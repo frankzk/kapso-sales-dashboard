@@ -19525,3 +19525,226 @@ update swayp_guide_emissions e
    and s.order_id = e.order_id
    and s.courier = 'fenix'
    and s.swayp_guide = e.guide_code;
+
+-- ---- 0240 ----
+-- ============================================================================
+-- 0240_order_master_stale_sin_tope.sql — el detector de desfase del Master
+-- vuelve a ver la tienda entera.
+--
+-- QUÉ PASABA (medido el 10-10-2026, tienda Kenku). `order_master_stale` (0123)
+-- recorría las filas del Master del recálculo más viejo al más nuevo con un tope
+-- de 20.000 (`p_scan`). Kenku ya tiene 23.946: las ~3.900 recalculadas más
+-- recientemente quedaban FUERA del recorrido. Y esas no son «lo que menos falta
+-- hace mirar», como suponía la 0123: son los pedidos vivos, los que los barridos
+-- de los couriers tocan cada hora. A las 18:00 había 293 pedidos desfasados en
+-- Kenku y la función devolvía 7; a las 17:00, 1.433 desfasados y 37 vistos. Un
+-- desfasado fuera del recorrido solo volvía a entrar cuando otros ~3.900 se
+-- recalculaban después de él: horas con la etapa vieja en pantalla. Fue el caso
+-- de #KP136038, descartado a las 15:40 y todavía en «Gestión Reproprovincia»
+-- a las 18:00.
+--
+-- Es la misma trampa que la 0123 vino a cerrar —una ventana con fondo, por la
+-- que un pedido podía no volver a entrar—, abierta por el otro extremo.
+--
+-- POR QUÉ SE PUEDE QUITAR EL TOPE. La 0123 lo justificaba con el índice
+-- (store_id, recomputed_at): con él la base recorría en orden y paraba al juntar
+-- `p_limit`. La 0204 borró ese índice (medido: la consulta iba más rápida sin
+-- él, y el índice impedía las escrituras HOT), así que la base ya ordenaba la
+-- tienda entera en cada pasada; el tope solo recortaba qué filas se miraban
+-- después. Medido en producción con las 23.946 filas de Kenku:
+--
+--     función de la 0123 (tope 20.000) ........ 84 ms, 7 de 293 desfasados
+--     esta función (sin tope) .................. 90 ms, los 293
+--
+-- El `lateral` calcula UNA vez la última escritura de las guías de cada pedido;
+-- la forma anterior la calculaba dos veces por fila (filtro y columna), y por
+-- eso recorrer todo con ella costaba 223 ms.
+--
+-- LO QUE NO CAMBIA. La regla (MOM §19.1): un pedido está desfasado si alguna de
+-- sus guías se escribió después de su último recálculo. El orden: del recálculo
+-- más viejo al más nuevo, para que un atraso se drene empezando por lo que lleva
+-- más tiempo mintiendo. Y la firma: `p_scan` se conserva para no romper a
+-- nadie, pero por defecto ya no recorta (`limit null` es «sin límite» en
+-- Postgres). Quien lo pase a mano sigue recortando como antes.
+-- ============================================================================
+
+create or replace function order_master_stale(
+  p_store_id uuid,
+  p_limit int default 1000,
+  p_scan int default null
+)
+returns table (order_id uuid, recomputed_at timestamptz, guide_updated_at timestamptz)
+language sql
+stable
+security definer
+set search_path to 'public'
+as $function$
+  select m.order_id, m.recomputed_at, g.guide_updated_at
+  from (
+    select om.order_id, om.recomputed_at
+    from order_master om
+    where om.store_id = p_store_id
+    order by om.recomputed_at asc
+    limit p_scan
+  ) m
+  cross join lateral (
+    select max(s.updated_at) as guide_updated_at
+    from shipments s
+    where s.order_id = m.order_id
+  ) g
+  where g.guide_updated_at > m.recomputed_at
+  order by m.recomputed_at asc
+  limit p_limit;
+$function$;
+
+comment on function order_master_stale(uuid, int, int) is
+  'Pedidos cuya fila del Master es anterior a la última escritura de sus guías. Definición canónica del desfase (0123, MOM §19.1): del recálculo más viejo al más nuevo y, desde la 0240, sobre la tienda entera (p_scan solo recorta si se pasa).';
+
+grant execute on function order_master_stale(uuid, int, int) to service_role;
+
+-- ---- 0241 ----
+-- ============================================================================
+-- 0241_order_master_stale_cerrada.sql — la función del desfase, como corre en
+-- producción: sin `p_scan`, con un solo agregado y cerrada al navegador.
+--
+-- POR QUÉ HAY DOS. El 10-10-2026 el tope de 20.000 filas de la 0123 se arregló
+-- dos veces en paralelo: la 0240 (#920) le quitó el recorte dejando `p_scan`
+-- opcional, y el #918 rehízo la función sin `p_scan`. En producción quedó la
+-- del #918, aplicada a mano en el SQL Editor a las 22:45 UTC. Esta migración
+-- lleva al repositorio lo que corre allí, para que una base nueva y la de
+-- producción tengan la misma función.
+--
+-- QUÉ CAMBIA RESPECTO DE LA 0240:
+--
+--   * Un agregado de las guías y un hash join, en vez de un `lateral` por
+--     pedido. Mismo resultado, medido en producción sobre Kenku (23.939
+--     pedidos, 18.855 guías): 52 ms, contra 90 ms de la 0240 y 82 ms de la
+--     0123. El agregado sale del índice `shipments_order_updated_idx` (0123).
+--   * Sin `p_scan`. Nadie lo pasa —el barrido llama con `p_store_id` y
+--     `p_limit` por nombre— y un tope por cantidad es justo lo que dejó fuera a
+--     los pedidos vivos. Sin el argumento, nadie puede volver a ponerlo.
+--   * PERMISOS. La 0123 y la 0240 concedían a `service_role`, pero en Postgres
+--     una función nace ejecutable por PUBLIC, y `anon` y `authenticated` la
+--     podían llamar. Siendo SECURITY DEFINER se salta la RLS: con la clave
+--     pública y el id de una tienda devolvía ids de pedidos ajenos. Se cierra
+--     como las funciones recientes (0230, 0236, 0238).
+--
+-- Se aplica en una sola transacción: quien llame durante la migración ve una
+-- función o la otra, nunca ninguna. En producción ya está aplicada; correrla
+-- otra vez no cambia nada (`drop ... if exists` y `create or replace`).
+-- ============================================================================
+
+drop function if exists order_master_stale(uuid, int, int);
+
+create or replace function order_master_stale(
+  p_store_id uuid,
+  p_limit int default 1000
+)
+returns table (order_id uuid, recomputed_at timestamptz, guide_updated_at timestamptz)
+language sql
+stable
+security definer
+set search_path to 'public'
+as $function$
+  select m.order_id, m.recomputed_at, g.guide_updated_at
+  from order_master m
+  join (
+    select s.order_id, max(s.updated_at) as guide_updated_at
+    from shipments s
+    group by s.order_id
+  ) g on g.order_id = m.order_id
+  where m.store_id = p_store_id
+    and g.guide_updated_at > m.recomputed_at
+  order by m.recomputed_at asc
+  limit p_limit;
+$function$;
+
+comment on function order_master_stale(uuid, int) is
+  'Pedidos cuya fila del Master es anterior a la última escritura de sus guías. Definición canónica del desfase (0123); sin tope de recorrido desde la 0240: mira todos los pedidos de la tienda, del recálculo más viejo al más nuevo.';
+
+revoke all on function order_master_stale(uuid, int) from public, anon, authenticated;
+grant execute on function order_master_stale(uuid, int) to service_role;
+
+-- ---- 0242 ----
+-- 0242_pickup_reminder.sql — el tercer aviso: el RECORDATORIO de recojo, al
+-- día 3 y al día 7 de que la guía quedó disponible en la agencia (MOM §12).
+--
+-- EL HUECO. El aviso de llegada (0169/0170) sale UNA vez, el día que el paquete
+-- llega, y después nada. Medido el 10-10-2026: Kenku tenía 230 pedidos en la
+-- agencia (Shalom 224, Olva 6) que todavía debían el saldo, S/ 37.087 en
+-- total — 82 llegados hace 3 días o menos, 28 de 4 a 7 días, 39 de 8 a 14, 36
+-- de 15 a 21, 9 de 22 o más (Shalom devuelve a los 28) y 36 sin fecha de
+-- llegada conocida. Un paquete que se queda en el mostrador sin cobrar acaba
+-- volviendo a Lima con el flete pagado dos veces.
+--
+-- DOS TIPOS, NO UNO CON CONTADOR. La cola ya garantiza «cada aviso una sola
+-- vez por guía» con la unique `(shipment_id, kind)` (0170). Para que el de día
+-- 3 y el de día 7 salgan como mucho una vez cada uno basta con que sean dos
+-- `kind`: `recordatorio_d3` y `recordatorio_d7`. Un único `recordatorio` con
+-- un contador obligaría a cambiar la unique y a reescribir el «exactamente una
+-- vez», que hoy no hay que tocar. Olva guarda el paquete solo 6 días: para
+-- Olva únicamente existe el de día 3.
+--
+-- PLANTILLA PROPIA, CON IMAGEN. Se aprueba aparte en Meta (`guias_shalom_
+-- recordatorio`, `guias_olva_recordatorio`) con cabecera de IMAGEN —la foto del
+-- producto, la misma del espejo de catálogo que usan los carritos (0164,
+-- 0233)— y cinco variables: nombre, agencia, guía, saldo y fecha límite. Si el
+-- pedido no tiene foto se usa la imagen de respaldo de la tienda; sin ninguna
+-- de las dos el recordatorio no sale (una plantilla con cabecera de imagen sin
+-- imagen la rechaza Meta).
+--
+-- NACE APAGADO, por tienda y por courier. Comparte con los otros avisos el
+-- número, el horario, las cuentas de cobro, los botones y el TOPE (0194).
+
+-- ── 1. La cola admite los dos recordatorios ─────────────────────────────────
+alter table shalom_transit_notifications
+  drop constraint if exists shalom_transit_notifications_kind_check;
+alter table shalom_transit_notifications
+  add constraint shalom_transit_notifications_kind_check
+  check (kind in ('transito', 'disponible', 'recordatorio_d3', 'recordatorio_d7'));
+
+comment on column shalom_transit_notifications.kind is
+  'Qué aviso es: transito (va en camino), disponible (ya llegó a la agencia), '
+  'recordatorio_d3 / recordatorio_d7 (sigue en la agencia y debe el saldo, a '
+  'los 3 y 7 días de llegar; Olva solo el de 3). La unique es (shipment_id, '
+  'kind): una guía recibe cada aviso una sola vez.';
+
+-- La foto que viajó en la cabecera, igual que `cart_seq_sends.image_url`
+-- (0233): «¿qué imagen le mandamos?» no se puede contestar de otra forma
+-- cuando el catálogo ya cambió.
+alter table shalom_transit_notifications
+  add column if not exists header_image_url text;
+
+comment on column shalom_transit_notifications.header_image_url is
+  'URL de la imagen mandada en la cabecera de la plantilla (recordatorio de '
+  'recojo): la foto del producto vía /api/wa-image o la de respaldo de la tienda.';
+
+-- ── 2. Config por tienda ────────────────────────────────────────────────────
+alter table stores
+  add column if not exists shalom_reminder_template_enabled boolean not null default false,
+  add column if not exists shalom_reminder_template_name    text default 'guias_shalom_recordatorio',
+  add column if not exists shalom_reminder_params           text not null
+    default 'nombre,agencia,guia,saldo,vence',
+  add column if not exists olva_reminder_template_enabled   boolean not null default false,
+  add column if not exists olva_reminder_template_name      text default 'guias_olva_recordatorio',
+  add column if not exists olva_reminder_params             text not null
+    default 'nombre,agencia,guia,saldo,vence',
+  -- Una para los dos couriers: es la imagen de la TIENDA (logo, una foto de
+  -- marca) para el pedido cuyo producto no tiene foto en el catálogo. Tiene
+  -- que ser JPG o PNG por https: Meta la baja al enviar.
+  add column if not exists shalom_reminder_fallback_image_url text;
+
+comment on column stores.shalom_reminder_template_enabled is
+  'Recordatorio de recojo para guías de Shalom: día 3 y día 7 después de '
+  'llegar a la agencia, solo si sigue allí y debe saldo. Nace apagado.';
+comment on column stores.shalom_reminder_params is
+  'Orden de variables del recordatorio. Por omisión: nombre, agencia, guia, '
+  'saldo, vence (la fecha límite de recojo, 28 días desde la llegada).';
+comment on column stores.olva_reminder_template_enabled is
+  'Recordatorio de recojo para guías de Olva: solo el del día 3 (Olva '
+  'devuelve a los 6 días). Independiente del de Shalom.';
+comment on column stores.olva_reminder_params is
+  'Orden de variables del recordatorio de Olva. `vence` se calcula a 6 días.';
+comment on column stores.shalom_reminder_fallback_image_url is
+  'Imagen de cabecera del recordatorio cuando el producto no tiene foto en el '
+  'espejo de catálogo. JPG o PNG por https. Vacía y sin foto ⇒ no se manda.';

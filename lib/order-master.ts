@@ -1651,7 +1651,8 @@ export async function reconcileOrderMaster(
   //
   // Ahora la pregunta la responde la base (`order_master_stale`, 0123), que es
   // donde la comparación se puede hacer de verdad y donde vive ya la única
-  // definición del desfase.
+  // definición del desfase. Sobre la tienda ENTERA desde la 0240: el tope de
+  // 20.000 filas dejaba fuera lo recién recalculado, que son los pedidos vivos.
   const seenPending = new Set(pending);
   let staleDoorError: string | null = null;
   const roomForStale = Math.max(0, limit - pending.length);

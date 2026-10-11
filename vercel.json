@@ -46,6 +46,10 @@
       "schedule": "*/30 * * * *"
     },
     {
+      "path": "/api/cron/shalom-cotejo",
+      "schedule": "10 1,13,17,21 * * *"
+    },
+    {
       "path": "/api/cron/olva-reconcile",
       "schedule": "15,45 * * * *"
     },

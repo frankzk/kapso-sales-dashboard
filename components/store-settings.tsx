@@ -175,6 +175,14 @@ export interface StoreSettingsData {
     olva_arrival_template_enabled: boolean;
     olva_arrival_template_name: string | null;
     olva_arrival_params: string | null;
+    /** Recordatorio de recojo, día 3 y día 7 en la agencia (0242). */
+    shalom_reminder_template_enabled: boolean;
+    shalom_reminder_template_name: string | null;
+    shalom_reminder_params: string | null;
+    olva_reminder_template_enabled: boolean;
+    olva_reminder_template_name: string | null;
+    olva_reminder_params: string | null;
+    shalom_reminder_fallback_image_url: string | null;
     /** Portal de clientes de Olva, para «Cotejar Olva» (0218). */
     olva_portal_username: string | null;
     olva_portal_ruc: string | null;
@@ -2513,7 +2521,11 @@ function AutomationSections({ data }: { data: StoreSettingsData }) {
         id="avisos-olva"
         title="Avisos de guía Olva (WhatsApp)"
         badge={
-          <NoticeBadge transit={s.olva_transit_template_enabled} arrival={s.olva_arrival_template_enabled} />
+          <NoticeBadge
+            transit={s.olva_transit_template_enabled}
+            arrival={s.olva_arrival_template_enabled}
+            reminder={s.olva_reminder_template_enabled}
+          />
         }
         description={
           <p>
@@ -2535,6 +2547,9 @@ function AutomationSections({ data }: { data: StoreSettingsData }) {
             s.olva_arrival_template_enabled,
             s.olva_arrival_template_name,
             s.olva_arrival_params,
+            s.olva_reminder_template_enabled,
+            s.olva_reminder_template_name,
+            s.olva_reminder_params,
           ]}
         >
           <ToggleRow name="olva_transit_template_enabled" label="Aviso de tránsito" defaultChecked={s.olva_transit_template_enabled} />
@@ -2599,8 +2614,49 @@ function AutomationSections({ data }: { data: StoreSettingsData }) {
               />
             </Field>
           </FieldGrid>
+          <ToggleRow
+            name="olva_reminder_template_enabled"
+            label="Recordatorio de recojo"
+            defaultChecked={s.olva_reminder_template_enabled}
+            description={
+              <p>
+                Al <strong>día 3</strong> en la oficina, si sigue allí y debe saldo. Solo ése: Olva devuelve a los 6
+                días. Lleva la foto del producto en la cabecera, como el de Shalom (la imagen de respaldo se configura
+                en <SectionLink to="avisos-shalom">Avisos de guía Shalom</SectionLink>).
+              </p>
+            }
+          />
+          <FieldGrid cols={3}>
+            <Field label="Plantilla · nombre" htmlFor="olva_reminder_template_name">
+              <input
+                id="olva_reminder_template_name"
+                name="olva_reminder_template_name"
+                defaultValue={s.olva_reminder_template_name ?? ""}
+                placeholder="guias_olva_recordatorio"
+                className={FIELD}
+              />
+            </Field>
+            <Field
+              label="Orden de las variables"
+              htmlFor="olva_reminder_params"
+              className="lg:col-span-2"
+              hint={
+                <p>
+                  <code>vence</code> se calcula a 6 días de la llegada.
+                </p>
+              }
+            >
+              <input
+                id="olva_reminder_params"
+                name="olva_reminder_params"
+                defaultValue={s.olva_reminder_params ?? ""}
+                placeholder="nombre,agencia,guia,saldo,vence"
+                className={FIELD}
+              />
+            </Field>
+          </FieldGrid>
           <BannerRow>
-            Las dos plantillas tienen que estar <strong>aprobadas en Meta</strong> con ese nombre y ese número de
+            Las plantillas tienen que estar <strong>aprobadas en Meta</strong> con ese nombre y ese número de
             variables, en la WABA del número por el que salen. Hasta entonces, deja el aviso apagado: la cola cierra
             las filas como «omitidas» y no se pierde nada.
           </BannerRow>
@@ -2610,12 +2666,16 @@ function AutomationSections({ data }: { data: StoreSettingsData }) {
   );
 }
 
-/** La chapa de un par de avisos (tránsito y llegada). */
-function NoticeBadge({ transit, arrival }: { transit: boolean; arrival: boolean }) {
-  if (transit && arrival) return <Badge tone="ok">Tránsito y llegada activos</Badge>;
-  if (transit) return <Badge tone="ok">Tránsito activo</Badge>;
-  if (arrival) return <Badge tone="ok">Llegada activa</Badge>;
-  return <Badge>Apagados</Badge>;
+/** La chapa de los avisos de un courier (tránsito, llegada y recordatorio). */
+function NoticeBadge({ transit, arrival, reminder = false }: { transit: boolean; arrival: boolean; reminder?: boolean }) {
+  const activos = (["tránsito", "llegada", "recordatorio"] as const).filter((_, i) => [transit, arrival, reminder][i]);
+  if (!activos.length) return <Badge>Apagados</Badge>;
+  if (activos.length === 1) {
+    const solo = { tránsito: "Tránsito activo", llegada: "Llegada activa", recordatorio: "Recordatorio activo" };
+    return <Badge tone="ok">{solo[activos[0]!]}</Badge>;
+  }
+  const lista = `${activos.slice(0, -1).join(", ")} y ${activos[activos.length - 1]}`;
+  return <Badge tone="ok">{`${lista.charAt(0).toUpperCase()}${lista.slice(1)} activos`}</Badge>;
 }
 
 function ShalomNoticesSection({ data }: { data: StoreSettingsData }) {
@@ -2624,7 +2684,13 @@ function ShalomNoticesSection({ data }: { data: StoreSettingsData }) {
     <SettingsSection
       id="avisos-shalom"
       title="Avisos de guía Shalom (WhatsApp)"
-      badge={<NoticeBadge transit={s.shalom_transit_template_enabled} arrival={s.shalom_arrival_template_enabled} />}
+      badge={
+        <NoticeBadge
+          transit={s.shalom_transit_template_enabled}
+          arrival={s.shalom_arrival_template_enabled}
+          reminder={s.shalom_reminder_template_enabled}
+        />
+      }
       description={
         <p>
           Cuando Shalom mueve una guía a <strong>en tránsito</strong>, se le manda a la clienta la plantilla
@@ -2708,7 +2774,7 @@ function ShalomNoticesSection({ data }: { data: StoreSettingsData }) {
           title="Horario y topes"
           description={
             <p>
-              Los topes cuentan los avisos de Shalom y Olva, tránsito y llegada juntos. El diario es en 24 h
+              Los topes cuentan los avisos de Shalom y Olva —tránsito, llegada y recordatorio— juntos. El diario es en 24 h
               móviles, como lo mide WhatsApp. Al llegar al tope el aviso <strong>espera en la cola</strong> y sale
               en la siguiente pasada con cupo: no se pierde. Un número nuevo tiene que empezar bajo y subir a medida
               que gana calidad. No cuenta las respuestas a lo que escribe la clienta.
@@ -2856,6 +2922,85 @@ function ShalomNoticesSection({ data }: { data: StoreSettingsData }) {
             bandeja de revisión no envía nada.
           </Banner>
         </ToggleRow>
+      </StoreForm>
+
+      <StoreForm
+        storeId={s.id}
+        title="Recordatorio de recojo"
+        description={
+          <p>
+            El de llegada sale una vez y después nada. Éste vuelve a escribirle a quien <strong>sigue con el
+            paquete en la agencia y todavía debe el saldo</strong>: al <strong>día 3</strong> y al{" "}
+            <strong>día 7</strong> de la llegada, con la fecha límite de recojo. Nunca después de esa fecha, nunca a
+            quien ya pagó (tampoco en el checkout) ni a un pedido cerrado. Al encenderlo, una guía que ya pasó el
+            día 7 recibe <strong>uno</strong>, no dos. Comparte número, horario, botones y el tope de arriba; nace
+            apagado.
+          </p>
+        }
+        persisted={[
+          s.shalom_reminder_template_enabled,
+          s.shalom_reminder_template_name,
+          s.shalom_reminder_params,
+          s.shalom_reminder_fallback_image_url,
+        ]}
+      >
+        <ToggleRow
+          name="shalom_reminder_template_enabled"
+          label="Recordatorio de recojo"
+          defaultChecked={s.shalom_reminder_template_enabled}
+        />
+        <FieldGrid cols={3}>
+          <Field label="Plantilla · nombre" htmlFor="shalom_reminder_template_name">
+            <input
+              id="shalom_reminder_template_name"
+              name="shalom_reminder_template_name"
+              defaultValue={s.shalom_reminder_template_name ?? ""}
+              placeholder="guias_shalom_recordatorio"
+              className={FIELD}
+            />
+          </Field>
+          <Field
+            label="Orden de las variables"
+            htmlFor="shalom_reminder_params"
+            className="lg:col-span-2"
+            hint={
+              <p>
+                El aprobado es <code>nombre,agencia,guia,saldo,vence</code>: {"{{1}}"} nombre, {"{{2}}"} agencia,{" "}
+                {"{{3}}"} guía, {"{{4}}"} saldo y {"{{5}}"} la fecha límite (28 días desde la llegada).
+              </p>
+            }
+          >
+            <input
+              id="shalom_reminder_params"
+              name="shalom_reminder_params"
+              defaultValue={s.shalom_reminder_params ?? ""}
+              placeholder="nombre,agencia,guia,saldo,vence"
+              className={FIELD}
+            />
+          </Field>
+        </FieldGrid>
+        <div className={ROW}>
+          <Field
+            label="Imagen de respaldo (cabecera)"
+            htmlFor="shalom_reminder_fallback_image_url"
+            hint={
+              <p>
+                La plantilla lleva cabecera de <strong>imagen</strong>: la foto del producto del pedido (la primera
+                que tenga foto en el catálogo). Esta imagen sale cuando el pedido no tiene ninguna; vale también para
+                Olva. JPG o PNG por <code>https://</code>. Vacía y sin foto, el recordatorio no sale.
+              </p>
+            }
+          >
+            <input
+              id="shalom_reminder_fallback_image_url"
+              name="shalom_reminder_fallback_image_url"
+              type="url"
+              defaultValue={s.shalom_reminder_fallback_image_url ?? ""}
+              placeholder="https://…/logo.jpg"
+              className={cn(FIELD, "sm:max-w-xl")}
+            />
+          </Field>
+        </div>
       </StoreForm>
 
       <div className={CARD}>

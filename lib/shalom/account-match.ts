@@ -385,44 +385,71 @@ export interface CollectedListing {
  */
 export async function collectListingPages(
   fetchPage: (page: number, timeoutMs: number) => Promise<ShalomAccountOrder[]>,
-  opts: { perPage: number; maxPages: number; deadlineMs: number; now?: () => number },
+  opts: { perPage: number; maxPages: number; deadlineMs: number; concurrency?: number; now?: () => number },
 ): Promise<CollectedListing> {
   const now = opts.now ?? Date.now;
+  // DE A VARIAS PÁGINAS A LA VEZ (11-10-2026). Shalom tarda ~38 s en entregar
+  // cada página —arma la cuenta entera para contestar— y el listado desde el
+  // pedido más viejo son 10-11 páginas: en serie no cabe en una invocación (la
+  // pasada de las 20:10 leyó 7 y se quedó sin tiempo). Se piden en tandas de
+  // `concurrency` y se procesan EN ORDEN, con las mismas reglas que una a una;
+  // pedir una tanda de más al final cuesta una o dos páginas vacías.
+  const concurrency = Math.max(1, Math.floor(opts.concurrency ?? 1));
   const orders: ShalomAccountOrder[] = [];
   const ids = new Set<string>();
   /** La página más larga vista: el tamaño que el servidor de verdad entrega. */
   let longest = 0;
-  for (let page = 1; page <= opts.maxPages; page += 1) {
+  for (let first = 1; first <= opts.maxPages; first += concurrency) {
     const left = opts.deadlineMs - now();
-    if (left < 5_000) return { orders, paginas: page - 1, completo: false, motivo: "se acabó el tiempo de la pasada" };
-    const batch = await fetchPage(page, left);
-    const fresh = batch.filter((o) => {
-      const key = `${o.id}|${String(o.guia ?? "")}`;
-      if (ids.has(key)) return false;
-      ids.add(key);
-      return true;
-    });
-    if (batch.length && !fresh.length) {
-      return { orders, paginas: page, completo: false, motivo: `la página ${page} repite la anterior: el listado no pagina` };
+    if (left < 5_000) return { orders, paginas: first - 1, completo: false, motivo: "se acabó el tiempo de la pasada" };
+    const pages = Array.from({ length: Math.min(concurrency, opts.maxPages - first + 1) }, (_, i) => first + i);
+    const batches = await Promise.all(pages.map((page) => fetchPage(page, left)));
+    for (const [i, batch] of batches.entries()) {
+      const page = first + i;
+      const fresh = batch.filter((o) => {
+        const key = `${o.id}|${String(o.guia ?? "")}`;
+        if (ids.has(key)) return false;
+        ids.add(key);
+        return true;
+      });
+      if (batch.length && !fresh.length) {
+        return { orders, paginas: page, completo: false, motivo: `la página ${page} repite la anterior: el listado no pagina` };
+      }
+      orders.push(...fresh);
+      if (!batch.length || batch.length < longest) return { orders, paginas: page, completo: true, motivo: null };
+      longest = Math.max(longest, batch.length);
     }
-    orders.push(...fresh);
-    if (!batch.length || batch.length < longest) return { orders, paginas: page, completo: true, motivo: null };
-    longest = Math.max(longest, batch.length);
   }
   return { orders, paginas: opts.maxPages, completo: false, motivo: `más de ${opts.maxPages} páginas` };
 }
 
-/** Horas de Lima en que el cron coteja: cuatro al día, en la pasada en punto. */
-export const COTEJO_HORAS_LIMA = [8, 12, 16, 20] as const;
+/**
+ * Cuántos días hacia atrás entrega de verdad el listado de la cuenta. Medido el
+ * 11-10-2026: con `from=2026-08-19` el listado llegó entero (8 páginas, fin por
+ * página corta) pero sin ninguna guía anterior al 27-08 18:00 —exactamente las
+ * 160 de la API que faltaban—: Shalom recorta a ~45 días aunque se le pida
+ * más. Se usa 44 para no rozar el borde.
+ */
+export const LISTING_WINDOW_DAYS = 44;
 
 /**
- * ¿Toca cotejar en esta pasada? El listado entero cuesta: cada página hace que
- * el wrapper baje la cuenta completa de Shalom, y el cupo de 60 llamadas por
- * minuto es de todas las tiendas. Con cuatro veces al día sobra para pedidos
- * que llevan semanas parados. `forzar` es el `?cotejar=1` del cron.
+ * Desde qué día se pide el listado (YYYY-MM-DD): dos días antes del pedido más
+ * viejo, pero nunca antes de lo que Shalom entrega. Pedir más atrás no trae
+ * nada y hace que la cobertura cuente como «faltantes» guías que el listado
+ * nunca iba a traer. Una guía creada antes de la ventana no se puede cotejar:
+ * su pedido queda sin pareja y para una persona. PURA.
  */
-export function shouldRunShalomCotejo(now: Date, forzar: boolean): boolean {
-  if (forzar) return true;
-  const limaHour = (now.getUTCHours() + 24 - 5) % 24;
-  return (COTEJO_HORAS_LIMA as readonly number[]).includes(limaHour) && now.getUTCMinutes() < 30;
+export function listingFromDate(oldestOrderMs: number, nowMs: number): string {
+  const wanted = (Number.isFinite(oldestOrderMs) ? oldestOrderMs : nowMs) - 2 * 86_400_000;
+  const floor = nowMs - LISTING_WINDOW_DAYS * 86_400_000;
+  return new Date(Math.max(wanted, floor)).toISOString().slice(0, 10);
 }
+
+/**
+ * Horas de Lima en que corre el cron de Cotejar Shalom (/api/cron/shalom-cotejo,
+ * vercel.json). El listado entero cuesta: cada página hace que el wrapper baje
+ * la cuenta completa de Shalom, y el cupo de 60 llamadas por minuto es de todas
+ * las tiendas. Con cuatro veces al día sobra para pedidos que llevan semanas
+ * parados. La prueba de vercel.json comprueba que el horario dice lo mismo.
+ */
+export const COTEJO_HORAS_LIMA = [8, 12, 16, 20] as const;

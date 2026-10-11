@@ -1147,8 +1147,9 @@ concretas que revisó:
 - **Quiere ambos:** confirmación explícita registrada y al menos el adelanto
   mínimo vigente validado en el pedido nuevo. Un comprobante pendiente o el
   pago del primer pedido no sirven. El pago se vuelve a comprobar al crear.
-- **Reemplaza al anterior:** sigue retenido hasta que conste la recuperación
-  física o entrega del envío anterior. Solicitar detenerlo no lo libera.
+- **Reemplaza al anterior:** quien resuelve declara qué pasó con cada envío anterior
+  y eso libera la guía (cambio del 10-10-2026, ver abajo). Solicitar detenerlo
+  no basta.
 - **Excepción autorizada:** exige el permiso `master.override_status` en la
   organización del pedido y un motivo. La autorización solo vale para los
   productos y salidas revisados; un cambio exige nueva revisión.
@@ -1160,6 +1161,44 @@ no se crea la guía. Esta excepción tampoco levanta el veto de dos rechazos del
 §8.2. Cotizar o vincular una guía que ya existe siguen siendo operaciones
 distintas; la regla impide emitir una nueva. Lima y los demás couriers conservan
 sus reglas. Las resoluciones quedan en `order_events`, sin borrar historial.
+
+#### Reemplazo: se declara el destino del envío anterior (10-10-2026)
+
+Decisión del owner. Hasta esta fecha «reemplaza» esperaba una constancia de
+entrega o retorno que, en los casos reales, el seguimiento ya no iba a traer:
+una guía `transferido` deja de consultarse, una anulada se consulta solo tres
+semanas y un paquete que el courier perdió no vuelve nunca. Del 02 al
+10-10-2026 hubo 4 pedidos y 15 intentos con «reemplaza», y los 4 terminaron en
+la excepción de un responsable; las vendedoras no podían cerrar el caso.
+
+Ahora, al elegir «reemplaza», quien resuelve declara el destino de **cada**
+salida anterior en conflicto, y cada declaración pasa por la puerta que ya le
+corresponde. Queda con actor, fecha y motivo sobre el pedido anterior:
+
+| Destino declarado | Qué se escribe | Dónde queda el pedido anterior |
+| --- | --- | --- |
+| Volvió al almacén | La recepción de devolución (`return_receive`, permiso `closure.return`), igual que desde la mesa de cierre | Su camino normal: Devolución pendiente de inventario |
+| Lo recibió el cliente | El hecho `delivery_declared` sobre esa salida | Por cerrar · **Entrega declarada · confirmar cobro** |
+| El courier lo perdió | El hecho `courier_loss_declared` sobre esa salida | Por cerrar · Indemnización pendiente |
+
+- **La guía del courier no se toca.** «Lo recibió el cliente» no la marca
+  entregada: esa puerta es del courier (§11). Lo que cambia es el pedido.
+- **Entrega declarada** se cierra cuando el pedido pasa a `entregado` —lo
+  reporta el courier o se confirma a mano, y desde ahí manda la liquidación— o
+  cuando alguien fija el estado en «Gestión manual» después de la declaración,
+  también si resultó falsa. Una declaración sin salida sería otro pedido
+  atascado.
+- **La pérdida declarada abre la indemnización** igual que la solicitud formal;
+  finanzas la completa con monto y la cierra con «Resolver indemnización».
+- **Solo Aliclik admite los tres destinos.** Para otro courier solo se declara
+  la devolución: su entrega tiene su propia puerta y la indemnización formal es
+  solo de Aliclik, así que una pérdida declarada no tendría quién la cierre.
+- Si la puerta de devolución se niega —por ejemplo, la salida figura en la
+  empresa— no se guarda la resolución y la guía sigue retenida; el motivo se
+  muestra tal cual. Las declaraciones se escriben antes que la resolución.
+- Una salida con destino declarado deja de contar como caja pendiente para
+  esta regla. Si después aparece, su devolución o entrega se registra por las
+  puertas de siempre.
 
 ### 8.4 Entrega estimada de Aliclik según los días del pedido (09-10-2026)
 
@@ -4739,6 +4778,26 @@ Reglas de esa tabla:
     injusta. El owner decidió arrancar el 04-10-2026 con el +1 de EE. UU.
     Al leer la comparación, la tasa de atendidas de Telnyx y ElevenLabs se
     lee con esa desventaja hasta que llegue el número de Lima.
+  - **Daaph, apagado** (11-10-2026, decisión del owner). Datos de octubre
+    al día 11:
+
+    | Agente | Llamadas | Reprogramadas | Por llamada | Entregadas |
+    | --- | --- | --- | --- | --- |
+    | Daaph | 190 | 4 | 2,1 % | 0 de 4 |
+    | Telnyx | 119 | 6 | 5,0 % | 2 de 6 |
+    | ElevenLabs | 207 | 4 | 1,9 % | 2 de 4 |
+
+    Las 19 salidas de Daaph de setiembre tampoco se entregaron. Daaph y
+    Telnyx son el mismo agente de xAI y se turnan el mismo puesto: apagar
+    Daaph no quita llamadas, todos sus turnos pasan a Telnyx. 4 contra 6
+    reprogramadas no prueba la diferencia, pero Zadarma además no avisa el
+    fin ni el costo de la llamada.
+
+    Se apaga con la configuración, sin tocar el código:
+    `VOICE_TELNYX_SHARE` = 67 y `VOICE_ELEVENLABS_SHARE` = 33. Daaph recibe
+    lo que sobra de 100, así que queda en 0. Si ElevenLabs baja, hay que
+    subir Telnyx en lo mismo, o Daaph vuelve a llamar. Para volver a
+    encenderlo basta bajar `VOICE_TELNYX_SHARE`.
 - Todo hecho que escribe lleva en `payload` el `voice_call_id`, y la línea de
   tiempo del drawer lo muestra con actor **«Agente de voz»** y enlace a la
   transcripción. Un intento que no se puede leer después no es historial
@@ -5100,6 +5159,41 @@ La regla vive en `lib/swayp-desde-confirmacion.ts` y la aplica
 `resolveMacroStage` antes del estado terminal y de Reproprovincia
 (`MOM_RESOLUTION_VERSION` sube a `mom-v1.24`).
 
+### 11.12 Oportunidades en Stock Swayp (10-10-2026)
+
+«Por reponer» responde qué falta para las guías **ya emitidas**. La vista
+**Oportunidades** de Stock Swayp responde la pregunta de antes: qué producto,
+en qué bodega de Swayp, dejaría salir pedidos que hoy esperan. Pedido del owner,
+10-10-2026. Es una lectura: no cambia etapas, no emite guías ni toca el stock.
+
+**Quién entra** (`lib/swayp-oportunidades.ts`), leído del Master:
+
+- **Repro Provincia**: subetapa `gestion_reproprovincia`. El intento falló y el
+  pedido se puede reenviar por Swayp si su bodega tiene el producto.
+- **Por confirmar**: provincia COD, salvo «Swayp no entregó». Es la misma regla
+  que el botón «Enviar por Swayp» (§11.11): con stock, saldría sin esperar la
+  confirmación. «Swayp no entregó» queda fuera porque ya salió por Swayp y se
+  llama para salir por otra vía.
+- Solo con **dirección completa**: dirección, distrito y provincia (o
+  departamento). Sin eso no hay guía que emitir aunque llegue el stock.
+- Solo en ciudades **con bodega Swayp**. Las demás no se destraban mandando
+  mercadería. Los que quedan fuera por cobertura o por dirección se cuentan en
+  la cabecera, para que se vean.
+
+**Cómo se mide.** Por producto, no por pedido: una guía directa sale con el
+pedido completo (`evaluateDirectFenixStock`). Por eso se cruza cada producto
+con su renglón de la bodega (SKU exacto primero, después el nombre) y se compara
+la demanda en unidades contra la cantidad. Una unidad en bodega para diez
+pedidos son nueve por mandar, no «hay stock». La columna `swayp_availability`
+del Master (§11.10) no sirve para esto: da un pedido por cubierto si alguno de
+sus productos tiene stock.
+
+**Qué muestra cada fila** (ciudad y producto): los pedidos que lo esperan,
+separados por fuente; el stock actual; las unidades por mandar; el total de esos
+pedidos; y cuántos **salen solo con ese producto** (no les falta nada más). Cada
+fila se abre en sus pedidos, con enlace al Master, ordenados primero por los que
+salen solo con eso y después por los días que llevan en su etapa.
+
 ## 12. Agencia: Shalom y Olva
 
 ### Shalom
@@ -5192,8 +5286,9 @@ La regla vive en `lib/swayp-desde-confirmacion.ts` y la aplica
     el texto, no los datos.
     - **Tope de envío por tienda** (0194, 28-09-2026): máximo por día —en 24 h
       móviles, que es como lo mide WhatsApp— y máximo por hora, contando los
-      avisos de Shalom y Olva, tránsito y llegada, juntos. Nace en **30/día y
-      8/hora** y se sube desde Ajustes a medida que el número gane calidad.
+      avisos de Shalom y Olva, tránsito, llegada y recordatorio de recojo,
+      juntos. Nace en **30/día y 8/hora** y se sube desde Ajustes a medida que
+      el número gane calidad.
       - **Por qué.** Ese día WhatsApp bloqueó el 600, desde el que salían estos
         avisos: venía mandando 50-75 plantillas al día a clientas que nunca le
         habían escrito. El número que lo reemplace es nuevo, y un número nuevo
@@ -5246,11 +5341,13 @@ La regla vive en `lib/swayp-desde-confirmacion.ts` y la aplica
       amenaza — «recógelo lo antes posible» y, sobre todo, «paga ahora y al
       llegar solo retiras», que es urgencia que le sirve A ELLA: con el cobro
       validado, la clave está lista cuando llegue al mostrador. El token
-      `vence` existe en el código por si algún día hace falta (un recordatorio
-      cerca del plazo), pero no entra en el orden por omisión.
+      `vence` existe en el código por si algún día hace falta, pero no entra
+      en el orden por omisión del aviso de llegada. Lo usa el recordatorio de
+      recojo (0242, abajo).
     - **Una fila por guía y por tipo.** La unique pasó de `shipment_id` a
       `(shipment_id, kind)`: una misma guía recibe el de tránsito y, días
-      después, el de llegada — pero ninguno de los dos dos veces.
+      después, el de llegada — pero ninguno de los dos dos veces. Los dos
+      recordatorios de recojo (0242) son dos tipos más con la misma garantía.
     - **Interruptores separados, número compartido.** Encender uno no enciende
       el otro, porque cada plantilla se aprueba aparte en Meta. El número, el
       horario y las cuentas de cobro son de la tienda y valen para los dos.
@@ -5258,6 +5355,84 @@ La regla vive en `lib/swayp-desde-confirmacion.ts` y la aplica
       con saldo** (173 de Kenku y 40 de Aurela, ~S/ 34.000) a las que nunca se
       les escribió, porque llegaron antes de que esto existiera o su tránsito
       ocurrió con el aviso apagado. Ese es el hueco que cierra el segundo aviso.
+  - **El recordatorio de recojo: un tercer aviso, al día 3 y al día 7**
+    (0242, aprobado por el owner el 11-10-2026). El de llegada sale una vez,
+    el día que el paquete llega, y después nada.
+    - **Por qué.** Medido el 10-10-2026: Kenku tenía **230 pedidos en la
+      agencia** (Shalom 224, Olva 6) que todavía debían el saldo, **S/ 37.087**
+      en total — 82 llegados hace 3 días o menos, 28 de 4 a 7 días, 39 de 8 a
+      14, 36 de 15 a 21, 9 de 22 o más (Shalom devuelve a los 28) y 36 sin
+      fecha de llegada conocida. Un paquete que se queda en el mostrador sin
+      cobrar vuelve a Lima con el flete pagado dos veces.
+    - **Cuándo.** Al **día 3** y al **día 7** desde que la guía quedó
+      `disponible_para_recojo`. **Olva solo el del día 3**: guarda el paquete
+      6 días (`OLVA_PICKUP_WINDOW_DAYS`) y un «día 7» de Olva no existe.
+      **Nunca después de la fecha límite del courier** (28 días Shalom, 6
+      Olva): un «recógelo antes del 16» el 17 es mentira.
+    - **Desde cuándo cuenta.** Shalom no llena `shipments.agency_arrived_at`.
+      La llegada es, en este orden: el **primer** `courier_status` →
+      `disponible_para_recojo` que el rastreo escribió **para esa guía** (la
+      misma regla de «La llegada que cuenta es la primera», abajo); si no hay,
+      cuándo salió el aviso de llegada; si tampoco, `agency_arrived_at` (Olva
+      sí la escribe). Sin ninguna no se adivina: no hay recordatorio.
+    - **A quién.** A la guía que **sigue en la agencia** (`pickup_state` en la
+      lista del Master de «disponible»: `disponible_para_recojo`,
+      `pendiente_de_recojo`; sin `entregado`, `anulado`, `devuelto` ni
+      `transferido`) y cuyo pedido **todavía debe**: las mismas reglas de
+      cobro que los otros dos avisos — ni «ya pagó todo», ni «pagado en el
+      checkout», ni un pedido cerrado; sin total conocido tampoco, porque el
+      saldo es la mitad del mensaje. Se mira **al encolar** —para no llenar la
+      cola de filas que se van a omitir— y **otra vez al enviar**, junto con
+      que siga en la agencia y en plazo: el tope y el horario pueden retenerlo
+      horas, y en ese rato pudo pagar o recogerlo. La fila queda `skipped` con
+      el motivo.
+    - **Una vez cada uno, y nunca dos de golpe.** Son dos tipos de la misma
+      cola, `recordatorio_d3` y `recordatorio_d7`: la unique `(shipment_id,
+      kind)` hace que cada uno salga como mucho una vez por guía, sin tocar la
+      garantía que ya existía (un único `recordatorio` con contador habría
+      obligado a cambiarla). Se encola **solo el más avanzado que ya toca**:
+      al encenderlo por primera vez, una guía que lleva 10 días en la agencia
+      recibe el de día 7 y **nunca** el de día 3. Y no entra un recordatorio
+      con otro aviso de esa guía todavía en la cola, ni a menos de **48 h**
+      de otro enviado: el de día 3 retenido por el tope no sale el mismo día
+      que el de día 7, ni el recordatorio pisa a un aviso de llegada que salió
+      tarde.
+    - **Quién lo encola.** El cron de cada courier, **antes de drenar** la cola:
+      `shalom-reconcile` las guías de Shalom y `olva-reconcile` las de Olva.
+      Sale por el mismo envío que los otros: **mismo número, horario, tope y
+      botones**. Para no tapar a los avisos que no pueden esperar —el primer
+      encendido en Kenku metería ~140 de golpe y un «va en camino» saldría un
+      día tarde— una tienda no tiene más de **10 recordatorios esperando** en
+      la cola a la vez; lo que vence antes entra primero, y el resto entra en
+      las pasadas siguientes. Un pedido con dos guías en la agencia recibe uno
+      por pasada. Si una lectura (pagos, avisos, llegadas) falla, **no se
+      encola nada**: un pago que no se pudo leer no es «no pagó».
+    - **La plantilla.** Propia, aprobada aparte en Meta:
+      `guias_shalom_recordatorio` (Olva: `guias_olva_recordatorio`), idioma
+      `es`. Cuerpo: {{1}} nombre, {{2}} agencia, {{3}} guía, {{4}} saldo y
+      {{5}} **la fecha límite** (`vence`, con `pickupDeadlineLabel`). El orden
+      se configura como el de los otros avisos. Aquí sí va la fecha, a
+      diferencia del aviso de llegada: el día 3 o el 7 ya no es «tienes 28
+      días», es «se te está pasando», y la fecha es lo que la clienta necesita.
+    - **La cabecera es una IMAGEN: la foto del producto.** La misma búsqueda
+      que la prueba de carritos (0233): el espejo `shopify_product_images`,
+      por `product_id` y, si no, por título contra `catalog_title`; en un
+      pedido de varios productos, **el primero que tenga foto**. Va servida en
+      JPG por `/api/wa-image`, porque Meta no acepta WebP. Sin foto, la
+      **imagen de respaldo** de la tienda (Ajustes, una para los dos
+      couriers, `https://`). **Sin ninguna de las dos no se manda** y la fila
+      queda `skipped` con el motivo: Meta rechaza una plantilla de cabecera de
+      imagen sin imagen. La URL que viajó queda en la fila
+      (`header_image_url`). No lleva el ticket de Shalom en la cabecera —es
+      una sola—, pero el ticket **sí sale al pulsar cualquier botón**, como
+      con los otros avisos.
+    - **Los botones se contestan igual.** La respuesta se cuelga del último
+      aviso enviado a ese celular **sea del tipo que sea**: mismo saldo
+      recalculado, mismas cuentas, mismo «Link de pago» y el ticket detrás si
+      es de Shalom.
+    - **Nace apagado**, por tienda y por courier («Recordatorio de recojo» en
+      Ajustes, junto al aviso de llegada de cada courier). Encender el de
+      Shalom no enciende el de Olva.
   - **La clave de recojo nunca va en el mensaje.** Guía, código y agencia sin la
     clave no abren nada; la clave se entrega desde la salida, con el cobro
     validado y con auditoría. Esta regla no cambia.
@@ -5607,13 +5782,15 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
    tránsito y de llegada llevan el ticket en PDF, y el ticket se baja con el
    OSE ID: sin él el aviso no sale. El 01-10-2026 se crearon a mano 21 guías de
    Kenku sin OSE ID y 25 avisos se perdieron. Ahora el cron de Shalom, antes de
-   drenar la cola de avisos, busca las guías manuales de los últimos 30 días
+   drenar la cola de avisos, busca las guías manuales de los últimos 7 días
    sin OSE ID en el listado de órdenes de la cuenta (`GET /v1/orders`) y les
    pone el `id` de su orden. Que ese `id` sea el OSE ID **se comprueba en cada
    lectura** con las guías creadas por API, cuyo OSE ID se conoce: si alguna
    aparece con otro `id`, o ninguna aparece, no se escribe nada. Mientras
    tanto, el aviso de una guía manual sin OSE ID **reintenta** en vez de
-   fallar.
+   fallar. La ventana era de 30 días y bajó a **7** el 10-10-2026: el ticket
+   sirve a los avisos de la primera semana, y una sola guía vieja que el
+   listado nunca resuelve hacía releer diez días de listado cada media hora.
 8. **Si nadie la registra, la registra Cotejar Shalom** (10-10-2026). Ver abajo.
 
 #### Cotejar Shalom: la guía hecha a mano que nadie registró (decidido el 10-10-2026)
@@ -5624,15 +5801,34 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   guía se creó a mano en `pro.shalom.pe` y el paso 2 de arriba no se hizo. Sin
   la guía en Kapta no hay rastreo, ni avisos, ni clave que entregar, y el pedido
   se queda parado para siempre aunque la clienta ya lo haya recogido.
-- **Qué hace.** El cron de Shalom (`/api/cron/shalom-reconcile`), **cuatro
-  veces al día** —la pasada de las 8, 12, 16 y 20 h de Lima— o a mano con
-  `?cotejar=1`, lee el listado de órdenes de la cuenta de Shalom Pro
+- **Qué hace.** Su propio cron (`/api/cron/shalom-cotejo`), **cuatro veces
+  al día** —la pasada de las 8, 12, 16 y 20 h de Lima, en el minuto 10—, lee
+  el listado de órdenes de la cuenta de Shalom Pro
   (`GET /v1/orders`, con su destinatario) desde el pedido más viejo y vincula
   la guía a su pedido **por el mismo camino que «Ya la creé en Shalom Pro»**
   (`lib/shalom/register-guide.ts`): las mismas comprobaciones, la salida
   `shalom_pro_manual` con su QR, el relleno de la salida «por definir» y el
   `guide_created` en la línea de tiempo. Desde ahí el rastreo de cada media
   hora mueve el estado y encola los avisos, como con cualquier guía.
+- **Por qué tiene cron propio** (10-10-2026). Nació como un paso de
+  `shalom-reconcile`, detrás del rastreo y del relleno del OSE ID, con la hora
+  límite contada desde que entraba la petición. El listado es lento —Shalom
+  arma la cuenta entera para contestar cada página— y a las 16:00 del
+  10-10-2026 se rindió sin recibir ni la primera página, con 47 pedidos
+  esperando. Con su propia invocación tiene ~270 s solo para el listado.
+- **Las páginas se piden de a tres** (11-10-2026). Cada página tarda ~38 s y el
+  listado desde el pedido más viejo son 10-11 páginas: en serie no cabe ni en
+  la invocación propia (la pasada de las 20:10 del 10-10 leyó 7 y se quedó sin
+  tiempo, sin vincular nada). En tandas de tres se lee en ~150 s; las páginas
+  se procesan en orden con las mismas reglas, y si una falla, falla el
+  listado entero y no se vincula nada.
+- **El listado solo llega ~45 días atrás** (medido el 11-10-2026). Pedido
+  desde el 19-08, llegó entero pero sin ninguna guía anterior al 27-08: las 160
+  guías de la API que la cobertura echaba en falta eran exactamente esas.
+  Shalom recorta aunque se le pida más. Por eso el listado se pide desde dos
+  días antes del pedido más viejo **pero nunca más de 44 días atrás**, y la
+  cobertura se mide dentro de esa ventana. Un pedido cuya guía se creó antes
+  de la ventana no se puede cotejar: queda sin pareja, para una persona.
 - **Quién es candidato.** Pedido de los últimos 90 días en «Preparación · Por
   generar rótulo», con el pago que Agencia exige para pasar a Preparación
   (`agencyPaymentReady`: adelanto validado, diferencia cargada o pago
@@ -5686,8 +5882,8 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
 - **Tope de 10 guías por pasada**; lo que sobra entra en la siguiente.
 - **Lo que queda para una persona.** Lo ambiguo y lo sin pareja no se toca:
   sigue en «Por generar rótulo» y se registra a mano con «Ya la creé en Shalom
-  Pro». El informe del cron (`cotejo`, y la línea `[shalom-cotejo]` de la
-  bitácora) dice cuántos candidatos, vinculados, ambiguos, sin pareja y por
+  Pro». La respuesta de `/api/cron/shalom-cotejo` (y la línea
+  `[shalom-cotejo]` de la bitácora) dice cuántos candidatos, vinculados, ambiguos, sin pareja y por
   tope hubo, el porqué de cada ambiguo y, por cuenta, cuántas guías trajo el
   listado, su cobertura y la comprobación del destinatario.
 
@@ -5766,6 +5962,12 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   es la oficina que el rastreo apuntó al llegar. Los interruptores y las
   plantillas de Olva se configuran en Ajustes, aparte de los de Shalom; con el
   aviso apagado la cola cierra la fila como omitida y no manda nada.
+- **El recordatorio de recojo de Olva** (0242): el mismo de Shalom (ver
+  «El recordatorio de recojo» arriba), **solo el del día 3** —Olva devuelve a
+  los 6—, con su plantilla `guias_olva_recordatorio`, su interruptor apagado de
+  nacimiento y `vence` a 6 días. La llegada sale de `agency_arrived_at`, que el
+  rastreo de Olva sí escribe, si no hay antes un `courier_status` de esa guía.
+  Lo encola `olva-reconcile` antes de drenar la cola.
 
 #### Cotejar Olva: el tracking sale del portal de clientes (migración 0218, decidido el 02-10-2026)
 
@@ -7109,9 +7311,27 @@ Tres reglas, a partir de acá:
    donde la comparación se puede hacer de verdad, y con eso la definición del
    desfase existe en **un solo sitio** —como `order_coverage_for` desde la 0104,
    y por la misma razón—. Se recorre del recálculo más viejo al más nuevo: lo
-   que lleva más tiempo mintiendo sale primero, y lo que un tope de recorrido
-   deje fuera es siempre lo más recientemente recalculado, que es lo que menos
-   falta hace mirar.
+   que lleva más tiempo mintiendo sale primero.
+
+   **Y sobre la tienda entera (0240, 10-10-2026).** La 0123 recortaba el
+   recorrido a las 20.000 filas más viejas, con la idea de que lo que quedara
+   fuera —lo recién recalculado— era «lo que menos falta hace mirar». Era al
+   revés: lo recién recalculado son los pedidos vivos, los que los barridos de
+   los couriers tocan cada hora. Cuando Kenku pasó de 23.900 filas, esas ~3.900
+   quedaron fuera: **293 desfasados y 7 vistos**, y un desfasado volvía a entrar
+   solo cuando otros 3.900 se recalculaban después de él. Pasó con #KP136038,
+   descartado a las 15:40 y aún en «Gestión Reproprovincia» a las 18:00. Sin el
+   índice que la 0204 borró, la base ya ordenaba la tienda entera; recorrerla
+   toda cuesta lo mismo (90 ms contra 84 ms, medido) y no deja a nadie fuera.
+
+   **Sin `p_scan` y cerrada al navegador (0241, 10-10-2026).** El mismo día
+   el tope se quitó dos veces en paralelo (#920 y #918), y en producción quedó
+   la versión del #918: un solo agregado de las guías cruzado con el Master
+   (52 ms medidos, el mismo resultado) y sin el argumento `p_scan`, para que
+   nadie pueda volver a ponerle un tope por cantidad. Y la función, que es
+   SECURITY DEFINER, ya no la puede llamar `anon` ni `authenticated`: con la
+   clave pública y el id de una tienda devolvía ids de pedidos ajenos,
+   saltándose la RLS. Solo la llama el barrido, con `service_role`.
 2. **El recálculo va por tandas.** Un pedido que revienta cuesta su trozo, no la
    lista entera. Endurecimiento, no la causa de este incidente: el import de
    Aliclik llega a llamar con más de mil pedidos de golpe y cualquier fallo los

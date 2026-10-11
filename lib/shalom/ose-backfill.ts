@@ -88,8 +88,14 @@ export interface OseBackfillReport {
   errores: string[];
 }
 
-/** Hasta dónde se buscan guías manuales sin OSE ID. */
-const LOOKBACK_DAYS = 30;
+/**
+ * Hasta dónde se buscan guías manuales sin OSE ID. El OSE ID sirve para el
+ * ticket de los avisos, que salen en la primera semana de la guía. Con 30 días,
+ * UNA guía vieja que el listado nunca resuelve (98058249, del 01-10-2026) hacía
+ * releer diez días de listado en cada pasada de media hora, y desde que se leen
+ * todas las páginas eso se comía el tiempo del cron (10-10-2026).
+ */
+const LOOKBACK_DAYS = 7;
 /** El listado pagina y Shalom no entrega más de 200 por página aunque se le
  *  pidan más (medido el 10-10-2026): con 600 se leía solo la primera página. */
 const PER_PAGE = 200;
