@@ -5715,6 +5715,12 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   arma la cuenta entera para contestar cada página— y a las 16:00 del
   10-10-2026 se rindió sin recibir ni la primera página, con 47 pedidos
   esperando. Con su propia invocación tiene ~270 s solo para el listado.
+- **Las páginas se piden de a tres** (11-10-2026). Cada página tarda ~38 s y el
+  listado desde el pedido más viejo son 10-11 páginas: en serie no cabe ni en
+  la invocación propia (la pasada de las 20:10 del 10-10 leyó 7 y se quedó sin
+  tiempo, sin vincular nada). En tandas de tres se lee en ~150 s; las páginas
+  se procesan en orden con las mismas reglas, y si una falla, falla el
+  listado entero y no se vincula nada.
 - **Quién es candidato.** Pedido de los últimos 90 días en «Preparación · Por
   generar rótulo», con el pago que Agencia exige para pasar a Preparación
   (`agencyPaymentReady`: adelanto validado, diferencia cargada o pago

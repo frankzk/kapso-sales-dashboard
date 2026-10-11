@@ -52,6 +52,10 @@ export const MAX_LINKS_PER_RUN = 10;
 const PER_PAGE = 200;
 /** 90 días de las dos tiendas son ~2.500 guías: 13 páginas de 200; 20 sobran. */
 const MAX_PAGES = 20;
+/** Páginas pedidas a la vez. Cada una tarda ~38 s; tres en paralelo leen las
+ *  10-11 páginas de hoy en ~150 s, muy por debajo del cupo de 60 llamadas por
+ *  minuto que comparten las tiendas. */
+const PAGE_CONCURRENCY = 3;
 /** `.in()` viaja en la URL: listas cortas. */
 const CHUNK = 150;
 /** Las guías de la API de la última hora pueden no estar todavía en el listado. */
@@ -422,7 +426,7 @@ export async function cotejarShalom(
       const collected = await readWithFreshSession(admin, group.storeId, group.store, (client) =>
         collectListingPages(
           (page, left) => client.ordersSince(desde, PER_PAGE, { page, timeoutMs: Math.min(SLOW_TIMEOUT_MS, left) }),
-          { perPage: PER_PAGE, maxPages: MAX_PAGES, deadlineMs: opts.deadlineMs },
+          { perPage: PER_PAGE, maxPages: MAX_PAGES, deadlineMs: opts.deadlineMs, concurrency: PAGE_CONCURRENCY },
         ),
       );
       account.listado = collected.orders.length;

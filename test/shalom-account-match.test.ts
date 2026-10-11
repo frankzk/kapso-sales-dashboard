@@ -353,6 +353,42 @@ describe("bajar el listado entero", () => {
     expect(r.orders).toHaveLength(3);
   });
 
+  it("de a tres a la vez lee lo mismo, en orden, y para en la página corta", async () => {
+    const pedidas: number[] = [];
+    let enVuelo = 0;
+    let maxEnVuelo = 0;
+    const lenta = async (page: number) => {
+      pedidas.push(page);
+      enVuelo += 1;
+      maxEnVuelo = Math.max(maxEnVuelo, enVuelo);
+      await new Promise((r) => setTimeout(r, 5));
+      enVuelo -= 1;
+      return paginas(23, 4)(page);
+    };
+    const r = await collectListingPages(lenta, { perPage: 10, maxPages: 20, deadlineMs: Date.now() + 60_000, concurrency: 3 });
+    expect(r).toMatchObject({ completo: true, paginas: 6 });
+    expect(r.orders.map((o) => o.id)).toEqual(Array.from({ length: 23 }, (_, i) => i + 1));
+    expect(maxEnVuelo).toBe(3);
+    // Dos tandas: 1-3 y 4-6. La 6 es la corta; no se pide una tercera tanda.
+    expect([...pedidas].sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("de a tres, la tanda que trae la vacía también cierra el listado", async () => {
+    const r = await collectListingPages(paginas(12, 4), { perPage: 10, maxPages: 20, deadlineMs: Date.now() + 60_000, concurrency: 3 });
+    expect(r).toMatchObject({ completo: true, paginas: 4 });
+    expect(r.orders).toHaveLength(12);
+  });
+
+  it("de a tres, si una página falla, falla el listado (no se da por entero)", async () => {
+    const falla = async (page: number) => {
+      if (page === 2) throw new Error("No hubo respuesta de Shalom");
+      return paginas(100, 10)(page);
+    };
+    await expect(
+      collectListingPages(falla, { perPage: 10, maxPages: 20, deadlineMs: Date.now() + 60_000, concurrency: 3 }),
+    ).rejects.toThrow("No hubo respuesta");
+  });
+
   it("si el wrapper ignora `page` y repite, el listado NO está entero", async () => {
     const r = await collectListingPages(async () => Array.from({ length: 10 }, (_, i) => orden(i)), {
       perPage: 10,

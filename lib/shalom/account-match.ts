@@ -385,29 +385,40 @@ export interface CollectedListing {
  */
 export async function collectListingPages(
   fetchPage: (page: number, timeoutMs: number) => Promise<ShalomAccountOrder[]>,
-  opts: { perPage: number; maxPages: number; deadlineMs: number; now?: () => number },
+  opts: { perPage: number; maxPages: number; deadlineMs: number; concurrency?: number; now?: () => number },
 ): Promise<CollectedListing> {
   const now = opts.now ?? Date.now;
+  // DE A VARIAS PÁGINAS A LA VEZ (11-10-2026). Shalom tarda ~38 s en entregar
+  // cada página —arma la cuenta entera para contestar— y el listado desde el
+  // pedido más viejo son 10-11 páginas: en serie no cabe en una invocación (la
+  // pasada de las 20:10 leyó 7 y se quedó sin tiempo). Se piden en tandas de
+  // `concurrency` y se procesan EN ORDEN, con las mismas reglas que una a una;
+  // pedir una tanda de más al final cuesta una o dos páginas vacías.
+  const concurrency = Math.max(1, Math.floor(opts.concurrency ?? 1));
   const orders: ShalomAccountOrder[] = [];
   const ids = new Set<string>();
   /** La página más larga vista: el tamaño que el servidor de verdad entrega. */
   let longest = 0;
-  for (let page = 1; page <= opts.maxPages; page += 1) {
+  for (let first = 1; first <= opts.maxPages; first += concurrency) {
     const left = opts.deadlineMs - now();
-    if (left < 5_000) return { orders, paginas: page - 1, completo: false, motivo: "se acabó el tiempo de la pasada" };
-    const batch = await fetchPage(page, left);
-    const fresh = batch.filter((o) => {
-      const key = `${o.id}|${String(o.guia ?? "")}`;
-      if (ids.has(key)) return false;
-      ids.add(key);
-      return true;
-    });
-    if (batch.length && !fresh.length) {
-      return { orders, paginas: page, completo: false, motivo: `la página ${page} repite la anterior: el listado no pagina` };
+    if (left < 5_000) return { orders, paginas: first - 1, completo: false, motivo: "se acabó el tiempo de la pasada" };
+    const pages = Array.from({ length: Math.min(concurrency, opts.maxPages - first + 1) }, (_, i) => first + i);
+    const batches = await Promise.all(pages.map((page) => fetchPage(page, left)));
+    for (const [i, batch] of batches.entries()) {
+      const page = first + i;
+      const fresh = batch.filter((o) => {
+        const key = `${o.id}|${String(o.guia ?? "")}`;
+        if (ids.has(key)) return false;
+        ids.add(key);
+        return true;
+      });
+      if (batch.length && !fresh.length) {
+        return { orders, paginas: page, completo: false, motivo: `la página ${page} repite la anterior: el listado no pagina` };
+      }
+      orders.push(...fresh);
+      if (!batch.length || batch.length < longest) return { orders, paginas: page, completo: true, motivo: null };
+      longest = Math.max(longest, batch.length);
     }
-    orders.push(...fresh);
-    if (!batch.length || batch.length < longest) return { orders, paginas: page, completo: true, motivo: null };
-    longest = Math.max(longest, batch.length);
   }
   return { orders, paginas: opts.maxPages, completo: false, motivo: `más de ${opts.maxPages} páginas` };
 }
