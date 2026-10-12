@@ -95,7 +95,7 @@ export function GfBoxAddPackages({ manifest, canManage, canAuthorizeCash = false
       setConfirmedIds((current) => current.includes(id) ? current : [...current, id]);
       setRevision((current) => current + 1);
     } else if (line.receivedFrom) {
-      // Se recibió de una caja (la reemplazada vuelve a stock, 0247; o salió
+      // Se recibió de una caja (la reemplazada vuelve a stock, 0248; o salió
       // de una caja vieja sin entrar en esta): la caja que se mira puede ser
       // esa, y se actualiza igual.
       setRevision((current) => current + 1);

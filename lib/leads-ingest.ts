@@ -23,6 +23,7 @@ import type { StoreCreds } from "@/lib/ingest";
 import { categoryOf, deriveAutoState, nextLeadState, statusDef } from "@/lib/leads";
 import { tzParts } from "@/lib/metrics";
 import { normalizePhone } from "@/lib/phone";
+import { LEAD_VOICE_KIND } from "@/lib/voice-leads";
 import {
   DRAFT_GRACE_MINUTES,
   extractNumericId,
@@ -1046,6 +1047,12 @@ export function shouldReopenLostCart(opts: {
  *  result). The auto-sync must not override a disposition with an order/cart that
  *  predates it.
  *
+ *  Cuenta también lo que dejó el agente de voz de leads (`LEAD_VOICE_KIND`, MOM
+ *  §33) cuando aplicó un estado: sin eso, un carrito creado ANTES de su llamada
+ *  reabría a «nuevo» el lead que el agente acababa de pasar a «Atender ahora» o
+ *  de cerrar. Sus filas sin estado (no contestó, guarda que no aplicó) no
+ *  cuentan, igual que una nota de asesora sin estado.
+ *
  *  LANZA si no puede leer (ver selectIn). Antes devolvía {} ante cualquier error,
  *  y un mapa vacío dice «nadie gestionó a estos leads»: con eso un pedido o un
  *  carrito podía pasar por encima del resultado que una asesora acababa de
@@ -1072,9 +1079,9 @@ export async function lastDispositionAtByPhone(
       .from("lead_calls")
       .select("lead_id, occurred_at")
       .eq("store_id", storeId)
-      .eq("kind", "call")
       .not("new_status", "is", null)
-      .in("lead_id", chunk),
+      .in("lead_id", chunk)
+      .in("kind", ["call", LEAD_VOICE_KIND]),
   );
   for (const c of calls) {
     const phone = phoneById.get(c.lead_id);
@@ -1768,6 +1775,34 @@ export function winbackSeed(body: any): WinbackSeed | null {
   };
 }
 
+/**
+ * ¿El lead de ese teléfono pidió no ser contactado (MOM §33)? Devuelve el
+ * motivo para `webhook_events.error`, o null si se puede enviar.
+ *
+ * El winback no crea leads, pero si la persona ya es lead y le dijo al agente
+ * de voz «no me contacten», una plantilla de marketing es justo lo que pidió no
+ * recibir. Si la lectura falla no se envía (cerrado): este envío no se
+ * reintenta, pero escribirle a quien lo prohibió es peor que perder un cupón.
+ * Pre-0247 (sin la columna) nadie pudo pedirlo todavía, así que se envía.
+ */
+async function winbackOptOut(admin: SupabaseClient, storeId: string, phone: string): Promise<string | null> {
+  const unread = "Omitido: no se pudo leer si pidió no ser contactado";
+  try {
+    const { data, error } = await admin
+      .from("leads")
+      .select("contact_opt_out_at")
+      .eq("store_id", storeId)
+      .eq("phone", phone)
+      .maybeSingle();
+    if (error) return /contact_opt_out_at/i.test(error.message) ? null : unread;
+    return (data as { contact_opt_out_at?: string | null } | null)?.contact_opt_out_at
+      ? "Omitido: pidió no ser contactado (agente de voz)"
+      : null;
+  } catch {
+    return unread; // el webhook nunca responde 500 por esto
+  }
+}
+
 /** Ingest a Shopify Flow "winback" event → send the re-engagement template.
  *  Idempotent per order cycle (`winback-<orderId>`): Flow retries dedupe, but a
  *  customer who buys again and lapses again re-enters with a NEW order id and
@@ -1809,54 +1844,58 @@ export async function processWinback(
   else if (!creds.kapso_api_key || !creds.whatsapp_phone_number_id)
     outcome = "Omitido: faltan credenciales de Kapso (API key / número)";
   else {
-    try {
-      const send = await sendTemplate(
-        { apiKey: creds.kapso_api_key },
-        {
-          phoneNumberId: creds.whatsapp_phone_number_id,
-          to: seed.phone,
-          templateName: creds.winback_template_name,
-          language: creds.winback_template_language ?? "es",
-          bodyParams: [seed.name],
-        },
-      );
-      if (!send.ok) outcome = `Falló el envío de «${creds.winback_template_name}»: ${send.error}`;
-      // Record the send so a later order can be attributed to "recuperación 60d"
-      // (order used a winback coupon AND got the template ≤30 días antes). Only
-      // successful sends count. Best-effort: a missing winback_sends table (0030
-      // not applied yet) must not break the webhook — swallow and move on.
-      if (send.ok) {
-        try {
-          await admin.from("winback_sends").insert({
-            store_id: storeId,
-            phone: seed.phone,
-            template_name: creds.winback_template_name,
-            order_gid: seed.orderId ? `gid://shopify/Order/${seed.orderId}` : null,
-          });
-        } catch {
-          /* table may not exist pre-0030 — attribution just misses this send */
+    // Pidió no ser contactado (o no se pudo saber): `outcome` ya dice por qué.
+    outcome = await winbackOptOut(admin, storeId, seed.phone);
+    if (!outcome) {
+      try {
+        const send = await sendTemplate(
+          { apiKey: creds.kapso_api_key },
+          {
+            phoneNumberId: creds.whatsapp_phone_number_id,
+            to: seed.phone,
+            templateName: creds.winback_template_name,
+            language: creds.winback_template_language ?? "es",
+            bodyParams: [seed.name],
+          },
+        );
+        if (!send.ok) outcome = `Falló el envío de «${creds.winback_template_name}»: ${send.error}`;
+        // Record the send so a later order can be attributed to "recuperación 60d"
+        // (order used a winback coupon AND got the template ≤30 días antes). Only
+        // successful sends count. Best-effort: a missing winback_sends table (0030
+        // not applied yet) must not break the webhook — swallow and move on.
+        if (send.ok) {
+          try {
+            await admin.from("winback_sends").insert({
+              store_id: storeId,
+              phone: seed.phone,
+              template_name: creds.winback_template_name,
+              order_gid: seed.orderId ? `gid://shopify/Order/${seed.orderId}` : null,
+            });
+          } catch {
+            /* table may not exist pre-0030 — attribution just misses this send */
+          }
         }
+        // Log on the phone's lead IF one exists (winback never creates leads).
+        const { data: lead } = await admin
+          .from("leads")
+          .select("id")
+          .eq("store_id", storeId)
+          .eq("phone", seed.phone)
+          .maybeSingle();
+        if (lead?.id) {
+          await admin.from("lead_calls").insert({
+            lead_id: lead.id,
+            store_id: storeId,
+            kind: "system",
+            vendedora: null,
+            note: send.ok
+              ? `📤 WhatsApp: plantilla «${creds.winback_template_name}» enviada (recuperación 60 días)`
+              : `⚠️ WhatsApp: falló envío de «${creds.winback_template_name}» (${send.error})`,
+          });
+        }
+      } catch (e) {
+        outcome = `Error en el envío: ${e instanceof Error ? e.message : String(e)}`;
       }
-      // Log on the phone's lead IF one exists (winback never creates leads).
-      const { data: lead } = await admin
-        .from("leads")
-        .select("id")
-        .eq("store_id", storeId)
-        .eq("phone", seed.phone)
-        .maybeSingle();
-      if (lead?.id) {
-        await admin.from("lead_calls").insert({
-          lead_id: lead.id,
-          store_id: storeId,
-          kind: "system",
-          vendedora: null,
-          note: send.ok
-            ? `📤 WhatsApp: plantilla «${creds.winback_template_name}» enviada (recuperación 60 días)`
-            : `⚠️ WhatsApp: falló envío de «${creds.winback_template_name}» (${send.error})`,
-        });
-      }
-    } catch (e) {
-      outcome = `Error en el envío: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 
@@ -1905,6 +1944,8 @@ export interface DripLead {
   cart_item_count?: number | null; // señal de carrito — solo para PRIORIZAR
   draft_order_gid?: string | null;
   attention_waves?: number | null; // >0 = la atención vino de una OLA de reencolado
+  /** Pidió no ser contactado (0247, MOM §33). Pre-0247 no viene. */
+  contact_opt_out_at?: string | null;
 }
 
 /** ¿El lead tiene carrito? (mismo criterio que leadSegment / las olas). */
@@ -1915,7 +1956,8 @@ export function dripHasCart(l: Pick<DripLead, "cart_item_count" | "draft_order_g
 /**
  * Por qué un lead NO recibe drip ahora (null = elegible). Pure — es LA regla
  * del drip, el fetch solo pre-filtra en SQL lo barato. Guardas, en orden:
- * status fuera de nr/buzón/cuelga; CARRITO cuando la secuencia de carritos lo
+ * pidió no ser contactado (`contact_opt_out_at`, MOM §33); status fuera de
+ * nr/buzón/cuelga; CARRITO cuando la secuencia de carritos lo
  * gestiona (`cartSeqOwnsCarts` — el carrito recibe carrito_abandonado, no el
  * genérico: sin esto le llegarían las dos plantillas); atención pendiente
  * (respondió o venció un seguimiento → lo ve la asesora, no el bot); agenda
@@ -1943,6 +1985,9 @@ function waveOverridesAttention(l: DripLead, nowMs: number): boolean {
 }
 
 export function dripSkipReason(l: DripLead, nowMs: number, cartSeqOwnsCarts = false): string | null {
+  // Primero que todo: quien pidió no ser contactado (se lo dijo al agente de
+  // voz de leads, MOM §33) no recibe plantillas, esté en el estado que esté.
+  if (l.contact_opt_out_at) return "no_contactar";
   if (!(DRIP_STATUSES as readonly string[]).includes(l.status)) return "status";
   // La secuencia de carritos (carrito_abandonado_1/2) es dueña de los carritos
   // cuando está activa: el drip genérico les cede el turno para no mandar dos
@@ -2052,11 +2097,20 @@ export async function sendSeguimientoDrip(
   // de OLA no frena el drip; una respuesta del cliente sí).
   const BASE_COLS =
     "id, phone, name, status, needs_attention, next_followup_at, last_interaction_at, last_inbound_at, drip_touches, last_drip_at, cart_item_count, draft_order_gid, wa_phone_number_id";
-  let { data, error } = await buildSelect(`${BASE_COLS}, attention_waves`);
-  if (error && /attention_waves/i.test(error.message)) {
-    // Pre-0036: sin la columna se degrada al comportamiento clásico (toda
-    // atención prendida frena el drip).
-    ({ data, error } = await buildSelect(BASE_COLS));
+  // Columnas que pueden no existir todavía. Cada una que la base no conozca se
+  // quita y se reintenta:
+  //   - attention_waves (0036): sin ella se degrada al comportamiento clásico
+  //     (toda atención prendida frena el drip).
+  //   - contact_opt_out_at (0247): sin ella nadie pudo pedir todavía que no lo
+  //     contacten, así que no hay a quién saltar.
+  let optional = ["attention_waves", "contact_opt_out_at"];
+  let { data, error } = await buildSelect([BASE_COLS, ...optional].join(", "));
+  for (;;) {
+    const msg = error?.message.toLowerCase() ?? "";
+    const missing = optional.find((c) => msg.includes(c));
+    if (!missing) break;
+    optional = optional.filter((c) => c !== missing);
+    ({ data, error } = await buildSelect([BASE_COLS, ...optional].join(", ")));
   }
   if (error) throw new Error(`drip select: ${error.message}`);
 

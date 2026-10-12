@@ -176,7 +176,7 @@ export async function addStops(routeId: string, orderIds: string[]): Promise<Rou
   if (unknown.length) {
     return { ok: false, error: `${unknown.length} pedido(s) no existen o no son accesibles.` };
   }
-  // Con una caja reemplazada todavía fuera (0247), una parada sin salida no
+  // Con una caja reemplazada todavía fuera (0248), una parada sin salida no
   // dice de qué caja habla: no se añade.
   const replacedOut = await ordersWithReplacedOutputOut(g.admin, orderIds);
   if (replacedOut.size) {
@@ -259,7 +259,7 @@ export async function startRoute(routeId: string): Promise<RouteActionResult> {
  * entregado» que siguen en su caja, de una vez. Es la MISMA puerta que
  * «Devoluciones» en Despacho del día (`returnUndeliveredOutputs`, 0188/0206):
  * sale de la caja con rastro y vuelve a «por asignar», rechazo incluido
- * (v1.23); la caja reemplazada por otra salida vuelve a stock (0247). Solo las
+ * (v1.23); la caja reemplazada por otra salida vuelve a stock (0248). Solo las
  * cajas de ESTA ruta. Pulsarlo dice que las cajas están en la oficina.
  */
 export async function receiveRouteReturns(routeId: string): Promise<RouteActionResult> {
@@ -272,7 +272,7 @@ export async function receiveRouteReturns(routeId: string): Promise<RouteActionR
   const orgId = detail.route.org_id;
   if (!orgId) return { ok: false, error: "La ruta no tiene organización: recíbelos desde «Devoluciones»." };
   // Por salida y solo de las cajas de ESTA ruta: el mismo pedido puede tener
-  // otra caja «No entregado» con otro motorizado (la reemplazada, 0247).
+  // otra caja «No entregado» con otro motorizado (la reemplazada, 0248).
   const res = await returnUndeliveredOutputs(
     orgId,
     [...new Set(pending.map((stop) => stop.shipment_id).filter((id): id is string => Boolean(id)))],

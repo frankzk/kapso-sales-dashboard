@@ -168,7 +168,7 @@ export interface CourierReturnableOrder extends CourierAvailableOrder {
 
 /**
  * Salida de Grupo GF «en devolución» con el motorizado: el pedido ya salió con
- * otra («Sacar con salida nueva», 0247). Se recibe en oficina cuando vuelve y
+ * otra («Sacar con salida nueva», 0248). Se recibe en oficina cuando vuelve y
  * va a stock; no se reprograma ni se asigna.
  */
 export interface CourierReturningOutput {
@@ -244,7 +244,7 @@ export interface CourierOperationsSnapshot {
   available: CourierAvailableOrder[];
   /** Salidas propias en una caja anterior, sin solicitud: «Recibir en oficina». */
   returnable: CourierReturnableOrder[];
-  /** Cajas reemplazadas que el motorizado todavía tiene (0247). */
+  /** Cajas reemplazadas que el motorizado todavía tiene (0248). */
   returning: CourierReturningOutput[];
   accepted: CourierAcceptedOrder[];
   routes: CourierRouteSummary[];
@@ -801,7 +801,7 @@ async function loadCourierOperations(
   }
   // «Nunca salieron» frente a «Ya salieron», y lo programado sin tomar (0199):
   // para la cola y para lo tomado, en una llamada cada uno. Junto a ellas, las
-  // reemplazadas por otra salida (0247), que no estorban ni se toman.
+  // reemplazadas por otra salida (0248), que no estorban ni se toman.
   const requestOrderIdsAll = ((requestRows ?? []) as { order_id: string }[]).map((request) => request.order_id);
   const [lastDispatchByOrder, programByOrder, replacedIds] = await Promise.all([
     loadDepartures(admin, [...new Set([...queueOrderIds, ...requestOrderIdsAll])]),
@@ -1122,7 +1122,7 @@ async function loadCourierOperations(
 
 /**
  * Las cajas reemplazadas que el motorizado todavía tiene («Sacar con salida
- * nueva», 0247): salida propia en custodia `retorno`, sin recibir y con su
+ * nueva», 0248): salida propia en custodia `retorno`, sin recibir y con su
  * ítem activo en una caja. Con la salida nueva que las reemplazó.
  */
 async function loadReturningOutputs(admin: Admin, storeIds: string[], storeName: Map<string, string>): Promise<CourierReturningOutput[]> {
@@ -1742,7 +1742,7 @@ export interface AssignCourierRouteResult extends CourierActionResult {
  * reportó «No entregado» sale de su caja con rastro, la custodia vuelve a la
  * empresa y la solicitud a «por asignar». El pedido queda en «Por reprogramar
  * Lima» hasta que se asigne otra vez. La caja reemplazada por otra salida
- * vuelve a stock (0247). Por número de pedido: si el pedido tiene dos cajas
+ * vuelve a stock (0248). Por número de pedido: si el pedido tiene dos cajas
  * «No entregado», no recibe ninguna y pide el QR (`returnUndeliveredShipments`).
  */
 export async function returnUndeliveredToOffice(orgId: string, orderIds: string[]): Promise<CourierActionResult> {
@@ -1762,7 +1762,7 @@ export async function returnUndeliveredToOffice(orgId: string, orderIds: string[
  * cuya última parada en su caja es «No entregado» (lo que exige la 0206): una
  * salida nueva del mismo pedido, con su parada pendiente, no es ruido.
  *
- * La caja reemplazada (0247, custodia `retorno`) también se recibe aquí, pero
+ * La caja reemplazada (0248, custodia `retorno`) también se recibe aquí, pero
  * vuelve a stock: el pedido ya salió con otra salida y no vuelve a la cola.
  */
 async function returnUndeliveredShipments(
@@ -1773,7 +1773,7 @@ async function returnUndeliveredShipments(
   opts: {
     /**
      * Por número de pedido: un pedido puede tener dos cajas «No entregado» (la
-     * reemplazada con un motorizado y la nueva con otro, 0247). Así no se sabe
+     * reemplazada con un motorizado y la nueva con otro, 0248). Así no se sabe
      * cuál llegó, y nunca se concilia solo por pedido (MOM §9.4): se pide el QR.
      */
     byOrder?: boolean;
@@ -1823,7 +1823,7 @@ async function returnUndeliveredShipments(
       received.push(item.shipment_id);
     }
   }
-  // Lo que la 0247 mandó a stock en vez de a «por asignar» —la reemplazada y la
+  // Lo que la 0248 mandó a stock en vez de a «por asignar» —la reemplazada y la
   // que ya constaba devuelta—, releído después de recibir: un reemplazo que
   // terminó mientras tanto cambia la rama. Una en `retorno` sin reemplazo
   // («Solicitar devolución») vuelve a «por asignar», como siempre.
@@ -1856,7 +1856,7 @@ async function returnUndeliveredShipments(
 
 /**
  * «Recibir en oficina» por salida: desde «En devolución» (la caja reemplazada
- * vuelve a stock, 0247), la fila de «Devoluciones», la lista de Despacho del
+ * vuelve a stock, 0248), la fila de «Devoluciones», la lista de Despacho del
  * día y el cierre de una ruta. Un pedido puede tener dos cajas «No entregado»
  * con dos motorizados: se recibe la que llegó, nunca por número de pedido.
  */
@@ -1907,7 +1907,7 @@ export async function returnUndeliveredByCode(orgId: string, rawCode: string): P
   }
   if (!orderId) return { error: found.error ?? "No encontramos un pedido con ese QR, guía o número." };
   // Por QR, código de salida o guía se recibe ESA salida: el pedido puede tener
-  // otra saliendo (0247). El número de pedido no designa caja: se recibe por
+  // otra saliendo (0248). El número de pedido no designa caja: se recibe por
   // pedido, con la regla de las dos cajas de `returnUndeliveredToOffice`.
   const byOutput = found.shipment && !found.byOrderName && courierKey(found.shipment.courier) === "propio" ? found.shipment : null;
   if (byOutput && !auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas." };
@@ -1933,7 +1933,7 @@ export interface ReplaceOwnOutputsResult extends CourierActionResult {
  * traen al día siguiente, Alexis cada dos o tres días— y el pedido tiene que
  * salir antes: se crea una salida NUEVA (consecutivo, QR y rótulo propios) que
  * Almacén arma desde stock, y la anterior queda «en devolución» a nombre del
- * motorizado (`gf_replace_output`, 0247). Cuando la trae, «Recibir en oficina»
+ * motorizado (`gf_replace_output`, 0248). Cuando la trae, «Recibir en oficina»
  * la devuelve a stock: no se reutiliza ni vuelve a la cola.
  *
  * Por salida (`shipmentIds`): un pedido puede tener una en devolución y otra
@@ -2215,7 +2215,7 @@ export async function replaceOwnOutputs(
 
 /** El código de la salida que reemplazó a esta (`output_replaced`), si consta. */
 /**
- * Las salidas que se reemplazaron por otra (evento `output_replaced`, 0247),
+ * Las salidas que se reemplazaron por otra (evento `output_replaced`, 0248),
  * entre estas. Es la marca: la custodia `retorno` sola también la pone
  * «Solicitar devolución».
  */
@@ -2239,7 +2239,7 @@ async function loadReplacedIds(admin: Admin, shipmentIds: string[]): Promise<Set
   return replacedOutputIds((data as Array<{ shipment_id: string | null }>).map((row) => ({ kind: "output_replaced", shipment_id: row.shipment_id })));
 }
 
-/** ¿La salida tiene el evento `output_replaced`? (0247) */
+/** ¿La salida tiene el evento `output_replaced`? (0248) */
 async function outputWasReplaced(admin: Admin, shipmentId: string): Promise<boolean> {
   const { data } = await admin
     .from("order_events")
@@ -3315,7 +3315,7 @@ export async function moveManifestItem(
     .maybeSingle();
   if (!shipment) return { error: "Paquete no encontrado." };
   if (!storeAllowed(auth, shipment.store_id as string | null)) return { error: OUTSIDE_STORE };
-  // La caja reemplazada (0247) no cambia de motorizado: vuelve a la oficina.
+  // La caja reemplazada (0248) no cambia de motorizado: vuelve a la oficina.
   // Una en `retorno` por «Solicitar devolución» tampoco se mueve, con el aviso
   // de siempre.
   if (shipment.custody_state === "retorno" && (await outputWasReplaced(admin, shipmentId))) {
@@ -3463,7 +3463,7 @@ export type ScanAssignStatus =
   /** Programado para otro día (0199): se asigna solo si se confirma. */
   | "programado_otro_dia"
   /**
-   * La caja reemplazada por otra salida (0247): el escaneo la recibió en
+   * La caja reemplazada por otra salida (0248): el escaneo la recibió en
    * oficina (o ya estaba recibida) y vuelve a stock. No se asigna.
    */
   | "recibido_a_stock"
@@ -3596,7 +3596,7 @@ export async function scanAssignToRider(
   const boxDay = opts.scheduledFor && DATE_RE.test(opts.scheduledFor) ? opts.scheduledFor : limaClock().day;
   let receivedFrom: string | null = null;
 
-  // La caja reemplazada por otra salida (0247): nunca se toma ni se asigna, ni
+  // La caja reemplazada por otra salida (0248): nunca se toma ni se asigna, ni
   // en su caja ni ya recibida —el pedido sale con la nueva, y tomarlo por este
   // QR metería la salida nueva en la caja con el rótulo de esta—.
   const replacedScan = found.shipment && found.shipment.id === shipmentId && courierKey(found.shipment.courier) === "propio"
@@ -3619,7 +3619,7 @@ export async function scanAssignToRider(
   // 2) ¿Ya está en una caja activa?
   if (shipmentId) {
     const box = (active as { id: string; manifest_id: string; office_checked_at: string | null; dispatch_manifests: { rider_id: string | null; driver_name: string | null; route_date: string; state: string } } | null) ?? null;
-    // La caja reemplazada (0247, «Sacar con salida nueva»): sea del día que
+    // La caja reemplazada (0248, «Sacar con salida nueva»): sea del día que
     // sea, escanearla en oficina la recibe y vuelve a stock. No se toma ni se
     // asigna: el pedido ya sale con otra salida.
     if (box && replacedScan) {
@@ -3679,7 +3679,7 @@ export async function scanAssignToRider(
       }
       const { error: returnError } = await admin.rpc("gf_return_to_office", { p_item_id: box.id, p_actor: auth.userId });
       if (returnError) return { ...line, status: "no_elegible", manifestId: box.manifest_id, message: returnError.message };
-      // Releída después de recibir (0247): si la base la mandó a stock —un
+      // Releída después de recibir (0248): si la base la mandó a stock —un
       // «Sacar con salida nueva» terminó mientras tanto, o ya constaba
       // devuelta—, no se toma ni se asigna: el pedido no sale con esta caja.
       const [{ data: after }, replacedNow] = await Promise.all([

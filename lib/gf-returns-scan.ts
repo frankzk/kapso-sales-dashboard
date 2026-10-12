@@ -13,7 +13,7 @@
 // Lo que nunca salió en Kapta no tiene nada que recibir: se dice que sigue por
 // asignar. Un entregado o una parada sin reporte no se tocan.
 //
-// La caja reemplazada (12-10-2026, «Sacar con salida nueva», 0247) se recibe
+// La caja reemplazada (12-10-2026, «Sacar con salida nueva», 0248) se recibe
 // igual, pero vuelve a stock: el pedido ya salió con otra salida.
 
 import { boxDayShort } from "@/lib/gf-scan-return";
@@ -29,7 +29,7 @@ export interface GfReturnFacts {
   replaced?: boolean;
   /*
    * Una salida que ya consta devuelta pero sigue en la caja también va a stock
-   * (0247): `custodyState` «devuelto».
+   * (0248): `custodyState` «devuelto».
    */
 }
 

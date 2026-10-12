@@ -168,8 +168,8 @@ function shiftDay(day: string, days: number): string {
  * Los reprogramados que el motorizado sigue teniendo: parada «Reprogramado» en
  * una caja suya de un día anterior, todavía en custodia y con el paquete
  * activo en ella (no volvió a la oficina ni pasó ya a otra ruta), y que no se
- * reemplazó por otra salida (custodia `retorno`, 0247). Es la misma condición
- * que valida `gf_carry_over` (0234, 0247).
+ * reemplazó por otra salida (custodia `retorno`, 0248). Es la misma condición
+ * que valida `gf_carry_over` (0234, 0248).
  */
 async function loadCarryCandidates(admin: SupabaseClient, target: NotebookTarget, onRoute: Set<string>): Promise<PlanCarry[]> {
   const { data: routes } = await admin
@@ -204,7 +204,7 @@ async function loadCarryCandidates(admin: SupabaseClient, target: NotebookTarget
   const active = new Set(((items ?? []) as { shipment_id: string; manifest_id: string }[]).map((i) => `${i.manifest_id}:${i.shipment_id}`));
   const inBox = reprogrammed.filter((s) => active.has(`${s.dispatch_manifest_id}:${s.shipment_id}`));
   if (!inBox.length) return [];
-  // La caja reemplazada por otra salida (0247) no pasa: vuelve a la oficina. Su
+  // La caja reemplazada por otra salida (0248) no pasa: vuelve a la oficina. Su
   // marca es el evento `output_replaced`: una en `retorno` por «Solicitar
   // devolución» pasa como siempre (lo mismo decide `gf_carry_over`).
   const inBoxIds = [...new Set(inBox.map((s) => s.shipment_id))];

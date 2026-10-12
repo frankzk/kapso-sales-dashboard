@@ -4323,6 +4323,8 @@ una condición existe en otra pantalla, se lee de la misma función.
    (ver pendientes).
 9. El teléfono **no pidió que no lo llamen** (`no_llamar`, abajo) en esa
    tienda.
+   La lista es una por tienda para los dos agentes de voz (12-10-2026): incluye
+   a quien se lo pidió al agente de leads (§33.7).
 
 Orden de la cola: **fecha pactada por el propio agente → guía cerrada más
 reciente primero**. Lo mismo que §6.1 con la antigüedad invertida: aquí lo
@@ -4338,6 +4340,10 @@ razón: el primer lote de cada tienda se mira antes de soltarlo.
 - `voice_recovery_auto`: el barrido llama solo. Apagarlo es la marcha atrás.
 - `voice_recovery_daily_cap` (30 por defecto): llamadas salientes por tienda y
   día de Lima. Se cuenta sobre `voice_calls`, no sobre un contador.
+- **Solo llamadas de pedido (12-10-2026).** El tope diario, «Gestión por
+  persona», «Llamando ahora» y la última llamada de la línea «Agente de voz»
+  cuentan solo `voice_calls.purpose = 'order'`. Las del agente de leads (§33)
+  tienen su propio tope (`voice_lead_daily_cap`) y su propio tablero.
 - **Una llamada del agente por pedido y día**, y **`voice_recovery_max_attempts`**
   (2 por defecto) llamadas del agente por pedido en total. Agotadas, el pedido
   sigue en la cola de Reproprovincia para una persona, marcado «el agente ya
@@ -4805,6 +4811,12 @@ Reglas de esa tabla:
       no se usa antes de que la clienta hable.
     - **Sin razonamiento interno** (`thinking_budget` = 0). En esa respuesta,
       el modelo generó 841 tokens para una sola frase.
+
+    **No es el agente de leads (12-10-2026).** Hay un segundo agente de
+    ElevenLabs que llama a leads, no a pedidos (§33). Comparte la conexión de
+    Telnyx, pero tiene su propia puerta SIP, su secreto, su inicio de
+    conversación y su carril, y sus llamadas no cuentan en ningún tablero de
+    esta sección.
   - **«Llamando ahora» (Envíos, 05-10-2026).** En la pestaña Pendiente, la
     pantalla pregunta cada 5 s por las llamadas del agente abiertas: reales,
     marcando o en conversación, y sin las caducadas (`getLiveVoiceCalls`).
@@ -5065,6 +5077,8 @@ poner las dos columnas una al lado de la otra.
   anuncia la grabación. Antes del piloto con clientas reales, confirmar con
   quien asesore en protección de datos si eso es aceptable; si no lo es, o se
   apaga la grabación (queda la transcripción) o el aviso vuelve al saludo.
+- **Leads por voz** (12-10-2026): es otro agente y otro piloto, con su cola,
+  su grupo de control y sus pendientes, en §33.
 
 ### 11.9 Reintento automático Aliclik → Swayp sin contacto (01-10-2026)
 
@@ -9666,7 +9680,7 @@ sin devolver y otra saliendo (principio 7, §7).
 - **Quién.** Quien organiza rutas (`dispatch.manage`) en las tiendas que tiene
   en Equipo (§29.10).
 - **Qué pasa** (`replaceOwnOutputs`, `app/dashboard/courier/actions.ts`, y
-  `gf_replace_output`, 0247):
+  `gf_replace_output`, 0248):
   - Nace una salida nueva de Grupo GF con su consecutivo, QR y rótulo
     (`rotulo_generado`, custodia `empresa`): Almacén arma otra caja desde stock
     y el pedido pasa a «Preparación · Por armar». Cuenta dentro de las cinco
@@ -9682,7 +9696,7 @@ sin devolver y otra saliendo (principio 7, §7).
     se abre una. Si la solicitud viva del pedido es de otra salida, no se saca.
   - Eventos `output_replaced` en el pedido (sobre la salida anterior), en la
     caja y en la solicitud. **Ese evento es la marca de la salida
-    reemplazada** (`gf_output_replaced`, 0247): la custodia `retorno` sola no
+    reemplazada** (`gf_output_replaced`, 0248): la custodia `retorno` sola no
     basta, porque «Solicitar devolución» (§13) también la pone, y esa salida se
     sigue reportando, recibiendo y reprogramando como siempre: «Desde la
     lista» la ofrece para «Recibir en oficina», al recibirla vuelve a «por
@@ -9726,7 +9740,7 @@ sin devolver y otra saliendo (principio 7, §7).
   «por asignar».
 - **El motorizado ya no la entrega.** La parada de una salida reemplazada no
   cambia de estado —ni entregarla ni deshacer su «No entregado»—: lo impide el
-  trigger `delivery_stops_guard_replaced` (0247), también si el motorizado
+  trigger `delivery_stops_guard_replaced` (0248), también si el motorizado
   escribe su parada directamente, y el reporte lo dice antes
   (`writeStopReport`). Corregir la nota o el motivo sin cambiar el estado sí se
   puede. Tampoco se mueve a otro motorizado ni pasa a su ruta siguiente desde
@@ -9740,7 +9754,7 @@ sin devolver y otra saliendo (principio 7, §7).
 - **La salida nueva no va con el mismo motorizado el mismo día** que la caja
   reemplazada: la ruta del día tiene una parada por pedido y la de la caja
   anterior ya la ocupa. Asignarla ahí se niega con el motivo
-  (`dispatch_items_guard_replaced_route`, 0247); va con otro motorizado u otro
+  (`dispatch_items_guard_replaced_route`, 0248); va con otro motorizado u otro
   día.
 - **Master** (v1.26): la salida reemplazada (en devolución y con
   `output_replaced`, `isReplacedOwnOutput`) sigue activa —el pedido no se
@@ -9774,7 +9788,7 @@ Implementación: `lib/gf-replaced-output.ts`, `lib/gf-retry.ts`
 (`ownReplaceDecision`), `app/dashboard/courier/actions.ts` (`replaceOwnOutputs`,
 `returnUndeliveredShipments`, `loadReturningOutputs`), `lib/order-macro-stage.ts`,
 `lib/order-status.ts`, `components/dispatch-day-board.tsx` y la migración
-`0247_gf_replace_output.sql`. Pruebas en `test/gf-replace-output.test.ts` y
+`0248_gf_replace_output.sql`. Pruebas en `test/gf-replace-output.test.ts` y
 `scripts/sql/gf_replace_output_smoke.sql`.
 
 **Escanear un «No entregado» de una caja anterior lo recibe y lo asigna
@@ -10310,7 +10324,7 @@ decía «Ya estaba». Había 78 así, en cajas del 16 al 28/09, y 20 rechazos.
   de una vez por la puerta de «Devoluciones» (`returnUndeliveredOutputs`,
   0188/0206), por salida y solo de las cajas de esa ruta: vuelven a «por
   asignar», rechazos incluidos (v1.23); la caja reemplazada por otra salida
-  vuelve a stock (0247). Pulsarlo es decir que las cajas están en la oficina, y
+  vuelve a stock (0248). Pulsarlo es decir que las cajas están en la oficina, y
   lo confirma.
 - La tabla de la ruta filtra **«Por devolver»** con el mismo criterio.
 
@@ -10916,3 +10930,410 @@ prestada), `lib/order-macro-stage.ts` (`en_caja_de_otro_pedido`),
 `app/dashboard/pedidos/companion-actions.ts` y
 `components/order-companion-panel.tsx`. Pruebas en
 `test/order-companion.test.ts`.
+
+## 33. Agente de voz para leads (piloto Biru, 12-10-2026)
+
+Estado: construido, apagado por tienda. Existen la migración 0247, la cola y su
+sorteo, el inicio de conversación y las dos tools del agente, el barrido
+(`/api/cron/voice-leads`), el panel del drawer del lead, los ajustes de la
+tienda y el tablero del piloto. **Ninguna tienda lo tiene encendido**: no se
+llama a ningún lead hasta que el owner encienda el piloto (33.8). El guion
+versionado y la configuración del agente en ElevenLabs viven en
+`docs/voz-leads-agente.md`; esta sección define las reglas.
+
+Un **agente de voz para leads** es un segundo agente de ElevenLabs, separado
+del de Reproprovincia (§11.8), que llama a los **leads de anuncio** que
+conversaron con el bot de WhatsApp, no compraron y ninguna asesora tocó.
+Pregunta qué le faltó para comprar, responde con la oferta de la tienda y, si
+quiere comprar, toma los datos y deja el lead en **«Atender ahora»** para que
+una asesora genere el pedido. **No crea pedidos** (§2, principio 3) ni cobra, y
+no tiene estados propios: escribe con el catálogo de estados de las asesoras.
+
+### 33.1 Qué es y por qué
+
+- **Nadie los toca.** En Biru entran unos **33 leads por día** que conversan
+  con el bot, no compran y ninguna asesora toca.
+- **Los tocados convierten.** Los leads que una asesora toca convierten
+  ~38-40 %; los que nadie toca, ~0,5-0,7 %.
+- **Esa diferencia no es lo que vale tocar.** Las asesoras eligen a quién
+  tocar —al que pregunta el precio, al que da sus datos—, así que la
+  comparación arrastra un **sesgo de selección**: los tocados ya iban a
+  comprar más. Por eso el piloto lleva grupo de control (33.3) y la única cifra
+  que decide es la conversión del tratamiento contra la del control, no contra
+  el 0,5 %.
+
+### 33.2 Quién entra a la cola del agente
+
+Las condiciones van **en este orden** y la primera que falla es la razón que
+cuentan el log del barrido y la cola en seco (`leadVoiceEligible`,
+`lib/voice-leads.ts`, una función pura; los textos en
+`LEAD_VOICE_EXCLUSION_LABEL`). El drawer de las asesoras no la muestra (33.3).
+
+| # | Condición | Si falla |
+| --- | --- | --- |
+| 1 | La tienda tiene el agente de leads habilitado (`voice_lead_enabled`) | `agente_apagado` |
+| 2 | Celular peruano: 9 dígitos que empiezan en 9, con o sin 51. Un fijo no es de quien escribió por WhatsApp | `sin_telefono` |
+| 3 | No pidió que no lo contacten: `leads.contact_opt_out_at` vacío y el teléfono fuera de la lista «no llamar» de la tienda (33.7) | `no_contactar` |
+| 4 | No tiene pedido: ni `won`, ni `has_order`, ni `order_id` | `ya_compro` |
+| 5 | Viene de una campaña del piloto: `source = 'meta_ad'` y la campaña de su anuncio (`meta_ads.campaign_id` por `ad_id`) está en `voice_lead_campaign_ids`. Lista vacía = ninguna | `fuera_de_campana` |
+| 6 | No está en Perdidos (`category = 'lost'`) | `perdido` |
+| 7 | Escribió dos veces o más (`inbound_count`, `LEAD_VOICE_MIN_INBOUND`): el que escribió una sola vez no conversó | `poco_interes` |
+| 8 | Si el propio agente agendó volver a llamar (el lead está en `volver_a_llamar` por SU última llamada que de verdad salió: una que Telnyx rechazó, `cancelled`, no corta el «volver a llamar»), la hora ya llegó | `callback_pendiente` |
+| 9 | Estado `nuevo` (primera llamada) o ese «volver a llamar» del agente. Cualquier otro —también un «Volver a llamar» que puso una asesora— queda fuera | `estado` |
+| 10 | Ninguna asesora lo tocó desde que llegó: ninguna fila de `lead_calls` firmada (`vendedora` no nula) de tipo `call`, `message` o `sale` desde `first_seen_at` | `atendido_por_asesora` |
+| 11 | Volver a llamar: no volvió a escribir después de la llamada del agente con un handoff del bot (`handoff_at` posterior a esa llamada). Ese mensaje lo contesta una asesora; si el agente llamara, su resultado lo sacaría de «Atender ahora» con el mensaje sin responder | `handoff_pendiente` |
+| 12 | Ninguna asesora lo tiene tomado ahora (reserva vigente, `isClaimActive`) | `reservado` |
+| 13 | Primera llamada: pasaron `voice_lead_wait_minutes` desde su último mensaje —las asesoras van primero— y no más de `voice_lead_max_age_hours` (sin fecha, también fuera). Volver a llamar: no más de `voice_lead_max_age_hours` desde la hora pactada | `muy_pronto` / `muy_antiguo` |
+| 14 | El sorteo lo dejó en el tratamiento (33.3) | `grupo_control` |
+| 15 | No hay otra llamada del agente abierta para ese lead | `llamada_abierta` |
+| 16 | Le quedan intentos: menos de `voice_lead_max_attempts` llamadas reales. Solo la que Telnyx rechazó antes de marcar (`cancelled`) no gasta intento; la que la persona contestó y se cortó porque el puente al agente falló, sí (`attemptCounts`) | `intentos_agotados` |
+| 17 | Primera llamada: pasaron 3 horas desde el intento anterior (`LEAD_VOICE_RETRY_GAP_HOURS`). Un «volver a llamar» no espera: la persona pidió esa hora | `reintento_pronto` |
+
+Las condiciones 1 a 13 deciden si el lead es **elegible**; recién ahí se sortea
+su brazo, con las mismas reglas para los dos lados. De la 14 en adelante son
+del agente.
+
+**Orden de la cola** (`sortLeadVoiceQueue`): primero los «volver a llamar»
+vencidos, de la hora pactada más antigua a la más nueva; después las primeras
+llamadas, del que escribió más recientemente al más antiguo: el interés se
+enfría rápido.
+
+La consulta a la base prefiltra (fuente, categoría, estado, dos mensajes,
+teléfono y ventana) solo para no leer la tienda entera; quien decide es la
+función. **La cola falla cerrada**: si no se pudo leer la lista «no llamar»,
+los toques de las asesoras, los intentos o los brazos, no hay candidatos. Una
+cola armada a medias llamaría a quien no debe.
+
+### 33.3 El grupo de control
+
+- **El sorteo** es `leadVoiceArm(lead, voice_lead_holdout_pct)`: determinista
+  (el mismo lead cae siempre del mismo lado), con el experimento
+  `agente_voz_leads_v1` como sal, así que el **reparto** es independiente del
+  de `frio_cobertura_v1` (`lib/lead-experiment.ts`).
+- **Pero el agente sí toca a ese otro experimento.** Casi todos los leads de
+  Biru también están en `frio_cobertura_v1`. A los de su tratamiento las
+  asesoras los llaman en las primeras horas (el empujón por Telegram), así que
+  casi nunca llegan al agente (condición 10); el agente llama sobre todo a los
+  que nadie tocó, que son en su mayoría su **control**. Mientras dure el piloto,
+  la lectura de `frio_cobertura_v1` para las campañas del piloto queda mezclada
+  con el agente: se lee sin ellas, o se pausa ese experimento para esas
+  campañas. **Decisión pendiente del owner** (33.9).
+- **Se guarda** en `lead_experiments` (0144), con experimento
+  `agente_voz_leads_v1` y brazo `tratamiento` o `control`. La tabla es de solo
+  agregar y **el primero manda**: si dos pasadas sortean a la vez, gana el que
+  quedó guardado.
+- **Cuándo.** La primera vez que el lead es elegible (condiciones 1 a 13),
+  **sea cual sea su brazo**: el control también, o el análisis no lo vería. Y
+  solo cuando la tienda de verdad está llamando: el barrido con el automático
+  encendido, dentro del horario, con cupo del día, el carril libre y la línea
+  configurada. La cola en seco (`?dry=1`) no sortea.
+- **El porcentaje queda fijo** en cuanto el piloto sortea al primer lead:
+  Ajustes rechaza cambiar `voice_lead_holdout_pct` con sorteos guardados (lo
+  avisa y conserva el anterior). El tablero junta todos los sorteos en una
+  comparación, y con 50/50 dos semanas y 90/10 otras dos una diferencia de
+  época se leería como efecto del agente. Otra proporción es otro piloto.
+- **Solo llama el barrido.** No hay «Llamar con el agente» en el drawer: si una
+  asesora eligiera a quién mandar al agente, el tratamiento serían los leads
+  que ella eligió y el control no tendría su par.
+- **A ciegas para las asesoras.** El panel del drawer muestra lo que el agente
+  ya hizo (sus llamadas, si pidió no ser contactado) y «Probar en mi
+  teléfono», pero **no** si el lead entra a la cola ni a qué brazo cayó. Una
+  asesora que lee «grupo de control» o «a este lo llama el agente» lo trabaja
+  distinto —el experimento del frío ya lo midió (v1: con la marca 🧪 se llamó
+  menos)— y el control deja de ser «lo de siempre». El brazo y las razones
+  solo se ven en el tablero de Ajustes y en el log del barrido.
+- **El control nunca se llama.** Tampoco con «Probar en mi teléfono»: la
+  prueba no deja marcar el número del lead (33.6).
+- Si el brazo no se pudo guardar, ese lead no se llama en esa pasada: una
+  llamada sin brazo no se podría medir.
+- **Intención de tratar.** El tablero cuenta todo lead del tratamiento, lo
+  haya alcanzado a llamar el agente o no (tope, no contestó, una asesora llegó
+  antes).
+
+### 33.4 Interruptores y topes por tienda
+
+Se mueven en Ajustes → «Agente de voz · Leads (piloto)» (owner o admin de la
+organización). Los defectos son los de la migración 0247:
+
+| Ajuste | Defecto | Rango | Qué hace |
+| --- | --- | --- | --- |
+| `voice_lead_enabled` | apagado | — | Habilita la cola del agente y la reposición de «Atender ahora» |
+| `voice_lead_auto` | apagado | — | El barrido llama solo. Apagarlo es la marcha atrás; el sorteo se conserva |
+| `voice_lead_daily_cap` | 40 | 0–300 | Llamadas reales a leads por tienda y día de Lima. No comparte el tope de Reproprovincia |
+| `voice_lead_max_attempts` | 2 | 1–4 | Llamadas reales del agente por lead, en total |
+| `voice_lead_wait_minutes` | 120 | 0–1440 | Turno de las asesoras: desde el último mensaje, el agente espera esto |
+| `voice_lead_max_age_hours` | 48 | 1–168 | Ventana del agente: pasado esto desde el último mensaje, ya no llama |
+| `voice_lead_holdout_pct` | 50 | 0–90 | Porcentaje de elegibles que van al grupo de control |
+| `voice_lead_hour_start` / `voice_lead_hour_end` | 9 / 20 | 0–23 / 1–24 | Horario de Lima. Los domingos empieza a las 11:00, como §11.8 (`withinVoiceHours`) |
+| `voice_lead_campaign_ids` | vacío | — | Campañas de Meta cuyos leads llama. Vacío = ninguna |
+| `voice_lead_product` | vacío | ≤ 120 | Cómo nombra el producto. Vacío = el titular del anuncio del lead |
+| `voice_lead_offer` | vacío | ≤ 800 | Precios y promociones que puede decir, tal cual. Lo que no esté aquí no lo ofrece |
+
+- **Un lead a la vez para todas las tiendas.** Hay un agente y un carril
+  (`leads`), así que hay a lo más una llamada de leads abierta (33.7).
+- **El barrido** corre cada cinco minutos, en los minutos 2, 7, 12… 57 (dos
+  después del de Reproprovincia). Por tienda habilitada repone los «Atender
+  ahora» que el sync pisó (33.6); con el automático, dentro del horario, con
+  cupo y con el carril libre, arma la cola, guarda los sorteos y prueba hasta
+  **tres** candidatos (30 s como mucho) hasta que uno sale. Fuera de
+  producción no llama.
+
+### 33.5 El guion
+
+El texto completo, el primer mensaje y las tools están versionados en
+`docs/voz-leads-agente.md`. Aquí van las reglas que no cambian con el
+redactado:
+
+- Se presenta **con su nombre y el de la tienda**. **Si le preguntan si es una
+  persona, dice que es un asistente de IA. Nunca lo niega** (igual que §11.8).
+- Sabe con quién habla: recibe al conectar el nombre, el producto, la oferta, la
+  primera consulta y la conversación de WhatsApp del lead (sin enlaces, los
+  mensajes más recientes). No empieza de cero ni repregunta lo que ya está en el
+  chat.
+- Su objetivo es **saber qué le faltó para comprar** y, si quiere comprar,
+  **tomar los datos y pasarlo a una asesora**.
+- **Cobertura y pago, solo con `consultar_cobertura`**: la misma cobertura
+  canónica del Master (`order_coverage_for`), no una lista propia. Lima y
+  provincia contra entrega: paga al recibir. Agencia: se separa con el
+  adelanto de `ADELANTO_MINIMO` (§12, `lib/adelanto-minimo.ts`) y una asesora
+  le escribe por WhatsApp para eso. Sin respuesta: una asesora lo confirma.
+- **Registra antes de anunciar o despedirse**, una sola vez
+  (`registrar_resultado_lead`), la lección de §11.8 del 08-10-2026.
+- Dura **cinco minutos como mucho** (`max_duration` de ElevenLabs).
+
+**Lo que el agente nunca hace.** Crear pedidos, ni decir que el pedido quedó
+hecho: lo confirma una asesora. Pedir o recibir pagos, datos de tarjeta o
+Yape. Ofrecer precios, promociones o descuentos que no estén en
+`voice_lead_offer`. Negar que es una IA. Prometer hora de entrega. Llamar al
+grupo de control o a quien pidió no ser contactado: no están en su cola
+(33.2). Llamar fuera de horario o por encima del tope (33.4).
+
+### 33.6 Lo que escribe
+
+El agente registra un resultado con `registrar_resultado_lead`. Kapta lo
+traduce (`translateLeadResult`, `leadPatchFor`) y escribe **sobre el lead,
+nunca sobre un pedido**:
+
+| `resultado` | Estado del lead | Además | `voice_calls.outcome` |
+| --- | --- | --- | --- |
+| `atender_ahora` | `casi_cierra` y **«Atender ahora»**: `needs_attention`, `handoff_reason = 'agente_voz'`, `handoff_context` con los datos que tomó, `handoff_at`. Seguimiento: el futuro que tenga o el automático de §6 (`defaultFollowupAt`) | La captura queda en `outcome_payload.captura` | `atender_ahora` |
+| `volver_a_llamar` | `volver_a_llamar`, con `next_followup_at` a la fecha y hora que pidió (Lima; sin hora, 10:00; sin fecha futura, la automática de §6) | El agente vuelve a llamar a esa hora (33.2, condiciones 8 y 9) | `volver_a_llamar` |
+| `no_compra` | Según el motivo: `precio`, `desconfianza` y `otro` → `cancelado_cliente`; `ya_compro` → `ya_compro_otro_lado`; `solo_miraba` → `solo_miraba`; `solo_informacion` → `solo_informacion`; `fuera_de_cobertura` → `fuera_de_ciudad`. Seguimiento borrado | El motivo, en la nota y en `outcome_payload.motivo`. Un motivo desconocido es `otro` | `no_compra` |
+| `no_llamar` | `cancelado_cliente`, seguimiento borrado | **No contactar**: `leads.contact_opt_out_at` y `outcome_payload.no_llamar` | `no_llamar` |
+| `no_contesta` | **No cambia**, ni `last_interaction_at` | Solo la nota «No contestó (intento N de M)» | `no_contesta` |
+
+Una llamada que nadie registró —el vigilante la cerró, o la línea avisó el
+corte— se escribe como `no_contesta`: la misma nota y el lead sin tocar. Una
+que Telnyx rechazó sin marcar (respondió con error) queda `cancelled` con
+`sin_resultado` y no gasta intento ni cupo; una que sonó y no llegó al agente
+(`failed` con `sin_resultado`) sí lo gasta, para que una línea caída no la
+vuelva a llamar cada tres horas sin tope. Si Telnyx **no respondió** (15 s sin
+contestar), la llamada puede estar sonando: queda `failed`, gasta intento y el
+barrido no marca a nadie más en esa pasada, de ninguna tienda.
+
+Reglas de esa tabla:
+
+- **Siempre una nota en el historial del lead**: `lead_calls` con
+  `kind = 'voice_agent'` y **sin vendedora**, `new_status` con el estado
+  aplicado (o vacío). No es `call`: `call` firmado es una asesora, y así lo
+  leen los experimentos, la cobertura y Productividad. El drawer la muestra
+  firmada «Agente de voz».
+- **No contactar va siempre.** También cuando el resultado es `no_compra` y el
+  resumen dice «no me llamen» (`pideNoContactar`: la idea de §11.8, más
+  estricta porque aquí el «sí» apaga también los WhatsApp; «no la llamaron»,
+  «no la llamen ahorita» o «no llamar antes de las 10» no cuentan). Con
+  `volver_a_llamar` o `atender_ahora` el resumen nunca la dispara: ahí un «que
+  no la llamen ahora» es una hora, no un pedido. Va
+  también cuando la guarda de estado (abajo) no deja aplicar el resto: es la
+  voluntad de la persona, no una disposición que una asesora pueda pisar. Se
+  conserva la primera fecha. Desde ahí no la llama ningún agente (la marca de
+  la llamada entra a la lista «no llamar» de la tienda, 33.7), y con
+  `contact_opt_out_at` el drip, la secuencia de carritos y el winback de
+  Shopify Flow la saltan (`no_contactar`). Una asesora todavía puede
+  responderle si ella escribe.
+- **La captura vive en la llamada**, no en `leads.address1`, `district` y
+  compañía: el sync de conversaciones pisa esas columnas y el reenvío Swayp las
+  usa como dirección. **«Generar pedido»** (`loadOrderDraft`) usa la captura de
+  la última llamada **real** del agente que terminó en `atender_ahora` en los
+  últimos 7 días. Si la persona dictó una dirección y el formulario no trae la
+  de un carrito, la toma **en bloque**: dirección, distrito, región (el
+  departamento, o la provincia si no lo dijo) y referencia juntas, para no
+  dejar una calle de un distrito con el distrito que el bot adivinó del chat.
+  Sin dirección dictada, solo completa lo vacío. El nombre que dio en la
+  llamada reemplaza al del perfil de WhatsApp cuando no hay carrito. **Nunca
+  líneas de producto**: las elige la asesora.
+- **Guardas para no pisar a una asesora.** El estado del lead se escribe solo
+  si, al registrar, el lead sigue en el estado que tenía al marcar
+  (`lead_context.estado_al_marcar`), en `open` u `hot`, sin pedido, ninguna
+  asesora firmó algo en su historial después de `dialed_at`, y el bot no lo
+  pasó a «Atender ahora» durante la llamada (`handoff_at` posterior a
+  `dialed_at`: escribió por WhatsApp mientras hablaba, y ese mensaje lo
+  contesta una asesora). La guarda de verdad es el `update` condicional. Si no pasa, el lead no cambia, la nota
+  empieza con «(no aplicado: …)» y el motivo queda en `outcome_payload.omitido`.
+- **El sync puede pisar un «Atender ahora» recién escrito** con lo que leyó
+  antes (carrera conocida de `lib/leads-ingest`). Dos defensas: el sync cuenta
+  las notas del agente con estado como una disposición (`lastDispositionAtByPhone`),
+  y cada pasada del barrido repone, en las tiendas habilitadas, los «Atender
+  ahora» del agente de las últimas 24 h que volvieron a `nuevo` sin atención
+  (`reflagAgentHandoffs`).
+- **Una sola vez por llamada.** Antes de escribir sobre el lead se reserva la
+  fila (`outcome` vacío → el resultado): un segundo registro, o el aviso de
+  corte que llega a la vez, no escribe encima. Si la escritura falla, la fila
+  queda `failed` y el agente no reintenta: retoma una persona con la nota. Si
+  el cierre de la fila (con la captura y el «no llamar») no llega, se reintenta
+  una vez y si no, la tool responde el fallo; y el vigilante cierra una fila de
+  lead ya reservada con **su** resultado, nunca con un «no contestó» encima.
+- **Modo prueba** (`mode = 'test'`, «Probar en mi teléfono» del drawer): usa la
+  ficha y el chat de un lead real, llama al teléfono de quien prueba y **no
+  escribe nada sobre el lead**: solo su fila. No exige el agente encendido ni
+  que el lead sea elegible, y no cuenta para el tope ni para el tablero. Un
+  «no me llamen» de quien prueba tampoco entra a la lista «no llamar». **No
+  marca el número del lead** (sería llamarlo a mano, por fuera del sorteo, y
+  su «no me llamen» se perdería por ser prueba), **ni el de otro lead de la
+  tienda** (recibiría la ficha y el chat ajenos), **ni uno que pidió no ser
+  contactado**, y pide `master.edit` en la organización de ese lead.
+- **El tope que no se puede leer no deja llamar.** Si `realCallsToday` no
+  puede contar (de los dos carriles), devuelve null: nadie llama en esa pasada
+  y el barrido lo informa como error, no como «tope del día» (antes devolvía 0
+  y el tope dejaba de frenar). Las llamadas de lead que Telnyx rechazó antes de
+  marcar (`cancelled`) no gastan cupo.
+- **La conversación** llega después, por el aviso «post-call» de ElevenLabs, a
+  `voice_calls.transcript`: turnos (los últimos 80), duración, costo de
+  ElevenLabs y su resumen. Solo de llamadas de lead y solo con la firma de
+  ElevenLabs (`ELEVENLABS_WEBHOOK_SECRET`).
+
+### 33.7 Separado de Reproprovincia
+
+Los dos agentes comparten la tabla `voice_calls`, la conexión de Telnyx y el
+vigilante. Nada más:
+
+- **`voice_calls.purpose`**: `order` (por defecto, todas las de §11.8) o
+  `lead`. La base exige que una de pedido tenga `order_id` y no `lead_id`, y
+  una de lead al revés, y valida los resultados por carril: un lead nunca
+  `confirma`, que es la marca que dispara la salida Swayp
+  (`salidasSwaypPendientes`).
+- **Carril**: `agent_number = 'leads'`, sin dígitos a propósito: los carriles
+  de §11.8 se comparan por dígitos y este no coincide con ninguno. El índice
+  único de 0190 deja una sola llamada de leads abierta, para todas las tiendas.
+- **Atadura**: el inicio y las tools de cada agente solo ven las llamadas
+  abiertas de su propósito (`openCalls`). La fila de pedido (`loadCall`) no
+  devuelve una de lead, y la de lead (`loadLeadCall`) no devuelve una de
+  pedido, aunque alguien pase su id. Las tools de leads se atan **solo** por el
+  `voice_call_id` que el inicio le dio al agente: sin él no registran nada
+  (una conversación sin id es una que el inicio no reconoció). Y el inicio
+  entrega la ficha solo si la conversación entra con el número de salida del
+  agente de leads (`caller_id`): quien llama al número del agente mientras
+  este marca a otra persona no recibe la ficha ajena (la regla de §11.8 del
+  24-09-2026). Si el aviso de ElevenLabs no trae `caller_id` (o el número de
+  salida no está configurado), no hay con qué comparar y se acepta: **hay que
+  confirmar en las primeras llamadas reales que ElevenLabs lo manda** (33.9).
+- **Secreto**: `VOICE_LEADS_TOOLS_SECRET` firma el inicio y las tools del
+  agente de leads. Si es igual a uno de los de §11.8, Kapta lo trata como vacío
+  y rechaza todo; y las tools de §11.8 no lo aceptan.
+- **Puerta SIP y número**: cuando el lead contesta, el aviso de Telnyx abre el
+  tramo a `TELNYX_LEADS_SIP_URI`, con el número `TELNYX_LEADS_FROM_NUMBER`
+  (vacío = el de §11.8). Sin esa puerta la llamada falla: **nunca** cae al
+  agente de Reproprovincia, que leería un pedido que no existe.
+- **El vigilante** (`sweepStaleCalls`) cierra las abiertas de los dos. Una de
+  lead en conversación dura hasta **8 minutos** antes de darse por caída
+  (`LEAD_IN_PROGRESS_TTL_MINUTES`; marcando, 3 como todas): el agente toma más
+  datos y ElevenLabs la corta a los 5. Su «no contesta» es una nota del lead
+  (`writeLeadNoAnswer`), nunca `register_confirmation_attempt_v2` ni el Master.
+- **Topes y tableros**: el tope diario se cuenta por carril (`realCallsToday`
+  con propósito). «Gestión por persona», «Llamando ahora», la última llamada de
+  la línea «Agente de voz» de Envíos y el reintento de la salida Swayp leen
+  solo `purpose = 'order'`. El agente de leads tiene su tablero (33.8).
+- **El candado del reintento automático Swayp** (`swayp_auto_voice_interlock`,
+  0209) solo corre para llamadas con pedido: con `order_id` nulo nunca
+  bloqueaba, pero tomaba el lock de la organización que también toma
+  `swayp_emission_claim`, y cada llamada de lead se ponía en fila con Swayp.
+- **La lista «no llamar» es una por tienda para los dos agentes, a
+  propósito.** Se lee por teléfono de `voice_calls.outcome_payload.no_llamar`
+  sin filtro de propósito (`loadDoNotCallPhones`): quien se lo pidió a
+  cualquiera de los dos no recibe más llamadas de ninguno.
+
+### 33.8 Piloto y medida
+
+- **Una tienda (Kenku) y una campaña (Biru).** Se enciende en este orden:
+  campaña, producto y oferta; la cola en seco (`?dry=1`, que la mira como si
+  el agente estuviera encendido); «Probar en mi teléfono» con leads reales de
+  la campaña; el porcentaje de control (queda fijo en el primer sorteo); y
+  recién entonces «Agente de leads» y «Llamadas automáticas». Los pasos están en
+  `docs/voz-leads-agente.md`.
+- **El tablero** (Ajustes → «Agente de voz · Leads (piloto)»,
+  `loadLeadVoicePilotReport`) va por brazo y por intención de tratar:
+
+  | Columna | Qué cuenta |
+  | --- | --- |
+  | Leads | Sorteados a ese brazo hace **7 días o más** (`LEAD_VOICE_MATURATION_DAYS`, el corte de `read_lead_experiment`). Los más recientes salen aparte, «esperan sus 7 días»: el agente vende antes y, con ellos adentro, un adelanto se leería como venta extra. Todas las columnas son de estos leads |
+  | Llamados por el agente | Con al menos una llamada real que marcó |
+  | Contestaron | Con una llamada atendida (la regla de §11.8, `voiceCallAnswered`) |
+  | Atender ahora | Que el agente pasó a una asesora |
+  | Tocados por asesora | Con una llamada, mensaje o venta firmados después del sorteo |
+  | Ventas | Con pedido o ganados, por el canal que sea |
+  | Conversión | Ventas / leads, en % |
+
+  Más la línea del agente (llamadas, contestadas, sin gestión —contestó y no
+  registró nada—, costo de línea de Telnyx en US$ y cuántas llamadas lo
+  traen si faltan algunas) y los motivos de no compra. La línea del agente
+  cuenta **todas** sus llamadas, también a los leads que todavía no maduran:
+  para el costo por venta incremental se toma el costo de las llamadas a los
+  leads maduros.
+- **Regla de decisión.** Con **dos semanas o más**, se compara la conversión
+  del tratamiento menos la del control. Se sigue si la diferencia es positiva y
+  el **costo por venta incremental** —lo que costó el agente (línea de Telnyx
+  más los minutos de ElevenLabs) dividido por las ventas del tratamiento que el
+  control no explica— queda por debajo del **techo de S/ 16,2 de Biru**. Si no,
+  se apaga. El tablero muestra solo el costo de línea (US$): el de ElevenLabs
+  llega en la transcripción (`transcript.costo`) **en créditos**, y se pasa a
+  dinero con el precio por crédito del plan antes de sumarlo.
+- «Tocados por asesora» dice cuánto se contaminó la comparación: las asesoras
+  siguen trabajando los dos brazos. Si el tratamiento tiene muchos menos
+  tocados que el control, el agente está reemplazando a una asesora, no
+  sumando.
+
+### 33.9 Pendientes
+
+- **Número peruano en Telnyx** para el agente de leads
+  (`TELNYX_LEADS_FROM_NUMBER`). Sin él, el lead ve el número de Telnyx de
+  Reproprovincia, que hoy es de EE. UU., y contesta menos.
+- **Revisión legal** del cierre «Gracias, no insisto» y del consentimiento para
+  llamar a quien escribió por un anuncio, igual que el aviso de grabación de
+  §11.8.
+- **El adelanto que dice el bot.** El bot de Kapso dice en el chat un adelanto
+  de S/ 30, y Kapta exige `ADELANTO_MINIMO` (`lib/adelanto-minimo.ts`). El
+  agente dice el que devuelve `consultar_cobertura`, así que la persona puede
+  oír una cifra distinta de la que leyó. Hay que alinear el bot.
+- **Transcripciones**: solo si el owner configura el webhook «post-call» de
+  ElevenLabs con `ELEVENLABS_WEBHOOK_SECRET`. Sin él,
+  `voice_calls.transcript` queda vacío.
+- **Que ElevenLabs mande `caller_id`** en el inicio de las llamadas por SIP:
+  revisarlo en las primeras llamadas reales (33.7). Sin él, el control de
+  «otro número» no hace nada.
+- **`frio_cobertura_v1` sobre las campañas del piloto** (33.3): el owner decide
+  si se pausa ese experimento para las campañas del piloto o si su lectura las
+  deja fuera mientras dure.
+- **Productividad no cuenta al agente**: sus filas `voice_agent` no tienen
+  vendedora y además están en `NON_SALES_KINDS`. Su trabajo solo se ve en el
+  tablero del piloto.
+- **La fecha de volver a llamar.** El agente recibe `hoy` (AAAA-MM-DD) y
+  `hoy_texto` («lunes 12 de octubre») y manda la fecha como AAAA-MM-DD y la
+  hora como HH:MM. Una fecha que no existe, mal formada o pasada cae a la hora
+  automática de §6, y una hora que no es HH:MM, a las 10:00.
+
+Implementación: `db/migrations/0247_voice_lead_calls.sql`;
+`lib/voice-leads.ts` (reglas puras), `lib/voice-lead-labels.ts`,
+`lib/voice-leads-server.ts` (cola, sorteo, ficha, marcado, cobertura, tablero),
+`lib/voice-leads-writeback.ts` (lo que se escribe sobre el lead);
+`app/api/voice/leads/inicio`, `app/api/voice/leads/registrar`,
+`app/api/voice/leads/cobertura`, `app/api/voice/elevenlabs/post-call`,
+`app/api/cron/voice-leads`; el aislamiento en `lib/voice-recovery.ts`,
+`lib/voice-recovery-server.ts`, `app/api/webhooks/telnyx/route.ts` y
+`lib/shipments-access.ts`; el lado de leads en `app/dashboard/leads/actions.ts`,
+`components/lead-voice-agent-panel.tsx`, `components/leads-drawer.tsx`,
+`lib/leads-ingest.ts` y `lib/cart-sequence.ts`; los ajustes en
+`lib/store-settings.ts` y `components/store-settings.tsx`. Pruebas en
+`test/voice-leads.test.ts`, `test/voice-leads-server.test.ts`,
+`test/voice-leads-rutas.test.ts`, `test/voice-leads-aislamiento.test.ts`,
+`test/voice-leads-drawer.test.ts`, `test/voice-leads-ajustes.test.ts`,
+`test/voice-leads-mom.test.ts` y `scripts/sql/voice_lead_smoke.sql`.

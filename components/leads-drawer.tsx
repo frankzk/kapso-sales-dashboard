@@ -16,6 +16,13 @@ import {
 import { waKindLabel, type WaNumber } from "@/lib/wa-numbers";
 import type { CustomerHistory } from "@/lib/leads-access";
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
+import {
+  LEAD_VOICE_AGENT_HANDOFF,
+  LEAD_VOICE_AGENT_KIND,
+  LEAD_VOICE_AGENT_NAME,
+  LeadVoiceAgentPanel,
+  leadVoiceAgentTitle,
+} from "@/components/lead-voice-agent-panel";
 import { SECTION_CARD } from "@/components/ops-ui";
 import { EmojiPicker } from "@/components/emoji-picker";
 import { insertAtCursor } from "@/lib/emoji";
@@ -489,6 +496,14 @@ export function LeadDrawer({
                 <SegmentBadge lead={lead} />
                 <Pill className={src.cls}>{src.isText ? src.label : `${src.glyph} ${src.label}`}</Pill>
                 <YapeKindChip lead={lead} />
+                {/* Se lo pidió al agente de voz (MOM §33): ni el agente ni el
+                    drip ni la secuencia de carritos lo vuelven a contactar. Una
+                    persona sí puede; el chip es para que lo sepa antes. */}
+                {lead.contact_opt_out_at && (
+                  <Pill className="bg-red-50 text-red-700" title="Pidió no ser contactado">
+                    🚫 No contactar
+                  </Pill>
+                )}
               </div>
             </div>
             {/* QR tel: — solo en panel ancho (desktop): la asesora escanea con
@@ -629,7 +644,9 @@ export function LeadDrawer({
                       : "border-amber-200 bg-amber-50 text-amber-800",
                   )}
                 >
-                  <p className="text-xs font-semibold tracking-wide uppercase opacity-80">Resumen del bot</p>
+                  <p className="text-xs font-semibold tracking-wide uppercase opacity-80">
+                    {lead.handoff_reason === LEAD_VOICE_AGENT_HANDOFF ? "Resumen del agente de voz" : "Resumen del bot"}
+                  </p>
                   <p className="mt-1 whitespace-pre-wrap">{lead.handoff_context}</p>
                 </div>
               )}
@@ -752,6 +769,16 @@ export function LeadDrawer({
                 </div>
               )}
 
+              {/* Agente de voz de leads (MOM §33): si entra a su cola, llamar o
+                  probarlo, y sus llamadas. Solo con teléfono: sin número no hay
+                  a quién llamar. Sin argumento en onRegistered a propósito: lo
+                  que el agente escribe toca lead, historial y lista. */}
+              {canCall && (
+                <div className={SECTION_CARD}>
+                  <LeadVoiceAgentPanel key={lead.id} leadId={lead.id} onChanged={() => onRegistered()} />
+                </div>
+              )}
+
               {/* Resultado de la llamada */}
               <CallForm key={lead.id} leadId={lead.id} onRegistered={onRegistered} />
 
@@ -783,6 +810,10 @@ export function LeadDrawer({
                             <p className="text-sm text-slate-800">
                               {c.kind === "message" ? (
                                 <span className="font-medium text-brand-700">📤 WhatsApp</span>
+                              ) : c.kind === LEAD_VOICE_AGENT_KIND ? (
+                                // El agente de voz de leads: que no se lea como
+                                // una asesora ni como el drip (MOM §33).
+                                <span className="font-medium">{leadVoiceAgentTitle(c.new_status)}</span>
                               ) : c.new_status ? (
                                 <span className="font-medium">{labelOf(c.new_status)}</span>
                               ) : (
@@ -792,7 +823,11 @@ export function LeadDrawer({
                             {c.note && <p className="mt-0.5 text-sm text-slate-600">{c.note}</p>}
                             <p className="mt-0.5 text-[11px] text-slate-400">
                               {fmtDate(c.occurred_at)}
-                              {c.vendedora_name ? ` · ${c.vendedora_name}` : ""}
+                              {c.vendedora_name
+                                ? ` · ${c.vendedora_name}`
+                                : c.kind === LEAD_VOICE_AGENT_KIND
+                                  ? ` · ${LEAD_VOICE_AGENT_NAME}`
+                                  : ""}
                             </p>
                           </div>
                         </div>

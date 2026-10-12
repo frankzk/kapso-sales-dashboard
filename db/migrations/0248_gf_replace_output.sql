@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0247_gf_replace_output.sql — «Sacar con salida nueva»: el pedido vuelve a
+-- 0248_gf_replace_output.sql — «Sacar con salida nueva»: el pedido vuelve a
 -- salir mientras el motorizado todavía tiene la caja que no entregó.
 --
 -- DECISIÓN DEL OWNER (12-10-2026, «Reprogramación en Lima»): un mismo pedido
@@ -228,7 +228,7 @@ begin
   v_rider := coalesce(v_manifest.driver_name, 'el motorizado');
   v_reason := 'No entregado por ' || v_rider || coalesce(' (' || v_stop.outcome_reason || ')', '') || ': recibido en oficina';
 
-  -- A stock (0247): la salida reemplazada —el pedido ya salió con otra— y la
+  -- A stock (0248): la salida reemplazada —el pedido ya salió con otra— y la
   -- que ya consta devuelta pero sigue en la caja. Queda devuelta; no vuelve a
   -- «por asignar» ni a la cola. Una en `retorno` sin reemplazo («Solicitar
   -- devolución») sigue el camino de siempre.
@@ -379,7 +379,7 @@ begin
   select * into v_rider from riders where id = p_rider_id;
   if not found then raise exception 'Motorizado no encontrado.'; end if;
 
-  -- 0247: los candados de todo el lote antes que nada, ítems y después cajas,
+  -- 0248: los candados de todo el lote antes que nada, ítems y después cajas,
   -- cada uno por id. `gf_replace_output` y `gf_return_to_office` toman ítem y
   -- luego caja: así ninguna espera a la otra en cruz por dos ítems de la misma
   -- caja. Las relecturas de cada paquete, abajo, vuelven a pedirlos.
@@ -397,7 +397,7 @@ begin
            i.id item_id, i.store_id item_store, m.id old_manifest, m.org_id, m.route_date old_date, s.id old_stop
       from unnest(p_shipment_ids) as x(shipment_id)
       join shipments sh on sh.id = x.shipment_id
-           -- 0247: la caja reemplazada no pasa a otra ruta: vuelve a la oficina.
+           -- 0248: la caja reemplazada no pasa a otra ruta: vuelve a la oficina.
            -- Su marca es el evento; `retorno` solo también es «Solicitar devolución».
            and not (sh.custody_state = 'retorno' and public.gf_output_replaced(sh.id))
       join orders o on o.id = sh.order_id and o.cancelled_at is null
@@ -424,7 +424,7 @@ begin
     v_reason := 'Reprogramado el ' || to_char(r.old_date, 'DD/MM') || ': ' || v_rider.full_name
              || ' se quedó con el paquete y sale en su ruta del ' || to_char(p_to_date, 'DD/MM') || ', ya cotejado.';
 
-    -- 0247: releído con candado, en el orden de `gf_replace_output` (ítem,
+    -- 0248: releído con candado, en el orden de `gf_replace_output` (ítem,
     -- caja, parada, salida). La consulta del bucle se leyó antes de que un
     -- «Sacar con salida nueva» o un «Recibir en oficina» simultáneo terminara
     -- de cambiar el paquete, y el UPDATE de abajo no lo vería.
