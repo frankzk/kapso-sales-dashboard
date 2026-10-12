@@ -2072,6 +2072,104 @@ desafío. Solo cambia desde qué red sale la petición, igual que elegir la regi
 3. **Grupo de Telegram** con esas personas y el bot de la tienda; su chat id en
    Ajustes → Telegram → Alertas urgentes («Buscar grupos» lo encuentra).
 
+### 10-10-2026 · App de Shopify para tiendas cliente, primera parte (0249, MOM §29.15.9)
+
+Segunda app de Shopify, pública y oculta, para las tiendas de organizaciones
+cliente de Grupo GF. Aurela y Kenku siguen con la app actual (§5); nada de lo
+suyo cambia.
+
+1. **Migración `0249_shopify_client_app.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0249_shopify_client_app.sql`.
+   Añade `stores.shopify_app` (`interna` por defecto, así que las tiendas de hoy
+   quedan como están) y `stores.shopify_uninstalled_at`, y crea
+   `shopify_pending_installs` y `shopify_privacy_requests`. Sin ella, la
+   desinstalación de una tienda falla al escribir la fecha y la búsqueda de
+   tiendas conectadas de la app nueva responde error.
+   **Ya aplicada en producción el 12-10-2026**, en dos pasos del historial de
+   Supabase: `0245_shopify_client_app` y `0245_shopify_client_app_revoke_defaults`
+   (el `revoke` a `anon` y `authenticated` se añadió después; el fichero ya lo
+   trae completo). Allí quedó con el nombre `0245_…`: el fichero pasó a ser la
+   `0249` porque la `0245` a la `0248` ya estaban tomadas en la integración. Es
+   la misma migración; no se vuelve a correr.
+2. **La app «Kapta» en el Dev Dashboard** (organización Grupo GF SAC), distinta
+   de «kapso-sales-dashboard-aurelape». **Creada el 12-10-2026**; la versión
+   `kapta-3` es la que tiene todo. Su configuración completa:
+
+   ```toml
+   client_id = "…"            # el de la app; no va al repositorio
+   name = "Kapta"
+   application_url = "https://kapso-sales-dashboard.vercel.app/api/shopify/clientes/entrada"
+   embedded = false           # Kapta abre en su pestaña; incrustada no hay login ni OAuth
+
+   [build]
+   automatically_update_urls_on_dev = false
+
+   [webhooks]
+   api_version = "2026-10"
+
+     [[webhooks.subscriptions]]
+     compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+     uri = "https://kapso-sales-dashboard.vercel.app/api/shopify/clientes/cumplimiento"
+
+   [access_scopes]
+   # = SHOPIFY_CLIENT_APP_SCOPES: los de la app interna más write_orders
+   scopes = "read_customers,write_draft_orders,read_draft_orders,read_orders,write_orders,read_products"
+   optional_scopes = [ ]
+   use_legacy_install_flow = false   # instalación gestionada por Shopify
+
+   [auth]
+   redirect_urls = [
+     "https://kapso-sales-dashboard.vercel.app/api/shopify/clientes/callback"
+   ]
+   ```
+
+   - **Los webhooks de privacidad no se pueden poner desde el formulario** del
+     Dev Dashboard (ni al crear ni en «Crear versión»). Se suben con la CLI:
+     `npm init @shopify/app@latest` → «Build an extension-only app» → org
+     Grupo GF SAC → «No, connect it to an existing app» → Kapta. Eso deja una
+     carpeta con `shopify.app.toml`; se deja igual al bloque de arriba y se
+     corre `shopify app deploy`, revisando el resumen antes de confirmar.
+   - **La plantilla trae ejemplos que NO deben subirse:** bloques
+     `[metaobjects.app.faq…]`, `[product.metafields.app.faq…]`, `[sidekick]` y
+     `[access.admin]` en el toml, y las extensiones `extensions/app-home` y
+     `extensions/app-tools`. Se borran antes del `deploy` («Extensions: None»
+     en el resumen).
+   - **Nunca `shopify app dev`** con esta app: cambia las URLs por un túnel
+     temporal.
+   - **Alcances:** cada uno tiene que poder justificarse en la revisión.
+     `write_orders` sirve para corregir la dirección de un pedido ya creado y
+     etiquetarlo. Si se cambian, cambiar también `SHOPIFY_CLIENT_APP_SCOPES`.
+   - **Distribución**: pública, visibilidad **oculta**. Es definitivo. **No**
+     enviar a revisión todavía: falta la segunda parte (anonimizar y entregar
+     datos, registro de accesos).
+   - **Datos protegidos de clientes** (nombre, teléfono y dirección del
+     comprador): se piden aparte, con la justificación «entrega contraentrega».
+3. **Variables en Vercel** (Production), copiadas directo del Dev Dashboard,
+   nunca por chat ni al repositorio:
+   - `SHOPIFY_CLIENT_APP_API_KEY` = Client ID de la app nueva.
+   - `SHOPIFY_CLIENT_APP_API_SECRET` = Client secret de la app nueva.
+   Sin ellas, la entrada y el callback responden «app no configurada» y los
+   avisos de privacidad reciben 401.
+4. **Prueba con una tienda de desarrollo** (no con Aurela ni Kenku: esas están
+   con la app interna y la app nueva las rechaza a propósito):
+   - instalar la app desde el enlace de instalación del Dev Dashboard;
+   - Shopify pide autorizar y vuelve a Kapta, que cae en
+     `/dashboard/conectar-shopify` con el dominio de la tienda (sin sesión
+     abierta, pasa antes por el login y el panel lo devuelve ahí);
+   - elegir la organización y «Conectar tienda»: la tienda queda creada, con
+     webhooks de pedidos y `app/uninstalled`, y empieza la sincronización;
+   - abrir la app otra vez desde el admin de Shopify: entra directo al
+     dashboard de esa tienda;
+   - desinstalar: la tienda pasa a `disabled`, sin token y con
+     `shopify_uninstalled_at`.
+5. **Qué mirar después**:
+   `select topic, shop_domain, status, received_at from shopify_privacy_requests order by received_at desc limit 20;`
+   — cada aviso de privacidad queda `pendiente` hasta la segunda parte. Shopify
+   da 30 días para cumplirlos.
+6. **Webhook de una tienda cliente** que diga `app/uninstalled` en
+   `webhook_events` con la tienda aún activa: el webhook llegó pero no se
+   desactivó; revisar la fila de `stores`.
+
 ### 11-10-2026 · Recordatorio de recojo, día 3 y día 7 en la agencia (0242, MOM §12)
 
 1. **Migración `0242_pickup_reminder.sql`**, a mano y ANTES del código:

@@ -32,7 +32,9 @@ heredados continúan disponibles como evidencia y compatibilidad.
 3. Kapta no crea pedidos comerciales. Las correcciones comerciales se realizan
    anulando el pedido incorrecto en Shopify y creando otro.
 4. Kapta es la fuente de verdad operativa, logística, financiera y de auditoría.
-5. El historial se conserva indefinidamente.
+5. El historial se conserva indefinidamente. Excepción: los datos personales
+   del comprador de una tienda cliente de otra organización se anonimizan
+   según §29.15.9; los hechos operativos y financieros se conservan.
 6. Los hechos no se sobrescriben ni se eliminan. Una corrección genera un nuevo
    evento que conserva el valor anterior.
 7. Un pedido puede tener varias salidas físicas simultáneas o sucesivas.
@@ -9985,6 +9987,10 @@ recibe el pedido en la puerta.
 - **Alta por invitación.** El registro público de Kapta sigue cerrado. Grupo GF
   invita por correo al dueño de la tienda; el dueño entra, crea su
   organización, conecta su Shopify y acepta el contrato con un código.
+- La tienda conecta su Shopify instalando **la app pública de Kapta para
+  tiendas cliente**, desde el enlace que le da Grupo GF. No escribe el dominio
+  de su tienda. Aurela y Kenku siguen con su app actual. Cómo se reclama la
+  instalación y qué pasa al desinstalar: §29.15.9, «Implementación».
 - El contrato nace en `draft` y pasa a `active` solo cuando la tienda lo
   acepta. Kapta comprueba que la tienda pertenece a la organización cliente
   del contrato. Grupo GF nunca vincula una tienda ajena por su cuenta.
@@ -10179,7 +10185,76 @@ COD cobrado por Grupo GF
   del Yape de Grupo GF. El cruce automático, operación por operación, queda
   para después.
 
-#### 29.15.9 Lo que no cambia
+#### 29.15.9 Datos personales del comprador (aprobado el 08-10-2026)
+
+La tienda cliente se conecta con una app pública de Shopify, que obliga a
+borrar datos personales cuando el comprador o la tienda lo piden. Para estas
+tiendas, §2.5 se cumple así: **los hechos se conservan y los datos personales
+del comprador se anonimizan.** Aurela y Kenku no cambian.
+
+- **Dato personal del comprador:**
+  - nombre, teléfono, correo, dirección y referencia, coordenadas y documento;
+  - notas y conversaciones;
+  - fotos de entrega y comprobantes de pago;
+  - nombre y teléfono de quien pagó.
+- **Lo que se conserva:**
+  - número de pedido, montos, fechas, estados y distrito;
+  - salidas, cajas, rutas y paradas (resultado, medio y monto cobrado);
+  - liquidaciones y cuenta corriente;
+  - los eventos, sin datos personales.
+- **Anonimizar** es reemplazar cada dato por «Comprador anonimizado» y borrar
+  los archivos. Queda un evento con fecha y motivo, sin los datos borrados. No
+  se puede deshacer.
+- **Se anonimiza cuando:**
+  1. el comprador pide que se borren sus datos (Shopify, `customers/redact`):
+     ese comprador, en esa tienda;
+  2. la tienda desinstala la app (Shopify, `shop/redact`): todos los
+     compradores de esa tienda. Además se borran sus credenciales de Shopify y
+     la tienda queda desconectada. Sus liquidaciones aprobadas y su cuenta
+     corriente siguen;
+  3. vence el plazo de retención que fije la política de privacidad.
+
+  Un pedido con liquidación por aprobar se anonimiza igual: la liquidación se
+  calcula con el número de pedido y los montos, no con el comprador.
+- **Si el comprador pide sus datos** (Shopify, `customers/data_request`),
+  Kapta le entrega a la tienda lo que guarda de él, dentro del plazo que exija
+  Shopify.
+- **Registro de accesos.** Se registra quién consulta datos personales de
+  compradores de una tienda cliente: persona, fecha y pedido.
+- **Sin cruces entre organizaciones.** Los compradores de una tienda cliente no
+  se usan para Aurela, Kenku ni otra tienda. Ninguna regla los cruza por
+  teléfono con pedidos de otra organización: riesgo, pedidos anteriores,
+  confirmación o campañas.
+
+**Implementación (Fase 1b, primera parte, 10-10-2026).**
+
+- **Qué app usa cada tienda.** Cada tienda guarda con qué app de Shopify se
+  conectó: `interna` (la app actual de Aurela y Kenku) o `clientes` (la app
+  pública). No hay otro valor. Un mismo dominio de Shopify no puede estar en
+  dos tiendas con la app de clientes, y la app de clientes no toma una tienda
+  que ya está con la interna.
+- **Instalación.** La tienda instala desde Shopify y autoriza en el acto. Kapta
+  guarda esa autorización como **instalación pendiente** por 30 minutos. El
+  dueño la reclama dentro de Kapta: elige una organización donde sea owner o
+  admin, y la tienda se crea ahí con el dominio que trajo Shopify. Una
+  instalación pendiente vencida o ya reclamada no sirve.
+- **Cada aviso de privacidad se registra** con su firma verificada (firma
+  inválida: 401, sin escribir nada) y una sola vez por aviso. Su estado es
+  `pendiente` hasta que se cumple y `atendida` después, con fecha. No hay otro
+  estado. Un aviso de una tienda que no está en Kapta se registra igual, sin
+  tienda.
+- **Al desinstalar** (`app/uninstalled`) y al llegar `shop/redact`: se borra el
+  token de Shopify, la tienda pasa a `disabled` y se anota la fecha de
+  desinstalación (la primera; un aviso posterior no la cambia). Los procesos
+  automáticos ya solo toman tiendas `active`. Pedidos, historial y
+  liquidaciones no se tocan. Si la tienda reinstala, vuelve a `active` con el
+  token nuevo.
+- **Falta (segunda parte):** cumplir los avisos pendientes (anonimizar y
+  entregar datos) y el registro de accesos. Hasta entonces los avisos quedan
+  `pendiente`, dentro del plazo de 30 días de Shopify, y la app no se envía a
+  revisión.
+
+#### 29.15.10 Lo que no cambia
 
 - Shopify sigue siendo la única fuente de pedidos (§2). Kapta no crea pedidos
   para la tienda, y cancelar una solicitud no cancela el pedido en Shopify.
@@ -10188,7 +10263,7 @@ COD cobrado por Grupo GF
 - Rutas que mezclan tiendas, cotejos, custodia, reportes y pago del motorizado
   funcionan igual para todos.
 
-#### 29.15.10 Fuera de esta versión
+#### 29.15.11 Fuera de esta versión
 
 - Entrada por API o Excel para tiendas sin Shopify (§29.11).
 - Conteo, reserva, recepción y retiro del inventario de la tienda (§29.3).
@@ -10198,7 +10273,7 @@ COD cobrado por Grupo GF
 - Cruce automático del Yape de Grupo GF con su estado de cuenta.
 - Cobro de la suscripción de Kapta a la tienda.
 
-#### 29.15.11 Criterios de aceptación
+#### 29.15.12 Criterios de aceptación
 
 - Una tienda invitada que acepta el contrato con su código lo deja `active`.
   Un código equivocado o de otra invitación no lo activa.
@@ -10243,6 +10318,15 @@ COD cobrado por Grupo GF
 - Aprobar la liquidación deja los pedidos entregados de la tienda en
   «Finalizado · Entregado y liquidado». Una corrección posterior aparece como
   ajuste en la cuenta corriente, sin cambiar la liquidación aprobada.
+- Un `customers/redact` deja a ese comprador como «Comprador anonimizado» en
+  todos sus pedidos de esa tienda y borra sus fotos y comprobantes. Montos,
+  estados, rutas y liquidaciones no cambian.
+- Un `shop/redact` anonimiza a todos los compradores de la tienda, borra sus
+  credenciales de Shopify y la deja desconectada. Su cuenta corriente sigue
+  visible.
+- Un webhook de privacidad con firma inválida responde 401 y no toca nada.
+- Un pedido de tienda cliente no aparece en los cruces por teléfono de los
+  pedidos de Aurela o Kenku, ni al revés.
 
 ## 30. Liquidaciones 2 — hojas por dominio
 
