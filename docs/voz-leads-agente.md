@@ -17,7 +17,10 @@ copia en el agente de pedidos, ni al revés.
 **En ElevenLabs** ya existe, creado el 12-10-2026 como «Agente de leads ·
 Kenku Biru (piloto)», con todo lo de las secciones 2 a 5 y 7: prompt, primer
 mensaje, las 17 variables, las dos tools, el webhook de inicio y el secreto
-en los tres. Le falta su puerta, el número (sección 9). Su id queda en la
+en los tres. Su puerta también: el +1 645 654 0729, comprado en Telnyx e
+importado por SIP trunk el 12-10-2026 como «Nicol Leads Telnyx» y asignado a
+este agente (sección 7); `TELNYX_LEADS_SIP_URI` ya está en Vercel y falta el
+redeploy (sección 9). Su id, el de sus tools y el del número quedan en la
 consola, no aquí: con el id, cualquiera puede abrir una conversación web con
 el agente.
 
@@ -355,7 +358,11 @@ responde siempre 200 (salvo un secreto incorrecto: 401). Antes mira el
 de leads (`TELNYX_LEADS_FROM_NUMBER`), que es con el que Kapta abre el tramo al
 agente. Si es otro —alguien que llama al número del agente mientras este marca
 a otra persona—, responde `encontrada = no` y no toca la llamada: la ficha de
-un lead nunca va a otra persona.
+un lead nunca va a otra persona. Mientras `TELNYX_LEADS_FROM_NUMBER` esté vacío,
+ese número es `TELNYX_FROM_NUMBER`, el 918 de EE. UU. En las llamadas SIP de
+Reproprovincia, que salen con ese mismo número, ElevenLabs registra quién llama
+como `+19182386713` (12-10-2026): número E.164 solo, que es lo que este control
+acepta. Falta ver en la primera prueba que el aviso de inicio lo trae igual.
 
 ```json
 {
@@ -419,12 +426,15 @@ hay costo de ElevenLabs por llamada.
   `encontrada` = `no`, que es lo que Kapta responde sin llamada: si el inicio no
   contesta, el agente se despide. Para probar en el editor se cambian allí.
 - **Overrides**: primer mensaje permitido (sección 2).
-- **Número**: el de Telnyx importado en ElevenLabs por SIP trunk y asignado a
-  ESTE agente. Su dirección SIP es `TELNYX_LEADS_SIP_URI`. Al importarlo, en la
-  entrada (inbound) van como direcciones permitidas solo las de Telnyx,
-  `192.76.120.0/24` y `64.16.250.0/24`, igual que el número de Reproprovincia.
-  Sin esa lista, cualquiera que mande un INVITE a esa dirección llega al agente,
-  y si Kapta está marcando a un lead en ese momento, recibe su ficha.
+- **Número**: el +1 645 654 0729, comprado en Telnyx e importado en ElevenLabs
+  por SIP trunk el 12-10-2026 como «Nicol Leads Telnyx», asignado a ESTE
+  agente. Su dirección SIP es `TELNYX_LEADS_SIP_URI`, con la misma forma que la
+  de Reproprovincia: `sip:+16456540729@sip.rtc.elevenlabs.io:5061;transport=tls`.
+  Solo entrada (inbound), y como direcciones permitidas solo las de Telnyx,
+  `192.76.120.0/24` y `64.16.250.0/24`; cifrado de medios «Allowed» y sin
+  usuario ni contraseña, igual que el número de Reproprovincia. Sin esa lista,
+  cualquiera que mande un INVITE a esa dirección llega al agente, y si Kapta
+  está marcando a un lead en ese momento, recibe su ficha.
 
 ## 8. Variables de Vercel
 
@@ -455,14 +465,17 @@ commit.
 4. **El número**: la puerta del agente es un número propio, importado en
    ElevenLabs por SIP trunk con las direcciones permitidas de la sección 7 y
    asignado a ESTE agente, nunca al de Reproprovincia. ElevenLabs lo usa para
-   saber qué agente contesta el tramo que abre Kapta: no llama desde él. Puede
-   ser ya el número peruano que se está comprando, o un segundo número de
-   EE. UU. Recién entonces `TELNYX_LEADS_SIP_URI` en Vercel (la dirección SIP de
-   ese número, con el mismo formato que `TELNYX_ELEVENLABS_SIP_URI`), y
-   redeploy. **Mientras llega el número peruano** (decisión del owner,
-   12-10-2026), `TELNYX_LEADS_FROM_NUMBER` queda vacío y el lead ve el número de
-   EE. UU. de Reproprovincia. Cuando el peruano esté activo en Telnyx,
-   `TELNYX_LEADS_FROM_NUMBER` pasa a ser ese, y redeploy.
+   saber qué agente contesta el tramo que abre Kapta: no llama desde él. Es el
+   +1 645 654 0729 («Nicol Leads Telnyx»), comprado en Telnyx e importado el
+   12-10-2026. Recién entonces `TELNYX_LEADS_SIP_URI` en Vercel (la dirección
+   SIP de ese número, con el mismo formato que `TELNYX_ELEVENLABS_SIP_URI`),
+   y redeploy. La variable se puso el 12-10-2026; **falta el redeploy**, que
+   hace el owner: hasta entonces producción no la lee y Ajustes sigue diciendo
+   «Falta preparar la línea del agente». **Mientras llega el número peruano**
+   (decisión del owner, 12-10-2026), `TELNYX_LEADS_FROM_NUMBER` queda vacío y
+   el lead ve el 918 de EE. UU. de Reproprovincia, no el +1 645 de la puerta.
+   Cuando el peruano esté activo en Telnyx, `TELNYX_LEADS_FROM_NUMBER` pasa a
+   ser ese, y redeploy; la puerta no cambia.
 5. **Ajustes de Kenku** → «Agente de voz · Leads (piloto)»:
    - campaña de Biru: `120248136956710056`;
    - producto, por ejemplo «Shampoo Birú anticaspa»;
@@ -471,6 +484,10 @@ commit.
      confirma el owner: el agente no ofrece nada que no esté aquí;
    - topes, ventana, horario y grupo de control: dejar los de fábrica para
      empezar (§33.4).
+
+   Al 12-10-2026, todavía sin cargar, a propósito. La prueba del paso 7 no los
+   exige, pero sin oferta Nicol no dice precios: cargar al menos producto y
+   oferta antes de probar.
 6. **Mirar la cola sin llamar**:
    `GET /api/cron/voice-leads?dry=1&storeId=<id de Kenku>` con
    `Authorization: Bearer <CRON_SECRET>`. Mira la cola como si el agente
@@ -479,7 +496,13 @@ commit.
 7. **Probar en mi teléfono**, desde el drawer de dos o tres leads de Biru:
    escuchar el saludo, la oferta, la cobertura y el registro. La llamada sale
    con la marca «Prueba» y el lead no cambia. La prueba no deja marcar el
-   número del lead ni uno que pidió no ser contactado.
+   número del lead ni uno que pidió no ser contactado. Tampoco el de otro lead
+   de la tienda: el celular de prueba tiene que ser peruano y ajeno a los
+   leads. Necesita el redeploy del paso 4; sin él, el drawer no muestra el
+   botón. Si Nicol dice «me equivoqué de llamada», falló el inicio (número que
+   llama, secreto o datos de inicio del webhook); si suena y se corta sin
+   hablar, falló el tramo SIP, y la causa queda en
+   `voice_calls.telephony_response.eventos`.
 8. **El grupo de control**: confirmar el porcentaje ANTES de encender. En
    cuanto el piloto sortea al primer lead queda fijo (§33.3).
 9. **«Agente de leads»** y **«Llamadas automáticas»** encendidos. Desde ahí el

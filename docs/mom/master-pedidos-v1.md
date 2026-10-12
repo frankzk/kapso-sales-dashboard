@@ -11353,7 +11353,8 @@ vigilante. Nada más:
   importa en ElevenLabs aceptando solo las direcciones de Telnyx
   (`192.76.120.0/24`, `64.16.250.0/24`), como el de §11.8. Sin esa lista,
   cualquiera que mande un INVITE a la puerta llega al agente y, mientras Kapta
-  marca a un lead, recibe su ficha.
+  marca a un lead, recibe su ficha. La puerta del agente de leads es el
+  +1 645 654 0729 («Nicol Leads Telnyx», 12-10-2026).
 - **El vigilante** (`sweepStaleCalls`) cierra las abiertas de los dos. Una de
   lead en conversación dura hasta **8 minutos** antes de darse por caída
   (`LEAD_IN_PROGRESS_TTL_MINUTES`; marcando, 3 como todas): el agente toma más
@@ -11418,15 +11419,22 @@ vigilante. Nada más:
   Biru (piloto)»), configurado según `docs/voz-leads-agente.md`; se presenta
   como Nicol, usa Gemini 2.5 Flash sin razonamiento (con Flash Lite fallaba las
   pruebas del guion, §11 de ese documento) y ya tiene `VOICE_LEADS_TOOLS_SECRET`
-  en sus dos tools y en el inicio, comprobado con una simulación que llamó a
-  Kapta. Le falta su puerta: un número propio importado en ElevenLabs y
-  asignado a él (`TELNYX_LEADS_SIP_URI`).
+  en sus dos tools y en el inicio. En las tools está comprobado con una
+  simulación que llamó a Kapta; el inicio solo lo llama una llamada por
+  teléfono, así que se comprueba en la primera prueba. **Su puerta también
+  existe** (12-10-2026): el +1 645 654 0729, comprado en Telnyx e importado en
+  ElevenLabs por SIP trunk como «Nicol Leads Telnyx» (solo entrada desde las
+  direcciones de Telnyx, sin usuario ni contraseña) y asignado a él;
+  `TELNYX_LEADS_SIP_URI` ya está en Vercel. Falta el redeploy, que hace el
+  owner. Después: producto y oferta de Kenku (sin cargar todavía, a
+  propósito), «Probar en mi teléfono» y recién entonces encender (33.8).
 - **Número peruano en Telnyx** para el agente de leads
   (`TELNYX_LEADS_FROM_NUMBER`). Sin él, el lead ve el número de Telnyx de
   Reproprovincia, que hoy es de EE. UU., y contesta menos. **Decisión del owner
   (12-10-2026):** mientras llega, el piloto sale con el de EE. UU.
   (`TELNYX_LEADS_FROM_NUMBER` vacío); las primeras semanas miden al agente con
-  ese número.
+  ese número. El +1 645 de la puerta no es el que ve el lead: cuando llegue el
+  peruano, va solo en `TELNYX_LEADS_FROM_NUMBER`, y redeploy.
 - **Revisión legal** del cierre «Gracias, no insisto» y del consentimiento para
   llamar a quien escribió por un anuncio, igual que el aviso de grabación de
   §11.8.
@@ -11439,7 +11447,9 @@ vigilante. Nada más:
   `voice_calls.transcript` queda vacío.
 - **Que ElevenLabs mande `caller_id`** en el inicio de las llamadas por SIP:
   revisarlo en las primeras llamadas reales (33.7). Sin él, el control de
-  «otro número» no hace nada.
+  «otro número» no hace nada. Indicio (12-10-2026): en las llamadas SIP de
+  Reproprovincia, que salen con el mismo número, ElevenLabs registra quién
+  llama como `+19182386713`, un E.164 solo, que es lo que el control acepta.
 - **`frio_cobertura_v1` sobre las campañas del piloto** (33.3): el owner decide
   si se pausa ese experimento para las campañas del piloto o si su lectura las
   deja fuera mientras dure.

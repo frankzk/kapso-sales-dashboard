@@ -2250,16 +2250,24 @@ la línea de tiempo («Recordatorio de recojo (día 3)…») y la foto que viaj�
    de las dos tools y del inicio (12-10-2026). Falta, si se quiere, el
    post-call.
 4. **El número**, después del agente: un número propio del agente de leads
-   (el peruano que se está comprando, o un segundo número de EE. UU.) importado
-   en ElevenLabs por SIP trunk, aceptando solo las direcciones de Telnyx
-   (`192.76.120.0/24`, `64.16.250.0/24`), y asignado al agente de leads. Recién
+   importado en ElevenLabs por SIP trunk, aceptando solo las direcciones de
+   Telnyx (`192.76.120.0/24`, `64.16.250.0/24`), y asignado al agente de leads.
+   **Hecho el 12-10-2026**: el +1 645 654 0729, comprado en Telnyx, importado
+   como «Nicol Leads Telnyx» (solo entrada, cifrado de medios «Allowed», sin
+   usuario ni contraseña), igual que el número de Reproprovincia. Recién
    entonces, en Vercel, y redeploy:
    - `TELNYX_LEADS_SIP_URI`: la puerta SIP de ese número, con el formato de
-     `TELNYX_ELEVENLABS_SIP_URI`. Sin ella no se llama a ningún lead: el aviso
-     de Telnyx corta el tramo, nunca lo manda al agente de Reproprovincia.
+     `TELNYX_ELEVENLABS_SIP_URI`
+     (`sip:+16456540729@sip.rtc.elevenlabs.io:5061;transport=tls`). **Puesta
+     el 12-10-2026.** Sin ella no se llama a ningún lead: el aviso de Telnyx
+     corta el tramo, nunca lo manda al agente de Reproprovincia.
    - `TELNYX_LEADS_FROM_NUMBER` (opcional): el número que ve el lead. Vacío =
      el mismo `TELNYX_FROM_NUMBER` de Reproprovincia, que es como sale el
      piloto mientras llega el número peruano (decisión del owner, 12-10-2026).
+     El +1 645 de la puerta no va aquí: el lead nunca lo ve.
+   - **Falta el redeploy** (lo hace el owner): hasta entonces producción no lee
+     `TELNYX_LEADS_SIP_URI` y Ajustes sigue diciendo «Falta preparar la línea
+     del agente».
 5. **El barrido** `/api/cron/voice-leads` ya está en `vercel.json` (cada cinco
    minutos, desfasado dos del de Reproprovincia). Solo corre en producción y
    sin tiendas con el agente encendido no hace nada. La cola se mira sin llamar
@@ -2267,8 +2275,8 @@ la línea de tiempo («Recordatorio de recojo (día 3)…») y la foto que viaj�
    `GET /api/cron/voice-leads?dry=1&storeId=<uuid>` y
    `Authorization: Bearer <CRON_SECRET>`: la mira como si el agente estuviera
    encendido y devuelve cuántos entran y cuántos quedan fuera por cada motivo.
-6. **Encendido por tienda** (Ajustes → «Agente de voz · Leads (piloto)»), en
-   este orden: campaña, producto y oferta; «Probar en mi teléfono» desde el
+6. **Encendido por tienda** (Ajustes → «Agente de voz · Leads (piloto)»),
+   después del redeploy del paso 4, en este orden: campaña, producto y oferta; «Probar en mi teléfono» desde el
    drawer de un lead; el porcentaje de control (queda fijo en el primer
    sorteo); y recién entonces «Agente de leads» y «Llamadas automáticas». Los
    pasos completos y la campaña de Biru están en `docs/voz-leads-agente.md`.

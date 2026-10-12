@@ -863,19 +863,49 @@ describe("docs/voz-leads-agente.md: webhooks, ajustes y variables de Vercel", ()
     expect(DOC).not.toContain("[nombre del agente]");
   });
 
-  it("los ids del agente y de sus tools no van en el repositorio", () => {
-    // Con el id del agente, cualquiera abre una conversación web con él.
+  it("los ids del agente, de sus tools y de su número no van en el repositorio", () => {
+    // Con el id del agente, cualquiera abre una conversación web con él; los
+    // de las tools y del número se quedan igual en la consola.
     for (const [name, text] of [
       ["docs/voz-leads-agente.md", DOC],
       ["MOM §33", S33],
       ["DEPLOY.md", read("DEPLOY.md")],
     ] as const) {
-      expect(text, name).not.toMatch(/\bagent_[0-9a-z]{20,}/);
-      expect(text, name).not.toMatch(/\btool_[0-9a-z]{20,}/);
+      expect(text, name).not.toMatch(/\bagent_[0-9a-z]{20,}/i);
+      expect(text, name).not.toMatch(/\btool_[0-9a-z]{20,}/i);
+      expect(text, name).not.toMatch(/\bphnum_[0-9a-z]{20,}/i);
     }
   });
 
-  it("lo que falta va en orden: secreto, agente, número y recién su puerta en Vercel", () => {
+  it("la puerta de Nicol ya existe y ningún texto dice que falta", () => {
+    const deploy = flat(section(read("DEPLOY.md"), "### 12-10-2026 · Agente de voz para leads", "\n### "));
+    for (const [name, text] of [
+      ["docs/voz-leads-agente.md", flat(DOC)],
+      ["MOM §33", flat(S33)],
+      ["DEPLOY.md", deploy],
+    ] as const) {
+      expect(text, name).toContain("+1 645 654 0729");
+      expect(text, name).toContain("«Nicol Leads Telnyx»");
+      expect(text, name).not.toContain("Le falta su puerta");
+      expect(text, name).not.toContain("que se está comprando");
+    }
+    // La forma de la dirección es la de Reproprovincia (test/telnyx.test.ts).
+    for (const text of [flat(DOC), deploy]) {
+      expect(text).toContain("`sip:+16456540729@sip.rtc.elevenlabs.io:5061;transport=tls`");
+    }
+    // El número de la puerta no es el que ve el lead.
+    expect(flat(S33)).toContain("El +1 645 de la puerta no es el que ve el lead");
+    // Lo único que falta del lado de Vercel es el redeploy.
+    expect(deploy).toContain("**Falta el redeploy** (lo hace el owner)");
+  });
+
+  it("el inicio no se da por probado: la simulación solo llegó a las tools", () => {
+    expect(flat(S33)).toContain("En las tools está comprobado con una simulación");
+    expect(flat(S33)).toContain("el inicio solo lo llama una llamada por teléfono");
+    expect(flat(S33)).not.toContain("en sus dos tools y en el inicio, comprobado con una simulación");
+  });
+
+  it("el encendido va en orden: secreto, agente, número con su puerta en Vercel y recién Kenku", () => {
     const s9 = flat(section(DOC, "## 9. Encendido", "\n## "));
     enOrden(s9, [
       "**El secreto**",
