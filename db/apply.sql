@@ -493,4 +493,6 @@
 \ir migrations/0244_gf_same_day_cutoff_noon.sql
 \echo 'Applying 0245_advisor_schedules.sql'
 \ir migrations/0245_advisor_schedules.sql
+\echo 'Applying 0247_voice_lead_calls.sql'
+\ir migrations/0247_voice_lead_calls.sql
 \echo 'Done.'

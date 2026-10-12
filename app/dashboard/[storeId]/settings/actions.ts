@@ -33,6 +33,7 @@ import { FlowClient } from "@/lib/flow/client";
 import { confirmationUrl } from "@/lib/flow/link";
 import { processTransitNotifications } from "@/lib/shalom/transit-notify";
 import { resolveAgentNames } from "@/lib/agent-names";
+import { LEAD_VOICE_EXPERIMENT } from "@/lib/voice-leads";
 
 export interface SettingsState {
   error?: string;
@@ -94,6 +95,13 @@ export async function updateStore(
   const get = (k: string) => {
     const v = formData.get(k);
     return v == null ? undefined : String(v);
+  };
+  // Las casillas de campañas del agente de leads viajan como VARIOS valores
+  // con el mismo nombre: `get` se quedaría solo con el primero. Ausente = esta
+  // tarjeta no las trae y no se tocan.
+  const getAll = (k: string) => {
+    const v = formData.getAll(k);
+    return v.length ? v.map(String) : undefined;
   };
 
   // El email de Shalom llega rellenado en cada guardado: hace falta el valor
@@ -169,6 +177,19 @@ export async function updateStore(
     voice_recovery_hour_end: get("voice_recovery_hour_end"),
     voice_recovery_agent_number: get("voice_recovery_agent_number"),
     voice_recovery_zadarma_sip: get("voice_recovery_zadarma_sip"),
+    // Agente de voz para leads, piloto Biru (MOM §33, 0247).
+    voice_lead_enabled: get("voice_lead_enabled"),
+    voice_lead_auto: get("voice_lead_auto"),
+    voice_lead_daily_cap: get("voice_lead_daily_cap"),
+    voice_lead_max_attempts: get("voice_lead_max_attempts"),
+    voice_lead_wait_minutes: get("voice_lead_wait_minutes"),
+    voice_lead_max_age_hours: get("voice_lead_max_age_hours"),
+    voice_lead_holdout_pct: get("voice_lead_holdout_pct"),
+    voice_lead_hour_start: get("voice_lead_hour_start"),
+    voice_lead_hour_end: get("voice_lead_hour_end"),
+    voice_lead_campaign_ids: getAll("voice_lead_campaign_ids"),
+    voice_lead_product: get("voice_lead_product"),
+    voice_lead_offer: get("voice_lead_offer"),
     confirmation_cycle_days: get("confirmation_cycle_days"),
     telegram_chat_id: get("telegram_chat_id"),
     urgent_telegram_chat_id: get("urgent_telegram_chat_id"),
@@ -242,7 +263,29 @@ export async function updateStore(
     shalom_pro_email: (currentStore as { shalom_pro_email?: string | null } | null)?.shalom_pro_email ?? null,
   });
 
-  if (!Object.keys(patch).length) return { notice: "No hay cambios para guardar." };
+  // El porcentaje del grupo de control del agente de leads queda fijo con el
+  // piloto en marcha (MOM §33.3): el tablero junta todos los sorteos en una
+  // sola comparación, y cambiar la proporción a mitad de camino la sesga
+  // (con 50/50 dos semanas y 90/10 otras dos, una diferencia de época se lee
+  // como efecto del agente). Para otra proporción, un piloto nuevo.
+  let holdoutAviso: string | null = null;
+  if (typeof patch.voice_lead_holdout_pct === "number") {
+    const [{ data: prevHoldout }, { count: sorteados }] = await Promise.all([
+      ctx.admin.from("stores").select("voice_lead_holdout_pct").eq("id", storeId).maybeSingle(),
+      ctx.admin
+        .from("lead_experiments")
+        .select("lead_id", { count: "exact", head: true })
+        .eq("store_id", storeId)
+        .eq("experiment", LEAD_VOICE_EXPERIMENT),
+    ]);
+    const antes = (prevHoldout as { voice_lead_holdout_pct?: number | null } | null)?.voice_lead_holdout_pct;
+    if (antes != null && antes !== patch.voice_lead_holdout_pct && (sorteados ?? 0) > 0) {
+      delete patch.voice_lead_holdout_pct;
+      holdoutAviso = `El grupo de control se queda en ${antes} %: el piloto ya sorteó leads con ese porcentaje.`;
+    }
+  }
+
+  if (!Object.keys(patch).length) return { notice: holdoutAviso ?? "No hay cambios para guardar." };
 
   // Prueba de imagen (0233): al encenderla se anota desde cuándo, y los
   // resultados cuentan desde ahí. Guardar el formulario con la prueba ya
@@ -272,7 +315,7 @@ export async function updateStore(
   revalidatePath(`/dashboard/${storeId}/settings`);
   revalidatePath(`/dashboard/${storeId}`);
   revalidatePath("/dashboard/stores");
-  return { notice: "Tienda actualizada." };
+  return { notice: holdoutAviso ? `Tienda actualizada. ${holdoutAviso}` : "Tienda actualizada." };
 }
 
 /**

@@ -130,8 +130,11 @@ export function storeInitials(name: string | null | undefined): string {
 }
 
 /** `kind`s de `lead_calls` que NO son trabajo de venta: anotaciones de máquina.
- *  Agregar acá cualquier `kind` nuevo que escriba el sistema y no una persona. */
-const NON_SALES_KINDS = new Set(["system"]);
+ *  Agregar acá cualquier `kind` nuevo que escriba el sistema y no una persona.
+ *  `voice_agent` (= LEAD_VOICE_KIND, MOM §33) lo escribe el agente de voz de
+ *  leads sin vendedora, así que hoy ya no entra al tablero; va aquí por si un
+ *  día una fila suya llegara firmada: una llamada del robot no es de nadie. */
+const NON_SALES_KINDS = new Set(["system", "voice_agent"]);
 
 /**
  * ¿Este toque es TRABAJO sobre el lead?

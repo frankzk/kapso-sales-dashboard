@@ -68,6 +68,19 @@ export const env = {
   // que llame a la vez que Daaph. Vacío = comparte número y turno con Daaph.
   voiceAgentNumberTelnyx: () => (process.env.VOICE_AGENT_NUMBER_TELNYX ?? "").trim(),
 
+  // Agente de voz para leads (MOM §33): un agente de ElevenLabs APARTE del de
+  // Reproprovincia. TELNYX_LEADS_SIP_URI es su puerta SIP (el número importado
+  // en ElevenLabs y asignado a ESE agente); sin ella el agente de leads no
+  // llama. TELNYX_LEADS_FROM_NUMBER es el número que ve el lead; vacío = el
+  // mismo del Agente Telnyx. VOICE_LEADS_TOOLS_SECRET firma su inicio de
+  // conversación y sus tools, y NO abre las de Reproprovincia (ni al revés).
+  telnyxLeadsSipUri: () => (process.env.TELNYX_LEADS_SIP_URI ?? "").trim(),
+  telnyxLeadsFromNumber: () => (process.env.TELNYX_LEADS_FROM_NUMBER || process.env.TELNYX_FROM_NUMBER || "").trim(),
+  voiceLeadsToolsSecret: () => (process.env.VOICE_LEADS_TOOLS_SECRET ?? "").trim(),
+  // Secreto HMAC del webhook «post-call» de ElevenLabs (transcripción, duración
+  // y costo de cada conversación). Vacío = Kapta rechaza esos avisos.
+  elevenLabsWebhookSecret: () => (process.env.ELEVENLABS_WEBHOOK_SECRET ?? "").trim(),
+
   // --- non-secret runtime config ---
   shopifyApiVersion: () => process.env.SHOPIFY_API_VERSION ?? "2025-01",
   kapsoApiBase: () =>
