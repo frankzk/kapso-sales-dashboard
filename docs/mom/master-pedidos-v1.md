@@ -1665,7 +1665,7 @@ Reglas:
 
 | Operador | Fuente del resultado | Momento observado |
 | --- | --- | --- |
-| Johnny, Roy y Douglas | WhatsApp; `entregado` o `entregado en efectivo`, más evidencia para Yape, Plin, link o POS | Durante/final de ruta |
+| Johnny (Yhoni), Roy, Alexis y Douglas | WhatsApp; `entregado` o `entregado en efectivo`, más evidencia para Yape, Plin, link o POS | Durante/final de ruta |
 | Axel Courier | Cuadro de entregados y devueltos; devolución física normalmente al día siguiente | Día siguiente |
 | Swayp | Excel/plataforma en tiempo real | Durante la ruta |
 | Urpi | Plataforma en tiempo real; su export «Reporte del mes – detallado» se carga en Kapta (§30.11) | Durante la ruta |
@@ -2010,11 +2010,16 @@ sin tope de antigüedad. Reglas:
 
 Devoluciones físicas:
 
-- Motorizados propios: el saldo no entregado se coteja físicamente al día
-  siguiente, pedido por pedido.
+- Motorizados propios: el saldo no entregado se queda con el motorizado hasta
+  que lo trae a la oficina, y de noche no se recibe nada. Johnny (Yhoni) y Roy
+  lo traen al día siguiente; Alexis, cada dos o tres días (owner, 12-10-2026).
+  Se recibe en oficina («Recibir en oficina», §29.13) el día que llega, pedido
+  por pedido y por su salida/QR. Hasta entonces la salida sigue «No entregado»
+  a su nombre. Para Douglas no hay una cadencia confirmada.
 - Axel: Daysi o Diana fotografía y coteja los paquetes devueltos y la fecha.
 - Swayp y Urpi: el recojo de devoluciones ocurre actualmente cada semana o cada
-  quince días; cada salida debe permanecer abierta hasta recibir su caja.
+  quince días (Urpi, cada una o dos semanas); cada salida debe permanecer
+  abierta hasta recibir su caja.
 - Si ya existe otra caja armada para el mismo pedido, la devolución anterior se
   identifica por su salida/QR; nunca se concilia solo por número de pedido.
 - Los pedidos que el cliente rechazó definitivamente y que fueron anulados en
@@ -2051,10 +2056,13 @@ la lista de Almacén «Reintentos por salir» quedan para una fase posterior.
 - **Paso a paso de un «No entregado» de Grupo GF:**
   1. El motorizado reporta el motivo y la foto en su ruta; si el cliente pide
      otro día, lo escribe en la nota. Puede reintentarlo el mismo día con la
-     misma caja (§9.3). Al terminar, entrega en oficina toda caja no entregada.
-  2. Esa misma noche alguien del equipo lo recibe con «Recibir en oficina»
-     (escaneo o lista, §29.13): al día siguiente no queda ninguna caja «No
-     entregado» a nombre de un motorizado. La caja va al estante de
+     misma caja (§9.3). La caja no entregada se queda con él hasta que la trae
+     a la oficina: Johnny (Yhoni) y Roy al día siguiente, Alexis cada dos o
+     tres días (§9.4).
+  2. El día que el motorizado la trae, alguien del equipo la recibe con
+     «Recibir en oficina» (escaneo o lista, §29.13); de noche no se recibe
+     nada. Hasta entonces la salida sigue «No entregado» a nombre del
+     motorizado: es lo esperado, no una caja perdida. La caja va al estante de
      reprogramados, en la bandeja del día en que se recibió.
   3. Alguien del equipo contacta al cliente y deja la fecha con «Programar»
      en Despacho del día (motivo «Confirmado con cliente: …», §29.6), o anota
@@ -2074,8 +2082,10 @@ la lista de Almacén «Reintentos por salir» quedan para una fase posterior.
      ya no lo quiere o el pedido se cancela.
   5. Despacho GF lo asigna a un motorizado desde «Programados hoy» o por QR.
 - **Barrido inicial.** Las cajas «No entregado» que siguen registradas en la
-  caja de un motorizado se reciben en oficina una por una. Lo que no aparezca
-  físicamente no se recibe en oficina: se anota en la ficha del pedido (caja,
+  caja de un motorizado se reciben en oficina una por una. Una caja de Johnny
+  o Roy del día anterior, o de Alexis con menos de tres días, no es faltante:
+  está con el motorizado. Lo que no aparezca físicamente no se recibe en
+  oficina: se anota en la ficha del pedido (caja,
   motorizado, quién buscó y cuándo) y se avisa a Frankz o Yohalis para decidir
   merma, descuento al motorizado o reclamo. No es una búsqueda en la calle. Un
   registro propio de paquete que no consta queda para una fase posterior: §13
@@ -10067,11 +10077,12 @@ decía «Ya estaba». Había 78 así, en cajas del 16 al 28/09, y 20 rechazos.
   ítem activo en la caja (`stopsNotReceived`, el mismo criterio del escaneo).
 - **Se puede cerrar igual, a conciencia** («Cerrar igual», con confirmación):
   cerrar no espera a que se reciba el saldo no entregado, y exigirlo antes del
-  cierre frenaría la liquidación del efectivo. Desde la fase 0 (11-10-2026,
-  §9.5) el motorizado entrega ese saldo en oficina al terminar y alguien del
-  equipo lo recibe esa misma noche: a la mañana siguiente no queda ninguna caja
-  «No entregado» a su nombre (antes se devolvía al día siguiente). Lo que queda sigue
-  en «Devoluciones» y el escaneo de «Por QR» lo recibe al volver a asignarlo.
+  cierre frenaría la liquidación del efectivo. El motorizado trae ese saldo a
+  la oficina cuando vuelve —Johnny (Yhoni) y Roy al día siguiente, Alexis cada
+  dos o tres días; de noche no se recibe nada (§9.4, §9.5)— y ese día se
+  recibe en oficina. Hasta entonces la caja «No entregado» sigue a su nombre.
+  Lo que queda sigue en «Devoluciones» y el escaneo de «Por QR» lo recibe al
+  volver a asignarlo.
   Es lo único que se fuerza en Grupo GF; lo sin reportar y la foto no.
 - **«Recibir en oficina»** en la misma fila (`receiveRouteReturns`) los recibe
   de una vez por la puerta de «Devoluciones» (`returnUndeliveredToOffice`,
