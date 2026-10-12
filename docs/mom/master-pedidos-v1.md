@@ -3452,6 +3452,24 @@ se rechaza: un nombre ambiguo como «San Juan» o «Huachipa» no se adivina.
 Esto vino de #KP132394, donde la cobertura aceptaba la guía y el ubigeo la
 negaba —comparaban distinto— y la salida se creó con código manual.
 
+**Grafías sin el «de» o pegadas (owner, 12-10-2026; migración 0245).** Se
+escriben sin el «de» y siguen siendo el mismo distrito: «San Juan Lurigancho»
+es San Juan de Lurigancho, **nunca** Lurigancho-Chosica; «San Juan Miraflores»
+es San Juan de Miraflores y «San Martín Porres» es San Martín de Porres.
+«Pachamamac» es Pachacámac, y «Cercado delima» o «Cercado Lima» son Lima
+(Cercado). Antes de estos alias, la búsqueda dentro del texto encontraba el
+distrito oficial más corto con que terminaba el texto: «San Juan Lurigancho»
+caía en Lurigancho y los otros quedaban como distrito inválido, fuera de la
+cola de Grupo GF. La lista de alias es una sola regla en dos lugares
+(`DISTRICT_ALIASES` en `lib/order-coverage.ts` y `lima_district_aliases()` en
+la base), y una prueba exige que digan lo mismo.
+
+Un distrito de **otro departamento** con la región «Lima (provincia)» no es un
+alias: #KP130975 trae «HUARAZ», que es Áncash. Se corrige en la ficha con
+«Corregir ubicación» (Áncash / Huaraz / Huaraz); el pedido pasa a Provincia
+COD y sale por Reproprovincia con Aliclik. No se decide por la provincia sola:
+hay pedidos de San Miguel de Lima que llegan con la provincia «San Román».
+
 Falta la configuración de bodega Swayp (`senders`) de las cuatro ciudades
 nuevas; sin ella la guía se niega aunque el ubigeo resuelva. Es configuración
 operativa, no código.

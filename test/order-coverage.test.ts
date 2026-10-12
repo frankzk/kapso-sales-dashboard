@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   classifyOrderCoverage,
@@ -218,6 +220,48 @@ describe("distrito escrito a mano", () => {
     expect(resolveLimaDistrict("Santa Maria - San Bartolo", { searchInText: true })).toBe("san bartolo");
     // "Zárate" es un barrio de SJL: no puede colar "Ate" como distrito.
     expect(resolveLimaDistrict("Zarate", { searchInText: true })).toBe(null);
+  });
+
+  // Owner, 12-10-2026: sin el «de» sigue siendo el mismo distrito, y «San Juan
+  // Lurigancho» es SJL, nunca Lurigancho-Chosica.
+  it("resuelve los distritos escritos sin el «de» o pegados", () => {
+    expect(resolveLimaDistrict("San juan lurigancho")).toBe("san juan de lurigancho");
+    expect(resolveLimaDistrict("Sanjuan Lurigancho")).toBe("san juan de lurigancho");
+    expect(resolveLimaDistrict("san juan miraflores")).toBe("san juan de miraflores");
+    expect(resolveLimaDistrict("San Martín Porres")).toBe("san martin de porres");
+    expect(resolveLimaDistrict("Pachamamac")).toBe("pachacamac");
+    expect(resolveLimaDistrict("cercado delima")).toBe("lima");
+    expect(resolveLimaDistrict("Cercado Lima")).toBe("lima");
+  });
+
+  it("dentro de una frase, «San Juan Lurigancho» gana a «Lurigancho»", () => {
+    expect(resolveLimaDistrict("Mz B San Juan Lurigancho", { searchInText: true })).toBe("san juan de lurigancho");
+    expect(resolveLimaDistrict("Av. Próceres, San Juan Lurigancho", { searchInText: true })).toBe(
+      "san juan de lurigancho",
+    );
+    // Lurigancho-Chosica sigue siendo Lurigancho-Chosica.
+    expect(resolveLimaDistrict("Lurigancho-Chosica")).toBe("lurigancho chosica");
+    expect(resolveLimaDistrict("Lurigancho", { searchInText: true })).toBe("lurigancho");
+    expect(resolveLimaDistrict("Huachipa")).toBe("lurigancho");
+    // Huaraz es Áncash: no es alias de nada en Lima.
+    expect(resolveLimaDistrict("HUARAZ", { searchInText: true })).toBe(null);
+  });
+
+  it("la base dice lo mismo: los alias de la última migración son los de Kapta", () => {
+    const dir = resolve(process.cwd(), "db/migrations");
+    const last = readdirSync(dir)
+      .filter((file) => file.endsWith(".sql"))
+      .sort()
+      .filter((file) => readFileSync(resolve(dir, file), "utf8").includes("function lima_district_aliases()"))
+      .at(-1)!;
+    const sql = readFileSync(resolve(dir, last), "utf8");
+    const pairs = [...sql.matchAll(/\('([a-z ]+)', '([a-z ]+)'\)/g)];
+    const src = readFileSync(resolve(process.cwd(), "lib/order-coverage.ts"), "utf8");
+    const start = src.indexOf("const DISTRICT_ALIASES");
+    const tsCount = [...src.slice(start, src.indexOf("};", start)).matchAll(/^\s+"?[a-z ]+"?: "[a-z ]+",$/gm)].length;
+    expect(sql).toContain("('san juan lurigancho', 'san juan de lurigancho')");
+    expect(pairs.length).toBe(tsCount);
+    for (const [, term, district] of pairs) expect(resolveLimaDistrict(term), term).toBe(district);
   });
 
   it('el caso del pedido #AUR174763: región "Lima" + distrito "Surco"', () => {
