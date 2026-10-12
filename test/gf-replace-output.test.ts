@@ -190,19 +190,44 @@ describe("las piezas en el código", () => {
     expect(migration).toContain("grant execute on function public.gf_replace_output(uuid, uuid, uuid, date, text, uuid) to service_role;");
   });
 
-  it("recibir la caja reemplazada la deja devuelta, conserva su salida y no vuelve a la cola", () => {
-    const branch = migration.slice(migration.indexOf("if v_shipment.custody_state = 'retorno' then"), migration.indexOf("return v_shipment.order_id;\n  end if;"));
-    expect(branch).toContain("custody_state = 'devuelto', returned_at = now()");
+  it("la marca de la reemplazada es su evento, no la custodia sola", () => {
+    expect(migration).toContain("create or replace function public.gf_output_replaced(p_shipment uuid)");
+    expect(migration).toContain("select 1 from order_events where shipment_id = p_shipment and kind = 'output_replaced'");
+    // Una salida en `retorno` por «Solicitar devolución» no se saca con salida nueva.
+    expect(migration).toContain("if v_old.custody_state = 'retorno' and not gf_output_replaced(v_old.id) then");
+  });
+
+  it("recibir la caja reemplazada (o la ya devuelta que sigue en la caja) la deja devuelta y no vuelve a la cola", () => {
+    const start = migration.indexOf("v_replaced := gf_output_replaced(v_shipment.id);");
+    const branch = migration.slice(start, migration.indexOf("return v_shipment.order_id;\n  end if;", start));
+    expect(branch).toContain("if v_shipment.custody_state = 'devuelto' or v_shipment.returned_at is not null\n     or (v_shipment.custody_state = 'retorno' and v_replaced) then");
+    expect(branch).toContain("custody_state = 'devuelto', returned_at = coalesce(returned_at, now())");
     expect(branch).not.toContain("dispatched_at = null");
     expect(branch).toContain("'return_received'");
     expect(branch).not.toContain("'returned_to_office', p_actor, 'dispatch'");
   });
 
-  it("la parada no cambia y el cuaderno no se la lleva", () => {
+  it("la parada no cambia —tampoco escrita por el motorizado— y el cuaderno no se la lleva", () => {
     expect(migration).toContain("create trigger delivery_stops_guard_replaced");
+    const guard = migration.slice(migration.indexOf("create or replace function public.gf_guard_replaced_stop()"), migration.indexOf("drop trigger if exists delivery_stops_guard_replaced"));
+    // El motorizado escribe bajo RLS y no ve `shipments`.
+    expect(guard).toContain("security definer");
+    expect(guard).toContain("and gf_output_replaced(new.shipment_id) then");
     expect(migration).toContain("and sh.custody_state is distinct from 'retorno'");
-    expect(read("lib/stop-report.ts")).toContain("if (returning) return { ok: false, error: REPLACED_STOP_ERROR };");
+    // El traspaso relee con candado antes de sacar el paquete de la caja.
+    const carry = migration.slice(migration.indexOf("create or replace function public.gf_carry_over("));
+    expect(carry).toContain("select * into v_item_row from dispatch_manifest_items where id = r.item_id for update;");
+    expect(carry).toContain("select custody_state into v_custody from shipments where id = r.shipment_id for update;");
+    expect(carry.indexOf("for update;")).toBeLessThan(carry.indexOf("-- 1. Sale de la caja anterior"));
+    const report = read("lib/stop-report.ts");
+    expect(report).toContain("if (await stopIsFrozenByReplacement(admin, stop.id, input.status)) return { ok: false, error: REPLACED_STOP_ERROR };");
+    expect(report).toContain('if (!row?.shipment_id || row.status === nextStatus) return false;');
     expect(read("lib/notebook-import-access.ts")).toContain('.eq("custody_state", "retorno");');
+  });
+
+  it("la salida nueva no entra en la ruta del mismo motorizado y día que la reemplazada", () => {
+    expect(migration).toContain("create trigger dispatch_items_guard_replaced_route");
+    expect(migration).toContain("raise exception 'Este pedido tiene su caja anterior (%) en la ruta de % del %: la salida nueva va con otro motorizado u otro día.'");
   });
 
   it("la acción pide organizar rutas y la tienda, escribe el motivo y deshace lo que creó", () => {
@@ -220,16 +245,51 @@ describe("las piezas en el código", () => {
     expect(replace.indexOf("ownReplaceDecision(")).toBeLessThan(replace.indexOf("writeCourierGuide("));
   });
 
-  it("recibir en oficina va por salida: el QR recibe ESA salida y la caja reemplazada vuelve a stock", () => {
+  it("recibir en oficina va por salida: el QR, la fila, la lista y la ruta reciben ESA caja", () => {
     expect(body("returnUndeliveredByCode")).toContain("returnUndeliveredShipments(admin, auth, orgId, [{ id: byOutput.id, store_id: byOutput.store_id }])");
-    expect(body("returnUndeliveredToOffice")).toContain("return box?.manifestId === item.manifest_id && Boolean(box.undeliveredReason);");
+    const toOffice = body("returnUndeliveredToOffice");
+    expect(toOffice).toContain("{ byOrder: true }");
+    // Por número de pedido, con dos cajas «No entregado», no se recibe ninguna.
+    expect(toOffice).toContain("const twoBoxes = (perOrder.get(orderOf.get(item.shipment_id) ?? item.shipment_id) ?? 0) > 1;");
+    expect(toOffice).toContain("(!opts.manifestIds || opts.manifestIds.has(item.manifest_id))");
     expect(body("returnUndeliveredOutputs")).toContain('if (!auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas." };');
+    const scanner = read("components/returns-scanner.tsx");
+    expect(scanner).toContain("await returnUndeliveredOutputs(orgId, [row.shipmentId])");
+    expect(scanner).toContain("<tr key={p.shipmentId}");
+    expect(read("components/dispatch-day-board.tsx")).toContain("await returnUndeliveredOutputs(orgId, shipmentIds)");
+    expect(read("lib/courier-route-ledger.ts")).toContain("replaced: replaced.has(s.shipment_id),");
+  });
+
+  it("el escaneo de la caja reemplazada la recibe a stock y nunca toma ni asigna la salida nueva", () => {
     const scan = body("scanAssignToRider");
-    expect(scan).toContain('found.shipment.custody_state === "retorno"');
+    expect(scan).toContain("if (!(await outputWasReplaced(admin, found.shipment!.id))) return null;");
+    expect(scan).toContain("if (replacedScan && !active) {");
+    expect(scan).toContain("if (box && replacedScan) {");
     expect(scan).toContain("replaced: true,");
-    // Recibida, no se toma ni se asigna.
+    expect(scan).toContain('status: "recibido_a_stock",');
+    // Ni recibida ni en su caja se llega a tomar o asignar.
+    expect(scan.indexOf("if (replacedScan && !active) {")).toBeLessThan(scan.indexOf("takeOrdersCore("));
     expect(scan.indexOf("replacedReceivedMessage(")).toBeLessThan(scan.indexOf("takeOrdersCore("));
+    // Sin revalidar la página dentro del escaneo: lo refresca el navegador.
+    const branch = scan.slice(scan.indexOf("if (box && replacedScan) {"), scan.indexOf("// Una caja de un día ANTERIOR"));
+    expect(branch).not.toContain("revalidatePath(");
+    expect(read("components/dispatch-day-board.tsx")).toContain('if (line.status === "asignado" || line.status === "ya_en_caja" || line.receivedFrom) scheduleRefresh();');
     expect(body("moveManifestItem")).toContain('if (shipment.custody_state === "retorno") {');
+  });
+
+  it("si la llamada falla sin respuesta clara, no deshace un reemplazo que sí se hizo", () => {
+    const replace = body("replaceOwnOutputs");
+    expect(replace).toContain("const committed = rpcError ? await replacementCommitted(admin, write.shipmentId) : false;");
+    expect(replace).toContain("if (rpcError && !committed) {");
+    expect(actions).toContain("if (await replacementCommitted(admin, shipmentId)) return;");
+    // Lo que no salió se dice con su pedido, también junto a lo que sí.
+    expect(replace).toContain("if (failed.length && (replaced.length || alreadyReplaced.length)) {");
+  });
+
+  it("la Mesa de cierre no recibe una caja que sigue con el motorizado", () => {
+    const closure = read("app/dashboard/pedidos/actions.ts");
+    expect(closure).toContain('if (action === "return_receive" && selectedShipment && (selectedShipment.courier ?? "").toLowerCase() === "propio") {');
+    expect(closure).toContain("recíbela en Despacho del día («En devolución» o «Devoluciones», o escaneando su QR)");
   });
 
   it("el tablero ofrece «Sacar con salida nueva» y la píldora «En devolución»", () => {

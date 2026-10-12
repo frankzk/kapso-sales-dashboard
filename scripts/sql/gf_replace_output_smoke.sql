@@ -96,11 +96,26 @@ begin
   begin
     update delivery_stops set status='pendiente', reported_at=null where route_id=v_route and shipment_id=v_s01;
     raise exception 'FAIL undo allowed on a replaced output';
-  exception when others then if sqlerrm like 'FAIL%' then raise; end if; end;
+  exception when others then
+    if sqlerrm like 'FAIL%' then raise; end if;
+    if sqlerrm not like 'Este paquete ya salió con otra salida%' then raise exception 'expected the stop guard, got %', sqlerrm; end if;
+  end;
   begin
-    update delivery_stops set status='entregado' where route_id=v_route and shipment_id=v_s01;
+    update delivery_stops set status='entregado', payment_method='sin_cobro', collected_amount=0 where route_id=v_route and shipment_id=v_s01;
     raise exception 'FAIL delivered a replaced output';
-  exception when others then if sqlerrm like 'FAIL%' then raise; end if; end;
+  exception when others then
+    if sqlerrm like 'FAIL%' then raise; end if;
+    if sqlerrm not like 'Este paquete ya salió con otra salida%' then raise exception 'expected the stop guard, got %', sqlerrm; end if;
+  end;
+  -- La S02 no entra en la ruta del mismo motorizado y el mismo día: la parada
+  -- de la S01 ocupa el pedido en esa ruta.
+  begin
+    insert into dispatch_manifest_items(manifest_id,shipment_id,store_id) values (v_load,v_s02,'24600000-0000-0000-0000-000000000002');
+    raise exception 'FAIL S02 entered the same rider and day as S01';
+  exception when others then
+    if sqlerrm like 'FAIL%' then raise; end if;
+    if sqlerrm not like 'Este pedido tiene su caja anterior (GX1-S01)%' then raise exception 'expected the same-route guard, got %', sqlerrm; end if;
+  end;
   -- El traspaso del cuaderno (0234) no se la lleva a la ruta siguiente.
   update delivery_stops set outcome_reason='reprogramado' where route_id=v_route and shipment_id=v_s01;
   begin
@@ -144,7 +159,8 @@ begin
   -- La solicitud de la S02 no se toca.
   if (select status from logistics_requests where id='24600000-0000-0000-0000-000000000030') <> 'accepted' then raise exception 'S02 request touched'; end if;
   -- Ya recibida: su parada vuelve a ser libre (la custodia es `devuelto`).
-  update delivery_stops set note='revisado' where route_id=v_route and shipment_id=v_s01;
+  update delivery_stops set status='pendiente', reported_at=null where route_id=v_route and shipment_id=v_s01;
+  update delivery_stops set status='no_entregado', outcome_reason='no_contesta', reported_at=now() where route_id=v_route and shipment_id=v_s01;
 
   -- Una vez recibida, no se reemplaza.
   begin
@@ -154,6 +170,74 @@ begin
     if sqlerrm like 'FAIL%' then raise; end if;
     if sqlerrm not like 'RECIBIDA:%' then raise exception 'expected RECIBIDA, got %', sqlerrm; end if;
   end;
+end $$;
+
+-- El motorizado escribe su parada directamente (política delivery_stops_report,
+-- 0066) y no ve `shipments`: la guarda tiene que funcionar igual con él.
+set request.test_uid = '24600000-0000-0000-0000-000000000009';
+set role authenticated;
+do $$
+declare n int;
+begin
+  begin
+    update delivery_stops set status='pendiente', reported_at=null where shipment_id='24600000-0000-0000-0000-000000000007';
+    get diagnostics n = row_count;
+    raise exception 'FAIL the rider undid a replaced output (% rows)', n;
+  exception when others then
+    if sqlerrm like 'FAIL%' then raise; end if;
+    if sqlerrm not like 'Este paquete ya salió con otra salida%' then raise exception 'expected the stop guard for the rider, got %', sqlerrm; end if;
+  end;
+end $$;
+reset role;
+
+-- «Solicitar devolución» (§13) también deja una salida propia en `retorno`, sin
+-- reemplazo: su parada se sigue reportando y no se saca con salida nueva. Y una
+-- salida que ya consta devuelta pero sigue en la caja sale de ella sin volver a
+-- «por asignar».
+do $$
+declare v_load uuid; v_route uuid; v_item5 uuid; v_item6 uuid; v_orders uuid[]; v_returned timestamptz;
+  v_actor uuid := '24600000-0000-0000-0000-000000000009';
+  v_s5 uuid := '24600000-0000-0000-0000-000000000056';
+  v_s6 uuid := '24600000-0000-0000-0000-000000000066';
+begin
+  insert into orders(id,store_id,shopify_order_id,name) values
+   ('24600000-0000-0000-0000-000000000050','24600000-0000-0000-0000-000000000002','gf-x-5','#GX5'),
+   ('24600000-0000-0000-0000-000000000060','24600000-0000-0000-0000-000000000002','gf-x-6','#GX6');
+  insert into shipments(id,store_id,courier,guide_code,order_id,order_name,preparation_state,custody_state,delivery_status) values
+   (v_s5,'24600000-0000-0000-0000-000000000002','propio','GX-5','24600000-0000-0000-0000-000000000050','#GX5','listo_despacho','empresa','pendiente'),
+   (v_s6,'24600000-0000-0000-0000-000000000002','propio','GX-6','24600000-0000-0000-0000-000000000060','#GX6','listo_despacho','empresa','pendiente');
+  v_load := gf_dispatch_load_open('24600000-0000-0000-0000-000000000001','24600000-0000-0000-0000-000000000003',current_date+3,v_actor);
+  insert into dispatch_manifest_items(manifest_id,shipment_id,store_id) values
+    (v_load,v_s5,'24600000-0000-0000-0000-000000000002'),
+    (v_load,v_s6,'24600000-0000-0000-0000-000000000002');
+  v_orders := gf_assign_custody(v_load,v_actor);
+  select delivery_route_id into v_route from dispatch_manifests where id=v_load;
+  select id into v_item5 from dispatch_manifest_items where manifest_id=v_load and shipment_id=v_s5;
+  select id into v_item6 from dispatch_manifest_items where manifest_id=v_load and shipment_id=v_s6;
+
+  -- Retorno pedido con la parada pendiente: el motorizado la reporta.
+  update shipments set custody_state='retorno', pickup_state='retorno_solicitado' where id=v_s5;
+  update delivery_stops set status='no_entregado', outcome_reason='no_contesta', reported_at=now() where route_id=v_route and shipment_id=v_s5;
+  begin
+    perform gf_replace_output(v_item5,v_s6,null,current_date+3,'no',v_actor);
+    raise exception 'FAIL replaced a return-requested output';
+  exception when others then
+    if sqlerrm like 'FAIL%' then raise; end if;
+    if sqlerrm not like 'La salida ya está en devolución%' then raise exception 'expected the return-requested refusal, got %', sqlerrm; end if;
+  end;
+
+  -- Ya devuelta en la Mesa de cierre con el ítem en la caja: sale de la caja,
+  -- conserva su sello y no vuelve a «por asignar».
+  update delivery_stops set status='no_entregado', outcome_reason='no_contesta', reported_at=now() where route_id=v_route and shipment_id=v_s6;
+  update shipments set custody_state='devuelto', returned_at=now() - interval '1 hour', returned_source='manual' where id=v_s6;
+  select returned_at into v_returned from shipments where id=v_s6;
+  perform gf_return_to_office(v_item6,v_actor);
+  if (select custody_state from shipments where id=v_s6) <> 'devuelto' then raise exception 'returned output went back to empresa'; end if;
+  if (select returned_at from shipments where id=v_s6) is distinct from v_returned then raise exception 'returned_at overwritten'; end if;
+  if (select dispatched_at from shipments where id=v_s6) is null then raise exception 'returned output dispatched_at cleared'; end if;
+  if (select removed_at from dispatch_manifest_items where id=v_item6) is null then raise exception 'returned output item not removed'; end if;
+  if exists (select 1 from order_events where shipment_id=v_s6 and kind='returned_to_office') then raise exception 'returned output counted as a departure'; end if;
+  if not exists (select 1 from order_events where shipment_id=v_s6 and kind='return_received' and not (payload->>'replaced')::boolean) then raise exception 'neutral return_received missing'; end if;
 end $$;
 
 -- El tope de cinco salidas también lo repite la base.

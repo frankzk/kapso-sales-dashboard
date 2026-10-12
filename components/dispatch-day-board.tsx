@@ -245,7 +245,9 @@ export function DispatchDayBoard(props: Props) {
       next[i] = line;
       return next;
     });
-    if (line.status === "asignado" || line.status === "ya_en_caja") scheduleRefresh();
+    // También lo recibido de una caja (la reemplazada vuelve a stock): cambia
+    // «En devolución» y «Devoluciones».
+    if (line.status === "asignado" || line.status === "ya_en_caja" || line.receivedFrom) scheduleRefresh();
   }
 
   /**
@@ -478,9 +480,21 @@ export function DispatchDayBoard(props: Props) {
   }
   function receiveInOffice() {
     if (!selectedReturnable.length) return;
-    const ids = selectedReturnable;
+    // Por salida: el mismo pedido puede tener otra caja «No entregado» con otro
+    // motorizado (la reemplazada, 0246), y esa no llegó.
+    const rows = allRows.filter((q) => isReturnable(q) && selected.has(q.orderId));
+    const shipmentIds = rows.map((q) => q.route?.shipmentId).filter((id): id is string => Boolean(id));
+    const withoutOutput = rows.filter((q) => !q.route?.shipmentId).map((q) => q.orderId);
     setSelected(new Set());
-    run(() => returnUndeliveredToOffice(orgId, ids));
+    run(async () => {
+      const byOutput = shipmentIds.length ? await returnUndeliveredOutputs(orgId, shipmentIds) : null;
+      const byOrder = withoutOutput.length ? await returnUndeliveredToOffice(orgId, withoutOutput) : null;
+      if (!byOrder) return byOutput!;
+      if (!byOutput) return byOrder;
+      const notice = [byOutput.notice, byOrder.notice].filter(Boolean).join(" ") || undefined;
+      const error = [byOutput.error, byOrder.error].filter(Boolean).join(" ") || undefined;
+      return { notice, error };
+    });
   }
   function replaceSelected() {
     const ids = selectedReplaceable.map((q) => q.route!.shipmentId!);
@@ -1624,6 +1638,9 @@ function scanRowPresentation(l: ScanAssignLine, riderName: string): { text: stri
       return { text: "Límite de efectivo", tone: "warn" };
     case "programado_otro_dia":
       return { text: `Programado ${l.programmedFor ? programDayLabel(l.programmedFor) : "otro día"}`, tone: "warn" };
+    case "recibido_a_stock":
+      // La caja reemplazada (0246): recibida, se desarma. No es un error.
+      return { text: l.message ? l.message.replace(/\.$/, "") : "Caja reemplazada: a stock", tone: "info" };
     case "no_elegible":
       return { text: l.message ? `No elegible: ${l.message.replace(/\.$/, "")}` : "No elegible", tone: "crit" };
     default:

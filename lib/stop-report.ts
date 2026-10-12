@@ -72,8 +72,7 @@ export async function writeStopReport(admin: SupabaseClient, input: WriteStopRep
   // La caja reemplazada por otra salida (0246, «Sacar con salida nueva») ya no
   // se entrega ni se reporta: vuelve a la oficina. La guarda de verdad es el
   // trigger `delivery_stops_guard_replaced`; esto da el mensaje claro antes.
-  const returning = await stopShipmentIsReturning(admin, stop.id);
-  if (returning) return { ok: false, error: REPLACED_STOP_ERROR };
+  if (await stopIsFrozenByReplacement(admin, stop.id, input.status)) return { ok: false, error: REPLACED_STOP_ERROR };
 
   const method = isPaymentMethod(input.paymentMethod) ? input.paymentMethod : null;
   const collected = reportedCollection(method, input.collectedAmount);
@@ -206,19 +205,24 @@ export async function writeStopReport(admin: SupabaseClient, input: WriteStopRep
   return { ok: true, orderId: stop.order_id, routeId: stop.route_id };
 }
 
-export const REPLACED_STOP_ERROR = "Este paquete ya salió con otra salida o está en devolución: no se entrega ni se reporta. Tráelo a la oficina.";
+export const REPLACED_STOP_ERROR = "Este paquete ya salió con otra salida: no se entrega ni se reporta. Tráelo a la oficina.";
 
-/** ¿La salida de la parada es una propia «en devolución» (`isReturningOwnOutput`)? */
-async function stopShipmentIsReturning(admin: SupabaseClient, stopId: string): Promise<boolean> {
-  const { data: stopRow } = await admin.from("delivery_stops").select("shipment_id").eq("id", stopId).maybeSingle();
-  const shipmentId = (stopRow as { shipment_id: string | null } | null)?.shipment_id;
-  if (!shipmentId) return false;
-  const { data: shipment } = await admin
-    .from("shipments")
-    .select("courier,delivery_status,custody_state,returned_at")
-    .eq("id", shipmentId)
-    .maybeSingle();
-  return shipment ? isReturningOwnOutput(shipment as Parameters<typeof isReturningOwnOutput>[0]) : false;
+/**
+ * ¿El reporte cambiaría el estado de la parada de una salida reemplazada que el
+ * motorizado todavía tiene? Lo mismo que el trigger: propia en devolución
+ * (`isReturningOwnOutput`) con el evento `output_replaced`. Corregir la nota o
+ * el motivo sin cambiar el estado sí se puede, y una salida en `retorno` por
+ * «Solicitar devolución» (§13) se sigue reportando.
+ */
+async function stopIsFrozenByReplacement(admin: SupabaseClient, stopId: string, nextStatus: string): Promise<boolean> {
+  const { data: stopRow } = await admin.from("delivery_stops").select("shipment_id,status").eq("id", stopId).maybeSingle();
+  const row = stopRow as { shipment_id: string | null; status: string } | null;
+  if (!row?.shipment_id || row.status === nextStatus) return false;
+  const [{ data: shipment }, { data: replaced }] = await Promise.all([
+    admin.from("shipments").select("courier,delivery_status,custody_state,returned_at").eq("id", row.shipment_id).maybeSingle(),
+    admin.from("order_events").select("id").eq("shipment_id", row.shipment_id).eq("kind", "output_replaced").limit(1).maybeSingle(),
+  ]);
+  return Boolean(shipment && replaced) && isReturningOwnOutput(shipment as Parameters<typeof isReturningOwnOutput>[0]);
 }
 
 async function writeStopUndoEvent(admin: SupabaseClient, stopId: string, routeId: string, orderId: string, actor: string): Promise<void> {

@@ -19922,6 +19922,9 @@ grant execute on function lima_district_aliases() to service_role;
 --
 -- QUÉ CAMBIA:
 --
+--   0) `gf_output_replaced(salida)`: la salida se reemplazó por otra (tiene el
+--      evento `output_replaced`). Es la marca: la custodia `retorno` sola no
+--      basta, porque «Solicitar devolución» (§13) también la pone.
 --   a) `gf_replace_output`: la salida anterior (S01, «No entregado» en la caja
 --      del motorizado) pasa a custodia `retorno` y conserva todo lo demás —su
 --      parada, su ítem activo en la caja y `dispatched_at`—. La solicitud de
@@ -19930,26 +19933,52 @@ grant execute on function lima_district_aliases() to service_role;
 --      se comprueba que es del mismo pedido y no salió. Se repite el tope de
 --      cinco salidas. Eventos `output_replaced` en el pedido, la caja y la
 --      solicitud.
---   b) `gf_return_to_office` gana una rama para la salida en `retorno`: al
---      recibirla queda `devuelto` (con `returned_at`), conserva `dispatched_at`
---      —salió de verdad, así que nunca vuelve a «Por despachar»— y NO vuelve a
---      «por asignar». Escribe `return_received`, no `returned_to_office`, que
---      `gf_order_departures` (0199) cuenta como salida del pedido. El resto de
---      la función es la de la 0206, sin cambios.
---   c) Trigger `delivery_stops_guard_replaced`: la parada de una salida propia
---      en `retorno` no cambia de estado. Si el motorizado deshiciera su «No
---      entregado», la parada volvería a `pendiente` y las funciones de custodia
---      (`gf_withdraw_in_custody`, `gf_office_reclaim`, `gf_rider_decline`) la
---      devolverían a la empresa: habría dos salidas vivas del mismo pedido.
---      Bloquea también entregarla: ese paquete ya no se entrega.
---
+--   b) `gf_return_to_office` gana una rama «a stock» para la salida
+--      reemplazada (en `retorno`) y para la que ya consta devuelta pero sigue en
+--      la caja (la recepción de la Mesa de cierre no la saca): queda `devuelto`
+--      (conserva el `returned_at` que tuviera), conserva `dispatched_at` —salió
+--      de verdad, así que nunca vuelve a «Por despachar»— y NO vuelve a «por
+--      asignar». Escribe `return_received` (si no estaba), no
+--      `returned_to_office`, que `gf_order_departures` (0199) cuenta como salida
+--      del pedido. El resto de la función es la de la 0206, sin cambios.
+--   c) Trigger `delivery_stops_guard_replaced`: la parada de una salida
+--      reemplazada que el motorizado todavía tiene no cambia de estado. Si
+--      deshiciera su «No entregado», la parada volvería a `pendiente` y las
+--      funciones de custodia (`gf_withdraw_in_custody`, `gf_office_reclaim`,
+--      `gf_rider_decline`) la devolverían a la empresa: habría dos salidas vivas
+--      del mismo pedido. Bloquea también entregarla. Es `security definer`: el
+--      motorizado puede escribir su parada directamente (política
+--      `delivery_stops_report`, 0066) sin poder leer `shipments`.
 --   d) `gf_carry_over` (0234) no pasa a la ruta siguiente del motorizado una
---      salida en `retorno`: el pedido ya salió con otra y esa caja vuelve a la
---      oficina. El resto de la función es la de la 0234, sin cambios.
+--      salida en `retorno`, y vuelve a leer con candado cada paquete antes de
+--      sacarlo de la caja anterior: un reemplazo o una recepción simultáneos no
+--      se pisan. El resto de la función es la de la 0234.
+--   e) Trigger `dispatch_items_guard_replaced_route`: la salida nueva no entra
+--      en una caja del mismo motorizado y el mismo día que la parada de la caja
+--      reemplazada. La ruta del día tiene una parada por pedido
+--      (`delivery_stops`, único por ruta y pedido) y la custodia de toda la
+--      carga fallaría con un error confuso.
 --
 -- Aplicar a mano ANTES de desplegar el código (DEPLOY.md). Sin `begin`/`commit`
 -- propios, como el resto de migraciones. Idempotente.
 -- ============================================================================
+
+-- 0) La marca de la salida reemplazada ----------------------------------------
+
+create or replace function public.gf_output_replaced(p_shipment uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from order_events where shipment_id = p_shipment and kind = 'output_replaced'
+  );
+$$;
+
+revoke all on function public.gf_output_replaced(uuid) from public, anon, authenticated;
+grant execute on function public.gf_output_replaced(uuid) to service_role;
 
 -- a) Reemplazar la salida que el motorizado todavía tiene ----------------------
 
@@ -19995,6 +20024,9 @@ begin
   end if;
 
   select * into v_old from shipments where id = v_item.shipment_id for update;
+  if v_old.custody_state = 'retorno' and not gf_output_replaced(v_old.id) then
+    raise exception 'La salida ya está en devolución (se pidió su retorno): no se saca con salida nueva.';
+  end if;
   if v_old.custody_state = 'retorno' then
     select s.output_code into v_prev
       from order_events e join shipments s on s.id = (e.payload->>'replaced_by')::uuid
@@ -20084,6 +20116,8 @@ declare
   v_stop delivery_stops%rowtype;
   v_reason text;
   v_rider text;
+  v_replaced boolean;
+  v_code text;
 begin
   select * into v_item from dispatch_manifest_items where id = p_item_id for update;
   if not found or v_item.removed_at is not null then raise exception 'Ese paquete ya no está en la caja.'; end if;
@@ -20099,36 +20133,50 @@ begin
   v_rider := coalesce(v_manifest.driver_name, 'el motorizado');
   v_reason := 'No entregado por ' || v_rider || coalesce(' (' || v_stop.outcome_reason || ')', '') || ': recibido en oficina';
 
-  -- La salida en devolución (0246): el pedido ya salió con otra. Vuelve a stock
-  -- y queda devuelta; no vuelve a «por asignar» ni a la cola.
-  if v_shipment.custody_state = 'retorno' then
+  -- A stock (0246): la salida reemplazada —el pedido ya salió con otra— y la
+  -- que ya consta devuelta pero sigue en la caja. Queda devuelta; no vuelve a
+  -- «por asignar» ni a la cola. Una en `retorno` sin reemplazo («Solicitar
+  -- devolución») sigue el camino de siempre.
+  v_replaced := gf_output_replaced(v_shipment.id);
+  if v_shipment.custody_state = 'devuelto' or v_shipment.returned_at is not null
+     or (v_shipment.custody_state = 'retorno' and v_replaced) then
+    v_code := coalesce(v_shipment.output_code, v_shipment.guide_code, 'La salida');
     perform set_config('gf.withdraw', 'on', true);
     update dispatch_manifest_items
        set removed_at = now(), removed_by = p_actor,
-           removal_reason = left('Salida reemplazada: recibida en oficina, vuelve a stock (' || v_rider || ')', 300)
+           removal_reason = left(case when v_replaced
+             then 'Salida reemplazada: recibida en oficina, vuelve a stock (' || v_rider || ')'
+             else 'Ya constaba devuelta: recibida en oficina, sale de la caja (' || v_rider || ')' end, 300)
      where id = p_item_id;
     perform set_config('gf.withdraw', 'off', true);
 
     -- Conserva `dispatched_at`: salió de verdad y la devolución está probada.
+    -- Una recepción anterior conserva su sello.
     update shipments
-       set custody_state = 'devuelto', returned_at = now(), returned_by = p_actor, returned_source = 'manual'
+       set custody_state = 'devuelto', returned_at = coalesce(returned_at, now()),
+           returned_by = coalesce(returned_by, p_actor), returned_source = coalesce(returned_source, 'manual')
      where id = v_item.shipment_id;
     -- Defensivo: la solicitud ya pasó a la salida nueva al reemplazarla.
     update logistics_requests
-       set status = 'cancelled', observation = 'Salida reemplazada recibida en oficina'
+       set status = 'cancelled', observation = 'Salida devuelta recibida en oficina'
      where shipment_id = v_item.shipment_id and status in ('accepted', 'scheduled');
 
     insert into dispatch_events(org_id, manifest_id, shipment_id, actor, kind, payload)
     values (v_manifest.org_id, v_item.manifest_id, v_item.shipment_id, p_actor, 'returned_to_office',
-            jsonb_build_object('stop_id', v_stop.id, 'outcome_reason', v_stop.outcome_reason, 'replaced', true));
-    if v_shipment.order_id is not null then
+            jsonb_build_object('stop_id', v_stop.id, 'outcome_reason', v_stop.outcome_reason, 'replaced', v_replaced, 'to_stock', true));
+    if v_shipment.order_id is not null and not exists (
+      select 1 from order_events where shipment_id = v_item.shipment_id and kind = 'return_received'
+    ) then
       insert into order_events(store_id, order_id, kind, actor, source, courier, guide_code, shipment_id, reason, note, payload)
       values (v_shipment.store_id, v_shipment.order_id, 'return_received', p_actor, 'dispatch', 'propio',
               v_shipment.guide_code, v_item.shipment_id, v_stop.outcome_reason,
-              coalesce(v_shipment.output_code, v_shipment.guide_code, 'La salida') || ' recibida en oficina ('
-                || v_rider || '): era la caja reemplazada. Desármala y devuelve el producto a stock; no se reprograma.',
+              case when v_replaced
+                then v_code || ' recibida en oficina (' || v_rider
+                  || '): era la caja reemplazada. Desármala y devuelve el producto a stock; no se reprograma.'
+                else v_code || ' recibida en oficina (' || v_rider
+                  || '): ya constaba devuelta. Sale de la caja; no vuelve a «por asignar».' end,
               jsonb_build_object('manifest_id', v_item.manifest_id, 'rider_id', v_manifest.rider_id,
-                                 'route_date', v_manifest.route_date, 'stop_id', v_stop.id, 'replaced', true));
+                                 'route_date', v_manifest.route_date, 'stop_id', v_stop.id, 'replaced', v_replaced));
     end if;
     return v_shipment.order_id;
   end if;
@@ -20168,9 +20216,12 @@ grant execute on function public.gf_return_to_office(uuid, uuid) to service_role
 
 -- c) La parada de la salida en devolución no cambia ----------------------------
 
+-- `security definer`: el motorizado escribe su parada bajo RLS y no ve
+-- `shipments`; leída como él, la guarda no encontraría nada.
 create or replace function public.gf_guard_replaced_stop()
 returns trigger
 language plpgsql
+security definer
 set search_path = public
 as $$
 begin
@@ -20178,8 +20229,8 @@ begin
     select 1 from shipments s
      where s.id = new.shipment_id and s.courier = 'propio'
        and s.custody_state = 'retorno' and s.returned_at is null
-  ) then
-    raise exception 'Este paquete está en devolución: ya no se entrega ni se reporta. Tráelo a la oficina.';
+  ) and gf_output_replaced(new.shipment_id) then
+    raise exception 'Este paquete ya salió con otra salida: no se entrega ni se reporta. Tráelo a la oficina.';
   end if;
   return new;
 end;
@@ -20209,6 +20260,9 @@ declare
   v_rider riders%rowtype;
   v_load uuid;
   r record;
+  v_item_row dispatch_manifest_items%rowtype;
+  v_stop_row delivery_stops%rowtype;
+  v_custody text;
   v_n int := 0;
   v_reason text;
   v_wanted int := (select count(distinct x) from unnest(p_shipment_ids) as x);
@@ -20248,6 +20302,24 @@ begin
     end if;
     v_reason := 'Reprogramado el ' || to_char(r.old_date, 'DD/MM') || ': ' || v_rider.full_name
              || ' se quedó con el paquete y sale en su ruta del ' || to_char(p_to_date, 'DD/MM') || ', ya cotejado.';
+
+    -- 0246: con candado y releído, en el orden de `gf_replace_output` (ítem,
+    -- caja, parada, salida). La consulta del bucle no bloquea filas: un
+    -- «Sacar con salida nueva» o un «Recibir en oficina» simultáneo pudo
+    -- cambiar el paquete mientras tanto, y el UPDATE de abajo no lo vería.
+    select * into v_item_row from dispatch_manifest_items where id = r.item_id for update;
+    if v_item_row.removed_at is not null then
+      raise exception 'Un paquete ya no está en la caja anterior: alguien lo recibió o lo movió. Vuelve a leer la hoja.';
+    end if;
+    perform 1 from dispatch_manifests where id = r.old_manifest for update;
+    select * into v_stop_row from delivery_stops where id = r.old_stop for update;
+    if v_stop_row.status <> 'no_entregado' or v_stop_row.outcome_reason is distinct from 'reprogramado' then
+      raise exception 'Un paquete ya no está reprogramado: vuelve a leer la hoja.';
+    end if;
+    select custody_state into v_custody from shipments where id = r.shipment_id for update;
+    if v_custody = 'retorno' then
+      raise exception 'Una caja ya salió con otra salida y vuelve a la oficina: no pasa a la ruta. Vuelve a leer la hoja.';
+    end if;
 
     -- 1. Sale de la caja anterior: no volvió a la oficina, sigue con él.
     perform set_config('gf.withdraw', 'on', true);
@@ -20290,3 +20362,43 @@ end;
 $$;
 revoke all on function public.gf_carry_over(uuid, date, uuid[], uuid) from public, anon, authenticated;
 grant execute on function public.gf_carry_over(uuid, date, uuid[], uuid) to service_role;
+
+-- e) La salida nueva no va en la ruta del mismo día que la caja reemplazada ----
+
+create or replace function public.gf_guard_replaced_same_route()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_manifest dispatch_manifests%rowtype;
+  v_order uuid;
+  v_code text;
+begin
+  select * into v_manifest from dispatch_manifests where id = new.manifest_id;
+  if not found or v_manifest.courier <> 'propio' or v_manifest.rider_id is null then return new; end if;
+  select order_id into v_order from shipments where id = new.shipment_id;
+  if v_order is null then return new; end if;
+  select coalesce(s.output_code, s.guide_code) into v_code
+    from delivery_routes dr
+    join delivery_stops ds on ds.route_id = dr.id
+    join shipments s on s.id = ds.shipment_id
+   where dr.org_id = v_manifest.org_id and dr.rider_id = v_manifest.rider_id
+     and dr.route_date = v_manifest.route_date and ds.order_id = v_order
+     and ds.shipment_id is distinct from new.shipment_id
+     and gf_output_replaced(ds.shipment_id)
+   limit 1;
+  if found then
+    raise exception 'Este pedido tiene su caja anterior (%) en la ruta de % del %: la salida nueva va con otro motorizado u otro día.',
+      coalesce(v_code, 'en devolución'), coalesce(v_manifest.driver_name, 'ese motorizado'), to_char(v_manifest.route_date, 'DD/MM');
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists dispatch_items_guard_replaced_route on public.dispatch_manifest_items;
+create trigger dispatch_items_guard_replaced_route
+  before insert on public.dispatch_manifest_items
+  for each row
+  execute function public.gf_guard_replaced_same_route();

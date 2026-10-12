@@ -36,6 +36,8 @@ function presentation(l: ScanAssignLine, riderName: string, canAuthorizeCash: bo
       return { text: canAuthorizeCash ? "Límite de efectivo → Autorizar" : "Límite de efectivo · lo autoriza Daysi o Frankz", textClass: "text-warn-fg", rowClass: "bg-warn-wash" };
     case "programado_otro_dia":
       return { text: `Programado ${l.programmedFor ? programDayLabel(l.programmedFor) : "otro día"} → Asignar igual`, textClass: "text-warn-fg", rowClass: "bg-warn-wash" };
+    case "recibido_a_stock":
+      return { text: l.message ? l.message.replace(/\.$/, "") : "Caja reemplazada: a stock", textClass: "text-ink-700", rowClass: "bg-wash" };
     case "no_elegible":
       return { text: l.message ? `No elegible: ${l.message.replace(/\.$/, "")}` : "No elegible", textClass: "text-crit-fg", rowClass: "bg-crit-wash" };
     default:

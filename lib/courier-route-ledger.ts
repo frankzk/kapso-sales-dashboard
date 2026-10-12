@@ -45,6 +45,10 @@ export interface CourierLedgerRow {
 
 /** Un «No entregado» que sigue en la caja del motorizado, esperando volver. */
 export interface PendingReturn {
+  /** La salida de la caja: se recibe por ella, no por pedido (0246). */
+  shipmentId: string;
+  /** Es la caja reemplazada por otra salida (0246): al recibirla vuelve a stock. */
+  replaced: boolean;
   orderId: string;
   orderName: string;
   customerName: string;
@@ -319,11 +323,19 @@ export async function getPendingReturns(scope: { storeIds?: readonly string[] | 
     chunked([...new Set(pending.map((s) => s.order_id))], 200, (ids) => admin.from("order_master").select("order_id,order_name,customer_name,district").in("order_id", ids)),
     chunked([...new Set(pending.map((s) => s.shipment_id))], 200, (ids) => admin.from("shipments").select("id,output_code,guide_code").in("id", ids)),
   ]);
+  const replacedEvents = await chunked([...new Set(pending.map((s) => s.shipment_id))], 200, (ids) => admin
+    .from("order_events")
+    .select("shipment_id")
+    .in("shipment_id", ids)
+    .eq("kind", "output_replaced"));
+  const replaced = new Set((replacedEvents as { shipment_id: string }[]).map((e) => e.shipment_id));
   const m = new Map((manifests as { id: string; driver_name: string | null; route_date: string }[]).map((x) => [x.id, x]));
   const o = new Map((orders as { order_id: string; order_name: string | null; customer_name: string | null; district: string | null }[]).map((x) => [x.order_id, x]));
   const sh = new Map((shipments as { id: string; output_code: string | null; guide_code: string | null }[]).map((x) => [x.id, x]));
   return pending
     .map((s) => ({
+      shipmentId: s.shipment_id,
+      replaced: replaced.has(s.shipment_id),
       orderId: s.order_id,
       orderName: o.get(s.order_id)?.order_name ?? "Pedido",
       customerName: o.get(s.order_id)?.customer_name ?? "",

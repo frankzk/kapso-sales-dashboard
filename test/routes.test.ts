@@ -651,7 +651,11 @@ describe("qué impide terminar la ruta", () => {
     expect(panel).toContain('{ key: "por_devolver", label: "Por devolver", count: notReceivedIds.size }');
     const rutas = readFileSync(resolve(process.cwd(), "app/dashboard/rutas/actions.ts"), "utf8");
     expect(rutas).toContain("const pending = stopsNotReceived(detail.stops);");
-    expect(rutas).toContain("await returnUndeliveredToOffice(orgId, [...new Set(pending.map((stop) => stop.order_id))]);");
+    // Por salida y solo las cajas de ESTA ruta (0246): el mismo pedido puede
+    // tener otra caja «No entregado» con otro motorizado.
+    expect(rutas).toContain("await returnUndeliveredOutputs(");
+    expect(rutas).toContain("pending.map((stop) => stop.shipment_id)");
+    expect(rutas).toContain("{ manifestIds: [...new Set(pending.map((stop) => stop.dispatch_manifest_id)");
     // La caja la dice el ítem activo que ya carga el detalle de la ruta.
     const access = readFileSync(resolve(process.cwd(), "lib/routes-access.ts"), "utf8");
     expect(access).toContain("manifest_item_id: pickups.get(pickupKey(s))?.id ?? null,");

@@ -27,7 +27,7 @@ import {
   stopsNotReceived,
   stopsToSettlementLines,
 } from "@/lib/routes";
-import { returnUndeliveredToOffice } from "@/app/dashboard/courier/actions";
+import { returnUndeliveredOutputs } from "@/app/dashboard/courier/actions";
 import { loadRouteCloseContext } from "@/lib/route-close";
 import { applyDeliveriesToMaster } from "@/lib/master-door";
 import { syncStopsToSheet } from "@/lib/sheets/stop-sync";
@@ -248,7 +248,7 @@ export async function startRoute(routeId: string): Promise<RouteActionResult> {
 /**
  * «Recibir en oficina» desde el cierre de la ruta (29-09-2026): los «No
  * entregado» que siguen en su caja, de una vez. Es la MISMA puerta que
- * «Devoluciones» en Despacho del día (`returnUndeliveredToOffice`, 0188/0206):
+ * «Devoluciones» en Despacho del día (`returnUndeliveredOutputs`, 0188/0206):
  * sale de la caja con rastro y vuelve a «por asignar», rechazo incluido
  * (v1.23). Pulsarlo dice que las cajas están en la oficina.
  */
@@ -261,7 +261,13 @@ export async function receiveRouteReturns(routeId: string): Promise<RouteActionR
   if (!pending.length) return { ok: true, message: "No queda ningún «No entregado» en la caja." };
   const orgId = detail.route.org_id;
   if (!orgId) return { ok: false, error: "La ruta no tiene organización: recíbelos desde «Devoluciones»." };
-  const res = await returnUndeliveredToOffice(orgId, [...new Set(pending.map((stop) => stop.order_id))]);
+  // Por salida y solo de las cajas de ESTA ruta: el mismo pedido puede tener
+  // otra caja «No entregado» con otro motorizado (la reemplazada, 0246).
+  const res = await returnUndeliveredOutputs(
+    orgId,
+    [...new Set(pending.map((stop) => stop.shipment_id).filter((id): id is string => Boolean(id)))],
+    { manifestIds: [...new Set(pending.map((stop) => stop.dispatch_manifest_id).filter((id): id is string => Boolean(id)))] },
+  );
   revalidatePath("/dashboard/courier/rutas");
   if (res.error) return { ok: false, error: res.error };
   return { ok: true, message: res.notice };

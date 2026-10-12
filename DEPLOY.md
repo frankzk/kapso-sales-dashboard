@@ -2113,11 +2113,12 @@ la línea de tiempo («Recordatorio de recojo (día 3)…») y la foto que viaj�
    del motorizado en vivo.
 2. **Migración `0246_gf_replace_output.sql`**, a mano y ANTES del código:
    `psql "$DATABASE_URL" -f db/migrations/0246_gf_replace_output.sql`. Crea
-   `gf_replace_output`, redefine `gf_return_to_office` (la 0206 más la rama de
-   la caja reemplazada) y `gf_carry_over` (la 0234 sin la caja reemplazada), y
-   crea el trigger `delivery_stops_guard_replaced`. Sin ella, «Sacar con salida
-   nueva» falla y deshace la salida nueva que había creado: no deja salidas
-   huérfanas.
+   `gf_output_replaced` y `gf_replace_output`, redefine `gf_return_to_office`
+   (la 0206 más la rama «a stock») y `gf_carry_over` (la 0234 sin la caja
+   reemplazada y con candado por paquete), y crea los triggers
+   `delivery_stops_guard_replaced` y `dispatch_items_guard_replaced_route`. Sin
+   ella, «Sacar con salida nueva» falla y deshace la salida nueva que había
+   creado: no deja salidas huérfanas.
 3. **Después del despliegue**, el cron recalcula el Master por la versión
    `mom-v1.26`. Con la foto del 12-10-2026 no hay ninguna salida propia en
    `retorno`; cambian pocos pedidos: los que tienen una salida ya recibida junto

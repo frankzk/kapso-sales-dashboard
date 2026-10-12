@@ -9618,7 +9618,10 @@ sin devolver y otra saliendo (principio 7, §7).
     anterior salió sin solicitud (por el cuaderno, o antes de las solicitudes),
     se abre una. Si la solicitud viva del pedido es de otra salida, no se saca.
   - Eventos `output_replaced` en el pedido (sobre la salida anterior), en la
-    caja y en la solicitud.
+    caja y en la solicitud. **Ese evento es la marca de la salida
+    reemplazada** (`gf_output_replaced`, 0246): la custodia `retorno` sola no
+    basta, porque «Solicitar devolución» (§13) también la pone, y esa salida se
+    sigue reportando y recibiendo como siempre (no se saca con salida nueva).
   - No se saca si el pedido ya no está en «Por reprogramar Lima», si tiene una
     salida entregada, si la salida ya no está en la caja o su parada no dice
     «No entregado», si el pedido tiene otra salida viva o si ya tiene cinco
@@ -9627,17 +9630,40 @@ sin devolver y otra saliendo (principio 7, §7).
     y la solicitud abierta para ella también.
 - **La caja que vuelve** sale en la píldora **«En devolución»** de Despacho del
   día («S01 vuelve con Alexis · 3 d · sale con S02»), con su propio «Recibir en
-  oficina». También la recibe «Devoluciones», el escaneo de «Por QR» y el
-  escaneo de Almacén: queda `devuelto` con `returned_at` y conserva
-  `dispatched_at`; el pedido NO vuelve a «por asignar» y el escaneo no la
-  asigna. Se escribe `return_received` (no `returned_to_office`, que
-  `gf_order_departures` cuenta como salida). Se desarma y se registra el
-  reingreso a stock sobre esa salida (§13).
-- **El motorizado ya no la entrega.** La parada de una salida en devolución no
+  oficina». También la recibe «Devoluciones» (con la chapa «reemplazada · a
+  stock»), el escaneo de «Por QR» y el escaneo de Almacén: queda `devuelto` con
+  `returned_at` y conserva `dispatched_at`; el pedido NO vuelve a «por asignar»
+  y el escaneo no la asigna —ni en su caja ni ya recibida: un QR de la caja
+  reemplazada nunca toma ni asigna la salida nueva—. La línea del escaneo dice
+  «recibida… desármala» en azul, no «No elegible». Se escribe `return_received`
+  (no `returned_to_office`, que `gf_order_departures` cuenta como salida). Se
+  desarma y se registra el reingreso a stock sobre esa salida (§13).
+- **Recibir en oficina va por salida, en todas partes.** Un pedido puede tener
+  dos cajas «No entregado» con dos motorizados (la reemplazada con Alexis, la
+  nueva con Johnny): recibir una nunca recibe la otra. La lista de Despacho del
+  día, la fila de «Devoluciones», su QR y el cierre de una ruta (solo las
+  cajas de esa ruta) reciben la caja concreta. Por número de pedido, si el
+  pedido tiene dos cajas por recibir, no se recibe ninguna y se pide el QR de
+  la que llegó (§9.4: nunca se concilia solo por número de pedido).
+- **La Mesa de cierre no recibe una caja que sigue con el motorizado.**
+  «Registrar recepción» sobre una salida de Grupo GF que sigue en la caja de un
+  motorizado se niega y manda a «Recibir en oficina», que es lo que la saca de
+  la caja. Si ya constaba devuelta y sigue en la caja (registrada antes de
+  este cambio), «Recibir en oficina» la saca y la deja devuelta, sin volver a
+  «por asignar».
+- **El motorizado ya no la entrega.** La parada de una salida reemplazada no
   cambia de estado —ni entregarla ni deshacer su «No entregado»—: lo impide el
-  trigger `delivery_stops_guard_replaced` (0246) y el reporte lo dice antes
-  (`writeStopReport`). Tampoco se mueve a otro motorizado ni pasa a su ruta
-  siguiente desde el cuaderno (`gf_carry_over`, 0246).
+  trigger `delivery_stops_guard_replaced` (0246), también si el motorizado
+  escribe su parada directamente, y el reporte lo dice antes
+  (`writeStopReport`). Corregir la nota o el motivo sin cambiar el estado sí se
+  puede. Tampoco se mueve a otro motorizado ni pasa a su ruta siguiente desde
+  el cuaderno: `gf_carry_over` la excluye y relee cada paquete con candado, así
+  que un reemplazo simultáneo no se pisa.
+- **La salida nueva no va con el mismo motorizado el mismo día** que la caja
+  reemplazada: la ruta del día tiene una parada por pedido y la de la caja
+  anterior ya la ocupa. Asignarla ahí se niega con el motivo
+  (`dispatch_items_guard_replaced_route`, 0246); va con otro motorizado u otro
+  día.
 - **Master** (v1.26): la salida en devolución (`isReturningOwnOutput`) sigue
   activa —el pedido no se finaliza mientras el motorizado la tenga—, pero no es
   la vigente: el pedido sigue a la salida nueva (Por armar → Por despachar → En
@@ -9647,6 +9673,10 @@ sin devolver y otra saliendo (principio 7, §7).
   pendiente de inventario». Una parada del cuaderno (sin salida) anterior a que
   naciera la salida nueva no se le atribuye. `MOM_RESOLUTION_VERSION` sube a
   `mom-v1.26`.
+- **Si la base no responde** al sacarla, antes de deshacer nada se comprueba si
+  el reemplazo quedó hecho (la solicitud ya apunta a la salida nueva): si se
+  hizo, se da por hecho y no se anula la salida nueva. Lo que no se pudo sacar
+  se dice con su pedido y su motivo, también junto a lo que sí.
 - **Límites conocidos.** Kapta no lleva un libro de stock: la caja nueva se
   arma aunque falte producto, y lo dirá la incidencia de preparación. Si la
   salida nueva se anula con la anterior todavía en devolución, el pedido queda

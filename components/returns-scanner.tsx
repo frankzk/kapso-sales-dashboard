@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { DispatchScanner } from "@/components/dispatch-scanner";
 import { DispatchCamera } from "@/components/dispatch-camera";
-import { returnUndeliveredByCode, returnUndeliveredToOffice } from "@/app/dashboard/courier/actions";
+import { returnUndeliveredByCode, returnUndeliveredOutputs } from "@/app/dashboard/courier/actions";
 import type { PendingReturn } from "@/lib/courier-route-ledger";
 import { nonDeliveryReasonLabel } from "@/lib/gf-delivery";
 import { Badge, OpsButton } from "@/components/ops-ui";
@@ -13,7 +13,9 @@ import { Badge, OpsButton } from "@/components/ops-ui";
  * Devoluciones (Despacho del día): el supervisor escanea (o teclea) cada paquete «No
  * entregado» que vuelve con el motorizado. Cámara en serie, como al asignar,
  * con «Devueltos X de N». Cada lectura lo saca de la caja (0188/0206) y lo
- * vuelve a «por asignar», rechazo incluido (v1.23).
+ * vuelve a «por asignar», rechazo incluido (v1.23). La caja reemplazada por
+ * otra salida (0246) vuelve a stock. Se recibe por SALIDA: un pedido puede
+ * tener dos cajas «No entregado» con dos motorizados.
  */
 export function ReturnsScanner({ orgId, pending }: { orgId: string; pending: PendingReturn[] }) {
   const router = useRouter();
@@ -23,18 +25,26 @@ export function ReturnsScanner({ orgId, pending }: { orgId: string; pending: Pen
   const [returned, setReturned] = useState<Set<string>>(new Set());
   // El total se fija al abrir: la lista se refresca y no debe cambiar la meta.
   const [total] = useState(pending.length);
-  const left = pending.filter((p) => !returned.has(p.orderId));
+  const left = pending.filter((p) => !returned.has(p.shipmentId));
 
-  async function run(code: string, orderId?: string) {
+  async function run(code: string, row?: PendingReturn) {
     if (busy || !code.trim()) return;
     setBusy(true);
     try {
-      const res = orderId ? await returnUndeliveredToOffice(orgId, [orderId]) : await returnUndeliveredByCode(orgId, code);
+      const res = row ? await returnUndeliveredOutputs(orgId, [row.shipmentId]) : await returnUndeliveredByCode(orgId, code);
       const byCodeName = "orderName" in res && typeof res.orderName === "string" ? res.orderName : null;
-      const name: string = orderId ? pending.find((p) => p.orderId === orderId)?.orderName ?? code : byCodeName ?? code;
-      setLines((cur) => [{ code: name, ok: !res.error, text: res.error ?? "Devuelto a la oficina" }, ...cur].slice(0, 50));
+      const name: string = row ? row.orderName : byCodeName ?? code;
+      // La caja reemplazada dice que se desarma; el resto, lo de siempre.
+      const toStock = row?.replaced || /reemplazada/i.test(res.notice ?? "");
+      setLines((cur) => [{ code: name, ok: !res.error, text: res.error ?? (toStock && res.notice ? res.notice : "Devuelto a la oficina") }, ...cur].slice(0, 50));
       if (!res.error) {
-        const hit = orderId ? orderId : pending.find((p) => p.orderName === name)?.orderId;
+        // Por QR: la fila de ESA salida. Por número de pedido, solo si el
+        // pedido tiene una sola caja por recibir (si tiene dos, el servidor
+        // pide el QR y no llega aquí).
+        const scanned = code.trim().toLowerCase();
+        const byCode = pending.find((p) => p.code?.toLowerCase() === scanned);
+        const byName = pending.filter((p) => p.orderName === name);
+        const hit = row?.shipmentId ?? byCode?.shipmentId ?? (byName.length === 1 ? byName[0]!.shipmentId : undefined);
         if (hit) setReturned((cur) => new Set(cur).add(hit));
         router.refresh();
       }
@@ -49,7 +59,7 @@ export function ReturnsScanner({ orgId, pending }: { orgId: string; pending: Pen
   return (
     <div>
       <DispatchScanner busy={busy} disabled={false} compact look="ops" buttonLabel="Escanear" onScan={(code) => void run(code)} onCamera={() => setCameraOpen(true)} />
-      <p className="mt-3 text-[13px] text-ink-500">Confirma que la devolución llegó a la oficina: <b className="font-semibold tabular-nums text-ink-900">{total - left.length} de {total}</b> recibidas{left.length ? `, faltan ${left.length}` : ""}. Vuelven a «por asignar», también los rechazados.</p>
+      <p className="mt-3 text-[13px] text-ink-500">Confirma que la devolución llegó a la oficina: <b className="font-semibold tabular-nums text-ink-900">{total - left.length} de {total}</b> recibidas{left.length ? `, faltan ${left.length}` : ""}. Vuelven a «por asignar», también los rechazados; la caja reemplazada por otra salida se desarma y vuelve a stock.</p>
       {lines.length > 0 && (
         <ul className="mt-3 max-h-40 divide-y divide-line overflow-auto rounded-lg text-sm ring-1 ring-line" aria-live="polite">
           {lines.map((l, i) => (
@@ -83,16 +93,17 @@ export function ReturnsScanner({ orgId, pending }: { orgId: string; pending: Pen
           </thead>
           <tbody className="divide-y divide-line">
             {left.map((p) => (
-              <tr key={p.orderId} className="align-top transition-colors hover:bg-wash">
+              <tr key={p.shipmentId} className="align-top transition-colors hover:bg-wash">
                 <td className="px-3 py-2.5">
                   <p className="truncate font-semibold text-ink-900" title={p.orderName}>{p.orderName}</p>
                   {p.code && <p className="truncate font-mono text-[11px] text-ink-500" title={p.code}>{p.code}</p>}
+                  {p.replaced && <Badge tone="info" title="El pedido ya salió con otra salida: al recibirla se desarma y vuelve a stock.">reemplazada · a stock</Badge>}
                 </td>
                 <td className="px-3 py-2.5"><p className="truncate text-ink-900" title={`${p.customerName} · ${p.district}`}>{p.customerName}</p><p className="truncate text-xs text-ink-500" title={p.district}>{p.district}</p></td>
                 <td className="truncate px-3 py-2.5 text-ink-700" title={p.riderName}>{p.riderName}</td>
                 <td className="px-3 py-2.5 tabular-nums text-ink-700">{p.routeDate ? `${p.routeDate.slice(8, 10)}/${p.routeDate.slice(5, 7)}` : "—"}</td>
                 <td className="px-3 py-2.5"><Badge tone={p.reason === "rechazado" ? "urgent" : "crit"} title={nonDeliveryReasonLabel(p.reason)}>{nonDeliveryReasonLabel(p.reason)}</Badge></td>
-                <td className="px-3 py-2 text-right"><OpsButton size="sm" disabled={busy} onClick={() => void run(p.orderName, p.orderId)}>Recibir</OpsButton></td>
+                <td className="px-3 py-2 text-right"><OpsButton size="sm" disabled={busy} onClick={() => void run(p.orderName, p)}>Recibir</OpsButton></td>
               </tr>
             ))}
             {!left.length && <tr><td colSpan={6} className="px-3 py-10 text-center text-sm font-medium text-ok-fg">Todas las devoluciones están en la oficina.</td></tr>}

@@ -1150,8 +1150,10 @@ async function loadReturningOutputs(admin: Admin, storeIds: string[], storeName:
   }
   return outputs.flatMap((row) => {
     const box = boxes.get(row.id);
-    if (!box) return [];
     const replace = lastReplace.get(row.id);
+    // Solo las reemplazadas: «Solicitar devolución» (§13) también deja una
+    // salida propia en `retorno`, y esa se reporta y se recibe como siempre.
+    if (!box || !replace) return [];
     const code = replace?.payload?.replaced_by_code;
     return [{
       shipmentId: row.id,
@@ -1746,7 +1748,7 @@ export async function returnUndeliveredToOffice(orgId: string, orderIds: string[
   if (!ids.length) return { error: "Marca al menos un pedido." };
   const admin = createAdminSupabase();
   const { data: shipments } = await admin.from("shipments").select("id,order_id,store_id").in("order_id", ids).eq("courier", "propio");
-  return returnUndeliveredShipments(admin, auth, orgId, ((shipments ?? []) as { id: string; store_id: string | null }[]));
+  return returnUndeliveredShipments(admin, auth, orgId, ((shipments ?? []) as { id: string; order_id: string | null; store_id: string | null }[]), { byOrder: true });
 }
 
 /**
@@ -1762,7 +1764,17 @@ async function returnUndeliveredShipments(
   admin: Admin,
   auth: ManagerAuth,
   orgId: string,
-  candidates: ReadonlyArray<{ id: string; store_id: string | null }>,
+  candidates: ReadonlyArray<{ id: string; store_id: string | null; order_id?: string | null }>,
+  opts: {
+    /**
+     * Por número de pedido: un pedido puede tener dos cajas «No entregado» (la
+     * reemplazada con un motorizado y la nueva con otro, 0246). Así no se sabe
+     * cuál llegó, y nunca se concilia solo por pedido (MOM §9.4): se pide el QR.
+     */
+    byOrder?: boolean;
+    /** Solo los paquetes de estas cajas (la ruta de un motorizado). */
+    manifestIds?: ReadonlySet<string>;
+  } = {},
 ): Promise<CourierActionResult> {
   const { data: orgStores } = await admin.from("stores").select("id").eq("org_id", orgId);
   const orgStoreIds = new Set(((orgStores ?? []) as { id: string }[]).map((store) => store.id));
@@ -1776,10 +1788,27 @@ async function returnUndeliveredShipments(
     courierRowsByIds(shipmentIds, (ids) => admin.from("shipments").select("id,courier,delivery_status,custody_state,returned_at").in("id", ids)),
   ]);
   const returningIds = new Set((custody as Array<ReturningOutputLike & { id: string }>).filter(isReturningOwnOutput).map((row) => row.id));
-  const undelivered = (items as Array<{ id: string; shipment_id: string; manifest_id: string }>).filter((item) => {
+  let undelivered = (items as Array<{ id: string; shipment_id: string; manifest_id: string }>).filter((item) => {
     const box = boxes.get(item.shipment_id);
-    return box?.manifestId === item.manifest_id && Boolean(box.undeliveredReason);
+    return box?.manifestId === item.manifest_id && Boolean(box.undeliveredReason) && (!opts.manifestIds || opts.manifestIds.has(item.manifest_id));
   });
+  const ambiguous: string[] = [];
+  if (opts.byOrder) {
+    const orderOf = new Map(candidates.map((row) => [row.id, row.order_id ?? row.id]));
+    const perOrder = new Map<string, number>();
+    for (const item of undelivered) {
+      const order = orderOf.get(item.shipment_id) ?? item.shipment_id;
+      perOrder.set(order, (perOrder.get(order) ?? 0) + 1);
+    }
+    undelivered = undelivered.filter((item) => {
+      const twoBoxes = (perOrder.get(orderOf.get(item.shipment_id) ?? item.shipment_id) ?? 0) > 1;
+      if (twoBoxes) ambiguous.push(item.shipment_id);
+      return !twoBoxes;
+    });
+  }
+  const ambiguousNote = ambiguous.length
+    ? "Ese pedido tiene dos cajas «No entregado» (la reemplazada y la nueva): escanea el QR de la que llegó para recibirla."
+    : "";
   const changed: string[] = [];
   let toStock = 0;
   const errors: string[] = [];
@@ -1794,7 +1823,8 @@ async function returnUndeliveredShipments(
   if (changed.length) await recomputeOrderMasterSafe(admin, [...new Set(changed)]);
   revalidatePath(COURIER_PATH);
   revalidatePath("/dashboard/pedidos");
-  if (!changed.length) return { error: [...new Set(errors)].join(" ") || "Ninguno de esos pedidos está «No entregado» dentro de una caja." };
+  if (!changed.length) return { error: [ambiguousNote, ...new Set(errors)].filter(Boolean).join(" ") || "Ninguno de esos pedidos está «No entregado» dentro de una caja." };
+  if (ambiguousNote) errors.push(ambiguousNote);
   const requeued = changed.length - toStock;
   const parts: string[] = [];
   if (requeued) parts.push(`${requeued} ${requeued === 1 ? "pedido recibido" : "pedidos recibidos"} en oficina. Vuelven a «por asignar» (Por reprogramar Lima), también los rechazados.`);
@@ -1804,10 +1834,17 @@ async function returnUndeliveredShipments(
 }
 
 /**
- * «Recibir en oficina» por salida, desde «En devolución con el motorizado»: la
- * caja reemplazada que el motorizado trae (0246). Vuelve a stock.
+ * «Recibir en oficina» por salida: desde «En devolución» (la caja reemplazada
+ * vuelve a stock, 0246), la fila de «Devoluciones», la lista de Despacho del
+ * día y el cierre de una ruta. Un pedido puede tener dos cajas «No entregado»
+ * con dos motorizados: se recibe la que llegó, nunca por número de pedido.
  */
-export async function returnUndeliveredOutputs(orgId: string, shipmentIds: string[]): Promise<CourierActionResult> {
+export async function returnUndeliveredOutputs(
+  orgId: string,
+  shipmentIds: string[],
+  /** Solo los paquetes de estas cajas: la ruta de un motorizado no recibe la caja de otro. */
+  opts: { manifestIds?: string[] } = {},
+): Promise<CourierActionResult> {
   const auth = await requireOperator(orgId);
   if ("error" in auth) return auth;
   if (!auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas." };
@@ -1815,7 +1852,9 @@ export async function returnUndeliveredOutputs(orgId: string, shipmentIds: strin
   if (!ids.length) return { error: "Marca al menos un paquete." };
   const admin = createAdminSupabase();
   const { data: shipments } = await courierRowsByIds(ids, (chunk) => admin.from("shipments").select("id,store_id").in("id", chunk).eq("courier", "propio"));
-  return returnUndeliveredShipments(admin, auth, orgId, shipments as Array<{ id: string; store_id: string | null }>);
+  return returnUndeliveredShipments(admin, auth, orgId, shipments as Array<{ id: string; store_id: string | null }>, {
+    manifestIds: opts.manifestIds?.length ? new Set(opts.manifestIds) : undefined,
+  });
 }
 
 /** El aviso de las cajas reemplazadas recibidas: se desarman, no se reprograman. */
@@ -1919,11 +1958,11 @@ export async function replaceOwnOutputs(
         .maybeSingle();
       const old = target as unknown as (AdmissionShipmentRow & { store_id: string | null }) | null;
       if (!old?.order_id || !old.store_id || !orgStoreIds.has(old.store_id)) {
-        failed.push({ shipmentId, error: "No encontramos esa salida." });
+        failed.push({ shipmentId, error: `${old?.output_code ?? "Una salida"}: no la encontramos.` });
         continue;
       }
       if (!storeAllowed(auth, old.store_id)) {
-        failed.push({ shipmentId, error: OUTSIDE_STORE });
+        failed.push({ shipmentId, error: `${old.output_code ?? "Una salida"}: ${OUTSIDE_STORE}` });
         continue;
       }
       const orderId = old.order_id;
@@ -1951,7 +1990,14 @@ export async function replaceOwnOutputs(
       const request = liveRequest as { id: string; shipment_id: string | null; status: string } | null;
       const decision = ownReplaceDecision(row, outputs, old, box, request?.shipment_id ?? null);
       if (decision.action === "ya_reemplazada") {
-        alreadyReplaced.push({ shipmentId, message: replaceDecisionMessage(decision, box, old.output_code, await replacedByCode(admin, old.id)) });
+        const replacedBy = await replacedByCode(admin, old.id);
+        // En `retorno` sin reemplazo: se pidió su devolución en la Mesa de
+        // cierre (§13). No se saca con salida nueva.
+        if (replacedBy === null && !(await outputWasReplaced(admin, old.id))) {
+          failed.push({ shipmentId, error: `${orderName}: ${old.output_code ?? "la salida"} ya está en devolución (se pidió su retorno): no se saca con salida nueva.` });
+          continue;
+        }
+        alreadyReplaced.push({ shipmentId, message: replaceDecisionMessage(decision, box, old.output_code, replacedBy) });
         continue;
       }
       if (decision.action === "bloquear") {
@@ -2061,7 +2107,11 @@ export async function replaceOwnOutputs(
         p_reason: reason,
         p_actor: auth.userId,
       });
-      if (rpcError) {
+      // Sin respuesta clara (red, tiempo de espera) la base pudo haberlo hecho
+      // igual: si la solicitud ya apunta a la S02, se reemplazó. Deshacer la
+      // S02 ahí dejaría el pedido sin salida y la S01 en devolución.
+      const committed = rpcError ? await replacementCommitted(admin, write.shipmentId) : false;
+      if (rpcError && !committed) {
         const message = rpcError.message ?? "";
         if (message.startsWith("REPLACED:")) {
           const code = message.slice("REPLACED:".length).trim() || null;
@@ -2135,7 +2185,10 @@ export async function replaceOwnOutputs(
     messages.push(`${replaced.length} pedidos salen con una salida nueva: Almacén arma otra caja desde stock para cada uno; imprime sus rótulos (${listNames(replaced.map((r) => r.newCode ?? r.orderName))}). Las anteriores quedan en devolución con su motorizado.`);
   }
   for (const item of alreadyReplaced) messages.push(item.message);
-  if (failed.length && replaced.length) messages.push(`${failed.length} no ${failed.length === 1 ? "pudo" : "pudieron"} sacarse.`);
+  // Lo que no salió se dice con su pedido y su motivo, también junto a lo que sí.
+  if (failed.length && (replaced.length || alreadyReplaced.length)) {
+    messages.push(`${failed.length} no ${failed.length === 1 ? "pudo" : "pudieron"} sacarse: ${failed.map((f) => f.error).join(" ")}`);
+  }
   const error = !replaced.length && !alreadyReplaced.length && failed.length
     ? failed.length === 1 ? failed[0]!.error : `No se pudieron sacar ${failed.length} pedidos: ${listNames(failed.map((f) => f.error))}`
     : undefined;
@@ -2143,6 +2196,30 @@ export async function replaceOwnOutputs(
 }
 
 /** El código de la salida que reemplazó a esta (`output_replaced`), si consta. */
+/** ¿La salida tiene el evento `output_replaced`? (0246) */
+async function outputWasReplaced(admin: Admin, shipmentId: string): Promise<boolean> {
+  const { data } = await admin
+    .from("order_events")
+    .select("id")
+    .eq("shipment_id", shipmentId)
+    .eq("kind", "output_replaced")
+    .limit(1)
+    .maybeSingle();
+  return Boolean(data);
+}
+
+/** ¿El reemplazo quedó hecho aunque la llamada no lo dijo? La solicitud ya es de la S02. */
+async function replacementCommitted(admin: Admin, newShipmentId: string): Promise<boolean> {
+  const { data, error } = await admin
+    .from("logistics_requests")
+    .select("id")
+    .eq("shipment_id", newShipmentId)
+    .neq("status", "cancelled")
+    .limit(1)
+    .maybeSingle();
+  return !error && Boolean(data);
+}
+
 async function replacedByCode(admin: Admin, shipmentId: string): Promise<string | null> {
   const { data } = await admin
     .from("order_events")
@@ -2162,6 +2239,8 @@ async function replacedByCode(admin: Admin, shipmentId: string): Promise<string 
  * anula con el motivo, para que no quede una caja viva sin solicitud.
  */
 async function discardNewOutput(admin: Admin, shipmentId: string): Promise<void> {
+  // Con una solicitud viva apuntándola, el reemplazo sí se hizo: no se toca.
+  if (await replacementCommitted(admin, shipmentId)) return;
   const { data: deleted, error } = await admin
     .from("shipments")
     .delete()
@@ -3338,6 +3417,11 @@ export type ScanAssignStatus =
   | "bloqueado_efectivo"
   /** Programado para otro día (0199): se asigna solo si se confirma. */
   | "programado_otro_dia"
+  /**
+   * La caja reemplazada por otra salida (0246): el escaneo la recibió en
+   * oficina (o ya estaba recibida) y vuelve a stock. No se asigna.
+   */
+  | "recibido_a_stock"
   | "desconocido";
 
 export interface ScanAssignLine {
@@ -3463,13 +3547,33 @@ export async function scanAssignToRider(
   const boxDay = opts.scheduledFor && DATE_RE.test(opts.scheduledFor) ? opts.scheduledFor : limaClock().day;
   let receivedFrom: string | null = null;
 
+  // La caja reemplazada por otra salida (0246): nunca se toma ni se asigna, ni
+  // en su caja ni ya recibida —el pedido sale con la nueva, y tomarlo por este
+  // QR metería la salida nueva en la caja con el rótulo de esta—.
+  const replacedScan = found.shipment && found.shipment.id === shipmentId && courierKey(found.shipment.courier) === "propio"
+    ? await (async () => {
+        if (!(await outputWasReplaced(admin, found.shipment!.id))) return null;
+        const replacedBy = await replacedByCode(admin, found.shipment!.id);
+        return { outputCode: found.shipment!.output_code ?? null, replacedBy, received: found.shipment!.custody_state === "devuelto" };
+      })()
+    : null;
+  if (replacedScan && !active) {
+    return {
+      ...line,
+      status: replacedScan.received ? "recibido_a_stock" : "no_elegible",
+      message: replacedScan.received
+        ? `${replacedScan.outputCode ?? "Esta salida"} era la caja reemplazada y ya se recibió: desármala y regístrala como reingreso a stock.${replacedScan.replacedBy ? ` El pedido sale con ${replacedScan.replacedBy}.` : ""}`
+        : `${replacedScan.outputCode ?? "Esta salida"} está en devolución y ya no está en una caja: revísala en la ficha. No se asigna.`,
+    };
+  }
+
   // 2) ¿Ya está en una caja activa?
   if (shipmentId) {
     const box = (active as { id: string; manifest_id: string; office_checked_at: string | null; dispatch_manifests: { rider_id: string | null; driver_name: string | null; route_date: string; state: string } } | null) ?? null;
     // La caja reemplazada (0246, «Sacar con salida nueva»): sea del día que
     // sea, escanearla en oficina la recibe y vuelve a stock. No se toma ni se
     // asigna: el pedido ya sale con otra salida.
-    if (box && found.shipment?.id === shipmentId && courierKey(found.shipment.courier) === "propio" && found.shipment.custody_state === "retorno") {
+    if (box && replacedScan) {
       const fromName = box.dispatch_manifests.driver_name ?? "otro motorizado";
       const { data: stop } = await admin
         .from("delivery_stops")
@@ -3487,18 +3591,19 @@ export async function scanAssignToRider(
         replaced: true,
       });
       if (decision !== "recibir_a_stock") {
-        return { ...line, status: "no_elegible", manifestId: box.manifest_id, message: `${found.shipment.output_code ?? "Esta salida"} está en devolución con ${fromName}: no se asigna.` };
+        return { ...line, status: "no_elegible", manifestId: box.manifest_id, message: `${replacedScan.outputCode ?? "Esta salida"} está en devolución con ${fromName}: no se asigna.` };
       }
       const { error: returnError } = await admin.rpc("gf_return_to_office", { p_item_id: box.id, p_actor: auth.userId });
       if (returnError) return { ...line, status: "no_elegible", manifestId: box.manifest_id, message: returnError.message };
+      // Un pedido, barato: el Master al día para el refresco del tablero. Sin
+      // revalidar la página: lo hace el navegador (`receivedFrom`).
       await recomputeOrderMasterSafe(admin, [orderId]);
-      revalidatePath(COURIER_PATH);
       return {
         ...line,
-        status: "no_elegible",
+        status: "recibido_a_stock",
         manifestId: box.manifest_id,
         receivedFrom: receivedFromLabel(fromName, box.dispatch_manifests.route_date),
-        message: replacedReceivedMessage(found.shipment.output_code, fromName, box.dispatch_manifests.route_date, await replacedByCode(admin, shipmentId)),
+        message: replacedReceivedMessage(replacedScan.outputCode, fromName, box.dispatch_manifests.route_date, replacedScan.replacedBy),
       };
     }
     // Una caja de un día ANTERIOR (lib/gf-scan-return.ts): escanearlo en

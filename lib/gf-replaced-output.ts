@@ -22,12 +22,13 @@ export interface ReturningOutputLike {
 }
 
 /**
- * ¿Es una salida de Grupo GF «en devolución» que el motorizado todavía tiene?
+ * ¿Es una salida de Grupo GF «en devolución» que todavía no se recibió?
  * Propia, viva para su courier (`pendiente`/`en_ruta`), custodia `retorno` y
  * sin recibir. Ya no se trabaja: no se reusa, no se rotula, no bloquea otra
- * salida ni es la vigente del pedido. La deja así «Sacar con salida nueva»;
- * también «Solicitar devolución» sobre una salida propia (§13), que tampoco se
- * entrega ya.
+ * salida ni es la vigente del pedido. La deja así «Sacar con salida nueva», y
+ * también «Solicitar devolución» (§13). Que se REEMPLAZÓ lo dice su evento
+ * `output_replaced` (`replacedOutputIds`, `gf_output_replaced` en la base):
+ * solo esa no se reporta ni se reprograma.
  */
 export function isReturningOwnOutput(output: ReturningOutputLike): boolean {
   return (
