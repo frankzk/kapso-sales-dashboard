@@ -24,6 +24,7 @@ import { operationFitsCourier, routeKindForCourier } from "@/lib/dispatch-routin
 import { courierLabelFor } from "@/lib/couriers/catalog";
 import { decideReception } from "@/lib/returns-reception";
 import { gfReturnDecision } from "@/lib/gf-returns-scan";
+import { replacedReceivedMessage } from "@/lib/gf-scan-return";
 import { boxWho, notInThisBoxMessage, oldLabelHint } from "@/lib/scan-other-box";
 import type { OutputForDecision } from "@/lib/labels/resolve-output";
 import { loadPickupKeyFacts } from "@/lib/shalom/pickup-facts";
@@ -421,7 +422,7 @@ export async function receiveReturnedPackage(
 async function receiveGrupoGfReturn(shipment: DispatchShipment): Promise<DispatchActionResult> {
   const label = dispatchScanLabel(shipment);
   const admin = createAdminSupabase();
-  const [{ data: items }, { data: received }, cancelled] = await Promise.all([
+  const [{ data: items }, { data: received }, cancelled, { data: replacedEvents }] = await Promise.all([
     admin
       .from("dispatch_manifest_items")
       .select("id,manifest_id,dispatch_manifests!inner(courier,route_date,driver_name)")
@@ -436,7 +437,15 @@ async function receiveGrupoGfReturn(shipment: DispatchShipment): Promise<Dispatc
       .in("kind", ["returned_to_office", "reclaimed_in_office"])
       .limit(1),
     cancelledScanNotice(admin, shipment.order_id),
+    // La caja reemplazada por otra salida (0246): vuelve a stock, no a la cola.
+    admin
+      .from("order_events")
+      .select("id")
+      .eq("shipment_id", shipment.id)
+      .eq("kind", "output_replaced")
+      .limit(1),
   ]);
+  const replaced = shipment.custody_state === "retorno" || Boolean(replacedEvents?.length);
   const item = (items ?? [])[0] as
     | { id: string; manifest_id: string; dispatch_manifests: { route_date: string; driver_name: string | null } | { route_date: string; driver_name: string | null }[] }
     | undefined;
@@ -457,6 +466,7 @@ async function receiveGrupoGfReturn(shipment: DispatchShipment): Promise<Dispatc
     box: item && manifest ? { riderName: manifest.driver_name ?? "el motorizado", routeDate: manifest.route_date, stopStatus } : null,
     custodyState: shipment.custody_state,
     receivedInOffice: Boolean(received?.length),
+    replaced,
   });
   if (decision.kind === "error") return { error: decision.message };
   if (decision.kind === "aviso") return cancelled ? { error: cancelled } : { notice: decision.message, shipment };
@@ -468,6 +478,9 @@ async function receiveGrupoGfReturn(shipment: DispatchShipment): Promise<Dispatc
   revalidatePath(RETURNS_PATH);
   revalidatePath("/dashboard/courier");
   revalidatePath("/dashboard/pedidos");
+  if (decision.toStock) {
+    return { notice: replacedReceivedMessage(label, manifest?.driver_name ?? "el motorizado", manifest?.route_date ?? ""), shipment };
+  }
   return cancelled
     ? { error: `${label} recibido en oficina. ${cancelled}`, shipment }
     : { notice: `${label} recibido en oficina: vuelve a «por asignar» en Grupo GF para reprogramarlo.`, shipment };

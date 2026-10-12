@@ -166,8 +166,9 @@ function shiftDay(day: string, days: number): string {
 /**
  * Los reprogramados que el motorizado sigue teniendo: parada «Reprogramado» en
  * una caja suya de un día anterior, todavía en custodia y con el paquete
- * activo en ella (no volvió a la oficina ni pasó ya a otra ruta). Es la misma
- * condición que valida `gf_carry_over` (0234).
+ * activo en ella (no volvió a la oficina ni pasó ya a otra ruta), y que no se
+ * reemplazó por otra salida (custodia `retorno`, 0246). Es la misma condición
+ * que valida `gf_carry_over` (0234, 0246).
  */
 async function loadCarryCandidates(admin: SupabaseClient, target: NotebookTarget, onRoute: Set<string>): Promise<PlanCarry[]> {
   const { data: routes } = await admin
@@ -200,7 +201,16 @@ async function loadCarryCandidates(admin: SupabaseClient, target: NotebookTarget
     .eq("dispatch_manifests.rider_id", target.riderId)
     .eq("dispatch_manifests.courier", "propio");
   const active = new Set(((items ?? []) as { shipment_id: string; manifest_id: string }[]).map((i) => `${i.manifest_id}:${i.shipment_id}`));
-  const live = reprogrammed.filter((s) => active.has(`${s.dispatch_manifest_id}:${s.shipment_id}`));
+  const inBox = reprogrammed.filter((s) => active.has(`${s.dispatch_manifest_id}:${s.shipment_id}`));
+  if (!inBox.length) return [];
+  // La caja reemplazada por otra salida (0246) no pasa: vuelve a la oficina.
+  const { data: returning } = await admin
+    .from("shipments")
+    .select("id")
+    .in("id", [...new Set(inBox.map((s) => s.shipment_id))])
+    .eq("custody_state", "retorno");
+  const replaced = new Set(((returning ?? []) as { id: string }[]).map((row) => row.id));
+  const live = inBox.filter((s) => !replaced.has(s.shipment_id));
   if (!live.length) return [];
   const orderIds = [...new Set(live.map((s) => s.order_id))];
   const [{ data: orders }, { data: master }, balances] = await Promise.all([

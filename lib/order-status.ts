@@ -17,6 +17,7 @@
 //   4. En proceso                — hay gestión logística iniciada sin resultado.
 //   5. Pendiente                 — todavía no arrancó bien el proceso logístico.
 
+import { isReturningOwnOutput } from "@/lib/gf-replaced-output";
 import { hasConfirmationSignal } from "@/lib/order-confirmation";
 import { COMPANION_LINKED } from "@/lib/order-companion";
 import { recoveryActive } from "@/lib/reproprovincia";
@@ -260,6 +261,8 @@ export interface GuideSnapshot {
   payment_check_state?: string | null;
   /** Cuándo la caja pasó al motorizado. Nulo = nunca salió de la empresa. */
   custody_transferred_at?: string | null;
+  /** empresa | courier | retorno | devuelto: la que vuelve no es la vigente. */
+  custody_state?: string | null;
   /** La etiqueta cruda de Aliclik (`status · dispatch · call`). Es lo único que
    *  distingue «el courier no pudo entregar» de «nos cancelaron la venta». */
   reported_status?: string | null;
@@ -400,13 +403,19 @@ export function isAgencyCourier(courier: string | null | undefined): boolean {
  * La guía "vigente": la que el equipo está trabajando ahora. Se descartan las
  * congeladas (transferido/anulado) mientras haya alguna activa; si no queda
  * ninguna activa, gana la que se movió más recientemente.
+ *
+ * Entre las activas, la que se trabaja gana a la que vuelve (12-10-2026,
+ * «Sacar con salida nueva»): la salida propia «en devolución» con el motorizado
+ * y la ya recibida siguen `pendiente`, y su recepción la haría parecer la más
+ * reciente aunque el pedido ya salga con otra.
  */
 export function currentGuide(guides: GuideSnapshot[]): GuideSnapshot | null {
   if (!guides.length) return null;
   const active = guides.filter(
     (g) => g.delivery_status === "pendiente" || g.delivery_status === "en_ruta",
   );
-  const pool = active.length ? active : guides;
+  const working = active.filter((g) => !isReturningOwnOutput(g) && !g.returned_at && g.custody_state !== "devuelto");
+  const pool = working.length ? working : active.length ? active : guides;
   let best = pool[0]!;
   for (const g of pool) {
     const a = guideMovedAt(g);

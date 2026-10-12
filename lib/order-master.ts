@@ -280,6 +280,7 @@ function toGuideSnapshot(s: ShipmentRecord, calls: CallRecord[]): GuideSnapshot 
     // `custody_transferred_at` es una de las guardas de la corrección de
     // registro: si la caja llegó a salir, no se toca el estado.
     custody_transferred_at: s.custody_transferred_at ?? null,
+    custody_state: s.custody_state ?? null,
     created_at: s.created_at,
     // Una gestión registrada por el equipo también es un movimiento del pedido.
     updated_at:
@@ -308,6 +309,7 @@ function toMacroGuideSnapshot(s: ShipmentRecord, calls: CallRecord[]): MacroGuid
     swayp_state: guide.swayp_state ?? null,
     closed_at: guide.closed_at,
     updated_at: guide.updated_at,
+    created_at: guide.created_at,
   };
 }
 

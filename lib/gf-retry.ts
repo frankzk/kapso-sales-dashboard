@@ -27,7 +27,8 @@
 import { courierKey } from "@/lib/dispatch";
 import { guideFailedAfterDispatch, type RecoveryGuideLike } from "@/lib/reproprovincia";
 import { listNames } from "@/lib/labels/resolve-output";
-import { isCourierTbd, nombreDeCourier } from "@/lib/shipment-output";
+import { isReturningOwnOutput } from "@/lib/gf-replaced-output";
+import { MAX_OUTPUTS_PER_ORDER, isCourierTbd, nombreDeCourier } from "@/lib/shipment-output";
 
 /** ¿El pedido espera un courier nuevo porque otro no lo entregó? */
 export function isRetryAdmission(
@@ -57,10 +58,12 @@ type OutputLike = RecoveryGuideLike & {
 
 /**
  * Las salidas que SÍ impiden que Grupo GF lo tome: las vivas que no fallaron.
- * La de Tanders que vuelve sigue `en_ruta`, pero ya no la trabaja nadie.
+ * La de Tanders que vuelve sigue `en_ruta`, pero ya no la trabaja nadie. Lo
+ * mismo la propia «en devolución» con el motorizado (`isReturningOwnOutput`,
+ * 12-10-2026): el pedido ya salió con otra.
  */
 export function outputsBlockingRetry<T extends OutputLike>(outputs: readonly T[]): T[] {
-  return outputs.filter((output) => !guideFailedAfterDispatch(output));
+  return outputs.filter((output) => !guideFailedAfterDispatch(output) && !isReturningOwnOutput(output));
 }
 
 /** La última salida que falló (la de consecutivo más alto), o null. */
@@ -255,4 +258,140 @@ export function reprogramBlockReason(outputs: readonly OutputLike[]): ReprogramB
   if (live.length) return "revisar_salidas";
   if (outputs.some((output) => courierKey(output.courier) === "propio" && returned(output))) return "salida_devuelta";
   return "sin_salida";
+}
+
+// ---------------------------------------------------------------------------
+// «Sacar con salida nueva» (12-10-2026, decisión del owner, MOM §29.13)
+// ---------------------------------------------------------------------------
+//
+// El motorizado todavía tiene la caja «No entregado» y el pedido tiene que
+// salir antes de que la traiga: se arma otra caja desde stock con salida, QR y
+// rótulo nuevos (`gf_replace_output`, 0246). La anterior queda en devolución a
+// su nombre y, al recibirla, vuelve a stock. Vale para cualquier motorizado con
+// caja de Grupo GF; no hay umbral de días.
+
+/**
+ * Por qué no se saca con salida nueva:
+ * - `fuera_de_etapa`: el pedido ya no está en «Por reprogramar Lima».
+ * - `entregado`: alguna salida ya se entregó.
+ * - `no_es_propia`: la salida no es de Grupo GF, ya volvió o ya no está viva.
+ * - `no_en_caja`: ya no está en una caja: se toma con su misma salida.
+ * - `caja_sin_reporte`: está en la caja sin «No entregado» de esa caja.
+ * - `otra_salida_viva`: el pedido tiene otra salida que se está trabajando.
+ * - `solicitud_en_otra_salida`: la solicitud viva de Grupo GF es de otra salida.
+ * - `tope`: el pedido ya tiene cinco salidas.
+ */
+export type OwnReplaceBlock =
+  | "fuera_de_etapa"
+  | "entregado"
+  | "no_es_propia"
+  | "no_en_caja"
+  | "caja_sin_reporte"
+  | "otra_salida_viva"
+  | "solicitud_en_otra_salida"
+  | "tope";
+
+export type OwnReplaceDecision =
+  | { action: "sacar" }
+  /** Ya salió con otra (otra pestaña, un doble clic): no se escribe nada. */
+  | { action: "ya_reemplazada" }
+  | { action: "bloquear"; reason: OwnReplaceBlock };
+
+type ReplaceTarget = OwnOutputLike & { id: string };
+
+/**
+ * La misma decisión en la cola y al sacarla. Lo ya reemplazado va primero:
+ * después del reemplazo el pedido pasa a Preparación y, si se mirara antes la
+ * etapa, el segundo clic diría «fuera de etapa» en vez de «ya salió con otra».
+ */
+export function ownReplaceDecision(
+  order: { macro_stage?: unknown; macro_substage?: unknown },
+  outputs: readonly (OwnOutputLike & { id: string })[],
+  target: ReplaceTarget,
+  box: { undeliveredReason?: string | null } | null,
+  requestShipmentId: string | null,
+): OwnReplaceDecision {
+  if (isReturningOwnOutput(target)) return { action: "ya_reemplazada" };
+  if (!isReprogramStage(order.macro_stage, order.macro_substage)) return { action: "bloquear", reason: "fuera_de_etapa" };
+  if (outputs.some((output) => output.delivery_status === "entregado" || output.status_category === "delivered")) {
+    return { action: "bloquear", reason: "entregado" };
+  }
+  if (
+    courierKey(target.courier) !== "propio" ||
+    target.delivery_status !== "pendiente" ||
+    Boolean(target.returned_at) ||
+    target.custody_state === "devuelto"
+  ) {
+    return { action: "bloquear", reason: "no_es_propia" };
+  }
+  if (!box) return { action: "bloquear", reason: "no_en_caja" };
+  if (!box.undeliveredReason) return { action: "bloquear", reason: "caja_sin_reporte" };
+  const otherLive = outputsBlockingRetry(outputs).some((output) =>
+    output.id !== target.id &&
+    LIVE_DELIVERY_STATUSES.includes(output.delivery_status) &&
+    !output.returned_at &&
+    output.custody_state !== "devuelto");
+  if (otherLive) return { action: "bloquear", reason: "otra_salida_viva" };
+  if (requestShipmentId && requestShipmentId !== target.id) return { action: "bloquear", reason: "solicitud_en_otra_salida" };
+  if (outputs.length >= MAX_OUTPUTS_PER_ORDER) return { action: "bloquear", reason: "tope" };
+  return { action: "sacar" };
+}
+
+/** Qué se le dice a quien pulsó «Sacar con salida nueva» cuando no se pudo. */
+export function replaceDecisionMessage(
+  decision: Exclude<OwnReplaceDecision, { action: "sacar" }>,
+  box: { riderName: string; routeDate: string } | null,
+  outputCode: string | null | undefined,
+  replacedByCode?: string | null,
+): string {
+  const code = outputCode ?? "La salida";
+  const rider = box?.riderName ?? "el motorizado";
+  if (decision.action === "ya_reemplazada") {
+    return `${code} ya salió con otra salida${replacedByCode ? ` (${replacedByCode})` : ""}; sigue en devolución con ${rider}.`;
+  }
+  switch (decision.reason) {
+    case "fuera_de_etapa":
+      return "El pedido ya no está en «Por reprogramar Lima».";
+    case "entregado":
+      return "El pedido ya tiene una salida entregada.";
+    case "no_es_propia":
+      return `${code} no es una salida de Grupo GF «No entregado».`;
+    case "no_en_caja":
+      return `${code} ya no está en la caja del motorizado: tómalo con su misma salida.`;
+    case "caja_sin_reporte":
+      return `${code} sigue en la caja de ${rider} sin «No entregado»: revisa su parada.`;
+    case "otra_salida_viva":
+      return "El pedido tiene otra salida viva: revísala antes de sacar una nueva.";
+    case "solicitud_en_otra_salida":
+      return "La solicitud de Grupo GF del pedido es de otra salida: revísala en la ficha.";
+    case "tope":
+      return `El pedido ya alcanzó el máximo de ${MAX_OUTPUTS_PER_ORDER} salidas.`;
+  }
+}
+
+/**
+ * El motivo de la salida adicional, que escribe el sistema (§9, §23): el
+ * hecho ya consta en la parada del motorizado.
+ */
+export function replacedOutputReason(input: { riderName: string; routeDate: string; outputCode: string | null | undefined }): string {
+  return `${input.riderName} no entregó ${input.outputCode ?? "la salida anterior"} (caja del ${dayMonth(input.routeDate)}) y todavía la tiene: sale con una salida nueva armada desde stock.`;
+}
+
+/** El aviso al terminar: qué arma Almacén y dónde queda la caja anterior. */
+export function replacedOutputNotice(orderName: string, newCode: string | null | undefined, oldCode: string | null | undefined, riderName: string): string {
+  return `${orderName} sale con ${newCode ?? "una salida nueva"}: Almacén arma otra caja desde stock; imprime su rótulo. ${oldCode ?? "La salida anterior"} queda en devolución con ${riderName}.`;
+}
+
+/** Días enteros entre dos días ISO (`2026-10-09` → `2026-10-12` = 3). */
+export function daysBetween(fromDay: string, toDay: string): number {
+  const a = Date.parse(`${fromDay.slice(0, 10)}T00:00:00Z`);
+  const b = Date.parse(`${toDay.slice(0, 10)}T00:00:00Z`);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return 0;
+  return Math.max(0, Math.round((b - a) / 86_400_000));
+}
+
+/** «S01 vuelve con Alexis · 3 d»: la chapa de la salida en devolución. */
+export function replacedOutputLabel(outputCode: string | null | undefined, riderName: string, days: number): string {
+  const consecutive = /-(S\d+)$/i.exec(outputCode ?? "")?.[1]?.toUpperCase() ?? outputCode ?? "La salida";
+  return `${consecutive} vuelve con ${riderName}${days > 0 ? ` · ${days} d` : ""}`;
 }

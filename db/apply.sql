@@ -493,4 +493,6 @@
 \ir migrations/0244_gf_same_day_cutoff_noon.sql
 \echo 'Applying 0245_district_aliases_sin_de.sql'
 \ir migrations/0245_district_aliases_sin_de.sql
+\echo 'Applying 0246_gf_replace_output.sql'
+\ir migrations/0246_gf_replace_output.sql
 \echo 'Done.'

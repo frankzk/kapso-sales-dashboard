@@ -12,6 +12,9 @@
 // GF, para reprogramarlo. Solo la anulación en Shopify termina la venta (v1.23).
 // Lo que nunca salió en Kapta no tiene nada que recibir: se dice que sigue por
 // asignar. Un entregado o una parada sin reporte no se tocan.
+//
+// La caja reemplazada (12-10-2026, «Sacar con salida nueva», 0246) se recibe
+// igual, pero vuelve a stock: el pedido ya salió con otra salida.
 
 import { boxDayShort } from "@/lib/gf-scan-return";
 
@@ -22,10 +25,13 @@ export interface GfReturnFacts {
   custodyState: string | null;
   /** Ya se recibió en oficina (`returned_to_office`) y no volvió a salir. */
   receivedInOffice: boolean;
+  /** El pedido salió con otra salida (`output_replaced`): esta vuelve a stock. */
+  replaced?: boolean;
 }
 
 export type GfReturnDecision =
-  | { kind: "recibir" }
+  /** `toStock`: era la caja reemplazada; al recibirla se desarma, no se reprograma. */
+  | { kind: "recibir"; toStock?: boolean }
   | { kind: "aviso"; message: string }
   | { kind: "error"; message: string };
 
@@ -34,7 +40,7 @@ export function gfReturnDecision(label: string, facts: GfReturnFacts): GfReturnD
   const { box } = facts;
   if (box) {
     const where = `la caja de ${box.riderName} del ${boxDayShort(box.routeDate)}`;
-    if (box.stopStatus === "no_entregado") return { kind: "recibir" };
+    if (box.stopStatus === "no_entregado") return facts.replaced ? { kind: "recibir", toStock: true } : { kind: "recibir" };
     if (box.stopStatus === "entregado") {
       return { kind: "error", message: `${label}: ${box.riderName} lo reportó entregado (${where}). Si volvió, que corrija ese reporte.` };
     }
@@ -42,6 +48,9 @@ export function gfReturnDecision(label: string, facts: GfReturnFacts): GfReturnD
       kind: "error",
       message: `${label} sigue en ${where} sin reporte: pide a ${box.riderName} que lo reporte «No entregado» y vuelve a escanearlo.`,
     };
+  }
+  if (facts.replaced && facts.custodyState === "devuelto") {
+    return { kind: "aviso", message: `${label} ya se recibió: era la caja reemplazada; desármala y regístrala como reingreso a stock.` };
   }
   if (facts.custodyState !== "empresa") {
     return { kind: "error", message: `${label}: no está en una caja de Grupo GF ni en la oficina. Revísalo en el Master.` };

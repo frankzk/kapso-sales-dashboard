@@ -2102,3 +2102,24 @@ ya en el día 7 o más; medido el 11-10-2026): entran de a 10 por tienda
 que la tanda tarda uno o dos días. Cada envío queda en
 la línea de tiempo («Recordatorio de recojo (día 3)…») y la foto que viajó en
 `shalom_transit_notifications.header_image_url`.
+
+### 12-10-2026 · Distritos sin el «de» (0245) y «Sacar con salida nueva» (0246, `mom-v1.26`)
+
+1. **Migración `0245_district_aliases_sin_de.sql`**, a mano, antes o después
+   del código: `psql "$DATABASE_URL" -f db/migrations/0245_district_aliases_sin_de.sql`.
+   Solo redefine `lima_district_aliases()` («San Juan Lurigancho», «Pachamamac»,
+   «Cercado delima»…). La cola de Grupo GF usa los alias de TypeScript y se
+   desbloquea con el despliegue; la base los usa en la cobertura y en el pago
+   del motorizado en vivo.
+2. **Migración `0246_gf_replace_output.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0246_gf_replace_output.sql`. Crea
+   `gf_replace_output`, redefine `gf_return_to_office` (la 0206 más la rama de
+   la caja reemplazada) y `gf_carry_over` (la 0234 sin la caja reemplazada), y
+   crea el trigger `delivery_stops_guard_replaced`. Sin ella, «Sacar con salida
+   nueva» falla y deshace la salida nueva que había creado: no deja salidas
+   huérfanas.
+3. **Después del despliegue**, el cron recalcula el Master por la versión
+   `mom-v1.26`. Con la foto del 12-10-2026 no hay ninguna salida propia en
+   `retorno`; cambian pocos pedidos: los que tienen una salida ya recibida junto
+   a otra viva (la vigente pasa a ser la viva) o una parada del cuaderno
+   anterior a su salida.

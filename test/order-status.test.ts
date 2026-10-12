@@ -519,6 +519,22 @@ describe("helpers", () => {
     expect(currentGuide([frozen, active])?.id).toBe("2");
   });
 
+  it("currentGuide: la que se trabaja gana a la que vuelve (12-10-2026, «Sacar con salida nueva»)", () => {
+    // La S01 en devolución con el motorizado (o ya recibida) sigue `pendiente`
+    // y se movió después; el pedido ya sale con la S02.
+    const returning = guide("1", { courier: "propio", custody_state: "retorno", updated_at: "2026-10-12T10:00:00.000Z" });
+    const received = guide("1", { courier: "propio", custody_state: "devuelto", returned_at: "2026-10-12T10:00:00.000Z" });
+    const working = guide("2", { courier: "propio", custody_state: "empresa", assigned_at: "2026-10-10T09:00:00.000Z", updated_at: "2026-10-10T09:00:00.000Z" });
+    expect(currentGuide([returning, working])?.id).toBe("2");
+    expect(currentGuide([received, working])?.id).toBe("2");
+    // Sola, sigue siendo la vigente.
+    expect(currentGuide([returning])?.id).toBe("1");
+    const s = resolve([received, working]);
+    expect(s.general).toBe("en_proceso");
+    expect(s.currentCourier).toBe("propio");
+    expect(s.guideCode).toBe("AUR5X2");
+  });
+
   it("currentGuide devuelve la más reciente cuando no queda ninguna activa", () => {
     const a = guide("1", { delivery_status: "anulado", closed_at: "2026-07-05T10:00:00.000Z" });
     const b = guide("2", { delivery_status: "anulado", closed_at: "2026-07-07T10:00:00.000Z" });

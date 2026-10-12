@@ -8,6 +8,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { NON_DELIVERY_REASONS } from "@/lib/routes";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { isReturningOwnOutput } from "@/lib/gf-replaced-output";
 import { reportedCollection } from "@/lib/route-collection";
 import { loadRouteCollectionBalances } from "@/lib/route-collection-access";
 import {
@@ -67,6 +68,12 @@ export async function writeStopReport(admin: SupabaseClient, input: WriteStopRep
           : "La ruta todavía no está en curso.",
     };
   }
+
+  // La caja reemplazada por otra salida (0246, «Sacar con salida nueva») ya no
+  // se entrega ni se reporta: vuelve a la oficina. La guarda de verdad es el
+  // trigger `delivery_stops_guard_replaced`; esto da el mensaje claro antes.
+  const returning = await stopShipmentIsReturning(admin, stop.id);
+  if (returning) return { ok: false, error: REPLACED_STOP_ERROR };
 
   const method = isPaymentMethod(input.paymentMethod) ? input.paymentMethod : null;
   const collected = reportedCollection(method, input.collectedAmount);
@@ -197,6 +204,21 @@ export async function writeStopReport(admin: SupabaseClient, input: WriteStopRep
   // cron y seguía «En curso» después de entregado.
   await recomputeOrderMasterSafe(admin, [stop.order_id]).catch(() => undefined);
   return { ok: true, orderId: stop.order_id, routeId: stop.route_id };
+}
+
+export const REPLACED_STOP_ERROR = "Este paquete ya salió con otra salida o está en devolución: no se entrega ni se reporta. Tráelo a la oficina.";
+
+/** ¿La salida de la parada es una propia «en devolución» (`isReturningOwnOutput`)? */
+async function stopShipmentIsReturning(admin: SupabaseClient, stopId: string): Promise<boolean> {
+  const { data: stopRow } = await admin.from("delivery_stops").select("shipment_id").eq("id", stopId).maybeSingle();
+  const shipmentId = (stopRow as { shipment_id: string | null } | null)?.shipment_id;
+  if (!shipmentId) return false;
+  const { data: shipment } = await admin
+    .from("shipments")
+    .select("courier,delivery_status,custody_state,returned_at")
+    .eq("id", shipmentId)
+    .maybeSingle();
+  return shipment ? isReturningOwnOutput(shipment as Parameters<typeof isReturningOwnOutput>[0]) : false;
 }
 
 async function writeStopUndoEvent(admin: SupabaseClient, stopId: string, routeId: string, orderId: string, actor: string): Promise<void> {
