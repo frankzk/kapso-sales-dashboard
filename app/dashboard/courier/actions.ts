@@ -1,6 +1,7 @@
 "use server";
 
 import { cancelledScanNotice } from "@/lib/scan-cancelled";
+import { alreadyInBoxMessage, alreadyInBoxStage, type AlreadyInBoxStage } from "@/lib/gf-scan-already-in-box";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { redirect } from "next/navigation";
@@ -3495,6 +3496,9 @@ export interface ScanAssignLine {
    * y la caja entró como esta: su rótulo es el que hay que imprimir y pegar.
    */
   relabel?: { outputCode: string | null; labelUrl: string } | null;
+  /** Con `ya_en_caja`: en qué carga está y qué le falta (lib/gf-scan-already-in-box.ts). */
+  loadNumber?: number | null;
+  boxStage?: AlreadyInBoxStage | null;
 }
 
 /**
@@ -3581,7 +3585,7 @@ export async function scanAssignToRider(
     admin.from("order_master").select("order_name,order_total,store_id").eq("order_id", orderId).maybeSingle(),
     shipmentId ? admin
       .from("dispatch_manifest_items")
-      .select("id,manifest_id,office_checked_at,dispatch_manifests!inner(id,rider_id,driver_name,route_date,state)")
+      .select("id,manifest_id,office_checked_at,dispatch_manifests!inner(id,rider_id,driver_name,route_date,state,load_number)")
       .eq("shipment_id", shipmentId)
       .is("removed_at", null)
       .maybeSingle() : Promise.resolve({ data: null }),
@@ -3618,7 +3622,7 @@ export async function scanAssignToRider(
 
   // 2) ¿Ya está en una caja activa?
   if (shipmentId) {
-    const box = (active as { id: string; manifest_id: string; office_checked_at: string | null; dispatch_manifests: { rider_id: string | null; driver_name: string | null; route_date: string; state: string } } | null) ?? null;
+    const box = (active as { id: string; manifest_id: string; office_checked_at: string | null; dispatch_manifests: { rider_id: string | null; driver_name: string | null; route_date: string; state: string; load_number: number | null } } | null) ?? null;
     // La caja reemplazada (0248, «Sacar con salida nueva»): sea del día que
     // sea, escanearla en oficina la recibe y vuelve a stock. No se toma ni se
     // asigna: el pedido ya sale con otra salida.
@@ -3704,13 +3708,15 @@ export async function scanAssignToRider(
       receivedFrom = receivedFromLabel(fromName, box.dispatch_manifests.route_date);
     } else if (box) {
       if (box.dispatch_manifests.rider_id === rider.id) {
+        const loadNumber = box.dispatch_manifests.load_number ?? null;
+        const boxStage = alreadyInBoxStage({ officeCheckedAt: box.office_checked_at, manifestState: box.dispatch_manifests.state });
         return {
           ...line,
           status: "ya_en_caja",
           manifestId: box.manifest_id,
-          message: (box.office_checked_at
-            ? `Ya estaba en la caja de ${rider.full_name}, verificado en oficina.`
-            : `Ya estaba en la caja de ${rider.full_name}; falta verificarlo en oficina.`) + oldLabelNote,
+          loadNumber,
+          boxStage,
+          message: alreadyInBoxMessage({ riderName: rider.full_name, loadNumber, stage: boxStage }) + oldLabelNote,
           relabel: relabelEarly,
         };
       }

@@ -17,6 +17,7 @@
 // las excepciones píldoras al borde, los filtros píldoras discontinuas.
 
 import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
+import { alreadyInBoxChip } from "@/lib/gf-scan-already-in-box";
 import Link from "next/link";
 import { OrderLink } from "@/components/order-link";
 import { useRouter } from "next/navigation";
@@ -1634,7 +1635,8 @@ function scanRowPresentation(l: ScanAssignLine, riderName: string): { text: stri
       // Volvió de la caja de otro día y el mismo escaneo lo recibió en oficina.
       return { text: `En la caja de ${l.riderName ?? riderName}${l.receivedFrom ? ` · volvió de ${l.receivedFrom}` : ""}`, tone: "ok" };
     case "ya_en_caja":
-      return { text: "Ya estaba", tone: "warn" };
+      // En qué carga y qué falta: «Ya estaba» a secas parecía que no estaba (12-10-2026).
+      return { text: alreadyInBoxChip({ riderName: l.riderName ?? riderName, loadNumber: l.loadNumber, stage: l.boxStage }), tone: "warn" };
     case "en_otra_caja":
       return { text: `En la caja de ${l.riderName ?? "otro"}`, tone: "warn" };
     case "bloqueado_efectivo":
