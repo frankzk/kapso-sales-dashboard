@@ -2202,3 +2202,38 @@ la misma sección de Ajustes.
    `mom-v1.26`. Con la foto del 12-10-2026 no hay ninguna salida reemplazada
    (`output_replaced`); cambian pocos pedidos: los que tienen una parada del
    cuaderno anterior a la salida a la que se atribuía.
+
+### 12-10-2026 · Repro Lima y fecha que pidió el cliente (0249)
+
+1. **Migración `0249_lima_repro.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0249_lima_repro.sql`. Agrega
+   `delivery_stops.requested_date` con el CHECK
+   `delivery_stops_requested_date_ck` (la fecha solo existe en un «No
+   entregado · Reprogramado»), crea `lima_repro_cases` y `lima_repro_calls`
+   (lectura por tienda, escritura solo del servidor, llamadas append-only) y
+   las RPC `lima_repro_claim` y `lima_repro_record`. **El orden importa**: el
+   código nuevo lee `requested_date` en `STOP_COLUMNS`
+   (lib/routes-access.ts). Sin la columna, `getRouteDetail` devuelve la ruta
+   **vacía y sin ningún error** (`stopRows ?? []`): /reparto, Coordinación,
+   «Reparto y liquidación» de Despacho del día y Rutas muestran rutas sin
+   paradas, y todo reporte de parada falla. Repro Lima tampoco puede tomar un
+   caso.
+2. Sin subir versión ni recálculo: el resolver no lee nada de esto
+   (`MOM_RESOLUTION_VERSION` sigue en `mom-v1.26`). Los casos nacen solos al
+   primer gesto en Repro Lima: no hay backfill.
+3. **Qué mirar después**:
+   - el reporte del motorizado ya no programa. Ningún `dispatch_programmed`
+     nuevo con el motivo del reporte:
+     `select count(*) from order_events where kind = 'dispatch_programmed' and payload->>'reason' like 'Reprogramado por el cliente (reporte%' and occurred_at > '<hora del despliegue>';`
+     tiene que dar 0. Los programas que ya creó #908 se respetan: salen en
+     «Por decidir» como «Fecha del motorizado sin confirmar»;
+   - Por decidir + Llamar después + Programados + Cerrados ≈ el mosaico «Por
+     reprogramar Lima» del Master;
+   - el primer programa con motivo «Repro Lima:» aparece en «Programados» de
+     Despacho del día.
+4. **Marcha atrás**: PRIMERO
+   `alter table public.delivery_stops drop constraint if exists delivery_stops_requested_date_ck;`
+   y DESPUÉS revertir el código. El `writeStopReport` anterior no conoce
+   `requested_date`: al pasar una parada con fecha de «Reprogramado» a
+   «Entregado» o a otro motivo violaría el CHECK y el reporte fallaría. Las
+   tablas, las RPC y la columna no molestan al código anterior y se quedan.

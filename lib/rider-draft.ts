@@ -24,6 +24,9 @@ export interface StopDraftFields {
   writtenPayment: string;
   reasonCode: string;
   reasonNote: string;
+  /** Fecha que pidió el cliente (YYYY-MM-DD o ""; 12-10-2026). Opcional: los
+   *  borradores de antes no la traen y siguen valiendo. */
+  requestedDate?: string;
 }
 
 export interface StopDraft extends StopDraftFields {
@@ -64,6 +67,7 @@ export function parseDraft(raw: string | null | undefined, now: number, reported
   if (!strOrNull(d.method) || !str(d.amount) || !str(d.reason) || !str(d.note)) return null;
   if (!strOrNull(d.photoPath) || !strOrNull(d.voucherPath)) return null;
   if (!str(d.written) || !str(d.writtenPayment) || !str(d.reasonCode) || !str(d.reasonNote)) return null;
+  if (d.requestedDate !== undefined && !str(d.requestedDate)) return null;
   return {
     v: 1,
     at: d.at,
@@ -78,6 +82,7 @@ export function parseDraft(raw: string | null | undefined, now: number, reported
     writtenPayment: d.writtenPayment,
     reasonCode: d.reasonCode,
     reasonNote: d.reasonNote,
+    ...(str(d.requestedDate) ? { requestedDate: d.requestedDate } : {}),
   };
 }
 

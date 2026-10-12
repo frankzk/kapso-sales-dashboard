@@ -59,6 +59,9 @@ export interface StopWithOrder extends RouteStop {
   /** Día de la ruta a la que pasó el paquete sin volver a la oficina: el
    *  motorizado lo conservó tras reprogramarse (`carried_over`, §29.7). */
   carried_to?: string | null;
+  /** Fecha que pidió el cliente con «Reprogramado por el cliente» (0249, D9).
+   *  Informativa: nunca programa; la tienda la confirma en Repro Lima. */
+  requested_date?: string | null;
   order: {
     name: string | null;
     customer_name: string | null;
@@ -78,7 +81,7 @@ const ROUTE_COLUMNS =
 const STOP_COLUMNS =
   "id,order_id,store_id,seq,status,payment_method,collected_amount,outcome_reason,note," +
   "photo_path,voucher_path,reported_at,reported_by,written_status,written_status_code,written_payment," +
-  "shipment_id,dispatch_manifest_id,pickup_confirmed";
+  "shipment_id,dispatch_manifest_id,pickup_confirmed,requested_date";
 
 /** La ficha del motorizado que corresponde al usuario de la petición, si la hay. */
 export async function getMyRider(): Promise<{ id: string; full_name: string } | null> {

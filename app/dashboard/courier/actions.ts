@@ -51,7 +51,7 @@ import { previousLabelNote } from "@/lib/scan-other-box";
 import { listNames } from "@/lib/labels/resolve-output";
 import type { RiderRateVersion } from "@/lib/rider-pay";
 import { isGroupGfRiderCourier } from "@/lib/couriers/catalog";
-import { custodyOnAssign, GF_SAME_DAY_CUTOFF_DEFAULT, isRiderPickupMode, sameDayCutoffMinute, type RiderPickupMode } from "@/lib/grupo-gf-courier";
+import { custodyOnAssign, GF_SAME_DAY_CUTOFF_DEFAULT, isRiderPickupMode, limaClock, scheduledDay, type RiderPickupMode } from "@/lib/grupo-gf-courier";
 import { BLOCKED_REASON_LABEL, programDayLabel, programNeedsConfirm, takenIsAssignable, type BlockedReason } from "@/lib/dispatch-day";
 import { pastBoxDecision, pastBoxMessage, receivedFromLabel, replacedReceivedMessage } from "@/lib/gf-scan-return";
 import { isReturningOwnOutput, officeReturnOutcome, replacedOutputIds, type ReturningOutputLike } from "@/lib/gf-replaced-output";
@@ -375,32 +375,6 @@ function amount(raw: unknown): number | null {
 
 function previousDay(day: string): string {
   return new Date(Date.parse(`${day}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
-}
-
-function nextDay(day: string): string {
-  return new Date(Date.parse(`${day}T12:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
-}
-
-function limaClock(now = new Date()): { day: string; minute: number } {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Lima",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(now);
-  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return {
-    day: `${value.year}-${value.month}-${value.day}`,
-    minute: Number(value.hour) * 60 + Number(value.minute),
-  };
-}
-
-function scheduledDay(cutoff: string | null | undefined, now = new Date()): string {
-  const current = limaClock(now);
-  return current.minute <= sameDayCutoffMinute(cutoff) ? current.day : nextDay(current.day);
 }
 
 type OperationsConfig = {

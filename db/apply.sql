@@ -499,4 +499,6 @@
 \ir migrations/0247_voice_lead_calls.sql
 \echo 'Applying 0248_gf_replace_output.sql'
 \ir migrations/0248_gf_replace_output.sql
+\echo 'Applying 0249_lima_repro.sql'
+\ir migrations/0249_lima_repro.sql
 \echo 'Done.'
