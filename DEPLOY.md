@@ -2085,6 +2085,10 @@ suyo cambia.
    `shopify_pending_installs` y `shopify_privacy_requests`. Sin ella, la
    desinstalación de una tienda falla al escribir la fecha y la búsqueda de
    tiendas conectadas de la app nueva responde error.
+   **Ya aplicada en producción el 12-10-2026**, en dos pasos del historial de
+   Supabase: `0245_shopify_client_app` y `0245_shopify_client_app_revoke_defaults`
+   (el `revoke` a `anon` y `authenticated` se añadió después; el fichero ya lo
+   trae completo).
 2. **Crear la app en el Dev Dashboard**, distinta de
    «kapso-sales-dashboard-aurelape»:
    - **App URL**: `https://kapso-sales-dashboard.vercel.app/api/shopify/clientes/entrada`.

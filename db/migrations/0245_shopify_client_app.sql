@@ -23,8 +23,9 @@
 --                                 hasta que se atiende (anonimizar o entregar
 --                                 los datos), con fecha y nota.
 --
--- Las dos tablas nuevas solo las toca el rol de servicio: RLS activa y sin
--- políticas para usuarios.
+-- Las dos tablas nuevas solo las toca el rol de servicio: RLS activa, sin
+-- políticas para usuarios y sin los privilegios que Supabase concede por
+-- defecto a anon y authenticated (DEPLOY.md §5m).
 
 alter table stores
   add column if not exists shopify_app text not null default 'interna';
@@ -108,4 +109,6 @@ comment on table shopify_privacy_requests is
 alter table shopify_pending_installs enable row level security;
 alter table shopify_privacy_requests enable row level security;
 
+revoke all on shopify_pending_installs from anon, authenticated;
+revoke all on shopify_privacy_requests from anon, authenticated;
 grant all privileges on shopify_pending_installs, shopify_privacy_requests to service_role;
