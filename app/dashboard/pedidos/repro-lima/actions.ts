@@ -231,6 +231,10 @@ export interface RegisterReproCallResult extends ReproActionResult {
   callId?: string;
   /** El mismo envío ya estaba guardado (doble clic o reintento de red). */
   duplicate?: boolean;
+  /** La caja o lo que cambió no coincide con lo que se ve: hay que recargar el caso. */
+  boxChanged?: boolean;
+  /** Quien guarda ya no tiene el caso: hay que volver a tomarlo. */
+  claimLost?: boolean;
 }
 
 /** Registra una llamada y hace lo que sigue (programar o quitar la fecha). */
