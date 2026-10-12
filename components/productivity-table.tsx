@@ -8,7 +8,19 @@ import { categoryOf, labelOf, LEAD_SEGMENTS, type LeadSegment } from "@/lib/lead
 import { getOnlineAdvisorIds, loadAgentLeads } from "@/app/dashboard/productividad/actions";
 import { RITMO_MIN_HORA, heatStatuses, ritmoPorHora, type HeatCellStatus } from "@/lib/heat";
 import { SEGMENT_LABEL, SOURCE_LABEL } from "@/lib/productivity-labels";
-import { daysLabel, dowShort, graceTimes, type WeekDay, type WeekStatus } from "@/lib/productivity-week";
+import {
+  daysLabel,
+  dowShort,
+  graceTimes,
+  groupWeeks,
+  PERIOD_DAYS_MAX,
+  type AdvisorSchedule,
+  type DayState,
+  type PeriodWeek,
+  type WeekDay,
+  type WeekDayStatus,
+  type WeekStatus,
+} from "@/lib/productivity-week";
 // Type-only import: pulling runtime values from lib/productivity would drag the
 // whole server data layer (supabase clients) into this client bundle.
 import type { AdvisorBoardRow, AgentLeadRow, SourceBucket, TrendCell } from "@/lib/productivity";
@@ -184,12 +196,224 @@ function HeatLegend({ className, tick = false }: { className?: string; /** Añad
       {item("bg-warn-bg", "Bajo ritmo")}
       {item("bg-crit-bg", "Hora muerta")}
       {item("bg-line", "Fuera de jornada")}
-      {tick && (
-        <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-          <span aria-hidden className="h-2.5 w-0.5 rounded-full bg-ink-900" />
-          Lo que ya debería llevar en la semana
+      {tick && <WeekTickLegend />}
+    </p>
+  );
+}
+
+/** La marca negra de la barra de «Esta semana», en la leyenda. */
+function WeekTickLegend() {
+  return (
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+      <span aria-hidden className="h-2.5 w-0.5 rounded-full bg-ink-900" />
+      Lo que ya debería llevar en la semana
+    </span>
+  );
+}
+
+// ── Horas por día (periodos de más de un día) ───────────────────────────────────
+
+/** El periodo día por día: cada día de cada asesora contra su parte de la meta
+ *  y su horario. Solo con más de un día; en «Hoy» y «Ayer» la franja es por hora. */
+export interface ProductivityPeriod {
+  days: WeekDay[];
+  today: string;
+  byUser: Record<string, PeriodUser>;
+}
+
+/** Los días de una asesora en el periodo y lo que le tocaba hasta ahora
+ *  (sin los días antes de su alta). */
+export interface PeriodUser {
+  dias: WeekDayStatus[];
+  esperado: number;
+}
+
+/** Celdas de la franja por día o por semana, en los tonos de estado (el azul
+ *  no es un estado): verde si cumplió su parte de la meta, ámbar si quedó
+ *  corta, rosa un día de trabajo sin nada, celeste hoy mientras dura y gris
+ *  libre o por venir — los mismos que las chapas del panel. */
+const DAY_CELL: Record<DayState, string> = {
+  cumplido: "bg-ok-bg text-ok-fg",
+  corto: "bg-warn-bg text-warn-fg",
+  sin_actividad: "bg-crit-bg text-crit-fg",
+  en_curso: "bg-info-bg text-info-fg",
+  futuro: "bg-line",
+  libre: "bg-line text-ink-600",
+};
+
+const DAY_STATE_LABEL: Record<DayState, string> = {
+  cumplido: "cumplió su meta",
+  corto: "corto",
+  sin_actividad: "sin actividad",
+  en_curso: "hoy, en curso",
+  futuro: "por venir",
+  libre: "libre",
+};
+
+/** Lo mismo dicho de una semana. */
+const WEEK_STATE_LABEL: Record<DayState, string> = {
+  cumplido: "cumplió su meta",
+  corto: "corta",
+  sin_actividad: "sin actividad",
+  en_curso: "en curso",
+  futuro: "por venir",
+  libre: "libre",
+};
+
+/** «12», «lun 12», «12 oct.»: una fecha local «YYYY-MM-DD» en corto. */
+function dateShort(iso: string, opts: { weekday?: boolean; month?: boolean } = {}): string {
+  const d = new Date(`${iso}T12:00:00Z`);
+  const parts: string[] = [];
+  if (opts.weekday) parts.push(dowShort(d.getUTCDay() === 0 ? 7 : d.getUTCDay()));
+  parts.push(String(d.getUTCDate()));
+  // Intl escribe el mes suelto con mayúscula («Oct.»); en una fecha va en minúscula.
+  if (opts.month) parts.push(d.toLocaleDateString("es-PE", { month: "short", timeZone: "UTC" }).toLowerCase());
+  return parts.join(" ");
+}
+
+/** «6 – 12 oct.», «29 sept. – 5 oct.». */
+function periodRangeLabel(from: string, to: string): string {
+  if (from === to) return dateShort(to, { month: true });
+  return `${dateShort(from, { month: from.slice(0, 7) !== to.slice(0, 7) })} – ${dateShort(to, { month: true })}`;
+}
+
+interface PeriodCell {
+  key: string;
+  estado: DayState;
+  horas: number;
+  title: string;
+}
+
+/** Hasta PERIOD_DAYS_MAX días, una celda por día; más, una por semana. */
+function periodCells(dias: WeekDayStatus[]): { cells: PeriodCell[]; byWeek: boolean } {
+  if (dias.length > PERIOD_DAYS_MAX) {
+    return {
+      byWeek: true,
+      cells: groupWeeks(dias).map((w) => ({
+        key: w.from,
+        estado: w.estado,
+        horas: w.horas,
+        title: `Semana ${periodRangeLabel(w.from, w.to)}: ${nf1.format(w.horas)} h${w.meta > 0 ? ` de ${nf1.format(w.meta)} h` : ""} · ${WEEK_STATE_LABEL[w.estado]}`,
+      })),
+    };
+  }
+  return {
+    byWeek: false,
+    cells: dias.map((d) => ({
+      key: d.date,
+      estado: d.estado,
+      horas: d.horas,
+      title: [
+        `${dateShort(d.date, { weekday: true, month: true })}: ${nf1.format(d.horas)} h${d.programado ? ` de ${nf1.format(d.meta)} h` : ""}`,
+        d.first ? (d.first === d.last ? d.first : `${d.first} a ${d.last}`) : null,
+        d.tardeMin != null ? `tarde ${fmtDelay(d.tardeMin)}` : null,
+        d.antesMin != null ? `salió ${fmtDelay(d.antesMin)} antes` : null,
+        d.antesDeAlta ? "antes de su alta" : DAY_STATE_LABEL[d.estado],
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    })),
+  };
+}
+
+/** Lo que dice la franja por día para quien no la ve. */
+function periodSummary(cells: PeriodCell[], byWeek: boolean, from: string, to: string): string {
+  const n = (e: DayState) => cells.filter((c) => c.estado === e).length;
+  const total = cells.reduce((sum, c) => sum + c.horas, 0);
+  const unit = (k: number) => (byWeek ? (k === 1 ? "semana" : "semanas") : k === 1 ? "día" : "días");
+  const ok = n("cumplido");
+  return `Horas por ${byWeek ? "semana" : "día"}, ${periodRangeLabel(from, to)}: ${nf1.format(total)} h en total. Cumplió su meta ${ok} ${unit(ok)}, ${n("corto")} ${byWeek ? "cortas" : "cortos"}, ${n("sin_actividad")} sin actividad.`;
+}
+
+interface EdgeTrim {
+  lead: number;
+  trail: number;
+}
+const NO_TRIM: EdgeTrim = { lead: 0, trail: 0 };
+
+/** Una semana de borde que no pide nada ni tiene horas (un domingo suelto). */
+const emptyWeek = (w: PeriodWeek | undefined) => !!w && w.meta === 0 && w.horas === 0;
+
+/** En la vista por semana, la primera o la última semana del periodo que no
+ *  pide nada a nadie no se dibuja: es un día suelto del borde, no una semana.
+ *  Se decide para todas las filas a la vez, para que las columnas sigan
+ *  alineadas. */
+function weekTrim(period: ProductivityPeriod | null): EdgeTrim {
+  if (!period || period.days.length <= PERIOD_DAYS_MAX) return NO_TRIM;
+  const all = Object.values(period.byUser).map((u) => groupWeeks(u.dias));
+  if (!all.length) return NO_TRIM;
+  const lead = all.every((ws) => ws.length > 1 && emptyWeek(ws[0])) ? 1 : 0;
+  const trail = all.every((ws) => ws.length > 1 + lead && emptyWeek(ws[ws.length - 1])) ? 1 : 0;
+  return { lead, trail };
+}
+
+/** La franja de un periodo de varios días: una celda por día (o por semana)
+ *  con las horas trabajadas, en el tono de cómo le fue contra su meta. */
+function PeriodStrip({ dias, trim = NO_TRIM }: { dias: WeekDayStatus[]; trim?: EdgeTrim }) {
+  if (!dias.length) return null;
+  const all = periodCells(dias);
+  const byWeek = all.byWeek;
+  const cells = byWeek ? all.cells.slice(trim.lead, all.cells.length - trim.trail) : all.cells;
+  // Con más de siete celdas solo caben horas enteras; el detalle va en el título.
+  const compact = cells.length > 7;
+  const label = (c: PeriodCell) => {
+    if (c.horas > 0) return compact ? (c.horas < 1 ? "<1" : String(Math.round(c.horas))) : nf1.format(c.horas);
+    // Hoy sin nada todavía también dice «0»: vacía, la celda casi no se ve.
+    return c.estado === "sin_actividad" || c.estado === "en_curso" ? "0" : "";
+  };
+  return (
+    <span
+      role="img"
+      aria-label={periodSummary(cells, byWeek, dias[0]!.date, dias[dias.length - 1]!.date)}
+      className="grid w-full gap-0.5"
+      style={{ gridTemplateColumns: `repeat(${cells.length}, minmax(0, 1fr))` }}
+    >
+      {cells.map((c) => (
+        <span
+          key={c.key}
+          title={c.title}
+          className={cn(
+            "flex h-5 w-full min-w-0 items-center justify-center rounded-[3px] text-[10px] font-semibold leading-none tabular-nums",
+            DAY_CELL[c.estado],
+          )}
+        >
+          {label(c)}
         </span>
-      )}
+      ))}
+    </span>
+  );
+}
+
+/** La leyenda de la franja por día, con sus colores de verdad. */
+function PeriodLegend({
+  className,
+  tick = false,
+  withToday = false,
+  byWeek = false,
+  title,
+}: {
+  className?: string;
+  tick?: boolean;
+  withToday?: boolean;
+  byWeek?: boolean;
+  /** Qué es la franja, para la lista del teléfono, que no tiene encabezado. */
+  title?: string;
+}) {
+  const item = (swatch: string, label: string) => (
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+      <span aria-hidden className={cn("size-3 rounded-[3px]", swatch)} />
+      {label}
+    </span>
+  );
+  return (
+    <p className={cn("flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-600", className)}>
+      {title && <span className="basis-full font-medium text-ink-700 xl:hidden">{title}</span>}
+      {item(DAY_CELL.cumplido, "Cumplió su meta")}
+      {item(DAY_CELL.corto, byWeek ? "Corta" : "Corto")}
+      {item(DAY_CELL.sin_actividad, "Sin actividad")}
+      {withToday && item(DAY_CELL.en_curso, byWeek ? "En curso" : "Hoy, en curso")}
+      {item(DAY_CELL.libre, "Libre o por venir")}
+      {tick && <WeekTickLegend />}
     </p>
   );
 }
@@ -512,6 +736,7 @@ export function ProductivityTable({
   solo = false,
   periodLabel,
   week = null,
+  period = null,
 }: {
   rows: AdvisorBoardRow[];
   currency: string;
@@ -527,6 +752,8 @@ export function ProductivityTable({
   /** «Lunes 12 de octubre», «Octubre 2026»: el periodo, para el panel. */
   periodLabel: string;
   week?: ProductivityWeek | null;
+  /** Con más de un día: la franja va por día (o por semana) en vez de por hora. */
+  period?: ProductivityPeriod | null;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
   const [cache, setCache] = useState<Record<string, LoadState>>({});
@@ -582,6 +809,9 @@ export function ProductivityTable({
     ...(week?.extra ?? []).filter((e) => !idleNow.some((i) => i.userId === e.userId)).map((e) => ({ ...e, online: onlineIds.has(e.userId) })),
   ];
   const openRow = openId ? rows.find((r) => r.userId === openId) : undefined;
+  const trim = weekTrim(period);
+  const periodByWeek = !!period && period.days.length > PERIOD_DAYS_MAX;
+  const periodRange = period ? periodRangeLabel(period.days[0]!.date, period.days[period.days.length - 1]!.date) : "";
 
   if (!rows.length && !quiet.length) {
     return (
@@ -611,7 +841,16 @@ export function ProductivityTable({
             </>
           )}
         </p>
-        <HeatLegend tick={!!week} />
+        {period ? (
+          <PeriodLegend
+            tick={!!week}
+            withToday={period.days.some((d) => d.date === period.today)}
+            byWeek={periodByWeek}
+            title={`Horas por ${periodByWeek ? "semana" : "día"}, ${periodRange}:`}
+          />
+        ) : (
+          <HeatLegend tick={!!week} />
+        )}
       </div>
 
       <div className="xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain">
@@ -645,7 +884,11 @@ export function ProductivityTable({
                     </span>
                   </span>
                   <span className="mt-2.5 block">
-                    <HeatStrip heat={r.heat} max={heatMax} mode={heatMode} startHour={heatStart} />
+                    {period ? (
+                      <PeriodStrip dias={period.byUser[r.userId]?.dias ?? []} trim={trim} />
+                    ) : (
+                      <HeatStrip heat={r.heat} max={heatMax} mode={heatMode} startHour={heatStart} />
+                    )}
                   </span>
                   {/* Cada dato entero en su tramo: un salto de línea nunca parte «12 min». */}
                   <span className="mt-2.5 flex flex-wrap gap-x-1.5 text-[13px] leading-5 text-ink-600">
@@ -726,7 +969,34 @@ export function ProductivityTable({
             <tr>
               <th scope="col" className={cn(TH, "pl-5 pr-3")}>Asesora</th>
               <th scope="col" className={cn(TH, "pr-4")}>
-                Actividad por hora <span className="font-normal tabular-nums text-ink-500">07–21 h</span>
+                {period ? (
+                  <>
+                    <span
+                      title={`Horas trabajadas cada ${periodByWeek ? "semana" : "día"} (gestiones de leads y de envíos) contra su parte de la meta · toca una asesora para verlas día por día`}
+                    >
+                      Horas por {periodByWeek ? "semana" : "día"}{" "}
+                      <span className="font-normal tabular-nums text-ink-500">{periodRange}</span>
+                    </span>
+                    {/* El día de cada celda, en la misma rejilla que la franja. */}
+                    {!periodByWeek && (
+                      <span
+                        aria-hidden
+                        className="mt-1 grid gap-0.5 text-[10px] font-normal leading-none tabular-nums text-ink-500"
+                        style={{ gridTemplateColumns: `repeat(${period.days.length}, minmax(0, 1fr))` }}
+                      >
+                        {period.days.map((d) => (
+                          <span key={d.date} className={cn("text-center", d.date === period.today && "font-semibold text-ink-900")}>
+                            {Number(d.date.slice(8, 10))}
+                          </span>
+                        ))}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    Actividad por hora <span className="font-normal tabular-nums text-ink-500">07–21 h</span>
+                  </>
+                )}
               </th>
               <th scope="col" className={cn(TH, "pr-3 text-right")}>
                 Horas
@@ -812,7 +1082,11 @@ export function ProductivityTable({
                     )}
                   </td>
                   <td className="py-3 pr-4">
-                    <HeatStrip heat={r.heat} max={heatMax} mode={heatMode} startHour={heatStart} />
+                    {period ? (
+                      <PeriodStrip dias={period.byUser[r.userId]?.dias ?? []} trim={trim} />
+                    ) : (
+                      <HeatStrip heat={r.heat} max={heatMax} mode={heatMode} startHour={heatStart} />
+                    )}
                   </td>
                   <td className="py-3 pr-3 text-right">
                     <span className="block tabular-nums text-ink-900">
@@ -904,6 +1178,7 @@ export function ProductivityTable({
           periodLabel={periodLabel}
           solo={solo}
           week={week}
+          period={period}
         />
       )}
     </>
@@ -952,6 +1227,7 @@ function AdvisorPanel({
   periodLabel,
   solo,
   week,
+  period,
 }: {
   row: AdvisorBoardRow;
   state: LoadState;
@@ -967,8 +1243,10 @@ function AdvisorPanel({
   periodLabel: string;
   solo: boolean;
   week: ProductivityWeek | null;
+  period: ProductivityPeriod | null;
 }) {
   const name = advisorName(r.email);
+  const periodUser = period?.byUser[r.userId];
   const weekStatus = week?.byUser[r.userId];
   const showDelta = hasPrev && !r.delta.isNew;
   const ritmo = ritmoPorHora(r.leadsTrabajados, r.horas);
@@ -1054,6 +1332,15 @@ function AdvisorPanel({
           </p>
         </section>
 
+        {period && periodUser && periodUser.dias.length > 0 && (
+          <PeriodZone
+            dias={periodUser.dias}
+            esperado={periodUser.esperado}
+            today={period.today}
+            schedule={weekStatus?.schedule ?? null}
+          />
+        )}
+
         {week && weekStatus && (
           <WeekZone s={weekStatus} userId={r.userId} days={week.days} today={week.today} canEdit={week.canEdit} />
         )}
@@ -1061,7 +1348,11 @@ function AdvisorPanel({
         <section className={PANEL_ZONE}>
           <ZoneHead
             title="Actividad por hora"
-            help={heatMode === "avg" ? "Leads distintos gestionados por hora, en promedio por día" : "Leads distintos gestionados en cada hora, de todas las fuentes"}
+            help={
+              heatMode === "avg"
+                ? `A qué horas trabaja: leads distintos gestionados en cada hora, en promedio por día de los ${nf.format(period?.days.length ?? r.dias)} días`
+                : "Leads distintos gestionados en cada hora, de todas las fuentes"
+            }
           />
           <HeatStrip heat={r.heat} max={heatMax} mode={heatMode} startHour={heatStart} size="panel" />
           <HeatLegend className="mt-3" />
@@ -1158,7 +1449,6 @@ function WeekZone({
     daysLabel(sched.days),
     sched.start ? `${sched.start} a ${sched.end}` : "sin horario",
   ].join(SEP);
-  const dayNum = (iso: string) => Number(iso.slice(8, 10));
   return (
     <section className={PANEL_ZONE} aria-label="Esta semana">
       <ZoneHead
@@ -1188,60 +1478,186 @@ function WeekZone({
       <div className="mt-2.5">
         <WeekBar s={s} size="panel" />
       </div>
-      <ul className="mt-4 divide-y divide-line border-y border-line">
-        {s.dias.map((d) => {
-          const badge = DAY_BADGE[d.estado];
-          const quiet = d.estado === "futuro" || (d.estado === "libre" && !d.first);
-          const share = d.meta > 0 ? Math.min(1, d.horas / d.meta) : 0;
-          // Con «Tarde» o «Salió antes», «Cumplido» sobra donde se ve la barra del
-          // día; en el teléfono no hay barra, así que ahí sí va.
-          const cumplidoConAviso = d.estado === "cumplido" && (d.tardeMin != null || d.antesMin != null);
-          return (
-            <li
-              key={d.date}
-              className="grid grid-cols-[3.25rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 py-2.5 text-[13px] sm:grid-cols-[3.25rem_4.5rem_3.5rem_minmax(0,1fr)_auto]"
-            >
-              <span className={cn("font-medium tabular-nums", quiet ? "text-ink-500" : d.date === today ? "text-ink-900" : "text-ink-700")}>
-                {dowShort(d.isoDow)} {dayNum(d.date)}
-              </span>
-              <span className="hidden sm:block">
-                {d.programado && d.estado !== "futuro" && (
-                  <span className="relative block h-1.5 rounded-full bg-line" title={`${nf1.format(d.horas)} de ${nf1.format(d.meta)} h`}>
-                    <span
-                      className={cn(
-                        "absolute inset-y-0 left-0 rounded-full",
-                        d.estado === "en_curso" ? "bg-ink-500" : d.estado === "corto" || d.estado === "sin_actividad" ? "bg-warn-fg" : "bg-ok-fg",
-                      )}
-                      style={{ width: `${share * 100}%` }}
-                    />
-                  </span>
-                )}
-              </span>
-              <span className={cn("text-right tabular-nums sm:text-left", quiet ? "text-ink-500" : "font-medium text-ink-900")}>
-                {quiet ? "—" : `${nf1.format(d.horas)}\u00a0h`}
-              </span>
-              <span className={cn("col-span-3 tabular-nums sm:col-span-1", quiet ? "text-ink-500" : "text-ink-600")}>
-                {d.first ? (d.first === d.last ? d.first : `${d.first} – ${d.last}`) : d.estado === "libre" ? "Libre" : ""}
-              </span>
-              <span className="col-span-3 flex flex-wrap gap-1.5 sm:col-span-1 sm:justify-end">
-                {d.tardeMin != null && <Badge tone="warn">Tarde {fmtDelay(d.tardeMin)}</Badge>}
-                {d.antesMin != null && <Badge tone="warn">Salió {fmtDelay(d.antesMin)} antes</Badge>}
-                {badge && (
-                  <Badge tone={badge.tone} className={cumplidoConAviso ? "sm:hidden" : undefined}>
-                    {badge.label}
-                  </Badge>
-                )}
-              </span>
-            </li>
-          );
-        })}
-      </ul>
+      <DayRows dias={s.dias} today={today} className="mt-4" />
       <p className="mt-2 text-xs text-ink-500">
         {s.porDefecto
           ? `Sin horario cargado: se usa la meta por defecto (${nf1.format(s.meta)}\u00a0h, ${daysLabel(sched.days)}) y no se juzgan llegadas ni salidas.`
           : grace
             ? `Primera y última actividad de cada día. «Tarde» si la primera pasa de las ${grace.tarde}; «Salió antes» si la última es antes de las ${grace.antes}, en días ya cerrados.`
             : "Primera y última actividad de cada día. Sin horario fijo no se juzgan llegadas ni salidas."}
+      </p>
+    </section>
+  );
+}
+
+/** Una fila por día: el día, una barra corta contra su parte de la meta (desde
+ *  640 px), las horas, la primera y la última actividad, y sus chapas. */
+function DayRows({ dias, today, className }: { dias: WeekDayStatus[]; today: string; className?: string }) {
+  const dayNum = (iso: string) => Number(iso.slice(8, 10));
+  return (
+    <ul className={cn("divide-y divide-line border-y border-line", className)}>
+      {dias.map((d) => {
+        const badge = DAY_BADGE[d.estado];
+        const quiet = d.estado === "futuro" || (d.estado === "libre" && !d.first);
+        const share = d.meta > 0 ? Math.min(1, d.horas / d.meta) : 0;
+        // Con «Tarde» o «Salió antes», «Cumplido» sobra donde se ve la barra del
+        // día; en el teléfono no hay barra, así que ahí sí va.
+        const cumplidoConAviso = d.estado === "cumplido" && (d.tardeMin != null || d.antesMin != null);
+        return (
+          <li
+            key={d.date}
+            className="grid grid-cols-[3.25rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 py-2.5 text-[13px] sm:grid-cols-[3.25rem_4.5rem_3.5rem_minmax(0,1fr)_auto]"
+          >
+            <span className={cn("font-medium tabular-nums", quiet ? "text-ink-500" : d.date === today ? "text-ink-900" : "text-ink-700")}>
+              {dowShort(d.isoDow)} {dayNum(d.date)}
+            </span>
+            <span className="hidden sm:block">
+              {d.programado && d.estado !== "futuro" && (
+                <span className="relative block h-1.5 rounded-full bg-line" title={`${nf1.format(d.horas)} de ${nf1.format(d.meta)} h`}>
+                  <span
+                    className={cn(
+                      "absolute inset-y-0 left-0 rounded-full",
+                      d.estado === "en_curso" ? "bg-ink-500" : d.estado === "corto" || d.estado === "sin_actividad" ? "bg-warn-fg" : "bg-ok-fg",
+                    )}
+                    style={{ width: `${share * 100}%` }}
+                  />
+                </span>
+              )}
+            </span>
+            <span className={cn("text-right tabular-nums sm:text-left", quiet ? "text-ink-500" : "font-medium text-ink-900")}>
+              {quiet ? "—" : `${nf1.format(d.horas)}\u00a0h`}
+            </span>
+            <span className={cn("col-span-3 tabular-nums sm:col-span-1", quiet ? "text-ink-500" : "text-ink-600")}>
+              {d.first
+                ? d.first === d.last
+                  ? d.first
+                  : `${d.first} – ${d.last}`
+                : d.antesDeAlta
+                  ? "Antes de su alta"
+                  : d.estado === "libre"
+                    ? "Libre"
+                    : ""}
+            </span>
+            <span className="col-span-3 flex flex-wrap gap-1.5 sm:col-span-1 sm:justify-end">
+              {d.tardeMin != null && <Badge tone="warn">Tarde {fmtDelay(d.tardeMin)}</Badge>}
+              {d.antesMin != null && <Badge tone="warn">Salió {fmtDelay(d.antesMin)} antes</Badge>}
+              {badge && (
+                <Badge tone={badge.tone} className={cumplidoConAviso ? "sm:hidden" : undefined}>
+                  {badge.label}
+                </Badge>
+              )}
+            </span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+const WEEK_BADGE: Partial<Record<DayState, { tone: "ok" | "warn" | "crit" | "info"; label: string }>> = {
+  cumplido: { tone: "ok", label: "Cumplida" },
+  corto: { tone: "warn", label: "Corta" },
+  sin_actividad: { tone: "crit", label: "Sin actividad" },
+  en_curso: { tone: "info", label: "En curso" },
+};
+
+/** Una fila por semana, para los periodos largos: el tramo, la barra contra lo
+ *  que tocaba, las horas y cómo le fue. */
+function WeekRows({ weeks, className }: { weeks: PeriodWeek[]; className?: string }) {
+  return (
+    <ul className={cn("divide-y divide-line border-y border-line", className)}>
+      {weeks.map((w) => {
+        const badge = WEEK_BADGE[w.estado];
+        const share = w.meta > 0 ? Math.min(1, w.horas / w.meta) : 0;
+        return (
+          <li
+            key={w.from}
+            className="grid grid-cols-[7.5rem_minmax(0,1fr)_auto] items-center gap-x-3 py-2.5 text-[13px] sm:grid-cols-[7.5rem_4.5rem_6.5rem_minmax(0,1fr)_auto]"
+          >
+            <span className="font-medium tabular-nums text-ink-700">{periodRangeLabel(w.from, w.to)}</span>
+            <span className="hidden sm:block">
+              {w.meta > 0 && w.estado !== "futuro" && (
+                <span className="relative block h-1.5 rounded-full bg-line">
+                  <span
+                    className={cn(
+                      "absolute inset-y-0 left-0 rounded-full",
+                      w.estado === "en_curso" ? "bg-ink-500" : w.estado === "cumplido" ? "bg-ok-fg" : "bg-warn-fg",
+                    )}
+                    style={{ width: `${share * 100}%` }}
+                  />
+                </span>
+              )}
+            </span>
+            <span className="text-right tabular-nums sm:text-left">
+              <span className="font-medium text-ink-900">{nf1.format(w.horas)}&nbsp;h</span>
+              {w.meta > 0 && <span className="text-ink-500"> de {nf1.format(w.meta)}&nbsp;h</span>}
+            </span>
+            <span className="hidden sm:block" />
+            <span className="col-span-3 flex sm:col-span-1 sm:justify-end">{badge && <Badge tone={badge.tone}>{badge.label}</Badge>}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** El periodo elegido, día por día (o por semana si pasa de un mes): cuántas
+ *  horas trabajó cada día, cuándo empezó y terminó, y cómo le fue contra su
+ *  parte de la meta. */
+function PeriodZone({
+  dias,
+  esperado,
+  today,
+  schedule,
+}: {
+  dias: WeekDayStatus[];
+  /** Lo que le tocaba hasta ahora, como en «Esta semana». */
+  esperado: number;
+  today: string;
+  schedule: AdvisorSchedule | null;
+}) {
+  const from = dias[0]!.date;
+  const to = dias[dias.length - 1]!.date;
+  const byWeek = dias.length > 31;
+  const total = dias.reduce((sum, d) => sum + d.horas, 0);
+  const cerrado = to < today;
+  let weeks = byWeek ? groupWeeks(dias) : [];
+  // Un día suelto del borde que no pide nada no es una semana.
+  if (weeks.length > 1 && emptyWeek(weeks[0])) weeks = weeks.slice(1);
+  if (weeks.length > 1 && emptyWeek(weeks[weeks.length - 1])) weeks = weeks.slice(0, -1);
+  const daily = dias.find((d) => d.programado)?.meta ?? 0;
+  const grace = schedule ? graceTimes(schedule) : null;
+  const help = [
+    periodRangeLabel(from, to),
+    daily > 0 ? `meta ${nf1.format(daily)}\u00a0h por día` : null,
+    schedule?.start ? `${schedule.start} a ${schedule.end}` : null,
+  ]
+    .filter(Boolean)
+    .join(SEP);
+  return (
+    <section className={PANEL_ZONE} aria-label={byWeek ? "Por semana" : "Por día"}>
+      <ZoneHead
+        title={byWeek ? "Por semana" : "Por día"}
+        help={help}
+        aside={
+          <span className="text-[13px] tabular-nums text-ink-600">
+            <b className="font-semibold text-ink-900">{nf1.format(total)}&nbsp;h</b>
+            {esperado > 0 &&
+              (cerrado ? (
+                <> de {nf1.format(esperado)}&nbsp;h que tocaban</>
+              ) : (
+                <>
+                  {SEP}tocaban ~{nf1.format(esperado)}&nbsp;h {schedule?.start ? "hasta ahora" : "hasta ayer"}
+                </>
+              ))}
+          </span>
+        }
+      />
+      {byWeek ? <WeekRows weeks={weeks} /> : <DayRows dias={dias} today={today} />}
+      <p className="mt-2 text-xs text-ink-500">
+        Horas trabajadas: gestiones de leads y de envíos, de la primera a la última acción del día (una pausa de más de 45
+        min corta el bloque); la columna «Horas» cuenta solo leads.
+        {grace && !byWeek && ` «Tarde» si la primera pasa de las ${grace.tarde}; «Salió antes» si la última es antes de las ${grace.antes}.`}
       </p>
     </section>
   );

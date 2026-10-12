@@ -51,3 +51,25 @@ export async function getOrgVendedoraIds(admin: SupabaseClient, orgIds: string[]
     return [];
   }
 }
+
+/**
+ * Desde cuándo está cada persona en las organizaciones dadas (la primera
+ * membresía): en un periodo largo, los días antes de su alta no se le piden.
+ * Con cualquier error, ninguna fecha: se juzga el periodo entero.
+ */
+export async function getMemberSince(admin: SupabaseClient, orgIds: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!orgIds.length) return out;
+  try {
+    const { data, error } = await admin.from("memberships").select("user_id, created_at").in("org_id", orgIds);
+    if (error || !data) return out;
+    for (const m of data as { user_id: string; created_at: string | null }[]) {
+      if (!m.created_at) continue;
+      const prev = out.get(m.user_id);
+      if (!prev || m.created_at < prev) out.set(m.user_id, m.created_at);
+    }
+  } catch {
+    /* sin fechas de alta: el periodo entero */
+  }
+  return out;
+}

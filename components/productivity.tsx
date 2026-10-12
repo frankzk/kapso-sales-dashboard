@@ -1,9 +1,9 @@
 import type { ReactNode } from "react";
 import { cn } from "@/components/ui";
 import { Badge } from "@/components/ops-ui";
-import { ProductivityTable, type ProductivityWeek } from "@/components/productivity-table";
+import { ProductivityTable, type ProductivityPeriod, type ProductivityWeek } from "@/components/productivity-table";
 
-export type { ProductivityWeek };
+export type { ProductivityPeriod, ProductivityWeek };
 import { ProductivityFilters, type PeriodLink } from "@/components/productivity-filters";
 import type { DateRange } from "@/lib/access";
 import type { MonthPace, MonthView } from "@/lib/productivity-month";
@@ -113,6 +113,7 @@ export function ProductivityBoard({
   month = null,
   months = [],
   week = null,
+  period = null,
 }: {
   rows: AdvisorBoardRow[];
   prevTotals: ProductivityTotals;
@@ -139,6 +140,8 @@ export function ProductivityBoard({
   months?: { month: string; label: string }[];
   /** La semana en curso contra la meta de cada persona (siempre lunes a domingo). */
   week?: ProductivityWeek | null;
+  /** Con más de un día: cada día de cada asesora contra su meta (la franja por día). */
+  period?: ProductivityPeriod | null;
 }) {
   const totals = rows.reduce(
     (a, r) => ({
@@ -332,6 +335,7 @@ export function ProductivityBoard({
           solo={solo}
           periodLabel={periodLabel}
           week={week}
+          period={period}
         />
       </section>
     </div>

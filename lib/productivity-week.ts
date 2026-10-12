@@ -133,6 +133,19 @@ export function weekWindow(
   return { days, today, nowMinutes: localClock(nowIso, tz).minutes };
 }
 
+/** Los días de un rango local «YYYY-MM-DD» (ambos incluidos), con su día ISO. */
+export function daysBetween(from: string, to: string): WeekDay[] {
+  const out: WeekDay[] = [];
+  const start = Date.parse(`${from}T12:00:00Z`); // mediodía: la suma de días no salta
+  const end = Date.parse(`${to}T12:00:00Z`);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return out;
+  for (let ms = start; ms <= end; ms += 86_400_000) {
+    const d = new Date(ms);
+    out.push({ date: d.toISOString().slice(0, 10), isoDow: d.getUTCDay() === 0 ? 7 : d.getUTCDay() });
+  }
+  return out;
+}
+
 /** Las horas activas de un día, con la primera y la última actividad («HH:MM»). */
 export interface DayActivity {
   date: string;
@@ -198,6 +211,8 @@ export interface WeekDayStatus extends DayActivity {
   /** Minutos antes de la salida de la última actividad, pasada la gracia (solo días ya cerrados). */
   antesMin: number | null;
   estado: DayState;
+  /** Un día anterior a su alta en el equipo: no se le pedía nada. */
+  antesDeAlta?: boolean;
 }
 
 /**
@@ -295,6 +310,79 @@ export function evaluateWeek({
       ? "al_dia"
       : "atrasada";
   return { horas, meta, esperado, estado, cerrada, schedule, porDefecto, dias };
+}
+
+/**
+ * Hasta cuántos días la franja de un periodo va día por día; más largo, por
+ * semana (con 30 cuadritos no se lee ninguno).
+ */
+export const PERIOD_DAYS_MAX = 14;
+
+/** Una semana (lunes a domingo) del periodo, recortada a sus bordes. */
+export interface PeriodWeek {
+  from: string;
+  to: string;
+  horas: number;
+  /** Lo que tocaba en los días de trabajo de ese tramo. */
+  meta: number;
+  estado: DayState;
+}
+
+/**
+ * Junta los días de un periodo en semanas de lunes a domingo. Una semana con
+ * días por venir va `en_curso` (o `futuro` si todavía no empezó); cerrada, se
+ * juzga entera contra su meta con 1 h de margen, como la semana en curso.
+ */
+export function groupWeeks(dias: WeekDayStatus[]): PeriodWeek[] {
+  const out: PeriodWeek[] = [];
+  let cur: WeekDayStatus[] = [];
+  const flush = () => {
+    if (!cur.length) return;
+    const horas = round1(cur.reduce((n, d) => n + d.horas, 0));
+    const meta = round1(cur.reduce((n, d) => n + (d.programado ? d.meta : 0), 0));
+    const work = cur.filter((d) => d.programado);
+    let estado: DayState;
+    if (work.length && work.every((d) => d.estado === "futuro")) estado = "futuro";
+    else if (work.some((d) => d.estado === "futuro" || d.estado === "en_curso")) estado = "en_curso";
+    else if (meta <= 0) estado = "libre";
+    else if (horas <= 0) estado = "sin_actividad";
+    else estado = horas >= meta - BEHIND_TOLERANCE_H ? "cumplido" : "corto";
+    out.push({ from: cur[0]!.date, to: cur[cur.length - 1]!.date, horas, meta, estado });
+    cur = [];
+  };
+  for (const d of dias) {
+    if (d.isoDow === 1) flush();
+    cur.push(d);
+  }
+  flush();
+  return out;
+}
+
+/** La fecha local «YYYY-MM-DD» de un instante. */
+export function localDateOf(iso: string, tz: string): string {
+  return tzParts(iso, tz).date;
+}
+
+/**
+ * Un periodo de varios días de una persona: cada día como en la semana, y lo
+ * que le tocaba hasta ahora. Los días antes de su alta (`desde`) no se le
+ * piden: van libres y lo dicen, y no suman a lo que tocaba.
+ */
+export function evaluatePeriod(
+  opts: Parameters<typeof evaluateWeek>[0] & { desde?: string | null },
+): { dias: WeekDayStatus[]; horas: number; esperado: number } {
+  const { desde, ...week } = opts;
+  const { dias } = evaluateWeek(week);
+  const counted = desde ? week.days.filter((d) => d.date >= desde) : week.days;
+  const esperado = counted.length ? evaluateWeek({ ...week, days: counted }).esperado : 0;
+  const out = desde
+    ? dias.map((d): WeekDayStatus =>
+        d.date < desde && !d.first
+          ? { ...d, programado: false, meta: 0, estado: "libre", tardeMin: null, antesMin: null, antesDeAlta: true }
+          : d,
+      )
+    : dias;
+  return { dias: out, horas: round1(out.reduce((n, d) => n + d.horas, 0)), esperado };
 }
 
 /** Una fila de `advisor_schedules` (las horas vienen como «09:00:00»). */

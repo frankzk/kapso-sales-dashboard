@@ -6,10 +6,13 @@ import { describe, expect, it } from "vitest";
 import {
   activeHoursFromTimes,
   computeWeekActivity,
+  daysBetween,
   daysLabel,
   DEFAULT_SCHEDULE,
+  evaluatePeriod,
   evaluateWeek,
   graceTimes,
+  groupWeeks,
   minutesOf,
   parseScheduleInput,
   scheduleFromRow,
@@ -199,6 +202,64 @@ describe("horarios guardados y del formulario", () => {
     expect(minutesOf("09:30:00")).toBe(570);
     expect(minutesOf("25:00")).toBeNull();
     expect(minutesOf(null)).toBeNull();
+  });
+});
+
+describe("el periodo día por día o por semana", () => {
+  const schedule: AdvisorSchedule = { weeklyHours: 48, days: [1, 2, 3, 4, 5, 6], start: null, end: null };
+
+  it("lista los días del rango con su día ISO, también entre meses", () => {
+    const d = daysBetween("2026-09-29", "2026-10-02");
+    expect(d.map((x) => x.date)).toEqual(["2026-09-29", "2026-09-30", "2026-10-01", "2026-10-02"]);
+    expect(d.map((x) => x.isoDow)).toEqual([2, 3, 4, 5]);
+    expect(daysBetween("2026-10-12", "2026-10-11")).toEqual([]);
+  });
+
+  it("evalúa cada día del periodo como la semana: cumplido, corto, sin actividad, libre", () => {
+    const days = daysBetween("2026-10-05", "2026-10-11");
+    const activity = [act("2026-10-05", 8.2, "09:00", "17:30"), act("2026-10-06", 5, "10:00", "15:00"), act("2026-10-11", 2, "10:00", "12:00")];
+    const { dias } = evaluateWeek({ activity, days, schedule, porDefecto: true, today: "2026-10-12", nowMinutes: 600 });
+    expect(dias.map((d) => d.estado)).toEqual(["cumplido", "corto", "sin_actividad", "sin_actividad", "sin_actividad", "sin_actividad", "libre"]);
+  });
+
+  it("junta los días en semanas de lunes a domingo, recortadas al periodo", () => {
+    // Septiembre 2026 empieza en martes.
+    const days = daysBetween("2026-09-01", "2026-09-30");
+    const activity = days.filter((d) => d.isoDow <= 6).map((d) => act(d.date, d.date < "2026-09-07" ? 8 : 6, "09:00", "17:00"));
+    const { dias } = evaluateWeek({ activity, days, schedule, porDefecto: true, today: "2026-10-12", nowMinutes: 600 });
+    const weeks = groupWeeks(dias);
+    expect(weeks.map((w) => `${w.from}/${w.to}`)).toEqual([
+      "2026-09-01/2026-09-06",
+      "2026-09-07/2026-09-13",
+      "2026-09-14/2026-09-20",
+      "2026-09-21/2026-09-27",
+      "2026-09-28/2026-09-30",
+    ]);
+    // 1–6: martes a sábado, 5 días × 8 h = 40 h, y las hizo.
+    expect(weeks[0]).toMatchObject({ horas: 40, meta: 40, estado: "cumplido" });
+    // 7–13: 6 días × 6 h = 36 de 48.
+    expect(weeks[1]).toMatchObject({ horas: 36, meta: 48, estado: "corto" });
+    expect(weeks[4]).toMatchObject({ meta: 24, estado: "corto" });
+  });
+
+  it("antes de su alta no se le pide nada: días libres que no suman a lo que tocaba", () => {
+    const days = daysBetween("2026-10-05", "2026-10-11");
+    const activity = [act("2026-10-08", 8, "09:00", "17:00"), act("2026-10-09", 7, "09:00", "16:00")];
+    const p = evaluatePeriod({ activity, days, schedule, porDefecto: true, today: "2026-10-12", nowMinutes: 600, desde: "2026-10-08" });
+    expect(p.dias.slice(0, 3).every((d) => d.estado === "libre" && d.antesDeAlta && d.meta === 0)).toBe(true);
+    expect(p.dias[3]).toMatchObject({ estado: "cumplido" });
+    // Del jueves al sábado: 3 días de trabajo × 8 h.
+    expect(p.esperado).toBe(24);
+    expect(p.horas).toBe(15);
+    const sinAlta = evaluatePeriod({ activity, days, schedule, porDefecto: true, today: "2026-10-12", nowMinutes: 600 });
+    expect(sinAlta.esperado).toBe(48);
+    expect(sinAlta.dias[0]!.estado).toBe("sin_actividad");
+  });
+
+  it("una semana con días por venir va en curso, y sin empezar, por venir", () => {
+    const days = daysBetween("2026-10-05", "2026-10-25");
+    const { dias } = evaluateWeek({ activity: [], days, schedule, porDefecto: true, today: "2026-10-14", nowMinutes: 600 });
+    expect(groupWeeks(dias).map((w) => w.estado)).toEqual(["sin_actividad", "en_curso", "futuro"]);
   });
 });
 
