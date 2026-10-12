@@ -9,6 +9,7 @@ import {
   daysLabel,
   DEFAULT_SCHEDULE,
   evaluateWeek,
+  graceTimes,
   minutesOf,
   parseScheduleInput,
   scheduleFromRow,
@@ -184,6 +185,13 @@ describe("horarios guardados y del formulario", () => {
     expect(parseScheduleInput({ weeklyHours: "48", days: [], start: null, end: null })).toHaveProperty("error");
     expect(parseScheduleInput({ weeklyHours: "48", days: [1], start: "09:00", end: "" })).toHaveProperty("error");
     expect(parseScheduleInput({ weeklyHours: "48", days: [1], start: "18:00", end: "09:00" })).toHaveProperty("error");
+  });
+
+  it("dice desde qué hora es tarde y antes de cuál salió antes, con la gracia sumada", () => {
+    expect(graceTimes({ start: "09:00", end: "18:00" })).toEqual({ tarde: "09:10", antes: "17:50" });
+    expect(graceTimes({ start: "10:00:00", end: "19:05:00" })).toEqual({ tarde: "10:10", antes: "18:55" });
+    expect(graceTimes({ start: null, end: null })).toBeNull();
+    expect(graceTimes({ start: "18:00", end: "08:00" })).toBeNull();
   });
 
   it("lee «HH:MM» y rechaza lo que no es una hora", () => {

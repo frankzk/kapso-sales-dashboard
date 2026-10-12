@@ -88,6 +88,7 @@ export function TeamManager({
   riders,
   schedules,
   initialTab = "usuarios",
+  initialScheduleUserId = null,
 }: {
   org: { id: string; name: string };
   orgs: { id: string; name: string }[];
@@ -99,6 +100,8 @@ export function TeamManager({
   /** Meta y horario por persona (Equipo › Horarios, migración 0245). */
   schedules: Record<string, AdvisorSchedule>;
   initialTab?: TeamTab;
+  /** Desde Productividad, «Editar horario» abre el de esa persona. */
+  initialScheduleUserId?: string | null;
 }) {
   const ownerCnt = members.filter((m) => m.role === "owner").length;
   const [tab, setTab] = useState<TeamTab>(initialTab);
@@ -222,6 +225,7 @@ export function TeamManager({
           orgId={org.id}
           members={members.map((m) => ({ user_id: m.user_id, email: m.email, role: m.role }))}
           schedules={schedules}
+          initialEditUserId={initialScheduleUserId}
         />
       )}
 

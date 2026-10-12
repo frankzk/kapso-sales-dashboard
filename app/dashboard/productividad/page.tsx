@@ -15,7 +15,7 @@ import {
   type DayActivity,
   type WeekStatus,
 } from "@/lib/productivity-week";
-import { getAdvisorSchedules } from "@/lib/advisor-schedules";
+import { getAdvisorSchedules, getOrgVendedoraIds } from "@/lib/advisor-schedules";
 import { createAdminSupabase } from "@/lib/db";
 import {
   fullMonthRange,
@@ -93,7 +93,8 @@ async function ProductividadContent({
   // de la persona, no del periodo ni de la tienda que se mira.
   const win = weekWindow(tz);
   const orgIds = [...new Set(stores.map((s) => s.org_id))];
-  const [board, prevMonthTotals, weekActivity, schedules] = await Promise.all([
+  const admin = createAdminSupabase();
+  const [board, prevMonthTotals, weekActivity, schedules, vendedoraIds] = await Promise.all([
     getProductivityBoard(scopeIds, range, source, tz, view ? { prevRange: view.prevRange } : {}),
     // «Agosto cerró en …»: el mes anterior entero. En modo solo, solo lo suyo —
     // al cliente no viaja ninguna cifra del equipo, y sin usuario no hay cifra.
@@ -101,7 +102,9 @@ async function ProductividadContent({
       ? getSalesTotals(scopeIds, fullMonthRange(view.prevMonth), source, tz, solo ? user!.id : null)
       : Promise.resolve(null),
     getWeekActivity(storeIds, tz, win.days).catch(() => ({}) as Record<string, DayActivity[]>),
-    getAdvisorSchedules(createAdminSupabase(), orgIds).catch(() => new Map<string, AdvisorSchedule>()),
+    getAdvisorSchedules(admin, orgIds).catch(() => new Map<string, AdvisorSchedule>()),
+    // En modo solo no hace falta el resto del equipo.
+    solo ? Promise.resolve([] as string[]) : getOrgVendedoraIds(admin, orgIds),
   ]);
   // Modo solo: la fila propia con la escala de calor propia; los totales del
   // periodo anterior son del EQUIPO, así que se ocultan los deltas (hasPrev).
@@ -113,9 +116,10 @@ async function ProductividadContent({
     ? []
     : [...board.rows.filter((r) => r.online).map((r) => r.userId), ...board.onlineIdle.map((i) => i.userId)];
 
-  // La semana de cada persona del tablero, más quien tiene horario y no
-  // aparece en el periodo (una asesora que hoy no entró también se mide). En
-  // modo solo, solo la suya: al navegador no viaja la semana de nadie más.
+  // La semana de cada persona del tablero, más las vendedoras y quien tiene
+  // horario que no aparecen en el periodo (la que hoy no entró también se
+  // mide: es la ausencia que hay que ver). En modo solo, solo la suya: al
+  // navegador no viaja la semana de nadie más.
   const statusFor = (userId: string): WeekStatus =>
     evaluateWeek({
       activity: weekActivity[userId],
@@ -126,7 +130,7 @@ async function ProductividadContent({
       nowMinutes: win.nowMinutes,
     });
   const shownIds = new Set([...rows.map((r) => r.userId), ...onlineIdle.map((i) => i.userId)]);
-  const extraIds = solo ? [] : [...schedules.keys()].filter((id) => !shownIds.has(id));
+  const extraIds = solo ? [] : [...new Set([...vendedoraIds, ...schedules.keys()])].filter((id) => !shownIds.has(id));
   const extraEmails = extraIds.length ? await resolveEmails(extraIds) : new Map<string, string>();
   const weekIds = solo ? (user ? [user.id] : []) : [...shownIds, ...extraIds];
   const week: ProductivityWeek = {

@@ -8,7 +8,7 @@ import { categoryOf, labelOf, LEAD_SEGMENTS, type LeadSegment } from "@/lib/lead
 import { getOnlineAdvisorIds, loadAgentLeads } from "@/app/dashboard/productividad/actions";
 import { RITMO_MIN_HORA, heatStatuses, ritmoPorHora, type HeatCellStatus } from "@/lib/heat";
 import { SEGMENT_LABEL, SOURCE_LABEL } from "@/lib/productivity-labels";
-import { daysLabel, dowShort, type WeekDay, type WeekStatus } from "@/lib/productivity-week";
+import { daysLabel, dowShort, graceTimes, type WeekDay, type WeekStatus } from "@/lib/productivity-week";
 // Type-only import: pulling runtime values from lib/productivity would drag the
 // whole server data layer (supabase clients) into this client bundle.
 import type { AdvisorBoardRow, AgentLeadRow, SourceBucket, TrendCell } from "@/lib/productivity";
@@ -37,6 +37,15 @@ function fmtMin(min: number | null): string {
   if (min < 60) return `${Math.round(min)}\u00a0min`;
   if (min < 1440) return `${nf1.format(min / 60)}\u00a0h`;
   return `${nf1.format(min / 1440)}\u00a0d`;
+}
+
+/** Retrasos de la jornada en horas y minutos enteros: «24 min», «1 h 6 min», «2 h». */
+function fmtDelay(min: number): string {
+  const m = Math.round(min);
+  if (m < 60) return `${m}\u00a0min`;
+  const h = Math.floor(m / 60);
+  const rest = m % 60;
+  return rest ? `${h}\u00a0h ${rest}\u00a0min` : `${h}\u00a0h`;
 }
 
 /** Tono de la 1ª gestión: verde ≤30 min · neutro ≤4 h · rojo más allá. */
@@ -162,7 +171,7 @@ function HeatStrip({
 }
 
 /** La leyenda de la franja, con sus colores de verdad. */
-function HeatLegend({ className }: { className?: string }) {
+function HeatLegend({ className, tick = false }: { className?: string; /** Añade la marca negra de la barra de la semana. */ tick?: boolean }) {
   const item = (swatch: string, label: string) => (
     <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
       <span aria-hidden className={cn("size-3 rounded-[3px]", swatch)} />
@@ -175,6 +184,12 @@ function HeatLegend({ className }: { className?: string }) {
       {item("bg-warn-bg", "Bajo ritmo")}
       {item("bg-crit-bg", "Hora muerta")}
       {item("bg-line", "Fuera de jornada")}
+      {tick && (
+        <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+          <span aria-hidden className="h-2.5 w-0.5 rounded-full bg-ink-900" />
+          Lo que ya debería llevar en la semana
+        </span>
+      )}
     </p>
   );
 }
@@ -283,7 +298,7 @@ export interface ProductivityWeek {
   days: WeekDay[];
   today: string;
   byUser: Record<string, WeekStatus>;
-  /** Con horario cargado y sin actividad en el periodo: también se miden. */
+  /** Vendedoras (y quien tiene horario) sin actividad en el periodo: también se miden. */
   extra: { userId: string; email: string }[];
   /** Owner o admin: enlaza a Equipo › Horarios. */
   canEdit: boolean;
@@ -316,7 +331,7 @@ function weekVerdict(s: WeekStatus): { text: string; tone: string; long: string 
       return { text: "Cumplida", tone: "text-ok-fg", long: "Cumplió la meta de la semana" };
     case "atrasada":
       return {
-        text: `−${nf1.format(gap)}\u00a0h`,
+        text: `Atraso ${nf1.format(gap)}\u00a0h`,
         tone: "text-warn-fg",
         long: `Va ${nf1.format(gap)}\u00a0h por debajo`,
       };
@@ -348,10 +363,18 @@ function WeekBar({ s, size = "row" }: { s: WeekStatus; size?: "row" | "panel" })
   );
 }
 
+/** «a esta hora debería llevar ~28.4 h»: con horario, lo esperado incluye la
+ *  parte de hoy ya transcurrida; sin horario, hoy no cuenta hasta que termina,
+ *  así que es «hasta ayer». Null si la semana cerró o aún no se espera nada. */
+function expectedPhrase(s: WeekStatus): string | null {
+  if (s.cerrada || s.esperado <= 0) return null;
+  return `${s.schedule.start ? "a esta hora" : "hasta ayer"} debería llevar ~${nf1.format(s.esperado)}\u00a0h`;
+}
+
 function weekTitle(s: WeekStatus): string {
   return [
     `${nf1.format(s.horas)} h activas de ${nf1.format(s.meta)} h`,
-    s.cerrada || s.esperado <= 0 ? null : `debería llevar ~${nf1.format(s.esperado)} h a esta hora`,
+    expectedPhrase(s),
     weekVerdict(s).long,
     s.porDefecto ? "meta por defecto, sin horario cargado" : null,
   ]
@@ -385,7 +408,7 @@ function WeekLine({ s }: { s: WeekStatus | undefined }) {
     <span className="mt-2.5 block" title={weekTitle(s)}>
       <span className="flex items-baseline justify-between gap-3 text-[13px]">
         <span className="text-ink-600">
-          Semana <span className="font-semibold tabular-nums text-ink-900">{nf1.format(s.horas)}</span>
+          Esta semana <span className="font-semibold tabular-nums text-ink-900">{nf1.format(s.horas)}</span>
           <span className="tabular-nums"> de {nf1.format(s.meta)}&nbsp;h</span>
         </span>
         <span className={cn("text-xs font-medium tabular-nums", v.tone)}>{v.text}</span>
@@ -582,12 +605,13 @@ export function ProductivityTable({
               <b className="font-semibold tabular-nums text-ink-900">{nf.format(rows.length)}</b>{" "}
               {rows.length === 1 ? "asesora" : "asesoras"}
               {idleNow.length > 0 && `${SEP}${nf.format(idleNow.length)} en línea sin actividad`}
-              {quiet.length > idleNow.length && `${SEP}${nf.format(quiet.length - idleNow.length)} con horario y sin actividad`}
+              {quiet.length > idleNow.length &&
+                `${SEP}${nf.format(quiet.length - idleNow.length)} ${idleNow.length ? "más " : ""}sin actividad en el periodo`}
               <span className="text-ink-500">{SEP}toca una para ver sus leads</span>
             </>
           )}
         </p>
-        <HeatLegend />
+        <HeatLegend tick={!!week} />
       </div>
 
       <div className="xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain">
@@ -687,10 +711,10 @@ export function ProductivityTable({
               el nombre, quince celdas de ~12 px, la línea de 7 días entera y
               «Semana» con su barra. */}
           <colgroup>
-            <col className="w-[13%]" />
+            <col className={week ? "w-[12%]" : "w-[13%]"} />
             <col className="w-[23%]" />
             <col className="w-[6.5%]" />
-            {week && <col className="w-[8.5%]" />}
+            {week && <col className="w-[9.5%]" />}
             <col className="w-[6%]" />
             <col className="w-[7.5%]" />
             <col className="w-[6%]" />
@@ -712,9 +736,9 @@ export function ProductivityTable({
                 <th
                   scope="col"
                   className={cn(TH, "pr-3")}
-                  title="Horas activas de la semana en curso (leads y envíos) contra su meta · la marca negra es lo que debería llevar a esta hora"
+                  title="Horas activas de la semana en curso, de lunes a domingo (leads y envíos), contra su meta, sea cual sea el periodo · la marca negra es lo que ya debería llevar: con horario, hasta esta hora; sin horario, hasta ayer"
                 >
-                  Semana
+                  Esta semana
                   <span className={TH_SUB}>de la meta</span>
                 </th>
               )}
@@ -1030,7 +1054,9 @@ function AdvisorPanel({
           </p>
         </section>
 
-        {week && weekStatus && <WeekZone s={weekStatus} days={week.days} today={week.today} canEdit={week.canEdit} />}
+        {week && weekStatus && (
+          <WeekZone s={weekStatus} userId={r.userId} days={week.days} today={week.today} canEdit={week.canEdit} />
+        )}
 
         <section className={PANEL_ZONE}>
           <ZoneHead
@@ -1109,9 +1135,23 @@ const DAY_BADGE: Partial<Record<WeekStatus["dias"][number]["estado"], { tone: "o
  * debería llevar a esta hora y cada día con sus horas, su primera y última
  * actividad, y si llegó tarde o se fue antes de su horario.
  */
-function WeekZone({ s, days, today, canEdit }: { s: WeekStatus; days: WeekDay[]; today: string; canEdit: boolean }) {
+function WeekZone({
+  s,
+  userId,
+  days,
+  today,
+  canEdit,
+}: {
+  s: WeekStatus;
+  userId: string;
+  days: WeekDay[];
+  today: string;
+  canEdit: boolean;
+}) {
   const v = weekVerdict(s);
   const sched = s.schedule;
+  const grace = graceTimes(sched);
+  const expected = expectedPhrase(s);
   const help = [
     weekRangeLabel(days),
     `meta ${nf1.format(s.meta)}\u00a0h`,
@@ -1120,13 +1160,16 @@ function WeekZone({ s, days, today, canEdit }: { s: WeekStatus; days: WeekDay[];
   ].join(SEP);
   const dayNum = (iso: string) => Number(iso.slice(8, 10));
   return (
-    <section className={PANEL_ZONE} aria-label="Semana">
+    <section className={PANEL_ZONE} aria-label="Esta semana">
       <ZoneHead
-        title="Semana"
+        title="Esta semana"
         help={help}
         aside={
           canEdit ? (
-            <Link href="/dashboard/team?tab=horarios" className="text-[13px] font-medium text-brand-700 underline-offset-2 hover:underline">
+            <Link
+              href={`/dashboard/team?tab=horarios&user=${encodeURIComponent(userId)}`}
+              className="inline-flex items-center text-[13px] font-medium text-brand-700 underline-offset-2 hover:underline pointer-coarse:min-h-11"
+            >
               {s.porDefecto ? "Definir horario" : "Editar horario"}
             </Link>
           ) : undefined
@@ -1138,9 +1181,7 @@ function WeekZone({ s, days, today, canEdit }: { s: WeekStatus; days: WeekDay[];
           <span className="tabular-nums">{nf1.format(s.meta)}&nbsp;h</span>
         </p>
         <p className="flex flex-wrap items-center gap-x-2 text-[13px] text-ink-600">
-          {!s.cerrada && s.esperado > 0 && (
-            <span className="tabular-nums">a esta hora debería llevar ~{nf1.format(s.esperado)}&nbsp;h</span>
-          )}
+          {expected && <span className="tabular-nums">{expected}</span>}
           <span className={cn("font-medium", v.tone)}>{v.long}</span>
         </p>
       </div>
@@ -1152,38 +1193,43 @@ function WeekZone({ s, days, today, canEdit }: { s: WeekStatus; days: WeekDay[];
           const badge = DAY_BADGE[d.estado];
           const quiet = d.estado === "futuro" || (d.estado === "libre" && !d.first);
           const share = d.meta > 0 ? Math.min(1, d.horas / d.meta) : 0;
+          // Con «Tarde» o «Salió antes», «Cumplido» sobra donde se ve la barra del
+          // día; en el teléfono no hay barra, así que ahí sí va.
+          const cumplidoConAviso = d.estado === "cumplido" && (d.tardeMin != null || d.antesMin != null);
           return (
             <li
               key={d.date}
-              className={cn(
-                "grid grid-cols-[3.25rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 py-2.5 text-[13px] sm:grid-cols-[3.25rem_4.5rem_3.5rem_minmax(0,1fr)_auto]",
-                quiet && "text-ink-300",
-              )}
+              className="grid grid-cols-[3.25rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 py-2.5 text-[13px] sm:grid-cols-[3.25rem_4.5rem_3.5rem_minmax(0,1fr)_auto]"
             >
-              <span className={cn("font-medium tabular-nums", quiet ? "text-ink-300" : d.date === today ? "text-ink-900" : "text-ink-700")}>
+              <span className={cn("font-medium tabular-nums", quiet ? "text-ink-500" : d.date === today ? "text-ink-900" : "text-ink-700")}>
                 {dowShort(d.isoDow)} {dayNum(d.date)}
               </span>
               <span className="hidden sm:block">
                 {d.programado && d.estado !== "futuro" && (
                   <span className="relative block h-1.5 rounded-full bg-line" title={`${nf1.format(d.horas)} de ${nf1.format(d.meta)} h`}>
                     <span
-                      className={cn("absolute inset-y-0 left-0 rounded-full", d.estado === "corto" || d.estado === "sin_actividad" ? "bg-warn-fg" : "bg-ok-fg")}
+                      className={cn(
+                        "absolute inset-y-0 left-0 rounded-full",
+                        d.estado === "en_curso" ? "bg-ink-500" : d.estado === "corto" || d.estado === "sin_actividad" ? "bg-warn-fg" : "bg-ok-fg",
+                      )}
                       style={{ width: `${share * 100}%` }}
                     />
                   </span>
                 )}
               </span>
-              <span className={cn("text-right tabular-nums sm:text-left", quiet ? "text-ink-300" : "font-medium text-ink-900")}>
+              <span className={cn("text-right tabular-nums sm:text-left", quiet ? "text-ink-500" : "font-medium text-ink-900")}>
                 {quiet ? "—" : `${nf1.format(d.horas)}\u00a0h`}
               </span>
-              <span className="col-span-3 tabular-nums text-ink-600 sm:col-span-1">
+              <span className={cn("col-span-3 tabular-nums sm:col-span-1", quiet ? "text-ink-500" : "text-ink-600")}>
                 {d.first ? (d.first === d.last ? d.first : `${d.first} – ${d.last}`) : d.estado === "libre" ? "Libre" : ""}
               </span>
               <span className="col-span-3 flex flex-wrap gap-1.5 sm:col-span-1 sm:justify-end">
-                {d.tardeMin != null && <Badge tone="warn">Tarde {fmtMin(d.tardeMin)}</Badge>}
-                {d.antesMin != null && <Badge tone="warn">Salió {fmtMin(d.antesMin)} antes</Badge>}
-                {badge && !(d.estado === "cumplido" && (d.tardeMin != null || d.antesMin != null)) && (
-                  <Badge tone={badge.tone}>{badge.label}</Badge>
+                {d.tardeMin != null && <Badge tone="warn">Tarde {fmtDelay(d.tardeMin)}</Badge>}
+                {d.antesMin != null && <Badge tone="warn">Salió {fmtDelay(d.antesMin)} antes</Badge>}
+                {badge && (
+                  <Badge tone={badge.tone} className={cumplidoConAviso ? "sm:hidden" : undefined}>
+                    {badge.label}
+                  </Badge>
                 )}
               </span>
             </li>
@@ -1192,10 +1238,10 @@ function WeekZone({ s, days, today, canEdit }: { s: WeekStatus; days: WeekDay[];
       </ul>
       <p className="mt-2 text-xs text-ink-500">
         {s.porDefecto
-          ? "Sin horario cargado: se usa la meta por defecto y no se juzgan llegadas ni salidas."
-          : sched.start
-            ? "Primera y última actividad del día; tarde o antes, pasados 10 minutos de su horario."
-            : "Primera y última actividad del día. Sin horario fijo no se juzgan llegadas ni salidas."}
+          ? `Sin horario cargado: se usa la meta por defecto (${nf1.format(s.meta)}\u00a0h, ${daysLabel(sched.days)}) y no se juzgan llegadas ni salidas.`
+          : grace
+            ? `Primera y última actividad de cada día. «Tarde» si la primera pasa de las ${grace.tarde}; «Salió antes» si la última es antes de las ${grace.antes}, en días ya cerrados.`
+            : "Primera y última actividad de cada día. Sin horario fijo no se juzgan llegadas ni salidas."}
       </p>
     </section>
   );

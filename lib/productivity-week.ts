@@ -90,6 +90,20 @@ export function minutesOf(hhmm: string | null | undefined): number | null {
   return h * 60 + min;
 }
 
+const hhmmOf = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+
+/**
+ * Desde qué hora la primera actividad es «Tarde» y antes de cuál la última es
+ * «Salió antes», con la gracia ya sumada: 09:00–18:00 → 09:10 y 17:50. Null
+ * sin horario (o con uno que no se puede leer o al revés).
+ */
+export function graceTimes(schedule: Pick<AdvisorSchedule, "start" | "end">): { tarde: string; antes: string } | null {
+  const start = minutesOf(schedule.start);
+  const end = minutesOf(schedule.end);
+  if (start == null || end == null || end <= start) return null;
+  return { tarde: hhmmOf(Math.min(start + LATE_GRACE_MIN, 23 * 60 + 59)), antes: hhmmOf(Math.max(end - LATE_GRACE_MIN, 0)) };
+}
+
 function localClock(iso: string, tz: string): { hhmm: string; minutes: number } {
   const parts = new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(
     new Date(iso),

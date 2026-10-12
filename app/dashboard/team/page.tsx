@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 export default async function TeamPage({
   searchParams,
 }: {
-  searchParams: Promise<{ org?: string; tab?: string }>;
+  searchParams: Promise<{ org?: string; tab?: string; user?: string }>;
 }) {
   if ((await getUserRoleSummary()).isVendedoraOnly) redirect("/dashboard/leads");
   const sp = await searchParams;
@@ -138,6 +138,7 @@ export default async function TeamPage({
       riders={riders}
       schedules={Object.fromEntries(schedules)}
       initialTab={sp.tab === "horarios" || sp.tab === "motorizados" ? sp.tab : "usuarios"}
+      initialScheduleUserId={sp.tab === "horarios" ? (sp.user ?? null) : null}
     />
   );
 }

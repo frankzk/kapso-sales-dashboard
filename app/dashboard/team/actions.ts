@@ -510,5 +510,5 @@ export async function clearAdvisorSchedule(orgId: string, userId: string): Promi
   if (error) return { error: error.message };
   revalidatePath("/dashboard/team");
   revalidatePath("/dashboard/productividad");
-  return { notice: "Horario quitado: vuelve a la meta por defecto." };
+  return { notice: "Vuelve a la meta por defecto: 48 h, lunes a sábado, sin horario." };
 }

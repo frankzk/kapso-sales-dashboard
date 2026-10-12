@@ -34,3 +34,20 @@ export async function getAdvisorSchedules(
   }
   return out;
 }
+
+/**
+ * Las vendedoras de las organizaciones dadas. Productividad mide la semana de
+ * todas, tengan horario o no: la que no hizo nada en el periodo (con la meta
+ * por defecto, el primer día son todas) es justo la que hay que ver. Con
+ * cualquier error, ninguna: la tabla sigue con quienes trabajaron.
+ */
+export async function getOrgVendedoraIds(admin: SupabaseClient, orgIds: string[]): Promise<string[]> {
+  if (!orgIds.length) return [];
+  try {
+    const { data, error } = await admin.from("memberships").select("user_id").in("org_id", orgIds).eq("role", "vendedora");
+    if (error || !data) return [];
+    return [...new Set((data as { user_id: string }[]).map((m) => m.user_id))];
+  } catch {
+    return [];
+  }
+}
