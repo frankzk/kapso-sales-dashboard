@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   activeHoursFromTimes,
   computeWeekActivity,
+  daysLabel,
   DEFAULT_SCHEDULE,
   evaluateWeek,
   minutesOf,
@@ -190,5 +191,14 @@ describe("horarios guardados y del formulario", () => {
     expect(minutesOf("09:30:00")).toBe(570);
     expect(minutesOf("25:00")).toBeNull();
     expect(minutesOf(null)).toBeNull();
+  });
+});
+
+describe("daysLabel", () => {
+  it("junta los días seguidos y enumera los sueltos", () => {
+    expect(daysLabel([1, 2, 3, 4, 5, 6])).toBe("lun a sáb");
+    expect(daysLabel([5, 1, 3])).toBe("lun, mié, vie");
+    expect(daysLabel([6, 7])).toBe("sáb, dom");
+    expect(daysLabel([])).toBe("sin días");
   });
 });

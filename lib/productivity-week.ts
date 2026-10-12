@@ -9,7 +9,23 @@
 // persona (Equipo › Horarios); y la semana se mira siempre entera, de lunes a
 // domingo, aunque el tablero esté en «Hoy».
 
-import { tzParts } from "@/lib/metrics";
+// Sin imports a propósito: Equipo (cliente) usa las etiquetas y la meta por
+// defecto, y este módulo no debe arrastrar nada más al navegador.
+
+const WEEKDAY_EN = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** Fecha local (YYYY-MM-DD) y día de la semana (0 = domingo) de un instante en `tz`. */
+function tzParts(iso: string, tz: string): { date: string; weekday: number } {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "short",
+  }).formatToParts(new Date(iso));
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return { date: `${get("year")}-${get("month")}-${get("day")}`, weekday: Math.max(0, WEEKDAY_EN.indexOf(get("weekday"))) };
+}
 
 /** Una pausa de más de 45 min corta el bloque de trabajo (almuerzo, descanso). */
 export const ACTIVE_GAP_MS = 45 * 60 * 1000;
@@ -316,4 +332,20 @@ export function parseScheduleInput(input: {
     if (e <= s) return { error: "La salida tiene que ser después de la entrada." };
   }
   return { schedule: { weeklyHours: Math.round(weeklyHours * 10) / 10, days, start, end } };
+}
+
+const DOW_SHORT = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"];
+
+/** «lun a sáb» si los días van seguidos (tres o más); si no, «lun, mié, vie». */
+export function daysLabel(days: number[]): string {
+  const sorted = [...new Set(days)].filter((d) => d >= 1 && d <= 7).sort((a, b) => a - b);
+  if (!sorted.length) return "sin días";
+  const consecutive = sorted.every((d, i) => i === 0 || d === sorted[i - 1]! + 1);
+  if (sorted.length >= 3 && consecutive) return `${DOW_SHORT[sorted[0]! - 1]} a ${DOW_SHORT[sorted[sorted.length - 1]! - 1]}`;
+  return sorted.map((d) => DOW_SHORT[d - 1]).join(", ");
+}
+
+/** El nombre corto de un día ISO: 1 → «lun». */
+export function dowShort(isoDow: number): string {
+  return DOW_SHORT[isoDow - 1] ?? "";
 }

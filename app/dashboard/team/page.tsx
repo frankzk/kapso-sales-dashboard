@@ -5,13 +5,14 @@ import { EmptyState } from "@/components/ui";
 import { TeamManager, type TeamMember, type RiderRow } from "@/components/team";
 import type { Role } from "@/lib/types";
 import { GRANTED_ONE_BY_ONE, permissionsFor } from "@/lib/permissions";
+import { getAdvisorSchedules } from "@/lib/advisor-schedules";
 
 export const dynamic = "force-dynamic";
 
 export default async function TeamPage({
   searchParams,
 }: {
-  searchParams: Promise<{ org?: string }>;
+  searchParams: Promise<{ org?: string; tab?: string }>;
 }) {
   if ((await getUserRoleSummary()).isVendedoraOnly) redirect("/dashboard/leads");
   const sp = await searchParams;
@@ -52,7 +53,7 @@ export default async function TeamPage({
   const selected = adminOrgs.find((o) => o.id === sp.org) ?? adminOrgs[0]!;
   const admin = createAdminSupabase();
 
-  const [{ data: memberRows }, { data: storeRows }, { data: riderRows }, { data: permissionRows }] = await Promise.all([
+  const [{ data: memberRows }, { data: storeRows }, { data: riderRows }, { data: permissionRows }, schedules] = await Promise.all([
     admin.from("memberships").select("user_id, role").eq("org_id", selected.id),
     admin.from("stores").select("id, name").eq("org_id", selected.id).order("name"),
     admin
@@ -66,6 +67,7 @@ export default async function TeamPage({
       .select("user_id, permission, granted")
       .eq("org_id", selected.id)
       .in("permission", [...GRANTED_ONE_BY_ONE.map((g) => g.permission), "shalom.validate_payment"]),
+    getAdvisorSchedules(admin, [selected.id]),
   ]);
 
   const stores = (storeRows as { id: string; name: string }[]) ?? [];
@@ -134,6 +136,8 @@ export default async function TeamPage({
       stores={stores}
       members={members}
       riders={riders}
+      schedules={Object.fromEntries(schedules)}
+      initialTab={sp.tab === "horarios" || sp.tab === "motorizados" ? sp.tab : "usuarios"}
     />
   );
 }
