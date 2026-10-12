@@ -9,6 +9,7 @@ import {
   daysBetween,
   daysLabel,
   DEFAULT_SCHEDULE,
+  evaluatePeriod,
   evaluateWeek,
   graceTimes,
   groupWeeks,
@@ -239,6 +240,20 @@ describe("el periodo día por día o por semana", () => {
     // 7–13: 6 días × 6 h = 36 de 48.
     expect(weeks[1]).toMatchObject({ horas: 36, meta: 48, estado: "corto" });
     expect(weeks[4]).toMatchObject({ meta: 24, estado: "corto" });
+  });
+
+  it("antes de su alta no se le pide nada: días libres que no suman a lo que tocaba", () => {
+    const days = daysBetween("2026-10-05", "2026-10-11");
+    const activity = [act("2026-10-08", 8, "09:00", "17:00"), act("2026-10-09", 7, "09:00", "16:00")];
+    const p = evaluatePeriod({ activity, days, schedule, porDefecto: true, today: "2026-10-12", nowMinutes: 600, desde: "2026-10-08" });
+    expect(p.dias.slice(0, 3).every((d) => d.estado === "libre" && d.antesDeAlta && d.meta === 0)).toBe(true);
+    expect(p.dias[3]).toMatchObject({ estado: "cumplido" });
+    // Del jueves al sábado: 3 días de trabajo × 8 h.
+    expect(p.esperado).toBe(24);
+    expect(p.horas).toBe(15);
+    const sinAlta = evaluatePeriod({ activity, days, schedule, porDefecto: true, today: "2026-10-12", nowMinutes: 600 });
+    expect(sinAlta.esperado).toBe(48);
+    expect(sinAlta.dias[0]!.estado).toBe("sin_actividad");
   });
 
   it("una semana con días por venir va en curso, y sin empezar, por venir", () => {

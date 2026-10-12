@@ -211,6 +211,8 @@ export interface WeekDayStatus extends DayActivity {
   /** Minutos antes de la salida de la última actividad, pasada la gracia (solo días ya cerrados). */
   antesMin: number | null;
   estado: DayState;
+  /** Un día anterior a su alta en el equipo: no se le pedía nada. */
+  antesDeAlta?: boolean;
 }
 
 /**
@@ -354,6 +356,33 @@ export function groupWeeks(dias: WeekDayStatus[]): PeriodWeek[] {
   }
   flush();
   return out;
+}
+
+/** La fecha local «YYYY-MM-DD» de un instante. */
+export function localDateOf(iso: string, tz: string): string {
+  return tzParts(iso, tz).date;
+}
+
+/**
+ * Un periodo de varios días de una persona: cada día como en la semana, y lo
+ * que le tocaba hasta ahora. Los días antes de su alta (`desde`) no se le
+ * piden: van libres y lo dicen, y no suman a lo que tocaba.
+ */
+export function evaluatePeriod(
+  opts: Parameters<typeof evaluateWeek>[0] & { desde?: string | null },
+): { dias: WeekDayStatus[]; horas: number; esperado: number } {
+  const { desde, ...week } = opts;
+  const { dias } = evaluateWeek(week);
+  const counted = desde ? week.days.filter((d) => d.date >= desde) : week.days;
+  const esperado = counted.length ? evaluateWeek({ ...week, days: counted }).esperado : 0;
+  const out = desde
+    ? dias.map((d): WeekDayStatus =>
+        d.date < desde && !d.first
+          ? { ...d, programado: false, meta: 0, estado: "libre", tardeMin: null, antesMin: null, antesDeAlta: true }
+          : d,
+      )
+    : dias;
+  return { dias: out, horas: round1(out.reduce((n, d) => n + d.horas, 0)), esperado };
 }
 
 /** Una fila de `advisor_schedules` (las horas vienen como «09:00:00»). */

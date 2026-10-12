@@ -9,13 +9,15 @@ import {
 } from "@/lib/productivity";
 import {
   DEFAULT_SCHEDULE,
+  evaluatePeriod,
   evaluateWeek,
+  localDateOf,
   weekWindow,
   type AdvisorSchedule,
   type DayActivity,
   type WeekStatus,
 } from "@/lib/productivity-week";
-import { getAdvisorSchedules, getOrgVendedoraIds } from "@/lib/advisor-schedules";
+import { getAdvisorSchedules, getMemberSince, getOrgVendedoraIds } from "@/lib/advisor-schedules";
 import { createAdminSupabase } from "@/lib/db";
 import {
   fullMonthRange,
@@ -94,7 +96,7 @@ async function ProductividadContent({
   const win = weekWindow(tz);
   const orgIds = [...new Set(stores.map((s) => s.org_id))];
   const admin = createAdminSupabase();
-  const [board, prevMonthTotals, weekActivity, schedules, vendedoraIds] = await Promise.all([
+  const [board, prevMonthTotals, weekActivity, schedules, vendedoraIds, memberSince] = await Promise.all([
     getProductivityBoard(scopeIds, range, source, tz, view ? { prevRange: view.prevRange } : {}),
     // «Agosto cerró en …»: el mes anterior entero. En modo solo, solo lo suyo —
     // al cliente no viaja ninguna cifra del equipo, y sin usuario no hay cifra.
@@ -105,6 +107,8 @@ async function ProductividadContent({
     getAdvisorSchedules(admin, orgIds).catch(() => new Map<string, AdvisorSchedule>()),
     // En modo solo no hace falta el resto del equipo.
     solo ? Promise.resolve([] as string[]) : getOrgVendedoraIds(admin, orgIds),
+    // Desde cuándo está cada una: en un periodo largo no se le piden los días de antes.
+    getMemberSince(admin, orgIds).catch(() => new Map<string, string>()),
   ]);
   // Modo solo: la fila propia con la escala de calor propia; los totales del
   // periodo anterior son del EQUIPO, así que se ocultan los deltas (hasPrev).
@@ -148,17 +152,19 @@ async function ProductividadContent({
           days: board.periodDays,
           today: win.today,
           byUser: Object.fromEntries(
-            rows.map((r) => [
-              r.userId,
-              evaluateWeek({
+            rows.map((r) => {
+              const since = memberSince.get(r.userId);
+              const { dias, esperado } = evaluatePeriod({
                 activity: board.activityByDay[r.userId],
                 days: board.periodDays,
                 schedule: schedules.get(r.userId) ?? DEFAULT_SCHEDULE,
                 porDefecto: !schedules.has(r.userId),
                 today: win.today,
                 nowMinutes: win.nowMinutes,
-              }).dias,
-            ]),
+                desde: since ? localDateOf(since, tz) : null,
+              });
+              return [r.userId, { dias, esperado }];
+            }),
           ),
         }
       : null;
