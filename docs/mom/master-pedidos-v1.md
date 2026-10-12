@@ -10251,7 +10251,8 @@ del comprador se anonimizan.** Aurela y Kenku no cambian.
 - **Instalación.** La tienda instala desde Shopify y autoriza en el acto. Kapta
   guarda esa autorización como **instalación pendiente** por 30 minutos. El
   dueño la reclama dentro de Kapta: elige una organización donde sea owner o
-  admin, y la tienda se crea ahí con el dominio que trajo Shopify. Una
+  admin, o crea una nueva en ese momento, y la tienda se crea ahí con el
+  dominio que trajo Shopify. Una
   instalación pendiente vencida o ya reclamada no sirve.
 - **Cada aviso de privacidad se registra** con su firma verificada (firma
   inválida: 401, sin escribir nada) y una sola vez por aviso. Su estado es
