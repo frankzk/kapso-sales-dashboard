@@ -1,10 +1,12 @@
-import Link from "next/link";
-import { Card, DeltaBadge, cn } from "@/components/ui";
+import type { ReactNode } from "react";
+import { cn } from "@/components/ui";
+import { Badge } from "@/components/ops-ui";
 import { ProductivityTable } from "@/components/productivity-table";
-import { ProductivityMonthSelect } from "@/components/productivity-month-select";
+import { ProductivityFilters, type PeriodLink } from "@/components/productivity-filters";
 import type { DateRange } from "@/lib/access";
 import type { MonthPace, MonthView } from "@/lib/productivity-month";
 import type { StoreSummary } from "@/lib/types";
+import { SOURCE_LABEL } from "@/lib/productivity-labels";
 import {
   FIRST_TOUCH_FAST_MIN,
   HEAT_START,
@@ -30,13 +32,8 @@ export interface ProductivityMonth {
   prevMonthTotals: { cerrados: number; ingresos: number } | null;
 }
 
-const SOURCE_FILTERS: { key: SourceBucket; label: string }[] = [
-  { key: "meta_ad", label: "📣 Campaña" },
-  { key: "fb_web", label: "🌐 Meta/Web" },
-  { key: "cod_cart", label: "🛒 Carrito" },
-  { key: "abandoned_browse", label: "🔎 Búsqueda" },
-  { key: "organic", label: "Orgánico" },
-];
+const nf = new Intl.NumberFormat("es-PE");
+const nf1 = new Intl.NumberFormat("es-PE", { maximumFractionDigits: 1 });
 
 function money(n: number, currency: string): string {
   return new Intl.NumberFormat("es-PE", { style: "currency", currency, maximumFractionDigits: 0 }).format(n);
@@ -56,48 +53,44 @@ function buildHref(opts: { from: string; to: string; store: string | null; src: 
   return `/dashboard/productividad?${qs.toString()}`;
 }
 
-function Chip({ href, label, active }: { href: string; label: string; active: boolean }) {
-  return (
-    <Link
-      href={href}
-      className={cn(
-        "rounded-lg border px-2 py-1 text-xs whitespace-nowrap",
-        active
-          ? "border-brand-500 bg-brand-50 font-medium text-brand-700"
-          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50",
-      )}
-    >
-      {label}
-    </Link>
-  );
+// ── Fechas del contexto («Lunes 12 de octubre · comparado con el domingo 11») ──
+
+function asDate(iso: string): Date {
+  return new Date(`${iso}T12:00:00.000Z`);
 }
 
-function ChipDivider() {
-  return <span aria-hidden className="mx-1 h-4 w-px self-center bg-slate-200" />;
+/** «domingo 11 de octubre» (sin la coma que pone el navegador tras el día). */
+function longDay(iso: string): string {
+  const d = asDate(iso);
+  // Sueltos, el día y el mes salen con mayúscula («Octubre»): en la frase van en minúscula.
+  const part = (o: Intl.DateTimeFormatOptions) => d.toLocaleDateString("es-PE", { ...o, timeZone: "UTC" }).toLowerCase();
+  return `${part({ weekday: "long" })} ${part({ day: "numeric" })} de ${part({ month: "long" })}`;
 }
 
-/** Compact KPI (the classic StatCard is too tall for the one-screen layout). */
-function Kpi({ label, value, delta, sub }: { label: string; value: string; delta?: number | null; sub?: string }) {
-  return (
-    <Card className="p-3">
-      <div className="flex items-baseline justify-between gap-2">
-        <p className="truncate text-[11px] font-medium tracking-wide text-slate-400 uppercase">{label}</p>
-        {delta !== undefined && <DeltaBadge pct={delta} />}
-      </div>
-      <p className="mt-0.5 text-xl font-semibold text-slate-900">{value}</p>
-      {sub && <p className="text-[11px] text-slate-400">{sub}</p>}
-    </Card>
-  );
+function shortDay(iso: string, withMonth = true): string {
+  return asDate(iso).toLocaleDateString("es-PE", withMonth ? { day: "numeric", month: "short", timeZone: "UTC" } : { day: "numeric", timeZone: "UTC" });
+}
+
+/** «lunes 12 de octubre» o «6 – 12 oct» (el mes una vez si no cambia). */
+function rangeLabel(r: DateRange): string {
+  if (r.from === r.to) return longDay(r.from);
+  const sameMonth = r.from.slice(0, 7) === r.to.slice(0, 7);
+  return `${shortDay(r.from, !sameMonth)} – ${shortDay(r.to)}`;
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 /**
- * One-screen productivity board: header+filters (1 row) · 5 compact KPIs ·
- * a single dense table (activity heatmap, trend sparkline, per-source chips)
- * that scrolls INTERNALLY — at xl+ the page itself never scrolls.
+ * Productividad: cabecera con el periodo, los filtros, las cifras del equipo en
+ * un marco y la tabla por asesora. Desde 1280 px es una pantalla —la tabla se
+ * desplaza por dentro con su cabecera pegajosa—; más angosta, baja la página.
  */
 export function ProductivityBoard({
   rows,
   prevTotals,
+  prevRange,
   hasPrev,
   range,
   currency,
@@ -131,7 +124,7 @@ export function ProductivityBoard({
   /** Velocidad de 1ª gestión del equipo — null en modo solo (privacidad: la
    *  vendedora ve la suya propia, derivada de su fila). */
   firstTouch: FirstTouchStats | null;
-  /** Vista de vendedora: solo su propia fila — sin KPI de presencia del equipo. */
+  /** Vista de vendedora: solo su propia fila — sin cifra de presencia del equipo. */
   solo?: boolean;
   /** Vista por mes; null cuando se mira un rango de días. */
   month?: ProductivityMonth | null;
@@ -147,29 +140,18 @@ export function ProductivityBoard({
     }),
     { llamadas: 0, leads: 0, cerrados: 0, ingresos: 0 },
   );
-  const onlineCount = initialOnlineIds.length;
-  // KPI de 1ª gestión: en equipo manda la mediana de CARRITOS (el segmento con
-  // plata); en modo solo, la propia (derivada de la fila — sin datos del equipo).
-  const ownFirstTouch = rows[0]?.primeraGestion ?? { medianMin: null, n: 0 };
-  const ftPend = firstTouch ? firstTouch.carritos.sinGestionar + firstTouch.resto.sinGestionar : 0;
-  const ftSub = firstTouch
-    ? firstTouch.carritos.n
-      ? `${firstTouch.carritos.under30Pct}% en <${FIRST_TOUCH_FAST_MIN} min · resto: ${formatMinutes(firstTouch.resto.medianMin)}` +
-        (ftPend ? ` · sin gestionar: ${ftPend}` : "")
-      : `sin carritos nuevos · resto: ${formatMinutes(firstTouch.resto.medianMin)}` +
-        (ftPend ? ` · sin gestionar: ${ftPend}` : "")
-    : undefined;
-  // Sigla + nombre por tienda para los chips "AUR 5 · KP 12" junto a Cerrados.
+  // Sigla + nombre por tienda para «KP 7 de 44» en la tabla y el panel.
   const storeInfo = Object.fromEntries(
     stores.map((s) => [s.id, { short: storeInitials(s.name), name: s.name }]),
   ) as Record<string, { short: string; name: string }>;
 
-  // Range presets anchored on the STORE's local day (a UTC date flips to
-  // "tomorrow" at 19:00 Lima and used to blank the board at night).
+  // Presets anclados en el día LOCAL de la tienda (un día UTC salta a
+  // «mañana» a las 19:00 de Lima y dejaba el tablero vacío por la noche).
+  const today = localDayPreset(0, tz);
   const presets: { label: string; p: DateRange }[] = [
-    { label: "Hoy", p: localDayPreset(0, tz) },
+    { label: "Hoy", p: today },
     { label: "Ayer", p: localDayPreset(1, tz) },
-    ...[7, 30, 90].map((d) => ({ label: `${d}d`, p: localPresetRange(d, tz) })),
+    ...[7, 30, 90].map((d) => ({ label: `${d} días`, p: localPresetRange(d, tz) })),
   ];
 
   // Vista por mes: el mes en curso y el anterior van en chip —son los que se
@@ -177,175 +159,210 @@ export function ProductivityBoard({
   // conserva el mes elegido.
   const mes = month?.view.month ?? null;
   const [thisMonth, lastMonth] = months;
-  const chipMonths = new Set([thisMonth?.month, lastMonth?.month]);
+  const chipMonths = [thisMonth, lastMonth].filter(Boolean) as { month: string; label: string }[];
   const hrefFor = (opts: { store: string | null; src: string | null }) =>
     buildHref({ from: range.from, to: range.to, mes, ...opts });
-  const count = (n: number) => n.toLocaleString("es-PE");
-  const monthSubs = monthKpiSubs({ month, hasPrev, prevTotals, currency, count });
+
+  const periods: PeriodLink[] = presets.map(({ label, p }) => ({
+    label,
+    href: buildHref({ from: p.from, to: p.to, store: storeId, src: source }),
+    active: !month && range.from === p.from && range.to === p.to,
+  }));
+  const monthChips: PeriodLink[] = chipMonths.map((m, i) => ({
+    label: i === 0 ? "Este mes" : capitalize(m.label.split(" ")[0]!),
+    href: buildHref({ from: range.from, to: range.to, store: storeId, src: source, mes: m.month }),
+    active: mes === m.month,
+  }));
+  const otherMonths =
+    months.length > 2
+      ? months.map((m) => ({ ...m, href: buildHref({ from: range.from, to: range.to, store: storeId, src: source, mes: m.month }) }))
+      : [];
+
+  // El contexto: qué se mira y con qué se compara (las cifras de color).
+  const isToday = !month && range.from === today.from && range.to === today.to;
+  const context = month
+    ? [
+        month.view.label,
+        month.view.current ? `día ${month.view.day} de ${month.view.daysInMonth}` : null,
+        hasPrev ? `comparado con ${month.view.prevLabel}` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : [
+        `${isToday ? "Hoy, " : ""}${isToday ? rangeLabel(range) : capitalize(rangeLabel(range))}`,
+        hasPrev ? `comparado con ${prevRange.from === prevRange.to ? "el " : ""}${rangeLabel(prevRange)}` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+  const periodLabel = month ? month.view.label : capitalize(rangeLabel(range));
+
+  const monthSubs = monthKpiSubs({ month, hasPrev, prevTotals, currency });
+  const delta = (cur: number, prev: number) => (hasPrev ? <Change pct={pctDelta(cur, prev)} /> : undefined);
+
+  // 1ª gestión: en equipo manda la mediana de CARRITOS (el segmento con plata);
+  // en modo solo, la propia (derivada de la fila — sin datos del equipo).
+  const ownFirstTouch = rows[0]?.primeraGestion ?? { medianMin: null, n: 0 };
+  const ftPend = firstTouch ? firstTouch.carritos.sinGestionar + firstTouch.resto.sinGestionar : 0;
+  const ftSub: ReactNode = solo ? (
+    ownFirstTouch.n ? (
+      `mediana de ${nf.format(ownFirstTouch.n)} ${ownFirstTouch.n === 1 ? "lead que tocaste" : "leads que tocaste"} primero`
+    ) : (
+      "aún sin leads nuevos tocados primero"
+    )
+  ) : firstTouch ? (
+    // Dos tramos que no se parten; el «·» cierra el primero para que ningún
+    // renglón empiece por él.
+    <span className="flex flex-wrap gap-x-1">
+      <span className="whitespace-nowrap">
+        {firstTouch.carritos.n
+          ? `${firstTouch.carritos.under30Pct} % en menos de ${FIRST_TOUCH_FAST_MIN} min ·`
+          : "sin carritos nuevos ·"}
+      </span>
+      <span className="whitespace-nowrap">el resto, {formatMinutes(firstTouch.resto.medianMin)}</span>
+    </span>
+  ) : undefined;
+  const onlineCount = initialOnlineIds.length;
 
   return (
-    <div className="flex flex-col gap-3 xl:h-[calc(100vh-3rem)] xl:overflow-hidden">
-      {/* Header + todos los filtros en una sola franja */}
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-        <div className="flex items-baseline gap-2">
-          <h1 className="text-lg font-semibold text-slate-900">
+    <div className="flex flex-col gap-4 xl:h-[calc(100dvh-3rem)]">
+      <header className="flex shrink-0 flex-col gap-3">
+        <div>
+          <h1 className="text-[28px] font-bold leading-9 tracking-tight text-ink-900">
             {solo ? "Mi productividad" : "Productividad por asesora"}
           </h1>
-          <p className="text-xs text-slate-400">
-            {month
-              ? [
-                  month.view.label,
-                  month.view.current ? `día ${month.view.day} de ${month.view.daysInMonth}` : null,
-                  hasPrev ? `vs ${month.view.prevLabel}` : null,
-                ]
-                  .filter(Boolean)
-                  .join(" · ")
-              : `${range.from} → ${range.to}`}
-          </p>
+          <p className="mt-0.5 text-sm text-ink-500 first-letter:uppercase">{context}</p>
         </div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          {presets.map(({ label, p }) => (
-            <Chip
-              key={label}
-              href={buildHref({ from: p.from, to: p.to, store: storeId, src: source })}
-              label={label}
-              active={!month && range.from === p.from && range.to === p.to}
-            />
-          ))}
-          {thisMonth && (
-            <>
-              <ChipDivider />
-              <Chip
-                href={buildHref({ from: range.from, to: range.to, store: storeId, src: source, mes: thisMonth.month })}
-                label="Este mes"
-                active={mes === thisMonth.month}
-              />
-              {lastMonth && (
-                <Chip
-                  href={buildHref({ from: range.from, to: range.to, store: storeId, src: source, mes: lastMonth.month })}
-                  label={lastMonth.label.split(" ")[0]!}
-                  active={mes === lastMonth.month}
-                />
-              )}
-              {months.length > 2 && (
-                <ProductivityMonthSelect
-                  options={months.map((m) => ({
-                    ...m,
-                    href: buildHref({ from: range.from, to: range.to, store: storeId, src: source, mes: m.month }),
-                  }))}
-                  value={mes}
-                  active={Boolean(mes) && !chipMonths.has(mes!)}
-                />
-              )}
-            </>
-          )}
-          {stores.length > 1 && (
-            <>
-              <ChipDivider />
-              <Chip
-                href={hrefFor({ store: null, src: source })}
-                label="Todas"
-                active={!storeId}
-              />
-              {stores.map((s) => (
-                <Chip
-                  key={s.id}
-                  href={hrefFor({ store: s.id, src: source })}
-                  label={s.name}
-                  active={storeId === s.id}
-                />
-              ))}
-            </>
-          )}
-          <ChipDivider />
-          <Chip
-            href={hrefFor({ store: storeId, src: null })}
-            label="Fuente: todas"
-            active={!source}
-          />
-          {SOURCE_FILTERS.map((f) => (
-            <Chip
-              key={f.key}
-              href={hrefFor({ store: storeId, src: f.key })}
-              label={f.label}
-              active={source === f.key}
-            />
-          ))}
-        </div>
-      </div>
+        <ProductivityFilters
+          periods={periods}
+          months={monthChips}
+          otherMonths={otherMonths}
+          otherMonth={mes && !chipMonths.some((m) => m.month === mes) ? mes : null}
+          stores={stores.map((s) => ({ value: s.id, label: s.name, href: hrefFor({ store: s.id, src: source }) }))}
+          store={{ value: storeId ?? "", allHref: hrefFor({ store: null, src: source }) }}
+          sources={(Object.keys(SOURCE_LABEL) as SourceBucket[]).map((k) => ({
+            value: k,
+            label: SOURCE_LABEL[k],
+            href: hrefFor({ store: storeId, src: k }),
+          }))}
+          source={{ value: source ?? "", allHref: hrefFor({ store: storeId, src: null }) }}
+        />
+      </header>
 
-      {/* KPIs compactos (en modo solo son LOS SUYOS; el de presencia del equipo
-          no aplica y se oculta) */}
-      <div className={cn("grid shrink-0 grid-cols-2 gap-3 md:grid-cols-3", solo ? "xl:grid-cols-5" : "xl:grid-cols-6")}>
-        <Kpi
+      {/* Las cifras del equipo (en modo solo, las suyas) en un marco de celdas
+          sobre hairlines: un dato, no tarjetas sueltas. */}
+      <dl
+        className={cn(
+          "grid shrink-0 gap-px overflow-hidden rounded-lg bg-line shadow-control ring-1 ring-line",
+          solo ? "grid-cols-2 lg:grid-cols-5" : "grid-cols-2 md:grid-cols-3 xl:grid-cols-6",
+        )}
+      >
+        <Figure
           label={solo ? "Mis llamadas" : "Llamadas"}
-          value={String(totals.llamadas)}
-          delta={hasPrev ? pctDelta(totals.llamadas, prevTotals.llamadas) : undefined}
+          value={nf.format(totals.llamadas)}
+          delta={delta(totals.llamadas, prevTotals.llamadas)}
           sub={monthSubs.llamadas}
         />
-        <Kpi
+        <Figure
           label={solo ? "Mis leads" : "Leads trabajados"}
-          value={String(totals.leads)}
-          delta={hasPrev ? pctDelta(totals.leads, prevTotals.leadsTrabajados) : undefined}
+          value={nf.format(totals.leads)}
+          delta={delta(totals.leads, prevTotals.leadsTrabajados)}
           sub={monthSubs.leads}
         />
-        <Kpi
+        <Figure
           label={solo ? "Mis cerrados" : "Pedidos cerrados"}
-          value={String(totals.cerrados)}
-          delta={hasPrev ? pctDelta(totals.cerrados, prevTotals.cerrados) : undefined}
+          value={nf.format(totals.cerrados)}
+          delta={delta(totals.cerrados, prevTotals.cerrados)}
           sub={monthSubs.cerrados}
         />
-        <Kpi
+        <Figure
           label={solo ? "Mis ingresos" : "Ingresos atribuidos"}
           value={money(totals.ingresos, currency)}
-          delta={hasPrev ? pctDelta(totals.ingresos, prevTotals.ingresos) : undefined}
+          delta={delta(totals.ingresos, prevTotals.ingresos)}
           sub={monthSubs.ingresos}
         />
-        <Kpi
-          label={solo ? "Mi 1ª gestión" : "1ª gestión carritos"}
+        <Figure
+          label={solo ? "Mi 1ª gestión" : "1ª gestión de carritos"}
           value={formatMinutes(solo ? ownFirstTouch.medianMin : (firstTouch?.carritos.medianMin ?? null))}
-          sub={
-            solo
-              ? ownFirstTouch.n
-                ? `mediana de ${ownFirstTouch.n} leads que tocaste primero`
-                : "aún sin leads frescos tocados primero"
-              : ftSub
+          delta={
+            ftPend > 0 ? (
+              <Badge tone="warn" title="Leads nuevos del periodo que siguen en cola sin ninguna gestión">
+                {nf.format(ftPend)} sin gestionar
+              </Badge>
+            ) : undefined
           }
+          sub={ftSub}
+          className={solo ? "col-span-2 lg:col-span-1" : undefined}
         />
         {!solo && (
-          <Kpi
+          <Figure
             label="En línea ahora"
-            value={String(onlineCount)}
-            sub={onlineCount ? "con el dashboard abierto" : "nadie conectada"}
+            value={nf.format(onlineCount)}
+            sub={onlineCount ? "con el panel abierto" : "nadie conectada"}
           />
         )}
-      </div>
+      </dl>
 
-      {/* Tabla única — scroll interno, encabezado sticky */}
-      <Card className="flex min-h-0 flex-1 flex-col overflow-hidden p-0">
-        <div className="min-h-0 flex-1 overflow-auto">
-          <ProductivityTable
-            rows={rows}
-            currency={currency}
-            hasPrev={hasPrev}
-            ctx={{ from: range.from, to: range.to, store: storeId, source }}
-            heatMax={heatMax}
-            heatMode={heatMode}
-            heatStart={HEAT_START}
-            storeInfo={storeInfo}
-            onlineIdle={onlineIdle}
-            initialOnlineIds={initialOnlineIds}
-          />
-        </div>
-        <p className="shrink-0 border-t border-slate-100 px-3 py-1.5 text-[11px] text-slate-400">
-          Actividad = leads distintos gestionados por hora (sin filtro de fuente): <span className="text-brand-700">azul</span> a
-          ritmo (≥6/h) · <span className="text-amber-700">ámbar</span> bajo ritmo · <span className="text-rose-600">rojo</span> hora
-          muerta en plena jornada · gris fuera de jornada — la señal de eficiencia es su contraste con el % de
-          cierre · el pedido se acredita a la asesora del último toque ·{" "}
-          {solo ? "toca tu fila para ver tus leads." : "toca una asesora para ver sus leads."}
-        </p>
-      </Card>
+      <section
+        aria-label={solo ? "Mi actividad" : "Asesoras"}
+        className="flex flex-col rounded-lg bg-white shadow-control ring-1 ring-line xl:min-h-0"
+      >
+        {/* La clave es el periodo y los filtros: al cambiarlos, los leads ya
+            cargados y el panel abierto no son de este tablero. */}
+        <ProductivityTable
+          key={`${range.from}|${range.to}|${storeId ?? ""}|${source ?? ""}`}
+          rows={rows}
+          currency={currency}
+          hasPrev={hasPrev}
+          ctx={{ from: range.from, to: range.to, store: storeId, source }}
+          heatMax={heatMax}
+          heatMode={heatMode}
+          heatStart={HEAT_START}
+          storeInfo={storeInfo}
+          onlineIdle={onlineIdle}
+          initialOnlineIds={initialOnlineIds}
+          solo={solo}
+          periodLabel={periodLabel}
+        />
+      </section>
     </div>
+  );
+}
+
+/** Una celda del marco de cifras: etiqueta, cifra con su cambio y una línea. */
+function Figure({
+  label,
+  value,
+  delta,
+  sub,
+  className,
+}: {
+  label: string;
+  value: string;
+  delta?: ReactNode;
+  sub?: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={cn("flex min-w-0 flex-col bg-white px-4 py-3", className)}>
+      <dt className="text-[13px] font-medium leading-5 text-ink-600">{label}</dt>
+      <dd className="mt-0.5 flex flex-wrap items-baseline gap-x-2">
+        <span className="text-xl font-semibold leading-7 tabular-nums text-ink-900">{value}</span>
+        {delta}
+      </dd>
+      {sub && <dd className="mt-0.5 text-pretty text-xs leading-4 text-ink-500">{sub}</dd>}
+    </div>
+  );
+}
+
+/** El cambio contra el periodo anterior, en su tono: sube en verde, baja en rojo. */
+function Change({ pct }: { pct: number | null }) {
+  if (pct === null) return <span className="text-xs font-medium text-ink-500">sin base</span>;
+  const tone = pct > 0 ? "text-ok-fg" : pct < 0 ? "text-crit-fg" : "text-ink-500";
+  return (
+    <span className={cn("text-[13px] font-semibold tabular-nums", tone)} title="Contra el periodo anterior">
+      {pct > 0 ? "+" : pct < 0 ? "−" : ""}
+      {nf1.format(Math.abs(pct))} %
+    </span>
   );
 }
 
@@ -359,21 +376,20 @@ function monthKpiSubs({
   hasPrev,
   prevTotals,
   currency,
-  count,
 }: {
   month: ProductivityMonth | null;
   hasPrev: boolean;
   prevTotals: ProductivityTotals;
   currency: string;
-  count: (n: number) => string;
 }): { llamadas?: string; leads?: string; cerrados?: string; ingresos?: string } {
   if (!month) return {};
   const { view, pace, prevMonthName, prevMonthTotals } = month;
+  const count = (n: number) => nf.format(n);
   const vs = (n: number) => (hasPrev ? `${view.prevLabel}: ${count(n)}` : undefined);
   const closing = (n: number | undefined, fmt: (x: number) => string) =>
     n == null ? null : view.current ? `${prevMonthName} cerró en ${fmt(n)}` : `${prevMonthName}: ${fmt(n)}`;
   const pacing = (n: number | undefined, fmt: (x: number) => string) =>
-    !view.current ? null : n == null ? "el ritmo se ve desde mañana" : `a este ritmo ~${fmt(n)}`;
+    !view.current ? null : n == null ? "el ritmo se ve desde mañana" : `a este ritmo, ~${fmt(n)}`;
   const join = (...parts: (string | null)[]) => parts.filter(Boolean).join(" · ") || undefined;
   const soles = (n: number) => money(n, currency);
   return {

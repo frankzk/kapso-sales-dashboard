@@ -168,6 +168,14 @@ export function StatusCard({ label, value, active, onClick, hint, marker }: {
   );
 }
 
+/** El aspecto del chip de elección, para quien lo dibuja con otro elemento (un `<select>`). */
+export function choiceChipClass(active: boolean): string {
+  return cn(
+    "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full px-3 text-[13px] font-medium transition-shadow pointer-coarse:h-11",
+    active ? "bg-brand-50 text-brand-700 ring-2 ring-inset ring-brand-600" : "bg-white text-ink-700 ring-1 ring-inset ring-line-strong hover:ring-ink-300",
+  );
+}
+
 /** Chip de elección con cantidad (subetapas, plazos, motivos, filtro de cajas). */
 export function ChoiceChip({ label, count, active, onClick, title }: { label: string; count?: number; active: boolean; onClick: () => void; title?: string }) {
   return (
@@ -177,11 +185,7 @@ export function ChoiceChip({ label, count, active, onClick, title }: { label: st
       disabled={count === 0 && !active}
       onClick={onClick}
       title={title}
-      className={cn(
-        "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full px-3 text-[13px] font-medium transition-shadow pointer-coarse:h-11",
-        active ? "bg-brand-50 text-brand-700 ring-2 ring-inset ring-brand-600" : "bg-white text-ink-700 ring-1 ring-inset ring-line-strong hover:ring-ink-300",
-        count === 0 && !active && "cursor-not-allowed opacity-40",
-      )}
+      className={cn(choiceChipClass(active), count === 0 && !active && "cursor-not-allowed opacity-40")}
     >
       {label}
       {count != null && <span className={cn("tabular-nums", active ? "text-brand-700" : "text-ink-500")}>{count.toLocaleString("es-PE")}</span>}
