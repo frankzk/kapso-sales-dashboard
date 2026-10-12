@@ -2174,3 +2174,31 @@ logs de Vercel, sin nombres ni teléfonos: qué hizo cada tienda (`llamada`,
 `sin_configurar`, `manual`, `apagado`, `error`), el tamaño de la cola, las exclusiones por motivo, los
 brazos sorteados y los «Atender ahora» repuestos. El tablero del piloto está en
 la misma sección de Ajustes.
+
+### 12-10-2026 · Distritos sin el «de» (0246) y «Sacar con salida nueva» (0248, `mom-v1.26`)
+
+1. **Migración `0246_district_aliases_sin_de.sql`**, a mano, antes o después
+   del código: `psql "$DATABASE_URL" -f db/migrations/0246_district_aliases_sin_de.sql`.
+   Solo redefine `lima_district_aliases()` («San Juan Lurigancho», «Pachamamac»,
+   «Cercado delima»…). La cola de Grupo GF usa los alias de TypeScript y se
+   desbloquea con el despliegue; la base los usa en la cobertura y en el pago
+   del motorizado en vivo. **Ya aplicada en producción** el 12-10-2026.
+2. **Migración `0248_gf_replace_output.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0248_gf_replace_output.sql`. Crea
+   `gf_output_replaced` y `gf_replace_output`, redefine `gf_return_to_office`
+   (la 0206 más la rama «a stock») y `gf_carry_over` (la 0234 sin la caja
+   reemplazada —por su evento— y con los candados del lote primero), y crea
+   los triggers
+   `delivery_stops_guard_replaced` y `dispatch_items_guard_replaced_route`. Sin
+   ella, «Sacar con salida nueva» falla y deshace la salida nueva que había
+   creado: no deja salidas huérfanas. **Ya aplicada en producción** el
+   12-10-2026, antes del código. En el historial de Supabase figura dos veces:
+   `0247_gf_replace_output` y, al renumerarla tras llegar a `main` la
+   `0247_voice_lead_calls`, `0248_gf_replace_output` (la misma, idempotente;
+   solo cambia el número en los comentarios); sin efecto sobre el código anterior (en
+   producción no había ninguna salida propia en `retorno` ni devuelta dentro
+   de una caja).
+3. **Después del despliegue**, el cron recalcula el Master por la versión
+   `mom-v1.26`. Con la foto del 12-10-2026 no hay ninguna salida reemplazada
+   (`output_replaced`); cambian pocos pedidos: los que tienen una parada del
+   cuaderno anterior a la salida a la que se atribuía.

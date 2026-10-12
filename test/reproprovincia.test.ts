@@ -337,7 +337,7 @@ describe("y la macroetapa la aplica IGUAL", () => {
     // guía de cualquier courier de Lima anulada después de salir, también.
     // v1.24: Swayp desde Por confirmar. v1.25: entregado, pagado completo a la
     // tienda y sin courier, no espera liquidación.
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.25");
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.26");
   });
 });
 

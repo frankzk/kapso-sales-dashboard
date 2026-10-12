@@ -2009,6 +2009,25 @@ export async function registerClosureAction(
   ) {
     return { error: "Esta salida ya fue recibida físicamente en almacén." };
   }
+  // Una caja de Grupo GF que sigue en la caja de un motorizado se recibe por
+  // «Recibir en oficina» (Despacho del día, «Devoluciones» o su QR): eso la
+  // saca de la caja. Registrarla aquí la dejaba devuelta pero dentro de la caja,
+  // y al recibirla después volvía a «por asignar» (0248, MOM §29.13).
+  if (action === "return_receive" && selectedShipment && (selectedShipment.courier ?? "").toLowerCase() === "propio") {
+    const { data: boxItem } = await admin
+      .from("dispatch_manifest_items")
+      .select("id,dispatch_manifests!inner(courier,driver_name)")
+      .eq("shipment_id", selectedShipment.id)
+      .is("removed_at", null)
+      .eq("dispatch_manifests.courier", "propio")
+      .limit(1)
+      .maybeSingle();
+    if (boxItem) {
+      const manifest = (boxItem as { dispatch_manifests: { driver_name: string | null } | { driver_name: string | null }[] }).dispatch_manifests;
+      const rider = (Array.isArray(manifest) ? manifest[0]?.driver_name : manifest?.driver_name) ?? "un motorizado";
+      return { error: `Esta salida sigue en la caja de ${rider}: recíbela en Despacho del día («En devolución» o «Devoluciones», o escaneando su QR). Eso la saca de la caja.` };
+    }
+  }
   const selectedReturnReceived =
     selectedShipment?.custody_state === "devuelto" || Boolean(selectedShipment?.returned_at);
   if (["inventory_restock", "inventory_merma"].includes(action) && !selectedReturnReceived) {

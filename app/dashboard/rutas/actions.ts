@@ -27,10 +27,11 @@ import {
   stopsNotReceived,
   stopsToSettlementLines,
 } from "@/lib/routes";
-import { returnUndeliveredToOffice } from "@/app/dashboard/courier/actions";
+import { returnUndeliveredOutputs } from "@/app/dashboard/courier/actions";
 import { loadRouteCloseContext } from "@/lib/route-close";
 import { applyDeliveriesToMaster } from "@/lib/master-door";
 import { syncStopsToSheet } from "@/lib/sheets/stop-sync";
+import { ordersWithReplacedOutputOut, replacedOutputStopError } from "@/lib/stop-report";
 
 export interface RouteActionResult {
   ok: boolean;
@@ -175,6 +176,14 @@ export async function addStops(routeId: string, orderIds: string[]): Promise<Rou
   if (unknown.length) {
     return { ok: false, error: `${unknown.length} pedido(s) no existen o no son accesibles.` };
   }
+  // Con una caja reemplazada todavía fuera (0248), una parada sin salida no
+  // dice de qué caja habla: no se añade.
+  const replacedOut = await ordersWithReplacedOutputOut(g.admin, orderIds);
+  if (replacedOut.size) {
+    const [firstId, code] = [...replacedOut.entries()][0]!;
+    const { data: named } = await g.admin.from("orders").select("name").eq("id", firstId).maybeSingle();
+    return { ok: false, error: replacedOutputStopError((named as { name?: string | null } | null)?.name, code) };
+  }
 
   const rows = orderIds.map((orderId) => ({
     route_id: routeId,
@@ -248,9 +257,10 @@ export async function startRoute(routeId: string): Promise<RouteActionResult> {
 /**
  * «Recibir en oficina» desde el cierre de la ruta (29-09-2026): los «No
  * entregado» que siguen en su caja, de una vez. Es la MISMA puerta que
- * «Devoluciones» en Despacho del día (`returnUndeliveredToOffice`, 0188/0206):
+ * «Devoluciones» en Despacho del día (`returnUndeliveredOutputs`, 0188/0206):
  * sale de la caja con rastro y vuelve a «por asignar», rechazo incluido
- * (v1.23). Pulsarlo dice que las cajas están en la oficina.
+ * (v1.23); la caja reemplazada por otra salida vuelve a stock (0248). Solo las
+ * cajas de ESTA ruta. Pulsarlo dice que las cajas están en la oficina.
  */
 export async function receiveRouteReturns(routeId: string): Promise<RouteActionResult> {
   const g = await guard();
@@ -261,7 +271,13 @@ export async function receiveRouteReturns(routeId: string): Promise<RouteActionR
   if (!pending.length) return { ok: true, message: "No queda ningún «No entregado» en la caja." };
   const orgId = detail.route.org_id;
   if (!orgId) return { ok: false, error: "La ruta no tiene organización: recíbelos desde «Devoluciones»." };
-  const res = await returnUndeliveredToOffice(orgId, [...new Set(pending.map((stop) => stop.order_id))]);
+  // Por salida y solo de las cajas de ESTA ruta: el mismo pedido puede tener
+  // otra caja «No entregado» con otro motorizado (la reemplazada, 0248).
+  const res = await returnUndeliveredOutputs(
+    orgId,
+    [...new Set(pending.map((stop) => stop.shipment_id).filter((id): id is string => Boolean(id)))],
+    { manifestIds: [...new Set(pending.map((stop) => stop.dispatch_manifest_id).filter((id): id is string => Boolean(id)))] },
+  );
   revalidatePath("/dashboard/courier/rutas");
   if (res.error) return { ok: false, error: res.error };
   return { ok: true, message: res.notice };

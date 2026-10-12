@@ -17,6 +17,7 @@
 //   4. En proceso                — hay gestión logística iniciada sin resultado.
 //   5. Pendiente                 — todavía no arrancó bien el proceso logístico.
 
+import { NO_REPLACED_OUTPUTS, replacedOutputIds } from "@/lib/gf-replaced-output";
 import { hasConfirmationSignal } from "@/lib/order-confirmation";
 import { COMPANION_LINKED } from "@/lib/order-companion";
 import { recoveryActive } from "@/lib/reproprovincia";
@@ -260,6 +261,8 @@ export interface GuideSnapshot {
   payment_check_state?: string | null;
   /** Cuándo la caja pasó al motorizado. Nulo = nunca salió de la empresa. */
   custody_transferred_at?: string | null;
+  /** empresa | courier | retorno | devuelto: la que vuelve no es la vigente. */
+  custody_state?: string | null;
   /** La etiqueta cruda de Aliclik (`status · dispatch · call`). Es lo único que
    *  distingue «el courier no pudo entregar» de «nos cancelaron la venta». */
   reported_status?: string | null;
@@ -400,13 +403,20 @@ export function isAgencyCourier(courier: string | null | undefined): boolean {
  * La guía "vigente": la que el equipo está trabajando ahora. Se descartan las
  * congeladas (transferido/anulado) mientras haya alguna activa; si no queda
  * ninguna activa, gana la que se movió más recientemente.
+ *
+ * Entre las activas, la que se trabaja gana a la reemplazada (12-10-2026,
+ * «Sacar con salida nueva»; `replaced` son las salidas con `output_replaced`,
+ * de `replacedOutputIds`): con el motorizado o ya recibida sigue `pendiente`, y
+ * su recepción la haría parecer la más reciente aunque el pedido ya salga con
+ * otra. Una en `retorno` por «Solicitar devolución» compite como siempre.
  */
-export function currentGuide(guides: GuideSnapshot[]): GuideSnapshot | null {
+export function currentGuide(guides: GuideSnapshot[], replaced: ReadonlySet<string> = NO_REPLACED_OUTPUTS): GuideSnapshot | null {
   if (!guides.length) return null;
   const active = guides.filter(
     (g) => g.delivery_status === "pendiente" || g.delivery_status === "en_ruta",
   );
-  const pool = active.length ? active : guides;
+  const working = active.filter((g) => !replaced.has(g.id));
+  const pool = working.length ? working : active.length ? active : guides;
   let best = pool[0]!;
   for (const g of pool) {
     const a = guideMovedAt(g);
@@ -522,11 +532,12 @@ export function resolveOrderState(inputs: ResolveInputs): ResolvedOrderState {
   // pedido por perdido ni para decir que hay gestión en curso.
   const corregidas = correctedShipmentIds(events);
   const real = guides.filter((g) => !cancelledAsRecordCorrection(g, corregidas));
-  const currentReal = currentGuide(real);
+  const replaced = replacedOutputIds(events);
+  const currentReal = currentGuide(real, replaced);
 
   // ── Rollup logístico (independiente del estado: se calcula siempre)
   const couriers = [...new Set(guides.map((g) => g.courier).filter(Boolean))];
-  const current = currentGuide(guides);
+  const current = currentGuide(guides, replaced);
   const byRecency = [...guides].sort((a, b) => {
     const av = guideMovedAt(a) ?? "";
     const bv = guideMovedAt(b) ?? "";

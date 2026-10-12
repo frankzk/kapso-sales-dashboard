@@ -113,6 +113,10 @@ Reglas:
   `pedido + consecutivo` y el rótulo dice `Por definir`.
 - La regla de repetición por modalidad se evalúa cuando el courier se conoce; el
   máximo de cinco salidas rige siempre, porque no depende del courier.
+- **«Sacar con salida nueva» (12-10-2026, §29.13)** abre un consecutivo más
+  mientras el motorizado todavía tiene la caja anterior: cuenta en el máximo de
+  cinco. La salida reemplazada conserva su consecutivo, código, QR y rótulo
+  —es la caja que vuelve— y nunca se reutiliza.
 - **Crear la guía de un courier (Tanders, Aliclik, Shalom) RELLENA la salida
   `por definir` del pedido en vez de abrir una segunda.** Fijar el courier es lo
   que la salida estaba esperando; es la misma caja, ya armada y rotulada. Se
@@ -924,7 +928,7 @@ Ejemplos:
 | Cualquier courier de Lima anuló la guía con la caja ya fuera (v1.23) | En curso | Por reprogramar Lima |
 | Ruta cerrada con la parada entregada, sin liquidar | Por cerrar | Pendiente de liquidación |
 | Aliclik retornando y Swayp repartiendo | En curso | En reparto |
-| Una salida entregó y otra sigue activa | Por cerrar | Salida adicional activa |
+| Una salida entregó y otra sigue activa (la reemplazada que vuelve con el motorizado no cuenta: es «Devolución física pendiente», §29.13) | Por cerrar | Salida adicional activa |
 | Entregado, courier aún no liquidó | Por cerrar | Pendiente de liquidación |
 | Entregado (no Agencia) sin ninguna salida ni motorizado, pagado completo a la tienda (v1.25, §6.5) | Finalizado | Entregado y cerrado |
 | Entregado (no Agencia) sin ninguna salida, sin pago completo validado | Por cerrar | Pendiente de liquidación |
@@ -1471,7 +1475,11 @@ intento fallido (`apiGuideReceivedBack`, `lib/reproprovincia.ts`), con la misma
 ventana y la misma ancla. Grupo GF y el motorizado propio no entran: su
 «Recibir en oficina» devuelve la salida a «por asignar». Lo que el motorizado
 propio no entregó se reprograma desde «Desde la lista» con su misma salida,
-también sin solicitud de Grupo GF (06-10-2026, §29.13).
+también sin solicitud de Grupo GF (06-10-2026, §29.13). Si el motorizado
+todavía tiene la caja y el pedido tiene que salir antes, sale con una salida
+nueva y la anterior queda «en devolución» a su nombre (12-10-2026, §29.13):
+esa salida no bloquea la toma, no se reusa ni se rotula, no es la salida
+vigente del pedido y no abre una recuperación.
 
 Lo que queda fuera: Axel no reporta sus no entregados a Kapta —solo llegan por
 la liquidación, que únicamente mueve entregas—. Urpi sí los reporta desde el
@@ -1600,7 +1608,14 @@ entonces:
 - Excepción de Grupo GF: si no cambia el producto ni el courier, su propia
   salida vuelve a salir otro día con el mismo envío, QR y rótulo —recibida en
   oficina (§29.5, v1.15) o, sin solicitud de Grupo GF, desde «Desde la lista»
-  (06-10-2026, §29.13)—. No se arma otra caja para el mismo paquete.
+  (06-10-2026, §29.13)—. No se arma otra caja para el mismo paquete, salvo
+  **«Sacar con salida nueva»** (12-10-2026, §29.13): si el motorizado todavía
+  tiene la caja y el pedido debe salir antes de que la devuelva, se arma otra
+  caja desde stock con salida, QR y rótulo nuevos. La anterior queda en
+  devolución a su nombre (custodia `retorno`, evento `output_replaced`) y, al
+  recibirla en oficina, se desarma y vuelve a stock: no se reutiliza ni vuelve a
+  la cola. Cuenta dentro de las cinco salidas; el motivo de salida adicional lo
+  escribe el sistema.
 - La nueva salida no debe borrar ni cerrar automáticamente la devolución física
   de la salida anterior.
 - El equipo revisa el courier anterior y el motivo antes de elegir el siguiente.
@@ -1665,7 +1680,7 @@ Reglas:
 
 | Operador | Fuente del resultado | Momento observado |
 | --- | --- | --- |
-| Johnny, Roy y Douglas | WhatsApp; `entregado` o `entregado en efectivo`, más evidencia para Yape, Plin, link o POS | Durante/final de ruta |
+| Johnny (Yhoni), Roy, Alexis y Douglas | WhatsApp; `entregado` o `entregado en efectivo`, más evidencia para Yape, Plin, link o POS | Durante/final de ruta |
 | Axel Courier | Cuadro de entregados y devueltos; devolución física normalmente al día siguiente | Día siguiente |
 | Swayp | Excel/plataforma en tiempo real | Durante la ruta |
 | Urpi | Plataforma en tiempo real; su export «Reporte del mes – detallado» se carga en Kapta (§30.11) | Durante la ruta |
@@ -2010,13 +2025,20 @@ sin tope de antigüedad. Reglas:
 
 Devoluciones físicas:
 
-- Motorizados propios: el saldo no entregado se coteja físicamente al día
-  siguiente, pedido por pedido.
+- Motorizados propios: el saldo no entregado se queda con el motorizado hasta
+  que lo trae a la oficina, y de noche no se recibe nada. Johnny (Yhoni) y Roy
+  lo traen al día siguiente; Alexis, cada dos o tres días (owner, 12-10-2026).
+  Se recibe en oficina («Recibir en oficina», §29.13) el día que llega, pedido
+  por pedido y por su salida/QR. Hasta entonces la salida sigue «No entregado»
+  a su nombre. Para Douglas no hay una cadencia confirmada.
 - Axel: Daysi o Diana fotografía y coteja los paquetes devueltos y la fecha.
 - Swayp y Urpi: el recojo de devoluciones ocurre actualmente cada semana o cada
-  quince días; cada salida debe permanecer abierta hasta recibir su caja.
+  quince días (Urpi, cada una o dos semanas); cada salida debe permanecer
+  abierta hasta recibir su caja.
 - Si ya existe otra caja armada para el mismo pedido, la devolución anterior se
-  identifica por su salida/QR; nunca se concilia solo por número de pedido.
+  identifica por su salida/QR; nunca se concilia solo por número de pedido. Si
+  la otra caja salió con «Sacar con salida nueva» (§29.13), la anterior se
+  recibe por su salida/QR y se desarma: vuelve a stock.
 - Los pedidos que el cliente rechazó definitivamente y que fueron anulados en
   Shopify no se vuelven a armar.
 
@@ -2051,10 +2073,13 @@ la lista de Almacén «Reintentos por salir» quedan para una fase posterior.
 - **Paso a paso de un «No entregado» de Grupo GF:**
   1. El motorizado reporta el motivo y la foto en su ruta; si el cliente pide
      otro día, lo escribe en la nota. Puede reintentarlo el mismo día con la
-     misma caja (§9.3). Al terminar, entrega en oficina toda caja no entregada.
-  2. Esa misma noche alguien del equipo lo recibe con «Recibir en oficina»
-     (escaneo o lista, §29.13): al día siguiente no queda ninguna caja «No
-     entregado» a nombre de un motorizado. La caja va al estante de
+     misma caja (§9.3). La caja no entregada se queda con él hasta que la trae
+     a la oficina: Johnny (Yhoni) y Roy al día siguiente, Alexis cada dos o
+     tres días (§9.4).
+  2. El día que el motorizado la trae, alguien del equipo la recibe con
+     «Recibir en oficina» (escaneo o lista, §29.13); de noche no se recibe
+     nada. Hasta entonces la salida sigue «No entregado» a nombre del
+     motorizado: es lo esperado, no una caja perdida. La caja va al estante de
      reprogramados, en la bandeja del día en que se recibió.
   3. Alguien del equipo contacta al cliente y deja la fecha con «Programar»
      en Despacho del día (motivo «Confirmado con cliente: …», §29.6), o anota
@@ -2064,7 +2089,10 @@ la lista de Almacén «Reintentos por salir» quedan para una fase posterior.
      el cliente dio en la puerta se confirma antes de programarla.
   4. Para el día programado, la caja pasa del estante al anaquel del día. Por
      defecto **se mantiene**: misma salida, QR y rótulo (excepción de Grupo GF,
-     §9.3). Se reimprime el rótulo de la misma salida si cambió la dirección
+     §9.3). Si el motorizado todavía no la trajo y el pedido tiene que salir
+     antes —con Alexis puede tardar dos o tres días—, «Sacar con salida nueva»
+     en Despacho del día arma otra caja desde stock (§29.13); la que vuelve se
+     recibe después y se desarma. Se reimprime el rótulo de la misma salida si cambió la dirección
      —corregida antes con el editor de destino de la salida, que la guarda en
      la salida y en Shopify; corregirla solo en Shopify no cambia el rótulo— o
      el monto (el rótulo lo lee del pedido). El teléfono del rótulo es el que
@@ -2074,8 +2102,10 @@ la lista de Almacén «Reintentos por salir» quedan para una fase posterior.
      ya no lo quiere o el pedido se cancela.
   5. Despacho GF lo asigna a un motorizado desde «Programados hoy» o por QR.
 - **Barrido inicial.** Las cajas «No entregado» que siguen registradas en la
-  caja de un motorizado se reciben en oficina una por una. Lo que no aparezca
-  físicamente no se recibe en oficina: se anota en la ficha del pedido (caja,
+  caja de un motorizado se reciben en oficina una por una. Una caja de Johnny
+  o Roy del día anterior, o de Alexis con menos de tres días, no es faltante:
+  está con el motorizado. Lo que no aparezca físicamente no se recibe en
+  oficina: se anota en la ficha del pedido (caja,
   motorizado, quién buscó y cuándo) y se avisa a Frankz o Yohalis para decidir
   merma, descuento al motorizado o reclamo. No es una búsqueda en la calle. Un
   registro propio de paquete que no consta queda para una fase posterior: §13
@@ -3451,6 +3481,24 @@ guion, la barra y la coma se leen como separador, y las grafías conocidas
 se rechaza: un nombre ambiguo como «San Juan» o «Huachipa» no se adivina.
 Esto vino de #KP132394, donde la cobertura aceptaba la guía y el ubigeo la
 negaba —comparaban distinto— y la salida se creó con código manual.
+
+**Grafías sin el «de» o pegadas (owner, 12-10-2026; migración 0246).** Se
+escriben sin el «de» y siguen siendo el mismo distrito: «San Juan Lurigancho»
+es San Juan de Lurigancho, **nunca** Lurigancho-Chosica; «San Juan Miraflores»
+es San Juan de Miraflores y «San Martín Porres» es San Martín de Porres.
+«Pachamamac» es Pachacámac, y «Cercado delima» o «Cercado Lima» son Lima
+(Cercado). Antes de estos alias, la búsqueda dentro del texto encontraba el
+distrito oficial más corto con que terminaba el texto: «San Juan Lurigancho»
+caía en Lurigancho y los otros quedaban como distrito inválido, fuera de la
+cola de Grupo GF. La lista de alias es una sola regla en dos lugares
+(`DISTRICT_ALIASES` en `lib/order-coverage.ts` y `lima_district_aliases()` en
+la base), y una prueba exige que digan lo mismo.
+
+Un distrito de **otro departamento** con la región «Lima (provincia)» no es un
+alias: #KP130975 trae «HUARAZ», que es Áncash. Se corrige en la ficha con
+«Corregir ubicación» (Áncash / Huaraz / Huaraz); el pedido pasa a Provincia
+COD y sale por Reproprovincia con Aliclik. No se decide por la provincia sola:
+hay pedidos de San Miguel de Lima que llegan con la provincia «San Román».
 
 Falta la configuración de bodega Swayp (`senders`) de las cuatro ciudades
 nuevas; sin ella la guía se niega aunque el ubigeo resuelva. Es configuración
@@ -6544,6 +6592,11 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
 - Almacén registra recepción y coteja solicitado contra recibido.
 - Actualmente se verifica principalmente que llegó la caja.
 - Yelitza decide reingreso a inventario o merma.
+- La caja reemplazada por «Sacar con salida nueva» (§29.13) se recibe en
+  oficina, se desarma y se registra como reingreso a inventario
+  (`inventory_restock`, permiso `closure.inventory`) sobre ESA salida. Si el
+  pedido ya se entregó con la salida nueva, el cierre espera ese registro
+  (`Por cerrar · Devolución pendiente de inventario`, v1.26).
 - Una devolución posterior del cliente mantiene el resultado Entregado y abre
   `Por cerrar · Devolución del cliente`.
 - Solo Frankz y Yohalis pueden reabrir una devolución finalizada.
@@ -7181,8 +7234,8 @@ Primer bloque publicado en el drawer del Master:
   reembolsos; los permisos puntuales de `user_permissions` siguen prevaleciendo.
 - El resolver quedó versionado —`mom-v1.4` en este bloque; la versión vigente es
   siempre `MOM_RESOLUTION_VERSION` en `lib/order-macro-stage.ts`, hoy
-  `mom-v1.25` (10-10-2026: pagado a la tienda y sin courier no espera
-  liquidación, §6.5)—; el cron detecta versiones anteriores y recalcula el histórico por
+  `mom-v1.26` (12-10-2026: «Sacar con salida nueva», la salida reemplazada
+  que el motorizado todavía tiene no es la vigente, §29.13)—; el cron detecta versiones anteriores y recalcula el histórico por
   lotes hasta que todo el Master converja, sin necesitar credenciales locales ni
   detener la sincronización. Toda regla que cambie el resultado de filas que
   nadie tocó debe subir esa constante, o el histórico queda con el veredicto
@@ -9554,7 +9607,9 @@ Decisión del owner (06-10-2026):
 - **Si sigue en una caja** y lo último que su motorizado reportó en ESA caja
   es «No entregado» —lo mismo que exige `gf_return_to_office`, 0206—, aparece
   con la chapa «No entregado · motivo» para **«Recibir en oficina»** —o se
-  escanea, que lo recibe y lo asigna— y después se toma con la misma salida.
+  escanea, que lo recibe y lo asigna— y después se toma con la misma salida; o,
+  si el motorizado aún la tiene y el pedido debe salir antes, **«Sacar con
+  salida nueva»** (12-10-2026, abajo).
   Sin ese reporte (solo la parada del cuaderno, o la de la caja dice otra cosa)
   va a «Sin condiciones · En una caja sin "No entregado" de esa caja»: hay que
   revisar la parada antes de sacarlo otra vez (#KP134157, #KP134960 y #KP134917
@@ -9604,6 +9659,137 @@ Implementación: `lib/gf-retry.ts`, `app/dashboard/courier/actions.ts`
 (`loadCourierOperations`, `loadActiveBoxes`, `takeOrdersCore`, `adoptOwnOutput`,
 `assignRouteCore`), `lib/order-route-plan.ts` y
 `components/dispatch-day-board.tsx`. Pruebas en `test/gf-own-retry.test.ts`.
+
+**«Sacar con salida nueva»: el pedido sale mientras el motorizado todavía tiene la caja (12-10-2026, decisión del owner).**
+De noche no se recibe nada y cada motorizado trae lo no entregado cuando vuelve:
+Johnny (Yhoni) y Roy al día siguiente, Alexis cada dos o tres días (§9.4). Hasta
+ahora un «No entregado» de Grupo GF solo podía volver a salir con su misma
+salida, después de «Recibir en oficina»: si el cliente lo pedía antes, había que
+esperar al motorizado. Un mismo pedido puede tener una salida «en devolución»
+sin devolver y otra saliendo (principio 7, §7).
+
+- **Para cualquier motorizado con caja de Grupo GF** (`propio`), sin umbral de
+  días: la cadencia de cada uno es un dato, no una regla. Urpi no tiene caja en
+  Kapta y sigue por la v1.19.
+- **Dónde.** Despacho del día → la fila «No entregado · motivo» de un pedido en
+  «Por reprogramar Lima» cuya salida sigue en la caja del motorizado (con
+  solicitud de Grupo GF o sin ella) → marcarla → **«Sacar con salida nueva»**.
+  La confirmación dice qué salida sigue con quién, desde qué día y el motivo,
+  y recuerda que Johnny y Roy la traen al día siguiente: si el pedido puede
+  esperar, se recibe en oficina y sale con su misma salida.
+- **Quién.** Quien organiza rutas (`dispatch.manage`) en las tiendas que tiene
+  en Equipo (§29.10).
+- **Qué pasa** (`replaceOwnOutputs`, `app/dashboard/courier/actions.ts`, y
+  `gf_replace_output`, 0248):
+  - Nace una salida nueva de Grupo GF con su consecutivo, QR y rótulo
+    (`rotulo_generado`, custodia `empresa`): Almacén arma otra caja desde stock
+    y el pedido pasa a «Preparación · Por armar». Cuenta dentro de las cinco
+    salidas; el motivo de salida adicional lo escribe el sistema
+    (`additional_output_reason`: «Alexis no entregó KP140009-S01 (caja del
+    09/10) y todavía la tiene…»).
+  - La salida anterior solo cambia de custodia, a `retorno`: conserva su parada
+    «No entregado», su lugar en la caja del motorizado y `dispatched_at`. No se
+    escribe `return_started`.
+  - La solicitud viva de Grupo GF pasa a la salida nueva, aceptada y con su día
+    (el programado, o el primero posible según el corte de las 12:00). Si la
+    anterior salió sin solicitud (por el cuaderno, o antes de las solicitudes),
+    se abre una. Si la solicitud viva del pedido es de otra salida, no se saca.
+  - Eventos `output_replaced` en el pedido (sobre la salida anterior), en la
+    caja y en la solicitud. **Ese evento es la marca de la salida
+    reemplazada** (`gf_output_replaced`, 0248): la custodia `retorno` sola no
+    basta, porque «Solicitar devolución» (§13) también la pone, y esa salida se
+    sigue reportando, recibiendo y reprogramando como siempre: «Desde la
+    lista» la ofrece para «Recibir en oficina», al recibirla vuelve a «por
+    asignar», y no se saca con salida nueva («ya está en devolución»).
+  - No se saca si el pedido ya no está en «Por reprogramar Lima», si tiene una
+    salida entregada, si la salida ya no está en la caja o su parada no dice
+    «No entregado», si el pedido tiene otra salida viva o si ya tiene cinco
+    salidas. Dos clics o dos pestañas no crean dos: el segundo dice «ya salió
+    con otra salida». Si la base rechaza el reemplazo, la salida nueva se borra
+    y la solicitud abierta para ella también.
+- **La caja que vuelve** sale en la píldora **«En devolución»** de Despacho del
+  día («S01 vuelve con Alexis · 3 d · sale con S02»), con su propio «Recibir en
+  oficina». También la recibe «Devoluciones» (con la chapa «reemplazada · a
+  stock»), el escaneo de «Por QR» y el escaneo de Almacén: queda `devuelto` con
+  `returned_at` y conserva `dispatched_at`; el pedido NO vuelve a «por asignar»
+  y el escaneo no la asigna —ni en su caja ni ya recibida: un QR de la caja
+  reemplazada nunca toma ni asigna la salida nueva—. La línea del escaneo dice
+  «recibida… desármala» en azul, no «No elegible». Se escribe `return_received`
+  (no `returned_to_office`, que `gf_order_departures` cuenta como salida). Se
+  desarma y se registra el reingreso a stock sobre esa salida (§13).
+- **Recibir en oficina va por salida, en todas partes.** Un pedido puede tener
+  dos cajas «No entregado» con dos motorizados (la reemplazada con Alexis, la
+  nueva con Johnny): recibir una nunca recibe la otra. La lista de Despacho del
+  día, la fila de «Devoluciones», su QR y el cierre de una ruta (solo las
+  cajas de esa ruta) reciben la caja concreta. Por número de pedido, si el
+  pedido tiene dos cajas por recibir, no se recibe ninguna y se pide el QR de
+  la que llegó (§9.4: nunca se concilia solo por número de pedido).
+- **Por número de pedido, mientras la reemplazada siga fuera, el escaneo no
+  elige: pide el QR.** La caja anterior y la nueva llevan el mismo código de
+  barras (el número de pedido, §4), así que el número no dice cuál está en la
+  mano. Mientras la reemplazada esté en devolución sin recibir, un escaneo o
+  un número escrito no toma, asigna, recibe, prepara ni coteja ninguna salida
+  del pedido: la línea pide el QR de la caja. El QR, el código de salida y la
+  guía siguen designando su caja. Ya recibida la anterior, el número vuelve a
+  funcionar como siempre.
+- **La Mesa de cierre no recibe una caja que sigue con el motorizado.**
+  «Registrar recepción» sobre una salida de Grupo GF que sigue en la caja de un
+  motorizado se niega y manda a «Recibir en oficina», que es lo que la saca de
+  la caja. Si ya constaba devuelta y sigue en la caja (registrada antes de
+  este cambio), «Recibir en oficina» la saca y la deja devuelta, sin volver a
+  «por asignar».
+- **El motorizado ya no la entrega.** La parada de una salida reemplazada no
+  cambia de estado —ni entregarla ni deshacer su «No entregado»—: lo impide el
+  trigger `delivery_stops_guard_replaced` (0248), también si el motorizado
+  escribe su parada directamente, y el reporte lo dice antes
+  (`writeStopReport`). Corregir la nota o el motivo sin cambiar el estado sí se
+  puede. Tampoco se mueve a otro motorizado ni pasa a su ruta siguiente desde
+  el cuaderno: `gf_carry_over` la excluye —por su evento: una en `retorno` por
+  «Solicitar devolución» pasa como siempre— y toma primero los candados de
+  todo el lote (ítems y cajas, en orden) y relee cada paquete, así que un
+  reemplazo o una recepción simultáneos no se pisan ni se bloquean en cruz.
+  Tampoco se añade el pedido como punto a mano (el teléfono del motorizado,
+  Rutas): una parada sin salida no dice de qué caja habla, y la nueva va por
+  Despacho del día con su caja.
+- **La salida nueva no va con el mismo motorizado el mismo día** que la caja
+  reemplazada: la ruta del día tiene una parada por pedido y la de la caja
+  anterior ya la ocupa. Asignarla ahí se niega con el motivo
+  (`dispatch_items_guard_replaced_route`, 0248); va con otro motorizado u otro
+  día.
+- **Master** (v1.26): la salida reemplazada (en devolución y con
+  `output_replaced`, `isReplacedOwnOutput`) sigue activa —el pedido no se
+  finaliza mientras el motorizado la tenga—, pero no es la vigente: el pedido
+  sigue a la salida nueva (Por armar → Por despachar → En curso) y nunca vuelve
+  a «Por reprogramar Lima» por el «No entregado» de la anterior. Si la nueva se
+  entrega con la anterior todavía fuera, queda «Por cerrar · Devolución física
+  pendiente»; recibida y sin reingreso, «Devolución pendiente de inventario».
+  Una parada sin salida (del cuaderno o a mano) nunca se le atribuye a la caja
+  reemplazada, y a la salida nueva solo si es posterior a que naciera. Una
+  salida en `retorno` por «Solicitar devolución», sin el evento, resuelve como
+  antes de la v1.26 (sigue siendo «salida adicional activa» y su «No
+  entregado» sigue mandando). `MOM_RESOLUTION_VERSION` sube a `mom-v1.26`.
+- **Si la base no responde** al sacarla, antes de deshacer nada se comprueba si
+  el reemplazo quedó hecho (la solicitud ya apunta a la salida nueva): si se
+  hizo, se da por hecho y no se anula la salida nueva. Lo que no se pudo sacar
+  se dice con su pedido y su motivo, también junto a lo que sí.
+- **Al recibir, el aviso dice lo que hizo la base.** Si un reemplazo termina
+  mientras alguien recibe esa caja, la base la manda a stock: el aviso («a
+  stock» o «vuelve a por asignar») y el escaneo de «Por QR» se deciden
+  releyendo la salida después de recibirla, y un escaneo cuya caja fue a stock
+  no toma ni asigna la salida nueva.
+- **Límites conocidos.** Kapta no lleva un libro de stock: la caja nueva se
+  arma aunque falte producto, y lo dirá la incidencia de preparación. Si la
+  salida nueva se anula con la anterior todavía en devolución, el pedido queda
+  sin salida viva en la cola y se resuelve en la ficha. Si el motorizado
+  entregara la caja anterior pese al bloqueo, es una incidencia: se anula la
+  nueva si no salió y se corrige en la ficha.
+
+Implementación: `lib/gf-replaced-output.ts`, `lib/gf-retry.ts`
+(`ownReplaceDecision`), `app/dashboard/courier/actions.ts` (`replaceOwnOutputs`,
+`returnUndeliveredShipments`, `loadReturningOutputs`), `lib/order-macro-stage.ts`,
+`lib/order-status.ts`, `components/dispatch-day-board.tsx` y la migración
+`0248_gf_replace_output.sql`. Pruebas en `test/gf-replace-output.test.ts` y
+`scripts/sql/gf_replace_output_smoke.sql`.
 
 **Escanear un «No entregado» de una caja anterior lo recibe y lo asigna
 (29-09-2026).** #KP136779 y #KP136896 salieron el 26/09 con Yhoni y volvieron
@@ -10126,16 +10312,20 @@ decía «Ya estaba». Había 78 así, en cajas del 16 al 28/09, y 20 rechazos.
   ítem activo en la caja (`stopsNotReceived`, el mismo criterio del escaneo).
 - **Se puede cerrar igual, a conciencia** («Cerrar igual», con confirmación):
   cerrar no espera a que se reciba el saldo no entregado, y exigirlo antes del
-  cierre frenaría la liquidación del efectivo. Desde la fase 0 (11-10-2026,
-  §9.5) el motorizado entrega ese saldo en oficina al terminar y alguien del
-  equipo lo recibe esa misma noche: a la mañana siguiente no queda ninguna caja
-  «No entregado» a su nombre (antes se devolvía al día siguiente). Lo que queda sigue
-  en «Devoluciones» y el escaneo de «Por QR» lo recibe al volver a asignarlo.
+  cierre frenaría la liquidación del efectivo. El motorizado trae ese saldo a
+  la oficina cuando vuelve —Johnny (Yhoni) y Roy al día siguiente, Alexis cada
+  dos o tres días; de noche no se recibe nada (§9.4, §9.5)— y ese día se
+  recibe en oficina. Hasta entonces la caja «No entregado» sigue a su nombre.
+  Lo que queda sigue en «Devoluciones» y el escaneo de «Por QR» lo recibe al
+  volver a asignarlo; la caja reemplazada por otra salida (§29.13) la recibe
+  y no la asigna.
   Es lo único que se fuerza en Grupo GF; lo sin reportar y la foto no.
 - **«Recibir en oficina»** en la misma fila (`receiveRouteReturns`) los recibe
-  de una vez por la puerta de «Devoluciones» (`returnUndeliveredToOffice`,
-  0188/0206): vuelven a «por asignar», rechazos incluidos (v1.23). Pulsarlo es
-  decir que las cajas están en la oficina, y lo confirma.
+  de una vez por la puerta de «Devoluciones» (`returnUndeliveredOutputs`,
+  0188/0206), por salida y solo de las cajas de esa ruta: vuelven a «por
+  asignar», rechazos incluidos (v1.23); la caja reemplazada por otra salida
+  vuelve a stock (0248). Pulsarlo es decir que las cajas están en la oficina, y
+  lo confirma.
 - La tabla de la ruta filtra **«Por devolver»** con el mismo criterio.
 
 **Reabrir ruta.** Una ruta cerrada vuelve a «en curso» (`reopenRoute`, permiso

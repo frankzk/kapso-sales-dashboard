@@ -61,6 +61,7 @@ import {
   splitAssignment,
   toggleInList,
   toggleQueueTile,
+  isReplaceable,
   isReturnable,
   takenIsAssignable,
   type BoxItemFilter,
@@ -74,7 +75,7 @@ import {
 } from "@/lib/dispatch-day";
 import { macroStageLabel, macroSubstageLabel, ORDER_MACRO_STAGES } from "@/lib/order-macro-stage";
 import { nonDeliveryReasonLabel } from "@/lib/gf-delivery";
-import { failedOutputLabel, ownOutputLabel } from "@/lib/gf-retry";
+import { daysBetween, failedOutputLabel, ownOutputLabel, replacedOutputLabel } from "@/lib/gf-retry";
 import { confirmedTandersReview, type TandersConfirmations, type TandersPackageLocation, type TandersReview } from "@/lib/gf-tanders-review";
 import { addToTray, optimisticBox, removeFromTray, type TrayEntry } from "@/lib/dispatch-scan-tray";
 import type { DispatchManifest } from "@/lib/dispatch-access";
@@ -87,12 +88,15 @@ import {
   rescheduleGroupGfCourierOrders,
   clearGroupGfCourierPrograms,
   returnUndeliveredToOffice,
+  returnUndeliveredOutputs,
+  replaceOwnOutputs,
   type ScanAssignLine,
   type CourierAcceptedOrder,
   type CourierActionResult,
   type CourierAvailableOrder,
   type CourierBlockedOrder,
   type CourierReturnableOrder,
+  type CourierReturningOutput,
   type CourierRiderOption,
 } from "@/app/dashboard/courier/actions";
 import { removeManifestItem, scanManifestItem } from "@/app/dashboard/pedidos/despacho/actions";
@@ -103,6 +107,8 @@ interface Props {
   available: CourierAvailableOrder[];
   /** Salidas propias en una caja anterior sin solicitud: se reciben en oficina. */
   returnable: CourierReturnableOrder[];
+  /** Cajas reemplazadas que el motorizado todavía tiene (0248): «En devolución». */
+  returning?: CourierReturningOutput[];
   accepted: CourierAcceptedOrder[];
   /** Pedidos de Lima que no entran en la cola, con su motivo («sin condiciones»). */
   blocked: CourierBlockedOrder[];
@@ -169,6 +175,16 @@ export function DispatchDayBoard(props: Props) {
   };
   const [blockedOpen, setBlockedOpen] = useState(false);
   const [declinedOpen, setDeclinedOpen] = useState(false);
+  // «Sacar con salida nueva» (0248): la confirmación, y las cajas reemplazadas
+  // que el motorizado todavía tiene, con su propia selección por salida (el
+  // mismo pedido ya está en la cola con la salida nueva).
+  const [replaceOpen, setReplaceOpen] = useState(false);
+  const [returningOpen, setReturningOpen] = useState(false);
+  const [returningSelected, setReturningSelected] = useState<Set<string>>(() => new Set());
+  const returning = props.returning ?? [];
+  // Solo lo marcado que sigue en la lista: lo recibido en otra pestaña o por QR
+  // ya no está y no cuenta.
+  const returningChosen = returning.filter((r) => returningSelected.has(r.shipmentId));
   // Filtro rápido de las cajas (Todos · Por armar · Listos para cotejo · Sin
   // confirmar): compartido por todas las cajas de la pestaña.
   const [boxFilter, setBoxFilter] = useState<BoxItemFilter>("todos");
@@ -232,7 +248,9 @@ export function DispatchDayBoard(props: Props) {
       next[i] = line;
       return next;
     });
-    if (line.status === "asignado" || line.status === "ya_en_caja") scheduleRefresh();
+    // También lo recibido de una caja (la reemplazada vuelve a stock): cambia
+    // «En devolución» y «Devoluciones».
+    if (line.status === "asignado" || line.status === "ya_en_caja" || line.receivedFrom) scheduleRefresh();
   }
 
   /**
@@ -377,6 +395,8 @@ export function DispatchDayBoard(props: Props) {
         officeCheckedAt: o.route.officeCheckedAt,
         pickupCheckedAt: o.route.pickupCheckedAt,
         undeliveredReason: o.route.undeliveredReason ?? null,
+        shipmentId: o.shipmentId,
+        outputCode: o.outputCode,
       },
     })), [props.accepted]);
   // Lo que Grupo GF no entregó con su propia salida y sigue en una caja
@@ -411,6 +431,8 @@ export function DispatchDayBoard(props: Props) {
       officeCheckedAt: o.route.officeCheckedAt,
       pickupCheckedAt: o.route.pickupCheckedAt,
       undeliveredReason: o.route.undeliveredReason ?? null,
+      shipmentId: o.shipmentId,
+      outputCode: o.ownOutput?.outputCode ?? null,
     },
     ownOutput: o.ownOutput ?? null,
   })), [props.returnable]);
@@ -435,6 +457,7 @@ export function DispatchDayBoard(props: Props) {
   const visibleAssignable = visible.filter((q) => q.assignable || isReturnable(q));
   const selectedAssignable = allRows.filter((q) => q.assignable && selected.has(q.orderId)).map((q) => q.orderId);
   const selectedReturnable = allRows.filter((q) => isReturnable(q) && selected.has(q.orderId)).map((q) => q.orderId);
+  const selectedReplaceable = allRows.filter((q) => isReplaceable(q) && selected.has(q.orderId));
   // Programar la salida (0199): solo guarda el día, con motivo; no toma el pedido.
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [rescheduleDay, setRescheduleDay] = useState("");
@@ -460,9 +483,35 @@ export function DispatchDayBoard(props: Props) {
   }
   function receiveInOffice() {
     if (!selectedReturnable.length) return;
-    const ids = selectedReturnable;
+    // Por salida: el mismo pedido puede tener otra caja «No entregado» con otro
+    // motorizado (la reemplazada, 0248), y esa no llegó.
+    const rows = allRows.filter((q) => isReturnable(q) && selected.has(q.orderId));
+    const shipmentIds = rows.map((q) => q.route?.shipmentId).filter((id): id is string => Boolean(id));
+    const withoutOutput = rows.filter((q) => !q.route?.shipmentId).map((q) => q.orderId);
     setSelected(new Set());
-    run(() => returnUndeliveredToOffice(orgId, ids));
+    run(async () => {
+      const byOutput = shipmentIds.length ? await returnUndeliveredOutputs(orgId, shipmentIds) : null;
+      const byOrder = withoutOutput.length ? await returnUndeliveredToOffice(orgId, withoutOutput) : null;
+      if (!byOrder) return byOutput!;
+      if (!byOutput) return byOrder;
+      const notice = [byOutput.notice, byOrder.notice].filter(Boolean).join(" ") || undefined;
+      const error = [byOutput.error, byOrder.error].filter(Boolean).join(" ") || undefined;
+      return { notice, error };
+    });
+  }
+  function replaceSelected() {
+    const ids = selectedReplaceable.map((q) => q.route!.shipmentId!);
+    if (!ids.length) return;
+    setReplaceOpen(false);
+    setSelected(new Set());
+    run(() => replaceOwnOutputs(orgId, ids));
+  }
+  function receiveReturning() {
+    const ids = returningChosen.map((r) => r.shipmentId);
+    if (!ids.length) return;
+    setReturningSelected(new Set());
+    setReturningOpen(false);
+    run(() => returnUndeliveredOutputs(orgId, ids));
   }
   const allVisibleSelected = visibleAssignable.length > 0 && visibleAssignable.every((q) => selected.has(q.orderId));
   const selectedTotal = queue.filter((q) => selected.has(q.orderId)).reduce((sum, q) => sum + q.orderTotal, 0);
@@ -627,6 +676,9 @@ export function DispatchDayBoard(props: Props) {
         <div role="group" aria-label="Excepciones del día" className="flex flex-wrap items-center gap-2 lg:ml-auto">
           <AttentionPill icon={IconRepeat} label="Por reprogramar" count={queueTiles.por_reprogramar} hint={QUEUE_TILE_LABEL.por_reprogramar.hint} active={queueTileActive(filters, "por_reprogramar") && method === "lista"} onClick={() => tapQueueTile("por_reprogramar")} />
           <AttentionPill icon={IconUndo} label="Devoluciones" count={pendingReturns.length} hint="No entregados que el motorizado tiene que traer de vuelta, de cualquier fecha. Toca para escanear y confirmar que llegaron a la oficina." active={method === "devoluciones"} onClick={() => setMethod((m) => (m === "devoluciones" ? "qr" : "devoluciones"))} />
+          {returning.length > 0 && (
+            <AttentionPill icon={IconUndo} label="En devolución" count={returning.length} hint="Cajas que el motorizado todavía tiene y ya se reemplazaron por una salida nueva («Sacar con salida nueva»). Cuando las traiga, recíbelas en oficina: vuelven a stock y no se reprograman." active={returningOpen} onClick={() => setReturningOpen((v) => !v)} />
+          )}
           {declined.length > 0 && (
             <AttentionPill icon={IconPackage} label="No recogidos" count={declined.length} hint="Paquetes que el motorizado no recogió de su caja: vuelven a «por asignar». Toca para ver cuáles." active={declinedOpen} onClick={() => setDeclinedOpen((v) => !v)} />
           )}
@@ -661,6 +713,34 @@ export function DispatchDayBoard(props: Props) {
             })}
             {!props.blocked.length && <li className="py-6 text-center text-[13px] text-ink-500">Todos los pedidos de Lima tienen condiciones para salir.</li>}
           </ul>
+        </Sheet>
+      )}
+
+      {returningOpen && returning.length > 0 && (
+        <Sheet look="ops" title={`${returning.length} en devolución con el motorizado`} onClose={() => setReturningOpen(false)} wide>
+          <p className="text-[13px] text-ink-500">El pedido ya salió con otra salida. Cuando el motorizado traiga la caja, márcala y «Recibir en oficina»: se desarma y vuelve a stock (regístralo como reingreso en el pedido). No se reprograma ni se asigna.</p>
+          <ul className="mt-3 max-h-[50vh] divide-y divide-line overflow-auto border-t border-line text-sm">
+            {returning.map((r) => {
+              const days = daysBetween(r.routeDate, day);
+              const checked = returningSelected.has(r.shipmentId);
+              return (
+                <li key={r.shipmentId} className="flex flex-wrap items-center gap-x-2 gap-y-1 py-2">
+                  <input type="checkbox" className={CHECKBOX} checked={checked} aria-label={`Marcar ${r.outputCode ?? r.orderName}`}
+                    onChange={() => setReturningSelected((current) => { const next = new Set(current); if (next.has(r.shipmentId)) next.delete(r.shipmentId); else next.add(r.shipmentId); return next; })} />
+                  <OrderLink orderId={r.orderId} className="font-semibold text-ink-900 hover:text-brand-700">{r.orderName}</OrderLink>
+                  <span className="text-[13px] text-ink-500">{r.storeName} · caja del {formatDayNumeric(r.routeDate)}</span>
+                  <Badge tone="warn">{replacedOutputLabel(r.outputCode, r.riderName, days)}</Badge>
+                  {r.replacedByCode && <span className="text-xs text-ink-500">sale con {r.replacedByCode}</span>}
+                </li>
+              );
+            })}
+          </ul>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <OpsButton variant="danger" disabled={pending || !canManageDispatch || !returningChosen.length} onClick={receiveReturning}>
+              Recibir en oficina{returningChosen.length ? ` ${returningChosen.length}` : ""}
+            </OpsButton>
+            {!canManageDispatch && <span className="text-[13px] text-ink-500">Tu rol no organiza rutas: puedes mirar, no recibir.</span>}
+          </div>
         </Sheet>
       )}
 
@@ -990,12 +1070,42 @@ export function DispatchDayBoard(props: Props) {
                   Recibir en oficina {selectedReturnable.length}
                 </OpsButton>
               )}
+              {selectedReplaceable.length > 0 && (
+                <OpsButton disabled={pending || !canManageDispatch} onClick={() => setReplaceOpen(true)} title="El motorizado todavía tiene la caja: se arma otra desde stock con QR y rótulo nuevos; la anterior queda en devolución a su nombre">
+                  Sacar con salida nueva {selectedReplaceable.length}
+                </OpsButton>
+              )}
               {props.canAuthorizeCash && (
                 <label className="flex min-h-8 items-center gap-2 text-[13px] text-ink-600 sm:ml-auto" title={cashOverrideHint(props.cashWarning, props.cashLimit)}>
                   <input type="checkbox" className={CHECKBOX} checked={overrideCash} onChange={(e) => setOverrideCash(e.target.checked)} /> <span className="whitespace-nowrap">Superar el límite</span>
                 </label>
               )}
             </div>
+
+            {replaceOpen && selectedReplaceable.length > 0 && (
+              <Sheet look="ops" title="Sacar con salida nueva" onClose={() => setReplaceOpen(false)} wide>
+                <ul className="space-y-2 text-sm text-ink-700">
+                  {selectedReplaceable.map((q) => {
+                    const days = daysBetween(q.route!.routeDate, day);
+                    return (
+                      <li key={q.orderId}>
+                        <b className="font-semibold text-ink-900">{q.orderName}</b> · {q.route!.outputCode ?? "La salida"} sigue con <b className="font-semibold text-ink-900">{q.route!.riderName}</b> (caja del {formatDayNumeric(q.route!.routeDate)}{days > 0 ? `, hace ${days} ${days === 1 ? "día" : "días"}` : ""}, No entregado · {nonDeliveryReasonLabel(q.route!.undeliveredReason ?? "")}).
+                      </li>
+                    );
+                  })}
+                </ul>
+                <p className="mt-3 text-[13px] text-ink-600">
+                  Se crea una salida nueva por pedido: Almacén arma otra caja desde stock y se imprime su rótulo. La salida anterior queda «en devolución» a nombre del motorizado; cuando la traiga, «Recibir en oficina» la devuelve a stock (se desarma): no se reusa ni vuelve a reprogramarse. Cuenta dentro de las 5 salidas del pedido.
+                </p>
+                <p className="mt-2 text-[13px] text-ink-500">Johnny (Yhoni) y Roy traen lo no entregado al día siguiente: si el pedido puede esperar, recíbelo en oficina y sale con su misma salida.</p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <OpsButton variant="primary" disabled={pending || !canManageDispatch} onClick={replaceSelected}>
+                    Crear {selectedReplaceable.length === 1 ? "salida nueva" : `${selectedReplaceable.length} salidas nuevas`}
+                  </OpsButton>
+                  <OpsButton variant="ghost" onClick={() => setReplaceOpen(false)}>Cancelar</OpsButton>
+                </div>
+              </Sheet>
+            )}
 
             {tandersConfirm && (
               <Sheet look="ops" title={tandersConfirm.rows.every((q) => q.tandersReview!.courier === "swayp") ? "Revisar paquetes de Swayp" : "Revisar paquetes de otro courier"} onClose={() => setTandersConfirm(null)} wide>
@@ -1531,6 +1641,9 @@ function scanRowPresentation(l: ScanAssignLine, riderName: string): { text: stri
       return { text: "Límite de efectivo", tone: "warn" };
     case "programado_otro_dia":
       return { text: `Programado ${l.programmedFor ? programDayLabel(l.programmedFor) : "otro día"}`, tone: "warn" };
+    case "recibido_a_stock":
+      // La caja reemplazada (0248): recibida, se desarma. No es un error.
+      return { text: l.message ? l.message.replace(/\.$/, "") : "Caja reemplazada: a stock", tone: "info" };
     case "no_elegible":
       return { text: l.message ? `No elegible: ${l.message.replace(/\.$/, "")}` : "No elegible", tone: "crit" };
     default:

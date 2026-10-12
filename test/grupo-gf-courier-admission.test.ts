@@ -27,7 +27,7 @@ describe("admisión de pedidos de Grupo GF Courier", () => {
     const alreadyTaken = body.indexOf('.in("status", ["accepting", "accepted", "scheduled"])');
     // Desde la v1.19 el reintento filtra antes la salida que falló, y desde el
     // 09-10-2026 también el camino normal (la «por definir» ya impresa).
-    const outputCheck = body.indexOf("activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : outputsBlockingRetry(outputs)");
+    const outputCheck = body.indexOf("activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : outputsBlockingRetry(outputs, replacedIds)");
     expect(alreadyTaken).toBeGreaterThan(0);
     expect(outputCheck).toBeGreaterThan(alreadyTaken);
     expect(body.slice(alreadyTaken, outputCheck)).toContain("alreadyAccepted.push(orderId)");

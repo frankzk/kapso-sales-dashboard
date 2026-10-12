@@ -36,6 +36,8 @@ function presentation(l: ScanAssignLine, riderName: string, canAuthorizeCash: bo
       return { text: canAuthorizeCash ? "Límite de efectivo → Autorizar" : "Límite de efectivo · lo autoriza Daysi o Frankz", textClass: "text-warn-fg", rowClass: "bg-warn-wash" };
     case "programado_otro_dia":
       return { text: `Programado ${l.programmedFor ? programDayLabel(l.programmedFor) : "otro día"} → Asignar igual`, textClass: "text-warn-fg", rowClass: "bg-warn-wash" };
+    case "recibido_a_stock":
+      return { text: l.message ? l.message.replace(/\.$/, "") : "Caja reemplazada: a stock", textClass: "text-ink-700", rowClass: "bg-wash" };
     case "no_elegible":
       return { text: l.message ? `No elegible: ${l.message.replace(/\.$/, "")}` : "No elegible", textClass: "text-crit-fg", rowClass: "bg-crit-wash" };
     default:
@@ -91,6 +93,11 @@ export function GfBoxAddPackages({ manifest, canManage, canAuthorizeCash = false
     if (line.status === "asignado" || line.status === "ya_en_caja") {
       const id = line.shipmentId ?? line.orderId ?? line.code;
       setConfirmedIds((current) => current.includes(id) ? current : [...current, id]);
+      setRevision((current) => current + 1);
+    } else if (line.receivedFrom) {
+      // Se recibió de una caja (la reemplazada vuelve a stock, 0248; o salió
+      // de una caja vieja sin entrar en esta): la caja que se mira puede ser
+      // esa, y se actualiza igual.
       setRevision((current) => current + 1);
     }
   };
