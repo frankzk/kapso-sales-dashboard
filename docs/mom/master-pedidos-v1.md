@@ -1520,7 +1520,7 @@ Responsable principal: Daysi. Diana apoya rutas y cotejo.
 - Almacén: Yelitza y Matías.
 - El corte operativo actual se realiza aproximadamente hasta las 11:00.
 - Los pedidos de Lima centro se distribuyen principalmente entre los
-  motorizados propios Johnny, Roy y Douglas.
+  motorizados propios Johnny, Roy y Duglas.
 - Axel Courier es operado por Alexis. Daysi llama y confirma aproximadamente
   entre 30 y 40 puntos diarios antes de entregarle la ruta.
 - Las entregas de Alexis comienzan normalmente entre 14:00 y 15:00 y continúan
@@ -1551,7 +1551,7 @@ estado del pedido.
 La decisión final sigue siendo de Seguimiento Lima. La sugerencia actual parte
 de estas reglas observadas por Daysi:
 
-1. Lima centro: Johnny, Roy o Douglas.
+1. Lima centro: Johnny, Roy o Duglas.
 2. Cliente que pidió la tarde o puede recibir desde las 14:00: Axel Courier.
 3. Distritos del sur, incluidos Punta Hermosa y Pachacámac: priorizar Swayp.
 4. Si el cliente no puede recibir en el horario de Axel: Swayp, después Tanders
@@ -1680,7 +1680,7 @@ Reglas:
 
 | Operador | Fuente del resultado | Momento observado |
 | --- | --- | --- |
-| Johnny (Yhoni), Roy, Alexis y Douglas | WhatsApp; `entregado` o `entregado en efectivo`, más evidencia para Yape, Plin, link o POS | Durante/final de ruta |
+| Johnny (Yhoni), Roy, Alexis y Duglas | WhatsApp; `entregado` o `entregado en efectivo`, más evidencia para Yape, Plin, link o POS | Durante/final de ruta |
 | Axel Courier | Cuadro de entregados y devueltos; devolución física normalmente al día siguiente | Día siguiente |
 | Swayp | Excel/plataforma en tiempo real | Durante la ruta |
 | Urpi | Plataforma en tiempo real; su export «Reporte del mes – detallado» se carga en Kapta (§30.11) | Durante la ruta |
@@ -2030,7 +2030,7 @@ Devoluciones físicas:
   lo traen al día siguiente; Alexis, cada dos o tres días (owner, 12-10-2026).
   Se recibe en oficina («Recibir en oficina», §29.13) el día que llega, pedido
   por pedido y por su salida/QR. Hasta entonces la salida sigue «No entregado»
-  a su nombre. Para Douglas no hay una cadencia confirmada.
+  a su nombre. Para Duglas no hay una cadencia confirmada.
 - Axel: Daysi o Diana fotografía y coteja los paquetes devueltos y la fecha.
 - Swayp y Urpi: el recojo de devoluciones ocurre actualmente cada semana o cada
   quince días (Urpi, cada una o dos semanas); cada salida debe permanecer
@@ -6613,7 +6613,7 @@ Couriers que cobran y luego liquidan: Aliclik, Swayp, Axel y Urpi.
 - Neto esperado: cobrado menos costo logístico aplicable.
 - La cabecera distingue el emisor del lote de una persona repartidora: Axel,
   Aliclik, Swayp y Urpi se asignan como **courier**. El campo motorizado se usa
-  únicamente cuando la liquidación corresponde a Johnny, Roy, Douglas u otro
+  únicamente cuando la liquidación corresponde a Johnny, Roy, Duglas u otro
   motorizado propio. Un lote de Axel no exige crear a «Axel Courier» como
   usuario ni calcularle tarifas de motorizado propio.
 - Conciliación: guía y pedido Shopify, con nombre/teléfono como apoyo.
@@ -7083,7 +7083,7 @@ segunda es un error: los paquetes quedan repartidos entre dos manifiestos y el
 cotejo de ninguno cuadra. Lo impide la base, no solo la interfaz.
 
 La unicidad sigue a la identidad de la ruta: **con motorizado**, uno por
-motorizado y día —así Johnny, Roy y Douglas tienen cada uno la suya aunque los
+motorizado y día —así Johnny, Roy y Duglas tienen cada uno la suya aunque los
 tres sean «motorizados propios»—; **sin motorizado**, uno por courier y día, que
 es el caso de Aliclik, las agencias y las rutas «Sin asignar».
 
@@ -7253,7 +7253,7 @@ Segundo bloque publicado en el Dashboard consolidado:
   incompleto` y `Sin movimiento por 60 días` muestran conteos reales y abren la
   cola correspondiente; el resumen no cambia estados ni ejecuta cierres.
 - Los plazos de liquidación distinguen Aliclik/motorizado propio, Axel/Urpi,
-  Swayp y Tanders, incluyendo Johnny, Roy y Douglas como motorizados propios.
+  Swayp y Tanders, incluyendo Johnny, Roy y Duglas como motorizados propios.
 - Un universo vacío se presenta como `Sin datos`, nunca como una tasa falsa de
   0 %, y el cálculo conserva la unidad pedido o salida aprobada en el MOM.
 
