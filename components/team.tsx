@@ -19,6 +19,8 @@ import {
   type TeamActionState,
 } from "@/app/dashboard/team/actions";
 import { Card, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
+import { SchedulesTab } from "@/components/team-schedules";
+import type { AdvisorSchedule } from "@/lib/productivity-week";
 import {
   DISPATCH_COURIERS,
   GROUP_GF_RIDER_COURIER,
@@ -74,7 +76,7 @@ export interface RiderRow {
   user_email: string | null;
 }
 
-type TeamTab = "usuarios" | "motorizados";
+type TeamTab = "usuarios" | "motorizados" | "horarios";
 
 export function TeamManager({
   org,
@@ -84,6 +86,9 @@ export function TeamManager({
   stores,
   members,
   riders,
+  schedules,
+  initialTab = "usuarios",
+  initialScheduleUserId = null,
 }: {
   org: { id: string; name: string };
   orgs: { id: string; name: string }[];
@@ -92,9 +97,14 @@ export function TeamManager({
   stores: Store[];
   members: TeamMember[];
   riders: RiderRow[];
+  /** Meta y horario por persona (Equipo › Horarios, migración 0245). */
+  schedules: Record<string, AdvisorSchedule>;
+  initialTab?: TeamTab;
+  /** Desde Productividad, «Editar horario» abre el de esa persona. */
+  initialScheduleUserId?: string | null;
 }) {
   const ownerCnt = members.filter((m) => m.role === "owner").length;
-  const [tab, setTab] = useState<TeamTab>("usuarios");
+  const [tab, setTab] = useState<TeamTab>(initialTab);
 
   return (
     <div className="space-y-6">
@@ -128,6 +138,7 @@ export function TeamManager({
         {(
           [
             ["usuarios", "Usuarios y accesos"],
+            ["horarios", "Horarios"],
             ["motorizados", "Motorizados"],
           ] as [TeamTab, string][]
         ).map(([key, label]) => (
@@ -207,6 +218,15 @@ export function TeamManager({
             </div>
           </Card>
         </>
+      )}
+
+      {tab === "horarios" && (
+        <SchedulesTab
+          orgId={org.id}
+          members={members.map((m) => ({ user_id: m.user_id, email: m.email, role: m.role }))}
+          schedules={schedules}
+          initialEditUserId={initialScheduleUserId}
+        />
       )}
 
       {tab === "motorizados" && (

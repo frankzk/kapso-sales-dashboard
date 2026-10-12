@@ -1,6 +1,22 @@
 import { Suspense } from "react";
 import { getAccessibleStores, getCurrentUser, getUserRoleSummary } from "@/lib/access";
-import { getProductivityBoard, getSalesTotals, productivityInitialRange } from "@/lib/productivity";
+import {
+  getProductivityBoard,
+  getSalesTotals,
+  getWeekActivity,
+  productivityInitialRange,
+  resolveEmails,
+} from "@/lib/productivity";
+import {
+  DEFAULT_SCHEDULE,
+  evaluateWeek,
+  weekWindow,
+  type AdvisorSchedule,
+  type DayActivity,
+  type WeekStatus,
+} from "@/lib/productivity-week";
+import { getAdvisorSchedules, getOrgVendedoraIds } from "@/lib/advisor-schedules";
+import { createAdminSupabase } from "@/lib/db";
 import {
   fullMonthRange,
   monthName,
@@ -9,7 +25,7 @@ import {
   parseMonthParam,
   recentMonths,
 } from "@/lib/productivity-month";
-import { ProductivityBoard, type ProductivityMonth } from "@/components/productivity";
+import { ProductivityBoard, type ProductivityMonth, type ProductivityWeek } from "@/components/productivity";
 import { EmptyState } from "@/components/ui";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 
@@ -73,13 +89,22 @@ async function ProductividadContent({
     return month ? monthView(month, tz) : null;
   })();
   const range = view?.range ?? productivityInitialRange(sp, tz);
-  const [board, prevMonthTotals] = await Promise.all([
+  // La semana en curso, siempre entera y de todas las tiendas: las horas son
+  // de la persona, no del periodo ni de la tienda que se mira.
+  const win = weekWindow(tz);
+  const orgIds = [...new Set(stores.map((s) => s.org_id))];
+  const admin = createAdminSupabase();
+  const [board, prevMonthTotals, weekActivity, schedules, vendedoraIds] = await Promise.all([
     getProductivityBoard(scopeIds, range, source, tz, view ? { prevRange: view.prevRange } : {}),
     // «Agosto cerró en …»: el mes anterior entero. En modo solo, solo lo suyo —
     // al cliente no viaja ninguna cifra del equipo, y sin usuario no hay cifra.
     view && (!solo || user)
       ? getSalesTotals(scopeIds, fullMonthRange(view.prevMonth), source, tz, solo ? user!.id : null)
       : Promise.resolve(null),
+    getWeekActivity(storeIds, tz, win.days).catch(() => ({}) as Record<string, DayActivity[]>),
+    getAdvisorSchedules(admin, orgIds).catch(() => new Map<string, AdvisorSchedule>()),
+    // En modo solo no hace falta el resto del equipo.
+    solo ? Promise.resolve([] as string[]) : getOrgVendedoraIds(admin, orgIds),
   ]);
   // Modo solo: la fila propia con la escala de calor propia; los totales del
   // periodo anterior son del EQUIPO, así que se ocultan los deltas (hasPrev).
@@ -90,6 +115,31 @@ async function ProductividadContent({
   const initialOnlineIds = solo
     ? []
     : [...board.rows.filter((r) => r.online).map((r) => r.userId), ...board.onlineIdle.map((i) => i.userId)];
+
+  // La semana de cada persona del tablero, más las vendedoras y quien tiene
+  // horario que no aparecen en el periodo (la que hoy no entró también se
+  // mide: es la ausencia que hay que ver). En modo solo, solo la suya: al
+  // navegador no viaja la semana de nadie más.
+  const statusFor = (userId: string): WeekStatus =>
+    evaluateWeek({
+      activity: weekActivity[userId],
+      days: win.days,
+      schedule: schedules.get(userId) ?? DEFAULT_SCHEDULE,
+      porDefecto: !schedules.has(userId),
+      today: win.today,
+      nowMinutes: win.nowMinutes,
+    });
+  const shownIds = new Set([...rows.map((r) => r.userId), ...onlineIdle.map((i) => i.userId)]);
+  const extraIds = solo ? [] : [...new Set([...vendedoraIds, ...schedules.keys()])].filter((id) => !shownIds.has(id));
+  const extraEmails = extraIds.length ? await resolveEmails(extraIds) : new Map<string, string>();
+  const weekIds = solo ? (user ? [user.id] : []) : [...shownIds, ...extraIds];
+  const week: ProductivityWeek = {
+    days: win.days,
+    today: win.today,
+    byUser: Object.fromEntries(weekIds.map((id) => [id, statusFor(id)])),
+    extra: extraIds.map((id) => ({ userId: id, email: extraEmails.get(id) ?? id })),
+    canEdit: role.roles.some((r) => r === "owner" || r === "admin"),
+  };
 
   const month: ProductivityMonth | null = view
     ? {
@@ -120,6 +170,7 @@ async function ProductividadContent({
       solo={solo}
       month={month}
       months={recentMonths(tz)}
+      week={week}
     />
   );
 }
