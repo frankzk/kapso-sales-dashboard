@@ -6701,6 +6701,21 @@ registra en cada evento.
 - Retirar del manifiesto: motivo obligatorio.
 - Corrección de resultado courier: evento de corrección, nunca edición destructiva.
 - Cerrar liquidación observada: rol financiero autorizado.
+- **Solo el dueño reparte poder (12-10-2026).** En **Equipo**, solo el owner
+  cambia roles, invita a alguien como admin y quita a un admin. Un admin invita
+  y quita vendedoras y solo lectura, y nada más. Los permisos de dinero y de
+  datos —«Validar pagos», «Corregir pagos», «Alerta de comprobante repetido»,
+  «Administrar Grupo GF» (tarifas y pago de motorizados) y «Exportar datos»—
+  solo los da o los quita el owner, también a sí mismo; un admin sigue
+  concediendo lo operativo («Reportar entregas de rutas»). Las casillas que no
+  puede tocar le salen apagadas, con el motivo al pasar el ratón, y el servidor
+  lo rechaza igual (`lib/team.ts`, `GRANTED_ONE_BY_ONE[].ownerOnly`).
+
+  Por qué: con doce admins, la regla de «Validar pagos se concede uno por uno»
+  no protegía nada, porque cualquier admin podía concedérselo. Al 12-10-2026 una
+  admin se había dado «Corregir pagos», «Administrar Grupo GF» y «Reportar
+  entregas de rutas», y dos admins habían dado «Validar pagos» a otras dos
+  personas. Lo ya concedido se mantiene; revisarlo es decisión del owner.
 
 ### 16.1 Bandeja de validación de pagos
 

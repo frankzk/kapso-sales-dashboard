@@ -176,6 +176,8 @@ export const GRANTED_ONE_BY_ONE = [
     label: "Reportar entregas de rutas",
     description: "Registrar entregas o no entregas por un motorizado, con evidencia y motivo. No permite cerrar liquidaciones.",
     lastOneMatters: false,
+    // Operativo: un admin lo puede conceder.
+    ownerOnly: false,
   },
   {
     permission: "payments.validate",
@@ -184,12 +186,15 @@ export const GRANTED_ONE_BY_ONE = [
     description: "Dar por bueno un comprobante y el dinero que representa.",
     /** Sin nadie con este permiso, la cola de validación se queda parada. */
     lastOneMatters: true,
+    /** Dinero: solo el dueño lo da o lo quita (lib/team.ts, MOM §16). */
+    ownerOnly: true,
   },
   {
     permission: "shalom.override_payment_validation",
     label: "Corregir pagos",
     description: "Mover un pago al pedido correcto o forzar su estado.",
     lastOneMatters: true,
+    ownerOnly: true,
   },
   {
     permission: "alerts.repeated_voucher",
@@ -197,12 +202,15 @@ export const GRANTED_ONE_BY_ONE = [
     description: "Recibir la alerta urgente cuando un mismo comprobante aparece en más de un pedido.",
     /** Sin nadie que la reciba, un pago cobrado dos veces vuelve a pasar en silencio. */
     lastOneMatters: true,
+    ownerOnly: true,
   },
   {
     permission: "logistics.manage",
     label: "Administrar Grupo GF Courier",
     description: "Gestionar clientes, tarifas y parámetros del operador logístico.",
     lastOneMatters: false,
+    // Tarifas, pago de motorizados y exceso de efectivo (§29.9): es dinero.
+    ownerOnly: true,
   },
   {
     permission: "data.export",
@@ -212,6 +220,8 @@ export const GRANTED_ONE_BY_ONE = [
     // Owner y admin ya exportaban: quitárselo no es lo que se pidió. La casilla
     // está para concedérselo a una vendedora concreta (08-10-2026).
     withAdminRole: true,
+    // La base de clientes entera: la concede el dueño.
+    ownerOnly: true,
   },
 ] as const satisfies readonly {
   permission: Permission;
@@ -220,6 +230,8 @@ export const GRANTED_ONE_BY_ONE = [
   lastOneMatters: boolean;
   /** Viene con el rol admin y además tiene casilla en Equipo para los demás roles. */
   withAdminRole?: boolean;
+  /** Solo el dueño lo da o lo quita: dinero o datos (12-10-2026, MOM §16). */
+  ownerOnly: boolean;
 }[];
 
 const ONE_BY_ONE: ReadonlySet<string> = new Set(
