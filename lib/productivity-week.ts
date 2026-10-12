@@ -1,0 +1,319 @@
+// La semana de cada asesora contra su meta de horas y su horario (Productividad).
+// Módulo PURO: sin base de datos ni red, para probarlo y para importarlo desde
+// cualquier lado. La lectura vive en lib/productivity.ts (`getWeekActivity`) y
+// en lib/advisor-schedules.ts.
+//
+// DECISIÓN DEL OWNER (12-10-2026): las horas que cuentan son las ACTIVAS —las
+// mismas de la columna «Horas»: bloques entre la primera y la última acción,
+// cortados en pausas de más de 45 minutos—; la meta y el horario son de cada
+// persona (Equipo › Horarios); y la semana se mira siempre entera, de lunes a
+// domingo, aunque el tablero esté en «Hoy».
+
+import { tzParts } from "@/lib/metrics";
+
+/** Una pausa de más de 45 min corta el bloque de trabajo (almuerzo, descanso). */
+export const ACTIVE_GAP_MS = 45 * 60 * 1000;
+
+/** Minutos de gracia antes de marcar una llegada tarde o una salida temprana. */
+export const LATE_GRACE_MIN = 10;
+
+/** Cuántas horas puede ir por debajo de lo esperado sin contarse como atrasada. */
+export const BEHIND_TOLERANCE_H = 1;
+
+/** Un día con estas horas menos que su parte de la meta todavía cuenta como cumplido. */
+const DAY_TOLERANCE_H = 0.5;
+
+/**
+ * Horas activas de una lista ORDENADA de instantes (ms): suma los bloques que
+ * separan las pausas de más de `ACTIVE_GAP_MS`. Una acción suelta aporta ~0: un
+ * solo punto no dice cuánto duró nada.
+ */
+export function activeHoursFromTimes(sorted: number[]): number {
+  if (sorted.length < 2) return 0;
+  let total = 0;
+  let blockStart = sorted[0]!;
+  let prev = sorted[0]!;
+  for (let i = 1; i < sorted.length; i++) {
+    const t = sorted[i]!;
+    if (t - prev > ACTIVE_GAP_MS) {
+      total += prev - blockStart;
+      blockStart = t;
+    }
+    prev = t;
+  }
+  total += prev - blockStart;
+  return total / 3_600_000;
+}
+
+/** Meta y horario de una persona. Sin horario (`start`/`end` null) solo se comparan horas. */
+export interface AdvisorSchedule {
+  weeklyHours: number;
+  /** Días que trabaja, ISO: 1 = lunes … 7 = domingo. */
+  days: number[];
+  /** «09:00» o null. */
+  start: string | null;
+  end: string | null;
+}
+
+/** Lo que se usa con quien no tiene horario cargado: 48 h de lunes a sábado. */
+export const DEFAULT_SCHEDULE: AdvisorSchedule = { weeklyHours: 48, days: [1, 2, 3, 4, 5, 6], start: null, end: null };
+
+export interface WeekDay {
+  date: string; // YYYY-MM-DD local
+  /** 1 = lunes … 7 = domingo. */
+  isoDow: number;
+}
+
+/** «HH:MM» → minutos desde la medianoche; null si no se puede leer. */
+export function minutesOf(hhmm: string | null | undefined): number | null {
+  const m = /^(\d{1,2}):(\d{2})/.exec(hhmm ?? "");
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h > 23 || min > 59) return null;
+  return h * 60 + min;
+}
+
+function localClock(iso: string, tz: string): { hhmm: string; minutes: number } {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(
+    new Date(iso),
+  );
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "00";
+  const h = get("hour") === "24" ? "00" : get("hour");
+  const hhmm = `${h}:${get("minute")}`;
+  return { hhmm, minutes: Number(h) * 60 + Number(get("minute")) };
+}
+
+/**
+ * La semana en curso, de lunes a domingo en el calendario LOCAL de la tienda,
+ * con hoy y la hora local de ahora (para lo que se esperaba a esta hora).
+ */
+export function weekWindow(
+  tz: string,
+  nowIso = new Date().toISOString(),
+): { days: WeekDay[]; today: string; nowMinutes: number } {
+  const { date: today, weekday } = tzParts(nowIso, tz);
+  const isoToday = weekday === 0 ? 7 : weekday;
+  const todayNoon = Date.parse(`${today}T12:00:00Z`); // ancla al mediodía: la suma de días no salta
+  const days: WeekDay[] = [];
+  for (let i = 1; i <= 7; i++) {
+    const date = new Date(todayNoon + (i - isoToday) * 86_400_000).toISOString().slice(0, 10);
+    days.push({ date, isoDow: i });
+  }
+  return { days, today, nowMinutes: localClock(nowIso, tz).minutes };
+}
+
+/** Las horas activas de un día, con la primera y la última actividad («HH:MM»). */
+export interface DayActivity {
+  date: string;
+  horas: number;
+  first: string | null;
+  last: string | null;
+}
+
+/**
+ * Horas activas por persona y día de la semana, desde todo su trabajo
+ * registrado (gestiones de leads y de envíos). Cada día se cuenta aparte, como
+ * la columna «Horas»: una pausa de la noche no une dos días.
+ */
+export function computeWeekActivity(
+  events: { agent: string | null; occurred_at: string | null }[],
+  tz: string,
+  days: WeekDay[],
+): Record<string, DayActivity[]> {
+  const inWeek = new Set(days.map((d) => d.date));
+  const byAgentDay = new Map<string, Map<string, number[]>>();
+  for (const e of events) {
+    if (!e.agent || !e.occurred_at) continue;
+    const ms = Date.parse(e.occurred_at);
+    if (!Number.isFinite(ms)) continue;
+    const date = tzParts(e.occurred_at, tz).date;
+    if (!inWeek.has(date)) continue;
+    const perDay = byAgentDay.get(e.agent) ?? new Map<string, number[]>();
+    const times = perDay.get(date) ?? [];
+    times.push(ms);
+    perDay.set(date, times);
+    byAgentDay.set(e.agent, perDay);
+  }
+  const out: Record<string, DayActivity[]> = {};
+  for (const [agent, perDay] of byAgentDay) {
+    out[agent] = days.map((d) => {
+      const times = (perDay.get(d.date) ?? []).sort((a, b) => a - b);
+      if (!times.length) return { date: d.date, horas: 0, first: null, last: null };
+      return {
+        date: d.date,
+        horas: Math.round(activeHoursFromTimes(times) * 10) / 10,
+        first: localClock(new Date(times[0]!).toISOString(), tz).hhmm,
+        last: localClock(new Date(times[times.length - 1]!).toISOString(), tz).hhmm,
+      };
+    });
+  }
+  return out;
+}
+
+/**
+ * Cómo va un día: `cumplido` (llegó a su parte de la meta, con media hora de
+ * margen), `corto`, `sin_actividad` (un día de trabajo ya pasado sin nada
+ * registrado), `en_curso` (hoy), `futuro` y `libre` (no es día de trabajo).
+ */
+export type DayState = "cumplido" | "corto" | "sin_actividad" | "en_curso" | "futuro" | "libre";
+
+export interface WeekDayStatus extends DayActivity {
+  isoDow: number;
+  programado: boolean;
+  /** Su parte de la meta (la meta repartida entre los días de trabajo). */
+  meta: number;
+  /** Minutos tarde de la primera actividad, pasada la gracia; null si llegó a tiempo o no aplica. */
+  tardeMin: number | null;
+  /** Minutos antes de la salida de la última actividad, pasada la gracia (solo días ya cerrados). */
+  antesMin: number | null;
+  estado: DayState;
+}
+
+/**
+ * `al_dia` / `atrasada` mientras quedan días de trabajo (contra lo esperado a
+ * esta hora); `cumplida` / `no_cumplida` cuando ya no queda ninguno.
+ */
+export type WeekState = "al_dia" | "atrasada" | "cumplida" | "no_cumplida";
+
+export interface WeekStatus {
+  horas: number;
+  meta: number;
+  /** Lo que debería llevar a esta hora: su parte de cada día de trabajo ya
+   *  pasado y, hoy, la fracción de su horario ya transcurrida. */
+  esperado: number;
+  estado: WeekState;
+  /** No le queda ningún día de trabajo en la semana. */
+  cerrada: boolean;
+  schedule: AdvisorSchedule;
+  /** Sin horario cargado: usa la meta por defecto. */
+  porDefecto: boolean;
+  dias: WeekDayStatus[];
+}
+
+const round1 = (n: number) => Math.round(n * 10) / 10;
+
+/** La semana de una persona contra su meta y su horario. Pura. */
+export function evaluateWeek({
+  activity,
+  days,
+  schedule,
+  porDefecto,
+  today,
+  nowMinutes,
+}: {
+  activity: DayActivity[] | undefined;
+  days: WeekDay[];
+  schedule: AdvisorSchedule;
+  porDefecto: boolean;
+  today: string;
+  nowMinutes: number;
+}): WeekStatus {
+  const workDays = new Set(schedule.days);
+  const daily = workDays.size ? schedule.weeklyHours / workDays.size : 0;
+  const start = minutesOf(schedule.start);
+  const end = minutesOf(schedule.end);
+  const hasWindow = start != null && end != null && end > start;
+
+  let horas = 0;
+  let esperado = 0;
+  let cerrada = true;
+  const dias: WeekDayStatus[] = days.map((d) => {
+    const act = activity?.find((a) => a.date === d.date) ?? { date: d.date, horas: 0, first: null, last: null };
+    horas += act.horas;
+    const programado = workDays.has(d.isoDow);
+    const past = d.date < today;
+    const isToday = d.date === today;
+    if (programado && !past) cerrada = false;
+
+    if (programado && past) esperado += daily;
+    if (programado && isToday && hasWindow) {
+      esperado += daily * Math.min(1, Math.max(0, (nowMinutes - start!) / (end! - start!)));
+    }
+
+    const first = minutesOf(act.first);
+    const last = minutesOf(act.last);
+    const late = programado && hasWindow && first != null && (past || isToday) ? first - start! : null;
+    const early = programado && hasWindow && last != null && past ? end! - last : null;
+
+    let estado: DayState;
+    if (!programado) estado = "libre";
+    else if (d.date > today) estado = "futuro";
+    else if (isToday) estado = "en_curso";
+    else if (act.first == null) estado = "sin_actividad";
+    else estado = act.horas >= daily - DAY_TOLERANCE_H ? "cumplido" : "corto";
+
+    return {
+      ...act,
+      isoDow: d.isoDow,
+      programado,
+      meta: round1(daily),
+      tardeMin: late != null && late > LATE_GRACE_MIN ? late : null,
+      antesMin: early != null && early > LATE_GRACE_MIN ? early : null,
+      estado,
+    };
+  });
+
+  horas = round1(horas);
+  esperado = round1(esperado);
+  const meta = schedule.weeklyHours;
+  const estado: WeekState = cerrada
+    ? horas >= meta - 0.05
+      ? "cumplida"
+      : "no_cumplida"
+    : horas >= esperado - BEHIND_TOLERANCE_H
+      ? "al_dia"
+      : "atrasada";
+  return { horas, meta, esperado, estado, cerrada, schedule, porDefecto, dias };
+}
+
+/** Una fila de `advisor_schedules` (las horas vienen como «09:00:00»). */
+export interface AdvisorScheduleRow {
+  user_id: string;
+  weekly_hours: number | string;
+  days: number[] | null;
+  start_time: string | null;
+  end_time: string | null;
+}
+
+export function scheduleFromRow(row: AdvisorScheduleRow): AdvisorSchedule {
+  const hhmm = (t: string | null) => (t && minutesOf(t) != null ? t.slice(0, 5) : null);
+  const start = hhmm(row.start_time);
+  const end = hhmm(row.end_time);
+  const days = [...new Set((row.days ?? []).map(Number).filter((d) => d >= 1 && d <= 7))].sort((a, b) => a - b);
+  return {
+    weeklyHours: Number(row.weekly_hours) || 0,
+    days,
+    start: start && end ? start : null,
+    end: start && end ? end : null,
+  };
+}
+
+/**
+ * Lo que llega del formulario de Equipo, validado. Devuelve el horario listo
+ * para guardar o el motivo, en la lengua de la pantalla.
+ */
+export function parseScheduleInput(input: {
+  weeklyHours: unknown;
+  days: unknown;
+  start: unknown;
+  end: unknown;
+}): { schedule: AdvisorSchedule } | { error: string } {
+  const weeklyHours = Number(String(input.weeklyHours ?? "").replace(",", "."));
+  if (!Number.isFinite(weeklyHours) || weeklyHours < 0 || weeklyHours > 84) {
+    return { error: "La meta de la semana tiene que ser un número de horas entre 0 y 84." };
+  }
+  const rawDays = Array.isArray(input.days) ? input.days : [];
+  const days = [...new Set(rawDays.map(Number).filter((d) => Number.isInteger(d) && d >= 1 && d <= 7))].sort((a, b) => a - b);
+  if (!days.length) return { error: "Elige al menos un día de trabajo." };
+  const start = typeof input.start === "string" && input.start ? input.start.slice(0, 5) : null;
+  const end = typeof input.end === "string" && input.end ? input.end.slice(0, 5) : null;
+  if ((start == null) !== (end == null)) return { error: "El horario necesita la entrada y la salida, o ninguna de las dos." };
+  if (start != null && end != null) {
+    const s = minutesOf(start);
+    const e = minutesOf(end);
+    if (s == null || e == null) return { error: "La hora de entrada o de salida no se entiende." };
+    if (e <= s) return { error: "La salida tiene que ser después de la entrada." };
+  }
+  return { schedule: { weeklyHours: Math.round(weeklyHours * 10) / 10, days, start, end } };
+}
