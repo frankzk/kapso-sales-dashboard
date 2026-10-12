@@ -445,7 +445,9 @@ async function receiveGrupoGfReturn(shipment: DispatchShipment): Promise<Dispatc
       .eq("kind", "output_replaced")
       .limit(1),
   ]);
-  const replaced = shipment.custody_state === "retorno" || Boolean(replacedEvents?.length);
+  // La marca es el evento: «Solicitar devolución» también deja `retorno`, y esa
+  // vuelve a «por asignar» como siempre.
+  const replaced = Boolean(replacedEvents?.length);
   const item = (items ?? [])[0] as
     | { id: string; manifest_id: string; dispatch_manifests: { route_date: string; driver_name: string | null } | { route_date: string; driver_name: string | null }[] }
     | undefined;
@@ -479,7 +481,9 @@ async function receiveGrupoGfReturn(shipment: DispatchShipment): Promise<Dispatc
   revalidatePath("/dashboard/courier");
   revalidatePath("/dashboard/pedidos");
   if (decision.toStock) {
-    return { notice: replacedReceivedMessage(label, manifest?.driver_name ?? "el motorizado", manifest?.route_date ?? ""), shipment };
+    return replaced
+      ? { notice: replacedReceivedMessage(label, manifest?.driver_name ?? "el motorizado", manifest?.route_date ?? ""), shipment }
+      : { notice: `${label} ya constaba devuelto: salió de la caja de ${manifest?.driver_name ?? "el motorizado"} sin volver a «por asignar».`, shipment };
   }
   return cancelled
     ? { error: `${label} recibido en oficina. ${cancelled}`, shipment }

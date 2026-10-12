@@ -39,6 +39,19 @@ export function isReturningOwnOutput(output: ReturningOutputLike): boolean {
   );
 }
 
+/**
+ * ¿Es la salida REEMPLAZADA por otra que el motorizado todavía tiene? En
+ * devolución (`isReturningOwnOutput`) y con el evento `output_replaced`
+ * (`replaced`, de `replacedOutputIds`). Una en `retorno` por «Solicitar
+ * devolución» no lo es: se sigue reportando, recibiendo y reprogramando.
+ */
+export function isReplacedOwnOutput(output: ReturningOutputLike & { id?: string | null }, replaced: ReadonlySet<string>): boolean {
+  return Boolean(output.id) && replaced.has(output.id as string) && isReturningOwnOutput(output);
+}
+
+/** Sin eventos leídos: ninguna salida cuenta como reemplazada. */
+export const NO_REPLACED_OUTPUTS: ReadonlySet<string> = new Set();
+
 /** Las salidas que se reemplazaron por otra (`output_replaced`), por id. */
 export function replacedOutputIds(events: readonly { kind: string; shipment_id?: string | null }[]): Set<string> {
   const out = new Set<string>();

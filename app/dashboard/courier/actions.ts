@@ -53,7 +53,7 @@ import { isGroupGfRiderCourier } from "@/lib/couriers/catalog";
 import { custodyOnAssign, GF_SAME_DAY_CUTOFF_DEFAULT, isRiderPickupMode, sameDayCutoffMinute, type RiderPickupMode } from "@/lib/grupo-gf-courier";
 import { BLOCKED_REASON_LABEL, programDayLabel, programNeedsConfirm, takenIsAssignable, type BlockedReason } from "@/lib/dispatch-day";
 import { pastBoxDecision, pastBoxMessage, receivedFromLabel, replacedReceivedMessage } from "@/lib/gf-scan-return";
-import { isReturningOwnOutput, type ReturningOutputLike } from "@/lib/gf-replaced-output";
+import { isReplacedOwnOutput, isReturningOwnOutput, replacedOutputIds, type ReturningOutputLike } from "@/lib/gf-replaced-output";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 import { riderPickupMode } from "@/lib/grupo-gf-courier-route-access";
 import { getRouteDetail, type RouteRow, type StopWithOrder } from "@/lib/routes-access";
@@ -794,6 +794,8 @@ async function loadCourierOperations(
         .from("shipments")
         .select(ADMISSION_SHIPMENT_COLUMNS)
         .in("order_id", ids));
+  // Las reemplazadas por otra salida (0246): no estorban ni se toman.
+  const replacedIds = await loadReplacedIds(admin, ((admissionShipmentRows ?? []) as AdmissionShipmentRow[]).map((row) => row.id));
   const shipmentsByOrder = new Map<string, AdmissionShipmentRow[]>();
   for (const row of (admissionShipmentRows ?? []) as AdmissionShipmentRow[]) {
     if (!row.order_id) continue;
@@ -824,7 +826,7 @@ async function loadCourierOperations(
   const ownByOrder = new Map<string, AdmissionShipmentRow>();
   for (const order of (queueRows ?? []) as QueueOrderRow[]) {
     if (activeOrderIds.has(order.order_id) || isRetryAdmission(order.macro_stage, order.macro_substage, order.operational_status)) continue;
-    const own = ownRetryOutput(order, shipmentsByOrder.get(order.order_id) ?? []);
+    const own = ownRetryOutput(order, shipmentsByOrder.get(order.order_id) ?? [], replacedIds);
     if (own) ownByOrder.set(order.order_id, own);
   }
   const ownIds = [...ownByOrder.values()].map((output) => output.id);
@@ -866,14 +868,14 @@ async function loadCourierOperations(
       // salida sigue viva (una reprogramación de Aliclik, por ejemplo) y la
       // lleva su courier, o no queda ninguna viva que sacar. Nunca
       // desaparece en silencio de la cola.
-      if (isReprogramStage(order.macro_stage, order.macro_substage)) block(order, reprogramBlockReason(outputs));
+      if (isReprogramStage(order.macro_stage, order.macro_substage)) block(order, reprogramBlockReason(outputs, replacedIds));
       continue;
     }
     const fillable = own ? null : pickFillableRouteOutput(outputs);
     // La salida propia que se reprograma es la única viva (`ownRetryOutput`): no estorba.
     // La que su courier no entregó tampoco, tampoco cuando el pedido ya tiene su
     // «por definir» impresa y está en Preparación (09-10-2026, §28).
-    const assigned = own ? null : activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : outputsBlockingRetry(outputs), fillable?.id ?? null);
+    const assigned = own ? null : activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : outputsBlockingRetry(outputs, replacedIds), fillable?.id ?? null);
     const needsExistingBox = !review && !retry && !own && order.macro_substage !== "por_generar_rotulo";
     if (assigned || (needsExistingBox && !fillable)) {
       block(order, assigned ? "ya_en_caja" : "sin_salida");
@@ -1392,13 +1394,14 @@ async function takeOrdersCore(
         continue;
       }
       const outputs = (outputRows ?? []) as unknown as AdmissionShipmentRow[];
+      const replacedIds = await loadReplacedIds(admin, outputs.map((output) => output.id));
       const review = courierReview(row, outputs, limaClock().day);
       // Grupo GF no lo entregó con su propia salida (06-10-2026): se toma con
       // ESA salida, sin crear otra. La misma regla que la cola.
-      const own = review || isRetryAdmission(row.macro_stage, row.macro_substage, row.operational_status) ? null : ownRetryOutput(row, outputs);
+      const own = review || isRetryAdmission(row.macro_stage, row.macro_substage, row.operational_status) ? null : ownRetryOutput(row, outputs, replacedIds);
       if (!isCourierAdmissionStage(row.macro_stage, row.macro_substage, row.operational_status) && !review && !own) {
         failed.push({ orderId, error: isReprogramStage(row.macro_stage, row.macro_substage)
-          ? `${BLOCKED_REASON_LABEL[reprogramBlockReason(outputs)].label}.`
+          ? `${BLOCKED_REASON_LABEL[reprogramBlockReason(outputs, replacedIds)].label}.`
           // Si lo frena la salida de otro courier, se dice cuál y de quién.
           : otherCourierBlockMessage(outputs) ?? "El pedido ya avanzó y salió de Pedidos disponibles." });
         continue;
@@ -1439,7 +1442,7 @@ async function takeOrdersCore(
       const fillable = review || own ? null : pickFillableRouteOutput(outputs);
       // La que su courier no entregó no estorba en ningún camino: tampoco
       // cuando el pedido, con su «por definir» ya impresa, está en Preparación.
-      const assigned = own ? null : activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : outputsBlockingRetry(outputs), fillable?.id ?? null);
+      const assigned = own ? null : activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : outputsBlockingRetry(outputs, replacedIds), fillable?.id ?? null);
       // Un reintento que rellena no crea: si otra pestaña se lleva la «por
       // definir» entre leer y escribir, no nace una caja sin puerta ni tope.
       const retryCreates = retry && !fillable;
@@ -1447,7 +1450,7 @@ async function takeOrdersCore(
       if (assigned) {
         // Nombrar la salida y su courier (09-10-2026): «asignada a otro
         // courier» a secas dejaba adivinando cuál y qué hacer.
-        const blocking = review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : retry ? outputsBlockingRetry(outputs) : outputs;
+        const blocking = review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : retry ? outputsBlockingRetry(outputs, replacedIds) : outputs;
         failed.push({
           orderId,
           error: otherCourierBlockMessage(blocking.filter((o) => o.id !== fillable?.id)) ?? "El pedido ya tiene una salida asignada a otro courier.",
@@ -1738,7 +1741,9 @@ export interface AssignCourierRouteResult extends CourierActionResult {
  * «Recibir en oficina» (0188, MOM §29.13): el paquete que el motorizado
  * reportó «No entregado» sale de su caja con rastro, la custodia vuelve a la
  * empresa y la solicitud a «por asignar». El pedido queda en «Por reprogramar
- * Lima» hasta que se asigne otra vez.
+ * Lima» hasta que se asigne otra vez. La caja reemplazada por otra salida
+ * vuelve a stock (0246). Por número de pedido: si el pedido tiene dos cajas
+ * «No entregado», no recibe ninguna y pide el QR (`returnUndeliveredShipments`).
  */
 export async function returnUndeliveredToOffice(orgId: string, orderIds: string[]): Promise<CourierActionResult> {
   const auth = await requireOperator(orgId);
@@ -1782,12 +1787,18 @@ async function returnUndeliveredShipments(
     .filter((row) => row.store_id != null && orgStoreIds.has(row.store_id) && storeAllowed(auth, row.store_id))
     .map((row) => row.id))];
   if (!shipmentIds.length) return { error: "Esos pedidos no tienen salida de Grupo GF a tu alcance." };
-  const [boxes, { data: items }, { data: custody }] = await Promise.all([
+  const [boxes, { data: items }, { data: custody }, replacedIds] = await Promise.all([
     loadActiveBoxes(admin, shipmentIds),
     courierRowsByIds(shipmentIds, (ids) => admin.from("dispatch_manifest_items").select("id,shipment_id,manifest_id").in("shipment_id", ids).is("removed_at", null)),
     courierRowsByIds(shipmentIds, (ids) => admin.from("shipments").select("id,courier,delivery_status,custody_state,returned_at").in("id", ids)),
+    loadReplacedIds(admin, shipmentIds),
   ]);
-  const returningIds = new Set((custody as Array<ReturningOutputLike & { id: string }>).filter(isReturningOwnOutput).map((row) => row.id));
+  // Lo que la 0246 manda a stock en vez de a «por asignar»: la reemplazada y la
+  // que ya constaba devuelta. Una en `retorno` sin reemplazo («Solicitar
+  // devolución») vuelve a «por asignar», como siempre.
+  const custodyRows = custody as Array<ReturningOutputLike & { id: string }>;
+  const returningIds = new Set(custodyRows.filter((row) => isReplacedOwnOutput(row, replacedIds)).map((row) => row.id));
+  const alreadyReturnedIds = new Set(custodyRows.filter((row) => row.custody_state === "devuelto" || Boolean(row.returned_at)).map((row) => row.id));
   let undelivered = (items as Array<{ id: string; shipment_id: string; manifest_id: string }>).filter((item) => {
     const box = boxes.get(item.shipment_id);
     return box?.manifestId === item.manifest_id && Boolean(box.undeliveredReason) && (!opts.manifestIds || opts.manifestIds.has(item.manifest_id));
@@ -1811,13 +1822,15 @@ async function returnUndeliveredShipments(
     : "";
   const changed: string[] = [];
   let toStock = 0;
+  let alreadyReturned = 0;
   const errors: string[] = [];
   for (const item of undelivered) {
     const { data, error } = await admin.rpc("gf_return_to_office", { p_item_id: item.id, p_actor: auth.userId });
     if (error) errors.push(error.message);
     else if (data) {
       changed.push(data as string);
-      if (returningIds.has(item.shipment_id)) toStock += 1;
+      if (alreadyReturnedIds.has(item.shipment_id)) alreadyReturned += 1;
+      else if (returningIds.has(item.shipment_id)) toStock += 1;
     }
   }
   if (changed.length) await recomputeOrderMasterSafe(admin, [...new Set(changed)]);
@@ -1825,10 +1838,11 @@ async function returnUndeliveredShipments(
   revalidatePath("/dashboard/pedidos");
   if (!changed.length) return { error: [ambiguousNote, ...new Set(errors)].filter(Boolean).join(" ") || "Ninguno de esos pedidos está «No entregado» dentro de una caja." };
   if (ambiguousNote) errors.push(ambiguousNote);
-  const requeued = changed.length - toStock;
+  const requeued = changed.length - toStock - alreadyReturned;
   const parts: string[] = [];
   if (requeued) parts.push(`${requeued} ${requeued === 1 ? "pedido recibido" : "pedidos recibidos"} en oficina. Vuelven a «por asignar» (Por reprogramar Lima), también los rechazados.`);
   if (toStock) parts.push(returnedToStockNotice(toStock));
+  if (alreadyReturned) parts.push(`${alreadyReturned} ya ${alreadyReturned === 1 ? "constaba devuelta: salió" : "constaban devueltas: salieron"} de la caja sin volver a «por asignar».`);
   const done = parts.join(" ");
   return errors.length ? { error: `${done} ${[...new Set(errors)].join(" ")}` } : { notice: done };
 }
@@ -1988,16 +2002,10 @@ export async function replaceOwnOutputs(
       const outputs = (outputRows ?? []) as unknown as AdmissionShipmentRow[];
       const box = boxes.get(old.id) ?? null;
       const request = liveRequest as { id: string; shipment_id: string | null; status: string } | null;
-      const decision = ownReplaceDecision(row, outputs, old, box, request?.shipment_id ?? null);
+      const replacedIds = await loadReplacedIds(admin, outputs.map((output) => output.id));
+      const decision = ownReplaceDecision(row, outputs, old, box, request?.shipment_id ?? null, replacedIds);
       if (decision.action === "ya_reemplazada") {
-        const replacedBy = await replacedByCode(admin, old.id);
-        // En `retorno` sin reemplazo: se pidió su devolución en la Mesa de
-        // cierre (§13). No se saca con salida nueva.
-        if (replacedBy === null && !(await outputWasReplaced(admin, old.id))) {
-          failed.push({ shipmentId, error: `${orderName}: ${old.output_code ?? "la salida"} ya está en devolución (se pidió su retorno): no se saca con salida nueva.` });
-          continue;
-        }
-        alreadyReplaced.push({ shipmentId, message: replaceDecisionMessage(decision, box, old.output_code, replacedBy) });
+        alreadyReplaced.push({ shipmentId, message: replaceDecisionMessage(decision, box, old.output_code, await replacedByCode(admin, old.id)) });
         continue;
       }
       if (decision.action === "bloquear") {
@@ -2196,6 +2204,21 @@ export async function replaceOwnOutputs(
 }
 
 /** El código de la salida que reemplazó a esta (`output_replaced`), si consta. */
+/**
+ * Las salidas que se reemplazaron por otra (evento `output_replaced`, 0246),
+ * entre estas. Es la marca: la custodia `retorno` sola también la pone
+ * «Solicitar devolución».
+ */
+async function loadReplacedIds(admin: Admin, shipmentIds: string[]): Promise<Set<string>> {
+  if (!shipmentIds.length) return new Set();
+  const { data } = await courierRowsByIds(shipmentIds, (ids) => admin
+    .from("order_events")
+    .select("shipment_id")
+    .in("shipment_id", ids)
+    .eq("kind", "output_replaced"));
+  return replacedOutputIds((data as Array<{ shipment_id: string | null }>).map((row) => ({ kind: "output_replaced", shipment_id: row.shipment_id })));
+}
+
 /** ¿La salida tiene el evento `output_replaced`? (0246) */
 async function outputWasReplaced(admin: Admin, shipmentId: string): Promise<boolean> {
   const { data } = await admin

@@ -9621,7 +9621,9 @@ sin devolver y otra saliendo (principio 7, §7).
     caja y en la solicitud. **Ese evento es la marca de la salida
     reemplazada** (`gf_output_replaced`, 0246): la custodia `retorno` sola no
     basta, porque «Solicitar devolución» (§13) también la pone, y esa salida se
-    sigue reportando y recibiendo como siempre (no se saca con salida nueva).
+    sigue reportando, recibiendo y reprogramando como siempre: «Desde la
+    lista» la ofrece para «Recibir en oficina», al recibirla vuelve a «por
+    asignar», y no se saca con salida nueva («ya está en devolución»).
   - No se saca si el pedido ya no está en «Por reprogramar Lima», si tiene una
     salida entregada, si la salida ya no está en la caja o su parada no dice
     «No entregado», si el pedido tiene otra salida viva o si ya tiene cinco
@@ -10217,12 +10219,15 @@ decía «Ya estaba». Había 78 así, en cajas del 16 al 28/09, y 20 rechazos.
   dos o tres días; de noche no se recibe nada (§9.4, §9.5)— y ese día se
   recibe en oficina. Hasta entonces la caja «No entregado» sigue a su nombre.
   Lo que queda sigue en «Devoluciones» y el escaneo de «Por QR» lo recibe al
-  volver a asignarlo.
+  volver a asignarlo; la caja reemplazada por otra salida (§29.13) la recibe
+  y no la asigna.
   Es lo único que se fuerza en Grupo GF; lo sin reportar y la foto no.
 - **«Recibir en oficina»** en la misma fila (`receiveRouteReturns`) los recibe
-  de una vez por la puerta de «Devoluciones» (`returnUndeliveredToOffice`,
-  0188/0206): vuelven a «por asignar», rechazos incluidos (v1.23). Pulsarlo es
-  decir que las cajas están en la oficina, y lo confirma.
+  de una vez por la puerta de «Devoluciones» (`returnUndeliveredOutputs`,
+  0188/0206), por salida y solo de las cajas de esa ruta: vuelven a «por
+  asignar», rechazos incluidos (v1.23); la caja reemplazada por otra salida
+  vuelve a stock (0246). Pulsarlo es decir que las cajas están en la oficina, y
+  lo confirma.
 - La tabla de la ruta filtra **«Por devolver»** con el mismo criterio.
 
 **Reabrir ruta.** Una ruta cerrada vuelve a «en curso» (`reopenRoute`, permiso

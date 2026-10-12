@@ -37,9 +37,10 @@
 --      deshiciera su «No entregado», la parada volvería a `pendiente` y las
 --      funciones de custodia (`gf_withdraw_in_custody`, `gf_office_reclaim`,
 --      `gf_rider_decline`) la devolverían a la empresa: habría dos salidas vivas
---      del mismo pedido. Bloquea también entregarla. Es `security definer`: el
---      motorizado puede escribir su parada directamente (política
---      `delivery_stops_report`, 0066) sin poder leer `shipments`.
+--      del mismo pedido. Bloquea también entregarla, soltarla de su salida o de
+--      su caja y borrarla. Es `security definer`: el motorizado puede escribir
+--      su parada directamente (política `delivery_stops_report`, 0066) sin
+--      poder leer `shipments`.
 --   d) `gf_carry_over` (0234) no pasa a la ruta siguiente del motorizado una
 --      salida en `retorno`, y vuelve a leer con candado cada paquete antes de
 --      sacarlo de la caja anterior: un reemplazo o una recepción simultáneos no
@@ -308,7 +309,10 @@ grant execute on function public.gf_return_to_office(uuid, uuid) to service_role
 -- c) La parada de la salida en devolución no cambia ----------------------------
 
 -- `security definer`: el motorizado escribe su parada bajo RLS y no ve
--- `shipments`; leída como él, la guarda no encontraría nada.
+-- `shipments`; leída como él, la guarda no encontraría nada. Mira la salida de
+-- ANTES del cambio: soltar la parada de su salida (`shipment_id`) o de su caja
+-- también la sacaría de la guarda. Corregir la nota o el motivo sin cambiar el
+-- estado sí se puede.
 create or replace function public.gf_guard_replaced_stop()
 returns trigger
 language plpgsql
@@ -316,22 +320,31 @@ security definer
 set search_path = public
 as $$
 begin
+  if tg_op = 'UPDATE'
+     and new.status is not distinct from old.status
+     and new.shipment_id is not distinct from old.shipment_id
+     and new.dispatch_manifest_id is not distinct from old.dispatch_manifest_id then
+    return new;
+  end if;
   if exists (
     select 1 from shipments s
-     where s.id = new.shipment_id and s.courier = 'propio'
+     where s.id = old.shipment_id and s.courier = 'propio'
        and s.custody_state = 'retorno' and s.returned_at is null
-  ) and gf_output_replaced(new.shipment_id) then
+  ) and gf_output_replaced(old.shipment_id) then
     raise exception 'Este paquete ya salió con otra salida: no se entrega ni se reporta. Tráelo a la oficina.';
   end if;
+  if tg_op = 'DELETE' then return old; end if;
   return new;
 end;
 $$;
 
+revoke all on function public.gf_guard_replaced_stop() from public, anon, authenticated;
+
 drop trigger if exists delivery_stops_guard_replaced on public.delivery_stops;
 create trigger delivery_stops_guard_replaced
-  before update of status on public.delivery_stops
+  before update of status, shipment_id, dispatch_manifest_id or delete on public.delivery_stops
   for each row
-  when (old.status is distinct from new.status and new.shipment_id is not null)
+  when (old.shipment_id is not null)
   execute function public.gf_guard_replaced_stop();
 
 -- d) El traspaso del cuaderno no se lleva la caja reemplazada -----------------
@@ -487,6 +500,8 @@ begin
   return new;
 end;
 $$;
+
+revoke all on function public.gf_guard_replaced_same_route() from public, anon, authenticated;
 
 drop trigger if exists dispatch_items_guard_replaced_route on public.dispatch_manifest_items;
 create trigger dispatch_items_guard_replaced_route

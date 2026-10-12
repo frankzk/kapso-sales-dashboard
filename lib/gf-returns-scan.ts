@@ -27,6 +27,10 @@ export interface GfReturnFacts {
   receivedInOffice: boolean;
   /** El pedido salió con otra salida (`output_replaced`): esta vuelve a stock. */
   replaced?: boolean;
+  /*
+   * Una salida que ya consta devuelta pero sigue en la caja también va a stock
+   * (0246): `custodyState` «devuelto».
+   */
 }
 
 export type GfReturnDecision =
@@ -40,7 +44,9 @@ export function gfReturnDecision(label: string, facts: GfReturnFacts): GfReturnD
   const { box } = facts;
   if (box) {
     const where = `la caja de ${box.riderName} del ${boxDayShort(box.routeDate)}`;
-    if (box.stopStatus === "no_entregado") return facts.replaced ? { kind: "recibir", toStock: true } : { kind: "recibir" };
+    if (box.stopStatus === "no_entregado") {
+      return facts.replaced || facts.custodyState === "devuelto" ? { kind: "recibir", toStock: true } : { kind: "recibir" };
+    }
     if (box.stopStatus === "entregado") {
       return { kind: "error", message: `${label}: ${box.riderName} lo reportó entregado (${where}). Si volvió, que corrija ese reporte.` };
     }

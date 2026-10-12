@@ -250,7 +250,8 @@ export async function startRoute(routeId: string): Promise<RouteActionResult> {
  * entregado» que siguen en su caja, de una vez. Es la MISMA puerta que
  * «Devoluciones» en Despacho del día (`returnUndeliveredOutputs`, 0188/0206):
  * sale de la caja con rastro y vuelve a «por asignar», rechazo incluido
- * (v1.23). Pulsarlo dice que las cajas están en la oficina.
+ * (v1.23); la caja reemplazada por otra salida vuelve a stock (0246). Solo las
+ * cajas de ESTA ruta. Pulsarlo dice que las cajas están en la oficina.
  */
 export async function receiveRouteReturns(routeId: string): Promise<RouteActionResult> {
   const g = await guard();

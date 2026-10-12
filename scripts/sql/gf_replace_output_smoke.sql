@@ -187,6 +187,19 @@ begin
     if sqlerrm like 'FAIL%' then raise; end if;
     if sqlerrm not like 'Este paquete ya salió con otra salida%' then raise exception 'expected the stop guard for the rider, got %', sqlerrm; end if;
   end;
+  -- Ni soltando la parada de su salida.
+  begin
+    update delivery_stops set shipment_id=null where shipment_id='24600000-0000-0000-0000-000000000007';
+    get diagnostics n = row_count;
+    raise exception 'FAIL the rider detached a replaced output (% rows)', n;
+  exception when others then
+    if sqlerrm like 'FAIL%' then raise; end if;
+    if sqlerrm not like 'Este paquete ya salió con otra salida%' then raise exception 'expected the stop guard on detach, got %', sqlerrm; end if;
+  end;
+  -- La nota sí la puede corregir.
+  update delivery_stops set note='la traigo mañana' where shipment_id='24600000-0000-0000-0000-000000000007';
+  get diagnostics n = row_count;
+  if n <> 1 then raise exception 'the rider could not edit the note (% rows)', n; end if;
 end $$;
 reset role;
 

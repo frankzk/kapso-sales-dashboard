@@ -401,7 +401,7 @@ describe("las piezas en el código", () => {
     // sigue distinguiendo el reintento de otro courier (test/gf-own-retry.test.ts).
     expect(body).toContain("${REPROGRAM_QUEUE_FILTER}");
     expect(body).toContain("isRetryAdmission(order.macro_stage, order.macro_substage, order.operational_status)");
-    expect(body).toContain("activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : outputsBlockingRetry(outputs), fillable?.id ?? null)");
+    expect(body).toContain("activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : outputsBlockingRetry(outputs, replacedIds), fillable?.id ?? null)");
     expect(body).toContain("const needsExistingBox = !review && !retry && !own && order.macro_substage !== \"por_generar_rotulo\"");
     expect(body).toContain("failedOutput: retry ? lastFailedOutput(outputs) : null");
   });

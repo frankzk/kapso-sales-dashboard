@@ -7,9 +7,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { isReturningOwnOutput, replacedOutputIds } from "@/lib/gf-replaced-output";
+import { isReplacedOwnOutput, isReturningOwnOutput, replacedOutputIds } from "@/lib/gf-replaced-output";
 import {
   daysBetween,
+  ownRetryDecision,
   outputsBlockingRetry,
   ownReplaceDecision,
   ownRetryOutput,
@@ -68,21 +69,38 @@ describe("isReturningOwnOutput: la salida propia en devolución con el motorizad
   });
 });
 
-describe("la salida en devolución no estorba ni se reusa", () => {
+describe("la salida reemplazada no estorba ni se reusa", () => {
   const replaced = s01({ custody_state: "retorno" });
   const fresh = s01({ id: "s02", custody_state: "empresa", dispatched_at: null, output_number: 2 });
+  const replacedIds = new Set(["s01"]);
+
+  it("la marca es su evento, no la custodia sola", () => {
+    expect(isReplacedOwnOutput(replaced, replacedIds)).toBe(true);
+    expect(isReplacedOwnOutput(replaced, new Set())).toBe(false);
+    expect(isReplacedOwnOutput(s01({ custody_state: "retorno", returned_at: "2026-10-12T10:00:00Z" }), replacedIds)).toBe(false);
+  });
 
   it("no bloquea otra salida", () => {
-    expect(outputsBlockingRetry([replaced, fresh]).map((o) => o.id)).toEqual(["s02"]);
+    expect(outputsBlockingRetry([replaced, fresh], replacedIds).map((o) => o.id)).toEqual(["s02"]);
   });
 
   it("no es la que se toma con su misma salida: con la S02 fallida, se toma la S02", () => {
-    expect(ownRetryOutput(reprogram, [replaced])).toBeNull();
-    expect(ownRetryOutput(reprogram, [replaced, fresh])?.id).toBe("s02");
+    expect(ownRetryOutput(reprogram, [replaced], replacedIds)).toBeNull();
+    expect(ownRetryOutput(reprogram, [replaced, fresh], replacedIds)?.id).toBe("s02");
   });
 
   it("sola, el pedido no tiene salida viva que sacar", () => {
-    expect(reprogramBlockReason([replaced])).toBe("sin_salida");
+    expect(reprogramBlockReason([replaced], replacedIds)).toBe("sin_salida");
+  });
+
+  it("«Solicitar devolución» (§13) sin reemplazo sigue como siempre: se recibe en oficina y se reprograma", () => {
+    // En `retorno` por la Mesa de cierre, en la caja con «No entregado».
+    const requested = s01({ custody_state: "retorno" });
+    expect(outputsBlockingRetry([requested], new Set()).map((o) => o.id)).toEqual(["s01"]);
+    expect(ownRetryOutput(reprogram, [requested], new Set())?.id).toBe("s01");
+    expect(ownRetryDecision(requested, box, false)).toEqual({ action: "recibir_en_oficina" });
+    // No se saca con salida nueva: ya está en devolución.
+    expect(ownReplaceDecision(reprogram, [requested], requested, box, null, new Set())).toEqual({ action: "bloquear", reason: "en_devolucion" });
   });
 });
 
@@ -90,16 +108,16 @@ describe("ownReplaceDecision: cuándo se saca con salida nueva", () => {
   it("«No entregado» en la caja de cualquier motorizado, en Por reprogramar Lima: se saca", () => {
     for (const riderName of ["Alexis", "Yhoni", "Roy", "Douglas"]) {
       const riderBox = { ...box, riderName };
-      expect(ownReplaceDecision(reprogram, [s01()], s01(), riderBox, null)).toEqual({ action: "sacar" });
+      expect(ownReplaceDecision(reprogram, [s01()], s01(), riderBox, null, new Set())).toEqual({ action: "sacar" });
     }
     // Con la solicitud de Grupo GF en esa misma salida, también.
-    expect(ownReplaceDecision(reprogram, [s01()], s01(), box, "s01")).toEqual({ action: "sacar" });
+    expect(ownReplaceDecision(reprogram, [s01()], s01(), box, "s01", new Set())).toEqual({ action: "sacar" });
   });
 
   it("ya reemplazada va primero: el segundo clic no dice «fuera de etapa»", () => {
     const replaced = s01({ custody_state: "retorno" });
     const afterReplace = { macro_stage: "preparacion", macro_substage: "por_armar" };
-    expect(ownReplaceDecision(afterReplace, [replaced], replaced, box, "s02")).toEqual({ action: "ya_reemplazada" });
+    expect(ownReplaceDecision(afterReplace, [replaced], replaced, box, "s02", new Set(["s01"]))).toEqual({ action: "ya_reemplazada" });
   });
 
   it.each([
@@ -113,7 +131,7 @@ describe("ownReplaceDecision: cuándo se saca con salida nueva", () => {
     ["solicitud_en_otra_salida", reprogram, [s01()], s01(), box, "otra"],
     ["tope", reprogram, [s01(), ...["a", "b", "c", "d"].map((id) => s01({ id, delivery_status: "anulado" }))], s01(), box, null],
   ] as const)("bloquea: %s", (reason, order, outputs, target, theBox, requestShipment) => {
-    expect(ownReplaceDecision(order, outputs as unknown as Output[], target as Output, theBox, requestShipment)).toEqual({ action: "bloquear", reason });
+    expect(ownReplaceDecision(order, outputs as unknown as Output[], target as Output, theBox, requestShipment, new Set())).toEqual({ action: "bloquear", reason });
   });
 
   it("los mensajes nombran la salida, el motorizado y la salida nueva", () => {
@@ -150,6 +168,12 @@ describe("escanear la caja reemplazada la recibe y vuelve a stock", () => {
     expect(pastBoxMessage("recibir_a_stock", "Alexis", "2026-10-09")).toContain("desármala y regístrala como reingreso a stock");
     expect(replacedReceivedMessage("KP140009-S01", "Alexis", "2026-10-09", "KP140009-S02"))
       .toBe("KP140009-S01 era la caja reemplazada (Alexis del 09/10): recibida en oficina; desármala y regístrala como reingreso a stock. El pedido sale con KP140009-S02.");
+  });
+
+  it("en Devoluciones de Almacén, la que ya consta devuelta y sigue en la caja también va a stock; la de devolución solicitada, no", () => {
+    const inBox = { riderName: "Alexis", routeDate: "2026-10-09", stopStatus: "no_entregado" };
+    expect(gfReturnDecision("KP1-S01", { box: inBox, custodyState: "devuelto", receivedInOffice: false })).toEqual({ kind: "recibir", toStock: true });
+    expect(gfReturnDecision("KP1-S01", { box: inBox, custodyState: "retorno", receivedInOffice: false, replaced: false })).toEqual({ kind: "recibir" });
   });
 
   it("en Devoluciones de Almacén: se recibe a stock; ya recibida, se avisa", () => {
@@ -212,13 +236,18 @@ describe("las piezas en el código", () => {
     const guard = migration.slice(migration.indexOf("create or replace function public.gf_guard_replaced_stop()"), migration.indexOf("drop trigger if exists delivery_stops_guard_replaced"));
     // El motorizado escribe bajo RLS y no ve `shipments`.
     expect(guard).toContain("security definer");
-    expect(guard).toContain("and gf_output_replaced(new.shipment_id) then");
+    expect(guard).toContain("and gf_output_replaced(old.shipment_id) then");
     expect(migration).toContain("and sh.custody_state is distinct from 'retorno'");
     // El traspaso relee con candado antes de sacar el paquete de la caja.
     const carry = migration.slice(migration.indexOf("create or replace function public.gf_carry_over("));
     expect(carry).toContain("select * into v_item_row from dispatch_manifest_items where id = r.item_id for update;");
     expect(carry).toContain("select custody_state into v_custody from shipments where id = r.shipment_id for update;");
     expect(carry.indexOf("for update;")).toBeLessThan(carry.indexOf("-- 1. Sale de la caja anterior"));
+    // También ante soltar la parada de su salida o de su caja, o borrarla; la
+    // nota se corrige.
+    expect(guard).toContain("new.status is not distinct from old.status");
+    expect(guard).toContain("where s.id = old.shipment_id and s.courier = 'propio'");
+    expect(migration).toContain("before update of status, shipment_id, dispatch_manifest_id or delete on public.delivery_stops");
     const report = read("lib/stop-report.ts");
     expect(report).toContain("if (await stopIsFrozenByReplacement(admin, stop.id, input.status)) return { ok: false, error: REPLACED_STOP_ERROR };");
     expect(report).toContain('if (!row?.shipment_id || row.status === nextStatus) return false;');
@@ -284,6 +313,17 @@ describe("las piezas en el código", () => {
     expect(actions).toContain("if (await replacementCommitted(admin, shipmentId)) return;");
     // Lo que no salió se dice con su pedido, también junto a lo que sí.
     expect(replace).toContain("if (failed.length && (replaced.length || alreadyReplaced.length)) {");
+  });
+
+  it("la cola, la toma y el reemplazo leen el evento: la custodia sola no es reemplazo", () => {
+    expect(actions).toContain("const replacedIds = await loadReplacedIds(admin, ((admissionShipmentRows ?? []) as AdmissionShipmentRow[]).map((row) => row.id));");
+    expect(actions).toContain("ownRetryOutput(order, shipmentsByOrder.get(order.order_id) ?? [], replacedIds)");
+    expect(actions).toContain("ownRetryOutput(row, outputs, replacedIds)");
+    expect(body("replaceOwnOutputs")).toContain("ownReplaceDecision(row, outputs, old, box, request?.shipment_id ?? null, replacedIds)");
+    // «A stock» solo para la reemplazada o la ya devuelta, como la base.
+    const core = body("returnUndeliveredToOffice");
+    expect(core).toContain("const returningIds = new Set(custodyRows.filter((row) => isReplacedOwnOutput(row, replacedIds)).map((row) => row.id));");
+    expect(read("app/dashboard/pedidos/despacho/actions.ts")).toContain("const replaced = Boolean(replacedEvents?.length);");
   });
 
   it("la Mesa de cierre no recibe una caja que sigue con el motorizado", () => {

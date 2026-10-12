@@ -182,6 +182,9 @@ export function DispatchDayBoard(props: Props) {
   const [returningOpen, setReturningOpen] = useState(false);
   const [returningSelected, setReturningSelected] = useState<Set<string>>(() => new Set());
   const returning = props.returning ?? [];
+  // Solo lo marcado que sigue en la lista: lo recibido en otra pestaña o por QR
+  // ya no está y no cuenta.
+  const returningChosen = returning.filter((r) => returningSelected.has(r.shipmentId));
   // Filtro rápido de las cajas (Todos · Por armar · Listos para cotejo · Sin
   // confirmar): compartido por todas las cajas de la pestaña.
   const [boxFilter, setBoxFilter] = useState<BoxItemFilter>("todos");
@@ -504,7 +507,7 @@ export function DispatchDayBoard(props: Props) {
     run(() => replaceOwnOutputs(orgId, ids));
   }
   function receiveReturning() {
-    const ids = returning.filter((r) => returningSelected.has(r.shipmentId)).map((r) => r.shipmentId);
+    const ids = returningChosen.map((r) => r.shipmentId);
     if (!ids.length) return;
     setReturningSelected(new Set());
     setReturningOpen(false);
@@ -733,8 +736,8 @@ export function DispatchDayBoard(props: Props) {
             })}
           </ul>
           <div className="mt-3 flex flex-wrap gap-2">
-            <OpsButton variant="danger" disabled={pending || !canManageDispatch || !returningSelected.size} onClick={receiveReturning}>
-              Recibir en oficina{returningSelected.size ? ` ${returningSelected.size}` : ""}
+            <OpsButton variant="danger" disabled={pending || !canManageDispatch || !returningChosen.length} onClick={receiveReturning}>
+              Recibir en oficina{returningChosen.length ? ` ${returningChosen.length}` : ""}
             </OpsButton>
             {!canManageDispatch && <span className="text-[13px] text-ink-500">Tu rol no organiza rutas: puedes mirar, no recibir.</span>}
           </div>

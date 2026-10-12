@@ -27,7 +27,7 @@
 import { courierKey } from "@/lib/dispatch";
 import { guideFailedAfterDispatch, type RecoveryGuideLike } from "@/lib/reproprovincia";
 import { listNames } from "@/lib/labels/resolve-output";
-import { isReturningOwnOutput } from "@/lib/gf-replaced-output";
+import { NO_REPLACED_OUTPUTS, isReplacedOwnOutput, isReturningOwnOutput } from "@/lib/gf-replaced-output";
 import { MAX_OUTPUTS_PER_ORDER, isCourierTbd, nombreDeCourier } from "@/lib/shipment-output";
 
 /** ¿El pedido espera un courier nuevo porque otro no lo entregó? */
@@ -51,6 +51,7 @@ export interface FailedOutput {
 }
 
 type OutputLike = RecoveryGuideLike & {
+  id?: string;
   returned_at?: string | null;
   custody_state?: string | null;
   output_number?: number | null;
@@ -59,11 +60,12 @@ type OutputLike = RecoveryGuideLike & {
 /**
  * Las salidas que SÍ impiden que Grupo GF lo tome: las vivas que no fallaron.
  * La de Tanders que vuelve sigue `en_ruta`, pero ya no la trabaja nadie. Lo
- * mismo la propia «en devolución» con el motorizado (`isReturningOwnOutput`,
- * 12-10-2026): el pedido ya salió con otra.
+ * mismo la propia reemplazada por otra que el motorizado todavía tiene
+ * (`isReplacedOwnOutput`, 12-10-2026): el pedido ya salió con otra.
+ * `replaced`: las salidas con `output_replaced` (`replacedOutputIds`).
  */
-export function outputsBlockingRetry<T extends OutputLike>(outputs: readonly T[]): T[] {
-  return outputs.filter((output) => !guideFailedAfterDispatch(output) && !isReturningOwnOutput(output));
+export function outputsBlockingRetry<T extends OutputLike>(outputs: readonly T[], replaced: ReadonlySet<string> = NO_REPLACED_OUTPUTS): T[] {
+  return outputs.filter((output) => !guideFailedAfterDispatch(output) && !isReplacedOwnOutput(output, replaced));
 }
 
 /** La última salida que falló (la de consecutivo más alto), o null. */
@@ -164,12 +166,13 @@ const LIVE_DELIVERY_STATUSES = ["pendiente", "en_ruta"];
 export function ownRetryOutput<T extends OwnOutputLike>(
   order: { macro_stage?: unknown; macro_substage?: unknown },
   outputs: readonly T[],
+  replaced: ReadonlySet<string> = NO_REPLACED_OUTPUTS,
 ): T | null {
   if (!isReprogramStage(order.macro_stage, order.macro_substage)) return null;
   if (outputs.some((output) => output.delivery_status === "entregado" || output.status_category === "delivered")) return null;
   // Una salida devuelta (la 0189 deja `pendiente` con custodia `devuelto`) ya
   // no está viva: no se reusa ni estorba a otra que sí lo esté.
-  const live = outputsBlockingRetry(outputs).filter((output) =>
+  const live = outputsBlockingRetry(outputs, replaced).filter((output) =>
     LIVE_DELIVERY_STATUSES.includes(output.delivery_status) && !output.returned_at && output.custody_state !== "devuelto");
   if (live.length !== 1) return null;
   const output = live[0]!;
@@ -250,9 +253,9 @@ export function ownOutputLabel(outputCode: string | null | undefined): string {
  */
 export type ReprogramBlock = "otra_salida_viva" | "revisar_salidas" | "salida_devuelta" | "sin_salida";
 
-export function reprogramBlockReason(outputs: readonly OutputLike[]): ReprogramBlock {
+export function reprogramBlockReason(outputs: readonly OutputLike[], replaced: ReadonlySet<string> = NO_REPLACED_OUTPUTS): ReprogramBlock {
   const returned = (output: OutputLike) => Boolean(output.returned_at) || output.custody_state === "devuelto";
-  const live = outputsBlockingRetry(outputs).filter((output) => LIVE_DELIVERY_STATUSES.includes(output.delivery_status) && !returned(output));
+  const live = outputsBlockingRetry(outputs, replaced).filter((output) => LIVE_DELIVERY_STATUSES.includes(output.delivery_status) && !returned(output));
   const ours = (output: OutputLike) => courierKey(output.courier) === "propio" || isCourierTbd(output.courier);
   if (live.some((output) => !ours(output))) return "otra_salida_viva";
   if (live.length) return "revisar_salidas";
@@ -280,8 +283,11 @@ export function reprogramBlockReason(outputs: readonly OutputLike[]): ReprogramB
  * - `otra_salida_viva`: el pedido tiene otra salida que se está trabajando.
  * - `solicitud_en_otra_salida`: la solicitud viva de Grupo GF es de otra salida.
  * - `tope`: el pedido ya tiene cinco salidas.
+ * - `en_devolucion`: está en `retorno` sin reemplazo: se pidió su devolución
+ *   en la Mesa de cierre (§13).
  */
 export type OwnReplaceBlock =
+  | "en_devolucion"
   | "fuera_de_etapa"
   | "entregado"
   | "no_es_propia"
@@ -310,8 +316,11 @@ export function ownReplaceDecision(
   target: ReplaceTarget,
   box: { undeliveredReason?: string | null } | null,
   requestShipmentId: string | null,
+  /** Las salidas con `output_replaced` (`replacedOutputIds`). */
+  replaced: ReadonlySet<string>,
 ): OwnReplaceDecision {
-  if (isReturningOwnOutput(target)) return { action: "ya_reemplazada" };
+  if (isReplacedOwnOutput(target, replaced)) return { action: "ya_reemplazada" };
+  if (isReturningOwnOutput(target)) return { action: "bloquear", reason: "en_devolucion" };
   if (!isReprogramStage(order.macro_stage, order.macro_substage)) return { action: "bloquear", reason: "fuera_de_etapa" };
   if (outputs.some((output) => output.delivery_status === "entregado" || output.status_category === "delivered")) {
     return { action: "bloquear", reason: "entregado" };
@@ -326,7 +335,7 @@ export function ownReplaceDecision(
   }
   if (!box) return { action: "bloquear", reason: "no_en_caja" };
   if (!box.undeliveredReason) return { action: "bloquear", reason: "caja_sin_reporte" };
-  const otherLive = outputsBlockingRetry(outputs).some((output) =>
+  const otherLive = outputsBlockingRetry(outputs, replaced).some((output) =>
     output.id !== target.id &&
     LIVE_DELIVERY_STATUSES.includes(output.delivery_status) &&
     !output.returned_at &&
@@ -350,6 +359,8 @@ export function replaceDecisionMessage(
     return `${code} ya salió con otra salida${replacedByCode ? ` (${replacedByCode})` : ""}; sigue en devolución con ${rider}.`;
   }
   switch (decision.reason) {
+    case "en_devolucion":
+      return `${code} ya está en devolución (se pidió su retorno): no se saca con salida nueva.`;
     case "fuera_de_etapa":
       return "El pedido ya no está en «Por reprogramar Lima».";
     case "entregado":
