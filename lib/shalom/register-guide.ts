@@ -98,8 +98,10 @@ export type RegisterExistingGuideResult =
  * Registra la guía existente en el pedido. No llama a Shalom: la guía ya está
  * emitida. El rastreo público la sigue después por su número.
  *
- * La clave de recojo se guarda solo si viene: el cron no la tiene y no la
- * inventa. Se registra después desde la salida Shalom, en Salidas y guías.
+ * La clave de recojo se guarda solo si viene. El cron la trae solo cuando la
+ * clave del listado de Shalom Pro se comprobó en esa misma lectura contra las
+ * guías creadas por API (lib/shalom/account-cotejo.ts); si no, no la inventa y
+ * se registra después desde la salida Shalom, en Salidas y guías.
  */
 export async function registerExistingShalomGuide(
   admin: SupabaseClient,
@@ -231,6 +233,7 @@ export async function registerExistingShalomGuide(
   }
 
   let keyWarning = "";
+  let keySaved = false;
   if (guide.pickupCode) {
     const { data: previousKey } = await admin
       .from("shalom_pickup_keys")
@@ -249,6 +252,8 @@ export async function registerExistingShalomGuide(
     );
     if (keyWrite.error) {
       keyWarning = ` La guía quedó vinculada, pero la clave no pudo guardarse (${keyWrite.error.message}); regístrala desde la salida Shalom en Salidas y guías.`;
+    } else {
+      keySaved = true;
     }
   } else {
     keyWarning = " No se ingresó la clave de recojo; regístrala después desde la salida Shalom en Salidas y guías.";
@@ -282,9 +287,15 @@ export async function registerExistingShalomGuide(
       `Guía Shalom ${what}.` +
       `${guide.agencyBranch ? ` Destino: ${guide.agencyBranch}.` : ""}` +
       ` Adelanto validado: S/ ${advance.toFixed(2)}.` +
-      // El cron no tiene la clave: la nota lo dice donde se lee, no solo en el
-      // payload, porque es lo siguiente que alguien tiene que hacer.
-      (cotejo && !guide.pickupCode ? " Falta la clave de recojo: regístrala desde la salida Shalom en Salidas y guías." : ""),
+      // Si el cron no trae la clave —o no se pudo guardar—, la nota lo dice
+      // donde se lee, no solo en el payload, porque es lo siguiente que alguien
+      // tiene que hacer. Si la trae, es la del listado: se dice de dónde salió,
+      // nunca cuál es.
+      (cotejo
+        ? keySaved
+          ? " Clave de recojo tomada del listado de Shalom Pro."
+          : " Falta la clave de recojo: regístrala desde la salida Shalom en Salidas y guías."
+        : ""),
     // Nunca se guarda la clave en la línea de tiempo: solo la confirmación de
     // que fue recibida y cifrada.
     payload: {
