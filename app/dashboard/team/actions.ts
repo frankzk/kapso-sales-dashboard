@@ -308,6 +308,7 @@ export async function setPaymentValidationPermission(
     actor.role,
     holders.ids,
     entry.lastOneMatters ? entry.label : null,
+    entry.ownerOnly ? entry.label : null,
   );
   if (!guard.ok) return { error: guard.reason };
 
