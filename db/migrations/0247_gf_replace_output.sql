@@ -343,8 +343,8 @@ $$;
 
 revoke all on function public.gf_guard_replaced_stop() from public, anon, authenticated;
 
-drop trigger if exists delivery_stops_guard_replaced on public.delivery_stops;
-create trigger delivery_stops_guard_replaced
+-- `create or replace trigger` y no drop + create (como la 0204): atómico.
+create or replace trigger delivery_stops_guard_replaced
   before update of status, shipment_id, dispatch_manifest_id or delete on public.delivery_stops
   for each row
   when (old.shipment_id is not null)
@@ -523,8 +523,7 @@ $$;
 
 revoke all on function public.gf_guard_replaced_same_route() from public, anon, authenticated;
 
-drop trigger if exists dispatch_items_guard_replaced_route on public.dispatch_manifest_items;
-create trigger dispatch_items_guard_replaced_route
+create or replace trigger dispatch_items_guard_replaced_route
   before insert on public.dispatch_manifest_items
   for each row
   execute function public.gf_guard_replaced_same_route();

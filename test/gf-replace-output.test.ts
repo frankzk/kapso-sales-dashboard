@@ -232,8 +232,10 @@ describe("las piezas en el código", () => {
   });
 
   it("la parada no cambia —tampoco escrita por el motorizado— y el cuaderno no se la lleva", () => {
-    expect(migration).toContain("create trigger delivery_stops_guard_replaced");
-    const guard = migration.slice(migration.indexOf("create or replace function public.gf_guard_replaced_stop()"), migration.indexOf("drop trigger if exists delivery_stops_guard_replaced"));
+    expect(migration).toContain("create or replace trigger delivery_stops_guard_replaced");
+    // Sin drop + create: atómico, y sin sentencias destructivas al aplicarla.
+    expect(migration).not.toContain("drop trigger");
+    const guard = migration.slice(migration.indexOf("create or replace function public.gf_guard_replaced_stop()"), migration.indexOf("create or replace trigger delivery_stops_guard_replaced"));
     // El motorizado escribe bajo RLS y no ve `shipments`.
     expect(guard).toContain("security definer");
     expect(guard).toContain("and gf_output_replaced(old.shipment_id) then");
@@ -267,7 +269,7 @@ describe("las piezas en el código", () => {
   });
 
   it("la salida nueva no entra en la ruta del mismo motorizado y día que la reemplazada", () => {
-    expect(migration).toContain("create trigger dispatch_items_guard_replaced_route");
+    expect(migration).toContain("create or replace trigger dispatch_items_guard_replaced_route");
     expect(migration).toContain("raise exception 'Este pedido tiene su caja anterior (%) en la ruta de % del %: la salida nueva va con otro motorizado u otro día.'");
   });
 
