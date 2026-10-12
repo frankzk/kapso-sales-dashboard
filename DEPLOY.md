@@ -2110,7 +2110,8 @@ la línea de tiempo («Recordatorio de recojo (día 3)…») y la foto que viaj�
    `advisor_schedules` (meta de horas por semana, días y horario de cada
    persona; solo el servidor la lee y la escribe). Sin ella, Productividad
    carga igual y usa la meta por defecto (48 h, lunes a sábado, sin horario),
-   pero Equipo › Horarios no puede guardar y lo dice.
+   pero Equipo › Horarios no puede guardar y lo dice. **Ya aplicada en
+   producción** el 12-10-2026, pegando el SQL en el editor de Supabase.
 2. **Cargar el horario de cada asesora** en Equipo › Horarios (owner o admin):
    meta de la semana, días que trabaja y, si tiene, su horario de entrada y
    salida. Con horario, Productividad marca la primera actividad tarde y la
