@@ -44,13 +44,16 @@ async function CourierContent({ searchParams }: { searchParams: Promise<SP> }) {
   const orgId = memberships[0]!.org_id;
   // Quien solo despacha opera las tiendas que tiene en Equipo; sin ninguna,
   // no ve pedidos (lo mismo comprueban las acciones).
-  if (!permissions.can("logistics.manage") && !(await getAccessibleStores()).some((store) => store.org_id === orgId)) {
+  const storeIds = permissions.can("logistics.manage")
+    ? null
+    : (await getAccessibleStores()).filter((store) => store.org_id === orgId).map((store) => store.id);
+  if (storeIds && !storeIds.length) {
     return <EmptyState title="No tienes tiendas asignadas">Pide acceso a Kenku o Aurela en Equipo.</EmptyState>;
   }
   // Una fecha concreta en la lista de Rutas la trae el servidor (puede ser
   // anterior a las últimas 150 rutas); «hoy» y «todas» filtran en el navegador.
   const day = /^\d{4}-\d{2}-\d{2}$/.test(sp.dia ?? "") ? sp.dia! : null;
-  const [snapshot, dispatch, ledger, pendingReturns] = await Promise.all([loadCourierConfig(orgId), getDispatchWorkspaceData(), getCourierRouteLedger({ day }), getPendingReturns().catch(() => [])]);
+  const [snapshot, dispatch, ledger, pendingReturns] = await Promise.all([loadCourierConfig(orgId), getDispatchWorkspaceData(), getCourierRouteLedger({ day }), getPendingReturns({ storeIds }).catch(() => [])]);
   const today = limaDate(new Date().toISOString()) ?? new Date().toISOString().slice(0, 10);
   return <GrupoGfCourierBoard orgId={orgId} snapshot={snapshot} manifests={dispatch.manifests} today={today} ledger={ledger} pendingReturns={pendingReturns} />;
 }

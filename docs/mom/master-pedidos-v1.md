@@ -8639,6 +8639,15 @@ Grupo GF, igual que el modo de recepción de §29.13. El aviso se quedó en
 S/ 4,000. Un operador nuevo sigue naciendo con S/ 4,000 / S/ 5,000, que son los
 valores por defecto de 0134.
 
+**El límite también rige al mover y lo pasa solo quien administra (11-10-2026,
+fase 0, §29.10).** Mover un paquete a la caja de otro motorizado suma su
+efectivo a la ruta destino, como asignar. Si la pasaría del límite, quien tiene
+`logistics.manage` (Daysi o Frankz) confirma la excepción en la misma pantalla y
+queda en el evento `dispatch_route_reassigned`; a quien solo despacha se le
+explica que lo autoriza quien administra, sin ofrecerle el botón. Un paquete que
+no suma efectivo (pagado en Shopify) no se frena aunque la ruta ya haya pasado
+el límite con una excepción autorizada.
+
 Neto de la tienda:
 
 ```text

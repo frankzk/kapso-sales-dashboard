@@ -294,9 +294,12 @@ export function cashLimitVerdict(input: {
  */
 export function cashLimitBlock(
   verdict: CashLimitVerdict,
-  input: { override: boolean; canAuthorize: boolean },
+  input: { override: boolean; canAuthorize: boolean; addingCod?: number },
 ): string | null {
   if (verdict.status !== "blocked") return null;
+  // Lo que no suma efectivo (pagado en Shopify) no empeora una ruta que ya
+  // pasó el límite con una excepción autorizada: no se frena.
+  if (input.addingCod != null && input.addingCod <= 0) return null;
   if (input.override && input.canAuthorize) return null;
   const message = verdict.message ?? "Límite de efectivo superado.";
   if (input.canAuthorize) return message;

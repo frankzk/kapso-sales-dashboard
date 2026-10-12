@@ -22,7 +22,7 @@ function money(value: number): string {
 /** Arreglo de una fila con aviso («Mover», «Asignar igual», «Autorizar»): botón secundario pequeño. */
 const AMEND = "inline-flex h-7 shrink-0 items-center rounded-md bg-white px-2 text-xs font-semibold text-ink-700 shadow-control ring-1 ring-inset ring-line-strong hover:bg-wash hover:text-ink-900 disabled:opacity-50";
 
-function presentation(l: ScanAssignLine, riderName: string): { text: string; textClass: string; rowClass: string } {
+function presentation(l: ScanAssignLine, riderName: string, canAuthorizeCash: boolean): { text: string; textClass: string; rowClass: string } {
   switch (l.status) {
     case "procesando":
       return { text: "Asignando…", textClass: "text-ink-500", rowClass: "bg-wash" };
@@ -33,7 +33,7 @@ function presentation(l: ScanAssignLine, riderName: string): { text: string; tex
     case "en_otra_caja":
       return { text: `En la caja de ${l.riderName ?? "otro"} → Mover`, textClass: "text-warn-fg", rowClass: "bg-warn-wash" };
     case "bloqueado_efectivo":
-      return { text: "Límite de efectivo → Autorizar", textClass: "text-warn-fg", rowClass: "bg-warn-wash" };
+      return { text: canAuthorizeCash ? "Límite de efectivo → Autorizar" : "Límite de efectivo · lo autoriza Daysi o Frankz", textClass: "text-warn-fg", rowClass: "bg-warn-wash" };
     case "programado_otro_dia":
       return { text: `Programado ${l.programmedFor ? programDayLabel(l.programmedFor) : "otro día"} → Asignar igual`, textClass: "text-warn-fg", rowClass: "bg-warn-wash" };
     case "no_elegible":
@@ -115,7 +115,7 @@ export function GfBoxAddPackages({ manifest, canManage, canAuthorizeCash = false
       {lines.length > 0 && (
         <ul className="max-h-72 divide-y divide-line overflow-auto rounded-lg ring-1 ring-line" aria-live="polite">
           {lines.map((l, i) => {
-            const r = presentation(l, riderName);
+            const r = presentation(l, riderName, canAuthorizeCash);
             return (
               <li key={`${l.code}:${i}`} className={cn("flex items-center gap-2 px-3 py-2 text-sm", r.rowClass)} title={[l.message, l.cashWarning].filter(Boolean).join(" · ")}>
                 <span className="min-w-0 flex-1 truncate">
@@ -125,7 +125,13 @@ export function GfBoxAddPackages({ manifest, canManage, canAuthorizeCash = false
                 {l.amount != null && <span className="shrink-0 text-xs tabular-nums text-ink-600">{money(l.amount)}</span>}
                 {l.status === "en_otra_caja" && l.manifestId && l.shipmentId && (
                   <button type="button" disabled={busy} onClick={() => start(async () => {
-                    const res = await moveManifestItem(manifest.org_id, l.manifestId!, l.shipmentId!, riderId, `Escaneado en la caja de ${riderName}`, { overrideCash: overrideCash && canAuthorizeCash });
+                    const reason = `Escaneado en la caja de ${riderName}`;
+                    let res = await moveManifestItem(manifest.org_id, l.manifestId!, l.shipmentId!, riderId, reason, { overrideCash: overrideCash && canAuthorizeCash });
+                    // Quien administra el courier puede autorizar pasar el límite (§29.9).
+                    if (res.cashBlocked && canAuthorizeCash && !overrideCash && window.confirm(`${res.error}\n\n¿Autorizas pasar el límite para mover este paquete?`)) {
+                      setOverrideCash(true);
+                      res = await moveManifestItem(manifest.org_id, l.manifestId!, l.shipmentId!, riderId, reason, { overrideCash: true });
+                    }
                     push({ ...l, status: res.error ? "no_elegible" : "asignado", riderName, message: res.error ?? "" });
                   })} className={AMEND}>Mover</button>
                 )}

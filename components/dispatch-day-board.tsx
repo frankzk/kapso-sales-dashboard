@@ -245,7 +245,13 @@ export function DispatchDayBoard(props: Props) {
     if (!line.manifestId || !line.shipmentId || !riderId) return;
     const from = line.riderName ?? "otro motorizado";
     setLines((cur) => cur.map((l) => (l === line ? { ...l, status: "procesando", message: "Moviendo…", moveError: null } : l)));
-    const result = await moveManifestItem(orgId, line.manifestId, line.shipmentId, riderId, `Escaneado en oficina para la caja de ${riderName}`, { inHand: true, overrideCash: overrideCash && props.canAuthorizeCash === true });
+    const reason = `Escaneado en oficina para la caja de ${riderName}`;
+    let result = await moveManifestItem(orgId, line.manifestId, line.shipmentId, riderId, reason, { inHand: true, overrideCash: overrideCash && props.canAuthorizeCash === true });
+    // Quien administra el courier puede autorizar pasar el límite (§29.9).
+    if (result.cashBlocked && props.canAuthorizeCash && !overrideCash && window.confirm(`${result.error}\n\n¿Autorizas pasar el límite para mover este paquete?`)) {
+      setOverrideCash(true);
+      result = await moveManifestItem(orgId, line.manifestId, line.shipmentId, riderId, reason, { inHand: true, overrideCash: true });
+    }
     setLines((cur) => cur.map((l) => {
       if (l.code !== line.code || l.status !== "procesando") return l;
       return "error" in result && result.error
@@ -773,6 +779,9 @@ export function DispatchDayBoard(props: Props) {
                       {l.status === "bloqueado_efectivo" && !overrideCash && props.canAuthorizeCash && (
                         <OpsButton size="sm" onClick={() => setOverrideCash(true)} title={`${cashOverrideHint(props.cashWarning, props.cashLimit)} Toca «Autorizar» y vuelve a escanear.`}>Autorizar</OpsButton>
                       )}
+                      {l.status === "bloqueado_efectivo" && !props.canAuthorizeCash && l.message && (
+                        <p className="basis-full text-xs text-ink-500">{l.message}</p>
+                      )}
                       {l.moveError && <p role="alert" className="basis-full text-xs font-medium text-crit-fg">{l.moveError}</p>}
                       {/* Se leyó el rótulo viejo (Tanders que no entregó): la caja
                           entró como otra salida y su rótulo es el que va encima. */}
@@ -1182,6 +1191,7 @@ export function DispatchDayBoard(props: Props) {
                     onChanged={() => router.refresh()}
                     pickupMode={props.riderPickupMode}
                     filter={boxFilter}
+                    canAuthorizeCash={props.canAuthorizeCash === true}
                   />
                 ))}
               </ul>
@@ -1293,7 +1303,7 @@ function RouteLine({ q }: { q: QueueRow }) {
   );
 }
 
-function BoxRow({ box, cash, riders, orgId, open, onToggle, canManage, onChanged, pickupMode, filter }: {
+function BoxRow({ box, cash, riders, orgId, open, onToggle, canManage, onChanged, pickupMode, filter, canAuthorizeCash }: {
   box: RiderBox;
   /** Efectivo previsto de la caja. */
   cash: number;
@@ -1306,6 +1316,8 @@ function BoxRow({ box, cash, riders, orgId, open, onToggle, canManage, onChanged
   pickupMode: RiderPickupMode;
   /** Filtro rápido compartido: Todos · Por armar · Listos para cotejo · Sin confirmar. */
   filter: BoxItemFilter;
+  /** Quien administra el courier puede autorizar pasar el límite de efectivo al mover (§29.9). */
+  canAuthorizeCash: boolean;
 }) {
   const [pending, start] = useTransition();
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
@@ -1325,7 +1337,13 @@ function BoxRow({ box, cash, riders, orgId, open, onToggle, canManage, onChanged
   const move = (manifestId: string, shipmentId: string, targetRiderId: string) => {
     const reason = window.prompt("¿Por qué cambia de motorizado?");
     if (!reason) return;
-    start(async () => say(await moveManifestItem(orgId, manifestId, shipmentId, targetRiderId, reason)));
+    start(async () => {
+      let result = await moveManifestItem(orgId, manifestId, shipmentId, targetRiderId, reason);
+      if (result.cashBlocked && canAuthorizeCash && window.confirm(`${result.error}\n\n¿Autorizas pasar el límite para mover este paquete?`)) {
+        result = await moveManifestItem(orgId, manifestId, shipmentId, targetRiderId, reason, { overrideCash: true });
+      }
+      say(result);
+    });
   };
   // Modo «confirmar» (0185): lo asignado que el motorizado aún no confirmó con
   // «Lo llevo». Se puede quitar o mover desde aquí; el RPC borra su parada.

@@ -66,16 +66,18 @@ describe("Despacho del día abierto al equipo; Tarifario y efectivo, no", () => 
 
   it("pasar el límite de efectivo exige administrar, aunque la pantalla lo pida, al asignar y al mover", () => {
     const assign = src.slice(src.indexOf("async function assignRouteCore("), src.indexOf("async function routeCashForecast("));
-    expect(assign).toContain("cashLimitBlock(verdict, { override: opts.overrideCash === true, canAuthorize: auth.canManageLogistics })");
+    expect(assign).toContain("cashLimitBlock(verdict, { override: opts.overrideCash === true, canAuthorize: auth.canManageLogistics, addingCod: cash.adding })");
     const move = body("moveManifestItem");
     expect(move).toContain("routeCashForecast(admin, orgId, rider.id, manifest.route_date, [shipment.order_id as string])");
-    expect(move).toContain("cashLimitBlock(verdict, { override: opts.overrideCash === true, canAuthorize: auth.canManageLogistics })");
+    expect(move).toContain("cashLimitBlock(verdict, { override: opts.overrideCash === true, canAuthorize: auth.canManageLogistics, addingCod: cash.adding })");
+    expect(move).toContain("if (cashBlock) return { error: cashBlock, cashBlocked: true };");
     // El chequeo va antes de tocar la caja de origen.
     expect(move.indexOf("cashLimitBlock(")).toBeLessThan(move.indexOf('admin.rpc("gf_dispatch_load_open"'));
     expect(move).toContain("cash_limit_overridden_by: auth.userId");
   });
 
   it("quien solo despacha opera solo las tiendas que tiene en Equipo; sin ninguna, no entra", () => {
+    const page = readFileSync(resolve(root, "app/dashboard/courier/page.tsx"), "utf8");
     expect(src).toContain('if (!stores.length) return { error: "No tienes tiendas asignadas. Pide acceso en Equipo." };');
     expect(src).toContain(".filter((agreement) => storeAllowed(auth, agreement.store_id));");
     expect(body("takeGroupGfCourierOrders").length).toBeGreaterThan(0);
@@ -85,10 +87,28 @@ describe("Despacho del día abierto al equipo; Tarifario y efectivo, no", () => 
     expect(assign).toContain(".filter((request) => storeAllowed(auth, request.store_id));");
     expect(body("returnUndeliveredToOffice")).toContain("storeAllowed(auth, row.store_id)");
     expect(body("moveManifestItem")).toContain("if (!storeAllowed(auth, shipment.store_id as string | null)) return { error: OUTSIDE_STORE };");
-    expect(body("scanAssignToRider")).toContain("if (!storeAllowed(auth, om?.store_id as string | null | undefined))");
+    const scan = body("scanAssignToRider");
+    // Fuera de alcance no devuelve ni el número ni el monto del pedido.
+    expect(scan.indexOf("if (!storeAllowed(auth, om?.store_id as string | null | undefined)) {")).toBeGreaterThan(0);
+    expect(scan.indexOf("if (!storeAllowed(auth, om?.store_id as string | null | undefined)) {")).toBeLessThan(scan.indexOf("const line: ScanAssignLine = {"));
+    expect(body("returnUndeliveredByCode")).toContain("if (res.error) return res;");
+    expect(page).toContain("getPendingReturns({ storeIds })");
+    const ledger = readFileSync(resolve(root, "lib/courier-route-ledger.ts"), "utf8");
+    expect(ledger).toContain('if (scope.storeIds) query = query.in("store_id", [...scope.storeIds]);');
     expect(src).toContain("await ordersOfOrg(admin, orgId, ids, auth);");
-    const page = readFileSync(resolve(root, "app/dashboard/courier/page.tsx"), "utf8");
     expect(page).toContain('<EmptyState title="No tienes tiendas asignadas">');
+  });
+
+  it("al mover, quien administra puede autorizar el exceso en las tres pantallas; los demás ven el porqué", () => {
+    const day = readFileSync(resolve(root, "components/dispatch-day-board.tsx"), "utf8");
+    const box = readFileSync(resolve(root, "components/gf-box-add-packages.tsx"), "utf8");
+    // Escaneo de Despacho del día, «Mover» de las cajas del día y caja del panel.
+    expect(day).toContain("if (result.cashBlocked && props.canAuthorizeCash && !overrideCash && window.confirm(");
+    expect(day).toContain("if (result.cashBlocked && canAuthorizeCash && window.confirm(");
+    expect(day).toContain("canAuthorizeCash={props.canAuthorizeCash === true}");
+    expect(box).toContain("if (res.cashBlocked && canAuthorizeCash && !overrideCash && window.confirm(");
+    expect(day).toContain('{l.status === "bloqueado_efectivo" && !props.canAuthorizeCash && l.message && (');
+    expect(box).toContain('canAuthorizeCash ? "Límite de efectivo → Autorizar" : "Límite de efectivo · lo autoriza Daysi o Frankz"');
   });
 
   it("la caja del motorizado solo ofrece «Autorizar» el efectivo a quien administra", () => {
@@ -142,5 +162,12 @@ describe("cashLimitBlock (§29.9): quién pasa el límite de efectivo", () => {
     // El escaneo la sigue marcando «bloqueado_efectivo».
     expect(/efectivo|límite/i.test(message)).toBe(true);
     expect(cashLimitBlock(blocked, { override: false, canAuthorize: false })).toBe(message);
+  });
+
+  it("lo que no suma efectivo no se frena aunque la ruta ya haya pasado el límite con permiso", () => {
+    const over = cashLimitVerdict({ currentCod: 9500, addingCod: 0, warningAmount: 4000, limitAmount: 9000 });
+    expect(over.status).toBe("blocked");
+    expect(cashLimitBlock(over, { override: false, canAuthorize: false, addingCod: 0 })).toBeNull();
+    expect(cashLimitBlock(blocked, { override: false, canAuthorize: false, addingCod: 800 })).not.toBeNull();
   });
 });

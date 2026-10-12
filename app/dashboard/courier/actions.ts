@@ -1692,8 +1692,10 @@ export async function returnUndeliveredByCode(orgId: string, rawCode: string): P
     if (orders?.length === 1) orderId = orders[0]!.id as string;
   }
   if (!orderId) return { error: found.error ?? "No encontramos un pedido con ese QR, guía o número." };
-  const { data: om } = await admin.from("order_master").select("order_name").eq("order_id", orderId).maybeSingle();
   const res = await returnUndeliveredToOffice(orgId, [orderId]);
+  // El nombre solo cuando se recibió: un error puede ser de otra tienda.
+  if (res.error) return res;
+  const { data: om } = await admin.from("order_master").select("order_name").eq("order_id", orderId).maybeSingle();
   return { ...res, orderName: (om?.order_name as string | null) ?? null };
 }
 
@@ -2132,7 +2134,7 @@ async function assignRouteCore(
     });
     // Pasar el límite es una excepción de quien administra el courier
     // (§29.9: Daysi o Frankz), no de cualquiera que despache.
-    const cashBlock = cashLimitBlock(verdict, { override: opts.overrideCash === true, canAuthorize: auth.canManageLogistics });
+    const cashBlock = cashLimitBlock(verdict, { override: opts.overrideCash === true, canAuthorize: auth.canManageLogistics, addingCod: cash.adding });
     if (cashBlock) {
       for (const request of group) failed.push({ requestId: request.id, error: cashBlock });
       continue;
@@ -2648,6 +2650,8 @@ export async function setDistrictAvailability(
 
 export interface MoveManifestItemResult extends CourierActionResult {
   manifestId?: string;
+  /** Lo frenó el límite de efectivo de la ruta destino (§29.9). */
+  cashBlocked?: boolean;
 }
 
 /**
@@ -2730,9 +2734,10 @@ export async function moveManifestItem(
       warningAmount: amount((cashProvider as { cash_warning_amount?: unknown } | null)?.cash_warning_amount),
       limitAmount: amount((cashProvider as { cash_limit_amount?: unknown } | null)?.cash_limit_amount),
     });
-    const cashBlock = cashLimitBlock(verdict, { override: opts.overrideCash === true, canAuthorize: auth.canManageLogistics });
-    if (cashBlock) return { error: cashBlock };
-    cashOverride = verdict.status === "blocked";
+    const cashBlock = cashLimitBlock(verdict, { override: opts.overrideCash === true, canAuthorize: auth.canManageLogistics, addingCod: cash.adding });
+    // `cashBlocked`: la pantalla de quien puede autorizar le ofrece reintentar.
+    if (cashBlock) return { error: cashBlock, cashBlocked: true };
+    cashOverride = verdict.status === "blocked" && cash.adding > 0;
   }
 
   // 1) abrir (o reutilizar) la carga del destino ANTES de retirar: si el
@@ -2966,8 +2971,11 @@ export async function scanAssignToRider(
       .is("removed_at", null)
       .maybeSingle() : Promise.resolve({ data: null }),
   ]);
+  // Fuera de sus tiendas: ni el número ni el monto del pedido.
+  if (!storeAllowed(auth, om?.store_id as string | null | undefined)) {
+    return { ...base, orderId: null, shipmentId: null, orderName: null, amount: null, riderName: rider.full_name, status: "no_elegible", message: OUTSIDE_STORE };
+  }
   const line: ScanAssignLine = { ...base, orderId, shipmentId, orderName: (om?.order_name as string | null) ?? null, amount: om?.order_total == null ? null : Number(om.order_total), riderName: rider.full_name };
-  if (!storeAllowed(auth, om?.store_id as string | null | undefined)) return { ...line, status: "no_elegible", message: OUTSIDE_STORE };
 
   // El día de la caja que se arma: hoy, o el que eligió el supervisor.
   const boxDay = opts.scheduledFor && DATE_RE.test(opts.scheduledFor) ? opts.scheduledFor : limaClock().day;
