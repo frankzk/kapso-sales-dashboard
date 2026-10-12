@@ -18,7 +18,7 @@ import { chunk, defaultRange, parseRange, previousRange, type DateRange } from "
 import { onlineVendedoraIds } from "@/lib/presence";
 import { leadSegment, type LeadSegment } from "@/lib/leads";
 import type { DayTotals } from "@/lib/productivity-month";
-import { activeHoursFromTimes, computeWeekActivity, type DayActivity, type WeekDay } from "@/lib/productivity-week";
+import { activeHoursFromTimes, computeWeekActivity, daysBetween, type DayActivity, type WeekDay } from "@/lib/productivity-week";
 
 const DB_READ_CONCURRENCY = 4;
 
@@ -958,6 +958,12 @@ export interface ProductivityBoardData {
    *  del mes. `dailyByAgent` es lo mismo por asesora, para «Mi productividad». */
   daily: DayTotals[];
   dailyByAgent: Record<string, DayTotals[]>;
+  /** Con más de un día: los días del rango y, por persona, sus horas activas,
+   *  primera y última actividad de cada uno — la franja día por día. Todo el
+   *  trabajo registrado (leads y envíos), sin la lente de fuente, como la
+   *  franja por hora: mide si estuvo trabajando, no qué vendió. */
+  periodDays: WeekDay[];
+  activityByDay: Record<string, DayActivity[]>;
 }
 
 /**
@@ -1124,6 +1130,8 @@ export async function getProductivityBoard(
     firstTouch: emptyFirstTouchStats(),
     daily: [],
     dailyByAgent: {},
+    periodDays: [],
+    activityByDay: {},
   };
   if (!storeIds.length) return empty;
   const sb = await createServerSupabase();
@@ -1189,14 +1197,14 @@ export async function getProductivityBoard(
 
   // Heatmap: ALL human events in range (no source lens) + Envíos gestiones,
   // counted as DISTINCT leads/shipments per hour.
-  const heat = computeHourlyActivity({
-    events: [
-      ...calls.map((c) => ({ agent: c.vendedora, occurred_at: c.occurred_at, ref: c.lead_id })),
-      ...shipEvents,
-    ],
-    tz,
-    rangeDays,
-  });
+  const workEvents = [
+    ...calls.map((c) => ({ agent: c.vendedora, occurred_at: c.occurred_at, ref: c.lead_id })),
+    ...shipEvents,
+  ];
+  const heat = computeHourlyActivity({ events: workEvents, tz, rangeDays });
+  // Más de un día: las horas de cada día, con los mismos eventos.
+  const periodDays = rangeDays > 1 ? daysBetween(range.from, range.to) : [];
+  const activityByDay = periodDays.length ? computeWeekActivity(workEvents, tz, periodDays) : {};
 
   // Velocidad de 1ª gestión: leads creados en el rango × primer toque humano
   // (calls SIN lente de fuente, igual que el heatmap — mide disciplina).
@@ -1232,6 +1240,8 @@ export async function getProductivityBoard(
     firstTouch,
     daily: daily.team,
     dailyByAgent: daily.byAgent,
+    periodDays,
+    activityByDay,
   };
 }
 

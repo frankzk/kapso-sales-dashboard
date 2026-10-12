@@ -25,7 +25,7 @@ import {
   parseMonthParam,
   recentMonths,
 } from "@/lib/productivity-month";
-import { ProductivityBoard, type ProductivityMonth, type ProductivityWeek } from "@/components/productivity";
+import { ProductivityBoard, type ProductivityMonth, type ProductivityPeriod, type ProductivityWeek } from "@/components/productivity";
 import { EmptyState } from "@/components/ui";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 
@@ -140,6 +140,28 @@ async function ProductividadContent({
     extra: extraIds.map((id) => ({ userId: id, email: extraEmails.get(id) ?? id })),
     canEdit: role.roles.some((r) => r === "owner" || r === "admin"),
   };
+  // Más de un día: la franja va por día (o por semana), cada día juzgado contra
+  // su parte de la meta y su horario, como la semana. Solo las filas que se ven.
+  const period: ProductivityPeriod | null =
+    board.periodDays.length > 1
+      ? {
+          days: board.periodDays,
+          today: win.today,
+          byUser: Object.fromEntries(
+            rows.map((r) => [
+              r.userId,
+              evaluateWeek({
+                activity: board.activityByDay[r.userId],
+                days: board.periodDays,
+                schedule: schedules.get(r.userId) ?? DEFAULT_SCHEDULE,
+                porDefecto: !schedules.has(r.userId),
+                today: win.today,
+                nowMinutes: win.nowMinutes,
+              }).dias,
+            ]),
+          ),
+        }
+      : null;
 
   const month: ProductivityMonth | null = view
     ? {
@@ -171,6 +193,7 @@ async function ProductividadContent({
       month={month}
       months={recentMonths(tz)}
       week={week}
+      period={period}
     />
   );
 }
