@@ -7,7 +7,10 @@ import {
   interpretWritten,
   nameScore,
   nextNamedDay,
+  nextNamedDayIso,
+  NOTEBOOK_PAST_DAY_NOTE,
   notebookStopNote,
+  requestedDayPassed,
   planTotals,
   type NotebookContext,
   type NotebookLine,
@@ -61,6 +64,19 @@ describe("lo escrito en F. PAGO", () => {
     expect(nextNamedDay("2026-10-05", "SABADO")).toBe("sábado 10/10");
     // El mismo día de la semana es la semana siguiente.
     expect(nextNamedDay("2026-10-05", "LUNES")).toBe("lunes 12/10");
+  });
+
+  it("el día escrito da la fecha que pidió el cliente; «MAÑANA» no da fecha (12-10-2026)", () => {
+    expect(nextNamedDayIso("2026-10-05", "MIERCOLES")).toBe("2026-10-07");
+    expect(nextNamedDayIso("2026-10-05", "LUNES")).toBe("2026-10-12");
+    expect(nextNamedDayIso("2026-10-31", "LUNES")).toBe("2026-11-02");
+    expect(nextNamedDayIso("2026-10-05", "MANANA")).toBeNull();
+    expect(nextNamedDayIso("05/10/2026", "LUNES")).toBeNull();
+    // Cargada el 06/10, el miércoles 07/10 todavía vale; cargada el 08/10, ya pasó.
+    expect(requestedDayPassed("2026-10-05", "MIERCOLES", "2026-10-06")).toBe(false);
+    expect(requestedDayPassed("2026-10-05", "MIERCOLES", "2026-10-07")).toBe(false);
+    expect(requestedDayPassed("2026-10-05", "MIERCOLES", "2026-10-08")).toBe(true);
+    expect(requestedDayPassed("2026-10-05", null, "2026-10-20")).toBe(false);
   });
 });
 
@@ -206,7 +222,22 @@ describe("la nota de la parada", () => {
     );
     expect(note(1)).toContain("Lo traía desde su ruta del 03/10 (reprogramado) y salió en la del 05/10.");
     expect(note(1)).toContain("MIERCOLES en el cuaderno: reprogramado para el miércoles 07/10.");
+    expect(note(1)).not.toContain(NOTEBOOK_PAST_DAY_NOTE);
     expect(note(2)).toContain("La hoja no trae el código; se cruzó por el nombre (Clay Sena Caya) y el monto (S/ 297.00).");
+  });
+
+  it("un día que ya pasó al cargarla queda solo en la nota (D9, 12-10-2026)", () => {
+    const plan = buildNotebookPlan([line({ item: 20, order: "#KP138029", written: "MIERCOLES", amount: 0 })], ctx());
+    const row = plan.rows[0]!;
+    const note = notebookStopNote({
+      riderName: "Alexis", routeDate: "2026-10-05", row, outcome: row.outcome!, loadedBy: "Frankz Kastner", loadedOn: "2026-10-12",
+    });
+    expect(note).toContain("MIERCOLES en el cuaderno: reprogramado para el miércoles 07/10. Ya había pasado al cargarla: queda solo en la nota.");
+    // «MAÑANA» no da fecha: no hay nada que haya pasado.
+    const manana = buildNotebookPlan([line({ item: 21, order: "#KP138910", written: "MAÑANA", amount: 0 })], ctx()).rows[0]!;
+    expect(notebookStopNote({
+      riderName: "Alexis", routeDate: "2026-10-05", row: manana, outcome: manana.outcome!, loadedBy: "Frankz Kastner", loadedOn: "2026-10-12",
+    })).not.toContain(NOTEBOOK_PAST_DAY_NOTE);
   });
 });
 
@@ -255,6 +286,12 @@ describe("la hoja se carga desde Kapta (08-10-2026)", () => {
     expect(apply).toContain("writeStopReport(");
     expect(apply).toContain("notebook: { riderName, importId }");
     expect(apply).toContain('admin.rpc("gf_carry_over"');
+    // El día escrito es la fecha que pidió el cliente si no pasó; sin día, no se toca (D9).
+    expect(apply).toContain("const requestedDate = day ? (iso && iso >= loadedOn ? iso : null) : undefined;");
+    expect(apply).toContain("        requestedDate,\n      },\n      { stop: t.stop!, routeStatus: routeNow?.status },");
+    const panel = read("components/rider-notebook-import.tsx");
+    expect(panel).toContain(": queda como fecha que pidió el cliente; la tienda la confirma.");
+    expect(panel).toContain(", que ya pasó: queda solo en la nota.");
     const report = read("lib/stop-report.ts");
     expect(report).toContain('reported_by: input.status === "pendiente" || notebook ? null : input.actor,');
     const migration = read("db/migrations/0234_gf_notebook_carry_over.sql");

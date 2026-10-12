@@ -622,6 +622,11 @@ export const TIMELINE_LABEL: Record<string, string> = {
   pickup_declined: "No lo llevó el motorizado",
   returned_to_office: "No entregado: recibido en oficina",
   stop_reported: "Reporte del motorizado",
+  // Repro Lima (MOM §9.5): kinds propios. Nunca `call`, `confirmation_contact`
+  // ni `contact_attempt`, que gastan el cupo de confirmación.
+  lima_repro_call: "Repro Lima: llamada",
+  lima_repro_agreed: "Repro Lima: acuerdo",
+  lima_repro_closed: "Repro Lima: caso cerrado",
   route_reopened: "Ruta reabierta",
   delivered_unconfirmed_pickup: "Entregado sin confirmar recojo",
   handed_to_courier: "Entregado al courier",

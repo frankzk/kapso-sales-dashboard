@@ -466,11 +466,7 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-/**
- * La nota de la parada: de dónde salió el reporte, quién lo cargó y lo que la
- * palabra escrita no dice sola. Es la misma forma que las cargas a mano del
- * 01 al 06/10, para que las paradas se lean igual.
- */
+/** Lo que dice la nota cuando el día escrito ya pasó al cargar la hoja (D9). */
 export const NOTEBOOK_PAST_DAY_NOTE = "Ya había pasado al cargarla: queda solo en la nota.";
 
 /**
@@ -483,6 +479,11 @@ export function requestedDayPassed(routeDate: string, day: string | null | undef
   return Boolean(iso && iso < loadedOn);
 }
 
+/**
+ * La nota de la parada: de dónde salió el reporte, quién lo cargó y lo que la
+ * palabra escrita no dice sola. Es la misma forma que las cargas a mano del
+ * 01 al 06/10, para que las paradas se lean igual.
+ */
 export function notebookStopNote(input: {
   riderName: string;
   routeDate: string;

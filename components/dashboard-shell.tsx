@@ -21,6 +21,7 @@ export function DashboardShell({
   yapeAlertsEnabled,
   canValidatePayments,
   canManageLogistics,
+  canReproLima = false,
   badges,
 }: {
   children: ReactNode;
@@ -31,6 +32,8 @@ export function DashboardShell({
   yapeAlertsEnabled: boolean;
   canValidatePayments: boolean;
   canManageLogistics: boolean;
+  /** `dispatch.manage`: la entrada «Repro Lima» (MOM §9.5). */
+  canReproLima?: boolean;
   badges?: Record<string, number>;
 }) {
   const pathname = usePathname();
@@ -57,6 +60,7 @@ export function DashboardShell({
         roleLabel={roleLabel}
         canValidatePayments={canValidatePayments}
         canManageLogistics={canManageLogistics}
+        canReproLima={canReproLima}
         badges={badges}
         pendingHref={routePending ? pendingHref : null}
         onNavigate={setPendingHref}

@@ -330,6 +330,7 @@ export function DispatchDayBoard(props: Props) {
         macroSubstage: o.macroSubstage,
         assignable: true,
         route: null,
+        reproLimaChip: o.reproLimaChip ?? null,
       }));
     const takenIds = new Set(taken.map((t) => t.orderId));
     const free: QueueRow[] = props.available
@@ -360,6 +361,7 @@ export function DispatchDayBoard(props: Props) {
         newOutputOnTake: o.newOutputOnTake ?? false,
         tandersReview: o.tandersReview ?? null,
         ownOutput: o.ownOutput ?? null,
+        reproLimaChip: o.reproLimaChip ?? null,
       }));
     return [...taken, ...free];
   }, [props.accepted, props.available]);
@@ -399,6 +401,7 @@ export function DispatchDayBoard(props: Props) {
         shipmentId: o.shipmentId,
         outputCode: o.outputCode,
       },
+      reproLimaChip: o.reproLimaChip ?? null,
     })), [props.accepted]);
   // Lo que Grupo GF no entregó con su propia salida y sigue en una caja
   // anterior, sin solicitud (06-10-2026): se recibe en oficina como los demás
@@ -436,6 +439,7 @@ export function DispatchDayBoard(props: Props) {
       outputCode: o.ownOutput?.outputCode ?? null,
     },
     ownOutput: o.ownOutput ?? null,
+    reproLimaChip: o.reproLimaChip ?? null,
   })), [props.returnable]);
   const allRows = useMemo(() => [...queue, ...tracked, ...ownInBox], [queue, tracked, ownInBox]);
 
@@ -732,6 +736,7 @@ export function DispatchDayBoard(props: Props) {
                   <span className="text-[13px] text-ink-500">{r.storeName} · caja del {formatDayNumeric(r.routeDate)}</span>
                   <Badge tone="warn">{replacedOutputLabel(r.outputCode, r.riderName, days)}</Badge>
                   {r.replacedByCode && <span className="text-xs text-ink-500">sale con {r.replacedByCode}</span>}
+                  {r.reproLimaChip && <Badge tone="info" title="El acuerdo de Repro Lima con el cliente (§9.5).">{r.reproLimaChip}</Badge>}
                 </li>
               );
             })}
@@ -1384,6 +1389,7 @@ function StateBadges({ q, today }: { q: QueueRow; today: string }) {
   return (
     <div className="flex flex-wrap items-center gap-1">
       {q.route?.undeliveredReason && <Badge tone="urgent" title="Sigue en la caja del motorizado: márcalo y «Recibir en oficina» cuando vuelva el paquete">No entregado · {nonDeliveryReasonLabel(q.route.undeliveredReason)}</Badge>}
+      {q.reproLimaChip && <Badge tone="warn" title="Lo decidió la tienda en Repro Lima al llamar al cliente (§9.5).">{q.reproLimaChip}</Badge>}
       {q.failedOutput && <Badge tone="crit" title="Otro courier no lo entregó: sale con una salida nueva, con su propio rótulo encima del anterior.">{failedOutputLabel(q.failedOutput)}</Badge>}
       {/* Visible, no en el title: la caja que volvió lleva el rótulo del otro
           courier, y al asignarlo nace la salida nueva cuyo rótulo hay que pegar

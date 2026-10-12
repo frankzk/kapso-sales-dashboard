@@ -37,16 +37,25 @@ interface NavItem {
   icon: Icon;
 }
 
+/**
+ * «Repro Lima» (MOM §9.5): los clientes de Lima con entrega fallida, para
+ * quien despacha (`dispatch.manage`). Va justo después de «Repro Provincia» y
+ * gana al Master por el prefijo más largo.
+ */
+const REPRO_LIMA_ITEM: NavItem = { href: "/dashboard/pedidos/repro-lima", label: "Repro Lima", icon: IconTruck };
+
 function navItems(
   isVendedoraOnly: boolean,
   canValidatePayments: boolean,
   canManageLogistics: boolean,
+  canReproLima: boolean,
 ): NavItem[] {
   if (isVendedoraOnly) {
     const items: NavItem[] = [
       { href: "/dashboard/leads", label: "Leads", icon: IconChat },
       { href: "/dashboard/pedidos", label: "Master de Pedidos", icon: IconClipboard },
       { href: "/dashboard/envios", label: "Repro Provincia", icon: IconTruck },
+      ...(canReproLima ? [REPRO_LIMA_ITEM] : []),
       { href: "/dashboard/envios/recuperacion", label: "Recuperar devueltos", icon: IconChat },
       // Liquidaciones y Liquidaciones 2 fuera del menú desde el 22-09-2026 (a
       // pedido de operación); las páginas siguen en su URL.
@@ -69,6 +78,7 @@ function navItems(
     { href: "/dashboard/leads", label: "Leads", icon: IconChat },
     { href: "/dashboard/pedidos", label: "Master de Pedidos", icon: IconClipboard },
     { href: "/dashboard/envios", label: "Repro Provincia", icon: IconTruck },
+    ...(canReproLima ? [REPRO_LIMA_ITEM] : []),
     // Primer contacto con la clienta cuya guía volvió (MOM §11.1). Va acá y no
     // dentro de Envíos porque es una COLA que se drena, no una vista de guías.
     { href: "/dashboard/envios/recuperacion", label: "Recuperar devueltos", icon: IconChat },
@@ -141,6 +151,7 @@ export function Sidebar({
   roleLabel,
   canValidatePayments,
   canManageLogistics,
+  canReproLima = false,
   badges,
   pendingHref,
   onNavigate,
@@ -151,6 +162,8 @@ export function Sidebar({
   roleLabel: string;
   canValidatePayments: boolean;
   canManageLogistics: boolean;
+  /** `dispatch.manage`: la entrada «Repro Lima» después de «Repro Provincia». */
+  canReproLima?: boolean;
   /** Pendientes por entrada del menú (href → cuántos), p. ej. «Cotejar Olva». */
   badges?: Record<string, number>;
   pendingHref?: string | null;
@@ -162,7 +175,7 @@ export function Sidebar({
   const [mobileOpen, setMobileOpen] = useState(false);
   const menuButton = useRef<HTMLButtonElement>(null);
   useEffect(() => { setMobileOpen(false); }, [pathname]);
-  const items = navItems(isVendedoraOnly, canValidatePayments, canManageLogistics);
+  const items = navItems(isVendedoraOnly, canValidatePayments, canManageLogistics, canReproLima);
   const pendingPath = pendingHref?.split("?", 1)[0] ?? null;
   const displayPath = pendingPath ?? pathname;
 
