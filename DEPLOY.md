@@ -2192,9 +2192,10 @@ la misma sección de Ajustes.
    `delivery_stops_guard_replaced` y `dispatch_items_guard_replaced_route`. Sin
    ella, «Sacar con salida nueva» falla y deshace la salida nueva que había
    creado: no deja salidas huérfanas. **Ya aplicada en producción** el
-   12-10-2026, antes del código (en el historial de Supabase figura como
-   `0247_gf_replace_output`: se renumeró después, al llegar a `main` la
-   `0247_voice_lead_calls`); sin efecto sobre el código anterior (en
+   12-10-2026, antes del código. En el historial de Supabase figura dos veces:
+   `0247_gf_replace_output` y, al renumerarla tras llegar a `main` la
+   `0247_voice_lead_calls`, `0248_gf_replace_output` (la misma, idempotente;
+   solo cambia el número en los comentarios); sin efecto sobre el código anterior (en
    producción no había ninguna salida propia en `retorno` ni devuelta dentro
    de una caja).
 3. **Después del despliegue**, el cron recalcula el Master por la versión
