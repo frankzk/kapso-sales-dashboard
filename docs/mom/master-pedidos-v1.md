@@ -11317,8 +11317,10 @@ vigilante. Nada más:
 
 - **El agente en ElevenLabs ya existe** (12-10-2026, «Agente de leads · Kenku
   Biru (piloto)»), configurado según `docs/voz-leads-agente.md`; se presenta
-  como Nicol, y ya tiene `VOICE_LEADS_TOOLS_SECRET` en sus dos tools y en el
-  inicio. Le falta su puerta: un número propio importado en ElevenLabs y
+  como Nicol, usa Gemini 2.5 Flash sin razonamiento (con Flash Lite fallaba las
+  pruebas del guion, §11 de ese documento) y ya tiene `VOICE_LEADS_TOOLS_SECRET`
+  en sus dos tools y en el inicio, comprobado con una simulación que llamó a
+  Kapta. Le falta su puerta: un número propio importado en ElevenLabs y
   asignado a él (`TELNYX_LEADS_SIP_URI`).
 - **Número peruano en Telnyx** para el agente de leads
   (`TELNYX_LEADS_FROM_NUMBER`). Sin él, el lead ve el número de Telnyx de

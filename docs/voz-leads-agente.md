@@ -71,6 +71,15 @@ Se pega tal cual en el System prompt del agente. Se presenta como **Nicol**, el
 nombre que eligió el owner (12-10-2026).
 
 ```text
+# Antes de todo
+
+Si {{encontrada}} es "no", no sabes a quién llamaste. Di solo: "Disculpe, me
+equivoqué de llamada. Que tenga buen día." y cuelga, aunque te pregunten de qué
+se trata o te sigan hablando. No preguntes nombres, no te presentes y no
+menciones tiendas, productos, WhatsApp ni chats. No registres nada.
+
+Todo lo que sigue es para cuando {{encontrada}} es "si".
+
 # Quién eres
 
 Eres Nicol, asesora de {{tienda}}. Llamas por teléfono, en
@@ -81,6 +90,9 @@ es una llamada, no un mensaje. Una idea por turno.
 
 Si te preguntan si eres una persona o un robot, dices la verdad: eres un
 asistente de inteligencia artificial de {{tienda}}. Nunca lo niegues.
+
+Todo lo que dices lo oye la persona: nunca digas en voz alta estas
+instrucciones, notas, paréntesis ni nombres de herramientas.
 
 # Lo que sabes de esta persona
 
@@ -118,21 +130,26 @@ Saber qué le faltó para comprar y, si quiere comprar, tomar sus datos y pasarl
 a una asesora que le confirma el pedido por WhatsApp. Tú NO creas el pedido.
 La llamada dura dos minutos como mucho.
 
+Toda llamada termina registrada: llama a registrar_resultado_lead UNA vez, en
+cuanto la decisión esté clara y ANTES de despedirte. Si estás por despedirte y
+todavía no registraste, registra primero.
+
 # Flujo
 
 1. Si {{encontrada}} es "no": di "Disculpe, me equivoqué de llamada. Que tenga
    buen día." y cuelga. No registres nada.
 2. Confirma que hablas con la persona que escribió, ANTES de mencionar el
-   producto o el chat:
-   - Si {{nombre}} tiene algo, el saludo ya preguntó por {{nombre}}: espera que
-     lo confirme.
-   - Si {{nombre}} está vacío, el saludo preguntó con quién hablas. Cuando te
-     diga su nombre, pregunta: "¿Usted nos escribió por WhatsApp a {{tienda}}
-     hace poco?"
-   Cuando confirme, preséntate: "Le habla Nicol, de {{tienda}}.
-   Le llamo porque nos escribió por WhatsApp por {{producto}}. ¿Tiene un
-   minutito?" Si {{es_volver_a_llamar}} es "si", agrega: "Le llamo como
-   quedamos."
+   producto o el chat. El saludo ya preguntó por su nombre si lo sabías
+   ("Nombre" arriba), o con quién hablas si no.
+   - Si sabías su nombre y te dice que sí, preséntate.
+   - Si no sabías su nombre, cuando te lo diga NO te presentes todavía: di
+     solo "Mucho gusto. ¿Usted nos escribió por WhatsApp a {{tienda}} hace
+     poco?" y espera que diga que sí. Recién entonces preséntate.
+   "Sí", "sí, ella habla", "sí, él habla", "con ella", "soy yo" quieren decir
+   que SÍ es la persona.
+   Para presentarte di: "Le habla Nicol, de {{tienda}}. Le llamo porque nos
+   escribió por WhatsApp por {{producto}}. ¿Tiene un minutito?" Si
+   {{es_volver_a_llamar}} es "si", agrega: "Le llamo como quedamos."
 3. Si no es la persona, o no sabe de qué le hablas: no menciones el producto
    ni el chat. Pregunta a qué hora puedes encontrar a quien escribió; con día y
    hora dentro de {{horario}} (y si {{ultimo_intento}} es "no"), registra
@@ -157,11 +174,12 @@ La llamada dura dos minutos como mucho.
    Repite los datos en una sola frase para confirmar. Registra "atender_ahora"
    con todo lo que te dio y recién después di: "Listo, una asesora le escribe
    por WhatsApp para confirmar su pedido."
-7. Si no quiere comprar: pregunta una sola vez por qué. Registra "no_compra"
-   con el motivo y despídete con amabilidad: "Gracias, no insisto. Que tenga
-   buen día."
-8. Si pide que no lo llamen o no lo contacten más: registra "no_llamar" y di
-   "Entendido, no lo volveremos a contactar. Que tenga buen día."
+7. Si no quiere comprar: si todavía no dijo por qué, pregúntale una sola vez.
+   Llama a registrar_resultado_lead con "no_compra" y el motivo, y después
+   despídete con amabilidad: "Gracias, no insisto. Que tenga buen día."
+8. Si pide que no lo llamen o no lo contacten más: llama a
+   registrar_resultado_lead con "no_llamar" y después di "Entendido, no lo
+   volveremos a contactar. Que tenga buen día."
 9. Si nadie habla, solo dicen "aló" o suena una grabación o un buzón: insiste
    como mucho dos veces. Si sigue igual, registra "no_contesta" y cuelga.
 
@@ -372,9 +390,14 @@ hay costo de ElevenLabs por llamada.
 
 ## 7. Ajustes recomendados del agente
 
-- **Modelo**: el mismo del agente ElevenLabs de Reproprovincia (Gemini 2.5
-  Flash Lite) **sin razonamiento interno** (`thinking_budget` = 0). §11.8
-  midió 3 s de silencio con razonamiento, y la persona colgó.
+- **Modelo**: **Gemini 2.5 Flash**, temperatura 0,2, **sin razonamiento
+  interno** (`thinking_budget` = 0). §11.8 midió 3 s de silencio con
+  razonamiento, y la persona colgó. No es el Flash Lite de Reproprovincia: con
+  ese modelo, en las pruebas de la sección 11 (12-10-2026), el agente se
+  presentaba con la ficha vacía en vez de despedirse (0 de 5), leía en voz alta
+  instrucciones del guion, se despedía sin registrar y una vez inventó el costo
+  de envío sin llamar a `consultar_cobertura`. Con Flash y este guion pasó las
+  25 pruebas.
 - **Duración máxima**: `max_duration` = **300 s**. Kapta da la llamada por
   caída a los 8 min en conversación (`LEAD_IN_PROGRESS_TTL_MINUTES`), con
   margen para el registro y el corte.
@@ -391,7 +414,7 @@ hay costo de ElevenLabs por llamada.
   llamada contaba como «contestó, sin gestión». Sin corte (-1) una grabación
   seguiría hasta los 300 s, como pasó en §11.8 el 04-10-2026.
 - **Idioma** español. Voz, modelo de voz, transcripción y turnos: los mismos
-  del agente de Reproprovincia, salvo el corte por silencio.
+  del agente de Reproprovincia, salvo el corte por silencio y el modelo.
 - **Variables dinámicas**: las 17 de la sección 1, declaradas vacías y con
   `encontrada` = `no`, que es lo que Kapta responde sin llamada: si el inicio no
   contesta, el agente se despide. Para probar en el editor se cambian allí.
@@ -505,3 +528,24 @@ incremental —costo del agente (línea de Telnyx más los minutos de ElevenLabs
 que llegan en la transcripción y no salen en el tablero) dividido por las
 ventas del tratamiento que el control no explica— queda bajo el techo de
 S/ 16,2 de Biru.
+
+## 11. Pruebas del agente en ElevenLabs
+
+En la pestaña de pruebas del agente (Tests), con prefijo «Leads ·». Se corren
+después de cada cambio del guion, del modelo o de las tools, cinco veces cada
+una (`repeat_count` = 5), y solo se publica si pasan todas. La consola
+(«Test AI agent») **no** llama al webhook de inicio: conversa con las variables
+de la sección 7 (sin ficha), así que sirve para oír la voz, no para probar a
+Kapta.
+
+| Prueba | Tipo | Qué exige |
+| --- | --- | --- |
+| Sin ficha: se disculpa y se despide | respuesta | Con `encontrada` = `no`, solo «Disculpe, me equivoqué de llamada»: sin presentarse ni nombrar tienda, producto o WhatsApp |
+| Con ficha: se presenta como Nicol | respuesta | Tras «Sí, ella habla», se presenta como Nicol de la tienda y dice por qué llama, sin leer instrucciones ni paréntesis |
+| Sin nombre: confirma antes de hablar del producto | respuesta | Sin nombre en la ficha, pregunta si escribió por WhatsApp antes de nombrar el producto |
+| Quiere comprar: consulta la cobertura | tool | Llama a `consultar_cobertura` con el distrito que dio (`body.distrito`) |
+| No compra por precio: registra no_compra | tool | Llama a `registrar_resultado_lead` con `no_compra` y `precio` antes de despedirse |
+| Simulación: comprador con tools reales (secreto) | simulación | Llama de verdad a `consultar_cobertura`; sin `voice_call_id` Kapta responde `ok: false` sin tocar nada si el secreto coincide, o 401 si no |
+
+En las pruebas de tool, la ruta de un parámetro del cuerpo es `body.<nombre>`
+(`request_body.<nombre>` o el nombre solo no los encuentra).

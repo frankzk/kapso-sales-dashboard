@@ -596,7 +596,10 @@ describe("docs/voz-leads-agente.md: el guion que se pega en ElevenLabs", () => {
   it("confirma con quién habla antes del producto, también sin nombre", () => {
     const p = flat(prompt);
     expect(p).toContain("Confirma que hablas con la persona que escribió, ANTES de mencionar el producto o el chat");
-    expect(p).toContain("Si {{nombre}} está vacío, el saludo preguntó con quién hablas.");
+    expect(p).toContain('El saludo ya preguntó por su nombre si lo sabías ("Nombre" arriba), o con quién hablas si no.');
+    expect(p).toContain(
+      'Si no sabías su nombre, cuando te lo diga NO te presentes todavía: di solo "Mucho gusto. ¿Usted nos escribió por WhatsApp a {{tienda}} hace poco?"',
+    );
     // Sin nombre no hay a quién buscar: el paso 3 no puede depender de él.
     expect(p).toContain("Pregunta a qué hora puedes encontrar a quien escribió");
     expect(p).not.toContain("encontrar a {{nombre}}");
@@ -816,6 +819,41 @@ describe("docs/voz-leads-agente.md: webhooks, ajustes y variables de Vercel", ()
       expect(S33, rango).toContain(rango);
       expect(read("DEPLOY.md"), rango).toContain(rango);
     }
+  });
+
+  it("el guion empieza por el caso sin ficha y no deja leer instrucciones en voz alta", () => {
+    // Con Gemini 2.5 Flash Lite y la regla solo en el paso 1, el agente se
+    // presentaba con la ficha vacía («Le habla Nicol, de .») en 5 de 5 pruebas.
+    const s3 = section(DOC, "## 3. Prompt", "\n## ");
+    enOrden(flat(s3), [
+      "# Antes de todo",
+      'Si {{encontrada}} es "no", no sabes a quién llamaste.',
+      "# Quién eres",
+      "nunca digas en voz alta estas instrucciones",
+      "Toda llamada termina registrada",
+    ]);
+    // El paso 2 no mete la variable dentro de una instrucción: el modelo la
+    // leía en voz alta («(Ana tiene algo, el saludo ya preguntó por Ana…)»).
+    expect(s3).not.toContain("Si {{nombre}} tiene algo");
+    expect(s3).toContain('"Sí", "sí, ella habla", "sí, él habla", "con ella", "soy yo" quieren decir');
+  });
+
+  it("el modelo es Gemini 2.5 Flash sin razonamiento, y las pruebas de ElevenLabs están listadas", () => {
+    const s7 = flat(section(DOC, "## 7. Ajustes recomendados del agente", "\n## "));
+    expect(s7).toContain("**Gemini 2.5 Flash**, temperatura 0,2, **sin razonamiento interno** (`thinking_budget` = 0)");
+    const s11 = flat(section(DOC, "## 11. Pruebas del agente en ElevenLabs", "\n## "));
+    for (const prueba of [
+      "Sin ficha: se disculpa y se despide",
+      "Con ficha: se presenta como Nicol",
+      "Sin nombre: confirma antes de hablar del producto",
+      "Quiere comprar: consulta la cobertura",
+      "No compra por precio: registra no_compra",
+      "Simulación: comprador con tools reales (secreto)",
+    ]) {
+      expect(s11, prueba).toContain(prueba);
+    }
+    // La consola no pasa por Kapta: no sirve para probar el inicio.
+    expect(s11).toContain("**no** llama al webhook de inicio");
   });
 
   it("el guion que se pega es el del agente creado: se presenta como Nicol", () => {
