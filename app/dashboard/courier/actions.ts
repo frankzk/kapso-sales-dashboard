@@ -794,19 +794,19 @@ async function loadCourierOperations(
         .from("shipments")
         .select(ADMISSION_SHIPMENT_COLUMNS)
         .in("order_id", ids));
-  // Las reemplazadas por otra salida (0246): no estorban ni se toman.
-  const replacedIds = await loadReplacedIds(admin, ((admissionShipmentRows ?? []) as AdmissionShipmentRow[]).map((row) => row.id));
   const shipmentsByOrder = new Map<string, AdmissionShipmentRow[]>();
   for (const row of (admissionShipmentRows ?? []) as AdmissionShipmentRow[]) {
     if (!row.order_id) continue;
     shipmentsByOrder.set(row.order_id, [...(shipmentsByOrder.get(row.order_id) ?? []), row]);
   }
   // «Nunca salieron» frente a «Ya salieron», y lo programado sin tomar (0199):
-  // para la cola y para lo tomado, en una llamada cada uno.
+  // para la cola y para lo tomado, en una llamada cada uno. Junto a ellas, las
+  // reemplazadas por otra salida (0246), que no estorban ni se toman.
   const requestOrderIdsAll = ((requestRows ?? []) as { order_id: string }[]).map((request) => request.order_id);
-  const [lastDispatchByOrder, programByOrder] = await Promise.all([
+  const [lastDispatchByOrder, programByOrder, replacedIds] = await Promise.all([
     loadDepartures(admin, [...new Set([...queueOrderIds, ...requestOrderIdsAll])]),
     loadPrograms(admin, { storeIds }),
+    loadReplacedIds(admin, returningOutputIds((admissionShipmentRows ?? []) as AdmissionShipmentRow[])),
   ]);
 
   const storeName = new Map(
@@ -1394,7 +1394,7 @@ async function takeOrdersCore(
         continue;
       }
       const outputs = (outputRows ?? []) as unknown as AdmissionShipmentRow[];
-      const replacedIds = await loadReplacedIds(admin, outputs.map((output) => output.id));
+      const replacedIds = await loadReplacedIds(admin, returningOutputIds(outputs));
       const review = courierReview(row, outputs, limaClock().day);
       // Grupo GF no lo entregó con su propia salida (06-10-2026): se toma con
       // ESA salida, sin crear otra. La misma regla que la cola.
@@ -2012,7 +2012,7 @@ export async function replaceOwnOutputs(
       const outputs = (outputRows ?? []) as unknown as AdmissionShipmentRow[];
       const box = boxes.get(old.id) ?? null;
       const request = liveRequest as { id: string; shipment_id: string | null; status: string } | null;
-      const replacedIds = await loadReplacedIds(admin, outputs.map((output) => output.id));
+      const replacedIds = await loadReplacedIds(admin, returningOutputIds(outputs));
       const decision = ownReplaceDecision(row, outputs, old, box, request?.shipment_id ?? null, replacedIds);
       if (decision.action === "ya_reemplazada") {
         alreadyReplaced.push({ shipmentId, message: replaceDecisionMessage(decision, box, old.output_code, await replacedByCode(admin, old.id)) });
@@ -2219,6 +2219,16 @@ export async function replaceOwnOutputs(
  * entre estas. Es la marca: la custodia `retorno` sola también la pone
  * «Solicitar devolución».
  */
+/**
+ * Las salidas que pueden ser reemplazadas: en devolución con el motorizado
+ * (`isReturningOwnOutput`). Las reglas de la cola, la toma y el reemplazo leen
+ * el conjunto solo a través de `isReplacedOwnOutput`, que lo exige: el evento
+ * se busca solo para ellas y lo normal es no consultar nada.
+ */
+function returningOutputIds(outputs: ReadonlyArray<ReturningOutputLike & { id: string }>): string[] {
+  return outputs.filter((output) => isReturningOwnOutput(output)).map((output) => output.id);
+}
+
 async function loadReplacedIds(admin: Admin, shipmentIds: string[]): Promise<Set<string>> {
   if (!shipmentIds.length) return new Set();
   const { data } = await courierRowsByIds(shipmentIds, (ids) => admin

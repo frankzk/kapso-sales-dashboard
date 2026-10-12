@@ -375,7 +375,12 @@ describe("las piezas en el código", () => {
   });
 
   it("la cola, la toma y el reemplazo leen el evento: la custodia sola no es reemplazo", () => {
-    expect(actions).toContain("const replacedIds = await loadReplacedIds(admin, ((admissionShipmentRows ?? []) as AdmissionShipmentRow[]).map((row) => row.id));");
+    // El evento se busca solo para las que están en devolución, y en la carga
+    // del tablero junto a las demás lecturas.
+    expect(actions).toContain("loadReplacedIds(admin, returningOutputIds((admissionShipmentRows ?? []) as AdmissionShipmentRow[])),");
+    expect(actions).toContain("return outputs.filter((output) => isReturningOwnOutput(output)).map((output) => output.id);");
+    expect(actions).not.toContain("loadReplacedIds(admin, outputs.map((output) => output.id))");
+    expect(read("lib/stop-report.ts")).toContain("if (!shipment || !isReturningOwnOutput(shipment as ReturningOutputLike)) return false;");
     expect(actions).toContain("ownRetryOutput(order, shipmentsByOrder.get(order.order_id) ?? [], replacedIds)");
     expect(actions).toContain("ownRetryOutput(row, outputs, replacedIds)");
     expect(body("replaceOwnOutputs")).toContain("ownReplaceDecision(row, outputs, old, box, request?.shipment_id ?? null, replacedIds)");

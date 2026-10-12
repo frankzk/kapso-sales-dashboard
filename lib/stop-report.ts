@@ -218,11 +218,11 @@ async function stopIsFrozenByReplacement(admin: SupabaseClient, stopId: string, 
   const { data: stopRow } = await admin.from("delivery_stops").select("shipment_id,status").eq("id", stopId).maybeSingle();
   const row = stopRow as { shipment_id: string | null; status: string } | null;
   if (!row?.shipment_id || row.status === nextStatus) return false;
-  const [{ data: shipment }, { data: replaced }] = await Promise.all([
-    admin.from("shipments").select("courier,delivery_status,custody_state,returned_at").eq("id", row.shipment_id).maybeSingle(),
-    admin.from("order_events").select("id").eq("shipment_id", row.shipment_id).eq("kind", "output_replaced").limit(1).maybeSingle(),
-  ]);
-  return Boolean(shipment && replaced) && isReturningOwnOutput(shipment as Parameters<typeof isReturningOwnOutput>[0]);
+  const { data: shipment } = await admin.from("shipments").select("courier,delivery_status,custody_state,returned_at").eq("id", row.shipment_id).maybeSingle();
+  // El evento solo se busca para la que está en devolución: lo normal es una lectura.
+  if (!shipment || !isReturningOwnOutput(shipment as ReturningOutputLike)) return false;
+  const { data: replaced } = await admin.from("order_events").select("id").eq("shipment_id", row.shipment_id).eq("kind", OUTPUT_REPLACED_KIND).limit(1).maybeSingle();
+  return Boolean(replaced);
 }
 
 /**
