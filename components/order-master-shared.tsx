@@ -559,6 +559,9 @@ export const TIMELINE_LABEL: Record<string, string> = {
   guide_registered: "Guía registrada",
   guide_created: "Guía creada",
   guide_cancelled: "Guía anulada",
+  // MOM §12: la clave quedó guardada (a mano o del listado de Shalom Pro). No
+  // es darla: eso es `key_shared`.
+  key_registered: "Clave de recojo registrada",
   aliclik_duplicate_resolution: "Resolución de posible duplicado Aliclik",
   route_output_created: "Salida y rótulo creados",
   route_output_cancelled: "Salida anulada",

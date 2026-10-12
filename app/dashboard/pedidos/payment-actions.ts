@@ -1219,7 +1219,11 @@ export async function setPickupKey(orderId: string, key: string): Promise<Paymen
   await admin.from("order_events").insert({
     store_id: ctx.storeId,
     order_id: orderId,
-    kind: "key_shared",
+    // Registrar la clave no es darla: `key_shared` es «salió hacia la clienta»
+    // y el retorno de §12 lo lee como que pudo recogerla
+    // (lib/shalom/pickup-facts.ts). Es el mismo hecho que escribe Cotejar
+    // Shalom cuando la toma del listado (lib/shalom/account-cotejo.ts).
+    kind: "key_registered",
     actor: ctx.userId,
     source: "manual",
     note: previous ? "Clave de recojo reemplazada." : "Clave de recojo registrada.",

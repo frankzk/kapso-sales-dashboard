@@ -5817,7 +5817,12 @@ pago completo», la alerta crítica de cobro, por un paquete que venía de vuelt
   la clave.
 - **La regla.** Un `entregado` de Shalom es el **retorno** cuando, a la vez:
   1. el pedido tiene clave registrada y **nunca** se reveló en pantalla
-     (`key_view`) ni se envió (`key_shared`, `pickup_key_shares`);
+     (`key_view`) ni se envió (`key_shared`, `pickup_key_shares`).
+     **Registrarla no es darla** (12-10-2026): guardar la clave —a mano desde
+     la salida Shalom o desde el listado de Shalom Pro con Cotejar Shalom—
+     escribe `key_registered`, que no cuenta como entregada. Hasta esa fecha
+     «Registrar clave» escribía `key_shared` y la habría contado como dada; no
+     se había usado nunca en producción (0 eventos con esa nota);
   2. no hay rastro de cobro, con el **mismo** criterio que la alerta
      `recogido_sin_pago_completo` (§6.5);
   3. pasaron **8 días o más** entre la **primera** llegada a la agencia y la
@@ -5866,7 +5871,8 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
    `Preparación · Por armar` (`rotulo_generado`, custodia de la empresa).
 4. La clave ingresada se cifra y nunca se escribe en la línea de tiempo. Si no
    se conoce todavía, puede registrarse después en la credencial de esa salida,
-   dentro de **Salidas y guías**.
+   dentro de **Salidas y guías**, o la pone Cotejar Shalom desde el listado de
+   Shalom Pro si esa lectura comprobó que su clave es la clave (ver abajo).
 5. El tracking público se recupera automáticamente por número de guía; no exige
    OSE ID ni sesión de Shalom Pro. OSE ID solo habilita rótulo/comprobante, e ID
    de orden permite una eventual anulación por API.
@@ -5963,23 +5969,80 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   - que su destinatario **sea el destinatario**: en las guías creadas por API,
     el DNI y el celular del listado tienen que coincidir con los del pedido en
     nueve de cada diez, con diez como mínimo. El campo que no pasa no se usa
-    para vincular, y si no pasa ninguno no se vincula nada.
+    para vincular, y si no pasa ninguno no se vincula nada. Medido el
+    12-10-2026: DNI 297 de 298 (se usa), celular 230 de 298 (no se usa);
+  - que su `pickup_code` **sea la clave de recojo** (12-10-2026): ver abajo.
 - **Lo que escribe.** `actor` nulo —no lo decidió una persona— y la nota
   «Guía Shalom creada fuera de Kapta y registrada por Cotejar Shalom (mismo
   DNI)» o «(mismo celular y nombre)»; en `shalom_raw` y en el payload,
   `registered_by: cotejar_shalom`. El código y la serie salen del listado; el
-  OSE ID solo si el listado demuestra que su `id` lo es. **La clave de recojo
-  no**: el listado no se usa para eso, y la nota pide registrarla desde la
-  salida Shalom, en Salidas y guías. Ese `guide_created` cuenta como el del
-  drawer —es el mismo hecho— y por eso también levanta una corrección manual
-  anterior del estado (`status_override`).
+  OSE ID solo si el listado demuestra que su `id` lo es, y la clave de recojo
+  solo si el listado demuestra que su `pickup_code` lo es (abajo). Sin clave
+  comprobada, la nota pide registrarla desde la salida Shalom, en Salidas y
+  guías; con ella, dice «Clave de recojo tomada del listado de Shalom Pro.»
+  —de dónde salió, nunca cuál es— y el payload lleva `clave_del_listado`. Ese
+  `guide_created` cuenta como el del drawer —es el mismo hecho— y por eso
+  también levanta una corrección manual anterior del estado
+  (`status_override`).
+- **La clave de recojo del listado, solo si se comprueba** (decidido el
+  12-10-2026).
+  - **El caso.** El 12-10-2026 a las 01:12 UTC el cotejo vinculó 7 guías
+    (#KP131631, #KP131819, #KP131839, #KP138133, #KP138138, #KP138150,
+    #KP138154) **sin clave**: el listado trae `pickup_code`, pero nunca se
+    había comprobado que fuera la clave —la recuperación tras un corte
+    (`findCreatedOrder`) lo suponía y no había corrido nunca en producción—.
+    Sin la clave en Kapta no hay qué mandarle a la clienta cuando paga
+    (`lib/pickup-key-delivery.ts`) y la nota pedía a una persona registrarla.
+  - **Cómo se comprueba.** En cada lectura, con la **misma muestra** que el
+    destinatario: las guías que Kapta creó por API y aparecen en el listado.
+    De esas Kapta sabe la clave, porque la eligió y la mandó al crearla
+    (`shalom_pickup_keys`). Se descifra **en el servidor, en memoria**, y se
+    compara con el `pickup_code` de su guía: **nueve de cada diez, con diez
+    como mínimo**, igual que el DNI y el celular. Si la misma guía sale dos
+    veces con claves distintas no se toma ninguna, y una clave que no se
+    descifra no se compara. Medido el 12-10-2026 en la base: las **1.315**
+    guías de la API de los últimos 44 días tienen su clave guardada (2
+    reemplazadas a mano), así que la muestra es la de siempre.
+  - **Si pasa**, en esa misma pasada:
+    1. la guía que se **vincula** entra con su clave —si tiene forma de clave
+       que Shalom emite (`pickupCodeFormatError`, el mismo de «Ya la creé en
+       Shalom Pro»); si no, entra sin ella, como antes—, cifrada por el camino
+       de siempre (`lib/shalom/register-guide.ts`);
+    2. **se rellenan las que faltan**: a cada salida de Shalom hecha a mano
+       (`shalom_pro_manual`, la vinculara Cotejar Shalom o «Ya la creé en
+       Shalom Pro») **viva** (pendiente, en ruta o por preparar), cuyo pedido
+       **no tiene ninguna clave** y cuya guía sale en el listado con una clave
+       válida, se le guarda cifrada en `shalom_pickup_keys`, con
+       `created_by` nulo. **Nunca se pisa** una clave que ya esté, la haya
+       puesto quien sea: la escritura es «insertar si no existe», así que una
+       que alguien registró entre la lectura y la escritura se queda. Con dos
+       guías manuales vivas en el mismo pedido no se adivina de cuál es. Queda
+       en la línea de tiempo un `key_registered` («Clave de recojo
+       registrada»), fuente `shalom`, sin persona, con la guía y la nota
+       «Clave de recojo tomada del listado de Shalom Pro (Cotejar Shalom).».
+       A una guía entregada, devuelta o anulada no se le pone: ya no le sirve
+       a nadie y cambiaría cómo se lee su «entregado» (el retorno de arriba
+       pregunta si hay clave y si se dio). Al 12-10-2026 eran las 7 de arriba;
+       las otras 8 guías manuales sin clave, del 09-09 y el 10-09-2026, ya
+       están recogidas y no se tocan.
+  - **Si no pasa, no se escribe ninguna clave**: se vincula sin ella, como
+    antes, y el informe lo dice con cuentas.
+  - **La clave nunca sale.** Ni en la respuesta del cron, ni en la línea
+    `[shalom-cotejo]` de la bitácora, ni en la línea de tiempo: de la
+    comprobación solo salen `comparadas`, `coinciden` y `confiable` (bloque
+    `contrato.clave`), y del relleno solo cuántas.
+  - Una guía manual viva sin clave también hace leer el listado, aunque no
+    haya candidatos que vincular.
 - **Tope de 10 guías por pasada**; lo que sobra entra en la siguiente.
 - **Lo que queda para una persona.** Lo ambiguo y lo sin pareja no se toca:
   sigue en «Por generar rótulo» y se registra a mano con «Ya la creé en Shalom
   Pro». La respuesta de `/api/cron/shalom-cotejo` (y la línea
   `[shalom-cotejo]` de la bitácora) dice cuántos candidatos, vinculados, ambiguos, sin pareja y por
-  tope hubo, el porqué de cada ambiguo y, por cuenta, cuántas guías trajo el
-  listado, su cobertura y la comprobación del destinatario.
+  tope hubo, el porqué de cada ambiguo, si cada vinculada entró con clave
+  (`clave: true/false`), cuántas claves se rellenaron (`clavesRellenadas`) y,
+  por cuenta, cuántas guías trajo el listado, su cobertura, la comprobación
+  del destinatario y de la clave (`contrato`), y cuántas guías manuales vivas
+  esperaban clave, cuántas la recibieron y, si ninguna, por qué (`claves`).
 
 ### Olva
 

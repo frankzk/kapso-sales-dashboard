@@ -9,23 +9,39 @@
 // (lib/shalom/register-guide.ts), sin usuario: `actor` nulo y la nota que dice
 // que la registró Cotejar Shalom.
 //
-// SERVER-ONLY: usa el cliente admin y la sesión de Shalom Pro de la tienda.
+// LA CLAVE DE RECOJO (12-10-2026). El listado trae `pickup_code`. Se comprueba
+// en cada lectura contra las claves que Kapta mandó al crear por API (paso 3);
+// solo si pasa, la guía se vincula con su clave y a las guías manuales vivas
+// sin clave se les pone la suya (paso 3b). Las claves se descifran y se cifran
+// aquí, en el servidor, y NUNCA van al informe, a la bitácora ni a la línea de
+// tiempo: de ellas solo salen cuentas.
+//
+// SERVER-ONLY: usa el cliente admin, la sesión de Shalom Pro de la tienda y la
+// clave de cifrado.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { decrypt, encrypt } from "@/lib/crypto";
 import { phoneKey } from "@/lib/olva/email-label";
 import { agencyPaymentReady } from "@/lib/order-macro-stage";
+import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { isFillableRouteOutput } from "@/lib/shipment-output";
 import {
   checkListingContract,
   collectListingPages,
+  CONTRACT_MIN_COMPARED,
   documentKey,
   guideCodeKey,
   listingCoverage,
   listingFromDate,
+  listingPickupCodes,
   matchShalomListing,
+  planKeyBackfill,
   readListingGuide,
+  usableListingKey,
   WINDOW_AFTER_DAYS,
   type CotejoShalomOrder,
+  type KeyBackfill,
+  type KeyBackfillCandidate,
   type KnownApiGuide,
   type ListingContract,
   type ListingCoverage,
@@ -38,6 +54,7 @@ import { SHALOM_ORIGIN } from "@/lib/shalom/origin";
 import { resolveOseIds } from "@/lib/shalom/ose-backfill";
 import {
   ACTIVE_GUIDE_STATUSES,
+  COTEJAR_SHALOM,
   registerExistingShalomGuide,
   type ExistingGuideOrder,
 } from "@/lib/shalom/register-guide";
@@ -71,8 +88,29 @@ export interface CotejoDetail {
   resultado: "vinculado" | "ambiguo" | "sin_pareja" | "por_tope" | "error";
   guia?: string;
   via?: ShalomCotejoVia;
+  /** Vinculada con su clave de recojo guardada. Solo el sí o el no. */
+  clave?: boolean;
   motivo?: string;
 }
+
+/** Las claves de recojo que faltaban en las guías manuales de la cuenta. Cuentas, nunca claves. */
+export interface CotejoKeysReport {
+  /** Guías hechas a mano, vivas, cuyo pedido no tenía clave al empezar. */
+  sinClave: number;
+  /** Las que recibieron la clave del listado en esta pasada. */
+  rellenadas: number;
+  /** Por qué no se tomó ninguna (la clave del listado no se comprobó…). */
+  motivo: string | null;
+}
+
+/** Nota de la línea de tiempo cuando la clave sale del listado. Sin la clave. */
+export const LISTING_KEY_NOTE = "Clave de recojo tomada del listado de Shalom Pro (Cotejar Shalom).";
+/**
+ * El hecho de la línea de tiempo: la clave quedó REGISTRADA. No es `key_shared`:
+ * ese dice que la clave salió hacia alguien, y el retorno de §12 lo lee como
+ * «la clienta pudo recogerla» (lib/shalom/pickup-facts.ts).
+ */
+export const KEY_REGISTERED_EVENT = "key_registered";
 
 export interface CotejoAccountReport {
   tiendas: string[];
@@ -84,6 +122,7 @@ export interface CotejoAccountReport {
   contrato: ListingContract | null;
   /** El `id` del listado se comprobó como OSE ID: la guía entra con su ticket. */
   oseVerificado: boolean;
+  claves: CotejoKeysReport;
   /** Por qué esta cuenta no se coteja (listado incompleto, error de Shalom…). */
   motivo: string | null;
 }
@@ -97,6 +136,8 @@ export interface ShalomCotejoReport {
   porTope: number;
   /** Candidatos de una cuenta cuyo listado no se pudo leer entero o creer. */
   sinCotejar: number;
+  /** Guías manuales vivas que recibieron su clave de recojo del listado. */
+  clavesRellenadas: number;
   cuentas: CotejoAccountReport[];
   detalle: CotejoDetail[];
   errores: string[];
@@ -169,6 +210,154 @@ async function loadCandidates(admin: SupabaseClient, errores: string[]): Promise
     }
   }
   return rows.filter((r) => !blocked.has(r.order_id));
+}
+
+/** Una guía manual viva de Kapta, con lo que hace falta para darle su clave. */
+interface ManualGuideRow extends KeyBackfillCandidate {
+  /** Fecha del pedido: el listado se pide desde antes de él. */
+  orderCreatedAt: string | null;
+}
+
+/**
+ * Las guías hechas a mano en Shalom Pro que siguen vivas, con si su pedido ya
+ * tiene clave. Un fallo al leer las claves no rellena nada: «no pude leer la
+ * clave» no es «no hay clave».
+ */
+async function loadManualGuides(admin: SupabaseClient, errores: string[]): Promise<ManualGuideRow[]> {
+  const since = new Date(Date.now() - LOOKBACK_DAYS * DAY_MS).toISOString();
+  const { data, error } = await admin
+    .from("shipments")
+    .select("id,order_id,store_id,guide_code,created_via,delivery_status")
+    .eq("courier", "shalom")
+    .eq("created_via", SHALOM_ORIGIN.manual)
+    .in("delivery_status", [...ACTIVE_GUIDE_STATUSES])
+    .not("guide_code", "is", null)
+    .not("order_id", "is", null)
+    .gte("created_at", since)
+    .limit(1000);
+  if (error) {
+    errores.push(`guías manuales sin clave: ${error.message}`);
+    return [];
+  }
+  const rows = (data ?? []) as {
+    id: string;
+    order_id: string;
+    store_id: string;
+    guide_code: string;
+    created_via: string | null;
+    delivery_status: string;
+  }[];
+  if (!rows.length) return [];
+
+  const orderIds = [...new Set(rows.map((r) => r.order_id))];
+  const withKey = new Set<string>();
+  const createdAt = new Map<string, string | null>();
+  for (const part of chunks(orderIds)) {
+    // Solo si EXISTE: aquí no se lee `key_enc`.
+    const { data: keys, error: keyErr } = await admin.from("shalom_pickup_keys").select("order_id").in("order_id", part);
+    if (keyErr) {
+      errores.push(`claves de las guías manuales: ${keyErr.message}`);
+      return [];
+    }
+    for (const k of (keys ?? []) as { order_id: string }[]) withKey.add(k.order_id);
+    const { data: orders } = await admin.from("order_master").select("order_id,order_created_at").in("order_id", part);
+    for (const o of (orders ?? []) as { order_id: string; order_created_at: string | null }[]) {
+      createdAt.set(o.order_id, o.order_created_at);
+    }
+  }
+  return rows.map((r) => ({
+    orderId: r.order_id,
+    storeId: r.store_id,
+    shipmentId: r.id,
+    guideCode: r.guide_code,
+    createdVia: r.created_via,
+    live: ACTIVE_GUIDE_STATUSES.has(r.delivery_status),
+    hasKey: withKey.has(r.order_id),
+    orderCreatedAt: createdAt.get(r.order_id) ?? null,
+  }));
+}
+
+/**
+ * Las claves que Kapta guardó para los pedidos de la muestra, descifradas EN
+ * MEMORIA para compararlas con el listado. Una que no se descifra no se
+ * compara. Si no se pueden leer, no hay muestra: la clave del listado no se
+ * comprueba y no se usa.
+ */
+async function loadSampleKeys(
+  admin: SupabaseClient,
+  orderIds: readonly string[],
+  errores: string[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  for (const part of chunks([...new Set(orderIds)])) {
+    const { data, error } = await admin.from("shalom_pickup_keys").select("order_id,key_enc").in("order_id", part);
+    if (error) {
+      errores.push(`claves de la muestra: ${error.message}`);
+      return new Map();
+    }
+    for (const k of (data ?? []) as { order_id: string; key_enc: string | null }[]) {
+      if (!k.key_enc) continue;
+      try {
+        const key = decrypt(k.key_enc).trim();
+        if (key) out.set(k.order_id, key);
+      } catch {
+        // Una clave que no se descifra no se compara; el porqué no hace falta.
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Guarda las claves que faltaban, cifradas, con la misma forma que
+ * lib/shalom/register-guide.ts y sin autor. NUNCA pisa: si el pedido ya tiene
+ * clave —la puso alguien entre la lectura y esto—, la base no escribe nada
+ * (`ignoreDuplicates`) y tampoco hay evento. Devuelve los pedidos rellenados.
+ */
+async function fillListingKeys(
+  admin: SupabaseClient,
+  plan: readonly KeyBackfill[],
+  errores: string[],
+): Promise<string[]> {
+  const filled: string[] = [];
+  for (const k of plan) {
+    let keyEnc: string;
+    try {
+      keyEnc = encrypt(k.pickupCode);
+    } catch {
+      errores.push(`clave de la guía ${k.guideCode}: no se pudo cifrar`);
+      continue;
+    }
+    const { data, error } = await admin
+      .from("shalom_pickup_keys")
+      .upsert(
+        { order_id: k.orderId, store_id: k.storeId, key_enc: keyEnc, created_by: null },
+        { onConflict: "order_id", ignoreDuplicates: true },
+      )
+      .select("order_id");
+    if (error) {
+      errores.push(`clave de la guía ${k.guideCode}: no se pudo guardar (${error.message})`);
+      continue;
+    }
+    if (!((data ?? []) as unknown[]).length) continue;
+    filled.push(k.orderId);
+    await admin.from("order_events").insert({
+      store_id: k.storeId,
+      order_id: k.orderId,
+      kind: KEY_REGISTERED_EVENT,
+      occurred_at: new Date().toISOString(),
+      actor: null,
+      source: "shalom",
+      courier: "shalom",
+      guide_code: k.guideCode,
+      shipment_id: k.shipmentId,
+      note: LISTING_KEY_NOTE,
+      // Nunca la clave: solo de dónde salió.
+      payload: { registered_by: COTEJAR_SHALOM, origen: "listado_shalom_pro", shipment_id: k.shipmentId },
+    });
+  }
+  if (filled.length) await recomputeOrderMasterSafe(admin, filled);
+  return filled;
 }
 
 /**
@@ -297,14 +486,17 @@ interface AccountGroup {
   storeId: string;
   storeIds: string[];
   candidates: CandidateRow[];
+  /** Guías manuales vivas de la cuenta, con o sin clave (paso 3b). */
+  manual: ManualGuideRow[];
 }
 
 async function groupByAccount(
   admin: SupabaseClient,
   candidates: CandidateRow[],
+  manual: ManualGuideRow[],
   errores: string[],
 ): Promise<{ groups: AccountGroup[]; sinCuenta: CandidateRow[] }> {
-  const storeIds = [...new Set(candidates.map((c) => c.store_id))];
+  const storeIds = [...new Set([...candidates.map((c) => c.store_id), ...manual.map((m) => m.storeId)])];
   const { data, error } = await admin.from("stores").select(`id,${SHALOM_STORE_COLUMNS}`).in("id", storeIds);
   if (error) {
     errores.push(`tiendas: ${error.message}`);
@@ -312,21 +504,24 @@ async function groupByAccount(
   }
   const stores = new Map(((data ?? []) as (StoreShalom & { id: string })[]).map((s) => [s.id, s]));
   const groups = new Map<string, AccountGroup>();
-  const sinCuenta: CandidateRow[] = [];
-  for (const c of candidates) {
-    const s = stores.get(c.store_id);
+  const groupOf = (storeId: string): AccountGroup | null => {
+    const s = stores.get(storeId);
     const email = (s?.shalom_pro_email ?? "").trim().toLowerCase();
-    if (!s || !email || !s.shalom_pro_password_enc) {
-      sinCuenta.push(c);
-      continue;
-    }
+    if (!s || !email || !s.shalom_pro_password_enc) return null;
     // La cuenta de Shalom Pro, no la tienda: Kenku y Aurela comparten una y
     // sus guías salen en el MISMO listado.
     const key = `${s.org_id}|${email}`;
-    const g = groups.get(key) ?? { store: s, storeId: s.id, storeIds: [], candidates: [] };
-    g.candidates.push(c);
+    const g = groups.get(key) ?? { store: s, storeId: s.id, storeIds: [], candidates: [], manual: [] };
     groups.set(key, g);
+    return g;
+  };
+  const sinCuenta: CandidateRow[] = [];
+  for (const c of candidates) {
+    const g = groupOf(c.store_id);
+    if (g) g.candidates.push(c);
+    else sinCuenta.push(c);
   }
+  for (const m of manual) groupOf(m.storeId)?.manual.push(m);
   for (const g of groups.values()) {
     const { data: siblings } = await admin
       .from("stores")
@@ -363,8 +558,9 @@ function pushDetail(report: ShalomCotejoReport, d: CotejoDetail): void {
 }
 
 /**
- * Una pasada de Cotejar Shalom. Barata cuando no hay nada que buscar: una
- * consulta y vuelve, sin llamar a Shalom.
+ * Una pasada de Cotejar Shalom. Barata cuando no hay nada que buscar —ningún
+ * candidato y ninguna guía manual viva sin clave—: dos consultas y vuelve, sin
+ * llamar a Shalom.
  *
  * @param deadlineMs  hora límite (epoch ms) para terminar de bajar el listado.
  *                    Un listado a medias no vincula nada.
@@ -380,21 +576,29 @@ export async function cotejarShalom(
     sinPareja: 0,
     porTope: 0,
     sinCotejar: 0,
+    clavesRellenadas: 0,
     cuentas: [],
     detalle: [],
     errores: [],
   };
   const candidates = await loadCandidates(admin, report.errores);
   report.candidatos = candidates.length;
-  if (!candidates.length) return report;
+  const manual = await loadManualGuides(admin, report.errores);
+  const keyless = (m: ManualGuideRow) => !m.hasKey;
+  if (!candidates.length && !manual.some(keyless)) return report;
 
-  const { groups, sinCuenta } = await groupByAccount(admin, candidates, report.errores);
+  const { groups, sinCuenta } = await groupByAccount(admin, candidates, manual, report.errores);
   report.sinCotejar += sinCuenta.length;
   let linksLeft = opts.maxLinks ?? MAX_LINKS_PER_RUN;
 
   for (const group of groups) {
+    const waitingKey = group.manual.filter(keyless);
+    // Una cuenta sin candidatos ni claves que poner no se lee: el listado cuesta.
+    if (!group.candidates.length && !waitingKey.length) continue;
     const oldest = Math.min(
-      ...group.candidates.map((c) => Date.parse(c.order_created_at ?? "")).filter(Number.isFinite),
+      ...[...group.candidates.map((c) => c.order_created_at), ...waitingKey.map((m) => m.orderCreatedAt)]
+        .map((iso) => Date.parse(iso ?? ""))
+        .filter(Number.isFinite),
     );
     // Nunca antes de lo que Shalom entrega (~45 días): ver `listingFromDate`.
     const desde = listingFromDate(oldest, Date.now());
@@ -407,6 +611,7 @@ export async function cotejarShalom(
       cobertura: null,
       contrato: null,
       oseVerificado: false,
+      claves: { sinClave: waitingKey.length, rellenadas: 0, motivo: null },
       motivo: null,
     };
     report.cuentas.push(account);
@@ -457,17 +662,42 @@ export async function cotejarShalom(
         continue;
       }
 
-      // 3. ¿Su destinatario es el destinatario? Se compara con lo que Kapta sabe.
+      // 3. ¿Su destinatario es el destinatario? ¿Su `pickup_code` es la clave?
+      // Se compara con lo que Kapta sabe de las guías que creó por API.
       const inListing = new Set(guides.map((g) => g.guia));
       const sample = known.filter((k) => k.order_id && inListing.has(guideCodeKey(k.guide_code))).slice(-CONTRACT_SAMPLE);
       const sampleIds = sample.map((k) => k.order_id as string);
-      const [sampleDocs, samplePhones] = await Promise.all([loadDocuments(admin, sampleIds), loadPhones(admin, sampleIds)]);
+      const [sampleDocs, samplePhones, sampleKeys] = await Promise.all([
+        loadDocuments(admin, sampleIds),
+        loadPhones(admin, sampleIds),
+        loadSampleKeys(admin, sampleIds, report.errores),
+      ]);
       const knownReceivers: KnownApiGuide[] = sample.map((k) => ({
         guideCode: k.guide_code,
         document: sampleDocs.get(k.order_id as string) ?? null,
         phone: samplePhones.get(k.order_id as string) ?? null,
+        pickupCode: sampleKeys.get(k.order_id as string) ?? null,
       }));
-      account.contrato = checkListingContract(guides, knownReceivers);
+      const listingKeys = listingPickupCodes(collected.orders);
+      account.contrato = checkListingContract(guides, knownReceivers, listingKeys);
+      const keyTrusted = account.contrato.clave.confiable;
+
+      // 3b. Las claves que faltan, si la del listado es la clave. No depende
+      // del destinatario: va por número de guía, que es exacto.
+      if (waitingKey.length) {
+        if (keyTrusted) {
+          const filled = await fillListingKeys(admin, planKeyBackfill(group.manual, listingKeys, true), report.errores);
+          account.claves.rellenadas = filled.length;
+          report.clavesRellenadas += filled.length;
+        } else {
+          // Solo las cuentas: cuántas se compararon y cuántas coincidieron.
+          const c = account.contrato.clave;
+          account.claves.motivo =
+            `la clave del listado no se comprobó con las guías creadas por API (coinciden ${c.coinciden} de ${c.comparadas}; ` +
+            `hacen falta ${CONTRACT_MIN_COMPARED} y nueve de cada diez): no se toma ninguna clave`;
+        }
+      }
+
       const usable = { documento: account.contrato.documento.confiable, telefono: account.contrato.telefono.confiable };
       if (!usable.documento && !usable.telefono) {
         skip("el destinatario del listado no coincide con el de las guías creadas por API: no se vincula nada");
@@ -522,11 +752,15 @@ export async function cotejarShalom(
           pushDetail(report, { pedido, resultado: "por_tope", guia: guide.guia, via });
           continue;
         }
+        // La clave del listado solo si esta lectura la comprobó y tiene forma
+        // de clave; si no, se vincula sin ella y la nota la pide, como antes.
+        const pickupCode = usableListingKey(listingKeys.get(guide.guia), keyTrusted);
         const normalized = normalizeManualShalomGuide({
           guideCode: guide.guia,
           codigo: guide.codigo,
           serie: guide.serie,
           oseId: ose.trusted ? (ose.resolved.get(guide.guia) ?? null) : null,
+          pickupCode,
         });
         const row = rows.get(outcome.order.orderId);
         if (!normalized.ok || !row) {
@@ -545,6 +779,7 @@ export async function cotejarShalom(
               via,
               listado_id: guide.listingId,
               guia_creada_en_shalom: guide.createdAt,
+              clave_del_listado: Boolean(pickupCode),
             },
           },
         });
@@ -553,8 +788,11 @@ export async function cotejarShalom(
           pushDetail(report, { pedido, resultado: "error", guia: guide.guia, via, motivo: res.error });
           continue;
         }
+        // `keyWarning` vacío es que la clave quedó guardada.
+        const clave = Boolean(pickupCode) && !res.keyWarning;
+        if (pickupCode && res.keyWarning) report.errores.push(`${pedido}: la clave del listado no se pudo guardar`);
         report.vinculados += 1;
-        pushDetail(report, { pedido, resultado: "vinculado", guia: guide.guia, via });
+        pushDetail(report, { pedido, resultado: "vinculado", guia: guide.guia, via, clave });
       }
     } catch (e) {
       skip(describeShalomError(e));
