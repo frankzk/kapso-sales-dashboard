@@ -72,6 +72,8 @@ describe("todo el mundo lo lee de ahí", () => {
     "lib/order-confirmation-brief.ts",
     "lib/confirmacion-agencia.ts",
     "components/pickup-key-panel.tsx",
+    // Lo que el agente de voz de leads dice sobre el adelanto de agencia (MOM §33).
+    "lib/voice-leads.ts",
   ];
 
   for (const sitio of sitios) {

@@ -90,6 +90,28 @@ import {
 } from "@/lib/whatsapp-outbox";
 import { shopifyOrderAdminUrl } from "@/lib/shopify-urls";
 import { normalizePhone, peruMobileProblem } from "@/lib/phone";
+import {
+  LEAD_VOICE_KIND,
+  LEAD_VOICE_NOTE_SIGNER,
+  LEAD_VOICE_PURPOSE,
+  leadVoicePhone,
+  type LeadCaptura,
+} from "@/lib/voice-leads";
+import {
+  LEAD_VOICE_EXCLUSION_LABEL,
+  type LeadVoiceCallSummary,
+  type LeadVoicePanelData,
+} from "@/lib/voice-lead-labels";
+import {
+  buildLeadContext,
+  leadVoiceConfigured,
+  loadLeadVoiceQueue,
+  loadLeadVoiceStore,
+  placeLeadCall,
+  type LeadVoiceQueueEntry,
+} from "@/lib/voice-leads-server";
+import { realCallsToday } from "@/lib/voice-recovery-server";
+import { VOICE_SUNDAY_START_HOUR, withinVoiceHours } from "@/lib/voice-recovery-queue";
 
 export interface LeadActionState {
   error?: string;
@@ -209,7 +231,13 @@ export async function loadLeadDetail(
   );
   const calls = detail.calls.map((c) => ({
     ...c,
-    vendedora_name: c.vendedora ? (names[c.vendedora] ?? null) : null,
+    // Lo que escribe el agente de voz de leads no lleva vendedora (no es una
+    // persona, MOM §33): sin firma se vería igual que el drip o el archivado.
+    vendedora_name: c.vendedora
+      ? (names[c.vendedora] ?? null)
+      : c.kind === LEAD_VOICE_KIND
+        ? LEAD_VOICE_NOTE_SIGNER
+        : null,
   }));
   return { lead: detail.lead, calls };
 }
@@ -2145,14 +2173,15 @@ export interface OrderFormPrefill {
 }
 
 /** Pre-fill the order form: for a cart, read the live draft (variant ids + price
- *  + address); for a new sale, return the lead's defaults blank. */
+ *  + address); for a new sale, return the lead's defaults blank. Lo que el
+ *  formulario no traiga lo completa la captura del agente de voz de leads. */
 export async function loadOrderDraft(leadId: string): Promise<OrderFormPrefill | { error: string }> {
   const ctx = await authorizeLead(leadId);
   if (!ctx) return { error: "Sin acceso a este lead." };
   const admin = createAdminSupabase();
   const { data: lead } = await admin
     .from("leads")
-    .select("phone, name, draft_order_gid, district, province, referencia, kapso_conversation_id")
+    .select("phone, name, draft_order_gid, address1, district, province, referencia, kapso_conversation_id")
     .eq("id", leadId)
     .maybeSingle();
   if (!lead) return { error: "Lead no encontrado." };
@@ -2160,6 +2189,7 @@ export async function loadOrderDraft(leadId: string): Promise<OrderFormPrefill |
     phone: string | null;
     name: string | null;
     draft_order_gid: string | null;
+    address1: string | null;
     district: string | null;
     province: string | null;
     referencia: string | null;
@@ -2172,7 +2202,9 @@ export async function loadOrderDraft(leadId: string): Promise<OrderFormPrefill |
     lineItems: [],
     customerName: l.name,
     phone: l.phone,
-    address1: null,
+    // Antes era null fijo: la dirección que la asesora (o un carrito) dejó en el
+    // lead no llegaba al formulario y había que volver a escribirla.
+    address1: l.address1,
     district: l.district,
     province: l.province,
     referencia: l.referencia,
@@ -2233,12 +2265,75 @@ export async function loadOrderDraft(leadId: string): Promise<OrderFormPrefill |
     }
   }
 
+  // Lo que tomó el agente de voz de leads al pasar el lead a «Atender ahora»
+  // (MOM §33). Solo llena lo que quedó VACÍO: lo que ya trae el carrito o el
+  // lead manda. Productos no: el agente no cotiza líneas, las elige la asesora.
+  const captura = await capturaDelAgente(admin, ctx.storeId, leadId);
+  if (captura) {
+    const vacio = (v: string | null) => !v?.trim();
+    if (vacio(out.address1) && captura.direccion) out.address1 = captura.direccion;
+    if (vacio(out.district) && captura.distrito) out.district = captura.distrito;
+    // El campo «provincia» del formulario es la región de Shopify (el
+    // departamento: lo normaliza matchPeruRegion); la provincia queda de
+    // respaldo si el agente no anotó el departamento.
+    const region = captura.departamento || captura.provincia;
+    if (vacio(out.province) && region) out.province = region;
+    if (vacio(out.referencia) && captura.referencia) out.referencia = captura.referencia;
+    if (vacio(out.customerName) && captura.nombre) out.customerName = captura.nombre;
+  }
+
   // 24h window (drives the confirmation checkbox default).
   if (l.kapso_conversation_id) {
     const w = await getLeadWindow(leadId);
     out.windowOpen = w.open;
   }
   return out;
+}
+
+/** Días hacia atrás que vale la captura del agente para prellenar el pedido. */
+const CAPTURA_AGENTE_DIAS = 7;
+
+/**
+ * La captura de la última llamada REAL del agente de leads que terminó en
+ * «quiere comprar» (`atender_ahora`) en los últimos 7 días, o null.
+ *
+ * Vive en `voice_calls.outcome_payload.captura` y no en `leads.*` a propósito
+ * (decisión 3 de §33): la sincronización pisa esas columnas y el reenvío Swayp
+ * las usa como dirección. Una llamada de PRUEBA no cuenta: lo que se dijo ahí
+ * lo dijo quien probaba, no el lead. Si la lectura falla (pre-0247) el
+ * formulario queda como antes: es solo un prellenado.
+ */
+async function capturaDelAgente(
+  admin: SupabaseClient,
+  storeId: string,
+  leadId: string,
+): Promise<Pick<LeadCaptura, "direccion" | "distrito" | "provincia" | "departamento" | "referencia" | "nombre"> | null> {
+  const since = new Date(Date.now() - CAPTURA_AGENTE_DIAS * 86_400_000).toISOString();
+  const { data, error } = await admin
+    .from("voice_calls")
+    .select("outcome_payload")
+    .eq("store_id", storeId)
+    .eq("lead_id", leadId)
+    .eq("purpose", LEAD_VOICE_PURPOSE)
+    .eq("mode", "real")
+    .eq("outcome", "atender_ahora")
+    .gte("queued_at", since)
+    .order("queued_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error || !data) return null;
+  const raw = (data as { outcome_payload: { captura?: unknown } | null }).outcome_payload?.captura;
+  if (!raw || typeof raw !== "object") return null;
+  const c = raw as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  return {
+    direccion: str(c.direccion),
+    distrito: str(c.distrito),
+    provincia: str(c.provincia),
+    departamento: str(c.departamento),
+    referencia: str(c.referencia),
+    nombre: str(c.nombre),
+  };
 }
 
 export interface GenerateOrderInput {
@@ -2726,4 +2821,185 @@ export async function generateOrder(
       confirmationSent,
     },
   };
+}
+
+// ===========================================================================
+// Agente de voz para leads (MOM §33) — panel del drawer de Leads.
+//
+// Tres acciones, las mismas que el panel de Reproprovincia (§11.8): leer el
+// estado (si entra a la cola, por qué no, su brazo y sus llamadas), llamar al
+// lead con el agente, y probar el agente con la ficha de ESTE lead llamando a
+// otro teléfono sin escribir nada sobre él. Las tres pasan por las mismas
+// funciones que el barrido (lib/voice-leads-server): una regla, un lugar.
+// Sin revalidatePath, como el resto de las acciones de leads.
+// ===========================================================================
+
+/** Lo que muestra el panel. Lectura: va por /api/leads/read, no escribe. */
+export async function loadLeadVoicePanel(
+  leadId: string,
+): Promise<{ data: LeadVoicePanelData } | { error: string }> {
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { error: "Sin acceso a este lead." };
+  const admin = createAdminSupabase();
+  const store = await loadLeadVoiceStore(admin, ctx.storeId);
+  if (!store) return { error: "Tienda no encontrada." };
+
+  // Sin `assign`: mirar el panel no sortea ni guarda el brazo de nadie. Si la
+  // cola no se puede leer, el lead queda «fuera» (cerrado) pero el panel igual
+  // muestra sus llamadas.
+  const [queue, { data: callRows }, { data: optRow }] = await Promise.all([
+    loadLeadVoiceQueue(admin, store, new Date(), { leadId }).catch(() => null),
+    admin
+      .from("voice_calls")
+      .select("id, mode, status, outcome, queued_at, outcome_payload, error")
+      .eq("lead_id", leadId)
+      .eq("purpose", LEAD_VOICE_PURPOSE)
+      .order("queued_at", { ascending: false })
+      .limit(10),
+    // Aparte del lead del drawer: pre-0247 la columna no existe y esta lectura
+    // falla sola (= no pidió nada) sin tumbar el panel.
+    admin.from("leads").select("contact_opt_out_at").eq("id", leadId).maybeSingle(),
+  ]);
+  const eligible = queue?.candidates.some((c) => c.lead.id === leadId) ?? false;
+  const code = queue?.reasons[leadId];
+  const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  return {
+    data: {
+      enabled: store.settings.enabled,
+      configured: leadVoiceConfigured(),
+      eligible,
+      reason: eligible
+        ? null
+        : !queue
+          ? "No se pudo leer la cola del agente. Vuelve a abrir el lead."
+          : code
+            ? (LEAD_VOICE_EXCLUSION_LABEL[code] ?? code)
+            : null,
+      arm: queue?.arms[leadId] ?? null,
+      optOut: Boolean((optRow as { contact_opt_out_at?: string | null } | null)?.contact_opt_out_at),
+      calls: ((callRows ?? []) as {
+        id: string;
+        mode: "real" | "test";
+        status: string;
+        outcome: string | null;
+        queued_at: string;
+        outcome_payload: Record<string, unknown> | null;
+        error: string | null;
+      }[]).map(
+        (c): LeadVoiceCallSummary => ({
+          id: c.id,
+          mode: c.mode,
+          status: c.status,
+          outcome: c.outcome,
+          queued_at: c.queued_at,
+          resumen: text(c.outcome_payload?.resumen),
+          motivo: text(c.outcome_payload?.motivo),
+          error: c.error,
+        }),
+      ),
+    },
+  };
+}
+
+/**
+ * Llama al lead con el agente. Pasa por la misma cola que el barrido, con
+ * `assign`: si es la primera vez que el lead es elegible, aquí se sortea y se
+ * guarda su brazo. Si le toca control, NO se llama (ni a mano): el grupo de
+ * control es lo que permite medir si el agente vende.
+ */
+export async function llamarLeadConAgente(leadId: string): Promise<LeadActionState> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite llamar con el agente." };
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { error: "Sin acceso a este lead." };
+  const admin = createAdminSupabase();
+  const store = await loadLeadVoiceStore(admin, ctx.storeId);
+  if (!store?.settings.enabled) {
+    return { error: "El agente de leads no está habilitado en esta tienda (Ajustes)." };
+  }
+  // Antes de mirar la cola: con `assign` la cola sortea y guarda el brazo, y
+  // un brazo solo se guarda cuando de verdad se puede llamar (decisión 5, §33).
+  if (!leadVoiceConfigured()) {
+    return { error: "Falta configurar la línea del agente de leads en Vercel (puerta SIP y secreto)." };
+  }
+  const { hourStart, hourEnd, dailyCap } = store.settings;
+  const now = new Date();
+  if (!withinVoiceHours(now, hourStart, hourEnd)) {
+    return {
+      error:
+        `El agente de leads llama de ${hourStart}:00 a ${hourEnd}:00; ` +
+        `los domingos, desde las ${Math.max(hourStart, VOICE_SUNDAY_START_HOUR)}:00.`,
+    };
+  }
+  // El tope es del carril de leads: las llamadas de Reproprovincia no lo gastan.
+  if ((await realCallsToday(admin, store.id, now, "lead")) >= dailyCap) {
+    return { error: "La tienda ya llegó al tope de llamadas del agente de leads de hoy." };
+  }
+  const queue = await loadLeadVoiceQueue(admin, store, now, { leadId, assign: true });
+  const entry = queue.candidates.find((c) => c.lead.id === leadId);
+  if (!entry) {
+    const code = queue.reasons[leadId];
+    return { error: code ? (LEAD_VOICE_EXCLUSION_LABEL[code] ?? code) : "Este lead no entra a la cola del agente." };
+  }
+  const context = await buildLeadContext(admin, store, entry, now, "real");
+  const placed = await placeLeadCall(
+    admin,
+    {
+      storeId: store.id,
+      leadId,
+      phone: entry.lead.phone ?? "",
+      mode: "real",
+      triggeredBy: ctx.userId,
+      context,
+    },
+    now,
+  );
+  if (!placed.ok) return { error: placed.error };
+  return { notice: "Llamando. Cuando conteste, lo atiende el agente de leads." };
+}
+
+/**
+ * Prueba el agente con la ficha y el chat de ESTE lead llamando a otro
+ * teléfono. Modo prueba: nada se escribe sobre el lead (§33). No exige el
+ * agente encendido ni que el lead sea elegible: sirve justamente para
+ * escucharlo antes de encenderlo.
+ */
+export async function probarAgenteLeadEnMiTelefono(leadId: string, phone: string): Promise<LeadActionState> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite probar el agente." };
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { error: "Sin acceso a este lead." };
+  const tel = leadVoicePhone(phone);
+  if (!tel) return { error: "Escribe tu celular peruano: 9 dígitos que empiezan en 9." };
+  const admin = createAdminSupabase();
+  const store = await loadLeadVoiceStore(admin, ctx.storeId);
+  if (!store) return { error: "Tienda no encontrada." };
+  const { data: row } = await admin
+    .from("leads")
+    .select(
+      "id, store_id, phone, name, status, category, has_order, order_id, source, ad_id, inbound_count, " +
+        "first_seen_at, last_inbound_at, claimed_at, next_followup_at, first_inbound_text, district, " +
+        "ad_headline, kapso_conversation_id",
+    )
+    .eq("id", leadId)
+    .maybeSingle();
+  if (!row) return { error: "Lead no encontrado." };
+  // La ficha sale de este lead como si fuera su primera llamada. El opt-out no
+  // se lee: la prueba no llama al lead, llama a quien prueba.
+  const entry: LeadVoiceQueueEntry = {
+    lead: { ...(row as unknown as Omit<LeadVoiceQueueEntry["lead"], "contact_opt_out_at">), contact_opt_out_at: null },
+    kind: "primera",
+    arm: "tratamiento",
+    attempt: 1,
+    campaignId: null,
+  };
+  const now = new Date();
+  const context = await buildLeadContext(admin, store, entry, now, "test");
+  const placed = await placeLeadCall(
+    admin,
+    { storeId: store.id, leadId, phone: tel, mode: "test", triggeredBy: ctx.userId, context },
+    now,
+  );
+  if (!placed.ok) return { error: placed.error };
+  return { notice: "Te llama el agente de leads. Es una prueba: nada se escribe sobre el lead." };
 }

@@ -7,6 +7,9 @@ import { env } from "@/lib/env";
 import { normalizeMetaAdAccounts } from "@/lib/meta-marketing";
 import { confirmationCycleDays } from "@/lib/order-confirmation";
 import { PAYMENT_METHOD_COLUMNS } from "@/lib/payment-methods";
+import { leadVoiceOwnNumber, loadLeadVoiceCampaigns } from "@/lib/store-settings";
+import { leadVoiceSettingsFrom } from "@/lib/voice-leads";
+import { leadVoiceConfigured, loadLeadVoicePilotReport } from "@/lib/voice-leads-server";
 import { EmptyState } from "@/components/ui";
 import { StoreSettings, type StoreSettingsData } from "@/components/store-settings";
 import { listEscalation } from "./actions";
@@ -125,12 +128,22 @@ export default async function StoreSettingsPage({
       .order("created_at", { ascending: true }),
   ]);
 
+  // Los ajustes del agente de leads (MOM §33) con los defectos de 0247: lo que
+  // la página pinta es lo mismo que lee el agente al llamar.
+  const leadVoice = leadVoiceSettingsFrom(full);
+  const now = new Date();
+
   // La escalera de cobranza y quién puede entrar en ella (0172). Van aparte
   // del Promise.all porque pasan por `requireStoreAdmin`, que ya comprueba
-  // permisos por su cuenta.
-  const [escalation, escalationCandidates] = await Promise.all([
+  // permisos por su cuenta. Con ellas, lo del agente de leads que depende de
+  // la fila de la tienda: las campañas para elegir (incluye siempre las ya
+  // elegidas; nunca falla) y el tablero del piloto. El tablero no tumba
+  // Ajustes: pre-0247, o si una lectura falla, sale vacío.
+  const [escalation, escalationCandidates, leadVoiceCampaigns, leadVoiceReport] = await Promise.all([
     listEscalation(storeId),
     listEscalationCandidates(storeId),
+    loadLeadVoiceCampaigns(admin, storeId, leadVoice.campaignIds, now),
+    loadLeadVoicePilotReport(admin, storeId, now).catch(() => null),
   ]);
 
   // La prueba de imagen en carritos (0233), desde que se encendió. Pre-0233
@@ -211,6 +224,20 @@ export default async function StoreSettingsPage({
       voice_recovery_hour_end: full.voice_recovery_hour_end ?? 20,
       voice_recovery_agent_number: full.voice_recovery_agent_number ?? null,
       voice_recovery_zadarma_sip: full.voice_recovery_zadarma_sip ?? null,
+      // Pre-0247 las columnas no existen ⇒ agente de leads apagado (y los
+      // defectos de la migración, vía leadVoiceSettingsFrom).
+      voice_lead_enabled: leadVoice.enabled,
+      voice_lead_auto: leadVoice.auto,
+      voice_lead_daily_cap: leadVoice.dailyCap,
+      voice_lead_max_attempts: leadVoice.maxAttempts,
+      voice_lead_wait_minutes: leadVoice.waitMinutes,
+      voice_lead_max_age_hours: leadVoice.maxAgeHours,
+      voice_lead_holdout_pct: leadVoice.holdoutPct,
+      voice_lead_hour_start: leadVoice.hourStart,
+      voice_lead_hour_end: leadVoice.hourEnd,
+      voice_lead_campaign_ids: leadVoice.campaignIds,
+      voice_lead_product: leadVoice.product || null,
+      voice_lead_offer: leadVoice.offer || null,
       // Pre-0133 la columna no existe ⇒ el ciclo por defecto del MOM.
       confirmation_cycle_days: confirmationCycleDays(full.confirmation_cycle_days),
       telegram_chat_id: full.telegram_chat_id ?? null,
@@ -292,6 +319,16 @@ export default async function StoreSettingsPage({
       olvaPortalPassword: Boolean(full.olva_portal_password_enc),
     },
     oauthAvailable: env.shopifyOAuthConfigured(),
+    // Solo sí/no, nunca los valores: la página llega al navegador.
+    leadVoice: {
+      configured: leadVoiceConfigured(),
+      // Sin número propio el lead ve TELNYX_FROM_NUMBER, el de Reproprovincia
+      // (env.telnyxLeadsFromNumber cae a ese). Uno con los mismos dígitos
+      // tampoco es propio: el lead vería el mismo número.
+      ownNumber: leadVoiceOwnNumber(process.env.TELNYX_LEADS_FROM_NUMBER, process.env.TELNYX_FROM_NUMBER),
+      campaigns: leadVoiceCampaigns,
+      report: leadVoiceReport,
+    },
     siteUrl,
     sync: (sync as StoreSettingsData["sync"]) ?? [],
     lastOpsAt: ops?.captured_at ?? null,

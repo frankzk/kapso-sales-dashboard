@@ -167,6 +167,13 @@ echo "  ✅ apply_bundled.sql levanta el esquema completo desde cero"
 echo "▶ automático Aliclik → Swayp: reserva, cupo, evidencia y RLS"
 $PSQL -f "$ROOT/scripts/sql/swayp_auto_smoke.sql"
 
+# Las llamadas de pedido (§11.8) y las del agente de leads (0247, MOM §33)
+# comparten `voice_calls`: lo que impide que una se tome por la otra son las
+# reglas de la base, así que se prueban aquí y no solo en el código.
+echo "▶ agente de voz para leads (0247): pedidos y leads no se mezclan en voice_calls"
+$PSQL -f "$ROOT/scripts/sql/voice_lead_smoke.sql"
+echo "  ✅ cada fila es de un pedido o de un lead, con los resultados de su carril; el candado Swayp no corre por un lead; una sola llamada de leads abierta"
+
 echo "▶ doble cotejo de despacho"
 $PSQL -f "$ROOT/scripts/sql/dispatch_smoke.sql"
 echo "  ✅ la custodia solo cambia después de cotejar el 100 % dos veces"

@@ -641,4 +641,6 @@ export const TIMELINE_LABEL: Record<string, string> = {
   lead_state_change: "Cambio de estado del lead",
   lead_note: "Nota de la asesora",
   lead_system: "Automático (Leads)",
+  // Lo que escribe el agente de voz de leads (MOM §33): no es una asesora.
+  lead_voice_agent: "Agente de voz (leads)",
 };

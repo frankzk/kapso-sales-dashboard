@@ -95,6 +95,13 @@ export async function updateStore(
     const v = formData.get(k);
     return v == null ? undefined : String(v);
   };
+  // Las casillas de campañas del agente de leads viajan como VARIOS valores
+  // con el mismo nombre: `get` se quedaría solo con el primero. Ausente = esta
+  // tarjeta no las trae y no se tocan.
+  const getAll = (k: string) => {
+    const v = formData.getAll(k);
+    return v.length ? v.map(String) : undefined;
+  };
 
   // El email de Shalom llega rellenado en cada guardado: hace falta el valor
   // actual para saber si lo cambiaron de verdad y solo entonces tirar el token
@@ -169,6 +176,19 @@ export async function updateStore(
     voice_recovery_hour_end: get("voice_recovery_hour_end"),
     voice_recovery_agent_number: get("voice_recovery_agent_number"),
     voice_recovery_zadarma_sip: get("voice_recovery_zadarma_sip"),
+    // Agente de voz para leads, piloto Biru (MOM §33, 0247).
+    voice_lead_enabled: get("voice_lead_enabled"),
+    voice_lead_auto: get("voice_lead_auto"),
+    voice_lead_daily_cap: get("voice_lead_daily_cap"),
+    voice_lead_max_attempts: get("voice_lead_max_attempts"),
+    voice_lead_wait_minutes: get("voice_lead_wait_minutes"),
+    voice_lead_max_age_hours: get("voice_lead_max_age_hours"),
+    voice_lead_holdout_pct: get("voice_lead_holdout_pct"),
+    voice_lead_hour_start: get("voice_lead_hour_start"),
+    voice_lead_hour_end: get("voice_lead_hour_end"),
+    voice_lead_campaign_ids: getAll("voice_lead_campaign_ids"),
+    voice_lead_product: get("voice_lead_product"),
+    voice_lead_offer: get("voice_lead_offer"),
     confirmation_cycle_days: get("confirmation_cycle_days"),
     telegram_chat_id: get("telegram_chat_id"),
     urgent_telegram_chat_id: get("urgent_telegram_chat_id"),

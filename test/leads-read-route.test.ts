@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   conversation: vi.fn(),
   alerts: vi.fn(),
   advisors: vi.fn(),
+  voicePanel: vi.fn(),
 }));
 vi.mock("@/lib/access", () => ({ getCurrentUser: mocks.user, getAccessibleStores: mocks.stores }));
 vi.mock("@/app/dashboard/leads/actions", () => ({
@@ -16,6 +17,7 @@ vi.mock("@/app/dashboard/leads/actions", () => ({
   loadLeadConversation: mocks.conversation,
   listYapeAlerts: mocks.alerts,
   listStoreVendedoras: mocks.advisors,
+  loadLeadVoicePanel: mocks.voicePanel,
 }));
 import { POST } from "@/app/api/leads/read/route";
 
@@ -64,11 +66,29 @@ describe("independent leads endpoint", () => {
     ["loadLeadConversation", [id, null, "true"]],
     ["loadLeadConversation", [id, null, false, "true"]],
     ["loadLeadCustomerHistory", [id, "extra argument"]],
+    // Agente de voz de leads (MOM §33): llamar y probar son mutaciones (marcan
+    // por Telnyx), nunca lecturas; el panel solo acepta un id de lead.
+    ["llamarLeadConAgente", [id]],
+    ["probarAgenteLeadEnMiTelefono", [id, "999888777"]],
+    ["loadLeadVoicePanel", ["not-a-uuid"]],
+    ["loadLeadVoicePanel", [id, "extra argument"]],
   ])("rejects mutations and malformed arguments (%s)", async (operation, args) => {
     expect((await POST(request(operation as string, args as unknown[]))).status).toBe(400);
     expect(mocks.search).not.toHaveBeenCalled();
     expect(mocks.history).not.toHaveBeenCalled();
     expect(mocks.conversation).not.toHaveBeenCalled();
+    expect(mocks.voicePanel).not.toHaveBeenCalled();
+  });
+
+  it("reads the lead voice-agent panel through the same allowlisted transport", async () => {
+    const panel = { data: { enabled: true, configured: false, eligible: false, reason: null, arm: null, optOut: false, calls: [] } };
+    mocks.voicePanel.mockResolvedValue(panel);
+    const response = await POST(request("loadLeadVoicePanel", [id]));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(panel);
+    expect(mocks.voicePanel).toHaveBeenCalledWith(id);
+    const log = JSON.parse(vi.mocked(console.info).mock.calls[0]![0]);
+    expect(log).toEqual({ event: "leads.read", operation: "loadLeadVoicePanel", durationMs: expect.any(Number), authMs: expect.any(Number), totalMs: expect.any(Number) });
   });
 
   it("returns the existing scope-filtered result without caching or logging customer data", async () => {
