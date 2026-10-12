@@ -5,7 +5,7 @@
  * una firma inválida.
  *
  * Aquí se VERIFICA y se REGISTRA cada aviso en `shopify_privacy_requests`
- * (0240), antes de responder. Atenderlo —anonimizar o entregar los datos a la
+ * (0245), antes de responder. Atenderlo —anonimizar o entregar los datos a la
  * tienda— es un trabajo aparte que deja la solicitud `atendida`; Shopify da
  * hasta 30 días. Lo único que se hace en el acto es cortar el acceso de la
  * tienda en un `shop/redact`, que llega 48 horas después de desinstalar.

@@ -263,6 +263,15 @@ export function OrderClosureDesk({
           ))}
         </div>
       )}
+      {/* Entrega declarada (MOM §8.3) no tiene botón aquí: la cierra el courier
+          al reportarla o quien la verifique fijando el estado. Sin esta línea
+          sería un pendiente sin salida a la vista. */}
+      {openReasons.includes("entrega_declarada") && (
+        <p className="text-[13px] leading-5 text-ink-600">
+          Alguien declaró que el cliente recibió este envío y el courier no lo reportó. Confirma la entrega y el cobro
+          con el courier y fija el estado en «Gestión manual»: entregado si se confirmó; el que corresponda si no.
+        </p>
+      )}
 
       {actions.length > 0 ? (
         <div className="grid gap-2 sm:grid-cols-2" role="group" aria-label="Acciones de cierre">

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { COTEJO_HORAS_LIMA } from "@/lib/shalom/account-match";
 
 // Guarda de `vercel.json`.
 //
@@ -77,7 +78,8 @@ describe("vercel.json", () => {
     // 20: reintento Aliclik → Swayp sin contacto (MOM §11.9).
     // 21: lectura automática de programaciones mensuales de Urpi.
     // 22: «Cotejar Olva», el tracking desde el portal de clientes (MOM §12).
-    expect(crons).toHaveLength(22);
+    // 23: «Cotejar Shalom» con reloj propio (MOM §12, 10-10-2026).
+    expect(crons).toHaveLength(23);
     for (const c of crons) {
       expect(c.path.startsWith("/api/cron/")).toBe(true);
       expect(c.schedule.trim().split(/\s+/)).toHaveLength(5);
@@ -103,6 +105,20 @@ describe("vercel.json", () => {
       expect(h).toBeGreaterThanOrEqual(7);
       expect(h).toBeLessThanOrEqual(18);
     }
+  });
+
+  it("Cotejar Shalom corre a sus horas de Lima y lejos de las pasadas del rastreo", () => {
+    // Tiene cron propio porque, colgado del final de shalom-reconcile, se
+    // quedaba sin tiempo para bajar el listado (10-10-2026, 16:00). Si
+    // arrancara en el mismo minuto que el rastreo (:00 y :30) volverían a
+    // pelearse por el mismo cupo de la API de Shalom.
+    const crons = cfg.crons as { path: string; schedule: string }[];
+    const cron = crons.find((c) => c.path === "/api/cron/shalom-cotejo");
+    expect(cron).toBeDefined();
+    const [minuto, horas] = cron!.schedule.split(" ");
+    expect(["0", "30"]).not.toContain(minuto);
+    const enLima = horas!.split(",").map((h) => (Number(h) + 24 - 5) % 24).sort((a, b) => a - b);
+    expect(enLima).toEqual([...COTEJO_HORAS_LIMA]);
   });
 
   it("el barrido de Aliclik y su cierre no arrancan en el mismo minuto", () => {

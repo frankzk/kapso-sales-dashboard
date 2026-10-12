@@ -6,6 +6,12 @@ import { buildFenixDemand, type DemandShipment } from "@/lib/fenix-demand";
 import { env } from "@/lib/env";
 import { FENIX_CITIES } from "@/lib/shipments";
 import { parseSenders, resumenDeBodegas } from "@/lib/swayp-guide";
+import {
+  buildSwaypOportunidades,
+  type OportunidadItem,
+  type OportunidadMasterRow,
+  type Oportunidades,
+} from "@/lib/swayp-oportunidades";
 import { fuenteAutomaticaDesdeEnv } from "@/lib/swayp-inventory-sync";
 import type { FenixStockRowDb, OrderLineItem } from "@/lib/types";
 
@@ -66,6 +72,10 @@ export default async function FenixStockPage() {
     demand = buildFenixDemand(rows, demandShipments);
   }
 
+  const oportunidades = storeIds.length
+    ? await cargarOportunidades(sb, storeIds, rows)
+    : buildSwaypOportunidades(rows, [], new Map());
+
   // Qué bodegas ve la app en SWAYP_SENDERS. Sólo para admins: es la única
   // forma de leer una variable Secret de Vercel sin editarla a ciegas.
   const bodegas = canEdit
@@ -78,10 +88,55 @@ export default async function FenixStockPage() {
       canEdit={canEdit}
       stores={stores}
       demand={demand}
+      oportunidades={oportunidades}
       bodegas={bodegas}
       syncResumen={await resumenDelSync(sb, canEdit)}
     />
   );
+}
+
+/**
+ * LAS OPORTUNIDADES: pedidos de Repro Provincia y de Por confirmar que saldrían
+ * por Swayp si su bodega tuviera el producto (`lib/swayp-oportunidades.ts`).
+ * Se leen del Master con la sesión de quien mira, así que la RLS decide qué
+ * tiendas entran, igual que en el resto de la página. Si una lectura falla
+ * devuelve null y la pantalla lo dice: una lista a medias se leería como «no
+ * hay nada que mandar».
+ */
+async function cargarOportunidades(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  storeIds: string[],
+  stock: FenixStockRowDb[],
+): Promise<Oportunidades | null> {
+  const PAGE = 1000;
+  const master: OportunidadMasterRow[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await sb
+      .from("order_master")
+      .select("order_id,order_name,macro_stage,macro_substage,macro_since,coverage,address,district,province,region,order_total")
+      .in("store_id", storeIds)
+      .or("macro_substage.eq.gestion_reproprovincia,macro_stage.eq.por_confirmar")
+      .order("order_id", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) return null;
+    const page = (data as OportunidadMasterRow[]) ?? [];
+    master.push(...page);
+    if (page.length < PAGE) break;
+  }
+
+  const itemsByOrder = new Map<string, OportunidadItem[]>();
+  const ids = master.map((m) => m.order_id);
+  for (let i = 0; i < ids.length; i += 300) {
+    const { data, error } = await sb.from("orders").select("id,line_items").in("id", ids.slice(i, i + 300));
+    if (error) return null;
+    for (const o of (data as { id: string; line_items: OrderLineItem[] | null }[]) ?? []) {
+      itemsByOrder.set(
+        o.id,
+        (o.line_items ?? []).map((li) => ({ title: li.title ?? null, sku: li.sku ?? null, quantity: li.quantity ?? 1 })),
+      );
+    }
+  }
+  return buildSwaypOportunidades(stock, master, itemsByOrder);
 }
 
 /**

@@ -228,6 +228,7 @@ export type MacroSubstage =
   | "recogido_sin_pago_completo"
   | "recuperacion_vencida"
   | "rechazo_no_reenviado"
+  | "entrega_declarada"
   | "indemnizacion_pendiente"
   | "merma_pendiente"
   | "reembolso_pendiente"
@@ -287,6 +288,7 @@ export const MACRO_SUBSTAGES_BY_STAGE: Record<
     "recogido_sin_pago_completo",
     "recuperacion_vencida",
     "rechazo_no_reenviado",
+    "entrega_declarada",
     "indemnizacion_pendiente",
     "merma_pendiente",
     "reembolso_pendiente",
@@ -342,6 +344,7 @@ export const MACRO_SUBSTAGE_LABEL: Record<MacroSubstage, string> = {
   recogido_sin_pago_completo: "Recogido sin pago completo",
   recuperacion_vencida: RECOVERY_LABEL.vencida,
   rechazo_no_reenviado: RECOVERY_LABEL.rechazo_no_reenviado,
+  entrega_declarada: "Entrega declarada · confirmar cobro",
   indemnizacion_pendiente: "Indemnización pendiente",
   merma_pendiente: "Merma pendiente",
   reembolso_pendiente: "Reembolso pendiente",
@@ -902,8 +905,30 @@ function closingReasons(input: ResolveMacroStageInput): MacroSubstage[] {
   if (isWorkflowOpen(events, ["refund_requested"], ["refund_completed"])) {
     reasons.push("reembolso_pendiente");
   }
-  if (isAnyShipmentWorkflowOpen(events, ["indemnity_requested"], ["indemnity_resolved"])) {
+  // `courier_loss_declared` (MOM §8.3): quien resolvió un duplicado declaró que
+  // el courier perdió esta salida. Abre la indemnización igual que la solicitud
+  // formal; finanzas la completa con monto y la resuelve por la misma puerta.
+  if (isAnyShipmentWorkflowOpen(events, ["indemnity_requested", "courier_loss_declared"], ["indemnity_resolved"])) {
     reasons.push("indemnizacion_pendiente");
+  }
+  // ENTREGA DECLARADA (MOM §8.3). Una persona dijo que el cliente recibió una
+  // salida que el courier no reportó entregada. La guía no se toca —esa verdad
+  // es del courier—, pero el pedido no puede seguir «en curso»: si se entregó,
+  // hay un cobro que reclamar. Se cierra cuando el pedido pasa a `entregado`
+  // (el courier lo reporta, o un responsable lo confirma) o cuando un
+  // responsable fija el estado a mano después de la declaración, también si
+  // la declaración resultó falsa. Sin esa salida sería otro pedido atascado.
+  {
+    const declared = latestEvent(events, ["delivery_declared"]);
+    const decided = latestEvent(events, ["status_override"]);
+    if (
+      declared &&
+      legacy.general !== "entregado" &&
+      !input.order.cancelled_at &&
+      (!decided || decided.occurred_at < declared.occurred_at)
+    ) {
+      reasons.push("entrega_declarada");
+    }
   }
   if (isWorkflowOpen(events, ["merma_pending"], ["merma_closed"])) {
     reasons.push("merma_pendiente");

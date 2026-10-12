@@ -15,7 +15,7 @@ import { isValidShopDomain, verifyShopifyOAuthHmac } from "@/lib/shopify";
 
 /** Cookie que ata la instalación pendiente al navegador que hizo el OAuth. */
 export const PENDING_INSTALL_COOKIE = "kapta_shopify_install";
-/** Lo mismo que el `default` de `shopify_pending_installs.expires_at` (0240). */
+/** Lo mismo que el `default` de `shopify_pending_installs.expires_at` (0245). */
 export const PENDING_INSTALL_TTL_MINUTES = 30;
 /** Cookie del `state` del OAuth (CSRF), propia de esta app. */
 export const CLIENT_OAUTH_STATE_COOKIE = "shopify_client_oauth_state";

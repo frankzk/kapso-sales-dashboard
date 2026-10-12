@@ -481,6 +481,12 @@
 \ir migrations/0238_auto_order_ab.sql
 \echo 'Applying 0239_swayp_link_emission_on_fill.sql'
 \ir migrations/0239_swayp_link_emission_on_fill.sql
-\echo 'Applying 0240_shopify_client_app.sql'
-\ir migrations/0240_shopify_client_app.sql
+\echo 'Applying 0240_order_master_stale_sin_tope.sql'
+\ir migrations/0240_order_master_stale_sin_tope.sql
+\echo 'Applying 0241_order_master_stale_cerrada.sql'
+\ir migrations/0241_order_master_stale_cerrada.sql
+\echo 'Applying 0242_pickup_reminder.sql'
+\ir migrations/0242_pickup_reminder.sql
+\echo 'Applying 0245_shopify_client_app.sql'
+\ir migrations/0245_shopify_client_app.sql
 \echo 'Done.'
