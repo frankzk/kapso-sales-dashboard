@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0242_gf_same_day_cutoff_noon.sql — el corte del mismo día de Grupo GF pasa de
+-- 0244_gf_same_day_cutoff_noon.sql — el corte del mismo día de Grupo GF pasa de
 -- las 11:30 a las 12:00.
 --
 -- DECISIÓN DEL OWNER (11-10-2026, «Reprogramación en Lima: quién hace qué»):

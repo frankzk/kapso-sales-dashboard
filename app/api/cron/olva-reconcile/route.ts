@@ -5,6 +5,7 @@ import { env } from "@/lib/env";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { describeOlvaError, fetchOlvaTracking } from "@/lib/olva/client";
 import { enqueueTransitNotification, processTransitNotifications } from "@/lib/shalom/transit-notify";
+import { enqueueDueReminders } from "@/lib/shalom/pickup-reminder";
 import {
   formatOlvaTracking,
   olvaNeedsTracking,
@@ -248,6 +249,11 @@ export async function GET(req: NextRequest) {
   // rastreo: el rastreo es lo que no puede esperar, y un aviso que se queda en
   // cola sale en la pasada siguiente. Drena la cola entera —también Shalom—,
   // igual que el cron de Shalom drena la de Olva: es una sola cola.
+  //
+  // Antes, el recordatorio de recojo de Olva (0242): solo el del día 3, porque
+  // Olva devuelve a los 6. Se encola aquí para que salga en esta pasada.
+  const recordatorios = await enqueueDueReminders(admin, { courier: "olva" });
+  errors.push(...recordatorios.errores);
   const elapsed = Date.now() - startedAt;
   const avisos = await processTransitNotifications(admin, {
     budgetMs: Math.max(20_000, 270_000 - elapsed),
@@ -270,6 +276,13 @@ export async function GET(req: NextRequest) {
     failed,
     // Avisos por WhatsApp: cuántos entraron a la cola y cómo quedó tras drenarla.
     avisos: { encolados: queued, ...avisos },
+    recordatorios: {
+      tiendas: recordatorios.tiendas,
+      guias: recordatorios.guias,
+      encolados: recordatorios.encolados,
+      porTope: recordatorios.porTope,
+      motivos: recordatorios.motivos,
+    },
     ...(skippedByBudget ? { skippedByBudget } : {}),
     ...(rejected.size ? { rechazos: top(rejected) } : {}),
     // Si aparece algo aquí, hay que añadirlo al traductor con su significado.

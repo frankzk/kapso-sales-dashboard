@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import {
   checkListingContract,
   collectListingPages,
+  LISTING_WINDOW_DAYS,
+  listingFromDate,
   CONTRACT_MIN_AGREEMENT,
   CONTRACT_MIN_COMPARED,
   COTEJO_HORAS_LIMA,
@@ -316,6 +318,28 @@ describe("antes de creerse el listado", () => {
   });
 });
 
+describe("desde cuándo se pide el listado", () => {
+  const DAY = 86_400_000;
+  const now = Date.parse("2026-10-11T19:00:00Z");
+
+  it("dos días antes del pedido más viejo, si cae dentro de lo que Shalom entrega", () => {
+    expect(listingFromDate(Date.parse("2026-10-01T15:00:00Z"), now)).toBe("2026-09-29");
+  });
+
+  it("nunca antes de la ventana del listado (~45 días): pedirlo más atrás no trae nada", () => {
+    // El 11-10-2026 se pidió desde el 19-08 y faltaron justo las 160 guías de
+    // la API anteriores al 27-08: Shalom no las entrega.
+    expect(LISTING_WINDOW_DAYS).toBe(44);
+    expect(listingFromDate(Date.parse("2026-08-21T12:00:00Z"), now)).toBe(
+      new Date(now - LISTING_WINDOW_DAYS * DAY).toISOString().slice(0, 10),
+    );
+  });
+
+  it("sin pedidos con fecha, la ventana manda", () => {
+    expect(listingFromDate(Number.POSITIVE_INFINITY, now)).toBe("2026-10-09");
+  });
+});
+
 describe("bajar el listado entero", () => {
   const orden = (id: number): ShalomAccountOrder => ({ id, guia: String(90000000 + id) });
   const paginas = (total: number, perPage: number) => async (page: number) =>
@@ -351,6 +375,42 @@ describe("bajar el listado entero", () => {
     const r = await collectListingPages(paginas(3, 10), { perPage: 10, maxPages: 5, deadlineMs: Date.now() + 60_000 });
     expect(r).toMatchObject({ completo: true, paginas: 2 });
     expect(r.orders).toHaveLength(3);
+  });
+
+  it("de a tres a la vez lee lo mismo, en orden, y para en la página corta", async () => {
+    const pedidas: number[] = [];
+    let enVuelo = 0;
+    let maxEnVuelo = 0;
+    const lenta = async (page: number) => {
+      pedidas.push(page);
+      enVuelo += 1;
+      maxEnVuelo = Math.max(maxEnVuelo, enVuelo);
+      await new Promise((r) => setTimeout(r, 5));
+      enVuelo -= 1;
+      return paginas(23, 4)(page);
+    };
+    const r = await collectListingPages(lenta, { perPage: 10, maxPages: 20, deadlineMs: Date.now() + 60_000, concurrency: 3 });
+    expect(r).toMatchObject({ completo: true, paginas: 6 });
+    expect(r.orders.map((o) => o.id)).toEqual(Array.from({ length: 23 }, (_, i) => i + 1));
+    expect(maxEnVuelo).toBe(3);
+    // Dos tandas: 1-3 y 4-6. La 6 es la corta; no se pide una tercera tanda.
+    expect([...pedidas].sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("de a tres, la tanda que trae la vacía también cierra el listado", async () => {
+    const r = await collectListingPages(paginas(12, 4), { perPage: 10, maxPages: 20, deadlineMs: Date.now() + 60_000, concurrency: 3 });
+    expect(r).toMatchObject({ completo: true, paginas: 4 });
+    expect(r.orders).toHaveLength(12);
+  });
+
+  it("de a tres, si una página falla, falla el listado (no se da por entero)", async () => {
+    const falla = async (page: number) => {
+      if (page === 2) throw new Error("No hubo respuesta de Shalom");
+      return paginas(100, 10)(page);
+    };
+    await expect(
+      collectListingPages(falla, { perPage: 10, maxPages: 20, deadlineMs: Date.now() + 60_000, concurrency: 3 }),
+    ).rejects.toThrow("No hubo respuesta");
   });
 
   it("si el wrapper ignora `page` y repite, el listado NO está entero", async () => {

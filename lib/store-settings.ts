@@ -156,6 +156,14 @@ export interface StoreSettingsInput {
   olva_arrival_template_enabled?: string | boolean;
   olva_arrival_template_name?: string;
   olva_arrival_params?: string;
+  /** Recordatorio de recojo, día 3 y día 7 en la agencia (0242). */
+  shalom_reminder_template_enabled?: string | boolean;
+  shalom_reminder_template_name?: string;
+  shalom_reminder_params?: string;
+  olva_reminder_template_enabled?: string | boolean;
+  olva_reminder_template_name?: string;
+  olva_reminder_params?: string;
+  shalom_reminder_fallback_image_url?: string;
   // Portal de clientes de Olva, para «Cotejar Olva» (0218). La contraseña
   // sigue la regla de los secretos: vacía = se conserva la guardada.
   olva_portal_username?: string;
@@ -528,6 +536,27 @@ export function buildStoreUpdate(
   ] as const) {
     const v = clean(input[k]);
     if (v !== null) patch[k] = v;
+  }
+
+  // El recordatorio de recojo (0242): mismas reglas que los otros avisos.
+  for (const k of ["shalom_reminder_template_enabled", "olva_reminder_template_enabled"] as const) {
+    if (input[k] !== undefined) patch[k] = input[k] === true || input[k] === "true";
+  }
+  for (const k of [
+    "shalom_reminder_template_name",
+    "shalom_reminder_params",
+    "olva_reminder_template_name",
+    "olva_reminder_params",
+  ] as const) {
+    const v = clean(input[k]);
+    if (v !== null) patch[k] = v;
+  }
+  // Vaciable —quitarla es volver a «sin foto, no sale»— y solo https: Meta
+  // baja la imagen al enviar, y una URL que no puede abrir tumba el envío.
+  if (input.shalom_reminder_fallback_image_url !== undefined) {
+    const v = clean(input.shalom_reminder_fallback_image_url);
+    if (v === null) patch.shalom_reminder_fallback_image_url = null;
+    else if (/^https:\/\/\S+$/i.test(v)) patch.shalom_reminder_fallback_image_url = v;
   }
 
   // Portal de clientes de Olva (0218). Un RUC que no son 11 dígitos no se

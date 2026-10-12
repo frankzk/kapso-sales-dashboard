@@ -40,22 +40,52 @@ function titleKey(title: string | null | undefined): string {
   return String(title ?? "").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
+type ItemWithProduct = { product_id?: string | number | null; title?: string | null };
+
+/** El producto del catálogo (con foto) de UN artículo: por `product_id` si
+ *  viene, y si no por el título. */
+function catalogProductOf(item: ItemWithProduct, catalog: CatalogImage[]): string | null {
+  const pid = item.product_id == null ? "" : String(item.product_id).trim();
+  if (pid && catalog.some((c) => c.product_id === pid)) return pid;
+  const key = titleKey(item.title);
+  if (!key) return null;
+  return catalog.find((c) => titleKey(c.catalog_title) === key)?.product_id ?? null;
+}
+
 /**
  * El producto (con foto) del primer artículo del carrito, o null si no se
  * encuentra: entonces el carrito queda fuera de la prueba.
  */
 export function cartProductWithImage(
-  lineItems: { product_id?: string | number | null; title?: string | null }[] | null | undefined,
+  lineItems: ItemWithProduct[] | null | undefined,
   catalog: CatalogImage[],
 ): string | null {
   const first = (lineItems ?? [])[0];
   if (!first) return null;
-  const ids = new Set(catalog.map((c) => c.product_id));
-  const pid = first.product_id == null ? "" : String(first.product_id).trim();
-  if (pid && ids.has(pid)) return pid;
-  const key = titleKey(first.title);
-  if (!key) return null;
-  return catalog.find((c) => titleKey(c.catalog_title) === key)?.product_id ?? null;
+  return catalogProductOf(first, catalog);
+}
+
+/**
+ * El primer artículo del pedido QUE TENGA foto, recorriéndolos en orden, o
+ * null si ninguno la tiene. Lo usa el recordatorio de recojo (0242), cuya
+ * plantilla lleva la foto en la cabecera: en un pedido de dos productos donde
+ * el primero no tiene foto, el segundo sirve igual — es su paquete.
+ *
+ * Distinto de `cartProductWithImage` a propósito: la prueba de carritos decide
+ * por el PRIMER artículo y no se toca, o los dos brazos dejarían de ser
+ * comparables con lo ya medido. La regla para casar es la misma.
+ */
+export function firstProductWithImage(
+  lineItems: unknown,
+  catalog: CatalogImage[],
+): string | null {
+  if (!Array.isArray(lineItems)) return null;
+  for (const item of lineItems) {
+    if (!item || typeof item !== "object") continue;
+    const pid = catalogProductOf(item as ItemWithProduct, catalog);
+    if (pid) return pid;
+  }
+  return null;
 }
 
 /**

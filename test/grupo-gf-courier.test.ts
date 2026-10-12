@@ -345,8 +345,8 @@ describe("corte del mismo día (MOM §29.6, decisión del 11-10-2026)", () => {
     }
   });
 
-  it("la migración 0242 mueve el proveedor y sus convenios a las 12:00 sin pisar un corte cambiado a mano", () => {
-    const sql = readFileSync(resolve(process.cwd(), "db/migrations/0242_gf_same_day_cutoff_noon.sql"), "utf8");
+  it("la migración 0244 mueve el proveedor y sus convenios a las 12:00 sin pisar un corte cambiado a mano", () => {
+    const sql = readFileSync(resolve(process.cwd(), "db/migrations/0244_gf_same_day_cutoff_noon.sql"), "utf8");
     expect(sql).toContain("set same_day_cutoff = time '12:00'");
     expect(sql).toContain("and same_day_cutoff = time '11:30'");
     expect(sql).toContain("and a.same_day_cutoff = time '11:30'");

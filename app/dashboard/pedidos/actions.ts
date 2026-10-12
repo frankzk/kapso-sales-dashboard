@@ -34,6 +34,9 @@ import {
   type VoiceExclusion,
 } from "@/lib/voice-recovery-queue";
 import type { VoiceAgentPanelData } from "@/lib/voice-recovery-labels";
+import { webrtcConfigFromEnv, webrtcLoginToken } from "@/lib/telnyx-webrtc";
+import { telnyxPeruE164 } from "@/lib/telnyx";
+import { browserCallNote, parseBrowserCallReport } from "@/lib/browser-call";
 import {
   getOrderConfirmationBrief,
   getOrderMasterDetail,
@@ -198,7 +201,7 @@ export async function loadOrderDetail(
     if (!ctx) return { error: "Sin acceso a este pedido." };
     const detail = await getOrderMasterDetail(orderId);
     if (!detail) return { error: "No encontrado." };
-    return { detail };
+    return { detail: { ...detail, browserCallEnabled: webrtcConfigFromEnv() !== null } };
   } catch (cause) {
     // El drawer enseña este texto y nada más, así que tiene que decir la verdad:
     // "No encontrado" solo cuando la base respondió que no hay fila. Si respondió
@@ -2516,4 +2519,75 @@ export async function probarAgenteEnMiTelefono(
         ? "Te llama el Agente Telnyx (número +1). Es una prueba: nada se escribe sobre el pedido."
         : "Te estamos llamando. Es una prueba: nada se escribe sobre el pedido.",
   };
+}
+
+// ---------------------------------------------------------------------------
+// Llamar desde la computadora (MOM §8.5)
+// ---------------------------------------------------------------------------
+
+export type BrowserCallSetup =
+  | { ok: true; token: string; to: string; from: string }
+  | { ok: false; error: string };
+
+/**
+ * Lo que el navegador necesita para llamar a la clienta: el token de la línea
+ * (24 horas, de la credencial de quien llama), a quién marca y con qué número.
+ * La clave de Telnyx no sale del servidor.
+ */
+export async function startBrowserCall(orderId: string): Promise<BrowserCallSetup> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { ok: false, error: "Tu rol no permite llamar desde Kapta." };
+  const cfg = webrtcConfigFromEnv();
+  if (!cfg) return { ok: false, error: "La línea para llamar desde la computadora todavía no está configurada." };
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { ok: false, error: "Sin acceso a este pedido." };
+  const to = telnyxPeruE164(ctx.row.customer_phone);
+  if (!to) return { ok: false, error: "El teléfono del cliente no es un número peruano válido." };
+  const login = await webrtcLoginToken(createAdminSupabase(), cfg, ctx.userId);
+  if ("error" in login) return { ok: false, error: login.error };
+  return { ok: true, token: login.token, to, from: cfg.fromNumber };
+}
+
+/**
+ * Deja la llamada en el historial del pedido (`browser_call`), con quién llamó,
+ * a qué número, desde cuál y cuánto se habló. Es un hecho, no la gestión: el
+ * resultado («confirma», «no contesta»…) se sigue registrando en la mesa de
+ * confirmación. Una misma llamada se guarda una sola vez.
+ */
+export async function recordBrowserCall(orderId: string, raw: unknown): Promise<MasterActionState> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite llamar desde Kapta." };
+  const report = parseBrowserCallReport(raw);
+  if (!report) return { error: "La llamada llegó incompleta y no se guardó." };
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  const admin = createAdminSupabase();
+  const { data: existing, error: readError } = await admin
+    .from("order_events")
+    .select("id")
+    .eq("order_id", orderId)
+    .eq("kind", "browser_call")
+    .eq("payload->>call_id", report.callId)
+    .limit(1);
+  if (readError) return { error: `No se pudo guardar la llamada: ${readError.message}` };
+  if (existing?.length) return { notice: "La llamada ya estaba guardada." };
+  const to = telnyxPeruE164(ctx.row.customer_phone) ?? ctx.row.customer_phone ?? "";
+  const from = webrtcConfigFromEnv()?.fromNumber ?? "";
+  const eventError = await recordEvent(admin, ctx, {
+    kind: "browser_call",
+    source: "telnyx",
+    note: browserCallNote(report, to, from),
+    payload: {
+      call_id: report.callId,
+      answered: report.answered,
+      talk_seconds: report.talkSeconds,
+      total_seconds: report.totalSeconds,
+      cause: report.cause,
+      sip_code: report.sipCode,
+      to,
+      from,
+    },
+  });
+  if (eventError) return { error: `No se pudo guardar la llamada: ${eventError}` };
+  return { notice: "Llamada guardada en el historial." };
 }

@@ -252,6 +252,15 @@ export default async function StoreSettingsPage({
       olva_arrival_template_enabled: full.olva_arrival_template_enabled ?? false,
       olva_arrival_template_name: full.olva_arrival_template_name ?? null,
       olva_arrival_params: full.olva_arrival_params ?? null,
+      // Pre-0242 las columnas no existen ⇒ recordatorio apagado, defaults de la
+      // migración.
+      shalom_reminder_template_enabled: full.shalom_reminder_template_enabled ?? false,
+      shalom_reminder_template_name: full.shalom_reminder_template_name ?? "guias_shalom_recordatorio",
+      shalom_reminder_params: full.shalom_reminder_params ?? "nombre,agencia,guia,saldo,vence",
+      olva_reminder_template_enabled: full.olva_reminder_template_enabled ?? false,
+      olva_reminder_template_name: full.olva_reminder_template_name ?? "guias_olva_recordatorio",
+      olva_reminder_params: full.olva_reminder_params ?? "nombre,agencia,guia,saldo,vence",
+      shalom_reminder_fallback_image_url: full.shalom_reminder_fallback_image_url ?? null,
       olva_portal_username: full.olva_portal_username ?? null,
       olva_portal_ruc: full.olva_portal_ruc ?? null,
       flowcl_link_enabled: full.flowcl_link_enabled ?? false,
