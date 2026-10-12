@@ -489,4 +489,6 @@
 \ir migrations/0242_pickup_reminder.sql
 \echo 'Applying 0243_telnyx_webrtc_credentials.sql'
 \ir migrations/0243_telnyx_webrtc_credentials.sql
+\echo 'Applying 0244_gf_same_day_cutoff_noon.sql'
+\ir migrations/0244_gf_same_day_cutoff_noon.sql
 \echo 'Done.'
