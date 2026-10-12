@@ -2089,22 +2089,59 @@ suyo cambia.
    Supabase: `0245_shopify_client_app` y `0245_shopify_client_app_revoke_defaults`
    (el `revoke` a `anon` y `authenticated` se añadió después; el fichero ya lo
    trae completo).
-2. **Crear la app en el Dev Dashboard**, distinta de
-   «kapso-sales-dashboard-aurelape»:
-   - **App URL**: `https://kapso-sales-dashboard.vercel.app/api/shopify/clientes/entrada`.
-   - **Allowed redirection URL**: `https://kapso-sales-dashboard.vercel.app/api/shopify/clientes/callback`.
-   - **Compliance webhooks** (los tres, misma URL):
-     `https://kapso-sales-dashboard.vercel.app/api/shopify/clientes/cumplimiento`
-     para `customers/data_request`, `customers/redact` y `shop/redact`.
-   - **Scopes** (alcances): los de la app interna más `write_orders`, y nada
-     más — tienen que coincidir con `SHOPIFY_CLIENT_APP_SCOPES`:
-     `read_orders,read_draft_orders,write_draft_orders,read_products,read_customers,write_orders`.
+2. **La app «Kapta» en el Dev Dashboard** (organización Grupo GF SAC), distinta
+   de «kapso-sales-dashboard-aurelape». **Creada el 12-10-2026**; la versión
+   `kapta-3` es la que tiene todo. Su configuración completa:
+
+   ```toml
+   client_id = "…"            # el de la app; no va al repositorio
+   name = "Kapta"
+   application_url = "https://kapso-sales-dashboard.vercel.app/api/shopify/clientes/entrada"
+   embedded = false           # Kapta abre en su pestaña; incrustada no hay login ni OAuth
+
+   [build]
+   automatically_update_urls_on_dev = false
+
+   [webhooks]
+   api_version = "2026-10"
+
+     [[webhooks.subscriptions]]
+     compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+     uri = "https://kapso-sales-dashboard.vercel.app/api/shopify/clientes/cumplimiento"
+
+   [access_scopes]
+   # = SHOPIFY_CLIENT_APP_SCOPES: los de la app interna más write_orders
+   scopes = "read_customers,write_draft_orders,read_draft_orders,read_orders,write_orders,read_products"
+   optional_scopes = [ ]
+   use_legacy_install_flow = false   # instalación gestionada por Shopify
+
+   [auth]
+   redirect_urls = [
+     "https://kapso-sales-dashboard.vercel.app/api/shopify/clientes/callback"
+   ]
+   ```
+
+   - **Los webhooks de privacidad no se pueden poner desde el formulario** del
+     Dev Dashboard (ni al crear ni en «Crear versión»). Se suben con la CLI:
+     `npm init @shopify/app@latest` → «Build an extension-only app» → org
+     Grupo GF SAC → «No, connect it to an existing app» → Kapta. Eso deja una
+     carpeta con `shopify.app.toml`; se deja igual al bloque de arriba y se
+     corre `shopify app deploy`, revisando el resumen antes de confirmar.
+   - **La plantilla trae ejemplos que NO deben subirse:** bloques
+     `[metaobjects.app.faq…]`, `[product.metafields.app.faq…]`, `[sidekick]` y
+     `[access.admin]` en el toml, y las extensiones `extensions/app-home` y
+     `extensions/app-tools`. Se borran antes del `deploy` («Extensions: None»
+     en el resumen).
+   - **Nunca `shopify app dev`** con esta app: cambia las URLs por un túnel
+     temporal.
+   - **Alcances:** cada uno tiene que poder justificarse en la revisión.
      `write_orders` sirve para corregir la dirección de un pedido ya creado y
-     etiquetarlo. Cada alcance tiene que poder justificarse en la revisión.
-   - **Embedded**: desactivado (Kapta abre en su propia pestaña).
+     etiquetarlo. Si se cambian, cambiar también `SHOPIFY_CLIENT_APP_SCOPES`.
    - **Distribución**: pública, visibilidad **oculta**. Es definitivo. **No**
      enviar a revisión todavía: falta la segunda parte (anonimizar y entregar
      datos, registro de accesos).
+   - **Datos protegidos de clientes** (nombre, teléfono y dirección del
+     comprador): se piden aparte, con la justificación «entrega contraentrega».
 3. **Variables en Vercel** (Production), copiadas directo del Dev Dashboard,
    nunca por chat ni al repositorio:
    - `SHOPIFY_CLIENT_APP_API_KEY` = Client ID de la app nueva.
