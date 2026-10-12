@@ -17,7 +17,7 @@
 //
 // Lo del MISMO día no cambia: «Ya estaba» o «En la caja de otro».
 //
-// LA CAJA REEMPLAZADA (12-10-2026, «Sacar con salida nueva», 0246). Si el
+// LA CAJA REEMPLAZADA (12-10-2026, «Sacar con salida nueva», 0247). Si el
 // pedido ya salió con otra salida, el escaneo de la anterior —sea de la caja
 // que sea— solo la recibe en oficina para devolverla a stock: no se asigna ni
 // se toma, porque el pedido ya va con la nueva.
@@ -83,7 +83,7 @@ export function receivedFromLabel(riderName: string, boxRouteDate: string): stri
 }
 
 /**
- * Lo que se dice al recibir la caja reemplazada (0246): vuelve a stock y el
+ * Lo que se dice al recibir la caja reemplazada (0247): vuelve a stock y el
  * pedido sigue con su salida nueva. `outputCode` es la reemplazada.
  */
 export function replacedReceivedMessage(outputCode: string | null | undefined, riderName: string, boxRouteDate: string, newCode?: string | null): string {

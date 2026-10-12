@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
--- 0246: «Sacar con salida nueva». El motorizado todavía tiene la caja «No
+-- 0247: «Sacar con salida nueva». El motorizado todavía tiene la caja «No
 -- entregado» (S01) y el pedido sale con otra salida (S02). La S01 queda en
 -- devolución a su nombre; su parada ya no cambia; al recibirla vuelve a stock
 -- (devuelta, con `dispatched_at`) y no vuelve a «por asignar».
@@ -15,9 +15,9 @@ insert into logistics_providers(id,org_id,code,name,status,same_day_cutoff,cash_
 insert into logistics_service_agreements(id,provider_id,client_org_id,store_id,client_label) values
  ('24600000-0000-0000-0000-000000000021','24600000-0000-0000-0000-000000000020','24600000-0000-0000-0000-000000000001','24600000-0000-0000-0000-000000000002','Store GF');
 insert into peru_districts(district_key,district,province,department,source) values
- ('zz smoke 0246','Smoke 0246','Lima','Lima','manual') on conflict do nothing;
+ ('zz smoke 0247','Smoke 0247','Lima','Lima','manual') on conflict do nothing;
 insert into logistics_district_tariffs(id,provider_id,agreement_id,district_key,delivery_amount,rejection_amount) values
- ('24600000-0000-0000-0000-000000000022','24600000-0000-0000-0000-000000000020','24600000-0000-0000-0000-000000000021','zz smoke 0246',10,10);
+ ('24600000-0000-0000-0000-000000000022','24600000-0000-0000-0000-000000000020','24600000-0000-0000-0000-000000000021','zz smoke 0247',10,10);
 insert into orders(id,store_id,shopify_order_id,name) values
  ('24600000-0000-0000-0000-000000000004','24600000-0000-0000-0000-000000000002','gf-x-1','#GX1'),
  ('24600000-0000-0000-0000-000000000005','24600000-0000-0000-0000-000000000002','gf-x-2','#GX2');
@@ -28,7 +28,7 @@ insert into shipments(id,store_id,courier,guide_code,order_id,order_name,prepara
  ('24600000-0000-0000-0000-000000000007','24600000-0000-0000-0000-000000000002','propio','GX-2','24600000-0000-0000-0000-000000000005','#GX2','listo_despacho','empresa','pendiente');
 insert into logistics_requests(id,provider_id,agreement_id,store_id,order_id,shipment_id,idempotency_key,status,district_key,tariff_id,tariff_amount,scheduled_for) values
  ('24600000-0000-0000-0000-000000000030','24600000-0000-0000-0000-000000000020','24600000-0000-0000-0000-000000000021','24600000-0000-0000-0000-000000000002',
-  '24600000-0000-0000-0000-000000000004','24600000-0000-0000-0000-000000000006','smoke-0246-1','scheduled','zz smoke 0246','24600000-0000-0000-0000-000000000022',10,current_date);
+  '24600000-0000-0000-0000-000000000004','24600000-0000-0000-0000-000000000006','smoke-0247-1','scheduled','zz smoke 0247','24600000-0000-0000-0000-000000000022',10,current_date);
 do $$
 declare
   v_load uuid; v_route uuid; v_item1 uuid; v_item2 uuid; v_orders uuid[]; v_res jsonb; v_order uuid;
@@ -141,7 +141,7 @@ begin
   if (select custody_state from shipments where id=v_t01) <> 'courier' then raise exception 'failed replace left custody changed'; end if;
   insert into logistics_requests(id,provider_id,agreement_id,store_id,order_id,idempotency_key,status,district_key,tariff_id,tariff_amount,scheduled_for) values
    ('24600000-0000-0000-0000-000000000031','24600000-0000-0000-0000-000000000020','24600000-0000-0000-0000-000000000021','24600000-0000-0000-0000-000000000002',
-    '24600000-0000-0000-0000-000000000005','smoke-0246-2','accepting','zz smoke 0246','24600000-0000-0000-0000-000000000022',10,current_date);
+    '24600000-0000-0000-0000-000000000005','smoke-0247-2','accepting','zz smoke 0247','24600000-0000-0000-0000-000000000022',10,current_date);
   perform gf_replace_output(v_item2,v_t02,'24600000-0000-0000-0000-000000000031',current_date,'Alexis no entregó GX-2',v_actor);
   if (select status from logistics_requests where id='24600000-0000-0000-0000-000000000031') <> 'accepted' then raise exception 'new request not accepted'; end if;
   if (select shipment_id from logistics_requests where id='24600000-0000-0000-0000-000000000031') <> v_t02 then raise exception 'new request not linked'; end if;
@@ -239,7 +239,7 @@ begin
     if sqlerrm not like 'La salida ya está en devolución%' then raise exception 'expected the return-requested refusal, got %', sqlerrm; end if;
   end;
   -- Reprogramada y con el retorno pedido, el cuaderno la sigue pasando a la
-  -- ruta siguiente, como antes de la 0246: no se reemplazó.
+  -- ruta siguiente, como antes de la 0247: no se reemplazó.
   update delivery_stops set outcome_reason='reprogramado' where route_id=v_route and shipment_id=v_s5;
   perform gf_carry_over('24600000-0000-0000-0000-000000000003',current_date+4,array[v_s5],v_actor);
   if (select removed_at from dispatch_manifest_items where id=v_item5) is null then raise exception 'return-requested reprogramado did not carry over'; end if;

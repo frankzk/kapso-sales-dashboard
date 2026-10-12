@@ -14,7 +14,7 @@ import { Badge, OpsButton } from "@/components/ops-ui";
  * entregado» que vuelve con el motorizado. Cámara en serie, como al asignar,
  * con «Devueltos X de N». Cada lectura lo saca de la caja (0188/0206) y lo
  * vuelve a «por asignar», rechazo incluido (v1.23). La caja reemplazada por
- * otra salida (0246) vuelve a stock. Se recibe por SALIDA: un pedido puede
+ * otra salida (0247) vuelve a stock. Se recibe por SALIDA: un pedido puede
  * tener dos cajas «No entregado» con dos motorizados.
  */
 export function ReturnsScanner({ orgId, pending }: { orgId: string; pending: PendingReturn[] }) {

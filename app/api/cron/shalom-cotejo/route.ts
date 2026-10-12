@@ -62,6 +62,8 @@ export async function GET(req: NextRequest) {
     sinPareja: cotejo.sinPareja,
     porTope: cotejo.porTope,
     sinCotejar: cotejo.sinCotejar,
+    // Solo la cuenta: las claves nunca salen en la respuesta ni en la bitácora.
+    clavesRellenadas: cotejo.clavesRellenadas,
     cuentas: cotejo.cuentas,
     detalle: cotejo.detalle,
     errores: cotejo.errores,

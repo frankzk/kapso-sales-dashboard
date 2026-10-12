@@ -269,7 +269,7 @@ export function reprogramBlockReason(outputs: readonly OutputLike[], replaced: R
 //
 // El motorizado todavía tiene la caja «No entregado» y el pedido tiene que
 // salir antes de que la traiga: se arma otra caja desde stock con salida, QR y
-// rótulo nuevos (`gf_replace_output`, 0246). La anterior queda en devolución a
+// rótulo nuevos (`gf_replace_output`, 0247). La anterior queda en devolución a
 // su nombre y, al recibirla, vuelve a stock. Vale para cualquier motorizado con
 // caja de Grupo GF; no hay umbral de días.
 

@@ -129,7 +129,7 @@ interface ScanCandidates {
 const NO_SCAN_CANDIDATES: ScanCandidates = { candidates: [], byOrderName: false, hold: null };
 
 /**
- * «Sacar con salida nueva» (0246, MOM §29.13): mientras la caja reemplazada
+ * «Sacar con salida nueva» (0247, MOM §29.13): mientras la caja reemplazada
  * siga fuera, el pedido tiene dos cajas con el mismo código de barras —la que
  * vuelve con el motorizado y la nueva—. El número de pedido no dice cuál está
  * en la mano: no elige ninguna, ni para tomar, asignar, recibir o cotejar.
@@ -483,7 +483,7 @@ async function receiveGrupoGfReturn(shipment: DispatchShipment): Promise<Dispatc
       .in("kind", ["returned_to_office", "reclaimed_in_office"])
       .limit(1),
     cancelledScanNotice(admin, shipment.order_id),
-    // La caja reemplazada por otra salida (0246): vuelve a stock, no a la cola.
+    // La caja reemplazada por otra salida (0247): vuelve a stock, no a la cola.
     admin
       .from("order_events")
       .select("id")

@@ -64,7 +64,7 @@ begin
     raise exception 'la región no debe resolverse buscando dentro del texto';
   end if;
 
-  -- 6b. Grafías sin el «de» (0245, owner 12-10-2026): «San Juan Lurigancho» es
+  -- 6b. Grafías sin el «de» (0246, owner 12-10-2026): «San Juan Lurigancho» es
   --     SJL, nunca Lurigancho-Chosica, también dentro de una frase.
   if resolve_lima_district('San juan lurigancho', false) is distinct from 'san juan de lurigancho' then
     raise exception 'San Juan Lurigancho debe ser San Juan de Lurigancho';

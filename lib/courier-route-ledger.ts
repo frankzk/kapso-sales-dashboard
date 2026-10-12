@@ -45,9 +45,9 @@ export interface CourierLedgerRow {
 
 /** Un «No entregado» que sigue en la caja del motorizado, esperando volver. */
 export interface PendingReturn {
-  /** La salida de la caja: se recibe por ella, no por pedido (0246). */
+  /** La salida de la caja: se recibe por ella, no por pedido (0247). */
   shipmentId: string;
-  /** Es la caja reemplazada por otra salida (0246): al recibirla vuelve a stock. */
+  /** Es la caja reemplazada por otra salida (0247): al recibirla vuelve a stock. */
   replaced: boolean;
   orderId: string;
   orderName: string;

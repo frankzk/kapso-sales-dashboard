@@ -188,7 +188,7 @@ echo "  ✅ asignar da custodia con paradas por confirmar; confirmar marca el í
 echo "▶ «Recibir en oficina» (0188): un no entregado sale de la caja en custodia, también en exigir"
 $PSQL -f "$ROOT/scripts/sql/gf_return_to_office_smoke.sql"
 echo "  ✅ sale con rastro, custodia a la empresa, solicitud a por asignar; la parada se conserva; un rechazo también vuelve a por asignar (0206)"
-echo "▶ «Sacar con salida nueva» (0246): la caja que el motorizado todavía tiene queda en devolución y el pedido sale con otra"
+echo "▶ «Sacar con salida nueva» (0247): la caja que el motorizado todavía tiene queda en devolución y el pedido sale con otra"
 $PSQL -f "$ROOT/scripts/sql/gf_replace_output_smoke.sql"
 echo "  ✅ la S01 pasa a retorno sin salir de la caja; la solicitud pasa a la S02; su parada ya no cambia; al recibirla vuelve a stock sin volver a por asignar; tope de cinco"
 echo "▶ caja abierta durante el cotejo (0196): se suma en paralelo y sale al 100 % o con la diferencia retirada"

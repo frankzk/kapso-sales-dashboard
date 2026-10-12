@@ -2103,16 +2103,30 @@ que la tanda tarda uno o dos días. Cada envío queda en
 la línea de tiempo («Recordatorio de recojo (día 3)…») y la foto que viajó en
 `shalom_transit_notifications.header_image_url`.
 
-### 12-10-2026 · Distritos sin el «de» (0245) y «Sacar con salida nueva» (0246, `mom-v1.26`)
+### 12-10-2026 · Horas de la semana por asesora (0245)
 
-1. **Migración `0245_district_aliases_sin_de.sql`**, a mano, antes o después
-   del código: `psql "$DATABASE_URL" -f db/migrations/0245_district_aliases_sin_de.sql`.
+1. **Migración `0245_advisor_schedules.sql`**, a mano y antes del código:
+   `psql "$DATABASE_URL" -f db/migrations/0245_advisor_schedules.sql`. Crea
+   `advisor_schedules` (meta de horas por semana, días y horario de cada
+   persona; solo el servidor la lee y la escribe). Sin ella, Productividad
+   carga igual y usa la meta por defecto (48 h, lunes a sábado, sin horario),
+   pero Equipo › Horarios no puede guardar y lo dice. **Ya aplicada en
+   producción** el 12-10-2026, pegando el SQL en el editor de Supabase.
+2. **Cargar el horario de cada asesora** en Equipo › Horarios (owner o admin):
+   meta de la semana, días que trabaja y, si tiene, su horario de entrada y
+   salida. Con horario, Productividad marca la primera actividad tarde y la
+   última antes de la salida (10 minutos de gracia).
+
+### 12-10-2026 · Distritos sin el «de» (0246) y «Sacar con salida nueva» (0247, `mom-v1.26`)
+
+1. **Migración `0246_district_aliases_sin_de.sql`**, a mano, antes o después
+   del código: `psql "$DATABASE_URL" -f db/migrations/0246_district_aliases_sin_de.sql`.
    Solo redefine `lima_district_aliases()` («San Juan Lurigancho», «Pachamamac»,
    «Cercado delima»…). La cola de Grupo GF usa los alias de TypeScript y se
    desbloquea con el despliegue; la base los usa en la cobertura y en el pago
    del motorizado en vivo.
-2. **Migración `0246_gf_replace_output.sql`**, a mano y ANTES del código:
-   `psql "$DATABASE_URL" -f db/migrations/0246_gf_replace_output.sql`. Crea
+2. **Migración `0247_gf_replace_output.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0247_gf_replace_output.sql`. Crea
    `gf_output_replaced` y `gf_replace_output`, redefine `gf_return_to_office`
    (la 0206 más la rama «a stock») y `gf_carry_over` (la 0234 sin la caja
    reemplazada —por su evento— y con los candados del lote primero), y crea

@@ -491,8 +491,10 @@
 \ir migrations/0243_telnyx_webrtc_credentials.sql
 \echo 'Applying 0244_gf_same_day_cutoff_noon.sql'
 \ir migrations/0244_gf_same_day_cutoff_noon.sql
-\echo 'Applying 0245_district_aliases_sin_de.sql'
-\ir migrations/0245_district_aliases_sin_de.sql
-\echo 'Applying 0246_gf_replace_output.sql'
-\ir migrations/0246_gf_replace_output.sql
+\echo 'Applying 0245_advisor_schedules.sql'
+\ir migrations/0245_advisor_schedules.sql
+\echo 'Applying 0246_district_aliases_sin_de.sql'
+\ir migrations/0246_district_aliases_sin_de.sql
+\echo 'Applying 0247_gf_replace_output.sql'
+\ir migrations/0247_gf_replace_output.sql
 \echo 'Done.'

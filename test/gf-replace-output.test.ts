@@ -196,7 +196,7 @@ describe("Despacho del día: qué fila ofrece «Sacar con salida nueva»", () =>
 });
 
 describe("las piezas en el código", () => {
-  const migration = read("db/migrations/0246_gf_replace_output.sql");
+  const migration = read("db/migrations/0247_gf_replace_output.sql");
   const actions = read("app/dashboard/courier/actions.ts");
   const body = (name: string) => {
     const start = actions.indexOf(`export async function ${name}(`);
@@ -204,7 +204,7 @@ describe("las piezas en el código", () => {
     return actions.slice(start, actions.indexOf("\nexport ", start + 1));
   };
 
-  it("la 0246 reemplaza con candado, repite el tope y es solo del servidor", () => {
+  it("la 0247 reemplaza con candado, repite el tope y es solo del servidor", () => {
     const fn = migration.slice(migration.indexOf("create or replace function public.gf_replace_output("), migration.indexOf("grant execute on function public.gf_replace_output"));
     expect(fn).toContain("from delivery_stops");
     expect(fn).toContain("for update;");

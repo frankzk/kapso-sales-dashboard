@@ -214,7 +214,7 @@ export interface QueueRoute {
   pickupCheckedAt: string | null;
   /** «No entregado» y todavía en la caja: se recibe en oficina para reprogramarlo. */
   undeliveredReason?: string | null;
-  /** La salida que está en la caja: la que «Sacar con salida nueva» reemplaza (0246). */
+  /** La salida que está en la caja: la que «Sacar con salida nueva» reemplaza (0247). */
   shipmentId?: string | null;
   outputCode?: string | null;
 }
@@ -239,7 +239,7 @@ export function isReturnable(row: Pick<QueueRow, "route">): boolean {
 
 /**
  * El mismo «No entregado» puede salir antes de que el motorizado lo traiga:
- * «Sacar con salida nueva» (12-10-2026, 0246) arma otra caja desde stock y la
+ * «Sacar con salida nueva» (12-10-2026, 0247) arma otra caja desde stock y la
  * anterior queda en devolución a su nombre. Hace falta saber qué salida es.
  */
 export function isReplaceable(row: Pick<QueueRow, "route">): boolean {

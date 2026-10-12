@@ -69,7 +69,7 @@ export async function writeStopReport(admin: SupabaseClient, input: WriteStopRep
     };
   }
 
-  // La caja reemplazada por otra salida (0246, «Sacar con salida nueva») ya no
+  // La caja reemplazada por otra salida (0247, «Sacar con salida nueva») ya no
   // se entrega ni se reporta: vuelve a la oficina. La guarda de verdad es el
   // trigger `delivery_stops_guard_replaced`; esto da el mensaje claro antes.
   if (await stopIsFrozenByReplacement(admin, stop.id, input.status)) return { ok: false, error: REPLACED_STOP_ERROR };
@@ -226,7 +226,7 @@ async function stopIsFrozenByReplacement(admin: SupabaseClient, stopId: string, 
 }
 
 /**
- * Los pedidos con una caja reemplazada que el motorizado todavía tiene (0246):
+ * Los pedidos con una caja reemplazada que el motorizado todavía tiene (0247):
  * pedido → código de esa salida. Una parada sin salida (un punto a mano desde
  * el teléfono, una parada añadida en Rutas) no dice de qué caja habla: con dos
  * cajas del pedido en la calle, su «No entregado» devolvería la nueva a «Por

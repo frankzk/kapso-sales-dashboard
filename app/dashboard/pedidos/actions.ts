@@ -2012,7 +2012,7 @@ export async function registerClosureAction(
   // Una caja de Grupo GF que sigue en la caja de un motorizado se recibe por
   // «Recibir en oficina» (Despacho del día, «Devoluciones» o su QR): eso la
   // saca de la caja. Registrarla aquí la dejaba devuelta pero dentro de la caja,
-  // y al recibirla después volvía a «por asignar» (0246, MOM §29.13).
+  // y al recibirla después volvía a «por asignar» (0247, MOM §29.13).
   if (action === "return_receive" && selectedShipment && (selectedShipment.courier ?? "").toLowerCase() === "propio") {
     const { data: boxItem } = await admin
       .from("dispatch_manifest_items")

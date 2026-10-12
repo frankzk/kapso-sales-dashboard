@@ -107,7 +107,7 @@ interface Props {
   available: CourierAvailableOrder[];
   /** Salidas propias en una caja anterior sin solicitud: se reciben en oficina. */
   returnable: CourierReturnableOrder[];
-  /** Cajas reemplazadas que el motorizado todavía tiene (0246): «En devolución». */
+  /** Cajas reemplazadas que el motorizado todavía tiene (0247): «En devolución». */
   returning?: CourierReturningOutput[];
   accepted: CourierAcceptedOrder[];
   /** Pedidos de Lima que no entran en la cola, con su motivo («sin condiciones»). */
@@ -175,7 +175,7 @@ export function DispatchDayBoard(props: Props) {
   };
   const [blockedOpen, setBlockedOpen] = useState(false);
   const [declinedOpen, setDeclinedOpen] = useState(false);
-  // «Sacar con salida nueva» (0246): la confirmación, y las cajas reemplazadas
+  // «Sacar con salida nueva» (0247): la confirmación, y las cajas reemplazadas
   // que el motorizado todavía tiene, con su propia selección por salida (el
   // mismo pedido ya está en la cola con la salida nueva).
   const [replaceOpen, setReplaceOpen] = useState(false);
@@ -484,7 +484,7 @@ export function DispatchDayBoard(props: Props) {
   function receiveInOffice() {
     if (!selectedReturnable.length) return;
     // Por salida: el mismo pedido puede tener otra caja «No entregado» con otro
-    // motorizado (la reemplazada, 0246), y esa no llegó.
+    // motorizado (la reemplazada, 0247), y esa no llegó.
     const rows = allRows.filter((q) => isReturnable(q) && selected.has(q.orderId));
     const shipmentIds = rows.map((q) => q.route?.shipmentId).filter((id): id is string => Boolean(id));
     const withoutOutput = rows.filter((q) => !q.route?.shipmentId).map((q) => q.orderId);
@@ -1642,7 +1642,7 @@ function scanRowPresentation(l: ScanAssignLine, riderName: string): { text: stri
     case "programado_otro_dia":
       return { text: `Programado ${l.programmedFor ? programDayLabel(l.programmedFor) : "otro día"}`, tone: "warn" };
     case "recibido_a_stock":
-      // La caja reemplazada (0246): recibida, se desarma. No es un error.
+      // La caja reemplazada (0247): recibida, se desarma. No es un error.
       return { text: l.message ? l.message.replace(/\.$/, "") : "Caja reemplazada: a stock", tone: "info" };
     case "no_elegible":
       return { text: l.message ? `No elegible: ${l.message.replace(/\.$/, "")}` : "No elegible", tone: "crit" };

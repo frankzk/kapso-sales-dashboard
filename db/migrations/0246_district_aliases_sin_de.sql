@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0245_district_aliases_sin_de.sql — los distritos que se escriben sin el «de»
+-- 0246_district_aliases_sin_de.sql — los distritos que se escriben sin el «de»
 -- o pegados.
 --
 -- DECISIÓN DEL OWNER (12-10-2026, «Reprogramación en Lima»):

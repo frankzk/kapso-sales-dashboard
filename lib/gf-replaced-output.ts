@@ -6,12 +6,12 @@
 // antes, había que esperar a que volviera. Ahora el pedido puede salir con una
 // salida NUEVA —otra caja desde stock, con su QR y su rótulo— y la anterior
 // queda «en devolución» a nombre del motorizado: custodia `retorno` y evento
-// `output_replaced` (0246). Al recibirla en oficina se desarma y vuelve a
+// `output_replaced` (0247). Al recibirla en oficina se desarma y vuelve a
 // stock; no se reutiliza ni vuelve a la cola.
 //
 // Sin imports: lo leen el Master, las etiquetas, la cola y el navegador.
 
-/** El evento que deja `gf_replace_output` (0246) sobre la salida reemplazada. */
+/** El evento que deja `gf_replace_output` (0247) sobre la salida reemplazada. */
 export const OUTPUT_REPLACED_KIND = "output_replaced";
 
 export interface ReturningOutputLike {
@@ -62,7 +62,7 @@ export function replacedOutputIds(events: readonly { kind: string; shipment_id?:
 }
 
 /**
- * Lo que hizo `gf_return_to_office` (0246) al recibir una caja en oficina,
+ * Lo que hizo `gf_return_to_office` (0247) al recibir una caja en oficina,
  * leído DESPUÉS de llamarla: la reemplazada y la que ya constaba devuelta
  * salen a stock (custodia `devuelto`); lo demás vuelve a «por asignar»
  * (`empresa`). Un «Sacar con salida nueva» que terminó entre la lectura previa
