@@ -14,6 +14,14 @@ Es un agente **aparte** del de Reproprovincia (§11.8): otra puerta SIP, otro
 secreto, otro inicio de conversación y otras tools. Nada de lo de abajo se
 copia en el agente de pedidos, ni al revés.
 
+**En ElevenLabs** ya existe, creado el 12-10-2026 como «Agente de leads ·
+Kenku Biru (piloto)», con todo lo de las secciones 2 a 5 y 7: prompt, primer
+mensaje, las 17 variables, las dos tools y el webhook de inicio. Le faltan
+tres cosas del owner (sección 9): el secreto en las dos tools y en el inicio,
+el número, y el nombre con que se presenta (`[nombre del agente]` en el
+prompt). Su id queda en la consola, no aquí: con el id, cualquiera puede abrir
+una conversación web con el agente.
+
 ## 1. Lo que recibe al conectar
 
 Cuando el lead contesta, Telnyx abre el tramo al agente y ElevenLabs llama al
@@ -212,7 +220,9 @@ Las dos son **webhook** (POST) contra Kapta, con la cabecera `x-voice-secret`
 = `VOICE_LEADS_TOOLS_SECRET`. En la consola el valor va como **secreto del
 workspace** (Headers → `x-voice-secret` → Secret), no pegado en el texto:
 abajo aparece como `secret_id`. Kapta también acepta `Authorization: Bearer …`
-y tolera «Bearer » delante del valor en `x-voice-secret`.
+y tolera «Bearer » delante del valor en `x-voice-secret`. Las dos tools del
+agente creado todavía no llevan la cabecera: se agrega cuando el secreto exista
+en el workspace (sección 9). Mientras, Kapta les responde 401.
 
 `voice_call_id` y `conversation_id` no los llena el modelo: salen de la
 variable dinámica `voice_call_id` y de la de sistema `system__conversation_id`.
@@ -318,7 +328,8 @@ así que el de leads apunta a su propia ruta y el de Reproprovincia sigue en la
 suya:
 
 - URL: `https://kapso-sales-dashboard.vercel.app/api/voice/leads/inicio`, POST.
-- Cabecera `x-voice-secret` = `VOICE_LEADS_TOOLS_SECRET` (como secreto).
+- Cabecera `x-voice-secret` = `VOICE_LEADS_TOOLS_SECRET` (como secreto). En el
+  agente creado falta, igual que en las tools (sección 9).
 - En Security, permitir que la llamada traiga los datos de inicio del webhook, y
   el reemplazo del primer mensaje (sección 2).
 
@@ -375,12 +386,24 @@ hay costo de ElevenLabs por llamada.
   buzón, el agente no registra nada y la llamada cuenta como «contestó, sin
   gestión» en el tablero. El guion (paso 9) ya resuelve los buzones
   registrando «no_contesta», que cuenta como no contestada.
-- **Idioma** español; una voz latinoamericana clara.
-- **Variables dinámicas**: las 17 de la sección 1, declaradas con un valor de
-  prueba para el editor.
+- **Corte por silencio**: `silence_end_call_timeout` = **40 s**, con
+  `turn_timeout` = 7 s. ElevenLabs lo cuenta desde la última vez que habló la
+  persona, no el agente. Con 20 s (el valor de Reproprovincia) cortaba en la
+  segunda insistencia del paso 9, antes de registrar «no_contesta», y la
+  llamada contaba como «contestó, sin gestión». Sin corte (-1) una grabación
+  seguiría hasta los 300 s, como pasó en §11.8 el 04-10-2026.
+- **Idioma** español. Voz, modelo de voz, transcripción y turnos: los mismos
+  del agente de Reproprovincia, salvo el corte por silencio.
+- **Variables dinámicas**: las 17 de la sección 1, declaradas vacías y con
+  `encontrada` = `no`, que es lo que Kapta responde sin llamada: si el inicio no
+  contesta, el agente se despide. Para probar en el editor se cambian allí.
 - **Overrides**: primer mensaje permitido (sección 2).
 - **Número**: el de Telnyx importado en ElevenLabs por SIP trunk y asignado a
-  ESTE agente. Su dirección SIP es `TELNYX_LEADS_SIP_URI`.
+  ESTE agente. Su dirección SIP es `TELNYX_LEADS_SIP_URI`. Al importarlo, en la
+  entrada (inbound) van como direcciones permitidas solo las de Telnyx,
+  `192.76.120.0/24` y `64.16.250.0/24`, igual que el número de Reproprovincia.
+  Sin esa lista, cualquiera que mande un INVITE a esa dirección llega al agente,
+  y si Kapta está marcando a un lead en ese momento, recibe su ficha.
 
 ## 8. Variables de Vercel
 
@@ -397,11 +420,22 @@ commit.
 
 ## 9. Encendido
 
-1. **Migración 0247**, a mano y antes del código (`DEPLOY.md`).
-2. **Variables de Vercel** de la sección 8, y redeploy.
-3. **El agente en ElevenLabs**: prompt, primer mensaje, las dos tools, el
-   webhook de inicio, el número y, si se quiere, el post-call.
-4. **Ajustes de Kenku** → «Agente de voz · Leads (piloto)»:
+1. **Migración 0247**, a mano y antes del código (`DEPLOY.md`). Hecha el
+   12-10-2026.
+2. **El secreto**: generar `VOICE_LEADS_TOOLS_SECRET` y pegarlo en Vercel y en
+   ElevenLabs como secreto del workspace. En el agente, ponerlo en la cabecera
+   `x-voice-secret` de `consultar_cobertura`, de `registrar_resultado_lead` y
+   del webhook de inicio. Si se quiere el post-call, también
+   `ELEVENLABS_WEBHOOK_SECRET` (sección 6). Redeploy.
+3. **El agente en ElevenLabs**: ya creado, con prompt, primer mensaje, las dos
+   tools, el webhook de inicio y los ajustes de la sección 7. Falta elegir el
+   nombre con que se presenta y reemplazar `[nombre del agente]` (dos veces) en
+   el prompt, allá y aquí.
+4. **El número**: comprar el número peruano en Telnyx, importarlo en
+   ElevenLabs por SIP trunk con las direcciones permitidas de la sección 7 y
+   asignarlo a ESTE agente, nunca al de Reproprovincia. Recién entonces
+   `TELNYX_LEADS_SIP_URI` y `TELNYX_LEADS_FROM_NUMBER` en Vercel, y redeploy.
+5. **Ajustes de Kenku** → «Agente de voz · Leads (piloto)»:
    - campaña de Biru: `120248136956710056`;
    - producto, por ejemplo «Shampoo Birú anticaspa»;
    - oferta, tal como se puede decir, por ejemplo «Shampoo Birú anticaspa: 1
@@ -409,18 +443,18 @@ commit.
      confirma el owner: el agente no ofrece nada que no esté aquí;
    - topes, ventana, horario y grupo de control: dejar los de fábrica para
      empezar (§33.4).
-5. **Mirar la cola sin llamar**:
+6. **Mirar la cola sin llamar**:
    `GET /api/cron/voice-leads?dry=1&storeId=<id de Kenku>` con
    `Authorization: Bearer <CRON_SECRET>`. Mira la cola como si el agente
    estuviera encendido (aunque no lo esté) y devuelve cuántos entran y cuántos
    quedan fuera por cada motivo, sin escribir nada.
-6. **Probar en mi teléfono**, desde el drawer de dos o tres leads de Biru:
+7. **Probar en mi teléfono**, desde el drawer de dos o tres leads de Biru:
    escuchar el saludo, la oferta, la cobertura y el registro. La llamada sale
    con la marca «Prueba» y el lead no cambia. La prueba no deja marcar el
    número del lead ni uno que pidió no ser contactado.
-7. **El grupo de control**: confirmar el porcentaje ANTES de encender. En
+8. **El grupo de control**: confirmar el porcentaje ANTES de encender. En
    cuanto el piloto sortea al primer lead queda fijo (§33.3).
-8. **«Agente de leads»** y **«Llamadas automáticas»** encendidos. Desde ahí el
+9. **«Agente de leads»** y **«Llamadas automáticas»** encendidos. Desde ahí el
    barrido llama cada cinco minutos dentro del horario, un lead a la vez.
    Revisar las primeras: la nota del historial («Agente de voz») y, si quiso
    comprar, que aparezca en «Atender ahora» y que «Generar pedido» venga con su

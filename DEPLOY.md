@@ -2132,15 +2132,9 @@ la línea de tiempo («Recordatorio de recojo (día 3)…») y la foto que viaj�
    pedidos deja de llamar. **Ya aplicada en producción** el 12-10-2026,
    pegando el SQL en el editor de Supabase (las 1.068 llamadas que había
    quedaron `purpose = 'order'`).
-2. **Variables en Vercel (Production)**. Se generan en tu máquina
+2. **Secretos en Vercel (Production)**. Se generan en tu máquina
    (`openssl rand -hex 24`) y se pegan directo en Vercel y en ElevenLabs:
    **nunca en un chat**, ni en un ticket.
-   - `TELNYX_LEADS_SIP_URI`: la puerta SIP del agente de leads (el número de
-     Telnyx importado en ElevenLabs y asignado a ESE agente). Sin ella no se
-     llama a ningún lead: el aviso de Telnyx corta el tramo, nunca lo manda al
-     agente de Reproprovincia.
-   - `TELNYX_LEADS_FROM_NUMBER` (opcional): el número que ve el lead. Vacío =
-     el mismo `TELNYX_FROM_NUMBER` de Reproprovincia.
    - `VOICE_LEADS_TOOLS_SECRET`: firma el inicio de conversación y las dos
      tools del agente de leads. **Distinto** de `VOICE_TOOLS_SECRET` y de
      `VOICE_TOOLS_SECRET_ELEVENLABS`: si es igual a uno de ellos, Kapta lo trata
@@ -2149,17 +2143,30 @@ la línea de tiempo («Recordatorio de recojo (día 3)…») y la foto que viaj�
    - `ELEVENLABS_WEBHOOK_SECRET`: el secreto HMAC que ElevenLabs genera al crear
      el webhook «post-call». Sin él, `/api/voice/elevenlabs/post-call` responde
      401 y no se guardan transcripciones; el resto funciona igual.
-3. **El agente en ElevenLabs**: guion, primer mensaje, las tools
+3. **El agente en ElevenLabs**: **ya creado** el 12-10-2026 («Agente de leads
+   · Kenku Biru (piloto)»), con guion, primer mensaje, las tools
    `consultar_cobertura` y `registrar_resultado_lead`, el webhook de inicio
-   (`/api/voice/leads/inicio`) y el post-call, en `docs/voz-leads-agente.md`.
-4. **El barrido** `/api/cron/voice-leads` ya está en `vercel.json` (cada cinco
+   (`/api/voice/leads/inicio`) y los ajustes de `docs/voz-leads-agente.md`.
+   Falta: `VOICE_LEADS_TOOLS_SECRET` como secreto del workspace en la cabecera
+   `x-voice-secret` de las dos tools y del inicio, el nombre con que se
+   presenta y, si se quiere, el post-call.
+4. **El número**, después del agente: el número peruano de Telnyx importado
+   en ElevenLabs por SIP trunk, aceptando solo las direcciones de Telnyx
+   (`192.76.120.0/24`, `64.16.250.0/24`), y asignado al agente de leads. Recién
+   entonces, en Vercel, y redeploy:
+   - `TELNYX_LEADS_SIP_URI`: la puerta SIP de ese número. Sin ella no se llama a
+     ningún lead: el aviso de Telnyx corta el tramo, nunca lo manda al agente de
+     Reproprovincia.
+   - `TELNYX_LEADS_FROM_NUMBER` (opcional): el número que ve el lead. Vacío =
+     el mismo `TELNYX_FROM_NUMBER` de Reproprovincia.
+5. **El barrido** `/api/cron/voice-leads` ya está en `vercel.json` (cada cinco
    minutos, desfasado dos del de Reproprovincia). Solo corre en producción y
    sin tiendas con el agente encendido no hace nada. La cola se mira sin llamar
    ni escribir con
    `GET /api/cron/voice-leads?dry=1&storeId=<uuid>` y
    `Authorization: Bearer <CRON_SECRET>`: la mira como si el agente estuviera
    encendido y devuelve cuántos entran y cuántos quedan fuera por cada motivo.
-5. **Encendido por tienda** (Ajustes → «Agente de voz · Leads (piloto)»), en
+6. **Encendido por tienda** (Ajustes → «Agente de voz · Leads (piloto)»), en
    este orden: campaña, producto y oferta; «Probar en mi teléfono» desde el
    drawer de un lead; el porcentaje de control (queda fijo en el primer
    sorteo); y recién entonces «Agente de leads» y «Llamadas automáticas». Los

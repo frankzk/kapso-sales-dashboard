@@ -11113,6 +11113,10 @@ redactado:
 - **Registra antes de anunciar o despedirse**, una sola vez
   (`registrar_resultado_lead`), la lección de §11.8 del 08-10-2026.
 - Dura **cinco minutos como mucho** (`max_duration` de ElevenLabs).
+- Corta por silencio a los **40 s** desde la última vez que habló la persona
+  (`silence_end_call_timeout`): alcanza para insistir dos veces y registrar
+  «no contesta». Con los 20 s del agente de §11.8 cortaba antes de registrar, y
+  un buzón o una línea muda contaban como «contestó, sin gestión» (33.8).
 
 **Lo que el agente nunca hace.** Crear pedidos, ni decir que el pedido quedó
 hecho: lo confirma una asesora. Pedir o recibir pagos, datos de tarjeta o
@@ -11246,7 +11250,11 @@ vigilante. Nada más:
 - **Puerta SIP y número**: cuando el lead contesta, el aviso de Telnyx abre el
   tramo a `TELNYX_LEADS_SIP_URI`, con el número `TELNYX_LEADS_FROM_NUMBER`
   (vacío = el de §11.8). Sin esa puerta la llamada falla: **nunca** cae al
-  agente de Reproprovincia, que leería un pedido que no existe.
+  agente de Reproprovincia, que leería un pedido que no existe. El número se
+  importa en ElevenLabs aceptando solo las direcciones de Telnyx
+  (`192.76.120.0/24`, `64.16.250.0/24`), como el de §11.8. Sin esa lista,
+  cualquiera que mande un INVITE a la puerta llega al agente y, mientras Kapta
+  marca a un lead, recibe su ficha.
 - **El vigilante** (`sweepStaleCalls`) cierra las abiertas de los dos. Una de
   lead en conversación dura hasta **8 minutos** antes de darse por caída
   (`LEAD_IN_PROGRESS_TTL_MINUTES`; marcando, 3 como todas): el agente toma más
@@ -11307,6 +11315,10 @@ vigilante. Nada más:
 
 ### 33.9 Pendientes
 
+- **El agente en ElevenLabs ya existe** (12-10-2026, «Agente de leads · Kenku
+  Biru (piloto)»), configurado según `docs/voz-leads-agente.md`. Le faltan el
+  secreto `VOICE_LEADS_TOOLS_SECRET` en sus dos tools y en el inicio, el
+  número y el nombre con que se presenta.
 - **Número peruano en Telnyx** para el agente de leads
   (`TELNYX_LEADS_FROM_NUMBER`). Sin él, el lead ve el número de Telnyx de
   Reproprovincia, que hoy es de EE. UU., y contesta menos.

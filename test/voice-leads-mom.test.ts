@@ -795,6 +795,61 @@ describe("docs/voz-leads-agente.md: webhooks, ajustes y variables de Vercel", ()
     expect(DOC).not.toContain("**Detección de buzón** activada");
   });
 
+  it("el corte por silencio deja insistir dos veces y registrar «no contesta» (paso 9)", () => {
+    // ElevenLabs cuenta el corte desde la última vez que habló la persona. Con
+    // 20 s (el de Reproprovincia) cortaba en la segunda insistencia y la
+    // llamada contaba como «contestó, sin gestión».
+    const turnTimeout = 7;
+    const silencio = 40;
+    expect(DOC).toContain(`\`silence_end_call_timeout\` = **${silencio} s**`);
+    expect(DOC).toContain(`\`turn_timeout\` = ${turnTimeout} s`);
+    expect(flat(S33)).toContain(`Corta por silencio a los **${silencio} s**`);
+    // Saludo (~3 s), tres esperas, dos insistencias (~2,5 s c/u) y la tool (~2 s).
+    expect(silencio).toBeGreaterThan(3 + 3 * turnTimeout + 2 * 2.5 + 2);
+    // Sin corte, una grabación seguiría hasta `max_duration`.
+    expect(silencio).toBeLessThan(300);
+  });
+
+  it("el número del agente de leads solo acepta la señalización de Telnyx", () => {
+    for (const rango of ["`192.76.120.0/24`", "`64.16.250.0/24`"]) {
+      expect(DOC, rango).toContain(rango);
+      expect(S33, rango).toContain(rango);
+      expect(read("DEPLOY.md"), rango).toContain(rango);
+    }
+  });
+
+  it("los ids del agente y de sus tools no van en el repositorio", () => {
+    // Con el id del agente, cualquiera abre una conversación web con él.
+    for (const [name, text] of [
+      ["docs/voz-leads-agente.md", DOC],
+      ["MOM §33", S33],
+      ["DEPLOY.md", read("DEPLOY.md")],
+    ] as const) {
+      expect(text, name).not.toMatch(/\bagent_[0-9a-z]{20,}/);
+      expect(text, name).not.toMatch(/\btool_[0-9a-z]{20,}/);
+    }
+  });
+
+  it("lo que falta va en orden: secreto, agente, número y recién su puerta en Vercel", () => {
+    const s9 = flat(section(DOC, "## 9. Encendido", "\n## "));
+    enOrden(s9, [
+      "**El secreto**",
+      "**El agente en ElevenLabs**: ya creado",
+      "**El número**",
+      "Recién entonces `TELNYX_LEADS_SIP_URI` y `TELNYX_LEADS_FROM_NUMBER` en Vercel",
+      "**Ajustes de Kenku**",
+    ]);
+    const deploy = flat(section(read("DEPLOY.md"), "### 12-10-2026 · Agente de voz para leads", "\n### "));
+    enOrden(deploy, [
+      "2. **Secretos en Vercel (Production)**",
+      "`VOICE_LEADS_TOOLS_SECRET`",
+      "3. **El agente en ElevenLabs**: **ya creado**",
+      "4. **El número**, después del agente",
+      "`TELNYX_LEADS_SIP_URI`",
+      "6. **Encendido por tienda**",
+    ]);
+  });
+
   it("los pasos de encendido nombran la campaña de Biru", () => {
     expect(DOC).toContain("campaña de Biru: `120248136956710056`");
   });
