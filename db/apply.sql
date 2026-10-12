@@ -501,4 +501,6 @@
 \ir migrations/0248_gf_replace_output.sql
 \echo 'Applying 0249_shopify_client_app.sql'
 \ir migrations/0249_shopify_client_app.sql
+\echo 'Applying 0250_membership_roles.sql'
+\ir migrations/0250_membership_roles.sql
 \echo 'Done.'

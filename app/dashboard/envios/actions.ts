@@ -132,7 +132,7 @@ import {
 import { avisoSinVinculoSwayp, normalizeSku, productosSinVinculo } from "@/lib/swayp-productos";
 import { cargarMapaSwayp, cargarMapaSwaypDeOrg } from "@/lib/swayp-sku-map";
 import { NOVELTY_ACTIONS, buildNoveltySolution, noveltyActionIsReturn } from "@/lib/swayp-novelty";
-import { getMasterPermissions } from "@/lib/permissions-access";
+import { getMasterPermissions, orgsWithPermission } from "@/lib/permissions-access";
 import {
   createFenixGuideViaApi,
   DIRECT_GUIDE_ORDER_COLUMNS,
@@ -2176,11 +2176,9 @@ export async function processSuggestionBatch(): Promise<
     data: { user },
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
-  const { data: mem } = await sb.from("memberships").select("org_id,role");
-  const adminOrg = ((mem as { org_id: string; role: string }[]) ?? []).find(
-    (m) => m.role === "owner" || m.role === "admin",
-  );
-  if (!adminOrg) return { error: "Solo un administrador puede ejecutar el emparejamiento automático." };
+  // Quien tenga el permiso, no solo owner/admin (MOM §16, 12-10-2026).
+  const adminOrg = (await orgsWithPermission("stores.manage"))[0];
+  if (!adminOrg) return { error: "Tu rol no permite ejecutar el emparejamiento automático (lo hace «Administración»)." };
 
   const stores = await getAccessibleStores();
   const storeIds = stores.map((s) => s.id);
@@ -2255,11 +2253,9 @@ export async function upsertFenixStock(input: {
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
   // resolve the caller's admin org (first one)
-  const { data: mem } = await sb.from("memberships").select("org_id,role");
-  const adminOrg = ((mem as { org_id: string; role: string }[]) ?? []).find(
-    (m) => m.role === "owner" || m.role === "admin",
-  );
-  if (!adminOrg) return { error: "Solo un administrador puede editar el stock." };
+  // Quien tenga el permiso, no solo owner/admin (MOM §16, 12-10-2026).
+  const adminOrg = (await orgsWithPermission("stock.manage"))[0];
+  if (!adminOrg) return { error: "Tu rol no permite editar el stock." };
 
   const city = input.city.trim().toLowerCase();
   const product = input.product.trim();
@@ -2348,11 +2344,9 @@ export async function importarInventarioSwayp(
     data: { user },
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
-  const { data: mem } = await sb.from("memberships").select("org_id,role");
-  const adminOrg = ((mem as { org_id: string; role: string }[]) ?? []).find(
-    (m) => m.role === "owner" || m.role === "admin",
-  );
-  if (!adminOrg) return { error: "Solo un administrador puede importar el stock." };
+  // Quien tenga el permiso, no solo owner/admin (MOM §16, 12-10-2026).
+  const adminOrg = (await orgsWithPermission("stock.manage"))[0];
+  if (!adminOrg) return { error: "Tu rol no permite importar el stock." };
 
   const file = formData.get("archivo");
   if (!(file instanceof File) || file.size === 0) {
@@ -2502,11 +2496,9 @@ async function prepararSyncSwayp(
     data: { user },
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
-  const { data: mem } = await sb.from("memberships").select("org_id,role");
-  const adminOrg = ((mem as { org_id: string; role: string }[]) ?? []).find(
-    (m) => m.role === "owner" || m.role === "admin",
-  );
-  if (!adminOrg) return { error: "Solo un administrador puede sincronizar el stock." };
+  // Quien tenga el permiso, no solo owner/admin (MOM §16, 12-10-2026).
+  const adminOrg = (await orgsWithPermission("stock.manage"))[0];
+  if (!adminOrg) return { error: "Tu rol no permite sincronizar el stock." };
 
   // Un «Bearer » pegado de más duplicaría el prefijo y Swayp respondería 403.
   const token = (input.token ?? "").trim().replace(/^bearer\s+/i, "");
@@ -2637,11 +2629,9 @@ export async function swaypInventoryEstado(): Promise<SwaypSyncEstado | { error:
     data: { user },
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
-  const { data: mem } = await sb.from("memberships").select("org_id,role");
-  const adminOrg = ((mem as { org_id: string; role: string }[]) ?? []).find(
-    (m) => m.role === "owner" || m.role === "admin",
-  );
-  if (!adminOrg) return { error: "Solo un administrador puede ver el sync de Swayp." };
+  // Quien tenga el permiso, no solo owner/admin (MOM §16, 12-10-2026).
+  const adminOrg = (await orgsWithPermission("stock.manage"))[0];
+  if (!adminOrg) return { error: "Tu rol no permite ver el sync de Swayp." };
 
   const auto = fuenteAutomaticaDesdeEnv();
   const { data } = await createAdminSupabase()
@@ -2660,8 +2650,11 @@ export async function swaypInventoryEstado(): Promise<SwaypSyncEstado | { error:
 
 /** Delete a Swayp stock row (admin). */
 export async function deleteFenixStock(id: string): Promise<ShipmentActionState> {
-  const sb = await createServerSupabase();
-  const { error } = await sb.from("fenix_stock").delete().eq("id", id);
+  // Con el permiso y no por RLS de admin: quien edita el stock por su rol
+  // (Despacho, Administración) también lo borra, solo en sus organizaciones.
+  const orgIds = (await orgsWithPermission("stock.manage")).map((m) => m.org_id);
+  if (!orgIds.length) return { error: "Tu rol no permite editar el stock." };
+  const { error } = await createAdminSupabase().from("fenix_stock").delete().eq("id", id).in("org_id", orgIds);
   if (error) return { error: errorDeBase(error, "borrar el stock Swayp") };
   const sync = await recomputeFenixEligibility();
   revalidatePath("/dashboard/envios/stock");
@@ -2691,11 +2684,9 @@ export async function recordFenixStockMovement(input: {
     data: { user },
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
-  const { data: mem } = await sb.from("memberships").select("org_id,role");
-  const adminOrgs = ((mem as { org_id: string; role: string }[]) ?? [])
-    .filter((m) => m.role === "owner" || m.role === "admin")
-    .map((m) => m.org_id);
-  if (!adminOrgs.length) return { error: "Solo un administrador puede mover el stock." };
+  // Quien tenga el permiso, no solo owner/admin (MOM §16, 12-10-2026).
+  const adminOrgs = (await orgsWithPermission("stock.manage")).map((m) => m.org_id);
+  if (!adminOrgs.length) return { error: "Tu rol no permite mover el stock." };
 
   const admin = createAdminSupabase();
   const { data: stock } = await admin
@@ -2789,11 +2780,9 @@ export async function recomputeFenixEligibility(): Promise<
     data: { user },
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
-  const { data: mem } = await sb.from("memberships").select("org_id,role");
-  const adminOrg = ((mem as { org_id: string; role: string }[]) ?? []).find(
-    (m) => m.role === "owner" || m.role === "admin",
-  );
-  if (!adminOrg) return { error: "Solo un administrador puede recalcular la elegibilidad." };
+  // Quien tenga el permiso, no solo owner/admin (MOM §16, 12-10-2026).
+  const adminOrg = (await orgsWithPermission("stock.manage"))[0];
+  if (!adminOrg) return { error: "Tu rol no permite recalcular la elegibilidad." };
 
   const stores = (await getAccessibleStores()).filter((s) => s.org_id === adminOrg.org_id);
   const storeIds = stores.map((s) => s.id);

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
-import { Sidebar } from "@/components/sidebar";
+import { Sidebar, type NavAccess } from "@/components/sidebar";
 import { YapeAlerts } from "@/components/yape-alerts";
 import { CollectionAlerts } from "@/components/collection-alerts";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
@@ -21,6 +21,7 @@ export function DashboardShell({
   yapeAlertsEnabled,
   canValidatePayments,
   canManageLogistics,
+  navAccess,
   badges,
 }: {
   children: ReactNode;
@@ -31,6 +32,7 @@ export function DashboardShell({
   yapeAlertsEnabled: boolean;
   canValidatePayments: boolean;
   canManageLogistics: boolean;
+  navAccess?: NavAccess;
   badges?: Record<string, number>;
 }) {
   const pathname = usePathname();
@@ -57,6 +59,7 @@ export function DashboardShell({
         roleLabel={roleLabel}
         canValidatePayments={canValidatePayments}
         canManageLogistics={canManageLogistics}
+        navAccess={navAccess}
         badges={badges}
         pendingHref={routePending ? pendingHref : null}
         onNavigate={setPendingHref}
