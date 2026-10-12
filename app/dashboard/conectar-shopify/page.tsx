@@ -59,6 +59,8 @@ export default async function ConectarShopifyPage({
         .select("org_id, organizations(name)")
         .eq("user_id", user.id)
         .in("role", ["owner", "admin"])
+        // La más reciente primero: la que se acaba de crear abajo queda elegida.
+        .order("created_at", { ascending: false })
     : { data: [] };
   const orgs = ((memberships ?? []) as unknown as { org_id: string; organizations: { name: string } | null }[]).map(
     (m) => ({ id: m.org_id, name: m.organizations?.name ?? m.org_id }),
@@ -96,6 +98,19 @@ export default async function ConectarShopifyPage({
             Tienda de Shopify: <span className="font-medium">{pending!.shop_domain}</span>
           </p>
           <ClaimShopifyInstallForm orgs={orgs} defaultName={storeNameFromShop(pending!.shop_domain)} />
+          {/* Quien ya tiene organizaciones (Grupo GF probando, o un dueño con otra
+              empresa) no debe meter la tienda en una que no es suya. */}
+          <details className="max-w-md rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+            <summary className="cursor-pointer text-sm font-medium text-slate-700">
+              ¿La tienda es de otra empresa? Crea una organización nueva
+            </summary>
+            <div className="mt-3 space-y-3">
+              <p className="text-sm text-slate-500">
+                Quedarás como dueño. Al crearla vuelves aquí con la organización nueva ya elegida.
+              </p>
+              <CreateOrgForm next="/dashboard/conectar-shopify" />
+            </div>
+          </details>
         </div>
       )}
     </div>

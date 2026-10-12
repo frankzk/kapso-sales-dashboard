@@ -20,10 +20,10 @@ export function CreateOrgForm({ next }: { next?: string } = {}) {
     <form action={action} className="max-w-md space-y-4">
       {next && <input type="hidden" name="next" value={next} />}
       <div>
-        <label className={labelCls} htmlFor="name">
+        <label className={labelCls} htmlFor="org_name">
           Nombre de la organización
         </label>
-        <input id="name" name="name" required placeholder="Mi empresa" className={inputCls} />
+        <input id="org_name" name="name" required placeholder="Mi empresa" className={inputCls} />
       </div>
       {state.error && <p className="text-sm text-red-600">{state.error}</p>}
       <button
