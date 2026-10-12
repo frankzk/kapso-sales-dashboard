@@ -43,9 +43,11 @@ function presentation(l: ScanAssignLine, riderName: string): { text: string; tex
   }
 }
 
-export function GfBoxAddPackages({ manifest, canManage, refresh, onBusy }: {
+export function GfBoxAddPackages({ manifest, canManage, canAuthorizeCash = false, refresh, onBusy }: {
   manifest: DispatchManifest;
   canManage: boolean;
+  /** Pasar el límite de efectivo de la ruta (§29.9): solo quien administra Grupo GF. */
+  canAuthorizeCash?: boolean;
   refresh: (preferId?: string | null) => Promise<void>;
   onBusy?: (busy: boolean) => void;
 }) {
@@ -123,7 +125,7 @@ export function GfBoxAddPackages({ manifest, canManage, refresh, onBusy }: {
                 {l.amount != null && <span className="shrink-0 text-xs tabular-nums text-ink-600">{money(l.amount)}</span>}
                 {l.status === "en_otra_caja" && l.manifestId && l.shipmentId && (
                   <button type="button" disabled={busy} onClick={() => start(async () => {
-                    const res = await moveManifestItem(manifest.org_id, l.manifestId!, l.shipmentId!, riderId, `Escaneado en la caja de ${riderName}`);
+                    const res = await moveManifestItem(manifest.org_id, l.manifestId!, l.shipmentId!, riderId, `Escaneado en la caja de ${riderName}`, { overrideCash: overrideCash && canAuthorizeCash });
                     push({ ...l, status: res.error ? "no_elegible" : "asignado", riderName, message: res.error ?? "" });
                   })} className={AMEND}>Mover</button>
                 )}
@@ -132,7 +134,7 @@ export function GfBoxAddPackages({ manifest, canManage, refresh, onBusy }: {
                     push(await scanAssignToRider(manifest.org_id, riderId, l.code, { overrideCash, scheduledFor: manifest.route_date, confirmProgrammed: true }));
                   })} title={l.message} className={AMEND}>Asignar igual</button>
                 )}
-                {l.status === "bloqueado_efectivo" && !overrideCash && (
+                {l.status === "bloqueado_efectivo" && !overrideCash && canAuthorizeCash && (
                   <button type="button" onClick={() => setOverrideCash(true)} title="Autoriza superar el límite de efectivo de la ruta y vuelve a escanear" className={AMEND}>Autorizar</button>
                 )}
               </li>
@@ -140,7 +142,7 @@ export function GfBoxAddPackages({ manifest, canManage, refresh, onBusy }: {
           })}
         </ul>
       )}
-      {overrideCash && <p className="text-[13px] text-warn-fg">Límite de efectivo autorizado para esta caja.</p>}
+      {overrideCash && canAuthorizeCash && <p className="text-[13px] text-warn-fg">Límite de efectivo autorizado para esta caja.</p>}
     </div>
   );
 }

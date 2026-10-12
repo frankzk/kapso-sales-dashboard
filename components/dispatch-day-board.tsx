@@ -109,7 +109,10 @@ interface Props {
   riders: CourierRiderOption[];
   manifests: DispatchManifest[];
   canManageDispatch: boolean;
-  /** Pasar el límite de efectivo es de quien administra el courier (§29.9). */
+  /**
+   * Quien administra el courier (`logistics.manage`): pasa el límite de
+   * efectivo (§29.9) y entra al Tarifario (§29.10).
+   */
   canAuthorizeCash?: boolean;
   /** 0185: exigir (verifica su caja antes de la ruta) · confirmar («Lo llevo» por paquete) · ninguno. */
   riderPickupMode: RiderPickupMode;
@@ -242,7 +245,7 @@ export function DispatchDayBoard(props: Props) {
     if (!line.manifestId || !line.shipmentId || !riderId) return;
     const from = line.riderName ?? "otro motorizado";
     setLines((cur) => cur.map((l) => (l === line ? { ...l, status: "procesando", message: "Moviendo…", moveError: null } : l)));
-    const result = await moveManifestItem(orgId, line.manifestId, line.shipmentId, riderId, `Escaneado en oficina para la caja de ${riderName}`, { inHand: true });
+    const result = await moveManifestItem(orgId, line.manifestId, line.shipmentId, riderId, `Escaneado en oficina para la caja de ${riderName}`, { inHand: true, overrideCash: overrideCash && props.canAuthorizeCash === true });
     setLines((cur) => cur.map((l) => {
       if (l.code !== line.code || l.status !== "procesando") return l;
       return "error" in result && result.error
@@ -637,7 +640,7 @@ export function DispatchDayBoard(props: Props) {
 
       {blockedOpen && (
         <Sheet look="ops" title={`${props.blocked.length.toLocaleString("es-PE")} sin condiciones para salir`} onClose={() => setBlockedOpen(false)} wide>
-          <p className="text-[13px] text-ink-500">No entran en la cola hasta que se arregle el motivo. Tarifa y pausa se corrigen en el Tarifario; el resto en el pedido o en la caja.</p>
+          <p className="text-[13px] text-ink-500">No entran en la cola hasta que se arregle el motivo. {props.canAuthorizeCash ? "Tarifa y pausa se corrigen en el Tarifario" : "Tarifa y pausa las corrige quien administra Grupo GF (Daysi o Frankz)"}; el resto en el pedido o en la caja.</p>
           <ul className="mt-3 max-h-[50vh] divide-y divide-line overflow-auto border-t border-line text-sm">
             {props.blocked.map((b) => {
               const reason = BLOCKED_REASON_LABEL[b.reason];
@@ -646,7 +649,7 @@ export function DispatchDayBoard(props: Props) {
                   <OrderLink orderId={b.orderId} className="font-semibold text-ink-900 hover:text-brand-700">{b.orderName}</OrderLink>
                   <span className="text-[13px] text-ink-500">{b.storeName} · {b.customerName} · {b.district}</span>
                   <Badge tone="warn">{reason.label}</Badge>
-                  {reason.fix === "tarifario" && <Link href="/dashboard/courier?tab=tariffs" className="text-xs font-medium text-brand-700 hover:underline">Arreglar en Tarifario</Link>}
+                  {reason.fix === "tarifario" && props.canAuthorizeCash && <Link href="/dashboard/courier?tab=tariffs" className="text-xs font-medium text-brand-700 hover:underline">Arreglar en Tarifario</Link>}
                 </li>
               );
             })}
@@ -769,9 +772,6 @@ export function DispatchDayBoard(props: Props) {
                       )}
                       {l.status === "bloqueado_efectivo" && !overrideCash && props.canAuthorizeCash && (
                         <OpsButton size="sm" onClick={() => setOverrideCash(true)} title={`${cashOverrideHint(props.cashWarning, props.cashLimit)} Toca «Autorizar» y vuelve a escanear.`}>Autorizar</OpsButton>
-                      )}
-                      {l.status === "bloqueado_efectivo" && !props.canAuthorizeCash && (
-                        <p className="basis-full text-xs text-ink-500">Pasar el límite lo autoriza quien administra Grupo GF (Daysi o Frankz).</p>
                       )}
                       {l.moveError && <p role="alert" className="basis-full text-xs font-medium text-crit-fg">{l.moveError}</p>}
                       {/* Se leyó el rótulo viejo (Tanders que no entregó): la caja

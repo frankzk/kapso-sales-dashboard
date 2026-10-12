@@ -15,6 +15,7 @@ import {
   resolveDistrictTariff,
   type DistrictAvailabilityEventRow,
   type DistrictTariffRow,
+  cashLimitBlock,
   cashLimitVerdict,
 } from "@/lib/grupo-gf-courier";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
@@ -237,7 +238,23 @@ const EMPTY_OPERATIONS: CourierOperationsSnapshot = {
   sourceCount: 0,
 };
 
-type ManagerAuth = { userId: string; canManageDispatch: boolean; canManageLogistics: boolean };
+type ManagerAuth = {
+  userId: string;
+  canManageDispatch: boolean;
+  canManageLogistics: boolean;
+  /**
+   * Tiendas a su alcance cuando solo despacha (RLS de `stores`, Equipo). `null`
+   * = todas: quien administra el courier ve la cola completa, como antes.
+   */
+  storeIds: ReadonlySet<string> | null;
+};
+
+/** ¿La tienda de este pedido está al alcance de quien opera? */
+function storeAllowed(auth: ManagerAuth, storeId: string | null | undefined): boolean {
+  return !auth.storeIds || (storeId != null && auth.storeIds.has(storeId));
+}
+
+const OUTSIDE_STORE = "No tienes acceso a la tienda de este pedido.";
 
 /**
  * Quién entra: `operar` es Despacho del día (tomar, asignar, programar,
@@ -262,10 +279,20 @@ async function requireCourierAccess(
   if (!memberships.some((membership) => membership.org_id === orgId)) {
     return { error: "No perteneces a esta organización." };
   }
+  // Quien solo despacha opera las tiendas que tiene asignadas en Equipo, como
+  // en el resto del panel; sin ninguna, no entra (el Master tampoco le muestra
+  // esos pedidos).
+  let storeIds: Set<string> | null = null;
+  if (!permissions.can("logistics.manage")) {
+    const stores = (await getAccessibleStores()).filter((store) => store.org_id === orgId);
+    if (!stores.length) return { error: "No tienes tiendas asignadas. Pide acceso en Equipo." };
+    storeIds = new Set(stores.map((store) => store.id));
+  }
   return {
     userId: user.id,
     canManageDispatch: permissions.can("dispatch.manage"),
     canManageLogistics: permissions.can("logistics.manage"),
+    storeIds,
   };
 }
 
@@ -1104,7 +1131,8 @@ export async function loadCourierConfig(orgId: string): Promise<CourierConfigSna
     rejection_amount: Number(row.rejection_amount),
   })) as DistrictTariffRow[];
   const normalizedAvailability = (availabilityEvents ?? []) as DistrictAvailabilityEventRow[];
-  const normalizedAgreements = (agreements ?? []) as CourierAgreementRow[];
+  const normalizedAgreements = ((agreements ?? []) as CourierAgreementRow[])
+    .filter((agreement) => storeAllowed(auth, agreement.store_id));
   const operations = await loadCourierOperations(admin, {
     provider,
     agreements: normalizedAgreements,
@@ -1214,6 +1242,10 @@ async function takeOrdersCore(
         continue;
       }
       const row = orderMaster as Record<string, unknown>;
+      if (!storeAllowed(auth, row.store_id as string | null)) {
+        failed.push({ orderId, error: OUTSIDE_STORE });
+        continue;
+      }
 
       const { data: outputRows, error: outputError } = await admin
         .from("shipments")
@@ -1615,9 +1647,13 @@ export async function returnUndeliveredToOffice(orgId: string, orderIds: string[
   const ids = [...new Set(orderIds.filter(Boolean))];
   if (!ids.length) return { error: "Marca al menos un pedido." };
   const admin = createAdminSupabase();
-  const { data: shipments } = await admin.from("shipments").select("id,order_id").in("order_id", ids).eq("courier", "propio");
-  const shipmentIds = ((shipments ?? []) as { id: string }[]).map((row) => row.id);
-  if (!shipmentIds.length) return { error: "Esos pedidos no tienen salida de Grupo GF." };
+  const { data: orgStores } = await admin.from("stores").select("id").eq("org_id", orgId);
+  const orgStoreIds = new Set(((orgStores ?? []) as { id: string }[]).map((store) => store.id));
+  const { data: shipments } = await admin.from("shipments").select("id,order_id,store_id").in("order_id", ids).eq("courier", "propio");
+  const shipmentIds = ((shipments ?? []) as { id: string; store_id: string | null }[])
+    .filter((row) => row.store_id != null && orgStoreIds.has(row.store_id) && storeAllowed(auth, row.store_id))
+    .map((row) => row.id);
+  if (!shipmentIds.length) return { error: "Esos pedidos no tienen salida de Grupo GF a tu alcance." };
   const { data: items } = await admin.from("dispatch_manifest_items").select("id,shipment_id").in("shipment_id", shipmentIds).is("removed_at", null);
   const changed: string[] = [];
   const errors: string[] = [];
@@ -1710,9 +1746,9 @@ export async function saveRiderDistrictPay(orgId: string, input: { riderId: stri
 }
 
 /** Los pedidos de la org entre los marcados, con su tienda: nada de programar pedidos ajenos. */
-async function ordersOfOrg(admin: Admin, orgId: string, orderIds: string[]): Promise<Map<string, string>> {
+async function ordersOfOrg(admin: Admin, orgId: string, orderIds: string[], auth?: ManagerAuth): Promise<Map<string, string>> {
   const { data: stores } = await admin.from("stores").select("id").eq("org_id", orgId);
-  const storeIds = new Set(((stores ?? []) as { id: string }[]).map((store) => store.id));
+  const storeIds = new Set(((stores ?? []) as { id: string }[]).map((store) => store.id).filter((id) => !auth || storeAllowed(auth, id)));
   const { data: orders } = await courierRowsByIds(orderIds, (ids) => admin.from("orders").select("id,store_id").in("id", ids));
   return new Map((orders as Array<{ id: string; store_id: string }>)
     .filter((order) => storeIds.has(order.store_id))
@@ -1746,7 +1782,7 @@ export async function rescheduleGroupGfCourierOrders(
   const admin = createAdminSupabase();
   const { data: provider } = await admin.from("logistics_providers").select("id").eq("org_id", orgId).eq("code", "grupo-gf-courier").maybeSingle();
   if (!provider) return { error: "Grupo GF Courier no está activado." };
-  const storeByOrder = await ordersOfOrg(admin, orgId, ids);
+  const storeByOrder = await ordersOfOrg(admin, orgId, ids, auth);
   const { data: requestRows, error: readError } = await admin
     .from("logistics_requests")
     .select("id,order_id,store_id,shipment_id,status,scheduled_for")
@@ -1808,7 +1844,7 @@ export async function clearGroupGfCourierPrograms(orgId: string, orderIds: strin
   const ids = [...new Set(orderIds.filter(Boolean))];
   if (!ids.length) return { error: "Marca al menos un pedido." };
   const admin = createAdminSupabase();
-  const storeByOrder = await ordersOfOrg(admin, orgId, ids);
+  const storeByOrder = await ordersOfOrg(admin, orgId, ids, auth);
   const programs = [...(await loadPrograms(admin, { orderIds: [...storeByOrder.keys()] })).values()];
   if (!programs.length) return { error: "Ninguno de esos pedidos tiene fecha programada." };
   const { error } = await admin.from("gf_dispatch_programs").delete().in("order_id", programs.map((p) => p.order_id));
@@ -1953,11 +1989,13 @@ async function assignRouteCore(
     status: string;
     scheduled_for: string;
   };
-  const requests = (requestRows ?? []) as AssignableRequest[];
+  const readRequests = (requestRows ?? []) as AssignableRequest[];
+  const requests = readRequests.filter((request) => storeAllowed(auth, request.store_id));
   const requestById = new Map(requests.map((request) => [request.id, request]));
+  const outsideIds = new Set(readRequests.filter((request) => !storeAllowed(auth, request.store_id)).map((request) => request.id));
   const failed: AssignCourierRouteResult["failed"] = unique
     .filter((id) => !requestById.has(id))
-    .map((requestId) => ({ requestId, error: "La solicitud ya no está disponible." }));
+    .map((requestId) => ({ requestId, error: outsideIds.has(requestId) ? OUTSIDE_STORE : "La solicitud ya no está disponible." }));
   const shipmentIds = requests
     .map((request) => request.shipment_id)
     .filter((shipmentId): shipmentId is string => Boolean(shipmentId));
@@ -2094,10 +2132,9 @@ async function assignRouteCore(
     });
     // Pasar el límite es una excepción de quien administra el courier
     // (§29.9: Daysi o Frankz), no de cualquiera que despache.
-    if (verdict.status === "blocked" && !(opts.overrideCash && auth.canManageLogistics)) {
-      const message = verdict.message ?? "Límite de efectivo superado.";
-      const error = opts.overrideCash ? `${message} Solo quien administra Grupo GF puede autorizar pasar el límite.` : message;
-      for (const request of group) failed.push({ requestId: request.id, error });
+    const cashBlock = cashLimitBlock(verdict, { override: opts.overrideCash === true, canAuthorize: auth.canManageLogistics });
+    if (cashBlock) {
+      for (const request of group) failed.push({ requestId: request.id, error: cashBlock });
       continue;
     }
     if (verdict.message) cashWarnings.push(verdict.status === "blocked" ? `${verdict.message} Autorizado por ${auth.userId}.` : verdict.message);
@@ -2635,7 +2672,11 @@ export async function moveManifestItem(
    * calle. Permite sacarlo de una caja ya en poder del motorizado aunque él lo
    * haya confirmado (`gf_office_reclaim`, 0230).
    */
-  opts: { inHand?: boolean } = {},
+  /**
+   * `overrideCash`: quien administra el courier autoriza que la caja destino
+   * pase el límite de efectivo (§29.9); para cualquier otro no cuenta.
+   */
+  opts: { inHand?: boolean; overrideCash?: boolean } = {},
 ): Promise<MoveManifestItemResult> {
   const auth = await requireOperator(orgId);
   if ("error" in auth) return auth;
@@ -2669,7 +2710,30 @@ export async function moveManifestItem(
     .eq("id", shipmentId)
     .maybeSingle();
   if (!shipment) return { error: "Paquete no encontrado." };
+  if (!storeAllowed(auth, shipment.store_id as string | null)) return { error: OUTSIDE_STORE };
   if (shipment.custody_state !== (sourceInCustody ? "courier" : "empresa")) return { error: "El paquete ya no está en custodia de Grupo GF." };
+
+  // Mover también suma su efectivo a la ruta del destino (§29.9): el mismo
+  // límite que al asignar, y pasarlo es solo de quien administra el courier.
+  let cashOverride = false;
+  if (shipment.order_id) {
+    const { data: cashProvider } = await admin
+      .from("logistics_providers")
+      .select("cash_warning_amount,cash_limit_amount")
+      .eq("org_id", orgId)
+      .eq("code", "grupo-gf-courier")
+      .maybeSingle();
+    const cash = await routeCashForecast(admin, orgId, rider.id, manifest.route_date, [shipment.order_id as string]);
+    const verdict = cashLimitVerdict({
+      currentCod: cash.current,
+      addingCod: cash.adding,
+      warningAmount: amount((cashProvider as { cash_warning_amount?: unknown } | null)?.cash_warning_amount),
+      limitAmount: amount((cashProvider as { cash_limit_amount?: unknown } | null)?.cash_limit_amount),
+    });
+    const cashBlock = cashLimitBlock(verdict, { override: opts.overrideCash === true, canAuthorize: auth.canManageLogistics });
+    if (cashBlock) return { error: cashBlock };
+    cashOverride = verdict.status === "blocked";
+  }
 
   // 1) abrir (o reutilizar) la carga del destino ANTES de retirar: si el
   // destino no admite paquetes, el origen no se toca.
@@ -2739,7 +2803,7 @@ export async function moveManifestItem(
           shipment_id: shipment.id,
           reason: cleanReason,
           note: `Pasó de la caja de ${fromName} a la de ${rider.full_name}.`,
-          payload: { from_rider_id: manifest.rider_id, from_manifest_id: manifestId, to_rider_id: rider.id, to_manifest_id: targetManifestId, route_date: manifest.route_date },
+          payload: { from_rider_id: manifest.rider_id, from_manifest_id: manifestId, to_rider_id: rider.id, to_manifest_id: targetManifestId, route_date: manifest.route_date, ...(cashOverride ? { cash_limit_overridden_by: auth.userId } : {}) },
         })
       : Promise.resolve(),
     // Está en otra caja: «scheduled». En custodia, el retiro (0185) la había
@@ -2903,6 +2967,7 @@ export async function scanAssignToRider(
       .maybeSingle() : Promise.resolve({ data: null }),
   ]);
   const line: ScanAssignLine = { ...base, orderId, shipmentId, orderName: (om?.order_name as string | null) ?? null, amount: om?.order_total == null ? null : Number(om.order_total), riderName: rider.full_name };
+  if (!storeAllowed(auth, om?.store_id as string | null | undefined)) return { ...line, status: "no_elegible", message: OUTSIDE_STORE };
 
   // El día de la caja que se arma: hoy, o el que eligió el supervisor.
   const boxDay = opts.scheduledFor && DATE_RE.test(opts.scheduledFor) ? opts.scheduledFor : limaClock().day;
@@ -3034,6 +3099,8 @@ export interface CourierBoxDetail {
   stores: { id: string; name: string }[];
   canManage: boolean;
   canPickup: boolean;
+  /** Pasar el límite de efectivo de la ruta (§29.9): solo `logistics.manage`. */
+  canAuthorizeCash: boolean;
 }
 
 /**
@@ -3104,6 +3171,7 @@ export async function loadCourierBox(request: { manifestId?: string | null; rout
     stores: stores.map((s) => ({ id: s.id, name: s.name })),
     canManage,
     canPickup,
+    canAuthorizeCash: permissions.can("logistics.manage"),
   };
 }
 

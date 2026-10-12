@@ -17,10 +17,9 @@
 --   * El valor por defecto de la columna del proveedor, para un proveedor nuevo
 --     (la acción de activar ya escribe 12:00 de forma explícita).
 --
--- Idempotente: correrla dos veces no cambia nada.
+-- Idempotente: correrla dos veces no cambia nada. Sin `begin`/`commit` propios,
+-- como el resto de migraciones: dentro del bundle concatenado cortarían el script.
 -- ============================================================================
-
-begin;
 
 update public.logistics_providers
    set same_day_cutoff = time '12:00'
@@ -36,5 +35,3 @@ update public.logistics_service_agreements a
 
 alter table public.logistics_providers
   alter column same_day_cutoff set default time '12:00';
-
-commit;

@@ -2021,20 +2021,30 @@ la lista de Almacén «Reintentos por salir» quedan para una fase posterior.
      (escaneo o lista, §29.13): al día siguiente no queda ninguna caja «No
      entregado» a nombre de un motorizado. La caja va al estante de
      reprogramados, en la bandeja del día en que se recibió.
-  3. Alguien del equipo contacta al cliente y deja fecha y courier con
-     «Programar» (motivo «Confirmado con cliente: …», §29.6), o anota en la
-     ficha por qué no se programó. La fecha que el cliente dio en la puerta se
-     confirma antes de programarla.
+  3. Alguien del equipo contacta al cliente y deja la fecha con «Programar»
+     en Despacho del día (motivo «Confirmado con cliente: …», §29.6), o anota
+     en la ficha por qué no se programó. «Programar» solo guarda el día y el
+     pedido sigue con Grupo GF; si el cliente necesita otro courier no se usa:
+     se arma otra salida desde la mesa de ruta del pedido (§9.3). La fecha que
+     el cliente dio en la puerta se confirma antes de programarla.
   4. Para el día programado, la caja pasa del estante al anaquel del día. Por
      defecto **se mantiene**: misma salida, QR y rótulo (excepción de Grupo GF,
-     §9.3). Se reimprime el rótulo de la misma salida si cambió la dirección, el
-     teléfono o el monto; se arma otra salida si cambia el producto o el courier
-     (§9.3); se desarma si el cliente ya no lo quiere o el pedido se cancela.
+     §9.3). Se reimprime el rótulo de la misma salida si cambió la dirección
+     —corregida antes con el editor de destino de la salida, que la guarda en
+     la salida y en Shopify; corregirla solo en Shopify no cambia el rótulo— o
+     el monto (el rótulo lo lee del pedido). El teléfono del rótulo es el que
+     se guardó al crear la salida y hoy Kapta no lo cambia: el número nuevo se
+     anota en la ficha y se le pasa al motorizado al asignarlo. Se arma otra
+     salida si cambia el producto o el courier (§9.3); se desarma si el cliente
+     ya no lo quiere o el pedido se cancela.
   5. Despacho GF lo asigna a un motorizado desde «Programados hoy» o por QR.
 - **Barrido inicial.** Las cajas «No entregado» que siguen registradas en la
-  caja de un motorizado se reciben en oficina una por una; lo que no aparezca
-  físicamente se registra como paquete que no consta (§13), no como búsqueda en
-  la calle.
+  caja de un motorizado se reciben en oficina una por una. Lo que no aparezca
+  físicamente no se recibe en oficina: se anota en la ficha del pedido (caja,
+  motorizado, quién buscó y cuándo) y se avisa a Frankz o Yohalis para decidir
+  merma, descuento al motorizado o reclamo. No es una búsqueda en la calle. Un
+  registro propio de paquete que no consta queda para una fase posterior: §13
+  todavía no lo define.
 - **Urpi**, mientras no se registre su despacho en Kapta (§30.11): un pedido con
   reporte de Urpi no se toma en Grupo GF sin revisar antes si ya salió con Urpi.
 
@@ -8710,7 +8720,11 @@ cambia solo: la diferencia se corrige con un adicional o reabriendo la ruta.
   motorizado, activar el courier y autorizar una ruta por encima del límite de
   efectivo (§29.9) siguen siendo solo de `logistics.manage`, que se concede
   persona por persona en Equipo; el servidor lo vuelve a comprobar aunque la
-  pantalla lo pida.
+  pantalla lo pida, al asignar y también al **mover** un paquete a la caja de
+  otro motorizado, que suma su efectivo a la ruta destino. Quien solo despacha
+  opera las tiendas que tiene asignadas en Equipo, como en el resto del panel;
+  sin ninguna, Despacho del día no le muestra pedidos ni le deja tomar,
+  asignar, programar ni recibir.
 - Frankz conserva permiso de propietario y excepción.
 - Una tienda ve únicamente sus solicitudes, inventario asociado, estados,
   evidencias, cargos y liquidaciones.
@@ -9504,8 +9518,10 @@ atrás. En el teléfono el panel ocupa toda la pantalla.
 **Pantallas que quedan.** `/dashboard/courier/reparto?id=` sigue siendo el
 reparto y cierre de UNA ruta (paradas, reporte, cierre, pago del
 motorizado); sin `id` manda a la lista. `/dashboard/courier/rutas` es la
-misma lista y el mismo panel para quien coteja, recibe o arma rutas sin
-administrar el courier; quien administra cae en la pestaña. Los enlaces
+misma lista y el mismo panel para quien solo arma rutas o coteja en la salida
+(`routes.manage` o `dispatch.pickup`, sin `dispatch.manage` ni
+`logistics.manage`); quien opera el courier (§29.10: `dispatch.manage` o
+`logistics.manage`) cae en la pestaña. Los enlaces
 antiguos `?manifiesto=` abren esa caja en la pestaña (`legacyManifestHref`).
 Nada de esto cambia acciones de servidor ni la base.
 
@@ -9868,8 +9884,11 @@ decía «Ya estaba». Había 78 así, en cajas del 16 al 28/09, y 20 rechazos.
   oficina** (`sin_recibir`): paradas «No entregado» cuyo paquete conserva su
   ítem activo en la caja (`stopsNotReceived`, el mismo criterio del escaneo).
 - **Se puede cerrar igual, a conciencia** («Cerrar igual», con confirmación):
-  el motorizado propio devuelve el saldo no entregado al día siguiente (§9.4),
-  y exigirlo esa noche frenaría la liquidación del efectivo. Lo que queda sigue
+  cerrar no espera a que se reciba el saldo no entregado, y exigirlo antes del
+  cierre frenaría la liquidación del efectivo. Desde la fase 0 (11-10-2026,
+  §9.5) el motorizado entrega ese saldo en oficina al terminar y alguien del
+  equipo lo recibe esa misma noche: a la mañana siguiente no queda ninguna caja
+  «No entregado» a su nombre (antes se devolvía al día siguiente). Lo que queda sigue
   en «Devoluciones» y el escaneo de «Por QR» lo recibe al volver a asignarlo.
   Es lo único que se fuerza en Grupo GF; lo sin reportar y la foto no.
 - **«Recibir en oficina»** en la misma fila (`receiveRouteReturns`) los recibe

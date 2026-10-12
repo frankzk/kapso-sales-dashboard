@@ -286,6 +286,23 @@ export function cashLimitVerdict(input: {
   return { status: "ok", total, message: null };
 }
 
+/**
+ * Qué responde el servidor cuando una ruta pasaría el límite de efectivo
+ * (§29.9), al asignar o al mover un paquete a otra caja. Pasarlo es una
+ * excepción de quien administra el courier (`logistics.manage`): a quien solo
+ * despacha no se le sugiere una autorización que no puede dar. `null` = sigue.
+ */
+export function cashLimitBlock(
+  verdict: CashLimitVerdict,
+  input: { override: boolean; canAuthorize: boolean },
+): string | null {
+  if (verdict.status !== "blocked") return null;
+  if (input.override && input.canAuthorize) return null;
+  const message = verdict.message ?? "Límite de efectivo superado.";
+  if (input.canAuthorize) return message;
+  return `${message.replace(" o autoriza superar el límite.", ".")} Pasar el límite lo autoriza quien administra Grupo GF (Daysi o Frankz).`;
+}
+
 // ---------------------------------------------------------------------------
 // Modo de recojo del motorizado: tres valores en la base (0185, §29.13)
 // ---------------------------------------------------------------------------

@@ -143,7 +143,7 @@ export function GrupoGfCourierBoard({
         </p>
       </header>
 
-      <nav aria-label="Secciones de Grupo GF Courier" className="grid grid-cols-[1fr_1fr_1fr_auto] gap-1 border-b border-line lg:flex lg:gap-6">
+      <nav aria-label="Secciones de Grupo GF Courier" className={cn("grid gap-1 border-b border-line lg:flex lg:gap-6", canManageLogistics ? "grid-cols-[1fr_1fr_1fr_auto]" : "grid-cols-[1fr_1fr_auto]")}>
         <CourierTab
           label="Despacho del día"
           shortLabel="Despacho"
