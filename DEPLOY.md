@@ -2265,9 +2265,9 @@ la línea de tiempo («Recordatorio de recojo (día 3)…») y la foto que viaj�
      el mismo `TELNYX_FROM_NUMBER` de Reproprovincia, que es como sale el
      piloto mientras llega el número peruano (decisión del owner, 12-10-2026).
      El +1 645 de la puerta no va aquí: el lead nunca lo ve.
-   - **Falta el redeploy** (lo hace el owner): hasta entonces producción no lee
-     `TELNYX_LEADS_SIP_URI` y Ajustes sigue diciendo «Falta preparar la línea
-     del agente».
+   - **Ya en producción**: la variable se puso a las 16:51 y los deploys de
+     main de las 17:00 y las 17:08 (12-10-2026) ya la leen. Si Ajustes todavía
+     dice «Falta preparar la línea del agente», redeploy.
 5. **El barrido** `/api/cron/voice-leads` ya está en `vercel.json` (cada cinco
    minutos, desfasado dos del de Reproprovincia). Solo corre en producción y
    sin tiendas con el agente encendido no hace nada. La cola se mira sin llamar
@@ -2276,8 +2276,8 @@ la línea de tiempo («Recordatorio de recojo (día 3)…») y la foto que viaj�
    `Authorization: Bearer <CRON_SECRET>`: la mira como si el agente estuviera
    encendido y devuelve cuántos entran y cuántos quedan fuera por cada motivo.
 6. **Encendido por tienda** (Ajustes → «Agente de voz · Leads (piloto)»),
-   después del redeploy del paso 4, en este orden: campaña, producto y oferta; «Probar en mi teléfono» desde el
-   drawer de un lead; el porcentaje de control (queda fijo en el primer
+   con la puerta del paso 4 ya en producción, en este orden: campaña, producto
+   y oferta; «Probar en mi teléfono» desde el drawer de un lead; el porcentaje de control (queda fijo en el primer
    sorteo); y recién entonces «Agente de leads» y «Llamadas automáticas». Los
    pasos completos y la campaña de Biru están en `docs/voz-leads-agente.md`.
 

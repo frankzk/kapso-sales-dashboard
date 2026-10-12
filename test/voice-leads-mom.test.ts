@@ -895,8 +895,15 @@ describe("docs/voz-leads-agente.md: webhooks, ajustes y variables de Vercel", ()
     }
     // El número de la puerta no es el que ve el lead.
     expect(flat(S33)).toContain("El +1 645 de la puerta no es el que ve el lead");
-    // Lo único que falta del lado de Vercel es el redeploy.
-    expect(deploy).toContain("**Falta el redeploy** (lo hace el owner)");
+    // Producción ya la lee: los deploys de main que siguieron a la variable.
+    expect(deploy).toContain("**Ya en producción**: la variable se puso a las 16:51");
+    for (const [name, text] of [
+      ["docs/voz-leads-agente.md", flat(DOC)],
+      ["MOM §33", flat(S33)],
+      ["DEPLOY.md", deploy],
+    ] as const) {
+      expect(text, name).not.toMatch(/falta el redeploy/i);
+    }
   });
 
   it("el inicio no se da por probado: la simulación solo llegó a las tools", () => {

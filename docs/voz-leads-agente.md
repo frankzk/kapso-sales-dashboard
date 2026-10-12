@@ -19,8 +19,8 @@ Kenku Biru (piloto)», con todo lo de las secciones 2 a 5 y 7: prompt, primer
 mensaje, las 17 variables, las dos tools, el webhook de inicio y el secreto
 en los tres. Su puerta también: el +1 645 654 0729, comprado en Telnyx e
 importado por SIP trunk el 12-10-2026 como «Nicol Leads Telnyx» y asignado a
-este agente (sección 7); `TELNYX_LEADS_SIP_URI` ya está en Vercel y falta el
-redeploy (sección 9). Su id, el de sus tools y el del número quedan en la
+este agente (sección 7); `TELNYX_LEADS_SIP_URI` ya está en Vercel y en
+producción (sección 9). Su id, el de sus tools y el del número quedan en la
 consola, no aquí: con el id, cualquiera puede abrir una conversación web con
 el agente.
 
@@ -469,8 +469,8 @@ commit.
    +1 645 654 0729 («Nicol Leads Telnyx»), comprado en Telnyx e importado el
    12-10-2026. Recién entonces `TELNYX_LEADS_SIP_URI` en Vercel (la dirección
    SIP de ese número, con el mismo formato que `TELNYX_ELEVENLABS_SIP_URI`),
-   y redeploy. La variable se puso el 12-10-2026; **falta el redeploy**, que
-   hace el owner: hasta entonces producción no la lee y Ajustes sigue diciendo
+   y redeploy. La variable se puso el 12-10-2026 a las 16:51 y los deploys de
+   producción de las 17:00 y las 17:08 ya la leen: Ajustes ya no debe decir
    «Falta preparar la línea del agente». **Mientras llega el número peruano**
    (decisión del owner, 12-10-2026), `TELNYX_LEADS_FROM_NUMBER` queda vacío y
    el lead ve el 918 de EE. UU. de Reproprovincia, no el +1 645 de la puerta.
@@ -498,7 +498,7 @@ commit.
    con la marca «Prueba» y el lead no cambia. La prueba no deja marcar el
    número del lead ni uno que pidió no ser contactado. Tampoco el de otro lead
    de la tienda: el celular de prueba tiene que ser peruano y ajeno a los
-   leads. Necesita el redeploy del paso 4; sin él, el drawer no muestra el
+   leads. Sin la puerta del paso 4 en producción, el drawer no muestra el
    botón. Si Nicol dice «me equivoqué de llamada», falló el inicio (número que
    llama, secreto o datos de inicio del webhook); si suena y se corta sin
    hablar, falló el tramo SIP, y la causa queda en

@@ -11425,8 +11425,8 @@ vigilante. Nada más:
   existe** (12-10-2026): el +1 645 654 0729, comprado en Telnyx e importado en
   ElevenLabs por SIP trunk como «Nicol Leads Telnyx» (solo entrada desde las
   direcciones de Telnyx, sin usuario ni contraseña) y asignado a él;
-  `TELNYX_LEADS_SIP_URI` ya está en Vercel. Falta el redeploy, que hace el
-  owner. Después: producto y oferta de Kenku (sin cargar todavía, a
+  `TELNYX_LEADS_SIP_URI` ya está en Vercel y producción la lee desde el deploy
+  de las 17:00 del 12-10-2026. Falta: producto y oferta de Kenku (sin cargar todavía, a
   propósito), «Probar en mi teléfono» y recién entonces encender (33.8).
 - **Número peruano en Telnyx** para el agente de leads
   (`TELNYX_LEADS_FROM_NUMBER`). Sin él, el lead ve el número de Telnyx de
