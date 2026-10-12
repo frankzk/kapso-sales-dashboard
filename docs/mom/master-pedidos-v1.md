@@ -9815,6 +9815,19 @@ límite de efectivo), la línea lo dice y el paquete queda recibido, «por
 asignar». Lo del **mismo día** no cambia: «Ya estaba» es solo la caja de ese
 día, y la de otro motorizado ofrece «Mover».
 
+**«Ya estaba» dice la carga y lo que falta (12-10-2026).** #KP139615 volvió de
+la ruta del 08/10 y el escaneo lo puso en la Carga 5 de Alexis, una carga nueva
+que nadie verificó. La parada de la ruta nace al verificar y entregar la carga,
+así que el pedido no salía en la hoja de Alexis, y el segundo escaneo respondía
+solo «Ya estaba»: parecía que no estaba en ningún lado. Ahora la chapa dice la
+carga y el paso pendiente (`lib/gf-scan-already-in-box.ts`):
+
+| La carga donde está | Chapa | Aviso completo |
+| --- | --- | --- |
+| Sin verificar | «Ya está en la Carga 5 · falta verificarla» | «…: falta verificar esa carga en «Cajas de hoy». Hasta entonces no sale en su ruta.» |
+| Verificada, sin entregar | «Ya está en la Carga 5 · falta entregarla» | «…, verificado en oficina: falta entregársela.» |
+| Entregada al motorizado | «Ya está en la Carga 3 · la tiene Alexis» | «…, que Alexis ya tiene.» |
+
 **«Mover» un paquete que está en la oficina (05-10-2026).** Con verificación
 «exigir», un paquete que el motorizado confirmó al recibir su caja no se puede
 sacar de ella desde Despacho del día: nadie le retira en silencio algo de su

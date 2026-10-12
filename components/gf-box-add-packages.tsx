@@ -9,6 +9,7 @@
 // página.
 
 import { useEffect, useEffectEvent, useState, useTransition } from "react";
+import { alreadyInBoxChip } from "@/lib/gf-scan-already-in-box";
 import { cn } from "@/components/ui";
 import { ScanAction } from "@/components/scan-action";
 import { moveManifestItem, scanAssignToRider, type ScanAssignLine } from "@/app/dashboard/courier/actions";
@@ -29,7 +30,7 @@ function presentation(l: ScanAssignLine, riderName: string, canAuthorizeCash: bo
     case "asignado":
       return { text: `En la caja de ${l.riderName ?? riderName}`, textClass: "text-ok-fg", rowClass: "bg-ok-wash" };
     case "ya_en_caja":
-      return { text: "Ya estaba", textClass: "text-warn-fg", rowClass: "bg-warn-wash" };
+      return { text: alreadyInBoxChip({ riderName: l.riderName ?? riderName, loadNumber: l.loadNumber, stage: l.boxStage }), textClass: "text-warn-fg", rowClass: "bg-warn-wash" };
     case "en_otra_caja":
       return { text: `En la caja de ${l.riderName ?? "otro"} → Mover`, textClass: "text-warn-fg", rowClass: "bg-warn-wash" };
     case "bloqueado_efectivo":
