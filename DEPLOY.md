@@ -2124,7 +2124,7 @@ la línea de tiempo («Recordatorio de recojo (día 3)…») y la foto que viaj�
    Solo redefine `lima_district_aliases()` («San Juan Lurigancho», «Pachamamac»,
    «Cercado delima»…). La cola de Grupo GF usa los alias de TypeScript y se
    desbloquea con el despliegue; la base los usa en la cobertura y en el pago
-   del motorizado en vivo.
+   del motorizado en vivo. **Ya aplicada en producción** el 12-10-2026.
 2. **Migración `0247_gf_replace_output.sql`**, a mano y ANTES del código:
    `psql "$DATABASE_URL" -f db/migrations/0247_gf_replace_output.sql`. Crea
    `gf_output_replaced` y `gf_replace_output`, redefine `gf_return_to_office`
@@ -2133,7 +2133,10 @@ la línea de tiempo («Recordatorio de recojo (día 3)…») y la foto que viaj�
    los triggers
    `delivery_stops_guard_replaced` y `dispatch_items_guard_replaced_route`. Sin
    ella, «Sacar con salida nueva» falla y deshace la salida nueva que había
-   creado: no deja salidas huérfanas.
+   creado: no deja salidas huérfanas. **Ya aplicada en producción** el
+   12-10-2026, antes del código; sin efecto sobre el código anterior (en
+   producción no había ninguna salida propia en `retorno` ni devuelta dentro
+   de una caja).
 3. **Después del despliegue**, el cron recalcula el Master por la versión
    `mom-v1.26`. Con la foto del 12-10-2026 no hay ninguna salida reemplazada
    (`output_replaced`); cambian pocos pedidos: los que tienen una parada del
