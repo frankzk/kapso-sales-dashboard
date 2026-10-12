@@ -2096,8 +2096,11 @@ suyo cambia.
    - **Compliance webhooks** (los tres, misma URL):
      `https://kapso-sales-dashboard.vercel.app/api/shopify/clientes/cumplimiento`
      para `customers/data_request`, `customers/redact` y `shop/redact`.
-   - **Scopes**: los mismos de la app interna:
-     `read_orders,read_draft_orders,write_draft_orders,read_products,read_customers`.
+   - **Scopes** (alcances): los de la app interna más `write_orders`, y nada
+     más — tienen que coincidir con `SHOPIFY_CLIENT_APP_SCOPES`:
+     `read_orders,read_draft_orders,write_draft_orders,read_products,read_customers,write_orders`.
+     `write_orders` sirve para corregir la dirección de un pedido ya creado y
+     etiquetarlo. Cada alcance tiene que poder justificarse en la revisión.
    - **Embedded**: desactivado (Kapta abre en su propia pestaña).
    - **Distribución**: pública, visibilidad **oculta**. Es definitivo. **No**
      enviar a revisión todavía: falta la segunda parte (anonimizar y entregar

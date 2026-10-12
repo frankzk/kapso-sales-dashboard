@@ -332,6 +332,8 @@ por cada corrección. Sin app aprobada, ninguna tienda cliente puede conectarse.
   - registro de accesos a datos de compradores;
   - plan de respuesta a incidentes y plazo de retención en la política;
   - verificar si la revisión exige una pantalla embebida en el admin;
+  - subir la versión de la API de Shopify: Kapta pide `2025-01`, que Shopify
+    ya no soporta y reemplaza en silencio por la más antigua vigente;
   - la invitación por correo (decisión 3) es de la Fase 1: hasta entonces solo
     reclama una instalación quien ya tiene cuenta en Kapta.
 

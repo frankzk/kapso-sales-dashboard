@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createHmac } from "node:crypto";
-import { routeShopifyTopic, SHOPIFY_APP_SCOPES } from "@/lib/shopify";
+import { routeShopifyTopic, SHOPIFY_APP_SCOPES, SHOPIFY_CLIENT_APP_SCOPES } from "@/lib/shopify";
 import {
   asPrivacyTopic,
   decideClientInstall,
@@ -140,13 +140,17 @@ describe("routeShopifyTopic: un tema que no es pedido ya no entra como pedido", 
 });
 
 describe("detalles", () => {
-  it("las dos apps piden los mismos permisos", () => {
+  it("la app de clientes pide lo de la interna más write_orders, y nada más", () => {
     expect(SHOPIFY_APP_SCOPES.split(",")).toEqual([
       "read_orders",
       "read_draft_orders",
       "write_draft_orders",
       "read_products",
       "read_customers",
+    ]);
+    expect(SHOPIFY_CLIENT_APP_SCOPES.split(",")).toEqual([
+      ...SHOPIFY_APP_SCOPES.split(","),
+      "write_orders",
     ]);
   });
   it("propone un nombre de tienda desde el dominio", () => {

@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { randomBytes } from "node:crypto";
 import { createAdminSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
-import { buildAuthorizeUrl, SHOPIFY_APP_SCOPES } from "@/lib/shopify";
+import { buildAuthorizeUrl, SHOPIFY_CLIENT_APP_SCOPES } from "@/lib/shopify";
 import { CLIENT_OAUTH_STATE_COOKIE, verifyShopifyLaunch } from "@/lib/shopify-client-app";
 
 // URL de la app de clientes (la que se pone como «App URL» en el Dev
@@ -53,7 +53,7 @@ export async function GET(req: NextRequest) {
   const authorizeUrl = buildAuthorizeUrl({
     shop,
     apiKey: env.shopifyClientAppApiKey(),
-    scopes: SHOPIFY_APP_SCOPES,
+    scopes: SHOPIFY_CLIENT_APP_SCOPES,
     redirectUri: `${env.siteUrl()}/api/shopify/clientes/callback`,
     state,
   });

@@ -2008,7 +2008,8 @@ export async function fetchShopInfo(opts: ShopifyClientOpts): Promise<ShopInfo> 
 // OAuth install flow ("Install on Shopify" → token captured automatically)
 // ---------------------------------------------------------------------------
 
-// Lo que piden las dos apps de Kapta (la interna y la de tiendas cliente):
+// Lo que piden las dos apps de Kapta (la interna y la de tiendas cliente;
+// la de clientes suma `write_orders`, abajo):
 // read_draft_orders + write_draft_orders power the abandoned-cart (Releasit COD)
 // feature: read open/completed drafts, and "Generar pedido" completes a draft
 // into a real order. read_products powers the order form's catalog picker
@@ -2018,6 +2019,12 @@ export async function fetchShopInfo(opts: ShopifyClientOpts): Promise<ShopInfo> 
 // (the local orders table is kapso-only, so non-bot purchases live only here).
 export const SHOPIFY_APP_SCOPES =
   "read_orders,read_draft_orders,write_draft_orders,read_products,read_customers";
+
+// La app de tiendas cliente pide además `write_orders`: corregir la dirección
+// de un pedido ya creado y etiquetarlo. La interna no lo tiene y esas dos cosas
+// fallan con aviso en sus tiendas (MOM §11). Tiene que coincidir con los alcances
+// declarados en el Dev Dashboard (DEPLOY.md, entrada del 10-10-2026).
+export const SHOPIFY_CLIENT_APP_SCOPES = `${SHOPIFY_APP_SCOPES},write_orders`;
 
 const SHOP_DOMAIN_RE = /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/;
 
