@@ -2116,3 +2116,61 @@ la línea de tiempo («Recordatorio de recojo (día 3)…») y la foto que viaj�
    meta de la semana, días que trabaja y, si tiene, su horario de entrada y
    salida. Con horario, Productividad marca la primera actividad tarde y la
    última antes de la salida (10 minutos de gracia).
+
+### 12-10-2026 · Agente de voz para leads, piloto Biru (0247, MOM §33)
+
+1. **Migración `0247_voice_lead_calls.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0247_voice_lead_calls.sql`. Agrega a
+   `voice_calls` a qué llama cada fila (`purpose`: `order` por defecto, o
+   `lead`), `lead_id` y `lead_context`; `order_id` queda nulo solo en las de
+   lead; los resultados se validan por carril. Además `leads.contact_opt_out_at`,
+   los ajustes `stores.voice_lead_*` (apagados) y el trigger
+   `swayp_auto_voice_interlock` solo para llamadas con pedido. **El orden
+   importa también para Reproprovincia**: el código nuevo filtra sus llamadas
+   por `purpose` (atadura de las tools, tope diario, «Gestión por persona»,
+   «Llamando ahora»), y sin la columna esas lecturas fallan y el agente de
+   pedidos deja de llamar. **Ya aplicada en producción** el 12-10-2026,
+   pegando el SQL en el editor de Supabase (las 1.068 llamadas que había
+   quedaron `purpose = 'order'`).
+2. **Variables en Vercel (Production)**. Se generan en tu máquina
+   (`openssl rand -hex 24`) y se pegan directo en Vercel y en ElevenLabs:
+   **nunca en un chat**, ni en un ticket.
+   - `TELNYX_LEADS_SIP_URI`: la puerta SIP del agente de leads (el número de
+     Telnyx importado en ElevenLabs y asignado a ESE agente). Sin ella no se
+     llama a ningún lead: el aviso de Telnyx corta el tramo, nunca lo manda al
+     agente de Reproprovincia.
+   - `TELNYX_LEADS_FROM_NUMBER` (opcional): el número que ve el lead. Vacío =
+     el mismo `TELNYX_FROM_NUMBER` de Reproprovincia.
+   - `VOICE_LEADS_TOOLS_SECRET`: firma el inicio de conversación y las dos
+     tools del agente de leads. **Distinto** de `VOICE_TOOLS_SECRET` y de
+     `VOICE_TOOLS_SECRET_ELEVENLABS`: si es igual a uno de ellos, Kapta lo trata
+     como vacío y rechaza todo (un secreto compartido abriría las tools de un
+     agente al otro).
+   - `ELEVENLABS_WEBHOOK_SECRET`: el secreto HMAC que ElevenLabs genera al crear
+     el webhook «post-call». Sin él, `/api/voice/elevenlabs/post-call` responde
+     401 y no se guardan transcripciones; el resto funciona igual.
+3. **El agente en ElevenLabs**: guion, primer mensaje, las tools
+   `consultar_cobertura` y `registrar_resultado_lead`, el webhook de inicio
+   (`/api/voice/leads/inicio`) y el post-call, en `docs/voz-leads-agente.md`.
+4. **El barrido** `/api/cron/voice-leads` ya está en `vercel.json` (cada cinco
+   minutos, desfasado dos del de Reproprovincia). Solo corre en producción y
+   sin tiendas con el agente encendido no hace nada. La cola se mira sin llamar
+   ni escribir con
+   `GET /api/cron/voice-leads?dry=1&storeId=<uuid>` y
+   `Authorization: Bearer <CRON_SECRET>`: la mira como si el agente estuviera
+   encendido y devuelve cuántos entran y cuántos quedan fuera por cada motivo.
+5. **Encendido por tienda** (Ajustes → «Agente de voz · Leads (piloto)»), en
+   este orden: campaña, producto y oferta; «Probar en mi teléfono» desde el
+   drawer de un lead; el porcentaje de control (queda fijo en el primer
+   sorteo); y recién entonces «Agente de leads» y «Llamadas automáticas». Los
+   pasos completos y la campaña de Biru están en `docs/voz-leads-agente.md`.
+
+**Marcha atrás.** Apagar «Llamadas automáticas» (o «Agente de leads») detiene
+el barrido. El sorteo del grupo de control queda guardado y nada se borra.
+
+**Qué mirar después.** Cada pasada escribe una línea `[voice-leads] {…}` en los
+logs de Vercel, sin nombres ni teléfonos: qué hizo cada tienda (`llamada`,
+`cola_vacia`, `fuera_de_horario`, `tope_diario`, `agente_ocupado`,
+`sin_configurar`, `manual`, `apagado`, `error`), el tamaño de la cola, las exclusiones por motivo, los
+brazos sorteados y los «Atender ahora» repuestos. El tablero del piloto está en
+la misma sección de Ajustes.

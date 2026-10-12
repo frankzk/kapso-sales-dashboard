@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { LeadVoicePanelData } from "@/lib/voice-lead-labels";
 
 const mocks = vi.hoisted(() => ({
   user: vi.fn(),
@@ -8,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   conversation: vi.fn(),
   alerts: vi.fn(),
   advisors: vi.fn(),
+  voicePanel: vi.fn(),
+  voiceTest: vi.fn(),
 }));
 vi.mock("@/lib/access", () => ({ getCurrentUser: mocks.user, getAccessibleStores: mocks.stores }));
 vi.mock("@/app/dashboard/leads/actions", () => ({
@@ -16,6 +19,10 @@ vi.mock("@/app/dashboard/leads/actions", () => ({
   loadLeadConversation: mocks.conversation,
   listYapeAlerts: mocks.alerts,
   listStoreVendedoras: mocks.advisors,
+  loadLeadVoicePanel: mocks.voicePanel,
+  // Exportada de verdad por las acciones de leads: si la lista blanca de la
+  // ruta la dejara pasar, este mock la registraría.
+  probarAgenteLeadEnMiTelefono: mocks.voiceTest,
 }));
 import { POST } from "@/app/api/leads/read/route";
 
@@ -64,11 +71,98 @@ describe("independent leads endpoint", () => {
     ["loadLeadConversation", [id, null, "true"]],
     ["loadLeadConversation", [id, null, false, "true"]],
     ["loadLeadCustomerHistory", [id, "extra argument"]],
+    // Agente de voz de leads (MOM §33.3): no hay llamada a mano desde el
+    // drawer, y «Probar en mi teléfono» marca por Telnyx, así que es una
+    // mutación y nunca una lectura, aunque sus argumentos sean válidos. El
+    // panel solo acepta exactamente un id de lead.
+    ["probarAgenteLeadEnMiTelefono", [id, "999888777"]],
+    ["loadLeadVoicePanel", []],
+    ["loadLeadVoicePanel", [null]],
+    ["loadLeadVoicePanel", ["not-a-uuid"]],
+    ["loadLeadVoicePanel", [id, "extra argument"]],
   ])("rejects mutations and malformed arguments (%s)", async (operation, args) => {
     expect((await POST(request(operation as string, args as unknown[]))).status).toBe(400);
     expect(mocks.search).not.toHaveBeenCalled();
     expect(mocks.history).not.toHaveBeenCalled();
     expect(mocks.conversation).not.toHaveBeenCalled();
+    expect(mocks.voicePanel).not.toHaveBeenCalled();
+    expect(mocks.voiceTest).not.toHaveBeenCalled();
+  });
+
+  it("reads the lead voice-agent panel through the same allowlisted transport", async () => {
+    // A ciegas (MOM §33.3): solo lo que el agente ya hizo. `satisfies` hace que
+    // tsc rechace aquí un campo de cola o de brazo (eligible, reason, arm).
+    const panel = {
+      data: {
+        enabled: true,
+        configured: true,
+        optOut: false,
+        calls: [
+          {
+            id: "call-1",
+            mode: "real",
+            status: "completed",
+            outcome: "volver_a_llamar",
+            queued_at: "2026-10-12T15:00:00.000Z",
+            resumen: "Pidió que la llamen mañana a las 10.",
+            motivo: null,
+            error: null,
+          },
+        ],
+      },
+    } satisfies { data: LeadVoicePanelData };
+    mocks.voicePanel.mockResolvedValue(panel);
+    const response = await POST(request("loadLeadVoicePanel", [id]));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    const body = await response.json();
+    expect(body).toEqual(panel);
+    expect(Object.keys(body.data).sort()).toEqual(["calls", "configured", "enabled", "optOut"]);
+    expect(mocks.voicePanel).toHaveBeenCalledWith(id);
+    // La autorización del lead es la del propio panel (RLS), no la de tiendas.
+    expect(mocks.stores).not.toHaveBeenCalled();
+    const log = JSON.parse(vi.mocked(console.info).mock.calls[0]![0]);
+    expect(log).toEqual({ event: "leads.read", operation: "loadLeadVoicePanel", durationMs: expect.any(Number), authMs: expect.any(Number), totalMs: expect.any(Number) });
+  });
+
+  it("passes through the neutral panel of a store whose agent settings cannot be read", async () => {
+    // Una tienda ilegible (o pre-0247) deja el agente apagado, no un error:
+    // la ruta lo entrega tal cual para que el drawer no muestre un fallo.
+    const neutral = { data: { enabled: false, configured: false, optOut: false, calls: [] } } satisfies {
+      data: LeadVoicePanelData;
+    };
+    mocks.voicePanel.mockResolvedValue(neutral);
+    const response = await POST(request("loadLeadVoicePanel", [id]));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(neutral);
+  });
+
+  it("preserves a denied voice panel from the existing RLS authorization", async () => {
+    mocks.voicePanel.mockResolvedValue({ error: "Sin acceso a este lead." });
+    const response = await POST(request("loadLeadVoicePanel", [id]));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ error: "Sin acceso a este lead." });
+  });
+
+  it("does not expose voice panel failures or the lead id", async () => {
+    mocks.voicePanel.mockRejectedValue(new Error(`voice_calls de ${id}: TELNYX_LEADS_SIP_URI`));
+    const response = await POST(request("loadLeadVoicePanel", [id]));
+    expect(response.status).toBe(500);
+    const text = await response.text();
+    expect(text).not.toContain(id);
+    expect(text).not.toContain("TELNYX");
+    const logged = String(vi.mocked(console.info).mock.calls[0]![0]);
+    expect(logged).not.toContain(id);
+    expect(JSON.parse(logged)).toMatchObject({ event: "leads.read", operation: "loadLeadVoicePanel" });
+  });
+
+  it.each([
+    ["missing session", null, "https://kapta.test", 401],
+    ["cross-origin", { id: "advisor" }, "https://other.test", 403],
+  ])("rejects voice panel polling with a %s", async (_case, user, origin, status) => {
+    mocks.user.mockResolvedValue(user);
+    expect((await POST(request("loadLeadVoicePanel", [id], origin))).status).toBe(status);
+    expect(mocks.voicePanel).not.toHaveBeenCalled();
   });
 
   it("returns the existing scope-filtered result without caching or logging customer data", async () => {
@@ -134,4 +228,3 @@ describe("independent leads endpoint", () => {
     expect(mocks.search).not.toHaveBeenCalled();
   });
 });
-

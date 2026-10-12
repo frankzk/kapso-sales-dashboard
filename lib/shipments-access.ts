@@ -1295,7 +1295,9 @@ async function getReproByAgent(
 
 /**
  * «Agentes de voz: comparación» (MOM §11.8): llamadas reales entre dos días de
- * Lima, ambos incluidos. Null si el rango no vale o la lectura falla.
+ * Lima, ambos incluidos. Null si el rango no vale o la lectura falla. Solo
+ * llamadas de pedido: las del agente de leads (MOM §33) tienen su propio
+ * tablero y aquí inflarían las del Agente ElevenLabs.
  */
 export async function getVoiceScore(storeIds: string[], from: string, to: string): Promise<VoiceScoreRow[] | null> {
   const bounds = voiceScoreBounds(from, to);
@@ -1312,6 +1314,7 @@ export async function getVoiceScore(storeIds: string[], from: string, to: string
       )
       .in("store_id", storeIds)
       .eq("mode", "real")
+      .eq("purpose", "order")
       .gte("queued_at", bounds.startIso)
       .lt("queued_at", bounds.endIso)
       .order("queued_at", { ascending: true })
@@ -1344,6 +1347,7 @@ export async function getTeamScore(storeIds: string[], from: string, to: string)
  * solo reales, para «Llamando ahora» en Envíos (MOM §11.8). Una llamada
  * caducada no se muestra: el barrido la cerrará y no hay nadie al teléfono.
  * Null si la lectura falla, para que la pantalla conserve lo último que vio.
+ * Solo de pedido: una de lead (MOM §33) no tiene pedido que mostrar.
  */
 export async function getLiveVoiceCalls(storeIds: string[]): Promise<LiveVoiceCall[] | null> {
   if (!storeIds.length) return [];
@@ -1353,6 +1357,7 @@ export async function getLiveVoiceCalls(storeIds: string[]): Promise<LiveVoiceCa
     .select("id, order_id, agent_number, phone, status, telephony, provider, dialed_at, started_at, orders(name)")
     .in("store_id", storeIds)
     .eq("mode", "real")
+    .eq("purpose", "order")
     .in("status", ["dialing", "in_progress"])
     .order("dialed_at", { ascending: true });
   if (error) return null;
@@ -1398,6 +1403,9 @@ export async function getVoiceLiveStatus(storeIds: string[]): Promise<VoiceLiveS
       .select("status, outcome, error, started_at, ended_at, telephony, provider, orders(name)")
       .in("store_id", storeIds)
       .eq("mode", "real")
+      // La última de Reproprovincia: una de lead saldría sin pedido y con un
+      // resultado que esta línea no conoce (MOM §33).
+      .eq("purpose", "order")
       .in("status", ["completed", "failed"])
       .not("ended_at", "is", null)
       .order("ended_at", { ascending: false })

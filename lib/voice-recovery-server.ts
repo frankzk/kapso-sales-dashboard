@@ -44,6 +44,7 @@ import {
   type VoiceEngine,
 } from "@/lib/telnyx";
 import { buscarOrigenReenvio, reenviarGuiaAnulada } from "@/lib/swayp-reenvio";
+import { writeLeadNoAnswer } from "@/lib/voice-leads-writeback";
 import { parseSenders } from "@/lib/swayp-guide";
 import { inspectAuto, pilotUsedToday } from "@/lib/swayp-auto-server";
 import { evaluateAutoDispatch, type AutoSettings } from "@/lib/swayp-auto-policy";
@@ -232,15 +233,50 @@ async function noteOnRecoveryGuide(
  * índice único de una abierta por número). Una real que no terminó en
  * gestión, porque nunca llegó al agente o porque se cortó sin registrar,
  * se registra como «no contesta» (`staleCallResolution`).
+ *
+ * Mira las abiertas de los DOS agentes, pedidos y leads (MOM §33): lo corren
+ * las tools, el inicio y los barridos de cualquiera de los dos, y una fila de
+ * lead colgada también ocupa su carril. `closeAsNoAnswer` decide qué se
+ * escribe según a qué llamaba la fila.
  */
 export async function sweepStaleCalls(admin: SupabaseClient, now: Date): Promise<void> {
   const { data } = await admin
     .from("voice_calls")
-    .select("id, store_id, order_id, mode, agent_number, phone, status, dialed_at, started_at")
+    .select("id, store_id, order_id, lead_id, purpose, mode, agent_number, phone, status, outcome, outcome_payload, dialed_at, started_at")
     .in("status", OPEN_STATUSES as unknown as string[]);
-  type Row = OpenCall & { store_id: string; order_id: string; mode: "real" | "test" };
+  type Row = OpenCall & {
+    store_id: string;
+    order_id: string | null;
+    lead_id: string | null;
+    mode: "real" | "test";
+    outcome?: string | null;
+    outcome_payload?: Record<string, unknown> | null;
+  };
   const stale = ((data ?? []) as Row[]).filter((c) => isStale(c, now));
   for (const c of stale) {
+    // Una llamada de lead que el agente ya registró (la tool tomó la fila con
+    // su resultado y escribió sobre el lead) pero cuyo cierre no llegó: se
+    // cierra con SU resultado. Un «no contestó» encima borraría lo que la
+    // persona dijo y dejaría una nota falsa en el lead (MOM §33.6).
+    if (c.purpose === "lead" && c.outcome) {
+      const payload = c.outcome_payload && Object.keys(c.outcome_payload).length ? c.outcome_payload : null;
+      await admin
+        .from("voice_calls")
+        .update({
+          status: "completed",
+          ended_at: now.toISOString(),
+          error: "registrada; el cierre no llegó y la cerró el vigilante",
+          // Sin el cierre de la tool, lo mínimo: el resultado y, si pidió no
+          // ser contactado en una llamada real, la marca que lee la lista
+          // «no llamar» de la tienda. La captura se perdió con el cierre.
+          ...(payload
+            ? {}
+            : { outcome_payload: { resultado: c.outcome, no_llamar: c.mode === "real" && c.outcome === "no_llamar" } }),
+        })
+        .eq("id", c.id)
+        .in("status", OPEN_STATUSES as unknown as string[]);
+      continue;
+    }
     const resumen =
       c.status === "in_progress"
         ? "No contestó: la llamada llegó al agente pero se cortó sin gestión (buzón o cuelgue)."
@@ -250,6 +286,18 @@ export async function sweepStaleCalls(admin: SupabaseClient, now: Date): Promise
 }
 
 /**
+ * Lo que `closeAsNoAnswer` necesita de la fila. `order_id` es nulo en una
+ * llamada de lead (MOM §33): esa fila nunca llega al pedido.
+ */
+export type ClosableCall = Pick<OpenCall, "id" | "status"> & {
+  store_id: string;
+  order_id: string | null;
+  lead_id?: string | null;
+  purpose?: string | null;
+  mode: "real" | "test";
+};
+
+/**
  * Cierra una llamada abierta como «no contesta» y, si es real, lo registra
  * sobre el pedido. La usan el barrido (ventana vencida) y los avisos de
  * Telnyx (no contestó, ocupado, contestadora), que saben antes que el barrido
@@ -257,7 +305,7 @@ export async function sweepStaleCalls(admin: SupabaseClient, now: Date): Promise
  */
 export async function closeAsNoAnswer(
   admin: SupabaseClient,
-  c: Pick<OpenCall, "id" | "status"> & { store_id: string; order_id: string; mode: "real" | "test" },
+  c: ClosableCall,
   resumen: string,
   now: Date,
   opts: { error?: string; soloSinGestion?: boolean } = {},
@@ -277,16 +325,33 @@ export async function closeAsNoAnswer(
   const { data: closed } = await close.select("id");
   if (!r.registerNoAnswer || !closed?.length) return;
 
+  // Llamada del agente de leads (MOM §33): el «no contesta» es una nota en el
+  // historial del lead, que no cambia. Nunca la v2 ni el Master: sin pedido,
+  // la v2 rechaza la fila («El pedido no pertenece…») y la dejaba `failed`.
+  // Sin `order_id` también va por aquí, aunque la fila no diga su propósito.
+  if (c.purpose === "lead" || c.order_id == null) {
+    try {
+      await writeLeadNoAnswer(admin, { id: c.id, store_id: c.store_id, lead_id: c.lead_id ?? null, mode: c.mode }, resumen, now);
+    } catch (err) {
+      // La fila ya quedó cerrada y el carril libre. Una nota que no se pudo
+      // escribir no puede cortar al barrido ni a las tools de Reproprovincia,
+      // que llaman a esto en cada pasada.
+      console.error(`[voice-recovery] nota de no contesta del lead no escrita (llamada ${c.id}): ${(err as Error).message}`);
+    }
+    return;
+  }
+
   const action = translateGestion(
     { disposition: "no_contesta", resumen },
     { today: voiceDates(now).hoy, canDiscard: false, voiceCallId: c.id },
   );
   if (action.kind !== "attempt") return;
-  const writeError = await writeVoiceAttempt(admin, c, action, now);
+  const orderId = c.order_id;
+  const writeError = await writeVoiceAttempt(admin, { id: c.id, store_id: c.store_id, order_id: orderId }, action, now);
   if (writeError) {
     await admin.from("voice_calls").update({ status: "failed", error: writeError }).eq("id", c.id);
   } else {
-    await recomputeOrderMasterSafe(admin, [c.order_id]);
+    await recomputeOrderMasterSafe(admin, [orderId]);
   }
 }
 
@@ -303,7 +368,7 @@ export const HANGUP_GRACE_MS = 3_000;
  */
 export async function closeCutWithoutGestion(
   admin: SupabaseClient,
-  c: Pick<OpenCall, "id" | "status"> & { store_id: string; order_id: string; mode: "real" | "test" },
+  c: ClosableCall,
   now: Date,
 ): Promise<void> {
   await new Promise((r) => setTimeout(r, HANGUP_GRACE_MS));
@@ -403,11 +468,18 @@ export async function reconcileZadarmaCalls(
   return closed;
 }
 
-export async function openCalls(admin: SupabaseClient): Promise<OpenCall[]> {
+/**
+ * Las llamadas abiertas de UN agente: pedidos (Reproprovincia, por defecto) o
+ * leads (MOM §33). La atadura compara el número de agente por dígitos y, sin
+ * número, toma la única abierta: sin este filtro, una tool o el inicio de
+ * Reproprovincia podían tomar la llamada de un lead (y al revés).
+ */
+export async function openCalls(admin: SupabaseClient, purpose: "order" | "lead" = "order"): Promise<OpenCall[]> {
   const { data, error } = await admin
     .from("voice_calls")
-    .select("id, agent_number, phone, provider, status, dialed_at, started_at")
-    .in("status", OPEN_STATUSES as unknown as string[]);
+    .select("id, agent_number, phone, provider, purpose, status, dialed_at, started_at")
+    .in("status", OPEN_STATUSES as unknown as string[])
+    .eq("purpose", purpose);
   if (error) throw new Error(error.message);
   return (data ?? []) as OpenCall[];
 }
@@ -418,6 +490,7 @@ export async function fichaPrecargada(admin: SupabaseClient, id: string): Promis
   return (data as { outcome_payload?: { ficha_precargada?: boolean } | null } | null)?.outcome_payload?.ficha_precargada === true;
 }
 
+/** Una llamada de pedido (`purpose = 'order'`): siempre trae `order_id`. */
 export interface VoiceCallRow {
   id: string;
   store_id: string;
@@ -426,11 +499,17 @@ export interface VoiceCallRow {
   status: string;
 }
 
+/**
+ * La fila de una llamada de pedido. Una de lead da null (MOM §33): todo lo que
+ * cuelga de aquí —ficha, intento, descarte, salida Swayp— escribe sobre el
+ * pedido. El agente de leads lee las suyas con `loadLeadCall`.
+ */
 export async function loadCall(admin: SupabaseClient, id: string): Promise<VoiceCallRow | null> {
   const { data } = await admin
     .from("voice_calls")
     .select("id, store_id, order_id, mode, status")
     .eq("id", id)
+    .eq("purpose", "order")
     .maybeSingle();
   return (data as VoiceCallRow | null) ?? null;
 }
@@ -654,6 +733,7 @@ export function telnyxConfig(): TelnyxConfig | { error: string } {
       fromNumber: env.telnyxFromNumber(),
       xaiSipUri: env.telnyxXaiSipUri(),
       elevenLabsSipUri: env.telnyxElevenLabsSipUri(),
+      leadsSipUri: env.telnyxLeadsSipUri(),
     };
   } catch (err) {
     return { error: `Falta configurar Telnyx en Vercel: ${(err as Error).message}` };
@@ -894,7 +974,7 @@ export async function loadVoiceQueue(
   };
   type Call = { order_id: string; queued_at: string };
 
-  const [guides, events, orders, priors, calls, stockRes, dnc, autoEmissions] = await Promise.all([
+  const [guides, events, orders, priors, calls, stockRes, doNotCall, autoEmissions] = await Promise.all([
     selectIn<Guide>(
       admin,
       "shipments",
@@ -927,20 +1007,13 @@ export async function loadVoiceQueue(
     store.org_id
       ? admin.from("fenix_stock").select("city, product, sku, quantity, unlimited").eq("org_id", store.org_id)
       : Promise.resolve({ data: [], error: null }),
-    admin
-      .from("voice_calls")
-      .select("phone")
-      .eq("store_id", store.id)
-      .eq("outcome_payload->>no_llamar", "true"),
+    loadDoNotCallPhones(admin, store.id),
     selectIn<{ order_id: string }>(admin, "swayp_guide_emissions", "order_id", "order_id", ids, (q) =>
       (q as unknown as { eq: (c: string, v: boolean) => unknown }).eq("automatic", true),
     ),
   ]);
   const autoRetry = new Set(autoEmissions.map((e) => e.order_id));
   const stock = ((stockRes as { data: unknown[] | null }).data ?? []) as FenixStockRow[];
-  const doNotCall = new Set(
-    ((dnc.data ?? []) as { phone: string }[]).map((r) => zadarmaLocalPeru(r.phone)).filter(Boolean),
-  );
 
   const byOrder = <T extends { order_id: string }>(rows: T[]) => {
     const m = new Map<string, T[]>();
@@ -998,8 +1071,38 @@ export async function loadVoiceQueue(
   return { candidates, excluded, reasons };
 }
 
-/** Llamadas reales de hoy (Lima) de una tienda: el tope diario se cuenta aquí. */
-export async function realCallsToday(admin: SupabaseClient, storeId: string, now: Date): Promise<number> {
+/**
+ * Los teléfonos que pidieron no ser llamados en una tienda (MOM §11.8, cond. 9),
+ * en el formato de la cuenta (`zadarmaLocalPeru`). Sin filtro de propósito A
+ * PROPÓSITO (MOM §33): quien se lo pidió al agente de pedidos o al de leads no
+ * recibe más llamadas de ninguno de los dos. Se drena por páginas como el resto
+ * de la cola, y una lectura fallida corta la cola (lanza) en vez de llamar a
+ * quien pidió que no.
+ */
+export async function loadDoNotCallPhones(admin: SupabaseClient, storeId: string): Promise<Set<string>> {
+  const rows = await drain<{ phone: string | null }>("voice_calls", (from, to) =>
+    admin
+      .from("voice_calls")
+      .select("phone")
+      .eq("store_id", storeId)
+      .eq("outcome_payload->>no_llamar", "true")
+      .order("id")
+      .range(from, to),
+  );
+  return new Set(rows.map((r) => zadarmaLocalPeru(r.phone)).filter((p): p is string => Boolean(p)));
+}
+
+/**
+ * Llamadas reales de hoy (Lima) de una tienda y de UN agente: el tope diario
+ * se cuenta aquí. Cada agente tiene el suyo (MOM §33): las llamadas a leads no
+ * gastan el tope de Reproprovincia, ni al revés.
+ */
+export async function realCallsToday(
+  admin: SupabaseClient,
+  storeId: string,
+  now: Date,
+  purpose: "order" | "lead" = "order",
+): Promise<number | null> {
   const limaMidnightUtc = new Date(
     Date.UTC(
       new Date(now.getTime() - 5 * 3_600_000).getUTCFullYear(),
@@ -1008,12 +1111,25 @@ export async function realCallsToday(admin: SupabaseClient, storeId: string, now
       5,
     ),
   );
-  const { count } = await admin
+  let q = admin
     .from("voice_calls")
     .select("id", { count: "exact", head: true })
     .eq("store_id", storeId)
     .eq("mode", "real")
+    .eq("purpose", purpose)
     .gte("queued_at", limaMidnightUtc.toISOString());
+  // Una llamada de lead que Telnyx rechazó antes de marcar (`cancelled`) no
+  // sonó: no gasta intento (`attemptCounts`) ni cupo. Sin esto, una hora de
+  // Telnyx caído se come el tope del día y el agente no llama aunque vuelva.
+  if (purpose === "lead") q = q.neq("status", "cancelled");
+  const { count, error } = await q;
+  // Sin poder contar, null: quien llama NO llama (un tope que no se puede
+  // leer no es razón para llamar sin límite; antes devolvía 0 y no frenaba
+  // nada) y lo informa como error, no como «tope del día».
+  if (error) {
+    console.error(`[voice] tope diario sin leer (${purpose}): ${error.message}`);
+    return null;
+  }
   return count ?? 0;
 }
 
@@ -1111,6 +1227,8 @@ export async function salidasSwaypPendientes(
     .from("voice_calls")
     .select("id, store_id, order_id, mode, status, outcome_payload")
     .eq("mode", "real")
+    // Solo llamadas de pedido: una de lead no tiene guía que reenviar (MOM §33).
+    .eq("purpose", "order")
     .eq("outcome", "confirma")
     .gte("queued_at", desde)
     .is("outcome_payload->salida_swayp", null);
