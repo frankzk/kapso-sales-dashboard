@@ -2,6 +2,24 @@
 
 export const GROUP_GF_YAPE_PERCENTAGE = 3.5;
 
+/**
+ * Corte del mismo día (MOM §29.6): lo que se toma hasta esta hora de Lima sale
+ * hoy por la tarde (Alexis recoge 12:30 y cubre todo Lima); lo de después,
+ * mañana. Es el valor por defecto: manda `logistics_providers.same_day_cutoff`.
+ */
+export const GF_SAME_DAY_CUTOFF_DEFAULT = "12:00";
+
+/** Minuto del día de un corte «HH:MM»; uno ilegible cae en el corte por defecto. */
+export function sameDayCutoffMinute(value: string | null | undefined): number {
+  const match = /^(\d{1,2}):(\d{2})/.exec(value ?? "") ?? /^(\d{1,2}):(\d{2})/.exec(GF_SAME_DAY_CUTOFF_DEFAULT)!;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+/** «HH:MM» del corte vigente, para mostrarlo tal cual lo guarda el proveedor. */
+export function sameDayCutoffLabel(value: string | null | undefined): string {
+  return /^\d{1,2}:\d{2}/.test(value ?? "") ? value!.slice(0, 5) : GF_SAME_DAY_CUTOFF_DEFAULT;
+}
+
 export type CourierOutcome =
   | "entregado"
   | "rechazado"
@@ -266,6 +284,26 @@ export function cashLimitVerdict(input: {
     };
   }
   return { status: "ok", total, message: null };
+}
+
+/**
+ * Qué responde el servidor cuando una ruta pasaría el límite de efectivo
+ * (§29.9), al asignar o al mover un paquete a otra caja. Pasarlo es una
+ * excepción de quien administra el courier (`logistics.manage`): a quien solo
+ * despacha no se le sugiere una autorización que no puede dar. `null` = sigue.
+ */
+export function cashLimitBlock(
+  verdict: CashLimitVerdict,
+  input: { override: boolean; canAuthorize: boolean; addingCod?: number },
+): string | null {
+  if (verdict.status !== "blocked") return null;
+  // Lo que no suma efectivo (pagado en Shopify) no empeora una ruta que ya
+  // pasó el límite con una excepción autorizada: no se frena.
+  if (input.addingCod != null && input.addingCod <= 0) return null;
+  if (input.override && input.canAuthorize) return null;
+  const message = verdict.message ?? "Límite de efectivo superado.";
+  if (input.canAuthorize) return message;
+  return `${message.replace(" o autoriza superar el límite.", ".")} Pasar el límite lo autoriza quien administra Grupo GF (Daysi o Frankz).`;
 }
 
 // ---------------------------------------------------------------------------

@@ -19748,3 +19748,80 @@ comment on column stores.olva_reminder_params is
 comment on column stores.shalom_reminder_fallback_image_url is
   'Imagen de cabecera del recordatorio cuando el producto no tiene foto en el '
   'espejo de catálogo. JPG o PNG por https. Vacía y sin foto ⇒ no se manda.';
+
+-- ---- 0243 ----
+-- ============================================================================
+-- 0243_telnyx_webrtc_credentials.sql — la credencial de Telnyx de cada persona
+-- para llamar desde la computadora (MOM §8.5, 11-10-2026).
+--
+-- QUÉ ES. La ficha del pedido llama a la clienta desde el navegador (Telnyx
+-- WebRTC): la asesora habla con audífonos y la clienta ve el número de la
+-- empresa. El navegador entra a Telnyx con un token que dura 24 horas, y el
+-- token sale de una «credencial de telefonía» que vive en Telnyx, colgada de
+-- la conexión SIP de credenciales (`TELNYX_WEBRTC_CONNECTION_ID`).
+--
+-- POR QUÉ UNA POR PERSONA. Telnyx lo pide así —cada usuario, su credencial—
+-- y así el registro de Telnyx dice quién llamó. Se crea la primera vez que la
+-- persona llama y se reutiliza; esta tabla solo recuerda cuál es.
+--
+-- `connection_id` se guarda para saber de qué conexión es: si un día la
+-- conexión cambia, la credencial vieja no sirve y se crea otra.
+--
+-- Solo la lee y la escribe el servidor (`service_role`). No guarda nada
+-- secreto —el id de la credencial no basta para llamar sin la clave de la API—,
+-- pero tampoco hay motivo para que la vea el navegador.
+-- ============================================================================
+
+create table if not exists telnyx_webrtc_credentials (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  credential_id text not null,
+  connection_id text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+comment on table telnyx_webrtc_credentials is
+  'Credencial de telefonía de Telnyx de cada persona, para llamar desde la computadora (MOM §8.5). Solo el servidor.';
+
+alter table telnyx_webrtc_credentials enable row level security;
+revoke all on telnyx_webrtc_credentials from anon, authenticated;
+grant all privileges on telnyx_webrtc_credentials to service_role;
+
+-- ---- 0244 ----
+-- ============================================================================
+-- 0244_gf_same_day_cutoff_noon.sql — el corte del mismo día de Grupo GF pasa de
+-- las 11:30 a las 12:00.
+--
+-- DECISIÓN DEL OWNER (11-10-2026, «Reprogramación en Lima: quién hace qué»):
+-- lo que se toma o se programa hasta las 12:00 del mismo día sale esa tarde,
+-- porque Alexis recoge a las 12:30 y cubre todo Lima. Ver MOM §29.6 y §9.1.
+--
+-- QUÉ CAMBIA:
+--
+--   * `logistics_providers.same_day_cutoff` del proveedor `grupo-gf-courier`:
+--     es el valor que lee Kapta (Despacho del día, Mesa de ruta y la toma de
+--     pedidos). Solo se mueve el que sigue en 11:30: un corte que alguien ya
+--     cambió a mano no se pisa.
+--   * Los convenios activos de ese proveedor, por coherencia: hoy nadie lee su
+--     columna, pero dice lo mismo y no debe contradecir al proveedor.
+--   * El valor por defecto de la columna del proveedor, para un proveedor nuevo
+--     (la acción de activar ya escribe 12:00 de forma explícita).
+--
+-- Idempotente: correrla dos veces no cambia nada. Sin `begin`/`commit` propios,
+-- como el resto de migraciones: dentro del bundle concatenado cortarían el script.
+-- ============================================================================
+
+update public.logistics_providers
+   set same_day_cutoff = time '12:00'
+ where code = 'grupo-gf-courier'
+   and same_day_cutoff = time '11:30';
+
+update public.logistics_service_agreements a
+   set same_day_cutoff = time '12:00'
+  from public.logistics_providers p
+ where a.provider_id = p.id
+   and p.code = 'grupo-gf-courier'
+   and a.same_day_cutoff = time '11:30';
+
+alter table public.logistics_providers
+  alter column same_day_cutoff set default time '12:00';

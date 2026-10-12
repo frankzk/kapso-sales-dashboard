@@ -11,7 +11,9 @@ const CSP = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
-  "connect-src 'self' https://*.supabase.co https://*.supabase.in wss://*.supabase.co",
+  // wss://rtc.telnyx.com: la señalización de las llamadas desde la computadora
+  // (MOM §8.5). El audio va por WebRTC, que la CSP no gobierna.
+  "connect-src 'self' https://*.supabase.co https://*.supabase.in wss://*.supabase.co wss://rtc.telnyx.com",
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",
@@ -26,10 +28,12 @@ const securityHeaders = [
   // `camera=(self)`, no `camera=()`: la lista vacía deniega la cámara también a
   // nuestro propio origen, y el navegador NI SIQUIERA pregunta — rechaza
   // getUserMedia en el acto. Eso dejaba muerto el lector de QR del cotejo de
-  // oficina. El resto sigue cerrado; nada en la app usa micrófono ni ubicación.
+  // oficina. El micrófono, por lo mismo, es `(self)` desde que la ficha llama
+  // desde la computadora (MOM §8.5): con `()` la llamada saldría muda sin que
+  // nadie viera por qué. La ubicación sigue cerrada.
   {
     key: "Permissions-Policy",
-    value: "camera=(self), microphone=(), geolocation=(), browsing-topics=()",
+    value: "camera=(self), microphone=(self), geolocation=(), browsing-topics=()",
   },
   { key: "Content-Security-Policy", value: CSP },
 ];

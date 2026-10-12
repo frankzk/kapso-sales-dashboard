@@ -392,6 +392,24 @@ export function IconPhone(props: IconProps) {
   );
 }
 
+export function IconMic(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" />
+    </svg>
+  );
+}
+
+export function IconMicOff(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M15 9.5V6a3 3 0 0 0-5.7-1.3M9 9v2a3 3 0 0 0 4.6 2.5" />
+      <path d="M18.5 11a6.5 6.5 0 0 1-1 3.4M5.5 11a6.5 6.5 0 0 0 10.2 5.3M12 17.5V21M4 4l16 16" />
+    </svg>
+  );
+}
+
 /** WhatsApp dibujado con el trazo de la familia: globo con cola y auricular. */
 export function IconWhatsApp(props: IconProps) {
   return (

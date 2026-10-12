@@ -287,17 +287,23 @@ export async function getCourierRouteLedger(opts: { day?: string | null; limit?:
  * role porque las paradas y los ítems tienen políticas distintas; quien llama
  * ya pasó el permiso de Grupo GF.
  */
-export async function getPendingReturns(): Promise<PendingReturn[]> {
+/**
+ * `storeIds`: las tiendas a su alcance cuando solo despacha (MOM §29.10); sin
+ * él, todas, como para quien administra el courier.
+ */
+export async function getPendingReturns(scope: { storeIds?: readonly string[] | null } = {}): Promise<PendingReturn[]> {
+  if (scope.storeIds && !scope.storeIds.length) return [];
   const admin = createAdminSupabase();
   const stops: Array<{ order_id: string; shipment_id: string; dispatch_manifest_id: string; outcome_reason: string | null }> = [];
   for (let from = 0; ; from += 1000) {
-    const { data, error } = await admin
+    let query = admin
       .from("delivery_stops")
       .select("order_id,shipment_id,dispatch_manifest_id,outcome_reason")
       .eq("status", "no_entregado")
       .not("dispatch_manifest_id", "is", null)
-      .not("shipment_id", "is", null)
-      .range(from, from + 999);
+      .not("shipment_id", "is", null);
+    if (scope.storeIds) query = query.in("store_id", [...scope.storeIds]);
+    const { data, error } = await query.range(from, from + 999);
     if (error) throw new Error(error.message);
     stops.push(...((data ?? []) as typeof stops));
     if (!data || data.length < 1000) break;

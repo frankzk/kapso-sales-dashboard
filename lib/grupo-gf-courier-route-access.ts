@@ -1,4 +1,4 @@
-import { isRiderPickupMode, type RiderPickupMode } from "@/lib/grupo-gf-courier";
+import { GF_SAME_DAY_CUTOFF_DEFAULT, isRiderPickupMode, sameDayCutoffLabel, type RiderPickupMode } from "@/lib/grupo-gf-courier";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   resolveDistrictAvailability,
@@ -33,7 +33,7 @@ const unavailable = (
   tariffId: null,
   tariffAmount: null,
   currency: "PEN",
-  sameDayCutoff: "11:30",
+  sameDayCutoff: GF_SAME_DAY_CUTOFF_DEFAULT,
   ...overrides,
 });
 
@@ -96,7 +96,7 @@ export async function loadGroupGfCourierRouteCheck(
   if (!provider) {
     return unavailable("Grupo GF Courier todavía no está activado.", { districtKey });
   }
-  const sameDayCutoff = (provider.same_day_cutoff ?? "11:30").slice(0, 5);
+  const sameDayCutoff = sameDayCutoffLabel(provider.same_day_cutoff);
   if (provider.status !== "active") {
     return unavailable("Grupo GF Courier está suspendido para nuevas asignaciones.", {
       providerId: provider.id,

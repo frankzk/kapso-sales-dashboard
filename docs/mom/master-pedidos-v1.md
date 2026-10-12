@@ -1222,6 +1222,41 @@ en Kenku: 61 %, 55 %, 40 % y 27 %; en Aurela: 70 %, 69 %, 50 % y 42 %.
   las tiendas que el usuario ve, y la ficha lo dice. Sin muestra, no se muestra
   un número. Un reenvío no lleva el aviso: las cifras son de primeras guías.
 
+### 8.5 Llamar desde la computadora (11-10-2026)
+
+Pedido por el owner: la asesora llama a la clienta desde la ficha del pedido y
+habla con audífonos, sin usar su celular. La llamada sale por Telnyx (WebRTC) y
+la clienta ve el número de la empresa, no el de la asesora.
+
+- **Dónde.** «Llamar desde Kapta», en la cabecera de la ficha, junto a
+  «Llamar» y «WhatsApp». Sale para quien puede editar el Master
+  (`master.edit`, el mismo permiso que registra la gestión) y solo si la línea
+  está configurada. Llama solo a teléfonos peruanos.
+- **Con qué número.** `TELNYX_WEBRTC_FROM_NUMBER`; vacío, el del Agente Telnyx.
+  Al 11-10-2026 es un número de Estados Unidos mientras se tramita uno de Perú:
+  cambiarlo es cambiar esa variable.
+- **Qué queda.** Al colgar, la llamada se guarda en el historial del pedido
+  (`browser_call`, «Llamada desde Kapta»): quién llamó, a qué número, con cuál,
+  si contestó y cuánto se habló, o por qué no se habló (ocupado, no contestó,
+  el número no existe…). Una llamada que no llegó a timbrar —sin micrófono, sin
+  línea— no se guarda: no fue un intento de contacto. Cerrar la ficha con la
+  llamada en curso la cuelga, y se guarda igual.
+- **No reemplaza la gestión.** La llamada es un hecho; el resultado («confirma»,
+  «no contesta», «reprograma»…) se sigue registrando en la mesa de
+  confirmación (§6.1), y la tarjeta de la llamada lleva hasta ella. Así
+  «Gestión por persona» cuenta lo mismo que antes.
+- **La clave de Telnyx no sale del servidor.** Cada persona tiene su
+  credencial en Telnyx (tabla `telnyx_webrtc_credentials`, migración 0243), y
+  el navegador recibe un token que dura 24 horas. Con ese token se puede llamar
+  por la línea mientras dure: el perfil de salida de Telnyx debe limitar los
+  destinos a Perú.
+- **Configuración (una vez).** En Telnyx, una conexión SIP de credenciales con
+  el perfil de salida que ya permite Perú; su id va en
+  `TELNYX_WEBRTC_CONNECTION_ID`. La conexión del Agente Telnyx (Call Control)
+  no sirve para esto. El sitio permite el micrófono a su propio origen
+  (`Permissions-Policy: microphone=(self)`) y la conexión a
+  `wss://rtc.telnyx.com`.
+
 ## 9. Lima
 
 - Todos los pedidos entran directamente a Preparación.
@@ -1495,6 +1530,13 @@ Los cortes previamente declarados siguen como referencia para automatización:
 La diferencia entre el corte general de almacén (aprox. 11:00) y los cortes de
 cada courier debe modelarse como capacidad/horario de ruta, no como un estado
 del pedido.
+
+**Corte de Grupo GF a las 12:00 (11-10-2026, decisión del owner).** Lo que se
+programa o se toma hasta las 12:00 del mismo día sale esa tarde: Alexis recoge
+a las 12:30 y cubre todo Lima. Es el `same_day_cutoff` del proveedor (0244) y
+reemplaza al de las 11:30 en §29.2 y §29.6; después de las 12:00 el pedido sale
+al día siguiente salvo que Despacho GF apruebe el cambio (§29.6). No es un
+estado del pedido.
 
 ### 9.2 Sugerencia de courier en Lima
 
@@ -1988,6 +2030,58 @@ Cobros y liquidación observados:
 - Daysi realiza hoy parte de estos cotejos semanalmente por capacidad. Los SLA
   financieros definidos en la sección de Liquidaciones no cambian: el sistema
   debe separar `resultado reportado`, `pago verificado` y `lote conciliado`.
+
+### 9.5 Reprogramación en Lima: procedimiento de la fase 0 (11-10-2026)
+
+Decisión del owner sobre la propuesta «Reprogramación en Lima: quién hace
+qué». Ordena el trabajo con las pantallas que ya existen; no crea etapas,
+subetapas ni estados nuevos. La pantalla propia de la tienda («Repro Lima») y
+la lista de Almacén «Reintentos por salir» quedan para una fase posterior.
+
+- **Cualquiera del equipo** llama, gestiona, reprograma, programa y recibe en
+  oficina; no hay una persona asignada. Lo hacen desde Grupo GF Courier →
+  Despacho del día, abierto a quien despacha (`dispatch.manage`) o administra
+  el courier (`logistics.manage`, §29.10). El actor real queda en cada evento.
+- **Grupo GF toma cualquier pedido de la cola**, también un reprogramado que
+  todavía no tiene fecha (§29.13, decisión del 06-10-2026): no se agrega un
+  bloqueo por fecha.
+- **Corte: 12:00 del mismo día** (§9.1). Programar o tomar hasta esa hora
+  hace que salga esa tarde; después, al día siguiente. Un cambio posterior lo
+  aprueba Despacho GF (§29.6).
+- **Paso a paso de un «No entregado» de Grupo GF:**
+  1. El motorizado reporta el motivo y la foto en su ruta; si el cliente pide
+     otro día, lo escribe en la nota. Puede reintentarlo el mismo día con la
+     misma caja (§9.3). Al terminar, entrega en oficina toda caja no entregada.
+  2. Esa misma noche alguien del equipo lo recibe con «Recibir en oficina»
+     (escaneo o lista, §29.13): al día siguiente no queda ninguna caja «No
+     entregado» a nombre de un motorizado. La caja va al estante de
+     reprogramados, en la bandeja del día en que se recibió.
+  3. Alguien del equipo contacta al cliente y deja la fecha con «Programar»
+     en Despacho del día (motivo «Confirmado con cliente: …», §29.6), o anota
+     en la ficha por qué no se programó. «Programar» solo guarda el día y el
+     pedido sigue con Grupo GF; si el cliente necesita otro courier no se usa:
+     se arma otra salida desde la mesa de ruta del pedido (§9.3). La fecha que
+     el cliente dio en la puerta se confirma antes de programarla.
+  4. Para el día programado, la caja pasa del estante al anaquel del día. Por
+     defecto **se mantiene**: misma salida, QR y rótulo (excepción de Grupo GF,
+     §9.3). Se reimprime el rótulo de la misma salida si cambió la dirección
+     —corregida antes con el editor de destino de la salida, que la guarda en
+     la salida y en Shopify; corregirla solo en Shopify no cambia el rótulo— o
+     el monto (el rótulo lo lee del pedido). El teléfono del rótulo es el que
+     se guardó al crear la salida y hoy Kapta no lo cambia: el número nuevo se
+     anota en la ficha y se le pasa al motorizado al asignarlo. Se arma otra
+     salida si cambia el producto o el courier (§9.3); se desarma si el cliente
+     ya no lo quiere o el pedido se cancela.
+  5. Despacho GF lo asigna a un motorizado desde «Programados hoy» o por QR.
+- **Barrido inicial.** Las cajas «No entregado» que siguen registradas en la
+  caja de un motorizado se reciben en oficina una por una. Lo que no aparezca
+  físicamente no se recibe en oficina: se anota en la ficha del pedido (caja,
+  motorizado, quién buscó y cuándo) y se avisa a Frankz o Yohalis para decidir
+  merma, descuento al motorizado o reclamo. No es una búsqueda en la calle. Un
+  registro propio de paquete que no consta queda para una fase posterior: §13
+  todavía no lo define.
+- **Urpi**, mientras no se registre su despacho en Kapta (§30.11): un pedido con
+  reporte de Urpi no se toma en Grupo GF sin revisar antes si ya salió con Urpi.
 
 ## 10. Provincia COD y Aliclik
 
@@ -4778,6 +4872,26 @@ Reglas de esa tabla:
     injusta. El owner decidió arrancar el 04-10-2026 con el +1 de EE. UU.
     Al leer la comparación, la tasa de atendidas de Telnyx y ElevenLabs se
     lee con esa desventaja hasta que llegue el número de Lima.
+  - **Daaph, apagado** (11-10-2026, decisión del owner). Datos de octubre
+    al día 11:
+
+    | Agente | Llamadas | Reprogramadas | Por llamada | Entregadas |
+    | --- | --- | --- | --- | --- |
+    | Daaph | 190 | 4 | 2,1 % | 0 de 4 |
+    | Telnyx | 119 | 6 | 5,0 % | 2 de 6 |
+    | ElevenLabs | 207 | 4 | 1,9 % | 2 de 4 |
+
+    Las 19 salidas de Daaph de setiembre tampoco se entregaron. Daaph y
+    Telnyx son el mismo agente de xAI y se turnan el mismo puesto: apagar
+    Daaph no quita llamadas, todos sus turnos pasan a Telnyx. 4 contra 6
+    reprogramadas no prueba la diferencia, pero Zadarma además no avisa el
+    fin ni el costo de la llamada.
+
+    Se apaga con la configuración, sin tocar el código:
+    `VOICE_TELNYX_SHARE` = 67 y `VOICE_ELEVENLABS_SHARE` = 33. Daaph recibe
+    lo que sobra de 100, así que queda en 0. Si ElevenLabs baja, hay que
+    subir Telnyx en lo mismo, o Daaph vuelve a llamar. Para volver a
+    encenderlo basta bajar `VOICE_TELNYX_SHARE`.
 - Todo hecho que escribe lleva en `payload` el `voice_call_id`, y la línea de
   tiempo del drawer lo muestra con actor **«Agente de voz»** y enlace a la
   transcripción. Un intento que no se puede leer después no es historial
@@ -6418,8 +6532,10 @@ mantiene observado el lote completo.
 | --- | --- | --- |
 | Confirmación | Confirmación | Milagros |
 | Preparación/almacén | Almacén | Yelitza y Matías |
-| Seguimiento Lima | Seguimiento Lima | Daysi |
+| Seguimiento Lima | Seguimiento Lima | Daysi; cualquiera del equipo reprograma (§9.5) |
 | Apoyo Lima/cotejo | Operación Lima | Diana |
+| Recibir en oficina y devoluciones de Lima | Operación Lima | Cualquiera del equipo (Diana, Daysi, Yessenia, Sara…, §9.5) |
+| Aprobar cambios después del corte de las 12:00 | Despacho GF | Despacho GF (§29.6) |
 | Reproprovincia | Jefatura Repro | Akemi |
 | Reproprovincia | Operación Repro | Mariannys |
 | Shalom/Olva | Seguimiento Agencia | Gerardo |
@@ -8128,7 +8244,7 @@ liquidación del día.
 
 - Cobertura: Lima Metropolitana y Callao.
 - Punto de operación: un único almacén de Grupo GF.
-- Corte para salida el mismo día: **11:30**.
+- Corte para salida el mismo día: **12:00** (11:30 hasta el 11-10-2026; §9.1, 0244).
 - La tienda asigna directamente la solicitud a Grupo GF Courier.
 - Grupo GF puede recibir inventario de una tienda, pero en el alcance inicial no
   recoge paquetes armados en otros almacenes: Grupo GF reserva, arma y rotula.
@@ -8365,13 +8481,15 @@ el último escaneo de «Recibir mi caja» fallaba con `delivery_stop_shipment_un
 
 - Una tienda puede pactar fecha y una franja amplia de aproximadamente cinco
   horas.
-- Un cambio después de las 11:30 requiere aprobación de Grupo GF y muestra
-  distrito, tarifa y fecha resultantes.
+- Un cambio después del corte de las 12:00 (§9.1) requiere aprobación de
+  Despacho GF y muestra distrito, tarifa y fecha resultantes.
 - Solo se aprueba dentro del día si el destino permanece en la ruta del mismo
   motorizado.
 - Si el cambio exige pasar a otro motorizado, se cancela la guía logística y la
   solicitud vuelve a `Por agendar`. Nunca se mueve silenciosamente entre rutas.
 - La tienda o Grupo GF pueden reprogramar, y siempre se registra actor y motivo.
+  En Kenku y Aurela lo hace cualquiera del equipo con acceso a Despacho del
+  día (§9.5, §29.10).
 - Cancelar una solicitud no tiene costo, incluso si el motorizado ya salió. El
   paquete puede retornar al almacén al día siguiente y la cancelación logística
   no cancela por sí sola el pedido Shopify.
@@ -8676,6 +8794,15 @@ Grupo GF, igual que el modo de recepción de §29.13. El aviso se quedó en
 S/ 4,000. Un operador nuevo sigue naciendo con S/ 4,000 / S/ 5,000, que son los
 valores por defecto de 0134.
 
+**El límite también rige al mover y lo pasa solo quien administra (11-10-2026,
+fase 0, §29.10).** Mover un paquete a la caja de otro motorizado suma su
+efectivo a la ruta destino, como asignar. Si la pasaría del límite, quien tiene
+`logistics.manage` (Daysi o Frankz) confirma la excepción en la misma pantalla y
+queda en el evento `dispatch_route_reassigned`; a quien solo despacha se le
+explica que lo autoriza quien administra, sin ofrecerle el botón. Un paquete que
+no suma efectivo (pagado en Shopify) no se frena aunque la ruta ya haya pasado
+el límite con una excepción autorizada.
+
 Neto de la tienda:
 
 ```text
@@ -8749,6 +8876,19 @@ cambia solo: la diferencia se corrige con un adicional o reabriendo la ruta.
 
 - Daysi administra tiendas cliente, motorizados, capacidad, asignaciones, rutas,
   contratos y tarifas de Grupo GF Courier.
+- **Operar no es administrar (11-10-2026, decisión del owner).** Despacho del
+  día —tomar, asignar, programar, reprogramar, recibir en oficina y la pestaña
+  Rutas— es de cualquiera que despache (`dispatch.manage`, que traen los roles
+  admin y vendedora) o administre el courier (`logistics.manage`), para que
+  quien esté pueda ejecutar (§9.5). El Tarifario, los contratos, el pago por
+  motorizado, activar el courier y autorizar una ruta por encima del límite de
+  efectivo (§29.9) siguen siendo solo de `logistics.manage`, que se concede
+  persona por persona en Equipo; el servidor lo vuelve a comprobar aunque la
+  pantalla lo pida, al asignar y también al **mover** un paquete a la caja de
+  otro motorizado, que suma su efectivo a la ruta destino. Quien solo despacha
+  opera las tiendas que tiene asignadas en Equipo, como en el resto del panel;
+  sin ninguna, Despacho del día no le muestra pedidos ni le deja tomar,
+  asignar, programar ni recibir.
 - Frankz conserva permiso de propietario y excepción.
 - Una tienda ve únicamente sus solicitudes, inventario asociado, estados,
   evidencias, cargos y liquidaciones.
@@ -8857,8 +8997,8 @@ fotografiar vivía en tres componentes que decidían por su cuenta.
 **Dos pasos para el supervisor, en una pantalla, con la pistola en la mano.**
 La pestaña «Despacho del día» de Grupo GF Courier abre en **modo escaneo**: el
 supervisor elige motorizado (y el día de la caja, hoy por defecto, nunca un día
-ya pasado) y escanea QR tras QR. Ese día manda también después del corte de
-las 11:30: el corte rige lo que se toma sin despachar todavía, no a la mesa
+ya pasado) y escanea QR tras QR. Ese día manda también después del corte del
+mismo día (12:00, §9.1): el corte rige lo que se toma sin despachar todavía, no a la mesa
 que ya tiene el paquete en la mano; si la solicitud estaba prevista para otro
 día, se mueve al de la caja con `logistics_request_rescheduled`. Cada lectura, en un
 solo gesto, **toma** el pedido si hacía falta, lo **pone en la caja** del
@@ -9058,7 +9198,7 @@ el orden del MOM (aunque estén en cero); si una fila trae otra por un dato
 viejo del Master, aparece detrás; cambiar de etapa apaga las subetapas que
 dejan de verse— y **Fecha pactada** —Vencidos, Hoy, Próximos sobre la salida
 prevista: la de la solicitud tomada o, si el pedido sigue disponible, hoy o
-mañana según el corte de las 11:30; «vencido» es un tomado cuya salida ya
+mañana según el corte de las 12:00; «vencido» es un tomado cuya salida ya
 pasó—. Dentro de cada grupo se encienden varios chips a la vez (basta con
 cumplir uno) y los grupos se combinan entre sí y con el resto del picker, la
 búsqueda y las tiles; sin ningún chip encendido el grupo es «todas», y el
@@ -9542,8 +9682,10 @@ atrás. En el teléfono el panel ocupa toda la pantalla.
 **Pantallas que quedan.** `/dashboard/courier/reparto?id=` sigue siendo el
 reparto y cierre de UNA ruta (paradas, reporte, cierre, pago del
 motorizado); sin `id` manda a la lista. `/dashboard/courier/rutas` es la
-misma lista y el mismo panel para quien coteja, recibe o arma rutas sin
-administrar el courier; quien administra cae en la pestaña. Los enlaces
+misma lista y el mismo panel para quien solo arma rutas o coteja en la salida
+(`routes.manage` o `dispatch.pickup`, sin `dispatch.manage` ni
+`logistics.manage`); quien opera el courier (§29.10: `dispatch.manage` o
+`logistics.manage`) cae en la pestaña. Los enlaces
 antiguos `?manifiesto=` abren esa caja en la pestaña (`legacyManifestHref`).
 Nada de esto cambia acciones de servidor ni la base.
 
@@ -9593,7 +9735,7 @@ recibe el pedido en la puerta.
   - Lima Metropolitana o Callao, con distrito canónico;
   - tarifa vigente;
   - distrito sin pausa;
-  - corte de las 11:30 para la fecha prevista.
+  - corte de las 12:00 para la fecha prevista.
 
   Además, todas las líneas del pedido tienen que estar mapeadas (§29.15.4). Si
   cumple, queda tomado: no existe un estado «solicitada» ni una aprobación de
@@ -9906,8 +10048,11 @@ decía «Ya estaba». Había 78 así, en cajas del 16 al 28/09, y 20 rechazos.
   oficina** (`sin_recibir`): paradas «No entregado» cuyo paquete conserva su
   ítem activo en la caja (`stopsNotReceived`, el mismo criterio del escaneo).
 - **Se puede cerrar igual, a conciencia** («Cerrar igual», con confirmación):
-  el motorizado propio devuelve el saldo no entregado al día siguiente (§9.4),
-  y exigirlo esa noche frenaría la liquidación del efectivo. Lo que queda sigue
+  cerrar no espera a que se reciba el saldo no entregado, y exigirlo antes del
+  cierre frenaría la liquidación del efectivo. Desde la fase 0 (11-10-2026,
+  §9.5) el motorizado entrega ese saldo en oficina al terminar y alguien del
+  equipo lo recibe esa misma noche: a la mañana siguiente no queda ninguna caja
+  «No entregado» a su nombre (antes se devolvía al día siguiente). Lo que queda sigue
   en «Devoluciones» y el escaneo de «Por QR» lo recibe al volver a asignarlo.
   Es lo único que se fuerza en Grupo GF; lo sin reportar y la foto no.
 - **«Recibir en oficina»** en la misma fila (`receiveRouteReturns`) los recibe

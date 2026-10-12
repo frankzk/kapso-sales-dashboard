@@ -534,6 +534,11 @@ export interface OrderMasterDetail {
   gfDeliveries: GfDelivery[];
   /** Pedido acompañante (MOM §32): en qué caja viaja y qué lleva en las suyas. */
   companion: OrderCompanionInfo;
+  /**
+   * Llamar desde la computadora (MOM §8.5): la línea de Telnyx está configurada.
+   * Lo pone `loadOrderDetail`, que corre en el servidor; sin él, el botón no sale.
+   */
+  browserCallEnabled?: boolean;
 }
 
 /** La caja de otro pedido en la que viaja este, o lo que lleva en las suyas (§32). */

@@ -32,11 +32,27 @@ describe("Permissions-Policy", () => {
     expect(value).not.toMatch(/camera=\(\)/);
   });
 
+  it("permite el micrófono al propio origen — la ficha llama desde la computadora (MOM §8.5)", async () => {
+    const value = (await siteHeaders()).get("Permissions-Policy")!;
+    expect(value).toContain("microphone=(self)");
+    // Con `microphone=()` la llamada saldría muda y el navegador no preguntaría.
+    expect(value).not.toMatch(/microphone=\(\)/);
+  });
+
   it("mantiene cerrado lo que la app no usa", async () => {
     const value = (await siteHeaders()).get("Permissions-Policy")!;
-    expect(value).toContain("microphone=()");
     expect(value).toContain("geolocation=()");
     expect(value).toContain("browsing-topics=()");
+  });
+});
+
+describe("Content-Security-Policy", () => {
+  it("deja conectar con la señalización de Telnyx y con nada más de Telnyx", async () => {
+    const csp = (await siteHeaders()).get("Content-Security-Policy")!;
+    const connect = csp.split(";").map((d) => d.trim()).find((d) => d.startsWith("connect-src"))!;
+    expect(connect).toContain("wss://rtc.telnyx.com");
+    // La API de Telnyx (con la clave) solo la llama el servidor.
+    expect(connect).not.toContain("api.telnyx.com");
   });
 });
 

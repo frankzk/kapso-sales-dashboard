@@ -78,7 +78,7 @@ import { failedOutputLabel, ownOutputLabel } from "@/lib/gf-retry";
 import { confirmedTandersReview, type TandersConfirmations, type TandersPackageLocation, type TandersReview } from "@/lib/gf-tanders-review";
 import { addToTray, optimisticBox, removeFromTray, type TrayEntry } from "@/lib/dispatch-scan-tray";
 import type { DispatchManifest } from "@/lib/dispatch-access";
-import type { RiderPickupMode } from "@/lib/grupo-gf-courier";
+import { sameDayCutoffLabel, type RiderPickupMode } from "@/lib/grupo-gf-courier";
 import {
   assignGroupGfCourierRoute,
   moveManifestItem,
@@ -109,8 +109,15 @@ interface Props {
   riders: CourierRiderOption[];
   manifests: DispatchManifest[];
   canManageDispatch: boolean;
+  /**
+   * Quien administra el courier (`logistics.manage`): pasa el límite de
+   * efectivo (§29.9) y entra al Tarifario (§29.10).
+   */
+  canAuthorizeCash?: boolean;
   /** 0185: exigir (verifica su caja antes de la ruta) · confirmar («Lo llevo» por paquete) · ninguno. */
   riderPickupMode: RiderPickupMode;
+  /** Corte del mismo día del proveedor («HH:MM», MOM §29.6). */
+  sameDayCutoff?: string | null;
   /** Umbrales de efectivo de la ruta (MOM §29.9): aviso y límite. */
   cashWarning: number;
   cashLimit: number;
@@ -129,6 +136,7 @@ const PROGRAM_REASONS = ["La clienta pidió ese día", "La clienta no está ante
 
 export function DispatchDayBoard(props: Props) {
   const { orgId, day, riders, canManageDispatch, pending, run } = props;
+  const cutoff = sameDayCutoffLabel(props.sameDayCutoff);
   const router = useRouter();
   // Sin motorizado preseleccionado: elegirlo es el primer gesto del supervisor.
   // Preseleccionar al primero de la lista mandaba paquetes a la caja de quien
@@ -237,7 +245,13 @@ export function DispatchDayBoard(props: Props) {
     if (!line.manifestId || !line.shipmentId || !riderId) return;
     const from = line.riderName ?? "otro motorizado";
     setLines((cur) => cur.map((l) => (l === line ? { ...l, status: "procesando", message: "Moviendo…", moveError: null } : l)));
-    const result = await moveManifestItem(orgId, line.manifestId, line.shipmentId, riderId, `Escaneado en oficina para la caja de ${riderName}`, { inHand: true });
+    const reason = `Escaneado en oficina para la caja de ${riderName}`;
+    let result = await moveManifestItem(orgId, line.manifestId, line.shipmentId, riderId, reason, { inHand: true, overrideCash: overrideCash && props.canAuthorizeCash === true });
+    // Quien administra el courier puede autorizar pasar el límite (§29.9).
+    if (result.cashBlocked && props.canAuthorizeCash && !overrideCash && window.confirm(`${result.error}\n\n¿Autorizas pasar el límite para mover este paquete?`)) {
+      setOverrideCash(true);
+      result = await moveManifestItem(orgId, line.manifestId, line.shipmentId, riderId, reason, { inHand: true, overrideCash: true });
+    }
     setLines((cur) => cur.map((l) => {
       if (l.code !== line.code || l.status !== "procesando") return l;
       return "error" in result && result.error
@@ -632,7 +646,7 @@ export function DispatchDayBoard(props: Props) {
 
       {blockedOpen && (
         <Sheet look="ops" title={`${props.blocked.length.toLocaleString("es-PE")} sin condiciones para salir`} onClose={() => setBlockedOpen(false)} wide>
-          <p className="text-[13px] text-ink-500">No entran en la cola hasta que se arregle el motivo. Tarifa y pausa se corrigen en el Tarifario; el resto en el pedido o en la caja.</p>
+          <p className="text-[13px] text-ink-500">No entran en la cola hasta que se arregle el motivo. {props.canAuthorizeCash ? "Tarifa y pausa se corrigen en el Tarifario" : "Tarifa y pausa las corrige quien administra Grupo GF (Daysi o Frankz)"}; el resto en el pedido o en la caja.</p>
           <ul className="mt-3 max-h-[50vh] divide-y divide-line overflow-auto border-t border-line text-sm">
             {props.blocked.map((b) => {
               const reason = BLOCKED_REASON_LABEL[b.reason];
@@ -641,7 +655,7 @@ export function DispatchDayBoard(props: Props) {
                   <OrderLink orderId={b.orderId} className="font-semibold text-ink-900 hover:text-brand-700">{b.orderName}</OrderLink>
                   <span className="text-[13px] text-ink-500">{b.storeName} · {b.customerName} · {b.district}</span>
                   <Badge tone="warn">{reason.label}</Badge>
-                  {reason.fix === "tarifario" && <Link href="/dashboard/courier?tab=tariffs" className="text-xs font-medium text-brand-700 hover:underline">Arreglar en Tarifario</Link>}
+                  {reason.fix === "tarifario" && props.canAuthorizeCash && <Link href="/dashboard/courier?tab=tariffs" className="text-xs font-medium text-brand-700 hover:underline">Arreglar en Tarifario</Link>}
                 </li>
               );
             })}
@@ -762,8 +776,11 @@ export function DispatchDayBoard(props: Props) {
                       {l.status === "programado_otro_dia" && riderId && (
                         <OpsButton size="sm" disabled={pending || draining} onClick={() => confirmScanned(l)} title={l.message}>Asignar igual</OpsButton>
                       )}
-                      {l.status === "bloqueado_efectivo" && !overrideCash && (
+                      {l.status === "bloqueado_efectivo" && !overrideCash && props.canAuthorizeCash && (
                         <OpsButton size="sm" onClick={() => setOverrideCash(true)} title={`${cashOverrideHint(props.cashWarning, props.cashLimit)} Toca «Autorizar» y vuelve a escanear.`}>Autorizar</OpsButton>
+                      )}
+                      {l.status === "bloqueado_efectivo" && !props.canAuthorizeCash && l.message && (
+                        <p className="basis-full text-xs text-ink-500">{l.message}</p>
                       )}
                       {l.moveError && <p role="alert" className="basis-full text-xs font-medium text-crit-fg">{l.moveError}</p>}
                       {/* Se leyó el rótulo viejo (Tanders que no entregó): la caja
@@ -882,7 +899,7 @@ export function DispatchDayBoard(props: Props) {
             )}
             {openPill === "fecha" && (
               <Sheet look="ops" title="Fecha pactada" onClose={closePill} anchored anchorRef={pillRef.fecha}>
-                <p className="text-[13px] text-ink-500">Fecha pactada de salida: la programada, la de la solicitud ya tomada o, si el pedido sigue disponible, hoy o mañana según el corte de las 11:30. «Vencidos» son los que ya debían haber salido.</p>
+                <p className="text-[13px] text-ink-500">Fecha pactada de salida: la programada, la de la solicitud ya tomada o, si el pedido sigue disponible, hoy o mañana según el corte de las {cutoff}. «Vencidos» son los que ya debían haber salido.</p>
                 <div role="group" aria-label="Fecha pactada" className="mt-3 flex flex-wrap gap-1.5">
                   {SCHEDULED_BUCKETS.map((bucket) => (
                     <ChoiceChip key={bucket} label={SCHEDULED_BUCKET_LABEL[bucket]} count={facets.due[bucket]} active={filters.due.includes(bucket)} onClick={() => patchFilters({ due: toggleInList(filters.due, bucket) })} />
@@ -973,9 +990,11 @@ export function DispatchDayBoard(props: Props) {
                   Recibir en oficina {selectedReturnable.length}
                 </OpsButton>
               )}
-              <label className="flex min-h-8 items-center gap-2 text-[13px] text-ink-600 sm:ml-auto" title={cashOverrideHint(props.cashWarning, props.cashLimit)}>
-                <input type="checkbox" className={CHECKBOX} checked={overrideCash} onChange={(e) => setOverrideCash(e.target.checked)} /> <span className="whitespace-nowrap">Superar el límite</span>
-              </label>
+              {props.canAuthorizeCash && (
+                <label className="flex min-h-8 items-center gap-2 text-[13px] text-ink-600 sm:ml-auto" title={cashOverrideHint(props.cashWarning, props.cashLimit)}>
+                  <input type="checkbox" className={CHECKBOX} checked={overrideCash} onChange={(e) => setOverrideCash(e.target.checked)} /> <span className="whitespace-nowrap">Superar el límite</span>
+                </label>
+              )}
             </div>
 
             {tandersConfirm && (
@@ -1062,7 +1081,7 @@ export function DispatchDayBoard(props: Props) {
                     <th className="px-3 py-2.5">Distrito</th>
                     <th className="px-3 py-2.5">Estado</th>
                     <th className="px-3 py-2.5">Creado</th>
-                    <th className="px-3 py-2.5" title="Salida prevista: el día programado si lo tiene; si no, después del corte de las 11:30 el pedido sale al día siguiente. Para los que ya salieron, el día de su caja.">Sale</th>
+                    <th className="px-3 py-2.5" title={`Salida prevista: el día programado si lo tiene; si no, después del corte de las ${cutoff} el pedido sale al día siguiente. Para los que ya salieron, el día de su caja.`}>Sale</th>
                     <th className="px-3 py-2.5 text-right">Venta</th>
                     <th className="px-4 py-2.5 text-right">Tarifa</th>
                   </tr>
@@ -1172,6 +1191,7 @@ export function DispatchDayBoard(props: Props) {
                     onChanged={() => router.refresh()}
                     pickupMode={props.riderPickupMode}
                     filter={boxFilter}
+                    canAuthorizeCash={props.canAuthorizeCash === true}
                   />
                 ))}
               </ul>
@@ -1283,7 +1303,7 @@ function RouteLine({ q }: { q: QueueRow }) {
   );
 }
 
-function BoxRow({ box, cash, riders, orgId, open, onToggle, canManage, onChanged, pickupMode, filter }: {
+function BoxRow({ box, cash, riders, orgId, open, onToggle, canManage, onChanged, pickupMode, filter, canAuthorizeCash }: {
   box: RiderBox;
   /** Efectivo previsto de la caja. */
   cash: number;
@@ -1296,6 +1316,8 @@ function BoxRow({ box, cash, riders, orgId, open, onToggle, canManage, onChanged
   pickupMode: RiderPickupMode;
   /** Filtro rápido compartido: Todos · Por armar · Listos para cotejo · Sin confirmar. */
   filter: BoxItemFilter;
+  /** Quien administra el courier puede autorizar pasar el límite de efectivo al mover (§29.9). */
+  canAuthorizeCash: boolean;
 }) {
   const [pending, start] = useTransition();
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
@@ -1315,7 +1337,13 @@ function BoxRow({ box, cash, riders, orgId, open, onToggle, canManage, onChanged
   const move = (manifestId: string, shipmentId: string, targetRiderId: string) => {
     const reason = window.prompt("¿Por qué cambia de motorizado?");
     if (!reason) return;
-    start(async () => say(await moveManifestItem(orgId, manifestId, shipmentId, targetRiderId, reason)));
+    start(async () => {
+      let result = await moveManifestItem(orgId, manifestId, shipmentId, targetRiderId, reason);
+      if (result.cashBlocked && canAuthorizeCash && window.confirm(`${result.error}\n\n¿Autorizas pasar el límite para mover este paquete?`)) {
+        result = await moveManifestItem(orgId, manifestId, shipmentId, targetRiderId, reason, { overrideCash: true });
+      }
+      say(result);
+    });
   };
   // Modo «confirmar» (0185): lo asignado que el motorizado aún no confirmó con
   // «Lo llevo». Se puede quitar o mover desde aquí; el RPC borra su parada.

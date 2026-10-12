@@ -33,7 +33,7 @@ describe("admisión de pedidos de Grupo GF Courier", () => {
     expect(body.slice(alreadyTaken, outputCheck)).toContain("alreadyAccepted.push(orderId)");
   });
 
-  it("el día de la mesa de despacho manda sobre el corte de las 11:30 al tomar", () => {
+  it("el día de la mesa de despacho manda sobre el corte del mismo día al tomar", () => {
     // Escanear a las 17:00 metía el paquete en la caja de MAÑANA (corte) aunque
     // la pantalla dijera «Hoy». Con el paquete en la mano, el día es el elegido.
     const src = readFileSync(resolve(root, "app/dashboard/courier/actions.ts"), "utf8");
