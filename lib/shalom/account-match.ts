@@ -31,6 +31,8 @@
 
 import { phoneKey } from "@/lib/olva/email-label";
 import { normalizeText } from "@/lib/olva/portal-match";
+import { pickupCodeFormatError } from "@/lib/shalom/draft";
+import { SHALOM_ORIGIN } from "@/lib/shalom/origin";
 import type { ShalomAccountOrder } from "@/lib/shalom/types";
 
 const DAY_MS = 86_400_000;
@@ -280,6 +282,12 @@ export interface KnownApiGuide {
   document: string | null;
   /** Los 9 dígitos del celular del pedido. */
   phone: string | null;
+  /**
+   * La clave de recojo que Kapta eligió y mandó al crearla, ya descifrada de
+   * `shalom_pickup_keys`. SECRETA: solo entra a la comparación, que devuelve
+   * cuentas.
+   */
+  pickupCode?: string | null;
 }
 
 export interface FieldCheck {
@@ -291,6 +299,8 @@ export interface FieldCheck {
 export interface ListingContract {
   documento: FieldCheck;
   telefono: FieldCheck;
+  /** ¿El `pickup_code` del listado es la clave de recojo? Solo cuentas, nunca claves. */
+  clave: FieldCheck;
 }
 
 /** Con menos guías conocidas que esto no hay muestra para fiarse. */
@@ -310,7 +320,8 @@ function fieldCheck(pairs: [string | null, string | null][]): FieldCheck {
 }
 
 /**
- * ¿El destinatario del listado es de verdad el destinatario?
+ * ¿El destinatario del listado es de verdad el destinatario? ¿Y su
+ * `pickup_code` es la clave de recojo?
  *
  * El contrato declara `receiver`, pero nunca se ha visto una respuesta real
  * desde Kapta: podría no venir, venir vacío o ser el remitente. Así que se
@@ -318,22 +329,152 @@ function fieldCheck(pairs: [string | null, string | null][]): FieldCheck {
  * sabe el DNI y el celular de la clienta. Si nueve de cada diez no coinciden,
  * ese campo no se usa para vincular. Es el mismo criterio que el OSE ID de las
  * guías manuales (ose-backfill.ts).
+ *
+ * La clave igual (12-10-2026): de esas mismas guías Kapta sabe la clave,
+ * porque la eligió y la mandó al crearla. `listingKeys` son las claves del
+ * listado por guía (`listingPickupCodes`), y `known[].pickupCode` las que
+ * Kapta guardó. Solo vuelven cuentas: ninguna clave sale de aquí.
  */
 export function checkListingContract(
   guides: readonly ShalomListingGuide[],
   known: readonly KnownApiGuide[],
+  listingKeys: ReadonlyMap<string, string> = new Map(),
 ): ListingContract {
   const byGuia = new Map<string, ShalomListingGuide>();
   for (const g of guides) if (!byGuia.has(g.guia)) byGuia.set(g.guia, g);
   const docs: [string | null, string | null][] = [];
   const phones: [string | null, string | null][] = [];
+  const keys: [string | null, string | null][] = [];
   for (const k of known) {
     const g = byGuia.get(guideCodeKey(k.guideCode));
     if (!g) continue;
     docs.push([k.document, g.document]);
     phones.push([k.phone, g.phone]);
+    keys.push([(k.pickupCode ?? "").trim() || null, listingKeys.get(g.guia) ?? null]);
   }
-  return { documento: fieldCheck(docs), telefono: fieldCheck(phones) };
+  return { documento: fieldCheck(docs), telefono: fieldCheck(phones), clave: fieldCheck(keys) };
+}
+
+// ---------------------------------------------------------------------------
+// La clave de recojo del listado (12-10-2026)
+// ---------------------------------------------------------------------------
+//
+// El 12-10-2026 a las 01:12 UTC Cotejar Shalom vinculó 7 guías (#KP131631 …
+// #KP138154) SIN clave: el listado trae `pickup_code`, pero nunca se había
+// comprobado que fuera la clave de verdad, y sin la clave en Kapta no hay qué
+// mandarle a la clienta cuando paga (lib/pickup-key-delivery.ts). Ahora se
+// comprueba en cada lectura, como el destinatario, y solo si pasa se usa.
+//
+// LA CLAVE ES SECRETA: es la llave del paquete. Por eso no viaja dentro de
+// `ShalomListingGuide` —que acaba en motivos y detalles del informe— sino en
+// un mapa aparte, y nada de lo que este módulo devuelve para el informe la
+// lleva: solo cuentas.
+
+/**
+ * La clave que el listado da a una orden, tal como viene. Si el JSON la trajera
+ * como número, «0482» llegaría como 482: se lee con sus 4 cifras. Que sea la
+ * clave de verdad NO se da por hecho aquí: lo dice `checkListingContract`.
+ */
+export function readListingPickupCode(raw: unknown): string | null {
+  if (typeof raw === "number") {
+    return Number.isSafeInteger(raw) && raw >= 0 && raw <= 9999 ? String(raw).padStart(4, "0") : null;
+  }
+  if (typeof raw === "string") return raw.trim() || null;
+  return null;
+}
+
+/**
+ * Las claves del listado por número de guía. Si la misma guía sale dos veces
+ * con claves distintas (o una sin clave), no se queda con ninguna: no se elige.
+ */
+export function listingPickupCodes(orders: readonly ShalomAccountOrder[]): Map<string, string> {
+  const seen = new Map<string, Set<string | null>>();
+  for (const o of orders) {
+    const guia = guideCodeKey(o.guia);
+    if (!guia) continue;
+    const codes = seen.get(guia) ?? new Set<string | null>();
+    codes.add(readListingPickupCode(o.pickup_code));
+    seen.set(guia, codes);
+  }
+  const out = new Map<string, string>();
+  for (const [guia, codes] of seen) {
+    const [only] = [...codes];
+    if (codes.size === 1 && only) out.set(guia, only);
+  }
+  return out;
+}
+
+/**
+ * La clave del listado que se puede guardar: solo si la comprobación de ESTA
+ * lectura dice que el campo es la clave, y solo con el formato de una clave
+ * que Shalom ya emitió (`pickupCodeFormatError`, el mismo que «Ya la creé en
+ * Shalom Pro»). Si no, null: la guía se vincula sin clave, como antes.
+ */
+export function usableListingKey(code: string | null | undefined, trusted: boolean): string | null {
+  if (!trusted) return null;
+  const v = (code ?? "").trim();
+  return v && !pickupCodeFormatError(v) ? v : null;
+}
+
+/** Una salida de Shalom de Kapta que podría recibir su clave del listado. */
+export interface KeyBackfillCandidate {
+  orderId: string;
+  storeId: string;
+  shipmentId: string;
+  guideCode: string;
+  /** `shipments.created_via`: solo las hechas a mano en Shalom Pro. */
+  createdVia: string | null;
+  /** La guía sigue viva: la clave todavía le sirve a la clienta. */
+  live: boolean;
+  /** El pedido ya tiene fila en `shalom_pickup_keys`. */
+  hasKey: boolean;
+}
+
+export interface KeyBackfill {
+  orderId: string;
+  storeId: string;
+  shipmentId: string;
+  guideCode: string;
+  /** SECRETA: se cifra al guardarla y no va a ningún informe. */
+  pickupCode: string;
+}
+
+/**
+ * Las claves que faltan y el listado puede poner. Solo cuando la clave del
+ * listado se comprobó en esta lectura (`trusted`), y solo para:
+ *
+ *   - guías hechas a mano en Shalom Pro (`shalom_pro_manual`): las que vinculó
+ *     Cotejar Shalom antes de poder fiarse de la clave, y las de «Ya la creé
+ *     en Shalom Pro» que se registraron sin ella. Las de la API ya la tienen;
+ *   - VIVAS: a una guía entregada, devuelta o anulada la clave ya no le sirve
+ *     a nadie, y ponérsela cambiaría cómo se lee su «entregado» (el retorno de
+ *     §12 pregunta si hay clave y si se dio);
+ *   - de un pedido SIN clave. La que haya, quien la haya puesto, no se pisa;
+ *   - con UNA sola guía así en el pedido: con dos no se adivina de cuál es.
+ *
+ * PURA. Quien llama cifra y escribe sin pisar (`ignoreDuplicates`).
+ */
+export function planKeyBackfill(
+  candidates: readonly KeyBackfillCandidate[],
+  listingKeys: ReadonlyMap<string, string>,
+  trusted: boolean,
+): KeyBackfill[] {
+  if (!trusted) return [];
+  const byOrder = new Map<string, KeyBackfillCandidate[]>();
+  for (const c of candidates) {
+    if (c.createdVia !== SHALOM_ORIGIN.manual || !c.live) continue;
+    byOrder.set(c.orderId, [...(byOrder.get(c.orderId) ?? []), c]);
+  }
+  const out: KeyBackfill[] = [];
+  for (const rows of byOrder.values()) {
+    const c = rows[0]!;
+    if (rows.length !== 1 || c.hasKey) continue;
+    const guideCode = guideCodeKey(c.guideCode);
+    const pickupCode = usableListingKey(listingKeys.get(guideCode), true);
+    if (!pickupCode) continue;
+    out.push({ orderId: c.orderId, storeId: c.storeId, shipmentId: c.shipmentId, guideCode, pickupCode });
+  }
+  return out;
 }
 
 export interface ListingCoverage {
