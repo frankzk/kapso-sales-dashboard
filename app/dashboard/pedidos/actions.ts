@@ -34,6 +34,9 @@ import {
   type VoiceExclusion,
 } from "@/lib/voice-recovery-queue";
 import type { VoiceAgentPanelData } from "@/lib/voice-recovery-labels";
+import { webrtcConfigFromEnv, webrtcLoginToken } from "@/lib/telnyx-webrtc";
+import { telnyxPeruE164 } from "@/lib/telnyx";
+import { browserCallNote, parseBrowserCallReport } from "@/lib/browser-call";
 import {
   getOrderConfirmationBrief,
   getOrderMasterDetail,
@@ -198,7 +201,7 @@ export async function loadOrderDetail(
     if (!ctx) return { error: "Sin acceso a este pedido." };
     const detail = await getOrderMasterDetail(orderId);
     if (!detail) return { error: "No encontrado." };
-    return { detail };
+    return { detail: { ...detail, browserCallEnabled: webrtcConfigFromEnv() !== null } };
   } catch (cause) {
     // El drawer enseña este texto y nada más, así que tiene que decir la verdad:
     // "No encontrado" solo cuando la base respondió que no hay fila. Si respondió
@@ -2006,6 +2009,25 @@ export async function registerClosureAction(
   ) {
     return { error: "Esta salida ya fue recibida físicamente en almacén." };
   }
+  // Una caja de Grupo GF que sigue en la caja de un motorizado se recibe por
+  // «Recibir en oficina» (Despacho del día, «Devoluciones» o su QR): eso la
+  // saca de la caja. Registrarla aquí la dejaba devuelta pero dentro de la caja,
+  // y al recibirla después volvía a «por asignar» (0248, MOM §29.13).
+  if (action === "return_receive" && selectedShipment && (selectedShipment.courier ?? "").toLowerCase() === "propio") {
+    const { data: boxItem } = await admin
+      .from("dispatch_manifest_items")
+      .select("id,dispatch_manifests!inner(courier,driver_name)")
+      .eq("shipment_id", selectedShipment.id)
+      .is("removed_at", null)
+      .eq("dispatch_manifests.courier", "propio")
+      .limit(1)
+      .maybeSingle();
+    if (boxItem) {
+      const manifest = (boxItem as { dispatch_manifests: { driver_name: string | null } | { driver_name: string | null }[] }).dispatch_manifests;
+      const rider = (Array.isArray(manifest) ? manifest[0]?.driver_name : manifest?.driver_name) ?? "un motorizado";
+      return { error: `Esta salida sigue en la caja de ${rider}: recíbela en Despacho del día («En devolución» o «Devoluciones», o escaneando su QR). Eso la saca de la caja.` };
+    }
+  }
   const selectedReturnReceived =
     selectedShipment?.custody_state === "devuelto" || Boolean(selectedShipment?.returned_at);
   if (["inventory_restock", "inventory_merma"].includes(action) && !selectedReturnReceived) {
@@ -2447,7 +2469,9 @@ export async function llamarConAgente(orderId: string): Promise<MasterActionStat
     };
   }
   const admin = createAdminSupabase();
-  if ((await realCallsToday(admin, store.id, now)) >= store.voice_recovery_daily_cap) {
+  const used = await realCallsToday(admin, store.id, now);
+  if (used === null) return { error: "No se pudo leer el tope de llamadas de hoy. Intenta de nuevo." };
+  if (used >= store.voice_recovery_daily_cap) {
     return { error: "La tienda ya llegó al tope de llamadas del agente de hoy." };
   }
   const queue = await loadVoiceQueue(admin, store, now, orderId);
@@ -2516,4 +2540,75 @@ export async function probarAgenteEnMiTelefono(
         ? "Te llama el Agente Telnyx (número +1). Es una prueba: nada se escribe sobre el pedido."
         : "Te estamos llamando. Es una prueba: nada se escribe sobre el pedido.",
   };
+}
+
+// ---------------------------------------------------------------------------
+// Llamar desde la computadora (MOM §8.5)
+// ---------------------------------------------------------------------------
+
+export type BrowserCallSetup =
+  | { ok: true; token: string; to: string; from: string }
+  | { ok: false; error: string };
+
+/**
+ * Lo que el navegador necesita para llamar a la clienta: el token de la línea
+ * (24 horas, de la credencial de quien llama), a quién marca y con qué número.
+ * La clave de Telnyx no sale del servidor.
+ */
+export async function startBrowserCall(orderId: string): Promise<BrowserCallSetup> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { ok: false, error: "Tu rol no permite llamar desde Kapta." };
+  const cfg = webrtcConfigFromEnv();
+  if (!cfg) return { ok: false, error: "La línea para llamar desde la computadora todavía no está configurada." };
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { ok: false, error: "Sin acceso a este pedido." };
+  const to = telnyxPeruE164(ctx.row.customer_phone);
+  if (!to) return { ok: false, error: "El teléfono del cliente no es un número peruano válido." };
+  const login = await webrtcLoginToken(createAdminSupabase(), cfg, ctx.userId);
+  if ("error" in login) return { ok: false, error: login.error };
+  return { ok: true, token: login.token, to, from: cfg.fromNumber };
+}
+
+/**
+ * Deja la llamada en el historial del pedido (`browser_call`), con quién llamó,
+ * a qué número, desde cuál y cuánto se habló. Es un hecho, no la gestión: el
+ * resultado («confirma», «no contesta»…) se sigue registrando en la mesa de
+ * confirmación. Una misma llamada se guarda una sola vez.
+ */
+export async function recordBrowserCall(orderId: string, raw: unknown): Promise<MasterActionState> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite llamar desde Kapta." };
+  const report = parseBrowserCallReport(raw);
+  if (!report) return { error: "La llamada llegó incompleta y no se guardó." };
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  const admin = createAdminSupabase();
+  const { data: existing, error: readError } = await admin
+    .from("order_events")
+    .select("id")
+    .eq("order_id", orderId)
+    .eq("kind", "browser_call")
+    .eq("payload->>call_id", report.callId)
+    .limit(1);
+  if (readError) return { error: `No se pudo guardar la llamada: ${readError.message}` };
+  if (existing?.length) return { notice: "La llamada ya estaba guardada." };
+  const to = telnyxPeruE164(ctx.row.customer_phone) ?? ctx.row.customer_phone ?? "";
+  const from = webrtcConfigFromEnv()?.fromNumber ?? "";
+  const eventError = await recordEvent(admin, ctx, {
+    kind: "browser_call",
+    source: "telnyx",
+    note: browserCallNote(report, to, from),
+    payload: {
+      call_id: report.callId,
+      answered: report.answered,
+      talk_seconds: report.talkSeconds,
+      total_seconds: report.totalSeconds,
+      cause: report.cause,
+      sip_code: report.sipCode,
+      to,
+      from,
+    },
+  });
+  if (eventError) return { error: `No se pudo guardar la llamada: ${eventError}` };
+  return { notice: "Llamada guardada en el historial." };
 }

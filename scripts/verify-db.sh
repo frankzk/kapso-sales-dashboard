@@ -167,6 +167,13 @@ echo "  ✅ apply_bundled.sql levanta el esquema completo desde cero"
 echo "▶ automático Aliclik → Swayp: reserva, cupo, evidencia y RLS"
 $PSQL -f "$ROOT/scripts/sql/swayp_auto_smoke.sql"
 
+# Las llamadas de pedido (§11.8) y las del agente de leads (0247, MOM §33)
+# comparten `voice_calls`: lo que impide que una se tome por la otra son las
+# reglas de la base, así que se prueban aquí y no solo en el código.
+echo "▶ agente de voz para leads (0247): pedidos y leads no se mezclan en voice_calls"
+$PSQL -f "$ROOT/scripts/sql/voice_lead_smoke.sql"
+echo "  ✅ cada fila es de un pedido o de un lead, con los resultados de su carril; el candado Swayp no corre por un lead; una sola llamada de leads abierta"
+
 echo "▶ doble cotejo de despacho"
 $PSQL -f "$ROOT/scripts/sql/dispatch_smoke.sql"
 echo "  ✅ la custodia solo cambia después de cotejar el 100 % dos veces"
@@ -188,6 +195,9 @@ echo "  ✅ asignar da custodia con paradas por confirmar; confirmar marca el í
 echo "▶ «Recibir en oficina» (0188): un no entregado sale de la caja en custodia, también en exigir"
 $PSQL -f "$ROOT/scripts/sql/gf_return_to_office_smoke.sql"
 echo "  ✅ sale con rastro, custodia a la empresa, solicitud a por asignar; la parada se conserva; un rechazo también vuelve a por asignar (0206)"
+echo "▶ «Sacar con salida nueva» (0248): la caja que el motorizado todavía tiene queda en devolución y el pedido sale con otra"
+$PSQL -f "$ROOT/scripts/sql/gf_replace_output_smoke.sql"
+echo "  ✅ la S01 pasa a retorno sin salir de la caja; la solicitud pasa a la S02; su parada ya no cambia; al recibirla vuelve a stock sin volver a por asignar; tope de cinco"
 echo "▶ caja abierta durante el cotejo (0196): se suma en paralelo y sale al 100 % o con la diferencia retirada"
 $PSQL -f "$ROOT/scripts/sql/gf_parallel_box_smoke.sql"
 echo "  ✅ misma caja durante el cotejo; lo nuevo reabre oficina; se recibe lo verificado; custodia al 100 % o al retirar la diferencia; carga 2 solo tras la custodia"

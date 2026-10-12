@@ -2,9 +2,12 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  GF_SAME_DAY_CUTOFF_DEFAULT,
   merchantSettlement,
   resolveDistrictAvailability,
   resolveDistrictTariff,
+  sameDayCutoffLabel,
+  sameDayCutoffMinute,
   tariffForOutcome,
   yapeCommission,
   type DistrictTariffRow,
@@ -310,5 +313,43 @@ describe("modo de recojo del motorizado (0185, MOM §29.13)", () => {
     // exigir y ninguno: la parada se entrega y no se pide nada.
     expect(riderStopDecision("exigir", base)).toEqual({ badge: null, canConfirm: false, canDecline: false, canReport: true, reportUnconfirmed: false });
     expect(riderStopDecision("ninguno", base)).toEqual({ badge: null, canConfirm: false, canDecline: false, canReport: true, reportUnconfirmed: false });
+  });
+});
+
+describe("corte del mismo día (MOM §29.6, decisión del 11-10-2026)", () => {
+  it("por defecto es a las 12:00: Alexis recoge 12:30 y sale esa tarde", () => {
+    expect(GF_SAME_DAY_CUTOFF_DEFAULT).toBe("12:00");
+    expect(sameDayCutoffMinute(null)).toBe(12 * 60);
+    expect(sameDayCutoffMinute("")).toBe(12 * 60);
+    expect(sameDayCutoffMinute("mediodía")).toBe(12 * 60);
+    expect(sameDayCutoffLabel(undefined)).toBe("12:00");
+  });
+
+  it("manda el valor guardado en el proveedor, con o sin segundos", () => {
+    expect(sameDayCutoffMinute("11:30")).toBe(11 * 60 + 30);
+    expect(sameDayCutoffMinute("12:00:00")).toBe(12 * 60);
+    expect(sameDayCutoffLabel("12:00:00")).toBe("12:00");
+    expect(sameDayCutoffLabel("09:45")).toBe("09:45");
+  });
+
+  it("ningún camino del corte vuelve a fijar 11:30 a mano", () => {
+    const root = process.cwd();
+    for (const file of [
+      "app/dashboard/courier/actions.ts",
+      "lib/order-route-plan.ts",
+      "lib/grupo-gf-courier-route-access.ts",
+      "components/grupo-gf-courier.tsx",
+      "components/dispatch-day-board.tsx",
+    ]) {
+      expect(readFileSync(resolve(root, file), "utf8"), file).not.toContain("11:30");
+    }
+  });
+
+  it("la migración 0244 mueve el proveedor y sus convenios a las 12:00 sin pisar un corte cambiado a mano", () => {
+    const sql = readFileSync(resolve(process.cwd(), "db/migrations/0244_gf_same_day_cutoff_noon.sql"), "utf8");
+    expect(sql).toContain("set same_day_cutoff = time '12:00'");
+    expect(sql).toContain("and same_day_cutoff = time '11:30'");
+    expect(sql).toContain("and a.same_day_cutoff = time '11:30'");
+    expect(sql).toContain("alter column same_day_cutoff set default time '12:00'");
   });
 });

@@ -313,7 +313,7 @@ por cada corrección. Sin app aprobada, ninguna tienda cliente puede conectarse.
 **Estado al 10-10-2026.**
 
 - **Hecho (primera parte):**
-  - migración `0245_shopify_client_app.sql`: con qué app se conectó cada
+  - migración `0249_shopify_client_app.sql`: con qué app se conectó cada
     tienda, fecha de desinstalación, instalaciones pendientes y registro de
     avisos de privacidad;
   - credenciales de la segunda app en `SHOPIFY_CLIENT_APP_API_KEY` y

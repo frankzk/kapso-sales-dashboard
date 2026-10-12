@@ -95,6 +95,7 @@ import {
   type OrderGeoInput,
 } from "@/app/dashboard/pedidos/actions";
 import { VoiceAgentPanel } from "@/components/voice-agent-panel";
+import { BrowserCallButton } from "@/components/browser-call";
 import { UrpiAttemptsSection } from "@/components/urpi-attempts-section";
 import { limaTodayKey } from "@/lib/shipments";
 import { downloadPdf } from "@/lib/download-pdf";
@@ -1217,6 +1218,16 @@ export function OrderDrawer({
                     <IconWhatsApp aria-hidden className="text-ink-500" />
                     <span className="hidden sm:inline">WhatsApp</span>
                   </a>
+                  {/* MOM §8.5: llamar desde la computadora por Telnyx. Solo
+                      sale si la línea está configurada. */}
+                  {detail.browserCallEnabled && canEdit && (
+                    <BrowserCallButton
+                      key={orderId}
+                      orderId={orderId}
+                      phone={detail.row.customer_phone}
+                      onRecorded={() => void reload()}
+                    />
+                  )}
                 </>
               )}
               {masterHref && (

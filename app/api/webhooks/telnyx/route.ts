@@ -1,4 +1,4 @@
-// Avisos de Telnyx del «Agente Telnyx» (MOM §11.8).
+// Avisos de Telnyx del «Agente Telnyx» (MOM §11.8) y del agente de leads (§33).
 //
 // Telnyx avisa cada paso de cada tramo. Aquí se hace lo que en Zadarma hacía
 // la centralita:
@@ -13,6 +13,11 @@
 //     `telephony_response.costo`, con la suma de los dos tramos.
 // Cada aviso queda en `voice_calls.telephony_response.eventos`: con eso se ve
 // por qué se cortó cada llamada, que es lo que el piloto quiere medir.
+//
+// La conexión de Telnyx es una sola para los dos agentes. Lo que separa una
+// llamada de lead (MOM §33) es su fila (`purpose`), no el `client_state`: su
+// tramo al agente va a la puerta SIP del agente de leads, con el número que ve
+// el lead, y su «no contesta» nunca toca un pedido (`closeAsNoAnswer`).
 //
 // Solo se acepta lo que viene firmado por Telnyx (Ed25519, TELNYX_PUBLIC_KEY).
 
@@ -43,7 +48,10 @@ const MAX_EVENTOS = 40;
 interface Row {
   id: string;
   store_id: string;
-  order_id: string;
+  /** Nulo en una llamada de lead (MOM §33). */
+  order_id: string | null;
+  lead_id: string | null;
+  purpose: string | null;
   mode: "real" | "test";
   status: string;
   telephony: string;
@@ -87,7 +95,7 @@ export async function POST(req: NextRequest) {
   const now = new Date();
   const { data } = await admin
     .from("voice_calls")
-    .select("id, store_id, order_id, mode, status, telephony, provider, telephony_response, updated_at")
+    .select("id, store_id, order_id, lead_id, purpose, mode, status, telephony, provider, telephony_response, updated_at")
     .eq("id", ev.state.vc)
     .maybeSingle();
   const row = data as Row | null;
@@ -128,11 +136,22 @@ export async function POST(req: NextRequest) {
       await hangup(ev.callControlId);
       return NextResponse.json({ ok: true, action: "colgada: la llamada ya estaba cerrada" });
     }
+    // Un lead va al agente de leads (MOM §33): su puerta SIP y el número que
+    // ve el lead. Sin esa puerta, la llamada falla: NUNCA cae al agente de
+    // Reproprovincia, que leería un pedido que no existe. Sin `order_id` es
+    // lead aunque la fila no lo diga.
+    const lead = row.purpose === "lead" || row.order_id == null;
+    const legCfg = lead ? { ...cfg, fromNumber: env.telnyxLeadsFromNumber() } : cfg;
     // Grok o ElevenLabs, según el motor con que se pidió la llamada.
-    const agentUri = agentSipUriFor(cfg, row.provider === "elevenlabs" ? "elevenlabs" : "grok");
+    const agentUri = lead
+      ? env.telnyxLeadsSipUri() || null
+      : agentSipUriFor(cfg, row.provider === "elevenlabs" ? "elevenlabs" : "grok");
     const dialed = agentUri
-      ? await dialTelnyx(cfg, agenteDialBody(cfg, row.id, ev.callControlId, agentUri))
-      : { ok: false, error: "el motor de la llamada no tiene puerta SIP configurada" };
+      ? await dialTelnyx(legCfg, agenteDialBody(legCfg, row.id, ev.callControlId, agentUri))
+      : {
+          ok: false,
+          error: lead ? "falta TELNYX_LEADS_SIP_URI" : "el motor de la llamada no tiene puerta SIP configurada",
+        };
     if (!dialed.ok) {
       await hangup(ev.callControlId);
       await admin
@@ -202,7 +221,7 @@ async function saveCost(admin: ReturnType<typeof createAdminSupabase>, first: Ro
     if (data?.length) return true;
     const { data: fresh } = await admin
       .from("voice_calls")
-      .select("id, store_id, order_id, mode, status, telephony, provider, telephony_response, updated_at")
+      .select("id, store_id, order_id, lead_id, purpose, mode, status, telephony, provider, telephony_response, updated_at")
       .eq("id", row.id)
       .maybeSingle();
     row = fresh as Row | null;

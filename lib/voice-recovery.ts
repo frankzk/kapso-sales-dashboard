@@ -25,6 +25,14 @@ export const DIALING_TTL_MINUTES = 3;
  * cada buzón mal leído costaba dos barridos sin llamar.
  */
 export const IN_PROGRESS_TTL_MINUTES = 5;
+/**
+ * Lo mismo para una llamada del agente de leads (MOM §33). Ese agente toma
+ * distrito, dirección, referencia y promo antes de pasar el lead a una
+ * asesora, y ElevenLabs lo corta a los 5 minutos: con la ventana de pedidos,
+ * el vigilante cerraba como «no contestó» una conversación todavía viva. 8
+ * minutos cubren el tope del agente más el margen del registro y del corte.
+ */
+export const LEAD_IN_PROGRESS_TTL_MINUTES = 8;
 
 /**
  * Firma de las notas del agente. La de Telnyx la pone `noteOnRecoveryGuide`
@@ -399,6 +407,11 @@ export interface OpenCall {
   phone: string;
   /** `grok` o `elevenlabs`: el motor que atiende (para separar las tools). */
   provider?: string | null;
+  /**
+   * A qué llama (MOM §33): un pedido (`order`, lo de siempre) o un lead. Sin
+   * dato, pedido: es lo que la base pone por defecto.
+   */
+  purpose?: "order" | "lead" | null;
   status: "queued" | "dialing" | "in_progress";
   dialed_at: string | null;
   started_at: string | null;
@@ -409,11 +422,20 @@ function localDigits(p: string | null | undefined): string {
   return zadarmaLocalPeru(p) ?? String(p ?? "").replace(/\D/g, "");
 }
 
-/** Una llamada abierta cuya ventana ya pasó está caída: no se le atribuye nada. */
+/**
+ * Una llamada abierta cuya ventana ya pasó está caída: no se le atribuye nada.
+ * La conversación del agente de leads dura más (`LEAD_IN_PROGRESS_TTL_MINUTES`);
+ * marcando, las dos caen a los mismos 3 minutos: ahí nadie contestó todavía.
+ */
 export function isStale(call: OpenCall, now: Date): boolean {
   const ref = call.status === "in_progress" ? call.started_at : call.dialed_at;
   if (!ref) return call.status !== "queued";
-  const ttl = call.status === "in_progress" ? IN_PROGRESS_TTL_MINUTES : DIALING_TTL_MINUTES;
+  const ttl =
+    call.status !== "in_progress"
+      ? DIALING_TTL_MINUTES
+      : call.purpose === "lead"
+        ? LEAD_IN_PROGRESS_TTL_MINUTES
+        : IN_PROGRESS_TTL_MINUTES;
   return now.getTime() - new Date(ref).getTime() > ttl * 60_000;
 }
 

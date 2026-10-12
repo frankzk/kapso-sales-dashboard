@@ -79,7 +79,8 @@ describe("vercel.json", () => {
     // 21: lectura automática de programaciones mensuales de Urpi.
     // 22: «Cotejar Olva», el tracking desde el portal de clientes (MOM §12).
     // 23: «Cotejar Shalom» con reloj propio (MOM §12, 10-10-2026).
-    expect(crons).toHaveLength(23);
+    // 24: barrido del agente de voz para leads (MOM §33).
+    expect(crons).toHaveLength(24);
     for (const c of crons) {
       expect(c.path.startsWith("/api/cron/")).toBe(true);
       expect(c.schedule.trim().split(/\s+/)).toHaveLength(5);

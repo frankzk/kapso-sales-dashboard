@@ -2072,14 +2072,14 @@ desafío. Solo cambia desde qué red sale la petición, igual que elegir la regi
 3. **Grupo de Telegram** con esas personas y el bot de la tienda; su chat id en
    Ajustes → Telegram → Alertas urgentes («Buscar grupos» lo encuentra).
 
-### 10-10-2026 · App de Shopify para tiendas cliente, primera parte (0245, MOM §29.15.9)
+### 10-10-2026 · App de Shopify para tiendas cliente, primera parte (0249, MOM §29.15.9)
 
 Segunda app de Shopify, pública y oculta, para las tiendas de organizaciones
 cliente de Grupo GF. Aurela y Kenku siguen con la app actual (§5); nada de lo
 suyo cambia.
 
-1. **Migración `0245_shopify_client_app.sql`**, a mano y ANTES del código:
-   `psql "$DATABASE_URL" -f db/migrations/0245_shopify_client_app.sql`.
+1. **Migración `0249_shopify_client_app.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0249_shopify_client_app.sql`.
    Añade `stores.shopify_app` (`interna` por defecto, así que las tiendas de hoy
    quedan como están) y `stores.shopify_uninstalled_at`, y crea
    `shopify_pending_installs` y `shopify_privacy_requests`. Sin ella, la
@@ -2088,7 +2088,9 @@ suyo cambia.
    **Ya aplicada en producción el 12-10-2026**, en dos pasos del historial de
    Supabase: `0245_shopify_client_app` y `0245_shopify_client_app_revoke_defaults`
    (el `revoke` a `anon` y `authenticated` se añadió después; el fichero ya lo
-   trae completo).
+   trae completo). Allí quedó con el nombre `0245_…`: el fichero pasó a ser la
+   `0249` porque la `0245` a la `0248` ya estaban tomadas en la integración. Es
+   la misma migración; no se vuelve a correr.
 2. **La app «Kapta» en el Dev Dashboard** (organización Grupo GF SAC), distinta
    de «kapso-sales-dashboard-aurelape». **Creada el 12-10-2026**; la versión
    `kapta-3` es la que tiene todo. Su configuración completa:
@@ -2198,3 +2200,113 @@ ya en el día 7 o más; medido el 11-10-2026): entran de a 10 por tienda
 que la tanda tarda uno o dos días. Cada envío queda en
 la línea de tiempo («Recordatorio de recojo (día 3)…») y la foto que viajó en
 `shalom_transit_notifications.header_image_url`.
+
+### 12-10-2026 · Horas de la semana por asesora (0245)
+
+1. **Migración `0245_advisor_schedules.sql`**, a mano y antes del código:
+   `psql "$DATABASE_URL" -f db/migrations/0245_advisor_schedules.sql`. Crea
+   `advisor_schedules` (meta de horas por semana, días y horario de cada
+   persona; solo el servidor la lee y la escribe). Sin ella, Productividad
+   carga igual y usa la meta por defecto (48 h, lunes a sábado, sin horario),
+   pero Equipo › Horarios no puede guardar y lo dice. **Ya aplicada en
+   producción** el 12-10-2026, pegando el SQL en el editor de Supabase.
+2. **Cargar el horario de cada asesora** en Equipo › Horarios (owner o admin):
+   meta de la semana, días que trabaja y, si tiene, su horario de entrada y
+   salida. Con horario, Productividad marca la primera actividad tarde y la
+   última antes de la salida (10 minutos de gracia).
+
+### 12-10-2026 · Agente de voz para leads, piloto Biru (0247, MOM §33)
+
+1. **Migración `0247_voice_lead_calls.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0247_voice_lead_calls.sql`. Agrega a
+   `voice_calls` a qué llama cada fila (`purpose`: `order` por defecto, o
+   `lead`), `lead_id` y `lead_context`; `order_id` queda nulo solo en las de
+   lead; los resultados se validan por carril. Además `leads.contact_opt_out_at`,
+   los ajustes `stores.voice_lead_*` (apagados) y el trigger
+   `swayp_auto_voice_interlock` solo para llamadas con pedido. **El orden
+   importa también para Reproprovincia**: el código nuevo filtra sus llamadas
+   por `purpose` (atadura de las tools, tope diario, «Gestión por persona»,
+   «Llamando ahora»), y sin la columna esas lecturas fallan y el agente de
+   pedidos deja de llamar. **Ya aplicada en producción** el 12-10-2026,
+   pegando el SQL en el editor de Supabase (las 1.068 llamadas que había
+   quedaron `purpose = 'order'`).
+2. **Secretos en Vercel (Production)**. Se generan en tu máquina
+   (`openssl rand -hex 24`) y se pegan directo en Vercel y en ElevenLabs:
+   **nunca en un chat**, ni en un ticket.
+   - `VOICE_LEADS_TOOLS_SECRET`: firma el inicio de conversación y las dos
+     tools del agente de leads. **Distinto** de `VOICE_TOOLS_SECRET` y de
+     `VOICE_TOOLS_SECRET_ELEVENLABS`: si es igual a uno de ellos, Kapta lo trata
+     como vacío y rechaza todo (un secreto compartido abriría las tools de un
+     agente al otro).
+   - `ELEVENLABS_WEBHOOK_SECRET`: el secreto HMAC que ElevenLabs genera al crear
+     el webhook «post-call». Sin él, `/api/voice/elevenlabs/post-call` responde
+     401 y no se guardan transcripciones; el resto funciona igual.
+3. **El agente en ElevenLabs**: **ya creado** el 12-10-2026 («Agente de leads
+   · Kenku Biru (piloto)»), con guion, primer mensaje, las tools
+   `consultar_cobertura` y `registrar_resultado_lead`, el webhook de inicio
+   (`/api/voice/leads/inicio`) y los ajustes de `docs/voz-leads-agente.md`.
+   Se presenta como Nicol. `VOICE_LEADS_TOOLS_SECRET` ya está en Vercel y, como
+   secreto del workspace `kapta_voice_leads`, en la cabecera `x-voice-secret`
+   de las dos tools y del inicio (12-10-2026). Falta, si se quiere, el
+   post-call.
+4. **El número**, después del agente: un número propio del agente de leads
+   (el peruano que se está comprando, o un segundo número de EE. UU.) importado
+   en ElevenLabs por SIP trunk, aceptando solo las direcciones de Telnyx
+   (`192.76.120.0/24`, `64.16.250.0/24`), y asignado al agente de leads. Recién
+   entonces, en Vercel, y redeploy:
+   - `TELNYX_LEADS_SIP_URI`: la puerta SIP de ese número, con el formato de
+     `TELNYX_ELEVENLABS_SIP_URI`. Sin ella no se llama a ningún lead: el aviso
+     de Telnyx corta el tramo, nunca lo manda al agente de Reproprovincia.
+   - `TELNYX_LEADS_FROM_NUMBER` (opcional): el número que ve el lead. Vacío =
+     el mismo `TELNYX_FROM_NUMBER` de Reproprovincia, que es como sale el
+     piloto mientras llega el número peruano (decisión del owner, 12-10-2026).
+5. **El barrido** `/api/cron/voice-leads` ya está en `vercel.json` (cada cinco
+   minutos, desfasado dos del de Reproprovincia). Solo corre en producción y
+   sin tiendas con el agente encendido no hace nada. La cola se mira sin llamar
+   ni escribir con
+   `GET /api/cron/voice-leads?dry=1&storeId=<uuid>` y
+   `Authorization: Bearer <CRON_SECRET>`: la mira como si el agente estuviera
+   encendido y devuelve cuántos entran y cuántos quedan fuera por cada motivo.
+6. **Encendido por tienda** (Ajustes → «Agente de voz · Leads (piloto)»), en
+   este orden: campaña, producto y oferta; «Probar en mi teléfono» desde el
+   drawer de un lead; el porcentaje de control (queda fijo en el primer
+   sorteo); y recién entonces «Agente de leads» y «Llamadas automáticas». Los
+   pasos completos y la campaña de Biru están en `docs/voz-leads-agente.md`.
+
+**Marcha atrás.** Apagar «Llamadas automáticas» (o «Agente de leads») detiene
+el barrido. El sorteo del grupo de control queda guardado y nada se borra.
+
+**Qué mirar después.** Cada pasada escribe una línea `[voice-leads] {…}` en los
+logs de Vercel, sin nombres ni teléfonos: qué hizo cada tienda (`llamada`,
+`cola_vacia`, `fuera_de_horario`, `tope_diario`, `agente_ocupado`,
+`sin_configurar`, `manual`, `apagado`, `error`), el tamaño de la cola, las exclusiones por motivo, los
+brazos sorteados y los «Atender ahora» repuestos. El tablero del piloto está en
+la misma sección de Ajustes.
+
+### 12-10-2026 · Distritos sin el «de» (0246) y «Sacar con salida nueva» (0248, `mom-v1.26`)
+
+1. **Migración `0246_district_aliases_sin_de.sql`**, a mano, antes o después
+   del código: `psql "$DATABASE_URL" -f db/migrations/0246_district_aliases_sin_de.sql`.
+   Solo redefine `lima_district_aliases()` («San Juan Lurigancho», «Pachamamac»,
+   «Cercado delima»…). La cola de Grupo GF usa los alias de TypeScript y se
+   desbloquea con el despliegue; la base los usa en la cobertura y en el pago
+   del motorizado en vivo. **Ya aplicada en producción** el 12-10-2026.
+2. **Migración `0248_gf_replace_output.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0248_gf_replace_output.sql`. Crea
+   `gf_output_replaced` y `gf_replace_output`, redefine `gf_return_to_office`
+   (la 0206 más la rama «a stock») y `gf_carry_over` (la 0234 sin la caja
+   reemplazada —por su evento— y con los candados del lote primero), y crea
+   los triggers
+   `delivery_stops_guard_replaced` y `dispatch_items_guard_replaced_route`. Sin
+   ella, «Sacar con salida nueva» falla y deshace la salida nueva que había
+   creado: no deja salidas huérfanas. **Ya aplicada en producción** el
+   12-10-2026, antes del código. En el historial de Supabase figura dos veces:
+   `0247_gf_replace_output` y, al renumerarla tras llegar a `main` la
+   `0247_voice_lead_calls`, `0248_gf_replace_output` (la misma, idempotente;
+   solo cambia el número en los comentarios); sin efecto sobre el código anterior (en
+   producción no había ninguna salida propia en `retorno` ni devuelta dentro
+   de una caja).
+3. **Después del despliegue**, el cron recalcula el Master por la versión
+   `mom-v1.26`. Con la foto del 12-10-2026 no hay ninguna salida reemplazada
+   (`output_replaced`); cambian pocos pedidos: los que tienen una parada del
+   cuaderno anterior a la salida a la que se atribuía.

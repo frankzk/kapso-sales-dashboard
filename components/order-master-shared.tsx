@@ -559,6 +559,9 @@ export const TIMELINE_LABEL: Record<string, string> = {
   guide_registered: "Guía registrada",
   guide_created: "Guía creada",
   guide_cancelled: "Guía anulada",
+  // MOM §12: la clave quedó guardada (a mano o del listado de Shalom Pro). No
+  // es darla: eso es `key_shared`.
+  key_registered: "Clave de recojo registrada",
   aliclik_duplicate_resolution: "Resolución de posible duplicado Aliclik",
   route_output_created: "Salida y rótulo creados",
   route_output_cancelled: "Salida anulada",
@@ -571,6 +574,8 @@ export const TIMELINE_LABEL: Record<string, string> = {
   novelty_solved: "Novedad de Swayp resuelta",
   comment: "Comentario",
   confirmation_contact: "Intento de confirmación",
+  // MOM §8.5: la llamada que hizo una persona desde la ficha, por Telnyx.
+  browser_call: "Llamada desde Kapta",
   confirmation_followup: "Próximo contacto pactado",
   reschedule: "Reprogramación",
   reroute: "Reprogramación",
@@ -636,4 +641,6 @@ export const TIMELINE_LABEL: Record<string, string> = {
   lead_state_change: "Cambio de estado del lead",
   lead_note: "Nota de la asesora",
   lead_system: "Automático (Leads)",
+  // Lo que escribe el agente de voz de leads (MOM §33): no es una asesora.
+  lead_voice_agent: "Agente de voz (leads)",
 };

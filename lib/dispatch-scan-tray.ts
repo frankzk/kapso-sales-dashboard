@@ -23,7 +23,7 @@ export function removeFromTray(tray: readonly TrayEntry[], code: string): TrayEn
 }
 
 export interface ScanLineLike {
-  status: "procesando" | "asignado" | "ya_en_caja" | "en_otra_caja" | "no_elegible" | "bloqueado_efectivo" | "programado_otro_dia" | "desconocido";
+  status: "procesando" | "asignado" | "ya_en_caja" | "en_otra_caja" | "no_elegible" | "bloqueado_efectivo" | "programado_otro_dia" | "recibido_a_stock" | "desconocido";
   amount: number | null;
   orderId?: string | null;
 }

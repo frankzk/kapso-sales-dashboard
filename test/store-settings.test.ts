@@ -274,3 +274,89 @@ describe("portal de clientes de Olva (0218)", () => {
     expect(sinCambios).not.toHaveProperty("olva_portal_ruc");
   });
 });
+
+describe("agente de voz para leads (0247, MOM §33)", () => {
+  it("es otro agente: sus ajustes no se cruzan con los de Reproprovincia", () => {
+    const patch = buildStoreUpdate(
+      { voice_recovery_enabled: "true", voice_recovery_daily_cap: "500", voice_lead_enabled: "false", voice_lead_daily_cap: "60" },
+      KEY,
+    );
+    expect(patch).toEqual({
+      voice_recovery_enabled: true,
+      voice_recovery_daily_cap: 500,
+      voice_lead_enabled: false,
+      voice_lead_daily_cap: 60,
+    });
+    // 500 vale para Reproprovincia pero no para leads (CHECK 0..300 de 0247):
+    // fuera de rango conserva el actual en vez de tumbar toda la tarjeta.
+    expect(buildStoreUpdate({ voice_lead_daily_cap: "500" }, KEY)).toEqual({});
+  });
+
+  it("los dos interruptores se pueden APAGAR (apagar `auto` es la marcha atrás del piloto)", () => {
+    expect(buildStoreUpdate({ voice_lead_enabled: "false", voice_lead_auto: "false" }, KEY)).toEqual({
+      voice_lead_enabled: false,
+      voice_lead_auto: false,
+    });
+    expect(buildStoreUpdate({ voice_lead_auto: true }, KEY)).toEqual({ voice_lead_auto: true });
+  });
+
+  it("los números solo entran en el rango de su CHECK", () => {
+    expect(
+      buildStoreUpdate(
+        {
+          voice_lead_max_attempts: "4",
+          voice_lead_wait_minutes: "0",
+          voice_lead_max_age_hours: "168",
+          voice_lead_holdout_pct: "90",
+          voice_lead_hour_start: "0",
+          voice_lead_hour_end: "24",
+        },
+        KEY,
+      ),
+    ).toEqual({
+      voice_lead_max_attempts: 4,
+      voice_lead_wait_minutes: 0,
+      voice_lead_max_age_hours: 168,
+      voice_lead_holdout_pct: 90,
+      voice_lead_hour_start: 0,
+      voice_lead_hour_end: 24,
+    });
+    expect(
+      buildStoreUpdate(
+        {
+          voice_lead_max_attempts: "5",
+          voice_lead_wait_minutes: "1441",
+          voice_lead_max_age_hours: "0",
+          // Un control de más del 90 % dejaría el piloto sin tratamiento que medir.
+          voice_lead_holdout_pct: "91",
+          voice_lead_hour_start: "24",
+          voice_lead_hour_end: "0",
+          voice_lead_daily_cap: "-1",
+        },
+        KEY,
+      ),
+    ).toEqual({});
+  });
+
+  it("campañas: sin vacíos ni repetidas, y vaciables (sin ninguna no llama a nadie)", () => {
+    expect(buildStoreUpdate({ voice_lead_campaign_ids: ["", "120248136956710056", "120248136956710056"] }, KEY)).toEqual({
+      voice_lead_campaign_ids: ["120248136956710056"],
+    });
+    expect(buildStoreUpdate({ voice_lead_campaign_ids: " 1, 2 ,1 " }, KEY)).toEqual({ voice_lead_campaign_ids: ["1", "2"] });
+    expect(buildStoreUpdate({ voice_lead_campaign_ids: [""] }, KEY)).toEqual({ voice_lead_campaign_ids: [] });
+    // Una tarjeta que no las trae no las toca.
+    expect(buildStoreUpdate({ voice_lead_product: "Shampoo" }, KEY)).not.toHaveProperty("voice_lead_campaign_ids");
+  });
+
+  it("producto y oferta: recortados y vaciables; uno más largo que el tope no se guarda", () => {
+    expect(buildStoreUpdate({ voice_lead_product: " Shampoo Birú ", voice_lead_offer: " 1 unidad S/ 85 " }, KEY)).toEqual({
+      voice_lead_product: "Shampoo Birú",
+      voice_lead_offer: "1 unidad S/ 85",
+    });
+    expect(buildStoreUpdate({ voice_lead_product: "", voice_lead_offer: "  " }, KEY)).toEqual({
+      voice_lead_product: null,
+      voice_lead_offer: null,
+    });
+    expect(buildStoreUpdate({ voice_lead_product: "x".repeat(121), voice_lead_offer: "x".repeat(801) }, KEY)).toEqual({});
+  });
+});

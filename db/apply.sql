@@ -487,6 +487,18 @@
 \ir migrations/0241_order_master_stale_cerrada.sql
 \echo 'Applying 0242_pickup_reminder.sql'
 \ir migrations/0242_pickup_reminder.sql
-\echo 'Applying 0245_shopify_client_app.sql'
-\ir migrations/0245_shopify_client_app.sql
+\echo 'Applying 0243_telnyx_webrtc_credentials.sql'
+\ir migrations/0243_telnyx_webrtc_credentials.sql
+\echo 'Applying 0244_gf_same_day_cutoff_noon.sql'
+\ir migrations/0244_gf_same_day_cutoff_noon.sql
+\echo 'Applying 0245_advisor_schedules.sql'
+\ir migrations/0245_advisor_schedules.sql
+\echo 'Applying 0246_district_aliases_sin_de.sql'
+\ir migrations/0246_district_aliases_sin_de.sql
+\echo 'Applying 0247_voice_lead_calls.sql'
+\ir migrations/0247_voice_lead_calls.sql
+\echo 'Applying 0248_gf_replace_output.sql'
+\ir migrations/0248_gf_replace_output.sql
+\echo 'Applying 0249_shopify_client_app.sql'
+\ir migrations/0249_shopify_client_app.sql
 \echo 'Done.'

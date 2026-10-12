@@ -15,6 +15,7 @@ import {
   type MemberLite,
 } from "@/lib/team";
 import { GROUP_GF_RIDER_COURIER } from "@/lib/couriers/catalog";
+import { parseScheduleInput } from "@/lib/productivity-week";
 
 export interface TeamActionState {
   error?: string;
@@ -451,4 +452,63 @@ export async function unlinkRiderUser(orgId: string, riderId: string): Promise<T
   if (error) return { error: error.message };
   revalidatePath("/dashboard/team");
   return { notice: "Usuario desvinculado." };
+}
+
+// ---------------------------------------------------------------------------
+// Horarios (migración 0245): la meta de horas por semana y el horario de cada
+// persona, que Productividad compara con sus horas activas.
+
+/** Guarda la meta y el horario de una persona de la organización. */
+export async function saveAdvisorSchedule(input: {
+  orgId: string;
+  userId: string;
+  weeklyHours: string;
+  days: number[];
+  start: string | null;
+  end: string | null;
+}): Promise<TeamActionState> {
+  const actor = await requireOrgAdmin(input.orgId);
+  if (!actor) return { error: "Sin permiso en esta organización." };
+  const parsed = parseScheduleInput(input);
+  if ("error" in parsed) return { error: parsed.error };
+  const admin = createAdminSupabase();
+  const members = await orgMembers(admin, input.orgId);
+  if (!members.some((m) => m.user_id === input.userId)) return { error: "Esa persona no es de esta organización." };
+  const { schedule } = parsed;
+  const { error } = await admin.from("advisor_schedules").upsert(
+    {
+      org_id: input.orgId,
+      user_id: input.userId,
+      weekly_hours: schedule.weeklyHours,
+      days: schedule.days,
+      start_time: schedule.start,
+      end_time: schedule.end,
+      updated_by: actor.userId,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "org_id,user_id" },
+  );
+  if (error) {
+    // Sin la migración 0245 la tabla no existe: que se entienda qué falta.
+    return {
+      error: /advisor_schedules/.test(error.message)
+        ? "Falta aplicar la migración 0245 (horarios) en la base de datos."
+        : error.message,
+    };
+  }
+  revalidatePath("/dashboard/team");
+  revalidatePath("/dashboard/productividad");
+  return { notice: "Horario guardado." };
+}
+
+/** Quita el horario: la persona vuelve a la meta por defecto (48 h, lunes a sábado). */
+export async function clearAdvisorSchedule(orgId: string, userId: string): Promise<TeamActionState> {
+  const actor = await requireOrgAdmin(orgId);
+  if (!actor) return { error: "Sin permiso en esta organización." };
+  const admin = createAdminSupabase();
+  const { error } = await admin.from("advisor_schedules").delete().eq("org_id", orgId).eq("user_id", userId);
+  if (error) return { error: error.message };
+  revalidatePath("/dashboard/team");
+  revalidatePath("/dashboard/productividad");
+  return { notice: "Vuelve a la meta por defecto: 48 h, lunes a sábado, sin horario." };
 }

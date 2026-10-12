@@ -45,6 +45,10 @@ export interface CourierLedgerRow {
 
 /** Un «No entregado» que sigue en la caja del motorizado, esperando volver. */
 export interface PendingReturn {
+  /** La salida de la caja: se recibe por ella, no por pedido (0248). */
+  shipmentId: string;
+  /** Es la caja reemplazada por otra salida (0248): al recibirla vuelve a stock. */
+  replaced: boolean;
   orderId: string;
   orderName: string;
   customerName: string;
@@ -287,17 +291,23 @@ export async function getCourierRouteLedger(opts: { day?: string | null; limit?:
  * role porque las paradas y los ítems tienen políticas distintas; quien llama
  * ya pasó el permiso de Grupo GF.
  */
-export async function getPendingReturns(): Promise<PendingReturn[]> {
+/**
+ * `storeIds`: las tiendas a su alcance cuando solo despacha (MOM §29.10); sin
+ * él, todas, como para quien administra el courier.
+ */
+export async function getPendingReturns(scope: { storeIds?: readonly string[] | null } = {}): Promise<PendingReturn[]> {
+  if (scope.storeIds && !scope.storeIds.length) return [];
   const admin = createAdminSupabase();
   const stops: Array<{ order_id: string; shipment_id: string; dispatch_manifest_id: string; outcome_reason: string | null }> = [];
   for (let from = 0; ; from += 1000) {
-    const { data, error } = await admin
+    let query = admin
       .from("delivery_stops")
       .select("order_id,shipment_id,dispatch_manifest_id,outcome_reason")
       .eq("status", "no_entregado")
       .not("dispatch_manifest_id", "is", null)
-      .not("shipment_id", "is", null)
-      .range(from, from + 999);
+      .not("shipment_id", "is", null);
+    if (scope.storeIds) query = query.in("store_id", [...scope.storeIds]);
+    const { data, error } = await query.range(from, from + 999);
     if (error) throw new Error(error.message);
     stops.push(...((data ?? []) as typeof stops));
     if (!data || data.length < 1000) break;
@@ -313,11 +323,19 @@ export async function getPendingReturns(): Promise<PendingReturn[]> {
     chunked([...new Set(pending.map((s) => s.order_id))], 200, (ids) => admin.from("order_master").select("order_id,order_name,customer_name,district").in("order_id", ids)),
     chunked([...new Set(pending.map((s) => s.shipment_id))], 200, (ids) => admin.from("shipments").select("id,output_code,guide_code").in("id", ids)),
   ]);
+  const replacedEvents = await chunked([...new Set(pending.map((s) => s.shipment_id))], 200, (ids) => admin
+    .from("order_events")
+    .select("shipment_id")
+    .in("shipment_id", ids)
+    .eq("kind", "output_replaced"));
+  const replaced = new Set((replacedEvents as { shipment_id: string }[]).map((e) => e.shipment_id));
   const m = new Map((manifests as { id: string; driver_name: string | null; route_date: string }[]).map((x) => [x.id, x]));
   const o = new Map((orders as { order_id: string; order_name: string | null; customer_name: string | null; district: string | null }[]).map((x) => [x.order_id, x]));
   const sh = new Map((shipments as { id: string; output_code: string | null; guide_code: string | null }[]).map((x) => [x.id, x]));
   return pending
     .map((s) => ({
+      shipmentId: s.shipment_id,
+      replaced: replaced.has(s.shipment_id),
       orderId: s.order_id,
       orderName: o.get(s.order_id)?.order_name ?? "Pedido",
       customerName: o.get(s.order_id)?.customer_name ?? "",

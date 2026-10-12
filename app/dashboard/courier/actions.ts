@@ -1,6 +1,7 @@
 "use server";
 
 import { cancelledScanNotice } from "@/lib/scan-cancelled";
+import { alreadyInBoxMessage, alreadyInBoxStage, type AlreadyInBoxStage } from "@/lib/gf-scan-already-in-box";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { redirect } from "next/navigation";
@@ -8,12 +9,14 @@ import { randomUUID } from "node:crypto";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getAccessibleStores, getAdminOrgs, getCurrentUser } from "@/lib/access";
 import { getDispatchWorkspaceData, type DispatchWorkspaceData } from "@/lib/dispatch-access";
+import { canOperateGroupGf } from "@/lib/permissions";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import {
   resolveDistrictAvailability,
   resolveDistrictTariff,
   type DistrictAvailabilityEventRow,
   type DistrictTariffRow,
+  cashLimitBlock,
   cashLimitVerdict,
 } from "@/lib/grupo-gf-courier";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
@@ -23,6 +26,10 @@ import { writeCourierGuide, type RouteOutputWriteResult } from "@/lib/route-outp
 import { MAX_OUTPUTS_PER_ORDER, isCourierTbd, manualRouteGuideCode, pickFillableRouteOutput, puertaDeSalidaAdicional } from "@/lib/shipment-output";
 import {
   REPROGRAM_QUEUE_FILTER,
+  ownReplaceDecision,
+  replaceDecisionMessage,
+  replacedOutputNotice,
+  replacedOutputReason,
   isReprogramStage,
   isRetryAdmission,
   lastFailedOutput,
@@ -41,11 +48,13 @@ import { courierKey, normalizeDispatchScan } from "@/lib/dispatch";
 import { courierReview, tandersReviewQueueFilter, swaypUndispatchedQueueFilter, confirmedTandersReview, tandersReviewReason, type TandersReview, type TandersConfirmations } from "@/lib/gf-tanders-review";
 import { lookupDispatchShipment } from "@/app/dashboard/pedidos/despacho/actions";
 import { previousLabelNote } from "@/lib/scan-other-box";
+import { listNames } from "@/lib/labels/resolve-output";
 import type { RiderRateVersion } from "@/lib/rider-pay";
 import { isGroupGfRiderCourier } from "@/lib/couriers/catalog";
-import { custodyOnAssign, isRiderPickupMode, type RiderPickupMode } from "@/lib/grupo-gf-courier";
+import { custodyOnAssign, GF_SAME_DAY_CUTOFF_DEFAULT, isRiderPickupMode, sameDayCutoffMinute, type RiderPickupMode } from "@/lib/grupo-gf-courier";
 import { BLOCKED_REASON_LABEL, programDayLabel, programNeedsConfirm, takenIsAssignable, type BlockedReason } from "@/lib/dispatch-day";
-import { pastBoxDecision, pastBoxMessage, receivedFromLabel } from "@/lib/gf-scan-return";
+import { pastBoxDecision, pastBoxMessage, receivedFromLabel, replacedReceivedMessage } from "@/lib/gf-scan-return";
+import { isReturningOwnOutput, officeReturnOutcome, replacedOutputIds, type ReturningOutputLike } from "@/lib/gf-replaced-output";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 import { riderPickupMode } from "@/lib/grupo-gf-courier-route-access";
 import { getRouteDetail, type RouteRow, type StopWithOrder } from "@/lib/routes-access";
@@ -99,6 +108,8 @@ export interface CourierConfigSnapshot {
   districts: PeruDistrictRow[];
   yapePercentage: number;
   canManageDispatch: boolean;
+  /** Tarifario, contratos, pago de motorizados y exceso de efectivo (§29.9, §29.10). */
+  canManageLogistics: boolean;
   operations: CourierOperationsSnapshot;
 }
 
@@ -152,6 +163,26 @@ export interface CourierAvailableOrder {
  */
 export interface CourierReturnableOrder extends CourierAvailableOrder {
   route: CourierRouteAssignment;
+  /** La salida que está en la caja: la que «Sacar con salida nueva» reemplaza. */
+  shipmentId: string;
+}
+
+/**
+ * Salida de Grupo GF «en devolución» con el motorizado: el pedido ya salió con
+ * otra («Sacar con salida nueva», 0248). Se recibe en oficina cuando vuelve y
+ * va a stock; no se reprograma ni se asigna.
+ */
+export interface CourierReturningOutput {
+  shipmentId: string;
+  orderId: string;
+  orderName: string;
+  storeName: string;
+  outputCode: string | null;
+  riderName: string;
+  routeDate: string;
+  /** Cuándo se sacó la salida nueva, y cuál es. */
+  replacedAt: string | null;
+  replacedByCode: string | null;
 }
 
 export interface CourierAcceptedOrder extends CourierAvailableOrder {
@@ -214,6 +245,8 @@ export interface CourierOperationsSnapshot {
   available: CourierAvailableOrder[];
   /** Salidas propias en una caja anterior, sin solicitud: «Recibir en oficina». */
   returnable: CourierReturnableOrder[];
+  /** Cajas reemplazadas que el motorizado todavía tiene (0248). */
+  returning: CourierReturningOutput[];
   accepted: CourierAcceptedOrder[];
   routes: CourierRouteSummary[];
   riders: CourierRiderOption[];
@@ -226,6 +259,7 @@ export interface CourierOperationsSnapshot {
 const EMPTY_OPERATIONS: CourierOperationsSnapshot = {
   available: [],
   returnable: [],
+  returning: [],
   accepted: [],
   routes: [],
   riders: [],
@@ -234,25 +268,73 @@ const EMPTY_OPERATIONS: CourierOperationsSnapshot = {
   sourceCount: 0,
 };
 
-async function requireManager(
+type ManagerAuth = {
+  userId: string;
+  canManageDispatch: boolean;
+  canManageLogistics: boolean;
+  /**
+   * Tiendas a su alcance cuando solo despacha (RLS de `stores`, Equipo). `null`
+   * = todas: quien administra el courier ve la cola completa, como antes.
+   */
+  storeIds: ReadonlySet<string> | null;
+};
+
+/** ¿La tienda de este pedido está al alcance de quien opera? */
+function storeAllowed(auth: ManagerAuth, storeId: string | null | undefined): boolean {
+  return !auth.storeIds || (storeId != null && auth.storeIds.has(storeId));
+}
+
+const OUTSIDE_STORE = "No tienes acceso a la tienda de este pedido.";
+
+/**
+ * Quién entra: `operar` es Despacho del día (tomar, asignar, programar,
+ * recibir en oficina) y lo hace cualquiera con `dispatch.manage` o
+ * `logistics.manage` (decisión del 11-10-2026, MOM §29.10). `administrar` es
+ * tarifario, contratos y pago de motorizados: solo `logistics.manage`.
+ */
+async function requireCourierAccess(
   orgId: string,
-): Promise<{ userId: string; canManageDispatch: boolean } | { error: string }> {
+  level: "operar" | "administrar",
+): Promise<ManagerAuth | { error: string }> {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const [permissions, memberships] = await Promise.all([
     getMasterPermissions(),
     getAdminOrgs(),
   ]);
-  if (!permissions.can("logistics.manage")) {
-    return { error: "No tienes permiso para administrar Grupo GF Courier." };
+  const allowed = level === "administrar" ? permissions.can("logistics.manage") : canOperateGroupGf(permissions.can);
+  if (!allowed) {
+    return { error: level === "administrar" ? "No tienes permiso para administrar Grupo GF Courier." : "No tienes permiso para operar Grupo GF Courier." };
   }
   if (!memberships.some((membership) => membership.org_id === orgId)) {
     return { error: "No perteneces a esta organización." };
   }
-  return { userId: user.id, canManageDispatch: permissions.can("dispatch.manage") };
+  // Quien solo despacha opera las tiendas que tiene asignadas en Equipo, como
+  // en el resto del panel; sin ninguna, no entra (el Master tampoco le muestra
+  // esos pedidos).
+  let storeIds: Set<string> | null = null;
+  if (!permissions.can("logistics.manage")) {
+    const stores = (await getAccessibleStores()).filter((store) => store.org_id === orgId);
+    if (!stores.length) return { error: "No tienes tiendas asignadas. Pide acceso en Equipo." };
+    storeIds = new Set(stores.map((store) => store.id));
+  }
+  return {
+    userId: user.id,
+    canManageDispatch: permissions.can("dispatch.manage"),
+    canManageLogistics: permissions.can("logistics.manage"),
+    storeIds,
+  };
 }
 
-type ManagerAuth = { userId: string; canManageDispatch: boolean };
+/** Tarifario, contratos y pago de motorizados: solo `logistics.manage`. */
+function requireManager(orgId: string) {
+  return requireCourierAccess(orgId, "administrar");
+}
+
+/** Despacho del día: cualquiera que despache o administre el courier. */
+function requireOperator(orgId: string) {
+  return requireCourierAccess(orgId, "operar");
+}
 
 /**
  * Qué hace una acción al terminar. Desde la lista, recalcula el Master y
@@ -316,14 +398,9 @@ function limaClock(now = new Date()): { day: string; minute: number } {
   };
 }
 
-function cutoffMinute(value: string | null | undefined): number {
-  const match = /^(\d{1,2}):(\d{2})/.exec(value ?? "");
-  return match ? Number(match[1]) * 60 + Number(match[2]) : 11 * 60 + 30;
-}
-
 function scheduledDay(cutoff: string | null | undefined, now = new Date()): string {
   const current = limaClock(now);
-  return current.minute <= cutoffMinute(cutoff) ? current.day : nextDay(current.day);
+  return current.minute <= sameDayCutoffMinute(cutoff) ? current.day : nextDay(current.day);
 }
 
 type OperationsConfig = {
@@ -529,6 +606,60 @@ async function adoptOwnOutput(
   };
 }
 
+/** «Producto ×2 | Otro»: lo que lleva la caja, de las líneas del pedido en Shopify. */
+async function orderProductSummary(admin: Admin, orderId: string): Promise<string | null> {
+  const { data: sourceOrder } = await admin
+    .from("orders")
+    .select("line_items")
+    .eq("id", orderId)
+    .maybeSingle();
+  const lineItems = ((sourceOrder as {
+    line_items?: Array<{ title?: string | null; quantity?: number | null }>;
+  } | null)?.line_items ?? []);
+  return lineItems
+    .map((item) => `${item.title ?? "Producto"}${(item.quantity ?? 1) > 1 ? ` ×${item.quantity}` : ""}`)
+    .join(" | ") || null;
+}
+
+/**
+ * La salida de Grupo GF que nace al tomar un pedido (o al sacarlo con salida
+ * nueva): con rótulo, en la empresa y por armar. Los datos del destino son los
+ * del pedido en el Master.
+ */
+function groupGfOutputRow(
+  row: Record<string, unknown>,
+  input: { id: string; guideCode: string | null; product: string | null; acceptedAt: string; scheduledFor: string },
+): Record<string, unknown> & { created_via: string } {
+  return {
+    id: input.id,
+    store_id: String(row.store_id),
+    courier: "propio",
+    guide_code: input.guideCode,
+    delivery_status: "pendiente",
+    status_category: "pending",
+    order_id: String(row.order_id),
+    matched: true,
+    match_method: "grupo_gf_courier",
+    order_name: row.order_name ?? null,
+    customer_name: row.customer_name ?? null,
+    customer_phone: row.customer_phone ?? null,
+    product: input.product,
+    district: row.district ?? null,
+    province: row.province ?? null,
+    city: row.district ?? null,
+    region: row.region ?? null,
+    delivery_address: row.address ?? null,
+    delivery_reference: row.reference ?? null,
+    latitude: row.latitude ?? null,
+    longitude: row.longitude ?? null,
+    assigned_at: input.acceptedAt,
+    next_followup_at: `${input.scheduledFor}T12:00:00-05:00`,
+    preparation_state: "rotulo_generado",
+    custody_state: "empresa",
+    created_via: "grupo_gf_courier",
+  };
+}
+
 interface DispatchProgram {
   order_id: string;
   store_id: string;
@@ -670,11 +801,13 @@ async function loadCourierOperations(
     shipmentsByOrder.set(row.order_id, [...(shipmentsByOrder.get(row.order_id) ?? []), row]);
   }
   // «Nunca salieron» frente a «Ya salieron», y lo programado sin tomar (0199):
-  // para la cola y para lo tomado, en una llamada cada uno.
+  // para la cola y para lo tomado, en una llamada cada uno. Junto a ellas, las
+  // reemplazadas por otra salida (0248), que no estorban ni se toman.
   const requestOrderIdsAll = ((requestRows ?? []) as { order_id: string }[]).map((request) => request.order_id);
-  const [lastDispatchByOrder, programByOrder] = await Promise.all([
+  const [lastDispatchByOrder, programByOrder, replacedIds] = await Promise.all([
     loadDepartures(admin, [...new Set([...queueOrderIds, ...requestOrderIdsAll])]),
     loadPrograms(admin, { storeIds }),
+    loadReplacedIds(admin, returningOutputIds((admissionShipmentRows ?? []) as AdmissionShipmentRow[])),
   ]);
 
   const storeName = new Map(
@@ -694,7 +827,7 @@ async function loadCourierOperations(
   const ownByOrder = new Map<string, AdmissionShipmentRow>();
   for (const order of (queueRows ?? []) as QueueOrderRow[]) {
     if (activeOrderIds.has(order.order_id) || isRetryAdmission(order.macro_stage, order.macro_substage, order.operational_status)) continue;
-    const own = ownRetryOutput(order, shipmentsByOrder.get(order.order_id) ?? []);
+    const own = ownRetryOutput(order, shipmentsByOrder.get(order.order_id) ?? [], replacedIds);
     if (own) ownByOrder.set(order.order_id, own);
   }
   const ownIds = [...ownByOrder.values()].map((output) => output.id);
@@ -736,14 +869,14 @@ async function loadCourierOperations(
       // salida sigue viva (una reprogramación de Aliclik, por ejemplo) y la
       // lleva su courier, o no queda ninguna viva que sacar. Nunca
       // desaparece en silencio de la cola.
-      if (isReprogramStage(order.macro_stage, order.macro_substage)) block(order, reprogramBlockReason(outputs));
+      if (isReprogramStage(order.macro_stage, order.macro_substage)) block(order, reprogramBlockReason(outputs, replacedIds));
       continue;
     }
     const fillable = own ? null : pickFillableRouteOutput(outputs);
     // La salida propia que se reprograma es la única viva (`ownRetryOutput`): no estorba.
     // La que su courier no entregó tampoco, tampoco cuando el pedido ya tiene su
     // «por definir» impresa y está en Preparación (09-10-2026, §28).
-    const assigned = own ? null : activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : outputsBlockingRetry(outputs), fillable?.id ?? null);
+    const assigned = own ? null : activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : outputsBlockingRetry(outputs, replacedIds), fillable?.id ?? null);
     const needsExistingBox = !review && !retry && !own && order.macro_substage !== "por_generar_rotulo";
     if (assigned || (needsExistingBox && !fillable)) {
       block(order, assigned ? "ya_en_caja" : "sin_salida");
@@ -794,7 +927,7 @@ async function loadCourierOperations(
       districtKey,
       tariffId: tariff.tariff.id,
       tariffAmount: tariff.tariff.delivery_amount,
-      // Programado: sale ese día. Si no, hoy o mañana según el corte de las 11:30.
+      // Programado: sale ese día. Si no, hoy o mañana según el corte del mismo día (12:00).
       scheduledFor: program?.scheduled_for ?? scheduledDay(config.provider.same_day_cutoff),
       hasPriorDispatch: lastDispatchByOrder.has(order.order_id),
       lastDispatchedAt: lastDispatchByOrder.get(order.order_id) ?? null,
@@ -807,7 +940,7 @@ async function loadCourierOperations(
       tandersReview: review,
       ownOutput: own ? { outputCode: own.output_code ?? null } : null,
     };
-    if (ownBox && decision?.action === "recibir_en_oficina") returnable.push({ ...row, route: ownBox });
+    if (ownBox && own && decision?.action === "recibir_en_oficina") returnable.push({ ...row, route: ownBox, shipmentId: own.id });
     else available.push(row);
   }
 
@@ -983,11 +1116,64 @@ async function loadCourierOperations(
     b.routeDate.localeCompare(a.routeDate) || a.riderName.localeCompare(b.riderName, "es"),
   );
 
-  return { available, returnable, accepted, routes, riders, blockedCount, blocked, sourceCount: sourceCount ?? available.length };
+  const returning = await loadReturningOutputs(admin, storeIds, storeName);
+
+  return { available, returnable, returning, accepted, routes, riders, blockedCount, blocked, sourceCount: sourceCount ?? available.length };
+}
+
+/**
+ * Las cajas reemplazadas que el motorizado todavía tiene («Sacar con salida
+ * nueva», 0248): salida propia en custodia `retorno`, sin recibir y con su
+ * ítem activo en una caja. Con la salida nueva que las reemplazó.
+ */
+async function loadReturningOutputs(admin: Admin, storeIds: string[], storeName: Map<string, string>): Promise<CourierReturningOutput[]> {
+  const { data: rows } = await courierRowsByIds(storeIds, (ids) => admin
+    .from("shipments")
+    .select("id,order_id,store_id,order_name,output_code,courier,delivery_status,custody_state,returned_at")
+    .in("store_id", ids)
+    .eq("courier", "propio")
+    .eq("custody_state", "retorno")
+    .is("returned_at", null));
+  const outputs = (rows as Array<ReturningOutputLike & { id: string; order_id: string | null; store_id: string; order_name: string | null; output_code: string | null }>)
+    .filter((row) => row.order_id && isReturningOwnOutput(row));
+  if (!outputs.length) return [];
+  const ids = outputs.map((row) => row.id);
+  const [boxes, { data: events }] = await Promise.all([
+    loadActiveBoxes(admin, ids),
+    courierRowsByIds(ids, (chunk) => admin
+      .from("order_events")
+      .select("shipment_id,occurred_at,payload")
+      .in("shipment_id", chunk)
+      .eq("kind", "output_replaced")),
+  ]);
+  const lastReplace = new Map<string, { occurred_at: string; payload: { replaced_by_code?: unknown } | null }>();
+  for (const event of events as Array<{ shipment_id: string; occurred_at: string; payload: { replaced_by_code?: unknown } | null }>) {
+    const current = lastReplace.get(event.shipment_id);
+    if (!current || event.occurred_at > current.occurred_at) lastReplace.set(event.shipment_id, event);
+  }
+  return outputs.flatMap((row) => {
+    const box = boxes.get(row.id);
+    const replace = lastReplace.get(row.id);
+    // Solo las reemplazadas: «Solicitar devolución» (§13) también deja una
+    // salida propia en `retorno`, y esa se reporta y se recibe como siempre.
+    if (!box || !replace) return [];
+    const code = replace?.payload?.replaced_by_code;
+    return [{
+      shipmentId: row.id,
+      orderId: row.order_id as string,
+      orderName: row.order_name ?? "Pedido sin código",
+      storeName: storeName.get(row.store_id) ?? "Tienda",
+      outputCode: row.output_code,
+      riderName: box.riderName,
+      routeDate: box.routeDate,
+      replacedAt: replace?.occurred_at ?? null,
+      replacedByCode: typeof code === "string" ? code : null,
+    }];
+  }).sort((a, b) => a.routeDate.localeCompare(b.routeDate) || a.riderName.localeCompare(b.riderName, "es"));
 }
 
 export async function loadCourierConfig(orgId: string): Promise<CourierConfigSnapshot> {
-  const auth = await requireManager(orgId);
+  const auth = await requireOperator(orgId);
   if ("error" in auth) {
     return {
       provider: null,
@@ -997,6 +1183,7 @@ export async function loadCourierConfig(orgId: string): Promise<CourierConfigSna
       districts: [],
       yapePercentage: 3.5,
       canManageDispatch: false,
+      canManageLogistics: false,
       operations: EMPTY_OPERATIONS,
     };
   }
@@ -1032,6 +1219,7 @@ export async function loadCourierConfig(orgId: string): Promise<CourierConfigSna
       districts,
       yapePercentage: 3.5,
       canManageDispatch: auth.canManageDispatch,
+      canManageLogistics: auth.canManageLogistics,
       operations: EMPTY_OPERATIONS,
     };
   }
@@ -1082,7 +1270,8 @@ export async function loadCourierConfig(orgId: string): Promise<CourierConfigSna
     rejection_amount: Number(row.rejection_amount),
   })) as DistrictTariffRow[];
   const normalizedAvailability = (availabilityEvents ?? []) as DistrictAvailabilityEventRow[];
-  const normalizedAgreements = (agreements ?? []) as CourierAgreementRow[];
+  const normalizedAgreements = ((agreements ?? []) as CourierAgreementRow[])
+    .filter((agreement) => storeAllowed(auth, agreement.store_id));
   const operations = await loadCourierOperations(admin, {
     provider,
     agreements: normalizedAgreements,
@@ -1098,6 +1287,7 @@ export async function loadCourierConfig(orgId: string): Promise<CourierConfigSna
     districts,
     yapePercentage: Number(fee?.percentage ?? 3.5),
     canManageDispatch: auth.canManageDispatch,
+    canManageLogistics: auth.canManageLogistics,
     operations,
   };
 }
@@ -1121,7 +1311,7 @@ export async function takeGroupGfCourierOrders(
   orderIds: string[],
   opts: { scheduledFor?: string | null; dispatchDay?: string | null; tandersConfirmations?: TandersConfirmations } = {},
 ): Promise<TakeCourierOrdersResult> {
-  const auth = await requireManager(orgId);
+  const auth = await requireOperator(orgId);
   if ("error" in auth) return { ...auth, accepted: [], alreadyAccepted: [], failed: [] };
   return takeOrdersCore(auth, orgId, orderIds, opts, IMMEDIATE_EFFECTS);
 }
@@ -1191,6 +1381,10 @@ async function takeOrdersCore(
         continue;
       }
       const row = orderMaster as Record<string, unknown>;
+      if (!storeAllowed(auth, row.store_id as string | null)) {
+        failed.push({ orderId, error: OUTSIDE_STORE });
+        continue;
+      }
 
       const { data: outputRows, error: outputError } = await admin
         .from("shipments")
@@ -1201,13 +1395,14 @@ async function takeOrdersCore(
         continue;
       }
       const outputs = (outputRows ?? []) as unknown as AdmissionShipmentRow[];
+      const replacedIds = await loadReplacedIds(admin, returningOutputIds(outputs));
       const review = courierReview(row, outputs, limaClock().day);
       // Grupo GF no lo entregó con su propia salida (06-10-2026): se toma con
       // ESA salida, sin crear otra. La misma regla que la cola.
-      const own = review || isRetryAdmission(row.macro_stage, row.macro_substage, row.operational_status) ? null : ownRetryOutput(row, outputs);
+      const own = review || isRetryAdmission(row.macro_stage, row.macro_substage, row.operational_status) ? null : ownRetryOutput(row, outputs, replacedIds);
       if (!isCourierAdmissionStage(row.macro_stage, row.macro_substage, row.operational_status) && !review && !own) {
         failed.push({ orderId, error: isReprogramStage(row.macro_stage, row.macro_substage)
-          ? `${BLOCKED_REASON_LABEL[reprogramBlockReason(outputs)].label}.`
+          ? `${BLOCKED_REASON_LABEL[reprogramBlockReason(outputs, replacedIds)].label}.`
           // Si lo frena la salida de otro courier, se dice cuál y de quién.
           : otherCourierBlockMessage(outputs) ?? "El pedido ya avanzó y salió de Pedidos disponibles." });
         continue;
@@ -1248,7 +1443,7 @@ async function takeOrdersCore(
       const fillable = review || own ? null : pickFillableRouteOutput(outputs);
       // La que su courier no entregó no estorba en ningún camino: tampoco
       // cuando el pedido, con su «por definir» ya impresa, está en Preparación.
-      const assigned = own ? null : activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : outputsBlockingRetry(outputs), fillable?.id ?? null);
+      const assigned = own ? null : activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : outputsBlockingRetry(outputs, replacedIds), fillable?.id ?? null);
       // Un reintento que rellena no crea: si otra pestaña se lleva la «por
       // definir» entre leer y escribir, no nace una caja sin puerta ni tope.
       const retryCreates = retry && !fillable;
@@ -1256,7 +1451,7 @@ async function takeOrdersCore(
       if (assigned) {
         // Nombrar la salida y su courier (09-10-2026): «asignada a otro
         // courier» a secas dejaba adivinando cuál y qué hacer.
-        const blocking = review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : retry ? outputsBlockingRetry(outputs) : outputs;
+        const blocking = review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : retry ? outputsBlockingRetry(outputs, replacedIds) : outputs;
         failed.push({
           orderId,
           error: otherCourierBlockMessage(blocking.filter((o) => o.id !== fillable?.id)) ?? "El pedido ya tiene una salida asignada a otro courier.",
@@ -1307,12 +1502,12 @@ async function takeOrdersCore(
         continue;
       }
 
-      // El corte (11:30) fija el primer día posible; el supervisor puede
+      // El corte del mismo día (12:00) fija el primer día posible; el supervisor puede
       // pedir uno posterior (modo escaneo, §29.13), nunca uno anterior.
       const earliest = scheduledDay(check.sameDayCutoff);
       // `dispatchDay` viene de la mesa de despacho con el paquete en la mano
-      // (Despacho del día): ese día manda, también después del corte de las
-      // 11:30. El corte solo rige lo que se toma sin despachar todavía.
+      // (Despacho del día): ese día manda, también después del corte del
+      // mismo día. El corte solo rige lo que se toma sin despachar todavía.
       const dispatchDay = opts.dispatchDay && DATE_RE.test(opts.dispatchDay) && opts.dispatchDay >= limaClock().day ? opts.dispatchDay : null;
       const scheduledFor = dispatchDay ?? (opts.scheduledFor && DATE_RE.test(opts.scheduledFor) && opts.scheduledFor > earliest ? opts.scheduledFor : earliest);
       const requestId = randomUUID();
@@ -1361,17 +1556,7 @@ async function takeOrdersCore(
         continue;
       }
 
-      const { data: sourceOrder } = await admin
-        .from("orders")
-        .select("line_items")
-        .eq("id", orderId)
-        .maybeSingle();
-      const lineItems = ((sourceOrder as {
-        line_items?: Array<{ title?: string | null; quantity?: number | null }>;
-      } | null)?.line_items ?? []);
-      const product = lineItems
-        .map((item) => `${item.title ?? "Producto"}${(item.quantity ?? 1) > 1 ? ` ×${item.quantity}` : ""}`)
-        .join(" | ") || null;
+      const product = await orderProductSummary(admin, orderId);
       // Si Almacén ya creó la caja «por definir», su UUID también es la base
       // del código interno. Generar otro aquí producía un código que parecía
       // pertenecer a una caja distinta, aunque el UPDATE conservara la original.
@@ -1383,34 +1568,8 @@ async function takeOrdersCore(
         "propio",
       );
       const acceptedAt = new Date().toISOString();
-      const write = own ? await adoptOwnOutput(admin, own, { acceptedAt, scheduledFor }) : await writeCourierGuide(admin, orderId, {
-        id: newShipmentId,
-        store_id: String(row.store_id),
-        courier: "propio",
-        guide_code: guideCode,
-        delivery_status: "pendiente",
-        status_category: "pending",
-        order_id: orderId,
-        matched: true,
-        match_method: "grupo_gf_courier",
-        order_name: row.order_name ?? null,
-        customer_name: row.customer_name ?? null,
-        customer_phone: row.customer_phone ?? null,
-        product,
-        district: row.district ?? null,
-        province: row.province ?? null,
-        city: row.district ?? null,
-        region: row.region ?? null,
-        delivery_address: row.address ?? null,
-        delivery_reference: row.reference ?? null,
-        latitude: row.latitude ?? null,
-        longitude: row.longitude ?? null,
-        assigned_at: acceptedAt,
-        next_followup_at: `${scheduledFor}T12:00:00-05:00`,
-        preparation_state: "rotulo_generado",
-        custody_state: "empresa",
-        created_via: "grupo_gf_courier",
-      }, { createIfMissing: mayCreateOutput, forceNew: Boolean(review) });
+      const outputRow = groupGfOutputRow(row, { id: newShipmentId, guideCode, product, acceptedAt, scheduledFor });
+      const write = own ? await adoptOwnOutput(admin, own, { acceptedAt, scheduledFor }) : await writeCourierGuide(admin, orderId, outputRow, { createIfMissing: mayCreateOutput, forceNew: Boolean(review) });
       if ("error" in write) {
         if (own) {
           // La salida cambió entre la lectura y la escritura (se anuló o
@@ -1583,32 +1742,146 @@ export interface AssignCourierRouteResult extends CourierActionResult {
  * «Recibir en oficina» (0188, MOM §29.13): el paquete que el motorizado
  * reportó «No entregado» sale de su caja con rastro, la custodia vuelve a la
  * empresa y la solicitud a «por asignar». El pedido queda en «Por reprogramar
- * Lima» hasta que se asigne otra vez.
+ * Lima» hasta que se asigne otra vez. La caja reemplazada por otra salida
+ * vuelve a stock (0248). Por número de pedido: si el pedido tiene dos cajas
+ * «No entregado», no recibe ninguna y pide el QR (`returnUndeliveredShipments`).
  */
 export async function returnUndeliveredToOffice(orgId: string, orderIds: string[]): Promise<CourierActionResult> {
-  const auth = await requireManager(orgId);
+  const auth = await requireOperator(orgId);
   if ("error" in auth) return auth;
   if (!auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas." };
   const ids = [...new Set(orderIds.filter(Boolean))];
   if (!ids.length) return { error: "Marca al menos un pedido." };
   const admin = createAdminSupabase();
-  const { data: shipments } = await admin.from("shipments").select("id,order_id").in("order_id", ids).eq("courier", "propio");
-  const shipmentIds = ((shipments ?? []) as { id: string }[]).map((row) => row.id);
-  if (!shipmentIds.length) return { error: "Esos pedidos no tienen salida de Grupo GF." };
-  const { data: items } = await admin.from("dispatch_manifest_items").select("id,shipment_id").in("shipment_id", shipmentIds).is("removed_at", null);
+  const { data: shipments } = await admin.from("shipments").select("id,order_id,store_id").in("order_id", ids).eq("courier", "propio");
+  return returnUndeliveredShipments(admin, auth, orgId, ((shipments ?? []) as { id: string; order_id: string | null; store_id: string | null }[]), { byOrder: true });
+}
+
+/**
+ * «Recibir en oficina» por SALIDA: el núcleo de `returnUndeliveredToOffice`,
+ * del escaneo por QR y de «En devolución con el motorizado». Solo los paquetes
+ * cuya última parada en su caja es «No entregado» (lo que exige la 0206): una
+ * salida nueva del mismo pedido, con su parada pendiente, no es ruido.
+ *
+ * La caja reemplazada (0248, custodia `retorno`) también se recibe aquí, pero
+ * vuelve a stock: el pedido ya salió con otra salida y no vuelve a la cola.
+ */
+async function returnUndeliveredShipments(
+  admin: Admin,
+  auth: ManagerAuth,
+  orgId: string,
+  candidates: ReadonlyArray<{ id: string; store_id: string | null; order_id?: string | null }>,
+  opts: {
+    /**
+     * Por número de pedido: un pedido puede tener dos cajas «No entregado» (la
+     * reemplazada con un motorizado y la nueva con otro, 0248). Así no se sabe
+     * cuál llegó, y nunca se concilia solo por pedido (MOM §9.4): se pide el QR.
+     */
+    byOrder?: boolean;
+    /** Solo los paquetes de estas cajas (la ruta de un motorizado). */
+    manifestIds?: ReadonlySet<string>;
+  } = {},
+): Promise<CourierActionResult> {
+  const { data: orgStores } = await admin.from("stores").select("id").eq("org_id", orgId);
+  const orgStoreIds = new Set(((orgStores ?? []) as { id: string }[]).map((store) => store.id));
+  const shipmentIds = [...new Set(candidates
+    .filter((row) => row.store_id != null && orgStoreIds.has(row.store_id) && storeAllowed(auth, row.store_id))
+    .map((row) => row.id))];
+  if (!shipmentIds.length) return { error: "Esos pedidos no tienen salida de Grupo GF a tu alcance." };
+  const [boxes, { data: items }] = await Promise.all([
+    loadActiveBoxes(admin, shipmentIds),
+    courierRowsByIds(shipmentIds, (ids) => admin.from("dispatch_manifest_items").select("id,shipment_id,manifest_id").in("shipment_id", ids).is("removed_at", null)),
+  ]);
+  let undelivered = (items as Array<{ id: string; shipment_id: string; manifest_id: string }>).filter((item) => {
+    const box = boxes.get(item.shipment_id);
+    return box?.manifestId === item.manifest_id && Boolean(box.undeliveredReason) && (!opts.manifestIds || opts.manifestIds.has(item.manifest_id));
+  });
+  const ambiguous: string[] = [];
+  if (opts.byOrder) {
+    const orderOf = new Map(candidates.map((row) => [row.id, row.order_id ?? row.id]));
+    const perOrder = new Map<string, number>();
+    for (const item of undelivered) {
+      const order = orderOf.get(item.shipment_id) ?? item.shipment_id;
+      perOrder.set(order, (perOrder.get(order) ?? 0) + 1);
+    }
+    undelivered = undelivered.filter((item) => {
+      const twoBoxes = (perOrder.get(orderOf.get(item.shipment_id) ?? item.shipment_id) ?? 0) > 1;
+      if (twoBoxes) ambiguous.push(item.shipment_id);
+      return !twoBoxes;
+    });
+  }
+  const ambiguousNote = ambiguous.length
+    ? "Ese pedido tiene dos cajas «No entregado» (la reemplazada y la nueva): escanea el QR de la que llegó para recibirla."
+    : "";
   const changed: string[] = [];
+  const received: string[] = [];
   const errors: string[] = [];
-  for (const item of (items ?? []) as { id: string }[]) {
+  for (const item of undelivered) {
     const { data, error } = await admin.rpc("gf_return_to_office", { p_item_id: item.id, p_actor: auth.userId });
     if (error) errors.push(error.message);
-    else if (data) changed.push(data as string);
+    else if (data) {
+      changed.push(data as string);
+      received.push(item.shipment_id);
+    }
   }
-  if (changed.length) await recomputeOrderMasterSafe(admin, changed);
+  // Lo que la 0248 mandó a stock en vez de a «por asignar» —la reemplazada y la
+  // que ya constaba devuelta—, releído después de recibir: un reemplazo que
+  // terminó mientras tanto cambia la rama. Una en `retorno` sin reemplazo
+  // («Solicitar devolución») vuelve a «por asignar», como siempre.
+  let toStock = 0;
+  let alreadyReturned = 0;
+  if (received.length) {
+    const [{ data: after }, replacedIds] = await Promise.all([
+      courierRowsByIds(received, (ids) => admin.from("shipments").select("id,custody_state").in("id", ids)),
+      loadReplacedIds(admin, received),
+    ]);
+    for (const row of after as Array<{ id: string; custody_state: string | null }>) {
+      const outcome = officeReturnOutcome(row.custody_state, replacedIds.has(row.id));
+      if (outcome === "a_stock_reemplazada") toStock += 1;
+      else if (outcome === "ya_devuelta") alreadyReturned += 1;
+    }
+  }
+  if (changed.length) await recomputeOrderMasterSafe(admin, [...new Set(changed)]);
   revalidatePath(COURIER_PATH);
   revalidatePath("/dashboard/pedidos");
-  if (!changed.length) return { error: [...new Set(errors)].join(" ") || "Ninguno de esos pedidos está «No entregado» dentro de una caja." };
-  const done = `${changed.length} ${changed.length === 1 ? "pedido recibido" : "pedidos recibidos"} en oficina. Vuelven a «por asignar» (Por reprogramar Lima), también los rechazados.`;
+  if (!changed.length) return { error: [ambiguousNote, ...new Set(errors)].filter(Boolean).join(" ") || "Ninguno de esos pedidos está «No entregado» dentro de una caja." };
+  if (ambiguousNote) errors.push(ambiguousNote);
+  const requeued = changed.length - toStock - alreadyReturned;
+  const parts: string[] = [];
+  if (requeued) parts.push(`${requeued} ${requeued === 1 ? "pedido recibido" : "pedidos recibidos"} en oficina. Vuelven a «por asignar» (Por reprogramar Lima), también los rechazados.`);
+  if (toStock) parts.push(returnedToStockNotice(toStock));
+  if (alreadyReturned) parts.push(`${alreadyReturned} ya ${alreadyReturned === 1 ? "constaba devuelta: salió" : "constaban devueltas: salieron"} de la caja sin volver a «por asignar».`);
+  const done = parts.join(" ");
   return errors.length ? { error: `${done} ${[...new Set(errors)].join(" ")}` } : { notice: done };
+}
+
+/**
+ * «Recibir en oficina» por salida: desde «En devolución» (la caja reemplazada
+ * vuelve a stock, 0248), la fila de «Devoluciones», la lista de Despacho del
+ * día y el cierre de una ruta. Un pedido puede tener dos cajas «No entregado»
+ * con dos motorizados: se recibe la que llegó, nunca por número de pedido.
+ */
+export async function returnUndeliveredOutputs(
+  orgId: string,
+  shipmentIds: string[],
+  /** Solo los paquetes de estas cajas: la ruta de un motorizado no recibe la caja de otro. */
+  opts: { manifestIds?: string[] } = {},
+): Promise<CourierActionResult> {
+  const auth = await requireOperator(orgId);
+  if ("error" in auth) return auth;
+  if (!auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas." };
+  const ids = [...new Set(shipmentIds.filter(Boolean))];
+  if (!ids.length) return { error: "Marca al menos un paquete." };
+  const admin = createAdminSupabase();
+  const { data: shipments } = await courierRowsByIds(ids, (chunk) => admin.from("shipments").select("id,store_id").in("id", chunk).eq("courier", "propio"));
+  return returnUndeliveredShipments(admin, auth, orgId, shipments as Array<{ id: string; store_id: string | null }>, {
+    manifestIds: opts.manifestIds?.length ? new Set(opts.manifestIds) : undefined,
+  });
+}
+
+/** El aviso de las cajas reemplazadas recibidas: se desarman, no se reprograman. */
+function returnedToStockNotice(count: number): string {
+  return `${count} ${count === 1 ? "era una caja reemplazada" : "eran cajas reemplazadas"} por otra salida: ${count === 1 ? "desármala y regístrala" : "desármalas y regístralas"} como reingreso a stock (no se reprograman).`;
 }
 
 /**
@@ -1619,12 +1892,13 @@ export async function returnUndeliveredToOffice(orgId: string, orderIds: string[
 export async function returnUndeliveredByCode(orgId: string, rawCode: string): Promise<CourierActionResult & { orderName?: string | null }> {
   const code = normalizeDispatchScan(rawCode).slice(0, 200);
   if (!code) return { error: "Escanea el QR o escribe el código del paquete." };
-  const auth = await requireManager(orgId);
+  const auth = await requireOperator(orgId);
   if ("error" in auth) return auth;
   const admin = createAdminSupabase();
   let orderId: string | null = null;
   const found = await lookupDispatchShipment(code);
   if (found.shipment) orderId = found.shipment.order_id;
+  else if (found.scanHold) return { error: found.error ?? "Escanea el QR de la caja." };
   else {
     const name = code.replace(/^#/, "");
     const { data: stores } = await admin.from("stores").select("id").eq("org_id", orgId);
@@ -1633,9 +1907,397 @@ export async function returnUndeliveredByCode(orgId: string, rawCode: string): P
     if (orders?.length === 1) orderId = orders[0]!.id as string;
   }
   if (!orderId) return { error: found.error ?? "No encontramos un pedido con ese QR, guía o número." };
+  // Por QR, código de salida o guía se recibe ESA salida: el pedido puede tener
+  // otra saliendo (0248). El número de pedido no designa caja: se recibe por
+  // pedido, con la regla de las dos cajas de `returnUndeliveredToOffice`.
+  const byOutput = found.shipment && !found.byOrderName && courierKey(found.shipment.courier) === "propio" ? found.shipment : null;
+  if (byOutput && !auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas." };
+  const res = byOutput
+    ? await returnUndeliveredShipments(admin, auth, orgId, [{ id: byOutput.id, store_id: byOutput.store_id }])
+    : await returnUndeliveredToOffice(orgId, [orderId]);
+  // El nombre solo cuando se recibió: un error puede ser de otra tienda.
+  if (res.error) return res;
   const { data: om } = await admin.from("order_master").select("order_name").eq("order_id", orderId).maybeSingle();
-  const res = await returnUndeliveredToOffice(orgId, [orderId]);
   return { ...res, orderName: (om?.order_name as string | null) ?? null };
+}
+
+export interface ReplaceOwnOutputsResult extends CourierActionResult {
+  replaced: Array<{ orderId: string; orderName: string; oldCode: string | null; newCode: string | null; riderName: string }>;
+  /** Ya habían salido con otra salida (otra pestaña, un doble clic): no se escribió nada. */
+  alreadyReplaced: Array<{ shipmentId: string; message: string }>;
+  failed: Array<{ shipmentId: string; error: string }>;
+}
+
+/**
+ * «Sacar con salida nueva» (12-10-2026, decisión del owner; MOM §9.3, §29.13).
+ * El motorizado todavía tiene la caja «No entregado» —Johnny (Yhoni) y Roy la
+ * traen al día siguiente, Alexis cada dos o tres días— y el pedido tiene que
+ * salir antes: se crea una salida NUEVA (consecutivo, QR y rótulo propios) que
+ * Almacén arma desde stock, y la anterior queda «en devolución» a nombre del
+ * motorizado (`gf_replace_output`, 0248). Cuando la trae, «Recibir en oficina»
+ * la devuelve a stock: no se reutiliza ni vuelve a la cola.
+ *
+ * Por salida (`shipmentIds`): un pedido puede tener una en devolución y otra
+ * saliendo. La S02 se crea antes de llamar a la base; si la llamada falla, se
+ * borra (o, si no se puede, se anula) y la solicitud abierta aquí también.
+ */
+export async function replaceOwnOutputs(
+  orgId: string,
+  shipmentIds: string[],
+  opts: { dispatchDay?: string | null } = {},
+): Promise<ReplaceOwnOutputsResult> {
+  const empty = { replaced: [], alreadyReplaced: [], failed: [] };
+  const auth = await requireOperator(orgId);
+  if ("error" in auth) return { ...auth, ...empty };
+  if (!auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas.", ...empty };
+  const ids = [...new Set(shipmentIds.filter(Boolean))];
+  if (!ids.length) return { error: "Marca al menos un paquete.", ...empty };
+  if (ids.length > MAX_TAKE_ORDERS) return { error: `Puedes sacar hasta ${MAX_TAKE_ORDERS} pedidos por tanda.`, ...empty };
+
+  const admin = createAdminSupabase();
+  const { data: orgStores } = await admin.from("stores").select("id").eq("org_id", orgId);
+  const orgStoreIds = new Set(((orgStores ?? []) as { id: string }[]).map((store) => store.id));
+  const { data: provider } = await admin
+    .from("logistics_providers")
+    .select("id")
+    .eq("org_id", orgId)
+    .eq("code", "grupo-gf-courier")
+    .maybeSingle();
+  const providerId = (provider as { id: string } | null)?.id ?? null;
+  if (!providerId) return { error: "Grupo GF Courier no está activo en esta organización.", ...empty };
+
+  const replaced: ReplaceOwnOutputsResult["replaced"] = [];
+  const alreadyReplaced: ReplaceOwnOutputsResult["alreadyReplaced"] = [];
+  const failed: ReplaceOwnOutputsResult["failed"] = [];
+  const touched: string[] = [];
+
+  // Secuencial: cada salida vuelve a leer su estado y deja su propio resultado.
+  for (const shipmentId of ids) {
+    let createdShipment: string | null = null;
+    let createdRequest: string | null = null;
+    try {
+      const { data: target } = await admin
+        .from("shipments")
+        .select(`${ADMISSION_SHIPMENT_COLUMNS},store_id`)
+        .eq("id", shipmentId)
+        .maybeSingle();
+      const old = target as unknown as (AdmissionShipmentRow & { store_id: string | null }) | null;
+      if (!old?.order_id || !old.store_id || !orgStoreIds.has(old.store_id)) {
+        failed.push({ shipmentId, error: `${old?.output_code ?? "Una salida"}: no la encontramos.` });
+        continue;
+      }
+      if (!storeAllowed(auth, old.store_id)) {
+        failed.push({ shipmentId, error: `${old.output_code ?? "Una salida"}: ${OUTSIDE_STORE}` });
+        continue;
+      }
+      const orderId = old.order_id;
+      const [{ data: orderMaster }, { data: outputRows }, boxes, { data: liveRequest }] = await Promise.all([
+        admin.from("order_master").select("*").eq("order_id", orderId).maybeSingle(),
+        admin.from("shipments").select(ADMISSION_SHIPMENT_COLUMNS).eq("order_id", orderId),
+        loadActiveBoxes(admin, [old.id]),
+        admin
+          .from("logistics_requests")
+          .select("id,shipment_id,status")
+          .eq("order_id", orderId)
+          .eq("provider_id", providerId)
+          .neq("status", "cancelled")
+          .limit(1)
+          .maybeSingle(),
+      ]);
+      const row = orderMaster as Record<string, unknown> | null;
+      if (!row) {
+        failed.push({ shipmentId, error: "El pedido ya no está disponible." });
+        continue;
+      }
+      const orderName = String(row.order_name ?? "El pedido");
+      const outputs = (outputRows ?? []) as unknown as AdmissionShipmentRow[];
+      const box = boxes.get(old.id) ?? null;
+      const request = liveRequest as { id: string; shipment_id: string | null; status: string } | null;
+      const replacedIds = await loadReplacedIds(admin, returningOutputIds(outputs));
+      const decision = ownReplaceDecision(row, outputs, old, box, request?.shipment_id ?? null, replacedIds);
+      if (decision.action === "ya_reemplazada") {
+        alreadyReplaced.push({ shipmentId, message: replaceDecisionMessage(decision, box, old.output_code, await replacedByCode(admin, old.id)) });
+        continue;
+      }
+      if (decision.action === "bloquear") {
+        failed.push({ shipmentId, error: `${orderName}: ${replaceDecisionMessage(decision, box, old.output_code)}` });
+        continue;
+      }
+      const riderName = box!.riderName;
+      const reason = replacedOutputReason({ riderName, routeDate: box!.routeDate, outputCode: old.output_code });
+      // Otra salida con la anterior todavía fuera: el motivo lo escribe el
+      // sistema (§9, §23) y el tope de cinco se aplica igual.
+      const puerta = puertaDeSalidaAdicional({ courier: "propio", operation: "lima", outputs, motivo: reason });
+      if (!puerta.ok) {
+        failed.push({ shipmentId, error: `${orderName}: ${puerta.error}` });
+        continue;
+      }
+      const { data: item } = await admin
+        .from("dispatch_manifest_items")
+        .select("id")
+        .eq("shipment_id", old.id)
+        .eq("manifest_id", box!.manifestId)
+        .is("removed_at", null)
+        .maybeSingle();
+      if (!item) {
+        failed.push({ shipmentId, error: `${orderName}: ${old.output_code ?? "La salida"} ya no está en la caja de ${riderName}.` });
+        continue;
+      }
+
+      const check = await loadGroupGfCourierRouteCheck(admin, {
+        store_id: String(row.store_id),
+        region: row.region == null ? null : String(row.region),
+        province: row.province == null ? null : String(row.province),
+        district: row.district == null ? null : String(row.district),
+      });
+      if (!check.eligible || !check.providerId || !check.agreementId || !check.districtKey || !check.tariffId || check.tariffAmount == null) {
+        failed.push({ shipmentId, error: `${orderName}: ${check.reason}` });
+        continue;
+      }
+      // El día: el de la mesa de despacho si se eligió; si no, el programado
+      // (sin adelantarlo al corte) o el primero posible según el corte de 12:00.
+      const earliest = scheduledDay(check.sameDayCutoff);
+      const program = (await loadPrograms(admin, { orderIds: [orderId] })).get(orderId) ?? null;
+      const dispatchDay = opts.dispatchDay && DATE_RE.test(opts.dispatchDay) && opts.dispatchDay >= limaClock().day ? opts.dispatchDay : null;
+      const scheduledFor = dispatchDay ?? (program && program.scheduled_for > earliest ? program.scheduled_for : earliest);
+
+      const newShipmentId = randomUUID();
+      // Sin solicitud viva (salió por el cuaderno o antes de las solicitudes),
+      // se abre una aquí y la base la acepta junto con el reemplazo. Su clave
+      // lleva la salida: la de la toma (`kapta:proveedor:pedido`) puede estar
+      // ocupada por una solicitud cancelada del mismo pedido.
+      if (!request) {
+        const requestId = randomUUID();
+        const insert = await admin
+          .from("logistics_requests")
+          .insert({
+            id: requestId,
+            provider_id: check.providerId,
+            agreement_id: check.agreementId,
+            store_id: String(row.store_id),
+            order_id: orderId,
+            source: "kapta",
+            external_reference: row.order_name == null ? null : String(row.order_name),
+            idempotency_key: `kapta:${check.providerId}:${orderId}:${newShipmentId}`,
+            status: "accepting",
+            district_key: check.districtKey,
+            tariff_id: check.tariffId,
+            tariff_amount: check.tariffAmount,
+            currency: check.currency,
+            includes_igv: true,
+            scheduled_for: scheduledFor,
+            requested_by: auth.userId,
+            accepted_by: auth.userId,
+          })
+          .select("id")
+          .single();
+        if (insert.error) {
+          failed.push({
+            shipmentId,
+            error: insert.error.code === "23505"
+              ? `${orderName}: otra persona acaba de tomar el pedido; vuelve a cargar la lista.`
+              : `${orderName}: ${insert.error.message}`,
+          });
+          continue;
+        }
+        createdRequest = requestId;
+      }
+
+      const acceptedAt = new Date().toISOString();
+      const guideCode = manualRouteGuideCode(row.order_name == null ? null : String(row.order_name), newShipmentId, "propio");
+      const product = await orderProductSummary(admin, orderId);
+      const write = await writeCourierGuide(
+        admin,
+        orderId,
+        groupGfOutputRow(row, { id: newShipmentId, guideCode, product, acceptedAt, scheduledFor }),
+        { createIfMissing: true, forceNew: true },
+      );
+      if ("error" in write) {
+        failed.push({ shipmentId, error: `${orderName}: ${write.error}` });
+        continue;
+      }
+      createdShipment = write.shipmentId;
+
+      const { error: rpcError } = await admin.rpc("gf_replace_output", {
+        p_item_id: (item as { id: string }).id,
+        p_new_shipment: write.shipmentId,
+        p_request_id: createdRequest,
+        p_scheduled_for: scheduledFor,
+        p_reason: reason,
+        p_actor: auth.userId,
+      });
+      // Sin respuesta clara (red, tiempo de espera) la base pudo haberlo hecho
+      // igual: si la solicitud ya apunta a la S02, se reemplazó. Deshacer la
+      // S02 ahí dejaría el pedido sin salida y la S01 en devolución.
+      const committed = rpcError ? await replacementCommitted(admin, write.shipmentId) : false;
+      if (rpcError && !committed) {
+        const message = rpcError.message ?? "";
+        if (message.startsWith("REPLACED:")) {
+          const code = message.slice("REPLACED:".length).trim() || null;
+          alreadyReplaced.push({ shipmentId, message: replaceDecisionMessage({ action: "ya_reemplazada" }, box, old.output_code, code) });
+        } else if (message.startsWith("RECIBIDA:")) {
+          failed.push({ shipmentId, error: `${orderName}: ${riderName} ya lo devolvió; tómalo con su misma salida ${old.output_code ?? ""}`.trim() });
+        } else if (message.startsWith("TOPE:")) {
+          failed.push({ shipmentId, error: `${orderName}: el pedido ya alcanzó el máximo de ${MAX_OUTPUTS_PER_ORDER} salidas.` });
+        } else {
+          failed.push({ shipmentId, error: `${orderName}: ${message}` });
+        }
+        continue;
+      }
+      // Hecho: la S02 y la solicitud ya no se deshacen.
+      const newShipment = createdShipment;
+      createdShipment = null;
+      createdRequest = null;
+
+      const { data: written } = await admin
+        .from("shipments")
+        .update({ label_url: `/api/pedidos/rotulos?ids=${newShipment}` })
+        .eq("id", newShipment)
+        .select("output_code")
+        .single();
+      const newCode = (written as { output_code?: string | null } | null)?.output_code ?? write.outputCode ?? null;
+      // La justificación auditada de la salida adicional (§23), como en la toma.
+      if (puerta.motivo) {
+        await admin.from("order_events").insert({
+          store_id: String(row.store_id),
+          order_id: orderId,
+          kind: "additional_output_reason",
+          occurred_at: acceptedAt,
+          actor: auth.userId,
+          source: "grupo_gf_courier",
+          courier: "propio",
+          guide_code: guideCode,
+          shipment_id: newShipment,
+          reason: puerta.motivo,
+          note: `Salida nueva por Grupo GF: ${old.output_code ?? "la anterior"} sigue con ${riderName} (en devolución).`,
+          payload: {
+            replaces: old.id,
+            replacesCode: old.output_code ?? null,
+            salidas_vivas: puerta.estorban.map((o) => ({
+              codigo: o.output_code ?? o.guide_code ?? null,
+              courier: o.courier,
+              estado: o.delivery_status,
+            })),
+          },
+        });
+      }
+      touched.push(orderId);
+      replaced.push({ orderId, orderName, oldCode: old.output_code ?? null, newCode, riderName });
+    } catch (error) {
+      failed.push({ shipmentId, error: error instanceof Error ? error.message : String(error) });
+    } finally {
+      // Lo que se creó para una salida que no se reemplazó no se queda suelto.
+      if (createdShipment) await discardNewOutput(admin, createdShipment);
+      if (createdRequest) await admin.from("logistics_requests").delete().eq("id", createdRequest).eq("status", "accepting");
+    }
+  }
+
+  if (touched.length) await recomputeOrderMasterSafe(admin, touched);
+  revalidatePath(COURIER_PATH);
+  revalidatePath("/dashboard/pedidos");
+  revalidatePath("/dashboard/pedidos/almacen");
+  const messages: string[] = [];
+  if (replaced.length === 1) {
+    const one = replaced[0]!;
+    messages.push(replacedOutputNotice(one.orderName, one.newCode, one.oldCode, one.riderName));
+  } else if (replaced.length > 1) {
+    messages.push(`${replaced.length} pedidos salen con una salida nueva: Almacén arma otra caja desde stock para cada uno; imprime sus rótulos (${listNames(replaced.map((r) => r.newCode ?? r.orderName))}). Las anteriores quedan en devolución con su motorizado.`);
+  }
+  for (const item of alreadyReplaced) messages.push(item.message);
+  // Lo que no salió se dice con su pedido y su motivo, también junto a lo que sí.
+  if (failed.length && (replaced.length || alreadyReplaced.length)) {
+    messages.push(`${failed.length} no ${failed.length === 1 ? "pudo" : "pudieron"} sacarse: ${failed.map((f) => f.error).join(" ")}`);
+  }
+  const error = !replaced.length && !alreadyReplaced.length && failed.length
+    ? failed.length === 1 ? failed[0]!.error : `No se pudieron sacar ${failed.length} pedidos: ${listNames(failed.map((f) => f.error))}`
+    : undefined;
+  return { notice: messages.join(" ") || undefined, error, replaced, alreadyReplaced, failed };
+}
+
+/** El código de la salida que reemplazó a esta (`output_replaced`), si consta. */
+/**
+ * Las salidas que se reemplazaron por otra (evento `output_replaced`, 0248),
+ * entre estas. Es la marca: la custodia `retorno` sola también la pone
+ * «Solicitar devolución».
+ */
+/**
+ * Las salidas que pueden ser reemplazadas: en devolución con el motorizado
+ * (`isReturningOwnOutput`). Las reglas de la cola, la toma y el reemplazo leen
+ * el conjunto solo a través de `isReplacedOwnOutput`, que lo exige: el evento
+ * se busca solo para ellas y lo normal es no consultar nada.
+ */
+function returningOutputIds(outputs: ReadonlyArray<ReturningOutputLike & { id: string }>): string[] {
+  return outputs.filter((output) => isReturningOwnOutput(output)).map((output) => output.id);
+}
+
+async function loadReplacedIds(admin: Admin, shipmentIds: string[]): Promise<Set<string>> {
+  if (!shipmentIds.length) return new Set();
+  const { data } = await courierRowsByIds(shipmentIds, (ids) => admin
+    .from("order_events")
+    .select("shipment_id")
+    .in("shipment_id", ids)
+    .eq("kind", "output_replaced"));
+  return replacedOutputIds((data as Array<{ shipment_id: string | null }>).map((row) => ({ kind: "output_replaced", shipment_id: row.shipment_id })));
+}
+
+/** ¿La salida tiene el evento `output_replaced`? (0248) */
+async function outputWasReplaced(admin: Admin, shipmentId: string): Promise<boolean> {
+  const { data } = await admin
+    .from("order_events")
+    .select("id")
+    .eq("shipment_id", shipmentId)
+    .eq("kind", "output_replaced")
+    .limit(1)
+    .maybeSingle();
+  return Boolean(data);
+}
+
+/** ¿El reemplazo quedó hecho aunque la llamada no lo dijo? La solicitud ya es de la S02. */
+async function replacementCommitted(admin: Admin, newShipmentId: string): Promise<boolean> {
+  const { data, error } = await admin
+    .from("logistics_requests")
+    .select("id")
+    .eq("shipment_id", newShipmentId)
+    .neq("status", "cancelled")
+    .limit(1)
+    .maybeSingle();
+  return !error && Boolean(data);
+}
+
+async function replacedByCode(admin: Admin, shipmentId: string): Promise<string | null> {
+  const { data } = await admin
+    .from("order_events")
+    .select("payload")
+    .eq("shipment_id", shipmentId)
+    .eq("kind", "output_replaced")
+    .order("occurred_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const code = (data as { payload?: { replaced_by_code?: unknown } } | null)?.payload?.replaced_by_code;
+  return typeof code === "string" ? code : null;
+}
+
+/**
+ * Deshace la salida nueva que no llegó a reemplazar a la anterior: se borra
+ * mientras siga en la empresa y sin salir; si la base no deja borrarla, se
+ * anula con el motivo, para que no quede una caja viva sin solicitud.
+ */
+async function discardNewOutput(admin: Admin, shipmentId: string): Promise<void> {
+  // Con una solicitud viva apuntándola, el reemplazo sí se hizo: no se toca.
+  if (await replacementCommitted(admin, shipmentId)) return;
+  const { data: deleted, error } = await admin
+    .from("shipments")
+    .delete()
+    .eq("id", shipmentId)
+    .eq("custody_state", "empresa")
+    .is("dispatched_at", null)
+    .select("id");
+  if (!error && (deleted ?? []).length) return;
+  await admin
+    .from("shipments")
+    .update({ delivery_status: "anulado", closed_at: new Date().toISOString() })
+    .eq("id", shipmentId)
+    .is("dispatched_at", null);
 }
 
 /**
@@ -1687,9 +2349,9 @@ export async function saveRiderDistrictPay(orgId: string, input: { riderId: stri
 }
 
 /** Los pedidos de la org entre los marcados, con su tienda: nada de programar pedidos ajenos. */
-async function ordersOfOrg(admin: Admin, orgId: string, orderIds: string[]): Promise<Map<string, string>> {
+async function ordersOfOrg(admin: Admin, orgId: string, orderIds: string[], auth?: ManagerAuth): Promise<Map<string, string>> {
   const { data: stores } = await admin.from("stores").select("id").eq("org_id", orgId);
-  const storeIds = new Set(((stores ?? []) as { id: string }[]).map((store) => store.id));
+  const storeIds = new Set(((stores ?? []) as { id: string }[]).map((store) => store.id).filter((id) => !auth || storeAllowed(auth, id)));
   const { data: orders } = await courierRowsByIds(orderIds, (ids) => admin.from("orders").select("id,store_id").in("id", ids));
   return new Map((orders as Array<{ id: string; store_id: string }>)
     .filter((order) => storeIds.has(order.store_id))
@@ -1710,7 +2372,7 @@ export async function rescheduleGroupGfCourierOrders(
   day: string,
   rawReason = "",
 ): Promise<CourierActionResult> {
-  const auth = await requireManager(orgId);
+  const auth = await requireOperator(orgId);
   if ("error" in auth) return auth;
   if (!auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas." };
   if (!DATE_RE.test(day)) return { error: "Elige una fecha válida." };
@@ -1723,7 +2385,7 @@ export async function rescheduleGroupGfCourierOrders(
   const admin = createAdminSupabase();
   const { data: provider } = await admin.from("logistics_providers").select("id").eq("org_id", orgId).eq("code", "grupo-gf-courier").maybeSingle();
   if (!provider) return { error: "Grupo GF Courier no está activado." };
-  const storeByOrder = await ordersOfOrg(admin, orgId, ids);
+  const storeByOrder = await ordersOfOrg(admin, orgId, ids, auth);
   const { data: requestRows, error: readError } = await admin
     .from("logistics_requests")
     .select("id,order_id,store_id,shipment_id,status,scheduled_for")
@@ -1779,13 +2441,13 @@ export async function rescheduleGroupGfCourierOrders(
 
 /** «Quitar la fecha»: el pedido vuelve a su apartado de siempre. Queda en el historial. */
 export async function clearGroupGfCourierPrograms(orgId: string, orderIds: string[]): Promise<CourierActionResult> {
-  const auth = await requireManager(orgId);
+  const auth = await requireOperator(orgId);
   if ("error" in auth) return auth;
   if (!auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas." };
   const ids = [...new Set(orderIds.filter(Boolean))];
   if (!ids.length) return { error: "Marca al menos un pedido." };
   const admin = createAdminSupabase();
-  const storeByOrder = await ordersOfOrg(admin, orgId, ids);
+  const storeByOrder = await ordersOfOrg(admin, orgId, ids, auth);
   const programs = [...(await loadPrograms(admin, { orderIds: [...storeByOrder.keys()] })).values()];
   if (!programs.length) return { error: "Ninguno de esos pedidos tiene fecha programada." };
   const { error } = await admin.from("gf_dispatch_programs").delete().in("order_id", programs.map((p) => p.order_id));
@@ -1807,7 +2469,7 @@ export async function clearGroupGfCourierPrograms(orgId: string, orderIds: strin
 }
 
 export async function takeAndAssignGroupGfCourierOrders(orgId: string, riderId: string, orderIds: string[], opts: { overrideCash?: boolean; scheduledFor?: string | null; day?: string | null; confirmProgrammed?: boolean; tandersConfirmations?: TandersConfirmations } = {}): Promise<CourierActionResult> {
-  const auth = await requireManager(orgId);
+  const auth = await requireOperator(orgId);
   if ("error" in auth) return auth;
   if (!auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas." };
   const admin = createAdminSupabase();
@@ -1847,7 +2509,7 @@ export async function assignGroupGfCourierRoute(
   requestIds: string[],
   opts: { overrideCash?: boolean; day?: string | null; confirmProgrammed?: boolean } = {},
 ): Promise<AssignCourierRouteResult> {
-  const auth = await requireManager(orgId);
+  const auth = await requireOperator(orgId);
   if ("error" in auth) return { ...auth, assigned: 0, manifestIds: [], failed: [] };
   return assignRouteCore(auth, orgId, riderId, requestIds, opts, IMMEDIATE_EFFECTS);
 }
@@ -1930,11 +2592,13 @@ async function assignRouteCore(
     status: string;
     scheduled_for: string;
   };
-  const requests = (requestRows ?? []) as AssignableRequest[];
+  const readRequests = (requestRows ?? []) as AssignableRequest[];
+  const requests = readRequests.filter((request) => storeAllowed(auth, request.store_id));
   const requestById = new Map(requests.map((request) => [request.id, request]));
+  const outsideIds = new Set(readRequests.filter((request) => !storeAllowed(auth, request.store_id)).map((request) => request.id));
   const failed: AssignCourierRouteResult["failed"] = unique
     .filter((id) => !requestById.has(id))
-    .map((requestId) => ({ requestId, error: "La solicitud ya no está disponible." }));
+    .map((requestId) => ({ requestId, error: outsideIds.has(requestId) ? OUTSIDE_STORE : "La solicitud ya no está disponible." }));
   const shipmentIds = requests
     .map((request) => request.shipment_id)
     .filter((shipmentId): shipmentId is string => Boolean(shipmentId));
@@ -2069,8 +2733,11 @@ async function assignRouteCore(
       warningAmount: amount((provider as { cash_warning_amount?: unknown }).cash_warning_amount),
       limitAmount: amount((provider as { cash_limit_amount?: unknown }).cash_limit_amount),
     });
-    if (verdict.status === "blocked" && !opts.overrideCash) {
-      for (const request of group) failed.push({ requestId: request.id, error: verdict.message ?? "Límite de efectivo superado." });
+    // Pasar el límite es una excepción de quien administra el courier
+    // (§29.9: Daysi o Frankz), no de cualquiera que despache.
+    const cashBlock = cashLimitBlock(verdict, { override: opts.overrideCash === true, canAuthorize: auth.canManageLogistics, addingCod: cash.adding });
+    if (cashBlock) {
+      for (const request of group) failed.push({ requestId: request.id, error: cashBlock });
       continue;
     }
     if (verdict.message) cashWarnings.push(verdict.status === "blocked" ? `${verdict.message} Autorizado por ${auth.userId}.` : verdict.message);
@@ -2261,7 +2928,7 @@ export async function activateGroupGfCourier(orgId: string): Promise<CourierActi
         name: "Grupo GF Courier",
         legal_name: "Grupo GF",
         coverage_note: "Lima Metropolitana y Callao",
-        same_day_cutoff: "11:30",
+        same_day_cutoff: GF_SAME_DAY_CUTOFF_DEFAULT,
         cash_warning_amount: 4000,
         cash_limit_amount: 5000,
         created_by: auth.userId,
@@ -2295,7 +2962,7 @@ export async function activateGroupGfCourier(orgId: string): Promise<CourierActi
         client_label: store.name,
         assignment_mode: "direct",
         settlement_frequency: "daily",
-        same_day_cutoff: "11:30",
+        same_day_cutoff: GF_SAME_DAY_CUTOFF_DEFAULT,
         coverage_note: "Lima Metropolitana y Callao",
         created_by: auth.userId,
       });
@@ -2584,6 +3251,8 @@ export async function setDistrictAvailability(
 
 export interface MoveManifestItemResult extends CourierActionResult {
   manifestId?: string;
+  /** Lo frenó el límite de efectivo de la ruta destino (§29.9). */
+  cashBlocked?: boolean;
 }
 
 /**
@@ -2608,9 +3277,13 @@ export async function moveManifestItem(
    * calle. Permite sacarlo de una caja ya en poder del motorizado aunque él lo
    * haya confirmado (`gf_office_reclaim`, 0230).
    */
-  opts: { inHand?: boolean } = {},
+  /**
+   * `overrideCash`: quien administra el courier autoriza que la caja destino
+   * pase el límite de efectivo (§29.9); para cualquier otro no cuenta.
+   */
+  opts: { inHand?: boolean; overrideCash?: boolean } = {},
 ): Promise<MoveManifestItemResult> {
-  const auth = await requireManager(orgId);
+  const auth = await requireOperator(orgId);
   if ("error" in auth) return auth;
   if (!auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas." };
   const cleanReason = reason.trim();
@@ -2638,11 +3311,41 @@ export async function moveManifestItem(
   if (!item) return { error: "El paquete ya no está en esa caja." };
   const { data: shipment } = await admin
     .from("shipments")
-    .select("id,store_id,order_id,order_name,courier,guide_code,custody_state")
+    .select("id,store_id,order_id,order_name,courier,guide_code,output_code,custody_state")
     .eq("id", shipmentId)
     .maybeSingle();
   if (!shipment) return { error: "Paquete no encontrado." };
+  if (!storeAllowed(auth, shipment.store_id as string | null)) return { error: OUTSIDE_STORE };
+  // La caja reemplazada (0248) no cambia de motorizado: vuelve a la oficina.
+  // Una en `retorno` por «Solicitar devolución» tampoco se mueve, con el aviso
+  // de siempre.
+  if (shipment.custody_state === "retorno" && (await outputWasReplaced(admin, shipmentId))) {
+    return { error: `${(shipment.output_code as string | null) ?? "El paquete"} se reemplazó por otra salida: no se mueve; recíbelo en oficina cuando vuelva.` };
+  }
   if (shipment.custody_state !== (sourceInCustody ? "courier" : "empresa")) return { error: "El paquete ya no está en custodia de Grupo GF." };
+
+  // Mover también suma su efectivo a la ruta del destino (§29.9): el mismo
+  // límite que al asignar, y pasarlo es solo de quien administra el courier.
+  let cashOverride = false;
+  if (shipment.order_id) {
+    const { data: cashProvider } = await admin
+      .from("logistics_providers")
+      .select("cash_warning_amount,cash_limit_amount")
+      .eq("org_id", orgId)
+      .eq("code", "grupo-gf-courier")
+      .maybeSingle();
+    const cash = await routeCashForecast(admin, orgId, rider.id, manifest.route_date, [shipment.order_id as string]);
+    const verdict = cashLimitVerdict({
+      currentCod: cash.current,
+      addingCod: cash.adding,
+      warningAmount: amount((cashProvider as { cash_warning_amount?: unknown } | null)?.cash_warning_amount),
+      limitAmount: amount((cashProvider as { cash_limit_amount?: unknown } | null)?.cash_limit_amount),
+    });
+    const cashBlock = cashLimitBlock(verdict, { override: opts.overrideCash === true, canAuthorize: auth.canManageLogistics, addingCod: cash.adding });
+    // `cashBlocked`: la pantalla de quien puede autorizar le ofrece reintentar.
+    if (cashBlock) return { error: cashBlock, cashBlocked: true };
+    cashOverride = verdict.status === "blocked" && cash.adding > 0;
+  }
 
   // 1) abrir (o reutilizar) la carga del destino ANTES de retirar: si el
   // destino no admite paquetes, el origen no se toca.
@@ -2712,7 +3415,7 @@ export async function moveManifestItem(
           shipment_id: shipment.id,
           reason: cleanReason,
           note: `Pasó de la caja de ${fromName} a la de ${rider.full_name}.`,
-          payload: { from_rider_id: manifest.rider_id, from_manifest_id: manifestId, to_rider_id: rider.id, to_manifest_id: targetManifestId, route_date: manifest.route_date },
+          payload: { from_rider_id: manifest.rider_id, from_manifest_id: manifestId, to_rider_id: rider.id, to_manifest_id: targetManifestId, route_date: manifest.route_date, ...(cashOverride ? { cash_limit_overridden_by: auth.userId } : {}) },
         })
       : Promise.resolve(),
     // Está en otra caja: «scheduled». En custodia, el retiro (0185) la había
@@ -2760,6 +3463,11 @@ export type ScanAssignStatus =
   | "bloqueado_efectivo"
   /** Programado para otro día (0199): se asigna solo si se confirma. */
   | "programado_otro_dia"
+  /**
+   * La caja reemplazada por otra salida (0248): el escaneo la recibió en
+   * oficina (o ya estaba recibida) y vuelve a stock. No se asigna.
+   */
+  | "recibido_a_stock"
   | "desconocido";
 
 export interface ScanAssignLine {
@@ -2788,6 +3496,9 @@ export interface ScanAssignLine {
    * y la caja entró como esta: su rótulo es el que hay que imprimir y pegar.
    */
   relabel?: { outputCode: string | null; labelUrl: string } | null;
+  /** Con `ya_en_caja`: en qué carga está y qué le falta (lib/gf-scan-already-in-box.ts). */
+  loadNumber?: number | null;
+  boxStage?: AlreadyInBoxStage | null;
 }
 
 /**
@@ -2807,7 +3518,7 @@ export async function scanAssignToRider(
   const code = normalizeDispatchScan(rawCode).slice(0, 200);
   const base: ScanAssignLine = { code, status: "desconocido", orderId: null, orderName: null, shipmentId: null, manifestId: null, riderName: null, amount: null, message: "" };
   if (!code) return { ...base, message: "Escanea el QR o el código del paquete." };
-  const auth = await requireManager(orgId);
+  const auth = await requireOperator(orgId);
   if ("error" in auth) return { ...base, status: "no_elegible", message: auth.error };
   if (!auth.canManageDispatch) return { ...base, status: "no_elegible", message: "No tienes permiso para organizar rutas." };
   const admin = createAdminSupabase();
@@ -2827,6 +3538,10 @@ export async function scanAssignToRider(
   if (found.shipment) {
     orderId = found.shipment.order_id;
     shipmentId = found.shipment.id;
+  } else if (found.scanHold) {
+    // Por número de pedido, con la caja reemplazada todavía fuera: las dos
+    // cajas llevan el mismo código de barras y no se toma ni asigna nada (§29.13).
+    return { ...base, status: "no_elegible", message: found.error ?? "Escanea el QR de la caja." };
   } else if (!found.error?.includes("salidas")) {
     const name = code.replace(/^#/, "");
     const { data: stores } = await admin.from("stores").select("id").eq("org_id", orgId);
@@ -2870,20 +3585,80 @@ export async function scanAssignToRider(
     admin.from("order_master").select("order_name,order_total,store_id").eq("order_id", orderId).maybeSingle(),
     shipmentId ? admin
       .from("dispatch_manifest_items")
-      .select("id,manifest_id,office_checked_at,dispatch_manifests!inner(id,rider_id,driver_name,route_date,state)")
+      .select("id,manifest_id,office_checked_at,dispatch_manifests!inner(id,rider_id,driver_name,route_date,state,load_number)")
       .eq("shipment_id", shipmentId)
       .is("removed_at", null)
       .maybeSingle() : Promise.resolve({ data: null }),
   ]);
+  // Fuera de sus tiendas: ni el número ni el monto del pedido.
+  if (!storeAllowed(auth, om?.store_id as string | null | undefined)) {
+    return { ...base, orderId: null, shipmentId: null, orderName: null, amount: null, riderName: rider.full_name, status: "no_elegible", message: OUTSIDE_STORE };
+  }
   const line: ScanAssignLine = { ...base, orderId, shipmentId, orderName: (om?.order_name as string | null) ?? null, amount: om?.order_total == null ? null : Number(om.order_total), riderName: rider.full_name };
 
   // El día de la caja que se arma: hoy, o el que eligió el supervisor.
   const boxDay = opts.scheduledFor && DATE_RE.test(opts.scheduledFor) ? opts.scheduledFor : limaClock().day;
   let receivedFrom: string | null = null;
 
+  // La caja reemplazada por otra salida (0248): nunca se toma ni se asigna, ni
+  // en su caja ni ya recibida —el pedido sale con la nueva, y tomarlo por este
+  // QR metería la salida nueva en la caja con el rótulo de esta—.
+  const replacedScan = found.shipment && found.shipment.id === shipmentId && courierKey(found.shipment.courier) === "propio"
+    ? await (async () => {
+        if (!(await outputWasReplaced(admin, found.shipment!.id))) return null;
+        const replacedBy = await replacedByCode(admin, found.shipment!.id);
+        return { outputCode: found.shipment!.output_code ?? null, replacedBy, received: found.shipment!.custody_state === "devuelto" };
+      })()
+    : null;
+  if (replacedScan && !active) {
+    return {
+      ...line,
+      status: replacedScan.received ? "recibido_a_stock" : "no_elegible",
+      message: replacedScan.received
+        ? `${replacedScan.outputCode ?? "Esta salida"} era la caja reemplazada y ya se recibió: desármala y regístrala como reingreso a stock.${replacedScan.replacedBy ? ` El pedido sale con ${replacedScan.replacedBy}.` : ""}`
+        : `${replacedScan.outputCode ?? "Esta salida"} está en devolución y ya no está en una caja: revísala en la ficha. No se asigna.`,
+    };
+  }
+
   // 2) ¿Ya está en una caja activa?
   if (shipmentId) {
-    const box = (active as { id: string; manifest_id: string; office_checked_at: string | null; dispatch_manifests: { rider_id: string | null; driver_name: string | null; route_date: string; state: string } } | null) ?? null;
+    const box = (active as { id: string; manifest_id: string; office_checked_at: string | null; dispatch_manifests: { rider_id: string | null; driver_name: string | null; route_date: string; state: string; load_number: number | null } } | null) ?? null;
+    // La caja reemplazada (0248, «Sacar con salida nueva»): sea del día que
+    // sea, escanearla en oficina la recibe y vuelve a stock. No se toma ni se
+    // asigna: el pedido ya sale con otra salida.
+    if (box && replacedScan) {
+      const fromName = box.dispatch_manifests.driver_name ?? "otro motorizado";
+      const { data: stop } = await admin
+        .from("delivery_stops")
+        .select("status,outcome_reason")
+        .eq("shipment_id", shipmentId)
+        .eq("dispatch_manifest_id", box.manifest_id)
+        .order("reported_at", { ascending: false, nullsFirst: false })
+        .limit(1)
+        .maybeSingle();
+      const decision = pastBoxDecision({
+        boxRouteDate: box.dispatch_manifests.route_date,
+        targetDay: boxDay,
+        stopStatus: (stop?.status as string | null) ?? null,
+        outcomeReason: (stop?.outcome_reason as string | null) ?? null,
+        replaced: true,
+      });
+      if (decision !== "recibir_a_stock") {
+        return { ...line, status: "no_elegible", manifestId: box.manifest_id, message: `${replacedScan.outputCode ?? "Esta salida"} está en devolución con ${fromName}: no se asigna.` };
+      }
+      const { error: returnError } = await admin.rpc("gf_return_to_office", { p_item_id: box.id, p_actor: auth.userId });
+      if (returnError) return { ...line, status: "no_elegible", manifestId: box.manifest_id, message: returnError.message };
+      // Un pedido, barato: el Master al día para el refresco del tablero. Sin
+      // revalidar la página: lo hace el navegador (`receivedFrom`).
+      await recomputeOrderMasterSafe(admin, [orderId]);
+      return {
+        ...line,
+        status: "recibido_a_stock",
+        manifestId: box.manifest_id,
+        receivedFrom: receivedFromLabel(fromName, box.dispatch_manifests.route_date),
+        message: replacedReceivedMessage(replacedScan.outputCode, fromName, box.dispatch_manifests.route_date, replacedScan.replacedBy),
+      };
+    }
     // Una caja de un día ANTERIOR (lib/gf-scan-return.ts): escanearlo en
     // oficina prueba que volvió. Un «No entregado» se recibe y se asigna en el
     // mismo gesto; antes respondía «Ya estaba» y no entraba en la ruta de hoy.
@@ -2908,16 +3683,40 @@ export async function scanAssignToRider(
       }
       const { error: returnError } = await admin.rpc("gf_return_to_office", { p_item_id: box.id, p_actor: auth.userId });
       if (returnError) return { ...line, status: "no_elegible", manifestId: box.manifest_id, message: returnError.message };
+      // Releída después de recibir (0248): si la base la mandó a stock —un
+      // «Sacar con salida nueva» terminó mientras tanto, o ya constaba
+      // devuelta—, no se toma ni se asigna: el pedido no sale con esta caja.
+      const [{ data: after }, replacedNow] = await Promise.all([
+        admin.from("shipments").select("custody_state,output_code").eq("id", shipmentId).maybeSingle(),
+        outputWasReplaced(admin, shipmentId),
+      ]);
+      const afterRow = after as { custody_state?: string | null; output_code?: string | null } | null;
+      const outcome = officeReturnOutcome(afterRow?.custody_state, replacedNow);
+      if (outcome !== "por_asignar") {
+        await recomputeOrderMasterSafe(admin, [orderId]);
+        const outputCode = afterRow?.output_code ?? null;
+        return {
+          ...line,
+          status: "recibido_a_stock",
+          manifestId: box.manifest_id,
+          receivedFrom: receivedFromLabel(fromName, box.dispatch_manifests.route_date),
+          message: outcome === "a_stock_reemplazada"
+            ? replacedReceivedMessage(outputCode, fromName, box.dispatch_manifests.route_date, await replacedByCode(admin, shipmentId))
+            : `${outputCode ?? "Esta salida"} ya constaba devuelta: salió de la caja de ${fromName} sin volver a «por asignar». No se asigna.`,
+        };
+      }
       receivedFrom = receivedFromLabel(fromName, box.dispatch_manifests.route_date);
     } else if (box) {
       if (box.dispatch_manifests.rider_id === rider.id) {
+        const loadNumber = box.dispatch_manifests.load_number ?? null;
+        const boxStage = alreadyInBoxStage({ officeCheckedAt: box.office_checked_at, manifestState: box.dispatch_manifests.state });
         return {
           ...line,
           status: "ya_en_caja",
           manifestId: box.manifest_id,
-          message: (box.office_checked_at
-            ? `Ya estaba en la caja de ${rider.full_name}, verificado en oficina.`
-            : `Ya estaba en la caja de ${rider.full_name}; falta verificarlo en oficina.`) + oldLabelNote,
+          loadNumber,
+          boxStage,
+          message: alreadyInBoxMessage({ riderName: rider.full_name, loadNumber, stage: boxStage }) + oldLabelNote,
           relabel: relabelEarly,
         };
       }
@@ -3007,6 +3806,8 @@ export interface CourierBoxDetail {
   stores: { id: string; name: string }[];
   canManage: boolean;
   canPickup: boolean;
+  /** Pasar el límite de efectivo de la ruta (§29.9): solo `logistics.manage`. */
+  canAuthorizeCash: boolean;
 }
 
 /**
@@ -3077,6 +3878,7 @@ export async function loadCourierBox(request: { manifestId?: string | null; rout
     stores: stores.map((s) => ({ id: s.id, name: s.name })),
     canManage,
     canPickup,
+    canAuthorizeCash: permissions.can("logistics.manage"),
   };
 }
 

@@ -125,6 +125,7 @@ export function CourierBoxView({ detail, error, onClose, refresh }: {
             manifests={[manifest]}
             canManage={detail.canManage}
             canPickup={detail.canPickup}
+            canAuthorizeCash={detail.canAuthorizeCash}
             surface="gf"
             storeName={storeName}
             refresh={refresh}

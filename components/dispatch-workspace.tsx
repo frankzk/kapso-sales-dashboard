@@ -261,6 +261,7 @@ export function DispatchBoxPanel({
   manifests,
   canManage,
   canPickup,
+  canAuthorizeCash = false,
   surface = "warehouse",
   storeName,
   refresh,
@@ -276,6 +277,8 @@ export function DispatchBoxPanel({
   manifests: DispatchManifest[];
   canManage: boolean;
   canPickup: boolean;
+  /** Pasar el límite de efectivo de la ruta (§29.9): solo quien administra Grupo GF. */
+  canAuthorizeCash?: boolean;
   surface?: "warehouse" | "gf";
   storeName: Map<string, string>;
   refresh: (preferId?: string | null) => Promise<void>;
@@ -446,7 +449,7 @@ export function DispatchBoxPanel({
             {mode === "build" ? (
               surface === "gf" ? (
                 selected
-                  ? <GfBoxAddPackages key={selected.id} manifest={selected} canManage={canManage} refresh={refresh} onBusy={setAssignmentBusy} />
+                  ? <GfBoxAddPackages key={selected.id} manifest={selected} canManage={canManage} canAuthorizeCash={canAuthorizeCash} refresh={refresh} onBusy={setAssignmentBusy} />
                   : <p className="p-5 text-sm text-ink-600">Elige una caja.</p>
               ) : selected ? (
                 <BuildRoute

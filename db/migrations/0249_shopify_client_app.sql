@@ -1,4 +1,4 @@
--- 0245_shopify_client_app.sql — la app de Shopify para tiendas cliente
+-- 0249_shopify_client_app.sql — la app de Shopify para tiendas cliente
 -- (MOM §29.15.1 y §29.15.9, plan clientes-externos-gf, Fase 1b).
 --
 -- QUÉ PASABA. Kapta tenía UNA app de Shopify, la de Aurela y Kenku, con

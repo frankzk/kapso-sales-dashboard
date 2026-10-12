@@ -27,13 +27,13 @@ describe("admisión de pedidos de Grupo GF Courier", () => {
     const alreadyTaken = body.indexOf('.in("status", ["accepting", "accepted", "scheduled"])');
     // Desde la v1.19 el reintento filtra antes la salida que falló, y desde el
     // 09-10-2026 también el camino normal (la «por definir» ya impresa).
-    const outputCheck = body.indexOf("activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : outputsBlockingRetry(outputs)");
+    const outputCheck = body.indexOf("activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : outputsBlockingRetry(outputs, replacedIds)");
     expect(alreadyTaken).toBeGreaterThan(0);
     expect(outputCheck).toBeGreaterThan(alreadyTaken);
     expect(body.slice(alreadyTaken, outputCheck)).toContain("alreadyAccepted.push(orderId)");
   });
 
-  it("el día de la mesa de despacho manda sobre el corte de las 11:30 al tomar", () => {
+  it("el día de la mesa de despacho manda sobre el corte del mismo día al tomar", () => {
     // Escanear a las 17:00 metía el paquete en la caja de MAÑANA (corte) aunque
     // la pantalla dijera «Hoy». Con el paquete en la mano, el día es el elegido.
     const src = readFileSync(resolve(root, "app/dashboard/courier/actions.ts"), "utf8");

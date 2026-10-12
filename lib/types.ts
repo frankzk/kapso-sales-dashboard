@@ -262,6 +262,10 @@ export interface LeadRow {
   claimed_at: string | null;
   closed_by: string | null;
   next_followup_at: string | null;
+  /** Pidió no ser contactado (0247, MOM §33): el agente de voz no lo llama y
+   *  el drip y la secuencia de carritos no le escriben. Opcional: pre-0247 la
+   *  columna no existe. */
+  contact_opt_out_at?: string | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -271,7 +275,7 @@ export interface LeadCallRow {
   lead_id: string;
   store_id: string;
   vendedora: string | null;
-  kind: string; // call | state_change | note | sale | system
+  kind: string; // call | state_change | note | sale | system | voice_agent (agente de voz de leads, MOM §33)
   new_status: string | null;
   note: string | null;
   next_followup_at: string | null;

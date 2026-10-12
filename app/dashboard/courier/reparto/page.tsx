@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getAccessibleStores } from "@/lib/access";
+import { canOperateGroupGf } from "@/lib/permissions";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { legacyReportHref, ROUTES_TAB_HREF } from "@/lib/courier-box-href";
 import { EmptyState } from "@/components/ui";
@@ -20,5 +21,5 @@ export default async function RutasPage({ searchParams }: { searchParams: Promis
     return <EmptyState title="Tu rol no permite armar rutas" />;
   }
   if (!sp.id) redirect("/dashboard/courier/rutas");
-  redirect(legacyReportHref(sp.id, perms.can("logistics.manage") ? ROUTES_TAB_HREF : "/dashboard/courier/rutas"));
+  redirect(legacyReportHref(sp.id, canOperateGroupGf(perms.can) ? ROUTES_TAB_HREF : "/dashboard/courier/rutas"));
 }

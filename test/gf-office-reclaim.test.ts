@@ -42,7 +42,7 @@ describe("Mover desde el escaneo", () => {
   });
 
   it("el botón del escaneo pide inHand y muestra el error en su fila", () => {
-    expect(board).toContain("{ inHand: true }");
+    expect(board).toContain("{ inHand: true, overrideCash: overrideCash && props.canAuthorizeCash === true }");
     expect(board).toContain("onClick={() => void moveScanned(l)}");
     expect(board).toContain('{l.moveError && <p role="alert"');
   });
