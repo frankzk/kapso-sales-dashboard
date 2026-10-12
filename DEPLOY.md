@@ -2147,18 +2147,20 @@ la línea de tiempo («Recordatorio de recojo (día 3)…») y la foto que viaj�
    · Kenku Biru (piloto)»), con guion, primer mensaje, las tools
    `consultar_cobertura` y `registrar_resultado_lead`, el webhook de inicio
    (`/api/voice/leads/inicio`) y los ajustes de `docs/voz-leads-agente.md`.
-   Falta: `VOICE_LEADS_TOOLS_SECRET` como secreto del workspace en la cabecera
-   `x-voice-secret` de las dos tools y del inicio, el nombre con que se
-   presenta y, si se quiere, el post-call.
-4. **El número**, después del agente: el número peruano de Telnyx importado
+   Se presenta como Nicol. Falta: `VOICE_LEADS_TOOLS_SECRET` como secreto del
+   workspace en la cabecera `x-voice-secret` de las dos tools y del inicio y,
+   si se quiere, el post-call.
+4. **El número**, después del agente: un número propio del agente de leads
+   (el peruano que se está comprando, o un segundo número de EE. UU.) importado
    en ElevenLabs por SIP trunk, aceptando solo las direcciones de Telnyx
    (`192.76.120.0/24`, `64.16.250.0/24`), y asignado al agente de leads. Recién
    entonces, en Vercel, y redeploy:
-   - `TELNYX_LEADS_SIP_URI`: la puerta SIP de ese número. Sin ella no se llama a
-     ningún lead: el aviso de Telnyx corta el tramo, nunca lo manda al agente de
-     Reproprovincia.
+   - `TELNYX_LEADS_SIP_URI`: la puerta SIP de ese número, con el formato de
+     `TELNYX_ELEVENLABS_SIP_URI`. Sin ella no se llama a ningún lead: el aviso
+     de Telnyx corta el tramo, nunca lo manda al agente de Reproprovincia.
    - `TELNYX_LEADS_FROM_NUMBER` (opcional): el número que ve el lead. Vacío =
-     el mismo `TELNYX_FROM_NUMBER` de Reproprovincia.
+     el mismo `TELNYX_FROM_NUMBER` de Reproprovincia, que es como sale el
+     piloto mientras llega el número peruano (decisión del owner, 12-10-2026).
 5. **El barrido** `/api/cron/voice-leads` ya está en `vercel.json` (cada cinco
    minutos, desfasado dos del de Reproprovincia). Solo corre en producción y
    sin tiendas con el agente encendido no hace nada. La cola se mira sin llamar

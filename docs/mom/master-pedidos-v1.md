@@ -11316,12 +11316,16 @@ vigilante. Nada más:
 ### 33.9 Pendientes
 
 - **El agente en ElevenLabs ya existe** (12-10-2026, «Agente de leads · Kenku
-  Biru (piloto)»), configurado según `docs/voz-leads-agente.md`. Le faltan el
-  secreto `VOICE_LEADS_TOOLS_SECRET` en sus dos tools y en el inicio, el
-  número y el nombre con que se presenta.
+  Biru (piloto)»), configurado según `docs/voz-leads-agente.md`; se presenta
+  como Nicol. Le faltan el secreto `VOICE_LEADS_TOOLS_SECRET` en sus dos tools
+  y en el inicio, y su puerta: un número propio importado en ElevenLabs y
+  asignado a él (`TELNYX_LEADS_SIP_URI`).
 - **Número peruano en Telnyx** para el agente de leads
   (`TELNYX_LEADS_FROM_NUMBER`). Sin él, el lead ve el número de Telnyx de
-  Reproprovincia, que hoy es de EE. UU., y contesta menos.
+  Reproprovincia, que hoy es de EE. UU., y contesta menos. **Decisión del owner
+  (12-10-2026):** mientras llega, el piloto sale con el de EE. UU.
+  (`TELNYX_LEADS_FROM_NUMBER` vacío); las primeras semanas miden al agente con
+  ese número.
 - **Revisión legal** del cierre «Gracias, no insisto» y del consentimiento para
   llamar a quien escribió por un anuncio, igual que el aviso de grabación de
   §11.8.

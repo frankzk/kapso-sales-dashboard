@@ -818,6 +818,13 @@ describe("docs/voz-leads-agente.md: webhooks, ajustes y variables de Vercel", ()
     }
   });
 
+  it("el guion que se pega es el del agente creado: se presenta como Nicol", () => {
+    const s3 = section(DOC, "## 3. Prompt", "\n## ");
+    expect(s3).toContain("Eres Nicol, asesora de {{tienda}}.");
+    expect(s3).toContain('"Le habla Nicol, de {{tienda}}.');
+    expect(DOC).not.toContain("[nombre del agente]");
+  });
+
   it("los ids del agente y de sus tools no van en el repositorio", () => {
     // Con el id del agente, cualquiera abre una conversación web con él.
     for (const [name, text] of [
@@ -836,7 +843,8 @@ describe("docs/voz-leads-agente.md: webhooks, ajustes y variables de Vercel", ()
       "**El secreto**",
       "**El agente en ElevenLabs**: ya creado",
       "**El número**",
-      "Recién entonces `TELNYX_LEADS_SIP_URI` y `TELNYX_LEADS_FROM_NUMBER` en Vercel",
+      "Recién entonces `TELNYX_LEADS_SIP_URI` en Vercel",
+      "**Mientras llega el número peruano**",
       "**Ajustes de Kenku**",
     ]);
     const deploy = flat(section(read("DEPLOY.md"), "### 12-10-2026 · Agente de voz para leads", "\n### "));

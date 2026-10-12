@@ -17,10 +17,9 @@ copia en el agente de pedidos, ni al revés.
 **En ElevenLabs** ya existe, creado el 12-10-2026 como «Agente de leads ·
 Kenku Biru (piloto)», con todo lo de las secciones 2 a 5 y 7: prompt, primer
 mensaje, las 17 variables, las dos tools y el webhook de inicio. Le faltan
-tres cosas del owner (sección 9): el secreto en las dos tools y en el inicio,
-el número, y el nombre con que se presenta (`[nombre del agente]` en el
-prompt). Su id queda en la consola, no aquí: con el id, cualquiera puede abrir
-una conversación web con el agente.
+dos cosas del owner (sección 9): el secreto en las dos tools y en el inicio, y
+su puerta (el número). Su id queda en la consola, no aquí: con el id,
+cualquiera puede abrir una conversación web con el agente.
 
 ## 1. Lo que recibe al conectar
 
@@ -68,13 +67,13 @@ ElevenLabs ignora el de Kapta.
 
 ## 3. Prompt
 
-Se pega tal cual en el System prompt del agente. Lo único que se completa a mano
-es `[nombre del agente]`: el nombre con que se presenta, que decide el owner.
+Se pega tal cual en el System prompt del agente. Se presenta como **Nicol**, el
+nombre que eligió el owner (12-10-2026).
 
 ```text
 # Quién eres
 
-Eres [nombre del agente], asesora de {{tienda}}. Llamas por teléfono, en
+Eres Nicol, asesora de {{tienda}}. Llamas por teléfono, en
 español de Perú, a personas que escribieron por WhatsApp a {{tienda}} después
 de ver un anuncio de {{producto}}, conversaron con el asistente del chat y no
 llegaron a comprar. Hablas de usted, con calidez y sin apuro, en frases cortas:
@@ -130,7 +129,7 @@ La llamada dura dos minutos como mucho.
    - Si {{nombre}} está vacío, el saludo preguntó con quién hablas. Cuando te
      diga su nombre, pregunta: "¿Usted nos escribió por WhatsApp a {{tienda}}
      hace poco?"
-   Cuando confirme, preséntate: "Le habla [nombre del agente], de {{tienda}}.
+   Cuando confirme, preséntate: "Le habla Nicol, de {{tienda}}.
    Le llamo porque nos escribió por WhatsApp por {{producto}}. ¿Tiene un
    minutito?" Si {{es_volver_a_llamar}} es "si", agrega: "Le llamo como
    quedamos."
@@ -428,13 +427,19 @@ commit.
    del webhook de inicio. Si se quiere el post-call, también
    `ELEVENLABS_WEBHOOK_SECRET` (sección 6). Redeploy.
 3. **El agente en ElevenLabs**: ya creado, con prompt, primer mensaje, las dos
-   tools, el webhook de inicio y los ajustes de la sección 7. Falta elegir el
-   nombre con que se presenta y reemplazar `[nombre del agente]` (dos veces) en
-   el prompt, allá y aquí.
-4. **El número**: comprar el número peruano en Telnyx, importarlo en
+   tools, el webhook de inicio y los ajustes de la sección 7. Se presenta como
+   Nicol.
+4. **El número**: la puerta del agente es un número propio, importado en
    ElevenLabs por SIP trunk con las direcciones permitidas de la sección 7 y
-   asignarlo a ESTE agente, nunca al de Reproprovincia. Recién entonces
-   `TELNYX_LEADS_SIP_URI` y `TELNYX_LEADS_FROM_NUMBER` en Vercel, y redeploy.
+   asignado a ESTE agente, nunca al de Reproprovincia. ElevenLabs lo usa para
+   saber qué agente contesta el tramo que abre Kapta: no llama desde él. Puede
+   ser ya el número peruano que se está comprando, o un segundo número de
+   EE. UU. Recién entonces `TELNYX_LEADS_SIP_URI` en Vercel (la dirección SIP de
+   ese número, con el mismo formato que `TELNYX_ELEVENLABS_SIP_URI`), y
+   redeploy. **Mientras llega el número peruano** (decisión del owner,
+   12-10-2026), `TELNYX_LEADS_FROM_NUMBER` queda vacío y el lead ve el número de
+   EE. UU. de Reproprovincia. Cuando el peruano esté activo en Telnyx,
+   `TELNYX_LEADS_FROM_NUMBER` pasa a ser ese, y redeploy.
 5. **Ajustes de Kenku** → «Agente de voz · Leads (piloto)»:
    - campaña de Biru: `120248136956710056`;
    - producto, por ejemplo «Shampoo Birú anticaspa»;
