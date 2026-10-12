@@ -53,7 +53,7 @@ import { isGroupGfRiderCourier } from "@/lib/couriers/catalog";
 import { custodyOnAssign, GF_SAME_DAY_CUTOFF_DEFAULT, isRiderPickupMode, sameDayCutoffMinute, type RiderPickupMode } from "@/lib/grupo-gf-courier";
 import { BLOCKED_REASON_LABEL, programDayLabel, programNeedsConfirm, takenIsAssignable, type BlockedReason } from "@/lib/dispatch-day";
 import { pastBoxDecision, pastBoxMessage, receivedFromLabel, replacedReceivedMessage } from "@/lib/gf-scan-return";
-import { isReplacedOwnOutput, isReturningOwnOutput, replacedOutputIds, type ReturningOutputLike } from "@/lib/gf-replaced-output";
+import { isReturningOwnOutput, officeReturnOutcome, replacedOutputIds, type ReturningOutputLike } from "@/lib/gf-replaced-output";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 import { riderPickupMode } from "@/lib/grupo-gf-courier-route-access";
 import { getRouteDetail, type RouteRow, type StopWithOrder } from "@/lib/routes-access";
@@ -1787,18 +1787,10 @@ async function returnUndeliveredShipments(
     .filter((row) => row.store_id != null && orgStoreIds.has(row.store_id) && storeAllowed(auth, row.store_id))
     .map((row) => row.id))];
   if (!shipmentIds.length) return { error: "Esos pedidos no tienen salida de Grupo GF a tu alcance." };
-  const [boxes, { data: items }, { data: custody }, replacedIds] = await Promise.all([
+  const [boxes, { data: items }] = await Promise.all([
     loadActiveBoxes(admin, shipmentIds),
     courierRowsByIds(shipmentIds, (ids) => admin.from("dispatch_manifest_items").select("id,shipment_id,manifest_id").in("shipment_id", ids).is("removed_at", null)),
-    courierRowsByIds(shipmentIds, (ids) => admin.from("shipments").select("id,courier,delivery_status,custody_state,returned_at").in("id", ids)),
-    loadReplacedIds(admin, shipmentIds),
   ]);
-  // Lo que la 0246 manda a stock en vez de a «por asignar»: la reemplazada y la
-  // que ya constaba devuelta. Una en `retorno` sin reemplazo («Solicitar
-  // devolución») vuelve a «por asignar», como siempre.
-  const custodyRows = custody as Array<ReturningOutputLike & { id: string }>;
-  const returningIds = new Set(custodyRows.filter((row) => isReplacedOwnOutput(row, replacedIds)).map((row) => row.id));
-  const alreadyReturnedIds = new Set(custodyRows.filter((row) => row.custody_state === "devuelto" || Boolean(row.returned_at)).map((row) => row.id));
   let undelivered = (items as Array<{ id: string; shipment_id: string; manifest_id: string }>).filter((item) => {
     const box = boxes.get(item.shipment_id);
     return box?.manifestId === item.manifest_id && Boolean(box.undeliveredReason) && (!opts.manifestIds || opts.manifestIds.has(item.manifest_id));
@@ -1821,16 +1813,31 @@ async function returnUndeliveredShipments(
     ? "Ese pedido tiene dos cajas «No entregado» (la reemplazada y la nueva): escanea el QR de la que llegó para recibirla."
     : "";
   const changed: string[] = [];
-  let toStock = 0;
-  let alreadyReturned = 0;
+  const received: string[] = [];
   const errors: string[] = [];
   for (const item of undelivered) {
     const { data, error } = await admin.rpc("gf_return_to_office", { p_item_id: item.id, p_actor: auth.userId });
     if (error) errors.push(error.message);
     else if (data) {
       changed.push(data as string);
-      if (alreadyReturnedIds.has(item.shipment_id)) alreadyReturned += 1;
-      else if (returningIds.has(item.shipment_id)) toStock += 1;
+      received.push(item.shipment_id);
+    }
+  }
+  // Lo que la 0246 mandó a stock en vez de a «por asignar» —la reemplazada y la
+  // que ya constaba devuelta—, releído después de recibir: un reemplazo que
+  // terminó mientras tanto cambia la rama. Una en `retorno` sin reemplazo
+  // («Solicitar devolución») vuelve a «por asignar», como siempre.
+  let toStock = 0;
+  let alreadyReturned = 0;
+  if (received.length) {
+    const [{ data: after }, replacedIds] = await Promise.all([
+      courierRowsByIds(received, (ids) => admin.from("shipments").select("id,custody_state").in("id", ids)),
+      loadReplacedIds(admin, received),
+    ]);
+    for (const row of after as Array<{ id: string; custody_state: string | null }>) {
+      const outcome = officeReturnOutcome(row.custody_state, replacedIds.has(row.id));
+      if (outcome === "a_stock_reemplazada") toStock += 1;
+      else if (outcome === "ya_devuelta") alreadyReturned += 1;
     }
   }
   if (changed.length) await recomputeOrderMasterSafe(admin, [...new Set(changed)]);
@@ -1890,6 +1897,7 @@ export async function returnUndeliveredByCode(orgId: string, rawCode: string): P
   let orderId: string | null = null;
   const found = await lookupDispatchShipment(code);
   if (found.shipment) orderId = found.shipment.order_id;
+  else if (found.scanHold) return { error: found.error ?? "Escanea el QR de la caja." };
   else {
     const name = code.replace(/^#/, "");
     const { data: stores } = await admin.from("stores").select("id").eq("org_id", orgId);
@@ -1898,8 +1906,10 @@ export async function returnUndeliveredByCode(orgId: string, rawCode: string): P
     if (orders?.length === 1) orderId = orders[0]!.id as string;
   }
   if (!orderId) return { error: found.error ?? "No encontramos un pedido con ese QR, guía o número." };
-  // Por QR se recibe ESA salida: el pedido puede tener otra saliendo (0246).
-  const byOutput = found.shipment && courierKey(found.shipment.courier) === "propio" ? found.shipment : null;
+  // Por QR, código de salida o guía se recibe ESA salida: el pedido puede tener
+  // otra saliendo (0246). El número de pedido no designa caja: se recibe por
+  // pedido, con la regla de las dos cajas de `returnUndeliveredToOffice`.
+  const byOutput = found.shipment && !found.byOrderName && courierKey(found.shipment.courier) === "propio" ? found.shipment : null;
   if (byOutput && !auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas." };
   const res = byOutput
     ? await returnUndeliveredShipments(admin, auth, orgId, [{ id: byOutput.id, store_id: byOutput.store_id }])
@@ -3296,7 +3306,9 @@ export async function moveManifestItem(
   if (!shipment) return { error: "Paquete no encontrado." };
   if (!storeAllowed(auth, shipment.store_id as string | null)) return { error: OUTSIDE_STORE };
   // La caja reemplazada (0246) no cambia de motorizado: vuelve a la oficina.
-  if (shipment.custody_state === "retorno") {
+  // Una en `retorno` por «Solicitar devolución» tampoco se mueve, con el aviso
+  // de siempre.
+  if (shipment.custody_state === "retorno" && (await outputWasReplaced(admin, shipmentId))) {
     return { error: `${(shipment.output_code as string | null) ?? "El paquete"} se reemplazó por otra salida: no se mueve; recíbelo en oficina cuando vuelva.` };
   }
   if (shipment.custody_state !== (sourceInCustody ? "courier" : "empresa")) return { error: "El paquete ya no está en custodia de Grupo GF." };
@@ -3512,6 +3524,10 @@ export async function scanAssignToRider(
   if (found.shipment) {
     orderId = found.shipment.order_id;
     shipmentId = found.shipment.id;
+  } else if (found.scanHold) {
+    // Por número de pedido, con la caja reemplazada todavía fuera: las dos
+    // cajas llevan el mismo código de barras y no se toma ni asigna nada (§29.13).
+    return { ...base, status: "no_elegible", message: found.error ?? "Escanea el QR de la caja." };
   } else if (!found.error?.includes("salidas")) {
     const name = code.replace(/^#/, "");
     const { data: stores } = await admin.from("stores").select("id").eq("org_id", orgId);
@@ -3653,6 +3669,28 @@ export async function scanAssignToRider(
       }
       const { error: returnError } = await admin.rpc("gf_return_to_office", { p_item_id: box.id, p_actor: auth.userId });
       if (returnError) return { ...line, status: "no_elegible", manifestId: box.manifest_id, message: returnError.message };
+      // Releída después de recibir (0246): si la base la mandó a stock —un
+      // «Sacar con salida nueva» terminó mientras tanto, o ya constaba
+      // devuelta—, no se toma ni se asigna: el pedido no sale con esta caja.
+      const [{ data: after }, replacedNow] = await Promise.all([
+        admin.from("shipments").select("custody_state,output_code").eq("id", shipmentId).maybeSingle(),
+        outputWasReplaced(admin, shipmentId),
+      ]);
+      const afterRow = after as { custody_state?: string | null; output_code?: string | null } | null;
+      const outcome = officeReturnOutcome(afterRow?.custody_state, replacedNow);
+      if (outcome !== "por_asignar") {
+        await recomputeOrderMasterSafe(admin, [orderId]);
+        const outputCode = afterRow?.output_code ?? null;
+        return {
+          ...line,
+          status: "recibido_a_stock",
+          manifestId: box.manifest_id,
+          receivedFrom: receivedFromLabel(fromName, box.dispatch_manifests.route_date),
+          message: outcome === "a_stock_reemplazada"
+            ? replacedReceivedMessage(outputCode, fromName, box.dispatch_manifests.route_date, await replacedByCode(admin, shipmentId))
+            : `${outputCode ?? "Esta salida"} ya constaba devuelta: salió de la caja de ${fromName} sin volver a «por asignar». No se asigna.`,
+        };
+      }
       receivedFrom = receivedFromLabel(fromName, box.dispatch_manifests.route_date);
     } else if (box) {
       if (box.dispatch_manifests.rider_id === rider.id) {

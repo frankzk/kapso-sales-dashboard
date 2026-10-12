@@ -123,7 +123,7 @@ begin
     raise exception 'FAIL carried over a replaced output';
   exception when others then
     if sqlerrm like 'FAIL%' then raise; end if;
-    if sqlerrm not like 'Solo 0 de 1%' then raise exception 'expected carry-over refusal, got %', sqlerrm; end if;
+    if sqlerrm not like 'Solo 0 de 1%reemplazada%' then raise exception 'expected carry-over refusal, got %', sqlerrm; end if;
   end;
   if (select removed_at from dispatch_manifest_items where id=v_item1) is not null then raise exception 'carry-over moved S01'; end if;
   -- Las demás paradas siguen libres.
@@ -238,6 +238,15 @@ begin
     if sqlerrm like 'FAIL%' then raise; end if;
     if sqlerrm not like 'La salida ya está en devolución%' then raise exception 'expected the return-requested refusal, got %', sqlerrm; end if;
   end;
+  -- Reprogramada y con el retorno pedido, el cuaderno la sigue pasando a la
+  -- ruta siguiente, como antes de la 0246: no se reemplazó.
+  update delivery_stops set outcome_reason='reprogramado' where route_id=v_route and shipment_id=v_s5;
+  perform gf_carry_over('24600000-0000-0000-0000-000000000003',current_date+4,array[v_s5],v_actor);
+  if (select removed_at from dispatch_manifest_items where id=v_item5) is null then raise exception 'return-requested reprogramado did not carry over'; end if;
+  if not exists (select 1 from dispatch_manifest_items i join dispatch_manifests m on m.id=i.manifest_id
+                  where i.shipment_id=v_s5 and i.removed_at is null and m.route_date=current_date+4) then
+    raise exception 'return-requested reprogramado is not in the next route';
+  end if;
 
   -- Ya devuelta en la Mesa de cierre con el ítem en la caja: sale de la caja,
   -- conserva su sello y no vuelve a «por asignar».

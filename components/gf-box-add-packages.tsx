@@ -94,6 +94,11 @@ export function GfBoxAddPackages({ manifest, canManage, canAuthorizeCash = false
       const id = line.shipmentId ?? line.orderId ?? line.code;
       setConfirmedIds((current) => current.includes(id) ? current : [...current, id]);
       setRevision((current) => current + 1);
+    } else if (line.receivedFrom) {
+      // Se recibió de una caja (la reemplazada vuelve a stock, 0246; o salió
+      // de una caja vieja sin entrar en esta): la caja que se mira puede ser
+      // esa, y se actualiza igual.
+      setRevision((current) => current + 1);
     }
   };
 

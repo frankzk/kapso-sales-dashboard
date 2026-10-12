@@ -31,6 +31,7 @@ import { returnUndeliveredOutputs } from "@/app/dashboard/courier/actions";
 import { loadRouteCloseContext } from "@/lib/route-close";
 import { applyDeliveriesToMaster } from "@/lib/master-door";
 import { syncStopsToSheet } from "@/lib/sheets/stop-sync";
+import { ordersWithReplacedOutputOut, replacedOutputStopError } from "@/lib/stop-report";
 
 export interface RouteActionResult {
   ok: boolean;
@@ -174,6 +175,14 @@ export async function addStops(routeId: string, orderIds: string[]): Promise<Rou
   const unknown = orderIds.filter((id) => !storeOf.has(id));
   if (unknown.length) {
     return { ok: false, error: `${unknown.length} pedido(s) no existen o no son accesibles.` };
+  }
+  // Con una caja reemplazada todavía fuera (0246), una parada sin salida no
+  // dice de qué caja habla: no se añade.
+  const replacedOut = await ordersWithReplacedOutputOut(g.admin, orderIds);
+  if (replacedOut.size) {
+    const [firstId, code] = [...replacedOut.entries()][0]!;
+    const { data: named } = await g.admin.from("orders").select("name").eq("id", firstId).maybeSingle();
+    return { ok: false, error: replacedOutputStopError((named as { name?: string | null } | null)?.name, code) };
   }
 
   const rows = orderIds.map((orderId) => ({

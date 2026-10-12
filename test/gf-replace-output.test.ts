@@ -7,7 +7,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { isReplacedOwnOutput, isReturningOwnOutput, replacedOutputIds } from "@/lib/gf-replaced-output";
+import { isReplacedOwnOutput, isReturningOwnOutput, officeReturnOutcome, replacedOutputIds } from "@/lib/gf-replaced-output";
 import {
   daysBetween,
   ownRetryDecision,
@@ -237,9 +237,19 @@ describe("las piezas en el código", () => {
     // El motorizado escribe bajo RLS y no ve `shipments`.
     expect(guard).toContain("security definer");
     expect(guard).toContain("and gf_output_replaced(old.shipment_id) then");
-    expect(migration).toContain("and sh.custody_state is distinct from 'retorno'");
-    // El traspaso relee con candado antes de sacar el paquete de la caja.
+    // El cuaderno no se lleva la reemplazada, que se reconoce por su evento: una
+    // en `retorno` por «Solicitar devolución» pasa como siempre.
     const carry = migration.slice(migration.indexOf("create or replace function public.gf_carry_over("));
+    expect(carry).toContain("and not (sh.custody_state = 'retorno' and public.gf_output_replaced(sh.id))");
+    expect(carry).not.toContain("custody_state is distinct from 'retorno'");
+    expect(carry).toContain("if v_custody = 'retorno' and public.gf_output_replaced(r.shipment_id) then");
+    // Candados de todo el lote primero (ítems y luego cajas, por id), y relee
+    // con candado antes de sacar el paquete de la caja.
+    const lockItems = carry.indexOf("perform 1 from dispatch_manifest_items\n   where shipment_id = any(p_shipment_ids) and removed_at is null\n   order by id for update;");
+    const lockBoxes = carry.indexOf("perform 1 from dispatch_manifests\n   where id in (select manifest_id from dispatch_manifest_items");
+    expect(lockItems).toBeGreaterThan(0);
+    expect(lockBoxes).toBeGreaterThan(lockItems);
+    expect(lockBoxes).toBeLessThan(carry.indexOf("  for r in"));
     expect(carry).toContain("select * into v_item_row from dispatch_manifest_items where id = r.item_id for update;");
     expect(carry).toContain("select custody_state into v_custody from shipments where id = r.shipment_id for update;");
     expect(carry.indexOf("for update;")).toBeLessThan(carry.indexOf("-- 1. Sale de la caja anterior"));
@@ -251,7 +261,9 @@ describe("las piezas en el código", () => {
     const report = read("lib/stop-report.ts");
     expect(report).toContain("if (await stopIsFrozenByReplacement(admin, stop.id, input.status)) return { ok: false, error: REPLACED_STOP_ERROR };");
     expect(report).toContain('if (!row?.shipment_id || row.status === nextStatus) return false;');
-    expect(read("lib/notebook-import-access.ts")).toContain('.eq("custody_state", "retorno");');
+    const notebook = read("lib/notebook-import-access.ts");
+    expect(notebook).toContain('.eq("kind", OUTPUT_REPLACED_KIND).in("shipment_id", inBoxIds)');
+    expect(notebook).toContain(".filter((id) => replacedIds.has(id))");
   });
 
   it("la salida nueva no entra en la ruta del mismo motorizado y día que la reemplazada", () => {
@@ -275,7 +287,12 @@ describe("las piezas en el código", () => {
   });
 
   it("recibir en oficina va por salida: el QR, la fila, la lista y la ruta reciben ESA caja", () => {
-    expect(body("returnUndeliveredByCode")).toContain("returnUndeliveredShipments(admin, auth, orgId, [{ id: byOutput.id, store_id: byOutput.store_id }])");
+    const byCode = body("returnUndeliveredByCode");
+    expect(byCode).toContain("returnUndeliveredShipments(admin, auth, orgId, [{ id: byOutput.id, store_id: byOutput.store_id }])");
+    // Solo el QR, el código de salida o la guía designan la caja; el número de
+    // pedido recibe por pedido, y con la reemplazada fuera pide el QR.
+    expect(byCode).toContain('const byOutput = found.shipment && !found.byOrderName && courierKey(found.shipment.courier) === "propio" ? found.shipment : null;');
+    expect(byCode).toContain('else if (found.scanHold) return { error: found.error ?? "Escanea el QR de la caja." };');
     const toOffice = body("returnUndeliveredToOffice");
     expect(toOffice).toContain("{ byOrder: true }");
     // Por número de pedido, con dos cajas «No entregado», no se recibe ninguna.
@@ -303,7 +320,49 @@ describe("las piezas en el código", () => {
     const branch = scan.slice(scan.indexOf("if (box && replacedScan) {"), scan.indexOf("// Una caja de un día ANTERIOR"));
     expect(branch).not.toContain("revalidatePath(");
     expect(read("components/dispatch-day-board.tsx")).toContain('if (line.status === "asignado" || line.status === "ya_en_caja" || line.receivedFrom) scheduleRefresh();');
-    expect(body("moveManifestItem")).toContain('if (shipment.custody_state === "retorno") {');
+    // «Se reemplazó» solo si se reemplazó: «Solicitar devolución» conserva su aviso.
+    expect(body("moveManifestItem")).toContain('if (shipment.custody_state === "retorno" && (await outputWasReplaced(admin, shipmentId))) {');
+  });
+
+  it("por número de pedido, con la reemplazada fuera, el escaneo no elige: pide el QR", () => {
+    // La S01 y la S02 llevan el mismo código de barras (el número de pedido).
+    const despacho = read("app/dashboard/pedidos/despacho/actions.ts");
+    expect(despacho).toContain("if (candidates.length) return { candidates, byOrderName: true, hold: await replacedOutHold(candidates) };");
+    expect(despacho).toContain('.eq("kind", OUTPUT_REPLACED_KIND)\n    .in("shipment_id", returning.map((candidate) => candidate.id));');
+    expect(despacho).toContain("if (hold) return { error: hold, byOrderName, scanHold: true };");
+    // Preparar, recibir, agregar a una ruta y cotejar tampoco eligen.
+    expect(despacho.split("if (scan.hold) return { error: scan.hold };").length - 1).toBe(4);
+    const scan = body("scanAssignToRider");
+    expect(scan).toContain("} else if (found.scanHold) {");
+    expect(scan.indexOf("} else if (found.scanHold) {")).toBeLessThan(scan.indexOf("takeOrdersCore("));
+  });
+
+  it("recibida de una caja vieja, se mira lo que hizo la base antes de tomar o asignar", () => {
+    const scan = body("scanAssignToRider");
+    const outcome = scan.indexOf("const outcome = officeReturnOutcome(afterRow?.custody_state, replacedNow);");
+    expect(outcome).toBeGreaterThan(0);
+    expect(outcome).toBeLessThan(scan.indexOf("takeOrdersCore("));
+    expect(scan).toContain('if (outcome !== "por_asignar") {');
+    expect(officeReturnOutcome("devuelto", true)).toBe("a_stock_reemplazada");
+    expect(officeReturnOutcome("devuelto", false)).toBe("ya_devuelta");
+    expect(officeReturnOutcome("empresa", true)).toBe("por_asignar");
+    expect(officeReturnOutcome(null, false)).toBe("por_asignar");
+    // El panel de la caja se actualiza también cuando el escaneo la recibió.
+    expect(read("components/gf-box-add-packages.tsx")).toContain("} else if (line.receivedFrom) {");
+  });
+
+  it("con la reemplazada fuera no se añade una parada sin salida: no dice de qué caja habla", () => {
+    const report = read("lib/stop-report.ts");
+    expect(report).toContain("export async function ordersWithReplacedOutputOut(");
+    expect(report).toContain("if (replaced.has(row.id) && !out.has(row.order_id)) out.set(row.order_id, row.output_code);");
+    const reparto = read("app/reparto/actions.ts");
+    const manual = reparto.slice(reparto.indexOf("export async function addManualStop("));
+    expect(manual.indexOf("ordersWithReplacedOutputOut(g.admin, [o.id])")).toBeGreaterThan(0);
+    expect(manual.indexOf("ordersWithReplacedOutputOut(g.admin, [o.id])")).toBeLessThan(manual.indexOf('.from("delivery_stops").insert('));
+    const rutas = read("app/dashboard/rutas/actions.ts");
+    const add = rutas.slice(rutas.indexOf("export async function addStops("));
+    expect(add.indexOf("ordersWithReplacedOutputOut(g.admin, orderIds)")).toBeGreaterThan(0);
+    expect(add.indexOf("ordersWithReplacedOutputOut(g.admin, orderIds)")).toBeLessThan(add.indexOf(".upsert(rows"));
   });
 
   it("si la llamada falla sin respuesta clara, no deshace un reemplazo que sí se hizo", () => {
@@ -320,10 +379,14 @@ describe("las piezas en el código", () => {
     expect(actions).toContain("ownRetryOutput(order, shipmentsByOrder.get(order.order_id) ?? [], replacedIds)");
     expect(actions).toContain("ownRetryOutput(row, outputs, replacedIds)");
     expect(body("replaceOwnOutputs")).toContain("ownReplaceDecision(row, outputs, old, box, request?.shipment_id ?? null, replacedIds)");
-    // «A stock» solo para la reemplazada o la ya devuelta, como la base.
+    // «A stock» solo para la reemplazada o la ya devuelta, como la base, y
+    // leído DESPUÉS de recibir: un reemplazo simultáneo cambia la rama.
     const core = body("returnUndeliveredToOffice");
-    expect(core).toContain("const returningIds = new Set(custodyRows.filter((row) => isReplacedOwnOutput(row, replacedIds)).map((row) => row.id));");
-    expect(read("app/dashboard/pedidos/despacho/actions.ts")).toContain("const replaced = Boolean(replacedEvents?.length);");
+    expect(core).toContain("const outcome = officeReturnOutcome(row.custody_state, replacedIds.has(row.id));");
+    expect(core.indexOf('admin.rpc("gf_return_to_office"')).toBeLessThan(core.indexOf("officeReturnOutcome("));
+    const despacho = read("app/dashboard/pedidos/despacho/actions.ts");
+    expect(despacho).toContain("const replaced = Boolean(replacedEvents?.length);");
+    expect(despacho.indexOf('admin.rpc("gf_return_to_office"')).toBeLessThan(despacho.indexOf("const outcome = officeReturnOutcome("));
   });
 
   it("la Mesa de cierre no recibe una caja que sigue con el motorizado", () => {
@@ -344,6 +407,8 @@ describe("las piezas en el código", () => {
     const mom = read("docs/mom/master-pedidos-v1.md");
     expect(mom).toContain("**«Sacar con salida nueva»: el pedido sale mientras el motorizado todavía tiene la caja (12-10-2026, decisión del owner).**");
     expect(mom).toContain("salvo\n  **«Sacar con salida nueva»** (12-10-2026, §29.13)");
-    expect(mom).toContain("`MOM_RESOLUTION_VERSION` sube a\n  `mom-v1.26`.");
+    expect(mom).toContain("`MOM_RESOLUTION_VERSION` sube a `mom-v1.26`.");
+    expect(mom).toContain("- **Por número de pedido, mientras la reemplazada siga fuera, el escaneo no\n  elige: pide el QR.**");
+    expect(mom).toContain("Una parada sin salida (del cuaderno o a mano) nunca se le atribuye a la caja\n  reemplazada");
   });
 });

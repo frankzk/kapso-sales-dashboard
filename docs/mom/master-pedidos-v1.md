@@ -928,7 +928,7 @@ Ejemplos:
 | Cualquier courier de Lima anuló la guía con la caja ya fuera (v1.23) | En curso | Por reprogramar Lima |
 | Ruta cerrada con la parada entregada, sin liquidar | Por cerrar | Pendiente de liquidación |
 | Aliclik retornando y Swayp repartiendo | En curso | En reparto |
-| Una salida entregó y otra sigue activa | Por cerrar | Salida adicional activa |
+| Una salida entregó y otra sigue activa (la reemplazada que vuelve con el motorizado no cuenta: es «Devolución física pendiente», §29.13) | Por cerrar | Salida adicional activa |
 | Entregado, courier aún no liquidó | Por cerrar | Pendiente de liquidación |
 | Entregado (no Agencia) sin ninguna salida ni motorizado, pagado completo a la tienda (v1.25, §6.5) | Finalizado | Entregado y cerrado |
 | Entregado (no Agencia) sin ninguna salida, sin pago completo validado | Por cerrar | Pendiente de liquidación |
@@ -7157,8 +7157,8 @@ Primer bloque publicado en el drawer del Master:
   reembolsos; los permisos puntuales de `user_permissions` siguen prevaleciendo.
 - El resolver quedó versionado —`mom-v1.4` en este bloque; la versión vigente es
   siempre `MOM_RESOLUTION_VERSION` en `lib/order-macro-stage.ts`, hoy
-  `mom-v1.26` (12-10-2026: «Sacar con salida nueva», la salida en devolución
-  con el motorizado no es la vigente, §29.13)—; el cron detecta versiones anteriores y recalcula el histórico por
+  `mom-v1.26` (12-10-2026: «Sacar con salida nueva», la salida reemplazada
+  que el motorizado todavía tiene no es la vigente, §29.13)—; el cron detecta versiones anteriores y recalcula el histórico por
   lotes hasta que todo el Master converja, sin necesitar credenciales locales ni
   detener la sincronización. Toda regla que cambie el resultado de filas que
   nadie tocó debe subir esa constante, o el histórico queda con el veredicto
@@ -9647,6 +9647,14 @@ sin devolver y otra saliendo (principio 7, §7).
   cajas de esa ruta) reciben la caja concreta. Por número de pedido, si el
   pedido tiene dos cajas por recibir, no se recibe ninguna y se pide el QR de
   la que llegó (§9.4: nunca se concilia solo por número de pedido).
+- **Por número de pedido, mientras la reemplazada siga fuera, el escaneo no
+  elige: pide el QR.** La caja anterior y la nueva llevan el mismo código de
+  barras (el número de pedido, §4), así que el número no dice cuál está en la
+  mano. Mientras la reemplazada esté en devolución sin recibir, un escaneo o
+  un número escrito no toma, asigna, recibe, prepara ni coteja ninguna salida
+  del pedido: la línea pide el QR de la caja. El QR, el código de salida y la
+  guía siguen designando su caja. Ya recibida la anterior, el número vuelve a
+  funcionar como siempre.
 - **La Mesa de cierre no recibe una caja que sigue con el motorizado.**
   «Registrar recepción» sobre una salida de Grupo GF que sigue en la caja de un
   motorizado se niega y manda a «Recibir en oficina», que es lo que la saca de
@@ -9659,26 +9667,39 @@ sin devolver y otra saliendo (principio 7, §7).
   escribe su parada directamente, y el reporte lo dice antes
   (`writeStopReport`). Corregir la nota o el motivo sin cambiar el estado sí se
   puede. Tampoco se mueve a otro motorizado ni pasa a su ruta siguiente desde
-  el cuaderno: `gf_carry_over` la excluye y relee cada paquete con candado, así
-  que un reemplazo simultáneo no se pisa.
+  el cuaderno: `gf_carry_over` la excluye —por su evento: una en `retorno` por
+  «Solicitar devolución» pasa como siempre— y toma primero los candados de
+  todo el lote (ítems y cajas, en orden) y relee cada paquete, así que un
+  reemplazo o una recepción simultáneos no se pisan ni se bloquean en cruz.
+  Tampoco se añade el pedido como punto a mano (el teléfono del motorizado,
+  Rutas): una parada sin salida no dice de qué caja habla, y la nueva va por
+  Despacho del día con su caja.
 - **La salida nueva no va con el mismo motorizado el mismo día** que la caja
   reemplazada: la ruta del día tiene una parada por pedido y la de la caja
   anterior ya la ocupa. Asignarla ahí se niega con el motivo
   (`dispatch_items_guard_replaced_route`, 0246); va con otro motorizado u otro
   día.
-- **Master** (v1.26): la salida en devolución (`isReturningOwnOutput`) sigue
-  activa —el pedido no se finaliza mientras el motorizado la tenga—, pero no es
-  la vigente: el pedido sigue a la salida nueva (Por armar → Por despachar → En
-  curso) y nunca vuelve a «Por reprogramar Lima» por el «No entregado» de la
-  anterior. Si la nueva se entrega con la anterior todavía fuera, queda «Por
-  cerrar · Devolución física pendiente»; recibida y sin reingreso, «Devolución
-  pendiente de inventario». Una parada del cuaderno (sin salida) anterior a que
-  naciera la salida nueva no se le atribuye. `MOM_RESOLUTION_VERSION` sube a
-  `mom-v1.26`.
+- **Master** (v1.26): la salida reemplazada (en devolución y con
+  `output_replaced`, `isReplacedOwnOutput`) sigue activa —el pedido no se
+  finaliza mientras el motorizado la tenga—, pero no es la vigente: el pedido
+  sigue a la salida nueva (Por armar → Por despachar → En curso) y nunca vuelve
+  a «Por reprogramar Lima» por el «No entregado» de la anterior. Si la nueva se
+  entrega con la anterior todavía fuera, queda «Por cerrar · Devolución física
+  pendiente»; recibida y sin reingreso, «Devolución pendiente de inventario».
+  Una parada sin salida (del cuaderno o a mano) nunca se le atribuye a la caja
+  reemplazada, y a la salida nueva solo si es posterior a que naciera. Una
+  salida en `retorno` por «Solicitar devolución», sin el evento, resuelve como
+  antes de la v1.26 (sigue siendo «salida adicional activa» y su «No
+  entregado» sigue mandando). `MOM_RESOLUTION_VERSION` sube a `mom-v1.26`.
 - **Si la base no responde** al sacarla, antes de deshacer nada se comprueba si
   el reemplazo quedó hecho (la solicitud ya apunta a la salida nueva): si se
   hizo, se da por hecho y no se anula la salida nueva. Lo que no se pudo sacar
   se dice con su pedido y su motivo, también junto a lo que sí.
+- **Al recibir, el aviso dice lo que hizo la base.** Si un reemplazo termina
+  mientras alguien recibe esa caja, la base la manda a stock: el aviso («a
+  stock» o «vuelve a por asignar») y el escaneo de «Por QR» se deciden
+  releyendo la salida después de recibirla, y un escaneo cuya caja fue a stock
+  no toma ni asigna la salida nueva.
 - **Límites conocidos.** Kapta no lleva un libro de stock: la caja nueva se
   arma aunque falte producto, y lo dirá la incidencia de preparación. Si la
   salida nueva se anula con la anterior todavía en devolución, el pedido queda

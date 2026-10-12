@@ -19,7 +19,7 @@ import { getCurrentUser } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { routeReportAccess } from "@/lib/route-report-access";
 import type { StopStatus } from "@/lib/routes";
-import { writeStopReport } from "@/lib/stop-report";
+import { ordersWithReplacedOutputOut, replacedOutputStopError, writeStopReport } from "@/lib/stop-report";
 import { explainStopAmount, riderSheetFor, syncStopsToSheet } from "@/lib/sheets/stop-sync";
 import { getMyRider } from "@/lib/routes-access";
 import { getRiderSheet, loadRiderOrders, searchRiderOrders, type RiderOrderCandidate } from "@/lib/sheets/rider-access";
@@ -353,6 +353,10 @@ export async function addManualStop(input: { orderId: string; fecha: string }): 
   const { data: order } = await g.admin.from("orders").select("id,store_id,stores(org_id)").eq("id", input.orderId).maybeSingle();
   const o = order as unknown as { id: string; store_id: string; stores: { org_id: string } | null } | null;
   if (!o || o.stores?.org_id !== g.sheet.org_id) return { ok: false, error: "Ese pedido no es de tu organización." };
+  // Con una caja reemplazada todavía fuera (0246), una parada sin salida no
+  // dice de qué caja habla: no se añade.
+  const replacedOut = await ordersWithReplacedOutputOut(g.admin, [o.id]);
+  if (replacedOut.has(o.id)) return { ok: false, error: replacedOutputStopError(info.order_name, replacedOut.get(o.id)) };
 
   const { data: existingRoute } = await g.admin
     .from("delivery_routes")

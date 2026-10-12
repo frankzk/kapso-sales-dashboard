@@ -60,3 +60,17 @@ export function replacedOutputIds(events: readonly { kind: string; shipment_id?:
   }
   return out;
 }
+
+/**
+ * Lo que hizo `gf_return_to_office` (0246) al recibir una caja en oficina,
+ * leído DESPUÉS de llamarla: la reemplazada y la que ya constaba devuelta
+ * salen a stock (custodia `devuelto`); lo demás vuelve a «por asignar»
+ * (`empresa`). Un «Sacar con salida nueva» que terminó entre la lectura previa
+ * y la recepción cambia la rama, así que el aviso no sale de lo leído antes.
+ */
+export type OfficeReturnOutcome = "a_stock_reemplazada" | "ya_devuelta" | "por_asignar";
+
+export function officeReturnOutcome(custodyAfter: string | null | undefined, replaced: boolean): OfficeReturnOutcome {
+  if (custodyAfter !== "devuelto") return "por_asignar";
+  return replaced ? "a_stock_reemplazada" : "ya_devuelta";
+}

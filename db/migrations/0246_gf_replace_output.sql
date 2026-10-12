@@ -42,9 +42,12 @@
 --      su parada directamente (política `delivery_stops_report`, 0066) sin
 --      poder leer `shipments`.
 --   d) `gf_carry_over` (0234) no pasa a la ruta siguiente del motorizado una
---      salida en `retorno`, y vuelve a leer con candado cada paquete antes de
---      sacarlo de la caja anterior: un reemplazo o una recepción simultáneos no
---      se pisan. El resto de la función es la de la 0234.
+--      salida reemplazada (`gf_output_replaced`; una en `retorno` por
+--      «Solicitar devolución» pasa como siempre). Bloquea primero los ítems y
+--      las cajas de todo el lote, en orden, y vuelve a leer con candado cada
+--      paquete antes de sacarlo de la caja anterior: un reemplazo o una
+--      recepción simultáneos no se pisan ni se bloquean en cruz. El resto de la
+--      función es la de la 0234.
 --   e) Trigger `dispatch_items_guard_replaced_route`: la salida nueva no entra
 --      en una caja del mismo motorizado y el mismo día que la parada de la caja
 --      reemplazada. La ruta del día tiene una parada por pedido
@@ -367,6 +370,7 @@ declare
   v_item_row dispatch_manifest_items%rowtype;
   v_stop_row delivery_stops%rowtype;
   v_custody text;
+  v_replaced int;
   v_n int := 0;
   v_reason text;
   v_wanted int := (select count(distinct x) from unnest(p_shipment_ids) as x);
@@ -375,6 +379,18 @@ begin
   select * into v_rider from riders where id = p_rider_id;
   if not found then raise exception 'Motorizado no encontrado.'; end if;
 
+  -- 0246: los candados de todo el lote antes que nada, ítems y después cajas,
+  -- cada uno por id. `gf_replace_output` y `gf_return_to_office` toman ítem y
+  -- luego caja: así ninguna espera a la otra en cruz por dos ítems de la misma
+  -- caja. Las relecturas de cada paquete, abajo, vuelven a pedirlos.
+  perform 1 from dispatch_manifest_items
+   where shipment_id = any(p_shipment_ids) and removed_at is null
+   order by id for update;
+  perform 1 from dispatch_manifests
+   where id in (select manifest_id from dispatch_manifest_items
+                 where shipment_id = any(p_shipment_ids) and removed_at is null)
+   order by id for update;
+
   for r in
     select distinct on (sh.id)
            sh.id shipment_id, sh.order_id, sh.store_id ship_store, sh.guide_code,
@@ -382,7 +398,8 @@ begin
       from unnest(p_shipment_ids) as x(shipment_id)
       join shipments sh on sh.id = x.shipment_id
            -- 0246: la caja reemplazada no pasa a otra ruta: vuelve a la oficina.
-           and sh.custody_state is distinct from 'retorno'
+           -- Su marca es el evento; `retorno` solo también es «Solicitar devolución».
+           and not (sh.custody_state = 'retorno' and public.gf_output_replaced(sh.id))
       join orders o on o.id = sh.order_id and o.cancelled_at is null
       join dispatch_manifest_items i on i.shipment_id = sh.id and i.removed_at is null
       join dispatch_manifests m on m.id = i.manifest_id and m.rider_id = p_rider_id and m.courier = 'propio'
@@ -407,10 +424,10 @@ begin
     v_reason := 'Reprogramado el ' || to_char(r.old_date, 'DD/MM') || ': ' || v_rider.full_name
              || ' se quedó con el paquete y sale en su ruta del ' || to_char(p_to_date, 'DD/MM') || ', ya cotejado.';
 
-    -- 0246: con candado y releído, en el orden de `gf_replace_output` (ítem,
-    -- caja, parada, salida). La consulta del bucle no bloquea filas: un
-    -- «Sacar con salida nueva» o un «Recibir en oficina» simultáneo pudo
-    -- cambiar el paquete mientras tanto, y el UPDATE de abajo no lo vería.
+    -- 0246: releído con candado, en el orden de `gf_replace_output` (ítem,
+    -- caja, parada, salida). La consulta del bucle se leyó antes de que un
+    -- «Sacar con salida nueva» o un «Recibir en oficina» simultáneo terminara
+    -- de cambiar el paquete, y el UPDATE de abajo no lo vería.
     select * into v_item_row from dispatch_manifest_items where id = r.item_id for update;
     if v_item_row.removed_at is not null then
       raise exception 'Un paquete ya no está en la caja anterior: alguien lo recibió o lo movió. Vuelve a leer la hoja.';
@@ -421,7 +438,7 @@ begin
       raise exception 'Un paquete ya no está reprogramado: vuelve a leer la hoja.';
     end if;
     select custody_state into v_custody from shipments where id = r.shipment_id for update;
-    if v_custody = 'retorno' then
+    if v_custody = 'retorno' and public.gf_output_replaced(r.shipment_id) then
       raise exception 'Una caja ya salió con otra salida y vuelve a la oficina: no pasa a la ruta. Vuelve a leer la hoja.';
     end if;
 
@@ -457,7 +474,10 @@ begin
   end loop;
 
   if v_n <> v_wanted then
-    raise exception 'Solo % de % paquetes son reprogramados que % conserva en una caja anterior (una caja reemplazada por otra salida no pasa: vuelve a la oficina).', v_n, v_wanted, v_rider.full_name;
+    select count(*) into v_replaced from shipments sh
+     where sh.id = any(p_shipment_ids) and sh.custody_state = 'retorno' and public.gf_output_replaced(sh.id);
+    raise exception 'Solo % de % paquetes son reprogramados que % conserva en una caja anterior.%', v_n, v_wanted, v_rider.full_name,
+      case when v_replaced > 0 then ' Una caja reemplazada por otra salida no pasa: vuelve a la oficina.' else '' end;
   end if;
   -- 3. La carga pasa a custodia: nacen las paradas pendientes de la ruta del día.
   perform public.finalize_dispatch_manifest(v_load, p_actor);

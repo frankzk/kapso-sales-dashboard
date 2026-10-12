@@ -519,20 +519,29 @@ describe("helpers", () => {
     expect(currentGuide([frozen, active])?.id).toBe("2");
   });
 
-  it("currentGuide: la que se trabaja gana a la que vuelve (12-10-2026, «Sacar con salida nueva»)", () => {
-    // La S01 en devolución con el motorizado (o ya recibida) sigue `pendiente`
-    // y se movió después; el pedido ya sale con la S02.
+  it("currentGuide: la que se trabaja gana a la reemplazada (12-10-2026, «Sacar con salida nueva»)", () => {
+    // La S01 reemplazada, con el motorizado o ya recibida, sigue `pendiente` y
+    // se movió después; el pedido ya sale con la S02. La marca es el evento.
     const returning = guide("1", { courier: "propio", custody_state: "retorno", updated_at: "2026-10-12T10:00:00.000Z" });
     const received = guide("1", { courier: "propio", custody_state: "devuelto", returned_at: "2026-10-12T10:00:00.000Z" });
     const working = guide("2", { courier: "propio", custody_state: "empresa", assigned_at: "2026-10-10T09:00:00.000Z", updated_at: "2026-10-10T09:00:00.000Z" });
-    expect(currentGuide([returning, working])?.id).toBe("2");
-    expect(currentGuide([received, working])?.id).toBe("2");
+    const replaced = new Set(["1"]);
+    expect(currentGuide([returning, working], replaced)?.id).toBe("2");
+    expect(currentGuide([received, working], replaced)?.id).toBe("2");
     // Sola, sigue siendo la vigente.
-    expect(currentGuide([returning])?.id).toBe("1");
-    const s = resolve([received, working]);
+    expect(currentGuide([returning], replaced)?.id).toBe("1");
+    const replacedEvent: OrderEventSnapshot = { kind: "output_replaced", shipment_id: "1", occurred_at: "2026-10-11T09:00:00.000Z", courier: "propio", new_status: null, new_operational: null };
+    const s = resolve([received, working], order(), [replacedEvent]);
     expect(s.general).toBe("en_proceso");
     expect(s.currentCourier).toBe("propio");
     expect(s.guideCode).toBe("AUR5X2");
+  });
+
+  it("currentGuide: una salida en `retorno` sin reemplazo («Solicitar devolución») compite como siempre", () => {
+    const requested = guide("1", { courier: "propio", custody_state: "retorno", updated_at: "2026-10-12T10:00:00.000Z" });
+    const other = guide("2", { courier: "propio", custody_state: "empresa", updated_at: "2026-10-10T09:00:00.000Z" });
+    expect(currentGuide([requested, other])?.id).toBe("1");
+    expect(currentGuide([requested, other], new Set())?.id).toBe("1");
   });
 
   it("currentGuide devuelve la más reciente cuando no queda ninguna activa", () => {

@@ -949,6 +949,29 @@ describe("«Sacar con salida nueva»: la caja en devolución no es la vigente (v
     const finalized: MacroEventSnapshot = { kind: "order_finalized", occurred_at: D("12", "12:00") };
     expect(gf([s01(), delivered], [...base, finalized], { general: "entregado", operational: "entregado", since: D("11", "18:00") }).stage).not.toBe("finalizado");
   });
+
+  it("una parada sin salida nunca es de la caja reemplazada: entregada así, el pedido no se finaliza con ella fuera", () => {
+    // Un punto a mano (sin `shipment_id`) entregado después del reemplazo es de
+    // la salida nueva; la S01 sigue con el motorizado.
+    const settled: MacroEventSnapshot = { kind: "liquidation_closed", occurred_at: D("12", "11:00") };
+    const legacy = { general: "entregado", operational: "entregado", since: D("11", "18:00") } as const;
+    const state = gf([s01(), s02({ preparation_state: "listo_despacho" })], [...base, stopOn(null, "entregado", D("11", "18:00")), settled], legacy);
+    expect(state.stage).not.toBe("finalizado");
+    expect(state).toMatchObject({ stage: "por_cerrar" });
+    expect(state.reasons).toContain("devolucion_fisica_pendiente");
+  });
+
+  it("una salida en `retorno` sin reemplazo («Solicitar devolución») resuelve como antes de la v1.26", () => {
+    const requested = s01();
+    const noEvent = [base[0]!];
+    // Con otra salida entregada, sigue siendo una salida adicional activa.
+    const aliclikDelivered = guide({ id: "a01", courier: "aliclik", delivery_status: "entregado", custody_state: "courier", dispatched_at: D("10", "14:00"), created_at: D("10", "09:00") });
+    const closing = gf([requested, aliclikDelivered], noEvent, { general: "entregado", operational: "entregado", since: D("11", "18:00") });
+    expect(closing.reasons).toContain("salida_adicional_activa");
+    // Con otra salida rotulada en la empresa, el «No entregado» sigue mandando.
+    const aliclikLabelled = guide({ id: "a01", courier: "aliclik", preparation_state: "rotulo_generado", custody_state: "empresa", created_at: D("10", "09:00") });
+    expect(gf([requested, aliclikLabelled], noEvent)).toMatchObject({ stage: "en_curso", substage: "por_reprogramar_lima" });
+  });
 });
 
 describe("motorizado propio: lo que reporta mueve la etapa (v1.14, MOM §29.13)", () => {

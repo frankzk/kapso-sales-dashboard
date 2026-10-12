@@ -8,7 +8,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { NON_DELIVERY_REASONS } from "@/lib/routes";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
-import { isReturningOwnOutput } from "@/lib/gf-replaced-output";
+import { isReturningOwnOutput, OUTPUT_REPLACED_KIND, replacedOutputIds, type ReturningOutputLike } from "@/lib/gf-replaced-output";
 import { reportedCollection } from "@/lib/route-collection";
 import { loadRouteCollectionBalances } from "@/lib/route-collection-access";
 import {
@@ -223,6 +223,43 @@ async function stopIsFrozenByReplacement(admin: SupabaseClient, stopId: string, 
     admin.from("order_events").select("id").eq("shipment_id", row.shipment_id).eq("kind", "output_replaced").limit(1).maybeSingle(),
   ]);
   return Boolean(shipment && replaced) && isReturningOwnOutput(shipment as Parameters<typeof isReturningOwnOutput>[0]);
+}
+
+/**
+ * Los pedidos con una caja reemplazada que el motorizado todavía tiene (0246):
+ * pedido → código de esa salida. Una parada sin salida (un punto a mano desde
+ * el teléfono, una parada añadida en Rutas) no dice de qué caja habla: con dos
+ * cajas del pedido en la calle, su «No entregado» devolvería la nueva a «Por
+ * reprogramar Lima» y su «Entregado» daría por entregada la que vuelve. La
+ * salida nueva va por Despacho del día, con su caja.
+ */
+export async function ordersWithReplacedOutputOut(admin: SupabaseClient, orderIds: string[]): Promise<Map<string, string | null>> {
+  const out = new Map<string, string | null>();
+  const ids = [...new Set(orderIds.filter(Boolean))];
+  if (!ids.length) return out;
+  const { data: rows } = await admin
+    .from("shipments")
+    .select("id,order_id,output_code,courier,delivery_status,custody_state,returned_at")
+    .in("order_id", ids)
+    .eq("courier", "propio")
+    .eq("custody_state", "retorno");
+  const returning = ((rows ?? []) as Array<ReturningOutputLike & { id: string; order_id: string; output_code: string | null }>)
+    .filter((row) => isReturningOwnOutput(row));
+  if (!returning.length) return out;
+  const { data: events } = await admin
+    .from("order_events")
+    .select("kind,shipment_id")
+    .eq("kind", OUTPUT_REPLACED_KIND)
+    .in("shipment_id", returning.map((row) => row.id));
+  const replaced = replacedOutputIds((events ?? []) as { kind: string; shipment_id: string | null }[]);
+  for (const row of returning) {
+    if (replaced.has(row.id) && !out.has(row.order_id)) out.set(row.order_id, row.output_code);
+  }
+  return out;
+}
+
+export function replacedOutputStopError(orderName: string | null | undefined, outputCode: string | null | undefined): string {
+  return `${orderName ?? "Este pedido"} ya salió con otra salida y su caja anterior (${outputCode ?? "la reemplazada"}) vuelve a la oficina: no se añade como punto a mano. La salida nueva va por Despacho del día, con su caja.`;
 }
 
 async function writeStopUndoEvent(admin: SupabaseClient, stopId: string, routeId: string, orderId: string, actor: string): Promise<void> {

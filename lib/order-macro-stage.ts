@@ -8,7 +8,7 @@
 // El cron usa esta versión para recalcular gradualmente todo el histórico sin
 // necesitar un script con credenciales locales.
 import { isNonMetroLimaLocation } from "@/lib/order-coverage";
-import { isReturningOwnOutput, replacedOutputIds } from "@/lib/gf-replaced-output";
+import { isReplacedOwnOutput, replacedOutputIds } from "@/lib/gf-replaced-output";
 import {
   CONFIRMATION_CONTACT_KINDS,
   CONFIRMATION_FOLLOWUP_KINDS,
@@ -30,15 +30,17 @@ import {
 } from "@/lib/swayp-desde-confirmacion";
 
 // v1.26 (12-10-2026): «Sacar con salida nueva» (MOM §9.3, §29.13, decisión del
-// owner). Un pedido puede tener una salida de Grupo GF «en devolución» que el
-// motorizado todavía tiene (custodia `retorno`, `isReturningOwnOutput`) y otra
-// saliendo. La que vuelve no es la vigente ni reabre «Por reprogramar Lima»: el
-// pedido sigue a la salida nueva (Por armar → Por despachar → En curso). Al
-// recibirla, su «Rechazó el pedido» tampoco lo devuelve a reprogramar
-// (`output_replaced`), y si el pedido ya se entregó espera a que se registre el
-// reingreso a stock (`devolucion_pendiente_inventario`). Una parada del cuaderno
-// (sin salida) anterior a una salida ya no se le atribuye. La versión sube para
-// que el cron recalcule.
+// owner). Un pedido puede tener una salida de Grupo GF REEMPLAZADA que el
+// motorizado todavía tiene (custodia `retorno` y evento `output_replaced`,
+// `isReplacedOwnOutput`) y otra saliendo. La que vuelve no es la vigente ni
+// reabre «Por reprogramar Lima»: el pedido sigue a la salida nueva (Por armar →
+// Por despachar → En curso). Al recibirla, su «Rechazó el pedido» tampoco lo
+// devuelve a reprogramar, y si el pedido ya se entregó espera a que se registre
+// el reingreso a stock (`devolucion_pendiente_inventario`). Una parada del
+// cuaderno (sin salida) anterior a una salida, o cualquiera para la caja
+// reemplazada, ya no se le atribuye. Una salida en `retorno` sin el evento
+// («Solicitar devolución») resuelve como antes. La versión sube para que el cron
+// recalcule.
 //
 // v1.25 (10-10-2026): un pedido pagado completo directo a la tienda, sin courier
 // que cobre, no espera liquidación (MOM §6.5, decisión del owner). Entregado fuera
@@ -680,12 +682,14 @@ function isActiveGuide(guide: MacroGuideSnapshot): boolean {
 }
 
 /**
- * Viva y trabajándose: no la salida propia «en devolución» que el motorizado
- * todavía tiene (v1.26, «Sacar con salida nueva»). Esa sigue activa —está
- * fuera y no se puede finalizar el pedido—, pero el pedido ya sigue a otra.
+ * Viva y trabajándose: no la salida propia reemplazada que el motorizado
+ * todavía tiene (v1.26, «Sacar con salida nueva»; `replaced` es
+ * `replacedOutputIds` de los eventos). Esa sigue activa —está fuera y no se
+ * puede finalizar el pedido—, pero el pedido ya sigue a otra. Una en `retorno`
+ * por «Solicitar devolución», sin el evento, se sigue trabajando como siempre.
  */
-function isWorkingGuide(guide: MacroGuideSnapshot): boolean {
-  return isActiveGuide(guide) && !isReturningOwnOutput(guide);
+function isWorkingGuide(guide: MacroGuideSnapshot, replaced: ReadonlySet<string>): boolean {
+  return isActiveGuide(guide) && !isReplacedOwnOutput(guide, replaced);
 }
 
 function isReadyAtCompany(guide: MacroGuideSnapshot): boolean {
@@ -865,9 +869,10 @@ function closingReasons(input: ResolveMacroStageInput): MacroSubstage[] {
   // ni un paquete «fuera sin cerrar». Sin esto, todo pedido de Grupo GF caía
   // en Devolución física pendiente al cerrar la ruta.
   const riderDelivered = (guide: MacroGuideSnapshot) => gfRiderSignal(events, guide)?.signal === "entregado";
-  // La salida en devolución (v1.26) no es «adicional activa»: si el pedido se
+  // La salida reemplazada (v1.26) no es «adicional activa»: si el pedido se
   // entregó con la nueva, lo que falta es que vuelva (`closedOutside`).
-  const active = guides.filter((guide) => isWorkingGuide(guide) && !riderDelivered(guide));
+  const replaced = replacedOutputIds(events);
+  const active = guides.filter((guide) => isWorkingGuide(guide, replaced) && !riderDelivered(guide));
   const delivered = guides.some((guide) => guide.delivery_status === "entregado" || riderDelivered(guide));
   const closedOutside = guides.filter(
     (guide) =>
@@ -901,7 +906,6 @@ function closingReasons(input: ResolveMacroStageInput): MacroSubstage[] {
   }
   // La caja reemplazada (v1.26) vuelve a stock aunque el pedido se haya
   // entregado con la nueva: se desarma y se registra el reingreso.
-  const replaced = replacedOutputIds(events);
   if (
     legacy.general === "entregado" &&
     returnedGuides.some((guide) => replaced.has(guide.id) && !inventoryResolvedForGuide(guide, events))
@@ -1130,8 +1134,9 @@ export function gfRiderSignal(
 ): { signal: GfRiderSignal; at: string } | null {
   if (!isOwnCourier(guide.courier)) return null;
   const kinds = new Set(["pickup_checked", "stop_reported", "pickup_declined", "package_removed", "returned_to_office", "custody_transferred"]);
+  const replaced = replacedOutputIds(events);
   const mine = events
-    .filter((event) => kinds.has(event.kind) && (event.kind !== "custody_transferred" || isRiderReception(event)) && isGuideEvent(event, guide))
+    .filter((event) => kinds.has(event.kind) && (event.kind !== "custody_transferred" || isRiderReception(event)) && isGuideEvent(event, guide, replaced))
     .sort((a, b) => (a.occurred_at < b.occurred_at ? 1 : a.occurred_at > b.occurred_at ? -1 : 0));
   // Un reporte deshecho (`stop_reported` con estado «pendiente») anula los
   // reportes anteriores: manda lo que hubo antes de ellos («Lo llevo»).
@@ -1158,20 +1163,25 @@ export function gfRiderSignal(
  * ¿El hecho es de esta salida? Los que la nombran, y las paradas del cuaderno
  * (sin salida), que valen para la salida propia vigente — salvo si son
  * anteriores a que la salida naciera (v1.26): el «No entregado» de la caja
- * reemplazada no es de la salida nueva.
+ * reemplazada no es de la salida nueva. Y nunca para la caja reemplazada
+ * (`replaced`): su parada lleva su salida, y una sin salida es de la nueva —si
+ * no, un punto a mano entregado la daba por entregada y el pedido se cerraba
+ * con ella todavía en manos del motorizado—.
  */
-function isGuideEvent(event: MacroEventSnapshot, guide: MacroGuideSnapshot): boolean {
+function isGuideEvent(event: MacroEventSnapshot, guide: MacroGuideSnapshot, replaced: ReadonlySet<string>): boolean {
   if (event.shipment_id) return event.shipment_id === guide.id;
   if (event.kind !== "stop_reported") return false;
+  if (replaced.has(guide.id)) return false;
   return !guide.created_at || event.occurred_at >= guide.created_at;
 }
 
 /** Hora del último reporte de la salida si fue «Rechazó el pedido» (y no se deshizo). */
 function gfRejectedAt(events: readonly MacroEventSnapshot[], guide: MacroGuideSnapshot): string | null {
+  const replaced = replacedOutputIds(events);
   let last: MacroEventSnapshot | null = null;
   for (const event of events) {
     if (event.kind !== "stop_reported") continue;
-    if (!isGuideEvent(event, guide)) continue;
+    if (!isGuideEvent(event, guide, replaced)) continue;
     if (!last || event.occurred_at > last.occurred_at) last = event;
   }
   if (!last || String(last.payload?.status ?? "") !== "no_entregado") return null;
@@ -1184,8 +1194,9 @@ function gfAwaitingRetry(events: readonly MacroEventSnapshot[], guide: MacroGuid
   let failed: MacroEventSnapshot | null = null;
   let moved: string | null = null;
   let undoneAt: string | null = null;
+  const replaced = replacedOutputIds(events);
   for (const event of events) {
-    if (!isGuideEvent(event, guide)) continue;
+    if (!isGuideEvent(event, guide, replaced)) continue;
     if (event.kind === "stop_reported") {
       const status = String(event.payload?.status ?? "");
       if (status === "pendiente") { if (!undoneAt || event.occurred_at > undoneAt) undoneAt = event.occurred_at; continue; }
@@ -1248,9 +1259,9 @@ function inCourseSubstage(
   return "recibido_por_courier";
 }
 
-function currentGuide(guides: readonly MacroGuideSnapshot[]): MacroGuideSnapshot | null {
-  // La que se trabaja gana a la que vuelve con el motorizado (v1.26).
-  const working = guides.filter(isWorkingGuide);
+function currentGuide(guides: readonly MacroGuideSnapshot[], replaced: ReadonlySet<string>): MacroGuideSnapshot | null {
+  // La que se trabaja gana a la reemplazada que vuelve con el motorizado (v1.26).
+  const working = guides.filter((guide) => isWorkingGuide(guide, replaced));
   const active = guides.filter(isActiveGuide);
   const pool = working.length ? working : active.length ? active : guides;
   let best: MacroGuideSnapshot | null = null;
@@ -1476,7 +1487,7 @@ export function resolveMacroStage(input: ResolveMacroStageInput): ResolvedMacroS
     );
   }
 
-  const current = currentGuide(input.guides);
+  const current = currentGuide(input.guides, replaced);
   if (current && hasExternalCustody(current)) {
     // v1.14 (MOM §29.13): lo que reporta el motorizado propio mueve la etapa
     // antes del cierre de la ruta. La liquidación sigue siendo el cierre.
@@ -1506,8 +1517,8 @@ export function resolveMacroStage(input: ResolveMacroStageInput): ResolvedMacroS
   // v1.15: un «No entregado» que volvió a la oficina sigue en «Por reprogramar
   // Lima» hasta que vuelva a salir (MOM §9): la parada fallida manda mientras
   // no haya una asignación nueva después de ella.
-  // La salida en devolución (v1.26) no espera reintento: el pedido ya salió con otra.
-  const retry = input.guides.find((guide) => isOwnCourier(guide.courier) && isWorkingGuide(guide) && gfAwaitingRetry(input.events, guide));
+  // La salida reemplazada (v1.26) no espera reintento: el pedido ya salió con otra.
+  const retry = input.guides.find((guide) => isOwnCourier(guide.courier) && isWorkingGuide(guide, replaced) && gfAwaitingRetry(input.events, guide));
   if (retry) {
     return result("en_curso", operation === "lima" ? "por_reprogramar_lima" : "gestion_reproprovincia", gfAwaitingRetry(input.events, retry), operation);
   }
