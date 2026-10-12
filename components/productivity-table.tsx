@@ -14,6 +14,9 @@ import type { AdvisorBoardRow, AgentLeadRow, SourceBucket, TrendCell } from "@/l
 const ONLINE_POLL_MS = 45_000; // refresco de los puntos "en línea"
 
 const nf = new Intl.NumberFormat("es-PE");
+/** El separador de tramos: el «·» pegado a la palabra de antes (espacio duro),
+ *  para que ningún renglón empiece por él (DESIGN.md). */
+const SEP = "\u00a0· ";
 const nf1 = new Intl.NumberFormat("es-PE", { maximumFractionDigits: 1 });
 
 function money(n: number, currency: string): string {
@@ -446,8 +449,8 @@ export function ProductivityTable({
             <>
               <b className="font-semibold tabular-nums text-ink-900">{nf.format(rows.length)}</b>{" "}
               {rows.length === 1 ? "asesora" : "asesoras"}
-              {idleNow.length > 0 && ` · ${nf.format(idleNow.length)} en línea sin actividad`}
-              <span className="text-ink-500"> · toca una para ver sus leads</span>
+              {idleNow.length > 0 && `${SEP}${nf.format(idleNow.length)} en línea sin actividad`}
+              <span className="text-ink-500">{SEP}toca una para ver sus leads</span>
             </>
           )}
         </p>
@@ -490,20 +493,22 @@ export function ProductivityTable({
                   {/* Cada dato entero en su tramo: un salto de línea nunca parte «12 min». */}
                   <span className="mt-2.5 flex flex-wrap gap-x-1.5 text-[13px] leading-5 text-ink-600">
                     <span className="whitespace-nowrap">
-                      <span className="font-medium tabular-nums text-ink-900">{nf.format(r.leadsTrabajados)}</span> leads ·
+                      <span className="font-medium tabular-nums text-ink-900">{nf.format(r.leadsTrabajados)}</span>
+                      {" leads\u00a0·"}
                     </span>
                     <span className="whitespace-nowrap">
-                      <span className="font-medium tabular-nums text-ink-900">{nf.format(r.llamadas)}</span> llamadas ·
+                      <span className="font-medium tabular-nums text-ink-900">{nf.format(r.llamadas)}</span>
+                      {" llamadas\u00a0·"}
                     </span>
                     <span className="whitespace-nowrap tabular-nums">
                       {nf1.format(r.horas)} h{r.dias > 1 && ` en ${r.dias} días`}
                       {ritmoPorHora(r.leadsTrabajados, r.horas) != null && (
                         <>
-                          {" · "}
+                          {SEP}
                           <Ritmo leads={r.leadsTrabajados} horas={r.horas} />
                         </>
                       )}
-                      {r.primeraGestion.medianMin != null && " ·"}
+                      {r.primeraGestion.medianMin != null && "\u00a0·"}
                     </span>
                     {r.primeraGestion.medianMin != null && (
                       <span className="whitespace-nowrap">
@@ -637,7 +642,7 @@ export function ProductivityTable({
                   <td className="py-3 pr-3 text-right">
                     <span className="block tabular-nums text-ink-900">
                       {nf1.format(r.horas)} h
-                      {r.dias > 1 && <span className="text-xs text-ink-500"> · {r.dias} d</span>}
+                      {r.dias > 1 && <span className="text-xs text-ink-500">{`${SEP}${r.dias} d`}</span>}
                     </span>
                     <Ritmo leads={r.leadsTrabajados} horas={r.horas} />
                   </td>
@@ -824,7 +829,7 @@ function AdvisorPanel({
                   de {nf.format(r.leadsTrabajados)} leads
                   {showDelta && (
                     <>
-                      {" · "}
+                      {SEP}
                       <Signed value={r.delta.cerrados} fmt={nf.format} className="font-medium" />
                     </>
                   )}
@@ -844,12 +849,12 @@ function AdvisorPanel({
             />
           </dl>
           <p className="mt-3 text-[13px] leading-5 text-ink-600">
-            <span className="font-medium tabular-nums text-ink-900">{nf.format(r.llamadas)}</span> llamadas ·{" "}
+            <span className="font-medium tabular-nums text-ink-900">{nf.format(r.llamadas)}</span> llamadas{SEP}
             <span className="tabular-nums">{nf1.format(r.horas)} h</span> activas
             {r.dias > 1 && <span className="tabular-nums"> en {r.dias} días</span>}
             {ritmo != null && (
               <>
-                {" · "}
+                {SEP}
                 <span className={cn("font-medium tabular-nums", ritmo >= RITMO_MIN_HORA ? "text-ink-900" : "text-warn-fg")}>
                   {nf1.format(ritmo)} leads por hora
                 </span>{" "}
@@ -886,8 +891,8 @@ function AdvisorPanel({
                         <span className="min-w-0 truncate font-medium text-ink-900">{storeInfo[sid]?.name ?? "Otra tienda"}</span>
                         <span className={cn("shrink-0 tabular-nums", broken ? "font-medium text-crit-fg" : "text-ink-600")}>
                           {nf.format(c.cerrados)} de {nf.format(c.leads)}
-                          {c.leads > 0 && ` · ${Math.round((c.cerrados / c.leads) * 100)} %`}
-                          {c.ingresos > 0 && <span className="text-ink-900"> · {money(c.ingresos, currency)}</span>}
+                          {c.leads > 0 && `${SEP}${Math.round((c.cerrados / c.leads) * 100)}\u00a0%`}
+                          {c.ingresos > 0 && <span className="text-ink-900">{SEP}{money(c.ingresos, currency)}</span>}
                         </span>
                       </li>
                     );
@@ -903,7 +908,7 @@ function AdvisorPanel({
                     <li key={k} className="flex items-baseline justify-between gap-3 py-2">
                       <span className="font-medium text-ink-900">{SOURCE_LABEL[k]}</span>
                       <span className="shrink-0 tabular-nums text-ink-600">
-                        {nf.format(cell.cerrados)} {cell.cerrados === 1 ? "cierre" : "cierres"} ·{" "}
+                        {nf.format(cell.cerrados)} {cell.cerrados === 1 ? "cierre" : "cierres"}{SEP}
                         <span className="text-ink-900">{money(cell.ingresos, currency)}</span>
                       </span>
                     </li>
@@ -995,13 +1000,15 @@ function AgentLeads({ state, currency, onRetry }: { state: LoadState; currency: 
                 <div className="min-w-0">
                   <p className="truncate text-sm">
                     <span className="font-medium text-ink-900">{l.name || "Sin nombre"}</span>
-                    {l.phone && <span className="tabular-nums text-ink-500"> · {l.phone}</span>}
+                    {l.phone && <span className="tabular-nums text-ink-500">{SEP}{l.phone}</span>}
                   </p>
                   <p className="mt-0.5 text-[13px] leading-5 text-ink-600">
                     <span className={statusTone(l.status)}>{labelOf(l.status)}</span>
-                    {` · ${SOURCE_LABEL[l.source]} · ${SEGMENT_LABEL[l.segment]} · `}
+                    {`${SEP}${SOURCE_LABEL[l.source]}${SEP}${SEGMENT_LABEL[l.segment]}${SEP}`}
                     <span className="tabular-nums">
-                      {l.llamadas} {l.llamadas === 1 ? "llamada" : "llamadas"} · {shortWhen(l.lastTouch)}
+                      {l.llamadas} {l.llamadas === 1 ? "llamada" : "llamadas"}
+                      {SEP}
+                      {shortWhen(l.lastTouch)}
                     </span>
                   </p>
                 </div>

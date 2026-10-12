@@ -78,6 +78,10 @@ function rangeLabel(r: DateRange): string {
   return `${shortDay(r.from, !sameMonth)} – ${shortDay(r.to)}`;
 }
 
+/** El separador de tramos: el «·» va pegado a la palabra de antes con un
+ *  espacio duro, así ningún renglón empieza por él (DESIGN.md). */
+const SEP = "\u00a0· ";
+
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
@@ -187,13 +191,13 @@ export function ProductivityBoard({
         hasPrev ? `comparado con ${month.view.prevLabel}` : null,
       ]
         .filter(Boolean)
-        .join(" · ")
+        .join(SEP)
     : [
         `${isToday ? "Hoy, " : ""}${isToday ? rangeLabel(range) : capitalize(rangeLabel(range))}`,
         hasPrev ? `comparado con ${prevRange.from === prevRange.to ? "el " : ""}${rangeLabel(prevRange)}` : null,
       ]
         .filter(Boolean)
-        .join(" · ");
+        .join(SEP);
   const periodLabel = month ? month.view.label : capitalize(rangeLabel(range));
 
   const monthSubs = monthKpiSubs({ month, hasPrev, prevTotals, currency });
@@ -215,8 +219,8 @@ export function ProductivityBoard({
     <span className="flex flex-wrap gap-x-1">
       <span className="whitespace-nowrap" title={`Carritos gestionados en menos de ${FIRST_TOUCH_FAST_MIN} minutos`}>
         {firstTouch.carritos.n
-          ? `${firstTouch.carritos.under30Pct}\u00a0% en\u00a0<${FIRST_TOUCH_FAST_MIN}\u00a0min ·`
-          : "sin carritos nuevos ·"}
+          ? `${firstTouch.carritos.under30Pct}\u00a0% en\u00a0<${FIRST_TOUCH_FAST_MIN}\u00a0min\u00a0·`
+          : "sin carritos nuevos\u00a0·"}
       </span>
       <span className="whitespace-nowrap">el resto, {formatMinutes(firstTouch.resto.medianMin)}</span>
     </span>
@@ -390,7 +394,7 @@ function monthKpiSubs({
     n == null ? null : view.current ? `${prevMonthName} cerró en ${fmt(n)}` : `${prevMonthName}: ${fmt(n)}`;
   const pacing = (n: number | undefined, fmt: (x: number) => string) =>
     !view.current ? null : n == null ? "el ritmo se ve desde mañana" : `a este ritmo, ~${fmt(n)}`;
-  const join = (...parts: (string | null)[]) => parts.filter(Boolean).join(" · ") || undefined;
+  const join = (...parts: (string | null)[]) => parts.filter(Boolean).join(SEP) || undefined;
   const soles = (n: number) => money(n, currency);
   return {
     llamadas: vs(prevTotals.llamadas),
