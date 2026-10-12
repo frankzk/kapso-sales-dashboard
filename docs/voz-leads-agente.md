@@ -16,10 +16,10 @@ copia en el agente de pedidos, ni al revés.
 
 **En ElevenLabs** ya existe, creado el 12-10-2026 como «Agente de leads ·
 Kenku Biru (piloto)», con todo lo de las secciones 2 a 5 y 7: prompt, primer
-mensaje, las 17 variables, las dos tools y el webhook de inicio. Le faltan
-dos cosas del owner (sección 9): el secreto en las dos tools y en el inicio, y
-su puerta (el número). Su id queda en la consola, no aquí: con el id,
-cualquiera puede abrir una conversación web con el agente.
+mensaje, las 17 variables, las dos tools, el webhook de inicio y el secreto
+en los tres. Le falta su puerta, el número (sección 9). Su id queda en la
+consola, no aquí: con el id, cualquiera puede abrir una conversación web con
+el agente.
 
 ## 1. Lo que recibe al conectar
 
@@ -219,9 +219,8 @@ Las dos son **webhook** (POST) contra Kapta, con la cabecera `x-voice-secret`
 = `VOICE_LEADS_TOOLS_SECRET`. En la consola el valor va como **secreto del
 workspace** (Headers → `x-voice-secret` → Secret), no pegado en el texto:
 abajo aparece como `secret_id`. Kapta también acepta `Authorization: Bearer …`
-y tolera «Bearer » delante del valor en `x-voice-secret`. Las dos tools del
-agente creado todavía no llevan la cabecera: se agrega cuando el secreto exista
-en el workspace (sección 9). Mientras, Kapta les responde 401.
+y tolera «Bearer » delante del valor en `x-voice-secret`. En el workspace el
+secreto se llama `kapta_voice_leads`; el de Reproprovincia es otro.
 
 `voice_call_id` y `conversation_id` no los llena el modelo: salen de la
 variable dinámica `voice_call_id` y de la de sistema `system__conversation_id`.
@@ -327,8 +326,8 @@ así que el de leads apunta a su propia ruta y el de Reproprovincia sigue en la
 suya:
 
 - URL: `https://kapso-sales-dashboard.vercel.app/api/voice/leads/inicio`, POST.
-- Cabecera `x-voice-secret` = `VOICE_LEADS_TOOLS_SECRET` (como secreto). En el
-  agente creado falta, igual que en las tools (sección 9).
+- Cabecera `x-voice-secret` = `VOICE_LEADS_TOOLS_SECRET` (como secreto):
+  `kapta_voice_leads`, el mismo de las tools.
 - En Security, permitir que la llamada traiga los datos de inicio del webhook, y
   el reemplazo del primer mensaje (sección 2).
 
@@ -425,7 +424,8 @@ commit.
    ElevenLabs como secreto del workspace. En el agente, ponerlo en la cabecera
    `x-voice-secret` de `consultar_cobertura`, de `registrar_resultado_lead` y
    del webhook de inicio. Si se quiere el post-call, también
-   `ELEVENLABS_WEBHOOK_SECRET` (sección 6). Redeploy.
+   `ELEVENLABS_WEBHOOK_SECRET` (sección 6). Redeploy. Hecho el 12-10-2026
+   (`kapta_voice_leads`), sin el post-call.
 3. **El agente en ElevenLabs**: ya creado, con prompt, primer mensaje, las dos
    tools, el webhook de inicio y los ajustes de la sección 7. Se presenta como
    Nicol.

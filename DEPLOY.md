@@ -2147,9 +2147,10 @@ la línea de tiempo («Recordatorio de recojo (día 3)…») y la foto que viaj�
    · Kenku Biru (piloto)»), con guion, primer mensaje, las tools
    `consultar_cobertura` y `registrar_resultado_lead`, el webhook de inicio
    (`/api/voice/leads/inicio`) y los ajustes de `docs/voz-leads-agente.md`.
-   Se presenta como Nicol. Falta: `VOICE_LEADS_TOOLS_SECRET` como secreto del
-   workspace en la cabecera `x-voice-secret` de las dos tools y del inicio y,
-   si se quiere, el post-call.
+   Se presenta como Nicol. `VOICE_LEADS_TOOLS_SECRET` ya está en Vercel y, como
+   secreto del workspace `kapta_voice_leads`, en la cabecera `x-voice-secret`
+   de las dos tools y del inicio (12-10-2026). Falta, si se quiere, el
+   post-call.
 4. **El número**, después del agente: un número propio del agente de leads
    (el peruano que se está comprando, o un segundo número de EE. UU.) importado
    en ElevenLabs por SIP trunk, aceptando solo las direcciones de Telnyx
