@@ -11,12 +11,17 @@ import {
   COTEJO_HORAS_LIMA,
   COVERAGE_MIN,
   listingCoverage,
+  listingPickupCodes,
   matchShalomListing,
+  planKeyBackfill,
   readListingGuide,
+  readListingPickupCode,
   shareAName,
+  usableListingKey,
   WINDOW_AFTER_DAYS,
   WINDOW_BEFORE_DAYS,
   type CotejoShalomOrder,
+  type KeyBackfillCandidate,
   type KnownApiGuide,
   type ShalomListingGuide,
 } from "@/lib/shalom/account-match";
@@ -318,6 +323,158 @@ describe("antes de creerse el listado", () => {
   });
 });
 
+// 12-10-2026, 01:12 UTC: Cotejar Shalom vinculó 7 guías (#KP131631 … #KP138154)
+// sin clave. El listado trae `pickup_code`, pero nadie había comprobado que
+// fuera la clave de verdad. Se comprueba como el destinatario: contra las
+// claves que Kapta mandó al crear por API.
+describe("la clave de recojo del listado", () => {
+  // Claves válidas y distintas: ni repetidas ni escaleras.
+  const CLAVES = ["4821", "5937", "7046", "8152", "2968", "6083", "3719", "9405", "1586", "6274", "4093", "8530"];
+  const listado = CLAVES.map((_, i) => guia({ guia: `9810${String(i).padStart(4, "0")}`, document: `4100${String(i).padStart(4, "0")}` }));
+  const conocidas: KnownApiGuide[] = listado.map((g, i) => ({
+    guideCode: g.guia,
+    document: g.document,
+    phone: g.phone,
+    pickupCode: CLAVES[i]!,
+  }));
+  const clavesDelListado = (claves: readonly string[]) => new Map(listado.map((g, i) => [g.guia, claves[i]!]));
+
+  it("se lee tal como viene; si viniera como número, con sus 4 cifras", () => {
+    expect(readListingPickupCode(" 4821 ")).toBe("4821");
+    expect(readListingPickupCode(482)).toBe("0482");
+    expect(readListingPickupCode(4821)).toBe("4821");
+    expect(readListingPickupCode(48210)).toBeNull();
+    expect(readListingPickupCode("")).toBeNull();
+    expect(readListingPickupCode(null)).toBeNull();
+    expect(readListingPickupCode(undefined)).toBeNull();
+  });
+
+  it("la misma guía dos veces con claves distintas no da ninguna", () => {
+    const m = listingPickupCodes([
+      { id: 1, guia: "98100000", pickup_code: "4821" },
+      { id: 2, guia: "98100001", pickup_code: "5937" },
+      { id: 3, guia: "98100001", pickup_code: "7046" },
+      { id: 4, guia: "98100002", pickup_code: "8152" },
+      { id: 5, guia: "98100002" },
+      { id: 6, guia: "98100003" },
+    ]);
+    expect([...m.entries()]).toEqual([["98100000", "4821"]]);
+  });
+
+  it("coincide con las claves que Kapta mandó: se puede usar", () => {
+    const c = checkListingContract(listado, conocidas, clavesDelListado(CLAVES));
+    expect(c.clave).toEqual({ comparadas: CLAVES.length, coinciden: CLAVES.length, confiable: true });
+  });
+
+  it("no coincide: el campo no es la clave y no se usa", () => {
+    const otras = CLAVES.map((_, i) => CLAVES[(i + 1) % CLAVES.length]!);
+    const c = checkListingContract(listado, conocidas, clavesDelListado(otras));
+    expect(c.clave).toEqual({ comparadas: CLAVES.length, coinciden: 0, confiable: false });
+    // El destinatario no depende de la clave.
+    expect(c.documento.confiable).toBe(true);
+  });
+
+  it("una clave cambiada después no tumba la comprobación; dos de doce sí", () => {
+    const una = CLAVES.map((k, i) => (i === 0 ? "1357" : k));
+    expect(checkListingContract(listado, conocidas, clavesDelListado(una)).clave.confiable).toBe(true);
+    const dos = CLAVES.map((k, i) => (i < 2 ? "1357" : k));
+    expect(checkListingContract(listado, conocidas, clavesDelListado(dos)).clave.confiable).toBe(false);
+  });
+
+  it("sin muestra suficiente no se fía, aunque todas coincidan", () => {
+    const pocas = conocidas.slice(0, CONTRACT_MIN_COMPARED - 1);
+    expect(checkListingContract(listado, pocas, clavesDelListado(CLAVES)).clave).toEqual({
+      comparadas: CONTRACT_MIN_COMPARED - 1,
+      coinciden: CONTRACT_MIN_COMPARED - 1,
+      confiable: false,
+    });
+    // Si el listado no trae el campo, no hay nada que comparar.
+    expect(checkListingContract(listado, conocidas).clave).toEqual({ comparadas: 0, coinciden: 0, confiable: false });
+    // Y una clave de Kapta que no se pudo descifrar no cuenta.
+    const sinDescifrar = conocidas.map((k) => ({ ...k, pickupCode: null }));
+    expect(checkListingContract(listado, sinDescifrar, clavesDelListado(CLAVES)).clave.comparadas).toBe(0);
+  });
+
+  it("de la comprobación solo salen cuentas, nunca una clave", () => {
+    const iguales = JSON.stringify(checkListingContract(listado, conocidas, clavesDelListado(CLAVES)));
+    const distintas = JSON.stringify(checkListingContract(listado, conocidas, clavesDelListado([...CLAVES].reverse())));
+    for (const k of CLAVES) {
+      expect(iguales).not.toContain(k);
+      expect(distintas).not.toContain(k);
+    }
+  });
+
+  it("se usa solo si esta lectura la comprobó y tiene forma de clave", () => {
+    expect(usableListingKey("4821", true)).toBe("4821");
+    expect(usableListingKey(" 4821 ", true)).toBe("4821");
+    expect(usableListingKey("4821", false)).toBeNull();
+    for (const mala of ["1111", "1234", "482", "48210", "48a1", "", null, undefined]) {
+      expect(usableListingKey(mala, true)).toBeNull();
+    }
+    // Una clave que ya emitió Shalom no se rechaza por parecer un año: es el
+    // mismo criterio que «Ya la creé en Shalom Pro».
+    expect(usableListingKey("1965", true)).toBe("1965");
+  });
+
+  describe("las claves que faltan en las guías manuales", () => {
+    const keys = new Map([
+      ["93000002", "7391"],
+      ["93000003", "9157"],
+      ["93000004", "2648"],
+      ["93000005", "1111"],
+      ["93000006", "3825"],
+      ["93000007", "6429"],
+    ]);
+    const salida = (over: Partial<KeyBackfillCandidate> = {}): KeyBackfillCandidate => ({
+      orderId: "o-sin-clave",
+      storeId: "kenku",
+      shipmentId: "s-1",
+      guideCode: "93000002",
+      createdVia: "shalom_pro_manual",
+      live: true,
+      hasKey: false,
+      ...over,
+    });
+
+    it("la guía manual viva sin clave recibe la del listado", () => {
+      expect(planKeyBackfill([salida()], keys, true)).toEqual([
+        { orderId: "o-sin-clave", storeId: "kenku", shipmentId: "s-1", guideCode: "93000002", pickupCode: "7391" },
+      ]);
+    });
+
+    it("si la clave del listado no se comprobó, no se pone ninguna", () => {
+      expect(planKeyBackfill([salida()], keys, false)).toEqual([]);
+    });
+
+    it("solo las manuales, solo vivas, solo sin clave, solo con formato de clave y con la guía en el listado", () => {
+      const plan = planKeyBackfill(
+        [
+          salida({ orderId: "o-api", shipmentId: "s-api", guideCode: "93000003", createdVia: "shalom_pro_api" }),
+          salida({ orderId: "o-attested", shipmentId: "s-att", guideCode: "93000003", createdVia: "status_attested" }),
+          salida({ orderId: "o-entregada", shipmentId: "s-ent", guideCode: "93000004", live: false }),
+          salida({ orderId: "o-con-clave", shipmentId: "s-con", guideCode: "93000006", hasKey: true }),
+          salida({ orderId: "o-mala", shipmentId: "s-mala", guideCode: "93000005" }),
+          salida({ orderId: "o-fuera", shipmentId: "s-fuera", guideCode: "93999999" }),
+          salida({ orderId: "o-ok", shipmentId: "s-ok", guideCode: " 93000007 " }),
+        ],
+        keys,
+        true,
+      );
+      expect(plan.map((p) => p.orderId)).toEqual(["o-ok"]);
+      expect(plan[0]).toMatchObject({ guideCode: "93000007", pickupCode: "6429" });
+    });
+
+    it("la clave que ya tiene el pedido no se pisa", () => {
+      expect(planKeyBackfill([salida({ hasKey: true })], keys, true)).toEqual([]);
+    });
+
+    it("dos guías manuales vivas en el mismo pedido: no se adivina de cuál es la clave", () => {
+      const dos = [salida(), salida({ shipmentId: "s-2", guideCode: "93000006" })];
+      expect(planKeyBackfill(dos, keys, true)).toEqual([]);
+    });
+  });
+});
+
 describe("desde cuándo se pide el listado", () => {
   const DAY = 86_400_000;
   const now = Date.parse("2026-10-11T19:00:00Z");
@@ -447,9 +604,22 @@ describe("una sola puerta para registrar una guía existente", () => {
     const cotejo = read("lib/shalom/account-cotejo.ts");
     expect(cotejo).toContain("registerExistingShalomGuide(");
     // El cron no es una persona: no firma con nadie y no se inventa la clave.
+    // La del listado entra solo si esta lectura la comprobó (12-10-2026).
     expect(cotejo).toContain("actor: null");
     expect(cotejo).toContain("onlyIfNew: true");
-    expect(cotejo).not.toContain("pickupCode:");
+    expect(cotejo).toContain("usableListingKey(listingKeys.get(guide.guia), keyTrusted)");
+  });
+
+  it("registrar la clave no es darla: ni el drawer ni el cotejo escriben `key_shared` al guardarla", () => {
+    // `key_shared` es «la clave salió hacia la clienta» y el retorno de §12 lo
+    // lee como que pudo recogerla (lib/shalom/pickup-facts.ts).
+    const facts = read("lib/shalom/pickup-facts.ts");
+    expect(facts).toContain('const KEY_GIVEN_EVENTS = ["key_view", "key_shared"];');
+    expect(read("lib/shalom/account-cotejo.ts")).toContain('KEY_REGISTERED_EVENT = "key_registered"');
+    const acciones = read("app/dashboard/pedidos/payment-actions.ts");
+    const setPickupKey = acciones.slice(acciones.indexOf("export async function setPickupKey"), acciones.indexOf("export async function revealPickupKey"));
+    expect(setPickupKey).toContain('kind: "key_registered"');
+    expect(setPickupKey).not.toContain('kind: "key_shared"');
   });
 
   it("el cotejo tiene cron propio, fuera del rastreo de media hora", () => {
@@ -479,5 +649,12 @@ describe("el MOM dice lo mismo que el código (§12, Cotejar Shalom)", () => {
   it("y el tope por pasada", () => {
     expect(read("lib/shalom/account-cotejo.ts")).toContain("MAX_LINKS_PER_RUN = 10;");
     expect(mom).toContain("**Tope de 10 guías por pasada**");
+  });
+
+  it("y la clave de recojo del listado (12-10-2026)", () => {
+    expect(mom).toContain("**La clave de recojo del listado, solo si se comprueba**");
+    expect(mom).toContain("`key_registered`");
+    expect(mom).toContain("Clave de recojo tomada del listado de Shalom Pro (Cotejar Shalom).");
+    expect(mom).toContain("`clavesRellenadas`");
   });
 });
