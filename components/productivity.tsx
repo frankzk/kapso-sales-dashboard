@@ -213,7 +213,7 @@ export function ProductivityBoard({
     // Dos tramos que no se parten; el «·» cierra el primero para que ningún
     // renglón empiece por él.
     <span className="flex flex-wrap gap-x-1">
-      <span className="whitespace-nowrap">
+      <span>
         {firstTouch.carritos.n
           ? `${firstTouch.carritos.under30Pct} % en menos de ${FIRST_TOUCH_FAST_MIN} min ·`
           : "sin carritos nuevos ·"}
@@ -227,7 +227,7 @@ export function ProductivityBoard({
     <div className="flex flex-col gap-4 xl:h-[calc(100dvh-3rem)]">
       <header className="flex shrink-0 flex-col gap-3">
         <div>
-          <h1 className="text-[28px] font-bold leading-9 tracking-tight text-ink-900">
+          <h1 className="text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">
             {solo ? "Mi productividad" : "Productividad por asesora"}
           </h1>
           <p className="mt-0.5 text-sm text-ink-500 first-letter:uppercase">{context}</p>

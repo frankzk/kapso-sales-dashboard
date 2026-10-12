@@ -77,9 +77,24 @@ function okStep(intensity: number): string {
 
 const HEAT_CELL: Record<Exclude<HeatCellStatus, "ok">, string> = {
   fuera: "bg-line",
-  muerta: "bg-crit-bg",
+  // La hora muerta lleva su «0» en rojo: sin número, junto al gris de fuera de
+  // jornada, era la marca más pálida de la página y la que más importa.
+  muerta: "bg-crit-bg text-crit-fg",
   bajo: "bg-warn-bg text-warn-fg",
 };
+
+/** Lo que dice la franja para quien no la ve: cuántas horas de cada tipo y el pico. */
+function heatSummary(heat: number[], statuses: HeatCellStatus[], startHour: number): string {
+  const n = (s: HeatCellStatus) => statuses.filter((x) => x === s).length;
+  const ok = n("ok");
+  const bajo = n("bajo");
+  const muerta = n("muerta");
+  if (!ok && !bajo && !muerta) return `Actividad por hora, de ${startHour} a ${startHour + heat.length - 1} h: sin actividad`;
+  const peak = heat.reduce((best, v, i) => (v > heat[best]! ? i : best), 0);
+  const horas = (k: number, what: string) => `${k} ${k === 1 ? "hora" : "horas"} ${what}`;
+  const counts = [horas(ok, "a ritmo"), horas(bajo, "bajo ritmo"), horas(muerta, muerta === 1 ? "muerta" : "muertas")].join(", ");
+  return `Actividad por hora, de ${startHour} a ${startHour + heat.length - 1} h: ${counts}; pico de ${nf1.format(heat[peak]!)} a las ${startHour + peak} h`;
+}
 
 /** Franja de actividad 07–21 h: una celda por hora con el número de leads
  *  distintos gestionados, juzgada dentro de la jornada real (heatStatuses):
@@ -103,7 +118,7 @@ function HeatStrip({
   return (
     <span
       role="img"
-      aria-label={`Actividad por hora, de ${startHour} a ${startHour + heat.length - 1} h`}
+      aria-label={heatSummary(heat, statuses, startHour)}
       className={cn("grid w-full", big ? "gap-1" : "gap-0.5")}
       style={{ gridTemplateColumns: `repeat(${heat.length}, minmax(0, 1fr))` }}
     >
@@ -130,7 +145,7 @@ function HeatStrip({
                 status === "ok" ? okStep(Math.min(1, v / Math.max(1, max))) : HEAT_CELL[status],
               )}
             >
-              {v > 0 && n > 0 ? n : ""}
+              {status === "muerta" ? "0" : v > 0 && n > 0 ? n : ""}
             </span>
             {big && <span className="text-xs leading-none tabular-nums text-ink-500">{String(hour).padStart(2, "0")}</span>}
           </span>
@@ -293,7 +308,7 @@ function Ritmo({ leads, horas }: { leads: number; horas: number }) {
   return (
     <span
       title={`Ritmo: ${leads} leads ÷ ${nf1.format(horas)} h activas · mínimo ${RITMO_MIN_HORA} por hora`}
-      className={cn("text-xs font-medium tabular-nums", ok ? "text-brand-700" : "text-warn-fg")}
+      className={cn("text-xs tabular-nums", ok ? "text-ink-600" : "font-medium text-warn-fg")}
     >
       {nf1.format(ritmo)}/h
     </span>
@@ -320,7 +335,9 @@ type DrillContext = {
 
 type LoadState = AgentLeadRow[] | "loading" | "error" | undefined;
 
-const TH = "sticky top-0 z-[1] border-b border-line bg-white py-2 font-medium";
+const TH = "sticky top-0 z-[1] border-b border-line bg-white py-2 font-semibold";
+/** El segundo renglón del encabezado: el dato que va debajo en la celda. */
+const TH_SUB = "block font-normal text-ink-500";
 
 /**
  * La tabla por asesora. Las columnas cuentan la historia de izquierda a
@@ -534,19 +551,19 @@ export function ProductivityTable({
             <col className="w-[11%]" />
             <col className="w-[9%]" />
           </colgroup>
-          <thead className="text-xs text-ink-500">
+          <thead className="text-xs text-ink-600">
             <tr>
               <th scope="col" className={cn(TH, "pl-5 pr-3")}>Asesora</th>
               <th scope="col" className={cn(TH, "pr-4")}>
-                Actividad por hora <span className="font-normal tabular-nums">07–21 h</span>
+                Actividad por hora <span className="font-normal tabular-nums text-ink-500">07–21 h</span>
               </th>
               <th scope="col" className={cn(TH, "pr-3 text-right")}>
                 Horas
-                <span className="block font-normal">ritmo</span>
+                <span className={TH_SUB}>ritmo</span>
               </th>
               <th scope="col" className={cn(TH, "pr-3 text-right")}>
                 Leads
-                <span className="block font-normal">llamadas</span>
+                <span className={TH_SUB}>llamadas</span>
               </th>
               <th
                 scope="col"
@@ -554,11 +571,11 @@ export function ProductivityTable({
                 title="Mediana de minutos desde que el lead llega hasta su primera gestión humana, en los leads que ella tocó primero · verde hasta 30 min, rojo más de 4 h"
               >
                 1ª gestión
-                <span className="block font-normal">leads</span>
+                <span className={TH_SUB}>leads</span>
               </th>
               <th scope="col" className={cn(TH, "pr-3 text-right")}>
                 Cierre
-                {hasPrev && <span className="block font-normal">cambio</span>}
+                {hasPrev && <span className={TH_SUB}>cambio</span>}
               </th>
               <th scope="col" className={cn(TH, "pl-3 pr-3")} title="% de cierre por día, últimos 7 días · escala 0–50 % · guía punteada en el 10 %">
                 Cierre 7 días
@@ -569,11 +586,11 @@ export function ProductivityTable({
                 title="El pedido se acredita a la asesora del último toque sobre el lead (llamada, mensaje o venta)"
               >
                 Cerrados
-                <span className="block font-normal">por tienda</span>
+                <span className={TH_SUB}>por tienda</span>
               </th>
               <th scope="col" className={cn(TH, "pr-5 text-right")}>
                 Ingresos
-                {hasPrev && <span className="block font-normal">cambio</span>}
+                {hasPrev && <span className={TH_SUB}>cambio</span>}
               </th>
             </tr>
           </thead>
@@ -832,7 +849,7 @@ function AdvisorPanel({
             {ritmo != null && (
               <>
                 {" · "}
-                <span className={cn("font-medium tabular-nums", ritmo >= RITMO_MIN_HORA ? "text-brand-700" : "text-warn-fg")}>
+                <span className={cn("font-medium tabular-nums", ritmo >= RITMO_MIN_HORA ? "text-ink-900" : "text-warn-fg")}>
                   {nf1.format(ritmo)} leads por hora
                 </span>{" "}
                 <span className="text-ink-500">(mínimo {RITMO_MIN_HORA})</span>
