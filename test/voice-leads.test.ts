@@ -16,17 +16,21 @@ import {
   LEAD_VOICE_OUTCOME_LABEL,
 } from "@/lib/voice-lead-labels";
 import { voiceDates } from "@/lib/voice-recovery";
+import { VOICE_SUNDAY_START_HOUR } from "@/lib/voice-recovery-queue";
 import {
   attemptCounts,
   buildLeadFicha,
+  callerIdDeKapta,
   chatParaAgente,
   coberturaParaAgente,
   consultaHablada,
   followupFrom,
   handoffContextFor,
+  horarioHablado,
   LEAD_VOICE_EXCLUSIONS,
   LEAD_VOICE_EXPERIMENT,
   LEAD_VOICE_HANDOFF_REASON,
+  LEAD_VOICE_MATURATION_DAYS,
   LEAD_VOICE_MOTIVO_STATUS,
   LEAD_VOICE_MOTIVOS,
   LEAD_VOICE_OUTCOMES,
@@ -103,6 +107,7 @@ function lead(over: Partial<LeadVoiceLead> = {}): LeadVoiceLead {
     claimed_at: null,
     next_followup_at: null,
     contact_opt_out_at: null,
+    handoff_at: null,
     ...over,
   };
 }
@@ -216,6 +221,14 @@ describe("leadVoiceEligible: quién entra a la cola del agente", () => {
     ["estado", "una asesora lo movió de «Sin llamar»", { lead: { status: "no_responde" } }],
     ["estado", "ya está en «Atender ahora»", { lead: { status: "casi_cierra", category: "hot" } }],
     ["atendido_por_asesora", "una asesora ya lo llamó o le escribió", { humanTouched: true }],
+    [
+      "handoff_pendiente",
+      "volvió a escribir después de la llamada del agente y el bot lo pasó a «Atender ahora»",
+      {
+        lead: { status: "volver_a_llamar", next_followup_at: hace(10 * MIN), handoff_at: hace(H) },
+        attempts: [intento(hace(4 * H), "completed", "volver_a_llamar")],
+      },
+    ],
     ["reservado", "una asesora lo tiene tomado", { lead: { claimed_at: hace(5 * MIN) } }],
     ["muy_pronto", "escribió hace una hora y la espera es de dos", { lead: { last_inbound_at: hace(H) } }],
     ["muy_antiguo", "escribió hace más de 48 h", { lead: { last_inbound_at: hace(49 * H) } }],
@@ -234,9 +247,11 @@ describe("leadVoiceEligible: quién entra a la cola del agente", () => {
     expect(new Set(CASOS.map(([r]) => r))).toEqual(new Set(LEAD_VOICE_EXCLUSIONS));
   });
 
-  // MOM §33.2 lista las condiciones en este orden, y el panel muestra la
-  // primera que falla. Si el código las evaluara en otro orden, la razón que ve
-  // la asesora no sería la que el MOM promete.
+  // MOM §33.2 lista las condiciones en este orden, y el log del barrido y la
+  // cola en seco cuentan la primera que falla (el drawer ya no la muestra:
+  // §33.3, a ciegas). Si el código las evaluara en otro orden, el conteo por
+  // motivo no sería el que el MOM promete. Las condiciones 1 a 13 deciden
+  // además si se sortea: una evaluada fuera de orden sortearía de más o de menos.
   it("la primera que falla es la razón, en el orden de LEAD_VOICE_EXCLUSIONS", () => {
     const i = input({
       settings: { enabled: false, maxAttempts: 2 },
@@ -250,6 +265,8 @@ describe("leadVoiceEligible: quién entra a la cola del agente", () => {
         next_followup_at: en(H),
         claimed_at: hace(MIN),
         last_inbound_at: hace(30 * MIN),
+        // Posterior a la última llamada del agente (hace una hora).
+        handoff_at: hace(30 * MIN),
       },
       campaignId: "cmp-otra",
       doNotCall: true,
@@ -271,8 +288,12 @@ describe("leadVoiceEligible: quién entra a la cola del agente", () => {
       ["perdido", () => (i.lead.category = "open")],
       ["poco_interes", () => (i.lead.inbound_count = 2)],
       ["callback_pendiente", () => (i.lead.status = "no_responde")],
-      ["estado", () => (i.lead.status = "nuevo")],
+      // Vuelve a ser la vuelta del agente, ya vencida: así se ve el handoff.
+      ["estado", () => ((i.lead.status = "volver_a_llamar"), (i.lead.next_followup_at = hace(10 * MIN)))],
       ["atendido_por_asesora", () => (i.humanTouched = false)],
+      // El handoff solo frena una vuelta: como primera llamada ya no cuenta
+      // (ahí manda la espera de las asesoras), y así se llega a muy_pronto.
+      ["handoff_pendiente", () => (i.lead.status = "nuevo")],
       ["reservado", () => (i.lead.claimed_at = null)],
       ["muy_pronto", () => (i.lead.last_inbound_at = hace(49 * H))],
       ["muy_antiguo", () => (i.lead.last_inbound_at = hace(3 * H))],
@@ -341,9 +362,11 @@ describe("leadVoiceArm: el sorteo del grupo de control", () => {
     expect(ids.every((id) => leadVoiceArm(id, Number.NaN) === leadVoiceArm(id, 50))).toBe(true);
   });
 
-  // Diseño factorial (decisión 5): los leads del piloto ya están repartidos en
-  // frio_cobertura_v1. Si el brazo del agente dependiera de aquél, cada
-  // experimento mediría en parte el tratamiento del otro.
+  // Los leads del piloto ya están repartidos en frio_cobertura_v1. El REPARTO
+  // tiene que ser independiente: si el brazo del agente dependiera de aquél,
+  // los dos brazos del agente no serían comparables. (Que el agente llame sobre
+  // todo al control de frío es otro asunto, de a quién toca y no del sorteo:
+  // MOM §33.3, decisión pendiente en §33.9.)
   it("es independiente de frio_cobertura_v1: correlación ≈ 0", () => {
     const voz = IDS.map((id) => leadVoiceArm(id, 50) === "tratamiento");
     const frio = IDS.map((id) => assignArm(id, FRIO_COVERAGE_EXPERIMENT) === "tratamiento");
@@ -535,6 +558,113 @@ describe("volver a llamar", () => {
   it("el tope de intentos también vale para la vuelta", () => {
     expect(razon(agendado({ settings: { maxAttempts: 1 } }))).toBe("intentos_agotados");
   });
+
+  // La vuelta la decide la última llamada que DE VERDAD salió. Antes, la fila
+  // `cancelled` del callback que Telnyx rechazó pasaba a ser «la última», el
+  // lead caía en «estado» y la persona que pidió esa hora nunca era llamada.
+  it("si Telnyx rechazó el callback (cancelled), el agente lo reintenta", () => {
+    const attempts = [intento(hace(4 * H), "completed", "volver_a_llamar"), intento(hace(5 * MIN), "cancelled", "sin_resultado")];
+    expect(leadVoiceEligible(agendado({ attempts }))).toEqual({
+      ok: true,
+      kind: "volver_a_llamar",
+      arm: "tratamiento",
+      assignNow: true,
+    });
+  });
+
+  it("…también tras varios rechazos, que no gastan intento", () => {
+    const attempts = [
+      intento(hace(4 * H), "completed", "volver_a_llamar"),
+      intento(hace(30 * MIN), "cancelled", "sin_resultado"),
+      intento(hace(20 * MIN), "cancelled", "sin_resultado"),
+      intento(hace(10 * MIN), "cancelled", "sin_resultado"),
+    ];
+    expect(razon(agendado({ attempts, settings: { maxAttempts: 2 } }))).toBe("ok");
+  });
+
+  it("…y la hora pedida se sigue respetando aunque haya un rechazo", () => {
+    const attempts = [intento(hace(4 * H), "completed", "volver_a_llamar"), intento(hace(5 * MIN), "cancelled", "sin_resultado")];
+    expect(razon(agendado({ attempts, lead: { next_followup_at: en(H) } }))).toBe("callback_pendiente");
+  });
+
+  // Solo `cancelled` se salta: una que marcó y se cayó (el puente al agente
+  // falló con la persona en línea) sí es la última llamada, y no dejó vuelta.
+  it("una llamada que sí marcó y se cayó después del callback corta la vuelta", () => {
+    const attempts = [intento(hace(4 * H), "completed", "volver_a_llamar"), intento(hace(5 * MIN), "failed", "sin_resultado")];
+    expect(razon(agendado({ attempts }))).toBe("estado");
+  });
+
+  // Un rechazo viejo no hace de «última» si después hubo una vuelta real.
+  it("un rechazo anterior a la vuelta del agente no cambia nada", () => {
+    const attempts = [intento(hace(6 * H), "cancelled", "sin_resultado"), intento(hace(4 * H), "completed", "volver_a_llamar")];
+    expect(razon(agendado({ attempts }))).toBe("ok");
+  });
+});
+
+// ── Un handoff del bot después de la llamada del agente (MOM §33.2, cond. 11) ──
+
+describe("handoff_pendiente: volvió a escribir y lo atiende una asesora", () => {
+  // La llamada del agente que dejó la vuelta fue hace 4 h (`agendado`).
+  it("un handoff posterior a la llamada del agente frena la vuelta, sin sortear", () => {
+    expect(leadVoiceEligible(agendado({ lead: { handoff_at: hace(H) } }))).toEqual({
+      ok: false,
+      reason: "handoff_pendiente",
+      arm: null,
+      assignNow: false,
+    });
+  });
+
+  it("con brazo guardado lo devuelve igual, sin volver a guardarlo", () => {
+    expect(leadVoiceEligible(agendado({ lead: { handoff_at: hace(H) }, arm: "tratamiento" }))).toEqual({
+      ok: false,
+      reason: "handoff_pendiente",
+      arm: "tratamiento",
+      assignNow: false,
+    });
+  });
+
+  it("un handoff anterior a la llamada del agente no la frena", () => {
+    expect(razon(agendado({ lead: { handoff_at: hace(5 * H) } }))).toBe("ok");
+  });
+
+  it("uno en el mismo instante de la llamada tampoco: tiene que ser posterior", () => {
+    expect(razon(agendado({ lead: { handoff_at: hace(4 * H) } }))).toBe("ok");
+    expect(razon(agendado({ lead: { handoff_at: hace(4 * H - 1000) } }))).toBe("handoff_pendiente");
+  });
+
+  // Lo que llega de la base puede venir con otra zona: se comparan instantes,
+  // no texto. «09:30-05:00» es 14:30 UTC, después de la llamada de las 13:00 UTC,
+  // aunque como texto «09» quede antes que «13».
+  it("compara instantes, no el texto de la fecha", () => {
+    expect(hace(4 * H)).toBe("2026-10-12T13:00:00.000Z");
+    expect(razon(agendado({ lead: { handoff_at: "2026-10-12T09:30:00-05:00" } }))).toBe("handoff_pendiente");
+    expect(razon(agendado({ lead: { handoff_at: "2026-10-12T12:30:00+00:00" } }))).toBe("ok");
+  });
+
+  it("se mide contra la última llamada REAL: un rechazo de Telnyx después del handoff no lo tapa", () => {
+    const attempts = [intento(hace(4 * H), "completed", "volver_a_llamar"), intento(hace(5 * MIN), "cancelled", "sin_resultado")];
+    expect(razon(agendado({ attempts, lead: { handoff_at: hace(H) } }))).toBe("handoff_pendiente");
+  });
+
+  it("una fecha de handoff ilegible no frena", () => {
+    expect(razon(agendado({ lead: { handoff_at: "no-es-fecha" } }))).toBe("ok");
+  });
+
+  // En una primera llamada el handoff no es esta regla: ahí van primero las
+  // asesoras por la espera desde su último mensaje (muy_pronto).
+  it("solo frena una vuelta, no una primera llamada", () => {
+    expect(razon(input({ lead: { handoff_at: hace(H) } }))).toBe("ok");
+    expect(razon(input({ lead: { handoff_at: hace(H) }, attempts: [intento(hace(4 * H))] }))).toBe("ok");
+  });
+
+  it("va después de «atendido por asesora» y antes de la reserva", () => {
+    expect(razon(agendado({ lead: { handoff_at: hace(H) }, humanTouched: true }))).toBe("atendido_por_asesora");
+    expect(razon(agendado({ lead: { handoff_at: hace(H), claimed_at: hace(MIN) } }))).toBe("handoff_pendiente");
+  });
+
+  it("la hora pendiente se informa antes que el handoff", () => {
+    expect(razon(agendado({ lead: { handoff_at: hace(H), next_followup_at: en(H) } }))).toBe("callback_pendiente");
+  });
 });
 
 // ── El orden de la cola ─────────────────────────────────────────────────────
@@ -663,6 +793,16 @@ describe("consultaHablada", () => {
 });
 
 describe("buildLeadFicha y leadVoiceInitiation", () => {
+  type FichaAjustes = LeadFichaInput["settings"];
+  // Los de la tienda de referencia: 9 a 20 h y dos intentos (los defectos de 0247).
+  const ajustes = (over: Partial<FichaAjustes> = {}): FichaAjustes => ({
+    product: "Shampoo anticaspa",
+    offer: "1 unidad o el 3x2",
+    hourStart: 9,
+    hourEnd: 20,
+    maxAttempts: 2,
+    ...over,
+  });
   const fichaInput = (over: Partial<LeadFichaInput> = {}): LeadFichaInput => ({
     lead: {
       name: "Rosa Quispe",
@@ -671,7 +811,7 @@ describe("buildLeadFicha y leadVoiceInitiation", () => {
       ad_headline: "Shampoo anticaspa",
     },
     storeName: "Biru Peru",
-    settings: { product: "Shampoo anticaspa", offer: "1 unidad o el 3x2" },
+    settings: ajustes(),
     chat: "Cliente: Hola",
     now: NOW,
     attempt: 1,
@@ -680,6 +820,16 @@ describe("buildLeadFicha y leadVoiceInitiation", () => {
     ...over,
   });
   const FICHA_KEYS = LEAD_VOICE_VARS.filter((k) => k !== "voice_call_id" && k !== "encontrada");
+
+  // docs/voz-leads-agente.md §1 promete «siempre las 17 variables», y en
+  // ElevenLabs se declaran una por una: una nueva sin declarar deja al agente
+  // sin arrancar.
+  it("son 17 variables, sin repetir, con las del último intento y el horario", () => {
+    expect(LEAD_VOICE_VARS).toHaveLength(17);
+    expect(new Set(LEAD_VOICE_VARS).size).toBe(17);
+    expect(LEAD_VOICE_VARS).toContain("ultimo_intento");
+    expect(LEAD_VOICE_VARS).toContain("horario");
+  });
 
   it("la ficha lleva cada variable, todas como texto", () => {
     const f = buildLeadFicha(fichaInput());
@@ -698,6 +848,8 @@ describe("buildLeadFicha y leadVoiceInitiation", () => {
       hoy_texto: voiceDates(NOW).hoy_texto,
       saludo: "buenas tardes",
       intento: "1",
+      ultimo_intento: "no",
+      horario: "de 9:00 a 20:00; los domingos desde las 11:00",
       es_volver_a_llamar: "no",
     });
     expect(f.hoy_texto).toBe("lunes 12 de octubre");
@@ -705,14 +857,16 @@ describe("buildLeadFicha y leadVoiceInitiation", () => {
   });
 
   it("el producto sale de los ajustes, si no del anuncio, si no una frase neutra", () => {
-    expect(buildLeadFicha(fichaInput({ settings: { product: "", offer: "" } })).producto).toBe("Shampoo anticaspa");
-    const sinNada = fichaInput({ settings: { product: "", offer: "" } });
+    expect(buildLeadFicha(fichaInput({ settings: ajustes({ product: "", offer: "" }) })).producto).toBe("Shampoo anticaspa");
+    const sinNada = fichaInput({ settings: ajustes({ product: "", offer: "" }) });
     sinNada.lead = { ...sinNada.lead, ad_headline: null };
     expect(buildLeadFicha(sinNada).producto).toBe("el producto que vio en el anuncio");
   });
 
   it("intento desde 1, vuelta, modo prueba y oferta con tope", () => {
-    const f = buildLeadFicha(fichaInput({ attempt: 0, kind: "volver_a_llamar", mode: "test", settings: { product: "x", offer: "o".repeat(1000) } }));
+    const f = buildLeadFicha(
+      fichaInput({ attempt: 0, kind: "volver_a_llamar", mode: "test", settings: ajustes({ product: "x", offer: "o".repeat(1000) }) }),
+    );
     expect(f.intento).toBe("1");
     expect(f.es_volver_a_llamar).toBe("si");
     expect(f.modo).toBe("test");
@@ -720,12 +874,44 @@ describe("buildLeadFicha y leadVoiceInitiation", () => {
     expect(buildLeadFicha(fichaInput({ attempt: 2 })).intento).toBe("2");
   });
 
+  // En el último intento el agente no promete otra llamada suya (MOM §33.5):
+  // si promete y el tope ya se gastó, la persona espera una llamada que no llega.
+  it.each<[number, number, "si" | "no"]>([
+    [1, 2, "no"],
+    [2, 2, "si"],
+    [3, 2, "si"], // pasado el tope (un tope bajado a mitad de camino) sigue siendo el último
+    [1, 1, "si"],
+    [1, 4, "no"],
+    [3, 4, "no"],
+    [4, 4, "si"],
+  ])("intento %i con tope %i ⇒ ultimo_intento «%s»", (attempt, maxAttempts, esperado) => {
+    expect(buildLeadFicha(fichaInput({ attempt, settings: ajustes({ maxAttempts }) })).ultimo_intento).toBe(esperado);
+  });
+
+  it("el último intento vale igual para una vuelta", () => {
+    expect(buildLeadFicha(fichaInput({ attempt: 2, kind: "volver_a_llamar" })).ultimo_intento).toBe("si");
+  });
+
+  it("el horario sale de los ajustes de la tienda (horarioHablado)", () => {
+    const f = buildLeadFicha(fichaInput({ settings: ajustes({ hourStart: 10, hourEnd: 18 }) }));
+    expect(f.horario).toBe("de 10:00 a 18:00; los domingos desde las 11:00");
+    expect(f.horario).toBe(horarioHablado(10, 18));
+  });
+
   it("con llamada: todas las variables, encontrada «si» y el saludo con el nombre", () => {
-    const init = leadVoiceInitiation("call-1", buildLeadFicha(fichaInput()));
+    const init = leadVoiceInitiation("call-1", buildLeadFicha(fichaInput({ attempt: 2 })));
     expect(init.type).toBe("conversation_initiation_client_data");
     expect(Object.keys(init.dynamic_variables).sort()).toEqual([...LEAD_VOICE_VARS].sort());
     for (const v of Object.values(init.dynamic_variables)) expect(typeof v).toBe("string");
-    expect(init.dynamic_variables).toMatchObject({ voice_call_id: "call-1", encontrada: "si", nombre: "Rosa", modo: "real" });
+    expect(init.dynamic_variables).toMatchObject({
+      voice_call_id: "call-1",
+      encontrada: "si",
+      nombre: "Rosa",
+      modo: "real",
+      intento: "2",
+      ultimo_intento: "si",
+      horario: "de 9:00 a 20:00; los domingos desde las 11:00",
+    });
     expect(init.conversation_config_override.agent.first_message).toBe("Hola, buenas tardes. ¿Hablo con Rosa?");
   });
 
@@ -755,6 +941,74 @@ describe("buildLeadFicha y leadVoiceInitiation", () => {
     const init = leadVoiceInitiation("call-1", ficha as LeadFicha);
     expect(init.dynamic_variables.oferta).toBe("");
     expect(JSON.stringify(init)).not.toContain("987654321");
+  });
+
+  // Una llamada marcada antes de que existieran `ultimo_intento` y `horario`
+  // guardó una ficha sin ellas: igual viajan, vacías, y el agente arranca.
+  it("una ficha guardada antes de las variables nuevas igual las manda, vacías", () => {
+    const vieja = buildLeadFicha(fichaInput()) as Partial<LeadFicha>;
+    delete vieja.ultimo_intento;
+    delete vieja.horario;
+    const init = leadVoiceInitiation("call-1", vieja as LeadFicha);
+    expect(Object.keys(init.dynamic_variables).sort()).toEqual([...LEAD_VOICE_VARS].sort());
+    expect(init.dynamic_variables).toMatchObject({ encontrada: "si", ultimo_intento: "", horario: "", nombre: "Rosa" });
+  });
+});
+
+describe("horarioHablado", () => {
+  it("dice el horario de la tienda y el domingo, que empieza más tarde", () => {
+    expect(VOICE_SUNDAY_START_HOUR).toBe(11);
+    expect(horarioHablado(9, 20)).toBe("de 9:00 a 20:00; los domingos desde las 11:00");
+  });
+
+  // El domingo empieza a la hora más tarde de las dos: la de la tienda o la
+  // del domingo (withinVoiceHours). Si no, el agente ofrecería un domingo a una
+  // hora en que el barrido no llama.
+  it("un horario que empieza después de las 11 también manda el domingo", () => {
+    expect(horarioHablado(12, 19)).toBe("de 12:00 a 19:00; los domingos desde las 12:00");
+    expect(horarioHablado(11, 20)).toBe("de 11:00 a 20:00; los domingos desde las 11:00");
+    expect(horarioHablado(8, 21)).toBe("de 8:00 a 21:00; los domingos desde las 11:00");
+  });
+});
+
+// ── Quién recibe la ficha al conectar (MOM §33.7, la regla de §11.8) ────────
+
+describe("callerIdDeKapta", () => {
+  const DE_KAPTA = "+51 1 640 9090";
+
+  it("el tramo que abre Kapta sale con el número de leads: recibe la ficha", () => {
+    expect(callerIdDeKapta("+5116409090", DE_KAPTA)).toBe(true);
+    expect(callerIdDeKapta("5116409090", DE_KAPTA)).toBe(true);
+  });
+
+  it("compara los últimos nueve dígitos: el formato del número no importa", () => {
+    expect(callerIdDeKapta("+51 987 000 111", "51987000111")).toBe(true);
+    expect(callerIdDeKapta("987000111", "+51987000111")).toBe(true);
+    expect(callerIdDeKapta("+1 (415) 555-0100", "+14155550100")).toBe(true);
+  });
+
+  // El caso del 24-09-2026 de §11.8: alguien llama al número del agente
+  // mientras este marca a otra persona. No recibe la ficha ajena.
+  it("otro número —un lead que devuelve la perdida— no recibe la ficha", () => {
+    expect(callerIdDeKapta("+51911222333", DE_KAPTA)).toBe(false);
+    expect(callerIdDeKapta("+51911222333", "+51987000111")).toBe(false);
+    // Mismos últimos ocho, distinto el noveno.
+    expect(callerIdDeKapta("+51887000111", "+51987000111")).toBe(false);
+  });
+
+  it("un caller ID que no es texto se lee igual", () => {
+    expect(callerIdDeKapta(51987000111, "+51987000111")).toBe(true);
+    expect(callerIdDeKapta(51911222333, "+51987000111")).toBe(false);
+  });
+
+  // Sin caller ID en el aviso no se puede saber: se acepta, como antes.
+  it.each([undefined, null, "", "   ", "anonymous"])("sin caller ID (%j) se acepta", (caller) => {
+    expect(callerIdDeKapta(caller, DE_KAPTA)).toBe(true);
+  });
+
+  it("sin número de leads configurado (menos de nueve dígitos) no se puede comparar y se acepta", () => {
+    expect(callerIdDeKapta("+51911222333", "")).toBe(true);
+    expect(callerIdDeKapta("+51911222333", "12345678")).toBe(true);
   });
 });
 
@@ -937,13 +1191,69 @@ describe("translateLeadResult", () => {
     });
   });
 
-  it("un resumen que dice «no me llamen» marca no contactar con cualquier resultado", () => {
+  // El no contactar del resumen solo se infiere con un «no»: con «no_compra»
+  // un «no me llamen» es un pedido; con «no_llamar» va siempre.
+  it("no_compra con un resumen que dice «no me llamen» marca no contactar", () => {
     expect(aplicar({ resultado: "no_compra", motivo: "precio", resumen: "Dijo que no la vuelvan a llamar." }).optOut).toBe(true);
-    expect(aplicar({ resultado: "no_contesta", resumen: "Contestó otra persona: no me llamen." })).toMatchObject({
-      status: null,
+    expect(aplicar({ resultado: "no_compra", resumen: "No le interesa. No me llamen más." })).toMatchObject({
       optOut: true,
+      status: "cancelado_cliente",
+      motivo: "otro",
     });
     expect(aplicar({ resultado: "no_compra", resumen: "No le interesa." }).optOut).toBe(false);
+  });
+
+  it("…también si el pedido viene en el motivo y no en el resumen", () => {
+    expect(aplicar({ resultado: "no_compra", motivo: "no me llamen", resumen: "Cortó." })).toMatchObject({
+      optOut: true,
+      motivo: "otro",
+    });
+  });
+
+  it("no_llamar marca no contactar siempre, diga lo que diga el resumen", () => {
+    expect(aplicar({ resultado: "no_llamar", resumen: "" }).optOut).toBe(true);
+    expect(aplicar({ resultado: "no_llamar", resumen: "Que no la llamen hasta el lunes." }).optOut).toBe(true);
+    expect(aplicar({ resultado: "no_llamar", resumen: "Está ocupada ahorita." }).optOut).toBe(true);
+  });
+
+  // El caso de la revisión: con «volver a llamar» el resumen dice una HORA.
+  // Antes marcaba no contactar, su teléfono entraba a la lista «no llamar» de
+  // la tienda y el propio callback del agente quedaba bloqueado para siempre.
+  it("volver_a_llamar nunca marca no contactar por el resumen", () => {
+    const a = aplicar({
+      resultado: "volver_a_llamar",
+      fecha: "2026-10-14",
+      hora: "10:00",
+      resumen: "Está manejando; pidió que no la llamen en este momento, que la llamen mañana a las 10.",
+    });
+    expect(a).toMatchObject({ outcome: "volver_a_llamar", status: "volver_a_llamar", optOut: false });
+    expect(a.followup).toEqual({ at: "2026-10-14T15:00:00.000Z" });
+    // Ni con la frase literal: el resultado que eligió el agente manda.
+    expect(aplicar({ resultado: "volver_a_llamar", resumen: "No me llamen más." }).optOut).toBe(false);
+  });
+
+  it("atender_ahora nunca marca no contactar por el resumen: quiere comprar", () => {
+    expect(aplicar({ resultado: "atender_ahora", resumen: "Quiere el 3x2; que no la llamen, que le escriban por WhatsApp." })).toMatchObject({
+      status: "casi_cierra",
+      needsAttention: true,
+      optOut: false,
+    });
+  });
+
+  // Quien contestó puede no ser la persona del lead: su «no me llamen» no
+  // apaga el contacto con el lead.
+  it("no_contesta nunca marca no contactar por el resumen: el lead no cambia", () => {
+    expect(aplicar({ resultado: "no_contesta", resumen: "Contestó otra persona: no me llamen." })).toMatchObject({
+      status: null,
+      optOut: false,
+      followup: "keep",
+    });
+  });
+
+  it("solo no_compra y no_llamar pueden marcar no contactar", () => {
+    const resumen = "Dijo que no la vuelvan a llamar.";
+    const marcan = LEAD_VOICE_RESULTS.filter((resultado) => aplicar({ resultado, resumen }).optOut);
+    expect(marcan.sort()).toEqual(["no_compra", "no_llamar"]);
   });
 
   // El «sí» apaga también los WhatsApp automáticos: una frase que solo se
@@ -959,6 +1269,42 @@ describe("translateLeadResult", () => {
       expect(pideNoContactar(t), t).toBe(false);
     }
     for (const t of ["No me llamen más.", "Pidió que no la vuelvan a llamar", "no quiere que la llamen", "que no la sigan llamando"]) {
+      expect(pideNoContactar(t), t).toBe(true);
+    }
+  });
+
+  // Las frases de la revisión: todas son una hora o una circunstancia, no un
+  // pedido de no contacto.
+  it("pideNoContactar tampoco con una hora, un momento o un lugar", () => {
+    for (const t of [
+      "Está manejando; pidió que no la llamen en este momento, que la llamen mañana a las 10.",
+      "no lo llamen por ahora",
+      "No la llamen todavía, está en el banco.",
+      "no la llamen todavia",
+      "no le llamen a esta hora",
+      "no la llamen esta semana",
+      "no quiere que lo llamen al trabajo",
+      "Que no la llamen ahorita, está ocupada.",
+      "no la llamen en horario de oficina",
+      "no lo llamen en su horario de trabajo",
+      "no la llamen en el horario del almuerzo",
+      "no lo llamen en su trabajo",
+      "No la llamen por la mañana.",
+      "no la llamen temprano",
+    ]) {
+      expect(pideNoContactar(t), t).toBe(false);
+    }
+  });
+
+  it("pideNoContactar sí con un pedido de verdad, aunque siga la frase", () => {
+    for (const t of [
+      "No me llamen, por favor.",
+      "no me llamen por favor",
+      "no la llamen nunca más",
+      "Que no la llamen y que no le escriban.",
+      "NO ME LLAMEN",
+      "no quiere que lo sigan llamando de esta tienda",
+    ]) {
       expect(pideNoContactar(t), t).toBe(true);
     }
   });
@@ -1078,9 +1424,40 @@ describe("leadPatchFor", () => {
     expect(leadPatchFor(aplicar({ resultado: "no_contesta" }), ctx(en(H)))).toBeNull();
   });
 
-  it("no_contesta con «no me llamen»: solo no contactar, sin estado ni última interacción", () => {
-    expect(leadPatchFor(aplicar({ resultado: "no_contesta", resumen: "no me llamen" }), ctx())).toEqual({
+  // Quien contestó puede no ser la persona: el lead no se toca, tampoco su
+  // no contactar.
+  it("no_contesta con «no me llamen» en el resumen: el lead no se toca", () => {
+    expect(leadPatchFor(aplicar({ resultado: "no_contesta", resumen: "no me llamen" }), ctx())).toBeNull();
+  });
+
+  // Ya ningún resultado del agente llega aquí sin estado y con no contactar,
+  // pero la regla del patch se mantiene: un no contactar nunca se pierde y, sin
+  // estado, no toca nada más.
+  it("una acción sin estado con no contactar: solo no contactar, sin estado ni última interacción", () => {
+    const sinEstado: Apply = { ...aplicar({ resultado: "no_contesta" }), optOut: true };
+    expect(leadPatchFor(sinEstado, ctx(en(H)))).toEqual({ contact_opt_out_at: NOW_ISO });
+  });
+
+  it("volver_a_llamar con «que no la llamen ahora»: la hora pedida, sin no contactar", () => {
+    const a = aplicar({
+      resultado: "volver_a_llamar",
+      fecha: "2026-10-13",
+      hora: "15:30",
+      resumen: "Está en el trabajo: que no la llamen ahora, que la llamen mañana.",
+    });
+    const patch = leadPatchFor(a, ctx());
+    expect(patch).toMatchObject({ status: "volver_a_llamar", next_followup_at: "2026-10-13T20:30:00.000Z" });
+    expect(patch).not.toHaveProperty("contact_opt_out_at");
+  });
+
+  it("no_compra con «no me llamen»: Perdidos y no contactar", () => {
+    expect(leadPatchFor(aplicar({ resultado: "no_compra", motivo: "precio", resumen: "No me llamen más." }), ctx())).toEqual({
       contact_opt_out_at: NOW_ISO,
+      status: "cancelado_cliente",
+      category: "lost",
+      needs_attention: false,
+      last_interaction_at: NOW_ISO,
+      next_followup_at: null,
     });
   });
 
@@ -1192,12 +1569,33 @@ describe("leadVoiceSettingsFrom", () => {
   });
 });
 
-describe("etiquetas del panel (lib/voice-lead-labels)", () => {
+describe("etiquetas (lib/voice-lead-labels)", () => {
   // El módulo de etiquetas va aparte para el cliente; si se agrega un código
-  // aquí y no allá, el panel mostraría el código crudo.
+  // aquí y no allá, el tablero, el log o el historial mostrarían el código crudo.
   it("cada exclusión, resultado y motivo tiene su texto", () => {
     expect(Object.keys(LEAD_VOICE_EXCLUSION_LABEL).sort()).toEqual([...LEAD_VOICE_EXCLUSIONS].sort());
     expect(Object.keys(LEAD_VOICE_OUTCOME_LABEL).sort()).toEqual([...LEAD_VOICE_OUTCOMES].sort());
     expect(Object.keys(LEAD_VOICE_MOTIVO_LABEL).sort()).toEqual([...LEAD_VOICE_MOTIVOS].sort());
+  });
+
+  it("handoff_pendiente tiene su texto, y va entre «atendido por asesora» y la reserva", () => {
+    expect(LEAD_VOICE_EXCLUSION_LABEL.handoff_pendiente).toBeTruthy();
+    const i = LEAD_VOICE_EXCLUSIONS.indexOf("handoff_pendiente");
+    expect(LEAD_VOICE_EXCLUSIONS[i - 1]).toBe("atendido_por_asesora");
+    expect(LEAD_VOICE_EXCLUSIONS[i + 1]).toBe("reservado");
+  });
+});
+
+// ── El corte del tablero del piloto (MOM §33.8) ─────────────────────────────
+
+describe("LEAD_VOICE_MATURATION_DAYS", () => {
+  // El agente vende antes (llama a las 2-4 h); sin un corte, un adelanto de
+  // la venta se leería como venta extra del tratamiento. El corte es el mismo
+  // que usa read_lead_experiment para los otros experimentos de leads.
+  it("son 7 días, los mismos que read_lead_experiment (0150)", () => {
+    expect(LEAD_VOICE_MATURATION_DAYS).toBe(7);
+    const sql = readFileSync(new URL("../db/migrations/0150_lead_coverage_pushes.sql", import.meta.url), "utf8");
+    const m = /function public\.read_lead_experiment\(\s*p_experiment text,\s*p_maduracion_dias integer default (\d+)/.exec(sql);
+    expect(m?.[1]).toBe(String(LEAD_VOICE_MATURATION_DAYS));
   });
 });

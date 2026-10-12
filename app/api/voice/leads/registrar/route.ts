@@ -66,32 +66,37 @@ export async function POST(req: NextRequest) {
     writeError = r.error;
   }
 
-  await admin
-    .from("voice_calls")
-    .update({
-      status: writeError ? "failed" : "completed",
-      outcome: action.outcome,
-      // Solo lo traducido, NUNCA el cuerpo entero: un `no_llamar` suelto en
-      // lo que mande el agente entraría a la lista «no llamar» de la tienda,
-      // que comparten los dos agentes y lee `outcome_payload->>no_llamar`.
-      outcome_payload: {
-        resultado: action.outcome,
-        motivo: action.motivo,
-        // Lo que dictó la persona vive aquí y no en `leads.*`: el sync y el
-        // reenvío Swayp leen esas columnas. «Generar pedido» la superpone.
-        captura: action.captura,
-        resumen: action.resumen,
-        // En una prueba el teléfono es el de quien prueba: su «no me llamen»
-        // no entra a la lista de la tienda.
-        no_llamar: call.mode === "real" && action.optOut,
-        aplicado: applied,
-        omitido: skipped,
-        conversation_id: body.conversation_id ?? null,
-      },
-      ended_at: now.toISOString(),
-      error: writeError,
-    })
-    .eq("id", call.id);
+  const cierre = {
+    status: writeError ? "failed" : "completed",
+    outcome: action.outcome,
+    // Solo lo traducido, NUNCA el cuerpo entero: un `no_llamar` suelto en
+    // lo que mande el agente entraría a la lista «no llamar» de la tienda,
+    // que comparten los dos agentes y lee `outcome_payload->>no_llamar`.
+    outcome_payload: {
+      resultado: action.outcome,
+      motivo: action.motivo,
+      // Lo que dictó la persona vive aquí y no en `leads.*`: el sync y el
+      // reenvío Swayp leen esas columnas. «Generar pedido» la superpone.
+      captura: action.captura,
+      resumen: action.resumen,
+      // En una prueba el teléfono es el de quien prueba: su «no me llamen»
+      // no entra a la lista de la tienda.
+      no_llamar: call.mode === "real" && action.optOut,
+      aplicado: applied,
+      omitido: skipped,
+      conversation_id: body.conversation_id ?? null,
+    },
+    ended_at: now.toISOString(),
+    error: writeError,
+  };
+  // El cierre lleva la captura y el «no llamar»: si no llega, el vigilante
+  // cerraría la fila sin ellos. Un reintento; si tampoco, se avisa el fallo.
+  let { error: closeError } = await admin.from("voice_calls").update(cierre).eq("id", call.id);
+  if (closeError) ({ error: closeError } = await admin.from("voice_calls").update(cierre).eq("id", call.id));
+  if (closeError) {
+    console.error(`[voice-leads] registro sin cerrar (llamada ${call.id}): ${closeError.message}`);
+    return NextResponse.json({ ok: false, error: "no se pudo registrar" });
+  }
 
   // El guion ordena no reintentar si falla: la fila queda `failed` y una
   // persona retoma con la nota y la transcripción.

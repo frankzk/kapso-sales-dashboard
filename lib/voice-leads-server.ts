@@ -14,11 +14,10 @@ import { fetchConversationTranscript } from "@/lib/kapso";
 import type { ExperimentArm } from "@/lib/lead-experiment";
 import { categoryOf } from "@/lib/leads";
 import { clienteDialBody, dialTelnyx, telnyxPeruE164 } from "@/lib/telnyx";
-import { pickOpenCall, voiceDates } from "@/lib/voice-recovery";
+import { voiceDates } from "@/lib/voice-recovery";
 import {
   drain,
   loadDoNotCallPhones,
-  openCalls,
   sweepStaleCalls,
   telnyxConfig,
   voiceToolSecretMatches,
@@ -28,6 +27,7 @@ import { loadLeadCall, type LeadCallRow } from "@/lib/voice-leads-writeback";
 import { zadarmaLocalPeru } from "@/lib/zadarma";
 import {
   LEAD_VOICE_EXPERIMENT,
+  LEAD_VOICE_MATURATION_DAYS,
   LEAD_VOICE_HANDOFF_REASON,
   LEAD_VOICE_LANE,
   LEAD_VOICE_PURPOSE,
@@ -129,7 +129,7 @@ export interface LeadVoiceQueue {
 
 const QUEUE_LEAD_COLUMNS =
   "id, store_id, phone, name, status, category, has_order, order_id, source, ad_id, inbound_count, first_seen_at, " +
-  "last_inbound_at, claimed_at, next_followup_at, contact_opt_out_at, first_inbound_text, district, ad_headline, " +
+  "last_inbound_at, claimed_at, next_followup_at, contact_opt_out_at, handoff_at, first_inbound_text, district, ad_headline, " +
   "kapso_conversation_id";
 
 /** Lo que el agente toca de una persona: llamada, mensaje o venta con firma. */
@@ -508,19 +508,25 @@ export async function placeLeadCall(
   const legCfg = { ...cfg, fromNumber: env.telnyxLeadsFromNumber() };
   const dialed = await dialTelnyx(legCfg, clienteDialBody(legCfg, callId, to));
   if (!dialed.ok) {
-    // `cancelled`: a la persona no le sonó nada, así que no gasta intento
-    // (`attemptCounts`). `failed` queda para lo que sí marcó y se cayó.
+    // Telnyx dijo que no (4xx/5xx con cuerpo): a la persona no le sonó nada,
+    // `cancelled`, y no gasta intento (`attemptCounts`). Si en cambio Telnyx
+    // NO RESPONDIÓ (se cortó a los 15 s), la llamada puede estar sonando: es
+    // `failed`, gasta intento, y quien llamó no prueba otro lead en esta
+    // pasada (504), para no tener dos sonando a la vez.
+    const sinRespuesta = String((dialed.response as { error?: unknown } | undefined)?.error ?? "").startsWith(
+      "Telnyx no respondió",
+    );
     await admin
       .from("voice_calls")
       .update({
-        status: "cancelled",
+        status: sinRespuesta ? "failed" : "cancelled",
         outcome: "sin_resultado",
         error: dialed.error ?? "Telnyx no marcó.",
         telephony_response: dialed.response ?? null,
         ended_at: new Date().toISOString(),
       })
       .eq("id", callId);
-    return { ok: false, status: 502, error: dialed.error ?? "Telnyx no marcó.", callId };
+    return { ok: false, status: sinRespuesta ? 504 : 502, error: dialed.error ?? "Telnyx no marcó.", callId };
   }
   await admin
     .from("voice_calls")
@@ -534,7 +540,7 @@ export async function placeLeadCall(
 
 /**
  * La llamada de lead a la que se ata una tool: la del `voice_call_id` que el
- * agente recibió al conectar o, sin él, la ÚNICA de lead en el estado pedido.
+ * agente recibió al conectar, en el estado pedido. Sin id, ninguna.
  * Solo filas `purpose = 'lead'`: una tool de leads nunca toca una de pedido.
  */
 export async function bindLeadCall(
@@ -545,18 +551,15 @@ export async function bindLeadCall(
 ): Promise<{ call: LeadCallRow } | { error: string }> {
   const open = new Set(["queued", "dialing", "in_progress"]);
   const fits = (status: string) => (wanted === "open" ? open.has(status) : status === wanted);
+  void now;
+  // SOLO por el id que el inicio de conversación le dio al agente. Sin él no
+  // se adivina con «la única abierta»: una conversación sin id es justamente
+  // la que el inicio NO reconoció (otro número, una prueba en la consola), y
+  // atarla a la llamada en curso escribiría sobre el lead de OTRA persona.
   const id = String(voiceCallId ?? "").trim();
-  if (id) {
-    const call = await loadLeadCall(admin, id);
-    return call && fits(call.status) ? { call } : { error: "sin llamada en curso" };
-  }
-  const calls = await openCalls(admin, "lead");
-  let picked = pickOpenCall(calls, "in_progress", { now });
-  // Si el inicio de conversación no llegó, la fila sigue «marcando».
-  if ("error" in picked && wanted === "open") picked = pickOpenCall(calls, "dialing", { now });
-  if ("error" in picked) return { error: `sin llamada en curso (${picked.error})` };
-  const call = await loadLeadCall(admin, picked.call.id);
-  return call ? { call } : { error: "sin llamada en curso" };
+  if (!id) return { error: "sin voice_call_id: esta conversación no es una llamada de Kapta" };
+  const call = await loadLeadCall(admin, id);
+  return call && fits(call.status) ? { call } : { error: "sin llamada en curso" };
 }
 
 /**
@@ -704,6 +707,11 @@ export interface LeadVoicePilotArm {
   ventas: number;
   /** ventas / leads, en %; null sin leads. */
   conversion: number | null;
+  /**
+   * Sorteados hace menos de LEAD_VOICE_MATURATION_DAYS: todavía no entran a
+   * la comparación (las columnas de arriba son solo de los maduros).
+   */
+  pendientes: number;
 }
 
 export interface LeadVoicePilotReport {
@@ -741,9 +749,12 @@ export async function loadLeadVoicePilotReport(
   storeId: string,
   now: Date,
 ): Promise<LeadVoicePilotReport> {
-  // La firma lleva `now` como las demás lecturas del agente; el tablero mira
-  // todo el piloto, sin corte de fecha.
-  void now;
+  // Solo se comparan los sorteados hace LEAD_VOICE_MATURATION_DAYS o más: el
+  // agente compra antes (llama a las 2-4 h y la asesora genera el pedido ese
+  // día) y el control a veces compra días después. Con los recién sorteados
+  // adentro, un adelanto se leería como venta extra. Es el mismo corte que
+  // `read_lead_experiment` (7 días).
+  const maduroMs = now.getTime() - LEAD_VOICE_MATURATION_DAYS * 86_400_000;
   const assignments = await drain<{ lead_id: string; arm: ExperimentArm; assigned_at: string }>(
     "lead_experiments",
     (from, to) =>
@@ -816,9 +827,14 @@ export async function loadLeadVoicePilotReport(
       tocadosPorAsesora: 0,
       ventas: 0,
       conversion: null,
+      pendientes: 0,
     };
     for (const a of assignments) {
       if (a.arm !== arm) continue;
+      if (Date.parse(a.assigned_at) > maduroMs) {
+        row.pendientes += 1;
+        continue;
+      }
       row.leads += 1;
       const own = callsBy.get(a.lead_id) ?? [];
       if (own.length) row.llamados += 1;

@@ -2368,7 +2368,7 @@ function AutomationSections({ data }: { data: StoreSettingsData }) {
             label="Envío automático"
             defaultChecked={s.return_recovery_auto}
             on="Automático"
-            off="A mano"
+            off="Apagado"
           />
           <FieldGrid cols={3}>
             <TemplateFields
@@ -2721,7 +2721,7 @@ function LeadVoiceSection({ data }: { data: StoreSettingsData }) {
       title="Agente de voz · Leads (piloto)"
       badge={
         s.voice_lead_enabled ? (
-          <Badge tone="ok">{s.voice_lead_auto ? "Activo · automático" : "Activo · a mano"}</Badge>
+          <Badge tone="ok">{s.voice_lead_auto ? "Activo · automático" : "Activo · sin llamar"}</Badge>
         ) : (
           <Badge>Apagado</Badge>
         )
@@ -2735,8 +2735,9 @@ function LeadVoiceSection({ data }: { data: StoreSettingsData }) {
             que tomó para que una asesora genere el pedido: <strong>no crea pedidos</strong> ni cobra.
           </p>
           <p>
-            Son <strong>dos interruptores</strong>, como en Reproprovincia: el primero habilita la cola y el botón
-            del drawer del lead; el segundo deja que el barrido llame solo.
+            Son <strong>dos interruptores</strong>: el primero habilita al agente; el segundo deja que el barrido
+            llame solo. Solo llama el barrido: no hay llamada a mano desde el drawer, para que el sorteo no dependa de
+            a quién elige una asesora. «Probar en mi teléfono» funciona con los dos apagados.
           </p>
         </>
       }
@@ -2777,8 +2778,8 @@ function LeadVoiceSection({ data }: { data: StoreSettingsData }) {
         )}
         <ToggleRow
           name="voice_lead_enabled"
-          label="Cola y botón"
-          description="Apagado, el agente no llama a ningún lead: ni el barrido ni el botón del drawer."
+          label="Agente de leads"
+          description="Apagado, el agente no llama a ningún lead. «Probar en mi teléfono» funciona igual: sirve para escucharlo antes."
           defaultChecked={s.voice_lead_enabled}
           on="Habilitado"
           off="Deshabilitado"
@@ -2914,8 +2915,8 @@ function LeadVoiceSection({ data }: { data: StoreSettingsData }) {
           </Field>
         </FieldGrid>
         <BannerRow tone="info" title="El grupo de control nunca se llama">
-          Ni el barrido ni el botón del drawer: así se mide si el agente vende más de lo que venderían las asesoras
-          solas. Tampoco llama a quien pidió no ser contactado, se lo haya dicho a este agente o al de Reproprovincia.
+          Y en el drawer las asesoras no ven quién es de control ni quién está en la cola del agente: así se mide si el
+          agente vende más de lo que venderían las asesoras solas. Tampoco llama a quien pidió no ser contactado, se lo haya dicho a este agente o al de Reproprovincia.
         </BannerRow>
       </StoreForm>
 
@@ -2935,7 +2936,9 @@ function LeadVoicePilotBoard({ report }: { report: LeadVoicePilotReport | null }
   const dec1 = (x: number) => x.toLocaleString("es-PE", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
   const pct = (x: number | null) => (x == null ? "—" : `${dec1(x)}%`);
   const usd = (x: number) => `US$ ${x.toLocaleString("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  const sorteados = report ? report.arms.reduce((t, a) => t + a.leads, 0) : 0;
+  const maduros = report ? report.arms.reduce((t, a) => t + a.leads, 0) : 0;
+  const pendientes = report ? report.arms.reduce((t, a) => t + a.pendientes, 0) : 0;
+  const sorteados = maduros + pendientes;
   const trat = report?.arms.find((a) => a.arm === "tratamiento");
   const ctrl = report?.arms.find((a) => a.arm === "control");
   const diff = trat?.conversion != null && ctrl?.conversion != null ? trat.conversion - ctrl.conversion : null;
@@ -2946,9 +2949,10 @@ function LeadVoicePilotBoard({ report }: { report: LeadVoicePilotReport | null }
         title="Tablero del piloto"
         description={
           <p>
-            Por grupo, contando a cada lead sorteado aunque el agente no haya llegado a llamarlo. El control nunca se
-            llama: la medida es la <strong>conversión del tratamiento menos la del control</strong>, con al menos dos
-            semanas de datos.
+            Por grupo, contando a cada lead sorteado aunque el agente no haya llegado a llamarlo, y solo los sorteados
+            hace 7 días o más: el agente vende antes y, con los recientes adentro, un adelanto se leería como venta
+            extra. El control nunca se llama: la medida es la{" "}
+            <strong>conversión del tratamiento menos la del control</strong>, con al menos dos semanas de datos.
           </p>
         }
         aside={
@@ -3002,6 +3006,12 @@ function LeadVoicePilotBoard({ report }: { report: LeadVoicePilotReport | null }
             </table>
           </div>
           <div className={cn(ROW, "space-y-1.5 text-[13px] leading-5 text-ink-700")}>
+            {pendientes > 0 && (
+              <p className="text-ink-500">
+                {n(pendientes)} {pendientes === 1 ? "lead sorteado espera" : "leads sorteados esperan"} sus 7 días para
+                entrar a la comparación.
+              </p>
+            )}
             <p>
               {diff == null ? (
                 "Todavía falta un grupo con leads para comparar."

@@ -29,6 +29,8 @@ const state = vi.hoisted(() => ({
   sweeps: 0,
   coverage: "lima" as string | null,
   metaAds: [] as Record<string, unknown>[],
+  /** Cuántos cierres del registro (los que llevan `outcome_payload`) fallan antes de pasar. */
+  closeFailures: 0,
 }));
 
 const val = (q: Q, col: string) => q.filters.find((f) => f[0] === "eq" && f[1] === col)?.[2];
@@ -66,6 +68,11 @@ vi.mock("@/lib/db", () => {
         // La reserva del registro: `outcome` solo, con la guarda de «en curso».
         if (Object.keys(q.value).length === 1 && "outcome" in q.value) {
           return { data: state.reservation ? [{ id: val(q, "id") }] : [], error: null };
+        }
+        // El cierre del registro (lleva la captura y el «no llamar»): falla a pedido.
+        if ("outcome_payload" in q.value && state.closeFailures > 0) {
+          state.closeFailures -= 1;
+          return { data: null, error: { message: "timeout de PostgREST" } };
         }
         return { data: [{ id: val(q, "id") }], error: null };
       }
@@ -112,6 +119,7 @@ import { POST as postCall } from "@/app/api/voice/elevenlabs/post-call/route";
 import { GET as cron } from "@/app/api/cron/voice-leads/route";
 import { POST as reproInicio } from "@/app/api/voice/elevenlabs/inicio/route";
 import { LEAD_VOICE_VARS, leadVoiceArm, type LeadContext } from "@/lib/voice-leads";
+import { realCallsToday } from "@/lib/voice-recovery-server";
 
 const NOW = new Date("2026-10-12T17:00:00.000Z");
 const XAI = "secreto-xai";
@@ -119,6 +127,8 @@ const ELEVEN = "secreto-elevenlabs";
 const LEADS = "secreto-leads";
 const WEBHOOK = "whsec_test";
 const VC = "11111111-1111-4111-8111-111111111111";
+/** El número con que Kapta abre el tramo al agente de leads (TELNYX_LEADS_FROM_NUMBER). */
+const LEADS_FROM = "+51100000000";
 
 const ficha = {
   modo: "real",
@@ -133,6 +143,8 @@ const ficha = {
   hoy_texto: "lunes 12 de octubre",
   saludo: "buenas tardes",
   intento: "1",
+  ultimo_intento: "no",
+  horario: "de 9:00 a 20:00; los domingos desde las 11:00",
   es_volver_a_llamar: "no",
 };
 const leadContext: LeadContext = {
@@ -196,10 +208,12 @@ beforeEach(() => {
   state.sweeps = 0;
   state.coverage = "lima";
   state.metaAds = [];
+  state.closeFailures = 0;
 });
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
 
 // ── Secretos: cada agente por su puerta ─────────────────────────────────────
@@ -235,6 +249,8 @@ describe("inicio de conversación del agente de leads", () => {
     const out = await res.json();
     expect(Object.keys(out.dynamic_variables).sort()).toEqual([...LEAD_VOICE_VARS].sort());
     expect(out.dynamic_variables).toMatchObject({ encontrada: "si", voice_call_id: VC, nombre: "Ana", producto: "Shampoo Birú" });
+    // La ficha guardada viaja entera, también el último intento y el horario.
+    expect(out.dynamic_variables).toMatchObject({ ultimo_intento: "no", horario: "de 9:00 a 20:00; los domingos desde las 11:00" });
     expect(out.conversation_config_override.agent.first_message).toBe("Hola, buenas tardes. ¿Hablo con Ana?");
     const flip = writes("voice_calls")[0]!;
     expect(flip.value).toEqual({ status: "in_progress", started_at: NOW.toISOString() });
@@ -250,6 +266,68 @@ describe("inicio de conversación del agente de leads", () => {
     expect(out.dynamic_variables.encontrada).toBe("no");
     expect(Object.values(out.dynamic_variables).every((v) => typeof v === "string")).toBe(true);
     expect(writes()).toEqual([]);
+  });
+
+  // §11.8 tras el 24-09-2026: quien llama al número del agente mientras este
+  // marca a otra persona no recibe la ficha ajena.
+  describe("el caller ID: solo el tramo que abrió Kapta recibe la ficha", () => {
+    const marcando = () => {
+      state.open = [open({ status: "dialing", started_at: null })];
+      state.rows[VC] = row({ status: "dialing", started_at: null });
+    };
+    const iniciar = async (body: unknown) => (await inicio(req("/api/voice/leads/inicio", { secret: LEADS, body }))).json();
+
+    it("con el número de salida de leads, en cualquier formato, da la ficha y pasa la llamada a «en curso»", async () => {
+      vi.stubEnv("TELNYX_LEADS_FROM_NUMBER", LEADS_FROM);
+      for (const caller_id of ["+51100000000", "51100000000", "100000000", "sip:+51100000000@sip.telnyx.com"]) {
+        marcando();
+        state.log = [];
+        const out = await iniciar({ caller_id, called_number: "+51100000000", agent_id: "agent_leads" });
+        expect(out.dynamic_variables, caller_id).toMatchObject({ encontrada: "si", voice_call_id: VC, nombre: "Ana" });
+        expect(writes("voice_calls")[0]!.value, caller_id).toEqual({ status: "in_progress", started_at: NOW.toISOString() });
+      }
+    });
+
+    it("con otro caller ID: «no encontrada», sin nada de la ficha y sin tocar la llamada que marca", async () => {
+      vi.stubEnv("TELNYX_LEADS_FROM_NUMBER", LEADS_FROM);
+      // Un lead que devuelve una perdida, o el propio lead que está sonando:
+      // ninguno entra por el tramo de Kapta.
+      for (const caller_id of ["+51987650000", "987654321", "+15550000001"]) {
+        marcando();
+        state.log = [];
+        const res = await inicio(req("/api/voice/leads/inicio", { secret: LEADS, body: { caller_id, called_number: LEADS_FROM } }));
+        expect(res.status, caller_id).toBe(200);
+        const out = await res.json();
+        expect(Object.keys(out.dynamic_variables).sort()).toEqual([...LEAD_VOICE_VARS].sort());
+        expect(Object.values(out.dynamic_variables).every((v) => typeof v === "string")).toBe(true);
+        expect(out.dynamic_variables, caller_id).toMatchObject({ encontrada: "no", voice_call_id: "", nombre: "", producto: "", chat: "" });
+        expect(out.conversation_config_override.agent.first_message).toBe("Hola, buenas.");
+        const raw = JSON.stringify(out);
+        for (const ajeno of [VC, "Ana", "Shampoo", "precio?", "987654321"]) expect(raw, caller_id).not.toContain(ajeno);
+        // La fila del lead que suena sigue «marcando»: ni se pasa a «en curso».
+        expect(writes(), caller_id).toEqual([]);
+      }
+    });
+
+    it("sin caller ID en el aviso (o sin cuerpo legible) se acepta: no hay con qué compararlo", async () => {
+      vi.stubEnv("TELNYX_LEADS_FROM_NUMBER", LEADS_FROM);
+      for (const body of [{}, { called_number: LEADS_FROM, agent_id: "agent_leads" }, { caller_id: "" }, { caller_id: null }, "no-es-json"]) {
+        marcando();
+        const out = await iniciar(body);
+        expect(out.dynamic_variables.encontrada, JSON.stringify(body)).toBe("si");
+      }
+    });
+
+    it("sin TELNYX_LEADS_FROM_NUMBER compara con TELNYX_FROM_NUMBER, el mismo con que sale el tramo al agente", async () => {
+      vi.stubEnv("TELNYX_LEADS_FROM_NUMBER", "");
+      vi.stubEnv("TELNYX_FROM_NUMBER", "+15550000001");
+      marcando();
+      expect((await iniciar({ caller_id: "+15550000001" })).dynamic_variables.encontrada).toBe("si");
+      marcando();
+      state.log = [];
+      expect((await iniciar({ caller_id: LEADS_FROM })).dynamic_variables.encontrada).toBe("no");
+      expect(writes()).toEqual([]);
+    });
   });
 });
 
@@ -325,10 +403,110 @@ describe("registrar_resultado_lead", () => {
     expect(writes()).toEqual([]);
   });
 
-  it("sin voice_call_id: la única llamada de lead en curso", async () => {
+  it("sin voice_call_id no registra nada, aunque haya una llamada de lead en curso (nada de «la única abierta»)", async () => {
+    // Una conversación sin id es una que el inicio no reconoció: atarla a la
+    // llamada en curso escribiría sobre el lead de OTRA persona.
+    expect(state.open).toEqual([expect.objectContaining({ purpose: "lead", status: "in_progress" })]);
     const { voice_call_id: _omit, ...sinId } = body;
     void _omit;
-    expect(await (await registrar(req("/api/voice/leads/registrar", { secret: LEADS, body: sinId }))).json()).toEqual({ ok: true, modo: "real" });
+    for (const b of [sinId, { ...sinId, voice_call_id: "" }, { ...sinId, voice_call_id: "   " }, { ...sinId, resultado: "no_llamar" }]) {
+      const res = await (await registrar(req("/api/voice/leads/registrar", { secret: LEADS, body: b }))).json();
+      expect(res.ok, JSON.stringify(b)).toBe(false);
+      expect(res.error).toMatch(/voice_call_id/);
+    }
+    // Ni se lee una fila: no se adivina ninguna.
+    expect(state.log).toEqual([]);
+  });
+
+  it("un voice_call_id que no es de una llamada de lead no se cambia por otra abierta", async () => {
+    const res = await (
+      await registrar(req("/api/voice/leads/registrar", { secret: LEADS, body: { ...body, voice_call_id: "22222222-2222-4222-8222-222222222222" } }))
+    ).json();
+    expect(res).toEqual({ ok: false, error: "sin llamada en curso" });
+    expect(writes()).toEqual([]);
+  });
+
+  describe("el cierre de la fila (captura y «no llamar»)", () => {
+    const cierres = () => writes("voice_calls").filter((q) => "outcome_payload" in q.value);
+
+    it("si no llega, se reintenta una vez con lo mismo, y el lead se escribe una sola vez", async () => {
+      state.closeFailures = 1;
+      const res = await (await registrar(req("/api/voice/leads/registrar", { secret: LEADS, body }))).json();
+      expect(res).toEqual({ ok: true, modo: "real" });
+      const [primero, reintento, ...mas] = cierres();
+      expect(mas).toEqual([]);
+      expect(reintento!.value).toEqual(primero!.value);
+      expect(reintento!.filters).toContainEqual(["eq", "id", VC]);
+      expect(reintento!.value).toMatchObject({ status: "completed", outcome: "atender_ahora" });
+      expect(reintento!.value.outcome_payload.captura).toMatchObject({ distrito: "Surco", nombre: "Ana", promo: "3x2" });
+      // El reintento es solo del cierre: ni otra reserva ni otra nota.
+      expect(writes("voice_calls").filter((q) => Object.keys(q.value).length === 1)).toHaveLength(1);
+      expect(writes("lead_calls")).toHaveLength(1);
+      expect(writes("leads")).toHaveLength(1);
+    });
+
+    it("si tampoco llega al reintento, la tool responde el fallo (y no insiste una tercera vez)", async () => {
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        for (const mode of ["real", "test"] as const) {
+          state.log = [];
+          state.rows[VC] = row({ mode });
+          state.closeFailures = 2;
+          const res = await (await registrar(req("/api/voice/leads/registrar", { secret: LEADS, body }))).json();
+          expect(res, mode).toEqual({ ok: false, error: "no se pudo registrar" });
+          expect(cierres(), mode).toHaveLength(2);
+        }
+        // El log dice qué llamada quedó sin cerrar, sin datos de la persona.
+        expect(logged).toHaveBeenCalledWith(expect.stringContaining(VC));
+        expect(JSON.stringify(logged.mock.calls)).not.toContain("Ana");
+      } finally {
+        logged.mockRestore();
+      }
+    });
+  });
+
+  describe("la marca «no llamar» de la fila (la lista que leen los dos agentes)", () => {
+    const registrarCon = async (extra: Record<string, unknown>) =>
+      (await registrar(req("/api/voice/leads/registrar", { secret: LEADS, body: { ...body, ...extra } }))).json();
+    const marca = () => writes("voice_calls").at(-1)!.value.outcome_payload.no_llamar;
+    const optOut = () => writes("leads").filter((q) => "contact_opt_out_at" in q.value);
+
+    it("modo real: «no_llamar», o un «no» con «no me llamen» en el resumen, la ponen y apagan al lead", async () => {
+      for (const extra of [{ resultado: "no_llamar", resumen: "Pidió que no la llamen." }, { resultado: "no_compra", motivo: "precio", resumen: "No le interesa. No me llamen más." }]) {
+        state.log = [];
+        expect(await registrarCon(extra)).toEqual({ ok: true, modo: "real" });
+        expect(marca(), extra.resultado).toBe(true);
+        expect(optOut()[0]!.value, extra.resultado).toEqual({ contact_opt_out_at: NOW.toISOString() });
+      }
+    });
+
+    it("modo prueba: nunca, con ningún resultado (el teléfono era el de quien probaba)", async () => {
+      state.rows[VC] = row({ mode: "test" });
+      for (const extra of [
+        { resultado: "no_llamar", resumen: "No me llamen." },
+        { resultado: "no_compra", motivo: "precio", resumen: "No me llamen más." },
+        { resultado: "atender_ahora", resumen: "Quiere el 3x2." },
+      ]) {
+        state.log = [];
+        expect(await registrarCon(extra)).toEqual({ ok: true, modo: "test" });
+        expect(marca(), extra.resultado).toBe(false);
+        expect(writes("leads")).toEqual([]);
+      }
+    });
+
+    it("con «volver a llamar» o «quiere comprar», un «que no la llamen ahora» del resumen es una hora, no un pedido", async () => {
+      for (const extra of [
+        { resultado: "volver_a_llamar", fecha: "2026-10-14", hora: "10:00", resumen: "Está manejando; pidió que no la llamen en este momento, que la llamen mañana a las 10." },
+        // Frases que `pideNoContactar` sí lee como pedido: lo que manda es el resultado.
+        { resultado: "volver_a_llamar", fecha: "2026-10-14", hora: "10:00", resumen: "Pidió que no la llamen, está en el trabajo; el miércoles a las 10 sí." },
+        { resultado: "atender_ahora", resumen: "Quiere el 3x2. Que no la llamen, que le escriban por WhatsApp para el pedido." },
+      ]) {
+        state.log = [];
+        expect(await registrarCon(extra)).toEqual({ ok: true, modo: "real" });
+        expect(marca(), extra.resultado).toBe(false);
+        expect(optOut(), extra.resultado).toEqual([]);
+      }
+    });
   });
 });
 
@@ -345,10 +523,24 @@ describe("consultar_cobertura", () => {
     expect(writes()).toEqual([]);
   });
 
-  it("sin llamada de lead abierta: «por revisar», sin preguntar a la base", async () => {
-    state.open = [];
-    const out = await (await cobertura(req("/api/voice/leads/cobertura", { secret: LEADS, body: { distrito: "Surco" } }))).json();
-    expect(out).toMatchObject({ ok: false, cobertura: "por_revisar" });
+  it("sin voice_call_id: «por revisar» aunque haya una llamada de lead en curso, sin preguntar a la base", async () => {
+    // Antes respondía por la tienda de «la única abierta», que es la de otra conversación.
+    expect(state.open).toEqual([expect.objectContaining({ purpose: "lead", status: "in_progress" })]);
+    for (const b of [{ distrito: "Surco" }, { voice_call_id: "", distrito: "Surco" }, { voice_call_id: "  ", distrito: "Surco" }]) {
+      const out = await (await cobertura(req("/api/voice/leads/cobertura", { secret: LEADS, body: b }))).json();
+      expect(out, JSON.stringify(b)).toMatchObject({ ok: false, cobertura: "por_revisar", pago: "por_confirmar" });
+      expect(out.error).toMatch(/voice_call_id/);
+    }
+    expect(state.rpc).toEqual([]);
+    expect(state.log).toEqual([]);
+  });
+
+  it("con el id de una llamada que no es de lead, o ya cerrada: «por revisar»", async () => {
+    for (const r of [row({ purpose: "order", lead_id: null, order_id: "order-1" }), row({ status: "completed" })]) {
+      state.rows[VC] = r;
+      const out = await (await cobertura(req("/api/voice/leads/cobertura", { secret: LEADS, body: { voice_call_id: VC, distrito: "Surco" } }))).json();
+      expect(out).toMatchObject({ ok: false, cobertura: "por_revisar" });
+    }
     expect(state.rpc).toEqual([]);
   });
 });
@@ -447,62 +639,212 @@ describe("barrido /api/cron/voice-leads", () => {
     expect(writes().map((q) => q.table)).toEqual(["leads"]);
   });
 
-  it("en automático, en horario y con el carril libre: sortea y llama al primero por Telnyx", async () => {
-    vi.stubEnv("VERCEL_ENV", "production");
+  /** La línea del agente de leads lista en Vercel: Telnyx, su puerta SIP y su número. */
+  const telnyxListo = () => {
     for (const [k, v] of Object.entries({
       TELNYX_API_KEY: "k",
       TELNYX_CONNECTION_ID: "conn",
       TELNYX_FROM_NUMBER: "+15550000001",
       TELNYX_XAI_SIP_URI: "sip:xai@x",
       TELNYX_LEADS_SIP_URI: "sip:leads@x",
-      TELNYX_LEADS_FROM_NUMBER: "+51100000000",
+      TELNYX_LEADS_FROM_NUMBER: LEADS_FROM,
     })) vi.stubEnv(k, v);
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: { call_control_id: "cc-9" } }), { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-    let id = "";
-    for (let i = 0; !id; i++) {
+  };
+  /** Ids de lead que el sorteo (50 %) deja en ese brazo, en orden. */
+  const idsDelBrazo = (arm: "tratamiento" | "control", n: number) => {
+    const ids: string[] = [];
+    for (let i = 0; ids.length < n; i++) {
       const c = `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`;
-      if (leadVoiceArm(c, 50) === "tratamiento") id = c;
+      if (leadVoiceArm(c, 50) === arm) ids.push(c);
     }
+    return ids;
+  };
+  /** Un lead de Biru elegible a las 12:00 de Lima: escribió hace 5 h, dos veces o más. */
+  const leadDeLaCola = (id: string, phone = "51987654321") => ({
+    id,
+    store_id: "store",
+    phone,
+    name: "Ana",
+    status: "nuevo",
+    category: "open",
+    has_order: false,
+    order_id: null,
+    source: "meta_ad",
+    ad_id: "ad1",
+    inbound_count: 3,
+    first_seen_at: "2026-10-12T10:00:00.000Z",
+    last_inbound_at: "2026-10-12T12:00:00.000Z",
+    claimed_at: null,
+    next_followup_at: null,
+    contact_opt_out_at: null,
+    handoff_at: null,
+    first_inbound_text: "precio?",
+    district: null,
+    ad_headline: null,
+    kapso_conversation_id: null,
+  });
+  const tiendaEnAutomatico = () => {
     state.open = [];
     state.stores = [{ id: "store", name: "Kenku Peru", voice_lead_enabled: true, voice_lead_auto: true, voice_lead_campaign_ids: ["C1"] }];
     state.metaAds = [{ ad_id: "ad1", campaign_id: "C1" }];
-    state.lead = [
-      {
-        id,
-        store_id: "store",
-        phone: "51987654321",
-        name: "Ana",
-        status: "nuevo",
-        category: "open",
-        has_order: false,
-        order_id: null,
-        source: "meta_ad",
-        ad_id: "ad1",
-        inbound_count: 3,
-        first_seen_at: "2026-10-12T10:00:00.000Z",
-        last_inbound_at: "2026-10-12T12:00:00.000Z",
-        claimed_at: null,
-        next_followup_at: null,
-        contact_opt_out_at: null,
-        first_inbound_text: "precio?",
-        district: null,
-        ad_headline: null,
-        kapso_conversation_id: null,
-      },
-    ] as never;
-    try {
+  };
+  const telnyxOk = () => new Response(JSON.stringify({ data: { call_control_id: "cc-9" } }), { status: 200 });
+  const inserts = () => writes("voice_calls").filter((q) => q.op === "insert");
+  /** ¿Se armó la cola? Lee los leads de la tienda. */
+  const leyoLaCola = () => state.log.some((q) => q.table === "leads" && q.op === "select");
+
+  it("en automático, en horario y con el carril libre: sortea y llama al primero por Telnyx", async () => {
+    vi.stubEnv("VERCEL_ENV", "production");
+    telnyxListo();
+    const fetchMock = vi.fn(async () => telnyxOk());
+    vi.stubGlobal("fetch", fetchMock);
+    const [id] = idsDelBrazo("tratamiento", 1);
+    tiendaEnAutomatico();
+    state.lead = [leadDeLaCola(id!)] as never;
+    const out = await (await cron(cronReq())).json();
+    expect(out.stores[0]).toMatchObject({ action: "llamada", queue: 1, assigned: 1, tries: 1, called: { kind: "primera", attempt: 1 } });
+    expect(writes("lead_experiments")[0]!.value).toEqual([{ lead_id: id, store_id: "store", experiment: "agente_voz_leads_v1", arm: "tratamiento" }]);
+    expect(inserts()[0]!.value).toMatchObject({ lead_id: id, purpose: "lead", mode: "real", triggered_by: null });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // El log del barrido no lleva el teléfono ni el nombre del lead.
+    expect(JSON.stringify(out)).not.toContain("987654321");
+    expect(JSON.stringify(out)).not.toContain("Ana");
+  });
+
+  it("sin la línea del agente lista: «sin_configurar», sin sortear ni llamar (un brazo se guarda solo si se puede llamar)", async () => {
+    vi.stubEnv("VERCEL_ENV", "production");
+    const fetchMock = vi.fn(async () => telnyxOk());
+    vi.stubGlobal("fetch", fetchMock);
+    const [id] = idsDelBrazo("tratamiento", 1);
+    const faltas: [string, () => void][] = [
+      ["sin Telnyx", () => {}],
+      ["sin la puerta SIP de leads", () => (telnyxListo(), vi.stubEnv("TELNYX_LEADS_SIP_URI", ""))],
+      ["sin secreto propio de leads", () => (telnyxListo(), vi.stubEnv("VOICE_LEADS_TOOLS_SECRET", ""))],
+      ["con el secreto de leads igual al de Reproprovincia", () => (telnyxListo(), vi.stubEnv("VOICE_LEADS_TOOLS_SECRET", ELEVEN))],
+    ];
+    for (const [falta, configurar] of faltas) {
+      vi.unstubAllEnvs();
+      vi.stubEnv("VERCEL_ENV", "production");
+      vi.stubEnv("VOICE_TOOLS_SECRET", XAI);
+      vi.stubEnv("VOICE_TOOLS_SECRET_ELEVENLABS", ELEVEN);
+      vi.stubEnv("VOICE_LEADS_TOOLS_SECRET", LEADS);
+      vi.stubEnv("CRON_SECRET", "cron");
+      configurar();
+      tiendaEnAutomatico();
+      state.lead = [leadDeLaCola(id!)] as never;
+      state.log = [];
       const out = await (await cron(cronReq())).json();
-      expect(out.stores[0]).toMatchObject({ action: "llamada", queue: 1, assigned: 1, tries: 1, called: { kind: "primera", attempt: 1 } });
-      expect(writes("lead_experiments")[0]!.value).toEqual([{ lead_id: id, store_id: "store", experiment: "agente_voz_leads_v1", arm: "tratamiento" }]);
-      expect(writes("voice_calls").find((q) => q.op === "insert")!.value).toMatchObject({ lead_id: id, purpose: "lead", mode: "real", triggered_by: null });
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      // El log del barrido no lleva el teléfono ni el nombre del lead.
-      expect(JSON.stringify(out)).not.toContain("987654321");
-      expect(JSON.stringify(out)).not.toContain("Ana");
-    } finally {
-      vi.unstubAllGlobals();
+      expect(out.stores[0], falta).toMatchObject({ store: "Kenku Peru", action: "sin_configurar" });
+      expect(out.stores[0], falta).not.toHaveProperty("assigned");
+      expect(out.stores[0], falta).not.toHaveProperty("queue");
+      expect(leyoLaCola(), falta).toBe(false);
+      expect(writes("lead_experiments"), falta).toEqual([]);
+      expect(inserts(), falta).toEqual([]);
     }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("si el tope del día no se puede contar: «error» (no «tope_diario»), y no sortea ni llama", async () => {
+    vi.stubEnv("VERCEL_ENV", "production");
+    telnyxListo();
+    const fetchMock = vi.fn(async () => telnyxOk());
+    vi.stubGlobal("fetch", fetchMock);
+    tiendaEnAutomatico();
+    state.lead = [leadDeLaCola(idsDelBrazo("tratamiento", 1)[0]!)] as never;
+    vi.mocked(realCallsToday).mockResolvedValueOnce(null);
+    const out = await (await cron(cronReq())).json();
+    expect(out.stores[0]).toMatchObject({
+      action: "error",
+      error: "No se pudo leer el tope del día: no se llama hasta poder contarlo.",
+    });
+    expect(vi.mocked(realCallsToday)).toHaveBeenLastCalledWith(expect.anything(), "store", NOW, "lead");
+    expect(leyoLaCola()).toBe(false);
+    expect(writes("lead_experiments")).toEqual([]);
+    expect(inserts()).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("con el tope del día lleno sí es «tope_diario» (el de la tienda, 40 por defecto)", async () => {
+    vi.stubEnv("VERCEL_ENV", "production");
+    telnyxListo();
+    tiendaEnAutomatico();
+    state.lead = [leadDeLaCola(idsDelBrazo("tratamiento", 1)[0]!)] as never;
+    vi.mocked(realCallsToday).mockResolvedValueOnce(40);
+    const out = await (await cron(cronReq())).json();
+    expect(out.stores[0]).toMatchObject({ action: "tope_diario" });
+    expect(out.stores[0]).not.toHaveProperty("error");
+    expect(leyoLaCola()).toBe(false);
+    expect(inserts()).toEqual([]);
+  });
+
+  it("Telnyx no responde (504): la llamada puede estar sonando, cuenta como intento y no prueba otro lead", async () => {
+    vi.stubEnv("VERCEL_ENV", "production");
+    telnyxListo();
+    const fetchMock = vi.fn(async (): Promise<Response> => {
+      throw new Error("The operation was aborted due to timeout");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    tiendaEnAutomatico();
+    const ids = idsDelBrazo("tratamiento", 2);
+    state.lead = [leadDeLaCola(ids[0]!, "51987654321"), leadDeLaCola(ids[1]!, "51987654322")] as never;
+    const out = await (await cron(cronReq())).json();
+    expect(out.stores[0]).toMatchObject({ action: "error", queue: 2, tries: 1 });
+    expect(out.stores[0].error).toContain("Telnyx no respondió");
+    expect(out.stores[0]).not.toHaveProperty("called");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(inserts()).toHaveLength(1);
+    // `failed`, no `cancelled`: gasta intento (`attemptCounts`).
+    const cierre = writes("voice_calls").find((q) => q.op === "update" && q.value.outcome === "sin_resultado")!;
+    expect(cierre.value).toMatchObject({ status: "failed", outcome: "sin_resultado" });
+  });
+
+  it("tras un 504 ninguna otra tienda marca en esa pasada (la llamada puede seguir sonando)", () => {
+    const src = readFileSync(resolve(__dirname, "../app/api/cron/voice-leads/route.ts"), "utf8");
+    expect(src).toContain("if (placed.status === 504) laneBusy = true;");
+  });
+
+  it("un rechazo de Telnyx (502) sí pasa al siguiente de la cola", async () => {
+    vi.stubEnv("VERCEL_ENV", "production");
+    telnyxListo();
+    const fetchMock = vi
+      .fn(async (): Promise<Response> => telnyxOk())
+      .mockResolvedValueOnce(new Response(JSON.stringify({ errors: [{ title: "Invalid destination" }] }), { status: 422 }));
+    vi.stubGlobal("fetch", fetchMock);
+    tiendaEnAutomatico();
+    const ids = idsDelBrazo("tratamiento", 2);
+    state.lead = [leadDeLaCola(ids[0]!, "51987654321"), leadDeLaCola(ids[1]!, "51987654322")] as never;
+    const out = await (await cron(cronReq())).json();
+    expect(out.stores[0]).toMatchObject({ action: "llamada", queue: 2, tries: 2, called: { kind: "primera", attempt: 1 } });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(inserts()).toHaveLength(2);
+    // Al rechazado no le sonó nada: `cancelled`, no gasta intento.
+    const rechazo = writes("voice_calls").find((q) => q.op === "update" && q.value.outcome === "sin_resultado")!;
+    expect(rechazo.value).toMatchObject({ status: "cancelled" });
+  });
+
+  it("?dry=1 mira la cola como si el agente estuviera encendido (paso previo a encenderlo), sin sortear", async () => {
+    vi.stubEnv("VERCEL_ENV", "preview");
+    const [trat] = idsDelBrazo("tratamiento", 1);
+    const [ctrl] = idsDelBrazo("control", 1);
+    state.stores = [{ id: "store", name: "Kenku Peru", voice_lead_enabled: false, voice_lead_auto: false, voice_lead_campaign_ids: ["C1"] }];
+    state.metaAds = [{ ad_id: "ad1", campaign_id: "C1" }];
+    state.lead = [leadDeLaCola(trat!), leadDeLaCola(ctrl!, "51987654322")] as never;
+    const out = await (await cron(cronReq("?dry=1&storeId=store"))).json();
+    // Con la tienda apagada saldría todo `agente_apagado`; se ven las razones de verdad.
+    expect(out.stores).toEqual([{ store: "Kenku Peru", action: "dry", queue: 1, excluded: { grupo_control: 1 } }]);
+    expect(writes()).toEqual([]);
+    expect(state.sweeps).toBe(0);
+
+    // Sin ?dry=1 la misma tienda apagada no llama: el interruptor manda.
+    vi.stubEnv("VERCEL_ENV", "production");
+    telnyxListo();
+    const fetchMock = vi.fn(async () => telnyxOk());
+    vi.stubGlobal("fetch", fetchMock);
+    state.log = [];
+    const real = await (await cron(cronReq("?storeId=store"))).json();
+    expect(real.stores).toEqual([{ store: "Kenku Peru", action: "apagado" }]);
+    expect(writes()).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("el orden de las rejas: horario, tope propio, carril libre y recién ahí el sorteo", () => {
@@ -516,6 +858,8 @@ describe("barrido /api/cron/voice-leads", () => {
     expect(at("withinVoiceHours(now, s.hourStart, s.hourEnd)")).toBeLessThan(at('realCallsToday(admin, store.id, now, "lead")'));
     expect(at('realCallsToday(admin, store.id, now, "lead")')).toBeLessThan(at("if (laneBusy)"));
     expect(at("if (laneBusy)")).toBeLessThan(at("loadLeadVoiceQueue(admin, store, now, { assign: true })"));
+    // La línea lista antes del sorteo: un brazo se guarda solo si se puede llamar.
+    expect(at("if (!leadVoiceConfigured())")).toBeLessThan(at("loadLeadVoiceQueue(admin, store, now, { assign: true })"));
     expect(src).toContain('await openCalls(admin, "lead")');
     expect(src).toContain('if (process.env.VERCEL_ENV !== "production" && !dry)');
     expect(src).toContain("if (!dry) await sweepStaleCalls(admin, now);");

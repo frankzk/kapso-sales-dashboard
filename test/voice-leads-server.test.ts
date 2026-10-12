@@ -39,7 +39,9 @@ vi.mock("@/lib/telnyx", async (importOriginal) => ({
 vi.mock("@/lib/crypto", () => ({ decryptOrNull: (v: string | null | undefined) => (v ? "kapso-key" : null) }));
 
 import { voiceToolAuthorized } from "@/lib/voice-recovery-server";
+import { dialTelnyx } from "@/lib/telnyx";
 import {
+  bindLeadCall,
   buildLeadContext,
   leadToolAuthorized,
   leadTranscriptFrom,
@@ -56,6 +58,8 @@ import {
 import { applyLeadVoiceResult, loadLeadCall, writeLeadNoAnswer, type LeadCallRow } from "@/lib/voice-leads-writeback";
 import {
   LEAD_VOICE_EXPERIMENT,
+  LEAD_VOICE_MATURATION_DAYS,
+  attemptCounts,
   leadVoiceArm,
   leadVoiceSettingsFrom,
   translateLeadResult,
@@ -294,10 +298,73 @@ describe("loadLeadCall", () => {
   });
 });
 
+describe("bindLeadCall: las tools se atan SOLO por el voice_call_id que dio el inicio", () => {
+  const row = (over: Record<string, unknown> = {}) => ({
+    id: "vc-1",
+    store_id: "store",
+    lead_id: "lead-1",
+    purpose: "lead",
+    mode: "real",
+    status: "in_progress",
+    outcome: null,
+    dialed_at: "2026-10-12T16:58:00.000Z",
+    started_at: "2026-10-12T16:58:20.000Z",
+    lead_context: ctx(),
+    ...over,
+  });
+  // La base contesta con la fila a cualquier lectura de voice_calls: una lista
+  // (la «única abierta» de antes) o la fila por id.
+  const db = (over: Record<string, unknown> = {}) =>
+    fakeAdmin((q) => {
+      if (q.table !== "voice_calls") return {};
+      return has(q, "eq", "id", "vc-1") ? { data: row(over) } : { data: [row(over)] };
+    });
+
+  it("sin voice_call_id no se ata a nada, aunque haya UNA sola llamada de lead en curso (la de otra persona)", async () => {
+    for (const id of ["", "   ", null, undefined]) {
+      for (const wanted of ["in_progress", "open"] as const) {
+        const { admin, log } = db();
+        const r = await bindLeadCall(admin, id, wanted, NOW);
+        expect(r).toEqual({ error: expect.stringContaining("sin voice_call_id") });
+        // Ni siquiera mira las abiertas: no hay a quién adivinar.
+        expect(log).toEqual([]);
+      }
+    }
+  });
+
+  it("con su id: la fila de lead en curso, buscada por ese id (sin espacios)", async () => {
+    const { admin, log } = db();
+    const r = await bindLeadCall(admin, "  vc-1 ", "in_progress", NOW);
+    expect(r).toEqual({ call: expect.objectContaining({ id: "vc-1", lead_id: "lead-1", status: "in_progress", mode: "real" }) });
+    expect(log).toHaveLength(1);
+    expect(has(log[0]!, "eq", "id", "vc-1")).toBe(true);
+  });
+
+  it("«en curso» exige in_progress; «abierta» acepta queued, dialing o in_progress", async () => {
+    const bind = async (status: string, wanted: "in_progress" | "open") =>
+      bindLeadCall(db({ status }).admin, "vc-1", wanted, NOW);
+    expect(await bind("dialing", "in_progress")).toEqual({ error: "sin llamada en curso" });
+    for (const s of ["queued", "dialing", "in_progress"]) expect("call" in (await bind(s, "open"))).toBe(true);
+    for (const s of ["completed", "failed", "cancelled"]) {
+      expect(await bind(s, "open")).toEqual({ error: "sin llamada en curso" });
+      expect(await bind(s, "in_progress")).toEqual({ error: "sin llamada en curso" });
+    }
+  });
+
+  it("el id de una llamada de pedido, o uno que no existe, no ata nada", async () => {
+    expect(await bindLeadCall(db({ purpose: "order", lead_id: null }).admin, "vc-1", "open", NOW)).toEqual({
+      error: "sin llamada en curso",
+    });
+    expect(await bindLeadCall(fakeAdmin(() => ({ data: null })).admin, "vc-x", "open", NOW)).toEqual({
+      error: "sin llamada en curso",
+    });
+  });
+});
+
 // ── Lo que se escribe sobre el lead ─────────────────────────────────────────
 
 describe("applyLeadVoiceResult", () => {
-  const leadRow = { id: "lead-1", status: "nuevo", category: "open", has_order: false, order_id: null, next_followup_at: null };
+  const leadRow = { id: "lead-1", status: "nuevo", category: "open", has_order: false, order_id: null, next_followup_at: null, handoff_at: null };
   const db = (opts: { lead?: object | null; human?: boolean; updated?: number } = {}) =>
     fakeAdmin((q) => {
       if (q.table === "leads" && q.op === "select") return { data: opts.lead === undefined ? leadRow : opts.lead };
@@ -341,10 +408,13 @@ describe("applyLeadVoiceResult", () => {
     expect(has(upd[0]!, "in", "category", ["open", "hot"])).toBe(true);
     expect(has(upd[0]!, "eq", "has_order", false)).toBe(true);
     expect(has(upd[0]!, "eq", "store_id", "store")).toBe(true);
-    // Y antes miró si una asesora firmó algo después de marcar.
+    // …y el bot no lo pasó a «Atender ahora» después de marcar.
+    expect(has(upd[0]!, "or", "handoff_at.is.null,handoff_at.lte.2026-10-12T16:58:00.000Z")).toBe(true);
+    // Y antes miró si una asesora firmó algo después de marcar, y el handoff del lead.
     const human = log.find((q) => q.table === "lead_calls" && q.op === "select")!;
     expect(has(human, "not", "vendedora", "is", null)).toBe(true);
     expect(has(human, "gt", "occurred_at", "2026-10-12T16:58:00.000Z")).toBe(true);
+    expect(log.find((q) => q.table === "leads" && q.op === "select")!.cols).toContain("handoff_at");
 
     const note = writes(log, "lead_calls")[0]!.value;
     expect(note).toMatchObject({ kind: "voice_agent", vendedora: null, new_status: "casi_cierra", lead_id: "lead-1", store_id: "store" });
@@ -402,6 +472,106 @@ describe("applyLeadVoiceResult", () => {
     const r = await applyLeadVoiceResult(admin, call({ lead_context: null }), apply({ resultado: "atender_ahora", resumen: "" }), NOW);
     expect(r.skipped).toBe("estado_cambio");
     expect(writes(log, "leads")).toEqual([]);
+  });
+
+  describe("el bot lo pasó a «Atender ahora» durante la llamada (handoff_at posterior a dialed_at)", () => {
+    const SKIP_NOTE = "(no aplicado: volvió a escribir y el bot lo pasó a «Atender ahora» durante la llamada) Agente de voz";
+
+    it("no se aplica (sacaría el lead de «Atender ahora» con el mensaje sin responder), pero la nota queda", async () => {
+      for (const resultado of ["volver_a_llamar", "no_compra", "atender_ahora"] as const) {
+        const { admin, log } = db({ lead: { ...leadRow, handoff_at: "2026-10-12T16:59:00.000Z" } });
+        const r = await applyLeadVoiceResult(admin, call(), apply({ resultado, resumen: "Habló con el agente." }), NOW);
+        expect(r).toEqual({ applied: false, skipped: "handoff_posterior", error: null });
+        expect(writes(log, "leads")).toEqual([]);
+        const note = writes(log, "lead_calls")[0]!.value;
+        expect(note).toMatchObject({ kind: "voice_agent", vendedora: null, new_status: null, next_followup_at: null });
+        expect(note.note.startsWith(SKIP_NOTE)).toBe(true);
+      }
+    });
+
+    it("se compara como instante, no como texto: un handoff con huso de Lima también cuenta", async () => {
+      // «11:59-05:00» es 16:59 UTC, un minuto DESPUÉS de marcar (16:58 UTC);
+      // como texto sería menor que «16:58…Z».
+      const after = db({ lead: { ...leadRow, handoff_at: "2026-10-12T11:59:00-05:00" } });
+      expect((await applyLeadVoiceResult(after.admin, call(), apply({ resultado: "no_compra", resumen: "" }), NOW)).skipped).toBe(
+        "handoff_posterior",
+      );
+      // «11:57-05:00» es 16:57 UTC: antes de marcar, no frena.
+      const before = db({ lead: { ...leadRow, handoff_at: "2026-10-12T11:57:00-05:00" } });
+      expect(await applyLeadVoiceResult(before.admin, call(), apply({ resultado: "no_compra", resumen: "" }), NOW)).toEqual({
+        applied: true,
+        skipped: null,
+        error: null,
+      });
+    });
+
+    it("un handoff ANTERIOR a marcar, o en el mismo instante, no frena: se aplica con la guarda", async () => {
+      for (const handoff_at of ["2026-10-12T10:00:00.000Z", "2026-10-12T16:58:00.000Z"]) {
+        const { admin, log } = db({ lead: { ...leadRow, handoff_at } });
+        const r = await applyLeadVoiceResult(admin, call(), apply({ resultado: "volver_a_llamar", resumen: "Mañana." }), NOW);
+        expect(r).toEqual({ applied: true, skipped: null, error: null });
+        const upd = writes(log, "leads");
+        expect(upd).toHaveLength(1);
+        expect(has(upd[0]!, "or", "handoff_at.is.null,handoff_at.lte.2026-10-12T16:58:00.000Z")).toBe(true);
+      }
+    });
+
+    it("la guarda de verdad es el update: si el handoff llega entre la lectura y el update, no toca el lead", async () => {
+      // La lectura no vio handoff; el update condicional (con el filtro de
+      // handoff_at) no encontró la fila porque el bot la movió en el medio.
+      const { admin, log } = db({ updated: 0 });
+      const r = await applyLeadVoiceResult(admin, call(), apply({ resultado: "no_compra", resumen: "" }), NOW);
+      expect(r).toEqual({ applied: false, skipped: "estado_cambio", error: null });
+      const upd = writes(log, "leads");
+      expect(upd).toHaveLength(1);
+      expect(upd[0]!.filters.some((f) => f[0] === "or" && String(f[1]).startsWith("handoff_at.is.null,"))).toBe(true);
+      expect(writes(log, "lead_calls")[0]!.value.new_status).toBeNull();
+    });
+
+    it("el filtro va en UTC con «Z», aunque dialed_at llegue con «+00:00» u otro huso", async () => {
+      for (const dialed_at of ["2026-10-12T16:58:00+00:00", "2026-10-12T11:58:00-05:00", "2026-10-12T16:58:00.000Z"]) {
+        const { admin, log } = db();
+        await applyLeadVoiceResult(admin, call({ dialed_at }), apply({ resultado: "no_compra", resumen: "" }), NOW);
+        const upd = writes(log, "leads")[0]!;
+        expect(has(upd, "or", "handoff_at.is.null,handoff_at.lte.2026-10-12T16:58:00.000Z")).toBe(true);
+        expect(upd.filters.filter((f) => f[0] === "or")).toHaveLength(1);
+      }
+    });
+
+    it("sin dialed_at, la referencia es started_at", async () => {
+      const { admin, log } = db({ lead: { ...leadRow, handoff_at: "2026-10-12T16:58:10.000Z" } });
+      // 16:58:10 es anterior a started_at (16:58:20): no frena.
+      const r = await applyLeadVoiceResult(admin, call({ dialed_at: null }), apply({ resultado: "no_compra", resumen: "" }), NOW);
+      expect(r.applied).toBe(true);
+      expect(has(writes(log, "leads")[0]!, "or", "handoff_at.is.null,handoff_at.lte.2026-10-12T16:58:20.000Z")).toBe(true);
+    });
+
+    it("«no me llamen» se marca igual: la voluntad de la persona no depende del handoff", async () => {
+      const { admin, log } = db({ lead: { ...leadRow, handoff_at: "2026-10-12T16:59:00.000Z" } });
+      const r = await applyLeadVoiceResult(admin, call(), apply({ resultado: "no_llamar", resumen: "No me llamen." }), NOW);
+      expect(r).toEqual({ applied: false, skipped: "handoff_posterior", error: null });
+      const upd = writes(log, "leads");
+      expect(upd).toHaveLength(1);
+      expect(upd[0]!.value).toEqual({ contact_opt_out_at: NOW.toISOString() });
+    });
+
+    it("orden de las razones: ganado y gestión de asesora van antes; el handoff antes que el cambio de estado", async () => {
+      const handoff = { ...leadRow, handoff_at: "2026-10-12T16:59:00.000Z" };
+      const run = async (o: Parameters<typeof db>[0]) =>
+        (await applyLeadVoiceResult(db(o).admin, call(), apply({ resultado: "no_compra", resumen: "" }), NOW)).skipped;
+      expect(await run({ lead: { ...handoff, has_order: true, category: "won" } })).toBe("ganado");
+      expect(await run({ lead: handoff, human: true })).toBe("gestion_humana_posterior");
+      // El handoff suele mover el estado: la razón que se anota es el handoff, que es la que explica.
+      expect(await run({ lead: { ...handoff, status: "casi_cierra", category: "hot" } })).toBe("handoff_posterior");
+    });
+
+    it("«no contestó» registrado por el agente no mira el handoff: solo la nota", async () => {
+      const { admin, log } = db({ lead: { ...leadRow, handoff_at: "2026-10-12T16:59:00.000Z" } });
+      const r = await applyLeadVoiceResult(admin, call(), apply({ resultado: "no_contesta", resumen: "Buzón." }), NOW);
+      expect(r).toEqual({ applied: false, skipped: null, error: null });
+      expect(writes(log, "leads")).toEqual([]);
+      expect(writes(log, "lead_calls")[0]!.value.note).not.toContain("no aplicado");
+    });
   });
 });
 
@@ -479,6 +649,7 @@ const lead = (id: string, phone: string, over: Record<string, unknown> = {}) => 
   claimed_at: null,
   next_followup_at: null,
   contact_opt_out_at: null,
+  handoff_at: null,
   first_inbound_text: "Hola, ¿precio?",
   district: null,
   ad_headline: "Biru",
@@ -543,6 +714,10 @@ describe("loadLeadVoiceQueue", () => {
     // La ventana va en la consulta; meta_ads con la llave de servicio.
     const leadsQ = log.find((x) => x.table === "leads")!;
     expect(leadsQ.filters.some((f) => f[0] === "or")).toBe(true);
+    // Lo que la regla necesita del lead, el handoff incluido (handoff_pendiente).
+    for (const col of ["claimed_at", "next_followup_at", "contact_opt_out_at", "handoff_at", "inbound_count"]) {
+      expect(leadsQ.cols!.split(",").map((c) => c.trim())).toContain(col);
+    }
     expect(has(leadsQ, "eq", "source", "meta_ad")).toBe(true);
     expect(has(leadsQ, "gte", "inbound_count", 2)).toBe(true);
     // Toques humanos: solo los firmados de llamada, mensaje o venta.
@@ -604,6 +779,52 @@ describe("loadLeadVoiceQueue", () => {
     expect(q.candidates).toEqual([]);
     expect(new Set(Object.values(q.reasons))).toEqual(new Set(["agente_apagado"]));
   });
+
+  describe("el «volver a llamar» del agente, con lo que la cola lee de la base", () => {
+    // El agente llamó a las 14:00 UTC y la persona pidió que la llamen a las 16:00.
+    const AGENT_CALL = { id: "v1", lead_id: T1, queued_at: "2026-10-12T14:00:00.000Z", status: "completed", outcome: "volver_a_llamar" };
+    const callbackDb = (leadOver: Record<string, unknown>, calls: object[]) =>
+      fakeAdmin((q) => {
+        if (q.table === "leads") {
+          return {
+            data: [lead(T1, "51911111111", { status: "volver_a_llamar", next_followup_at: "2026-10-12T16:00:00.000Z", ...leadOver })],
+          };
+        }
+        if (q.table === "meta_ads") return { data: [{ ad_id: "ad1", campaign_id: "C1" }] };
+        if (q.table === "voice_calls") return { data: calls };
+        return { data: [] };
+      });
+
+    it("volvió a escribir después de la llamada del agente y el bot lo pasó a «Atender ahora»: handoff_pendiente", async () => {
+      const { admin } = callbackDb({ handoff_at: "2026-10-12T15:00:00.000Z" }, [AGENT_CALL]);
+      const q = await loadLeadVoiceQueue(admin, store(), NOW, { leadId: T1 });
+      expect(q.candidates).toEqual([]);
+      expect(q.reasons[T1]).toBe("handoff_pendiente");
+    });
+
+    it("un handoff de ANTES de la llamada del agente no frena el «volver a llamar»", async () => {
+      for (const handoff_at of [null, "2026-10-12T13:00:00.000Z"]) {
+        const { admin } = callbackDb({ handoff_at }, [AGENT_CALL]);
+        const q = await loadLeadVoiceQueue(admin, store(), NOW, { leadId: T1 });
+        expect(q.reasons[T1]).toBeUndefined();
+        expect(q.candidates).toHaveLength(1);
+        expect(q.candidates[0]).toMatchObject({ kind: "volver_a_llamar", arm: "tratamiento", attempt: 2 });
+      }
+    });
+
+    it("si Telnyx rechazó el callback (cancelled), la persona sigue esperando: se reintenta sin gastar intento", async () => {
+      const rejected = { id: "v2", lead_id: T1, queued_at: "2026-10-12T16:02:00.000Z", status: "cancelled", outcome: "sin_resultado" };
+      const { admin } = callbackDb({}, [AGENT_CALL, rejected]);
+      const q = await loadLeadVoiceQueue(admin, store(), NOW, { leadId: T1 });
+      expect(q.reasons[T1]).toBeUndefined();
+      // Intento 2: el rechazado no sonó y no cuenta.
+      expect(q.candidates[0]).toMatchObject({ kind: "volver_a_llamar", attempt: 2 });
+
+      // Y el handoff se compara con la llamada que de verdad salió (14:00), no con la rechazada.
+      const withHandoff = callbackDb({ handoff_at: "2026-10-12T15:00:00.000Z" }, [AGENT_CALL, rejected]);
+      expect((await loadLeadVoiceQueue(withHandoff.admin, store(), NOW, { leadId: T1 })).reasons[T1]).toBe("handoff_pendiente");
+    });
+  });
 });
 
 // ── Lo que el agente escucha ────────────────────────────────────────────────
@@ -637,6 +858,20 @@ describe("buildLeadContext", () => {
     expect(c.ficha.chat).not.toContain("https://");
     expect(c).toMatchObject({ estado_al_marcar: "nuevo", tipo: "primera", intento: 1, max_intentos: 2, campaign_id: "C1" });
     expect(c.ficha).toMatchObject({ modo: "real", nombre: "Ana", producto: "Shampoo Birú anticaspa", oferta: "1 unidad S/ 85" });
+    // El agente sabe cuándo puede volver a llamar y si le queda otro intento.
+    expect(c.ficha).toMatchObject({ intento: "1", ultimo_intento: "no", horario: "de 9:00 a 20:00; los domingos desde las 11:00" });
+  });
+
+  it("el último intento y el horario salen de los ajustes de la tienda", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("no", { status: 401 })));
+    const s = store({ voice_lead_max_attempts: 2, voice_lead_hour_start: 12, voice_lead_hour_end: 19 });
+    const c = await buildLeadContext(db().admin, s, { ...entry(), attempt: 2, kind: "volver_a_llamar" }, NOW, "real");
+    expect(c.ficha).toMatchObject({
+      intento: "2",
+      ultimo_intento: "si",
+      es_volver_a_llamar: "si",
+      horario: "de 12:00 a 19:00; los domingos desde las 12:00",
+    });
   });
 
   it("si Kapso falla, se llama igual sin chat (chat_ok = false)", async () => {
@@ -717,12 +952,79 @@ describe("placeLeadCall", () => {
     expect(mocks.dialCalls).toEqual([]);
   });
 
-  it("Telnyx no marcó: la fila queda cancelled / sin_resultado (no gasta intento)", async () => {
-    mocks.dial = { ok: false, error: "Telnyx rechazó la llamada (422)" };
+  it("Telnyx rechazó la llamada (respondió con un error): cancelled / sin_resultado y 502 (no sonó, no gasta intento)", async () => {
+    const response = { errors: [{ title: "Invalid destination", detail: "D11" }] };
+    mocks.dial = { ok: false, error: "Telnyx rechazó la llamada (422): Invalid destination: D11", response };
     const { admin, log } = fakeAdmin((q) => (q.op === "insert" ? { data: { id: "vc-9" } } : {}));
     const r = await placeLeadCall(admin, input(), NOW);
-    expect(r).toMatchObject({ ok: false, status: 502, callId: "vc-9" });
-    expect(writes(log, "voice_calls")[1]!.value).toMatchObject({ status: "cancelled", outcome: "sin_resultado" });
+    expect(r).toEqual({ ok: false, status: 502, error: "Telnyx rechazó la llamada (422): Invalid destination: D11", callId: "vc-9" });
+    const upd = writes(log, "voice_calls")[1]!;
+    expect(upd.value).toMatchObject({
+      status: "cancelled",
+      outcome: "sin_resultado",
+      error: "Telnyx rechazó la llamada (422): Invalid destination: D11",
+      telephony_response: response,
+    });
+    expect(has(upd, "eq", "id", "vc-9")).toBe(true);
+    expect(attemptCounts({ queued_at: NOW.toISOString(), status: upd.value.status, outcome: upd.value.outcome })).toBe(false);
+  });
+
+  it("un rechazo sin cuerpo, o que no es un corte por tiempo, también es cancelled / 502", async () => {
+    for (const dial of [
+      { ok: false, error: "Telnyx rechazó la llamada (422)" },
+      { ok: false, error: "Telnyx no devolvió el id de la llamada.", response: {} },
+      { ok: false, error: "Telnyx rechazó la llamada (503): Service unavailable", response: { error: "Service unavailable" } },
+    ]) {
+      mocks.dial = dial;
+      const { admin, log } = fakeAdmin((q) => (q.op === "insert" ? { data: { id: "vc-9" } } : {}));
+      expect(await placeLeadCall(admin, input(), NOW)).toMatchObject({ ok: false, status: 502, callId: "vc-9" });
+      expect(writes(log, "voice_calls")[1]!.value.status).toBe("cancelled");
+    }
+  });
+
+  it("Telnyx NO respondió (se cortó a los 15 s): failed y 504 — puede estar sonando, gasta intento", async () => {
+    const response = { error: "Telnyx no respondió: The operation was aborted due to timeout" };
+    mocks.dial = { ok: false, error: `Telnyx rechazó la llamada (0): ${response.error}`, response };
+    const { admin, log } = fakeAdmin((q) => (q.op === "insert" ? { data: { id: "vc-9" } } : {}));
+    const r = await placeLeadCall(admin, input(), NOW);
+    // 504 y no 502: quien llamó (el barrido) no prueba otro lead en esta pasada,
+    // para no tener dos sonando a la vez.
+    expect(r).toEqual({ ok: false, status: 504, error: `Telnyx rechazó la llamada (0): ${response.error}`, callId: "vc-9" });
+    const upd = writes(log, "voice_calls")[1]!;
+    expect(upd.value).toMatchObject({ status: "failed", outcome: "sin_resultado", telephony_response: response });
+    expect(has(upd, "eq", "id", "vc-9")).toBe(true);
+    // Cuenta como intento: si sonó, a la persona ya la llamaron.
+    expect(attemptCounts({ queued_at: NOW.toISOString(), status: upd.value.status, outcome: upd.value.outcome })).toBe(true);
+  });
+
+  describe("con el dialTelnyx de verdad (solo fetch es doble)", () => {
+    beforeEach(async () => {
+      const real = await vi.importActual<typeof import("@/lib/telnyx")>("@/lib/telnyx");
+      vi.mocked(dialTelnyx).mockImplementationOnce(real.dialTelnyx);
+    });
+
+    it("fetch que se corta por tiempo: failed / 504", async () => {
+      const fetchMock = vi.fn(async () => {
+        throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const { admin, log } = fakeAdmin((q) => (q.op === "insert" ? { data: { id: "vc-9" } } : {}));
+      const r = await placeLeadCall(admin, input(), NOW);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(r).toMatchObject({ ok: false, status: 504, callId: "vc-9" });
+      expect(writes(log, "voice_calls")[1]!.value).toMatchObject({ status: "failed", outcome: "sin_resultado" });
+    });
+
+    it("Telnyx contesta 422 con su error: cancelled / 502", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(JSON.stringify({ errors: [{ title: "Invalid destination", detail: "D11" }] }), { status: 422 })),
+      );
+      const { admin, log } = fakeAdmin((q) => (q.op === "insert" ? { data: { id: "vc-9" } } : {}));
+      const r = await placeLeadCall(admin, input(), NOW);
+      expect(r).toEqual({ ok: false, status: 502, error: "Telnyx rechazó la llamada (422): Invalid destination: D11", callId: "vc-9" });
+      expect(writes(log, "voice_calls")[1]!.value).toMatchObject({ status: "cancelled", outcome: "sin_resultado" });
+    });
   });
 });
 
@@ -761,13 +1063,14 @@ describe("leadVoiceCoverage", () => {
 
 describe("loadLeadVoicePilotReport", () => {
   it("por brazo e intención de tratar, y la línea del agente", async () => {
-    const { admin } = fakeAdmin((q) => {
+    // Sorteados hace 8 días: ya maduraron y entran a la comparación.
+    const { admin, log } = fakeAdmin((q) => {
       if (q.table === "lead_experiments") {
         return {
           data: [
-            { lead_id: "t1", arm: "tratamiento", assigned_at: "2026-10-12T10:00:00Z" },
-            { lead_id: "t2", arm: "tratamiento", assigned_at: "2026-10-12T11:00:00Z" },
-            { lead_id: "c1", arm: "control", assigned_at: "2026-10-12T09:00:00Z" },
+            { lead_id: "t1", arm: "tratamiento", assigned_at: "2026-10-04T10:00:00Z" },
+            { lead_id: "t2", arm: "tratamiento", assigned_at: "2026-10-04T11:00:00Z" },
+            { lead_id: "c1", arm: "control", assigned_at: "2026-10-04T09:00:00Z" },
           ],
         };
       }
@@ -792,16 +1095,39 @@ describe("loadLeadVoicePilotReport", () => {
         };
       }
       if (q.table === "lead_calls") {
-        return { data: [{ lead_id: "t1", occurred_at: "2026-10-12T12:00:00Z" }, { lead_id: "c1", occurred_at: "2026-10-12T08:00:00Z" }] };
+        return { data: [{ lead_id: "t1", occurred_at: "2026-10-04T12:00:00Z" }, { lead_id: "c1", occurred_at: "2026-10-04T08:00:00Z" }] };
       }
       return {};
     });
     const r = await loadLeadVoicePilotReport(admin, "store", NOW);
-    expect(r.since).toBe("2026-10-12T09:00:00Z");
+    const assignQ = log.find((q) => q.table === "lead_experiments")!;
+    expect(has(assignQ, "eq", "experiment", LEAD_VOICE_EXPERIMENT)).toBe(true);
+    expect(has(assignQ, "eq", "store_id", "store")).toBe(true);
+    expect(r.since).toBe("2026-10-04T09:00:00Z");
     const [t, c] = r.arms;
-    expect(t).toEqual({ arm: "tratamiento", leads: 2, llamados: 2, contestaron: 2, atenderAhora: 1, tocadosPorAsesora: 1, ventas: 1, conversion: 50 });
+    expect(t).toEqual({
+      arm: "tratamiento",
+      leads: 2,
+      llamados: 2,
+      contestaron: 2,
+      atenderAhora: 1,
+      tocadosPorAsesora: 1,
+      ventas: 1,
+      conversion: 50,
+      pendientes: 0,
+    });
     // El toque de c1 fue ANTES del sorteo: no cuenta.
-    expect(c).toEqual({ arm: "control", leads: 1, llamados: 0, contestaron: 0, atenderAhora: 0, tocadosPorAsesora: 0, ventas: 0, conversion: 0 });
+    expect(c).toEqual({
+      arm: "control",
+      leads: 1,
+      llamados: 0,
+      contestaron: 0,
+      atenderAhora: 0,
+      tocadosPorAsesora: 0,
+      ventas: 0,
+      conversion: 0,
+      pendientes: 0,
+    });
     expect(r.agente).toEqual({
       llamadas: 4, // la que Telnyx rechazó no cuenta
       contestadas: 3,
@@ -815,5 +1141,107 @@ describe("loadLeadVoicePilotReport", () => {
       conCosto: 3,
     });
     expect(r.motivos).toEqual([{ motivo: "precio", n: 1 }]);
+  });
+
+  describe(`maduración: solo comparan los sorteados hace ${LEAD_VOICE_MATURATION_DAYS} días o más`, () => {
+    const DAY = 86_400_000;
+    const cutoff = new Date(NOW.getTime() - LEAD_VOICE_MATURATION_DAYS * DAY).toISOString(); // 2026-10-05T17:00:00.000Z
+    const justAfter = new Date(Date.parse(cutoff) + 1).toISOString();
+
+    // Los recién sorteados son los que más rápido «venden» con el agente:
+    // llamado a las 2 h, «Atender ahora» y pedido el mismo día.
+    const pilotDb = () =>
+      fakeAdmin((q) => {
+        if (q.table === "lead_experiments") {
+          return {
+            data: [
+              { lead_id: "tOld", arm: "tratamiento", assigned_at: cutoff }, // exactamente 7 días: entra
+              { lead_id: "tEdge", arm: "tratamiento", assigned_at: justAfter }, // 1 ms menos: espera
+              { lead_id: "tHoy", arm: "tratamiento", assigned_at: "2026-10-12T15:00:00Z" },
+              { lead_id: "cOld", arm: "control", assigned_at: "2026-10-01T10:00:00Z" },
+              { lead_id: "cNew", arm: "control", assigned_at: "2026-10-11T10:00:00Z" },
+            ],
+          };
+        }
+        if (q.table === "leads") {
+          return {
+            data: [
+              { id: "tOld", category: "lost", has_order: false, order_id: null },
+              { id: "tEdge", category: "won", has_order: true, order_id: "o0" },
+              { id: "tHoy", category: "won", has_order: true, order_id: "o1" },
+              { id: "cOld", category: "open", has_order: false, order_id: null },
+              { id: "cNew", category: "won", has_order: true, order_id: "o2" },
+            ],
+          };
+        }
+        if (q.table === "voice_calls") {
+          return {
+            data: [
+              { lead_id: "tOld", status: "completed", queued_at: "a", started_at: "s", outcome: "no_compra", error: null, motivo: "precio", costo: 0.02 },
+              { lead_id: "tHoy", status: "completed", queued_at: "b", started_at: "s", outcome: "atender_ahora", error: null, motivo: null, costo: 0.05 },
+            ],
+          };
+        }
+        if (q.table === "lead_calls") {
+          // Tocados después de su sorteo: el de tOld cuenta; el de cNew espera con él.
+          return { data: [{ lead_id: "tOld", occurred_at: "2026-10-06T10:00:00Z" }, { lead_id: "cNew", occurred_at: "2026-10-11T12:00:00Z" }] };
+        }
+        return {};
+      });
+
+    it("los recientes salen aparte como «pendientes» y no entran a ninguna columna del brazo", async () => {
+      const r = await loadLeadVoicePilotReport(pilotDb().admin, "store", NOW);
+      const [t, c] = r.arms;
+      expect(t).toEqual({
+        arm: "tratamiento",
+        leads: 1,
+        llamados: 1,
+        contestaron: 1,
+        atenderAhora: 0, // el «Atender ahora» de tHoy espera sus 7 días
+        tocadosPorAsesora: 1,
+        ventas: 0, // las ventas de tEdge y tHoy, también
+        conversion: 0,
+        pendientes: 2,
+      });
+      expect(c).toEqual({
+        arm: "control",
+        leads: 1,
+        llamados: 0,
+        contestaron: 0,
+        atenderAhora: 0,
+        tocadosPorAsesora: 0,
+        ventas: 0,
+        conversion: 0,
+        pendientes: 1,
+      });
+      // Desde cuándo corre el piloto: el primer sorteo, maduro o no.
+      expect(r.since).toBe("2026-10-01T10:00:00Z");
+    });
+
+    it("el corte se mide desde `now`: los mismos sorteos, una semana después, ya comparan todos", async () => {
+      const later = new Date(NOW.getTime() + LEAD_VOICE_MATURATION_DAYS * DAY);
+      const [t, c] = (await loadLeadVoicePilotReport(pilotDb().admin, "store", later)).arms;
+      expect(t).toMatchObject({ leads: 3, atenderAhora: 1, ventas: 2, conversion: 66.7, pendientes: 0 });
+      expect(c).toMatchObject({ leads: 2, ventas: 1, tocadosPorAsesora: 1, conversion: 50, pendientes: 0 });
+    });
+
+    it("con todo recién sorteado, ningún brazo compara todavía (conversión null)", async () => {
+      const { admin } = fakeAdmin((q) => {
+        if (q.table === "lead_experiments") {
+          return {
+            data: [
+              { lead_id: "t", arm: "tratamiento", assigned_at: "2026-10-12T10:00:00Z" },
+              { lead_id: "c", arm: "control", assigned_at: "2026-10-10T10:00:00Z" },
+            ],
+          };
+        }
+        if (q.table === "leads") return { data: [{ id: "t", category: "won", has_order: true, order_id: "o1" }] };
+        return { data: [] };
+      });
+      const r = await loadLeadVoicePilotReport(admin, "store", NOW);
+      for (const a of r.arms) {
+        expect(a).toMatchObject({ leads: 0, ventas: 0, conversion: null, pendientes: 1 });
+      }
+    });
   });
 });

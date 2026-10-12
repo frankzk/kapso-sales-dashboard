@@ -2,11 +2,16 @@
 
 // Agente de voz de leads en el drawer de Leads (MOM §33).
 //
-// El mismo patrón que el panel de Reproprovincia (components/voice-agent-panel)
-// con el estilo del drawer de leads: si el lead entra a la cola del agente (y
-// si no, por qué, con la misma frase que decide el barrido), su brazo del
-// sorteo, llamar con el agente, y probar el agente con la ficha de ESTE lead en
-// otro teléfono sin escribir nada sobre él. Debajo, sus llamadas.
+// Lo que el agente ya hizo con este lead (sus llamadas y si pidió no ser
+// contactado) y «Probar en mi teléfono»: el agente con la ficha de ESTE lead,
+// llamando a quien prueba, sin escribir nada sobre él.
+//
+// A CIEGAS, a propósito (MOM §33.3): el panel no dice si el lead entra a la
+// cola del agente ni a qué brazo del sorteo cayó, y no hay botón para que lo
+// llame a mano. Una asesora que lee «grupo de control» o «el agente lo llama»
+// trabaja ese lead distinto —el repo ya lo midió con el experimento del frío
+// (lib/lead-experiment.ts, v1)— y la comparación deja de medir al agente.
+// Quién llama y cuándo lo decide solo el barrido.
 //
 // No importa lib/voice-leads: arrastra lib/voice-recovery y con él
 // node:crypto, que no entra al cliente. Por eso las constantes del historial
@@ -14,11 +19,7 @@
 // (test/voice-leads-drawer.test.ts).
 
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
-import {
-  llamarLeadConAgente,
-  probarAgenteLeadEnMiTelefono,
-  type LeadActionState,
-} from "@/app/dashboard/leads/actions";
+import { probarAgenteLeadEnMiTelefono, type LeadActionState } from "@/app/dashboard/leads/actions";
 import { loadLeadVoicePanel } from "@/lib/leads-read-client";
 import { labelOf } from "@/lib/leads";
 import {
@@ -41,20 +42,14 @@ export function leadVoiceAgentTitle(newStatus: string | null | undefined): strin
 }
 
 /**
- * Se puede llamar con el agente, y si no, por qué. El orden importa: sin la
- * línea configurada o con el agente apagado, la razón de la cola no es la que
- * hay que arreglar primero.
+ * Se puede probar el agente, y si no, por qué. La prueba no exige el agente
+ * encendido (sirve para escucharlo antes), solo la línea configurada.
  */
-export function leadVoicePanelView(data: LeadVoicePanelData): { puedeLlamar: boolean; porQueNo: string | null } {
-  const puedeLlamar = data.enabled && data.configured && data.eligible;
-  const porQueNo = puedeLlamar
-    ? null
-    : !data.configured
-      ? "Falta configurar la línea del agente de leads en Vercel (puerta SIP y secreto)."
-      : !data.enabled
-        ? "El agente de leads está apagado en esta tienda (Ajustes)."
-        : data.reason;
-  return { puedeLlamar, porQueNo };
+export function leadVoicePanelView(data: LeadVoicePanelData): { puedeProbar: boolean; aviso: string | null } {
+  return {
+    puedeProbar: data.configured,
+    aviso: !data.configured ? "Falta configurar la línea del agente de leads en Vercel (puerta SIP y secreto)." : null,
+  };
 }
 
 const OPEN = new Set(["queued", "dialing", "in_progress"]);
@@ -85,8 +80,9 @@ export function LeadVoiceAgentPanel({ leadId, onChanged }: { leadId: string; onC
     try {
       const res = await loadLeadVoicePanel(leadId);
       if ("error" in res) {
+        // Lo último que se leyó se queda: si falla una relectura con una
+        // llamada abierta, el panel sigue mirándola en vez de borrarse.
         setLoadError(res.error);
-        setData(null);
       } else {
         setLoadError(null);
         setData(res.data);
@@ -136,10 +132,11 @@ export function LeadVoiceAgentPanel({ leadId, onChanged }: { leadId: string; onC
     });
   }
 
-  if (loadError) return <p className="text-sm text-slate-500">Agente de voz: {loadError}</p>;
-  if (!data) return <p className="text-sm text-slate-400">Agente de voz: cargando…</p>;
+  if (!data) {
+    return <p className="text-sm text-slate-400">Agente de voz: {loadError ?? "cargando…"}</p>;
+  }
 
-  const { puedeLlamar, porQueNo } = leadVoicePanelView(data);
+  const { puedeProbar, aviso } = leadVoicePanelView(data);
   const telOk = telefono.replace(/\D/g, "").length >= 9;
 
   return (
@@ -151,52 +148,28 @@ export function LeadVoiceAgentPanel({ leadId, onChanged }: { leadId: string; onC
         >
           🤖 Agente de voz
         </p>
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className={cn(chip, data.eligible ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600")}>
-            {data.eligible ? "En la cola del agente" : "Fuera de la cola"}
-          </span>
-          {data.arm === "control" && (
-            <span
-              className={cn(chip, "bg-violet-50 text-violet-700")}
-              title="El sorteo lo dejó en el grupo de control: el agente nunca lo llama, para comparar."
-            >
-              Grupo de control
-            </span>
-          )}
-          {data.optOut && <span className={cn(chip, "bg-red-50 text-red-700")}>Pidió no ser contactado</span>}
-        </div>
+        {data.optOut && <span className={cn(chip, "bg-red-50 text-red-700")}>Pidió no ser contactado</span>}
       </div>
 
-      {porQueNo && <p className="text-sm text-slate-600">{porQueNo}</p>}
+      {loadError && <p className="text-sm text-slate-500">{loadError}</p>}
+      {aviso && <p className="text-sm text-slate-600">{aviso}</p>}
+      {data.calls.length === 0 && <p className="text-sm text-slate-500">El agente no ha llamado a este lead.</p>}
 
-      {(puedeLlamar || (data.configured && !probando)) && (
-        <div className="flex flex-wrap items-center gap-2">
-          {puedeLlamar && (
-            <button
-              type="button"
-              disabled={pending}
-              onClick={() => run(() => llamarLeadConAgente(leadId))}
-              className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-60"
-            >
-              {pending ? "Llamando…" : "Llamar con el agente"}
-            </button>
-          )}
-          {data.configured && !probando && (
-            <button
-              type="button"
-              onClick={() => setProbando(true)}
-              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-            >
-              Probar en mi teléfono
-            </button>
-          )}
-        </div>
+      {puedeProbar && !probando && (
+        <button
+          type="button"
+          onClick={() => setProbando(true)}
+          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+        >
+          Probar en mi teléfono
+        </button>
       )}
 
       {probando && (
         <div className="space-y-2.5 rounded-lg bg-slate-50 p-3">
           <p className="text-sm text-slate-700">
-            El agente te llama con la ficha y el chat de este lead. Es una prueba: nada se escribe sobre el lead.
+            El agente te llama con la ficha y el chat de este lead. Es una prueba: nada se escribe sobre el lead, y
+            no puede ser el número del lead.
           </p>
           <label className="block text-sm font-medium text-slate-700">
             Tu celular

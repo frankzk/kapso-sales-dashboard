@@ -138,7 +138,13 @@ async function run(req: NextRequest) {
         report.action = "agente_ocupado";
         continue;
       }
-      let left = store.voice_recovery_daily_cap - (await realCallsToday(admin, store.id, now));
+      const used = await realCallsToday(admin, store.id, now);
+      if (used === null) {
+        report.action = "error";
+        report.error = "No se pudo leer el tope del día: no se llama hasta poder contarlo.";
+        continue;
+      }
+      let left = store.voice_recovery_daily_cap - used;
       if (left <= 0) {
         report.action = "tope_diario";
         continue;

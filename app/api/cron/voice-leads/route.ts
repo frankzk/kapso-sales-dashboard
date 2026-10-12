@@ -27,6 +27,7 @@ import {
 } from "@/lib/voice-leads";
 import {
   buildLeadContext,
+  leadVoiceConfigured,
   loadLeadVoiceQueue,
   placeLeadCall,
   reflagAgentHandoffs,
@@ -110,7 +111,9 @@ async function run(req: NextRequest) {
     reports.push(report);
     try {
       if (dry) {
-        const queue = await loadLeadVoiceQueue(admin, store, now);
+        // Se mira la cola como si el agente estuviera encendido: es el paso
+        // previo a encenderlo, y con él apagado todo saldría `agente_apagado`.
+        const queue = await loadLeadVoiceQueue(admin, { ...store, settings: { ...s, enabled: true } }, now);
         report.action = "dry";
         report.queue = queue.candidates.length;
         report.excluded = excludedCounts(queue);
@@ -134,12 +137,24 @@ async function run(req: NextRequest) {
         continue;
       }
       // Su propio tope: las llamadas a leads no gastan el de Reproprovincia.
-      if ((await realCallsToday(admin, store.id, now, "lead")) >= s.dailyCap) {
+      const used = await realCallsToday(admin, store.id, now, "lead");
+      if (used === null) {
+        report.action = "error";
+        report.error = "No se pudo leer el tope del día: no se llama hasta poder contarlo.";
+        continue;
+      }
+      if (used >= s.dailyCap) {
         report.action = "tope_diario";
         continue;
       }
       if (laneBusy) {
         report.action = "agente_ocupado";
+        continue;
+      }
+      // Sin la línea lista no se sortea: un brazo se guarda solo cuando la
+      // tienda de verdad puede llamar (MOM §33.3).
+      if (!leadVoiceConfigured()) {
+        report.action = "sin_configurar";
         continue;
       }
       // Recién aquí se sortea: el brazo se guarda solo en pasadas en que la
@@ -178,9 +193,13 @@ async function run(req: NextRequest) {
           break;
         }
         lastError = placed.error;
+        // Telnyx no respondió: esa llamada puede estar sonando. Nadie más
+        // marca en esta pasada, tampoco otra tienda.
+        if (placed.status === 504) laneBusy = true;
         // Carril ocupado o falta configuración: el siguiente lead tendría el
-        // mismo problema. Solo un número malo o un rechazo de Telnyx pasa al siguiente.
-        if (placed.status === 409 || placed.status === 500) break;
+        // mismo problema. Telnyx sin respuesta (504): la anterior puede estar
+        // sonando. Solo un número malo o un rechazo de Telnyx pasa al siguiente.
+        if (placed.status === 409 || placed.status === 500 || placed.status === 504) break;
       }
       if (report.called) report.action = "llamada";
       else {

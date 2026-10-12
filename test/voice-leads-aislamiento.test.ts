@@ -4,19 +4,22 @@
 //   · la atadura (`openCalls` + `pickOpenCall`) y la fila (`loadCall`) son por
 //     propósito;
 //   · el vigilante cierra las de los dos, pero el «no contesta» de un lead es
-//     una nota del lead, nunca la v2 del pedido;
+//     una nota del lead, nunca la v2 del pedido; y una fila de lead que el
+//     agente ya registró se cierra con SU resultado, sin «no contestó» encima;
 //   · el tramo al agente de un lead va a SU puerta SIP con SU número;
 //   · el tope diario, la salida Swayp y los tableros de Envíos son por pedido;
+//     el de leads no cuenta lo que Telnyx rechazó antes de marcar, y un tope
+//     que no se puede leer es un error (null), nunca «tope del día»;
 //   · la lista «no llamar» se comparte a propósito.
 
 import { generateKeyPairSync, sign } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 type Row = Record<string, unknown>;
-type Filter = { op: "eq" | "in" | "is" | "gte" | "lt" | "not"; col: string; val: unknown };
+type Filter = { op: "eq" | "neq" | "in" | "is" | "gte" | "lt" | "not"; col: string; val: unknown };
 interface Op {
   table: string;
   kind: "select" | "update" | "insert";
@@ -73,6 +76,8 @@ function matches(row: Row, filters: Filter[]): boolean {
   return filters.every(({ op, col, val }) => {
     const v = valueAt(row, col);
     if (op === "eq") return v === val;
+    // Como en SQL: `NULL <> x` no es verdadero, así que un NULL no pasa.
+    if (op === "neq") return v !== null && v !== undefined && v !== val;
     if (op === "in") return (val as unknown[]).includes(v);
     if (op === "is") return val === null ? v === null || v === undefined : v === val;
     if (op === "not") return v !== null && v !== undefined;
@@ -121,6 +126,7 @@ function fakeAdmin(): SupabaseClient {
           return q;
         },
         eq: filter("eq"),
+        neq: filter("neq"),
         in: filter("in"),
         is: filter("is"),
         gte: filter("gte"),
@@ -328,34 +334,243 @@ describe("el «no contesta» de un lead nunca toca un pedido", () => {
   });
 });
 
+describe("el vigilante no pisa lo que el agente de leads ya registró (MOM §33.6)", () => {
+  // `registrar_resultado_lead` reserva la fila (`outcome` vacío → el
+  // resultado) y escribe sobre el lead ANTES de cerrarla. Si ese cierre no
+  // llega, la fila sigue `in_progress` con su resultado y el vigilante la ve.
+  const base = { store_id: "s1", mode: "real", agent_number: "x", phone: "930000001", provider: "elevenlabs" };
+  const OPEN = ["queued", "dialing", "in_progress"];
+  const fila = (id: string) => state.tables.voice_calls!.find((r) => r.id === id)!;
+  const cierreDe = (id: string) =>
+    ops().filter((o) => o.kind === "update" && o.filters.some((f) => f.col === "id" && f.val === id));
+
+  it("una fila de lead ya reservada se cierra completed con SU resultado, sin nota «No contestó»", async () => {
+    const payload = { resultado: "atender_ahora", captura: { direccion: "Jr. Los Pinos 123" } };
+    state.tables.voice_calls = [
+      {
+        ...base,
+        id: "lead-registrado",
+        order_id: null,
+        lead_id: "L1",
+        purpose: "lead",
+        status: "in_progress",
+        outcome: "atender_ahora",
+        outcome_payload: payload,
+        error: null,
+        dialed_at: hace(10),
+        started_at: hace(9),
+      },
+      // Mismo vigilante, misma pasada: la que nadie registró sigue siendo «no contestó».
+      { ...base, id: "lead-sin-gestion", order_id: null, lead_id: "L2", purpose: "lead", status: "in_progress", outcome: null, dialed_at: hace(10), started_at: hace(9) },
+    ];
+    await sweepStaleCalls(state.admin as SupabaseClient, NOW);
+
+    const read = ops().find((o) => o.kind === "select" && o.table === "voice_calls")!;
+    expect(read.cols).toContain("outcome");
+
+    expect(fila("lead-registrado")).toMatchObject({
+      status: "completed",
+      outcome: "atender_ahora",
+      outcome_payload: payload,
+      ended_at: NOW.toISOString(),
+    });
+    expect(String(fila("lead-registrado").error)).toContain("registrada");
+    expect(String(fila("lead-registrado").error)).not.toContain("sin registrar_gestion");
+
+    // Un solo cierre, que no toca el resultado ni lo que guardó la tool, y solo
+    // si la fila seguía abierta.
+    const [cierre, ...otros] = cierreDe("lead-registrado");
+    expect(otros).toEqual([]);
+    expect(cierre?.patch).not.toHaveProperty("outcome");
+    expect(cierre?.patch).not.toHaveProperty("outcome_payload");
+    expect(cierre?.filters).toContainEqual({ op: "in", col: "status", val: OPEN });
+
+    // La nota «No contestó» va solo al lead que de verdad no tuvo gestión.
+    expect(state.leadNoAnswer).toHaveBeenCalledTimes(1);
+    expect(state.leadNoAnswer.mock.calls[0]?.[1]).toMatchObject({ id: "lead-sin-gestion", lead_id: "L2" });
+    expect(state.leadNoAnswer.mock.calls[0]?.[2]).toBe(
+      "No contestó: la llamada llegó al agente pero se cortó sin gestión (buzón o cuelgue).",
+    );
+    expect(fila("lead-sin-gestion")).toMatchObject({
+      status: "completed",
+      outcome: "no_contesta",
+      error: "sin registrar_gestion dentro de la ventana",
+    });
+    // Ni la v2 ni el Master: son filas de lead.
+    expect(state.rpcs).toEqual([]);
+    expect(state.recompute).not.toHaveBeenCalled();
+  });
+
+  it("vale para cualquier resultado reservado y también en prueba; una todavía en ventana no se toca", async () => {
+    state.tables.voice_calls = [
+      { ...base, id: "no-llamar", order_id: null, lead_id: "L1", purpose: "lead", status: "in_progress", outcome: "no_llamar", dialed_at: hace(12), started_at: hace(10) },
+      { ...base, id: "prueba", order_id: null, lead_id: "L2", purpose: "lead", mode: "test", status: "in_progress", outcome: "volver_a_llamar", dialed_at: hace(12), started_at: hace(10) },
+      // Reservada sin que el inicio la pasara a «en curso»: sigue «marcando» pasada su ventana.
+      { ...base, id: "marcando", order_id: null, lead_id: "L3", purpose: "lead", status: "dialing", outcome: "no_compra", dialed_at: hace(4), started_at: null },
+      // Reservada hace poco: la tool todavía está escribiendo.
+      { ...base, id: "en-ventana", order_id: null, lead_id: "L4", purpose: "lead", status: "in_progress", outcome: "atender_ahora", dialed_at: hace(7), started_at: hace(6) },
+    ];
+    await sweepStaleCalls(state.admin as SupabaseClient, NOW);
+
+    expect(fila("no-llamar")).toMatchObject({ status: "completed", outcome: "no_llamar" });
+    // Sin el cierre de la tool, lo mínimo: el resultado y la marca «no llamar»
+    // (solo en real), para que la lista de la tienda la vea.
+    expect(fila("no-llamar").outcome_payload).toEqual({ resultado: "no_llamar", no_llamar: true });
+    expect(fila("prueba")).toMatchObject({ status: "completed", outcome: "volver_a_llamar" });
+    expect(fila("prueba").outcome_payload).toEqual({ resultado: "volver_a_llamar", no_llamar: false });
+    expect(fila("marcando")).toMatchObject({ status: "completed", outcome: "no_compra" });
+    expect(fila("en-ventana")).toMatchObject({ status: "in_progress", outcome: "atender_ahora" });
+    expect(fila("en-ventana")).not.toHaveProperty("ended_at");
+    expect(cierreDe("en-ventana")).toEqual([]);
+    expect(state.leadNoAnswer).not.toHaveBeenCalled();
+    expect(state.rpcs).toEqual([]);
+  });
+
+  it("si el cierre del registro llega justo antes, el vigilante no lo pisa", async () => {
+    state.tables.voice_calls = [
+      { ...base, id: "lead", order_id: null, lead_id: "L1", purpose: "lead", status: "in_progress", outcome: "atender_ahora", error: null, dialed_at: hace(10), started_at: hace(9) },
+    ];
+    const cierreDelRegistro = { status: "completed", outcome_payload: { resultado: "atender_ahora" }, ended_at: hace(0.5), error: null };
+    // Entre la lectura del vigilante y su `update`, el registro cierra la fila.
+    const inner = fakeAdmin();
+    const admin = {
+      from(table: string) {
+        const q = (inner as unknown as { from: (t: string) => Record<string, (...a: unknown[]) => unknown> }).from(table);
+        const update = q.update!;
+        q.update = (patch: unknown) => {
+          Object.assign(fila("lead"), cierreDelRegistro);
+          return update(patch);
+        };
+        return q;
+      },
+      rpc: (inner as unknown as { rpc: unknown }).rpc,
+    } as unknown as SupabaseClient;
+
+    await sweepStaleCalls(admin, NOW);
+
+    expect(fila("lead")).toMatchObject({ ...cierreDelRegistro, outcome: "atender_ahora" });
+    expect(cierreDe("lead")).toHaveLength(1);
+    expect(state.leadNoAnswer).not.toHaveBeenCalled();
+  });
+
+  it("solo las de lead: una de pedido tomada y vencida sigue cerrándose «no contesta» por la v2 (§11.8)", async () => {
+    state.tables.voice_calls = [
+      { ...base, id: "pedido", order_id: "o1", lead_id: null, purpose: "order", status: "in_progress", outcome: "confirma", dialed_at: hace(8), started_at: hace(6) },
+    ];
+    await sweepStaleCalls(state.admin as SupabaseClient, NOW);
+    expect(fila("pedido")).toMatchObject({ status: "completed", outcome: "no_contesta" });
+    expect(state.rpcs.map((r) => (r.args as { p_order_id: string }).p_order_id)).toEqual(["o1"]);
+    expect(state.leadNoAnswer).not.toHaveBeenCalled();
+  });
+});
+
 // ── Topes, salida Swayp y «no llamar» ───────────────────────────────────────
 
 describe("cada agente con su tope; la salida Swayp solo de pedidos", () => {
   it("realCallsToday cuenta un solo propósito, pedido por defecto", async () => {
     const today = NOW.toISOString();
     state.tables.voice_calls = [
-      { id: "a", store_id: "s1", mode: "real", purpose: "order", queued_at: today },
-      { id: "b", store_id: "s1", mode: "real", purpose: "lead", queued_at: today },
-      { id: "c", store_id: "s1", mode: "real", purpose: "lead", queued_at: today },
-      { id: "d", store_id: "s1", mode: "test", purpose: "lead", queued_at: today },
+      { id: "a", store_id: "s1", mode: "real", purpose: "order", status: "completed", queued_at: today },
+      { id: "b", store_id: "s1", mode: "real", purpose: "lead", status: "completed", queued_at: today },
+      { id: "c", store_id: "s1", mode: "real", purpose: "lead", status: "completed", queued_at: today },
+      { id: "d", store_id: "s1", mode: "test", purpose: "lead", status: "completed", queued_at: today },
     ];
     expect(await realCallsToday(state.admin as SupabaseClient, "s1", NOW)).toBe(1);
     expect(await realCallsToday(state.admin as SupabaseClient, "s1", NOW, "lead")).toBe(2);
   });
 
-  it("realCallsToday sin poder leer da el tope por lleno (antes devolvía 0 y no frenaba)", async () => {
+  it("el tope de leads no cuenta las que Telnyx rechazó antes de marcar (cancelled), sí las que sonaron", async () => {
+    // NOW es 11:00 de Lima: el día empieza a las 05:00 UTC.
+    const lead = (id: string, status: string, queued_at = NOW.toISOString(), o: Row = {}) => ({
+      id,
+      store_id: "s1",
+      mode: "real",
+      purpose: "lead",
+      status,
+      queued_at,
+      ...o,
+    });
+    state.tables.voice_calls = [
+      lead("rechazada-1", "cancelled"),
+      lead("rechazada-2", "cancelled"),
+      lead("rechazada-3", "cancelled"),
+      lead("contesto", "completed"),
+      // Telnyx no respondió a tiempo: pudo sonar, gasta cupo.
+      lead("sin-respuesta", "failed"),
+      lead("marcando", "dialing"),
+      lead("hablando", "in_progress"),
+      lead("en-cola", "queued"),
+      lead("medianoche", "completed", "2026-10-12T05:00:00.000Z"),
+      // Ayer en Lima (23:59), aunque ya sea 12 en UTC.
+      lead("ayer", "completed", "2026-10-12T04:59:00.000Z"),
+      lead("prueba", "completed", NOW.toISOString(), { mode: "test" }),
+      lead("otra-tienda", "completed", NOW.toISOString(), { store_id: "s2" }),
+      { id: "pedido", store_id: "s1", mode: "real", purpose: "order", status: "completed", queued_at: NOW.toISOString() },
+    ];
+    expect(await realCallsToday(state.admin as SupabaseClient, "s1", NOW, "lead")).toBe(6);
+
+    const leadRead = ops().find((o) => o.filters.some((f) => f.col === "purpose" && f.val === "lead"))!;
+    await realCallsToday(state.admin as SupabaseClient, "s1", NOW);
+    const orderRead = ops()[ops().length - 1]!;
+    expect(leadRead.head).toBe(true);
+    expect(leadRead.filters).toContainEqual({ op: "neq", col: "status", val: "cancelled" });
+    expect(leadRead.filters).toContainEqual({ op: "eq", col: "mode", val: "real" });
+    expect(leadRead.filters).toContainEqual({ op: "gte", col: "queued_at", val: "2026-10-12T05:00:00.000Z" });
+    // El de pedidos no lleva el filtro: el cambio es solo del carril de leads.
+    expect(orderRead.filters).toContainEqual({ op: "eq", col: "purpose", val: "order" });
+    expect(orderRead.filters.some((f) => f.col === "status")).toBe(false);
+  });
+
+  it("un día de Telnyx caído no se come el tope: con solo rechazos, el cupo sigue en 0", async () => {
+    state.tables.voice_calls = Array.from({ length: 40 }, (_, i) => ({
+      id: `r${i}`,
+      store_id: "s1",
+      mode: "real",
+      purpose: "lead",
+      status: "cancelled",
+      queued_at: hace(i),
+    }));
+    expect(await realCallsToday(state.admin as SupabaseClient, "s1", NOW, "lead")).toBe(0);
+  });
+
+  it("realCallsToday sin poder leer devuelve null y lo avisa: ni 0 (llamaría sin tope) ni «tope lleno»", async () => {
     const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    const llamados: string[] = [];
     const roto = {
       from: () => {
         const q: Record<string, unknown> = {};
-        for (const m of ["select", "eq", "gte"]) q[m] = () => q;
+        for (const m of ["select", "eq", "neq", "gte"]) {
+          q[m] = () => {
+            llamados.push(m);
+            return q;
+          };
+        }
         q.then = (ok: (v: unknown) => unknown) => Promise.resolve({ count: null, error: { message: "caída" } }).then(ok);
         return q;
       },
     };
-    expect(await realCallsToday(roto as unknown as SupabaseClient, "s1", NOW, "lead")).toBe(Number.POSITIVE_INFINITY);
-    expect(await realCallsToday(roto as unknown as SupabaseClient, "s1", NOW)).toBe(Number.POSITIVE_INFINITY);
+    expect(await realCallsToday(roto as unknown as SupabaseClient, "s1", NOW, "lead")).toBeNull();
+    expect(llamados).toContain("neq");
+    expect(await realCallsToday(roto as unknown as SupabaseClient, "s1", NOW)).toBeNull();
+    const avisos = quiet.mock.calls.map((c) => String(c[0]));
+    expect(avisos).toEqual([
+      "[voice] tope diario sin leer (lead): caída",
+      "[voice] tope diario sin leer (order): caída",
+    ]);
     quiet.mockRestore();
+  });
+
+  it("una cuenta sin error y sin número es 0, no null", async () => {
+    const vacio = {
+      from: () => {
+        const q: Record<string, unknown> = {};
+        for (const m of ["select", "eq", "neq", "gte"]) q[m] = () => q;
+        q.then = (ok: (v: unknown) => unknown) => Promise.resolve({ count: null, error: null }).then(ok);
+        return q;
+      },
+    };
+    expect(await realCallsToday(vacio as unknown as SupabaseClient, "s1", NOW, "lead")).toBe(0);
+    expect(await realCallsToday(vacio as unknown as SupabaseClient, "s1", NOW)).toBe(0);
   });
 
   it("una fila de lead nunca pide salida Swayp, aunque traiga la marca", async () => {
@@ -550,10 +765,78 @@ describe("guardas del aislamiento (código)", () => {
     expect(sweep).not.toContain('.eq("purpose"');
   });
 
+  it("el barrido lee el resultado y cierra la fila de lead ya registrada ANTES del «no contesta»", () => {
+    const sweep = fn(server, "export async function sweepStaleCalls(");
+    expect(sweep).toContain("status, outcome, outcome_payload, dialed_at");
+    const branch = sweep.indexOf('if (c.purpose === "lead" && c.outcome) {');
+    expect(branch).toBeGreaterThan(-1);
+    expect(branch).toBeLessThan(sweep.indexOf("await closeAsNoAnswer(admin, c, resumen, now);"));
+    const body = sweep.slice(branch, sweep.indexOf("continue;", branch));
+    expect(body).toContain('status: "completed"');
+    expect(body).toContain(".in(\"status\", OPEN_STATUSES");
+    expect(body).not.toContain("outcome:");
+    expect(body).not.toContain("writeLeadNoAnswer");
+  });
+
   it("tope diario, fila de pedido y salida Swayp: solo pedidos", () => {
     expect(fn(server, "export async function realCallsToday(")).toContain('.eq("purpose", purpose)');
     expect(fn(server, "export async function loadCall(")).toContain('.eq("purpose", "order")');
     expect(fn(server, "export async function salidasSwaypPendientes(")).toContain('.eq("purpose", "order")');
+  });
+
+  it("realCallsToday: null al fallar (nunca infinito ni 0) y, en leads, sin las rechazadas", () => {
+    const today = fn(server, "export async function realCallsToday(");
+    expect(today).toContain("Promise<number | null>");
+    expect(today).toContain('if (purpose === "lead") q = q.neq("status", "cancelled");');
+    expect(today).toContain("return null;");
+    expect(today).not.toContain("POSITIVE_INFINITY");
+    expect(today).not.toContain("Infinity");
+  });
+
+  it("quien lee el tope trata null como error, nunca como «tope del día»", () => {
+    // Todos los que llaman a realCallsToday, para que uno nuevo no se cuele sin la guarda.
+    const walk = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((d) =>
+        d.isDirectory() ? walk(join(dir, d.name)) : /\.tsx?$/.test(d.name) ? [join(dir, d.name)] : [],
+      );
+    const root = resolve(__dirname, "..");
+    const callers = ["app", "lib"]
+      .flatMap((d) => walk(join(root, d)))
+      .filter((p) => /\brealCallsToday\(/.test(readFileSync(p, "utf8").replace("export async function realCallsToday(", "")))
+      .map((p) => relative(root, p).split("\\").join("/"))
+      .sort();
+    expect(callers).toEqual([
+      "app/api/cron/voice-leads/route.ts",
+      "app/api/cron/voice-recovery/route.ts",
+      "app/dashboard/pedidos/actions.ts",
+    ]);
+
+    const cron = (p: string, call: string) => {
+      const src = read(p);
+      const at = src.indexOf(`const used = await ${call};`);
+      expect(at).toBeGreaterThan(-1);
+      const guard = src.indexOf("if (used === null) {", at);
+      const tope = src.indexOf('report.action = "tope_diario";', at);
+      expect(guard).toBeGreaterThan(at);
+      expect(guard).toBeLessThan(tope);
+      const block = src.slice(guard, src.indexOf("continue;", guard));
+      expect(block).toContain('report.action = "error";');
+      expect(block).toContain('report.error = "No se pudo leer el tope del día');
+      // Nada de restar o comparar el resultado sin mirar antes si es null.
+      expect(src).not.toMatch(/- \(await realCallsToday\(/);
+      expect(src).not.toMatch(/\(await realCallsToday\([^)]*\)\) >=/);
+    };
+    cron("app/api/cron/voice-recovery/route.ts", "realCallsToday(admin, store.id, now)");
+    cron("app/api/cron/voice-leads/route.ts", 'realCallsToday(admin, store.id, now, "lead")');
+
+    const llamar = fn(read("app/dashboard/pedidos/actions.ts"), "export async function llamarConAgente(");
+    const nulo = llamar.indexOf(
+      'if (used === null) return { error: "No se pudo leer el tope de llamadas de hoy. Intenta de nuevo." };',
+    );
+    expect(llamar).toContain("const used = await realCallsToday(admin, store.id, now);");
+    expect(nulo).toBeGreaterThan(llamar.indexOf("const used = await realCallsToday("));
+    expect(nulo).toBeLessThan(llamar.indexOf("if (used >= store.voice_recovery_daily_cap) {"));
+    expect(llamar).toContain('return { error: "La tienda ya llegó al tope de llamadas del agente de hoy." };');
   });
 
   it("la cola de Reproprovincia usa la lista «no llamar» compartida, sin filtro de propósito", () => {

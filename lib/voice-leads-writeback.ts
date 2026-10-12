@@ -34,11 +34,12 @@ export interface LeadCallRow {
   lead_context: LeadContext | null;
 }
 
-export type LeadApplySkip = "gestion_humana_posterior" | "estado_cambio" | "ganado" | "sin_lead";
+export type LeadApplySkip = "gestion_humana_posterior" | "handoff_posterior" | "estado_cambio" | "ganado" | "sin_lead";
 
 /** Lo que dice la nota del historial cuando el resultado no se aplicó al lead. */
 const SKIP_TEXT: Record<LeadApplySkip, string> = {
   gestion_humana_posterior: "una asesora lo gestionó durante la llamada",
+  handoff_posterior: "volvió a escribir y el bot lo pasó a «Atender ahora» durante la llamada",
   estado_cambio: "el lead cambió de estado durante la llamada",
   ganado: "el lead ya tiene pedido",
   sin_lead: "el lead ya no existe",
@@ -111,7 +112,7 @@ export async function applyLeadVoiceResult(
   const [leadRes, storeRes, humanRes] = await Promise.all([
     admin
       .from("leads")
-      .select("id, status, category, has_order, order_id, next_followup_at")
+      .select("id, status, category, has_order, order_id, next_followup_at, handoff_at")
       .eq("id", call.lead_id)
       .eq("store_id", call.store_id)
       .maybeSingle(),
@@ -131,6 +132,7 @@ export async function applyLeadVoiceResult(
     has_order: boolean | null;
     order_id: string | null;
     next_followup_at: string | null;
+    handoff_at: string | null;
   } | null;
   const store = storeRes.data as { timezone?: string | null; voice_lead_max_attempts?: number | null } | null;
 
@@ -176,6 +178,11 @@ export async function applyLeadVoiceResult(
     skipped = "ganado";
   } else if ((humanRes.data ?? []).length > 0) {
     skipped = "gestion_humana_posterior";
+  } else if (lead.handoff_at && Date.parse(lead.handoff_at) > Date.parse(since)) {
+    // Escribió por WhatsApp mientras hablaba con el agente y el bot lo pasó a
+    // «Atender ahora»: el resultado del agente lo sacaría de ahí con el
+    // mensaje sin responder. Lo atiende la asesora; la nota queda.
+    skipped = "handoff_posterior";
   } else if (!ctx?.estado_al_marcar || lead.status !== ctx.estado_al_marcar || !OPEN_CATEGORIES.includes(lead.category)) {
     skipped = "estado_cambio";
   } else {
@@ -197,6 +204,8 @@ export async function applyLeadVoiceResult(
         .eq("status", ctx.estado_al_marcar)
         .in("category", OPEN_CATEGORIES)
         .eq("has_order", false)
+        // En UTC con «Z»: el «+00:00» que devuelve la base no viaja limpio en un filtro.
+        .or(`handoff_at.is.null,handoff_at.lte.${new Date(since).toISOString()}`)
         .select("id");
       if (updErr) error = updErr.message;
       else if ((updated ?? []).length) applied = true;

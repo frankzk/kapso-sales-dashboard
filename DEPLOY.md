@@ -2157,21 +2157,20 @@ la línea de tiempo («Recordatorio de recojo (día 3)…») y la foto que viaj�
    sin tiendas con el agente encendido no hace nada. La cola se mira sin llamar
    ni escribir con
    `GET /api/cron/voice-leads?dry=1&storeId=<uuid>` y
-   `Authorization: Bearer <CRON_SECRET>`: devuelve cuántos entran y cuántos
-   quedan fuera por cada motivo.
+   `Authorization: Bearer <CRON_SECRET>`: la mira como si el agente estuviera
+   encendido y devuelve cuántos entran y cuántos quedan fuera por cada motivo.
 5. **Encendido por tienda** (Ajustes → «Agente de voz · Leads (piloto)»), en
    este orden: campaña, producto y oferta; «Probar en mi teléfono» desde el
-   drawer de un lead; «Cola y botón»; y recién entonces «Llamadas
-   automáticas». Los pasos completos y la campaña de Biru están en
-   `docs/voz-leads-agente.md`.
+   drawer de un lead; el porcentaje de control (queda fijo en el primer
+   sorteo); y recién entonces «Agente de leads» y «Llamadas automáticas». Los
+   pasos completos y la campaña de Biru están en `docs/voz-leads-agente.md`.
 
-**Marcha atrás.** Apagar «Llamadas automáticas» detiene el barrido; apagar
-«Cola y botón» apaga también el botón del drawer. El sorteo del grupo de control
-queda guardado y nada se borra.
+**Marcha atrás.** Apagar «Llamadas automáticas» (o «Agente de leads») detiene
+el barrido. El sorteo del grupo de control queda guardado y nada se borra.
 
 **Qué mirar después.** Cada pasada escribe una línea `[voice-leads] {…}` en los
 logs de Vercel, sin nombres ni teléfonos: qué hizo cada tienda (`llamada`,
-`cola_vacia`, `fuera_de_horario`, `tope_diario`, `agente_ocupado`, `manual`,
-`apagado`, `error`), el tamaño de la cola, las exclusiones por motivo, los
+`cola_vacia`, `fuera_de_horario`, `tope_diario`, `agente_ocupado`,
+`sin_configurar`, `manual`, `apagado`, `error`), el tamaño de la cola, las exclusiones por motivo, los
 brazos sorteados y los «Atender ahora» repuestos. El tablero del piloto está en
 la misma sección de Ajustes.

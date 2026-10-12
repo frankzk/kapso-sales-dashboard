@@ -16,6 +16,7 @@ import { assignArm, type ExperimentArm } from "@/lib/lead-experiment";
 import { categoryOf, isClaimActive, labelOf } from "@/lib/leads";
 import { LEAD_VOICE_MOTIVO_LABEL, LEAD_VOICE_OUTCOME_LABEL } from "@/lib/voice-lead-labels";
 import { primerNombre, tiendaHablada, voiceDates } from "@/lib/voice-recovery";
+import { VOICE_SUNDAY_START_HOUR } from "@/lib/voice-recovery-queue";
 
 // ── Constantes ──────────────────────────────────────────────────────────────
 
@@ -24,8 +25,9 @@ export const LEAD_VOICE_PURPOSE = "lead" as const;
 
 /**
  * El sorteo del grupo de control, en `lead_experiments` (0144). Otra sal que
- * `frio_cobertura_v1`: los dos experimentos reparten independientes, así que
- * cada uno sigue midiendo lo suyo aunque compartan leads (diseño factorial).
+ * `frio_cobertura_v1`, así que el REPARTO es independiente; pero el agente sí
+ * toca ese otro experimento, porque llama sobre todo a los leads que nadie
+ * tocó, que son en su mayoría su control (MOM §33.3).
  */
 export const LEAD_VOICE_EXPERIMENT = "agente_voz_leads_v1";
 
@@ -49,6 +51,12 @@ export const LEAD_VOICE_NOTE_SIGNER = "Agente de voz";
 
 /** Mensajes entrantes mínimos: el que escribió dos veces conversó; el que escribió una, no. */
 export const LEAD_VOICE_MIN_INBOUND = 2;
+
+/**
+ * Días desde el sorteo para que un lead entre a la comparación del tablero:
+ * el mismo corte de maduración que `read_lead_experiment` (0150).
+ */
+export const LEAD_VOICE_MATURATION_DAYS = 7;
 
 /** Horas entre dos intentos del agente al mismo lead (los de «volver a llamar» no esperan). */
 export const LEAD_VOICE_RETRY_GAP_HOURS = 3;
@@ -193,6 +201,8 @@ export interface LeadVoiceLead {
   claimed_at: string | null;
   next_followup_at: string | null;
   contact_opt_out_at: string | null;
+  /** Último handoff del bot (o del agente) a «Atender ahora». */
+  handoff_at: string | null;
 }
 
 /** Una llamada anterior del agente a este lead (`voice_calls`, purpose lead, modo real). */
@@ -228,6 +238,7 @@ export const LEAD_VOICE_EXCLUSIONS = [
   "callback_pendiente",
   "estado",
   "atendido_por_asesora",
+  "handoff_pendiente",
   "reservado",
   "muy_pronto",
   "muy_antiguo",
@@ -297,7 +308,11 @@ export function leadVoiceEligible(input: LeadVoiceEligibilityInput): LeadVoiceEl
   if ((lead.inbound_count ?? 0) < LEAD_VOICE_MIN_INBOUND) return no("poco_interes");
 
   const last = lastAttempt(input.attempts);
-  const agendadoPorAgente = lead.status === "volver_a_llamar" && last?.outcome === "volver_a_llamar";
+  // El «volver a llamar» lo decide la última llamada que DE VERDAD salió: si
+  // Telnyx rechazó la del callback (`cancelled`), la persona sigue esperando
+  // esa llamada y el agente la reintenta.
+  const lastReal = lastAttempt(input.attempts.filter(attemptCounts));
+  const agendadoPorAgente = lead.status === "volver_a_llamar" && lastReal?.outcome === "volver_a_llamar";
   const followupMs = lead.next_followup_at ? Date.parse(lead.next_followup_at) : NaN;
   if (agendadoPorAgente && Number.isFinite(followupMs) && followupMs > t) return no("callback_pendiente");
   const kind: LeadVoiceCallKind | null =
@@ -305,6 +320,13 @@ export function leadVoiceEligible(input: LeadVoiceEligibilityInput): LeadVoiceEl
   if (!kind) return no("estado");
 
   if (input.humanTouched) return no("atendido_por_asesora");
+  // Volvió a escribir después de la llamada del agente y el bot lo pasó a
+  // «Atender ahora»: le contesta una asesora. Si el agente llamara, su
+  // resultado lo sacaría de «Atender ahora» con el mensaje sin responder.
+  const handoffMs = lead.handoff_at ? Date.parse(lead.handoff_at) : NaN;
+  if (kind === "volver_a_llamar" && lastReal && Number.isFinite(handoffMs) && handoffMs > Date.parse(lastReal.queued_at)) {
+    return no("handoff_pendiente");
+  }
   if (isClaimActive(lead.claimed_at, now)) return no("reservado");
 
   if (kind === "primera") {
@@ -383,6 +405,8 @@ export function chatParaAgente(
   for (const m of msgs) {
     let text = String(m.text ?? "")
       .replace(/https?:\/\/\S+/gi, "[enlace]")
+      // El guion encierra el chat entre «<<<» y «>>>»: la persona no puede cerrarlo.
+      .replace(/<<<|>>>/g, " ")
       .replace(/\s+/g, " ")
       .trim();
     if (!text && m.mediaKind) text = MEDIA_LABEL[m.mediaKind] ?? "[archivo]";
@@ -439,9 +463,18 @@ export function nombreHablado(name: string | null | undefined): string {
 export function consultaHablada(text: string | null | undefined): string {
   const t = String(text ?? "")
     .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/<<<|>>>/g, " ")
     .replace(/\s+/g, " ")
     .trim();
   return t.length > 200 ? `${t.slice(0, 197)}…` : t;
+}
+
+/**
+ * El horario en que el agente puede volver a llamar, para que no prometa una
+ * hora en que no llama: «de 9:00 a 20:00; los domingos desde las 11:00».
+ */
+export function horarioHablado(start: number, end: number): string {
+  return `de ${start}:00 a ${end}:00; los domingos desde las ${Math.max(start, VOICE_SUNDAY_START_HOUR)}:00`;
 }
 
 /** Las variables que el agente de leads recibe al conectar. Van TODAS, como texto. */
@@ -460,6 +493,8 @@ export const LEAD_VOICE_VARS = [
   "hoy_texto",
   "saludo",
   "intento",
+  "ultimo_intento",
+  "horario",
   "es_volver_a_llamar",
 ] as const;
 export type LeadVoiceVar = (typeof LEAD_VOICE_VARS)[number];
@@ -474,7 +509,7 @@ export interface LeadFichaInput {
     ad_headline?: string | null;
   };
   storeName: string | null;
-  settings: Pick<LeadVoiceSettings, "product" | "offer">;
+  settings: Pick<LeadVoiceSettings, "product" | "offer" | "hourStart" | "hourEnd" | "maxAttempts">;
   chat: string;
   now: Date;
   /** Número de este intento, desde 1. */
@@ -501,8 +536,26 @@ export function buildLeadFicha(input: LeadFichaInput): LeadFicha {
     hoy_texto: voiceDates(input.now).hoy_texto,
     saludo: saludoLima(input.now),
     intento: String(Math.max(1, input.attempt)),
+    // En el último intento el agente no promete otra llamada suya: si piden
+    // otra hora, queda para una asesora (el guion, docs/voz-leads-agente.md).
+    ultimo_intento: input.attempt >= input.settings.maxAttempts ? "si" : "no",
+    horario: horarioHablado(input.settings.hourStart, input.settings.hourEnd),
     es_volver_a_llamar: input.kind === "volver_a_llamar" ? "si" : "no",
   };
+}
+
+/**
+ * ¿La conversación entra por el tramo que abrió Kapta? Se comparan los últimos
+ * nueve dígitos del caller ID que manda ElevenLabs con el número de salida del
+ * agente de leads. Sin caller ID en el aviso no se puede saber y se acepta
+ * (lo que hacía antes); con uno distinto, no.
+ */
+export function callerIdDeKapta(callerId: unknown, fromNumber: string): boolean {
+  const caller = String(callerId ?? "").replace(/\D/g, "");
+  if (!caller) return true;
+  const from = fromNumber.replace(/\D/g, "");
+  if (from.length < 9) return true;
+  return caller.slice(-9) === from.slice(-9);
 }
 
 export interface LeadVoiceInitiation {
@@ -699,7 +752,7 @@ export function handoffContextFor(c: LeadCaptura, resumen: string): string {
  * es un pedido) y descarta lo que es una hora («no llamar antes de las 10»).
  */
 export function pideNoContactar(text: string): boolean {
-  return /\bno\s+(quiere\s+que\s+)?(me|la|lo|le|nos)?\s*(vuelvan\s+a\s+|sigan\s+)?llam(en|ar|ando)\b(?!\s+(antes|despu[eé]s|hasta|hoy|mañana|ahora|temprano|tarde|en\s+la|por\s+la|a\s+las|de\s+\d))/i.test(
+  return /\bno\s+(quiere\s+que\s+)?(me|la|lo|le|nos)?\s*(vuelvan\s+a\s+|sigan\s+)?llam(en|ar|ando)\b(?!\s+(antes|despu[eé]s|hasta|hoy|mañana|ahora|ahorita|todav[ií]a|temprano|tarde|en\s+la|en\s+este|en\s+(el\s+|su\s+)?horario|en\s+su\s+trabajo|por\s+la|por\s+ahora|a\s+las|a\s+esta|al\s+trabajo|esta\s+semana|de\s+\d))/i.test(
     text,
   );
 }
@@ -726,7 +779,9 @@ export function translateLeadResult(input: LeadResultInput, now: Date = new Date
   const resumen = clean(input.resumen, 1000);
   const motivoRaw = clean(input.motivo, 40).toLowerCase() as LeadVoiceMotivo;
   const motivo: LeadVoiceMotivo | null = r === "no_compra" ? (LEAD_VOICE_MOTIVOS.includes(motivoRaw) ? motivoRaw : "otro") : null;
-  const optOut = r === "no_llamar" || pideNoContactar(`${resumen} ${clean(input.motivo)}`);
+  // Del resumen solo se infiere con un «no»: con «volver a llamar» o «quiere
+  // comprar», un «que no la llamen ahora» es una hora, no un pedido.
+  const optOut = r === "no_llamar" || (r === "no_compra" && pideNoContactar(`${resumen} ${clean(input.motivo)}`));
   const label = motivo
     ? `${LEAD_VOICE_OUTCOME_LABEL[r]} (${LEAD_VOICE_MOTIVO_LABEL[motivo]})`
     : LEAD_VOICE_OUTCOME_LABEL[r];

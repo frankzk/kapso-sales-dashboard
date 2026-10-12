@@ -22,7 +22,10 @@ export const LEAD_VOICE_MOTIVO_LABEL: Record<string, string> = {
   otro: "otro motivo",
 };
 
-/** Por qué el agente no llama a este lead (MOM §33, «Quién entra a la cola»). */
+/**
+ * Por qué el agente no llama a un lead (MOM §33, «Quién entra a la cola»).
+ * Para el tablero y el log del barrido; el drawer de las asesoras no lo muestra.
+ */
 export const LEAD_VOICE_EXCLUSION_LABEL: Record<string, string> = {
   agente_apagado: "El agente de leads está apagado en esta tienda.",
   sin_telefono: "No tiene un celular peruano.",
@@ -34,6 +37,7 @@ export const LEAD_VOICE_EXCLUSION_LABEL: Record<string, string> = {
   callback_pendiente: "El agente lo vuelve a llamar a la hora que pidió.",
   estado: "Ya no está en «Sin llamar».",
   atendido_por_asesora: "Una asesora ya lo atendió.",
+  handoff_pendiente: "Volvió a escribir: lo atiende una asesora.",
   reservado: "Una asesora lo tiene tomado.",
   muy_pronto: "Todavía es turno de las asesoras.",
   muy_antiguo: "Pasó la ventana del agente.",
@@ -54,16 +58,15 @@ export interface LeadVoiceCallSummary {
   error: string | null;
 }
 
+/**
+ * Lo que ve una asesora en el drawer. A ciegas (MOM §33.3): ni si el lead
+ * entra a la cola del agente ni su brazo del sorteo; solo lo que ya pasó.
+ */
 export interface LeadVoicePanelData {
   /** La tienda tiene el agente de leads encendido (`voice_lead_enabled`). */
   enabled: boolean;
   /** La puerta SIP del agente de leads y su secreto están configurados en Vercel. */
   configured: boolean;
-  eligible: boolean;
-  /** Por qué no entra, si no entra. */
-  reason: string | null;
-  /** Brazo del sorteo, si el lead ya fue elegible alguna vez. */
-  arm: "tratamiento" | "control" | null;
   /** Pidió no ser contactado (`leads.contact_opt_out_at`). */
   optOut: boolean;
   calls: LeadVoiceCallSummary[];

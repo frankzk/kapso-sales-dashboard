@@ -242,11 +242,41 @@ async function noteOnRecoveryGuide(
 export async function sweepStaleCalls(admin: SupabaseClient, now: Date): Promise<void> {
   const { data } = await admin
     .from("voice_calls")
-    .select("id, store_id, order_id, lead_id, purpose, mode, agent_number, phone, status, dialed_at, started_at")
+    .select("id, store_id, order_id, lead_id, purpose, mode, agent_number, phone, status, outcome, outcome_payload, dialed_at, started_at")
     .in("status", OPEN_STATUSES as unknown as string[]);
-  type Row = OpenCall & { store_id: string; order_id: string | null; lead_id: string | null; mode: "real" | "test" };
+  type Row = OpenCall & {
+    store_id: string;
+    order_id: string | null;
+    lead_id: string | null;
+    mode: "real" | "test";
+    outcome?: string | null;
+    outcome_payload?: Record<string, unknown> | null;
+  };
   const stale = ((data ?? []) as Row[]).filter((c) => isStale(c, now));
   for (const c of stale) {
+    // Una llamada de lead que el agente ya registró (la tool tomó la fila con
+    // su resultado y escribió sobre el lead) pero cuyo cierre no llegó: se
+    // cierra con SU resultado. Un «no contestó» encima borraría lo que la
+    // persona dijo y dejaría una nota falsa en el lead (MOM §33.6).
+    if (c.purpose === "lead" && c.outcome) {
+      const payload = c.outcome_payload && Object.keys(c.outcome_payload).length ? c.outcome_payload : null;
+      await admin
+        .from("voice_calls")
+        .update({
+          status: "completed",
+          ended_at: now.toISOString(),
+          error: "registrada; el cierre no llegó y la cerró el vigilante",
+          // Sin el cierre de la tool, lo mínimo: el resultado y, si pidió no
+          // ser contactado en una llamada real, la marca que lee la lista
+          // «no llamar» de la tienda. La captura se perdió con el cierre.
+          ...(payload
+            ? {}
+            : { outcome_payload: { resultado: c.outcome, no_llamar: c.mode === "real" && c.outcome === "no_llamar" } }),
+        })
+        .eq("id", c.id)
+        .in("status", OPEN_STATUSES as unknown as string[]);
+      continue;
+    }
     const resumen =
       c.status === "in_progress"
         ? "No contestó: la llamada llegó al agente pero se cortó sin gestión (buzón o cuelgue)."
@@ -1072,7 +1102,7 @@ export async function realCallsToday(
   storeId: string,
   now: Date,
   purpose: "order" | "lead" = "order",
-): Promise<number> {
+): Promise<number | null> {
   const limaMidnightUtc = new Date(
     Date.UTC(
       new Date(now.getTime() - 5 * 3_600_000).getUTCFullYear(),
@@ -1081,18 +1111,24 @@ export async function realCallsToday(
       5,
     ),
   );
-  const { count, error } = await admin
+  let q = admin
     .from("voice_calls")
     .select("id", { count: "exact", head: true })
     .eq("store_id", storeId)
     .eq("mode", "real")
     .eq("purpose", purpose)
     .gte("queued_at", limaMidnightUtc.toISOString());
-  // Sin poder contar, el tope se da por lleno: un tope que no se puede leer
-  // no es razón para llamar sin límite (antes devolvía 0 y no frenaba nada).
+  // Una llamada de lead que Telnyx rechazó antes de marcar (`cancelled`) no
+  // sonó: no gasta intento (`attemptCounts`) ni cupo. Sin esto, una hora de
+  // Telnyx caído se come el tope del día y el agente no llama aunque vuelva.
+  if (purpose === "lead") q = q.neq("status", "cancelled");
+  const { count, error } = await q;
+  // Sin poder contar, null: quien llama NO llama (un tope que no se puede
+  // leer no es razón para llamar sin límite; antes devolvía 0 y no frenaba
+  // nada) y lo informa como error, no como «tope del día».
   if (error) {
     console.error(`[voice] tope diario sin leer (${purpose}): ${error.message}`);
-    return Number.POSITIVE_INFINITY;
+    return null;
   }
   return count ?? 0;
 }

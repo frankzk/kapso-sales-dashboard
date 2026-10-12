@@ -1,13 +1,15 @@
 // Agente de voz para leads — el lado de Leads (MOM §33, 12-10-2026).
 //
-// Lo que ve y hace la asesora en el drawer (panel, historial, «Resumen del
-// agente de voz», «No contactar»), lo que el agente deja listo para «Generar
-// pedido», y que quien pidió no ser contactado no reciba más plantillas
-// automáticas. Las acciones se prueban con la base y el servidor del agente
-// simulados: aquí se mira el lado de Leads, no la telefonía.
+// Lo que ve y hace la asesora en el drawer (el panel A CIEGAS, historial,
+// «Resumen del agente de voz», «No contactar»), lo que el agente deja listo
+// para «Generar pedido», y que quien pidió no ser contactado no reciba más
+// plantillas automáticas. Las acciones se prueban con la base y el servidor del
+// agente simulados: aquí se mira el lado de Leads, no la telefonía.
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type Filter = [method: string, column: string, value: unknown];
@@ -25,42 +27,99 @@ const st = vi.hoisted(() => ({
   reply: (_c: Call): Reply => ({ data: null, error: null }),
   access: true,
   canEdit: true,
+  /** Permisos por organización (`hasOrgPermission`), no la unión de todas. */
+  orgPerms: {} as Record<string, string[]>,
+  orgPermArgs: [] as unknown[][],
   leadWithCalls: null as unknown,
   names: {} as Record<string, string>,
   store: null as unknown,
+  storeError: null as Error | null,
   queue: null as unknown,
-  queueError: null as Error | null,
-  callsToday: 0,
   placed: { ok: true, callId: "vc-1", from: "+5110000000" } as unknown,
   configured: true,
+  /** La lista «no llamar» de la tienda, en el formato local de 9 dígitos. */
+  dnc: [] as string[],
+  dncError: null as Error | null,
+  dncArgs: [] as unknown[][],
   loadQueue: [] as unknown[][],
   built: [] as unknown[][],
   placeArgs: [] as unknown[][],
-  todayArgs: [] as unknown[][],
   revalidate: [] as unknown[],
 }));
 
+/**
+ * El panel en el servidor (renderToStaticMarkup) con su estado inyectado: los
+ * `useState` del panel toman `initial` en orden (data, loadError, probando…) y
+ * sus setters se anotan en `sets`; los `useEffect` se guardan para correrlos a
+ * mano. Fuera de `montar`, React es el de siempre.
+ */
+const ui = vi.hoisted(() => ({
+  on: false,
+  i: 0,
+  initial: [] as unknown[],
+  sets: [] as [slot: number, value: unknown][],
+  effects: [] as (() => unknown)[],
+  reads: [] as unknown[][],
+  panelReply: null as unknown,
+  panelThrow: null as Error | null,
+}));
+
+vi.mock("react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react")>();
+  return {
+    ...actual,
+    useState: (init: unknown) => {
+      if (!ui.on) return actual.useState(init);
+      const slot = ui.i++;
+      const value = slot < ui.initial.length ? ui.initial[slot] : typeof init === "function" ? (init as () => unknown)() : init;
+      return [value, (v: unknown) => ui.sets.push([slot, v])];
+    },
+    useEffect: (fn: Parameters<typeof actual.useEffect>[0], deps?: Parameters<typeof actual.useEffect>[1]) => {
+      if (!ui.on) return actual.useEffect(fn, deps);
+      ui.effects.push(fn);
+    },
+  };
+});
+vi.mock("@/lib/leads-read-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/leads-read-client")>()),
+  loadLeadVoicePanel: async (...a: unknown[]) => {
+    ui.reads.push(a);
+    if (ui.panelThrow) throw ui.panelThrow;
+    return ui.panelReply;
+  },
+}));
 vi.mock("next/cache", () => ({ revalidatePath: (...a: unknown[]) => st.revalidate.push(a) }));
 vi.mock("next/server", () => ({ after: vi.fn() }));
 vi.mock("next/navigation", () => ({ redirect: (p: string) => { throw new Error(`redirect:${p}`); } }));
 vi.mock("@/lib/agent-names", () => ({ resolveAgentName: vi.fn(), resolveAgentNames: async () => st.names }));
-vi.mock("@/lib/permissions-access", () => ({ getMasterPermissions: async () => ({ can: () => st.canEdit }) }));
+vi.mock("@/lib/permissions-access", () => ({
+  getMasterPermissions: async () => ({ can: () => st.canEdit }),
+  hasOrgPermission: async (...a: unknown[]) => {
+    st.orgPermArgs.push(a);
+    const [orgId, permission] = a as [string, string];
+    return (st.orgPerms[orgId] ?? []).includes(permission);
+  },
+}));
 vi.mock("@/lib/leads-access", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/leads-access")>()),
   getLeadWithCalls: async () => st.leadWithCalls,
 }));
 vi.mock("@/lib/voice-recovery-server", () => ({
-  realCallsToday: async (...a: unknown[]) => {
-    st.todayArgs.push(a);
-    return st.callsToday;
+  loadDoNotCallPhones: async (...a: unknown[]) => {
+    st.dncArgs.push(a);
+    if (st.dncError) throw st.dncError;
+    return new Set(st.dnc);
   },
 }));
 vi.mock("@/lib/voice-leads-server", () => ({
   leadVoiceConfigured: () => st.configured,
-  loadLeadVoiceStore: async () => st.store,
+  loadLeadVoiceStore: async () => {
+    if (st.storeError) throw st.storeError;
+    return st.store;
+  },
+  // Nadie del lado de Leads debe mirar la cola: si alguien la llama, queda anotado.
   loadLeadVoiceQueue: async (...a: unknown[]) => {
     st.loadQueue.push(a);
-    if (st.queueError) throw st.queueError;
     return st.queue;
   },
   buildLeadContext: async (...a: unknown[]) => {
@@ -121,7 +180,6 @@ vi.mock("@/lib/db", () => {
 });
 
 import {
-  llamarLeadConAgente,
   loadLeadDetail,
   loadLeadVoicePanel,
   loadOrderDraft,
@@ -131,6 +189,7 @@ import {
   LEAD_VOICE_AGENT_HANDOFF,
   LEAD_VOICE_AGENT_KIND,
   LEAD_VOICE_AGENT_NAME,
+  LeadVoiceAgentPanel,
   leadVoiceAgentTitle,
   leadVoicePanelView,
 } from "@/components/lead-voice-agent-panel";
@@ -140,12 +199,18 @@ import {
   LEAD_VOICE_NOTE_SIGNER,
   leadVoiceTimelineTitle,
 } from "@/lib/voice-leads";
-import { LEAD_VOICE_EXCLUSION_LABEL, type LeadVoicePanelData } from "@/lib/voice-lead-labels";
+import {
+  LEAD_VOICE_EXCLUSION_LABEL,
+  type LeadVoiceCallSummary,
+  type LeadVoicePanelData,
+} from "@/lib/voice-lead-labels";
 import { isSalesTouch } from "@/lib/productivity";
 import { cartSeqSkipReason, runCartSequence } from "@/lib/cart-sequence";
 import { dripSkipReason, lastDispositionAtByPhone, processWinback, sendSeguimientoDrip } from "@/lib/leads-ingest";
 
 const read = (...p: string[]) => readFileSync(resolve(process.cwd(), ...p), "utf8");
+/** El código sin sus comentarios de línea: lo que se prueba es lo que corre. */
+const sinComentarios = (src: string) => src.replace(/^\s*\/\/.*$/gm, "");
 const LEAD = "4f5e7c8a-1111-4222-8333-944455556666";
 const filtersOf = (c: Call | undefined) => c?.filters ?? [];
 const has = (c: Call | undefined, m: string, col: string, v?: unknown) =>
@@ -174,6 +239,48 @@ const entryFor = (over: Record<string, unknown> = {}) => ({
   campaignId: "120248136956710056",
 });
 
+const panelData = (over: Partial<LeadVoicePanelData> = {}): LeadVoicePanelData => ({
+  enabled: true,
+  configured: true,
+  optOut: false,
+  calls: [],
+  ...over,
+});
+const voiceCall = (over: Partial<LeadVoiceCallSummary> = {}): LeadVoiceCallSummary => ({
+  id: "vc-9",
+  mode: "real",
+  status: "completed",
+  outcome: "volver_a_llamar",
+  queued_at: "2026-10-14T14:00:00Z",
+  resumen: null,
+  motivo: null,
+  error: null,
+  ...over,
+});
+
+/** Índices de los `useState` del panel, en el orden en que los declara. */
+const DATA = 0;
+const LOAD_ERROR = 1;
+
+/** Pinta el panel con ese estado. Devuelve el HTML; los efectos quedan en `ui.effects`. */
+function montar(data: LeadVoicePanelData | null, opts: { loadError?: string | null; probando?: boolean } = {}): string {
+  ui.on = true;
+  ui.i = 0;
+  ui.initial = [data, opts.loadError ?? null, opts.probando ?? false];
+  ui.sets = [];
+  ui.effects = [];
+  try {
+    return renderToStaticMarkup(createElement(LeadVoiceAgentPanel, { leadId: LEAD, onChanged: () => {} }));
+  } finally {
+    ui.on = false;
+  }
+}
+/** Corre la lectura del panel (su primer efecto) y espera a que termine. */
+async function relectura(): Promise<void> {
+  ui.effects[0]!();
+  await new Promise((r) => setTimeout(r, 0));
+}
+
 beforeEach(() => {
   // Martes 14-10-2026, 10:00 en Lima: dentro del horario del agente.
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -182,19 +289,28 @@ beforeEach(() => {
   st.reply = () => ({ data: null, error: null });
   st.access = true;
   st.canEdit = true;
+  st.orgPerms = { "org-1": ["master.edit"] };
+  st.orgPermArgs = [];
   st.leadWithCalls = null;
   st.names = {};
   st.store = { id: "store-1", name: "Kenku Perú", settings: { ...SETTINGS } };
+  st.storeError = null;
   st.queue = { candidates: [entryFor()], reasons: {}, arms: { [LEAD]: "tratamiento" }, assigned: 0, seen: 1 };
-  st.queueError = null;
-  st.callsToday = 0;
   st.placed = { ok: true, callId: "vc-1", from: "+5110000000" };
   st.configured = true;
+  st.dnc = [];
+  st.dncError = null;
+  st.dncArgs = [];
   st.loadQueue = [];
   st.built = [];
   st.placeArgs = [];
-  st.todayArgs = [];
   st.revalidate = [];
+  ui.on = false;
+  ui.sets = [];
+  ui.effects = [];
+  ui.reads = [];
+  ui.panelReply = null;
+  ui.panelThrow = null;
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -228,30 +344,24 @@ describe("las constantes del drawer son las del agente", () => {
 
 // ── El panel ────────────────────────────────────────────────────────────────
 
-describe("leadVoicePanelView: cuándo hay botón y qué se dice si no", () => {
-  const data = (over: Partial<LeadVoicePanelData> = {}): LeadVoicePanelData => ({
-    enabled: true,
-    configured: true,
-    eligible: true,
-    reason: null,
-    arm: "tratamiento",
-    optOut: false,
-    calls: [],
-    ...over,
+describe("leadVoicePanelView: la prueba, y qué falta si no se puede", () => {
+  it("con la línea configurada se puede probar, con el agente encendido o apagado", () => {
+    expect(leadVoicePanelView(panelData())).toEqual({ puedeProbar: true, aviso: null });
+    expect(leadVoicePanelView(panelData({ enabled: false }))).toEqual({ puedeProbar: true, aviso: null });
   });
 
-  it("solo con el agente encendido, la línea configurada y el lead en la cola", () => {
-    expect(leadVoicePanelView(data())).toEqual({ puedeLlamar: true, porQueNo: null });
-    expect(leadVoicePanelView(data({ eligible: false, reason: "Grupo de control" })).puedeLlamar).toBe(false);
-    expect(leadVoicePanelView(data({ enabled: false })).puedeLlamar).toBe(false);
-    expect(leadVoicePanelView(data({ configured: false })).puedeLlamar).toBe(false);
+  it("sin la línea configurada no hay prueba y se dice qué falta", () => {
+    for (const enabled of [true, false]) {
+      const view = leadVoicePanelView(panelData({ configured: false, enabled }));
+      expect(view.puedeProbar).toBe(false);
+      expect(view.aviso).toBe("Falta configurar la línea del agente de leads en Vercel (puerta SIP y secreto).");
+    }
   });
 
-  it("primero lo que falta configurar, después el interruptor, al final la razón de la cola", () => {
-    const todo = data({ configured: false, enabled: false, eligible: false, reason: "x" });
-    expect(leadVoicePanelView(todo).porQueNo).toContain("Vercel");
-    expect(leadVoicePanelView({ ...todo, configured: true }).porQueNo).toContain("apagado");
-    expect(leadVoicePanelView({ ...todo, configured: true, enabled: true }).porQueNo).toBe("x");
+  it("lo que dice no depende de las llamadas ni del opt-out: no hay nada de cola ni de brazo que mostrar", () => {
+    const base = leadVoicePanelView(panelData());
+    expect(Object.keys(base).sort()).toEqual(["aviso", "puedeProbar"]);
+    expect(leadVoicePanelView(panelData({ optOut: true, calls: [voiceCall()] }))).toEqual(base);
   });
 
   it("el drawer lo monta en su tarjeta, antes del resultado de la llamada y solo con teléfono", () => {
@@ -262,17 +372,107 @@ describe("leadVoicePanelView: cuándo hay botón y qué se dice si no", () => {
     expect(drawer.indexOf("<LeadVoiceAgentPanel")).toBeLessThan(drawer.indexOf("<CallForm key={lead.id}"));
   });
 
-  it("el panel lee por /api/leads/read y muta con las acciones de leads", () => {
+  it("el panel lee por /api/leads/read y solo prueba: sin llamada a mano, sin cola y sin brazo", () => {
     const panel = read("components", "lead-voice-agent-panel.tsx");
+    const code = sinComentarios(panel);
     expect(panel).toContain('import { loadLeadVoicePanel } from "@/lib/leads-read-client";');
-    expect(panel).toContain("llamarLeadConAgente(leadId)");
-    expect(panel).toContain("probarAgenteLeadEnMiTelefono(leadId, telefono)");
-    for (const text of ["En la cola del agente", "Fuera de la cola", "Grupo de control", "Pidió no ser contactado", "Llamar con el agente", "Probar en mi teléfono", "Prueba"]) {
-      expect(panel).toContain(text);
+    expect(code).toContain("probarAgenteLeadEnMiTelefono(leadId, telefono)");
+    // «Llamar con el agente» ya no existe: ni se importa ni se llama.
+    expect(code).not.toContain("llamarLeadConAgente");
+    for (const text of ["Pidió no ser contactado", "Probar en mi teléfono", "Prueba", "El agente no ha llamado a este lead."]) {
+      expect(code).toContain(text);
+    }
+    for (const text of ["Grupo de control", "En la cola", "Fuera de la cola", "Llamar con el agente", ".arm", ".eligible", ".reason"]) {
+      expect(code).not.toContain(text);
     }
     const client = read("lib", "leads-read-client.ts");
     expect(client).toContain('readLeadData("loadLeadVoicePanel", args)');
     expect(read("app", "api", "leads", "read", "route.ts")).toContain("loadLeadVoicePanel: lead,");
+  });
+
+  it("no hay llamada a mano: las acciones de leads no tienen llamarLeadConAgente ni miran la cola", async () => {
+    const actions = await import("@/app/dashboard/leads/actions");
+    expect("llamarLeadConAgente" in actions).toBe(false);
+    const src = sinComentarios(read("app", "dashboard", "leads", "actions.ts"));
+    expect(src).not.toContain("llamarLeadConAgente");
+    expect(src).not.toMatch(/import\s*\{[^}]*\bloadLeadVoiceQueue\b[^}]*\}\s*from/);
+    expect(src).not.toMatch(/import\s*\{[^}]*\bLEAD_VOICE_EXCLUSION_LABEL\b[^}]*\}\s*from/);
+  });
+});
+
+describe("LeadVoiceAgentPanel: lo que se pinta", () => {
+  it("a ciegas: muestra sus llamadas y «Probar en mi teléfono», nunca la cola, el brazo ni «Llamar con el agente»", () => {
+    const html = montar(panelData({ calls: [voiceCall({ resumen: "Pidió que la llamen a las 6." })] }));
+    expect(html).toContain("Probar en mi teléfono");
+    expect(html).toContain("Pidió que la llamen a las 6.");
+    expect(html).not.toMatch(/grupo de control|en la cola|fuera de la cola|llamar con el agente|tratamiento/i);
+    expect(html).not.toContain(LEAD_VOICE_EXCLUSION_LABEL.grupo_control);
+  });
+
+  it("sin llamadas lo dice; una de prueba lleva su marca; «no contactar» se ve", () => {
+    expect(montar(panelData())).toContain("El agente no ha llamado a este lead.");
+    const html = montar(panelData({ optOut: true, calls: [voiceCall({ mode: "test" })] }));
+    expect(html).not.toContain("El agente no ha llamado a este lead.");
+    expect(html).toContain("Prueba");
+    expect(html).toContain("Pidió no ser contactado");
+  });
+
+  it("sin la línea configurada no ofrece la prueba y dice qué falta", () => {
+    const html = montar(panelData({ configured: false }));
+    expect(html).not.toContain("Probar en mi teléfono");
+    expect(html).toContain("Falta configurar la línea del agente de leads en Vercel");
+  });
+
+  it("al probar avisa que no puede ser el número del lead", () => {
+    const html = montar(panelData(), { probando: true });
+    expect(html).toContain("no puede ser el número del lead");
+    expect(html).toContain("Llamarme");
+    expect(html).not.toContain("Probar en mi teléfono");
+  });
+
+  it("antes de la primera lectura: «cargando…», o el error si esa lectura falló", () => {
+    expect(montar(null)).toContain("Agente de voz: cargando…");
+    expect(montar(null, { loadError: "Sin acceso a este lead." })).toContain("Agente de voz: Sin acceso a este lead.");
+  });
+
+  it("con lo último leído y un error, el error va arriba y las llamadas siguen debajo", () => {
+    const html = montar(panelData({ calls: [voiceCall({ status: "in_progress", outcome: null, resumen: "En curso." })] }), {
+      loadError: "No se pudo cargar la información. Intenta nuevamente.",
+    });
+    expect(html).toContain("No se pudo cargar la información. Intenta nuevamente.");
+    expect(html).toContain("En conversación");
+    expect(html.indexOf("No se pudo cargar")).toBeLessThan(html.indexOf("En conversación"));
+  });
+});
+
+describe("LeadVoiceAgentPanel: una relectura que falla no borra lo último leído", () => {
+  const abierta = () => panelData({ calls: [voiceCall({ status: "in_progress", outcome: null })] });
+
+  it("con {error}: anota el error y deja los datos (la llamada abierta se sigue mirando)", async () => {
+    montar(abierta());
+    ui.panelReply = { error: "Sin acceso a este lead." };
+    await relectura();
+    expect(ui.reads).toEqual([[LEAD]]);
+    expect(ui.sets).toEqual([[LOAD_ERROR, "Sin acceso a este lead."]]);
+    expect(ui.sets.some(([slot]) => slot === DATA)).toBe(false);
+  });
+
+  it("si la lectura revienta (la red), igual: solo el error", async () => {
+    montar(abierta());
+    ui.panelThrow = new Error("No se pudo cargar la información. Intenta nuevamente.");
+    await relectura();
+    expect(ui.sets).toEqual([[LOAD_ERROR, "No se pudo cargar la información. Intenta nuevamente."]]);
+  });
+
+  it("una lectura buena limpia el error y trae lo nuevo", async () => {
+    montar(abierta(), { loadError: "timeout" });
+    const nueva = panelData({ calls: [voiceCall({ status: "completed", outcome: "atender_ahora" })] });
+    ui.panelReply = { data: nueva };
+    await relectura();
+    expect(ui.sets).toEqual([
+      [LOAD_ERROR, null],
+      [DATA, nueva],
+    ]);
   });
 });
 
@@ -320,7 +520,7 @@ describe("el historial y la ficha del lead", () => {
 
 // ── Acciones del panel ──────────────────────────────────────────────────────
 
-describe("loadLeadVoicePanel", () => {
+describe("loadLeadVoicePanel: a ciegas", () => {
   beforeEach(() => {
     st.reply = (c) => {
       if (c.table === "voice_calls") {
@@ -345,10 +545,11 @@ describe("loadLeadVoicePanel", () => {
     };
   });
 
-  it("dice si entra, su brazo y sus llamadas, sin sortear (sin assign)", async () => {
+  it("solo lo que ya pasó: encendido, línea, opt-out y sus llamadas; nunca mira la cola ni sortea", async () => {
     const res = await loadLeadVoicePanel(LEAD);
     if ("error" in res) throw new Error(res.error);
-    expect(res.data).toMatchObject({ enabled: true, configured: true, eligible: true, reason: null, arm: "tratamiento", optOut: false });
+    expect(Object.keys(res.data).sort()).toEqual(["calls", "configured", "enabled", "optOut"]);
+    expect(res.data).toMatchObject({ enabled: true, configured: true, optOut: false });
     expect(res.data.calls[0]).toEqual({
       id: "vc-2",
       mode: "real",
@@ -360,42 +561,57 @@ describe("loadLeadVoicePanel", () => {
       error: null,
     });
     expect(res.data.calls[1]).toMatchObject({ mode: "test", resumen: null, motivo: null });
-    expect(st.loadQueue[0]![3]).toEqual({ leadId: LEAD });
+    expect(st.loadQueue).toHaveLength(0);
     // Solo las llamadas de LEADS de este lead: las de Reproprovincia no son suyas.
     const vc = callsTo("voice_calls")[0];
     expect(has(vc, "eq", "lead_id", LEAD)).toBe(true);
     expect(has(vc, "eq", "purpose", "lead")).toBe(true);
+    // Leer el panel no escribe nada (ni brazo ni llamada).
+    expect(st.calls.filter((c) => c.op !== "select")).toHaveLength(0);
+    expect(callsTo("lead_experiments")).toHaveLength(0);
     expect(st.placeArgs).toHaveLength(0);
   });
 
-  it("grupo de control y «no contactar», con la frase de la cola", async () => {
+  it("un lead de control se ve igual que cualquiera: sin brazo ni razón, solo «no contactar» si lo pidió", async () => {
     st.queue = { candidates: [], reasons: { [LEAD]: "grupo_control" }, arms: { [LEAD]: "control" }, assigned: 0, seen: 1 };
     const base = st.reply;
     st.reply = (c) => (c.table === "leads" ? { data: { contact_opt_out_at: "2026-10-12T15:00:00Z" }, error: null } : base(c));
     const res = await loadLeadVoicePanel(LEAD);
     if ("error" in res) throw new Error(res.error);
-    expect(res.data).toMatchObject({
-      eligible: false,
-      reason: LEAD_VOICE_EXCLUSION_LABEL.grupo_control,
-      arm: "control",
-      optOut: true,
-    });
+    expect(res.data.optOut).toBe(true);
+    expect(res.data).not.toHaveProperty("arm");
+    expect(res.data).not.toHaveProperty("eligible");
+    expect(res.data).not.toHaveProperty("reason");
+    expect(JSON.stringify(res.data)).not.toContain(LEAD_VOICE_EXCLUSION_LABEL.grupo_control);
+    expect(st.loadQueue).toHaveLength(0);
   });
 
-  it("si la cola no se puede leer, queda fuera (cerrado) y las llamadas igual se ven", async () => {
-    st.queueError = new Error("timeout");
+  it("dice tal cual si el agente está apagado o la línea sin configurar", async () => {
+    st.store = { id: "store-1", name: "Kenku", settings: { ...SETTINGS, enabled: false } };
+    st.configured = false;
     const res = await loadLeadVoicePanel(LEAD);
     if ("error" in res) throw new Error(res.error);
-    expect(res.data.eligible).toBe(false);
-    expect(res.data.reason).toContain("No se pudo leer la cola");
-    expect(res.data.calls).toHaveLength(2);
+    expect(res.data).toMatchObject({ enabled: false, configured: false });
   });
 
-  it("pre-0247 (sin columnas) el panel no se cae: sin llamadas y sin opt-out", async () => {
+  it.each<[string, () => void]>([
+    ["no se encuentra (o pre-0247, sin columnas)", () => void (st.store = null)],
+    ["revienta al leerla", () => void (st.storeError = new Error("timeout"))],
+  ])("una tienda que %s deja el agente apagado, no un error, y las llamadas igual se ven", async (_t, romper) => {
+    romper();
+    const res = await loadLeadVoicePanel(LEAD);
+    if ("error" in res) throw new Error(res.error);
+    expect(res.data).toMatchObject({ enabled: false, configured: true, optOut: false });
+    expect(res.data.calls).toHaveLength(2);
+    expect(st.loadQueue).toHaveLength(0);
+  });
+
+  it("pre-0247 (sin columnas) el panel no se cae: apagado, sin llamadas y sin opt-out", async () => {
+    st.store = null;
     st.reply = () => ({ data: null, error: { message: "column voice_calls.lead_id does not exist" } });
     const res = await loadLeadVoicePanel(LEAD);
     if ("error" in res) throw new Error(res.error);
-    expect(res.data).toMatchObject({ optOut: false, calls: [] });
+    expect(res.data).toEqual({ enabled: false, configured: true, optOut: false, calls: [] });
   });
 
   it("sin acceso al lead no lee nada privilegiado", async () => {
@@ -406,92 +622,35 @@ describe("loadLeadVoicePanel", () => {
   });
 });
 
-describe("llamarLeadConAgente", () => {
-  it("llama al lead de la cola: modo real, quién lo pidió, su teléfono; sin revalidatePath", async () => {
-    const res = await llamarLeadConAgente(LEAD);
-    expect(res).toEqual({ notice: "Llamando. Cuando conteste, lo atiende el agente de leads." });
-    expect(st.loadQueue[0]![3]).toEqual({ leadId: LEAD, assign: true });
-    expect(st.todayArgs[0]![1]).toBe("store-1");
-    expect(st.todayArgs[0]![3]).toBe("lead"); // el tope es del carril de leads
-    expect(st.built[0]![4]).toBe("real");
-    expect(st.placeArgs[0]![1]).toEqual({
-      storeId: "store-1",
-      leadId: LEAD,
-      phone: "51987654321",
-      mode: "real",
-      triggeredBy: "asesora-1",
-      context: { ficha: { modo: "real" }, estado_al_marcar: "nuevo" },
-    });
-    expect(st.revalidate).toHaveLength(0);
-  });
-
-  it("el grupo de control NUNCA se llama, ni a mano", async () => {
-    st.queue = { candidates: [], reasons: { [LEAD]: "grupo_control" }, arms: { [LEAD]: "control" }, assigned: 1, seen: 1 };
-    expect(await llamarLeadConAgente(LEAD)).toEqual({ error: LEAD_VOICE_EXCLUSION_LABEL.grupo_control });
-    expect(st.placeArgs).toHaveLength(0);
-    expect(st.built).toHaveLength(0);
-  });
-
-  it("quien pidió no ser contactado tampoco", async () => {
-    st.queue = { candidates: [], reasons: { [LEAD]: "no_contactar" }, arms: {}, assigned: 0, seen: 1 };
-    expect(await llamarLeadConAgente(LEAD)).toEqual({ error: LEAD_VOICE_EXCLUSION_LABEL.no_contactar });
-    expect(st.placeArgs).toHaveLength(0);
-  });
-
-  it("agente apagado, línea sin configurar, fuera de horario o tope del día: no mira la cola ni marca", async () => {
-    st.store = { id: "store-1", name: "Kenku", settings: { ...SETTINGS, enabled: false } };
-    expect((await llamarLeadConAgente(LEAD)).error).toContain("no está habilitado");
-
-    st.store = { id: "store-1", name: "Kenku", settings: { ...SETTINGS } };
-    st.configured = false;
-    expect((await llamarLeadConAgente(LEAD)).error).toContain("Falta configurar la línea");
-    st.configured = true;
-
-    st.store = { id: "store-1", name: "Kenku", settings: { ...SETTINGS } };
-    vi.setSystemTime(new Date("2026-10-14T03:00:00Z")); // 22:00 en Lima
-    expect((await llamarLeadConAgente(LEAD)).error).toBe(
-      "El agente de leads llama de 9:00 a 20:00; los domingos, desde las 11:00.",
-    );
-
-    vi.setSystemTime(new Date("2026-10-14T15:00:00Z"));
-    st.callsToday = 40;
-    expect((await llamarLeadConAgente(LEAD)).error).toContain("tope de llamadas del agente de leads");
-
-    expect(st.loadQueue).toHaveLength(0);
-    expect(st.placeArgs).toHaveLength(0);
-  });
-
-  it("sin permiso de edición del Master no hace nada", async () => {
-    st.canEdit = false;
-    expect((await llamarLeadConAgente(LEAD)).error).toContain("Tu rol no permite");
-    expect(st.loadQueue).toHaveLength(0);
-    expect(st.placeArgs).toHaveLength(0);
-  });
-
-  it("devuelve el error de la línea tal cual", async () => {
-    st.placed = { ok: false, status: 409, error: "El agente de leads ya está en otra llamada." };
-    expect(await llamarLeadConAgente(LEAD)).toEqual({ error: "El agente de leads ya está en otra llamada." });
-  });
-});
-
 describe("probarAgenteLeadEnMiTelefono", () => {
+  const LEAD_ROW = {
+    id: LEAD,
+    store_id: "store-1",
+    phone: "51987654321",
+    name: "Rosa",
+    status: "volver_a_llamar",
+    category: "open",
+    first_inbound_text: "Precio del shampoo?",
+    kapso_conversation_id: "conv-1",
+  };
+  /** La consulta «¿algún lead de la tienda con este número pidió no ser contactado?». */
+  const esOptOut = (c: Call) => c.table === "leads" && has(c, "not", "contact_opt_out_at");
+  /** La consulta «¿este número es de otro lead de la tienda?». */
+  const esOtroLead = (c: Call) => c.table === "leads" && has(c, "in", "phone");
+  let storeOrg: Reply;
+  let optOut: Reply;
+  let otroLead: Reply;
   beforeEach(() => {
-    st.reply = (c) =>
-      c.table === "leads"
-        ? {
-            data: {
-              id: LEAD,
-              store_id: "store-1",
-              phone: "51987654321",
-              name: "Rosa",
-              status: "volver_a_llamar",
-              category: "open",
-              first_inbound_text: "Precio del shampoo?",
-              kapso_conversation_id: "conv-1",
-            },
-            error: null,
-          }
-        : { data: null, error: null };
+    storeOrg = { data: { org_id: "org-1" }, error: null };
+    optOut = { data: [], error: null };
+    otroLead = { data: [], error: null };
+    st.reply = (c) => {
+      if (c.table === "stores") return storeOrg;
+      if (esOptOut(c)) return optOut;
+      if (esOtroLead(c)) return otroLead;
+      if (c.table === "leads") return { data: LEAD_ROW, error: null };
+      return { data: null, error: null };
+    };
   });
 
   it("llama al teléfono de quien prueba, en modo prueba, con la ficha de este lead", async () => {
@@ -508,15 +667,116 @@ describe("probarAgenteLeadEnMiTelefono", () => {
     expect(st.calls.filter((c) => c.op !== "select")).toHaveLength(0);
   });
 
+  it("revisa el permiso en la organización de la tienda del lead y el «no llamar» de ESA tienda", async () => {
+    await probarAgenteLeadEnMiTelefono(LEAD, "911222333");
+    const org = callsTo("stores")[0];
+    expect(org?.cols).toBe("org_id");
+    expect(has(org, "eq", "id", "store-1")).toBe(true);
+    expect(st.orgPermArgs).toEqual([["org-1", "master.edit"]]);
+    expect(st.dncArgs).toHaveLength(1);
+    expect(st.dncArgs[0]![1]).toBe("store-1");
+    const opt = st.calls.find(esOptOut);
+    expect(has(opt, "eq", "store_id", "store-1")).toBe(true);
+    expect(has(opt, "eq", "phone", "51911222333")).toBe(true);
+    expect(has(opt, "not", "contact_opt_out_at", "is")).toBe(true);
+    expect(st.placeArgs).toHaveLength(1);
+  });
+
   it("rechaza un teléfono que no es celular peruano antes de marcar", async () => {
     expect((await probarAgenteLeadEnMiTelefono(LEAD, "12345")).error).toContain("celular peruano");
     expect(st.placeArgs).toHaveLength(0);
   });
 
-  it("sin permiso de edición del Master no prueba", async () => {
-    st.canEdit = false;
-    expect((await probarAgenteLeadEnMiTelefono(LEAD, "911222333")).error).toContain("Tu rol no permite");
+  it("sin permiso de edición del Master en la organización del lead no prueba", async () => {
+    st.orgPerms = { "org-1": ["master.view"] };
+    expect(await probarAgenteLeadEnMiTelefono(LEAD, "911222333")).toEqual({ error: "Tu rol no permite probar el agente." });
     expect(st.placeArgs).toHaveLength(0);
+    expect(st.built).toHaveLength(0);
+    // Ni lee el lead ni la lista: se corta en el permiso.
+    expect(callsTo("leads")).toHaveLength(0);
+    expect(st.dncArgs).toHaveLength(0);
+  });
+
+  it("master.edit en OTRA organización no alcanza (no es la unión de todas las tuyas)", async () => {
+    st.canEdit = true; // la unión global diría que sí
+    st.orgPerms = { "org-otra": ["master.edit"], "org-1": [] };
+    expect(await probarAgenteLeadEnMiTelefono(LEAD, "911222333")).toEqual({ error: "Tu rol no permite probar el agente." });
+    expect(st.orgPermArgs).toEqual([["org-1", "master.edit"]]);
+    expect(st.placeArgs).toHaveLength(0);
+  });
+
+  it("si la tienda del agente no se puede leer, no prueba", async () => {
+    st.store = null;
+    expect(await probarAgenteLeadEnMiTelefono(LEAD, "911222333")).toEqual({ error: "Tienda no encontrada." });
+    expect(st.placeArgs).toHaveLength(0);
+  });
+
+  it("si no se sabe la organización de la tienda, no prueba", async () => {
+    storeOrg = { data: null, error: { message: "timeout" } };
+    expect(await probarAgenteLeadEnMiTelefono(LEAD, "911222333")).toEqual({ error: "Tu rol no permite probar el agente." });
+    expect(st.orgPermArgs).toHaveLength(0);
+    expect(st.placeArgs).toHaveLength(0);
+  });
+
+  it.each(["987654321", "987 654 321", "+51 987 654 321", "51987654321"])(
+    "nunca marca el número del lead, escrito como sea (%s)",
+    async (phone) => {
+      expect(await probarAgenteLeadEnMiTelefono(LEAD, phone)).toEqual({
+        error: "Ese es el número del lead. Usa tu propio celular: la prueba nunca llama al lead.",
+      });
+      expect(st.placeArgs).toHaveLength(0);
+      expect(st.built).toHaveLength(0);
+    },
+  );
+
+  // Desde el drawer del lead A, el número del lead B: B recibiría la ficha y
+  // el chat de A, y sería una llamada por fuera del sorteo.
+  it("tampoco el número de OTRO lead de la tienda, escrito con o sin 51", async () => {
+    otroLead = { data: [{ id: "lead-b" }], error: null };
+    expect(await probarAgenteLeadEnMiTelefono(LEAD, "911 222 333")).toEqual({
+      error: "Ese número es de un lead de la tienda. Usa tu propio celular.",
+    });
+    const q = st.calls.find(esOtroLead);
+    expect(has(q, "eq", "store_id", "store-1")).toBe(true);
+    expect(has(q, "in", "phone", ["51911222333", "911222333"])).toBe(true);
+    expect(st.placeArgs).toHaveLength(0);
+    expect(st.built).toHaveLength(0);
+  });
+
+  it("si no se puede revisar si el número es de otro lead, no llama", async () => {
+    otroLead = { data: null, error: { message: "statement timeout" } };
+    expect(await probarAgenteLeadEnMiTelefono(LEAD, "911222333")).toEqual({
+      error: "No se pudo revisar el número. Intenta de nuevo.",
+    });
+    expect(st.placeArgs).toHaveLength(0);
+  });
+
+  it("un número de la lista «no llamar» de la tienda no recibe ni una prueba", async () => {
+    st.dnc = ["911222333"];
+    expect(await probarAgenteLeadEnMiTelefono(LEAD, "911 222 333")).toEqual({
+      error: "Ese número pidió no ser contactado. Usa otro celular.",
+    });
+    expect(st.placeArgs).toHaveLength(0);
+    expect(st.built).toHaveLength(0);
+  });
+
+  it("tampoco el de un lead de la tienda que pidió no ser contactado", async () => {
+    optOut = { data: [{ id: "otro-lead" }], error: null };
+    expect(await probarAgenteLeadEnMiTelefono(LEAD, "911222333")).toEqual({
+      error: "Ese número pidió no ser contactado. Usa otro celular.",
+    });
+    expect(st.placeArgs).toHaveLength(0);
+  });
+
+  it("si la lista «no llamar» o los opt-out no se pueden leer, no llama (cierra)", async () => {
+    const msg = "No se pudo revisar la lista «no llamar». Intenta de nuevo.";
+    st.dncError = new Error("statement timeout");
+    expect(await probarAgenteLeadEnMiTelefono(LEAD, "911222333")).toEqual({ error: msg });
+    st.dncError = null;
+    optOut = { data: null, error: { message: "statement timeout" } };
+    expect(await probarAgenteLeadEnMiTelefono(LEAD, "911222333")).toEqual({ error: msg });
+    expect(st.placeArgs).toHaveLength(0);
+    expect(st.built).toHaveLength(0);
   });
 });
 
@@ -544,11 +804,60 @@ describe("loadOrderDraft superpone la captura del agente", () => {
     kapso_conversation_id: null,
     ...over,
   });
-  const reply = (lead: Record<string, unknown>, voice: Reply) => (c: Call): Reply =>
-    c.table === "leads" ? { data: lead, error: null } : c.table === "voice_calls" ? voice : { data: null, error: null };
+  const NO_DRAFT: Reply = { data: null, error: null };
+  const reply = (lead: Record<string, unknown>, voice: Reply, draft: Reply = NO_DRAFT) => (c: Call): Reply =>
+    c.table === "leads"
+      ? { data: lead, error: null }
+      : c.table === "voice_calls"
+        ? voice
+        : c.table === "draft_orders"
+          ? draft
+          : { data: null, error: null };
+  const conCaptura = (captura: Record<string, unknown>): Reply => ({
+    data: { outcome_payload: { resultado: "atender_ahora", captura } },
+    error: null,
+  });
 
-  it("llena lo vacío con la captura y no inventa productos", async () => {
-    st.reply = reply(leadRow(), { data: { outcome_payload: { resultado: "atender_ahora", captura: CAPTURA } }, error: null });
+  it("sin carrito, la dirección dictada entra en bloque y el nombre de la llamada reemplaza al de WhatsApp; no inventa productos", async () => {
+    st.reply = reply(leadRow(), conCaptura(CAPTURA));
+    const res = await loadOrderDraft(LEAD);
+    if ("error" in res) throw new Error(res.error);
+    expect(res).toMatchObject({
+      isCart: false,
+      address1: "Calle Los Pinos 123",
+      district: "Cayma",
+      province: "Arequipa",
+      referencia: "frente al parque",
+      customerName: "Rosa Quispe", // no el «🌸» del perfil de WhatsApp
+      lineItems: [],
+    });
+  });
+
+  it("el distrito que el bot adivinó del chat no queda pegado a la calle que dictó en otro distrito", async () => {
+    st.reply = reply(leadRow({ name: "Rosita 🌸", district: "Lima", province: "Lima" }), conCaptura({
+      nombre: "Rosa Quispe Mamani",
+      direccion: "Jr. Los Pinos 123",
+      distrito: "San Juan de Lurigancho",
+      provincia: "Lima",
+      departamento: "Lima",
+      referencia: "",
+    }));
+    const res = await loadOrderDraft(LEAD);
+    if ("error" in res) throw new Error(res.error);
+    expect(res).toMatchObject({
+      address1: "Jr. Los Pinos 123",
+      district: "San Juan de Lurigancho",
+      province: "Lima",
+      referencia: null,
+      customerName: "Rosa Quispe Mamani",
+    });
+  });
+
+  it("una dirección vieja del lead tampoco gana a la dictada: va todo el bloque de la llamada", async () => {
+    st.reply = reply(
+      leadRow({ name: null, address1: "Jr. Lima 456", district: "Yanahuara", province: "Cusco", referencia: "casa verde" }),
+      conCaptura(CAPTURA),
+    );
     const res = await loadOrderDraft(LEAD);
     if ("error" in res) throw new Error(res.error);
     expect(res).toMatchObject({
@@ -556,19 +865,94 @@ describe("loadOrderDraft superpone la captura del agente", () => {
       district: "Cayma",
       province: "Arequipa",
       referencia: "frente al parque",
-      customerName: "🌸", // el nombre del lead ya estaba: no se pisa
-      lineItems: [],
+      customerName: "Rosa Quispe",
     });
   });
 
-  it("lo que ya trae el lead manda; el nombre se toma solo si falta", async () => {
-    st.reply = reply(leadRow({ name: null, address1: "Jr. Lima 456", district: "Yanahuara" }), {
-      data: { outcome_payload: { captura: CAPTURA } },
-      error: null,
-    });
+  it("con dirección dictada, lo que la llamada no anotó queda como estaba (no se borra)", async () => {
+    st.reply = reply(
+      leadRow({ district: "Yanahuara", province: "Arequipa", referencia: "casa verde" }),
+      conCaptura({ ...CAPTURA, distrito: "", provincia: "", departamento: "", referencia: "" }),
+    );
     const res = await loadOrderDraft(LEAD);
     if ("error" in res) throw new Error(res.error);
-    expect(res).toMatchObject({ address1: "Jr. Lima 456", district: "Yanahuara", customerName: "Rosa Quispe" });
+    expect(res).toMatchObject({
+      address1: "Calle Los Pinos 123",
+      district: "Yanahuara",
+      province: "Arequipa",
+      referencia: "casa verde",
+    });
+  });
+
+  it("sin dirección dictada solo llena lo vacío: lo que ya trae el lead manda", async () => {
+    st.reply = reply(leadRow({ address1: "Jr. Lima 456", district: "Yanahuara" }), conCaptura({ ...CAPTURA, direccion: "" }));
+    const res = await loadOrderDraft(LEAD);
+    if ("error" in res) throw new Error(res.error);
+    expect(res).toMatchObject({
+      address1: "Jr. Lima 456",
+      district: "Yanahuara",
+      province: "Arequipa", // estaba vacío
+      referencia: "frente al parque", // estaba vacío
+      customerName: "Rosa Quispe", // sin carrito, el nombre de la llamada igual reemplaza al de WhatsApp
+    });
+  });
+
+  it("sin nombre en la captura queda el del lead", async () => {
+    st.reply = reply(leadRow({ name: "Rosa" }), conCaptura({ ...CAPTURA, nombre: "" }));
+    const res = await loadOrderDraft(LEAD);
+    if ("error" in res) throw new Error(res.error);
+    expect(res.customerName).toBe("Rosa");
+  });
+
+  it("con un carrito que trae dirección, el carrito manda: la captura solo llena lo vacío y no cambia el nombre", async () => {
+    st.reply = reply(
+      leadRow({ name: "Ana WhatsApp", draft_order_gid: "gid://shopify/DraftOrder/9", district: "Lima" }),
+      conCaptura(CAPTURA),
+      {
+        data: {
+          line_items: [{ title: "Shampoo Birú", quantity: 2, price: "45" }],
+          address1: "Av. Carrito 9",
+          district: "Miraflores",
+          province: "Lima",
+          referencia: null,
+          customer_name: "Ana Carrito",
+        },
+        error: null,
+      },
+    );
+    const res = await loadOrderDraft(LEAD);
+    if ("error" in res) throw new Error(res.error);
+    expect(callsTo("draft_orders")).toHaveLength(1);
+    expect(res).toMatchObject({
+      isCart: true,
+      address1: "Av. Carrito 9",
+      district: "Miraflores",
+      province: "Lima",
+      referencia: "frente al parque", // el carrito no la traía
+      customerName: "Ana Carrito",
+      lineItems: [{ variantId: null, title: "Shampoo Birú", quantity: 2, unitPrice: 45 }],
+    });
+  });
+
+  it("un carrito sin dirección no manda: la dirección dictada entra en bloque", async () => {
+    st.reply = reply(
+      leadRow({ name: "Ana WhatsApp", draft_order_gid: "gid://shopify/DraftOrder/9", district: "Lima" }),
+      conCaptura(CAPTURA),
+      {
+        data: { line_items: [], address1: "  ", district: null, province: null, referencia: null, customer_name: "Ana Carrito" },
+        error: null,
+      },
+    );
+    const res = await loadOrderDraft(LEAD);
+    if ("error" in res) throw new Error(res.error);
+    expect(res).toMatchObject({
+      isCart: true,
+      address1: "Calle Los Pinos 123",
+      district: "Cayma",
+      province: "Arequipa",
+      referencia: "frente al parque",
+      customerName: "Ana Carrito", // con carrito, el nombre del carrito se queda
+    });
   });
 
   it("la región sale del departamento; la provincia es el respaldo", async () => {
@@ -605,7 +989,7 @@ describe("loadOrderDraft superpone la captura del agente", () => {
     st.reply = reply(leadRow({ address1: "Av. Ejército 700" }), { data: null, error: { message: "column voice_calls.lead_id does not exist" } });
     const res = await loadOrderDraft(LEAD);
     if ("error" in res) throw new Error(res.error);
-    expect(res).toMatchObject({ address1: "Av. Ejército 700", district: null, province: null });
+    expect(res).toMatchObject({ address1: "Av. Ejército 700", district: null, province: null, customerName: "🌸" });
     expect(callsTo("leads")[0]!.cols).toContain("address1");
   });
 });

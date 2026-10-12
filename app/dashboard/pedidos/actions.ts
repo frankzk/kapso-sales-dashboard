@@ -2450,7 +2450,9 @@ export async function llamarConAgente(orderId: string): Promise<MasterActionStat
     };
   }
   const admin = createAdminSupabase();
-  if ((await realCallsToday(admin, store.id, now)) >= store.voice_recovery_daily_cap) {
+  const used = await realCallsToday(admin, store.id, now);
+  if (used === null) return { error: "No se pudo leer el tope de llamadas de hoy. Intenta de nuevo." };
+  if (used >= store.voice_recovery_daily_cap) {
     return { error: "La tienda ya llegó al tope de llamadas del agente de hoy." };
   }
   const queue = await loadVoiceQueue(admin, store, now, orderId);

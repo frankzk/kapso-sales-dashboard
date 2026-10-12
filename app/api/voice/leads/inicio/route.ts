@@ -17,7 +17,8 @@
 
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminSupabase } from "@/lib/db";
-import { leadVoiceInitiation } from "@/lib/voice-leads";
+import { env } from "@/lib/env";
+import { callerIdDeKapta, leadVoiceInitiation } from "@/lib/voice-leads";
 import { leadToolAuthorized } from "@/lib/voice-leads-server";
 import { loadLeadCall } from "@/lib/voice-leads-writeback";
 import { pickOpenCall } from "@/lib/voice-recovery";
@@ -30,6 +31,20 @@ export const maxDuration = 10;
 export async function POST(req: NextRequest) {
   if (!leadToolAuthorized(req)) {
     return NextResponse.json({ error: "no autorizado" }, { status: 401 });
+  }
+  // El tramo que Kapta abre al agente sale con el número de leads
+  // (`agenteDialBody` con TELNYX_LEADS_FROM_NUMBER). Una conversación que entra
+  // con otro caller ID es alguien llamando al número del agente —típicamente
+  // un lead que devuelve la perdida— mientras el agente marca a otra persona:
+  // no recibe la ficha ajena (la regla de §11.8 tras el 24-09-2026).
+  let body: { caller_id?: unknown } = {};
+  try {
+    body = (await req.json()) as { caller_id?: unknown };
+  } catch {
+    body = {};
+  }
+  if (!callerIdDeKapta(body.caller_id, env.telnyxLeadsFromNumber())) {
+    return NextResponse.json(leadVoiceInitiation(null, null));
   }
   try {
     const admin = createAdminSupabase();
