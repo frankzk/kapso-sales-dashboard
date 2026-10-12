@@ -213,9 +213,9 @@ export function ProductivityBoard({
     // Dos tramos que no se parten; el «·» cierra el primero para que ningún
     // renglón empiece por él.
     <span className="flex flex-wrap gap-x-1">
-      <span>
+      <span className="whitespace-nowrap" title={`Carritos gestionados en menos de ${FIRST_TOUCH_FAST_MIN} minutos`}>
         {firstTouch.carritos.n
-          ? `${firstTouch.carritos.under30Pct} % en menos de ${FIRST_TOUCH_FAST_MIN} min ·`
+          ? `${firstTouch.carritos.under30Pct}\u00a0% en\u00a0<${FIRST_TOUCH_FAST_MIN}\u00a0min ·`
           : "sin carritos nuevos ·"}
       </span>
       <span className="whitespace-nowrap">el resto, {formatMinutes(firstTouch.resto.medianMin)}</span>
@@ -361,7 +361,7 @@ function Change({ pct }: { pct: number | null }) {
   return (
     <span className={cn("text-[13px] font-semibold tabular-nums", tone)} title="Contra el periodo anterior">
       {pct > 0 ? "+" : pct < 0 ? "−" : ""}
-      {nf1.format(Math.abs(pct))} %
+      {nf1.format(Math.abs(pct))}{"\u00a0"}%
     </span>
   );
 }

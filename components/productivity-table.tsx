@@ -20,17 +20,18 @@ function money(n: number, currency: string): string {
   return new Intl.NumberFormat("es-PE", { style: "currency", currency, maximumFractionDigits: 0 }).format(n);
 }
 
+// Cifra y unidad van con espacio duro: un salto de línea nunca deja «min» o «%» solos.
 function pct(x: number): string {
-  return `${Math.round(x * 100)} %`;
+  return `${Math.round(x * 100)}\u00a0%`;
 }
 
 /** Copia local de formatMinutes (lib/productivity) — este archivo solo importa
  *  TIPOS de ese módulo para no arrastrar el data layer al bundle cliente. */
 function fmtMin(min: number | null): string {
   if (min == null) return "—";
-  if (min < 60) return `${Math.round(min)} min`;
-  if (min < 1440) return `${nf1.format(min / 60)} h`;
-  return `${nf1.format(min / 1440)} d`;
+  if (min < 60) return `${Math.round(min)}\u00a0min`;
+  if (min < 1440) return `${nf1.format(min / 60)}\u00a0h`;
+  return `${nf1.format(min / 1440)}\u00a0d`;
 }
 
 /** Tono de la 1ª gestión: verde ≤30 min · neutro ≤4 h · rojo más allá. */
