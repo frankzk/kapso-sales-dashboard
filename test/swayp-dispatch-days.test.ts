@@ -79,7 +79,8 @@ describe("los días de despacho Swayp", () => {
 describe("todas las puertas lo aplican", () => {
   it("el servidor rechaza el domingo en la guía directa, la guía manual y el reenvío", () => {
     const actions = read("app/dashboard/envios/actions.ts");
-    expect(actions).toContain("if (!isSwaypDispatchDay(dispatchDay)) return { error: SWAYP_SUNDAY_ERROR };");
+    // La guía directa se emite en lib/swayp-directa.ts desde el 13-10-2026.
+    expect(read("lib/swayp-directa.ts")).toContain("if (!isSwaypDispatchDay(dispatchDay)) return { error: SWAYP_SUNDAY_ERROR };");
     expect(actions).toContain("if (!isSwaypDispatchDay(input.nextFollowupAt)) return { error: SWAYP_SUNDAY_ERROR };");
     expect(read("lib/swayp-reenvio.ts")).toContain("if (!isSwaypDispatchDay(input.nextFollowupAt)) return { error: SWAYP_SUNDAY_ERROR };");
     // «Cliente confirma» por Swayp emite la guía nueva con esa fecha.

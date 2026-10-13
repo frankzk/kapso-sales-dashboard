@@ -35,6 +35,8 @@ export interface SwaypDesdeConfirmacionRow {
   nextOutput: { courier: string; guideCode: string | null; deliveryStatus: string } | null;
   macroStage: string | null;
   macroSubstage: string | null;
+  /** Lo envió el automático (MOM §11.13), no una persona con el botón. */
+  automatico: boolean;
 }
 
 interface GuideRow {
@@ -57,7 +59,7 @@ export async function getSwaypDesdeConfirmacionLog(limit = 300): Promise<SwaypDe
   const sb = await createServerSupabase();
   const { data: events, error } = await sb
     .from("order_events")
-    .select("order_id,store_id,shipment_id,occurred_at,actor,guide_code")
+    .select("order_id,store_id,shipment_id,occurred_at,actor,guide_code,source")
     .eq("kind", SWAYP_DESDE_CONFIRMACION_KIND)
     .order("occurred_at", { ascending: false })
     .limit(limit);
@@ -69,6 +71,7 @@ export async function getSwaypDesdeConfirmacionLog(limit = 300): Promise<SwaypDe
     occurred_at: string;
     actor: string | null;
     guide_code: string | null;
+    source: string | null;
   }[];
   if (!cases.length) return [];
 
@@ -125,7 +128,7 @@ export async function getSwaypDesdeConfirmacionLog(limit = 300): Promise<SwaypDe
       destination: [text(m.district), text(m.province) ?? text(m.region)].filter(Boolean).join(" · ") || null,
       orderTotal: m.order_total == null ? null : Number(m.order_total),
       sentAt: c.occurred_at,
-      sentBy: c.actor ? (emails.get(c.actor) ?? null) : null,
+      sentBy: c.source === "system" ? "Automático" : c.actor ? (emails.get(c.actor) ?? null) : null,
       guideCode: guide.guide_code ?? c.guide_code,
       swaypState: guide.swayp_state,
       swaypStateLabel: guide.swayp_state != null ? (SWAYP_STATES[guide.swayp_state] ?? null) : null,
@@ -137,6 +140,7 @@ export async function getSwaypDesdeConfirmacionLog(limit = 300): Promise<SwaypDe
         : null,
       macroStage: text(m.macro_stage),
       macroSubstage: text(m.macro_substage),
+      automatico: c.source === "system",
     });
   }
   return rows;
