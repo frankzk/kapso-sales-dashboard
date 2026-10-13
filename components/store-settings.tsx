@@ -45,6 +45,18 @@ import {
 import { LEAD_VOICE_MOTIVO_LABEL } from "@/lib/voice-lead-labels";
 import type { LeadVoicePilotReport } from "@/lib/voice-leads-server";
 import { imageTestSummary, type ImageTestRow } from "@/lib/cart-image-test";
+import {
+  RESTOCK_CATALOG_DAYS,
+  RESTOCK_DEFAULT_DAYS,
+  RESTOCK_RESULTS_DAYS,
+  restockProductList,
+  restockResultsSummary,
+  suggestShortName,
+  type RestockCatalogRow,
+  type RestockListItem,
+  type RestockProductRow,
+  type RestockResultRow,
+} from "@/lib/restock-view";
 import type { MetaAdAccount, MetaConnectionProbe, StoreMetaAdAccount } from "@/lib/meta-marketing";
 import {
   addPaymentMethod,
@@ -68,6 +80,8 @@ import {
   addEscalationStep,
   moveEscalationStep,
   removeEscalationStep,
+  removeRestockProduct,
+  saveRestockProduct,
   sendTransitQueueNow,
   testFlowclLink,
   syncAliclikCatalogNow,
@@ -135,6 +149,18 @@ export interface StoreSettingsData {
     delivered_thanks_max_hours: number;
     delivered_thanks_pace_count: number;
     delivered_thanks_pace_minutes: number;
+    restock_enabled: boolean;
+    restock_template_name: string | null;
+    restock_template_language: string | null;
+    restock_params: string | null;
+    restock_phone_number_id: string | null;
+    restock_button_label: string | null;
+    restock_hour_start: number;
+    restock_hour_end: number;
+    restock_pace_count: number;
+    restock_pace_minutes: number;
+    restock_days_before: number;
+    restock_control_pct: number;
     /** Agente de voz para Reproprovincia (MOM §11.8, migración 0190). */
     voice_recovery_enabled: boolean;
     voice_recovery_auto: boolean;
@@ -284,6 +310,12 @@ export interface StoreSettingsData {
   escalationCandidates: Array<{ id: string; name: string }>;
   /** Resultado de la prueba de imagen en carritos (0233), por brazo. */
   cartImageTest: ImageTestRow[];
+  /** Recordatorio de reposición (0253): vendido, configurado y resultados. */
+  restock: {
+    catalog: RestockCatalogRow[];
+    products: RestockProductRow[];
+    results: RestockResultRow[];
+  };
   replyTemplates: Array<{
     id: string;
     label: string;
@@ -350,6 +382,7 @@ const INDEX: IndexGroup[] = [
       { id: "drip", label: "Drip sin respuesta" },
       { id: "carritos", label: "Carritos abandonados" },
       { id: "agradecer", label: "Agradecer al entregar" },
+      { id: "reposicion", label: "Recordatorio de reposición" },
       { id: "devueltos", label: "Pedidos devueltos" },
       { id: "agente-voz", label: "Agente de voz" },
       { id: "agente-voz-leads", label: "Agente de voz · Leads" },
@@ -1948,6 +1981,335 @@ function CartImageTestResult({ rows, since }: { rows: ImageTestRow[]; since: str
   );
 }
 
+/**
+ * Recordatorio de reposición (MOM §34): la configuración del envío, cuánto
+ * dura cada producto y cómo le va contra el grupo de control.
+ */
+function RestockSection({ data }: { data: StoreSettingsData }) {
+  const s = data.store;
+  const items = restockProductList(data.restock.catalog, data.restock.products);
+  const on = items.filter((i) => i.config);
+  const off = items.filter((i) => !i.config);
+  return (
+    <SettingsSection
+      id="reposicion"
+      title="Recordatorio de reposición"
+      badge={<OnOff on={s.restock_enabled} />}
+      description={
+        <>
+          <p>
+            Cuando a la clienta se le está por acabar lo que compró, le llega una plantilla con el botón{" "}
+            <strong>«{s.restock_button_label || "Sí, quiero"}»</strong>. Si lo toca —o contesta «sí»— el lead sube a{" "}
+            <strong>Atender ahora</strong> con lo que quiere reponer, y una asesora le escribe para armar el pedido.
+          </p>
+          <p>
+            Solo reciben recordatorio los productos que tienen <strong>días por unidad</strong>. A quien ya volvió a
+            comprar no se le escribe, y un grupo de control no lo recibe: así se sabe cuánto vende de verdad. La
+            plantilla va aprobada en Meta como <strong>Marketing</strong>, con el botón como respuesta rápida.
+          </p>
+        </>
+      }
+    >
+      <StoreForm
+        storeId={s.id}
+        persisted={[
+          s.restock_enabled,
+          s.restock_template_name,
+          s.restock_template_language,
+          s.restock_params,
+          s.restock_button_label,
+          s.restock_days_before,
+          s.restock_hour_start,
+          s.restock_hour_end,
+          s.restock_pace_count,
+          s.restock_pace_minutes,
+          s.restock_control_pct,
+          s.restock_phone_number_id,
+        ]}
+      >
+        <ToggleRow name="restock_enabled" label="Envío" defaultChecked={s.restock_enabled} />
+        <FieldGrid cols={3}>
+          <TemplateFields
+            nameField="restock_template_name"
+            langField="restock_template_language"
+            name={s.restock_template_name}
+            lang={s.restock_template_language}
+            placeholder="recordatorio_reposicion"
+            nameLabel="Plantilla · nombre"
+            langLabel="Plantilla · idioma"
+          />
+          <Field
+            label="Variables del texto"
+            htmlFor="restock_params"
+            hint={
+              <p>
+                Una por cada {"{{n}}"} del texto, en orden. Disponibles: <code>nombre</code>, <code>producto</code>{" "}
+                (el nombre corto de abajo), <code>unidades</code>, <code>pedido</code>.
+              </p>
+            }
+          >
+            <input
+              id="restock_params"
+              name="restock_params"
+              defaultValue={s.restock_params ?? ""}
+              placeholder="nombre,producto"
+              className={FIELD}
+            />
+          </Field>
+          <Field
+            label="Rótulo del botón"
+            htmlFor="restock_button_label"
+            className="lg:col-span-2"
+            hint={<p>Igual que en la plantilla. Quien lo toca pasa a una asesora; nadie arma el pedido solo.</p>}
+          >
+            <input
+              id="restock_button_label"
+              name="restock_button_label"
+              defaultValue={s.restock_button_label ?? ""}
+              placeholder="Sí, quiero"
+              className={FIELD}
+            />
+          </Field>
+        </FieldGrid>
+        <SubRow title="Cuándo y a qué ritmo">
+          <NumberField
+            name="restock_days_before"
+            label="Días antes de que se acabe"
+            min={0}
+            max={60}
+            value={s.restock_days_before}
+            hint={<p>Contados desde la entrega: un frasco de 30 días con 7 de aviso sale el día 23.</p>}
+          />
+          <HourRange
+            label="Horario de envío (hora local)"
+            startName="restock_hour_start"
+            endName="restock_hour_end"
+            start={s.restock_hour_start}
+            end={s.restock_hour_end}
+          />
+          <div className="min-w-0">
+            <p className="text-[13px] font-medium leading-5 text-ink-700">Ritmo</p>
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
+              <input
+                aria-label="Ritmo · mensajes"
+                name="restock_pace_count"
+                type="number"
+                min={1}
+                max={25}
+                defaultValue={s.restock_pace_count}
+                className={cn(NUMBER_NARROW, "w-20")}
+              />
+              <span className="text-sm text-ink-500">cada</span>
+              <input
+                aria-label="Ritmo · cada (minutos)"
+                name="restock_pace_minutes"
+                type="number"
+                min={5}
+                max={1440}
+                defaultValue={s.restock_pace_minutes}
+                className={cn(NUMBER_NARROW, "w-20")}
+              />
+              <span className="text-sm text-ink-500">min</span>
+            </div>
+            <p className={cn(HELP, "mt-1.5")}>Lo que no sale hoy sale mañana: hay dos semanas de margen.</p>
+          </div>
+          <NumberField
+            name="restock_control_pct"
+            label="Grupo de control (%)"
+            min={0}
+            max={50}
+            value={s.restock_control_pct}
+            hint={<p>Clientas que no lo reciben, siempre las mismas. 0 = a todas, sin poder medir.</p>}
+          />
+        </SubRow>
+        <div className={ROW}>
+          <Field label="Enviar desde otro número (opcional)" htmlFor="restock_phone_number_id">
+            <input
+              id="restock_phone_number_id"
+              name="restock_phone_number_id"
+              defaultValue={s.restock_phone_number_id ?? ""}
+              placeholder="Vacío = el número de la tienda"
+              className={cn(FIELD, "sm:max-w-md")}
+            />
+          </Field>
+        </div>
+      </StoreForm>
+
+      <div className={cn(CARD, "divide-y divide-line")}>
+        <CardHeader
+          title="Cuánto dura cada producto"
+          description={
+            <p>
+              Días por unidad: lo que dura uno con la dosis normal. Dos unidades duran el doble. El nombre corto es como
+              sale en el mensaje.
+            </p>
+          }
+        />
+        {on.length > 0 ? (
+          <RowList>
+            {on.map((item) => (
+              <RestockProductEditor key={item.key} storeId={s.id} item={item} />
+            ))}
+          </RowList>
+        ) : (
+          <EmptyRow>Ningún producto recibe recordatorio todavía. Actívalos abajo.</EmptyRow>
+        )}
+        {off.length > 0 && (
+          <details className="group">
+            <summary
+              className={cn(
+                ROW,
+                "flex cursor-pointer list-none items-center gap-2 text-sm font-medium text-ink-700 hover:text-ink-900 [&::-webkit-details-marker]:hidden",
+              )}
+            >
+              <IconChevronDown className="size-4 shrink-0 text-ink-400 transition-transform group-open:rotate-180" />
+              Agregar un producto · {off.length} vendidos en los últimos {RESTOCK_CATALOG_DAYS} días
+            </summary>
+            <RowList>
+              {off.map((item) => (
+                <RestockProductEditor key={item.key} storeId={s.id} item={item} />
+              ))}
+            </RowList>
+          </details>
+        )}
+      </div>
+
+      {data.restock.results.length > 0 && <RestockResults rows={data.restock.results} />}
+    </SettingsSection>
+  );
+}
+
+/** Una fila de producto: nombre corto y días, con guardar y quitar. */
+function RestockProductEditor({ storeId, item }: { storeId: string; item: RestockListItem }) {
+  const [shortName, setShortName] = useState(item.config?.shortName ?? suggestShortName(item.title));
+  const [days, setDays] = useState(String(item.config?.days ?? RESTOCK_DEFAULT_DAYS));
+  const [pending, startTransition] = useTransition();
+  const [msg, setMsg] = useState<string | null>(null);
+  const router = useRouter();
+  const id = `rs-${item.key.replace(/[^a-zA-Z0-9]/g, "").slice(0, 24) || "p"}`;
+
+  function save() {
+    startTransition(async () => {
+      const res = await saveRestockProduct(storeId, {
+        productKey: item.key,
+        title: item.title,
+        shortName,
+        days: Number(days),
+      });
+      setMsg(res.error ?? res.notice ?? null);
+      if (!res.error) router.refresh();
+    });
+  }
+
+  function remove() {
+    if (!confirm(`¿Dejar de recordar «${item.config?.shortName ?? item.title}»? Lo ya enviado queda registrado.`)) return;
+    startTransition(async () => {
+      const res = await removeRestockProduct(storeId, item.key);
+      setMsg(res.error ?? res.notice ?? null);
+      if (!res.error) router.refresh();
+    });
+  }
+
+  return (
+    <li className={cn(ROW, "space-y-3")}>
+      <div className="min-w-0">
+        <p className="text-sm font-medium leading-5 text-ink-900 [overflow-wrap:anywhere]">{item.title}</p>
+        <p className="mt-0.5 text-xs tabular-nums text-ink-500">
+          {item.pedidos > 0
+            ? `${item.pedidos.toLocaleString("es-PE")} pedidos · ${item.unidades.toLocaleString("es-PE")} unidades en ${RESTOCK_CATALOG_DAYS} días`
+            : `Sin ventas en los últimos ${RESTOCK_CATALOG_DAYS} días`}
+        </p>
+      </div>
+      <div className="flex flex-wrap items-end gap-x-3 gap-y-3">
+        <div className="min-w-0 flex-1 basis-56">
+          <label htmlFor={`${id}-name`} className="text-[13px] font-medium leading-5 text-ink-700">
+            Nombre en el mensaje
+          </label>
+          <input
+            id={`${id}-name`}
+            value={shortName}
+            maxLength={60}
+            onChange={(e) => setShortName(e.target.value)}
+            className={cn(FIELD, "mt-1.5")}
+          />
+        </div>
+        <div>
+          <label htmlFor={`${id}-days`} className="text-[13px] font-medium leading-5 text-ink-700">
+            Días por unidad
+          </label>
+          <input
+            id={`${id}-days`}
+            type="number"
+            min={1}
+            max={365}
+            value={days}
+            onChange={(e) => setDays(e.target.value)}
+            className={cn(NUMBER_NARROW, "mt-1.5 block w-24")}
+          />
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <OpsButton variant={item.config ? "secondary" : "primary"} disabled={pending} onClick={save}>
+            {pending ? "Guardando…" : item.config ? "Guardar" : "Activar"}
+          </OpsButton>
+          {item.config && (
+            <OpsButton variant="danger" disabled={pending} onClick={remove}>
+              Quitar
+            </OpsButton>
+          )}
+        </div>
+      </div>
+      {msg && (
+        <p role="status" className="text-[13px] leading-5 text-ink-600">
+          {msg}
+        </p>
+      )}
+    </li>
+  );
+}
+
+/** Cómo le va al recordatorio contra el grupo de control. */
+function RestockResults({ rows }: { rows: RestockResultRow[] }) {
+  const r = restockResultsSummary(rows);
+  const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
+  const arms = [
+    { label: "Con recordatorio", a: r.enviado, replies: true },
+    { label: "Sin recordatorio (control)", a: r.control, replies: false },
+  ];
+  return (
+    <div className={CARD}>
+      <CardHeader title="Resultado" description={<p>Últimos {RESTOCK_RESULTS_DAYS} días.</p>} />
+      <table className="w-full text-[13px] tabular-nums shadow-[inset_0_1px_0_var(--color-line)]">
+        <thead>
+          <tr className="text-left text-xs text-ink-500">
+            <th className="px-4 py-2 font-medium sm:px-5">Grupo</th>
+            <th className="px-2 py-2 text-right font-medium">Clientas</th>
+            <th className="hidden px-2 py-2 text-right font-medium sm:table-cell">Contestaron sí</th>
+            <th className="px-2 py-2 text-right font-medium">Compraron</th>
+            <th className="px-4 py-2 text-right font-medium sm:px-5">Tasa</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-line">
+          {arms.map(({ label, a, replies }) => (
+            <tr key={label}>
+              <td className="px-4 py-2 text-ink-900 sm:px-5">{label}</td>
+              <td className="px-2 py-2 text-right">{a.clientas.toLocaleString("es-PE")}</td>
+              <td className="hidden px-2 py-2 text-right sm:table-cell">
+                {replies ? a.respondieron.toLocaleString("es-PE") : "—"}
+              </td>
+              <td className="px-2 py-2 text-right">{a.compraron.toLocaleString("es-PE")}</td>
+              <td className="whitespace-nowrap px-4 py-2 text-right font-semibold text-ink-900 sm:px-5">{pct(a.tasa)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="px-4 py-3 text-[13px] text-ink-700 shadow-[inset_0_1px_0_var(--color-line)] sm:px-5">
+        {r.veredicto}{" "}
+        <span className="text-ink-500">Compra = pedido no anulado en los 30 días siguientes al recordatorio.</span>
+      </p>
+    </div>
+  );
+}
+
 function AutomationSections({ data }: { data: StoreSettingsData }) {
   const s = data.store;
   return (
@@ -2320,6 +2682,8 @@ function AutomationSections({ data }: { data: StoreSettingsData }) {
           </div>
         </StoreForm>
       </SettingsSection>
+
+      <RestockSection data={data} />
 
       <SettingsSection
         id="devueltos"

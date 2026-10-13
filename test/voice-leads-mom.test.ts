@@ -71,8 +71,9 @@ describe("MOM §33: la sección existe y dice su estado", () => {
     expect(MOM).toContain("## 33. Agente de voz para leads (piloto Biru, 12-10-2026)");
     expect(S33).toContain("Estado: construido, apagado por tienda.");
     for (let n = 1; n <= 9; n++) expect(S33).toContain(`### 33.${n} `);
-    // Es la última sección: nada de §33 queda colgando dentro de otra.
-    expect(MOM.trimEnd().endsWith(S33.trimEnd())).toBe(true);
+    // Nada de §33 queda colgando dentro de otra sección. Antes se exigía que
+    // fuera la última; desde el 13-10-2026 la sigue §34 (reposición).
+    expect(MOM.replace(S33, "")).not.toMatch(/^#{3,4} 33\./m);
   });
 
   it("§11.8 remite a §33 donde los dos agentes se tocan", () => {

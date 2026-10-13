@@ -163,6 +163,18 @@ export async function updateStore(
     delivered_thanks_max_hours: get("delivered_thanks_max_hours"),
     delivered_thanks_pace_count: get("delivered_thanks_pace_count"),
     delivered_thanks_pace_minutes: get("delivered_thanks_pace_minutes"),
+    restock_enabled: get("restock_enabled"),
+    restock_template_name: get("restock_template_name"),
+    restock_template_language: get("restock_template_language"),
+    restock_params: get("restock_params"),
+    restock_phone_number_id: get("restock_phone_number_id"),
+    restock_button_label: get("restock_button_label"),
+    restock_hour_start: get("restock_hour_start"),
+    restock_hour_end: get("restock_hour_end"),
+    restock_pace_count: get("restock_pace_count"),
+    restock_pace_minutes: get("restock_pace_minutes"),
+    restock_days_before: get("restock_days_before"),
+    restock_control_pct: get("restock_control_pct"),
     voice_recovery_enabled: get("voice_recovery_enabled"),
     voice_recovery_auto: get("voice_recovery_auto"),
     voice_recovery_can_discard: get("voice_recovery_can_discard"),
@@ -1500,4 +1512,62 @@ export async function moveEscalationStep(
   await ctx.admin.from("store_collection_escalation").update({ sort: rows[i]!.sort }).eq("id", rows[j]!.id);
   revalidatePath(`/dashboard/${storeId}/settings`);
   return { notice: "Orden actualizado ✓" };
+}
+
+// ---------------------------------------------------------------------------
+// Recordatorio de reposición: cuánto dura cada producto (0253, MOM §34)
+// ---------------------------------------------------------------------------
+//
+// Un producto recibe recordatorio solo si tiene días por unidad. Quitarlo no
+// toca los recordatorios ya enviados: su historia queda en `restock_sends`.
+
+export async function saveRestockProduct(
+  storeId: string,
+  input: { productKey: string; title: string; shortName: string; days: number },
+): Promise<SettingsState> {
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso para editar esta tienda." };
+  const productKey = String(input.productKey ?? "").trim();
+  const title = String(input.title ?? "").trim();
+  const shortName = String(input.shortName ?? "").replace(/\s+/g, " ").trim();
+  const days = Math.round(Number(input.days));
+  if (!productKey || !title) return { error: "Falta el producto." };
+  if (!shortName || shortName.length > 60) {
+    return { error: "Ponle el nombre con que se nombra en el mensaje (máx. 60)." };
+  }
+  if (!Number.isFinite(days) || days < 1 || days > 365) {
+    return { error: "Los días por unidad van de 1 a 365." };
+  }
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  const { error } = await ctx.admin.from("restock_products").upsert(
+    {
+      store_id: storeId,
+      product_key: productKey,
+      shopify_title: title,
+      short_name: shortName,
+      days_per_unit: days,
+      updated_by: user?.id ?? null,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "store_id,product_key" },
+  );
+  if (error) return { error: error.message };
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  return { notice: `«${shortName}»: ${days} días por unidad ✓` };
+}
+
+export async function removeRestockProduct(storeId: string, productKey: string): Promise<SettingsState> {
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso para editar esta tienda." };
+  const { error } = await ctx.admin
+    .from("restock_products")
+    .delete()
+    .eq("store_id", storeId)
+    .eq("product_key", productKey);
+  if (error) return { error: error.message };
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  return { notice: "Ese producto ya no recibe recordatorio." };
 }
