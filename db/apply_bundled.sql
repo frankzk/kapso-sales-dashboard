@@ -21308,3 +21308,546 @@ $$;
 
 revoke all on function public.lima_repro_record(uuid, uuid, uuid, text, text, text, timestamptz, date, text, jsonb, text, text, text, text, integer) from public, anon, authenticated;
 grant execute on function public.lima_repro_record(uuid, uuid, uuid, text, text, text, timestamptz, date, text, jsonb, text, text, text, text, integer) to service_role;
+
+-- ---- 0252 ----
+-- ============================================================================
+-- 0252_ltv_cohorts.sql — LTV : CPA por mes de primera compra (MOM §17,
+-- 13-10-2026).
+--
+-- QUÉ ES. La métrica que el dueño eligió para saber si el negocio se sostiene:
+-- lo que vende cada clienta nueva en sus primeros días, por cada sol que costó
+-- traerla. Dos funciones que agregan en Postgres —para no bajar decenas de
+-- miles de filas en cada carga de Consolidado— y dejan el cálculo del ratio en
+-- lib/ltv.ts:
+--
+--   - `ltv_cohorts`: por tienda y mes de la PRIMERA entrega de cada clienta,
+--     cuántas clientas nuevas hubo, lo que compraron (ingreso bruto de pedidos
+--     entregados) dentro de 30, 60, 90, 180 y 365 días desde esa primera
+--     compra, y cuántas volvieron a comprar en 90 días.
+--   - `meta_spend_by_month`: el gasto de Meta por tienda, mes y moneda. La
+--     conversión de dólares a soles la hace el código (lib/ltv.ts): la cuenta
+--     de Meta puede estar en USD aunque la tienda venda en soles.
+--
+-- La clienta es su teléfono: los últimos nueve dígitos (MOM §8.1, en un COD de
+-- Shopify no hay cuenta ni documento). El mes es el de Lima. Solo cuentan los
+-- pedidos entregados: en contraentrega, lo que no se entrega no se cobra.
+--
+-- SECURITY INVOKER a propósito: las políticas de `order_master` y de
+-- `meta_ad_insights_daily` siguen mandando, así que cada persona ve solo sus
+-- tiendas.
+-- ============================================================================
+
+create or replace function public.ltv_cohorts(p_store_ids uuid[], p_since date)
+returns table (
+  store_id uuid,
+  cohort_month date,
+  new_customers integer,
+  last_first_at timestamptz,
+  value_30 numeric,
+  value_60 numeric,
+  value_90 numeric,
+  value_180 numeric,
+  value_365 numeric,
+  repeat_90 integer
+)
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  with entregas as (
+    select om.store_id,
+           right(regexp_replace(om.customer_phone, '\D', '', 'g'), 9) as tel,
+           om.order_created_at as t,
+           coalesce(om.order_total, 0) as total
+      from public.order_master om
+     where om.store_id = any(p_store_ids)
+       and om.general_status = 'entregado'
+       and om.order_created_at >= p_since
+       and length(regexp_replace(coalesce(om.customer_phone, ''), '\D', '', 'g')) >= 9
+  ), primeras as (
+    select e.store_id, e.tel, min(e.t) as primera
+      from entregas e
+     group by e.store_id, e.tel
+  ), por_clienta as (
+    select p.store_id, p.primera,
+           sum(e.total) filter (where e.t < p.primera + interval '30 days')  as v30,
+           sum(e.total) filter (where e.t < p.primera + interval '60 days')  as v60,
+           sum(e.total) filter (where e.t < p.primera + interval '90 days')  as v90,
+           sum(e.total) filter (where e.t < p.primera + interval '180 days') as v180,
+           sum(e.total) filter (where e.t < p.primera + interval '365 days') as v365,
+           count(*) filter (where e.t < p.primera + interval '90 days')       as n90
+      from primeras p
+      join entregas e on e.store_id = p.store_id and e.tel = p.tel
+     group by p.store_id, p.tel, p.primera
+  )
+  select c.store_id,
+         date_trunc('month', c.primera at time zone 'America/Lima')::date as cohort_month,
+         count(*)::integer as new_customers,
+         max(c.primera) as last_first_at,
+         coalesce(sum(c.v30), 0)  as value_30,
+         coalesce(sum(c.v60), 0)  as value_60,
+         coalesce(sum(c.v90), 0)  as value_90,
+         coalesce(sum(c.v180), 0) as value_180,
+         coalesce(sum(c.v365), 0) as value_365,
+         (count(*) filter (where c.n90 >= 2))::integer as repeat_90
+    from por_clienta c
+   group by c.store_id, date_trunc('month', c.primera at time zone 'America/Lima')
+   order by c.store_id, cohort_month;
+$$;
+
+revoke all on function public.ltv_cohorts(uuid[], date) from public, anon;
+grant execute on function public.ltv_cohorts(uuid[], date) to authenticated, service_role;
+
+create or replace function public.meta_spend_by_month(p_store_ids uuid[], p_since date)
+returns table (
+  store_id uuid,
+  month date,
+  currency text,
+  spend numeric
+)
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  select i.store_id,
+         date_trunc('month', i.date)::date as month,
+         upper(coalesce(nullif(i.currency, ''), '?')) as currency,
+         coalesce(sum(i.spend), 0) as spend
+    from public.meta_ad_insights_daily i
+   where i.store_id = any(p_store_ids)
+     and i.date >= p_since
+   group by i.store_id, date_trunc('month', i.date), upper(coalesce(nullif(i.currency, ''), '?'))
+   order by i.store_id, month;
+$$;
+
+revoke all on function public.meta_spend_by_month(uuid[], date) from public, anon;
+grant execute on function public.meta_spend_by_month(uuid[], date) to authenticated, service_role;
+
+-- ---- 0253 ----
+-- 0253_swayp_pc_auto.sql — Swayp automático desde Por confirmar, piloto A/B
+-- (MOM §11.13, 13-10-2026).
+--
+-- QUÉ ES. Una pasada diaria que hace lo mismo que el botón «Enviar por Swayp»
+-- de la mesa de confirmación (§11.11) sobre pedidos frescos —hasta 48 h, con
+-- 1 o 2 llamadas sin respuesta, dirección con número o manzana y lote, sin
+-- agencia, ubicación corroborada y stock completo—. La mitad de los elegibles
+-- sale por Swayp y la otra mitad sigue la cola de llamadas, para medir si de
+-- verdad suma. Decisiones del owner: sin aviso por WhatsApp, 48 h, A/B de 10
+-- por día.
+--
+-- APAGADO AL INSTALAR. La fila de cada organización nace con `enabled = false`;
+-- lo activa una persona con «Administrar tiendas» desde el registro de Swayp
+-- desde Por confirmar. Y se apaga sola —el freno— si de los últimos
+-- `brake_window` casos resueltos se entrega menos de `brake_min_rate`.
+--
+-- Las tres tablas siguen el patrón del automático Aliclik → Swayp (0209): la
+-- lectura respeta organización y tiendas por RLS y solo el servidor escribe.
+
+create table if not exists swayp_pc_auto_settings (
+  org_id            uuid primary key references organizations(id),
+  enabled           boolean not null default false,
+  daily_cap         integer not null default 10 check (daily_cap between 1 and 50),
+  per_warehouse_cap integer not null default 3 check (per_warehouse_cap between 1 and 50),
+  max_age_hours     integer not null default 48 check (max_age_hours between 1 and 168),
+  min_attempts      integer not null default 1 check (min_attempts between 0 and 10),
+  max_unanswered    integer not null default 2 check (max_unanswered between 0 and 10),
+  max_amount        numeric not null default 300 check (max_amount > 0),
+  brake_window      integer not null default 20 check (brake_window between 5 and 200),
+  brake_min_rate    numeric not null default 0.35 check (brake_min_rate between 0 and 1),
+  -- Por qué está apagado, si lo apagó el freno (null si lo apagó una persona).
+  paused_reason     text,
+  paused_at         timestamptz,
+  updated_by        uuid references auth.users(id) on delete set null,
+  updated_at        timestamptz not null default now()
+);
+
+-- Una decisión por pedido. Mientras no es elegible se reescribe en cada pasada
+-- (el motivo cambia: hoy sin llamada, mañana sí); en cuanto es elegible queda
+-- fija con su brazo, para que el A/B no cambie de lado a nadie.
+create table if not exists swayp_pc_auto_decisions (
+  order_id    uuid primary key references orders(id) on delete cascade,
+  store_id    uuid not null references stores(id),
+  org_id      uuid not null references organizations(id),
+  arm         text check (arm in ('swayp', 'control')),
+  reason      text not null,
+  eligible    boolean not null default false,
+  shipment_id uuid references shipments(id) on delete set null,
+  evidence    jsonb not null default '{}',
+  decided_at  timestamptz not null default now(),
+  checked_at  timestamptz not null default now()
+);
+create index if not exists swayp_pc_auto_decisions_org_idx
+  on swayp_pc_auto_decisions (org_id, eligible, decided_at desc);
+
+create table if not exists swayp_pc_auto_runs (
+  id         uuid primary key default gen_random_uuid(),
+  org_id     uuid not null references organizations(id),
+  summary    jsonb not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists swayp_pc_auto_runs_org_idx on swayp_pc_auto_runs (org_id, created_at desc);
+
+alter table swayp_pc_auto_settings enable row level security;
+alter table swayp_pc_auto_decisions enable row level security;
+alter table swayp_pc_auto_runs enable row level security;
+drop policy if exists swayp_pc_auto_settings_read on swayp_pc_auto_settings;
+create policy swayp_pc_auto_settings_read on swayp_pc_auto_settings
+  for select to authenticated using (org_id in (select auth_org_ids()));
+drop policy if exists swayp_pc_auto_decisions_read on swayp_pc_auto_decisions;
+create policy swayp_pc_auto_decisions_read on swayp_pc_auto_decisions
+  for select to authenticated using (store_id in (select auth_store_ids()));
+drop policy if exists swayp_pc_auto_runs_read on swayp_pc_auto_runs;
+create policy swayp_pc_auto_runs_read on swayp_pc_auto_runs
+  for select to authenticated using (org_id in (select auth_org_ids()));
+grant select on swayp_pc_auto_settings, swayp_pc_auto_decisions, swayp_pc_auto_runs to authenticated;
+grant all on swayp_pc_auto_settings, swayp_pc_auto_decisions, swayp_pc_auto_runs to service_role;
+
+-- Una fila apagada por organización con tiendas activas.
+insert into swayp_pc_auto_settings (org_id)
+select distinct org_id from stores where status = 'active' and org_id is not null
+on conflict (org_id) do nothing;
+
+-- ---- 0254 ----
+-- 0254_swayp_actividad_backfill.sql — la Actividad de los pedidos Swayp, completa.
+--
+-- QUÉ PASABA (13-10-2026). El webhook y el barrido de Swayp escribían el estado
+-- en la guía y en nada más: #KP140633 decía «Entregado» en Salidas y guías y la
+-- pestaña Actividad no tenía una sola línea de la entrega. Aliclik y Shalom
+-- dejan un `courier_status` por transición; Swayp no dejaba ninguno. Desde este
+-- cambio lo deja (`swaypStatusEvent`, lib/swayp-ingest.ts).
+--
+-- ESTE RELLENO deja, para cada guía Swayp que ya se movió (estado 5 en
+-- adelante: reparto, novedad, entregada, devolución) y no tiene ninguna línea,
+-- UNA línea con su último estado conocido. El camino que tuvo hasta ahí no se
+-- puede reconstruir: Swayp no lo guardamos. La nota lo dice.
+--
+-- La hora: el cierre si lo hay (entregada, devolución confirmada); si no, la
+-- salida a reparto o el despacho. Idempotente: no toca una guía que ya tenga su
+-- `courier_status` de Swayp.
+
+insert into order_events (store_id, order_id, kind, occurred_at, actor, source, courier, guide_code, shipment_id, new_status, note, payload)
+select s.store_id, s.order_id, 'courier_status',
+       coalesce(s.closed_at, s.out_for_delivery_at, s.dispatched_at, s.updated_at),
+       null, 'fenix', 'fenix', s.guide_code, s.id, s.delivery_status,
+       'Swayp: ' ||
+         case s.swayp_state
+           when 5 then 'Reparto' when 6 then 'Novedad' when 7 then 'Entregada' when 8 then 'Devolución'
+           when 9 then 'Devolución confirmada' when 10 then 'Cancelada' when 11 then 'Indemnizada'
+           when 12 then 'Devolución confirmada con cobro' else 'Estado ' || s.swayp_state
+         end || ' (' || s.swayp_state || ')' ||
+         case when s.reported_status like 'Swayp · %' then ' · ' || substr(s.reported_status, 9) else '' end ||
+         '. Último estado conocido, registrado el 13-10-2026 al completar la Actividad.',
+       jsonb_build_object('swayp_state', s.swayp_state, 'relleno', true)
+  from shipments s
+ where s.courier = 'fenix'
+   and s.swayp_state >= 5
+   and s.order_id is not null
+   and s.store_id is not null
+   and not exists (
+     select 1 from order_events e
+      where e.order_id = s.order_id and e.kind = 'courier_status' and e.source = 'fenix'
+        and e.guide_code is not distinct from s.guide_code
+   );
+
+-- ---- 0255 ----
+-- ============================================================================
+-- 0255_restock_reminders.sql — recordatorio de reposición (MOM §34,
+-- 13-10-2026).
+--
+-- QUÉ ES. Cuando a la clienta se le está por acabar lo que compró, se le manda
+-- una plantilla de WhatsApp con un botón «Sí, quiero». Si lo toca, una asesora
+-- la atiende: el lead sube a «Atender ahora» con lo que quiere reponer. El dueño
+-- lo pidió para subir el LTV (§17.2): la recompra del mismo producto era baja
+-- —4,5 % en el aceite de semilla negra, que vuelve a los ~46 días—.
+--
+-- CUÁNDO. Cada producto tiene sus días por unidad (`restock_products`): un
+-- frasco de 30 días, comprado en dos unidades, dura 60. El recordatorio sale
+-- unos días antes de que se acabe (`restock_days_before`), contados desde la
+-- entrega. Un producto sin días no recibe recordatorio: así una cartera o un
+-- pelador nunca reciben «se te está acabando».
+--
+-- A QUIÉN NO. A quien ya volvió a comprar después de esa entrega; a quien ya se
+-- le recordó ese pedido; a quien pidió que no le escriban. Y a un grupo de
+-- control (`restock_control_pct`, 10 % por defecto, elegido por el teléfono):
+-- se registra igual pero no se le envía, para saber si el recordatorio vende o
+-- si la clienta iba a volver igual.
+--
+-- Nace APAGADO por tienda. Escribe solo el servidor; las tablas se leen por
+-- tienda.
+-- ============================================================================
+
+alter table stores
+  add column if not exists restock_enabled boolean not null default false,
+  add column if not exists restock_template_name text,
+  add column if not exists restock_template_language text not null default 'es',
+  add column if not exists restock_params text not null default 'nombre,producto',
+  add column if not exists restock_phone_number_id text,
+  add column if not exists restock_button_label text not null default 'Sí, quiero',
+  add column if not exists restock_hour_start integer not null default 9
+    check (restock_hour_start between 0 and 23),
+  add column if not exists restock_hour_end integer not null default 20
+    check (restock_hour_end between 1 and 24),
+  add column if not exists restock_pace_count integer not null default 5
+    check (restock_pace_count between 1 and 25),
+  add column if not exists restock_pace_minutes integer not null default 20
+    check (restock_pace_minutes between 5 and 1440),
+  add column if not exists restock_days_before integer not null default 7
+    check (restock_days_before between 0 and 60),
+  add column if not exists restock_control_pct integer not null default 10
+    check (restock_control_pct between 0 and 50);
+
+-- Cuánto dura cada producto. La clave es el `product_id` de Shopify de la línea
+-- del pedido (o el título, si la línea no lo trae). `short_name` es como se
+-- nombra en el mensaje: el título de Shopify suele ser una frase entera.
+create table if not exists restock_products (
+  store_id uuid not null references stores(id) on delete cascade,
+  product_key text not null,
+  shopify_title text not null,
+  short_name text not null check (length(btrim(short_name)) > 0),
+  days_per_unit integer not null check (days_per_unit between 1 and 365),
+  updated_by uuid references auth.users(id) on delete set null,
+  updated_at timestamptz not null default now(),
+  primary key (store_id, product_key)
+);
+
+-- Un registro por pedido recordado (o apartado como control) y por intento
+-- fallido. `ok` es «quedó atendido»: el envío aceptado o la fila de control.
+create table if not exists restock_sends (
+  id uuid primary key default gen_random_uuid(),
+  store_id uuid not null references stores(id) on delete cascade,
+  order_id uuid not null references orders(id) on delete cascade,
+  phone text not null,
+  product_key text not null,
+  product_name text not null,
+  units integer not null,
+  due_at timestamptz not null,
+  arm text not null check (arm in ('enviado', 'control')),
+  template_name text,
+  ok boolean not null,
+  error text,
+  sent_at timestamptz not null default now(),
+  replied_at timestamptz,
+  reply_kind text check (reply_kind in ('boton', 'si'))
+);
+
+create unique index if not exists restock_sends_order_ok on restock_sends (order_id) where ok;
+create index if not exists restock_sends_store_phone on restock_sends (store_id, phone, sent_at desc);
+create index if not exists restock_sends_store_sent on restock_sends (store_id, sent_at desc);
+
+-- Quien respondió «BAJA» a un recordatorio. No hace falta que tenga lead: muchas
+-- compraron por la web y nunca escribieron.
+create table if not exists contact_opt_outs (
+  store_id uuid not null references stores(id) on delete cascade,
+  phone text not null,
+  source text not null,
+  created_at timestamptz not null default now(),
+  primary key (store_id, phone)
+);
+
+alter table restock_products enable row level security;
+alter table restock_sends enable row level security;
+alter table contact_opt_outs enable row level security;
+
+do $$
+begin
+  if not exists (select 1 from pg_policies where tablename = 'restock_products' and policyname = 'restock_products_select') then
+    create policy restock_products_select on restock_products for select to authenticated
+      using (store_id in (select auth_store_ids()));
+  end if;
+  if not exists (select 1 from pg_policies where tablename = 'restock_sends' and policyname = 'restock_sends_select') then
+    create policy restock_sends_select on restock_sends for select to authenticated
+      using (store_id in (select auth_store_ids()));
+  end if;
+  if not exists (select 1 from pg_policies where tablename = 'contact_opt_outs' and policyname = 'contact_opt_outs_select') then
+    create policy contact_opt_outs_select on contact_opt_outs for select to authenticated
+      using (store_id in (select auth_store_ids()));
+  end if;
+end $$;
+
+revoke all on restock_products, restock_sends, contact_opt_outs from anon, authenticated;
+grant select on restock_products, restock_sends, contact_opt_outs to authenticated;
+grant all privileges on restock_products, restock_sends, contact_opt_outs to service_role;
+
+-- Las líneas de pedido traen el `product_id` de Shopify, pero las que arma el
+-- bot como línea suelta traen solo el título: en Aurela, el pelador aparece 371
+-- veces con id y 89 sin él. Un producto se configura UNA vez (por su id) y se le
+-- reconoce también por su título; si no, la mitad de sus clientas no recibiría
+-- el recordatorio.
+create or replace function public.restock_line_matches(
+  p_key text,
+  p_title text,
+  p_line_id text,
+  p_line_title text
+)
+returns boolean
+language sql
+immutable
+set search_path = public
+as $$
+  select (p_line_id is not null and p_key = p_line_id)
+      or (p_line_title is not null and (p_key = p_line_title
+          or lower(btrim(p_title)) = lower(btrim(p_line_title))));
+$$;
+
+-- Los pedidos entregados cuyo producto se acaba ahora: el recordatorio vence
+-- (entrega + unidades × días por unidad − días antes) dentro de la ventana, la
+-- clienta no volvió a comprar después de esa entrega y el pedido no tiene ya su
+-- recordatorio. Por pedido, el producto que se acaba primero.
+create or replace function public.restock_candidates(
+  p_store_id uuid,
+  p_now timestamptz,
+  p_days_before integer,
+  p_window_days integer,
+  p_limit integer
+)
+returns table (
+  order_id uuid,
+  order_name text,
+  customer_name text,
+  customer_phone text,
+  delivered_at timestamptz,
+  product_key text,
+  product_name text,
+  units integer,
+  due_at timestamptz
+)
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  with lineas as (
+    select om.order_id, om.order_name, om.customer_name, om.customer_phone, om.delivered_at,
+           nullif(li->>'product_id', '') as line_id,
+           nullif(btrim(li->>'title'), '') as line_title,
+           greatest(coalesce((li->>'quantity')::numeric::integer, 1), 1) as qty
+      from public.order_master om
+      join public.orders o on o.id = om.order_id
+     cross join lateral jsonb_array_elements(
+             case when jsonb_typeof(o.line_items) = 'array' then o.line_items else '[]'::jsonb end) li
+     where om.store_id = p_store_id
+       and om.general_status = 'entregado'
+       and om.delivered_at is not null
+       and om.delivered_at < p_now
+       and om.delivered_at > p_now - interval '400 days'
+       and om.customer_phone is not null
+  ), por_producto as (
+    select l.order_id, l.order_name, l.customer_name, l.customer_phone, l.delivered_at,
+           rp.product_key, rp.short_name, rp.days_per_unit, sum(l.qty)::integer as units
+      from lineas l
+      -- Una línea, un producto: si dos filas la reconocen, gana la del id.
+      join lateral (
+        select r.product_key, r.short_name, r.days_per_unit
+          from public.restock_products r
+         where r.store_id = p_store_id
+           and public.restock_line_matches(r.product_key, r.shopify_title, l.line_id, l.line_title)
+         order by (r.product_key = l.line_id) desc nulls last
+         limit 1
+      ) rp on true
+     group by l.order_id, l.order_name, l.customer_name, l.customer_phone, l.delivered_at,
+              rp.product_key, rp.short_name, rp.days_per_unit
+  ), vencen as (
+    -- La ventana va ANTES de elegir el producto: si el pedido trae dos y el que
+    -- se acabó primero ya quedó atrás, el otro igual tiene su recordatorio.
+    select p.*, p.delivered_at + make_interval(days => p.units * p.days_per_unit - p_days_before) as vence
+      from por_producto p
+  ), primero as (
+    select distinct on (v.order_id) v.*
+      from vencen v
+     where v.vence <= p_now
+       and v.vence > p_now - make_interval(days => p_window_days)
+     order by v.order_id, v.vence
+  )
+  select f.order_id, f.order_name, f.customer_name, f.customer_phone, f.delivered_at,
+         f.product_key, f.short_name, f.units, f.vence
+    from primero f
+   where not exists (
+       select 1 from public.order_master o2
+        where o2.store_id = p_store_id
+          and o2.customer_phone = f.customer_phone
+          and o2.order_id <> f.order_id
+          and o2.order_created_at > f.delivered_at
+          and o2.general_status <> 'anulado')
+     and not exists (select 1 from public.restock_sends s where s.order_id = f.order_id and s.ok)
+   order by f.vence desc
+   limit p_limit;
+$$;
+
+revoke all on function public.restock_candidates(uuid, timestamptz, integer, integer, integer) from public, anon, authenticated;
+grant execute on function public.restock_candidates(uuid, timestamptz, integer, integer, integer) to service_role;
+
+-- Lo que se vendió en los últimos días, por producto, para elegir en Ajustes
+-- cuáles reciben recordatorio. Las líneas sin id se suman al producto con id
+-- del mismo título.
+create or replace function public.restock_product_catalog(p_store_id uuid, p_since timestamptz)
+returns table (product_key text, title text, pedidos integer, unidades integer)
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  with lineas as (
+    select o.id as order_id,
+           nullif(li->>'product_id', '') as line_id,
+           nullif(btrim(li->>'title'), '') as line_title,
+           greatest(coalesce((li->>'quantity')::numeric::integer, 1), 1) as qty
+      from public.orders o
+     cross join lateral jsonb_array_elements(
+             case when jsonb_typeof(o.line_items) = 'array' then o.line_items else '[]'::jsonb end) li
+     where o.store_id = p_store_id
+       and o.created_at >= p_since
+  ), id_por_titulo as (
+    select distinct on (lower(line_title)) lower(line_title) as t, line_id
+      from lineas
+     where line_id is not null and line_title is not null
+     group by lower(line_title), line_id
+     order by lower(line_title), count(*) desc
+  )
+  select coalesce(l.line_id, i.line_id, l.line_title) as product_key,
+         mode() within group (order by l.line_title) as title,
+         count(distinct l.order_id)::integer,
+         sum(l.qty)::integer
+    from lineas l
+    left join id_por_titulo i on l.line_id is null and i.t = lower(l.line_title)
+   where coalesce(l.line_id, l.line_title) is not null
+   group by 1
+   order by 3 desc
+   limit 80;
+$$;
+
+revoke all on function public.restock_product_catalog(uuid, timestamptz) from public, anon;
+grant execute on function public.restock_product_catalog(uuid, timestamptz) to authenticated, service_role;
+
+-- Lo que se lee en Ajustes: por grupo, cuántas clientas, cuántas respondieron
+-- y cuántas compraron (y recibieron) en los 30 días siguientes.
+create or replace function public.restock_results(p_store_id uuid, p_since timestamptz)
+returns table (arm text, clientas integer, respondieron integer, compraron integer, entregados integer)
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  select s.arm,
+         count(*)::integer,
+         (count(*) filter (where s.replied_at is not null))::integer,
+         (count(*) filter (where exists (
+            select 1 from public.order_master o
+             where o.store_id = s.store_id and o.customer_phone = s.phone
+               and o.order_id <> s.order_id
+               and o.order_created_at between s.sent_at and s.sent_at + interval '30 days'
+               and o.general_status <> 'anulado')))::integer,
+         (count(*) filter (where exists (
+            select 1 from public.order_master o
+             where o.store_id = s.store_id and o.customer_phone = s.phone
+               and o.order_id <> s.order_id
+               and o.order_created_at between s.sent_at and s.sent_at + interval '30 days'
+               and o.general_status = 'entregado')))::integer
+    from public.restock_sends s
+   where s.store_id = p_store_id and s.ok and s.sent_at >= p_since
+   group by s.arm;
+$$;
+
+revoke all on function public.restock_results(uuid, timestamptz) from public, anon;
+grant execute on function public.restock_results(uuid, timestamptz) to authenticated, service_role;

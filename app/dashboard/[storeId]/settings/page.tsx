@@ -11,6 +11,7 @@ import { PAYMENT_METHOD_COLUMNS } from "@/lib/payment-methods";
 import { leadVoiceOwnNumber, loadLeadVoiceCampaigns } from "@/lib/store-settings";
 import { leadVoiceSettingsFrom } from "@/lib/voice-leads";
 import { leadVoiceConfigured, loadLeadVoicePilotReport } from "@/lib/voice-leads-server";
+import { RESTOCK_CATALOG_DAYS, RESTOCK_RESULTS_DAYS } from "@/lib/restock-view";
 import { EmptyState } from "@/components/ui";
 import { StoreSettings, type StoreSettingsData } from "@/components/store-settings";
 import { listEscalation } from "./actions";
@@ -153,6 +154,24 @@ export default async function StoreSettingsPage({
       })
     : { data: null };
 
+  // Recordatorio de reposición (0255): lo vendido, lo configurado y cómo le va
+  // a cada grupo. Pre-0255 las funciones no existen ⇒ listas vacías, sin tumbar
+  // Ajustes.
+  const [restockCatalog, restockProducts, restockResults] = await Promise.all([
+    admin.rpc("restock_product_catalog", {
+      p_store_id: storeId,
+      p_since: new Date(now.getTime() - RESTOCK_CATALOG_DAYS * 86_400_000).toISOString(),
+    }),
+    admin
+      .from("restock_products")
+      .select("product_key, shopify_title, short_name, days_per_unit")
+      .eq("store_id", storeId),
+    admin.rpc("restock_results", {
+      p_store_id: storeId,
+      p_since: new Date(now.getTime() - RESTOCK_RESULTS_DAYS * 86_400_000).toISOString(),
+    }),
+  ]);
+
   const data: StoreSettingsData = {
     store: {
       id: full.id,
@@ -211,6 +230,19 @@ export default async function StoreSettingsPage({
       delivered_thanks_max_hours: full.delivered_thanks_max_hours ?? 72,
       delivered_thanks_pace_count: full.delivered_thanks_pace_count ?? 5,
       delivered_thanks_pace_minutes: full.delivered_thanks_pace_minutes ?? 20,
+      // Pre-0255 las columnas no existen ⇒ recordatorio apagado.
+      restock_enabled: full.restock_enabled ?? false,
+      restock_template_name: full.restock_template_name ?? null,
+      restock_template_language: full.restock_template_language ?? null,
+      restock_params: full.restock_params ?? null,
+      restock_phone_number_id: full.restock_phone_number_id ?? null,
+      restock_button_label: full.restock_button_label ?? null,
+      restock_hour_start: full.restock_hour_start ?? 9,
+      restock_hour_end: full.restock_hour_end ?? 20,
+      restock_pace_count: full.restock_pace_count ?? 5,
+      restock_pace_minutes: full.restock_pace_minutes ?? 20,
+      restock_days_before: full.restock_days_before ?? 7,
+      restock_control_pct: full.restock_control_pct ?? 10,
       // Pre-0190 las columnas no existen ⇒ agente de voz apagado.
       voice_recovery_enabled: full.voice_recovery_enabled ?? false,
       voice_recovery_auto: full.voice_recovery_auto ?? false,
@@ -338,6 +370,11 @@ export default async function StoreSettingsPage({
     escalation,
     escalationCandidates,
     cartImageTest: (cartImageTest as StoreSettingsData["cartImageTest"] | null) ?? [],
+    restock: {
+      catalog: (restockCatalog.data as StoreSettingsData["restock"]["catalog"] | null) ?? [],
+      products: (restockProducts.data as StoreSettingsData["restock"]["products"] | null) ?? [],
+      results: (restockResults.data as StoreSettingsData["restock"]["results"] | null) ?? [],
+    },
   };
 
   const banner = sp.installed

@@ -399,7 +399,7 @@ describe("ningún courier se queda fuera del relleno", () => {
     "app/dashboard/pedidos/tanders-actions.ts",
     "app/dashboard/pedidos/aliclik-actions.ts",
     "app/dashboard/pedidos/shalom-actions.ts",
-    "app/dashboard/envios/actions.ts", // Swayp
+    "lib/swayp-directa.ts", // Swayp: el botón y el automático (13-10-2026)
   ];
 
   it.each(CAMINOS)("%s escribe la guía con writeCourierGuide", (archivo) => {
@@ -410,9 +410,10 @@ describe("ningún courier se queda fuera del relleno", () => {
   it("la guía directa de Swayp NO inserta la fila por su cuenta", () => {
     // Un INSERT suelto se saltaría el relleno sin que nada avise: la guía
     // saldría bien y la salida «por definir» quedaría huérfana al lado.
-    const src = readFileSync(resolve(process.cwd(), "app/dashboard/envios/actions.ts"), "utf8");
-    const i = src.indexOf("export async function createDirectFenixGuide");
-    const cuerpo = src.slice(i, src.indexOf("\nfunction labelOfStatus", i));
+    const src = readFileSync(resolve(process.cwd(), "lib/swayp-directa.ts"), "utf8");
+    const i = src.indexOf("export async function emitirGuiaSwaypDirecta");
+    expect(i).toBeGreaterThan(-1);
+    const cuerpo = src.slice(i);
     expect(cuerpo).toContain("writeCourierGuide(");
     expect(cuerpo).not.toMatch(/from\("shipments"\)\s*\.insert\(/);
   });

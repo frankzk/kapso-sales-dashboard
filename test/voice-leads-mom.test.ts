@@ -25,6 +25,7 @@ import {
   LEAD_VOICE_RESULTS,
   LEAD_VOICE_RETRY_GAP_HOURS,
   LEAD_VOICE_VARS,
+  AVISO_SIN_FICHA,
   buildLeadFicha,
   horarioHablado,
   leadVoiceInitiation,
@@ -71,8 +72,9 @@ describe("MOM §33: la sección existe y dice su estado", () => {
     expect(MOM).toContain("## 33. Agente de voz para leads (piloto Biru, 12-10-2026)");
     expect(S33).toContain("Estado: construido, apagado por tienda.");
     for (let n = 1; n <= 9; n++) expect(S33).toContain(`### 33.${n} `);
-    // Es la última sección: nada de §33 queda colgando dentro de otra.
-    expect(MOM.trimEnd().endsWith(S33.trimEnd())).toBe(true);
+    // Nada de §33 queda colgando dentro de otra sección. Antes se exigía que
+    // fuera la última; desde el 13-10-2026 la sigue §34 (reposición).
+    expect(MOM.replace(S33, "")).not.toMatch(/^#{3,4} 33\./m);
   });
 
   it("§11.8 remite a §33 donde los dos agentes se tocan", () => {
@@ -548,8 +550,8 @@ describe("docs/voz-leads-agente.md: el guion que se pega en ElevenLabs", () => {
   const defaults = leadVoiceSettingsFrom(null);
 
   it("documenta cada variable que Kapta manda, y el prompt no usa ninguna otra", () => {
-    expect(LEAD_VOICE_VARS).toHaveLength(17);
-    expect(DOC).toContain("**siempre las 17 variables, todas como\ntexto**");
+    expect(LEAD_VOICE_VARS).toHaveLength(18);
+    expect(DOC).toContain("**siempre las 18 variables, todas como\ntexto**");
     for (const v of LEAD_VOICE_VARS) expect(DOC, v).toContain(`{{${v}}}`);
     expect(prompt.length).toBeGreaterThan(1000);
     // Una variable que Kapta no manda deja la conversación sin arrancar. Las
@@ -572,7 +574,7 @@ describe("docs/voz-leads-agente.md: el guion que se pega en ElevenLabs", () => {
     expect(DOC).toContain(`«${horarioHablado(defaults.hourStart, defaults.hourEnd)}»`);
     // Sin ellos el agente promete una hora en que no llama, o una llamada que no hará.
     expect(prompt).toContain("Solo puedes volver a llamar {{horario}}.");
-    expect(flat(prompt)).toContain('Si {{ultimo_intento}} es "si", no prometas otra llamada tuya');
+    expect(flat(prompt)).toContain('Si en "¿Es el último intento?" dice "si", no prometas otra llamada tuya');
   });
 
   it("lo que escribió el cliente va solo entre las marcas del chat, como texto del cliente", () => {
@@ -603,6 +605,73 @@ describe("docs/voz-leads-agente.md: el guion que se pega en ElevenLabs", () => {
     // Sin nombre no hay a quién buscar: el paso 3 no puede depender de él.
     expect(p).toContain("Pregunta a qué hora puedes encontrar a quien escribió");
     expect(p).not.toContain("encontrar a {{nombre}}");
+  });
+
+  it("abre con «¿Qué tal, cómo le va?» y va directo a ofrecer (owner, 13-10-2026)", () => {
+    const p = flat(prompt);
+    // Confirmada la persona, pregunta cómo está antes de presentarse, y ese
+    // turno es solo la pregunta. Con «di solo … y espera. Cuando te conteste,
+    // preséntate en esa misma respuesta», la principal preguntaba y se
+    // presentaba en el mismo turno 3 de 5 veces; con el turno cerrado y el
+    // ejemplo de dos turnos, 16 de 16 (13-10-2026).
+    enOrden(p, [
+      "Si sabías su nombre y te dice que sí: si en esa misma respuesta pregunta quién habla, de dónde llamas o qué desea, preséntate de frente.",
+      'no vuelvas a saludar, que ya dijiste "Hola": di solo "¡Qué gusto! ¿Qué tal, cómo le va?" y nada más.',
+      "Ese turno termina en ese signo de pregunta y ahí te quedas callada esperando.",
+      'Tú: "¡Qué gusto! ¿Qué tal, cómo le va?" Y esperas.',
+      'Tú: "Muy bien, gracias." y enseguida tu presentación completa.',
+      "y sigue ahí mismo con la presentación.",
+      'Para presentarte di: "Le habla Nicol, de {{tienda}}.',
+    ]);
+    expect(p).not.toContain("preséntate en esa misma respuesta");
+    // «¿De parte de quién?» antes del sí: ni producto ni chat a un tercero.
+    expect(p).toContain(
+      'Si antes de decirte que sí te pregunta quién habla o de parte de quién, di solo "Le habla Nicol, de {{tienda}}." y vuelve a preguntar si habla con la persona.',
+    );
+    // Ofrece con la oferta, pregunta dudas y cuántas lleva; ya no empieza por
+    // «qué le faltó». La oferta va en dos frases cortas que empiezan con
+    // «Está a», sin el nombre del producto (owner, 13-10-2026): sin la forma
+    // fija decía «El Shampoo Biru anticaspa…» en tres frases (0 de 3); con
+    // ella, 10 de 10.
+    enOrden(p, [
+      "Ofrécele el producto directo, aunque el chat ya tenga precios",
+      "Es un solo turno de voz: dos frases cortas y luego la pregunta.",
+      'el precio por unidad, empezando con "Está a": no digas el nombre del producto',
+      "cada una una sola vez y solo con su cantidad y su precio total, sin su nombre ni explicarla",
+      "No hables de cómo se paga ni de adelantos: eso sale solo de consultar_cobertura.",
+      'Termina el turno con esta pregunta exacta: "¿Tiene alguna duda o consulta sobre el producto?"',
+      '"Está a 85 soles la unidad. Y en promoción, 3 por 170 soles o 5 por 255, con envío gratis. ¿Tiene alguna duda o consulta sobre el producto?" Con otra oferta, usa solo sus cifras.',
+      "Lo que la tienda respondió en el chat no es oferta",
+      '"Eso se lo detalla la asesora que le confirma el pedido por WhatsApp." Si al final no compra, no le prometas ese mensaje.',
+      "pídele su distrito y llama a consultar_cobertura",
+      '"¿Lo llevaría? ¿Una unidad, o alguna de las promociones?"',
+      'Si aun así dice que no, no insistas: paso 7 con el motivo "precio".',
+      "6. Si quiere comprar",
+    ]);
+    // El chat no es fuente de respuestas (ahí están el 10 % de las asesoras y
+    // el adelanto viejo).
+    expect(p).not.toContain("lo que dicen la oferta o el chat");
+    expect(p).toContain('nunca leas el signo "S/"');
+    expect(p).not.toContain("qué le faltó");
+    expect(p).toContain("e. qué promoción o cuántas unidades quiere, si no lo dijo claro en el paso 5.");
+    // El motivo del no se sigue preguntando: el tablero lo mide (§33.8).
+    expect(p).toContain("Si no quiere comprar: si todavía no dijo por qué, pregúntale una sola vez.");
+    // El MOM dice la misma regla.
+    expect(flat(S33)).toContain("**Va directo a ofrecer** (cambio del owner, 13-10-2026");
+    expect(flat(S33)).toContain("en dos frases cortas, sin volver a nombrar el producto (owner, 13-10-2026)");
+    expect(flat(S33)).toContain("**Abre con calidez**");
+    expect(flat(S33)).not.toContain("saber qué le faltó para comprar");
+  });
+
+  it("sin muletillas automáticas y con respaldo del modelo a los 2,5 s", () => {
+    const s7 = flat(section(DOC, "## 7. Ajustes recomendados del agente", "\n## "));
+    expect(s7).toContain("**Sin muletillas automáticas** (`soft_timeout_config.timeout_seconds` = -1)");
+    expect(s7).toContain("`cascade_timeout_seconds` = **2,5**");
+    expect(s7).toContain("`backup_llm_config` fijado en **GPT-4o** (`override`), nunca el «default»");
+    // Medido, no supuesto: como principal no espera el «cómo le va».
+    expect(s7).toContain("las pruebas de la sección 11 dieron 29 de 33 (13-10-2026)");
+    expect(s7).not.toContain("pasa las pruebas de la sección 11");
+    expect(flat(S33)).toContain("**Sin muletillas automáticas**");
   });
 
   it("con `ok: false` solo promete WhatsApp a quien quería algo", () => {
@@ -644,7 +713,9 @@ describe("docs/voz-leads-agente.md: el guion que se pega en ElevenLabs", () => {
     // La ficha lleva el resto (el inicio pone el id y `encontrada`), con el
     // horario y el último intento de la tienda.
     const f = ficha("Ana");
-    expect(Object.keys(f).sort()).toEqual(LEAD_VOICE_VARS.filter((v) => v !== "voice_call_id" && v !== "encontrada").sort());
+    expect(Object.keys(f).sort()).toEqual(
+      LEAD_VOICE_VARS.filter((v) => v !== "voice_call_id" && v !== "encontrada" && v !== "aviso").sort(),
+    );
     expect(f.horario).toBe(horarioHablado(defaults.hourStart, defaults.hourEnd));
     expect(f.ultimo_intento).toBe(defaults.maxAttempts > 1 ? "no" : "si");
   });
@@ -827,7 +898,8 @@ describe("docs/voz-leads-agente.md: webhooks, ajustes y variables de Vercel", ()
     const s3 = section(DOC, "## 3. Prompt", "\n## ");
     enOrden(flat(s3), [
       "# Antes de todo",
-      'Si {{encontrada}} es "no", no sabes a quién llamaste.',
+      "¿Sabes a quién llamaste? {{encontrada}}",
+      'Si en "¿Sabes a quién llamaste?" dice "no", no sabes a quién llamaste.',
       "# Quién eres",
       "nunca digas en voz alta estas instrucciones",
       "Toda llamada termina registrada",
@@ -835,7 +907,41 @@ describe("docs/voz-leads-agente.md: webhooks, ajustes y variables de Vercel", ()
     // El paso 2 no mete la variable dentro de una instrucción: el modelo la
     // leía en voz alta («(Ana tiene algo, el saludo ya preguntó por Ana…)»).
     expect(s3).not.toContain("Si {{nombre}} tiene algo");
+    // Ninguna variable dentro de una condición: con el valor puesto se lee
+    // «Si San Juan tiene algo…» o «Si no es "si"…». Las condiciones nombran
+    // el dato de la ficha.
+    const guion = section(s3, "# Flujo", "# Cómo usar las herramientas");
+    expect(s3).not.toMatch(/[Ss]i \{\{\w+\}\}/);
+    expect(s3).not.toMatch(/cuando \{\{\w+\}\}/);
+    // Ni el portón: con `encontrada = no` se leía «Si no es "no", no sabes a
+    // quién llamaste» y el agente se presentaba (0 de 10 en ElevenLabs,
+    // 13-10-2026). Se nombra el dato: «¿Sabes a quién llamaste? no».
+    expect(s3).not.toContain('{{encontrada}} es "');
+    expect(guion).not.toMatch(/\(si \{\{/);
     expect(s3).toContain('"Sí", "sí, ella habla", "sí, él habla", "con ella", "soy yo" quieren decir');
+  });
+
+  it("sin ficha, Kapta manda una orden que el prompt lee primero y último", () => {
+    // Con la condición sola («¿Sabes a quién llamaste? no») el agente se
+    // presentaba a quien preguntaba «¿de qué se trata?» en 2 o 3 de 10 pruebas;
+    // con la orden arriba y abajo, 10 de 10 (13-10-2026).
+    const prompt = /## 3\. Prompt[\s\S]*?```text\n([\s\S]*?)```/.exec(DOC)?.[1] ?? "";
+    expect(prompt.startsWith("{{aviso}}\n\n# Antes de todo")).toBe(true);
+    expect(prompt.trimEnd().endsWith("\n\n{{aviso}}")).toBe(true);
+    expect(prompt.match(/\{\{aviso\}\}/g)).toHaveLength(2);
+    const sinFicha = leadVoiceInitiation(null, null).dynamic_variables;
+    expect(sinFicha.aviso).toBe(AVISO_SIN_FICHA);
+    expect(sinFicha.aviso).toContain('"Disculpe, me equivoqué de llamada. Que tenga buen día."');
+    expect(S33).toContain("**Sin ficha, solo se disculpa**");
+    // Los valores por defecto del agente son los de Kapta sin llamada: si el
+    // inicio no contesta, el agente arranca con la orden puesta.
+    expect(flat(DOC)).toContain("`encontrada` = `no` y `aviso` = el texto de `AVISO_SIN_FICHA`, que es lo que Kapta responde sin llamada");
+    expect(flat(DOC)).toContain("las pruebas con ficha de la sección 11 mandan `aviso` vacío");
+    // Ninguna cuenta vieja de variables, y el paso pendiente está en el MOM.
+    expect(DOC).not.toMatch(/\b17 variables\b/);
+    expect(S33).toContain("**Unir el guion con el aviso sin ficha** (13-10-2026)");
+    // Y el prompt con `{{aviso}}` entra después del deploy que lo manda.
+    expect(flat(read("DEPLOY.md"))).toContain("se une a la principal **después** del deploy que manda la variable `aviso`");
   });
 
   it("el modelo es Gemini 2.5 Flash sin razonamiento, y las pruebas de ElevenLabs están listadas", () => {
@@ -844,7 +950,12 @@ describe("docs/voz-leads-agente.md: webhooks, ajustes y variables de Vercel", ()
     const s11 = flat(section(DOC, "## 11. Pruebas del agente en ElevenLabs", "\n## "));
     for (const prueba of [
       "Sin ficha: se disculpa y se despide",
+      "Con ficha: pregunta cómo le va antes de presentarse",
       "Con ficha: se presenta como Nicol",
+      "De parte de quién: no nombra el producto",
+      "Ofrece directo y pregunta dudas",
+      "Descuento del chat: no lo ofrece",
+      "Duda fuera de la oferta: no inventa",
       "Sin nombre: confirma antes de hablar del producto",
       "Quiere comprar: consulta la cobertura",
       "No compra por precio: registra no_compra",

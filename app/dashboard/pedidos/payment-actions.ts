@@ -37,6 +37,8 @@ import { typedTheOperationNumber } from "@/lib/payment-review";
 import {
   canRevealPickupKey,
   describeBlockers,
+  discountException,
+  DISCOUNT_EXCEPTION_MAX,
   paymentPlanProblem,
   paymentState,
   validationReleasesPickupKey,
@@ -169,6 +171,13 @@ export interface PickupKeyPanel {
   canViewKey: boolean;
   canManageKey: boolean;
   canOverride: boolean;
+  /**
+   * La excepción por descuento (MOM §12): si la clave está bloqueada solo
+   * porque a lo validado le faltan hasta S/ 15, quien puede verla la muestra
+   * dejando el motivo escrito. `eligible` se calcula aquí; el servidor lo
+   * vuelve a comprobar al revelarla.
+   */
+  discountException: { eligible: boolean; shortfall: number; reason: string | null; max: number };
   /**
    * La guía Shalom viva del pedido, si ya existe.
    *
@@ -363,6 +372,7 @@ export async function loadPaymentPanel(
       canViewKey: perms.can("shalom.reveal_pickup_key"),
       canManageKey: perms.can("shalom.view_pickup_key"),
       canOverride: perms.can("shalom.override_payment_validation"),
+      discountException: { ...discountException(keyCtx), max: DISCOUNT_EXCEPTION_MAX },
       shalomGuide,
       keyAutosend: {
         enabled: autosendOn,
@@ -1243,7 +1253,7 @@ export async function setPickupKey(orderId: string, key: string): Promise<Paymen
  */
 export async function revealPickupKey(
   orderId: string,
-  input: { reason?: string; override?: boolean } = {},
+  input: { reason?: string; override?: boolean; discount?: boolean } = {},
 ): Promise<{ key: string } | { error: string }> {
   const perms = await getMasterPermissions();
   if (!perms.can("shalom.reveal_pickup_key")) {
@@ -1259,7 +1269,7 @@ export async function revealPickupKey(
   ]);
 
   const payments = (paymentRows ?? []) as PaymentSnapshot[];
-  const verdict = canRevealPickupKey({
+  const keyCtx = {
     orderId,
     generalStatus: ctx.row.general_status,
     pickupState: ctx.row.pickup_state,
@@ -1274,16 +1284,33 @@ export async function revealPickupKey(
       paymentState: ctx.row.payment_state,
       paymentGateway: ctx.row.payment_gateway,
     },
-  });
+  };
+  const verdict = canRevealPickupKey(keyCtx);
 
-  const wantsOverride = Boolean(input.override);
+  // Dos excepciones, y las dos dejan el motivo escrito. La del administrador
+  // levanta cualquier condición; la del descuento (MOM §12) solo deja pasar lo
+  // que le falta a lo validado, hasta S/ 15, y la puede usar quien ya ve la
+  // clave. Se vuelve a calcular aquí: el panel solo decide si ofrece el botón.
+  let exception: "descuento" | "administrador" | null = null;
+  let discountShortfall: number | null = null;
   if (!verdict.allowed) {
-    if (!wantsOverride) return { error: describeBlockers(verdict) };
-    if (!perms.can("shalom.override_payment_validation")) {
-      return { error: "Solo un administrador puede mostrar la clave sin las validaciones." };
-    }
-    if (!input.reason?.trim()) {
-      return { error: "Una excepción exige motivo: quedará en el historial." };
+    if (input.discount) {
+      if (!input.reason?.trim()) {
+        return { error: "La excepción por descuento exige el motivo: quedará en el historial." };
+      }
+      const discount = discountException(keyCtx);
+      if (!discount.eligible) return { error: discount.reason ?? describeBlockers(verdict) };
+      exception = "descuento";
+      discountShortfall = discount.shortfall;
+    } else {
+      if (!input.override) return { error: describeBlockers(verdict) };
+      if (!perms.can("shalom.override_payment_validation")) {
+        return { error: "Solo un administrador puede mostrar la clave sin las validaciones." };
+      }
+      if (!input.reason?.trim()) {
+        return { error: "Una excepción exige motivo: quedará en el historial." };
+      }
+      exception = "administrador";
     }
     if (!keyRow) return { error: "No hay clave registrada para este pedido." };
   }
@@ -1308,6 +1335,8 @@ export async function revealPickupKey(
       paidTotal: payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0),
       payments: payments.map((p) => ({ kind: p.kind, status: p.validation_status, amount: p.amount })),
       blockers: verdict.blockers,
+      exception,
+      ...(discountShortfall !== null ? { discountShortfall } : {}),
     },
   });
   await admin.from("order_events").insert({
@@ -1317,7 +1346,11 @@ export async function revealPickupKey(
     actor: ctx.userId,
     source: "manual",
     reason: input.reason?.trim() || null,
-    note: verdict.allowed ? "Clave de recojo consultada." : "Clave consultada como EXCEPCIÓN.",
+    note: verdict.allowed
+      ? "Clave de recojo consultada."
+      : exception === "descuento"
+        ? `Clave consultada con EXCEPCIÓN POR DESCUENTO: faltaban S/ ${discountShortfall?.toFixed(2)} para el total.`
+        : "Clave consultada como EXCEPCIÓN.",
   });
 
   revalidatePath(MASTER_PATH);
