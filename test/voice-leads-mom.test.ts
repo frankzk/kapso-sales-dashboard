@@ -651,6 +651,9 @@ describe("docs/voz-leads-agente.md: el guion que se pega en ElevenLabs", () => {
     expect(s7).toContain("**Sin muletillas automáticas** (`soft_timeout_config.timeout_seconds` = -1)");
     expect(s7).toContain("`cascade_timeout_seconds` = **2,5**");
     expect(s7).toContain("`backup_llm_config` fijado en **GPT-4o** (`override`), nunca el «default»");
+    // Medido, no supuesto: como principal no espera el «cómo le va».
+    expect(s7).toContain("las pruebas de la sección 11 dieron 29 de 33 (13-10-2026)");
+    expect(s7).not.toContain("pasa las pruebas de la sección 11");
     expect(flat(S33)).toContain("**Sin muletillas automáticas**");
   });
 

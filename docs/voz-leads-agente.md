@@ -493,9 +493,13 @@ hay costo de ElevenLabs por llamada.
   «default», que puede caer en un modelo sin probar como Flash Lite. Si Gemini
   no responde en 2,5 s, ElevenLabs pasa a GPT-4o; sin muletillas, la persona
   oye esos 2,5 s más lo que tarde el respaldo. GPT-4o es el que contestó bien
-  el turno trabado de la primera prueba, y pasa las pruebas de la sección 11
-  corridas con él como modelo principal. Cambiar el respaldo es cambiar de
-  modelo: se vuelven a correr las pruebas.
+  el turno trabado de la primera prueba. Con él como modelo principal, las
+  pruebas de la sección 11 dieron 29 de 33 (13-10-2026): todo bien salvo
+  «cómo le va», donde dice el saludo y se presenta en el mismo turno, sin
+  esperar la respuesta (3 de 3), y una del evaluador que tomó «tres por
+  dos» como promoción inventada. Como respaldo de un turno suelto alcanza;
+  no sirve como modelo principal. Cambiar el respaldo es cambiar de modelo:
+  se vuelven a correr las pruebas.
 - **Idioma** español. Voz, modelo de voz, transcripción y turnos: los mismos
   del agente de Reproprovincia, salvo el corte por silencio, las muletillas,
   el respaldo y el modelo.
