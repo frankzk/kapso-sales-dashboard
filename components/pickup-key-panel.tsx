@@ -2395,6 +2395,14 @@ function KeySection({
                       </div>
                     </div>
                   )}
+                  {/* Por qué NO aplica, cuando lo que falta es dinero: sin esto
+                      el botón simplemente no salía y nadie sabía qué faltaba. */}
+                  {!panel.canReveal && !panel.discountException.eligible && panel.discountException.reason && (
+                    <p className="basis-full text-[13px] leading-5 text-ink-500">
+                      <span className="font-medium text-ink-700">Excepción por descuento no disponible:</span>{" "}
+                      {panel.discountException.reason}
+                    </p>
+                  )}
                   {!panel.canReveal && !panel.discountException.eligible && panel.canOverride && (
                     <>
                       <input
