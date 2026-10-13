@@ -609,23 +609,38 @@ describe("docs/voz-leads-agente.md: el guion que se pega en ElevenLabs", () => {
 
   it("abre con «¿Qué tal, cómo le va?» y va directo a ofrecer (owner, 13-10-2026)", () => {
     const p = flat(prompt);
-    // Confirmada la persona, pregunta cómo está antes de presentarse.
+    // Confirmada la persona, pregunta cómo está antes de presentarse, y ese
+    // turno es solo la pregunta. Con «di solo … y espera. Cuando te conteste,
+    // preséntate en esa misma respuesta», la principal preguntaba y se
+    // presentaba en el mismo turno 3 de 5 veces; con el turno cerrado y el
+    // ejemplo de dos turnos, 16 de 16 (13-10-2026).
     enOrden(p, [
       "Si sabías su nombre y te dice que sí: si en esa misma respuesta pregunta quién habla, de dónde llamas o qué desea, preséntate de frente.",
-      'no vuelvas a saludar, que ya dijiste "Hola": di solo "¡Qué gusto! ¿Qué tal, cómo le va?" y espera.',
-      "Cuando te conteste, preséntate en esa misma respuesta",
+      'no vuelvas a saludar, que ya dijiste "Hola": di solo "¡Qué gusto! ¿Qué tal, cómo le va?" y nada más.',
+      "Ese turno termina en ese signo de pregunta y ahí te quedas callada esperando.",
+      'Tú: "¡Qué gusto! ¿Qué tal, cómo le va?" Y esperas.',
+      'Tú: "Muy bien, gracias." y enseguida tu presentación completa.',
+      "y sigue ahí mismo con la presentación.",
       'Para presentarte di: "Le habla Nicol, de {{tienda}}.',
     ]);
+    expect(p).not.toContain("preséntate en esa misma respuesta");
     // «¿De parte de quién?» antes del sí: ni producto ni chat a un tercero.
     expect(p).toContain(
       'Si antes de decirte que sí te pregunta quién habla o de parte de quién, di solo "Le habla Nicol, de {{tienda}}." y vuelve a preguntar si habla con la persona.',
     );
     // Ofrece con la oferta, pregunta dudas y cuántas lleva; ya no empieza por
-    // «qué le faltó».
+    // «qué le faltó». La oferta va en dos frases cortas que empiezan con
+    // «Está a», sin el nombre del producto (owner, 13-10-2026): sin la forma
+    // fija decía «El Shampoo Biru anticaspa…» en tres frases (0 de 3); con
+    // ella, 10 de 10.
     enOrden(p, [
       "Ofrécele el producto directo, aunque el chat ya tenga precios",
-      "cómo se paga y los adelantos salen solo de consultar_cobertura",
-      '"¿Tiene alguna duda o consulta sobre el producto?"',
+      "Es un solo turno de voz: dos frases cortas y luego la pregunta.",
+      'el precio por unidad, empezando con "Está a": no digas el nombre del producto',
+      "cada una una sola vez y solo con su cantidad y su precio total, sin su nombre ni explicarla",
+      "No hables de cómo se paga ni de adelantos: eso sale solo de consultar_cobertura.",
+      'Termina el turno con esta pregunta exacta: "¿Tiene alguna duda o consulta sobre el producto?"',
+      '"Está a 85 soles la unidad. Y en promoción, 3 por 170 soles o 5 por 255, con envío gratis. ¿Tiene alguna duda o consulta sobre el producto?" Con otra oferta, usa solo sus cifras.',
       "Lo que la tienda respondió en el chat no es oferta",
       '"Eso se lo detalla la asesora que le confirma el pedido por WhatsApp." Si al final no compra, no le prometas ese mensaje.',
       "pídele su distrito y llama a consultar_cobertura",
@@ -643,6 +658,7 @@ describe("docs/voz-leads-agente.md: el guion que se pega en ElevenLabs", () => {
     expect(p).toContain("Si no quiere comprar: si todavía no dijo por qué, pregúntale una sola vez.");
     // El MOM dice la misma regla.
     expect(flat(S33)).toContain("**Va directo a ofrecer** (cambio del owner, 13-10-2026");
+    expect(flat(S33)).toContain("en dos frases cortas, sin volver a nombrar el producto (owner, 13-10-2026)");
     expect(flat(S33)).toContain("**Abre con calidez**");
     expect(flat(S33)).not.toContain("saber qué le faltó para comprar");
   });

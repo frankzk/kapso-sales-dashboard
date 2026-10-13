@@ -12108,7 +12108,8 @@ redactado:
   papel. Si antes de confirmar le preguntan «¿de parte de quién?», dice solo
   su nombre y el de la tienda: el producto y el chat, recién con el sí.
 - **Va directo a ofrecer** (cambio del owner, 13-10-2026, tras la primera
-  prueba por teléfono): dice el precio y las promociones de la oferta, pregunta
+  prueba por teléfono): dice el precio y las promociones de la oferta en dos
+  frases cortas, sin volver a nombrar el producto (owner, 13-10-2026), pregunta
   si tiene alguna duda y pregunta si lleva una unidad o una promoción. Las
   dudas las responde solo con la oferta: lo que la tienda dijo en el chat
   (descuentos de asesora, adelantos, días de entrega) no es oferta, y lo que no
@@ -12352,10 +12353,11 @@ vigilante. Nada más:
   de las 17:00 del 12-10-2026. Falta: producto y oferta de Kenku (sin cargar todavía, a
   propósito), «Probar en mi teléfono» y recién entonces encender (33.8).
 - **Unir el guion con el aviso sin ficha** (13-10-2026): el prompt con
-  `{{aviso}}` (33.5) está en una rama del agente en ElevenLabs y se une a la
-  principal recién cuando producción manda la variable `aviso` desde el
+  `{{aviso}}` (33.5) se probó en una rama del agente en ElevenLabs y se unió a
+  la principal recién cuando producción mandó la variable `aviso` desde el
   inicio, antes de encender. Con el prompt nuevo y el inicio viejo, ElevenLabs
-  no arranca la conversación si exige la variable.
+  no arranca la conversación si exige la variable. **Hecho el 13-10-2026**,
+  después del deploy de #946.
 - **Número peruano en Telnyx** para el agente de leads
   (`TELNYX_LEADS_FROM_NUMBER`). Sin él, el lead ve el número de Telnyx de
   Reproprovincia, que hoy es de EE. UU., y contesta menos. **Decisión del owner

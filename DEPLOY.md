@@ -2251,7 +2251,8 @@ la línea de tiempo («Recordatorio de recojo (día 3)…») y la foto que viaj�
    post-call. **Guion con `{{aviso}}`** (13-10-2026): va en la rama
    `sin-ficha-por-regla` del agente y se une a la principal **después** del
    deploy que manda la variable `aviso` desde `/api/voice/leads/inicio`
-   (`docs/voz-leads-agente.md` §3).
+   (`docs/voz-leads-agente.md` §3). **Hecho el 13-10-2026**, con el deploy de
+   #946 ya en producción.
 4. **El número**, después del agente: un número propio del agente de leads
    importado en ElevenLabs por SIP trunk, aceptando solo las direcciones de
    Telnyx (`192.76.120.0/24`, `64.16.250.0/24`), y asignado al agente de leads.
