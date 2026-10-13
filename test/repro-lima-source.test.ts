@@ -393,7 +393,9 @@ describe("el MOM lo documenta (§9.5, §29.6, §29.13)", () => {
       ["Se quitó la fecha que tenía en Grupo GF. Usa «Programar ahora».", actions, 'const CLEARED_NOTE = " Se quitó la fecha que tenía en Grupo GF.";'],
       ["«Acuerdo guardado, pero no se pudo programar: …", actions, "error: `Acuerdo guardado, pero no se pudo programar: ${why}${tail} Usa «Programar ahora».`,"],
       // «Falta la salida nueva» de una caja nueva desde stock.
-      ["«Acuerdo guardado. Falta la salida nueva: Kapta todavía no la crea para una caja nueva desde stock. Anótalo en la ficha y avisa a Despacho GF.»", actions, '"para una caja nueva desde stock"'],
+      ["«Acuerdo guardado. Falta la salida nueva: Kapta todavía no la crea para una caja nueva desde stock. Anótalo en la ficha y avisa a Despacho GF.»", core, '"para una caja nueva desde stock"'],
+      // Y la acción de la caja antes de guardar, que ya no promete que Grupo GF la crea.
+      ["«Caja nueva desde stock: falta la salida nueva de Grupo GF (Kapta todavía no la crea; avisa a Despacho GF).»", read("lib/repro-box-action.ts"), "`Caja nueva desde stock: falta la salida nueva de Grupo GF (Kapta todavía no la crea; avisa a Despacho GF). ${"],
       // «Guardar y pasar al siguiente» lleva el aviso a la hoja siguiente.
       ["(«Avisa a Almacén: la caja tiene que estar en el anaquel antes de las 12:30.»)", actions, '" Avisa a Almacén: la caja tiene que estar en el anaquel antes de las 12:30."'],
       // El escaneo de una caja que el cliente ya no quiere.
@@ -404,6 +406,10 @@ describe("el MOM lo documenta (§9.5, §29.6, §29.13)", () => {
       expect(src, code).toContain(code);
     }
     expect(actions).toContain("Kapta todavía no la crea ${why}. Anótalo en la ficha y avisa a Despacho GF.");
+    expect(actions).toContain("const why = faltaSalidaWhy(boxAction);");
+    // El servidor calcula la acción de la caja con el reintento, como el plan.
+    const decided = actions.slice(actions.indexOf("const decided = reproBoxAction({"));
+    expect(decided.slice(0, decided.indexOf("});"))).toContain("retryAdmission: f.retryAdmission,");
     // La firma de 0249 que cita el MOM y DEPLOY.md.
     expect(text).toContain("`lima_repro_claim` (0249) recibe `p_reopen` (por defecto false)");
     expect(flat(read("DEPLOY.md"))).toContain("`lima_repro_claim` lleva `p_reopen`");
@@ -424,6 +430,8 @@ describe("el MOM lo documenta (§9.5, §29.6, §29.13)", () => {
     expect(s93).toContain("**la misma salida**: se reimprime su rótulo (mismo QR)");
     // §9.5: el episodio por el día de la ruta, el acuerdo de hoy que ya no alcanza, la caja nueva.
     expect(s95).toContain("La parada más reciente se elige **por el día de su ruta**");
+    expect(s95).toContain("en el mismo día, por la que nació después (`delivery_stops.created_at`");
+    expect(s95).toContain("La que se recibe después de reabrir sigue «En oficina»");
     expect(s95).toContain("no abre otro episodio ni cierra el caso como `nuevo_intento`");
     expect(s95).toContain("Pasado ese día, es `acuerdo_vencido`");
     expect(s95).toContain("se programa al decidir solo si alguien puede sacar la salida");
@@ -431,6 +439,7 @@ describe("el MOM lo documenta (§9.5, §29.6, §29.13)", () => {
     expect(s95).toContain("Solo otra solicitud, también una cancelada, la deja en «No consta».");
     // §29.13: la chapa sigue mientras el cierre sea del episodio vigente.
     expect(s2913).toContain("solo un fallo nuevo (otro episodio) la quita");
+    expect(s2913).toContain("Acordada con Tanders, Swayp o Axel no lleva chapa");
     expect(s2913).toContain("**En «Por QR», esa caja se recibe y ahí termina.**");
   });
 });

@@ -27,6 +27,8 @@ const state = vi.hoisted(() => ({
   materialize: vi.fn(),
   cleared: vi.fn(),
   closeStale: vi.fn(),
+  /** Lo que recibió `reproBoxAction` (la acción real, solo se mira). */
+  boxInputs: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
@@ -60,6 +62,16 @@ vi.mock("@/lib/repro-lima-program", async (importOriginal) => {
     },
     materializeAgreement: (...args: unknown[]) => state.materialize(...args),
     closeStaleReproCases: (...args: unknown[]) => state.closeStale(...args),
+  };
+});
+vi.mock("@/lib/repro-box-action", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/repro-box-action")>();
+  return {
+    ...real,
+    reproBoxAction: (input: Parameters<typeof real.reproBoxAction>[0]) => {
+      state.boxInputs.push({ ...input });
+      return real.reproBoxAction(input);
+    },
   };
 });
 vi.mock("@/lib/db", () => {
@@ -193,6 +205,7 @@ beforeEach(() => {
   state.materialize.mockReset();
   state.cleared.mockReset();
   state.closeStale.mockReset();
+  state.boxInputs = [];
   state.respond = (q) => (isCaseRead(q) ? { data: caseRow(), error: null } : { data: null, error: null });
   state.rpc = () => ({ data: { call_id: "call-1", duplicate: false }, error: null });
 });
@@ -347,6 +360,24 @@ describe("caja nueva desde stock sin quien saque la salida (F12)", () => {
     expect(state.materialize).not.toHaveBeenCalled();
     expect(state.cleared).toHaveBeenCalledTimes(1);
     expect(result.notice).toBe("Acuerdo guardado. Falta la salida nueva: Kapta todavía no la crea para una caja nueva desde stock. Anótalo en la ficha y avisa a Despacho GF. Se quitó la fecha que tenía en Grupo GF.");
+    // «Qué hacer con la caja» se calcula con el reintento de los hechos: no promete
+    // que Grupo GF crea la salida al tomarlo.
+    expect(state.boxInputs[0]).toHaveProperty("retryAdmission", false);
+  });
+
+  it("con reintento, la acción de la caja lo sabe: Grupo GF crea la salida al tomarlo", async () => {
+    const tanders = {
+      box: { kind: "volviendo_courier", courier: "tanders" },
+      ownLive: null,
+      failedOutput: { id: "s01", courier: "tanders" },
+      outputs: [{ id: "s01", courier: "tanders" }],
+      hadPropio: false,
+      retryAdmission: true,
+    };
+    state.facts = [facts(tanders)];
+    await registerReproCall(confirmInput({ changes: { no_esperar_caja: true }, expectedBoxAction: "caja_nueva_stock" }));
+    expect(state.boxInputs[0]).toHaveProperty("retryAdmission", true);
+    expect(state.rpcs.find((r) => r.name === "lima_repro_record")?.params.p_box_action).toBe("caja_nueva_stock");
   });
 });
 

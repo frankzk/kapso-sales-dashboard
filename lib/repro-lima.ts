@@ -416,6 +416,8 @@ export type EpisodeStop = {
   status?: string | null;
   /** Día de su ruta (YYYY-MM-DD). */
   routeDate?: string | null;
+  /** Cuándo nació la parada (`delivery_stops.created_at`): ninguna corrección lo mueve. */
+  created_at?: string | null;
 };
 
 function cmpCode(a: string, b: string): number {
@@ -424,13 +426,18 @@ function cmpCode(a: string, b: string): number {
 
 /**
  * El orden de las paradas «No entregado», la más reciente primero: por el día
- * de su ruta, después por `reported_at` y por id. El día de la ruta va antes
- * porque `reported_at` se reescribe en cada corrección del reporte
- * (Liquidaciones 2, «Completar reportes anteriores»): corregir la parada de un
- * día anterior no la vuelve el fallo más reciente ni abre otro episodio (§9.5).
+ * de su ruta, después por cuándo nació la parada (`created_at`), y solo
+ * después por `reported_at` y por id. Los dos primeros van antes porque
+ * `reported_at` se reescribe en cada corrección del reporte (Liquidaciones 2,
+ * «Completar reportes anteriores»): corregir una parada anterior —de otro día
+ * o de otra ruta del mismo día, por ejemplo la del motorizado que tenía la
+ * caja antes de «Sacar con salida nueva»— no la vuelve el fallo más reciente
+ * ni abre otro episodio (§9.5). La parada nace al entregar la carga: la de la
+ * salida nueva nace después.
  */
 export function compareEpisodeStops(a: EpisodeStop, b: EpisodeStop): number {
   return cmpCode(b.routeDate ?? "", a.routeDate ?? "") ||
+    cmpCode(b.created_at ?? "", a.created_at ?? "") ||
     cmpCode(b.reported_at ?? "", a.reported_at ?? "") ||
     cmpCode(b.id, a.id);
 }
@@ -650,6 +657,16 @@ export function materializationPlan(input: {
       if (input.box.kind === "en_oficina") return "ahora";
       return { no: "falta_ubicar" };
   }
+}
+
+/**
+ * Por qué falta la salida nueva (`falta_salida`), para la hoja y el aviso al
+ * guardar: «Kapta todavía no la crea …». Con «Caja nueva desde stock» la
+ * caja no está en oficina (vuelve con su courier o no consta): se dice la
+ * caja nueva.
+ */
+export function faltaSalidaWhy(boxAction: string | null | undefined): string {
+  return boxAction === "caja_nueva_stock" ? "para una caja nueva desde stock" : "con la caja en oficina";
 }
 
 /** El programa vigente de Grupo GF (`gf_dispatch_programs`). */

@@ -1035,7 +1035,8 @@ async function loadCourierOperations(
   // Repro Lima en la cola (E28, §29.13): una lectura de los casos de lo que
   // está en la etapa, lo tomado y lo que está en devolución. «No lo quiere»
   // en cualquier fila; «caja nueva desde stock» solo donde la caja sigue con
-  // el motorizado. Sin lectura no hay chapas.
+  // el motorizado y si se acordó con Grupo GF (`loadReproQueueFlags`). Sin
+  // lectura no hay chapas.
   const reproFlags = await loadReproQueueFlags(admin, [
     ...((queueRows ?? []) as QueueOrderRow[])
       .filter((order) => isReprogramStage(order.macro_stage, order.macro_substage))

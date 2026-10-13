@@ -66,12 +66,43 @@ describe("una acción por regla", () => {
     });
   });
 
-  it("4. no esperar la caja que vuelve con Tanders", () => {
-    expect(action(fromTanders({ changes: { no_esperar_caja: true } }))).toEqual({
+  it("4. no esperar la caja que vuelve con Tanders, con reintento: Grupo GF crea la salida al tomarlo", () => {
+    expect(action(fromTanders({ changes: { no_esperar_caja: true }, retryAdmission: true }))).toEqual({
       action: "caja_nueva_stock",
       newSalida: true,
       label: "Caja nueva desde stock y salida nueva de Grupo GF (la crea al tomarlo en Despacho del día); la que vuelve con Tanders se desarma al recibirla.",
     });
+  });
+
+  it("4. sin quien saque la salida no promete que Grupo GF la crea: dice que falta (F12)", () => {
+    // La de Tanders que vuelve sin reintento (o sin el dato): `falta_salida` al guardar.
+    for (const retryAdmission of [false, undefined]) {
+      expect(action(fromTanders({ changes: { no_esperar_caja: true }, retryAdmission }))).toEqual({
+        action: "caja_nueva_stock",
+        newSalida: true,
+        label: "Caja nueva desde stock: falta la salida nueva de Grupo GF (Kapta todavía no la crea; avisa a Despacho GF). La que vuelve con Tanders se desarma al recibirla.",
+      });
+    }
+    // E29 con la salida propia que no consta y está bloqueada (fuera de la
+    // oficina o en otra solicitud): Grupo GF no la toma, ni con reintento.
+    for (const block of ["fuera_de_oficina", "salida_en_otra_solicitud"] as const) {
+      const own = action(base({ box: { kind: "desconocida", own: true, block }, changes: { no_esperar_caja: true }, reopened: true, retryAdmission: true }));
+      expect(own).toEqual({
+        action: "caja_nueva_stock",
+        newSalida: true,
+        label: "Caja nueva desde stock: falta la salida nueva de Grupo GF (Kapta todavía no la crea; avisa a Despacho GF). Si aparece la anterior, se desarma.",
+      });
+      expect(own.label).not.toContain("la crea al tomarlo");
+    }
+    // La que no consta y no es propia: solo con reintento la crea Grupo GF.
+    const unknown = (retryAdmission: boolean) =>
+      action(base({ box: { kind: "desconocida" }, ownLiveCourier: null, changes: { no_esperar_caja: true }, reopened: true, retryAdmission })).label;
+    expect(unknown(true)).toBe("Caja nueva desde stock y salida nueva de Grupo GF (la crea al tomarlo en Despacho del día); si aparece la anterior, se desarma.");
+    expect(unknown(false)).toContain("falta la salida nueva de Grupo GF");
+    // Con otro courier, su salida desde la Mesa de ruta, con o sin reintento.
+    expect(action(fromTanders({ courier: "axel", changes: { no_esperar_caja: true } })).label).toBe(
+      "Caja nueva desde stock y salida de Axel desde la Mesa de ruta; la que vuelve con Tanders se desarma al recibirla.",
+    );
   });
 
   it("5. cambió el producto o la caja está dañada: desarmar y rearmar", () => {
@@ -119,7 +150,7 @@ describe("una acción por regla", () => {
     const reopened = action(base({ box: { kind: "desconocida" }, ownLiveCourier: null, changes: { no_esperar_caja: true }, reopened: true }));
     expect(reopened.action).toBe("caja_nueva_stock");
     expect(reopened.newSalida).toBe(true);
-    expect(reopened.label).toContain("si aparece la anterior, se desarma");
+    expect(reopened.label).toContain("aparece la anterior, se desarma");
   });
 
   it("sin reabrir, la caja que no consta no ofrece caja nueva: primero se busca (§9.3, F12)", () => {

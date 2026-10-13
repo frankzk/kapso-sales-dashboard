@@ -202,6 +202,24 @@ describe("la línea del fallo de otro courier (F17)", () => {
     // El orden de «Por decidir» conserva el ancla de la salida (como `macro_since`): el sábado es el último día de reparto.
     expect(row.rank).toBe(0);
   });
+
+  it("el mismo día que una parada: cuenta cuándo nació la parada, no su reporte corregido (F0)", async () => {
+    // Sáb 10/10: Roy falla en la mañana (parada nacida a las 08:00) y Swayp
+    // sale a las 14:00 y no entrega. El lunes corrigen la nota de la parada.
+    const swayp = {
+      id: "sw1", order_id: "o1", store_id: "s1", courier: "fenix", created_via: "fenix", delivery_status: "en_ruta",
+      custody_state: null, custody_transferred_at: null, output_number: 2, output_code: null, guide_code: "SW-1",
+      status_category: null, reported_status: null, swayp_state: 9, returned_at: null, dispatched_at: "2026-10-10T19:00:00Z",
+      updated_at: "2026-10-12T14:00:00Z", closed_at: null,
+    };
+    const stop = {
+      id: "stop-1", order_id: "o1", shipment_id: "sh1", route_id: "r1", status: "no_entregado", outcome_reason: "no_contesta",
+      note: "corregida", photo_path: null, reported_at: "2026-10-12T14:00:00Z", requested_date: null, dispatch_manifest_id: "box-1",
+      created_at: "2026-10-10T13:00:00Z",
+    };
+    const { data } = await load(seed({ shipments: [swayp], stops: [stop], cases: [] }));
+    expect(data.rows[0]!.failure?.text.startsWith("Salió el sáb 10/10 con Swayp · ")).toBe(true);
+  });
 });
 
 describe("un acuerdo con Grupo GF para hoy que ya no alcanza (E25, F5/F13)", () => {

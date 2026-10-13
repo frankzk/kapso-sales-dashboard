@@ -14,6 +14,7 @@ import {
   cutoffNotice,
   dismantleSuggested,
   failureLine,
+  faltaSalidaWhy,
   firstAllowedDay,
   isAgreementBoxAction,
   isOwnBox,
@@ -132,9 +133,22 @@ describe("reproEpisodeKey", () => {
     expect(ep.key).toBe("s:s2|o:-");
     expect(ep.at).toBe("2026-10-13T20:00:00.000Z");
     expect([s1, s2].sort(compareEpisodeStops).map((s) => s.id)).toEqual(["s2", "s1"]);
-    // El mismo día de ruta (dos rutas el mismo día): manda `reported_at`, y después el id.
+    // El mismo día de ruta sin `created_at`: manda `reported_at`, y después el id.
     const s3 = { id: "s3", reported_at: "2026-10-13T21:00:00Z", status: "no_entregado", routeDate: MARTES };
     expect(reproEpisodeKey({ orderId: "o1", outputs: [], failedStops: [s2, s3] })).toBe("s:s3|o:-");
+  });
+
+  it("dos rutas el mismo día: manda la parada que nació después, aunque corrijan la otra (F0)", () => {
+    // Roy falló S01 a las 10:00 (parada r1, nacida a las 08:00); «Sacar con
+    // salida nueva» mandó la S02 con Johnny (parada j1, nacida a las 12:30),
+    // que falló a las 17:00. Al día siguiente corrigen la nota de r1.
+    const r1 = { id: "r1", reported_at: "2026-10-14T15:00:00Z", status: "no_entregado", routeDate: MARTES, created_at: "2026-10-13T13:00:00Z" };
+    const j1 = { id: "j1", reported_at: "2026-10-13T22:00:00Z", status: "no_entregado", routeDate: MARTES, created_at: "2026-10-13T17:30:00Z" };
+    expect(reproEpisodeKey({ orderId: "o1", outputs: [], failedStops: [r1, j1] })).toBe("s:j1|o:-");
+    expect([r1, j1].sort(compareEpisodeStops).map((s) => s.id)).toEqual(["j1", "r1"]);
+    // El día de la ruta sigue mandando sobre el nacimiento.
+    const lunes = { ...j1, id: "l1", routeDate: LUNES, created_at: "2026-10-14T00:00:00Z" };
+    expect([lunes, r1].sort(compareEpisodeStops).map((s) => s.id)).toEqual(["r1", "l1"]);
   });
 
   it("el momento del episodio es el fallo más reciente (E1)", () => {
@@ -556,6 +570,10 @@ describe("agreementState", () => {
     expect(agreementStateLabel({ kind: "deriva_movido", gfDay: "2026-10-16", reason: "Capacidad" }, a)).toBe("Grupo GF lo movió al vie 16/10 («Capacidad»)");
     expect(agreementStateLabel({ kind: "falta_sacar" }, a)).toBe("Falta: Sacar con salida nueva");
     expect(agreementStateLabel({ kind: "falta_salida" }, a)).toBe("Falta la salida nueva");
+    // Por qué falta: con «Caja nueva desde stock» no es «la caja en oficina» (F12).
+    expect(faltaSalidaWhy("caja_nueva_stock")).toBe("para una caja nueva desde stock");
+    expect(faltaSalidaWhy("desarmar_rearmar")).toBe("con la caja en oficina");
+    expect(faltaSalidaWhy(null)).toBe("con la caja en oficina");
     expect(agreementStateLabel({ kind: "otro_courier" }, { agreed_on: JUEVES, agreed_courier: "tanders" })).toBe("Sale jue 15/10 con Tanders · crea la salida en la Mesa de ruta");
     expect(agreementStateLabel({ kind: "falta_recibir_devolucion" }, a, { kind: "volviendo_courier", courier: "tanders" }))
       .toBe("Vuelve con Tanders: se programa cuando llegue (Devoluciones)");

@@ -28,6 +28,7 @@ import { courierKey } from "@/lib/dispatch";
 import { sameDayCutoffLabel } from "@/lib/grupo-gf-courier";
 import {
   BOX_ACTION_LABEL,
+  materializationPlan,
   noEsperarCajaAplica,
   reproCourierName,
   REPRO_COURIER_LABEL,
@@ -80,6 +81,12 @@ export interface ReproBoxActionInput {
    * «No esperar la caja» vale (`noEsperarCajaAplica`).
    */
   reopened?: boolean;
+  /**
+   * El pedido entra a la cola de Grupo GF como reintento de otro courier
+   * (`isRetryAdmission`): Grupo GF crea la salida nueva al tomarlo. Sin el
+   * dato, «Caja nueva desde stock» no lo promete (`materializationPlan`).
+   */
+  retryAdmission?: boolean;
 }
 
 const MAX_OUTPUTS_PROBLEM = `Ya usó las ${MAX_OUTPUTS_PER_ORDER} salidas: solo queda «Desarmar y cerrar».`;
@@ -103,6 +110,22 @@ function newOutputBy(courier: ReproCourier): string {
   return courier === "propio"
     ? "salida nueva de Grupo GF (la crea al tomarlo en Despacho del día)"
     : `salida de ${REPRO_COURIER_LABEL[courier]} desde la Mesa de ruta`;
+}
+
+/**
+ * «Caja nueva desde stock» lejos de la caja anterior (`previous`: qué pasa
+ * con ella). Con Grupo GF solo promete que crea la salida al tomarlo si
+ * alguien puede sacarla (`materializationPlan` dice «ahora»); si no, dice que
+ * falta, como el estado `falta_salida` que queda al guardar.
+ */
+function cajaNuevaLabel(input: ReproBoxActionInput, courier: ReproCourier, previous: string): string {
+  const plan = courier === "propio"
+    ? materializationPlan({ courier, boxAction: "caja_nueva_stock", box: input.box, retryAdmission: Boolean(input.retryAdmission) })
+    : null;
+  if (plan && plan !== "ahora") {
+    return `Caja nueva desde stock: falta la salida nueva de Grupo GF (Kapta todavía no la crea; avisa a Despacho GF). ${previous.charAt(0).toUpperCase()}${previous.slice(1)}.`;
+  }
+  return `Caja nueva desde stock y ${newOutputBy(courier)}; ${previous}.`;
 }
 
 /** Qué hacer con la caja. La primera regla que aplica gana (ver la cabecera). */
@@ -160,20 +183,20 @@ export function reproBoxAction(input: ReproBoxActionInput): ReproBoxActionResult
       return {
         action: "caja_nueva_stock",
         newSalida: true,
-        label: `Caja nueva desde stock y ${newOutputBy(courier)}; la de ${box.riderName} se desarma al recibirla.`,
+        label: cajaNuevaLabel(input, courier, `la de ${box.riderName} se desarma al recibirla`),
       };
     }
     if (box.kind === "volviendo_courier") {
       return {
         action: "caja_nueva_stock",
         newSalida: true,
-        label: `Caja nueva desde stock y ${newOutputBy(courier)}; la que vuelve con ${reproCourierName(box.courier)} se desarma al recibirla.`,
+        label: cajaNuevaLabel(input, courier, `la que vuelve con ${reproCourierName(box.courier)} se desarma al recibirla`),
       };
     }
     return {
       action: "caja_nueva_stock",
       newSalida: true,
-      label: `Caja nueva desde stock y ${newOutputBy(courier)}; si aparece la anterior, se desarma.`,
+      label: cajaNuevaLabel(input, courier, "si aparece la anterior, se desarma"),
     };
   }
 

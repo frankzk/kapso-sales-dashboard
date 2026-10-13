@@ -1665,6 +1665,11 @@ en el caso con quién decidió y cuándo. La primera fila que aplica gana:
   haberla desarmado. Sin reabrir, primero se busca («Ya la encontré:
   programar»). La hoja y el servidor lo deciden igual, con el caso reabierto
   (`noEsperarCajaAplica`).
+- Con Grupo GF y la caja que vuelve con su courier o que no consta, la
+  salida nueva la crea Grupo GF al tomarlo solo si el pedido entra como
+  reintento. Si nadie puede sacarla, «Caja nueva desde stock» lo dice («falta
+  la salida nueva de Grupo GF (Kapta todavía no la crea; avisa a Despacho
+  GF)») y no se programa (`falta_salida`, §9.5).
 - Una caja de «Desarmar y cerrar» que todavía estaba en la caja de un
   motorizado de un día anterior y se escanea en «Por QR» se recibe en oficina
   y ahí termina: no se programa, no se toma ni se asigna (§29.13).
@@ -2206,11 +2211,16 @@ programa sola** (decisión 7).
   (`reproEpisodeKey`, `lib/repro-lima.ts`). Un reintento del mismo día reusa su
   parada y sigue en el mismo episodio. Un día nuevo, o un courier nuevo que no
   entrega, abre otro.
-- La parada más reciente se elige **por el día de su ruta** y después por la
-  hora del reporte (`compareEpisodeStops`). Corregir el reporte de una parada
-  de un día anterior (Liquidaciones 2, «Completar reportes anteriores»)
-  reescribe esa hora, pero no la vuelve el fallo más reciente: no abre otro
-  episodio ni cierra el caso como `nuevo_intento`.
+- La parada más reciente se elige **por el día de su ruta**; en el mismo día,
+  por la que nació después (`delivery_stops.created_at`: la parada nace al
+  entregar la carga), y solo después por la hora del reporte
+  (`compareEpisodeStops`). Corregir el reporte de una parada anterior
+  (Liquidaciones 2, «Completar reportes anteriores») —de un día anterior, o
+  de otra ruta del mismo día, como la del motorizado que tenía la caja antes
+  de «Sacar con salida nueva»— reescribe esa hora, pero no la vuelve el fallo
+  más reciente: no abre otro episodio ni cierra el caso como `nuevo_intento`.
+  La línea del fallo compara igual una parada y la guía de otro courier del
+  mismo día.
 - Motivos de cierre (`close_reason`):
   - `desarmar_cerrar`: «Ya no lo quiere» o «Desarmar y cerrar sin llamada». Es
     el único cierre con evento (`lima_repro_closed`).
@@ -2233,8 +2243,12 @@ se abre solo para leer: «Diana está atendiendo este pedido; se libera a las
 10:42.», con «Reintentar». Si se pierde, la hoja lo dice («Ya no tienes este
 caso», con «Volver a tomarlo») y conserva lo escrito. Lo mismo al guardar: si
 el servidor responde «Ya no tienes este caso: vuelve a tomarlo.» —lo note la
-acción o la RPC—, la hoja pasa a ese aviso en vez de dejar solo el error.
-Guardar exige el candado vivo y el mismo episodio (`lima_repro_record`).
+acción o la RPC—, la hoja pasa a ese aviso en vez de dejar solo el error. Si
+tomarlo falla, la hoja dice «No pudimos tomar el caso. Vuelve a intentarlo.»,
+también con «Reintentar». Mientras el caso no es tuyo (se está tomando, lo
+tiene otra persona, falló o se perdió), lo escrito sigue a la vista pero sin
+poder editarse («Lo que escribiste sigue aquí. Reintenta para guardarlo.»), y
+cerrar con algo sin guardar siempre avisa (§11.5). Guardar exige el candado vivo y el mismo episodio (`lima_repro_record`).
 **Solo vale dentro de Repro Lima**:
 Grupo GF sigue tomando, programando y asignando el pedido. «Ver acuerdo» y
 «Cerrados» se abren solo para leer, sin candado.
@@ -2309,9 +2323,12 @@ consta dónde está la caja»).
   está «en otra solicitud»: recibida en oficina es `en_oficina`, y «Mantener»
   se programa al decidir. Solo otra solicitud, también una cancelada, la deja
   en «No consta».
-- En un caso reabierto después de «Desarmar y cerrar», la caja que estaba en
-  oficina se lee «No consta»: Almacén pudo haberla desarmado. Con el
-  motorizado o volviendo con su courier, no cambia.
+- En un caso reabierto después de «Desarmar y cerrar», la caja que ya estaba
+  en oficina antes de reabrir (o sin fecha de recepción) se lee «No consta»:
+  Almacén pudo haberla desarmado. La que se recibe después de reabrir sigue
+  «En oficina»: con el caso abierto, la recepción no pide desarmarla, y
+  «Mantener» se programa al decidir. Con el motorizado o volviendo con su
+  courier, no cambia.
 
 Cuándo se programa (`materializationPlan`): `ahora`, `al_recibir`, o no se
 programa por `otro_courier`, `falta_salida`, `falta_ubicar` o
@@ -2392,7 +2409,11 @@ real (§29.6):
   (Grupo GF crea la salida al tomarlo). Si no, queda «Falta la salida nueva»
   (`falta_salida`) y se quita todo programa de Grupo GF, con el aviso
   «Acuerdo guardado. Falta la salida nueva: Kapta todavía no la crea para una
-  caja nueva desde stock. Anótalo en la ficha y avisa a Despacho GF.».
+  caja nueva desde stock. Anótalo en la ficha y avisa a Despacho GF.». Antes
+  de guardar, «Qué hacer con la caja» lo dice igual: solo promete que Grupo
+  GF crea la salida al tomarlo cuando el pedido entra como reintento; si no,
+  «Caja nueva desde stock: falta la salida nueva de Grupo GF (Kapta todavía
+  no la crea; avisa a Despacho GF).», con lo que pasa con la caja anterior.
 - **Al recibir la caja en oficina**, si sigue con el motorizado: el acuerdo
   queda «esperando la caja» y «Recibir en oficina» lo programa (§29.13).
 - **Con «Ya la encontré: programar»**, si no consta dónde está la caja: quien
@@ -2469,12 +2490,12 @@ desarmó, elige «No esperar la caja».».
   persona lo tenía) y «Volver a tomarlo» toman sin reabrir: si alguien acaba
   de cerrar el caso con «Desarmar y cerrar», se vuelve a pedir el segundo
   clic.
-- En el caso reabierto, la caja que estaba en oficina no consta (arriba) y
-  «No esperar la caja» se ofrece también así (§9.3). Con Grupo GF y su salida
-  propia, si nada la bloquea, «Caja nueva desde stock» sale con la misma
-  salida: se reimprime su rótulo (mismo QR) y Grupo GF la toma en Despacho
-  del día; no nace salida ni cuenta para las cinco. Si aparece la caja
-  anterior, se desarma.
+- En el caso reabierto, la caja que ya estaba en oficina antes de reabrir no
+  consta (arriba) y «No esperar la caja» se ofrece también así (§9.3). Con
+  Grupo GF y su salida propia, si nada la bloquea, «Caja nueva desde stock»
+  sale con la misma salida: se reimprime su rótulo (mismo QR) y Grupo GF la
+  toma en Despacho del día; no nace salida ni cuenta para las cinco. Si
+  aparece la caja anterior, se desarma.
 
 **Plazo sugerido, nunca automático.** Con 10 días desde la recepción en oficina
 y 3 «No contesta», la fila muestra «Sugerido: desarmar y cerrar» (decisión 10).
@@ -10397,10 +10418,13 @@ La caja va al anaquel de ese día, no al estante de reprogramados.
   hechos del pedido, solo para esos pedidos; si esa lectura falla, la chapa
   sigue mientras el pedido no haya vuelto a salir después del cierre. Una caja
   con el motorizado o en devolución cuyo acuerdo es caja nueva desde stock
-  lleva «Repro Lima: caja nueva desde stock, sale jue 15/10»: en la salida
-  propia sin solicitud, en «En devolución» y también en la fila de un pedido
-  ya tomado (con solicitud de Grupo GF) cuya caja sigue con el motorizado con
-  «No entregado», que es donde se ofrece «Sacar con salida nueva».
+  **con Grupo GF** lleva «Repro Lima: caja nueva desde stock, sale jue
+  15/10»: en la salida propia sin solicitud, en «En devolución» y también en
+  la fila de un pedido ya tomado (con solicitud de Grupo GF) cuya caja sigue
+  con el motorizado con «No entregado», que es donde se ofrece «Sacar con
+  salida nueva». Acordada con Tanders, Swayp o Axel no lleva chapa: su salida
+  se crea desde la Mesa de ruta (§9.3, fila 2), no con «Sacar con salida
+  nueva».
 
 **Un pedido anulado se dice primero, en cualquier escaneo (05-10-2026).** Al
 escanear un paquete —armado en almacén, agregar a una ruta, cotejo de la caja o

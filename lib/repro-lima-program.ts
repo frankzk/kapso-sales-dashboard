@@ -161,12 +161,14 @@ export interface ReproStopRow {
   reported_at: string | null;
   requested_date: string | null;
   dispatch_manifest_id: string | null;
+  /** Cuándo nació la parada: desempata el episodio en el mismo día (`compareEpisodeStops`). */
+  created_at: string | null;
   routeDate: string | null;
   riderName: string | null;
 }
 
 const STOP_COLUMNS =
-  "id,order_id,shipment_id,route_id,status,outcome_reason,note,photo_path,reported_at,requested_date,dispatch_manifest_id";
+  "id,order_id,shipment_id,route_id,status,outcome_reason,note,photo_path,reported_at,requested_date,dispatch_manifest_id,created_at";
 
 /** El proveedor Grupo GF de la organización: el corte sale de aquí (D6). */
 export interface ReproProviderRow {
@@ -236,7 +238,8 @@ export interface ReproFacts {
   latestClosed: ReproCaseRow | null;
   /**
    * El caso abierto reabre un «Desarmar y cerrar» del mismo episodio (E29):
-   * si la caja ya estaba en oficina, no consta que siga armada.
+   * si la caja ya estaba en oficina antes de reabrir, no consta que siga
+   * armada.
    */
   reopened: boolean;
 }
@@ -264,6 +267,12 @@ function episodeDepartedAt(
     output?.dispatched_at ? Date.parse(output.dispatched_at) : NaN,
   ].filter((t) => Number.isFinite(t));
   return stamps.length ? Math.max(...stamps) : null;
+}
+
+/** ¿Se recibió en oficina desde ese momento? Sin fecha de recepción, no consta. */
+function receivedSince(receivedAt: string | null, since: string): boolean {
+  const at = Date.parse(receivedAt ?? "");
+  return Number.isFinite(at) && at >= Date.parse(since);
 }
 
 export interface ReproFactsOptions {
@@ -397,8 +406,8 @@ export async function loadReproFacts(
           riderName: route?.rider_id ? riderName.get(route.rider_id) ?? null : null,
         };
       })
-      // El mismo orden que el episodio: el día de la ruta antes que `reported_at`,
-      // que cada corrección del reporte reescribe.
+      // El mismo orden que el episodio: el día de la ruta y el nacimiento de la
+      // parada antes que `reported_at`, que cada corrección del reporte reescribe.
       .sort(compareEpisodeStops);
     const episode = reproEpisode({ orderId, outputs, failedStops });
     let failedOutput: ReproShipmentRow | null = null;
@@ -452,9 +461,14 @@ export async function loadReproFacts(
       lastFailed,
       receivedAt,
     });
-    // E29: reabierto después de «Desarmar y cerrar» con la caja en oficina:
-    // Almacén pudo haberla desarmado. Con el motorizado o volviendo, no.
-    if (reopened && box.kind === "en_oficina") box = { kind: "desconocida", ...(isOwnBox(box) ? { own: true } : {}) };
+    // E29: reabierto después de «Desarmar y cerrar» con la caja que ya estaba
+    // en oficina antes de reabrir (o sin fecha de recepción): Almacén pudo
+    // haberla desarmado. Una recibida después de reabrir no tuvo el aviso de
+    // desarmarla (con el caso abierto, la recepción no lo da): sigue en
+    // oficina. Con el motorizado o volviendo, no cambia.
+    if (reopened && open && box.kind === "en_oficina" && !receivedSince(box.since, open.opened_at)) {
+      box = { kind: "desconocida", ...(isOwnBox(box) ? { own: true } : {}) };
+    }
     out.set(orderId, {
       orderId,
       storeId,
@@ -896,10 +910,13 @@ export function reproCajaNuevaChip(day: string): string {
  *   cierre no lo esconden. El episodio se lee con los hechos del pedido
  *   (`loadReproFacts`), solo para esos pedidos; si esa lectura falla, se cae a
  *   `departures` (no volvió a salir después del cierre).
- * - `cajaNueva`: el último caso acordó «Caja nueva desde stock»: el día que
- *   sale y si el caso sigue abierto. Uno cerrado al salir de la etapa solo
- *   vale para la caja reemplazada que vuelve («En devolución»): el pedido ya
- *   salió de «Por reprogramar Lima» con la salida nueva.
+ * - `cajaNueva`: el último caso acordó «Caja nueva desde stock» con Grupo GF:
+ *   el día que sale y si el caso sigue abierto. Con otro courier no: su salida
+ *   se crea en la Mesa de ruta, y la chapa en la fila donde se ofrece «Sacar
+ *   con salida nueva» le diría a Grupo GF que la saque él (§9.3, fila 2). Uno
+ *   cerrado al salir de la etapa solo vale para la caja reemplazada que vuelve
+ *   («En devolución»): el pedido ya salió de «Por reprogramar Lima» con la
+ *   salida nueva.
  * Nunca lanza: sin lectura no hay chapas.
  */
 export async function loadReproQueueFlags(
@@ -912,10 +929,10 @@ export async function loadReproQueueFlags(
   try {
     const ids = [...new Set(orderIds.filter(Boolean))];
     if (!ids.length) return { noLoQuiere, cajaNueva };
-    type FlagCase = Pick<ReproCaseRow, "order_id" | "episode_key" | "opened_at" | "closed_at" | "close_reason" | "agreed_on" | "box_action">;
+    type FlagCase = Pick<ReproCaseRow, "order_id" | "episode_key" | "opened_at" | "closed_at" | "close_reason" | "agreed_on" | "agreed_courier" | "box_action">;
     const { data } = await courierRowsByIds(ids, (chunk) => admin
       .from("lima_repro_cases")
-      .select("order_id,episode_key,opened_at,closed_at,close_reason,agreed_on,box_action")
+      .select("order_id,episode_key,opened_at,closed_at,close_reason,agreed_on,agreed_courier,box_action")
       .in("order_id", chunk));
     const byOrder = new Map<string, FlagCase[]>();
     for (const row of (data ?? []) as FlagCase[]) {
@@ -927,7 +944,8 @@ export async function loadReproQueueFlags(
       const latest = newest(rows, (row) => row.opened_at);
       if (!latest) continue;
       if (latest.box_action === "caja_nueva_stock" && latest.agreed_on && (!latest.closed_at || latest.close_reason === "fuera_de_etapa")) {
-        cajaNueva.set(orderId, { day: latest.agreed_on.slice(0, 10), open: !latest.closed_at });
+        // Solo con Grupo GF: con otro courier, la salida sale de la Mesa de ruta.
+        if (sameCourier(latest.agreed_courier, "propio")) cajaNueva.set(orderId, { day: latest.agreed_on.slice(0, 10), open: !latest.closed_at });
         continue;
       }
       if (latest.closed_at && latest.close_reason === "desarmar_cerrar") closed.set(orderId, latest);

@@ -5,10 +5,14 @@
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { RESCHEDULE_MAX_DAYS } from "@/lib/gf-dispatch-program";
-import { agreementDateProblem } from "@/lib/repro-lima";
+import { agreementDateProblem, materializationPlan, type BoxLocation } from "@/lib/repro-lima";
 import { swaypDispatchDayOptions } from "@/lib/swayp-dispatch-days";
+import { planText } from "@/components/repro-lima-sheet";
+
+// La hoja importa las acciones de servidor; aquí solo se prueban sus textos.
+vi.mock("@/app/dashboard/pedidos/repro-lima/actions", () => ({}));
 
 const read = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8");
 
@@ -104,7 +108,40 @@ describe("el candado de la hoja (D10)", () => {
     expect(claimEffect).toContain('setClaimState("lost");');
     expect(sheet).toContain("Lo que escribiste sigue aquí. Vuelve a tomarlo para guardarlo.");
     // Perder el caso apaga el formulario, no lo desmonta.
-    expect(sheet).toContain('<fieldset disabled={claimState === "lost"} className="contents">');
+    expect(sheet).toContain('const showForm = mine || (mode === "edit" && (claimState === "lost" || hasDraft));');
+    expect(sheet).toContain('{showForm && (\n          <fieldset disabled={!mine} className="contents">');
+  });
+
+  it("con algo escrito, sin el caso (tomándolo, con otra persona o si falló la toma) lo escrito se ve apagado (§9.5)", () => {
+    // La vuelta del bfcache o «Volver a tomarlo» pueden terminar en «held» o
+    // «error»: el borrador no se esconde, solo se apaga hasta tener el caso.
+    expect(sheet).toContain('(claimState === "lost" || hasDraft)');
+    // La silueta de «Tomando el caso…» solo cuando no hay nada que mostrar.
+    expect(sheet).toContain('{mode === "edit" && claimState === "claiming" && !showForm && (');
+    expect(sheet).not.toContain("{(mine || claimState === \"lost\") && (");
+    expect(sheet).toContain("Lo que escribiste sigue aquí. Reintenta para guardarlo.");
+  });
+
+  it("la hoja calcula «Qué hacer con la caja» con lo mismo que el servidor (reabierto y reintento)", () => {
+    const call = between(sheet, "const boxInput = (c: ReproCourier): ReproBoxActionResult => reproBoxAction({", "});");
+    expect(call).toContain("reopened: current.reopened,");
+    expect(call).toContain("retryAdmission: current.retryAdmission,");
+    expect(sheet).toContain("Kapta no la crea ${faltaSalidaWhy(boxAction)}");
+  });
+
+  it("el MOM dice lo que hace la hoja si tomar el caso falla (§9.5, el candado)", () => {
+    const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8").replace(/\s+/g, " ");
+    expect(mom).toContain("tomarlo falla, la hoja dice «No pudimos tomar el caso. Vuelve a intentarlo.», también con «Reintentar».");
+    expect(mom).toContain("lo escrito sigue a la vista pero sin poder editarse («Lo que escribiste sigue aquí. Reintenta para guardarlo.»)");
+  });
+
+  it("si la toma falla, «Reintentar» vuelve a tomar sin cerrar la hoja", () => {
+    expect(sheet).toContain('{(claimState === "held" || claimState === "error") && (');
+    const retry = between(sheet, '{(claimState === "held" || claimState === "error") && (', "</OpsButton>");
+    expect(retry).toContain("onClick={() => setClaimAttempt((n) => n + 1)}>Reintentar</OpsButton>");
+    // Cerrar ya no es la única salida: cerrar descartaría lo escrito.
+    expect(sheet).not.toContain("Cierra y vuelve a intentarlo");
+    expect(sheet).toContain('setClaimMessage("No pudimos tomar el caso. Vuelve a intentarlo.");');
   });
 
   it("cerrar o recargar la pestaña lo suelta con un beacon, solo después de tenerlo", () => {
@@ -175,6 +212,18 @@ describe("el candado de la hoja (D10)", () => {
     expect(sheet).toContain("Escribiste algo que todavía no se guardó.");
     expect(between(sheet, "function requestExit(", "\n  }")).toContain("setPendingExit(kind)");
   });
+
+  it("el aviso de texto sin guardar vale en cualquier estado del candado, no solo con el caso", () => {
+    // Con otra persona («held»), tomándolo o si falló la toma, «Cerrar», la X y
+    // Escape también pasan por aquí: sin el aviso, la nota se perdía callada.
+    const exit = between(sheet, "function requestExit(", "\n  }");
+    expect(exit).toContain('if (mode === "edit" && hasDraft) { setPendingExit(kind); return; }');
+    expect(exit).not.toContain("mine");
+    expect(exit).not.toContain("claimState");
+    expect(sheet).toContain('onClose={() => requestExit("close")}');
+    expect(sheet).toContain('exitRef.current("close");');
+    expect(sheet).toContain('onClick={() => requestExit("close")}>Cerrar</OpsButton>');
+  });
 });
 
 describe("un envío, un operationId (E3)", () => {
@@ -241,6 +290,28 @@ describe("la hoja decide con las reglas del servidor (§11.6, E14-E19)", () => {
     }
     // vie 20/11: a 39 días, la que traía «Otra fecha» de Grupo GF.
     expect(offered.has("2026-11-20")).toBe(true);
+  });
+
+  it("«Falta la salida nueva» de una caja nueva desde stock no culpa a la caja en oficina (§9.5)", () => {
+    // Un caso reabierto con la salida propia fuera de la oficina, y la caja que
+    // vuelve con Tanders sin reintento: nadie saca la salida y la caja no está.
+    const lost: BoxLocation = { kind: "desconocida", own: true, block: "fuera_de_oficina" };
+    const returning: BoxLocation = { kind: "volviendo_courier", courier: "Tanders" };
+    for (const box of [lost, returning]) {
+      const plan = materializationPlan({ courier: "propio", boxAction: "caja_nueva_stock", box, retryAdmission: false });
+      expect(plan, box.kind).toEqual({ no: "falta_salida" });
+      const text = planText(plan, "propio", box, "caja_nueva_stock");
+      expect(text).toBe("todavía no: falta la salida nueva (Kapta no la crea para una caja nueva desde stock). Avisa a Despacho GF.");
+      expect(text).not.toContain("en oficina");
+    }
+    // Las lagunas (un cambio de producto con la salida propia viva) siguen igual.
+    const office: BoxLocation = { kind: "en_oficina", since: null };
+    expect(planText({ no: "falta_salida" }, "propio", office, "desarmar_rearmar")).toContain("Kapta no la crea con la caja en oficina");
+    expect(planText({ no: "falta_salida" }, "propio", office, null)).toContain("Kapta no la crea con la caja en oficina");
+    // Las dos llamadas le pasan la acción de la caja: la del acuerdo guardado y la calculada.
+    expect(sheet).toContain("planText(current.plan, agreement.courier, current.box, isBoxAction(agreement.boxAction) ? agreement.boxAction : null)");
+    expect(sheet).toContain("planText(plan, courier, box, decided.action)");
+    expect(sheet.match(/planText\(/g)?.length).toBe(3);
   });
 
   it("«Ya no lo quiere» pide un segundo clic que nombra el pedido y no anula la venta (§11.5)", () => {

@@ -40,6 +40,7 @@ import { limaDay, programDayLabel } from "@/lib/dispatch-day";
 import { priorOutputsWith, reproBoxAction } from "@/lib/repro-box-action";
 import {
   agreementDateProblem,
+  faltaSalidaWhy,
   isAgreementBoxAction,
   isReproChannel,
   isReproCourier,
@@ -362,6 +363,7 @@ async function recordCall(scope: ReproScope, input: RegisterReproCallInput): Pro
           priorWithCourier: priorOutputsWith(f.outputs, courier),
           ownReplace: f.ownReplace,
           reopened: f.reopened,
+          retryAdmission: f.retryAdmission,
         });
         // La hoja no deja guardar con un problema de caja: si aquí aparece
         // uno, o la acción es otra, los hechos cambiaron mientras se decidía.
@@ -588,8 +590,8 @@ async function afterCall(admin: Admin, input: {
     case "falta_salida": {
       // Caja nueva desde stock sin quien saque la salida (caja de otro courier
       // sin reintento, o la propia que no consta con bloqueo): no es «la caja
-      // en oficina».
-      const why = boxAction === "caja_nueva_stock" ? "para una caja nueva desde stock" : "con la caja en oficina";
+      // en oficina» (`faltaSalidaWhy`).
+      const why = faltaSalidaWhy(boxAction);
       return {
         notice: `Acuerdo guardado. Falta la salida nueva: Kapta todavía no la crea ${why}. Anótalo en la ficha y avisa a Despacho GF.${tail}`,
         programChanged: cleared,

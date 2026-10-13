@@ -63,6 +63,7 @@ import {
   materializationPlan,
   nextCallProblem,
   nextRoundAt,
+  faltaSalidaWhy,
   noEsperarCajaAplica,
   normalizeReproChanges,
   reproCallTimeLabel,
@@ -75,6 +76,7 @@ import {
   REPRO_LIST_LABEL,
   REPRO_OUTCOME_LABEL,
   type AgreementStateKind,
+  type BoxAction,
   type BoxLocation,
   type MaterializationPlan,
   type ReproChanges,
@@ -311,14 +313,16 @@ function limaInMinutes(now: Date, minutes: number): string {
 }
 
 /** «Se programa: …» del acuerdo, con el plan que calcula Kapta. */
-function planText(plan: MaterializationPlan, courier: ReproCourier, box: BoxLocation): string {
+export function planText(plan: MaterializationPlan, courier: ReproCourier, box: BoxLocation, boxAction: BoxAction | null): string {
   if (plan === "ahora") return "al guardar, en Grupo GF (sale en «Programados» de Despacho del día).";
   if (plan === "al_recibir") return `al recibir la caja de ${box.kind === "con_motorizado" ? box.riderName : "el motorizado"} en oficina.`;
   switch (plan.no) {
     case "otro_courier":
       return `no en Grupo GF: crea la salida de ${REPRO_COURIER_LABEL[courier]} desde la Mesa de ruta de la ficha.`;
-    case "falta_salida":
-      return "todavía no: falta la salida nueva (Kapta no la crea con la caja en oficina). Avisa a Despacho GF.";
+    case "falta_salida": {
+      // Lo mismo que dice el aviso al guardar (§9.5).
+      return `todavía no: falta la salida nueva (Kapta no la crea ${faltaSalidaWhy(boxAction)}). Avisa a Despacho GF.`;
+    }
     case "falta_ubicar":
       return "cuando alguien encuentre la caja en la oficina («Ya la encontré: programar»).";
     case "falta_recibir_devolucion":
@@ -590,7 +594,7 @@ export function ReproLimaSheet({
         reopenRef.current = false;
         if (!active || session.shouldRelease) return;
         setClaimState("error");
-        setClaimMessage("No pudimos tomar el caso. Cierra y vuelve a intentarlo.");
+        setClaimMessage("No pudimos tomar el caso. Vuelve a intentarlo.");
       });
 
     return () => {
@@ -671,6 +675,7 @@ export function ReproLimaSheet({
     priorWithCourier: current.boxInputs.priorByCourier[c] ?? 0,
     ownReplace: current.boxInputs.ownReplace,
     reopened: current.reopened,
+    retryAdmission: current.retryAdmission,
   });
 
   // Otra guía viva de otro courier: no se confirma nada aquí (la trabaja ese courier).
@@ -755,6 +760,9 @@ export function ReproLimaSheet({
 
   const destructive = form === "close" || outcome === "no_quiere";
   const hasDraft = note.trim().length > 0 || closeNote.trim().length > 0;
+  // Sin el caso (perdido, tomándolo, con otra persona o si falló la toma), lo
+  // escrito se sigue viendo, apagado: la hoja lo conserva (§9.5).
+  const showForm = mine || (mode === "edit" && (claimState === "lost" || hasDraft));
 
   function finish(result: RegisterReproCallResult, advance: boolean) {
     if (result.callId) {
@@ -836,9 +844,10 @@ export function ReproLimaSheet({
     });
   }
 
-  // Salir: cerrar la hoja o soltar el caso. Con texto sin guardar, se avisa (§11.5).
+  // Salir: cerrar la hoja o soltar el caso. Con texto sin guardar, se avisa
+  // (§11.5), tenga o no el caso.
   function requestExit(kind: "close" | "release") {
-    if ((mine || claimState === "lost") && hasDraft) { setPendingExit(kind); return; }
+    if (mode === "edit" && hasDraft) { setPendingExit(kind); return; }
     doExit();
   }
   function doExit() {
@@ -914,8 +923,11 @@ export function ReproLimaSheet({
             <span aria-hidden className={cn("mt-1.5 size-2 shrink-0 rounded-full", claimDot, (claimState === "claiming" || claimState === "idle") && mode === "edit" && "animate-pulse motion-reduce:animate-none")} />
             <span>{claimLine}</span>
           </p>
-          {claimState === "held" && (
-            <OpsButton size="sm" onClick={() => setClaimAttempt((n) => n + 1)}>Reintentar</OpsButton>
+          {(claimState === "held" || claimState === "error") && (
+            <div className="flex flex-wrap items-center gap-2">
+              <OpsButton size="sm" onClick={() => setClaimAttempt((n) => n + 1)}>Reintentar</OpsButton>
+              {hasDraft && <p className="text-[13px] leading-5 text-ink-600">Lo que escribiste sigue aquí. Reintenta para guardarlo.</p>}
+            </div>
           )}
           {claimState === "lost" && (
             <Banner tone="warn" role="alert" title="Ya no tienes este caso">
@@ -1029,7 +1041,7 @@ export function ReproLimaSheet({
               {current.plan && isReproCourier(agreement.courier) && (
                 <>
                   <dt className="text-ink-500">Se programa</dt>
-                  <dd className="text-ink-900">{planText(current.plan, agreement.courier, current.box)}</dd>
+                  <dd className="text-ink-900">{planText(current.plan, agreement.courier, current.box, isBoxAction(agreement.boxAction) ? agreement.boxAction : null)}</dd>
                 </>
               )}
             </dl>
@@ -1075,15 +1087,15 @@ export function ReproLimaSheet({
           </Section>
         )}
 
-        {/* El formulario: solo con el caso tomado. */}
-        {mode === "edit" && claimState === "claiming" && (
+        {/* El formulario: solo con el caso tomado. Sin él, apagado si hay algo escrito. */}
+        {mode === "edit" && claimState === "claiming" && !showForm && (
           <div className="space-y-2 border-t border-line pt-4" aria-hidden>
             <Skeleton className="h-8 w-40" />
             <Skeleton className="h-24" />
           </div>
         )}
-        {(mine || claimState === "lost") && (
-          <fieldset disabled={claimState === "lost"} className="contents">
+        {showForm && (
+          <fieldset disabled={!mine} className="contents">
             {form === "call" ? (
               <>
                 <Section title="Canal">
@@ -1244,7 +1256,7 @@ export function ReproLimaSheet({
                           <>
                             <p className="text-ink-900"><b className="font-semibold">Qué hacer con la caja:</b> {decided.label}</p>
                             <p className="text-ink-600">{boxActionReadyLabel(decided.action, courier, current.cutoff)}</p>
-                            {plan && <p className="text-ink-900"><b className="font-semibold">Se programa:</b> {planText(plan, courier, box)}</p>}
+                            {plan && <p className="text-ink-900"><b className="font-semibold">Se programa:</b> {planText(plan, courier, box, decided.action)}</p>}
                           </>
                         ) : null}
                       </div>

@@ -204,8 +204,9 @@ function daysBetweenDays(from: string | null, to: string): number | null {
 /**
  * El fallo que se enseña: la parada o la salida de otro courier, la más
  * reciente. Se comparan días (el de la ruta de la parada, el del fallo de la
- * guía) antes que horas: el `reported_at` de la parada se reescribe en cada
- * corrección del reporte.
+ * guía) antes que horas, y en el mismo día cuenta cuándo nació la parada, no
+ * su `reported_at`: este se reescribe en cada corrección del reporte
+ * (`compareEpisodeStops`).
  *
  * `failedOn` ordena «Por decidir» (rango 0). De Tanders y Swayp es el día en
  * que salió el intento (`guideFailedAt`, el mismo ancla que `macro_since`): no
@@ -217,7 +218,7 @@ function failureOf(f: ReproFacts): { line: ReproRow["failure"]; failedOn: string
   const outputAt = output ? guideFailedAt(output) : null;
   const stopDay = stop ? stop.routeDate?.slice(0, 10) ?? limaDay(stop.reported_at) ?? "" : "";
   const outputDay = limaDay(outputAt) ?? "";
-  const stopFirst = stopDay !== outputDay ? stopDay > outputDay : (stop?.reported_at ?? "") >= (outputAt ?? "");
+  const stopFirst = stopDay !== outputDay ? stopDay > outputDay : (stop?.created_at ?? stop?.reported_at ?? "") >= (outputAt ?? "");
   if (stop && (!output || stopFirst)) {
     const line = failureLine({
       kind: "parada",
