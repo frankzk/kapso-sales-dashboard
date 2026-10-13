@@ -5862,6 +5862,80 @@ pedidos; y cuántos **salen solo con ese producto** (no les falta nada más). Ca
 fila se abre en sus pedidos, con enlace al Master, ordenados primero por los que
 salen solo con eso y después por los días que llevan en su etapa.
 
+### 11.13 Swayp automático desde Por confirmar, piloto A/B (13-10-2026)
+
+Una pasada diaria hace lo mismo que el botón «Enviar por Swayp» de §11.11, sin
+persona, sobre un grupo angosto de pedidos y con la mitad como grupo de control.
+Si Swayp no entrega, el pedido vuelve a «Por confirmar · Swayp no entregó» igual
+que con el botón. Nace **apagado**; lo activa quien tiene «Administrar tiendas»
+desde el registro de Swayp desde Por confirmar.
+
+**Por qué así (números del 13-10-2026).** El botón llevaba 22 envíos: 2
+entregados de 15 resueltos (13 %), 7 en reparto. Los 6 más viejos —de 4 a 7
+llamadas sin respuesta, de 5 a 14 días esperando— fallaron todos; las 2 entregas
+fueron pedidos del día con una sola llamada. En todas las guías Swayp desde el
+15-09, se entrega el 27 % cuando el cliente confirmó, el 17 % con el automático
+Aliclik → Swayp (§11.9) y el 13 % con el botón; el primer motivo de fallo es
+«destinatario no contesta» (41 %), después los rechazos (22 %) y las fallas de la
+propia bodega (12 %). Quien no le contesta a la asesora tampoco le contesta al
+motorizado: el automático va a pedidos **frescos**, no a los que llevan días sin
+contestar.
+
+**Decisiones del owner:** sin aviso previo por WhatsApp; pedidos de hasta 48 h;
+piloto A/B de 10 por día. Los demás umbrales son de la propuesta y viven en
+`swayp_pc_auto_settings` (0253), no en el código.
+
+**Quién entra** (`lib/swayp-por-confirmar-auto.ts`, pura):
+
+- Por confirmar, subetapa «Sin llamar» o «Por confirmar» (no «Volver a
+  contactar», «Pendiente de abono» ni «Swayp no entregó»); provincia COD; Swayp
+  ok en el Master.
+- Pedido de hasta 48 h, sano (sin anular ni reembolsar, en soles, pago
+  pendiente), sin pagos registrados y sin otra salida viva.
+- Al menos 1 llamada (la asesora va primero) y no más de 2 sin respuesta; sin
+  fecha para volver a contactar.
+- Dirección con número, o con manzana y lote (§11.12 usa la misma idea). No
+  cuentan la fecha que nombra una calle («Av. 31 de Octubre»), la etapa de una
+  urbanización ni un código pegado («Las Dunas D2»). Sin recojo en agencia.
+- Teléfono válido y limpio: sin rechazos previos (novedades 15 y 16 de Swayp,
+  descarte de la recuperación, una nota que dice que no), y sin otro pedido vivo
+  —o entregado en 30 días— con el mismo producto.
+- Hasta S/ 300.
+
+Para los que pasan, el servidor (`swayp-por-confirmar-auto-server.ts`) mira lo
+que pide red, **para los dos brazos**, porque el control tiene que ser el mismo
+tipo de pedido:
+
+- La bodega no tuvo fallas propias (novedades 18 y 20) en los últimos 7 días.
+- La ubicación se corrobora con Aliclik: el pin del GPS tiene que resolver al
+  mismo ubigeo que la dirección. Es lo que deja fuera Majes o La Joya cuando el
+  distrito dice «Arequipa».
+- Cada producto tiene su vínculo con Swayp y stock completo leído en vivo.
+
+**El A/B.** El brazo sale del id del pedido (FNV-1a, mitad y mitad): el mismo
+pedido cae siempre del mismo lado. A sale por Swayp; B sigue la cola de
+llamadas. Cuando un pedido es elegible, su decisión queda fija con su brazo
+(`swayp_pc_auto_decisions`). Primero van quienes ya compraron y recibieron (el
+84 % de esas entregas llegó en el histórico); después el más antiguo de la
+ventana.
+
+**Límites y freno.** 10 por día y 3 por bodega; corre a las 6:30 p. m. de Lima
+para despachar el siguiente día de despacho (lunes a sábado; en Arequipa no el
+sábado, como §11.9). Si de los últimos 20 casos resueltos del brazo A se entrega
+menos del 35 %, se apaga solo y deja el motivo; volver a activarlo lo decide una
+persona.
+
+**Un solo camino de emisión.** La guía la emite `emitirGuiaSwaypDirecta`
+(`lib/swayp-directa.ts`), la misma función que usa el botón desde el 13-10-2026:
+mismas rejas de pedido, salidas vivas, stock de todos los productos, vínculo,
+fecha y número emitido por Swayp. El hecho `swayp_desde_por_confirmar` del
+automático va con `source = 'system'`, sin actor, y su evidencia en el payload;
+el registro lo muestra como «Automático».
+
+**Cómo se mide.** El panel compara la tasa de entrega de los resueltos de cada
+brazo: A por su guía Swayp; B por el Master (entregado por quien sea, o cerrado
+sin entrega). La simulación muestra qué saldría hoy sin enviar nada.
+
 ## 12. Agencia: Shalom y Olva
 
 ### Shalom

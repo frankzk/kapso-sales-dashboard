@@ -30,7 +30,7 @@ describe("swayp_emission_claim — salidas vivas solo bloquean el automático", 
   });
 
   it("la guía directa sigue pasando por la regla de salidas de la app", () => {
-    const src = readFileSync(join(process.cwd(), "app/dashboard/envios/actions.ts"), "utf8");
+    const src = readFileSync(join(process.cwd(), "lib/swayp-directa.ts"), "utf8");
     expect(src).toContain("puertaDeSalidaAdicional({");
     expect(src).toContain("sourceKey: `direct:${order.id}:${input.dispatchDateIso}`");
   });

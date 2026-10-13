@@ -8,6 +8,9 @@ import {
 } from "@/lib/swayp-desde-confirmacion";
 import { Badge, type BadgeTone } from "@/components/ops-ui";
 import { Card, EmptyState, StatCard } from "@/components/ui";
+import { SwaypPcAutoPanel } from "@/components/swayp-pc-auto-panel";
+import { hasOrgPermission } from "@/lib/permissions-access";
+import { getPcAutoResumen, type PcAutoResumen } from "@/lib/swayp-pc-auto-access";
 
 // Registro de «Swayp desde Por confirmar» (MOM §11.11): cada pedido enviado con
 // el botón de la mesa de confirmación, qué hizo Swayp y qué pasó después. Sirve
@@ -51,6 +54,13 @@ export default async function SwaypDesdeConfirmarPage({
     return <EmptyState title="No se pudo cargar el registro">{e instanceof Error ? e.message : null}</EmptyState>;
   }
 
+  // El automático (MOM §11.13) es por organización; la del usuario es la de sus tiendas.
+  const orgId = stores[0]!.org_id;
+  const [canManage, autoResumen] = await Promise.all([
+    hasOrgPermission(orgId, "stores.manage"),
+    getPcAutoResumen(orgId).catch((): PcAutoResumen | null => null),
+  ]);
+
   const params = await searchParams;
   const raw = typeof params.estado === "string" ? params.estado : "";
   const estado = (OUTCOMES as string[]).includes(raw) ? (raw as SwaypDesdeConfirmacionOutcome) : null;
@@ -74,10 +84,12 @@ export default async function SwaypDesdeConfirmarPage({
         </p>
       </div>
 
+      {autoResumen && <SwaypPcAutoPanel orgId={orgId} canManage={canManage} resumen={autoResumen} />}
+
       {!rows.length ? (
         <EmptyState title="Todavía no hay envíos con este botón">
           El botón «Enviar por Swayp» aparece en la ficha de los pedidos de provincia COD en Por confirmar que Swayp
-          puede llevar hoy.
+          puede llevar hoy, y el automático de abajo los envía solo cuando está activo.
         </EmptyState>
       ) : (
         <>
@@ -128,7 +140,11 @@ export default async function SwaypDesdeConfirmarPage({
                     <td className="px-4 py-3 text-ink-700">{r.destination ?? "—"}</td>
                     <td className="px-4 py-3">
                       <p className="text-ink-700">{when(r.sentAt)}</p>
-                      {r.sentBy && <p className="text-xs text-ink-500">{r.sentBy}</p>}
+                      {r.automatico ? (
+                        <Badge tone="brand">Automático</Badge>
+                      ) : (
+                        r.sentBy && <p className="text-xs text-ink-500">{r.sentBy}</p>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       <p className="font-mono text-xs text-ink-700">{r.guideCode ?? "—"}</p>
