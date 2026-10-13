@@ -340,6 +340,29 @@ export function IconPackage(props: IconProps) {
   );
 }
 
+/** Caja con visto: «entregado». */
+export function IconPackageCheck(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M20 11V7.5L12 3 4 7.5v9l8 4.5 1.5-.85" />
+      <path d="m4 7.5 8 4.5 8-4.5M12 12v9M8 5.3l8 4.5" />
+      <path d="m15.5 17.5 2 2 4-4" />
+    </svg>
+  );
+}
+
+/** Calendario con flecha de vuelta: «reprogramado». */
+export function IconCalendarRepeat(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M20.5 10.5V7a2 2 0 0 0-2-2h-13a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2H11" />
+      <path d="M3.5 10h17M8 3v4M16 3v4" />
+      <path d="M21.5 17.5a4 4 0 1 1-1.2-2.85" />
+      <path d="M21 12.5v2.4h-2.4" />
+    </svg>
+  );
+}
+
 export function IconMore(props: IconProps) {
   return (
     <svg {...base(props)}>
