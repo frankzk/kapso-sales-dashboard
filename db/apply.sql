@@ -505,4 +505,6 @@
 \ir migrations/0250_membership_roles.sql
 \echo 'Applying 0251_lima_repro.sql'
 \ir migrations/0251_lima_repro.sql
+\echo 'Applying 0252_ltv_cohorts.sql'
+\ir migrations/0252_ltv_cohorts.sql
 \echo 'Done.'
