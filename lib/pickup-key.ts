@@ -208,7 +208,8 @@ export const BLOCKER_LABEL: Record<PickupBlocker, string> = {
   monto_insuficiente: "La suma de los pagos todavía no cubre el total del pedido.",
   pago_observado: "Uno de los comprobantes está rechazado o marcado como posible duplicado.",
   pago_de_otro_pedido: "Uno de los comprobantes está asociado a otro pedido.",
-  pedido_cerrado: "El pedido está anulado, entregado o devuelto.",
+  pedido_cerrado:
+    "El pedido está anulado o devuelto, o se marcó entregado sin el pago validado completo.",
   paquete_no_disponible: "El paquete todavía no está disponible para recojo.",
 };
 
@@ -218,6 +219,23 @@ export interface PickupKeyVerdict {
 }
 
 const CLOSED_STATUSES: readonly string[] = ["anulado", "entregado", "devuelto"];
+
+/**
+ * ¿El estado del pedido impide mostrar la clave?
+ *
+ * «Entregado» con el pago ENTERO no la impide (13-10-2026, decisión del owner).
+ * El equipo marca «Entregado» en cuanto dicta la clave —469 veces en los 30
+ * días al 13-10, segundos después de consultarla— con el paquete todavía en la
+ * agencia. Si la clienta la pierde y vuelve a pedirla días después, la regla
+ * del pedido cerrado la bloqueaba, y la salida era devolver el pedido a
+ * «pendiente» a mano («dar clave»). Con lo validado cubriendo el total no hay
+ * dinero que proteger: volver a mostrarla no suelta nada que no se haya
+ * cobrado. Anulado y devuelto siguen cerrando: ahí el paquete no es de nadie.
+ */
+function closedForKey(generalStatus: string, paidInFull: boolean): boolean {
+  if (!CLOSED_STATUSES.includes(generalStatus)) return false;
+  return !(generalStatus === "entregado" && paidInFull);
+}
 
 /** Sub-estados de agencia en los que el paquete YA se puede recoger. */
 const AVAILABLE_PICKUP_STATES: readonly string[] = [
@@ -246,7 +264,8 @@ function findAll(payments: readonly PaymentSnapshot[], kind: PaymentKind): Payme
  *   - la suma registrada alcanza o supera el total del pedido;
  *   - ambos pagos del mismo pedido;
  *   - ningún comprobante asociado a otro pedido;
- *   - el pedido no anulado, entregado ni devuelto;
+ *   - el pedido no anulado ni devuelto, ni entregado sin el pago entero
+ *     validado (ver `closedForKey`);
  *   - el paquete disponible para recojo, cuando esa información existe —
  *     SALVO que lo VALIDADO ya cubra el total (ver `paidInFull` abajo).
  */
@@ -267,7 +286,8 @@ export function canRevealPickupKey(ctx: PickupKeyContext): PickupKeyVerdict {
   // (lib/payment-gateway.ts). Y como el checkout cobró, un comprobante suelto
   // —una captura subida por error, #KP132708— no vuelve a exigir el dinero.
   if (isWebPrepaid(ctx.paymentFacts ?? {})) {
-    if (CLOSED_STATUSES.includes(ctx.generalStatus)) blockers.push("pedido_cerrado");
+    // Pagado en el checkout es pagado entero: «entregado» no la cierra.
+    if (closedForKey(ctx.generalStatus, true)) blockers.push("pedido_cerrado");
     // Pagado en el checkout es pagado entero: no se espera a que llegue. Ver
     // la regla de abajo, que es la misma.
     return { allowed: blockers.length === 0, blockers };
@@ -348,7 +368,8 @@ export function canRevealPickupKey(ctx: PickupKeyContext): PickupKeyVerdict {
     blockers.push("pago_de_otro_pedido");
   }
 
-  if (CLOSED_STATUSES.includes(ctx.generalStatus)) blockers.push("pedido_cerrado");
+  const paidInFull = paymentProgress(ctx.payments, ctx.orderTotal).completeValidated;
+  if (closedForKey(ctx.generalStatus, paidInFull)) blockers.push("pedido_cerrado");
 
   // PAGADO ENTERO NO ESPERA A QUE LLEGUE (decisión del 24-09-2026). Esperar a
   // la agencia protegía de soltar un paquete sin cobrar; con lo VALIDADO
@@ -363,12 +384,83 @@ export function canRevealPickupKey(ctx: PickupKeyContext): PickupKeyVerdict {
   //
   // Y si no sabemos dónde está el paquete no se bloquea por ello — se
   // bloquearía todo pedido cuyo courier no reporte sub-estado.
-  const paidInFull = paymentProgress(ctx.payments, ctx.orderTotal).completeValidated;
   if (!paidInFull && ctx.pickupState && !AVAILABLE_PICKUP_STATES.includes(ctx.pickupState)) {
     blockers.push("paquete_no_disponible");
   }
 
   return { allowed: blockers.length === 0, blockers };
+}
+
+/** Lo más que puede faltar para el total con la excepción por descuento (S/). */
+export const DISCOUNT_EXCEPTION_MAX = 15;
+
+export interface DiscountException {
+  /** Se puede mostrar la clave con la excepción, dejando el motivo escrito. */
+  eligible: boolean;
+  /** Lo que falta para el total con lo VALIDADO (S/). */
+  shortfall: number;
+  /** Por qué no se puede, dicho para la pantalla; null si no aplica o si se puede. */
+  reason: string | null;
+}
+
+/**
+ * La excepción por descuento: mostrar la clave aunque lo validado no llegue al
+ * total, cuando lo que falta es un descuento de último momento (13-10-2026,
+ * decisión del owner). El caso: la clienta pagó el envío de Shalom y se le
+ * descontó de la diferencia. La diferencia nunca va a llegar entera, y la
+ * única salida era pedirle la clave a un administrador.
+ *
+ * La puede usar quien ya puede ver la clave (una vendedora como Gerardo), con
+ * tres rejas que el administrador no necesita:
+ *   - al menos DOS comprobantes VALIDADOS —el adelanto y la diferencia—: el
+ *     dinero que sí entró está confirmado por una persona;
+ *   - lo que falta, con lo validado, no pasa de S/ 15
+ *     (`DISCOUNT_EXCEPTION_MAX`): un descuento, no un pago a medias;
+ *   - ningún comprobante observado ni de otro pedido, y lo demás que pide la
+ *     clave igual que siempre: registrada y el pedido ni anulado ni devuelto.
+ * Y siempre con el motivo escrito; queda en el historial como excepción.
+ *
+ * Con el descuento aceptado el pedido cuenta como cobrado: no espera a que el
+ * paquete llegue ni lo cierra «entregado», igual que el pago entero.
+ */
+export function discountException(ctx: PickupKeyContext): DiscountException {
+  const none = { eligible: false, shortfall: 0, reason: null };
+  if (isWebPrepaid(ctx.paymentFacts ?? {})) return none;
+  if (canRevealPickupKey(ctx).allowed) return none;
+
+  const totalCents = inCents(ctx.orderTotal);
+  if (totalCents === null || totalCents <= 0) {
+    return { ...none, reason: "El pedido no tiene un total contra el cual medir el descuento." };
+  }
+  const live = ctx.payments.filter(isLive);
+  const validated = live.filter((p) => p.validation_status === "validado");
+  const validatedCents = validated.reduce((sum, p) => sum + (inCents(p.amount) ?? 0), 0);
+  const shortfallCents = totalCents - validatedCents;
+  const shortfall = Math.max(0, shortfallCents) / 100;
+  // Lo validado ya cubre: lo que bloquea no es dinero y el descuento no lo arregla.
+  if (shortfallCents <= 0) return none;
+
+  if (validated.length < 2) {
+    return { eligible: false, shortfall, reason: "La excepción por descuento pide al menos dos comprobantes validados." };
+  }
+  if (live.some((p) => p.validation_status === "posible_duplicado")) {
+    return { eligible: false, shortfall, reason: BLOCKER_LABEL.pago_observado };
+  }
+  if (shortfallCents > DISCOUNT_EXCEPTION_MAX * 100) {
+    return {
+      eligible: false,
+      shortfall,
+      reason:
+        `Faltan S/ ${shortfall.toFixed(2)}: la excepción por descuento cubre hasta ` +
+        `S/ ${DISCOUNT_EXCEPTION_MAX}. Para más hace falta un administrador.`,
+    };
+  }
+  // Lo que no es dinero se pregunta con la regla de siempre, dando por cobrado
+  // lo validado: clave registrada, pedido ni anulado ni devuelto, ningún
+  // comprobante de otro pedido.
+  const rest = canRevealPickupKey({ ...ctx, payments: validated, orderTotal: validatedCents / 100 });
+  if (!rest.allowed) return { eligible: false, shortfall, reason: describeBlockers(rest) };
+  return { eligible: true, shortfall, reason: null };
 }
 
 /**

@@ -3,6 +3,8 @@ import { ADELANTO_MINIMO } from "@/lib/adelanto-minimo";
 import {
   canRevealPickupKey,
   describeBlockers,
+  discountException,
+  DISCOUNT_EXCEPTION_MAX,
   keyState,
   nextPaymentKinds,
   paymentPlanProblem,
@@ -133,10 +135,29 @@ describe("canRevealPickupKey — las seis condiciones", () => {
     expect(v.blockers).toContain("pago_de_otro_pedido");
   });
 
-  it("un pedido cerrado no entrega la clave", () => {
-    for (const status of ["anulado", "entregado", "devuelto"]) {
+  it("un pedido anulado o devuelto no entrega la clave, pague lo que pague", () => {
+    for (const status of ["anulado", "devuelto"]) {
       expect(canRevealPickupKey(ctx({ generalStatus: status })).blockers).toContain("pedido_cerrado");
     }
+  });
+
+  it("«entregado» con el pago entero validado deja volver a ver la clave", () => {
+    // 13-10-2026: el equipo marca «Entregado» al dictar la clave, con el
+    // paquete aún en la agencia; si la clienta la pierde, había que devolver el
+    // pedido a «pendiente» para volver a verla.
+    expect(canRevealPickupKey(ctx({ generalStatus: "entregado" })).allowed).toBe(true);
+    expect(
+      canRevealPickupKey(
+        ctx({ generalStatus: "entregado", payments: [], paymentFacts: { financialStatus: "paid", paymentGateway: "checkout" } }),
+      ).allowed,
+    ).toBe(true);
+  });
+
+  it("«entregado» sin el pago entero VALIDADO sigue cerrado", () => {
+    const v = canRevealPickupKey(
+      ctx({ generalStatus: "entregado", payments: [payment("adelanto"), payment("diferencia", "pendiente_revision")] }),
+    );
+    expect(v.blockers).toContain("pedido_cerrado");
   });
 
   it("pagado ENTERO y validado, la clave sale aunque el paquete siga en camino", () => {
@@ -424,5 +445,75 @@ describe("usesPickupKeyFlow", () => {
   it("un pedido sin decidir no cuenta como de agencia — el drawer lo compensa aparte", () => {
     expect(usesPickupKeyFlow(null, null)).toBe(false);
     expect(usesPickupKeyFlow(null, "cod")).toBe(false);
+  });
+});
+
+describe("discountException — la excepción por descuento (13-10-2026)", () => {
+  // El caso: la clienta pagó el envío de Shalom y se le descontó de la
+  // diferencia. Pedido de S/ 100, adelanto S/ 30 y diferencia S/ 58 validados.
+  const descuento = (over: Partial<PickupKeyContext> = {}) =>
+    ctx({
+      payments: [payment("adelanto", "validado", ORDER, 30), payment("diferencia", "validado", ORDER, 58)],
+      ...over,
+    });
+
+  it("dos comprobantes validados y faltan hasta S/ 15: se puede, y dice cuánto falta", () => {
+    expect(canRevealPickupKey(descuento()).allowed).toBe(false);
+    const d = discountException(descuento());
+    expect(d).toEqual({ eligible: true, shortfall: 12, reason: null });
+  });
+
+  it("justo en el tope vale; un céntimo más, no", () => {
+    expect(
+      discountException(
+        ctx({ payments: [payment("adelanto", "validado", ORDER, 30), payment("diferencia", "validado", ORDER, 100 - 30 - DISCOUNT_EXCEPTION_MAX)] }),
+      ).eligible,
+    ).toBe(true);
+    const fuera = discountException(
+      ctx({ payments: [payment("adelanto", "validado", ORDER, 30), payment("diferencia", "validado", ORDER, 54.99)] }),
+    );
+    expect(fuera.eligible).toBe(false);
+    expect(fuera.reason).toContain("hasta S/ 15");
+  });
+
+  it("los comprobantes tienen que estar VALIDADOS: lo cargado no cuenta", () => {
+    const d = discountException(
+      descuento({ payments: [payment("adelanto", "validado", ORDER, 30), payment("diferencia", "pendiente_revision", ORDER, 58)] }),
+    );
+    expect(d.eligible).toBe(false);
+    expect(d.reason).toContain("dos comprobantes validados");
+  });
+
+  it("con un solo comprobante validado no es un descuento sobre la diferencia", () => {
+    const d = discountException(ctx({ payments: [payment("total", "validado", ORDER, 90)] }));
+    expect(d.eligible).toBe(false);
+  });
+
+  it("un comprobante observado lo impide", () => {
+    const d = discountException(
+      descuento({
+        payments: [
+          payment("adelanto", "validado", ORDER, 30),
+          payment("diferencia", "validado", ORDER, 58),
+          payment("diferencia", "posible_duplicado", ORDER, 12),
+        ],
+      }),
+    );
+    expect(d.eligible).toBe(false);
+  });
+
+  it("lo que no es dinero sigue mandando: sin clave, o anulado, no", () => {
+    expect(discountException(descuento({ hasKey: false })).eligible).toBe(false);
+    expect(discountException(descuento({ generalStatus: "anulado" })).eligible).toBe(false);
+    expect(discountException(descuento({ generalStatus: "devuelto" })).eligible).toBe(false);
+  });
+
+  it("con el descuento aceptado cuenta como cobrado: ni espera al paquete ni lo cierra «entregado»", () => {
+    expect(discountException(descuento({ pickupState: "en_transito" })).eligible).toBe(true);
+    expect(discountException(descuento({ generalStatus: "entregado" })).eligible).toBe(true);
+  });
+
+  it("si la clave ya se puede ver, la excepción no aplica", () => {
+    expect(discountException(ctx())).toEqual({ eligible: false, shortfall: 0, reason: null });
   });
 });

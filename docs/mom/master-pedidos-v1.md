@@ -5843,6 +5843,33 @@ salen solo con eso y después por los días que llevan en su etapa.
 - Se permiten varios pagos; se libera la clave cuando la suma validada alcanza
   el total exigido.
 - Sin pago completo no se entrega la clave.
+- **Excepción por descuento** (13-10-2026, decisión del owner). Cuando lo que
+  falta es un descuento de último momento —la clienta pagó el envío de Shalom y
+  se le descontó de la diferencia—, la diferencia nunca llega entera y la única
+  salida era pedirle la clave a un administrador. Ahora quien ya puede ver la
+  clave (una vendedora como Gerardo) la muestra con **«Mostrar con
+  descuento»**, si se cumple todo esto (`discountException`,
+  `lib/pickup-key.ts`):
+  - hay **al menos dos comprobantes VALIDADOS** —el adelanto y la
+    diferencia—; lo cargado sin validar no cuenta;
+  - lo que falta para el total, con lo validado, **no pasa de S/ 15**
+    (`DISCOUNT_EXCEPTION_MAX`); con más hace falta un administrador;
+  - ningún comprobante observado ni de otro pedido, la clave registrada y el
+    pedido ni anulado ni devuelto;
+  - y **siempre con el motivo escrito**: la consulta queda como excepción en
+    `pickup_key_views` (con lo que faltaba) y en la línea de tiempo.
+  Con el descuento aceptado el pedido cuenta como cobrado: no espera a que el
+  paquete llegue ni lo cierra «entregado». El servidor vuelve a comprobarlo al
+  revelar; el panel solo decide si ofrece el botón. La excepción del
+  administrador —cualquier condición, con motivo— sigue igual.
+- **«Entregado» con el pago entero deja volver a ver la clave** (13-10-2026).
+  El equipo marca «Entregado» en cuanto dicta la clave: 469 veces en los 30
+  días al 13-10, segundos después de consultarla, con el paquete todavía en la
+  agencia. Si la clienta la perdía y la pedía días después, «pedido cerrado» la
+  bloqueaba, y la salida era devolver el pedido a «pendiente» a mano (motivo
+  «dar clave»). Ahora «entregado» solo cierra la clave si lo **validado** no
+  cubre el total (o el checkout no lo cobró): con el dinero confirmado no hay
+  nada que proteger. **Anulado y devuelto siguen cerrándola** siempre.
 - La clave pertenece a la salida Shalom: se registra, consulta y entrega desde
   **Salidas y guías**, no desde el formulario de comprobantes. El pago solo
   gobierna si la credencial puede revelarse.
@@ -7189,7 +7216,7 @@ registra en cada evento.
 
   | Rol | Qué trae |
   | --- | --- |
-  | Asesora | Gestionar pedidos, registrar comprobantes, ver la clave con cobro completo, crear guías (Aliclik, Tanders, Shalom) y pedidos, novedades de Swayp, recuperar devoluciones, Repro Lima (§9.5), recibir devoluciones |
+  | Asesora | Gestionar pedidos, registrar comprobantes, ver la clave con cobro completo (o con la excepción por descuento, §12), crear guías (Aliclik, Tanders, Shalom) y pedidos, novedades de Swayp, recuperar devoluciones, Repro Lima (§9.5), recibir devoluciones |
   | Almacén | Dejar paquetes listos, recibir devoluciones, reingresar al inventario |
   | Despacho y Grupo GF | Despacho del día y cotejo, entregar la caja, Repro Lima (§9.5), armar rutas, reportar por el motorizado, cargar reportes, stock de couriers, crear guías, recibir devoluciones |
   | Liquidaciones | Cargar y cerrar liquidaciones, trabajar las hojas, observar liquidaciones e indemnizaciones |
