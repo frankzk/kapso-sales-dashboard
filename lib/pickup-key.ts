@@ -426,11 +426,26 @@ export interface DiscountException {
 export function discountException(ctx: PickupKeyContext): DiscountException {
   const none = { eligible: false, shortfall: 0, reason: null };
   if (isWebPrepaid(ctx.paymentFacts ?? {})) return none;
-  if (canRevealPickupKey(ctx).allowed) return none;
+  const verdict = canRevealPickupKey(ctx);
+  if (verdict.allowed) return none;
+
+  // EL PORQUÉ, SOLO CUANDO VIENE A CUENTO (13-10-2026). Si lo que bloquea es
+  // que el dinero cargado no alcanza, quien mira la clave está justo en el caso
+  // de la excepción y necesita saber qué le falta para usarla —«falta validar
+  // uno», «faltan S/ 20 y el tope es S/ 15»—: sin eso no sale nada y se queda
+  // adivinando. Con la diferencia sin cargar, el aviso de siempre ya lo dice, y
+  // hablarle de un descuento sería ruido. Decide solo si se EXPLICA: quién puede
+  // usarla no cambia.
+  const explains = verdict.blockers.includes("monto_insuficiente");
+  const no = (shortfall: number, reason: string): DiscountException => ({
+    eligible: false,
+    shortfall,
+    reason: explains ? reason : null,
+  });
 
   const totalCents = inCents(ctx.orderTotal);
   if (totalCents === null || totalCents <= 0) {
-    return { ...none, reason: "El pedido no tiene un total contra el cual medir el descuento." };
+    return no(0, "El pedido no tiene un total contra el cual medir el descuento.");
   }
   const live = ctx.payments.filter(isLive);
   const validated = live.filter((p) => p.validation_status === "validado");
@@ -441,25 +456,31 @@ export function discountException(ctx: PickupKeyContext): DiscountException {
   if (shortfallCents <= 0) return none;
 
   if (validated.length < 2) {
-    return { eligible: false, shortfall, reason: "La excepción por descuento pide al menos dos comprobantes validados." };
+    const pending = live.filter((p) => p.validation_status !== "validado").length;
+    return no(
+      shortfall,
+      live.length >= 2 && pending > 0
+        ? `La excepción por descuento solo cuenta comprobantes validados: falta validar ${
+            pending === 1 ? "uno" : pending
+          }.`
+        : "La excepción por descuento pide al menos dos comprobantes validados.",
+    );
   }
   if (live.some((p) => p.validation_status === "posible_duplicado")) {
-    return { eligible: false, shortfall, reason: BLOCKER_LABEL.pago_observado };
+    return no(shortfall, BLOCKER_LABEL.pago_observado);
   }
   if (shortfallCents > DISCOUNT_EXCEPTION_MAX * 100) {
-    return {
-      eligible: false,
+    return no(
       shortfall,
-      reason:
-        `Faltan S/ ${shortfall.toFixed(2)}: la excepción por descuento cubre hasta ` +
+      `Faltan S/ ${shortfall.toFixed(2)} y la excepción por descuento cubre hasta ` +
         `S/ ${DISCOUNT_EXCEPTION_MAX}. Para más hace falta un administrador.`,
-    };
+    );
   }
   // Lo que no es dinero se pregunta con la regla de siempre, dando por cobrado
   // lo validado: clave registrada, pedido ni anulado ni devuelto, ningún
   // comprobante de otro pedido.
   const rest = canRevealPickupKey({ ...ctx, payments: validated, orderTotal: validatedCents / 100 });
-  if (!rest.allowed) return { eligible: false, shortfall, reason: describeBlockers(rest) };
+  if (!rest.allowed) return no(shortfall, describeBlockers(rest));
   return { eligible: true, shortfall, reason: null };
 }
 

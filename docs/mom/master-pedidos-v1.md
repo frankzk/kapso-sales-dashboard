@@ -5902,6 +5902,11 @@ salen solo con eso y después por los días que llevan en su etapa.
     pedido ni anulado ni devuelto;
   - y **siempre con el motivo escrito**: la consulta queda como excepción en
     `pickup_key_views` (con lo que faltaba) y en la línea de tiempo.
+  - **Cuando no aplica, se dice por qué** (13-10-2026), pero solo si lo que
+    bloquea es que el dinero cargado no alcanza: «falta validar uno»,
+    «faltan S/ 20 y la excepción cubre hasta S/ 15»… Sin esto el botón
+    simplemente no salía y nadie sabía qué faltaba. Con la diferencia sin
+    cargar no se menciona: el aviso de siempre ya lo dice.
   Con el descuento aceptado el pedido cuenta como cobrado: no espera a que el
   paquete llegue ni lo cierra «entregado». El servidor vuelve a comprobarlo al
   revelar; el panel solo decide si ofrece el botón. La excepción del

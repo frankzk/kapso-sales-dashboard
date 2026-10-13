@@ -476,12 +476,29 @@ describe("discountException — la excepción por descuento (13-10-2026)", () =>
     expect(fuera.reason).toContain("hasta S/ 15");
   });
 
-  it("los comprobantes tienen que estar VALIDADOS: lo cargado no cuenta", () => {
+  it("los comprobantes tienen que estar VALIDADOS: lo cargado no cuenta, y lo dice", () => {
     const d = discountException(
       descuento({ payments: [payment("adelanto", "validado", ORDER, 30), payment("diferencia", "pendiente_revision", ORDER, 58)] }),
     );
     expect(d.eligible).toBe(false);
-    expect(d.reason).toContain("dos comprobantes validados");
+    expect(d.reason).toBe("La excepción por descuento solo cuenta comprobantes validados: falta validar uno.");
+  });
+
+  it("si falta más que el tope, dice cuánto falta y cuál es el tope", () => {
+    const d = discountException(
+      ctx({ payments: [payment("adelanto", "validado", ORDER, 30), payment("diferencia", "validado", ORDER, 50)] }),
+    );
+    expect(d).toMatchObject({ eligible: false, shortfall: 20 });
+    expect(d.reason).toBe(
+      "Faltan S/ 20.00 y la excepción por descuento cubre hasta S/ 15. Para más hace falta un administrador.",
+    );
+  });
+
+  it("con la diferencia sin cargar no habla del descuento: el aviso de siempre basta", () => {
+    // Solo el adelanto: lo que bloquea es «falta la diferencia», no que el
+    // dinero no alcance, y mencionar un descuento sería ruido.
+    const d = discountException(ctx({ payments: [payment("adelanto", "validado", ORDER, 30)] }));
+    expect(d).toEqual({ eligible: false, shortfall: 70, reason: null });
   });
 
   it("con un solo comprobante validado no es un descuento sobre la diferencia", () => {
