@@ -6756,6 +6756,27 @@ registra en cada evento.
   bajar a alguien de admin a vendedora hay que darle acceso explícito a sus
   tiendas (`user_store_access`): owner y admin ven todas las tiendas de la
   organización sin esa lista.
+- **Ver no es tocar (13-10-2026).** Poder ver un pedido o un envío (RLS) no
+  da permiso para escribir en él. Toda escritura pide un permiso en el
+  servidor, también para quien es de solo lectura:
+  - **Repro Provincia** (`app/dashboard/envios/actions.ts`): reservar el
+    envío, registrar una gestión o la llamada de recuperación (también
+    «no quiere»), cambiar el estado o la dirección, crear la guía de Swayp
+    (también la directa y la de «Enviar por Swayp»), vincular el pedido y
+    editar la nota de una gestión. Todo pide `master.edit`, lo mismo que el
+    Master pide para esos mismos hechos; stock y novedades de Swayp conservan
+    su permiso propio. Al abrir un envío sin el permiso, la reserva rebota con
+    «Tu rol no permite gestionar envíos.» y el panel queda bloqueado. Soltar
+    la reserva no lleva puerta porque solo suelta la propia.
+  - **Datos de Shalom** (DNI y agencia antes de la guía): `master.edit`.
+    Guardarlos puede confirmar el pedido, igual que una confirmación.
+  - **Pedido cerrado**: «Registrar devolución» sobre un pedido entregado o
+    anulado pide `master.override_status` y motivo, como «Cambiar estado»
+    (`closedStatusChangeError`, lib/order-status.ts). Antes pasaba un
+    entregado a devuelto con solo `master.edit`.
+
+  `test/escrituras-piden-permiso.test.ts` falla si una acción de Repro
+  Provincia vuelve a escribir sin pedir permiso.
 
 ### 16.1 Bandeja de validación de pagos
 

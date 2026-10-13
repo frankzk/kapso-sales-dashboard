@@ -237,6 +237,19 @@ async function syncMasterForShipment(
   revalidatePath("/dashboard/pedidos");
 }
 
+/**
+ * Escribir en un envío —reservarlo, registrar una gestión, cambiar su estado o
+ * su dirección, crear o vincular una guía— es gestionar el pedido: pide
+ * `master.edit`, lo mismo que el Master pide para esos mismos hechos (MOM §16).
+ * Ver el envío (RLS, `authorizeShipment`) no alcanza: quien es de solo lectura
+ * lo ve y no lo toca. Al abrirlo, la reserva le rebota con este mensaje y el
+ * panel queda bloqueado.
+ */
+async function canManageShipments(): Promise<boolean> {
+  return (await getMasterPermissions()).can("master.edit");
+}
+const READ_ONLY_SHIPMENTS = "Tu rol no permite gestionar envíos.";
+
 async function authorizeShipment(
   shipmentId: string,
 ): Promise<{ userId: string; storeId: string } | null> {
@@ -385,13 +398,14 @@ export async function loadShipmentDetail(
   };
 }
 
-/** Editar la nota (texto libre) de una gestión del historial. Cualquiera con
- *  acceso a la guía puede editarla; deja traza de quién y cuándo la modificó.
+/** Editar la nota (texto libre) de una gestión del historial. Cualquiera que
+ *  vea la guía y gestione envíos puede editarla; deja traza de quién y cuándo.
  *  Solo cambia la nota — nunca el estado, la fecha ni el tipo de gestión. */
 export async function updateShipmentCallNote(
   callId: string,
   note: string,
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const sb = await createServerSupabase();
   const {
     data: { user },
@@ -447,6 +461,7 @@ export async function searchOrdersToLink(query: string): Promise<OrderLinkCandid
 
 /** Claim a shipment (one at a time). Succeeds if free, stale, or already mine. */
 export async function claimShipment(shipmentId: string): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
   const admin = createAdminSupabase();
@@ -474,6 +489,7 @@ export async function claimShipment(shipmentId: string): Promise<ShipmentActionS
 
 /** Keep an existing reservation alive while its drawer remains open. */
 export async function renewShipmentClaim(shipmentId: string): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
   const admin = createAdminSupabase();
@@ -525,6 +541,7 @@ export async function registerRerouteCall(
     forceAliclik?: boolean;
   },
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
   const admin = createAdminSupabase();
@@ -826,6 +843,7 @@ export async function registerRecoveryCall(
     nextFollowupAt?: string | null;
   },
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
   const admin = createAdminSupabase();
@@ -940,6 +958,7 @@ export async function updateShipmentDeliveryAddress(
   shipmentId: string,
   input: ShipmentAddressInput,
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
 
@@ -1096,6 +1115,7 @@ export async function registerCourierReportResult(
     note?: string | null;
   },
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a esta guía." };
 
@@ -1210,6 +1230,7 @@ export async function setShipmentStatus(
   status: string,
   note?: string,
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso." };
   if (!isValidStatus(status)) return { error: "Estado inválido." };
@@ -1244,6 +1265,7 @@ export async function reprogramCancelledShipmentException(
   shipmentId: string,
   input: { nextFollowupAt?: string | null; note?: string | null },
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a esta guía." };
 
@@ -1271,6 +1293,7 @@ export async function createFenixGuide(
   shipmentId: string,
   input: { guideCode: string; nextFollowupAt?: string | null },
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso." };
 
@@ -1511,6 +1534,7 @@ export async function previewDirectFenixGuide(input: {
   orderGid?: string;
   storeId?: string;
 }): Promise<DirectFenixGuidePreview | { error: string }> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const sb = await createServerSupabase();
   const {
     data: { user },
@@ -1692,6 +1716,7 @@ export async function createDirectFenixGuide(input: {
    */
   origen?: "por_confirmar";
 }): Promise<ShipmentActionState & { shipmentId?: string }> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const sb = await createServerSupabase();
   const {
     data: { user },
@@ -2008,6 +2033,7 @@ export async function resolveShipmentMatch(
   shipmentId: string,
   input: { orderId?: string | null },
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
   const admin = createAdminSupabase();
@@ -2119,6 +2145,7 @@ export async function linkShipmentToShopifyOrder(
   orderGid: string,
   storeId: string,
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
   const sb = await createServerSupabase();
@@ -2193,6 +2220,7 @@ export async function processSuggestionBatch(): Promise<
  * Revisión, still searchable manually via OrderLinkPicker underneath.
  */
 export async function clearShipmentSuggestion(shipmentId: string): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
   const admin = createAdminSupabase();
