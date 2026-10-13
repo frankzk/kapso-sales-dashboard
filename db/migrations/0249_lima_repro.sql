@@ -211,13 +211,23 @@ create policy lima_repro_calls_select on public.lima_repro_calls for select to a
 --     `fuera_de_etapa` lo hace la carga de la pantalla (`after()`): un `raise`
 --     aquí desharía cualquier escritura de esta misma llamada.
 --   · Candado vivo de otra persona: `claimed:false` con quién y hasta cuándo.
+--   · Sin caso abierto, si el último cerrado del pedido es «Desarmar y cerrar»
+--     de ESTE episodio, no se abre otro: `needs_reopen:true`, salvo
+--     `p_reopen` («Volver a atender», segundo clic, E29). Se mira aquí, dentro
+--     del candado: un cierre que llega entre la lectura del servidor y esta
+--     llamada no se reabre solo.
+-- Con un parámetro más, `create or replace` crearía otra función al lado de
+-- la vieja (y la llamada por nombre sería ambigua): se borra la firma vieja.
+drop function if exists public.lima_repro_claim(uuid, uuid, uuid, text, timestamptz, integer);
+
 create or replace function public.lima_repro_claim(
   p_order uuid,
   p_store uuid,
   p_actor uuid,
   p_episode text,
   p_episode_at timestamptz default null,
-  p_ttl_minutes integer default 10
+  p_ttl_minutes integer default 10,
+  p_reopen boolean default false
 )
 returns jsonb
 language plpgsql
@@ -228,6 +238,7 @@ declare
   v_case lima_repro_cases%rowtype;
   v_open boolean;
   v_until timestamptz;
+  v_last lima_repro_cases%rowtype;
 begin
   if p_actor is null then
     raise exception 'Falta quién atiende el caso.';
@@ -268,6 +279,15 @@ begin
   end if;
 
   if not v_open then
+    select * into v_last
+      from lima_repro_cases
+     where order_id = p_order and closed_at is not null
+     order by closed_at desc, opened_at desc
+     limit 1;
+    if found and v_last.close_reason = 'desarmar_cerrar' and v_last.episode_key = p_episode
+       and not coalesce(p_reopen, false) then
+      return jsonb_build_object('claimed', false, 'needs_reopen', true);
+    end if;
     insert into lima_repro_cases (store_id, order_id, episode_key, episode_at, opened_by)
     values (p_store, p_order, p_episode, coalesce(p_episode_at, now()), p_actor)
     returning * into v_case;
@@ -285,8 +305,8 @@ begin
 end;
 $$;
 
-revoke all on function public.lima_repro_claim(uuid, uuid, uuid, text, timestamptz, integer) from public, anon, authenticated;
-grant execute on function public.lima_repro_claim(uuid, uuid, uuid, text, timestamptz, integer) to service_role;
+revoke all on function public.lima_repro_claim(uuid, uuid, uuid, text, timestamptz, integer, boolean) from public, anon, authenticated;
+grant execute on function public.lima_repro_claim(uuid, uuid, uuid, text, timestamptz, integer, boolean) to service_role;
 
 -- d2) Registrar una llamada ---------------------------------------------------
 --

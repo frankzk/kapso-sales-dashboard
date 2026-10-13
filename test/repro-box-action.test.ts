@@ -116,9 +116,32 @@ describe("una acción por regla", () => {
   });
 
   it("un caso reabierto con la caja que no consta puede pedir caja nueva (E29)", () => {
-    const reopened = action(base({ box: { kind: "desconocida" }, ownLiveCourier: null, changes: { no_esperar_caja: true } }));
+    const reopened = action(base({ box: { kind: "desconocida" }, ownLiveCourier: null, changes: { no_esperar_caja: true }, reopened: true }));
     expect(reopened.action).toBe("caja_nueva_stock");
+    expect(reopened.newSalida).toBe(true);
     expect(reopened.label).toContain("si aparece la anterior, se desarma");
+  });
+
+  it("sin reabrir, la caja que no consta no ofrece caja nueva: primero se busca (§9.3, F12)", () => {
+    for (const box of [{ kind: "desconocida" }, { kind: "desconocida", own: true, block: "fuera_de_oficina" }] as BoxLocation[]) {
+      const result = action(base({ box, ownLiveCourier: box.kind === "desconocida" && box.own ? "propio" : null, changes: { no_esperar_caja: true } }));
+      expect(result.action).not.toBe("caja_nueva_stock");
+    }
+  });
+
+  it("E29 con la salida propia que estaba en oficina: sale con esa misma salida, no nace otra", () => {
+    const own = action(base({ box: { kind: "desconocida", own: true }, changes: { no_esperar_caja: true }, reopened: true }));
+    expect(own).toEqual({
+      action: "caja_nueva_stock",
+      newSalida: false,
+      label: "Caja nueva desde stock con la misma salida de Grupo GF: se reimprime su rótulo (mismo QR) y Grupo GF la toma en Despacho del día; si aparece la anterior, se desarma.",
+    });
+    // No nace salida: el tope de cinco no estorba.
+    expect(action(base({ box: { kind: "desconocida", own: true }, changes: { no_esperar_caja: true }, reopened: true, totalOutputs: 5 })).action).toBe("caja_nueva_stock");
+    // Con otro courier sí nace su salida, desde la Mesa de ruta.
+    const tanders = action(base({ box: { kind: "desconocida", own: true }, courier: "tanders", priorWithCourier: 0, changes: { no_esperar_caja: true }, reopened: true }));
+    expect(tanders).toMatchObject({ action: "caja_nueva_stock", newSalida: true });
+    expect(tanders.label).toBe("Caja nueva desde stock y salida de Tanders desde la Mesa de ruta; si aparece la anterior, se desarma.");
   });
 });
 

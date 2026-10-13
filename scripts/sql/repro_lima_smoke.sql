@@ -11,6 +11,8 @@
 --     cierra el caso viejo (`nuevo_intento`) y uno más viejo no lo toca;
 --   · el candado de 10 minutos: otra persona recibe `claimed:false`, uno
 --     vencido se puede tomar, sin candado no se registra nada;
+--   · un «Desarmar y cerrar» del mismo episodio no se reabre sin el segundo
+--     clic (`needs_reopen`, `p_reopen`, E29); un episodio nuevo sí abre caso;
 --   · cuatro resultados con su forma, idempotencia por `operation_id` (y
 --     rechazo del mismo envío con otro contenido), el acuerdo que fija
 --     `confirma` y vacían `llamar_despues`/`no_quiere`, el cierre atómico con su
@@ -544,10 +546,40 @@ begin
     raise exception 'expected one event per call, got %', (select count(*) from order_events where order_id = o1 and kind like 'lima_repro_%');
   end if;
 
-  -- «Volver a atender» el mismo episodio: otro caso, el cerrado queda como está.
+  -- Tomarlo otra vez en el mismo episodio, sin el segundo clic: no abre caso
+  -- (`needs_reopen`), lo mismo con `p_reopen` nulo (E29). Cuenta el ÚLTIMO
+  -- cerrado: el `nuevo_intento` del episodio anterior se cerró antes (aquí
+  -- `now()` no avanza, así que se mueve hacia atrás).
+  update lima_repro_cases set opened_at = now() - interval '2 hours', closed_at = now() - interval '1 hour'
+   where order_id = o1 and close_reason = 'nuevo_intento';
   v := lima_repro_claim(o1, a, ua, k, now() - interval '1 day', 10);
+  if (v->>'claimed')::boolean or not coalesce((v->>'needs_reopen')::boolean, false) or v ? 'case_id' then
+    raise exception 'same-episode claim after desarmar_cerrar did not ask to reopen: %', v;
+  end if;
+  v := lima_repro_claim(o1, a, uc, k, now() - interval '1 day', 10, null);
+  if (v->>'claimed')::boolean or not coalesce((v->>'needs_reopen')::boolean, false) then
+    raise exception 'null p_reopen reopened the case: %', v;
+  end if;
+  if exists (select 1 from lima_repro_cases where order_id = o1 and closed_at is null) then
+    raise exception 'needs_reopen opened a case';
+  end if;
+  -- Un fallo nuevo (otro episodio) sí abre caso sin el segundo clic. Se
+  -- deshace en el acto: el resto del archivo cuenta los casos de #RL1.
+  begin
+    v := lima_repro_claim(o1, a, ua, 's:7|o:-', now(), 10);
+    if not (v->>'claimed')::boolean or v ? 'needs_reopen' then raise exception 'FAIL new episode asked to reopen: %', v; end if;
+    raise exception 'ROLLBACK new episode probe';
+  exception when others then
+    if sqlerrm <> 'ROLLBACK new episode probe' then raise; end if;
+  end;
+  -- «Volver a atender» el mismo episodio (`p_reopen`): otro caso, el cerrado
+  -- queda como está.
+  v := lima_repro_claim(o1, a, ua, k, now() - interval '1 day', 10, p_reopen => true);
   if not (v->>'claimed')::boolean or (v->>'case_id')::uuid = c then raise exception 'reopen did not open a new case: %', v; end if;
   if (select close_reason from lima_repro_cases where id = c) <> 'desarmar_cerrar' then raise exception 'reopen touched the closed case'; end if;
+  -- Ya abierto, tomarlo otra vez no pide reabrir: es el mismo caso.
+  v := lima_repro_claim(o1, a, ua, k, now() - interval '1 day', 10);
+  if not (v->>'claimed')::boolean or v ? 'needs_reopen' then raise exception 'open reopened case asked to reopen: %', v; end if;
 end $$;
 
 -- ── «Desarmar y cerrar» sin llamada ─────────────────────────────────────────
@@ -672,13 +704,13 @@ begin
           and has_table_privilege('service_role', 'public.lima_repro_calls', 'INSERT')) then
     raise exception 'service_role lost its writes';
   end if;
-  if has_function_privilege('authenticated', 'public.lima_repro_claim(uuid,uuid,uuid,text,timestamptz,integer)', 'EXECUTE')
-     or has_function_privilege('anon', 'public.lima_repro_claim(uuid,uuid,uuid,text,timestamptz,integer)', 'EXECUTE')
+  if has_function_privilege('authenticated', 'public.lima_repro_claim(uuid,uuid,uuid,text,timestamptz,integer,boolean)', 'EXECUTE')
+     or has_function_privilege('anon', 'public.lima_repro_claim(uuid,uuid,uuid,text,timestamptz,integer,boolean)', 'EXECUTE')
      or has_function_privilege('authenticated', 'public.lima_repro_record(uuid,uuid,uuid,text,text,text,timestamptz,date,text,jsonb,text,text,text,text,integer)', 'EXECUTE')
      or has_function_privilege('anon', 'public.lima_repro_record(uuid,uuid,uuid,text,text,text,timestamptz,date,text,jsonb,text,text,text,text,integer)', 'EXECUTE') then
     raise exception 'authenticated or anon can execute the Repro Lima RPCs';
   end if;
-  if not (has_function_privilege('service_role', 'public.lima_repro_claim(uuid,uuid,uuid,text,timestamptz,integer)', 'EXECUTE')
+  if not (has_function_privilege('service_role', 'public.lima_repro_claim(uuid,uuid,uuid,text,timestamptz,integer,boolean)', 'EXECUTE')
           and has_function_privilege('service_role', 'public.lima_repro_record(uuid,uuid,uuid,text,text,text,timestamptz,date,text,jsonb,text,text,text,text,integer)', 'EXECUTE')) then
     raise exception 'service_role cannot execute the Repro Lima RPCs';
   end if;

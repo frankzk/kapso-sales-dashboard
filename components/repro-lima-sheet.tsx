@@ -4,9 +4,10 @@
 //
 // Quien llama abre la hoja y el caso queda suyo diez minutos (candado de D10,
 // el mismo de Envíos): se toma al abrir, late cada cuatro minutos, se suelta
-// al cerrar y, si la pestaña se cierra o se recarga, con un beacon. Con el
-// candado de otra persona, o desde «Cerrados» y «Ver acuerdo», la hoja es de
-// solo lectura y no toma nada (E29).
+// al cerrar o al desmontar la hoja (atrás del navegador) y, si la pestaña se
+// cierra o se recarga, con un beacon; si la página vuelve del bfcache, se
+// vuelve a tomar. Con el candado de otra persona, o desde «Cerrados» y «Ver
+// acuerdo», la hoja es de solo lectura y no toma nada (E29).
 //
 // Antes de llamar se lee el fallo (motivo, nota y foto, §11.7), dónde está la
 // caja, la fecha que pidió el cliente y las llamadas anteriores. Después se
@@ -424,6 +425,7 @@ export function ReproLimaSheet({
   onClose,
   onSaved,
   onChanged,
+  previous = null,
 }: {
   row: ReproRow;
   /** `edit`: «Atender» (toma el caso). `read`: «Ver acuerdo» y «Cerrados» (E29), sin candado. */
@@ -437,11 +439,15 @@ export function ReproLimaSheet({
   onSaved: (saved: ReproSaved, advance: boolean) => void;
   /** Algo cambió fuera del formulario («Programar ahora»): el tablero relee. */
   onChanged: () => void;
+  /**
+   * Lo que dijo el guardado del pedido anterior con «Guardar y pasar al
+   * siguiente» («Avisa a Almacén…»): va arriba de esta hoja para que no se tape.
+   */
+  previous?: { orderName: string; text: string } | null;
 }) {
   const orderId = row.orderId;
   const openDrawer = useOpenOrderDrawer();
   const [mode, setMode] = useState<"edit" | "read">(initialMode);
-  const [reopen, setReopen] = useState(false);
   const [showReopen, setShowReopen] = useState(askReopen);
   const [pending, start] = useTransition();
 
@@ -490,6 +496,11 @@ export function ReproLimaSheet({
   const [caseId, setCaseId] = useState<string | null>(row.caseId);
   const [claimAttempt, setClaimAttempt] = useState(0);
   const claimSessionRef = useRef<{ orderId: string; caseId: string | null; shouldRelease: boolean } | null>(null);
+  // «Sí, volver a atender» (E29) vale para UNA toma: «Reintentar» y «Volver a
+  // tomarlo» toman sin reabrir, así un «Desarmar y cerrar» que otra persona
+  // acaba de guardar vuelve a pedir el segundo clic. Se borra al responder la
+  // toma, no al empezarla: en desarrollo el efecto corre dos veces.
+  const reopenRef = useRef(false);
 
   useEffect(() => {
     if (mode !== "edit") return;
@@ -497,6 +508,7 @@ export function ReproLimaSheet({
     let heartbeat: ReturnType<typeof setInterval> | null = null;
     const session = { orderId, caseId: null as string | null, shouldRelease: false };
     claimSessionRef.current = session;
+    const reopen = reopenRef.current;
     setClaimState("claiming");
     setClaimMessage(null);
     setHolder(null);
@@ -512,14 +524,25 @@ export function ReproLimaSheet({
         new Blob([JSON.stringify({ caseId: session.caseId })], { type: "application/json" }),
       );
     };
+    // Si la página vuelve del bfcache (atrás y adelante), el beacon ya soltó
+    // el caso y el latido calla: se vuelve a tomar, con lo escrito intacto.
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted && session.shouldRelease) setClaimAttempt((n) => n + 1);
+    };
 
     void claimReproCase(orderId, reopen ? { reopen: true } : {})
       .then((result) => {
+        reopenRef.current = false;
         if (session.shouldRelease) {
           if (!("error" in result)) void releaseReproCase(result.caseId).catch(() => undefined);
           return;
         }
-        if (!active) return;
+        if (!active) {
+          // La hoja se desmontó con la toma en camino: se suelta. Si el efecto
+          // volvió a correr, la toma nueva es otra sesión y esta no suelta nada.
+          if (claimSessionRef.current === session && !("error" in result)) void releaseReproCase(result.caseId).catch(() => undefined);
+          return;
+        }
         if ("error" in result) {
           if (result.needsReopen) {
             setClaimState("reopen");
@@ -539,6 +562,7 @@ export function ReproLimaSheet({
         setClaimUntil(result.until);
         setClaimState("mine");
         window.addEventListener("pagehide", onPageHide);
+        window.addEventListener("pageshow", onPageShow);
         void reload();
         heartbeat = setInterval(() => {
           void renewReproCase(result.caseId)
@@ -563,6 +587,7 @@ export function ReproLimaSheet({
         }, REPRO_CLAIM_HEARTBEAT_MS);
       })
       .catch(() => {
+        reopenRef.current = false;
         if (!active || session.shouldRelease) return;
         setClaimState("error");
         setClaimMessage("No pudimos tomar el caso. Cierra y vuelve a intentarlo.");
@@ -571,9 +596,18 @@ export function ReproLimaSheet({
     return () => {
       active = false;
       window.removeEventListener("pagehide", onPageHide);
+      window.removeEventListener("pageshow", onPageShow);
       if (heartbeat) clearInterval(heartbeat);
+      // Desmontar la hoja sin «Cerrar» ni «Soltar» (atrás del navegador, un
+      // enlace de la ficha) también suelta el caso (§9.5). Si el efecto vuelve
+      // a correr («Volver a tomarlo»), se suelta antes de la toma nueva: las
+      // acciones de servidor corren de a una, en orden.
+      if (session.caseId && !session.shouldRelease) {
+        session.shouldRelease = true;
+        void releaseReproCase(session.caseId).catch(() => undefined);
+      }
     };
-  }, [orderId, mode, reopen, claimAttempt, reload]);
+  }, [orderId, mode, claimAttempt, reload]);
 
   function releaseCurrentClaim() {
     const session = claimSessionRef.current;
@@ -619,7 +653,9 @@ export function ReproLimaSheet({
   }, [fingerprint]);
 
   const box = current.box;
-  const showNoEsperar = noEsperarCajaAplica(box);
+  // Con la caja que no consta, «No esperar la caja» solo en un caso reabierto
+  // (E29). La misma regla que el servidor (`reproBoxAction` con `reopened`).
+  const showNoEsperar = noEsperarCajaAplica(box, current.reopened);
   const effectiveChanges: ReproChanges = showNoEsperar ? changes : { ...changes, no_esperar_caja: false };
 
   const boxInput = (c: ReproCourier): ReproBoxActionResult => reproBoxAction({
@@ -634,6 +670,7 @@ export function ReproLimaSheet({
     totalOutputs: current.boxInputs.totalOutputs,
     priorWithCourier: current.boxInputs.priorByCourier[c] ?? 0,
     ownReplace: current.boxInputs.ownReplace,
+    reopened: current.reopened,
   });
 
   // Otra guía viva de otro courier: no se confirma nada aquí (la trabaja ese courier).
@@ -731,7 +768,20 @@ export function ReproLimaSheet({
       }, advance);
       return;
     }
+    if (result.claimLost) {
+      // Ya no tiene el caso (D10): la hoja lo dice, conserva lo escrito y
+      // ofrece «Volver a tomarlo».
+      setClaimState("lost");
+      setClaimMessage(result.error ?? null);
+      return;
+    }
     setFeedback({ kind: "error", text: result.error ?? "No se pudo guardar. Vuelve a intentarlo." });
+    if (result.boxChanged) {
+      // La caja cambió mientras se decidía (§9.5): se releen los hechos para
+      // recalcular «Qué hacer con la caja». Lo escrito se queda.
+      void reload();
+      onChanged();
+    }
   }
 
   function save(advance: boolean) {
@@ -852,6 +902,12 @@ export function ReproLimaSheet({
       onClose={() => requestExit("close")}
     >
       <div ref={bodyRef} className="space-y-5">
+        {/* El aviso del pedido anterior («Guardar y pasar al siguiente»). */}
+        {previous && (
+          <Banner tone="ok" role="status" title={previous.orderName}>
+            <p>{previous.text}</p>
+          </Banner>
+        )}
         {/* El candado, en una línea con su punto. */}
         <div className="space-y-2">
           <p className="flex items-start gap-2 text-[13px] leading-5 text-ink-600" aria-live="polite">
@@ -875,7 +931,7 @@ export function ReproLimaSheet({
                   size="sm"
                   variant="primary"
                   className="pointer-coarse:h-11"
-                  onClick={() => { setShowReopen(false); setReopen(true); setMode("edit"); }}
+                  onClick={() => { setShowReopen(false); reopenRef.current = true; setMode("edit"); setClaimAttempt((n) => n + 1); }}
                 >
                   Sí, volver a atender
                 </OpsButton>
@@ -1086,7 +1142,8 @@ export function ReproLimaSheet({
                     <Section title="Fecha">
                       {swayp ? (
                         <div className="space-y-1">
-                          <SwaypDispatchDateSelect value={agreedOn} onChange={(value) => { setAgreedOn(value); setOtherDate(false); }} className={cn(FIELD, "max-w-xs")} />
+                          {/* Hasta los 60 días del servidor: una fecha que viene de otro courier se ve. */}
+                          <SwaypDispatchDateSelect value={agreedOn} lastDay={maxDay} onChange={(value) => { setAgreedOn(value); setOtherDate(false); }} className={cn(FIELD, "max-w-xs")} />
                           <p className="text-[13px] text-ink-500">
                             Swayp arma su ruta el día anterior: desde mañana, de lunes a sábado.
                             {current.requestedDate ? ` El cliente pidió el ${programDayLabel(current.requestedDate)}.` : ""}

@@ -1650,7 +1650,8 @@ function scanRowPresentation(l: ScanAssignLine, riderName: string): { text: stri
     case "programado_otro_dia":
       return { text: `Programado ${l.programmedFor ? programDayLabel(l.programmedFor) : "otro día"}`, tone: "warn" };
     case "recibido_a_stock":
-      // La caja reemplazada (0248): recibida, se desarma. No es un error.
+      // La caja reemplazada (0248) o la que el cliente ya no quiere (Repro
+      // Lima): recibida, se desarma. No es un error.
       return { text: l.message ? l.message.replace(/\.$/, "") : "Caja reemplazada: a stock", tone: "info" };
     case "no_elegible":
       return { text: l.message ? `No elegible: ${l.message.replace(/\.$/, "")}` : "No elegible", tone: "crit" };

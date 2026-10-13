@@ -83,10 +83,12 @@ describe("la entrada del menú (§9.5, D11)", () => {
 });
 
 describe("el candado de la hoja (D10)", () => {
-  const claimEffect = between(sheet, "const onPageHide = () => {", "}, [orderId, mode, reopen, claimAttempt, reload]);");
+  const claimEffect = between(sheet, "const onPageHide = () => {", "}, [orderId, mode, claimAttempt, reload]);");
+  const cleanup = between(claimEffect, "    return () => {\n      active = false;", "\n    };\n  }, [orderId");
+  const finish = between(sheet, "function finish(", "\n  }\n");
 
   it("se toma al abrir, solo al atender: «Ver acuerdo» y «Cerrados» no toman nada (E29)", () => {
-    const effect = between(sheet, "useEffect(() => {\n    if (mode !== \"edit\") return;", "}, [orderId, mode, reopen, claimAttempt, reload]);");
+    const effect = between(sheet, "useEffect(() => {\n    if (mode !== \"edit\") return;", "}, [orderId, mode, claimAttempt, reload]);");
     expect(effect.indexOf('if (mode !== "edit") return;')).toBeLessThan(effect.indexOf("claimReproCase(orderId"));
     expect(board).toContain('openRow(row, "read")}>Ver acuerdo</OpsButton>');
     expect(board).toContain('openRow(row, "read")}>Ver</OpsButton>');
@@ -119,6 +121,47 @@ describe("el candado de la hoja (D10)", () => {
     expect(between(sheet, "function doExit() {", "\n  }")).toContain("releaseCurrentClaim();");
     expect(between(sheet, "function finish(", "\n  }")).toContain("releaseCurrentClaim();");
     expect(sheet).toContain('onClick={() => requestExit("release")}>Soltar</OpsButton>');
+  });
+
+  it("desmontar la hoja sin «Cerrar» ni «Soltar» (atrás del navegador) también lo suelta, una sola vez", () => {
+    // Con el caso tomado y todavía sin soltar: así no suelta dos veces lo que
+    // ya soltaron «Cerrar», «Soltar», el guardado o el beacon.
+    expect(cleanup).toContain("if (session.caseId && !session.shouldRelease) {");
+    expect(cleanup.indexOf("session.shouldRelease = true;")).toBeLessThan(cleanup.indexOf("releaseReproCase(session.caseId)"));
+    // Con la toma en camino, la suelta al responder; si el efecto volvió a
+    // correr (otra sesión), no suelta la toma nueva.
+    const inactive = between(claimEffect, "if (!active) {", "return;\n        }");
+    expect(inactive).toContain("claimSessionRef.current === session && !(\"error\" in result)");
+    expect(inactive).toContain("releaseReproCase(result.caseId)");
+    expect(claimEffect.indexOf("if (session.shouldRelease) {")).toBeLessThan(claimEffect.indexOf("if (!active) {"));
+  });
+
+  it("si la página vuelve del bfcache, vuelve a tomar el caso que soltó el beacon", () => {
+    expect(claimEffect).toContain("if (event.persisted && session.shouldRelease) setClaimAttempt((n) => n + 1);");
+    expect(claimEffect.indexOf('setClaimState("mine")')).toBeLessThan(claimEffect.indexOf('window.addEventListener("pageshow", onPageShow)'));
+    expect(cleanup).toContain('window.removeEventListener("pageshow", onPageShow)');
+  });
+
+  it("un guardado sin el caso (claimLost) lo da por perdido: «Volver a tomarlo» y lo escrito se queda", () => {
+    const lost = between(finish, "if (result.claimLost) {", "return;\n    }");
+    expect(lost).toContain('setClaimState("lost");');
+    expect(lost).toContain("setClaimMessage(result.error ?? null);");
+    // Antes del aviso de error y sin soltar ni avisar al tablero: la hoja sigue abierta.
+    expect(finish.indexOf("if (result.claimLost)")).toBeLessThan(finish.indexOf('setFeedback({ kind: "error"'));
+    expect(lost).not.toContain("releaseCurrentClaim");
+    expect(lost).not.toContain("onSaved");
+    expect(sheet).toContain('onClick={() => setClaimAttempt((n) => n + 1)}>Volver a tomarlo</OpsButton>');
+  });
+
+  it("«La caja cambió mientras decidías» (boxChanged) relee los hechos y conserva lo escrito (§9.5)", () => {
+    const changed = between(finish, "if (result.boxChanged) {", "\n    }");
+    expect(changed).toContain("void reload();");
+    expect(changed).toContain("onChanged();");
+    // Releer recalcula la acción de la caja desde los hechos frescos (`current`).
+    expect(sheet).toContain("const current = fresh ?? row;");
+    expect(sheet).toContain("const box = current.box;");
+    // El borrador vive en el estado de la hoja: releer no lo toca.
+    expect(changed).not.toMatch(/setNote|setOutcome|setAgreedOn|setChanges/);
   });
 
   it("con otra persona, solo lectura con la hora en que se libera", () => {

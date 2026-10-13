@@ -69,6 +69,8 @@ const NOTE_MAX = 1000;
 
 const CASE_GONE = "Ya no tienes este caso: vuelve a tomarlo.";
 const OUT_OF_STAGE = "Este pedido ya no está en «Por reprogramar Lima».";
+const NEEDS_REOPEN = "Este pedido se cerró con «Desarmar y cerrar». «Volver a atender» lo reabre.";
+const BOX_CHANGED = "La caja cambió mientras decidías: revisa «Qué hacer con la caja» y vuelve a guardar.";
 
 type Admin = ReturnType<typeof createAdminSupabase>;
 
@@ -122,7 +124,9 @@ export type ClaimReproResult =
 /**
  * «Atender»: abre el caso si no hay (D1) y lo toma por 10 minutos. Un caso
  * cerrado con «Desarmar y cerrar» del mismo episodio solo se reabre con
- * `reopen` (segundo clic, E29).
+ * `reopen` (segundo clic, E29). La RPC lo vuelve a mirar dentro de su candado
+ * (`needs_reopen`): un cierre que llega entre esta lectura y la RPC no se
+ * reabre solo.
  */
 export async function claimReproCase(orderId: string, opts: { reopen?: boolean } = {}): Promise<ClaimReproResult> {
   const scope = await requireReproLima();
@@ -142,7 +146,7 @@ export async function claimReproCase(orderId: string, opts: { reopen?: boolean }
       !f.open && !opts.reopen &&
       f.latestClosed?.close_reason === "desarmar_cerrar" && f.latestClosed.episode_key === f.episode.key
     ) {
-      return { error: "Este pedido se cerró con «Desarmar y cerrar». «Volver a atender» lo reabre.", needsReopen: true };
+      return { error: NEEDS_REOPEN, needsReopen: true };
     }
     const { data, error } = await admin.rpc("lima_repro_claim", {
       p_order: orderId,
@@ -151,15 +155,17 @@ export async function claimReproCase(orderId: string, opts: { reopen?: boolean }
       p_episode: f.episode.key,
       p_episode_at: f.episode.at,
       p_ttl_minutes: REPRO_CLAIM_TTL_MINUTES,
+      p_reopen: Boolean(opts.reopen),
     });
     if (error) return { error: error.message };
-    const claim = data as { case_id: string; claimed: boolean; until: string | null; holder?: string | null };
+    const claim = data as { case_id?: string | null; claimed: boolean; until?: string | null; holder?: string | null; needs_reopen?: boolean };
     revalidatePath(REPRO_LIMA_PATH);
-    if (!claim.claimed) {
+    if (claim.needs_reopen) return { error: NEEDS_REOPEN, needsReopen: true };
+    if (!claim.claimed || !claim.case_id) {
       const name = claim.holder ? await resolveAgentName(claim.holder, admin) : null;
-      return { error: `${name ?? "Otra persona"} está atendiendo este pedido.`, caseId: claim.case_id, holder: { name, until: claim.until } };
+      return { error: `${name ?? "Otra persona"} está atendiendo este pedido.`, ...(claim.case_id ? { caseId: claim.case_id } : {}), holder: { name, until: claim.until ?? null } };
     }
-    return { caseId: claim.case_id, until: claim.until };
+    return { caseId: claim.case_id, until: claim.until ?? null };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
   }
@@ -309,10 +315,12 @@ async function recordCall(scope: ReproScope, input: RegisterReproCallInput): Pro
           await closeStaleReproCases(admin, [c.id], problem.reason);
           revalidatePath(REPRO_LIMA_PATH);
         }
-        return { error: problem.message };
+        // «El pedido cambió mientras lo abrías»: la hoja relee los hechos y
+        // conserva lo escrito (C3).
+        return problem.reason === "cambio" ? { error: problem.message, boxChanged: true } : { error: problem.message };
       }
       if (c.claimed_by !== scope.userId || !c.claimed_until || Date.parse(c.claimed_until) <= now.getTime()) {
-        return { error: CASE_GONE };
+        return { error: CASE_GONE, claimLost: true };
       }
 
       if (input.outcome === "llamar_despues") {
@@ -353,10 +361,13 @@ async function recordCall(scope: ReproScope, input: RegisterReproCallInput): Pro
           totalOutputs: f.outputs.length,
           priorWithCourier: priorOutputsWith(f.outputs, courier),
           ownReplace: f.ownReplace,
+          reopened: f.reopened,
         });
-        if ("problem" in decided) return { error: decided.problem };
+        // La hoja no deja guardar con un problema de caja: si aquí aparece
+        // uno, o la acción es otra, los hechos cambiaron mientras se decidía.
+        if ("problem" in decided) return { error: decided.problem, boxChanged: true };
         if (decided.action !== input.expectedBoxAction) {
-          return { error: "La caja cambió mientras decidías: revisa «Qué hacer con la caja» y vuelve a guardar." };
+          return { error: BOX_CHANGED, boxChanged: true };
         }
         boxAction = decided.action;
         const dateProblem = agreementDateProblem({
@@ -408,7 +419,8 @@ async function recordCall(scope: ReproScope, input: RegisterReproCallInput): Pro
       p_event_note: eventNote,
       p_ttl_minutes: REPRO_CLAIM_TTL_MINUTES,
     });
-    if (error) return { error: error.message };
+    // La RPC vuelve a mirar el candado: se pudo perder entre la lectura y aquí.
+    if (error) return error.message === CASE_GONE ? { error: CASE_GONE, claimLost: true } : { error: error.message };
     const recorded = data as { call_id: string; duplicate: boolean };
 
     // Lo que sigue, con hechos releídos después de la RPC (E24), también en
@@ -537,10 +549,18 @@ async function afterCall(admin: Admin, input: {
       };
     }
     const why = result.status === "error" || result.status === "cerrado" ? result.message : "otra persona cambió el caso.";
+    // El programa de otro día ya contradice el acuerdo guardado (E23): se
+    // quita aunque no se haya podido escribir el nuevo. El borrado es
+    // condicionado a lo leído: no toca un programa que otro acabe de escribir.
+    // Un caso cerrado (otro intento, fuera de la etapa) ya no manda: no se toca.
+    const cleared = result.status !== "cerrado" && f.program && f.program.scheduled_for.slice(0, 10) !== day
+      ? await clearPrograms(admin, [f.program], actor, SUFFIX_OTRO_ACUERDO)
+      : false;
+    const tail = cleared ? CLEARED_NOTE : "";
     return {
-      notice: "Acuerdo guardado.",
-      error: `Acuerdo guardado, pero no se pudo programar: ${why} Usa «Programar ahora».`,
-      programChanged: false,
+      notice: `Acuerdo guardado.${tail}`,
+      error: `Acuerdo guardado, pero no se pudo programar: ${why}${tail} Usa «Programar ahora».`,
+      programChanged: cleared,
     };
   }
 
@@ -594,7 +614,8 @@ async function afterCall(admin: Admin, input: {
  * «falta programarlo», por ejemplo porque falló la escritura o la caja de otro
  * courier ya llegó) o, con `found`, «Ya la encontré: programar» cuando no
  * constaba dónde estaba la caja y alguien la encontró en la oficina (segundo
- * clic). Toma el candado antes (E21) y lo suelta después si no era suyo.
+ * clic). Toma el candado de ESE caso antes (E21; nunca abre otro) y lo
+ * suelta después si no era suyo.
  */
 export async function programReproAgreement(input: { caseId: string; found?: boolean }): Promise<ReproActionResult> {
   const scope = await requireReproLima();
@@ -644,20 +665,26 @@ export async function programReproAgreement(input: { caseId: string; found?: boo
     const dateProblem = agreementDateProblem({ day, today: clock.day, nowMinute: clock.minute, cutoff: check.sameDayCutoff, courier, boxAction });
     if (dateProblem) return { error: `${dateProblem} Vuelve a confirmar la fecha con el cliente.` };
 
-    // El candado, antes de escribir (E21).
+    // El candado, antes de escribir (E21), sobre ESTE caso y nada más: la RPC
+    // `lima_repro_claim` abre otro si no hay abierto, y con este cerrado
+    // mientras tanto («Ya no lo quiere») reabriría el episodio sin el segundo
+    // clic (E29). Escritura condicional, como el candado de Envíos: libre,
+    // vencido o ya propio, y el caso abierto.
     const hadClaim = c0.claimed_by === scope.userId && Boolean(c0.claimed_until) && Date.parse(c0.claimed_until!) > now.getTime();
-    const { data: claimData, error: claimError } = await admin.rpc("lima_repro_claim", {
-      p_order: c0.order_id,
-      p_store: c0.store_id,
-      p_actor: scope.userId,
-      p_episode: f.episode.key,
-      p_episode_at: f.episode.at,
-      p_ttl_minutes: REPRO_CLAIM_TTL_MINUTES,
-    });
+    const { data: claimed, error: claimError } = await admin
+      .from("lima_repro_cases")
+      .update({ claimed_by: scope.userId, claimed_until: new Date(now.getTime() + REPRO_CLAIM_TTL_MINUTES * 60_000).toISOString() })
+      .eq("id", c0.id)
+      .is("closed_at", null)
+      .or(`claimed_by.is.null,claimed_by.eq.${scope.userId},claimed_until.lte.${now.toISOString()}`)
+      .select("id")
+      .maybeSingle();
     if (claimError) return { error: claimError.message };
-    const claim = claimData as { case_id: string; claimed: boolean; holder?: string | null };
-    if (!claim.claimed) {
-      const name = claim.holder ? await resolveAgentName(claim.holder, admin) : null;
+    if (!claimed) {
+      const { data: held } = await admin.from("lima_repro_cases").select("closed_at,claimed_by").eq("id", c0.id).maybeSingle();
+      const holder = held as { closed_at: string | null; claimed_by: string | null } | null;
+      if (!holder || holder.closed_at) return { error: "El caso ya está cerrado." };
+      const name = holder.claimed_by ? await resolveAgentName(holder.claimed_by, admin) : null;
       return { error: `${name ?? "Otra persona"} está atendiendo este pedido.` };
     }
 
@@ -695,7 +722,7 @@ export async function programReproAgreement(input: { caseId: string; found?: boo
         await admin
           .from("lima_repro_cases")
           .update({ claimed_by: null, claimed_until: null })
-          .eq("id", claim.case_id)
+          .eq("id", c0.id)
           .eq("claimed_by", scope.userId);
       }
     }

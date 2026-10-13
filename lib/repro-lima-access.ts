@@ -115,7 +115,7 @@ export interface ReproRow {
   requestedDate: string | null;
   box: BoxLocation;
   boxLabel: string;
-  /** Cuándo se recibió en oficina. */
+  /** Cuándo se recibió en oficina la caja del episodio (`ReproFacts.receivedAt`). */
   receivedAt: string | null;
   /** Reintento de otro courier: Grupo GF crea la salida al tomarlo. */
   retryAdmission: boolean;
@@ -201,12 +201,24 @@ function daysBetweenDays(from: string | null, to: string): number | null {
   return Math.max(0, Math.round((b - a) / DAY_MS));
 }
 
-/** El fallo que se enseña: la parada o la salida de otro courier, la más reciente. */
+/**
+ * El fallo que se enseña: la parada o la salida de otro courier, la más
+ * reciente. Se comparan días (el de la ruta de la parada, el del fallo de la
+ * guía) antes que horas: el `reported_at` de la parada se reescribe en cada
+ * corrección del reporte.
+ *
+ * `failedOn` ordena «Por decidir» (rango 0). De Tanders y Swayp es el día en
+ * que salió el intento (`guideFailedAt`, el mismo ancla que `macro_since`): no
+ * hay un sello fijo del fallo. La línea lo dice como salida, no como fallo.
+ */
 function failureOf(f: ReproFacts): { line: ReproRow["failure"]; failedOn: string | null } {
   const stop = f.lastStop;
   const output = f.failedOutput;
   const outputAt = output ? guideFailedAt(output) : null;
-  if (stop && (!output || (stop.reported_at ?? "") >= (outputAt ?? ""))) {
+  const stopDay = stop ? stop.routeDate?.slice(0, 10) ?? limaDay(stop.reported_at) ?? "" : "";
+  const outputDay = limaDay(outputAt) ?? "";
+  const stopFirst = stopDay !== outputDay ? stopDay > outputDay : (stop?.reported_at ?? "") >= (outputAt ?? "");
+  if (stop && (!output || stopFirst)) {
     const line = failureLine({
       kind: "parada",
       riderName: stop.riderName,
@@ -217,12 +229,14 @@ function failureOf(f: ReproFacts): { line: ReproRow["failure"]; failedOn: string
     return { line: { ...line, photoPath: stop.photo_path }, failedOn: stop.routeDate ?? limaDay(stop.reported_at) };
   }
   if (output) {
+    const fromDispatch = Boolean(outputAt) && outputAt === output.dispatched_at;
     const line = failureLine({
       kind: "courier",
       courier: output.courier,
       reportedStatus: output.reported_status,
       swaypState: output.swayp_state,
-      failedOn: outputAt,
+      failedOn: fromDispatch ? null : outputAt,
+      dispatchedOn: fromDispatch ? outputAt : null,
     });
     return { line: { ...line, photoPath: null }, failedOn: limaDay(outputAt) };
   }
@@ -251,6 +265,8 @@ function buildRow(input: {
   const program = f.program
     ? { scheduled_for: f.program.scheduled_for.slice(0, 10), reason: f.program.reason ?? null, set_at: f.program.set_at ?? null }
     : null;
+  const cutoff = f.provider?.same_day_cutoff ?? null;
+  // Con el minuto y el corte: un acuerdo para hoy que ya no alcanza vence hoy (E25).
   const state = agreementState({
     c: open,
     program,
@@ -258,6 +274,8 @@ function buildRow(input: {
     plan,
     today,
     programRemovedAt: f.programRemovedAt,
+    nowMinute: limaClock(now).minute,
+    cutoff,
   });
   const requestedDate = f.lastStop?.requested_date?.slice(0, 10) ?? null;
   const listed = reproList({
@@ -332,14 +350,20 @@ function buildRow(input: {
         }
       : null,
     state,
-    stateLabel: agreementStateLabel(state, open ? { agreed_on: open.agreed_on, agreed_courier: open.agreed_courier } : null, f.box),
+    stateLabel: agreementStateLabel(state, open ? { agreed_on: open.agreed_on, agreed_courier: open.agreed_courier } : null, f.box, today),
     plan,
     program: program ? { scheduledFor: program.scheduled_for, reason: program.reason, origin: programOrigin(program.reason) } : null,
     list: listed.list,
     rank,
     overdue: listed.overdue,
     chips: listed.chips,
-    dismantleSuggested: dismantleSuggested({ receivedAt: f.receivedAt, noAnswerCount: open?.no_answer_count ?? 0, today }),
+    // Los diez días cuentan desde la recepción de la caja que está en oficina
+    // (decisión 10): con la caja con el motorizado o volviendo, no se sugiere.
+    dismantleSuggested: dismantleSuggested({
+      receivedAt: f.box.kind === "en_oficina" ? f.box.since : null,
+      noAnswerCount: open?.no_answer_count ?? 0,
+      today,
+    }),
     closed: closedCase
       ? {
           caseId: closedCase.id,
@@ -358,7 +382,7 @@ function buildRow(input: {
       priorByCourier,
       ownReplace: f.ownReplace,
     },
-    cutoff: f.provider?.same_day_cutoff ?? null,
+    cutoff,
     agreedOn: open?.agreed_on?.slice(0, 10) ?? null,
     programDay: program?.scheduled_for ?? null,
     closedAt: closedCase?.closed_at ?? null,
@@ -420,7 +444,9 @@ export async function loadReproLima(
 
   const rows = orderRows.filter((row) => scope.storeIds.has(row.store_id));
   const inStage = new Set(rows.map((row) => row.order_id));
-  const outOfStage = openCases.filter((row) => !inStage.has(row.order_id)).map((row) => row.id);
+  // Candidatos, no cierres: la etapa se lee por páginas y un pedido que sale
+  // de ella entre página y página corre a los demás. Se releen antes de cerrar.
+  const outOfStage = openCases.filter((row) => !inStage.has(row.order_id));
 
   // Oleadas 2 y 3: los hechos de cada pedido.
   const facts = await loadReproFacts(admin, rows.map((row) => row.order_id), { orders: rows, storeOrg, providers });
@@ -439,10 +465,18 @@ export async function loadReproLima(
   const openIds = [...facts.values()]
     .map((f) => (f.open && f.open.episode_key === f.episode.key ? f.open.id : null))
     .filter((id): id is string => Boolean(id));
-  const { data: callRows } = await courierRowsByIds(openIds, (chunk) => admin
+  // Todas las llamadas de cada lote de casos, por páginas y en orden fijo: una
+  // respuesta trae 1000 filas como mucho y cortaría la última llamada.
+  const { data: callRows } = await courierRowsByIds(openIds, (chunk) => allCourierRows((from, to) => admin
     .from("lima_repro_calls")
     .select("case_id,actor,occurred_at,outcome,channel")
-    .in("case_id", chunk));
+    .in("case_id", chunk)
+    .neq("channel", "sin_contacto")
+    .order("case_id")
+    .order("occurred_at", { ascending: false })
+    .order("id")
+    .range(from, to) as unknown as PromiseLike<{ data: Array<{ case_id: string; actor: string | null; occurred_at: string; outcome: string | null; channel: string | null }> | null; error: { message: string } | null }>)
+    .then((data) => ({ data, error: null })));
   const lastCallByCase = new Map<string, { at: string; actor: string | null; outcome: string | null }>();
   for (const call of callRows as Array<{ case_id: string; actor: string | null; occurred_at: string; outcome: string | null; channel: string | null }>) {
     // «Desarmar y cerrar sin llamada» no es una llamada.
@@ -484,10 +518,22 @@ export async function loadReproLima(
 
   // Cierres sin evento, después de responder (`after()`).
   const nowIso = now.toISOString();
-  const closeOut = [...new Set([...outOfStage, ...outOfStageInFacts])];
-  if (closeOut.length || newAttempt.length) {
+  if (outOfStage.length || outOfStageInFacts.length || newAttempt.length) {
     const task = async () => {
       try {
+        // Lo que no vino en la lectura por páginas se relee por id: solo se
+        // cierra lo que de verdad ya no está en «Por reprogramar Lima».
+        const { data: still } = await courierRowsByIds([...new Set(outOfStage.map((row) => row.order_id))], (chunk) => admin
+          .from("order_master")
+          .select("order_id")
+          .in("order_id", chunk)
+          .eq("macro_stage", "en_curso")
+          .eq("macro_substage", "por_reprogramar_lima") as unknown as PromiseLike<{ data: Array<{ order_id: string }> | null; error: { message: string } | null }>);
+        const stillInStage = new Set(still.map((row) => row.order_id));
+        const closeOut = [...new Set([
+          ...outOfStage.filter((row) => !stillInStage.has(row.order_id)).map((row) => row.id),
+          ...outOfStageInFacts,
+        ])];
         await closeStaleReproCases(admin, closeOut, "fuera_de_etapa", nowIso);
         await closeStaleReproCases(admin, newAttempt, "nuevo_intento", nowIso);
       } catch (error) {

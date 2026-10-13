@@ -8,15 +8,16 @@
 // 1. «Ya no lo quiere» → Desarmar y cerrar (no anula la venta).
 // 2. Otra guía viva de otro courier → problema: la trabaja ese courier.
 // 3. Urpi → problema: en 1a no lleva reprogramados (E16).
-// 4. «No esperar la caja» con la caja fuera → Caja nueva desde stock. Va antes
-//    que el producto: es lo único que se puede hacer con el producto cambiado y
-//    la caja lejos.
+// 4. «No esperar la caja» con la caja fuera (o que no consta en un caso
+//    reabierto, E29) → Caja nueva desde stock. Va antes que el producto: es lo
+//    único que se puede hacer con el producto cambiado y la caja lejos.
 // 5. Cambió el producto o la caja está dañada → Desarmar y rearmar.
 // 6. Sin salida propia viva, o cambia el courier → Salida nueva y rearmado.
 // 7. Cambió la dirección o el monto → Reimprimir el rótulo de la misma salida.
 // 8. Lo demás → Mantener.
 //
-// En 4-6 nace una salida: se respeta el tope de cinco y la repetición por
+// En 4-6 nace una salida (salvo la caja propia reabierta de 4, que sale con su
+// misma salida): se respeta el tope de cinco y la repetición por
 // courier de Lima (`canRepeatCourier`). El tope y la repetición son problemas
 // que se le dicen a quien decide: nunca cierran el caso solos.
 
@@ -74,6 +75,11 @@ export interface ReproBoxActionInput {
    * salida nueva» (`ownReplaceDecision`) y el código de esa salida (E18).
    */
   ownReplace?: { decision: OwnReplaceDecision; outputCode: string | null } | null;
+  /**
+   * El caso reabre un «Desarmar y cerrar» (E29): con la caja que no consta,
+   * «No esperar la caja» vale (`noEsperarCajaAplica`).
+   */
+  reopened?: boolean;
 }
 
 const MAX_OUTPUTS_PROBLEM = `Ya usó las ${MAX_OUTPUTS_PER_ORDER} salidas: solo queda «Desarmar y cerrar».`;
@@ -126,7 +132,16 @@ export function reproBoxAction(input: ReproBoxActionInput): ReproBoxActionResult
   const box = input.box;
 
   // 4. No esperar la caja: se arma otra desde stock.
-  if (changes.no_esperar_caja && noEsperarCajaAplica(box)) {
+  if (changes.no_esperar_caja && noEsperarCajaAplica(box, input.reopened)) {
+    // E29: la salida propia estaba en oficina y Almacén pudo desarmar su caja.
+    // Grupo GF la toma con esa misma salida (`ownRetryDecision`): no nace otra.
+    if (courier === "propio" && box.kind === "desconocida" && box.own && !box.block) {
+      return {
+        action: "caja_nueva_stock",
+        newSalida: false,
+        label: "Caja nueva desde stock con la misma salida de Grupo GF: se reimprime su rótulo (mismo QR) y Grupo GF la toma en Despacho del día; si aparece la anterior, se desarma.",
+      };
+    }
     const problem = newOutputProblem(input, courier);
     if (problem) return { problem };
     if (box.kind === "con_motorizado") {

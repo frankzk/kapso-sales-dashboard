@@ -1045,7 +1045,13 @@ async function loadCourierOperations(
   ], lastDispatchByOrder);
   const noLoQuiereChip = (orderId: string) => (reproFlags.noLoQuiere.has(orderId) ? REPRO_NO_LO_QUIERE_CHIP : null);
   for (const row of available) row.reproLimaChip = noLoQuiereChip(row.orderId);
-  for (const row of accepted) row.reproLimaChip = noLoQuiereChip(row.orderId);
+  // Lo tomado con la caja todavía con el motorizado (su caja dice «No
+  // entregado»): ahí se ofrece «Sacar con salida nueva», como en la propia
+  // sin solicitud de abajo.
+  for (const row of accepted) {
+    const nueva = row.route?.undeliveredReason ? reproFlags.cajaNueva.get(row.orderId) : undefined;
+    row.reproLimaChip = nueva?.open ? reproCajaNuevaChip(nueva.day) : noLoQuiereChip(row.orderId);
+  }
   for (const row of returnable) {
     const nueva = reproFlags.cajaNueva.get(row.orderId);
     row.reproLimaChip = nueva?.open ? reproCajaNuevaChip(nueva.day) : noLoQuiereChip(row.orderId);
@@ -3407,8 +3413,9 @@ export type ScanAssignStatus =
   /** Programado para otro día (0199): se asigna solo si se confirma. */
   | "programado_otro_dia"
   /**
-   * La caja reemplazada por otra salida (0248): el escaneo la recibió en
-   * oficina (o ya estaba recibida) y vuelve a stock. No se asigna.
+   * La caja reemplazada por otra salida (0248), o la de un cliente que ya no
+   * lo quiere (Repro Lima, «Desarmar y cerrar»): el escaneo la recibió en
+   * oficina (o ya estaba recibida) y se desarma. No se asigna.
    */
   | "recibido_a_stock"
   | "desconocido";
@@ -3657,6 +3664,19 @@ export async function scanAssignToRider(
       const repro = await materializeWaitingAgreementsSafe(admin, [orderId], auth.userId, { via: "escaneo" });
       reproNote = reproReceptionNotice(repro, { single: true, omitProgrammed: true }).map((part) => `${part} `).join("");
       receivedFrom = receivedFromLabel(fromName, box.dispatch_manifests.route_date);
+      // El cliente ya no lo quiere («Desarmar y cerrar» de este episodio, §9.3
+      // fila 1): la caja queda recibida y se desarma; la salida no vuelve a
+      // salir. Ni programa, ni toma, ni asigna.
+      if (repro.noLoQuiere.some((row) => row.orderId === orderId)) {
+        await recomputeOrderMasterSafe(admin, [orderId]);
+        return {
+          ...line,
+          status: "recibido_a_stock",
+          manifestId: box.manifest_id,
+          receivedFrom,
+          message: `Recibido en oficina (salió de la caja de ${receivedFrom}). ${reproNote}No se asigna.`,
+        };
+      }
     } else if (box) {
       if (box.dispatch_manifests.rider_id === rider.id) {
         const loadNumber = box.dispatch_manifests.load_number ?? null;

@@ -18,6 +18,7 @@ import {
   type ReproCaseRow,
 } from "@/lib/repro-lima-program";
 import { clearGfDispatchPrograms } from "@/lib/gf-dispatch-program";
+import { materializationPlan } from "@/lib/repro-lima";
 
 // ---------------------------------------------------------------------------
 // Una base en memoria con lo justo del query builder de Supabase
@@ -29,6 +30,8 @@ type Write = { table: string; op: string; value: any };
 function fakeDb(seed: Record<string, Row[]>, opts: {
   onWrite?: (write: Write, db: Record<string, Row[]>) => void;
   failUpsert?: string;
+  /** Una tabla cuya lectura falla. */
+  failRead?: string;
 } = {}) {
   const db: Record<string, Row[]> = Object.fromEntries(Object.entries(seed).map(([t, rows]) => [t, rows.map((r) => ({ ...r }))]));
   const writes: Write[] = [];
@@ -62,6 +65,7 @@ function fakeDb(seed: Record<string, Row[]>, opts: {
       const match = (r: Row) => filters.every((f) => f(r));
       if (op === "select") {
         reads.push(table);
+        if (opts.failRead === table) return { data: null, error: { message: `sin ${table}` } };
         let out = rows.filter(match);
         if (order) {
           const { col, asc } = order;
@@ -207,6 +211,51 @@ describe("los hechos del pedido", () => {
     expect(facts.box).toEqual({ kind: "desconocida", own: true });
   });
 
+  it("F1: la solicitud vigente del pedido con su S01 no es «otra solicitud»: la caja recibida está en oficina", async () => {
+    // `gf_return_to_office` devuelve la solicitud a `accepted` con la misma salida.
+    const own = { id: "req-1", order_id: "o1", provider_id: "p1", shipment_id: "sh1", scheduled_for: "2026-10-12", status: "accepted", created_at: "2026-10-11T13:30:00Z" };
+    const { admin } = fakeDb(seed({ requests: [own] }));
+    const facts = (await loadReproFacts(admin, ["o1"])).get("o1")!;
+    expect(facts.ownInOtherRequest).toBe(false);
+    expect(facts.box).toMatchObject({ kind: "en_oficina", courier: "propio" });
+    expect(materializationPlan({ courier: "propio", boxAction: "mantener", box: facts.box, retryAdmission: facts.retryAdmission })).toBe("ahora");
+    // Una solicitud cancelada que tuvo la S01 sí la bloquea (`logistics_requests_shipment_uniq`).
+    const cancelled = fakeDb(seed({ requests: [{ ...own, status: "cancelled" }] }));
+    const blocked = (await loadReproFacts(cancelled.admin, ["o1"])).get("o1")!;
+    expect(blocked.ownInOtherRequest).toBe(true);
+    expect(blocked.box).toEqual({ kind: "desconocida", own: true, block: "salida_en_otra_solicitud" });
+  });
+
+  it("F0: corregir el reporte de una parada de un día anterior no cambia el episodio ni cierra el caso", async () => {
+    // stop-1 es de la ruta del sáb 10/10; stop-2, de la del lun 12/10 (09:00),
+    // abrió el caso. A las 09:30 Liquidaciones 2 reescribe el reporte de stop-1.
+    const stops = [
+      { id: "stop-1", order_id: "o1", shipment_id: "sh1", route_id: "r1", status: "no_entregado", outcome_reason: "no_contesta", note: "corregida", photo_path: null, reported_at: "2026-10-12T14:30:00Z", requested_date: null, dispatch_manifest_id: "box-1" },
+      { id: "stop-2", order_id: "o1", shipment_id: "sh1", route_id: "r2", status: "no_entregado", outcome_reason: "ausente", note: null, photo_path: null, reported_at: "2026-10-12T14:00:00Z", requested_date: "2026-10-15", dispatch_manifest_id: "box-2" },
+    ];
+    const s = seed({ stops, cases: [agreement({ episode_key: "s:stop-2|o:-", episode_at: "2026-10-12T14:00:00.000Z" })] });
+    s.delivery_routes!.push({ id: "r2", route_date: "2026-10-12", rider_id: "rd1" });
+    const { admin } = fakeDb(s);
+    const facts = (await loadReproFacts(admin, ["o1"])).get("o1")!;
+    expect(facts.episode.key).toBe("s:stop-2|o:-");
+    expect(facts.lastStop?.id).toBe("stop-2");
+    expect(facts.failedStops.map((stop) => stop.id)).toEqual(["stop-2", "stop-1"]);
+    expect(reproCaseProblem(facts, facts.open!)).toBeNull();
+  });
+
+  it("F9/F16: la recepción de un episodio anterior no cuenta para la caja de este", async () => {
+    // La caja se recibió el 01/10; el pedido volvió a salir el sáb 10/10 y falló.
+    const s = seed();
+    s.order_events = [{ id: "ev-0", order_id: "o1", shipment_id: "sh1", kind: "returned_to_office", occurred_at: "2026-10-01T15:00:00Z" }];
+    const old = (await loadReproFacts(fakeDb(s).admin, ["o1"])).get("o1")!;
+    expect(old.receivedAt).toBeNull();
+    // Recibida el mismo día de su ruta, cuenta (desde el inicio del día en Lima).
+    s.order_events.push({ id: "ev-1", order_id: "o1", shipment_id: "sh1", kind: "returned_to_office", occurred_at: "2026-10-10T23:30:00Z" });
+    const fresh = (await loadReproFacts(fakeDb(s).admin, ["o1"])).get("o1")!;
+    expect(fresh.receivedAt).toBe("2026-10-10T23:30:00Z");
+    expect(fresh.box).toEqual({ kind: "en_oficina", since: "2026-10-10T23:30:00Z", courier: "propio" });
+  });
+
   it("un caso de otro episodio: nuevo intento si el fallo es más reciente, «cambió» si no", () => {
     const facts = { inStage: true, cancelled: false, episode: { key: "s:stop-2|o:-", at: "2026-10-11T20:00:00Z" } };
     expect(reproCaseProblem(facts, agreement())?.reason).toBe("nuevo_intento");
@@ -305,6 +354,43 @@ describe("materializeAgreement", () => {
     expect(db.gf_dispatch_programs).toEqual([]);
     const cleared = writes.find((w) => w.table === "order_events" && w.op === "insert" && (w.value as Row[])[0]?.kind === "dispatch_program_cleared")!;
     expect((cleared.value as Row[])[0]!.note).toContain("Repro Lima: el acuerdo cambió mientras se programaba.");
+  });
+
+  it("F6: si el acuerdo nuevo del mismo día ya se marcó contando con este programa, no se quita", async () => {
+    // La tienda reconfirma el mismo día mientras se recibe la caja: su RPC
+    // borra la marca, su materialización marca de nuevo y ve este programa
+    // (paso 5), así que no escribe el suyo.
+    const { admin, db, writes } = fakeDb(seed(), {
+      onWrite: (write, tables) => {
+        if (write.table === "gf_dispatch_programs" && write.op === "upsert") {
+          Object.assign(tables.lima_repro_cases!.find((r) => r.id === "case-1")!, {
+            agreement_call_id: "call-2",
+            materialized_at: "2026-10-12T15:00:30.000Z",
+            materialized_on: "2026-10-13",
+          });
+        }
+      },
+    });
+    const result = await materializeAgreement(admin, { caseRow: agreement(), actor: "u" });
+    expect(result).toMatchObject({ status: "programado", day: "2026-10-13" });
+    expect(db.gf_dispatch_programs).toHaveLength(1);
+    expect(writes.some((w) => w.table === "order_events" && w.op === "insert" && (w.value as Row[])[0]?.kind === "dispatch_program_cleared")).toBe(false);
+
+    // Si el acuerdo nuevo es de otro día, el programa sí se quita.
+    const other = fakeDb(seed(), {
+      onWrite: (write, tables) => {
+        if (write.table === "gf_dispatch_programs" && write.op === "upsert") {
+          Object.assign(tables.lima_repro_cases!.find((r) => r.id === "case-1")!, {
+            agreement_call_id: "call-2",
+            agreed_on: "2026-10-14",
+            materialized_at: "2026-10-12T15:00:30.000Z",
+            materialized_on: "2026-10-14",
+          });
+        }
+      },
+    });
+    expect(await materializeAgreement(other.admin, { caseRow: agreement(), actor: "u" })).toMatchObject({ status: "error" });
+    expect(other.db.gf_dispatch_programs).toEqual([]);
   });
 });
 
@@ -410,9 +496,33 @@ describe("las chapas de la cola de Despacho del día (E28)", () => {
     const flags = await loadReproQueueFlags(admin, ["o1", "o2"], new Map());
     expect([...flags.noLoQuiere]).toEqual(["o1"]);
     expect(flags.cajaNueva.get("o2")).toEqual({ day: "2026-10-15", open: true });
-    // Volvió a salir después del cierre: es otro episodio.
-    const again = await loadReproQueueFlags(admin, ["o1"], new Map([["o1", "2026-10-12T16:00:00Z"]]));
-    expect(again.noLoQuiere.size).toBe(0);
     expect(REPRO_NO_LO_QUIERE_CHIP).toBe("Repro Lima: no lo quiere · desarmar");
+  });
+
+  it("F2: recibir la caja (o corregir el reporte) después del cierre no esconde «no lo quiere»", async () => {
+    const closed = agreement({ closed_at: "2026-10-12T14:00:00Z", close_reason: "desarmar_cerrar", box_action: "desarmar_cerrar", agreement_call_id: null, agreed_on: null, agreed_courier: null, claimed_by: null, claimed_until: null });
+    // `gf_order_departures` cuenta el `returned_to_office` de las 16:00 como salida.
+    const { admin } = fakeDb(seed({ cases: [closed] }));
+    const received = await loadReproQueueFlags(admin, ["o1"], new Map([["o1", "2026-10-12T16:00:00Z"]]));
+    expect([...received.noLoQuiere]).toEqual(["o1"]);
+  });
+
+  it("F2: un fallo nuevo después del cierre es otro episodio: la chapa se va", async () => {
+    const closed = agreement({ closed_at: "2026-10-12T14:00:00Z", close_reason: "desarmar_cerrar", box_action: "desarmar_cerrar", agreement_call_id: null, agreed_on: null, agreed_courier: null, claimed_by: null, claimed_until: null });
+    const stops = [
+      { id: "stop-1", order_id: "o1", shipment_id: "sh1", route_id: "r1", status: "no_entregado", outcome_reason: "no_contesta", note: null, photo_path: null, reported_at: "2026-10-10T20:00:00Z", requested_date: null, dispatch_manifest_id: "box-1" },
+      { id: "stop-2", order_id: "o1", shipment_id: "sh1", route_id: "r2", status: "no_entregado", outcome_reason: "ausente", note: null, photo_path: null, reported_at: "2026-10-12T20:00:00Z", requested_date: null, dispatch_manifest_id: "box-2" },
+    ];
+    const s = seed({ cases: [closed], stops });
+    s.delivery_routes!.push({ id: "r2", route_date: "2026-10-12", rider_id: "rd1" });
+    const { admin } = fakeDb(s);
+    expect((await loadReproQueueFlags(admin, ["o1"], new Map([["o1", "2026-10-12T20:00:00Z"]]))).noLoQuiere.size).toBe(0);
+  });
+
+  it("F2: sin los hechos del pedido, se cae a las salidas después del cierre", async () => {
+    const closed = agreement({ closed_at: "2026-10-12T14:00:00Z", close_reason: "desarmar_cerrar", box_action: "desarmar_cerrar", agreement_call_id: null, agreed_on: null, agreed_courier: null, claimed_by: null, claimed_until: null });
+    const { admin } = fakeDb(seed({ cases: [closed] }), { failRead: "shipments" });
+    expect([...(await loadReproQueueFlags(admin, ["o1"], new Map())).noLoQuiere]).toEqual(["o1"]);
+    expect((await loadReproQueueFlags(admin, ["o1"], new Map([["o1", "2026-10-12T16:00:00Z"]]))).noLoQuiere.size).toBe(0);
   });
 });

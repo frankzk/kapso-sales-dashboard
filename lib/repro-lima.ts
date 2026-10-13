@@ -410,14 +410,37 @@ export function cutoffNotice(cutoff: string | null | undefined, now: Date = new 
 // ---------------------------------------------------------------------------
 
 type EpisodeOutput = RecoveryGuideLike & { id: string; output_number?: number | null };
-type EpisodeStop = { id: string; reported_at: string | null; status?: string | null };
+export type EpisodeStop = {
+  id: string;
+  reported_at: string | null;
+  status?: string | null;
+  /** Día de su ruta (YYYY-MM-DD). */
+  routeDate?: string | null;
+};
+
+function cmpCode(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
 
 /**
- * El fallo que define el episodio: la parada «No entregado» más reciente y la
- * salida de otro courier que no entregó (la de consecutivo más alto que pasa
- * `guideFailedAfterDispatch`). Un reintento del mismo día reusa su parada
- * (`route_id, order_id` único), así que el episodio no cambia; un día nuevo o
- * un courier nuevo que falla dan otro.
+ * El orden de las paradas «No entregado», la más reciente primero: por el día
+ * de su ruta, después por `reported_at` y por id. El día de la ruta va antes
+ * porque `reported_at` se reescribe en cada corrección del reporte
+ * (Liquidaciones 2, «Completar reportes anteriores»): corregir la parada de un
+ * día anterior no la vuelve el fallo más reciente ni abre otro episodio (§9.5).
+ */
+export function compareEpisodeStops(a: EpisodeStop, b: EpisodeStop): number {
+  return cmpCode(b.routeDate ?? "", a.routeDate ?? "") ||
+    cmpCode(b.reported_at ?? "", a.reported_at ?? "") ||
+    cmpCode(b.id, a.id);
+}
+
+/**
+ * El fallo que define el episodio: la parada «No entregado» más reciente
+ * (`compareEpisodeStops`) y la salida de otro courier que no entregó (la de
+ * consecutivo más alto que pasa `guideFailedAfterDispatch`). Un reintento del
+ * mismo día reusa su parada (`route_id, order_id` único), así que el episodio
+ * no cambia; un día nuevo o un courier nuevo que falla dan otro.
  *
  * `at` es el momento del fallo (E1): el `reported_at` de la parada o el
  * retorno de la salida, el más reciente; null si no hay ninguno (la RPC usa
@@ -432,7 +455,7 @@ export function reproEpisode(input: {
   let stop: EpisodeStop | null = null;
   for (const s of input.failedStops) {
     if (s.status != null && s.status !== "no_entregado") continue;
-    if (!stop || (s.reported_at ?? "") > (stop.reported_at ?? "") || ((s.reported_at ?? "") === (stop.reported_at ?? "") && s.id > stop.id)) stop = s;
+    if (!stop || compareEpisodeStops(s, stop) < 0) stop = s;
   }
   let output: EpisodeOutput | null = null;
   for (const o of input.outputs) {
@@ -519,12 +542,15 @@ export function isOwnBox(box: BoxLocation): boolean {
 }
 
 /**
- * ¿Tiene sentido «No esperar la caja»? Cuando la caja está con el motorizado,
- * vuelve con su courier o no consta (un caso reabierto después de «Desarmar y
- * cerrar» la fuerza a `desconocida`: si Almacén ya la desarmó, se arma otra, E29).
+ * ¿Tiene sentido «No esperar la caja»? Solo con la caja en manos del
+ * motorizado o volviendo con su courier (§9.3, fila 2). Una caja que no consta
+ * solo cuando el caso reabre un «Desarmar y cerrar» (`reopened`): si Almacén
+ * ya la desarmó, se arma otra (E29). Sin reabrir, «No consta» se busca primero
+ * («Ya la encontré: programar»).
  */
-export function noEsperarCajaAplica(box: BoxLocation): boolean {
-  return box.kind === "con_motorizado" || box.kind === "volviendo_courier" || box.kind === "desconocida";
+export function noEsperarCajaAplica(box: BoxLocation, reopened = false): boolean {
+  if (box.kind === "con_motorizado" || box.kind === "volviendo_courier") return true;
+  return box.kind === "desconocida" && reopened;
 }
 
 /** La chapa de la caja en la fila. */
@@ -571,10 +597,23 @@ export function reproProgramReason(agentName: string | null | undefined, decided
 
 /**
  * Cuándo se escribe el programa de Grupo GF para el acuerdo:
- * - `ahora`: al decidir (la caja está en oficina, o es caja nueva desde stock,
- *   o Grupo GF crea la salida al tomarlo);
+ * - `ahora`: al decidir (la caja está en oficina, o es caja nueva desde stock
+ *   con una salida que se puede sacar, o Grupo GF crea la salida al tomarlo);
  * - `al_recibir`: al «Recibir en oficina» la caja del motorizado (D4);
  * - `{no}`: no se programa, y por qué.
+ *
+ * «Caja nueva desde stock» solo se programa si alguien puede sacar la salida
+ * con la que sale la caja nueva:
+ * - la caja sigue con el motorizado: «Sacar con salida nueva» en Despacho del
+ *   día (§29.13);
+ * - la salida propia está en oficina, o estaba y el caso reabrió un «Desarmar
+ *   y cerrar» (`desconocida` propia sin bloqueo, E29): Grupo GF la toma con su
+ *   misma salida (`ownRetryDecision`);
+ * - la caja es de otro courier y el pedido es reintento: Grupo GF crea la
+ *   salida al tomarlo.
+ * Lo demás (la propia fuera de la oficina o en otra solicitud, o la de otro
+ * courier sin reintento) es `falta_salida`: la cola de Despacho del día lo
+ * bloquea y nadie crearía la salida prometida.
  */
 export type MaterializationBlock = "otro_courier" | "falta_salida" | "falta_ubicar" | "falta_recibir_devolucion";
 export type MaterializationPlan = "ahora" | "al_recibir" | { no: MaterializationBlock };
@@ -590,7 +629,12 @@ export function materializationPlan(input: {
   retryAdmission: boolean;
 }): MaterializationPlan {
   if (input.courier !== "propio") return { no: "otro_courier" };
-  if (input.boxAction === "caja_nueva_stock") return "ahora";
+  if (input.boxAction === "caja_nueva_stock") {
+    const box = input.box;
+    if (box.kind === "con_motorizado") return "ahora";
+    if (isOwnBox(box)) return box.kind === "en_oficina" || (box.kind === "desconocida" && !box.block) ? "ahora" : { no: "falta_salida" };
+    return input.retryAdmission ? "ahora" : { no: "falta_salida" };
+  }
   // La de Tanders o Swayp todavía vuelve: se programa cuando llegue (E10).
   if (input.box.kind === "volviendo_courier") return { no: "falta_recibir_devolucion" };
   switch (input.boxAction) {
@@ -665,6 +709,26 @@ export function isProblemState(kind: AgreementStateKind): boolean {
 }
 
 /**
+ * ¿Un acuerdo con Grupo GF para hoy, sin programar, ya no alcanza hoy? (E25)
+ * Lo mismo que rechazaría «Programar ahora» o «Ya la encontré»
+ * (`agreementDateProblem`): pasó el corte, o su acción se prepara la noche
+ * anterior. Si espera la caja (`al_recibir`) solo cuenta el corte: recibida
+ * antes, «Recibir en oficina» la programa. Sin el minuto de Lima, no.
+ */
+function missedToday(
+  c: ReproAgreementFacts,
+  plan: MaterializationPlan | null,
+  today: string,
+  nowMinute: number | null | undefined,
+  cutoff: string | null | undefined,
+): boolean {
+  if (nowMinute == null || !sameCourier(c.agreed_courier, "propio")) return false;
+  if (plan === "al_recibir") return nowMinute > sameDayCutoffMinute(cutoff);
+  const boxAction = isBoxAction(c.box_action) ? c.box_action : null;
+  return agreementDateProblem({ day: today, today, nowMinute, cutoff, courier: "propio", boxAction }) != null;
+}
+
+/**
  * El estado del acuerdo frente al programa vigente. El caso nunca se reescribe
  * (D5): lo que hizo Grupo GF se enseña como deriva.
  *
@@ -672,11 +736,14 @@ export function isProblemState(kind: AgreementStateKind): boolean {
  * 2. No materializado:
  *    - con fecha pasada → `acuerdo_vencido` (E8), antes que cualquier otro: un
  *      acuerdo de otro courier o al que le falta algo también vence;
+ *    - con Grupo GF para hoy y ya no alcanza hoy (`missedToday`: pasó el corte,
+ *      o lo rechazaría «Programar ahora») → `acuerdo_vencido` (E25);
  *    - lo que impide programar (`otro_courier`, `falta_*`), según el plan;
  *    - `esperando_caja` (al recibir) o `por_programar`.
- * 3. Materializado sin programa: `deriva_quitado` si Grupo GF lo quitó o lo
- *    reemplazó después; si no hay evento, falló la escritura → `por_programar`
- *    (E9), o `acuerdo_vencido` si su día ya pasó.
+ * 3. Materializado sin programa: con fecha pasada → `acuerdo_vencido`, también
+ *    si Grupo GF lo quitó (§9.5, regla 4: su día pasó); si no, `deriva_quitado`
+ *    si Grupo GF lo quitó o lo reemplazó después; sin evento, falló la
+ *    escritura → `por_programar` (E9), o `acuerdo_vencido` si ya no alcanza hoy.
  * 4. Materializado con programa: `deriva_movido` (otro día), `falta_sacar`
  *    (caja nueva desde stock con la caja todavía con el motorizado),
  *    `programado_vencido` (su día pasó) o `programado`. Lo que diga el plan ya
@@ -692,21 +759,27 @@ export function agreementState(input: {
   today: string;
   /** El último `dispatch_program_cleared` o `dispatch_program_overridden` (E9). */
   programRemovedAt?: string | null;
+  /** Minuto del día en Lima (`limaClock().minute`); sin él no se mira el corte. */
+  nowMinute?: number | null;
+  /** El corte del mismo día del proveedor (`same_day_cutoff`). */
+  cutoff?: string | null;
 }): AgreementState {
   const c = input.c;
   if (!c?.agreed_on) return { kind: "sin_acuerdo" };
   const agreedOn = c.agreed_on.slice(0, 10);
+  const missed = agreedOn === input.today && missedToday(c, input.plan, input.today, input.nowMinute, input.cutoff);
   if (!c.materialized_at) {
-    if (agreedOn < input.today) return { kind: "acuerdo_vencido" };
+    if (agreedOn < input.today || missed) return { kind: "acuerdo_vencido" };
     if (input.plan && typeof input.plan === "object") return { kind: input.plan.no };
     return { kind: input.plan === "al_recibir" ? "esperando_caja" : "por_programar" };
   }
 
   const program = input.program;
   if (!program) {
+    if (agreedOn < input.today) return { kind: "acuerdo_vencido" };
     const removed = input.programRemovedAt && Date.parse(input.programRemovedAt) > Date.parse(c.materialized_at);
     if (removed) return { kind: "deriva_quitado" };
-    return { kind: agreedOn < input.today ? "acuerdo_vencido" : "por_programar" };
+    return { kind: missed ? "acuerdo_vencido" : "por_programar" };
   }
   const gfDay = program.scheduled_for.slice(0, 10);
   if (gfDay !== (c.materialized_on ?? agreedOn).slice(0, 10)) return { kind: "deriva_movido", gfDay, reason: program.reason };
@@ -715,14 +788,21 @@ export function agreementState(input: {
   return { kind: "programado" };
 }
 
-/** La chapa del estado del acuerdo en la fila y en la hoja. */
+/**
+ * La chapa del estado del acuerdo en la fila y en la hoja. Con `today`, un
+ * acuerdo vencido el mismo día dice que ya no alcanza hoy (E25).
+ */
 export function agreementStateLabel(
   state: AgreementState,
   agreement: { agreed_on: string | null; agreed_courier: string | null } | null,
   box?: BoxLocation | null,
+  today?: string | null,
 ): string {
   const day = agreement?.agreed_on ? programDayLabel(agreement.agreed_on.slice(0, 10)) : "el día acordado";
   const courier = reproCourierName(agreement?.agreed_courier);
+  if (state.kind === "acuerdo_vencido" && today && agreement?.agreed_on?.slice(0, 10) === today) {
+    return `El acuerdo era para hoy (${day}) y ya no alcanza: confírmalo de nuevo`;
+  }
   switch (state.kind) {
     case "sin_acuerdo":
       return "Sin acuerdo";
@@ -808,8 +888,10 @@ function callChip(iso: string, now: Date): ReproChip {
  *    episodio → «Cerrados» (espera que Shopify anule la venta).
  * 2. Acuerdo no vencido → «Programados» (con «Toca llamar» si hay llamada).
  * 3. Próxima llamada futura → «Llamar después» («Acuerdo anterior» si quedó uno).
- * 4. Acuerdo vencido (sin materializar y su día pasó, o su programa pasó) →
- *    «Por decidir», vencido.
+ * 4. Acuerdo vencido (sin materializar y su día pasó o ya no alcanza hoy, o su
+ *    programa pasó) → «Por decidir», vencido. La chapa dice cuál: el día
+ *    acordado pasó, ya no alcanza hoy, o Grupo GF lo programó antes y ese día
+ *    pasó sin salir (el día acordado todavía no llega).
  * 5. Programa sin acuerdo vivo: de Grupo GF → «Programados»; de un acuerdo
  *    anterior o del motorizado (#908, D9) → «Por decidir», con su chapa.
  * 6. Lo demás → «Por decidir» (una llamada que ya toca es vencida).
@@ -875,7 +957,13 @@ export function reproList(input: {
   // 4. Acuerdo vencido.
   if (agreementOverdue && live?.agreed_on) {
     if (nextCall) chips.push(callChip(nextCall, input.now));
-    chips.push({ key: "acuerdo_vencido", text: `Acuerdo vencido: era para el ${programDayLabel(live.agreed_on.slice(0, 10))}` });
+    const agreedOn = live.agreed_on.slice(0, 10);
+    const text = agreedOn < today
+      ? `Acuerdo vencido: era para el ${programDayLabel(agreedOn)}`
+      : live.materialized_at && programDay != null && programDay < today
+        ? `Grupo GF lo programó para el ${programDayLabel(programDay)} y no salió; acordado ${programDayLabel(agreedOn)}`
+        : "Acuerdo vencido: era para hoy y ya no alcanza";
+    chips.push({ key: "acuerdo_vencido", text });
     requestedChip();
     return { list: "por_decidir", overdue: true, chips };
   }
@@ -1010,7 +1098,9 @@ export const DISMANTLE_DAYS_MIN = 10;
 /**
  * ¿Se sugiere «Desarmar y cerrar»? Tres «No contesta» o más y diez días o más
  * desde la recepción en oficina. Solo una chapa: la merma no se automatiza
- * (principio 11 del MOM).
+ * (principio 11 del MOM). `receivedAt` es la recepción de la caja del
+ * episodio que está en oficina (`en_oficina.since`): una recepción anterior a
+ * que volviera a salir no cuenta, y sin caja en oficina no hay sugerencia.
  */
 export function dismantleSuggested(input: { receivedAt: string | null; noAnswerCount: number; today: string }): boolean {
   if (input.noAnswerCount < DISMANTLE_NO_ANSWER_MIN) return false;
@@ -1036,14 +1126,21 @@ export type ReproFailure =
       courier: string;
       reportedStatus: string | null;
       swaypState?: number | null;
-      /** Día del fallo (YYYY-MM-DD o ISO). */
+      /** Día del fallo (YYYY-MM-DD o ISO), cuando el courier lo sella (Aliclik al anular). */
       failedOn?: string | null;
+      /**
+       * Día en que salió el intento fallido, cuando es lo único fijo que hay
+       * (Tanders y Swayp: `guideFailedAt` se ancla en la salida). Se dice como
+       * salida, nunca como el día del fallo.
+       */
+      dispatchedOn?: string | null;
     };
 
 /**
  * «No entregado por Roy el sáb 10/10 · Rechazó el pedido · «nota»». Sin motivo
  * se escribe la ausencia (§11.7): la falta de dato no es «no lo rechazó».
- * `rejected`: el cliente lo rechazó en la puerta.
+ * `rejected`: el cliente lo rechazó en la puerta. De otro courier, con solo el
+ * día de la salida: «Salió el lun 12/10 con Swayp · motivo».
  */
 export function failureLine(f: ReproFailure): { text: string; rejected: boolean } {
   if (f.kind === "parada") {
@@ -1055,8 +1152,6 @@ export function failureLine(f: ReproFailure): { text: string; rejected: boolean 
     const note = f.note?.trim() ? ` · «${f.note.trim()}»` : "";
     return { text: `No entregado por ${who}${day} · ${reason}${note}`, rejected: f.outcomeReason === "rechazado" };
   }
-  const failedOn = limaDayOf(f.failedOn ?? null);
-  const day = failedOn ? ` el ${programDayLabel(failedOn)}` : "";
   const motivo = motivoDelCourier(f.reportedStatus).texto;
   const rejected = guideDoorRejection({
     courier: f.courier,
@@ -1064,6 +1159,12 @@ export function failureLine(f: ReproFailure): { text: string; rejected: boolean 
     reported_status: f.reportedStatus,
     swayp_state: f.swaypState ?? null,
   });
+  const dispatchedOn = limaDayOf(f.dispatchedOn ?? null);
+  if (dispatchedOn) {
+    return { text: `Salió el ${programDayLabel(dispatchedOn)} con ${reproCourierName(f.courier)} · ${motivo}`, rejected };
+  }
+  const failedOn = limaDayOf(f.failedOn ?? null);
+  const day = failedOn ? ` el ${programDayLabel(failedOn)}` : "";
   return { text: `No entregado por ${reproCourierName(f.courier)}${day} · ${motivo}`, rejected };
 }
 

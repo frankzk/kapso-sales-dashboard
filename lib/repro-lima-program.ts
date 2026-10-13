@@ -18,7 +18,8 @@
 // - La marca del acuerdo es una escritura condicional sobre
 //   `agreement_call_id` (CAS): cada acuerdo se programa una vez. Si escribir
 //   falla, la marca se deshace. Si el acuerdo cambió mientras se escribía, se
-//   quita SU programa (E22).
+//   quita SU programa (E22), salvo que el acuerdo nuevo, del mismo día, ya
+//   cuente con él.
 // - Un programa del mismo día solo se deja sin tocar si ya es de Repro Lima
 //   (E26): el del motorizado o el de Grupo GF se reescribe con su motivo.
 // - Los ganchos nunca lanzan, no revalidan ni recalculan el Master y no llaman
@@ -43,6 +44,7 @@ import { sameCourier } from "@/lib/shipment-output";
 import { otherLiveCourierOf } from "@/lib/repro-box-action";
 import {
   boxLocation,
+  compareEpisodeStops,
   isOwnBox,
   programOrigin,
   reproEpisode,
@@ -195,7 +197,7 @@ export interface ReproFacts {
   /** Anulado (`orders.cancelled_at`). */
   cancelled: boolean;
   outputs: ReproShipmentRow[];
-  /** Paradas «No entregado», la más reciente primero. */
+  /** Paradas «No entregado», la más reciente primero (`compareEpisodeStops`). */
   failedStops: ReproStopRow[];
   /** La parada del episodio (la más reciente), o null. */
   lastStop: ReproStopRow | null;
@@ -206,7 +208,10 @@ export interface ReproFacts {
   ownLive: ReproShipmentRow | null;
   ownBox: CourierRouteAssignment | null;
   ownInOtherRequest: boolean;
-  /** Cuándo se recibió en oficina por última vez. */
+  /**
+   * Cuándo se recibió en oficina la caja del episodio: la última recepción
+   * desde que salió el intento que falló (`episodeDepartedAt`); null si no.
+   */
   receivedAt: string | null;
   box: BoxLocation;
   /** Reintento de otro courier (`isRetryAdmission`): Grupo GF crea la salida al tomarlo. */
@@ -242,6 +247,23 @@ function newest<T>(rows: readonly T[], at: (row: T) => string | null | undefined
     if (!best || (at(row) ?? "") > (at(best) ?? "")) best = row;
   }
   return best;
+}
+
+/**
+ * Desde cuándo cuenta una recepción para el episodio (ms), o null: la salida
+ * del intento que falló. De la parada, el inicio del día de su ruta en Lima
+ * (su `reported_at` se reescribe en cada corrección); de la guía de otro
+ * courier, su `dispatched_at`. Si hay las dos, la más reciente.
+ */
+function episodeDepartedAt(
+  stop: Pick<ReproStopRow, "routeDate"> | null,
+  output: Pick<ReproShipmentRow, "dispatched_at"> | null,
+): number | null {
+  const stamps = [
+    stop?.routeDate && /^\d{4}-\d{2}-\d{2}$/.test(stop.routeDate.slice(0, 10)) ? Date.parse(`${stop.routeDate.slice(0, 10)}T00:00:00-05:00`) : NaN,
+    output?.dispatched_at ? Date.parse(output.dispatched_at) : NaN,
+  ].filter((t) => Number.isFinite(t));
+  return stamps.length ? Math.max(...stamps) : null;
 }
 
 export interface ReproFactsOptions {
@@ -375,18 +397,32 @@ export async function loadReproFacts(
           riderName: route?.rider_id ? riderName.get(route.rider_id) ?? null : null,
         };
       })
-      .sort((a, b) => (b.reported_at ?? "").localeCompare(a.reported_at ?? "") || b.id.localeCompare(a.id));
+      // El mismo orden que el episodio: el día de la ruta antes que `reported_at`,
+      // que cada corrección del reporte reescribe.
+      .sort(compareEpisodeStops);
     const episode = reproEpisode({ orderId, outputs, failedStops });
     let failedOutput: ReproShipmentRow | null = null;
     for (const output of outputs) {
       if (!guideFailedAfterDispatch(output)) continue;
       if (!failedOutput || (output.output_number ?? 0) >= (failedOutput.output_number ?? 0)) failedOutput = output;
     }
+    // La solicitud vigente de Grupo GF, antes que la caja: la salida propia en
+    // ESA solicitud no está «en otra solicitud». Al recibirla en oficina,
+    // `gf_return_to_office` devuelve la solicitud a `accepted` con la misma
+    // salida; solo otra solicitud (también cancelada, 0138) la bloquea.
+    const request = provider
+      ? newest((requestsByOrder.get(orderId) ?? []).filter((row) => row.provider_id === provider.id), (row) => row.created_at)
+      : null;
     const ownLive = ownByOrder.get(orderId) ?? null;
     const ownBox = ownLive ? ownBoxes.get(ownLive.id) ?? null : null;
-    const ownInOtherRequest = ownLive ? ownInRequest.has(ownLive.id) : false;
+    const ownInOtherRequest = ownLive ? ownInRequest.has(ownLive.id) && request?.shipment_id !== ownLive.id : false;
+    // La recepción de la caja del episodio (decisión 10): no antes de que
+    // saliera. La de un episodio anterior era de otra vuelta de la caja.
+    const episodeSince = episodeDepartedAt(failedStops[0] ?? null, failedOutput);
     const receivedAt = newest(
-      orderEvents.filter((event) => event.kind === "returned_to_office" || event.kind === "return_received"),
+      orderEvents.filter((event) =>
+        (event.kind === "returned_to_office" || event.kind === "return_received") &&
+        (episodeSince == null || Date.parse(event.occurred_at) >= episodeSince)),
       (event) => event.occurred_at,
     )?.occurred_at ?? null;
     const programRemovedAt = newest(
@@ -419,9 +455,6 @@ export async function loadReproFacts(
     // E29: reabierto después de «Desarmar y cerrar» con la caja en oficina:
     // Almacén pudo haberla desarmado. Con el motorizado o volviendo, no.
     if (reopened && box.kind === "en_oficina") box = { kind: "desconocida", ...(isOwnBox(box) ? { own: true } : {}) };
-    const request = provider
-      ? newest((requestsByOrder.get(orderId) ?? []).filter((row) => row.provider_id === provider.id), (row) => row.created_at)
-      : null;
     out.set(orderId, {
       orderId,
       storeId,
@@ -549,7 +582,9 @@ export type MaterializeResult =
  *    desde stock»: sale otra caja);
  * 5. escribe con `writeGfDispatchProgram`, salvo que el programa ya sea de
  *    Repro Lima para ese día (E26);
- * 6. relee el caso: si el acuerdo cambió mientras tanto, quita SU programa (E22).
+ * 6. relee el caso: si el acuerdo cambió mientras tanto, quita SU programa (E22),
+ *    salvo que el acuerdo nuevo ya esté marcado para el mismo día: ese cuenta
+ *    con este programa (lo vio en su paso 5 y no escribió).
  * Si algo falla después de marcar, la marca se deshace: la fila vuelve a
  * ofrecer «Programar ahora». No lanza por la escritura; sí si falla la lectura
  * de los hechos (quien llama la envuelve).
@@ -649,11 +684,23 @@ export async function materializeAgreement(
     // 6. ¿El acuerdo cambió mientras se escribía? (E22)
     const { data: after } = await admin
       .from("lima_repro_cases")
-      .select("id,agreement_call_id,closed_at")
+      .select("id,agreement_call_id,closed_at,materialized_at,materialized_on")
       .eq("id", c.id)
       .maybeSingle();
-    const reread = after as { agreement_call_id: string | null; closed_at: string | null } | null;
+    const reread = after as {
+      agreement_call_id: string | null;
+      closed_at: string | null;
+      materialized_at: string | null;
+      materialized_on: string | null;
+    } | null;
     if (!reread || reread.closed_at || reread.agreement_call_id !== callId) {
+      // El acuerdo nuevo ya se marcó (su marca, no la nuestra: «Confirma» la
+      // borra) para el mismo día: en el paso 5 vio este programa y no escribió
+      // el suyo. Cuenta con él: no se quita.
+      const newMark = reread?.materialized_at && Date.parse(reread.materialized_at) !== Date.parse(markAt);
+      if (reread && !reread.closed_at && newMark && reread.materialized_on?.slice(0, 10) === day) {
+        return { status: "programado", day, wrote: true, warning: written.error };
+      }
       await clearGfDispatchPrograms(
         admin,
         [{ order_id: c.order_id, store_id: c.store_id, scheduled_for: day, reason, set_at: setAt }],
@@ -843,9 +890,12 @@ export function reproCajaNuevaChip(day: string): string {
 /**
  * Lo que la cola de Despacho del día necesita saber de Repro Lima, en una
  * lectura por los pedidos que se le pasan:
- * - `noLoQuiere`: el último caso es «Desarmar y cerrar», no hay otro abierto y
- *   el pedido no volvió a salir después del cierre (`departures`: un fallo
- *   nuevo es otro episodio).
+ * - `noLoQuiere`: el último caso es «Desarmar y cerrar» del episodio vigente
+ *   (E28) y no hay otro abierto. Solo un fallo nuevo abre otro episodio:
+ *   recibir la caja en oficina o corregir el reporte de la parada después del
+ *   cierre no lo esconden. El episodio se lee con los hechos del pedido
+ *   (`loadReproFacts`), solo para esos pedidos; si esa lectura falla, se cae a
+ *   `departures` (no volvió a salir después del cierre).
  * - `cajaNueva`: el último caso acordó «Caja nueva desde stock»: el día que
  *   sale y si el caso sigue abierto. Uno cerrado al salir de la etapa solo
  *   vale para la caja reemplazada que vuelve («En devolución»): el pedido ya
@@ -862,15 +912,17 @@ export async function loadReproQueueFlags(
   try {
     const ids = [...new Set(orderIds.filter(Boolean))];
     if (!ids.length) return { noLoQuiere, cajaNueva };
+    type FlagCase = Pick<ReproCaseRow, "order_id" | "episode_key" | "opened_at" | "closed_at" | "close_reason" | "agreed_on" | "box_action">;
     const { data } = await courierRowsByIds(ids, (chunk) => admin
       .from("lima_repro_cases")
-      .select("order_id,opened_at,closed_at,close_reason,agreed_on,box_action")
+      .select("order_id,episode_key,opened_at,closed_at,close_reason,agreed_on,box_action")
       .in("order_id", chunk));
-    const byOrder = new Map<string, Array<Pick<ReproCaseRow, "order_id" | "opened_at" | "closed_at" | "close_reason" | "agreed_on" | "box_action">>>();
-    for (const row of (data ?? []) as Array<Pick<ReproCaseRow, "order_id" | "opened_at" | "closed_at" | "close_reason" | "agreed_on" | "box_action">>) {
+    const byOrder = new Map<string, FlagCase[]>();
+    for (const row of (data ?? []) as FlagCase[]) {
       if (!row?.order_id) continue;
       byOrder.set(row.order_id, [...(byOrder.get(row.order_id) ?? []), row]);
     }
+    const closed = new Map<string, FlagCase>();
     for (const [orderId, rows] of byOrder) {
       const latest = newest(rows, (row) => row.opened_at);
       if (!latest) continue;
@@ -878,9 +930,23 @@ export async function loadReproQueueFlags(
         cajaNueva.set(orderId, { day: latest.agreed_on.slice(0, 10), open: !latest.closed_at });
         continue;
       }
-      if (latest.closed_at && latest.close_reason === "desarmar_cerrar") {
+      if (latest.closed_at && latest.close_reason === "desarmar_cerrar") closed.set(orderId, latest);
+    }
+    if (closed.size) {
+      let facts: Map<string, ReproFacts> | null = null;
+      try {
+        facts = await loadReproFacts(admin, [...closed.keys()]);
+      } catch (error) {
+        console.error("repro-lima: episodio de la cola", error instanceof Error ? error.message : error);
+      }
+      for (const [orderId, latest] of closed) {
+        const f = facts?.get(orderId);
+        if (f) {
+          if (f.episode.key === latest.episode_key) noLoQuiere.add(orderId);
+          continue;
+        }
         const departed = departures.get(orderId);
-        if (!departed || Date.parse(departed) <= Date.parse(latest.closed_at)) noLoQuiere.add(orderId);
+        if (!departed || Date.parse(departed) <= Date.parse(latest.closed_at!)) noLoQuiere.add(orderId);
       }
     }
   } catch (error) {

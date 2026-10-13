@@ -10,6 +10,7 @@ import {
   boxLocation,
   boxLocationLabel,
   claimView,
+  compareEpisodeStops,
   cutoffNotice,
   dismantleSuggested,
   failureLine,
@@ -23,6 +24,7 @@ import {
   materializationPlan,
   nextCallProblem,
   nextRoundAt,
+  noEsperarCajaAplica,
   normalizeReproChanges,
   porDecidirRank,
   programOrigin,
@@ -121,6 +123,20 @@ describe("reproEpisodeKey", () => {
     expect(reproEpisode({ orderId: "o1", outputs: [], failedStops: [] })).toEqual({ key: "order:o1", at: null });
   });
 
+  it("corregir la parada de un día anterior no la vuelve el fallo más reciente (F0)", () => {
+    // S1 es del lunes y se corrigió el miércoles (Liquidaciones 2 reescribe
+    // `reported_at`); S2 es del martes. Manda el día de la ruta.
+    const s1 = { id: "s1", reported_at: "2026-10-14T23:00:00Z", status: "no_entregado", routeDate: LUNES };
+    const s2 = { id: "s2", reported_at: "2026-10-13T20:00:00Z", status: "no_entregado", routeDate: MARTES };
+    const ep = reproEpisode({ orderId: "o1", outputs: [], failedStops: [s1, s2] });
+    expect(ep.key).toBe("s:s2|o:-");
+    expect(ep.at).toBe("2026-10-13T20:00:00.000Z");
+    expect([s1, s2].sort(compareEpisodeStops).map((s) => s.id)).toEqual(["s2", "s1"]);
+    // El mismo día de ruta (dos rutas el mismo día): manda `reported_at`, y después el id.
+    const s3 = { id: "s3", reported_at: "2026-10-13T21:00:00Z", status: "no_entregado", routeDate: MARTES };
+    expect(reproEpisodeKey({ orderId: "o1", outputs: [], failedStops: [s2, s3] })).toBe("s:s3|o:-");
+  });
+
   it("el momento del episodio es el fallo más reciente (E1)", () => {
     const ep = reproEpisode({
       orderId: "o1",
@@ -181,6 +197,23 @@ describe("boxLocation", () => {
 
   it("sin nada: no consta", () => {
     expect(boxLocation({ ownLive: null, box: null, lastFailed: null, receivedAt: null })).toEqual({ kind: "desconocida" });
+  });
+});
+
+describe("noEsperarCajaAplica (§9.3, fila 2; E29)", () => {
+  it("con el motorizado o volviendo con su courier; en oficina, no", () => {
+    expect(noEsperarCajaAplica({ kind: "con_motorizado", riderName: "Roy", since: "2026-10-10" })).toBe(true);
+    expect(noEsperarCajaAplica({ kind: "volviendo_courier", courier: "tanders" })).toBe(true);
+    expect(noEsperarCajaAplica({ kind: "en_oficina", since: null, courier: "propio" })).toBe(false);
+    expect(noEsperarCajaAplica({ kind: "en_oficina", since: null, courier: "propio" }, true)).toBe(false);
+  });
+
+  it("la caja que no consta solo en un caso reabierto después de «Desarmar y cerrar»", () => {
+    const lost: BoxLocation = { kind: "desconocida", own: true, block: "fuera_de_oficina" };
+    expect(noEsperarCajaAplica(lost)).toBe(false);
+    expect(noEsperarCajaAplica({ kind: "desconocida" })).toBe(false);
+    expect(noEsperarCajaAplica({ kind: "desconocida", own: true }, true)).toBe(true);
+    expect(noEsperarCajaAplica(lost, true)).toBe(true);
   });
 });
 
@@ -336,9 +369,26 @@ describe("materializationPlan", () => {
     expect(plan("tanders", "salida_nueva_rearmar", ownOffice)).toEqual({ no: "otro_courier" });
   });
 
-  it("caja nueva desde stock: ahora, aunque la caja siga con el motorizado", () => {
+  it("caja nueva desde stock: ahora, aunque la caja siga con el motorizado («Sacar con salida nueva»)", () => {
     expect(plan("propio", "caja_nueva_stock", rider)).toBe("ahora");
-    expect(plan("propio", "caja_nueva_stock", tandersBack)).toBe("ahora");
+    expect(plan("propio", "caja_nueva_stock", rider, true)).toBe("ahora");
+  });
+
+  it("caja nueva desde stock: solo si alguien puede sacar la salida (F12)", () => {
+    // La de Tanders que vuelve: Grupo GF crea la salida al tomarlo solo si es reintento.
+    expect(plan("propio", "caja_nueva_stock", tandersBack, true)).toBe("ahora");
+    expect(plan("propio", "caja_nueva_stock", tandersBack, false)).toEqual({ no: "falta_salida" });
+    expect(plan("propio", "caja_nueva_stock", { kind: "desconocida" }, true)).toBe("ahora");
+    expect(plan("propio", "caja_nueva_stock", { kind: "desconocida" }, false)).toEqual({ no: "falta_salida" });
+    // La propia en oficina (recibida o sacada con salida nueva): Grupo GF la toma.
+    expect(plan("propio", "caja_nueva_stock", ownOffice)).toBe("ahora");
+    // E29: estaba en oficina y el caso se reabrió: Grupo GF la toma con su S01.
+    expect(plan("propio", "caja_nueva_stock", { kind: "desconocida", own: true })).toBe("ahora");
+    // La propia fuera de la oficina o en otra solicitud: nadie crea la salida prometida.
+    for (const block of ["fuera_de_oficina", "salida_en_otra_solicitud"] as const) {
+      expect(plan("propio", "caja_nueva_stock", { kind: "desconocida", own: true, block }, true)).toEqual({ no: "falta_salida" });
+    }
+    expect(plan("tanders", "caja_nueva_stock", rider)).toEqual({ no: "otro_courier" });
   });
 
   it("la de Tanders que todavía vuelve: cuando llegue (E10)", () => {
@@ -420,6 +470,61 @@ describe("agreementState", () => {
     expect(agreementState({ c: done(), program: null, box: office, plan: "ahora", today: LUNES })).toEqual({ kind: "por_programar" });
     expect(agreementState({ c: done({ agreed_on: "2026-10-10", materialized_on: "2026-10-10" }), program: null, box: office, plan: "ahora", today: LUNES }))
       .toEqual({ kind: "acuerdo_vencido" });
+  });
+
+  it("materializado y quitado por Grupo GF: cuando su día pasa, vence (F15, §9.5 regla 4)", () => {
+    const removed = "2026-10-12T16:00:00Z";
+    expect(agreementState({ c: done({ agreed_on: "2026-10-10", materialized_on: "2026-10-10", materialized_at: "2026-10-09T15:00:00Z" }), program: null, box: office, plan: "ahora", today: LUNES, programRemovedAt: removed }))
+      .toEqual({ kind: "acuerdo_vencido" });
+    // Mientras su día no pasa, sigue siendo una deriva.
+    expect(agreementState({ c: done({ agreed_on: LUNES, materialized_on: LUNES }), program: null, box: office, plan: "ahora", today: LUNES, programRemovedAt: removed }))
+      .toEqual({ kind: "deriva_quitado" });
+  });
+
+  describe("un acuerdo con Grupo GF para hoy que ya no alcanza (E25, F5/F13)", () => {
+    const hoy = (extra: Partial<ReproAgreementFacts> = {}) => agreed({ agreed_on: LUNES, ...extra });
+    const at = (hh: number, mm: number) => hh * 60 + mm;
+    const state = (c: ReproAgreementFacts, plan: Parameters<typeof agreementState>[0]["plan"], nowMinute: number | null, box: BoxLocation = office) =>
+      agreementState({ c, program: null, box, plan, today: LUNES, nowMinute, cutoff: "12:00:00" });
+
+    it("por programar antes del corte; vencido después (la caja llegó tarde)", () => {
+      expect(state(hoy(), "ahora", at(11, 59))).toEqual({ kind: "por_programar" });
+      expect(state(hoy(), "ahora", at(12, 0))).toEqual({ kind: "por_programar" });
+      expect(state(hoy(), "ahora", at(14, 0))).toEqual({ kind: "acuerdo_vencido" });
+    });
+
+    it("lo que «Programar ahora» rechazaría: una acción de la noche anterior ya no sale hoy", () => {
+      expect(state(hoy({ box_action: "salida_nueva_rearmar" }), "ahora", at(9, 0))).toEqual({ kind: "acuerdo_vencido" });
+      expect(state(hoy({ box_action: "reimprimir_misma_salida" }), { no: "falta_ubicar" }, at(9, 0), { kind: "desconocida" }))
+        .toEqual({ kind: "acuerdo_vencido" });
+      expect(state(hoy({ box_action: "caja_nueva_stock" }), "ahora", at(9, 0))).toEqual({ kind: "por_programar" });
+    });
+
+    it("esperando la caja: solo el corte (recibida antes, «Recibir en oficina» la programa)", () => {
+      expect(state(hoy({ box_action: "reimprimir_misma_salida" }), "al_recibir", at(9, 0), rider)).toEqual({ kind: "esperando_caja" });
+      expect(state(hoy(), "al_recibir", at(12, 1), rider)).toEqual({ kind: "acuerdo_vencido" });
+    });
+
+    it("lo que falta también vence después del corte; otro courier no tiene corte", () => {
+      expect(state(hoy(), { no: "falta_salida" }, at(13, 0))).toEqual({ kind: "acuerdo_vencido" });
+      expect(state(hoy({ agreed_courier: "tanders" }), { no: "otro_courier" }, at(17, 0))).toEqual({ kind: "otro_courier" });
+    });
+
+    it("materializado sin programa ni evento (falló la escritura): vence igual; sin el minuto, no se mira", () => {
+      expect(agreementState({ c: done({ agreed_on: LUNES, materialized_on: LUNES }), program: null, box: office, plan: "ahora", today: LUNES, nowMinute: at(14, 0), cutoff: "12:00" }))
+        .toEqual({ kind: "acuerdo_vencido" });
+      expect(state(hoy(), "ahora", null)).toEqual({ kind: "por_programar" });
+      // Un día que todavía no llega no vence.
+      expect(agreementState({ c: agreed(), program: null, box: office, plan: "ahora", today: LUNES, nowMinute: at(14, 0), cutoff: "12:00" }))
+        .toEqual({ kind: "por_programar" });
+    });
+
+    it("la chapa dice que ya no alcanza hoy", () => {
+      const a = { agreed_on: LUNES, agreed_courier: "propio" };
+      expect(agreementStateLabel({ kind: "acuerdo_vencido" }, a, office, LUNES)).toBe("El acuerdo era para hoy (lun 12/10) y ya no alcanza: confírmalo de nuevo");
+      expect(agreementStateLabel({ kind: "acuerdo_vencido" }, { agreed_on: "2026-10-10", agreed_courier: "propio" }, office, LUNES))
+        .toBe("El acuerdo era para el sáb 10/10 y ya pasó: confírmalo de nuevo");
+    });
   });
 
   it("«Ya la encontré: programar» (E12): materializado, manda el programa y no el plan", () => {
@@ -514,6 +619,15 @@ describe("reproList", () => {
       program: { scheduled_for: "2026-10-10", reason: "x" },
     });
     expect(m).toMatchObject({ list: "por_decidir", overdue: true });
+    // Su día todavía no llega: la chapa no dice que el acuerdo venció (F18).
+    expect(m.chips).toContainEqual({ key: "acuerdo_vencido", text: "Grupo GF lo programó para el sáb 10/10 y no salió; acordado jue 15/10" });
+    expect(m.chips.map((c) => c.text)).not.toContain("Acuerdo vencido: era para el jue 15/10");
+  });
+
+  it("4. un acuerdo para hoy que ya no alcanza: Por decidir, vencido, y lo dice (E25)", () => {
+    const r = list({ open: open({ agreed_on: LUNES, agreed_courier: "propio" }), state: { kind: "acuerdo_vencido" } });
+    expect(r).toMatchObject({ list: "por_decidir", overdue: true });
+    expect(r.chips).toContainEqual({ key: "acuerdo_vencido", text: "Acuerdo vencido: era para hoy y ya no alcanza" });
   });
 
   it("5. programa de Grupo GF sin acuerdo: Programados", () => {
@@ -654,9 +768,15 @@ describe("failureLine (§11.7)", () => {
   it("otro courier: su motivo con `.texto`, nunca «[object Object]» (E20)", () => {
     const line = failureLine({ kind: "courier", courier: "aliclik", reportedStatus: "REFUSED · RETURNED" });
     expect(line).toEqual({ text: "No entregado por Aliclik · lo rechazó en la puerta · devuelto al almacén", rejected: true });
-    const swayp = failureLine({ kind: "courier", courier: "fenix", reportedStatus: null, failedOn: "2026-10-10" });
-    expect(swayp.text).toBe("No entregado por Swayp el sáb 10/10 · sin motivo del courier · no consta si la rechazó en la puerta");
-    expect(swayp.text).not.toContain("[object Object]");
+    const aliclik = failureLine({ kind: "courier", courier: "aliclik", reportedStatus: null, failedOn: "2026-10-10" });
+    expect(aliclik.text).toBe("No entregado por Aliclik el sáb 10/10 · sin motivo del courier · no consta si la rechazó en la puerta");
+    expect(aliclik.text).not.toContain("[object Object]");
+  });
+
+  it("Tanders y Swayp: el día que se conoce es el de la salida, y se dice así (F17)", () => {
+    const swayp = failureLine({ kind: "courier", courier: "fenix", reportedStatus: null, dispatchedOn: "2026-10-12T14:00:00Z" });
+    expect(swayp.text).toBe("Salió el lun 12/10 con Swayp · sin motivo del courier · no consta si la rechazó en la puerta");
+    expect(swayp.text).not.toContain("No entregado por Swayp el");
   });
 });
 

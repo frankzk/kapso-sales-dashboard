@@ -80,7 +80,14 @@ function matches(row: ReproRow, query: string): boolean {
   return digits.length >= 3 && (row.customerPhone ?? "").replace(/\D/g, "").includes(digits);
 }
 
-type OpenSheet = { row: ReproRow; mode: "edit" | "read"; askReopen?: boolean; key: number };
+type OpenSheet = {
+  row: ReproRow;
+  mode: "edit" | "read";
+  askReopen?: boolean;
+  key: number;
+  /** El aviso del pedido anterior, arriba de la hoja siguiente. */
+  previous?: { orderName: string; text: string } | null;
+};
 type Feedback = { kind: "notice" | "error"; text: string; orderId?: string; orderName?: string; mesa?: boolean; extra?: string | null };
 
 export function ReproLimaBoard({ data }: { data: ReproLimaData }) {
@@ -160,23 +167,28 @@ export function ReproLimaBoard({ data }: { data: ReproLimaData }) {
     return after.find((row) => row.orderId !== orderId && row.claim.view !== "otro" && row.list !== "cerrados") ?? null;
   }
 
-  function openRow(row: ReproRow, mode: "edit" | "read", askReopen = false) {
+  function openRow(row: ReproRow, mode: "edit" | "read", askReopen = false, previous: OpenSheet["previous"] = null) {
     setConfirmFound(null);
-    setOpen({ row, mode, askReopen, key: Date.now() });
+    setOpen({ row, mode, askReopen, key: Date.now(), previous });
   }
 
   function onSaved(saved: ReproSaved, advance: boolean) {
-    const next = advance ? nextAfter(saved.orderId) : null;
+    // Lo que pide algo (un error, como «no se pudo programar», o crear la
+    // salida en la Mesa de ruta) no pasa al siguiente: la hoja se cierra y el
+    // aviso queda a la vista en el tablero. Lo demás («Avisa a Almacén…») pasa
+    // al siguiente y va arriba de su hoja, que si no lo taparía.
+    const next = advance && !saved.error && !saved.mesa ? nextAfter(saved.orderId) : null;
+    const text = saved.error ?? saved.notice ?? "Guardado.";
     setFeedback({
       kind: saved.error ? "error" : "notice",
-      text: saved.error ?? saved.notice ?? "Guardado.",
+      text,
       extra: saved.error ? saved.notice : null,
       orderId: saved.orderId,
       orderName: saved.orderName,
       mesa: saved.mesa,
     });
     refresh();
-    if (next) openRow(next, "edit");
+    if (next) openRow(next, "edit", false, { orderName: saved.orderName, text });
     else setOpen(null);
   }
 
@@ -486,6 +498,7 @@ export function ReproLimaBoard({ data }: { data: ReproLimaData }) {
           onClose={() => { setOpen(null); refresh(); }}
           onSaved={onSaved}
           onChanged={refresh}
+          previous={open.previous}
         />
       )}
     </div>
