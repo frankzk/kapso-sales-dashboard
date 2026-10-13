@@ -13,7 +13,7 @@ import { SidePanel } from "@/components/ops-ui";
 import { IconChevronRight } from "@/components/icons";
 
 export interface ModulePanel {
-  title: string;
+  /** El del panel es el de la celda: lo que se tocó es lo que se abre. */
   meta?: ReactNode;
   /** Ancho máximo de la hoja (`max-w-[...]`), según lo que lleva dentro. */
   width?: string;
@@ -142,8 +142,8 @@ export function ModuleBoard({ groups }: { groups: ModuleGroup[] }) {
 
       {open?.panel && (
         <SidePanel
-          label={open.panel.title}
-          title={open.panel.title}
+          label={open.title}
+          title={open.title}
           meta={open.panel.meta}
           width={open.panel.width ?? "max-w-[720px]"}
           onClose={() => setOpenId(null)}

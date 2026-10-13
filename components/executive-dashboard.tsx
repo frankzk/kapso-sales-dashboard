@@ -9,6 +9,7 @@ import type {
 } from "@/lib/types";
 import { defaultRange, previousRange, type DateRange } from "@/lib/access";
 import {
+  ATTRIBUTION_SOURCE_ORDER,
   aggregateRollups,
   businessBreakdown,
   campaignBreakdown,
@@ -40,7 +41,7 @@ import { opsButtonClass } from "@/components/ops-styles";
 import { Change, Figure, FIGURE_FRAME, pctText as pct } from "@/components/figures";
 import { ConsolidadoFilters, ConsolidadoNav, PendingDim, type PeriodLink } from "@/components/consolidado-filters";
 import { ModuleBoard, type ModuleCell, type ModuleGroup } from "@/components/module-board";
-import { BarsGlyph, ColumnsGlyph, DotsGlyph, FunnelGlyph, LineGlyph, StackGlyph, type DotTone } from "@/components/dashboard-viz";
+import { BarsGlyph, ColumnsGlyph, DotsGlyph, LineGlyph, StackGlyph, type DotTone } from "@/components/dashboard-viz";
 import { CHANNEL_SHADE, SOURCE_SERIES, VIZ, trendColor } from "@/components/palette";
 import { DailyBars, DailyLine, SalesAttributionModule, TrendLines } from "@/components/lazy-dashboard-modules";
 import { CampaignTable } from "@/components/campaign-table";
@@ -397,10 +398,16 @@ export function ExecutiveDashboard({
       ? `promedio por día${best && nDays > 1 ? `${SEP}mejor día ${shortDay(best.date)}, ${money(best.revenue, currency)}` : ""}`
       : "Sin ventas en el periodo",
     tone: series.length ? undefined : "muted",
-    glyph: nDays > 1 && series.length ? <ColumnsGlyph values={days.map((d) => d.revenue)} label="Ingresos por día; el último día resaltado" /> : undefined,
+    glyph:
+      nDays > 1 && series.length ? (
+        <ColumnsGlyph
+          values={days.map((d) => d.revenue)}
+          highlight={best ? days.findIndex((d) => d.date === best.date) : undefined}
+          label={`Ingresos por día; resaltado el mejor día${best ? `, ${shortDay(best.date)}` : ""}`}
+        />
+      ) : undefined,
     panel: series.length
       ? {
-          title: "Ventas por día",
           meta: periodMeta,
           width: "max-w-[760px]",
           body: (
@@ -436,7 +443,6 @@ export function ExecutiveDashboard({
     glyph: nDays > 1 && totals.conversationsCount ? <LineGlyph values={days.map((d) => d.conversionRate)} label="Conversión por día" /> : undefined,
     panel: totals.conversationsCount
       ? {
-          title: "Conversión",
           meta: periodMeta,
           width: "max-w-[760px]",
           body: (
@@ -482,7 +488,7 @@ export function ExecutiveDashboard({
             />
           ) : undefined,
           panel: pattern.peak
-            ? { title: "Patrón de horas", meta: `${periodMeta}${SEP}${timezone}`, width: "max-w-[640px]", body: <HourPattern pattern={pattern} /> }
+            ? { meta: `${periodMeta}${SEP}${timezone}`, width: "max-w-[640px]", body: <HourPattern pattern={pattern} /> }
             : null,
         }
       : {
@@ -496,7 +502,6 @@ export function ExecutiveDashboard({
           ) : undefined,
           panel: byStore.length
             ? {
-                title: "Por tienda",
                 meta: rangeLabel(range),
                 width: "max-w-[720px]",
                 body: (
@@ -557,7 +562,6 @@ export function ExecutiveDashboard({
     ) : undefined,
     panel: products.length
       ? {
-          title: "Productos más vendidos",
           meta: periodMeta,
           width: "max-w-[720px]",
           body: (
@@ -604,13 +608,14 @@ export function ExecutiveDashboard({
     sub: topSource ? `de las ventas vienen de ${topSource.label}` : "Sin pedidos en el periodo para atribuir",
     glyph: attribution.total.orders ? (
       <StackGlyph
-        parts={attribution.sources.map((s) => ({ label: s.label, value: s.revenue, color: SOURCE_SERIES[s.key] ?? VIZ.ink300 }))}
+        parts={[...attribution.sources]
+          .sort((a, b) => ATTRIBUTION_SOURCE_ORDER.indexOf(a.key) - ATTRIBUTION_SOURCE_ORDER.indexOf(b.key))
+          .map((s) => ({ label: s.label, value: s.revenue, color: SOURCE_SERIES[s.key] ?? VIZ.ink300 }))}
       />
     ) : undefined,
     panel: attribution.total.orders
       ? {
-          title: "Ventas por fuente y cierre",
-          meta: periodMeta,
+          meta: `Ventas por fuente y canal de cierre${SEP}${periodMeta}`,
           width: "max-w-[880px]",
           body: <SalesAttributionModule attribution={attribution} metaSpend={metaSpend ?? null} currency={currency} timezone={timezone} />,
         }
@@ -631,7 +636,6 @@ export function ExecutiveDashboard({
     ) : undefined,
     panel: channelTotal
       ? {
-          title: "Ventas: bot y asesoras",
           meta: periodMeta,
           width: "max-w-[760px]",
           body: (
@@ -666,7 +670,6 @@ export function ExecutiveDashboard({
     ) : undefined,
     panel: campaignStats.length
       ? {
-          title: "Rendimiento por anuncio (Meta)",
           meta: `${nf.format(campaignStats.length)} anuncios${SEP}${periodMeta}${SEP}gasto de Meta, ventas y entregas de Shopify y logística`,
           width: "max-w-[1320px]",
           body: (
@@ -711,7 +714,6 @@ export function ExecutiveDashboard({
     panel:
       campaignTrend.rows.length > 1
         ? {
-            title: "Tendencia por anuncio (Meta)",
             meta: periodMeta,
             width: "max-w-[880px]",
             body: (
@@ -762,16 +764,17 @@ export function ExecutiveDashboard({
       firstStage?.value && lastStage
         ? `${nf.format(lastStage.value)} ${lastStage.label.toLowerCase()} de ${nf.format(firstStage.value)} ${firstStage.label.toLowerCase()}`
         : "Sin mensajes en el periodo",
-    // El dibujo empieza en las conversaciones: los mensajes son otra unidad
-    // (varios por conversación) y con ellos el resto quedaba en puntos.
+    // Tres etapas con su cifra, desde la conversación: los mensajes son otra
+    // unidad (varios por conversación) y con ellos el resto quedaba en puntos.
     glyph: firstStage?.value ? (
-      <FunnelGlyph
-        values={funnelStages.slice(1).map((s) => s.value)}
-        label={funnelStages.slice(1).map((s) => `${s.label} ${nf.format(s.value)}`).join(", ")}
+      <BarsGlyph
+        rows={funnelStages
+          .filter((s) => s.key === "conversaciones" || s.key === "interesados" || s.key === "pedidos")
+          .map((s) => ({ label: s.label, value: s.value, display: nf.format(s.value) }))}
       />
     ) : undefined,
     panel: firstStage?.value
-      ? { title: "Embudo de conversión conversacional", meta: periodMeta, width: "max-w-[640px]", body: <HorizontalFunnel stages={funnelStages} /> }
+      ? { meta: periodMeta, width: "max-w-[640px]", body: <HorizontalFunnel stages={funnelStages} /> }
       : null,
   };
 
@@ -786,10 +789,14 @@ export function ExecutiveDashboard({
       <DotsGlyph
         items={health.stages
           .filter((s) => s.stepPct != null)
-          .map((s) => ({ label: `${s.label.split(" ")[0]} ${s.stepPct != null ? Math.round(s.stepPct * 100) : 0}\u00a0%`, tone: HEALTH[s.status].tone as DotTone }))}
+          .map((s) => ({
+            label: `${s.label.split(" ")[0]} ${s.stepPct != null ? Math.round(s.stepPct * 100) : 0}\u00a0%`,
+            tone: HEALTH[s.status].tone as DotTone,
+            state: HEALTH[s.status].label,
+          }))}
       />
     ) : undefined,
-    panel: critical ? { title: "Salud del embudo", meta: periodMeta, width: "max-w-[640px]", body: <FunnelHealth stages={health.stages} critical={critical} /> } : null,
+    panel: critical ? { meta: periodMeta, width: "max-w-[640px]", body: <FunnelHealth stages={health.stages} critical={critical} /> } : null,
   };
 
   const topReason = loss.reasons[0];
@@ -803,7 +810,7 @@ export function ExecutiveDashboard({
       <BarsGlyph rows={loss.reasons.slice(0, 3).map((r) => ({ label: r.label, value: r.count, display: sharePct(r.pct) }))} />
     ) : undefined,
     panel: loss.reasons.length
-      ? { title: "¿Por qué no compraron?", meta: periodMeta, width: "max-w-[640px]", body: <LossReasonBars items={loss.reasons} total={loss.total} /> }
+      ? { meta: periodMeta, width: "max-w-[640px]", body: <LossReasonBars items={loss.reasons} total={loss.total} /> }
       : null,
   };
 
@@ -818,7 +825,6 @@ export function ExecutiveDashboard({
     ) : undefined,
     panel: lostRev.items.length
       ? {
-          title: "Impacto económico perdido",
           meta: periodMeta,
           width: "max-w-[640px]",
           body: (
@@ -849,7 +855,6 @@ export function ExecutiveDashboard({
           />
         ),
         panel: {
-          title: "Recuperación de carritos",
           meta: periodMeta,
           width: "max-w-[720px]",
           body: (
@@ -899,7 +904,6 @@ export function ExecutiveDashboard({
     ) : undefined,
     panel: waStats.length
       ? {
-          title: "Por número de WhatsApp",
           meta: periodMeta,
           width: "max-w-[760px]",
           body: (
@@ -959,7 +963,6 @@ export function ExecutiveDashboard({
     glyph: breakdown.total ? <StackGlyph parts={shipping} /> : undefined,
     panel: breakdown.total
       ? {
-          title: "Desglose de negocio",
           meta: periodMeta,
           width: "max-w-[640px]",
           body: (
@@ -1017,7 +1020,6 @@ export function ExecutiveDashboard({
         />
       ) : undefined,
     panel: !(fine.ordersWithConversationId || fine.orphanOrders) ? null : {
-      title: "Integridad de conversión",
       meta: periodMeta,
       width: "max-w-[560px]",
       body: (
@@ -1056,11 +1058,15 @@ export function ExecutiveDashboard({
     tone: !opsRows.length ? "muted" : healthy < opsRows.length ? "warn" : undefined,
     sub: opsRows.length ? `${opsRows.length === 1 ? "tienda sana" : "tiendas sanas"}${SEP}${nf.format(apiErrors)} errores de API en 24 h` : "Sin tiendas para mostrar",
     glyph: opsRows.length ? (
-      <DotsGlyph items={opsRows.map((r) => ({ label: r.store.name, tone: healthTone(r.p?.health?.status).dot }))} />
+      <DotsGlyph
+        items={opsRows.map((r) => {
+          const h = healthTone(r.p?.health?.status);
+          return { label: r.store.name, tone: h.dot, state: r.p ? h.label : "Sin datos" };
+        })}
+      />
     ) : undefined,
     panel: opsRows.length
       ? {
-          title: "Salud operativa",
           meta: "Kapso, últimas 24 h, con la mejor información disponible",
           width: "max-w-[760px]",
           body: (

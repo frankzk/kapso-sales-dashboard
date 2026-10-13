@@ -61,7 +61,7 @@ function ExceptionCell({ alert }: { alert: MomOwnerAlert }) {
       <Link
         href={alert.href}
         className={cn(
-          "group flex min-h-[104px] w-full min-w-0 flex-col gap-2 px-4 py-3 transition-colors",
+          "group flex min-h-[88px] w-full min-w-0 flex-col gap-1.5 px-4 py-3 transition-colors",
           open ? "bg-crit-wash hover:bg-crit-bg" : "bg-white hover:bg-wash",
         )}
       >
@@ -99,8 +99,8 @@ export function MomOwnerSummaryPanel({ summary }: { summary: MomOwnerSummary }) 
         help={
           <>
             {pending
-              ? `${pending} ${pending === 1 ? "excepción espera" : "excepciones esperan"} acción en el Master`
-              : "Ninguna excepción espera acción en el Master"}
+              ? `${pending} ${pending === 1 ? "excepción espera" : "excepciones esperan"} acción`
+              : "Ninguna excepción espera acción"}
             {"\u00a0· "}actualizado {generatedLabel(summary.generatedAt)}
           </>
         }
@@ -132,10 +132,10 @@ export function MomOwnerSummarySkeleton() {
       <Skeleton className="mt-2 h-4 w-72" />
       <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {[0, 1, 2, 3].map((item) => (
-          <Skeleton key={item} className="h-[104px]" />
+          <Skeleton key={item} className="h-[88px]" />
         ))}
       </div>
-      <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-5">
         {[0, 1, 2, 3, 4].map((item) => (
           <Skeleton key={item} className="h-24" />
         ))}

@@ -9,8 +9,9 @@ import { cn } from "@/components/ui";
 import { VIZ } from "@/components/palette";
 
 /**
- * Una columna por día (o por hora); la resaltada —por defecto la última, el día
- * más reciente— en el color de la serie y el resto en tinta clara.
+ * Una columna por día (o por hora); la resaltada —por defecto la última— en el
+ * color de la serie y el resto en tinta clara. Las columnas se reparten el ancho
+ * con 24 px como mucho cada una: con pocos días no se ensanchan, se separan.
  */
 export function ColumnsGlyph({
   values,
@@ -26,27 +27,20 @@ export function ColumnsGlyph({
   if (!values.length) return null;
   const mark = highlight ?? values.length - 1;
   const max = Math.max(1, ...values);
-  const W = 100;
-  const H = 36;
-  const gap = values.length > 40 ? 0.6 : values.length > 20 ? 1 : 2;
-  const bw = Math.max(0.8, (W - gap * (values.length - 1)) / values.length);
+  const gap = values.length > 45 ? "gap-px" : values.length > 20 ? "gap-px" : "gap-0.5";
   return (
-    <svg role="img" aria-label={label} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className={cn("block h-9 w-full", className)}>
-      {values.map((v, i) => {
-        const h = v > 0 ? Math.max(1.5, (v / max) * H) : 0.75;
-        return (
-          <rect
-            key={i}
-            x={i * (bw + gap)}
-            y={H - h}
-            width={bw}
-            height={h}
-            rx={Math.min(1, bw / 3)}
-            fill={v > 0 ? (i === mark ? VIZ.brand : VIZ.ink300) : VIZ.line}
-          />
-        );
-      })}
-    </svg>
+    <span role="img" aria-label={label} className={cn("flex h-9 w-full items-end justify-between", gap, className)}>
+      {values.map((v, i) => (
+        <span
+          key={i}
+          className="block min-w-px max-w-6 flex-1 rounded-t-[2px]"
+          style={{
+            height: v > 0 ? `${Math.max(4, (v / max) * 100)}%` : "1px",
+            background: v > 0 ? (i === mark ? VIZ.brand : VIZ.ink300) : VIZ.line,
+          }}
+        />
+      ))}
+    </span>
   );
 }
 
@@ -94,7 +88,7 @@ export function StackGlyph({ parts, legend = true, className }: { parts: StackPa
       </span>
       {legend && (
         <span aria-hidden className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs leading-4 text-ink-600">
-          {shown.slice(0, 4).map((p) => (
+          {shown.map((p) => (
             <span key={p.label} className="inline-flex min-w-0 items-center gap-1.5">
               <span className="size-2 shrink-0 rounded-[2px]" style={{ background: p.color }} />
               <span className="truncate">{p.label}</span>
@@ -134,23 +128,6 @@ export function BarsGlyph({ rows, max: forcedMax, className }: { rows: BarRow[];
   );
 }
 
-/** El embudo de bolsillo: una barra por etapa, de la más ancha a la más angosta. */
-export function FunnelGlyph({ values, label, className }: { values: number[]; label: string; className?: string }) {
-  if (!values.length) return null;
-  const top = Math.max(1, values[0] ?? 1);
-  return (
-    <span role="img" aria-label={label} className={cn("flex flex-col gap-1", className)}>
-      {values.map((v, i) => (
-        <span
-          key={i}
-          className={cn("block h-1 rounded-full", i === values.length - 1 ? "bg-brand-500" : "bg-ink-300")}
-          style={{ width: `${Math.max(2, (v / top) * 100)}%` }}
-        />
-      ))}
-    </span>
-  );
-}
-
 export type DotTone = "ok" | "warn" | "crit" | "none";
 
 const DOT: Record<DotTone, string> = {
@@ -160,15 +137,26 @@ const DOT: Record<DotTone, string> = {
   none: "bg-ink-300",
 };
 
-/** Una fila de estados con su punto y su nombre (nunca el color solo). */
-export function DotsGlyph({ items, className }: { items: { label: string; tone: DotTone }[]; className?: string }) {
+const STATE_TEXT: Record<DotTone, string> = {
+  ok: "text-ok-fg",
+  warn: "text-warn-fg",
+  crit: "text-crit-fg",
+  none: "text-ink-500",
+};
+
+/**
+ * Una fila de estados: el punto, el nombre y la palabra del estado en su tono
+ * («Aurela · Degradada»). El color nunca va solo: la palabra es lo que se lee.
+ */
+export function DotsGlyph({ items, className }: { items: { label: string; tone: DotTone; state: string }[]; className?: string }) {
   if (!items.length) return null;
   return (
-    <span className={cn("flex flex-wrap gap-x-3 gap-y-1 text-xs leading-4 text-ink-600", className)}>
+    <span className={cn("flex flex-col gap-1 text-xs leading-4 text-ink-600", className)}>
       {items.map((it) => (
-        <span key={it.label} className="inline-flex min-w-0 items-center gap-1.5">
+        <span key={it.label} className="flex min-w-0 items-center gap-1.5">
           <span aria-hidden className={cn("size-2 shrink-0 rounded-full", DOT[it.tone])} />
           <span className="truncate">{it.label}</span>
+          <span className={cn("shrink-0 font-medium", STATE_TEXT[it.tone])}>{it.state}</span>
         </span>
       ))}
     </span>
