@@ -12105,7 +12105,8 @@ redactado:
   papel. Si antes de confirmar le preguntan «¿de parte de quién?», dice solo
   su nombre y el de la tienda: el producto y el chat, recién con el sí.
 - **Va directo a ofrecer** (cambio del owner, 13-10-2026, tras la primera
-  prueba por teléfono): dice el precio y las promociones de la oferta, pregunta
+  prueba por teléfono): dice el precio y las promociones de la oferta en dos
+  frases cortas, sin volver a nombrar el producto (owner, 13-10-2026), pregunta
   si tiene alguna duda y pregunta si lleva una unidad o una promoción. Las
   dudas las responde solo con la oferta: lo que la tienda dijo en el chat
   (descuentos de asesora, adelantos, días de entrega) no es oferta, y lo que no
