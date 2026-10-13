@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { hasOrgPermission } from "@/lib/permissions-access";
 import { revalidatePath } from "next/cache";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { encryptOrNull } from "@/lib/crypto";
@@ -288,15 +289,8 @@ export async function createStore(
   const user = await requireUser();
   const orgId = String(formData.get("org_id") ?? "").trim();
 
-  // Authorize: must be owner/admin of the target org.
-  const sb = await createServerSupabase();
-  const { data: membership } = await sb
-    .from("memberships")
-    .select("role")
-    .eq("org_id", orgId)
-    .eq("user_id", user.id)
-    .maybeSingle();
-  if (!membership || !["owner", "admin"].includes(membership.role)) {
+  // «Administrar tiendas» en esa organización (MOM §16): owner/admin, o Administración.
+  if (!(await hasOrgPermission(orgId, "stores.manage"))) {
     return { error: "No tienes permiso para crear tiendas en esta organización." };
   }
 

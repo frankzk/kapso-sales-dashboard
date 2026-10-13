@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { randomBytes } from "node:crypto";
+import { hasOrgPermission } from "@/lib/permissions-access";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
 import { buildAuthorizeUrl, isValidShopDomain, SHOPIFY_APP_SCOPES } from "@/lib/shopify";
@@ -35,13 +36,8 @@ export async function GET(req: NextRequest) {
     .maybeSingle();
   if (!store) return new NextResponse("tienda no encontrada", { status: 404 });
 
-  const { data: m } = await sb
-    .from("memberships")
-    .select("role")
-    .eq("org_id", store.org_id)
-    .eq("user_id", user.id)
-    .maybeSingle();
-  if (!m || (m.role !== "owner" && m.role !== "admin")) {
+  // «Administrar tiendas» (MOM §16): owner/admin, o el rol Administración.
+  if (!(await hasOrgPermission(store.org_id, "stores.manage"))) {
     return new NextResponse("sin permiso", { status: 403 });
   }
 

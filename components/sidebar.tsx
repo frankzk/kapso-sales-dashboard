@@ -37,10 +37,28 @@ interface NavItem {
   icon: Icon;
 }
 
-function navItems(
+/**
+ * Qué entradas de administración ve la persona, por permiso (MOM §16,
+ * 12-10-2026). Owner y admin las tienen todas, así que para ellos el menú es el
+ * de siempre; quien entra al panel completo por un rol (Supervisión,
+ * Administración) ve solo las suyas.
+ */
+export interface NavAccess {
+  reports: boolean;
+  catalog: boolean;
+  mapAds: boolean;
+  stores: boolean;
+  costs: boolean;
+  team: boolean;
+}
+
+const FULL_ACCESS: NavAccess = { reports: true, catalog: true, mapAds: true, stores: true, costs: true, team: true };
+
+export function navItems(
   isVendedoraOnly: boolean,
   canValidatePayments: boolean,
   canManageLogistics: boolean,
+  access: NavAccess = FULL_ACCESS,
 ): NavItem[] {
   if (isVendedoraOnly) {
     const items: NavItem[] = [
@@ -65,7 +83,7 @@ function navItems(
     return items;
   }
   const items: NavItem[] = [
-    { href: "/dashboard", label: "Consolidado", icon: IconGrid },
+    ...(access.reports ? [{ href: "/dashboard", label: "Consolidado", icon: IconGrid }] : []),
     { href: "/dashboard/leads", label: "Leads", icon: IconChat },
     { href: "/dashboard/pedidos", label: "Master de Pedidos", icon: IconClipboard },
     { href: "/dashboard/envios", label: "Repro Provincia", icon: IconTruck },
@@ -74,18 +92,18 @@ function navItems(
     { href: "/dashboard/envios/recuperacion", label: "Recuperar devueltos", icon: IconChat },
     // Dato maestro de la integración con Aliclik: se configura una vez por
     // tienda, no pedido a pedido. Sin el mapeo SKU→EAN no se crea ninguna guía.
-    { href: "/dashboard/envios/aliclik", label: "Catálogo de productos", icon: IconPlug },
+    ...(access.catalog ? [{ href: "/dashboard/envios/aliclik", label: "Catálogo de productos", icon: IconPlug }] : []),
     // Dato maestro de la cola de leads, del mismo tipo que el catálogo Aliclik:
     // se declara una vez por anuncio, no lead a lead. Sin él, los leads que
     // llegan por anuncio no tienen producto y no se pueden agrupar para llamar.
-    { href: "/dashboard/leads/anuncios", label: "Producto por anuncio", icon: IconPlug },
-    { href: "/dashboard/productividad", label: "Productividad", icon: IconHeadset },
-    { href: "/dashboard/stores", label: "Tiendas", icon: IconStore },
+    ...(access.mapAds ? [{ href: "/dashboard/leads/anuncios", label: "Producto por anuncio", icon: IconPlug }] : []),
+    { href: "/dashboard/productividad", label: access.reports ? "Productividad" : "Mi productividad", icon: IconHeadset },
+    ...(access.stores ? [{ href: "/dashboard/stores", label: "Tiendas", icon: IconStore }] : []),
     // Liquidaciones (/dashboard/liquidaciones) y Liquidaciones 2
     // (/dashboard/liquidaciones-2, hojas por dominio, 0176, MOM §30) fuera del
     // menú desde el 22-09-2026 a pedido de operación. Las páginas siguen
     // funcionando en su URL; para volver a mostrarlas, repón estas dos líneas.
-    { href: "/dashboard/costos", label: "Costos", icon: IconMoney },
+    ...(access.costs ? [{ href: "/dashboard/costos", label: "Costos", icon: IconMoney }] : []),
     ...(canManageLogistics
       ? [
         { href: "/dashboard/courier", label: "Grupo GF Courier", icon: IconTruck },
@@ -94,11 +112,13 @@ function navItems(
         { href: "/dashboard/olva", label: "Cotejar Olva", icon: IconTruck },
       ]
       : []),
-    { href: "/dashboard/team", label: "Equipo", icon: IconUsers },
-    { href: "/dashboard/stores/new", label: "Conectar tienda", icon: IconPlug },
+    ...(access.team ? [{ href: "/dashboard/team", label: "Equipo", icon: IconUsers }] : []),
+    ...(access.stores ? [{ href: "/dashboard/stores/new", label: "Conectar tienda", icon: IconPlug }] : []),
   ];
   if (canValidatePayments) {
-    items.splice(3, 0, { href: "/dashboard/pagos", label: "Validar pagos", icon: IconMoney });
+    // Detrás de «Master de Pedidos», esté o no «Consolidado» delante.
+    const master = items.findIndex((it) => it.href === "/dashboard/pedidos");
+    items.splice(master + 1, 0, { href: "/dashboard/pagos", label: "Validar pagos", icon: IconMoney });
   }
   return items;
 }
@@ -141,6 +161,7 @@ export function Sidebar({
   roleLabel,
   canValidatePayments,
   canManageLogistics,
+  navAccess,
   badges,
   pendingHref,
   onNavigate,
@@ -151,6 +172,7 @@ export function Sidebar({
   roleLabel: string;
   canValidatePayments: boolean;
   canManageLogistics: boolean;
+  navAccess?: NavAccess;
   /** Pendientes por entrada del menú (href → cuántos), p. ej. «Cotejar Olva». */
   badges?: Record<string, number>;
   pendingHref?: string | null;
@@ -162,7 +184,7 @@ export function Sidebar({
   const [mobileOpen, setMobileOpen] = useState(false);
   const menuButton = useRef<HTMLButtonElement>(null);
   useEffect(() => { setMobileOpen(false); }, [pathname]);
-  const items = navItems(isVendedoraOnly, canValidatePayments, canManageLogistics);
+  const items = navItems(isVendedoraOnly, canValidatePayments, canManageLogistics, navAccess);
   const pendingPath = pendingHref?.split("?", 1)[0] ?? null;
   const displayPath = pendingPath ?? pathname;
 

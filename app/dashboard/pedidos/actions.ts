@@ -15,7 +15,7 @@ import { loadAliclikDuplicateHold } from "@/lib/aliclik-duplicate-access";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
-import { getMasterPermissions } from "@/lib/permissions-access";
+import { getMasterPermissions, hasOrgPermission } from "@/lib/permissions-access";
 import { getCurrentUser } from "@/lib/access";
 import { applyConfirmationCycleToStore, recomputeOrderMasterSafe } from "@/lib/order-master";
 import {
@@ -283,15 +283,9 @@ export async function setStoreConfirmationCycle(
     .maybeSingle();
   if (!store) return { error: "Sin acceso a esta tienda." };
 
-  const { data: membership } = await sb
-    .from("memberships")
-    .select("role")
-    .eq("org_id", (store as { org_id: string }).org_id)
-    .eq("user_id", user.id)
-    .maybeSingle();
-  const role = (membership as { role?: string } | null)?.role;
-  if (role !== "owner" && role !== "admin") {
-    return { error: "Solo un owner o admin de la tienda puede cambiar el ciclo." };
+  // «Administrar tiendas» (MOM §16): owner/admin, o el rol Administración.
+  if (!(await hasOrgPermission((store as { org_id: string }).org_id, "stores.manage"))) {
+    return { error: "Tu rol no permite cambiar el ciclo de la tienda." };
   }
 
   const admin = createAdminSupabase();

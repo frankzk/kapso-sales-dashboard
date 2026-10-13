@@ -1,6 +1,7 @@
 "use server";
 
 import { randomBytes } from "node:crypto";
+import { hasOrgPermission } from "@/lib/permissions-access";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -70,13 +71,8 @@ async function requireStoreAdmin(
     data: { user },
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
-  const { data: m } = await sb
-    .from("memberships")
-    .select("role")
-    .eq("org_id", store.org_id)
-    .eq("user_id", user.id)
-    .maybeSingle();
-  if (!m || (m.role !== "owner" && m.role !== "admin")) return null;
+  // «Administrar tiendas» (MOM §16): owner/admin, o el rol Administración.
+  if (!(await hasOrgPermission(store.org_id, "stores.manage"))) return null;
   return { admin, orgId: store.org_id };
 }
 

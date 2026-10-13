@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 import { getAccessibleStores, getCurrentUser, getUserRoleSummary } from "@/lib/access";
+import { getMasterPermissions } from "@/lib/permissions-access";
 import {
   getProductivityBoard,
   getSalesTotals,
@@ -142,7 +143,8 @@ async function ProductividadContent({
     today: win.today,
     byUser: Object.fromEntries(weekIds.map((id) => [id, statusFor(id)])),
     extra: extraIds.map((id) => ({ userId: id, email: extraEmails.get(id) ?? id })),
-    canEdit: role.roles.some((r) => r === "owner" || r === "admin"),
+    // Metas y horarios se editan en Equipo: quien gestiona el equipo (MOM §16).
+    canEdit: (await getMasterPermissions()).can("team.manage"),
   };
   // Más de un día: la franja va por día (o por semana), cada día juzgado contra
   // su parte de la meta y su horario, como la semana. Solo las filas que se ven.

@@ -12,13 +12,16 @@ export const DUPLICATE_READ_ERROR = "No se pudo verificar si hay otro envío del
 async function duplicatePermissions(sb: Awaited<ReturnType<typeof createServerSupabase>>, orgId: string) {
   const { data: { user }, error } = await sb.auth.getUser();
   if (error || !user) throw new Error(DUPLICATE_READ_ERROR);
-  const [membership, grants] = await Promise.all([
+  const [membership, grants, functions] = await Promise.all([
     sb.from("memberships").select("role").eq("org_id", orgId).eq("user_id", user.id).maybeSingle(),
     sb.from("user_permissions").select("permission,granted").eq("org_id", orgId).eq("user_id", user.id),
+    sb.from("membership_roles").select("role").eq("org_id", orgId).eq("user_id", user.id),
   ]);
   // A failed grants read must not erase an explicit revocation.
   if (membership.error || grants.error || !grants.data) throw new Error(DUPLICATE_READ_ERROR);
-  return permissionsFor(membership.data ? [membership.data.role] : [], grants.data);
+  // Los roles acumulables (0244): sin la tabla todavía, ninguno.
+  const functionalRoles = functions.error ? [] : ((functions.data ?? []) as { role: string }[]).map((row) => row.role);
+  return permissionsFor(membership.data ? [membership.data.role] : [], grants.data, functionalRoles);
 }
 
 /** RLS throughout. Never limit customer history to the 50 rows shown in the brief. */

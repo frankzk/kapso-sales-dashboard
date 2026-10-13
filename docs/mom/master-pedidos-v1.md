@@ -6716,6 +6716,46 @@ registra en cada evento.
   admin se había dado «Corregir pagos», «Administrar Grupo GF» y «Reportar
   entregas de rutas», y dos admins habían dado «Validar pagos» a otras dos
   personas. Lo ya concedido se mantiene; revisarlo es decisión del owner.
+- **Roles que se acumulan (12-10-2026, migración 0250).** Encima del acceso de
+  cada persona (dueño, admin, vendedora, solo lectura, motorizado), el dueño le
+  asigna en **Equipo** uno o varios roles por función, y sus permisos se suman
+  (`FUNCTIONAL_ROLES`, lib/permissions.ts):
+
+  | Rol | Qué trae |
+  | --- | --- |
+  | Asesora | Gestionar pedidos, registrar comprobantes, ver la clave con cobro completo, crear guías (Aliclik, Tanders, Shalom) y pedidos, novedades de Swayp, recuperar devoluciones, recibir devoluciones |
+  | Almacén | Dejar paquetes listos, recibir devoluciones, reingresar al inventario |
+  | Despacho y Grupo GF | Despacho del día y cotejo, entregar la caja, armar rutas, reportar por el motorizado, cargar reportes, stock de couriers, crear guías, recibir devoluciones |
+  | Liquidaciones | Cargar y cerrar liquidaciones, trabajar las hojas, observar liquidaciones e indemnizaciones |
+  | Cobranza | Registrar comprobantes, la clave de recojo, revisar cobros rechazados |
+  | Supervisión | Cambiar estados cerrados, cerrar y reabrir expedientes, anular guías de Aliclik, recibir devoluciones e inventario, ver reportes |
+  | Administración | Gestionar el equipo, administrar tiendas, costos, stock, catálogo de Aliclik, producto por anuncio, configurar hojas, motorizados, ver reportes |
+
+  Reglas:
+  - Quien tiene acceso «vendedora» y algún rol recibe **solo** lo de sus roles;
+    el paquete «vendedora» es el de quien aún no tiene roles. Owner y admin ya
+    lo tienen todo: un rol no les suma nada.
+  - Ningún rol trae los permisos de dinero o datos que da el dueño uno por uno
+    (validar y corregir pagos, alerta de comprobante repetido, Administrar
+    Grupo GF, exportar datos), ni confirmar reembolsos. Lo fija una prueba.
+  - Una revocación puntual sigue ganando sobre cualquier rol.
+  - Solo el dueño asigna o quita roles. Equipo muestra, plegado bajo cada
+    persona, la lista de lo que puede hacer hoy.
+  - Lo que el código decidía con «¿es owner o admin?» ahora pide un permiso:
+    «Gestionar el equipo» (Equipo), «Administrar tiendas» (tiendas, ajustes,
+    ciclo de confirmación, cobertura de Aliclik por distrito, despacho
+    automático de Swayp, emparejamiento masivo), «Stock de couriers» (Swayp y
+    Fénix), «Costos» y «Ver reportes» (Consolidado, panel de tienda,
+    productividad de todo el equipo, repartir leads). Owner y admin los tienen;
+    el menú muestra a cada quien las entradas de sus permisos.
+  - `rider_pay_allowed` (pago de motorizados, en la base) reconoce los roles con
+    la misma regla: armar rutas ← Despacho, cerrar liquidaciones ←
+    Liquidaciones, costos ← Administración.
+
+  Mientras nadie tenga roles, todos ven y pueden lo mismo que antes. Antes de
+  bajar a alguien de admin a vendedora hay que darle acceso explícito a sus
+  tiendas (`user_store_access`): owner y admin ven todas las tiendas de la
+  organización sin esa lista.
 
 ### 16.1 Bandeja de validación de pagos
 

@@ -11,8 +11,8 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
-import { getAdminOrgs, getCurrentUser } from "@/lib/access";
-import { getMasterPermissions } from "@/lib/permissions-access";
+import { getCurrentUser } from "@/lib/access";
+import { getMasterPermissions, hasOrgPermission } from "@/lib/permissions-access";
 import { COST_CONCEPTS, type CostConcept } from "@/lib/costs";
 import { refreshOrderCoverage } from "@/lib/order-coverage";
 
@@ -32,11 +32,8 @@ async function requireCostAdmin(orgId: string): Promise<{ userId: string } | { e
   if (!perms.can("costs.manage")) {
     return { error: "Solo un administrador puede gestionar los costos." };
   }
-  // getAdminOrgs devuelve TODAS las membresías, no solo las de administrador:
-  // el rol se comprueba aquí, como en app/dashboard/envios/actions.ts.
-  const orgs = await getAdminOrgs();
-  const membership = orgs.find((m) => m.org_id === orgId);
-  if (!membership || (membership.role !== "owner" && membership.role !== "admin")) {
+  // El permiso EN esta organización (MOM §16), no solo en alguna.
+  if (!(await hasOrgPermission(orgId, "costs.manage"))) {
     return { error: "Sin acceso a esta organización." };
   }
   return { userId: user.id };
@@ -327,9 +324,7 @@ export interface ShopifyProduct {
  * administrador de esa organización antes de invocar la función.
  */
 export async function loadShopifyProducts(orgId: string): Promise<ShopifyProduct[]> {
-  const orgs = await getAdminOrgs();
-  const membership = orgs.find((m) => m.org_id === orgId);
-  if (!membership || (membership.role !== "owner" && membership.role !== "admin")) return [];
+  if (!(await hasOrgPermission(orgId, "costs.manage"))) return [];
 
   const admin = createAdminSupabase();
   const { data, error } = await admin.rpc("org_shopify_products", { p_org_id: orgId });

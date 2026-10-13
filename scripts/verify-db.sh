@@ -107,6 +107,8 @@ echo "▶ cobertura por coordenada"
 $PSQL -f "$ROOT/scripts/sql/coverage_smoke.sql" >/dev/null
 echo "▶ order_master_stale (0123, 0240, 0241): el desfase se ve aunque sea ANTIGUO o RECIÉN recalculado, y solo lo pide el servidor"
 $PSQL -f "$ROOT/scripts/sql/order_master_stale_smoke.sql"
+echo "▶ membership_roles (0250): los roles se suman también en la base y se van con la membresía"
+$PSQL -f "$ROOT/scripts/sql/membership_roles_smoke.sql"
 # Qué escritura cuenta como cambio (0204): un sello de lectura de la API o un
 # recálculo sin cambios no pueden mover `updated_at`, o vuelve la cascada de
 # recálculos y recargas del Master. Y la búsqueda con índice no ve más que la RLS.
