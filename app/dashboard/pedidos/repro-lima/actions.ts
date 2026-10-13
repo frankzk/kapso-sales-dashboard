@@ -585,11 +585,16 @@ async function afterCall(admin: Admin, input: {
         href: orderDrawerHref(f.orderId, "operar", { pathname: REPRO_LIMA_PATH }),
         programChanged: cleared,
       };
-    case "falta_salida":
+    case "falta_salida": {
+      // Caja nueva desde stock sin quien saque la salida (caja de otro courier
+      // sin reintento, o la propia que no consta con bloqueo): no es «la caja
+      // en oficina».
+      const why = boxAction === "caja_nueva_stock" ? "para una caja nueva desde stock" : "con la caja en oficina";
       return {
-        notice: `Acuerdo guardado. Falta la salida nueva: Kapta todavía no la crea con la caja en oficina. Anótalo en la ficha y avisa a Despacho GF.${tail}`,
+        notice: `Acuerdo guardado. Falta la salida nueva: Kapta todavía no la crea ${why}. Anótalo en la ficha y avisa a Despacho GF.${tail}`,
         programChanged: cleared,
       };
+    }
     case "falta_ubicar":
       return {
         notice: `Acuerdo guardado. No consta dónde está la caja: búscala en oficina antes de programar (§9.5).${tail}`,

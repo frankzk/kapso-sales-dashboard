@@ -723,6 +723,10 @@ function missedToday(
   cutoff: string | null | undefined,
 ): boolean {
   if (nowMinute == null || !sameCourier(c.agreed_courier, "propio")) return false;
+  // Solo vence lo que Kapta programaría hoy: «Programar ahora» (`ahora`) o «Ya
+  // la encontré» (`falta_ubicar`). A un acuerdo al que le falta la salida
+  // nueva ningún botón lo programa: hecho la noche anterior, sigue en pie.
+  if (plan && typeof plan === "object" && plan.no !== "falta_ubicar") return false;
   if (plan === "al_recibir") return nowMinute > sameDayCutoffMinute(cutoff);
   const boxAction = isBoxAction(c.box_action) ? c.box_action : null;
   return agreementDateProblem({ day: today, today, nowMinute, cutoff, courier: "propio", boxAction }) != null;
@@ -737,7 +741,8 @@ function missedToday(
  *    - con fecha pasada → `acuerdo_vencido` (E8), antes que cualquier otro: un
  *      acuerdo de otro courier o al que le falta algo también vence;
  *    - con Grupo GF para hoy y ya no alcanza hoy (`missedToday`: pasó el corte,
- *      o lo rechazaría «Programar ahora») → `acuerdo_vencido` (E25);
+ *      o lo rechazaría «Programar ahora»; solo si un botón lo programaría:
+ *      `ahora`, `al_recibir` o `falta_ubicar`) → `acuerdo_vencido` (E25);
  *    - lo que impide programar (`otro_courier`, `falta_*`), según el plan;
  *    - `esperando_caja` (al recibir) o `por_programar`.
  * 3. Materializado sin programa: con fecha pasada → `acuerdo_vencido`, también

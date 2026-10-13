@@ -505,9 +505,16 @@ describe("agreementState", () => {
       expect(state(hoy(), "al_recibir", at(12, 1), rider)).toEqual({ kind: "acuerdo_vencido" });
     });
 
-    it("lo que falta también vence después del corte; otro courier no tiene corte", () => {
-      expect(state(hoy(), { no: "falta_salida" }, at(13, 0))).toEqual({ kind: "acuerdo_vencido" });
+    it("lo que ningún botón programa no vence en su día: falta la salida nueva; otro courier no tiene corte", () => {
+      expect(state(hoy(), { no: "falta_salida" }, at(13, 0))).toEqual({ kind: "falta_salida" });
       expect(state(hoy({ agreed_courier: "tanders" }), { no: "otro_courier" }, at(17, 0))).toEqual({ kind: "otro_courier" });
+    });
+
+    it("un rearmado acordado ayer para hoy sigue con «Falta la salida nueva» todo el día (no vence a las 00:01)", () => {
+      const rearmar = hoy({ box_action: "desarmar_rearmar" });
+      expect(state(rearmar, { no: "falta_salida" }, at(0, 1))).toEqual({ kind: "falta_salida" });
+      expect(state(rearmar, { no: "falta_salida" }, at(13, 0))).toEqual({ kind: "falta_salida" });
+      expect(state(hoy({ box_action: "salida_nueva_rearmar" }), { no: "falta_salida" }, at(0, 1))).toEqual({ kind: "falta_salida" });
     });
 
     it("materializado sin programa ni evento (falló la escritura): vence igual; sin el minuto, no se mira", () => {

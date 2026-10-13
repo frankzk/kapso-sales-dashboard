@@ -6,6 +6,9 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { RESCHEDULE_MAX_DAYS } from "@/lib/gf-dispatch-program";
+import { agreementDateProblem } from "@/lib/repro-lima";
+import { swaypDispatchDayOptions } from "@/lib/swayp-dispatch-days";
 
 const read = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8");
 
@@ -214,6 +217,32 @@ describe("la hoja decide con las reglas del servidor (§11.6, E14-E19)", () => {
     expect(sheet).toContain("boxActionReadyLabel(decided.action, courier, current.cutoff)");
   });
 
+  it("«No esperar la caja» con la caja que no consta solo en un caso reabierto, como el servidor (E29, §9.3)", () => {
+    expect(sheet).toContain("const showNoEsperar = noEsperarCajaAplica(box, current.reopened);");
+    expect(between(sheet, "const boxInput = (c: ReproCourier)", "\n  });")).toContain("reopened: current.reopened,");
+  });
+
+  it("Swayp ofrece todas las fechas hasta los 60 días del servidor, también la que viene de otro courier", () => {
+    expect(sheet).toContain("const maxDay = shiftDay(today, RESCHEDULE_MAX_DAYS);");
+    expect(sheet).toContain("<SwaypDispatchDateSelect value={agreedOn} lastDay={maxDay}");
+    const select = read("components/swayp-dispatch-date-select.tsx");
+    expect(select).toContain("swaypDispatchDayOptions(limaTodayKey(), undefined, lastDay)");
+  });
+
+  it("toda fecha Swayp que acepta el acuerdo está en la lista de la hoja, y ninguna que rechace", () => {
+    // Lunes 12-10-2026 a las 10:00 de Lima, como la hoja: hoy, el tope de 60 días y la regla del servidor.
+    const today = "2026-10-12";
+    const lastDay = new Date(Date.parse(`${today}T12:00:00Z`) + RESCHEDULE_MAX_DAYS * 86_400_000).toISOString().slice(0, 10);
+    const offered = new Set(swaypDispatchDayOptions(today, undefined, lastDay).map((o) => o.value));
+    for (let i = 0; i <= RESCHEDULE_MAX_DAYS + 2; i += 1) {
+      const day = new Date(Date.parse(`${today}T12:00:00Z`) + i * 86_400_000).toISOString().slice(0, 10);
+      const ok = agreementDateProblem({ day, today, nowMinute: 600, cutoff: "12:00:00", courier: "fenix", boxAction: null }) === null;
+      expect(offered.has(day), day).toBe(ok);
+    }
+    // vie 20/11: a 39 días, la que traía «Otra fecha» de Grupo GF.
+    expect(offered.has("2026-11-20")).toBe(true);
+  });
+
   it("«Ya no lo quiere» pide un segundo clic que nombra el pedido y no anula la venta (§11.5)", () => {
     expect(sheet).toContain("Sí, desarmar y cerrar {current.orderName}");
     expect(sheet).toContain("No anula la venta: solo Shopify la anula.");
@@ -225,8 +254,22 @@ describe("solo lectura y reabrir (E12, E29)", () => {
   it("«Volver a atender» pide el segundo clic en la hoja y reabre con `reopen`", () => {
     expect(board).toContain('openRow(row, "read", true)}>Volver a atender</OpsButton>');
     expect(sheet).toContain("Si Almacén ya la desarmó, elige «No esperar la caja».");
-    expect(sheet).toContain('onClick={() => { setShowReopen(false); setReopen(true); setMode("edit"); }}');
+    expect(sheet).toContain('onClick={() => { setShowReopen(false); reopenRef.current = true; setMode("edit"); setClaimAttempt((n) => n + 1); }}');
     expect(sheet).toContain("claimReproCase(orderId, reopen ? { reopen: true } : {})");
+  });
+
+  it("`reopen` vale para una sola toma: «Reintentar» y «Volver a tomarlo» no reabren", () => {
+    // Un ref, no un estado en las dependencias: borrarlo no vuelve a tomar.
+    expect(sheet).toContain("const reopenRef = useRef(false);");
+    expect(sheet).not.toMatch(/useState\(false\);\s*\n.*setReopen|const \[reopen, setReopen\]/);
+    const effect = between(sheet, "useEffect(() => {\n    if (mode !== \"edit\") return;", "}, [orderId, mode, claimAttempt, reload]);");
+    expect(effect).toContain("const reopen = reopenRef.current;");
+    // Se borra al responder la toma (éxito, otra persona, error o fallo de red).
+    expect(between(effect, ".then((result) => {", "if (session.shouldRelease)")).toContain("reopenRef.current = false;");
+    expect(between(effect, ".catch(() => {\n        reopenRef", "});")).toContain("reopenRef.current = false;");
+    // Los botones que vuelven a tomar no lo encienden.
+    expect(sheet.match(/reopenRef\.current = true/g)?.length).toBe(1);
+    expect(sheet).toContain('onClick={() => setClaimAttempt((n) => n + 1)}>Reintentar</OpsButton>');
   });
 
   it("«Ya la encontré: programar» pide «La caja está en la oficina» antes de programar", () => {
@@ -270,5 +313,18 @@ describe("el tablero (E31, E33)", () => {
   it("se relee tras cada acción y al volver a la pestaña", () => {
     expect(board).toContain("startRefresh(() => router.refresh())");
     expect(board).toContain('window.addEventListener("focus", onFocus);');
+  });
+
+  it("«Guardar y pasar al siguiente» no tapa un error ni un aviso con la hoja siguiente", () => {
+    const onSaved = between(board, "function onSaved(saved: ReproSaved, advance: boolean) {", "\n  }\n");
+    // Un error o la Mesa de ruta: no pasa; la hoja se cierra y el aviso queda en el tablero.
+    expect(onSaved).toContain("const next = advance && !saved.error && !saved.mesa ? nextAfter(saved.orderId) : null;");
+    expect(onSaved).toContain("else setOpen(null);");
+    // Lo demás («Avisa a Almacén…») va arriba de la hoja siguiente.
+    expect(onSaved).toContain('if (next) openRow(next, "edit", false, { orderName: saved.orderName, text });');
+    expect(board).toContain("previous={open.previous}");
+    expect(sheet).toContain('<Banner tone="ok" role="status" title={previous.orderName}>');
+    // Arriba de todo: antes del candado.
+    expect(sheet.indexOf("{previous && (")).toBeLessThan(sheet.indexOf("{/* El candado, en una línea con su punto. */}"));
   });
 });

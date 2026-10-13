@@ -88,8 +88,32 @@ describe("el candado y la llamada: dos RPC (D10, E1-E4)", () => {
     expect(claim).toContain("p_episode: f.episode.key,");
     expect(claim).toContain("p_episode_at: f.episode.at,");
     expect(claim).toContain("p_ttl_minutes: REPRO_CLAIM_TTL_MINUTES,");
-    // Reabrir un «Desarmar y cerrar» del mismo episodio pide el segundo clic (E29).
+    // Reabrir un «Desarmar y cerrar» del mismo episodio pide el segundo clic
+    // (E29), también si el cierre llega después de leer los hechos: la RPC lo
+    // mira dentro de su candado (`needs_reopen`).
     expect(claim).toContain("needsReopen: true");
+    expect(claim).toContain("p_reopen: Boolean(opts.reopen),");
+    expect(claim).toContain("if (claim.needs_reopen) return { error: NEEDS_REOPEN, needsReopen: true };");
+  });
+
+  it("«Programar ahora» toma el candado de su caso con una escritura condicional, nunca con la RPC que abre casos (E21, E29)", () => {
+    const program = body(actions, "export async function programReproAgreement(");
+    expect(program).not.toContain('rpc("lima_repro_claim"');
+    expect(program).toContain(".or(`claimed_by.is.null,claimed_by.eq.${scope.userId},claimed_until.lte.${now.toISOString()}`)");
+    const claim = program.slice(program.indexOf("const hadClaim"), program.indexOf("try {", program.indexOf("const hadClaim")));
+    expect(claim).toContain('.eq("id", c0.id)');
+    expect(claim).toContain('.is("closed_at", null)');
+    expect(program).toContain('if (!holder || holder.closed_at) return { error: "El caso ya está cerrado." };');
+  });
+
+  it("guardar dice si la caja cambió (boxChanged) o se perdió el caso (claimLost): C3", () => {
+    const record = actions.slice(actions.indexOf("async function recordCall("), actions.indexOf("async function clearPrograms("));
+    expect(record).toContain("return { error: CASE_GONE, claimLost: true };");
+    expect(record).toContain("if (error) return error.message === CASE_GONE ? { error: CASE_GONE, claimLost: true } : { error: error.message };");
+    expect(record).toContain("return { error: BOX_CHANGED, boxChanged: true };");
+    expect(record).toContain('return problem.reason === "cambio" ? { error: problem.message, boxChanged: true } : { error: problem.message };');
+    // El caso reabierto (E29) decide «No esperar la caja» igual que la hoja (C2).
+    expect(record).toContain("reopened: f.reopened,");
   });
 
   it("registrar va por lima_repro_record, una sola vez por envío", () => {
@@ -198,6 +222,12 @@ describe("«Recibir en oficina» programa el acuerdo que esperaba la caja (§29.
     expect(hook).toBeGreaterThan(scan.indexOf('if (outcome !== "por_asignar") {'));
     expect(hook).toBeLessThan(scan.indexOf("programConflicts("));
     expect(scan).toContain("reproReceptionNotice(repro, { single: true, omitProgrammed: true })");
+    // «No lo quiere» (§9.3 fila 1): recibida, no se programa, ni se toma, ni se asigna.
+    const refused = scan.indexOf("if (repro.noLoQuiere.some((row) => row.orderId === orderId)) {");
+    expect(refused).toBeGreaterThan(hook);
+    expect(refused).toBeLessThan(scan.indexOf("programConflicts("));
+    expect(refused).toBeLessThan(scan.indexOf("takeOrdersCore("));
+    expect(scan.slice(refused, scan.indexOf("} else if (box) {"))).toContain('status: "recibido_a_stock",');
   });
 
   it("el ayudante nunca lanza, no revalida, no recalcula ni llama RPC (E30)", () => {
@@ -231,6 +261,12 @@ describe("las chapas de la cola de Despacho del día (E28)", () => {
     const ops = courier.slice(courier.indexOf("async function loadCourierOperations("), courier.indexOf("\nexport async function loadCourierConfig("));
     expect(ops).toContain("await loadReproQueueFlags(admin, [");
     expect(ops).toContain("row.reproLimaChip = nueva?.open ? reproCajaNuevaChip(nueva.day) : noLoQuiereChip(row.orderId);");
+    // Lo tomado con la caja todavía con el motorizado (su caja dice «No
+    // entregado») también lleva «caja nueva desde stock»: es donde se ofrece
+    // «Sacar con salida nueva».
+    const acceptedLoop = ops.slice(ops.indexOf("for (const row of accepted) {"), ops.indexOf("for (const row of returnable) {"));
+    expect(acceptedLoop).toContain("const nueva = row.route?.undeliveredReason ? reproFlags.cajaNueva.get(row.orderId) : undefined;");
+    expect(acceptedLoop).toContain("row.reproLimaChip = nueva?.open ? reproCajaNuevaChip(nueva.day) : noLoQuiereChip(row.orderId);");
     expect(ops).toContain("return { available, returnable, returning, accepted,");
     expect(read("lib/dispatch-day.ts")).toContain("reproLimaChip?: string | null;");
     const board = read("components/dispatch-day-board.tsx");
@@ -277,9 +313,21 @@ describe("la migración 0249 (D12)", () => {
     expect(sql).toContain("execute function public.reject_mutation();");
     expect(sql).toContain("revoke all on public.lima_repro_cases from anon, authenticated, service_role;");
     expect(sql).toContain("revoke all on public.lima_repro_calls from anon, authenticated, service_role;");
-    expect(sql).toContain("grant execute on function public.lima_repro_claim(uuid, uuid, uuid, text, timestamptz, integer) to service_role;");
+    expect(sql).toContain("grant execute on function public.lima_repro_claim(uuid, uuid, uuid, text, timestamptz, integer, boolean) to service_role;");
+    // La firma de antes se borra: con las dos, la llamada por nombre sería ambigua.
+    expect(sql).toContain("drop function if exists public.lima_repro_claim(uuid, uuid, uuid, text, timestamptz, integer);");
     expect(sql).not.toMatch(/^\s*begin;/im);
     expect(sql).not.toMatch(/^\s*commit;/im);
+  });
+
+  it("tomar no reabre un «Desarmar y cerrar» del mismo episodio sin el segundo clic (E29)", () => {
+    const claim = sql.slice(sql.indexOf("create or replace function public.lima_repro_claim("), sql.indexOf("revoke all on function public.lima_repro_claim("));
+    expect(claim).toContain("p_reopen boolean default false");
+    // Dentro del candado del pedido, antes de abrir el caso.
+    expect(claim.indexOf("pg_advisory_xact_lock(")).toBeLessThan(claim.indexOf("'needs_reopen', true"));
+    expect(claim.indexOf("'needs_reopen', true")).toBeLessThan(claim.indexOf("insert into lima_repro_cases"));
+    expect(claim).toContain("v_last.close_reason = 'desarmar_cerrar' and v_last.episode_key = p_episode");
+    expect(claim).toContain("and not coalesce(p_reopen, false) then");
   });
 
   it("la acción manda los parámetros que la RPC espera", () => {
@@ -318,5 +366,71 @@ describe("el MOM lo documenta (§9.5, §29.6, §29.13)", () => {
     ]) {
       expect(text, quote).toContain(quote);
     }
+  });
+
+  // Lo que cambió con la revisión de la entrega 1a: el MOM cita la pantalla y
+  // la pantalla dice lo que el MOM cita.
+  it("cita lo que dicen la hoja, la fila y el escaneo desde la revisión", () => {
+    const text = flat(mom);
+    const core = read("lib/repro-lima.ts");
+    const sheet = read("components/repro-lima-sheet.tsx");
+    const pairs: Array<[mom: string, src: string, code: string]> = [
+      // Un acuerdo para hoy que ya no alcanza, y las tres chapas de la regla 4.
+      ["El acuerdo era para hoy (lun 12/10) y ya no alcanza: confírmalo de nuevo", core, "`El acuerdo era para hoy (${day}) y ya no alcanza: confírmalo de nuevo`"],
+      ["«Acuerdo vencido: era para hoy y ya no alcanza»", core, '"Acuerdo vencido: era para hoy y ya no alcanza"'],
+      ["«Grupo GF lo programó para el mié 14/10 y no salió; acordado vie 16/10»", core, "`Grupo GF lo programó para el ${programDayLabel(programDay)} y no salió; acordado ${programDayLabel(agreedOn)}`"],
+      // La línea del fallo de Tanders y Swayp dice la salida.
+      ["«Salió el lun 12/10 con Swayp · motivo»", core, "`Salió el ${programDayLabel(dispatchedOn)} con ${reproCourierName(f.courier)} · ${motivo}`"],
+      // El candado y los rechazos al guardar.
+      ["«Ya no tienes este caso: vuelve a tomarlo.»", actions, 'const CASE_GONE = "Ya no tienes este caso: vuelve a tomarlo.";'],
+      ["«La caja cambió mientras decidías: revisa «Qué hacer con la caja» y vuelve a guardar.»", actions, 'const BOX_CHANGED = "La caja cambió mientras decidías: revisa «Qué hacer con la caja» y vuelve a guardar.";'],
+      ["«El pedido cambió mientras lo abrías: vuelve a intentarlo.»", program, '"El pedido cambió mientras lo abrías: vuelve a intentarlo."'],
+      ["«El caso ya está cerrado.»", actions, 'return { error: "El caso ya está cerrado." };'],
+      // «Volver a atender» (0249, `needs_reopen`) y su segundo clic.
+      ["«Este pedido se cerró con «Desarmar y cerrar». «Volver a atender» lo reabre.»", actions, 'const NEEDS_REOPEN = "Este pedido se cerró con «Desarmar y cerrar». «Volver a atender» lo reabre.";'],
+      ["«Si Almacén ya la desarmó, elige «No esperar la caja».»", sheet, "<p>Si Almacén ya la desarmó, elige «No esperar la caja».</p>"],
+      // El programa de otro día que se quita aunque no se pudo programar.
+      ["Se quitó la fecha que tenía en Grupo GF. Usa «Programar ahora».", actions, 'const CLEARED_NOTE = " Se quitó la fecha que tenía en Grupo GF.";'],
+      ["«Acuerdo guardado, pero no se pudo programar: …", actions, "error: `Acuerdo guardado, pero no se pudo programar: ${why}${tail} Usa «Programar ahora».`,"],
+      // «Falta la salida nueva» de una caja nueva desde stock.
+      ["«Acuerdo guardado. Falta la salida nueva: Kapta todavía no la crea para una caja nueva desde stock. Anótalo en la ficha y avisa a Despacho GF.»", actions, '"para una caja nueva desde stock"'],
+      // «Guardar y pasar al siguiente» lleva el aviso a la hoja siguiente.
+      ["(«Avisa a Almacén: la caja tiene que estar en el anaquel antes de las 12:30.»)", actions, '" Avisa a Almacén: la caja tiene que estar en el anaquel antes de las 12:30."'],
+      // El escaneo de una caja que el cliente ya no quiere.
+      ["«Recibido en oficina (salió de la caja de Johnny del 12/10). Repro Lima: el cliente ya no lo quiere. Desármala (cuaderno «DESARMAR»); no va al estante. No se asigna.»", courier, "message: `Recibido en oficina (salió de la caja de ${receivedFrom}). ${reproNote}No se asigna.`,"],
+    ];
+    for (const [quote, src, code] of pairs) {
+      expect(text, quote).toContain(quote);
+      expect(src, code).toContain(code);
+    }
+    expect(actions).toContain("Kapta todavía no la crea ${why}. Anótalo en la ficha y avisa a Despacho GF.");
+    // La firma de 0249 que cita el MOM y DEPLOY.md.
+    expect(text).toContain("`lima_repro_claim` (0249) recibe `p_reopen` (por defecto false)");
+    expect(flat(read("DEPLOY.md"))).toContain("`lima_repro_claim` lleva `p_reopen`");
+  });
+
+  it("dice las reglas nuevas en su sección", () => {
+    const section = (start: string, end: string) => {
+      const from = mom.indexOf(start);
+      expect(from, start).toBeGreaterThanOrEqual(0);
+      const to = mom.indexOf(end, from);
+      return flat(mom.slice(from, to === -1 ? undefined : to));
+    };
+    const s93 = section("### 9.3 Resultado fallido y nueva salida", "### 9.4 ");
+    const s95 = section("### 9.5 Reprogramación en Lima", "## 10. ");
+    const s2913 = section("### 29.13 ", "### 29.14 ");
+    // §9.3: «No esperar la caja» con la caja que no consta, solo reabierto; la misma salida.
+    expect(s93).toContain("Con la caja que no consta, solo en un caso reabierto después de «Desarmar y cerrar» (§9.5)");
+    expect(s93).toContain("**la misma salida**: se reimprime su rótulo (mismo QR)");
+    // §9.5: el episodio por el día de la ruta, el acuerdo de hoy que ya no alcanza, la caja nueva.
+    expect(s95).toContain("La parada más reciente se elige **por el día de su ruta**");
+    expect(s95).toContain("no abre otro episodio ni cierra el caso como `nuevo_intento`");
+    expect(s95).toContain("Pasado ese día, es `acuerdo_vencido`");
+    expect(s95).toContain("se programa al decidir solo si alguien puede sacar la salida");
+    expect(s95).toContain("Una recepción de un episodio anterior no cuenta.");
+    expect(s95).toContain("Solo otra solicitud, también una cancelada, la deja en «No consta».");
+    // §29.13: la chapa sigue mientras el cierre sea del episodio vigente.
+    expect(s2913).toContain("solo un fallo nuevo (otro episodio) la quita");
+    expect(s2913).toContain("**En «Por QR», esa caja se recibe y ahí termina.**");
   });
 });

@@ -2217,7 +2217,11 @@ la misma sección de Ajustes.
    **vacía y sin ningún error** (`stopRows ?? []`): /reparto, Coordinación,
    «Reparto y liquidación» de Despacho del día y Rutas muestran rutas sin
    paradas, y todo reporte de parada falla. Repro Lima tampoco puede tomar un
-   caso.
+   caso. `lima_repro_claim` lleva `p_reopen` (el segundo clic de «Volver a
+   atender», MOM §9.5) y el código lo manda siempre: la migración borra antes
+   la firma sin él (`drop function if exists`), así que una base con una
+   versión anterior de 0249 (una de prueba) se pone al día volviendo a correr
+   el archivo, que es idempotente. Con la firma vieja, «Atender» falla.
 2. Sin subir versión ni recálculo: el resolver no lee nada de esto
    (`MOM_RESOLUTION_VERSION` sigue en `mom-v1.26`). Los casos nacen solos al
    primer gesto en Repro Lima: no hay backfill.
