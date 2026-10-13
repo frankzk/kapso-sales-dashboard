@@ -1,4 +1,4 @@
--- 0252_swayp_pc_auto.sql — Swayp automático desde Por confirmar, piloto A/B
+-- 0253_swayp_pc_auto.sql — Swayp automático desde Por confirmar, piloto A/B
 -- (MOM §11.13, 13-10-2026).
 --
 -- QUÉ ES. Una pasada diaria que hace lo mismo que el botón «Enviar por Swayp»

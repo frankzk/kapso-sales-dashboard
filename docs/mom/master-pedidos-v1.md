@@ -5883,7 +5883,7 @@ contestar.
 
 **Decisiones del owner:** sin aviso previo por WhatsApp; pedidos de hasta 48 h;
 piloto A/B de 10 por día. Los demás umbrales son de la propuesta y viven en
-`swayp_pc_auto_settings` (0252), no en el código.
+`swayp_pc_auto_settings` (0253), no en el código.
 
 **Quién entra** (`lib/swayp-por-confirmar-auto.ts`, pura):
 

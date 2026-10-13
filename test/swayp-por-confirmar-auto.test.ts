@@ -258,7 +258,7 @@ describe("las garantías del runner", () => {
   });
 
   it("nace apagado y solo lo cambia quien administra tiendas", () => {
-    expect(read("db/migrations/0252_swayp_pc_auto.sql")).toContain("enabled           boolean not null default false,");
+    expect(read("db/migrations/0253_swayp_pc_auto.sql")).toContain("enabled           boolean not null default false,");
     expect(read("app/dashboard/pedidos/swayp-desde-confirmar/actions.ts")).toContain('hasOrgPermission(orgId, "stores.manage")');
   });
 

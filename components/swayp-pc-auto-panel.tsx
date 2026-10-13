@@ -35,7 +35,7 @@ export function SwaypPcAutoPanel({
   if (!s) {
     return (
       <Banner tone="warn" role="status">
-        <p>El automático todavía no está instalado en la base (migración 0252).</p>
+        <p>El automático todavía no está instalado en la base (migración 0253).</p>
       </Banner>
     );
   }

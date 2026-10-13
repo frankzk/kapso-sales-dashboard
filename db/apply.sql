@@ -505,6 +505,6 @@
 \ir migrations/0250_membership_roles.sql
 \echo 'Applying 0251_lima_repro.sql'
 \ir migrations/0251_lima_repro.sql
-\echo 'Applying 0252_swayp_pc_auto.sql'
-\ir migrations/0252_swayp_pc_auto.sql
+\echo 'Applying 0253_swayp_pc_auto.sql'
+\ir migrations/0253_swayp_pc_auto.sql
 \echo 'Done.'

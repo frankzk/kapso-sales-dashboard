@@ -21309,8 +21309,8 @@ $$;
 revoke all on function public.lima_repro_record(uuid, uuid, uuid, text, text, text, timestamptz, date, text, jsonb, text, text, text, text, integer) from public, anon, authenticated;
 grant execute on function public.lima_repro_record(uuid, uuid, uuid, text, text, text, timestamptz, date, text, jsonb, text, text, text, text, integer) to service_role;
 
--- ---- 0252 ----
--- 0252_swayp_pc_auto.sql — Swayp automático desde Por confirmar, piloto A/B
+-- ---- 0253 ----
+-- 0253_swayp_pc_auto.sql — Swayp automático desde Por confirmar, piloto A/B
 -- (MOM §11.13, 13-10-2026).
 --
 -- QUÉ ES. Una pasada diaria que hace lo mismo que el botón «Enviar por Swayp»
