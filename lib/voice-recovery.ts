@@ -175,7 +175,11 @@ export function callsForEngine<T extends { provider?: string | null }>(
 
 // ── Producto corto ──────────────────────────────────────────────────────────
 
-const STOP_TAIL = new Set(["de", "del", "para", "con", "y", "la", "el", "los", "las", "en", "a"]);
+// «e», «o», «u»: conjunciones también. «Gel Íntimo Reafirmante e Hidratante»
+// salía «Gel Íntimo Reafirmante e» (13-10-2026).
+const STOP_TAIL = new Set([
+  "de", "del", "para", "con", "y", "e", "o", "u", "la", "el", "los", "las", "en", "a", "al", "por", "sin",
+]);
 
 /**
  * El nombre que el agente dice en voz alta. El título de Shopify es de
@@ -293,6 +297,15 @@ export type Ficha = VoiceDates & {
   ventana_horaria: string;
 };
 
+/**
+ * La dirección como se dice: los números de tres cifras o más, cifra por
+ * cifra («Los Ciruelos 104» → «Los Ciruelos 1 0 4»). El agente leyó «104»
+ * como «diez y ocho» (13-10-2026); uno o dos dígitos («Lote 12») se leen bien.
+ */
+export function direccionHablada(address: string | null | undefined): string {
+  return String(address ?? "").replace(/\d{3,}/g, (n) => n.split("").join(" "));
+}
+
 /** «Kenku Peru» → «Kenku». La clienta conoce la marca, no la razón social. */
 export function tiendaHablada(name: string | null | undefined): string {
   return String(name ?? "").replace(/\s+(peru|perú)$/i, "").trim() || "la tienda";
@@ -332,7 +345,7 @@ export function buildFicha(input: FichaInput, now: Date): Ficha {
     monto: montoHablado(input.total),
     distrito: input.district ?? "",
     ciudad: input.province ?? input.district ?? "",
-    direccion: input.address ?? "",
+    direccion: direccionHablada(input.address),
     referencia: input.reference ?? "",
     ventana_horaria: VOICE_DELIVERY_WINDOW,
     ...voiceDates(now),

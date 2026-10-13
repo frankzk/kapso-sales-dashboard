@@ -7,6 +7,7 @@ import {
   pickOpenCall,
   primerNombre,
   productoCorto,
+  direccionHablada,
   staleCallResolution,
   tiendaHablada,
   translateGestion,
@@ -60,8 +61,14 @@ describe("lo que se dice en voz alta", () => {
     expect(productoCorto(title)).toBe(corto);
   });
 
-  it("no termina en preposición", () => {
+  it("no termina en preposición ni en conjunción", () => {
     expect(productoCorto("Set de Pelador de Verduras")).toBe("Set de Pelador");
+    expect(productoCorto("Gel Íntimo Reafirmante e Hidratante 100ml")).toBe("Gel Íntimo Reafirmante");
+  });
+
+  it("la dirección lee cifra por cifra los números largos", () => {
+    expect(direccionHablada("Los Ciruelos 104, Mz B Lt 12")).toBe("Los Ciruelos 1 0 4, Mz B Lt 12");
+    expect(direccionHablada(null)).toBe("");
   });
 
   it("tienda, nombre y monto", () => {
