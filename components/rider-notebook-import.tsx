@@ -24,12 +24,18 @@ import {
   nextNamedDay,
   outcomeLabel,
   planTotals,
+  requestedDayPassed,
   type MatchKind,
   type NotebookAction,
   type NotebookOutcome,
   type NotebookPlan,
   type PlanRow,
 } from "@/lib/notebook-import";
+
+/** Hoy en Lima (YYYY-MM-DD): un día del cuaderno anterior a hoy ya pasó (D9). */
+function limaToday(): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Lima", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+}
 
 const MAX_PHOTOS = 4;
 // Una captura de Excel pesa cientos de KB; solo una foto grande se achica, y
@@ -436,7 +442,12 @@ export function RiderNotebookImport({ routeId, riderName, routeDate, onApplied }
                             <span className="text-ok-fg">{outcomeLabel(c.outcome)}</span>
                           ) : null}
                           {on && r.interpretation.day && c.outcome?.status === "no_entregado" && c.outcome.reason === "reprogramado" && (
-                            <p className="mt-1 text-ink-500">Para el {nextNamedDay(read.target.routeDate, r.interpretation.day) ?? r.interpretation.day.toLowerCase()}: queda en la nota.</p>
+                            <p className="mt-1 text-ink-500">
+                              Para el {nextNamedDay(read.target.routeDate, r.interpretation.day) ?? r.interpretation.day.toLowerCase()}
+                              {requestedDayPassed(read.target.routeDate, r.interpretation.day, limaToday())
+                                ? ", que ya pasó: queda solo en la nota."
+                                : ": queda como fecha que pidió el cliente; la tienda la confirma."}
+                            </p>
                           )}
                         </td>
                       </tr>

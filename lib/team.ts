@@ -12,6 +12,7 @@
 // solo el dueño.
 
 import type { Role } from "@/lib/types";
+import { isFunctionalRole } from "@/lib/permissions";
 
 export const ROLES: Role[] = ["owner", "admin", "viewer", "vendedora"];
 
@@ -131,6 +132,24 @@ export function canSetPaymentValidator(
       ok: false,
       reason: `Debe quedar al menos una persona autorizada para ${label.toLocaleLowerCase("es")}.`,
     };
+  }
+  return { ok: true };
+}
+
+/**
+ * ¿Puede `actorRole` dar o quitar a `targetUserId` el rol acumulable `role`
+ * (MOM §16)? Solo el dueño: asignar un rol es repartir sus permisos.
+ */
+export function canSetFunctionRole(
+  members: MemberLite[],
+  targetUserId: string,
+  role: string,
+  actorRole: Role,
+): GuardResult {
+  if (!isFunctionalRole(role)) return { ok: false, reason: "Rol inválido." };
+  if (actorRole !== "owner") return { ok: false, reason: "Solo el dueño asigna roles." };
+  if (!members.some((m) => m.user_id === targetUserId)) {
+    return { ok: false, reason: "No es miembro de la organización." };
   }
   return { ok: true };
 }

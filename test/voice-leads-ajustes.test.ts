@@ -49,7 +49,15 @@ vi.mock("@/lib/db", () => {
   };
   return {
     createAdminSupabase: () => ({ from }),
-    createServerSupabase: async () => ({ from, auth: { getUser: async () => ({ data: { user: { id: "owner" } } }) } }),
+    createServerSupabase: async () => ({
+      from,
+      auth: {
+        getUser: async () => ({ data: { user: { id: "owner" } } }),
+        // La guarda de la tienda pide el permiso por organización (MOM §16), que
+        // resuelve la persona por sus claims.
+        getClaims: async () => ({ data: { claims: { sub: "owner" } } }),
+      },
+    }),
   };
 });
 

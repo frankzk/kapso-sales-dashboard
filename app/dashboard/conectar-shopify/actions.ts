@@ -9,6 +9,7 @@ import { env } from "@/lib/env";
 import { fetchShopInfo } from "@/lib/shopify";
 import { PENDING_INSTALL_COOKIE, pendingInstallUsable } from "@/lib/shopify-client-app";
 import { finishClientStoreConnection } from "@/lib/shopify-client-install";
+import { hasOrgPermission } from "@/lib/permissions-access";
 
 export interface ClaimInstallState {
   error?: string;
@@ -16,7 +17,7 @@ export interface ClaimInstallState {
 
 /**
  * Crea la tienda de una instalación pendiente de la app de clientes (MOM
- * §29.15.1) en una organización donde el usuario es owner o admin. El token ya
+ * §29.15.1) en una organización donde el usuario puede administrar tiendas. El token ya
  * viene cifrado desde el callback; aquí no se escribe ningún dominio a mano.
  */
 export async function claimShopifyInstall(
@@ -40,13 +41,8 @@ export async function claimShopifyInstall(
   if (!orgId) return { error: "Elige la organización." };
   if (!name) return { error: "Escribe el nombre de la tienda." };
 
-  const { data: membership } = await sb
-    .from("memberships")
-    .select("role")
-    .eq("org_id", orgId)
-    .eq("user_id", user.id)
-    .maybeSingle();
-  if (!membership || !["owner", "admin"].includes((membership as { role: string }).role)) {
+  // «Administrar tiendas» (MOM §16): owner, admin o el rol Administración.
+  if (!(await hasOrgPermission(orgId, "stores.manage"))) {
     return { error: "No tienes permiso para crear tiendas en esa organización." };
   }
 

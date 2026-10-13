@@ -26,6 +26,7 @@ import { decideReception } from "@/lib/returns-reception";
 import { gfReturnDecision } from "@/lib/gf-returns-scan";
 import { replacedReceivedMessage } from "@/lib/gf-scan-return";
 import { OUTPUT_REPLACED_KIND, officeReturnOutcome, replacedOutputIds } from "@/lib/gf-replaced-output";
+import { materializeWaitingAgreementsSafe, reproReceptionNotice, REPRO_LIMA_PATH } from "@/lib/repro-lima-program";
 import { boxWho, notInThisBoxMessage, oldLabelHint } from "@/lib/scan-other-box";
 import type { OutputForDecision } from "@/lib/labels/resolve-output";
 import { loadPickupKeyFacts } from "@/lib/shalom/pickup-facts";
@@ -539,9 +540,18 @@ async function receiveGrupoGfReturn(shipment: DispatchShipment): Promise<Dispatc
   if (outcome === "ya_devuelta") {
     return { notice: `${label} ya constaba devuelto: salió de la caja de ${manifest?.driver_name ?? "el motorizado"} sin volver a «por asignar».`, shipment };
   }
+  // Repro Lima (§29.13): el acuerdo que esperaba esta caja se programa para su
+  // día y el aviso lo dice; o dice que el cliente ya no lo quiere. Sin RPC ni
+  // recálculo: nunca lanza (E30).
+  const repro = orderId
+    ? await materializeWaitingAgreementsSafe(admin, [orderId as string], user.id, { via: "recepcion" })
+    : null;
+  const reproParts = repro ? reproReceptionNotice(repro, { single: true }) : [];
+  revalidatePath(REPRO_LIMA_PATH);
+  const reproNote = reproParts.map((part) => ` ${part}`).join("");
   return cancelled
-    ? { error: `${label} recibido en oficina. ${cancelled}`, shipment }
-    : { notice: `${label} recibido en oficina: vuelve a «por asignar» en Grupo GF para reprogramarlo.`, shipment };
+    ? { error: `${label} recibido en oficina. ${cancelled}${reproNote}`, shipment }
+    : { notice: `${label} recibido en oficina: vuelve a «por asignar» en Grupo GF para reprogramarlo.${reproNote}`, shipment };
 }
 
 /**

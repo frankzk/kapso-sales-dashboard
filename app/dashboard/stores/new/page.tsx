@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { createServerSupabase } from "@/lib/db";
+import { orgsWithPermission } from "@/lib/permissions-access";
 import { getUserRoleSummary } from "@/lib/access";
 import { CreateOrgForm, CreateStoreForm } from "@/components/forms";
 
@@ -7,12 +8,11 @@ export const dynamic = "force-dynamic";
 
 export default async function NewStorePage() {
   if ((await getUserRoleSummary()).isVendedoraOnly) redirect("/dashboard/leads");
-  // Orgs where the current user is owner/admin (can create stores).
+  // Orgs where the current user may create stores: «Administrar tiendas» (MOM §16).
+  const allowed = new Set((await orgsWithPermission("stores.manage")).map((m) => m.org_id));
   const sb = await createServerSupabase();
-  const { data } = await sb
-    .from("memberships")
-    .select("org_id, role, organizations(name)")
-    .in("role", ["owner", "admin"]);
+  const { data: rows } = await sb.from("memberships").select("org_id, role, organizations(name)");
+  const data = ((rows ?? []) as any[]).filter((m) => allowed.has(m.org_id));
 
   // Una entrada por organización: por RLS, un admin ve las membresías de TODOS
   // los owner/admin de su org, así que aquí pueden venir varias filas con el

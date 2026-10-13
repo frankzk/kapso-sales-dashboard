@@ -1016,6 +1016,11 @@ export async function saveShalomOrderDraft(
   orderId: string,
   input: ShalomOrderDraftInput,
 ): Promise<{ notice: string } | { error: string }> {
+  // Guardar el DNI y la agencia puede confirmar el pedido (abajo): es gestionar
+  // el pedido, `master.edit`, como el resto de las confirmaciones (MOM §16).
+  // Ver el pedido (RLS) no alcanza.
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite modificar pedidos." };
   const ctx = await authorize(orderId);
   if (!ctx) return { error: "Sin acceso a este pedido." };
   const { row } = ctx;

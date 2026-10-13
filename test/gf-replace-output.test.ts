@@ -106,7 +106,7 @@ describe("la salida reemplazada no estorba ni se reusa", () => {
 
 describe("ownReplaceDecision: cuándo se saca con salida nueva", () => {
   it("«No entregado» en la caja de cualquier motorizado, en Por reprogramar Lima: se saca", () => {
-    for (const riderName of ["Alexis", "Yhoni", "Roy", "Douglas"]) {
+    for (const riderName of ["Alexis", "Yhoni", "Roy", "Duglas"]) {
       const riderBox = { ...box, riderName };
       expect(ownReplaceDecision(reprogram, [s01()], s01(), riderBox, null, new Set())).toEqual({ action: "sacar" });
     }
