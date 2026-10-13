@@ -17,6 +17,7 @@
 //   4. En proceso                — hay gestión logística iniciada sin resultado.
 //   5. Pendiente                 — todavía no arrancó bien el proceso logístico.
 
+import { PERMISSION_LABEL } from "@/lib/permissions";
 import { NO_REPLACED_OUTPUTS, replacedOutputIds } from "@/lib/gf-replaced-output";
 import { hasConfirmationSignal } from "@/lib/order-confirmation";
 import { COMPANION_LINKED } from "@/lib/order-companion";
@@ -195,7 +196,7 @@ export function closedStatusChangeError(
 ): string | null {
   if (!isTerminalGeneral(current) || current === target) return null;
   if (!canOverride) {
-    return `Este pedido ya está ${current.replace("_", " ")}; solo quien puede «Cambiar estados ya cerrados» lo cambia.`;
+    return `Este pedido ya está ${current.replace("_", " ")}; solo quien puede «${PERMISSION_LABEL["master.override_status"]}» lo cambia.`;
   }
   if (!reason.trim()) return "Describe el motivo del cambio: quedará en el historial.";
   return null;
