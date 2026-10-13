@@ -608,13 +608,21 @@ describe("docs/voz-leads-agente.md: el guion que se pega en ElevenLabs", () => {
 
   it("abre con «¿Qué tal, cómo le va?» y va directo a ofrecer (owner, 13-10-2026)", () => {
     const p = flat(prompt);
-    // Confirmada la persona, pregunta cómo está antes de presentarse.
+    // Confirmada la persona, pregunta cómo está antes de presentarse, y ese
+    // turno es solo la pregunta. Con «di solo … y espera. Cuando te conteste,
+    // preséntate en esa misma respuesta», la principal preguntaba y se
+    // presentaba en el mismo turno 3 de 5 veces; con el turno cerrado y el
+    // ejemplo de dos turnos, 16 de 16 (13-10-2026).
     enOrden(p, [
       "Si sabías su nombre y te dice que sí: si en esa misma respuesta pregunta quién habla, de dónde llamas o qué desea, preséntate de frente.",
-      'no vuelvas a saludar, que ya dijiste "Hola": di solo "¡Qué gusto! ¿Qué tal, cómo le va?" y espera.',
-      "Cuando te conteste, preséntate en esa misma respuesta",
+      'no vuelvas a saludar, que ya dijiste "Hola": di solo "¡Qué gusto! ¿Qué tal, cómo le va?" y nada más.',
+      "Ese turno termina en ese signo de pregunta y ahí te quedas callada esperando.",
+      'Tú: "¡Qué gusto! ¿Qué tal, cómo le va?" Y esperas.',
+      'Tú: "Muy bien, gracias." y enseguida tu presentación completa.',
+      "y sigue ahí mismo con la presentación.",
       'Para presentarte di: "Le habla Nicol, de {{tienda}}.',
     ]);
+    expect(p).not.toContain("preséntate en esa misma respuesta");
     // «¿De parte de quién?» antes del sí: ni producto ni chat a un tercero.
     expect(p).toContain(
       'Si antes de decirte que sí te pregunta quién habla o de parte de quién, di solo "Le habla Nicol, de {{tienda}}." y vuelve a preguntar si habla con la persona.',

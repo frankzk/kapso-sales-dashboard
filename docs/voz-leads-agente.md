@@ -18,8 +18,8 @@ copia en el agente de pedidos, ni al revés.
 Kenku Biru (piloto)», con todo lo de las secciones 2 a 5 y 7: prompt, primer
 mensaje, las variables, las dos tools, el webhook de inicio y el secreto en
 los tres. El prompt de la sección 3, con `{{aviso}}` y su variable (la 18),
-está en la rama `sin-ficha-por-regla` del agente hasta el deploy que manda
-`aviso` (sección 3). Su puerta también: el +1 645 654 0729, comprado en Telnyx e
+está en la principal del agente desde el 13-10-2026, después del deploy que
+manda `aviso` (sección 3). Su puerta también: el +1 645 654 0729, comprado en Telnyx e
 importado por SIP trunk el 12-10-2026 como «Nicol Leads Telnyx» y asignado a
 este agente (sección 7); `TELNYX_LEADS_SIP_URI` ya está en Vercel y en
 producción (sección 9). Su id, el de sus tools y el del número quedan en la
@@ -76,12 +76,12 @@ ElevenLabs ignora el de Kapta.
 Se pega tal cual en el System prompt del agente. Se presenta como **Nicol**, el
 nombre que eligió el owner (12-10-2026).
 
-**Orden de despliegue de `{{aviso}}`** (13-10-2026): este prompt va en la
-rama `sin-ficha-por-regla` del agente, con sus pruebas pasadas. Se une a la
-principal recién cuando producción tenga el código que manda `aviso`: con el
-prompt nuevo y un inicio viejo, ElevenLabs no arranca la conversación si
-exige la variable. Hasta entonces la principal tiene el mismo guion sin
-`{{aviso}}`, con la regla de sin ficha al final.
+**Orden de despliegue de `{{aviso}}`** (13-10-2026): este prompt se probó en
+la rama `sin-ficha-por-regla` del agente y se unió a la principal recién
+cuando producción tuvo el código que manda `aviso` (hecho el 13-10-2026): con
+el prompt nuevo y un inicio viejo, ElevenLabs no arranca la conversación si
+exige la variable. Un cambio del guion sigue el mismo camino: una rama, las
+pruebas de la sección 11 y después la unión a la principal.
 
 ```text
 {{aviso}}
@@ -173,9 +173,17 @@ todavía no registraste, registra primero.
    - Si sabías su nombre y te dice que sí: si en esa misma respuesta pregunta
      quién habla, de dónde llamas o qué desea, preséntate de frente. Si solo
      dice que sí, NO te presentes todavía y no vuelvas a saludar, que ya
-     dijiste "Hola": di solo "¡Qué gusto! ¿Qué tal, cómo le va?" y espera.
-     Cuando te conteste, preséntate en esa misma respuesta: si te devolvió la
-     pregunta, empieza con "Muy bien, gracias."; si no, con "Qué bueno.".
+     dijiste "Hola": di solo "¡Qué gusto! ¿Qué tal, cómo le va?" y nada más.
+     Ese turno termina en ese signo de pregunta y ahí te quedas callada
+     esperando. Tu presentación va recién en tu turno siguiente, nunca pegada
+     a esa pregunta. Así:
+       Cliente: "Sí, ella habla."
+       Tú: "¡Qué gusto! ¿Qué tal, cómo le va?" Y esperas.
+       Cliente: "Bien, gracias, ¿y usted?"
+       Tú: "Muy bien, gracias." y enseguida tu presentación completa.
+     En ese turno siguiente, cuando ya te contestó, empieza con "Muy bien,
+     gracias." si te devolvió la pregunta, o con "Qué bueno." si no, y sigue
+     ahí mismo con la presentación.
    - Si no sabías su nombre, cuando te lo diga NO te presentes todavía: di
      solo "Mucho gusto. ¿Usted nos escribió por WhatsApp a {{tienda}} hace
      poco?" y espera que diga que sí. Recién entonces preséntate.
@@ -466,8 +474,11 @@ hay costo de ElevenLabs por llamada.
   ese modelo, en las pruebas de la sección 11 (12-10-2026), el agente se
   presentaba con la ficha vacía en vez de despedirse (0 de 5), leía en voz alta
   instrucciones del guion, se despedía sin registrar y una vez inventó el costo
-  de envío sin llamar a `consultar_cobertura`. Con Flash y este guion (v4.7),
-  las 11 pruebas de la sección 11 dieron 64 de 65 corridas (13-10-2026).
+  de envío sin llamar a `consultar_cobertura`. Con Flash y este guion (v4.8),
+  las 11 pruebas de la sección 11 dieron 55 de 55 (13-10-2026). La v4.7 dio 51
+  de 55 en la principal: decía «¿Qué tal, cómo le va?» y se presentaba en el
+  mismo turno, sin esperar la respuesta (3 de 5), y una vez no contestó nada;
+  la v4.8 cierra ese turno en la pregunta (paso 2) y ya lo cumple 16 de 16.
 - **Duración máxima**: `max_duration` = **300 s**. Kapta da la llamada por
   caída a los 8 min en conversación (`LEAD_IN_PROGRESS_TTL_MINUTES`), con
   margen para el registro y el corte.
@@ -653,7 +664,7 @@ Kapta.
 | Con ficha: pregunta cómo le va antes de presentarse | respuesta | Tras «Sí, ella habla», dice «¡Qué gusto! ¿Qué tal, cómo le va?»: sin volver a saludar, sin presentarse todavía, sin producto ni precios |
 | Con ficha: se presenta como Nicol | respuesta | Tras «Bien, gracias, ¿y usted?», dice «Muy bien, gracias» y en el mismo turno se presenta como Nicol de la tienda y dice por qué llama, sin leer instrucciones ni paréntesis |
 | De parte de quién: no nombra el producto | respuesta | Ante «¿De parte de quién?» antes del sí, dice solo «Nicol, de la tienda» y vuelve a preguntar por la persona: sin producto, WhatsApp ni chat |
-| Ofrece directo y pregunta dudas | respuesta | Tras «Sí, dígame», dice el precio y las promociones de la oferta en soles y pregunta si tiene alguna duda; no pregunta «qué le faltó» ni inventa descuentos |
+| Ofrece directo y pregunta dudas | respuesta | Tras «Sí, dígame», dice el precio y las promociones de la oferta en soles y pregunta si tiene alguna duda; no pregunta «qué le faltó» ni inventa descuentos. La condición copia la oferta y acepta «3 por 2» y «envío gratis»: el evaluador no ve la variable `oferta` y, sin eso, los tomaba por inventados (13-10-2026) |
 | Descuento del chat: no lo ofrece | respuesta | Con el 10 % de una asesora en el chat y «¿Me respeta el descuento?», solo da los precios de la oferta |
 | Duda fuera de la oferta: no inventa | respuesta | Ante «¿Qué ingredientes tiene?», no nombra ingredientes ni resultados: se lo detalla la asesora que confirma el pedido |
 | Sin nombre: confirma antes de hablar del producto | respuesta | Sin nombre en la ficha, pregunta si escribió por WhatsApp antes de nombrar el producto |
