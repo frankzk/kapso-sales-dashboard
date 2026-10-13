@@ -1,47 +1,39 @@
 "use client";
 
 import { Fragment, useState } from "react";
-import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { CHART } from "@/components/palette";
 import {
   attributionDailyTrend,
   formatCurrency,
-  formatPct,
   type AttributionSource,
   type ClosingChannel,
   type SalesAttribution,
 } from "@/lib/metrics";
 import { cn } from "@/components/ui";
+import { Badge, Banner } from "@/components/ops-ui";
+import { Figure, FIGURE_FRAME, pctText } from "@/components/figures";
+import { CHANNEL_SHADE, SOURCE_SERIES } from "@/components/palette";
+import { StackedDailyBars, dayLabel } from "@/components/charts";
+import { IconChevronRight } from "@/components/icons";
 
-// One color per source, reused by the table dot and the stacked chart so the
-// legend reads the same in both.
-const SOURCE_COLOR: Record<AttributionSource, string> = {
-  meta_ad: CHART.brand,
-  fb_web: CHART.blue,
-  cod_cart: CHART.orange,
-  abandoned_browse: CHART.teal,
-  winback: CHART.purple,
-  organic: CHART.green,
-  sin_atribucion: CHART.slate,
-};
+// Ventas por fuente y canal de cierre, en el panel de Consolidado: el reparto
+// por canal en un marco de cifras, la tabla de fuentes que se abre para auditar
+// sus pedidos, el halo del winback y los ingresos por día apilados por fuente.
+// Una fuente lleva el mismo color en la tabla, la leyenda y el gráfico.
 
 const CHANNEL_LABEL: Record<ClosingChannel, string> = {
   asesora: "Asesora",
   bot_asistido: "Bot asistido",
   bot: "Bot",
 };
-const CHANNEL_COLOR: Record<ClosingChannel, string> = {
-  asesora: "bg-brand-500",
-  bot_asistido: "bg-violet-500",
-  bot: "bg-slate-400",
-};
 
-function shortDate(d: string): string {
-  // "2026-07-05" → "05/07"
-  return `${d.slice(8, 10)}/${d.slice(5, 7)}`;
+/** De menos a más mano humana, el orden de la escala de tinta. */
+const CHANNEL_ORDER: ClosingChannel[] = ["bot", "bot_asistido", "asesora"];
+
+function Swatch({ color, round = false }: { color: string; round?: boolean }) {
+  return <span aria-hidden className={cn("inline-block size-2.5 shrink-0", round ? "rounded-full" : "rounded-[2px]")} style={{ background: color }} />;
 }
 
-/** Compact per-source channel split as a stacked mini-bar + counts. */
+/** El reparto de una fuente entre canales: una barra corta con aire entre partes y la cuenta debajo. */
 function ChannelSplit({
   byChannel,
   currency,
@@ -49,30 +41,26 @@ function ChannelSplit({
   byChannel: Record<ClosingChannel, { orders: number; revenue: number }>;
   currency: string;
 }) {
-  const order: ClosingChannel[] = ["asesora", "bot_asistido", "bot"];
-  const total = order.reduce((s, c) => s + byChannel[c].revenue, 0);
-  if (total <= 0) return <span className="text-xs text-slate-400">—</span>;
+  const total = CHANNEL_ORDER.reduce((s, c) => s + byChannel[c].revenue, 0);
+  if (total <= 0) return <span className="text-xs text-ink-500">—</span>;
+  const shown = CHANNEL_ORDER.filter((c) => byChannel[c].revenue > 0);
   return (
-    <div className="space-y-1">
-      <div className="flex h-1.5 w-28 overflow-hidden rounded-full bg-slate-100">
-        {order
-          .filter((c) => byChannel[c].revenue > 0)
-          .map((c) => (
-            <div
-              key={c}
-              className={CHANNEL_COLOR[c]}
-              style={{ width: `${(byChannel[c].revenue / total) * 100}%` }}
-              title={`${CHANNEL_LABEL[c]}: ${formatCurrency(byChannel[c].revenue, currency)}`}
-            />
-          ))}
-      </div>
-      <p className="text-[10px] leading-tight text-slate-400">
-        {order
-          .filter((c) => byChannel[c].orders > 0)
+    <span className="block">
+      <span
+        role="img"
+        aria-label={shown.map((c) => `${CHANNEL_LABEL[c]} ${formatCurrency(byChannel[c].revenue, currency)}`).join(", ")}
+        className="flex h-1.5 w-28 gap-0.5 overflow-hidden rounded-full"
+      >
+        {shown.map((c) => (
+          <span key={c} className="h-full first:rounded-l-full last:rounded-r-full" style={{ flex: `${byChannel[c].revenue} 0 0`, background: CHANNEL_SHADE[c] }} />
+        ))}
+      </span>
+      <span className="mt-1 block text-xs leading-4 text-ink-500">
+        {CHANNEL_ORDER.filter((c) => byChannel[c].orders > 0)
           .map((c) => `${CHANNEL_LABEL[c]} ${byChannel[c].orders}`)
           .join(" · ")}
-      </p>
-    </div>
+      </span>
+    </span>
   );
 }
 
@@ -95,167 +83,171 @@ export function SalesAttributionModule({
   const trend = attributionDailyTrend(orders, timezone);
 
   if (!total.orders) {
-    return <p className="text-sm text-slate-400">Sin pedidos en el rango para atribuir.</p>;
+    return <p className="text-sm text-ink-500">Sin pedidos en el periodo para atribuir.</p>;
   }
 
-  const channelOrder: ClosingChannel[] = ["bot", "bot_asistido", "asesora"];
-
   return (
-    <div className="space-y-5">
-      {/* Closing-channel summary strip (marginal totals). */}
-      <div className="grid grid-cols-3 gap-3">
-        {channelOrder.map((c) => (
-          <div key={c} className="rounded-xl border border-slate-200 bg-white p-3">
-            <div className="flex items-center gap-1.5">
-              <span className={cn("h-2.5 w-2.5 rounded-full", CHANNEL_COLOR[c])} />
-              <p className="text-xs font-medium text-slate-500">{CHANNEL_LABEL[c]}</p>
-            </div>
-            <p className="mt-1 text-lg font-semibold text-slate-900">
-              {formatCurrency(channels[c].revenue, currency)}
-            </p>
-            <p className="text-xs text-slate-400">
-              {channels[c].orders} pedido{channels[c].orders === 1 ? "" : "s"} ·{" "}
-              {formatPct(total.revenue ? channels[c].revenue / total.revenue : 0)}
-            </p>
-          </div>
-        ))}
-      </div>
+    <div className="flex flex-col gap-6">
+      <section aria-labelledby="atrib-canal">
+        <h3 id="atrib-canal" className="text-sm font-semibold text-ink-900">
+          Canal de cierre
+        </h3>
+        <p className="mt-0.5 text-[13px] text-ink-500">Quién cerró cada venta, de menos a más mano humana.</p>
+        <dl className={cn(FIGURE_FRAME, "mt-3 grid-cols-1 sm:grid-cols-3")}>
+          {CHANNEL_ORDER.map((c) => (
+            <Figure
+              key={c}
+              label={
+                <span className="inline-flex items-center gap-1.5">
+                  <Swatch color={CHANNEL_SHADE[c]} />
+                  {CHANNEL_LABEL[c]}
+                </span>
+              }
+              value={formatCurrency(channels[c].revenue, currency)}
+              sub={`${channels[c].orders.toLocaleString("es-PE")} ${channels[c].orders === 1 ? "pedido" : "pedidos"}\u00a0· ${pctText(total.revenue ? channels[c].revenue / total.revenue : 0)} de las ventas`}
+            />
+          ))}
+        </dl>
+      </section>
 
-      {/* Source table with drill-down. */}
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-slate-200 text-left text-xs text-slate-400">
-              <th className="pb-2 font-medium">Fuente</th>
-              <th className="pb-2 text-right font-medium">Pedidos</th>
-              <th className="pb-2 text-right font-medium">Ingresos</th>
-              <th className="pb-2 text-right font-medium">% del total</th>
-              <th className="pb-2 pl-4 font-medium">Cierre</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sources.map((s) => {
-              const isOpen = open === s.key;
-              const drill = isOpen ? orders.filter((o) => o.source === s.key) : [];
-              return (
-                <Fragment key={s.key}>
-                  <tr
-                    onClick={() => setOpen(isOpen ? null : s.key)}
-                    className="cursor-pointer border-b border-slate-100 hover:bg-slate-50"
-                  >
-                    <td className="py-2">
-                      <div className="flex items-center gap-2">
-                        <span className="text-slate-300">{isOpen ? "▾" : "▸"}</span>
-                        <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: SOURCE_COLOR[s.key] }} />
-                        <span className="font-medium text-slate-800">{s.label}</span>
+      <section aria-labelledby="atrib-fuente">
+        <h3 id="atrib-fuente" className="text-sm font-semibold text-ink-900">
+          Por fuente
+        </h3>
+        <p className="mt-0.5 text-[13px] text-ink-500">De dónde vino el cliente. Abre una fuente para ver sus pedidos.</p>
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full min-w-[620px] text-sm">
+            <thead>
+              <tr className="border-b border-line text-left text-xs font-semibold text-ink-600">
+                <th scope="col" className="py-2 pr-3 font-semibold">Fuente</th>
+                <th scope="col" className="px-3 py-2 text-right font-semibold">Pedidos</th>
+                <th scope="col" className="px-3 py-2 text-right font-semibold">Ingresos</th>
+                <th scope="col" className="px-3 py-2 text-right font-semibold">Del total</th>
+                <th scope="col" className="py-2 pl-4 font-semibold">Cierre</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sources.map((s) => {
+                const isOpen = open === s.key;
+                const drill = isOpen ? orders.filter((o) => o.source === s.key) : [];
+                return (
+                  <Fragment key={s.key}>
+                    <tr
+                      onClick={() => setOpen(isOpen ? null : s.key)}
+                      className={cn("cursor-pointer border-b border-line align-top transition-colors hover:bg-wash", isOpen && "bg-wash")}
+                    >
+                      <td className="py-2.5 pr-3">
+                        <button
+                          type="button"
+                          aria-expanded={isOpen}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpen(isOpen ? null : s.key);
+                          }}
+                          className="inline-flex min-w-0 items-center gap-2 text-left font-medium text-ink-900"
+                        >
+                          <IconChevronRight aria-hidden className={cn("size-3.5 shrink-0 text-ink-500 transition-transform", isOpen && "rotate-90")} />
+                          <Swatch color={SOURCE_SERIES[s.key] ?? SOURCE_SERIES.sin_atribucion!} round />
+                          {s.label}
+                        </button>
                         {s.key === "meta_ad" && metaSpend != null && (
-                          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">
-                            inv. {formatCurrency(metaSpend, currency)} · ROAS{" "}
-                            {metaSpend > 0 ? `${(s.revenue / metaSpend).toFixed(1)}x` : "—"}
+                          <span className="mt-1 block pl-[38px]">
+                            <Badge>
+                              Inversión {formatCurrency(metaSpend, currency)}
+                              {"\u00a0· "}ROAS {metaSpend > 0 ? `${(s.revenue / metaSpend).toFixed(1)}×` : "—"}
+                            </Badge>
                           </span>
                         )}
-                      </div>
-                    </td>
-                    <td className="py-2 text-right tabular-nums text-slate-700">{s.orders}</td>
-                    <td className="py-2 text-right font-semibold tabular-nums text-emerald-700">
-                      {formatCurrency(s.revenue, currency)}
-                    </td>
-                    <td className="py-2 text-right tabular-nums text-slate-600">{s.pct.toFixed(1)}%</td>
-                    <td className="py-2 pl-4">
-                      <ChannelSplit byChannel={s.byChannel} currency={currency} />
-                    </td>
-                  </tr>
-                  {isOpen && (
-                    <tr className="bg-slate-50/60">
-                      <td colSpan={5} className="px-3 py-2">
-                        <div className="max-h-60 overflow-y-auto rounded-lg border border-slate-200 bg-white">
-                          <table className="w-full text-xs">
-                            <thead className="sticky top-0 bg-slate-50 text-left text-[10px] uppercase text-slate-400">
-                              <tr>
-                                <th className="px-2 py-1 font-medium">Pedido</th>
-                                <th className="px-2 py-1 font-medium">Fecha</th>
-                                <th className="px-2 py-1 text-right font-medium">Neto</th>
-                                <th className="px-2 py-1 font-medium">Cierre</th>
-                                <th className="px-2 py-1 font-medium">Cupón</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {drill.map((o, i) => (
-                                <tr key={i} className="border-t border-slate-100">
-                                  <td className="px-2 py-1 font-medium text-slate-700">{o.name ?? "—"}</td>
-                                  <td className="px-2 py-1 text-slate-500">
-                                    {o.createdAt ? shortDate(o.createdAt.slice(0, 10)) : "—"}
-                                  </td>
-                                  <td className="px-2 py-1 text-right tabular-nums text-slate-700">
-                                    {formatCurrency(o.net, currency)}
-                                  </td>
-                                  <td className="px-2 py-1 text-slate-500">{CHANNEL_LABEL[o.channel]}</td>
-                                  <td className="px-2 py-1 text-slate-400">{o.coupons.join(", ") || "—"}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
+                      </td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-ink-700">{s.orders.toLocaleString("es-PE")}</td>
+                      <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-ink-900">{formatCurrency(s.revenue, currency)}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-ink-600">{s.pct.toFixed(1)}&nbsp;%</td>
+                      <td className="py-2.5 pl-4">
+                        <ChannelSplit byChannel={s.byChannel} currency={currency} />
                       </td>
                     </tr>
-                  )}
-                </Fragment>
-              );
-            })}
-          </tbody>
-          <tfoot>
-            <tr className="border-t-2 border-slate-200 font-semibold text-slate-800">
-              <td className="py-2">Total</td>
-              <td className="py-2 text-right tabular-nums">{total.orders}</td>
-              <td className="py-2 text-right tabular-nums text-emerald-800">
-                {formatCurrency(total.revenue, currency)}
-              </td>
-              <td className="py-2 text-right tabular-nums">100%</td>
-              <td className="py-2" />
-            </tr>
-          </tfoot>
-        </table>
-      </div>
+                    {isOpen && (
+                      <tr className="border-b border-line bg-wash">
+                        <td colSpan={5} className="px-3 pb-3 pt-1">
+                          <div className="max-h-64 overflow-y-auto rounded-md bg-white ring-1 ring-line">
+                            <table className="w-full text-xs">
+                              <thead className="sticky top-0 bg-white text-left text-ink-600 shadow-[inset_0_-1px_0_var(--color-line)]">
+                                <tr>
+                                  <th scope="col" className="px-3 py-1.5 font-semibold">Pedido</th>
+                                  <th scope="col" className="px-3 py-1.5 font-semibold">Fecha</th>
+                                  <th scope="col" className="px-3 py-1.5 text-right font-semibold">Neto</th>
+                                  <th scope="col" className="px-3 py-1.5 font-semibold">Cierre</th>
+                                  <th scope="col" className="px-3 py-1.5 font-semibold">Cupón</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {drill.map((o, i) => (
+                                  <tr key={i} className="border-t border-line">
+                                    <td className="px-3 py-1.5 font-medium text-ink-900">{o.name ?? "—"}</td>
+                                    <td className="px-3 py-1.5 tabular-nums text-ink-600">{o.createdAt ? dayLabel(o.createdAt.slice(0, 10)) : "—"}</td>
+                                    <td className="px-3 py-1.5 text-right tabular-nums text-ink-900">{formatCurrency(o.net, currency)}</td>
+                                    <td className="px-3 py-1.5 text-ink-600">{CHANNEL_LABEL[o.channel]}</td>
+                                    <td className="px-3 py-1.5 text-ink-500">{o.coupons.join(", ") || "—"}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="font-semibold text-ink-900">
+                <td className="py-2.5 pr-3">Total</td>
+                <td className="px-3 py-2.5 text-right tabular-nums">{total.orders.toLocaleString("es-PE")}</td>
+                <td className="px-3 py-2.5 text-right tabular-nums">{formatCurrency(total.revenue, currency)}</td>
+                <td className="px-3 py-2.5 text-right tabular-nums">100&nbsp;%</td>
+                <td className="py-2.5 pl-4" />
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </section>
 
       {/* Winback halo — informational, not added to the winback bucket. */}
       {halo.orders > 0 && (
-        <p className="rounded-lg bg-violet-50 px-3 py-2 text-xs text-violet-700">
-          🔁 Efecto halo del winback: <strong>{halo.orders}</strong> pedido
-          {halo.orders === 1 ? "" : "s"} más ({formatCurrency(halo.revenue, currency)}) de clientes que recibieron la
-          plantilla de recuperación ≤30 días antes pero compraron <strong>sin cupón</strong> — se atribuyen a su fuente
-          original, no a recuperación.
-        </p>
+        <Banner tone="info" title="Efecto halo del winback">
+          {halo.orders.toLocaleString("es-PE")} {halo.orders === 1 ? "pedido más" : "pedidos más"} (
+          {formatCurrency(halo.revenue, currency)}) de clientes que recibieron la plantilla de recuperación hasta 30 días
+          antes pero compraron sin cupón. Se atribuyen a su fuente original, no a recuperación.
+        </Banner>
       )}
 
-      {/* Stacked daily revenue by source. */}
       {trend.rows.length > 1 && (
-        <div>
-          <p className="mb-1 text-xs font-medium text-slate-500">Ingresos por día y fuente</p>
-          <div className="h-56 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={trend.rows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={CHART.grid} vertical={false} />
-                <XAxis dataKey="date" tickFormatter={shortDate} tick={{ fontSize: 11, fill: CHART.slate }} />
-                <YAxis tick={{ fontSize: 11, fill: CHART.slate }} width={44} />
-                <Tooltip
-                  labelFormatter={(l) => shortDate(String(l))}
-                  formatter={(v, name) => [formatCurrency(Number(v) || 0, currency), name]}
-                  contentStyle={{ borderRadius: 12, border: "1px solid #e2e8f0", fontSize: 12 }}
-                />
-                <Legend wrapperStyle={{ fontSize: 11 }} />
-                {trend.series.map((s) => (
-                  <Bar key={s.key} dataKey={s.key} name={s.label} stackId="rev" fill={SOURCE_COLOR[s.key]} />
-                ))}
-              </BarChart>
-            </ResponsiveContainer>
+        <section aria-labelledby="atrib-dia">
+          <h3 id="atrib-dia" className="text-sm font-semibold text-ink-900">
+            Ingresos por día y fuente
+          </h3>
+          <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-600">
+            {trend.series.map((s) => (
+              <li key={s.key} className="inline-flex items-center gap-1.5">
+                <Swatch color={SOURCE_SERIES[s.key] ?? SOURCE_SERIES.sin_atribucion!} />
+                {s.label}
+              </li>
+            ))}
+          </ul>
+          <div className="mt-3">
+            <StackedDailyBars
+              rows={trend.rows}
+              series={trend.series.map((s) => ({ ...s, color: SOURCE_SERIES[s.key] ?? SOURCE_SERIES.sin_atribucion! }))}
+              currency={currency}
+            />
           </div>
-        </div>
+        </section>
       )}
 
-      <p className="text-[11px] text-slate-400">
-        Cada pedido activo se asigna a <strong>una</strong> fuente y <strong>un</strong> canal de cierre, así que las
-        columnas suman exactamente los {formatCurrency(total.revenue, currency)} de ventas del período (neto de
-        reembolsos). Clic en una fuente para ver sus pedidos.
+      <p className="text-xs leading-4 text-ink-500">
+        Cada pedido activo se asigna a una fuente y un canal de cierre, así que las columnas suman exactamente los{" "}
+        {formatCurrency(total.revenue, currency)} de ventas del periodo, neto de reembolsos.
       </p>
     </div>
   );

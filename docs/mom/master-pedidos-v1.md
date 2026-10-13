@@ -7890,7 +7890,10 @@ Segundo bloque publicado en el Dashboard consolidado:
   eventos y manifiestos.
 - Las tasas de Confirmación Provincia COD, Adelanto de Agencia, Entrega Aliclik,
   Entrega Lima y Pago completo de Agencia muestran porcentaje, numerador y
-  denominador en las cinco ventanas de la sección 17.1.
+  denominador en las cinco ventanas de la sección 17.1. Desde el 13-10-2026 la
+  ventana se elige en chips (Hoy, Ayer, 7 días —la de entrada—, Este mes y Mes
+  anterior) en vez de una tabla con las cinco a la vez; las ventanas siguen
+  fijas y no siguen al periodo de ventas que se elija debajo.
 - Las alertas `Recogido sin pago completo`, `Liquidación vencida`, `Manifiesto
   incompleto` y `Sin movimiento por 60 días` muestran conteos reales y abren la
   cola correspondiente; el resumen no cambia estados ni ejecuta cierres.

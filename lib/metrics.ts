@@ -1636,12 +1636,14 @@ const ASSIST_ATTR_DAYS = 7; // advisor touch ≤7d before the order ⇒ bot asis
 // cubre `bot_asistido` mirando la gestión, no la etiqueta.
 const ADVISOR_ORDER_TAGS = new Set(["venta_manual", "carrito_recuperado"]);
 
+// Sin emojis: Consolidado las enseña junto a su color de serie, que ya las
+// distingue, y un emoji delante desalineaba la columna.
 const SOURCE_LABELS: Record<AttributionSource, string> = {
-  winback: "🔁 Recuperación 60d",
+  winback: "Recuperación 60d",
   meta_ad: "Meta Ads (campañas)",
-  fb_web: "🌐 Meta / Web (FB·IG)",
-  cod_cart: "🛒 Carrito abandonado",
-  abandoned_browse: "🔎 Búsqueda abandonada",
+  fb_web: "Meta / Web (FB·IG)",
+  cod_cart: "Carrito abandonado",
+  abandoned_browse: "Búsqueda abandonada",
   organic: "Orgánico (WhatsApp)",
   sin_atribucion: "Sin atribuir",
 };

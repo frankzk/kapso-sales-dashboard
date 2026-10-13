@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+import Link from "next/link";
 import type {
   ConversationRow,
   DailyRollupRow,
@@ -5,7 +7,7 @@ import type {
   OrderRow,
   StoreSummary,
 } from "@/lib/types";
-import type { DateRange } from "@/lib/access";
+import { defaultRange, previousRange, type DateRange } from "@/lib/access";
 import {
   aggregateRollups,
   businessBreakdown,
@@ -17,7 +19,6 @@ import {
   dateHourPattern,
   formatCurrency,
   formatDuration,
-  formatPct,
   funnelFineLink,
   funnelHealth,
   leadsByWaNumber,
@@ -25,75 +26,37 @@ import {
   lostRevenueByReason,
   rollupSeries,
   topProducts,
+  tzParts,
   webNoAtribuido,
-  type CartRecoveryStats,
+  type CampaignStat,
   type SalesAttribution,
 } from "@/lib/metrics";
-import type { AdMeta } from "@/lib/meta-ads";
+import { prettyAdName, type AdMeta } from "@/lib/meta-ads";
+import { fullMonthRange, monthView, recentMonths } from "@/lib/productivity-month";
 import { waKindLabel, waLabel, type WaNumber } from "@/lib/wa-numbers";
-import { BarList, Card, EmptyState, SimpleTable, StatCard, cn, type BarItem } from "@/components/ui";
+import { cn } from "@/components/ui";
+import { Badge, Banner, type BadgeTone } from "@/components/ops-ui";
+import { opsButtonClass } from "@/components/ops-styles";
+import { Change, Figure, FIGURE_FRAME, pctText as pct } from "@/components/figures";
+import { ConsolidadoFilters, ConsolidadoNav, PendingDim, type PeriodLink } from "@/components/consolidado-filters";
+import { ModuleBoard, type ModuleCell, type ModuleGroup } from "@/components/module-board";
+import { BarsGlyph, ColumnsGlyph, DotsGlyph, FunnelGlyph, LineGlyph, StackGlyph, type DotTone } from "@/components/dashboard-viz";
+import { CHANNEL_SHADE, SOURCE_SERIES, VIZ, trendColor } from "@/components/palette";
+import { DailyBars, DailyLine, SalesAttributionModule, TrendLines } from "@/components/lazy-dashboard-modules";
 import { CampaignTable } from "@/components/campaign-table";
-import {
-  CampaignTrendChart,
-  ConversionOrdersTrend,
-  RevenueOrdersChart,
-  SalesAttributionModule,
-} from "@/components/lazy-dashboard-modules";
-import { DashboardControls } from "@/components/controls";
-import { HourPattern } from "@/components/hour-pattern";
-import { KpiCard } from "@/components/kpi-cards";
+import { BotVsAdvisor, CHANNEL_COLS } from "@/components/bot-vs-advisor";
 import { HorizontalFunnel } from "@/components/funnel-horizontal";
-import { LossReasonBars, LostRevenueCards } from "@/components/loss-reasons";
-import { FunnelHealth } from "@/components/funnel-health";
-import { BotVsAdvisor } from "@/components/bot-vs-advisor";
-import {
-  IconCart,
-  IconClock,
-  IconInfo,
-  IconMoney,
-  IconTrendingUp,
-} from "@/components/icons";
-import Link from "next/link";
-import type { ReactNode } from "react";
+import { LossReasonBars, LostRevenueCards, sharePct } from "@/components/loss-reasons";
+import { FunnelHealth, HEALTH } from "@/components/funnel-health";
+import { HourPattern, WEEKDAYS } from "@/components/hour-pattern";
+import { IconDownload } from "@/components/icons";
 
-function pctDelta(cur: number, prev: number): number | null {
-  if (prev === 0) return cur === 0 ? 0 : null;
-  return Math.round(((cur - prev) / prev) * 10000) / 100;
-}
-
-/** Stacked composition bar for cart outcomes: recuperados / por trabajar / perdidos. */
-function CartRecoveryBar({ stats }: { stats: CartRecoveryStats }) {
-  const total = Math.max(1, stats.total);
-  const seg = [
-    { label: "Recuperados", n: stats.recuperados, cls: "bg-emerald-500" },
-    { label: "Por trabajar", n: stats.pendientes, cls: "bg-amber-400" },
-    { label: "Perdidos", n: stats.perdidos, cls: "bg-slate-300" },
-  ];
-  return (
-    <div className="space-y-1.5">
-      <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
-        {seg
-          .filter((s) => s.n > 0)
-          .map((s) => (
-            <div
-              key={s.label}
-              className={s.cls}
-              style={{ width: `${(s.n / total) * 100}%` }}
-              title={`${s.label}: ${s.n}`}
-            />
-          ))}
-      </div>
-      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
-        {seg.map((s) => (
-          <span key={s.label} className="inline-flex items-center gap-1.5">
-            <span className={cn("inline-block h-2 w-2 rounded-full", s.cls)} />
-            {s.label} <span className="font-medium text-slate-700">{s.n}</span>
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}
+// Consolidado (DESIGN.md › Consolidado): una pantalla de mando. Arriba la
+// operación del MOM (la pone la página, porque es de la organización y no del
+// periodo); debajo, el periodo de ventas con sus cifras contra el anterior y
+// una rejilla con cada análisis reducido a su cifra y un gráfico de bolsillo.
+// El módulo entero se abre en un panel lateral. Los cálculos son los de
+// lib/metrics, sin tocar: aquí solo se decide cómo se leen.
 
 interface OpsPayload {
   health?: { status?: string } | null;
@@ -107,36 +70,148 @@ interface OpsPayload {
   activity24h?: { conversations?: number; activeConversations?: number } | null;
 }
 
-/** Module shell — consistent premium header (title + optional info icon). */
-function Module({
-  title,
-  subtitle,
-  info,
-  right,
-  children,
-  className,
-}: {
-  title: string;
-  subtitle?: string;
-  info?: boolean;
-  right?: ReactNode;
-  children: ReactNode;
-  className?: string;
-}) {
+const nf = new Intl.NumberFormat("es-PE");
+/** El separador de tramos: el «·» va pegado a la palabra de antes con un espacio duro. */
+const SEP = "\u00a0· ";
+
+function money(n: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat("es-PE", { style: "currency", currency, maximumFractionDigits: 0 }).format(n);
+  } catch {
+    return `${currency} ${Math.round(n)}`;
+  }
+}
+
+function pctDelta(cur: number, prev: number): number | null {
+  if (prev === 0) return cur === 0 ? 0 : null;
+  return Math.round(((cur - prev) / prev) * 1000) / 10;
+}
+
+// ── Fechas («6 – 12 oct», «lunes 12 de octubre») ─────────────────────────────
+
+function asDate(iso: string): Date {
+  return new Date(`${iso}T12:00:00.000Z`);
+}
+
+function longDay(iso: string): string {
+  const d = asDate(iso);
+  const part = (o: Intl.DateTimeFormatOptions) => d.toLocaleDateString("es-PE", { ...o, timeZone: "UTC" }).toLowerCase();
+  return `${part({ weekday: "long" })} ${part({ day: "numeric" })} de ${part({ month: "long" })}`;
+}
+
+function shortDay(iso: string, withMonth = true): string {
+  return asDate(iso)
+    .toLocaleDateString("es-PE", withMonth ? { day: "numeric", month: "short", timeZone: "UTC" } : { day: "numeric", timeZone: "UTC" })
+    .replace(/\./g, "");
+}
+
+function rangeLabel(r: DateRange): string {
+  if (r.from === r.to) return longDay(r.from);
+  const sameMonth = r.from.slice(0, 7) === r.to.slice(0, 7);
+  const sameYear = r.from.slice(0, 4) === r.to.slice(0, 4);
+  const to = sameYear ? shortDay(r.to) : `${shortDay(r.to)} ${r.to.slice(0, 4)}`;
+  const from = sameYear ? shortDay(r.from, !sameMonth) : `${shortDay(r.from)} ${r.from.slice(0, 4)}`;
+  return `${from} – ${to}`;
+}
+
+/** Cada día del rango, para que un día sin ventas sea una columna en cero y no un hueco. */
+function daysOf(r: DateRange): string[] {
+  const out: string[] = [];
+  const d = asDate(r.from);
+  const end = asDate(r.to).getTime();
+  while (d.getTime() <= end && out.length < 400) {
+    out.push(d.toISOString().slice(0, 10));
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return out;
+}
+
+function sameCurrency(a: string | null | undefined, b: string | null | undefined): boolean {
+  return !!a && !!b && a.trim().toUpperCase() === b.trim().toUpperCase();
+}
+
+/** El ROAS entregado del conjunto, con la misma regla que la tabla de anuncios: solo gasto y ventas en la misma moneda. */
+function deliveredRoas(rows: CampaignStat[], currency: string): number | null {
+  const matching = rows.filter((r) => sameCurrency(r.metaCurrency, currency) && r.spend > 0 && !r.currencyConflict);
+  const spend = matching.reduce((s, r) => s + r.spend, 0);
+  if (!spend) return null;
+  return matching.reduce((s, r) => s + r.deliveredRevenue, 0) / spend;
+}
+
+function healthTone(status?: string): { tone: BadgeTone; dot: DotTone; label: string } {
+  if (status === "healthy" || status === "ok" || status === "active") return { tone: "ok", dot: "ok", label: "Sana" };
+  if (status === "degraded" || status === "warning") return { tone: "warn", dot: "warn", label: "Degradada" };
+  if (status) return { tone: "crit", dot: "crit", label: "Con fallas" };
+  return { tone: "neutral", dot: "none", label: "Sin datos" };
+}
+
+// ── Piezas de los paneles ────────────────────────────────────────────────────
+
+function PanelSection({ title, help, aside, children }: { title: string; help?: ReactNode; aside?: ReactNode; children: ReactNode }) {
   return (
-    <Card className={cn("flex flex-col", className)}>
-      <div className="mb-3 flex items-start justify-between gap-2">
+    <section className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
         <div className="min-w-0">
-          <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-800">
-            {title}
-            {info && <IconInfo className="h-3.5 w-3.5 text-slate-300" />}
-          </h3>
-          {subtitle && <p className="text-xs text-slate-400">{subtitle}</p>}
+          <h3 className="text-sm font-semibold leading-5 text-ink-900">{title}</h3>
+          {help && <p className="mt-0.5 max-w-[68ch] text-[13px] leading-5 text-ink-500">{help}</p>}
         </div>
-        {right}
+        {aside}
       </div>
-      <div className="flex-1">{children}</div>
-    </Card>
+      {children}
+    </section>
+  );
+}
+
+const TH = "px-3 py-2 text-xs font-semibold text-ink-600";
+
+interface DayPoint {
+  date: string;
+  orders: number;
+  revenue: number;
+  conversations: number;
+  conversionRate: number;
+}
+
+/** La tabla gemela de los gráficos por día: el más reciente arriba. */
+function DayTable({ days, currency }: { days: DayPoint[]; currency: string }) {
+  return (
+    <div className="max-h-80 overflow-y-auto rounded-lg ring-1 ring-line">
+      <table className="w-full text-sm">
+        <thead className="sticky top-0 bg-white text-left shadow-[inset_0_-1px_0_var(--color-line)]">
+          <tr>
+            <th scope="col" className={TH}>Día</th>
+            <th scope="col" className={cn(TH, "text-right")}>Conversaciones</th>
+            <th scope="col" className={cn(TH, "text-right")}>Pedidos</th>
+            <th scope="col" className={cn(TH, "text-right")}>Conversión</th>
+            <th scope="col" className={cn(TH, "text-right")}>Ingresos</th>
+          </tr>
+        </thead>
+        <tbody>
+          {[...days].reverse().map((d) => (
+            <tr key={d.date} className="border-t border-line first:border-0">
+              <td className="px-3 py-2 text-ink-700">{shortDay(d.date)}</td>
+              <td className="px-3 py-2 text-right tabular-nums text-ink-600">{nf.format(d.conversations)}</td>
+              <td className="px-3 py-2 text-right tabular-nums text-ink-900">{nf.format(d.orders)}</td>
+              <td className="px-3 py-2 text-right tabular-nums text-ink-600">{d.conversations ? pct(d.conversionRate) : "—"}</td>
+              <td className="px-3 py-2 text-right font-semibold tabular-nums text-ink-900">{money(d.revenue, currency)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function Legend({ items }: { items: { label: string; color: string }[] }) {
+  return (
+    <ul className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-600">
+      {items.map((it) => (
+        <li key={it.label} className="inline-flex min-w-0 items-center gap-1.5">
+          <span aria-hidden className="size-2.5 shrink-0 rounded-[2px]" style={{ background: it.color }} />
+          <span className="truncate">{it.label}</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -163,6 +238,8 @@ export function ExecutiveDashboard({
   metaAdPerformance,
   webAdOrders,
   metaAdCatalog,
+  operations,
+  nowIso,
 }: {
   stores: StoreSummary[];
   scope: "all" | string;
@@ -192,15 +269,22 @@ export function ExecutiveDashboard({
    *  Sin esto, el panel enseñaba en cero a 32 campañas que sí venden. */
   webAdOrders?: import("@/lib/cod-cart-attribution").WebAdOrder[];
   metaAdCatalog?: import("@/lib/cod-cart-attribution").AnuncioMeta[];
+  /** La operación del MOM (excepciones e indicadores), entre la cabecera y el periodo. */
+  operations?: ReactNode;
+  /** Para la vista previa; por defecto, ahora. */
+  nowIso?: string;
 }) {
   const names: Record<string, string> = Object.fromEntries(stores.map((s) => [s.id, s.name]));
   const totals = aggregateRollups(rollups);
   const prev = aggregateRollups(prevRollups);
+  const hasPrev = prevRollups.length > 0;
   const cmp = comparePeriods(
     { ordersCount: totals.ordersCount, revenue: totals.revenue, aov: totals.aov },
     { ordersCount: prev.ordersCount, revenue: prev.revenue, aov: prev.aov },
   );
   const series = rollupSeries(rollups);
+  const prevRange = previousRange(range);
+  const now = nowIso ?? new Date().toISOString();
 
   // by-store totals (from rollups, authoritative beyond the order cap)
   const storeAgg = new Map<string, { orders: number; revenue: number; conversations: number }>();
@@ -224,7 +308,7 @@ export function ExecutiveDashboard({
 
   const fine = funnelFineLink(orders, conversations);
   const breakdown = businessBreakdown(orders);
-  const products = topProducts(orders, 6);
+  const products = topProducts(orders, 10);
   const pattern = singleStore ? dateHourPattern(orders, timezone) : null;
 
   // Leads-derived (Phase B)
@@ -257,507 +341,865 @@ export function ExecutiveDashboard({
     inboundMessages: totals.inboundMessages || null,
   });
   const health = funnelHealth(funnelStages);
-
   const hasRt = totals.avgFirstResponseSeconds != null;
-
-  const productItems: BarItem[] = products.map((p) => ({
-    label: p.title,
-    value: p.quantity,
-    valueLabel: `${p.quantity} u · ${formatCurrency(p.revenue, currency)}`,
-    sublabel: `${p.orders} órden${p.orders === 1 ? "" : "es"}`,
-  }));
-  const shippingItems: BarItem[] = [
-    { label: "Contraentrega (COD)", value: breakdown.codOrders },
-    { label: "Agencia", value: breakdown.agencyOrders },
-    { label: "Otro / sin definir", value: breakdown.otherShippingOrders },
-  ];
 
   const opsStores = singleStore ? [singleStore] : stores;
   const exportQs = new URLSearchParams({ from: range.from, to: range.to });
   if (scope !== "all") exportQs.set("storeId", scope);
   const exportBase = exportQs.toString();
 
-  return (
-    <div className="space-y-5">
-      {/* Header */}
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
-            {singleStore ? singleStore.name : "Dashboard"}
-          </h1>
-          <p className="text-sm text-slate-500">
-            Resumen ejecutivo de ventas por WhatsApp · {range.from} → {range.to}
-            {singleStore ? ` · ${singleStore.shopify_domain}` : ` · ${stores.length} tienda(s)`}
-          </p>
-          {singleStore && (
-            <Link
-              href={`/dashboard/${singleStore.id}/settings`}
-              className="mt-1 inline-block text-sm font-medium text-brand-700 hover:underline"
-            >
-              Ajustes de la tienda →
-            </Link>
-          )}
-        </div>
-        <DashboardControls stores={stores} scope={scope} from={range.from} to={range.to} />
-      </div>
+  // ── Periodo: chips, meses y enlaces de tienda ──────────────────────────────
+  const basePath = scope === "all" ? "/dashboard" : `/dashboard/${scope}`;
+  const hrefFor = (r: DateRange, path = basePath) => `${path}?${new URLSearchParams({ from: r.from, to: r.to })}`;
+  const sameRange = (r: DateRange) => r.from === range.from && r.to === range.to;
+  // Presets en el día LOCAL de la tienda, como los de Productividad.
+  const localDay = (offset: number): DateRange => {
+    const d = tzParts(new Date(Date.parse(now) - offset * 86_400_000).toISOString(), timezone).date;
+    return { from: d, to: d };
+  };
+  const presets: { label: string; r: DateRange }[] = [
+    { label: "Hoy", r: localDay(0) },
+    { label: "Ayer", r: localDay(1) },
+    ...[7, 30, 90].map((d) => ({ label: `${d} días`, r: defaultRange(d, timezone, now) })),
+  ];
+  const periods: PeriodLink[] = presets.map(({ label, r }) => ({ label, href: hrefFor(r), active: sameRange(r) }));
+  const months = recentMonths(timezone, now, "2025-01", 12);
+  const monthRange = (m: string, i: number) => (i === 0 ? (monthView(m, timezone, now)?.range ?? fullMonthRange(m)) : fullMonthRange(m));
+  const monthChips: PeriodLink[] = months.slice(0, 2).map((m, i) => {
+    const r = monthRange(m.month, i);
+    return { label: i === 0 ? "Este mes" : m.label.split(" ")[0]!, href: hrefFor(r), active: sameRange(r) };
+  });
+  const otherMonths = months.slice(2).map((m) => ({ month: m.month, label: m.label, href: hrefFor(fullMonthRange(m.month)) }));
+  const otherMonth = months.slice(2).find((m) => sameRange(fullMonthRange(m.month)))?.month ?? null;
+  const storeLinks = stores.map((s) => ({ value: s.id, label: s.name, href: hrefFor(range, `/dashboard/${s.id}`) }));
 
-      {/* Row 1 — KPIs */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <KpiCard
-          label="Ingresos generados"
-          value={formatCurrency(totals.revenue, currency)}
-          icon={<IconMoney className="h-5 w-5" />}
-          accent="green"
-          delta={cmp.revenueDeltaPct}
-          sub={`${totals.ordersCount} órdenes`}
-        />
-        <KpiCard
-          label="Conversión general"
-          value={formatPct(totals.conversionRate)}
-          icon={<IconTrendingUp className="h-5 w-5" />}
-          accent="purple"
-          delta={pctDelta(totals.conversionRate, prev.conversionRate)}
-          sub={`${totals.conversationsCount} conv.`}
-        />
-        <KpiCard
-          label="Ticket promedio"
-          value={formatCurrency(totals.aov, currency)}
-          icon={<IconCart className="h-5 w-5" />}
-          accent="blue"
-          delta={cmp.aovDeltaPct}
-        />
-        <KpiCard
-          label="Tiempo de respuesta"
-          value={hasRt ? formatDuration(totals.avgFirstResponseSeconds) : "—"}
-          icon={<IconClock className="h-5 w-5" />}
-          accent="amber"
-          muted={!hasRt}
-          sub={hasRt ? "primera respuesta promedio" : "se activa con la próxima ingesta"}
-        />
-      </div>
+  const scopeLabel = singleStore ? singleStore.name : stores.length > 1 ? "todas las tiendas" : (stores[0]?.name ?? "");
+  const periodMeta = `${rangeLabel(range)}${SEP}${scopeLabel}`;
+  const context = [rangeLabel(range), hasPrev ? `comparado con ${prevRange.from === prevRange.to ? "el " : ""}${rangeLabel(prevRange)}` : null]
+    .filter(Boolean)
+    .join(SEP);
+  const storeList = new Intl.ListFormat("es", { type: "conjunction" }).format(stores.map((s) => s.name));
 
-      {/* Row 2 — Embudo · ¿Por qué no compraron? · Impacto económico */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-        <Module
-          title="Embudo de conversión conversacional"
-          info
-          className="lg:col-span-5"
-        >
-          <HorizontalFunnel stages={funnelStages} />
-        </Module>
-        <Module title="¿Por qué NO compraron?" info className="lg:col-span-4">
-          <LossReasonBars items={loss.reasons} total={loss.total} />
-        </Module>
-        <Module
-          title="Impacto económico perdido"
-          subtitle="estimado: leads sin comprar × ticket promedio"
-          info
-          className="lg:col-span-3"
-        >
-          <LostRevenueCards items={lostRev.items} total={lostRev.total} currency={currency} />
-        </Module>
-      </div>
+  // ── Los días del periodo (con los vacíos en cero) ──────────────────────────
+  const byDate = new Map(series.map((s) => [s.date, s]));
+  const days: DayPoint[] = daysOf(range).map(
+    (date) => byDate.get(date) ?? { date, orders: 0, revenue: 0, conversations: 0, conversionRate: 0 },
+  );
+  const nDays = days.length;
+  const best = series.length ? series.reduce((a, b) => (b.revenue > a.revenue ? b : a)) : null;
 
-      {/* Row 2b — Ventas por fuente y cierre (order-centric, reconciles to headline
-          revenue). Every active order → one source + one closing channel, with a
-          per-source drill-down for auditing the assignment. */}
-      {attribution.total.orders > 0 && (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-          <Module
-            title="Ventas por fuente y cierre"
-            subtitle="Cada pedido asignado a una fuente (de dónde vino el cliente) y un canal de cierre (bot / bot asistido / asesora) — suma exacta de las ventas del período · clic en una fuente para auditar sus pedidos"
-            info
-            className="lg:col-span-12"
-          >
-            <SalesAttributionModule
-              attribution={attribution}
-              metaSpend={metaSpend ?? null}
-              currency={currency}
-              timezone={timezone}
-            />
-          </Module>
-        </div>
-      )}
-
-      {/* Row 2b-bis — Recuperación de carritos abandonados. Hidden until carts exist. */}
-      {cartStats && (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-          <Module
-            title="🛒 Recuperación de carritos"
-            subtitle="Carritos abandonados (formulario COD / borradores de Shopify) que se convirtieron en pedido real"
-            info
-            className="lg:col-span-12"
-          >
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                <StatCard
-                  label="Carritos del período"
-                  value={String(cartStats.total)}
-                  sub={`${cartStats.pendientes} por trabajar`}
-                />
-                <StatCard
-                  label="Recuperados"
-                  value={`${cartStats.recuperados} · ${formatPct(cartStats.tasaRecuperacion)}`}
-                  sub="se volvieron pedido"
-                />
-                <StatCard
-                  label="Ingresos recuperados"
-                  value={formatCurrency(cartStats.ingresosRecuperados, currency)}
-                  sub={
-                    cartStats.recuperados
-                      ? `ticket prom. ${formatCurrency(cartStats.ticketPromedio, currency)}`
-                      : undefined
-                  }
-                />
-                <StatCard
-                  label="Valor en riesgo"
-                  value={formatCurrency(cartStats.valorEnRiesgo, currency)}
-                  sub="carritos abiertos sin cerrar"
-                />
-              </div>
-              <CartRecoveryBar stats={cartStats} />
+  // ── Celdas ─────────────────────────────────────────────────────────────────
+  const ventasDia: ModuleCell = {
+    id: "ventas-dia",
+    title: "Ventas por día",
+    figure: money(nDays ? totals.revenue / nDays : 0, currency),
+    sub: series.length
+      ? `promedio por día${best && nDays > 1 ? `${SEP}mejor día ${shortDay(best.date)}, ${money(best.revenue, currency)}` : ""}`
+      : "Sin ventas en el periodo",
+    tone: series.length ? undefined : "muted",
+    glyph: nDays > 1 && series.length ? <ColumnsGlyph values={days.map((d) => d.revenue)} label="Ingresos por día; el último día resaltado" /> : undefined,
+    panel: series.length
+      ? {
+          title: "Ventas por día",
+          meta: periodMeta,
+          width: "max-w-[760px]",
+          body: (
+            <div className="flex flex-col gap-6">
+              <dl className={cn(FIGURE_FRAME, "grid-cols-1 shadow-none sm:grid-cols-3")}>
+                <Figure label="Ingresos" value={money(totals.revenue, currency)} delta={hasPrev ? <Change pct={cmp.revenueDeltaPct} /> : undefined} />
+                <Figure label="Pedidos" value={nf.format(totals.ordersCount)} delta={hasPrev ? <Change pct={cmp.ordersDeltaPct} /> : undefined} />
+                <Figure label="Ticket promedio" value={money(totals.aov, currency)} delta={hasPrev ? <Change pct={cmp.aovDeltaPct} /> : undefined} />
+              </dl>
+              <PanelSection title="Ingresos por día">
+                <DailyBars data={days.map((d) => ({ date: d.date, value: d.revenue }))} kind="money" currency={currency} name="Ingresos" />
+              </PanelSection>
+              <PanelSection title="Pedidos por día" help="El mismo eje de días; cada medida en su propio gráfico.">
+                <DailyBars data={days.map((d) => ({ date: d.date, value: d.orders }))} kind="count" name="Pedidos" height={160} />
+              </PanelSection>
+              <PanelSection title="Día por día">
+                <DayTable days={days} currency={currency} />
+              </PanelSection>
             </div>
-          </Module>
-        </div>
-      )}
+          ),
+        }
+      : null,
+  };
 
-      {/* Row 2c — Rendimiento por campaña (revenue half of ROAS). Hidden until
-          campaign-attributed leads exist. */}
-      {campaignStats.length > 0 && (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-          <Module
-            title="Rendimiento por anuncio (Meta)"
-            subtitle="Gasto e impresiones desde Meta · ventas y entregas desde Shopify y logística · abre una fila para auditar producto y pedidos"
-            info
-            className="lg:col-span-12"
-          >
-            <CampaignTable
-              rows={campaignStats}
-              currency={currency}
-              catalogStoreIds={scope === "all" ? stores.map((store) => store.id) : [scope]}
+  const conversion: ModuleCell = {
+    id: "conversion",
+    title: "Conversión",
+    figure: totals.conversationsCount ? pct(totals.conversionRate) : "—",
+    tone: totals.conversationsCount ? undefined : "muted",
+    sub: totals.conversationsCount
+      ? `${nf.format(totals.ordersCount)} pedidos de ${nf.format(totals.conversationsCount)} conversaciones`
+      : "Sin conversaciones en el periodo",
+    glyph: nDays > 1 && totals.conversationsCount ? <LineGlyph values={days.map((d) => d.conversionRate)} label="Conversión por día" /> : undefined,
+    panel: totals.conversationsCount
+      ? {
+          title: "Conversión",
+          meta: periodMeta,
+          width: "max-w-[760px]",
+          body: (
+            <div className="flex flex-col gap-6">
+              <dl className={cn(FIGURE_FRAME, "grid-cols-1 shadow-none sm:grid-cols-3")}>
+                <Figure
+                  label="Conversión"
+                  value={pct(totals.conversionRate)}
+                  delta={hasPrev ? <Change pct={prev.conversationsCount ? (totals.conversionRate - prev.conversionRate) * 100 : null} unit="pts" /> : undefined}
+                />
+                <Figure label="Conversaciones" value={nf.format(totals.conversationsCount)} delta={hasPrev ? <Change pct={pctDelta(totals.conversationsCount, prev.conversationsCount)} /> : undefined} />
+                <Figure label="Pedidos" value={nf.format(totals.ordersCount)} delta={hasPrev ? <Change pct={cmp.ordersDeltaPct} /> : undefined} />
+              </dl>
+              <PanelSection title="Conversión por día" help="Pedidos sobre conversaciones de cada día.">
+                <DailyLine data={days.map((d) => ({ date: d.date, value: d.conversionRate }))} kind="pct" name="Conversión" />
+              </PanelSection>
+              <PanelSection title="Conversaciones por día">
+                <DailyBars data={days.map((d) => ({ date: d.date, value: d.conversations }))} kind="count" name="Conversaciones" height={160} />
+              </PanelSection>
+              <PanelSection title="Día por día">
+                <DayTable days={days} currency={currency} />
+              </PanelSection>
+            </div>
+          ),
+        }
+      : null,
+  };
+
+  const topStore = byStore[0];
+  const storeCell: ModuleCell =
+    singleStore && pattern
+      ? {
+          id: "horas",
+          title: "Patrón de horas",
+          figure: pattern.peak ? `${WEEKDAYS[pattern.peak.weekday]} ${String(pattern.peak.hour).padStart(2, "0")}:00` : "—",
+          tone: pattern.peak ? undefined : "muted",
+          sub: pattern.peak ? `el pico, con ${nf.format(pattern.peak.count)} órdenes${SEP}${timezone}` : "Sin órdenes en el periodo",
+          glyph: pattern.peak ? (
+            <ColumnsGlyph
+              values={pattern.byHour}
+              highlight={pattern.byHour.indexOf(Math.max(...pattern.byHour))}
+              label="Órdenes por hora del día; la hora con más resaltada"
             />
-            {webSuelto.pedidos > 0 && (
-              <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                Fuera de la tabla: <strong>{webSuelto.pedidos}</strong> pedidos del carrito COD de la
-                web ({formatCurrency(webSuelto.ingresos, currency)}) llegaron sin decir de qué
-                anuncio salieron. Se sabe la campaña, no la creatividad, y repartirlos entre sus
-                anuncios sería inventar cuál vendió. Se arregla en Meta: la plantilla de URL de esas
-                cuentas manda el nombre del anuncio donde debería mandar <code>{"{{ad.id}}"}</code>.
+          ) : undefined,
+          panel: pattern.peak
+            ? { title: "Patrón de horas", meta: `${periodMeta}${SEP}${timezone}`, width: "max-w-[640px]", body: <HourPattern pattern={pattern} /> }
+            : null,
+        }
+      : {
+          id: "tiendas",
+          title: "Por tienda",
+          figure: topStore && totals.revenue ? pct(topStore.revenue / totals.revenue, 0) : "—",
+          tone: topStore ? undefined : "muted",
+          sub: topStore ? `de los ingresos son de ${topStore.name}` : "Aún no hay tiendas con datos",
+          glyph: byStore.length ? (
+            <BarsGlyph rows={byStore.slice(0, 3).map((s) => ({ label: s.name, value: s.revenue, display: money(s.revenue, currency) }))} />
+          ) : undefined,
+          panel: byStore.length
+            ? {
+                title: "Por tienda",
+                meta: rangeLabel(range),
+                width: "max-w-[720px]",
+                body: (
+                  <PanelSection
+                    title="Resumen por tienda"
+                    help="De los cierres diarios de cada tienda; la conversión es pedidos sobre conversaciones."
+                    aside={
+                      <a href={`/api/export?kind=rollups&${exportBase}`} className={opsButtonClass("secondary", "sm", "pointer-coarse:h-11")}>
+                        <IconDownload />
+                        CSV
+                      </a>
+                    }
+                  >
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[520px] text-sm">
+                        <thead>
+                          <tr className="border-b border-line text-left">
+                            <th scope="col" className={cn(TH, "pl-0")}>Tienda</th>
+                            <th scope="col" className={cn(TH, "text-right")}>Órdenes</th>
+                            <th scope="col" className={cn(TH, "text-right")}>Ingresos</th>
+                            <th scope="col" className={cn(TH, "text-right")}>Ticket</th>
+                            <th scope="col" className={cn(TH, "pr-0 text-right")}>Conversión</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {byStore.map((r) => (
+                            <tr key={r.id} className="border-b border-line">
+                              <td className="py-2.5 pr-3">
+                                <span className="block font-medium text-ink-900">{r.name}</span>
+                                <span className="mt-1.5 block h-1 w-full max-w-48 rounded-full bg-line">
+                                  <span className="block h-full rounded-full bg-ink-500" style={{ width: `${totals.revenue ? Math.max(2, (r.revenue / totals.revenue) * 100) : 0}%` }} />
+                                </span>
+                              </td>
+                              <td className="px-3 py-2.5 text-right tabular-nums text-ink-700">{nf.format(r.orders)}</td>
+                              <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-ink-900">{formatCurrency(r.revenue, currency)}</td>
+                              <td className="px-3 py-2.5 text-right tabular-nums text-ink-700">{formatCurrency(r.aov, currency)}</td>
+                              <td className="py-2.5 pl-3 text-right tabular-nums text-ink-700">{pct(r.conv)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </PanelSection>
+                ),
+              }
+            : null,
+        };
+
+  const topProduct = products[0];
+  const productos: ModuleCell = {
+    id: "productos",
+    title: "Productos",
+    figure: topProduct ? `${nf.format(topProduct.quantity)} u` : "—",
+    tone: topProduct ? undefined : "muted",
+    sub: topProduct ? `${topProduct.title}, el más vendido` : "Sin líneas de producto en el periodo",
+    glyph: products.length ? (
+      <BarsGlyph rows={products.slice(0, 3).map((p) => ({ label: p.title, value: p.quantity, display: `${nf.format(p.quantity)} u` }))} />
+    ) : undefined,
+    panel: products.length
+      ? {
+          title: "Productos más vendidos",
+          meta: periodMeta,
+          width: "max-w-[720px]",
+          body: (
+            <PanelSection title={`Los ${products.length} con más unidades`} help="Por SKU, o por título cuando no hay SKU. Las órdenes canceladas no cuentan.">
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[520px] text-sm">
+                  <thead>
+                    <tr className="border-b border-line text-left">
+                      <th scope="col" className={cn(TH, "pl-0")}>Producto</th>
+                      <th scope="col" className={cn(TH, "text-right")}>Unidades</th>
+                      <th scope="col" className={cn(TH, "text-right")}>Órdenes</th>
+                      <th scope="col" className={cn(TH, "pr-0 text-right")}>Ingresos</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {products.map((p) => (
+                      <tr key={p.key} className="border-b border-line">
+                        <td className="py-2.5 pr-3">
+                          <span className="block text-ink-900">{p.title}</span>
+                          <span className="mt-1.5 block h-1 w-full max-w-64 rounded-full bg-line">
+                            <span className="block h-full rounded-full bg-ink-500" style={{ width: `${Math.max(2, (p.quantity / (topProduct?.quantity || 1)) * 100)}%` }} />
+                          </span>
+                        </td>
+                        <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-ink-900">{nf.format(p.quantity)}</td>
+                        <td className="px-3 py-2.5 text-right tabular-nums text-ink-700">{nf.format(p.orders)}</td>
+                        <td className="py-2.5 pl-3 text-right tabular-nums text-ink-700">{formatCurrency(p.revenue, currency)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </PanelSection>
+          ),
+        }
+      : null,
+  };
+
+  const topSource = attribution.sources[0];
+  const fuente: ModuleCell = {
+    id: "fuente",
+    title: "Fuente de las ventas",
+    figure: topSource ? pct(topSource.pct / 100, 0) : "—",
+    tone: topSource ? undefined : "muted",
+    sub: topSource ? `de las ventas vienen de ${topSource.label}` : "Sin pedidos en el periodo para atribuir",
+    glyph: attribution.total.orders ? (
+      <StackGlyph
+        parts={attribution.sources.map((s) => ({ label: s.label, value: s.revenue, color: SOURCE_SERIES[s.key] ?? VIZ.ink300 }))}
+      />
+    ) : undefined,
+    panel: attribution.total.orders
+      ? {
+          title: "Ventas por fuente y cierre",
+          meta: periodMeta,
+          width: "max-w-[880px]",
+          body: <SalesAttributionModule attribution={attribution} metaSpend={metaSpend ?? null} currency={currency} timezone={timezone} />,
+        }
+      : null,
+  };
+
+  const channelTotal = CHANNEL_COLS.reduce((s, c) => s + channels[c.key].revenue, 0);
+  const canal: ModuleCell = {
+    id: "canal",
+    title: "Canal de cierre",
+    figure: channelTotal ? pct(channels.asesora.revenue / channelTotal, 0) : "—",
+    tone: channelTotal ? undefined : "muted",
+    sub: channelTotal
+      ? `lo cerró una asesora${SEP}${money(channels.asesora.revenue, currency)} de ${money(channelTotal, currency)}`
+      : "Sin ventas en el periodo",
+    glyph: channelTotal ? (
+      <StackGlyph parts={CHANNEL_COLS.map((c) => ({ label: c.title, value: channels[c.key].revenue, color: CHANNEL_SHADE[c.key] }))} />
+    ) : undefined,
+    panel: channelTotal
+      ? {
+          title: "Ventas: bot y asesoras",
+          meta: periodMeta,
+          width: "max-w-[760px]",
+          body: (
+            <div className="flex flex-col gap-4">
+              <p className="max-w-[68ch] text-[13px] leading-5 text-ink-600">
+                Tres canales y no dos: el bot asistido es una venta que cerró el bot después de que una asesora gestionara el lead. Asistir no
+                es cerrar, así que no se suma a la asesora.
               </p>
-            )}
-          </Module>
-        </div>
-      )}
+              <BotVsAdvisor channels={channels} currency={currency} />
+            </div>
+          ),
+        }
+      : null,
+  };
 
-      {/* Row 2c-bis — Tendencia por anuncio (leads/día). Hidden until ≥2 días con datos. */}
-      {campaignTrend.rows.length > 1 && (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-          <Module
-            title="Tendencia por anuncio (Meta)"
-            subtitle="Leads por día, una línea por anuncio (top 5 + Otros)"
-            info
-            className="lg:col-span-12"
-          >
-            <CampaignTrendChart rows={campaignTrend.rows} series={campaignTrend.series} />
-          </Module>
-        </div>
-      )}
+  const roas = deliveredRoas(campaignStats, currency);
+  const adSpend = campaignStats.filter((r) => sameCurrency(r.metaCurrency, currency) && !r.currencyConflict).reduce((s, r) => s + r.spend, 0);
+  const adOrders = campaignStats.reduce((s, r) => s + r.pedidos, 0);
+  const topAds = [...campaignStats].sort((a, b) => b.pedidos - a.pedidos || b.leads - a.leads).slice(0, 3);
+  const anuncios: ModuleCell = {
+    id: "anuncios",
+    title: "Anuncios de Meta",
+    figure: campaignStats.length ? (roas != null ? `${roas.toFixed(2)}×` : `${nf.format(adOrders)} pedidos`) : "—",
+    tone: campaignStats.length ? undefined : "muted",
+    sub: campaignStats.length
+      ? roas != null
+        ? `ROAS entregado${SEP}gasto ${money(adSpend, currency)}${SEP}${nf.format(adOrders)} pedidos`
+        : `de ${nf.format(campaignStats.length)} anuncios${SEP}sin gasto comparable en ${currency}`
+      : "Sin anuncios con leads o gasto en el periodo",
+    glyph: topAds.length ? (
+      <BarsGlyph rows={topAds.map((r) => ({ label: prettyAdName(r.label), value: r.pedidos, display: `${nf.format(r.pedidos)} ped.` }))} />
+    ) : undefined,
+    panel: campaignStats.length
+      ? {
+          title: "Rendimiento por anuncio (Meta)",
+          meta: `${nf.format(campaignStats.length)} anuncios${SEP}${periodMeta}${SEP}gasto de Meta, ventas y entregas de Shopify y logística`,
+          width: "max-w-[1320px]",
+          body: (
+            <div className="flex flex-col gap-4">
+              {webSuelto.pedidos > 0 && (
+                <Banner tone="warn" title={`${nf.format(webSuelto.pedidos)} pedidos de la web fuera de la tabla`}>
+                  Llegaron por el carrito COD ({formatCurrency(webSuelto.ingresos, currency)}) sin decir de qué anuncio salieron. Se sabe la
+                  campaña, no la creatividad, y repartirlos entre sus anuncios sería inventar cuál vendió. Se arregla en Meta: la plantilla de
+                  URL de esas cuentas manda el nombre del anuncio donde debería mandar <code className="font-mono text-xs">{"{{ad.id}}"}</code>.
+                </Banner>
+              )}
+              <CampaignTable
+                rows={campaignStats}
+                currency={currency}
+                catalogStoreIds={scope === "all" ? stores.map((store) => store.id) : [scope]}
+              />
+            </div>
+          ),
+        }
+      : null,
+  };
 
-      {/* Row 2d — Por número de WhatsApp (API vs Business). Hidden until ≥2 buckets. */}
-      {waStats.length > 1 && (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-          <Module
-            title="Por número de WhatsApp"
-            subtitle="Leads, conversión e ingresos según el número por el que escribió el cliente"
-            info
-            className="lg:col-span-12"
-          >
-            <SimpleTable
-              rows={waStats}
-              empty="Sin números atribuidos todavía."
-              columns={[
-                {
-                  key: "label",
-                  header: "Número",
-                  render: (r) => {
-                    if (!r.phoneNumberId)
-                      return <span className="text-slate-500">📱 Sin asignar</span>;
-                    const n = waNumbers?.[r.phoneNumberId];
-                    const kind = waKindLabel(n?.kind ?? null);
-                    return (
-                      <span className="font-medium text-slate-800">
-                        📱 {waLabel(n, r.phoneNumberId)}
-                        {kind && <span className="ml-1 font-normal text-slate-400">· {kind}</span>}
-                        {n?.displayPhone && (
-                          <span className="ml-1 font-normal text-slate-400">· {n.displayPhone}</span>
-                        )}
-                      </span>
-                    );
-                  },
-                },
-                { key: "leads", header: "Leads", align: "right", render: (r) => r.leads },
-                { key: "pedidos", header: "Pedidos", align: "right", render: (r) => r.pedidos },
-                {
-                  key: "conversion",
-                  header: "Conversión",
-                  align: "right",
-                  render: (r) => formatPct(r.conversion),
-                },
-                {
-                  key: "ingresos",
-                  header: "Ingresos",
-                  align: "right",
-                  render: (r) => (
-                    <span className="font-semibold text-emerald-700">
-                      {formatCurrency(r.ingresos, currency)}
-                    </span>
-                  ),
-                },
-              ]}
-            />
-          </Module>
-        </div>
-      )}
-
-      {/* Row 3 — Ventas · Resumen por tienda · Integridad de conversión */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-        <Module title="Ventas" subtitle="Ingresos por día" className="lg:col-span-5">
-          {series.length ? (
-            <RevenueOrdersChart
-              data={series.map((s) => ({ date: s.date, revenue: s.revenue, orders: s.orders }))}
-            />
-          ) : (
-            <p className="text-sm text-slate-400">Sin datos en el rango.</p>
-          )}
-        </Module>
-        {singleStore && pattern ? (
-          <Module title="Patrón fecha / hora" subtitle={timezone} info className="lg:col-span-4">
-            <HourPattern pattern={pattern} />
-          </Module>
-        ) : (
-        <Module
-          title="Resumen por tienda"
-          className="lg:col-span-4"
-          right={
-            <a
-              href={`/api/export?kind=rollups&${exportBase}`}
-              className="text-xs font-medium text-brand-700 hover:underline"
-            >
-              CSV
-            </a>
+  const trendDays = campaignTrend.rows.map((row) => campaignTrend.series.reduce((s, x) => s + Number(row[x.key] ?? 0), 0));
+  const trendTotal = trendDays.reduce((s, v) => s + v, 0);
+  const trendBySeries = campaignTrend.series.map((x, i) => ({
+    ...x,
+    color: trendColor(x.key, i),
+    total: campaignTrend.rows.reduce((s, row) => s + Number(row[x.key] ?? 0), 0),
+  }));
+  const tendencia: ModuleCell = {
+    id: "tendencia",
+    title: "Leads por anuncio",
+    figure: trendTotal ? `${nf.format(trendTotal)} leads` : "—",
+    tone: trendTotal ? undefined : "muted",
+    sub:
+      campaignTrend.rows.length > 1
+        ? `de anuncios, por día${SEP}los ${Math.min(5, campaignTrend.series.filter((s) => s.key !== "otros").length)} principales y otros`
+        : trendTotal
+          ? "Hace falta más de un día con leads de anuncios"
+          : "Sin leads de anuncios en el periodo",
+    glyph: campaignTrend.rows.length > 1 ? <LineGlyph values={trendDays} label="Leads de anuncios por día" /> : undefined,
+    panel:
+      campaignTrend.rows.length > 1
+        ? {
+            title: "Tendencia por anuncio (Meta)",
+            meta: periodMeta,
+            width: "max-w-[880px]",
+            body: (
+              <div className="flex flex-col gap-6">
+                <PanelSection title="Leads por día" help="Una línea por anuncio: los cinco con más leads y el resto en «Otros».">
+                  <Legend items={trendBySeries.map((s) => ({ label: s.label, color: s.color }))} />
+                  <TrendLines rows={campaignTrend.rows} series={campaignTrend.series} />
+                </PanelSection>
+                <PanelSection title="Por anuncio">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-line text-left">
+                        <th scope="col" className={cn(TH, "pl-0")}>Anuncio</th>
+                        <th scope="col" className={cn(TH, "text-right")}>Leads</th>
+                        <th scope="col" className={cn(TH, "pr-0 text-right")}>Del total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {trendBySeries.map((s) => (
+                        <tr key={s.key} className="border-b border-line">
+                          <td className="py-2.5 pr-3">
+                            <span className="inline-flex min-w-0 items-center gap-2 text-ink-900">
+                              <span aria-hidden className="size-2.5 shrink-0 rounded-[2px]" style={{ background: s.color }} />
+                              {s.label}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-ink-900">{nf.format(s.total)}</td>
+                          <td className="py-2.5 pl-3 text-right tabular-nums text-ink-600">{trendTotal ? pct(s.total / trendTotal) : "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </PanelSection>
+              </div>
+            ),
           }
-        >
-          <SimpleTable
-            rows={byStore}
-            empty="Aún no hay tiendas con datos."
-            columns={[
-              {
-                key: "name",
-                header: "Tienda",
-                render: (r) => <span className="font-medium text-slate-800">{r.name}</span>,
-              },
-              { key: "orders", header: "Órdenes", align: "right", render: (r) => r.orders },
-              {
-                key: "revenue",
-                header: "Ingresos",
-                align: "right",
-                render: (r) => formatCurrency(r.revenue, currency),
-              },
-              {
-                key: "aov",
-                header: "AOV",
-                align: "right",
-                render: (r) => formatCurrency(r.aov, currency),
-              },
-              { key: "conv", header: "Conv.", align: "right", render: (r) => formatPct(r.conv) },
+        : null,
+  };
+
+  const firstStage = funnelStages[0];
+  const lastStage = funnelStages[funnelStages.length - 1];
+  const embudo: ModuleCell = {
+    id: "embudo",
+    title: "Embudo conversacional",
+    figure: firstStage?.value && lastStage ? pct(lastStage.value / firstStage.value) : "—",
+    tone: firstStage?.value ? undefined : "muted",
+    sub:
+      firstStage?.value && lastStage
+        ? `${nf.format(lastStage.value)} ${lastStage.label.toLowerCase()} de ${nf.format(firstStage.value)} ${firstStage.label.toLowerCase()}`
+        : "Sin mensajes en el periodo",
+    // El dibujo empieza en las conversaciones: los mensajes son otra unidad
+    // (varios por conversación) y con ellos el resto quedaba en puntos.
+    glyph: firstStage?.value ? (
+      <FunnelGlyph
+        values={funnelStages.slice(1).map((s) => s.value)}
+        label={funnelStages.slice(1).map((s) => `${s.label} ${nf.format(s.value)}`).join(", ")}
+      />
+    ) : undefined,
+    panel: firstStage?.value
+      ? { title: "Embudo de conversión conversacional", meta: periodMeta, width: "max-w-[640px]", body: <HorizontalFunnel stages={funnelStages} /> }
+      : null,
+  };
+
+  const critical = health.critical;
+  const saludEmbudo: ModuleCell = {
+    id: "salud-embudo",
+    title: "Salud del embudo",
+    figure: critical?.stepPct != null ? pct(critical.stepPct, 0) : "—",
+    tone: critical ? (critical.status === "red" ? "crit" : critical.status === "amber" ? "warn" : undefined) : "muted",
+    sub: critical ? `llega a ${critical.label.toLowerCase()}, el paso más débil` : "Sin datos para medir los pasos",
+    glyph: critical ? (
+      <DotsGlyph
+        items={health.stages
+          .filter((s) => s.stepPct != null)
+          .map((s) => ({ label: `${s.label.split(" ")[0]} ${s.stepPct != null ? Math.round(s.stepPct * 100) : 0}\u00a0%`, tone: HEALTH[s.status].tone as DotTone }))}
+      />
+    ) : undefined,
+    panel: critical ? { title: "Salud del embudo", meta: periodMeta, width: "max-w-[640px]", body: <FunnelHealth stages={health.stages} critical={critical} /> } : null,
+  };
+
+  const topReason = loss.reasons[0];
+  const motivos: ModuleCell = {
+    id: "motivos",
+    title: "Por qué no compraron",
+    figure: topReason ? sharePct(topReason.pct) : "—",
+    tone: topReason ? undefined : "muted",
+    sub: topReason ? `${topReason.label}${SEP}de ${nf.format(loss.total)} que no compraron` : "Sin leads sin convertir en el periodo",
+    glyph: loss.reasons.length ? (
+      <BarsGlyph rows={loss.reasons.slice(0, 3).map((r) => ({ label: r.label, value: r.count, display: sharePct(r.pct) }))} />
+    ) : undefined,
+    panel: loss.reasons.length
+      ? { title: "¿Por qué no compraron?", meta: periodMeta, width: "max-w-[640px]", body: <LossReasonBars items={loss.reasons} total={loss.total} /> }
+      : null,
+  };
+
+  const impacto: ModuleCell = {
+    id: "impacto",
+    title: "Venta perdida estimada",
+    figure: lostRev.items.length ? money(lostRev.total, currency) : "—",
+    tone: lostRev.items.length ? undefined : "muted",
+    sub: lostRev.items.length ? `leads sin comprar × ticket de ${money(totals.aov, currency)}` : "Sin pérdidas estimadas en el periodo",
+    glyph: lostRev.items.length ? (
+      <BarsGlyph rows={[...lostRev.items].sort((a, b) => b.estRevenue - a.estRevenue).slice(0, 3).map((r) => ({ label: r.label, value: r.estRevenue, display: money(r.estRevenue, currency) }))} />
+    ) : undefined,
+    panel: lostRev.items.length
+      ? {
+          title: "Impacto económico perdido",
+          meta: periodMeta,
+          width: "max-w-[640px]",
+          body: (
+            <div className="flex flex-col gap-4">
+              <p className="max-w-[68ch] text-[13px] leading-5 text-ink-600">
+                Una estimación gruesa: cuántos leads no compraron por cada motivo, por el ticket promedio del periodo ({formatCurrency(totals.aov, currency)}).
+              </p>
+              <LostRevenueCards items={lostRev.items} total={lostRev.total} currency={currency} />
+            </div>
+          ),
+        }
+      : null,
+  };
+
+  const carritos: ModuleCell = cartStats
+    ? {
+        id: "carritos",
+        title: "Carritos abandonados",
+        figure: pct(cartStats.tasaRecuperacion),
+        sub: `${nf.format(cartStats.recuperados)} de ${nf.format(cartStats.total)} recuperados${SEP}${money(cartStats.valorEnRiesgo, currency)} por trabajar`,
+        glyph: (
+          <StackGlyph
+            parts={[
+              { label: "Recuperados", value: cartStats.recuperados, color: VIZ.ok },
+              { label: "Por trabajar", value: cartStats.pendientes, color: VIZ.warn },
+              { label: "Perdidos", value: cartStats.perdidos, color: VIZ.ink300 },
             ]}
           />
-        </Module>
-        )}
-        <Module title="Integridad de conversión" info className="lg:col-span-3">
-          <dl className="space-y-2 text-sm">
-            <Row k="Órdenes con conversación" v={fine.ordersWithConversationId} />
-            <Row k="Emparejadas" v={fine.matchedOrders} accent="emerald" />
-            <Row k="Conversación no encontrada" v={fine.unmatchedOrders} accent="amber" />
-            <Row k="Sin id de conversación" v={fine.orphanOrders} accent="slate" />
-          </dl>
-        </Module>
-      </div>
-
-      {/* Row 4 — BOT vs Asesores · Tendencia · Salud del embudo */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-        <Module title="Ventas generadas: BOT vs Asesores" info className="lg:col-span-5">
-          <BotVsAdvisor channels={channels} currency={currency} />
-        </Module>
-        <Module
-          title="Tendencia de conversión y pedidos"
-          subtitle={`${series.length} día(s)`}
-          info
-          className="lg:col-span-4"
-        >
-          {series.length ? (
-            <ConversionOrdersTrend
-              data={series.map((s) => ({
-                date: s.date,
-                conversionRate: s.conversionRate,
-                orders: s.orders,
-              }))}
-            />
-          ) : (
-            <p className="text-sm text-slate-400">Sin datos en el rango.</p>
-          )}
-        </Module>
-        <Module title="Salud del embudo" info className="lg:col-span-3">
-          <FunnelHealth stages={health.stages} critical={health.critical} />
-        </Module>
-      </div>
-
-      {/* Row 5 — Desglose de negocio · Top productos · Salud operativa */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-        <Module title="Desglose de negocio" className="lg:col-span-5">
-          <div className="grid grid-cols-2 gap-4">
-            <Mini
-              label="% con promo"
-              value={formatPct(breakdown.promoPct / 100)}
-              sub={`${breakdown.promoOrders} órdenes · tag promo-whatsapp`}
-            />
-            <Mini
-              label="Stock por validar"
-              value={String(breakdown.stockValidarOrders)}
-              sub="órdenes marcadas"
-            />
-            <Mini
-              label="Canceladas"
-              value={String(totals.cancelledOrders)}
-              sub="excluidas de ingresos"
-            />
-            <Mini
-              label="Reembolsado"
-              value={formatCurrency(totals.refundedAmount, currency)}
-              sub="en órdenes activas"
-            />
-          </div>
-          <div className="mt-5">
-            <p className="mb-2 text-xs font-medium text-slate-500">Modo de envío</p>
-            <BarList items={shippingItems} />
-          </div>
-        </Module>
-        <Module title="Top productos (por unidades)" className="lg:col-span-4">
-          <BarList items={productItems} empty="Sin líneas de producto en el rango." />
-        </Module>
-        <Module
-          title="Salud operativa"
-          subtitle="Kapso · best-effort"
-          info
-          className="lg:col-span-3"
-        >
-          {opsStores.length ? (
-            <div className="space-y-3">
-              {opsStores.map((s) => {
-                const p = ops[s.id] as OpsPayload | undefined;
-                return (
-                  <div key={s.id} className="rounded-xl border border-slate-100 px-3 py-2">
-                    <div className="flex items-center justify-between">
-                      <span className="truncate text-sm font-medium text-slate-800">{s.name}</span>
-                      <HealthDot status={p?.health?.status} />
-                    </div>
-                    {p ? (
-                      <dl className="mt-1.5 space-y-1 text-xs">
-                        <Row
-                          k="Errores API 24h"
-                          v={
-                            p.apiLogs
-                              ? `${p.apiLogs.errors ?? 0}/${p.apiLogs.total ?? 0}`
-                              : "—"
-                          }
-                          small
-                        />
-                        <Row
-                          k="Latencia avg/p95"
-                          v={
-                            p.apiLogs?.avgLatencyMs != null
-                              ? `${Math.round(p.apiLogs.avgLatencyMs)}/${p.apiLogs.p95LatencyMs ?? "—"} ms`
-                              : "—"
-                          }
-                          small
-                        />
-                        <Row
-                          k="Conversaciones 24h"
-                          v={
-                            p.activity24h
-                              ? `${p.activity24h.conversations ?? 0} (${p.activity24h.activeConversations ?? 0} act.)`
-                              : "—"
-                          }
-                          small
-                        />
-                      </dl>
-                    ) : (
-                      <p className="mt-1 text-xs text-slate-400">Sin snapshot aún.</p>
-                    )}
-                  </div>
-                );
-              })}
+        ),
+        panel: {
+          title: "Recuperación de carritos",
+          meta: periodMeta,
+          width: "max-w-[720px]",
+          body: (
+            <div className="flex flex-col gap-5">
+              <p className="max-w-[68ch] text-[13px] leading-5 text-ink-600">
+                Carritos abandonados (formulario COD o borradores de Shopify) que se convirtieron en pedido real.
+              </p>
+              <dl className={cn(FIGURE_FRAME, "grid-cols-2 shadow-none")}>
+                <Figure label="Carritos del periodo" value={nf.format(cartStats.total)} sub={`${nf.format(cartStats.pendientes)} por trabajar`} />
+                <Figure label="Recuperados" value={nf.format(cartStats.recuperados)} delta={<span className="text-[13px] font-semibold tabular-nums text-ink-600">{pct(cartStats.tasaRecuperacion)}</span>} sub="se volvieron pedido" />
+                <Figure
+                  label="Ingresos recuperados"
+                  value={formatCurrency(cartStats.ingresosRecuperados, currency)}
+                  sub={cartStats.recuperados ? `ticket promedio ${formatCurrency(cartStats.ticketPromedio, currency)}` : undefined}
+                />
+                <Figure label="Valor en riesgo" value={formatCurrency(cartStats.valorEnRiesgo, currency)} sub="carritos abiertos sin cerrar" />
+              </dl>
+              <StackGlyph
+                parts={[
+                  { label: "Recuperados", value: cartStats.recuperados, color: VIZ.ok },
+                  { label: "Por trabajar", value: cartStats.pendientes, color: VIZ.warn },
+                  { label: "Perdidos", value: cartStats.perdidos, color: VIZ.ink300 },
+                ]}
+              />
             </div>
-          ) : (
-            <EmptyState title="Sin tiendas para mostrar." />
+          ),
+        },
+      }
+    : {
+        id: "carritos",
+        title: "Carritos abandonados",
+        figure: "—",
+        tone: "muted",
+        sub: "Sin carritos en el periodo",
+      };
+
+  const waLabelOf = (id: string) => (id ? waLabel(waNumbers?.[id], id) : "Sin asignar");
+  const topWa = [...waStats].sort((a, b) => b.ingresos - a.ingresos)[0];
+  const whatsapp: ModuleCell = {
+    id: "whatsapp",
+    title: "Números de WhatsApp",
+    figure: waStats.length ? `${nf.format(waStats.length)} ${waStats.length === 1 ? "número" : "números"}` : "—",
+    tone: waStats.length ? undefined : "muted",
+    sub: topWa ? `${waLabelOf(topWa.phoneNumberId)} vende más${SEP}${money(topWa.ingresos, currency)}` : "Sin leads en el periodo",
+    glyph: waStats.length ? (
+      <BarsGlyph rows={[...waStats].sort((a, b) => b.leads - a.leads).slice(0, 3).map((r) => ({ label: waLabelOf(r.phoneNumberId), value: r.leads, display: `${nf.format(r.leads)} leads` }))} />
+    ) : undefined,
+    panel: waStats.length
+      ? {
+          title: "Por número de WhatsApp",
+          meta: periodMeta,
+          width: "max-w-[760px]",
+          body: (
+            <PanelSection title="Leads, conversión e ingresos" help="Según el número por el que escribió el cliente.">
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[560px] text-sm">
+                  <thead>
+                    <tr className="border-b border-line text-left">
+                      <th scope="col" className={cn(TH, "pl-0")}>Número</th>
+                      <th scope="col" className={cn(TH, "text-right")}>Leads</th>
+                      <th scope="col" className={cn(TH, "text-right")}>Pedidos</th>
+                      <th scope="col" className={cn(TH, "text-right")}>Conversión</th>
+                      <th scope="col" className={cn(TH, "pr-0 text-right")}>Ingresos</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {waStats.map((r) => {
+                      const n = r.phoneNumberId ? waNumbers?.[r.phoneNumberId] : undefined;
+                      const kind = waKindLabel(n?.kind ?? null);
+                      return (
+                        <tr key={r.phoneNumberId || "sin-asignar"} className="border-b border-line">
+                          <td className="py-2.5 pr-3">
+                            <span className={cn("block font-medium", r.phoneNumberId ? "text-ink-900" : "text-ink-500")}>{waLabelOf(r.phoneNumberId)}</span>
+                            {(kind || n?.displayPhone) && (
+                              <span className="mt-0.5 block text-xs tabular-nums text-ink-500">{[kind, n?.displayPhone].filter(Boolean).join(SEP)}</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2.5 text-right tabular-nums text-ink-700">{nf.format(r.leads)}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums text-ink-700">{nf.format(r.pedidos)}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums text-ink-700">{pct(r.conversion)}</td>
+                          <td className="py-2.5 pl-3 text-right font-semibold tabular-nums text-ink-900">{formatCurrency(r.ingresos, currency)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </PanelSection>
+          ),
+        }
+      : null,
+  };
+
+  const shipping = [
+    { label: "Contraentrega", value: breakdown.codOrders, color: VIZ.ink900 },
+    { label: "Agencia", value: breakdown.agencyOrders, color: VIZ.ink500 },
+    { label: "Otro", value: breakdown.otherShippingOrders, color: VIZ.ink300 },
+  ];
+  const negocio: ModuleCell = {
+    id: "negocio",
+    title: "Desglose de negocio",
+    figure: breakdown.total ? pct(breakdown.promoPct / 100) : "—",
+    tone: breakdown.total ? undefined : "muted",
+    sub: breakdown.total
+      ? `con promo${SEP}${nf.format(breakdown.stockValidarOrders)} con stock por validar`
+      : "Sin órdenes en el periodo",
+    glyph: breakdown.total ? <StackGlyph parts={shipping} /> : undefined,
+    panel: breakdown.total
+      ? {
+          title: "Desglose de negocio",
+          meta: periodMeta,
+          width: "max-w-[640px]",
+          body: (
+            <div className="flex flex-col gap-6">
+              <dl className={cn(FIGURE_FRAME, "grid-cols-2 shadow-none")}>
+                <Figure label="Con promo" value={pct(breakdown.promoPct / 100)} sub={`${nf.format(breakdown.promoOrders)} órdenes con la etiqueta promo-whatsapp`} />
+                <Figure label="Stock por validar" value={nf.format(breakdown.stockValidarOrders)} sub="órdenes marcadas" />
+                <Figure label="Canceladas" value={nf.format(totals.cancelledOrders)} sub="fuera de los ingresos" />
+                <Figure label="Reembolsado" value={formatCurrency(totals.refundedAmount, currency)} sub="en órdenes activas" />
+              </dl>
+              <PanelSection title="Modo de envío">
+                <ul className="flex flex-col gap-3">
+                  {shipping.map((s) => (
+                    <li key={s.label}>
+                      <div className="flex items-baseline justify-between gap-3 text-sm">
+                        <span className="inline-flex items-center gap-2 text-ink-900">
+                          <span aria-hidden className="size-2.5 rounded-[2px]" style={{ background: s.color }} />
+                          {s.label}
+                        </span>
+                        <span className="tabular-nums text-ink-600">
+                          <span className="font-semibold text-ink-900">{nf.format(s.value)}</span>
+                          {SEP}
+                          {pct(breakdown.total ? s.value / breakdown.total : 0, 0)}
+                        </span>
+                      </div>
+                      <div className="mt-1.5 h-2 rounded-full bg-line">
+                        <div className="h-full rounded-full" style={{ width: `${breakdown.total ? Math.max(s.value ? 2 : 0, (s.value / breakdown.total) * 100) : 0}%`, background: s.color }} />
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </PanelSection>
+            </div>
+          ),
+        }
+      : null,
+  };
+
+  const integridad: ModuleCell = {
+    id: "integridad",
+    title: "Integridad de conversión",
+    figure: fine.ordersWithConversationId ? pct(fine.matchedOrders / fine.ordersWithConversationId) : "—",
+    tone: fine.ordersWithConversationId ? (fine.unmatchedOrders > 0 ? "warn" : undefined) : "muted",
+    sub: fine.ordersWithConversationId
+      ? `de las órdenes con conversación se emparejaron${fine.unmatchedOrders ? `${SEP}${nf.format(fine.unmatchedOrders)} sin encontrar` : ""}`
+      : "Ninguna orden trae id de conversación",
+    glyph:
+      fine.ordersWithConversationId || fine.orphanOrders ? (
+        <StackGlyph
+          parts={[
+            { label: "Emparejadas", value: fine.matchedOrders, color: VIZ.ok },
+            { label: "No encontrada", value: fine.unmatchedOrders, color: VIZ.warn },
+            { label: "Sin id", value: fine.orphanOrders, color: VIZ.ink300 },
+          ]}
+        />
+      ) : undefined,
+    panel: !(fine.ordersWithConversationId || fine.orphanOrders) ? null : {
+      title: "Integridad de conversión",
+      meta: periodMeta,
+      width: "max-w-[560px]",
+      body: (
+        <div className="flex flex-col gap-4">
+          <p className="max-w-[68ch] text-[13px] leading-5 text-ink-600">
+            Cuántas órdenes se pueden unir con su conversación de Kapso por el id de conversación. Una que trae id y no se encuentra es un
+            hueco de la ingesta.
+          </p>
+          <table className="w-full text-sm">
+            <tbody>
+              {[
+                { k: "Órdenes con conversación", v: fine.ordersWithConversationId, tone: "text-ink-900" },
+                { k: "Emparejadas", v: fine.matchedOrders, tone: "text-ok-fg" },
+                { k: "Conversación no encontrada", v: fine.unmatchedOrders, tone: fine.unmatchedOrders ? "text-warn-fg" : "text-ink-900" },
+                { k: "Sin id de conversación", v: fine.orphanOrders, tone: "text-ink-600" },
+              ].map((r) => (
+                <tr key={r.k} className="border-b border-line last:border-0">
+                  <th scope="row" className="py-2.5 pr-3 text-left font-normal text-ink-700">{r.k}</th>
+                  <td className={cn("py-2.5 pl-3 text-right font-semibold tabular-nums", r.tone)}>{nf.format(r.v)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ),
+    },
+  };
+
+  const opsRows = opsStores.map((s) => ({ store: s, p: ops[s.id] as OpsPayload | undefined }));
+  const healthy = opsRows.filter((r) => healthTone(r.p?.health?.status).tone === "ok").length;
+  const apiErrors = opsRows.reduce((sum, r) => sum + (r.p?.apiLogs?.errors ?? 0), 0);
+  const saludOp: ModuleCell = {
+    id: "salud-operativa",
+    title: "Salud operativa (Kapso)",
+    figure: opsRows.length ? `${healthy} de ${opsRows.length}` : "—",
+    tone: !opsRows.length ? "muted" : healthy < opsRows.length ? "warn" : undefined,
+    sub: opsRows.length ? `${opsRows.length === 1 ? "tienda sana" : "tiendas sanas"}${SEP}${nf.format(apiErrors)} errores de API en 24 h` : "Sin tiendas para mostrar",
+    glyph: opsRows.length ? (
+      <DotsGlyph items={opsRows.map((r) => ({ label: r.store.name, tone: healthTone(r.p?.health?.status).dot }))} />
+    ) : undefined,
+    panel: opsRows.length
+      ? {
+          title: "Salud operativa",
+          meta: "Kapso, últimas 24 h, con la mejor información disponible",
+          width: "max-w-[760px]",
+          body: (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[600px] text-sm">
+                <thead>
+                  <tr className="border-b border-line text-left">
+                    <th scope="col" className={cn(TH, "pl-0")}>Tienda</th>
+                    <th scope="col" className={TH}>Estado</th>
+                    <th scope="col" className={cn(TH, "text-right")}>Errores API</th>
+                    <th scope="col" className={cn(TH, "text-right")}>Latencia prom. / p95</th>
+                    <th scope="col" className={cn(TH, "pr-0 text-right")}>Conversaciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {opsRows.map(({ store, p }) => {
+                    const h = healthTone(p?.health?.status);
+                    return (
+                      <tr key={store.id} className="border-b border-line">
+                        <td className="py-2.5 pr-3 font-medium text-ink-900">{store.name}</td>
+                        <td className="px-3 py-2.5">
+                          <Badge tone={h.tone}>{p ? h.label : "Sin datos aún"}</Badge>
+                        </td>
+                        <td className="px-3 py-2.5 text-right tabular-nums text-ink-700">
+                          {p?.apiLogs ? `${nf.format(p.apiLogs.errors ?? 0)} de ${nf.format(p.apiLogs.total ?? 0)}` : "—"}
+                        </td>
+                        <td className="px-3 py-2.5 text-right tabular-nums text-ink-700">
+                          {p?.apiLogs?.avgLatencyMs != null ? `${Math.round(p.apiLogs.avgLatencyMs)} / ${p.apiLogs.p95LatencyMs ?? "—"} ms` : "—"}
+                        </td>
+                        <td className="py-2.5 pl-3 text-right tabular-nums text-ink-700">
+                          {p?.activity24h ? `${nf.format(p.activity24h.conversations ?? 0)} (${nf.format(p.activity24h.activeConversations ?? 0)} activas)` : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ),
+        }
+      : null,
+  };
+
+  const groups: ModuleGroup[] = [
+    { id: "ventas", label: "Ventas", cells: [ventasDia, conversion, storeCell, productos] },
+    { id: "origen", label: "Origen y cierre", cells: [fuente, canal, anuncios, tendencia] },
+    { id: "perdida", label: "Lo que se pierde", cells: [embudo, saludEmbudo, motivos, impacto, carritos] },
+    { id: "sistema", label: "Números, negocio y sistema", cells: [whatsapp, negocio, integridad, saludOp] },
+  ];
+
+  return (
+    <ConsolidadoNav>
+      <div className="flex flex-col gap-6">
+        <header className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">
+              {singleStore ? singleStore.name : "Consolidado"}
+            </h1>
+            <p className="mt-0.5 text-sm text-ink-500">
+              {singleStore ? singleStore.shopify_domain : stores.length > 1 ? `${stores.length} tiendas: ${storeList}` : storeList}
+            </p>
+          </div>
+          {singleStore && (
+            <Link href={`/dashboard/${singleStore.id}/settings`} className={opsButtonClass("secondary", "md", "pointer-coarse:h-11")}>
+              Ajustes de la tienda
+            </Link>
           )}
-        </Module>
+        </header>
+
+        {operations}
+
+        <section aria-labelledby="ventas-periodo" className="flex flex-col gap-4">
+          <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
+            <div className="min-w-0">
+              <h2 id="ventas-periodo" className="text-xl font-semibold leading-7 text-ink-900">
+                Ventas del periodo
+              </h2>
+              <p className="mt-0.5 text-sm text-ink-500 first-letter:uppercase">{context}</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <a href={`/api/export?kind=orders&${exportBase}`} className={opsButtonClass("ghost", "sm", "pointer-coarse:h-11")}>
+                <IconDownload />
+                Órdenes CSV
+              </a>
+              <a href={`/api/export?kind=rollups&${exportBase}`} className={opsButtonClass("ghost", "sm", "pointer-coarse:h-11")}>
+                <IconDownload />
+                Resumen diario CSV
+              </a>
+            </div>
+          </div>
+
+          <ConsolidadoFilters
+            basePath={basePath}
+            range={range}
+            periods={periods}
+            months={monthChips}
+            otherMonths={otherMonths}
+            otherMonth={otherMonth}
+            stores={storeLinks}
+            store={{ value: scope === "all" ? "" : scope, allHref: hrefFor(range, "/dashboard") }}
+          />
+
+          <PendingDim className="flex flex-col gap-6">
+            <dl className={cn(FIGURE_FRAME, "grid-cols-2 lg:grid-cols-5")}>
+              <Figure
+                label="Ingresos"
+                value={money(totals.revenue, currency)}
+                delta={hasPrev ? <Change pct={cmp.revenueDeltaPct} /> : undefined}
+                sub={hasPrev ? `antes ${money(prev.revenue, currency)}` : "sin periodo anterior con datos"}
+              />
+              <Figure
+                label="Pedidos"
+                value={nf.format(totals.ordersCount)}
+                delta={hasPrev ? <Change pct={cmp.ordersDeltaPct} /> : undefined}
+                sub={totals.cancelledOrders ? `${nf.format(totals.cancelledOrders)} cancelados aparte` : undefined}
+              />
+              <Figure
+                label="Ticket promedio"
+                value={money(totals.aov, currency)}
+                delta={hasPrev ? <Change pct={cmp.aovDeltaPct} /> : undefined}
+              />
+              <Figure
+                label="Conversión"
+                value={totals.conversationsCount ? pct(totals.conversionRate) : "—"}
+                delta={hasPrev && totals.conversationsCount ? <Change pct={prev.conversationsCount ? (totals.conversionRate - prev.conversionRate) * 100 : null} unit="pts" /> : undefined}
+                sub={`de ${nf.format(totals.conversationsCount)} conversaciones`}
+              />
+              <Figure
+                label="Primera respuesta"
+                value={hasRt ? formatDuration(totals.avgFirstResponseSeconds) : "—"}
+                sub={hasRt ? "promedio del periodo" : "se activa con la próxima ingesta"}
+                className="col-span-2 lg:col-span-1"
+              />
+            </dl>
+
+            <ModuleBoard groups={groups} />
+          </PendingDim>
+        </section>
       </div>
-
-      {/* Footer — export */}
-      <div className="flex items-center gap-2 pt-1 text-xs text-slate-400">
-        <span>Exportar CSV:</span>
-        <a href={`/api/export?kind=orders&${exportBase}`} className="text-brand-700 hover:underline">
-          órdenes
-        </a>
-        <span>·</span>
-        <a href={`/api/export?kind=rollups&${exportBase}`} className="text-brand-700 hover:underline">
-          rollups
-        </a>
-      </div>
-    </div>
-  );
-}
-
-function Row({
-  k,
-  v,
-  accent,
-  small,
-}: {
-  k: string;
-  v: string | number;
-  accent?: "emerald" | "amber" | "slate";
-  small?: boolean;
-}) {
-  const color =
-    accent === "emerald" ? "text-emerald-600" : accent === "amber" ? "text-amber-600" : "text-slate-900";
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <dt className={cn("text-slate-500", small && "text-xs")}>{k}</dt>
-      <dd className={cn("font-medium", color, small && "text-xs")}>{v}</dd>
-    </div>
-  );
-}
-
-function Mini({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div>
-      <p className="text-xs font-medium text-slate-500">{label}</p>
-      <p className="mt-1 text-xl font-semibold text-slate-900">{value}</p>
-      {sub && <p className="text-xs text-slate-400">{sub}</p>}
-    </div>
-  );
-}
-
-function HealthDot({ status }: { status?: string }) {
-  const ok = status === "healthy" || status === "ok" || status === "active";
-  const warn = status === "degraded" || status === "warning";
-  const color = ok ? "bg-emerald-500" : warn ? "bg-amber-500" : status ? "bg-red-500" : "bg-slate-300";
-  return (
-    <span
-      className={cn("inline-block h-2.5 w-2.5 shrink-0 rounded-full", color)}
-      title={status ?? "desconocido"}
-    />
+    </ConsolidadoNav>
   );
 }
