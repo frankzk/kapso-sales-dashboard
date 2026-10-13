@@ -8037,6 +8037,29 @@ nuevos. Sin eso la excepción sería cierta para el futuro y mentira para lo que
 está en pantalla, que es el desfase de §19.1. Los finalizados no se tocan: su
 historia queda como ocurrió.
 
+**Cada cambio de cobertura que causa una persona queda registrado
+(13-10-2026).** La cobertura no se escribe a mano: la decide
+`order_coverage_for` a partir de la ubicación y de estas decisiones. Lo que una
+persona cambia es la causa, y hasta esta fecha eso dejaba un comentario genérico
+—«Ubicación corregida…»— sin decir que el pedido había pasado de Provincia COD a
+Lima. Ahora, cuando la cobertura de un pedido cambia por una acción humana, se
+escribe el hecho `coverage_changed` con el antes, el después y la causa
+(`lib/coverage-change.ts`), visible en Actividad como «Cobertura cambiada»:
+
+| Acción | Causa registrada | Pedidos |
+| --- | --- | --- |
+| Corregir la ubicación del pedido | `ubicacion_corregida` | Ese pedido |
+| Retirar la corrección de ubicación | `ubicacion_restaurada` | Ese pedido |
+| Guardar o eliminar una excepción de distrito en Ajustes, o marcar el distrito como Provincia COD desde la cotización de Aliclik | `decision_distrito` | Los abiertos de ese distrito |
+
+Es la puerta estándar para el pedido mal clasificado, y la que pide «Descargar
+rótulos» (§28) cuando un pedido de «Provincia COD» resulta ser de Lima. **Solo las
+acciones humanas**: el recálculo del Master corre en tandas de miles y una
+tarifa nueva puede reclasificar un distrito entero, así que registrar ahí cada
+cambio llenaría el historial sin que nadie haya decidido nada. Si el registro no
+se puede escribir, la acción no se deshace —la corrección ya está guardada y la
+cobertura nueva es la verdadera— y el error se muestra.
+
 **La cobertura se calcula sobre `peru_districts`, que es texto libre.** El
 Master rellena la región y la provincia del pedido desde esa tabla
 (`fetchGeo` en `lib/order-master.ts`), y esa región entra a `order_coverage_for`
@@ -8859,10 +8882,33 @@ Por cada pedido seleccionado:
 | Situación | Qué ocurre |
 | --- | --- |
 | Ya tiene una salida **viva** en custodia de la empresa | Se **reimprime esa**; no se crea otra. No cuentan una anulada, entregada o `transferido` —la custodia `empresa` sola no basta— ni una que su courier no entregó (abajo) |
-| No tiene ninguna salida | Se **crea** una sin courier decidido |
-| Su última salida fue **devuelta** | Se **crea** una nueva: rearmar es reprogramación normal, no una salida simultánea |
+| No tiene ninguna salida | **En Lima** se **crea** una sin courier decidido. **Fuera de Lima no se crea nada** (abajo) |
+| Su última salida fue **devuelta** | **En Lima** se **crea** una nueva: rearmar es reprogramación normal, no una salida simultánea |
 | **En Lima**, una salida **no la entregó su courier** (Tanders `RETURNING`/`RETURNED`, Swayp Devolución, anulada después de salir) | Se **crea** la salida nueva con **motivo automático** (09-10-2026): la anterior no está «en la calle» aunque su courier la siga dando en ruta, porque nadie la trabaja |
 | Tiene una salida **todavía en la calle** (viva de verdad) | No se crea nada: una salida adicional exige justificación auditada (§23) y se hace desde el pedido |
+
+**Fuera de Lima el rótulo no crea salida (13-10-2026, decisión del owner).**
+Solo en Lima el rótulo interno es el de verdad: la caja se arma antes de saber
+con qué motorizado o courier sale. En **Provincia COD y Agencia** la caja viaja
+con el rótulo del courier —Aliclik, Shalom, Olva— y el escáner del despacho ya
+acepta su número de guía, así que una salida «por definir» no la necesita
+nadie. Medido del 13-09 al 13-10-2026: de unas 4.200 guías de provincia y
+agencia, 19 pasaron por un rótulo interno y 10 terminaron con la «por definir»
+anulada a mano. La del 13-10 (#KP141065) la creó «Descargar rótulos» sobre una
+tanda que mezclaba coberturas, y la operadora creyó que el sistema había
+generado una guía sola.
+
+- Decide `macro_operation`, la misma que ya separaba Lima en esta tabla.
+- **Solo cambia CREAR.** Un pedido de provincia que ya tiene su salida con la
+  empresa —por ejemplo, la guía de su courier escrita encima de una «por
+  definir» anterior— se sigue reimprimiendo igual.
+- El pedido queda en la lista de la tanda con su motivo: no lleva rótulo
+  interno, la caja viaja con el del courier y su guía se crea desde el pedido.
+  Los demás pedidos de la tanda siguen.
+- **El pedido mal clasificado** —Provincia COD o Agencia que en realidad es de
+  Lima— no tiene atajo para forzar el rótulo: se corrige su **ubicación** en el
+  pedido, la cobertura se recalcula y el cambio queda registrado
+  (`coverage_changed`, §19.0.1). Desde ahí el rótulo se descarga normal.
 
 **La salida que su courier no entregó (09-10-2026, decisión del owner).**
 «Descargar rótulos» respondía «Tiene 1 salida todavía en la calle» a un pedido

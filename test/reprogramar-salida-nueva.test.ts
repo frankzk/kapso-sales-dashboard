@@ -416,7 +416,8 @@ describe("el cableado", () => {
     expect(body).toContain("if (shipmentError || masterError) {");
     expect(body).toContain("reported_status,swayp_state,dispatched_at,returned_at");
     // Solo en Lima, y con la foto del pedido fresca antes de crear.
-    expect(body).toContain('admin.from("order_master").select("order_id,macro_operation").in("order_id", unique)');
+    // `order_name` desde el 13-10-2026: el aviso de «fuera de Lima no se crea» nombra el pedido.
+    expect(body).toContain('admin.from("order_master").select("order_id,order_name,macro_operation").in("order_id", unique)');
     expect(body).toContain("const decisionCtx = { lima: limaOrders.has(orderId) };");
     expect(body).toContain('const { data: fresh, error: freshError } = await admin.from("shipments").select(labelColumns).eq("order_id", orderId);');
     expect(body).toContain("decision = decideLabelAction(freshRows, decisionCtx);");
