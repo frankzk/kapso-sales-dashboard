@@ -5279,6 +5279,50 @@ Reglas de esa tabla:
       no se usa antes de que la clienta hable.
     - **Sin razonamiento interno** (`thinking_budget` = 0). En esa respuesta,
       el modelo generó 841 tokens para una sola frase.
+    **Guion en pasos cortos y registro que no se cancela (13-10-2026).** Se
+    revisaron las 61 conversaciones del Agente ElevenLabs entre el 06-10 y
+    el 13-10:
+    - 15 terminaron registradas;
+    - en 27 la clienta nunca habló (20 se cerraron por 20 s de silencio; en
+      las dos revisadas a fondo, ElevenLabs recibió 0 s de audio: posible
+      audio en un solo sentido, pendiente de escuchar las grabaciones);
+    - 19 se cortaron sin registro. En 10 de ellas fue durante el pitch o
+      justo después.
+
+    Lo que se vio en esas 19:
+    - el pitch era largo, se interrumpió en 12 de 19 y el agente lo
+      repetía entero;
+    - arrancaba sin confirmar identidad;
+    - no decía quién llamaba cuando se lo preguntaban;
+    - ignoraba «estoy ocupado»;
+    - preguntaba el motivo antes de registrar un «no»;
+    - el registro se cancelaba si la clienta hablaba encima;
+    - usaba `identificar_llamada` teniendo la ficha (una vez inventó un
+      número y cortó);
+    - dijo el producto a otra persona.
+
+    Cambios en ElevenLabs:
+    - **guion en pasos:** primero la identidad; después una sola frase de
+      motivo («el courier no pudo entregárselo en {distrito}. ¿Todavía lo
+      desea recibir?»), sin el nombre largo del producto; recién después el
+      reenvío. Si interrumpen, responde sin repetir. A «¿quién habla?»
+      responde quién es. «Ocupado» u otra persona se registran como
+      programar, y a otra persona nunca se le dice el producto. Un «no» se
+      registra al momento, sin preguntar antes el motivo;
+    - **`registrar_gestion`:** con `interruption_mode =
+      disable_during_tool`, para que no se cancele si la clienta habla, y
+      con una descripción que pide llamarla en cuanto hay decisión;
+    - **`identificar_llamada`, quitada de este agente:** la ficha llega
+      precargada. Sin ficha, el agente se disculpa y cuelga;
+    - **modelo de respaldo:** `gemini-2.0-flash`, en vez del de ElevenLabs
+      por defecto (`gemini-2.5-flash`, que tardó 5 a 7 s).
+
+    Cambios en Kapta (valen también para los agentes Grok):
+    - **`producto_corto`** ya no termina en «e», «o», «u», «al», «por» ni
+      «sin». Salía «Gel Íntimo Reafirmante e»;
+    - **la dirección de la ficha** trae los números de tres cifras o más
+      separados, cifra por cifra (`direccionHablada`): el agente leyó «104»
+      como «diez y ocho».
 
     **No es el agente de leads (12-10-2026).** Hay un segundo agente de
     ElevenLabs que llama a leads, no a pedidos (§33). Comparte la conexión de
