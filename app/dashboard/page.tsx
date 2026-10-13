@@ -31,6 +31,9 @@ import {
   MomOwnerSummarySkeleton,
 } from "@/components/mom-owner-summary";
 import { getMomOwnerSummary } from "@/lib/mom-owner-summary-access";
+import { LtvCpaPanel, LtvCpaSkeleton } from "@/components/ltv-cpa";
+import { getLtvInputs } from "@/lib/ltv-access";
+import { buildCohorts } from "@/lib/ltv";
 import { PENDING_INSTALL_COOKIE } from "@/lib/shopify-client-app";
 
 export const dynamic = "force-dynamic";
@@ -168,6 +171,9 @@ async function ConsolidatedContent({
           orgIds={[...new Set(stores.map((store) => store.org_id))]}
         />
       </Suspense>
+      <Suspense fallback={<LtvCpaSkeleton />}>
+        <LtvCpaLoader stores={stores.map((store) => ({ id: store.id, name: store.name, currency: store.currency }))} />
+      </Suspense>
       <ExecutiveDashboard
         stores={stores}
         scope="all"
@@ -209,6 +215,23 @@ async function MomOwnerSummaryLoader({
     return (
       <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
         El resumen operativo no pudo actualizarse. El dashboard comercial y el Master siguen disponibles.
+      </div>
+    );
+  }
+}
+
+/** LTV : CPA por mes de primera compra (MOM §17). Un fallo no tumba el resto. */
+async function LtvCpaLoader({ stores }: { stores: { id: string; name: string; currency: string }[] }) {
+  try {
+    const { cohorts, spend } = await getLtvInputs(stores.map((store) => store.id));
+    const currencyByStore = Object.fromEntries(stores.map((store) => [store.id, store.currency]));
+    const views = buildCohorts(cohorts, spend, currencyByStore, new Date());
+    return <LtvCpaPanel stores={stores} views={views} />;
+  } catch (error) {
+    console.error("No se pudo cargar LTV : CPA", error);
+    return (
+      <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        LTV : CPA no pudo calcularse ahora. El resto del Consolidado sigue disponible.
       </div>
     );
   }

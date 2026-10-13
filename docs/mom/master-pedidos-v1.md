@@ -7649,6 +7649,54 @@ Alertas críticas iniciales:
 3. Manifiesto incompleto.
 4. Pedido sin movimiento por 60 días, salvo reprogramación explícita.
 
+### 17.2 LTV : CPA (13-10-2026)
+
+El dueño eligió esta métrica para saber si el negocio se sostiene: lo que vende
+cada clienta nueva en sus primeros días por cada sol que costó traerla. Está en
+**Consolidado**, debajo del resumen operativo, con la escala del dueño:
+
+| Ratio | Lectura |
+| --- | --- |
+| Menos de 3 | Pierde caja: se pierde flujo de caja en cada venta |
+| 3 a 3.5 | Estable, pero no escala de forma eficiente |
+| 3.5 a 4 | Gana cuota: lo que compra después sostiene la pauta |
+| Más de 4 | Dominio: se puede pagar un CPA más alto que la competencia |
+
+Cómo se calcula (`ltv_cohorts` y `meta_spend_by_month`, migración 0252; el
+ratio en `lib/ltv.ts`):
+
+- **Clienta nueva:** el teléfono (últimos nueve dígitos, §8.1) en su primera
+  entrega. Se agrupa por el mes de esa primera entrega, en hora de Lima.
+- **Valor (LTV):** el ingreso bruto de los pedidos entregados de esa clienta a
+  30, 60, 90, 180 y 365 días desde su primera compra. Solo cuenta lo
+  entregado: en contraentrega, lo que no se entrega no se cobra. No resta el
+  costo de producto, porque no está cargado en Costos.
+- **Costo (CPA):** el gasto de Meta del mes ÷ las clientas nuevas con entrega
+  ese mes. Las cuentas de Meta en dólares se convierten a S/ 3.75, el cambio
+  que fijó el dueño. Otros canales pagados no entran; una moneda que no se
+  sabe convertir no se suma y se avisa.
+- **Ratio:** valor ÷ gasto del mes, que es lo mismo que LTV por clienta ÷ CPA.
+- **Cuándo se lee.** Un horizonte se lee cuando la última clienta nueva del mes
+  lo cumple, así que un mes recién da su ratio a 30 días un mes después de
+  terminar. Las tres semanas siguientes es provisional (*), porque todavía se
+  entregan pedidos de esos días. El CPA de un mes terminado también es
+  provisional esas tres semanas: siguen apareciendo clientas nuevas del mes a
+  medida que se entregan sus pedidos. El mes en curso no da CPA: con la mitad
+  de sus pedidos sin entregar sale inflado.
+- **Lo primero que se lee, por tienda:**
+  - el ratio a 30 días del último mes que ya los cumple;
+  - el CPA del último mes ya terminado que todavía no cumple 30 días, comparado
+    con el anterior, porque un salto en lo que cuesta traer a una clienta tiene
+    que verse antes de que cierre su ratio;
+  - lo que la recompra le sumó al mes más antiguo, de 30 días a su horizonte
+    más largo.
+
+  Plegado, «Ver mes por mes» trae cada mes con sus clientas nuevas, gasto, CPA,
+  el ratio y el valor por clienta a cada horizonte y la recompra a 90 días.
+- **Historial.** Empieza en junio de 2026 (`ORDERS_SYNC_FROM`): las clientas
+  de junio pueden incluir algunas que ya habían comprado antes, y el año 1
+  completo se podrá leer desde julio de 2027.
+
 ## 18. Implementación incremental
 
 ### Fase 1 — Fundaciones
