@@ -36,7 +36,7 @@ async function CourierContent({ searchParams }: { searchParams: Promise<SP> }) {
     if (permissions.can("routes.manage") || permissions.can("dispatch.pickup")) redirect("/dashboard/courier/rutas");
     return (
       <EmptyState title="Acceso restringido">
-        Frankz puede habilitarte “Administrar Grupo GF Courier” desde Equipo.
+        Pide al dueño el rol «Despacho y Grupo GF» en Equipo.
       </EmptyState>
     );
   }
