@@ -581,6 +581,11 @@ export const TIMELINE_LABEL: Record<string, string> = {
   reroute: "Reprogramación",
   courier_change: "Cambio de courier",
   delivered: "Entrega confirmada",
+  // Lo que informa el courier por su API o su barrido (Aliclik, Shalom, Swayp):
+  // la nota dice el estado crudo. Salía como «courier_status» sin traducir.
+  courier_status: "Estado informado por el courier",
+  // MOM §11.11 y §11.13: salió por Swayp sin confirmar; si no entrega, vuelve.
+  swayp_desde_por_confirmar: "Enviado por Swayp desde Por confirmar",
   return_started: "Retorno iniciado",
   return_requested: "Retorno solicitado",
   return_received: "Devolución recibida en almacén",
