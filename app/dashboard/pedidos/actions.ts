@@ -46,6 +46,7 @@ import {
   type OrderMasterDetail,
 } from "@/lib/orders-master-access";
 import {
+  closedStatusChangeError,
   defaultOperationalFor,
   isGeneralStatus,
   isOperationalStatus,
@@ -1424,19 +1425,10 @@ export async function setOrderStatus(
   if (!ctx) return { error: "Sin acceso a este pedido." };
 
   const target: GeneralStatus = input.general;
-  const wasClosed = isTerminalGeneral(ctx.row.general_status);
   const reason = input.reason?.trim() ?? "";
 
-  if (wasClosed && target !== ctx.row.general_status) {
-    if (!perms.can("master.override_status")) {
-      return {
-        error: `Este pedido ya está ${ctx.row.general_status.replace("_", " ")}; solo un administrador puede cambiarlo.`,
-      };
-    }
-    if (!reason) {
-      return { error: "Describe el motivo del cambio: quedará en el historial." };
-    }
-  }
+  const closedError = closedStatusChangeError(ctx.row.general_status, target, perms.can("master.override_status"), reason);
+  if (closedError) return { error: closedError };
 
   const operational =
     input.operational && isOperationalStatus(input.operational)
@@ -1802,6 +1794,12 @@ export async function registerReturn(
         "Retorno registrado. El pedido no se marca como devuelto todavía: falta el despacho o la guía que lo respalde.",
     };
   }
+
+  // Devolver un pedido que ya se cerró —entregado o anulado— es corregir el
+  // cierre: la misma regla que «Cambiar estado» (MOM §16). Sin ella, esta
+  // puerta pasaba un entregado a devuelto con solo `master.edit`.
+  const closedError = closedStatusChangeError(ctx.row.general_status, "devuelto", perms.can("master.override_status"), reason);
+  if (closedError) return { error: closedError };
 
   const admin = createAdminSupabase();
   const occurredAt = input.occurredAt || new Date().toISOString();

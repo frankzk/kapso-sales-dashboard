@@ -180,6 +180,26 @@ export function isOperationalStatus(code: string | null | undefined): boolean {
 export function isTerminalGeneral(code: string): boolean {
   return GENERAL_BY_CODE.get(code as GeneralStatus)?.terminal ?? false;
 }
+
+/**
+ * Pasar un pedido YA cerrado (entregado, anulado o devuelto) a otro estado es
+ * corregir el cierre: pide `master.override_status` y un motivo (MOM §16).
+ * Devuelve el error a mostrar, o `null` si se puede. Lo preguntan igual
+ * «Cambiar estado» y «Registrar devolución»: dos puertas al mismo hecho.
+ */
+export function closedStatusChangeError(
+  current: string,
+  target: GeneralStatus,
+  canOverride: boolean,
+  reason: string,
+): string | null {
+  if (!isTerminalGeneral(current) || current === target) return null;
+  if (!canOverride) {
+    return `Este pedido ya está ${current.replace("_", " ")}; solo quien puede «Cambiar estados ya cerrados» lo cambia.`;
+  }
+  if (!reason.trim()) return "Describe el motivo del cambio: quedará en el historial.";
+  return null;
+}
 /** Estados operativos válidos para un estado general dado (para los selectores). */
 export function operationalStatusesFor(general: GeneralStatus): OperationalStatusDef[] {
   return OPERATIONAL_STATUSES.filter((s) => s.general === general);
