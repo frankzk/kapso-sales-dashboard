@@ -601,6 +601,9 @@ export const TIMELINE_LABEL: Record<string, string> = {
   order_finalized: "Expediente finalizado",
   order_reopened: "Expediente reabierto",
   status_override: "Estado cambiado manualmente",
+  // MOM §19.0.1: una corrección de ubicación o una decisión por distrito movió
+  // la cobertura. La nota dice el antes, el después y la causa.
+  coverage_changed: "Cobertura cambiada",
   // Pedido acompañante (MOM §32): el mismo hecho en los dos pedidos; la nota
   // dice de qué lado está cada uno.
   companion_linked: "Caja compartida con otro pedido",

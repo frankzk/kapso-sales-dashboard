@@ -18,6 +18,7 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getMasterPermissions, hasOrgPermission } from "@/lib/permissions-access";
 import { getCurrentUser } from "@/lib/access";
 import { applyConfirmationCycleToStore, recomputeOrderMasterSafe } from "@/lib/order-master";
+import { coverageLabel, recordCoverageChanges } from "@/lib/coverage-change";
 import {
   VOICE_STORE_COLUMNS,
   loadVoiceQueue,
@@ -85,7 +86,9 @@ import { cancelGuides, swaypOptsFromEnv } from "@/lib/swayp";
 import { env } from "@/lib/env";
 import {
   decideLabelAction,
+  labelCreatesOutput,
   listNames,
+  nonLimaLabelMessage,
   type OutputForDecision,
 } from "@/lib/labels/resolve-output";
 import {
@@ -1068,7 +1071,7 @@ export async function resolveLabelsForOrders(orderIds: string[]): Promise<Resolv
   // si la salida que no entregó su courier libera el rótulo: solo en Lima (§28).
   const [{ data: shipmentRows, error: shipmentError }, { data: masterRows, error: masterError }] = await Promise.all([
     admin.from("shipments").select(labelColumns).in("order_id", unique),
-    admin.from("order_master").select("order_id,macro_operation").in("order_id", unique),
+    admin.from("order_master").select("order_id,order_name,macro_operation").in("order_id", unique),
   ]);
   if (shipmentError || masterError) {
     return {
@@ -1076,10 +1079,11 @@ export async function resolveLabelsForOrders(orderIds: string[]): Promise<Resolv
       shipmentIds: [], created: 0, reused: 0, reusedOrders: [], reprogrammedOrders: [], blocked: [],
     };
   }
+  const master = (masterRows ?? []) as { order_id: string; order_name: string | null; macro_operation: string | null }[];
+  const operationByOrder = new Map(master.map((row) => [row.order_id, row.macro_operation]));
+  const masterNameByOrder = new Map(master.map((row) => [row.order_id, row.order_name]));
   const limaOrders = new Set(
-    ((masterRows ?? []) as { order_id: string; macro_operation: string | null }[])
-      .filter((row) => row.macro_operation === "lima")
-      .map((row) => row.order_id),
+    master.filter((row) => labelCreatesOutput(row.macro_operation)).map((row) => row.order_id),
   );
 
   type LabelOutputRow = OutputForDecision & {
@@ -1133,6 +1137,15 @@ export async function resolveLabelsForOrders(orderIds: string[]): Promise<Resolv
       // El nombre sale de la salida que se reusa, que por definición existe.
       const name = nameByOrder.get(orderId);
       if (name) reusedOrders.push(name);
+      continue;
+    }
+    // Fuera de Lima no se CREA la salida interna: la caja viaja con el rótulo
+    // del courier (13-10-2026). Reusar y reimprimir siguen igual, arriba.
+    if (decision.kind === "create" && !limaOrders.has(orderId)) {
+      blocked.push({
+        orderId,
+        error: nonLimaLabelMessage(masterNameByOrder.get(orderId) ?? nameByOrder.get(orderId) ?? null, operationByOrder.get(orderId)),
+      });
       continue;
     }
     if (decision.kind === "needs_justification") {
@@ -2326,11 +2339,25 @@ export async function updateOrderGeo(
   if (eventError) return { error: eventError };
 
   await recomputeOrderMasterSafe(admin, [orderId]);
+  // Si la corrección movió la cobertura —p. ej. un pedido de «Provincia COD»
+  // que era de Lima—, queda escrito con el antes y el después (MOM §19.0.1).
+  const coverage = await recordCoverageChanges(
+    admin,
+    [{ order_id: orderId, store_id: ctx.storeId, coverage: ctx.row.coverage ?? null }],
+    { cause: "ubicacion_corregida", actor: ctx.userId, reason: patch.note },
+  );
   revalidatePath(MASTER_PATH);
+  const moved = coverage.changed[0];
   return {
-    notice: learned
-      ? "Ubicación corregida. La provincia queda recordada para los próximos pedidos de ese distrito."
-      : "Ubicación corregida.",
+    notice: [
+      learned
+        ? "Ubicación corregida. La provincia queda recordada para los próximos pedidos de ese distrito."
+        : "Ubicación corregida.",
+      moved ? `Cobertura: ${coverageLabel(moved.from)} → ${coverageLabel(moved.to)}.` : null,
+      coverage.error,
+    ]
+      .filter(Boolean)
+      .join(" "),
   };
 }
 
@@ -2368,8 +2395,22 @@ export async function clearOrderGeo(orderId: string): Promise<MasterActionState>
     note: "Corrección manual de ubicación retirada: vuelve a la dirección de origen.",
   });
   await recomputeOrderMasterSafe(admin, [orderId]);
+  const coverage = await recordCoverageChanges(
+    admin,
+    [{ order_id: orderId, store_id: ctx.storeId, coverage: ctx.row.coverage ?? null }],
+    { cause: "ubicacion_restaurada", actor: ctx.userId },
+  );
   revalidatePath(MASTER_PATH);
-  return { notice: "Corrección retirada." };
+  const moved = coverage.changed[0];
+  return {
+    notice: [
+      "Corrección retirada.",
+      moved ? `Cobertura: ${coverageLabel(moved.from)} → ${coverageLabel(moved.to)}.` : null,
+      coverage.error,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  };
 }
 
 /**

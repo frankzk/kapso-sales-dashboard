@@ -34,6 +34,7 @@ import { getMasterPermissions, hasOrgPermission } from "@/lib/permissions-access
 import { normalizeDistrictKey } from "@/lib/district-coverage";
 import { dispatchFallsOnSunday, expectedDispatchDate } from "@/lib/aliclik-dispatch-date";
 import { saveDistrictCoverageRow } from "@/lib/district-coverage-access";
+import { recordCoverageChanges, type CoverageSnapshot } from "@/lib/coverage-change";
 import { getStoreCreds } from "@/lib/ingest";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import {
@@ -1977,17 +1978,24 @@ export async function markDistrictCoveredByAliclik(
   // vieja. Sin esto, el que acabas de comprobar seguiría enseñando Agencia.
   const { data: affected } = await admin
     .from("order_master")
-    .select("order_id")
+    .select("order_id,store_id,coverage")
     .ilike("district", district)
     .not("macro_stage", "in", "(finalizado)")
     .limit(2000);
-  const ids = ((affected ?? []) as { order_id: string }[]).map((r) => r.order_id);
-  const done = ids.length ? await recomputeOrderMasterSafe(admin, ids) : { written: 0 };
+  const before = (affected ?? []) as CoverageSnapshot[];
+  const done = before.length ? await recomputeOrderMasterSafe(admin, before.map((r) => r.order_id)) : { written: 0 };
+  // Los que la decisión movió quedan con su antes y su después (MOM §19.0.1).
+  const coverage = await recordCoverageChanges(admin, before, {
+    cause: "decision_distrito",
+    actor: user.id,
+    reason: `Aliclik cotizó el distrito desde ${row.order_name ?? orderId}.`,
+  });
 
   revalidatePath(MASTER_PATH);
   return {
     notice:
       `«${raw}» queda como Provincia COD.` +
-      (done.written ? ` ${done.written} pedido(s) abiertos reclasificados.` : ""),
+      (done.written ? ` ${done.written} pedido(s) abiertos recalculados, ${coverage.changed.length} cambiaron de cobertura.` : "") +
+      (coverage.error ? ` ${coverage.error}` : ""),
   };
 }
