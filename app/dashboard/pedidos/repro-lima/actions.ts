@@ -1,7 +1,7 @@
 "use server";
 
 // «Repro Lima» (fase 1, entrega 1a; MOM §9.5): tomar el caso, registrar la
-// llamada y programar el acuerdo. Cada acción pide `dispatch.manage` y la
+// llamada y programar el acuerdo. Cada acción pide `repro_lima.manage` y la
 // tienda del pedido (`requireReproLima`), y escribe con el cliente de servicio
 // después de comprobarlo (D12). Las dos RPC (`lima_repro_claim`,
 // `lima_repro_record`) llevan el candado y el episodio; el resto son

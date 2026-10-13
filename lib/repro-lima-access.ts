@@ -1,7 +1,8 @@
 // «Repro Lima»: quién entra y qué ve (fase 1, entrega 1a; MOM §9.5).
 //
-// Entra quien despacha (`dispatch.manage`, el permiso de «Programar»), en las
-// tiendas que tiene en Equipo: el mismo alcance que Despacho del día
+// Entra quien llama a los clientes o despacha (`repro_lima.manage`: roles
+// «Asesora» y «Despacho y Grupo GF», la vendedora sin roles, admin y owner;
+// MOM §9.5, §16), en las tiendas que tiene en Equipo: el mismo alcance que Despacho del día
 // (`getAccessibleStores`, E36). La lista sale del Master —todo «En curso · Por
 // reprogramar Lima» de esas tiendas, de cualquier courier— y se cruza con los
 // casos (`lima_repro_cases`), el programa de Grupo GF y los hechos de cada
@@ -67,8 +68,8 @@ export { loadReproFacts, type ReproFacts } from "@/lib/repro-lima-program";
 
 type Admin = ReturnType<typeof createAdminSupabase>;
 
-/** Sin `dispatch.manage` (E32). */
-export const REPRO_NO_PERMISSION = "Repro Lima es de quien despacha (rol «Despacho y Grupo GF»). Pide ese rol en Equipo.";
+/** Sin `repro_lima.manage` (E32; MOM §9.5). */
+export const REPRO_NO_PERMISSION = "Repro Lima es de quien llama a los clientes o despacha (rol «Asesora» o «Despacho y Grupo GF»). Pide uno de esos roles en Equipo.";
 export const REPRO_NO_STORES = "No tienes tiendas asignadas. Pide acceso en Equipo.";
 export const REPRO_OUTSIDE_STORE = "No tienes acceso a la tienda de este pedido.";
 
@@ -86,7 +87,7 @@ export async function requireReproLima(): Promise<ReproScope | { error: string; 
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const permissions = await getMasterPermissions();
-  if (!permissions.can("dispatch.manage")) return { error: REPRO_NO_PERMISSION, reason: "permiso" };
+  if (!permissions.can("repro_lima.manage")) return { error: REPRO_NO_PERMISSION, reason: "permiso" };
   const stores = await getAccessibleStores();
   if (!stores.length) return { error: REPRO_NO_STORES, reason: "tiendas" };
   return { userId: user.id, storeIds: new Set(stores.map((store) => store.id)) };

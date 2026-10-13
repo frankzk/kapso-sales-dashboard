@@ -6,8 +6,8 @@ import { loadReproLima, requireReproLima } from "@/lib/repro-lima-access";
 import ReproLimaLoading from "./loading";
 
 // «Repro Lima» (fase 1, entrega 1a; MOM §9.5): los clientes de Lima con
-// entrega fallida. Entra quien despacha (`dispatch.manage`, el permiso de
-// «Programar») en las tiendas que tiene en Equipo (E36). La lista se lee con
+// entrega fallida. Entra quien llama a los clientes o despacha
+// (`repro_lima.manage`) en las tiendas que tiene en Equipo (E36). La lista se lee con
 // el cliente de servicio DESPUÉS de comprobar el permiso y las tiendas
 // (`requireReproLima`); cada acción lo vuelve a comprobar.
 

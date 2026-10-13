@@ -111,6 +111,11 @@ export const PERMISSIONS = [
   // plata por adelantado—, y un envío desafortunado no se retira: se reporta, y
   // los reportes le cuestan la plantilla a toda la tienda.
   "recovery.contact",
+  // «Repro Lima» (MOM §9.5, 13-10-2026): llamar al cliente de Lima con entrega
+  // fallida y dejar el acuerdo, que Kapta programa en Grupo GF. Es de quien
+  // llama —la Asesora— y de quien despacha: permiso propio para que el rol
+  // «Asesora» lo traiga sin traer Despacho del día (`dispatch.manage`).
+  "repro_lima.manage",
   // Registro de motorizados: alta/edición de la ficha y vínculo con un usuario
   // para dar acceso a /reparto. Vive en Equipo (owner/admin). El alta rápida por
   // nombre desde Liquidaciones sigue bajo settlements.manage.
@@ -304,6 +309,8 @@ const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
     // Recuperar una devolución es gestión de venta, que es su trabajo: la misma
     // persona que llamaría a esa clienta es la que manda el mensaje.
     "recovery.contact",
+    // Lo mismo con el cliente de Lima que no recibió: lo llama y deja el acuerdo.
+    "repro_lima.manage",
     // Coordinar el reparto es operativo, no financiero: arma la ruta del día.
     "routes.manage",
     // Generar el pedido ES su trabajo: la vendedora cierra la venta por teléfono
@@ -338,7 +345,7 @@ export const FUNCTIONAL_ROLES = [
   {
     role: "asesora",
     label: "Asesora",
-    description: "Confirma y gestiona pedidos, registra comprobantes, crea guías y pedidos, recupera devoluciones.",
+    description: "Confirma y gestiona pedidos, registra comprobantes, crea guías y pedidos, recupera devoluciones y llama a los clientes de Repro Lima.",
     permissions: [
       "master.edit",
       "shalom.register_payment",
@@ -348,6 +355,7 @@ export const FUNCTIONAL_ROLES = [
       "shalom.create_guide",
       "swayp.solve_novelty",
       "recovery.contact",
+      "repro_lima.manage",
       "orders.create",
       "closure.return",
     ],
@@ -368,6 +376,7 @@ export const FUNCTIONAL_ROLES = [
       "warehouse.prepare",
       "dispatch.manage",
       "dispatch.pickup",
+      "repro_lima.manage",
       "routes.manage",
       "routes.report_others",
       // «Motorizados» vive en Equipo, que es de Administración: sin Equipo,
@@ -473,6 +482,7 @@ export const PERMISSION_LABEL: Record<Permission, string> = {
   "routes.report_others": "Reportar entregas por un motorizado",
   "alerts.repeated_voucher": "Alerta de comprobante repetido",
   "recovery.contact": "Escribir a clientas con devolución",
+  "repro_lima.manage": "Repro Lima: llamar y reprogramar en Lima",
   "riders.manage": "Motorizados",
   "leads.map_ads": "Producto por anuncio",
   "orders.create": "Crear pedidos",

@@ -2193,13 +2193,16 @@ programa sola** (decisión 7).
 
 - **Dónde.** `/dashboard/pedidos/repro-lima`: «Repro Lima» en la navegación,
   justo después de «Repro Provincia».
-- **Quién.** Quien despacha (`dispatch.manage`, el permiso de «Programar»; lo
-  traen el owner, los admins, la vendedora que aún no tiene roles y el rol
-  «Despacho y Grupo GF», §16), en las tiendas que tiene asignadas en Equipo: el
-  mismo alcance que Despacho del día (`getAccessibleStores`). El rol «Asesora»
-  solo no lo trae. Sin el permiso, la pantalla dice «Repro Lima es de quien
-  despacha (rol «Despacho y Grupo GF»). Pide ese rol en Equipo.»; sin tiendas,
-  «No tienes tiendas asignadas». El actor real queda en cada llamada y en cada evento.
+- **Quién.** Quien llama a los clientes o despacha: permiso propio
+  `repro_lima.manage` («Repro Lima: llamar y reprogramar en Lima», 13-10-2026,
+  decisión del owner), que traen los roles «Asesora» y «Despacho y Grupo GF»
+  (§16), la vendedora que aún no tiene roles, los admins y el owner. La Asesora
+  lo tiene sin tener Despacho del día (`dispatch.manage`). Vale en las tiendas
+  que la persona tiene asignadas en Equipo: el mismo alcance que Despacho del
+  día (`getAccessibleStores`). Sin el permiso, la pantalla dice «Repro Lima es
+  de quien llama a los clientes o despacha (rol «Asesora» o «Despacho y Grupo
+  GF»). Pide uno de esos roles en Equipo.»; sin tiendas, «No tienes tiendas
+  asignadas». El actor real queda en cada llamada y en cada evento.
 - **Qué pedidos.** Todo pedido de esas tiendas en «En curso · Por reprogramar
   Lima» (`order_master`), de cualquier courier. La lista se calcula desde el
   Master, no desde los casos.
@@ -7186,9 +7189,9 @@ registra en cada evento.
 
   | Rol | Qué trae |
   | --- | --- |
-  | Asesora | Gestionar pedidos, registrar comprobantes, ver la clave con cobro completo, crear guías (Aliclik, Tanders, Shalom) y pedidos, novedades de Swayp, recuperar devoluciones, recibir devoluciones |
+  | Asesora | Gestionar pedidos, registrar comprobantes, ver la clave con cobro completo, crear guías (Aliclik, Tanders, Shalom) y pedidos, novedades de Swayp, recuperar devoluciones, Repro Lima (§9.5), recibir devoluciones |
   | Almacén | Dejar paquetes listos, recibir devoluciones, reingresar al inventario |
-  | Despacho y Grupo GF | Despacho del día y cotejo, entregar la caja, armar rutas, reportar por el motorizado, cargar reportes, stock de couriers, crear guías, recibir devoluciones |
+  | Despacho y Grupo GF | Despacho del día y cotejo, entregar la caja, Repro Lima (§9.5), armar rutas, reportar por el motorizado, cargar reportes, stock de couriers, crear guías, recibir devoluciones |
   | Liquidaciones | Cargar y cerrar liquidaciones, trabajar las hojas, observar liquidaciones e indemnizaciones |
   | Cobranza | Registrar comprobantes, la clave de recojo, revisar cobros rechazados |
   | Supervisión | Cambiar estados cerrados, cerrar y reabrir expedientes, anular guías de Aliclik, recibir devoluciones e inventario, ver reportes |

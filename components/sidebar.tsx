@@ -39,8 +39,8 @@ interface NavItem {
 
 /**
  * «Repro Lima» (MOM §9.5): los clientes de Lima con entrega fallida, para
- * quien despacha (`dispatch.manage`). Va justo después de «Repro Provincia» y
- * gana al Master por el prefijo más largo.
+ * quien llama o despacha (`repro_lima.manage`). Va justo después de «Repro
+ * Provincia» y gana al Master por el prefijo más largo.
  */
 const REPRO_LIMA_ITEM: NavItem = { href: "/dashboard/pedidos/repro-lima", label: "Repro Lima", icon: IconTruck };
 
@@ -183,7 +183,7 @@ export function Sidebar({
   roleLabel: string;
   canValidatePayments: boolean;
   canManageLogistics: boolean;
-  /** `dispatch.manage`: la entrada «Repro Lima» después de «Repro Provincia». */
+  /** `repro_lima.manage`: la entrada «Repro Lima» después de «Repro Provincia». */
   canReproLima?: boolean;
   navAccess?: NavAccess;
   /** Pendientes por entrada del menú (href → cuántos), p. ej. «Cotejar Olva». */

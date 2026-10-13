@@ -50,6 +50,19 @@ describe("cómo se suman", () => {
     for (const perm of ["team.manage", "stores.manage", "stock.manage", "reports.view"] as const) expect(vendedora.has(perm)).toBe(false);
   });
 
+  it("Repro Lima (MOM §9.5): la Asesora la trae sin traer Despacho del día", () => {
+    const asesora = permissionsFor(["vendedora"], [], ["asesora"]);
+    expect(asesora.has("repro_lima.manage")).toBe(true);
+    expect(asesora.has("dispatch.manage")).toBe(false);
+    expect(permissionsFor(["vendedora"], [], ["despacho"]).has("repro_lima.manage")).toBe(true);
+    for (const role of ["owner", "admin", "vendedora"]) expect(permissionsFor([role]).has("repro_lima.manage")).toBe(true);
+    for (const role of ["almacen", "liquidaciones", "cobranza"]) expect(permissionsFor(["vendedora"], [], [role]).has("repro_lima.manage")).toBe(false);
+    expect(permissionsFor(["viewer"]).has("repro_lima.manage")).toBe(false);
+    expect(permissionsFor(["motorizado"]).has("repro_lima.manage")).toBe(false);
+    // Se puede quitar a una persona, como cualquier permiso.
+    expect(permissionsFor(["vendedora"], [{ permission: "repro_lima.manage", granted: false }], ["asesora"]).has("repro_lima.manage")).toBe(false);
+  });
+
   it("una revocación puntual sigue ganando sobre el rol", () => {
     const p = permissionsFor(["vendedora"], [{ permission: "settlements.close", granted: false }], ["liquidaciones"]);
     expect(p.has("settlements.close")).toBe(false);

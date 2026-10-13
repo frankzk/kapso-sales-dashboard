@@ -33,7 +33,7 @@ export function DashboardShell({
   yapeAlertsEnabled: boolean;
   canValidatePayments: boolean;
   canManageLogistics: boolean;
-  /** `dispatch.manage`: la entrada «Repro Lima» (MOM §9.5). */
+  /** `repro_lima.manage`: la entrada «Repro Lima» (MOM §9.5). */
   canReproLima?: boolean;
   navAccess?: NavAccess;
   badges?: Record<string, number>;

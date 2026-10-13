@@ -50,7 +50,7 @@ describe("quién entra (D11, E32, E36)", () => {
     expect(page).toContain('<EmptyState title="No tienes tiendas asignadas">{scope.error}</EmptyState>');
     expect(page).toContain('title="No pudimos cargar Repro Lima"');
     // El texto de E32: el permiso viene del rol, no de un control de Equipo.
-    expect(access).toContain("Repro Lima es de quien despacha (rol «Despacho y Grupo GF»). Pide ese rol en Equipo.");
+    expect(access).toContain("Repro Lima es de quien llama a los clientes o despacha (rol «Asesora» o «Despacho y Grupo GF»). Pide uno de esos roles en Equipo.");
     expect(page).not.toContain("Pide «Despachar» en Equipo");
   });
 
@@ -71,7 +71,7 @@ describe("quién entra (D11, E32, E36)", () => {
 });
 
 describe("la entrada del menú (§9.5, D11)", () => {
-  it("«Repro Lima» va justo después de «Repro Provincia» en los dos menús, solo con dispatch.manage", () => {
+  it("«Repro Lima» va justo después de «Repro Provincia» en los dos menús, solo con repro_lima.manage", () => {
     expect(sidebar).toContain('const REPRO_LIMA_ITEM: NavItem = { href: "/dashboard/pedidos/repro-lima", label: "Repro Lima", icon: IconTruck };');
     const after = /\{ href: "\/dashboard\/envios", label: "Repro Provincia", icon: IconTruck \},\n\s*\.\.\.\(canReproLima \? \[REPRO_LIMA_ITEM\] : \[\]\),/g;
     expect(sidebar.match(after)?.length).toBe(2);
@@ -88,7 +88,7 @@ describe("la entrada del menú (§9.5, D11)", () => {
   });
 
   it("el permiso sale del layout y pasa por el armazón", () => {
-    expect(layout).toContain('const canReproLima = permissions.can("dispatch.manage");');
+    expect(layout).toContain('const canReproLima = permissions.can("repro_lima.manage");');
     expect(layout).toContain("canReproLima={canReproLima}");
     expect(shell).toContain("canReproLima={canReproLima}");
   });
