@@ -11736,8 +11736,8 @@ versionado y la configuración del agente en ElevenLabs viven en
 Un **agente de voz para leads** es un segundo agente de ElevenLabs, separado
 del de Reproprovincia (§11.8), que llama a los **leads de anuncio** que
 conversaron con el bot de WhatsApp, no compraron y ninguna asesora tocó.
-Pregunta qué le faltó para comprar, responde con la oferta de la tienda y, si
-quiere comprar, toma los datos y deja el lead en **«Atender ahora»** para que
+Le ofrece el producto directo con la oferta de la tienda, resuelve sus dudas y,
+si quiere comprar, toma los datos y deja el lead en **«Atender ahora»** para que
 una asesora genere el pedido. **No crea pedidos** (§2, principio 3) ni cobra, y
 no tiene estados propios: escribe con el catálogo de estados de las asesoras.
 
@@ -11882,8 +11882,18 @@ redactado:
   primera consulta y la conversación de WhatsApp del lead (sin enlaces, los
   mensajes más recientes). No empieza de cero ni repregunta lo que ya está en el
   chat.
-- Su objetivo es **saber qué le faltó para comprar** y, si quiere comprar,
-  **tomar los datos y pasarlo a una asesora**.
+- **Abre con calidez**: confirmada la persona, pregunta «¿Qué tal, cómo le
+  va?» y recién después se presenta y dice por qué llama.
+- **Va directo a ofrecer** (cambio del owner, 13-10-2026, tras la primera
+  prueba por teléfono): dice el precio y las promociones de la oferta, pregunta
+  si tiene alguna duda, la resuelve sin inventar (lo que no sabe, lo confirma
+  una asesora por WhatsApp) y pregunta si lleva una unidad o la promoción. Si
+  quiere comprar, **toma los datos y lo pasa a una asesora**. Si no, pregunta
+  una sola vez por qué: el motivo se mide (33.8). Antes empezaba preguntando
+  «qué le faltó para animarse».
+- **Sin muletillas automáticas** («Ajá…», «Un momentito…»): si el modelo
+  tarda, ElevenLabs pasa al de respaldo a los 2,5 s en vez de rellenar con
+  palabras sueltas (mismo cambio del owner).
 - **Cobertura y pago, solo con `consultar_cobertura`**: la misma cobertura
   canónica del Master (`order_coverage_for`), no una lista propia. Lima y
   provincia contra entrega: paga al recibir. Agencia: se separa con el

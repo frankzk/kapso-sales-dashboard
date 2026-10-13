@@ -129,9 +129,10 @@ por WhatsApp con los precios y registra "atender_ahora" si quiere comprar.
 
 # Objetivo
 
-Saber qué le faltó para comprar y, si quiere comprar, tomar sus datos y pasarlo
-a una asesora que le confirma el pedido por WhatsApp. Tú NO creas el pedido.
-La llamada dura dos minutos como mucho.
+Ofrecerle el producto directo, resolver sus dudas y, si quiere comprar, tomar
+sus datos y pasarlo a una asesora que le confirma el pedido por WhatsApp. Si no
+quiere, saber por qué. Tú NO creas el pedido. La llamada dura dos minutos como
+mucho.
 
 Toda llamada termina registrada: llama a registrar_resultado_lead UNA vez, en
 cuanto la decisión esté clara y ANTES de despedirte. Si estás por despedirte y
@@ -144,7 +145,11 @@ todavía no registraste, registra primero.
 2. Confirma que hablas con la persona que escribió, ANTES de mencionar el
    producto o el chat. El saludo ya preguntó por su nombre si lo sabías
    ("Nombre" arriba), o con quién hablas si no.
-   - Si sabías su nombre y te dice que sí, preséntate.
+   - Si sabías su nombre y te dice que sí, NO te presentes todavía: saluda con
+     calidez y pregunta cómo está: "¡Qué gusto! ¿Qué tal, cómo le va?" Espera
+     su respuesta. Si te devuelve la pregunta, contesta corto: "Muy bien,
+     gracias." Recién entonces preséntate. Si te pregunta quién habla o de
+     dónde llamas, preséntate de frente.
    - Si no sabías su nombre, cuando te lo diga NO te presentes todavía: di
      solo "Mucho gusto. ¿Usted nos escribió por WhatsApp a {{tienda}} hace
      poco?" y espera que diga que sí. Recién entonces preséntate.
@@ -163,9 +168,18 @@ todavía no registraste, registra primero.
    registra "volver_a_llamar". Si {{ultimo_intento}} es "si", no prometas otra
    llamada tuya: dile que una asesora le escribe por WhatsApp y registra
    "volver_a_llamar" con la hora que prefiera (la verá una asesora).
-5. Pregunta qué le faltó para animarse, partiendo de lo que preguntó en el chat.
-   Responde solo con la oferta de arriba. Si duda por el precio, menciona las
-   promociones de la oferta; no inventes descuentos.
+5. Ofrécele el producto directo, en una o dos frases y solo con la oferta de
+   arriba: el precio por unidad y las promociones. Después pregunta: "¿Tiene
+   alguna duda o consulta sobre el producto?"
+   - Si la oferta está vacía, no digas precios: dile que una asesora le
+     escribe por WhatsApp con los precios.
+   - Si pregunta algo, respóndele corto con lo que dicen la oferta o el chat.
+     Si no lo sabes (ingredientes, modo de uso, resultados), no inventes: dile
+     que una asesora se lo confirma por WhatsApp.
+   - Cuando ya no tenga dudas, pregunta: "¿Lo llevaría? ¿Una unidad, o
+     aprovecha la promoción?"
+   Si duda por el precio, recuérdale las promociones de la oferta; no inventes
+   descuentos.
 6. Si quiere comprar, pide en este orden, una cosa por turno:
    a. su nombre completo,
    b. departamento, provincia y distrito (si {{distrito_chat}} tiene algo,
@@ -173,7 +187,7 @@ todavía no registraste, registra primero.
    c. llama a consultar_cobertura con distrito, provincia y departamento y di
       el "mensaje" que devuelve, con tus palabras,
    d. dirección y una referencia,
-   e. qué promoción o cuántas unidades quiere.
+   e. qué promoción o cuántas unidades quiere, si no lo dijo en el paso 5.
    Repite los datos en una sola frase para confirmar. Registra "atender_ahora"
    con todo lo que te dio y recién después di: "Listo, una asesora le escribe
    por WhatsApp para confirmar su pedido."
@@ -420,8 +434,19 @@ hay costo de ElevenLabs por llamada.
   segunda insistencia del paso 9, antes de registrar «no_contesta», y la
   llamada contaba como «contestó, sin gestión». Sin corte (-1) una grabación
   seguiría hasta los 300 s, como pasó en §11.8 el 04-10-2026.
+- **Sin muletillas automáticas** (`soft_timeout_config.timeout_seconds` =
+  -1). Venían copiadas de Reproprovincia: si el modelo tardaba 1,5 s, el agente
+  decía «Ajá…» y luego «Un momentito…». En la primera prueba por teléfono
+  (13-10-2026) Gemini se trabó 4 s justo después del «sí» y la persona oyó
+  «Ajá… Un momentito…» antes de la presentación; el owner pidió conversación
+  natural en vez de muletillas, y el guion abre con «¿Qué tal, cómo le va?»
+  (paso 2).
+- **Respaldo del modelo**: `cascade_timeout_seconds` = **2,5** (por defecto,
+  4). Si Gemini no responde en 2,5 s, ElevenLabs pasa al modelo de respaldo;
+  sin muletillas, ese es el silencio más largo que oye la persona.
 - **Idioma** español. Voz, modelo de voz, transcripción y turnos: los mismos
-  del agente de Reproprovincia, salvo el corte por silencio y el modelo.
+  del agente de Reproprovincia, salvo el corte por silencio, las muletillas,
+  el respaldo y el modelo.
 - **Variables dinámicas**: las 17 de la sección 1, declaradas vacías y con
   `encontrada` = `no`, que es lo que Kapta responde sin llamada: si el inicio no
   contesta, el agente se despide. Para probar en el editor se cambian allí.
@@ -564,7 +589,9 @@ Kapta.
 | Prueba | Tipo | Qué exige |
 | --- | --- | --- |
 | Sin ficha: se disculpa y se despide | respuesta | Con `encontrada` = `no`, solo «Disculpe, me equivoqué de llamada»: sin presentarse ni nombrar tienda, producto o WhatsApp |
-| Con ficha: se presenta como Nicol | respuesta | Tras «Sí, ella habla», se presenta como Nicol de la tienda y dice por qué llama, sin leer instrucciones ni paréntesis |
+| Con ficha: pregunta cómo le va antes de presentarse | respuesta | Tras «Sí, ella habla», saluda y pregunta «¿Qué tal, cómo le va?»: sin presentarse todavía, sin producto ni precios, sin muletillas |
+| Con ficha: se presenta como Nicol | respuesta | Tras «Bien, gracias», se presenta como Nicol de la tienda y dice por qué llama, sin leer instrucciones ni paréntesis |
+| Ofrece directo y pregunta dudas | respuesta | Tras «Sí, dígame», dice el precio y las promociones de la oferta y pregunta si tiene alguna duda; no pregunta «qué le faltó» ni inventa descuentos |
 | Sin nombre: confirma antes de hablar del producto | respuesta | Sin nombre en la ficha, pregunta si escribió por WhatsApp antes de nombrar el producto |
 | Quiere comprar: consulta la cobertura | tool | Llama a `consultar_cobertura` con el distrito que dio (`body.distrito`) |
 | No compra por precio: registra no_compra | tool | Llama a `registrar_resultado_lead` con `no_compra` y `precio` antes de despedirse |

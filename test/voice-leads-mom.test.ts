@@ -605,6 +605,41 @@ describe("docs/voz-leads-agente.md: el guion que se pega en ElevenLabs", () => {
     expect(p).not.toContain("encontrar a {{nombre}}");
   });
 
+  it("abre con «¿Qué tal, cómo le va?» y va directo a ofrecer (owner, 13-10-2026)", () => {
+    const p = flat(prompt);
+    // Confirmada la persona, pregunta cómo está antes de presentarse.
+    enOrden(p, [
+      "Si sabías su nombre y te dice que sí, NO te presentes todavía",
+      '"¡Qué gusto! ¿Qué tal, cómo le va?"',
+      "Recién entonces preséntate. Si te pregunta quién habla",
+      'Para presentarte di: "Le habla Nicol, de {{tienda}}.',
+    ]);
+    // Ofrece con la oferta, pregunta dudas y cuántas lleva; ya no empieza por
+    // «qué le faltó».
+    enOrden(p, [
+      "Ofrécele el producto directo",
+      '"¿Tiene alguna duda o consulta sobre el producto?"',
+      "no inventes: dile que una asesora se lo confirma por WhatsApp",
+      '"¿Lo llevaría? ¿Una unidad, o aprovecha la promoción?"',
+      "6. Si quiere comprar",
+    ]);
+    expect(p).not.toContain("qué le faltó");
+    expect(p).toContain("e. qué promoción o cuántas unidades quiere, si no lo dijo en el paso 5.");
+    // El motivo del no se sigue preguntando: el tablero lo mide (§33.8).
+    expect(p).toContain("Si no quiere comprar: si todavía no dijo por qué, pregúntale una sola vez.");
+    // El MOM dice la misma regla.
+    expect(flat(S33)).toContain("**Va directo a ofrecer** (cambio del owner, 13-10-2026");
+    expect(flat(S33)).toContain("**Abre con calidez**");
+    expect(flat(S33)).not.toContain("saber qué le faltó para comprar");
+  });
+
+  it("sin muletillas automáticas y con respaldo del modelo a los 2,5 s", () => {
+    const s7 = flat(section(DOC, "## 7. Ajustes recomendados del agente", "\n## "));
+    expect(s7).toContain("**Sin muletillas automáticas** (`soft_timeout_config.timeout_seconds` = -1)");
+    expect(s7).toContain("`cascade_timeout_seconds` = **2,5**");
+    expect(flat(S33)).toContain("**Sin muletillas automáticas**");
+  });
+
   it("con `ok: false` solo promete WhatsApp a quien quería algo", () => {
     const p = flat(prompt);
     expect(p).toContain(
@@ -844,7 +879,9 @@ describe("docs/voz-leads-agente.md: webhooks, ajustes y variables de Vercel", ()
     const s11 = flat(section(DOC, "## 11. Pruebas del agente en ElevenLabs", "\n## "));
     for (const prueba of [
       "Sin ficha: se disculpa y se despide",
+      "Con ficha: pregunta cómo le va antes de presentarse",
       "Con ficha: se presenta como Nicol",
+      "Ofrece directo y pregunta dudas",
       "Sin nombre: confirma antes de hablar del producto",
       "Quiere comprar: consulta la cobertura",
       "No compra por precio: registra no_compra",
