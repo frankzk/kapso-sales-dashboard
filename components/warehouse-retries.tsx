@@ -13,12 +13,14 @@
 // que se puede hacer es abrir la ficha, imprimir el rótulo de la misma salida y
 // actualizar; el escáner sigue siendo el de la estación.
 //
-// Se relee al volver a la pestaña si pasaron 5 minutos o cambió el día de
-// Lima, y con «Actualizar». Nunca tras cada escaneo de armado: esa cola es otra.
+// Se lee después de montar la estación, nunca al pintar en servidor (mientras
+// llega, esqueleto). Se relee al volver a la pestaña si pasaron 5 minutos o
+// cambió el día de Lima, y con «Actualizar». Nunca tras cada escaneo de armado:
+// esa cola es otra.
 
 import { useEffect, useRef } from "react";
 import { cn } from "@/components/ui";
-import { Badge, Banner, OpsButton, opsButtonClass, type BadgeTone } from "@/components/ops-ui";
+import { Badge, Banner, OpsButton, Skeleton, opsButtonClass, type BadgeTone } from "@/components/ops-ui";
 import { OrderLink } from "@/components/order-link";
 import { limaClock } from "@/lib/grupo-gf-courier";
 import {
@@ -141,7 +143,8 @@ export function WarehouseRetries({
   onRefresh,
   busy,
 }: {
-  data: WarehouseRetriesData;
+  /** `null` mientras llega la primera lectura, que la estación pide al montar. */
+  data: WarehouseRetriesData | null;
   onRefresh: () => Promise<void>;
   busy: boolean;
 }) {
@@ -152,11 +155,15 @@ export function WarehouseRetries({
   }, [data]);
 
   // Al volver a la pestaña: una lista de la mañana no sirve para la tarde, ni
-  // la de ayer para hoy.
+  // la de ayer para hoy. Dos avisos seguidos (`visibilitychange` y `focus`)
+  // piden una sola lectura: la estación no abre otra mientras hay una en curso.
+  const today = data?.today ?? null;
   useEffect(() => {
+    // Sin lista todavía, la primera lectura ya va en camino.
+    if (!today) return;
     const onWake = () => {
       if (document.visibilityState !== "visible" || busy) return;
-      const stale = Date.now() - loadedAt.current >= RETRY_STALE_MS || limaClock(new Date()).day !== data.today;
+      const stale = Date.now() - loadedAt.current >= RETRY_STALE_MS || limaClock(new Date()).day !== today;
       if (!stale) return;
       loadedAt.current = Date.now();
       void onRefresh();
@@ -167,23 +174,26 @@ export function WarehouseRetries({
       window.removeEventListener("focus", onWake);
       document.removeEventListener("visibilitychange", onWake);
     };
-  }, [busy, data.today, onRefresh]);
-
-  const { counts } = data;
+  }, [busy, today, onRefresh]);
 
   return (
-    <section id="reintentos" aria-labelledby="reintentos-titulo" aria-busy={busy} className="scroll-mt-4 rounded-lg bg-white shadow-control ring-1 ring-line">
+    <section id="reintentos" aria-labelledby="reintentos-titulo" aria-busy={busy || !data} className="scroll-mt-4 rounded-lg bg-white shadow-control ring-1 ring-line">
       <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between sm:p-6">
         <div className="min-w-0">
           <h2 id="reintentos-titulo" className="text-base font-semibold leading-6 text-ink-900">Reintentos por salir</h2>
           <p className="mt-0.5 max-w-2xl text-[13px] text-ink-600">{RETRY_HELP}</p>
         </div>
-        <OpsButton onClick={() => void onRefresh()} disabled={busy} className="self-start pointer-coarse:h-11">
-          {busy ? "Actualizando…" : "Actualizar"}
-        </OpsButton>
+        {/* La primera lectura va sola: hasta que llega no hay nada que actualizar. */}
+        {data && (
+          <OpsButton onClick={() => void onRefresh()} disabled={busy} className="self-start pointer-coarse:h-11">
+            {busy ? "Actualizando…" : "Actualizar"}
+          </OpsButton>
+        )}
       </div>
 
-      {data.error ? (
+      {!data ? (
+        <RetryZonesSkeleton />
+      ) : data.error ? (
         // La estación de arriba sigue funcionando: solo esta parte no cargó.
         <div className="px-4 pb-4 sm:px-6 sm:pb-6">
           <Banner tone="crit" role="alert" title={RETRY_ERROR}>
@@ -204,8 +214,8 @@ export function WarehouseRetries({
             <RetryZone
               bucket="hoy"
               title="Hoy"
-              count={counts.hoy}
-              subline={`${counts.hoyEnOficina.toLocaleString("es-PE")} en oficina · ${counts.hoyFuera.toLocaleString("es-PE")} fuera`}
+              count={data.counts.hoy}
+              subline={`${data.counts.hoyEnOficina.toLocaleString("es-PE")} en oficina · ${data.counts.hoyFuera.toLocaleString("es-PE")} fuera`}
               help={RETRY_HOY_HELP(data.cutoffLabel)}
               empty={RETRY_EMPTY_HOY}
               data={data}
@@ -213,8 +223,8 @@ export function WarehouseRetries({
             <RetryZone
               bucket="manana"
               title="Mañana"
-              count={counts.manana}
-              subline={`${counts.mananaNoche.toLocaleString("es-PE")} ${counts.mananaNoche === 1 ? "se prepara" : "se preparan"} esta noche`}
+              count={data.counts.manana}
+              subline={`${data.counts.mananaNoche.toLocaleString("es-PE")} ${data.counts.mananaNoche === 1 ? "se prepara" : "se preparan"} esta noche`}
               help={RETRY_MANANA_HELP}
               empty={RETRY_EMPTY_MANANA}
               data={data}
@@ -224,6 +234,26 @@ export function WarehouseRetries({
         </>
       )}
     </section>
+  );
+}
+
+/** Mientras llega la primera lectura: las dos zonas, con su título, en esqueleto sobre `wash`. */
+function RetryZonesSkeleton() {
+  return (
+    <>
+      <p role="status" className="sr-only">Cargando los reintentos…</p>
+      <div aria-hidden className="grid grid-cols-1 shadow-[inset_0_1px_0_var(--color-line)] lg:grid-cols-2">
+        {["Hoy", "Mañana"].map((title, index) => (
+          <div key={title} className={cn("min-w-0 p-4 sm:p-6", index > 0 && "shadow-[inset_0_1px_0_var(--color-line)] lg:shadow-[inset_1px_0_0_var(--color-line)]")}>
+            <h3 className="text-sm font-semibold text-ink-900">{title}</h3>
+            <div className="mt-4 space-y-2">
+              <Skeleton className="h-16" />
+              <Skeleton className="h-16" />
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
   );
 }
 

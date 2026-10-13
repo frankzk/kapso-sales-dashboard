@@ -2,8 +2,10 @@
 // MOM §9.5, entrega 1c). Con una base en memoria que anota cada consulta: la
 // puerta (`warehouse.prepare` y tiendas) antes de leer nada, cada lectura
 // acotada a las tiendas de quien mira, los filtros de fecha, los acuerdos que
-// ya están en «Por armar», los lotes y el tope, el motor de Repro Lima sin
-// cerrar casos, ninguna escritura ni RPC, y un fallo que nunca lanza.
+// ya están en «Por armar» (su día: programa, caja de Grupo GF o acordado; y
+// solo mientras su salida nueva sea la de ese intento), los lotes y el tope,
+// el motor de Repro Lima sin cerrar casos, ninguna escritura ni RPC, y un
+// fallo que nunca lanza.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -462,9 +464,10 @@ describe("«Ya en «Por armar»» con el caso todavía abierto", () => {
     expect(open.filters).toEqual(expect.arrayContaining([
       ["is", "closed_at", null],
       ["not", "agreed_on", ["is", null]],
-      ["lte", "agreed_on", "2026-10-14"],
       ["in", "box_action", ["salida_nueva_rearmar", "desarmar_rearmar", "caja_nueva_stock"]],
     ]));
+    // Sin tope de día acordado: el día lo deciden el programa vigente o la caja.
+    expect(open.filters.some(([method, col]) => col === "agreed_on" && (method === "lte" || method === "gte"))).toBe(false);
     expect(open.filters.some(([, col]) => col === "close_reason")).toBe(false);
     expect(open.filters.some(([method, col]) => method === "gte" && col === "closed_at")).toBe(false);
     const closed = queries.find((query) => query.table === "lima_repro_cases" && query.filters.some(([, col]) => col === "close_reason"))!;
@@ -510,6 +513,161 @@ describe("«Ya en «Por armar»»: el día es el del programa vigente, sea cual 
     const data = await getWarehouseRetries(NOW);
     expect(data.handoffs).toEqual([expect.objectContaining({ orderId: "o5", bucket: "hoy", day: "2026-10-12", overdue: true, dayLabel: "lun 12/10" })]);
   });
+
+  it.each([
+    ["hoy", "2026-10-13", { bucket: "hoy", day: "2026-10-13", overdue: false }],
+    ["mañana", "2026-10-14", { bucket: "manana", day: "2026-10-14", overdue: false }],
+    ["un día que pasó", "2026-10-12", { bucket: "hoy", day: "2026-10-12", overdue: true }],
+  ])("Grupo GF lo adelantó a %s y el acuerdo es para después de mañana: se lista con su día", async (_label, scheduledFor, expected) => {
+    const seed = daySeed();
+    Object.assign(seed.lima_repro_cases!.find((row) => row.id === "case-5")!, { agreed_on: "2026-10-16" });
+    seed.gf_dispatch_programs!.push({ order_id: "o5", store_id: "s1", scheduled_for: scheduledFor, reason: GF_REASON, set_at: "2026-10-13T14:30:00Z" });
+    const { queries } = useDb(seed);
+    const data = await getWarehouseRetries(NOW);
+    expect(data.handoffs).toEqual([expect.objectContaining({ orderId: "o5", ...expected })]);
+    expect(writes(queries)).toEqual([]);
+  });
+
+  it("con el caso abierto también; sin programa, un acuerdo para después de mañana no se lista", async () => {
+    const seed = daySeed();
+    const c5 = seed.lima_repro_cases!.find((row) => row.id === "case-5")!;
+    Object.assign(c5, { agreed_on: "2026-10-16", closed_at: null, close_reason: null });
+    useDb(seed);
+    expect((await getWarehouseRetries(NOW)).handoffs).toEqual([]);
+    seed.gf_dispatch_programs!.push({ order_id: "o5", store_id: "s1", scheduled_for: "2026-10-13", reason: GF_REASON, set_at: "2026-10-13T14:30:00Z" });
+    useDb(seed);
+    expect((await getWarehouseRetries(NOW)).handoffs).toEqual([expect.objectContaining({ orderId: "o5", bucket: "hoy", day: "2026-10-13", overdue: false })]);
+  });
+});
+
+describe("«Ya en «Por armar»»: sin programa, el día de la caja de Grupo GF de la salida nueva", () => {
+  /**
+   * o5, acordado para el lun 12/10: Grupo GF lo movió y asignó su salida nueva
+   * (sh5, todavía por armar) a la caja de Roy; al asignarla, el programa se
+   * dio por cumplido y se borró.
+   */
+  function boxSeed(routeDate: string, item: Row = {}, box: Row = {}): Record<string, Row[]> {
+    const seed = daySeed();
+    Object.assign(seed.lima_repro_cases!.find((row) => row.id === "case-5")!, { agreed_on: "2026-10-12" });
+    seed.dispatch_manifests!.push({
+      id: "box-5", org_id: "org1", courier: "propio", route_date: routeDate, rider_id: "rd1", driver_name: "Roy", state: "open",
+      load_number: 1, delivery_route_id: null, ...box,
+    });
+    seed.dispatch_manifest_items!.push({
+      id: "item-5", shipment_id: "sh5", manifest_id: "box-5", store_id: "s1", removed_at: null, office_checked_at: null, pickup_checked_at: null, ...item,
+    });
+    return seed;
+  }
+
+  /** La lectura de la caja de esa salida (el motor de Repro Lima lee las de sus salidas propias aparte). */
+  const boxItemsOf = (shipmentId: string) => (query: Query) =>
+    query.table === "dispatch_manifest_items" &&
+    query.filters.some(([method, col, value]) => method === "in" && col === "shipment_id" && (value as string[]).includes(shipmentId));
+
+  it("la caja de hoy manda sobre el acordado de ayer: «Hoy», sin «Vencido»", async () => {
+    const { queries } = useDb(boxSeed("2026-10-13"));
+    const data = await getWarehouseRetries(NOW);
+    expect(data.handoffs).toEqual([expect.objectContaining({ orderId: "o5", bucket: "hoy", day: "2026-10-13", dayLabel: "mar 13/10", overdue: false })]);
+    // Los ítems por las tiendas de quien mira; las cajas, por sus organizaciones.
+    const items = queries.find(boxItemsOf("sh5"))!;
+    expect(items.filters).toEqual(expect.arrayContaining([["in", "store_id", ["s1"]], ["in", "shipment_id", ["sh5"]], ["is", "removed_at", null]]));
+    const boxes = queries.find((query) => query.table === "dispatch_manifests" && query.filters.some(([method, col, value]) => method === "in" && col === "id" && (value as string[]).includes("box-5")))!;
+    expect(boxes.filters).toEqual(expect.arrayContaining([["in", "org_id", ["org1"]], ["in", "id", ["box-5"]]]));
+    expect(writes(queries)).toEqual([]);
+  });
+
+  it("la caja de mañana va a «Mañana»; la de después de mañana no se lista", async () => {
+    useDb(boxSeed("2026-10-14"));
+    expect((await getWarehouseRetries(NOW)).handoffs).toEqual([expect.objectContaining({ orderId: "o5", bucket: "manana", day: "2026-10-14", overdue: false })]);
+    useDb(boxSeed("2026-10-16"));
+    expect((await getWarehouseRetries(NOW)).handoffs).toEqual([]);
+  });
+
+  it.each([
+    ["la sacaron de la caja", { removed_at: "2026-10-13T14:00:00Z", removal_reason: "Se sacó" }, {}],
+    ["la caja se anuló", {}, { state: "cancelled" }],
+    ["la caja es de otra organización", {}, { org_id: "org2" }],
+  ])("sin caja vigente (%s), el acordado", async (_label, item, box) => {
+    useDb(boxSeed("2026-10-13", item, box));
+    const data = await getWarehouseRetries(NOW);
+    expect(data.handoffs).toEqual([expect.objectContaining({ orderId: "o5", bucket: "hoy", day: "2026-10-12", overdue: true })]);
+  });
+
+  it("el programa vigente manda sobre la caja", async () => {
+    const seed = boxSeed("2026-10-13");
+    seed.gf_dispatch_programs!.push({ order_id: "o5", store_id: "s1", scheduled_for: "2026-10-14", reason: GF_REASON, set_at: "2026-10-13T14:30:00Z" });
+    const { queries } = useDb(seed);
+    const data = await getWarehouseRetries(NOW);
+    expect(data.handoffs).toEqual([expect.objectContaining({ orderId: "o5", bucket: "manana", day: "2026-10-14" })]);
+    expect(queries.some(boxItemsOf("sh5"))).toBe(false);
+  });
+
+  it("la salida nueva de otro courier no mira cajas: el acordado", async () => {
+    const seed = boxSeed("2026-10-13");
+    Object.assign(seed.lima_repro_cases!.find((row) => row.id === "case-5")!, { agreed_courier: "tanders" });
+    Object.assign(seed.shipments!.find((row) => row.id === "sh5")!, { courier: "tanders" });
+    const { queries } = useDb(seed);
+    const data = await getWarehouseRetries(NOW);
+    expect(data.handoffs).toEqual([expect.objectContaining({ orderId: "o5", day: "2026-10-12", overdue: true, courierName: "Tanders" })]);
+    expect(queries.some(boxItemsOf("sh5"))).toBe(false);
+  });
+});
+
+describe("«Ya en «Por armar»»: solo mientras la salida nueva sea la de ese acuerdo", () => {
+  /**
+   * o5: la salida nueva del acuerdo (sh5, S02) ya salió; sh5c (S03) nació de
+   * otro intento y nadie pulsó «Atender»: no hay caso nuevo y case-5 sigue
+   * siendo el último del pedido.
+   */
+  function laterSeed(salida: Row, stops: Row[] = []): Record<string, Row[]> {
+    const seed = daySeed();
+    Object.assign(seed.shipments!.find((row) => row.id === "sh5")!, { preparation_state: "listo_despacho", ready_at: "2026-10-13T13:45:00Z", ...salida });
+    seed.shipments!.push(shipment("sh5c", "o5", {
+      output_number: 3, output_code: "o5-S03", preparation_state: "rotulo_generado", ready_at: null, dispatched_at: null, created_at: "2026-10-13T14:40:00Z",
+    }));
+    seed.delivery_stops!.push(...stops);
+    return seed;
+  }
+  const stop5 = (shipmentId: string): Row => ({
+    id: `stop-${shipmentId}`, order_id: "o5", store_id: "s1", shipment_id: shipmentId, route_id: "r5", status: "no_entregado",
+    outcome_reason: "no_contesta", note: null, photo_path: null, reported_at: "2026-10-13T14:20:00Z", requested_date: null,
+    dispatch_manifest_id: "box-5", created_at: "2026-10-13T13:50:00Z",
+  });
+
+  it.each([
+    ["su parada de Grupo GF dice «No entregado»", { custody_state: "courier", custody_transferred_at: "2026-10-13T13:50:00Z" }, [stop5("sh5")]],
+    ["«Sacar con salida nueva» con la caja en el motorizado", { custody_state: "retorno" }, []],
+    ["la caja reemplazada ya volvió", { custody_state: "devuelto", returned_at: "2026-10-13T14:30:00Z" }, []],
+    ["la de Tanders volvió", { courier: "tanders", custody_state: null, returned_at: "2026-10-13T14:30:00Z" }, []],
+  ])("un fallo nuevo sin caso nuevo (%s): no se lista", async (_label, salida, stops) => {
+    const { queries } = useDb(laterSeed(salida, stops));
+    const data = await getWarehouseRetries(NOW);
+    expect(data.handoffs).toEqual([]);
+    expect(writes(queries)).toEqual([]);
+  });
+
+  it("el fallo de una salida de antes del acuerdo no cuenta; las paradas se leen por sus tiendas", async () => {
+    const seed = daySeed();
+    seed.delivery_stops!.push(stop5("tx5"));
+    const { queries } = useDb(seed);
+    const data = await getWarehouseRetries(NOW);
+    expect(data.handoffs).toEqual([expect.objectContaining({ orderId: "o5", salida: { code: "o5-S02", armed: false, readyAt: null } })]);
+    const stops = queries.find((query) => query.table === "delivery_stops")!;
+    expect(stops.filters).toEqual(expect.arrayContaining([
+      ["in", "store_id", ["s1"]], ["in", "order_id", ["o5", "o6", "o7"]], ["eq", "status", "no_entregado"], ["not", "shipment_id", ["is", null]],
+    ]));
+  });
+});
+
+describe("«Ya en «Por armar»»: al armar la salida nueva, la fila sale de la lista", () => {
+  it("el pedido pasa a «Por despachar»: el cargador no devuelve una salida nueva armada", async () => {
+    const seed = daySeed();
+    Object.assign(seed.shipments!.find((row) => row.id === "sh5")!, { preparation_state: "listo_despacho", ready_at: "2026-10-13T15:12:00Z" });
+    Object.assign(seed.order_master!.find((row) => row.order_id === "o5")!, { macro_stage: "por_despachar", macro_substage: "por_asignar" });
+    useDb(seed);
+    const data = await getWarehouseRetries(NOW);
+    expect(data.handoffs).toEqual([]);
+  });
 });
 
 describe("solo lee", () => {
@@ -532,11 +690,13 @@ describe("solo lee", () => {
     const { queries } = useDb(daySeed());
     const data = await getWarehouseRetries(NOW);
     expect(data.rows.length).toBeGreaterThan(0);
+    // `delivery_stops` y `dispatch_manifest_items`: el fallo y la caja de la salida nueva de o5.
     expect(new Set(queries.map((query) => query.table))).toEqual(new Set([
       "gf_dispatch_programs", "lima_repro_cases", "stores", "logistics_providers", "order_master", "shipments",
+      "delivery_stops", "dispatch_manifest_items",
     ]));
     for (const query of queries) {
-      const column = query.table === "stores" ? "id" : query.table === "logistics_providers" ? "org_id" : "store_id";
+      const column = query.table === "stores" ? "id" : query.table === "logistics_providers" || query.table === "dispatch_manifests" ? "org_id" : "store_id";
       const scoped = query.filters.find(([method, col]) => method === "in" && col === column);
       expect(scoped, `${query.table} ${query.columns}`).toBeTruthy();
       const allowed = column === "org_id" ? ["org1"] : ["s1"];
@@ -566,10 +726,10 @@ describe("solo lee", () => {
     expect(handoff.filters).toEqual(expect.arrayContaining([
       ["eq", "close_reason", "fuera_de_etapa"],
       ["not", "agreed_on", ["is", null]],
-      ["lte", "agreed_on", "2026-10-14"],
       ["in", "box_action", ["salida_nueva_rearmar", "desarmar_rearmar", "caja_nueva_stock"]],
       ["gte", "closed_at", "2026-09-29T15:00:00.000Z"],
     ]));
+    expect(handoff.filters.some(([method, col]) => col === "agreed_on" && (method === "lte" || method === "gte"))).toBe(false);
     const master = queries.find((query) => query.table === "order_master" && query.columns?.includes("macro_substage") && query.filters.some(([, col, value]) => col === "macro_substage" && value === "por_armar"))!;
     expect(master.filters).toContainEqual(["eq", "macro_stage", "preparacion"]);
   });

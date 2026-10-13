@@ -7,9 +7,10 @@ import { cn } from "@/components/ui";
 import { Badge, Banner, OpsButton } from "@/components/ops-ui";
 import { IconCamera, IconSearch } from "@/components/icons";
 import { markShipmentReady, type DispatchActionResult } from "@/app/dashboard/pedidos/despacho/actions";
-import { loadWarehouseRetries, loadWarehouseStation } from "@/app/dashboard/pedidos/almacen/actions";
+import { loadWarehouseStation } from "@/app/dashboard/pedidos/almacen/actions";
 import { WarehouseRetries, retryScanHint, type RetryScanHint } from "@/components/warehouse-retries";
 import { OPERATION_LABELS } from "@/lib/dispatch-routing";
+import { limaClock } from "@/lib/grupo-gf-courier";
 import {
   buildWarehouseQueue,
   warehousePanels,
@@ -51,21 +52,39 @@ import type { StoreSummary } from "@/lib/types";
  * Debajo, aparte, «Reintentos por salir» (entrega 1c, MOM §9.5): las cajas de
  * «Por reprogramar Lima» que salen hoy y mañana. No es esta cola y no se relee
  * con cada escaneo; el escáner es el mismo y, si la caja es de un reintento
- * listado, dice qué hacer con ella.
+ * listado, dice qué hacer con ella. Se lee aquí, después de montar: la página
+ * no la lee al pintar en servidor (ver `refreshRetries`).
  */
+
+/**
+ * La lista por GET (`/api/almacen/reintentos`), no por acción de servidor: las
+ * acciones de una pestaña van en fila, y el primer escaneo esperaría a esta
+ * lectura. Un error HTTP o una respuesta que no es JSON (la sesión venció y
+ * redirigió a /login) lanza, y `refreshRetries` lo muestra como error.
+ */
+async function fetchWarehouseRetries(): Promise<WarehouseRetriesData> {
+  const response = await fetch("/api/almacen/reintentos", { cache: "no-store", credentials: "same-origin" });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return (await response.json()) as WarehouseRetriesData;
+}
 export function WarehouseStation({
   initialData,
   initialRetries,
   stores,
 }: {
   initialData: WarehouseStationData;
-  /** «Reintentos por salir»; sin él, la estación se ve como siempre. */
+  /**
+   * «Reintentos por salir» ya leídos (lo usan las pruebas para pintar con
+   * datos). La página no los pasa: sin ellos, se leen después de montar.
+   */
   initialRetries?: WarehouseRetriesData;
   stores: StoreSummary[];
 }) {
   const [data, setData] = useState(initialData);
-  const [retries, setRetries] = useState(initialRetries);
+  const [retries, setRetries] = useState<WarehouseRetriesData | null>(initialRetries ?? null);
   const [retriesBusy, setRetriesBusy] = useState(false);
+  // Marca síncrona de la lectura en curso (ver `refreshRetries`).
+  const retriesInFlight = useRef(false);
   const [retryHint, setRetryHint] = useState<RetryScanHint | null>(null);
   const [scan, setScan] = useState("");
   const [query, setQuery] = useState("");
@@ -94,16 +113,33 @@ export function WarehouseStation({
   }, [busy, retries]);
 
   const refreshRetries = useCallback(async () => {
+    // Una sola lectura a la vez. Al volver a la pestaña llegan `visibilitychange`
+    // y `focus` seguidos, y el segundo aún ve el `busy` del render anterior: la
+    // marca se pone antes de esperar, así que el segundo no pide otra lectura.
+    if (retriesInFlight.current) return;
+    retriesInFlight.current = true;
     setRetriesBusy(true);
     try {
-      setRetries(await loadWarehouseRetries());
+      setRetries(await fetchWarehouseRetries());
     } catch {
-      // La acción no llegó (sin red): se dice aquí y la estación sigue.
-      setRetries((prev) => prev && emptyWarehouseRetries({ today: prev.today, nowIso: prev.nowIso, cutoffLabel: prev.cutoffLabel, error: RETRY_ERROR }));
+      // La acción no llegó (sin red): se dice aquí y la estación sigue. Sin una
+      // lista anterior (la primera lectura), el día es el de Lima en este equipo.
+      setRetries((prev) => emptyWarehouseRetries(prev
+        ? { today: prev.today, nowIso: prev.nowIso, cutoffLabel: prev.cutoffLabel, error: RETRY_ERROR }
+        : { today: limaClock(new Date()).day, nowIso: new Date().toISOString(), error: RETRY_ERROR }));
     } finally {
+      retriesInFlight.current = false;
       setRetriesBusy(false);
     }
   }, []);
+
+  // «Reintentos por salir» se lee DESPUÉS de montar, nunca al pintar en
+  // servidor: el escaneo que arma una caja revalida esta página, y una lectura
+  // en ese render se haría con cada escaneo para tirarse (el estado ya está
+  // aquí). Mientras llega, el apartado se ve en esqueleto.
+  useEffect(() => {
+    if (!retries) void refreshRetries();
+  }, [retries, refreshRetries]);
 
   // La chapa de «Por armar» de un pedido cuyo reintento ya tiene su salida nueva.
   const handoffByOrder = useMemo(
@@ -286,7 +322,7 @@ export function WarehouseStation({
         </div>
       </section>
 
-      {retries && <WarehouseRetries data={retries} onRefresh={refreshRetries} busy={retriesBusy} />}
+      <WarehouseRetries data={retries} onRefresh={refreshRetries} busy={retriesBusy} />
 
       <DispatchCamera open={cameraOpen} onClose={() => setCameraOpen(false)} onScan={onCameraScan} />
     </div>

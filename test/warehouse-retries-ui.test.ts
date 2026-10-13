@@ -3,6 +3,8 @@
 // pinta: el apartado y el enlace de la cabecera, el escáner que no cambia, la
 // cola de «Por armar» que sigue saliendo de `data.pending`, el aviso de error
 // que no tumba la estación, los apartados de cada zona y la pista del escáner.
+// Y cuándo se lee: después de montar, nunca en el render de servidor que
+// revalida cada escaneo, y una sola lectura a la vez.
 
 import React, { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -40,7 +42,7 @@ vi.stubGlobal("React", React);
 afterAll(() => vi.unstubAllGlobals());
 // Las acciones de servidor y la cámara no se ejecutan al pintar en el servidor.
 vi.mock("@/app/dashboard/pedidos/despacho/actions", () => ({ markShipmentReady: vi.fn() }));
-vi.mock("@/app/dashboard/pedidos/almacen/actions", () => ({ loadWarehouseStation: vi.fn(), loadWarehouseRetries: vi.fn() }));
+vi.mock("@/app/dashboard/pedidos/almacen/actions", () => ({ loadWarehouseStation: vi.fn() }));
 vi.mock("@/components/dispatch-camera", () => ({ DispatchCamera: () => null }));
 vi.mock("next/navigation", () => ({
   usePathname: () => "/dashboard/pedidos/almacen",
@@ -238,7 +240,7 @@ function renderStation(initialRetries?: WarehouseRetriesData, data: WarehouseSta
   return renderToStaticMarkup(createElement(WarehouseStation, { initialData: data, initialRetries, stores }));
 }
 
-function renderRetries(data: WarehouseRetriesData, busy = false): string {
+function renderRetries(data: WarehouseRetriesData | null, busy = false): string {
   return renderToStaticMarkup(createElement(WarehouseRetries, { data, onRefresh: async () => {}, busy }));
 }
 
@@ -262,13 +264,140 @@ describe("dónde vive y cómo se llega (§1)", () => {
     expect(retries).toBeGreaterThan(stationCard);
   });
 
-  it("la página lee la estación y los reintentos a la vez, después de su puerta", () => {
+  it("la página lee solo la estación, después de su puerta: los reintentos no se leen al pintar en servidor", () => {
     const gate = page.indexOf('permissions.can("warehouse.prepare")');
-    const load = page.indexOf("await Promise.all([getWarehouseStationData(), getWarehouseRetries()])");
+    const load = page.indexOf("const data = await getWarehouseStationData();");
     expect(gate).toBeGreaterThan(-1);
     expect(load).toBeGreaterThan(gate);
-    expect(page).toContain("<WarehouseStation initialData={data} initialRetries={retries} stores={stores} />");
-    expect(page).toContain('import { getWarehouseRetries } from "@/lib/warehouse-retries-access";');
+    expect(page).toContain("<WarehouseStation initialData={data} stores={stores} />");
+    expect(page).not.toContain("getWarehouseRetries");
+    expect(page).not.toContain("warehouse-retries-access");
+    expect(page).not.toContain("initialRetries");
+  });
+
+  it("la estación los pide después de montar, por GET (no por acción de servidor) y fuera del escaneo", () => {
+    expect(station).toContain("const [retries, setRetries] = useState<WarehouseRetriesData | null>(initialRetries ?? null);");
+    expect(station).toContain("useEffect(() => {\n    if (!retries) void refreshRetries();\n  }, [retries, refreshRetries]);");
+    // Las acciones de una pestaña van en fila: por GET, el primer escaneo no espera a la lista.
+    expect(station).toContain('fetch("/api/almacen/reintentos", { cache: "no-store", credentials: "same-origin" })');
+    expect(station).not.toContain("loadWarehouseRetries");
+    expect(between(station, "const refreshRetries = useCallback(async () => {", "}, []);")).toContain("setRetries(await fetchWarehouseRetries());");
+    // Mientras llega, el apartado se pinta igual (en esqueleto): no espera a tener datos.
+    expect(station).toContain("<WarehouseRetries data={retries} onRefresh={refreshRetries} busy={retriesBusy} />");
+    expect(station).not.toContain("{retries && <WarehouseRetries");
+  });
+});
+
+describe("el render de servidor que revalida un escaneo no lee los reintentos (§9.5)", () => {
+  // `markShipmentReady` llama `revalidatePath`, y Next vuelve a pintar en
+  // servidor la página desde la que se escaneó: ese render es `WarehousePage()`.
+  it("ni al entrar ni al revalidar se llama getWarehouseRetries; la estación va sin initialRetries", async () => {
+    const station1 = stationData([{ order_id: "o1" }]);
+    const station2 = stationData([{ order_id: "o1" }, { order_id: "o2" }]);
+    const getWarehouseStationData = vi.fn().mockResolvedValueOnce(station1).mockResolvedValueOnce(station2);
+    const getWarehouseRetries = vi.fn(async () => retriesData([]));
+    vi.resetModules();
+    vi.doMock("@/lib/access", () => ({ getAccessibleStores: async () => stores }));
+    vi.doMock("@/lib/permissions-access", () => ({ getMasterPermissions: async () => ({ can: (key: string) => key === "warehouse.prepare" }) }));
+    vi.doMock("@/lib/dispatch-access", () => ({ getWarehouseStationData }));
+    vi.doMock("@/lib/warehouse-retries-access", () => ({ getWarehouseRetries }));
+    try {
+      const { default: WarehousePage } = await import("@/app/dashboard/pedidos/almacen/page");
+      const { WarehouseStation: Station } = await import("@/components/warehouse-station");
+      // Entrar a la página y, después, el render que revalida un escaneo que armó.
+      for (const expected of [station1, station2]) {
+        const element = (await WarehousePage()) as React.ReactElement<Record<string, unknown>>;
+        expect(element.type).toBe(Station);
+        expect(element.props).toEqual({ initialData: expected, stores });
+        expect("initialRetries" in element.props).toBe(false);
+      }
+      expect(getWarehouseStationData).toHaveBeenCalledTimes(2);
+      expect(getWarehouseRetries).not.toHaveBeenCalled();
+    } finally {
+      for (const mod of ["@/lib/access", "@/lib/permissions-access", "@/lib/dispatch-access", "@/lib/warehouse-retries-access"]) vi.doUnmock(mod);
+      vi.resetModules();
+    }
+  });
+});
+
+describe("una sola lectura de los reintentos a la vez", () => {
+  /**
+   * El `refreshRetries` de una estación pintada en servidor (sin montar): la
+   * marca de lectura en curso es la de verdad y los `setState` no hacen nada.
+   */
+  async function stationRefresh() {
+    vi.resetModules();
+    const captured: Array<() => Promise<void>> = [];
+    vi.doMock("@/components/warehouse-retries", async (importOriginal) => {
+      const real = await importOriginal<typeof import("@/components/warehouse-retries")>();
+      return {
+        ...real,
+        WarehouseRetries: ({ onRefresh }: { onRefresh: () => Promise<void> }) => {
+          captured.push(onRefresh);
+          return null;
+        },
+      };
+    });
+    const { WarehouseStation: Station } = await import("@/components/warehouse-station");
+    renderToStaticMarkup(createElement(Station, { initialData: stationData(), stores }));
+    const [refresh] = captured;
+    expect(captured).toHaveLength(1);
+    if (!refresh) throw new Error("la estación no pintó «Reintentos por salir»");
+    // La lista llega por GET: cada lectura es un `fetch` que responde lo que dé `load`.
+    const load = vi.fn<() => Promise<WarehouseRetriesData>>();
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      const data = await load();
+      return { ok: true, status: 200, json: async () => data };
+    }));
+    return { refresh, load };
+  }
+
+  afterAll(() => {
+    vi.doUnmock("@/components/warehouse-retries");
+    vi.resetModules();
+  });
+
+  it("dos avisos seguidos al volver a la pestaña (día nuevo) piden una sola lectura", async () => {
+    const { refresh, load } = await stationRefresh();
+    let finish!: (data: WarehouseRetriesData) => void;
+    load.mockImplementation(() => new Promise<WarehouseRetriesData>((done) => { finish = done; }));
+    // `visibilitychange` y luego `focus`, antes de que React vuelva a pintar.
+    const first = refresh();
+    const second = refresh();
+    expect(load).toHaveBeenCalledTimes(1);
+    await second;
+    finish(retriesData([]));
+    await first;
+    // Acabada la lectura, «Actualizar» puede pedir otra.
+    load.mockResolvedValueOnce(retriesData([]));
+    await refresh();
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it("una lectura que falla (sin red o sin sesión) no lanza y suelta la marca", async () => {
+    const { refresh, load } = await stationRefresh();
+    load.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await expect(refresh()).resolves.toBeUndefined();
+    load.mockResolvedValueOnce(retriesData([]));
+    await refresh();
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it("la marca se pone antes de esperar y se quita en el finally", () => {
+    const refresh = between(station, "const refreshRetries = useCallback(async () => {", "}, []);");
+    const guard = refresh.indexOf("if (retriesInFlight.current) return;");
+    const set = refresh.indexOf("retriesInFlight.current = true;");
+    const wait = refresh.indexOf("await fetchWarehouseRetries()");
+    const fin = refresh.indexOf("} finally {");
+    const clear = refresh.indexOf("retriesInFlight.current = false;");
+    expect(guard).toBeGreaterThan(-1);
+    expect(set).toBeGreaterThan(guard);
+    expect(wait).toBeGreaterThan(set);
+    expect(clear).toBeGreaterThan(fin);
+    expect(fin).toBeGreaterThan(wait);
+    // Sin lista anterior (falló la primera lectura), el aviso de error sale igual.
+    expect(refresh).toContain(": { today: limaClock(new Date()).day, nowIso: new Date().toISOString(), error: RETRY_ERROR }");
+    expect(refresh).not.toContain("prev && ");
   });
 });
 
@@ -281,7 +410,7 @@ describe("el escáner y la cola de armado no cambian (§4, §6)", () => {
   });
 
   it("el escaneo no relee los reintentos: solo busca en lo que ya está en pantalla", () => {
-    expect(scan).not.toContain("loadWarehouseRetries");
+    expect(scan).not.toContain("fetchWarehouseRetries");
     expect(scan).not.toContain("refreshRetries");
     expect(scan).toContain("setRetryHint(retryScanHint(retries, result.shipment?.order_id));");
     // La estación sí se relee tras el escaneo, como siempre.
@@ -302,7 +431,8 @@ describe("el escáner y la cola de armado no cambian (§4, §6)", () => {
     expect(retriesUi).toContain("const RETRY_STALE_MS = 5 * 60_000;");
     expect(retriesUi).toContain('document.addEventListener("visibilitychange", onWake);');
     expect(retriesUi).toContain('window.addEventListener("focus", onWake);');
-    expect(retriesUi).toContain("limaClock(new Date()).day !== data.today");
+    expect(retriesUi).toContain("limaClock(new Date()).day !== today");
+    expect(retriesUi).toContain("const today = data?.today ?? null;");
     expect(count(retriesUi, "onRefresh()")).toBe(3);
   });
 });
@@ -380,11 +510,38 @@ describe("el aviso de error no tumba la estación", () => {
     expect(text(html)).toContain(RETRY_ERROR);
   });
 
-  it("sin reintentos (prop ausente), la estación se ve como siempre", () => {
+  it("antes de la primera lectura, la estación pinta entera y el apartado va en esqueleto, sin enlace", () => {
     const html = renderStation(undefined);
     expect(html).toContain("Dejar paquete listo");
-    expect(html).not.toContain('id="reintentos"');
-    expect(html).not.toContain("Reintentos por salir");
+    expect(html).toContain("Por empacar");
+    expect(html).toContain("Armados hoy");
+    expect(html).toContain('id="reintentos"');
+    expect(html).toContain('aria-busy="true"');
+    expect(text(html)).toContain("Cargando los reintentos…");
+    // Sin cifra todavía, la cabecera no enlaza.
+    expect(html).not.toContain('href="#reintentos"');
+  });
+});
+
+describe("mientras llega la primera lectura (DESIGN.md: esqueleto en `wash`)", () => {
+  it("el apartado se ve con su título, sus zonas en esqueleto y sin «Actualizar» ni vacíos", () => {
+    const html = renderRetries(null);
+    const t = text(html);
+    expect(html).toContain('<section id="reintentos" aria-labelledby="reintentos-titulo" aria-busy="true"');
+    expect(t).toContain("Reintentos por salir");
+    expect(t).toContain(RETRY_HELP);
+    expect(html).toContain('<p role="status" class="sr-only">Cargando los reintentos…</p>');
+    expect(count(html, "animate-pulse rounded-lg bg-wash")).toBe(4);
+    expect(t).toContain("Hoy");
+    expect(t).toContain("Mañana");
+    expect(t).not.toContain("Actualizar");
+    expect(t).not.toContain(RETRY_EMPTY_HOY);
+    expect(t).not.toContain(RETRY_EMPTY_MANANA);
+    expect(html).not.toContain('role="alert"');
+  });
+
+  it("al volver a la pestaña no pide nada sin lista: la primera lectura ya va en camino", () => {
+    expect(retriesUi).toContain("if (!today) return;");
   });
 });
 

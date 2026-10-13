@@ -1696,8 +1696,9 @@ en el caso con quién decidió y cuándo. Almacén la lee en «Reintentos por sa
   rearmado» si el pedido entra como reintento de otro courier— con «Por
   defecto: sin acuerdo de Repro Lima» (decisión 1 del owner, 13-10-2026). Si
   el cliente cambió algo, lo decide Repro Lima. Lo mismo vale para el programa
-  que dejó un acuerdo anterior. Si algo impide la acción (arriba), no hay
-  acción: la fila dice el problema.
+  que dejó un acuerdo anterior, y para el programa de un pedido cuyo acuerdo
+  venció sin programarse: ese acuerdo ya no manda (§9.5). Si algo impide la
+  acción (arriba), no hay acción: la fila dice el problema.
 
 #### Un pedido cerrado se dice igual en todas las pantallas, y con el sitio donde se abre
 
@@ -2558,9 +2559,22 @@ Decisiones del owner sobre el diseño de la entrega 1c (13-10-2026):
     casos que quedaron viejos (`closeStale: false`).
   - No es la cola de armado (§6.2).
   - Si no carga, dice «No pudimos cargar «Reintentos por salir».», con
-    «Reintentar», y la estación de arriba sigue funcionando.
+    «Reintentar», y la estación de arriba sigue funcionando. También si falla
+    la primera lectura.
+  - Se lee después de que carga la estación, no al pintar la página en el
+    servidor: el escaneo que arma una caja vuelve a pintar la página, y esa
+    lectura se haría con cada escaneo. Mientras llega, el apartado tiene su
+    título y su ayuda, y «Hoy» y «Mañana» en esqueleto, sin «Actualizar».
+    Hasta entonces no hay enlace en la cabecera, ni chapa «Reintento · …» en
+    «Por armar», ni segundo aviso del escáner.
+  - Llega por GET (`/api/almacen/reintentos`), no por una acción de
+    servidor: las acciones de una pestaña van en fila, y el primer escaneo
+    esperaría a que la lista termine de leerse. Así el escáner nunca espera.
   - Se vuelve a leer con «Actualizar», y al volver a la pestaña si pasaron 5
     minutos o cambió el día. Nunca después de cada escaneo de armado.
+  - Una sola lectura a la vez: la que se pide mientras otra sigue en curso (el
+    segundo aviso al volver a la pestaña, «Actualizar» o «Reintentar») no se
+    hace ni queda en cola.
 - **Etiquetas, no subetapas.**
   - «Hoy», «Mañana» y sus apartados («Con aviso», «Al anaquel», «Todavía
     fuera», «Prepárala hoy», «Ya en «Por armar»») se calculan al leer.
@@ -2584,6 +2598,10 @@ Decisiones del owner sobre el diseño de la entrega 1c (13-10-2026):
   - El del programa vigente, que es lo que ejecuta Despacho GF («Programados
     hoy», §29.6). Si difiere del acuerdo, la fila lo dice («Grupo GF lo movió
     al vie 16/10 («motivo»)») y el caso no cambia.
+  - Lo mismo si el acuerdo vigente no se programó y hay un programa de otro
+    día, o el acuerdo es con otro courier: «Grupo GF lo programó para el mar
+    13/10; acordado jue 15/10 con Tanders», en ámbar. Manda el programa y el
+    caso no cambia.
   - «Hoy» incluye lo vencido («Vencido · era para el lun 12/10»): «Lo
     programado hasta el corte de las 12:00 sale esta tarde; lo vencido sigue
     aquí hasta que salga o se reprograme.». El corte se lee del proveedor
@@ -2592,9 +2610,11 @@ Decisiones del owner sobre el diseño de la entrega 1c (13-10-2026):
     «Déjalo listo esta tarde: primero lo que se prepara la noche anterior.».
     Lo de después no se lista.
 - **Qué hacer con la caja.**
-  - La acción guardada en el acuerdo (§9.3), en su chapa y con su línea;
-    Almacén no la elige. La fila dice lo que cambió el cliente y quién decidió
-    y cuándo («Decidió Diana 12/10 15:20»).
+  - La acción guardada en el acuerdo vigente (§9.3), en su chapa y con su
+    línea; Almacén no la elige. La fila dice lo que cambió el cliente y quién
+    decidió y cuándo («Decidió Diana 12/10 15:20»). También cuando lo que el
+    acuerdo programó no salió («Programado para el lun 12/10 y no salió») o
+    Grupo GF lo movió: ese programa sigue siendo suyo, y su estado va en azul.
   - Kapta la vuelve a calcular con los hechos de ahora, igual que al guardar.
     Si saldría otra: «Los hechos cambiaron desde el acuerdo: confírmalo con
     Repro Lima antes de tocarla.». La chapa sigue siendo la guardada y el caso
@@ -2604,12 +2624,21 @@ Decisiones del owner sobre el diseño de la entrega 1c (13-10-2026):
     salida de Tanders ya existe: rearma la caja del estante con su etiqueta y
     retira la vieja.» y «La salida de Grupo GF sigue viva: avisa a Despacho
     GF.».
-  - Sin acuerdo (decisión 1 del 13-10-2026), la acción por defecto de la
-    tabla, con «Por defecto: sin acuerdo de Repro Lima», la chapa de Repro
+  - Sin acuerdo vigente (decisión 1 del 13-10-2026), la acción por defecto de
+    la tabla, con «Por defecto: sin acuerdo de Repro Lima», la chapa de Repro
     Lima («Programado en Grupo GF · sin acuerdo», «Fecha del motorizado sin
     confirmar: mié 14/10» o «Programado por un acuerdo anterior») y el motivo
-    del programa tal cual. Si la tabla da un problema, no hay chapa de acción:
-    la fila dice el problema.
+    del programa tal cual, sin «Decidió …» ni lo que cambió el cliente. Si la
+    tabla da un problema, no hay chapa de acción: la fila dice el problema.
+  - Un acuerdo vencido cuenta como sin acuerdo vigente: nunca se programó, así
+    que el programa es de otro (Grupo GF, el motorizado o un acuerdo anterior).
+    En vez de la chapa de Repro Lima, la fila lleva su estado en ámbar: «El
+    acuerdo era para el lun 12/10 y ya pasó: confírmalo de nuevo» o, el del
+    mismo día que ya no alcanza, «El acuerdo era para hoy (mar 13/10) y ya no
+    alcanza: confírmalo de nuevo». Estar vencido no la pasa a «Con aviso»:
+    con el programa de Grupo GF puede ir «Al anaquel», con ese aviso. Con la
+    fecha del motorizado o de un acuerdo anterior lleva la línea de abajo y va
+    «Con aviso» (sin confirmar), salvo que la caja siga fuera.
   - Si la fecha es del motorizado o de un acuerdo anterior: «No va al anaquel
     hasta que Repro Lima la confirme.»
   - Si el último caso del episodio es «Desarmar y cerrar» y Grupo GF lo
@@ -2619,10 +2648,16 @@ Decisiones del owner sobre el diseño de la entrega 1c (13-10-2026):
   - Lo que se prepara la noche anterior (reimprimir, salida nueva y rearmado,
     desarmar y rearmar: «Lista para», §9.3) lleva en «Mañana» «Prepárala hoy:
     se prepara la noche anterior». En «Hoy», si se agregó hoy, «Se prepara la
-    noche anterior y se programó hoy: prepárala ya».
+    noche anterior y se programó hoy: prepárala ya», salvo que el programa no
+    sea el del acuerdo vigente (el acuerdo no se programó y el programa lo dejó
+    otro): ese programa no la prepara.
 - **Dónde está la caja.** La chapa de Repro Lima («Con Roy desde lun 12/10»,
   «Vuelve con Tanders» o, en rojo, «No consta dónde está la caja»). Con la
   caja en oficina, además:
+  - Lo de «Desarmar y cerrar» nunca dice que debería estar en el anaquel. Si
+    se recibió después del cierre, la recepción pidió desarmarla (§29.13): «Al
+    recibirla se pidió desarmarla (cuaderno «DESARMAR»): no va al estante.».
+    Si se recibió antes, o falta alguna de las dos horas, su bandeja (abajo).
   - «Debería estar en el anaquel del jue 15/10» si tenía su programa cuando se
     recibió: el programa ya existía antes de la recepción, o lo escribió la
     recepción misma («Recibir en oficina» programa el acuerdo que esperaba la
@@ -2631,11 +2666,17 @@ Decisiones del owner sobre el diseño de la entrega 1c (13-10-2026):
     minutos después de la recepción. Un programa escrito más tarde (una
     confirmación posterior, «Programar ahora») no cuenta, aunque sea del mismo
     acuerdo: la caja sigue en su bandeja;
+  - también si la recepción misma programó el acuerdo vigente aunque Grupo GF
+    reescribiera el programa después o lo quitara: se reconoce porque la marca
+    del acuerdo (`materialized_at`) cae entre la recepción y 2 minutos
+    después. Es el anaquel del día marcado (`materialized_on`, o el acordado).
+    Si Grupo GF lo movió a otro día: «Debería estar en el anaquel del mié
+    14/10: pásala al del mar 13/10». Una marca anterior a la recepción, o de
+    más de 2 minutos después (una confirmación posterior), no cuenta;
   - si no, «En el estante · bandeja del lun 12/10», la del día en que se
     recibió, hasta 7 días;
   - sin recepción registrada o con más de 7 días, «En el estante · bandeja
     «sin fecha / más de 7 días»».
-  - Lo que se desarma nunca dice que debería estar en el anaquel.
   - Sin recepción registrada, Kapta no la da por puesta: «Kapta la cuenta en
     oficina, pero nadie registró su recepción: búscala en el estante.» o, con
     la caja de otro courier, «Tanders la da por devuelta; nadie la escaneó en
@@ -2648,6 +2689,12 @@ Decisiones del owner sobre el diseño de la entrega 1c (13-10-2026):
     la anterior. Avisa a Repro Lima.», si la dirección de la salida propia
     cambió después de armarla y la acción no es reimprimir. Se muestra; la
     acción no cambia.
+  - Con programa, el estado del acuerdo que la deja «Con aviso», en ámbar:
+    «Sale jue 15/10 con Tanders · crea la salida en la Mesa de ruta», «Falta
+    la salida nueva» o «Sale mar 13/10 con Grupo GF · falta programarlo». Si
+    falta ubicar la caja, basta la chapa roja «No consta dónde está la caja»:
+    no se repite el estado, que pide buscarla «antes de programar» y Grupo GF
+    ya la programó.
 - **Apartados y orden.** La primera regla que aplica gana:
   1. **Con aviso**, en rojo: no lo quiere, los hechos cambiaron o no consta la
      caja.
@@ -2673,19 +2720,30 @@ Decisiones del owner sobre el diseño de la entrega 1c (13-10-2026):
     «Por armar» (§6.2).
   - La fila sigue aquí, sin contarse («Se cuentan en «Por armar».»), si el
     caso sigue abierto o se cerró por dejar la etapa en los últimos 14 días,
-    es el último del pedido, el pedido está en «Preparación · Por armar» y su
-    día es hoy, uno que pasó o mañana. El caso sigue abierto hasta que alguien
-    abre Repro Lima, que es quien lo cierra: Almacén lee sin cerrar casos.
-  - Su día es el del programa vigente de Grupo GF, sea cual sea su fecha; sin
-    programa, el acordado. Si Grupo GF lo movió a después de mañana, no se
-    lista.
+    es el último del pedido, ninguna salida nacida después del acuerdo falló o
+    volvió, el pedido está en «Preparación · Por armar» y su día es hoy, uno
+    que pasó o mañana. El caso sigue abierto hasta que alguien abre Repro
+    Lima, que es quien lo cierra: Almacén lee sin cerrar casos.
+  - Si una salida nacida después del acuerdo falló («No entregado» de Grupo
+    GF, o el fallo o la anulación de otro courier después de salir) o volvió
+    (devuelta, o en retorno), el pedido está en «Por armar» por otro intento
+    sin caso nuevo, y la fila no se lista (ni su chapa en «Por armar» ni su
+    aviso del escáner): su instrucción ya no vale. El fallo de una salida
+    anterior al acuerdo no cuenta.
+  - Su día es el del programa vigente de Grupo GF, sea cual sea su fecha
+    (también si lo adelantó antes del acordado); sin programa, el de la caja de
+    Grupo GF donde ya entró su salida nueva (al asignarla, el programa se
+    borra), si no la quitaron de ella y la caja no está anulada; sin caja, el
+    acordado. Si ese día es después de mañana, no se lista.
   - Dice lo que se hace con la caja del estante: «Pega el rótulo de la salida
     nueva encima del anterior, tapando su QR, y escanéala.» (Grupo GF), «Rearma
     la caja del estante con la etiqueta de Tanders y retira la vieja.»,
     «Desarma la caja del estante y arma otra con la salida nueva.» o «Arma la
     caja nueva desde stock con la salida nueva; la anterior se desarma al
-    recibirla.». Y cómo va la salida nueva: «Falta armarla · KP1-S03» o
-    «Armada 10:12 · KP1-S03».
+    recibirla.». Y cómo va la salida nueva: «Falta armarla · KP1-S03». Al
+    armarla, el pedido pasa a «Por despachar» y la fila sale de la lista
+    («Armada 10:12 · KP1-S03» solo se vería si el Master del pedido quedó sin
+    recalcular).
   - La acción es la guardada: fuera de la etapa no se recalcula.
   - La fila de «Por armar» lleva «Reintento · Salida nueva y rearmado».
 - **Rótulo.**
@@ -2734,6 +2792,13 @@ Decisiones del owner sobre el diseño de la entrega 1c (13-10-2026):
 - El reintento que Grupo GF toma sin programa no tiene fecha para Almacén.
 - Una salida de Tanders creada sin «por definir» puede nacer `no_iniciado` y
   no entra en «Por armar».
+- Kapta no guarda qué programa tenía la caja al recibirla. Si el programa ya
+  existía antes de la recepción y Grupo GF lo reescribe después, «Reintentos
+  por salir» dice su bandeja («En el estante · bandeja …») aunque la caja fue
+  al anaquel.
+- Con la fecha del motorizado o de un acuerdo anterior que ya existía al
+  recibirla, la fila dice «Debería estar en el anaquel del …» y también «No va
+  al anaquel hasta que Repro Lima la confirme.», y va «Con aviso».
 
 Implementación: `lib/repro-lima.ts`, `lib/repro-box-action.ts`,
 `lib/repro-lima-access.ts`, `lib/repro-lima-program.ts`,
@@ -2747,7 +2812,7 @@ Pruebas en `test/repro-lima.test.ts`, `test/repro-box-action.test.ts`,
 
 La entrega 1c: `lib/warehouse-retries.ts` (las reglas, puras),
 `lib/warehouse-retries-access.ts` (la puerta y las lecturas),
-`loadWarehouseRetries` en `app/dashboard/pedidos/almacen/actions.ts`,
+la ruta `app/api/almacen/reintentos/route.ts` (la lectura por GET),
 `app/dashboard/pedidos/almacen/page.tsx`, `components/warehouse-retries.tsx`
 y `components/warehouse-station.tsx`. Pruebas en
 `test/warehouse-retries.test.ts`, `test/warehouse-retries-access.test.ts`,

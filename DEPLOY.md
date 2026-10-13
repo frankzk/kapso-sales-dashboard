@@ -2374,10 +2374,13 @@ Shopify para tiendas cliente y la `0250`, los roles que se acumulan.
 Entrega 1c: sin migración. La última sigue siendo la 0251; no hay variables de
 entorno ni RPC nuevas, y `MOM_RESOLUTION_VERSION` sigue en `mom-v1.26`. El
 apartado solo lee (MOM §9.5): no programa, no cierra casos ni escribe eventos.
+La página no lo lee al pintar en el servidor: la estación lo pide después de
+cargar, y mientras llega la tarjeta se ve en esqueleto.
 
 1. **Qué mirar después**, solo lectura: sin casos de Repro Lima, los programas
    de pedidos de la etapa con fecha de mañana o anterior son las filas de la
-   lista. El 13-10-2026 eran 6, todas «Hoy · vencido»:
+   lista. El 13-10-2026 eran 6, todas en la zona «Hoy» y vencidas, con la
+   chapa roja «Vencido · era para el …»:
    `select count(*) from gf_dispatch_programs p join order_master m on m.order_id = p.order_id where m.macro_stage = 'en_curso' and m.macro_substage = 'por_reprogramar_lima' and p.scheduled_for <= '<mañana>';`
 2. **Antes del primer día** (plan del 11-10-2026): contar las cajas reales del
    estante y rotular las bandejas fijas, una por día de recepción y una «sin

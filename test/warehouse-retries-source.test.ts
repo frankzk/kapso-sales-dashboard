@@ -20,7 +20,9 @@ import {
   RETRY_ADDED_TODAY,
   RETRY_ADDRESS_CHANGED,
   RETRY_ANAQUEL,
+  RETRY_ANAQUEL_MOVED,
   RETRY_DEFAULT_CHIP,
+  RETRY_DISMANTLE_AT_RECEPTION,
   RETRY_EMPTY_HOY,
   RETRY_EMPTY_MANANA,
   RETRY_ERROR,
@@ -38,11 +40,13 @@ import {
   RETRY_NO_RECEPTION_OWN,
   RETRY_OTHER_SALIDA_EXISTS,
   RETRY_OVERDUE,
+  RETRY_PROGRAM_NOT_AGREED,
   RETRY_TRAY,
   RETRY_TRAY_OLD,
   RETRY_UNCONFIRMED,
   handoffSalidaLine,
 } from "@/lib/warehouse-retries";
+import { agreementStateLabel } from "@/lib/repro-lima";
 
 const root = process.cwd();
 const read = (path: string) => readFileSync(resolve(root, path), "utf8");
@@ -109,11 +113,13 @@ describe("quién entra (§9.5)", () => {
   const actions = read("app/dashboard/pedidos/almacen/actions.ts");
   const access = read("lib/warehouse-retries-access.ts");
 
-  it("la acción del servidor pasa por el cargador, que tiene la puerta", () => {
+  it("la ruta GET pasa por el cargador, que tiene la puerta; no hay acción de servidor que la lea", () => {
     expect(actions.startsWith('"use server";')).toBe(true);
-    const load = body(actions, "export async function loadWarehouseRetries(");
-    expect(load).toContain("return getWarehouseRetries();");
-    expect(load).not.toContain("createAdminSupabase");
+    expect(actions).not.toContain("getWarehouseRetries");
+    const route = read("app/api/almacen/reintentos/route.ts");
+    expect(body(route, "export async function GET(")).toContain("const data = await getWarehouseRetries();");
+    expect(route).toContain('NextResponse.json(data, { headers: { "Cache-Control": "no-store" } })');
+    expect(route).not.toContain("createAdminSupabase");
     const loader = body(access, "export async function getWarehouseRetries(");
     expect(loader).toContain("await requireWarehouse()");
     expect(loader.indexOf("await requireWarehouse()")).toBeLessThan(loader.indexOf("createAdminSupabase()"));
@@ -200,6 +206,9 @@ describe("el MOM lo documenta (§6.2, §9.3, §9.5)", () => {
       RETRY_NO_RECEPTION_OTHER("Tanders"),
       RETRY_ADDRESS_CHANGED("12/10"),
       RETRY_ANAQUEL("jue 15/10"),
+      RETRY_ANAQUEL_MOVED("mié 14/10", "mar 13/10"),
+      RETRY_DISMANTLE_AT_RECEPTION,
+      RETRY_PROGRAM_NOT_AGREED("mar 13/10", "jue 15/10", "Tanders"),
       RETRY_TRAY("lun 12/10"),
       RETRY_TRAY_OLD,
       RETRY_OTHER_SALIDA_EXISTS("Tanders"),
@@ -221,7 +230,46 @@ describe("el MOM lo documenta (§6.2, §9.3, §9.5)", () => {
     for (const quote of quotes) expect(s1c, quote).toContain(`«${quote}`);
     // Los ejemplos que el MOM escribe con esos textos.
     expect(s1c).toContain("«Reintento · Salida nueva y rearmado»");
-    expect(s1c).toContain("«Falta armarla · KP1-S03» o «Armada 10:12 · KP1-S03»");
+    // Al armarla, el pedido pasa a «Por despachar» y deja la lista (el cargador solo lee «Por armar»).
+    expect(s1c).not.toContain("«Falta armarla · KP1-S03» o «Armada 10:12 · KP1-S03»");
+    expect(s1c).toContain("«Falta armarla · KP1-S03». Al armarla, el pedido pasa a «Por despachar» y la fila sale de la lista («Armada 10:12 · KP1-S03» solo se vería si el Master del pedido quedó sin recalcular).");
+    const access = read("lib/warehouse-retries-access.ts");
+    const handoffs = access.slice(access.indexOf("async function loadHandoffs("));
+    expect(handoffs).toContain('row.macro_stage === "preparacion" && row.macro_substage === "por_armar"');
+  });
+
+  it("y los estados del acuerdo que cita (lib/repro-lima.ts)", () => {
+    const tanders = { agreed_on: "2026-10-15", agreed_courier: "tanders" };
+    const gf = (day: string) => ({ agreed_on: day, agreed_courier: "propio" });
+    const quotes = [
+      agreementStateLabel({ kind: "otro_courier" }, tanders),
+      agreementStateLabel({ kind: "falta_salida" }, tanders),
+      agreementStateLabel({ kind: "por_programar" }, gf("2026-10-13")),
+      agreementStateLabel({ kind: "programado_vencido" }, gf("2026-10-12")),
+      agreementStateLabel({ kind: "acuerdo_vencido" }, gf("2026-10-12"), null, "2026-10-13"),
+      agreementStateLabel({ kind: "acuerdo_vencido" }, gf("2026-10-13"), null, "2026-10-13"),
+    ];
+    expect(quotes).toContain("El acuerdo era para hoy (mar 13/10) y ya no alcanza: confírmalo de nuevo");
+    for (const quote of quotes) expect(s1c, quote).toContain(`«${quote}»`);
+    // Falta ubicar la caja: basta la chapa roja de la caja; el estado no se repite.
+    expect(s1c).toContain("Si falta ubicar la caja, basta la chapa roja «No consta dónde está la caja»");
+  });
+
+  it("un acuerdo vencido no manda: cuenta como sin acuerdo vigente (decisión 1)", () => {
+    const pure = read("lib/warehouse-retries.ts");
+    expect(s1c).toContain("Un acuerdo vencido cuenta como sin acuerdo vigente: nunca se programó");
+    expect(s1c).toContain("Sin acuerdo vigente (decisión 1 del 13-10-2026), la acción por defecto de la tabla");
+    expect(s93).toContain("y para el programa de un pedido cuyo acuerdo venció sin programarse: ese acuerdo ya no manda (§9.5)");
+    expect(body(pure, "function agreementInForce(")).toContain('r.agreement && r.state.kind !== "acuerdo_vencido" ? r.agreement : null');
+    const action = body(pure, "export function retryAction(");
+    expect(action).toContain("const agreement = agreementInForce(r);");
+    expect(action).not.toContain("if (r.agreement)");
+    // El programa de otro no prepara «prepárala ya»; su estado y su día sí se dicen.
+    expect(s1c).toContain("salvo que el programa no sea el del acuerdo vigente (el acuerdo no se programó y el programa lo dejó otro)");
+    const rows = body(pure, "export function warehouseRetryRows(");
+    expect(rows).toContain("const foreignProgram = Boolean(agreement && r.program && !agreement.materializedAt);");
+    expect(rows).toContain("added != null && !foreignProgram");
+    expect(rows).toContain('(WARN_STATES.has(r.state.kind) && r.state.kind !== "falta_ubicar") || r.state.kind === "acuerdo_vencido"');
   });
 
   it("y las cifras que cita son las del código", () => {
@@ -236,15 +284,33 @@ describe("el MOM lo documenta (§6.2, §9.3, §9.5)", () => {
     expect(s1c).toContain("El caso sigue abierto hasta que alguien abre Repro Lima, que es quien lo cierra: Almacén lee sin cerrar casos.");
     expect(access).toContain('byStores<ReproCaseRow>((chunk) => handoffAgreements(chunk)\n      .is("closed_at", null)');
     // El día de «Ya en «Por armar»»: el programa vigente, leído sin filtro de fecha.
-    expect(s1c).toContain("Su día es el del programa vigente de Grupo GF, sea cual sea su fecha; sin programa, el acordado. Si Grupo GF lo movió a después de mañana, no se lista.");
+    expect(s1c).toContain("Su día es el del programa vigente de Grupo GF, sea cual sea su fecha (también si lo adelantó antes del acordado); sin programa, el de la caja de Grupo GF donde ya entró su salida nueva (al asignarla, el programa se borra), si no la quitaron de ella y la caja no está anulada; sin caja, el acordado. Si ese día es después de mañana, no se lista.");
     const handoffs = access.slice(access.indexOf("async function loadHandoffs("));
     const live = handoffs.slice(handoffs.indexOf('.from("gf_dispatch_programs")'), handoffs.indexOf("]);"));
     expect(live).toContain('.in("store_id", storeIds)');
     expect(live).not.toMatch(/\.(lte|gte|lt|gt|eq)\("scheduled_for"/);
+    // Los candidatos, sea cual sea su día acordado; el día lo da el programa, la caja o el acordado.
+    const candidates = access.slice(access.indexOf("const handoffAgreements = "), access.indexOf("// Oleada 1"));
+    expect(candidates).toContain('.in("box_action", [...HANDOFF_BOX_ACTIONS]);');
+    expect(candidates).not.toMatch(/\.(lte|gte|lt|gt)\("agreed_on"/);
+    expect(handoffs).toContain("programDay: programDay.get(c.order_id) ?? (salidaId ? boxDay.get(salidaId) : undefined) ?? null,");
+    const boxes = access.slice(access.indexOf("async function loadBoxDays("));
+    expect(boxes).toContain('.is("removed_at", null)');
+    expect(boxes).toContain('manifest.state === "cancelled"');
+    expect(boxes).toContain('sameCourier(manifest.courier, "propio")');
+    // Otro intento sin caso nuevo: la fila no se lista.
+    expect(s1c).toContain("ninguna salida nacida después del acuerdo falló o volvió");
+    expect(s1c).toContain("El fallo de una salida anterior al acuerdo no cuenta.");
+    expect(handoffs).toContain("!failedSinceAgreement(shipmentsByOrder.get(c.order_id) ?? [], c.decided_at, failedIds)");
     // La caja que la recepción misma programó va al anaquel: hasta 2 minutos.
     expect(s1c).toContain("el programa es de Repro Lima y se escribió hasta 2 minutos después de la recepción");
     expect(s1c).toContain("Un programa escrito más tarde (una confirmación posterior, «Programar ahora») no cuenta");
     expect(pure).toContain("export const RECEPTION_PROGRAM_WINDOW_MS = 2 * 60_000;");
+    // También la marca del acuerdo que puso la recepción, aunque Grupo GF reescriba el programa.
+    expect(s1c).toContain("se reconoce porque la marca del acuerdo (`materialized_at`) cae entre la recepción y 2 minutos después. Es el anaquel del día marcado (`materialized_on`, o el acordado).");
+    expect(s1c).toContain("Una marca anterior a la recepción, o de más de 2 minutos después (una confirmación posterior), no cuenta");
+    expect(body(pure, "export function markedAtReception(")).toContain("marked >= received && marked - received <= RECEPTION_PROGRAM_WINDOW_MS");
+    expect(s1c).toContain("Lo de «Desarmar y cerrar» nunca dice que debería estar en el anaquel. Si se recibió después del cierre");
     expect(s1c).toContain("la del día en que se recibió, hasta 7 días");
     expect(pure).toContain("const TRAY_DAYS = 7;");
     expect(s1c).toContain("«Imprimir los 3 rótulos» los imprime juntos (hasta 200)");
@@ -263,6 +329,13 @@ describe("el MOM lo documenta (§6.2, §9.3, §9.5)", () => {
     // Se relee al volver a la pestaña tras 5 minutos; nunca tras cada escaneo.
     expect(s1c).toContain("al volver a la pestaña si pasaron 5 minutos o cambió el día. Nunca después de cada escaneo de armado.");
     expect(ui).toContain("5 * 60_000");
+    // Se lee después de montar la estación, no al pintar en servidor; una lectura a la vez.
+    expect(s1c).toContain("Se lee después de que carga la estación, no al pintar la página en el servidor");
+    expect(read("app/dashboard/pedidos/almacen/page.tsx")).not.toContain("getWarehouseRetries");
+    const station = read("components/warehouse-station.tsx");
+    expect(station).toContain("if (!retries) void refreshRetries();");
+    expect(s1c).toContain("Una sola lectura a la vez: la que se pide mientras otra sigue en curso");
+    expect(station).toContain("if (retriesInFlight.current) return;");
   });
 
   it("el segundo aviso del escáner solo sale si el escaneo de esa caja sale bien", () => {
@@ -287,7 +360,7 @@ describe("el MOM lo documenta (§6.2, §9.3, §9.5)", () => {
     for (const file of [
       "lib/warehouse-retries.ts",
       "lib/warehouse-retries-access.ts",
-      "app/dashboard/pedidos/almacen/actions.ts",
+      "app/api/almacen/reintentos/route.ts",
       "app/dashboard/pedidos/almacen/page.tsx",
       "components/warehouse-retries.tsx",
       "components/warehouse-station.tsx",
@@ -304,12 +377,19 @@ describe("el MOM lo documenta (§6.2, §9.3, §9.5)", () => {
 
 describe("DESIGN.md y DEPLOY.md", () => {
   it("el apartado en el alcance del diseño de operación", () => {
-    expect(flat(read("DESIGN.md"))).toContain("y «Armados hoy», y desde el 13-10-2026, debajo de la estación, «Reintentos por salir»: una tarjeta aparte con «Hoy» y «Mañana» en dos zonas");
+    expect(flat(read("DESIGN.md"))).toContain("y «Armados hoy», y desde el 13-10-2026, debajo de la estación, «Reintentos por salir»: una tarjeta aparte con «Hoy» y «Mañana» en dos zonas (mientras llega la lista, las dos zonas con su título y el esqueleto en `wash`)");
   });
 
   it("sin migración", () => {
     const deploy = flat(read("DEPLOY.md"));
     expect(deploy).toContain("### 13-10-2026 · Repro Lima, entrega 1c: «Reintentos por salir» en Almacén");
     expect(deploy).toContain("Entrega 1c: sin migración.");
+  });
+
+  it("DEPLOY.md cita lo que dice la pantalla: «Hoy» y la chapa del vencido", () => {
+    const deploy = flat(read("DEPLOY.md"));
+    expect(deploy).not.toContain("Hoy · vencido");
+    expect(deploy).toContain(`El 13-10-2026 eran 6, todas en la zona «Hoy» y vencidas, con la chapa roja «${RETRY_OVERDUE("…")}»`);
+    expect(deploy).toContain("La página no lo lee al pintar en el servidor: la estación lo pide después de cargar");
   });
 });

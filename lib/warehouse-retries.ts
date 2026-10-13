@@ -12,8 +12,9 @@
 //   queda en el estante.
 // - La acción es la guardada en el caso (§9.3): Almacén no la elige. Si con
 //   los hechos de ahora Kapta calcularía otra, la fila lo dice; el caso nunca
-//   se reescribe (D5). Sin acuerdo, la de la tabla sin cambios declarados,
-//   marcada «Por defecto» (decisión 1 del owner, 13-10-2026).
+//   se reescribe (D5). Sin acuerdo vigente (sin acuerdo, o vencido), la de la
+//   tabla sin cambios declarados, marcada «Por defecto» (decisión 1 del owner,
+//   13-10-2026).
 // - «Hoy», «Mañana» y los apartados son etiquetas de esta pantalla, no
 //   subetapas. Los pedidos que ya están en «Por armar» se listan aparte y no
 //   se cuentan: los cuenta «Por armar».
@@ -69,6 +70,14 @@ export const RETRY_NO_RECEPTION_OTHER = (courier: string): string => `${courier}
 export const RETRY_ADDRESS_CHANGED = (day: string): string =>
   `La dirección cambió el ${day}, después de armar la caja: el rótulo tiene la anterior. Avisa a Repro Lima.`;
 export const RETRY_ANAQUEL = (day: string): string => `Debería estar en el anaquel del ${day}`;
+/** La recepción la puso en el anaquel de su día y Grupo GF lo movió después. */
+export const RETRY_ANAQUEL_MOVED = (placed: string, live: string): string =>
+  `Debería estar en el anaquel del ${placed}: pásala al del ${live}`;
+/** Recibida después del «Desarmar y cerrar»: la recepción pidió desarmarla (§29.13). */
+export const RETRY_DISMANTLE_AT_RECEPTION = "Al recibirla se pidió desarmarla (cuaderno «DESARMAR»): no va al estante.";
+/** Un programa que no es el del acuerdo (que no se programó): otro día u otro courier. */
+export const RETRY_PROGRAM_NOT_AGREED = (programDay: string, agreedDay: string, courier: string): string =>
+  `Grupo GF lo programó para el ${programDay}; acordado ${agreedDay} con ${courier}`;
 export const RETRY_TRAY = (day: string): string => `En el estante · bandeja del ${day}`;
 export const RETRY_TRAY_OLD = "En el estante · bandeja «sin fecha / más de 7 días»";
 export const RETRY_OTHER_SALIDA_EXISTS = (courier: string): string =>
@@ -299,17 +308,29 @@ function decidedLineOf(name: string | null, at: string | null): string | null {
 }
 
 /**
+ * El acuerdo que manda (regla b): el del caso, salvo el vencido. Un acuerdo
+ * vencido con programa nunca se programó, así que ese programa es de otro
+ * (Grupo GF, el motorizado o un acuerdo anterior): Repro Lima lo lleva a «Por
+ * decidir» y aquí cuenta como sin acuerdo vigente (decisión 1). Lo que sí se
+ * programó y no salió (`programado_vencido`) o Grupo GF movió
+ * (`deriva_movido`) sigue siendo suyo.
+ */
+function agreementInForce(r: Pick<ReproRow, "agreement" | "state">): ReproRow["agreement"] {
+  return r.agreement && r.state.kind !== "acuerdo_vencido" ? r.agreement : null;
+}
+
+/**
  * La acción de la caja; la primera regla que aplica gana:
  * a) «Cerrados» (el último caso del episodio es «Desarmar y cerrar») y Grupo GF
  *    lo programó: se desarma y no va al anaquel; avisa a Despacho GF.
- * b) Un acuerdo: la acción guardada. Se recalcula como al guardar
- *    (app/dashboard/pedidos/repro-lima/actions.ts); si ahora sale otra, «Los
- *    hechos cambiaron…», salvo que el problema sea la salida del otro courier
- *    acordado, que ya existe: eso no es deriva (laguna 1 de 1a).
- * c) Un programa sin acuerdo vivo: la de la tabla con Grupo GF y sin cambios
- *    declarados, «Por defecto: sin acuerdo de Repro Lima»; con un problema, sin
- *    acción. La fecha del motorizado o de un acuerdo anterior no va al anaquel
- *    hasta que Repro Lima la confirme.
+ * b) Un acuerdo vigente (`agreementInForce`): la acción guardada. Se recalcula
+ *    como al guardar (app/dashboard/pedidos/repro-lima/actions.ts); si ahora
+ *    sale otra, «Los hechos cambiaron…», salvo que el problema sea la salida
+ *    del otro courier acordado, que ya existe: eso no es deriva (laguna 1 de 1a).
+ * c) Un programa sin acuerdo vigente (sin acuerdo, o vencido): la de la tabla
+ *    con Grupo GF y sin cambios declarados, «Por defecto: sin acuerdo de Repro
+ *    Lima»; con un problema, sin acción. La fecha del motorizado o de un
+ *    acuerdo anterior no va al anaquel hasta que Repro Lima la confirme.
  */
 export function retryAction(r: ReproRow): RetryAction {
   const out: RetryAction = {
@@ -339,9 +360,9 @@ export function retryAction(r: ReproRow): RetryAction {
     return out;
   }
 
-  // b) La acción guardada en el acuerdo.
-  if (r.agreement) {
-    const agreement = r.agreement;
+  // b) La acción guardada en el acuerdo vigente.
+  const agreement = agreementInForce(r);
+  if (agreement) {
     out.courierName = agreement.courierName;
     out.changesText = reproChangesText(agreement.changes);
     out.decidedLine = decidedLineOf(agreement.decidedByName, agreement.decidedAt);
@@ -374,7 +395,7 @@ export function retryAction(r: ReproRow): RetryAction {
     return out;
   }
 
-  // c) Programa sin acuerdo vivo: la tabla, sin cambios declarados (decisión 1).
+  // c) Programa sin acuerdo vigente: la tabla, sin cambios declarados (decisión 1).
   if (r.program) {
     const byDefault = reproBoxAction({ outcome: "confirma", courier: "propio", changes: NO_REPRO_CHANGES, ...boxFacts(r, "propio") });
     if ("action" in byDefault) {
@@ -527,9 +548,10 @@ export const RECEPTION_PROGRAM_WINDOW_MS = 2 * 60_000;
 /**
  * La caja tenía su programa al recibirla, y la recepción la mandó al anaquel
  * de su día: el programa ya existía (`setAt <= receivedAt`) o lo escribió la
- * recepción misma (de Repro Lima y hasta 2 minutos después). No basta con que
- * el acuerdo se marcara después de recibirla: una confirmación posterior
- * también lo hace, y esa caja sigue en su bandeja.
+ * recepción misma (de Repro Lima y hasta 2 minutos después). Una confirmación
+ * posterior (horas después) también marca el acuerdo después de recibirla, y
+ * esa caja sigue en su bandeja: la marca solo cuenta dentro de la misma
+ * ventana (`markedAtReception`).
  */
 export function programmedAtReception(
   program: Pick<NonNullable<ReproRow["program"]>, "setAt" | "origin"> | null | undefined,
@@ -543,15 +565,55 @@ export function programmedAtReception(
 }
 
 /**
- * Dónde debería estar, solo con la caja en oficina: en el anaquel de su día si
- * tenía su programa al recibirla (`programmedAtReception`: la recepción la
- * manda ahí); si no, en la bandeja del día en que se recibió, o en la de «sin
- * fecha / más de 7 días». Lo que se desarma no va al anaquel.
+ * La recepción misma programó el acuerdo: su marca (`materializedAt`) cae
+ * hasta 2 minutos después de recibirla. El gancho de «Recibir en oficina» solo
+ * la deja si escribió el programa (si falla, la deshace), y una confirmación
+ * posterior la borra y la vuelve a poner a su hora. Vale aunque Grupo GF
+ * reescriba o mueva el programa después: la caja ya fue al anaquel del día
+ * marcado (`materializedOn`).
  */
-function whereLineOf(r: ReproRow, action: BoxAction | null, dayLabel: string, today: string): string | null {
+export function markedAtReception(
+  agreement: Pick<NonNullable<ReproRow["agreement"]>, "materializedAt"> | null | undefined,
+  receivedAt: string | null | undefined,
+): boolean {
+  const received = Date.parse(receivedAt ?? "");
+  const marked = Date.parse(agreement?.materializedAt ?? "");
+  if (!Number.isFinite(received) || !Number.isFinite(marked)) return false;
+  return marked >= received && marked - received <= RECEPTION_PROGRAM_WINDOW_MS;
+}
+
+/** Se recibió después del «Desarmar y cerrar»: la recepción pidió desarmarla y no ponerla en el estante. */
+function receivedAfterClose(r: Pick<ReproRow, "receivedAt" | "closed">): boolean {
+  const received = Date.parse(r.receivedAt ?? "");
+  const closed = Date.parse(r.closed?.at ?? "");
+  return Number.isFinite(received) && Number.isFinite(closed) && received > closed;
+}
+
+/**
+ * Dónde debería estar, solo con la caja en oficina; la primera regla que
+ * aplica gana:
+ * 1. lo que se desarma no va al anaquel; si se recibió después del «Desarmar y
+ *    cerrar», la recepción pidió desarmarla y no va al estante (§29.13);
+ * 2. en el anaquel de su día si tenía su programa al recibirla
+ *    (`programmedAtReception`: la recepción la manda ahí);
+ * 3. en el anaquel del día que programó la recepción (`markedAtReception`),
+ *    aunque Grupo GF reescribiera el programa; si lo movió a otro día, se
+ *    pasa al de ese día;
+ * 4. si no, en la bandeja del día en que se recibió, o en la de «sin fecha /
+ *    más de 7 días».
+ */
+function whereLineOf(r: ReproRow, action: BoxAction | null, day: string, today: string): string | null {
   if (r.box.kind !== "en_oficina") return null;
-  if (action !== "desarmar_cerrar" && programmedAtReception(r.program, r.receivedAt)) {
-    return RETRY_ANAQUEL(dayLabel);
+  const agreement = agreementInForce(r);
+  if (action === "desarmar_cerrar") {
+    if (receivedAfterClose(r)) return RETRY_DISMANTLE_AT_RECEPTION;
+  } else if (programmedAtReception(r.program, r.receivedAt)) {
+    return RETRY_ANAQUEL(programDayLabel(day));
+  } else if (agreement && markedAtReception(agreement, r.receivedAt)) {
+    const placed = (agreement.materializedOn ?? agreement.agreedOn).slice(0, 10);
+    return placed === day
+      ? RETRY_ANAQUEL(programDayLabel(day))
+      : RETRY_ANAQUEL_MOVED(programDayLabel(placed), programDayLabel(day));
   }
   const tray = trayDayOf(r.receivedAt, today);
   return tray ? RETRY_TRAY(programDayLabel(tray)) : RETRY_TRAY_OLD;
@@ -583,12 +645,29 @@ export function warehouseRetryRows(rows: readonly ReproRow[], ctx: RetryContext)
     if (slot.overdue) chips.push({ tone: "crit", text: RETRY_OVERDUE(dayLabel) });
     chips.push(...act.chips);
 
+    // El programa no es el del acuerdo vigente: el acuerdo no se programó
+    // (sin marca) y el programa lo dejó otro (Grupo GF, el motorizado).
+    const agreement = agreementInForce(r);
+    const foreignProgram = Boolean(agreement && r.program && !agreement.materializedAt);
+
     // Sin programa, Despacho GF no la ve en «Programados hoy»: el estado dice por qué.
     if (when.dayFrom === "acuerdo") {
       chips.push({ tone: "warn", text: RETRY_NO_GF_PROGRAM });
       chips.push({ tone: isProblemState(r.state.kind) ? "warn" : "info", text: r.stateLabel });
     } else if (r.state.kind === "deriva_movido" || r.state.kind === "programado_vencido") {
       chips.push({ tone: "info", text: r.stateLabel });
+    } else if ((WARN_STATES.has(r.state.kind) && r.state.kind !== "falta_ubicar") || r.state.kind === "acuerdo_vencido") {
+      // Con programa, el estado que la deja «Con aviso» dice por qué; el vencido, que ya no manda.
+      // `falta_ubicar` no: la chapa roja de la caja («No consta dónde está la caja») ya lo dice,
+      // y «búscala antes de programar» no vale para una caja que Grupo GF ya programó.
+      chips.push({ tone: "warn", text: r.stateLabel });
+    }
+    // Si el programa difiere del acuerdo (día o courier), la fila lo dice; el caso no cambia (D5).
+    if (agreement && foreignProgram) {
+      const agreedOn = agreement.agreedOn.slice(0, 10);
+      if (agreedOn !== when.day || !sameCourier(agreement.courier, "propio")) {
+        chips.push({ tone: "warn", text: RETRY_PROGRAM_NOT_AGREED(dayLabel, programDayLabel(agreedOn), agreement.courierName) });
+      }
     }
 
     // Agregado hoy: no estaba en la cuenta de la mañana. Pasado el corte, sale igual hoy.
@@ -602,7 +681,10 @@ export function warehouseRetryRows(rows: readonly ReproRow[], ctx: RetryContext)
 
     const nightBefore = act.action ? NIGHT_BEFORE_BOX_ACTIONS.has(act.action) : false;
     if (nightBefore && slot.bucket === "manana") chips.push({ tone: "warn", text: RETRY_NIGHT_BEFORE_MANANA });
-    if (nightBefore && slot.bucket === "hoy" && added != null) chips.push({ tone: "warn", text: RETRY_NIGHT_BEFORE_HOY });
+    // «Prepárala ya» solo si lo programado hoy es el acuerdo: el programa de otro no la prepara.
+    if (nightBefore && slot.bucket === "hoy" && added != null && !foreignProgram) {
+      chips.push({ tone: "warn", text: RETRY_NIGHT_BEFORE_HOY });
+    }
 
     // Kapta la cuenta en oficina sin que nadie la haya recibido: no se da por puesta.
     const noReception = r.box.kind === "en_oficina" && !r.receivedAt;
@@ -647,7 +729,7 @@ export function warehouseRetryRows(rows: readonly ReproRow[], ctx: RetryContext)
       programReason: act.programReason,
       nightBefore,
       boxLabel: r.boxLabel,
-      whereLine: whereLineOf(r, act.action, dayLabel, ctx.today),
+      whereLine: whereLineOf(r, act.action, when.day, ctx.today),
       inOffice,
       group: retryGroup({
         box: r.box,
@@ -766,7 +848,11 @@ export function handoffSalida(shipments: readonly HandoffShipment[], decidedAt: 
     : null;
 }
 
-/** «Falta armarla · KP1-S03» o «Armada 10:12 · KP1-S03». */
+/**
+ * «Falta armarla · KP1-S03». Al armarla, el pedido pasa a «Por despachar» y la
+ * fila sale de la lista (el cargador solo lee «Por armar»): «Armada 10:12 ·
+ * KP1-S03» solo sale si el Master del pedido quedó sin recalcular.
+ */
 export function handoffSalidaLine(salida: WarehouseHandoffRow["salida"]): string | null {
   if (!salida) return null;
   const code = salida.code ? ` · ${salida.code}` : "";
@@ -777,8 +863,10 @@ export function handoffSalidaLine(salida: WarehouseHandoffRow["salida"]): string
 
 /**
  * La fila de un acuerdo que ya está en «Por armar». El día es el del programa
- * vigente si lo hay, sea cual sea su fecha; si no, el acordado. Lo de después
- * de mañana no se lista, tampoco si Grupo GF lo movió para después.
+ * vigente si lo hay, sea cual sea su fecha; si no, el de la caja de Grupo GF
+ * donde ya entró la salida nueva (al asignarla, el programa se borra); si
+ * tampoco, el acordado. Lo de después de mañana no se lista, tampoco si Grupo
+ * GF lo movió para después.
  * La acción es la guardada: aquí no se recalcula, porque fuera de la etapa los
  * hechos de la salida propia ya no se leen igual.
  */
@@ -786,7 +874,10 @@ export function warehouseHandoffRow(input: {
   caseRow: { order_id: string; agreed_on: string | null; agreed_courier: string | null; box_action: string | null; decided_at: string | null };
   order: { order_name: string | null; customer_name: string | null; district: string | null };
   storeName: string;
-  /** El día del programa vigente de Grupo GF (YYYY-MM-DD), o null. */
+  /**
+   * El día del programa vigente de Grupo GF; sin él, el de la caja de Grupo GF
+   * de la salida nueva (YYYY-MM-DD), o null.
+   */
   programDay: string | null;
   shipments: readonly HandoffShipment[];
   today: string;

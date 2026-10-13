@@ -21,6 +21,7 @@ import {
   handoffLine,
   handoffSalida,
   handoffSalidaLine,
+  markedAtReception,
   programmedAtReception,
   retryAction,
   retryBucket,
@@ -40,7 +41,9 @@ import {
   RETRY_ADDED_TODAY,
   RETRY_ADDRESS_CHANGED,
   RETRY_ANAQUEL,
+  RETRY_ANAQUEL_MOVED,
   RETRY_DEFAULT_CHIP,
+  RETRY_DISMANTLE_AT_RECEPTION,
   RETRY_FACTS_CHANGED,
   RETRY_GF_STILL_LIVE,
   RETRY_NIGHT_BEFORE_HOY,
@@ -51,6 +54,7 @@ import {
   RETRY_NO_RECEPTION_OWN,
   RETRY_OTHER_SALIDA_EXISTS,
   RETRY_OVERDUE,
+  RETRY_PROGRAM_NOT_AGREED,
   RETRY_TRAY,
   RETRY_TRAY_OLD,
   RETRY_UNCONFIRMED,
@@ -227,6 +231,61 @@ describe("qué día sale", () => {
     const r = reproRow({ list: "cerrados", closed: { caseId: "case-0", at: "2026-10-12T16:00:00Z", byName: "diana", note: null } });
     expect(project([r])).toEqual([]);
   });
+
+  describe("un programa que no es el del acuerdo (el acuerdo no se programó)", () => {
+    /** Tanders, jue 15/10, «Salida nueva y rearmado»: al guardarlo se quitó el programa; Despacho GF lo programó después. */
+    const tanders = (prog: NonNullable<ReproRow["program"]>) => reproRow({
+      agreement: agreement({ agreedOn: "2026-10-15", courier: "tanders", courierName: "Tanders", boxAction: "salida_nueva_rearmar" }),
+      state: { kind: "otro_courier" },
+      program: prog,
+    });
+
+    it("manda el día del programa y la fila dice el estado y lo acordado; no «prepárala ya»", () => {
+      const row = one(tanders(program(TODAY, { setAt: "2026-10-13T14:00:00Z" })));
+      expect(row).toMatchObject({ bucket: "hoy", day: TODAY, dayFrom: "programa", courierName: "Tanders", actionSource: "acuerdo", group: "con_aviso" });
+      expect(row.chips).toContainEqual({ tone: "warn", text: "Sale jue 15/10 con Tanders · crea la salida en la Mesa de ruta" });
+      expect(row.chips).toContainEqual({ tone: "warn", text: RETRY_PROGRAM_NOT_AGREED("mar 13/10", "jue 15/10", "Tanders") });
+      expect(texts(row)).toContain("Grupo GF lo programó para el mar 13/10; acordado jue 15/10 con Tanders");
+      expect(row.chips).toContainEqual({ tone: "info", text: RETRY_ADDED_TODAY("09:00") });
+      expect(texts(row)).not.toContain(RETRY_NIGHT_BEFORE_HOY);
+    });
+
+    it("para mañana, igual (la noche anterior se sigue diciendo)", () => {
+      const row = one(tanders(program(TOMORROW)));
+      expect(row).toMatchObject({ bucket: "manana", dayLabel: "mié 14/10", group: "con_aviso" });
+      expect(row.chips).toContainEqual({ tone: "warn", text: "Sale jue 15/10 con Tanders · crea la salida en la Mesa de ruta" });
+      expect(row.chips).toContainEqual({ tone: "warn", text: RETRY_PROGRAM_NOT_AGREED("mié 14/10", "jue 15/10", "Tanders") });
+      expect(row.chips).toContainEqual({ tone: "warn", text: RETRY_NIGHT_BEFORE_MANANA });
+    });
+
+    it("falta la salida nueva: el estado y el día acordado", () => {
+      const row = one(reproRow({
+        agreement: agreement({ agreedOn: "2026-10-15", boxAction: "desarmar_rearmar", changes: { producto: true } }),
+        state: { kind: "falta_salida" },
+        program: program(TODAY),
+      }));
+      expect(row.group).toBe("con_aviso");
+      expect(row.chips).toContainEqual({ tone: "warn", text: "Falta la salida nueva" });
+      expect(row.chips).toContainEqual({ tone: "warn", text: RETRY_PROGRAM_NOT_AGREED("mar 13/10", "jue 15/10", "Grupo GF") });
+    });
+
+    it("el mismo día y con Grupo GF no difiere: solo el estado que la deja «Con aviso»", () => {
+      const row = one(reproRow({ agreement: agreement({ agreedOn: TODAY }), state: { kind: "por_programar" }, program: program(TODAY) }));
+      expect(row.group).toBe("con_aviso");
+      expect(row.chips).toContainEqual({ tone: "warn", text: "Sale mar 13/10 con Grupo GF · falta programarlo" });
+      expect(texts(row).some((text) => text.startsWith("Grupo GF lo programó para el"))).toBe(false);
+    });
+
+    it("el programa del acuerdo (con su marca) no se compara: si Grupo GF lo movió, lo dice la deriva", () => {
+      const row = one(reproRow({
+        agreement: agreement({ agreedOn: TOMORROW, materializedAt: "2026-10-12T20:20:00Z", materializedOn: TOMORROW }),
+        program: program(TODAY, { reason: "Cliente pidió hoy" }),
+        state: { kind: "deriva_movido", gfDay: TODAY, reason: "Cliente pidió hoy" },
+      }));
+      expect(texts(row).some((text) => text.startsWith("Grupo GF lo programó para el"))).toBe(false);
+      expect(row.chips).toContainEqual({ tone: "info", text: "Grupo GF lo movió al mar 13/10 («Cliente pidió hoy»)" });
+    });
+  });
 });
 
 describe("hoy y mañana", () => {
@@ -387,6 +446,76 @@ describe("sin acuerdo de Repro Lima: la acción por defecto (decisión 1)", () =
     expect(row.chips).toContainEqual({ tone: "warn", text: RETRY_UNCONFIRMED });
   });
 
+  describe("un acuerdo vencido con programa no manda: cuenta como sin acuerdo vigente", () => {
+    /** «Mantener» con Grupo GF, al recibir; nunca se programó y la caja llegó tarde. */
+    const expired = (agreedOn: string, prog: NonNullable<ReproRow["program"]>, over: Partial<ReproRow> = {}) => reproRow({
+      agreement: agreement({ agreedOn, boxAction: "mantener", decidedAt: "2026-10-11T20:20:00Z" }),
+      state: { kind: "acuerdo_vencido" },
+      list: "por_decidir",
+      overdue: true,
+      chips: [{ key: "acuerdo_vencido", text: `Acuerdo vencido: era para el ${agreedOn === YESTERDAY ? "lun 12/10" : "mar 13/10"}` }],
+      program: prog,
+      receivedAt: "2026-10-13T14:00:00Z",
+      box: { kind: "en_oficina", since: "2026-10-13T14:00:00Z", courier: "propio" },
+      ...over,
+    });
+    const RIDER = { reason: "Reprogramado por el cliente (reporte de la parada de Roy)", origin: "motorizado" as const, setAt: "2026-10-11T22:00:00Z" };
+
+    it("la fecha del motorizado: por defecto, «No va al anaquel…» y el acuerdo vencido, «Con aviso»", () => {
+      const row = one(expired(YESTERDAY, program(YESTERDAY, RIDER)));
+      expect(row).toMatchObject({
+        bucket: "hoy",
+        overdue: true,
+        action: "mantener",
+        actionSource: "por_defecto",
+        decidedLine: null,
+        changesText: null,
+        programReason: RIDER.reason,
+        group: "con_aviso",
+      });
+      expect(row.chips).toContainEqual({ tone: "neutral", text: RETRY_DEFAULT_CHIP });
+      expect(row.chips).toContainEqual({ tone: "warn", text: RETRY_UNCONFIRMED });
+      expect(row.chips).toContainEqual({ tone: "warn", text: "El acuerdo era para el lun 12/10 y ya pasó: confírmalo de nuevo" });
+      // No es un programa que difiera de un acuerdo vigente.
+      expect(texts(row).some((text) => text.startsWith("Grupo GF lo programó para el"))).toBe(false);
+      // Igual que la misma fila sin caso, más el aviso del vencido.
+      const bare = one(expired(YESTERDAY, program(YESTERDAY, RIDER), { agreement: null, state: { kind: "sin_acuerdo" }, chips: [] }));
+      expect(bare).toMatchObject({ action: row.action, actionSource: row.actionSource, group: row.group });
+    });
+
+    it("el mismo día, llegada después del corte (E25): igual, con «ya no alcanza»", () => {
+      const row = one(expired(TODAY, program(TODAY, RIDER)));
+      expect(row).toMatchObject({ bucket: "hoy", overdue: false, actionSource: "por_defecto", group: "con_aviso" });
+      expect(row.chips).toContainEqual({ tone: "warn", text: RETRY_UNCONFIRMED });
+      expect(row.chips).toContainEqual({ tone: "warn", text: "El acuerdo era para hoy (mar 13/10) y ya no alcanza: confírmalo de nuevo" });
+    });
+
+    it("la fecha de un acuerdo anterior: también sin confirmar", () => {
+      const row = one(expired(YESTERDAY, program(YESTERDAY, { reason: "Repro Lima: confirmado con el cliente (diana, 09/10)", origin: "repro_lima" })));
+      expect(row).toMatchObject({ actionSource: "por_defecto", group: "con_aviso" });
+      expect(row.chips).toContainEqual({ tone: "warn", text: RETRY_UNCONFIRMED });
+    });
+
+    it("con el programa de Grupo GF: por defecto, sin «No va al anaquel…», y el aviso del vencido", () => {
+      const row = one(expired(YESTERDAY, program(YESTERDAY)));
+      expect(row).toMatchObject({ actionSource: "por_defecto", group: "anaquel" });
+      expect(texts(row)).not.toContain(RETRY_UNCONFIRMED);
+      expect(row.chips).toContainEqual({ tone: "warn", text: "El acuerdo era para el lun 12/10 y ya pasó: confírmalo de nuevo" });
+    });
+
+    it("lo programado por el acuerdo que no salió sigue siendo suyo (`programado_vencido`)", () => {
+      const row = one(reproRow({
+        agreement: agreement({ agreedOn: YESTERDAY, materializedAt: "2026-10-11T20:20:05Z", materializedOn: YESTERDAY }),
+        state: { kind: "programado_vencido" },
+        list: "por_decidir",
+        program: program(YESTERDAY, { reason: "Repro Lima: diana acordó con el cliente (11/10)", origin: "repro_lima" }),
+      }));
+      expect(row).toMatchObject({ action: "mantener", actionSource: "acuerdo", group: "anaquel" });
+      expect(row.chips).toContainEqual({ tone: "info", text: "Programado para el lun 12/10 y no salió" });
+      expect(texts(row)).not.toContain(RETRY_UNCONFIRMED);
+    });
+  });
+
   it("otras chapas de la lista (la llamada, la fecha pedida) no pasan", () => {
     const row = one(reproRow({
       program: program(TODAY),
@@ -435,13 +564,25 @@ describe("lo que se prepara la noche anterior", () => {
   });
 
   it("en «Hoy», solo si se agregó hoy: prepárala ya", () => {
-    const early = one(reproRow({ agreement: agreement({ boxAction: "desarmar_rearmar", changes: { producto: true }, agreedOn: TODAY }), program: program(TODAY) }));
+    // El programa es el del acuerdo: Repro Lima lo programó (su marca).
+    const own = { boxAction: "desarmar_rearmar" as const, changes: { producto: true }, agreedOn: TODAY, materializedAt: "2026-10-13T14:30:00Z", materializedOn: TODAY };
+    const early = one(reproRow({ agreement: agreement(own), program: program(TODAY) }));
     expect(texts(early)).not.toContain(RETRY_NIGHT_BEFORE_HOY);
-    const late = one(reproRow({
+    const late = one(reproRow({ agreement: agreement(own), program: program(TODAY, { setAt: "2026-10-13T14:30:00Z" }) }));
+    expect(late.chips).toContainEqual({ tone: "warn", text: RETRY_NIGHT_BEFORE_HOY });
+  });
+
+  it("el programa de otro (el acuerdo no se programó) no la prepara ya", () => {
+    // «Desarmar y rearmar» sin su salida nueva; Grupo GF lo programó hoy igual.
+    const row = one(reproRow({
       agreement: agreement({ boxAction: "desarmar_rearmar", changes: { producto: true }, agreedOn: TODAY }),
       program: program(TODAY, { setAt: "2026-10-13T14:30:00Z" }),
+      state: { kind: "falta_salida" },
     }));
-    expect(late.chips).toContainEqual({ tone: "warn", text: RETRY_NIGHT_BEFORE_HOY });
+    expect(row.nightBefore).toBe(true);
+    expect(texts(row)).not.toContain(RETRY_NIGHT_BEFORE_HOY);
+    expect(row.chips).toContainEqual({ tone: "warn", text: "Falta la salida nueva" });
+    expect(row.group).toBe("con_aviso");
   });
 });
 
@@ -579,20 +720,56 @@ describe("dónde está la caja en oficina", () => {
       expect(one(received("2026-10-12T15:02:01.000Z")).whereLine).toBe(RETRY_TRAY("lun 12/10"));
     });
 
-    it("una confirmación posterior (horas después) no la manda al anaquel, aunque el acuerdo se marcara después de recibirla", () => {
+    it("una confirmación posterior (horas después) no la manda al anaquel: marca y programa son de esa hora", () => {
       const row = one(received("2026-10-12T19:30:00.000Z"));
       expect(row.whereLine).toBe(RETRY_TRAY("lun 12/10"));
-      // La marca del acuerdo sola no basta: manda cuándo se escribió el programa.
-      const marked = one(received("2026-10-12T19:30:00.000Z", {}, {
-        agreement: agreement({ agreedOn: TODAY, materializedAt: "2026-10-12T15:00:00.100Z", materializedOn: TODAY }),
+      expect(markedAtReception({ materializedAt: "2026-10-12T19:30:00.000Z" }, RECEIVED)).toBe(false);
+    });
+
+    it("si Grupo GF reescribe después el programa de la recepción, sigue en el anaquel: lo dice la marca del acuerdo", () => {
+      const MARK = "2026-10-12T15:00:00.100Z";
+      // «Programar» de Despacho GF el mismo día: el programa es suyo y de después; la marca es la de la recepción.
+      const sameDay = one(received("2026-10-12T19:30:00.000Z", { reason: "Programado por Despacho GF", origin: "grupo_gf" }, {
+        agreement: agreement({ agreedOn: TODAY, materializedAt: MARK, materializedOn: TODAY }),
       }));
-      expect(marked.whereLine).toBe(RETRY_TRAY("lun 12/10"));
+      expect(sameDay.whereLine).toBe(RETRY_ANAQUEL("mar 13/10"));
+      // Lo movió a otro día (`deriva_movido`): la caja está en el anaquel del día marcado y se pasa al del programa.
+      const moved = one(reproRow({
+        agreement: agreement({ agreedOn: TOMORROW, materializedAt: MARK, materializedOn: TOMORROW }),
+        program: program(TODAY, { reason: "Cliente pidió hoy", origin: "grupo_gf", setAt: "2026-10-13T13:00:00.000Z" }),
+        state: { kind: "deriva_movido", gfDay: TODAY, reason: "Cliente pidió hoy" },
+        receivedAt: RECEIVED,
+        box: { kind: "en_oficina", since: RECEIVED, courier: "propio" },
+      }));
+      expect(moved).toMatchObject({ bucket: "hoy", group: "anaquel", whereLine: RETRY_ANAQUEL_MOVED("mié 14/10", "mar 13/10") });
+      expect(moved.whereLine).toBe("Debería estar en el anaquel del mié 14/10: pásala al del mar 13/10");
+      expect(moved.chips).toContainEqual({ tone: "info", text: "Grupo GF lo movió al mar 13/10 («Cliente pidió hoy»)" });
+      // Grupo GF quitó la fecha: sale el día acordado, y la caja sigue en ese anaquel.
+      const removed = one(reproRow({
+        agreement: agreement({ agreedOn: TODAY, materializedAt: MARK, materializedOn: TODAY }),
+        program: null,
+        state: { kind: "deriva_quitado" },
+        receivedAt: RECEIVED,
+        box: { kind: "en_oficina", since: RECEIVED, courier: "propio" },
+      }));
+      expect(removed).toMatchObject({ dayFrom: "acuerdo", whereLine: RETRY_ANAQUEL("mar 13/10") });
+    });
+
+    it("la marca del acuerdo cuenta hasta 2 minutos después de la recepción, no antes", () => {
+      expect(markedAtReception({ materializedAt: RECEIVED }, RECEIVED)).toBe(true);
+      expect(markedAtReception({ materializedAt: "2026-10-12T15:02:00.000Z" }, RECEIVED)).toBe(true);
+      expect(markedAtReception({ materializedAt: "2026-10-12T15:02:00.001Z" }, RECEIVED)).toBe(false);
+      expect(markedAtReception({ materializedAt: "2026-10-12T14:59:59.000Z" }, RECEIVED)).toBe(false);
+      expect(markedAtReception({ materializedAt: null }, RECEIVED)).toBe(false);
+      expect(markedAtReception({ materializedAt: "2026-10-12T15:00:01.000Z" }, null)).toBe(false);
+      expect(markedAtReception(null, RECEIVED)).toBe(false);
     });
 
     it("solo el programa de Repro Lima tiene la ventana: el de Despacho GF segundos después va a la bandeja", () => {
       expect(programmedAtReception({ origin: "grupo_gf", setAt: "2026-10-12T15:00:05.000Z" }, RECEIVED)).toBe(false);
       expect(programmedAtReception({ origin: "motorizado", setAt: "2026-10-12T15:00:05.000Z" }, RECEIVED)).toBe(false);
-      const row = one(received("2026-10-12T15:00:05.000Z", { reason: "Programado por Despacho GF", origin: "grupo_gf" }));
+      // Sin acuerdo que la recepción haya marcado.
+      const row = one(received("2026-10-12T15:00:05.000Z", { reason: "Programado por Despacho GF", origin: "grupo_gf" }, { agreement: null }));
       expect(row.whereLine).toBe(RETRY_TRAY("lun 12/10"));
     });
 
@@ -608,13 +785,27 @@ describe("dónde está la caja en oficina", () => {
     });
 
     it("lo que se desarma nunca va al anaquel, aunque la recepción escribiera el programa", () => {
+      // Cerrado después de recibirla: la caja ya estaba en su bandeja.
       const row = one(received("2026-10-12T15:00:00.500Z", {}, {
         agreement: null,
         list: "cerrados",
-        closed: { caseId: "case-0", at: "2026-10-12T14:00:00Z", byName: "diana", note: null },
+        closed: { caseId: "case-0", at: "2026-10-12T16:00:00Z", byName: "diana", note: null },
       }));
       expect(row.action).toBe("desarmar_cerrar");
       expect(row.whereLine).toBe(RETRY_TRAY("lun 12/10"));
+    });
+
+    it("recibida después del «Desarmar y cerrar»: la recepción pidió desarmarla, no va al estante", () => {
+      const closed = (at: string | null) => one(received("2026-10-13T14:00:00.000Z", { reason: "Programado por Despacho GF", origin: "grupo_gf" }, {
+        agreement: null,
+        list: "cerrados",
+        closed: { caseId: "case-0", at, byName: "diana", note: null },
+      }));
+      const after = closed("2026-10-12T14:00:00Z");
+      expect(after).toMatchObject({ action: "desarmar_cerrar", group: "con_aviso", whereLine: RETRY_DISMANTLE_AT_RECEPTION });
+      expect(after.whereLine).toBe("Al recibirla se pidió desarmarla (cuaderno «DESARMAR»): no va al estante.");
+      // Sin la hora del cierre, la bandeja de siempre.
+      expect(closed(null).whereLine).toBe(RETRY_TRAY("lun 12/10"));
     });
   });
 });
