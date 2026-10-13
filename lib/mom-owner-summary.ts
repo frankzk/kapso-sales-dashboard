@@ -271,6 +271,7 @@ function settlementSlaDays(courier: string | null): number | null {
       "motorizado propio",
       "johnny",
       "roy",
+      "duglas",
       "douglas",
     ])
   ) {

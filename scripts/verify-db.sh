@@ -212,6 +212,9 @@ echo "  ✅ entrega y rechazo del cuaderno sin foto no frenan el pago y se pagan
 echo "▶ el reprogramado que el motorizado conserva pasa a su ruta siguiente (0234)"
 $PSQL -f "$ROOT/scripts/sql/gf_carry_over_smoke.sql"
 echo "  ✅ sale de la caja anterior con rastro, entra cotejado en una carga en custodia con su parada pendiente; no contesta, anulado y repetidos no pasan; todo o nada"
+echo "▶ «Repro Lima» (0251): un caso abierto por pedido, candado, llamadas append-only y fecha que pidió el cliente"
+$PSQL -f "$ROOT/scripts/sql/repro_lima_smoke.sql"
+echo "  ✅ caso perezoso único, episodio, candado de 10 min, cuatro resultados, idempotencia, RLS por tienda"
 
 echo ""
 echo "✅ DB verification passed."

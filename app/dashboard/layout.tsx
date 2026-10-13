@@ -28,6 +28,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
     permissions.can("routes.manage") ||
     permissions.can("dispatch.manage") ||
     permissions.can("dispatch.pickup");
+  // «Repro Lima» es de quien llama a los clientes o despacha
+  // (`repro_lima.manage`, MOM §9.5). La página y cada acción lo vuelven a pedir.
+  const canReproLima = permissions.can("repro_lima.manage");
   // Lo que espera a una persona en «Cotejar Olva» (MOM §12). Un fallo aquí no
   // puede tumbar el panel entero: sin número, el menú sigue funcionando.
   const olvaPending = canManageLogistics
@@ -59,6 +62,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       yapeAlertsEnabled={roles.includes("vendedora")}
       canValidatePayments={canValidatePayments}
       canManageLogistics={canManageLogistics}
+      canReproLima={canReproLima}
       navAccess={navAccess}
       badges={olvaPending > 0 ? { "/dashboard/olva": olvaPending } : undefined}
     >

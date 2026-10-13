@@ -221,7 +221,7 @@ begin
     null;
   end;
 
-  -- Otro motorizado del MISMO courier sí puede: Johnny, Roy y Douglas son todos
+  -- Otro motorizado del MISMO courier sí puede: Johnny, Roy y Duglas son todos
   -- "motorizados propios" y cada uno lleva su ruta.
   insert into riders (id, org_id, full_name)
   values (

@@ -53,6 +53,16 @@ describe("borrador de la parada", () => {
     expect(parseDraft(JSON.stringify({ ...fields, v: 1, at: NOW, amount: 298 }), NOW, null)).toBeNull();
   });
 
+  it("recuerda la fecha que pidió el cliente; los borradores de antes siguen valiendo (12-10-2026)", () => {
+    const withDate = parseDraft(serializeDraft({ ...fields, status: "no_entregado", reason: "reprogramado", requestedDate: "2026-10-14" }, NOW - 60_000), NOW, null);
+    expect(withDate?.requestedDate).toBe("2026-10-14");
+    const old = parseDraft(serializeDraft(fields, NOW - 60_000), NOW, null);
+    expect(old).not.toBeNull();
+    expect(old).not.toHaveProperty("requestedDate");
+    expect(parseDraft(JSON.stringify({ ...fields, v: 1, at: NOW, requestedDate: 20261014 }), NOW, null)).toBeNull();
+    expect(draftDiffers({ ...fields, requestedDate: "2026-10-14" }, { ...fields, requestedDate: "" })).toBe(true);
+  });
+
   it("abrir la ficha sin tocar nada no deja borrador", () => {
     expect(draftDiffers(fields, { ...fields })).toBe(false);
     expect(draftDiffers({ ...fields, method: "efectivo" }, fields)).toBe(true);

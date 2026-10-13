@@ -81,9 +81,19 @@ function cn(...parts: Array<string | false | null | undefined>): string {
 
 type Glyph = ComponentType<SVGProps<SVGSVGElement>>;
 
-/** Hoy en Lima (YYYY-MM-DD): el mínimo de la nueva fecha de un reprogramado. */
+/** Hoy en Lima (YYYY-MM-DD): el mínimo de la fecha que pidió el cliente. */
 function limaToday(): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Lima", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+}
+
+/** El tope de la fecha que pidió el cliente: el mismo `RESCHEDULE_MAX_DAYS`
+ *  (lib/gf-dispatch-program) con que la valida el servidor. No se importa para
+ *  no traer ese módulo de servidor al teléfono; una prueba los mantiene iguales. */
+const REQUESTED_DATE_MAX_DAYS = 60;
+
+/** Hoy en Lima más `days` días: el máximo de la fecha que pidió el cliente. */
+function limaDayPlus(days: number): string {
+  return new Date(Date.parse(`${limaToday()}T12:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
 }
 
 /** Campo del motorizado: 48 px, texto de 16 px (Android no hace zoom), anillo fino y foco azul. */
@@ -910,10 +920,12 @@ function radioKeys(e: KeyboardEvent<HTMLButtonElement>, choose: (delta: 1 | -1) 
   if (e.key === "ArrowLeft" || e.key === "ArrowUp") { e.preventDefault(); choose(-1); }
 }
 
-/** Los campos de un borrador, sin su versión ni su hora. */
-function draftFieldsOf(draft: StopDraftFields): StopDraftFields {
+/** Los campos de un borrador, sin su versión ni su hora. Un borrador de antes
+ *  del 12-10-2026 no trae la fecha que pidió el cliente: vale la de la parada. */
+function draftFieldsOf(draft: StopDraftFields, storedRequestedDate: string): StopDraftFields {
   const { status, method, amount, reason, note, photoPath, voucherPath, written, writtenPayment, reasonCode, reasonNote } = draft;
-  return { status, method, amount, reason, note, photoPath, voucherPath, written, writtenPayment, reasonCode, reasonNote };
+  const requestedDate = draft.requestedDate ?? storedRequestedDate;
+  return { status, method, amount, reason, note, photoPath, voucherPath, written, writtenPayment, reasonCode, reasonNote, requestedDate };
 }
 
 /** Lo que volvió del borrador, en una línea: «Entregado · Yape · la foto de la entrega ya subida». */
@@ -960,8 +972,9 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
   );
   const [reason, setReason] = useState(stop.outcome_reason ?? "");
   const [note, setNote] = useState(stop.note ?? "");
-  /** «Reprogramado por el cliente» con fecha (10-10-2026): opcional, YYYY-MM-DD. */
-  const [rescheduleOn, setRescheduleOn] = useState("");
+  /** Fecha que pidió el cliente (12-10-2026, D9): opcional, YYYY-MM-DD. Queda
+   *  en la parada; la tienda la confirma en Repro Lima antes de programarla. */
+  const [requestedDate, setRequestedDate] = useState(stop.requested_date ?? "");
   const [photoPath, setPhotoPath] = useState<string | null>(stop.photo_path);
   const [voucherPath, setVoucherPath] = useState<string | null>(stop.voucher_path);
   const [err, setErr] = useState<string | null>(null);
@@ -975,7 +988,7 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
   // recupera lo marcado y la foto ya subida. Se borra al guardar.
   const fields: StopDraftFields = {
     status: status === "no_entregado" ? "no_entregado" : "entregado",
-    method, amount, reason, note, photoPath, voucherPath, written, writtenPayment, reasonCode, reasonNote,
+    method, amount, reason, note, photoPath, voucherPath, written, writtenPayment, reasonCode, reasonNote, requestedDate,
   };
   const [pristine] = useState<StopDraftFields>(() => fields);
   // Lo que volvió del borrador, dicho tal cual; se apaga al primer cambio.
@@ -996,12 +1009,13 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
       setWrittenPayment(draft.writtenPayment);
       setReasonCode(draft.reasonCode);
       setReasonNote(draft.reasonNote);
+      if (draft.requestedDate !== undefined) setRequestedDate(draft.requestedDate);
       setRecovered(describeDraft(draft));
-      restoredAt.current = JSON.stringify(draftFieldsOf(draft));
+      restoredAt.current = JSON.stringify(draftFieldsOf(draft, stop.requested_date ?? ""));
     } catch {
       // Sin almacenamiento (modo privado, bloqueado): se trabaja sin borrador.
     }
-  }, [stop.id, stop.reported_at]);
+  }, [stop.id, stop.reported_at, stop.requested_date]);
   const saves = useRef(0);
   useEffect(() => {
     // El montaje no es un cambio: el primer paso solo arma el registro.
@@ -1019,7 +1033,7 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
     }
     // `fields` se arma en cada render; lo que cambia son sus valores.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stop.id, status, method, amount, reason, note, photoPath, voucherPath, written, writtenPayment, reasonCode, reasonNote]);
+  }, [stop.id, status, method, amount, reason, note, photoPath, voucherPath, written, writtenPayment, reasonCode, reasonNote, requestedDate]);
   function discardDraft() {
     try { window.localStorage.removeItem(draftKey(stop.id)); } catch { /* sin almacenamiento */ }
     setStatus(pristine.status);
@@ -1033,6 +1047,7 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
     setWrittenPayment(pristine.writtenPayment);
     setReasonCode(pristine.reasonCode);
     setReasonNote(pristine.reasonNote);
+    setRequestedDate(pristine.requestedDate ?? "");
     setRecovered(null);
     restoredAt.current = null;
   }
@@ -1139,14 +1154,14 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
           writtenPayment: writtenPayment.trim() || null,
           reasonCode: mustExplain ? reasonCode : null,
           reasonNote: mustExplain ? reasonNote.trim() || null : null,
-          rescheduleOn: status === "no_entregado" && reason === "reprogramado" ? rescheduleOn || null : null,
+          // Sin tocarla, no se manda: una fecha guardada que ya pasó no se
+          // vuelve a validar al corregir otra cosa del reporte.
+          requestedDate: status === "no_entregado" && reason === "reprogramado"
+            ? (requestedDate === (stop.requested_date ?? "") ? undefined : requestedDate || null)
+            : null,
         });
         if (!res.ok) setErr(res.error ?? "No se pudo guardar.");
-        else if (res.message?.includes("No se pudo agendar")) {
-          // El reporte quedó, la fecha no: se dice aquí antes de cerrar.
-          try { window.localStorage.removeItem(draftKey(stop.id)); } catch { /* sin almacenamiento */ }
-          setErr(res.message);
-        } else {
+        else {
           try { window.localStorage.removeItem(draftKey(stop.id)); } catch { /* sin almacenamiento */ }
           onDone();
         }
@@ -1390,21 +1405,23 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
           </fieldset>
         )}
 
-        {/* La fecha que dio el cliente, de una vez (10-10-2026). Opcional: sin
-            fecha, el pedido va a «Por reprogramar» como siempre. */}
+        {/* La fecha que pidió el cliente (12-10-2026, D9). Opcional y solo
+            informativa: el pedido va a «Por reprogramar» como siempre y la
+            tienda la confirma en Repro Lima. Nunca programa la salida. */}
         {status === "no_entregado" && reason === "reprogramado" && (
           <label className="block text-sm font-semibold text-ink-900">
-            Nueva fecha <span className="font-normal text-ink-500">(opcional)</span>
+            Fecha que pidió el cliente <span className="font-normal text-ink-500">(opcional)</span>
             <input
               type="date"
-              value={rescheduleOn}
+              value={requestedDate}
               min={limaToday()}
-              onChange={(e) => { setRescheduleOn(e.target.value); setErr(null); }}
+              max={limaDayPlus(REQUESTED_DATE_MAX_DAYS)}
+              onChange={(e) => { setRequestedDate(e.target.value); setErr(null); }}
               aria-describedby={`reprograma-${stop.id}`}
               className={cn(RIDER_FIELD, "mt-1.5")}
             />
             <span id={`reprograma-${stop.id}`} className="mt-1 block text-xs font-normal text-ink-500">
-              Si el cliente dio fecha, la salida queda agendada para ese día en Grupo GF.
+              La tienda la confirma con el cliente antes de programarla.
             </span>
           </label>
         )}

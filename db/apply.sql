@@ -503,4 +503,6 @@
 \ir migrations/0249_shopify_client_app.sql
 \echo 'Applying 0250_membership_roles.sql'
 \ir migrations/0250_membership_roles.sql
+\echo 'Applying 0251_lima_repro.sql'
+\ir migrations/0251_lima_repro.sql
 \echo 'Done.'

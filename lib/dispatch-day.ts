@@ -203,6 +203,12 @@ export interface QueueRow {
    * `ownRetryOutput`): mismo QR y rótulo, Almacén no arma otra caja.
    */
   ownOutput?: { outputCode: string | null } | null;
+  /**
+   * Repro Lima (E28, §29.13): «Repro Lima: no lo quiere · desarmar» o, con la
+   * caja todavía con el motorizado, «Repro Lima: caja nueva desde stock, sale
+   * jue 15/10». Null si no hay nada que decir.
+   */
+  reproLimaChip?: string | null;
 }
 
 export interface QueueRoute {

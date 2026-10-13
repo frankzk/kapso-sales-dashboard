@@ -38,6 +38,13 @@ interface NavItem {
 }
 
 /**
+ * «Repro Lima» (MOM §9.5): los clientes de Lima con entrega fallida, para
+ * quien llama o despacha (`repro_lima.manage`). Va justo después de «Repro
+ * Provincia» y gana al Master por el prefijo más largo.
+ */
+const REPRO_LIMA_ITEM: NavItem = { href: "/dashboard/pedidos/repro-lima", label: "Repro Lima", icon: IconTruck };
+
+/**
  * Qué entradas de administración ve la persona, por permiso (MOM §16,
  * 12-10-2026). Owner y admin las tienen todas, así que para ellos el menú es el
  * de siempre; quien entra al panel completo por un rol (Supervisión,
@@ -59,12 +66,14 @@ export function navItems(
   canValidatePayments: boolean,
   canManageLogistics: boolean,
   access: NavAccess = FULL_ACCESS,
+  canReproLima = false,
 ): NavItem[] {
   if (isVendedoraOnly) {
     const items: NavItem[] = [
       { href: "/dashboard/leads", label: "Leads", icon: IconChat },
       { href: "/dashboard/pedidos", label: "Master de Pedidos", icon: IconClipboard },
       { href: "/dashboard/envios", label: "Repro Provincia", icon: IconTruck },
+      ...(canReproLima ? [REPRO_LIMA_ITEM] : []),
       { href: "/dashboard/envios/recuperacion", label: "Recuperar devueltos", icon: IconChat },
       // Liquidaciones y Liquidaciones 2 fuera del menú desde el 22-09-2026 (a
       // pedido de operación); las páginas siguen en su URL.
@@ -87,6 +96,7 @@ export function navItems(
     { href: "/dashboard/leads", label: "Leads", icon: IconChat },
     { href: "/dashboard/pedidos", label: "Master de Pedidos", icon: IconClipboard },
     { href: "/dashboard/envios", label: "Repro Provincia", icon: IconTruck },
+    ...(canReproLima ? [REPRO_LIMA_ITEM] : []),
     // Primer contacto con la clienta cuya guía volvió (MOM §11.1). Va acá y no
     // dentro de Envíos porque es una COLA que se drena, no una vista de guías.
     { href: "/dashboard/envios/recuperacion", label: "Recuperar devueltos", icon: IconChat },
@@ -161,6 +171,7 @@ export function Sidebar({
   roleLabel,
   canValidatePayments,
   canManageLogistics,
+  canReproLima = false,
   navAccess,
   badges,
   pendingHref,
@@ -172,6 +183,8 @@ export function Sidebar({
   roleLabel: string;
   canValidatePayments: boolean;
   canManageLogistics: boolean;
+  /** `repro_lima.manage`: la entrada «Repro Lima» después de «Repro Provincia». */
+  canReproLima?: boolean;
   navAccess?: NavAccess;
   /** Pendientes por entrada del menú (href → cuántos), p. ej. «Cotejar Olva». */
   badges?: Record<string, number>;
@@ -184,7 +197,7 @@ export function Sidebar({
   const [mobileOpen, setMobileOpen] = useState(false);
   const menuButton = useRef<HTMLButtonElement>(null);
   useEffect(() => { setMobileOpen(false); }, [pathname]);
-  const items = navItems(isVendedoraOnly, canValidatePayments, canManageLogistics, navAccess);
+  const items = navItems(isVendedoraOnly, canValidatePayments, canManageLogistics, navAccess, canReproLima);
   const pendingPath = pendingHref?.split("?", 1)[0] ?? null;
   const displayPath = pendingPath ?? pathname;
 

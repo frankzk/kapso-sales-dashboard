@@ -51,7 +51,7 @@ import { previousLabelNote } from "@/lib/scan-other-box";
 import { listNames } from "@/lib/labels/resolve-output";
 import type { RiderRateVersion } from "@/lib/rider-pay";
 import { isGroupGfRiderCourier } from "@/lib/couriers/catalog";
-import { custodyOnAssign, GF_SAME_DAY_CUTOFF_DEFAULT, isRiderPickupMode, sameDayCutoffMinute, type RiderPickupMode } from "@/lib/grupo-gf-courier";
+import { custodyOnAssign, GF_SAME_DAY_CUTOFF_DEFAULT, isRiderPickupMode, limaClock, scheduledDay, type RiderPickupMode } from "@/lib/grupo-gf-courier";
 import { BLOCKED_REASON_LABEL, programDayLabel, programNeedsConfirm, takenIsAssignable, type BlockedReason } from "@/lib/dispatch-day";
 import { pastBoxDecision, pastBoxMessage, receivedFromLabel, replacedReceivedMessage } from "@/lib/gf-scan-return";
 import { isReturningOwnOutput, officeReturnOutcome, replacedOutputIds, type ReturningOutputLike } from "@/lib/gf-replaced-output";
@@ -62,7 +62,16 @@ import { getRiders, type RiderRow } from "@/lib/settlements-access";
 import { routeReportAccess } from "@/lib/route-report-access";
 import { loadRouteCloseContext, type RouteCloseContext } from "@/lib/route-close";
 import { otherCourierBlockMessage } from "@/lib/gf-admission-message";
-import { writeGfDispatchProgram } from "@/lib/gf-dispatch-program";
+import { clearGfDispatchPrograms, writeGfDispatchProgram } from "@/lib/gf-dispatch-program";
+import { loadActiveBoxes, type CourierRouteAssignment } from "@/lib/gf-active-boxes";
+import {
+  loadReproQueueFlags,
+  materializeWaitingAgreementsSafe,
+  reproCajaNuevaChip,
+  reproReceptionNotice,
+  REPRO_LIMA_PATH,
+  REPRO_NO_LO_QUIERE_CHIP,
+} from "@/lib/repro-lima-program";
 
 const COURIER_PATH = "/dashboard/courier";
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -154,6 +163,12 @@ export interface CourierAvailableOrder {
    * (06-10-2026, `ownRetryOutput`): mismo QR y rótulo, sin salida nueva.
    */
   ownOutput?: { outputCode: string | null } | null;
+  /**
+   * Repro Lima (E28): «Repro Lima: no lo quiere · desarmar» o, con la caja
+   * todavía con el motorizado, «Repro Lima: caja nueva desde stock, sale jue
+   * 15/10». Null si no hay nada que decir.
+   */
+  reproLimaChip?: string | null;
 }
 
 /**
@@ -183,6 +198,8 @@ export interface CourierReturningOutput {
   /** Cuándo se sacó la salida nueva, y cuál es. */
   replacedAt: string | null;
   replacedByCode: string | null;
+  /** Repro Lima (E28): «Repro Lima: caja nueva desde stock, sale jue 15/10». */
+  reproLimaChip?: string | null;
 }
 
 export interface CourierAcceptedOrder extends CourierAvailableOrder {
@@ -194,20 +211,6 @@ export interface CourierAcceptedOrder extends CourierAvailableOrder {
   acceptedAt: string | null;
   observation: string | null;
   route: CourierRouteAssignment | null;
-}
-
-export interface CourierRouteAssignment {
-  manifestId: string;
-  loadNumber: number;
-  deliveryRouteId: string | null;
-  routeDate: string;
-  riderId: string | null;
-  riderName: string;
-  state: string;
-  officeCheckedAt: string | null;
-  pickupCheckedAt: string | null;
-  /** El motorizado lo reportó «No entregado» y sigue en su caja: motivo del reporte. */
-  undeliveredReason?: string | null;
 }
 
 export interface CourierRouteSummary {
@@ -377,32 +380,6 @@ function previousDay(day: string): string {
   return new Date(Date.parse(`${day}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
 }
 
-function nextDay(day: string): string {
-  return new Date(Date.parse(`${day}T12:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
-}
-
-function limaClock(now = new Date()): { day: string; minute: number } {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Lima",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(now);
-  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return {
-    day: `${value.year}-${value.month}-${value.day}`,
-    minute: Number(value.hour) * 60 + Number(value.minute),
-  };
-}
-
-function scheduledDay(cutoff: string | null | undefined, now = new Date()): string {
-  const current = limaClock(now);
-  return current.minute <= sameDayCutoffMinute(cutoff) ? current.day : nextDay(current.day);
-}
-
 type OperationsConfig = {
   provider: CourierProviderRow;
   agreements: CourierAgreementRow[];
@@ -497,71 +474,6 @@ async function loadDepartures(admin: Admin, orderIds: string[]): Promise<Map<str
   }
   for (const row of (data ?? []) as Array<{ order_id: string; last_departure_at: string }>) {
     out.set(row.order_id, row.last_departure_at);
-  }
-  return out;
-}
-
-/**
- * La caja activa de cada salida (ítem sin `removed_at`) y, si lo ÚLTIMO que su
- * motorizado reportó en ESA caja es «No entregado», su motivo: exactamente lo
- * que exige `gf_return_to_office` (0206: caja de Grupo GF, última parada por
- * `reported_at`). Para las salidas propias que se reprograman sin solicitud de
- * Grupo GF (`ownRetryOutput`), que no pasan por `accepted`.
- */
-async function loadActiveBoxes(admin: Admin, shipmentIds: string[]): Promise<Map<string, CourierRouteAssignment>> {
-  const out = new Map<string, CourierRouteAssignment>();
-  if (!shipmentIds.length) return out;
-  const { data: items } = await courierRowsByIds(shipmentIds, (ids) => admin
-    .from("dispatch_manifest_items")
-    .select("shipment_id,manifest_id,office_checked_at,pickup_checked_at")
-    .in("shipment_id", ids)
-    .is("removed_at", null));
-  const boxItems = items as Array<{ shipment_id: string; manifest_id: string; office_checked_at: string | null; pickup_checked_at: string | null }>;
-  if (!boxItems.length) return out;
-  const [{ data: manifests }, { data: stops }] = await Promise.all([
-    courierRowsByIds([...new Set(boxItems.map((item) => item.manifest_id))], (ids) => admin
-      .from("dispatch_manifests")
-      .select("id,courier,route_date,rider_id,driver_name,state,load_number,delivery_route_id")
-      .in("id", ids)),
-    courierRowsByIds(boxItems.map((item) => item.shipment_id), (ids) => admin
-      .from("delivery_stops")
-      .select("shipment_id,dispatch_manifest_id,status,outcome_reason,reported_at")
-      .in("shipment_id", ids)
-      .not("dispatch_manifest_id", "is", null)),
-  ]);
-  const manifestById = new Map((manifests as Array<{
-    id: string;
-    courier: string;
-    route_date: string;
-    rider_id: string | null;
-    driver_name: string | null;
-    state: string;
-    load_number: number;
-    delivery_route_id: string | null;
-  }>).map((manifest) => [manifest.id, manifest]));
-  // La última parada de cada (caja, salida), como la ordena la 0206.
-  const lastStop = new Map<string, { status: string; outcome_reason: string | null; reported_at: string | null }>();
-  for (const stop of stops as Array<{ shipment_id: string; dispatch_manifest_id: string; status: string; outcome_reason: string | null; reported_at: string | null }>) {
-    const key = `${stop.dispatch_manifest_id}:${stop.shipment_id}`;
-    const current = lastStop.get(key);
-    if (!current || (stop.reported_at ?? "") > (current.reported_at ?? "")) lastStop.set(key, stop);
-  }
-  for (const item of boxItems) {
-    const manifest = manifestById.get(item.manifest_id);
-    const stop = lastStop.get(`${item.manifest_id}:${item.shipment_id}`);
-    const undelivered = manifest && courierKey(manifest.courier) === "propio" && stop?.status === "no_entregado";
-    out.set(item.shipment_id, {
-      manifestId: item.manifest_id,
-      loadNumber: manifest?.load_number ?? 1,
-      deliveryRouteId: manifest?.delivery_route_id ?? null,
-      routeDate: manifest?.route_date ?? "",
-      riderId: manifest?.rider_id ?? null,
-      riderName: manifest?.driver_name ?? "Motorizado sin nombre",
-      state: manifest?.state ?? "unknown",
-      officeCheckedAt: item.office_checked_at,
-      pickupCheckedAt: item.pickup_checked_at,
-      undeliveredReason: undelivered ? stop?.outcome_reason ?? "sin motivo" : null,
-    });
   }
   return out;
 }
@@ -665,6 +577,8 @@ interface DispatchProgram {
   store_id: string;
   scheduled_for: string;
   reason: string;
+  /** Cuándo se escribió: «Quitar la fecha» borra solo si sigue siendo este (E22). */
+  set_at?: string | null;
 }
 
 /** Programaciones de salida sin tomar (0199), por pedido. Una lectura que falla no tumba la pantalla. */
@@ -675,7 +589,7 @@ async function loadPrograms(admin: Admin, filter: { storeIds?: string[]; orderId
   try {
     const { data } = await courierRowsByIds(ids, (batch) => admin
       .from("gf_dispatch_programs")
-      .select("order_id,store_id,scheduled_for,reason")
+      .select("order_id,store_id,scheduled_for,reason,set_at")
       .in(filter.orderIds ? "order_id" : "store_id", batch));
     for (const row of data as DispatchProgram[]) out.set(row.order_id, row);
   } catch (error) {
@@ -1117,6 +1031,36 @@ async function loadCourierOperations(
   );
 
   const returning = await loadReturningOutputs(admin, storeIds, storeName);
+
+  // Repro Lima en la cola (E28, §29.13): una lectura de los casos de lo que
+  // está en la etapa, lo tomado y lo que está en devolución. «No lo quiere»
+  // en cualquier fila; «caja nueva desde stock» solo donde la caja sigue con
+  // el motorizado y si se acordó con Grupo GF (`loadReproQueueFlags`). Sin
+  // lectura no hay chapas.
+  const reproFlags = await loadReproQueueFlags(admin, [
+    ...((queueRows ?? []) as QueueOrderRow[])
+      .filter((order) => isReprogramStage(order.macro_stage, order.macro_substage))
+      .map((order) => order.order_id),
+    ...accepted.map((order) => order.orderId),
+    ...returning.map((output) => output.orderId),
+  ], lastDispatchByOrder);
+  const noLoQuiereChip = (orderId: string) => (reproFlags.noLoQuiere.has(orderId) ? REPRO_NO_LO_QUIERE_CHIP : null);
+  for (const row of available) row.reproLimaChip = noLoQuiereChip(row.orderId);
+  // Lo tomado con la caja todavía con el motorizado (su caja dice «No
+  // entregado»): ahí se ofrece «Sacar con salida nueva», como en la propia
+  // sin solicitud de abajo.
+  for (const row of accepted) {
+    const nueva = row.route?.undeliveredReason ? reproFlags.cajaNueva.get(row.orderId) : undefined;
+    row.reproLimaChip = nueva?.open ? reproCajaNuevaChip(nueva.day) : noLoQuiereChip(row.orderId);
+  }
+  for (const row of returnable) {
+    const nueva = reproFlags.cajaNueva.get(row.orderId);
+    row.reproLimaChip = nueva?.open ? reproCajaNuevaChip(nueva.day) : noLoQuiereChip(row.orderId);
+  }
+  for (const output of returning) {
+    const nueva = reproFlags.cajaNueva.get(output.orderId);
+    if (nueva) output.reproLimaChip = reproCajaNuevaChip(nueva.day);
+  }
 
   return { available, returnable, returning, accepted, routes, riders, blockedCount, blocked, sourceCount: sourceCount ?? available.length };
 }
@@ -1816,12 +1760,16 @@ async function returnUndeliveredShipments(
   const changed: string[] = [];
   const received: string[] = [];
   const errors: string[] = [];
+  // De qué pedido es cada caja recibida: los que vuelven a «por asignar» pasan
+  // por Repro Lima (abajo).
+  const orderOfShipment = new Map<string, string>();
   for (const item of undelivered) {
     const { data, error } = await admin.rpc("gf_return_to_office", { p_item_id: item.id, p_actor: auth.userId });
     if (error) errors.push(error.message);
     else if (data) {
       changed.push(data as string);
       received.push(item.shipment_id);
+      orderOfShipment.set(item.shipment_id, data as string);
     }
   }
   // Lo que la 0248 mandó a stock en vez de a «por asignar» —la reemplazada y la
@@ -1830,6 +1778,7 @@ async function returnUndeliveredShipments(
   // («Solicitar devolución») vuelve a «por asignar», como siempre.
   let toStock = 0;
   let alreadyReturned = 0;
+  const requeuedOrders = new Set<string>();
   if (received.length) {
     const [{ data: after }, replacedIds] = await Promise.all([
       courierRowsByIds(received, (ids) => admin.from("shipments").select("id,custody_state").in("id", ids)),
@@ -1839,11 +1788,20 @@ async function returnUndeliveredShipments(
       const outcome = officeReturnOutcome(row.custody_state, replacedIds.has(row.id));
       if (outcome === "a_stock_reemplazada") toStock += 1;
       else if (outcome === "ya_devuelta") alreadyReturned += 1;
+      else {
+        const order = orderOfShipment.get(row.id);
+        if (order) requeuedOrders.add(order);
+      }
     }
   }
+  // Repro Lima (§29.13): el acuerdo que esperaba esta caja se programa para su
+  // día (va al anaquel de ese día), y se avisa si el cliente ya no lo quiere.
+  // Solo lo que vuelve a «por asignar»: la reemplazada va a stock. Nunca lanza.
+  const repro = await materializeWaitingAgreementsSafe(admin, [...requeuedOrders], auth.userId, { via: "recepcion" });
   if (changed.length) await recomputeOrderMasterSafe(admin, [...new Set(changed)]);
   revalidatePath(COURIER_PATH);
   revalidatePath("/dashboard/pedidos");
+  revalidatePath(REPRO_LIMA_PATH);
   if (!changed.length) return { error: [ambiguousNote, ...new Set(errors)].filter(Boolean).join(" ") || "Ninguno de esos pedidos está «No entregado» dentro de una caja." };
   if (ambiguousNote) errors.push(ambiguousNote);
   const requeued = changed.length - toStock - alreadyReturned;
@@ -1851,6 +1809,7 @@ async function returnUndeliveredShipments(
   if (requeued) parts.push(`${requeued} ${requeued === 1 ? "pedido recibido" : "pedidos recibidos"} en oficina. Vuelven a «por asignar» (Por reprogramar Lima), también los rechazados.`);
   if (toStock) parts.push(returnedToStockNotice(toStock));
   if (alreadyReturned) parts.push(`${alreadyReturned} ya ${alreadyReturned === 1 ? "constaba devuelta: salió" : "constaban devueltas: salieron"} de la caja sin volver a «por asignar».`);
+  parts.push(...reproReceptionNotice(repro, { single: changed.length === 1 }));
   const done = parts.join(" ");
   return errors.length ? { error: `${done} ${[...new Set(errors)].join(" ")}` } : { notice: done };
 }
@@ -2450,22 +2409,13 @@ export async function clearGroupGfCourierPrograms(orgId: string, orderIds: strin
   const storeByOrder = await ordersOfOrg(admin, orgId, ids, auth);
   const programs = [...(await loadPrograms(admin, { orderIds: [...storeByOrder.keys()] })).values()];
   if (!programs.length) return { error: "Ninguno de esos pedidos tiene fecha programada." };
-  const { error } = await admin.from("gf_dispatch_programs").delete().in("order_id", programs.map((p) => p.order_id));
-  if (error) return { error: error.message };
-  const now = new Date().toISOString();
-  await admin.from("order_events").insert(programs.map((program) => ({
-    store_id: program.store_id,
-    order_id: program.order_id,
-    kind: "dispatch_program_cleared",
-    occurred_at: now,
-    actor: auth.userId,
-    source: "grupo_gf_courier",
-    courier: "propio",
-    note: `Se quitó la salida programada para el ${programDayLabel(program.scheduled_for)} («${program.reason}»).`,
-    payload: { from: program.scheduled_for, reason: program.reason },
-  })));
+  // Borra solo lo que se leyó y deja el evento de lo borrado (lib/gf-dispatch-program, E22).
+  const { cleared, error } = await clearGfDispatchPrograms(admin, programs, auth.userId);
+  if (!cleared.length) return { error: error ?? "La fecha cambió mientras tanto: vuelve a cargar la lista." };
   revalidatePath(COURIER_PATH);
-  return { notice: `${programs.length} ${programs.length === 1 ? "pedido vuelve" : "pedidos vuelven"} a la cola sin fecha programada.` };
+  revalidatePath(REPRO_LIMA_PATH);
+  const notice = `${cleared.length} ${cleared.length === 1 ? "pedido vuelve" : "pedidos vuelven"} a la cola sin fecha programada.`;
+  return error ? { error: `${notice} ${error}` } : { notice };
 }
 
 export async function takeAndAssignGroupGfCourierOrders(orgId: string, riderId: string, orderIds: string[], opts: { overrideCash?: boolean; scheduledFor?: string | null; day?: string | null; confirmProgrammed?: boolean; tandersConfirmations?: TandersConfirmations } = {}): Promise<CourierActionResult> {
@@ -3464,8 +3414,9 @@ export type ScanAssignStatus =
   /** Programado para otro día (0199): se asigna solo si se confirma. */
   | "programado_otro_dia"
   /**
-   * La caja reemplazada por otra salida (0248): el escaneo la recibió en
-   * oficina (o ya estaba recibida) y vuelve a stock. No se asigna.
+   * La caja reemplazada por otra salida (0248), o la de un cliente que ya no
+   * lo quiere (Repro Lima, «Desarmar y cerrar»): el escaneo la recibió en
+   * oficina (o ya estaba recibida) y se desarma. No se asigna.
    */
   | "recibido_a_stock"
   | "desconocido";
@@ -3599,6 +3550,7 @@ export async function scanAssignToRider(
   // El día de la caja que se arma: hoy, o el que eligió el supervisor.
   const boxDay = opts.scheduledFor && DATE_RE.test(opts.scheduledFor) ? opts.scheduledFor : limaClock().day;
   let receivedFrom: string | null = null;
+  let reproNote = "";
 
   // La caja reemplazada por otra salida (0248): nunca se toma ni se asigna, ni
   // en su caja ni ya recibida —el pedido sale con la nueva, y tomarlo por este
@@ -3705,7 +3657,27 @@ export async function scanAssignToRider(
             : `${outputCode ?? "Esta salida"} ya constaba devuelta: salió de la caja de ${fromName} sin volver a «por asignar». No se asigna.`,
         };
       }
+      // Repro Lima (§29.13): el acuerdo que esperaba esta caja se programa para
+      // su día ANTES de mirar el programa (paso 3): si es otro día, la línea lo
+      // dice como cualquier programado. Aquí sí se programa aunque haya pasado
+      // el corte: Grupo GF lo está asignando (E25). Sin revalidar ni recalcular
+      // dentro del escaneo, y nunca lanza (E30).
+      const repro = await materializeWaitingAgreementsSafe(admin, [orderId], auth.userId, { via: "escaneo" });
+      reproNote = reproReceptionNotice(repro, { single: true, omitProgrammed: true }).map((part) => `${part} `).join("");
       receivedFrom = receivedFromLabel(fromName, box.dispatch_manifests.route_date);
+      // El cliente ya no lo quiere («Desarmar y cerrar» de este episodio, §9.3
+      // fila 1): la caja queda recibida y se desarma; la salida no vuelve a
+      // salir. Ni programa, ni toma, ni asigna.
+      if (repro.noLoQuiere.some((row) => row.orderId === orderId)) {
+        await recomputeOrderMasterSafe(admin, [orderId]);
+        return {
+          ...line,
+          status: "recibido_a_stock",
+          manifestId: box.manifest_id,
+          receivedFrom,
+          message: `Recibido en oficina (salió de la caja de ${receivedFrom}). ${reproNote}No se asigna.`,
+        };
+      }
     } else if (box) {
       if (box.dispatch_manifests.rider_id === rider.id) {
         const loadNumber = box.dispatch_manifests.load_number ?? null;
@@ -3726,7 +3698,7 @@ export async function scanAssignToRider(
 
   // Lo que se diga de aquí en adelante sobre un paquete recibido lo cuenta:
   // salió de la caja vieja aunque no llegue a entrar en la nueva.
-  const receivedNote = receivedFrom ? `Recibido en oficina (salió de la caja de ${receivedFrom}). ` : "";
+  const receivedNote = receivedFrom ? `Recibido en oficina (salió de la caja de ${receivedFrom}). ${reproNote}` : "";
   if (receivedFrom) line.receivedFrom = receivedFrom;
 
   // 3) ¿Programado para otro día? Se avisa antes de tomar nada (§29.6); la
