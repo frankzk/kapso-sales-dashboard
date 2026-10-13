@@ -34,7 +34,7 @@ describe("un pedido cerrado solo lo cambia quien corrige cierres", () => {
 
   it("cerrado a otro estado: pide el permiso y después el motivo", () => {
     expect(closedStatusChangeError("entregado", "devuelto", false, "volvió")).toBe(
-      "Este pedido ya está entregado; solo quien puede «Cambiar estados ya cerrados» lo cambia.",
+      "Este pedido ya está entregado; solo quien puede «Corregir pedidos cerrados» lo cambia.",
     );
     expect(closedStatusChangeError("anulado", "en_proceso", true, "  ")).toBe(
       "Describe el motivo del cambio: quedará en el historial.",

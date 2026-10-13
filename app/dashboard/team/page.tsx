@@ -3,7 +3,7 @@ import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { EmptyState } from "@/components/ui";
 import { TeamManager, type TeamMember, type RiderRow } from "@/components/team";
 import type { Role } from "@/lib/types";
-import { GRANTED_ONE_BY_ONE, PERMISSIONS, PERMISSION_LABEL, permissionsFor } from "@/lib/permissions";
+import { GRANTED_ONE_BY_ONE, explainPermissions, permissionsFor } from "@/lib/permissions";
 import { hasOrgPermission } from "@/lib/permissions-access";
 import { getAdvisorSchedules } from "@/lib/advisor-schedules";
 
@@ -88,10 +88,17 @@ export default async function TeamPage({
 
   // Resolve emails for the member ids via the auth admin API.
   const emailById = new Map<string, string>();
+  // El nombre que la persona puso al entrar, para leer «Mily Marquina» y no su correo.
+  const nameById = new Map<string, string>();
   for (let page = 1; page <= 20; page++) {
     const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 200 });
     if (error || !data) break;
-    for (const u of data.users) emailById.set(u.id, u.email ?? u.id);
+    for (const u of data.users) {
+      emailById.set(u.id, u.email ?? u.id);
+      const meta = (u.user_metadata ?? {}) as { full_name?: unknown; name?: unknown };
+      const name = typeof meta.full_name === "string" ? meta.full_name : typeof meta.name === "string" ? meta.name : "";
+      if (name.trim()) nameById.set(u.id, name.trim());
+    }
     if (data.users.length < 200) break;
   }
 
@@ -113,15 +120,17 @@ export default async function TeamPage({
   const members: TeamMember[] = ((memberRows as { user_id: string; role: Role }[]) ?? [])
     .map((m) => {
       const functions = functionsByUser.get(m.user_id) ?? [];
-      const effective = permissionsFor([m.role], paymentPermissionByUser.get(m.user_id) ?? [], functions);
+      const grants = paymentPermissionByUser.get(m.user_id) ?? [];
+      const effective = permissionsFor([m.role], grants, functions);
       return {
         user_id: m.user_id,
         email: emailById.get(m.user_id) ?? m.user_id,
+        name: nameById.get(m.user_id) ?? null,
         role: m.role,
         stores: accessByUser.get(m.user_id) ?? [],
         functions,
-        // En el orden de la lista de permisos, con el nombre que se lee en Equipo.
-        effective: PERMISSIONS.filter((p) => effective.has(p)).map((p) => PERMISSION_LABEL[p]),
+        // Lo que puede hacer y de dónde le viene cada cosa (la guía de Equipo).
+        access: explainPermissions([m.role], grants, functions),
         // Un mapa y no un booleano por permiso: cada vez que se añada uno a
         // GRANTED_ONE_BY_ONE aparece solo, sin tocar el tipo ni esta consulta.
         grants: Object.fromEntries(GRANTED_ONE_BY_ONE.map((entry) => [entry.permission, effective.has(entry.permission)])),

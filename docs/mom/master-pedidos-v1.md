@@ -7216,13 +7216,13 @@ registra en cada evento.
 
   | Rol | Qué trae |
   | --- | --- |
-  | Asesora | Gestionar pedidos, registrar comprobantes, ver la clave con cobro completo (o con la excepción por descuento, §12), crear guías (Aliclik, Tanders, Shalom) y pedidos, novedades de Swayp, recuperar devoluciones, Repro Lima (§9.5), recibir devoluciones |
-  | Almacén | Dejar paquetes listos, recibir devoluciones, reingresar al inventario |
-  | Despacho y Grupo GF | Despacho del día y cotejo, entregar la caja, Repro Lima (§9.5), armar rutas, reportar por el motorizado, cargar reportes, stock de couriers, crear guías, recibir devoluciones |
-  | Liquidaciones | Cargar y cerrar liquidaciones, trabajar las hojas, observar liquidaciones e indemnizaciones |
-  | Cobranza | Registrar comprobantes, la clave de recojo, revisar cobros rechazados |
-  | Supervisión | Cambiar estados cerrados, cerrar y reabrir expedientes, anular guías de Aliclik, recibir devoluciones e inventario, ver reportes |
-  | Administración | Gestionar el equipo, administrar tiendas, costos, stock, catálogo de Aliclik, producto por anuncio, configurar hojas, motorizados, ver reportes |
+  | Asesora | Gestionar pedidos, subir comprobantes, ver la clave de recojo (con el cobro completo, o con la excepción por descuento, §12), crear guías de Aliclik, Tanders y Shalom, crear pedidos en Shopify, responder novedades de Swayp, escribir a clientas con devolución, reprogramar entregas en Lima (§9.5), recibir devoluciones |
+  | Almacén | Gestionar pedidos, preparar paquetes, recibir devoluciones, reingresar al inventario |
+  | Despacho y Grupo GF | Gestionar pedidos, despachar, entregar la caja al motorizado, reprogramar entregas en Lima (§9.5), armar rutas, reportar entregas por un motorizado, subir reportes de couriers, manejar stock de Swayp y Fénix, preparar paquetes, crear guías, recibir devoluciones |
+  | Liquidaciones | Gestionar pedidos, subir y cerrar liquidaciones de motorizados, cuadrar hojas de couriers, conciliar el dinero del pedido |
+  | Cobranza | Gestionar pedidos, subir comprobantes, ver y registrar claves de recojo, aprobar cobros de Tanders rechazados |
+  | Supervisión | Gestionar pedidos, corregir pedidos cerrados, cerrar o reabrir pedidos, anular guías de Aliclik, recibir devoluciones, reingresar al inventario, ver reportes del negocio |
+  | Administración | Gestionar pedidos, gestionar el equipo, administrar tiendas, editar costos, manejar stock, editar el catálogo de Aliclik, asignar producto a anuncios, configurar hojas de couriers, dar de alta motorizados, subir reportes de couriers, ver reportes del negocio |
 
   Reglas:
   - Quien tiene acceso «vendedora» y algún rol recibe **solo** lo de sus roles;
@@ -7232,8 +7232,8 @@ registra en cada evento.
     (validar y corregir pagos, alerta de comprobante repetido, Administrar
     Grupo GF, exportar datos), ni confirmar reembolsos. Lo fija una prueba.
   - Una revocación puntual sigue ganando sobre cualquier rol.
-  - Solo el dueño asigna o quita roles. Equipo muestra, plegado bajo cada
-    persona, la lista de lo que puede hacer hoy.
+  - Solo el dueño asigna o quita roles. Equipo muestra, para cada persona, lo
+    que puede hacer hoy y de dónde le viene (ver «Glosario de Equipo»).
   - Lo que el código decidía con «¿es owner o admin?» ahora pide un permiso:
     «Gestionar el equipo» (Equipo), «Administrar tiendas» (tiendas, ajustes,
     ciclo de confirmación, cobertura de Aliclik por distrito, despacho
@@ -7249,6 +7249,28 @@ registra en cada evento.
   bajar a alguien de admin a vendedora hay que darle acceso explícito a sus
   tiendas (`user_store_access`): owner y admin ven todas las tiendas de la
   organización sin esa lista.
+- **Glosario de Equipo (13-10-2026).** Cada permiso tiene en pantalla un
+  nombre de verbo y objeto, sin jerga, una explicación de una línea y un área
+  (Pedidos; Pagos y claves de recojo; Guías y couriers; Almacén y despacho;
+  Rutas y motorizados; Devoluciones y cierre del pedido; Liquidaciones;
+  Administración). Los nombres los aprobó el dueño y viven en
+  `lib/permissions.ts` (`PERMISSION_LABEL`, `PERMISSION_HELP`,
+  `PERMISSION_AREAS`). Los accesos se leen Dueño, Admin, Vendedora, Solo
+  lectura y Motorizado. Para que no se confundan: «Subir comprobantes» es
+  adjuntar el Yape al pedido y «Validar pagos» es confirmar que el dinero llegó;
+  «Ver la clave de recojo» es con el pedido pagado completo y «Registrar claves
+  de recojo» es guardarla o reemplazarla; «Conciliar el dinero del pedido» es el
+  cierre financiero de cada pedido, y «Subir» y «Cerrar liquidaciones de
+  motorizados» son las del pago al motorizado.
+
+  En **Equipo**, «¿Qué hace cada rol?» abre una guía en un panel lateral: un
+  índice con los siete roles, la vendedora sin roles, los permisos que se dan
+  uno por uno y los accesos (en el teléfono, un selector), y al lado lo elegido
+  con sus permisos por área y quiénes lo tienen. En cada fila, «N permisos» abre
+  lo que puede hacer esa persona, por área y con el origen de cada permiso (el
+  rol que lo trae o «Dado uno por uno»; lo que trae el acceso se dice una vez
+  arriba) y, aparte, lo que se le quitó a mano (`explainPermissions`). Las
+  explicaciones se leen al tocar, no solo al pasar el ratón.
 - **Ver no es tocar (13-10-2026).** Poder ver un pedido o un envío (RLS) no
   da permiso para escribir en él. Toda escritura pide un permiso en el
   servidor, también para quien es de solo lectura:
