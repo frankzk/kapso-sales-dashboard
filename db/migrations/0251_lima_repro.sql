@@ -5,8 +5,9 @@
 --
 -- DECISIÓN DEL OWNER (12-10-2026, D1-D13; fase 1, entrega 1a; MOM §9.5, §11.4,
 -- §29.7): la fecha que el cliente da en la puerta se confirma con él antes de
--- programarla, NUNCA de forma automática. Quien despacha (`dispatch.manage`)
--- atiende cada pedido de Lima en `en_curso / por_reprogramar_lima` desde una
+-- programarla, NUNCA de forma automática. Quien llama o despacha (en la app,
+-- `repro_lima.manage`: Asesora, Despacho y Grupo GF, admin, owner) atiende
+-- cada pedido de Lima en `en_curso / por_reprogramar_lima` desde una
 -- pantalla propia, con un candado de 10 minutos para que dos personas no llamen
 -- al mismo cliente. «Por decidir», «Llamar después», «Programados» y
 -- «Cerrados» son etiquetas de esa pantalla, no subetapas del Master: el
@@ -112,7 +113,7 @@ create table if not exists public.lima_repro_cases (
 comment on table public.lima_repro_cases is
   'Repro Lima (MOM §9.5): un caso abierto por pedido y episodio de «No entregado». Lleva el candado, la próxima llamada y el acuerdo vigente; nunca se reescribe por lo que haga Grupo GF después (la pantalla muestra la diferencia).';
 comment on column public.lima_repro_cases.episode_at is
-  'Momento del fallo que define el episodio: reported_at de la parada «No entregado» más reciente, o el de la salida fallida; si no hay, opened_at. Un caso de otro episodio solo se cierra si el nuevo es posterior.';
+  'Momento del fallo que define el episodio: reported_at de la parada «No entregado» del episodio (la del último día de ruta; en el mismo día, la creada después), o el de la salida fallida; si no hay, opened_at. Un caso de otro episodio solo se cierra si el nuevo es posterior.';
 
 create unique index if not exists lima_repro_cases_open_uniq
   on public.lima_repro_cases(order_id) where closed_at is null;
@@ -121,9 +122,9 @@ create index if not exists lima_repro_cases_store_open_idx
 create index if not exists lima_repro_cases_order_idx
   on public.lima_repro_cases(order_id, opened_at desc);
 
--- touch_updated_at() se define en 0004_leads.sql
-drop trigger if exists lima_repro_cases_touch on public.lima_repro_cases;
-create trigger lima_repro_cases_touch before update on public.lima_repro_cases
+-- touch_updated_at() se define en 0004_leads.sql. `create or replace trigger`
+-- y no drop + create, como la 0248: atómico.
+create or replace trigger lima_repro_cases_touch before update on public.lima_repro_cases
   for each row execute function public.touch_updated_at();
 
 -- c) Las llamadas (append-only) -----------------------------------------------
@@ -168,8 +169,7 @@ comment on table public.lima_repro_calls is
 create index if not exists lima_repro_calls_case_idx
   on public.lima_repro_calls(case_id, occurred_at desc);
 
-drop trigger if exists lima_repro_calls_append_only on public.lima_repro_calls;
-create trigger lima_repro_calls_append_only before update or delete on lima_repro_calls
+create or replace trigger lima_repro_calls_append_only before update or delete on lima_repro_calls
   for each row execute function public.reject_mutation();
 
 do $$
@@ -193,12 +193,21 @@ grant select on public.lima_repro_calls to authenticated;
 grant select, insert, update on public.lima_repro_cases to service_role;
 grant select, insert on public.lima_repro_calls to service_role;
 
-drop policy if exists lima_repro_cases_select on public.lima_repro_cases;
-create policy lima_repro_cases_select on public.lima_repro_cases for select to authenticated
-  using (store_id in (select public.auth_store_ids()));
-drop policy if exists lima_repro_calls_select on public.lima_repro_calls;
-create policy lima_repro_calls_select on public.lima_repro_calls for select to authenticated
-  using (store_id in (select public.auth_store_ids()));
+-- Sin `drop policy`: la herramienta que aplica migraciones en producción se
+-- queda esperando con cualquier `drop` (DEPLOY.md, 0248). Se crea si falta.
+do $$
+begin
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'lima_repro_cases'
+                   and policyname = 'lima_repro_cases_select') then
+    create policy lima_repro_cases_select on public.lima_repro_cases for select to authenticated
+      using (store_id in (select public.auth_store_ids()));
+  end if;
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'lima_repro_calls'
+                   and policyname = 'lima_repro_calls_select') then
+    create policy lima_repro_calls_select on public.lima_repro_calls for select to authenticated
+      using (store_id in (select public.auth_store_ids()));
+  end if;
+end $$;
 
 -- d1) Tomar el caso -----------------------------------------------------------
 --
@@ -216,10 +225,8 @@ create policy lima_repro_calls_select on public.lima_repro_calls for select to a
 --     `p_reopen` («Volver a atender», segundo clic, E29). Se mira aquí, dentro
 --     del candado: un cierre que llega entre la lectura del servidor y esta
 --     llamada no se reabre solo.
--- Con un parámetro más, `create or replace` crearía otra función al lado de
--- la vieja (y la llamada por nombre sería ambigua): se borra la firma vieja.
-drop function if exists public.lima_repro_claim(uuid, uuid, uuid, text, timestamptz, integer);
-
+-- La firma sin `p_reopen` nunca llegó a producción: no hay otra función al
+-- lado que borrar (y un `drop` deja colgada la herramienta, DEPLOY.md).
 create or replace function public.lima_repro_claim(
   p_order uuid,
   p_store uuid,

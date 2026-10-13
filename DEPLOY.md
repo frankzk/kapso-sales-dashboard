@@ -2337,10 +2337,18 @@ Shopify para tiendas cliente y la `0250`, los roles que se acumulan.
    «Reparto y liquidación» de Despacho del día y Rutas muestran rutas sin
    paradas, y todo reporte de parada falla. Repro Lima tampoco puede tomar un
    caso. `lima_repro_claim` lleva `p_reopen` (el segundo clic de «Volver a
-   atender», MOM §9.5) y el código lo manda siempre: la migración borra antes
-   la firma sin él (`drop function if exists`), así que una base con una
-   versión anterior de 0251 (una de prueba) se pone al día volviendo a correr
-   el archivo, que es idempotente. Con la firma vieja, «Atender» falla.
+   atender», MOM §9.5) y el código lo manda siempre. La migración no lleva
+   ningún `drop`: con uno, `apply_migration` de Supabase se queda esperando
+   hasta cortarse a los 60 s sin aplicar nada (pasó con la 0248 y con el
+   primer intento de esta). Los triggers son `create or replace` y las
+   políticas se crean si faltan; el archivo es idempotente. Una base de prueba
+   que tuviera la firma de seis parámetros (sin `p_reopen`) la borra a mano
+   antes de correrlo.
+   **Ya aplicada en producción el 13-10-2026** (historial
+   `20261013024826 0251_lima_repro`, con `set local lock_timeout = '15s'`
+   delante). Los cuerpos de `lima_repro_claim` y `lima_repro_record` son los
+   del archivo (md5 igual), el CHECK quedó validado sobre las 5664 paradas y
+   el código anterior sigue funcionando: no escribe `requested_date`.
 2. Sin subir versión ni recálculo: el resolver no lee nada de esto
    (`MOM_RESOLUTION_VERSION` sigue en `mom-v1.26`). Los casos nacen solos al
    primer gesto en Repro Lima: no hay backfill.

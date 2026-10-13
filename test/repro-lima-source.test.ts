@@ -314,8 +314,12 @@ describe("la migración 0251 (D12)", () => {
     expect(sql).toContain("revoke all on public.lima_repro_cases from anon, authenticated, service_role;");
     expect(sql).toContain("revoke all on public.lima_repro_calls from anon, authenticated, service_role;");
     expect(sql).toContain("grant execute on function public.lima_repro_claim(uuid, uuid, uuid, text, timestamptz, integer, boolean) to service_role;");
-    // La firma de antes se borra: con las dos, la llamada por nombre sería ambigua.
-    expect(sql).toContain("drop function if exists public.lima_repro_claim(uuid, uuid, uuid, text, timestamptz, integer);");
+    // Sin ningún `drop`: la herramienta que aplica en producción se queda
+    // esperando con ellos (DEPLOY.md). Los triggers son `create or replace` y
+    // las políticas se crean si faltan, así que se puede volver a correr.
+    expect(sql).not.toMatch(/^\s*drop\s/im);
+    expect(sql).toContain("create or replace trigger lima_repro_calls_append_only");
+    expect(sql).toContain("policyname = 'lima_repro_cases_select') then");
     expect(sql).not.toMatch(/^\s*begin;/im);
     expect(sql).not.toMatch(/^\s*commit;/im);
   });
