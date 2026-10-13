@@ -11979,18 +11979,31 @@ redactado:
   primera consulta y la conversación de WhatsApp del lead (sin enlaces, los
   mensajes más recientes). No empieza de cero ni repregunta lo que ya está en el
   chat.
-- **Abre con calidez**: confirmada la persona, pregunta «¿Qué tal, cómo le
-  va?» y recién después se presenta y dice por qué llama.
+- **Abre con calidez**: si sabía su nombre y la persona lo confirma, pregunta
+  «¿Qué tal, cómo le va?» y en el turno siguiente se presenta y dice por qué
+  llama. Sin nombre, el «Mucho gusto» y la pregunta por el WhatsApp hacen ese
+  papel. Si antes de confirmar le preguntan «¿de parte de quién?», dice solo
+  su nombre y el de la tienda: el producto y el chat, recién con el sí.
 - **Va directo a ofrecer** (cambio del owner, 13-10-2026, tras la primera
   prueba por teléfono): dice el precio y las promociones de la oferta, pregunta
-  si tiene alguna duda, la resuelve sin inventar (lo que no sabe, lo confirma
-  una asesora por WhatsApp) y pregunta si lleva una unidad o la promoción. Si
-  quiere comprar, **toma los datos y lo pasa a una asesora**. Si no, pregunta
-  una sola vez por qué: el motivo se mide (33.8). Antes empezaba preguntando
-  «qué le faltó para animarse».
+  si tiene alguna duda y pregunta si lleva una unidad o una promoción. Las
+  dudas las responde solo con la oferta: lo que la tienda dijo en el chat
+  (descuentos de asesora, adelantos, días de entrega) no es oferta, y lo que no
+  sabe (ingredientes, modo de uso) se lo detalla la asesora que confirma el
+  pedido. Pago, adelanto y si llega a su zona, solo con `consultar_cobertura`.
+  Si quiere comprar, **toma los datos y lo pasa a una asesora**. Si no,
+  pregunta una sola vez por qué: el motivo se mide (33.8). Antes empezaba
+  preguntando «qué le faltó para animarse».
+- **Sin ficha, solo se disculpa**: si Kapta no encontró la llamada (entra por
+  otro número o no hay ninguna marcando), manda `encontrada = no` y un aviso
+  que el prompt lee arriba y abajo: su única frase es «Disculpe, me equivoqué
+  de llamada. Que tenga buen día.» y cuelga, sin presentarse. Es una orden que
+  solo llega en ese caso, no una condición dentro del guion: con la condición
+  sola se presentaba igual a quien preguntaba «¿de qué se trata?» (2 a 3 de
+  cada 10 pruebas, 13-10-2026).
 - **Sin muletillas automáticas** («Ajá…», «Un momentito…»): si el modelo
-  tarda, ElevenLabs pasa al de respaldo a los 2,5 s en vez de rellenar con
-  palabras sueltas (mismo cambio del owner).
+  tarda, ElevenLabs pasa a GPT-4o a los 2,5 s en vez de rellenar con palabras
+  sueltas (mismo cambio del owner).
 - **Cobertura y pago, solo con `consultar_cobertura`**: la misma cobertura
   canónica del Master (`order_coverage_for`), no una lista propia. Lima y
   provincia contra entrega: paga al recibir. Agencia: se separa con el
@@ -12215,6 +12228,11 @@ vigilante. Nada más:
   `TELNYX_LEADS_SIP_URI` ya está en Vercel y producción la lee desde el deploy
   de las 17:00 del 12-10-2026. Falta: producto y oferta de Kenku (sin cargar todavía, a
   propósito), «Probar en mi teléfono» y recién entonces encender (33.8).
+- **Unir el guion con el aviso sin ficha** (13-10-2026): el prompt con
+  `{{aviso}}` (33.5) está en una rama del agente en ElevenLabs y se une a la
+  principal recién cuando producción manda la variable `aviso` desde el
+  inicio, antes de encender. Con el prompt nuevo y el inicio viejo, ElevenLabs
+  no arranca la conversación si exige la variable.
 - **Número peruano en Telnyx** para el agente de leads
   (`TELNYX_LEADS_FROM_NUMBER`). Sin él, el lead ve el número de Telnyx de
   Reproprovincia, que hoy es de EE. UU., y contesta menos. **Decisión del owner
