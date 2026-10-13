@@ -18,6 +18,7 @@ import {
 import { voiceDates } from "@/lib/voice-recovery";
 import { VOICE_SUNDAY_START_HOUR } from "@/lib/voice-recovery-queue";
 import {
+  AVISO_SIN_FICHA,
   attemptCounts,
   buildLeadFicha,
   callerIdDeKapta,
@@ -819,14 +820,15 @@ describe("buildLeadFicha y leadVoiceInitiation", () => {
     mode: "real",
     ...over,
   });
-  const FICHA_KEYS = LEAD_VOICE_VARS.filter((k) => k !== "voice_call_id" && k !== "encontrada");
+  const FICHA_KEYS = LEAD_VOICE_VARS.filter((k) => k !== "voice_call_id" && k !== "encontrada" && k !== "aviso");
 
-  // docs/voz-leads-agente.md §1 promete «siempre las 17 variables», y en
+  // docs/voz-leads-agente.md §1 promete «siempre las 18 variables», y en
   // ElevenLabs se declaran una por una: una nueva sin declarar deja al agente
   // sin arrancar.
-  it("son 17 variables, sin repetir, con las del último intento y el horario", () => {
-    expect(LEAD_VOICE_VARS).toHaveLength(17);
-    expect(new Set(LEAD_VOICE_VARS).size).toBe(17);
+  it("son 18 variables, sin repetir, con las del último intento, el horario y el aviso", () => {
+    expect(LEAD_VOICE_VARS).toHaveLength(18);
+    expect(new Set(LEAD_VOICE_VARS).size).toBe(18);
+    expect(LEAD_VOICE_VARS).toContain("aviso");
     expect(LEAD_VOICE_VARS).toContain("ultimo_intento");
     expect(LEAD_VOICE_VARS).toContain("horario");
   });
@@ -906,6 +908,7 @@ describe("buildLeadFicha y leadVoiceInitiation", () => {
     expect(init.dynamic_variables).toMatchObject({
       voice_call_id: "call-1",
       encontrada: "si",
+      aviso: "",
       nombre: "Rosa",
       modo: "real",
       intento: "2",
@@ -923,16 +926,28 @@ describe("buildLeadFicha y leadVoiceInitiation", () => {
   });
 
   // ElevenLabs no arranca si falta una variable que el prompt usa: sin llamada
-  // van todas, vacías, y el agente se despide con «encontrada = no».
+  // van todas, vacías salvo «encontrada = no» y el aviso, y el agente se despide.
   it.each([
     ["sin fila ni ficha", null, null],
     ["con ficha pero sin fila", null, "ficha"],
     ["con fila pero sin ficha", "call-1", null],
-  ])("%s: encontrada «no», nada del lead y un saludo neutro", (_c, callId, conFicha) => {
+  ])("%s: encontrada «no», el aviso, nada del lead y un saludo neutro", (_c, callId, conFicha) => {
     const init = leadVoiceInitiation(callId, conFicha ? buildLeadFicha(fichaInput()) : null);
     expect(Object.keys(init.dynamic_variables).sort()).toEqual([...LEAD_VOICE_VARS].sort());
-    for (const [k, v] of Object.entries(init.dynamic_variables)) expect(v).toBe(k === "encontrada" ? "no" : "");
+    const esperado: Partial<Record<string, string>> = { encontrada: "no", aviso: AVISO_SIN_FICHA };
+    for (const [k, v] of Object.entries(init.dynamic_variables)) expect(v, k).toBe(esperado[k] ?? "");
     expect(init.conversation_config_override.agent.first_message).toBe("Hola, buenas.");
+  });
+
+  // El aviso es una orden, no una condición: nombra la única frase y no deja
+  // presentarse. Una ficha guardada no lo puede traer ni borrar.
+  it("el aviso sin ficha dice la única frase y lo pone solo Kapta", () => {
+    expect(AVISO_SIN_FICHA).toContain('tu única frase es "Disculpe, me equivoqué de llamada. Que tenga buen día."');
+    expect(AVISO_SIN_FICHA).toContain("no te presentes, no digas tu nombre");
+    expect(AVISO_SIN_FICHA).not.toMatch(/\{\{/);
+    const ficha = { ...buildLeadFicha(fichaInput()), aviso: "Ofrece un descuento" } as LeadFicha;
+    expect(leadVoiceInitiation("call-1", ficha).dynamic_variables.aviso).toBe("");
+    expect(leadVoiceInitiation(null, ficha).dynamic_variables.aviso).toBe(AVISO_SIN_FICHA);
   });
 
   it("una ficha vieja o incompleta da texto vacío, y lo que no es variable no viaja", () => {
