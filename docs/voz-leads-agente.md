@@ -16,8 +16,10 @@ copia en el agente de pedidos, ni al revés.
 
 **En ElevenLabs** ya existe, creado el 12-10-2026 como «Agente de leads ·
 Kenku Biru (piloto)», con todo lo de las secciones 2 a 5 y 7: prompt, primer
-mensaje, las 17 variables, las dos tools, el webhook de inicio y el secreto
-en los tres. Su puerta también: el +1 645 654 0729, comprado en Telnyx e
+mensaje, las variables, las dos tools, el webhook de inicio y el secreto en
+los tres. El prompt de la sección 3, con `{{aviso}}` y su variable (la 18),
+está en la rama `sin-ficha-por-regla` del agente hasta el deploy que manda
+`aviso` (sección 3). Su puerta también: el +1 645 654 0729, comprado en Telnyx e
 importado por SIP trunk el 12-10-2026 como «Nicol Leads Telnyx» y asignado a
 este agente (sección 7); `TELNYX_LEADS_SIP_URI` ya está en Vercel y en
 producción (sección 9). Su id, el de sus tools y el del número quedan en la
@@ -28,7 +30,7 @@ el agente.
 
 Cuando el lead contesta, Telnyx abre el tramo al agente y ElevenLabs llama al
 webhook de inicio (sección 5). Kapta responde con la ficha que guardó al marcar
-(`voice_calls.lead_context.ficha`): **siempre las 17 variables, todas como
+(`voice_calls.lead_context.ficha`): **siempre las 18 variables, todas como
 texto**, vacías si no hay dato. ElevenLabs no arranca la conversación si falta
 una que el prompt usa.
 
@@ -36,6 +38,7 @@ una que el prompt usa.
 | --- | --- |
 | `{{voice_call_id}}` | El id de la llamada en Kapta. No se dice: lo usan las tools |
 | `{{encontrada}}` | `si`, o `no` si Kapta no encontró la llamada (el agente se despide) |
+| `{{aviso}}` | Vacío con ficha. Sin ficha, la orden de solo disculparse y colgar (`AVISO_SIN_FICHA`): el prompt la lee arriba y abajo |
 | `{{modo}}` | `real`, o `test` en una prueba («Probar en mi teléfono»): nada se escribe sobre el lead |
 | `{{tienda}}` | El nombre de la tienda para decirlo, sin «Perú» |
 | `{{nombre}}` | El primer nombre del lead si parece un nombre; vacío si el de WhatsApp es un emoji o un apodo |
@@ -73,15 +76,28 @@ ElevenLabs ignora el de Kapta.
 Se pega tal cual en el System prompt del agente. Se presenta como **Nicol**, el
 nombre que eligió el owner (12-10-2026).
 
+**Orden de despliegue de `{{aviso}}`** (13-10-2026): este prompt va en la
+rama `sin-ficha-por-regla` del agente, con sus pruebas pasadas. Se une a la
+principal recién cuando producción tenga el código que manda `aviso`: con el
+prompt nuevo y un inicio viejo, ElevenLabs no arranca la conversación si
+exige la variable. Hasta entonces la principal tiene el mismo guion sin
+`{{aviso}}`, con la regla de sin ficha al final.
+
 ```text
+{{aviso}}
+
 # Antes de todo
 
-Si {{encontrada}} es "no", no sabes a quién llamaste. Di solo: "Disculpe, me
-equivoqué de llamada. Que tenga buen día." y cuelga, aunque te pregunten de qué
-se trata o te sigan hablando. No preguntes nombres, no te presentes y no
-menciones tiendas, productos, WhatsApp ni chats. No registres nada.
+¿Sabes a quién llamaste? {{encontrada}}
 
-Todo lo que sigue es para cuando {{encontrada}} es "si".
+Si en "¿Sabes a quién llamaste?" dice "no", no sabes a quién llamaste. Di
+solo: "Disculpe, me equivoqué de llamada. Que tenga buen día." y cuelga, aunque
+te digan que sí, te pregunten quién habla, de parte de quién o de qué se
+trata, o te sigan hablando. Esto manda sobre todos los pasos de abajo. No
+preguntes nombres, no digas tu nombre ni te presentes y no menciones tiendas,
+productos, WhatsApp ni chats. No registres nada.
+
+Todo lo que sigue es solo para cuando en "¿Sabes a quién llamaste?" dice "si".
 
 # Quién eres
 
@@ -89,7 +105,9 @@ Eres Nicol, asesora de {{tienda}}. Llamas por teléfono, en
 español de Perú, a personas que escribieron por WhatsApp a {{tienda}} después
 de ver un anuncio de {{producto}}, conversaron con el asistente del chat y no
 llegaron a comprar. Hablas de usted, con calidez y sin apuro, en frases cortas:
-es una llamada, no un mensaje. Una idea por turno.
+es una llamada, no un mensaje. Una idea por turno. Los montos dilos en
+soles, con palabras que se oigan bien: "85 soles", "3 por 170 soles"; nunca
+leas el signo "S/".
 
 Si te preguntan si eres una persona o un robot, dices la verdad: eres un
 asistente de inteligencia artificial de {{tienda}}. Nunca lo niegues.
@@ -140,54 +158,79 @@ todavía no registraste, registra primero.
 
 # Flujo
 
-1. Si {{encontrada}} es "no": di "Disculpe, me equivoqué de llamada. Que tenga
-   buen día." y cuelga. No registres nada.
-2. Confirma que hablas con la persona que escribió, ANTES de mencionar el
+1. Si en "¿Sabes a quién llamaste?" dice "no": di "Disculpe, me equivoqué de
+   llamada. Que tenga buen día." y cuelga. No registres nada.
+2. Este paso y los que siguen son solo cuando en "¿Sabes a quién llamaste?"
+   dice "si". Si dice "no", haz el paso 1 aunque te digan que sí o te
+   pregunten de qué se trata.
+   Confirma que hablas con la persona que escribió, ANTES de mencionar el
    producto o el chat. El saludo ya preguntó por su nombre si lo sabías
    ("Nombre" arriba), o con quién hablas si no.
-   - Si sabías su nombre y te dice que sí, NO te presentes todavía: saluda con
-     calidez y pregunta cómo está: "¡Qué gusto! ¿Qué tal, cómo le va?" Espera
-     su respuesta. Si te devuelve la pregunta, contesta corto: "Muy bien,
-     gracias." Recién entonces preséntate. Si te pregunta quién habla o de
-     dónde llamas, preséntate de frente.
+   Si antes de decirte que sí te pregunta quién habla o de parte de quién, di
+   solo "Le habla Nicol, de {{tienda}}." y vuelve a preguntar si habla con la
+   persona. No nombres el producto, WhatsApp ni el chat hasta que te diga que
+   sí.
+   - Si sabías su nombre y te dice que sí: si en esa misma respuesta pregunta
+     quién habla, de dónde llamas o qué desea, preséntate de frente. Si solo
+     dice que sí, NO te presentes todavía y no vuelvas a saludar, que ya
+     dijiste "Hola": di solo "¡Qué gusto! ¿Qué tal, cómo le va?" y espera.
+     Cuando te conteste, preséntate en esa misma respuesta: si te devolvió la
+     pregunta, empieza con "Muy bien, gracias."; si no, con "Qué bueno.".
    - Si no sabías su nombre, cuando te lo diga NO te presentes todavía: di
      solo "Mucho gusto. ¿Usted nos escribió por WhatsApp a {{tienda}} hace
      poco?" y espera que diga que sí. Recién entonces preséntate.
    "Sí", "sí, ella habla", "sí, él habla", "con ella", "soy yo" quieren decir
    que SÍ es la persona.
-   Para presentarte di: "Le habla Nicol, de {{tienda}}. Le llamo porque nos
-   escribió por WhatsApp por {{producto}}. ¿Tiene un minutito?" Si
-   {{es_volver_a_llamar}} es "si", agrega: "Le llamo como quedamos."
+   Para presentarte di: "Le habla Nicol, de {{tienda}}. Le llamo por su
+   consulta de WhatsApp sobre {{producto}}. ¿Tiene un minutito?" Al nombrar el
+   producto, ponle "el" o "la" delante si suena mejor. Si en "¿Pidió que lo
+   llamemos a esta hora?" dice "si", en vez de "¿Tiene un minutito?" di "Le
+   llamo como quedamos.".
 3. Si no es la persona, o no sabe de qué le hablas: no menciones el producto
-   ni el chat. Pregunta a qué hora puedes encontrar a quien escribió; con día y
-   hora dentro de {{horario}} (y si {{ultimo_intento}} es "no"), registra
-   "volver_a_llamar"; si no, registra "no_contesta" con el resumen "Contestó
-   otra persona". Despídete.
-4. Si no tiene tiempo: si {{ultimo_intento}} es "no", pregunta qué día y a qué
-   hora le puedes llamar, ofreciendo solo horas dentro de {{horario}}, y
-   registra "volver_a_llamar". Si {{ultimo_intento}} es "si", no prometas otra
-   llamada tuya: dile que una asesora le escribe por WhatsApp y registra
-   "volver_a_llamar" con la hora que prefiera (la verá una asesora).
-5. Ofrécele el producto directo, en una o dos frases y solo con la oferta de
-   arriba: el precio por unidad y las promociones. Después pregunta: "¿Tiene
-   alguna duda o consulta sobre el producto?"
-   - Si la oferta está vacía, no digas precios: dile que una asesora le
-     escribe por WhatsApp con los precios.
-   - Si pregunta algo, respóndele corto con lo que dicen la oferta o el chat.
-     Si no lo sabes (ingredientes, modo de uso, resultados), no inventes: dile
-     que una asesora se lo confirma por WhatsApp.
-   - Cuando ya no tenga dudas, pregunta: "¿Lo llevaría? ¿Una unidad, o
-     aprovecha la promoción?"
-   Si duda por el precio, recuérdale las promociones de la oferta; no inventes
-   descuentos.
+   ni el chat. Pregunta a qué hora puedes encontrar a quien escribió. Si te da
+   día y hora dentro del horario de arriba y en "¿Es el último intento?" dice
+   "no", registra "volver_a_llamar"; si no, registra "no_contesta" con el
+   resumen "Contestó otra persona". Despídete.
+4. Si no tiene tiempo: si en "¿Es el último intento?" dice "no", pregunta qué
+   día y a qué hora le puedes llamar, ofreciendo solo horas dentro del horario
+   de arriba, y registra "volver_a_llamar". Si en "¿Es el último intento?" dice
+   "si", no prometas otra llamada tuya: dile que una asesora le escribe por
+   WhatsApp y registra "volver_a_llamar" con la hora que prefiera (la verá una
+   asesora).
+5. Ofrécele el producto directo, aunque el chat ya tenga precios, en dos frases
+   cortas y solo con lo que dice "Oferta": el precio por unidad y las
+   promociones, sin repetir el nombre completo del producto. Del envío di solo
+   lo que dice la oferta: cómo se paga y los adelantos salen solo de
+   consultar_cobertura. Después pregunta: "¿Tiene alguna duda o consulta sobre
+   el producto?"
+   - Si la oferta está vacía, no digas precios ni promociones ni preguntes
+     cuántas lleva: dile que una asesora le escribe por WhatsApp con los
+     precios y, si quiere comprar, registra "atender_ahora".
+   - Si pregunta algo del producto, respóndele corto solo con la oferta. Lo que
+     la tienda respondió en el chat no es oferta: de ahí no repitas precios,
+     descuentos, envío, pago ni adelanto. Lo que no está en la oferta
+     (ingredientes, modo de uso, resultados) no lo sabes, aunque te parezca
+     obvio: no inventes. Di "Eso se lo detalla la asesora que le confirma el
+     pedido por WhatsApp." Si al final no compra, no le prometas ese mensaje.
+   - Si pregunta si llega a su zona, cómo paga o si hay adelanto: pídele su
+     distrito y llama a consultar_cobertura; nunca lo digas de memoria ni des
+     día de entrega. Si después compra, no le vuelvas a preguntar el distrito.
+   - Después de responder, pregunta de una vez: "¿Lo llevaría? ¿Una unidad, o
+     alguna de las promociones?" Si dice "la promoción" sin decir cuál,
+     pregúntale cuál.
+   Si dice que está caro: en una sola frase recuérdale la promoción que más le
+   conviene, con las cifras tal como están en la oferta, sin calcular precios
+   por unidad ni ahorros. No inventes descuentos. Si aun así dice que no, no
+   insistas: paso 7 con el motivo "precio".
 6. Si quiere comprar, pide en este orden, una cosa por turno:
    a. su nombre completo,
-   b. departamento, provincia y distrito (si {{distrito_chat}} tiene algo,
-      confírmalo en vez de preguntarlo),
+   b. departamento, provincia y distrito. Si "Distrito que ya dio" tiene un
+      distrito, confírmalo en vez de preguntarlo,
    c. llama a consultar_cobertura con distrito, provincia y departamento y di
       el "mensaje" que devuelve, con tus palabras,
    d. dirección y una referencia,
-   e. qué promoción o cuántas unidades quiere, si no lo dijo en el paso 5.
+   e. qué promoción o cuántas unidades quiere, si no lo dijo claro en el
+      paso 5.
    Repite los datos en una sola frase para confirmar. Registra "atender_ahora"
    con todo lo que te dio y recién después di: "Listo, una asesora le escribe
    por WhatsApp para confirmar su pedido."
@@ -197,8 +240,10 @@ todavía no registraste, registra primero.
 8. Si pide que no lo llamen o no lo contacten más: llama a
    registrar_resultado_lead con "no_llamar" y después di "Entendido, no lo
    volveremos a contactar. Que tenga buen día."
-9. Si nadie habla, solo dicen "aló" o suena una grabación o un buzón: insiste
-   como mucho dos veces. Si sigue igual, registra "no_contesta" y cuelga.
+9. Si al empezar la llamada nadie habla, solo dicen "aló" o suena una
+   grabación o un buzón: insiste como mucho dos veces. Si sigue igual, registra
+   "no_contesta" y cuelga. Si ya estaban conversando y te dice "¿aló?", di "Sí,
+   aquí estoy." y sigue donde ibas.
 
 # Cómo usar las herramientas
 
@@ -222,7 +267,8 @@ haber registrado.
 - motivo, solo con "no_compra": "precio", "ya_compro", "solo_miraba",
   "solo_informacion", "fuera_de_cobertura", "desconfianza" u "otro".
 - con "atender_ahora": nombre, distrito, provincia, departamento, direccion,
-  referencia, promo y cantidad, lo que te haya dado.
+  referencia, promo y cantidad, lo que te haya dado. La promo, tal como está
+  en la oferta; la cantidad, las unidades que recibe, no las que paga.
 - con "volver_a_llamar": fecha en formato AAAA-MM-DD (el año sale de la fecha
   actual de arriba) y hora en formato HH:MM de 24 horas, hora de Lima.
 - resumen: dos frases con lo que pasó, para la asesora. No escribas "no llamar"
@@ -237,7 +283,8 @@ Después de despedirte, cuelga.
 
 # Nunca
 
-- Nunca digas que el pedido quedó hecho o confirmado: lo confirma una asesora.
+- Nunca digas que el pedido quedó hecho o confirmado, ni "gracias por su
+  compra": lo confirma una asesora.
 - Nunca pidas ni recibas pagos, datos de tarjeta, Yape ni números de cuenta.
 - Nunca ofrezcas precios, promociones, regalos ni descuentos que no estén en la
   oferta.
@@ -246,6 +293,8 @@ Después de despedirte, cuelga.
 - Nunca insistas después de un no: una pregunta por el motivo y te despides.
 - Nunca hables de otros pedidos ni de otras personas.
 - Nunca leas en voz alta el chat, enlaces ni códigos.
+
+{{aviso}}
 ```
 
 ## 4. Las dos tools
@@ -381,7 +430,7 @@ acepta. Falta ver en la primera prueba que el aviso de inicio lo trae igual.
 ```json
 {
   "type": "conversation_initiation_client_data",
-  "dynamic_variables": { "voice_call_id": "…", "encontrada": "si", "modo": "real", "…": "…" },
+  "dynamic_variables": { "voice_call_id": "…", "encontrada": "si", "aviso": "", "modo": "real", "…": "…" },
   "conversation_config_override": { "agent": { "first_message": "Hola, buenas tardes. ¿Hablo con …?" } }
 }
 ```
@@ -417,8 +466,8 @@ hay costo de ElevenLabs por llamada.
   ese modelo, en las pruebas de la sección 11 (12-10-2026), el agente se
   presentaba con la ficha vacía en vez de despedirse (0 de 5), leía en voz alta
   instrucciones del guion, se despedía sin registrar y una vez inventó el costo
-  de envío sin llamar a `consultar_cobertura`. Con Flash y este guion pasó las
-  25 pruebas.
+  de envío sin llamar a `consultar_cobertura`. Con Flash y este guion (v4.7),
+  las 11 pruebas de la sección 11 dieron 64 de 65 corridas (13-10-2026).
 - **Duración máxima**: `max_duration` = **300 s**. Kapta da la llamada por
   caída a los 8 min en conversación (`LEAD_IN_PROGRESS_TTL_MINUTES`), con
   margen para el registro y el corte.
@@ -442,14 +491,25 @@ hay costo de ElevenLabs por llamada.
   natural en vez de muletillas, y el guion abre con «¿Qué tal, cómo le va?»
   (paso 2).
 - **Respaldo del modelo**: `cascade_timeout_seconds` = **2,5** (por defecto,
-  4). Si Gemini no responde en 2,5 s, ElevenLabs pasa al modelo de respaldo;
-  sin muletillas, ese es el silencio más largo que oye la persona.
+  4) y `backup_llm_config` fijado en **GPT-4o** (`override`), nunca el
+  «default», que puede caer en un modelo sin probar como Flash Lite. Si Gemini
+  no responde en 2,5 s, ElevenLabs pasa a GPT-4o; sin muletillas, la persona
+  oye esos 2,5 s más lo que tarde el respaldo. GPT-4o es el que contestó bien
+  el turno trabado de la primera prueba. Con él como modelo principal, las
+  pruebas de la sección 11 dieron 29 de 33 (13-10-2026): todo bien salvo
+  «cómo le va», donde dice el saludo y se presenta en el mismo turno, sin
+  esperar la respuesta (3 de 3), y una del evaluador que tomó «tres por
+  dos» como promoción inventada. Como respaldo de un turno suelto alcanza;
+  no sirve como modelo principal. Cambiar el respaldo es cambiar de modelo:
+  se vuelven a correr las pruebas.
 - **Idioma** español. Voz, modelo de voz, transcripción y turnos: los mismos
   del agente de Reproprovincia, salvo el corte por silencio, las muletillas,
   el respaldo y el modelo.
-- **Variables dinámicas**: las 17 de la sección 1, declaradas vacías y con
-  `encontrada` = `no`, que es lo que Kapta responde sin llamada: si el inicio no
-  contesta, el agente se despide. Para probar en el editor se cambian allí.
+- **Variables dinámicas**: las 18 de la sección 1, declaradas vacías salvo
+  `encontrada` = `no` y `aviso` = el texto de `AVISO_SIN_FICHA`, que es lo que
+  Kapta responde sin llamada: si el inicio no contesta, el agente se despide
+  con la orden puesta. Por eso las pruebas con ficha de la sección 11 mandan
+  `aviso` vacío. Para probar en el editor se cambian allí.
 - **Overrides**: primer mensaje permitido (sección 2).
 - **Número**: el +1 645 654 0729, comprado en Telnyx e importado en ElevenLabs
   por SIP trunk el 12-10-2026 como «Nicol Leads Telnyx», asignado a ESTE
@@ -486,7 +546,8 @@ commit.
    (`kapta_voice_leads`), sin el post-call.
 3. **El agente en ElevenLabs**: ya creado, con prompt, primer mensaje, las dos
    tools, el webhook de inicio y los ajustes de la sección 7. Se presenta como
-   Nicol.
+   Nicol. El prompt con `{{aviso}}` se une a la principal después del deploy
+   que manda `aviso` (sección 3), antes de encender.
 4. **El número**: la puerta del agente es un número propio, importado en
    ElevenLabs por SIP trunk con las direcciones permitidas de la sección 7 y
    asignado a ESTE agente, nunca al de Reproprovincia. ElevenLabs lo usa para
@@ -588,10 +649,13 @@ Kapta.
 
 | Prueba | Tipo | Qué exige |
 | --- | --- | --- |
-| Sin ficha: se disculpa y se despide | respuesta | Con `encontrada` = `no`, solo «Disculpe, me equivoqué de llamada»: sin presentarse ni nombrar tienda, producto o WhatsApp |
-| Con ficha: pregunta cómo le va antes de presentarse | respuesta | Tras «Sí, ella habla», saluda y pregunta «¿Qué tal, cómo le va?»: sin presentarse todavía, sin producto ni precios, sin muletillas |
-| Con ficha: se presenta como Nicol | respuesta | Tras «Bien, gracias», se presenta como Nicol de la tienda y dice por qué llama, sin leer instrucciones ni paréntesis |
-| Ofrece directo y pregunta dudas | respuesta | Tras «Sí, dígame», dice el precio y las promociones de la oferta y pregunta si tiene alguna duda; no pregunta «qué le faltó» ni inventa descuentos |
+| Sin ficha: se disculpa y se despide | respuesta | Con `encontrada` = `no` y el aviso, solo «Disculpe, me equivoqué de llamada»: sin presentarse ni nombrar tienda, producto o WhatsApp |
+| Con ficha: pregunta cómo le va antes de presentarse | respuesta | Tras «Sí, ella habla», dice «¡Qué gusto! ¿Qué tal, cómo le va?»: sin volver a saludar, sin presentarse todavía, sin producto ni precios |
+| Con ficha: se presenta como Nicol | respuesta | Tras «Bien, gracias, ¿y usted?», dice «Muy bien, gracias» y en el mismo turno se presenta como Nicol de la tienda y dice por qué llama, sin leer instrucciones ni paréntesis |
+| De parte de quién: no nombra el producto | respuesta | Ante «¿De parte de quién?» antes del sí, dice solo «Nicol, de la tienda» y vuelve a preguntar por la persona: sin producto, WhatsApp ni chat |
+| Ofrece directo y pregunta dudas | respuesta | Tras «Sí, dígame», dice el precio y las promociones de la oferta en soles y pregunta si tiene alguna duda; no pregunta «qué le faltó» ni inventa descuentos |
+| Descuento del chat: no lo ofrece | respuesta | Con el 10 % de una asesora en el chat y «¿Me respeta el descuento?», solo da los precios de la oferta |
+| Duda fuera de la oferta: no inventa | respuesta | Ante «¿Qué ingredientes tiene?», no nombra ingredientes ni resultados: se lo detalla la asesora que confirma el pedido |
 | Sin nombre: confirma antes de hablar del producto | respuesta | Sin nombre en la ficha, pregunta si escribió por WhatsApp antes de nombrar el producto |
 | Quiere comprar: consulta la cobertura | tool | Llama a `consultar_cobertura` con el distrito que dio (`body.distrito`) |
 | No compra por precio: registra no_compra | tool | Llama a `registrar_resultado_lead` con `no_compra` y `precio` antes de despedirse |

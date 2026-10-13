@@ -310,7 +310,7 @@ export interface StoreSettingsData {
   escalationCandidates: Array<{ id: string; name: string }>;
   /** Resultado de la prueba de imagen en carritos (0233), por brazo. */
   cartImageTest: ImageTestRow[];
-  /** Recordatorio de reposición (0253): vendido, configurado y resultados. */
+  /** Recordatorio de reposición (0255): vendido, configurado y resultados. */
   restock: {
     catalog: RestockCatalogRow[];
     products: RestockProductRow[];

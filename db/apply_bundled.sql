@@ -21426,8 +21426,134 @@ revoke all on function public.meta_spend_by_month(uuid[], date) from public, ano
 grant execute on function public.meta_spend_by_month(uuid[], date) to authenticated, service_role;
 
 -- ---- 0253 ----
+-- 0253_swayp_pc_auto.sql — Swayp automático desde Por confirmar, piloto A/B
+-- (MOM §11.13, 13-10-2026).
+--
+-- QUÉ ES. Una pasada diaria que hace lo mismo que el botón «Enviar por Swayp»
+-- de la mesa de confirmación (§11.11) sobre pedidos frescos —hasta 48 h, con
+-- 1 o 2 llamadas sin respuesta, dirección con número o manzana y lote, sin
+-- agencia, ubicación corroborada y stock completo—. La mitad de los elegibles
+-- sale por Swayp y la otra mitad sigue la cola de llamadas, para medir si de
+-- verdad suma. Decisiones del owner: sin aviso por WhatsApp, 48 h, A/B de 10
+-- por día.
+--
+-- APAGADO AL INSTALAR. La fila de cada organización nace con `enabled = false`;
+-- lo activa una persona con «Administrar tiendas» desde el registro de Swayp
+-- desde Por confirmar. Y se apaga sola —el freno— si de los últimos
+-- `brake_window` casos resueltos se entrega menos de `brake_min_rate`.
+--
+-- Las tres tablas siguen el patrón del automático Aliclik → Swayp (0209): la
+-- lectura respeta organización y tiendas por RLS y solo el servidor escribe.
+
+create table if not exists swayp_pc_auto_settings (
+  org_id            uuid primary key references organizations(id),
+  enabled           boolean not null default false,
+  daily_cap         integer not null default 10 check (daily_cap between 1 and 50),
+  per_warehouse_cap integer not null default 3 check (per_warehouse_cap between 1 and 50),
+  max_age_hours     integer not null default 48 check (max_age_hours between 1 and 168),
+  min_attempts      integer not null default 1 check (min_attempts between 0 and 10),
+  max_unanswered    integer not null default 2 check (max_unanswered between 0 and 10),
+  max_amount        numeric not null default 300 check (max_amount > 0),
+  brake_window      integer not null default 20 check (brake_window between 5 and 200),
+  brake_min_rate    numeric not null default 0.35 check (brake_min_rate between 0 and 1),
+  -- Por qué está apagado, si lo apagó el freno (null si lo apagó una persona).
+  paused_reason     text,
+  paused_at         timestamptz,
+  updated_by        uuid references auth.users(id) on delete set null,
+  updated_at        timestamptz not null default now()
+);
+
+-- Una decisión por pedido. Mientras no es elegible se reescribe en cada pasada
+-- (el motivo cambia: hoy sin llamada, mañana sí); en cuanto es elegible queda
+-- fija con su brazo, para que el A/B no cambie de lado a nadie.
+create table if not exists swayp_pc_auto_decisions (
+  order_id    uuid primary key references orders(id) on delete cascade,
+  store_id    uuid not null references stores(id),
+  org_id      uuid not null references organizations(id),
+  arm         text check (arm in ('swayp', 'control')),
+  reason      text not null,
+  eligible    boolean not null default false,
+  shipment_id uuid references shipments(id) on delete set null,
+  evidence    jsonb not null default '{}',
+  decided_at  timestamptz not null default now(),
+  checked_at  timestamptz not null default now()
+);
+create index if not exists swayp_pc_auto_decisions_org_idx
+  on swayp_pc_auto_decisions (org_id, eligible, decided_at desc);
+
+create table if not exists swayp_pc_auto_runs (
+  id         uuid primary key default gen_random_uuid(),
+  org_id     uuid not null references organizations(id),
+  summary    jsonb not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists swayp_pc_auto_runs_org_idx on swayp_pc_auto_runs (org_id, created_at desc);
+
+alter table swayp_pc_auto_settings enable row level security;
+alter table swayp_pc_auto_decisions enable row level security;
+alter table swayp_pc_auto_runs enable row level security;
+drop policy if exists swayp_pc_auto_settings_read on swayp_pc_auto_settings;
+create policy swayp_pc_auto_settings_read on swayp_pc_auto_settings
+  for select to authenticated using (org_id in (select auth_org_ids()));
+drop policy if exists swayp_pc_auto_decisions_read on swayp_pc_auto_decisions;
+create policy swayp_pc_auto_decisions_read on swayp_pc_auto_decisions
+  for select to authenticated using (store_id in (select auth_store_ids()));
+drop policy if exists swayp_pc_auto_runs_read on swayp_pc_auto_runs;
+create policy swayp_pc_auto_runs_read on swayp_pc_auto_runs
+  for select to authenticated using (org_id in (select auth_org_ids()));
+grant select on swayp_pc_auto_settings, swayp_pc_auto_decisions, swayp_pc_auto_runs to authenticated;
+grant all on swayp_pc_auto_settings, swayp_pc_auto_decisions, swayp_pc_auto_runs to service_role;
+
+-- Una fila apagada por organización con tiendas activas.
+insert into swayp_pc_auto_settings (org_id)
+select distinct org_id from stores where status = 'active' and org_id is not null
+on conflict (org_id) do nothing;
+
+-- ---- 0254 ----
+-- 0254_swayp_actividad_backfill.sql — la Actividad de los pedidos Swayp, completa.
+--
+-- QUÉ PASABA (13-10-2026). El webhook y el barrido de Swayp escribían el estado
+-- en la guía y en nada más: #KP140633 decía «Entregado» en Salidas y guías y la
+-- pestaña Actividad no tenía una sola línea de la entrega. Aliclik y Shalom
+-- dejan un `courier_status` por transición; Swayp no dejaba ninguno. Desde este
+-- cambio lo deja (`swaypStatusEvent`, lib/swayp-ingest.ts).
+--
+-- ESTE RELLENO deja, para cada guía Swayp que ya se movió (estado 5 en
+-- adelante: reparto, novedad, entregada, devolución) y no tiene ninguna línea,
+-- UNA línea con su último estado conocido. El camino que tuvo hasta ahí no se
+-- puede reconstruir: Swayp no lo guardamos. La nota lo dice.
+--
+-- La hora: el cierre si lo hay (entregada, devolución confirmada); si no, la
+-- salida a reparto o el despacho. Idempotente: no toca una guía que ya tenga su
+-- `courier_status` de Swayp.
+
+insert into order_events (store_id, order_id, kind, occurred_at, actor, source, courier, guide_code, shipment_id, new_status, note, payload)
+select s.store_id, s.order_id, 'courier_status',
+       coalesce(s.closed_at, s.out_for_delivery_at, s.dispatched_at, s.updated_at),
+       null, 'fenix', 'fenix', s.guide_code, s.id, s.delivery_status,
+       'Swayp: ' ||
+         case s.swayp_state
+           when 5 then 'Reparto' when 6 then 'Novedad' when 7 then 'Entregada' when 8 then 'Devolución'
+           when 9 then 'Devolución confirmada' when 10 then 'Cancelada' when 11 then 'Indemnizada'
+           when 12 then 'Devolución confirmada con cobro' else 'Estado ' || s.swayp_state
+         end || ' (' || s.swayp_state || ')' ||
+         case when s.reported_status like 'Swayp · %' then ' · ' || substr(s.reported_status, 9) else '' end ||
+         '. Último estado conocido, registrado el 13-10-2026 al completar la Actividad.',
+       jsonb_build_object('swayp_state', s.swayp_state, 'relleno', true)
+  from shipments s
+ where s.courier = 'fenix'
+   and s.swayp_state >= 5
+   and s.order_id is not null
+   and s.store_id is not null
+   and not exists (
+     select 1 from order_events e
+      where e.order_id = s.order_id and e.kind = 'courier_status' and e.source = 'fenix'
+        and e.guide_code is not distinct from s.guide_code
+   );
+
+-- ---- 0255 ----
 -- ============================================================================
--- 0253_restock_reminders.sql — recordatorio de reposición (MOM §34,
+-- 0255_restock_reminders.sql — recordatorio de reposición (MOM §34,
 -- 13-10-2026).
 --
 -- QUÉ ES. Cuando a la clienta se le está por acabar lo que compró, se le manda

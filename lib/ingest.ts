@@ -147,7 +147,7 @@ export interface StoreCreds {
   /** Ritmo (0195): como mucho `count` intentos cada `minutes` minutos. */
   delivered_thanks_pace_count: number;
   delivered_thanks_pace_minutes: number;
-  /** Recordatorio de reposición (0253). Ver lib/restock-reminder.ts. */
+  /** Recordatorio de reposición (0255). Ver lib/restock-reminder.ts. */
   restock_enabled: boolean;
   restock_template_name: string | null;
   restock_template_language: string | null;
@@ -322,7 +322,7 @@ export async function getStoreCreds(
     // Pre-0195 ⇒ el ritmo por defecto, 5 cada 20 minutos.
     delivered_thanks_pace_count: data.delivered_thanks_pace_count ?? 5,
     delivered_thanks_pace_minutes: data.delivered_thanks_pace_minutes ?? 20,
-    // Pre-0253 las columnas no existen (select * → undefined) ⇒ apagado.
+    // Pre-0255 las columnas no existen (select * → undefined) ⇒ apagado.
     restock_enabled: data.restock_enabled ?? false,
     restock_template_name: data.restock_template_name ?? null,
     restock_template_language: data.restock_template_language ?? null,

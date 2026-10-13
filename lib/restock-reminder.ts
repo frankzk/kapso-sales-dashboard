@@ -11,7 +11,7 @@
 // frascos de 30 días duran 60. Sale `restock_days_before` días antes de que se
 // acabe, contados desde la entrega. Un producto sin días no recibe nada: es
 // opt-in por producto, para que un accesorio nunca reciba «se te está
-// acabando». La consulta vive en SQL (`restock_candidates`, 0253).
+// acabando». La consulta vive en SQL (`restock_candidates`, 0255).
 //
 // ES LA GEMELA DEL AGRADECIMIENTO AL ENTREGAR (lib/delivered-thanks.ts): mismo
 // cron, mismo ritmo en ventana deslizante, mismo horario, mismo corte ante el
@@ -516,7 +516,7 @@ export async function handleRestockReply(
       .order("sent_at", { ascending: false })
       .limit(1)
       .maybeSingle();
-    // Pre-0253 la tabla no existe: no hubo recordatorios que contestar.
+    // Pre-0255 la tabla no existe: no hubo recordatorios que contestar.
     if (error) return null;
     last = (data as RecentSend | null) ?? null;
   } catch {

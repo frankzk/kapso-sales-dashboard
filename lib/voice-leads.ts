@@ -481,6 +481,7 @@ export function horarioHablado(start: number, end: number): string {
 export const LEAD_VOICE_VARS = [
   "voice_call_id",
   "encontrada",
+  "aviso",
   "modo",
   "tienda",
   "nombre",
@@ -500,7 +501,16 @@ export const LEAD_VOICE_VARS = [
 export type LeadVoiceVar = (typeof LEAD_VOICE_VARS)[number];
 
 /** La ficha que se guarda al marcar (`voice_calls.lead_context.ficha`). */
-export type LeadFicha = Record<Exclude<LeadVoiceVar, "voice_call_id" | "encontrada">, string>;
+export type LeadFicha = Record<Exclude<LeadVoiceVar, "voice_call_id" | "encontrada" | "aviso">, string>;
+
+/**
+ * Lo que el prompt lee arriba y abajo (`{{aviso}}`) cuando Kapta no encontró
+ * la llamada; con ficha va vacío. Es una orden directa y no una condición: con
+ * solo «¿Sabes a quién llamaste? no», el modelo se presentaba igual a quien
+ * preguntaba «¿de qué se trata?» (de 2 a 3 veces en 10, 13-10-2026).
+ */
+export const AVISO_SIN_FICHA =
+  'ESTA LLAMADA NO TIENE FICHA: no sabes a quién llamaste. Digan lo que digan, tu única frase es "Disculpe, me equivoqué de llamada. Que tenga buen día." y después cuelgas. No sigas el guion: no te presentes, no digas tu nombre y no menciones tiendas, productos, WhatsApp ni chats.';
 
 export interface LeadFichaInput {
   lead: Pick<LeadVoiceLead, "name"> & {
@@ -567,18 +577,21 @@ export interface LeadVoiceInitiation {
 /**
  * Lo que Kapta devuelve al webhook de inicio del agente de leads: TODAS las
  * variables (ElevenLabs no arranca si falta una que el prompt usa) y un primer
- * mensaje. Sin llamada, `encontrada = "no"` y el agente se despide.
+ * mensaje. Sin llamada, `encontrada = "no"`, el aviso de que no hay ficha, y
+ * el agente se despide.
  */
 export function leadVoiceInitiation(callId: string | null, ficha: LeadFicha | null): LeadVoiceInitiation {
   const vars = Object.fromEntries(LEAD_VOICE_VARS.map((k) => [k, ""])) as Record<LeadVoiceVar, string>;
   vars.encontrada = "no";
+  vars.aviso = AVISO_SIN_FICHA;
   if (callId && ficha) {
     for (const k of LEAD_VOICE_VARS) {
-      if (k === "voice_call_id" || k === "encontrada") continue;
+      if (k === "voice_call_id" || k === "encontrada" || k === "aviso") continue;
       vars[k] = String(ficha[k] ?? "");
     }
     vars.voice_call_id = callId;
     vars.encontrada = "si";
+    vars.aviso = "";
   }
   const saludo = vars.saludo ? `Hola, ${vars.saludo}.` : "Hola, buenas.";
   const first_message = vars.encontrada !== "si" ? "Hola, buenas." : vars.nombre ? `${saludo} ¿Hablo con ${vars.nombre}?` : `${saludo} ¿Con quién tengo el gusto?`;

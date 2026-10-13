@@ -154,8 +154,8 @@ export default async function StoreSettingsPage({
       })
     : { data: null };
 
-  // Recordatorio de reposición (0253): lo vendido, lo configurado y cómo le va
-  // a cada grupo. Pre-0253 las funciones no existen ⇒ listas vacías, sin tumbar
+  // Recordatorio de reposición (0255): lo vendido, lo configurado y cómo le va
+  // a cada grupo. Pre-0255 las funciones no existen ⇒ listas vacías, sin tumbar
   // Ajustes.
   const [restockCatalog, restockProducts, restockResults] = await Promise.all([
     admin.rpc("restock_product_catalog", {
@@ -230,7 +230,7 @@ export default async function StoreSettingsPage({
       delivered_thanks_max_hours: full.delivered_thanks_max_hours ?? 72,
       delivered_thanks_pace_count: full.delivered_thanks_pace_count ?? 5,
       delivered_thanks_pace_minutes: full.delivered_thanks_pace_minutes ?? 20,
-      // Pre-0253 las columnas no existen ⇒ recordatorio apagado.
+      // Pre-0255 las columnas no existen ⇒ recordatorio apagado.
       restock_enabled: full.restock_enabled ?? false,
       restock_template_name: full.restock_template_name ?? null,
       restock_template_language: full.restock_template_language ?? null,

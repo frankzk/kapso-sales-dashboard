@@ -218,7 +218,7 @@ echo "  ✅ caso perezoso único, episodio, candado de 10 min, cuatro resultados
 echo "▶ LTV : CPA (0252): clientas nuevas por mes de primera entrega, valor a cada horizonte, gasto por moneda y RLS"
 $PSQL -f "$ROOT/scripts/sql/ltv_cohorts_smoke.sql"
 echo "  ✅ solo entregados desde la primera compra, teléfono por sus 9 dígitos, gasto por mes y moneda, cada quien sus tiendas"
-echo "▶ Recordatorio de reposición (0253): quién vence hoy, línea sin id por su título, uno por pedido, resultados por grupo y RLS"
+echo "▶ Recordatorio de reposición (0255): quién vence hoy, línea sin id por su título, uno por pedido, resultados por grupo y RLS"
 $PSQL -f "$ROOT/scripts/sql/restock_reminders_smoke.sql"
 echo "  ✅ unidades × días − días antes, ventana, quien volvió a comprar no, uno por pedido, control aparte, cada quien sus tiendas"
 

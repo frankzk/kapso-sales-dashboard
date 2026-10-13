@@ -1,4 +1,4 @@
--- Recordatorio de reposición (migración 0253). Corre en el clúster desechable
+-- Recordatorio de reposición (migración 0255). Corre en el clúster desechable
 -- después de todas las migraciones y reutiliza las tiendas y usuarios de
 -- rls_smoke.sql: A (viewer de la tienda A), C (owner de las dos), D (sin
 -- tiendas).

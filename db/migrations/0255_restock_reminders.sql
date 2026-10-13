@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0253_restock_reminders.sql — recordatorio de reposición (MOM §34,
+-- 0255_restock_reminders.sql — recordatorio de reposición (MOM §34,
 -- 13-10-2026).
 --
 -- QUÉ ES. Cuando a la clienta se le está por acabar lo que compró, se le manda

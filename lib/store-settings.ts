@@ -413,7 +413,7 @@ export function buildStoreUpdate(
   const dtPaceMinutes = intField(input.delivered_thanks_pace_minutes, 5, 1440);
   if (dtPaceMinutes !== null) patch.delivered_thanks_pace_minutes = dtPaceMinutes;
 
-  // Recordatorio de reposición (0253). El toggle tiene que poder APAGARSE; el
+  // Recordatorio de reposición (0255). El toggle tiene que poder APAGARSE; el
   // nombre de la plantilla y el número propio son vaciables.
   if (input.restock_enabled !== undefined) {
     patch.restock_enabled = input.restock_enabled === true || input.restock_enabled === "true";

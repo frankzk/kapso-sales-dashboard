@@ -238,3 +238,52 @@ export function listNames(names: readonly string[]): string {
   if (names.length <= MAX_NAMED) return names.join(", ");
   return `${names.slice(0, MAX_NAMED).join(", ")} y ${names.length - MAX_NAMED} más`;
 }
+
+// ---------------------------------------------------------------------------
+// Solo Lima crea la salida interna (13-10-2026, decisión del owner)
+// ---------------------------------------------------------------------------
+
+/**
+ * ¿Puede «Descargar rótulos» CREAR una salida «por definir» para este pedido?
+ *
+ * Solo en Lima. Ahí el rótulo interno es el de verdad: la caja se arma antes de
+ * saber con qué motorizado o courier sale, y el courier se fija al entrar a una
+ * ruta (§4). En Provincia COD y Agencia la caja viaja con el rótulo del courier
+ * (Aliclik, Shalom, Olva) y el escáner del despacho ya acepta su número de guía.
+ * Medido del 13-09 al 13-10-2026: de unas 4.200 guías de provincia y agencia,
+ * 19 pasaron por un rótulo interno y 10 terminaron con la «por definir»
+ * anulada a mano — la del 13-10 la creó «Descargar rótulos» al seleccionar una
+ * tanda que mezclaba coberturas.
+ *
+ * Decide la MISMA `macro_operation` con la que ya se separaba Lima en este
+ * archivo, no `coverage`: es la que corrige las nueve provincias del
+ * departamento de Lima que van por agencia.
+ *
+ * Reimprimir sigue igual en todas partes: si el pedido ya tiene su salida con
+ * la empresa, se reusa. Lo único que cambia es CREAR.
+ */
+export function labelCreatesOutput(macroOperation: string | null | undefined): boolean {
+  return macroOperation === "lima";
+}
+
+const OPERATION_LABEL: Record<string, string> = {
+  provincia_cod: "Provincia COD",
+  agencia: "Agencia",
+  desconocida: "cobertura sin determinar",
+};
+
+/**
+ * Lo que se dice de un pedido que no recibe salida interna. Nombra la salida
+ * correcta —su guía de courier— y la puerta para el pedido mal clasificado:
+ * corregir su ubicación, que recalcula la cobertura y deja registrado el cambio
+ * (`coverage_changed`, MOM §19.0.1). No hay un atajo para forzar el rótulo.
+ */
+export function nonLimaLabelMessage(orderName: string | null, macroOperation: string | null | undefined): string {
+  const name = orderName ?? "Este pedido";
+  const where = OPERATION_LABEL[macroOperation ?? ""] ?? (macroOperation || "cobertura sin determinar");
+  return (
+    `${name} es de ${where}: no lleva rótulo interno, la caja viaja con el rótulo del courier. ` +
+    "Crea su guía desde el pedido. Si en realidad es de Lima, corrige su ubicación en el pedido: " +
+    "la cobertura se recalcula, el cambio queda registrado y el rótulo se puede descargar."
+  );
+}

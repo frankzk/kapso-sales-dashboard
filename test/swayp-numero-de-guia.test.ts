@@ -55,7 +55,10 @@ describe("las cuatro puertas exigen el número de Swayp", () => {
     readFileSync(resolve(process.cwd(), "lib/swayp-reenvio.ts"), "utf8");
 
   it("la guía directa no crea nada si Swayp no emitió", () => {
-    expect(server).toContain("Swayp no emitió la guía: ${viaApi.reason}. No se creó ninguna salida.");
+    // Desde el 13-10-2026 la emite lib/swayp-directa.ts (el botón y el automático).
+    expect(readFileSync(resolve(process.cwd(), "lib/swayp-directa.ts"), "utf8")).toContain(
+      "Swayp no emitió la guía: ${viaApi.reason}. No se creó ninguna salida.",
+    );
   });
 
   it("la reprogramación y el reenvío tampoco", () => {
