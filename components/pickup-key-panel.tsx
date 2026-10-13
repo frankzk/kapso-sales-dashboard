@@ -57,6 +57,7 @@ import {
   saveShalomOrderDraft,
   searchShalomAgencies,
 } from "@/app/dashboard/pedidos/shalom-actions";
+import { announcePaymentPanelChange, subscribePaymentPanelChange } from "@/lib/payment-panel-sync";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 import {
   PAYMENT_STATE_LABEL,
@@ -194,7 +195,25 @@ function usePaymentPanel(orderId: string) {
     void reload();
   }, [reload]);
 
-  return { panel, error, setError, notice, setNotice, pending, startTransition, reload };
+  // El OTRO panel del mismo pedido cambió los pagos: registrar la diferencia en
+  // «Cobro» tiene que encender «Mostrar clave» en «Salidas y guías» sin
+  // actualizar la página (lib/payment-panel-sync.ts).
+  const source = useId();
+  useEffect(
+    () => subscribePaymentPanelChange(orderId, source, () => void reload()),
+    [orderId, source, reload],
+  );
+
+  /** Recarga este panel y avisa a los demás del pedido. */
+  const changed = useMemo(
+    () => async () => {
+      await reload();
+      announcePaymentPanelChange(orderId, source);
+    },
+    [orderId, source, reload],
+  );
+
+  return { panel, error, setError, notice, setNotice, pending, startTransition, reload, changed };
 }
 
 /**
@@ -239,7 +258,7 @@ export function PickupKeyPanel({
    */
   gatewayNote?: string | null;
 }) {
-  const { panel, error, setError, notice, setNotice, pending, startTransition, reload } =
+  const { panel, error, setError, notice, setNotice, pending, startTransition, reload, changed } =
     usePaymentPanel(orderId);
 
   function run(action: () => Promise<{ error?: string; notice?: string }>) {
@@ -248,7 +267,7 @@ export function PickupKeyPanel({
       setError(res.error ?? null);
       setNotice(res.notice ?? null);
       if (!res.error) {
-        await reload();
+        await changed();
         onChanged();
       }
     });
@@ -393,7 +412,7 @@ export function PickupKeyPanel({
           shalomGuide={panel.shalomGuide}
           pending={pending}
           onRegistered={() => {
-            void reload();
+            void changed();
             onChanged();
           }}
           onError={setError}
@@ -417,7 +436,7 @@ export function ShalomPickupKeyPanel({
   orderId: string;
   onChanged: () => void;
 }) {
-  const { panel, error, setError, notice, setNotice, pending, startTransition, reload } =
+  const { panel, error, setError, notice, setNotice, pending, startTransition, reload, changed } =
     usePaymentPanel(orderId);
 
   function run(action: () => Promise<{ error?: string; notice?: string }>) {
@@ -426,7 +445,7 @@ export function ShalomPickupKeyPanel({
       setError(res.error ?? null);
       setNotice(res.notice ?? null);
       if (!res.error) {
-        await reload();
+        await changed();
         onChanged();
       }
     });
