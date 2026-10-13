@@ -517,16 +517,40 @@ function trayDayOf(receivedAt: string | null, today: string): string | null {
 }
 
 /**
+ * Cuánto después de la recepción puede quedar escrito el programa que la
+ * recepción misma escribe (el gancho de «Recibir en oficina» de Repro Lima,
+ * lib/repro-lima-program.ts: el evento de recepción va primero y el programa,
+ * milisegundos o segundos después).
+ */
+export const RECEPTION_PROGRAM_WINDOW_MS = 2 * 60_000;
+
+/**
+ * La caja tenía su programa al recibirla, y la recepción la mandó al anaquel
+ * de su día: el programa ya existía (`setAt <= receivedAt`) o lo escribió la
+ * recepción misma (de Repro Lima y hasta 2 minutos después). No basta con que
+ * el acuerdo se marcara después de recibirla: una confirmación posterior
+ * también lo hace, y esa caja sigue en su bandeja.
+ */
+export function programmedAtReception(
+  program: Pick<NonNullable<ReproRow["program"]>, "setAt" | "origin"> | null | undefined,
+  receivedAt: string | null | undefined,
+): boolean {
+  const received = Date.parse(receivedAt ?? "");
+  const programmed = Date.parse(program?.setAt ?? "");
+  if (!program || !Number.isFinite(received) || !Number.isFinite(programmed)) return false;
+  if (programmed <= received) return true;
+  return program.origin === "repro_lima" && programmed - received <= RECEPTION_PROGRAM_WINDOW_MS;
+}
+
+/**
  * Dónde debería estar, solo con la caja en oficina: en el anaquel de su día si
- * se recibió después de programarla (la recepción la manda ahí); si no, en la
- * bandeja del día en que se recibió, o en la de «sin fecha / más de 7 días».
- * Lo que se desarma no va al anaquel.
+ * tenía su programa al recibirla (`programmedAtReception`: la recepción la
+ * manda ahí); si no, en la bandeja del día en que se recibió, o en la de «sin
+ * fecha / más de 7 días». Lo que se desarma no va al anaquel.
  */
 function whereLineOf(r: ReproRow, action: BoxAction | null, dayLabel: string, today: string): string | null {
   if (r.box.kind !== "en_oficina") return null;
-  const received = Date.parse(r.receivedAt ?? "");
-  const programmed = Date.parse(r.program?.setAt ?? "");
-  if (action !== "desarmar_cerrar" && Number.isFinite(received) && Number.isFinite(programmed) && programmed <= received) {
+  if (action !== "desarmar_cerrar" && programmedAtReception(r.program, r.receivedAt)) {
     return RETRY_ANAQUEL(dayLabel);
   }
   const tray = trayDayOf(r.receivedAt, today);
@@ -753,7 +777,8 @@ export function handoffSalidaLine(salida: WarehouseHandoffRow["salida"]): string
 
 /**
  * La fila de un acuerdo que ya está en «Por armar». El día es el del programa
- * vigente si lo hay; si no, el acordado. Lo de después de mañana no se lista.
+ * vigente si lo hay, sea cual sea su fecha; si no, el acordado. Lo de después
+ * de mañana no se lista, tampoco si Grupo GF lo movió para después.
  * La acción es la guardada: aquí no se recalcula, porque fuera de la etapa los
  * hechos de la salida propia ya no se leen igual.
  */

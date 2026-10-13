@@ -21,6 +21,7 @@ import {
   handoffLine,
   handoffSalida,
   handoffSalidaLine,
+  programmedAtReception,
   retryAction,
   retryBucket,
   retryCounts,
@@ -34,6 +35,7 @@ import {
   HANDOFF_LINE_CAJA_NUEVA,
   HANDOFF_LINE_DESARMAR,
   HANDOFF_LINE_GF,
+  RECEPTION_PROGRAM_WINDOW_MS,
   RETRY_ADDED_LATE,
   RETRY_ADDED_TODAY,
   RETRY_ADDRESS_CHANGED,
@@ -547,6 +549,73 @@ describe("dónde está la caja en oficina", () => {
   it("fuera de la oficina no hay línea", () => {
     const row = one(reproRow({ program: program(TODAY), box: { kind: "volviendo_courier", courier: "fenix" } }));
     expect(row.whereLine).toBeNull();
+  });
+
+  describe("la recepción misma escribió el programa (gancho de «Recibir en oficina»)", () => {
+    const RECEIVED = "2026-10-12T15:00:00.000Z";
+    const REPRO_REASON = "Repro Lima: diana acordó con el cliente (12/10)";
+    /** El acuerdo «Mantener» que esperaba la caja, programado al recibirla. */
+    const received = (setAt: string, extra: Partial<NonNullable<ReproRow["program"]>> = {}, over: Partial<ReproRow> = {}) =>
+      reproRow({
+        agreement: agreement({ agreedOn: TODAY, materializedAt: setAt, materializedOn: TODAY }),
+        program: program(TODAY, { reason: REPRO_REASON, origin: "repro_lima", setAt, ...extra }),
+        receivedAt: RECEIVED,
+        box: { kind: "en_oficina", since: RECEIVED, courier: "propio" },
+        ...over,
+      });
+
+    it("milisegundos o segundos después de la recepción: en el anaquel de su día", () => {
+      for (const setAt of ["2026-10-12T15:00:00.180Z", "2026-10-12T15:00:04.000Z", "2026-10-12T15:01:30.000Z"]) {
+        const row = one(received(setAt));
+        expect(row.whereLine, setAt).toBe(RETRY_ANAQUEL("mar 13/10"));
+        expect(row.actionSource, setAt).toBe("acuerdo");
+      }
+    });
+
+    it("hasta 2 minutos justos; después, en la bandeja del día en que se recibió", () => {
+      expect(programmedAtReception({ origin: "repro_lima", setAt: "2026-10-12T15:02:00.000Z" }, RECEIVED)).toBe(true);
+      expect(programmedAtReception({ origin: "repro_lima", setAt: "2026-10-12T15:02:00.001Z" }, RECEIVED)).toBe(false);
+      expect(RECEPTION_PROGRAM_WINDOW_MS).toBe(120_000);
+      expect(one(received("2026-10-12T15:02:01.000Z")).whereLine).toBe(RETRY_TRAY("lun 12/10"));
+    });
+
+    it("una confirmación posterior (horas después) no la manda al anaquel, aunque el acuerdo se marcara después de recibirla", () => {
+      const row = one(received("2026-10-12T19:30:00.000Z"));
+      expect(row.whereLine).toBe(RETRY_TRAY("lun 12/10"));
+      // La marca del acuerdo sola no basta: manda cuándo se escribió el programa.
+      const marked = one(received("2026-10-12T19:30:00.000Z", {}, {
+        agreement: agreement({ agreedOn: TODAY, materializedAt: "2026-10-12T15:00:00.100Z", materializedOn: TODAY }),
+      }));
+      expect(marked.whereLine).toBe(RETRY_TRAY("lun 12/10"));
+    });
+
+    it("solo el programa de Repro Lima tiene la ventana: el de Despacho GF segundos después va a la bandeja", () => {
+      expect(programmedAtReception({ origin: "grupo_gf", setAt: "2026-10-12T15:00:05.000Z" }, RECEIVED)).toBe(false);
+      expect(programmedAtReception({ origin: "motorizado", setAt: "2026-10-12T15:00:05.000Z" }, RECEIVED)).toBe(false);
+      const row = one(received("2026-10-12T15:00:05.000Z", { reason: "Programado por Despacho GF", origin: "grupo_gf" }));
+      expect(row.whereLine).toBe(RETRY_TRAY("lun 12/10"));
+    });
+
+    it("el programa que ya existía al recibirla sigue mandándola al anaquel, sea de quien sea", () => {
+      expect(programmedAtReception({ origin: "grupo_gf", setAt: RECEIVED }, RECEIVED)).toBe(true);
+      expect(programmedAtReception({ origin: "repro_lima", setAt: "2026-10-12T14:59:59.000Z" }, RECEIVED)).toBe(true);
+    });
+
+    it("sin recepción, sin programa o sin fecha del programa, no", () => {
+      expect(programmedAtReception({ origin: "repro_lima", setAt: "2026-10-12T15:00:01.000Z" }, null)).toBe(false);
+      expect(programmedAtReception(null, RECEIVED)).toBe(false);
+      expect(programmedAtReception({ origin: "repro_lima", setAt: null }, RECEIVED)).toBe(false);
+    });
+
+    it("lo que se desarma nunca va al anaquel, aunque la recepción escribiera el programa", () => {
+      const row = one(received("2026-10-12T15:00:00.500Z", {}, {
+        agreement: null,
+        list: "cerrados",
+        closed: { caseId: "case-0", at: "2026-10-12T14:00:00Z", byName: "diana", note: null },
+      }));
+      expect(row.action).toBe("desarmar_cerrar");
+      expect(row.whereLine).toBe(RETRY_TRAY("lun 12/10"));
+    });
   });
 });
 

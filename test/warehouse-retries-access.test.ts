@@ -406,6 +406,112 @@ describe("el día 1 de producción, de punta a punta", () => {
   });
 });
 
+describe("«Ya en «Por armar»» con el caso todavía abierto", () => {
+  /**
+   * o9: su salida nueva lo llevó a «Por armar», pero nadie abrió Repro Lima
+   * todavía: el caso sigue abierto (Almacén no lo cierra). o10: la misma
+   * acción, pero el pedido sigue en la etapa: no es de «Por armar».
+   */
+  function openSeed(): Record<string, Row[]> {
+    const seed = daySeed();
+    seed.order_master!.push(
+      orderRow("o9", { macro_stage: "preparacion", macro_substage: "por_armar" }),
+      orderRow("o10"),
+    );
+    seed.orders!.push({ id: "o9", store_id: "s1", cancelled_at: null }, { id: "o10", store_id: "s1", cancelled_at: null });
+    seed.shipments!.push(
+      shipment("sh9", "o9", { delivery_status: "no_entregado" }),
+      shipment("sh9b", "o9", { output_number: 2, output_code: "o9-S02", preparation_state: "rotulo_generado", ready_at: null, created_at: "2026-10-13T13:30:00Z" }),
+      shipment("sh10", "o10"),
+    );
+    seed.lima_repro_cases!.push(
+      caseRow("case-9", "o9", {
+        agreement_call_id: "call-9", agreed_on: "2026-10-13", agreed_courier: "propio", box_action: "salida_nueva_rearmar",
+        decided_by: "u-diana", decided_at: "2026-10-12T21:00:00Z", opened_at: "2026-10-12T20:00:00Z",
+      }),
+      caseRow("case-10", "o10", {
+        agreement_call_id: "call-10", agreed_on: "2026-10-14", agreed_courier: "propio", box_action: "salida_nueva_rearmar",
+        decided_by: "u-diana", decided_at: "2026-10-12T21:00:00Z", opened_at: "2026-10-12T20:00:00Z",
+      }),
+    );
+    return seed;
+  }
+
+  it("se lista con el caso abierto, y el caso sigue abierto", async () => {
+    const { db, queries } = useDb(openSeed());
+    const data = await getWarehouseRetries(NOW);
+    expect(data.handoffs.map((row) => row.orderId)).toEqual(["o9", "o5"]);
+    expect(data.handoffs[0]).toMatchObject({
+      orderId: "o9", bucket: "hoy", day: "2026-10-13", overdue: false, action: "salida_nueva_rearmar",
+      line: HANDOFF_LINE_GF, salida: { code: "o9-S02", armed: false, readyAt: null },
+    });
+    // El que sigue en la etapa no es de «Por armar»: no sale aquí.
+    expect(data.handoffs.some((row) => row.orderId === "o10")).toBe(false);
+    expect(db.lima_repro_cases!.find((row) => row.id === "case-9")!.closed_at).toBeNull();
+    expect(writes(queries)).toEqual([]);
+  });
+
+  it("los abiertos se leen sin ventana de 14 días ni motivo de cierre; los cerrados, con ellos", async () => {
+    const { queries } = useDb(openSeed());
+    await getWarehouseRetries(NOW);
+    const open = queries.find((query) =>
+      query.table === "lima_repro_cases" &&
+      query.filters.some(([method, col]) => method === "in" && col === "box_action") &&
+      query.filters.some(([method, col]) => method === "is" && col === "closed_at"))!;
+    expect(open).toBeTruthy();
+    expect(open.filters).toEqual(expect.arrayContaining([
+      ["is", "closed_at", null],
+      ["not", "agreed_on", ["is", null]],
+      ["lte", "agreed_on", "2026-10-14"],
+      ["in", "box_action", ["salida_nueva_rearmar", "desarmar_rearmar", "caja_nueva_stock"]],
+    ]));
+    expect(open.filters.some(([, col]) => col === "close_reason")).toBe(false);
+    expect(open.filters.some(([method, col]) => method === "gte" && col === "closed_at")).toBe(false);
+    const closed = queries.find((query) => query.table === "lima_repro_cases" && query.filters.some(([, col]) => col === "close_reason"))!;
+    expect(closed.filters).toContainEqual(["gte", "closed_at", "2026-09-29T15:00:00.000Z"]);
+    expect(closed.filters.some(([method, col]) => method === "is" && col === "closed_at")).toBe(false);
+  });
+
+  it("solo el último caso del pedido: un caso cerrado anterior no se lista junto al abierto", async () => {
+    const seed = openSeed();
+    seed.lima_repro_cases!.push(caseRow("case-9-old", "o9", {
+      agreement_call_id: "call-9-old", agreed_on: "2026-10-12", agreed_courier: "propio", box_action: "desarmar_rearmar",
+      decided_by: "u-diana", decided_at: "2026-10-11T21:00:00Z", opened_at: "2026-10-11T14:00:00Z",
+      closed_at: "2026-10-12T14:00:00Z", close_reason: "fuera_de_etapa",
+    }));
+    useDb(seed);
+    const data = await getWarehouseRetries(NOW);
+    expect(data.handoffs.filter((row) => row.orderId === "o9")).toEqual([
+      expect.objectContaining({ action: "salida_nueva_rearmar", day: "2026-10-13" }),
+    ]);
+  });
+});
+
+describe("«Ya en «Por armar»»: el día es el del programa vigente, sea cual sea", () => {
+  it("si Grupo GF lo movió a después de mañana, no se lista (aunque el acuerdo sea de mañana)", async () => {
+    const seed = daySeed();
+    seed.gf_dispatch_programs!.push({ order_id: "o5", store_id: "s1", scheduled_for: "2026-10-16", reason: GF_REASON, set_at: "2026-10-13T14:30:00Z" });
+    const { queries } = useDb(seed);
+    const data = await getWarehouseRetries(NOW);
+    expect(data.handoffs).toEqual([]);
+    // El programa de los candidatos se lee sin filtro de fecha, por sus tiendas.
+    const live = queries.find((query) =>
+      query.table === "gf_dispatch_programs" && query.filters.some(([method, col]) => method === "in" && col === "order_id"))!;
+    expect(live).toBeTruthy();
+    expect(live.filters.some(([method]) => method === "lte" || method === "gte")).toBe(false);
+    expect(live.filters).toContainEqual(["in", "store_id", ["s1"]]);
+    expect(live.filters).toContainEqual(["in", "order_id", ["o5", "o6", "o7"]]);
+  });
+
+  it("con programa para hoy o un día pasado, manda el suyo", async () => {
+    const seed = daySeed();
+    seed.gf_dispatch_programs!.push({ order_id: "o5", store_id: "s1", scheduled_for: "2026-10-12", reason: GF_REASON, set_at: "2026-10-12T14:30:00Z" });
+    useDb(seed);
+    const data = await getWarehouseRetries(NOW);
+    expect(data.handoffs).toEqual([expect.objectContaining({ orderId: "o5", bucket: "hoy", day: "2026-10-12", overdue: true, dayLabel: "lun 12/10" })]);
+  });
+});
+
 describe("solo lee", () => {
   it("el motor de Repro Lima va con `closeStale: false`: ni escrituras, ni RPC, ni `after()`", async () => {
     const { queries, rpc, db } = useDb(daySeed());

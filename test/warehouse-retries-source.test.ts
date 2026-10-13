@@ -229,9 +229,22 @@ describe("el MOM lo documenta (§6.2, §9.3, §9.5)", () => {
     const pure = read("lib/warehouse-retries.ts");
     expect(s1c).toContain("Se leen hasta 300 pedidos, primero los de día más antiguo.");
     expect(access).toContain("export const RETRY_CANDIDATES_MAX = 300;");
-    expect(s1c).toContain("se cerró por dejar la etapa en los últimos 14 días");
+    expect(s1c).toContain("si el caso sigue abierto o se cerró por dejar la etapa en los últimos 14 días");
     expect(access).toContain("const HANDOFF_DAYS = 14;");
     expect(access).toContain('.eq("close_reason", "fuera_de_etapa")');
+    // Los abiertos también: Almacén no cierra casos (`closeStale: false`).
+    expect(s1c).toContain("El caso sigue abierto hasta que alguien abre Repro Lima, que es quien lo cierra: Almacén lee sin cerrar casos.");
+    expect(access).toContain('byStores<ReproCaseRow>((chunk) => handoffAgreements(chunk)\n      .is("closed_at", null)');
+    // El día de «Ya en «Por armar»»: el programa vigente, leído sin filtro de fecha.
+    expect(s1c).toContain("Su día es el del programa vigente de Grupo GF, sea cual sea su fecha; sin programa, el acordado. Si Grupo GF lo movió a después de mañana, no se lista.");
+    const handoffs = access.slice(access.indexOf("async function loadHandoffs("));
+    const live = handoffs.slice(handoffs.indexOf('.from("gf_dispatch_programs")'), handoffs.indexOf("]);"));
+    expect(live).toContain('.in("store_id", storeIds)');
+    expect(live).not.toMatch(/\.(lte|gte|lt|gt|eq)\("scheduled_for"/);
+    // La caja que la recepción misma programó va al anaquel: hasta 2 minutos.
+    expect(s1c).toContain("el programa es de Repro Lima y se escribió hasta 2 minutos después de la recepción");
+    expect(s1c).toContain("Un programa escrito más tarde (una confirmación posterior, «Programar ahora») no cuenta");
+    expect(pure).toContain("export const RECEPTION_PROGRAM_WINDOW_MS = 2 * 60_000;");
     expect(s1c).toContain("la del día en que se recibió, hasta 7 días");
     expect(pure).toContain("const TRAY_DAYS = 7;");
     expect(s1c).toContain("«Imprimir los 3 rótulos» los imprime juntos (hasta 200)");
@@ -250,6 +263,24 @@ describe("el MOM lo documenta (§6.2, §9.3, §9.5)", () => {
     // Se relee al volver a la pestaña tras 5 minutos; nunca tras cada escaneo.
     expect(s1c).toContain("al volver a la pestaña si pasaron 5 minutos o cambió el día. Nunca después de cada escaneo de armado.");
     expect(ui).toContain("5 * 60_000");
+  });
+
+  it("el segundo aviso del escáner solo sale si el escaneo de esa caja sale bien", () => {
+    expect(s1c).toContain("Si el escaneo de esa caja sale bien en Almacén (queda lista para despacho o ya lo estaba) y es de un reintento listado");
+    expect(s1c).toContain("Si el escaneo la rechaza, no hay segundo aviso, aunque la caja sea de un reintento listado.");
+    expect(s1c).toContain("Le pasa a la caja devuelta de otro courier (Tanders, Swayp): ya no está en custodia de la empresa y el escáner de Almacén no la arma.");
+    // La pista busca `result.shipment`, y `markShipmentReady` solo la devuelve
+    // cuando la caja queda lista o ya lo estaba: ningún rechazo trae la salida.
+    expect(read("components/warehouse-station.tsx")).toContain("setRetryHint(retryScanHint(retries, result.shipment?.order_id));");
+    const scan = body(read("app/dashboard/pedidos/despacho/actions.ts"), "export async function markShipmentReady(");
+    const returns = scan.match(/return \{[^;]*\};/g) ?? [];
+    expect(returns.length).toBeGreaterThan(0);
+    for (const ret of returns) {
+      if (ret.startsWith("return { error")) expect(ret, ret).not.toContain("shipment }");
+      else expect(ret, ret).toMatch(/^return \{ notice: .*, shipment \};$/);
+    }
+    // La caja que ya no está en custodia de la empresa (la de otro courier que volvió) se rechaza.
+    expect(scan).toMatch(/if \(shipment\.custody_state !== "empresa"\) \{[\s\S]*?return \{ error:/);
   });
 
   it("dice dónde vive (Implementación y Pruebas)", () => {

@@ -40,7 +40,7 @@ export const WAREHOUSE_NO_PERMISSION = "No tienes acceso al almacén.";
 export const RETRY_CANDIDATES_MAX = 300;
 /** De cuántos en cuántos se leen con el motor de Repro Lima. */
 const RETRY_CHUNK = 100;
-/** Hasta cuándo se mira un acuerdo que ya dejó la etapa («Ya en «Por armar»»). */
+/** Hasta cuándo se mira un acuerdo cerrado por dejar la etapa («Ya en «Por armar»»); el abierto, siempre. */
 const HANDOFF_DAYS = 14;
 const DAY_MS = 86_400_000;
 
@@ -90,11 +90,22 @@ async function loadRetries(admin: ReturnType<typeof createAdminSupabase>, scope:
   const byStores = <T>(read: (chunk: string[]) => Read<T>): Promise<T[]> =>
     courierRowsByIds(storeIds, read).then((result) => result.data);
 
+  // Los acuerdos con salida nueva hasta mañana: los candidatos de «Ya en «Por
+  // armar»». Su pedido se filtra después (`loadHandoffs`).
+  const handoffAgreements = (chunk: string[]) => admin
+    .from("lima_repro_cases")
+    .select(REPRO_CASE_COLUMNS)
+    .in("store_id", chunk)
+    .not("agreed_on", "is", null)
+    .lte("agreed_on", tomorrow)
+    .in("box_action", [...HANDOFF_BOX_ACTIONS]);
+
   // Oleada 1: programas hasta mañana (lo vencido incluido), acuerdos abiertos
-  // para hoy o mañana, acuerdos que ya dejaron la etapa, tiendas y el corte.
+  // para hoy o mañana, acuerdos que pudieron dejar la etapa (con el caso
+  // abierto o cerrado por eso), tiendas y el corte.
   // El corte es el del proveedor de la primera tienda, como Repro Lima, y nunca
   // fijo (D6): se lee solo para las organizaciones de esas tiendas.
-  const [programs, openCases, handoffCases, { visibleStores, headerCutoff }] = await Promise.all([
+  const [programs, openCases, openHandoffCases, closedHandoffCases, { visibleStores, headerCutoff }] = await Promise.all([
     byStores<{ order_id: string; scheduled_for: string }>((chunk) => admin
       .from("gf_dispatch_programs")
       .select("order_id,scheduled_for")
@@ -107,14 +118,14 @@ async function loadRetries(admin: ReturnType<typeof createAdminSupabase>, scope:
       .is("closed_at", null)
       .gte("agreed_on", today)
       .lte("agreed_on", tomorrow) as unknown as Read<{ order_id: string; agreed_on: string }>),
-    byStores<ReproCaseRow>((chunk) => admin
-      .from("lima_repro_cases")
-      .select(REPRO_CASE_COLUMNS)
-      .in("store_id", chunk)
+    // Abiertos: Almacén lee sin cerrar casos (`closeStale: false`), así que el
+    // caso de un pedido que su salida nueva ya llevó a «Por armar» sigue abierto
+    // hasta que alguien abra Repro Lima.
+    byStores<ReproCaseRow>((chunk) => handoffAgreements(chunk)
+      .is("closed_at", null) as unknown as Read<ReproCaseRow>),
+    // Cerrados por dejar la etapa, en los últimos 14 días.
+    byStores<ReproCaseRow>((chunk) => handoffAgreements(chunk)
       .eq("close_reason", "fuera_de_etapa")
-      .not("agreed_on", "is", null)
-      .lte("agreed_on", tomorrow)
-      .in("box_action", [...HANDOFF_BOX_ACTIONS])
       .gte("closed_at", new Date(now.getTime() - HANDOFF_DAYS * DAY_MS).toISOString()) as unknown as Read<ReproCaseRow>),
     courierRowsByIds(storeIds, (chunk) => admin.from("stores").select("id,name,org_id").in("id", chunk) as unknown as Read<{ id: string; name: string; org_id: string }>)
       .then(async ({ data }) => {
@@ -135,6 +146,8 @@ async function loadRetries(admin: ReturnType<typeof createAdminSupabase>, scope:
       }),
   ]);
   const storeName = new Map(visibleStores.map((store) => [store.id, store.name]));
+  // Los candidatos de «Ya en «Por armar»», una vez cada caso.
+  const handoffCases = [...new Map([...openHandoffCases, ...closedHandoffCases].map((row) => [row.id, row])).values()];
 
   // Los pedidos de la etapa: los de un programa y los de un acuerdo, una vez
   // cada uno, lo más antiguo primero, con tope.
@@ -155,7 +168,7 @@ async function loadRetries(admin: ReturnType<typeof createAdminSupabase>, scope:
   const [reproRows, handoffs] = await Promise.all([
     Promise.all(chunks.map((orderIds) => loadReproLima(admin, scope, now, { orderIds, closeStale: false })))
       .then((pages) => pages.flatMap((page) => page.rows)),
-    loadHandoffs(admin, storeIds, handoffCases, { programs, storeName, today }),
+    loadHandoffs(admin, storeIds, handoffCases, { storeName, today }),
   ]);
 
   // Oleada 3: la dirección y el armado de la salida propia, para su chapa.
@@ -188,21 +201,25 @@ async function loadRetries(admin: ReturnType<typeof createAdminSupabase>, scope:
 
 /**
  * Los acuerdos que ya dejaron la etapa porque nació su salida nueva y el pedido
- * está en «Preparación · Por armar». Solo el último caso del pedido (por
- * apertura, como las chapas de la cola de Despacho del día) y solo con su
- * salida nueva, si se encuentra. No se cuentan: los cuenta «Por armar».
+ * está en «Preparación · Por armar», con el caso aún abierto o cerrado por
+ * dejar la etapa. Solo el último caso del pedido (por apertura, como las
+ * chapas de la cola de Despacho del día) y solo con su salida nueva, si se
+ * encuentra. El día es el del programa vigente, leído aquí sin filtro de
+ * fecha: si Grupo GF lo movió a después de mañana, no se lista. No se
+ * cuentan: los cuenta «Por armar».
  */
 async function loadHandoffs(
   admin: ReturnType<typeof createAdminSupabase>,
   storeIds: string[],
   candidates: readonly ReproCaseRow[],
-  ctx: { programs: ReadonlyArray<{ order_id: string; scheduled_for: string }>; storeName: ReadonlyMap<string, string>; today: string },
+  ctx: { storeName: ReadonlyMap<string, string>; today: string },
 ): Promise<WarehouseHandoffRow[]> {
   const orderIds = [...new Set(candidates.map((row) => row.order_id))];
   if (!orderIds.length) return [];
   type HandoffOrder = { order_id: string; store_id: string; order_name: string | null; customer_name: string | null; district: string | null; macro_stage: string | null; macro_substage: string | null };
   type CaseStamp = { order_id: string; id: string; opened_at: string };
-  const [orders, cases, shipments] = await Promise.all([
+  type HandoffProgram = { order_id: string; scheduled_for: string };
+  const [orders, cases, shipments, programs] = await Promise.all([
     courierRowsByIds(orderIds, (chunk) => admin
       .from("order_master")
       .select("order_id,store_id,order_name,customer_name,district,macro_stage,macro_substage")
@@ -220,6 +237,12 @@ async function loadHandoffs(
       .select("id,order_id,courier,output_code,output_number,preparation_state,ready_at,created_at,delivery_status")
       .in("store_id", storeIds)
       .in("order_id", chunk) as unknown as Read<HandoffShipment>).then((result) => result.data),
+    // El programa vigente, sea cual sea su día (el de la oleada 1 llega hasta mañana).
+    courierRowsByIds(orderIds, (chunk) => admin
+      .from("gf_dispatch_programs")
+      .select("order_id,scheduled_for")
+      .in("store_id", storeIds)
+      .in("order_id", chunk) as unknown as Read<HandoffProgram>).then((result) => result.data),
   ]);
   const orderById = new Map(orders
     .filter((row) => row.macro_stage === "preparacion" && row.macro_substage === "por_armar")
@@ -234,7 +257,7 @@ async function loadHandoffs(
     if (!row.order_id) continue;
     shipmentsByOrder.set(row.order_id, [...(shipmentsByOrder.get(row.order_id) ?? []), row]);
   }
-  const programDay = new Map(ctx.programs.map((row) => [row.order_id, row.scheduled_for.slice(0, 10)]));
+  const programDay = new Map(programs.map((row) => [row.order_id, row.scheduled_for.slice(0, 10)]));
 
   const out: WarehouseHandoffRow[] = [];
   for (const c of candidates) {

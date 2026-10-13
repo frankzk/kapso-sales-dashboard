@@ -2623,8 +2623,14 @@ Decisiones del owner sobre el diseño de la entrega 1c (13-10-2026):
 - **Dónde está la caja.** La chapa de Repro Lima («Con Roy desde lun 12/10»,
   «Vuelve con Tanders» o, en rojo, «No consta dónde está la caja»). Con la
   caja en oficina, además:
-  - «Debería estar en el anaquel del jue 15/10» si ya tenía su programa cuando
-    se recibió;
+  - «Debería estar en el anaquel del jue 15/10» si tenía su programa cuando se
+    recibió: el programa ya existía antes de la recepción, o lo escribió la
+    recepción misma («Recibir en oficina» programa el acuerdo que esperaba la
+    caja, §29.13, y lo escribe segundos después de registrarla). Esto último
+    se reconoce porque el programa es de Repro Lima y se escribió hasta 2
+    minutos después de la recepción. Un programa escrito más tarde (una
+    confirmación posterior, «Programar ahora») no cuenta, aunque sea del mismo
+    acuerdo: la caja sigue en su bandeja;
   - si no, «En el estante · bandeja del lun 12/10», la del día en que se
     recibió, hasta 7 días;
   - sin recepción registrada o con más de 7 días, «En el estante · bandeja
@@ -2666,9 +2672,13 @@ Decisiones del owner sobre el diseño de la entrega 1c (13-10-2026):
     rearmar o caja nueva desde stock) deja la etapa y su salida se arma en
     «Por armar» (§6.2).
   - La fila sigue aquí, sin contarse («Se cuentan en «Por armar».»), si el
-    caso se cerró por dejar la etapa en los últimos 14 días, es el último del
-    pedido, el pedido está en «Preparación · Por armar» y su día es hoy, uno
-    que pasó o mañana.
+    caso sigue abierto o se cerró por dejar la etapa en los últimos 14 días,
+    es el último del pedido, el pedido está en «Preparación · Por armar» y su
+    día es hoy, uno que pasó o mañana. El caso sigue abierto hasta que alguien
+    abre Repro Lima, que es quien lo cierra: Almacén lee sin cerrar casos.
+  - Su día es el del programa vigente de Grupo GF, sea cual sea su fecha; sin
+    programa, el acordado. Si Grupo GF lo movió a después de mañana, no se
+    lista.
   - Dice lo que se hace con la caja del estante: «Pega el rótulo de la salida
     nueva encima del anterior, tapando su QR, y escanéala.» (Grupo GF), «Rearma
     la caja del estante con la etiqueta de Tanders y retira la vieja.»,
@@ -2686,9 +2696,15 @@ Decisiones del owner sobre el diseño de la entrega 1c (13-10-2026):
     imprime juntos (hasta 200).
   - «REIMPRESO dd-mm» se escribe a mano. Imprimir no deja evento.
 - **Escáner.** Uno solo. Arma como siempre (`markShipmentReady`, una vez por
-  escaneo) y, con la caja de un reintento listado, también de «Ya en «Por
-  armar»», un segundo aviso dice qué hacer con ella, en rojo si es «Desarmar y
-  cerrar». No confirma que la caja está en el anaquel.
+  escaneo). Si el escaneo de esa caja sale bien en Almacén (queda lista para
+  despacho o ya lo estaba) y es de un reintento listado, también de «Ya en
+  «Por armar»», un segundo aviso dice qué hacer con ella, en rojo si es
+  «Desarmar y cerrar».
+  - Si el escaneo la rechaza, no hay segundo aviso, aunque la caja sea de un
+    reintento listado.
+  - Le pasa a la caja devuelta de otro courier (Tanders, Swayp): ya no está en
+    custodia de la empresa y el escáner de Almacén no la arma.
+  - El aviso no confirma que la caja está en el anaquel.
 - **Horas de Almacén** (plan del 11-10-2026):
   - 07:30-09:30 cuenta el anaquel de hoy contra «Hoy»;
   - 12:00-12:30 última revisión (lo programado hasta el corte sale con Alexis
