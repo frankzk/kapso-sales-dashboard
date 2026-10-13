@@ -447,6 +447,17 @@ function mismoCourier(a: string, b: string): boolean {
   return canon(a) === canon(b);
 }
 
+/**
+ * ¿Es el mismo courier? La comparación canónica: `swayp` = `fenix`,
+ * `axel courier` = `axel`, `motorizado propio` = `propio`. `courierKey` solo
+ * no basta (lib/gf-tanders-review.ts escribe `swayp`). Vacío o nulo no es
+ * ningún courier: nunca es el mismo que otro.
+ */
+export function sameCourier(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a?.trim() || !b?.trim()) return false;
+  return mismoCourier(a, b);
+}
+
 export type PuertaDeSalidaAdicional =
   | { ok: true; estorban: SalidaExistente[]; motivo: string | null }
   | { ok: false; error: string; estorban: SalidaExistente[]; pideMotivo: boolean };

@@ -132,7 +132,7 @@ import {
 import { avisoSinVinculoSwayp, normalizeSku, productosSinVinculo } from "@/lib/swayp-productos";
 import { cargarMapaSwayp, cargarMapaSwaypDeOrg } from "@/lib/swayp-sku-map";
 import { NOVELTY_ACTIONS, buildNoveltySolution, noveltyActionIsReturn } from "@/lib/swayp-novelty";
-import { getMasterPermissions } from "@/lib/permissions-access";
+import { getMasterPermissions, orgsWithPermission } from "@/lib/permissions-access";
 import {
   createFenixGuideViaApi,
   DIRECT_GUIDE_ORDER_COLUMNS,
@@ -236,6 +236,19 @@ async function syncMasterForShipment(
   );
   revalidatePath("/dashboard/pedidos");
 }
+
+/**
+ * Escribir en un envío —reservarlo, registrar una gestión, cambiar su estado o
+ * su dirección, crear o vincular una guía— es gestionar el pedido: pide
+ * `master.edit`, lo mismo que el Master pide para esos mismos hechos (MOM §16).
+ * Ver el envío (RLS, `authorizeShipment`) no alcanza: quien es de solo lectura
+ * lo ve y no lo toca. Al abrirlo, la reserva le rebota con este mensaje y el
+ * panel queda bloqueado.
+ */
+async function canManageShipments(): Promise<boolean> {
+  return (await getMasterPermissions()).can("master.edit");
+}
+const READ_ONLY_SHIPMENTS = "Tu rol no permite gestionar envíos.";
 
 async function authorizeShipment(
   shipmentId: string,
@@ -385,13 +398,14 @@ export async function loadShipmentDetail(
   };
 }
 
-/** Editar la nota (texto libre) de una gestión del historial. Cualquiera con
- *  acceso a la guía puede editarla; deja traza de quién y cuándo la modificó.
+/** Editar la nota (texto libre) de una gestión del historial. Cualquiera que
+ *  vea la guía y gestione envíos puede editarla; deja traza de quién y cuándo.
  *  Solo cambia la nota — nunca el estado, la fecha ni el tipo de gestión. */
 export async function updateShipmentCallNote(
   callId: string,
   note: string,
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const sb = await createServerSupabase();
   const {
     data: { user },
@@ -447,6 +461,7 @@ export async function searchOrdersToLink(query: string): Promise<OrderLinkCandid
 
 /** Claim a shipment (one at a time). Succeeds if free, stale, or already mine. */
 export async function claimShipment(shipmentId: string): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
   const admin = createAdminSupabase();
@@ -474,6 +489,7 @@ export async function claimShipment(shipmentId: string): Promise<ShipmentActionS
 
 /** Keep an existing reservation alive while its drawer remains open. */
 export async function renewShipmentClaim(shipmentId: string): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
   const admin = createAdminSupabase();
@@ -525,6 +541,7 @@ export async function registerRerouteCall(
     forceAliclik?: boolean;
   },
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
   const admin = createAdminSupabase();
@@ -826,6 +843,7 @@ export async function registerRecoveryCall(
     nextFollowupAt?: string | null;
   },
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
   const admin = createAdminSupabase();
@@ -940,6 +958,7 @@ export async function updateShipmentDeliveryAddress(
   shipmentId: string,
   input: ShipmentAddressInput,
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
 
@@ -1096,6 +1115,7 @@ export async function registerCourierReportResult(
     note?: string | null;
   },
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a esta guía." };
 
@@ -1210,6 +1230,7 @@ export async function setShipmentStatus(
   status: string,
   note?: string,
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso." };
   if (!isValidStatus(status)) return { error: "Estado inválido." };
@@ -1244,6 +1265,7 @@ export async function reprogramCancelledShipmentException(
   shipmentId: string,
   input: { nextFollowupAt?: string | null; note?: string | null },
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a esta guía." };
 
@@ -1271,6 +1293,7 @@ export async function createFenixGuide(
   shipmentId: string,
   input: { guideCode: string; nextFollowupAt?: string | null },
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso." };
 
@@ -1511,6 +1534,7 @@ export async function previewDirectFenixGuide(input: {
   orderGid?: string;
   storeId?: string;
 }): Promise<DirectFenixGuidePreview | { error: string }> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const sb = await createServerSupabase();
   const {
     data: { user },
@@ -1692,6 +1716,7 @@ export async function createDirectFenixGuide(input: {
    */
   origen?: "por_confirmar";
 }): Promise<ShipmentActionState & { shipmentId?: string }> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const sb = await createServerSupabase();
   const {
     data: { user },
@@ -2008,6 +2033,7 @@ export async function resolveShipmentMatch(
   shipmentId: string,
   input: { orderId?: string | null },
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
   const admin = createAdminSupabase();
@@ -2119,6 +2145,7 @@ export async function linkShipmentToShopifyOrder(
   orderGid: string,
   storeId: string,
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
   const sb = await createServerSupabase();
@@ -2176,11 +2203,9 @@ export async function processSuggestionBatch(): Promise<
     data: { user },
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
-  const { data: mem } = await sb.from("memberships").select("org_id,role");
-  const adminOrg = ((mem as { org_id: string; role: string }[]) ?? []).find(
-    (m) => m.role === "owner" || m.role === "admin",
-  );
-  if (!adminOrg) return { error: "Solo un administrador puede ejecutar el emparejamiento automático." };
+  // Quien tenga el permiso, no solo owner/admin (MOM §16, 12-10-2026).
+  const adminOrg = (await orgsWithPermission("stores.manage"))[0];
+  if (!adminOrg) return { error: "Tu rol no permite ejecutar el emparejamiento automático (lo hace «Administración»)." };
 
   const stores = await getAccessibleStores();
   const storeIds = stores.map((s) => s.id);
@@ -2195,6 +2220,7 @@ export async function processSuggestionBatch(): Promise<
  * Revisión, still searchable manually via OrderLinkPicker underneath.
  */
 export async function clearShipmentSuggestion(shipmentId: string): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
   const admin = createAdminSupabase();
@@ -2255,11 +2281,9 @@ export async function upsertFenixStock(input: {
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
   // resolve the caller's admin org (first one)
-  const { data: mem } = await sb.from("memberships").select("org_id,role");
-  const adminOrg = ((mem as { org_id: string; role: string }[]) ?? []).find(
-    (m) => m.role === "owner" || m.role === "admin",
-  );
-  if (!adminOrg) return { error: "Solo un administrador puede editar el stock." };
+  // Quien tenga el permiso, no solo owner/admin (MOM §16, 12-10-2026).
+  const adminOrg = (await orgsWithPermission("stock.manage"))[0];
+  if (!adminOrg) return { error: "Tu rol no permite editar el stock." };
 
   const city = input.city.trim().toLowerCase();
   const product = input.product.trim();
@@ -2348,11 +2372,9 @@ export async function importarInventarioSwayp(
     data: { user },
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
-  const { data: mem } = await sb.from("memberships").select("org_id,role");
-  const adminOrg = ((mem as { org_id: string; role: string }[]) ?? []).find(
-    (m) => m.role === "owner" || m.role === "admin",
-  );
-  if (!adminOrg) return { error: "Solo un administrador puede importar el stock." };
+  // Quien tenga el permiso, no solo owner/admin (MOM §16, 12-10-2026).
+  const adminOrg = (await orgsWithPermission("stock.manage"))[0];
+  if (!adminOrg) return { error: "Tu rol no permite importar el stock." };
 
   const file = formData.get("archivo");
   if (!(file instanceof File) || file.size === 0) {
@@ -2502,11 +2524,9 @@ async function prepararSyncSwayp(
     data: { user },
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
-  const { data: mem } = await sb.from("memberships").select("org_id,role");
-  const adminOrg = ((mem as { org_id: string; role: string }[]) ?? []).find(
-    (m) => m.role === "owner" || m.role === "admin",
-  );
-  if (!adminOrg) return { error: "Solo un administrador puede sincronizar el stock." };
+  // Quien tenga el permiso, no solo owner/admin (MOM §16, 12-10-2026).
+  const adminOrg = (await orgsWithPermission("stock.manage"))[0];
+  if (!adminOrg) return { error: "Tu rol no permite sincronizar el stock." };
 
   // Un «Bearer » pegado de más duplicaría el prefijo y Swayp respondería 403.
   const token = (input.token ?? "").trim().replace(/^bearer\s+/i, "");
@@ -2637,11 +2657,9 @@ export async function swaypInventoryEstado(): Promise<SwaypSyncEstado | { error:
     data: { user },
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
-  const { data: mem } = await sb.from("memberships").select("org_id,role");
-  const adminOrg = ((mem as { org_id: string; role: string }[]) ?? []).find(
-    (m) => m.role === "owner" || m.role === "admin",
-  );
-  if (!adminOrg) return { error: "Solo un administrador puede ver el sync de Swayp." };
+  // Quien tenga el permiso, no solo owner/admin (MOM §16, 12-10-2026).
+  const adminOrg = (await orgsWithPermission("stock.manage"))[0];
+  if (!adminOrg) return { error: "Tu rol no permite ver el sync de Swayp." };
 
   const auto = fuenteAutomaticaDesdeEnv();
   const { data } = await createAdminSupabase()
@@ -2660,8 +2678,11 @@ export async function swaypInventoryEstado(): Promise<SwaypSyncEstado | { error:
 
 /** Delete a Swayp stock row (admin). */
 export async function deleteFenixStock(id: string): Promise<ShipmentActionState> {
-  const sb = await createServerSupabase();
-  const { error } = await sb.from("fenix_stock").delete().eq("id", id);
+  // Con el permiso y no por RLS de admin: quien edita el stock por su rol
+  // (Despacho, Administración) también lo borra, solo en sus organizaciones.
+  const orgIds = (await orgsWithPermission("stock.manage")).map((m) => m.org_id);
+  if (!orgIds.length) return { error: "Tu rol no permite editar el stock." };
+  const { error } = await createAdminSupabase().from("fenix_stock").delete().eq("id", id).in("org_id", orgIds);
   if (error) return { error: errorDeBase(error, "borrar el stock Swayp") };
   const sync = await recomputeFenixEligibility();
   revalidatePath("/dashboard/envios/stock");
@@ -2691,11 +2712,9 @@ export async function recordFenixStockMovement(input: {
     data: { user },
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
-  const { data: mem } = await sb.from("memberships").select("org_id,role");
-  const adminOrgs = ((mem as { org_id: string; role: string }[]) ?? [])
-    .filter((m) => m.role === "owner" || m.role === "admin")
-    .map((m) => m.org_id);
-  if (!adminOrgs.length) return { error: "Solo un administrador puede mover el stock." };
+  // Quien tenga el permiso, no solo owner/admin (MOM §16, 12-10-2026).
+  const adminOrgs = (await orgsWithPermission("stock.manage")).map((m) => m.org_id);
+  if (!adminOrgs.length) return { error: "Tu rol no permite mover el stock." };
 
   const admin = createAdminSupabase();
   const { data: stock } = await admin
@@ -2789,11 +2808,9 @@ export async function recomputeFenixEligibility(): Promise<
     data: { user },
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
-  const { data: mem } = await sb.from("memberships").select("org_id,role");
-  const adminOrg = ((mem as { org_id: string; role: string }[]) ?? []).find(
-    (m) => m.role === "owner" || m.role === "admin",
-  );
-  if (!adminOrg) return { error: "Solo un administrador puede recalcular la elegibilidad." };
+  // Quien tenga el permiso, no solo owner/admin (MOM §16, 12-10-2026).
+  const adminOrg = (await orgsWithPermission("stock.manage"))[0];
+  if (!adminOrg) return { error: "Tu rol no permite recalcular la elegibilidad." };
 
   const stores = (await getAccessibleStores()).filter((s) => s.org_id === adminOrg.org_id);
   const storeIds = stores.map((s) => s.id);

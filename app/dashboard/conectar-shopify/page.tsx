@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
+import { orgsWithPermission } from "@/lib/permissions-access";
 import {
   PENDING_INSTALL_COOKIE,
   pendingInstallUsable,
@@ -53,18 +54,19 @@ export default async function ConectarShopifyPage({
   const {
     data: { user },
   } = await sb.auth.getUser();
+  // Donde puede crear tiendas: «Administrar tiendas» (MOM §16).
+  const allowed = new Set((await orgsWithPermission("stores.manage")).map((m) => m.org_id));
   const { data: memberships } = user
     ? await sb
         .from("memberships")
         .select("org_id, organizations(name)")
         .eq("user_id", user.id)
-        .in("role", ["owner", "admin"])
         // La más reciente primero: la que se acaba de crear abajo queda elegida.
         .order("created_at", { ascending: false })
     : { data: [] };
-  const orgs = ((memberships ?? []) as unknown as { org_id: string; organizations: { name: string } | null }[]).map(
-    (m) => ({ id: m.org_id, name: m.organizations?.name ?? m.org_id }),
-  );
+  const orgs = ((memberships ?? []) as unknown as { org_id: string; organizations: { name: string } | null }[])
+    .filter((m) => allowed.has(m.org_id))
+    .map((m) => ({ id: m.org_id, name: m.organizations?.name ?? m.org_id }));
 
   return (
     <div className="space-y-6">

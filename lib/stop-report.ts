@@ -11,6 +11,9 @@ import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { isReturningOwnOutput, OUTPUT_REPLACED_KIND, replacedOutputIds, type ReturningOutputLike } from "@/lib/gf-replaced-output";
 import { reportedCollection } from "@/lib/route-collection";
 import { loadRouteCollectionBalances } from "@/lib/route-collection-access";
+import { rescheduleDateProblem } from "@/lib/gf-dispatch-program";
+import { programDayLabel } from "@/lib/dispatch-day";
+import { limaTodayKey } from "@/lib/shipments";
 import {
   isNonDeliveryReason,
   isPaymentMethod,
@@ -44,6 +47,12 @@ export interface WriteStopReportInput {
    * `actor` y en la actividad del pedido.
    */
   notebook?: { riderName: string; importId: string } | null;
+  /**
+   * Fecha que pidió el cliente (YYYY-MM-DD, Lima; MOM §9.5, 12-10-2026).
+   * undefined conserva; null borra; solo con no_entregado·reprogramado. Es
+   * informativa: nunca programa la salida; la tienda la confirma en Repro Lima.
+   */
+  requestedDate?: string | null;
 }
 
 export type WriteStopReportResult =
@@ -87,6 +96,15 @@ export async function writeStopReport(admin: SupabaseClient, input: WriteStopRep
     }
   }
   const reason = isNonDeliveryReason(input.outcomeReason) ? input.outcomeReason : null;
+  // La fecha que pidió el cliente solo vive con «Reprogramado por el cliente»
+  // (CHECK delivery_stops_requested_date_ck); con otro resultado se borra. Se
+  // valida ANTES de escribir: una fecha mala no deja el reporte a medias.
+  const keeps = input.status === "no_entregado" && reason === "reprogramado";
+  const requestedDate = input.requestedDate === undefined ? undefined : input.requestedDate?.trim() || null;
+  if (keeps && requestedDate) {
+    const problem = rescheduleDateProblem(requestedDate, limaTodayKey());
+    if (problem) return { ok: false, error: problem };
+  }
   const photoPath = input.photoPath ?? stop.photo_path;
   const voucherPath = input.voucherPath ?? stop.voucher_path;
   const notebook = input.notebook ?? null;
@@ -132,6 +150,7 @@ export async function writeStopReport(admin: SupabaseClient, input: WriteStopRep
       written_payment: input.writtenPayment ?? null,
       reported_at: input.status === "pendiente" ? null : now,
       reported_by: input.status === "pendiente" || notebook ? null : input.actor,
+      ...(keeps ? (requestedDate === undefined ? {} : { requested_date: requestedDate }) : { requested_date: null }),
       updated_at: now,
     })
     .eq("id", input.stopId);
@@ -175,6 +194,7 @@ export async function writeStopReport(admin: SupabaseClient, input: WriteStopRep
       voucherPath,
       delegated: Boolean(input.delegated),
       notebook,
+      requestedDate: keeps && requestedDate ? requestedDate : null,
     }).catch(() => undefined);
   }
   if (unconfirmed && pickup) {
@@ -318,6 +338,8 @@ async function writeStopReportedEvent(
     method: string | null; collected: number | null; reason: string | null; note: string | null;
     photoPath: string | null; voucherPath: string | null; delegated: boolean;
     notebook?: { riderName: string; importId: string } | null;
+    /** La fecha que pidió el cliente, solo cuando este reporte la trae. */
+    requestedDate?: string | null;
   },
 ): Promise<void> {
   const [{ data: stopRow }, { data: rider }] = await Promise.all([
@@ -335,6 +357,8 @@ async function writeStopReportedEvent(
   } else {
     const reason = NON_DELIVERY_REASONS.find((r) => r.code === ev.reason)?.label ?? ev.reason ?? "sin motivo";
     parts.push(`No entregado · ${reason}`);
+    // Lo que dijo el cliente en la puerta: nunca programa (MOM §9.5).
+    if (ev.requestedDate) parts.push(`pidió el ${programDayLabel(ev.requestedDate)} (sin confirmar)`);
   }
   const evidence = [ev.photoPath ? "foto" : null, ev.voucherPath ? "comprobante" : null].filter(Boolean).join(" y ");
   if (evidence) parts.push(`con ${evidence}`);
@@ -354,6 +378,7 @@ async function writeStopReportedEvent(
       stop_id: ev.stopId, route_id: ev.routeId, status: ev.status, payment_method: ev.method,
       collected_amount: ev.collected, outcome_reason: ev.reason, photo_path: ev.photoPath, voucher_path: ev.voucherPath,
       ...(ev.notebook ? { origen: "cuaderno", notebook_import_id: ev.notebook.importId } : {}),
+      ...(ev.requestedDate ? { requested_date: ev.requestedDate } : {}),
     },
   });
 }

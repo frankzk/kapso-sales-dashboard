@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { getAccessibleStores, getAdminOrgs } from "@/lib/access";
-import { getMasterPermissions } from "@/lib/permissions-access";
+import { getMasterPermissions, hasOrgPermission } from "@/lib/permissions-access";
 import { DEFAULT_CONFIRMATION_CYCLE_DAYS } from "@/lib/order-confirmation";
 import {
   MASTER_PAGE_SIZE,
@@ -116,11 +116,12 @@ async function PedidosContent({
     : emptyConfirmationQueueCounts().due;
   const managementDayCounts = confirmationCounts.managementDays;
 
-  // Owner o admin de la organización de la tienda: el ciclo reparte la carga de
-  // todo el equipo, así que se ve siempre pero solo lo mueve quien manda ahí.
-  const adminOrgIds = new Set(
-    adminOrgs.filter((o) => o.role === "owner" || o.role === "admin").map((o) => o.org_id),
-  );
+  // Quien administra la tienda («Administrar tiendas», MOM §16): el ciclo reparte
+  // la carga de todo el equipo, así que se ve siempre pero solo lo mueve quien
+  // manda ahí.
+  const cycleOrgs = [...new Set(adminOrgs.map((o) => o.org_id))];
+  const cycleAllowed = await Promise.all(cycleOrgs.map((orgId) => hasOrgPermission(orgId, "stores.manage")));
+  const adminOrgIds = new Set(cycleOrgs.filter((_, i) => cycleAllowed[i]));
   const confirmationCycles = showConfirmation
     ? stores.map((s) => ({
         storeId: s.id,

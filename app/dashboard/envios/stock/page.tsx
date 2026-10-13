@@ -1,5 +1,6 @@
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
-import { getAccessibleStores, getAdminOrgs } from "@/lib/access";
+import { getAccessibleStores } from "@/lib/access";
+import { getMasterPermissions } from "@/lib/permissions-access";
 import { EmptyState } from "@/components/ui";
 import { FenixStockEditor, type SyncResumen } from "@/components/fenix-stock";
 import { buildFenixDemand, type DemandShipment } from "@/lib/fenix-demand";
@@ -26,8 +27,8 @@ export default async function FenixStockPage() {
     .order("product");
   const rows = (data as FenixStockRowDb[]) ?? [];
 
-  const adminOrgs = await getAdminOrgs();
-  const canEdit = adminOrgs.some((m) => m.role === "owner" || m.role === "admin");
+  // Con «Stock de couriers», no solo owner/admin (MOM §16, 12-10-2026).
+  const canEdit = (await getMasterPermissions()).can("stock.manage");
 
   if (!rows.length && !canEdit) {
     return <EmptyState title="Sin stock de Swayp registrado" />;

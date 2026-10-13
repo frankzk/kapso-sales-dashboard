@@ -1,10 +1,10 @@
 import { redirect } from "next/navigation";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
-import { getUserRoleSummary } from "@/lib/access";
 import { EmptyState } from "@/components/ui";
 import { TeamManager, type TeamMember, type RiderRow } from "@/components/team";
 import type { Role } from "@/lib/types";
-import { GRANTED_ONE_BY_ONE, permissionsFor } from "@/lib/permissions";
+import { GRANTED_ONE_BY_ONE, PERMISSIONS, PERMISSION_LABEL, permissionsFor } from "@/lib/permissions";
+import { hasOrgPermission } from "@/lib/permissions-access";
 import { getAdvisorSchedules } from "@/lib/advisor-schedules";
 
 export const dynamic = "force-dynamic";
@@ -14,7 +14,6 @@ export default async function TeamPage({
 }: {
   searchParams: Promise<{ org?: string; tab?: string; user?: string }>;
 }) {
-  if ((await getUserRoleSummary()).isVendedoraOnly) redirect("/dashboard/leads");
   const sp = await searchParams;
   const sb = await createServerSupabase();
   const {
@@ -30,10 +29,14 @@ export default async function TeamPage({
     .from("memberships")
     .select("org_id, role, organizations(name)")
     .eq("user_id", user?.id ?? "");
+  // Donde la persona gestiona el equipo: owner/admin, o «Administración» (MOM §16).
+  const manages = await Promise.all(
+    (memberships ?? []).map((m: any) => hasOrgPermission(m.org_id as string, "team.manage")),
+  );
   const adminOrgs = Array.from(
     new Map(
       (memberships ?? [])
-        .filter((m: any) => m.role === "owner" || m.role === "admin")
+        .filter((_: any, i: number) => manages[i])
         .map((m: any) => [
           m.org_id as string,
           { id: m.org_id as string, name: (m.organizations?.name as string) ?? m.org_id, role: m.role as Role },
@@ -42,6 +45,8 @@ export default async function TeamPage({
   );
 
   if (!adminOrgs.length) {
+    // Sin equipo que gestionar: la vendedora vuelve a su pantalla, como antes.
+    if ((memberships ?? []).every((m: any) => m.role === "vendedora")) redirect("/dashboard/leads");
     return (
       <EmptyState title="No administras ninguna organización">
         Pide a un owner/admin que te dé el rol correspondiente, o crea una organización al conectar
@@ -62,13 +67,17 @@ export default async function TeamPage({
       .eq("org_id", selected.id)
       .order("active", { ascending: false })
       .order("full_name"),
-    admin
-      .from("user_permissions")
-      .select("user_id, permission, granted")
-      .eq("org_id", selected.id)
-      .in("permission", [...GRANTED_ONE_BY_ONE.map((g) => g.permission), "shalom.validate_payment"]),
+    // Todas las concesiones, no solo las de casilla: con ellas se arma la lista
+    // de permisos efectivos de cada persona.
+    admin.from("user_permissions").select("user_id, permission, granted").eq("org_id", selected.id),
     getAdvisorSchedules(admin, [selected.id]),
   ]);
+  // Roles acumulables (0250). Sin la tabla todavía, ninguno.
+  const { data: functionRows } = await admin.from("membership_roles").select("user_id, role").eq("org_id", selected.id);
+  const functionsByUser = new Map<string, string[]>();
+  for (const row of (functionRows as { user_id: string; role: string }[] | null) ?? []) {
+    functionsByUser.set(row.user_id, [...(functionsByUser.get(row.user_id) ?? []), row.role]);
+  }
 
   const stores = (storeRows as { id: string; name: string }[]) ?? [];
   const storeIds = stores.map((s) => s.id);
@@ -102,22 +111,22 @@ export default async function TeamPage({
   }
 
   const members: TeamMember[] = ((memberRows as { user_id: string; role: Role }[]) ?? [])
-    .map((m) => ({
-      user_id: m.user_id,
-      email: emailById.get(m.user_id) ?? m.user_id,
-      role: m.role,
-      stores: accessByUser.get(m.user_id) ?? [],
-      // Un mapa y no un booleano por permiso: cada vez que se añada uno a
-      // GRANTED_ONE_BY_ONE aparece solo, sin tocar el tipo ni esta consulta.
-      grants: Object.fromEntries(
-        GRANTED_ONE_BY_ONE.map((entry) => [
-          entry.permission,
-          permissionsFor([m.role], paymentPermissionByUser.get(m.user_id) ?? []).has(
-            entry.permission,
-          ),
-        ]),
-      ),
-    }))
+    .map((m) => {
+      const functions = functionsByUser.get(m.user_id) ?? [];
+      const effective = permissionsFor([m.role], paymentPermissionByUser.get(m.user_id) ?? [], functions);
+      return {
+        user_id: m.user_id,
+        email: emailById.get(m.user_id) ?? m.user_id,
+        role: m.role,
+        stores: accessByUser.get(m.user_id) ?? [],
+        functions,
+        // En el orden de la lista de permisos, con el nombre que se lee en Equipo.
+        effective: PERMISSIONS.filter((p) => effective.has(p)).map((p) => PERMISSION_LABEL[p]),
+        // Un mapa y no un booleano por permiso: cada vez que se añada uno a
+        // GRANTED_ONE_BY_ONE aparece solo, sin tocar el tipo ni esta consulta.
+        grants: Object.fromEntries(GRANTED_ONE_BY_ONE.map((entry) => [entry.permission, effective.has(entry.permission)])),
+      };
+    })
     .sort((a, b) => a.email.localeCompare(b.email));
 
   const riders: RiderRow[] = (

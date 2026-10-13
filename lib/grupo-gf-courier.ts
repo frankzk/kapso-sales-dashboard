@@ -20,6 +20,40 @@ export function sameDayCutoffLabel(value: string | null | undefined): string {
   return /^\d{1,2}:\d{2}/.test(value ?? "") ? value!.slice(0, 5) : GF_SAME_DAY_CUTOFF_DEFAULT;
 }
 
+// El reloj de Lima de Despacho del día. Vivía en app/dashboard/courier/actions.ts;
+// pasó aquí sin cambios (12-10-2026) para que «Repro Lima» use el mismo corte.
+// No confundir con `limaClock` de lib/warehouse-shift.ts ni de lib/olva/email-log.ts,
+// que devuelven otra forma: ningún archivo importa dos.
+
+/** El día siguiente de un día YYYY-MM-DD. */
+export function nextDay(day: string): string {
+  return new Date(Date.parse(`${day}T12:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+}
+
+/** Día (YYYY-MM-DD) y minuto del día en Lima. */
+export function limaClock(now = new Date()): { day: string; minute: number } {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Lima",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return {
+    day: `${value.year}-${value.month}-${value.day}`,
+    minute: Number(value.hour) * 60 + Number(value.minute),
+  };
+}
+
+/** El primer día en que sale lo que se toma ahora: hoy hasta el corte, si no mañana. */
+export function scheduledDay(cutoff: string | null | undefined, now = new Date()): string {
+  const current = limaClock(now);
+  return current.minute <= sameDayCutoffMinute(cutoff) ? current.day : nextDay(current.day);
+}
+
 export type CourierOutcome =
   | "entregado"
   | "rechazado"

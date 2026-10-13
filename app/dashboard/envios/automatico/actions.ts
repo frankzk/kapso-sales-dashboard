@@ -1,12 +1,14 @@
 "use server";
 import { revalidatePath } from "next/cache";
-import { getAdminOrgs } from "@/lib/access";
+import { hasOrgPermission } from "@/lib/permissions-access";
 import { createAdminSupabase } from "@/lib/db";
 import { runAutoDispatch } from "@/lib/swayp-auto-server";
 import type { AutoSettings } from "@/lib/swayp-auto-policy";
 
 async function authorized(orgId: string) {
-  if (!(await getAdminOrgs()).some(m=>m.org_id===orgId && ["owner","admin"].includes(m.role))) throw new Error("Solo administradores");
+  // Activar o pausar el despacho automático cambia la salida de todos los pedidos
+  // de la organización: «Administrar tiendas» (MOM §16), no «es owner o admin».
+  if (!(await hasOrgPermission(orgId, "stores.manage"))) throw new Error("Tu rol no permite cambiar el automático.");
   if (process.env.VERCEL_ENV!=="production") throw new Error("Disponible solo en producción");
   return createAdminSupabase();
 }

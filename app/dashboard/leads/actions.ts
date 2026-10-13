@@ -641,11 +641,10 @@ export async function passYape(leadId: string): Promise<LeadActionState> {
 export async function assignYape(leadId: string, vendedoraId: string): Promise<LeadActionState> {
   const ctx = await authorizeLead(leadId);
   if (!ctx) return { error: "Sin acceso a este lead." };
-  const sb = await createServerSupabase();
-  const { data: rolesData } = await sb.from("memberships").select("role");
-  const roles = ((rolesData as { role: string }[] | null) ?? []).map((m) => m.role);
-  if (!roles.some((r) => r === "owner" || r === "admin")) {
-    return { error: "Solo un administrador puede asignar." };
+  // Repartir leads es supervisar al equipo (MOM §16): Administración o Supervisión.
+  const perms = await getMasterPermissions();
+  if (!perms.can("team.manage") && !perms.can("reports.view")) {
+    return { error: "Tu rol no permite asignar." };
   }
   const admin = createAdminSupabase();
   await admin
@@ -663,9 +662,8 @@ export async function listStoreVendedoras(storeId: string): Promise<{ id: string
     data: { user },
   } = await sb.auth.getUser();
   if (!user) return [];
-  const { data: rolesData } = await sb.from("memberships").select("role");
-  const roles = ((rolesData as { role: string }[] | null) ?? []).map((m) => m.role);
-  if (!roles.some((r) => r === "owner" || r === "admin")) return [];
+  const perms = await getMasterPermissions();
+  if (!perms.can("team.manage") && !perms.can("reports.view")) return [];
   const admin = createAdminSupabase();
   const { data: store } = await admin.from("stores").select("org_id").eq("id", storeId).maybeSingle();
   const orgId = (store as { org_id?: string } | null)?.org_id;

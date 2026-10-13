@@ -32,11 +32,22 @@ function addDays(dayKey: string, days: number): string {
 /**
  * Los próximos `count` días de despacho DESPUÉS de `todayKey` (Swayp arma la
  * ruta del día siguiente), sin domingos. El primero lleva «mañana» si lo es.
+ *
+ * Con `lastDay`, en vez de `count`, todos los días de despacho hasta ese día
+ * inclusive (a lo sumo un año): el mismo plazo que acepta el servidor (Repro
+ * Lima: 60 días, `RESCHEDULE_MAX_DAYS`). Así toda fecha válida está en la lista.
  */
-export function swaypDispatchDayOptions(todayKey: string, count = 24): { value: string; label: string }[] {
+export function swaypDispatchDayOptions(
+  todayKey: string,
+  count = 24,
+  lastDay?: string | null,
+): { value: string; label: string }[] {
   const out: { value: string; label: string }[] = [];
-  for (let i = 1; out.length < count && i <= count * 2; i += 1) {
+  const until = lastDay && /^\d{4}-\d{2}-\d{2}$/.test(lastDay) ? lastDay : null;
+  const fits = (value: string, i: number) => until ? value <= until && i <= 366 : out.length < count && i <= count * 2;
+  for (let i = 1; ; i += 1) {
     const value = addDays(todayKey, i);
+    if (!fits(value, i)) break;
     if (!isSwaypDispatchDay(value)) continue;
     const label = new Date(`${value}T12:00:00Z`).toLocaleDateString("es-PE", {
       weekday: "long",

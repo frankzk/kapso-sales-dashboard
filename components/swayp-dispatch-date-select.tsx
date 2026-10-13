@@ -13,6 +13,7 @@ export function SwaypDispatchDateSelect({
   className,
   invalid,
   placeholder = "Elige la fecha",
+  lastDay,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -20,8 +21,13 @@ export function SwaypDispatchDateSelect({
   invalid?: boolean;
   /** Se muestra mientras no hay fecha elegida. */
   placeholder?: string;
+  /**
+   * El último día que se ofrece (inclusive), el mismo plazo que acepta el
+   * servidor (Repro Lima: 60 días). Sin él, las próximas 24 fechas.
+   */
+  lastDay?: string;
 }) {
-  const options = swaypDispatchDayOptions(limaTodayKey());
+  const options = swaypDispatchDayOptions(limaTodayKey(), undefined, lastDay);
   const known = options.some((o) => o.value === value);
   return (
     <select

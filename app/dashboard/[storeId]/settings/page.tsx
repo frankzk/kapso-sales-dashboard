@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { headers } from "next/headers";
+import { hasOrgPermission } from "@/lib/permissions-access";
 import { notFound, redirect } from "next/navigation";
 import { createAdminSupabase } from "@/lib/db";
-import { getAccessibleStores, getAdminOrgs, getUserRoleSummary } from "@/lib/access";
+import { getAccessibleStores, getUserRoleSummary } from "@/lib/access";
 import { env } from "@/lib/env";
 import { normalizeMetaAdAccounts } from "@/lib/meta-marketing";
 import { confirmationCycleDays } from "@/lib/order-confirmation";
@@ -52,14 +53,11 @@ export default async function StoreSettingsPage({
   const store = stores.find((s) => s.id === storeId);
   if (!store) notFound();
 
-  // Editing requires owner/admin of the store's org.
-  const adminOrgs = await getAdminOrgs();
-  const isAdmin = adminOrgs.some(
-    (o) => o.org_id === store.org_id && (o.role === "owner" || o.role === "admin"),
-  );
+  // Editing requires «Administrar tiendas» in the store's org (MOM §16).
+  const isAdmin = await hasOrgPermission(store.org_id, "stores.manage");
   if (!isAdmin) {
     return (
-      <EmptyState title="Necesitas rol admin u owner para editar esta tienda">
+      <EmptyState title="Tu rol no permite editar esta tienda">
         <Link href={`/dashboard/${storeId}`} className="text-brand-700 hover:underline">
           ← Volver al panel
         </Link>

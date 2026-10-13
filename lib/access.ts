@@ -3,6 +3,7 @@
 // stores they may access.
 
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
+import { permissionsFor } from "@/lib/permissions";
 import { cache } from "react";
 import { decryptOrNull } from "@/lib/crypto";
 import { fetchMetaSpend, normalizeMetaAdAccounts } from "@/lib/meta-marketing";
@@ -108,9 +109,24 @@ async function getUserRoleSummaryUncached(): Promise<{
   isRiderOnly: boolean;
 }> {
   const sb = await createServerSupabase();
-  const { data } = await sb.from("memberships").select("role");
+  const user = await getCurrentUser();
+  // `memberships` sin filtrar, como siempre: RLS le deja a un admin leer las
+  // filas de su equipo y hoy de eso dependen cosas (las alertas de Yape). Los
+  // roles acumulables, en cambio, solo los PROPIOS.
+  const [{ data }, { data: functionRows, error: functionError }] = await Promise.all([
+    sb.from("memberships").select("role"),
+    sb.from("membership_roles").select("role").eq("user_id", user?.id ?? ""),
+  ]);
   const roles = ((data as { role: string }[]) ?? []).map((m) => m.role);
-  const isVendedoraOnly = roles.length > 0 && roles.every((r) => r === "vendedora");
+  // Roles acumulables (0250, MOM §16): una vendedora con un rol que ve los
+  // reportes del negocio (Supervisión, Administración) deja de ser «solo
+  // vendedora» y entra al panel completo; lo que cada pantalla deja hacer lo
+  // sigue decidiendo su permiso. Sin la tabla todavía, ningún rol.
+  const functions = functionError ? [] : ((functionRows as { role: string }[]) ?? []).map((r) => r.role);
+  const isVendedoraOnly =
+    roles.length > 0 &&
+    roles.every((r) => r === "vendedora") &&
+    !permissionsFor(roles, [], functions).has("reports.view");
   // Un motorizado no es un usuario del panel: su sitio es /reparto. El layout
   // del dashboard lo redirige, y RLS ya le impide leer nada de allí de todos
   // modos — la redirección es para que no vea una pantalla vacía y confusa.
