@@ -5,7 +5,7 @@ import { useActionState, useEffect, useRef, useState, useTransition } from "reac
 import { useRouter } from "next/navigation";
 import type { Role } from "@/lib/types";
 import { ROLES, invitableRoles } from "@/lib/team";
-import { FUNCTIONAL_ROLES, GRANTED_ONE_BY_ONE } from "@/lib/permissions";
+import { ACCESS_LABEL, FUNCTIONAL_ROLES, GRANTED_ONE_BY_ONE } from "@/lib/permissions";
 import {
   addMember,
   removeMember,
@@ -21,6 +21,15 @@ import {
 } from "@/app/dashboard/team/actions";
 import { Card, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 import { SchedulesTab } from "@/components/team-schedules";
+import { OpsButton } from "@/components/ops-ui";
+import { IconChevronRight, IconInfo } from "@/components/icons";
+import {
+  MemberAccessPanel,
+  RolesGuidePanel,
+  displayName,
+  type AccessMember,
+  type GuideSection,
+} from "@/components/team-permissions";
 import type { AdvisorSchedule } from "@/lib/productivity-week";
 import {
   DISPATCH_COURIERS,
@@ -53,15 +62,20 @@ function useSavedFlash(pending: boolean, notice: string | undefined): boolean {
 export interface TeamMember {
   user_id: string;
   email: string;
+  /** El nombre con que entró, si lo dio. */
+  name: string | null;
   role: Role;
   stores: string[]; // store ids the member has explicit access to
   /** Permiso de concesión individual → si esta persona lo tiene hoy. */
   grants: Record<string, boolean>;
   /** Roles acumulables (0250, MOM §16). */
   functions: string[];
-  /** Todo lo que puede hacer hoy, con el nombre que se lee en Equipo. */
-  effective: string[];
+  /** Lo que puede hacer hoy y de dónde le viene (`explainPermissions`). */
+  access: AccessMember["access"];
 }
+
+/** Qué panel lateral está abierto: la guía de roles o lo que puede hacer una persona. */
+type AccessPanel = { kind: "guide"; section: GuideSection } | { kind: "member"; userId: string } | null;
 
 interface Store {
   id: string;
@@ -110,6 +124,10 @@ export function TeamManager({
 }) {
   const ownerCnt = members.filter((m) => m.role === "owner").length;
   const [tab, setTab] = useState<TeamTab>(initialTab);
+  const [panel, setPanel] = useState<AccessPanel>(null);
+  const openGuide = (section: GuideSection) => setPanel({ kind: "guide", section });
+  const openMember = (userId: string) => setPanel({ kind: "member", userId });
+  const panelMember = panel?.kind === "member" ? members.find((m) => m.user_id === panel.userId) : undefined;
 
   return (
     <div className="space-y-6">
@@ -117,7 +135,7 @@ export function TeamManager({
         <div>
           <h1 className="text-xl font-semibold text-slate-900">Equipo y accesos</h1>
           <p className="text-sm text-slate-500">
-            Organización <strong>{org.name}</strong> · tu rol: {myRole}
+            Organización <strong>{org.name}</strong> · tu acceso: {ACCESS_LABEL[myRole] ?? myRole}
           </p>
         </div>
         {orgs.length > 1 && (
@@ -163,38 +181,33 @@ export function TeamManager({
         <>
           <AddMemberForm orgId={org.id} myRole={myRole} />
           <Card>
-            {/* El texto se arma desde la misma lista que las casillas: con la
-                frase escrita a mano, añadir un permiso dejaba la explicación
-                hablando solo del primero. */}
-            <p className="mb-2 text-xs text-slate-500">
-              <strong className="font-semibold text-slate-700">Roles:</strong> cada uno es el paquete de
-              permisos de una función y una persona puede tener varios; sus permisos se suman. Quien
-              tiene acceso «vendedora» y algún rol recibe solo lo de sus roles. Los asigna el dueño.{" "}
-              {FUNCTIONAL_ROLES.map((entry) => (
-                <span key={entry.role} className="mr-1 inline-block">
-                  <strong className="font-semibold text-slate-700">{entry.label}</strong>: {entry.description}
-                </span>
-              ))}
-            </p>
-            <p className="mb-3 text-xs text-slate-500">
-              Estos permisos se conceden persona por persona según su responsabilidad; solo
-              «Exportar datos» viene ya con dueño y admin. Los accesos correspondientes aparecen
-              en su menú al recargar.{" "}
-              {GRANTED_ONE_BY_ONE.map((entry) => (
-                <span key={entry.permission} className="mr-1 inline-block">
-                  <strong className="font-semibold text-slate-700">{entry.label}</strong>:{" "}
-                  {entry.description}
-                </span>
-              ))}
-            </p>
+            {/* Antes, dos párrafos enumeraban cada rol y cada permiso de corrido, y el
+                resto solo salía al pasar el ratón. Ahora una frase y la guía. */}
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="max-w-[68ch] text-[13px] leading-5 text-ink-600">
+                Cada persona tiene un <strong className="font-semibold text-ink-900">acceso</strong> y, encima,{" "}
+                <strong className="font-semibold text-ink-900">roles</strong> que le suman permisos. Los de dinero y
+                datos se dan uno por uno. Toca «permisos» en una fila para ver qué puede hacer esa persona y por qué.
+              </p>
+              <OpsButton size="sm" className="shrink-0" onClick={() => openGuide(FUNCTIONAL_ROLES[0].role)}>
+                <IconInfo width={16} height={16} aria-hidden />
+                ¿Qué hace cada rol?
+              </OpsButton>
+            </div>
             <div className={TABLE_WRAP_FROM[1110]}>
               <table className="w-full min-w-[1040px] text-sm">
                 <thead>
                   <tr className={cn(STICKY_HEAD, "text-xs text-slate-500")}>
                     <th className="py-2 text-left font-medium">Miembro</th>
-                    <th className="py-2 text-left font-medium">Roles</th>
-                    <th className="py-2 text-left font-medium">Permisos por persona</th>
-                    <th className="py-2 text-left font-medium" title="Dueño, admin, vendedora, solo lectura o motorizado">Acceso</th>
+                    <th className="py-2 text-left font-medium">
+                      <HeadWithGuide label="Roles" onOpen={() => openGuide(FUNCTIONAL_ROLES[0].role)} />
+                    </th>
+                    <th className="py-2 text-left font-medium">
+                      <HeadWithGuide label="Permisos por persona" onOpen={() => openGuide("uno-por-uno")} />
+                    </th>
+                    <th className="py-2 text-left font-medium">
+                      <HeadWithGuide label="Acceso" onOpen={() => openGuide("accesos")} />
+                    </th>
                     <th className="py-2 text-left font-medium">Acceso a tiendas</th>
                     <th className="py-2 text-right font-medium">Acción</th>
                   </tr>
@@ -203,13 +216,20 @@ export function TeamManager({
                   {members.map((m) => (
                     <tr key={m.user_id} className="border-b border-slate-100 align-top last:border-0">
                       <td className="py-3 text-slate-800">
-                        {m.email}
+                        {m.name ?? m.email}
                         {m.user_id === currentUserId && (
                           <span className="ml-1 text-xs text-slate-400">(tú)</span>
                         )}
+                        {m.name && <span className="block text-xs text-slate-500">{m.email}</span>}
                       </td>
                       <td className="py-3">
-                        <FunctionRolesCell orgId={org.id} member={m} myRole={myRole} />
+                        <FunctionRolesCell
+                          orgId={org.id}
+                          member={m}
+                          myRole={myRole}
+                          onOpenGuide={openGuide}
+                          onOpenMember={() => openMember(m.user_id)}
+                        />
                       </td>
                       <td className="py-3">
                         <PaymentValidationToggle orgId={org.id} member={m} myRole={myRole} />
@@ -236,6 +256,17 @@ export function TeamManager({
               </table>
             </div>
           </Card>
+          {panel?.kind === "guide" && (
+            <RolesGuidePanel
+              section={panel.section}
+              onSelect={openGuide}
+              members={members}
+              onClose={() => setPanel(null)}
+            />
+          )}
+          {panelMember && (
+            <MemberAccessPanel member={panelMember} onOpenGuide={openGuide} onClose={() => setPanel(null)} />
+          )}
         </>
       )}
 
@@ -280,7 +311,7 @@ function AddMemberForm({ orgId, myRole }: { orgId: string; myRole: Role }) {
         </div>
         <div>
           <label className="block text-sm font-medium text-slate-700" htmlFor="role">
-            Rol
+            Acceso
           </label>
           <select
             id="role"
@@ -291,7 +322,7 @@ function AddMemberForm({ orgId, myRole }: { orgId: string; myRole: Role }) {
             {/* Un admin solo invita vendedoras y solo lectura (MOM §16). */}
             {invitableRoles(myRole).map((r) => (
               <option key={r} value={r}>
-                {r}
+                {ACCESS_LABEL[r] ?? r}
               </option>
             ))}
           </select>
@@ -344,7 +375,7 @@ function RoleForm({
       >
         {roleOptions(showOwnerOption).map((r) => (
           <option key={r} value={r}>
-            {r}
+            {ACCESS_LABEL[r] ?? r}
           </option>
         ))}
       </select>
@@ -362,8 +393,38 @@ function RoleForm({
  * Los roles acumulables de una persona (MOM §16). El dueño los marca y desmarca;
  * los demás los ven. Debajo, plegado, todo lo que la persona puede hacer hoy.
  */
-function FunctionRolesCell({ orgId, member, myRole }: { orgId: string; member: TeamMember; myRole: Role }) {
+/** Encabezado de columna con un botón que abre su parte de la guía. */
+function HeadWithGuide({ label, onOpen }: { label: string; onOpen: () => void }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      {label}
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-label={`Qué significa «${label}»`}
+        className="grid size-6 place-items-center rounded text-ink-500 transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:size-11"
+      >
+        <IconInfo width={14} height={14} aria-hidden />
+      </button>
+    </span>
+  );
+}
+
+function FunctionRolesCell({
+  orgId,
+  member,
+  myRole,
+  onOpenGuide,
+  onOpenMember,
+}: {
+  orgId: string;
+  member: TeamMember;
+  myRole: Role;
+  onOpenGuide: (section: GuideSection) => void;
+  onOpenMember: () => void;
+}) {
   const canEdit = myRole === "owner";
+  const count = member.access.granted.length;
   return (
     <div className="flex flex-col gap-1">
       {canEdit ? (
@@ -373,28 +434,28 @@ function FunctionRolesCell({ orgId, member, myRole }: { orgId: string; member: T
       ) : member.functions.length ? (
         <div className="flex max-w-56 flex-wrap gap-1">
           {FUNCTIONAL_ROLES.filter((entry) => member.functions.includes(entry.role)).map((entry) => (
-            <span key={entry.role} title={entry.description} className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-700">
+            <button
+              key={entry.role}
+              type="button"
+              onClick={() => onOpenGuide(entry.role)}
+              className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-700 transition-colors hover:bg-slate-200"
+            >
               {entry.label}
-            </span>
+            </button>
           ))}
         </div>
       ) : (
         <span className="text-xs text-slate-400" title="Solo el dueño asigna roles">Sin roles</span>
       )}
-      <details className="mt-1 text-[11px] text-slate-500">
-        <summary className="cursor-pointer select-none font-medium text-slate-600">
-          {member.effective.length} {member.effective.length === 1 ? "permiso" : "permisos"}
-        </summary>
-        {member.effective.length ? (
-          <ul className="mt-1 max-w-56 list-disc space-y-0.5 pl-4">
-            {member.effective.map((label) => (
-              <li key={label}>{label}</li>
-            ))}
-          </ul>
-        ) : (
-          <p className="mt-1">Solo puede mirar.</p>
-        )}
-      </details>
+      <button
+        type="button"
+        onClick={onOpenMember}
+        aria-label={`Qué puede hacer ${displayName(member)}`}
+        className="mt-1 inline-flex w-fit items-center gap-0.5 rounded text-xs font-medium text-brand-700 underline-offset-2 hover:underline pointer-coarse:min-h-11"
+      >
+        {count ? `${count} ${count === 1 ? "permiso" : "permisos"}` : "Solo mira"}
+        <IconChevronRight width={14} height={14} aria-hidden />
+      </button>
     </div>
   );
 }
