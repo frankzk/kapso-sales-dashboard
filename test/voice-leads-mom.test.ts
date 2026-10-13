@@ -916,8 +916,13 @@ describe("docs/voz-leads-agente.md: webhooks, ajustes y variables de Vercel", ()
     expect(sinFicha.aviso).toBe(AVISO_SIN_FICHA);
     expect(sinFicha.aviso).toContain('"Disculpe, me equivoqué de llamada. Que tenga buen día."');
     expect(S33).toContain("**Sin ficha, solo se disculpa**");
-    // `aviso` se declara vacío en ElevenLabs: las pruebas con ficha no lo ponen.
-    expect(flat(DOC)).toContain("`aviso` también se declara vacío");
+    // Los valores por defecto del agente son los de Kapta sin llamada: si el
+    // inicio no contesta, el agente arranca con la orden puesta.
+    expect(flat(DOC)).toContain("`encontrada` = `no` y `aviso` = el texto de `AVISO_SIN_FICHA`, que es lo que Kapta responde sin llamada");
+    expect(flat(DOC)).toContain("las pruebas con ficha de la sección 11 mandan `aviso` vacío");
+    // Ninguna cuenta vieja de variables, y el paso pendiente está en el MOM.
+    expect(DOC).not.toMatch(/\b17 variables\b/);
+    expect(S33).toContain("**Unir el guion con el aviso sin ficha** (13-10-2026)");
     // Y el prompt con `{{aviso}}` entra después del deploy que lo manda.
     expect(flat(read("DEPLOY.md"))).toContain("se une a la principal **después** del deploy que manda la variable `aviso`");
   });

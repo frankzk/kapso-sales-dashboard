@@ -16,8 +16,10 @@ copia en el agente de pedidos, ni al revés.
 
 **En ElevenLabs** ya existe, creado el 12-10-2026 como «Agente de leads ·
 Kenku Biru (piloto)», con todo lo de las secciones 2 a 5 y 7: prompt, primer
-mensaje, las 17 variables, las dos tools, el webhook de inicio y el secreto
-en los tres. Su puerta también: el +1 645 654 0729, comprado en Telnyx e
+mensaje, las variables, las dos tools, el webhook de inicio y el secreto en
+los tres. El prompt de la sección 3, con `{{aviso}}` y su variable (la 18),
+está en la rama `sin-ficha-por-regla` del agente hasta el deploy que manda
+`aviso` (sección 3). Su puerta también: el +1 645 654 0729, comprado en Telnyx e
 importado por SIP trunk el 12-10-2026 como «Nicol Leads Telnyx» y asignado a
 este agente (sección 7); `TELNYX_LEADS_SIP_URI` ya está en Vercel y en
 producción (sección 9). Su id, el de sus tools y el del número quedan en la
@@ -464,8 +466,8 @@ hay costo de ElevenLabs por llamada.
   ese modelo, en las pruebas de la sección 11 (12-10-2026), el agente se
   presentaba con la ficha vacía en vez de despedirse (0 de 5), leía en voz alta
   instrucciones del guion, se despedía sin registrar y una vez inventó el costo
-  de envío sin llamar a `consultar_cobertura`. Con Flash y este guion pasó las
-  25 pruebas.
+  de envío sin llamar a `consultar_cobertura`. Con Flash y este guion (v4.7),
+  las 11 pruebas de la sección 11 dieron 64 de 65 corridas (13-10-2026).
 - **Duración máxima**: `max_duration` = **300 s**. Kapta da la llamada por
   caída a los 8 min en conversación (`LEAD_IN_PROGRESS_TTL_MINUTES`), con
   margen para el registro y el corte.
@@ -503,12 +505,11 @@ hay costo de ElevenLabs por llamada.
 - **Idioma** español. Voz, modelo de voz, transcripción y turnos: los mismos
   del agente de Reproprovincia, salvo el corte por silencio, las muletillas,
   el respaldo y el modelo.
-- **Variables dinámicas**: las 18 de la sección 1, declaradas vacías y con
-  `encontrada` = `no`, que es lo que Kapta responde sin llamada: si el inicio no
-  contesta, el agente se despide. `aviso` también se declara vacío: las
-  pruebas con ficha de la sección 11 no lo ponen y lo toman de ahí (comprobado
-  el 13-10-2026); la de sin ficha lo trae con el texto de `AVISO_SIN_FICHA`.
-  Para probar en el editor se cambian allí.
+- **Variables dinámicas**: las 18 de la sección 1, declaradas vacías salvo
+  `encontrada` = `no` y `aviso` = el texto de `AVISO_SIN_FICHA`, que es lo que
+  Kapta responde sin llamada: si el inicio no contesta, el agente se despide
+  con la orden puesta. Por eso las pruebas con ficha de la sección 11 mandan
+  `aviso` vacío. Para probar en el editor se cambian allí.
 - **Overrides**: primer mensaje permitido (sección 2).
 - **Número**: el +1 645 654 0729, comprado en Telnyx e importado en ElevenLabs
   por SIP trunk el 12-10-2026 como «Nicol Leads Telnyx», asignado a ESTE
@@ -545,7 +546,8 @@ commit.
    (`kapta_voice_leads`), sin el post-call.
 3. **El agente en ElevenLabs**: ya creado, con prompt, primer mensaje, las dos
    tools, el webhook de inicio y los ajustes de la sección 7. Se presenta como
-   Nicol.
+   Nicol. El prompt con `{{aviso}}` se une a la principal después del deploy
+   que manda `aviso` (sección 3), antes de encender.
 4. **El número**: la puerta del agente es un número propio, importado en
    ElevenLabs por SIP trunk con las direcciones permitidas de la sección 7 y
    asignado a ESTE agente, nunca al de Reproprovincia. ElevenLabs lo usa para
