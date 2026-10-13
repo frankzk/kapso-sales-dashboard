@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getAccessibleStores } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { getWarehouseStationData } from "@/lib/dispatch-access";
+import { getWarehouseRetries } from "@/lib/warehouse-retries-access";
 import { EmptyState } from "@/components/ui";
 import { WarehouseStation } from "@/components/warehouse-station";
 
@@ -17,6 +18,8 @@ export default async function WarehousePage() {
       </EmptyState>
     );
   }
-  const data = await getWarehouseStationData();
-  return <WarehouseStation initialData={data} stores={stores} />;
+  // «Reintentos por salir» (entrega 1c) se lee a la vez y nunca lanza: si
+  // falla, la estación carga igual y esa parte lo dice.
+  const [data, retries] = await Promise.all([getWarehouseStationData(), getWarehouseRetries()]);
+  return <WarehouseStation initialData={data} initialRetries={retries} stores={stores} />;
 }

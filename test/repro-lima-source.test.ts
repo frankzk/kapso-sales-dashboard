@@ -346,7 +346,7 @@ describe("el MOM lo documenta (§9.5, §29.6, §29.13)", () => {
   const mom = read("docs/mom/master-pedidos-v1.md");
 
   it("con sus títulos", () => {
-    expect(mom).toContain("### 9.5 Reprogramación en Lima: «Repro Lima» (fase 1, entrega 1a)");
+    expect(mom).toContain("### 9.5 Reprogramación en Lima: «Repro Lima» (fase 1, entregas 1a y 1c)");
     expect(mom).toContain("#### «Repro Lima» (fase 1, entrega 1a, 12-10-2026)");
     expect(mom).toContain("#### Procedimiento de la fase 0 (11-10-2026)");
     expect(mom).toContain("#### Qué hacer con la caja (12-10-2026, decisión 8 del owner)");
