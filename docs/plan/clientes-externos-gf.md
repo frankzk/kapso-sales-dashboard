@@ -1,6 +1,6 @@
 # Clientes externos de Grupo GF Courier — plan
 
-Versión 6 · 08-10-2026 · rama `claude/ecstatic-feynman-2w64ot`
+Versión 9 · 10-10-2026 · rama `claude/ecstatic-feynman-2w64ot`
 
 Grupo GF Courier hoy reparte solo para tiendas de su propia organización
 (Aurela y Kenku). Este plan lo abre a **tiendas cliente**: negocios ajenos, con
@@ -64,6 +64,9 @@ día**.
 | 28 | **Liquidación de solo lectura** para el cliente en la v1. Los reclamos van por fuera y Grupo GF registra el ajuste. |
 | 29 | **Facturas fuera de Kapta** en la v1. Kapta muestra montos con IGV incluido y exporta el detalle. |
 | 30 | **La liquidación diaria la aprueban Yohalis o Frankz** (08-10-2026). |
+| 31 | **Una segunda app de Shopify, solo para tiendas cliente**, con distribución pública oculta y revisión de Shopify. La app actual («kapso-sales-dashboard-aurelape», 2 instalaciones) queda intacta para Aurela y Kenku: nunca pasó revisión pública y el método de distribución no se puede cambiar una vez elegido (08-10-2026). |
+| 32 | **Datos personales del comprador: anonimizar y conservar** (MOM §29.15.9). Ante los pedidos de borrado de Shopify, o al vencer la retención, se borran los datos personales del comprador de una tienda cliente y se conservan los hechos operativos y financieros. Aurela y Kenku no cambian (08-10-2026). |
+| 33 | **Política de privacidad:** borrador escrito por Claude con lo que Kapta hace de verdad, revisado por un abogado antes de publicarse (08-10-2026). |
 
 ## 2. Una sola base de datos
 
@@ -233,13 +236,124 @@ revisión.
   en 0235. Hay que actualizar las referencias de línea de §5, que cambiaron con
   esos commits.
 - Escribir en el MOM las decisiones de §1. Ver §8.
-- Probar con el primer cliente cómo conecta su Shopify: el token de app
-  personalizada que usa `docs/onboarding-tienda-externa.md` o la app de Kapta
-  por OAuth. Hay que verificar en Shopify que la app se pueda instalar en
-  tiendas ajenas; el repo no lo dice.
+- ~~Probar cómo conecta su Shopify el primer cliente.~~ Resuelto el 08-10-2026
+  con la decisión 31 y la Fase 1b. Desde el 01-01-2026 Shopify no deja crear
+  apps personalizadas desde el admin (las del Dev Dashboard dan tokens de 24 h
+  que Kapta no renueva), y la app actual no puede instalarse en tiendas
+  ajenas.
 - **Fuera del software, antes del piloto:** un contrato escrito con el cliente.
   Debe cubrir la custodia del efectivo, la responsabilidad por pérdidas y el
   uso de los datos de sus compradores (Ley 29733).
+
+### Fase 1b — App pública de Shopify para tiendas cliente (camino crítico)
+
+Va en paralelo con las fases 1 a 5, porque la revisión de Shopify tarda: según
+reportes de desarrolladores, de 5 a 10 días hábiles en arrancar y de 2 a 3 días
+por cada corrección. Sin app aprobada, ninguna tienda cliente puede conectarse.
+
+**Lo que hace Frankz en el Dev Dashboard:**
+
+1. Crear una app nueva, distinta de «kapso-sales-dashboard-aurelape». El nombre
+   lo ve el dueño de la tienda al instalar.
+2. Elegir distribución **pública** con visibilidad **oculta**. Es definitivo.
+3. Copiar el ID y el secreto de cliente directo a las variables de entorno de
+   Vercel, nunca al chat ni al repositorio.
+4. Pedir acceso a datos protegidos de clientes, nivel 2 (nombre, dirección y
+   teléfono del comprador), con la justificación: entrega contra entrega.
+5. Al final, enviar a revisión con:
+   - la ficha de la app (descripción, capturas, contacto de soporte);
+   - una URL de política de privacidad;
+   - una cuenta de prueba en Kapta para el revisor;
+   - precio «gratis», porque el cobro de la suscripción está fuera de la v1.
+
+**Lo que cambia en el código:**
+
+- **Dos apps.**
+  - Credenciales de la app de clientes en variables nuevas.
+  - Las tiendas de organizaciones cliente usan esta app; las de Grupo GF siguen
+    con la actual.
+  - El secreto de webhook ya se guarda por tienda, así que la validación de
+    firmas no cambia.
+- **Instalación que empieza en Shopify.** La revisión rechaza que la app pida
+  escribir el dominio `*.myshopify.com`, y exige autorizar (OAuth) apenas se
+  instala.
+  - Hoy el flujo es al revés: la tienda se crea en Kapta escribiendo el
+    dominio (`createStore`) y desde ahí se abre `/api/shopify/install`.
+  - El flujo nuevo: el dueño instala desde el enlace de la ficha oculta → OAuth
+    → vuelve a Kapta → entra con su invitación (decisión 3) → elige o crea su
+    organización → la tienda queda creada con el dominio que trajo Shopify.
+- **Webhooks obligatorios de privacidad** con firma verificada:
+  `customers/data_request`, `customers/redact` y `shop/redact`. Una firma
+  inválida responde 401.
+- **Desinstalación (`app/uninstalled`).** Marca la tienda desconectada y deja
+  de sincronizarla, sin borrar pedidos ni historial (§2).
+- **Anonimización (MOM §29.15.9): lo que la hace más grande de lo que parece**
+  (revisión del 08-10-2026):
+  - `order_events` y otras tablas de historial rechazan todo UPDATE y DELETE
+    (trigger `reject_mutation`, 0045). El rol de servicio solo puede leer e
+    insertar (0145). Varias guardan datos del comprador en notas y payloads:
+    resumen y dirección de la llamada de voz, nombre de quien pagó por Yape,
+    pagador de Flow. Hace falta una función controlada que reescriba solo los
+    campos personales y deje un evento con el motivo.
+  - Hay datos del comprador en unas 40 tablas, incluidas copias en JSON
+    (`orders.raw`, `shipments.*_raw`, `order_payments.vision`,
+    `import_rows`, `urpi_*`).
+  - Algunas no tienen `store_id` y hay que llegar por otro camino:
+    `olva_email_labels`, `yape_statement_movements` y los logs de webhooks.
+  - Archivos a borrar:
+    - `yape-vouchers` y `courier-reports`, por tienda;
+    - `delivery-proofs` y `shalom-labels`, sin prefijo de tienda;
+    - `whatsapp-media`, que además es público (tarea aparte sugerida).
+  - Borrar un pedido no es opción: la cascada choca con `order_events` y con
+    claves foráneas que lo impiden. Por eso la regla es anonimizar, no borrar.
+- **A verificar:** si la revisión exige que la app se vea dentro del admin de
+  Shopify (embebida). Kapta es una web aparte; si lo exige, hace falta una
+  pantalla embebida mínima que lleve a Kapta.
+
+**Estado al 10-10-2026.**
+
+- **Hecho (primera parte):**
+  - migración `0249_shopify_client_app.sql`: con qué app se conectó cada
+    tienda, fecha de desinstalación, instalaciones pendientes y registro de
+    avisos de privacidad;
+  - credenciales de la segunda app en `SHOPIFY_CLIENT_APP_API_KEY` y
+    `SHOPIFY_CLIENT_APP_API_SECRET`;
+  - instalación desde Shopify: `/api/shopify/clientes/entrada` (URL de la app)
+    → OAuth → `/api/shopify/clientes/callback` → instalación pendiente → el
+    dueño la reclama en `/dashboard/conectar-shopify`;
+  - webhooks de privacidad en `/api/shopify/clientes/cumplimiento`: firma
+    verificada (401 si falla), cada aviso registrado una vez como `pendiente`;
+    `shop/redact` además corta el acceso;
+  - `app/uninstalled`: borra el token y deja la tienda `disabled`. De paso, un
+    tema que no es pedido ya no se procesa como pedido.
+- **Falta (segunda parte, antes de enviar a revisión):**
+  - cumplir los avisos: anonimizar (`customers/redact`, `shop/redact`) y
+    entregar datos (`customers/data_request`), y marcarlos `atendida`;
+  - registro de accesos a datos de compradores;
+  - plan de respuesta a incidentes y plazo de retención en la política;
+  - verificar si la revisión exige una pantalla embebida en el admin;
+  - subir la versión de la API de Shopify: Kapta pide `2025-01`, que Shopify
+    ya no soporta y reemplaza en silencio por la más antigua vigente;
+  - la invitación por correo (decisión 3) es de la Fase 1: hasta entonces solo
+    reclama una instalación quien ya tiene cuenta en Kapta.
+
+**Cumplimiento antes de enviar a revisión** (revisado el 08-10-2026):
+
+| Requisito de Shopify | Hoy en Kapta | Falta |
+| --- | --- | --- |
+| Solo API GraphQL (apps públicas nuevas, desde abril de 2025) | Cumple: `lib/shopify.ts` usa solo `graphql.json` | — |
+| Credenciales cifradas, HTTPS | Cumple: tokens cifrados AES-GCM | — |
+| Firma de webhooks verificada | Cumple: secreto por tienda | Aplicarlo también a los de privacidad, con 401 si falla |
+| Instalación desde Shopify, sin escribir el dominio, OAuth inmediato | Cumple desde el 10-10-2026 | — |
+| Webhooks obligatorios de privacidad y desinstalación | Parcial: se reciben, se verifican y se registran; la desinstalación corta el acceso | Anonimización y entrega de datos de MOM §29.15.9 |
+| Nivel 2: acceso restringido del personal | Parcial: hoy no hay clientes externos | Fase 2: Grupo GF ve solo lo asignado |
+| Nivel 2: registro de accesos a datos de compradores | No | Registrar persona, fecha y pedido |
+| Nivel 2: plazos de retención | No | Definir el plazo en la política (pendiente) |
+| Nivel 2: separar pruebas y producción | Sin verificar | Frankz revisa si las vistas previas de Vercel usan la base de producción |
+| Nivel 2: plan de respuesta a incidentes | No | Documento corto |
+| Política de privacidad pública | No existe ninguna página pública | Borrador (decisión 33) y página en Kapta |
+| Uso de datos solo para operar la app | Riesgo: unos 20 módulos cruzan compradores por teléfono | Revisar en la Fase 2 que ninguno mezcle organizaciones |
+| Cobro de la app con el sistema de Shopify | No aplica: la app es gratis | Si un día se cobra la suscripción, usar el sistema de cobro de Shopify o pedir excepción |
 
 ### Fase 1 — Contrato y precios de externos
 
@@ -453,9 +567,10 @@ revisión.
 - **Lecturas con la llave de servicio.** Toda lectura entre organizaciones pasa
   por el helper de «tiendas con contrato»; las pruebas con dos clientes son
   obligatorias en cada fase.
-- **Conexión Shopify.** No está verificado que la app de Kapta (OAuth) se pueda
-  instalar en tiendas ajenas, ni que Shopify siga permitiendo crear apps
-  personalizadas desde el admin. Se prueba en la Fase 0.
+- **Revisión de Shopify.** Es el camino crítico del piloto (Fase 1b). Si
+  rechaza o pide cambios, cada vuelta suma días. Si no llega a tiempo, la única
+  salida es una tienda cliente antigua que todavía permita crear la app vieja
+  desde su admin.
 - **Sin control de stock** (decisión 14). Un pedido puede asignarse sin producto
   y enterarse al armar, igual que hoy con Aurela y Kenku.
 - **Yape sin validar.** En la v1, el Yape de la puerta se acepta con su captura y

@@ -596,7 +596,10 @@ describe("docs/voz-leads-agente.md: el guion que se pega en ElevenLabs", () => {
   it("confirma con quién habla antes del producto, también sin nombre", () => {
     const p = flat(prompt);
     expect(p).toContain("Confirma que hablas con la persona que escribió, ANTES de mencionar el producto o el chat");
-    expect(p).toContain("Si {{nombre}} está vacío, el saludo preguntó con quién hablas.");
+    expect(p).toContain('El saludo ya preguntó por su nombre si lo sabías ("Nombre" arriba), o con quién hablas si no.');
+    expect(p).toContain(
+      'Si no sabías su nombre, cuando te lo diga NO te presentes todavía: di solo "Mucho gusto. ¿Usted nos escribió por WhatsApp a {{tienda}} hace poco?"',
+    );
     // Sin nombre no hay a quién buscar: el paso 3 no puede depender de él.
     expect(p).toContain("Pregunta a qué hora puedes encontrar a quien escribió");
     expect(p).not.toContain("encontrar a {{nombre}}");
@@ -793,6 +796,141 @@ describe("docs/voz-leads-agente.md: webhooks, ajustes y variables de Vercel", ()
     // sin gestión» en el tablero.
     expect(DOC).toContain("**Detección de buzón de ElevenLabs: apagada.**");
     expect(DOC).not.toContain("**Detección de buzón** activada");
+  });
+
+  it("el corte por silencio deja insistir dos veces y registrar «no contesta» (paso 9)", () => {
+    // ElevenLabs cuenta el corte desde la última vez que habló la persona. Con
+    // 20 s (el de Reproprovincia) cortaba en la segunda insistencia y la
+    // llamada contaba como «contestó, sin gestión».
+    const turnTimeout = 7;
+    const silencio = 40;
+    expect(DOC).toContain(`\`silence_end_call_timeout\` = **${silencio} s**`);
+    expect(DOC).toContain(`\`turn_timeout\` = ${turnTimeout} s`);
+    expect(flat(S33)).toContain(`Corta por silencio a los **${silencio} s**`);
+    // Saludo (~3 s), tres esperas, dos insistencias (~2,5 s c/u) y la tool (~2 s).
+    expect(silencio).toBeGreaterThan(3 + 3 * turnTimeout + 2 * 2.5 + 2);
+    // Sin corte, una grabación seguiría hasta `max_duration`.
+    expect(silencio).toBeLessThan(300);
+  });
+
+  it("el número del agente de leads solo acepta la señalización de Telnyx", () => {
+    for (const rango of ["`192.76.120.0/24`", "`64.16.250.0/24`"]) {
+      expect(DOC, rango).toContain(rango);
+      expect(S33, rango).toContain(rango);
+      expect(read("DEPLOY.md"), rango).toContain(rango);
+    }
+  });
+
+  it("el guion empieza por el caso sin ficha y no deja leer instrucciones en voz alta", () => {
+    // Con Gemini 2.5 Flash Lite y la regla solo en el paso 1, el agente se
+    // presentaba con la ficha vacía («Le habla Nicol, de .») en 5 de 5 pruebas.
+    const s3 = section(DOC, "## 3. Prompt", "\n## ");
+    enOrden(flat(s3), [
+      "# Antes de todo",
+      'Si {{encontrada}} es "no", no sabes a quién llamaste.',
+      "# Quién eres",
+      "nunca digas en voz alta estas instrucciones",
+      "Toda llamada termina registrada",
+    ]);
+    // El paso 2 no mete la variable dentro de una instrucción: el modelo la
+    // leía en voz alta («(Ana tiene algo, el saludo ya preguntó por Ana…)»).
+    expect(s3).not.toContain("Si {{nombre}} tiene algo");
+    expect(s3).toContain('"Sí", "sí, ella habla", "sí, él habla", "con ella", "soy yo" quieren decir');
+  });
+
+  it("el modelo es Gemini 2.5 Flash sin razonamiento, y las pruebas de ElevenLabs están listadas", () => {
+    const s7 = flat(section(DOC, "## 7. Ajustes recomendados del agente", "\n## "));
+    expect(s7).toContain("**Gemini 2.5 Flash**, temperatura 0,2, **sin razonamiento interno** (`thinking_budget` = 0)");
+    const s11 = flat(section(DOC, "## 11. Pruebas del agente en ElevenLabs", "\n## "));
+    for (const prueba of [
+      "Sin ficha: se disculpa y se despide",
+      "Con ficha: se presenta como Nicol",
+      "Sin nombre: confirma antes de hablar del producto",
+      "Quiere comprar: consulta la cobertura",
+      "No compra por precio: registra no_compra",
+      "Simulación: comprador con tools reales (secreto)",
+    ]) {
+      expect(s11, prueba).toContain(prueba);
+    }
+    // La consola no pasa por Kapta: no sirve para probar el inicio.
+    expect(s11).toContain("**no** llama al webhook de inicio");
+  });
+
+  it("el guion que se pega es el del agente creado: se presenta como Nicol", () => {
+    const s3 = section(DOC, "## 3. Prompt", "\n## ");
+    expect(s3).toContain("Eres Nicol, asesora de {{tienda}}.");
+    expect(s3).toContain('"Le habla Nicol, de {{tienda}}.');
+    expect(DOC).not.toContain("[nombre del agente]");
+  });
+
+  it("los ids del agente, de sus tools y de su número no van en el repositorio", () => {
+    // Con el id del agente, cualquiera abre una conversación web con él; los
+    // de las tools y del número se quedan igual en la consola.
+    for (const [name, text] of [
+      ["docs/voz-leads-agente.md", DOC],
+      ["MOM §33", S33],
+      ["DEPLOY.md", read("DEPLOY.md")],
+    ] as const) {
+      expect(text, name).not.toMatch(/\bagent_[0-9a-z]{20,}/i);
+      expect(text, name).not.toMatch(/\btool_[0-9a-z]{20,}/i);
+      expect(text, name).not.toMatch(/\bphnum_[0-9a-z]{20,}/i);
+    }
+  });
+
+  it("la puerta de Nicol ya existe y ningún texto dice que falta", () => {
+    const deploy = flat(section(read("DEPLOY.md"), "### 12-10-2026 · Agente de voz para leads", "\n### "));
+    for (const [name, text] of [
+      ["docs/voz-leads-agente.md", flat(DOC)],
+      ["MOM §33", flat(S33)],
+      ["DEPLOY.md", deploy],
+    ] as const) {
+      expect(text, name).toContain("+1 645 654 0729");
+      expect(text, name).toContain("«Nicol Leads Telnyx»");
+      expect(text, name).not.toContain("Le falta su puerta");
+      expect(text, name).not.toContain("que se está comprando");
+    }
+    // La forma de la dirección es la de Reproprovincia (test/telnyx.test.ts).
+    for (const text of [flat(DOC), deploy]) {
+      expect(text).toContain("`sip:+16456540729@sip.rtc.elevenlabs.io:5061;transport=tls`");
+    }
+    // El número de la puerta no es el que ve el lead.
+    expect(flat(S33)).toContain("El +1 645 de la puerta no es el que ve el lead");
+    // Producción ya la lee: los deploys de main que siguieron a la variable.
+    expect(deploy).toContain("**Ya en producción**: la variable se puso a las 16:51");
+    for (const [name, text] of [
+      ["docs/voz-leads-agente.md", flat(DOC)],
+      ["MOM §33", flat(S33)],
+      ["DEPLOY.md", deploy],
+    ] as const) {
+      expect(text, name).not.toMatch(/falta el redeploy/i);
+    }
+  });
+
+  it("el inicio no se da por probado: la simulación solo llegó a las tools", () => {
+    expect(flat(S33)).toContain("En las tools está comprobado con una simulación");
+    expect(flat(S33)).toContain("el inicio solo lo llama una llamada por teléfono");
+    expect(flat(S33)).not.toContain("en sus dos tools y en el inicio, comprobado con una simulación");
+  });
+
+  it("el encendido va en orden: secreto, agente, número con su puerta en Vercel y recién Kenku", () => {
+    const s9 = flat(section(DOC, "## 9. Encendido", "\n## "));
+    enOrden(s9, [
+      "**El secreto**",
+      "**El agente en ElevenLabs**: ya creado",
+      "**El número**",
+      "Recién entonces `TELNYX_LEADS_SIP_URI` en Vercel",
+      "**Mientras llega el número peruano**",
+      "**Ajustes de Kenku**",
+    ]);
+    const deploy = flat(section(read("DEPLOY.md"), "### 12-10-2026 · Agente de voz para leads", "\n### "));
+    enOrden(deploy, [
+      "2. **Secretos en Vercel (Production)**",
+      "`VOICE_LEADS_TOOLS_SECRET`",
+      "3. **El agente en ElevenLabs**: **ya creado**",
+      "4. **El número**, después del agente",
+      "`TELNYX_LEADS_SIP_URI`",
+      "6. **Encendido por tienda**",
+    ]);
   });
 
   it("los pasos de encendido nombran la campaña de Biru", () => {

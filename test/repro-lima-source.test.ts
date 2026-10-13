@@ -73,7 +73,7 @@ describe("quién entra (§9.5, D11, E32, E36)", () => {
     expect(gate).toContain('if (!user) redirect("/login");');
     expect(gate).toContain('permissions.can("dispatch.manage")');
     expect(gate).toContain("await getAccessibleStores()");
-    expect(access).toContain('"Repro Lima es de quien despacha (rol admin o vendedora). Pide acceso en Equipo."');
+    expect(access).toContain('"Repro Lima es de quien despacha (rol «Despacho y Grupo GF»). Pide ese rol en Equipo."');
     expect(access).toContain('"No tienes tiendas asignadas. Pide acceso en Equipo."');
     // Cada caso se mira contra la tienda antes de tocarlo.
     expect(actions).toContain("if (!scope.storeIds.has(row.store_id)) return { error: REPRO_OUTSIDE_STORE };");
@@ -305,8 +305,8 @@ describe("el historial: kinds propios que no gastan el cupo de confirmación (D3
   });
 });
 
-describe("la migración 0249 (D12)", () => {
-  const sql = read("db/migrations/0249_lima_repro.sql");
+describe("la migración 0251 (D12)", () => {
+  const sql = read("db/migrations/0251_lima_repro.sql");
 
   it("un caso abierto por pedido, llamadas append-only, escrituras solo del servidor", () => {
     expect(sql).toContain("create unique index if not exists lima_repro_cases_open_uniq\n  on public.lima_repro_cases(order_id) where closed_at is null;");
@@ -353,7 +353,7 @@ describe("el MOM lo documenta (§9.5, §29.6, §29.13)", () => {
   it("y con los textos que dice la pantalla", () => {
     const text = flat(mom);
     for (const quote of [
-      "Repro Lima es de quien despacha (rol admin o vendedora). Pide acceso en Equipo.",
+      "Repro Lima es de quien despacha (rol «Despacho y Grupo GF»). Pide ese rol en Equipo.",
       "con acuerdo de Repro Lima: quedaron programados para su día (van al anaquel de ese día).",
       "con fecha acordada que ya pasó: vuelve a confirmarla en Repro Lima.",
       "Repro Lima: el cliente ya no lo quiere. Desármala (cuaderno «DESARMAR»); no va al estante.",
@@ -386,7 +386,7 @@ describe("el MOM lo documenta (§9.5, §29.6, §29.13)", () => {
       ["«La caja cambió mientras decidías: revisa «Qué hacer con la caja» y vuelve a guardar.»", actions, 'const BOX_CHANGED = "La caja cambió mientras decidías: revisa «Qué hacer con la caja» y vuelve a guardar.";'],
       ["«El pedido cambió mientras lo abrías: vuelve a intentarlo.»", program, '"El pedido cambió mientras lo abrías: vuelve a intentarlo."'],
       ["«El caso ya está cerrado.»", actions, 'return { error: "El caso ya está cerrado." };'],
-      // «Volver a atender» (0249, `needs_reopen`) y su segundo clic.
+      // «Volver a atender» (0251, `needs_reopen`) y su segundo clic.
       ["«Este pedido se cerró con «Desarmar y cerrar». «Volver a atender» lo reabre.»", actions, 'const NEEDS_REOPEN = "Este pedido se cerró con «Desarmar y cerrar». «Volver a atender» lo reabre.";'],
       ["«Si Almacén ya la desarmó, elige «No esperar la caja».»", sheet, "<p>Si Almacén ya la desarmó, elige «No esperar la caja».</p>"],
       // El programa de otro día que se quita aunque no se pudo programar.
@@ -410,8 +410,8 @@ describe("el MOM lo documenta (§9.5, §29.6, §29.13)", () => {
     // El servidor calcula la acción de la caja con el reintento, como el plan.
     const decided = actions.slice(actions.indexOf("const decided = reproBoxAction({"));
     expect(decided.slice(0, decided.indexOf("});"))).toContain("retryAdmission: f.retryAdmission,");
-    // La firma de 0249 que cita el MOM y DEPLOY.md.
-    expect(text).toContain("`lima_repro_claim` (0249) recibe `p_reopen` (por defecto false)");
+    // La firma de 0251 que cita el MOM y DEPLOY.md.
+    expect(text).toContain("`lima_repro_claim` (0251) recibe `p_reopen` (por defecto false)");
     expect(flat(read("DEPLOY.md"))).toContain("`lima_repro_claim` lleva `p_reopen`");
   });
 

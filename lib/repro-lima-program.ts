@@ -62,7 +62,7 @@ export const REPRO_LIMA_PATH = "/dashboard/pedidos/repro-lima";
 // Filas
 // ---------------------------------------------------------------------------
 
-/** El caso tal como lo guarda 0249. */
+/** El caso tal como lo guarda 0251. */
 export interface ReproCaseRow {
   id: string;
   store_id: string;

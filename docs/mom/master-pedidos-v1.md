@@ -32,7 +32,9 @@ heredados continúan disponibles como evidencia y compatibilidad.
 3. Kapta no crea pedidos comerciales. Las correcciones comerciales se realizan
    anulando el pedido incorrecto en Shopify y creando otro.
 4. Kapta es la fuente de verdad operativa, logística, financiera y de auditoría.
-5. El historial se conserva indefinidamente.
+5. El historial se conserva indefinidamente. Excepción: los datos personales
+   del comprador de una tienda cliente de otra organización se anonimizan
+   según §29.15.9; los hechos operativos y financieros se conservan.
 6. Los hechos no se sobrescriben ni se eliminan. Una corrección genera un nuevo
    evento que conserva el valor anterior.
 7. Un pedido puede tener varias salidas físicas simultáneas o sucesivas.
@@ -2192,11 +2194,12 @@ programa sola** (decisión 7).
 - **Dónde.** `/dashboard/pedidos/repro-lima`: «Repro Lima» en la navegación,
   justo después de «Repro Provincia».
 - **Quién.** Quien despacha (`dispatch.manage`, el permiso de «Programar»; lo
-  traen los roles admin y vendedora), en las tiendas que tiene asignadas en
-  Equipo: el mismo alcance que Despacho del día (`getAccessibleStores`). Sin el
-  permiso, la pantalla dice «Repro Lima es de quien despacha (rol admin o
-  vendedora). Pide acceso en Equipo.»; sin tiendas, «No tienes tiendas
-  asignadas». El actor real queda en cada llamada y en cada evento.
+  traen el owner, los admins, la vendedora que aún no tiene roles y el rol
+  «Despacho y Grupo GF», §16), en las tiendas que tiene asignadas en Equipo: el
+  mismo alcance que Despacho del día (`getAccessibleStores`). El rol «Asesora»
+  solo no lo trae. Sin el permiso, la pantalla dice «Repro Lima es de quien
+  despacha (rol «Despacho y Grupo GF»). Pide ese rol en Equipo.»; sin tiendas,
+  «No tienes tiendas asignadas». El actor real queda en cada llamada y en cada evento.
 - **Qué pedidos.** Todo pedido de esas tiendas en «En curso · Por reprogramar
   Lima» (`order_master`), de cualquier courier. La lista se calcula desde el
   Master, no desde los casos.
@@ -2204,7 +2207,7 @@ programa sola** (decisión 7).
 **El caso y el episodio.**
 
 - Un pedido tiene a lo sumo **un caso abierto** (`lima_repro_cases`, índice
-  único parcial, 0249). Nace con el primer gesto («Atender»), sin trigger ni
+  único parcial, 0251). Nace con el primer gesto («Atender»), sin trigger ni
   barrido: un pedido sin caso se ve igual en la lista.
 - El caso atiende un **episodio**: el fallo que lo abrió, que es la parada «No
   entregado» más reciente y la salida de otro courier que no entregó
@@ -2480,7 +2483,7 @@ la recibe sin asignarla (§29.13).
 desarmó, elige «No esperar la caja».».
 
 - Lo comprueba la base, dentro del candado del pedido: `lima_repro_claim`
-  (0249) recibe `p_reopen` (por defecto false). Sin caso abierto, si el último
+  (0251) recibe `p_reopen` (por defecto false). Sin caso abierto, si el último
   caso cerrado del pedido es «Desarmar y cerrar» del mismo episodio, no abre
   otro y responde `needs_reopen` («Este pedido se cerró con «Desarmar y
   cerrar». «Volver a atender» lo reabre.»), salvo con el segundo clic. Un
@@ -2522,7 +2525,7 @@ porque la merma no se automatiza (principio 11).
 Implementación: `lib/repro-lima.ts`, `lib/repro-box-action.ts`,
 `lib/repro-lima-access.ts`, `lib/repro-lima-program.ts`,
 `app/dashboard/pedidos/repro-lima/`, `components/repro-lima-board.tsx`,
-`components/repro-lima-sheet.tsx` y la migración `0249_lima_repro.sql`.
+`components/repro-lima-sheet.tsx` y la migración `0251_lima_repro.sql`.
 Pruebas en `test/repro-lima.test.ts`, `test/repro-box-action.test.ts`,
 `test/repro-lima-program.test.ts`, `test/repro-lima-access.test.ts`,
 `test/repro-lima-actions.test.ts`, `test/repro-lima-scan.test.ts`,
@@ -7161,6 +7164,61 @@ registra en cada evento.
 - Retirar del manifiesto: motivo obligatorio.
 - Corrección de resultado courier: evento de corrección, nunca edición destructiva.
 - Cerrar liquidación observada: rol financiero autorizado.
+- **Solo el dueño reparte poder (12-10-2026).** En **Equipo**, solo el owner
+  cambia roles, invita a alguien como admin y quita a un admin. Un admin invita
+  y quita vendedoras y solo lectura, y nada más. Los permisos de dinero y de
+  datos —«Validar pagos», «Corregir pagos», «Alerta de comprobante repetido»,
+  «Administrar Grupo GF» (tarifas y pago de motorizados) y «Exportar datos»—
+  solo los da o los quita el owner, también a sí mismo; un admin sigue
+  concediendo lo operativo («Reportar entregas de rutas»). Las casillas que no
+  puede tocar le salen apagadas, con el motivo al pasar el ratón, y el servidor
+  lo rechaza igual (`lib/team.ts`, `GRANTED_ONE_BY_ONE[].ownerOnly`).
+
+  Por qué: con doce admins, la regla de «Validar pagos se concede uno por uno»
+  no protegía nada, porque cualquier admin podía concedérselo. Al 12-10-2026 una
+  admin se había dado «Corregir pagos», «Administrar Grupo GF» y «Reportar
+  entregas de rutas», y dos admins habían dado «Validar pagos» a otras dos
+  personas. Lo ya concedido se mantiene; revisarlo es decisión del owner.
+- **Roles que se acumulan (12-10-2026, migración 0250).** Encima del acceso de
+  cada persona (dueño, admin, vendedora, solo lectura, motorizado), el dueño le
+  asigna en **Equipo** uno o varios roles por función, y sus permisos se suman
+  (`FUNCTIONAL_ROLES`, lib/permissions.ts):
+
+  | Rol | Qué trae |
+  | --- | --- |
+  | Asesora | Gestionar pedidos, registrar comprobantes, ver la clave con cobro completo, crear guías (Aliclik, Tanders, Shalom) y pedidos, novedades de Swayp, recuperar devoluciones, recibir devoluciones |
+  | Almacén | Dejar paquetes listos, recibir devoluciones, reingresar al inventario |
+  | Despacho y Grupo GF | Despacho del día y cotejo, entregar la caja, armar rutas, reportar por el motorizado, cargar reportes, stock de couriers, crear guías, recibir devoluciones |
+  | Liquidaciones | Cargar y cerrar liquidaciones, trabajar las hojas, observar liquidaciones e indemnizaciones |
+  | Cobranza | Registrar comprobantes, la clave de recojo, revisar cobros rechazados |
+  | Supervisión | Cambiar estados cerrados, cerrar y reabrir expedientes, anular guías de Aliclik, recibir devoluciones e inventario, ver reportes |
+  | Administración | Gestionar el equipo, administrar tiendas, costos, stock, catálogo de Aliclik, producto por anuncio, configurar hojas, motorizados, ver reportes |
+
+  Reglas:
+  - Quien tiene acceso «vendedora» y algún rol recibe **solo** lo de sus roles;
+    el paquete «vendedora» es el de quien aún no tiene roles. Owner y admin ya
+    lo tienen todo: un rol no les suma nada.
+  - Ningún rol trae los permisos de dinero o datos que da el dueño uno por uno
+    (validar y corregir pagos, alerta de comprobante repetido, Administrar
+    Grupo GF, exportar datos), ni confirmar reembolsos. Lo fija una prueba.
+  - Una revocación puntual sigue ganando sobre cualquier rol.
+  - Solo el dueño asigna o quita roles. Equipo muestra, plegado bajo cada
+    persona, la lista de lo que puede hacer hoy.
+  - Lo que el código decidía con «¿es owner o admin?» ahora pide un permiso:
+    «Gestionar el equipo» (Equipo), «Administrar tiendas» (tiendas, ajustes,
+    ciclo de confirmación, cobertura de Aliclik por distrito, despacho
+    automático de Swayp, emparejamiento masivo), «Stock de couriers» (Swayp y
+    Fénix), «Costos» y «Ver reportes» (Consolidado, panel de tienda,
+    productividad de todo el equipo, repartir leads). Owner y admin los tienen;
+    el menú muestra a cada quien las entradas de sus permisos.
+  - `rider_pay_allowed` (pago de motorizados, en la base) reconoce los roles con
+    la misma regla: armar rutas ← Despacho, cerrar liquidaciones ←
+    Liquidaciones, costos ← Administración.
+
+  Mientras nadie tenga roles, todos ven y pueden lo mismo que antes. Antes de
+  bajar a alguien de admin a vendedora hay que darle acceso explícito a sus
+  tiendas (`user_store_access`): owner y admin ven todas las tiendas de la
+  organización sin esa lista.
 
 ### 16.1 Bandeja de validación de pagos
 
@@ -9292,7 +9350,7 @@ programa sola**.
   «La tienda la confirma con el cliente antes de programarla.». No acepta días
   anteriores a hoy ni posteriores a 60 días; el servidor lo comprueba antes de
   escribir el reporte.
-- La fecha queda en la parada (`delivery_stops.requested_date`, 0249) y en el
+- La fecha queda en la parada (`delivery_stops.requested_date`, 0251) y en el
   `stop_reported` del historial («pidió el mié 14/10 (sin confirmar)»). Solo la
   escribe `writeStopReport`, y solo puede existir con «No entregado ·
   Reprogramado»: un CHECK de la base lo exige, y otro motivo u otro estado la
@@ -10550,6 +10608,10 @@ recibe el pedido en la puerta.
 - **Alta por invitación.** El registro público de Kapta sigue cerrado. Grupo GF
   invita por correo al dueño de la tienda; el dueño entra, crea su
   organización, conecta su Shopify y acepta el contrato con un código.
+- La tienda conecta su Shopify instalando **la app pública de Kapta para
+  tiendas cliente**, desde el enlace que le da Grupo GF. No escribe el dominio
+  de su tienda. Aurela y Kenku siguen con su app actual. Cómo se reclama la
+  instalación y qué pasa al desinstalar: §29.15.9, «Implementación».
 - El contrato nace en `draft` y pasa a `active` solo cuando la tienda lo
   acepta. Kapta comprueba que la tienda pertenece a la organización cliente
   del contrato. Grupo GF nunca vincula una tienda ajena por su cuenta.
@@ -10744,7 +10806,77 @@ COD cobrado por Grupo GF
   del Yape de Grupo GF. El cruce automático, operación por operación, queda
   para después.
 
-#### 29.15.9 Lo que no cambia
+#### 29.15.9 Datos personales del comprador (aprobado el 08-10-2026)
+
+La tienda cliente se conecta con una app pública de Shopify, que obliga a
+borrar datos personales cuando el comprador o la tienda lo piden. Para estas
+tiendas, §2.5 se cumple así: **los hechos se conservan y los datos personales
+del comprador se anonimizan.** Aurela y Kenku no cambian.
+
+- **Dato personal del comprador:**
+  - nombre, teléfono, correo, dirección y referencia, coordenadas y documento;
+  - notas y conversaciones;
+  - fotos de entrega y comprobantes de pago;
+  - nombre y teléfono de quien pagó.
+- **Lo que se conserva:**
+  - número de pedido, montos, fechas, estados y distrito;
+  - salidas, cajas, rutas y paradas (resultado, medio y monto cobrado);
+  - liquidaciones y cuenta corriente;
+  - los eventos, sin datos personales.
+- **Anonimizar** es reemplazar cada dato por «Comprador anonimizado» y borrar
+  los archivos. Queda un evento con fecha y motivo, sin los datos borrados. No
+  se puede deshacer.
+- **Se anonimiza cuando:**
+  1. el comprador pide que se borren sus datos (Shopify, `customers/redact`):
+     ese comprador, en esa tienda;
+  2. la tienda desinstala la app (Shopify, `shop/redact`): todos los
+     compradores de esa tienda. Además se borran sus credenciales de Shopify y
+     la tienda queda desconectada. Sus liquidaciones aprobadas y su cuenta
+     corriente siguen;
+  3. vence el plazo de retención que fije la política de privacidad.
+
+  Un pedido con liquidación por aprobar se anonimiza igual: la liquidación se
+  calcula con el número de pedido y los montos, no con el comprador.
+- **Si el comprador pide sus datos** (Shopify, `customers/data_request`),
+  Kapta le entrega a la tienda lo que guarda de él, dentro del plazo que exija
+  Shopify.
+- **Registro de accesos.** Se registra quién consulta datos personales de
+  compradores de una tienda cliente: persona, fecha y pedido.
+- **Sin cruces entre organizaciones.** Los compradores de una tienda cliente no
+  se usan para Aurela, Kenku ni otra tienda. Ninguna regla los cruza por
+  teléfono con pedidos de otra organización: riesgo, pedidos anteriores,
+  confirmación o campañas.
+
+**Implementación (Fase 1b, primera parte, 10-10-2026).**
+
+- **Qué app usa cada tienda.** Cada tienda guarda con qué app de Shopify se
+  conectó: `interna` (la app actual de Aurela y Kenku) o `clientes` (la app
+  pública). No hay otro valor. Un mismo dominio de Shopify no puede estar en
+  dos tiendas con la app de clientes, y la app de clientes no toma una tienda
+  que ya está con la interna.
+- **Instalación.** La tienda instala desde Shopify y autoriza en el acto. Kapta
+  guarda esa autorización como **instalación pendiente** por 30 minutos. El
+  dueño la reclama dentro de Kapta: elige una organización donde sea owner o
+  admin, o crea una nueva en ese momento, y la tienda se crea ahí con el
+  dominio que trajo Shopify. Una
+  instalación pendiente vencida o ya reclamada no sirve.
+- **Cada aviso de privacidad se registra** con su firma verificada (firma
+  inválida: 401, sin escribir nada) y una sola vez por aviso. Su estado es
+  `pendiente` hasta que se cumple y `atendida` después, con fecha. No hay otro
+  estado. Un aviso de una tienda que no está en Kapta se registra igual, sin
+  tienda.
+- **Al desinstalar** (`app/uninstalled`) y al llegar `shop/redact`: se borra el
+  token de Shopify, la tienda pasa a `disabled` y se anota la fecha de
+  desinstalación (la primera; un aviso posterior no la cambia). Los procesos
+  automáticos ya solo toman tiendas `active`. Pedidos, historial y
+  liquidaciones no se tocan. Si la tienda reinstala, vuelve a `active` con el
+  token nuevo.
+- **Falta (segunda parte):** cumplir los avisos pendientes (anonimizar y
+  entregar datos) y el registro de accesos. Hasta entonces los avisos quedan
+  `pendiente`, dentro del plazo de 30 días de Shopify, y la app no se envía a
+  revisión.
+
+#### 29.15.10 Lo que no cambia
 
 - Shopify sigue siendo la única fuente de pedidos (§2). Kapta no crea pedidos
   para la tienda, y cancelar una solicitud no cancela el pedido en Shopify.
@@ -10753,7 +10885,7 @@ COD cobrado por Grupo GF
 - Rutas que mezclan tiendas, cotejos, custodia, reportes y pago del motorizado
   funcionan igual para todos.
 
-#### 29.15.10 Fuera de esta versión
+#### 29.15.11 Fuera de esta versión
 
 - Entrada por API o Excel para tiendas sin Shopify (§29.11).
 - Conteo, reserva, recepción y retiro del inventario de la tienda (§29.3).
@@ -10763,7 +10895,7 @@ COD cobrado por Grupo GF
 - Cruce automático del Yape de Grupo GF con su estado de cuenta.
 - Cobro de la suscripción de Kapta a la tienda.
 
-#### 29.15.11 Criterios de aceptación
+#### 29.15.12 Criterios de aceptación
 
 - Una tienda invitada que acepta el contrato con su código lo deja `active`.
   Un código equivocado o de otra invitación no lo activa.
@@ -10808,6 +10940,15 @@ COD cobrado por Grupo GF
 - Aprobar la liquidación deja los pedidos entregados de la tienda en
   «Finalizado · Entregado y liquidado». Una corrección posterior aparece como
   ajuste en la cuenta corriente, sin cambiar la liquidación aprobada.
+- Un `customers/redact` deja a ese comprador como «Comprador anonimizado» en
+  todos sus pedidos de esa tienda y borra sus fotos y comprobantes. Montos,
+  estados, rutas y liquidaciones no cambian.
+- Un `shop/redact` anonimiza a todos los compradores de la tienda, borra sus
+  credenciales de Shopify y la deja desconectada. Su cuenta corriente sigue
+  visible.
+- Un webhook de privacidad con firma inválida responde 401 y no toca nada.
+- Un pedido de tienda cliente no aparece en los cruces por teléfono de los
+  pedidos de Aurela o Kenku, ni al revés.
 
 ## 30. Liquidaciones 2 — hojas por dominio
 
@@ -11678,6 +11819,10 @@ redactado:
 - **Registra antes de anunciar o despedirse**, una sola vez
   (`registrar_resultado_lead`), la lección de §11.8 del 08-10-2026.
 - Dura **cinco minutos como mucho** (`max_duration` de ElevenLabs).
+- Corta por silencio a los **40 s** desde la última vez que habló la persona
+  (`silence_end_call_timeout`): alcanza para insistir dos veces y registrar
+  «no contesta». Con los 20 s del agente de §11.8 cortaba antes de registrar, y
+  un buzón o una línea muda contaban como «contestó, sin gestión» (33.8).
 
 **Lo que el agente nunca hace.** Crear pedidos, ni decir que el pedido quedó
 hecho: lo confirma una asesora. Pedir o recibir pagos, datos de tarjeta o
@@ -11811,7 +11956,12 @@ vigilante. Nada más:
 - **Puerta SIP y número**: cuando el lead contesta, el aviso de Telnyx abre el
   tramo a `TELNYX_LEADS_SIP_URI`, con el número `TELNYX_LEADS_FROM_NUMBER`
   (vacío = el de §11.8). Sin esa puerta la llamada falla: **nunca** cae al
-  agente de Reproprovincia, que leería un pedido que no existe.
+  agente de Reproprovincia, que leería un pedido que no existe. El número se
+  importa en ElevenLabs aceptando solo las direcciones de Telnyx
+  (`192.76.120.0/24`, `64.16.250.0/24`), como el de §11.8. Sin esa lista,
+  cualquiera que mande un INVITE a la puerta llega al agente y, mientras Kapta
+  marca a un lead, recibe su ficha. La puerta del agente de leads es el
+  +1 645 654 0729 («Nicol Leads Telnyx», 12-10-2026).
 - **El vigilante** (`sweepStaleCalls`) cierra las abiertas de los dos. Una de
   lead en conversación dura hasta **8 minutos** antes de darse por caída
   (`LEAD_IN_PROGRESS_TTL_MINUTES`; marcando, 3 como todas): el agente toma más
@@ -11872,9 +12022,26 @@ vigilante. Nada más:
 
 ### 33.9 Pendientes
 
+- **El agente en ElevenLabs ya existe** (12-10-2026, «Agente de leads · Kenku
+  Biru (piloto)»), configurado según `docs/voz-leads-agente.md`; se presenta
+  como Nicol, usa Gemini 2.5 Flash sin razonamiento (con Flash Lite fallaba las
+  pruebas del guion, §11 de ese documento) y ya tiene `VOICE_LEADS_TOOLS_SECRET`
+  en sus dos tools y en el inicio. En las tools está comprobado con una
+  simulación que llamó a Kapta; el inicio solo lo llama una llamada por
+  teléfono, así que se comprueba en la primera prueba. **Su puerta también
+  existe** (12-10-2026): el +1 645 654 0729, comprado en Telnyx e importado en
+  ElevenLabs por SIP trunk como «Nicol Leads Telnyx» (solo entrada desde las
+  direcciones de Telnyx, sin usuario ni contraseña) y asignado a él;
+  `TELNYX_LEADS_SIP_URI` ya está en Vercel y producción la lee desde el deploy
+  de las 17:00 del 12-10-2026. Falta: producto y oferta de Kenku (sin cargar todavía, a
+  propósito), «Probar en mi teléfono» y recién entonces encender (33.8).
 - **Número peruano en Telnyx** para el agente de leads
   (`TELNYX_LEADS_FROM_NUMBER`). Sin él, el lead ve el número de Telnyx de
-  Reproprovincia, que hoy es de EE. UU., y contesta menos.
+  Reproprovincia, que hoy es de EE. UU., y contesta menos. **Decisión del owner
+  (12-10-2026):** mientras llega, el piloto sale con el de EE. UU.
+  (`TELNYX_LEADS_FROM_NUMBER` vacío); las primeras semanas miden al agente con
+  ese número. El +1 645 de la puerta no es el que ve el lead: cuando llegue el
+  peruano, va solo en `TELNYX_LEADS_FROM_NUMBER`, y redeploy.
 - **Revisión legal** del cierre «Gracias, no insisto» y del consentimiento para
   llamar a quien escribió por un anuncio, igual que el aviso de grabación de
   §11.8.
@@ -11887,7 +12054,9 @@ vigilante. Nada más:
   `voice_calls.transcript` queda vacío.
 - **Que ElevenLabs mande `caller_id`** en el inicio de las llamadas por SIP:
   revisarlo en las primeras llamadas reales (33.7). Sin él, el control de
-  «otro número» no hace nada.
+  «otro número» no hace nada. Indicio (12-10-2026): en las llamadas SIP de
+  Reproprovincia, que salen con el mismo número, ElevenLabs registra quién
+  llama como `+19182386713`, un E.164 solo, que es lo que el control acepta.
 - **`frio_cobertura_v1` sobre las campañas del piloto** (33.3): el owner decide
   si se pausa ese experimento para las campañas del piloto o si su lectura las
   deja fuera mientras dure.

@@ -229,7 +229,7 @@ export function reproEventKind(outcome: ReproOutcome): ReproEventKind {
   return REPRO_EVENT_KINDS.call;
 }
 
-/** Por qué se cierra un caso (CHECK de 0249). */
+/** Por qué se cierra un caso (CHECK de 0251). */
 export type ReproCloseReason = "desarmar_cerrar" | "fuera_de_etapa" | "nuevo_intento";
 
 /** El candado del caso: el mismo TTL y latido que Envíos (D10). */

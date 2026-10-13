@@ -10,6 +10,7 @@ import { RESCHEDULE_MAX_DAYS } from "@/lib/gf-dispatch-program";
 import { agreementDateProblem, materializationPlan, type BoxLocation } from "@/lib/repro-lima";
 import { swaypDispatchDayOptions } from "@/lib/swayp-dispatch-days";
 import { planText } from "@/components/repro-lima-sheet";
+import { navItems } from "@/components/sidebar";
 
 // La hoja importa las acciones de servidor; aquí solo se prueban sus textos.
 vi.mock("@/app/dashboard/pedidos/repro-lima/actions", () => ({}));
@@ -49,7 +50,7 @@ describe("quién entra (D11, E32, E36)", () => {
     expect(page).toContain('<EmptyState title="No tienes tiendas asignadas">{scope.error}</EmptyState>');
     expect(page).toContain('title="No pudimos cargar Repro Lima"');
     // El texto de E32: el permiso viene del rol, no de un control de Equipo.
-    expect(access).toContain("Repro Lima es de quien despacha (rol admin o vendedora). Pide acceso en Equipo.");
+    expect(access).toContain("Repro Lima es de quien despacha (rol «Despacho y Grupo GF»). Pide ese rol en Equipo.");
     expect(page).not.toContain("Pide «Despachar» en Equipo");
   });
 
@@ -74,7 +75,16 @@ describe("la entrada del menú (§9.5, D11)", () => {
     expect(sidebar).toContain('const REPRO_LIMA_ITEM: NavItem = { href: "/dashboard/pedidos/repro-lima", label: "Repro Lima", icon: IconTruck };');
     const after = /\{ href: "\/dashboard\/envios", label: "Repro Provincia", icon: IconTruck \},\n\s*\.\.\.\(canReproLima \? \[REPRO_LIMA_ITEM\] : \[\]\),/g;
     expect(sidebar.match(after)?.length).toBe(2);
-    expect(sidebar).toContain("navItems(isVendedoraOnly, canValidatePayments, canManageLogistics, canReproLima)");
+    expect(sidebar).toContain("navItems(isVendedoraOnly, canValidatePayments, canManageLogistics, navAccess, canReproLima)");
+  });
+
+  it("con los roles que se acumulan (§16), la entrada sigue al permiso, no al menú de cada rol", () => {
+    const hrefs = (vendedora: boolean, repro: boolean) => navItems(vendedora, false, false, undefined, repro).map((it) => it.href);
+    for (const vendedora of [false, true]) {
+      const items = hrefs(vendedora, true);
+      expect(items[items.indexOf("/dashboard/envios") + 1]).toBe("/dashboard/pedidos/repro-lima");
+      expect(hrefs(vendedora, false)).not.toContain("/dashboard/pedidos/repro-lima");
+    }
   });
 
   it("el permiso sale del layout y pasa por el armazón", () => {

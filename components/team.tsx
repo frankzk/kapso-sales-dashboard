@@ -4,11 +4,12 @@ import Link from "next/link";
 import { useActionState, useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { Role } from "@/lib/types";
-import { ROLES } from "@/lib/team";
-import { GRANTED_ONE_BY_ONE } from "@/lib/permissions";
+import { ROLES, invitableRoles } from "@/lib/team";
+import { FUNCTIONAL_ROLES, GRANTED_ONE_BY_ONE } from "@/lib/permissions";
 import {
   addMember,
   removeMember,
+  setMemberFunctionRole,
   setMemberRole,
   setPaymentValidationPermission,
   setStoreAccess,
@@ -56,6 +57,10 @@ export interface TeamMember {
   stores: string[]; // store ids the member has explicit access to
   /** Permiso de concesión individual → si esta persona lo tiene hoy. */
   grants: Record<string, boolean>;
+  /** Roles acumulables (0250, MOM §16). */
+  functions: string[];
+  /** Todo lo que puede hacer hoy, con el nombre que se lee en Equipo. */
+  effective: string[];
 }
 
 interface Store {
@@ -161,6 +166,16 @@ export function TeamManager({
             {/* El texto se arma desde la misma lista que las casillas: con la
                 frase escrita a mano, añadir un permiso dejaba la explicación
                 hablando solo del primero. */}
+            <p className="mb-2 text-xs text-slate-500">
+              <strong className="font-semibold text-slate-700">Roles:</strong> cada uno es el paquete de
+              permisos de una función y una persona puede tener varios; sus permisos se suman. Quien
+              tiene acceso «vendedora» y algún rol recibe solo lo de sus roles. Los asigna el dueño.{" "}
+              {FUNCTIONAL_ROLES.map((entry) => (
+                <span key={entry.role} className="mr-1 inline-block">
+                  <strong className="font-semibold text-slate-700">{entry.label}</strong>: {entry.description}
+                </span>
+              ))}
+            </p>
             <p className="mb-3 text-xs text-slate-500">
               Estos permisos se conceden persona por persona según su responsabilidad; solo
               «Exportar datos» viene ya con dueño y admin. Los accesos correspondientes aparecen
@@ -173,12 +188,13 @@ export function TeamManager({
               ))}
             </p>
             <div className={TABLE_WRAP_FROM[1110]}>
-              <table className="w-full min-w-[880px] text-sm">
+              <table className="w-full min-w-[1040px] text-sm">
                 <thead>
                   <tr className={cn(STICKY_HEAD, "text-xs text-slate-500")}>
                     <th className="py-2 text-left font-medium">Miembro</th>
+                    <th className="py-2 text-left font-medium">Roles</th>
                     <th className="py-2 text-left font-medium">Permisos por persona</th>
-                    <th className="py-2 text-left font-medium">Rol</th>
+                    <th className="py-2 text-left font-medium" title="Dueño, admin, vendedora, solo lectura o motorizado">Acceso</th>
                     <th className="py-2 text-left font-medium">Acceso a tiendas</th>
                     <th className="py-2 text-right font-medium">Acción</th>
                   </tr>
@@ -191,6 +207,9 @@ export function TeamManager({
                         {m.user_id === currentUserId && (
                           <span className="ml-1 text-xs text-slate-400">(tú)</span>
                         )}
+                      </td>
+                      <td className="py-3">
+                        <FunctionRolesCell orgId={org.id} member={m} myRole={myRole} />
                       </td>
                       <td className="py-3">
                         <PaymentValidationToggle orgId={org.id} member={m} myRole={myRole} />
@@ -208,7 +227,7 @@ export function TeamManager({
                   ))}
                   {!members.length && (
                     <tr>
-                      <td colSpan={5} className="py-4 text-sm text-slate-400">
+                      <td colSpan={6} className="py-4 text-sm text-slate-400">
                         Sin miembros todavía.
                       </td>
                     </tr>
@@ -269,7 +288,8 @@ function AddMemberForm({ orgId, myRole }: { orgId: string; myRole: Role }) {
             defaultValue="viewer"
             className="mt-1 rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500"
           >
-            {roleOptions(myRole === "owner").map((r) => (
+            {/* Un admin solo invita vendedoras y solo lectura (MOM §16). */}
+            {invitableRoles(myRole).map((r) => (
               <option key={r} value={r}>
                 {r}
               </option>
@@ -305,7 +325,8 @@ function RoleForm({
   const saved = useSavedFlash(pending, state.notice);
   const isOwnerTarget = member.role === "owner";
   const lastOwner = isOwnerTarget && ownerCnt <= 1;
-  const canEdit = myRole === "owner" || !isOwnerTarget;
+  // Solo el dueño cambia roles (MOM §16, 12-10-2026).
+  const canEdit = myRole === "owner";
   const disabled = pending || lastOwner || !canEdit;
   // Always include the current role as an option so the value is valid.
   const showOwnerOption = myRole === "owner" || isOwnerTarget;
@@ -319,7 +340,7 @@ function RoleForm({
         disabled={disabled}
         onChange={(e) => e.currentTarget.form?.requestSubmit()}
         className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-brand-500 disabled:bg-slate-50 disabled:text-slate-400"
-        title={lastOwner ? "No puedes cambiar al único owner" : undefined}
+        title={lastOwner ? "No puedes cambiar al único owner" : !canEdit ? "Solo el dueño cambia roles" : undefined}
       >
         {roleOptions(showOwnerOption).map((r) => (
           <option key={r} value={r}>
@@ -337,6 +358,80 @@ function RoleForm({
   );
 }
 
+/**
+ * Los roles acumulables de una persona (MOM §16). El dueño los marca y desmarca;
+ * los demás los ven. Debajo, plegado, todo lo que la persona puede hacer hoy.
+ */
+function FunctionRolesCell({ orgId, member, myRole }: { orgId: string; member: TeamMember; myRole: Role }) {
+  const canEdit = myRole === "owner";
+  return (
+    <div className="flex flex-col gap-1">
+      {canEdit ? (
+        FUNCTIONAL_ROLES.map((entry) => (
+          <FunctionRoleToggle key={entry.role} orgId={orgId} member={member} entry={entry} />
+        ))
+      ) : member.functions.length ? (
+        <div className="flex max-w-56 flex-wrap gap-1">
+          {FUNCTIONAL_ROLES.filter((entry) => member.functions.includes(entry.role)).map((entry) => (
+            <span key={entry.role} title={entry.description} className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-700">
+              {entry.label}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <span className="text-xs text-slate-400" title="Solo el dueño asigna roles">Sin roles</span>
+      )}
+      <details className="mt-1 text-[11px] text-slate-500">
+        <summary className="cursor-pointer select-none font-medium text-slate-600">
+          {member.effective.length} {member.effective.length === 1 ? "permiso" : "permisos"}
+        </summary>
+        {member.effective.length ? (
+          <ul className="mt-1 max-w-56 list-disc space-y-0.5 pl-4">
+            {member.effective.map((label) => (
+              <li key={label}>{label}</li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-1">Solo puede mirar.</p>
+        )}
+      </details>
+    </div>
+  );
+}
+
+function FunctionRoleToggle({
+  orgId,
+  member,
+  entry,
+}: {
+  orgId: string;
+  member: TeamMember;
+  entry: (typeof FUNCTIONAL_ROLES)[number];
+}) {
+  const [state, action, pending] = useActionState(setMemberFunctionRole, initial);
+  const has = member.functions.includes(entry.role);
+  return (
+    <form action={action} className="flex flex-col">
+      <input type="hidden" name="org_id" value={orgId} />
+      <input type="hidden" name="user_id" value={member.user_id} />
+      <input type="hidden" name="role" value={entry.role} />
+      <input type="hidden" name="grant" value={has ? "0" : "1"} />
+      <label className="inline-flex w-fit cursor-pointer items-center gap-2 text-xs font-medium text-slate-700" title={entry.description}>
+        <input
+          type="checkbox"
+          defaultChecked={has}
+          disabled={pending}
+          onChange={(event) => event.currentTarget.form?.requestSubmit()}
+          aria-label={`${entry.label} — rol de ${member.email}`}
+          className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+        />
+        {entry.label}
+      </label>
+      {state.error && <span className="max-w-56 text-[11px] text-red-600">{state.error}</span>}
+    </form>
+  );
+}
+
 function RemoveForm({
   orgId,
   member,
@@ -350,7 +445,8 @@ function RemoveForm({
 }) {
   const [state, action, pending] = useActionState(removeMember, initial);
   const lastOwner = member.role === "owner" && ownerCnt <= 1;
-  const canRemove = myRole === "owner" || member.role !== "owner";
+  // A un admin u owner solo lo quita el dueño (MOM §16).
+  const canRemove = myRole === "owner" || (member.role !== "owner" && member.role !== "admin");
   const disabled = pending || lastOwner || !canRemove;
   return (
     <form action={action} className="inline-flex flex-col items-end gap-1">
@@ -360,7 +456,7 @@ function RemoveForm({
         type="submit"
         disabled={disabled}
         className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:text-slate-300 disabled:hover:bg-transparent"
-        title={lastOwner ? "No puedes remover al único owner" : undefined}
+        title={lastOwner ? "No puedes remover al único owner" : !canRemove ? "Solo el dueño puede quitar a un admin" : undefined}
       >
         Quitar
       </button>
@@ -482,7 +578,8 @@ function OneByOneToggle({
 }) {
   const [state, action, pending] = useActionState(setPaymentValidationPermission, initial);
   const saved = useSavedFlash(pending, state.notice);
-  const canEdit = myRole === "owner" || member.role !== "owner";
+  // Dinero y datos: solo el dueño los da o los quita, también a sí mismo (MOM §16).
+  const canEdit = myRole === "owner" || (!entry.ownerOnly && member.role !== "owner");
   const has = member.grants[entry.permission] ?? false;
   return (
     <form action={action} className="flex flex-col gap-0.5">
@@ -495,7 +592,7 @@ function OneByOneToggle({
           "inline-flex w-fit items-center gap-2 text-xs font-medium",
           canEdit ? "cursor-pointer text-slate-700" : "cursor-not-allowed text-slate-400",
         )}
-        title={entry.description}
+        title={!canEdit && entry.ownerOnly ? `${entry.description} Solo el dueño lo da o lo quita.` : entry.description}
       >
         <input
           type="checkbox"

@@ -1,7 +1,7 @@
 // La fecha que pidió el cliente (12-10-2026, D9, MOM §9.5). El motorizado, la
 // coordinación o el cuaderno la dejan en la parada (`delivery_stops.requested_date`)
 // y la tienda la confirma en Repro Lima: nunca programa la salida. La escribe
-// SOLO writeStopReport, y solo con «Reprogramado por el cliente» (CHECK de 0249).
+// SOLO writeStopReport, y solo con «Reprogramado por el cliente» (CHECK de 0251).
 //   - undefined conserva lo que había (Liquidaciones 2 no la manda);
 //   - null la borra;
 //   - con otro resultado se borra siempre;
@@ -116,7 +116,7 @@ describe("la fecha que pidió el cliente en el reporte de la parada", () => {
     const delivered = await report({ status: "entregado", outcomeReason: null, paymentMethod: "efectivo", collectedAmount: 50, requestedDate: "2026-10-14" });
     expect(delivered.result.ok).toBe(true);
     expect(delivered.update).toMatchObject({ status: "entregado", requested_date: null });
-    // Sin fecha que mandar, otro resultado la borra igual: el CHECK de 0249 no la deja.
+    // Sin fecha que mandar, otro resultado la borra igual: el CHECK de 0251 no la deja.
     expect((await report({ outcomeReason: "no_contesta" })).update).toMatchObject({ requested_date: null });
   });
 

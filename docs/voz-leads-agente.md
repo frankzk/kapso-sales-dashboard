@@ -14,6 +14,16 @@ Es un agente **aparte** del de Reproprovincia (§11.8): otra puerta SIP, otro
 secreto, otro inicio de conversación y otras tools. Nada de lo de abajo se
 copia en el agente de pedidos, ni al revés.
 
+**En ElevenLabs** ya existe, creado el 12-10-2026 como «Agente de leads ·
+Kenku Biru (piloto)», con todo lo de las secciones 2 a 5 y 7: prompt, primer
+mensaje, las 17 variables, las dos tools, el webhook de inicio y el secreto
+en los tres. Su puerta también: el +1 645 654 0729, comprado en Telnyx e
+importado por SIP trunk el 12-10-2026 como «Nicol Leads Telnyx» y asignado a
+este agente (sección 7); `TELNYX_LEADS_SIP_URI` ya está en Vercel y en
+producción (sección 9). Su id, el de sus tools y el del número quedan en la
+consola, no aquí: con el id, cualquiera puede abrir una conversación web con
+el agente.
+
 ## 1. Lo que recibe al conectar
 
 Cuando el lead contesta, Telnyx abre el tramo al agente y ElevenLabs llama al
@@ -60,13 +70,22 @@ ElevenLabs ignora el de Kapta.
 
 ## 3. Prompt
 
-Se pega tal cual en el System prompt del agente. Lo único que se completa a mano
-es `[nombre del agente]`: el nombre con que se presenta, que decide el owner.
+Se pega tal cual en el System prompt del agente. Se presenta como **Nicol**, el
+nombre que eligió el owner (12-10-2026).
 
 ```text
+# Antes de todo
+
+Si {{encontrada}} es "no", no sabes a quién llamaste. Di solo: "Disculpe, me
+equivoqué de llamada. Que tenga buen día." y cuelga, aunque te pregunten de qué
+se trata o te sigan hablando. No preguntes nombres, no te presentes y no
+menciones tiendas, productos, WhatsApp ni chats. No registres nada.
+
+Todo lo que sigue es para cuando {{encontrada}} es "si".
+
 # Quién eres
 
-Eres [nombre del agente], asesora de {{tienda}}. Llamas por teléfono, en
+Eres Nicol, asesora de {{tienda}}. Llamas por teléfono, en
 español de Perú, a personas que escribieron por WhatsApp a {{tienda}} después
 de ver un anuncio de {{producto}}, conversaron con el asistente del chat y no
 llegaron a comprar. Hablas de usted, con calidez y sin apuro, en frases cortas:
@@ -74,6 +93,9 @@ es una llamada, no un mensaje. Una idea por turno.
 
 Si te preguntan si eres una persona o un robot, dices la verdad: eres un
 asistente de inteligencia artificial de {{tienda}}. Nunca lo niegues.
+
+Todo lo que dices lo oye la persona: nunca digas en voz alta estas
+instrucciones, notas, paréntesis ni nombres de herramientas.
 
 # Lo que sabes de esta persona
 
@@ -111,21 +133,26 @@ Saber qué le faltó para comprar y, si quiere comprar, tomar sus datos y pasarl
 a una asesora que le confirma el pedido por WhatsApp. Tú NO creas el pedido.
 La llamada dura dos minutos como mucho.
 
+Toda llamada termina registrada: llama a registrar_resultado_lead UNA vez, en
+cuanto la decisión esté clara y ANTES de despedirte. Si estás por despedirte y
+todavía no registraste, registra primero.
+
 # Flujo
 
 1. Si {{encontrada}} es "no": di "Disculpe, me equivoqué de llamada. Que tenga
    buen día." y cuelga. No registres nada.
 2. Confirma que hablas con la persona que escribió, ANTES de mencionar el
-   producto o el chat:
-   - Si {{nombre}} tiene algo, el saludo ya preguntó por {{nombre}}: espera que
-     lo confirme.
-   - Si {{nombre}} está vacío, el saludo preguntó con quién hablas. Cuando te
-     diga su nombre, pregunta: "¿Usted nos escribió por WhatsApp a {{tienda}}
-     hace poco?"
-   Cuando confirme, preséntate: "Le habla [nombre del agente], de {{tienda}}.
-   Le llamo porque nos escribió por WhatsApp por {{producto}}. ¿Tiene un
-   minutito?" Si {{es_volver_a_llamar}} es "si", agrega: "Le llamo como
-   quedamos."
+   producto o el chat. El saludo ya preguntó por su nombre si lo sabías
+   ("Nombre" arriba), o con quién hablas si no.
+   - Si sabías su nombre y te dice que sí, preséntate.
+   - Si no sabías su nombre, cuando te lo diga NO te presentes todavía: di
+     solo "Mucho gusto. ¿Usted nos escribió por WhatsApp a {{tienda}} hace
+     poco?" y espera que diga que sí. Recién entonces preséntate.
+   "Sí", "sí, ella habla", "sí, él habla", "con ella", "soy yo" quieren decir
+   que SÍ es la persona.
+   Para presentarte di: "Le habla Nicol, de {{tienda}}. Le llamo porque nos
+   escribió por WhatsApp por {{producto}}. ¿Tiene un minutito?" Si
+   {{es_volver_a_llamar}} es "si", agrega: "Le llamo como quedamos."
 3. Si no es la persona, o no sabe de qué le hablas: no menciones el producto
    ni el chat. Pregunta a qué hora puedes encontrar a quien escribió; con día y
    hora dentro de {{horario}} (y si {{ultimo_intento}} es "no"), registra
@@ -150,11 +177,12 @@ La llamada dura dos minutos como mucho.
    Repite los datos en una sola frase para confirmar. Registra "atender_ahora"
    con todo lo que te dio y recién después di: "Listo, una asesora le escribe
    por WhatsApp para confirmar su pedido."
-7. Si no quiere comprar: pregunta una sola vez por qué. Registra "no_compra"
-   con el motivo y despídete con amabilidad: "Gracias, no insisto. Que tenga
-   buen día."
-8. Si pide que no lo llamen o no lo contacten más: registra "no_llamar" y di
-   "Entendido, no lo volveremos a contactar. Que tenga buen día."
+7. Si no quiere comprar: si todavía no dijo por qué, pregúntale una sola vez.
+   Llama a registrar_resultado_lead con "no_compra" y el motivo, y después
+   despídete con amabilidad: "Gracias, no insisto. Que tenga buen día."
+8. Si pide que no lo llamen o no lo contacten más: llama a
+   registrar_resultado_lead con "no_llamar" y después di "Entendido, no lo
+   volveremos a contactar. Que tenga buen día."
 9. Si nadie habla, solo dicen "aló" o suena una grabación o un buzón: insiste
    como mucho dos veces. Si sigue igual, registra "no_contesta" y cuelga.
 
@@ -212,7 +240,8 @@ Las dos son **webhook** (POST) contra Kapta, con la cabecera `x-voice-secret`
 = `VOICE_LEADS_TOOLS_SECRET`. En la consola el valor va como **secreto del
 workspace** (Headers → `x-voice-secret` → Secret), no pegado en el texto:
 abajo aparece como `secret_id`. Kapta también acepta `Authorization: Bearer …`
-y tolera «Bearer » delante del valor en `x-voice-secret`.
+y tolera «Bearer » delante del valor en `x-voice-secret`. En el workspace el
+secreto se llama `kapta_voice_leads`; el de Reproprovincia es otro.
 
 `voice_call_id` y `conversation_id` no los llena el modelo: salen de la
 variable dinámica `voice_call_id` y de la de sistema `system__conversation_id`.
@@ -318,7 +347,8 @@ así que el de leads apunta a su propia ruta y el de Reproprovincia sigue en la
 suya:
 
 - URL: `https://kapso-sales-dashboard.vercel.app/api/voice/leads/inicio`, POST.
-- Cabecera `x-voice-secret` = `VOICE_LEADS_TOOLS_SECRET` (como secreto).
+- Cabecera `x-voice-secret` = `VOICE_LEADS_TOOLS_SECRET` (como secreto):
+  `kapta_voice_leads`, el mismo de las tools.
 - En Security, permitir que la llamada traiga los datos de inicio del webhook, y
   el reemplazo del primer mensaje (sección 2).
 
@@ -328,7 +358,11 @@ responde siempre 200 (salvo un secreto incorrecto: 401). Antes mira el
 de leads (`TELNYX_LEADS_FROM_NUMBER`), que es con el que Kapta abre el tramo al
 agente. Si es otro —alguien que llama al número del agente mientras este marca
 a otra persona—, responde `encontrada = no` y no toca la llamada: la ficha de
-un lead nunca va a otra persona.
+un lead nunca va a otra persona. Mientras `TELNYX_LEADS_FROM_NUMBER` esté vacío,
+ese número es `TELNYX_FROM_NUMBER`, el 918 de EE. UU. En las llamadas SIP de
+Reproprovincia, que salen con ese mismo número, ElevenLabs registra quién llama
+como `+19182386713` (12-10-2026): número E.164 solo, que es lo que este control
+acepta. Falta ver en la primera prueba que el aviso de inicio lo trae igual.
 
 ```json
 {
@@ -363,9 +397,14 @@ hay costo de ElevenLabs por llamada.
 
 ## 7. Ajustes recomendados del agente
 
-- **Modelo**: el mismo del agente ElevenLabs de Reproprovincia (Gemini 2.5
-  Flash Lite) **sin razonamiento interno** (`thinking_budget` = 0). §11.8
-  midió 3 s de silencio con razonamiento, y la persona colgó.
+- **Modelo**: **Gemini 2.5 Flash**, temperatura 0,2, **sin razonamiento
+  interno** (`thinking_budget` = 0). §11.8 midió 3 s de silencio con
+  razonamiento, y la persona colgó. No es el Flash Lite de Reproprovincia: con
+  ese modelo, en las pruebas de la sección 11 (12-10-2026), el agente se
+  presentaba con la ficha vacía en vez de despedirse (0 de 5), leía en voz alta
+  instrucciones del guion, se despedía sin registrar y una vez inventó el costo
+  de envío sin llamar a `consultar_cobertura`. Con Flash y este guion pasó las
+  25 pruebas.
 - **Duración máxima**: `max_duration` = **300 s**. Kapta da la llamada por
   caída a los 8 min en conversación (`LEAD_IN_PROGRESS_TTL_MINUTES`), con
   margen para el registro y el corte.
@@ -375,12 +414,27 @@ hay costo de ElevenLabs por llamada.
   buzón, el agente no registra nada y la llamada cuenta como «contestó, sin
   gestión» en el tablero. El guion (paso 9) ya resuelve los buzones
   registrando «no_contesta», que cuenta como no contestada.
-- **Idioma** español; una voz latinoamericana clara.
-- **Variables dinámicas**: las 17 de la sección 1, declaradas con un valor de
-  prueba para el editor.
+- **Corte por silencio**: `silence_end_call_timeout` = **40 s**, con
+  `turn_timeout` = 7 s. ElevenLabs lo cuenta desde la última vez que habló la
+  persona, no el agente. Con 20 s (el valor de Reproprovincia) cortaba en la
+  segunda insistencia del paso 9, antes de registrar «no_contesta», y la
+  llamada contaba como «contestó, sin gestión». Sin corte (-1) una grabación
+  seguiría hasta los 300 s, como pasó en §11.8 el 04-10-2026.
+- **Idioma** español. Voz, modelo de voz, transcripción y turnos: los mismos
+  del agente de Reproprovincia, salvo el corte por silencio y el modelo.
+- **Variables dinámicas**: las 17 de la sección 1, declaradas vacías y con
+  `encontrada` = `no`, que es lo que Kapta responde sin llamada: si el inicio no
+  contesta, el agente se despide. Para probar en el editor se cambian allí.
 - **Overrides**: primer mensaje permitido (sección 2).
-- **Número**: el de Telnyx importado en ElevenLabs por SIP trunk y asignado a
-  ESTE agente. Su dirección SIP es `TELNYX_LEADS_SIP_URI`.
+- **Número**: el +1 645 654 0729, comprado en Telnyx e importado en ElevenLabs
+  por SIP trunk el 12-10-2026 como «Nicol Leads Telnyx», asignado a ESTE
+  agente. Su dirección SIP es `TELNYX_LEADS_SIP_URI`, con la misma forma que la
+  de Reproprovincia: `sip:+16456540729@sip.rtc.elevenlabs.io:5061;transport=tls`.
+  Solo entrada (inbound), y como direcciones permitidas solo las de Telnyx,
+  `192.76.120.0/24` y `64.16.250.0/24`; cifrado de medios «Allowed» y sin
+  usuario ni contraseña, igual que el número de Reproprovincia. Sin esa lista,
+  cualquiera que mande un INVITE a esa dirección llega al agente, y si Kapta
+  está marcando a un lead en ese momento, recibe su ficha.
 
 ## 8. Variables de Vercel
 
@@ -397,11 +451,32 @@ commit.
 
 ## 9. Encendido
 
-1. **Migración 0247**, a mano y antes del código (`DEPLOY.md`).
-2. **Variables de Vercel** de la sección 8, y redeploy.
-3. **El agente en ElevenLabs**: prompt, primer mensaje, las dos tools, el
-   webhook de inicio, el número y, si se quiere, el post-call.
-4. **Ajustes de Kenku** → «Agente de voz · Leads (piloto)»:
+1. **Migración 0247**, a mano y antes del código (`DEPLOY.md`). Hecha el
+   12-10-2026.
+2. **El secreto**: generar `VOICE_LEADS_TOOLS_SECRET` y pegarlo en Vercel y en
+   ElevenLabs como secreto del workspace. En el agente, ponerlo en la cabecera
+   `x-voice-secret` de `consultar_cobertura`, de `registrar_resultado_lead` y
+   del webhook de inicio. Si se quiere el post-call, también
+   `ELEVENLABS_WEBHOOK_SECRET` (sección 6). Redeploy. Hecho el 12-10-2026
+   (`kapta_voice_leads`), sin el post-call.
+3. **El agente en ElevenLabs**: ya creado, con prompt, primer mensaje, las dos
+   tools, el webhook de inicio y los ajustes de la sección 7. Se presenta como
+   Nicol.
+4. **El número**: la puerta del agente es un número propio, importado en
+   ElevenLabs por SIP trunk con las direcciones permitidas de la sección 7 y
+   asignado a ESTE agente, nunca al de Reproprovincia. ElevenLabs lo usa para
+   saber qué agente contesta el tramo que abre Kapta: no llama desde él. Es el
+   +1 645 654 0729 («Nicol Leads Telnyx»), comprado en Telnyx e importado el
+   12-10-2026. Recién entonces `TELNYX_LEADS_SIP_URI` en Vercel (la dirección
+   SIP de ese número, con el mismo formato que `TELNYX_ELEVENLABS_SIP_URI`),
+   y redeploy. La variable se puso el 12-10-2026 a las 16:51 y los deploys de
+   producción de las 17:00 y las 17:08 ya la leen: Ajustes ya no debe decir
+   «Falta preparar la línea del agente». **Mientras llega el número peruano**
+   (decisión del owner, 12-10-2026), `TELNYX_LEADS_FROM_NUMBER` queda vacío y
+   el lead ve el 918 de EE. UU. de Reproprovincia, no el +1 645 de la puerta.
+   Cuando el peruano esté activo en Telnyx, `TELNYX_LEADS_FROM_NUMBER` pasa a
+   ser ese, y redeploy; la puerta no cambia.
+5. **Ajustes de Kenku** → «Agente de voz · Leads (piloto)»:
    - campaña de Biru: `120248136956710056`;
    - producto, por ejemplo «Shampoo Birú anticaspa»;
    - oferta, tal como se puede decir, por ejemplo «Shampoo Birú anticaspa: 1
@@ -409,18 +484,28 @@ commit.
      confirma el owner: el agente no ofrece nada que no esté aquí;
    - topes, ventana, horario y grupo de control: dejar los de fábrica para
      empezar (§33.4).
-5. **Mirar la cola sin llamar**:
+
+   Al 12-10-2026, todavía sin cargar, a propósito. La prueba del paso 7 no los
+   exige, pero sin oferta Nicol no dice precios: cargar al menos producto y
+   oferta antes de probar.
+6. **Mirar la cola sin llamar**:
    `GET /api/cron/voice-leads?dry=1&storeId=<id de Kenku>` con
    `Authorization: Bearer <CRON_SECRET>`. Mira la cola como si el agente
    estuviera encendido (aunque no lo esté) y devuelve cuántos entran y cuántos
    quedan fuera por cada motivo, sin escribir nada.
-6. **Probar en mi teléfono**, desde el drawer de dos o tres leads de Biru:
+7. **Probar en mi teléfono**, desde el drawer de dos o tres leads de Biru:
    escuchar el saludo, la oferta, la cobertura y el registro. La llamada sale
    con la marca «Prueba» y el lead no cambia. La prueba no deja marcar el
-   número del lead ni uno que pidió no ser contactado.
-7. **El grupo de control**: confirmar el porcentaje ANTES de encender. En
+   número del lead ni uno que pidió no ser contactado. Tampoco el de otro lead
+   de la tienda: el celular de prueba tiene que ser peruano y ajeno a los
+   leads. Sin la puerta del paso 4 en producción, el drawer no muestra el
+   botón. Si Nicol dice «me equivoqué de llamada», falló el inicio (número que
+   llama, secreto o datos de inicio del webhook); si suena y se corta sin
+   hablar, falló el tramo SIP, y la causa queda en
+   `voice_calls.telephony_response.eventos`.
+8. **El grupo de control**: confirmar el porcentaje ANTES de encender. En
    cuanto el piloto sortea al primer lead queda fijo (§33.3).
-8. **«Agente de leads»** y **«Llamadas automáticas»** encendidos. Desde ahí el
+9. **«Agente de leads»** y **«Llamadas automáticas»** encendidos. Desde ahí el
    barrido llama cada cinco minutos dentro del horario, un lead a la vez.
    Revisar las primeras: la nota del historial («Agente de voz») y, si quiso
    comprar, que aparezca en «Atender ahora» y que «Generar pedido» venga con su
@@ -466,3 +551,24 @@ incremental —costo del agente (línea de Telnyx más los minutos de ElevenLabs
 que llegan en la transcripción y no salen en el tablero) dividido por las
 ventas del tratamiento que el control no explica— queda bajo el techo de
 S/ 16,2 de Biru.
+
+## 11. Pruebas del agente en ElevenLabs
+
+En la pestaña de pruebas del agente (Tests), con prefijo «Leads ·». Se corren
+después de cada cambio del guion, del modelo o de las tools, cinco veces cada
+una (`repeat_count` = 5), y solo se publica si pasan todas. La consola
+(«Test AI agent») **no** llama al webhook de inicio: conversa con las variables
+de la sección 7 (sin ficha), así que sirve para oír la voz, no para probar a
+Kapta.
+
+| Prueba | Tipo | Qué exige |
+| --- | --- | --- |
+| Sin ficha: se disculpa y se despide | respuesta | Con `encontrada` = `no`, solo «Disculpe, me equivoqué de llamada»: sin presentarse ni nombrar tienda, producto o WhatsApp |
+| Con ficha: se presenta como Nicol | respuesta | Tras «Sí, ella habla», se presenta como Nicol de la tienda y dice por qué llama, sin leer instrucciones ni paréntesis |
+| Sin nombre: confirma antes de hablar del producto | respuesta | Sin nombre en la ficha, pregunta si escribió por WhatsApp antes de nombrar el producto |
+| Quiere comprar: consulta la cobertura | tool | Llama a `consultar_cobertura` con el distrito que dio (`body.distrito`) |
+| No compra por precio: registra no_compra | tool | Llama a `registrar_resultado_lead` con `no_compra` y `precio` antes de despedirse |
+| Simulación: comprador con tools reales (secreto) | simulación | Llama de verdad a `consultar_cobertura`; sin `voice_call_id` Kapta responde `ok: false` sin tocar nada si el secreto coincide, o 401 si no |
+
+En las pruebas de tool, la ruta de un parámetro del cuerpo es `body.<nombre>`
+(`request_body.<nombre>` o el nombre solo no los encuentra).

@@ -36,6 +36,17 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const olvaPending = canManageLogistics
     ? await countOlvaCotejoPending(createAdminSupabase(), [...new Set(stores.map((s) => s.org_id))]).catch(() => 0)
     : 0;
+  // El menú por permisos (MOM §16): owner y admin los tienen todos. Quien solo
+  // mira (viewer) conserva el Consolidado que siempre vio.
+  const viewerOnly = roles.length > 0 && roles.every((r) => r === "viewer");
+  const navAccess = {
+    reports: permissions.can("reports.view") || viewerOnly,
+    catalog: permissions.can("aliclik.manage_catalog"),
+    mapAds: permissions.can("leads.map_ads"),
+    stores: permissions.can("stores.manage"),
+    costs: permissions.can("costs.manage"),
+    team: permissions.can("team.manage"),
+  };
   const roleLabel = isVendedoraOnly
     ? "Vendedora"
     : roles.includes("owner") || roles.includes("admin")
@@ -52,6 +63,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       canValidatePayments={canValidatePayments}
       canManageLogistics={canManageLogistics}
       canReproLima={canReproLima}
+      navAccess={navAccess}
       badges={olvaPending > 0 ? { "/dashboard/olva": olvaPending } : undefined}
     >
       {children}

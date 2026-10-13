@@ -118,6 +118,7 @@ class FakeSupabase {
   leadPatches: any[] = []; // updates a leads (drip_touches, attention_waves, etc.)
   waveLeads: any[] = []; // filas que responde el select de candidatos de olas
   waveSelectError: string | null = null; // simula la columna 0036 ausente
+  storeUpdates: any[] = []; // updates a stores (desinstalación de la app)
   constructor(storeRow: Row) {
     this.storeRow = storeRow;
   }
@@ -131,6 +132,10 @@ class FakeSupabase {
   exec(b: FakeBuilder): { data: any; error: any } {
     if (b.table === "stores" && b.op === "select") {
       return { data: this.storeRow, error: null };
+    }
+    if (b.table === "stores" && b.op === "update") {
+      this.storeUpdates.push({ ...b.payload, filters: b.filters });
+      return { data: null, error: null };
     }
     if (b.table === "webhook_events" && b.op === "insert") {
       const id = b.payload.webhook_id as string;
@@ -392,6 +397,74 @@ const DRAFT_COMPLETED_BODY = JSON.stringify({
   line_items: [{ title: "Mochila", quantity: 2, price: "60.00" }],
   order_id: 99887766,
   note: "Releasit COD form",
+});
+
+describe("processShopifyWebhook · desinstalación y temas desconocidos (MOM §29.15.9)", () => {
+  const SHOP_BODY = JSON.stringify({ id: 954889, domain: "aurela.myshopify.com", name: "Aurela" });
+
+  it("app/uninstalled deja la tienda deshabilitada y sin token, sin crear un pedido", async () => {
+    const { processShopifyWebhook } = await import("@/lib/ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    const res = await processShopifyWebhook(
+      {
+        storeId: "store-1",
+        topic: "app/uninstalled",
+        rawBody: SHOP_BODY,
+        hmacHeader: sign(SHOP_BODY),
+        webhookIdHeader: "wh_uninstall",
+      },
+      fake as any,
+    );
+    expect(res.status).toBe("ok");
+    expect(fake.upsertedOrders).toHaveLength(0);
+    expect(fake.storeUpdates).toEqual([
+      expect.objectContaining({
+        shopify_token_enc: null,
+        status: "disabled",
+        shopify_uninstalled_at: expect.any(String),
+        filters: { id: "store-1" },
+      }),
+    ]);
+  });
+
+  it("app/uninstalled repetido → duplicado", async () => {
+    const { processShopifyWebhook } = await import("@/lib/ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    const params = {
+      storeId: "store-1",
+      topic: "app/uninstalled",
+      rawBody: SHOP_BODY,
+      hmacHeader: sign(SHOP_BODY),
+      webhookIdHeader: "wh_uninstall",
+    };
+    await processShopifyWebhook(params, fake as any);
+    const second = await processShopifyWebhook(params, fake as any);
+    expect(second.status).toBe("duplicate");
+    expect(fake.storeUpdates).toHaveLength(1);
+  });
+
+  it("app/uninstalled con firma inválida no toca la tienda", async () => {
+    const { processShopifyWebhook } = await import("@/lib/ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    const res = await processShopifyWebhook(
+      { storeId: "store-1", topic: "app/uninstalled", rawBody: SHOP_BODY, hmacHeader: sign(SHOP_BODY, "x") },
+      fake as any,
+    );
+    expect(res.status).toBe("unauthorized");
+    expect(fake.storeUpdates).toHaveLength(0);
+  });
+
+  it("un tema desconocido se ignora: no entra como pedido", async () => {
+    const { processShopifyWebhook } = await import("@/lib/ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    const res = await processShopifyWebhook(
+      { storeId: "store-1", topic: "shop/update", rawBody: SHOP_BODY, hmacHeader: sign(SHOP_BODY) },
+      fake as any,
+    );
+    expect(res.status).toBe("ok");
+    expect(fake.upsertedOrders).toHaveLength(0);
+    expect(fake.insertedWebhookIds.size).toBe(0);
+  });
 });
 
 describe("processShopifyWebhook · draft orders", () => {

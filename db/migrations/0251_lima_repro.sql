@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0249_lima_repro.sql — «Repro Lima»: la tienda llama al cliente de Lima que no
+-- 0251_lima_repro.sql — «Repro Lima»: la tienda llama al cliente de Lima que no
 -- recibió su pedido, confirma fecha y courier, y Kapta programa la salida. Y la
 -- fecha que el cliente le pidió al motorizado queda guardada sin programar nada.
 --

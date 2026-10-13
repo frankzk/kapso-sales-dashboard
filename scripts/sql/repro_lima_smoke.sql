@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
--- 0249: «Repro Lima» (MOM §9.5, §11.4). Corre en el clúster desechable de
+-- 0251: «Repro Lima» (MOM §9.5, §11.4). Corre en el clúster desechable de
 -- verify-db, después de todas las migraciones, dentro de una transacción que se
 -- deshace. Reutiliza las tiendas y usuarios de rls_smoke.sql: A (viewer de la
 -- tienda A), B (viewer de la B), C (owner de las dos), D (viewer sin tiendas).

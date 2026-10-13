@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Suspense } from "react";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import {
   getAccessibleStores,
@@ -30,6 +31,7 @@ import {
   MomOwnerSummarySkeleton,
 } from "@/components/mom-owner-summary";
 import { getMomOwnerSummary } from "@/lib/mom-owner-summary-access";
+import { PENDING_INSTALL_COOKIE } from "@/lib/shopify-client-app";
 
 export const dynamic = "force-dynamic";
 
@@ -50,6 +52,10 @@ async function ConsolidatedContent({
 }: {
   searchParams: Promise<{ from?: string; to?: string }>;
 }) {
+  // Quien instaló la app de Shopify para tiendas cliente sin sesión abierta
+  // entra al login, y el login siempre aterriza aquí: se retoma el reclamo de
+  // la instalación (MOM §29.15.9). La cookie vence con la instalación.
+  if ((await cookies()).get(PENDING_INSTALL_COOKIE)) redirect("/dashboard/conectar-shopify");
   const [role, sp, stores] = await Promise.all([
     getUserRoleSummary(),
     searchParams,

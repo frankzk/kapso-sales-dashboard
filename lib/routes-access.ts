@@ -59,7 +59,7 @@ export interface StopWithOrder extends RouteStop {
   /** Día de la ruta a la que pasó el paquete sin volver a la oficina: el
    *  motorizado lo conservó tras reprogramarse (`carried_over`, §29.7). */
   carried_to?: string | null;
-  /** Fecha que pidió el cliente con «Reprogramado por el cliente» (0249, D9).
+  /** Fecha que pidió el cliente con «Reprogramado por el cliente» (0251, D9).
    *  Informativa: nunca programa; la tienda la confirma en Repro Lima. */
   requested_date?: string | null;
   order: {

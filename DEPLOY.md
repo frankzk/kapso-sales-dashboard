@@ -2072,6 +2072,104 @@ desafío. Solo cambia desde qué red sale la petición, igual que elegir la regi
 3. **Grupo de Telegram** con esas personas y el bot de la tienda; su chat id en
    Ajustes → Telegram → Alertas urgentes («Buscar grupos» lo encuentra).
 
+### 10-10-2026 · App de Shopify para tiendas cliente, primera parte (0249, MOM §29.15.9)
+
+Segunda app de Shopify, pública y oculta, para las tiendas de organizaciones
+cliente de Grupo GF. Aurela y Kenku siguen con la app actual (§5); nada de lo
+suyo cambia.
+
+1. **Migración `0249_shopify_client_app.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0249_shopify_client_app.sql`.
+   Añade `stores.shopify_app` (`interna` por defecto, así que las tiendas de hoy
+   quedan como están) y `stores.shopify_uninstalled_at`, y crea
+   `shopify_pending_installs` y `shopify_privacy_requests`. Sin ella, la
+   desinstalación de una tienda falla al escribir la fecha y la búsqueda de
+   tiendas conectadas de la app nueva responde error.
+   **Ya aplicada en producción el 12-10-2026**, en dos pasos del historial de
+   Supabase: `0245_shopify_client_app` y `0245_shopify_client_app_revoke_defaults`
+   (el `revoke` a `anon` y `authenticated` se añadió después; el fichero ya lo
+   trae completo). Allí quedó con el nombre `0245_…`: el fichero pasó a ser la
+   `0249` porque la `0245` a la `0248` ya estaban tomadas en la integración. Es
+   la misma migración; no se vuelve a correr.
+2. **La app «Kapta» en el Dev Dashboard** (organización Grupo GF SAC), distinta
+   de «kapso-sales-dashboard-aurelape». **Creada el 12-10-2026**; la versión
+   `kapta-3` es la que tiene todo. Su configuración completa:
+
+   ```toml
+   client_id = "…"            # el de la app; no va al repositorio
+   name = "Kapta"
+   application_url = "https://kapso-sales-dashboard.vercel.app/api/shopify/clientes/entrada"
+   embedded = false           # Kapta abre en su pestaña; incrustada no hay login ni OAuth
+
+   [build]
+   automatically_update_urls_on_dev = false
+
+   [webhooks]
+   api_version = "2026-10"
+
+     [[webhooks.subscriptions]]
+     compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+     uri = "https://kapso-sales-dashboard.vercel.app/api/shopify/clientes/cumplimiento"
+
+   [access_scopes]
+   # = SHOPIFY_CLIENT_APP_SCOPES: los de la app interna más write_orders
+   scopes = "read_customers,write_draft_orders,read_draft_orders,read_orders,write_orders,read_products"
+   optional_scopes = [ ]
+   use_legacy_install_flow = false   # instalación gestionada por Shopify
+
+   [auth]
+   redirect_urls = [
+     "https://kapso-sales-dashboard.vercel.app/api/shopify/clientes/callback"
+   ]
+   ```
+
+   - **Los webhooks de privacidad no se pueden poner desde el formulario** del
+     Dev Dashboard (ni al crear ni en «Crear versión»). Se suben con la CLI:
+     `npm init @shopify/app@latest` → «Build an extension-only app» → org
+     Grupo GF SAC → «No, connect it to an existing app» → Kapta. Eso deja una
+     carpeta con `shopify.app.toml`; se deja igual al bloque de arriba y se
+     corre `shopify app deploy`, revisando el resumen antes de confirmar.
+   - **La plantilla trae ejemplos que NO deben subirse:** bloques
+     `[metaobjects.app.faq…]`, `[product.metafields.app.faq…]`, `[sidekick]` y
+     `[access.admin]` en el toml, y las extensiones `extensions/app-home` y
+     `extensions/app-tools`. Se borran antes del `deploy` («Extensions: None»
+     en el resumen).
+   - **Nunca `shopify app dev`** con esta app: cambia las URLs por un túnel
+     temporal.
+   - **Alcances:** cada uno tiene que poder justificarse en la revisión.
+     `write_orders` sirve para corregir la dirección de un pedido ya creado y
+     etiquetarlo. Si se cambian, cambiar también `SHOPIFY_CLIENT_APP_SCOPES`.
+   - **Distribución**: pública, visibilidad **oculta**. Es definitivo. **No**
+     enviar a revisión todavía: falta la segunda parte (anonimizar y entregar
+     datos, registro de accesos).
+   - **Datos protegidos de clientes** (nombre, teléfono y dirección del
+     comprador): se piden aparte, con la justificación «entrega contraentrega».
+3. **Variables en Vercel** (Production), copiadas directo del Dev Dashboard,
+   nunca por chat ni al repositorio:
+   - `SHOPIFY_CLIENT_APP_API_KEY` = Client ID de la app nueva.
+   - `SHOPIFY_CLIENT_APP_API_SECRET` = Client secret de la app nueva.
+   Sin ellas, la entrada y el callback responden «app no configurada» y los
+   avisos de privacidad reciben 401.
+4. **Prueba con una tienda de desarrollo** (no con Aurela ni Kenku: esas están
+   con la app interna y la app nueva las rechaza a propósito):
+   - instalar la app desde el enlace de instalación del Dev Dashboard;
+   - Shopify pide autorizar y vuelve a Kapta, que cae en
+     `/dashboard/conectar-shopify` con el dominio de la tienda (sin sesión
+     abierta, pasa antes por el login y el panel lo devuelve ahí);
+   - elegir la organización y «Conectar tienda»: la tienda queda creada, con
+     webhooks de pedidos y `app/uninstalled`, y empieza la sincronización;
+   - abrir la app otra vez desde el admin de Shopify: entra directo al
+     dashboard de esa tienda;
+   - desinstalar: la tienda pasa a `disabled`, sin token y con
+     `shopify_uninstalled_at`.
+5. **Qué mirar después**:
+   `select topic, shop_domain, status, received_at from shopify_privacy_requests order by received_at desc limit 20;`
+   — cada aviso de privacidad queda `pendiente` hasta la segunda parte. Shopify
+   da 30 días para cumplirlos.
+6. **Webhook de una tienda cliente** que diga `app/uninstalled` en
+   `webhook_events` con la tienda aún activa: el webhook llegó pero no se
+   desactivó; revisar la fila de `stores`.
+
 ### 11-10-2026 · Recordatorio de recojo, día 3 y día 7 en la agencia (0242, MOM §12)
 
 1. **Migración `0242_pickup_reminder.sql`**, a mano y ANTES del código:
@@ -2132,15 +2230,9 @@ la línea de tiempo («Recordatorio de recojo (día 3)…») y la foto que viaj�
    pedidos deja de llamar. **Ya aplicada en producción** el 12-10-2026,
    pegando el SQL en el editor de Supabase (las 1.068 llamadas que había
    quedaron `purpose = 'order'`).
-2. **Variables en Vercel (Production)**. Se generan en tu máquina
+2. **Secretos en Vercel (Production)**. Se generan en tu máquina
    (`openssl rand -hex 24`) y se pegan directo en Vercel y en ElevenLabs:
    **nunca en un chat**, ni en un ticket.
-   - `TELNYX_LEADS_SIP_URI`: la puerta SIP del agente de leads (el número de
-     Telnyx importado en ElevenLabs y asignado a ESE agente). Sin ella no se
-     llama a ningún lead: el aviso de Telnyx corta el tramo, nunca lo manda al
-     agente de Reproprovincia.
-   - `TELNYX_LEADS_FROM_NUMBER` (opcional): el número que ve el lead. Vacío =
-     el mismo `TELNYX_FROM_NUMBER` de Reproprovincia.
    - `VOICE_LEADS_TOOLS_SECRET`: firma el inicio de conversación y las dos
      tools del agente de leads. **Distinto** de `VOICE_TOOLS_SECRET` y de
      `VOICE_TOOLS_SECRET_ELEVENLABS`: si es igual a uno de ellos, Kapta lo trata
@@ -2149,19 +2241,43 @@ la línea de tiempo («Recordatorio de recojo (día 3)…») y la foto que viaj�
    - `ELEVENLABS_WEBHOOK_SECRET`: el secreto HMAC que ElevenLabs genera al crear
      el webhook «post-call». Sin él, `/api/voice/elevenlabs/post-call` responde
      401 y no se guardan transcripciones; el resto funciona igual.
-3. **El agente en ElevenLabs**: guion, primer mensaje, las tools
+3. **El agente en ElevenLabs**: **ya creado** el 12-10-2026 («Agente de leads
+   · Kenku Biru (piloto)»), con guion, primer mensaje, las tools
    `consultar_cobertura` y `registrar_resultado_lead`, el webhook de inicio
-   (`/api/voice/leads/inicio`) y el post-call, en `docs/voz-leads-agente.md`.
-4. **El barrido** `/api/cron/voice-leads` ya está en `vercel.json` (cada cinco
+   (`/api/voice/leads/inicio`) y los ajustes de `docs/voz-leads-agente.md`.
+   Se presenta como Nicol. `VOICE_LEADS_TOOLS_SECRET` ya está en Vercel y, como
+   secreto del workspace `kapta_voice_leads`, en la cabecera `x-voice-secret`
+   de las dos tools y del inicio (12-10-2026). Falta, si se quiere, el
+   post-call.
+4. **El número**, después del agente: un número propio del agente de leads
+   importado en ElevenLabs por SIP trunk, aceptando solo las direcciones de
+   Telnyx (`192.76.120.0/24`, `64.16.250.0/24`), y asignado al agente de leads.
+   **Hecho el 12-10-2026**: el +1 645 654 0729, comprado en Telnyx, importado
+   como «Nicol Leads Telnyx» (solo entrada, cifrado de medios «Allowed», sin
+   usuario ni contraseña), igual que el número de Reproprovincia. Recién
+   entonces, en Vercel, y redeploy:
+   - `TELNYX_LEADS_SIP_URI`: la puerta SIP de ese número, con el formato de
+     `TELNYX_ELEVENLABS_SIP_URI`
+     (`sip:+16456540729@sip.rtc.elevenlabs.io:5061;transport=tls`). **Puesta
+     el 12-10-2026.** Sin ella no se llama a ningún lead: el aviso de Telnyx
+     corta el tramo, nunca lo manda al agente de Reproprovincia.
+   - `TELNYX_LEADS_FROM_NUMBER` (opcional): el número que ve el lead. Vacío =
+     el mismo `TELNYX_FROM_NUMBER` de Reproprovincia, que es como sale el
+     piloto mientras llega el número peruano (decisión del owner, 12-10-2026).
+     El +1 645 de la puerta no va aquí: el lead nunca lo ve.
+   - **Ya en producción**: la variable se puso a las 16:51 y los deploys de
+     main de las 17:00 y las 17:08 (12-10-2026) ya la leen. Si Ajustes todavía
+     dice «Falta preparar la línea del agente», redeploy.
+5. **El barrido** `/api/cron/voice-leads` ya está en `vercel.json` (cada cinco
    minutos, desfasado dos del de Reproprovincia). Solo corre en producción y
    sin tiendas con el agente encendido no hace nada. La cola se mira sin llamar
    ni escribir con
    `GET /api/cron/voice-leads?dry=1&storeId=<uuid>` y
    `Authorization: Bearer <CRON_SECRET>`: la mira como si el agente estuviera
    encendido y devuelve cuántos entran y cuántos quedan fuera por cada motivo.
-5. **Encendido por tienda** (Ajustes → «Agente de voz · Leads (piloto)»), en
-   este orden: campaña, producto y oferta; «Probar en mi teléfono» desde el
-   drawer de un lead; el porcentaje de control (queda fijo en el primer
+6. **Encendido por tienda** (Ajustes → «Agente de voz · Leads (piloto)»),
+   con la puerta del paso 4 ya en producción, en este orden: campaña, producto
+   y oferta; «Probar en mi teléfono» desde el drawer de un lead; el porcentaje de control (queda fijo en el primer
    sorteo); y recién entonces «Agente de leads» y «Llamadas automáticas». Los
    pasos completos y la campaña de Biru están en `docs/voz-leads-agente.md`.
 
@@ -2203,10 +2319,13 @@ la misma sección de Ajustes.
    (`output_replaced`); cambian pocos pedidos: los que tienen una parada del
    cuaderno anterior a la salida a la que se atribuía.
 
-### 12-10-2026 · Repro Lima y fecha que pidió el cliente (0249)
+### 12-10-2026 · Repro Lima y fecha que pidió el cliente (0251)
 
-1. **Migración `0249_lima_repro.sql`**, a mano y ANTES del código:
-   `psql "$DATABASE_URL" -f db/migrations/0249_lima_repro.sql`. Agrega
+Se escribió como `0249` y pasó a `0251` al traer main: la `0249` es la app de
+Shopify para tiendas cliente y la `0250`, los roles que se acumulan.
+
+1. **Migración `0251_lima_repro.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0251_lima_repro.sql`. Agrega
    `delivery_stops.requested_date` con el CHECK
    `delivery_stops_requested_date_ck` (la fecha solo existe en un «No
    entregado · Reprogramado»), crea `lima_repro_cases` y `lima_repro_calls`
@@ -2220,7 +2339,7 @@ la misma sección de Ajustes.
    caso. `lima_repro_claim` lleva `p_reopen` (el segundo clic de «Volver a
    atender», MOM §9.5) y el código lo manda siempre: la migración borra antes
    la firma sin él (`drop function if exists`), así que una base con una
-   versión anterior de 0249 (una de prueba) se pone al día volviendo a correr
+   versión anterior de 0251 (una de prueba) se pone al día volviendo a correr
    el archivo, que es idempotente. Con la firma vieja, «Atender» falla.
 2. Sin subir versión ni recálculo: el resolver no lee nada de esto
    (`MOM_RESOLUTION_VERSION` sigue en `mom-v1.26`). Los casos nacen solos al

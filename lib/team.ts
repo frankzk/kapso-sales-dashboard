@@ -1,8 +1,18 @@
 // Pure authorization guards for team management, unit-tested and reused by the
 // server actions so the tricky rules (last-owner protection, who may manage
 // owners) have one source of truth.
+//
+// SOLO EL DUEÑO REPARTE PODER (12-10-2026, MOM §16). Hasta esta fecha un admin
+// podía cambiar roles, invitar admins y darse a sí mismo «Corregir pagos» o
+// «Validar pagos» desde Equipo, con doce admins en la organización. Pasó: una
+// admin se concedió «Corregir pagos» y «Administrar Grupo GF», y dos admins
+// dieron «Validar pagos» a otras personas. Desde entonces un admin solo puede
+// invitar o quitar vendedoras y solo lectura, y conceder lo operativo
+// («Reportar entregas de rutas»). Roles, admins y permisos de dinero o datos:
+// solo el dueño.
 
 import type { Role } from "@/lib/types";
+import { isFunctionalRole } from "@/lib/permissions";
 
 export const ROLES: Role[] = ["owner", "admin", "viewer", "vendedora"];
 
@@ -35,6 +45,9 @@ export function canRemoveMember(
   if (target.role === "owner" && actorRole !== "owner") {
     return { ok: false, reason: "Solo un owner puede remover a otro owner." };
   }
+  if (target.role === "admin" && actorRole !== "owner") {
+    return { ok: false, reason: "Solo el dueño puede quitar a un admin." };
+  }
   if (target.role === "owner" && ownerCount(members) <= 1) {
     return { ok: false, reason: "No puedes remover al único owner." };
   }
@@ -52,6 +65,7 @@ export function canSetRole(
   const target = members.find((m) => m.user_id === targetUserId);
   if (!target) return { ok: false, reason: "No es miembro de la organización." };
   if (target.role === newRole) return { ok: true };
+  if (actorRole !== "owner") return { ok: false, reason: "Solo el dueño cambia roles." };
   // Only owners may grant or revoke the owner role.
   if ((target.role === "owner" || newRole === "owner") && actorRole !== "owner") {
     return { ok: false, reason: "Solo un owner puede gestionar el rol owner." };
@@ -69,7 +83,15 @@ export function canAddMember(newRole: string, actorRole: Role): GuardResult {
   if (newRole === "owner" && actorRole !== "owner") {
     return { ok: false, reason: "Solo un owner puede asignar el rol owner." };
   }
+  if (newRole === "admin" && actorRole !== "owner") {
+    return { ok: false, reason: "Solo el dueño puede invitar a alguien como admin." };
+  }
   return { ok: true };
+}
+
+/** Los roles que `actorRole` puede elegir al invitar: un admin, solo los que no reparten poder. */
+export function invitableRoles(actorRole: Role): Role[] {
+  return ROLES.filter((role) => canAddMember(role, actorRole).ok);
 }
 
 /**
@@ -90,9 +112,17 @@ export function canSetPaymentValidator(
    * que quede alguien sería un candado sin motivo.
    */
   label: string | null = "validar pagos",
+  /**
+   * Si el permiso es de dinero o de datos (`GRANTED_ONE_BY_ONE[].ownerOnly`), su
+   * nombre: solo el dueño lo da o lo quita, también a sí mismo. Null = no.
+   */
+  ownerOnlyLabel: string | null = null,
 ): GuardResult {
   const target = members.find((member) => member.user_id === targetUserId);
   if (!target) return { ok: false, reason: "No es miembro de la organizacion." };
+  if (ownerOnlyLabel && actorRole !== "owner") {
+    return { ok: false, reason: `Solo el dueño puede dar o quitar «${ownerOnlyLabel}».` };
+  }
   if (target.role === "owner" && actorRole !== "owner") {
     return { ok: false, reason: "Solo un owner puede modificar los permisos de otro owner." };
   }
@@ -102,6 +132,24 @@ export function canSetPaymentValidator(
       ok: false,
       reason: `Debe quedar al menos una persona autorizada para ${label.toLocaleLowerCase("es")}.`,
     };
+  }
+  return { ok: true };
+}
+
+/**
+ * ¿Puede `actorRole` dar o quitar a `targetUserId` el rol acumulable `role`
+ * (MOM §16)? Solo el dueño: asignar un rol es repartir sus permisos.
+ */
+export function canSetFunctionRole(
+  members: MemberLite[],
+  targetUserId: string,
+  role: string,
+  actorRole: Role,
+): GuardResult {
+  if (!isFunctionalRole(role)) return { ok: false, reason: "Rol inválido." };
+  if (actorRole !== "owner") return { ok: false, reason: "Solo el dueño asigna roles." };
+  if (!members.some((m) => m.user_id === targetUserId)) {
+    return { ok: false, reason: "No es miembro de la organización." };
   }
   return { ok: true };
 }

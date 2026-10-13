@@ -68,7 +68,7 @@ export { loadReproFacts, type ReproFacts } from "@/lib/repro-lima-program";
 type Admin = ReturnType<typeof createAdminSupabase>;
 
 /** Sin `dispatch.manage` (E32). */
-export const REPRO_NO_PERMISSION = "Repro Lima es de quien despacha (rol admin o vendedora). Pide acceso en Equipo.";
+export const REPRO_NO_PERMISSION = "Repro Lima es de quien despacha (rol «Despacho y Grupo GF»). Pide ese rol en Equipo.";
 export const REPRO_NO_STORES = "No tienes tiendas asignadas. Pide acceso en Equipo.";
 export const REPRO_OUTSIDE_STORE = "No tienes acceso a la tienda de este pedido.";
 
