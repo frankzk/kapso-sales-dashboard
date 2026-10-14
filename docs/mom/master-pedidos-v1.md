@@ -2318,6 +2318,90 @@ pone primero lo que pide a alguien (derivas, vencidos, lo que falta y lo que
 no se programó) y después sigue la fecha acordada. «Cerrados» pone arriba el
 último cierre.
 
+**«Todos»: los pedidos de Lima sin estado final (14-10-2026, pedido del owner
+del 13-10-2026).** Además de las cuatro listas, Repro Lima tiene una quinta
+tarjeta, «Todos · por entregar», para ver en qué anda cada pedido de Lima que
+todavía no tiene un estado final y darle curso sin perder ninguno. No es una
+lista de casos ni una subetapa: agrupa por la macroetapa y la subetapa del
+Master (`order_master.macro_stage` y `macro_substage`, §6), con sus nombres
+(`lib/order-macro-stage.ts`). No crea estados y `MOM_RESOLUTION_VERSION` no
+cambia (`mom-v1.26`).
+
+- **Qué pedidos.** Los de las tiendas a su alcance (`getAccessibleStores`) con
+  cobertura Lima (`order_master.coverage = 'lima'`) en cualquier macroetapa
+  menos «Finalizado», la única terminal (§6.6). Son los que cuenta el Master
+  con la cobertura «Lima» (`cv=lima`), así que cada cifra es la que el Master
+  da a esa etapa y subetapa. Incluye los pocos de Lima que se atienden por
+  agencia. «Por reprogramar Lima» es la excepción: su cifra sale de las filas
+  de las cuatro listas («Qué pedidos», arriba), con la tienda elegida y nunca
+  con la búsqueda.
+- **La cifra de la tarjeta** es lo que todavía no se entrega: Por confirmar,
+  Preparación, Por despachar y En curso. En Lima lo que no se entrega vuelve a
+  «Por reprogramar Lima»: solo la entrega lleva a Por cerrar y solo la
+  anulación en Shopify termina la venta (§9, 30-09-2026). **Decisión del owner
+  (14-10-2026):** a la pregunta de si «Por cerrar» suma a la tarjeta respondió
+  «como mejor lo creas conveniente», y se tomó la opción recomendada. «Por
+  cerrar» va aparte, en el bloque «Ya entregado, anulado o devuelto: falta
+  cerrar», abierto y con su total: el resultado ya se decidió y queda una
+  obligación (§6.5), y ahí siguen cajas que están afuera, como «Salida
+  adicional activa» y «Devolución física pendiente». No suma a la cifra de la
+  tarjeta.
+- **La pantalla.** En el teléfono la tarjeta va a todo el ancho, debajo de las
+  cuatro; desde 1024 px es la quinta columna. Al tocarla se quita la búsqueda
+  y no hay buscador (se cuentan pedidos del Master, no casos); la tienda sigue
+  en su píldora. La línea de cifras dice «N todavía por entregar · M por
+  cerrar», sin la segunda parte si es cero. Dos bloques: «Todavía por
+  entregar», con la línea «En Lima, lo que no se entrega vuelve a «Por
+  reprogramar Lima»; solo la entrega lo pasa a «Por cerrar».», y «Ya
+  entregado, anulado o devuelto: falta cerrar»; uno debajo del otro en el
+  teléfono y uno al lado del otro desde 1024 px. Sin ningún pedido, «No hay
+  pedidos de Lima sin estado final.».
+- **El resumen** sigue el orden del MOM: las etapas en el orden de §6 y, dentro
+  de cada una, sus subetapas en el orden canónico (`MACRO_SUBSTAGES_BY_STAGE`).
+  Solo aparecen las que tienen pedidos, así que una subetapa nueva aparece sola
+  en su lugar; una que el MOM ya no lista para esa etapa va después, por su
+  código, y los pedidos sin subetapa van al final, como «Sin subetapa». Una
+  etapa sin pedidos no se muestra; como Lima omite Por confirmar (§6.1), esa
+  etapa por lo general no aparece. Cada etapa lleva una línea que resume
+  §6.1-6.5: texto de pantalla, no estados. Cada pedido cuenta una vez, en su
+  subetapa: en Por cerrar es el primer motivo abierto y los demás quedan en
+  `macro_reasons`. Las subetapas suman su etapa.
+- **Antigüedad.** Cada subetapa dice cuántos llevan más de 7 días y más de 30
+  días en la etapa, en días de Lima desde `macro_since`: el mismo conteo que
+  «6 d en la etapa» de la fila y que la regla de 7 días que ordena «Por
+  decidir». Las chapas, la ámbar «N con más de 7 días» y la crítica «N con más
+  de 30», salen solo si hay alguno. En Por cerrar, «Por generar rótulo» y «Por
+  armar», `macro_since` es el último cambio de estado del pedido (en Por
+  cerrar, por ejemplo, la entrega). Estas cifras no filtran: el Master no
+  filtra por días en la etapa.
+- **Darle curso.** Cada subetapa abre el Master de Pedidos en esa etapa y
+  subetapa, con la cobertura «Lima» y la tienda elegida (`masterQueueHref`:
+  `/dashboard/pedidos?st=…&cv=lima&view=…&substage=…`; sin tienda elegida no
+  lleva `st` y el Master usa las mismas tiendas a su alcance). Una subetapa que
+  el MOM no lista para la etapa, o «Sin subetapa», abre la etapa entera, porque
+  el Master solo acepta las subetapas de esa etapa. El Master cuenta lo mismo
+  (§6: los contadores cuentan lo que muestra la lista) y cada pedido se opera
+  desde su ficha, con su próxima acción y sus permisos. «Por reprogramar Lima»
+  no sale de la pantalla: su cifra es la suma de las cuatro listas; la fila
+  abre «Por decidir» y, debajo, cada lista se abre con un toque. La vista va en
+  la URL (`?vista=todos`): al volver del Master, Repro Lima sigue en «Todos».
+  La tienda elegida no va en la URL y vuelve a todas.
+- **Solo lee.** «Todos» no escribe, no abre casos ni toma el candado. El
+  conteo es una sola lectura agrupada, `order_master_lima_open_counts` (0256),
+  solo para el cliente de servicio y después de `requireReproLima`. Si no se
+  puede leer (por ejemplo, sin la migración 0256), deja «repro-lima: conteo de
+  Todos» en el log, la tarjeta no aparece y el resto de Repro Lima sigue igual.
+
+Implementación: `db/migrations/0256_lima_open_counts.sql`
+(`order_master_lima_open_counts`, solo para el cliente de servicio),
+`lib/repro-lima-todos.ts` (las reglas, puras), `lib/repro-lima-todos-access.ts`
+(la lectura), `masterQueueHref` en `lib/master-query.ts`,
+`components/repro-lima-todos.tsx`, `components/repro-lima-board.tsx` y
+`app/dashboard/pedidos/repro-lima/` (`page.tsx` y `loading.tsx`). Pruebas en
+`test/repro-lima-todos.test.ts`, `test/repro-lima-todos-access.test.ts`,
+`test/master-query.test.ts`, `test/repro-lima-ui.test.ts`,
+`test/repro-lima-source.test.ts` y `scripts/sql/lima_open_counts_smoke.sql`.
+
 **Estados derivados del acuerdo** (`agreementState`). Tampoco son estados del
 Master: se calculan al leer, y el caso nunca se reescribe.
 
