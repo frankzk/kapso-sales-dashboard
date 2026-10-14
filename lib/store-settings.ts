@@ -75,6 +75,18 @@ export interface StoreSettingsInput {
   delivered_thanks_max_hours?: string;
   delivered_thanks_pace_count?: string;
   delivered_thanks_pace_minutes?: string;
+  restock_enabled?: string | boolean;
+  restock_template_name?: string;
+  restock_template_language?: string;
+  restock_params?: string;
+  restock_phone_number_id?: string;
+  restock_button_label?: string;
+  restock_hour_start?: string;
+  restock_hour_end?: string;
+  restock_pace_count?: string;
+  restock_pace_minutes?: string;
+  restock_days_before?: string;
+  restock_control_pct?: string;
   // Agente de voz para Reproprovincia (MOM §11.8, 0190).
   voice_recovery_enabled?: string | boolean;
   voice_recovery_auto?: string | boolean;
@@ -400,6 +412,31 @@ export function buildStoreUpdate(
   if (dtPaceCount !== null) patch.delivered_thanks_pace_count = dtPaceCount;
   const dtPaceMinutes = intField(input.delivered_thanks_pace_minutes, 5, 1440);
   if (dtPaceMinutes !== null) patch.delivered_thanks_pace_minutes = dtPaceMinutes;
+
+  // Recordatorio de reposición (0255). El toggle tiene que poder APAGARSE; el
+  // nombre de la plantilla y el número propio son vaciables.
+  if (input.restock_enabled !== undefined) {
+    patch.restock_enabled = input.restock_enabled === true || input.restock_enabled === "true";
+  }
+  for (const k of ["restock_template_language", "restock_params", "restock_button_label"] as const) {
+    const v = clean(input[k]);
+    if (v !== null) patch[k] = v;
+  }
+  for (const k of ["restock_template_name", "restock_phone_number_id"] as const) {
+    if (input[k] !== undefined) patch[k] = clean(input[k]);
+  }
+  const rsStart = intField(input.restock_hour_start, 0, 23);
+  if (rsStart !== null) patch.restock_hour_start = rsStart;
+  const rsEnd = intField(input.restock_hour_end, 1, 24);
+  if (rsEnd !== null) patch.restock_hour_end = rsEnd;
+  const rsPaceCount = intField(input.restock_pace_count, 1, 25);
+  if (rsPaceCount !== null) patch.restock_pace_count = rsPaceCount;
+  const rsPaceMinutes = intField(input.restock_pace_minutes, 5, 1440);
+  if (rsPaceMinutes !== null) patch.restock_pace_minutes = rsPaceMinutes;
+  const rsBefore = intField(input.restock_days_before, 0, 60);
+  if (rsBefore !== null) patch.restock_days_before = rsBefore;
+  const rsControl = intField(input.restock_control_pct, 0, 50);
+  if (rsControl !== null) patch.restock_control_pct = rsControl;
 
   // Agente de voz (MOM §11.8). Los tres toggles tienen que poder APAGARSE, y
   // el número del agente y la extensión son vaciables: sin ellos Kapta no

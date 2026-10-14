@@ -7770,6 +7770,9 @@ ratio en `lib/ltv.ts`):
 - **Historial.** Empieza en junio de 2026 (`ORDERS_SYNC_FROM`): las clientas
   de junio pueden incluir algunas que ya habían comprado antes, y el año 1
   completo se podrá leer desde julio de 2027.
+- **Para subirlo:** el recordatorio de reposición (§34) le escribe a la
+  clienta cuando se le está por acabar lo que compró. Mide su efecto contra un
+  grupo de control.
 
 ## 18. Implementación incremental
 
@@ -12404,3 +12407,113 @@ Implementación: `db/migrations/0247_voice_lead_calls.sql`;
 `test/voice-leads-rutas.test.ts`, `test/voice-leads-aislamiento.test.ts`,
 `test/voice-leads-drawer.test.ts`, `test/voice-leads-ajustes.test.ts`,
 `test/voice-leads-mom.test.ts` y `scripts/sql/voice_lead_smoke.sql`.
+
+## 34. Recordatorio de reposición (13-10-2026)
+
+Para subir el LTV (§17.2), el dueño pidió escribirle a la clienta cuando se le
+está por acabar lo que compró, «en 1, 3 o 5 meses según cuántos frascos
+compró». Y que, si responde que sí, **lo tome una asesora**. Kapta no arma
+ningún pedido por su cuenta.
+
+Por qué hacía falta: la recompra del mismo producto era baja. En el aceite de
+semilla negra, el más vendido de Kenku, era el 4,5 %, a los ~46 días. Y el
+canal es WhatsApp: solo ~1 % de los pedidos trae correo.
+
+**Cómo funciona.**
+
+- **Cada producto tiene sus días por unidad**, en Ajustes → «Recordatorio de
+  reposición» (`restock_products`). Ese número es lo que dura uno con la dosis
+  normal: dos frascos de 30 días duran 60.
+  - **Solo reciben recordatorio los productos que tienen días.** Así una faja
+    o un pelador nunca reciben un «se te está por acabar».
+  - Al activar un producto, Ajustes propone **30 días por unidad** (un frasco,
+    un mes). El dueño corrige cada uno según su dosis.
+- **Cuándo sale:** el recordatorio sale `días antes` (7 por defecto) de que
+  se acabe, contando desde la entrega (`delivered_at`). Por ejemplo, un frasco
+  de 30 días sale el día 23.
+  - Si un pedido trae varios productos con días, se avisa por el que se acaba
+    primero entre los que vencen ahora.
+  - Hay dos semanas de margen. Pasado ese plazo, ya no se envía, porque
+    llegaría tarde.
+- **A quién no se le envía:**
+  - a quien volvió a comprar después de esa entrega (un pedido nuevo no
+    anulado con el mismo teléfono);
+  - a quien ya recibió el recordatorio de ese pedido;
+  - a quien recibió otro recordatorio hace menos de 20 días;
+  - a quien pidió que no le escriban: «BAJA» a un recordatorio
+    (`contact_opt_outs`), o «no me contacten» al agente de voz
+    (`leads.contact_opt_out_at`, §33);
+  - a quien no tiene nombre ni un celular válido.
+- **La plantilla** es de **Marketing**, aprobada en Meta en la WABA de la
+  tienda.
+  - Lleva un botón de respuesta rápida (por defecto «Sí, quiero»).
+  - Sus variables son `nombre`, `producto` (el nombre corto configurado),
+    `unidades` y `pedido`.
+  - La oferta, si la hay, va escrita en la plantilla.
+- **Ritmo y horario:** igual que el agradecimiento (§31): 5 cada 20 minutos, de
+  9 a 20 h. Si Meta pone su tope de mensajería, el lote se corta.
+
+**Cuando contesta «sí», lo toma una asesora.**
+
+- **Qué cuenta como «sí»:** el botón de la plantilla, o un «sí» escrito. Este
+  último tiene que llegar dentro de las 72 h siguientes al recordatorio.
+  - Los «sí» escritos que valen forman una **lista cerrada** (`sí`,
+    `sí quiero`, `sí por favor`, `claro`, `me interesa`…).
+  - Un «sí, pero ¿cuánto cuesta?» no está en la lista y sigue con el bot y la
+    asesora, como siempre. Es la misma regla que en los botones de pago
+    (§12): Kapta no interpreta texto libre.
+- **El lead sube a «Atender ahora»** por el mismo camino que el handoff del bot
+  (`applyHandoff`), con el motivo `recompra`.
+  - El contexto dice qué quiere reponer y cuál fue su último pedido.
+  - El contexto va **sin palabras de cobro**, para que no caiga en la pestaña
+    Yape/Shalom.
+  - Si ya compró antes, el lead conserva su estado y solo se marca para
+    atender.
+- **La clienta recibe una confirmación:** «¡Gracias, Ana! 🙌 Ya le avisé a una
+  asesora: te escribe por aquí para coordinar tu Aceite de Semilla Negra». El
+  mensaje no promete minutos, porque ella puede contestar a las once de la
+  noche.
+- **Sin repeticiones:** se responde una sola vez por recordatorio, y una
+  reentrega del webhook no deriva dos veces (`wa_auto_replies`).
+- **Si contesta BAJA:** se anota en silencio. No se le contesta con otro
+  mensaje a quien pidió no recibir más.
+- **El bot no debe contestar también al botón** (docs/kapso-functions/README.md).
+
+**Grupo de control.**
+
+- **Quiénes son:** el 10 % de las clientas (configurable de 0 a 50). Se eligen
+  por su teléfono, así que una clienta siempre cae del mismo lado.
+- **Qué pasa con ellas:** se registran igual que las demás, pero **no se les
+  envía nada**.
+- **Por qué existe:** sin él no se sabe si el recordatorio vende o si la
+  clienta iba a volver igual. El winback de Kenku se midió sin control, y su
+  3,9 % no dice nada.
+- **Resultado en Ajustes (últimos 60 días):** por grupo, cuántas clientas,
+  cuántas contestaron sí y cuántas compraron en los 30 días siguientes.
+  - Lo que vende el recordatorio es la **diferencia** de tasa contra el
+    control.
+  - Con menos de 30 clientas en el control no se concluye nada.
+
+**Nace apagado en todas las tiendas.**
+
+Para encenderlo se necesitan tres cosas:
+
+1. la plantilla aprobada;
+2. los productos con sus días;
+3. el interruptor «Envío».
+
+Cada envío, cada fila de control y cada rechazo quedan en `restock_sends`, una
+fila por pedido atendido. Kapta nunca reescribe esa historia.
+
+Implementación:
+
+- `db/migrations/0255_restock_reminders.sql`: las funciones
+  `restock_candidates`, `restock_product_catalog` y `restock_results`. Una línea
+  sin `product_id` se reconoce por su título.
+- `lib/restock-reminder.ts`: envío, control y respuesta.
+- `lib/restock-view.ts`: lo que muestra Ajustes.
+- La respuesta se atiende en `lib/wa-button-replies.ts`, antes del acuse.
+- El cron, en `lib/ingest.ts`.
+- Los ajustes, en `lib/store-settings.ts` y `components/store-settings.tsx`.
+- Pruebas: `test/restock-reminder.test.ts` y
+  `scripts/sql/restock_reminders_smoke.sql`.

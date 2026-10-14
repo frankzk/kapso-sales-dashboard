@@ -45,6 +45,7 @@ import { ensureFlowPaymentLink } from "@/lib/flow/link";
 import { env } from "@/lib/env";
 import { handleInboundVoucher, loadVoucherCandidates } from "@/lib/shalom/voucher-intake";
 import type { sendWhatsappDocument } from "@/lib/kapso";
+import { handleRestockReply } from "@/lib/restock-reminder";
 
 export type PaymentButton = "yape" | "transferencia" | "link_pago";
 
@@ -319,6 +320,15 @@ export async function handleInboundMessage(
 
   const button = matchPaymentButton(msg.buttonText, msg.buttonPayload);
   if (button) return replyToButton(admin, storeId, creds, msg, button, opts);
+
+  // «Sí, quiero» al recordatorio de reposición (MOM §34): lo toma una asesora.
+  // Va ANTES del acuse porque «sí» también es un acuse: tras un recordatorio
+  // es una compra, no un «ok» al que repetirle el Yape.
+  const restock = await handleRestockReply(admin, storeId, creds, msg, {
+    sendText: opts.sendText,
+    nowIso: opts.nowIso,
+  });
+  if (restock) return restock;
 
   // Una foto después del aviso: casi siempre es el comprobante del saldo.
   if (msg.mediaKind === "image") {
