@@ -74,17 +74,30 @@ export interface ClosingChannelSummary {
  * Lo que el panel recibe: el resumen, o por qué no lo hay. Un error se dice;
  * nunca se vuelve ceros.
  *
- * `coverageFrom`: Kapta guarda TODOS los pedidos de la tienda solo desde
- * `ORDERS_SYNC_FROM` (2026-06-01); antes solo los del bot y las ventas que
- * registraron las asesoras. Si el rango empieza antes, se cuenta desde esa fecha
- * y el panel lo dice; si termina antes, no hay con qué responder
- * (`sin_cobertura`) y vuelve la vista anterior.
+ * `coverageFrom`: el canal solo es verdad desde que Kapta tiene, a la vez, todos
+ * los pedidos de la tienda (`ORDERS_SYNC_FROM`, 2026-06-01) y las ventas que
+ * registran sus asesoras (el día de la primera fila de `order_sales` de la
+ * tienda; sin ninguna, el de su primer lead). Antes de eso una venta de asesora
+ * no tenía dónde registrarse y caería en «Web» u «Otros»: medido, una tienda
+ * tenía 3.898 pedidos en junio de 2026 y su primera venta registrada es del
+ * 04-07. Si el rango empieza antes, se cuenta desde esa fecha y el panel lo
+ * dice; si termina antes, no hay con qué responder (`sin_cobertura`) y vuelve
+ * la vista anterior.
  */
 export type ClosingChannelResult =
   | { status: "ok"; summary: ClosingChannelSummary; coverageFrom: string | null }
   | { status: "sin_cobertura"; coverageFrom: string }
   | { status: "sin_migracion" }
   | { status: "error"; message: string };
+
+/**
+ * Desde qué día local responde el canal: el más tardío entre `ORDERS_SYNC_FROM`
+ * y el inicio de cada tienda pedida (null = sin inicio conocido). Con varias
+ * tiendas manda la que empezó último, para que el total sea de un solo periodo.
+ */
+export function coverageStart(syncFrom: string, storeStarts: readonly (string | null)[]): string {
+  return storeStarts.reduce<string>((max, d) => (d && d > max ? d : max), syncFrom);
+}
 
 /**
  * El rango que se le pide a la función, recortado a la cobertura. `clipped`

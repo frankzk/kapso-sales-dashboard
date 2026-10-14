@@ -7796,11 +7796,25 @@ mientras Productividad les contaba S/ 484.645.
 pedidos e ingresos—, y el ingreso es total − reembolsado, igual que el resto
 del Consolidado.
 
-Kapta guarda todos los pedidos de la tienda solo desde `ORDERS_SYNC_FROM`
-(2026-06-01); antes, solo los del bot y las ventas que registraron las
-asesoras. Un periodo que empieza antes se cuenta desde esa fecha y la tarjeta lo
-dice («desde el 1 jun 2026»); uno que termina antes no tiene con qué responder y
-la tarjeta vuelve a la vista anterior con un aviso, sin cifra de cabecera.
+**Desde cuándo responde.** El canal solo es verdad desde que Kapta tiene, a la
+vez, todos los pedidos de la tienda y las ventas que registran sus asesoras:
+
+- todos los pedidos, desde `ORDERS_SYNC_FROM` (2026-06-01): antes de esa fecha
+  la sincronización no trae los pedidos que no son del bot;
+- las ventas de las asesoras, desde el día local de la primera fila de
+  `order_sales` de la tienda (si todavía no tiene ninguna, el de su primer
+  lead). Antes, una venta de asesora no tenía dónde registrarse y caería en
+  «Web» u «Otros». Medido: una tienda tenía 3.898 pedidos en junio de 2026 y
+  ninguna venta registrada; su primera es del 04-07-2026, y la de la otra
+  tienda del 25-06-2026.
+
+La tarjeta cuenta desde el más tardío de esos días; con varias tiendas, desde
+el de la que empezó último, para que el total sea de un solo periodo. Un
+periodo que empieza antes se cuenta desde ese día y la tarjeta lo dice
+(«desde el 4 jul 2026»); uno que termina antes no tiene con qué responder y la
+tarjeta vuelve a la vista anterior con un aviso, sin cifra de cabecera.
+Mover `ORDERS_SYNC_FROM` hacia atrás no amplía la tarjeta más allá del inicio
+de cada tienda; adelantarlo sí la recorta.
 
 **Un canal por pedido**, el primero que aplique en este orden. Así los canales
 suman el total de la tienda:
@@ -7859,9 +7873,11 @@ Productividad cuenta ventas registradas por la fecha en que la asesora apretó
 el botón e incluye las que después se cancelaron; el canal cuenta pedidos por
 su fecha de creación en Shopify y deja los cancelados aparte.
 
-**Lo que todavía no cambia.** Ingresos, Pedidos, Ticket promedio y Conversión
-de «Ventas del periodo», y los módulos Fuente, Productos y Embudo, siguen
-contando solo los pedidos del bot de Kapso (DEPLOY.md §5h). La tarjeta lo dice,
+**Lo que todavía no cambia.** Salvo esta tarjeta y «Anuncios de Meta», los
+pedidos y los ingresos que muestra el Consolidado —«Ventas del periodo»,
+Ventas por día, Por tienda, Patrón de horas, Productos, Fuente, Embudo y su
+salud, Venta perdida, Carritos, Números de WhatsApp, Desglose de negocio e
+Integridad— siguen contando solo los pedidos del bot de Kapso (DEPLOY.md §5h). La tarjeta lo dice,
 porque su total —todas las ventas— es mayor. El panel de «Fuente» conserva su
 propio cierre por etiquetas, ahora con el nombre «Cierre de los pedidos del
 bot, por etiquetas»: no ve las ventas de las asesoras y remite a esta tarjeta.

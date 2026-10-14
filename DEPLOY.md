@@ -502,6 +502,10 @@ de couriers, intentos y comentarios.
   que un pedido viejo que alguien edite hoy no vuelva a entrar. Para ampliar el
   histórico basta mover la variable en Vercel y borrar el cursor:
   `delete from sync_state where source = 'shopify_all';`
+  También es el piso de «Canal de cierre» (MOM §17.3), que cuenta desde el más
+  tardío entre esta fecha y el día en que cada tienda registró su primera venta
+  de asesora en Kapta. Moverla hacia atrás no amplía la tarjeta más allá de ese
+  inicio; adelantarla sí la recorta.
 - **El Master se rellena solo.** `runStoreSync` termina con un barrido de
   reconciliación (`reconcileOrderMaster`) que crea o refresca las filas que
   falten, así que no hace falta ningún backfill manual. Las acciones de Repro
@@ -2413,10 +2417,12 @@ el webhook no la trajo, tal como viene de Shopify.
      etiqueta `kapso` que les ponía el botón duraba hasta la siguiente
      sincronización. Es más correcto; el cambio es pequeño y se nota sobre
      todo en el día en curso.
-   - Un periodo que empieza antes de `ORDERS_SYNC_FROM` (2026-06-01) se cuenta
-     desde esa fecha y la tarjeta lo dice: antes Kapta solo guardaba los
-     pedidos del bot. Un periodo entero anterior vuelve a la vista de respaldo
-     con su aviso.
+   - La tarjeta cuenta desde que Kapta tiene todos los pedidos
+     (`ORDERS_SYNC_FROM`, 2026-06-01) y las ventas de las asesoras de cada
+     tienda (su primera fila de `order_sales`: 25-06 y 04-07-2026 en las dos
+     tiendas de hoy). Antes, una venta de asesora caería en «Web». Un periodo
+     que empieza antes se cuenta desde ese día y la tarjeta lo dice; uno entero
+     anterior vuelve a la vista de respaldo con su aviso.
    - En el panel de «Fuente», el bloque que se llamaba «Canal de cierre» pasa a
      llamarse «Cierre de los pedidos del bot, por etiquetas» y remite a la
      tarjeta: es el mismo cálculo de siempre, solo sobre pedidos del bot.

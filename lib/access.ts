@@ -21,6 +21,7 @@ import { idsEnUtm, type AnuncioMeta, type WebAdOrder } from "@/lib/cod-cart-attr
 import type { AttributionInputs, AttributionSource } from "@/lib/metrics";
 import {
   clampToCoverage,
+  coverageStart,
   isMissingFunctionError,
   parseClosingChannels,
   summarizeClosingChannels,
@@ -644,14 +645,14 @@ export async function getAttributionInputs(
  * vino a corregir.
  */
 export async function getClosingChannels(storeIds: string[], range: DateRange): Promise<ClosingChannelResult> {
-  // Antes de ORDERS_SYNC_FROM Kapta solo guardaba los pedidos del bot: contar
-  // ahí «todas las ventas» inflaría a la asesora sobre un universo a medias.
-  const coverageFrom = env.ordersSyncFrom();
+  if (!storeIds.length) return { status: "ok", summary: summarizeClosingChannels([]), coverageFrom: null };
+  const sb = await createServerSupabase();
+  // El canal solo es verdad desde que Kapta tiene todos los pedidos Y las ventas
+  // de las asesoras (MOM §17.3): antes, una venta de asesora caería en «Web».
+  const coverageFrom = coverageStart(env.ordersSyncFrom(), await kaptaStartDays(sb, storeIds));
   const window = clampToCoverage(range, coverageFrom);
   if (!window) return { status: "sin_cobertura", coverageFrom };
   const clipped = window.clipped ? coverageFrom : null;
-  if (!storeIds.length) return { status: "ok", summary: summarizeClosingChannels([]), coverageFrom: clipped };
-  const sb = await createServerSupabase();
   const { data, error } = await sb.rpc("canal_de_cierre", {
     p_store_ids: storeIds,
     p_from: window.from,
@@ -663,6 +664,29 @@ export async function getClosingChannels(storeIds: string[], range: DateRange): 
     return { status: "error", message: error.message };
   }
   return { status: "ok", summary: summarizeClosingChannels(parseClosingChannels(data)), coverageFrom: clipped };
+}
+
+/**
+ * El día local en que cada tienda empezó a registrar ventas en Kapta: su primera
+ * fila de `order_sales` o, si todavía no tiene ninguna, su primer lead. null si
+ * no hay ninguno o si la lectura falla (entonces solo manda ORDERS_SYNC_FROM).
+ * Dos lecturas por tienda como mucho, cada una con su índice y `limit 1`.
+ */
+async function kaptaStartDays(sb: Awaited<ReturnType<typeof createServerSupabase>>, storeIds: string[]): Promise<(string | null)[]> {
+  const first = async (table: "order_sales" | "leads", column: "occurred_at" | "created_at", storeId: string) => {
+    const { data, error } = await sb.from(table).select(column).eq("store_id", storeId).order(column, { ascending: true }).limit(1).maybeSingle();
+    if (error) console.error("[consolidado] inicio de la tienda", table, error.code, error.message);
+    return ((data as Record<string, string> | null)?.[column] ?? null) as string | null;
+  };
+  const [{ data: stores }, firsts] = await Promise.all([
+    sb.from("stores").select("id, timezone").in("id", storeIds),
+    Promise.all(storeIds.map(async (id) => (await first("order_sales", "occurred_at", id)) ?? (await first("leads", "created_at", id)))),
+  ]);
+  const tz = new Map(((stores ?? []) as { id: string; timezone: string | null }[]).map((s) => [s.id, s.timezone || "UTC"]));
+  return storeIds.map((id, i) => {
+    const iso = firsts[i];
+    return iso ? tzParts(iso, tz.get(id) ?? "UTC").date : null;
+  });
 }
 
 /**
