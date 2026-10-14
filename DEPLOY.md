@@ -503,9 +503,10 @@ de couriers, intentos y comentarios.
   histórico basta mover la variable en Vercel y borrar el cursor:
   `delete from sync_state where source = 'shopify_all';`
   También es el piso de «Canal de cierre» (MOM §17.3), que cuenta desde el más
-  tardío entre esta fecha y el día en que cada tienda registró su primera venta
-  de asesora en Kapta. Moverla hacia atrás no amplía la tarjeta más allá de ese
-  inicio; adelantarla sí la recorta.
+  tardío entre esta fecha y el día en que cada tienda empezó a usar Kapta (su
+  primera venta de asesora registrada o, sin ninguna, su primer lead); con
+  varias tiendas, desde la que empezó último. Moverla hacia atrás no amplía la
+  tarjeta más allá de ese inicio; adelantarla sí la recorta.
 - **El Master se rellena solo.** `runStoreSync` termina con un barrido de
   reconciliación (`reconcileOrderMaster`) que crea o refresca las filas que
   falten, así que no hace falta ningún backfill manual. Las acciones de Repro
@@ -2419,10 +2420,14 @@ el webhook no la trajo, tal como viene de Shopify.
      todo en el día en curso.
    - La tarjeta cuenta desde que Kapta tiene todos los pedidos
      (`ORDERS_SYNC_FROM`, 2026-06-01) y las ventas de las asesoras de cada
-     tienda (su primera fila de `order_sales`: 25-06 y 04-07-2026 en las dos
-     tiendas de hoy). Antes, una venta de asesora caería en «Web». Un periodo
-     que empieza antes se cuenta desde ese día y la tarjeta lo dice; uno entero
-     anterior vuelve a la vista de respaldo con su aviso.
+     tienda (su primera fila de `order_sales` o, sin ninguna, su primer lead:
+     25-06 y 04-07-2026 en las dos tiendas de hoy). Antes, una venta de asesora
+     caería en «Web» u «Otros». En el Consolidado cuenta desde la tienda que
+     empezó último (hoy, 04-07-2026) y el aviso la nombra. Un periodo que empieza
+     antes se cuenta desde ese día y la tarjeta lo dice; uno entero anterior
+     vuelve a la vista de respaldo con su aviso. Una tienda que todavía no usa
+     Kapta queda fuera del conteo, nombrada; si no se puede leer desde cuándo
+     usa Kapta una tienda, la tarjeta muestra el error.
    - En el panel de «Fuente», el bloque que se llamaba «Canal de cierre» pasa a
      llamarse «Cierre de los pedidos del bot, por etiquetas» y remite a la
      tarjeta: es el mismo cálculo de siempre, solo sobre pedidos del bot.

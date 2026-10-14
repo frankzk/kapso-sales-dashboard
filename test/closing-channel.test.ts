@@ -16,14 +16,17 @@ vi.mock("server-only", () => ({}));
 const rpc = vi.hoisted(() => ({
   result: { data: null as unknown, error: null as null | { code?: string; message: string } },
   calls: [] as Record<string, unknown>[],
-  // Las tablas que lee el inicio de cada tienda (stores, order_sales, leads).
+  // Las tablas que lee el inicio de cada tienda (stores, order_sales, leads), y
+  // las que tienen que fallar.
   tables: {} as Record<string, Record<string, unknown>[]>,
+  failing: {} as Record<string, string>,
 }));
 vi.mock("@/lib/db", () => {
   // Lo justo de PostgREST para `select().eq()/in().order().limit().maybeSingle()`
   // y para `await select().in()`.
   const from = (table: string) => {
     let rows = [...(rpc.tables[table] ?? [])];
+    const error = rpc.failing[table] ? { code: "PGRST003", message: rpc.failing[table] } : null;
     const q: any = {
       select: () => q,
       eq: (k: string, v: unknown) => ((rows = rows.filter((r) => r[k] === v)), q),
@@ -32,8 +35,8 @@ vi.mock("@/lib/db", () => {
         (rows = [...rows].sort((a, b) => (String(a[k]) < String(b[k]) ? -1 : 1) * (o.ascending ? 1 : -1))), q
       ),
       limit: (n: number) => ((rows = rows.slice(0, n)), q),
-      maybeSingle: async () => ({ data: rows[0] ?? null, error: null }),
-      then: (ok: (v: unknown) => unknown) => Promise.resolve({ data: rows, error: null }).then(ok),
+      maybeSingle: async () => (error ? { data: null, error } : { data: rows[0] ?? null, error: null }),
+      then: (ok: (v: unknown) => unknown) => Promise.resolve(error ? { data: null, error } : { data: rows, error: null }).then(ok),
     };
     return q;
   };
@@ -51,8 +54,11 @@ import {
   CLOSING_CHANNELS,
   CHANNEL_LABEL,
   clampToCoverage,
-  coverageStart,
+  coverageCopy,
   isMissingFunctionError,
+  noCoverageCopy,
+  planCoverage,
+  type ClosingCoverage,
   parseClosingChannels,
   summarizeClosingChannels,
 } from "@/lib/closing-channel";
@@ -177,16 +183,36 @@ describe("clampToCoverage", () => {
   });
 });
 
-describe("coverageStart", () => {
-  it("manda el más tardío entre ORDERS_SYNC_FROM y el inicio de cada tienda", () => {
-    expect(coverageStart("2026-06-01", ["2026-06-25", "2026-07-04"])).toBe("2026-07-04");
-    expect(coverageStart("2026-06-01", ["2026-06-25"])).toBe("2026-06-25");
+describe("planCoverage", () => {
+  it("manda el más tardío entre ORDERS_SYNC_FROM y el inicio de cada tienda, y dice cuál", () => {
+    expect(planCoverage("2026-06-01", [{ id: "A", start: "2026-06-25" }, { id: "B", start: "2026-07-04" }])).toEqual({
+      counted: ["A", "B"],
+      from: "2026-07-04",
+      cause: "tienda",
+      storeId: "B",
+      excluded: [],
+      multiStore: true,
+    });
   });
 
-  it("sin inicio conocido, solo ORDERS_SYNC_FROM", () => {
-    expect(coverageStart("2026-06-01", [null, null])).toBe("2026-06-01");
-    expect(coverageStart("2026-06-01", [])).toBe("2026-06-01");
-    expect(coverageStart("2026-08-01", ["2026-06-25"])).toBe("2026-08-01");
+  it("si ORDERS_SYNC_FROM es posterior, manda él", () => {
+    expect(planCoverage("2026-08-01", [{ id: "A", start: "2026-06-25" }])).toMatchObject({ from: "2026-08-01", cause: "sync", storeId: null });
+  });
+
+  it("una tienda que todavía no usa Kapta queda fuera del conteo, no «cubierta»", () => {
+    expect(planCoverage("2026-06-01", [{ id: "A", start: "2026-06-25" }, { id: "Z", start: null }])).toMatchObject({
+      counted: ["A"],
+      from: "2026-06-25",
+      excluded: ["Z"],
+    });
+    expect(planCoverage("2026-06-01", [{ id: "Z", start: null }])).toEqual({
+      counted: [],
+      from: null,
+      cause: null,
+      storeId: null,
+      excluded: ["Z"],
+      multiStore: false,
+    });
   });
 });
 
@@ -215,6 +241,7 @@ describe("getClosingChannels", () => {
     rpc.result = { data: null, error: null };
     rpc.calls = [];
     rpc.tables = TIENDAS;
+    rpc.failing = {};
     vi.unstubAllEnvs();
   });
 
@@ -224,7 +251,7 @@ describe("getClosingChannels", () => {
     expect(r.status).toBe("ok");
     if (r.status === "ok") {
       expect(r.summary.byChannel.asesora.revenue).toBe(300);
-      expect(r.coverageFrom).toBeNull();
+      expect(r.coverage.from).toBeNull();
     }
     expect(rpc.calls).toEqual([{ p_store_ids: ["A"], p_from: "2026-09-14", p_to: "2026-10-13" }]);
   });
@@ -234,33 +261,57 @@ describe("getClosingChannels", () => {
     const r = await getClosingChannels(["A"], { from: "2026-06-01", to: "2026-06-30" });
     // 2026-06-26T04:50Z es el 25-06 a las 23:50 en Lima.
     expect(rpc.calls).toEqual([{ p_store_ids: ["A"], p_from: "2026-06-25", p_to: "2026-06-30" }]);
-    expect(r).toMatchObject({ status: "ok", coverageFrom: "2026-06-25" });
+    expect(r).toMatchObject({ status: "ok", coverage: { from: "2026-06-25", cause: "tienda", storeId: "A", multiStore: false } });
   });
 
   it("junio entero en la tienda que empezó el 04-07: `sin_cobertura`, nunca un «0 % asesora»", async () => {
     const r = await getClosingChannels(["B"], { from: "2026-06-01", to: "2026-06-30" });
-    expect(r).toEqual({ status: "sin_cobertura", coverageFrom: "2026-07-04" });
+    expect(r).toEqual({
+      status: "sin_cobertura",
+      coverage: { from: "2026-07-04", cause: "tienda", storeId: "B", excluded: [], multiStore: false },
+    });
     expect(rpc.calls).toEqual([]);
   });
 
-  it("con varias tiendas manda la que empezó último: un solo periodo para el total", async () => {
+  it("con varias tiendas manda la que empezó último, y dice cuál", async () => {
     rpc.result = { data: { version: 1, filas: [] }, error: null };
     const r = await getClosingChannels(["A", "B"], { from: "2026-07-01", to: "2026-07-31" });
-    expect(rpc.calls[0]).toMatchObject({ p_from: "2026-07-04", p_to: "2026-07-31" });
-    expect(r).toMatchObject({ status: "ok", coverageFrom: "2026-07-04" });
+    expect(rpc.calls[0]).toMatchObject({ p_store_ids: ["A", "B"], p_from: "2026-07-04", p_to: "2026-07-31" });
+    expect(r).toMatchObject({ status: "ok", coverage: { from: "2026-07-04", cause: "tienda", storeId: "B", multiStore: true } });
   });
 
-  it("una tienda sin ventas registradas empieza en su primer lead; sin nada, en ORDERS_SYNC_FROM", async () => {
+  it("una tienda sin ventas registradas empieza en su primer lead", async () => {
     rpc.result = { data: { version: 1, filas: [] }, error: null };
     const c = await getClosingChannels(["C"], { from: "2026-07-01", to: "2026-08-31" });
-    expect(c).toMatchObject({ status: "ok", coverageFrom: "2026-08-01" }); // 03:00Z = 22:00 del 01-08 en Lima
-    const d = await getClosingChannels(["D"], { from: "2026-05-15", to: "2026-06-14" });
-    expect(d).toMatchObject({ status: "ok", coverageFrom: "2026-06-01" });
+    expect(c).toMatchObject({ status: "ok", coverage: { from: "2026-08-01" } }); // 03:00Z = 22:00 del 01-08 en Lima
+  });
+
+  it("una tienda que todavía no usa Kapta: sola, `sin_cobertura`; con otras, fuera del conteo y nombrada", async () => {
+    const d = await getClosingChannels(["D"], { from: "2026-09-14", to: "2026-10-13" });
+    expect(d).toEqual({ status: "sin_cobertura", coverage: { from: null, cause: null, storeId: null, excluded: ["D"], multiStore: false } });
+    expect(rpc.calls).toEqual([]);
+
+    rpc.result = { data: { version: 1, filas: [] }, error: null };
+    const ad = await getClosingChannels(["A", "D"], { from: "2026-09-14", to: "2026-10-13" });
+    expect(rpc.calls[0]).toMatchObject({ p_store_ids: ["A"] });
+    expect(ad).toMatchObject({ status: "ok", coverage: { from: null, excluded: ["D"], multiStore: true } });
+  });
+
+  it("si no se puede leer desde cuándo usa Kapta una tienda, es un error: nunca un periodo sin recortar", async () => {
+    rpc.failing = { order_sales: "pool timeout" };
+    const r = await getClosingChannels(["B"], { from: "2026-06-01", to: "2026-06-30" });
+    expect(r.status).toBe("error");
+    if (r.status === "error") expect(r.message).toContain("pool timeout");
+    expect(rpc.calls).toEqual([]);
+
+    rpc.failing = { stores: "boom" };
+    expect((await getClosingChannels(["A"], { from: "2026-09-14", to: "2026-10-13" })).status).toBe("error");
   });
 
   it("un periodo entero antes de ORDERS_SYNC_FROM: `sin_cobertura`, sin preguntarle a la función", async () => {
-    const r = await getClosingChannels(["D"], { from: "2026-05-01", to: "2026-05-31" });
-    expect(r).toEqual({ status: "sin_cobertura", coverageFrom: "2026-06-01" });
+    vi.stubEnv("ORDERS_SYNC_FROM", "2026-08-01");
+    const r = await getClosingChannels(["A"], { from: "2026-07-01", to: "2026-07-31" });
+    expect(r).toMatchObject({ status: "sin_cobertura", coverage: { from: "2026-08-01", cause: "sync" } });
     expect(rpc.calls).toEqual([]);
   });
 
@@ -269,7 +320,7 @@ describe("getClosingChannels", () => {
     rpc.result = { data: { version: 1, filas: [] }, error: null };
     const r = await getClosingChannels(["A", "B"], { from: "2026-07-01", to: "2026-07-14" });
     expect(rpc.calls[0]).toMatchObject({ p_from: "2026-07-08" });
-    expect(r).toMatchObject({ status: "ok", coverageFrom: "2026-07-08" });
+    expect(r).toMatchObject({ status: "ok", coverage: { from: "2026-07-08", cause: "sync", storeId: null } });
   });
 
   it("sin la migración: `sin_migracion`, nunca ceros", async () => {
@@ -435,6 +486,55 @@ describe("el orden de los canales es uno solo: SQL, código y MOM", () => {
   });
 });
 
+describe("los textos de la cobertura dicen qué fijó el día", () => {
+  const name = (id: string) => ({ A: "Tienda Uno", B: "Tienda Dos", Z: "Tienda Nueva" })[id] ?? "?";
+  const day = (iso: string) => `día ${iso}`;
+  const cov = (o: Partial<ClosingCoverage>): ClosingCoverage => ({ from: null, cause: null, storeId: null, excluded: [], multiStore: false, ...o });
+
+  it("sin recorte ni tiendas fuera, nada que decir", () => {
+    expect(coverageCopy(cov({}), name, day)).toEqual({ title: null, body: null, sub: null });
+  });
+
+  it("una tienda: el día en que empezó a usar Kapta, y por qué recorta", () => {
+    const c = coverageCopy(cov({ from: "2026-07-04", cause: "tienda", storeId: "B" }), name, day);
+    expect(c.title).toBe("Cuenta desde el día 2026-07-04");
+    expect(c.sub).toBe("desde el día 2026-07-04");
+    expect(c.body).toContain("Ese día la tienda empezó a usar Kapta");
+    expect(c.body).toContain("«Web» u «Otros»");
+  });
+
+  it("varias tiendas: nombra la que empezó último y dice que cada página cuenta desde su inicio", () => {
+    const c = coverageCopy(cov({ from: "2026-07-04", cause: "tienda", storeId: "B", multiStore: true }), name, day);
+    expect(c.body).toContain("Ese día empezó a usar Kapta Tienda Dos, la última de las tiendas");
+    expect(c.body).toContain("La página de cada tienda cuenta desde su propio inicio");
+  });
+
+  it("si lo fijó ORDERS_SYNC_FROM, no culpa a las asesoras", () => {
+    const c = coverageCopy(cov({ from: "2026-08-01", cause: "sync" }), name, day);
+    expect(c.body).toContain("Kapta no tiene los pedidos que no son del bot");
+    expect(c.body).not.toContain("asesora");
+  });
+
+  it("una tienda que no usa Kapta se nombra y se dice que no entra", () => {
+    const c = coverageCopy(cov({ excluded: ["Z"], multiStore: true }), name, day);
+    expect(c).toEqual({
+      title: "No entran todas las tiendas",
+      body: "Tienda Nueva todavía no usa Kapta (sin ventas registradas ni leads): sus pedidos no entran en este total.",
+      sub: "sin Tienda Nueva",
+    });
+  });
+
+  it("sin cobertura: el aviso de la vista anterior según la causa", () => {
+    expect(noCoverageCopy(cov({}), name, day).note).toMatch(/^Esta tienda todavía no usa Kapta/);
+    expect(noCoverageCopy(cov({ multiStore: true }), name, day).note).toMatch(/^Ninguna de estas tiendas usa Kapta/);
+    const t = noCoverageCopy(cov({ from: "2026-07-04", cause: "tienda", storeId: "B", multiStore: true }), name, day);
+    expect(t.note).toContain("el día en que empezó a usar Kapta Tienda Dos, la última de las tiendas");
+    expect(t.note).toContain("Esto es la vista anterior: solo los pedidos del bot de Kapso.");
+    expect(t.sub).toBe("Periodo anterior a que Kapta tuviera todas las ventas");
+    expect(noCoverageCopy(cov({ from: "2026-08-01", cause: "sync" }), name, day).note).not.toContain("asesora");
+  });
+});
+
 describe("el panel", () => {
   const summary = summarizeClosingChannels(
     parseClosingChannels({
@@ -472,9 +572,9 @@ describe("el panel", () => {
 
   it("antes de la cobertura, también la vista anterior con su aviso; recortado, lo dice", () => {
     const dash = read("components/executive-dashboard.tsx");
-    expect(dash).toContain('closing?.status === "sin_cobertura"');
-    expect(dash).toContain("El canal de todas las ventas cuenta desde el");
-    expect(dash).toMatch(/closingFrom \? `\$\{SEP\}desde el/);
+    expect(dash).toContain('closing?.status === "sin_cobertura" ? noCoverageCopy(closing.coverage, storeName, fullDay)');
+    expect(dash).toContain('closing?.status === "ok" ? coverageCopy(closing.coverage, storeName, fullDay)');
+    expect(dash).toContain("<Banner tone=\"info\" role=\"status\" title={closingCopy.title}>");
   });
 
   it("la vista de respaldo no muestra el porcentaje de solo-bot como cifra de cabecera", () => {

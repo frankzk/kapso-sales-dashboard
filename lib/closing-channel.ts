@@ -71,32 +71,132 @@ export interface ClosingChannelSummary {
 }
 
 /**
- * Lo que el panel recibe: el resumen, o por qué no lo hay. Un error se dice;
- * nunca se vuelve ceros.
- *
- * `coverageFrom`: el canal solo es verdad desde que Kapta tiene, a la vez, todos
- * los pedidos de la tienda (`ORDERS_SYNC_FROM`, 2026-06-01) y las ventas que
- * registran sus asesoras (el día de la primera fila de `order_sales` de la
- * tienda; sin ninguna, el de su primer lead). Antes de eso una venta de asesora
+ * Desde cuándo responde el canal y por qué (MOM §17.3, «Desde cuándo
+ * responde»). El canal solo es verdad desde que Kapta tiene, a la vez, todos
+ * los pedidos de la tienda (`ORDERS_SYNC_FROM`) y las ventas que registran sus
+ * asesoras (el inicio de la tienda en Kapta: el día local de su primera fila de
+ * `order_sales` o, sin ninguna, de su primer lead). Antes, una venta de asesora
  * no tenía dónde registrarse y caería en «Web» u «Otros»: medido, una tienda
  * tenía 3.898 pedidos en junio de 2026 y su primera venta registrada es del
- * 04-07. Si el rango empieza antes, se cuenta desde esa fecha y el panel lo
- * dice; si termina antes, no hay con qué responder (`sin_cobertura`) y vuelve
- * la vista anterior.
+ * 04-07.
+ */
+export interface ClosingCoverage {
+  /**
+   * Día local desde el que cuenta. En `ok`, solo si recortó el periodo (si no,
+   * null); en `sin_cobertura`, el día que haría falta, o null si ninguna de las
+   * tiendas usa Kapta todavía.
+   */
+  from: string | null;
+  /** Qué fijó ese día: `sync` = ORDERS_SYNC_FROM; `tienda` = el inicio de `storeId` en Kapta. */
+  cause: "sync" | "tienda" | null;
+  storeId: string | null;
+  /** Tiendas pedidas que todavía no usan Kapta (sin ventas registradas ni leads): fuera del conteo. */
+  excluded: string[];
+  /** Se pidió más de una tienda: el día es el de la que empezó último. */
+  multiStore: boolean;
+}
+
+/**
+ * Lo que el panel recibe: el resumen, o por qué no lo hay. Un error se dice;
+ * nunca se vuelve ceros. Tampoco un periodo sin cobertura: vuelve la vista
+ * anterior con su aviso (`sin_cobertura`).
  */
 export type ClosingChannelResult =
-  | { status: "ok"; summary: ClosingChannelSummary; coverageFrom: string | null }
-  | { status: "sin_cobertura"; coverageFrom: string }
+  | { status: "ok"; summary: ClosingChannelSummary; coverage: ClosingCoverage }
+  | { status: "sin_cobertura"; coverage: ClosingCoverage }
   | { status: "sin_migracion" }
   | { status: "error"; message: string };
 
+/** El plan de cobertura de las tiendas pedidas, antes de mirar el periodo. */
+export interface CoveragePlan {
+  /** Las tiendas que entran en el conteo: las que ya usan Kapta. */
+  counted: string[];
+  /** El día desde el que cuentan todas ellas; null si ninguna usa Kapta. */
+  from: string | null;
+  cause: ClosingCoverage["cause"];
+  storeId: string | null;
+  excluded: string[];
+  multiStore: boolean;
+}
+
 /**
- * Desde qué día local responde el canal: el más tardío entre `ORDERS_SYNC_FROM`
- * y el inicio de cada tienda pedida (null = sin inicio conocido). Con varias
- * tiendas manda la que empezó último, para que el total sea de un solo periodo.
+ * Decide desde qué día responde el canal para estas tiendas. Cada tienda empieza
+ * el día que empezó a usar Kapta (`start`; null = todavía no lo usa, y queda
+ * fuera del conteo). El día es el más tardío entre `ORDERS_SYNC_FROM` y el inicio
+ * de cada tienda contada: con varias tiendas manda la que empezó último, para
+ * que el total sea de un solo periodo.
  */
-export function coverageStart(syncFrom: string, storeStarts: readonly (string | null)[]): string {
-  return storeStarts.reduce<string>((max, d) => (d && d > max ? d : max), syncFrom);
+export function planCoverage(syncFrom: string, stores: readonly { id: string; start: string | null }[]): CoveragePlan {
+  const counted = stores.filter((s): s is { id: string; start: string } => s.start != null);
+  const excluded = stores.filter((s) => s.start == null).map((s) => s.id);
+  const multiStore = stores.length > 1;
+  if (!counted.length) return { counted: [], from: null, cause: null, storeId: null, excluded, multiStore };
+  const last = counted.reduce((a, b) => (b.start > a.start ? b : a));
+  return last.start > syncFrom
+    ? { counted: counted.map((s) => s.id), from: last.start, cause: "tienda", storeId: last.id, excluded, multiStore }
+    : { counted: counted.map((s) => s.id), from: syncFrom, cause: "sync", storeId: null, excluded, multiStore };
+}
+
+const joinNames = (names: string[]) =>
+  names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} y ${names[names.length - 1]}`;
+
+function excludedLine(cov: ClosingCoverage, name: (id: string) => string): string | null {
+  if (!cov.excluded.length) return null;
+  const n = cov.excluded.length;
+  return `${joinNames(cov.excluded.map(name))} todavía no ${n > 1 ? "usan" : "usa"} Kapta (sin ventas registradas ni leads): sus pedidos no entran en este total.`;
+}
+
+/**
+ * Los textos de la cobertura cuando hay resumen: el aviso del panel (título y
+ * cuerpo) y la coletilla de la tarjeta. Todo null si se contó el periodo entero
+ * con todas las tiendas.
+ */
+export function coverageCopy(
+  cov: ClosingCoverage,
+  name: (id: string) => string,
+  day: (iso: string) => string,
+): { title: string | null; body: string | null; sub: string | null } {
+  const excl = excludedLine(cov, name);
+  if (!cov.from) {
+    return excl
+      ? { title: "No entran todas las tiendas", body: excl, sub: `sin ${joinNames(cov.excluded.map(name))}` }
+      : { title: null, body: null, sub: null };
+  }
+  const reason =
+    cov.cause === "tienda" && cov.storeId
+      ? cov.multiStore
+        ? `Ese día empezó a usar Kapta ${name(cov.storeId)}, la última de las tiendas. Antes, sus ventas de asesora no tenían dónde registrarse y caerían en «Web» u «Otros»; para que el total sea de un solo periodo, todas las tiendas cuentan desde ese día. La página de cada tienda cuenta desde su propio inicio.`
+        : "Ese día la tienda empezó a usar Kapta. Antes, una venta de asesora no tenía dónde registrarse y caería en «Web» u «Otros», así que los días anteriores del periodo no entran aquí."
+      : "Antes de ese día Kapta no tiene los pedidos que no son del bot, así que los días anteriores del periodo no entran aquí.";
+  return { title: `Cuenta desde el ${day(cov.from)}`, body: excl ? `${reason} ${excl}` : reason, sub: `desde el ${day(cov.from)}` };
+}
+
+/** El aviso de la vista de respaldo cuando el periodo no tiene cobertura, y la coletilla de la tarjeta. */
+export function noCoverageCopy(
+  cov: ClosingCoverage,
+  name: (id: string) => string,
+  day: (iso: string) => string,
+): { note: string; sub: string } {
+  const back = " Esto es la vista anterior: solo los pedidos del bot de Kapso.";
+  if (!cov.from) {
+    return cov.multiStore
+      ? {
+          note: `Ninguna de estas tiendas usa Kapta todavía (sin ventas registradas ni leads): no hay con qué decir quién cerró cada venta.${back}`,
+          sub: "Las tiendas todavía no usan Kapta",
+        }
+      : {
+          note: `Esta tienda todavía no usa Kapta (sin ventas registradas ni leads): no hay con qué decir quién cerró cada venta.${back}`,
+          sub: "La tienda todavía no usa Kapta",
+        };
+  }
+  const desde = `El canal de todas las ventas cuenta desde el ${day(cov.from)}`;
+  const why =
+    cov.cause === "tienda" && cov.storeId
+      ? cov.multiStore
+        ? `${desde}, el día en que empezó a usar Kapta ${name(cov.storeId)}, la última de las tiendas; la página de cada tienda cuenta desde su propio inicio.`
+        : `${desde}, el día en que la tienda empezó a usar Kapta: antes, una venta de asesora no tenía dónde registrarse.`
+      : `${desde}: antes Kapta no tiene los pedidos que no son del bot.`;
+  return { note: `${why} Para este periodo no hay con qué decir quién cerró cada venta.${back}`, sub: "Periodo anterior a que Kapta tuviera todas las ventas" };
 }
 
 /**
