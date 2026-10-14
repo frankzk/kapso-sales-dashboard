@@ -47,6 +47,8 @@ export interface RestockListItem {
   unidades: number;
   /** null = no recibe recordatorio. */
   config: { shortName: string; days: number } | null;
+  /** Tiene foto en Shopify. Sin foto no se envía: la plantilla la lleva. */
+  hasImage: boolean;
 }
 
 /**
@@ -54,8 +56,13 @@ export interface RestockListItem {
  * (aunque no se hayan vendido en los últimos 90 días), después los vendidos,
  * de más a menos pedidos. Pura.
  */
-export function restockProductList(catalog: RestockCatalogRow[], products: RestockProductRow[]): RestockListItem[] {
+export function restockProductList(
+  catalog: RestockCatalogRow[],
+  products: RestockProductRow[],
+  withImage: readonly string[] = [],
+): RestockListItem[] {
   const byKey = new Map(products.map((p) => [p.product_key, p]));
+  const images = new Set(withImage);
   const seen = new Set<string>();
   const items: RestockListItem[] = [];
   for (const c of catalog) {
@@ -67,6 +74,7 @@ export function restockProductList(catalog: RestockCatalogRow[], products: Resto
       pedidos: c.pedidos,
       unidades: c.unidades,
       config: p ? { shortName: p.short_name, days: p.days_per_unit } : null,
+      hasImage: images.has(c.product_key),
     });
   }
   for (const p of products) {
@@ -77,6 +85,7 @@ export function restockProductList(catalog: RestockCatalogRow[], products: Resto
       pedidos: 0,
       unidades: 0,
       config: { shortName: p.short_name, days: p.days_per_unit },
+      hasImage: images.has(p.product_key),
     });
   }
   const on = items.filter((i) => i.config);

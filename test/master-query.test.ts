@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildMasterQuery, hasQueryFilters, parseMasterQuery } from "@/lib/master-query";
+import { buildMasterQuery, hasQueryFilters, masterQueueHref, parseMasterQuery } from "@/lib/master-query";
+import { MASTER_PATH } from "@/lib/order-drawer-href";
 import { emptyFilters } from "@/lib/order-master-filters";
 
 const parse = (qs: string) => parseMasterQuery(new URLSearchParams(qs));
@@ -106,5 +107,42 @@ describe("hasQueryFilters", () => {
     const h = emptyFilters();
     h.confirmationDue = "vencido";
     expect(hasQueryFilters(h)).toBe(true);
+  });
+});
+
+describe("masterQueueHref", () => {
+  const STORE = "11111111-1111-4111-8111-111111111111";
+  const split = (href: string) => new URLSearchParams(href.slice(href.indexOf("?") + 1));
+
+  it("escribe la etapa, la subetapa, la cobertura y la tienda", () => {
+    const href = masterQueueHref({ view: "en_curso", substage: "en_transito", coverages: ["lima"], storeIds: [STORE] });
+    const params = split(href);
+    expect(params.get("view")).toBe("en_curso");
+    expect(params.get("substage")).toBe("en_transito");
+    expect(params.get("cv")).toBe("lima");
+    expect(params.get("st")).toBe(STORE);
+  });
+
+  it("abre el Master de Pedidos", () => {
+    const href = masterQueueHref({ view: "por_cerrar", coverages: ["lima"] });
+    expect(href.startsWith(`${MASTER_PATH}?`)).toBe(true);
+  });
+
+  it("ida y vuelta: parseMasterQuery lee la misma cobertura y las mismas tiendas", () => {
+    const other = "22222222-2222-4222-8222-222222222222";
+    const q = parseMasterQuery(split(masterQueueHref({ view: "preparacion", coverages: ["lima"], storeIds: [STORE, other] })));
+    expect([...q.filters.coverages]).toEqual(["lima"]);
+    expect([...q.filters.stores]).toEqual([STORE, other]);
+    expect(q.sortKey).toBe("created");
+    expect(q.page).toBe(1);
+    expect(hasQueryFilters({ ...q.filters, coverages: new Set(), stores: new Set() })).toBe(false);
+  });
+
+  it("sin subetapa no escribe el parámetro, y sin tienda tampoco", () => {
+    const params = split(masterQueueHref({ view: "por_despachar", substage: null, coverages: ["lima"] }));
+    expect(params.has("substage")).toBe(false);
+    expect(params.has("st")).toBe(false);
+    expect(params.get("view")).toBe("por_despachar");
+    expect(split(masterQueueHref({ view: "por_despachar" })).has("substage")).toBe(false);
   });
 });

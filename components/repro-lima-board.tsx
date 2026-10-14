@@ -4,9 +4,14 @@
 //
 // Los clientes de Lima con entrega fallida, en cuatro listas que son ETIQUETAS
 // de esta pantalla, no subetapas del Master (D2): «Por decidir», «Llamar
-// después», «Programados» y «Cerrados». Las cuatro tarjetas filtran y dicen
-// cuántos hay (DESIGN.md, «Las cifras navegan»). La lista viene ordenada del
-// servidor (`sortRepro`); aquí solo se filtra por tienda y búsqueda.
+// después», «Programados» y «Cerrados»; y «Todos», un resumen del Master
+// (14-10-2026): los pedidos de Lima sin estado final por etapa y subetapa, cada
+// una con el enlace a su cola (components/repro-lima-todos.tsx). Las tarjetas
+// filtran y dicen cuántos hay (DESIGN.md, «Las cifras navegan»); la de «Todos»
+// cuenta lo que todavía no se entrega y no aparece si su conteo no se pudo
+// leer. La vista va en la URL (`?vista=todos`, con `replaceState`): «atrás»
+// desde el Master vuelve a «Todos». La lista viene ordenada del servidor
+// (`sortRepro`); aquí solo se filtra por tienda y búsqueda.
 //
 // Desde 1280 px la lista es una tabla; más angosta, filas con líneas finas
 // (sin tarjeta dentro de tarjeta, E33). Funciona a 360 px.
@@ -16,7 +21,7 @@
 // con `router.refresh()`.
 
 import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/components/ui";
 import { Badge, Banner, FIELD, FilterPill, OpsButton, StatusCard, opsButtonClass } from "@/components/ops-ui";
 import { Sheet } from "@/components/filter-sheet";
@@ -25,6 +30,7 @@ import { OrderLink } from "@/components/order-link";
 import type { ReproLimaData, ReproRow } from "@/lib/repro-lima-access";
 import { programReproAgreement, type ReproActionResult } from "@/app/dashboard/pedidos/repro-lima/actions";
 import { cutoffNotice, isProblemState, REPRO_LISTS, type ReproList } from "@/lib/repro-lima";
+import { limaOpenBreakdown, reproAging, type LimaOpenCounts } from "@/lib/repro-lima-todos";
 import { soles, telHref } from "@/lib/rider-contact";
 import { MAX_OUTPUTS_PER_ORDER } from "@/lib/shipment-output";
 import {
@@ -38,6 +44,7 @@ import {
   stageAgeLabel,
   type ReproSaved,
 } from "@/components/repro-lima-sheet";
+import { ReproLimaTodos } from "@/components/repro-lima-todos";
 
 /** Las cuatro tarjetas: etiqueta y lo que dice su lista vacía (§6). */
 const LIST_CARD: Record<ReproList, { label: string; hint: string; empty: string }> = {
@@ -62,6 +69,10 @@ const LIST_CARD: Record<ReproList, { label: string; hint: string; empty: string 
     empty: "Ningún caso cerrado espera la anulación.",
   },
 };
+
+/** La quinta tarjeta: lo que todavía no se entrega (MOM §9.5, «Todos»). */
+const TODOS_CARD_HINT =
+  "Los pedidos de Lima sin estado final, por etapa y subetapa del Master. La cifra es lo que todavía no se entrega; lo que falta cerrar va aparte.";
 
 const PAGE = 100;
 /** Al volver a la pestaña se relee, como mucho una vez cada 20 segundos. */
@@ -90,8 +101,10 @@ type OpenSheet = {
 };
 type Feedback = { kind: "notice" | "error"; text: string; orderId?: string; orderName?: string; mesa?: boolean; extra?: string | null };
 
-export function ReproLimaBoard({ data }: { data: ReproLimaData }) {
+export function ReproLimaBoard({ data, openCounts = null }: { data: ReproLimaData; openCounts?: LimaOpenCounts | null }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [refreshing, startRefresh] = useTransition();
   const [acting, startAction] = useTransition();
   const [list, setList] = useState<ReproList>("por_decidir");
@@ -138,10 +151,9 @@ export function ReproLimaBoard({ data }: { data: ReproLimaData }) {
 
   useEffect(() => { setLimit(PAGE); }, [list, query, store]);
 
-  const scoped = useMemo(
-    () => data.rows.filter((row) => (!store || row.storeId === store) && matches(row, query)),
-    [data.rows, store, query],
-  );
+  // La tienda sin la búsqueda: de aquí sale «Por reprogramar Lima» en «Todos».
+  const storeScoped = useMemo(() => data.rows.filter((row) => !store || row.storeId === store), [data.rows, store]);
+  const scoped = useMemo(() => storeScoped.filter((row) => matches(row, query)), [storeScoped, query]);
   const counts = useMemo(() => {
     const out: Record<ReproList, number> = { por_decidir: 0, llamar_despues: 0, programados: 0, cerrados: 0 };
     for (const row of scoped) out[row.list] += 1;
@@ -154,6 +166,48 @@ export function ReproLimaBoard({ data }: { data: ReproLimaData }) {
   const inList = useMemo(() => scoped.filter((row) => row.list === list), [scoped, list]);
   const visible = inList.slice(0, limit);
   const storeName = data.stores.find((s) => s.id === store)?.name ?? null;
+
+  // «Todos»: el conteo del Master con «Por reprogramar Lima» de las filas del
+  // tablero, así su cifra es la suma de las cuatro listas.
+  const breakdown = useMemo(
+    () => openCounts ? limaOpenBreakdown(openCounts.rows, { storeId: store || null, repro: reproAging(storeScoped) }) : null,
+    [openCounts, store, storeScoped],
+  );
+  // La vista vive en la URL; sin conteo, siempre las listas.
+  const view = openCounts && searchParams.get("vista") === "todos" ? "todos" : "listas";
+  const todos = view === "todos" ? breakdown : null;
+  // Las cuatro listas de «Todos» se cuentan con la tienda y sin la búsqueda, como
+  // «Por reprogramar Lima»: así siempre suman su cifra.
+  const storeCounts = useMemo(() => {
+    const out: Record<ReproList, number> = { por_decidir: 0, llamar_despues: 0, programados: 0, cerrados: 0 };
+    for (const row of storeScoped) out[row.list] += 1;
+    return out;
+  }, [storeScoped]);
+  const lists = REPRO_LISTS.map((l) => ({ list: l, label: LIST_CARD[l].label.split(" · ")[0]!, count: storeCounts[l] }));
+  // En «Todos» no hay búsqueda a la vista: se quita también si se llega por la URL
+  // (al releer, o con «atrás»), para que al volver a las listas no quede oculta.
+  useEffect(() => { if (view === "todos") setQuery(""); }, [view]);
+  // Sin conteo no hay «Todos»: se quita `vista` para que una relectura no cambie la pantalla sola.
+  const staleTodos = !openCounts && searchParams.get("vista") === "todos";
+  useEffect(() => { if (staleTodos) showView("listas"); });
+  // Al abrir una lista desde «Todos», el foco va a la sección (el control tocado ya no está).
+  const listSection = useRef<HTMLElement>(null);
+
+  /** Cambia de vista sin volver a pedir la página y sin tocar los demás parámetros (`ficha`, `seccion`). */
+  function showView(next: "listas" | "todos") {
+    const params = new URLSearchParams(searchParams.toString());
+    if (next === "todos") params.set("vista", "todos");
+    else params.delete("vista");
+    if (params.toString() === searchParams.toString()) return;
+    const qs = params.toString();
+    window.history.replaceState(null, "", qs ? `${pathname}?${qs}` : pathname);
+  }
+
+  function onOpenList(l: ReproList) {
+    setList(l);
+    showView("listas");
+    window.requestAnimationFrame(() => listSection.current?.focus());
+  }
 
   // La fila viva de la hoja abierta: tras releer, la del servidor; si salió de
   // la etapa, la última que se vio.
@@ -285,10 +339,15 @@ export function ReproLimaBoard({ data }: { data: ReproLimaData }) {
         </div>
       </header>
 
+      {/* En el teléfono, las cuatro listas en 2×2 y «Todos» a todo el ancho
+          debajo; desde 1024 px, «Todos» es la quinta columna. */}
       <div
         role="group"
         aria-label="Listas de Repro Lima"
-        className="grid grid-cols-2 gap-2 sm:grid-cols-4 [&>button>span:first-child]:whitespace-normal [&>button>span:last-child]:mt-auto"
+        className={cn(
+          "grid grid-cols-2 gap-2 sm:grid-cols-4 [&>button>span:first-child]:whitespace-normal [&>button>span:last-child]:mt-auto",
+          breakdown && "lg:grid-cols-5",
+        )}
       >
         {REPRO_LISTS.map((l) => (
           <StatusCard
@@ -296,10 +355,23 @@ export function ReproLimaBoard({ data }: { data: ReproLimaData }) {
             label={l === "programados" && toReview > 0 ? `Programados · ${toReview} a revisar` : LIST_CARD[l].label}
             value={counts[l]}
             hint={LIST_CARD[l].hint}
-            active={list === l}
-            onClick={() => setList(l)}
+            active={view === "listas" && list === l}
+            onClick={() => { setList(l); showView("listas"); }}
           />
         ))}
+        {breakdown && (
+          // StatusCard no recibe clase: la envuelve una celda que ocupa la fila
+          // y repite los ajustes que la grilla da a sus botones.
+          <div className="col-span-2 sm:col-span-4 lg:col-span-1 flex [&>button]:flex-1 [&>button>span:first-child]:whitespace-normal [&>button>span:last-child]:mt-auto">
+            <StatusCard
+              label="Todos · por entregar"
+              value={breakdown.totals.porEntregar}
+              hint={TODOS_CARD_HINT}
+              active={view === "todos"}
+              onClick={() => { setQuery(""); showView("todos"); }}
+            />
+          </div>
+        )}
       </div>
 
       {feedback && (
@@ -322,20 +394,23 @@ export function ReproLimaBoard({ data }: { data: ReproLimaData }) {
         </Banner>
       )}
 
-      <section aria-label={LIST_CARD[list].label} className="rounded-lg bg-white shadow-control ring-1 ring-line">
-        {/* Búsqueda y tienda, como en Stripe: la píldora es discontinua hasta que filtra. */}
+      <section ref={listSection} tabIndex={-1} aria-label={todos ? "Todos" : LIST_CARD[list].label} className="rounded-lg bg-white shadow-control ring-1 ring-line focus:outline-none">
+        {/* Búsqueda y tienda, como en Stripe: la píldora es discontinua hasta que filtra.
+            En «Todos» no hay búsqueda: se cuentan pedidos del Master, no casos. */}
         <div className="flex flex-wrap items-center gap-2 px-4 py-3">
-          <label className="relative w-full sm:w-72">
-            <span className="sr-only">Buscar pedido, cliente o teléfono</span>
-            <IconSearch className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-ink-500" />
-            <input
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Pedido, cliente o teléfono"
-              className={cn(FIELD, "h-8 pl-8 pointer-coarse:h-11")}
-            />
-          </label>
+          {!todos && (
+            <label className="relative w-full sm:w-72">
+              <span className="sr-only">Buscar pedido, cliente o teléfono</span>
+              <IconSearch className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-ink-500" />
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Pedido, cliente o teléfono"
+                className={cn(FIELD, "h-8 pl-8 pointer-coarse:h-11")}
+              />
+            </label>
+          )}
           {data.stores.length > 1 && (
             <FilterPill
               ref={storePill}
@@ -347,7 +422,16 @@ export function ReproLimaBoard({ data }: { data: ReproLimaData }) {
             />
           )}
           <p className="w-full text-[13px] tabular-nums text-ink-500 lg:ml-auto lg:w-auto">
-            <b className="font-semibold text-ink-900">{inList.length.toLocaleString("es-PE")}</b> en {LIST_CARD[list].label.split(" · ")[0]!.toLocaleLowerCase("es")}
+            {todos ? (
+              <>
+                <b className="font-semibold text-ink-900">{todos.totals.porEntregar.toLocaleString("es-PE")}</b> todavía por entregar
+                {todos.totals.porCerrar > 0 && ` · ${todos.totals.porCerrar.toLocaleString("es-PE")} por cerrar`}
+              </>
+            ) : (
+              <>
+                <b className="font-semibold text-ink-900">{inList.length.toLocaleString("es-PE")}</b> en {LIST_CARD[list].label.split(" · ")[0]!.toLocaleLowerCase("es")}
+              </>
+            )}
           </p>
         </div>
         {storeSheet && (
@@ -369,7 +453,9 @@ export function ReproLimaBoard({ data }: { data: ReproLimaData }) {
           </Sheet>
         )}
 
-        {!inList.length ? (
+        {todos ? (
+          <ReproLimaTodos breakdown={todos} lists={lists} onOpenList={onOpenList} />
+        ) : !inList.length ? (
           <div className="border-t border-line px-4 py-12 text-center">
             <p className="text-sm text-ink-500">{emptyText}</p>
             {elsewhere.length > 0 && (
