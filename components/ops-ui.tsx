@@ -37,7 +37,13 @@ export const OpsButton = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTML
   },
 );
 
-export type BadgeTone = "neutral" | "info" | "ok" | "warn" | "crit" | "urgent" | "brand";
+/** Matiz de una CLASIFICACIÓN (no de un estado): el segmento del lead, la línea
+ *  de WhatsApp. Tinte suave con anillo, como la chapa de cobertura del Master
+ *  (DESIGN.md › Estados › Cobertura): se distingue de las chapas de estado, que
+ *  van rellenas y sin anillo. */
+export type CategoryTone = "slate" | "sky" | "indigo" | "teal" | "orange" | "emerald";
+
+export type BadgeTone = "neutral" | "info" | "ok" | "warn" | "crit" | "urgent" | "brand" | CategoryTone;
 
 const BADGE_TONE: Record<BadgeTone, string> = {
   neutral: "bg-line text-ink-600",
@@ -47,6 +53,12 @@ const BADGE_TONE: Record<BadgeTone, string> = {
   crit: "bg-crit-bg text-crit-fg",
   urgent: "bg-urgent text-white",
   brand: "bg-brand-50 text-brand-700",
+  slate: "bg-slate-50 text-slate-700 ring-1 ring-inset ring-slate-200",
+  sky: "bg-sky-50 text-sky-800 ring-1 ring-inset ring-sky-200",
+  indigo: "bg-indigo-50 text-indigo-800 ring-1 ring-inset ring-indigo-200",
+  teal: "bg-teal-50 text-teal-800 ring-1 ring-inset ring-teal-200",
+  orange: "bg-orange-50 text-orange-800 ring-1 ring-inset ring-orange-200",
+  emerald: "bg-emerald-50 text-emerald-800 ring-1 ring-inset ring-emerald-200",
 };
 
 /** Chapa de estado: 20 px de alto, 4 px de radio, texto de 12 px. */
