@@ -42,10 +42,12 @@ import { Change, Figure, FIGURE_FRAME, pctText as pct } from "@/components/figur
 import { ConsolidadoFilters, ConsolidadoNav, PendingDim, type PeriodLink } from "@/components/consolidado-filters";
 import { ModuleBoard, type ModuleCell, type ModuleGroup } from "@/components/module-board";
 import { BarsGlyph, ColumnsGlyph, DotsGlyph, LineGlyph, StackGlyph, type DotTone } from "@/components/dashboard-viz";
-import { CHANNEL_SHADE, SOURCE_SERIES, VIZ, trendColor } from "@/components/palette";
+import { CHANNEL_SHADE, CLOSING_GROUP_SHADE, SOURCE_SERIES, VIZ, trendColor } from "@/components/palette";
 import { DailyBars, DailyLine, SalesAttributionModule, TrendLines } from "@/components/lazy-dashboard-modules";
 import { CampaignTable } from "@/components/campaign-table";
 import { BotVsAdvisor, CHANNEL_COLS } from "@/components/bot-vs-advisor";
+import { ClosingChannels } from "@/components/closing-channels";
+import { CLOSING_GROUPS, GROUP_LABEL, type ClosingChannelResult } from "@/lib/closing-channel";
 import { HorizontalFunnel } from "@/components/funnel-horizontal";
 import { LossReasonBars, LostRevenueCards, sharePct } from "@/components/loss-reasons";
 import { FunnelHealth, HEALTH } from "@/components/funnel-health";
@@ -232,6 +234,7 @@ export function ExecutiveDashboard({
   adNames,
   waNumbers,
   attribution,
+  closing,
   metaSpend,
   campaignDeliveries,
   campaignLeads,
@@ -261,6 +264,10 @@ export function ExecutiveDashboard({
    *  que una asesora había trabajado, y encima se quedaba sin el módulo de
    *  fuente y cierre. Que el tipo lo exija impide que vuelva a pasar en silencio. */
   attribution: SalesAttribution;
+  /** Quién cerró TODAS las ventas de la tienda (MOM §17.3, función 0257). Sin
+   *  él —o sin la migración— «Canal de cierre» vuelve a la vista anterior, que
+   *  solo ve los pedidos del bot, y lo dice. */
+  closing?: ClosingChannelResult;
   metaSpend?: number | null;
   campaignDeliveries?: import("@/lib/types").CampaignDeliveryOutcome[];
   campaignLeads?: LeadRow[];
@@ -622,34 +629,86 @@ export function ExecutiveDashboard({
       : null,
   };
 
+  // «Canal de cierre» (MOM §17.3): quién cerró TODAS las ventas de la tienda,
+  // por la venta registrada de la asesora y no por etiquetas que la
+  // sincronización con Shopify borra. Si la función 0257 no está (deploy no
+  // aplica migraciones) o falla, vuelve la vista anterior —solo pedidos del
+  // bot— con un aviso, nunca ceros.
+  const closingSummary = closing?.status === "ok" ? closing.summary : null;
   const channelTotal = CHANNEL_COLS.reduce((s, c) => s + channels[c.key].revenue, 0);
-  const canal: ModuleCell = {
-    id: "canal",
-    title: "Canal de cierre",
-    figure: channelTotal ? pct(channels.asesora.revenue / channelTotal, 0) : "—",
-    tone: channelTotal ? undefined : "muted",
-    sub: channelTotal
-      ? `lo cerró una asesora${SEP}${money(channels.asesora.revenue, currency)} de ${money(channelTotal, currency)}`
-      : "Sin ventas en el periodo",
-    glyph: channelTotal ? (
-      <StackGlyph parts={CHANNEL_COLS.map((c) => ({ label: c.title, value: channels[c.key].revenue, color: CHANNEL_SHADE[c.key] }))} />
-    ) : undefined,
-    panel: channelTotal
-      ? {
-          meta: periodMeta,
-          width: "max-w-[760px]",
-          body: (
-            <div className="flex flex-col gap-4">
-              <p className="max-w-[68ch] text-[13px] leading-5 text-ink-600">
-                Tres canales y no dos: el bot asistido es una venta que cerró el bot después de que una asesora gestionara el lead. Asistir no
-                es cerrar, así que no se suma a la asesora.
-              </p>
-              <BotVsAdvisor channels={channels} currency={currency} />
-            </div>
-          ),
-        }
-      : null,
-  };
+  const legacyCanalNote =
+    closing?.status === "sin_migracion"
+      ? "Falta aplicar la migración 0257 en la base: mientras tanto este panel solo ve los pedidos del bot de Kapso y no puede contar las ventas de las asesoras."
+      : closing?.status === "error"
+        ? `No se pudo calcular el canal de todas las ventas (${closing.message}). Esto es la vista anterior: solo los pedidos del bot de Kapso.`
+        : null;
+  const canal: ModuleCell = closingSummary
+    ? {
+        id: "canal",
+        title: "Canal de cierre",
+        figure: closingSummary.total.revenue ? pct(closingSummary.byGroup.humano.revenue / closingSummary.total.revenue, 0) : "—",
+        tone: closingSummary.total.revenue ? undefined : "muted",
+        sub: closingSummary.total.revenue
+          ? `lo cerró una asesora${SEP}${money(closingSummary.byGroup.humano.revenue, currency)} de ${money(closingSummary.total.revenue, currency)}`
+          : "Sin ventas en el periodo",
+        glyph: closingSummary.total.revenue ? (
+          <StackGlyph
+            parts={CLOSING_GROUPS.map((g) => ({ label: GROUP_LABEL[g], value: closingSummary.byGroup[g].revenue, color: CLOSING_GROUP_SHADE[g] }))}
+          />
+        ) : undefined,
+        panel: closingSummary.total.revenue
+          ? {
+              meta: `Todas las ventas de la tienda${SEP}${periodMeta}`,
+              width: "max-w-[880px]",
+              body: (
+                <div className="flex flex-col gap-4">
+                  <p className="max-w-[72ch] text-[13px] leading-5 text-ink-600">
+                    Cada venta cae en un solo canal, así que los canales suman el total de la tienda: la venta que una asesora
+                    registró en el dashboard es suya aunque el pedido lleve otra etiqueta. «Ayudados por asesora» marca lo que cerró
+                    otro canal después de que una asesora gestionara a la clienta en los 7 días previos: ayudar no es cerrar, por
+                    eso no se suma a la asesora. Las cifras de arriba de la página siguen siendo solo las del bot de Kapso.
+                  </p>
+                  <ClosingChannels summary={closingSummary} currency={currency} />
+                </div>
+              ),
+            }
+          : null,
+      }
+    : {
+        id: "canal",
+        title: "Canal de cierre",
+        figure: channelTotal ? pct(channels.asesora.revenue / channelTotal, 0) : "—",
+        tone: channelTotal ? undefined : "muted",
+        sub: legacyCanalNote
+          ? "Solo pedidos del bot: falta calcular todas las ventas"
+          : channelTotal
+            ? `lo cerró una asesora${SEP}${money(channels.asesora.revenue, currency)} de ${money(channelTotal, currency)}`
+            : "Sin ventas en el periodo",
+        glyph: channelTotal ? (
+          <StackGlyph parts={CHANNEL_COLS.map((c) => ({ label: c.title, value: channels[c.key].revenue, color: CHANNEL_SHADE[c.key] }))} />
+        ) : undefined,
+        panel:
+          channelTotal || legacyCanalNote
+            ? {
+                meta: periodMeta,
+                width: "max-w-[760px]",
+                body: (
+                  <div className="flex flex-col gap-4">
+                    {legacyCanalNote && (
+                      <Banner tone="warn" role="status" title="Este panel no ve todas las ventas">
+                        {legacyCanalNote}
+                      </Banner>
+                    )}
+                    <p className="max-w-[68ch] text-[13px] leading-5 text-ink-600">
+                      Tres canales y no dos: el bot asistido es una venta que cerró el bot después de que una asesora gestionara el lead. Asistir no
+                      es cerrar, así que no se suma a la asesora.
+                    </p>
+                    <BotVsAdvisor channels={channels} currency={currency} />
+                  </div>
+                ),
+              }
+            : null,
+      };
 
   const roas = deliveredRoas(campaignStats, currency);
   const adSpend = campaignStats.filter((r) => sameCurrency(r.metaCurrency, currency) && !r.currencyConflict).reduce((s, r) => s + r.spend, 0);

@@ -51,6 +51,22 @@ export const VIZ = {
 export const CHANNEL_SHADE = { bot: "#a3acba", bot_asistido: "#687385", asesora: "#1a1b25" } as const;
 
 /**
+ * Los cuatro grupos de «quién cerró» de TODAS las ventas (MOM §17.3), con el
+ * mismo criterio: escala de tinta de más a menos mano humana (asesora → bot o
+ * automatización → la clienta sola → otros), para no confundirse con los
+ * colores de las fuentes del panel vecino. Validada con el validador de dataviz
+ * en modo claro: luminosidad monótona y ΔE ≥ 15,9 entre vecinos (también con
+ * daltonismo). «Otros» es la tinta clara de siempre y queda bajo 3:1 sobre
+ * blanco: va siempre con etiqueta y con la tabla al lado.
+ */
+export const CLOSING_GROUP_SHADE = {
+  humano: "#1a1b25",
+  automatizacion: "#3f4453",
+  web: "#6b7385",
+  otros: "#a3acba",
+} as const;
+
+/**
  * Un color por fuente de venta, en el orden canónico de
  * `ATTRIBUTION_SOURCE_ORDER` (lib/metrics), que es el orden en que se apilan:
  * así los vecinos de la barra son los vecinos validados de `SERIES`.

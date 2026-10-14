@@ -5,6 +5,7 @@ import {
   getCampaignDeliveryOutcomes,
   getCampaignLeadsForDashboard,
   getAttributionInputs,
+  getClosingChannels,
   getConversations,
   getLatestOps,
   getLeadsForDashboard,
@@ -42,13 +43,15 @@ export default async function StorePage({
   if (!store) notFound(); // not accessible (RLS) or non-existent
 
   const prev = previousRange(range);
-  const [rollups, prevRollups, orders, conversations, leads, ops] = await Promise.all([
+  const [rollups, prevRollups, orders, conversations, leads, ops, closing] = await Promise.all([
     getRollups([storeId], range),
     getRollups([storeId], prev),
     getOrders([storeId], range),
     getConversations([storeId], range),
     getLeadsForDashboard([storeId], range),
     getLatestOps([storeId]),
+    // Quién cerró TODAS las ventas de la tienda, no solo las del bot (MOM §17.3).
+    getClosingChannels([storeId], range),
   ]);
   const campaignLeads = await getCampaignLeadsForDashboard(storeId, range, store.timezone);
   const campaignOrdersPromise = getOrdersByIds([storeId], campaignLeads.map((lead) => lead.order_id));
@@ -98,6 +101,7 @@ export default async function StorePage({
       adNames={adNames}
       waNumbers={waNumbers}
       attribution={attribution}
+      closing={closing}
       metaSpend={metaSpend}
       campaignDeliveries={campaignDeliveries}
       campaignLeads={campaignLeads}

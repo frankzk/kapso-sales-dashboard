@@ -18,6 +18,12 @@ import type {
 import type { AdMeta } from "@/lib/meta-ads";
 import { idsEnUtm, type AnuncioMeta, type WebAdOrder } from "@/lib/cod-cart-attribution";
 import type { AttributionInputs, AttributionSource } from "@/lib/metrics";
+import {
+  isMissingFunctionError,
+  parseClosingChannels,
+  summarizeClosingChannels,
+  type ClosingChannelResult,
+} from "@/lib/closing-channel";
 import type { WaNumber } from "@/lib/wa-numbers";
 
 export interface DateRange {
@@ -622,6 +628,33 @@ export async function getAttributionInputs(
   for (const arr of winbackByPhone.values()) arr.sort();
 
   return { sourceByPhone, advisorTouchesByPhone, winbackByPhone };
+}
+
+/**
+ * Canal de cierre de TODAS las ventas de las tiendas en el rango (MOM §17.3),
+ * en el día local de cada tienda. Lo clasifica Postgres (`canal_de_cierre`,
+ * 0257) con la sesión de quien mira, así que cada persona ve solo sus tiendas;
+ * aquí solo se lee y se resume.
+ *
+ * Si la migración todavía no se aplicó, `sin_migracion`: el panel vuelve a la
+ * vista anterior con un aviso. Cualquier otro error se dice tal cual, nunca se
+ * convierte en ceros: un «0 % lo cerró una asesora» falso es lo que este cambio
+ * vino a corregir.
+ */
+export async function getClosingChannels(storeIds: string[], range: DateRange): Promise<ClosingChannelResult> {
+  if (!storeIds.length) return { status: "ok", summary: summarizeClosingChannels([]) };
+  const sb = await createServerSupabase();
+  const { data, error } = await sb.rpc("canal_de_cierre", {
+    p_store_ids: storeIds,
+    p_from: range.from,
+    p_to: range.to,
+  });
+  if (error) {
+    if (isMissingFunctionError(error)) return { status: "sin_migracion" };
+    console.error("[consolidado] canal_de_cierre", error.code, error.message);
+    return { status: "error", message: error.message };
+  }
+  return { status: "ok", summary: summarizeClosingChannels(parseClosingChannels(data)) };
 }
 
 /**

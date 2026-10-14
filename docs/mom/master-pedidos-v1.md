@@ -59,7 +59,9 @@ venden también por un formulario COD en la web (EasySell, etiqueta
 nada —los 591 están en `order_master` y 499 ya tienen guía—, pero sí para todo
 lo que se calcula recorriendo leads: ese camino no los ve. El anuncio que los
 trajo viaja en `orders.utm_meta`, y las reglas para leerlo están en
-`lib/cod-cart-attribution.ts`.
+`lib/cod-cart-attribution.ts`. Quién cerró cada pedido —asesora, bot, la
+clienta sola en la web— se decide por hechos que la sincronización no borra,
+no por etiquetas locales (§17.3).
 
 ### Salida
 
@@ -7773,6 +7775,85 @@ ratio en `lib/ltv.ts`):
 - **Para subirlo:** el recordatorio de reposición (§34) le escribe a la
   clienta cuando se le está por acabar lo que compró. Mide su efecto contra un
   grupo de control.
+
+### 17.3 Canal de cierre de todas las ventas (14-10-2026)
+
+Responde quién cerró cada venta de la tienda: una asesora, el bot o una
+automatización, la clienta sola en la web, u otra vía. Está en **Consolidado**
+y en la página de cada tienda, en la tarjeta «Canal de cierre».
+
+**Por qué cambió.** La tarjeta solo veía los pedidos con etiqueta `kapso` y
+decidía «asesora» por las etiquetas `venta_manual` / `carrito_recuperado`. El
+botón «Generar pedido» escribía `kapso` solo en la copia local del pedido —en
+Shopify el pedido nace con `venta_manual`, o con las etiquetas del borrador de
+EasySell cuando se reusa el carrito— y la sincronización con Shopify reescribe
+las etiquetas cada 5 minutos. Del 14-09 al 13-10-2026, de 2.916 pedidos de
+asesoras quedaba 1 con `kapso`: la tarjeta decía «0 % lo cerró una asesora»
+mientras Productividad les contaba S/ 484.645.
+
+**Universo.** Todos los pedidos de Shopify de la tienda (`orders`), por el día
+**local** de la tienda en que se crearon. Los cancelados van aparte —fuera de
+pedidos e ingresos—, y el ingreso es total − reembolsado, igual que el resto
+del Consolidado.
+
+**Un canal por pedido**, el primero que aplique en este orden. Así los canales
+suman el total de la tienda:
+
+| Orden | Canal | Cómo se reconoce | Grupo |
+| --- | --- | --- | --- |
+| 1 | Asesora | Tiene fila en `order_sales`: la venta que la asesora registró al generar el pedido | Asesora |
+| 2 | Recompra automática | Es el pedido de una prueba de recompra (`auto_order_trials` en `generado`; §11, «Prueba: pedido de recompra sin llamada») | Bot o automatización |
+| 3 | Bot de Kapso | Etiqueta `kapso` puesta en Shopify (sin distinguir mayúsculas) | Bot o automatización |
+| 4 | Bot de carritos externo | Etiquetas `BOT`, `CARRITO RECUPERADO` o `BOT (whatsapp_cloud)` | Bot o automatización |
+| 5 | Web, la clienta sola | Etiquetas de EasySell (`easysell_cod_form` y las que empiezan con `easysell`) | La clienta sola en la web |
+| 6 | Otros | Todo lo demás: catálogo de WhatsApp, pedidos hechos a mano en Shopify… | Otros |
+
+La venta de la asesora gana a cualquier etiqueta porque es el único hecho que
+nada sobrescribe: la asesora la registró y `order_sales` es append-only. Las
+etiquetas casi no se solapan —en el mes medido, un pedido con `kapso` y venta
+de asesora y otro con `kapso` y EasySell—, así que el orden solo decide bordes.
+
+**«Ayudado por asesora».** Para lo que NO cerró una asesora: una asesora
+gestionó a esa clienta en los 7 días previos al pedido, con una fila firmada de
+`lead_calls` de tipo `call`, `message` o `sale` (la misma definición de «tocado»
+del agente de voz, §33.2) en el lead de la **misma tienda** con el **mismo
+teléfono**. Ayudar no es cerrar: el pedido queda en su canal, y la ayuda se
+cuenta aparte en su fila. Una fila del sistema sin firma o una nota no es
+gestión.
+
+**Lo que no decide el canal.** Ninguna etiqueta que Kapta escriba en su copia:
+las tiendas no dieron `write_orders`, así que Kapta no puede etiquetar pedidos
+en Shopify, y lo que escribe solo en su copia lo borra la siguiente
+sincronización. Por eso, desde este cambio, «Generar pedido», la captura del
+carrito recuperado sin asesora y la recompra automática registran la fila local
+**solo si el webhook no la trajo ya, y tal como viene de Shopify**: sin `kapso`,
+sin `cod_recuperado`, sin pisar la fecha ni los productos reales.
+
+**Productividad y el canal no cuadran exacto, y no tienen por qué.**
+Productividad cuenta ventas registradas por la fecha en que la asesora apretó
+el botón e incluye las que después se cancelaron; el canal cuenta pedidos por
+su fecha de creación en Shopify y deja los cancelados aparte.
+
+**Lo que todavía no cambia.** Las cifras de arriba del Consolidado (Ingresos,
+Pedidos, Ticket, Conversión) siguen siendo solo las del bot de Kapso (DEPLOY.md
+§5h). La tarjeta lo dice, porque su total —todas las ventas— es mayor.
+
+Medido del 14-09 al 13-10-2026, días de Lima, pedidos activos:
+
+| Canal | Pedidos | Ingresos | Cancelados aparte | Ayudados |
+| --- | --- | --- | --- | --- |
+| Asesora | 2.651 | S/ 481.451 | 243 | — |
+| Recompra automática | 29 | S/ 5.826 | 11 | 0 |
+| Bot de Kapso | 593 | S/ 103.880 | 140 | 57 |
+| Bot de carritos externo | 244 | S/ 41.090 | 102 | 51 |
+| Web, la clienta sola | 3.012 | S/ 527.865 | 1.105 | 66 |
+| Otros | 93 | S/ 20.968 | 26 | 15 |
+
+Cómo se calcula: `canal_de_cierre` (migración 0257, de lectura, con la sesión
+de quien mira: cada persona ve solo sus tiendas), resumido en
+`lib/closing-channel.ts` y dibujado en `components/closing-channels.tsx`. Si la
+migración todavía no se aplicó, la tarjeta vuelve a la vista anterior (solo
+pedidos del bot) con un aviso, nunca con ceros.
 
 ## 18. Implementación incremental
 
