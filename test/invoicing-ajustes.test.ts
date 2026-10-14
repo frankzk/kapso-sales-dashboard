@@ -833,6 +833,7 @@ const RECENT: InvoiceSettingsData["recent"] = [
     total: 89.9,
     error: null,
     createdAt: "2026-10-14T14:00:00.000Z",
+    rucMismatch: false,
   },
   {
     id: "inv-2",
@@ -846,6 +847,7 @@ const RECENT: InvoiceSettingsData["recent"] = [
     total: 120,
     error: "SimpleFact no respondió.",
     createdAt: "2026-10-14T14:10:00.000Z",
+    rucMismatch: false,
   },
 ];
 
@@ -881,6 +883,41 @@ describe("la sección, pintada", () => {
     expect(html).toContain("Agregar RUC");
   });
 
+  // FIX: cuando el barrido apaga un RUC borra `checked_at`/`checked_ruc` y deja
+  // el motivo en `check_error`. Sin fecha, esto decía «Sin probar…» y escondía
+  // el motivo: el owner no sabía por qué se apagó ni qué arreglar.
+  it("un RUC que Kapta apagó dice por qué y que hay que probar antes de volver a Real", () => {
+    const why = `SimpleFact emitió con archivos del RUC ${OTRO}: el token no es de este RUC.`;
+    const html = render({
+      issuers: [issuerView({ mode: "apagado", checkedAt: null, checkedRuc: null, checkError: why })],
+    });
+    expect(html).toContain(
+      `Apagado por Kapta: SimpleFact emitió con archivos del RUC ${OTRO}: el token no es de este RUC. Prueba la conexión antes de volver a Real.`,
+    );
+    expect(html).toMatch(/<span class="text-crit-fg">Apagado por Kapta: /);
+    expect(html).not.toContain("Sin probar");
+  });
+
+  it("sin fecha y encendido, el motivo se enseña igual: no está probado", () => {
+    const html = render({
+      issuers: [issuerView({ mode: "simulacion", checkedAt: null, checkedRuc: null, checkError: "Token rechazado (401)." })],
+    });
+    expect(html).toContain("Sin probar. Lo último que falló: Token rechazado (401). Prueba la conexión antes de pasar a Real.");
+    expect(html).not.toContain("Apagado por Kapta");
+  });
+
+  it("sin fecha ni motivo, «Sin probar»; con una prueba fechada, la de siempre", () => {
+    const nunca = render({ issuers: [issuerView({ checkedAt: null, checkedRuc: null, checkError: null })] });
+    expect(nunca).toContain("Sin probar. «Probar conexión» lee las ventas de la cuenta");
+    expect(nunca).not.toContain("Apagado por Kapta");
+    const fallida = render({
+      issuers: [issuerView({ mode: "apagado", checkedRuc: null, checkError: "Token rechazado (401)." })],
+    });
+    // 09:30 en Lima del 14.
+    expect(fallida).toMatch(/Última prueba \([^)]*9:30[^)]*\): Token rechazado \(401\)\./);
+    expect(fallida).not.toContain("Apagado por Kapta");
+  });
+
   it("el alta no ofrece Real", () => {
     const html = render({ issuers: [] });
     expect(html).toContain("Aún no hay RUC");
@@ -913,6 +950,30 @@ describe("la sección, pintada", () => {
     expect(html).toContain("S/ 89.90");
     expect(html).toContain(">En duda</span>");
     expect(html).toContain("SimpleFact no respondió.");
+  });
+
+  // FIX F: una emitida con archivos de otro RUC se pintaba como una emitida más,
+  // verde y sin su error. Es una boleta de una empresa que no cobró.
+  it("una emitida con otro RUC va marcada, en rojo y con su error", () => {
+    const error = `SimpleFact contestó con archivos del RUC ${OTRO}, no del ${GF}.`;
+    const html = render({
+      recent: [{ ...RECENT![0]!, id: "inv-3", orderName: "#KP136190", rucMismatch: true, error }],
+    });
+    expect(html).toMatch(/<span[^>]*bg-crit-bg[^>]*>Emitida<\/span>/);
+    expect(html).toMatch(/<span[^>]*bg-crit-bg[^>]*>Otro RUC<\/span>/);
+    expect(html).toContain(error);
+    expect(html).toContain("Revísala en SimpleFact: puede necesitar anularse o una nota de crédito.");
+    // La de su RUC sigue verde y sin marca.
+    const bien = render({});
+    expect(bien).toMatch(/<span[^>]*bg-ok-bg[^>]*>Emitida<\/span>/);
+    expect(bien).not.toContain("Otro RUC");
+  });
+
+  it("la página lee la marca de los últimos comprobantes", () => {
+    // La primera lectura de `order_invoices` es la de los últimos 20.
+    const recent = PAGE.slice(PAGE.indexOf('.from("order_invoices")'), PAGE.indexOf(".limit(20)"));
+    expect(recent).toMatch(/\.select\("[^"]*\bruc_mismatch\b[^"]*"\)/);
+    expect(PAGE).toContain("rucMismatch: r.ruc_mismatch === true,");
   });
 
   it("lo que no se pudo leer se dice, no se pinta como vacío", () => {

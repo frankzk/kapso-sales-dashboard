@@ -62,8 +62,13 @@ const RUC_OTRO = "20600000005";
 
 /** «Emitir desde»: la medianoche de Lima del 14-10-2026. */
 const DESDE = "2026-10-14T05:00:00.000Z";
-/** Cuándo se validó el pago de la mayoría de los casos. */
+/**
+ * Cuándo entró a Kapta el pago de la mayoría de los casos (`registered_at`): la
+ * fecha de «quedó pagado».
+ */
 const PAGADO = "2026-10-14T15:00:00.000Z";
+/** Cuándo lo validó finanzas (`validated_at`): solo para auditar la base. */
+const VALIDADO = "2026-10-14T15:20:00.000Z";
 const FECHA_PEDIDO = "2026-10-14T13:00:00.000Z";
 
 const GF: InvoiceIssuer = {
@@ -165,7 +170,8 @@ function pago(over: Partial<InvoicePayment> = {}): InvoicePayment {
     kind: "total",
     amount: 150,
     validationStatus: "validado",
-    validatedAt: PAGADO,
+    registeredAt: PAGADO,
+    validatedAt: VALIDADO,
     vision: LECTURA_GF,
     flowLinked: false,
     statementDestination: null,
@@ -210,7 +216,7 @@ const SIN_NADA = { realLive: false, simulated: false, errorBlocked: false };
 // ── ¿Lleva comprobante? ──────────────────────────────────────────────────────
 
 describe("MOM §35.3 — invoiceEligibility: el pedido que sí lleva comprobante", () => {
-  it("S/ 150 por Yape a Grupo GF, validado después de «Emitir desde»: boleta real de GRUPO GF", () => {
+  it("S/ 150 por Yape a Grupo GF, pagado después de «Emitir desde»: boleta real de GRUPO GF", () => {
     expect(invoiceEligibility(hechos())).toEqual({
       ok: true,
       issuer: GF,
@@ -220,20 +226,28 @@ describe("MOM §35.3 — invoiceEligibility: el pedido que sí lleva comprobante
       basis: {
         prepaid: false,
         payments: [
-          { id: "pay-1", amount: 150, source: "lectura_verificada", accountIds: ["acc-gf"], validatedAt: PAGADO },
+          { id: "pay-1", amount: 150, source: "lectura_verificada", accountIds: ["acc-gf"], validatedAt: VALIDADO },
         ],
       },
     });
   });
 
-  it("dos pagos que juntos cubren el total: paidAt es el ÚLTIMO validado y la base lleva los dos", () => {
+  it("dos pagos que juntos cubren el total: paidAt es el ÚLTIMO registrado y la base lleva los dos", () => {
     const tarde = "2026-10-14T18:30:00.000Z";
+    const tardeValidado = "2026-10-14T18:45:00.000Z";
     const r = invoiceEligibility(
       hechos({
         payments: [
-          // El último validado va primero: cuenta la fecha, no la posición.
-          pago({ id: "pay-dif", kind: "diferencia", amount: 100, validatedAt: tarde, statementDestination: "GRUPO GF S.A.C." }),
-          pago({ id: "pay-ade", kind: "adelanto", amount: 50, validatedAt: PAGADO }),
+          // El último registrado va primero: cuenta la fecha, no la posición.
+          pago({
+            id: "pay-dif",
+            kind: "diferencia",
+            amount: 100,
+            registeredAt: tarde,
+            validatedAt: tardeValidado,
+            statementDestination: "GRUPO GF S.A.C.",
+          }),
+          pago({ id: "pay-ade", kind: "adelanto", amount: 50 }),
         ],
       }),
     );
@@ -246,8 +260,8 @@ describe("MOM §35.3 — invoiceEligibility: el pedido que sí lleva comprobante
       basis: {
         prepaid: false,
         payments: [
-          { id: "pay-dif", amount: 100, source: "estado_yape", accountIds: ["acc-gf"], validatedAt: tarde },
-          { id: "pay-ade", amount: 50, source: "lectura_verificada", accountIds: ["acc-gf"], validatedAt: PAGADO },
+          { id: "pay-dif", amount: 100, source: "estado_yape", accountIds: ["acc-gf"], validatedAt: tardeValidado },
+          { id: "pay-ade", amount: 50, source: "lectura_verificada", accountIds: ["acc-gf"], validatedAt: VALIDADO },
         ],
       },
     });
@@ -662,29 +676,81 @@ describe("MOM §35.3 fila 8 y §35.4 — «Emitir desde»: ningún RUC emite hac
     expect(motivo(hechos({ issuers: conDesde("2026-10-14T10:00:01-05:00") }))).toBe("antes_de_inicio");
   });
 
-  it("cuenta el ÚLTIMO pago validado: uno antes y otro después de «Emitir desde» entra", () => {
+  it("cuenta el ÚLTIMO pago registrado: uno antes y otro después de «Emitir desde» entra", () => {
     const f = hechos({
       payments: [
-        pago({ id: "p-ayer", amount: 50, validatedAt: "2026-10-13T20:00:00.000Z" }),
-        pago({ id: "p-hoy", amount: 100, validatedAt: PAGADO }),
+        pago({ id: "p-ayer", amount: 50, registeredAt: "2026-10-13T20:00:00.000Z" }),
+        pago({ id: "p-hoy", amount: 100, registeredAt: PAGADO }),
       ],
     });
     expect(invoiceEligibility(f)).toMatchObject({ ok: true, paidAt: PAGADO });
   });
 
-  it("todos los pagos validados antes de «Emitir desde»: no", () => {
-    const f = hechos({ payments: [pago({ validatedAt: "2026-10-14T04:59:59.000Z" })] });
+  it("todos los pagos registrados antes de «Emitir desde»: no", () => {
+    const f = hechos({ payments: [pago({ registeredAt: "2026-10-14T04:59:59.000Z" })] });
     expect(motivo(f)).toBe("antes_de_inicio");
   });
 
   it.each([
     ["sin fecha", null],
     ["con una fecha que no se entiende", "ayer"],
-  ])("un pago validado %s bloquea aunque otro sea de hoy: no se sabe cuándo quedó pagado", (_porque, validatedAt) => {
+  ])("un pago validado registrado %s bloquea aunque otro sea de hoy: no se sabe cuándo quedó pagado", (_porque, registeredAt) => {
     const f = hechos({
-      payments: [pago({ id: "p-hoy", amount: 100 }), pago({ id: "p-sin-fecha", amount: 50, validatedAt })],
+      payments: [pago({ id: "p-hoy", amount: 100 }), pago({ id: "p-sin-fecha", amount: 50, registeredAt })],
     });
     expect(motivo(f)).toBe("antes_de_inicio");
+  });
+
+  // `validated_at` cambia: observar un pago lo borra (observePayment) y volver a
+  // validarlo lo pone en ahora (lib/payment-validation.ts). Si contara, un pedido
+  // pagado antes de «Emitir desde» se colaría con una boleta hacia atrás.
+  it("pagado antes de «Emitir desde» y vuelto a validar después: no", () => {
+    const f = hechos({
+      payments: [pago({ registeredAt: "2026-10-13T20:00:00.000Z", validatedAt: "2026-10-14T16:00:00.000Z" })],
+    });
+    expect(invoiceEligibility(f)).toEqual({ ok: false, reason: "antes_de_inicio", issuerId: GF.id });
+  });
+
+  it("adelanto antes de «Emitir desde» y diferencia después: entra, y paidAt es el registro de la diferencia", () => {
+    const diferencia = "2026-10-14T09:30:00.000Z";
+    const f = hechos({
+      payments: [
+        // El adelanto se volvió a validar al final del día: su validated_at es el
+        // más tardío de todos, y aun así no es la fecha de pago.
+        pago({
+          id: "p-adelanto",
+          kind: "adelanto",
+          amount: 50,
+          registeredAt: "2026-10-13T20:00:00.000Z",
+          validatedAt: "2026-10-14T22:00:00.000Z",
+        }),
+        pago({
+          id: "p-diferencia",
+          kind: "diferencia",
+          amount: 100,
+          registeredAt: diferencia,
+          validatedAt: "2026-10-14T10:00:00.000Z",
+        }),
+      ],
+    });
+    expect(invoiceEligibility(f)).toMatchObject({
+      ok: true,
+      paidAt: diferencia,
+      basis: {
+        payments: [
+          { id: "p-adelanto", validatedAt: "2026-10-14T22:00:00.000Z" },
+          { id: "p-diferencia", validatedAt: "2026-10-14T10:00:00.000Z" },
+        ],
+      },
+    });
+  });
+
+  it.each([
+    ["sin fecha", null],
+    ["con una fecha que no se entiende", "ayer"],
+  ])("validated_at %s no decide nada: la fecha de pago es la del registro", (_porque, validatedAt) => {
+    const r = invoiceEligibility(hechos({ payments: [pago({ validatedAt })] }));
+    expect(r).toMatchObject({ ok: true, paidAt: PAGADO, basis: { payments: [{ id: "pay-1", validatedAt }] } });
   });
 
   it("un «Emitir desde» que no se entiende no deja emitir", () => {

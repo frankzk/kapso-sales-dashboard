@@ -21,6 +21,7 @@ import { createAdminSupabase } from "@/lib/db";
 import { decryptOrNull } from "@/lib/crypto";
 import { shopifyGraphQL } from "@/lib/shopify";
 import { extractNumericId } from "@/lib/shopify-urls";
+import { CHECKOUT_GATEWAYS } from "@/lib/payment-gateway";
 import type { InvoiceItem, InvoiceReason } from "@/lib/invoicing/rules";
 
 /**
@@ -51,6 +52,7 @@ export const ORDER_FOR_INVOICE_QUERY = /* GraphQL */ `
         kind
         status
         gateway
+        formattedGateway
         test
         amountSet { shopMoney { amount } }
       }
@@ -96,7 +98,14 @@ export type InvoiceOrderRead =
       payment: {
         financialStatus: string;
         gatewayNames: string[];
+        /** Ventas y capturas aprobadas, no de prueba, que cobró el checkout de Flow. */
         paidCents: number;
+        /**
+         * Lo mismo, cobrado por CUALQUIER otra pasarela: «manual», contraentrega,
+         * tarjeta de regalo, o una cuyo nombre no se reconoce. Ese dinero no entró
+         * a la cuenta de Flow y no va en su boleta.
+         */
+        otherPaidCents: number;
         netPaymentCents: number;
         outstandingCents: number;
       };
@@ -234,6 +243,58 @@ function lineName(title: string, variantTitle: unknown): string {
   return full.trim().slice(0, ITEM_NAME_MAX).trim();
 }
 
+// ── El dinero de Flow ────────────────────────────────────────────────────────
+//
+// La boleta de un prepago web va al RUC de la cuenta de Flow (MOM §35.2), así
+// que solo puede cubrir lo que cobró Flow. `classifyPaymentGateway` dice
+// «checkout» si CUALQUIER pasarela del pedido es Flow: un pedido con
+// [Flow, «manual»] —Flow falló o cobró una parte, y alguien lo marcó pagado a
+// mano, o el resto fue contraentrega o tarjeta de regalo— pasaría por pagado
+// por Flow con dinero que Flow nunca recibió. Por eso se mira cada transacción.
+
+/**
+ * Un nombre de pasarela comparable: sin espacios de más, en minúsculas y sin
+ * tildes. «Cuotas débito» y «Cuotas debito» son la misma pasarela.
+ */
+function normalizeGatewayName(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Las pasarelas del checkout confirmadas por la operación (lib/payment-gateway.ts). */
+const CHECKOUT_GATEWAY_KEYS = new Set(CHECKOUT_GATEWAYS.map(normalizeGatewayName).filter(Boolean));
+
+/**
+ * «flow» como palabra entera: «Flow», «flow_cl», «Checkout Flow | …». No
+ * «overflow» ni «cashflow». El guion bajo separa, porque los handles de las
+ * pasarelas lo usan.
+ */
+const FLOW_WORD_RE = /(?:^|[^a-z0-9])flow(?:[^a-z0-9]|$)/;
+
+/**
+ * ¿La transacción la cobró Flow? El texto de `gateway` de una transacción de
+ * Flow nunca se ha visto en producción (los pedidos solo muestran
+ * `paymentGatewayNames`), así que se aceptan el nombre exacto del checkout y la
+ * palabra «flow», en `gateway` o en `formattedGateway`. Cualquier otra cosa
+ * —o nada— es dinero de otra pasarela: falla cerrada.
+ */
+function isFlowTransaction(tx: Obj): boolean {
+  return [tx.gateway, tx.formattedGateway].some((raw) => {
+    const name = normalizeGatewayName(raw);
+    return name !== "" && (CHECKOUT_GATEWAY_KEYS.has(name) || FLOW_WORD_RE.test(name));
+  });
+}
+
+/** ¿El nombre es, tal cual, una pasarela del checkout confirmada? */
+function isCheckoutGatewayName(value: unknown): boolean {
+  return CHECKOUT_GATEWAY_KEYS.has(normalizeGatewayName(value));
+}
+
 function mapOrThrow(raw: unknown): InvoiceOrderRead {
   const o = objOf(raw, "order");
   const orderGid = textOf(o.id);
@@ -349,19 +410,28 @@ function mapOrThrow(raw: unknown): InvoiceOrderRead {
   }
 
   // 5. El cobro según Shopify, sin decidir nada. Lo cobrado son las ventas y
-  // capturas aprobadas que no son de prueba; una autorización no es dinero. Si
-  // hubiera más de 20 transacciones, se cuenta de menos: nunca de más.
+  // capturas aprobadas que no son de prueba; una autorización no es dinero. Lo
+  // de Flow y lo de cualquier otra pasarela van por separado: la boleta de la
+  // cuenta de Flow no puede cubrir lo que cobró otro. Si hubiera más de 20
+  // transacciones, se cuenta de menos —nunca de más—, y el neto de Shopify ya
+  // no cuadraría con lo de Flow.
   let paidCents = 0;
+  let otherPaidCents = 0;
   for (const [i, node] of listOf(o.transactions, "transactions").entries()) {
     const tx = objOf(node, `transactions[${i}]`);
     if (tx.kind !== "SALE" && tx.kind !== "CAPTURE") continue;
     if (tx.status !== "SUCCESS") continue;
     if (flagOf(tx.test, `transactions[${i}].test`)) continue;
-    paidCents += nonNegativeCentsOf(tx.amountSet, `transactions[${i}].amountSet`);
+    const cents = nonNegativeCentsOf(tx.amountSet, `transactions[${i}].amountSet`);
+    if (isFlowTransaction(tx)) paidCents += cents;
+    else otherPaidCents += cents;
   }
-  const gatewayNames = listOf(o.paymentGatewayNames, "paymentGatewayNames").filter(
-    (n): n is string => typeof n === "string",
-  );
+  // `[String!]!` en el esquema: una entrada que no es texto es una respuesta
+  // que no entendemos, no una pasarela que se pueda saltar.
+  const gatewayNames = listOf(o.paymentGatewayNames, "paymentGatewayNames").map((n, i) => {
+    if (typeof n !== "string") throw new Unreadable(`paymentGatewayNames[${i}]`);
+    return n;
+  });
 
   return {
     ok: true,
@@ -373,6 +443,7 @@ function mapOrThrow(raw: unknown): InvoiceOrderRead {
       financialStatus: typeof o.displayFinancialStatus === "string" ? o.displayFinancialStatus : "",
       gatewayNames,
       paidCents,
+      otherPaidCents,
       netPaymentCents: centsOf(o.netPaymentSet, "netPaymentSet"),
       outstandingCents: centsOf(o.totalOutstandingSet, "totalOutstandingSet"),
     },
@@ -394,16 +465,24 @@ export function mapOrderForInvoice(order: unknown): InvoiceOrderRead {
 }
 
 /**
- * ¿Shopify confirma que la pasarela cobró el total? Para el prepago web, que no
- * deja comprobantes en Kapta (MOM §35.3): pagado, lo aprobado igual al total,
- * nada reembolsado de lo neto y nada pendiente. «Pagado» solo no alcanza: un
- * pedido marcado a mano también dice PAID.
+ * ¿Shopify confirma que FLOW cobró el total? Para el prepago web, que no deja
+ * comprobantes en Kapta (MOM §35.3): pagado; todas las pasarelas del pedido son
+ * el checkout de Flow; ni un céntimo aprobado por otra pasarela; lo que cobró
+ * Flow igual al total; nada reembolsado de lo neto y nada pendiente. «Pagado»
+ * solo no alcanza: un pedido marcado a mano también dice PAID, y uno con Flow y
+ * «manual» también. La boleta va al RUC de la cuenta de Flow, así que solo
+ * puede cubrir dinero que entró por Flow.
  */
 export function webPrepaidConfirmed(read: InvoiceOrderOk): boolean {
   const { payment, totalCents } = read;
+  const names: unknown = payment.gatewayNames;
   return (
     totalCents > 0 &&
     payment.financialStatus.trim().toUpperCase() === "PAID" &&
+    Array.isArray(names) &&
+    names.length > 0 &&
+    names.every(isCheckoutGatewayName) &&
+    payment.otherPaidCents === 0 &&
     payment.paidCents === totalCents &&
     payment.netPaymentCents === totalCents &&
     payment.outstandingCents === 0

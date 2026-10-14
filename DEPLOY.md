@@ -2453,9 +2453,11 @@ tienda y el cron usa `CRON_SECRET`. Sin cambio del resolver:
    `invoice_issuers`, `store_collection_accounts.invoice_issuer_id` (con el
    trigger que rechaza un RUC de otra organización), `order_invoices` (con el
    índice de un solo comprobante real vivo por pedido y el trigger que no deja
-   editar ni borrar lo emitido), `invoice_order_checks` y la función
-   `invoice_claim`, y siembra GRUPO GF S.A.C. Las tres tablas quedan sin
-   policies y revocadas a `anon` y `authenticated`: solo las lee el servidor.
+   editar ni borrar lo emitido), `invoice_order_checks`, las funciones
+   `invoice_claim` (el turno) e `invoice_candidates` (qué pedidos mira el
+   barrido), y siembra GRUPO GF S.A.C. Las tres tablas quedan sin policies y
+   revocadas a `anon` y `authenticated`, y las dos funciones solo las ejecuta
+   `service_role`: solo las usa el servidor.
    Es idempotente, y la semilla no pisa una asignación que el owner ya haya
    cambiado. El `alter table` y los `drop trigger` sobre
    `store_collection_accounts` toman un candado breve de esa tabla: si se queda
@@ -2470,15 +2472,23 @@ tienda y el cron usa `CRON_SECRET`. Sin cambio del resolver:
      celular). Las cuentas personales de los dueños, con `ruc` nulo;
    - `select has_table_privilege('authenticated', 'public.invoice_issuers', 'select');`
      tiene que dar `false` (y lo mismo con `anon`, `order_invoices` e
-     `invoice_order_checks`).
+     `invoice_order_checks`);
+   - `select has_function_privilege('authenticated', 'public.invoice_candidates(uuid, text, timestamptz, integer, text[], uuid)', 'execute');`
+     tiene que dar `false` (y lo mismo con `anon`, y con
+     `public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)`).
 2. **Desplegar.** El cron `/api/cron/invoices` ya está en `vercel.json`, cada
    10 minutos (`6,16,26,…`), y solo emite en producción. Con todos los RUC en
    «Apagado» cada pasada deja en los logs de Vercel una línea `[invoices] {…}`
-   con `"skipped":"sin_ruc_encendido"` y no hace nada más. **Si el código sale
-   antes que la migración** no se emite nada: el cron responde 502 («No se
-   pudieron leer los RUC») cada 10 minutos y Ajustes dice «No se pudieron leer
-   los RUC de la organización.». Aplicar la 0257 y la pasada siguiente vuelve
-   a `sin_ruc_encendido`.
+   con `"skipped":"sin_ruc_encendido"`, y no lee pedidos ni llama a SimpleFact.
+   **Si el código sale antes que la migración** no se emite nada y el cron no
+   se pone rojo: cada pasada responde 200 con `"skipped":"sin_migracion"` en
+   la línea `[invoices] {…}`, el panel «Comprobante» del drawer no aparece y
+   Ajustes dice «No se pudieron leer los RUC de la organización.». Aplicar la
+   0257 y la pasada siguiente pasa a `sin_ruc_encendido`. Solo cuenta como
+   `sin_migracion` lo que crea la 0257: si lo que falta es otra tabla o
+   función (`orders`, `order_payments`, `order_master`…), el cron responde
+   502 con el error en `errors`, y eso no se arregla aplicando la 0257: la
+   base está rota y hay que mirarla.
 3. **El token: lo pone el owner, y solo en Ajustes.** Regenerar en SimpleFact
    el token de la cuenta `grupogf`: **el anterior quedó expuesto en una captura
    y no se usa**. Pegar el nuevo **solo** en Ajustes de la tienda → «Boletas y
@@ -2498,6 +2508,14 @@ tienda y el cron usa `CRON_SECRET`. Sin cambio del resolver:
    - `select status, count(*) from order_invoices where mode = 'simulacion' group by 1;`
    - `select reason, count(*) from invoice_order_checks where mode = 'simulacion' group by 1 order by 2 desc;`
    - `select order_name, total, request->>'notes', request->'items' from order_invoices where mode = 'simulacion' order by created_at desc limit 10;`
+
+   **Los prepagos web por Flow tienen que salir** (MOM §35.9): Kapta nunca vio
+   el texto que pone Shopify en la pasarela de una transacción de Flow. Si
+   hubo prepagos web desde «Emitir desde» y ninguno sale como `simulada` —todos
+   quedan en `pago_web_no_confirmado`—, ese texto es otro: se ajusta la regla
+   (`lib/invoicing/shopify-order.ts`) antes de pasar a Real. Solo lectura:
+   - `select count(*) from order_invoices i join order_master m on m.order_id = i.order_id where i.mode = 'simulacion' and m.payment_gateway = 'checkout';`
+   - `select c.reason, count(*) from invoice_order_checks c join order_master m on m.order_id = c.order_id where c.mode = 'simulacion' and m.payment_gateway = 'checkout' group by 1 order by 2 desc;`
 5. **Con el contador**: confirmar que una boleta hasta S/ 700 va a «CLIENTES
    VARIOS» con DNI `00000000`, sin correo ni celular, y el umbral de S/ 700:
    por encima, la boleta se emite a mano con el DNI y se registra en el panel
@@ -2509,7 +2527,20 @@ tienda y el cron usa `CRON_SECRET`. Sin cambio del resolver:
    la nota «Pedido #KP… · Kapta ‹ref›». En Kapta, solo lectura:
    `select status, ruc_mismatch, count(*) from order_invoices where mode = 'real' group by 1, 2;`
    — nada en `emitiendo` por más de unos minutos, ningún `ruc_mismatch`, y
-   cada `en_duda` conciliado solo o revisado por una persona (MOM §35.4).
+   cada `en_duda` conciliado solo o revisado por una persona (MOM §35.4). Un
+   `en_duda` con «Sin respuesta de SimpleFact: búscala por su nota…» lo dejó
+   así la pasada porque nadie lo iba a conciliar. **Un `en_duda` se busca en
+   SimpleFact por su nota «Kapta ‹ref›» antes de tocarlo**, y se resuelve en el
+   panel «Comprobante» del pedido (pide `invoices.manage`):
+   - **Si está**, «Sí está en SimpleFact: registrar su serie», con la serie y
+     el número con que salió (`B…` si es boleta) y dónde se encontró. Queda
+     `emitida` y Kapta no emite otra. No se corrige después: revisar la serie
+     antes de confirmar.
+   - **Si no está**, «No está en SimpleFact: volver a intentar», con lo que se
+     revisó. Pasa a `error` y la pasada siguiente lo vuelve a intentar, si el
+     pedido sigue cumpliendo las reglas.
+     **Liberar una que existe es emitir otra**: ante la duda, se busca de
+     nuevo y no se libera.
 7. **Pasada en seco, a mano.** La corre el owner o quien opera, no un agente:
    `GET /api/cron/invoices?dry=1` con `Authorization: Bearer <CRON_SECRET>` (y
    `&storeId=<uuid>` para una sola tienda). Revisa, relee en Shopify y arma la
@@ -2523,7 +2554,9 @@ tienda y el cron usa `CRON_SECRET`. Sin cambio del resolver:
 
 **Marcha atrás.** Poner cada RUC en «Apagado» (Ajustes → «Boletas y
 facturas», o `update invoice_issuers set mode = 'apagado';`): el barrido deja
-de leer y de emitir en la pasada siguiente. No hace falta revertir el código.
+de leer y de emitir en la pasada siguiente. Un comprobante que haya quedado en
+`emitiendo` más de 10 minutos pasa a `en_duda` al empezar una pasada, sin
+llamar a SimpleFact, y lo revisa una persona. No hace falta revertir el código.
 Lo emitido no se borra —ya está en SUNAT—: una boleta que no correspondía la
 anula una persona con nota de crédito en SimpleFact (MOM §35.9). Las tablas no
 molestan al código anterior y se quedan.
@@ -2531,6 +2564,16 @@ molestan al código anterior y se quedan.
 **Qué mirar después.** Cada pasada escribe una línea `[invoices] {…}` en los
 logs de Vercel, sin clientas, teléfonos ni token: por RUC, `simuladas`,
 `emitidas`, `en_duda`, `errores`, `conciliadas`, `pendientes`, los motivos y
-por qué se detuvo (`stopped`). `errors` no vacío pone el cron en rojo (502). Un
-token rechazado (401 o 403) o una cuenta que no responde (404 o 405) apaga el
-RUC solo, con el motivo a la vista en Ajustes.
+por qué se detuvo (`stopped`). `errors` no vacío pone el cron en rojo (502).
+`sin_respuesta` cuenta los `emitiendo` que la pasada pasó a `en_duda` porque
+nadie los iba a conciliar: cada uno se busca en SimpleFact por su nota y se
+resuelve en el panel como en el paso 6. `"lleno":{"real":true}` (o
+`"simulacion"`) dice que `invoice_candidates` devolvió los 500 pedidos de ese
+modo: lo más viejo pendiente no se miró en esa pasada. No pone el cron en
+rojo, pero si se repite hay que ver qué llena la lista (por ejemplo, con
+`select reason, count(*) from invoice_order_checks where mode = 'real' group by 1 order by 2 desc;`).
+Un token rechazado (401 o 403), una cuenta que no responde (404 o 405) o una
+venta con archivos de otro RUC apaga el RUC solo y borra su prueba de
+conexión. Ajustes lo dice en rojo: «Apagado por Kapta: ‹motivo›. Prueba la
+conexión antes de volver a Real.». Para volver a Real hay que corregir lo que
+falló (el token o el subdominio) y pulsar «Probar conexión» de nuevo.

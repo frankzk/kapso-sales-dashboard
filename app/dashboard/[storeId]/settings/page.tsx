@@ -78,7 +78,7 @@ async function loadInvoiceSettings(
       .order("label", { ascending: true }),
     admin
       .from("order_invoices")
-      .select("id,order_id,order_name,ruc,mode,status,serie,correlative,total,error,created_at")
+      .select("id,order_id,order_name,ruc,mode,status,serie,correlative,total,error,created_at,ruc_mismatch")
       .eq("store_id", storeId)
       .order("created_at", { ascending: false })
       .limit(20),
@@ -139,6 +139,8 @@ async function loadInvoiceSettings(
     total: number | string;
     error: string | null;
     created_at: string;
+    /** SimpleFact contestó con archivos de otro RUC: la emitida no es de quien cobró. */
+    ruc_mismatch: boolean | null;
   };
 
   return {
@@ -180,6 +182,7 @@ async function loadInvoiceSettings(
           total: Number(r.total),
           error: r.error,
           createdAt: r.created_at,
+          rucMismatch: r.ruc_mismatch === true,
         })),
   };
 }

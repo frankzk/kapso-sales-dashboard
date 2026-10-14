@@ -2,16 +2,17 @@
 
 // Panel «Comprobante» del drawer (MOM §35.4, §35.7, §35.9).
 //
-// Cuatro acciones: leer el estado del comprobante del pedido, registrar uno
+// Cinco acciones: leer el estado del comprobante del pedido, registrar uno
 // emitido fuera de Kapta, pedir que se vuelva a intentar uno que terminó en
-// error y liberar uno que quedó en duda. NO HAY «EMITIR»: emitir lo hace solo el
-// barrido (§35.7). Un pedido que no cumple las reglas no se fuerza desde aquí.
+// error y, de uno que quedó en duda, registrar la serie con que sí salió o
+// liberarlo porque no salió. NO HAY «EMITIR»: emitir lo hace solo el barrido
+// (§35.7). Un pedido que no cumple las reglas no se fuerza desde aquí.
 //
 // Lo que estas acciones cuidan, y por qué:
 //
 //  · VER ES DE QUIEN VE EL PEDIDO; TOCAR, DE «BOLETAS Y FACTURAS». La lectura
 //    pasa por RLS (`authorizeOrder`) y las tablas de comprobantes se leen con el
-//    service role, porque no tienen policy para el navegador (0257). Las tres
+//    service role, porque no tienen policy para el navegador (0257). Las cuatro
 //    escrituras piden además `invoices.manage` en la organización del pedido:
 //    decidir que una boleta existe o que no existe es un permiso de dinero.
 //  · EL TOKEN NO SALE. Nada de aquí lee `token_enc`: los RUC llegan por
@@ -30,8 +31,14 @@ import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { hasOrgPermission } from "@/lib/permissions-access";
-import { loadInvoiceIssuers, loadInvoiceOrderFacts } from "@/lib/invoicing/server";
 import {
+  SHOPIFY_LEVEL_REASONS,
+  isInvoiceMigrationMissing,
+  loadInvoiceIssuers,
+  loadInvoiceOrderFacts,
+} from "@/lib/invoicing/server";
+import {
+  INVOICE_REASONS,
   LIVE_REAL_STATUSES,
   creditNoteWarning,
   invoiceEligibility,
@@ -58,9 +65,48 @@ const LIBERADA = "Liberada a mano: no estaba en SimpleFact";
 /** «B001-123», «F001-9»: la serie (letra y tres caracteres) y el número. */
 const SERIE_NUMERO_RE = /^[A-Z]\w{3}-\d{1,8}$/i;
 
-/** Qué se revisó en SimpleFact antes de liberar: sin eso no se suelta. */
+/**
+ * Qué se revisó en SimpleFact antes de liberar o de confirmar un `en_duda`: sin
+ * eso no se suelta ni se da por emitida.
+ */
 const RELEASE_NOTE_MIN = 5;
 const NOTE_MAX = 500;
+
+/**
+ * Los hechos del pedido no se pudieron leer al registrar una externa: sin ellos
+ * no se sabe a qué RUC entró el pago, y la fila no se corrige después.
+ */
+const SIN_COMPROBAR_RUC = "No se pudo comprobar a qué RUC entró el pago; intenta de nuevo.";
+
+/** Lo que dice una escritura sobre un `en_duda` que otro resolvió entre la lectura y ella. */
+const YA_NO_EN_DUDA = "El comprobante ya no está en duda: vuelve a abrir el pedido para ver su estado.";
+
+/** Lo que una persona escribió como serie y número, ya validado. */
+interface TypedSerie {
+  serie: string;
+  correlative: string;
+  /** B = boleta (03), F = factura (01). */
+  invoiceType: "01" | "03";
+}
+
+/**
+ * «B001-123» como lo escribe una persona, validado igual en las dos acciones
+ * que lo piden (la externa y la confirmación de un `en_duda`): sin espacios y
+ * en mayúsculas, B o F, el número sin ceros a la izquierda y nunca 0.
+ */
+function parseSerieNumber(serieNumber: string): TypedSerie | { error: string } {
+  const typed = String(serieNumber ?? "").replace(/\s+/g, "").toUpperCase();
+  if (!SERIE_NUMERO_RE.test(typed)) {
+    return { error: "Escribe la serie y el número como en SimpleFact: B001-123." };
+  }
+  const [serie, number] = typed.split("-") as [string, string];
+  // B = boleta (03), F = factura (01). Otra letra no es un comprobante de venta.
+  const invoiceType = serie.startsWith("B") ? "03" : serie.startsWith("F") ? "01" : null;
+  if (!invoiceType) return { error: "La serie empieza con B (boleta) o con F (factura)." };
+  const correlative = number.replace(/^0+(?=\d)/, "");
+  if (correlative === "0") return { error: "El número del comprobante no puede ser 0." };
+  return { serie, correlative, invoiceType };
+}
 
 // ── Acceso ───────────────────────────────────────────────────────────────────
 
@@ -118,6 +164,8 @@ interface InvoiceRef {
   mode: string;
   status: string;
   retry_requested_at: string | null;
+  /** 03 boleta, 01 factura: la serie que confirme un `en_duda` tiene que ser de ese tipo. */
+  invoice_type: string | null;
 }
 
 /**
@@ -132,7 +180,7 @@ async function authorizeInvoice(
   const admin = createAdminSupabase();
   const { data, error } = await admin
     .from("order_invoices")
-    .select("id, org_id, order_id, mode, status, retry_requested_at")
+    .select("id, org_id, order_id, mode, status, retry_requested_at, invoice_type")
     .eq("id", invoiceId)
     .maybeSingle();
   if (error) return { error: `No se pudo leer el comprobante: ${error.message}` };
@@ -147,15 +195,14 @@ async function authorizeInvoice(
   return { ctx: auth.ctx, invoice };
 }
 
-/** La base todavía no tiene la 0257: el panel no se dibuja, no falla. */
-function isMissingInvoiceTable(error: { code?: string; message?: string } | null | undefined): boolean {
-  if (!error) return false;
-  if (error.code === "42P01" || error.code === "PGRST205") return true;
-  const message = error.message ?? "";
-  return (
-    /order_invoices|invoice_order_checks|invoice_issuers/.test(message) &&
-    /does not exist|schema cache|no existe/i.test(message)
-  );
+/**
+ * La base todavía no tiene la 0257: el panel no se dibuja, no falla. Es la
+ * misma regla del barrido (`isInvoiceMigrationMissing`): solo cuenta como
+ * «falta la 0257» si lo que falta es un objeto de la 0257; cualquier otra tabla
+ * ausente es un error de verdad y se dice.
+ */
+function isMissingInvoiceTable(error: unknown): boolean {
+  return isInvoiceMigrationMissing(error);
 }
 
 // ── Lectura ──────────────────────────────────────────────────────────────────
@@ -186,17 +233,50 @@ export interface InvoicePanelRow {
   retryRequestedAt: string | null;
   /** Registrada por una persona como emitida fuera de Kapta (`basis.manual`). */
   manual: boolean;
+  /**
+   * SimpleFact contestó con archivos de OTRO RUC (`ruc_mismatch`): la boleta
+   * existe, pero no de la empresa que recibió el pago. El motivo va en `error`.
+   */
+  rucMismatch: boolean;
   /** Solo en una simulada: los ítems de la boleta que habría enviado. */
   items: InvoicePanelItem[] | null;
 }
 
 /**
- * Lo que dicen HOY las reglas de §35.3 con lo que hay en Kapta. No relee
- * Shopify: eso lo hace el barrido justo antes de emitir.
+ * Lo que dicen HOY las reglas de §35.3 con lo que hay en Kapta, y lo último que
+ * el barrido leyó de Shopify. No relee Shopify: eso lo hace el barrido justo
+ * antes de emitir.
+ *
+ * `issuerId` es el RUC que decidieron las reglas, cuando se llegó a saber: el
+ * de la cuenta que recibió el pago. «Ya tiene comprobante» lo trae elegido.
  */
 export type InvoicePanelReview =
-  | { state: "lista"; ruc: string; legalName: string; mode: InvoiceWriteMode }
-  | { state: "no"; reason: InvoiceReason; detail: string | null }
+  | { state: "lista"; ruc: string; legalName: string; mode: InvoiceWriteMode; issuerId: string }
+  /**
+   * Las reglas de Kapta se cumplen, pero la última pasada lo frenó por lo que
+   * dijo Shopify (`SHOPIFY_LEVEL_REASONS` o `lectura_fallida`). El barrido lo
+   * sigue saltando: decir «lista» aquí sería mentir.
+   * `retry`: se vuelve a intentar solo (Shopify no se leyó o la tienda no
+   * tiene conexión); si no, no sale sola y se emite a mano.
+   * `waitsHours`: el barrido no vuelve a leer Shopify por este motivo hasta 6
+   * horas después de `checkedAt` —es de `SHOPIFY_LEVEL_REASONS`, la misma
+   * lista que recibe la base como `p_blocked`—; false, lo relee en la próxima
+   * pasada (`lectura_fallida`). Con él, el panel no promete «la próxima
+   * pasada» a lo que no se va a mirar en horas.
+   */
+  | {
+      state: "shopify";
+      ruc: string;
+      legalName: string;
+      mode: InvoiceWriteMode;
+      issuerId: string;
+      reason: InvoiceReason;
+      detail: string | null;
+      checkedAt: string;
+      retry: boolean;
+      waitsHours: boolean;
+    }
+  | { state: "no"; reason: InvoiceReason; detail: string | null; issuerId: string | null }
   /** No se pudieron leer los hechos: no se afirma nada (falla cerrada). */
   | { state: "sin_revisar"; error: string };
 
@@ -228,7 +308,7 @@ export interface InvoicePanelData {
 }
 
 const INVOICE_PANEL_COLUMNS =
-  "id, mode, status, ruc, total, serie, correlative, pdf_url, error, note, created_at, retry_requested_at, basis";
+  "id, mode, status, ruc, total, serie, correlative, pdf_url, error, note, created_at, retry_requested_at, basis, ruc_mismatch";
 
 interface InvoiceDbRow {
   id: string;
@@ -244,6 +324,57 @@ interface InvoiceDbRow {
   created_at: string;
   retry_requested_at: string | null;
   basis: unknown;
+  ruc_mismatch: boolean | null;
+}
+
+interface CheckDbRow {
+  mode: string;
+  reason: string;
+  detail: string | null;
+  checked_at: string;
+}
+
+const KNOWN_REASONS = new Set<string>(INVOICE_REASONS);
+
+/**
+ * Lo que el barrido leyó en Shopify y lo frena. `lectura_fallida` no está en
+ * `SHOPIFY_LEVEL_REASONS` (el barrido la reintenta en cada pasada), pero
+ * mientras sea lo último que pasó, el pedido no está «listo»: tampoco salió.
+ */
+function isShopifySide(reason: string): reason is InvoiceReason {
+  return KNOWN_REASONS.has(reason) && (SHOPIFY_LEVEL_REASONS.has(reason as InvoiceReason) || reason === "lectura_fallida");
+}
+
+/**
+ * Lo que dijo Shopify y no cambia con otra pasada: el pedido NO sale solo, se
+ * emite a mano en SimpleFact y se registra con «Ya tiene comprobante». El resto
+ * (`lectura_fallida`, `sin_token_shopify`) se vuelve a intentar solo.
+ *
+ * Lista cerrada a propósito, y un motivo nuevo que nadie clasificó cae del lado
+ * de «se vuelve a intentar»: mandar a emitir a mano algo que el barrido podría
+ * emitir después es el camino a dos boletas por un pedido, y eso es lo que no
+ * puede pasar (§35.1). La prueba del drawer obliga a clasificar cada motivo de
+ * `SHOPIFY_LEVEL_REASONS`.
+ */
+const SHOPIFY_MANUAL_REASONS: ReadonlySet<InvoiceReason> = new Set<InvoiceReason>([
+  "prueba",
+  "editado",
+  "cantidad_editada",
+  "envio_editado",
+  "propina",
+  "gift_card",
+  "linea_gratuita",
+  "impuesto_encima",
+  "demasiadas_lineas",
+  "no_cuadra",
+  "total_distinto",
+  "pago_web_no_confirmado",
+  "no_encontrado",
+]);
+
+function time(iso: string | null | undefined): number {
+  const t = Date.parse(iso ?? "");
+  return Number.isFinite(t) ? t : 0;
 }
 
 function obj(value: unknown): Record<string, unknown> {
@@ -298,12 +429,13 @@ export async function loadInvoicePanel(orderId: string): Promise<{ data: Invoice
       .select(INVOICE_PANEL_COLUMNS)
       .eq("order_id", orderId)
       .order("created_at", { ascending: false }),
+    // Una por modo (la llave es pedido + modo): a lo más dos. Hacen falta las
+    // dos: la del modo del RUC dice si Shopify lo frena (`reviewOf`).
     admin
       .from("invoice_order_checks")
       .select("mode, reason, detail, checked_at")
       .eq("order_id", orderId)
-      .order("checked_at", { ascending: false })
-      .limit(1),
+      .order("checked_at", { ascending: false }),
     hasOrgPermission(ctx.orgId, "invoices.manage"),
   ]);
   if (isMissingInvoiceTable(invoicesRes.error) || isMissingInvoiceTable(checksRes.error)) {
@@ -319,7 +451,7 @@ export async function loadInvoicePanel(orderId: string): Promise<{ data: Invoice
     issuers = await loadInvoiceIssuers(admin, ctx.orgId);
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
-    if (isMissingInvoiceTable({ message })) return { data: inactive(canManage) };
+    if (isMissingInvoiceTable(cause)) return { data: inactive(canManage) };
     return { error: `No se pudieron leer los RUC: ${message}` };
   }
 
@@ -356,16 +488,20 @@ export async function loadInvoicePanel(orderId: string): Promise<{ data: Invoice
     createdAt: r.created_at,
     retryRequestedAt: r.retry_requested_at,
     manual: obj(r.basis).manual === true,
+    rucMismatch: r.ruc_mismatch === true,
     items: r.status === "simulada" ? itemsById.get(r.id) ?? [] : null,
   }));
 
   // Lo que dicen hoy las reglas. FALLA CERRADA: si algo no se pudo leer, el
   // panel no dice «lista para emitirse» ni ningún motivo; dice que no revisó.
+  const checks = (checksRes.data ?? []) as CheckDbRow[];
   let facts: InvoiceOrderFacts | null = null;
   let review: InvoicePanelReview;
   try {
     facts = (await loadInvoiceOrderFacts(admin, [orderId])).get(orderId) ?? null;
-    review = facts ? reviewOf(facts, ctx.storeActive) : { state: "sin_revisar", error: "No se encontró el pedido." };
+    review = facts
+      ? reviewOf(facts, ctx.storeActive, checks)
+      : { state: "sin_revisar", error: "No se encontró el pedido." };
   } catch (cause) {
     review = { state: "sin_revisar", error: cause instanceof Error ? cause.message : String(cause) };
   }
@@ -389,12 +525,9 @@ export async function loadInvoicePanel(orderId: string): Promise<{ data: Invoice
     });
   }
 
-  const checkRow = ((checksRes.data ?? []) as {
-    mode: string;
-    reason: string;
-    detail: string | null;
-    checked_at: string;
-  }[])[0];
+  // La más nueva de las dos, como hasta ahora: el panel la enseña aparte si
+  // dice otra cosa que la revisión (el tope, por ejemplo).
+  const checkRow = checks[0];
 
   return {
     data: {
@@ -411,16 +544,96 @@ export async function loadInvoicePanel(orderId: string): Promise<{ data: Invoice
   };
 }
 
-/** Las reglas de §35.3 sobre los hechos del pedido, en lo que enseña el panel. */
-function reviewOf(facts: InvoiceOrderFacts, storeActive: boolean): InvoicePanelReview {
+/**
+ * Las reglas de §35.3 sobre los hechos del pedido, y lo último que el barrido
+ * leyó en Shopify, en lo que enseña el panel.
+ */
+function reviewOf(facts: InvoiceOrderFacts, storeActive: boolean, checks: CheckDbRow[]): InvoicePanelReview {
   const elig = invoiceEligibility(facts);
-  if (!elig.ok) return { state: "no", reason: elig.reason, detail: elig.detail ?? null };
+  if (!elig.ok) return { state: "no", reason: elig.reason, detail: elig.detail ?? null, issuerId: elig.issuerId ?? null };
+  const { issuer, mode } = elig;
   // El barrido solo recorre las tiendas activas: listo en una apagada sería mentir.
-  if (!storeActive) return { state: "no", reason: "tienda", detail: null };
-  return { state: "lista", ruc: elig.issuer.ruc, legalName: elig.issuer.legalName, mode: elig.mode };
+  if (!storeActive) return { state: "no", reason: "tienda", detail: null, issuerId: issuer.id };
+  const blocked = shopifyBlock(checks, mode);
+  if (blocked) {
+    return {
+      state: "shopify",
+      ruc: issuer.ruc,
+      legalName: issuer.legalName,
+      mode,
+      issuerId: issuer.id,
+      reason: blocked.reason,
+      detail: blocked.detail,
+      checkedAt: blocked.checked_at,
+      retry: !SHOPIFY_MANUAL_REASONS.has(blocked.reason),
+      // Lo dice la lista del barrido, no el panel: un motivo que entra o sale de
+      // ella cambia aquí solo lo que se promete.
+      waitsHours: SHOPIFY_LEVEL_REASONS.has(blocked.reason),
+    };
+  }
+  return { state: "lista", ruc: issuer.ruc, legalName: issuer.legalName, mode, issuerId: issuer.id };
+}
+
+/**
+ * ¿Lo frena Shopify? Las reglas de Kapta no leen Shopify: lo lee el barrido
+ * justo antes de pedir el turno, y si lo frena, deja el motivo en
+ * `invoice_order_checks` y no lo vuelve a leer en 6 horas. Mientras ese sea lo
+ * último que pasó, «lista para emitirse» es falso: el barrido lo salta.
+ *
+ * Manda la revisión del modo del RUC. La del otro modo cuenta solo si es un
+ * motivo de Shopify y es más nueva que la propia: el barrido también la respeta
+ * («un motivo de Shopify es del pedido, no del modo», lib/invoicing/server.ts).
+ * Una revisión propia más nueva que no es de Shopify (el tope, por ejemplo)
+ * quiere decir que Shopify ya se volvió a leer y dejó pasar el pedido.
+ */
+function shopifyBlock(
+  checks: CheckDbRow[],
+  mode: InvoiceWriteMode,
+): (CheckDbRow & { reason: InvoiceReason }) | null {
+  const own = checks.find((c) => c.mode === mode);
+  if (own && isShopifySide(own.reason)) return { ...own, reason: own.reason };
+  const other = checks.find(
+    (c) => c.mode !== mode && KNOWN_REASONS.has(c.reason) && SHOPIFY_LEVEL_REASONS.has(c.reason as InvoiceReason),
+  );
+  if (other && (!own || time(other.checked_at) > time(own.checked_at))) {
+    return { ...other, reason: other.reason as InvoiceReason };
+  }
+  return null;
 }
 
 // ── Escrituras ───────────────────────────────────────────────────────────────
+
+/**
+ * El RUC que las reglas de §35.3 le dan al pedido, cuando se llega a saber: el
+ * de la cuenta que recibió el pago. Con un pago sin cuenta, una cuenta sin RUC
+ * o RUC mezclados no se sabe, y no se adivina: `issuer: null`.
+ *
+ * FALLA CERRADA: si los hechos no se pudieron leer (o el lector no devolvió el
+ * pedido), `ok: false`, que NO es «no se sabe». Antes caía en null y se
+ * aceptaba cualquier RUC: una caída de la base dejaba registrar, para siempre,
+ * la boleta de una empresa que no cobró.
+ */
+async function expectedIssuer(
+  admin: ReturnType<typeof createAdminSupabase>,
+  orderId: string,
+): Promise<{ ok: true; issuer: { id: string; ruc: string } | null } | { ok: false }> {
+  let facts: InvoiceOrderFacts | undefined;
+  try {
+    facts = (await loadInvoiceOrderFacts(admin, [orderId])).get(orderId);
+  } catch (cause) {
+    // Se rechaza sin decir más a quien registra, pero queda dicho por qué: un
+    // fallo que no se va bloquearía ese pedido sin que nadie supiera la razón.
+    // El mensaje es de la base (tablas y columnas), sin datos de la clienta.
+    console.error(
+      `[invoices] comprobante externo: no se pudo comprobar el RUC del pago — ${cause instanceof Error ? cause.message : String(cause)}`,
+    );
+    return { ok: false };
+  }
+  if (!facts) return { ok: false };
+  const elig = invoiceEligibility(facts);
+  const issuer = elig.ok ? elig.issuer : facts.issuers.find((i) => i.id === elig.issuerId);
+  return { ok: true, issuer: issuer ? { id: issuer.id, ruc: issuer.ruc } : null };
+}
 
 /**
  * «Ya tiene comprobante» (§35.4): una persona emitió la boleta a mano en
@@ -439,16 +652,9 @@ export async function registerExternalInvoice(
   const { ctx } = auth;
   if (!(await hasOrgPermission(ctx.orgId, "invoices.manage"))) return { error: SIN_PERMISO };
 
-  const typed = String(serieNumber ?? "").replace(/\s+/g, "").toUpperCase();
-  if (!SERIE_NUMERO_RE.test(typed)) {
-    return { error: "Escribe la serie y el número como en SimpleFact: B001-123." };
-  }
-  const [serie, number] = typed.split("-") as [string, string];
-  // B = boleta (03), F = factura (01). Otra letra no es un comprobante de venta.
-  const invoiceType = serie.startsWith("B") ? "03" : serie.startsWith("F") ? "01" : null;
-  if (!invoiceType) return { error: "La serie empieza con B (boleta) o con F (factura)." };
-  const correlative = number.replace(/^0+(?=\d)/, "");
-  if (correlative === "0") return { error: "El número del comprobante no puede ser 0." };
+  const parsed = parseSerieNumber(serieNumber);
+  if ("error" in parsed) return { error: parsed.error };
+  const { serie, correlative, invoiceType } = parsed;
   const cleanNote = String(note ?? "").trim().slice(0, NOTE_MAX);
 
   const admin = createAdminSupabase();
@@ -459,6 +665,20 @@ export async function registerExternalInvoice(
     return { error: `No se pudieron leer los RUC: ${cause instanceof Error ? cause.message : String(cause)}` };
   }
   if (!issuer) return { error: "Ese RUC no es de la organización del pedido." };
+
+  // EL RUC LO DECIDE A DÓNDE ENTRÓ EL PAGO, NO QUIEN REGISTRA (§35.2). Una
+  // externa no se corrige después (`order_invoices_guard`): si las reglas ya
+  // saben de qué RUC es el dinero, la boleta de otro no se registra. Si las
+  // reglas no lo saben (cuenta sin RUC, RUC mezclados), vale el que se eligió.
+  // Pero si los hechos NO SE PUDIERON LEER, no se registra: «no se pudo
+  // comprobar» no es «no se sabe», y una externa con el RUC equivocado no tiene
+  // arreglo. Una lectura caída se reintenta; una boleta ajena, no.
+  const check = await expectedIssuer(admin, ctx.orderId);
+  if (!check.ok) return { error: SIN_COMPROBAR_RUC };
+  const expected = check.issuer;
+  if (expected && expected.id !== issuer.id) {
+    return { error: `El pago entró a una cuenta del RUC ${expected.ruc}: registra el comprobante de ese RUC.` };
+  }
 
   const { data: order, error: orderError } = await admin
     .from("orders")
@@ -558,8 +778,70 @@ export async function releaseDoubtfulInvoice(invoiceId: string, note: string): P
     .select("id");
   if (error) return { error: `No se pudo liberar el comprobante: ${error.message}` };
   // La conciliación la encontró (o alguien la liberó) entre la lectura y ahora.
-  if (!(data as unknown[] | null)?.length) {
-    return { error: "El comprobante ya no está en duda: vuelve a abrir el pedido para ver su estado." };
-  }
+  if (!(data as unknown[] | null)?.length) return { error: YA_NO_EN_DUDA };
   return { notice: "Liberado: se vuelve a intentar en la próxima pasada, si el pedido sigue cumpliendo las reglas." };
+}
+
+/**
+ * «Sí está en SimpleFact: registrar su serie» (§35.4): un `en_duda` cuya boleta
+ * una persona SÍ encontró en SimpleFact (por su nota «Kapta ‹ref›»), y que la
+ * conciliación no llegó a cerrar —su RUC ya no está en Real, es de antes de
+ * ayer, o no aparece en las páginas que lee—. Sin esto, la única salida era
+ * liberarla, y liberar una boleta que existe es emitir otra.
+ *
+ * Pasa a `emitida` con la serie y el número que salieron, y deja escrito dónde
+ * se encontró. Es la misma fila: el RUC, el total, el tipo y lo enviado no
+ * cambian (`order_invoices_guard` deja `en_duda` → `emitida` y nada más). La
+ * letra de la serie tiene que ser la del tipo de la fila: una F no confirma una
+ * boleta. No hay forma de corregirla después, así que se filtra por el estado
+ * de partida: si la conciliación o otra persona la resolvió entre tanto, gana
+ * la suya.
+ */
+export async function confirmDoubtfulInvoice(
+  invoiceId: string,
+  serieNumber: string,
+  note: string,
+): Promise<InvoiceActionState> {
+  const auth = await authorizeInvoice(invoiceId);
+  if ("error" in auth) return { error: auth.error };
+  const { ctx, invoice } = auth;
+  if (invoice.status !== "en_duda") return { error: "Solo se confirma un comprobante que está en duda." };
+
+  const parsed = parseSerieNumber(serieNumber);
+  if ("error" in parsed) return { error: parsed.error };
+  const { serie, correlative, invoiceType } = parsed;
+  // El tipo es el de lo que se envió. Un tipo que no se reconoce no se adivina:
+  // no se confirma nada (falla cerrada).
+  const expectedType = invoice.invoice_type === "01" || invoice.invoice_type === "03" ? invoice.invoice_type : null;
+  if (!expectedType) return { error: "No se pudo saber si este comprobante es boleta o factura: no se confirma." };
+  if (invoiceType !== expectedType) {
+    return {
+      error:
+        expectedType === "03"
+          ? "Este comprobante es una boleta: su serie empieza con B."
+          : "Este comprobante es una factura: su serie empieza con F.",
+    };
+  }
+  const cleanNote = String(note ?? "").trim().slice(0, NOTE_MAX);
+  if (cleanNote.length < RELEASE_NOTE_MIN) {
+    return { error: "Escribe dónde la encontraste en SimpleFact: queda junto al comprobante." };
+  }
+
+  const { data, error } = await createAdminSupabase()
+    .from("order_invoices")
+    .update({
+      status: "emitida",
+      serie,
+      correlative,
+      note: cleanNote,
+      resolved_by: ctx.userId,
+      resolved_at: new Date().toISOString(),
+    })
+    .eq("id", invoice.id)
+    .eq("status", "en_duda")
+    .select("id");
+  if (error) return { error: `No se pudo registrar la serie: ${error.message}` };
+  // La conciliación la encontró (o alguien la liberó) entre la lectura y ahora.
+  if (!(data as unknown[] | null)?.length) return { error: YA_NO_EN_DUDA };
+  return { notice: `Comprobante ${serie}-${correlative} registrado como emitido: Kapta no emitirá otro por este pedido.` };
 }
