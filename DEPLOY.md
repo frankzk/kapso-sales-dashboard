@@ -2469,6 +2469,12 @@ el webhook no la trajo, tal como viene de Shopify.
    **Sin ella el código no se rompe**: la tarjeta vuelve a la vista anterior
    (solo pedidos del bot) con un aviso de que falta la migración y sin cifra
    de cabecera («—»), porque ese porcentaje es justo el número equivocado.
+   **Ya aplicada en producción el 14-10-2026** con `apply_migration` (historial
+   `20261014172812 0257_canal_de_cierre`). Comprobado ese día: el cuerpo de la
+   función es idéntico al del archivo (mismo md5), `anon` no la puede ejecutar,
+   y como el owner, con RLS, del 14-09 al 13-10 ve las dos tiendas en 0,27 s con
+   los mismos pedidos por canal que la tabla del MOM §17.3 (solo cambian los
+   que se cancelaron después de medirla).
 2. **Qué cambia en las cifras**:
    - «Canal de cierre» pasa de «0 % lo cerró una asesora» a la parte real. Con
      el periodo 14-09 → 13-10-2026: asesora 2.651 pedidos y S/ 481.451 de
