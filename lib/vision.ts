@@ -447,7 +447,8 @@ function buildExtractPrompt(): string {
     '  "recipient_phone_last_digits": string|null, // últimos 3 dígitos del Nro. de celular destino\n' +
     '  "received_view": boolean,         // true si es la captura de QUIEN RECIBIÓ: dice "Te yapearon"\n' +
     '  "yape_empresa_marker": boolean,   // true si la captura menciona "Yape Empresa" (aviso al pie)\n' +
-    '  "flow_order": string|null         // SOLO en la constancia de Flow: el "Nº de orden"\n' +
+    '  "is_flow": boolean,               // true si el comprobante es de la pasarela Flow (pantalla o correo)\n' +
+    '  "flow_order": string|null         // SOLO en la constancia de Flow: su número de orden\n' +
     "}\n" +
     "El comprobante puede venir de CUALQUIER banco o billetera peruana (Yape, " +
     "Plin, BCP, Interbank, BBVA, Scotiabank), y cada uno rotula ese dato a su " +
@@ -497,13 +498,18 @@ function buildExtractPrompt(): string {
     "En una constancia de pasarela (Flow u otra), quien recibe es el comercio " +
     "que va bajo \"Pagado a\" o equivalente; esas constancias no muestran " +
     "celular, así que recipient_phone_last_digits es null.\n" +
-    "LA CONSTANCIA DE FLOW TIENE OTRA FORMA: la pantalla \"¡Tu pago se ha " +
-    "concretado exitosamente!\", con el logo de la tienda arriba, y debajo " +
-    "\"Monto\", \"Nº de orden\", \"Fecha\", \"Medio de pago\", \"Tarjeta\" y " +
-    "\"Estado\". Su \"Nº de orden\" es el número de la orden en Flow: va en " +
-    "flow_order (solo dígitos) y también en operation_number, con " +
-    "operation_label \"Nº de orden\". No muestra quién recibe: recipient_name " +
-    "es null. En cualquier otro comprobante flow_order es null.\n" +
+    "LAS CONSTANCIAS DE FLOW vienen en dos formas, y en las dos is_flow es " +
+    "true: (1) la pantalla \"¡Tu pago se ha concretado exitosamente!\", con el " +
+    "logo de la tienda arriba y debajo \"Monto\", \"Nº de orden\", \"Fecha\", " +
+    "\"Medio de pago\", \"Tarjeta\" y \"Estado\"; (2) el CORREO de Flow, con el " +
+    "logo \"flow\" junto al de la tienda, un texto y una tabla con el número de " +
+    "orden, el monto, la fecha y el medio de pago. Su número de orden (\"Nº de " +
+    "orden\", \"Número de orden\", \"N° Orden Flow\" o equivalente) es el número " +
+    "de la orden en Flow: va en flow_order (solo dígitos) y también en " +
+    "operation_number, con su rótulo en operation_label. No lo confundas con la " +
+    "\"Orden de comercio\" o \"Orden de compra\" de la tienda, que es otro dato. " +
+    "La tienda que aparece (\"Aurela\", \"Kenku\") va en recipient_name. En " +
+    "cualquier otro comprobante is_flow es false y flow_order es null.\n" +
     `HAY RÓTULOS QUE SE PARECEN Y NO VALEN: ${notLabels}. Conviven con el de ` +
     "operación en el mismo comprobante y nombran otra cosa — el código de " +
     "solicitud identifica la SOLICITUD de transferencia, no el movimiento. Si el " +
@@ -654,7 +660,10 @@ function parseFields(text: string): Omit<YapeVoucherFields, "ok" | "model"> | nu
   // El «Nº de orden» de Flow identifica el pago igual que un nº de operación
   // —es único en Flow— y además se puede verificar con la pasarela. Si el
   // modelo lo dejó solo en flow_order, se usa también como operación.
-  const flowDigits = (str(o.flow_order) ?? "").replace(/\D/g, "");
+  // Si el modelo marcó la constancia como de Flow pero dejó el número solo en
+  // operation_number, ese número es la orden de Flow.
+  const isFlow = o.is_flow === true;
+  const flowDigits = (str(o.flow_order) ?? (isFlow ? str(o.operation_number) : null) ?? "").replace(/\D/g, "");
   const flowOrder = flowDigits.length >= 6 ? flowDigits : null;
   const readOperationNumber =
     cleanedOperation.length >= minLength && !labeledAsSomethingElse ? cleanedOperation : null;

@@ -29,6 +29,7 @@ import {
   cartLinesOf,
   categoryOf,
   defaultFollowupAt,
+  isClaimActive,
   isValidStatus,
   labelOf,
   leadSearchPasses,
@@ -617,6 +618,39 @@ export async function openLeadDrawer(
   const [claim, detail] = await Promise.all([claimLead(leadId), loadLeadDetail(leadId)]);
   if (claim.error) return { error: claim.error };
   return detail;
+}
+
+/**
+ * Renueva la reserva propia mientras la ficha sigue abierta (ver
+ * `CLAIM_HEARTBEAT_MS`). Solo si sigue siendo suya y está viva: si venció y
+ * otra asesora lo tomó, NO se le quita — se le dice quién lo tiene.
+ */
+export async function renewLeadClaim(leadId: string): Promise<LeadActionState> {
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { error: "Sin acceso a este lead." };
+  const admin = createAdminSupabase();
+  const cutoff = new Date(Date.now() - CLAIM_TTL_MINUTES * 60_000).toISOString();
+  const { data, error } = await admin
+    .from("leads")
+    .update({ claimed_at: new Date().toISOString() })
+    .eq("id", leadId)
+    .eq("claimed_by", ctx.userId)
+    .gt("claimed_at", cutoff)
+    .select("id")
+    .maybeSingle();
+  if (error) return { error: error.message };
+  if (data) return { notice: "Reserva renovada." };
+  const { data: held } = await admin
+    .from("leads")
+    .select("claimed_by, claimed_at")
+    .eq("id", leadId)
+    .maybeSingle();
+  const h = held as { claimed_by: string | null; claimed_at: string | null } | null;
+  if (h?.claimed_by && h.claimed_by !== ctx.userId && isClaimActive(h.claimed_at)) {
+    const who = await resolveAgentName(h.claimed_by, admin);
+    return { error: `${who ?? "Otra asesora"} tomó este lead mientras lo tenías abierto. Coordina con ella antes de seguir.` };
+  }
+  return { error: "Tu reserva de este lead venció. Ciérralo y vuelve a abrirlo para seguir." };
 }
 
 /** Release a claim (called when closing the drawer). Only releases your own. */
