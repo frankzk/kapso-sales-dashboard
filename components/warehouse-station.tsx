@@ -8,7 +8,9 @@ import { Badge, Banner, OpsButton } from "@/components/ops-ui";
 import { IconCamera, IconSearch } from "@/components/icons";
 import { markShipmentReady, type DispatchActionResult } from "@/app/dashboard/pedidos/despacho/actions";
 import { loadWarehouseStation } from "@/app/dashboard/pedidos/almacen/actions";
+import { WarehouseRetries, retryScanHint, type RetryScanHint } from "@/components/warehouse-retries";
 import { OPERATION_LABELS } from "@/lib/dispatch-routing";
+import { limaClock } from "@/lib/grupo-gf-courier";
 import {
   buildWarehouseQueue,
   warehousePanels,
@@ -28,6 +30,14 @@ import type {
   WarehouseShipment,
   WarehouseStationData,
 } from "@/lib/dispatch-access";
+import {
+  BOX_ACTION_LABEL,
+  POR_ARMAR_CHIP,
+  RETRY_ERROR,
+  emptyWarehouseRetries,
+  type WarehouseHandoffRow,
+  type WarehouseRetriesData,
+} from "@/lib/warehouse-retries";
 import type { StoreSummary } from "@/lib/types";
 
 /**
@@ -38,15 +48,44 @@ import type { StoreSummary } from "@/lib/types";
  * cotejar. Antes el armado era el paso 1 de una pantalla de cuatro pasos, así
  * que el almacén tenía que entrar por la puerta de despacho y no tenía dónde
  * ver su propia cola: sabía lo que ya había armado, nunca lo que le faltaba.
+ *
+ * Debajo, aparte, «Reintentos por salir» (entrega 1c, MOM §9.5): las cajas de
+ * «Por reprogramar Lima» que salen hoy y mañana. No es esta cola y no se relee
+ * con cada escaneo; el escáner es el mismo y, si la caja es de un reintento
+ * listado, dice qué hacer con ella. Se lee aquí, después de montar: la página
+ * no la lee al pintar en servidor (ver `refreshRetries`).
  */
+
+/**
+ * La lista por GET (`/api/almacen/reintentos`), no por acción de servidor: las
+ * acciones de una pestaña van en fila, y el primer escaneo esperaría a esta
+ * lectura. Un error HTTP o una respuesta que no es JSON (la sesión venció y
+ * redirigió a /login) lanza, y `refreshRetries` lo muestra como error.
+ */
+async function fetchWarehouseRetries(): Promise<WarehouseRetriesData> {
+  const response = await fetch("/api/almacen/reintentos", { cache: "no-store", credentials: "same-origin" });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return (await response.json()) as WarehouseRetriesData;
+}
 export function WarehouseStation({
   initialData,
+  initialRetries,
   stores,
 }: {
   initialData: WarehouseStationData;
+  /**
+   * «Reintentos por salir» ya leídos (lo usan las pruebas para pintar con
+   * datos). La página no los pasa: sin ellos, se leen después de montar.
+   */
+  initialRetries?: WarehouseRetriesData;
   stores: StoreSummary[];
 }) {
   const [data, setData] = useState(initialData);
+  const [retries, setRetries] = useState<WarehouseRetriesData | null>(initialRetries ?? null);
+  const [retriesBusy, setRetriesBusy] = useState(false);
+  // Marca síncrona de la lectura en curso (ver `refreshRetries`).
+  const retriesInFlight = useRef(false);
+  const [retryHint, setRetryHint] = useState<RetryScanHint | null>(null);
   const [scan, setScan] = useState("");
   const [query, setQuery] = useState("");
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -61,13 +100,52 @@ export function WarehouseStation({
     if (!value || busy) return;
     setBusy(true);
     setMessage(null);
+    setRetryHint(null);
     const result: DispatchActionResult = await markShipmentReady(value);
     setMessage({ tone: result.error ? "error" : "ok", text: result.error ?? result.notice ?? "Listo." });
+    // Si la caja es de un reintento listado, se dice qué hacer con ella. Solo
+    // se busca en lo que ya está en pantalla: el escaneo no relee los reintentos.
+    setRetryHint(retryScanHint(retries, result.shipment?.order_id));
     setScan("");
     setData(await loadWarehouseStation());
     setBusy(false);
     requestAnimationFrame(() => inputRef.current?.focus());
-  }, [busy]);
+  }, [busy, retries]);
+
+  const refreshRetries = useCallback(async () => {
+    // Una sola lectura a la vez. Al volver a la pestaña llegan `visibilitychange`
+    // y `focus` seguidos, y el segundo aún ve el `busy` del render anterior: la
+    // marca se pone antes de esperar, así que el segundo no pide otra lectura.
+    if (retriesInFlight.current) return;
+    retriesInFlight.current = true;
+    setRetriesBusy(true);
+    try {
+      setRetries(await fetchWarehouseRetries());
+    } catch {
+      // La acción no llegó (sin red): se dice aquí y la estación sigue. Sin una
+      // lista anterior (la primera lectura), el día es el de Lima en este equipo.
+      setRetries((prev) => emptyWarehouseRetries(prev
+        ? { today: prev.today, nowIso: prev.nowIso, cutoffLabel: prev.cutoffLabel, error: RETRY_ERROR }
+        : { today: limaClock(new Date()).day, nowIso: new Date().toISOString(), error: RETRY_ERROR }));
+    } finally {
+      retriesInFlight.current = false;
+      setRetriesBusy(false);
+    }
+  }, []);
+
+  // «Reintentos por salir» se lee DESPUÉS de montar, nunca al pintar en
+  // servidor: el escaneo que arma una caja revalida esta página, y una lectura
+  // en ese render se haría con cada escaneo para tirarse (el estado ya está
+  // aquí). Mientras llega, el apartado se ve en esqueleto.
+  useEffect(() => {
+    if (!retries) void refreshRetries();
+  }, [retries, refreshRetries]);
+
+  // La chapa de «Por armar» de un pedido cuyo reintento ya tiene su salida nueva.
+  const handoffByOrder = useMemo(
+    () => new Map<string, WarehouseHandoffRow>(retries && !retries.error ? retries.handoffs.map((handoff) => [handoff.orderId, handoff]) : []),
+    [retries],
+  );
 
   function submitScan(event: FormEvent) {
     event.preventDefault();
@@ -111,6 +189,12 @@ export function WarehouseStation({
           <Link href="/dashboard/pedidos/despacho" className={LINK_SECONDARY}>Entregas a couriers <span aria-hidden className="text-ink-500">→</span></Link>
           <Link href="/dashboard/courier/rutas" className={LINK_SECONDARY}>Cajas de Grupo GF <span aria-hidden className="text-ink-500">→</span></Link>
           <Link href="/dashboard/pedidos/devoluciones" className={LINK_SECONDARY}>Devoluciones <span aria-hidden className="text-ink-500">→</span></Link>
+          {/* La cifra navega: baja a su apartado. */}
+          {retries && !retries.error && (
+            <a href="#reintentos" className={LINK_SECONDARY}>
+              Reintentos por salir · <span className="tabular-nums">{retries.counts.hoy.toLocaleString("es-PE")}</span> hoy <span aria-hidden className="text-ink-500">↓</span>
+            </a>
+          )}
         </nav>
       </header>
 
@@ -144,6 +228,7 @@ export function WarehouseStation({
             <OpsButton type="submit" variant="primary" size="lg" className="h-12 px-6" disabled={busy || !scan.trim()}>{busy ? "Procesando…" : "Confirmar"}</OpsButton>
           </form>
           {message && <Banner tone={message.tone === "error" ? "crit" : "ok"} role={message.tone === "error" ? "alert" : "status"} className="mt-4">{message.text}</Banner>}
+          {retryHint && <Banner tone={retryHint.tone} role="status" className="mt-2">{retryHint.text}</Banner>}
         </div>
 
         <div className="p-4 shadow-[inset_0_1px_0_var(--color-line)] sm:p-6">
@@ -183,7 +268,7 @@ export function WarehouseStation({
             {queue.groups.length ? (
               <div className="space-y-5">
                 {queue.groups.map((group) => (
-                  <QueueGroup key={group.operation} group={group} storeName={storeName} />
+                  <QueueGroup key={group.operation} group={group} storeName={storeName} handoffByOrder={handoffByOrder} />
                 ))}
               </div>
             ) : (
@@ -236,6 +321,8 @@ export function WarehouseStation({
           </div>
         </div>
       </section>
+
+      <WarehouseRetries data={retries} onRefresh={refreshRetries} busy={retriesBusy} />
 
       <DispatchCamera open={cameraOpen} onClose={() => setCameraOpen(false)} onScan={onCameraScan} />
     </div>
@@ -331,9 +418,12 @@ const GROUP_LIMIT = 24;
 function QueueGroup({
   group,
   storeName,
+  handoffByOrder,
 }: {
   group: WarehouseQueueGroup<WarehouseShipment>;
   storeName: Map<string, string>;
+  /** Pedidos de un reintento de Lima cuya salida nueva está aquí (solo se muestra). */
+  handoffByOrder: ReadonlyMap<string, WarehouseHandoffRow>;
 }) {
   const byCourier = group.waitingOnCourier === group.entries.length;
   return (
@@ -346,7 +436,13 @@ function QueueGroup({
       </div>
       <ul className="divide-y divide-line rounded-lg ring-1 ring-line">
         {group.entries.slice(0, GROUP_LIMIT).map((entry) => (
-          <PendingRow key={entry.shipment.id} entry={entry} storeName={storeName} courierNote={!byCourier} />
+          <PendingRow
+            key={entry.shipment.id}
+            entry={entry}
+            storeName={storeName}
+            courierNote={!byCourier}
+            handoff={entry.shipment.order_id ? handoffByOrder.get(entry.shipment.order_id) ?? null : null}
+          />
         ))}
       </ul>
       {group.entries.length > GROUP_LIMIT && (
@@ -356,16 +452,22 @@ function QueueGroup({
   );
 }
 
-/** Una caja por armar: código, a quién va y qué lleva; la detenida, sobre ámbar y con su chapa. */
+/**
+ * Una caja por armar: código, a quién va y qué lleva; la detenida, sobre ámbar
+ * y con su chapa. Si es la salida nueva de un reintento de Lima, lleva «Reintento
+ * · …» y qué hacer con la caja vieja del estante.
+ */
 function PendingRow({
   entry,
   storeName,
   courierNote,
+  handoff,
 }: {
   entry: WarehouseQueueEntry<WarehouseShipment>;
   storeName: Map<string, string>;
   /** Si todo el grupo lo cierra el courier, la chapa del grupo ya lo dice. */
   courierNote: boolean;
+  handoff: WarehouseHandoffRow | null;
 }) {
   const { shipment, closer, ageDays, stalled } = entry;
   return (
@@ -374,12 +476,14 @@ function PendingRow({
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <p className="truncate font-mono text-xs font-semibold text-ink-900">{packageCode(shipment)}</p>
           {stalled && <Badge tone="warn">Detenida</Badge>}
+          {handoff && <Badge tone="info" wrap>{POR_ARMAR_CHIP(BOX_ACTION_LABEL[handoff.action])}</Badge>}
         </div>
         <p className="mt-0.5 text-sm text-ink-700">{shipment.customer_name ?? "Cliente"} · {shipment.district ?? shipment.province ?? "Sin distrito"}</p>
         <p className="truncate text-xs text-ink-500">
           {shipment.order_name} · {storeName.get(shipment.store_id) ?? "Tienda"}
           {shipment.product && <> · {shipment.product}</>}
         </p>
+        {handoff && <p className="mt-0.5 text-xs text-ink-600">{handoff.line}</p>}
         {courierNote && closer === "courier" && (
           <p className="mt-0.5 text-xs text-info-fg">Empácala; sale de la cola cuando {courierLabel(shipment.courier)} la reporte preparada.</p>
         )}
