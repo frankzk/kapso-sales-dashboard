@@ -134,9 +134,34 @@ describe("team guards", () => {
     it("los de dinero y datos sí; reportar entregas no", () => {
       const ownerOnly = GRANTED_ONE_BY_ONE.filter((entry) => entry.ownerOnly).map((entry) => entry.permission);
       expect(ownerOnly.sort()).toEqual(
-        ["alerts.repeated_voucher", "data.export", "logistics.manage", "payments.validate", "shalom.override_payment_validation"].sort(),
+        [
+          "alerts.repeated_voucher",
+          "data.export",
+          "invoices.manage",
+          "logistics.manage",
+          "payments.validate",
+          "shalom.override_payment_validation",
+        ].sort(),
       );
       expect(GRANTED_ONE_BY_ONE.find((entry) => entry.permission === "routes.report_others")!.ownerOnly).toBe(false);
+    });
+    it("«Boletas y facturas» (MOM §35.7): un admin no lo da ni se lo da; el dueño sí", () => {
+      const entry = GRANTED_ONE_BY_ONE.find((g) => g.permission === "invoices.manage")!;
+      // Lo que la acción de Equipo le pasa al guardia (`entry.ownerOnly ? entry.label : null`).
+      const ownerOnlyLabel = entry.ownerOnly ? entry.label : null;
+      const lastLabel = entry.lastOneMatters ? entry.label : null;
+      expect(canSetPaymentValidator(members, "a1", true, "admin", ["o1"], lastLabel, ownerOnlyLabel)).toEqual({
+        ok: false,
+        reason: "Solo el dueño puede dar o quitar «Boletas y facturas».",
+      });
+      expect(canSetPaymentValidator(members, "s1", true, "admin", ["o1"], lastLabel, ownerOnlyLabel).ok).toBe(false);
+      expect(canSetPaymentValidator(members, "s1", true, "owner", ["o1"], lastLabel, ownerOnlyLabel).ok).toBe(true);
+      // Sin nadie, el barrido sigue emitiendo y nadie puede apagar un RUC.
+      expect(canSetPaymentValidator(members, "o1", false, "owner", ["o1"], lastLabel, ownerOnlyLabel)).toEqual({
+        ok: false,
+        reason: "Debe quedar al menos una persona autorizada para boletas y facturas.",
+      });
+      expect(canSetPaymentValidator(members, "o1", false, "owner", ["o1", "s1"], lastLabel, ownerOnlyLabel).ok).toBe(true);
     });
     it("la acción de Equipo pasa la marca al guardia", async () => {
       const { readFileSync } = await import("node:fs");

@@ -169,6 +169,9 @@ roles and the `auth` schema, so it just works.
      covers table-level loss (bad migration, accidental DROP), not "whole
      project gone". **Restore:** download the CSV from the bucket and `COPY`/
      import it back into the table.
+   - `/api/cron/invoices` — cada 10 min (a los :06, :16, …). Emite o simula las
+     boletas por RUC (MOM §35). No hace nada mientras todos los RUC estén
+     «Apagado»; ver la sección «Comprobantes SimpleFact por RUC».
 
 ### Pases a mano (bajo `/api/cron`, pero SIN horario)
 
@@ -2432,3 +2435,102 @@ escribe, no abre casos ni toma el candado. Sin variables de entorno nuevas.
 
 **Marcha atrás.** Revertir el código basta. La función no molesta al código
 anterior y se queda.
+
+### 14-10-2026 · Comprobantes SimpleFact por RUC (MOM §35) — needs migration 0257
+
+Kapta emite, en la cuenta de SimpleFact de la empresa que recibió el dinero, la
+boleta de un pedido ya cobrado: un RUC por cuenta de cobro (MOM §35). **Sale
+apagado**: la 0257 da de alta GRUPO GF S.A.C. (RUC 20556792829, subdominio
+`grupogf`) en «Apagado» y sin token, y mientras todos los RUC estén apagados el
+barrido no lee pedidos ni llama a SimpleFact. **Sin variables de entorno
+nuevas**: el token se cifra con la misma `ENCRYPTION_KEY` de los tokens de
+tienda y el cron usa `CRON_SECRET`. Sin cambio del resolver:
+`MOM_RESOLUTION_VERSION` sigue en `mom-v1.26`.
+
+1. **Migración `0257_invoices.sql`**, a mano y ANTES del código: pegar el
+   archivo en el editor SQL de Supabase (o
+   `psql "$DATABASE_URL" -f db/migrations/0257_invoices.sql`). Crea
+   `invoice_issuers`, `store_collection_accounts.invoice_issuer_id` (con el
+   trigger que rechaza un RUC de otra organización), `order_invoices` (con el
+   índice de un solo comprobante real vivo por pedido y el trigger que no deja
+   editar ni borrar lo emitido), `invoice_order_checks` y la función
+   `invoice_claim`, y siembra GRUPO GF S.A.C. Las tres tablas quedan sin
+   policies y revocadas a `anon` y `authenticated`: solo las lee el servidor.
+   Es idempotente, y la semilla no pisa una asignación que el owner ya haya
+   cambiado. El `alter table` y los `drop trigger` sobre
+   `store_collection_accounts` toman un candado breve de esa tabla: si se queda
+   esperando, cortar y repetir con `set lock_timeout = '15s';` delante.
+   **Comprobar**, solo lectura:
+   - `select ruc, legal_name, simplefact_subdomain, mode, token_enc is null as sin_token, emit_from, daily_limit from invoice_issuers;`
+     — una fila por organización que cobra en la cuenta ···309: `20556792829`,
+     `grupogf`, `apagado`, `sin_token = true`, sin «Emitir desde» y tope 40;
+   - `select s.name, a.label, a.phone_last_digits, i.ruc from store_collection_accounts a join stores s on s.id = a.store_id left join invoice_issuers i on i.id = a.invoice_issuer_id order by s.name, a.label;`
+     — en cada tienda de esa organización, **dos** cuentas con `20556792829`:
+     «Grupo GF S.A.C.» ···309 y «Aurela Kenku» (la pasarela Flow, sin
+     celular). Las cuentas personales de los dueños, con `ruc` nulo;
+   - `select has_table_privilege('authenticated', 'public.invoice_issuers', 'select');`
+     tiene que dar `false` (y lo mismo con `anon`, `order_invoices` e
+     `invoice_order_checks`).
+2. **Desplegar.** El cron `/api/cron/invoices` ya está en `vercel.json`, cada
+   10 minutos (`6,16,26,…`), y solo emite en producción. Con todos los RUC en
+   «Apagado» cada pasada deja en los logs de Vercel una línea `[invoices] {…}`
+   con `"skipped":"sin_ruc_encendido"` y no hace nada más. **Si el código sale
+   antes que la migración** no se emite nada: el cron responde 502 («No se
+   pudieron leer los RUC») cada 10 minutos y Ajustes dice «No se pudieron leer
+   los RUC de la organización.». Aplicar la 0257 y la pasada siguiente vuelve
+   a `sin_ruc_encendido`.
+3. **El token: lo pone el owner, y solo en Ajustes.** Regenerar en SimpleFact
+   el token de la cuenta `grupogf`: **el anterior quedó expuesto en una captura
+   y no se usa**. Pegar el nuevo **solo** en Ajustes de la tienda → «Boletas y
+   facturas» (pide `stores.manage` y `invoices.manage`, que solo da el owner):
+   nunca en un chat, un ticket, Vercel ni el editor SQL. Ajustes solo dice
+   «Configurado». Pulsar «Probar conexión»: lee las ventas de la cuenta, no
+   emite nada, y tiene que confirmar el RUC 20556792829. Si dice otro RUC, el
+   token es de otra empresa; si dice que la cuenta no tiene ventas con
+   archivos, no se puede pasar a Real hasta que tenga una.
+4. **Simulación.** Poner el RUC en «Simulación» con «Emitir desde» de hoy (si
+   quedó atrás, la base la mueve sola al momento del cambio). Cada pasada arma
+   la boleta exacta de cada pedido que entraría y la guarda como `simulada`,
+   hasta el tope del día, **sin llamar a SimpleFact**. Revisar unos días, en
+   Ajustes (lo de hoy y los últimos comprobantes) y en el panel «Comprobante»
+   del drawer: el RUC, los ítems, el total y los motivos de lo que no entró.
+   En SQL, solo lectura:
+   - `select status, count(*) from order_invoices where mode = 'simulacion' group by 1;`
+   - `select reason, count(*) from invoice_order_checks where mode = 'simulacion' group by 1 order by 2 desc;`
+   - `select order_name, total, request->>'notes', request->'items' from order_invoices where mode = 'simulacion' order by created_at desc limit 10;`
+5. **Con el contador**: confirmar que una boleta hasta S/ 700 va a «CLIENTES
+   VARIOS» con DNI `00000000`, sin correo ni celular, y el umbral de S/ 700:
+   por encima, la boleta se emite a mano con el DNI y se registra en el panel
+   con «Ya tiene comprobante» (MOM §35.5).
+6. **Real.** Pasar el RUC a «Real». La base lo rechaza sin token, sin «Emitir
+   desde» o sin una prueba de conexión que leyó el mismo RUC, y «Emitir desde»
+   se mueve al momento del cambio: nada pagado antes sale. Revisar en
+   SimpleFact las primeras boletas: serie, total, ítems con el IGV incluido y
+   la nota «Pedido #KP… · Kapta ‹ref›». En Kapta, solo lectura:
+   `select status, ruc_mismatch, count(*) from order_invoices where mode = 'real' group by 1, 2;`
+   — nada en `emitiendo` por más de unos minutos, ningún `ruc_mismatch`, y
+   cada `en_duda` conciliado solo o revisado por una persona (MOM §35.4).
+7. **Pasada en seco, a mano.** La corre el owner o quien opera, no un agente:
+   `GET /api/cron/invoices?dry=1` con `Authorization: Bearer <CRON_SECRET>` (y
+   `&storeId=<uuid>` para una sola tienda). Revisa, relee en Shopify y arma la
+   boleta, pero no escribe nada en la base ni llama a SimpleFact: devuelve, por
+   RUC, cuántos pedirían turno (`would_claim`) y los motivos de los demás. Con
+   todos los RUC en «Apagado» responde `"skipped":"sin_ruc_encendido"`: sirve
+   desde el paso 4.
+
+**Antes de subir**: `npm test`, `npm run typecheck`, `bash scripts/verify-db.sh`
+(clúster desechable; corre `scripts/sql/invoices_smoke.sql`) y `next build`.
+
+**Marcha atrás.** Poner cada RUC en «Apagado» (Ajustes → «Boletas y
+facturas», o `update invoice_issuers set mode = 'apagado';`): el barrido deja
+de leer y de emitir en la pasada siguiente. No hace falta revertir el código.
+Lo emitido no se borra —ya está en SUNAT—: una boleta que no correspondía la
+anula una persona con nota de crédito en SimpleFact (MOM §35.9). Las tablas no
+molestan al código anterior y se quedan.
+
+**Qué mirar después.** Cada pasada escribe una línea `[invoices] {…}` en los
+logs de Vercel, sin clientas, teléfonos ni token: por RUC, `simuladas`,
+`emitidas`, `en_duda`, `errores`, `conciliadas`, `pendientes`, los motivos y
+por qué se detuvo (`stopped`). `errors` no vacío pone el cron en rojo (502). Un
+token rechazado (401 o 403) o una cuenta que no responde (404 o 405) apaga el
+RUC solo, con el motivo a la vista en Ajustes.

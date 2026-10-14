@@ -1,7 +1,13 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  FUNCTIONAL_ROLES,
   GRANTED_ONE_BY_ONE,
   PERMISSIONS,
+  PERMISSION_AREAS,
+  PERMISSION_HELP,
+  PERMISSION_LABEL,
   hasPermission,
   isGrantedOneByOne,
   isPermission,
@@ -302,5 +308,63 @@ describe("data.export", () => {
 
   it("y a un admin se le puede quitar", () => {
     expect(permissionsFor(["admin"], [{ permission: "data.export", granted: false }]).has("data.export")).toBe(false);
+  });
+});
+
+// Comprobantes electrónicos por RUC (MOM §35.7, 14-10-2026). Configurar un RUC,
+// darle cuentas o registrar una boleta hecha a mano decide qué empresa paga el
+// impuesto de qué venta, y una boleta enviada a SUNAT no se borra: es dinero,
+// lo da solo el dueño y ningún rol lo trae salvo el suyo.
+describe("invoices.manage (Boletas y facturas)", () => {
+  const entry = GRANTED_ONE_BY_ONE.find((g) => g.permission === "invoices.manage");
+
+  it("se da uno por uno, solo el dueño, y el rol admin no lo trae", () => {
+    expect(isPermission("invoices.manage")).toBe(true);
+    expect(isGrantedOneByOne("invoices.manage")).toBe(true);
+    expect(entry).toBeDefined();
+    expect(entry!.ownerOnly).toBe(true);
+    const withAdminRole = GRANTED_ONE_BY_ONE.filter((g) => "withAdminRole" in g && g.withAdminRole).map((g) => g.permission);
+    expect(withAdminRole).not.toContain("invoices.manage");
+    // Sin nadie con el permiso, nadie podría apagar un RUC que sigue emitiendo.
+    expect(entry!.lastOneMatters).toBe(true);
+  });
+
+  it("lo tiene el owner; admin, vendedora, viewer y motorizado no", () => {
+    expect(permissionsFor(["owner"]).has("invoices.manage")).toBe(true);
+    for (const role of ["admin", "vendedora", "viewer", "motorizado"]) {
+      expect(permissionsFor([role]).has("invoices.manage"), role).toBe(false);
+    }
+  });
+
+  it("ningún rol por función lo trae, ni todos juntos", () => {
+    for (const fn of FUNCTIONAL_ROLES) {
+      expect((fn.permissions as readonly string[]).includes("invoices.manage"), fn.role).toBe(false);
+    }
+    const all = FUNCTIONAL_ROLES.map((fn) => fn.role);
+    expect(permissionsFor(["vendedora"], [], all).has("invoices.manage")).toBe(false);
+    expect(permissionsFor(["admin"], [], all).has("invoices.manage")).toBe(false);
+  });
+
+  it("se concede a una persona y se le puede quitar al owner", () => {
+    expect(permissionsFor(["admin"], [{ permission: "invoices.manage", granted: true }]).has("invoices.manage")).toBe(true);
+    expect(permissionsFor(["owner"], [{ permission: "invoices.manage", granted: false }]).has("invoices.manage")).toBe(false);
+  });
+
+  it("tiene nombre, explicación y área en Equipo", () => {
+    expect(PERMISSION_LABEL["invoices.manage"]).toBe("Boletas y facturas");
+    expect(entry!.label).toBe("Boletas y facturas");
+    const help = PERMISSION_HELP["invoices.manage"];
+    expect(help).toMatch(/SimpleFact/);
+    expect(help).toMatch(/\.$/);
+    expect(help.length).toBeLessThanOrEqual(130);
+    expect(entry!.description).toBe(help);
+    const areas = PERMISSION_AREAS.filter((area) => (area.permissions as readonly string[]).includes("invoices.manage"));
+    expect(areas.map((area) => area.key)).toEqual(["pagos"]);
+  });
+
+  it("el MOM dice lo mismo que el código", () => {
+    const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8").replace(/\s+/g, " ");
+    expect(mom).toContain("**`invoices.manage` («Boletas y facturas»)**");
+    expect(mom).toContain("**solo el owner lo da** (§16, `ownerOnly`)");
   });
 });

@@ -55,9 +55,12 @@ create table if not exists invoice_issuers (
   created_at           timestamptz not null default now(),
   updated_at           timestamptz not null default now(),
   unique (org_id, ruc),
+  -- `checked_ruc is not null` va escrito: sin él, un RUC SIN prueba daba
+  -- `null = ruc` → NULL, y un CHECK con NULL pasa. Se podía poner en real sin
+  -- haber probado la conexión nunca.
   constraint invoice_issuers_real_ready check (
     mode <> 'real'
-    or (token_enc is not null and emit_from is not null and checked_ruc = ruc)
+    or (token_enc is not null and emit_from is not null and checked_ruc is not null and checked_ruc = ruc)
   )
 );
 
@@ -68,12 +71,22 @@ comment on column invoice_issuers.token_enc is
 comment on column invoice_issuers.mode is
   'apagado = no hace nada; simulacion = arma la boleta y la guarda sin enviarla; real = emite (MOM §35.8).';
 comment on column invoice_issuers.emit_from is
-  'Solo se emiten pedidos que quedaron pagados desde esta fecha: ningún RUC emite hacia atrás (MOM §35.4).';
+  'Solo se emiten pedidos que quedaron pagados desde esta fecha: ningún RUC emite hacia atrás. Al encender o cambiar de modo, si quedó atrás, se mueve sola a ese momento (MOM §35.4).';
 comment on column invoice_issuers.checked_ruc is
   'RUC leído en los archivos de la cuenta por «Probar conexión». Pasar a real exige que sea el RUC declarado.';
 
 -- Cambiar el token, el subdominio o el RUC invalida la prueba de conexión, y un
 -- RUC en real baja a simulación: un token nuevo se prueba antes de emitir.
+--
+-- Lo mismo si la prueba se repite con el RUC ya en real y no confirma el RUC
+-- (leyó otro, o no pudo leer): sin esto, guardar el resultado de esa prueba
+-- chocaba con `invoice_issuers_real_ready` y Ajustes no podía registrarlo, con
+-- el RUC emitiendo sobre la prueba vieja. Real exige, mientras dure, que la
+-- última prueba sea la del RUC declarado.
+--
+-- «Emitir desde» no queda atrás al encender ni al cambiar de modo (MOM §35.4):
+-- la fecha que sirvió para la simulación de ayer no habilita, al pasar a real,
+-- las boletas de todo lo que se pagó desde entonces.
 create or replace function invoice_issuers_touch() returns trigger
 language plpgsql security invoker set search_path = public as $$
 begin
@@ -88,6 +101,15 @@ begin
     if new.mode = 'real' then
       new.mode := 'simulacion';
     end if;
+  end if;
+  if tg_op = 'UPDATE' and old.mode = 'real' and new.mode = 'real'
+     and new.checked_ruc is distinct from new.ruc then
+    new.mode := 'simulacion';
+  end if;
+  if new.mode <> 'apagado'
+     and (tg_op = 'INSERT' or new.mode is distinct from old.mode)
+     and new.emit_from < now() then
+    new.emit_from := now();
   end if;
   return new;
 end;
@@ -304,6 +326,10 @@ begin
   end if;
   if coalesce(v_order.total_refunded, 0) <> 0 then
     return jsonb_build_object('reason', 'reembolsado');
+  end if;
+  -- La boleta va en soles: un total en otra moneda se emitiría como si lo fuera.
+  if upper(coalesce(v_order.currency, '')) <> 'PEN' then
+    return jsonb_build_object('reason', 'moneda');
   end if;
 
   perform pg_advisory_xact_lock(hashtextextended(p_issuer::text, 257));

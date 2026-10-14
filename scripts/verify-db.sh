@@ -225,5 +225,14 @@ echo "▶ Repro Lima «Todos» (0256): Lima sin Finalizado por etapa y subetapa,
 $PSQL -f "$ROOT/scripts/sql/lima_open_counts_smoke.sql"
 echo "  ✅ igual a un GROUP BY directo, sin Finalizado ni Provincia, borde de medianoche de Lima, authenticated sin permiso"
 
+# SimpleFact no tiene llave de idempotencia: la misma boleta mandada dos veces
+# son dos boletas ante SUNAT, y una boleta enviada no se borra. Lo que lo impide
+# —el turno con candado, un solo comprobante real vivo por pedido, estados que
+# solo avanzan, «real» solo con la conexión probada— vive en la base (0257, MOM
+# §35), así que se prueba en la base y no solo en el código.
+echo "▶ Comprobantes por RUC (0257): semilla apagada, cuenta → RUC de su organización, turno con candado y uno real vivo por pedido"
+$PSQL -f "$ROOT/scripts/sql/invoices_smoke.sql"
+echo "  ✅ GRUPO GF S.A.C. sembrado apagado y sin pisar al owner, real solo con token, fecha y prueba del mismo RUC, cada motivo del turno, tope del día, índice único, estados que solo avanzan, solo service_role"
+
 echo ""
 echo "✅ DB verification passed."

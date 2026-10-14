@@ -95,6 +95,7 @@ import {
   type OrderGeoInput,
 } from "@/app/dashboard/pedidos/actions";
 import { VoiceAgentPanel } from "@/components/voice-agent-panel";
+import { OrderInvoicePanel } from "@/components/order-invoice-panel";
 import { BrowserCallButton } from "@/components/browser-call";
 import { UrpiAttemptsSection } from "@/components/urpi-attempts-section";
 import { limaTodayKey } from "@/lib/shipments";
@@ -1827,6 +1828,10 @@ export function OrderDrawer({
                     gatewayNote={gatewayNote}
                     onChanged={onSaved}
                   />
+                  {/* MOM §35: la boleta sale del dinero que ya entró, así que
+                      vive bajo el cobro. Se dibuja solo si la organización
+                      tiene algún RUC o comprobante. */}
+                  <OrderInvoicePanel orderId={orderId} pending={pending} run={run} />
                 </div>
               )}
               {/* Crear guía: solo tiene sentido en un pedido que todavía no tiene
