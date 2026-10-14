@@ -5,7 +5,18 @@ import { useRouter } from "next/navigation";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import type { LeadCallRow, LeadRow, StoreSummary } from "@/lib/types";
 import type { AdMeta } from "@/lib/meta-ads";
-import { IconAlert } from "@/components/icons";
+import {
+  IconAlert,
+  IconCheck,
+  IconDownload,
+  IconFlash,
+  IconLock,
+  IconMoney,
+  IconPhone,
+  IconSearch,
+  IconWhatsApp,
+  IconX,
+} from "@/components/icons";
 import { waKindLabel, waLabel, type WaNumber } from "@/lib/wa-numbers";
 import {
   ALL_STORES,
@@ -81,6 +92,22 @@ import {
 } from "@/app/dashboard/leads/actions";
 import { claveAnuncio, handleDeAnuncioPara, type AdDeclaration } from "@/lib/ad-products";
 import { cn } from "@/components/ui";
+import {
+  AttentionPill,
+  Badge,
+  Banner,
+  CHECKBOX,
+  ChoiceChip,
+  FIELD_BOX,
+  FilterPill,
+  OpsButton,
+  Skeleton,
+  choiceChipClass,
+  type BadgeTone,
+} from "@/components/ops-ui";
+import { ChoicePill } from "@/components/facet-pill";
+import { Sheet } from "@/components/filter-sheet";
+import { NextLeadCard, SegmentBadge, useNextLead } from "@/components/leads-next";
 import { VentaTelefonica } from "@/components/venta-telefonica";
 import type { LeadDrawerProps, LeadDrawerUpdate } from "@/components/leads-drawer";
 import { reportClientPerformanceMetric } from "@/lib/client-performance";
@@ -115,16 +142,17 @@ const LeadDrawer = dynamic<LeadDrawerProps>(
 function LeadDrawerLoading() {
   return (
     <>
-      <div className="fixed inset-0 z-10 bg-slate-900/20" aria-hidden="true" />
+      <div className="fixed inset-0 z-40 bg-ink-900/20" aria-hidden="true" />
       <aside
-        className="fixed inset-y-0 right-0 z-20 flex h-full w-[min(880px,96%)] flex-col border-l border-slate-200 bg-slate-50 shadow-xl"
-        aria-label="Cargando detalle del lead"
+        className="fixed inset-y-0 right-0 z-50 flex h-full w-full max-w-[1040px] flex-col bg-white shadow-popover"
+        aria-label="Cargando la ficha del lead"
+        aria-busy
       >
-        <div className="border-b border-slate-200 bg-white px-5 py-4">
-          <div className="h-5 w-44 animate-pulse rounded bg-slate-200" />
-          <div className="mt-2 h-4 w-64 animate-pulse rounded bg-slate-100" />
+        <div className="px-5 py-4 shadow-[inset_0_-1px_0_var(--color-line)]">
+          <Skeleton className="h-6 w-52" />
+          <Skeleton className="mt-2 h-4 w-80 max-w-full" />
         </div>
-        <div className="grid flex-1 place-items-center p-6 text-sm text-slate-500">Cargando atención…</div>
+        <div className="grid flex-1 place-items-center p-6 text-sm text-ink-500">Abriendo la ficha…</div>
       </aside>
     </>
   );
@@ -198,290 +226,129 @@ function fmtDateShort(value: string | null | undefined): string {
   });
 }
 
-// Outcome tabs (right of the separator): distinct buckets, not sub-filters of
-// the call queue. "Calientes" was intentionally dropped — casi-cierra leads
-// stay reachable in the queue, and paid ones live in Yape/Shalom.
-const OUTCOME_VIEWS: { key: LeadView; label: string }[] = [
-  { key: "yape", label: "🔥 Yape/Shalom" },
+// Las vistas que no son la cola (DESIGN.md › Leads): chips con su contador en
+// la primera fila, siempre a la vista.
+const REVIEW_VIEWS: { key: "seguimientos" | "ganados" | "perdidos"; label: string }[] = [
   { key: "seguimientos", label: "Seguimientos" },
   { key: "ganados", label: "Ganados" },
   { key: "perdidos", label: "Perdidos" },
 ];
 
-// Keyed by the queue FILTER bucket (lib/leads.ts › QUEUE_BUCKETS), so the pill
-// on each row reads the same as the chip that finds it.
-const SEGMENT_BADGE: Record<QueueBucket, string> = {
-  carrito: "bg-emerald-50 text-emerald-700",
-  distrito: "bg-amber-50 text-amber-700",
-  producto: "bg-yellow-50 text-yellow-800",
-  converso: "bg-blue-50 text-blue-700",
-  frio: "bg-slate-100 text-slate-500",
+const VIEW_TITLE: Record<LeadView, string> = {
+  por_llamar: "La cola",
+  handoff: "Atender ahora",
+  yape: "Yape / Shalom",
+  seguimientos: "Seguimientos",
+  ganados: "Ganados",
+  perdidos: "Perdidos",
 };
 
-// Plain calificación labels (no emoji) for the row/drawer pills, per the redesign.
-const SEG_PILL_LABEL: Record<QueueBucket, string> = {
-  carrito: "Con carrito",
-  distrito: "Dio distrito",
-  producto: "Vio producto",
-  converso: "Conversó",
-  frio: "Frío",
-};
-
-// Terminal outcomes shown in the Calificación column instead of an engagement
-// segment — a cancelled lead is "Perdidos", not "🛒 Con carrito".
-const OUTCOME_SEG_BADGE: Record<"won" | "lost", { label: string; cls: string }> = {
-  won: { label: "Ganados", cls: "bg-emerald-100 text-emerald-700" },
-  lost: { label: "Perdidos", cls: "bg-slate-200 text-slate-600" },
-};
-
-/** Calificación chip per row. Active leads (open/hot) show their engagement level
- *  (Frío → Conversó → Vio producto → Dio distrito → Con carrito); leads that are already won or
- *  lost show the outcome (Ganados/Perdidos) — the engagement level is meaningless
- *  once the lead is closed, and "Con carrito" on a cancelled lead is misleading.
- *  The specific reason (e.g. "Cancelado por cliente") stays available on hover. */
-function SegmentBadge({ lead }: { lead: LeadRow }) {
-  const cat = categoryOf(lead.status);
-  if (cat === "won" || cat === "lost") {
-    const b = OUTCOME_SEG_BADGE[cat];
-    return (
-      <span
-        className={cn("whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium", b.cls)}
-        title={labelOf(lead.status)}
-      >
-        {b.label}
-      </span>
-    );
-  }
-  const seg = leadQueueBucket(lead);
-  // El monto del carrito va en el propio chip: con la cola ordenada por
-  // prioridad, entre dos carritos el ticket es lo que decide a cuál llamar
-  // primero, y hasta ahora había que abrir el drawer para verlo.
-  const cartValue = seg === "carrito" ? Number(lead.cart_value ?? 0) : 0;
+/** Chip de la cola con su contador y, en «En seguimiento», los que piden atención. */
+function QueueChip({
+  label,
+  count,
+  alert,
+  active,
+  onClick,
+}: {
+  label: string;
+  count: number;
+  alert?: number;
+  active: boolean;
+  onClick: () => void;
+}) {
   return (
-    <span className={cn("whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium", SEGMENT_BADGE[seg])}>
-      {SEG_PILL_LABEL[seg]}
-      {cartValue > 0 && <span className="ml-1 font-semibold">S/ {Math.round(cartValue)}</span>}
-    </span>
+    <button type="button" aria-pressed={active} onClick={onClick} className={choiceChipClass(active)}>
+      {label}
+      <span className={cn("tabular-nums", active ? "text-brand-700" : "text-ink-500")}>{count.toLocaleString("es-PE")}</span>
+      {/* Reencolados por ola, respuestas nuevas y seguimientos vencidos: la
+          deuda se ve sin entrar a la pestaña. */}
+      {!!alert && (
+        <Badge tone="crit" title="Requieren atención: reencolados, respuestas nuevas o seguimientos vencidos">
+          {alert.toLocaleString("es-PE")}
+        </Badge>
+      )}
+    </button>
   );
 }
 
-/**
- * Segmented control (single-select): a sunken muted track holding pill options;
- * the active option is a filled brand capsule, the rest are muted text. Used for
- * every leads filter so the toolbar reads as grouped toggles, not loose pills.
- * `onChange` receives the option key — the caller decides whether that sets
- * client state or navigates. value = null (or a key not in the list) → none active.
- */
-function SegControl({
-  label,
-  options,
-  value,
-  onChange,
-}: {
-  label?: string;
-  options: { key: string; label: string; count?: number; alert?: number }[];
-  value: string | null;
-  onChange: (key: string) => void;
-}) {
+/** Un grupo de chips con su nombre delante («Segmento», «Cobertura»). */
+function ChipGroup({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex items-center gap-1.5">
-      {label && <span className="shrink-0 text-xs font-medium text-slate-400">{label}</span>}
-      <div className="inline-flex items-center gap-0.5 rounded-lg border border-slate-200 bg-slate-100 p-0.5">
-        {options.map((o) => {
-          const active = o.key === value;
-          return (
-            <button
-              key={o.key}
-              type="button"
-              aria-pressed={active}
-              onClick={() => onChange(o.key)}
-              className={cn(
-                "inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-medium transition",
-                active ? "bg-brand-600 text-white shadow-sm" : "text-slate-500 hover:text-slate-800",
-              )}
-            >
-              {o.label}
-              {o.count !== undefined && (
-                <span
-                  className={cn(
-                    "rounded-full px-1.5 text-[11px] font-semibold tabular-nums",
-                    active ? "bg-white/25 text-white" : "bg-slate-200 text-slate-500",
-                  )}
-                >
-                  {o.count}
-                </span>
-              )}
-              {/* Semáforo: leads con atención pendiente dentro de este estado
-                  (reencolados por ola, respuestas nuevas, seguimientos vencidos).
-                  Rojo fuerte a propósito: la deuda debe verse sin abrir el tab. */}
-              {!!o.alert && (
-                <span
-                  title="Requieren atención: reencolados, respuestas nuevas o seguimientos vencidos"
-                  className={cn(
-                    "rounded-full px-1.5 text-[11px] font-bold tabular-nums",
-                    active ? "bg-white text-red-600" : "bg-red-600 text-white",
-                  )}
-                >
-                  {o.alert}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
+    <div role="group" aria-label={label} className="flex shrink-0 items-center gap-1.5">
+      <span className="mr-1 text-xs font-medium text-ink-500">{label}</span>
+      {children}
     </div>
   );
 }
 
-/** Multi-select dropdown for filter groups with many options (Fuente, Número).
- *  A compact trigger that opens a checkbox panel; selecting several = OR within
- *  the group. `selected` empty = sin filtro ("Todas/Todos"). Cierra con
- *  click-outside (mismo patrón que el drawer). Los counts por opción vienen
- *  faceteados desde el padre (independientes de la selección del propio grupo). */
-function MultiSelect({
+const SHEET_ROW =
+  "flex min-h-9 cursor-pointer items-center gap-2.5 rounded-md px-2 text-sm text-ink-700 hover:bg-wash pointer-coarse:min-h-11";
+
+/** Lista de casillas con contador para la hoja de «Más filtros» (Fuente, Producto, Número). */
+function CheckList({
   label,
   options,
   selected,
   onToggle,
-  onClear,
-  summaryAll,
+  searchable = false,
 }: {
   label: string;
   options: { key: string; label: string; count?: number }[];
   selected: Set<string>;
   onToggle: (key: string) => void;
-  onClear: () => void;
-  summaryAll: string;
+  searchable?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [open]);
-
-  const n = selected.size;
-  const selectedLabels = options.filter((o) => selected.has(o.key)).map((o) => o.label);
-  const summary =
-    n === 0
-      ? summaryAll
-      : selectedLabels.length <= 3
-        ? selectedLabels.join(", ") // muestra los nombres elegidos
-        : `${selectedLabels.slice(0, 2).join(", ")} +${selectedLabels.length - 2}`; // compacto si son muchos
-
+  const [term, setTerm] = useState("");
+  const t = term.trim().toLocaleLowerCase("es");
+  const shown = t ? options.filter((o) => o.label.toLocaleLowerCase("es").includes(t)) : options;
   return (
-    <div className="relative flex items-center gap-1.5" ref={ref}>
-      <span className="shrink-0 text-xs font-medium text-slate-400">{label}</span>
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-        className={cn(
-          "inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 py-1 text-xs font-medium transition",
-          n > 0
-            ? "border-brand-300 bg-brand-50 text-brand-700"
-            : "border-slate-300 text-slate-600 hover:bg-slate-100 hover:text-slate-900",
-        )}
-      >
-        {summary}
-        {n > 0 && (
-          <span className="rounded-full bg-brand-600 px-1.5 text-[11px] font-semibold tabular-nums text-white">{n}</span>
-        )}
-        <span className="text-slate-400" aria-hidden="true">
-          ▾
-        </span>
-      </button>
-      {open && (
-        <div className="absolute top-full left-0 z-20 mt-1 max-h-72 w-56 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-lg">
-          <button
-            type="button"
-            onClick={onClear}
-            className="flex w-full items-center rounded-md px-2 py-1.5 text-xs hover:bg-slate-50"
-          >
-            <span className={cn(n === 0 ? "font-semibold text-brand-700" : "text-slate-600")}>{summaryAll}</span>
-          </button>
-          {options.map((o) => {
-            const on = selected.has(o.key);
-            return (
-              <button
-                key={o.key}
-                type="button"
-                onClick={() => onToggle(o.key)}
-                className="flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-slate-50"
-              >
-                <span className="flex items-center gap-2">
-                  <input type="checkbox" readOnly checked={on} className="h-3.5 w-3.5 accent-brand-600" />
-                  <span className={cn(on ? "font-medium text-slate-900" : "text-slate-600")}>{o.label}</span>
-                </span>
-                {o.count !== undefined && <span className="tabular-nums text-slate-400">{o.count}</span>}
-              </button>
-            );
-          })}
-        </div>
+    <div>
+      {searchable && (
+        <label className="relative mb-1.5 block">
+          <span className="sr-only">Buscar en {label.toLocaleLowerCase("es")}</span>
+          <IconSearch className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-ink-500" />
+          <input
+            value={term}
+            onChange={(e) => setTerm(e.target.value)}
+            placeholder={`Buscar ${label.toLocaleLowerCase("es")}`}
+            className={cn(FIELD_BOX, "h-8 w-full pl-8 pr-3")}
+          />
+        </label>
       )}
+      <ul className="-mx-1 grid max-h-56 gap-0.5 overflow-y-auto">
+        {shown.map((o) => (
+          <li key={o.key}>
+            <label className={SHEET_ROW}>
+              <input type="checkbox" className={CHECKBOX} checked={selected.has(o.key)} onChange={() => onToggle(o.key)} />
+              <span className="min-w-0 flex-1 truncate">{o.label}</span>
+              {o.count != null && <span className="shrink-0 text-xs tabular-nums text-ink-500">{o.count.toLocaleString("es-PE")}</span>}
+            </label>
+          </li>
+        ))}
+        {!shown.length && <li className="px-2 py-2 text-[13px] text-ink-500">Sin coincidencias.</li>}
+      </ul>
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Presentational helpers for the redesigned board (pixel-perfect with the design
-// handoff). Pure styling — all data comes from the existing lib/leads helpers.
-// ---------------------------------------------------------------------------
-
-// Avatar tints rotate across 6 soft palettes, keyed by a stable hash of the
-// (UUID) id so a lead always gets the same colour.
-const AVATAR_TINTS = [
-  "bg-brand-50 text-brand-700",
-  "bg-violet-50 text-violet-700",
-  "bg-emerald-50 text-emerald-700",
-  "bg-amber-50 text-amber-700",
-  "bg-sky-50 text-sky-700",
-  "bg-orange-50 text-orange-700",
-];
-function avatarTint(id: string): string {
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = (h + id.charCodeAt(i)) % AVATAR_TINTS.length;
-  return AVATAR_TINTS[h]!;
-}
-
-// Square source chip (📣 Campaña / 🌐 Meta/Web / 🛒 Carrito / 🔎 Búsqueda / "Directo").
-const SOURCE_CHIP: Record<
-  "meta_ad" | "fb_web" | "cod_cart" | "abandoned_browse" | "organic",
-  { glyph: string; label: string; cls: string; title: string; isText?: boolean }
-> = {
-  meta_ad: { glyph: "📣", label: "Campaña", cls: "bg-violet-100 text-violet-700", title: "Campaña Meta (Click-to-WhatsApp, con anuncio)" },
-  fb_web: { glyph: "🌐", label: "Meta/Web", cls: "bg-sky-100 text-sky-700", title: "Llegó por un link de Meta (Facebook/Instagram) en la web (sin anuncio confirmado)" },
-  cod_cart: { glyph: "🛒", label: "Carrito", cls: "bg-emerald-100 text-emerald-700", title: "Carrito abandonado (formulario COD)" },
-  abandoned_browse: { glyph: "🔎", label: "Búsqueda", cls: "bg-orange-100 text-orange-700", title: "Búsqueda abandonada" },
-  organic: { glyph: "Directo", label: "Directo", cls: "bg-slate-100 text-slate-500", title: "Orgánico / directo", isText: true },
-};
-function SourceChip({ source }: { source: string | null | undefined }) {
-  const s = SOURCE_CHIP[leadSourceKey(source)];
+/** Un bloque de la hoja: su nombre y lo que filtra. */
+function SheetSection({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <span
-      title={s.title}
-      className={cn(
-        "inline-flex h-5 min-w-[22px] shrink-0 items-center justify-center rounded-md px-1.5 font-semibold leading-none",
-        s.isText ? "text-[10px]" : "text-[11px]",
-        s.cls,
-      )}
-    >
-      {s.glyph}
-    </span>
+    <section className="border-t border-line pt-3 first:border-0 first:pt-0">
+      <h3 className="mb-2 text-xs font-semibold text-ink-600">{title}</h3>
+      {children}
+    </section>
   );
 }
 
 // El "anzuelo": con qué abrir la llamada. Sin esto un lead frío es solo un
 // nombre y nadie sabe cómo empezar, así que nunca se trabaja. Se muestra el
 // producto que miraba, o el anuncio que lo trajo, o sus propias palabras.
-const HOOK_DISPLAY: Record<LeadHookKind, { icon: string; title: string; cls: string }> = {
-  producto: { icon: "🛒", title: "Producto que miraba / agregó al carrito", cls: "text-emerald-700" },
-  anuncio: { icon: "📣", title: "Anuncio por el que llegó", cls: "text-violet-700" },
-  mensaje: { icon: "💬", title: "Primer mensaje que escribió el cliente", cls: "text-slate-500" },
+const HOOK_DISPLAY: Record<LeadHookKind, { prefix: string; title: string }> = {
+  producto: { prefix: "Carrito", title: "Producto que miraba / agregó al carrito" },
+  anuncio: { prefix: "Anuncio", title: "Anuncio por el que llegó" },
+  mensaje: { prefix: "Escribió", title: "Primer mensaje que escribió el cliente" },
 };
 
 function LeadHookLine({ lead }: { lead: LeadRow }) {
@@ -489,112 +356,70 @@ function LeadHookLine({ lead }: { lead: LeadRow }) {
   if (!hook) return null;
   const d = HOOK_DISPLAY[hook.kind];
   return (
-    <p
-      title={`${d.title}: ${hook.text}`}
-      className={cn("mt-0.5 truncate text-[11px] leading-tight", d.cls)}
-    >
-      <span aria-hidden="true">{d.icon}</span>{" "}
-      {hook.kind === "mensaje" ? `“${hook.text}”` : hook.text}
+    <p title={`${d.title}: ${hook.text}`} className="mt-0.5 truncate text-[13px] leading-5 text-ink-600">
+      <span className="text-ink-500">{d.prefix}:</span> {hook.kind === "mensaje" ? `«${hook.text}»` : hook.text}
     </p>
   );
 }
 
-// Gestión (advisor call-state) → label + dot for the "Última gestión" column.
-const GESTION_DISPLAY: Record<LeadGestion, { label: string; dot: string; fg: string; hollow?: boolean }> = {
-  sin_llamar: { label: "Sin llamar", dot: "border-[1.5px] border-amber-500", fg: "text-amber-700", hollow: true },
-  nr: { label: "No responde", dot: "bg-slate-400", fg: "text-slate-600" },
-  buzon_cuelga: { label: "Buzón/Cuelga", dot: "bg-slate-400", fg: "text-slate-600" },
-  contactados: { label: "Contactado", dot: "bg-emerald-500", fg: "text-emerald-700" },
-  sin_stock: { label: "Sin stock", dot: "bg-blue-500", fg: "text-blue-700" },
+// Gestión (estado de la llamada) → etiqueta y punto de la columna «Última gestión».
+const GESTION_DISPLAY: Record<LeadGestion, { label: string; dot: string }> = {
+  sin_llamar: { label: "Sin llamar", dot: "bg-white ring-1 ring-inset ring-warn-fg" },
+  nr: { label: "No responde", dot: "bg-ink-500" },
+  buzon_cuelga: { label: "Buzón / cuelga", dot: "bg-ink-500" },
+  contactados: { label: "Contactado", dot: "bg-ok-fg" },
+  sin_stock: { label: "Sin stock", dot: "bg-info-fg" },
 };
 
-// 24h window state → dot/text colour. Ya NO manda el acento lateral de la fila:
-// ese lo pinta la urgencia (ver URGENCY_DISPLAY). La ventana de WhatsApp es un
-// permiso de mensajería, no una probabilidad de cierre, y usarla como la señal
-// visual dominante hacía que un lead de doce minutos y uno de 67 días llevaran
-// exactamente el mismo verde.
-const WIN_DISPLAY: Record<"fresca" | "por_vencer" | "cerrada", { dot: string; fg: string; accent: string }> = {
-  fresca: { dot: "bg-emerald-500", fg: "text-emerald-700", accent: "#34d399" },
-  por_vencer: { dot: "bg-amber-500", fg: "text-amber-700", accent: "#fbbf24" },
-  cerrada: { dot: "bg-slate-400", fg: "text-slate-500", accent: "#cbd5e1" },
-};
-function winKey(state: LeadWindow | null): "fresca" | "por_vencer" | "cerrada" {
-  if (state === "por_vencer" || state === "critica") return "por_vencer";
-  if (state === "cerrada") return "cerrada";
-  return "fresca"; // fresca or null (no inbound yet) → neutral-fresh accent
-}
-
-// Edad del lead → cómo se pinta la columna y el acento lateral de la fila.
+// La edad manda el punto de la fila; la ventana de WhatsApp es un permiso de
+// mensajería, no una probabilidad de cierre, y si pintara la fila un lead de
+// doce minutos y uno de 67 días llevarían el mismo verde.
 //
 // El salto de color está donde está el acantilado medido: `dorada` es el único
-// tramo con contraste fuerte, porque es el único donde llamar YA vale el doble.
-// Los tres de abajo son grises de intensidad decreciente a propósito — si
-// «tibia» compitiera visualmente con «dorada», volveríamos a tener 366 filas
-// gritando lo mismo y ninguna destacando.
-const URGENCY_DISPLAY: Record<UrgencyTier, { dot: string; fg: string; accent: string }> = {
-  dorada: { dot: "bg-emerald-500", fg: "text-emerald-700", accent: "#10b981" },
-  tibia: { dot: "bg-amber-400", fg: "text-amber-700", accent: "#fcd34d" },
-  enfriando: { dot: "bg-slate-300", fg: "text-slate-500", accent: "#e2e8f0" },
-  fria: { dot: "bg-slate-200", fg: "text-slate-400", accent: "#f1f5f9" },
+// tramo con color fuerte, porque es el único donde llamar YA vale el doble. Los
+// de abajo bajan de intensidad a propósito: si «tibia» compitiera con
+// «dorada», volveríamos a tener cientos de filas gritando lo mismo.
+const URGENCY_DISPLAY: Record<UrgencyTier, { dot: string; fg: string }> = {
+  dorada: { dot: "bg-ok-fg", fg: "text-ok-fg" },
+  tibia: { dot: "bg-warn-fg", fg: "text-ink-900" },
+  enfriando: { dot: "bg-ink-500", fg: "text-ink-900" },
+  fria: { dot: "bg-ink-300", fg: "text-ink-600" },
 };
 /** Sin edad calculable no se afirma urgencia: gris neutro y una raya. */
-const URGENCY_UNKNOWN = { dot: "bg-slate-200", fg: "text-slate-400", accent: "#f1f5f9" };
+const URGENCY_UNKNOWN = { dot: "bg-line-strong", fg: "text-ink-500" };
 
-/** Small rounded pill (header/drawer chips). */
-function Pill({ children, className, title }: { children: ReactNode; className?: string; title?: string }) {
-  return (
-    <span
-      title={title}
-      className={cn(
-        "inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium",
-        className,
-      )}
-    >
-      {children}
-    </span>
-  );
-}
-
-// Chip para leads Yape/Shalom: distingue si el handoff fue por 💰 pago (verificar
-// Yape) o 📦 agencia (coordinar el envío por Shalom/Olva). Se deriva del motivo del
-// handoff — no parte la pestaña, solo aclara de un vistazo qué media es.
-const YAPE_KIND_CHIP: Record<YapeKind, { glyph: string; label: string; cls: string; title: string }> = {
-  pago: { glyph: "💰", label: "Pago", cls: "bg-amber-100 text-amber-800", title: "Verificar el pago (Yape / comprobante)" },
-  agencia: { glyph: "📦", label: "Agencia", cls: "bg-indigo-100 text-indigo-700", title: "Coordinar el envío por agencia (Shalom / Olva)" },
+// Yape/Shalom: si el handoff fue por pago (verificar Yape) o por agencia
+// (coordinar Shalom/Olva). Se deriva del motivo del handoff.
+const YAPE_KIND_BADGE: Record<YapeKind, { label: string; tone: BadgeTone; title: string }> = {
+  pago: { label: "Pago", tone: "warn", title: "Verificar el pago (Yape / comprobante)" },
+  agencia: { label: "Agencia", tone: "info", title: "Coordinar el envío por agencia (Shalom / Olva)" },
 };
 
-/** Chip 💰 Pago / 📦 Agencia — solo para leads en Yape/Shalom (`yape_por_verificar`). */
-function YapeKindChip({ lead }: { lead: LeadRow }) {
+/** «Pago» / «Agencia» — solo para leads en Yape/Shalom (`yape_por_verificar`). */
+function YapeKindBadge({ lead }: { lead: LeadRow }) {
   if (lead.status !== "yape_por_verificar") return null;
-  const k = YAPE_KIND_CHIP[yapeKind(lead.handoff_reason, lead.handoff_context)];
+  const k = YAPE_KIND_BADGE[yapeKind(lead.handoff_reason, lead.handoff_context)];
   return (
-    <Pill className={k.cls} title={k.title}>
-      {`${k.glyph} ${k.label}`}
-    </Pill>
+    <Badge tone={k.tone} title={k.title}>
+      {k.label}
+    </Badge>
   );
 }
 
-/** Single-path stroke icon (Lucide/Feather style) used across the board. */
-function StrokeIcon({ d, size = 15 }: { d: string; size?: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.8}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d={d} />
-    </svg>
-  );
-}
-const ICON_PHONE =
-  "M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3.1-8.7A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8.1 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2z";
-const ICON_CHAT = "M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z";
+/** Una fila de chips: cabe entera en 1280 px; si no, se desplaza por dentro sin barra a la vista. */
+const CHIP_ROW =
+  "flex min-w-0 items-center gap-1.5 overflow-x-auto py-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden";
+
+const ROW_ACTION =
+  "inline-grid size-8 place-items-center rounded-md bg-white text-ink-600 shadow-control ring-1 ring-inset ring-line-strong hover:text-ink-900";
+
+const EDAD_LABEL: Record<UrgencyTier, string> = {
+  dorada: "Hora dorada",
+  tibia: "1–6 h",
+  enfriando: "6–24 h",
+  fria: "Más de un día",
+};
+const WIN_LABEL = { fresca: "A tiempo", por_vencer: "Por vencer", cerrada: "Vencida" } as const;
 
 // Cada cuánto se revalida la página en vivo (soft-refresh de datos del servidor).
 // Mismo espíritu que ONLINE_POLL_MS de Productividad, un poco más ágil porque
@@ -639,6 +464,7 @@ export function LeadsBoard({
   leadsComplete = true,
   scope,
   allStoresAvailable = false,
+  canHoldNext = false,
 }: {
   stores: StoreSummary[];
   /** Id de la tienda activa, o ALL_STORES cuando la vista es combinada. */
@@ -682,6 +508,8 @@ export function LeadsBoard({
   /** false = la página cargó solo un tope de filas para esta vista, así que un
    *  export debe repedir el universo completo al servidor. */
   leadsComplete?: boolean;
+  /** Tiene el rol `vendedora`: se le reserva su siguiente lead (MOM §11). */
+  canHoldNext?: boolean;
 }) {
   const [board, setBoard] = useState({ sourceLeads: serverLeads, sourceCounts: serverCounts, leads: serverLeads, counts: serverCounts });
   // A route/periodic refresh replaces the local confirmed writes atomically.
@@ -753,11 +581,6 @@ export function LeadsBoard({
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<LeadRow[] | null>(null);
   const [searching, setSearching] = useState(false);
-  // Outcome views other than the queue/Yape (Seguimientos/Ganados/Perdidos) live
-  // inside the collapsible "Filtros" panel; open it by default when we land on
-  // one so the active view is never hidden.
-  const isReviewView = view === "seguimientos" || view === "ganados" || view === "perdidos";
-  const [more, setMore] = useState<boolean>(isReviewView);
   // Orden de la cola. "prioridad" (por defecto) pone arriba lo que más cierra;
   // "reciente" es el orden viejo, por si alguien quiere barrer por hora de llegada.
   const [sortMode, setSortMode] = useState<"prioridad" | "reciente">("prioridad");
@@ -1004,7 +827,12 @@ export function LeadsBoard({
   }
 
   function openLead(lead: LeadRow) {
-    void abrirLeadPorId(lead.id, lead);
+    void (async () => {
+      // El siguiente cuenta como una de sus dos reservas: abrir otro lead de la
+      // cola lo suelta ANTES de reservar el otro, y pasa a otra vendedora.
+      if (nextLead.heldId && nextLead.heldId !== lead.id) await nextLead.release();
+      await abrirLeadPorId(lead.id, lead);
+    })();
   }
 
   /**
@@ -1163,7 +991,8 @@ export function LeadsBoard({
     setHistory(null);
     // Release the claim in the background (fire-and-forget). No full-list refresh
     // on close, and no shared transition that would freeze the row buttons.
-    if (leadId) void releaseLead(leadId);
+    // La ficha de su siguiente se cierra sin soltarlo: sigue siendo suyo.
+    if (leadId && leadId !== nextLead.heldId) void releaseLead(leadId);
   }
 
   // `now` alimenta el estado de la ventana de 24h (y sus contadores). Antes se
@@ -1452,20 +1281,9 @@ export function LeadsBoard({
     srcFilter.size > 0 ||
     numFilter.size > 0 ||
     prodFilter.size > 0;
-  // Badge on the "Filtros" button: count the active refinement groups (la pestaña
-  // primaria de la cola no cuenta aquí).
-  const refinementCount =
-    (gestActive ? 1 : 0) +
-    (inQueue && edadFilter !== "all" ? 1 : 0) +
-    (inQueue && winFilter !== "all" ? 1 : 0) +
-    (inQueue && queueState === "sin_llamar" && interactionDateFilter ? 1 : 0) +
-    (srcFilter.size > 0 ? 1 : 0) +
-    (numFilter.size > 0 ? 1 : 0) +
-    (prodFilter.size > 0 ? 1 : 0) +
-    (isReviewView ? 1 : 0);
-  function clearFilters() {
-    setSegFilter(null);
-    setCovFilter(null);
+  // «Más filtros» quita solo lo suyo: el segmento y la cobertura tienen sus
+  // propios chips a la vista.
+  function clearRefinements() {
     setGestFilter(null);
     setWinFilter("all");
     setEdadFilter("all");
@@ -1596,434 +1414,417 @@ export function LeadsBoard({
     }
   }
 
-  return (
-    <div className="space-y-4" aria-busy={routePending}>
-      {/* Título "Leads" + tablero de hoy (burndown · sin llamar · productividad). */}
-      <LeadsInsightsPanel
-        data={insightsData}
-        allStores={allStores}
-        interactionDateFilter={interactionDateFilter}
-        onInteractionDateFilterChange={changeInteractionDateFilter}
-        titleSlot={
-          <div>
-            <h1 className="text-xl font-semibold text-slate-900">Leads</h1>
-            <p className="mt-0.5 text-sm text-slate-500">
-              <span className="font-semibold text-slate-800">{counts.sin_llamar} sin llamar</span>
-              {" · "}
-              <span className="text-slate-600">{counts.por_llamar - counts.sin_llamar} en seguimiento</span>
-              {counts.handoff > 0 && (
-                <>
-                  {" · "}
-                  <button
-                    type="button"
-                    onClick={() => navigateToView("handoff")}
-                    className="font-semibold text-amber-600 hover:underline"
-                  >
-                    ⚡ {counts.handoff} atender ahora
-                  </button>
-                </>
-              )}
-              {counts.yape > 0 && (
-                <>
-                  {" · "}
-                  <button
-                    type="button"
-                    onClick={() => navigateToView("yape")}
-                    className="font-semibold text-red-600 hover:underline"
-                  >
-                    🔥 {counts.yape} en Yape/Shalom
-                  </button>
-                </>
-              )}
-            </p>
-          </div>
-        }
-        actionsSlot={
-          stores.length > 1 ? (
-            <select
-              value={storeId}
-              onChange={(e) => changeStore(e.currentTarget.value)}
-              onFocus={prefetchOtherStores}
-              onPointerDown={prefetchOtherStores}
-              disabled={routePending}
-              aria-label="Tienda"
-              className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500"
-            >
-              {allStoresAvailable && (
-                <option value={ALL_STORES}>Todas las tiendas</option>
-              )}
-              {stores.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          ) : null
-        }
-      />
+  // El siguiente lead (MOM §11): solo a quien vende, en «Sin llamar», sin
+  // búsqueda. La cola que mira es la que se le pasa: con sus chips y su orden.
+  const nextEnabled =
+    canHoldNext && !!currentUserId && view === "por_llamar" && queueState === "sin_llamar" && !searchMode;
+  const nextLead = useNextLead({
+    enabled: nextEnabled,
+    queue: displayLeads,
+    userId: currentUserId,
+    drawerLeadId: selected?.id ?? null,
+  });
+  const nextHandle = nextLead.lead ? handleOf(nextLead.lead) : null;
 
-      <div className="sticky top-0 z-10 space-y-2 bg-slate-50 pt-1 pb-2">
-        {/* Toolbar: pestañas de la cola (Sin llamar/En seguimiento/segmento) · píldora Yape/Shalom · Filtros. */}
-        <div className="flex items-center gap-2">
-          {/* Tira de pestañas: en móvil scrollea sola (no empuja el ancho de la página). */}
-          <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
-          <SegControl
-            value={inQueue ? queueState : ""}
-            onChange={(key) => {
-              // Cambio de tab instantáneo (client-side, sin refetch); desde una vista
-              // de revisión, navega de vuelta a la cola en ese estado.
-              if (inQueue) {
-                const nextState = key as QueueState;
-                setQueueState(nextState);
-                if (nextState !== "sin_llamar") setInteractionDateFilter(null);
-              } else {
-                startRouteTransition(() => {
-                  router.push(`/dashboard/leads?store=${storeId}&view=por_llamar&state=${key}`);
-                });
-              }
-            }}
-            options={QUEUE_STATES.map((s) => ({
-              key: s.key,
-              label: s.label,
-              count: inQueue ? stateCounts[s.key] : undefined,
-              alert: inQueue && s.key === "seguimiento" ? seguimientoAlert || undefined : undefined,
-            }))}
-          />
-          {counts.yape > 0 && (
-            <button
-              type="button"
-              aria-pressed={view === "yape"}
-              onClick={() => navigateToView(view === "yape" ? "por_llamar" : "yape")}
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold transition",
-                view === "yape"
-                  ? "border-red-600 bg-red-600 text-white"
-                  : "border-red-200 bg-red-50 text-red-700 hover:bg-red-100",
-              )}
-            >
-              🔥 Yape/Shalom
-              <span
-                className={cn(
-                  "rounded-full px-1.5 tabular-nums",
-                  view === "yape" ? "bg-white/25 text-white" : "bg-white text-red-700",
-                )}
-              >
-                {counts.yape}
-              </span>
-            </button>
-          )}
-          </div>
-          <div className="relative w-40 shrink-0 sm:w-52">
-            <svg
-              aria-hidden="true"
-              viewBox="0 0 20 20"
-              fill="none"
-              className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-slate-400"
-            >
-              <circle cx="9" cy="9" r="6" stroke="currentColor" strokeWidth="2" />
-              <path d="m14 14 4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-            </svg>
+  // «Más filtros»: lo que no entra en las dos filas de chips.
+  const filtersPillRef = useRef<HTMLButtonElement>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const refinementLabels = [
+    gestActive && gestFilter ? (gestFilter === "otros" ? "Otros estados" : GESTION_DISPLAY[gestFilter].label) : null,
+    inQueue && edadFilter !== "all" ? EDAD_LABEL[edadFilter] : null,
+    inQueue && winFilter !== "all" ? `Ventana ${WIN_LABEL[winFilter].toLocaleLowerCase("es")}` : null,
+    inQueue && queueState === "sin_llamar" && interactionDateFilter
+      ? `Última interacción ${interactionDateFilterLabel(interactionDateFilter)}`
+      : null,
+    srcFilter.size ? `Fuente (${srcFilter.size})` : null,
+    prodFilter.size ? `Producto (${prodFilter.size})` : null,
+    numFilter.size ? `Número (${numFilter.size})` : null,
+  ].filter((v): v is string => !!v);
+
+  function pickQueueState(nextState: QueueState) {
+    // Cambio instantáneo dentro de la cola; desde otra vista, vuelve a ella.
+    if (inQueue) {
+      setQueueState(nextState);
+      if (nextState !== "sin_llamar") setInteractionDateFilter(null);
+    } else {
+      startRouteTransition(() => {
+        router.push(`/dashboard/leads?store=${storeId}&view=por_llamar&state=${nextState}`);
+      });
+    }
+  }
+
+  const storeLabel =
+    allStores ? stores.map((s) => s.name).join(" y ") : (storeNameById.get(storeId) ?? stores[0]?.name ?? "");
+  const queueTitle = searchMode
+    ? "Resultados"
+    : view === "por_llamar"
+      ? queueState === "sin_llamar"
+        ? "Sin llamar"
+        : "En seguimiento"
+      : VIEW_TITLE[view];
+
+  return (
+    <div className="flex flex-col gap-4" aria-busy={routePending}>
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">Leads</h1>
+          <p className="mt-0.5 text-sm text-ink-500">
+            {storeLabel}
+            {" · "}
+            {counts.sin_llamar.toLocaleString("es-PE")} sin llamar
+            {" · "}
+            {(counts.por_llamar - counts.sin_llamar).toLocaleString("es-PE")} en seguimiento
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="relative block w-full sm:w-64">
+            <span className="sr-only">Buscar lead por nombre o celular</span>
+            <IconSearch className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-ink-500" />
             <input
               type="search"
               value={query}
               onChange={(e) => setQuery(e.currentTarget.value)}
-              placeholder="Buscar lead…"
+              placeholder="Buscar por nombre o celular"
               aria-label="Buscar lead por nombre o celular"
-              className="w-full rounded-lg border border-slate-300 py-1.5 pr-8 pl-9 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+              className={cn(FIELD_BOX, "h-9 w-full pl-8 pr-8 pointer-coarse:h-11")}
             />
             {query && (
               <button
                 type="button"
                 onClick={() => setQuery("")}
                 aria-label="Limpiar búsqueda"
-                className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                className="absolute right-1.5 top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded text-ink-500 hover:text-ink-900"
               >
-                ✕
+                <IconX className="size-3.5" />
               </button>
             )}
-          </div>
+          </label>
+          {stores.length > 1 &&
+            (allStoresAvailable ? (
+              <span onPointerEnter={prefetchOtherStores} onFocusCapture={prefetchOtherStores}>
+                <ChoicePill
+                  label="Tienda"
+                  allLabel="Todas las tiendas"
+                  allValue={ALL_STORES}
+                  options={stores.map((s) => ({ value: s.id, label: s.name }))}
+                  value={storeId}
+                  onChange={changeStore}
+                />
+              </span>
+            ) : (
+              <select
+                value={storeId}
+                onChange={(e) => changeStore(e.currentTarget.value)}
+                onFocus={prefetchOtherStores}
+                onPointerDown={prefetchOtherStores}
+                disabled={routePending}
+                aria-label="Tienda"
+                className={cn(FIELD_BOX, "h-9 w-auto pl-3 pr-8")}
+              >
+                {stores.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            ))}
           <VentaTelefonica
             stores={stores.map((s) => ({ id: s.id, name: s.name }))}
             defaultStoreId={storeId === "all" ? null : storeId}
             onAbrir={(leadId) => abrirLeadPorId(leadId)}
           />
-          <button
-            type="button"
-            aria-expanded={more}
-            onClick={() => setMore((v) => !v)}
-            className={cn(
-              "inline-flex shrink-0 items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-medium transition",
-              more
-                ? "border-brand-300 bg-brand-50 text-brand-700"
-                : "border-slate-300 text-slate-600 hover:bg-slate-100",
-            )}
-          >
-            <StrokeIcon d="M3 5h18M6 12h12M10 19h4" />
-            Filtros
-            {refinementCount > 0 && (
-              <span className="rounded-full bg-brand-600 px-1.5 text-[11px] font-semibold tabular-nums text-white">
-                {refinementCount}
-              </span>
-            )}
-          </button>
-          <button
-            type="button"
-            onClick={downloadMetaAudience}
-            disabled={allStores || !audienceRows.length || exportingAudience}
-            title={
-              allStores
-                ? "Elige una tienda para exportar. Un público personalizado se sube a UNA cuenta publicitaria, así que mezclar las dos marcas da un público más grande que rinde peor."
-                : !audienceRows.length
-                  ? "No hay celulares válidos en el filtro actual"
-                  : leadsComplete
-                    ? `Descarga ${audienceRows.length} celular(es) con el formato de Meta (Públicos personalizados → Lista de clientes). Exporta exactamente los leads filtrados en pantalla.`
-                    : "Descarga TODOS los leads del filtro actual (no solo los visibles) con el formato de Meta (Públicos personalizados → Lista de clientes)."
-            }
-            className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <StrokeIcon d="M12 4v10m0 0-4-4m4 4 4-4M5 19h14" />
-            {exportingAudience ? "Preparando…" : "Audiencia Meta"}
-            {/* El contador solo se muestra cuando lo cargado ES el universo
-                completo; si no, un "200" haría creer que el público es de 200
-                cuando el export trae todos. */}
-            {!exportingAudience && leadsComplete && audienceRows.length > 0 && (
-              <span className="rounded-full bg-slate-200 px-1.5 text-[11px] font-semibold tabular-nums text-slate-700">
-                {audienceRows.length}
-              </span>
-            )}
-          </button>
+          {/* En la vista combinada no se exporta: un público se sube a UNA
+              cuenta publicitaria. Se dice a la vista, no solo en el título. */}
+          {allStores ? (
+            <span className="inline-flex h-9 items-center gap-2 text-[13px] text-ink-500">
+              <IconDownload className="size-4" />
+              Audiencia Meta: elige una tienda
+            </span>
+          ) : (
+            <OpsButton
+              variant="ghost"
+              onClick={downloadMetaAudience}
+              disabled={allStores || !audienceRows.length || exportingAudience}
+              title={
+                allStores
+                  ? "Elige una tienda para exportar. Un público personalizado se sube a UNA cuenta publicitaria, así que mezclar las dos marcas da un público más grande que rinde peor."
+                  : !audienceRows.length
+                    ? "No hay celulares válidos en el filtro actual"
+                    : leadsComplete
+                      ? `Descarga ${audienceRows.length} celular(es) con el formato de Meta (Públicos personalizados → Lista de clientes). Exporta exactamente los leads filtrados en pantalla.`
+                      : "Descarga TODOS los leads del filtro actual (no solo los visibles) con el formato de Meta (Públicos personalizados → Lista de clientes)."
+              }
+            >
+              <IconDownload />
+              {exportingAudience ? "Preparando…" : "Audiencia Meta"}
+              {/* El contador solo se muestra cuando lo cargado ES el universo
+                  completo; si no, un "200" haría creer que el público es de 200
+                  cuando el export trae todos. */}
+              {!exportingAudience && leadsComplete && audienceRows.length > 0 && (
+                <span className="font-normal tabular-nums text-ink-500">{audienceRows.length.toLocaleString("es-PE")}</span>
+              )}
+            </OpsButton>
+          )}
+        </div>
+      </header>
+
+      {/* El tablero de hoy (burndown · sin llamar · conversión · productividad), sin tocar. */}
+      <LeadsInsightsPanel
+        data={insightsData}
+        allStores={allStores}
+        interactionDateFilter={interactionDateFilter}
+        onInteractionDateFilterChange={changeInteractionDateFilter}
+      />
+
+      {/* LOS CHIPS, EN DOS FILAS COMO MUCHO Y SIEMPRE A LA VISTA (DESIGN.md ›
+          Leads). Arriba, qué lista; abajo, qué leads dentro de ella. Lo que no
+          entra va a «Más filtros». */}
+      <div className="flex flex-col gap-2">
+        {/* Con los números reales, cada fila llena casi los 976 px que quedan a
+            1280: por eso «Más filtros» vive en la cabecera de la cola, junto a
+            «Orden», y no aquí. Si algún día no cabe (un teléfono, cifras de cinco
+            dígitos), la fila se desplaza por dentro sin barra a la vista. */}
+        <div className={CHIP_ROW}>
+          <QueueChip
+            label="Sin llamar"
+            count={inQueue ? stateCounts.sin_llamar : counts.sin_llamar}
+            active={inQueue && queueState === "sin_llamar"}
+            onClick={() => pickQueueState("sin_llamar")}
+          />
+          <QueueChip
+            label="En seguimiento"
+            count={inQueue ? stateCounts.seguimiento : counts.por_llamar - counts.sin_llamar}
+            alert={inQueue ? seguimientoAlert : undefined}
+            active={inQueue && queueState === "seguimiento"}
+            onClick={() => pickQueueState("seguimiento")}
+          />
+          <span aria-hidden className="mx-0.5 h-5 w-px shrink-0 bg-line-strong" />
+          <AttentionPill
+            icon={IconFlash}
+            label="Atender ahora"
+            count={counts.handoff}
+            active={view === "handoff"}
+            onClick={() => navigateToView(view === "handoff" ? "por_llamar" : "handoff")}
+            hint="Clientes que pidieron hablar con una persona"
+          />
+          <AttentionPill
+            icon={IconMoney}
+            label="Yape / Shalom"
+            count={counts.yape}
+            active={view === "yape"}
+            onClick={() => navigateToView(view === "yape" ? "por_llamar" : "yape")}
+            hint="Pagos por verificar y envíos por agencia"
+          />
+          <span aria-hidden className="mx-0.5 h-5 w-px shrink-0 bg-line-strong" />
+          {REVIEW_VIEWS.map((v) => (
+            <ChoiceChip
+              key={v.key}
+              label={v.label}
+              count={counts[v.key]}
+              active={view === v.key}
+              onClick={() => navigateToView(view === v.key ? "por_llamar" : v.key)}
+            />
+          ))}
         </div>
 
-        {/* Fila 2 — accesos directos por segmento, scopeados al tab de estado activo
-            (en "Sin llamar" suman los 237, no los 429; en "En seguimiento", los 192). */}
+        {/* Segmento y cobertura, scopeados al estado activo (en «Sin llamar»
+            suman lo que hay sin llamar, no la cola entera). Sin «Todos»: volver
+            a tocar el chip elegido lo quita. */}
         {inQueue && (
-          <div className="flex min-w-0 items-center gap-2 overflow-x-auto">
-            <SegControl
-              label="Segmento"
-              value={segFilter ?? "all"}
-              onChange={(key) => setSegFilter(isQueueBucket(key) ? key : null)}
-              options={[
-                { key: "all", label: "Todos", count: segTotal },
-                // Sale de QUEUE_BUCKETS, no de una lista escrita acá. Estaba a
-                // mano y con un `as LeadSegment[]` que silenciaba al compilador:
-                // al fusionar `distrito` en `interes`, esta fila siguió pidiendo
-                // «distrito» —una clave que ya no existía— y el chip del balde
-                // nuevo, con 490 leads dentro, no se dibujó. Los segmentos
-                // dejaron de sumar el total y nadie podía filtrarlos.
-                // Invertida porque la fila se lee de menor a mayor intención.
-                ...[...QUEUE_BUCKETS].reverse().map(({ key, label }) => ({
-                  key,
-                  label,
-                  count: segCounts[key],
-                })),
-              ]}
-            />
-            <SegControl
-              label="Cobertura"
-              value={covFilter ?? "all"}
-              onChange={(key) => setCovFilter(key === "all" ? null : (key as LeadCoverage))}
-              options={[
-                { key: "all", label: "Todos", count: covTotal },
-                ...LEAD_COVERAGES.map(({ key, label }) => ({ key, label, count: covCounts[key] })),
-              ]}
-            />
-            {interactionDateFilter && queueState === "sin_llamar" && (
-              <button
-                type="button"
-                onClick={() => changeInteractionDateFilter(null)}
-                aria-label="Quitar filtro de última interacción"
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-brand-200 bg-brand-50 px-2.5 py-1 text-xs font-medium text-brand-700 hover:bg-brand-100"
-              >
-                Última interacción: {interactionDateFilterLabel(interactionDateFilter)}
-                <span aria-hidden="true">×</span>
-              </button>
-            )}
-          </div>
-        )}
-
-        {/* Panel "Más filtros" (colapsable): refinos de la cola · Fuente · Número · Vista. */}
-        {more && (
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-3 rounded-xl border border-slate-200 bg-white px-3.5 py-3 shadow-sm">
-            {view === "por_llamar" && queueState !== "sin_llamar" && (
-              <SegControl
-                label="Gestión"
-                value={gestFilter ?? "all"}
-                onChange={(key) => setGestFilter(key === "all" ? null : (key as LeadGestion | "otros"))}
-                options={[
-                  { key: "all", label: "Todos", count: gestTotal },
-                  ...LEAD_GESTIONES.map((g) => ({ key: g.key, label: g.label, count: gestCounts[g.key] })),
-                  // Mantener el chip "Otros" mientras sea el filtro activo aunque su
-                  // count caiga a 0, para que siga deseleccionable (no quede huérfano).
-                  ...(gestOtros > 0 || gestFilter === "otros"
-                    ? [{ key: "otros", label: "Otros", count: gestOtros }]
-                    : []),
-                ]}
-              />
-            )}
-            {view === "por_llamar" && queueState === "sin_llamar" && !searchMode && (
-              <label className="flex items-center gap-2 text-xs text-slate-500">
-                Orden
-                <select
-                  value={sortMode}
-                  onChange={(event) => setSortMode(event.currentTarget.value as typeof sortMode)}
-                  className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs text-slate-700 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-                >
-                  <option value="prioridad">Prioridad (lo que más cierra)</option>
-                  <option value="reciente">Más recientes</option>
-                </select>
-              </label>
-            )}
-            {view === "por_llamar" && queueState === "sin_llamar" && (
-              <label className="flex items-center gap-2 text-xs text-slate-500">
-                Última interacción
-                <input
-                  type="date"
-                  value={interactionDateFilter?.kind === "day" ? interactionDateFilter.date : ""}
-                  max={insightsData?.sinLlamar.at(-1)?.date}
-                  onChange={(event) =>
-                    changeInteractionDateFilter(
-                      event.currentTarget.value
-                        ? { kind: "day", date: event.currentTarget.value }
-                        : null,
-                    )
-                  }
-                  className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs text-slate-700 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+          <div className={cn(CHIP_ROW, "gap-x-5")}>
+            <ChipGroup label="Segmento">
+              {/* Sale de QUEUE_BUCKETS, no de una lista escrita acá: al fusionar
+                  `distrito` en `interes`, una lista a mano siguió pidiendo una
+                  clave que ya no existía y el chip del balde nuevo, con 490
+                  leads, no se dibujó. Invertida porque la fila se lee de menor
+                  a mayor intención. */}
+              {[...QUEUE_BUCKETS].reverse().map(({ key, label }) => (
+                <ChoiceChip
+                  key={key}
+                  label={label}
+                  count={segCounts[key]}
+                  active={segFilter === key}
+                  onClick={() => setSegFilter(segFilter === key ? null : isQueueBucket(key) ? key : null)}
                 />
-              </label>
-            )}
-            {/* Edad ANTES que Ventana: es el reloj que decide la venta, y el
-                orden de la barra es parte de lo que enseña cuál mirar. Van
-                separados porque son cosas distintas — la ventana dice si puedo
-                escribirle, la edad si vale el doble llamarlo ahora. */}
-            {view === "por_llamar" && (
-              <SegControl
-                label="Edad"
-                value={edadFilter}
-                onChange={(key) => setEdadFilter(key as "all" | UrgencyTier)}
-                options={[
-                  { key: "all", label: "Todas", count: edadTotal },
-                  { key: "dorada", label: "⏱️ Hora dorada", count: edadCounts.dorada },
-                  { key: "tibia", label: "1-6 h", count: edadCounts.tibia },
-                  { key: "enfriando", label: "6-24 h", count: edadCounts.enfriando },
-                  { key: "fria", label: "+1 día", count: edadCounts.fria },
-                ]}
-              />
-            )}
-            {view === "por_llamar" && (
-              <SegControl
-                label="Ventana"
-                value={winFilter}
-                onChange={(key) => setWinFilter(key as "all" | "fresca" | "por_vencer" | "cerrada")}
-                options={[
-                  { key: "all", label: "Todos", count: winTotal },
-                  { key: "fresca", label: "🟢 A tiempo", count: winCounts.a_tiempo },
-                  { key: "por_vencer", label: "⏳ Por vencer", count: winCounts.por_vencer },
-                  { key: "cerrada", label: "⚫ Vencido", count: winCounts.cerrada },
-                ]}
-              />
-            )}
-            {(hasCampaign || hasFbWeb || hasCart || hasBrowse) && (
-              <MultiSelect
-                label="Fuente"
-                summaryAll="Todas"
-                selected={srcFilter}
-                onToggle={(key) => setSrcFilter((s) => withToggled(s, key))}
-                onClear={() => setSrcFilter(new Set())}
-                options={[
-                  ...(hasCampaign ? [{ key: "meta_ad", label: "📣 Campaña", count: srcCounts.meta_ad }] : []),
-                  ...(hasFbWeb ? [{ key: "fb_web", label: "🌐 Meta/Web", count: srcCounts.fb_web }] : []),
-                  ...(hasCart ? [{ key: "cod_cart", label: "🛒 Carrito", count: srcCounts.cod_cart }] : []),
-                  ...(hasBrowse
-                    ? [{ key: "abandoned_browse", label: "🔎 Búsqueda", count: srcCounts.abandoned_browse }]
-                    : []),
-                  { key: "organic", label: "Orgánico", count: srcCounts.organic },
-                ]}
-              />
-            )}
-            {(prodOptions.length > 0 || prodFilter.size > 0) && (
-              <MultiSelect
-                label="Producto"
-                summaryAll="Todos"
-                selected={prodFilter}
-                onToggle={(key) => setProdFilter((s) => withToggled(s, key))}
-                onClear={() => setProdFilter(new Set())}
-                options={[
-                  ...prodOptions,
-                  // «Sin producto» son los que no llegaron desde una ficha: los
-                  // que dieron su distrito, los del carrito, los que solo
-                  // saludaron. No es un producto más, es el resto — y tiene que
-                  // estar para que la suma cuadre con «Todos».
-                  ...(prodSin > 0 || prodFilter.has("__none__")
-                    ? [{ key: "__none__", label: "Sin producto", count: prodSin }]
-                    : []),
-                ]}
-              />
-            )}
-            {hasMultiNumbers && (
-              <MultiSelect
-                label="Número"
-                summaryAll="Todos"
-                selected={numFilter}
-                onToggle={(key) => setNumFilter((s) => withToggled(s, key))}
-                onClear={() => setNumFilter(new Set())}
-                options={[
-                  ...waIds.map((id) => {
-                    const n = waNumbers?.[id];
-                    const kind = waKindLabel(n?.kind ?? null);
-                    return {
-                      key: id,
-                      label: `📱 ${waLabel(n, id)}${kind ? ` · ${kind}` : ""}`,
-                      count: waCounts.get(id) ?? 0,
-                    };
-                  }),
-                  // El chip "Sin número" persiste mientras sea el filtro activo aunque
-                  // su count sea 0, para poder deseleccionarlo desde el panel.
-                  ...(numOtros > 0 || numFilter.has("__none__")
-                    ? [{ key: "__none__", label: "Sin número", count: numOtros }]
-                    : []),
-                ]}
-              />
-            )}
-            {/* Vista: la cola + las vistas de revisión (Yape tiene su píldora aparte). */}
-            <SegControl
-              label="Vista"
-              value={isReviewView ? view : view === "por_llamar" ? "por_llamar" : ""}
-              onChange={navigateToView}
-              options={[
-                { key: "por_llamar", label: "Cola", count: counts.por_llamar },
-                ...OUTCOME_VIEWS.filter((v) => v.key !== "yape").map((v) => ({
-                  key: v.key,
-                  label: v.label,
-                  count: counts[v.key],
-                })),
-              ]}
-            />
-            {hasActiveFilters && (
-              <button
-                type="button"
-                onClick={clearFilters}
-                className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-              >
-                ✕ Limpiar
-              </button>
-            )}
+              ))}
+            </ChipGroup>
+            <ChipGroup label="Cobertura">
+              {LEAD_COVERAGES.map(({ key, label }) => (
+                <ChoiceChip
+                  key={key}
+                  label={label}
+                  count={covCounts[key]}
+                  active={covFilter === key}
+                  onClick={() => setCovFilter(covFilter === key ? null : key)}
+                />
+              ))}
+            </ChipGroup>
           </div>
         )}
       </div>
 
-      {banner && (
-        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">
-          {banner}
-        </div>
+      {filtersOpen && (
+        <Sheet look="ops" title="Más filtros" onClose={() => setFiltersOpen(false)} anchored anchorRef={filtersPillRef} wide>
+          <div className="flex flex-col gap-3">
+            {view === "por_llamar" && queueState !== "sin_llamar" && (
+              <SheetSection title="Gestión">
+                <div className="flex flex-wrap gap-1.5">
+                  {LEAD_GESTIONES.map((g) => (
+                    <ChoiceChip
+                      key={g.key}
+                      label={GESTION_DISPLAY[g.key].label}
+                      count={gestCounts[g.key]}
+                      active={gestFilter === g.key}
+                      onClick={() => setGestFilter(gestFilter === g.key ? null : g.key)}
+                    />
+                  ))}
+                  {/* «Otros» se queda mientras sea el filtro activo aunque su
+                      cuenta caiga a 0, para que siga deseleccionable. */}
+                  {(gestOtros > 0 || gestFilter === "otros") && (
+                    <ChoiceChip
+                      label="Otros estados"
+                      count={gestOtros}
+                      active={gestFilter === "otros"}
+                      onClick={() => setGestFilter(gestFilter === "otros" ? null : "otros")}
+                    />
+                  )}
+                </div>
+                <p className="mt-1.5 text-xs text-ink-500">De {gestTotal.toLocaleString("es-PE")} en seguimiento con los demás filtros.</p>
+              </SheetSection>
+            )}
+            {inQueue && (
+              <SheetSection title="Edad del lead">
+                <div className="flex flex-wrap gap-1.5">
+                  {(["dorada", "tibia", "enfriando", "fria"] as const).map((key) => (
+                    <ChoiceChip
+                      key={key}
+                      label={EDAD_LABEL[key]}
+                      count={edadCounts[key]}
+                      active={edadFilter === key}
+                      onClick={() => setEdadFilter(edadFilter === key ? "all" : key)}
+                    />
+                  ))}
+                </div>
+                <p className="mt-1.5 text-xs text-ink-500">
+                  Desde que entró. Dentro de la primera hora el cierre es el doble. De {edadTotal.toLocaleString("es-PE")}.
+                </p>
+              </SheetSection>
+            )}
+            {inQueue && (
+              <SheetSection title="Ventana de WhatsApp">
+                <div className="flex flex-wrap gap-1.5">
+                  <ChoiceChip label="A tiempo" count={winCounts.a_tiempo} active={winFilter === "fresca"} onClick={() => setWinFilter(winFilter === "fresca" ? "all" : "fresca")} />
+                  <ChoiceChip label="Por vencer" count={winCounts.por_vencer} active={winFilter === "por_vencer"} onClick={() => setWinFilter(winFilter === "por_vencer" ? "all" : "por_vencer")} />
+                  <ChoiceChip label="Vencida" count={winCounts.cerrada} active={winFilter === "cerrada"} onClick={() => setWinFilter(winFilter === "cerrada" ? "all" : "cerrada")} />
+                </div>
+                <p className="mt-1.5 text-xs text-ink-500">24 horas desde su último mensaje. De {winTotal.toLocaleString("es-PE")}.</p>
+              </SheetSection>
+            )}
+            {inQueue && queueState === "sin_llamar" && (
+              <SheetSection title="Última interacción">
+                <span className="flex items-center gap-2">
+                  <input
+                    type="date"
+                    aria-label="Día de la última interacción"
+                    value={interactionDateFilter?.kind === "day" ? interactionDateFilter.date : ""}
+                    max={insightsData?.sinLlamar.at(-1)?.date}
+                    onChange={(event) =>
+                      changeInteractionDateFilter(
+                        event.currentTarget.value ? { kind: "day", date: event.currentTarget.value } : null,
+                      )
+                    }
+                    className={cn(FIELD_BOX, "h-9 w-44 px-3")}
+                  />
+                  {interactionDateFilter && (
+                    <OpsButton size="sm" variant="ghost" onClick={() => changeInteractionDateFilter(null)}>
+                      Quitar
+                    </OpsButton>
+                  )}
+                </span>
+                {interactionDateFilter?.kind === "older" && (
+                  <p className="mt-1.5 text-xs text-ink-500">Mostrando: {interactionDateFilterLabel(interactionDateFilter)}.</p>
+                )}
+              </SheetSection>
+            )}
+            {(hasCampaign || hasFbWeb || hasCart || hasBrowse) && (
+              <SheetSection title="Fuente">
+                <CheckList
+                  label="Fuente"
+                  selected={srcFilter}
+                  onToggle={(key) => setSrcFilter((s) => withToggled(s, key))}
+                  options={[
+                    ...(hasCampaign ? [{ key: "meta_ad", label: "Campaña", count: srcCounts.meta_ad }] : []),
+                    ...(hasFbWeb ? [{ key: "fb_web", label: "Meta / web", count: srcCounts.fb_web }] : []),
+                    ...(hasCart ? [{ key: "cod_cart", label: "Carrito", count: srcCounts.cod_cart }] : []),
+                    ...(hasBrowse ? [{ key: "abandoned_browse", label: "Búsqueda", count: srcCounts.abandoned_browse }] : []),
+                    { key: "organic", label: "Orgánico", count: srcCounts.organic },
+                  ]}
+                />
+              </SheetSection>
+            )}
+            {(prodOptions.length > 0 || prodFilter.size > 0) && (
+              <SheetSection title="Producto">
+                <CheckList
+                  label="Producto"
+                  searchable={prodOptions.length > 8}
+                  selected={prodFilter}
+                  onToggle={(key) => setProdFilter((s) => withToggled(s, key))}
+                  options={[
+                    ...prodOptions,
+                    // «Sin producto» son los que no llegaron desde una ficha: no
+                    // es un producto más, es el resto, y tiene que estar para que
+                    // la suma cuadre.
+                    ...(prodSin > 0 || prodFilter.has("__none__")
+                      ? [{ key: "__none__", label: "Sin producto", count: prodSin }]
+                      : []),
+                  ]}
+                />
+              </SheetSection>
+            )}
+            {hasMultiNumbers && (
+              <SheetSection title="Número de WhatsApp">
+                <CheckList
+                  label="Número"
+                  selected={numFilter}
+                  onToggle={(key) => setNumFilter((s) => withToggled(s, key))}
+                  options={[
+                    ...waIds.map((id) => {
+                      const n = waNumbers?.[id];
+                      const kind = waKindLabel(n?.kind ?? null);
+                      return { key: id, label: `${waLabel(n, id)}${kind ? ` · ${kind}` : ""}`, count: waCounts.get(id) ?? 0 };
+                    }),
+                    // «Sin número» persiste mientras sea el filtro activo.
+                    ...(numOtros > 0 || numFilter.has("__none__")
+                      ? [{ key: "__none__", label: "Sin número", count: numOtros }]
+                      : []),
+                  ]}
+                />
+              </SheetSection>
+            )}
+            {hasActiveFilters && (
+              <div className="border-t border-line pt-3">
+                <OpsButton size="sm" onClick={clearRefinements}>
+                  Quitar estos filtros
+                </OpsButton>
+              </div>
+            )}
+          </div>
+        </Sheet>
       )}
 
-      {/* EL MISMO AVISO, FLOTANDO. El banner de arriba es el registro, pero
-          vive en la cabecera de la lista: quien pincha una fila cincuenta más
-          abajo no lo ve, y solo nota que el cajón no se abrió. El tope de
-          MAX_OPEN_LEADS lo hizo evidente —«¿ya funciona?»— y vale igual para
-          «X está atendiendo este lead». Misma cáscara que el aviso de Yape,
-          para que sean el mismo objeto a la vista. Se va con «Entendido»,
-          con Escape, o al abrir el siguiente lead. */}
+      {banner && (
+        <Banner tone="crit" role="alert" title="No se pudo tomar el lead">
+          {banner}
+        </Banner>
+      )}
+
+      {/* EL MISMO AVISO, FLOTANDO. El de arriba es el registro, pero vive en la
+          cabecera: quien pincha una fila cincuenta más abajo no lo ve, y solo
+          nota que la ficha no se abrió. El tope de MAX_OPEN_LEADS lo hizo
+          evidente —«¿ya funciona?»— y vale igual para «X está atendiendo este
+          lead». Misma cáscara que el aviso de Yape, para que sean el mismo
+          objeto a la vista. Se va con «Entendido», con Escape, o al abrir el
+          siguiente lead. */}
       {banner && (
         <div
           className="pointer-events-none fixed inset-x-0 top-0 z-50 flex justify-center p-4"
@@ -2065,53 +1866,59 @@ export function LeadsBoard({
           verdad". v2 entrega el tratamiento por Telegram, como trabajo normal,
           sin decir que hay una prueba (lib/coverage-push.ts). */}
 
+      {nextEnabled && (
+        <NextLeadCard
+          state={nextLead}
+          now={now}
+          product={nextHandle ? productLabel(nextHandle) : null}
+          adName={nextLead.lead?.ad_id ? (adNames?.[nextLead.lead.ad_id]?.adName ?? nextLead.lead.ad_headline ?? null) : null}
+          storeName={allStores && nextLead.lead ? (storeNameById.get(nextLead.lead.store_id) ?? null) : null}
+          onOpen={openLead}
+          onRegistered={refreshDetail}
+          filters={refinementLabels}
+          onClearFilters={clearRefinements}
+        />
+      )}
+
       {/* Aviso de hora dorada.
           Con la cola real (1.966 sin llamar) esto muestra un puñado de leads, no
           una lista: 21 estaban dentro de la hora y solo 3 eran carrito o interés.
           Ese es justamente el punto — son pocos, valen el doble, y hasta ahora
           iban pintados igual que los 1.945 restantes.
 
-          UN SOLO NÚMERO. Antes el aviso contaba solo carrito e interés y el
-          botón contaba la hora entera: decían 5 y 8 en la misma barra. Dos cifras
-          que no cuadran a diez centímetros una de otra destruyen la confianza en
-          las dos. Ahora las dos son el total de la hora y el desglose dice qué
-          hay dentro.
-
-          NO se muestra cuando está vacío: una banda permanente en cero enseña a
-          ignorarla, y entonces no sirve el día que dice 5. La excepción es tenerla
+          UN SOLO NÚMERO: el aviso y el botón cuentan lo mismo, la hora entera, y
+          el desglose dice qué hay dentro. NO se muestra vacío: una banda
+          permanente en cero enseña a ignorarla. La excepción es tenerla
           activada como filtro, donde hay que poder salir. */}
       {view === "por_llamar" && queueState === "sin_llamar" && !searchMode &&
         (goldenTally.total > 0 || edadFilter === "dorada") && (
           <div
             className={cn(
-              "flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border px-4 py-2.5 text-sm",
-              goldenTally.total > 0
-                ? "border-emerald-300 bg-emerald-50 text-emerald-900"
-                : "border-slate-200 bg-slate-50 text-slate-600",
+              "flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg px-4 py-2.5 text-sm",
+              goldenTally.total > 0 ? "bg-ok-wash text-ink-700" : "bg-wash text-ink-600",
             )}
           >
             {goldenTally.total > 0 ? (
               <>
-                <span className="font-semibold">
-                  ⏱️ {goldenTally.total} {goldenTally.total === 1 ? "lead" : "leads"} en hora dorada
+                <span className="font-semibold text-ok-fg">
+                  {goldenTally.total} {goldenTally.total === 1 ? "lead" : "leads"} en hora dorada
                 </span>
-                <span className="text-emerald-800">
+                <span>
                   {goldenBreakdown(goldenTally)
                     .map((b) => `${b.count} ${b.label}`)
-                    .join(" · ")}{" "}
-                  · llamados dentro de la primera hora cierran{" "}
-                  <span className="font-semibold">el doble</span>
+                    .join(" · ")}
+                  {" · "}llamados dentro de la primera hora cierran <span className="font-semibold">el doble</span>
                 </span>
               </>
             ) : (
               <span>Ya no queda ninguno dentro de la primera hora.</span>
             )}
-            <button
-              type="button"
+            <OpsButton
+              size="sm"
+              className="ml-auto"
               // Limpia también el segmento y la cobertura: el aviso cuenta la
-              // hora entera sin mirar esos chips, así que si al filtrar quedara
-              // uno puesto la lista mostraría menos filas que el número del
-              // botón — el mismo desajuste que este cambio viene a quitar.
+              // hora entera sin mirar esos chips, así que si quedara uno puesto
+              // la lista mostraría menos filas que el número del botón.
               onClick={() => {
                 if (edadFilter === "dorada") {
                   setEdadFilter("all");
@@ -2121,315 +1928,281 @@ export function LeadsBoard({
                   setCovFilter(null);
                 }
               }}
-              className={cn(
-                "ml-auto inline-flex h-[30px] items-center rounded-md border px-2.5 text-[12px] font-semibold",
-                edadFilter === "dorada"
-                  ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-                  : "border-emerald-400 bg-white text-emerald-700 hover:bg-emerald-100",
-              )}
             >
               {edadFilter === "dorada" ? "Ver toda la cola" : `Ver estos ${goldenTally.total}`}
-            </button>
+            </OpsButton>
           </div>
         )}
 
       {/* El 14–20% del carrito está bien medido: un carrito que cierra SIGUE
-          teniendo carrito, así que el éxito no cambia su etiqueta. En frío no se
-          puede afirmar lo mismo: si la llamada funciona, el cliente da su
-          distrito o se genera el pedido y el lead DEJA de ser frío. O sea que el
-          balde "frío" es, por construcción, el de los casos donde la llamada NO
-          funcionó, y medir su tasa de cierre es casi una tautología.
-          Por eso acá se informa el costo de oportunidad (dato sólido) y NO se
-          recomienda dejar de llamarlos (eso no lo sabemos). Medirlo bien necesita
-          el segmento AL MOMENTO de la llamada, no el de hoy. */}
+          teniendo carrito. En frío no: si la llamada funciona, el cliente da su
+          distrito o se genera el pedido y el lead DEJA de ser frío. Por eso acá
+          se informa el costo de oportunidad (dato sólido) y NO se recomienda
+          dejar de llamarlos (eso no lo sabemos). */}
       {view === "por_llamar" && queueState === "sin_llamar" && segFilter === "frio" && (
-        <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm text-amber-900">
-          ⚠️ <span className="font-semibold">Ojo con el costo de oportunidad.</span> Un lead con
-          carrito cierra <span className="font-semibold">14–20%</span> de las veces que se llama; si
-          quedan carritos sin llamar, rinde más ir por ellos primero. Cuánto rinde llamar a un frío
-          todavía no lo sabemos: cuando la llamada funciona, el lead da distrito o genera pedido y{" "}
+        <Banner tone="warn" title="Ojo con el costo de oportunidad.">
+          Un lead con carrito cierra <span className="font-semibold">14–20 %</span> de las veces que se llama; si
+          quedan carritos sin llamar, rinde más ir por ellos primero. Cuánto rinde llamar a un frío todavía no lo
+          sabemos: cuando la llamada funciona, el lead da distrito o genera pedido y{" "}
           <span className="font-semibold">deja de contarse como frío</span>.
-        </div>
+        </Banner>
       )}
 
-      {query.trim().length >= 2 && (
-        <p className="text-xs text-slate-500">
-          {searching
-            ? "Buscando en todas las etapas…"
-            : searchMode
-              ? `🔎 ${displayLeads.length} resultado${displayLeads.length === 1 ? "" : "s"} para «${query.trim()}» · en todas las etapas`
-              : null}
-        </p>
-      )}
-
-      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div className="overflow-x-auto">
-          <div className="min-w-0">
-            {/* Cabecera de columnas — solo md+; en móvil cada fila se apila. */}
-            <div className="hidden grid-cols-[42px_minmax(0,1fr)_184px_86px_78px] items-center gap-[14px] border-b border-slate-200 bg-slate-50 px-[18px] py-2.5 text-[11px] font-semibold tracking-wide text-slate-400 uppercase md:grid">
-              <span />
-              <span>Lead</span>
-              <span>Última gestión</span>
-              <span title="Tiempo desde que entró el lead. Dentro de la primera hora el cierre es el doble.">
-                Edad
+      <section aria-labelledby="cola-titulo" className="overflow-hidden rounded-lg bg-white shadow-control ring-1 ring-line">
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 py-2.5 shadow-[inset_0_-1px_0_var(--color-line)]">
+          <h2 id="cola-titulo" className="text-sm font-semibold text-ink-900">
+            {queueTitle}
+            <span className="ml-1.5 font-normal tabular-nums text-ink-500">{displayLeads.length.toLocaleString("es-PE")}</span>
+            {query.trim().length >= 2 && (
+              <span className="ml-2 text-[13px] font-normal text-ink-500">
+                {searching ? "Buscando en todas las etapas…" : searchMode ? `para «${query.trim()}» en todas las etapas` : null}
               </span>
-              <span />
-            </div>
-            {visibleLeads.map((lead) => {
-              const locked =
-                !!lead.claimed_by && isClaimActive(lead.claimed_at) && lead.claimed_by !== currentUserId;
-              // Quién la tiene. Puede faltar (la reserva nació después de que
-              // cargó la página, o el correo no se pudo leer): entonces la
-              // etiqueta vuelve a decir solo «Tomado», nunca un id a medias.
-              const lockedBy = locked ? (agentNames?.[lead.claimed_by!] ?? null) : null;
-              const g = gestionOf(lead.status);
-              const gd = g
-                ? GESTION_DISPLAY[g]
-                : { label: labelOf(lead.status), dot: "bg-slate-400", fg: "text-slate-600", hollow: false };
-              const metaLine = g === "sin_llamar" ? "nadie aún" : fmtDateShort(lead.last_interaction_at);
-              const { state } = leadWindowInfo(lead.last_inbound_at ?? lead.last_interaction_at, now);
-              const wd = WIN_DISPLAY[winKey(state)];
-              const urgency = leadUrgency(lead.first_seen_at, now);
-              const ud = urgency ? URGENCY_DISPLAY[urgency.tier] : URGENCY_UNKNOWN;
-              // La ventana de 24h solo se nombra cuando limita algo: si está
-              // abierta, saberlo no cambia ninguna decisión, y ponerlo en las
-              // ~2.000 filas de la cola es exactamente el ruido que tapaba la
-              // señal que sí importa.
-              const windowNote =
-                state === "cerrada" ? "sin ventana" : state === "por_vencer" || state === "critica" ? "ventana ⏳" : null;
-              const handle = leadHandle(lead);
-              const initial = (lead.name || handle).trim()[0]?.toUpperCase() || "?";
-              return (
-                <div
-                  key={lead.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => openLead(lead)}
-                  onPointerEnter={() => void loadLeadDrawerModule()}
-                  onFocus={() => void loadLeadDrawerModule()}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      openLead(lead);
-                    }
-                  }}
-                  className={cn(
-                    // Móvil: tarjeta apilada (flex-wrap). md+: el grid de columnas.
-                    "group flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-100 px-4 py-3 transition [contain-intrinsic-size:auto_54px] [content-visibility:auto] last:border-0 md:grid md:grid-cols-[42px_minmax(0,1fr)_184px_86px_78px] md:gap-x-[14px] md:gap-y-0 md:px-[18px] md:py-2.5",
-                    locked ? "bg-brand-50" : isYape ? "bg-red-50" : "hover:bg-slate-50",
-                    openingId === lead.id && "opacity-60",
-                  )}
-                  style={{ boxShadow: `inset 3px 0 0 ${ud.accent}` }}
-                >
-                  {/* Col 1 · avatar */}
-                  <span
-                    className={cn(
-                      "flex h-8 w-8 items-center justify-center rounded-full text-sm font-semibold",
-                      avatarTint(lead.id),
-                    )}
-                  >
-                    {initial}
-                  </span>
-
-                  {/* Col 2 · lead (en móvil ocupa la 1ª línea; gestión/ventana bajan) */}
-                  <div className="min-w-0 flex-1 md:flex-none">
-                  <div className="flex min-w-0 items-center gap-1.5">
-                    <span className="truncate text-sm font-semibold text-slate-900">{lead.name || handle}</span>
-                    {/* De qué tienda es esta fila. Solo en vista combinada: con una
-                        sola tienda seleccionada repetiría el mismo texto en cada
-                        fila y no informa nada. Es lo único que hace legible la
-                        cola mezclada — sin esto no se sabe a nombre de qué marca
-                        se está llamando. */}
-                    {allStores && lead.store_id && (
-                      <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">
-                        {storeNameById.get(lead.store_id) ?? "—"}
-                      </span>
-                    )}
-                    {isYape && <span aria-hidden="true">🔥</span>}
-                    <SourceChip source={lead.source} />
-                    <span className="shrink-0">
-                      <SegmentBadge lead={lead} />
-                    </span>
-                    <span className="shrink-0">
-                      <YapeKindChip lead={lead} />
-                    </span>
-                    {/* Marcador de atención: sin esto un reencolado (ola 🔁),
-                        una respuesta nueva o un seguimiento vencido eran
-                        invisibles en la fila — solo cambiaban el orden. */}
-                    {lead.needs_attention && !isYape && (
-                      <span
-                        title="Requiere atención: reencolado por carrito sin contacto, respuesta nueva o seguimiento vencido"
-                        className="inline-flex shrink-0 items-center gap-1 rounded-full bg-red-50 px-1.5 py-0.5 text-[11px] font-semibold text-red-600"
-                      >
-                        <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-red-600" />
-                        atención
-                      </span>
-                    )}
-                    {locked && (
-                      <span
-                        title={
-                          lockedBy ? `${lockedBy} está atendiendo este lead` : "Tomado por otra asesora"
-                        }
-                        className="inline-flex max-w-[180px] shrink-0 items-center gap-1 rounded-full bg-brand-100 px-2 py-0.5 text-[11px] font-semibold text-brand-700"
-                      >
-                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" className="shrink-0">
-                          <rect x="5" y="11" width="14" height="9" rx="2" />
-                          <path d="M8 11V8a4 4 0 0 1 8 0v3" />
-                        </svg>
-                        Tomado
-                        {lockedBy && (
-                          <>
-                            <span aria-hidden="true" className="text-brand-400">
-                              ·
-                            </span>
-                            <span className="truncate font-medium">{lockedBy}</span>
-                          </>
-                        )}
-                      </span>
-                    )}
-                    {hasMultiNumbers && lead.wa_phone_number_id && (
-                      <span
-                        className="shrink-0 rounded bg-sky-100 px-1.5 py-0.5 text-[11px] font-medium text-sky-700"
-                        title={`WhatsApp: ${waLabel(waNumbers?.[lead.wa_phone_number_id], lead.wa_phone_number_id)}${waNumbers?.[lead.wa_phone_number_id]?.displayPhone ? ` · ${waNumbers[lead.wa_phone_number_id]!.displayPhone}` : ""}`}
-                      >
-                        📱{" "}
-                        {waKindLabel(waNumbers?.[lead.wa_phone_number_id]?.kind ?? null) ??
-                          waLabel(waNumbers?.[lead.wa_phone_number_id], lead.wa_phone_number_id)}
-                      </span>
-                    )}
-                  </div>
-                  <LeadHookLine lead={lead} />
-                  </div>
-
-                  {/* Col 3 · última gestión */}
-                  <div className="min-w-0">
-                    {locked ? (
-                      <div className="flex items-center gap-1.5 text-xs font-semibold text-brand-700">
-                        <span className="h-[7px] w-[7px] shrink-0 animate-pulse-dot rounded-full bg-brand-500 motion-reduce:animate-none" />
-                        Atendiendo ahora
-                      </div>
-                    ) : (
-                      <>
-                        <div className={cn("flex min-w-0 items-center gap-1.5 text-xs font-semibold", gd.fg)}>
-                          <span
-                            className={cn(
-                              "h-[7px] w-[7px] shrink-0 rounded-full",
-                              gd.hollow ? "border-[1.5px] border-amber-500" : gd.dot,
-                            )}
-                          />
-                          <span className="truncate">{gd.label}</span>
-                        </div>
-                        <div className="mt-0.5 truncate text-[11px] text-slate-400">{metaLine}</div>
-                      </>
-                    )}
-                  </div>
-
-                  {/* Col 4 · edad (hora dorada) + la ventana de 24h solo si limita */}
-                  <div className="min-w-0">
-                    <span
-                      title={
-                        urgency?.tier === "dorada"
-                          ? `Entró hace ${Math.round(urgency.ageMinutes)} min: dentro de la hora dorada, donde el cierre es el doble`
-                          : "Tiempo desde que entró el lead"
-                      }
-                      className={cn(
-                        "inline-flex items-center gap-1.5 text-sm font-semibold",
-                        urgency?.tier === "dorada" ? "text-emerald-700" : ud.fg,
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          "h-[7px] w-[7px] shrink-0 rounded-full",
-                          ud.dot,
-                          // Solo la hora dorada late. Un pulso en cada fila no
-                          // llamaría la atención sobre ninguna.
-                          urgency?.tier === "dorada" && "animate-pulse-dot motion-reduce:animate-none",
-                        )}
-                      />
-                      {urgency?.label ?? "—"}
-                    </span>
-                    {windowNote && (
-                      <div className={cn("mt-0.5 truncate text-[11px]", wd.fg)}>{windowNote}</div>
-                    )}
-                  </div>
-
-                  {/* Col 5 · acciones rápidas (hover en desktop; ocultas en móvil, ahí se abre tocando la fila) */}
-                  <div className="ml-auto hidden items-center justify-end gap-1.5 md:flex">
-                    {locked ? (
-                      <span className="text-[11px] whitespace-nowrap text-slate-400">en curso</span>
-                    ) : (
-                      <div className="flex items-center gap-1.5 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
-                        {view === "handoff" && (
-                          <button
-                            type="button"
-                            title="Sacar de Atender ahora (handoff resuelto)"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              startRouteTransition(async () => {
-                                await resolveHandoff(lead.id);
-                                router.refresh();
-                              });
-                            }}
-                            className="inline-flex h-[30px] items-center rounded-md border border-emerald-300 bg-emerald-50 px-2 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100"
-                          >
-                            ✓ Resuelto
-                          </button>
-                        )}
-                        {/* Sin número no se ofrece «Llamar»: un `tel:` vacío abre el
-                            marcador en blanco y la asesora cree que falló el equipo.
-                            Y `wa.me` también necesita número — a estos leads se les
-                            escribe desde el drawer, que los alcanza por BSUID. */}
-                        {leadCanCall(lead) && (
-                          <>
-                            <a
-                              title="Llamar"
-                              href={`tel:+${lead.phone}`}
-                              onClick={(e) => e.stopPropagation()}
-                              className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 hover:bg-slate-50"
-                            >
-                              <StrokeIcon d={ICON_PHONE} />
-                            </a>
-                            <a
-                              title="WhatsApp"
-                              href={`https://wa.me/${lead.phone}`}
-                              target="_blank"
-                              rel="noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                              className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 hover:bg-slate-50"
-                            >
-                              <StrokeIcon d={ICON_CHAT} />
-                            </a>
-                          </>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-            {hasMoreRows && (
-              // Centinela: al asomarse (con 800px de adelanto) pinta el siguiente
-              // tramo. Se ve como una lista normal que nunca acaba de cargar.
-              <div ref={moreSentinelRef} className="px-[18px] py-4 text-center text-xs text-slate-400">
-                Cargando más leads… ({visibleLeads.length} de {displayLeads.length})
-              </div>
             )}
-            {!displayLeads.length && (
-              <div className="px-[18px] py-6 text-sm text-slate-400">
-                {query.trim()
-                  ? searching
-                    ? "Buscando…"
-                    : `Sin resultados para «${query.trim()}».`
-                  : view === "handoff" && !leads.length
-                    ? "🎉 Cola en cero — no hay handoffs esperando. Buen trabajo."
-                    : leads.length
-                      ? "No hay leads de esta fuente en la vista."
-                      : "No hay leads en esta vista."}
-              </div>
+          </h2>
+          <div className="flex items-center gap-3">
+            {/* Lo que afina y ordena la lista vive con la lista. */}
+            <FilterPill
+              ref={filtersPillRef}
+              label="Más filtros"
+              value={refinementLabels.length ? refinementLabels.join(", ") : null}
+              expanded={filtersOpen}
+              onClick={() => setFiltersOpen((o) => !o)}
+              onClear={hasActiveFilters ? clearRefinements : undefined}
+            />
+            {view === "por_llamar" && queueState === "sin_llamar" && !searchMode && (
+              <label className="flex items-center gap-2 text-[13px] text-ink-600">
+                Orden
+                <select
+                  value={sortMode}
+                  onChange={(event) => setSortMode(event.currentTarget.value as typeof sortMode)}
+                  className={cn(FIELD_BOX, "h-8 w-auto py-0 pl-2.5 pr-8 text-[13px] font-medium")}
+                >
+                  <option value="prioridad">Lo que más cierra</option>
+                  <option value="reciente">Más recientes</option>
+                </select>
+              </label>
             )}
           </div>
         </div>
-      </div>
+        {/* Cabecera de columnas — solo md+; en el teléfono cada fila se apila. */}
+        <div className="hidden grid-cols-[minmax(0,1fr)_184px_112px_80px] items-center gap-4 px-4 py-2 text-xs font-semibold text-ink-600 shadow-[inset_0_-1px_0_var(--color-line)] md:grid">
+          <span>Lead y lo que pidió</span>
+          <span>Última gestión</span>
+          <span className="text-right" title="Tiempo desde que entró el lead. Dentro de la primera hora el cierre es el doble.">
+            Edad
+          </span>
+          <span />
+        </div>
+        {visibleLeads.map((lead) => {
+          const locked =
+            !!lead.claimed_by && isClaimActive(lead.claimed_at) && lead.claimed_by !== currentUserId;
+          // Quién la tiene. Puede faltar (la reserva nació después de que
+          // cargó la página, o el correo no se pudo leer): entonces la
+          // etiqueta vuelve a decir solo «Tomado», nunca un id a medias.
+          const lockedBy = locked ? (agentNames?.[lead.claimed_by!] ?? null) : null;
+          const mine = lead.id === nextLead.heldId;
+          const g = gestionOf(lead.status);
+          const gd = g ? GESTION_DISPLAY[g] : { label: labelOf(lead.status), dot: "bg-ink-500" };
+          const metaLine = g === "sin_llamar" ? "nadie aún" : fmtDateShort(lead.last_interaction_at);
+          const { state } = leadWindowInfo(lead.last_inbound_at ?? lead.last_interaction_at, now);
+          const urgency = leadUrgency(lead.first_seen_at, now);
+          const ud = urgency ? URGENCY_DISPLAY[urgency.tier] : URGENCY_UNKNOWN;
+          // La ventana de 24h solo se nombra cuando limita algo: si está
+          // abierta, saberlo no cambia ninguna decisión, y ponerlo en las
+          // ~2.000 filas de la cola es el ruido que tapaba la señal.
+          const windowNote =
+            state === "cerrada" ? "sin ventana" : state === "por_vencer" || state === "critica" ? "ventana por vencer" : null;
+          const handle = leadHandle(lead);
+          return (
+            <div
+              key={lead.id}
+              role="button"
+              tabIndex={0}
+              onClick={() => openLead(lead)}
+              onPointerEnter={() => void loadLeadDrawerModule()}
+              onFocus={() => void loadLeadDrawerModule()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  openLead(lead);
+                }
+              }}
+              // El anillo va por dentro: la tarjeta recorta lo de fuera.
+              style={{ outline: "none" }}
+              className={cn(
+                "group flex cursor-pointer flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-line px-4 py-2.5 transition-colors [contain-intrinsic-size:auto_58px] [content-visibility:auto] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500 md:grid md:grid-cols-[minmax(0,1fr)_184px_112px_80px]",
+                locked ? "bg-info-wash/60" : "hover:bg-wash",
+                openingId === lead.id && "opacity-60",
+              )}
+            >
+              <div className="min-w-0 basis-full md:basis-auto">
+                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="min-w-0 truncate text-sm font-semibold text-ink-900">{lead.name || handle}</span>
+                  {/* De qué tienda es esta fila: solo en la vista combinada, que
+                      sin esto no dice a nombre de qué marca se llama. */}
+                  {allStores && lead.store_id && (
+                    <span className="shrink-0 text-xs font-medium text-ink-500">{storeNameById.get(lead.store_id) ?? "—"}</span>
+                  )}
+                  <SegmentBadge lead={lead} />
+                  <YapeKindBadge lead={lead} />
+                  {/* Un reencolado, una respuesta nueva o un seguimiento vencido:
+                      sin la marca solo cambiaban el orden. */}
+                  {lead.needs_attention && !isYape && (
+                    <Badge tone="warn" title="Requiere atención: reencolado por carrito sin contacto, respuesta nueva o seguimiento vencido">
+                      Atención
+                    </Badge>
+                  )}
+                  {mine && <Badge tone="brand">Tu siguiente</Badge>}
+                  {locked && (
+                    <Badge tone="info" title={lockedBy ? `${lockedBy} está atendiendo este lead` : "Tomado por otra vendedora"}>
+                      <IconLock className="mr-1 size-3" aria-hidden />
+                      Tomado
+                      {lockedBy && (
+                        <>
+                          <span aria-hidden="true" className="mx-1">
+                            ·
+                          </span>
+                          <span className="truncate font-medium">{lockedBy}</span>
+                        </>
+                      )}
+                    </Badge>
+                  )}
+                  {hasMultiNumbers && lead.wa_phone_number_id && (
+                    <Badge
+                      tone="neutral"
+                      title={`WhatsApp: ${waLabel(waNumbers?.[lead.wa_phone_number_id], lead.wa_phone_number_id)}${waNumbers?.[lead.wa_phone_number_id]?.displayPhone ? ` · ${waNumbers[lead.wa_phone_number_id]!.displayPhone}` : ""}`}
+                    >
+                      {waKindLabel(waNumbers?.[lead.wa_phone_number_id]?.kind ?? null) ??
+                        waLabel(waNumbers?.[lead.wa_phone_number_id], lead.wa_phone_number_id)}
+                    </Badge>
+                  )}
+                </div>
+                <LeadHookLine lead={lead} />
+              </div>
+
+              <div className="min-w-0">
+                {locked ? (
+                  <span className="flex items-center gap-1.5 text-[13px] font-medium text-info-fg">
+                    <span aria-hidden className="size-2 shrink-0 animate-pulse-dot rounded-full bg-info-fg motion-reduce:animate-none" />
+                    Atendiendo ahora
+                  </span>
+                ) : (
+                  <>
+                    <span className="flex min-w-0 items-center gap-1.5 text-[13px] text-ink-900">
+                      <span aria-hidden className={cn("size-2 shrink-0 rounded-full", gd.dot)} />
+                      <span className="truncate">{gd.label}</span>
+                    </span>
+                    <span className="mt-0.5 block truncate text-xs tabular-nums text-ink-500">{metaLine}</span>
+                  </>
+                )}
+              </div>
+
+              <div className="min-w-0 md:text-right">
+                <span
+                  title={
+                    urgency?.tier === "dorada"
+                      ? `Entró hace ${Math.round(urgency.ageMinutes)} min: dentro de la hora dorada, donde el cierre es el doble`
+                      : "Tiempo desde que entró el lead"
+                  }
+                  className={cn("inline-flex items-center gap-1.5 text-[13px] font-medium tabular-nums", ud.fg)}
+                >
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "size-2 shrink-0 rounded-full",
+                      ud.dot,
+                      // Solo la hora dorada late: un pulso en cada fila no
+                      // llamaría la atención sobre ninguna.
+                      urgency?.tier === "dorada" && "animate-pulse-dot motion-reduce:animate-none",
+                    )}
+                  />
+                  {urgency?.tier === "dorada" ? `quedan ${urgency.label}` : (urgency?.label ?? "—")}
+                </span>
+                {windowNote && (
+                  <span className={cn("mt-0.5 block truncate text-xs", state === "cerrada" ? "text-crit-fg" : "text-warn-fg")}>
+                    {windowNote}
+                  </span>
+                )}
+              </div>
+
+              {/* Acciones rápidas: al pasar el puntero en escritorio; en el
+                  teléfono se abre la ficha tocando la fila. */}
+              <div className="ml-auto hidden items-center justify-end gap-1 md:flex">
+                {locked ? (
+                  <span className="whitespace-nowrap text-xs text-ink-500">en curso</span>
+                ) : (
+                  <div className="flex items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+                    {view === "handoff" && (
+                      <OpsButton
+                        size="sm"
+                        title="Sacar de Atender ahora (handoff resuelto)"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          startRouteTransition(async () => {
+                            await resolveHandoff(lead.id);
+                            router.refresh();
+                          });
+                        }}
+                      >
+                        <IconCheck />
+                        Resuelto
+                      </OpsButton>
+                    )}
+                    {/* Sin número no se ofrece «Llamar»: un `tel:` vacío abre el
+                        marcador en blanco y la vendedora cree que falló el equipo.
+                        `wa.me` también necesita número: a estos leads se les
+                        escribe desde la ficha, que los alcanza por BSUID. */}
+                    {leadCanCall(lead) && (
+                      <>
+                        <a
+                          title="Llamar"
+                          aria-label={`Llamar a ${lead.name || handle}`}
+                          href={`tel:+${lead.phone}`}
+                          onClick={(e) => e.stopPropagation()}
+                          className={ROW_ACTION}
+                        >
+                          <IconPhone className="size-4" />
+                        </a>
+                        <a
+                          title="WhatsApp"
+                          aria-label={`Abrir WhatsApp con ${lead.name || handle}`}
+                          href={`https://wa.me/${lead.phone}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className={ROW_ACTION}
+                        >
+                          <IconWhatsApp className="size-4" />
+                        </a>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        {hasMoreRows && (
+          // Centinela: al asomarse (con 800px de adelanto) pinta el siguiente
+          // tramo. Se ve como una lista normal que nunca acaba de cargar.
+          <div ref={moreSentinelRef} className="border-t border-line px-4 py-3 text-center text-xs tabular-nums text-ink-500">
+            Cargando más leads… ({visibleLeads.length.toLocaleString("es-PE")} de {displayLeads.length.toLocaleString("es-PE")})
+          </div>
+        )}
+        {!displayLeads.length && (
+          <p className="border-t border-line px-4 py-6 text-sm text-ink-500">
+            {query.trim()
+              ? searching
+                ? "Buscando…"
+                : `Sin resultados para «${query.trim()}».`
+              : view === "handoff" && !leads.length
+                ? "Nadie esperando en Atender ahora."
+                : leads.length
+                  ? "No hay leads con estos filtros."
+                  : "No hay leads en esta vista."}
+          </p>
+        )}
+      </section>
 
       {selected && (
         <LeadDrawer

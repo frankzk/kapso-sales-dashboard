@@ -1,0 +1,115 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { describe, expect, it } from "vitest";
+import { CLAIM_TTL_MINUTES, MAX_OPEN_LEADS, isClaimCapError, pickNextLead } from "@/lib/leads";
+
+/**
+ * El siguiente lead de cada vendedora (14-10-2026, MOM §11).
+ *
+ * La tarjeta de arriba de la cola le reserva a cada vendedora un lead para
+ * llamar ahora. Lo que tiene que cumplirse: nunca el mismo a dos, la reserva es
+ * la de siempre (10 minutos) y cuenta como una de las dos que puede tener.
+ */
+
+const NOW = new Date("2026-10-14T15:00:00.000Z");
+const hace = (min: number) => new Date(NOW.getTime() - min * 60_000).toISOString();
+const YO = "yo";
+
+const lead = (id: string, extra: Partial<{ status: string; claimed_by: string | null; claimed_at: string | null }> = {}) => ({
+  id,
+  status: "nuevo",
+  claimed_by: null,
+  claimed_at: null,
+  ...extra,
+});
+
+describe("pickNextLead", () => {
+  it("toma el primero de la cola en el orden en que se mira", () => {
+    expect(pickNextLead([lead("a"), lead("b")], { userId: YO, now: NOW })?.id).toBe("a");
+  });
+
+  it("salta el que otra vendedora tiene reservado", () => {
+    const cola = [lead("a", { claimed_by: "rosa", claimed_at: hace(2) }), lead("b")];
+    expect(pickNextLead(cola, { userId: YO, now: NOW })?.id).toBe("b");
+  });
+
+  it("una reserva ajena vencida ya no estorba", () => {
+    const cola = [lead("a", { claimed_by: "rosa", claimed_at: hace(CLAIM_TTL_MINUTES + 1) }), lead("b")];
+    expect(pickNextLead(cola, { userId: YO, now: NOW })?.id).toBe("a");
+  });
+
+  it("uno reservado por mí sí sirve", () => {
+    const cola = [lead("a", { claimed_by: YO, claimed_at: hace(2) }), lead("b")];
+    expect(pickNextLead(cola, { userId: YO, now: NOW })?.id).toBe("a");
+  });
+
+  it("los que saltó no vuelven", () => {
+    expect(pickNextLead([lead("a"), lead("b")], { userId: YO, skipped: new Set(["a"]), now: NOW })?.id).toBe("b");
+  });
+
+  it("solo los que siguen sin llamar", () => {
+    expect(pickNextLead([lead("a", { status: "no_responde" }), lead("b")], { userId: YO, now: NOW })?.id).toBe("b");
+  });
+
+  it("el que ya tiene se queda aunque suba otro con más puntaje", () => {
+    const cola = [lead("nuevo-arriba"), lead("a", { claimed_by: YO, claimed_at: hace(1) })];
+    expect(pickNextLead(cola, { userId: YO, current: "a", now: NOW })?.id).toBe("a");
+  });
+
+  it("pero si el que tenía ya se gestionó, pasa al primero", () => {
+    const cola = [lead("b"), lead("a", { status: "no_responde" })];
+    expect(pickNextLead(cola, { userId: YO, current: "a", now: NOW })?.id).toBe("b");
+  });
+
+  it("y si otra se lo llevó al vencer la reserva, también", () => {
+    const cola = [lead("b"), lead("a", { claimed_by: "rosa", claimed_at: hace(1) })];
+    expect(pickNextLead(cola, { userId: YO, current: "a", now: NOW })?.id).toBe("b");
+  });
+
+  it("cola vacía o toda tomada: no hay siguiente", () => {
+    expect(pickNextLead([], { userId: YO, now: NOW })).toBeNull();
+    expect(pickNextLead([lead("a", { claimed_by: "rosa", claimed_at: hace(1) })], { userId: YO, now: NOW })).toBeNull();
+  });
+});
+
+describe("el aviso del tope se distingue del de «X está atendiendo»", () => {
+  it("reconoce el texto del tope que arma claimLead", () => {
+    expect(isClaimCapError(`Ya tienes ${MAX_OPEN_LEADS} leads abiertos (Ana y Luis). Cierra uno para tomar este.`)).toBe(true);
+    expect(isClaimCapError("Rosa está atendiendo este lead.")).toBe(false);
+    expect(isClaimCapError(null)).toBe(false);
+  });
+
+  it("y el texto sigue siendo el que arma la acción", () => {
+    const server = readFileSync(resolve(process.cwd(), "app/dashboard/leads/actions.ts"), "utf8");
+    expect(server).toContain("error: `Ya tienes ${abiertos.length} leads abiertos (${nombres}). Cierra uno para tomar este.`");
+  });
+});
+
+describe("la tarjeta usa la reserva de siempre", () => {
+  const next = readFileSync(resolve(process.cwd(), "components/leads-next.tsx"), "utf8");
+  const board = readFileSync(resolve(process.cwd(), "components/leads.tsx"), "utf8");
+  const page = readFileSync(resolve(process.cwd(), "app/dashboard/leads/page.tsx"), "utf8");
+
+  it("reserva con claimLead (el tope de 2 y el TTL de 10 min) y suelta con releaseLead", () => {
+    expect(next).toContain("claimLead(");
+    expect(next).toContain("releaseLead(");
+    expect(next).toContain("pickNextLead(");
+  });
+
+  it("se renueva mientras la pestaña se ve y se suelta al cerrarla", () => {
+    expect(next).toContain("RENEW_MS");
+    expect(next).toContain('"/api/leads/release-claim"');
+    expect(next).toContain('window.addEventListener("pagehide", onPageHide);');
+  });
+
+  it("abrir otro lead de la cola suelta el siguiente ANTES de reservar el otro", () => {
+    const open = board.slice(board.indexOf("function openLead("));
+    const body = open.slice(0, open.indexOf("\n  }\n"));
+    expect(body).toContain("await nextLead.release()");
+    expect(body.indexOf("await nextLead.release()")).toBeLessThan(body.indexOf("abrirLeadPorId("));
+  });
+
+  it("solo para quien vende", () => {
+    expect(page).toContain('roles.includes("vendedora")');
+  });
+});

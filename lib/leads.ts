@@ -407,7 +407,7 @@ export type QueueBucket = "carrito" | "distrito" | "producto" | "converso" | "fr
 
 /** De mayor a menor intención, como LEAD_SEGMENTS. */
 export const QUEUE_BUCKETS: { key: QueueBucket; label: string }[] = [
-  { key: "carrito", label: "🛒 Carrito" },
+  { key: "carrito", label: "Carrito" },
   { key: "distrito", label: "Distrito" },
   { key: "producto", label: "Producto" },
   { key: "converso", label: "Conversó" },
@@ -472,6 +472,18 @@ export function leadHandle(lead: LeadIdentity): string {
  * el pedido de Shopify. Escribirle por WhatsApp sí se puede — Kapso lo alcanza
  * por BSUID — y por eso ésa pasa a ser la acción principal de estos leads.
  */
+/**
+ * Cómo se LEE el identificador de un lead: un celular peruano en grupos
+ * («+51 988 805 509»), cualquier otro como `leadHandle`. Solo para mostrar: lo
+ * que se copia o se marca sigue siendo el número tal cual.
+ */
+export function leadPhoneLabel(lead: LeadIdentity): string {
+  const digits = (lead.phone ?? "").replace(/\D/g, "");
+  const local = digits.length === 11 && digits.startsWith("51") ? digits.slice(2) : digits;
+  if (local.length === 9 && local.startsWith("9")) return `+51 ${local.slice(0, 3)} ${local.slice(3, 6)} ${local.slice(6)}`;
+  return leadHandle(lead);
+}
+
 export function leadCanCall(lead: LeadIdentity): boolean {
   return Boolean(lead.phone?.trim());
 }
@@ -943,6 +955,53 @@ export function claimBlockedByCap(
   max: number = MAX_OPEN_LEADS,
 ): boolean {
   return claimsBlocking(claims, userId, leadId, now).length >= max;
+}
+
+// ---------------------------------------------------------------------------
+// El siguiente lead de cada vendedora (14-10-2026, MOM §11 › «El siguiente
+// lead»). La tarjeta de arriba de la cola le reserva a cada vendedora UN lead
+// para llamar ahora, y nunca el mismo a dos: la reserva es la de siempre
+// (CLAIM_TTL_MINUTES) y cuenta como una de sus MAX_OPEN_LEADS.
+// ---------------------------------------------------------------------------
+
+export interface NextLeadCandidate {
+  id: string;
+  status: string;
+  claimed_by: string | null;
+  claimed_at: string | null;
+}
+
+/**
+ * El siguiente de `userId`: el primero de SU cola —ya filtrada y en el orden en
+ * que la está mirando— que sigue sin llamar, que nadie más tiene reservado y
+ * que ella no saltó. Si ya tiene uno y todavía sirve, se queda ese: la tarjeta
+ * no cambia bajo la mano porque entró un lead con más puntaje; ese será el
+ * siguiente al guardar.
+ */
+export function pickNextLead<T extends NextLeadCandidate>(
+  queue: readonly T[],
+  opts: {
+    userId: string;
+    current?: string | null;
+    skipped?: ReadonlySet<string>;
+    now?: Date;
+  },
+): T | null {
+  const now = opts.now ?? new Date();
+  const usable = (l: T) =>
+    l.status === "nuevo" &&
+    !opts.skipped?.has(l.id) &&
+    !(l.claimed_by && l.claimed_by !== opts.userId && isClaimActive(l.claimed_at, now));
+  if (opts.current) {
+    const current = queue.find((l) => l.id === opts.current);
+    if (current && usable(current)) return current;
+  }
+  return queue.find(usable) ?? null;
+}
+
+/** ¿El aviso del servidor es el del tope (y no «X está atendiendo este lead»)? */
+export function isClaimCapError(message: string | null | undefined): boolean {
+  return !!message && message.startsWith("Ya tienes ") && message.includes("leads abiertos");
 }
 
 // ---------------------------------------------------------------------------

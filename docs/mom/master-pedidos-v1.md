@@ -3831,6 +3831,37 @@ Esto ordena la llamada, no la reemplaza. Se descartó crear el pedido de forma
 automática para esta señal: incluso aquí, 6 de cada 10 carritos que siguen
 abiertos a las dos horas no terminan en pedido.
 
+**El siguiente lead de cada vendedora (14-10-2026).** Arriba de «Sin llamar»,
+cada vendedora ve UN lead para llamar ahora, con lo que pidió, el chat y el
+resultado de la llamada, y nunca el mismo que otra (`pickNextLead`,
+`lib/leads.ts`). Es el primero de **su** cola tal como la está mirando —con sus
+chips de segmento y cobertura, en el orden de «lo que más cierra» o «Más
+recientes»— que sigue `nuevo`, que nadie más tiene reservado y que ella no
+saltó.
+
+- **La reserva es la de siempre.** Aparecer en la tarjeta reserva el lead
+  (`claimLead`): 10 minutos (`CLAIM_TTL_MINUTES`) y **cuenta como una de las
+  dos** que puede tener (`MAX_OPEN_LEADS`). Mientras la pestaña se ve, se
+  renueva sola; al cerrarla se suelta (el mismo beacon de la ficha). Para las
+  demás aparece «Tomado · nombre», y el agente de voz no lo llama (§33.2,
+  condición 12).
+- **Abrir otro lead de la cola suelta el siguiente** antes de reservar el otro,
+  y pasa a otra vendedora. Al cerrar esa ficha, la tarjeta vuelve a reservar.
+- **Saltar** lo suelta y no se le vuelve a ofrecer en esa pestaña; para las
+  demás sigue en la cola.
+- **Guardar el resultado** desde la tarjeta es lo mismo que guardarlo en la
+  ficha; el lead deja «Sin llamar», se suelta y entra el siguiente.
+- Si ya tiene dos abiertos, la tarjeta lo dice y no reserva nada.
+- El que tiene se queda aunque entre otro con más puntaje: la tarjeta no
+  cambia bajo la mano; ese será el siguiente.
+- Solo la ve quien tiene el rol `vendedora`, y solo en «Sin llamar» sin
+  búsqueda: quien solo supervisa no retiene leads por mirar la cola.
+
+La cola de abajo sigue siendo **una sola lista** en el orden medido, con la
+edad en cada fila. Se descartó agruparla por edad (hora dorada, 1–6 h, …):
+dejaba un carrito de dos días, que cierra 9 a 12 veces más, debajo de un frío
+de diez minutos.
+
 **Carrito que ya es pedido (29-09-2026).** Un carrito sale de la cola de
 llamadas en cuanto llega un pedido que cumple cuatro variables fijas:
 

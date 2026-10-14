@@ -196,17 +196,21 @@ describe("countLeadUrgency", () => {
 describe("la fila usa la urgencia, no la ventana de 24h", () => {
   const src = readFileSync(new URL("../components/leads.tsx", import.meta.url), "utf8");
 
-  it("el acento lateral lo pinta la urgencia", () => {
-    expect(src).toContain("inset 3px 0 0 ${ud.accent}");
-    // La ventana ya no manda el acento: si volviera, un lead de 12 minutos y uno
-    // de 67 días se pintarían otra vez del mismo verde.
-    expect(src).not.toContain("inset 3px 0 0 ${wd.accent}");
+  it("el punto de la fila lo pinta la urgencia", () => {
+    // Desde el rediseño (DESIGN.md › Leads) ya no hay acento lateral: la edad
+    // es un punto junto a su cifra, y lo pinta el tramo de urgencia.
+    expect(src).toContain("const ud = urgency ? URGENCY_DISPLAY[urgency.tier] : URGENCY_UNKNOWN;");
+    expect(src).toContain("ud.dot,");
+    // La ventana no manda el color: si volviera, un lead de 12 minutos y uno de
+    // 67 días se pintarían otra vez del mismo verde.
+    expect(src).not.toContain("WIN_DISPLAY");
+    expect(src).not.toContain("inset 3px 0 0");
   });
 
   it("la columna muestra la edad", () => {
     expect(src).toContain("leadUrgency(lead.first_seen_at, now)");
     expect(src).toContain("urgency?.label");
-    expect(src).toContain(">\n                Edad\n              </span>");
+    expect(src).toContain(">\n            Edad\n          </span>");
   });
 
   it("la ventana de 24h solo se nombra cuando limita algo", () => {
@@ -249,13 +253,13 @@ describe("la fila usa la urgencia, no la ventana de 24h", () => {
   // equivocado: de los 7 leads con mensaje entrante hace menos de una hora, solo
   // 4 tenían menos de una hora de vida.
   it("la edad es un eje propio, separado de la ventana de 24h", () => {
-    expect(src).toContain('label="Edad"');
-    expect(src).toContain('label="Ventana"');
+    expect(src).toContain('title="Edad del lead"');
+    expect(src).toContain('title="Ventana de WhatsApp"');
     // El predicado de edad mira `first_seen_at`, no el último entrante.
     expect(src).toContain('leadUrgency(l.first_seen_at, now)?.tier === edadFilter');
-    // Y la barra pone Edad antes que Ventana: cuál mirar primero se enseña con
-    // el orden.
-    expect(src.indexOf('label="Edad"')).toBeLessThan(src.indexOf('label="Ventana"'));
+    // Y «Más filtros» pone Edad antes que Ventana: cuál mirar primero se enseña
+    // con el orden.
+    expect(src.indexOf('title="Edad del lead"')).toBeLessThan(src.indexOf('title="Ventana de WhatsApp"'));
   });
 
   it("los contadores del chip salen de su propia base faceteada", () => {
