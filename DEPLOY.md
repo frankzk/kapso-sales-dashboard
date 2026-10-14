@@ -2392,3 +2392,40 @@ cargar, y mientras llega la tarjeta se ve en esqueleto.
 3. **Despacho GF** limpia los programas viejos con «Quitar la fecha»: el
    13-10-2026, 13 de 14 estaban vencidos y 6 estaban en pedidos fuera de la
    etapa.
+
+### 14-10-2026 · Repro Lima «Todos» (0256)
+
+Una quinta tarjeta en Repro Lima, «Todos · por entregar»: los pedidos de Lima
+sin estado final por etapa y subetapa del Master (MOM §9.5). Solo lee: no
+escribe, no abre casos ni toma el candado. Sin variables de entorno nuevas.
+
+1. **Migración `0256_lima_open_counts.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0256_lima_open_counts.sql`. Crea una
+   sola función, `order_master_lima_open_counts(uuid[], date)`: los pedidos de
+   `order_master` con `coverage = 'lima'` y sin «Finalizado», agrupados por
+   tienda, macroetapa y subetapa, con cuántos llevan más de 7 y de 30 días de
+   Lima desde `macro_since`. `security invoker` y solo para `service_role`
+   (revocada a `public`, `anon` y `authenticated`). Sin índice nuevo (usa
+   `order_master_store_coverage_idx`, unos 18 ms sobre ~8,3k filas) y sin
+   ningún `drop` ni `begin`/`commit`: es `create or replace` y se puede
+   repetir. Se aplica también con `apply_migration` de Supabase.
+   **Pendiente de aplicar en producción.**
+2. **Comprobar en producción**, solo lectura:
+   - `select sum(total) from order_master_lima_open_counts(array(select id from stores)::uuid[], (now() at time zone 'America/Lima')::date);`
+     da unos 8,3k (el 14-10-2026: 1.940 por entregar y 6.393 por cerrar);
+   - `select has_function_privilege('authenticated', 'public.order_master_lima_open_counts(uuid[], date)', 'execute');`
+     tiene que dar `false` (y lo mismo con `anon`).
+3. Sin backfill, sin cambio del resolver y sin subir versión:
+   `MOM_RESOLUTION_VERSION` sigue en `mom-v1.26`.
+4. **Si el código sale antes que la migración**, la tarjeta «Todos» no
+   aparece y el resto de Repro Lima sigue igual. En los logs de Vercel se ve
+   `repro-lima: conteo de Todos` con el código del error (`PGRST202`: falta la
+   función). Aplicar la migración y la tarjeta aparece en la siguiente carga.
+5. **Antes de subir**: `npm test`, `npm run typecheck`,
+   `bash scripts/verify-db.sh` (clúster desechable) y `next build`. A mano a
+   360, 768 y 1280 px: en el teléfono las cuatro listas en 2×2 y «Todos» en
+   una fila entera debajo; desde 1024 px, la quinta columna; nada se desplaza
+   de lado; y «Atrás» desde el Master vuelve a «Todos» (`?vista=todos`).
+
+**Marcha atrás.** Revertir el código basta. La función no molesta al código
+anterior y se queda.

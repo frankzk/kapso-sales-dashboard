@@ -13,6 +13,7 @@
 // error — es la pantalla de trabajo diaria del equipo.
 
 import { emptyFilters, type MasterFilters, type MasterSortKey } from "@/lib/order-master-filters";
+import { MASTER_PATH } from "@/lib/order-drawer-href";
 
 /** Claves cortas: la URL se lee y se comparte, y `?d=lince,ate` gana a
  *  `?districts=lince%2Cate` para algo que se mira todo el día. */
@@ -156,4 +157,18 @@ export function hasQueryFilters(f: MasterFilters): boolean {
     Boolean(f.search.trim())
     || Boolean(f.confirmationDue)
   );
+}
+
+/** Enlace a una cola del Master: etapa, subetapa y filtros por la URL (lo que lee app/dashboard/pedidos/page.tsx). Quien llama valida que la subetapa sea de esa etapa. */
+export function masterQueueHref(opts: {
+  view: string;
+  substage?: string | null;
+  coverages?: readonly string[];
+  storeIds?: readonly string[];
+}): string {
+  const filters = { ...emptyFilters(), coverages: new Set(opts.coverages ?? []), stores: new Set(opts.storeIds ?? []) };
+  const params = buildMasterQuery({ filters, sortKey: "created", page: 1 });
+  params.set("view", opts.view);
+  if (opts.substage) params.set("substage", opts.substage);
+  return `${MASTER_PATH}?${params.toString()}`;
 }

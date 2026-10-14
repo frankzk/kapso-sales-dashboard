@@ -20,6 +20,7 @@ const read = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8"
 const page = read("app/dashboard/pedidos/repro-lima/page.tsx");
 const loading = read("app/dashboard/pedidos/repro-lima/loading.tsx");
 const board = read("components/repro-lima-board.tsx");
+const todos = read("components/repro-lima-todos.tsx");
 const sheet = read("components/repro-lima-sheet.tsx");
 const sidebar = read("components/sidebar.tsx");
 const shell = read("components/dashboard-shell.tsx");
@@ -42,6 +43,9 @@ describe("quién entra (D11, E32, E36)", () => {
     const load = page.indexOf("loadReproLima(createAdminSupabase(), scope)");
     expect(gate).toBeGreaterThan(-1);
     expect(load).toBeGreaterThan(gate);
+    // «Todos» también se cuenta después del permiso, y llega al tablero.
+    expect(page.indexOf("loadLimaOpenCounts(createAdminSupabase(), scope)")).toBeGreaterThan(gate);
+    expect(page).toContain("openCounts={openCounts}");
   });
 
   it("sin permiso dice de quién es, sin tiendas lo dice, y el error de lectura no tumba el panel", () => {
@@ -56,12 +60,14 @@ describe("quién entra (D11, E32, E36)", () => {
 
   it("la carga es su propia silueta, no la del Master", () => {
     expect(loading).toContain('aria-label="Cargando Repro Lima"');
+    // Las cuatro tarjetas de lista y «Todos».
+    expect(loading).toContain("length: 5");
     expect(page).toContain('import ReproLimaLoading from "./loading";');
     expect(page).toContain("<Suspense fallback={<ReproLimaLoading />}>");
   });
 
   it("los componentes de cliente solo importan tipos del acceso (que es de servidor)", () => {
-    for (const src of [board, sheet]) {
+    for (const src of [board, sheet, todos]) {
       expect(src.startsWith('"use client";')).toBe(true);
       expect(src).toContain('import type { ');
       expect(src).not.toMatch(/import \{[^}]*\} from "@\/lib\/repro-lima-access"/);
@@ -366,7 +372,7 @@ describe("el tablero (E31, E33)", () => {
   it("la ficha se abre sobre Repro Lima, nunca navegando al Master", () => {
     expect(sheet).toContain("const openDrawer = useOpenOrderDrawer();");
     expect(board).toContain("<OrderLink");
-    for (const src of [board, sheet]) expect(src).not.toContain('href="/dashboard/pedidos?');
+    for (const src of [board, sheet, todos]) expect(src).not.toContain('href="/dashboard/pedidos?');
   });
 
   it("tabla desde 1280 px y filas con líneas finas más angosto", () => {
@@ -374,11 +380,64 @@ describe("el tablero (E31, E33)", () => {
     expect(board).toContain('<ul className="divide-y divide-line border-t border-line xl:hidden">');
   });
 
-  it("cuatro tarjetas que filtran y cuentan, también «Cerrados»", () => {
+  it("cuatro listas y «Todos» que filtran y cuentan", () => {
     expect(board).toContain("grid grid-cols-2 gap-2 sm:grid-cols-4");
     expect(board).toContain("{REPRO_LISTS.map((l) => (\n          <StatusCard");
     expect(board).toContain('label: "Cerrados · esperan anulación"');
     expect(board).toContain("`Programados · ${toReview} a revisar`");
+    // «Todos»: la quinta columna desde 1024 px y una fila entera en el teléfono.
+    expect(board).toContain("lg:grid-cols-5");
+    expect(board).toContain("col-span-2 sm:col-span-4 lg:col-span-1");
+    expect(board).toContain('label="Todos · por entregar"');
+    expect(board).toContain("value={breakdown.totals.porEntregar}");
+    // Va DESPUÉS de las cuatro listas y solo con el conteo leído.
+    expect(board.indexOf('label="Todos · por entregar"')).toBeGreaterThan(board.indexOf("{REPRO_LISTS.map((l) => (\n          <StatusCard"));
+    expect(board).toContain("{breakdown && (");
+    // La vista va en la URL, sin volver a pedir la página.
+    expect(board).toContain('searchParams.get("vista") === "todos"');
+    expect(board).toContain("window.history.replaceState(");
+    expect(board).not.toMatch(/router\.(push|replace)\(/);
+    // Entrar a «Todos» quita la búsqueda; una lista vuelve a las listas.
+    const todosCard = between(board, 'label="Todos · por entregar"', "/>");
+    expect(todosCard).toContain('onClick={() => { setQuery(""); showView("todos"); }}');
+    expect(todosCard).toContain('active={view === "todos"}');
+    expect(board).toContain('active={view === "listas" && list === l}');
+    expect(board).toContain('onClick={() => { setList(l); showView("listas"); }}');
+    // «Por reprogramar Lima» sale de las filas del tablero, por tienda y sin la búsqueda.
+    expect(board).toContain("reproAging(storeScoped)");
+    expect(board).toContain("const scoped = useMemo(() => storeScoped.filter((row) => matches(row, query))");
+    // En «Todos», sin búsqueda, y la línea dice lo que falta entregar.
+    expect(board).toContain("todavía por entregar");
+    expect(board).toContain('aria-label={todos ? "Todos" : LIST_CARD[list].label}');
+    expect(board).toContain("<ReproLimaTodos breakdown={todos} lists={lists} onOpenList={onOpenList} />");
+  });
+
+  it("«Todos» agrupa por etapa y subetapa del Master, con enlaces a sus colas (§9.5)", () => {
+    expect(todos).toContain("No hay pedidos de Lima sin estado final.");
+    expect(todos).toContain("con más de 7 días");
+    expect(todos).toContain("con más de 30");
+    expect(todos).toContain("MacroStageDot");
+    // Los dos bloques: lo que falta entregar y, aparte y abierto, lo que falta cerrar.
+    expect(todos).toContain('title="Todavía por entregar"');
+    expect(todos).toContain('title="Ya entregado, anulado o devuelto: falta cerrar"');
+    expect(todos).toContain("En Lima, lo que no se entrega vuelve a «Por reprogramar Lima»; solo la entrega lo pasa a «Por cerrar».");
+    expect(todos).toContain("Cada pedido cuenta una vez, en su subetapa del Master.");
+    expect(todos).toContain("lg:grid lg:grid-cols-2 lg:divide-x");
+    // Líneas finas y objetivos de 44 px (E33).
+    expect(todos).toContain('<ul className="mt-2 divide-y divide-line border-t border-line">');
+    expect(todos).toContain("flex min-h-11 items-start justify-between gap-3 px-4 py-2.5 hover:bg-wash");
+    // Los enlaces vienen del resumen (masterQueueHref): ninguna URL escrita a mano.
+    expect(todos).toContain("href={s.href}");
+    expect(todos).not.toContain("/dashboard/pedidos");
+    expect(todos).toContain("Abrir en el Master de Pedidos.");
+    // «Por reprogramar Lima» abre las cuatro listas, que van debajo y no dentro del botón.
+    expect(todos).toContain('onOpenList("por_decidir")');
+    expect(todos).toContain("Ver sus cuatro listas.");
+    const inPage = between(todos, "if (s.inPage) {", "\n  }\n");
+    expect(inPage.indexOf("</button>")).toBeLessThan(inPage.indexOf("<ChoiceChip"));
+    expect(inPage).toContain("active={false} onClick={() => onOpenList(l.list)}");
+    // Sin anchos fijos: nada se desplaza de lado a 360 px.
+    expect(todos).not.toMatch(/\bw-\[|\bmin-w-\[|\bw-(48|56|64|72|80|96)\b/);
   });
 
   it("las listas vacías y la búsqueda sin resultado lo dicen", () => {
