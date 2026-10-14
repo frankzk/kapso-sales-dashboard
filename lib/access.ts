@@ -636,7 +636,7 @@ export async function getAttributionInputs(
 /**
  * Canal de cierre de TODAS las ventas de las tiendas en el rango (MOM §17.3),
  * en el día local de cada tienda. Lo clasifica Postgres (`canal_de_cierre`,
- * 0257) con la sesión de quien mira, así que cada persona ve solo sus tiendas;
+ * 0258) con la sesión de quien mira, así que cada persona ve solo sus tiendas;
  * aquí solo se lee y se resume.
  *
  * Si la migración todavía no se aplicó, `sin_migracion`: el panel vuelve a la

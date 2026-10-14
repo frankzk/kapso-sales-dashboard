@@ -515,6 +515,8 @@
 \ir migrations/0255_restock_reminders.sql
 \echo 'Applying 0256_lima_open_counts.sql'
 \ir migrations/0256_lima_open_counts.sql
-\echo 'Applying 0257_canal_de_cierre.sql'
-\ir migrations/0257_canal_de_cierre.sql
+\echo 'Applying 0257_invoices.sql'
+\ir migrations/0257_invoices.sql
+\echo 'Applying 0258_canal_de_cierre.sql'
+\ir migrations/0258_canal_de_cierre.sql
 \echo 'Done.'

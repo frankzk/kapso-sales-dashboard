@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0257_canal_de_cierre.sql — quién cerró cada venta de la tienda, con TODOS
+-- 0258_canal_de_cierre.sql — quién cerró cada venta de la tienda, con TODOS
 -- los pedidos y sin depender de etiquetas que la sincronización borra
 -- (MOM §17.3, 14-10-2026).
 --

@@ -8303,7 +8303,7 @@ Medido del 14-09 al 13-10-2026, días de Lima, pedidos activos:
 | Web, la clienta sola | 3.012 | S/ 527.865 | 1.105 | 66 |
 | Otros | 93 | S/ 20.968 | 26 | 15 |
 
-Cómo se calcula: `canal_de_cierre` (migración 0257, de lectura, con la sesión
+Cómo se calcula: `canal_de_cierre` (migración 0258, de lectura, con la sesión
 de quien mira: cada persona ve solo sus tiendas), resumido en
 `lib/closing-channel.ts` y dibujado en `components/closing-channels.tsx`. Si la
 migración todavía no se aplicó o la función falla, la tarjeta vuelve a la

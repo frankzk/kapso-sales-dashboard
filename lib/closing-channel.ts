@@ -1,6 +1,6 @@
 // Canal de cierre de TODAS las ventas de la tienda (MOM §17.3).
 //
-// La clasificación vive en Postgres (`canal_de_cierre`, migración 0257): allí
+// La clasificación vive en Postgres (`canal_de_cierre`, migración 0258): allí
 // cada pedido cae en UN canal por hechos que la sincronización con Shopify no
 // borra —la venta registrada de la asesora en `order_sales`, la prueba de
 // recompra, las etiquetas que pone el propio Shopify—. Acá solo se lee lo que
@@ -291,7 +291,7 @@ export function summarizeClosingChannels(rows: readonly ClosingChannelRow[]): Cl
 
 /**
  * ¿El error de PostgREST dice que la función todavía no existe? Deploy no
- * aplica migraciones (AGENTS.md): si el código sale antes que la 0257, el panel
+ * aplica migraciones (AGENTS.md): si el código sale antes que la 0258, el panel
  * muestra la vista anterior con un aviso, no un error ni ceros.
  */
 export function isMissingFunctionError(error: { code?: string | null; message?: string | null } | null | undefined): boolean {

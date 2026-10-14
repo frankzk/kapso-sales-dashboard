@@ -370,7 +370,7 @@ neto, canal, cupón) and sanity-check the assignment.
   etiquetas**, que la sincronización con Shopify reescribe: aquí «Asesora»
   queda casi siempre en cero. La tarjeta «Canal de cierre» del Consolidado ya
   no usa esto desde el 14-10-2026: clasifica TODAS las ventas por
-  `order_sales` (0257, MOM §17.3).
+  `order_sales` (0258, MOM §17.3).
 - **ROAS** on the Meta row = attributed revenue / Meta ad spend for the range
   (live from the Marketing API; shows "—" if Meta isn't connected).
 - Needs **migration 0030** (`discount_codes` on orders + `winback_sends`). Before
@@ -495,7 +495,7 @@ de couriers, intentos y comentarios.
   la pasada `shopify_all` y el webhook reescriben `tags` con lo de Shopify, y
   esos pedidos salían del conteo en minutos (1 de 2.916 ventas de asesora la
   conservaba). Desde el 14-10-2026 ya no se escribe; quién cerró cada venta lo
-  decide `canal_de_cierre` (0257, MOM §17.3).
+  decide `canal_de_cierre` (0258, MOM §17.3).
 - **`ORDERS_SYNC_FROM` acota el histórico** (por defecto `2026-06-01`). La pasada
   nueva solo trae pedidos **creados** a partir de esa fecha, así que no arrastra
   años de pedidos cerrados. Se filtra por `created_at` y no por `updated_at`, para
@@ -2449,7 +2449,7 @@ escribe, no abre casos ni toma el candado. Sin variables de entorno nuevas.
 **Marcha atrás.** Revertir el código basta. La función no molesta al código
 anterior y se queda.
 
-### 14-10-2026 · Canal de cierre de todas las ventas (0257, MOM §17.3)
+### 14-10-2026 · Canal de cierre de todas las ventas (0258, MOM §17.3)
 
 La tarjeta «Canal de cierre» del Consolidado y de la página de cada tienda deja
 de mirar solo los pedidos con `kapso` y clasifica TODAS las ventas por quién
@@ -2460,8 +2460,8 @@ sin asesora y la recompra automática dejan de escribir `kapso` /
 `cod_recuperado` / `auto_recompra` en la copia local: registran la fila solo si
 el webhook no la trajo, tal como viene de Shopify.
 
-1. **Migración `0257_canal_de_cierre.sql`**, a mano y ANTES del código:
-   `psql "$DATABASE_URL" -f db/migrations/0257_canal_de_cierre.sql`. Crea solo
+1. **Migración `0258_canal_de_cierre.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0258_canal_de_cierre.sql`. Crea solo
    la función de lectura `canal_de_cierre(uuid[], date, date)` (SECURITY
    INVOKER, ejecutable por `authenticated` y `service_role`). No escribe datos,
    no toma bloqueos sobre tablas y no lleva `drop`. Medida en producción como
@@ -2470,7 +2470,9 @@ el webhook no la trajo, tal como viene de Shopify.
    (solo pedidos del bot) con un aviso de que falta la migración y sin cifra
    de cabecera («—»), porque ese porcentaje es justo el número equivocado.
    **Ya aplicada en producción el 14-10-2026** con `apply_migration` (historial
-   `20261014172812 0257_canal_de_cierre`). Comprobado ese día: el cuerpo de la
+   `20261014172812 0257_canal_de_cierre`: se aplicó con ese número y el mismo
+   día se renumeró a 0258, porque la integración ya tenía `0257_invoices.sql`;
+   la función es la misma y no hay que volver a aplicarla). Comprobado ese día: el cuerpo de la
    función es idéntico al del archivo (mismo md5), `anon` no la puede ejecutar,
    y como el owner, con RLS, del 14-09 al 13-10 ve las dos tiendas en 0,27 s con
    los mismos pedidos por canal que la tabla del MOM §17.3 (solo cambian los
