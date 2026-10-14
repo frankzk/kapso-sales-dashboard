@@ -219,12 +219,14 @@ export function AttentionPill({ icon: Glyph, label, count, active, onClick, hint
  * cabecera pegajosa con título, chapa de estado, contexto y cierre. El ancho
  * lo decide quien lo abre (`width`, p. ej. `max-w-[960px]`).
  */
-export function SidePanel({ label, title, badge, meta, width, onClose, children }: {
+export function SidePanel({ label, title, badge, meta, actions, width, onClose, children }: {
   /** Nombre accesible del diálogo. */
   label: string;
   title: ReactNode;
   badge?: ReactNode;
   meta?: ReactNode;
+  /** Lo que va arriba a la derecha, antes de «Cerrar» (el QR de la ficha del lead). */
+  actions?: ReactNode;
   width: string;
   onClose: () => void;
   children: ReactNode;
@@ -260,9 +262,12 @@ export function SidePanel({ label, title, badge, meta, width, onClose, children 
             </div>
             {meta && <p className="mt-0.5 text-[13px] tabular-nums text-ink-500">{meta}</p>}
           </div>
-          <button type="button" onClick={onClose} aria-label="Cerrar" className="-mr-1.5 grid size-8 shrink-0 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900">
-            <svg aria-hidden width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M6 6l12 12M18 6 6 18" /></svg>
-          </button>
+          <div className="flex shrink-0 items-start gap-3">
+            {actions}
+            <button type="button" onClick={onClose} aria-label="Cerrar" className="-mr-1.5 grid size-8 shrink-0 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900">
+              <svg aria-hidden width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M6 6l12 12M18 6 6 18" /></svg>
+            </button>
+          </div>
         </header>
         <div className="flex-1 px-4 py-5 sm:px-6">{children}</div>
       </aside>

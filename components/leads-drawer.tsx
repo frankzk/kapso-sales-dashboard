@@ -152,6 +152,10 @@ export type LeadDrawerUpdate = {
 /** Etiqueta de campo (13 px, tinta media), como en la ficha del pedido. */
 const LABEL = "block text-[13px] font-medium leading-5 text-ink-700";
 
+/** La franja del agente de voz: lo mínimo, una línea con «Probar en mi
+ *  teléfono» (Frankz, 14-10-2026); crece solo con sus llamadas o al probar. */
+const VOICE_STRIP = "rounded-lg bg-white px-4 py-3 shadow-control ring-1 ring-line sm:px-5";
+
 /** Botón de solo icono: 32 px (44 con el dedo), en reposo sin fondo. El color
  *  lo pone quien lo usa: `cn` no resuelve dos `text-*` que choquen. */
 const ICON_BTN =
@@ -648,6 +652,16 @@ export function LeadDrawer({
           )}
         </span>
       }
+      actions={
+        // QR tel: arriba a la derecha y solo, como siempre estuvo (Frankz,
+        // 14-10-2026): la asesora lo escanea con su celular y el marcador abre
+        // listo. Solo en escritorio; en el teléfono ya está «Llamar».
+        canCall ? (
+          <div className="hidden lg:block">
+            <CallQr phone={lead.phone as string} size={64} />
+          </div>
+        ) : null
+      }
       width="max-w-[1040px]"
       onClose={onClose}
     >
@@ -787,6 +801,60 @@ export function LeadDrawer({
               </section>
             )}
 
+            {/* Pedidos anteriores: los 3 últimos de Shopify, justo bajo «Lo que pidió»:
+                es lo primero que se mira al abrir la ficha (Frankz, 14-10-2026). */}
+            {history && history.recentOrders.length > 0 && (
+              <section aria-label="Pedidos anteriores" className={SECTION_CARD}>
+                <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                  <h3 className="text-sm font-semibold text-ink-900">
+                    Pedidos anteriores{" "}
+                    <span className="font-normal tabular-nums text-ink-500">· {history.recentOrders.length}</span>
+                  </h3>
+                  <span className="text-[13px] tabular-nums text-ink-600">
+                    {currency}{" "}
+                    {history.recentOrders
+                      .filter((o) => !o.cancelled)
+                      .reduce((s, o) => s + o.amount, 0)
+                      .toFixed(2)}{" "}
+                    en total
+                  </span>
+                </div>
+                <ul className="-mx-4 -mb-4 mt-3 divide-y divide-line border-t border-line sm:-mx-5 sm:-mb-5">
+                  {history.recentOrders.map((o, i) => (
+                    <li key={o.name ?? i} className="flex items-center justify-between gap-3 px-4 py-2.5 sm:px-5">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="truncate text-sm font-medium text-ink-900">Pedido {o.name ?? "—"}</span>
+                        {o.cancelled && <Badge tone="neutral">Anulado</Badge>}
+                      </span>
+                      <span className="flex shrink-0 items-center gap-3">
+                        <span className="text-xs tabular-nums text-ink-500">{orderDateShort(o.createdAt)}</span>
+                        <span
+                          className={cn(
+                            "text-sm font-semibold tabular-nums",
+                            o.cancelled ? "text-ink-500 line-through decoration-ink-300" : "text-ink-900",
+                          )}
+                        >
+                          {currency} {o.amount.toFixed(2)}
+                        </span>
+                        {o.adminUrl && (
+                          <a
+                            href={o.adminUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Abrir en Shopify"
+                            aria-label={`Abrir ${o.name ?? "pedido"} en Shopify (nueva pestaña)`}
+                            className="-mr-1.5 grid size-7 shrink-0 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:size-11"
+                          >
+                            <IconArrowUpRight aria-hidden className="size-4" />
+                          </a>
+                        )}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
             {/* Resumen del bot */}
             {lead.handoff_context && (
               <Banner
@@ -864,25 +932,9 @@ export function LeadDrawer({
                 a quién llamar. Sin argumento en onRegistered a propósito: lo
                 que el agente escribe toca lead, historial y lista. */}
             {canCall && (
-              <div className={SECTION_CARD}>
+              <div className={VOICE_STRIP}>
                 <LeadVoiceAgentPanel key={lead.id} leadId={lead.id} onChanged={() => onRegistered()} />
               </div>
-            )}
-
-            {/* QR tel: — solo en escritorio: la asesora escanea con su celular y
-                el marcador abre listo. En el teléfono ya está «Llamar» arriba.
-                Va justo antes del resultado: se llama y se anota. */}
-            {canCall && (
-              <section aria-label="Llamar desde tu celular" className={cn(SECTION_CARD, "hidden items-center gap-4 lg:flex")}>
-                <CallQr phone={lead.phone as string} size={64} />
-                <div className="min-w-0">
-                  <h3 className="text-sm font-semibold text-ink-900">Llamar desde tu celular</h3>
-                  <p className="mt-0.5 text-[13px] leading-5 text-ink-500">
-                    Escanea el código con la cámara y el marcador se abre con{" "}
-                    <span className="tabular-nums text-ink-700">{leadPhoneLabel(lead)}</span> listo.
-                  </p>
-                </div>
-              </section>
             )}
 
             {/* Resultado de la llamada */}
@@ -940,46 +992,6 @@ export function LeadDrawer({
                 <p className="mt-2 text-[13px] text-ink-500">Sin actividad todavía.</p>
               )}
             </section>
-
-            {/* Pedidos anteriores: últimos 3 pedidos de Shopify de este cliente */}
-            {history && history.recentOrders.length > 0 && (
-              <section aria-label="Pedidos anteriores" className={SECTION_CARD}>
-                <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                  <h3 className="text-sm font-semibold text-ink-900">
-                    Pedidos anteriores{" "}
-                    <span className="font-normal tabular-nums text-ink-500">· {history.recentOrders.length}</span>
-                  </h3>
-                  <span className="text-[13px] tabular-nums text-ink-600">
-                    {currency} {history.recentOrders.reduce((s, o) => s + o.amount, 0).toFixed(2)} en total
-                  </span>
-                </div>
-                <ul className="-mx-4 -mb-4 mt-3 divide-y divide-line border-t border-line sm:-mx-5 sm:-mb-5">
-                  {history.recentOrders.map((o, i) => (
-                    <li key={o.name ?? i} className="flex items-center justify-between gap-3 px-4 py-2.5 sm:px-5">
-                      <span className="min-w-0 truncate text-sm font-medium text-ink-900">Pedido {o.name ?? "—"}</span>
-                      <span className="flex shrink-0 items-center gap-3">
-                        <span className="text-xs tabular-nums text-ink-500">{orderDateShort(o.createdAt)}</span>
-                        <span className="text-sm font-semibold tabular-nums text-ink-900">
-                          {currency} {o.amount.toFixed(2)}
-                        </span>
-                        {o.adminUrl && (
-                          <a
-                            href={o.adminUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            title="Abrir en Shopify"
-                            aria-label={`Abrir ${o.name ?? "pedido"} en Shopify (nueva pestaña)`}
-                            className="-mr-1.5 grid size-7 shrink-0 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:size-11"
-                          >
-                            <IconArrowUpRight aria-hidden className="size-4" />
-                          </a>
-                        )}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
 
             {/* Número de WhatsApp y campaña Meta */}
             {(lead.wa_phone_number_id || lead.source === "meta_ad") && (

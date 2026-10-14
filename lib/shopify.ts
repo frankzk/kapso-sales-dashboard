@@ -467,11 +467,50 @@ export async function shopifyGraphQL<T = any>(
  * phone and read their orders connection. Requires the `read_customers` scope;
  * if it's missing (or no customer matches) this returns [] — never throws.
  */
+/** Un pedido anterior del cliente, como lo lista la ficha del lead. */
+export interface RecentShopifyOrder {
+  name: string | null;
+  createdAt: string | null;
+  amount: number;
+  adminUrl: string | null;
+  /** Anulado en Shopify: se muestra con su total original y la marca. */
+  cancelled: boolean;
+}
+
+/**
+ * Un nodo de pedido de Shopify a una fila de «Pedidos anteriores». Puro.
+ *
+ * `currentTotalPriceSet` es el total DESPUÉS de devoluciones y quitas: un
+ * pedido anulado queda en 0 porque sus artículos se quitan. Así salía la lista
+ * en producción («PEN 0.00» en los tres pedidos de un cliente con tres
+ * anulados), que se lee como que compró gratis. Con el actual en 0 se muestra
+ * el total original y, si se anuló, la marca.
+ */
+export function recentOrderFromNode(node: unknown, domain: string): RecentShopifyOrder {
+  const n = (node ?? {}) as {
+    id?: string | null;
+    name?: string | null;
+    createdAt?: string | null;
+    cancelledAt?: string | null;
+    currentTotalPriceSet?: { shopMoney?: { amount?: string } };
+    totalPriceSet?: { shopMoney?: { amount?: string } };
+  };
+  const money = (v: string | undefined) => Math.round(Number(v ?? 0) * 100) / 100 || 0;
+  const current = money(n.currentTotalPriceSet?.shopMoney?.amount);
+  return {
+    name: n.name ?? null,
+    createdAt: n.createdAt ?? null,
+    amount: current > 0 ? current : money(n.totalPriceSet?.shopMoney?.amount),
+    adminUrl: shopifyOrderAdminUrl(domain, n.id),
+    cancelled: !!n.cancelledAt,
+  };
+}
+
 export async function getCustomerRecentOrders(
   opts: ShopifyClientOpts,
   phone: string | null | undefined,
   { excludeName, limit = 3 }: { excludeName?: string | null; limit?: number } = {},
-): Promise<{ name: string | null; createdAt: string | null; amount: number; adminUrl: string | null }[]> {
+): Promise<RecentShopifyOrder[]> {
   const e164 = toE164(phone);
   if (!e164) return [];
   const query = `
@@ -480,7 +519,7 @@ export async function getCustomerRecentOrders(
         edges {
           node {
             orders(first: $n, sortKey: CREATED_AT, reverse: true) {
-              edges { node { id name createdAt currentTotalPriceSet { shopMoney { amount } } } }
+              edges { node { id name createdAt cancelledAt currentTotalPriceSet { shopMoney { amount } } totalPriceSet { shopMoney { amount } } } }
             }
           }
         }
@@ -491,20 +530,7 @@ export async function getCustomerRecentOrders(
       customers?: { edges?: { node?: { orders?: { edges?: { node?: unknown }[] } } }[] };
     }>({ ...opts, query, variables: { q: `phone:${e164}`, n: limit + 1 } });
     const edges = data?.customers?.edges?.[0]?.node?.orders?.edges ?? [];
-    const orders = edges.map((e) => {
-      const n = (e?.node ?? {}) as {
-        id?: string | null;
-        name?: string | null;
-        createdAt?: string | null;
-        currentTotalPriceSet?: { shopMoney?: { amount?: string } };
-      };
-      return {
-        name: n.name ?? null,
-        createdAt: n.createdAt ?? null,
-        amount: Math.round(Number(n.currentTotalPriceSet?.shopMoney?.amount ?? 0) * 100) / 100,
-        adminUrl: shopifyOrderAdminUrl(opts.domain, n.id),
-      };
-    });
+    const orders = edges.map((e) => recentOrderFromNode(e?.node, opts.domain));
     const filtered = excludeName ? orders.filter((o) => o.name !== excludeName) : orders;
     return filtered.slice(0, limit);
   } catch {

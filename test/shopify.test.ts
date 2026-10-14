@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createHmac } from "node:crypto";
 import {
+  recentOrderFromNode,
   verifyShopifyHmac,
   parseTags,
   parseDiscountCodes,
@@ -1053,5 +1054,36 @@ describe("isRecoveredDraft (un draft completado solo es recuperación si estuvo 
     expect(isRecoveredDraft({ createdAt: null, completedAt: "2026-07-14T10:30:00Z" })).toBe(false);
     expect(isRecoveredDraft({ createdAt: "2026-07-14T10:00:00Z", completedAt: null })).toBe(false);
     expect(isRecoveredDraft({ createdAt: null, completedAt: null, orderTags: ["cod"] })).toBe(false);
+  });
+});
+
+describe("recentOrderFromNode (Pedidos anteriores de la ficha del lead)", () => {
+  const node = (over: Record<string, unknown> = {}) => ({
+    id: "gid://shopify/Order/5550001",
+    name: "#KP78383",
+    createdAt: "2026-07-03T15:00:00Z",
+    cancelledAt: null,
+    currentTotalPriceSet: { shopMoney: { amount: "129.00" } },
+    totalPriceSet: { shopMoney: { amount: "129.00" } },
+    ...over,
+  });
+
+  it("un pedido vigente muestra su total actual", () => {
+    const o = recentOrderFromNode(node(), "kenku.myshopify.com");
+    expect(o).toMatchObject({ name: "#KP78383", amount: 129, cancelled: false });
+    expect(o.adminUrl).toContain("5550001");
+  });
+
+  it("anulado: el total actual queda en 0, así que se muestra el original y la marca", () => {
+    const o = recentOrderFromNode(
+      node({ cancelledAt: "2026-07-05T10:00:00Z", currentTotalPriceSet: { shopMoney: { amount: "0.00" } } }),
+      "kenku.myshopify.com",
+    );
+    expect(o).toMatchObject({ amount: 129, cancelled: true });
+  });
+
+  it("con una devolución parcial manda el total actual, y sin montos queda en 0", () => {
+    expect(recentOrderFromNode(node({ currentTotalPriceSet: { shopMoney: { amount: "89.50" } } }), "d").amount).toBe(89.5);
+    expect(recentOrderFromNode({ name: "#1" }, "d")).toMatchObject({ amount: 0, cancelled: false, createdAt: null });
   });
 });

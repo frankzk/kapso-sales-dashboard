@@ -28,6 +28,7 @@ import {
   type LeadVoicePanelData,
 } from "@/lib/voice-lead-labels";
 import { cn } from "@/components/ui";
+import { Badge, FIELD_BOX, OpsButton } from "@/components/ops-ui";
 
 /** `lead_calls.kind` del agente (= LEAD_VOICE_KIND). */
 export const LEAD_VOICE_AGENT_KIND = "voice_agent";
@@ -63,8 +64,6 @@ const hora = new Intl.DateTimeFormat("es-PE", {
   hour: "2-digit",
   minute: "2-digit",
 });
-
-const chip = "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold";
 
 export function LeadVoiceAgentPanel({ leadId, onChanged }: { leadId: string; onChanged: () => void }) {
   const [data, setData] = useState<LeadVoicePanelData | null>(null);
@@ -133,91 +132,83 @@ export function LeadVoiceAgentPanel({ leadId, onChanged }: { leadId: string; onC
   }
 
   if (!data) {
-    return <p className="text-sm text-slate-400">Agente de voz: {loadError ?? "cargando…"}</p>;
+    return <p className="text-[13px] text-ink-500">Agente de voz: {loadError ?? "cargando…"}</p>;
   }
 
   const { puedeProbar, aviso } = leadVoicePanelView(data);
   const telOk = telefono.replace(/\D/g, "").length >= 9;
 
+  // Lo mínimo (Frankz, 14-10-2026): una línea con su estado y «Probar en mi
+  // teléfono». Crece solo con sus llamadas, un aviso o al probar.
   return (
-    <section aria-labelledby={`voz-lead-${leadId}`} className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p
-          id={`voz-lead-${leadId}`}
-          className="text-xs font-semibold tracking-wide text-slate-400 uppercase"
-        >
-          🤖 Agente de voz
+    <section aria-labelledby={`voz-lead-${leadId}`} className="space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <p className="min-w-0 text-[13px] leading-5 text-ink-500">
+          <span id={`voz-lead-${leadId}`} className="font-semibold text-ink-900">
+            Agente de voz
+          </span>
+          {data.calls.length === 0 && <> · El agente no ha llamado a este lead.</>}
         </p>
-        {data.optOut && <span className={cn(chip, "bg-red-50 text-red-700")}>Pidió no ser contactado</span>}
+        {(data.optOut || (puedeProbar && !probando)) && (
+          <span className="flex shrink-0 items-center gap-2">
+            {data.optOut && <Badge tone="crit">Pidió no ser contactado</Badge>}
+            {puedeProbar && !probando && (
+              <OpsButton size="sm" onClick={() => setProbando(true)}>
+                Probar en mi teléfono
+              </OpsButton>
+            )}
+          </span>
+        )}
       </div>
 
-      {loadError && <p className="text-sm text-slate-500">{loadError}</p>}
-      {aviso && <p className="text-sm text-slate-600">{aviso}</p>}
-      {data.calls.length === 0 && <p className="text-sm text-slate-500">El agente no ha llamado a este lead.</p>}
-
-      {puedeProbar && !probando && (
-        <button
-          type="button"
-          onClick={() => setProbando(true)}
-          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-        >
-          Probar en mi teléfono
-        </button>
-      )}
+      {loadError && <p className="text-[13px] text-ink-500">{loadError}</p>}
+      {aviso && <p className="text-[13px] text-ink-600">{aviso}</p>}
 
       {probando && (
-        <div className="space-y-2.5 rounded-lg bg-slate-50 p-3">
-          <p className="text-sm text-slate-700">
+        <div className="space-y-2.5 rounded-md bg-wash p-3">
+          <p className="text-[13px] leading-5 text-ink-700">
             El agente te llama con la ficha y el chat de este lead. Es una prueba: nada se escribe sobre el lead, y
             no puede ser el número del lead.
           </p>
-          <label className="block text-sm font-medium text-slate-700">
+          <label className="block text-[13px] font-medium text-ink-700">
             Tu celular
             <input
               value={telefono}
               onChange={(e) => setTelefono(e.target.value)}
               inputMode="tel"
               placeholder="9XXXXXXXX"
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal tabular-nums outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100 sm:w-56"
+              className={cn(FIELD_BOX, "mt-1 h-9 w-full px-3 font-normal tabular-nums sm:w-56")}
             />
           </label>
           <div className="flex gap-2">
-            <button
-              type="button"
+            <OpsButton
+              variant="primary"
+              size="sm"
               disabled={pending || !telOk}
               onClick={() => run(() => probarAgenteLeadEnMiTelefono(leadId, telefono), () => setProbando(false))}
-              className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-60"
             >
               {pending ? "Llamando…" : "Llamarme"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setProbando(false)}
-              className="rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100"
-            >
+            </OpsButton>
+            <OpsButton size="sm" variant="ghost" onClick={() => setProbando(false)}>
               Cancelar
-            </button>
+            </OpsButton>
           </div>
         </div>
       )}
 
-      {msg && (
-        <p className={cn("text-sm", msg.tone === "error" ? "text-red-600" : "text-emerald-600")}>{msg.text}</p>
-      )}
+      {msg && <p className={cn("text-[13px]", msg.tone === "error" ? "text-crit-fg" : "text-ok-fg")}>{msg.text}</p>}
 
       {data.calls.length > 0 && (
-        <ul className="divide-y divide-slate-100 border-t border-slate-100 text-sm">
+        <ul className="divide-y divide-line border-t border-line text-[13px]">
           {data.calls.map((c) => (
             <li key={c.id} className="py-2">
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                <span className="text-xs tabular-nums text-slate-400">{hora.format(new Date(c.queued_at))}</span>
-                <span className="font-medium text-slate-800">{leadVoiceCallState(c.status, c.outcome, c.error)}</span>
-                {c.motivo && (
-                  <span className="text-slate-500">· {LEAD_VOICE_MOTIVO_LABEL[c.motivo] ?? c.motivo}</span>
-                )}
-                {c.mode === "test" && <span className={cn(chip, "bg-amber-50 text-amber-700")}>Prueba</span>}
+                <span className="text-xs tabular-nums text-ink-500">{hora.format(new Date(c.queued_at))}</span>
+                <span className="font-medium text-ink-900">{leadVoiceCallState(c.status, c.outcome, c.error)}</span>
+                {c.motivo && <span className="text-ink-500">· {LEAD_VOICE_MOTIVO_LABEL[c.motivo] ?? c.motivo}</span>}
+                {c.mode === "test" && <Badge tone="warn">Prueba</Badge>}
               </div>
-              {c.resumen && <p className="mt-0.5 text-slate-600">{c.resumen}</p>}
+              {c.resumen && <p className="mt-0.5 text-ink-700">{c.resumen}</p>}
             </li>
           ))}
         </ul>
