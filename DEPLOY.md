@@ -2389,6 +2389,66 @@ Shopify para tiendas cliente y la `0250`, los roles que se acumulan.
    «Entregado» o a otro motivo violaría el CHECK y el reporte fallaría. Las
    tablas, las RPC y la columna no molestan al código anterior y se quedan.
 
+### 13-10-2026 · Repro Lima, entrega 1c: «Reintentos por salir» en Almacén
+
+Entrega 1c: sin migración. La última sigue siendo la 0251; no hay variables de
+entorno ni RPC nuevas, y `MOM_RESOLUTION_VERSION` sigue en `mom-v1.26`. El
+apartado solo lee (MOM §9.5): no programa, no cierra casos ni escribe eventos.
+La página no lo lee al pintar en el servidor: la estación lo pide después de
+cargar, y mientras llega la tarjeta se ve en esqueleto.
+
+1. **Qué mirar después**, solo lectura: sin casos de Repro Lima, los programas
+   de pedidos de la etapa con fecha de mañana o anterior son las filas de la
+   lista. El 13-10-2026 eran 6, todas en la zona «Hoy» y vencidas, con la
+   chapa roja «Vencido · era para el …»:
+   `select count(*) from gf_dispatch_programs p join order_master m on m.order_id = p.order_id where m.macro_stage = 'en_curso' and m.macro_substage = 'por_reprogramar_lima' and p.scheduled_for <= '<mañana>';`
+2. **Antes del primer día** (plan del 11-10-2026): contar las cajas reales del
+   estante y rotular las bandejas fijas, una por día de recepción y una «sin
+   fecha / más de 7 días».
+3. **Despacho GF** limpia los programas viejos con «Quitar la fecha»: el
+   13-10-2026, 13 de 14 estaban vencidos y 6 estaban en pedidos fuera de la
+   etapa.
+
+### 14-10-2026 · Repro Lima «Todos» (0256)
+
+Una quinta tarjeta en Repro Lima, «Todos · por entregar»: los pedidos de Lima
+sin estado final por etapa y subetapa del Master (MOM §9.5). Solo lee: no
+escribe, no abre casos ni toma el candado. Sin variables de entorno nuevas.
+
+1. **Migración `0256_lima_open_counts.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0256_lima_open_counts.sql`. Crea una
+   sola función, `order_master_lima_open_counts(uuid[], date)`: los pedidos de
+   `order_master` con `coverage = 'lima'` y sin «Finalizado», agrupados por
+   tienda, macroetapa y subetapa, con cuántos llevan más de 7 y de 30 días de
+   Lima desde `macro_since`. `security invoker` y solo para `service_role`
+   (revocada a `public`, `anon` y `authenticated`). Sin índice nuevo (usa
+   `order_master_store_coverage_idx`, unos 18 ms sobre ~8,3k filas) y sin
+   ningún `drop` ni `begin`/`commit`: es `create or replace` y se puede
+   repetir. Se aplica también con `apply_migration` de Supabase.
+   **Ya aplicada en producción el 14-10-2026** (historial
+   `20261014131234 0256_lima_open_counts`). Comprobado ese día: 8.358 pedidos (1.968 por
+   entregar y 6.390 por cerrar), y `anon` y `authenticated` no la pueden
+   ejecutar.
+2. **Comprobar en producción**, solo lectura:
+   - `select sum(total) from order_master_lima_open_counts(array(select id from stores)::uuid[], (now() at time zone 'America/Lima')::date);`
+     da unos 8,3k (el 14-10-2026: 1.940 por entregar y 6.393 por cerrar);
+   - `select has_function_privilege('authenticated', 'public.order_master_lima_open_counts(uuid[], date)', 'execute');`
+     tiene que dar `false` (y lo mismo con `anon`).
+3. Sin backfill, sin cambio del resolver y sin subir versión:
+   `MOM_RESOLUTION_VERSION` sigue en `mom-v1.26`.
+4. **Si el código sale antes que la migración**, la tarjeta «Todos» no
+   aparece y el resto de Repro Lima sigue igual. En los logs de Vercel se ve
+   `repro-lima: conteo de Todos` con el código del error (`PGRST202`: falta la
+   función). Aplicar la migración y la tarjeta aparece en la siguiente carga.
+5. **Antes de subir**: `npm test`, `npm run typecheck`,
+   `bash scripts/verify-db.sh` (clúster desechable) y `next build`. A mano a
+   360, 768 y 1280 px: en el teléfono las cuatro listas en 2×2 y «Todos» en
+   una fila entera debajo; desde 1024 px, la quinta columna; nada se desplaza
+   de lado; y «Atrás» desde el Master vuelve a «Todos» (`?vista=todos`).
+
+**Marcha atrás.** Revertir el código basta. La función no molesta al código
+anterior y se queda.
+
 ### 14-10-2026 · Canal de cierre de todas las ventas (0257, MOM §17.3)
 
 La tarjeta «Canal de cierre» del Consolidado y de la página de cada tienda deja

@@ -46,7 +46,12 @@ const cand = (over: Partial<RestockCandidate> = {}): RestockCandidate => ({
   ...over,
 });
 
-const empty = (): RestockHistory => ({ failedAttempts: new Map(), recentPhones: new Set(), optedOut: new Set() });
+const empty = (): RestockHistory => ({
+  failedAttempts: new Map(),
+  recentPhones: new Set(),
+  optedOut: new Set(),
+  productsWithImage: new Set(["111"]),
+});
 
 describe("el grupo de control", () => {
   it("lo decide el teléfono: la misma clienta cae siempre del mismo lado", () => {
@@ -75,6 +80,12 @@ describe("a quién no", () => {
     expect(restockSkipReason(cand(), h2)).toContain(`${RESTOCK_PHONE_COOLDOWN_DAYS} días`);
     expect(restockSkipReason(cand({ customer_name: " " }), empty())).toBe("sin nombre de la clienta");
     expect(restockSkipReason(cand({ customer_phone: "123" }), empty())).toBe("sin número de WhatsApp válido");
+  });
+
+  it("sin foto del producto en Shopify no se manda: la plantilla lleva la foto", () => {
+    const h = empty();
+    h.productsWithImage.clear();
+    expect(restockSkipReason(cand(), h)).toBe("el producto no tiene foto en Shopify");
   });
 
   it("tras tres rechazos de Meta sobre el mismo pedido se deja de intentar", () => {
@@ -161,7 +172,8 @@ function fakeAdmin(opts: {
         limit: () => chain,
         maybeSingle: () => Promise.resolve({ data: opts.maybe?.[table] ?? null, error: null }),
         then(res: any, rej: any) {
-          return Promise.resolve({ data: opts.tables?.[table] ?? [], error: null }).then(res, rej);
+          const tables: Record<string, any[]> = { shopify_product_images: [{ product_id: "111" }], ...opts.tables };
+          return Promise.resolve({ data: tables[table] ?? [], error: null }).then(res, rej);
         },
       };
       return chain;
@@ -182,12 +194,18 @@ describe("runRestockReminders", () => {
       ],
     });
     const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.1" });
-    const rep = await runRestockReminders(admin, "store", CREDS, send, NOW);
+    const rep = await runRestockReminders(admin, "store", CREDS, send, NOW, "https://kapta.app");
     expect(rep).toEqual({ sent: 1, control: 1, failed: 0, skipped: 0 });
     expect(send).toHaveBeenCalledTimes(1);
     expect(send).toHaveBeenCalledWith(
       { apiKey: "k" },
-      expect.objectContaining({ to: ENVIO, templateName: "recordatorio_reposicion", bodyParams: ["Ana", "Aceite de Semilla Negra"] }),
+      expect.objectContaining({
+        to: ENVIO,
+        templateName: "recordatorio_reposicion",
+        bodyParams: ["Ana", "Aceite de Semilla Negra"],
+        // La foto del producto, convertida a JPG por /api/wa-image.
+        headerImage: { link: "https://kapta.app/api/wa-image/store/111.jpg" },
+      }),
     );
     const rows = admin.writes.filter((w: any) => w.table === "restock_sends").map((w: any) => w.row);
     expect(rows).toEqual([
@@ -198,6 +216,17 @@ describe("runRestockReminders", () => {
       fn: "restock_candidates",
       args: { p_store_id: "store", p_days_before: 7, p_window_days: 14 },
     });
+  });
+
+  it("sin foto del producto no sale, ni a la clienta ni al control", async () => {
+    const admin = fakeAdmin({
+      candidates: [cand({ order_id: "o1" }), cand({ order_id: "o2", customer_phone: CONTROL })],
+      tables: { shopify_product_images: [] },
+    });
+    const send = vi.fn();
+    const rep = await runRestockReminders(admin, "store", CREDS, send, NOW);
+    expect(rep).toEqual({ sent: 0, control: 0, failed: 0, skipped: 2 });
+    expect(send).not.toHaveBeenCalled();
   });
 
   it("dos pedidos de la misma clienta: un solo recordatorio", async () => {
@@ -435,6 +464,21 @@ describe("la lista de productos en Ajustes", () => {
     ]);
   });
 
+  it("marca los productos sin foto: no se les envía aunque tengan días", () => {
+    const list = restockProductList(
+      [{ product_key: "2", title: "Aceite", pedidos: 100, unidades: 150 }],
+      [
+        { product_key: "2", shopify_title: "Aceite", short_name: "aceite", days_per_unit: 30 },
+        { product_key: "9", shopify_title: "Viejo", short_name: "viejo", days_per_unit: 60 },
+      ],
+      ["2"],
+    );
+    expect(list.map((i) => [i.key, i.hasImage])).toEqual([
+      ["2", true],
+      ["9", false],
+    ]);
+  });
+
   it("sugiere un nombre corto, y el mes por frasco es solo el valor inicial", () => {
     expect(suggestShortName("Nattokinase - Mejora de Circulación Arterial (90 cápsulas)")).toBe("Nattokinase");
     expect(suggestShortName("Magnesio 12 en 1 Complex (120 Cápsulas)")).toBe("Magnesio 12 en 1 Complex");
@@ -468,5 +512,6 @@ describe("MOM §34", () => {
     expect(mom).toContain("Recordatorio de reposición (13-10-2026)");
     expect(mom).toContain("lo toma una asesora");
     expect(mom).toContain("grupo de control");
+    expect(mom).toContain("Un producto sin foto no recibe recordatorio");
   });
 });

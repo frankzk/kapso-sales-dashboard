@@ -149,7 +149,8 @@ export interface ReproRow {
   stateLabel: string;
   /** Cuándo se programa el acuerdo con los hechos de ahora; null sin acuerdo. */
   plan: MaterializationPlan | null;
-  program: { scheduledFor: string; reason: string | null; origin: ProgramOrigin } | null;
+  /** `setAt`: cuándo se escribió el programa («Agregado hoy» de Almacén, entrega 1c). */
+  program: { scheduledFor: string; reason: string | null; origin: ProgramOrigin; setAt: string | null } | null;
   list: ReproList;
   /** `porDecidirRank` (solo cuenta en «Por decidir»). */
   rank: number;
@@ -161,6 +162,11 @@ export interface ReproRow {
   closed: { caseId: string; at: string | null; byName: string | null; note: string | null } | null;
   /** El caso abierto reabre un «Desarmar y cerrar» (E29). */
   reopened: boolean;
+  /**
+   * La salida propia que se reusa (`ReproFacts.ownLive`): la del rótulo de la
+   * misma salida y la de la dirección que cambió después de armar (entrega 1c).
+   */
+  ownOutput: { id: string; code: string | null } | null;
   /** Lo que `reproBoxAction` necesita además de lo que elige quien decide. */
   boxInputs: {
     ownLiveCourier: string | null;
@@ -354,7 +360,9 @@ function buildRow(input: {
     state,
     stateLabel: agreementStateLabel(state, open ? { agreed_on: open.agreed_on, agreed_courier: open.agreed_courier } : null, f.box, today),
     plan,
-    program: program ? { scheduledFor: program.scheduled_for, reason: program.reason, origin: programOrigin(program.reason) } : null,
+    program: program
+      ? { scheduledFor: program.scheduled_for, reason: program.reason, origin: programOrigin(program.reason), setAt: program.set_at }
+      : null,
     list: listed.list,
     rank,
     overdue: listed.overdue,
@@ -375,6 +383,7 @@ function buildRow(input: {
         }
       : null,
     reopened: Boolean(open && f.reopened),
+    ownOutput: f.ownLive ? { id: f.ownLive.id, code: f.ownLive.output_code ?? f.ownLive.guide_code ?? null } : null,
     boxInputs: {
       ownLiveCourier: f.ownLive?.courier ?? null,
       lastFailedCourier: f.failedOutput?.courier ?? null,
@@ -395,13 +404,14 @@ function buildRow(input: {
  * La pantalla entera: los pedidos de la etapa en las tiendas a su alcance,
  * con sus hechos, en tres oleadas de lecturas por lotes. `orderIds` acota a
  * esos pedidos (la hoja relee el suyo al abrirse). Los casos que ya no sirven
- * se cierran en `after()`.
+ * se cierran en `after()`, salvo con `closeStale: false`: Almacén solo lee
+ * (entrega 1c) y la fila ya los trata como ausentes.
  */
 export async function loadReproLima(
   admin: Admin,
   scope: ReproScope,
   now: Date = new Date(),
-  opts: { orderIds?: readonly string[]; defer?: (task: () => Promise<void>) => void } = {},
+  opts: { orderIds?: readonly string[]; defer?: (task: () => Promise<void>) => void; closeStale?: boolean } = {},
 ): Promise<ReproLimaData> {
   const clock = limaClock(now);
   const today = clock.day;
@@ -518,9 +528,10 @@ export async function loadReproLima(
     }));
   }
 
-  // Cierres sin evento, después de responder (`after()`).
+  // Cierres sin evento, después de responder (`after()`). Con `closeStale:
+  // false` no se programa nada: la lectura no escribe.
   const nowIso = now.toISOString();
-  if (outOfStage.length || outOfStageInFacts.length || newAttempt.length) {
+  if (opts.closeStale !== false && (outOfStage.length || outOfStageInFacts.length || newAttempt.length)) {
     const task = async () => {
       try {
         // Lo que no vino en la lectura por páginas se relee por id: solo se

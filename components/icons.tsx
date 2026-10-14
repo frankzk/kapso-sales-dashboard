@@ -407,6 +407,16 @@ export function IconNavigate(props: IconProps) {
   );
 }
 
+/** Emojis: una cara sonriente, el botón del selector del chat. */
+export function IconSmile(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M8.5 14a4.5 4.5 0 0 0 7 0M9.5 9.5h.01M14.5 9.5h.01" />
+    </svg>
+  );
+}
+
 export function IconPhone(props: IconProps) {
   return (
     <svg {...base(props)}>

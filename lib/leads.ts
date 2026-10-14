@@ -407,7 +407,7 @@ export type QueueBucket = "carrito" | "distrito" | "producto" | "converso" | "fr
 
 /** De mayor a menor intención, como LEAD_SEGMENTS. */
 export const QUEUE_BUCKETS: { key: QueueBucket; label: string }[] = [
-  { key: "carrito", label: "🛒 Carrito" },
+  { key: "carrito", label: "Carrito" },
   { key: "distrito", label: "Distrito" },
   { key: "producto", label: "Producto" },
   { key: "converso", label: "Conversó" },
@@ -472,6 +472,18 @@ export function leadHandle(lead: LeadIdentity): string {
  * el pedido de Shopify. Escribirle por WhatsApp sí se puede — Kapso lo alcanza
  * por BSUID — y por eso ésa pasa a ser la acción principal de estos leads.
  */
+/**
+ * Cómo se LEE el identificador de un lead: un celular peruano en grupos
+ * («+51 988 805 509»), cualquier otro como `leadHandle`. Solo para mostrar: lo
+ * que se copia o se marca sigue siendo el número tal cual.
+ */
+export function leadPhoneLabel(lead: LeadIdentity): string {
+  const digits = (lead.phone ?? "").replace(/\D/g, "");
+  const local = digits.length === 11 && digits.startsWith("51") ? digits.slice(2) : digits;
+  if (local.length === 9 && local.startsWith("9")) return `+51 ${local.slice(0, 3)} ${local.slice(3, 6)} ${local.slice(6)}`;
+  return leadHandle(lead);
+}
+
 export function leadCanCall(lead: LeadIdentity): boolean {
   return Boolean(lead.phone?.trim());
 }
@@ -943,6 +955,108 @@ export function claimBlockedByCap(
   max: number = MAX_OPEN_LEADS,
 ): boolean {
   return claimsBlocking(claims, userId, leadId, now).length >= max;
+}
+
+// ---------------------------------------------------------------------------
+// El siguiente lead de cada vendedora (14-10-2026, MOM §11 › «El siguiente
+// lead»). La tarjeta de arriba de la cola le reserva a cada vendedora UN lead
+// para llamar ahora, y nunca el mismo a dos: la reserva es la de siempre
+// (CLAIM_TTL_MINUTES) y cuenta como una de sus MAX_OPEN_LEADS.
+// ---------------------------------------------------------------------------
+
+export interface NextLeadCandidate {
+  id: string;
+  status: string;
+  claimed_by: string | null;
+  claimed_at: string | null;
+}
+
+/**
+ * El siguiente de `userId`: el primero de SU cola —ya filtrada y en el orden en
+ * que la está mirando— que sigue sin llamar, que nadie más tiene reservado y
+ * que ella no saltó. Si ya tiene uno y todavía sirve, se queda ese: la tarjeta
+ * no cambia bajo la mano porque entró un lead con más puntaje; ese será el
+ * siguiente al guardar.
+ */
+export function pickNextLead<T extends NextLeadCandidate>(
+  queue: readonly T[],
+  opts: {
+    userId: string;
+    current?: string | null;
+    skipped?: ReadonlySet<string>;
+    now?: Date;
+  },
+): T | null {
+  const now = opts.now ?? new Date();
+  const usable = (l: T) =>
+    l.status === "nuevo" &&
+    !opts.skipped?.has(l.id) &&
+    !(l.claimed_by && l.claimed_by !== opts.userId && isClaimActive(l.claimed_at, now));
+  if (opts.current) {
+    const current = queue.find((l) => l.id === opts.current);
+    if (current && usable(current)) return current;
+  }
+  return queue.find(usable) ?? null;
+}
+
+/** ¿El aviso del servidor es el del tope (y no «X está atendiendo este lead»)? */
+export function isClaimCapError(message: string | null | undefined): boolean {
+  return !!message && message.startsWith("Ya tienes ") && message.includes("leads abiertos");
+}
+
+/** Un artículo del carrito como lo lee la asesora. */
+export interface CartLine {
+  title: string;
+  quantity: number;
+}
+
+/**
+ * Los artículos del borrador de Shopify (`draft_orders.line_items`) para la
+ * tarjeta del siguiente lead: el título sin la variante entre paréntesis (la
+ * misma limpieza que la plantilla del carrito, `cartProductLabel`) y la
+ * cantidad, que `cart_summary` no guarda. Lo que no trae título no se muestra.
+ */
+export function cartLinesOf(lineItems: unknown): CartLine[] {
+  if (!Array.isArray(lineItems)) return [];
+  const lines: CartLine[] = [];
+  for (const item of lineItems) {
+    if (!item || typeof item !== "object") continue;
+    const { title, quantity } = item as { title?: unknown; quantity?: unknown };
+    const clean = String(title ?? "").replace(/\s*\(.*$/, "").trim();
+    if (!clean) continue;
+    const qty = Math.trunc(Number(quantity ?? 1));
+    lines.push({ title: clean, quantity: qty > 0 ? qty : 1 });
+  }
+  return lines;
+}
+
+/**
+ * La calle que la asesora puede usar, o null. El formulario del carrito deja
+ * un guion o un punto cuando el cliente no escribió nada («-, Carás»): eso no
+ * es una dirección, y mostrarla esconde que falta pedirla en la llamada.
+ */
+export function usableAddress(value: string | null | undefined): string | null {
+  const text = (value ?? "").trim();
+  if (!text || /^[\s\-–—.,_/·]*$/.test(text)) return null;
+  if (/^(s\/?n|sin direcci[oó]n|ninguna?|no)\.?$/i.test(text)) return null;
+  return text;
+}
+
+/**
+ * Cuándo pasó algo, como se dice en la mesa de llamadas: «hoy 10:12»,
+ * «ayer 18:05» o «12 oct 16:40», en la hora de Lima.
+ */
+export function dayTimeLabel(iso: string | null | undefined, now: Date = new Date(), timeZone = "America/Lima"): string | null {
+  if (!iso) return null;
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return null;
+  const dayOf = (d: Date) => d.toLocaleDateString("en-CA", { timeZone });
+  const time = at.toLocaleTimeString("es-PE", { timeZone, hour: "2-digit", minute: "2-digit", hour12: false });
+  const day = dayOf(at);
+  if (day === dayOf(now)) return `hoy ${time}`;
+  if (day === dayOf(new Date(now.getTime() - 86_400_000))) return `ayer ${time}`;
+  const date = at.toLocaleDateString("es-PE", { timeZone, day: "numeric", month: "short" }).replace(/\.$/, "");
+  return `${date} ${time}`;
 }
 
 // ---------------------------------------------------------------------------

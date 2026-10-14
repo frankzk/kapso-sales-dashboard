@@ -169,7 +169,9 @@ describe("el filtro es una faceta de verdad", () => {
   it("cuenta como filtro activo y se va con «limpiar»", () => {
     // Un filtro que no aparece en el badge es un filtro que alguien deja puesto
     // sin darse cuenta y luego jura que faltan leads.
-    expect(source).toContain("(prodFilter.size > 0 ? 1 : 0)");
+    // «Más filtros» lo nombra en su píldora y lo quita con «Quitar estos filtros».
+    expect(source).toContain("prodFilter.size ? `Producto (${prodFilter.size})` : null");
+    expect(source).toContain("prodFilter.size > 0;");
     expect(source).toContain("setProdFilter(new Set());");
   });
 });

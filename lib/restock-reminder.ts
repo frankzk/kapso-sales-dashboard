@@ -37,6 +37,8 @@ import { handoffStatus } from "@/lib/leads";
 import { sendWhatsappTemplate, sendWhatsappText, type InboundMessage } from "@/lib/kapso";
 import { firstName, recoveryWithinHours } from "@/lib/return-recovery";
 import { THANKS_BATCH_CAP, thanksPaceBudget } from "@/lib/delivered-thanks";
+import { waImageUrl } from "@/lib/cart-image-test";
+import { env } from "@/lib/env";
 
 /** Hasta cuántos días después de vencer todavía se manda. Pasado eso, un
  *  «se te está por acabar» llega tarde: ya se le acabó hace semanas. */
@@ -82,6 +84,8 @@ export interface RestockHistory {
   recentPhones: Set<string>;
   /** Teléfonos que pidieron no ser contactados. */
   optedOut: Set<string>;
+  /** Productos con foto en el espejo del catálogo (`shopify_product_images`). */
+  productsWithImage: Set<string>;
 }
 
 /**
@@ -103,6 +107,9 @@ export function restockSkipReason(c: RestockCandidate, history: RestockHistory):
   if ((history.failedAttempts.get(c.order_id) ?? 0) >= RESTOCK_MAX_ATTEMPTS) {
     return `Meta lo rechazó ${RESTOCK_MAX_ATTEMPTS} veces`;
   }
+  // La plantilla lleva la foto del producto en la cabecera: sin foto, Meta
+  // rechaza el envío. Y el dueño decidió que sin foto no se manda (14-10-2026).
+  if (!history.productsWithImage.has(c.product_key)) return "el producto no tiene foto en Shopify";
   const phone = (c.customer_phone ?? "").trim();
   if (!isSendablePhone(phone)) return "sin número de WhatsApp válido";
   if (history.optedOut.has(phone)) return "pidió que no le escriban";
@@ -209,9 +216,15 @@ async function loadHistory(
   storeId: string,
   orderIds: string[],
   phones: string[],
+  productKeys: string[],
   nowMs: number,
 ): Promise<RestockHistory> {
-  const history: RestockHistory = { failedAttempts: new Map(), recentPhones: new Set(), optedOut: new Set() };
+  const history: RestockHistory = {
+    failedAttempts: new Map(),
+    recentPhones: new Set(),
+    optedOut: new Set(),
+    productsWithImage: new Set(),
+  };
   if (orderIds.length) {
     const { data, error } = await admin
       .from("restock_sends")
@@ -236,6 +249,16 @@ async function loadHistory(
     for (const r of (data ?? []) as { phone: string }[]) history.recentPhones.add(r.phone);
     history.optedOut = await loadOptOuts(admin, storeId, phones);
   }
+  if (productKeys.length) {
+    const { data, error } = await admin
+      .from("shopify_product_images")
+      .select("product_id")
+      .eq("store_id", storeId)
+      .in("product_id", productKeys)
+      .not("image_url", "is", null);
+    if (error) throw new Error(`restock images: ${error.message}`);
+    for (const r of (data ?? []) as { product_id: string }[]) history.productsWithImage.add(String(r.product_id));
+  }
   return history;
 }
 
@@ -249,6 +272,7 @@ export async function runRestockReminders(
   creds: StoreCreds,
   sendTemplate: typeof sendWhatsappTemplate = sendWhatsappTemplate,
   nowIso = new Date().toISOString(),
+  siteUrl = env.siteUrl(),
 ): Promise<RestockReport> {
   const report: RestockReport = { sent: 0, control: 0, failed: 0, skipped: 0 };
   const cfg = restockConfig(creds);
@@ -290,6 +314,7 @@ export async function runRestockReminders(
     storeId,
     rows.map((r) => r.order_id),
     [...new Set(rows.map((r) => (r.customer_phone ?? "").trim()).filter(Boolean))],
+    [...new Set(rows.map((r) => r.product_key))],
     nowMs,
   );
 
@@ -338,6 +363,9 @@ export async function runRestockReminders(
           templateName: cfg.templateName,
           language: cfg.language,
           bodyParams: bodyParams ?? undefined,
+          // La foto del producto, en JPG: Meta no acepta el WebP de Shopify
+          // (ver app/api/wa-image).
+          headerImage: { link: waImageUrl(siteUrl, storeId, c.product_key) },
         },
       );
       ok = res.ok;

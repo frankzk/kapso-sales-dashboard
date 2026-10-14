@@ -26,12 +26,15 @@ import {
   MAX_OPEN_LEADS,
   claimsBlocking,
   canDispositionLead,
+  cartLinesOf,
   categoryOf,
   defaultFollowupAt,
   isValidStatus,
   labelOf,
   leadSearchPasses,
+  type CartLine,
 } from "@/lib/leads";
+import { firstProductWithImage, type CatalogImage } from "@/lib/cart-image-test";
 import { OFFER_TTL_MS, planYapeOffers, type RoutingLead } from "@/lib/yape-routing";
 import { onlineVendedorasForStore } from "@/lib/presence";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -236,6 +239,52 @@ export async function loadLeadDetail(
         : null,
   }));
   return { lead: detail.lead, calls };
+}
+
+/** El carrito del siguiente lead, con lo que `cart_summary` no guarda. */
+export interface NextLeadCart {
+  lines: CartLine[];
+  /** Cuándo armó el carrito (el borrador de Shopify). */
+  createdAt: string | null;
+  /** La foto del catálogo, servida por /api/wa-image (mismo origen, en JPG). */
+  photoUrl: string | null;
+}
+
+/**
+ * Lo que la tarjeta del siguiente lead pone primero (DESIGN.md › Leads): los
+ * artículos del carrito con su cantidad y la foto del producto. Salen del
+ * borrador de Shopify (`draft_orders.line_items`) y del espejo de catálogo
+ * (`shopify_product_images`), con la regla de casado de la prueba de imagen
+ * (lib/cart-image-test): por `product_id`, y si no viene, por el título. Sin
+ * carrito o sin foto, la tarjeta se queda con `cart_summary` y sin foto.
+ */
+export async function loadNextLeadCart(leadId: string): Promise<NextLeadCart | { error: string }> {
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { error: "Sin acceso a este lead." };
+  const admin = createAdminSupabase();
+  const { data: lead } = await admin.from("leads").select("draft_order_gid").eq("id", leadId).maybeSingle();
+  const gid = (lead as { draft_order_gid: string | null } | null)?.draft_order_gid ?? null;
+  if (!gid) return { lines: [], createdAt: null, photoUrl: null };
+  const [draftRes, catalogRes] = await Promise.all([
+    admin
+      .from("draft_orders")
+      .select("line_items, created_at")
+      .eq("store_id", ctx.storeId)
+      .eq("draft_order_gid", gid)
+      .maybeSingle(),
+    admin
+      .from("shopify_product_images")
+      .select("product_id, catalog_title")
+      .eq("store_id", ctx.storeId)
+      .not("image_url", "is", null),
+  ]);
+  const draft = draftRes.data as { line_items: unknown; created_at: string | null } | null;
+  const productId = draft ? firstProductWithImage(draft.line_items, (catalogRes.data as CatalogImage[] | null) ?? []) : null;
+  return {
+    lines: cartLinesOf(draft?.line_items),
+    createdAt: draft?.created_at ?? null,
+    photoUrl: productId ? `/api/wa-image/${ctx.storeId}/${productId}.jpg` : null,
+  };
 }
 
 /** Non-critical customer context loaded progressively after the drawer is
