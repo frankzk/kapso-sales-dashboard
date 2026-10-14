@@ -652,48 +652,62 @@ export function ExecutiveDashboard({
         : closing?.status === "error"
           ? `No se pudo calcular el canal de todas las ventas (${closing.message}). Esto es la vista anterior: solo los pedidos del bot de Kapso.`
           : null;
+  const coverageSub = closingCopy?.sub.length ? `${SEP}${closingCopy.sub.join(SEP)}` : "";
+  const closingSold = closingSummary ? closingSummary.total.revenue > 0 : false;
   const canal: ModuleCell = closingSummary
     ? {
         id: "canal",
         title: "Canal de cierre",
-        figure: closingSummary.total.revenue ? pct(closingSummary.byGroup.humano.revenue / closingSummary.total.revenue, 0) : "—",
-        tone: closingSummary.total.revenue ? undefined : "muted",
-        sub: closingSummary.total.revenue
-          ? `de todas las ventas lo cerró una asesora${SEP}${money(closingSummary.byGroup.humano.revenue, currency)} de ${money(closingSummary.total.revenue, currency)}${closingCopy?.sub ? `${SEP}${closingCopy.sub}` : ""}`
-          : "Sin ventas en el periodo",
-        glyph: closingSummary.total.revenue ? (
+        figure: closingSold ? pct(closingSummary.byGroup.humano.revenue / closingSummary.total.revenue, 0) : "—",
+        tone: closingSold ? undefined : "muted",
+        sub: closingSold
+          ? `de todas las ventas lo cerró una asesora${SEP}${money(closingSummary.byGroup.humano.revenue, currency)} de ${money(closingSummary.total.revenue, currency)}${coverageSub}`
+          : coverageSub
+            ? `Sin ventas en lo contado${coverageSub}`
+            : "Sin ventas en el periodo",
+        glyph: closingSold ? (
           <StackGlyph
             parts={CLOSING_GROUPS.map((g) => ({ label: GROUP_LABEL[g], value: closingSummary.byGroup[g].revenue, color: CLOSING_GROUP_SHADE[g] }))}
           />
         ) : undefined,
-        panel: closingSummary.total.revenue
-          ? {
-              meta: `Todas las ventas de la tienda${SEP}${closingFrom ? `${rangeLabel({ from: closingFrom, to: range.to })}${SEP}${scopeLabel}` : periodMeta}`,
-              width: "max-w-[880px]",
-              body: (
-                <div className="flex flex-col gap-4">
-                  {closingCopy?.title && (
-                    <Banner tone="info" role="status" title={closingCopy.title}>
-                      {closingCopy.body}
-                    </Banner>
-                  )}
-                  <p className="max-w-[72ch] text-[13px] leading-5 text-ink-600">
-                    Cada venta cae en un solo canal, así que los canales suman el total de la tienda: la venta que una asesora
-                    registró en el dashboard es suya aunque el pedido lleve otra etiqueta. «Ayudados por asesora» marca lo que cerró
-                    otro canal después de que una asesora gestionara a la clienta en los 7 días previos: ayudar no es cerrar, por
-                    eso no se suma a la asesora. En «Ventas del periodo», salvo esta tarjeta y «Anuncios de Meta», los pedidos y los
-                    ingresos —las cifras de cabecera, Ventas por día, Productos, Fuente, Embudo, Carritos, Números de WhatsApp, Venta
-                    perdida y los demás módulos— cuentan solo los pedidos del bot de Kapso.
-                  </p>
-                  <p className="max-w-[72ch] text-[13px] leading-5 text-ink-600">
-                    Un carrito de EasySell que completa el bot de Kapso por WhatsApp hoy cuenta como «Web»: Shopify no le pone ninguna
-                    marca que lo distinga de uno que la clienta terminó sola.
-                  </p>
-                  <ClosingChannels summary={closingSummary} currency={currency} />
-                </div>
-              ),
-            }
-          : null,
+        // Sin ventas en lo contado, el panel se abre igual si hay algo que decir de
+        // la cobertura: «Sin ventas» con una tienda fuera o un periodo recortado no
+        // es lo mismo que una tienda sin ventas.
+        panel:
+          closingSold || closingCopy?.title
+            ? {
+                meta: `Todas las ventas de la tienda${SEP}${closingFrom ? `${rangeLabel({ from: closingFrom, to: range.to })}${SEP}${scopeLabel}` : periodMeta}`,
+                width: "max-w-[880px]",
+                body: (
+                  <div className="flex flex-col gap-4">
+                    {closingCopy?.title && (
+                      <Banner tone="info" role="status" title={closingCopy.title}>
+                        {closingCopy.body}
+                      </Banner>
+                    )}
+                    {closingSold ? (
+                      <>
+                        <p className="max-w-[72ch] text-[13px] leading-5 text-ink-600">
+                          Cada venta cae en un solo canal, así que los canales suman el total de la tienda: la venta que una asesora
+                          registró en el dashboard es suya aunque el pedido lleve otra etiqueta. «Ayudados por asesora» marca lo que
+                          cerró otro canal después de que una asesora gestionara a la clienta en los 7 días previos: ayudar no es cerrar,
+                          por eso no se suma a la asesora. En «Ventas del periodo», salvo esta tarjeta y «Anuncios de Meta», los pedidos
+                          y los ingresos —las cifras de cabecera, Ventas por día, Productos, Fuente, Embudo, Carritos, Números de
+                          WhatsApp, Venta perdida y los demás módulos— cuentan solo los pedidos del bot de Kapso.
+                        </p>
+                        <p className="max-w-[72ch] text-[13px] leading-5 text-ink-600">
+                          Un carrito de EasySell que completa el bot de Kapso por WhatsApp hoy cuenta como «Web»: Shopify no le pone
+                          ninguna marca que lo distinga de uno que la clienta terminó sola.
+                        </p>
+                        <ClosingChannels summary={closingSummary} currency={currency} />
+                      </>
+                    ) : (
+                      <p className="text-[13px] leading-5 text-ink-600">Sin ventas en lo contado.</p>
+                    )}
+                  </div>
+                ),
+              }
+            : null,
       }
     : {
         id: "canal",

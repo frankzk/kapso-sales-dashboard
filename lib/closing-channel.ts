@@ -92,7 +92,10 @@ export interface ClosingCoverage {
   storeId: string | null;
   /** Tiendas pedidas que todavía no usan Kapta (sin ventas registradas ni leads): fuera del conteo. */
   excluded: string[];
-  /** Se pidió más de una tienda: el día es el de la que empezó último. */
+  /**
+   * Se cuenta más de una tienda (el día es el de la que empezó último); si
+   * ninguna usa Kapta, se pidió más de una.
+   */
   multiStore: boolean;
 }
 
@@ -129,8 +132,8 @@ export interface CoveragePlan {
 export function planCoverage(syncFrom: string, stores: readonly { id: string; start: string | null }[]): CoveragePlan {
   const counted = stores.filter((s): s is { id: string; start: string } => s.start != null);
   const excluded = stores.filter((s) => s.start == null).map((s) => s.id);
-  const multiStore = stores.length > 1;
-  if (!counted.length) return { counted: [], from: null, cause: null, storeId: null, excluded, multiStore };
+  if (!counted.length) return { counted: [], from: null, cause: null, storeId: null, excluded, multiStore: stores.length > 1 };
+  const multiStore = counted.length > 1;
   const last = counted.reduce((a, b) => (b.start > a.start ? b : a));
   return last.start > syncFrom
     ? { counted: counted.map((s) => s.id), from: last.start, cause: "tienda", storeId: last.id, excluded, multiStore }
@@ -148,27 +151,30 @@ function excludedLine(cov: ClosingCoverage, name: (id: string) => string): strin
 
 /**
  * Los textos de la cobertura cuando hay resumen: el aviso del panel (título y
- * cuerpo) y la coletilla de la tarjeta. Todo null si se contó el periodo entero
- * con todas las tiendas.
+ * cuerpo) y las coletillas de la tarjeta («desde el …», «sin …»). Nada si se
+ * contó el periodo entero con todas las tiendas.
  */
 export function coverageCopy(
   cov: ClosingCoverage,
   name: (id: string) => string,
   day: (iso: string) => string,
-): { title: string | null; body: string | null; sub: string | null } {
+): { title: string | null; body: string | null; sub: string[] } {
   const excl = excludedLine(cov, name);
+  const sinTiendas = cov.excluded.length ? [`sin ${joinNames(cov.excluded.map(name))}`] : [];
   if (!cov.from) {
-    return excl
-      ? { title: "No entran todas las tiendas", body: excl, sub: `sin ${joinNames(cov.excluded.map(name))}` }
-      : { title: null, body: null, sub: null };
+    return excl ? { title: "No entran todas las tiendas", body: excl, sub: sinTiendas } : { title: null, body: null, sub: [] };
   }
   const reason =
     cov.cause === "tienda" && cov.storeId
       ? cov.multiStore
         ? `Ese día empezó a usar Kapta ${name(cov.storeId)}, la última de las tiendas. Antes, sus ventas de asesora no tenían dónde registrarse y caerían en «Web» u «Otros»; para que el total sea de un solo periodo, todas las tiendas cuentan desde ese día. La página de cada tienda cuenta desde su propio inicio.`
-        : "Ese día la tienda empezó a usar Kapta. Antes, una venta de asesora no tenía dónde registrarse y caería en «Web» u «Otros», así que los días anteriores del periodo no entran aquí."
+        : `Ese día ${name(cov.storeId)} empezó a usar Kapta. Antes, una venta de asesora no tenía dónde registrarse y caería en «Web» u «Otros», así que los días anteriores del periodo no entran aquí.`
       : "Antes de ese día Kapta no tiene los pedidos que no son del bot, así que los días anteriores del periodo no entran aquí.";
-  return { title: `Cuenta desde el ${day(cov.from)}`, body: excl ? `${reason} ${excl}` : reason, sub: `desde el ${day(cov.from)}` };
+  return {
+    title: `Cuenta desde el ${day(cov.from)}`,
+    body: excl ? `${reason} ${excl}` : reason,
+    sub: [`desde el ${day(cov.from)}`, ...sinTiendas],
+  };
 }
 
 /** El aviso de la vista de respaldo cuando el periodo no tiene cobertura, y la coletilla de la tarjeta. */
@@ -194,7 +200,7 @@ export function noCoverageCopy(
     cov.cause === "tienda" && cov.storeId
       ? cov.multiStore
         ? `${desde}, el día en que empezó a usar Kapta ${name(cov.storeId)}, la última de las tiendas; la página de cada tienda cuenta desde su propio inicio.`
-        : `${desde}, el día en que la tienda empezó a usar Kapta: antes, una venta de asesora no tenía dónde registrarse.`
+        : `${desde}, el día en que ${name(cov.storeId)} empezó a usar Kapta: antes, una venta de asesora no tenía dónde registrarse.`
       : `${desde}: antes Kapta no tiene los pedidos que no son del bot.`;
   return { note: `${why} Para este periodo no hay con qué decir quién cerró cada venta.${back}`, sub: "Periodo anterior a que Kapta tuviera todas las ventas" };
 }

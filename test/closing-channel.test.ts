@@ -294,7 +294,8 @@ describe("getClosingChannels", () => {
     rpc.result = { data: { version: 1, filas: [] }, error: null };
     const ad = await getClosingChannels(["A", "D"], { from: "2026-09-14", to: "2026-10-13" });
     expect(rpc.calls[0]).toMatchObject({ p_store_ids: ["A"] });
-    expect(ad).toMatchObject({ status: "ok", coverage: { from: null, excluded: ["D"], multiStore: true } });
+    // Se cuenta una sola tienda: los textos no hablan de «la última de las tiendas».
+    expect(ad).toMatchObject({ status: "ok", coverage: { from: null, excluded: ["D"], multiStore: false } });
   });
 
   it("si no se puede leer desde cuándo usa Kapta una tienda, es un error: nunca un periodo sin recortar", async () => {
@@ -492,15 +493,23 @@ describe("los textos de la cobertura dicen qué fijó el día", () => {
   const cov = (o: Partial<ClosingCoverage>): ClosingCoverage => ({ from: null, cause: null, storeId: null, excluded: [], multiStore: false, ...o });
 
   it("sin recorte ni tiendas fuera, nada que decir", () => {
-    expect(coverageCopy(cov({}), name, day)).toEqual({ title: null, body: null, sub: null });
+    expect(coverageCopy(cov({}), name, day)).toEqual({ title: null, body: null, sub: [] });
   });
 
   it("una tienda: el día en que empezó a usar Kapta, y por qué recorta", () => {
     const c = coverageCopy(cov({ from: "2026-07-04", cause: "tienda", storeId: "B" }), name, day);
     expect(c.title).toBe("Cuenta desde el día 2026-07-04");
-    expect(c.sub).toBe("desde el día 2026-07-04");
-    expect(c.body).toContain("Ese día la tienda empezó a usar Kapta");
+    expect(c.sub).toEqual(["desde el día 2026-07-04"]);
+    expect(c.body).toContain("Ese día Tienda Dos empezó a usar Kapta");
     expect(c.body).toContain("«Web» u «Otros»");
+    expect(c.body).not.toContain("la última de las tiendas");
+  });
+
+  it("recortado y con una tienda fuera: la tarjeta dice las dos cosas", () => {
+    const c = coverageCopy(cov({ from: "2026-07-04", cause: "tienda", storeId: "B", excluded: ["Z"] }), name, day);
+    expect(c.sub).toEqual(["desde el día 2026-07-04", "sin Tienda Nueva"]);
+    expect(c.body).toContain("Ese día Tienda Dos empezó a usar Kapta.");
+    expect(c.body).toContain("Tienda Nueva todavía no usa Kapta");
   });
 
   it("varias tiendas: nombra la que empezó último y dice que cada página cuenta desde su inicio", () => {
@@ -520,7 +529,7 @@ describe("los textos de la cobertura dicen qué fijó el día", () => {
     expect(c).toEqual({
       title: "No entran todas las tiendas",
       body: "Tienda Nueva todavía no usa Kapta (sin ventas registradas ni leads): sus pedidos no entran en este total.",
-      sub: "sin Tienda Nueva",
+      sub: ["sin Tienda Nueva"],
     });
   });
 
@@ -575,6 +584,12 @@ describe("el panel", () => {
     expect(dash).toContain('closing?.status === "sin_cobertura" ? noCoverageCopy(closing.coverage, storeName, fullDay)');
     expect(dash).toContain('closing?.status === "ok" ? coverageCopy(closing.coverage, storeName, fullDay)');
     expect(dash).toContain("<Banner tone=\"info\" role=\"status\" title={closingCopy.title}>");
+  });
+
+  it("sin ventas en lo contado, la cobertura se sigue diciendo (no «Sin ventas en el periodo» a secas)", () => {
+    const dash = read("components/executive-dashboard.tsx");
+    expect(dash).toContain("`Sin ventas en lo contado${coverageSub}`");
+    expect(dash).toContain("closingSold || closingCopy?.title");
   });
 
   it("la vista de respaldo no muestra el porcentaje de solo-bot como cifra de cabecera", () => {
