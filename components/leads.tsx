@@ -1875,6 +1875,8 @@ export function LeadsBoard({
           storeName={allStores && nextLead.lead ? (storeNameById.get(nextLead.lead.store_id) ?? null) : null}
           onOpen={openLead}
           onRegistered={refreshDetail}
+          filters={refinementLabels}
+          onClearFilters={clearRefinements}
         />
       )}
 
@@ -1957,7 +1959,7 @@ export function LeadsBoard({
               </span>
             )}
           </h2>
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <div className="flex items-center gap-3">
             {/* Lo que afina y ordena la lista vive con la lista. */}
             <FilterPill
               ref={filtersPillRef}

@@ -879,7 +879,7 @@ export function LeadDrawer({
                   <h3 className="text-sm font-semibold text-ink-900">Llamar desde tu celular</h3>
                   <p className="mt-0.5 text-[13px] leading-5 text-ink-500">
                     Escanea el código con la cámara y el marcador se abre con{" "}
-                    <span className="tabular-nums text-ink-700">{handle}</span> listo.
+                    <span className="tabular-nums text-ink-700">{leadPhoneLabel(lead)}</span> listo.
                   </p>
                 </div>
               </section>

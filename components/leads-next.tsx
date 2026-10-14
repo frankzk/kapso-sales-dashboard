@@ -367,6 +367,8 @@ export function NextLeadCard({
   storeName,
   onOpen,
   onRegistered,
+  filters = [],
+  onClearFilters,
 }: {
   state: NextLeadState;
   now: number;
@@ -377,8 +379,27 @@ export function NextLeadCard({
   storeName: string | null;
   onOpen: (lead: LeadRow) => void;
   onRegistered: (leadId: string, update?: LeadDrawerUpdate) => void;
+  /** Lo que «Más filtros» tiene puesto: también decide qué lead se reserva. */
+  filters?: string[];
+  onClearFilters?: () => void;
 }) {
   const { lead, problem } = state;
+  // «Más filtros» vive en la cabecera de la cola, debajo de esta tarjeta; lo
+  // que tenga puesto decide qué lead se reserva, así que se dice aquí también.
+  const filterNote =
+    filters.length > 0 ? (
+      <span className="text-xs text-ink-500">
+        Sale de la cola con <span className="font-medium text-ink-700">{filters.join(", ")}</span>
+        {onClearFilters && (
+          <>
+            {" · "}
+            <button type="button" onClick={onClearFilters} className="font-medium text-brand-700 hover:underline">
+              Quitar
+            </button>
+          </>
+        )}
+      </span>
+    ) : null;
 
   if (problem) {
     return (
@@ -398,7 +419,7 @@ export function NextLeadCard({
       return (
         <p className="rounded-lg bg-white px-4 py-3 text-[13px] text-ink-600 shadow-control ring-1 ring-line">
           No queda nadie libre para reservarte en lo que estás mirando. Cambia el segmento o la cobertura, o revisa
-          «En seguimiento».
+          «En seguimiento».{filterNote && <> {filterNote}</>}
         </p>
       );
     }
@@ -451,6 +472,7 @@ export function NextLeadCard({
               </Badge>
               Las demás vendedoras ven otro lead. Si lo saltas, vuelve a la cola.
             </p>
+            {filterNote && <p className="mt-1">{filterNote}</p>}
           </div>
 
           {(asked || address || botNote || firstMessage) && (
