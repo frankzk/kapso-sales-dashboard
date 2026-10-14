@@ -58,6 +58,7 @@ import {
   type RestockResultRow,
 } from "@/lib/restock-view";
 import type { MetaAdAccount, MetaConnectionProbe, StoreMetaAdAccount } from "@/lib/meta-marketing";
+import { InvoiceSettingsSection, type InvoiceSettingsData } from "@/components/invoice-settings-section";
 import {
   addPaymentMethod,
   addReplyTemplate,
@@ -304,6 +305,9 @@ export interface StoreSettingsData {
     active: boolean;
     sort: number;
   }>;
+  /** «Boletas y facturas» (MOM §35): los RUC, sus cuentas y los últimos
+   *  comprobantes. Sin el token: solo si hay uno. */
+  invoices: InvoiceSettingsData;
   /** La escalera de la cola de cobranza (0172), en orden. */
   escalation: Array<{ id: string; userId: string; name: string; minutes: number; sort: number }>;
   /** Usuarios de la tienda que pueden entrar en la escalera. */
@@ -397,6 +401,7 @@ const INDEX: IndexGroup[] = [
     title: "Cobranza",
     items: [
       { id: "cuentas", label: "Cuentas de cobro" },
+      { id: "boletas", label: "Boletas y facturas" },
       { id: "escalera", label: "Quién atiende la cobranza" },
     ],
   },
@@ -582,6 +587,7 @@ export function StoreSettings({
 
           <SettingsGroup title="Cobranza">
             <PaymentMethodsSection storeId={s.id} rows={data.paymentMethods} />
+            <InvoiceSettingsSection storeId={s.id} data={data.invoices} paymentMethods={data.paymentMethods} />
             <EscalationSection storeId={s.id} rows={data.escalation} candidates={data.escalationCandidates} />
           </SettingsGroup>
 

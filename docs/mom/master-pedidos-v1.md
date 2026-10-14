@@ -7722,11 +7722,12 @@ registra en cada evento.
   cambia roles, invita a alguien como admin y quita a un admin. Un admin invita
   y quita vendedoras y solo lectura, y nada más. Los permisos de dinero y de
   datos —«Validar pagos», «Corregir pagos», «Alerta de comprobante repetido»,
-  «Administrar Grupo GF» (tarifas y pago de motorizados) y «Exportar datos»—
-  solo los da o los quita el owner, también a sí mismo; un admin sigue
-  concediendo lo operativo («Reportar entregas de rutas»). Las casillas que no
-  puede tocar le salen apagadas, con el motivo al pasar el ratón, y el servidor
-  lo rechaza igual (`lib/team.ts`, `GRANTED_ONE_BY_ONE[].ownerOnly`).
+  «Administrar Grupo GF» (tarifas y pago de motorizados), «Exportar datos» y
+  «Boletas y facturas» (§35.7)— solo los da o los quita el owner, también a sí
+  mismo; un admin sigue concediendo lo operativo («Reportar entregas de
+  rutas»). Las casillas que no puede tocar le salen apagadas, con el motivo al
+  pasar el ratón, y el servidor lo rechaza igual (`lib/team.ts`,
+  `GRANTED_ONE_BY_ONE[].ownerOnly`).
 
   Por qué: con doce admins, la regla de «Validar pagos se concede uno por uno»
   no protegía nada, porque cualquier admin podía concedérselo. Al 12-10-2026 una
@@ -7754,7 +7755,8 @@ registra en cada evento.
     lo tienen todo: un rol no les suma nada.
   - Ningún rol trae los permisos de dinero o datos que da el dueño uno por uno
     (validar y corregir pagos, alerta de comprobante repetido, Administrar
-    Grupo GF, exportar datos), ni confirmar reembolsos. Lo fija una prueba.
+    Grupo GF, exportar datos, boletas y facturas), ni confirmar reembolsos. Lo
+    fija una prueba.
   - Una revocación puntual sigue ganando sobre cualquier rol.
   - Solo el dueño asigna o quita roles. Equipo muestra, para cada persona, lo
     que puede hacer hoy y de dónde le viene (ver «Glosario de Equipo»).
@@ -13198,8 +13200,9 @@ detalle no suma el total (`no_cuadra`) y uno cuyo total no es el de Kapta
 sus transacciones aprobadas sumen el total (`pago_web_no_confirmado`).
 
 Recién entonces se pide el turno (`invoice_claim`, 35.4), que revisa de nuevo,
-dentro de la base, el modo, la conexión, el monto, la fecha de inicio, que no
-haya otro comprobante y el tope del día: `sin_conexion`, `tope`.
+dentro de la base, que el pedido siga sin anular ni reembolsar y en soles, el
+modo, la conexión, el monto, la fecha de inicio, que no haya otro comprobante y
+el tope del día: `sin_conexion`, `tope`.
 
 **Falla cerrada.** Si no se pudo leer algo —pagos, cuentas, el estado de
 cuenta, los links de Flow, Shopify—, el pedido no se emite en esa pasada. Un
@@ -13215,19 +13218,19 @@ comprobante armado con datos a medias puede ir al RUC equivocado.
   `emitiendo`. Recién entonces se llama a SimpleFact.
 - **Lo que contestó SimpleFact:**
   - `emitida`: contestó con la venta (id, serie y correlativo).
-  - `error`: contestó que no, con un 4xx y su mensaje: no hay boleta. No se
-    reintenta solo. Una persona pulsa «Volver a intentar» y la fila queda como
-    historia.
-  - `en_duda`: no contestó, contestó un 5xx o algo que no se entiende. La
-    boleta puede existir, así que **nunca se reintenta sola**. El barrido la
-    concilia buscando en las ventas de hoy y de ayer de SimpleFact la nota
-    «Kapta ‹ref›» (35.5); si aparece, pasa a `emitida`. Si no aparece, la ve
-    una persona: si confirma en SimpleFact que no existe, la libera con «No
-    está en SimpleFact: volver a intentar».
+  - `error`: contestó que no, con un 4xx que no deja duda (400, 401, 403, 404,
+    405, 409, 422 o 429) y su mensaje: no hay boleta. No se reintenta solo. Una
+    persona pulsa «Volver a intentar» y la fila queda como historia.
+  - `en_duda`: no contestó, contestó un 5xx u otro código, o algo que no se
+    entiende. La boleta puede existir, así que **nunca se reintenta sola**. El
+    barrido la concilia buscando en las ventas de hoy y de ayer de SimpleFact
+    la nota «Kapta ‹ref›» (35.5); si aparece, pasa a `emitida`. Si no aparece,
+    la ve una persona: si confirma en SimpleFact que no existe, la libera con
+    «No está en SimpleFact: volver a intentar».
 - **Tope diario por RUC** (`daily_limit`): 40 por defecto, de 1 a 300, por día
-  de Lima. Cuenta lo emitido, lo que se está emitiendo y lo que está en duda.
-  Lo que excede espera al día siguiente y no se pierde. El defecto cubre el pico
-  medido (34) más los prepagos web.
+  de Lima. Cuenta lo emitido, lo que se está emitiendo y lo que está en duda;
+  en simulación, lo simulado. Lo que excede espera al día siguiente y no se
+  pierde. El defecto cubre el pico medido (34) más los prepagos web.
 - **Por pasada,** a lo más 15 comprobantes por RUC.
 - **«Emitir desde».** Ningún RUC emite hacia atrás: solo pedidos que quedaron
   pagados desde esa fecha, y Ajustes no la deja en el pasado. Al cambiar de
@@ -13239,11 +13242,22 @@ comprobante armado con datos a medias puede ir al RUC equivocado.
   una fila `externa` y Kapta no vuelve a emitir por ese pedido.
 - **El token tiene que ser del RUC.** «Probar conexión» lee las ventas de la
   cuenta y saca el RUC del nombre de sus archivos (`20556792829-03-B001-…`).
-  Si no es el RUC declarado, no se puede pasar a real. Cada respuesta de una
+  Si no es el RUC declarado, no se puede pasar a real. Si se vuelve a probar
+  con el RUC en real y la prueba no confirma el RUC, baja sola a Simulación; lo
+  mismo al cambiar el token, el subdominio o el RUC. Cada respuesta de una
   emisión se contrasta igual: si trae otro RUC, el comprobante queda marcado y
   el RUC se apaga solo.
-- **Un token rechazado** (401 o 403) apaga el RUC con el motivo a la vista:
-  seguir intentando solo llenaría de errores.
+- **Un token rechazado** (401 o 403), o una cuenta que no responde (404 o
+  405), apaga el RUC con el motivo a la vista: seguir intentando solo llenaría
+  de errores. Tras un 429 (SimpleFact pide esperar) no se emite nada más en
+  esa pasada. Tras una respuesta en duda, ese RUC tampoco emite nada más en la
+  pasada.
+- **Qué mira el barrido.** Cada 10 minutos, los pedidos pagados completos de
+  los últimos 45 días (`order_master`) y los que tienen pagos validados desde
+  «Emitir desde». No empieza un pedido nuevo pasados 20 segundos de la pasada:
+  una función cortada a la mitad de un envío deja la fila en `emitiendo`, y la
+  pasada siguiente la concilia. Un pedido bloqueado por lo que dijo Shopify no
+  se vuelve a leer en Shopify antes de 6 horas.
 
 ### 35.5 Boleta, IGV y comprador
 
@@ -13304,9 +13318,15 @@ Reglas de esa tabla:
   registrar un comprobante externo, pedir un reintento y liberar un `en_duda`.
   Es un permiso de dinero: **solo el owner lo da** (§16, `ownerOnly`), y ningún
   rol lo trae salvo el del owner. En Ajustes de la tienda se pide además
-  `stores.manage`.
+  `stores.manage`. Equipo no deja sin él a la última persona que lo tiene:
+  alguien tiene que poder apagar un RUC.
 - **El panel «Comprobante» del drawer** lo ve quien ve el pedido: estado, serie
-  y número, PDF y motivo. Nunca credenciales.
+  y número, PDF y motivo. Nunca credenciales. No aparece si la organización no
+  tiene ningún RUC y el pedido no tiene comprobantes (las tiendas cliente
+  facturan fuera de Kapta, §29.15).
+- **Registrar uno externo** pide el RUC y la serie y número tal como salió en
+  SimpleFact: `B…` es boleta y `F…` factura. **Liberar un `en_duda`** pide una
+  nota con lo que se revisó en SimpleFact.
 - **Emitir lo hace solo el barrido.** No hay botón «Emitir»: un pedido que no
   cumple las reglas no se fuerza desde Kapta.
 

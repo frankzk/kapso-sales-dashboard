@@ -81,7 +81,8 @@ describe("vercel.json", () => {
     // 23: «Cotejar Shalom» con reloj propio (MOM §12, 10-10-2026).
     // 24: barrido del agente de voz para leads (MOM §33).
     // 25: Swayp automático desde Por confirmar, piloto A/B (MOM §11.13, 13-10-2026).
-    expect(crons).toHaveLength(25);
+    // 26: barrido de comprobantes electrónicos por RUC (MOM §35, 14-10-2026).
+    expect(crons).toHaveLength(26);
     for (const c of crons) {
       expect(c.path.startsWith("/api/cron/")).toBe(true);
       expect(c.schedule.trim().split(/\s+/)).toHaveLength(5);

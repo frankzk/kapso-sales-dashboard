@@ -48,6 +48,16 @@ export const PERMISSIONS = [
   // de la misma familia que darlo por bueno, y venía incluido en el rol `admin`
   // —catorce personas— sin que nadie lo hubiera decidido.
   "shalom.override_payment_validation",
+  // Comprobantes electrónicos por RUC (MOM §35.7, 14-10-2026): dar de alta un
+  // RUC con su token de SimpleFact, cambiar su modo, su «Emitir desde» y su
+  // tope, asignarle cuentas de cobro, registrar un comprobante emitido fuera de
+  // Kapta, pedir un reintento y liberar un `en_duda`. Es dinero y es fiscal:
+  // pasar un RUC a «Real» o darle una cuenta decide qué empresa paga el
+  // impuesto de qué venta, y una boleta que llegó a SUNAT no se borra. Por eso
+  // no cae bajo `stores.manage` —que Ajustes pide además— y se concede persona
+  // por persona: solo el dueño. Emitir no es parte del permiso: lo hace solo el
+  // barrido, y no hay botón para forzarlo.
+  "invoices.manage",
   // Costos
   "costs.manage",
   // Grupo GF Courier: contratos, tarifas, clientes y parámetros operativos.
@@ -181,6 +191,7 @@ export const PERMISSION_LABEL: Record<Permission, string> = {
   "shalom.reveal_pickup_key": "Ver la clave de recojo",
   "shalom.view_pickup_key": "Registrar claves de recojo",
   "shalom.override_payment_validation": "Corregir pagos",
+  "invoices.manage": "Boletas y facturas",
   "costs.manage": "Editar costos",
   "logistics.manage": "Administrar Grupo GF",
   "aliclik.create_guide": "Crear guías de Aliclik",
@@ -229,6 +240,7 @@ export const PERMISSION_HELP: Record<Permission, string> = {
   "shalom.reveal_pickup_key": "Ver la clave de Shalom cuando el pedido está pagado completo. Queda registrado quién la vio.",
   "shalom.view_pickup_key": "Guardar o reemplazar la clave de recojo de Shalom y verla siempre.",
   "shalom.override_payment_validation": "Pasar un pago a otro pedido o forzar su estado.",
+  "invoices.manage": "Configurar cada RUC de SimpleFact con su token y su modo, asignarle cuentas de cobro y registrar boletas emitidas fuera de Kapta.",
   "costs.manage": "Costos de producto, tarifas y gastos adicionales.",
   "logistics.manage": "Tarifas, clientes, pago de motorizados y exceso de efectivo del Grupo GF.",
   "aliclik.create_guide": "Crear la guía en Aliclik. Sale de verdad hacia el courier.",
@@ -278,6 +290,8 @@ export const PERMISSION_AREAS = [
       "shalom.override_payment_validation",
       "tanders.review_payment",
       "alerts.repeated_voucher",
+      // Una boleta sale de un pago validado y de la cuenta que lo recibió (§35.2).
+      "invoices.manage",
       "shalom.reveal_pickup_key",
       "shalom.view_pickup_key",
     ],
@@ -420,6 +434,19 @@ export const GRANTED_ONE_BY_ONE = [
     description: PERMISSION_HELP["alerts.repeated_voucher"],
     /** Sin nadie que la reciba, un pago cobrado dos veces vuelve a pasar en silencio. */
     lastOneMatters: true,
+    ownerOnly: true,
+  },
+  {
+    permission: "invoices.manage",
+    label: PERMISSION_LABEL["invoices.manage"],
+    description: PERMISSION_HELP["invoices.manage"],
+    /**
+     * Sin nadie con este permiso el barrido sigue emitiendo con lo configurado,
+     * pero nadie puede apagar un RUC, liberar un `en_duda` ni registrar una
+     * boleta hecha a mano: emisión sin nadie al volante (MOM §35.4).
+     */
+    lastOneMatters: true,
+    // Cada boleta es impuesto de una empresa y no se borra (MOM §35.7).
     ownerOnly: true,
   },
   {

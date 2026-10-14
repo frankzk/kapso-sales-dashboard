@@ -14,38 +14,38 @@ declare
   v_a  uuid := 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
   v_b  uuid := 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
   v_uc uuid := '00000000-0000-0000-0000-00000000000c';
-  v_l1 uuid := '25700000-0000-0000-0000-0000000000a1';
-  v_l3 uuid := '25700000-0000-0000-0000-0000000000a3';
-  v_l4 uuid := '25700000-0000-0000-0000-0000000000a4';
-  v_l7 uuid := '25700000-0000-0000-0000-0000000000a7';
-  v_lb uuid := '25700000-0000-0000-0000-0000000000b4';
+  v_l1 uuid := '25800000-0000-0000-0000-0000000000a1';
+  v_l3 uuid := '25800000-0000-0000-0000-0000000000a3';
+  v_l4 uuid := '25800000-0000-0000-0000-0000000000a4';
+  v_l7 uuid := '25800000-0000-0000-0000-0000000000a7';
+  v_lb uuid := '25800000-0000-0000-0000-0000000000b4';
 begin
   insert into orders (id, store_id, shopify_order_id, name, created_at, total_amount, total_refunded, currency, tags, customer_phone, cancelled_at) values
     -- 1. Venta registrada por una asesora, aunque el pedido diga kapso.
-    ('25700000-0000-0000-0000-000000000001', v_a, 'cc-a1', '#CC1', '2026-03-10 15:00+00', 100, 0, 'PEN', array['kapso', 'venta_manual'], '51999000001', null),
+    ('25800000-0000-0000-0000-000000000001', v_a, 'cc-a1', '#CC1', '2026-03-10 15:00+00', 100, 0, 'PEN', array['kapso', 'venta_manual'], '51999000001', null),
     -- 2. Recompra automática: completa el borrador de EasySell, así que trae sus etiquetas.
-    ('25700000-0000-0000-0000-000000000002', v_a, 'cc-a2', '#CC2', '2026-03-10 15:05+00', 200, 0, 'PEN', array['easysell_cod_form'], '51999000002', null),
+    ('25800000-0000-0000-0000-000000000002', v_a, 'cc-a2', '#CC2', '2026-03-10 15:05+00', 200, 0, 'PEN', array['easysell_cod_form'], '51999000002', null),
     -- 3. Bot de Kapso (la etiqueta con mayúscula también cuenta), ayudado 2 días antes.
-    ('25700000-0000-0000-0000-000000000003', v_a, 'cc-a3', '#CC3', '2026-03-10 15:10+00', 300, 0, 'PEN', array['Kapso', 'whatsapp'], '51999000003', null),
+    ('25800000-0000-0000-0000-000000000003', v_a, 'cc-a3', '#CC3', '2026-03-10 15:10+00', 300, 0, 'PEN', array['Kapso', 'whatsapp'], '51999000003', null),
     -- 4. Bot de Kapso con gestión de hace 10 días y otra de la OTRA tienda: no ayudado.
-    ('25700000-0000-0000-0000-000000000004', v_a, 'cc-a4', '#CC4', '2026-03-10 15:15+00', 400, 0, 'PEN', array['kapso'], '51999000004', null),
+    ('25800000-0000-0000-0000-000000000004', v_a, 'cc-a4', '#CC4', '2026-03-10 15:15+00', 400, 0, 'PEN', array['kapso'], '51999000004', null),
     -- 5. El otro bot de carritos.
-    ('25700000-0000-0000-0000-000000000005', v_a, 'cc-a5', '#CC5', '2026-03-10 15:20+00', 500, 0, 'PEN', array['BOT', 'CARRITO RECUPERADO'], '51999000005', null),
+    ('25800000-0000-0000-0000-000000000005', v_a, 'cc-a5', '#CC5', '2026-03-10 15:20+00', 500, 0, 'PEN', array['BOT', 'CARRITO RECUPERADO'], '51999000005', null),
     -- 6. Web cancelado: aparte, fuera de pedidos e ingresos.
-    ('25700000-0000-0000-0000-000000000006', v_a, 'cc-a6', '#CC6', '2026-03-10 15:25+00', 600, 0, 'PEN', array['easysell_cod_form'], '51999000006', '2026-03-10 18:00+00'),
+    ('25800000-0000-0000-0000-000000000006', v_a, 'cc-a6', '#CC6', '2026-03-10 15:25+00', 600, 0, 'PEN', array['easysell_cod_form'], '51999000006', '2026-03-10 18:00+00'),
     -- 7. Web con reembolso parcial; solo notas sin firma o que no son gestión.
-    ('25700000-0000-0000-0000-000000000007', v_a, 'cc-a7', '#CC7', '2026-03-10 15:30+00', 150, 50, 'PEN', array['easysell_cod_form', 'easysell-abandoned-checkout'], '51999000007', null),
+    ('25800000-0000-0000-0000-000000000007', v_a, 'cc-a7', '#CC7', '2026-03-10 15:30+00', 150, 50, 'PEN', array['easysell_cod_form', 'easysell-abandoned-checkout'], '51999000007', null),
     -- 8. Otros: sin etiquetas de origen y sin teléfono.
-    ('25700000-0000-0000-0000-000000000008', v_a, 'cc-a8', '#CC8', '2026-03-10 15:35+00', 80, 0, 'PEN', array['catalogo-wsp'], null, null),
+    ('25800000-0000-0000-0000-000000000008', v_a, 'cc-a8', '#CC8', '2026-03-10 15:35+00', 80, 0, 'PEN', array['catalogo-wsp'], null, null),
     -- 9. 23:30 del 10-03 en Lima (04:30 UTC del 11-03): es del día 10.
-    ('25700000-0000-0000-0000-000000000009', v_a, 'cc-a9', '#CC9', '2026-03-11 04:30+00', 90, 0, 'PEN', array['kapso'], '51999000009', null),
+    ('25800000-0000-0000-0000-000000000009', v_a, 'cc-a9', '#CC9', '2026-03-11 04:30+00', 90, 0, 'PEN', array['kapso'], '51999000009', null),
     -- 10. 23:30 del 09-03 en Lima (04:30 UTC del 10-03): queda fuera del día 10.
-    ('25700000-0000-0000-0000-000000000010', v_a, 'cc-a10', '#CC10', '2026-03-10 04:30+00', 999, 0, 'PEN', array['kapso'], '51999000010', null),
+    ('25800000-0000-0000-0000-000000000010', v_a, 'cc-a10', '#CC10', '2026-03-10 04:30+00', 999, 0, 'PEN', array['kapso'], '51999000010', null),
     -- 11. Tienda B: el viewer de A no lo ve.
-    ('25700000-0000-0000-0000-000000000011', v_b, 'cc-b1', '#CCB1', '2026-03-10 15:00+00', 700, 0, 'PEN', array['easysell_cod_form'], '51999000011', null);
+    ('25800000-0000-0000-0000-000000000011', v_b, 'cc-b1', '#CCB1', '2026-03-10 15:00+00', 700, 0, 'PEN', array['easysell_cod_form'], '51999000011', null);
 
   insert into order_sales (order_id, store_id, vendedora, occurred_at) values
-    ('25700000-0000-0000-0000-000000000001', v_a, v_uc, '2026-03-10 15:00+00');
+    ('25800000-0000-0000-0000-000000000001', v_a, v_uc, '2026-03-10 15:00+00');
 
   insert into auto_order_trials (store_id, draft_order_gid, cohort, grupo, status, shopify_order_id) values
     (v_a, 'gid://shopify/DraftOrder/cc-a2', 'cc-cohorte', 'A', 'generado', 'cc-a2');

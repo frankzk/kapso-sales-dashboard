@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { headers } from "next/headers";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { hasOrgPermission } from "@/lib/permissions-access";
 import { notFound, redirect } from "next/navigation";
 import { createAdminSupabase } from "@/lib/db";
@@ -12,8 +13,12 @@ import { leadVoiceOwnNumber, loadLeadVoiceCampaigns } from "@/lib/store-settings
 import { leadVoiceSettingsFrom } from "@/lib/voice-leads";
 import { leadVoiceConfigured, loadLeadVoicePilotReport } from "@/lib/voice-leads-server";
 import { RESTOCK_CATALOG_DAYS, RESTOCK_RESULTS_DAYS } from "@/lib/restock-view";
+import { limaDateTimeInputValue } from "@/lib/repro-lima";
+import { limaDayStartIso } from "@/lib/auto-order-ab";
+import type { InvoiceMode, InvoiceStatus, InvoiceWriteMode } from "@/lib/invoicing/rules";
 import { EmptyState } from "@/components/ui";
 import { StoreSettings, type StoreSettingsData } from "@/components/store-settings";
+import type { InvoiceSettingsData } from "@/components/invoice-settings-section";
 import { listEscalation } from "./actions";
 import { listEscalationCandidates } from "@/app/dashboard/cobranza/actions";
 
@@ -37,6 +42,147 @@ const SHOPIFY_ERRORS: Record<string, string> = {
   "intercambio-fallo": "Shopify rechazó el intercambio del código por token.",
   "guardado-fallo": "No se pudo guardar el token.",
 };
+
+/** Sin permiso, o si la lectura entera se cayó: nada que mostrar. */
+const NO_INVOICES: Omit<InvoiceSettingsData, "canManage"> = { issuers: null, accounts: null, recent: null };
+
+/** Lo de hoy por RUC (MOM §35.8): los cuatro estados que se miran a diario. */
+const INVOICE_TODAY_STATUSES = ["emitida", "simulada", "en_duda", "error"] as const;
+
+/**
+ * «Boletas y facturas» (MOM §35): los RUC de la organización, lo de hoy de
+ * cada uno, las cuentas activas de esta tienda con su RUC y los últimos 20
+ * comprobantes de la tienda. Cada lectura que falla deja su lista en null, que
+ * la sección dice como «no se pudo leer» y no como «no hay».
+ *
+ * `token_enc` no se selecciona nunca: si hay token se sabe con un filtro
+ * (`not token_enc is null`) que devuelve solo ids.
+ */
+async function loadInvoiceSettings(
+  admin: SupabaseClient,
+  orgId: string,
+  storeId: string,
+): Promise<Omit<InvoiceSettingsData, "canManage">> {
+  const [issuerRows, tokenRows, accountRows, recentRows] = await Promise.all([
+    admin
+      .from("invoice_issuers")
+      .select("id,ruc,legal_name,simplefact_subdomain,mode,emit_from,daily_limit,checked_at,checked_ruc,check_error")
+      .eq("org_id", orgId)
+      .order("legal_name", { ascending: true }),
+    admin.from("invoice_issuers").select("id").eq("org_id", orgId).not("token_enc", "is", null),
+    admin
+      .from("store_collection_accounts")
+      .select("id,label,aliases,phone_last_digits,invoice_issuer_id")
+      .eq("store_id", storeId)
+      .eq("active", true)
+      .order("label", { ascending: true }),
+    admin
+      .from("order_invoices")
+      .select("id,order_id,order_name,ruc,mode,status,serie,correlative,total,error,created_at")
+      .eq("store_id", storeId)
+      .order("created_at", { ascending: false })
+      .limit(20),
+  ]);
+
+  type IssuerRow = {
+    id: string;
+    ruc: string;
+    legal_name: string;
+    simplefact_subdomain: string;
+    mode: InvoiceMode;
+    emit_from: string | null;
+    daily_limit: number;
+    checked_at: string | null;
+    checked_ruc: string | null;
+    check_error: string | null;
+  };
+  // Sin saber si hay token, «Configurado» podría mentir: los dos o ninguno.
+  const rows = issuerRows.error || tokenRows.error ? null : ((issuerRows.data ?? []) as IssuerRow[]);
+  const withToken = new Set(((tokenRows.data ?? []) as { id: string }[]).map((r) => r.id));
+
+  // Lo de hoy cuenta desde el inicio del día de Lima, como el tope (0257).
+  const since = limaDayStartIso(Date.now());
+  const today = await Promise.all(
+    (rows ?? []).map(async (r) => {
+      const counts = await Promise.all(
+        INVOICE_TODAY_STATUSES.map((status) =>
+          admin
+            .from("order_invoices")
+            .select("id", { count: "exact", head: true })
+            .eq("issuer_id", r.id)
+            .eq("status", status)
+            .gte("created_at", since),
+        ),
+      );
+      if (counts.some((c) => c.error || c.count == null)) return null;
+      const [emitidas, simuladas, enDuda, errores] = counts.map((c) => c.count ?? 0);
+      return { emitidas: emitidas!, simuladas: simuladas!, enDuda: enDuda!, errores: errores! };
+    }),
+  );
+
+  type AccountRow = {
+    id: string;
+    label: string;
+    aliases: string[] | null;
+    phone_last_digits: string | null;
+    invoice_issuer_id: string | null;
+  };
+  type RecentRow = {
+    id: string;
+    order_id: string;
+    order_name: string | null;
+    ruc: string;
+    mode: InvoiceWriteMode;
+    status: InvoiceStatus;
+    serie: string | null;
+    correlative: string | null;
+    total: number | string;
+    error: string | null;
+    created_at: string;
+  };
+
+  return {
+    issuers:
+      rows?.map((r, i) => ({
+        id: r.id,
+        ruc: r.ruc,
+        legalName: r.legal_name,
+        subdomain: r.simplefact_subdomain,
+        mode: r.mode,
+        emitFromInput: limaDateTimeInputValue(r.emit_from),
+        dailyLimit: r.daily_limit,
+        hasToken: withToken.has(r.id),
+        checkedAt: r.checked_at,
+        checkedRuc: r.checked_ruc,
+        checkError: r.check_error,
+        today: today[i] ?? null,
+      })) ?? null,
+    accounts: accountRows.error
+      ? null
+      : ((accountRows.data ?? []) as AccountRow[]).map((a) => ({
+          id: a.id,
+          label: a.label,
+          aliases: a.aliases ?? [],
+          phoneLastDigits: a.phone_last_digits,
+          issuerId: a.invoice_issuer_id,
+        })),
+    recent: recentRows.error
+      ? null
+      : ((recentRows.data ?? []) as RecentRow[]).map((r) => ({
+          id: r.id,
+          orderId: r.order_id,
+          orderName: r.order_name,
+          ruc: r.ruc,
+          mode: r.mode,
+          status: r.status,
+          serie: r.serie,
+          correlative: r.correlative,
+          total: Number(r.total),
+          error: r.error,
+          createdAt: r.created_at,
+        })),
+  };
+}
 
 export default async function StoreSettingsPage({
   params,
@@ -66,6 +212,10 @@ export default async function StoreSettingsPage({
     );
   }
 
+  // «Boletas y facturas» pide además su propio permiso (MOM §35.7). Sin él la
+  // sección solo dice quién la configura, y no se lee nada de los RUC.
+  const canManageInvoices = await hasOrgPermission(store.org_id, "invoices.manage");
+
   // Absolute base URL for copy-paste webhook URLs (works in preview + prod).
   const h = await headers();
   const host = h.get("x-forwarded-host") ?? h.get("host") ?? "";
@@ -87,6 +237,9 @@ export default async function StoreSettingsPage({
     // Pre-0166 la tabla no existe ⇒ `error` y lista vacía: sin cuentas no se
     // contesta ningún botón, que es el lado seguro.
     { data: paymentMethods },
+    // Pre-0257 las tablas no existen ⇒ cada lista en null («no se pudo leer»),
+    // sin tumbar Ajustes. Nunca trae el token, solo si hay uno.
+    invoices,
   ] = await Promise.all([
     admin.from("stores").select("*").eq("id", storeId).single(),
     admin
@@ -125,6 +278,9 @@ export default async function StoreSettingsPage({
       .eq("store_id", storeId)
       .order("sort", { ascending: true })
       .order("created_at", { ascending: true }),
+    canManageInvoices
+      ? loadInvoiceSettings(admin, store.org_id, storeId).catch(() => NO_INVOICES)
+      : Promise.resolve(NO_INVOICES),
   ]);
 
   // Los ajustes del agente de leads (MOM §33) con los defectos de 0247: lo que
@@ -369,6 +525,7 @@ export default async function StoreSettingsPage({
     replyTemplates: (replyTemplates as StoreSettingsData["replyTemplates"]) ?? [],
     districtCoverage: (districtCoverage as StoreSettingsData["districtCoverage"]) ?? [],
     paymentMethods: (paymentMethods as StoreSettingsData["paymentMethods"]) ?? [],
+    invoices: { canManage: canManageInvoices, ...invoices },
     escalation,
     escalationCandidates,
     cartImageTest: (cartImageTest as StoreSettingsData["cartImageTest"] | null) ?? [],

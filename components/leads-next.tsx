@@ -35,6 +35,7 @@ import { loadLeadCustomerHistory, loadLeadDetail, loadNextLeadCart } from "@/lib
 import type { LeadDrawerUpdate } from "@/components/leads-drawer";
 import { useCopyToClipboard } from "@/components/copy-button";
 import { Badge, Banner, OpsButton, Skeleton, type BadgeTone } from "@/components/ops-ui";
+import { SEGMENT_TONE } from "@/components/lead-segment-tone";
 import { IconCheck, IconCopy, IconMapPin, IconPhone, IconWhatsApp } from "@/components/icons";
 
 // El chat y el resultado son los de la ficha, cargados aparte: la cola no paga
@@ -85,9 +86,9 @@ export function SegmentBadge({ lead }: { lead: LeadRow }) {
   // ticket es lo que decide a cuál llamar primero.
   const cartValue = seg === "carrito" ? Number(lead.cart_value ?? 0) : 0;
   return (
-    <Badge tone="neutral">
+    <Badge tone={SEGMENT_TONE[seg]}>
       {SEGMENT_LABEL[seg]}
-      {cartValue > 0 && <span className="ml-1 font-semibold tabular-nums text-ink-900">S/ {Math.round(cartValue)}</span>}
+      {cartValue > 0 && <span className="ml-1 font-semibold tabular-nums text-orange-950">S/ {Math.round(cartValue)}</span>}
     </Badge>
   );
 }
@@ -495,7 +496,7 @@ function PriorOrders({ history }: { history: Loaded<CustomerHistory | null> }) {
               )}
               <span className="w-12 shrink-0">{shortDate(o.createdAt) ?? "—"}</span>
               <span className={o.cancelled ? "text-ink-500 line-through decoration-ink-300" : undefined}>{soles(o.amount)}</span>
-              {o.cancelled && <span className="text-ink-500">anulado</span>}
+              {o.cancelled && <Badge tone="crit">Anulado</Badge>}
             </li>
           ))}
         </ul>

@@ -2076,7 +2076,7 @@ export function LeadsBoard({
                   )}
                   {hasMultiNumbers && lead.wa_phone_number_id && (
                     <Badge
-                      tone="neutral"
+                      tone="emerald"
                       title={`WhatsApp: ${waLabel(waNumbers?.[lead.wa_phone_number_id], lead.wa_phone_number_id)}${waNumbers?.[lead.wa_phone_number_id]?.displayPhone ? ` · ${waNumbers[lead.wa_phone_number_id]!.displayPhone}` : ""}`}
                     >
                       {waKindLabel(waNumbers?.[lead.wa_phone_number_id]?.kind ?? null) ??
