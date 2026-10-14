@@ -505,4 +505,10 @@
 \ir migrations/0250_membership_roles.sql
 \echo 'Applying 0251_lima_repro.sql'
 \ir migrations/0251_lima_repro.sql
+\echo 'Applying 0252_ltv_cohorts.sql'
+\ir migrations/0252_ltv_cohorts.sql
+\echo 'Applying 0253_swayp_pc_auto.sql'
+\ir migrations/0253_swayp_pc_auto.sql
+\echo 'Applying 0254_swayp_actividad_backfill.sql'
+\ir migrations/0254_swayp_actividad_backfill.sql
 \echo 'Done.'

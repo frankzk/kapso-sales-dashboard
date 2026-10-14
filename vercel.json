@@ -13,6 +13,10 @@
       "schedule": "12,42 * * * *"
     },
     {
+      "path": "/api/cron/swayp-pc-auto",
+      "schedule": "30 23 * * *"
+    },
+    {
       "path": "/api/cron/sync",
       "schedule": "*/5 * * * *"
     },

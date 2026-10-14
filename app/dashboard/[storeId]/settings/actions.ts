@@ -27,6 +27,7 @@ import { REPLY_TOKENS } from "@/lib/wa-reply-templates";
 import { PAYMENT_METHOD_KINDS } from "@/lib/payment-methods";
 import { normalizeDistrictKey, type DistrictCoverageValue } from "@/lib/district-coverage";
 import { saveDistrictCoverageRow } from "@/lib/district-coverage-access";
+import { recordCoverageChanges, type CoverageSnapshot } from "@/lib/coverage-change";
 import { applyConfirmationCycleToStore, recomputeOrderMasterSafe } from "@/lib/order-master";
 import { describeShalomError, describeShalomProbeFailure } from "@/lib/shalom/client";
 import { clientFor, loadStoreShalom, mintSession, publicClient } from "@/lib/shalom/session";
@@ -56,7 +57,7 @@ export interface SettingsState {
 
 async function requireStoreAdmin(
   storeId: string,
-): Promise<{ admin: SupabaseClient; orgId: string } | null> {
+): Promise<{ admin: SupabaseClient; orgId: string; userId: string } | null> {
   if (!storeId) return null;
   const admin = createAdminSupabase();
   const { data: store } = await admin
@@ -73,7 +74,7 @@ async function requireStoreAdmin(
   if (!user) redirect("/login");
   // «Administrar tiendas» (MOM §16): owner/admin, o el rol Administración.
   if (!(await hasOrgPermission(store.org_id, "stores.manage"))) return null;
-  return { admin, orgId: store.org_id };
+  return { admin, orgId: store.org_id, userId: user.id };
 }
 
 function errMsg(e: unknown): string {
@@ -1330,19 +1331,24 @@ async function recomputeDistrictOrders(
   storeId: string,
   district: string,
   scopeAllStores: boolean,
-): Promise<number> {
+  actor: string,
+  reason: string | null,
+): Promise<{ written: number; moved: number; error: string | null }> {
   let q = admin
     .from("order_master")
-    .select("order_id")
+    .select("order_id,store_id,coverage")
     .ilike("district", district)
     .not("macro_stage", "in", "(finalizado)")
     .limit(2000);
   if (!scopeAllStores) q = q.eq("store_id", storeId);
   const { data } = await q;
-  const ids = ((data ?? []) as { order_id: string }[]).map((r) => r.order_id);
-  if (!ids.length) return 0;
-  const done = await recomputeOrderMasterSafe(admin, ids);
-  return done.written;
+  const before = (data ?? []) as CoverageSnapshot[];
+  if (!before.length) return { written: 0, moved: 0, error: null };
+  const done = await recomputeOrderMasterSafe(admin, before.map((r) => r.order_id));
+  // Cada pedido abierto que la decisión movió queda con su antes y su después
+  // (MOM §19.0.1): una decisión por distrito es una decisión humana.
+  const coverage = await recordCoverageChanges(admin, before, { cause: "decision_distrito", actor, reason });
+  return { written: done.written, moved: coverage.changed.length, error: coverage.error };
 }
 
 export async function saveDistrictCoverage(
@@ -1373,13 +1379,15 @@ export async function saveDistrictCoverage(
   });
   if (error) return { error };
 
-  const recomputed = await recomputeDistrictOrders(ctx.admin, storeId, district, allStores);
+  const recomputed = await recomputeDistrictOrders(ctx.admin, storeId, district, allStores, ctx.userId, note);
   revalidatePath(`/dashboard/${storeId}/settings`);
   revalidatePath("/dashboard/pedidos");
   return {
     notice:
       `«${raw}» queda como ${coverage === "provincia_cod" ? "Provincia COD" : coverage === "lima" ? "Lima" : "Agencia"}.` +
-      (recomputed ? ` ${recomputed} pedido(s) abiertos reclasificados.` : ""),
+      (recomputed.written ? ` ${recomputed.written} pedido(s) abiertos recalculados` : "") +
+      (recomputed.written ? `, ${recomputed.moved} cambiaron de cobertura y quedó registrado.` : "") +
+      (recomputed.error ? ` ${recomputed.error}` : ""),
   };
 }
 
@@ -1400,13 +1408,14 @@ export async function deleteDistrictCoverage(
 
   const target = row as { district: string; store_id: string | null } | null;
   const recomputed = target
-    ? await recomputeDistrictOrders(ctx.admin, storeId, target.district, target.store_id === null)
-    : 0;
+    ? await recomputeDistrictOrders(ctx.admin, storeId, target.district, target.store_id === null, ctx.userId, "Excepción de cobertura eliminada")
+    : { written: 0, moved: 0, error: null };
   revalidatePath(`/dashboard/${storeId}/settings`);
   return {
     notice:
       "Excepción eliminada; ese distrito vuelve a la regla general." +
-      (recomputed ? ` ${recomputed} pedido(s) abiertos reclasificados.` : ""),
+      (recomputed.written ? ` ${recomputed.written} pedido(s) abiertos recalculados, ${recomputed.moved} cambiaron de cobertura.` : "") +
+      (recomputed.error ? ` ${recomputed.error}` : ""),
   };
 }
 

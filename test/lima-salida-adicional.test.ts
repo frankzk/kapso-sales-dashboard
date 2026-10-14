@@ -236,7 +236,8 @@ describe("las dos puertas usan la misma regla y dejan rastro", () => {
     resolve(process.cwd(), "app/dashboard/pedidos/tanders-actions.ts"),
     "utf8",
   );
-  const swayp = readFileSync(resolve(process.cwd(), "app/dashboard/envios/actions.ts"), "utf8");
+  // La guía directa se emite en lib/swayp-directa.ts desde el 13-10-2026: la usan el botón y el automático.
+  const swayp = readFileSync(resolve(process.cwd(), "lib/swayp-directa.ts"), "utf8");
 
   it("Tanders y Swayp directa pasan por puertaDeSalidaAdicional al crear", () => {
     expect(tanders).toContain("motivo: input.motivoSalidaAdicional");

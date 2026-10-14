@@ -5862,6 +5862,80 @@ pedidos; y cuántos **salen solo con ese producto** (no les falta nada más). Ca
 fila se abre en sus pedidos, con enlace al Master, ordenados primero por los que
 salen solo con eso y después por los días que llevan en su etapa.
 
+### 11.13 Swayp automático desde Por confirmar, piloto A/B (13-10-2026)
+
+Una pasada diaria hace lo mismo que el botón «Enviar por Swayp» de §11.11, sin
+persona, sobre un grupo angosto de pedidos y con la mitad como grupo de control.
+Si Swayp no entrega, el pedido vuelve a «Por confirmar · Swayp no entregó» igual
+que con el botón. Nace **apagado**; lo activa quien tiene «Administrar tiendas»
+desde el registro de Swayp desde Por confirmar.
+
+**Por qué así (números del 13-10-2026).** El botón llevaba 22 envíos: 2
+entregados de 15 resueltos (13 %), 7 en reparto. Los 6 más viejos —de 4 a 7
+llamadas sin respuesta, de 5 a 14 días esperando— fallaron todos; las 2 entregas
+fueron pedidos del día con una sola llamada. En todas las guías Swayp desde el
+15-09, se entrega el 27 % cuando el cliente confirmó, el 17 % con el automático
+Aliclik → Swayp (§11.9) y el 13 % con el botón; el primer motivo de fallo es
+«destinatario no contesta» (41 %), después los rechazos (22 %) y las fallas de la
+propia bodega (12 %). Quien no le contesta a la asesora tampoco le contesta al
+motorizado: el automático va a pedidos **frescos**, no a los que llevan días sin
+contestar.
+
+**Decisiones del owner:** sin aviso previo por WhatsApp; pedidos de hasta 48 h;
+piloto A/B de 10 por día. Los demás umbrales son de la propuesta y viven en
+`swayp_pc_auto_settings` (0253), no en el código.
+
+**Quién entra** (`lib/swayp-por-confirmar-auto.ts`, pura):
+
+- Por confirmar, subetapa «Sin llamar» o «Por confirmar» (no «Volver a
+  contactar», «Pendiente de abono» ni «Swayp no entregó»); provincia COD; Swayp
+  ok en el Master.
+- Pedido de hasta 48 h, sano (sin anular ni reembolsar, en soles, pago
+  pendiente), sin pagos registrados y sin otra salida viva.
+- Al menos 1 llamada (la asesora va primero) y no más de 2 sin respuesta; sin
+  fecha para volver a contactar.
+- Dirección con número, o con manzana y lote (§11.12 usa la misma idea). No
+  cuentan la fecha que nombra una calle («Av. 31 de Octubre»), la etapa de una
+  urbanización ni un código pegado («Las Dunas D2»). Sin recojo en agencia.
+- Teléfono válido y limpio: sin rechazos previos (novedades 15 y 16 de Swayp,
+  descarte de la recuperación, una nota que dice que no), y sin otro pedido vivo
+  —o entregado en 30 días— con el mismo producto.
+- Hasta S/ 300.
+
+Para los que pasan, el servidor (`swayp-por-confirmar-auto-server.ts`) mira lo
+que pide red, **para los dos brazos**, porque el control tiene que ser el mismo
+tipo de pedido:
+
+- La bodega no tuvo fallas propias (novedades 18 y 20) en los últimos 7 días.
+- La ubicación se corrobora con Aliclik: el pin del GPS tiene que resolver al
+  mismo ubigeo que la dirección. Es lo que deja fuera Majes o La Joya cuando el
+  distrito dice «Arequipa».
+- Cada producto tiene su vínculo con Swayp y stock completo leído en vivo.
+
+**El A/B.** El brazo sale del id del pedido (FNV-1a, mitad y mitad): el mismo
+pedido cae siempre del mismo lado. A sale por Swayp; B sigue la cola de
+llamadas. Cuando un pedido es elegible, su decisión queda fija con su brazo
+(`swayp_pc_auto_decisions`). Primero van quienes ya compraron y recibieron (el
+84 % de esas entregas llegó en el histórico); después el más antiguo de la
+ventana.
+
+**Límites y freno.** 10 por día y 3 por bodega; corre a las 6:30 p. m. de Lima
+para despachar el siguiente día de despacho (lunes a sábado; en Arequipa no el
+sábado, como §11.9). Si de los últimos 20 casos resueltos del brazo A se entrega
+menos del 35 %, se apaga solo y deja el motivo; volver a activarlo lo decide una
+persona.
+
+**Un solo camino de emisión.** La guía la emite `emitirGuiaSwaypDirecta`
+(`lib/swayp-directa.ts`), la misma función que usa el botón desde el 13-10-2026:
+mismas rejas de pedido, salidas vivas, stock de todos los productos, vínculo,
+fecha y número emitido por Swayp. El hecho `swayp_desde_por_confirmar` del
+automático va con `source = 'system'`, sin actor, y su evidencia en el payload;
+el registro lo muestra como «Automático».
+
+**Cómo se mide.** El panel compara la tasa de entrega de los resueltos de cada
+brazo: A por su guía Swayp; B por el Master (entregado por quien sea, o cerrado
+sin entrega). La simulación muestra qué saldría hoy sin enviar nada.
+
 ## 12. Agencia: Shalom y Olva
 
 ### Shalom
@@ -7649,6 +7723,54 @@ Alertas críticas iniciales:
 3. Manifiesto incompleto.
 4. Pedido sin movimiento por 60 días, salvo reprogramación explícita.
 
+### 17.2 LTV : CPA (13-10-2026)
+
+El dueño eligió esta métrica para saber si el negocio se sostiene: lo que vende
+cada clienta nueva en sus primeros días por cada sol que costó traerla. Está en
+**Consolidado**, debajo del resumen operativo, con la escala del dueño:
+
+| Ratio | Lectura |
+| --- | --- |
+| Menos de 3 | Pierde caja: se pierde flujo de caja en cada venta |
+| 3 a 3.5 | Estable, pero no escala de forma eficiente |
+| 3.5 a 4 | Gana cuota: lo que compra después sostiene la pauta |
+| Más de 4 | Dominio: se puede pagar un CPA más alto que la competencia |
+
+Cómo se calcula (`ltv_cohorts` y `meta_spend_by_month`, migración 0252; el
+ratio en `lib/ltv.ts`):
+
+- **Clienta nueva:** el teléfono (últimos nueve dígitos, §8.1) en su primera
+  entrega. Se agrupa por el mes de esa primera entrega, en hora de Lima.
+- **Valor (LTV):** el ingreso bruto de los pedidos entregados de esa clienta a
+  30, 60, 90, 180 y 365 días desde su primera compra. Solo cuenta lo
+  entregado: en contraentrega, lo que no se entrega no se cobra. No resta el
+  costo de producto, porque no está cargado en Costos.
+- **Costo (CPA):** el gasto de Meta del mes ÷ las clientas nuevas con entrega
+  ese mes. Las cuentas de Meta en dólares se convierten a S/ 3.75, el cambio
+  que fijó el dueño. Otros canales pagados no entran; una moneda que no se
+  sabe convertir no se suma y se avisa.
+- **Ratio:** valor ÷ gasto del mes, que es lo mismo que LTV por clienta ÷ CPA.
+- **Cuándo se lee.** Un horizonte se lee cuando la última clienta nueva del mes
+  lo cumple, así que un mes recién da su ratio a 30 días un mes después de
+  terminar. Las tres semanas siguientes es provisional (*), porque todavía se
+  entregan pedidos de esos días. El CPA de un mes terminado también es
+  provisional esas tres semanas: siguen apareciendo clientas nuevas del mes a
+  medida que se entregan sus pedidos. El mes en curso no da CPA: con la mitad
+  de sus pedidos sin entregar sale inflado.
+- **Lo primero que se lee, por tienda:**
+  - el ratio a 30 días del último mes que ya los cumple;
+  - el CPA del último mes ya terminado que todavía no cumple 30 días, comparado
+    con el anterior, porque un salto en lo que cuesta traer a una clienta tiene
+    que verse antes de que cierre su ratio;
+  - lo que la recompra le sumó al mes más antiguo, de 30 días a su horizonte
+    más largo.
+
+  Plegado, «Ver mes por mes» trae cada mes con sus clientas nuevas, gasto, CPA,
+  el ratio y el valor por clienta a cada horizonte y la recompra a 90 días.
+- **Historial.** Empieza en junio de 2026 (`ORDERS_SYNC_FROM`): las clientas
+  de junio pueden incluir algunas que ya habían comprado antes, y el año 1
+  completo se podrá leer desde julio de 2027.
+
 ## 18. Implementación incremental
 
 ### Fase 1 — Fundaciones
@@ -7991,6 +8113,29 @@ un destino.
 nuevos. Sin eso la excepción sería cierta para el futuro y mentira para lo que ya
 está en pantalla, que es el desfase de §19.1. Los finalizados no se tocan: su
 historia queda como ocurrió.
+
+**Cada cambio de cobertura que causa una persona queda registrado
+(13-10-2026).** La cobertura no se escribe a mano: la decide
+`order_coverage_for` a partir de la ubicación y de estas decisiones. Lo que una
+persona cambia es la causa, y hasta esta fecha eso dejaba un comentario genérico
+—«Ubicación corregida…»— sin decir que el pedido había pasado de Provincia COD a
+Lima. Ahora, cuando la cobertura de un pedido cambia por una acción humana, se
+escribe el hecho `coverage_changed` con el antes, el después y la causa
+(`lib/coverage-change.ts`), visible en Actividad como «Cobertura cambiada»:
+
+| Acción | Causa registrada | Pedidos |
+| --- | --- | --- |
+| Corregir la ubicación del pedido | `ubicacion_corregida` | Ese pedido |
+| Retirar la corrección de ubicación | `ubicacion_restaurada` | Ese pedido |
+| Guardar o eliminar una excepción de distrito en Ajustes, o marcar el distrito como Provincia COD desde la cotización de Aliclik | `decision_distrito` | Los abiertos de ese distrito |
+
+Es la puerta estándar para el pedido mal clasificado, y la que pide «Descargar
+rótulos» (§28) cuando un pedido de «Provincia COD» resulta ser de Lima. **Solo las
+acciones humanas**: el recálculo del Master corre en tandas de miles y una
+tarifa nueva puede reclasificar un distrito entero, así que registrar ahí cada
+cambio llenaría el historial sin que nadie haya decidido nada. Si el registro no
+se puede escribir, la acción no se deshace —la corrección ya está guardada y la
+cobertura nueva es la verdadera— y el error se muestra.
 
 **La cobertura se calcula sobre `peru_districts`, que es texto libre.** El
 Master rellena la región y la provincia del pedido desde esa tabla
@@ -8814,10 +8959,33 @@ Por cada pedido seleccionado:
 | Situación | Qué ocurre |
 | --- | --- |
 | Ya tiene una salida **viva** en custodia de la empresa | Se **reimprime esa**; no se crea otra. No cuentan una anulada, entregada o `transferido` —la custodia `empresa` sola no basta— ni una que su courier no entregó (abajo) |
-| No tiene ninguna salida | Se **crea** una sin courier decidido |
-| Su última salida fue **devuelta** | Se **crea** una nueva: rearmar es reprogramación normal, no una salida simultánea |
+| No tiene ninguna salida | **En Lima** se **crea** una sin courier decidido. **Fuera de Lima no se crea nada** (abajo) |
+| Su última salida fue **devuelta** | **En Lima** se **crea** una nueva: rearmar es reprogramación normal, no una salida simultánea |
 | **En Lima**, una salida **no la entregó su courier** (Tanders `RETURNING`/`RETURNED`, Swayp Devolución, anulada después de salir) | Se **crea** la salida nueva con **motivo automático** (09-10-2026): la anterior no está «en la calle» aunque su courier la siga dando en ruta, porque nadie la trabaja |
 | Tiene una salida **todavía en la calle** (viva de verdad) | No se crea nada: una salida adicional exige justificación auditada (§23) y se hace desde el pedido |
+
+**Fuera de Lima el rótulo no crea salida (13-10-2026, decisión del owner).**
+Solo en Lima el rótulo interno es el de verdad: la caja se arma antes de saber
+con qué motorizado o courier sale. En **Provincia COD y Agencia** la caja viaja
+con el rótulo del courier —Aliclik, Shalom, Olva— y el escáner del despacho ya
+acepta su número de guía, así que una salida «por definir» no la necesita
+nadie. Medido del 13-09 al 13-10-2026: de unas 4.200 guías de provincia y
+agencia, 19 pasaron por un rótulo interno y 10 terminaron con la «por definir»
+anulada a mano. La del 13-10 (#KP141065) la creó «Descargar rótulos» sobre una
+tanda que mezclaba coberturas, y la operadora creyó que el sistema había
+generado una guía sola.
+
+- Decide `macro_operation`, la misma que ya separaba Lima en esta tabla.
+- **Solo cambia CREAR.** Un pedido de provincia que ya tiene su salida con la
+  empresa —por ejemplo, la guía de su courier escrita encima de una «por
+  definir» anterior— se sigue reimprimiendo igual.
+- El pedido queda en la lista de la tanda con su motivo: no lleva rótulo
+  interno, la caja viaja con el del courier y su guía se crea desde el pedido.
+  Los demás pedidos de la tanda siguen.
+- **El pedido mal clasificado** —Provincia COD o Agencia que en realidad es de
+  Lima— no tiene atajo para forzar el rótulo: se corrige su **ubicación** en el
+  pedido, la cobertura se recalcula y el cambio queda registrado
+  (`coverage_changed`, §19.0.1). Desde ahí el rótulo se descarga normal.
 
 **La salida que su courier no entregó (09-10-2026, decisión del owner).**
 «Descargar rótulos» respondía «Tiene 1 salida todavía en la calle» a un pedido
@@ -11940,7 +12108,8 @@ redactado:
   papel. Si antes de confirmar le preguntan «¿de parte de quién?», dice solo
   su nombre y el de la tienda: el producto y el chat, recién con el sí.
 - **Va directo a ofrecer** (cambio del owner, 13-10-2026, tras la primera
-  prueba por teléfono): dice el precio y las promociones de la oferta, pregunta
+  prueba por teléfono): dice el precio y las promociones de la oferta en dos
+  frases cortas, sin volver a nombrar el producto (owner, 13-10-2026), pregunta
   si tiene alguna duda y pregunta si lleva una unidad o una promoción. Las
   dudas las responde solo con la oferta: lo que la tienda dijo en el chat
   (descuentos de asesora, adelantos, días de entrega) no es oferta, y lo que no
@@ -12184,10 +12353,11 @@ vigilante. Nada más:
   de las 17:00 del 12-10-2026. Falta: producto y oferta de Kenku (sin cargar todavía, a
   propósito), «Probar en mi teléfono» y recién entonces encender (33.8).
 - **Unir el guion con el aviso sin ficha** (13-10-2026): el prompt con
-  `{{aviso}}` (33.5) está en una rama del agente en ElevenLabs y se une a la
-  principal recién cuando producción manda la variable `aviso` desde el
+  `{{aviso}}` (33.5) se probó en una rama del agente en ElevenLabs y se unió a
+  la principal recién cuando producción mandó la variable `aviso` desde el
   inicio, antes de encender. Con el prompt nuevo y el inicio viejo, ElevenLabs
-  no arranca la conversación si exige la variable.
+  no arranca la conversación si exige la variable. **Hecho el 13-10-2026**,
+  después del deploy de #946.
 - **Número peruano en Telnyx** para el agente de leads
   (`TELNYX_LEADS_FROM_NUMBER`). Sin él, el lead ve el número de Telnyx de
   Reproprovincia, que hoy es de EE. UU., y contesta menos. **Decisión del owner

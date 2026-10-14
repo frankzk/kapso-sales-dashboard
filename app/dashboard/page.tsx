@@ -32,6 +32,9 @@ import {
 } from "@/components/mom-owner-summary";
 import { getMomOwnerSummary } from "@/lib/mom-owner-summary-access";
 import { Banner } from "@/components/ops-ui";
+import { LtvCpaPanel, LtvCpaSkeleton } from "@/components/ltv-cpa";
+import { getLtvInputs } from "@/lib/ltv-access";
+import { buildCohorts } from "@/lib/ltv";
 import { PENDING_INSTALL_COOKIE } from "@/lib/shopify-client-app";
 
 export const dynamic = "force-dynamic";
@@ -164,14 +167,20 @@ async function ConsolidatedContent({
   return (
     <ExecutiveDashboard
       operations={
-        // La operación del MOM es de la organización, no del periodo: llega por
-        // su lado y no frena el tablero comercial.
-        <Suspense fallback={<MomOwnerSummarySkeleton />}>
-          <MomOwnerSummaryLoader
-            storeIds={storeIds}
-            orgIds={[...new Set(stores.map((store) => store.org_id))]}
-          />
-        </Suspense>
+        // La operación del MOM y LTV : CPA (MOM §17.2, «debajo del resumen
+        // operativo») no siguen al periodo: llegan cada una por su lado y no
+        // frenan el tablero comercial.
+        <>
+          <Suspense fallback={<MomOwnerSummarySkeleton />}>
+            <MomOwnerSummaryLoader
+              storeIds={storeIds}
+              orgIds={[...new Set(stores.map((store) => store.org_id))]}
+            />
+          </Suspense>
+          <Suspense fallback={<LtvCpaSkeleton />}>
+            <LtvCpaLoader stores={stores.map((store) => ({ id: store.id, name: store.name, currency: store.currency }))} />
+          </Suspense>
+        </>
       }
       stores={stores}
       scope="all"
@@ -212,6 +221,23 @@ async function MomOwnerSummaryLoader({
     return (
       <Banner tone="warn" role="status" title="La operación no pudo actualizarse">
         Las ventas del periodo y el Master de Pedidos siguen disponibles.
+      </Banner>
+    );
+  }
+}
+
+/** LTV : CPA por mes de primera compra (MOM §17). Un fallo no tumba el resto. */
+async function LtvCpaLoader({ stores }: { stores: { id: string; name: string; currency: string }[] }) {
+  try {
+    const { cohorts, spend } = await getLtvInputs(stores.map((store) => store.id));
+    const currencyByStore = Object.fromEntries(stores.map((store) => [store.id, store.currency]));
+    const views = buildCohorts(cohorts, spend, currencyByStore, new Date());
+    return <LtvCpaPanel stores={stores} views={views} />;
+  } catch (error) {
+    console.error("No se pudo cargar LTV : CPA", error);
+    return (
+      <Banner tone="warn" role="status">
+        LTV : CPA no pudo calcularse ahora. El resto del Consolidado sigue disponible.
       </Banner>
     );
   }

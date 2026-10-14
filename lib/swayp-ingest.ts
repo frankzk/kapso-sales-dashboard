@@ -53,13 +53,16 @@ function constantTimeEquals(a: string, b: string): boolean {
 
 /** Las columnas que hacen falta para aplicar un estado de Swayp a su guía. */
 export const SWAYP_SHIPMENT_COLUMNS =
-  "id,order_id,delivery_status,swayp_state,custody_state,custody_transferred_at," +
+  "id,order_id,store_id,guide_code,delivery_status,swayp_state,custody_state,custody_transferred_at," +
   "dispatched_at,out_for_delivery_at,closed_at,reported_status";
 
 /** La guía tal como la necesita `swaypStatePatch`. */
 export interface SwaypShipmentRow {
   id: string;
   order_id?: string | null;
+  /** Para dejar el hecho en el historial del pedido (`swaypStatusEvent`). */
+  store_id?: string | null;
+  guide_code?: string | null;
   delivery_status: string;
   swayp_state: number | null;
   custody_state?: string | null;
@@ -191,6 +194,47 @@ export function swaypStatePatch(
 }
 
 /**
+ * El hecho que deja un cambio de Swayp en el historial del pedido (la pestaña
+ * Actividad), o null si no hay que dejar ninguno.
+ *
+ * QUÉ PASABA (13-10-2026). El webhook y el barrido de Swayp escribían en la
+ * guía y en nada más: #KP140633 figuraba «Entregado» en Salidas y guías, y en
+ * Actividad no había ni una línea de que Swayp lo entregó. Aliclik pasó por lo
+ * mismo (#KP131561, ver `lib/aliclik-track.ts`) y Shalom lo hizo desde el
+ * principio: un `courier_status` por transición. Swayp se queda igual.
+ *
+ * SOLO EN LA TRANSICIÓN —estado de Swayp o novedad nueva—, que es cuando
+ * `swaypStatePatch` dice `changed`: el barrido relee las guías cada hora, y una
+ * línea por lectura dejaría el historial ilegible. PURA.
+ */
+export function swaypStatusEvent(
+  row: SwaypShipmentRow,
+  read: SwaypIncomingState,
+  deliveryStatus: string,
+  nowIso: string,
+): Record<string, unknown> | null {
+  if (!row.order_id || !row.store_id) return null;
+  const state = normalizeSwaypIncoming(row, read).state;
+  const novedad = (read.novelty ?? "").replace(/^Swayp · /, "").trim();
+  const estado = SWAYP_STATES[state] ?? `Estado ${state}`;
+  return {
+    store_id: row.store_id,
+    order_id: row.order_id,
+    kind: "courier_status",
+    occurred_at: read.changedAt ?? nowIso,
+    actor: null,
+    source: "fenix",
+    courier: "fenix",
+    guide_code: row.guide_code ?? null,
+    shipment_id: row.id,
+    previous_status: row.delivery_status,
+    new_status: deliveryStatus,
+    note: `Swayp: ${estado} (${state})${novedad && !novedad.startsWith(estado) ? ` · ${novedad}` : ""}.`,
+    payload: { swayp_state: state },
+  };
+}
+
+/**
  * Aplica un estado de Swayp a su guía y, si cambió algo, recalcula el Master
  * del pedido. `swayp_synced_at` se sella SIEMPRE: 0080 lo define como «cuándo
  * supimos de Swayp por última vez», y sirve para ver guías que dejaron de
@@ -213,6 +257,15 @@ export async function applySwaypState(
     .update({ ...patch, swayp_synced_at: nowIso })
     .eq("id", row.id);
   if (error) throw new Error(error.message);
+  // Constancia en el pedido, no solo en la guía (`swaypStatusEvent`). Un fallo
+  // acá no deshace el estado ya escrito: se dice en el log y sigue.
+  if (changed) {
+    const evento = swaypStatusEvent(row, incoming, deliveryStatus, nowIso);
+    if (evento) {
+      const { error: evError } = await admin.from("order_events").insert(evento);
+      if (evError) console.error(`swayp: no se registró el hecho de ${row.guide_code ?? row.id}: ${evError.message}`);
+    }
+  }
   const recompute = opts.recompute ?? recomputeOrderMasterSafe;
   // Sin esto el cambio no llega al Master hasta la puerta de guías movidas del
   // cron (hasta 10 minutos), y un pedido que Swayp devolvió sigue «En tránsito».

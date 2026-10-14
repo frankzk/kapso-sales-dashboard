@@ -581,6 +581,11 @@ export const TIMELINE_LABEL: Record<string, string> = {
   reroute: "Reprogramación",
   courier_change: "Cambio de courier",
   delivered: "Entrega confirmada",
+  // Lo que informa el courier por su API o su barrido (Aliclik, Shalom, Swayp):
+  // la nota dice el estado crudo. Salía como «courier_status» sin traducir.
+  courier_status: "Estado informado por el courier",
+  // MOM §11.11 y §11.13: salió por Swayp sin confirmar; si no entrega, vuelve.
+  swayp_desde_por_confirmar: "Enviado por Swayp desde Por confirmar",
   return_started: "Retorno iniciado",
   return_requested: "Retorno solicitado",
   return_received: "Devolución recibida en almacén",
@@ -601,6 +606,9 @@ export const TIMELINE_LABEL: Record<string, string> = {
   order_finalized: "Expediente finalizado",
   order_reopened: "Expediente reabierto",
   status_override: "Estado cambiado manualmente",
+  // MOM §19.0.1: una corrección de ubicación o una decisión por distrito movió
+  // la cobertura. La nota dice el antes, el después y la causa.
+  coverage_changed: "Cobertura cambiada",
   // Pedido acompañante (MOM §32): el mismo hecho en los dos pedidos; la nota
   // dice de qué lado está cada uno.
   companion_linked: "Caja compartida con otro pedido",

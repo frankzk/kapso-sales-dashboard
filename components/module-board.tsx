@@ -9,7 +9,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { cn } from "@/components/ui";
-import { SidePanel } from "@/components/ops-ui";
+import { OpsButton, SidePanel } from "@/components/ops-ui";
 import { IconChevronRight } from "@/components/icons";
 
 export interface ModulePanel {
@@ -79,20 +79,59 @@ function CellBody({ cell, interactive }: { cell: ModuleCell; interactive: boolea
   );
 }
 
+/**
+ * Escape cierra el panel, como en Productividad. Un campo que ya usó la tecla
+ * (la búsqueda de producto de Anuncios cierra su lista) la marca.
+ */
+function useEscape(open: boolean, close: () => void) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !e.defaultPrevented) close();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, close]);
+}
+
+/**
+ * Un botón secundario que abre su contenido en un panel lateral: lo que una
+ * tarjeta tiene de más («Ver mes por mes» de LTV : CPA) sin estirar el tablero.
+ */
+export function PanelButton({
+  label,
+  title,
+  meta,
+  width = "max-w-[880px]",
+  children,
+}: {
+  label: string;
+  title: string;
+  meta?: ReactNode;
+  width?: string;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  useEscape(open, () => setOpen(false));
+  return (
+    <>
+      <OpsButton size="sm" aria-haspopup="dialog" onClick={() => setOpen(true)} className="pointer-coarse:h-11">
+        {label}
+      </OpsButton>
+      {open && (
+        <SidePanel label={title} title={title} meta={meta} width={width} onClose={() => setOpen(false)}>
+          {children}
+        </SidePanel>
+      )}
+    </>
+  );
+}
+
 export function ModuleBoard({ groups }: { groups: ModuleGroup[] }) {
   const [openId, setOpenId] = useState<string | null>(null);
   const open = openId ? groups.flatMap((g) => g.cells).find((c) => c.id === openId) : null;
 
-  // Escape cierra el panel, como en Productividad. Un campo que ya usó la
-  // tecla (la búsqueda de producto de Anuncios cierra su lista) la marca.
-  useEffect(() => {
-    if (!openId) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !e.defaultPrevented) setOpenId(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [openId]);
+  useEscape(openId != null, () => setOpenId(null));
 
   return (
     <div className="flex flex-col gap-5">

@@ -21308,3 +21308,245 @@ $$;
 
 revoke all on function public.lima_repro_record(uuid, uuid, uuid, text, text, text, timestamptz, date, text, jsonb, text, text, text, text, integer) from public, anon, authenticated;
 grant execute on function public.lima_repro_record(uuid, uuid, uuid, text, text, text, timestamptz, date, text, jsonb, text, text, text, text, integer) to service_role;
+
+-- ---- 0252 ----
+-- ============================================================================
+-- 0252_ltv_cohorts.sql — LTV : CPA por mes de primera compra (MOM §17,
+-- 13-10-2026).
+--
+-- QUÉ ES. La métrica que el dueño eligió para saber si el negocio se sostiene:
+-- lo que vende cada clienta nueva en sus primeros días, por cada sol que costó
+-- traerla. Dos funciones que agregan en Postgres —para no bajar decenas de
+-- miles de filas en cada carga de Consolidado— y dejan el cálculo del ratio en
+-- lib/ltv.ts:
+--
+--   - `ltv_cohorts`: por tienda y mes de la PRIMERA entrega de cada clienta,
+--     cuántas clientas nuevas hubo, lo que compraron (ingreso bruto de pedidos
+--     entregados) dentro de 30, 60, 90, 180 y 365 días desde esa primera
+--     compra, y cuántas volvieron a comprar en 90 días.
+--   - `meta_spend_by_month`: el gasto de Meta por tienda, mes y moneda. La
+--     conversión de dólares a soles la hace el código (lib/ltv.ts): la cuenta
+--     de Meta puede estar en USD aunque la tienda venda en soles.
+--
+-- La clienta es su teléfono: los últimos nueve dígitos (MOM §8.1, en un COD de
+-- Shopify no hay cuenta ni documento). El mes es el de Lima. Solo cuentan los
+-- pedidos entregados: en contraentrega, lo que no se entrega no se cobra.
+--
+-- SECURITY INVOKER a propósito: las políticas de `order_master` y de
+-- `meta_ad_insights_daily` siguen mandando, así que cada persona ve solo sus
+-- tiendas.
+-- ============================================================================
+
+create or replace function public.ltv_cohorts(p_store_ids uuid[], p_since date)
+returns table (
+  store_id uuid,
+  cohort_month date,
+  new_customers integer,
+  last_first_at timestamptz,
+  value_30 numeric,
+  value_60 numeric,
+  value_90 numeric,
+  value_180 numeric,
+  value_365 numeric,
+  repeat_90 integer
+)
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  with entregas as (
+    select om.store_id,
+           right(regexp_replace(om.customer_phone, '\D', '', 'g'), 9) as tel,
+           om.order_created_at as t,
+           coalesce(om.order_total, 0) as total
+      from public.order_master om
+     where om.store_id = any(p_store_ids)
+       and om.general_status = 'entregado'
+       and om.order_created_at >= p_since
+       and length(regexp_replace(coalesce(om.customer_phone, ''), '\D', '', 'g')) >= 9
+  ), primeras as (
+    select e.store_id, e.tel, min(e.t) as primera
+      from entregas e
+     group by e.store_id, e.tel
+  ), por_clienta as (
+    select p.store_id, p.primera,
+           sum(e.total) filter (where e.t < p.primera + interval '30 days')  as v30,
+           sum(e.total) filter (where e.t < p.primera + interval '60 days')  as v60,
+           sum(e.total) filter (where e.t < p.primera + interval '90 days')  as v90,
+           sum(e.total) filter (where e.t < p.primera + interval '180 days') as v180,
+           sum(e.total) filter (where e.t < p.primera + interval '365 days') as v365,
+           count(*) filter (where e.t < p.primera + interval '90 days')       as n90
+      from primeras p
+      join entregas e on e.store_id = p.store_id and e.tel = p.tel
+     group by p.store_id, p.tel, p.primera
+  )
+  select c.store_id,
+         date_trunc('month', c.primera at time zone 'America/Lima')::date as cohort_month,
+         count(*)::integer as new_customers,
+         max(c.primera) as last_first_at,
+         coalesce(sum(c.v30), 0)  as value_30,
+         coalesce(sum(c.v60), 0)  as value_60,
+         coalesce(sum(c.v90), 0)  as value_90,
+         coalesce(sum(c.v180), 0) as value_180,
+         coalesce(sum(c.v365), 0) as value_365,
+         (count(*) filter (where c.n90 >= 2))::integer as repeat_90
+    from por_clienta c
+   group by c.store_id, date_trunc('month', c.primera at time zone 'America/Lima')
+   order by c.store_id, cohort_month;
+$$;
+
+revoke all on function public.ltv_cohorts(uuid[], date) from public, anon;
+grant execute on function public.ltv_cohorts(uuid[], date) to authenticated, service_role;
+
+create or replace function public.meta_spend_by_month(p_store_ids uuid[], p_since date)
+returns table (
+  store_id uuid,
+  month date,
+  currency text,
+  spend numeric
+)
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  select i.store_id,
+         date_trunc('month', i.date)::date as month,
+         upper(coalesce(nullif(i.currency, ''), '?')) as currency,
+         coalesce(sum(i.spend), 0) as spend
+    from public.meta_ad_insights_daily i
+   where i.store_id = any(p_store_ids)
+     and i.date >= p_since
+   group by i.store_id, date_trunc('month', i.date), upper(coalesce(nullif(i.currency, ''), '?'))
+   order by i.store_id, month;
+$$;
+
+revoke all on function public.meta_spend_by_month(uuid[], date) from public, anon;
+grant execute on function public.meta_spend_by_month(uuid[], date) to authenticated, service_role;
+
+-- ---- 0253 ----
+-- 0253_swayp_pc_auto.sql — Swayp automático desde Por confirmar, piloto A/B
+-- (MOM §11.13, 13-10-2026).
+--
+-- QUÉ ES. Una pasada diaria que hace lo mismo que el botón «Enviar por Swayp»
+-- de la mesa de confirmación (§11.11) sobre pedidos frescos —hasta 48 h, con
+-- 1 o 2 llamadas sin respuesta, dirección con número o manzana y lote, sin
+-- agencia, ubicación corroborada y stock completo—. La mitad de los elegibles
+-- sale por Swayp y la otra mitad sigue la cola de llamadas, para medir si de
+-- verdad suma. Decisiones del owner: sin aviso por WhatsApp, 48 h, A/B de 10
+-- por día.
+--
+-- APAGADO AL INSTALAR. La fila de cada organización nace con `enabled = false`;
+-- lo activa una persona con «Administrar tiendas» desde el registro de Swayp
+-- desde Por confirmar. Y se apaga sola —el freno— si de los últimos
+-- `brake_window` casos resueltos se entrega menos de `brake_min_rate`.
+--
+-- Las tres tablas siguen el patrón del automático Aliclik → Swayp (0209): la
+-- lectura respeta organización y tiendas por RLS y solo el servidor escribe.
+
+create table if not exists swayp_pc_auto_settings (
+  org_id            uuid primary key references organizations(id),
+  enabled           boolean not null default false,
+  daily_cap         integer not null default 10 check (daily_cap between 1 and 50),
+  per_warehouse_cap integer not null default 3 check (per_warehouse_cap between 1 and 50),
+  max_age_hours     integer not null default 48 check (max_age_hours between 1 and 168),
+  min_attempts      integer not null default 1 check (min_attempts between 0 and 10),
+  max_unanswered    integer not null default 2 check (max_unanswered between 0 and 10),
+  max_amount        numeric not null default 300 check (max_amount > 0),
+  brake_window      integer not null default 20 check (brake_window between 5 and 200),
+  brake_min_rate    numeric not null default 0.35 check (brake_min_rate between 0 and 1),
+  -- Por qué está apagado, si lo apagó el freno (null si lo apagó una persona).
+  paused_reason     text,
+  paused_at         timestamptz,
+  updated_by        uuid references auth.users(id) on delete set null,
+  updated_at        timestamptz not null default now()
+);
+
+-- Una decisión por pedido. Mientras no es elegible se reescribe en cada pasada
+-- (el motivo cambia: hoy sin llamada, mañana sí); en cuanto es elegible queda
+-- fija con su brazo, para que el A/B no cambie de lado a nadie.
+create table if not exists swayp_pc_auto_decisions (
+  order_id    uuid primary key references orders(id) on delete cascade,
+  store_id    uuid not null references stores(id),
+  org_id      uuid not null references organizations(id),
+  arm         text check (arm in ('swayp', 'control')),
+  reason      text not null,
+  eligible    boolean not null default false,
+  shipment_id uuid references shipments(id) on delete set null,
+  evidence    jsonb not null default '{}',
+  decided_at  timestamptz not null default now(),
+  checked_at  timestamptz not null default now()
+);
+create index if not exists swayp_pc_auto_decisions_org_idx
+  on swayp_pc_auto_decisions (org_id, eligible, decided_at desc);
+
+create table if not exists swayp_pc_auto_runs (
+  id         uuid primary key default gen_random_uuid(),
+  org_id     uuid not null references organizations(id),
+  summary    jsonb not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists swayp_pc_auto_runs_org_idx on swayp_pc_auto_runs (org_id, created_at desc);
+
+alter table swayp_pc_auto_settings enable row level security;
+alter table swayp_pc_auto_decisions enable row level security;
+alter table swayp_pc_auto_runs enable row level security;
+drop policy if exists swayp_pc_auto_settings_read on swayp_pc_auto_settings;
+create policy swayp_pc_auto_settings_read on swayp_pc_auto_settings
+  for select to authenticated using (org_id in (select auth_org_ids()));
+drop policy if exists swayp_pc_auto_decisions_read on swayp_pc_auto_decisions;
+create policy swayp_pc_auto_decisions_read on swayp_pc_auto_decisions
+  for select to authenticated using (store_id in (select auth_store_ids()));
+drop policy if exists swayp_pc_auto_runs_read on swayp_pc_auto_runs;
+create policy swayp_pc_auto_runs_read on swayp_pc_auto_runs
+  for select to authenticated using (org_id in (select auth_org_ids()));
+grant select on swayp_pc_auto_settings, swayp_pc_auto_decisions, swayp_pc_auto_runs to authenticated;
+grant all on swayp_pc_auto_settings, swayp_pc_auto_decisions, swayp_pc_auto_runs to service_role;
+
+-- Una fila apagada por organización con tiendas activas.
+insert into swayp_pc_auto_settings (org_id)
+select distinct org_id from stores where status = 'active' and org_id is not null
+on conflict (org_id) do nothing;
+
+-- ---- 0254 ----
+-- 0254_swayp_actividad_backfill.sql — la Actividad de los pedidos Swayp, completa.
+--
+-- QUÉ PASABA (13-10-2026). El webhook y el barrido de Swayp escribían el estado
+-- en la guía y en nada más: #KP140633 decía «Entregado» en Salidas y guías y la
+-- pestaña Actividad no tenía una sola línea de la entrega. Aliclik y Shalom
+-- dejan un `courier_status` por transición; Swayp no dejaba ninguno. Desde este
+-- cambio lo deja (`swaypStatusEvent`, lib/swayp-ingest.ts).
+--
+-- ESTE RELLENO deja, para cada guía Swayp que ya se movió (estado 5 en
+-- adelante: reparto, novedad, entregada, devolución) y no tiene ninguna línea,
+-- UNA línea con su último estado conocido. El camino que tuvo hasta ahí no se
+-- puede reconstruir: Swayp no lo guardamos. La nota lo dice.
+--
+-- La hora: el cierre si lo hay (entregada, devolución confirmada); si no, la
+-- salida a reparto o el despacho. Idempotente: no toca una guía que ya tenga su
+-- `courier_status` de Swayp.
+
+insert into order_events (store_id, order_id, kind, occurred_at, actor, source, courier, guide_code, shipment_id, new_status, note, payload)
+select s.store_id, s.order_id, 'courier_status',
+       coalesce(s.closed_at, s.out_for_delivery_at, s.dispatched_at, s.updated_at),
+       null, 'fenix', 'fenix', s.guide_code, s.id, s.delivery_status,
+       'Swayp: ' ||
+         case s.swayp_state
+           when 5 then 'Reparto' when 6 then 'Novedad' when 7 then 'Entregada' when 8 then 'Devolución'
+           when 9 then 'Devolución confirmada' when 10 then 'Cancelada' when 11 then 'Indemnizada'
+           when 12 then 'Devolución confirmada con cobro' else 'Estado ' || s.swayp_state
+         end || ' (' || s.swayp_state || ')' ||
+         case when s.reported_status like 'Swayp · %' then ' · ' || substr(s.reported_status, 9) else '' end ||
+         '. Último estado conocido, registrado el 13-10-2026 al completar la Actividad.',
+       jsonb_build_object('swayp_state', s.swayp_state, 'relleno', true)
+  from shipments s
+ where s.courier = 'fenix'
+   and s.swayp_state >= 5
+   and s.order_id is not null
+   and s.store_id is not null
+   and not exists (
+     select 1 from order_events e
+      where e.order_id = s.order_id and e.kind = 'courier_status' and e.source = 'fenix'
+        and e.guide_code is not distinct from s.guide_code
+   );
