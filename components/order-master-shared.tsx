@@ -20,7 +20,31 @@
 // parpadear a vacío.
 
 import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
-import { IconLock } from "@/components/icons";
+import {
+  IconActivity,
+  IconAlert,
+  IconBot,
+  IconCalendar,
+  IconCalendarRepeat,
+  IconCart,
+  IconChat,
+  IconCheck,
+  IconClipboard,
+  IconHeadset,
+  IconLock,
+  IconMapPin,
+  IconMoney,
+  IconNavigate,
+  IconPackage,
+  IconPackageCheck,
+  IconPhone,
+  IconReceipt,
+  IconTruck,
+  IconUndo,
+  IconWhatsApp,
+  IconX,
+} from "@/components/icons";
+import { timelineFact, type TimelineFactInput, type TimelineIcon } from "@/lib/order-timeline-fact";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Card, cn, EmptyState, STICKY_HEAD, TABLE_LAYER, TABLE_WRAP_PAGE_X } from "@/components/ui";
@@ -501,6 +525,55 @@ export function MacroStageDot({ stage }: { stage: string }) {
   return <span aria-hidden className={cn("size-2 shrink-0 rounded-[2px]", MACRO_STAGE_DOT[stage] ?? "bg-ink-300")} />;
 }
 
+const TIMELINE_ICON: Record<TimelineIcon, (props: { className?: string; strokeWidth?: number }) => ReactNode> = {
+  pedido: IconCart,
+  confirmado: IconCheck,
+  llamada: IconPhone,
+  agente: IconHeadset,
+  mensaje: IconWhatsApp,
+  nota: IconChat,
+  pago: IconMoney,
+  guia: IconReceipt,
+  paquete: IconPackage,
+  programado: IconCalendar,
+  despacho: IconTruck,
+  motorizado: IconNavigate,
+  entregado: IconPackageCheck,
+  reprogramado: IconCalendarRepeat,
+  fallo: IconAlert,
+  devuelto: IconUndo,
+  anulado: IconX,
+  expediente: IconClipboard,
+  clave: IconLock,
+  automatico: IconBot,
+  ubicacion: IconMapPin,
+  estado: IconActivity,
+};
+
+/**
+ * El marcador de un movimiento en la Actividad de la ficha: un disco de 28 px
+ * sobre el riel con el icono de 16 px del hecho (`lib/order-timeline-fact.ts`). Los
+ * hitos toman el par de su macroetapa (el mismo de `MacroStageBadge`); el resto
+ * va en el lavado gris de consulta. Decorativo: el título dice lo mismo.
+ */
+export function TimelineMarker({ entry }: { entry: TimelineFactInput }) {
+  const fact = timelineFact(entry);
+  const Icon = fact.icon ? TIMELINE_ICON[fact.icon] : null;
+  return (
+    <span
+      aria-hidden
+      data-timeline-fact={fact.icon ?? "otro"}
+      data-timeline-stage={fact.stage ?? "consulta"}
+      className={cn(
+        "absolute -left-10 -top-1 grid size-7 place-items-center rounded-full ring-[3px] ring-white",
+        fact.stage ? MACRO_STAGE_TONE[fact.stage] : "bg-wash text-ink-500",
+      )}
+    >
+      {Icon ? <Icon className="size-4" /> : <span className="size-1.5 rounded-full bg-ink-300" />}
+    </span>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Board
 // ---------------------------------------------------------------------------
@@ -573,6 +646,18 @@ export const TIMELINE_LABEL: Record<string, string> = {
   attempt_failed: "Intento fallido",
   novelty_solved: "Novedad de Swayp resuelta",
   comment: "Comentario",
+  // Tipos que salían con el código crudo (13-10-2026). La nota dice el detalle.
+  whatsapp_template: "Plantilla de WhatsApp enviada",
+  key_view: "Clave de recojo consultada",
+  key_shared: "Clave de recojo enviada",
+  payment: "Pago",
+  payment_recipient_exception: "Pago validado con cuenta receptora no verificada",
+  aliclik_risk_exception: "Excepción al riesgo de Aliclik",
+  additional_output_reason: "Motivo de la salida adicional",
+  recovery_discarded: "Recuperación de provincia descartada",
+  confirmation_cancellation_task_created: "Tarea de anulación creada",
+  // Repro Provincia: el resultado que informa el courier («Resultado Swayp: No contesta»).
+  courier_report: "Resultado informado por el courier",
   confirmation_contact: "Intento de confirmación",
   // MOM §8.5: la llamada que hizo una persona desde la ficha, por Telnyx.
   browser_call: "Llamada desde Kapta",
@@ -653,6 +738,7 @@ export const TIMELINE_LABEL: Record<string, string> = {
   lead_call: "Llamada al cliente (Leads)",
   lead_state_change: "Cambio de estado del lead",
   lead_note: "Nota de la asesora",
+  lead_message: "Mensaje de la asesora (Leads)",
   lead_system: "Automático (Leads)",
   // Lo que escribe el agente de voz de leads (MOM §33): no es una asesora.
   lead_voice_agent: "Agente de voz (leads)",

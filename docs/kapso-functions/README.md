@@ -195,6 +195,19 @@ propia. La clienta recibiría dos mensajes, y uno de los dos estará mal en cuan
 la cuenta cambie. Si el bot tiene una regla que reacciona al texto «Pagar con
 Yape» o parecidos, hay que quitarla o acotarla a texto que no venga de un botón.
 
+### El «Sí, quiero» del recordatorio de reposición (13-10-2026)
+
+El recordatorio de reposición (MOM §34) termina con un botón de respuesta
+rápida, «Sí, quiero» por defecto (el rótulo vive en Ajustes de la tienda).
+Cuando la clienta lo toca —o contesta un «sí» pelado dentro de las 72 h—,
+Kapta sube el lead a «Atender ahora» con motivo `recompra` y le confirma que
+una asesora le escribe. **Lo que el bot NO debe hacer** es contestar también a
+ese botón: la clienta recibiría dos respuestas distintas a la misma pregunta.
+Si el bot tiene una regla que reacciona a «sí» después de una plantilla, hay
+que acotarla para que no se dispare con el botón de esta plantilla. Un «sí,
+pero ¿cuánto cuesta?» sí sigue con el bot y la asesora: Kapta solo reconoce el
+botón y una lista cerrada de «sí».
+
 ### Lo que sigue pendiente: la recuperación de devueltos
 
 La recuperación de pedidos devueltos (MOM §11.1) manda desde el dashboard la

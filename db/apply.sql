@@ -511,4 +511,6 @@
 \ir migrations/0253_swayp_pc_auto.sql
 \echo 'Applying 0254_swayp_actividad_backfill.sql'
 \ir migrations/0254_swayp_actividad_backfill.sql
+\echo 'Applying 0255_restock_reminders.sql'
+\ir migrations/0255_restock_reminders.sql
 \echo 'Done.'
