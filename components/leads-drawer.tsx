@@ -26,6 +26,7 @@ import {
   useTransition,
 } from "react";
 import { CallQr } from "@/components/call-qr";
+import { SEGMENT_TONE } from "@/components/lead-segment-tone";
 import { copyLabel, useCopyToClipboard } from "@/components/copy-button";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
 import {
@@ -356,10 +357,10 @@ function SegmentBadge({ lead, currency }: { lead: LeadRow; currency: string }) {
   }
   const seg = leadQueueBucket(lead);
   return (
-    <Badge tone="neutral">
+    <Badge tone={SEGMENT_TONE[seg]}>
       {SEG_PILL_LABEL[seg]}
       {seg === "carrito" && lead.cart_value != null && (
-        <span className="font-semibold tabular-nums text-ink-900">
+        <span className="font-semibold tabular-nums text-orange-950">
           {currency} {fmtAmount(lead.cart_value)}
         </span>
       )}
@@ -824,7 +825,7 @@ export function LeadDrawer({
                     <li key={o.name ?? i} className="flex items-center justify-between gap-3 px-4 py-2.5 sm:px-5">
                       <span className="flex min-w-0 items-center gap-2">
                         <span className="truncate text-sm font-medium text-ink-900">Pedido {o.name ?? "—"}</span>
-                        {o.cancelled && <Badge tone="neutral">Anulado</Badge>}
+                        {o.cancelled && <Badge tone="crit">Anulado</Badge>}
                       </span>
                       <span className="flex shrink-0 items-center gap-3">
                         <span className="text-xs tabular-nums text-ink-500">{orderDateShort(o.createdAt)}</span>
