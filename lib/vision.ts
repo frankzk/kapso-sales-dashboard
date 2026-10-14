@@ -411,6 +411,13 @@ export interface YapeVoucherFields {
    * personal cualquiera que también recibió un Yape (02-10-2026).
    */
   yapeEmpresaMarker?: boolean;
+  /**
+   * El «Nº de orden» de una constancia de Flow («¡Tu pago se ha concretado
+   * exitosamente!»). Es el `flowOrder`: con él se le pregunta a Flow si el
+   * pago entró de verdad (lib/flow/verify.ts). Null en cualquier otro
+   * comprobante.
+   */
+  flowOrder?: string | null;
   ok: boolean;
   model: string;
 }
@@ -439,7 +446,8 @@ function buildExtractPrompt(): string {
     '  "recipient_name": string|null,    // quien recibe\n' +
     '  "recipient_phone_last_digits": string|null, // últimos 3 dígitos del Nro. de celular destino\n' +
     '  "received_view": boolean,         // true si es la captura de QUIEN RECIBIÓ: dice "Te yapearon"\n' +
-    '  "yape_empresa_marker": boolean    // true si la captura menciona "Yape Empresa" (aviso al pie)\n' +
+    '  "yape_empresa_marker": boolean,   // true si la captura menciona "Yape Empresa" (aviso al pie)\n' +
+    '  "flow_order": string|null         // SOLO en la constancia de Flow: el "Nº de orden"\n' +
     "}\n" +
     "El comprobante puede venir de CUALQUIER banco o billetera peruana (Yape, " +
     "Plin, BCP, Interbank, BBVA, Scotiabank), y cada uno rotula ese dato a su " +
@@ -489,6 +497,13 @@ function buildExtractPrompt(): string {
     "En una constancia de pasarela (Flow u otra), quien recibe es el comercio " +
     "que va bajo \"Pagado a\" o equivalente; esas constancias no muestran " +
     "celular, así que recipient_phone_last_digits es null.\n" +
+    "LA CONSTANCIA DE FLOW TIENE OTRA FORMA: la pantalla \"¡Tu pago se ha " +
+    "concretado exitosamente!\", con el logo de la tienda arriba, y debajo " +
+    "\"Monto\", \"Nº de orden\", \"Fecha\", \"Medio de pago\", \"Tarjeta\" y " +
+    "\"Estado\". Su \"Nº de orden\" es el número de la orden en Flow: va en " +
+    "flow_order (solo dígitos) y también en operation_number, con " +
+    "operation_label \"Nº de orden\". No muestra quién recibe: recipient_name " +
+    "es null. En cualquier otro comprobante flow_order es null.\n" +
     `HAY RÓTULOS QUE SE PARECEN Y NO VALEN: ${notLabels}. Conviven con el de ` +
     "operación en el mismo comprobante y nombran otra cosa — el código de " +
     "solicitud identifica la SOLICITUD de transferencia, no el movimiento. Si el " +
@@ -636,13 +651,20 @@ function parseFields(text: string): Omit<YapeVoucherFields, "ok" | "model"> | nu
   // hay uno así. Lo que se cierra es que la máquina y la persona usaran dos
   // varas distintas para el mismo dato.
   const minLength = isOperationLabel(rawLabel) ? 4 : 6;
-  const operationNumber =
+  // El «Nº de orden» de Flow identifica el pago igual que un nº de operación
+  // —es único en Flow— y además se puede verificar con la pasarela. Si el
+  // modelo lo dejó solo en flow_order, se usa también como operación.
+  const flowDigits = (str(o.flow_order) ?? "").replace(/\D/g, "");
+  const flowOrder = flowDigits.length >= 6 ? flowDigits : null;
+  const readOperationNumber =
     cleanedOperation.length >= minLength && !labeledAsSomethingElse ? cleanedOperation : null;
+  const operationNumber = readOperationNumber ?? flowOrder;
   return {
     operationNumber,
     // El rótulo sin número no dice nada y sería ruido en la distribución por
     // banco: solo se guarda cuando acompaña a un número que sí aceptamos.
-    operationLabel: operationNumber ? rawLabel : null,
+    operationLabel: readOperationNumber ? rawLabel : flowOrder ? "Nº de orden (Flow)" : null,
+    flowOrder,
     amount: num(o.amount),
     paidAt: parseVoucherInstant(str(o.date), str(o.time)),
     // En la captura de quien recibió, todo lo que se lee es del pagador: si el
