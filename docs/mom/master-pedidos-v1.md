@@ -3831,6 +3831,37 @@ Esto ordena la llamada, no la reemplaza. Se descartó crear el pedido de forma
 automática para esta señal: incluso aquí, 6 de cada 10 carritos que siguen
 abiertos a las dos horas no terminan en pedido.
 
+**El siguiente lead de cada vendedora (14-10-2026).** Arriba de «Sin llamar»,
+cada vendedora ve UN lead para llamar ahora, con lo que pidió, el chat y el
+resultado de la llamada, y nunca el mismo que otra (`pickNextLead`,
+`lib/leads.ts`). Es el primero de **su** cola tal como la está mirando —con sus
+chips de segmento y cobertura, en el orden de «lo que más cierra» o «Más
+recientes»— que sigue `nuevo`, que nadie más tiene reservado y que ella no
+saltó.
+
+- **La reserva es la de siempre.** Aparecer en la tarjeta reserva el lead
+  (`claimLead`): 10 minutos (`CLAIM_TTL_MINUTES`) y **cuenta como una de las
+  dos** que puede tener (`MAX_OPEN_LEADS`). Mientras la pestaña se ve, se
+  renueva sola; al cerrarla se suelta (el mismo beacon de la ficha). Para las
+  demás aparece «Tomado · nombre», y el agente de voz no lo llama (§33.2,
+  condición 12).
+- **Abrir otro lead de la cola suelta el siguiente** antes de reservar el otro,
+  y pasa a otra vendedora. Al cerrar esa ficha, la tarjeta vuelve a reservar.
+- **Saltar** lo suelta y no se le vuelve a ofrecer en esa pestaña; para las
+  demás sigue en la cola.
+- **Guardar el resultado** desde la tarjeta es lo mismo que guardarlo en la
+  ficha; el lead deja «Sin llamar», se suelta y entra el siguiente.
+- Si ya tiene dos abiertos, la tarjeta lo dice y no reserva nada.
+- El que tiene se queda aunque entre otro con más puntaje: la tarjeta no
+  cambia bajo la mano; ese será el siguiente.
+- Solo la ve quien tiene el rol `vendedora`, y solo en «Sin llamar» sin
+  búsqueda: quien solo supervisa no retiene leads por mirar la cola.
+
+La cola de abajo sigue siendo **una sola lista** en el orden medido, con la
+edad en cada fila. Se descartó agruparla por edad (hora dorada, 1–6 h, …):
+dejaba un carrito de dos días, que cierra 9 a 12 veces más, debajo de un frío
+de diez minutos.
+
 **Carrito que ya es pedido (29-09-2026).** Un carrito sale de la cola de
 llamadas en cuanto llega un pedido que cumple cuatro variables fijas:
 
@@ -12933,3 +12964,314 @@ Implementación:
 - Los ajustes, en `lib/store-settings.ts` y `components/store-settings.tsx`.
 - Pruebas: `test/restock-reminder.test.ts` y
   `scripts/sql/restock_reminders_smoke.sql`.
+
+## 35. Comprobantes electrónicos por RUC (SimpleFact, 14-10-2026)
+
+Estado: construido y apagado. Existen la migración 0257 (empresas emisoras,
+cuenta → RUC, comprobantes y el candado de emisión), las reglas puras, el
+cliente de SimpleFact, el barrido (`/api/cron/invoices`), la sección «Boletas y
+facturas» de Ajustes y el panel «Comprobante» del drawer. **Ningún RUC emite**:
+GRUPO GF S.A.C. nace dado de alta, en «Apagado» y sin token, con sus cuentas ya
+asignadas (35.2). Se enciende primero en simulación y después en real, y lo
+enciende el owner (35.8).
+
+Un **comprobante electrónico** es la boleta (o factura) que emite, en su cuenta
+de SimpleFact, **la empresa que recibió el dinero** de un pedido; SimpleFact la
+manda a SUNAT. Grupo GF tiene **cuatro razones sociales**, cada una con su RUC y
+su propia cuenta de SimpleFact (subdominio, usuario y token distintos). Kapta
+decide si el pedido lleva comprobante y de qué RUC, lo emite **una sola vez** y
+guarda lo que mandó y lo que contestó SimpleFact (§2, principio 4). Kapta no
+edita ni borra un comprobante emitido (§2, principio 6) y no emite notas de
+crédito: deshacer una venta es de una persona (§2, principio 11).
+
+Cubre las ventas de las tiendas propias. Las tiendas cliente de otra
+organización facturan fuera de Kapta (§29.15).
+
+### 35.1 Qué es y por qué
+
+- **Las reglas son del owner (14-10-2026):** «un comprobante por pedido»;
+  «solo se emite el comprobante si la empresa recibió el pago»; automático,
+  «con restricciones como que coincida el método de pago con la conexión al
+  RUC»; un tope de S/ 700; y «cuidarnos de que no se generen boletas de más y
+  tengamos que pagar muchos impuestos». Boleta por defecto, y el IGV ya está
+  incluido en el precio de Shopify.
+- **Cuántos pedidos entran.** En los 30 días al 14-10-2026 quedaron pagados
+  completos en Kapta unos **780 pedidos** de unos 8.300: por comprobantes
+  validados o por la pasarela web. De los pagados con comprobante, **~21 al
+  día** (pico de 34) tienen todos sus pagos en cuentas de Grupo GF S.A.C. y no
+  pasan de S/ 700. Los prepagos web por Flow suman ~3 al día. Solo 2 pedidos
+  pagados pasaron de S/ 700.
+- **El resto todavía no.** La mayoría de los pedidos se cobra en la puerta, con
+  motorizado o courier. Ese dinero recién es de la empresa cuando se aprueba la
+  liquidación (§14, §29.10), y Kapta no sabe a qué cuenta se depositó. Queda
+  para una segunda fase (35.9).
+- **Por qué un candado y no una cola.** SimpleFact no tiene llave de
+  idempotencia: el mismo pedido mandado dos veces son dos boletas, y una boleta
+  enviada a SUNAT no se borra. Es el mismo problema que Swayp
+  (`swayp_emission_claim`, 0209): el turno se reserva en la base antes de
+  llamar, y un envío sin respuesta se concilia, nunca se repite.
+
+### 35.2 Cuenta receptora → RUC
+
+- **Los RUC.** Cada empresa emisora es una fila de `invoice_issuers`, por
+  organización: RUC, razón social, subdominio de SimpleFact (`grupogf` →
+  `https://grupogf.simplefact.pe/api/v1`), token cifrado, modo, «Emitir desde»
+  y tope diario. El token solo viaja a un subdominio de `simplefact.pe`.
+- **Las cuentas.** El RUC se asigna a las **cuentas contra las que Kapta
+  verifica los comprobantes** (`store_collection_accounts`, §12 Pagos), con un
+  desplegable por cuenta en Ajustes → «Boletas y facturas». Una cuenta en «Sin
+  comprobante» **no emite**: el dinero que entra ahí no es de ninguna empresa
+  emisora.
+- **Por titular, no por banco.** Kapta reconoce a quién le llegó el pago por el
+  titular de la cuenta, y un Yape y una transferencia al mismo titular se ven
+  igual: la máscara «**** 0012» de una constancia BCP se aparta y no se juzga
+  (§12 Pagos). Por eso el BCP ···0-12 de Grupo GF S.A.C. va con la fila «Grupo
+  GF S.A.C. · ···309». Ajustes lista bajo cada titular las cuentas que se le
+  enseñan a la clienta con ese titular (`store_payment_methods`), para que se
+  vea qué cubre cada fila. Si dos cuentas del mismo titular tuvieran que ir a
+  RUC distintos, primero hay que enseñarle al lector a guardar la máscara
+  (35.9).
+- **Semilla (decisión del owner, 14-10-2026).** El Yape ···309, el BCP ···0-12
+  y la cuenta de Flow son de **GRUPO GF S.A.C., RUC 20556792829**. La 0257 da de
+  alta ese RUC (subdominio `grupogf`, apagado y sin token) y le asigna «Grupo GF
+  S.A.C.» ···309 y «Aurela Kenku» (la pasarela Flow, sin celular, 0198) en las
+  tiendas de la organización. Las cuentas personales de los dueños quedan sin
+  RUC.
+
+**A qué cuenta entró cada pago.** Se decide por cada pago validado, con la
+primera señal que exista y en este orden (`resolvePaymentAccounts`,
+`lib/invoicing/rules.ts`):
+
+| # | Señal | Cuentas candidatas |
+| --- | --- | --- |
+| 1 | El pago nació de un link de Flow (`flowcl_payment_links.payment_id`) | Las cuentas sin celular de la tienda: la pasarela (0198) |
+| 2 | Lo validó el estado de cuenta Yape (`yape_statement_matches`, §16.2) | La cuenta cuyo nombre o alias es el destino del movimiento (`statementAccountKey`) |
+| 3 | El lector del comprobante encajó con una cuenta (`verified`) | Esa cuenta |
+| 4 | El lector quedó en `partial`: nombre recortado, o solo el celular | Todas las cuentas con las que esa lectura encaja, verificada o parcial |
+| — | Cualquier otro caso: sin lectura, un `mismatch` validado con excepción, «Te yapearon» (no dice cuál de nuestras cuentas), un cobro del courier sin estado de cuenta | Ninguna: `pago_sin_cuenta` |
+
+La lectura se recalcula con las cuentas vivas (`yapeRecipientReadingFromVision`,
+§12 Pagos), nunca con el `recipient_check` guardado. El prepago web por el
+checkout de Flow (`payment_gateway = 'checkout'`) no deja filas de pago: su
+cuenta es la pasarela de la tienda, como en la fila 1.
+
+**El RUC del pedido** es el de sus cuentas candidatas, y solo si **todas** las
+de todos sus pagos validados tienen **el mismo RUC**. Una candidata sin RUC da
+`cuenta_sin_ruc`, y dos RUC distintos, `ruc_mezclados`. En la duda no se elige:
+el pedido no lleva comprobante y el panel dice por qué. Es la regla del owner:
+el método de pago tiene que coincidir con la conexión al RUC.
+
+### 35.3 Cuándo se emite
+
+Un pedido lleva comprobante cuando cumple todo esto. Las condiciones van **en
+este orden**, y la primera que falla es el motivo que guardan el barrido y el
+panel (`invoiceEligibility`, función pura; los textos en
+`INVOICE_REASON_LABEL`):
+
+| # | Condición | Si falla |
+| --- | --- | --- |
+| 1 | El pedido no está anulado ni reembolsado y está en soles | `anulado` / `reembolsado` / `moneda` |
+| 2 | Todos sus pagos vivos (no rechazados) están validados. Un posible duplicado bloquea aunque cubra el total | `posible_duplicado` / `pagos_en_revision` |
+| 3 | La empresa recibió el pago: lo validado cubre el total del pedido, o es un prepago web confirmado (§6.5, §12 Pagos). Un prepago web que además tiene comprobantes cargados no se adivina | `sin_pago_completo` / `prepago_con_comprobantes` |
+| 4 | Cada pago validado tiene cuenta (35.2) | `pago_sin_cuenta` |
+| 5 | Todas sus cuentas tienen RUC, y es el mismo | `cuenta_sin_ruc` / `ruc_mezclados` |
+| 6 | El total es mayor que 0 y no pasa de S/ 700 (35.5) | `monto_cero` / `monto_mayor_700` |
+| 7 | Ese RUC no está apagado | `ruc_apagado` |
+| 8 | El pedido quedó pagado desde «Emitir desde» del RUC: cuenta el último pago validado (`validated_at`), o la fecha del pedido si es prepago web. Sin fecha de inicio no se emite | `antes_de_inicio` |
+| 9 | No tiene comprobante real vivo ni uno registrado como emitido fuera de Kapta (35.4). En simulación, tampoco una simulación | `ya_tiene` / `ya_simulado` |
+| 10 | Su último intento real no terminó en `error` sin que una persona pidiera reintentar | `error_previo` |
+
+**Justo antes de emitir, Kapta vuelve a leer el pedido en Shopify**
+(`fetchOrderForInvoice`), porque lo guardado no alcanza para armar la boleta
+(35.5). Esa lectura bloquea un pedido de prueba (`prueba`), anulado,
+reembolsado o en otra moneda, uno editado (`editado`, `cantidad_editada`,
+`envio_editado`), con propina, con tarjeta de regalo (`gift_card`), con una
+línea gratis (`linea_gratuita`), con impuesto sumado encima
+(`impuesto_encima`), con más de 100 líneas (`demasiadas_lineas`), uno cuyo
+detalle no suma el total (`no_cuadra`) y uno cuyo total no es el de Kapta
+(`total_distinto`). En un prepago web exige además que Shopify diga pagado y que
+sus transacciones aprobadas sumen el total (`pago_web_no_confirmado`).
+
+Recién entonces se pide el turno (`invoice_claim`, 35.4), que revisa de nuevo,
+dentro de la base, el modo, la conexión, el monto, la fecha de inicio, que no
+haya otro comprobante y el tope del día: `sin_conexion`, `tope`.
+
+**Falla cerrada.** Si no se pudo leer algo —pagos, cuentas, el estado de
+cuenta, los links de Flow, Shopify—, el pedido no se emite en esa pasada. Un
+comprobante armado con datos a medias puede ir al RUC equivocado.
+
+### 35.4 Topes y candados
+
+- **Uno por pedido, en la base.** Un índice único deja a cada pedido con a lo
+  más un comprobante real vivo: `emitiendo`, `emitida`, `en_duda` o `externa`.
+  Lo garantiza Postgres, no el código.
+- **El turno se reserva antes de llamar.** `invoice_claim` toma un candado por
+  RUC, revisa todo de nuevo, cuenta el tope del día y deja la fila en
+  `emitiendo`. Recién entonces se llama a SimpleFact.
+- **Lo que contestó SimpleFact:**
+  - `emitida`: contestó con la venta (id, serie y correlativo).
+  - `error`: contestó que no, con un 4xx y su mensaje: no hay boleta. No se
+    reintenta solo. Una persona pulsa «Volver a intentar» y la fila queda como
+    historia.
+  - `en_duda`: no contestó, contestó un 5xx o algo que no se entiende. La
+    boleta puede existir, así que **nunca se reintenta sola**. El barrido la
+    concilia buscando en las ventas de hoy y de ayer de SimpleFact la nota
+    «Kapta ‹ref›» (35.5); si aparece, pasa a `emitida`. Si no aparece, la ve
+    una persona: si confirma en SimpleFact que no existe, la libera con «No
+    está en SimpleFact: volver a intentar».
+- **Tope diario por RUC** (`daily_limit`): 40 por defecto, de 1 a 300, por día
+  de Lima. Cuenta lo emitido, lo que se está emitiendo y lo que está en duda.
+  Lo que excede espera al día siguiente y no se pierde. El defecto cubre el pico
+  medido (34) más los prepagos web.
+- **Por pasada,** a lo más 15 comprobantes por RUC.
+- **«Emitir desde».** Ningún RUC emite hacia atrás: solo pedidos que quedaron
+  pagados desde esa fecha, y Ajustes no la deja en el pasado. Al cambiar de
+  modo, si quedó atrás, se mueve sola al momento del cambio. Asignar un RUC a
+  una cuenta no emite nada pagado antes de esa fecha.
+- **Emitido fuera de Kapta.** Si una persona emite la boleta a mano en
+  SimpleFact —por ejemplo, la de un pedido de más de S/ 700 con DNI—, la
+  registra en el panel con «Ya tiene comprobante», con su serie y número. Queda
+  una fila `externa` y Kapta no vuelve a emitir por ese pedido.
+- **El token tiene que ser del RUC.** «Probar conexión» lee las ventas de la
+  cuenta y saca el RUC del nombre de sus archivos (`20556792829-03-B001-…`).
+  Si no es el RUC declarado, no se puede pasar a real. Cada respuesta de una
+  emisión se contrasta igual: si trae otro RUC, el comprobante queda marcado y
+  el RUC se apaga solo.
+- **Un token rechazado** (401 o 403) apaga el RUC con el motivo a la vista:
+  seguir intentando solo llenaría de errores.
+
+### 35.5 Boleta, IGV y comprador
+
+- **Boleta** (`invoice_type = '03'`) por defecto. La factura (`'01'`) necesita
+  el RUC del comprador y queda fuera de esta versión (35.9).
+- **El precio de Shopify ya incluye el IGV** (owner, 14-10-2026). Cada ítem va
+  con su precio unitario con IGV y `tax_percent` 18, y SimpleFact separa la base
+  y el impuesto. Kapta no suma IGV encima: si Shopify sumó impuesto aparte
+  (`taxesIncluded = false` con impuesto), no emite.
+- **Los ítems salen de Shopify, al céntimo.** La línea neta es precio original
+  × cantidad − descuentos asignados a la línea, que incluyen los descuentos del
+  pedido entero. Si no se divide exacto entre la cantidad, la línea se parte en
+  dos ítems cuyos precios difieren en un céntimo. El envío cobrado va como ítem
+  «Servicio de envío». La suma tiene que dar exactamente el total de Shopify y
+  el de Kapta, o no se emite.
+- **El tope de S/ 700.** Una boleta de más de S/ 700 tiene que identificar al
+  comprador con su documento. Kapta no tiene el DNI de forma confiable (en
+  Shopify llega en texto libre), así que **no emite boletas de más de S/ 700**:
+  esas se emiten a mano y se registran como externas (35.4). El owner lo planteó
+  como el máximo de ley; para SUNAT es el umbral de identificación del
+  comprador. El efecto en Kapta es el mismo.
+- **Comprador sin identificar.** Hasta S/ 700 la boleta va a «CLIENTES VARIOS»
+  con DNI `00000000`, sin correo ni celular, y SimpleFact no le escribe a nadie
+  (`email_send = false`). Kapta no le manda a SimpleFact datos de la clienta que
+  la boleta no necesita. La convención se confirma con el contador y con la
+  primera boleta real (35.8).
+- **La nota.** Cada boleta lleva «Pedido #KP… · Kapta ‹ref›», donde ‹ref› son
+  los primeros 8 caracteres del id del comprobante en Kapta. Sirve para
+  conciliar un `en_duda` y para encontrarla en SimpleFact.
+- **Una por pedido, por su total.** Un pedido acompañante (§32) lleva su propia
+  boleta por su propio total, nunca la suma de la guía.
+
+### 35.6 Lo que escribe
+
+| Dónde | Qué guarda |
+| --- | --- |
+| `invoice_issuers` | Los RUC: subdominio, token cifrado (AES-256-GCM, `lib/crypto.ts`), modo, «Emitir desde», tope y la última prueba de conexión (RUC leído, fecha y error). Sin policy de lectura: solo la lee el servidor |
+| `store_collection_accounts.invoice_issuer_id` | El RUC de cada cuenta (35.2). Un trigger exige que el RUC sea de la misma organización que la tienda |
+| `order_invoices` | Una fila por intento: pedido, RUC (copiado), modo, estado, total, cuándo quedó pagado, los pagos y cuentas en que se basó (`basis`), lo enviado (`request`), lo recibido (`response` y código HTTP), el id de SimpleFact, serie, correlativo y enlaces al PDF y al XML, y quién pidió reintentar o la registró como externa |
+| `invoice_order_checks` | La última revisión del barrido por pedido y modo (motivo y fecha). Con ella el panel dice por qué un pedido no lleva comprobante, y el barrido no relee en Shopify cada 10 minutos un pedido bloqueado |
+
+Reglas de esa tabla:
+
+- **Un comprobante no se edita ni se borra.** Sus estados solo avanzan:
+  `emitiendo` → `emitida`, `error` o `en_duda`; y `en_duda` → `emitida` (se
+  concilió) o `error` (una persona confirmó que no existe). Un reintento es una
+  fila nueva y la anterior se queda.
+- **La simulación escribe la misma fila,** con modo `simulacion` y estado
+  `simulada`, con la boleta exacta que habría enviado, y **no llama a
+  SimpleFact**. Una simulación no impide la emisión real.
+- **El token nunca sale al navegador ni a un log.** Ajustes solo dice
+  «Configurado» o «Sin configurar».
+
+### 35.7 Permisos
+
+- **`invoices.manage` («Boletas y facturas»)**: dar de alta un RUC, poner su
+  token, cambiar su modo, su «Emitir desde» y su tope, asignar cuentas,
+  registrar un comprobante externo, pedir un reintento y liberar un `en_duda`.
+  Es un permiso de dinero: **solo el owner lo da** (§16, `ownerOnly`), y ningún
+  rol lo trae salvo el del owner. En Ajustes de la tienda se pide además
+  `stores.manage`.
+- **El panel «Comprobante» del drawer** lo ve quien ve el pedido: estado, serie
+  y número, PDF y motivo. Nunca credenciales.
+- **Emitir lo hace solo el barrido.** No hay botón «Emitir»: un pedido que no
+  cumple las reglas no se fuerza desde Kapta.
+
+### 35.8 Encendido
+
+Cada RUC tiene tres modos: **Apagado** (no hace nada), **Simulación** (revisa
+todo, arma la boleta y la guarda sin enviarla) y **Real**. Para pasar a Real,
+la base exige token, «Emitir desde» y una prueba de conexión que leyó el mismo
+RUC declarado.
+
+Orden de encendido:
+
+1. El owner regenera el token de SimpleFact de Grupo GF (el anterior quedó
+   expuesto en una captura) y lo pega directo en Ajustes → «Boletas y
+   facturas», nunca en un chat. Pulsa «Probar conexión».
+2. Pone el RUC en Simulación con «Emitir desde» de hoy, y revisa unos días las
+   simuladas: el RUC, los ítems, el total y los motivos de lo que no entró.
+3. Confirma con el contador la convención «CLIENTES VARIOS» / `00000000` y el
+   umbral de S/ 700 (35.5).
+4. Pasa a Real con «Emitir desde» del momento del cambio, y revisa en
+   SimpleFact las primeras boletas.
+
+Ajustes muestra, por RUC, lo de hoy (emitidas, simuladas, en duda y con error)
+y los últimos comprobantes.
+
+### 35.9 Pendientes
+
+- **Cobros en la puerta (fase 2).** El efectivo, el Yape y el POS que cobra el
+  motorizado (`delivery_stops.payment_method`) no son pagos validados ni dicen
+  a qué cuenta llegaron: «el monto reportado no equivale a ingreso bancario
+  validado» (§29.10). Entran cuando la liquidación aprobada diga a qué cuenta se
+  depositó.
+- **Couriers que liquidan** (Aliclik, Swayp, Axel, Urpi, §14). Depositan neto y
+  el MOM no dice a qué cuenta. La boleta iría por el total del pedido, no por el
+  neto. Falta decidir la señal (`liquidation_closed`) y la cuenta.
+- **Cobro del courier Tanders sin estado de cuenta.** Su lectura tiene otra
+  forma (`vision.method`, `to_yape`) y otra regla de receptor; hoy solo entra si
+  lo validó el estado de cuenta Yape (35.2, fila 2).
+- **«Te yapearon» con Yape Empresa.** La captura no dice cuál de nuestras
+  cuentas recibió: 2 pagos en 30 días. Hace falta marcar qué cuenta es la de
+  Yape Empresa.
+- **Separar el BCP del Yape del mismo titular:** guardar la máscara de la
+  constancia (35.2).
+- **Facturas** con el RUC del comprador, y **boletas de más de S/ 700** con su
+  DNI desde Kapta.
+- **Notas de crédito.** Si después de emitida un pago deja de estar validado, o
+  el pedido se anula o se reembolsa, el panel avisa «Revisa si corresponde una
+  nota de crédito». La nota la emite una persona en SimpleFact (§2, principio
+  11).
+- **Adelanto retenido** cuando la clienta rechaza el saldo (§12 Pagos): es
+  ingreso sin pago completo. **Decisión pendiente del owner.**
+- **Los otros tres RUC.** El owner los da de alta con su subdominio y su token,
+  y les asigna cuentas.
+
+Implementación:
+
+- `db/migrations/0257_invoices.sql`: `invoice_issuers`,
+  `store_collection_accounts.invoice_issuer_id` con su trigger,
+  `order_invoices`, `invoice_order_checks`, la función `invoice_claim` y la
+  semilla de GRUPO GF S.A.C.
+- `lib/invoicing/rules.ts`: reglas puras (cuenta y RUC de cada pago,
+  elegibilidad, la boleta, la lectura de la respuesta).
+- `lib/invoicing/shopify-order.ts`: la lectura del pedido en Shopify y su
+  mapeo al céntimo.
+- `lib/invoicing/simplefact.ts`: el cliente de SimpleFact.
+- `lib/invoicing/server.ts`: lo que el barrido y el panel leen de la base, el
+  barrido y la conciliación.
+- `app/api/cron/invoices/route.ts`: el barrido, cada 10 minutos.
+- Ajustes, en `app/dashboard/[storeId]/settings/invoice-actions.ts` y
+  `components/invoice-settings-section.tsx`; el panel, en
+  `app/dashboard/pedidos/invoice-actions.ts` y
+  `components/order-invoice-panel.tsx`; el permiso, en `lib/permissions.ts`.
+- Pruebas: `test/invoicing-*.test.ts` y `scripts/sql/invoices_smoke.sql`.

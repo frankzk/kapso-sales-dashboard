@@ -364,10 +364,10 @@ describe("leadVoicePanelView: la prueba, y qué falta si no se puede", () => {
     expect(leadVoicePanelView(panelData({ optOut: true, calls: [voiceCall()] }))).toEqual(base);
   });
 
-  it("el drawer lo monta en su tarjeta, antes del resultado de la llamada y solo con teléfono", () => {
+  it("el drawer lo monta en su franja, antes del resultado de la llamada y solo con teléfono", () => {
     const drawer = read("components", "leads-drawer.tsx");
     expect(drawer).toMatch(
-      /\{canCall && \(\s*<div className=\{SECTION_CARD\}>\s*<LeadVoiceAgentPanel key=\{lead\.id\} leadId=\{lead\.id\} onChanged=\{\(\) => onRegistered\(\)\} \/>/,
+      /\{canCall && \(\s*<div className=\{VOICE_STRIP\}>\s*<LeadVoiceAgentPanel key=\{lead\.id\} leadId=\{lead\.id\} onChanged=\{\(\) => onRegistered\(\)\} \/>/,
     );
     expect(drawer.indexOf("<LeadVoiceAgentPanel")).toBeLessThan(drawer.indexOf("<CallForm key={lead.id}"));
   });
@@ -488,7 +488,9 @@ describe("el historial y la ficha del lead", () => {
     const drawer = read("components", "leads-drawer.tsx");
     expect(drawer).toContain('lead.handoff_reason === LEAD_VOICE_AGENT_HANDOFF ? "Resumen del agente de voz" : "Resumen del bot"');
     expect(drawer).toContain("lead.contact_opt_out_at && (");
-    expect(drawer).toContain("🚫 No contactar");
+    // La chapa ya no lleva el emoji (mundo de operación, sin glifos): la
+    // dicen la palabra, el tono crítico y el porqué en el título.
+    expect(drawer).toMatch(/<Badge tone="crit" title="Pidió no ser contactado">\s*No contactar\s*<\/Badge>/);
   });
 
   it("el Master de Pedidos nombra sus filas", () => {

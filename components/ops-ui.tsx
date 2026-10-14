@@ -37,7 +37,13 @@ export const OpsButton = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTML
   },
 );
 
-export type BadgeTone = "neutral" | "info" | "ok" | "warn" | "crit" | "urgent" | "brand";
+/** Matiz de una CLASIFICACIÓN (no de un estado): el segmento del lead, la línea
+ *  de WhatsApp. Tinte suave con anillo, como la chapa de cobertura del Master
+ *  (DESIGN.md › Estados › Cobertura): se distingue de las chapas de estado, que
+ *  van rellenas y sin anillo. */
+export type CategoryTone = "slate" | "sky" | "indigo" | "teal" | "orange" | "emerald";
+
+export type BadgeTone = "neutral" | "info" | "ok" | "warn" | "crit" | "urgent" | "brand" | CategoryTone;
 
 const BADGE_TONE: Record<BadgeTone, string> = {
   neutral: "bg-line text-ink-600",
@@ -47,6 +53,12 @@ const BADGE_TONE: Record<BadgeTone, string> = {
   crit: "bg-crit-bg text-crit-fg",
   urgent: "bg-urgent text-white",
   brand: "bg-brand-50 text-brand-700",
+  slate: "bg-slate-50 text-slate-700 ring-1 ring-inset ring-slate-200",
+  sky: "bg-sky-50 text-sky-800 ring-1 ring-inset ring-sky-200",
+  indigo: "bg-indigo-50 text-indigo-800 ring-1 ring-inset ring-indigo-200",
+  teal: "bg-teal-50 text-teal-800 ring-1 ring-inset ring-teal-200",
+  orange: "bg-orange-50 text-orange-800 ring-1 ring-inset ring-orange-200",
+  emerald: "bg-emerald-50 text-emerald-800 ring-1 ring-inset ring-emerald-200",
 };
 
 /** Chapa de estado: 20 px de alto, 4 px de radio, texto de 12 px. */
@@ -219,12 +231,14 @@ export function AttentionPill({ icon: Glyph, label, count, active, onClick, hint
  * cabecera pegajosa con título, chapa de estado, contexto y cierre. El ancho
  * lo decide quien lo abre (`width`, p. ej. `max-w-[960px]`).
  */
-export function SidePanel({ label, title, badge, meta, width, onClose, children }: {
+export function SidePanel({ label, title, badge, meta, actions, width, onClose, children }: {
   /** Nombre accesible del diálogo. */
   label: string;
   title: ReactNode;
   badge?: ReactNode;
   meta?: ReactNode;
+  /** Lo que va arriba a la derecha, antes de «Cerrar» (el QR de la ficha del lead). */
+  actions?: ReactNode;
   width: string;
   onClose: () => void;
   children: ReactNode;
@@ -260,9 +274,12 @@ export function SidePanel({ label, title, badge, meta, width, onClose, children 
             </div>
             {meta && <p className="mt-0.5 text-[13px] tabular-nums text-ink-500">{meta}</p>}
           </div>
-          <button type="button" onClick={onClose} aria-label="Cerrar" className="-mr-1.5 grid size-8 shrink-0 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900">
-            <svg aria-hidden width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M6 6l12 12M18 6 6 18" /></svg>
-          </button>
+          <div className="flex shrink-0 items-start gap-3">
+            {actions}
+            <button type="button" onClick={onClose} aria-label="Cerrar" className="-mr-1.5 grid size-8 shrink-0 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900">
+              <svg aria-hidden width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M6 6l12 12M18 6 6 18" /></svg>
+            </button>
+          </div>
         </header>
         <div className="flex-1 px-4 py-5 sm:px-6">{children}</div>
       </aside>
