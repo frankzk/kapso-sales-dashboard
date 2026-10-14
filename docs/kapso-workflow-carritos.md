@@ -156,8 +156,11 @@ Cuando el bot completa el borrador:
    secuencia de carritos se detiene sola (el borrador dejó de estar `open`).
    La orden queda con las etiquetas que le pone Shopify: hasta el 14-10-2026
    el dashboard le añadía `kapso + cod_recuperado` en su copia, y la
-   sincronización las borraba en minutos. Quién la cerró lo dice el canal de
-   cierre (MOM §17.3).
+   sincronización las borraba en minutos. Ojo: el canal de cierre (MOM §17.3)
+   todavía no lo distingue y lo cuenta como «Web», porque Shopify no le pone
+   ninguna marca que lo separe del carrito que la clienta terminó sola. Para
+   contarlo como del bot, el workflow tendría que ponerle una etiqueta al
+   borrador (por ejemplo `kapso`) antes de completarlo.
 3. El envío queda auditado en `cart_seq_sends`, así después se puede medir
    cuántos carritos recuperó la secuencia (¿pedido después de `sent_at`?).
 

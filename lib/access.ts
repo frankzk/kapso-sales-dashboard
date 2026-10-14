@@ -4,6 +4,7 @@
 
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { permissionsFor } from "@/lib/permissions";
+import { env } from "@/lib/env";
 import { cache } from "react";
 import { decryptOrNull } from "@/lib/crypto";
 import { fetchMetaSpend, normalizeMetaAdAccounts } from "@/lib/meta-marketing";
@@ -19,6 +20,7 @@ import type { AdMeta } from "@/lib/meta-ads";
 import { idsEnUtm, type AnuncioMeta, type WebAdOrder } from "@/lib/cod-cart-attribution";
 import type { AttributionInputs, AttributionSource } from "@/lib/metrics";
 import {
+  clampToCoverage,
   isMissingFunctionError,
   parseClosingChannels,
   summarizeClosingChannels,
@@ -642,19 +644,25 @@ export async function getAttributionInputs(
  * vino a corregir.
  */
 export async function getClosingChannels(storeIds: string[], range: DateRange): Promise<ClosingChannelResult> {
-  if (!storeIds.length) return { status: "ok", summary: summarizeClosingChannels([]) };
+  // Antes de ORDERS_SYNC_FROM Kapta solo guardaba los pedidos del bot: contar
+  // ahí «todas las ventas» inflaría a la asesora sobre un universo a medias.
+  const coverageFrom = env.ordersSyncFrom();
+  const window = clampToCoverage(range, coverageFrom);
+  if (!window) return { status: "sin_cobertura", coverageFrom };
+  const clipped = window.clipped ? coverageFrom : null;
+  if (!storeIds.length) return { status: "ok", summary: summarizeClosingChannels([]), coverageFrom: clipped };
   const sb = await createServerSupabase();
   const { data, error } = await sb.rpc("canal_de_cierre", {
     p_store_ids: storeIds,
-    p_from: range.from,
-    p_to: range.to,
+    p_from: window.from,
+    p_to: window.to,
   });
   if (error) {
     if (isMissingFunctionError(error)) return { status: "sin_migracion" };
     console.error("[consolidado] canal_de_cierre", error.code, error.message);
     return { status: "error", message: error.message };
   }
-  return { status: "ok", summary: summarizeClosingChannels(parseClosingChannels(data)) };
+  return { status: "ok", summary: summarizeClosingChannels(parseClosingChannels(data)), coverageFrom: clipped };
 }
 
 /**

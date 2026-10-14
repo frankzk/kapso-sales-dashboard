@@ -323,9 +323,10 @@ export function ExecutiveDashboard({
   const leadList = leads ?? [];
   const loss = lossReasons(leadList);
   const lostRev = lostRevenueByReason(loss, totals.aov);
-  // Los canales salen de la MISMA atribución que alimenta «Ventas por fuente y
-  // cierre». Antes esto se calculaba aparte y las dos tarjetas de la aplicación
-  // podían contradecirse sobre quién cerró la misma venta.
+  // Los canales por etiquetas de los pedidos del bot salen de la MISMA
+  // atribución que alimenta el panel de «Fuente». Ya no son el «Canal de
+  // cierre» de la tienda (MOM §17.3): solo los usa la vista de respaldo cuando
+  // la función 0257 no responde.
   const channels = attribution.channels;
   const cartStats = cartRecovery(leadList, orders);
   const campaignStats = campaignBreakdown(
@@ -622,7 +623,7 @@ export function ExecutiveDashboard({
     ) : undefined,
     panel: attribution.total.orders
       ? {
-          meta: `Ventas por fuente y canal de cierre${SEP}${periodMeta}`,
+          meta: `Pedidos del bot por fuente y cierre${SEP}${periodMeta}`,
           width: "max-w-[880px]",
           body: <SalesAttributionModule attribution={attribution} metaSpend={metaSpend ?? null} currency={currency} timezone={timezone} />,
         }
@@ -632,16 +633,21 @@ export function ExecutiveDashboard({
   // «Canal de cierre» (MOM §17.3): quién cerró TODAS las ventas de la tienda,
   // por la venta registrada de la asesora y no por etiquetas que la
   // sincronización con Shopify borra. Si la función 0257 no está (deploy no
-  // aplica migraciones) o falla, vuelve la vista anterior —solo pedidos del
-  // bot— con un aviso, nunca ceros.
+  // aplica migraciones), falla, o el periodo cae antes de que Kapta guardara
+  // todos los pedidos, vuelve la vista anterior —solo pedidos del bot— con un
+  // aviso y sin cifra de cabecera: su porcentaje sería el número equivocado.
   const closingSummary = closing?.status === "ok" ? closing.summary : null;
+  const closingFrom = closing?.status === "ok" ? closing.coverageFrom : null;
+  const fullDay = (iso: string) => `${shortDay(iso)} ${iso.slice(0, 4)}`;
   const channelTotal = CHANNEL_COLS.reduce((s, c) => s + channels[c.key].revenue, 0);
   const legacyCanalNote =
     closing?.status === "sin_migracion"
       ? "Falta aplicar la migración 0257 en la base: mientras tanto este panel solo ve los pedidos del bot de Kapso y no puede contar las ventas de las asesoras."
-      : closing?.status === "error"
-        ? `No se pudo calcular el canal de todas las ventas (${closing.message}). Esto es la vista anterior: solo los pedidos del bot de Kapso.`
-        : null;
+      : closing?.status === "sin_cobertura"
+        ? `Kapta guarda todos los pedidos de la tienda desde el ${fullDay(closing.coverageFrom)}; antes solo los del bot. Para este periodo no hay con qué contar todas las ventas: esto es la vista anterior, solo los pedidos del bot de Kapso.`
+        : closing?.status === "error"
+          ? `No se pudo calcular el canal de todas las ventas (${closing.message}). Esto es la vista anterior: solo los pedidos del bot de Kapso.`
+          : null;
   const canal: ModuleCell = closingSummary
     ? {
         id: "canal",
@@ -649,7 +655,7 @@ export function ExecutiveDashboard({
         figure: closingSummary.total.revenue ? pct(closingSummary.byGroup.humano.revenue / closingSummary.total.revenue, 0) : "—",
         tone: closingSummary.total.revenue ? undefined : "muted",
         sub: closingSummary.total.revenue
-          ? `lo cerró una asesora${SEP}${money(closingSummary.byGroup.humano.revenue, currency)} de ${money(closingSummary.total.revenue, currency)}`
+          ? `de todas las ventas lo cerró una asesora${SEP}${money(closingSummary.byGroup.humano.revenue, currency)} de ${money(closingSummary.total.revenue, currency)}${closingFrom ? `${SEP}desde el ${fullDay(closingFrom)}` : ""}`
           : "Sin ventas en el periodo",
         glyph: closingSummary.total.revenue ? (
           <StackGlyph
@@ -658,15 +664,26 @@ export function ExecutiveDashboard({
         ) : undefined,
         panel: closingSummary.total.revenue
           ? {
-              meta: `Todas las ventas de la tienda${SEP}${periodMeta}`,
+              meta: `Todas las ventas de la tienda${SEP}${closingFrom ? `${rangeLabel({ from: closingFrom, to: range.to })}${SEP}${scopeLabel}` : periodMeta}`,
               width: "max-w-[880px]",
               body: (
                 <div className="flex flex-col gap-4">
+                  {closingFrom && (
+                    <Banner tone="info" role="status" title={`Cuenta desde el ${fullDay(closingFrom)}`}>
+                      Kapta guarda todos los pedidos de la tienda desde esa fecha; antes solo los del bot. Los días anteriores del periodo
+                      no entran aquí para no inflar a ningún canal con un universo a medias.
+                    </Banner>
+                  )}
                   <p className="max-w-[72ch] text-[13px] leading-5 text-ink-600">
                     Cada venta cae en un solo canal, así que los canales suman el total de la tienda: la venta que una asesora
                     registró en el dashboard es suya aunque el pedido lleve otra etiqueta. «Ayudados por asesora» marca lo que cerró
                     otro canal después de que una asesora gestionara a la clienta en los 7 días previos: ayudar no es cerrar, por
-                    eso no se suma a la asesora. Las cifras de arriba de la página siguen siendo solo las del bot de Kapso.
+                    eso no se suma a la asesora. Ingresos, Pedidos, Ticket promedio y Conversión de «Ventas del periodo», y Fuente,
+                    Productos y Embudo, siguen contando solo los pedidos del bot de Kapso.
+                  </p>
+                  <p className="max-w-[72ch] text-[13px] leading-5 text-ink-600">
+                    Un carrito de EasySell que completa el bot de Kapso por WhatsApp hoy cuenta como «Web»: Shopify no le pone ninguna
+                    marca que lo distinga de uno que la clienta terminó sola.
                   </p>
                   <ClosingChannels summary={closingSummary} currency={currency} />
                 </div>
@@ -677,16 +694,19 @@ export function ExecutiveDashboard({
     : {
         id: "canal",
         title: "Canal de cierre",
-        figure: channelTotal ? pct(channels.asesora.revenue / channelTotal, 0) : "—",
-        tone: channelTotal ? undefined : "muted",
+        figure: !legacyCanalNote && channelTotal ? pct(channels.asesora.revenue / channelTotal, 0) : "—",
+        tone: !legacyCanalNote && channelTotal ? undefined : "muted",
         sub: legacyCanalNote
-          ? "Solo pedidos del bot: falta calcular todas las ventas"
+          ? closing?.status === "sin_cobertura"
+            ? "Periodo anterior a que Kapta guardara todas las ventas"
+            : "Falta calcular todas las ventas"
           : channelTotal
             ? `lo cerró una asesora${SEP}${money(channels.asesora.revenue, currency)} de ${money(channelTotal, currency)}`
             : "Sin ventas en el periodo",
-        glyph: channelTotal ? (
-          <StackGlyph parts={CHANNEL_COLS.map((c) => ({ label: c.title, value: channels[c.key].revenue, color: CHANNEL_SHADE[c.key] }))} />
-        ) : undefined,
+        glyph:
+          !legacyCanalNote && channelTotal ? (
+            <StackGlyph parts={CHANNEL_COLS.map((c) => ({ label: c.title, value: channels[c.key].revenue, color: CHANNEL_SHADE[c.key] }))} />
+          ) : undefined,
         panel:
           channelTotal || legacyCanalNote
             ? {

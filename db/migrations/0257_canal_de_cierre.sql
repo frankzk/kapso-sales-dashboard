@@ -30,9 +30,11 @@
 --   6. otros          — todo lo demás (catálogo de WhatsApp, pedidos hechos a
 --                       mano en Shopify…).
 --
--- El orden importa solo en el borde: medido en el mismo mes, un pedido tenía
--- `kapso` y venta de asesora, y otro `kapso` y EasySell. Un pedido cae en UN
--- solo canal, así que los canales suman el total de la tienda.
+-- El orden SÍ decide: medido en el mismo mes, 1.375 de las 2.651 ventas
+-- activas de asesora llevan las etiquetas de EasySell (la asesora reusó el
+-- borrador del carrito) y las 29 recompras llevan la etiqueta de otro canal.
+-- Entre etiquetas no hubo choques. Un pedido cae en UN solo canal, así que los
+-- canales suman el total de la tienda.
 --
 -- Y una marca aparte, «ayudado por asesora», para lo que NO cerró una asesora:
 -- una asesora gestionó a esa clienta —fila firmada de `lead_calls` de tipo

@@ -2402,7 +2402,8 @@ el webhook no la trajo, tal como viene de Shopify.
    no toma bloqueos sobre tablas y no lleva `drop`. Medida en producción como
    el owner, 30 días y dos tiendas: 0,32 s, con los índices que ya existen.
    **Sin ella el código no se rompe**: la tarjeta vuelve a la vista anterior
-   (solo pedidos del bot) con un aviso de que falta la migración.
+   (solo pedidos del bot) con un aviso de que falta la migración y sin cifra
+   de cabecera («—»), porque ese porcentaje es justo el número equivocado.
 2. **Qué cambia en las cifras**:
    - «Canal de cierre» pasa de «0 % lo cerró una asesora» a la parte real. Con
      el periodo 14-09 → 13-10-2026: asesora 2.651 pedidos y S/ 481.451 de
@@ -2412,6 +2413,20 @@ el webhook no la trajo, tal como viene de Shopify.
      etiqueta `kapso` que les ponía el botón duraba hasta la siguiente
      sincronización. Es más correcto; el cambio es pequeño y se nota sobre
      todo en el día en curso.
+   - Un periodo que empieza antes de `ORDERS_SYNC_FROM` (2026-06-01) se cuenta
+     desde esa fecha y la tarjeta lo dice: antes Kapta solo guardaba los
+     pedidos del bot. Un periodo entero anterior vuelve a la vista de respaldo
+     con su aviso.
+   - En el panel de «Fuente», el bloque que se llamaba «Canal de cierre» pasa a
+     llamarse «Cierre de los pedidos del bot, por etiquetas» y remite a la
+     tarjeta: es el mismo cálculo de siempre, solo sobre pedidos del bot.
+   - Limitación conocida: un carrito de EasySell que completa el bot de Kapso
+     por WhatsApp cuenta como «Web», porque Shopify no le deja ninguna marca
+     del bot. Para separarlo, el workflow del bot tendría que etiquetar el
+     borrador antes de completarlo (MOM §17.3).
+   - Si al generar el pedido Shopify contesta que el borrador ya estaba
+     completado, la venta se registra sobre el pedido real del borrador y no
+     sobre una fila inventada `draft-<id>`, que la contaba dos veces.
 3. **Qué mirar después**:
    - la tarjeta muestra «Todas las ventas de la tienda» y su total se parece a
      los pedidos del Master del mismo periodo, no a los S/ ~100k del bot;

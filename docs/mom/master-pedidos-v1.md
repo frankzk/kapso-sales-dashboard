@@ -7796,6 +7796,12 @@ mientras Productividad les contaba S/ 484.645.
 pedidos e ingresos—, y el ingreso es total − reembolsado, igual que el resto
 del Consolidado.
 
+Kapta guarda todos los pedidos de la tienda solo desde `ORDERS_SYNC_FROM`
+(2026-06-01); antes, solo los del bot y las ventas que registraron las
+asesoras. Un periodo que empieza antes se cuenta desde esa fecha y la tarjeta lo
+dice («desde el 1 jun 2026»); uno que termina antes no tiene con qué responder y
+la tarjeta vuelve a la vista anterior con un aviso, sin cifra de cabecera.
+
 **Un canal por pedido**, el primero que aplique en este orden. Así los canales
 suman el total de la tienda:
 
@@ -7809,9 +7815,12 @@ suman el total de la tienda:
 | 6 | Otros | Todo lo demás: catálogo de WhatsApp, pedidos hechos a mano en Shopify… | Otros |
 
 La venta de la asesora gana a cualquier etiqueta porque es el único hecho que
-nada sobrescribe: la asesora la registró y `order_sales` es append-only. Las
-etiquetas casi no se solapan —en el mes medido, un pedido con `kapso` y venta
-de asesora y otro con `kapso` y EasySell—, así que el orden solo decide bordes.
+nada sobrescribe: la asesora la registró y `order_sales` es append-only. El
+orden **sí decide**, y mucho: en el mes medido, 1.375 de las 2.651 ventas
+activas de asesora llevan las etiquetas de EasySell (la asesora reusó el
+borrador del carrito) y las 29 recompras llevan la etiqueta de otro canal. Sin
+el orden, la mitad de las ventas de asesora caería en «Web». Entre etiquetas no
+hubo choques: ningún pedido tenía `kapso` y además otra etiqueta de canal.
 
 **«Ayudado por asesora».** Para lo que NO cerró una asesora: una asesora
 gestionó a esa clienta en los 7 días previos al pedido, con una fila firmada de
@@ -7829,14 +7838,33 @@ carrito recuperado sin asesora y la recompra automática registran la fila local
 **solo si el webhook no la trajo ya, y tal como viene de Shopify**: sin `kapso`,
 sin `cod_recuperado`, sin pisar la fecha ni los productos reales.
 
+Si al completar el borrador Shopify contesta que ya estaba completado, Kapta
+le pregunta a Shopify cuál es el pedido real de ese borrador y registra la venta
+sobre él. Antes inventaba una fila `draft-<id>` que no era ningún pedido de
+Shopify: la venta se contaba dos veces, una en la fila inventada y otra en el
+pedido real que traía la sincronización. Solo si Shopify tampoco lo dice queda
+el respaldo de antes, la fila `draft-<id>`, para no perder la venta; hasta el
+14-10-2026 no había ninguna en la base.
+
+**Lo que el canal todavía no distingue.** Un carrito de EasySell que completa el
+bot de Kapso por WhatsApp (`draftOrderComplete` sobre el borrador del carrito)
+cuenta como **Web**: Shopify no le pone ninguna marca que lo separe del carrito
+que la clienta terminó sola, y Kapta no puede etiquetarlo. Para contarlo como
+del bot, el workflow del bot tendría que ponerle una etiqueta al borrador (por
+ejemplo `kapso`) antes de completarlo; eso es un cambio del bot, no de esta
+tarjeta.
+
 **Productividad y el canal no cuadran exacto, y no tienen por qué.**
 Productividad cuenta ventas registradas por la fecha en que la asesora apretó
 el botón e incluye las que después se cancelaron; el canal cuenta pedidos por
 su fecha de creación en Shopify y deja los cancelados aparte.
 
-**Lo que todavía no cambia.** Las cifras de arriba del Consolidado (Ingresos,
-Pedidos, Ticket, Conversión) siguen siendo solo las del bot de Kapso (DEPLOY.md
-§5h). La tarjeta lo dice, porque su total —todas las ventas— es mayor.
+**Lo que todavía no cambia.** Ingresos, Pedidos, Ticket promedio y Conversión
+de «Ventas del periodo», y los módulos Fuente, Productos y Embudo, siguen
+contando solo los pedidos del bot de Kapso (DEPLOY.md §5h). La tarjeta lo dice,
+porque su total —todas las ventas— es mayor. El panel de «Fuente» conserva su
+propio cierre por etiquetas, ahora con el nombre «Cierre de los pedidos del
+bot, por etiquetas»: no ve las ventas de las asesoras y remite a esta tarjeta.
 
 Medido del 14-09 al 13-10-2026, días de Lima, pedidos activos:
 
@@ -7852,8 +7880,9 @@ Medido del 14-09 al 13-10-2026, días de Lima, pedidos activos:
 Cómo se calcula: `canal_de_cierre` (migración 0257, de lectura, con la sesión
 de quien mira: cada persona ve solo sus tiendas), resumido en
 `lib/closing-channel.ts` y dibujado en `components/closing-channels.tsx`. Si la
-migración todavía no se aplicó, la tarjeta vuelve a la vista anterior (solo
-pedidos del bot) con un aviso, nunca con ceros.
+migración todavía no se aplicó o la función falla, la tarjeta vuelve a la
+vista anterior (solo pedidos del bot) con un aviso y sin cifra de cabecera
+(«—»): su porcentaje sería el número equivocado. Nunca con ceros.
 
 ## 18. Implementación incremental
 

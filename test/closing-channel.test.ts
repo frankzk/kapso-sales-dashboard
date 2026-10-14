@@ -13,21 +13,31 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // la fila que trajo Shopify.
 
 vi.mock("server-only", () => ({}));
-const rpc = vi.hoisted(() => ({ result: { data: null as unknown, error: null as null | { code?: string; message: string } } }));
+const rpc = vi.hoisted(() => ({
+  result: { data: null as unknown, error: null as null | { code?: string; message: string } },
+  calls: [] as Record<string, unknown>[],
+}));
 vi.mock("@/lib/db", () => {
-  const client = { rpc: async () => rpc.result };
+  const client = {
+    rpc: async (_name: string, args: Record<string, unknown>) => {
+      rpc.calls.push(args);
+      return rpc.result;
+    },
+  };
   return { createServerSupabase: async () => client, createAdminSupabase: () => client };
 });
 
 import {
   CLOSING_CHANNELS,
   CHANNEL_LABEL,
+  clampToCoverage,
   isMissingFunctionError,
   parseClosingChannels,
   summarizeClosingChannels,
 } from "@/lib/closing-channel";
 import { getClosingChannels } from "@/lib/access";
 import { insertOrderIfAbsent, recomputeRollupsForLocalDay } from "@/lib/order-sale";
+import { getDraftOrderOrder } from "@/lib/shopify";
 import { ClosingChannels } from "@/components/closing-channels";
 
 const read = (p: string) => readFileSync(p, "utf8");
@@ -130,16 +140,59 @@ describe("isMissingFunctionError", () => {
   });
 });
 
+describe("clampToCoverage", () => {
+  const desde = "2026-06-01";
+  it("un rango dentro de la cobertura queda igual", () => {
+    expect(clampToCoverage({ from: "2026-09-14", to: "2026-10-13" }, desde)).toEqual({ from: "2026-09-14", to: "2026-10-13", clipped: false });
+    expect(clampToCoverage({ from: desde, to: desde }, desde)).toEqual({ from: desde, to: desde, clipped: false });
+  });
+
+  it("un rango que empieza antes se cuenta desde la cobertura, y lo dice", () => {
+    expect(clampToCoverage({ from: "2026-05-01", to: "2026-06-30" }, desde)).toEqual({ from: desde, to: "2026-06-30", clipped: true });
+  });
+
+  it("un rango que termina antes no tiene con qué responder", () => {
+    expect(clampToCoverage({ from: "2026-05-01", to: "2026-05-31" }, desde)).toBeNull();
+  });
+});
+
 describe("getClosingChannels", () => {
   beforeEach(() => {
     rpc.result = { data: null, error: null };
+    rpc.calls = [];
+    vi.unstubAllEnvs();
   });
 
-  it("con la función: el resumen", async () => {
+  it("con la función: el resumen, sin recorte", async () => {
     rpc.result = { data: { version: 1, filas: [fila({ canal: "asesora", pedidos: 2, ingresos: 300 })] }, error: null };
     const r = await getClosingChannels(["A"], { from: "2026-09-14", to: "2026-10-13" });
     expect(r.status).toBe("ok");
-    if (r.status === "ok") expect(r.summary.byChannel.asesora.revenue).toBe(300);
+    if (r.status === "ok") {
+      expect(r.summary.byChannel.asesora.revenue).toBe(300);
+      expect(r.coverageFrom).toBeNull();
+    }
+    expect(rpc.calls).toEqual([{ p_store_ids: ["A"], p_from: "2026-09-14", p_to: "2026-10-13" }]);
+  });
+
+  it("antes de ORDERS_SYNC_FROM no hay todas las ventas: se cuenta desde esa fecha y se dice", async () => {
+    rpc.result = { data: { version: 1, filas: [] }, error: null };
+    const r = await getClosingChannels(["A"], { from: "2026-05-15", to: "2026-06-14" });
+    expect(rpc.calls).toEqual([{ p_store_ids: ["A"], p_from: "2026-06-01", p_to: "2026-06-14" }]);
+    expect(r).toMatchObject({ status: "ok", coverageFrom: "2026-06-01" });
+  });
+
+  it("un periodo entero antes de la cobertura: `sin_cobertura`, sin preguntarle a la base", async () => {
+    const r = await getClosingChannels(["A"], { from: "2026-05-01", to: "2026-05-31" });
+    expect(r).toEqual({ status: "sin_cobertura", coverageFrom: "2026-06-01" });
+    expect(rpc.calls).toEqual([]);
+  });
+
+  it("la cobertura sale de ORDERS_SYNC_FROM, no de una fecha fija", async () => {
+    vi.stubEnv("ORDERS_SYNC_FROM", "2026-07-01");
+    rpc.result = { data: { version: 1, filas: [] }, error: null };
+    const r = await getClosingChannels(["A"], { from: "2026-06-15", to: "2026-07-14" });
+    expect(rpc.calls[0]).toMatchObject({ p_from: "2026-07-01" });
+    expect(r).toMatchObject({ status: "ok", coverageFrom: "2026-07-01" });
   });
 
   it("sin la migración: `sin_migracion`, nunca ceros", async () => {
@@ -227,6 +280,24 @@ describe("recomputeRollupsForLocalDay", () => {
   });
 });
 
+describe("getDraftOrderOrder: el pedido real de un borrador ya completado", () => {
+  const fakeFetch = (body: unknown) => (async () => new Response(JSON.stringify(body), { status: 200 })) as unknown as typeof fetch;
+  const base = { domain: "x.myshopify.com", token: "t", gid: "gid://shopify/DraftOrder/7" };
+
+  it("devuelve el gid y el nombre del pedido", async () => {
+    const r = await getDraftOrderOrder({
+      ...base,
+      fetchImpl: fakeFetch({ data: { draftOrder: { id: base.gid, order: { id: "gid://shopify/Order/99", name: "#KP1" } } } }),
+    });
+    expect(r).toEqual({ orderGid: "gid://shopify/Order/99", orderName: "#KP1" });
+  });
+
+  it("un borrador sin pedido (o que no existe) da null, no un pedido inventado", async () => {
+    expect(await getDraftOrderOrder({ ...base, fetchImpl: fakeFetch({ data: { draftOrder: { id: base.gid, order: null } } }) })).toBeNull();
+    expect(await getDraftOrderOrder({ ...base, fetchImpl: fakeFetch({ data: { draftOrder: null } }) })).toBeNull();
+  });
+});
+
 describe("las tres vías que crean pedidos ya no inventan `kapso`", () => {
   it("generateOrder: inserta si falta, sin `kapso`, y recalcula el día local", () => {
     const src = read("app/dashboard/leads/actions.ts");
@@ -235,6 +306,23 @@ describe("las tres vías que crean pedidos ya no inventan `kapso`", () => {
     expect(gen).not.toMatch(/tags:\s*reuseExistingDraft\s*\?\s*\[\s*"kapso"/);
     expect(gen).not.toContain('nowIso.slice(0, 10)');
     expect(gen).toContain("recomputeRollupsForLocalDay(admin, ctx.storeId, nowIso)");
+  });
+
+  it("generateOrder: si Shopify dice «ya completado», busca el pedido REAL del borrador", () => {
+    const src = read("app/dashboard/leads/actions.ts");
+    const gen = src.slice(src.indexOf("export async function generateOrder"));
+    const rama = gen.slice(gen.indexOf("/already.*complet"), gen.indexOf("write_draft_orders|access denied"));
+    expect(rama).toContain("getDraftOrderOrder({ ...sclient, gid: draftGid })");
+    expect(rama).not.toMatch(/orderGid:\s*null,\s*orderName:\s*null/);
+  });
+
+  it("recoverCart (sin uso hoy) tampoco pisa la fila de Shopify ni escribe `kapso`", () => {
+    const src = read("app/dashboard/leads/actions.ts");
+    const rec = src.slice(src.indexOf("export async function recoverCart"), src.indexOf("const WINDOW_MS"));
+    expect(rec).toContain("insertOrderIfAbsent(admin, {");
+    expect(rec).toContain("getDraftOrderOrder(");
+    expect(rec).not.toContain('"kapso"');
+    expect(rec).not.toContain(".upsert(");
   });
 
   it("carrito recuperado sin asesora y recompra automática: sin etiquetas locales", () => {
@@ -303,5 +391,25 @@ describe("el panel", () => {
     const dash = read("components/executive-dashboard.tsx");
     expect(dash).toContain('closing?.status === "sin_migracion"');
     expect(dash).toContain("Falta aplicar la migración 0257");
+  });
+
+  it("antes de la cobertura, también la vista anterior con su aviso; recortado, lo dice", () => {
+    const dash = read("components/executive-dashboard.tsx");
+    expect(dash).toContain('closing?.status === "sin_cobertura"');
+    expect(dash).toContain("Kapta guarda todos los pedidos de la tienda desde el");
+    expect(dash).toMatch(/closingFrom \? `\$\{SEP\}desde el/);
+  });
+
+  it("la vista de respaldo no muestra el porcentaje de solo-bot como cifra de cabecera", () => {
+    const dash = read("components/executive-dashboard.tsx");
+    const respaldo = dash.slice(dash.indexOf("    : {\n        id: \"canal\""), dash.indexOf("const roas = deliveredRoas("));
+    expect(respaldo).toContain('figure: !legacyCanalNote && channelTotal ? pct(channels.asesora.revenue / channelTotal, 0) : "—"');
+    expect(respaldo).toContain('tone: !legacyCanalNote && channelTotal ? undefined : "muted"');
+  });
+
+  it("el cierre por etiquetas del panel de «Fuente» ya no se llama «Canal de cierre»", () => {
+    const attr = read("components/sales-attribution.tsx");
+    expect(attr).toContain("Cierre de los pedidos del bot, por etiquetas");
+    expect(attr).not.toMatch(/>\s*Canal de cierre\s*</);
   });
 });

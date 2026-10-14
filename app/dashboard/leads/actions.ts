@@ -47,6 +47,7 @@ import {
   extractNumericId,
   getCustomerRecentOrders,
   getDraftOrderForEdit,
+  getDraftOrderOrder,
   priceMismatchRejection,
   resolveOrderDiscount,
   searchCatalogProducts,
@@ -1073,7 +1074,9 @@ export async function recoverCart(leadId: string): Promise<LeadActionState> {
   } catch (e: any) {
     const msg = String(e?.message ?? e).toLowerCase();
     if (/already.*complet|complet.*already|has already|is complete/.test(msg)) {
-      completed = { orderGid: null, orderName: null, status: "completed" };
+      // Como en generateOrder: el pedido REAL del borrador, no una fila inventada.
+      const real = await getDraftOrderOrder({ domain: creds.shopify_domain, token: creds.shopify_token, gid: l.draft_order_gid }).catch(() => null);
+      completed = { orderGid: real?.orderGid ?? null, orderName: real?.orderName ?? null, status: "completed" };
     } else if (/write_draft_orders|access denied|not authorized|access scope|require/.test(msg)) {
       return { error: "Falta el permiso de escritura en Shopify (write_draft_orders). Re-autoriza la tienda en Ajustes." };
     } else {
@@ -1103,43 +1106,37 @@ export async function recoverCart(leadId: string): Promise<LeadActionState> {
       : [{ title: l.cart_summary || "Carrito recuperado", quantity: 1, price: amount }];
   const nowIso = new Date().toISOString();
 
-  // 3) Record the resulting order. Tagged `kapso` so recompute_daily_rollups
-  //    counts it; `carrito_recuperado` so it's identifiable. Use the real Shopify
-  //    id when returned (so a later order sync upserts the same row, no dup);
-  //    else a synthetic id. COD ⇒ financial_status 'pending'.
+  // 3) La fila local del pedido, SOLO si el webhook no la trajo ya, y con las
+  //    etiquetas que tiene en Shopify (MOM §17.3): una etiqueta local la borra la
+  //    siguiente sincronización, y pisar la fila real le quitaba fecha y
+  //    productos. Quién cerró lo decide `order_sales`, más abajo.
   const realOrderId = completed.orderGid ? extractNumericId(completed.orderGid) : null;
   const shopifyOrderId = realOrderId || `draft-${extractNumericId(l.draft_order_gid)}`;
-  const { data: order, error: orderErr } = await admin
-    .from("orders")
-    .upsert(
-      {
-        store_id: ctx.storeId,
-        shopify_order_id: shopifyOrderId,
-        name: completed.orderName ?? l.draft_order_name ?? `REC-${shopifyOrderId.slice(-6).toUpperCase()}`,
-        created_at: nowIso,
-        processed_at: nowIso,
-        total_amount: amount,
-        total_refunded: 0,
-        currency,
-        financial_status: "pending",
-        cancelled_at: null,
-        customer_phone: phone,
-        tags: ["kapso", "carrito_recuperado"],
-        promo_applied: false,
-        stock_por_validar: false,
-        shipping_mode: "cod",
-        line_items: lineItems,
-        kapso_conversation_id: null,
-      },
-      { onConflict: "store_id,shopify_order_id" },
-    )
-    .select("id")
-    .maybeSingle();
-  if (orderErr || !order) {
+  const { id: recoveredOrderId, error: orderErr } = await insertOrderIfAbsent(admin, {
+    store_id: ctx.storeId,
+    shopify_order_id: shopifyOrderId,
+    name: completed.orderName ?? l.draft_order_name ?? `REC-${shopifyOrderId.slice(-6).toUpperCase()}`,
+    created_at: nowIso,
+    processed_at: nowIso,
+    total_amount: amount,
+    total_refunded: 0,
+    currency,
+    financial_status: "pending",
+    cancelled_at: null,
+    customer_phone: phone,
+    tags: [],
+    promo_applied: false,
+    stock_por_validar: false,
+    shipping_mode: "cod",
+    line_items: lineItems,
+    kapso_conversation_id: null,
+  });
+  if (orderErr || !recoveredOrderId) {
     return {
-      error: `Pedido generado en Shopify, pero no se pudo registrar localmente: ${orderErr?.message ?? "error"}`,
+      error: `Pedido generado en Shopify, pero no se pudo registrar localmente: ${orderErr ?? "error"}`,
     };
   }
+  const order = { id: recoveredOrderId };
 
   // 4) Mark the lead won + link the order; reflect the draft as completed.
   await admin
@@ -2622,7 +2619,12 @@ export async function generateOrder(
   } catch (e: any) {
     const msg = String(e?.message ?? e).toLowerCase();
     if (/already.*complet|complet.*already|has already|is complete/.test(msg)) {
-      completed = { orderGid: null, orderName: null, status: "completed" };
+      // Shopify ya lo completó (la clienta, o un primer intento que sí llegó):
+      // se busca el pedido REAL del borrador. Sin él la venta quedaba en una fila
+      // `draft-<id>` al lado del pedido verdadero y el canal de cierre la contaba
+      // dos veces (MOM §17.3). Si Shopify no lo devuelve, queda el respaldo.
+      const real = draftGid ? await getDraftOrderOrder({ ...sclient, gid: draftGid }).catch(() => null) : null;
+      completed = { orderGid: real?.orderGid ?? null, orderName: real?.orderName ?? null, status: "completed" };
     } else if (/write_draft_orders|access denied|not authorized|access scope|require/.test(msg)) {
       return { error: "Falta el permiso de escritura en Shopify (write_draft_orders). Re-autoriza la tienda en Ajustes." };
     } else {

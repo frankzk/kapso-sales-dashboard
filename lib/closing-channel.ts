@@ -70,11 +70,35 @@ export interface ClosingChannelSummary {
   total: ChannelFigures;
 }
 
-/** Lo que el panel recibe: el resumen, o por qué no lo hay. Un error se dice; nunca se vuelve ceros. */
+/**
+ * Lo que el panel recibe: el resumen, o por qué no lo hay. Un error se dice;
+ * nunca se vuelve ceros.
+ *
+ * `coverageFrom`: Kapta guarda TODOS los pedidos de la tienda solo desde
+ * `ORDERS_SYNC_FROM` (2026-06-01); antes solo los del bot y las ventas que
+ * registraron las asesoras. Si el rango empieza antes, se cuenta desde esa fecha
+ * y el panel lo dice; si termina antes, no hay con qué responder
+ * (`sin_cobertura`) y vuelve la vista anterior.
+ */
 export type ClosingChannelResult =
-  | { status: "ok"; summary: ClosingChannelSummary }
+  | { status: "ok"; summary: ClosingChannelSummary; coverageFrom: string | null }
+  | { status: "sin_cobertura"; coverageFrom: string }
   | { status: "sin_migracion" }
   | { status: "error"; message: string };
+
+/**
+ * El rango que se le pide a la función, recortado a la cobertura. `clipped`
+ * dice si se recortó; `null` si el rango entero cae antes de la cobertura.
+ */
+export function clampToCoverage(
+  range: { from: string; to: string },
+  coverageFrom: string,
+): { from: string; to: string; clipped: boolean } | null {
+  if (range.to < coverageFrom) return null;
+  return range.from < coverageFrom
+    ? { from: coverageFrom, to: range.to, clipped: true }
+    : { from: range.from, to: range.to, clipped: false };
+}
 
 const zero = (): ChannelFigures => ({ orders: 0, revenue: 0, cancelled: 0, assisted: 0, assistedRevenue: 0 });
 const round2 = (n: number) => Math.round(n * 100) / 100;
