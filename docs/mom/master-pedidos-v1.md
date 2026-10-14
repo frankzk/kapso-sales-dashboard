@@ -12820,7 +12820,20 @@ canal es WhatsApp: solo ~1 % de los pedidos trae correo.
   - Lleva un botón de respuesta rápida (por defecto «Sí, quiero»).
   - Sus variables son `nombre`, `producto` (el nombre corto configurado),
     `unidades` y `pedido`.
-  - La oferta, si la hay, va escrita en la plantilla.
+  - La oferta, si la hay, va escrita en la plantilla. En Kenku es el 3×2 que
+    la tienda ya vende: «llévate 3 frascos y paga solo 2» (S/ 298 en vez de
+    S/ 149 cada uno).
+- **Con foto, o no sale (14-10-2026).** Decisión del dueño:
+  - La plantilla lleva **cabecera de imagen**, y cada envío pone la foto del
+    producto en Shopify (`shopify_product_images`).
+  - La foto se convierte a JPG en `/api/wa-image`, porque Meta no acepta el
+    WebP de Shopify.
+  - **Un producto sin foto no recibe recordatorio**, ni la clienta ni el grupo
+    de control. Ajustes lo avisa en la fila del producto.
+- **El número.** Kenku lo envía desde el **451** (`restock_phone_number_id`),
+  el mismo número del agradecimiento (§31), porque el 981 está degradado en
+  Meta. La plantilla vive en la cuenta de negocio del 451, y el «sí» de la
+  clienta llega a ese número.
 - **Ritmo y horario:** igual que el agradecimiento (§31): 5 cada 20 minutos, de
   9 a 20 h. Si Meta pone su tope de mensajería, el lote se corta.
 

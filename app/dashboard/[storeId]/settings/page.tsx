@@ -157,7 +157,7 @@ export default async function StoreSettingsPage({
   // Recordatorio de reposición (0255): lo vendido, lo configurado y cómo le va
   // a cada grupo. Pre-0255 las funciones no existen ⇒ listas vacías, sin tumbar
   // Ajustes.
-  const [restockCatalog, restockProducts, restockResults] = await Promise.all([
+  const [restockCatalog, restockProducts, restockResults, restockImages] = await Promise.all([
     admin.rpc("restock_product_catalog", {
       p_store_id: storeId,
       p_since: new Date(now.getTime() - RESTOCK_CATALOG_DAYS * 86_400_000).toISOString(),
@@ -170,6 +170,8 @@ export default async function StoreSettingsPage({
       p_store_id: storeId,
       p_since: new Date(now.getTime() - RESTOCK_RESULTS_DAYS * 86_400_000).toISOString(),
     }),
+    // Qué productos tienen foto: sin foto no se envía (la plantilla la lleva).
+    admin.from("shopify_product_images").select("product_id").eq("store_id", storeId).not("image_url", "is", null),
   ]);
 
   const data: StoreSettingsData = {
@@ -374,6 +376,7 @@ export default async function StoreSettingsPage({
       catalog: (restockCatalog.data as StoreSettingsData["restock"]["catalog"] | null) ?? [],
       products: (restockProducts.data as StoreSettingsData["restock"]["products"] | null) ?? [],
       results: (restockResults.data as StoreSettingsData["restock"]["results"] | null) ?? [],
+      withImage: ((restockImages.data as { product_id: string }[] | null) ?? []).map((r) => String(r.product_id)),
     },
   };
 

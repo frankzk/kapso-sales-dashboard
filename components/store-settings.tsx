@@ -315,6 +315,8 @@ export interface StoreSettingsData {
     catalog: RestockCatalogRow[];
     products: RestockProductRow[];
     results: RestockResultRow[];
+    /** Productos con foto en Shopify (`shopify_product_images`). */
+    withImage: string[];
   };
   replyTemplates: Array<{
     id: string;
@@ -1987,7 +1989,7 @@ function CartImageTestResult({ rows, since }: { rows: ImageTestRow[]; since: str
  */
 function RestockSection({ data }: { data: StoreSettingsData }) {
   const s = data.store;
-  const items = restockProductList(data.restock.catalog, data.restock.products);
+  const items = restockProductList(data.restock.catalog, data.restock.products, data.restock.withImage);
   const on = items.filter((i) => i.config);
   const off = items.filter((i) => !i.config);
   return (
@@ -2003,9 +2005,11 @@ function RestockSection({ data }: { data: StoreSettingsData }) {
             <strong>Atender ahora</strong> con lo que quiere reponer, y una asesora le escribe para armar el pedido.
           </p>
           <p>
-            Solo reciben recordatorio los productos que tienen <strong>días por unidad</strong>. A quien ya volvió a
-            comprar no se le escribe, y un grupo de control no lo recibe: así se sabe cuánto vende de verdad. La
-            plantilla va aprobada en Meta como <strong>Marketing</strong>, con el botón como respuesta rápida.
+            Solo reciben recordatorio los productos que tienen <strong>días por unidad</strong> y{" "}
+            <strong>foto en Shopify</strong>: la plantilla lleva la foto del producto en la cabecera. A quien ya volvió
+            a comprar no se le escribe, y un grupo de control no lo recibe: así se sabe cuánto vende de verdad. La
+            plantilla va aprobada en Meta como <strong>Marketing</strong>, con cabecera de imagen y el botón como
+            respuesta rápida.
           </p>
         </>
       }
@@ -2219,6 +2223,11 @@ function RestockProductEditor({ storeId, item }: { storeId: string; item: Restoc
             ? `${item.pedidos.toLocaleString("es-PE")} pedidos · ${item.unidades.toLocaleString("es-PE")} unidades en ${RESTOCK_CATALOG_DAYS} días`
             : `Sin ventas en los últimos ${RESTOCK_CATALOG_DAYS} días`}
         </p>
+        {!item.hasImage && (
+          <p className="mt-1 text-xs font-medium text-warn-fg">
+            Sin foto en Shopify: no se le envía aunque tenga días.
+          </p>
+        )}
       </div>
       <div className="flex flex-wrap items-end gap-x-3 gap-y-3">
         <div className="min-w-0 flex-1 basis-56">
