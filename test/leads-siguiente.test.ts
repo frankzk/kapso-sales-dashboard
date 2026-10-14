@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { CLAIM_TTL_MINUTES, MAX_OPEN_LEADS, isClaimCapError, pickNextLead } from "@/lib/leads";
+import { CLAIM_TTL_MINUTES, MAX_OPEN_LEADS, cartLinesOf, dayTimeLabel, isClaimCapError, pickNextLead, usableAddress } from "@/lib/leads";
 
 /**
  * El siguiente lead de cada vendedora (14-10-2026, MOM §11).
@@ -111,5 +111,50 @@ describe("la tarjeta usa la reserva de siempre", () => {
 
   it("solo para quien vende", () => {
     expect(page).toContain('roles.includes("vendedora")');
+  });
+});
+
+describe("lo que la tarjeta del siguiente lead pone primero", () => {
+  it("lee los artículos del borrador con su cantidad y sin la variante", () => {
+    expect(
+      cartLinesOf([
+        { title: "Cayenne Pepper – Suplemento Botánico para Circulación Saludable", quantity: 3, product_id: 1 },
+        { title: "Reloj minimal (Negro / 40 mm)", quantity: "1" },
+        { title: "   ", quantity: 2 },
+        { quantity: 1 },
+        null,
+      ]),
+    ).toEqual([
+      { title: "Cayenne Pepper – Suplemento Botánico para Circulación Saludable", quantity: 3 },
+      { title: "Reloj minimal", quantity: 1 },
+    ]);
+  });
+
+  it("una cantidad rota cuenta como una unidad, y sin borrador no hay artículos", () => {
+    expect(cartLinesOf([{ title: "Pulsera", quantity: 0 }, { title: "Collar", quantity: "dos" }])).toEqual([
+      { title: "Pulsera", quantity: 1 },
+      { title: "Collar", quantity: 1 },
+    ]);
+    expect(cartLinesOf(null)).toEqual([]);
+    expect(cartLinesOf({ title: "x" })).toEqual([]);
+  });
+
+  it("el guion que deja el formulario no es una dirección: falta pedirla", () => {
+    for (const vacio of ["-", " - ", ".", "--", "s/n", "S/N", "sin dirección", "", null, undefined]) {
+      expect(usableAddress(vacio)).toBeNull();
+    }
+    expect(usableAddress("Av. José Pardo 610, dpto. 302")).toBe("Av. José Pardo 610, dpto. 302");
+    expect(usableAddress("Jr. Lima s/n")).toBe("Jr. Lima s/n");
+  });
+
+  it("dice cuándo como en la mesa: hoy, ayer o la fecha, en la hora de Lima", () => {
+    // NOW = 14-10-2026 10:00 en Lima.
+    expect(dayTimeLabel("2026-10-14T13:06:00.000Z", NOW)).toBe("hoy 08:06");
+    expect(dayTimeLabel("2026-10-13T23:05:00.000Z", NOW)).toBe("ayer 18:05");
+    // 04:30 UTC del 14 son las 23:30 del 13 en Lima: ayer, no hoy.
+    expect(dayTimeLabel("2026-10-14T04:30:00.000Z", NOW)).toBe("ayer 23:30");
+    expect(dayTimeLabel("2026-10-12T21:40:00.000Z", NOW)).toBe("12 oct 16:40");
+    expect(dayTimeLabel(null, NOW)).toBeNull();
+    expect(dayTimeLabel("no es fecha", NOW)).toBeNull();
   });
 });

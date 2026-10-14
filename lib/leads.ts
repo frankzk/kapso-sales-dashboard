@@ -1004,6 +1004,61 @@ export function isClaimCapError(message: string | null | undefined): boolean {
   return !!message && message.startsWith("Ya tienes ") && message.includes("leads abiertos");
 }
 
+/** Un artículo del carrito como lo lee la asesora. */
+export interface CartLine {
+  title: string;
+  quantity: number;
+}
+
+/**
+ * Los artículos del borrador de Shopify (`draft_orders.line_items`) para la
+ * tarjeta del siguiente lead: el título sin la variante entre paréntesis (la
+ * misma limpieza que la plantilla del carrito, `cartProductLabel`) y la
+ * cantidad, que `cart_summary` no guarda. Lo que no trae título no se muestra.
+ */
+export function cartLinesOf(lineItems: unknown): CartLine[] {
+  if (!Array.isArray(lineItems)) return [];
+  const lines: CartLine[] = [];
+  for (const item of lineItems) {
+    if (!item || typeof item !== "object") continue;
+    const { title, quantity } = item as { title?: unknown; quantity?: unknown };
+    const clean = String(title ?? "").replace(/\s*\(.*$/, "").trim();
+    if (!clean) continue;
+    const qty = Math.trunc(Number(quantity ?? 1));
+    lines.push({ title: clean, quantity: qty > 0 ? qty : 1 });
+  }
+  return lines;
+}
+
+/**
+ * La calle que la asesora puede usar, o null. El formulario del carrito deja
+ * un guion o un punto cuando el cliente no escribió nada («-, Carás»): eso no
+ * es una dirección, y mostrarla esconde que falta pedirla en la llamada.
+ */
+export function usableAddress(value: string | null | undefined): string | null {
+  const text = (value ?? "").trim();
+  if (!text || /^[\s\-–—.,_/·]*$/.test(text)) return null;
+  if (/^(s\/?n|sin direcci[oó]n|ninguna?|no)\.?$/i.test(text)) return null;
+  return text;
+}
+
+/**
+ * Cuándo pasó algo, como se dice en la mesa de llamadas: «hoy 10:12»,
+ * «ayer 18:05» o «12 oct 16:40», en la hora de Lima.
+ */
+export function dayTimeLabel(iso: string | null | undefined, now: Date = new Date(), timeZone = "America/Lima"): string | null {
+  if (!iso) return null;
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return null;
+  const dayOf = (d: Date) => d.toLocaleDateString("en-CA", { timeZone });
+  const time = at.toLocaleTimeString("es-PE", { timeZone, hour: "2-digit", minute: "2-digit", hour12: false });
+  const day = dayOf(at);
+  if (day === dayOf(now)) return `hoy ${time}`;
+  if (day === dayOf(new Date(now.getTime() - 86_400_000))) return `ayer ${time}`;
+  const date = at.toLocaleDateString("es-PE", { timeZone, day: "numeric", month: "short" }).replace(/\.$/, "");
+  return `${date} ${time}`;
+}
+
 // ---------------------------------------------------------------------------
 // Excel → canonical (best-effort, for reference / optional future import)
 // ---------------------------------------------------------------------------

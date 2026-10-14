@@ -1888,6 +1888,7 @@ export function LeadsBoard({
           product={nextHandle ? productLabel(nextHandle) : null}
           adName={nextLead.lead?.ad_id ? (adNames?.[nextLead.lead.ad_id]?.adName ?? nextLead.lead.ad_headline ?? null) : null}
           storeName={allStores && nextLead.lead ? (storeNameById.get(nextLead.lead.store_id) ?? null) : null}
+          coverage={nextLead.lead ? coverageOf(nextLead.lead) : null}
           onOpen={openLead}
           onRegistered={refreshDetail}
           filters={refinementLabels}

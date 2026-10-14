@@ -1399,7 +1399,7 @@ export function WhatsappChat({
       aria-label="Conversación de WhatsApp"
       className={
         card
-          ? "flex min-w-0 flex-col"
+          ? "flex h-full min-h-0 min-w-0 flex-col"
           : "flex h-full min-h-0 min-w-0 flex-col rounded-lg bg-white shadow-control ring-1 ring-line"
       }
     >
@@ -1480,13 +1480,15 @@ export function WhatsappChat({
       )}
 
       {/* Hilo de mensajes */}
-      <div className={card ? "relative" : "relative min-h-0 flex-1"}>
+      {/* En la tarjeta el hilo no decide el alto: se desplaza dentro del que
+          marcan las otras dos columnas. */}
+      <div className="relative min-h-0 flex-1">
         <div
           ref={scrollRef}
           onScroll={onThreadScroll}
           className={cn(
-            "space-y-2 overflow-y-auto overscroll-contain bg-wash",
-            card ? "max-h-80 min-h-32 rounded-md px-3 py-3" : "absolute inset-0 px-4 py-4",
+            "absolute inset-0 space-y-2 overflow-y-auto overscroll-contain bg-wash",
+            card ? "rounded-md px-1 py-3" : "px-4 py-4",
           )}
         >
           {state.status === "loading" ? (
@@ -2035,17 +2037,24 @@ function TemplateComposer({
 
   return (
     <div className={cn("flex flex-col gap-2", compact ? "pt-2" : "px-4 py-3 shadow-[inset_0_1px_0_var(--color-line)]")}>
+      {/* En la tarjeta, sin plantillas los dos avisos van en uno: la columna
+          del chat es angosta y dos cajas seguidas se comían el hilo. */}
       <Banner tone="warn">
-        {reason} Fuera de las 24h solo se puede enviar una plantilla aprobada.
+        {reason} Fuera de las 24h solo se puede enviar una plantilla aprobada
+        {compact && templates?.length === 0
+          ? ", y esta tienda todavía no tiene ninguna: se cargan en Ajustes, en «Plantillas de respuesta»."
+          : "."}
       </Banner>
 
       {templates === null ? (
         <p className="text-xs text-ink-500">Buscando plantillas…</p>
       ) : templates.length === 0 ? (
-        <p className="text-xs leading-5 text-ink-500">
-          Esta tienda todavía no tiene plantillas cargadas. Se configuran en Ajustes, en «Plantillas de
-          respuesta», con el nombre exacto aprobado en Meta.
-        </p>
+        compact ? null : (
+          <p className="text-xs leading-5 text-ink-500">
+            Esta tienda todavía no tiene plantillas cargadas. Se configuran en Ajustes, en «Plantillas de
+            respuesta», con el nombre exacto aprobado en Meta.
+          </p>
+        )
       ) : (
         <div className="space-y-2">
           <select
@@ -3179,11 +3188,14 @@ export function CallForm({
   onRegistered,
   submitLabel = "Guardar resultado",
   variant = "panel",
+  footer,
 }: {
   leadId: string;
   onRegistered: (update?: LeadDrawerUpdate) => void;
   submitLabel?: string;
   variant?: "panel" | "card";
+  /** Solo en la tarjeta: lo que va bajo el botón de guardar («Abrir ficha», «Saltar»). */
+  footer?: ReactNode;
 }) {
   const [state, action, pending] = useActionState<LeadActionState, FormData>(registerCall, {});
   const [status, setStatus] = useState("");
@@ -3245,38 +3257,61 @@ export function CallForm({
   );
 
   if (card) {
+    // La columna del medio de la tarjeta del siguiente lead (DESIGN.md › Leads):
+    // registrar la gestión de arriba abajo, con «Guardar y siguiente» al pie.
     return (
-      <form action={action} onSubmit={() => startUiMeasure("kapso:call-save")} className="space-y-2">
+      <form action={action} onSubmit={() => startUiMeasure("kapso:call-save")} className="flex flex-1 flex-col gap-4">
         {fields}
-        <div className="flex flex-wrap items-center gap-1.5">
-          {chips}
+        <div className="space-y-2">
+          <div role="group" aria-label="Resultado" className="grid grid-cols-2 gap-1.5 @xs:grid-cols-3">
+            {CHIPS.map(([k, label]) => {
+              const on = status === k;
+              return (
+                <button
+                  key={k}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() => setStatus(on ? "" : k)}
+                  className={cn(choiceChipClass(on), "w-full justify-center")}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
           {/* «Otro estado» con el aspecto del chip: encendido solo cuando lo
               elegido no es uno de los chips. */}
           <select
             value={status}
             onChange={(e) => setStatus(e.currentTarget.value)}
-            className={cn(choiceChipClass(status !== "" && !chipKeys.has(status)), "max-w-full cursor-pointer")}
+            className={cn(choiceChipClass(status !== "" && !chipKeys.has(status)), "w-full cursor-pointer")}
             aria-label="Estado de la llamada"
           >
             <option value="">Otro estado</option>
             {options}
           </select>
         </div>
-        <div className="grid grid-cols-1 items-end gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-          <label className="block min-w-0">
-            <span className="mb-1 block text-xs text-ink-600">Próximo seguimiento</span>
-            <input name="next_followup_at" type="datetime-local" className={cn(FIELD_BOX, "h-8 w-full px-3 tabular-nums")} />
-          </label>
-          <label className="block min-w-0">
-            <span className="mb-1 block text-xs text-ink-600">Nota</span>
-            <input name="note" placeholder="Opcional" className={cn(FIELD_BOX, "h-8 w-full px-3")} />
-          </label>
-          <OpsButton type="submit" variant="primary" size="sm" disabled={pending}>
+        <label className="block min-w-0">
+          <span className="mb-1 block text-xs text-ink-600">Próximo seguimiento</span>
+          <input name="next_followup_at" type="datetime-local" className={cn(FIELD_BOX, "h-9 w-full px-3 tabular-nums")} />
+        </label>
+        {autoHint}
+        <label className="block min-w-0">
+          <span className="mb-1 block text-xs text-ink-600">Nota</span>
+          <textarea
+            name="note"
+            rows={3}
+            placeholder="Lo que te dijo, qué quedó pendiente…"
+            className={cn(FIELD_BOX, "w-full resize-none px-3 py-2 leading-5")}
+          />
+        </label>
+        <div className="mt-auto space-y-2 pt-1">
+          {feedback}
+          <OpsButton type="submit" variant="primary" size="lg" className="w-full" disabled={pending}>
             {pending ? "Guardando…" : submitLabel}
           </OpsButton>
+          {footer}
         </div>
-        {autoHint}
-        {feedback}
       </form>
     );
   }
