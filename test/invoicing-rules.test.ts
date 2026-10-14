@@ -824,8 +824,30 @@ describe("MOM §35.2 — resolvePaymentAccounts: la primera señal que exista, e
   it("1. link de Flow y la tienda sin pasarela: no se adivina", () => {
     expect(resolver({ flowLinked: true }, [CUENTA_GF, CUENTA_GABRIELA])).toEqual({
       ok: false,
-      detail: "Pago por link de Flow y la tienda no tiene la cuenta de la pasarela.",
+      detail: "Pago por Flow y la tienda no tiene la cuenta de la pasarela.",
     });
+  });
+
+  it("1. constancia de Flow que Flow confirmó pagada (`vision.flow.state = 'pagado'`): la pasarela", () => {
+    // lib/flow/verify.ts le pregunta a Flow por la orden de la constancia; si
+    // la confirma pagada en la cuenta de la tienda, el lector no tiene nombre ni
+    // celular que contrastar, pero el dinero entró por la pasarela.
+    const vision = { flow: { state: "pagado", flowOrder: "184932654" }, extracted: {} };
+    expect(resolver({ vision })).toEqual({
+      ok: true,
+      value: { paymentId: "pay-1", source: "flow", accountIds: ["acc-flow"] },
+    });
+    expect(resolver({ vision }, [CUENTA_GF, CUENTA_GABRIELA])).toEqual({
+      ok: false,
+      detail: "Pago por Flow y la tienda no tiene la cuenta de la pasarela.",
+    });
+  });
+
+  it("1. una constancia de Flow que Flow NO confirmó no es la pasarela", () => {
+    for (const state of ["no_pagado", "no_encontrado", "sin_flow", "error"]) {
+      const r = resolver({ vision: { flow: { state, flowOrder: "184932654" }, extracted: {} } });
+      expect(r.ok, state).toBe(false);
+    }
   });
 
   it("2. estado de cuenta Yape: manda sobre el lector del comprobante", () => {

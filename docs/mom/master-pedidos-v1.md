@@ -13089,7 +13089,7 @@ primera señal que exista y en este orden (`resolvePaymentAccounts`,
 
 | # | Señal | Cuentas candidatas |
 | --- | --- | --- |
-| 1 | El pago nació de un link de Flow (`flowcl_payment_links.payment_id`) | Las cuentas sin celular de la tienda: la pasarela (0198) |
+| 1 | El pago nació de un link de Flow (`flowcl_payment_links.payment_id`), o es una constancia de Flow que Flow confirmó pagada en la cuenta de la tienda (`vision.flow.state = 'pagado'`, §12) | Las cuentas sin celular de la tienda: la pasarela (0198) |
 | 2 | Lo validó el estado de cuenta Yape (`yape_statement_matches`, §16.2) | La cuenta cuyo nombre o alias es el destino del movimiento (`statementAccountKey`) |
 | 3 | El lector del comprobante encajó con una cuenta (`verified`) | Esa cuenta |
 | 4 | El lector quedó en `partial`: nombre recortado, o solo el celular | Todas las cuentas con las que esa lectura encaja, verificada o parcial |

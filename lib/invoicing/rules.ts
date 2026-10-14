@@ -364,6 +364,16 @@ function asCollectionAccounts(accounts: InvoiceAccount[]): Map<CollectionAccount
   return map;
 }
 
+/**
+ * ¿Flow confirmó esta constancia como pagada en la cuenta de la tienda? Es la
+ * marca que deja lib/flow/verify.ts al preguntarle a Flow por la orden; el
+ * lector no tiene nombre ni celular que contrastar en esa pantalla.
+ */
+function flowConfirmed(vision: unknown): boolean {
+  const root = obj(vision);
+  return obj(root.flow).state === "pagado";
+}
+
 /** Las cuentas sin celular: la pasarela Flow (0198). */
 export function gatewayAccounts(accounts: InvoiceAccount[]): InvoiceAccount[] {
   return accounts.filter((a) => a.phoneLastDigits === null);
@@ -379,12 +389,14 @@ export function resolvePaymentAccounts(
   accounts: InvoiceAccount[],
   customerName: string | null,
 ): PaymentAccountsResult {
-  // 1. Link de Flow: el dinero entró por la pasarela.
-  if (payment.flowLinked) {
+  // 1. Link de Flow, o una constancia de Flow que Flow confirmó pagada en la
+  // cuenta de la tienda (lib/flow/verify.ts deja `vision.flow.state =
+  // 'pagado'`, MOM §12): el dinero entró por la pasarela.
+  if (payment.flowLinked || flowConfirmed(payment.vision)) {
     const ids = gatewayAccounts(accounts).map((a) => a.id);
     return ids.length
       ? { ok: true, value: { paymentId: payment.id, source: "flow", accountIds: ids } }
-      : { ok: false, detail: "Pago por link de Flow y la tienda no tiene la cuenta de la pasarela." };
+      : { ok: false, detail: "Pago por Flow y la tienda no tiene la cuenta de la pasarela." };
   }
 
   // 2. Estado de cuenta Yape: el movimiento dice a qué cuenta llegó.
