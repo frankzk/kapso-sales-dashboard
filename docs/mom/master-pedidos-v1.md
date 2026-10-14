@@ -6637,6 +6637,38 @@ sin entrega). La simulación muestra qué saldría hoy sin enviar nada.
       seguiría viendo una deuda que ya pagó y la clave de recojo esperaría a que
       una persona hiciera clic. `validated_by` queda en **NULL**: no lo validó
       nadie, lo validó la pasarela, y la línea de tiempo lo dice.
+    - **Una constancia de Flow subida a mano se verifica con Flow (14-10-2026).**
+      - **El caso.** La clienta paga con tarjeta por Flow, con un link que no
+        salió de Kapta, y manda la pantalla «¡Tu pago se ha concretado
+        exitosamente!». Esa pantalla trae monto, «Nº de orden», fecha, medio,
+        tarjeta y «Pago exitoso», pero no «Pagado a» ni un nº de operación de
+        banco.
+      - **El problema.** El lector no encontraba nada seguro y la daba por «no
+        parece un Yape» (#KP141432, orden 184932654).
+      - **Ahora el lector lee el «Nº de orden»**, que es el `flowOrder`, y Kapta
+        le pregunta a Flow con las credenciales de la tienda
+        (`payment/getStatusByFlowOrder`).
+      - **Si Flow la confirma pagada en nuestra cuenta,** el pago entra
+        **validado por la pasarela**:
+        - es el mismo criterio que el link de arriba, sin persona y con la
+          fuente «flow» en la línea de tiempo;
+        - pasa por la validación de siempre, que cierra la liquidación del
+          courier, confirma la agencia y cierra alertas;
+        - el monto es el que entró según Flow;
+        - el nº de operación es la orden de Flow, así que la misma constancia
+          no paga dos pedidos.
+      - **No entra validado** si:
+        - el monto registrado supera lo que entró;
+        - el nº escrito no es el de la imagen;
+        - el pago es anterior al pedido;
+        - o Flow no conoce la orden en nuestra cuenta.
+
+        En esos casos sigue el camino de siempre.
+      - **Si Flow tiene la orden sin pagar,** la constancia no corresponde a
+        dinero y va a **revisión administrativa**.
+      - **Pago que ya entró por un link de Kapta.** No se registra dos veces:
+        los pagos por link guardan ahora la orden de Flow como nº de operación,
+        y el registro busca la orden en los links.
     - **Nunca dos cobros vivos por el mismo saldo.** Si ya hay un link vivo por
       el mismo importe se reenvía ese; solo un importe distinto justifica otro,
       y el anterior se deja de ofrecer. Pulsar el botón dos veces no puede

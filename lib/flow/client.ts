@@ -159,6 +159,22 @@ export class FlowClient {
     })) as FlowPaymentStatus;
   }
 
+  /**
+   * Estado de una orden por su número de Flow: el «Nº de orden» que la
+   * constancia de pago le muestra a la clienta. Sirve para verificar una
+   * constancia que no salió de un link nuestro (sin token). Es lectura:
+   * reintentar es seguro.
+   */
+  async getStatusByFlowOrder(flowOrder: string | number): Promise<FlowPaymentStatus> {
+    const order = String(flowOrder).trim();
+    if (!/^\d+$/.test(order)) throw new Error("getStatusByFlowOrder necesita el nº de orden de Flow.");
+    const pairs = flowRequestPairs({ apiKey: this.apiKey, flowOrder: order }, this.secretKey);
+    const qs = new URLSearchParams(pairs).toString();
+    return (await this.request(`/payment/getStatusByFlowOrder?${qs}`, {
+      method: "GET",
+    })) as FlowPaymentStatus;
+  }
+
   private async request(path: string, init: RequestInit): Promise<unknown> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
