@@ -3776,6 +3776,35 @@ de Lima Metropolitana por su distrito. Las frases del bot que el lector del
 chat guardó como distrito («indicarte bien 🚚», «coordinarlo») no son lugar y
 quedan Sin identificar.
 
+**La cobertura en «Entrega» (14-10-2026).** La tarjeta del siguiente lead y la
+ficha ponen, junto a la dirección, la cobertura **del Master** —Lima, Provincia
+COD o Agencia, la misma chapa que lleva el pedido—, porque es lo que la
+vendedora dice en la llamada: paga al recibir o separa con adelanto (§12). No
+reemplaza a la pista de la cola de arriba: esa sigue repartiendo llamadas en
+Lima / Provincia / Sin identificar.
+
+- **Una sola definición.** Se le pregunta a `order_coverage_for` (§5) lo que
+  le preguntaría el pedido si naciera con esa dirección, armada como en el
+  Master (`lib/lead-delivery-coverage.ts`): el distrito del lead; la provincia
+  del INEI que le da `peru_districts` (Shopify llama `province` al
+  departamento); la región del lead o, si no la hay, el departamento; y la
+  coordenada que Shopify geocodificó en el carrito, solo si el carrito es del
+  mismo distrito. Lo que las excepciones de `district_coverage`, Cañete o los
+  puntos COD deciden para el pedido lo deciden igual aquí.
+- **La coordenada no es opcional.** Sin ella no entra el desempate por
+  cercanía a un punto COD (0100): en los pedidos de los últimos 60 días, 370
+  de 7.441 Provincia COD habrían salido Agencia; 1 de cada 7 «Agencia» habría
+  sido falsa. El 94 % de los carritos trae la coordenada.
+- **Sin un distrito que sirva, no hay chapa.** Un «-» o un vacío no es una
+  dirección: la base clasificaría por el centro del departamento. La línea se
+  queda como estaba —la pista de la cola en minúscula y el aviso «Falta la
+  dirección exacta»—, igual que si la base no responde.
+- **Medido al abrirlo**: de 2.213 carritos de los últimos 45 días que
+  terminaron en pedido, 2.094 (94,6 %) dan la misma cobertura que su pedido;
+  92 no tenían distrito en el carrito; 27 (1,2 %) difieren, casi todos porque
+  el cliente dio otra dirección al comprar (Sullana en el carrito, Lima en el
+  pedido).
+
 **Qué cuenta como distrito dicho en el chat (05-10-2026).** El lector
 (`parseOrderSignals`, `lib/kapso.ts`) guardaba como distrito cosas que no lo
 eran: medido en la cola, 459 leads, el 40 % de los que tenían distrito sin
