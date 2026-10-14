@@ -1580,51 +1580,64 @@ export function LeadsBoard({
           Leads). Arriba, qué lista; abajo, qué leads dentro de ella. Lo que no
           entra va a «Más filtros». */}
       <div className="flex flex-col gap-2">
-        {/* Con los números reales, cada fila llena casi los 976 px que quedan a
-            1280: por eso «Más filtros» vive en la cabecera de la cola, junto a
-            «Orden», y no aquí. Si algún día no cabe (un teléfono, cifras de cinco
-            dígitos), la fila se desplaza por dentro sin barra a la vista. */}
-        <div className={CHIP_ROW}>
-          <QueueChip
-            label="Sin llamar"
-            count={inQueue ? stateCounts.sin_llamar : counts.sin_llamar}
-            active={inQueue && queueState === "sin_llamar"}
-            onClick={() => pickQueueState("sin_llamar")}
-          />
-          <QueueChip
-            label="En seguimiento"
-            count={inQueue ? stateCounts.seguimiento : counts.por_llamar - counts.sin_llamar}
-            alert={inQueue ? seguimientoAlert : undefined}
-            active={inQueue && queueState === "seguimiento"}
-            onClick={() => pickQueueState("seguimiento")}
-          />
-          <span aria-hidden className="mx-0.5 h-5 w-px shrink-0 bg-line-strong" />
-          <AttentionPill
-            icon={IconFlash}
-            label="Atender ahora"
-            count={counts.handoff}
-            active={view === "handoff"}
-            onClick={() => navigateToView(view === "handoff" ? "por_llamar" : "handoff")}
-            hint="Clientes que pidieron hablar con una persona"
-          />
-          <AttentionPill
-            icon={IconMoney}
-            label="Yape / Shalom"
-            count={counts.yape}
-            active={view === "yape"}
-            onClick={() => navigateToView(view === "yape" ? "por_llamar" : "yape")}
-            hint="Pagos por verificar y envíos por agencia"
-          />
-          <span aria-hidden className="mx-0.5 h-5 w-px shrink-0 bg-line-strong" />
-          {REVIEW_VIEWS.map((v) => (
-            <ChoiceChip
-              key={v.key}
-              label={v.label}
-              count={counts[v.key]}
-              active={view === v.key}
-              onClick={() => navigateToView(view === v.key ? "por_llamar" : v.key)}
+        {/* «Más filtros» cierra la primera fila a la derecha, como en la imagen
+            aprobada (J). En la cabecera de la cola, junto a «Orden», nadie lo
+            encontraba (Frankz, 14-10-2026). Donde no cabe al lado de los chips,
+            baja a su propia línea antes que tapar un chip; si los chips solos
+            tampoco caben (un teléfono), se desplazan por dentro sin barra. */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <div className={CHIP_ROW}>
+            <QueueChip
+              label="Sin llamar"
+              count={inQueue ? stateCounts.sin_llamar : counts.sin_llamar}
+              active={inQueue && queueState === "sin_llamar"}
+              onClick={() => pickQueueState("sin_llamar")}
             />
-          ))}
+            <QueueChip
+              label="En seguimiento"
+              count={inQueue ? stateCounts.seguimiento : counts.por_llamar - counts.sin_llamar}
+              alert={inQueue ? seguimientoAlert : undefined}
+              active={inQueue && queueState === "seguimiento"}
+              onClick={() => pickQueueState("seguimiento")}
+            />
+            <span aria-hidden className="mx-0.5 h-5 w-px shrink-0 bg-line-strong" />
+            <AttentionPill
+              icon={IconFlash}
+              label="Atender ahora"
+              count={counts.handoff}
+              active={view === "handoff"}
+              onClick={() => navigateToView(view === "handoff" ? "por_llamar" : "handoff")}
+              hint="Clientes que pidieron hablar con una persona"
+            />
+            <AttentionPill
+              icon={IconMoney}
+              label="Yape / Shalom"
+              count={counts.yape}
+              active={view === "yape"}
+              onClick={() => navigateToView(view === "yape" ? "por_llamar" : "yape")}
+              hint="Pagos por verificar y envíos por agencia"
+            />
+            <span aria-hidden className="mx-0.5 h-5 w-px shrink-0 bg-line-strong" />
+            {REVIEW_VIEWS.map((v) => (
+              <ChoiceChip
+                key={v.key}
+                label={v.label}
+                count={counts[v.key]}
+                active={view === v.key}
+                onClick={() => navigateToView(view === v.key ? "por_llamar" : v.key)}
+              />
+            ))}
+          </div>
+          <div className="ml-auto">
+            <FilterPill
+              ref={filtersPillRef}
+              label="Más filtros"
+              value={refinementLabels.length ? refinementLabels.join(", ") : null}
+              expanded={filtersOpen}
+              onClick={() => setFiltersOpen((o) => !o)}
+              onClear={hasActiveFilters ? clearRefinements : undefined}
+            />
+          </div>
         </div>
 
         {/* Segmento y cobertura, scopeados al estado activo (en «Sin llamar»
@@ -1960,15 +1973,6 @@ export function LeadsBoard({
             )}
           </h2>
           <div className="flex items-center gap-3">
-            {/* Lo que afina y ordena la lista vive con la lista. */}
-            <FilterPill
-              ref={filtersPillRef}
-              label="Más filtros"
-              value={refinementLabels.length ? refinementLabels.join(", ") : null}
-              expanded={filtersOpen}
-              onClick={() => setFiltersOpen((o) => !o)}
-              onClear={hasActiveFilters ? clearRefinements : undefined}
-            />
             {view === "por_llamar" && queueState === "sin_llamar" && !searchMode && (
               <label className="flex items-center gap-2 text-[13px] text-ink-600">
                 Orden
