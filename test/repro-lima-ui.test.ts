@@ -3,17 +3,36 @@
 // entrada del menú, el candado de la hoja (latido y beacon), el `operationId`
 // que se estrena al cambiar el formulario, y las vistas de solo lectura.
 
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { RESCHEDULE_MAX_DAYS } from "@/lib/gf-dispatch-program";
-import { agreementDateProblem, materializationPlan, type BoxLocation } from "@/lib/repro-lima";
+import { parseMasterQuery } from "@/lib/master-query";
+import { agreementDateProblem, materializationPlan, REPRO_LISTS, type BoxLocation } from "@/lib/repro-lima";
+import { limaOpenBreakdown, type LimaOpenCountRow, type StageAging } from "@/lib/repro-lima-todos";
 import { swaypDispatchDayOptions } from "@/lib/swayp-dispatch-days";
 import { planText } from "@/components/repro-lima-sheet";
+import { ReproLimaTodos } from "@/components/repro-lima-todos";
+import { ReproLimaBoard } from "@/components/repro-lima-board";
+import type { ReproLimaData, ReproRow } from "@/lib/repro-lima-access";
 import { navItems } from "@/components/sidebar";
 
 // La hoja importa las acciones de servidor; aquí solo se prueban sus textos.
 vi.mock("@/app/dashboard/pedidos/repro-lima/actions", () => ({}));
+// La chapa de etapa vive junto a la ficha, que arrastra acciones de servidor:
+// aquí basta con saber de qué etapa es.
+vi.mock("@/components/order-master-shared", () => ({
+  MacroStageDot: ({ stage }: { stage: string }) => createElement("span", { "data-dot": stage }),
+}));
+// El tablero lee la vista de la URL; cada prueba elige la suya.
+const nav = vi.hoisted(() => ({ search: "" }));
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/dashboard/pedidos/repro-lima",
+  useSearchParams: () => new URLSearchParams(nav.search),
+  useRouter: () => ({ refresh: () => {} }),
+}));
 
 const read = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8");
 
@@ -466,5 +485,190 @@ describe("el tablero (E31, E33)", () => {
     expect(sheet).toContain('<Banner tone="ok" role="status" title={previous.orderName}>');
     // Arriba de todo: antes del candado.
     expect(sheet.indexOf("{previous && (")).toBeLessThan(sheet.indexOf("{/* El candado, en una línea con su punto. */}"));
+  });
+});
+
+describe("«Todos» en pantalla (§9.5, 14-10-2026)", () => {
+  const STORE = "11111111-1111-4111-8111-111111111111";
+  const row = (stage: LimaOpenCountRow["stage"], substage: string | null, total: number, over7 = 0, over30 = 0): LimaOpenCountRow =>
+    ({ storeId: STORE, stage, substage, total, over7, over30 });
+  // Producción el 14-10-2026 (cobertura Lima, sin «Por reprogramar Lima»: sale del tablero).
+  const PROD: LimaOpenCountRow[] = [
+    row("por_cerrar", "validacion_cierre_pendiente", 641, 283, 5),
+    row("en_curso", "en_retorno", 1),
+    row("preparacion", "por_armar", 13, 11, 11),
+    row("por_despachar", "listo_para_asignar", 1094, 948, 351),
+    row("en_curso", "en_transito", 91, 48, 20),
+    row("en_curso", "en_reparto", 104, 30, 0),
+    row("en_curso", "disponible_para_recojo", 1),
+    row("en_curso", "pendiente_pago_diferencia", 2, 1, 0),
+    row("preparacion", "por_generar_rotulo", 183, 141, 132),
+    row("por_cerrar", "pendiente_liquidacion", 4624, 4576, 3845),
+    row("por_cerrar", "salida_adicional_activa", 773, 770, 655),
+    row("por_cerrar", "devolucion_fisica_pendiente", 186, 98, 1),
+    row("por_cerrar", "devolucion_pendiente_inventario", 164, 147, 20),
+    row("por_cerrar", "recogido_sin_pago_completo", 5, 5, 2),
+  ];
+  const REPRO: StageAging = { total: 451, over7: 236, over30: 51 };
+  const LISTS = REPRO_LISTS.map((l, i) => ({ list: l, label: `Lista ${i}`, count: i }));
+  const fmt = (n: number) => n.toLocaleString("es-PE");
+  const render = (rows: LimaOpenCountRow[], repro: StageAging = REPRO, storeId: string | null = null) =>
+    renderToStaticMarkup(createElement(ReproLimaTodos, {
+      breakdown: limaOpenBreakdown(rows, { storeId, repro }),
+      lists: LISTS,
+      onOpenList: () => {},
+    }));
+  const hrefs = (html: string) => [...html.matchAll(/href="([^"]+)"/g)].map((m) => m[1]!.replace(/&amp;/g, "&"));
+
+  it("los dos bloques con su total: 1.940 por entregar y, aparte, 6.393 por cerrar", () => {
+    const html = render(PROD);
+    expect(html).toContain(`Todavía por entregar</span><span class="shrink-0 tabular-nums">${fmt(1940)}</span>`);
+    expect(html).toContain(`Ya entregado, anulado o devuelto: falta cerrar</span><span class="shrink-0 tabular-nums">${fmt(6393)}</span>`);
+    expect(html).toContain("En Lima, lo que no se entrega vuelve a «Por reprogramar Lima»; solo la entrega lo pasa a «Por cerrar».");
+    expect(html).toContain("Cada pedido cuenta una vez, en su subetapa del Master.");
+    expect(html).not.toContain("No hay pedidos de Lima sin estado final.");
+  });
+
+  it("las etapas en el orden del MOM, Por confirmar oculta, y Por cerrar en su bloque", () => {
+    const html = render(PROD);
+    const at = (stage: string) => html.indexOf(`data-dot="${stage}"`);
+    expect(at("por_confirmar")).toBe(-1);
+    expect(at("preparacion")).toBeGreaterThan(-1);
+    expect(at("preparacion")).toBeLessThan(at("por_despachar"));
+    expect(at("por_despachar")).toBeLessThan(at("en_curso"));
+    expect(at("en_curso")).toBeLessThan(html.indexOf("Ya entregado, anulado o devuelto"));
+    expect(html.indexOf("Ya entregado, anulado o devuelto")).toBeLessThan(at("por_cerrar"));
+    // Las subetapas en su orden canónico, aunque lleguen desordenadas.
+    const order = ["Por generar rótulo", "Por armar", "Listo para asignar", "En tránsito", "En reparto", "Disponible para recojo",
+      "Pendiente de pago de diferencia", "Por reprogramar Lima", "En retorno", "Pendiente de liquidación", "Salida adicional activa",
+      "Devolución física pendiente", "Devolución pendiente de inventario", "Recogido sin pago completo", "Validación de cierre pendiente"];
+    const positions = order.map((label) => html.indexOf(`text-ink-900">${label}</span>`));
+    expect(positions.every((p) => p > -1), JSON.stringify(positions)).toBe(true);
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions);
+  });
+
+  it("cada subetapa abre su cola del Master con «Lima», y sus chapas solo si hay antigüedad", () => {
+    const html = render(PROD);
+    const links = hrefs(html);
+    // Todas menos «Por reprogramar Lima», que se queda en la pantalla.
+    expect(links).toHaveLength(14);
+    for (const href of links) {
+      expect(href.startsWith("/dashboard/pedidos?")).toBe(true);
+      const q = parseMasterQuery(new URLSearchParams(href.split("?")[1]));
+      expect([...q.filters.coverages]).toEqual(["lima"]);
+    }
+    expect(links).toContain("/dashboard/pedidos?cv=lima&view=por_cerrar&substage=salida_adicional_activa");
+    expect(html).toContain(`aria-label="Pendiente de liquidación: ${fmt(4624)} pedidos, ${fmt(4576)} con más de 7 días y ${fmt(3845)} con más de 30. Abrir en el Master de Pedidos."`);
+    expect(html).toContain(`>${fmt(948)} con más de 7 días</span>`);
+    expect(html).toContain(`>${fmt(351)} con más de 30</span>`);
+    // Sin antigüedad, sin chapas ni cifras de más en el nombre.
+    expect(html).toContain('aria-label="Disponible para recojo: 1 pedido. Abrir en el Master de Pedidos."');
+    expect(html).toContain('aria-label="En reparto: 104 pedidos, 30 con más de 7 días. Abrir en el Master de Pedidos."');
+    const reparto = html.slice(html.indexOf('aria-label="En reparto:'), html.indexOf("</a>", html.indexOf('aria-label="En reparto:')));
+    expect(reparto).not.toContain("con más de 30</span>");
+  });
+
+  it("con una tienda elegida, cada enlace lleva esa tienda", () => {
+    const html = render(PROD, REPRO, STORE);
+    const links = hrefs(html);
+    expect(links.length).toBeGreaterThan(0);
+    for (const href of links) {
+      expect([...parseMasterQuery(new URLSearchParams(href.split("?")[1])).filters.stores]).toEqual([STORE]);
+    }
+  });
+
+  it("«Por reprogramar Lima» es un botón con las cuatro listas debajo, nunca dentro", () => {
+    const html = render(PROD);
+    const start = html.indexOf('<button type="button" aria-label="Por reprogramar Lima:');
+    expect(start).toBeGreaterThan(-1);
+    const end = html.indexOf("</button>", start);
+    // Ningún botón dentro del botón.
+    expect(html.slice(start + 1, end)).not.toContain("<button");
+    expect(html.slice(start, end)).toContain(`aria-label="Por reprogramar Lima: 451 pedidos, 236 con más de 7 días y 51 con más de 30. Ver sus cuatro listas."`);
+    // Las cuatro listas, como hermanas, justo después.
+    const chips = html.slice(end, html.indexOf("</li>", end));
+    expect(chips.match(/<button type="button" aria-pressed="false"/g)?.length).toBe(4);
+    for (const l of LISTS) expect(chips).toContain(`>${l.label}<span`);
+    // Sin casos en Repro Lima, la fila no aparece (y no hay botón).
+    expect(render(PROD, { total: 0, over7: 0, over30: 0 })).not.toContain("Por reprogramar Lima:");
+  });
+
+  it("sin nada abierto lo dice; con solo «Por cerrar», el primer bloque queda en cero", () => {
+    const empty = render([], { total: 0, over7: 0, over30: 0 });
+    expect(empty).toContain("No hay pedidos de Lima sin estado final.");
+    expect(empty).not.toContain("<h2");
+    const onlyClose = render([row("por_cerrar", "pendiente_liquidacion", 3)], { total: 0, over7: 0, over30: 0 });
+    expect(onlyClose).toContain('Todavía por entregar</span><span class="shrink-0 tabular-nums">0</span>');
+    expect(onlyClose).toContain('data-dot="por_cerrar"');
+    expect(onlyClose).not.toContain("No hay pedidos de Lima sin estado final.");
+  });
+});
+
+describe("el tablero con «Todos» (§9.5, 14-10-2026)", () => {
+  const A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  // Solo lo que el tablero lee fuera de las filas dibujadas: la lista, la tienda y los días.
+  const caseRow = (orderId: string, storeId: string, list: ReproRow["list"], daysInStage: number | null) =>
+    ({ orderId, storeId, list, daysInStage, orderName: `#${orderId}`, customerName: "", customerPhone: null, state: { kind: "vigente" } }) as unknown as ReproRow;
+  const data = {
+    today: "2026-10-14",
+    nowIso: "2026-10-14T15:00:00.000Z",
+    cutoffLabel: "12:00",
+    cutoffPassed: false,
+    cutoffText: "",
+    stores: [{ id: A, name: "Tienda A" }, { id: B, name: "Tienda B" }],
+    // Todas en «Cerrados»: la lista por omisión («Por decidir») queda vacía y no dibuja filas.
+    rows: [caseRow("1", A, "cerrados", 3), caseRow("2", A, "cerrados", 8), caseRow("3", B, "cerrados", 31)],
+    me: "u",
+  } as unknown as ReproLimaData;
+  const openCounts = {
+    today: "2026-10-14",
+    rows: [
+      { storeId: A, stage: "preparacion" as const, substage: "por_generar_rotulo", total: 5, over7: 1, over30: 0 },
+      { storeId: B, stage: "por_cerrar" as const, substage: "pendiente_liquidacion", total: 7, over7: 7, over30: 2 },
+    ],
+  };
+  const render = (search: string, counts: typeof openCounts | null = openCounts) => {
+    nav.search = search;
+    return renderToStaticMarkup(createElement(ReproLimaBoard, { data, openCounts: counts }));
+  };
+  const card = (html: string) => {
+    const at = html.indexOf("Todos · por entregar");
+    return at < 0 ? "" : html.slice(html.lastIndexOf("<button", at), html.indexOf("</button>", at));
+  };
+
+  it("sin conteo, ni tarjeta ni quinta columna, y «?vista=todos» se queda en las listas", () => {
+    for (const search of ["", "vista=todos"]) {
+      const html = render(search, null);
+      expect(html).not.toContain("Todos · por entregar");
+      expect(html).not.toContain("lg:grid-cols-5");
+      expect(html).toContain('type="search"');
+      expect(html).not.toContain("Todavía por entregar");
+    }
+  });
+
+  it("en las listas, la tarjeta cuenta lo que falta entregar (con Repro Lima) y no está elegida", () => {
+    const html = render("");
+    expect(html).toContain("lg:grid-cols-5");
+    const todosCard = card(html);
+    // 5 en Preparación + los 3 casos del tablero; Por cerrar no suma.
+    expect(todosCard).toContain('aria-pressed="false"');
+    expect(todosCard).toContain(">8</span>");
+    expect(html).toContain('type="search"');
+    expect(html).toContain('aria-label="Por decidir"');
+  });
+
+  it("con «?vista=todos», el resumen sin búsqueda y con la línea de lo que falta", () => {
+    const html = render("vista=todos&ficha=x");
+    expect(card(html)).toContain('aria-pressed="true"');
+    // Ninguna lista elegida mientras se mira «Todos».
+    expect(html.match(/aria-pressed="true"/g)?.length).toBe(1);
+    expect(html).toContain('<section aria-label="Todos"');
+    expect(html).not.toContain('type="search"');
+    expect(html).toContain('<b class="font-semibold text-ink-900">8</b> todavía por entregar · 7 por cerrar');
+    expect(html).toContain("Todavía por entregar");
+    expect(html).toContain('aria-label="Por reprogramar Lima: 3 pedidos, 2 con más de 7 días y 1 con más de 30. Ver sus cuatro listas."');
+    // La píldora de tienda sigue ahí.
+    expect(html).toContain("Tienda");
   });
 });
