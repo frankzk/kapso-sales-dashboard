@@ -54,7 +54,9 @@ import {
   countLeadWindows,
   countQueueStates,
   gestionOf,
+  CLAIM_HEARTBEAT_MS,
   isClaimActive,
+  shouldRenewClaim,
   isQueueBucket,
   labelOf,
   leadHook,
@@ -88,6 +90,7 @@ import {
 import {
   openLeadDrawer,
   releaseLead,
+  renewLeadClaim,
   resolveHandoff,
 } from "@/app/dashboard/leads/actions";
 import { claveAnuncio, handleDeAnuncioPara, type AdDeclaration } from "@/lib/ad-products";
@@ -982,6 +985,42 @@ export function LeadsBoard({
     window.addEventListener("pagehide", onPageHide);
     return () => window.removeEventListener("pagehide", onPageHide);
   }, []);
+
+  // LA RESERVA SE RENUEVA MIENTRAS LA FICHA ESTÁ ABIERTA (14-10-2026). Antes
+  // vencía a los 10 minutos de abrirla aunque la asesora siguiera con la
+  // clienta, y otra podía tomar el mismo lead encima (Daphne y Ross). Solo se
+  // renueva si la asesora tocó la página hace menos de 10 minutos: una ficha
+  // olvidada abierta suelta el lead sola, como siempre. Si al renovar resulta
+  // que otra lo tomó, se le dice quién —no se le quita a nadie—.
+  const openLeadId = selected?.id ?? null;
+  const lastActivityRef = useRef(Date.now());
+  useEffect(() => {
+    const mark = () => {
+      lastActivityRef.current = Date.now();
+    };
+    const opts = { passive: true } as const;
+    window.addEventListener("pointerdown", mark, opts);
+    window.addEventListener("keydown", mark, opts);
+    window.addEventListener("pointermove", mark, opts);
+    return () => {
+      window.removeEventListener("pointerdown", mark);
+      window.removeEventListener("keydown", mark);
+      window.removeEventListener("pointermove", mark);
+    };
+  }, []);
+  useEffect(() => {
+    if (!openLeadId) return;
+    const timer = setInterval(() => {
+      if (activeLeadIdRef.current !== openLeadId) return;
+      if (!shouldRenewClaim(lastActivityRef.current, Date.now())) return;
+      void renewLeadClaim(openLeadId)
+        .then((res) => {
+          if (res.error && activeLeadIdRef.current === openLeadId) setBanner(res.error);
+        })
+        .catch(() => undefined); // un fallo de red se reintenta en el siguiente latido
+    }, CLAIM_HEARTBEAT_MS);
+    return () => clearInterval(timer);
+  }, [openLeadId]);
 
   function closeDrawer() {
     const leadId = selected?.id;

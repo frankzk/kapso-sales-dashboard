@@ -856,6 +856,27 @@ export function countGestiones(leads: { status: string }[]): Record<LeadGestion,
 export const CLAIM_TTL_MINUTES = 10;
 
 /**
+ * CADA CUÁNTO SE RENUEVA LA RESERVA CON LA FICHA ABIERTA (14-10-2026).
+ *
+ * La reserva nacía al abrir la ficha y vencía a los 10 minutos AUNQUE la ficha
+ * siguiera abierta: una asesora en una llamada larga, o escribiéndole a la
+ * clienta, perdía el lead sin enterarse y otra podía tomarlo encima. Lo
+ * reportó Daphne: ella y Ross tenían el mismo lead a la vez. Con la ficha
+ * abierta y la asesora activa, la reserva se renueva cada 3 minutos.
+ */
+export const CLAIM_HEARTBEAT_MS = 3 * 60_000;
+
+/**
+ * ¿Se renueva? Solo si la asesora tocó la página (mouse, teclado, toque) en
+ * los últimos `CLAIM_TTL_MINUTES`. Una ficha olvidada abierta no puede retener
+ * un lead para siempre: a los 10 minutos sin actividad deja de renovarse y el
+ * lead se libera solo, como antes. Pura.
+ */
+export function shouldRenewClaim(lastActivityMs: number, nowMs: number): boolean {
+  return nowMs - lastActivityMs < CLAIM_TTL_MINUTES * 60_000;
+}
+
+/**
  * CUÁNTOS LEADS PUEDE TENER TOMADOS UNA ASESORA A LA VEZ.
  *
  * Decidido el 14-09-2026 con estos números detrás (461 reservas, 15 asesoras):
