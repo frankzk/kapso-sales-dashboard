@@ -3876,6 +3876,19 @@ saltó.
   condición 12).
 - **Abrir otro lead de la cola suelta el siguiente** antes de reservar el otro,
   y pasa a otra vendedora. Al cerrar esa ficha, la tarjeta vuelve a reservar.
+- **La reserva de la ficha abierta también se renueva (14-10-2026).**
+  - **Lo que pasaba.** Abrir un lead lo reservaba 10 minutos y la reserva
+    vencía aunque la ficha siguiera abierta. Una asesora en una llamada larga,
+    o escribiéndole a la clienta, perdía el lead sin enterarse, y otra podía
+    tomarlo encima. Lo reportó Daphne: ella y Ross tenían el mismo lead a la
+    vez.
+  - **Ahora**, con la ficha abierta, la reserva se renueva cada 3 minutos
+    (`renewLeadClaim`, `CLAIM_HEARTBEAT_MS`), siempre que la asesora haya
+    tocado la página (mouse, teclado o toque) en los últimos 10 minutos.
+  - **Una ficha olvidada abierta** deja de renovarse y el lead se suelta solo,
+    como antes.
+  - **Si otra asesora ya lo tomó** cuando la reserva había vencido, no se le
+    quita a nadie: la ficha avisa quién lo tiene.
 - **Saltar** lo suelta y no se le vuelve a ofrecer en esa pestaña; para las
   demás sigue en la cola.
 - **Guardar el resultado** desde la tarjeta es lo mismo que guardarlo en la

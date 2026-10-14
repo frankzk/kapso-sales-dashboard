@@ -155,6 +155,37 @@ describe("el lector reconoce la constancia de Flow", () => {
     expect(r.paidAt).toBe("2026-10-14T19:18:00.000Z");
   });
 
+  it("el correo de Flow marcado como Flow: el nº de operación es la orden de Flow", async () => {
+    // #KP141432, 14-10-2026: el correo de Flow (logo «flow» + «AURELA» y una
+    // tabla) se leía con nº, monto y fecha, pero sin flow_order: no se
+    // consultaba a Flow y «Aurela» quedaba como cuenta ajena.
+    const r = await extractYapeVoucher("AAAA", "image/png", {
+      apiKey: "k",
+      model: "m",
+      fetchImpl: reply({
+        operation_number: "184932654",
+        operation_label: "Número de orden",
+        amount: 116,
+        date: "14/10/2026",
+        time: "14:18",
+        recipient_name: "Aurela",
+        is_flow: true,
+        flow_order: null,
+      }),
+    });
+    expect(r.flowOrder).toBe("184932654");
+    expect(r.operationNumber).toBe("184932654");
+  });
+
+  it("sin la marca de Flow, un nº de operación no se trata como orden de Flow", async () => {
+    const r = await extractYapeVoucher("AAAA", "image/png", {
+      apiKey: "k",
+      model: "m",
+      fetchImpl: reply({ operation_number: "35514682", operation_label: "Nro. de operación", amount: 119, is_flow: false }),
+    });
+    expect(r.flowOrder).toBeNull();
+  });
+
   it("el prompt describe la pantalla de Flow", async () => {
     let sent = "";
     await extractYapeVoucher("AAAA", "image/jpeg", {
@@ -166,6 +197,8 @@ describe("el lector reconoce la constancia de Flow", () => {
       }) as unknown as typeof fetch,
     });
     expect(sent).toContain("¡Tu pago se ha concretado exitosamente!");
+    expect(sent).toContain("CORREO de Flow");
+    expect(sent).toContain("is_flow");
     expect(sent).toContain("flow_order");
   });
 });
