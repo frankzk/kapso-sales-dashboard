@@ -32,8 +32,13 @@ import {
   isValidStatus,
   labelOf,
   leadSearchPasses,
+  usableAddress,
   type CartLine,
 } from "@/lib/leads";
+import { asOrderCoverage, leadDeliveryProbe } from "@/lib/lead-delivery-coverage";
+import type { OrderCoverage } from "@/lib/order-coverage";
+import { limaTodayKey, normalizeDistrict } from "@/lib/shipments";
+import { shopifyShippingAddress } from "@/lib/shopify-address";
 import { firstProductWithImage, type CatalogImage } from "@/lib/cart-image-test";
 import { OFFER_TTL_MS, planYapeOffers, type RoutingLead } from "@/lib/yape-routing";
 import { onlineVendedorasForStore } from "@/lib/presence";
@@ -284,6 +289,59 @@ export async function loadNextLeadCart(leadId: string): Promise<NextLeadCart | {
     createdAt: draft?.created_at ?? null,
     photoUrl: productId ? `/api/wa-image/${ctx.storeId}/${productId}.jpg` : null,
   };
+}
+
+/**
+ * La cobertura de entrega del lead, la MISMA del Master: `order_coverage_for`
+ * con la dirección del carrito (`lib/lead-delivery-coverage.ts`, MOM §11). La
+ * tarjeta del siguiente lead y la ficha la ponen en «Entrega». Sin un distrito
+ * que sirva, o si la base no responde, null: la línea se queda con lo que ya
+ * decía.
+ */
+export async function loadLeadDeliveryCoverage(
+  leadId: string,
+): Promise<{ coverage: OrderCoverage | null } | { error: string }> {
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { error: "Sin acceso a este lead." };
+  const admin = createAdminSupabase();
+  const { data } = await admin
+    .from("leads")
+    .select("district, province, region, draft_order_gid")
+    .eq("id", leadId)
+    .maybeSingle();
+  const lead = data as { district: string | null; province: string | null; region: string | null; draft_order_gid: string | null } | null;
+  if (!lead || !usableAddress(lead.district)) return { coverage: null };
+  const [geoRes, draftRes] = await Promise.all([
+    admin
+      .from("peru_districts")
+      .select("province, department")
+      .eq("district_key", normalizeDistrict(lead.district))
+      .maybeSingle(),
+    lead.draft_order_gid
+      ? admin
+          .from("draft_orders")
+          .select("shippingAddress:raw->shippingAddress, shipping_address:raw->shipping_address")
+          .eq("store_id", ctx.storeId)
+          .eq("draft_order_gid", lead.draft_order_gid)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+  ]);
+  const probe = leadDeliveryProbe(
+    lead,
+    (geoRes.data as { province: string | null; department: string | null } | null) ?? null,
+    shopifyShippingAddress(draftRes.data),
+  );
+  if (!probe) return { coverage: null };
+  const { data: coverage, error } = await admin.rpc("order_coverage_for", {
+    p_store_id: ctx.storeId,
+    p_region: probe.region,
+    p_province: probe.province,
+    p_district: probe.district,
+    p_lat: probe.latitude,
+    p_lng: probe.longitude,
+    p_day: limaTodayKey(),
+  });
+  return { coverage: error ? null : asOrderCoverage(coverage) };
 }
 
 /** Non-critical customer context loaded progressively after the drawer is
