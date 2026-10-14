@@ -494,7 +494,8 @@ function PriorOrders({ history }: { history: Loaded<CustomerHistory | null> }) {
                 <span className="w-20 shrink-0 font-medium text-ink-700">{o.name ?? "Pedido"}</span>
               )}
               <span className="w-12 shrink-0">{shortDate(o.createdAt) ?? "—"}</span>
-              <span>{soles(o.amount)}</span>
+              <span className={o.cancelled ? "text-ink-500 line-through decoration-ink-300" : undefined}>{soles(o.amount)}</span>
+              {o.cancelled && <span className="text-ink-500">anulado</span>}
             </li>
           ))}
         </ul>
