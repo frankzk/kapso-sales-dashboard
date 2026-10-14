@@ -2,18 +2,18 @@
 
 // El siguiente lead de cada vendedora (DESIGN.md › Leads, MOM §11 › «El
 // siguiente lead de cada vendedora»). Arriba de «Sin llamar», a lo ancho: el
-// lead que le toca llamar ahora, ya reservado para ella, con lo que pidió, el
-// chat y el resultado de la llamada. Nunca el mismo a dos vendedoras: aparecer
-// aquí es tomarlo con la reserva de siempre (claimLead, 10 minutos), que cuenta
-// como una de sus dos.
+// lead que le toca llamar ahora, ya reservado para ella, en tres columnas —el
+// cliente y lo que pregunta, registrar la gestión, y el chat—. Nunca el mismo a
+// dos vendedoras: aparecer aquí es tomarlo con la reserva de siempre
+// (claimLead, 10 minutos), que cuenta como una de sus dos.
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { LeadRow } from "@/lib/types";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { LeadCallRow, LeadRow } from "@/lib/types";
 import {
+  dayTimeLabel,
   isClaimCapError,
   leadCanCall,
-  leadHandle,
   leadHook,
   leadPhoneLabel,
   leadQueueBucket,
@@ -21,13 +21,21 @@ import {
   categoryOf,
   labelOf,
   pickNextLead,
+  usableAddress,
+  type CartLine,
   type QueueBucket,
 } from "@/lib/leads";
+import { LEAD_COVERAGES, type LeadCoverage } from "@/lib/lead-coverage";
 import { leadUrgency } from "@/lib/lead-urgency";
-import { claimLead, releaseLead } from "@/app/dashboard/leads/actions";
+import type { CustomerHistory } from "@/lib/leads-access";
+import { claimLead, releaseLead, type NextLeadCart } from "@/app/dashboard/leads/actions";
+// Las lecturas van por /api/leads/read, como las de la ficha: fuera de la cola
+// de Server Actions, que pondría la foto detrás de un guardado.
+import { loadLeadCustomerHistory, loadLeadDetail, loadNextLeadCart } from "@/lib/leads-read-client";
 import type { LeadDrawerUpdate } from "@/components/leads-drawer";
-import { Badge, Banner, OpsButton, Skeleton, opsButtonClass, type BadgeTone } from "@/components/ops-ui";
-import { IconPhone, IconWhatsApp } from "@/components/icons";
+import { useCopyToClipboard } from "@/components/copy-button";
+import { Badge, Banner, OpsButton, Skeleton, type BadgeTone } from "@/components/ops-ui";
+import { IconCheck, IconCopy, IconMapPin, IconPhone, IconWhatsApp } from "@/components/icons";
 
 // El chat y el resultado son los de la ficha, cargados aparte: la cola no paga
 // su peso en el primer pintado (test/leads-bundle.test.ts).
@@ -335,28 +343,327 @@ const SOURCE_WORD: Record<string, string> = {
   abandoned_browse: "una búsqueda en la web",
 };
 
+/** «Llegó por»: de dónde vino, con nombre propio cuando lo hay. */
+const SOURCE_LABEL: Record<string, string> = {
+  meta_ad: "Campaña",
+  fb_web: "Enlace de Meta",
+  cod_cart: "Formulario de carrito",
+  abandoned_browse: "Búsqueda en la web",
+};
+
 function soles(value: number): string {
-  return `S/\u00a0${value.toLocaleString("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `S/ ${value.toLocaleString("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-/** Qué pidió, en una línea: el carrito, el producto que miraba, o con qué llegó. */
-function askedText(lead: LeadRow, product: string | null): string | null {
-  const cart = (lead.cart_summary ?? "").trim();
-  if (cart) {
-    const parts = [lead.draft_order_name?.trim() ? `Carrito ${lead.draft_order_name.trim()}` : "Carrito", cart];
-    if (Number(lead.cart_value ?? 0) > 0) parts.push(soles(Number(lead.cart_value)));
-    return parts.join(" · ");
+function units(n: number): string {
+  return `${n} ${n === 1 ? "unidad" : "unidades"}`;
+}
+
+function shortDate(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return null;
+  return at.toLocaleDateString("es-PE", { timeZone: "America/Lima", day: "numeric", month: "short" }).replace(/\.$/, "");
+}
+
+type Loaded<T> = T | "loading" | "error";
+
+interface NextLeadContext {
+  cart: Loaded<NextLeadCart>;
+  history: Loaded<CustomerHistory | null>;
+  calls: Loaded<LeadCallRow[]>;
+}
+
+const LOADING: NextLeadContext = { cart: "loading", history: "loading", calls: "loading" };
+
+/**
+ * Lo que la fila de la cola no trae: el carrito con cantidades y su foto, los
+ * pedidos de antes (Shopify, puede tardar unos segundos) y las llamadas. Cada
+ * pieza llega por su lado y se pinta cuando llega; la tarjeta se usa desde el
+ * primer momento.
+ */
+function useNextLeadContext(leadId: string | null): NextLeadContext {
+  const [state, setState] = useState<{ id: string | null } & NextLeadContext>({ id: null, ...LOADING });
+  useEffect(() => {
+    if (!leadId) return;
+    let alive = true;
+    const put = (patch: Partial<NextLeadContext>) => {
+      if (!alive) return;
+      setState((s) => ({ ...(s.id === leadId ? s : LOADING), id: leadId, ...patch }));
+    };
+    loadNextLeadCart(leadId).then(
+      (r) => put({ cart: "error" in r ? "error" : r }),
+      () => put({ cart: "error" }),
+    );
+    loadLeadDetail(leadId).then(
+      (r) => put({ calls: "error" in r ? "error" : r.calls }),
+      () => put({ calls: "error" }),
+    );
+    loadLeadCustomerHistory(leadId).then(
+      (r) => put({ history: "error" in r ? "error" : r.customerHistory }),
+      () => put({ history: "error" }),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [leadId]);
+  return state.id === leadId ? state : LOADING;
+}
+
+/** Lo que pide, para la cabeza de la columna del cliente. */
+function askedOf(
+  lead: LeadRow,
+  product: string | null,
+  lines: CartLine[],
+): { label: string; lines: { title: string; quantity: number | null }[]; detail: string | null } | null {
+  const summary = (lead.cart_summary ?? "").trim();
+  if (lines.length || summary) {
+    const items = lines.length ? lines : [{ title: summary, quantity: null }];
+    const single = items.length === 1 ? items[0] : null;
+    const detail = [
+      single?.quantity ? units(single.quantity) : null,
+      Number(lead.cart_value ?? 0) > 0 ? soles(Number(lead.cart_value)) : null,
+      lead.source === "cod_cart" ? "contra entrega" : null,
+      lead.draft_order_name?.trim() ? `carrito ${lead.draft_order_name.trim()}` : null,
+    ].filter(Boolean);
+    return { label: "Lo que pidió", lines: items, detail: detail.length ? detail.join(" · ") : null };
   }
-  if (product) return `Miraba ${product}`;
+  if (product) return { label: "Lo que miraba", lines: [{ title: product, quantity: null }], detail: null };
   const hook = leadHook(lead);
   if (!hook) return null;
-  return hook.kind === "anuncio" ? `Llegó por el anuncio «${hook.text}»` : `«${hook.text}»`;
+  return hook.kind === "anuncio"
+    ? { label: "Llegó por el anuncio", lines: [{ title: hook.text, quantity: null }], detail: null }
+    : { label: "Lo que escribió", lines: [{ title: `«${hook.text}»`, quantity: null }], detail: null };
 }
 
-function addressText(lead: LeadRow): string | null {
-  const place = [lead.district, lead.province ?? lead.region].map((v) => v?.trim()).filter(Boolean);
-  const parts = [lead.address1?.trim(), place.length ? [...new Set(place)].join(", ") : null].filter(Boolean);
-  return parts.length ? parts.join(" · ") : null;
+function Row({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <>
+      <dt className="pt-px text-xs font-medium text-ink-500">{label}</dt>
+      <dd className="min-w-0 text-[13px] leading-5 text-ink-900">{children}</dd>
+    </>
+  );
+}
+
+const QUIET_ICON =
+  "grid size-8 shrink-0 place-items-center rounded-md text-ink-500 ring-1 ring-inset ring-line-strong transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:size-11";
+
+/** Copiar, llamar y escribir: siguen a mano pero callados; hoy se llama desde el celular. */
+function ContactIcons({ lead }: { lead: LeadRow }) {
+  const { state: copy, copy: copyText } = useCopyToClipboard();
+  if (!leadCanCall(lead)) return null;
+  const phone = lead.phone!.trim();
+  const copyLabel = copy === "ok" ? "Número copiado" : copy === "fail" ? "No se pudo copiar" : "Copiar número";
+  return (
+    <span className="flex shrink-0 items-center gap-1">
+      <button type="button" onClick={() => copyText(`+${phone}`)} title={copyLabel} aria-label={copyLabel} className={QUIET_ICON}>
+        {copy === "ok" ? <IconCheck className="size-4 text-ok-fg" /> : <IconCopy className="size-4" />}
+      </button>
+      <a href={`tel:+${phone}`} title="Llamar" aria-label="Llamar" className={QUIET_ICON}>
+        <IconPhone className="size-4" />
+      </a>
+      <a href={`https://wa.me/${phone}`} target="_blank" rel="noreferrer" title="Abrir WhatsApp" aria-label="Abrir WhatsApp" className={QUIET_ICON}>
+        <IconWhatsApp className="size-4" />
+      </a>
+    </span>
+  );
+}
+
+function PriorOrders({ history }: { history: Loaded<CustomerHistory | null> }) {
+  if (history === "loading") return <span className="text-ink-500">Buscando en Shopify…</span>;
+  if (history === "error") return <span className="text-ink-500">No se pudo consultar ahora.</span>;
+  const count = Math.max(history?.orderCount ?? 0, history?.recentOrders.length ?? 0);
+  if (!history || count === 0) return <span className="text-ink-700">Ninguno: es cliente nuevo</span>;
+  return (
+    <div className="space-y-1">
+      <p>
+        <span className="font-medium">
+          {count} {count === 1 ? "pedido" : "pedidos"}
+        </span>
+        {history.lastProduct && <span className="text-ink-500"> · el último, {history.lastProduct}</span>}
+      </p>
+      {history.recentOrders.length > 0 && (
+        <ul className="space-y-0.5 text-xs tabular-nums text-ink-600">
+          {history.recentOrders.map((o, i) => (
+            <li key={o.name ?? i} className="flex gap-3">
+              {o.adminUrl ? (
+                <a href={o.adminUrl} target="_blank" rel="noopener noreferrer" className="w-20 shrink-0 font-medium text-ink-700 hover:text-brand-700 hover:underline">
+                  {o.name ?? "Pedido"}
+                </a>
+              ) : (
+                <span className="w-20 shrink-0 font-medium text-ink-700">{o.name ?? "Pedido"}</span>
+              )}
+              <span className="w-12 shrink-0">{shortDate(o.createdAt) ?? "—"}</span>
+              <span>{soles(o.amount)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function CallsLine({ calls, now }: { calls: Loaded<LeadCallRow[]>; now: number }) {
+  if (calls === "loading") return <span className="text-ink-500">…</span>;
+  if (calls === "error") return <span className="text-ink-500">No se pudo consultar ahora.</span>;
+  const real = calls.filter((c) => c.kind === "call" || c.kind === "voice_agent");
+  if (!real.length) return <span className="text-ink-700">Ninguna todavía</span>;
+  const last = real[0]!;
+  const parts = [
+    dayTimeLabel(last.occurred_at, new Date(now)),
+    last.vendedora_name,
+    last.new_status ? labelOf(last.new_status) : null,
+  ].filter(Boolean);
+  return (
+    <span>
+      <span className="font-medium">{real.length}</span>
+      {parts.length > 0 && <span className="text-ink-600"> · la última {parts.join(" · ")}</span>}
+    </span>
+  );
+}
+
+function ClientColumn({
+  lead,
+  now,
+  product,
+  adName,
+  storeName,
+  coverage,
+  context,
+  filterNote,
+}: {
+  lead: LeadRow;
+  now: number;
+  product: string | null;
+  adName: string | null;
+  storeName: string | null;
+  coverage: LeadCoverage | null;
+  context: NextLeadContext;
+  filterNote: ReactNode;
+}) {
+  const urgency = leadUrgency(lead.first_seen_at, now);
+  const { state: win } = leadWindowInfo(lead.last_inbound_at ?? lead.last_interaction_at, now);
+  const name = lead.name?.trim() || null;
+  const title = name ?? leadPhoneLabel(lead);
+  const via = adName ? `por «${adName}»` : lead.source && SOURCE_WORD[lead.source] ? `por ${SOURCE_WORD[lead.source]}` : null;
+  const age = urgency ? (urgency.tier === "dorada" ? `${Math.round(urgency.ageMinutes)} min` : urgency.label) : null;
+  const meta = [storeName, name ? leadPhoneLabel(lead) : null, age ? `entró hace ${age}${via ? ` ${via}` : ""}` : via]
+    .filter(Boolean)
+    .join(" · ");
+
+  const cart = typeof context.cart === "object" ? context.cart : null;
+  const asked = askedOf(lead, product, cart?.lines ?? []);
+  const waitingPhoto = context.cart === "loading" && !!lead.draft_order_gid;
+  const botNote = (lead.handoff_context ?? "").trim();
+  const firstMessage = (lead.first_inbound_text ?? "").trim();
+  const showFirst = !botNote && !!firstMessage && !asked?.lines.some((l) => l.title.includes(firstMessage));
+  const history = context.history;
+  const recurrent = typeof history === "object" && !!history && (history.orderCount > 0 || history.recentOrders.length > 0);
+
+  const street = usableAddress(lead.address1);
+  const place = [...new Set([lead.district, lead.province ?? lead.region].map((v) => v?.trim()).filter(Boolean))].join(", ");
+  // «provincia» o «lima» solo cuando el lugar no lo dice ya («Miraflores, Lima · lima»).
+  const coverageLabel = coverage && coverage !== "sin_identificar" ? LEAD_COVERAGES.find((c) => c.key === coverage)?.label : null;
+  const coverageWord = coverageLabel && !place.toLowerCase().includes(coverageLabel.toLowerCase()) ? coverageLabel.toLowerCase() : null;
+  const delivery = [street, place || null, coverageWord].filter(Boolean).join(" · ");
+  const inbound = Number(lead.inbound_count ?? 0);
+  const arrived = [
+    lead.source === "meta_ad" && adName ? `Campaña «${adName}»` : SOURCE_LABEL[lead.source ?? ""] ?? "WhatsApp",
+    dayTimeLabel(lead.first_seen_at, new Date(now)),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <div className="flex min-w-0 flex-col gap-5 p-4 sm:p-5">
+      <div className="space-y-2">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 id="siguiente-lead" className="break-words text-xl font-semibold leading-7 text-ink-900 tabular-nums">
+              {title}
+            </h2>
+            {meta && <p className="mt-0.5 text-[13px] text-ink-500">{meta}</p>}
+          </div>
+          <ContactIcons lead={lead} />
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <SegmentBadge lead={lead} />
+          {urgency?.tier === "dorada" && <Badge tone="ok">{`Hora dorada · quedan ${urgency.minutesLeft} min`}</Badge>}
+          {(win === "por_vencer" || win === "critica") && <Badge tone="warn">Ventana por vencer</Badge>}
+          {win === "cerrada" && <Badge tone="crit">Sin ventana de 24 h</Badge>}
+          {recurrent && <Badge tone="brand">Cliente recurrente</Badge>}
+          <Badge tone="info" title="Las demás vendedoras ven otro lead. Se renueva sola mientras tengas Leads abierto; si lo saltas o cierras la pestaña, vuelve a la cola.">
+            Reservado para ti
+          </Badge>
+        </div>
+        {filterNote && <p>{filterNote}</p>}
+      </div>
+
+      {asked && (
+        <div className="flex gap-3.5">
+          {cart?.photoUrl ? (
+            // La foto del catálogo, ya en JPG desde /api/wa-image (mismo origen: la CSP no deja cargar el CDN de Shopify).
+            <img
+              src={cart.photoUrl}
+              alt=""
+              width={72}
+              height={72}
+              loading="lazy"
+              className="size-[72px] shrink-0 rounded-md bg-wash object-cover ring-1 ring-line"
+            />
+          ) : waitingPhoto ? (
+            <Skeleton className="size-[72px] shrink-0 rounded-md" />
+          ) : null}
+          <div className="min-w-0 space-y-1">
+            <p className="text-xs font-medium text-ink-500">{asked.label}</p>
+            {asked.lines.map((l, i) => (
+              <p key={i} className="text-sm font-semibold leading-5 text-ink-900">
+                {l.title}
+                {asked.lines.length > 1 && l.quantity && <span className="font-normal tabular-nums text-ink-500"> × {l.quantity}</span>}
+              </p>
+            ))}
+            {asked.detail && <p className="text-[13px] tabular-nums text-ink-600">{asked.detail}</p>}
+          </div>
+        </div>
+      )}
+
+      {(botNote || showFirst) && (
+        <div className="rounded-md bg-wash px-3 py-2.5">
+          <p className="text-xs font-medium text-ink-500">{botNote ? "Lo que dijo al bot" : "Su primer mensaje"}</p>
+          <p className="mt-0.5 line-clamp-4 text-[13px] leading-5 text-ink-900">{botNote || `«${firstMessage}»`}</p>
+        </div>
+      )}
+
+      <dl className="grid grid-cols-[112px_minmax(0,1fr)] gap-x-3 gap-y-2.5 border-t border-line pt-4">
+        <Row label="Pedidos antes">
+          <PriorOrders history={history} />
+        </Row>
+        <Row label="Llamadas">
+          <CallsLine calls={context.calls} now={now} />
+        </Row>
+        <Row label="WhatsApp">
+          {inbound > 0 ? (
+            <span>
+              Escribió {inbound} {inbound === 1 ? "vez" : "veces"}
+              {lead.last_inbound_at && <span className="text-ink-600"> · la última {dayTimeLabel(lead.last_inbound_at, new Date(now))}</span>}
+            </span>
+          ) : (
+            <span className="text-ink-700">No ha escrito todavía</span>
+          )}
+        </Row>
+        <Row label="Entrega">
+          {delivery ? <span>{delivery}</span> : <span className="text-ink-700">Sin datos todavía</span>}
+          {!street && (
+            <span className="mt-0.5 flex items-center gap-1 text-xs text-warn-fg">
+              <IconMapPin aria-hidden className="size-3.5 shrink-0" />
+              Falta la dirección exacta: pídela en la llamada
+            </span>
+          )}
+        </Row>
+        <Row label="Llegó por">{arrived}</Row>
+      </dl>
+    </div>
+  );
 }
 
 export function NextLeadCard({
@@ -365,6 +672,7 @@ export function NextLeadCard({
   product,
   adName,
   storeName,
+  coverage = null,
   onOpen,
   onRegistered,
   filters = [],
@@ -377,6 +685,8 @@ export function NextLeadCard({
   adName: string | null;
   /** Solo en la vista de varias tiendas. */
   storeName: string | null;
+  /** La cobertura que la cola ya resolvió para este lead. */
+  coverage?: LeadCoverage | null;
   onOpen: (lead: LeadRow) => void;
   onRegistered: (leadId: string, update?: LeadDrawerUpdate) => void;
   /** Lo que «Más filtros» tiene puesto: también decide qué lead se reserva. */
@@ -384,8 +694,9 @@ export function NextLeadCard({
   onClearFilters?: () => void;
 }) {
   const { lead, problem } = state;
-  // «Más filtros» vive en la cabecera de la cola, debajo de esta tarjeta; lo
-  // que tenga puesto decide qué lead se reserva, así que se dice aquí también.
+  const context = useNextLeadContext(lead?.id ?? null);
+  // Lo que «Más filtros» tenga puesto decide qué lead se reserva, así que se
+  // dice aquí también.
   const filterNote =
     filters.length > 0 ? (
       <span className="text-xs text-ink-500">
@@ -433,122 +744,65 @@ export function NextLeadCard({
     );
   }
 
-  const urgency = leadUrgency(lead.first_seen_at, now);
-  const { state: win } = leadWindowInfo(lead.last_inbound_at ?? lead.last_interaction_at, now);
-  const asked = askedText(lead, product);
-  const address = addressText(lead);
-  const botNote = (lead.handoff_context ?? "").trim();
-  const firstMessage = (lead.first_inbound_text ?? "").trim();
-  const via = adName ? `por «${adName}»` : lead.source && SOURCE_WORD[lead.source] ? `por ${SOURCE_WORD[lead.source]}` : null;
-  const ageTone: BadgeTone = urgency?.tier === "dorada" ? "ok" : "neutral";
+  const hasConversation = !!(lead.kapso_conversation_id || lead.phone);
 
   return (
     <section aria-labelledby="siguiente-lead" className="overflow-hidden rounded-lg bg-white shadow-control ring-1 ring-line">
-      <div className="grid lg:grid-cols-[minmax(0,1fr)_minmax(320px,440px)]">
-        <div className="flex min-w-0 flex-col gap-4 p-4 sm:p-5">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <h2 id="siguiente-lead" className="min-w-0 truncate text-xl font-semibold leading-7 text-ink-900">
-                {lead.name || leadHandle(lead)}
-              </h2>
-              {storeName && <span className="text-xs font-medium text-ink-500">{storeName}</span>}
-              <SegmentBadge lead={lead} />
-              {urgency && (
-                <Badge tone={ageTone}>
-                  {urgency.tier === "dorada" ? `Hora dorada · quedan ${urgency.minutesLeft}\u00a0min` : `Entró hace ${urgency.label}`}
-                </Badge>
-              )}
-              {(win === "por_vencer" || win === "critica") && <Badge tone="warn">Ventana por vencer</Badge>}
-              {win === "cerrada" && <Badge tone="crit">Sin ventana de 24 h</Badge>}
-            </div>
-            <p className="mt-0.5 text-[13px] text-ink-500">
-              {leadPhoneLabel(lead)}
-              {urgency && <>{" · "}entró hace {urgency.tier === "dorada" ? `${Math.round(urgency.ageMinutes)}\u00a0min` : urgency.label}</>}
-              {via && <> {via}</>}
-            </p>
-            <p className="mt-2 flex flex-wrap items-center gap-2 text-xs text-ink-500">
-              <Badge tone="info" title="Se renueva sola mientras tengas Leads abierto; si cierras la pestaña, se suelta.">
-                Reservado para ti
-              </Badge>
-              Las demás vendedoras ven otro lead. Si lo saltas, vuelve a la cola.
-            </p>
-            {filterNote && <p className="mt-1">{filterNote}</p>}
-          </div>
+      {/* Tres columnas desde 1280 px: el cliente y lo que pregunta, registrar la
+          gestión, y el chat. Entre 1024 y 1280 el chat baja a lo ancho; en el
+          teléfono, una sola columna. */}
+      <div className="grid lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] xl:min-h-[28rem] xl:grid-cols-[minmax(0,1.3fr)_minmax(0,0.95fr)_minmax(320px,0.95fr)]">
+        <ClientColumn
+          lead={lead}
+          now={now}
+          product={product}
+          adName={adName}
+          storeName={storeName}
+          coverage={coverage}
+          context={context}
+          filterNote={filterNote}
+        />
 
-          {(asked || address || botNote || firstMessage) && (
-            <dl className="grid grid-cols-[112px_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-[13px]">
-              {asked && (
-                <>
-                  <dt className="text-ink-500">Lo que pidió</dt>
-                  <dd className="min-w-0 text-ink-900">{asked}</dd>
-                </>
-              )}
-              {address && (
-                <>
-                  <dt className="text-ink-500">Entrega</dt>
-                  <dd className="min-w-0 text-ink-900">{address}</dd>
-                </>
-              )}
-              {botNote ? (
-                <>
-                  <dt className="text-ink-500">Resumen del bot</dt>
-                  <dd className="line-clamp-3 min-w-0 text-ink-700">{botNote}</dd>
-                </>
-              ) : (
-                firstMessage &&
-                !asked?.includes(firstMessage) && (
-                  <>
-                    <dt className="text-ink-500">Primer mensaje</dt>
-                    <dd className="line-clamp-2 min-w-0 text-ink-700">«{firstMessage}»</dd>
-                  </>
-                )
-              )}
-            </dl>
-          )}
-
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Sin número no se ofrece llamar: un `tel:` vacío abre el marcador
-                en blanco. A esos se les escribe desde el chat (BSUID). */}
-            {leadCanCall(lead) && (
-              <>
-                <a href={`tel:+${lead.phone}`} className={opsButtonClass("primary", "lg")}>
-                  <IconPhone />
-                  Llamar
-                </a>
-                <a href={`https://wa.me/${lead.phone}`} target="_blank" rel="noreferrer" className={opsButtonClass("secondary", "lg")}>
-                  <IconWhatsApp />
-                  WhatsApp
-                </a>
-              </>
-            )}
-            <OpsButton size="lg" onClick={() => onOpen(lead)}>
-              Abrir ficha
-            </OpsButton>
-            <OpsButton size="lg" variant="ghost" onClick={state.skip}>
-              Saltar
-            </OpsButton>
-          </div>
-
-          <div className="border-t border-line pt-4">
-            <h3 className="mb-2 text-xs font-semibold text-ink-600">Resultado de la llamada</h3>
-            <NextCallForm
-              key={lead.id}
-              leadId={lead.id}
-              variant="card"
-              submitLabel="Guardar y siguiente"
-              onRegistered={(update) => onRegistered(lead.id, update)}
-            />
-          </div>
-        </div>
-        <div className="flex min-w-0 flex-col border-t border-line bg-wash p-4 sm:p-5 lg:border-t-0 lg:shadow-[inset_1px_0_0_var(--color-line)]">
-          <NextChat
+        <div className="@container flex min-w-0 flex-col gap-3 border-t border-line p-4 sm:p-5 lg:border-t-0 lg:shadow-[inset_1px_0_0_var(--color-line)]">
+          <h3 className="text-sm font-semibold text-ink-900">Registrar la gestión</h3>
+          <NextCallForm
             key={lead.id}
             leadId={lead.id}
-            lastInboundAt={lead.last_inbound_at}
-            hasConversation={!!(lead.kapso_conversation_id || lead.phone)}
-            onSent={(update) => onRegistered(lead.id, update)}
             variant="card"
+            submitLabel="Guardar y siguiente"
+            onRegistered={(update) => onRegistered(lead.id, update)}
+            footer={
+              <div className="flex items-center justify-between gap-2">
+                <OpsButton size="sm" onClick={() => onOpen(lead)}>
+                  Abrir ficha
+                </OpsButton>
+                <OpsButton size="sm" variant="ghost" onClick={state.skip}>
+                  Saltar este lead
+                </OpsButton>
+              </div>
+            }
           />
+        </div>
+
+        {/* El chat no decide el alto de la tarjeta: se desplaza dentro del que
+            marcan las otras dos columnas. */}
+        <div className="relative h-[30rem] min-w-0 border-t border-line bg-wash lg:col-span-2 xl:col-span-1 xl:h-auto xl:border-t-0 xl:shadow-[inset_1px_0_0_var(--color-line)]">
+          <div className="absolute inset-0 flex flex-col p-4">
+            {hasConversation ? (
+              <NextChat
+                key={lead.id}
+                leadId={lead.id}
+                lastInboundAt={lead.last_inbound_at}
+                hasConversation={hasConversation}
+                onSent={(update) => onRegistered(lead.id, update)}
+                variant="card"
+              />
+            ) : (
+              <p className="m-auto max-w-[32ch] text-center text-[13px] text-ink-500">
+                Este lead no tiene conversación de WhatsApp. Llámalo, o escríbele desde la ficha cuando deje su número.
+              </p>
+            )}
+          </div>
         </div>
       </div>
     </section>
