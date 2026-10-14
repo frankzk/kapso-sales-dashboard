@@ -2409,7 +2409,10 @@ escribe, no abre casos ni toma el candado. Sin variables de entorno nuevas.
    `order_master_store_coverage_idx`, unos 18 ms sobre ~8,3k filas) y sin
    ningún `drop` ni `begin`/`commit`: es `create or replace` y se puede
    repetir. Se aplica también con `apply_migration` de Supabase.
-   **Pendiente de aplicar en producción.**
+   **Ya aplicada en producción el 14-10-2026** (historial
+   `20261014131234 0256_lima_open_counts`). Comprobado ese día: 8.358 pedidos (1.968 por
+   entregar y 6.390 por cerrar), y `anon` y `authenticated` no la pueden
+   ejecutar.
 2. **Comprobar en producción**, solo lectura:
    - `select sum(total) from order_master_lima_open_counts(array(select id from stores)::uuid[], (now() at time zone 'America/Lima')::date);`
      da unos 8,3k (el 14-10-2026: 1.940 por entregar y 6.393 por cerrar);
