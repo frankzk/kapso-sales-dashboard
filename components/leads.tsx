@@ -406,6 +406,10 @@ function YapeKindBadge({ lead }: { lead: LeadRow }) {
   );
 }
 
+/** Una fila de chips: cabe entera en 1280 px; si no, se desplaza por dentro sin barra a la vista. */
+const CHIP_ROW =
+  "flex min-w-0 items-center gap-1.5 overflow-x-auto py-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden";
+
 const ROW_ACTION =
   "inline-grid size-8 place-items-center rounded-md bg-white text-ink-600 shadow-control ring-1 ring-inset ring-line-strong hover:text-ink-900";
 
@@ -1529,29 +1533,38 @@ export function LeadsBoard({
             defaultStoreId={storeId === "all" ? null : storeId}
             onAbrir={(leadId) => abrirLeadPorId(leadId)}
           />
-          <OpsButton
-            variant="ghost"
-            onClick={downloadMetaAudience}
-            disabled={allStores || !audienceRows.length || exportingAudience}
-            title={
-              allStores
-                ? "Elige una tienda para exportar. Un público personalizado se sube a UNA cuenta publicitaria, así que mezclar las dos marcas da un público más grande que rinde peor."
-                : !audienceRows.length
-                  ? "No hay celulares válidos en el filtro actual"
-                  : leadsComplete
-                    ? `Descarga ${audienceRows.length} celular(es) con el formato de Meta (Públicos personalizados → Lista de clientes). Exporta exactamente los leads filtrados en pantalla.`
-                    : "Descarga TODOS los leads del filtro actual (no solo los visibles) con el formato de Meta (Públicos personalizados → Lista de clientes)."
-            }
-          >
-            <IconDownload />
-            {exportingAudience ? "Preparando…" : "Audiencia Meta"}
-            {/* El contador solo se muestra cuando lo cargado ES el universo
-                completo; si no, un "200" haría creer que el público es de 200
-                cuando el export trae todos. */}
-            {!exportingAudience && leadsComplete && audienceRows.length > 0 && (
-              <span className="font-normal tabular-nums text-ink-500">{audienceRows.length.toLocaleString("es-PE")}</span>
-            )}
-          </OpsButton>
+          {/* En la vista combinada no se exporta: un público se sube a UNA
+              cuenta publicitaria. Se dice a la vista, no solo en el título. */}
+          {allStores ? (
+            <span className="inline-flex h-9 items-center gap-2 text-[13px] text-ink-500">
+              <IconDownload className="size-4" />
+              Audiencia Meta: elige una tienda
+            </span>
+          ) : (
+            <OpsButton
+              variant="ghost"
+              onClick={downloadMetaAudience}
+              disabled={allStores || !audienceRows.length || exportingAudience}
+              title={
+                allStores
+                  ? "Elige una tienda para exportar. Un público personalizado se sube a UNA cuenta publicitaria, así que mezclar las dos marcas da un público más grande que rinde peor."
+                  : !audienceRows.length
+                    ? "No hay celulares válidos en el filtro actual"
+                    : leadsComplete
+                      ? `Descarga ${audienceRows.length} celular(es) con el formato de Meta (Públicos personalizados → Lista de clientes). Exporta exactamente los leads filtrados en pantalla.`
+                      : "Descarga TODOS los leads del filtro actual (no solo los visibles) con el formato de Meta (Públicos personalizados → Lista de clientes)."
+              }
+            >
+              <IconDownload />
+              {exportingAudience ? "Preparando…" : "Audiencia Meta"}
+              {/* El contador solo se muestra cuando lo cargado ES el universo
+                  completo; si no, un "200" haría creer que el público es de 200
+                  cuando el export trae todos. */}
+              {!exportingAudience && leadsComplete && audienceRows.length > 0 && (
+                <span className="font-normal tabular-nums text-ink-500">{audienceRows.length.toLocaleString("es-PE")}</span>
+              )}
+            </OpsButton>
+          )}
         </div>
       </header>
 
@@ -1567,7 +1580,11 @@ export function LeadsBoard({
           Leads). Arriba, qué lista; abajo, qué leads dentro de ella. Lo que no
           entra va a «Más filtros». */}
       <div className="flex flex-col gap-2">
-        <div className="flex min-w-0 items-center gap-2 overflow-x-auto py-0.5">
+        {/* Con los números reales, cada fila llena casi los 976 px que quedan a
+            1280: por eso «Más filtros» vive en la cabecera de la cola, junto a
+            «Orden», y no aquí. Si algún día no cabe (un teléfono, cifras de cinco
+            dígitos), la fila se desplaza por dentro sin barra a la vista. */}
+        <div className={CHIP_ROW}>
           <QueueChip
             label="Sin llamar"
             count={inQueue ? stateCounts.sin_llamar : counts.sin_llamar}
@@ -1581,7 +1598,7 @@ export function LeadsBoard({
             active={inQueue && queueState === "seguimiento"}
             onClick={() => pickQueueState("seguimiento")}
           />
-          <span aria-hidden className="mx-1 h-5 w-px shrink-0 bg-line-strong" />
+          <span aria-hidden className="mx-0.5 h-5 w-px shrink-0 bg-line-strong" />
           <AttentionPill
             icon={IconFlash}
             label="Atender ahora"
@@ -1598,7 +1615,7 @@ export function LeadsBoard({
             onClick={() => navigateToView(view === "yape" ? "por_llamar" : "yape")}
             hint="Pagos por verificar y envíos por agencia"
           />
-          <span aria-hidden className="mx-1 h-5 w-px shrink-0 bg-line-strong" />
+          <span aria-hidden className="mx-0.5 h-5 w-px shrink-0 bg-line-strong" />
           {REVIEW_VIEWS.map((v) => (
             <ChoiceChip
               key={v.key}
@@ -1608,23 +1625,13 @@ export function LeadsBoard({
               onClick={() => navigateToView(view === v.key ? "por_llamar" : v.key)}
             />
           ))}
-          <span className="ml-auto shrink-0 pl-2">
-            <FilterPill
-              ref={filtersPillRef}
-              label="Más filtros"
-              value={refinementLabels.length ? refinementLabels.join(", ") : null}
-              expanded={filtersOpen}
-              onClick={() => setFiltersOpen((o) => !o)}
-              onClear={hasActiveFilters ? clearRefinements : undefined}
-            />
-          </span>
         </div>
 
         {/* Segmento y cobertura, scopeados al estado activo (en «Sin llamar»
             suman lo que hay sin llamar, no la cola entera). Sin «Todos»: volver
             a tocar el chip elegido lo quita. */}
         {inQueue && (
-          <div className="flex min-w-0 items-center gap-x-6 gap-y-2 overflow-x-auto py-0.5">
+          <div className={cn(CHIP_ROW, "gap-x-5")}>
             <ChipGroup label="Segmento">
               {/* Sale de QUEUE_BUCKETS, no de una lista escrita acá: al fusionar
                   `distrito` en `interes`, una lista a mano siguió pidiendo una
@@ -1950,19 +1957,30 @@ export function LeadsBoard({
               </span>
             )}
           </h2>
-          {view === "por_llamar" && queueState === "sin_llamar" && !searchMode && (
-            <label className="flex items-center gap-2 text-[13px] text-ink-600">
-              Orden
-              <select
-                value={sortMode}
-                onChange={(event) => setSortMode(event.currentTarget.value as typeof sortMode)}
-                className={cn(FIELD_BOX, "h-8 w-auto py-0 pl-2.5 pr-8 text-[13px] font-medium")}
-              >
-                <option value="prioridad">Lo que más cierra</option>
-                <option value="reciente">Más recientes</option>
-              </select>
-            </label>
-          )}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            {/* Lo que afina y ordena la lista vive con la lista. */}
+            <FilterPill
+              ref={filtersPillRef}
+              label="Más filtros"
+              value={refinementLabels.length ? refinementLabels.join(", ") : null}
+              expanded={filtersOpen}
+              onClick={() => setFiltersOpen((o) => !o)}
+              onClear={hasActiveFilters ? clearRefinements : undefined}
+            />
+            {view === "por_llamar" && queueState === "sin_llamar" && !searchMode && (
+              <label className="flex items-center gap-2 text-[13px] text-ink-600">
+                Orden
+                <select
+                  value={sortMode}
+                  onChange={(event) => setSortMode(event.currentTarget.value as typeof sortMode)}
+                  className={cn(FIELD_BOX, "h-8 w-auto py-0 pl-2.5 pr-8 text-[13px] font-medium")}
+                >
+                  <option value="prioridad">Lo que más cierra</option>
+                  <option value="reciente">Más recientes</option>
+                </select>
+              </label>
+            )}
+          </div>
         </div>
         {/* Cabecera de columnas — solo md+; en el teléfono cada fila se apila. */}
         <div className="hidden grid-cols-[minmax(0,1fr)_184px_112px_80px] items-center gap-4 px-4 py-2 text-xs font-semibold text-ink-600 shadow-[inset_0_-1px_0_var(--color-line)] md:grid">

@@ -95,6 +95,7 @@ import {
   type YapeKind,
   leadHandle,
   leadCanCall,
+  leadPhoneLabel,
 } from "@/lib/leads";
 import {
   confirmLeadWon,
@@ -596,7 +597,7 @@ export function LeadDrawer({
           {/* El número y «copiar» parten juntos: sueltos, el número bajaba
               solo y el botón quedaba colgando en la línea siguiente. */}
           <span className="inline-flex items-center gap-1 whitespace-nowrap">
-            <span className="tabular-nums text-ink-700">{handle}</span>
+            <span className="tabular-nums text-ink-700">{leadPhoneLabel(lead)}</span>
             <button
               type="button"
               onClick={() => copy(handle)}
@@ -1374,7 +1375,7 @@ export function WhatsappChat({
     if (day !== lastDay) {
       rows.push(
         <div key={`day-${i}`} className="flex justify-center py-1">
-          <span className="rounded-full bg-white px-2.5 py-0.5 text-[11px] font-medium text-ink-500 ring-1 ring-line">
+          <span className="rounded-full bg-white px-2.5 py-0.5 text-xs font-medium text-ink-500 ring-1 ring-line">
             {chatDayLabel(m.at)}
           </span>
         </div>,
@@ -1403,7 +1404,7 @@ export function WhatsappChat({
       }
     >
       {/* Cabecera: qué es, cuántos mensajes y desde qué número; buscar y actualizar. */}
-      <div className={cn("flex items-center justify-between gap-2", card ? "pb-2" : "px-4 py-1.5 shadow-[inset_0_-1px_0_var(--color-line)]")}>
+      <div className={cn("flex items-center justify-between gap-2", card ? "pb-2 shadow-[inset_0_-1px_0_var(--color-line)]" : "px-4 py-1.5 shadow-[inset_0_-1px_0_var(--color-line)]")}>
         <p className="min-w-0 truncate text-sm font-semibold text-ink-900">
           Conversación
           {headContext.length > 0 && (
@@ -1626,7 +1627,7 @@ function ChatBubble({
   const ticks = outbound ? statusTicks(msg.status) : null;
   // La hora va al final del texto, como en WhatsApp; sin texto, sola a la derecha.
   const stamp = (
-    <span className="ml-2 inline-flex translate-y-0.5 items-center gap-1 whitespace-nowrap align-baseline text-[11px] leading-none tabular-nums text-ink-500">
+    <span className="ml-2 inline-flex translate-y-0.5 items-center gap-1 whitespace-nowrap align-baseline text-xs leading-none tabular-nums text-ink-500">
       {chatTime(msg.at)}
       {ticks && (
         <span className={ticks.cls} title={ticks.label} role="img" aria-label={ticks.label}>
@@ -3261,15 +3262,15 @@ export function CallForm({
             {options}
           </select>
         </div>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-          <input
-            name="next_followup_at"
-            type="datetime-local"
-            aria-label="Reprogramar seguimiento"
-            title="Próximo seguimiento"
-            className={cn(FIELD_BOX, "h-8 w-full px-3 tabular-nums")}
-          />
-          <input name="note" placeholder="Nota rápida (opcional)" aria-label="Nota" className={cn(FIELD_BOX, "h-8 w-full px-3")} />
+        <div className="grid grid-cols-1 items-end gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+          <label className="block min-w-0">
+            <span className="mb-1 block text-xs text-ink-600">Próximo seguimiento</span>
+            <input name="next_followup_at" type="datetime-local" className={cn(FIELD_BOX, "h-8 w-full px-3 tabular-nums")} />
+          </label>
+          <label className="block min-w-0">
+            <span className="mb-1 block text-xs text-ink-600">Nota</span>
+            <input name="note" placeholder="Opcional" className={cn(FIELD_BOX, "h-8 w-full px-3")} />
+          </label>
           <OpsButton type="submit" variant="primary" size="sm" disabled={pending}>
             {pending ? "Guardando…" : submitLabel}
           </OpsButton>

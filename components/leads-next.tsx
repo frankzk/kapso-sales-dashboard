@@ -15,6 +15,7 @@ import {
   leadCanCall,
   leadHandle,
   leadHook,
+  leadPhoneLabel,
   leadQueueBucket,
   leadWindowInfo,
   categoryOf,
@@ -27,7 +28,6 @@ import { claimLead, releaseLead } from "@/app/dashboard/leads/actions";
 import type { LeadDrawerUpdate } from "@/components/leads-drawer";
 import { Badge, Banner, OpsButton, Skeleton, opsButtonClass, type BadgeTone } from "@/components/ops-ui";
 import { IconPhone, IconWhatsApp } from "@/components/icons";
-import { cn } from "@/components/ui";
 
 // El chat y el resultado son los de la ficha, cargados aparte: la cola no paga
 // su peso en el primer pintado (test/leads-bundle.test.ts).
@@ -335,14 +335,6 @@ const SOURCE_WORD: Record<string, string> = {
   abandoned_browse: "una búsqueda en la web",
 };
 
-/** «988-805-509» o el identificador que tenga (usuario de WhatsApp, BSUID). */
-function phoneText(lead: LeadRow): string {
-  const digits = (lead.phone ?? "").replace(/\D/g, "");
-  const local = digits.length === 11 && digits.startsWith("51") ? digits.slice(2) : digits;
-  if (local.length === 9) return `+51 ${local.slice(0, 3)} ${local.slice(3, 6)} ${local.slice(6)}`;
-  return leadHandle(lead);
-}
-
 function soles(value: number): string {
   return `S/\u00a0${value.toLocaleString("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
@@ -435,7 +427,7 @@ export function NextLeadCard({
         <div className="flex min-w-0 flex-col gap-4 p-4 sm:p-5">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <h2 id="siguiente-lead" className="min-w-0 truncate text-[22px] font-semibold leading-8 text-ink-900">
+              <h2 id="siguiente-lead" className="min-w-0 truncate text-xl font-semibold leading-7 text-ink-900">
                 {lead.name || leadHandle(lead)}
               </h2>
               {storeName && <span className="text-xs font-medium text-ink-500">{storeName}</span>}
@@ -449,7 +441,7 @@ export function NextLeadCard({
               {win === "cerrada" && <Badge tone="crit">Sin ventana de 24 h</Badge>}
             </div>
             <p className="mt-0.5 text-[13px] text-ink-500">
-              {phoneText(lead)}
+              {leadPhoneLabel(lead)}
               {urgency && <>{" · "}entró hace {urgency.tier === "dorada" ? `${Math.round(urgency.ageMinutes)}\u00a0min` : urgency.label}</>}
               {via && <> {via}</>}
             </p>
@@ -526,7 +518,7 @@ export function NextLeadCard({
             />
           </div>
         </div>
-        <div className={cn("flex min-w-0 flex-col bg-wash", "border-t border-line lg:border-t-0 lg:shadow-[inset_1px_0_0_var(--color-line)]")}>
+        <div className="flex min-w-0 flex-col border-t border-line bg-wash p-4 sm:p-5 lg:border-t-0 lg:shadow-[inset_1px_0_0_var(--color-line)]">
           <NextChat
             key={lead.id}
             leadId={lead.id}

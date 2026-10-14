@@ -472,6 +472,18 @@ export function leadHandle(lead: LeadIdentity): string {
  * el pedido de Shopify. Escribirle por WhatsApp sí se puede — Kapso lo alcanza
  * por BSUID — y por eso ésa pasa a ser la acción principal de estos leads.
  */
+/**
+ * Cómo se LEE el identificador de un lead: un celular peruano en grupos
+ * («+51 988 805 509»), cualquier otro como `leadHandle`. Solo para mostrar: lo
+ * que se copia o se marca sigue siendo el número tal cual.
+ */
+export function leadPhoneLabel(lead: LeadIdentity): string {
+  const digits = (lead.phone ?? "").replace(/\D/g, "");
+  const local = digits.length === 11 && digits.startsWith("51") ? digits.slice(2) : digits;
+  if (local.length === 9 && local.startsWith("9")) return `+51 ${local.slice(0, 3)} ${local.slice(3, 6)} ${local.slice(6)}`;
+  return leadHandle(lead);
+}
+
 export function leadCanCall(lead: LeadIdentity): boolean {
   return Boolean(lead.phone?.trim());
 }

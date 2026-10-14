@@ -152,7 +152,7 @@ export function AdProductsBoard({
         }
       />
 
-      <p className="max-w-[760px] text-[13px] leading-5 text-ink-600">
+      <p className="max-w-[68ch] text-[13px] leading-5 text-ink-600">
         Quien llega por un anuncio nunca pasa por la ficha del producto, así que su lead no trae ninguno. Declararlo acá
         lo pone en el mismo producto que los que sí llegaron por la ficha. Si un creativo se reutilizó para otra cosa, pon
         la fecha desde la que vale: cada lead toma lo que el anuncio vendía el día que entró, y el pasado no se reescribe.
@@ -370,7 +370,12 @@ function DeclararPanel({
     const target = plano(ad.suggested_label);
     return handles.find((h) => plano(productLabel(h)) === target) ?? "";
   }, [ad.suggested_label, handles]);
-  const [handle, setHandle] = useState(ad.declaraciones.length ? "" : sugerido);
+  // El campo muestra el NOMBRE del producto; lo que se guarda es su handle.
+  const porNombre = useMemo(() => new Map(handles.map((h) => [plano(productLabel(h)), h])), [handles]);
+  const [texto, setTexto] = useState(ad.declaraciones.length || !sugerido ? "" : productLabel(sugerido));
+  const escrito = texto.trim();
+  const resuelto = porNombre.get(plano(escrito)) ?? (handles.includes(escrito) ? escrito : null);
+  const handle = resuelto ?? escrito;
   const [conFecha, setConFecha] = useState(ad.declaraciones.length > 0);
   const [desde, setDesde] = useState("");
   const hoy = new Date().toISOString().slice(0, 10);
@@ -386,7 +391,7 @@ function DeclararPanel({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const listo = !!handle.trim() && (!conFecha || !!desde);
+  const listo = !!handle && (!conFecha || !!desde);
 
   return (
     <SidePanel
@@ -416,25 +421,25 @@ function DeclararPanel({
             <IconSearch className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-ink-500" />
             <input
               list="handles-conocidos"
-              value={handle}
-              onChange={(e) => setHandle(e.target.value)}
+              value={texto}
+              onChange={(e) => setTexto(e.target.value)}
               placeholder="Buscar el producto"
               className={cn(FIELD_BOX, "h-9 w-full pl-8 pr-3 pointer-coarse:h-11")}
             />
           </span>
           <span className="mt-1 block text-xs text-ink-500">
-            {handle && handles.includes(handle.trim())
-              ? productLabel(handle.trim())
-              : "De los productos que ya aparecen en los enlaces: así cae en el mismo grupo que la ficha."}
+            {resuelto
+              ? `Se guarda como «${resuelto}», el mismo producto que la ficha.`
+              : escrito
+                ? "No está entre los productos de los enlaces: se guarda tal cual lo escribiste."
+                : "De los productos que ya aparecen en los enlaces: así cae en el mismo grupo que la ficha."}
           </span>
         </label>
         {/* Los handles que ya existen en links. Elegir de esta lista es lo que
             garantiza que el anuncio caiga en el MISMO balde que la ficha. */}
         <datalist id="handles-conocidos">
           {handles.map((h) => (
-            <option key={h} value={h}>
-              {productLabel(h)}
-            </option>
+            <option key={h} value={productLabel(h)} />
           ))}
         </datalist>
 
@@ -463,7 +468,7 @@ function DeclararPanel({
           <OpsButton variant="ghost" onClick={onClose}>
             Cancelar
           </OpsButton>
-          <OpsButton variant="primary" disabled={busy || !listo} onClick={() => onDeclare(handle.trim(), conFecha ? desde : null)}>
+          <OpsButton variant="primary" disabled={busy || !listo} onClick={() => onDeclare(handle, conFecha ? desde : null)}>
             {ad.declaraciones.length ? "Añadir periodo" : "Declarar"}
           </OpsButton>
         </div>

@@ -9,6 +9,7 @@ import {
   pushRecent,
   searchEmojis,
 } from "@/lib/emoji";
+import { IconSmile } from "@/components/icons";
 
 /**
  * El selector de emojis del compositor de Leads.
@@ -105,9 +106,9 @@ export function EmojiPicker({
         aria-label="Emojis"
         aria-expanded={open}
         aria-haspopup="dialog"
-        className="rounded-full p-2 text-lg leading-none text-slate-500 hover:bg-slate-100 disabled:opacity-60"
+        className="grid size-8 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900 disabled:opacity-60 pointer-coarse:size-11"
       >
-        😊
+        <IconSmile className="size-[18px]" />
       </button>
 
       {open && (
