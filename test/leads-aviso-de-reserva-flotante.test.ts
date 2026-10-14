@@ -15,7 +15,8 @@ const ui = readFileSync(resolve(process.cwd(), "components/leads.tsx"), "utf8");
 
 describe("el mismo estado, dos sitios", () => {
   it("el banner en la cabecera sigue existiendo", () => {
-    expect(ui).toContain('className="rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700"');
+    // El aviso de la página es el Banner del mundo de operación (DESIGN.md).
+    expect(ui).toContain('<Banner tone="crit" role="alert" title="No se pudo tomar el lead">\n          {banner}');
   });
 
   it("y además hay un popup con rol de diálogo de alerta, alimentado por `banner`", () => {

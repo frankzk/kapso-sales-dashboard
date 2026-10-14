@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import { getAccessibleStores, getAdNames, getCurrentUser, getWaNumbers } from "@/lib/access";
+import { getAccessibleStores, getAdNames, getCurrentUser, getUserRoleSummary, getWaNumbers } from "@/lib/access";
 import {
   ALL_STORES,
   LEAD_VIEWS,
@@ -131,6 +131,9 @@ async function LeadsContent({
   // mismo universo que el gráfico; las demás vistas mantienen el tope estándar.
   const leadsPromise = getStoreLeads(scope, view, leadsViewLimit(view));
   const userPromise = getCurrentUser();
+  // El siguiente lead (MOM §11) se reserva solo a quien vende: quien solo
+  // supervisa la cola no retiene leads por mirarla.
+  const rolesPromise = getUserRoleSummary().then(({ roles }) => roles);
   // These lookups depend only on the list, so pipeline them as soon as that
   // promise settles instead of waiting for counts and user first.
   const adNamesPromise = leadsPromise.then((rows) => getAdNames(rows.map((l) => l.ad_id)));
@@ -165,6 +168,7 @@ async function LeadsContent({
     priorCoverage,
     coverageRules,
     shopifyLocations,
+    roles,
   ] = await Promise.all([
     snapshotPromise,
     leadsPromise,
@@ -176,6 +180,7 @@ async function LeadsContent({
     priorCoveragePromise,
     coverageRulesPromise,
     shopifyLocationsPromise,
+    rolesPromise,
   ]);
 
   return (
@@ -206,6 +211,7 @@ async function LeadsContent({
       initialOpenId={typeof sp.open === "string" ? sp.open : null}
       initialOpenNonce={typeof sp.oid === "string" ? sp.oid : null}
       currentUserId={user?.id ?? ""}
+      canHoldNext={roles.includes("vendedora")}
       leadsComplete={leadsViewLimit(view) === null}
     />
   );

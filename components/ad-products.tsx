@@ -8,18 +8,23 @@
 //
 // LO QUE LA PANTALLA NO HACE: aplicar la sugerencia sola. El histórico propone
 // —«de este anuncio suelen comprar Beewax, 98 % sobre 44 pedidos»— y la persona
-// declara o no. Un anuncio sin declarar deja a sus leads en «Sin producto», que
-// es la verdad, en vez de en un producto probable, que es una mentira que nadie
-// puede ver.
+// declara o no. El panel trae el producto sugerido ya escrito, pero declararlo
+// sigue siendo un toque de alguien. Un anuncio sin declarar deja a sus leads en
+// «Sin producto», que es la verdad, en vez de en un producto probable, que es
+// una mentira que nadie puede ver.
 //
 // Y LA DECLARACIÓN TIENE FECHA. Un creativo que funciona se reutiliza para otro
 // producto —el del café que hoy vende el gel de limpieza de lengua—, así que un
 // anuncio puede tener varios periodos. Cada lead toma el que valía el día que
 // entró; declarar hoy no reescribe lo que ya se trabajó.
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { Card, EmptyState, cn } from "@/components/ui";
+import { cn } from "@/components/ui";
+import { Badge, Banner, ChoiceChip, FIELD, FIELD_BOX, OpsButton, SidePanel, StatusCard, type BadgeTone } from "@/components/ops-ui";
+import { ChoicePill } from "@/components/facet-pill";
+import { CopyButton } from "@/components/copy-button";
+import { IconSearch } from "@/components/icons";
 import {
   FUERZA_LABEL,
   fuerzaEvidencia,
@@ -48,11 +53,16 @@ function desdeLabel(validFrom: string): string {
     : `desde ${new Date(t).toLocaleDateString("es-PE", { day: "2-digit", month: "short", year: "numeric" })}`;
 }
 
-const FUERZA_STYLE: Record<string, string> = {
-  fuerte: "bg-emerald-50 text-emerald-700",
-  dudosa: "bg-amber-50 text-amber-700",
-  ninguna: "bg-slate-100 text-slate-500",
+const FUERZA_TONE: Record<string, BadgeTone> = {
+  fuerte: "ok",
+  dudosa: "warn",
+  ninguna: "neutral",
 };
+
+/** Para comparar el título sugerido con el nombre de un handle: sin tildes ni mayúsculas. */
+const plano = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+
+type Vista = "pendientes" | "declarados" | "todos";
 
 export function AdProductsBoard({
   ads,
@@ -68,19 +78,19 @@ export function AdProductsBoard({
   const router = useRouter();
   const [busy, start] = useTransition();
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [draft, setDraft] = useState<Record<string, string>>({});
-  const [desde, setDesde] = useState<Record<string, string>>({});
-  const hoy = new Date().toISOString().slice(0, 10);
   const storeName = useMemo(() => {
     const byId = new Map(stores.map((s) => [s.id, s.name]));
     return (id: string) => byId.get(id) ?? "—";
   }, [stores]);
 
-  const run = (fn: () => Promise<{ ok: boolean; error?: string; message?: string }>) =>
+  const run = (fn: () => Promise<{ ok: boolean; error?: string; message?: string }>, after?: () => void) =>
     start(async () => {
       const res = await fn();
       setMsg({ ok: res.ok, text: res.error ?? res.message ?? "" });
-      if (res.ok) router.refresh();
+      if (res.ok) {
+        after?.();
+        router.refresh();
+      }
     });
 
   // Cuántos leads dependen de una firma que todavía no existe. Es el número que
@@ -90,195 +100,402 @@ export function AdProductsBoard({
     [ads],
   );
   const declarados = useMemo(() => ads.filter((a) => a.declaraciones.length).length, [ads]);
+  const sinDeclarar = ads.length - declarados;
+
+  const [vista, setVista] = useState<Vista>(sinDeclarar > 0 ? "pendientes" : "todos");
+  const [tienda, setTienda] = useState("");
+  const [query, setQuery] = useState("");
+  const q = plano(query);
+  const shown = ads.filter(
+    (a) =>
+      (vista === "todos" || (vista === "pendientes" ? !a.declaraciones.length : a.declaraciones.length > 0)) &&
+      (!tienda || a.store_id === tienda) &&
+      (!q || plano(a.ad_headline ?? "").includes(q) || a.ad_id.includes(query.trim())),
+  );
+
+  const [abierto, setAbierto] = useState<string | null>(null);
+  const open = abierto ? ads.find((a) => `${a.store_id}::${a.ad_id}` === abierto) ?? null : null;
 
   if (!ads.length) {
-    return <EmptyState title="No hay anuncios con leads en la cola" />;
+    return (
+      <div className="flex flex-col gap-4">
+        <Header pendientes={0} declarados={0} total={0} canEdit={false} busy={false} onRefresh={() => undefined} />
+        <p className="rounded-lg bg-white px-4 py-6 text-sm text-ink-500 shadow-control ring-1 ring-line">
+          No hay anuncios con leads en la cola.
+        </p>
+      </div>
+    );
   }
 
-  return (
-    <div className="space-y-4">
-      <Card className="flex flex-wrap items-center justify-between gap-3 p-4">
-        <div>
-          <h2 className="text-sm font-semibold text-slate-800">Qué vende cada anuncio</h2>
-          <p className="mt-1 text-xs text-slate-500">
-            Quien llega por un anuncio nunca pasa por la ficha del producto, así que su lead
-            no trae ninguno. Declararlo acá hace que caiga en el mismo producto que los que
-            sí llegaron por la ficha. Si un creativo se reutilizó para vender otra cosa, pon
-            la fecha desde la que vale: cada lead toma lo que el anuncio vendía el día que
-            entró, y el pasado no se reescribe.{" "}
-            <strong className="font-medium text-slate-700">
-              {pendientes.toLocaleString("es-PE")} leads
-            </strong>{" "}
-            esperan una firma; {declarados} de {ads.length} anuncios ya están declarados.
-          </p>
-        </div>
-        {canEdit && (
-          <button
-            disabled={busy}
-            onClick={() => run(() => refreshAdSuggestions())}
-            className="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
-          >
-            Recalcular sugerencias
-          </button>
-        )}
-      </Card>
+  const titulo = vista === "pendientes" ? "Sin declarar" : vista === "declarados" ? "Declarados" : "Todos";
 
-      {msg && (
-        <p
-          className={cn(
-            "rounded-lg px-3 py-2 text-sm",
-            msg.ok ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700",
-          )}
-        >
+  return (
+    <div className="flex flex-col gap-4">
+      <Header
+        pendientes={pendientes}
+        declarados={declarados}
+        total={ads.length}
+        canEdit={canEdit}
+        busy={busy}
+        onRefresh={() => run(() => refreshAdSuggestions())}
+        storePill={
+          stores.length > 1 ? (
+            <ChoicePill
+              label="Tienda"
+              allLabel="Todas las tiendas"
+              allValue=""
+              options={stores.map((s) => ({ value: s.id, label: s.name }))}
+              value={tienda}
+              onChange={setTienda}
+            />
+          ) : null
+        }
+      />
+
+      <p className="max-w-[760px] text-[13px] leading-5 text-ink-600">
+        Quien llega por un anuncio nunca pasa por la ficha del producto, así que su lead no trae ninguno. Declararlo acá
+        lo pone en el mismo producto que los que sí llegaron por la ficha. Si un creativo se reutilizó para otra cosa, pon
+        la fecha desde la que vale: cada lead toma lo que el anuncio vendía el día que entró, y el pasado no se reescribe.
+      </p>
+
+      {msg?.text && (
+        <Banner tone={msg.ok ? "ok" : "crit"} role={msg.ok ? "status" : "alert"}>
           {msg.text}
-        </p>
+        </Banner>
       )}
 
-      <Card className="overflow-x-auto p-0">
-        <table className="w-full min-w-[900px] text-sm">
-          <thead className="border-b border-slate-200 text-left text-xs text-slate-500">
-            <tr>
-              <th className="px-3 py-2 font-medium">Anuncio</th>
-              <th className="px-3 py-2 font-medium">Tienda</th>
-              <th className="px-3 py-2 text-right font-medium">Leads</th>
-              <th className="px-3 py-2 font-medium">Suele vender (histórico)</th>
-              <th className="px-3 py-2 font-medium">Qué vendió, y desde cuándo</th>
-              <th className="px-3 py-2 font-medium">Declarar</th>
-              <th className="px-3 py-2" />
-            </tr>
-          </thead>
-          <tbody>
-            {ads.map((ad) => {
-              const key = `${ad.store_id}::${ad.ad_id}`;
-              const fuerza = fuerzaEvidencia(ad);
-              const valor = draft[key] ?? "";
-              return (
-                <tr key={key} className="border-b border-slate-100 align-top">
-                  <td className="px-3 py-2">
-                    <p className="text-slate-700">{ad.ad_headline || "Sin titular"}</p>
-                    {/* El id se muestra porque el titular NO identifica: hay
-                        cuatro anuncios de Beewax con tres titulares distintos, y
-                        dos de ellos son nombres de archivo de video. */}
-                    <p className="font-mono text-[11px] text-slate-400">{ad.ad_id}</p>
-                  </td>
-                  <td className="px-3 py-2 text-slate-500">{storeName(ad.store_id)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums text-slate-700">
-                    {ad.leads.toLocaleString("es-PE")}
-                  </td>
-                  <td className="px-3 py-2">
-                    {ad.suggested_label ? (
-                      <>
-                        <p className="text-slate-600">{ad.suggested_label}</p>
-                        <span
-                          className={cn(
-                            "mt-0.5 inline-block rounded-full px-1.5 py-0.5 text-[11px] font-medium",
-                            FUERZA_STYLE[fuerza],
-                          )}
-                        >
-                          {FUERZA_LABEL[fuerza]} · {ad.evidence_pct ?? 0}% de {ad.evidence_sample ?? 0}
-                        </span>
-                      </>
-                    ) : (
-                      <span className="text-xs text-slate-400">Sin evidencia todavía</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2">
-                    {/* Los periodos declarados, del más nuevo al más viejo. Un
-                        anuncio reutilizado tiene varios y cada lead toma el que
-                        valía el día que entró. */}
-                    {ad.declaraciones.length > 0 ? (
-                      <ul className="space-y-0.5">
-                        {ad.declaraciones.map((d) => (
-                          <li key={d.id ?? d.valid_from} className="text-[11px]">
-                            <span className="font-medium text-emerald-700">
-                              {productLabel(d.product_handle)}
-                            </span>{" "}
-                            <span className="text-slate-400">{desdeLabel(d.valid_from)}</span>
-                            {d.note && <span className="text-slate-400"> · {d.note}</span>}
-                            {canEdit && (
-                              <button
-                                disabled={busy}
-                                onClick={() =>
-                                  run(() =>
-                                    removeAdDeclaration({
-                                      storeId: ad.store_id,
-                                      declarationId: d.id!,
-                                    }),
-                                  )
-                                }
-                                className="ml-1.5 text-slate-400 underline hover:text-red-600 disabled:opacity-50"
-                              >
-                                quitar
-                              </button>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <span className="text-xs text-slate-400">Sin declarar</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2">
-                    {canEdit && (
-                      <div className="space-y-1">
-                        <input
-                          list="handles-conocidos"
-                          value={valor}
-                          onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
-                          placeholder="handle del producto"
-                          className="w-56 rounded-lg border border-slate-300 px-2 py-1 text-xs"
-                        />
-                        {/* La fecha solo hace falta cuando el anuncio CAMBIÓ de
-                            producto. En blanco vale desde siempre, que es el
-                            caso normal y no debe costar un clic de más. */}
-                        <input
-                          type="date"
-                          value={desde[key] ?? ""}
-                          onChange={(e) => setDesde((d) => ({ ...d, [key]: e.target.value }))}
-                          max={hoy}
-                          title="Desde cuándo vende este producto. En blanco = desde siempre."
-                          className="w-56 rounded-lg border border-slate-300 px-2 py-1 text-xs text-slate-600"
-                        />
-                      </div>
-                    )}
-                  </td>
-                  <td className="px-3 py-2 text-right whitespace-nowrap">
-                    {canEdit && (
-                      <button
-                        disabled={busy || !valor.trim()}
-                        onClick={() =>
-                          run(() =>
-                            declareAdProduct({
-                              storeId: ad.store_id,
-                              adId: ad.ad_id,
-                              handle: valor,
-                              validFrom: desde[key] || null,
-                              adHeadline: ad.ad_headline ?? null,
-                            }),
-                          )
-                        }
-                        className="rounded-lg bg-brand-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-brand-700 disabled:opacity-40"
-                      >
-                        {ad.declaraciones.length ? "Añadir periodo" : "Declarar"}
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </Card>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <StatusCard
+          label="Sin declarar"
+          value={sinDeclarar}
+          active={vista === "pendientes"}
+          onClick={() => setVista("pendientes")}
+          marker={sinDeclarar > 0 ? <span aria-hidden className="size-2 shrink-0 rounded-full bg-warn-fg" /> : undefined}
+        />
+        <StatusCard label="Declarados" value={declarados} active={vista === "declarados"} onClick={() => setVista("declarados")} />
+        <StatusCard label="Todos" value={ads.length} active={vista === "todos"} onClick={() => setVista("todos")} />
+      </div>
 
-      {/* Los handles que ya existen en links. Elegir de esta lista es lo que
-          garantiza que el anuncio caiga en el MISMO balde que la ficha. */}
-      <datalist id="handles-conocidos">
-        {handles.map((h) => (
-          <option key={h} value={h}>
-            {productLabel(h)}
-          </option>
-        ))}
-      </datalist>
+      <section aria-labelledby="anuncios-titulo" className="overflow-hidden rounded-lg bg-white shadow-control ring-1 ring-line">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 shadow-[inset_0_-1px_0_var(--color-line)]">
+          <h2 id="anuncios-titulo" className="text-sm font-semibold text-ink-900">
+            {titulo} <span className="font-normal tabular-nums text-ink-500">{shown.length}</span>
+          </h2>
+          <label className="relative block w-full sm:w-64">
+            <span className="sr-only">Buscar anuncio</span>
+            <IconSearch className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-ink-500" />
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Buscar por titular o ID"
+              className={cn(FIELD_BOX, "h-8 w-full pl-8 pr-3 pointer-coarse:h-11")}
+            />
+          </label>
+        </div>
+        <div className="hidden grid-cols-[minmax(0,1.3fr)_72px_minmax(0,1fr)_minmax(0,1.2fr)_128px] gap-4 px-4 py-2 text-xs font-semibold text-ink-600 shadow-[inset_0_-1px_0_var(--color-line)] lg:grid">
+          <span>Anuncio</span>
+          <span className="text-right">Leads</span>
+          <span>Suele vender (histórico)</span>
+          <span>Qué vende, y desde cuándo</span>
+          <span />
+        </div>
+        {shown.map((ad) => {
+          const key = `${ad.store_id}::${ad.ad_id}`;
+          const fuerza = fuerzaEvidencia(ad);
+          return (
+            <div
+              key={key}
+              className="flex flex-col gap-2 border-t border-line px-4 py-3 first:border-t-0 lg:grid lg:grid-cols-[minmax(0,1.3fr)_72px_minmax(0,1fr)_minmax(0,1.2fr)_128px] lg:items-center lg:gap-4"
+            >
+              <div className="min-w-0">
+                <p className={cn("truncate text-sm font-semibold", ad.ad_headline ? "text-ink-900" : "text-ink-500")}>
+                  {ad.ad_headline || "Sin titular"}
+                </p>
+                {/* El id se muestra porque el titular NO identifica: hay cuatro
+                    anuncios de Beewax con tres titulares distintos, y dos de
+                    ellos son nombres de archivo de video. */}
+                <p className="mt-0.5 flex min-w-0 items-center gap-1 text-xs text-ink-500">
+                  {storeName(ad.store_id)}
+                  {" · "}
+                  <span className="truncate font-mono">{ad.ad_id}</span>
+                  <CopyButton value={ad.ad_id} label="el ID del anuncio" />
+                </p>
+              </div>
+              <p className="text-sm font-semibold tabular-nums text-ink-900 lg:text-right">
+                {ad.leads.toLocaleString("es-PE")}
+                <span className="ml-1 font-normal text-ink-500 lg:hidden">leads</span>
+              </p>
+              <div className="min-w-0">
+                {ad.suggested_label ? (
+                  <>
+                    <p className="truncate text-[13px] text-ink-900">{ad.suggested_label}</p>
+                    <p className="mt-1">
+                      <Badge tone={FUERZA_TONE[fuerza]}>
+                        {FUERZA_LABEL[fuerza]} · {ad.evidence_pct ?? 0}&nbsp;% de {ad.evidence_sample ?? 0}
+                      </Badge>
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-[13px] text-ink-500">Sin evidencia todavía</p>
+                )}
+              </div>
+              <div className="min-w-0">
+                {/* Los periodos declarados, del más nuevo al más viejo. Un anuncio
+                    reutilizado tiene varios y cada lead toma el que valía el día
+                    que entró. */}
+                {ad.declaraciones.length > 0 ? (
+                  <ul className="flex flex-col gap-1">
+                    {ad.declaraciones.map((d) => (
+                      <li key={d.id ?? d.valid_from} className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-[13px]">
+                        <span className="font-medium text-ink-900">{productLabel(d.product_handle)}</span>
+                        <span className="text-xs text-ink-500">
+                          {desdeLabel(d.valid_from)}
+                          {d.note && ` · ${d.note}`}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <Badge tone="warn">Sin declarar</Badge>
+                )}
+              </div>
+              <div className="flex lg:justify-end">
+                {canEdit && (
+                  <OpsButton size="sm" variant={ad.declaraciones.length ? "ghost" : "secondary"} onClick={() => setAbierto(key)} aria-haspopup="dialog">
+                    {ad.declaraciones.length ? "Añadir periodo" : "Declarar"}
+                  </OpsButton>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        {!shown.length && <p className="border-t border-line px-4 py-6 text-sm text-ink-500">Nada con estos filtros.</p>}
+      </section>
+
+      {open && canEdit && (
+        <DeclararPanel
+          key={abierto}
+          ad={open}
+          handles={handles}
+          storeName={storeName(open.store_id)}
+          busy={busy}
+          onClose={() => setAbierto(null)}
+          onDeclare={(handle, validFrom) =>
+            run(
+              () =>
+                declareAdProduct({
+                  storeId: open.store_id,
+                  adId: open.ad_id,
+                  handle,
+                  validFrom,
+                  adHeadline: open.ad_headline ?? null,
+                }),
+              () => setAbierto(null),
+            )
+          }
+          onRemove={(declarationId) => run(() => removeAdDeclaration({ storeId: open.store_id, declarationId }))}
+        />
+      )}
     </div>
+  );
+}
+
+function Header({
+  pendientes,
+  declarados,
+  total,
+  canEdit,
+  busy,
+  onRefresh,
+  storePill,
+}: {
+  pendientes: number;
+  declarados: number;
+  total: number;
+  canEdit: boolean;
+  busy: boolean;
+  onRefresh: () => void;
+  storePill?: ReactNode;
+}) {
+  return (
+    <header className="flex flex-wrap items-start justify-between gap-3">
+      <div className="min-w-0">
+        <h1 className="text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">Anuncios</h1>
+        <p className="mt-0.5 text-sm text-ink-500">
+          Qué vende cada anuncio
+          {total > 0 && (
+            <>
+              {" · "}
+              {pendientes.toLocaleString("es-PE")} leads esperan una firma{" · "}
+              {declarados} de {total} anuncios declarados
+            </>
+          )}
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        {storePill}
+        {canEdit && (
+          <OpsButton disabled={busy} onClick={onRefresh}>
+            Recalcular sugerencias
+          </OpsButton>
+        )}
+      </div>
+    </header>
+  );
+}
+
+function DeclararPanel({
+  ad,
+  handles,
+  storeName,
+  busy,
+  onClose,
+  onDeclare,
+  onRemove,
+}: {
+  ad: AdRow;
+  handles: string[];
+  storeName: string;
+  busy: boolean;
+  onClose: () => void;
+  onDeclare: (handle: string, validFrom: string | null) => void;
+  onRemove: (declarationId: string) => void;
+}) {
+  const fuerza = fuerzaEvidencia(ad);
+  // El producto sugerido viene como título de pedido; si coincide con el nombre
+  // de un handle conocido, se escribe ya. Declararlo sigue siendo un toque.
+  const sugerido = useMemo(() => {
+    if (!ad.suggested_label) return "";
+    const target = plano(ad.suggested_label);
+    return handles.find((h) => plano(productLabel(h)) === target) ?? "";
+  }, [ad.suggested_label, handles]);
+  const [handle, setHandle] = useState(ad.declaraciones.length ? "" : sugerido);
+  const [conFecha, setConFecha] = useState(ad.declaraciones.length > 0);
+  const [desde, setDesde] = useState("");
+  const hoy = new Date().toISOString().slice(0, 10);
+
+  // Escape cierra, como los demás paneles.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !e.defaultPrevented) closeRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const listo = !!handle.trim() && (!conFecha || !!desde);
+
+  return (
+    <SidePanel
+      label={`Declarar el producto de ${ad.ad_headline || "este anuncio"}`}
+      title={ad.ad_headline || "Sin titular"}
+      meta={
+        <>
+          {storeName} · <span className="font-mono">{ad.ad_id}</span> · {ad.leads.toLocaleString("es-PE")} leads
+        </>
+      }
+      width="max-w-[520px]"
+      onClose={onClose}
+    >
+      <div className="flex flex-col gap-4">
+        {ad.suggested_label ? (
+          <Banner tone={fuerza === "fuerte" ? "ok" : "warn"} title={`De este anuncio suelen comprar ${ad.suggested_label}`}>
+            {FUERZA_LABEL[fuerza]}: {ad.evidence_pct ?? 0}&nbsp;% de {ad.evidence_sample ?? 0} pedidos. Es una sugerencia: no
+            se aplica sola.
+          </Banner>
+        ) : (
+          <Banner tone="info">Sin evidencia todavía: nadie compró desde este anuncio en los pedidos que se miraron.</Banner>
+        )}
+
+        <label className="block">
+          <span className="text-[13px] font-medium text-ink-700">Producto</span>
+          <span className="relative mt-1 block">
+            <IconSearch className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-ink-500" />
+            <input
+              list="handles-conocidos"
+              value={handle}
+              onChange={(e) => setHandle(e.target.value)}
+              placeholder="Buscar el producto"
+              className={cn(FIELD_BOX, "h-9 w-full pl-8 pr-3 pointer-coarse:h-11")}
+            />
+          </span>
+          <span className="mt-1 block text-xs text-ink-500">
+            {handle && handles.includes(handle.trim())
+              ? productLabel(handle.trim())
+              : "De los productos que ya aparecen en los enlaces: así cae en el mismo grupo que la ficha."}
+          </span>
+        </label>
+        {/* Los handles que ya existen en links. Elegir de esta lista es lo que
+            garantiza que el anuncio caiga en el MISMO balde que la ficha. */}
+        <datalist id="handles-conocidos">
+          {handles.map((h) => (
+            <option key={h} value={h}>
+              {productLabel(h)}
+            </option>
+          ))}
+        </datalist>
+
+        <div>
+          <span className="text-[13px] font-medium text-ink-700">Desde cuándo</span>
+          {/* La fecha solo hace falta cuando el anuncio CAMBIÓ de producto. En
+              blanco vale desde siempre, que es el caso normal. */}
+          <div role="group" aria-label="Desde cuándo" className="mt-1 flex flex-wrap items-center gap-1.5">
+            <ChoiceChip label="Desde siempre" active={!conFecha} onClick={() => setConFecha(false)} />
+            <ChoiceChip label="Desde una fecha" active={conFecha} onClick={() => setConFecha(true)} />
+            {conFecha && (
+              <input
+                type="date"
+                value={desde}
+                max={hoy}
+                aria-label="Desde qué día vende este producto"
+                onChange={(e) => setDesde(e.target.value)}
+                className={cn(FIELD, "w-44")}
+              />
+            )}
+          </div>
+          <span className="mt-1 block text-xs text-ink-500">Solo si el creativo cambió de producto. El pasado no se reescribe.</span>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 border-t border-line pt-4">
+          <OpsButton variant="ghost" onClick={onClose}>
+            Cancelar
+          </OpsButton>
+          <OpsButton variant="primary" disabled={busy || !listo} onClick={() => onDeclare(handle.trim(), conFecha ? desde : null)}>
+            {ad.declaraciones.length ? "Añadir periodo" : "Declarar"}
+          </OpsButton>
+        </div>
+
+        <section>
+          <h3 className="text-sm font-semibold text-ink-900">Periodos</h3>
+          {ad.declaraciones.length ? (
+            <ul className="mt-2 flex flex-col">
+              {ad.declaraciones.map((d) => (
+                <li key={d.id ?? d.valid_from} className="flex items-center justify-between gap-3 border-t border-line py-2 first:border-t-0">
+                  <span className="min-w-0 text-[13px]">
+                    <span className="font-medium text-ink-900">{productLabel(d.product_handle)}</span>{" "}
+                    <span className="text-ink-500">
+                      {desdeLabel(d.valid_from)}
+                      {d.note && ` · ${d.note}`}
+                    </span>
+                  </span>
+                  {d.id && (
+                    <OpsButton size="sm" variant="ghost" disabled={busy} onClick={() => onRemove(d.id!)}>
+                      Quitar
+                    </OpsButton>
+                  )}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-1 text-[13px] text-ink-500">
+              Todavía no tiene ninguno: sus {ad.leads.toLocaleString("es-PE")} leads están en «Sin producto».
+            </p>
+          )}
+        </section>
+      </div>
+    </SidePanel>
   );
 }
