@@ -29,11 +29,17 @@ import {
   cartLinesOf,
   categoryOf,
   defaultFollowupAt,
+  isClaimActive,
   isValidStatus,
   labelOf,
   leadSearchPasses,
+  usableAddress,
   type CartLine,
 } from "@/lib/leads";
+import { asOrderCoverage, leadDeliveryProbe } from "@/lib/lead-delivery-coverage";
+import type { OrderCoverage } from "@/lib/order-coverage";
+import { limaTodayKey, normalizeDistrict } from "@/lib/shipments";
+import { shopifyShippingAddress } from "@/lib/shopify-address";
 import { firstProductWithImage, type CatalogImage } from "@/lib/cart-image-test";
 import { OFFER_TTL_MS, planYapeOffers, type RoutingLead } from "@/lib/yape-routing";
 import { onlineVendedorasForStore } from "@/lib/presence";
@@ -285,6 +291,59 @@ export async function loadNextLeadCart(leadId: string): Promise<NextLeadCart | {
     createdAt: draft?.created_at ?? null,
     photoUrl: productId ? `/api/wa-image/${ctx.storeId}/${productId}.jpg` : null,
   };
+}
+
+/**
+ * La cobertura de entrega del lead, la MISMA del Master: `order_coverage_for`
+ * con la dirección del carrito (`lib/lead-delivery-coverage.ts`, MOM §11). La
+ * tarjeta del siguiente lead y la ficha la ponen en «Entrega». Sin un distrito
+ * que sirva, o si la base no responde, null: la línea se queda con lo que ya
+ * decía.
+ */
+export async function loadLeadDeliveryCoverage(
+  leadId: string,
+): Promise<{ coverage: OrderCoverage | null } | { error: string }> {
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { error: "Sin acceso a este lead." };
+  const admin = createAdminSupabase();
+  const { data } = await admin
+    .from("leads")
+    .select("district, province, region, draft_order_gid")
+    .eq("id", leadId)
+    .maybeSingle();
+  const lead = data as { district: string | null; province: string | null; region: string | null; draft_order_gid: string | null } | null;
+  if (!lead || !usableAddress(lead.district)) return { coverage: null };
+  const [geoRes, draftRes] = await Promise.all([
+    admin
+      .from("peru_districts")
+      .select("province, department")
+      .eq("district_key", normalizeDistrict(lead.district))
+      .maybeSingle(),
+    lead.draft_order_gid
+      ? admin
+          .from("draft_orders")
+          .select("shippingAddress:raw->shippingAddress, shipping_address:raw->shipping_address")
+          .eq("store_id", ctx.storeId)
+          .eq("draft_order_gid", lead.draft_order_gid)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+  ]);
+  const probe = leadDeliveryProbe(
+    lead,
+    (geoRes.data as { province: string | null; department: string | null } | null) ?? null,
+    shopifyShippingAddress(draftRes.data),
+  );
+  if (!probe) return { coverage: null };
+  const { data: coverage, error } = await admin.rpc("order_coverage_for", {
+    p_store_id: ctx.storeId,
+    p_region: probe.region,
+    p_province: probe.province,
+    p_district: probe.district,
+    p_lat: probe.latitude,
+    p_lng: probe.longitude,
+    p_day: limaTodayKey(),
+  });
+  return { coverage: error ? null : asOrderCoverage(coverage) };
 }
 
 /** Non-critical customer context loaded progressively after the drawer is
@@ -560,6 +619,39 @@ export async function openLeadDrawer(
   const [claim, detail] = await Promise.all([claimLead(leadId), loadLeadDetail(leadId)]);
   if (claim.error) return { error: claim.error };
   return detail;
+}
+
+/**
+ * Renueva la reserva propia mientras la ficha sigue abierta (ver
+ * `CLAIM_HEARTBEAT_MS`). Solo si sigue siendo suya y está viva: si venció y
+ * otra asesora lo tomó, NO se le quita — se le dice quién lo tiene.
+ */
+export async function renewLeadClaim(leadId: string): Promise<LeadActionState> {
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { error: "Sin acceso a este lead." };
+  const admin = createAdminSupabase();
+  const cutoff = new Date(Date.now() - CLAIM_TTL_MINUTES * 60_000).toISOString();
+  const { data, error } = await admin
+    .from("leads")
+    .update({ claimed_at: new Date().toISOString() })
+    .eq("id", leadId)
+    .eq("claimed_by", ctx.userId)
+    .gt("claimed_at", cutoff)
+    .select("id")
+    .maybeSingle();
+  if (error) return { error: error.message };
+  if (data) return { notice: "Reserva renovada." };
+  const { data: held } = await admin
+    .from("leads")
+    .select("claimed_by, claimed_at")
+    .eq("id", leadId)
+    .maybeSingle();
+  const h = held as { claimed_by: string | null; claimed_at: string | null } | null;
+  if (h?.claimed_by && h.claimed_by !== ctx.userId && isClaimActive(h.claimed_at)) {
+    const who = await resolveAgentName(h.claimed_by, admin);
+    return { error: `${who ?? "Otra asesora"} tomó este lead mientras lo tenías abierto. Coordina con ella antes de seguir.` };
+  }
+  return { error: "Tu reserva de este lead venció. Ciérralo y vuelve a abrirlo para seguir." };
 }
 
 /** Release a claim (called when closing the drawer). Only releases your own. */

@@ -12,23 +12,34 @@
 // en duda y no se repite, un token rechazado apaga el RUC, una lectura que
 // falla no emite, y ni el token ni la clienta salen en el reporte o el log.
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   INVOICE_MAX_PER_RUN,
+  LIVE_REAL_STATUSES,
   buildSalePayload,
   invoiceNoteRef,
   type InvoiceItem,
 } from "@/lib/invoicing/rules";
 import type { InvoiceOrderRead } from "@/lib/invoicing/shopify-order";
+import { CHECKOUT_GATEWAYS } from "@/lib/payment-gateway";
 import type { SimplefactHttp } from "@/lib/invoicing/simplefact";
 import {
   INVOICE_NOT_FOUND_ERROR,
   INVOICE_SHOPIFY_RECHECK_MS,
+  INVOICE_SWEEP_MAX_CANDIDATES,
+  INVOICE_UNRECONCILED_BATCH,
+  InvoiceMigrationMissingError,
+  SHOPIFY_LEVEL_REASONS,
   invoiceExistingFrom,
+  invoiceUnreconciledError,
+  isInvoiceMigrationMissing,
   loadInvoiceIssuers,
   loadInvoiceOrderFacts,
   runInvoiceSweep,
+  shopifyBlockedReasons,
   type InvoiceSweepDeps,
 } from "@/lib/invoicing/server";
 
@@ -141,19 +152,38 @@ function invoiceGuard(old: Row, values: Row): string | null {
 
 const LIVE = ["emitiendo", "emitida", "en_duda", "externa"];
 
-function fakeDb(now: Date) {
+/** Lo que contesta la base cuando la 0257 no está: la tabla o la función no existe. */
+const MISSING = {
+  "42P01": (name: string) => `relation "public.${name}" does not exist`,
+  "42883": (name: string) => `function public.${name}() does not exist`,
+  PGRST205: (name: string) => `Could not find the table 'public.${name}' in the schema cache`,
+  PGRST202: (name: string) => `Could not find the function public.${name} in the schema cache`,
+} as const;
+type MissingCode = keyof typeof MISSING;
+
+function fakeDb(initialNow: Date) {
   const tables: Record<string, Row[]> = {};
   const log: Q[] = [];
   const rpcLog: { fn: string; args: Record<string, unknown> }[] = [];
   const failWhen: Array<(q: Q) => boolean> = [];
+  /** Tablas y funciones que «no existen» todavía, con el código que contesta la base. */
+  const missing = new Map<string, MissingCode>();
   const state = {
     rpcError: null as string | null,
     claimOverride: null as null | ((args: Record<string, unknown>) => unknown),
+    candidatesError: null as string | null,
   };
+  // El reloj de la base (`now()`): `sweep` lo pone en el `now` de la pasada.
+  const clock = { now: initialNow };
   const t = (name: string) => (tables[name] ??= []);
+  const missingError = (name: string) => {
+    const code = missing.get(name)!;
+    return { data: null, error: { code, message: MISSING[code](name) } };
+  };
 
-  const exec = (q: Q): { data: unknown; error: { message: string } | null } => {
+  const exec = (q: Q): { data: unknown; error: { message: string; code?: string } | null } => {
     log.push(q);
+    if (missing.has(q.table)) return missingError(q.table);
     if (failWhen.some((f) => f(q))) return { data: null, error: { message: `falla simulada en ${q.table}` } };
     const rows = t(q.table);
     if (q.op === "select") {
@@ -232,8 +262,49 @@ function fakeDb(now: Date) {
     return b;
   };
 
+  /** `invoice_candidates` (0257, §7), con los mismos filtros y el mismo orden. */
+  const candidates = (a: Record<string, unknown>): { order_id: string }[] => {
+    if (!["simulacion", "real"].includes(a.p_mode as string) || !a.p_since) return [];
+    const now = clock.now;
+    const stores = new Set(
+      t("stores")
+        .filter((s) => s.org_id === a.p_org && s.status === "active" && (!a.p_store || s.id === a.p_store))
+        .map((s) => s.id),
+    );
+    const windowStart = new Date(now.getTime() - 60 * 86_400_000).toISOString();
+    const recheck = new Date(now.getTime() - 6 * 3_600_000).toISOString();
+    const blocked = new Set((a.p_blocked as string[] | null) ?? []);
+    const prepaid = (m: Row) => m.payment_gateway === "checkout" && m.financial_status === "paid";
+    const mine = (m: Row) => t("order_invoices").filter((i) => i.order_id === m.order_id);
+    return t("order_master")
+      .filter((m) => stores.has(m.store_id))
+      .filter((m) => m.payment_state === "pago_completo" || prepaid(m))
+      .filter((m) => cmp(m.order_created_at, windowStart) >= 0)
+      .filter((m) => !mine(m).some((i) => i.mode === "real" && LIVE.includes(i.status as string)))
+      .filter((m) => a.p_mode === "real" || !mine(m).some((i) => i.mode === "simulacion"))
+      // En real, un error sin reintento pedido: el turno diría `error_previo`.
+      .filter((m) => a.p_mode !== "real" || !mine(m).some((i) => i.mode === "real" && i.status === "error" && !i.retry_requested_at))
+      .filter(
+        (m) =>
+          !t("invoice_order_checks").some(
+            (c) => c.order_id === m.order_id && c.mode === a.p_mode && blocked.has(c.reason as string) && cmp(c.checked_at, recheck) > 0,
+          ),
+      )
+      .filter(
+        (m) =>
+          t("order_payments").some(
+            (p) => p.order_id === m.order_id && p.validation_status === "validado" && !!p.registered_at && cmp(p.registered_at, a.p_since) >= 0,
+          ) ||
+          (prepaid(m) && cmp(m.order_created_at, a.p_since) >= 0),
+      )
+      .sort((x, y) => cmp(y.order_created_at, x.order_created_at) || String(x.order_id).localeCompare(String(y.order_id)))
+      .slice(0, Math.max(0, Number(a.p_limit ?? 0)))
+      .map((m) => ({ order_id: m.order_id as string }));
+  };
+
   /** `invoice_claim` (0257, §6), con las mismas revisiones y en el mismo orden. */
   const claim = (a: Record<string, unknown>): unknown => {
+    const now = clock.now;
     const store = t("stores").find((s) => s.id === a.p_store && s.status === "active");
     if (!store) return { reason: "tienda" };
     const order = t("orders").find((o) => o.id === a.p_order && o.store_id === a.p_store);
@@ -241,6 +312,16 @@ function fakeDb(now: Date) {
     if (order.cancelled_at) return { reason: "anulado" };
     if (Number(order.total_refunded ?? 0) !== 0) return { reason: "reembolsado" };
     if (String(order.currency ?? "").toUpperCase() !== "PEN") return { reason: "moneda" };
+    // Cuándo quedó pagado, con los pagos de la base: todos los vivos validados y
+    // el último registrado; sin pagos vivos, la fecha del pedido.
+    const live = t("order_payments").filter((p) => p.order_id === a.p_order && p.validation_status !== "rechazado");
+    if (live.some((p) => p.validation_status !== "validado")) return { reason: "pagos_en_revision" };
+    const registered = live.map((p) => (p.registered_at ?? null) as string | null);
+    const paid: string | null = !live.length
+      ? ((order.processed_at ?? order.created_at ?? null) as string | null)
+      : registered.includes(null)
+        ? null
+        : registered.reduce((x, y) => (cmp(y, x) > 0 ? y : x));
     const iss = t("invoice_issuers").find((i) => i.id === a.p_issuer);
     if (!iss || iss.org_id !== store.org_id) return { reason: "ruc_ajeno" };
     if (iss.mode === "apagado") return { reason: "ruc_apagado" };
@@ -248,7 +329,9 @@ function fakeDb(now: Date) {
     if (!(total > 0)) return { reason: "monto_cero" };
     if (total > 700) return { reason: "monto_mayor_700" };
     if (Math.abs(Number(order.total_amount) - total) >= 0.005) return { reason: "total_distinto" };
-    if (!iss.emit_from || !a.p_paid_at || cmp(a.p_paid_at, iss.emit_from) < 0) return { reason: "antes_de_inicio" };
+    if (!iss.emit_from || !a.p_paid_at || cmp(a.p_paid_at, iss.emit_from) < 0 || !paid || cmp(paid, iss.emit_from) < 0) {
+      return { reason: "antes_de_inicio" };
+    }
     if (!a.p_request || typeof a.p_request !== "object") return { reason: "sin_boleta" };
     const mine = t("order_invoices").filter((r) => r.order_id === a.p_order);
     if (mine.some((r) => r.mode === "real" && LIVE.includes(r.status as string))) return { reason: "ya_tiene" };
@@ -294,17 +377,25 @@ function fakeDb(now: Date) {
     from,
     rpc: async (fn: string, args: Record<string, unknown>) => {
       rpcLog.push({ fn, args });
+      if (missing.has(fn)) return missingError(fn);
+      if (fn === "invoice_candidates") {
+        if (state.candidatesError) return { data: null, error: { message: state.candidatesError } };
+        return { data: candidates(args), error: null };
+      }
       if (fn !== "invoice_claim") throw new Error(`rpc inesperada: ${fn}`);
       if (state.rpcError) return { data: null, error: { message: state.rpcError } };
       return { data: state.claimOverride ? state.claimOverride(args) : claim(args), error: null };
     },
   } as unknown as SupabaseClient;
 
-  return { admin, tables, t, log, rpcLog, failWhen, state };
+  return { admin, tables, t, log, rpcLog, failWhen, state, missing, clock };
 }
 
 type Db = ReturnType<typeof fakeDb>;
 const writes = (db: Db, table?: string) => db.log.filter((q) => q.op !== "select" && (!table || q.table === table));
+/** Los turnos pedidos (`invoice_claim`), sin las lecturas de candidatos. */
+const claims = (db: Db) => db.rpcLog.filter((r) => r.fn === "invoice_claim");
+const candidateCalls = (db: Db) => db.rpcLog.filter((r) => r.fn === "invoice_candidates");
 const has = (q: Q, ...f: Filter) => q.filters.some((g) => JSON.stringify(g) === JSON.stringify(f));
 
 // ── Datos ────────────────────────────────────────────────────────────────────
@@ -344,6 +435,7 @@ function world(opts: { mode?: "apagado" | "simulacion" | "real"; dailyLimit?: nu
     emit_from: DESDE,
     daily_limit: opts.dailyLimit ?? 40,
     checked_ruc: RUC_GF,
+    checked_at: "2026-10-14T06:00:00.000Z",
     check_error: null,
   });
   db.t("store_collection_accounts").push(
@@ -387,6 +479,8 @@ interface OrderOpts {
   prepaid?: boolean;
   createdAt?: string;
   validatedAt?: string;
+  /** Cuándo entró el pago a Kapta: lo que decide «Emitir desde» (§35.3, condición 8). */
+  registeredAt?: string;
   /** El pago no dice a qué cuenta entró. */
   sinCuenta?: boolean;
   inMaster?: boolean;
@@ -433,6 +527,7 @@ function addOrder(db: Db, n: number, o: OrderOpts = {}): string {
       amount: total,
       validation_status: "validado",
       validated_at: o.validatedAt ?? PAGADO,
+      registered_at: o.registeredAt ?? PAGADO,
       vision: {},
     });
     if (!o.sinCuenta) db.t("flowcl_payment_links").push({ id: `link-${n}`, order_id: id, payment_id: `pay-${n}` });
@@ -449,8 +544,8 @@ function okRead(shopifyOrderId: string, totalCents = 15_000, paid = false): Invo
     totalCents,
     items,
     payment: paid
-      ? { financialStatus: "PAID", gatewayNames: ["Checkout Flow"], paidCents: totalCents, netPaymentCents: totalCents, outstandingCents: 0 }
-      : { financialStatus: "PENDING", gatewayNames: ["manual"], paidCents: 0, netPaymentCents: 0, outstandingCents: totalCents },
+      ? { financialStatus: "PAID", gatewayNames: [CHECKOUT_GATEWAYS[0]!], paidCents: totalCents, otherPaidCents: 0, netPaymentCents: totalCents, outstandingCents: 0 }
+      : { financialStatus: "PENDING", gatewayNames: ["manual"], paidCents: 0, otherPaidCents: 0, netPaymentCents: 0, outstandingCents: totalCents },
   };
 }
 
@@ -498,8 +593,11 @@ function makeDeps(over: { now?: () => Date; decryptToken?: InvoiceSweepDeps["dec
   };
 }
 
-const sweep = (db: Db, deps: ReturnType<typeof makeDeps>, opts: { dry?: boolean; storeId?: string } = {}) =>
-  runInvoiceSweep(db.admin, { ...opts, deps });
+const sweep = (db: Db, deps: ReturnType<typeof makeDeps>, opts: { dry?: boolean; storeId?: string } = {}) => {
+  // La base corre con el mismo reloj que la pasada.
+  db.clock.now = deps.now();
+  return runInvoiceSweep(db.admin, { ...opts, deps });
+};
 
 const invoice = (db: Db, orderId: string) => db.t("order_invoices").find((r) => r.order_id === orderId);
 const check = (db: Db, orderId: string, mode = "real") =>
@@ -587,6 +685,7 @@ describe("loadInvoiceOrderFacts: los hechos de cada pedido (§35.2, §35.3)", ()
         amount: "30.50",
         validation_status: "validado",
         validated_at: "2026-10-14T16:00:00.000Z",
+        registered_at: "2026-10-14T15:30:00.000Z",
         vision: { extracted: { recipient_name: "Grupo GF S.A.C." } },
       },
       {
@@ -597,6 +696,7 @@ describe("loadInvoiceOrderFacts: los hechos de cada pedido (§35.2, §35.3)", ()
         amount: 10,
         validation_status: "rechazado",
         validated_at: null,
+        registered_at: "2026-10-14T12:00:00.000Z",
         vision: {},
       },
     );
@@ -648,6 +748,7 @@ describe("loadInvoiceOrderFacts: los hechos de cada pedido (§35.2, §35.3)", ()
         kind: "total",
         amount: 150,
         validationStatus: "validado",
+        registeredAt: PAGADO,
         validatedAt: PAGADO,
         vision: {},
         flowLinked: true,
@@ -658,6 +759,7 @@ describe("loadInvoiceOrderFacts: los hechos de cada pedido (§35.2, §35.3)", ()
         kind: "diferencia",
         amount: 30.5,
         validationStatus: "validado",
+        registeredAt: "2026-10-14T15:30:00.000Z",
         validatedAt: "2026-10-14T16:00:00.000Z",
         vision: { extracted: { recipient_name: "Grupo GF S.A.C." } },
         flowLinked: false,
@@ -668,6 +770,7 @@ describe("loadInvoiceOrderFacts: los hechos de cada pedido (§35.2, §35.3)", ()
         kind: "adelanto",
         amount: 10,
         validationStatus: "rechazado",
+        registeredAt: "2026-10-14T12:00:00.000Z",
         validatedAt: null,
         vision: {},
         flowLinked: false,
@@ -846,7 +949,7 @@ describe("runInvoiceSweep: simulación (§35.6)", () => {
       items: [{ code: "FAJA-M", name: "Faja Reductora - M", qty: 1, priceCents: 15_000 }],
       totalCents: 15_000,
     });
-    expect(db.rpcLog).toEqual([
+    expect(claims(db)).toEqual([
       {
         fn: "invoice_claim",
         args: {
@@ -875,13 +978,28 @@ describe("runInvoiceSweep: simulación (§35.6)", () => {
     expect(report.errors).toEqual([]);
   });
 
-  it("la segunda pasada no simula dos veces el mismo pedido", async () => {
+  it("la segunda pasada no simula dos veces el mismo pedido: la base ya no lo devuelve", async () => {
     const db = world({ mode: "simulacion" });
     addOrder(db, 1);
     await sweep(db, makeDeps());
     const deps = makeDeps();
     const report = await sweep(db, deps);
     expect(db.t("order_invoices")).toHaveLength(1);
+    expect(deps.fetchOrder).not.toHaveBeenCalled();
+    expect(claims(db)).toHaveLength(1);
+    expect(report.orgs[0]).toMatchObject({ candidates: 0, reasons: {} });
+  });
+
+  it("si la base igual lo devolviera (otra pasada lo simuló entre la lista y los hechos), la regla dice ya_simulado", async () => {
+    const db = world({ mode: "simulacion" });
+    addOrder(db, 1);
+    db.t("order_invoices").push({ id: "sim", order_id: "ord-1", issuer_id: ISS, mode: "simulacion", status: "simulada", created_at: NOW.toISOString() });
+    // La lista se leyó antes de que existiera la simulación.
+    const rpc = db.admin.rpc.bind(db.admin);
+    (db.admin as unknown as { rpc: unknown }).rpc = async (fn: string, args: Record<string, unknown>) =>
+      fn === "invoice_candidates" ? { data: [{ order_id: "ord-1" }], error: null } : rpc(fn, args);
+    const deps = makeDeps();
+    const report = await sweep(db, deps);
     expect(deps.fetchOrder).not.toHaveBeenCalled();
     expect(report.orgs[0]!.issuers[0]!.reasons).toEqual({ ya_simulado: 1 });
     expect(check(db, "ord-1", "simulacion")).toMatchObject({ reason: "ya_simulado", issuer_id: ISS });
@@ -895,7 +1013,7 @@ describe("runInvoiceSweep: emisión real (§35.4)", () => {
     const deps = makeDeps();
     deps.createSale.mockImplementation(async () => {
       // Al momento de llamar, la fila ya existe en `emitiendo`.
-      expect(db.rpcLog).toHaveLength(1);
+      expect(claims(db)).toHaveLength(1);
       expect(invoice(db, "ord-1")).toMatchObject({ status: "emitiendo" });
       return created(812);
     });
@@ -904,7 +1022,7 @@ describe("runInvoiceSweep: emisión real (§35.4)", () => {
     expect(deps.createSale).toHaveBeenCalledTimes(1);
     const [conn, payload] = deps.createSale.mock.calls[0] as unknown as [{ subdomain: string; token: string }, unknown];
     expect(conn).toEqual({ subdomain: "grupogf", token: TOKEN });
-    expect(payload).toEqual(db.rpcLog[0]!.args.p_request);
+    expect(payload).toEqual(claims(db)[0]!.args.p_request);
     expect(invoice(db, "ord-1")).toMatchObject({
       status: "emitida",
       http_status: 200,
@@ -941,7 +1059,7 @@ describe("runInvoiceSweep: emisión real (§35.4)", () => {
     addOrder(db, 1);
     const deps = makeDeps({ decryptToken: () => { throw new Error("clave equivocada"); } });
     const report = await sweep(db, deps);
-    expect(db.rpcLog).toEqual([]);
+    expect(claims(db)).toEqual([]);
     expect(deps.fetchOrder).not.toHaveBeenCalled();
     expect(deps.createSale).not.toHaveBeenCalled();
     expect(report.orgs[0]!.issuers[0]).toMatchObject({ stopped: "sin_token", pendientes: 1 });
@@ -968,11 +1086,11 @@ describe("runInvoiceSweep: emisión real (§35.4)", () => {
     next.createSale.mockResolvedValue(created(9));
     await sweep(db, next);
     const calls = next.createSale.mock.calls as unknown as [unknown, { notes: string }][];
-    // El pedido en duda no vuelve a salir; el otro sí.
+    // El pedido en duda no vuelve a salir (la base ya no lo devuelve); el otro sí.
     expect(calls).toHaveLength(1);
     expect(calls[0]![1].notes).toContain("#KP1002");
     expect(db.t("order_invoices").filter((r) => r.order_id === "ord-1")).toHaveLength(1);
-    expect(check(db, "ord-1")).toMatchObject({ reason: "ya_tiene" });
+    expect(next.fetchOrder).toHaveBeenCalledTimes(1);
   });
 
   it("sin respuesta (http null): en duda, con el motivo del transporte", async () => {
@@ -999,10 +1117,51 @@ describe("runInvoiceSweep: emisión real (§35.4)", () => {
       return okRead(input.shopifyOrderId);
     });
     const report = await sweep(db, deps);
-    expect(db.rpcLog).toHaveLength(1);
+    expect(claims(db)).toHaveLength(1);
     expect(deps.createSale).not.toHaveBeenCalled();
     expect(check(db, "ord-1")).toMatchObject({ reason: "ya_tiene", issuer_id: ISS });
     expect(report.orgs[0]!.issuers[0]!.reasons).toEqual({ ya_tiene: 1 });
+  });
+
+  it("el turno mira los pagos de la base: uno nuevo sin validar da pagos_en_revision y no se llama; el lote sigue", async () => {
+    const db = world();
+    addOrder(db, 1);
+    addOrder(db, 2);
+    const deps = makeDeps();
+    deps.fetchOrder.mockImplementation(async (input) => {
+      // Mientras se leía Shopify, entró un comprobante que nadie revisó todavía.
+      if (input.shopifyOrderId === "shp-2") {
+        db.t("order_payments").push({ id: "pay-2b", order_id: "ord-2", store_id: STORE, kind: "diferencia", amount: 1, validation_status: "pendiente_revision", registered_at: NOW.toISOString(), vision: {} });
+      }
+      return okRead(input.shopifyOrderId);
+    });
+    const report = await sweep(db, deps);
+    // El turno lo pidió con la fecha de los hechos que leyó: la base dijo que no.
+    expect(claims(db).find((c) => c.args.p_order === "ord-2")?.args.p_paid_at).toBe(PAGADO);
+    expect(invoice(db, "ord-2")).toBeUndefined();
+    expect(check(db, "ord-2")).toMatchObject({ reason: "pagos_en_revision", issuer_id: ISS });
+    // Es del pedido, no del RUC: el otro pedido sale igual.
+    expect(deps.createSale).toHaveBeenCalledTimes(1);
+    expect(invoice(db, "ord-1")).toMatchObject({ status: "emitida" });
+    expect(report.orgs[0]!.issuers[0]).toMatchObject({ emitidas: 1, stopped: null, reasons: { pagos_en_revision: 1 } });
+    expect(report.errors).toEqual([]);
+  });
+
+  it("el turno mira los pagos de la base: si su último pago vivo es de antes de «Emitir desde», antes_de_inicio y no se llama", async () => {
+    const db = world();
+    addOrder(db, 1);
+    const deps = makeDeps();
+    deps.fetchOrder.mockImplementation(async (input) => {
+      // La fecha que llegó al turno (PAGADO) ya no es la de la base.
+      db.t("order_payments").find((p) => p.id === "pay-1")!.registered_at = "2026-10-14T04:59:59.000Z";
+      return okRead(input.shopifyOrderId);
+    });
+    const report = await sweep(db, deps);
+    expect(claims(db)[0]?.args.p_paid_at).toBe(PAGADO);
+    expect(deps.createSale).not.toHaveBeenCalled();
+    expect(db.t("order_invoices")).toEqual([]);
+    expect(check(db, "ord-1")).toMatchObject({ reason: "antes_de_inicio", issuer_id: ISS });
+    expect(report.orgs[0]!.issuers[0]).toMatchObject({ stopped: null, reasons: { antes_de_inicio: 1 } });
   });
 
   it("422: error sin boleta; no se reintenta solo y el lote sigue", async () => {
@@ -1018,10 +1177,12 @@ describe("runInvoiceSweep: emisión real (§35.4)", () => {
     expect(db.t("order_invoices").map((r) => r.status).sort()).toEqual(["emitida", "error"]);
     expect(report.orgs[0]!.issuers[0]).toMatchObject({ errores: 1, emitidas: 1, stopped: null });
     const next = makeDeps();
-    await sweep(db, next);
+    const again = await sweep(db, next);
     expect(next.createSale).not.toHaveBeenCalled();
-    const errored = db.t("order_invoices").find((r) => r.status === "error")!;
-    expect(check(db, errored.order_id as string)).toMatchObject({ reason: "error_previo" });
+    // La base ya no lo devuelve en real (ni el emitido): espera que una persona
+    // pida reintentar, sin ocupar un lugar ni releerse en Shopify.
+    expect(next.fetchOrder).not.toHaveBeenCalled();
+    expect(again.orgs[0]!.candidates).toBe(0);
   });
 
   it("401: apaga el RUC con el motivo a la vista y no intenta los demás pedidos de ese RUC", async () => {
@@ -1033,7 +1194,8 @@ describe("runInvoiceSweep: emisión real (§35.4)", () => {
     deps.createSale.mockResolvedValue({ http: 401, body: { message: "Unauthenticated." } });
     const report = await sweep(db, deps);
     expect(deps.createSale).toHaveBeenCalledTimes(1);
-    expect(issuerRow(db)).toMatchObject({ mode: "apagado" });
+    // La prueba de conexión se borra: volver a Real exige probar de nuevo.
+    expect(issuerRow(db)).toMatchObject({ mode: "apagado", checked_ruc: null, checked_at: null });
     expect(issuerRow(db).check_error).toMatch(/Token rechazado \(401\)/);
     expect(db.t("order_invoices")).toHaveLength(1);
     expect(db.t("order_invoices")[0]).toMatchObject({ status: "error", http_status: 401 });
@@ -1041,6 +1203,30 @@ describe("runInvoiceSweep: emisión real (§35.4)", () => {
     expect(report.errors.join(" ")).toMatch(/apagado/);
     // Con el token rechazado no se concilia.
     expect(deps.listSales).not.toHaveBeenCalled();
+  });
+
+  it.each([403, 404, 405])("%s: también apaga el RUC y borra su prueba de conexión", async (http) => {
+    const db = world();
+    addOrder(db, 1);
+    addOrder(db, 2);
+    const deps = makeDeps();
+    deps.createSale.mockResolvedValue({ http, body: { message: "No." } });
+    const report = await sweep(db, deps);
+    expect(deps.createSale).toHaveBeenCalledTimes(1);
+    expect(issuerRow(db)).toMatchObject({ mode: "apagado", checked_ruc: null, checked_at: null });
+    expect(String(issuerRow(db).check_error)).toContain(`(${http})`);
+    expect(report.orgs[0]!.issuers[0]).toMatchObject({ stopped: "apagado", pendientes: 1 });
+  });
+
+  it("el RUC apagado por la pasada no puede volver a Real sin otra prueba: la base lo exige", async () => {
+    // Lo que hace invoice_issuers_real_ready (0257) con la fila que dejó el barrido.
+    const realReady = (r: Row) => !!r.token_enc && !!r.emit_from && r.checked_ruc !== null && r.checked_ruc === r.ruc;
+    const db = world();
+    addOrder(db, 1);
+    const deps = makeDeps();
+    deps.createSale.mockResolvedValue({ http: 401, body: { message: "Unauthenticated." } });
+    await sweep(db, deps);
+    expect(realReady(issuerRow(db))).toBe(false);
   });
 
   it("429: corta toda la emisión de la pasada, también la de otra organización", async () => {
@@ -1068,7 +1254,7 @@ describe("runInvoiceSweep: emisión real (§35.4)", () => {
     expect(deps.createSale).toHaveBeenCalledTimes(1);
     expect(db.t("order_invoices")[0]).toMatchObject({ status: "emitida", ruc_mismatch: true, simplefact_id: 44 });
     expect(db.t("order_invoices")[0]!.error).toMatch(/20601643316/);
-    expect(issuerRow(db).mode).toBe("apagado");
+    expect(issuerRow(db)).toMatchObject({ mode: "apagado", checked_ruc: null, checked_at: null });
     expect(issuerRow(db).check_error).toMatch(/20601643316/);
     expect(report.orgs[0]!.issuers[0]).toMatchObject({ emitidas: 1, stopped: "apagado", pendientes: 1 });
   });
@@ -1088,7 +1274,7 @@ describe("runInvoiceSweep: emisión real (§35.4)", () => {
     const deps = makeDeps();
     const report = await sweep(db, deps);
     expect(deps.createSale).not.toHaveBeenCalled();
-    expect(db.rpcLog).toHaveLength(1);
+    expect(claims(db)).toHaveLength(1);
     expect(check(db, "ord-2") ?? check(db, "ord-1")).toMatchObject({ reason: "tope", issuer_id: ISS });
     expect(report.orgs[0]!.issuers[0]).toMatchObject({ stopped: "tope", pendientes: 1, reasons: { tope: 1 } });
   });
@@ -1115,7 +1301,7 @@ describe("runInvoiceSweep: emisión real (§35.4)", () => {
     db.state.rpcError = "connection reset";
     const deps = makeDeps();
     const report = await sweep(db, deps);
-    expect(db.rpcLog).toHaveLength(2);
+    expect(claims(db)).toHaveLength(2);
     expect(deps.createSale).not.toHaveBeenCalled();
     expect(report.errors).toHaveLength(2);
     expect(report.orgs[0]!.issuers[0]!.errores).toBe(2);
@@ -1128,7 +1314,7 @@ describe("runInvoiceSweep: emisión real (§35.4)", () => {
     db.state.claimOverride = () => ({ id: "otro-id", mode: "real" });
     const deps = makeDeps();
     const report = await sweep(db, deps);
-    expect(db.rpcLog).toHaveLength(1);
+    expect(claims(db)).toHaveLength(1);
     expect(deps.createSale).not.toHaveBeenCalled();
     expect(report.orgs[0]!.issuers[0]!.stopped).toBe("turno");
   });
@@ -1150,7 +1336,7 @@ describe("runInvoiceSweep: emisión real (§35.4)", () => {
     const db = world({ mode: "simulacion" });
     for (let i = 1; i <= 20; i += 1) addOrder(db, i);
     const report = await sweep(db, makeDeps());
-    expect(db.rpcLog).toHaveLength(INVOICE_MAX_PER_RUN);
+    expect(claims(db)).toHaveLength(INVOICE_MAX_PER_RUN);
     expect(db.t("order_invoices")).toHaveLength(INVOICE_MAX_PER_RUN);
     expect(report.orgs[0]!.issuers[0]).toMatchObject({
       simuladas: INVOICE_MAX_PER_RUN,
@@ -1167,7 +1353,7 @@ describe("runInvoiceSweep: la lectura de Shopify justo antes (§35.3)", () => {
     const deps = makeDeps();
     deps.fetchOrder.mockResolvedValue({ ok: false, reason: "lectura_fallida", detail: "Shopify no respondió a tiempo." });
     const report = await sweep(db, deps);
-    expect(db.rpcLog).toEqual([]);
+    expect(claims(db)).toEqual([]);
     expect(deps.createSale).not.toHaveBeenCalled();
     expect(check(db, "ord-1")).toMatchObject({
       reason: "lectura_fallida",
@@ -1189,7 +1375,7 @@ describe("runInvoiceSweep: la lectura de Shopify justo antes (§35.3)", () => {
     const deps = makeDeps();
     deps.fetchOrder.mockResolvedValue(okRead("shp-1", 14_990));
     await sweep(db, deps);
-    expect(db.rpcLog).toEqual([]);
+    expect(claims(db)).toEqual([]);
     expect(check(db, "ord-1")).toMatchObject({ reason: "total_distinto", detail: "Shopify dice S/ 149.90; Kapta, S/ 150.00." });
   });
 
@@ -1200,7 +1386,7 @@ describe("runInvoiceSweep: la lectura de Shopify justo antes (§35.3)", () => {
     const read = okRead("shp-1") as Extract<InvoiceOrderRead, { ok: true }>;
     deps.fetchOrder.mockResolvedValue({ ...read, items: [{ code: "A", name: "A", qty: 1, priceCents: 14_000 }] });
     await sweep(db, deps);
-    expect(db.rpcLog).toEqual([]);
+    expect(claims(db)).toEqual([]);
     expect(check(db, "ord-1")).toMatchObject({ reason: "no_cuadra" });
   });
 
@@ -1209,7 +1395,7 @@ describe("runInvoiceSweep: la lectura de Shopify justo antes (§35.3)", () => {
     addOrder(db, 1, { prepaid: true });
     const deps = makeDeps();
     await sweep(db, deps);
-    expect(db.rpcLog).toEqual([]);
+    expect(claims(db)).toEqual([]);
     expect(check(db, "ord-1")).toMatchObject({ reason: "pago_web_no_confirmado" });
 
     // Pasadas las 6 horas, se relee y Shopify ya lo confirma.
@@ -1217,15 +1403,15 @@ describe("runInvoiceSweep: la lectura de Shopify justo antes (§35.3)", () => {
     const next = makeDeps({ now: () => later });
     next.fetchOrder.mockResolvedValue(okRead("shp-1", 15_000, true));
     await sweep(db, next);
-    expect(db.rpcLog).toHaveLength(1);
-    expect(db.rpcLog[0]!.args).toMatchObject({
+    expect(claims(db)).toHaveLength(1);
+    expect(claims(db)[0]!.args).toMatchObject({
       p_paid_at: FECHA_PEDIDO,
       p_basis: { prepaid: true, payments: [{ id: null, source: "prepago_web", accountIds: ["acc-flow"] }] },
     });
     expect(invoice(db, "ord-1")).toMatchObject({ status: "emitida" });
   });
 
-  it("un motivo de Shopify de hace menos de 6 horas no se relee; pasado ese plazo, sí, y se reescribe su fecha", async () => {
+  it("un motivo de Shopify de hace menos de 6 horas: la base no lo devuelve; pasado ese plazo, se relee y se reescribe su fecha", async () => {
     const db = world();
     addOrder(db, 1);
     db.t("invoice_order_checks").push({
@@ -1240,7 +1426,7 @@ describe("runInvoiceSweep: la lectura de Shopify justo antes (§35.3)", () => {
     const deps = makeDeps();
     const report = await sweep(db, deps);
     expect(deps.fetchOrder).not.toHaveBeenCalled();
-    expect(report.orgs[0]).toMatchObject({ candidates: 1, cached: 1 });
+    expect(report.orgs[0]).toMatchObject({ candidates: 0, cached: 0 });
     expect(writes(db)).toEqual([]);
 
     db.t("invoice_order_checks")[0]!.checked_at = new Date(NOW.getTime() - INVOICE_SHOPIFY_RECHECK_MS - 1).toISOString();
@@ -1249,6 +1435,26 @@ describe("runInvoiceSweep: la lectura de Shopify justo antes (§35.3)", () => {
     await sweep(db, again);
     expect(again.fetchOrder).toHaveBeenCalledTimes(1);
     expect(check(db, "ord-1")).toMatchObject({ reason: "editado", checked_at: NOW.toISOString() });
+  });
+
+  it("bloqueado por Shopify hace poco bajo el OTRO modo: la base lo devuelve, pero tampoco se relee", async () => {
+    // Un motivo de Shopify es del pedido en Shopify, no del modo.
+    const db = world();
+    addOrder(db, 1);
+    db.t("invoice_order_checks").push({
+      order_id: "ord-1",
+      mode: "simulacion",
+      store_id: STORE,
+      issuer_id: ISS,
+      reason: "propina",
+      detail: null,
+      checked_at: new Date(NOW.getTime() - 60 * 60_000).toISOString(),
+    });
+    const deps = makeDeps();
+    const report = await sweep(db, deps);
+    expect(deps.fetchOrder).not.toHaveBeenCalled();
+    expect(claims(db)).toEqual([]);
+    expect(report.orgs[0]).toMatchObject({ candidates: 1, cached: 1 });
   });
 
   it("dry relee Shopify (es solo lectura) pero no escribe nada ni llama a SimpleFact", async () => {
@@ -1260,7 +1466,7 @@ describe("runInvoiceSweep: la lectura de Shopify justo antes (§35.3)", () => {
     const report = await sweep(db, deps, { dry: true });
     expect(deps.fetchOrder).toHaveBeenCalledTimes(1);
     expect(writes(db)).toEqual([]);
-    expect(db.rpcLog).toEqual([]);
+    expect(claims(db)).toEqual([]);
     expect(deps.createSale).not.toHaveBeenCalled();
     expect(deps.listSales).not.toHaveBeenCalled();
     expect(deps.decryptToken).not.toHaveBeenCalled();
@@ -1327,34 +1533,142 @@ describe("runInvoiceSweep: la revisión de cada pedido (§35.6)", () => {
     expect(report.orgs[0]!.reasons).toEqual({ ruc_apagado: 1 });
   });
 
-  it("un último intento en error sin reintento pedido no se vuelve a intentar (error_previo)", async () => {
+  it("un error real sin reintento pedido ya no es candidato en real: no ocupa lugar ni se relee", async () => {
     const db = world();
     addOrder(db, 1);
     db.t("order_invoices").push({ id: "e", order_id: "ord-1", issuer_id: ISS, mode: "real", status: "error", retry_requested_at: null, created_at: PAGADO });
+    const deps = makeDeps();
+    const report = await sweep(db, deps);
+    expect(report.orgs[0]).toMatchObject({ candidates: 0, lleno: {} });
+    expect(deps.fetchOrder).not.toHaveBeenCalled();
+    expect(claims(db)).toEqual([]);
+    // Pedido el reintento, vuelve a entrar y sale.
+    db.t("order_invoices")[0]!.retry_requested_at = NOW.toISOString();
+    await sweep(db, deps);
+    expect(deps.createSale).toHaveBeenCalledTimes(1);
+    expect(db.t("order_invoices").map((r) => r.status)).toEqual(["error", "emitida"]);
+  });
+
+  it("si la base igual lo devolviera (el error llegó entre la lista y los hechos), la regla dice error_previo", async () => {
+    const db = world();
+    addOrder(db, 1);
+    db.t("order_invoices").push({ id: "e", order_id: "ord-1", issuer_id: ISS, mode: "real", status: "error", retry_requested_at: null, created_at: PAGADO });
+    const rpc = db.admin.rpc.bind(db.admin);
+    (db.admin as unknown as { rpc: unknown }).rpc = async (fn: string, args: Record<string, unknown>) =>
+      fn === "invoice_candidates" ? { data: [{ order_id: "ord-1" }], error: null } : rpc(fn, args);
     const deps = makeDeps();
     await sweep(db, deps);
     expect(deps.fetchOrder).not.toHaveBeenCalled();
     expect(check(db, "ord-1")).toMatchObject({ reason: "error_previo", issuer_id: ISS });
   });
 
-  it("un pedido viejo que se terminó de pagar hoy también entra (aunque no esté entre los recientes del Master)", async () => {
+  it("en simulación, un error real no lo saca de la lista: el turno de simulación no lo mira", async () => {
+    const db = world({ mode: "simulacion" });
+    addOrder(db, 1);
+    db.t("order_invoices").push({ id: "e", order_id: "ord-1", issuer_id: ISS, mode: "real", status: "error", retry_requested_at: null, created_at: PAGADO });
+    const report = await sweep(db, makeDeps());
+    expect(report.orgs[0]!.candidates).toBe(1);
+    expect(db.t("order_invoices").find((r) => r.mode === "simulacion")).toMatchObject({ status: "simulada" });
+  });
+
+  it(`una lista que llega a ${INVOICE_SWEEP_MAX_CANDIDATES} queda marcada «lleno» en su modo; una de uno menos, no`, async () => {
+    const run = async (sizes: Partial<Record<string, number>>) => {
+      const db = world();
+      db.t("invoice_issuers").push({ ...issuerRow(db), id: "iss-sim", ruc: "20600000013", legal_name: "Z", mode: "simulacion" });
+      const rpc = db.admin.rpc.bind(db.admin);
+      (db.admin as unknown as { rpc: unknown }).rpc = async (fn: string, args: Record<string, unknown>) =>
+        fn === "invoice_candidates"
+          ? {
+              data: Array.from({ length: sizes[args.p_mode as string] ?? 0 }, (_, i) => ({ order_id: `${String(args.p_mode)}-${i}` })),
+              error: null,
+            }
+          : rpc(fn, args);
+      return sweep(db, makeDeps());
+    };
+    const max = INVOICE_SWEEP_MAX_CANDIDATES;
+    const soloReal = (await run({ real: max, simulacion: max - 1 })).orgs[0]!;
+    expect(soloReal.candidates).toBe(2 * max - 1);
+    expect(soloReal.lleno).toEqual({ real: true });
+    expect((await run({ real: max - 1, simulacion: max })).orgs[0]!.lleno).toEqual({ simulacion: true });
+    expect((await run({ real: max, simulacion: max })).orgs[0]!.lleno).toEqual({ real: true, simulacion: true });
+    const ninguno = await run({ real: max - 1, simulacion: 0 });
+    expect(ninguno.orgs[0]!.lleno).toEqual({});
+    // No es un error: el cron no se pone rojo por esto.
+    expect(ninguno.errors).toEqual([]);
+    expect((await run({ real: max })).errors).toEqual([]);
+  });
+
+  it("un pedido de hace 50 días que se terminó de pagar hoy entra, aunque haya cientos más nuevos ya resueltos", async () => {
+    // Antes eran los 300 más nuevos del Master (45 días) y los 300 pagos
+    // validados más nuevos: con ~26 pagados al día, ~11 días, y los pedidos ya
+    // emitidos ocupaban los lugares. Este pedido no entraba nunca.
     const db = world();
-    addOrder(db, 1, { createdAt: "2026-08-01T15:00:00.000Z", inMaster: false });
+    for (let i = 1; i <= 320; i += 1) {
+      const id = addOrder(db, 100 + i, { registeredAt: "2026-10-14T16:00:00.000Z", validatedAt: "2026-10-14T16:00:00.000Z" });
+      db.t("order_invoices").push({ id: `ya-${i}`, order_id: id, issuer_id: ISS, mode: "real", status: "emitida", created_at: "2026-10-13T16:00:00.000Z" });
+    }
+    addOrder(db, 1, { createdAt: "2026-08-25T15:00:00.000Z" });
     const deps = makeDeps();
-    await sweep(db, deps);
+    const report = await sweep(db, deps);
+    expect(report.orgs[0]!.candidates).toBe(1);
+    expect(deps.fetchOrder).toHaveBeenCalledTimes(1);
     expect(invoice(db, "ord-1")).toMatchObject({ status: "emitida" });
   });
 
-  it("los candidatos del Master: pagados completos o prepago web, de los últimos 45 días, los 300 más nuevos", async () => {
+  it("pide los candidatos a la base: una vez por modo encendido, con el «Emitir desde» más antiguo de ese modo", async () => {
+    const db = world();
+    const base = issuerRow(db);
+    db.t("invoice_issuers").push(
+      { ...base, id: "iss-real-2", ruc: RUC_OTRO, legal_name: "B", emit_from: "2026-10-12T05:00:00.000Z", checked_ruc: RUC_OTRO },
+      { ...base, id: "iss-sim", ruc: "20600000013", legal_name: "C", mode: "simulacion", emit_from: "2026-10-10T05:00:00.000Z" },
+      // Sin fecha no emite: no cuenta para el «desde».
+      { ...base, id: "iss-sim-sin-fecha", ruc: "20600000021", legal_name: "D", mode: "simulacion", emit_from: null },
+    );
+    await sweep(db, makeDeps());
+    const blocked = [...SHOPIFY_LEVEL_REASONS].sort();
+    expect(candidateCalls(db).map((c) => c.args)).toEqual([
+      { p_org: ORG, p_mode: "real", p_since: "2026-10-12T05:00:00.000Z", p_limit: INVOICE_SWEEP_MAX_CANDIDATES, p_blocked: blocked, p_store: null },
+      { p_org: ORG, p_mode: "simulacion", p_since: "2026-10-10T05:00:00.000Z", p_limit: INVOICE_SWEEP_MAX_CANDIDATES, p_blocked: blocked, p_store: null },
+    ]);
+    expect(INVOICE_SWEEP_MAX_CANDIDATES).toBe(500);
+    // Una sola lista de motivos de Shopify, la de aquí: la base no tiene otra.
+    expect(shopifyBlockedReasons()).toEqual(blocked);
+    expect(blocked).toContain("editado");
+    expect(blocked).not.toContain("lectura_fallida");
+  });
+
+  it("un modo cuyos RUC no tienen «Emitir desde» no tiene candidatos: ni se pregunta", async () => {
+    const db = world({ mode: "simulacion" });
+    issuerRow(db).emit_from = null;
+    addOrder(db, 1);
+    const deps = makeDeps();
+    const report = await sweep(db, deps);
+    expect(candidateCalls(db)).toEqual([]);
+    expect(report.orgs[0]!.candidates).toBe(0);
+    expect(deps.fetchOrder).not.toHaveBeenCalled();
+  });
+
+  it("con ?storeId la base mira solo esa tienda", async () => {
     const db = world();
     addOrder(db, 1);
-    await sweep(db, makeDeps());
-    const q = db.log.find((x) => x.table === "order_master" && x.cols === "order_id")!;
-    expect(has(q, "in", "store_id", [STORE])).toBe(true);
-    expect(has(q, "or", "payment_state.eq.pago_completo,and(payment_gateway.eq.checkout,financial_status.eq.paid)")).toBe(true);
-    expect(has(q, "gte", "order_created_at", "2026-08-30T20:00:00.000Z")).toBe(true);
-    expect(q.orderBy).toEqual({ col: "order_created_at", ascending: false });
-    expect(q.limit).toBe(300);
+    await sweep(db, makeDeps(), { storeId: STORE });
+    expect(candidateCalls(db).map((c) => c.args.p_store)).toEqual([STORE]);
+  });
+
+  it("FALLA CERRADA: si la base no da los candidatos, esa organización no emite; otra sigue", async () => {
+    const db = world();
+    addSecondOrg(db);
+    addOrder(db, 1);
+    addOrder(db, 2, { store: STORE2 });
+    const rpc = db.admin.rpc.bind(db.admin);
+    (db.admin as unknown as { rpc: unknown }).rpc = async (fn: string, args: Record<string, unknown>) =>
+      fn === "invoice_candidates" && args.p_org === ORG ? { data: null, error: { message: "statement timeout" } } : rpc(fn, args);
+    const deps = makeDeps();
+    const report = await sweep(db, deps);
+    expect(invoice(db, "ord-1")).toBeUndefined();
+    expect(invoice(db, "ord-2")).toMatchObject({ status: "emitida", issuer_id: ISS2 });
+    expect(report.errors).toHaveLength(1);
+    expect(report.errors[0]).toMatch(new RegExp(`^Organización ${ORG}: .*pedidos por revisar.*statement timeout`));
   });
 
   it("solo las tiendas activas", async () => {
@@ -1390,7 +1704,7 @@ describe("runInvoiceSweep: falla cerrada por organización", () => {
     const deps = makeDeps();
     const report = await sweep(db, deps);
     expect(deps.fetchOrder).not.toHaveBeenCalled();
-    expect(db.rpcLog).toEqual([]);
+    expect(claims(db)).toEqual([]);
     expect(report.errors).toHaveLength(1);
   });
 });
@@ -1455,13 +1769,14 @@ describe("runInvoiceSweep: conciliación (§35.4)", () => {
     expect(db.t("order_invoices")[0]).toMatchObject({ status: "emitida", simplefact_id: 5 });
   });
 
-  it("no mira lo de antes de ayer: eso ya es de una persona", async () => {
+  it("no busca en SimpleFact lo de antes de ayer: el `emitiendo` pasa a en duda y lo ve una persona", async () => {
     const db = world();
     openRow(db, 1, "emitiendo", "2026-10-11T20:00:00.000Z");
     const deps = makeDeps();
-    await sweep(db, deps);
+    const report = await sweep(db, deps);
     expect(deps.listSales).not.toHaveBeenCalled();
-    expect(db.t("order_invoices")[0]).toMatchObject({ status: "emitiendo" });
+    expect(db.t("order_invoices")[0]).toMatchObject({ status: "en_duda", error: invoiceUnreconciledError(uuidOf(1)) });
+    expect(report.sin_respuesta).toBe(1);
   });
 
   it.each([
@@ -1504,6 +1819,363 @@ describe("runInvoiceSweep: conciliación (§35.4)", () => {
     const deps = makeDeps();
     await sweep(db, deps);
     expect(deps.listSales).not.toHaveBeenCalled();
+  });
+});
+
+describe("runInvoiceSweep: un `emitiendo` que nadie va a conciliar pasa a en duda (§35.4)", () => {
+  const minutesAgo = (m: number) => new Date(NOW.getTime() - m * 60_000).toISOString();
+  function emitting(db: Db, n: number, createdAt: string, issuerId = ISS, store = STORE) {
+    db.t("order_invoices").push({
+      id: uuidOf(n),
+      order_id: `ord-e${n}`,
+      store_id: store,
+      issuer_id: issuerId,
+      mode: "real",
+      status: "emitiendo",
+      error: null,
+      created_at: createdAt,
+    });
+  }
+  const row = (db: Db, n: number) => db.t("order_invoices").find((r) => r.id === uuidOf(n))!;
+
+  it("la nota de la boleta va en el mensaje, para buscarla en SimpleFact", () => {
+    expect(invoiceUnreconciledError("6f1c2a3b-9d8e-4f00-a1b2-c3d4e5f60718")).toBe(
+      "Sin respuesta de SimpleFact: búscala por su nota «Kapta 6f1c2a3b» antes de liberarla",
+    );
+  });
+
+  it.each(["apagado", "simulacion"] as const)(
+    "RUC en %s: pasa a en duda sin llamar a SimpleFact, aunque no haya nada que barrer",
+    async (mode) => {
+      const db = world({ mode });
+      emitting(db, 1, minutesAgo(30));
+      const deps = makeDeps();
+      const report = await sweep(db, deps);
+      expect(row(db, 1)).toMatchObject({ status: "en_duda", error: invoiceUnreconciledError(uuidOf(1)) });
+      expect(report.sin_respuesta).toBe(1);
+      expect(report.errors).toEqual([]);
+      // «Apagado» no hace nada hacia afuera: ni se lee el token.
+      expect(deps.listSales).not.toHaveBeenCalled();
+      expect(deps.createSale).not.toHaveBeenCalled();
+      expect(deps.decryptToken).not.toHaveBeenCalled();
+      // Solo si seguía emitiendo al escribir.
+      const update = writes(db, "order_invoices").find((q) => q.op === "update")!;
+      expect(has(update, "eq", "id", uuidOf(1))).toBe(true);
+      expect(has(update, "eq", "status", "emitiendo")).toBe(true);
+      if (mode === "apagado") expect(report.skipped).toBe("sin_ruc_encendido");
+    },
+  );
+
+  it("RUC en real sin token: pasa a en duda (la conciliación no puede leer la lista)", async () => {
+    const db = world();
+    issuerRow(db).token_enc = null;
+    emitting(db, 1, minutesAgo(30));
+    const deps = makeDeps();
+    await sweep(db, deps);
+    expect(row(db, 1)).toMatchObject({ status: "en_duda" });
+    expect(deps.listSales).not.toHaveBeenCalled();
+  });
+
+  it("RUC en real con token, de hoy o de ayer: lo deja para la conciliación de la misma pasada", async () => {
+    const db = world();
+    emitting(db, 1, minutesAgo(30));
+    // 00:00 de Lima del 13-10: el borde de la ventana de la conciliación.
+    emitting(db, 2, "2026-10-13T05:00:00.000Z");
+    const deps = makeDeps();
+    deps.listSales.mockImplementation(async (_conn, q) => ({
+      http: 200,
+      body: { data: q.shortdate === "today" ? [sale(31, RUC_GF, invoiceNoteRef(uuidOf(1)))] : [] },
+    }));
+    const report = await sweep(db, deps);
+    expect(row(db, 1)).toMatchObject({ status: "emitida", simplefact_id: 31 });
+    // No apareció en la lista completa: la conciliación lo pasa a en duda con su texto.
+    expect(row(db, 2)).toMatchObject({ status: "en_duda", error: INVOICE_NOT_FOUND_ERROR });
+    expect(report.sin_respuesta).toBe(0);
+  });
+
+  it("un minuto antes de la ventana de la conciliación ya no lo mira nadie: pasa a en duda", async () => {
+    const db = world();
+    emitting(db, 1, "2026-10-13T04:59:00.000Z");
+    const deps = makeDeps();
+    await sweep(db, deps);
+    expect(row(db, 1)).toMatchObject({ status: "en_duda", error: invoiceUnreconciledError(uuidOf(1)) });
+    expect(deps.listSales).not.toHaveBeenCalled();
+  });
+
+  it("uno de hace menos de 10 minutos puede tener su POST en vuelo: no se toca", async () => {
+    const db = world({ mode: "apagado" });
+    emitting(db, 1, minutesAgo(5));
+    const report = await sweep(db, makeDeps());
+    expect(row(db, 1)).toMatchObject({ status: "emitiendo" });
+    expect(report.sin_respuesta).toBe(0);
+  });
+
+  it("un en duda, un error o una simulación no se tocan: solo los `emitiendo` reales", async () => {
+    const db = world({ mode: "apagado" });
+    db.t("order_invoices").push(
+      { id: uuidOf(1), order_id: "a", store_id: STORE, issuer_id: ISS, mode: "real", status: "en_duda", error: "x", created_at: minutesAgo(60) },
+      { id: uuidOf(2), order_id: "b", store_id: STORE, issuer_id: ISS, mode: "real", status: "error", error: "y", created_at: minutesAgo(60) },
+      { id: uuidOf(3), order_id: "c", store_id: STORE, issuer_id: ISS, mode: "simulacion", status: "simulada", error: null, created_at: minutesAgo(60) },
+    );
+    await sweep(db, makeDeps());
+    expect(writes(db, "order_invoices")).toEqual([]);
+    const read = db.log.find((q) => q.table === "order_invoices")!;
+    expect(has(read, "eq", "mode", "real")).toBe(true);
+    expect(has(read, "eq", "status", "emitiendo")).toBe(true);
+  });
+
+  it("con ?storeId solo los de esa tienda", async () => {
+    const db = world({ mode: "simulacion" });
+    addSecondOrg(db);
+    issuerRow(db, ISS2).mode = "apagado";
+    emitting(db, 1, minutesAgo(30));
+    emitting(db, 2, minutesAgo(30), ISS2, STORE2);
+    await sweep(db, makeDeps(), { storeId: STORE });
+    expect(row(db, 1)).toMatchObject({ status: "en_duda" });
+    expect(row(db, 2)).toMatchObject({ status: "emitiendo" });
+  });
+
+  it(`del más viejo al más nuevo, a lo más ${INVOICE_UNRECONCILED_BATCH} por pasada`, async () => {
+    const db = world({ mode: "apagado" });
+    for (let i = 1; i <= INVOICE_UNRECONCILED_BATCH + 5; i += 1) emitting(db, i, minutesAgo(300 - i));
+    const report = await sweep(db, makeDeps());
+    expect(report.sin_respuesta).toBe(INVOICE_UNRECONCILED_BATCH);
+    expect(row(db, 1)).toMatchObject({ status: "en_duda" });
+    expect(row(db, INVOICE_UNRECONCILED_BATCH + 5)).toMatchObject({ status: "emitiendo" });
+  });
+
+  it("dry no lo toca", async () => {
+    const db = world({ mode: "apagado" });
+    emitting(db, 1, minutesAgo(30));
+    await sweep(db, makeDeps(), { dry: true });
+    expect(row(db, 1)).toMatchObject({ status: "emitiendo" });
+    expect(db.log.filter((q) => q.table === "order_invoices")).toEqual([]);
+  });
+
+  it("si no puede leer los RUC de esas filas no toca nada, lo reporta y sigue con el barrido", async () => {
+    const db = world({ mode: "simulacion" });
+    emitting(db, 1, minutesAgo(30));
+    addOrder(db, 1);
+    db.failWhen.push((q) => q.table === "invoice_issuers" && q.cols === "id,mode");
+    const report = await sweep(db, makeDeps());
+    expect(row(db, 1)).toMatchObject({ status: "emitiendo" });
+    expect(report.errors.join(" ")).toMatch(/emitiendo/);
+    expect(invoice(db, "ord-1")).toMatchObject({ status: "simulada" });
+  });
+
+  it("si no puede leer los `emitiendo`, lo reporta y sigue con el barrido", async () => {
+    const db = world({ mode: "simulacion" });
+    addOrder(db, 1);
+    db.failWhen.push((q) => q.table === "order_invoices" && q.op === "select" && has(q, "eq", "status", "emitiendo"));
+    const report = await sweep(db, makeDeps());
+    expect(report.errors).toHaveLength(1);
+    expect(invoice(db, "ord-1")).toMatchObject({ status: "simulada" });
+  });
+});
+
+describe("invoice_candidates (0257) y el barrido dicen lo mismo", () => {
+  const sql = readFileSync(resolve(process.cwd(), "db/migrations/0257_invoices.sql"), "utf8");
+  const fn = /create or replace function invoice_candidates\([\s\S]*?\n\$\$;/.exec(sql)?.[0] ?? "";
+  const flat = fn.replace(/\s+/g, " ");
+
+  it("recibe lo que manda el barrido, con esos nombres", () => {
+    expect(fn).not.toBe("");
+    for (const arg of ["p_org uuid", "p_mode text", "p_since timestamptz", "p_limit integer", "p_blocked text[]", "p_store uuid default null"]) {
+      expect(flat).toContain(arg);
+    }
+    expect(flat).toContain("returns table (order_id uuid)");
+    expect(flat).toContain("security invoker set search_path = public");
+  });
+
+  it("los motivos de Shopify vienen del barrido: la base no tiene su propia lista", () => {
+    expect(flat).toContain("c.reason = any (coalesce(p_blocked, '{}'::text[]))");
+    for (const reason of SHOPIFY_LEVEL_REASONS) expect(fn).not.toContain(`'${reason}'`);
+  });
+
+  it("las 6 horas sin releer en Shopify son las del barrido", () => {
+    expect(INVOICE_SHOPIFY_RECHECK_MS % 3_600_000).toBe(0);
+    expect(flat).toContain(`c.checked_at > now() - interval '${INVOICE_SHOPIFY_RECHECK_MS / 3_600_000} hours'`);
+  });
+
+  it("un comprobante real vivo es lo mismo que para la regla y el índice", () => {
+    const live = /i\.mode = 'real' and i\.status in \(([^)]*)\)/.exec(flat);
+    expect(live?.[1]?.split(",").map((x) => x.trim().replace(/'/g, ""))).toEqual([...LIVE_REAL_STATUSES]);
+  });
+
+  it("en real deja fuera el mismo error que el turno rechaza con `error_previo`", () => {
+    expect(flat).toContain(
+      "(p_mode <> 'real' or not exists ( select 1 from order_invoices i where i.order_id = m.order_id and i.mode = 'real' and i.status = 'error' and i.retry_requested_at is null ))",
+    );
+    const claim = /create or replace function invoice_claim\([\s\S]*?\n\$\$;/.exec(sql)?.[0]?.replace(/\s+/g, " ") ?? "";
+    expect(claim).toContain(
+      "where order_id = p_order and mode = 'real' and status = 'error' and retry_requested_at is null ) then return jsonb_build_object('reason', 'error_previo');",
+    );
+  });
+
+  it("los 60 días que Shopify deja leer, y los pagados del Master", () => {
+    expect(flat).toContain("m.order_created_at >= now() - interval '60 days'");
+    expect(flat).toContain(
+      "(m.payment_state = 'pago_completo' or (m.payment_gateway = 'checkout' and m.financial_status = 'paid'))",
+    );
+    // «Quedó pagado» es cuándo se registró el pago (§35.3, condición 8), no cuándo se validó.
+    expect(flat).toContain("p.validation_status = 'validado' and p.registered_at >= p_since");
+    expect(flat).not.toContain("validated_at");
+  });
+});
+
+describe("runInvoiceSweep: el código llegó antes que la 0257", () => {
+  const TABLES = ["invoice_issuers", "order_invoices", "invoice_order_checks"];
+
+  it.each(["42P01", "PGRST205"] as const)("sin las tablas (%s): sin_migracion, sin errores y sin tocar nada", async (code) => {
+    for (const dry of [false, true]) {
+      const db = world();
+      addOrder(db, 1);
+      for (const table of TABLES) db.missing.set(table, code);
+      const deps = makeDeps();
+      const report = await sweep(db, deps, { dry });
+      expect(report, `dry=${dry}`).toMatchObject({ skipped: "sin_migracion", orgs: [], errors: [] });
+      expect(deps.fetchOrder).not.toHaveBeenCalled();
+      expect(deps.createSale).not.toHaveBeenCalled();
+      expect(writes(db)).toEqual([]);
+    }
+  });
+
+  it.each(["42883", "PGRST202"] as const)("sin invoice_candidates (%s): sin_migracion, sin errores", async (code) => {
+    const db = world();
+    addOrder(db, 1);
+    db.missing.set("invoice_candidates", code);
+    const deps = makeDeps();
+    const report = await sweep(db, deps);
+    expect(report).toMatchObject({ skipped: "sin_migracion", errors: [] });
+    expect(deps.fetchOrder).not.toHaveBeenCalled();
+    expect(claims(db)).toEqual([]);
+  });
+
+  it("sin invoice_claim: no se reservó nada ni se llamó a SimpleFact", async () => {
+    const db = world();
+    addOrder(db, 1);
+    addOrder(db, 2);
+    db.missing.set("invoice_claim", "PGRST202");
+    const deps = makeDeps();
+    const report = await sweep(db, deps);
+    expect(report).toMatchObject({ skipped: "sin_migracion", errors: [] });
+    expect(deps.createSale).not.toHaveBeenCalled();
+    expect(db.t("order_invoices")).toEqual([]);
+  });
+
+  it("otra falla de la base sigue siendo un error a la vista", async () => {
+    const db = world();
+    db.failWhen.push((q) => q.table === "order_invoices");
+    db.failWhen.push((q) => q.table === "invoice_issuers");
+    const report = await sweep(db, makeDeps());
+    expect(report.skipped).toBeUndefined();
+    expect(report.errors.length).toBeGreaterThan(0);
+  });
+
+  it("las lecturas del panel lo dicen con un error que se reconoce", async () => {
+    const db = world();
+    db.missing.set("invoice_issuers", "PGRST205");
+    const err = await loadInvoiceIssuers(db.admin, ORG).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(InvoiceMigrationMissingError);
+    expect(isInvoiceMigrationMissing(err)).toBe(true);
+    expect(isInvoiceMigrationMissing(new Error("42P01"))).toBe(false);
+  });
+
+  it("«no existe» solo es «falta la 0257» si nombra algo que crea la 0257", () => {
+    const si: object[] = [
+      { code: "42P01", message: 'relation "public.order_invoices" does not exist' },
+      { code: "42P01", message: 'relation "invoice_order_checks" does not exist' },
+      { code: "PGRST205", message: "Could not find the table 'public.invoice_issuers' in the schema cache" },
+      { code: "42883", message: "function public.invoice_candidates(uuid, text, timestamp with time zone, integer, text[], uuid) does not exist" },
+      { code: "PGRST202", message: "Could not find the function public.invoice_claim(p_basis, p_id) in the schema cache" },
+      // PostgREST pone la función buscada en `details`.
+      {
+        code: "PGRST202",
+        message: "Could not find the function in the schema cache",
+        details: "Searched for the function public.invoice_candidates with parameters p_blocked, p_limit",
+      },
+    ];
+    // Cada cosa que crea la 0257, con el mensaje de Postgres.
+    for (const name of ["invoice_issuers", "order_invoices", "invoice_order_checks", "invoice_claim", "invoice_candidates", "invoice_issuer_id"]) {
+      si.push({ code: "42P01", message: `relation "public.${name}" does not exist` });
+    }
+    const no: object[] = [
+      // Una tabla de antes que falta es una base rota, no la 0257.
+      { code: "42P01", message: 'relation "public.orders" does not exist' },
+      { code: "PGRST205", message: "Could not find the table 'public.order_payments' in the schema cache" },
+      // Dentro de una función de la 0257, lo que falta es otra cosa.
+      { code: "42P01", message: 'relation "order_master" does not exist' },
+      { code: "42883", message: "function hashtextextended(text, integer) does not exist" },
+      // El hint dice lo que SÍ existe: que nombre una tabla de la 0257 prueba que está.
+      {
+        code: "PGRST205",
+        message: "Could not find the table 'public.order_invoice' in the schema cache",
+        hint: "Perhaps you meant the table 'public.order_invoices'",
+      },
+      // Un nombre que solo empieza igual no es el de la 0257.
+      { code: "42P01", message: 'relation "public.order_invoices_respaldo" does not exist' },
+      // Sin nombre no se sabe qué falta.
+      { code: "42P01", message: "x" },
+      // Otro código, aunque nombre la tabla.
+      { code: "23505", message: 'duplicate key value violates unique constraint "order_invoices_one_real"' },
+      { code: "42703", message: "column store_collection_accounts.invoice_issuer_id does not exist" },
+    ];
+    for (const e of si) expect(isInvoiceMigrationMissing(e), JSON.stringify(e)).toBe(true);
+    for (const e of no) expect(isInvoiceMigrationMissing(e), JSON.stringify(e)).toBe(false);
+  });
+
+  it.each(["42P01", "PGRST205"] as const)(
+    "falta una tabla de antes (%s): no es `sin_migracion`, es un error a la vista y no se emite",
+    async (code) => {
+      const db = world();
+      addSecondOrg(db);
+      addOrder(db, 1);
+      addOrder(db, 2, { store: STORE2 });
+      db.missing.set("order_payments", code);
+      const deps = makeDeps();
+      const report = await sweep(db, deps);
+      expect(report.skipped).toBeUndefined();
+      // Una por organización: ninguna emite sin saber sus pagos.
+      expect(report.errors).toHaveLength(2);
+      for (const e of report.errors) expect(e).toMatch(/^Organización .*order_payments/);
+      expect(deps.fetchOrder).not.toHaveBeenCalled();
+      expect(claims(db)).toEqual([]);
+      expect(deps.createSale).not.toHaveBeenCalled();
+    },
+  );
+
+  it("si invoice_candidates dice que falta una tabla de antes (order_master), es un error, no `sin_migracion`", async () => {
+    const db = world();
+    addOrder(db, 1);
+    const rpc = db.admin.rpc.bind(db.admin);
+    (db.admin as unknown as { rpc: unknown }).rpc = async (fn: string, args: Record<string, unknown>) =>
+      fn === "invoice_candidates"
+        ? { data: null, error: { code: "42P01", message: 'relation "order_master" does not exist' } }
+        : rpc(fn, args);
+    const deps = makeDeps();
+    const report = await sweep(db, deps);
+    expect(report.skipped).toBeUndefined();
+    expect(report.errors).toHaveLength(1);
+    expect(report.errors[0]).toMatch(/order_master/);
+    expect(deps.fetchOrder).not.toHaveBeenCalled();
+    expect(claims(db)).toEqual([]);
+  });
+
+  it("si invoice_claim dice que falta una tabla de antes (order_payments), es un error del turno: no se llama a SimpleFact", async () => {
+    const db = world();
+    addOrder(db, 1);
+    const rpc = db.admin.rpc.bind(db.admin);
+    (db.admin as unknown as { rpc: unknown }).rpc = async (fn: string, args: Record<string, unknown>) =>
+      fn === "invoice_claim"
+        ? { data: null, error: { code: "42P01", message: 'relation "order_payments" does not exist' } }
+        : rpc(fn, args);
+    const deps = makeDeps();
+    const report = await sweep(db, deps);
+    expect(report.skipped).toBeUndefined();
+    expect(deps.createSale).not.toHaveBeenCalled();
+    expect(db.t("order_invoices")).toEqual([]);
+    expect(report.orgs[0]!.issuers[0]).toMatchObject({ errores: 1 });
+    expect(report.errors.join(" ")).toMatch(/turno.*order_payments/);
   });
 });
 

@@ -22,6 +22,10 @@ import {
   type CollectionAccount,
   type YapeRecipientCheck,
 } from "@/lib/yape-recipient";
+import { verifyFlowReceipt, type FlowReceiptCheck } from "@/lib/flow/verify";
+
+/** El receptor de un pago que Flow confirmó: la cuenta Flow de la tienda. */
+export const FLOW_RECIPIENT_NAME = "Cuenta Flow de la tienda";
 
 /** Los comprobantes llevan datos bancarios del cliente: bucket privado. */
 export const VOUCHER_BUCKET = "yape-vouchers";
@@ -59,6 +63,11 @@ export interface VoucherInspection {
     recipientYapeEmpresa: boolean;
     /** Con qué cuenta de cobro encajó, si encajó con alguna. */
     recipientAccount: CollectionAccount | null;
+    /**
+     * Constancia de Flow: lo que dijo Flow de su «Nº de orden». Null en
+     * cualquier otro comprobante. Ver lib/flow/verify.ts.
+     */
+    flow: FlowReceiptCheck | null;
   };
   payload: Record<string, unknown>;
 }
@@ -80,6 +89,7 @@ export const EMPTY_INSPECTION: VoucherInspection = {
     recipientReceivedView: false,
     recipientYapeEmpresa: false,
     recipientAccount: null,
+    flow: null,
   },
   payload: {},
 };
@@ -101,6 +111,8 @@ export function voucherReading(
   extracted: YapeVoucherFields,
   accounts: CollectionAccount[],
   customerName?: string | null,
+  /** Lo que dijo Flow del «Nº de orden», si la imagen era una constancia de Flow. */
+  flow: FlowReceiptCheck | null = null,
 ): VoucherInspection {
   // La MISMA regla que relee la auditoría en cada pantalla, con sus dos
   // correcciones: la lectura invertida —un cobro impecable acusado de desvío
@@ -110,28 +122,40 @@ export function voucherReading(
   const swapped = recipient.swapped;
   const recipientName = recipient.name;
   const recipientCheck = recipient.status;
+  // FLOW MANDA SOBRE LA FOTO. Si Flow confirmó la orden como pagada en NUESTRA
+  // cuenta, el dinero entró: el receptor somos nosotros, el monto es el que
+  // dice Flow y es un comprobante aunque no se parezca a un Yape. La fecha se
+  // toma de la imagen si se leyó (es la hora local que ve la clienta) y si no,
+  // la de Flow.
+  const paid = flow?.state === "pagado" ? flow : null;
   return {
     ok: verdict.ok,
-    isVoucher: verdict.isVoucher,
+    isVoucher: paid ? true : verdict.isVoucher,
     fields: {
-      operationNumber: extracted.operationNumber,
-      operationLabel: extracted.operationLabel,
-      amount: extracted.amount,
-      paidAt: extracted.paidAt,
+      operationNumber: paid ? paid.flowOrder : extracted.operationNumber,
+      operationLabel: paid ? "Nº de orden (Flow)" : extracted.operationLabel,
+      amount: paid ? paid.amount ?? extracted.amount : extracted.amount,
+      paidAt: paid ? extracted.paidAt ?? paid.paidAt : extracted.paidAt,
       payerName: swapped ? extracted.recipientName : extracted.payerName,
-      recipientName,
-      recipientPhoneLastDigits: extracted.recipientPhoneLastDigits,
-      recipientCheck,
-      recipientAccount: recipient.account,
-      recipientSwapped: swapped,
-      recipientIgnoredName: recipient.ignoredName,
-      recipientReceivedView: recipient.receivedView,
-      recipientYapeEmpresa: recipient.yapeEmpresa,
+      recipientName: paid ? FLOW_RECIPIENT_NAME : recipientName,
+      recipientPhoneLastDigits: paid ? null : extracted.recipientPhoneLastDigits,
+      recipientCheck: paid ? "verified" : recipientCheck,
+      recipientAccount: paid ? null : recipient.account,
+      recipientSwapped: paid ? false : swapped,
+      recipientIgnoredName: paid ? null : recipient.ignoredName,
+      recipientReceivedView: paid ? false : recipient.receivedView,
+      recipientYapeEmpresa: paid ? false : recipient.yapeEmpresa,
+      flow,
     },
     payload: {
       indicators: verdict.indicators,
       model: verdict.model,
       ok: verdict.ok,
+      // Lo que dijo Flow, tal cual: es la auditoría de por qué un comprobante
+      // que no parece un Yape entró validado. `yapeRecipientReadingFromVision`
+      // lo relee para no decir «receptor no pudo leerse» sobre un pago que la
+      // pasarela confirmó.
+      ...(flow ? { flow } : {}),
       extracted: {
         operation_number: extracted.operationNumber,
         // El rótulo bajo el que se leyó el número: es lo único que dice de qué
@@ -155,6 +179,7 @@ export function voucherReading(
         // A qué cuenta de cobro llegó, cuando se pudo determinar. Con varias
         // cuentas, "verificado" a secas ya no dice dónde está el dinero.
         recipient_account: recipient.account?.name ?? null,
+        flow_order: extracted.flowOrder ?? null,
         ok: extracted.ok,
       },
     },
@@ -204,7 +229,9 @@ export async function inspectVoucher(
     // Las cuentas de cobro de ESTA tienda. Si no hay ninguna configurada, la
     // verificación cae en «no se puede contrastar», jamás en «se desvió».
     const accounts = await loadStoreCollectionAccounts(admin, storeId);
-    return voucherReading(verdict, extracted, accounts, customerName);
+    // Constancia de Flow: se le pregunta a Flow por su «Nº de orden».
+    const flow = extracted.flowOrder ? await verifyFlowReceipt(admin, storeId, extracted.flowOrder) : null;
+    return voucherReading(verdict, extracted, accounts, customerName, flow);
   } catch {
     return EMPTY_INSPECTION;
   }

@@ -40,6 +40,7 @@ import {
   classifySaleResponse,
   findSaleByNote,
   invoiceEligibility,
+  invoiceNoteRef,
   type InvoiceAccount,
   type InvoiceExisting,
   type InvoiceIssuer,
@@ -64,11 +65,15 @@ import {
 /** De a cuántos ids se lee: el largo de la URL de PostgREST (como lib/order-master.ts). */
 const ID_BATCH = 200;
 
-/** El barrido mira los pedidos de los últimos 45 días. */
-export const INVOICE_SWEEP_WINDOW_DAYS = 45;
-
-/** Candidatos por fuente y organización en una pasada. */
-export const INVOICE_SWEEP_MAX_CANDIDATES = 300;
+/**
+ * Candidatos por organización y modo en una pasada (`invoice_candidates`, 0257).
+ * La base ya deja fuera lo resuelto —con comprobante real vivo o, en
+ * simulación, con su simulación— y lo que Shopify bloqueó hace poco, así que el
+ * límite es para lo que falta mirar: con ~26 pedidos pagados al día y los 60
+ * días que mira la función, lo pendiente de verdad queda muy por debajo. Si
+ * una lista llega al límite, el reporte lo dice (`lleno`).
+ */
+export const INVOICE_SWEEP_MAX_CANDIDATES = 500;
 
 /**
  * Un pedido bloqueado por lo que dijo Shopify no se relee antes de 6 horas: el
@@ -86,6 +91,19 @@ export const INVOICE_RECONCILE_MAX_PAGES = 5;
 
 /** Lo que guarda el panel de un `emitiendo` que se buscó y no apareció. */
 export const INVOICE_NOT_FOUND_ERROR = "Sin respuesta: se busca en SimpleFact";
+
+/**
+ * Lo que guarda un `emitiendo` que ninguna conciliación va a mirar (su RUC no
+ * está en real o no tiene token, o es de antes de ayer) cuando pasa a
+ * `en_duda`: la boleta puede existir, así que una persona la busca por su nota
+ * antes de liberarla (§35.4).
+ */
+export function invoiceUnreconciledError(invoiceId: string): string {
+  return `Sin respuesta de SimpleFact: búscala por su nota «${invoiceNoteRef(invoiceId)}» antes de liberarla`;
+}
+
+/** Cuántos `emitiendo` sin conciliación pasan a `en_duda` por pasada, del más viejo. */
+export const INVOICE_UNRECONCILED_BATCH = 100;
 
 /**
  * Los motivos que salen de la lectura del pedido en Shopify. Son los que el
@@ -185,6 +203,57 @@ function bump(counts: Record<string, number>, key: string): void {
   counts[key] = (counts[key] ?? 0) + 1;
 }
 
+// ── La 0257 todavía no está ──────────────────────────────────────────────────
+
+/**
+ * «La tabla o la función no existe»: Postgres (42P01, 42883) y PostgREST
+ * (PGRST205, PGRST202: no está en su caché del esquema).
+ */
+const MISSING_SCHEMA_CODES: ReadonlySet<string> = new Set(["42P01", "42883", "PGRST205", "PGRST202"]);
+
+/**
+ * Lo que crea la 0257. «No existe» solo es «falta la 0257» si lo que falta es
+ * uno de estos: una tabla de antes que desaparece (`orders`, `order_payments`,
+ * `order_master` dentro de `invoice_candidates`…) es una base rota, y tiene que
+ * verse en rojo, no pasar en verde como `sin_migracion`.
+ */
+const MIGRATION_0257_OBJECTS =
+  /\b(?:invoice_issuers|order_invoices|invoice_order_checks|invoice_claim|invoice_candidates|invoice_issuer_id)\b/;
+
+/**
+ * Falta aplicar la 0257. Esta rama se integra a main desde otras sesiones y la
+ * migración se aplica a mano (DEPLOY.md): el código puede llegar a producción
+ * antes que la base. Eso no es un error que una persona tenga que mirar cada 10
+ * minutos: el barrido lo reporta como `skipped: "sin_migracion"` y no hace nada.
+ */
+export class InvoiceMigrationMissingError extends Error {
+  constructor(what: string) {
+    super(`Falta aplicar la migración 0257 de comprobantes (${what}).`);
+    this.name = "InvoiceMigrationMissingError";
+  }
+}
+
+/**
+ * Si un error (de Supabase o lanzado aquí) dice que falta la 0257: un código de
+ * «no existe» cuyo mensaje o detalle nombra algo que crea la 0257.
+ *
+ * El `hint` no se mira a propósito: PostgREST pone ahí lo que SÍ existe («Perhaps
+ * you meant the table 'public.order_invoices'»). Que nombre una tabla de la 0257
+ * prueba lo contrario: la 0257 está, y lo que falta es otra cosa.
+ */
+export function isInvoiceMigrationMissing(error: unknown): boolean {
+  if (error instanceof InvoiceMigrationMissingError) return true;
+  if (!error || typeof error !== "object") return false;
+  const { code, message, details } = error as { code?: unknown; message?: unknown; details?: unknown };
+  if (typeof code !== "string" || !MISSING_SCHEMA_CODES.has(code)) return false;
+  return [message, details].some((text) => typeof text === "string" && MIGRATION_0257_OBJECTS.test(text));
+}
+
+/** El error de una lectura o escritura: «falta la 0257», o el mensaje de la base. */
+function dbError(what: string, error: { message: string; code?: string; details?: string | null }): Error {
+  return isInvoiceMigrationMissing(error) ? new InvoiceMigrationMissingError(what) : new Error(`${what}: ${error.message}`);
+}
+
 /** Los filtros extra de una lectura por lotes. */
 interface InFilters {
   eq?: Record<string, string | boolean>;
@@ -209,7 +278,7 @@ async function selectIn<T>(
     for (const [key, value] of Object.entries(filters.eq ?? {})) query = query.eq(key, value);
     if (filters.notNull) query = query.not(filters.notNull, "is", null);
     const { data, error } = await query;
-    if (error) throw new Error(`No se pudo leer ${table}: ${error.message}`);
+    if (error) throw dbError(`No se pudo leer ${table}`, error);
     out.push(...((data ?? []) as T[]));
   }
   return out;
@@ -299,6 +368,7 @@ interface PaymentRow {
   amount: number | string | null;
   validation_status: string;
   validated_at: string | null;
+  registered_at: string | null;
   vision: unknown;
 }
 
@@ -361,7 +431,7 @@ async function loadOrders(admin: SupabaseClient, orderIds: string[]): Promise<Ma
     selectIn<PaymentRow>(
       admin,
       "order_payments",
-      "id,order_id,kind,amount,validation_status,validated_at,vision",
+      "id,order_id,kind,amount,validation_status,validated_at,registered_at,vision",
       "order_id",
       found,
     ),
@@ -423,6 +493,9 @@ async function loadOrders(admin: SupabaseClient, orderIds: string[]): Promise<Ma
       amount: num(p.amount),
       validationStatus: p.validation_status,
       validatedAt: p.validated_at,
+      // Cuándo quedó pagado el pedido sale del último pago REGISTRADO (§35.3,
+      // condición 8): es la fecha que mira `invoice_candidates`.
+      registeredAt: p.registered_at,
       vision: p.vision,
       flowLinked: flowLinked.has(p.id),
       statementDestination: destinationByPayment.get(p.id) ?? null,
@@ -525,7 +598,19 @@ export interface InvoiceOrgSweepReport {
   orgId: string;
   stores: number;
   candidates: number;
-  /** Saltados por un motivo de Shopify de hace menos de 6 horas. */
+  /**
+   * Los modos cuya lista de `invoice_candidates` vino llena: exactamente
+   * `INVOICE_SWEEP_MAX_CANDIDATES` pedidos. La base la cortó, así que lo más
+   * viejo pendiente no se miró en esta pasada (ni se mirará mientras lo de
+   * arriba no se resuelva). No es un error, pero va en la línea del log del
+   * cron para que se vea: `"lleno":{"real":true}`.
+   */
+  lleno: Partial<Record<InvoiceWriteMode, true>>;
+  /**
+   * Saltados por un motivo de Shopify de hace menos de 6 horas. La base ya no
+   * devuelve los bloqueados en el modo que se pregunta (`invoice_candidates`):
+   * aquí quedan los que Shopify bloqueó bajo el OTRO modo.
+   */
   cached: number;
   /** Motivos de los pedidos cuyo RUC encendido no se llegó a saber (sin cuenta, RUC apagado…). */
   reasons: Record<string, number>;
@@ -540,7 +625,16 @@ export interface InvoiceOrgSweepReport {
 export interface InvoiceSweepReport {
   dry: boolean;
   at: string;
-  skipped?: "sin_ruc_encendido";
+  /**
+   * sin_ruc_encendido → ningún RUC en simulación ni en real.
+   * sin_migracion     → la 0257 no está aplicada: no hay nada que barrer.
+   */
+  skipped?: "sin_ruc_encendido" | "sin_migracion";
+  /**
+   * `emitiendo` sin respuesta que ninguna conciliación iba a mirar y pasaron a
+   * `en_duda` al empezar la pasada (solo fuera de `dry`).
+   */
+  sin_respuesta?: number;
   orgs: InvoiceOrgSweepReport[];
   errors: string[];
 }
@@ -605,9 +699,6 @@ interface PendingCheck {
   detail: string | null;
 }
 
-/** Los pagados que mira el barrido en el Master: por comprobantes o por la pasarela web. */
-const PAID_FILTER = "payment_state.eq.pago_completo,and(payment_gateway.eq.checkout,financial_status.eq.paid)";
-
 const CLAIM_MODES: readonly InvoiceWriteMode[] = ["simulacion", "real"];
 
 /** Quita los tokens de todo texto de un valor, llaves incluidas. */
@@ -660,14 +751,15 @@ function emptyIssuerReport(i: { id: string; ruc: string; mode: InvoiceWriteMode 
 /**
  * Una pasada del barrido (MOM §35.3, §35.4): por cada organización con un RUC
  * en simulación o en real, revisa sus pedidos pagados, simula o emite, y
- * concilia lo que quedó sin respuesta.
+ * concilia lo que quedó sin respuesta. Antes, fuera de `dry`, pasa a `en_duda`
+ * los `emitiendo` sin respuesta que ninguna conciliación va a mirar.
  *
  *   dry      → revisa, lee en Shopify y arma la boleta, pero no escribe nada en
  *              la base ni llama a SimpleFact (tampoco concilia).
  *   storeId  → solo esa tienda (y los RUC de su organización).
  *
  * No lanza por un problema de una organización: lo anota en `errors` y sigue
- * con la siguiente.
+ * con la siguiente. Si falta la 0257, no hace nada y lo dice en `skipped`.
  */
 export async function runInvoiceSweep(
   admin: SupabaseClient,
@@ -690,33 +782,68 @@ export async function runInvoiceSweep(
   };
   const fail = (text: string) => report.errors.push(sinTelefonos(redact(text)));
 
-  // a. Los RUC encendidos.
+  try {
+    await sweepAll({ admin, deps, dry, now, started, storeId: opts.storeId ?? null, report, fail, redact, secrets });
+  } catch (err) {
+    // Sin la 0257 no hay RUC, ni comprobantes, ni turno: nada que barrer y
+    // nada que una persona tenga que mirar. Cualquier otra cosa sí lanza.
+    if (!isInvoiceMigrationMissing(err)) throw err;
+    report.skipped = "sin_migracion";
+  }
+  return report;
+}
+
+interface SweepContext {
+  admin: SupabaseClient;
+  deps: InvoiceSweepDeps;
+  dry: boolean;
+  now: Date;
+  started: number;
+  storeId: string | null;
+  report: InvoiceSweepReport;
+  fail: (text: string) => void;
+  redact: (text: string) => string;
+  secrets: Set<string>;
+}
+
+async function sweepAll(ctx: SweepContext): Promise<void> {
+  const { admin, deps, dry, now, started, storeId, report, fail, redact, secrets } = ctx;
+
+  // a. La organización de ?storeId.
   let onlyOrg: string | null = null;
-  if (opts.storeId) {
-    const { data, error } = await admin.from("stores").select("id,org_id").eq("id", opts.storeId).maybeSingle();
+  if (storeId) {
+    const { data, error } = await admin.from("stores").select("id,org_id").eq("id", storeId).maybeSingle();
     if (error) {
       fail(`No se pudo leer la tienda: ${error.message}`);
-      return report;
+      return;
     }
     onlyOrg = (data as { org_id?: string | null } | null)?.org_id ?? null;
     if (!onlyOrg) {
       report.skipped = "sin_ruc_encendido";
-      return report;
+      return;
     }
   }
+
+  // b. Antes que nada, y aunque ningún RUC esté encendido: los `emitiendo` que
+  // nadie va a conciliar. Un RUC en «Apagado» no hace nada hacia afuera, pero
+  // su fila a medio enviar no puede quedarse así para siempre.
+  if (!dry) await settleUnreconciledEmitting(ctx);
+
+  // c. Los RUC encendidos.
   let issuersQuery = admin.from("invoice_issuers").select(ISSUER_COLUMNS).in("mode", [...CLAIM_MODES]);
   if (onlyOrg) issuersQuery = issuersQuery.eq("org_id", onlyOrg);
   const { data: issuerData, error: issuerError } = await issuersQuery;
   if (issuerError) {
+    if (isInvoiceMigrationMissing(issuerError)) throw new InvoiceMigrationMissingError("invoice_issuers");
     fail(`No se pudieron leer los RUC: ${issuerError.message}`);
-    return report;
+    return;
   }
   const enabled = ((issuerData ?? []) as IssuerRow[]).filter((r) =>
     (CLAIM_MODES as readonly string[]).includes(r.mode),
   );
   if (!enabled.length) {
     report.skipped = "sin_ruc_encendido";
-    return report;
+    return;
   }
   const byOrg = new Map<string, IssuerRow[]>();
   for (const row of enabled) byOrg.set(row.org_id, [...(byOrg.get(row.org_id) ?? []), row]);
@@ -742,6 +869,7 @@ export async function runInvoiceSweep(
       orgId,
       stores: 0,
       candidates: 0,
+      lleno: {},
       cached: 0,
       reasons: {},
       issuers: [...issuers.values()].map((i) => i.report),
@@ -754,7 +882,7 @@ export async function runInvoiceSweep(
         dry,
         now,
         started,
-        storeId: opts.storeId ?? null,
+        storeId,
         orgId,
         issuers,
         orgReport,
@@ -764,10 +892,93 @@ export async function runInvoiceSweep(
         secrets,
       });
     } catch (err) {
+      // Falta la 0257 (o parte): no es de esta organización, corta la pasada.
+      if (isInvoiceMigrationMissing(err)) throw err;
       fail(`Organización ${orgId}: ${err instanceof Error ? err.message : "error del barrido"}`);
     }
   }
-  return report;
+}
+
+/** Desde cuándo concilia una pasada: las 00:00 de Lima de ayer (§35.4). */
+function reconcileSince(now: Date): string {
+  const yesterdayKey = limaDateKey(new Date(now.getTime() - DAY_MS));
+  return new Date(`${yesterdayKey}T00:00:00-05:00`).toISOString();
+}
+
+interface EmittingRow {
+  id: string;
+  issuer_id: string;
+  created_at: string;
+}
+
+/**
+ * Un `emitiendo` es una boleta que pudo haber salido: la función se cortó a
+ * mitad del POST, o no se pudo guardar lo que contestó SimpleFact. Lo resuelve
+ * la conciliación (`reconcileIssuer`), pero solo la de un RUC en real con token
+ * y solo con las ventas de hoy y de ayer de SimpleFact. Uno cuyo RUC pasó a
+ * «Apagado» o a «Simulación» (la marcha atrás del owner, una prueba de conexión
+ * fallida, un 401), o que es de antes de ayer, no lo miraba nadie, y el panel no
+ * tiene acción para un `emitiendo`: se quedaba así para siempre, bloqueando el
+ * pedido sin que nadie lo viera.
+ *
+ * Aquí pasa a `en_duda`, sin llamar a nada afuera: la boleta puede existir, así
+ * que no se repite, y una persona la busca por su nota en SimpleFact antes de
+ * liberarla desde el panel. Solo los de más de 10 minutos (uno más nuevo puede
+ * tener su POST en vuelo) y solo si siguen en `emitiendo` al escribir.
+ */
+async function settleUnreconciledEmitting(ctx: SweepContext): Promise<void> {
+  const { admin, now, storeId, report, fail } = ctx;
+  const staleBefore = new Date(now.getTime() - INVOICE_STALE_EMITTING_MS).toISOString();
+  let query = admin
+    .from("order_invoices")
+    .select("id,issuer_id,created_at")
+    .eq("mode", "real")
+    .eq("status", "emitiendo")
+    .lt("created_at", staleBefore);
+  if (storeId) query = query.eq("store_id", storeId);
+  const { data, error } = await query.order("created_at", { ascending: true }).limit(INVOICE_UNRECONCILED_BATCH);
+  if (error) {
+    if (isInvoiceMigrationMissing(error)) throw new InvoiceMigrationMissingError("order_invoices");
+    fail(`No se pudieron leer los comprobantes «emitiendo» sin respuesta (${error.message}).`);
+    return;
+  }
+  report.sin_respuesta = 0;
+  const rows = (data ?? []) as EmittingRow[];
+  if (!rows.length) return;
+
+  // Qué RUC concilia esta pasada: en real y con token (como `sweepOrg`, g).
+  let reconciled: Set<string>;
+  try {
+    const ids = unique(rows.map((r) => r.issuer_id));
+    const [modes, withToken] = await Promise.all([
+      selectIn<{ id: string; mode: string }>(admin, "invoice_issuers", "id,mode", "id", ids),
+      selectIn<{ id: string }>(admin, "invoice_issuers", "id", "id", ids, { notNull: "token_enc" }),
+    ]);
+    const hasToken = new Set(withToken.map((r) => r.id));
+    reconciled = new Set(modes.filter((r) => r.mode === "real" && hasToken.has(r.id)).map((r) => r.id));
+  } catch (err) {
+    if (isInvoiceMigrationMissing(err)) throw err;
+    // Sin saber el RUC no se toca nada: la próxima pasada lo vuelve a intentar.
+    fail(`No se pudieron revisar los comprobantes «emitiendo» sin respuesta (${err instanceof Error ? err.message : "error"}).`);
+    return;
+  }
+
+  const windowStart = Date.parse(reconcileSince(now));
+  for (const row of rows) {
+    const created = time(row.created_at);
+    if (reconciled.has(row.issuer_id) && created !== null && created >= windowStart) continue;
+    const saved = await admin
+      .from("order_invoices")
+      .update({ status: "en_duda", error: invoiceUnreconciledError(row.id) })
+      .eq("id", row.id)
+      .eq("status", "emitiendo")
+      .select("id");
+    if (saved.error) {
+      fail(`No se pudo pasar a «en duda» un comprobante sin respuesta (${saved.error.message}).`);
+      continue;
+    }
+    if (((saved.data ?? []) as unknown[]).length) report.sin_respuesta += 1;
+  }
 }
 
 interface OrgContext {
@@ -787,41 +998,47 @@ interface OrgContext {
   secrets: Set<string>;
 }
 
-/** Los pedidos a revisar, del más nuevo al más viejo, sin repetir. */
-async function loadCandidates(ctx: OrgContext, storeIds: string[]): Promise<string[]> {
-  const { admin, now, issuers } = ctx;
-  const since = new Date(now.getTime() - INVOICE_SWEEP_WINDOW_DAYS * DAY_MS).toISOString();
+/**
+ * Los motivos de Shopify como los recibe `invoice_candidates`: una sola lista,
+ * la de aquí, para que la base y el barrido no dejen de releer cosas distintas.
+ */
+export function shopifyBlockedReasons(): string[] {
+  return [...SHOPIFY_LEVEL_REASONS].sort();
+}
+
+/**
+ * Los pedidos a revisar (§35.4, «Qué mira el barrido»), de `invoice_candidates`
+ * (0257): una llamada por cada modo con un RUC encendido en la organización, con
+ * el «Emitir desde» más antiguo de los RUC de ese modo. Ningún pedido pagado
+ * antes de ese momento puede salir en ese modo, y un RUC sin fecha no emite:
+ * sin fecha, ese modo no tiene candidatos. Del más nuevo al más viejo, sin
+ * repetir. Lanza si la base no contesta: sin la lista no se emite. Una lista
+ * que llega al límite queda anotada en `orgReport.lleno`.
+ */
+async function loadCandidates(ctx: OrgContext): Promise<string[]> {
+  const { admin, issuers, orgReport } = ctx;
   const ids: string[] = [];
-
-  // 1. Los pagados según el Master: por comprobantes, o por la pasarela web.
-  const master = await admin
-    .from("order_master")
-    .select("order_id")
-    .in("store_id", storeIds)
-    .or(PAID_FILTER)
-    .gte("order_created_at", since)
-    .order("order_created_at", { ascending: false })
-    .limit(INVOICE_SWEEP_MAX_CANDIDATES);
-  if (master.error) throw new Error(`No se pudo leer order_master: ${master.error.message}`);
-  ids.push(...((master.data ?? []) as { order_id: string }[]).map((r) => r.order_id));
-
-  // 2. Los que se terminaron de pagar desde «Emitir desde», aunque el pedido sea
-  // viejo: un pedido de agencia paga su diferencia semanas después de crearse y
-  // no entraría entre los 300 más nuevos de (1). Es exactamente la condición 8
-  // de §35.3: su último pago validado es posterior al inicio del RUC.
-  const starts = [...issuers.values()].map((i) => time(i.emitFrom)).filter((t): t is number => t !== null);
-  if (starts.length) {
-    const from = new Date(Math.max(Math.min(...starts), now.getTime() - INVOICE_SWEEP_WINDOW_DAYS * DAY_MS));
-    const paid = await admin
-      .from("order_payments")
-      .select("order_id")
-      .in("store_id", storeIds)
-      .eq("validation_status", "validado")
-      .gte("validated_at", from.toISOString())
-      .order("validated_at", { ascending: false })
-      .limit(INVOICE_SWEEP_MAX_CANDIDATES);
-    if (paid.error) throw new Error(`No se pudo leer order_payments: ${paid.error.message}`);
-    ids.push(...((paid.data ?? []) as { order_id: string }[]).map((r) => r.order_id));
+  // Real primero: si el límite se llenara, que falte una simulación y no una boleta.
+  for (const mode of ["real", "simulacion"] as const) {
+    const starts = [...issuers.values()]
+      .filter((i) => i.mode === mode)
+      .map((i) => time(i.emitFrom))
+      .filter((t): t is number => t !== null);
+    if (!starts.length) continue;
+    const { data, error } = await admin.rpc("invoice_candidates", {
+      p_org: ctx.orgId,
+      p_mode: mode,
+      p_since: new Date(Math.min(...starts)).toISOString(),
+      p_limit: INVOICE_SWEEP_MAX_CANDIDATES,
+      p_blocked: shopifyBlockedReasons(),
+      p_store: ctx.storeId,
+    });
+    if (error) throw dbError(`No se pudieron leer los pedidos por revisar (${mode})`, error);
+    const rows = (data ?? []) as { order_id: string | null }[];
+    // Llena: pudo quedar algo pendiente más allá del límite. Sin esta marca, una
+    // lista cortada no se distingue en el log de una que trajo todo.
+    if (rows.length >= INVOICE_SWEEP_MAX_CANDIDATES) orgReport.lleno[mode] = true;
+    ids.push(...rows.map((r) => r.order_id ?? ""));
   }
   return unique(ids.filter(Boolean));
 }
@@ -829,7 +1046,8 @@ async function loadCandidates(ctx: OrgContext, storeIds: string[]): Promise<stri
 async function sweepOrg(ctx: OrgContext): Promise<void> {
   const { admin, deps, dry, now, started, orgId, issuers, orgReport, run, fail, redact } = ctx;
 
-  // b. Las tiendas activas de la organización.
+  // b. Las tiendas activas de la organización. `invoice_candidates` ya mira
+  // solo esas; aquí sirven para el reporte y para la que se pausó en medio.
   let storesQuery = admin.from("stores").select("id").eq("org_id", orgId).eq("status", "active");
   if (ctx.storeId) storesQuery = storesQuery.eq("id", ctx.storeId);
   const { data: storeData, error: storeError } = await storesQuery;
@@ -839,11 +1057,12 @@ async function sweepOrg(ctx: OrgContext): Promise<void> {
   if (!storeIds.length) return;
   const activeStores = new Set(storeIds);
 
-  const candidates = await loadCandidates(ctx, storeIds);
+  const candidates = await loadCandidates(ctx);
   orgReport.candidates = candidates.length;
 
-  // c. La última revisión de cada pedido: para no releer en Shopify lo que
-  // Shopify bloqueó hace poco, y para escribir solo lo que cambió.
+  // c. La última revisión de cada pedido: para escribir solo lo que cambió, y
+  // para no releer en Shopify lo que Shopify bloqueó hace poco bajo el otro
+  // modo (`invoice_candidates` ya no devuelve lo bloqueado en el suyo).
   const checks = await selectIn<CheckRow>(
     admin,
     "invoice_order_checks",
@@ -925,13 +1144,19 @@ async function sweepOrg(ctx: OrgContext): Promise<void> {
     return issuer.conn;
   };
 
-  /** Apaga el RUC con el motivo a la vista (§35.4) y lo detiene en esta pasada. */
+  /**
+   * Apaga el RUC con el motivo a la vista (§35.4) y lo detiene en esta pasada.
+   * También borra la prueba de conexión: si quedaba la vieja, el owner podía
+   * volver a «Real» sin probar de nuevo y emitir otra boleta con el token
+   * rechazado o de otra empresa. Real exige una prueba que leyó el mismo RUC
+   * (0257), así que vuelve solo con «Probar conexión». El motivo se queda.
+   */
   const turnOff = async (issuer: RunIssuer, why: string) => {
     stopIssuer(issuer, STOP.apagado);
     fail(`RUC ${issuer.ruc} apagado: ${why}`);
     const { error } = await admin
       .from("invoice_issuers")
-      .update({ mode: "apagado", check_error: redact(why).slice(0, 500) })
+      .update({ mode: "apagado", checked_ruc: null, checked_at: null, check_error: redact(why).slice(0, 500) })
       .eq("id", issuer.id);
     if (error) fail(`RUC ${issuer.ruc}: no se pudo apagar (${error.message}).`);
   };
@@ -1014,6 +1239,8 @@ async function sweepOrg(ctx: OrgContext): Promise<void> {
       p_request: payload,
     });
     if (claim.error) {
+      // Sin la función no se reservó nada ni se llamó: falta la 0257.
+      if (isInvoiceMigrationMissing(claim.error)) throw new InvoiceMigrationMissingError("invoice_claim");
       // Sin respuesta del turno no se llama: si la fila llegó a quedar en
       // `emitiendo`, la conciliación la pasa a `en_duda` y la ve una persona.
       issuer.report.errores += 1;
@@ -1160,8 +1387,9 @@ async function reconcileIssuer(
 ): Promise<void> {
   const { admin, deps, now, started, fail } = ctx;
   const todayKey = limaDateKey(now);
-  const yesterdayKey = limaDateKey(new Date(now.getTime() - DAY_MS));
-  const since = new Date(`${yesterdayKey}T00:00:00-05:00`).toISOString();
+  // La misma ventana que deja fuera `settleUnreconciledEmitting`: lo de antes
+  // ya pasó a `en_duda` al empezar la pasada.
+  const since = reconcileSince(now);
 
   const { data, error } = await admin
     .from("order_invoices")

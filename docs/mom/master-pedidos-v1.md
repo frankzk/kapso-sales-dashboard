@@ -3778,6 +3778,35 @@ de Lima Metropolitana por su distrito. Las frases del bot que el lector del
 chat guardó como distrito («indicarte bien 🚚», «coordinarlo») no son lugar y
 quedan Sin identificar.
 
+**La cobertura en «Entrega» (14-10-2026).** La tarjeta del siguiente lead y la
+ficha ponen, junto a la dirección, la cobertura **del Master** —Lima, Provincia
+COD o Agencia, la misma chapa que lleva el pedido—, porque es lo que la
+vendedora dice en la llamada: paga al recibir o separa con adelanto (§12). No
+reemplaza a la pista de la cola de arriba: esa sigue repartiendo llamadas en
+Lima / Provincia / Sin identificar.
+
+- **Una sola definición.** Se le pregunta a `order_coverage_for` (§5) lo que
+  le preguntaría el pedido si naciera con esa dirección, armada como en el
+  Master (`lib/lead-delivery-coverage.ts`): el distrito del lead; la provincia
+  del INEI que le da `peru_districts` (Shopify llama `province` al
+  departamento); la región del lead o, si no la hay, el departamento; y la
+  coordenada que Shopify geocodificó en el carrito, solo si el carrito es del
+  mismo distrito. Lo que las excepciones de `district_coverage`, Cañete o los
+  puntos COD deciden para el pedido lo deciden igual aquí.
+- **La coordenada no es opcional.** Sin ella no entra el desempate por
+  cercanía a un punto COD (0100): en los pedidos de los últimos 60 días, 370
+  de 7.441 Provincia COD habrían salido Agencia; 1 de cada 7 «Agencia» habría
+  sido falsa. El 94 % de los carritos trae la coordenada.
+- **Sin un distrito que sirva, no hay chapa.** Un «-» o un vacío no es una
+  dirección: la base clasificaría por el centro del departamento. La línea se
+  queda como estaba —la pista de la cola en minúscula y el aviso «Falta la
+  dirección exacta»—, igual que si la base no responde.
+- **Medido al abrirlo**: de 2.213 carritos de los últimos 45 días que
+  terminaron en pedido, 2.094 (94,6 %) dan la misma cobertura que su pedido;
+  92 no tenían distrito en el carrito; 27 (1,2 %) difieren, casi todos porque
+  el cliente dio otra dirección al comprar (Sullana en el carrito, Lima en el
+  pedido).
+
 **Qué cuenta como distrito dicho en el chat (05-10-2026).** El lector
 (`parseOrderSignals`, `lib/kapso.ts`) guardaba como distrito cosas que no lo
 eran: medido en la cola, 459 leads, el 40 % de los que tenían distrito sin
@@ -3849,6 +3878,19 @@ saltó.
   condición 12).
 - **Abrir otro lead de la cola suelta el siguiente** antes de reservar el otro,
   y pasa a otra vendedora. Al cerrar esa ficha, la tarjeta vuelve a reservar.
+- **La reserva de la ficha abierta también se renueva (14-10-2026).**
+  - **Lo que pasaba.** Abrir un lead lo reservaba 10 minutos y la reserva
+    vencía aunque la ficha siguiera abierta. Una asesora en una llamada larga,
+    o escribiéndole a la clienta, perdía el lead sin enterarse, y otra podía
+    tomarlo encima. Lo reportó Daphne: ella y Ross tenían el mismo lead a la
+    vez.
+  - **Ahora**, con la ficha abierta, la reserva se renueva cada 3 minutos
+    (`renewLeadClaim`, `CLAIM_HEARTBEAT_MS`), siempre que la asesora haya
+    tocado la página (mouse, teclado o toque) en los últimos 10 minutos.
+  - **Una ficha olvidada abierta** deja de renovarse y el lead se suelta solo,
+    como antes.
+  - **Si otra asesora ya lo tomó** cuando la reserva había vencido, no se le
+    quita a nadie: la ficha avisa quién lo tiene.
 - **Saltar** lo suelta y no se le vuelve a ofrecer en esa pestaña; para las
   demás sigue en la cola.
 - **Guardar el resultado** desde la tarjeta es lo mismo que guardarlo en la
@@ -6639,6 +6681,38 @@ sin entrega). La simulación muestra qué saldría hoy sin enviar nada.
       seguiría viendo una deuda que ya pagó y la clave de recojo esperaría a que
       una persona hiciera clic. `validated_by` queda en **NULL**: no lo validó
       nadie, lo validó la pasarela, y la línea de tiempo lo dice.
+    - **Una constancia de Flow subida a mano se verifica con Flow (14-10-2026).**
+      - **El caso.** La clienta paga con tarjeta por Flow, con un link que no
+        salió de Kapta, y manda la pantalla «¡Tu pago se ha concretado
+        exitosamente!». Esa pantalla trae monto, «Nº de orden», fecha, medio,
+        tarjeta y «Pago exitoso», pero no «Pagado a» ni un nº de operación de
+        banco.
+      - **El problema.** El lector no encontraba nada seguro y la daba por «no
+        parece un Yape» (#KP141432, orden 184932654).
+      - **Ahora el lector lee el «Nº de orden»**, que es el `flowOrder`, y Kapta
+        le pregunta a Flow con las credenciales de la tienda
+        (`payment/getStatusByFlowOrder`).
+      - **Si Flow la confirma pagada en nuestra cuenta,** el pago entra
+        **validado por la pasarela**:
+        - es el mismo criterio que el link de arriba, sin persona y con la
+          fuente «flow» en la línea de tiempo;
+        - pasa por la validación de siempre, que cierra la liquidación del
+          courier, confirma la agencia y cierra alertas;
+        - el monto es el que entró según Flow;
+        - el nº de operación es la orden de Flow, así que la misma constancia
+          no paga dos pedidos.
+      - **No entra validado** si:
+        - el monto registrado supera lo que entró;
+        - el nº escrito no es el de la imagen;
+        - el pago es anterior al pedido;
+        - o Flow no conoce la orden en nuestra cuenta.
+
+        En esos casos sigue el camino de siempre.
+      - **Si Flow tiene la orden sin pagar,** la constancia no corresponde a
+        dinero y va a **revisión administrativa**.
+      - **Pago que ya entró por un link de Kapta.** No se registra dos veces:
+        los pagos por link guardan ahora la orden de Flow como nº de operación,
+        y el registro busca la orden en los links.
     - **Nunca dos cobros vivos por el mismo saldo.** Si ya hay un link vivo por
       el mismo importe se reenvía ese; solo un importe distinto justifica otro,
       y el anterior se deja de ofrecer. Pulsar el botón dos veces no puede
@@ -13075,9 +13149,10 @@ Implementación:
 ## 35. Comprobantes electrónicos por RUC (SimpleFact, 14-10-2026)
 
 Estado: construido y apagado. Existen la migración 0257 (empresas emisoras,
-cuenta → RUC, comprobantes y el candado de emisión), las reglas puras, el
-cliente de SimpleFact, el barrido (`/api/cron/invoices`), la sección «Boletas y
-facturas» de Ajustes y el panel «Comprobante» del drawer. **Ningún RUC emite**:
+cuenta → RUC, comprobantes, el candado de emisión y los pedidos por revisar),
+las reglas puras, el cliente de SimpleFact, el barrido (`/api/cron/invoices`),
+la sección «Boletas y facturas» de Ajustes y el panel «Comprobante» del
+drawer. **Ningún RUC emite**:
 GRUPO GF S.A.C. nace dado de alta, en «Apagado» y sin token, con sus cuentas ya
 asignadas (35.2). Se enciende primero en simulación y después en real, y lo
 enciende el owner (35.8).
@@ -13151,7 +13226,7 @@ primera señal que exista y en este orden (`resolvePaymentAccounts`,
 
 | # | Señal | Cuentas candidatas |
 | --- | --- | --- |
-| 1 | El pago nació de un link de Flow (`flowcl_payment_links.payment_id`) | Las cuentas sin celular de la tienda: la pasarela (0198) |
+| 1 | El pago nació de un link de Flow (`flowcl_payment_links.payment_id`), o es una constancia de Flow que Flow confirmó pagada en la cuenta de la tienda (`vision.flow.state = 'pagado'`, §12) | Las cuentas sin celular de la tienda: la pasarela (0198) |
 | 2 | Lo validó el estado de cuenta Yape (`yape_statement_matches`, §16.2) | La cuenta cuyo nombre o alias es el destino del movimiento (`statementAccountKey`) |
 | 3 | El lector del comprobante encajó con una cuenta (`verified`) | Esa cuenta |
 | 4 | El lector quedó en `partial`: nombre recortado, o solo el celular | Todas las cuentas con las que esa lectura encaja, verificada o parcial |
@@ -13184,7 +13259,7 @@ panel (`invoiceEligibility`, función pura; los textos en
 | 5 | Todas sus cuentas tienen RUC, y es el mismo | `cuenta_sin_ruc` / `ruc_mezclados` |
 | 6 | El total es mayor que 0 y no pasa de S/ 700 (35.5) | `monto_cero` / `monto_mayor_700` |
 | 7 | Ese RUC no está apagado | `ruc_apagado` |
-| 8 | El pedido quedó pagado desde «Emitir desde» del RUC: cuenta el último pago validado (`validated_at`), o la fecha del pedido si es prepago web. Sin fecha de inicio no se emite | `antes_de_inicio` |
+| 8 | El pedido quedó pagado desde «Emitir desde» del RUC: cuenta cuándo se registró en Kapta el último de sus pagos validados (`registered_at`, que no cambia si el pago se observa y se vuelve a validar; la fecha de validación, `validated_at`, sí), o la fecha del pedido si es prepago web. Un pago validado sin fecha de registro, o un RUC sin fecha de inicio, no emite | `antes_de_inicio` |
 | 9 | No tiene comprobante real vivo ni uno registrado como emitido fuera de Kapta (35.4). En simulación, tampoco una simulación | `ya_tiene` / `ya_simulado` |
 | 10 | Su último intento real no terminó en `error` sin que una persona pidiera reintentar | `error_previo` |
 
@@ -13196,13 +13271,30 @@ reembolsado o en otra moneda, uno editado (`editado`, `cantidad_editada`,
 línea gratis (`linea_gratuita`), con impuesto sumado encima
 (`impuesto_encima`), con más de 100 líneas (`demasiadas_lineas`), uno cuyo
 detalle no suma el total (`no_cuadra`) y uno cuyo total no es el de Kapta
-(`total_distinto`). En un prepago web exige además que Shopify diga pagado y que
-sus transacciones aprobadas sumen el total (`pago_web_no_confirmado`).
+(`total_distinto`). En un prepago web exige además que Shopify diga pagado, sin
+nada reembolsado ni pendiente; que **todas** las pasarelas del pedido sean el
+checkout de Flow (el nombre de `CHECKOUT_GATEWAYS`, `lib/payment-gateway.ts`,
+sin contar mayúsculas, tildes ni espacios de más); y que lo cobrado —ventas y
+capturas aprobadas, no de prueba— haya entrado por Flow y sume el total, sin un
+céntimo cobrado por otra pasarela (`pago_web_no_confirmado`). La boleta va al
+RUC de la cuenta de Flow (35.2), así que solo puede cubrir lo que cobró Flow: un
+pedido marcado pagado a mano, o pagado en todo o en parte contraentrega o con
+tarjeta de regalo, no lleva boleta automática. Una transacción cuenta como de
+Flow si su pasarela es ese checkout o dice «flow» como palabra entera;
+cualquier otra, o ninguna, es de otra pasarela.
 
 Recién entonces se pide el turno (`invoice_claim`, 35.4), que revisa de nuevo,
 dentro de la base, que el pedido siga sin anular ni reembolsar y en soles, el
-modo, la conexión, el monto, la fecha de inicio, que no haya otro comprobante y
-el tope del día: `sin_conexion`, `tope`.
+modo, la conexión, el monto, que no haya otro comprobante y el tope del día:
+`sin_conexion`, `tope`. **La fecha de pago no se la cree al barrido**: la
+vuelve a sacar de los pagos de la base, con la cuenta de las condiciones 2 y 8,
+en los dos modos. Si queda un pago vivo (no rechazado) sin validar, no da el
+turno (`pagos_en_revision`). Si no, cuenta el `registered_at` del último pago
+validado o, sin pagos validados, la fecha del pedido. Esa fecha y la que manda
+el barrido tienen que ser las dos desde «Emitir desde»; si falta una, o una es
+anterior, no da el turno (`antes_de_inicio`). Así, un error en las reglas o en
+una lectura no manda a SUNAT la boleta de algo pagado antes de la fecha de
+inicio.
 
 **Falla cerrada.** Si no se pudo leer algo —pagos, cuentas, el estado de
 cuenta, los links de Flow, Shopify—, el pedido no se emite en esa pasada. Un
@@ -13225,8 +13317,19 @@ comprobante armado con datos a medias puede ir al RUC equivocado.
     entiende. La boleta puede existir, así que **nunca se reintenta sola**. El
     barrido la concilia buscando en las ventas de hoy y de ayer de SimpleFact
     la nota «Kapta ‹ref›» (35.5); si aparece, pasa a `emitida`. Si no aparece,
-    la ve una persona: si confirma en SimpleFact que no existe, la libera con
-    «No está en SimpleFact: volver a intentar».
+    la ve una persona y la busca en SimpleFact por esa nota. Si la encuentra,
+    registra la serie y el número con que salió con «Sí está en SimpleFact:
+    registrar su serie», y pasa a `emitida`. Si confirma que no existe, la
+    libera con «No está en SimpleFact: volver a intentar». Liberar una que
+    existe es emitir otra.
+  - Un `emitiendo` sin respuesta (la función se cortó a mitad del envío, o no
+    se pudo guardar lo que contestó) se concilia igual pasados 10 minutos; si
+    no aparece, pasa a `en_duda`. Uno que ninguna conciliación va a mirar —su
+    RUC ya no está en Real o no tiene token, o es de antes de ayer— pasa a
+    `en_duda` al empezar la pasada siguiente, sin llamar a SimpleFact, con el
+    aviso «Sin respuesta de SimpleFact: búscala por su nota «Kapta ‹ref›» antes
+    de liberarla», y lo ve una persona. Pasa aunque ningún RUC esté encendido:
+    a lo más 100 por pasada, del más viejo.
 - **Tope diario por RUC** (`daily_limit`): 40 por defecto, de 1 a 300, por día
   de Lima. Cuenta lo emitido, lo que se está emitiendo y lo que está en duda;
   en simulación, lo simulado. Lo que excede espera al día siguiente y no se
@@ -13238,26 +13341,73 @@ comprobante armado con datos a medias puede ir al RUC equivocado.
   una cuenta no emite nada pagado antes de esa fecha.
 - **Emitido fuera de Kapta.** Si una persona emite la boleta a mano en
   SimpleFact —por ejemplo, la de un pedido de más de S/ 700 con DNI—, la
-  registra en el panel con «Ya tiene comprobante», con su serie y número. Queda
-  una fila `externa` y Kapta no vuelve a emitir por ese pedido.
+  registra en el panel con «Ya tiene comprobante», con su RUC, serie y número.
+  Queda una fila `externa` y Kapta no vuelve a emitir por ese pedido. La fila
+  no se corrige después, así que el RUC se elige a mano —viene elegido solo el
+  de la cuenta que recibió el pago, si las reglas lo saben— y antes de
+  registrar el panel dice qué queda: «Se registra como comprobante de ‹razón
+  social› (RUC ‹ruc›), serie ‹serie›. No se puede corregir después.». Si las
+  reglas saben a qué RUC entró el pago (35.2), no se registra el comprobante de
+  otro RUC. Lo saben cuando el pedido pasa la condición 5 de 35.3. Si se frenó
+  antes —pagos en revisión, un pago sin cuenta, una cuenta sin RUC, RUC
+  mezclados—, no lo saben, y vale el que eligió la persona: registrar la boleta
+  que ya está en SimpleFact es lo que impide una segunda. Pero si el pedido o
+  sus pagos no se pudieron leer, no se registra nada: «No se pudo comprobar a
+  qué RUC entró el pago; intenta de nuevo.». Que no se pudo comprobar no quiere
+  decir que no se sepa, y la fila no se corrige después.
 - **El token tiene que ser del RUC.** «Probar conexión» lee las ventas de la
   cuenta y saca el RUC del nombre de sus archivos (`20556792829-03-B001-…`).
   Si no es el RUC declarado, no se puede pasar a real. Si se vuelve a probar
   con el RUC en real y la prueba no confirma el RUC, baja sola a Simulación; lo
   mismo al cambiar el token, el subdominio o el RUC. Cada respuesta de una
-  emisión se contrasta igual: si trae otro RUC, el comprobante queda marcado y
-  el RUC se apaga solo.
+  emisión (y cada venta que encuentra la conciliación) se contrasta igual: si
+  trae otro RUC, el comprobante queda marcado (`ruc_mismatch`, 35.7) y el RUC
+  se apaga solo.
 - **Un token rechazado** (401 o 403), o una cuenta que no responde (404 o
   405), apaga el RUC con el motivo a la vista: seguir intentando solo llenaría
   de errores. Tras un 429 (SimpleFact pide esperar) no se emite nada más en
   esa pasada. Tras una respuesta en duda, ese RUC tampoco emite nada más en la
   pasada.
-- **Qué mira el barrido.** Cada 10 minutos, los pedidos pagados completos de
-  los últimos 45 días (`order_master`) y los que tienen pagos validados desde
-  «Emitir desde». No empieza un pedido nuevo pasados 20 segundos de la pasada:
-  una función cortada a la mitad de un envío deja la fila en `emitiendo`, y la
-  pasada siguiente la concilia. Un pedido bloqueado por lo que dijo Shopify no
-  se vuelve a leer en Shopify antes de 6 horas.
+- **Apagado solo, se vuelve a probar.** Cuando el barrido apaga un RUC por su
+  cuenta (otro RUC en la respuesta, un token rechazado, una cuenta que no
+  responde), borra también su última prueba de conexión y deja el motivo. Para
+  volver a Real hace falta pulsar de nuevo «Probar conexión» y que confirme el
+  RUC (35.8): sin eso, el owner podría volver a Real con el mismo token
+  rechazado o de otra empresa. Ajustes dice el motivo en rojo: «Apagado por
+  Kapta: ‹motivo›. Prueba la conexión antes de volver a Real.». Si alguien lo
+  vuelve a encender sin probar, dice «Sin probar. Lo último que falló:
+  ‹motivo›. Prueba la conexión antes de pasar a Real.».
+- **Qué mira el barrido.** Cada 10 minutos, por organización y por cada modo
+  con un RUC encendido, los pedidos que le da la base (`invoice_candidates`,
+  0257): de una tienda activa; pagados según el Master (`order_master`), por
+  comprobantes o por la pasarela web; de los últimos 60 días (Shopify no deja
+  leer pedidos más viejos sin `read_all_orders`); con un pago validado
+  registrado desde el «Emitir desde» más antiguo de los RUC de ese modo o, si
+  es prepago web, creados desde entonces; sin comprobante real vivo ni, en
+  simulación, su simulación; en real, sin un `error` real que espera a que una
+  persona pida reintentar; y sin un bloqueo de Shopify en ese modo de las
+  últimas 6 horas. A lo más 500 por organización y modo, del pedido más nuevo
+  al más viejo, y primero el modo real. Lo que ya tiene su comprobante no
+  ocupa lugar: el límite es para lo pendiente. Un `error` sin reintento
+  tampoco: el turno lo rechazaría (`error_previo`), y vuelve a entrar cuando
+  una persona pulsa «Volver a intentar». En simulación sí entra, porque la
+  simulación no mira los errores reales. Un modo cuyos RUC no tienen «Emitir
+  desde» no tiene candidatos. La lista solo dice qué mirar: deciden
+  `invoiceEligibility` y, al final, `invoice_claim`.
+- **Una lista llena se ve.** Si `invoice_candidates` devuelve los 500, la
+  línea del log del cron lo anota por modo (`"lleno":{"real":true}`): lo más
+  viejo pendiente de ese modo no se miró en esa pasada. No es un error y no
+  pone el cron en rojo, pero sin la marca una lista cortada no se distingue de
+  una que trajo todo.
+- **Shopify no se relee en cada pasada.** Un pedido bloqueado por lo que dijo
+  Shopify —incluida una tienda sin conexión con Shopify (`sin_token_shopify`)—
+  no se vuelve a leer en Shopify antes de 6 horas, bajo ninguno de los dos
+  modos. Un corte de Shopify (`lectura_fallida`) se reintenta en la pasada
+  siguiente.
+- **Presupuesto de la pasada.** No empieza un pedido nuevo pasados 20 segundos
+  de la pasada: una función cortada a la mitad de un envío deja la fila en
+  `emitiendo`, y la pasada siguiente la concilia o, si nadie la va a conciliar,
+  la pasa a `en_duda`.
 
 ### 35.5 Boleta, IGV y comprador
 
@@ -13303,8 +13453,15 @@ Reglas de esa tabla:
 
 - **Un comprobante no se edita ni se borra.** Sus estados solo avanzan:
   `emitiendo` → `emitida`, `error` o `en_duda`; y `en_duda` → `emitida` (se
-  concilió) o `error` (una persona confirmó que no existe). Un reintento es una
-  fila nueva y la anterior se queda.
+  concilió, o una persona la encontró en SimpleFact y registró su serie) o
+  `error` (una persona confirmó que no existe). Un reintento es una fila nueva
+  y la anterior se queda. La única excepción es borrar la cuenta de una
+  persona: la base deja en blanco quién la registró, pidió el reintento o la
+  resolvió (`created_by`, `retry_requested_by`, `resolved_by`) y nada más de la
+  fila cambia; el hecho y su fecha se quedan. Pasa **solo dentro de esa
+  cascada** (la llave hacia la cuenta, `on delete set null`): poner esas
+  columnas en blanco a mano, sin borrar la cuenta, el candado lo rechaza como
+  cualquier otro cambio, aunque lo intente el servidor.
 - **La simulación escribe la misma fila,** con modo `simulacion` y estado
   `simulada`, con la boleta exacta que habría enviado, y **no llama a
   SimpleFact**. Una simulación no impide la emisión real.
@@ -13315,7 +13472,8 @@ Reglas de esa tabla:
 
 - **`invoices.manage` («Boletas y facturas»)**: dar de alta un RUC, poner su
   token, cambiar su modo, su «Emitir desde» y su tope, asignar cuentas,
-  registrar un comprobante externo, pedir un reintento y liberar un `en_duda`.
+  registrar un comprobante externo, pedir un reintento y resolver un
+  `en_duda`: registrar su serie si está en SimpleFact, o liberarlo si no está.
   Es un permiso de dinero: **solo el owner lo da** (§16, `ownerOnly`), y ningún
   rol lo trae salvo el del owner. En Ajustes de la tienda se pide además
   `stores.manage`. Equipo no deja sin él a la última persona que lo tiene:
@@ -13324,9 +13482,39 @@ Reglas de esa tabla:
   y número, PDF y motivo. Nunca credenciales. No aparece si la organización no
   tiene ningún RUC y el pedido no tiene comprobantes (las tiendas cliente
   facturan fuera de Kapta, §29.15).
-- **Registrar uno externo** pide el RUC y la serie y número tal como salió en
-  SimpleFact: `B…` es boleta y `F…` factura. **Liberar un `en_duda`** pide una
-  nota con lo que se revisó en SimpleFact.
+- **Lo que el panel no calla:**
+  - Una boleta que SimpleFact emitió con archivos de otro RUC
+    (`ruc_mismatch`) se ve como «Emitida con otro RUC», en rojo, con el aviso
+    de revisarla en SimpleFact: puede necesitar anularse o una nota de crédito,
+    y eso lo hace una persona (§2, principio 11). Ajustes la marca igual en
+    los últimos comprobantes.
+  - Si las reglas de Kapta se cumplen pero la última pasada lo frenó por lo
+    que dijo Shopify (35.3), el panel no dice «Lista para emitirse»: dice el
+    motivo, de qué pasada es y qué pasa ahora. Si se vuelve a intentar solo
+    (Shopify no se pudo leer, o la tienda no tiene conexión con Shopify), dice
+    «Espera a Shopify» y cuándo, como lo hace el barrido (35.4): un corte de
+    Shopify, en la próxima pasada; una tienda sin conexión, «Se vuelve a
+    revisar en unas horas, cuando la tienda tenga conexión con Shopify.»,
+    porque ese pedido no se relee antes de 6 horas. Si no —un pedido de
+    prueba, editado, con propina, con tarjeta de regalo, un prepago web que
+    Flow no cobró entero—, dice «Se emite a mano»: no se emite sola, se emite a
+    mano en SimpleFact y se registra con «Ya tiene comprobante».
+- **Registrar uno externo** pide elegir el RUC y la serie y número tal como
+  salió en SimpleFact: `B…` es boleta y `F…` factura. El RUC no viene elegido
+  salvo el de la cuenta que recibió el pago, el panel dice antes qué se va a
+  registrar, y el servidor rechaza un RUC distinto del de esa cuenta cuando las
+  reglas lo saben. Si no pudo leer el pedido o sus pagos, no registra ninguno
+  (35.4).
+- **Resolver un `en_duda`** (35.4) ofrece las dos salidas, una al lado de la
+  otra: «Sí está en SimpleFact: registrar su serie» y «No está en SimpleFact:
+  volver a intentar». **Registrar su serie** pide la serie y el número con que
+  salió, con la letra de lo que se envió (`B…` si fue boleta, `F…` si fue
+  factura), y una nota de dónde se encontró. Antes de registrar, el panel dice
+  qué queda: «Queda como emitida: ‹serie› de ‹razón social› (RUC ‹ruc›). No se
+  puede corregir después.». La misma fila pasa a `emitida`: el RUC, el total y
+  lo enviado no cambian. **Liberar** pide una nota con lo que se revisó en
+  SimpleFact. Si la conciliación u otra persona lo resolvió mientras tanto,
+  vale lo suyo y el panel lo dice.
 - **Emitir lo hace solo el barrido.** No hay botón «Emitir»: un pedido que no
   cumple las reglas no se fuerza desde Kapta.
 
@@ -13343,7 +13531,8 @@ Orden de encendido:
    expuesto en una captura) y lo pega directo en Ajustes → «Boletas y
    facturas», nunca en un chat. Pulsa «Probar conexión».
 2. Pone el RUC en Simulación con «Emitir desde» de hoy, y revisa unos días las
-   simuladas: el RUC, los ítems, el total y los motivos de lo que no entró.
+   simuladas: el RUC, los ítems, el total, los motivos de lo que no entró y
+   que los prepagos web por Flow salen (35.9).
 3. Confirma con el contador la convención «CLIENTES VARIOS» / `00000000` y el
    umbral de S/ 700 (35.5).
 4. Pasa a Real con «Emitir desde» del momento del cambio, y revisa en
@@ -13352,8 +13541,28 @@ Orden de encendido:
 Ajustes muestra, por RUC, lo de hoy (emitidas, simuladas, en duda y con error)
 y los últimos comprobantes.
 
+**Antes de la 0257.** La migración se aplica a mano (DEPLOY.md), y el código
+puede llegar antes que ella. Entonces no se emite nada y nada se pone rojo: el
+barrido responde sin error con `skipped: "sin_migracion"`, el panel
+«Comprobante» no aparece y Ajustes dice que no pudo leer los RUC. Aplicada la
+0257, la pasada siguiente sigue como siempre.
+
+Para el barrido, «falta la 0257» es solo un «no existe» (de tabla o de
+función) que nombra algo que crea la 0257: `invoice_issuers`,
+`order_invoices`, `invoice_order_checks`, `invoice_claim`,
+`invoice_candidates` o `invoice_issuer_id`. Si lo que falta es otra cosa
+—`orders`, `order_payments`, `order_master`—, no es la 0257 sino una base
+rota, y el cron se pone rojo (502).
+
 ### 35.9 Pendientes
 
+- **Confirmar en simulación los prepagos web por Flow.** Qué texto pone Shopify
+  en la pasarela de una transacción de Flow no se ha visto en producción: los
+  pedidos guardados solo traen los nombres de sus pasarelas, y la regla de
+  35.3 acepta el nombre del checkout o la palabra «flow». Antes de pasar a
+  Real hay que ver en las simuladas que los prepagos web por Flow salen. Si
+  todos salen con `pago_web_no_confirmado`, el texto es otro y se ajusta la
+  regla (`lib/invoicing/shopify-order.ts`) antes de encender.
 - **Cobros en la puerta (fase 2).** El efectivo, el Yape y el POS que cobra el
   motorizado (`delivery_stops.payment_method`) no son pagos validados ni dicen
   a qué cuenta llegaron: «el monto reportado no equivale a ingreso bancario
@@ -13385,8 +13594,9 @@ Implementación:
 
 - `db/migrations/0257_invoices.sql`: `invoice_issuers`,
   `store_collection_accounts.invoice_issuer_id` con su trigger,
-  `order_invoices`, `invoice_order_checks`, la función `invoice_claim` y la
-  semilla de GRUPO GF S.A.C.
+  `order_invoices`, `invoice_order_checks`, las funciones `invoice_claim` (el
+  turno) e `invoice_candidates` (qué pedidos mira el barrido) y la semilla de
+  GRUPO GF S.A.C.
 - `lib/invoicing/rules.ts`: reglas puras (cuenta y RUC de cada pago,
   elegibilidad, la boleta, la lectura de la respuesta).
 - `lib/invoicing/shopify-order.ts`: la lectura del pedido en Shopify y su

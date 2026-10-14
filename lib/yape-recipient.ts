@@ -556,6 +556,23 @@ export function yapeRecipientReadingFromVision(
     ? root.extracted as Record<string, unknown>
     : {};
   const text = (value: unknown) => (typeof value === "string" ? value : null);
+  // Una constancia de Flow que Flow confirmó pagada (lib/flow/verify.ts): el
+  // dinero entró en la cuenta Flow de la tienda. No hay nombre ni celular que
+  // contrastar, y decir «no pudo leerse» sobre un pago confirmado por la
+  // pasarela sería mentir.
+  const flow = root.flow && typeof root.flow === "object" ? (root.flow as Record<string, unknown>) : null;
+  if (flow?.state === "pagado") {
+    return {
+      name: "Cuenta Flow de la tienda",
+      phoneLastDigits: null,
+      status: "verified",
+      account: null,
+      swapped: false,
+      ignoredName: null,
+      receivedView: false,
+      yapeEmpresa: false,
+    };
+  }
   return yapeRecipientReading(
     {
       recipientName: text(extracted.recipient_name),
