@@ -372,8 +372,10 @@ export async function getLeadWithCalls(
 export interface PriorOrder {
   name: string | null; // Shopify order name, e.g. "#AUR1234"
   createdAt: string | null;
-  amount: number; // net (total_amount − refunds)
+  amount: number; // net (total_amount − refunds); un anulado de Shopify trae su total original
   adminUrl: string | null; // deep-link to the order in Shopify admin (new tab)
+  /** Anulado en Shopify (solo la lista de Shopify lo sabe; la local ya los excluye). */
+  cancelled?: boolean;
 }
 
 export interface CustomerHistory {
