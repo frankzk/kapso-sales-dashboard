@@ -207,6 +207,7 @@ import {
   ShalomCancelButton,
   StatusBadge,
   TIMELINE_LABEL,
+  TimelineMarker,
   fmtAge,
   fmtDate,
   fmtDateTime,
@@ -2057,27 +2058,14 @@ export function OrderDrawer({
                 {detail.timeline.length === 0 ? (
                   <p className="text-sm text-ink-500">Sin movimientos registrados.</p>
                 ) : (
-                  <ol className="relative space-y-5 pl-6 before:absolute before:bottom-1 before:left-[5px] before:top-1.5 before:w-px before:bg-line-strong">
+                  <ol className="relative space-y-5 pl-10 before:absolute before:bottom-3.5 before:left-[13.5px] before:top-3.5 before:w-px before:bg-line-strong">
                     {detail.timeline.map((t) => (
                       <li key={t.id} className="relative">
-                        {/* El punto dice de qué parte del recorrido es el hecho
-                            (los tonos de macroetapa del MOM); el texto lo dice
-                            igual, así que el color nunca es la única señal. */}
-                        <span
-                          aria-hidden
-                          className={cn(
-                            "absolute -left-6 top-1.5 size-[11px] rounded-full ring-[3px] ring-white",
-                            t.origin === "leads"
-                              ? "bg-ink-700"
-                              : /payment|liquidation|entregado/.test(t.kind)
-                                ? "bg-emerald-500"
-                              : /return|refund|merma|anulado/.test(t.kind)
-                                ? "bg-orange-500"
-                                : /guide|dispatch|route|custody/.test(t.kind)
-                                  ? "bg-indigo-500"
-                                  : "bg-ink-300",
-                          )}
-                        />
+                        {/* El icono dice qué hecho es; el tono, de qué parte del
+                            recorrido (los matices de macroetapa del MOM), y solo
+                            en los hitos. El texto lo dice igual, así que ni el
+                            icono ni el color son nunca la única señal. */}
+                        <TimelineMarker entry={t} />
                         <p className="text-sm font-medium leading-5 text-ink-900">
                           {TIMELINE_LABEL[t.kind] ?? t.kind}
                           {/* El resultado va pegado al título, no en la línea de

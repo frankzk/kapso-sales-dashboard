@@ -1,6 +1,7 @@
 import { cn } from "@/components/ui";
-import { IconBot, IconHeadset } from "@/components/icons";
-import { formatCurrency, formatPct, type ClosingChannel } from "@/lib/metrics";
+import { Figure, FIGURE_FRAME, pctText } from "@/components/figures";
+import { CHANNEL_SHADE } from "@/components/palette";
+import { formatCurrency, type ClosingChannel } from "@/lib/metrics";
 
 /** Una cifra por canal de cierre. Misma forma que `SalesAttribution.channels`. */
 export interface ChannelTotals {
@@ -11,84 +12,11 @@ export interface ChannelTotals {
 /** Etiquetas, colores y ORDEN idénticos a components/sales-attribution.tsx. Que
  *  el mismo canal se llame y se pinte igual en las dos pantallas no es estética:
  *  es lo que permite comparar una con otra sin traducir. */
-const COLS: {
-  key: ClosingChannel;
-  title: string;
-  sub: string;
-  box: string;
-  bar: string;
-  icon: "bot" | "headset";
-}[] = [
-  {
-    key: "bot",
-    title: "Bot",
-    sub: "sin toque humano previo",
-    box: "bg-slate-100 text-slate-700",
-    bar: "bg-slate-400",
-    icon: "bot",
-  },
-  {
-    key: "bot_asistido",
-    title: "Bot asistido",
-    sub: "una asesora gestionó el lead antes",
-    box: "bg-violet-50 text-violet-700",
-    bar: "bg-violet-500",
-    icon: "headset",
-  },
-  {
-    key: "asesora",
-    title: "Asesora",
-    sub: "cerró desde el dashboard",
-    box: "bg-brand-50 text-brand-700",
-    bar: "bg-brand-500",
-    icon: "headset",
-  },
+export const CHANNEL_COLS: { key: ClosingChannel; title: string; sub: string }[] = [
+  { key: "bot", title: "Bot", sub: "sin toque humano previo" },
+  { key: "bot_asistido", title: "Bot asistido", sub: "una asesora gestionó el lead antes" },
+  { key: "asesora", title: "Asesora", sub: "cerró desde el dashboard" },
 ];
-
-function ChannelCol({
-  title,
-  sub,
-  icon,
-  box,
-  f,
-  share,
-  currency,
-}: {
-  title: string;
-  sub: string;
-  icon: React.ReactNode;
-  box: string;
-  f: ChannelTotals;
-  share: number; // 0..1 de los ingresos
-  currency: string;
-}) {
-  const aov = f.orders ? f.revenue / f.orders : 0;
-  return (
-    <div className="flex-1">
-      <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-        <span className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-lg", box)}>
-          {icon}
-        </span>
-        {title}
-      </div>
-      <p className="mt-1 text-[11px] leading-tight text-slate-400">{sub}</p>
-      <div className={cn("mt-2 rounded-xl px-2 py-2 text-center", box)}>
-        <p className="text-base font-semibold">{formatCurrency(f.revenue, currency)}</p>
-        <p className="text-[11px] opacity-80">{formatPct(share)} de los ingresos</p>
-      </div>
-      <dl className="mt-3 space-y-1.5 text-sm">
-        <div className="flex items-center justify-between gap-2">
-          <dt className="text-slate-500">Pedidos</dt>
-          <dd className="font-medium text-slate-900">{f.orders.toLocaleString("es-PE")}</dd>
-        </div>
-        <div className="flex items-center justify-between gap-2">
-          <dt className="text-slate-500">Ticket prom.</dt>
-          <dd className="font-medium text-slate-900">{formatCurrency(aov, currency)}</dd>
-        </div>
-      </dl>
-    </div>
-  );
-}
 
 /**
  * Ventas por canal de cierre: cuánto generó cada lado.
@@ -111,49 +39,56 @@ export function BotVsAdvisor({
   channels: Record<ClosingChannel, ChannelTotals>;
   currency: string;
 }) {
-  const totalRevenue = COLS.reduce((s, c) => s + channels[c.key].revenue, 0);
-  const totalOrders = COLS.reduce((s, c) => s + channels[c.key].orders, 0);
+  const totalRevenue = CHANNEL_COLS.reduce((s, c) => s + channels[c.key].revenue, 0);
+  const totalOrders = CHANNEL_COLS.reduce((s, c) => s + channels[c.key].orders, 0);
   const share = (c: ClosingChannel) => (totalRevenue ? channels[c].revenue / totalRevenue : 0);
+  const shown = CHANNEL_COLS.filter((c) => channels[c.key].revenue > 0);
   return (
-    <div>
-      <div className="flex items-stretch gap-3">
-        {COLS.map((c) => (
-          <ChannelCol
-            key={c.key}
-            title={c.title}
-            sub={c.sub}
-            icon={
-              c.icon === "bot" ? (
-                <IconBot className="h-4 w-4" />
-              ) : (
-                <IconHeadset className="h-4 w-4" />
-              )
-            }
-            box={c.box}
-            f={channels[c.key]}
-            share={share(c.key)}
-            currency={currency}
-          />
-        ))}
-      </div>
-      <div className="mt-4">
-        <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
-          {COLS.map((c) => (
-            <div
+    <div className="flex flex-col gap-5">
+      <dl className={cn(FIGURE_FRAME, "grid-cols-1 sm:grid-cols-3")}>
+        {CHANNEL_COLS.map((c) => {
+          const f = channels[c.key];
+          const aov = f.orders ? f.revenue / f.orders : 0;
+          return (
+            <Figure
               key={c.key}
-              className={cn("h-full", c.bar)}
-              style={{ width: `${Math.round(share(c.key) * 100)}%` }}
+              label={
+                <span className="inline-flex items-center gap-1.5">
+                  <span aria-hidden className="size-2.5 shrink-0 rounded-[2px]" style={{ background: CHANNEL_SHADE[c.key] }} />
+                  {c.title}
+                </span>
+              }
+              value={formatCurrency(f.revenue, currency)}
+              sub={
+                <>
+                  {pctText(share(c.key))} de los ingresos{"\u00a0· "}
+                  {f.orders.toLocaleString("es-PE")} {f.orders === 1 ? "pedido" : "pedidos"}
+                  {"\u00a0· "}ticket {formatCurrency(aov, currency)}
+                  <span className="mt-1 block text-ink-500">{c.sub}</span>
+                </>
+              }
+            />
+          );
+        })}
+      </dl>
+      <div>
+        <div
+          role="img"
+          aria-label={shown.map((c) => `${c.title} ${pctText(share(c.key))}`).join(", ") || "Sin ingresos"}
+          className="flex h-3 w-full gap-0.5 overflow-hidden rounded-full bg-line"
+        >
+          {shown.map((c) => (
+            <span
+              key={c.key}
+              className="h-full first:rounded-l-full last:rounded-r-full"
+              style={{ flex: `${channels[c.key].revenue} 0 0`, background: CHANNEL_SHADE[c.key] }}
             />
           ))}
         </div>
-        <div className="mt-2 rounded-xl bg-slate-50 px-4 py-3 text-center">
-          <p className="text-xs font-medium text-slate-500">
-            Ingresos generados · {totalOrders.toLocaleString("es-PE")} pedidos
-          </p>
-          <p className="text-2xl font-semibold text-slate-900">
-            {formatCurrency(totalRevenue, currency)}
-          </p>
-        </div>
+        <p className="mt-2 flex flex-wrap items-baseline justify-between gap-x-4 text-sm text-ink-600">
+          <span>Ingresos generados{"\u00a0· "}{totalOrders.toLocaleString("es-PE")} pedidos</span>
+          <span className="text-base font-semibold tabular-nums text-ink-900">{formatCurrency(totalRevenue, currency)}</span>
+        </p>
       </div>
     </div>
   );

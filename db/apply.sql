@@ -513,4 +513,6 @@
 \ir migrations/0254_swayp_actividad_backfill.sql
 \echo 'Applying 0255_restock_reminders.sql'
 \ir migrations/0255_restock_reminders.sql
+\echo 'Applying 0256_lima_open_counts.sql'
+\ir migrations/0256_lima_open_counts.sql
 \echo 'Done.'
