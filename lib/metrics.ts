@@ -748,8 +748,13 @@ export interface CartRecoveryStats {
   pendientes: number; // still open / workable
   perdidos: number; // marked lost (cancelado, ya compró en otro lado, …)
   tasaRecuperacion: number; // recuperados / total, 0..1
-  ingresosRecuperados: number; // net revenue of recovered carts
-  ticketPromedio: number; // ingresosRecuperados / recuperados (0 if none)
+  ingresosRecuperados: number; // net revenue of recovered carts, from the bot orders it receives
+  /** Recuperados con un pedido del bot que sume ingresos: el divisor del ticket. */
+  recuperadosBot: number;
+  // ingresosRecuperados / recuperadosBot (0 if none). Not / recuperados: a cart
+  // recovered by an advisor or the web adds no bot revenue, and dividing by it
+  // understated the ticket.
+  ticketPromedio: number;
   valorEnRiesgo: number; // Σ cart_value of the pendientes (money still on the table)
 }
 
@@ -775,12 +780,15 @@ export function cartRecovery(leads: LeadRow[], orders: OrderRow[]): CartRecovery
   let pendientes = 0;
   let perdidos = 0;
   let ingresosRecuperados = 0;
+  let recuperadosBot = 0;
   let valorEnRiesgo = 0;
   for (const l of carts) {
     const recovered = !!l.has_order || l.draft_order_status === "completed";
     if (recovered) {
       recuperados += 1;
-      ingresosRecuperados += (l.phone ? (netByPhone.get(l.phone) ?? 0) : 0);
+      const net = l.phone ? (netByPhone.get(l.phone) ?? 0) : 0;
+      ingresosRecuperados += net;
+      if (net > 0) recuperadosBot += 1;
     } else if (l.category === "lost") {
       perdidos += 1;
     } else {
@@ -796,7 +804,8 @@ export function cartRecovery(leads: LeadRow[], orders: OrderRow[]): CartRecovery
     perdidos,
     tasaRecuperacion: total ? recuperados / total : 0,
     ingresosRecuperados: round2(ingresosRecuperados),
-    ticketPromedio: recuperados ? round2(ingresosRecuperados / recuperados) : 0,
+    recuperadosBot,
+    ticketPromedio: recuperadosBot ? round2(ingresosRecuperados / recuperadosBot) : 0,
     valorEnRiesgo: round2(valorEnRiesgo),
   };
 }
@@ -1547,8 +1556,9 @@ export function lostRevenueByReason(
 // Ventas por FUENTE y CIERRE — order-centric attribution (auditable).
 //
 // Every ACTIVE order is assigned exactly ONE acquisition source and ONE closing
-// channel, so the buckets always reconcile to headline net revenue (Σ sources
-// = Σ channels = total). This is the audit tool: the numbers can't silently
+// channel, so the buckets always reconcile to the net revenue of the bot orders
+// it reads (Σ sources = Σ channels = total). Since 0259 the dashboard headline
+// counts ALL orders (MOM §17.4), so this total is smaller than the headline. This is the audit tool: the numbers can't silently
 // double-count or drop a sale, and each order carries its assigned source +
 // channel so the UI can drill down and a human can sanity-check the call.
 //

@@ -519,4 +519,6 @@
 \ir migrations/0257_invoices.sql
 \echo 'Applying 0258_canal_de_cierre.sql'
 \ir migrations/0258_canal_de_cierre.sql
+\echo 'Applying 0259_ventas_por_origen.sql'
+\ir migrations/0259_ventas_por_origen.sql
 \echo 'Done.'

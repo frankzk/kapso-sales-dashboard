@@ -374,6 +374,9 @@ neto, canal, cupón) and sanity-check the assignment.
   queda casi siempre en cero. La tarjeta «Canal de cierre» del Consolidado ya
   no usa esto desde el 14-10-2026: clasifica TODAS las ventas por
   `order_sales` (0258, MOM §17.3).
+- **Corrección (14-10-2026, 0259):** desde la 0259 la cabecera del tablero
+  cuenta todas las ventas (MOM §17.4). Este módulo sigue sobre los pedidos del
+  bot: cuadra con el total de esos pedidos, no con la cabecera.
 - **ROAS** on the Meta row = attributed revenue / Meta ad spend for the range
   (live from the Marketing API; shows "—" if Meta isn't connected).
 - Needs **migration 0030** (`discount_codes` on orders + `winback_sends`). Before
@@ -498,7 +501,10 @@ de couriers, intentos y comentarios.
   la pasada `shopify_all` y el webhook reescriben `tags` con lo de Shopify, y
   esos pedidos salían del conteo en minutos (1 de 2.916 ventas de asesora la
   conservaba). Desde el 14-10-2026 ya no se escribe; quién cerró cada venta lo
-  decide `canal_de_cierre` (0258, MOM §17.3).
+  decide `canal_de_cierre` (0258, MOM §17.3). Y desde la 0259 (MOM §17.4) la
+  cabecera, «Ventas por día» y «Por tienda» cuentan todas las ventas con
+  `ventas_por_origen`; `getOrders`, `getRollups` y `recompute_daily_rollups`
+  siguen con `tag:kapso` para los módulos que son del bot y lo dicen.
 - **`ORDERS_SYNC_FROM` acota el histórico** (por defecto `2026-06-01`). La pasada
   nueva solo trae pedidos **creados** a partir de esa fecha, así que no arrastra
   años de pedidos cerrados. Se filtra por `created_at` y no por `updated_at`, para
@@ -508,8 +514,10 @@ de couriers, intentos y comentarios.
   También es el piso de «Canal de cierre» (MOM §17.3), que cuenta desde el más
   tardío entre esta fecha y el día en que cada tienda empezó a usar Kapta (su
   primera venta de asesora registrada o, sin ninguna, su primer lead); con
-  varias tiendas, desde la que empezó último. Moverla hacia atrás no amplía la
-  tarjeta más allá de ese inicio; adelantarla sí la recorta.
+  varias tiendas, cada una desde su propio día (desde la 0259; antes, desde la
+  que empezó último). Lo mismo vale para la cabecera y «Conversión por fuente»
+  (MOM §17.4). Moverla hacia atrás no amplía nada más allá de ese inicio;
+  adelantarla sí recorta.
 - **El Master se rellena solo.** `runStoreSync` termina con un barrido de
   reconciliación (`reconcileOrderMaster`) que crea o refresca las filas que
   falten, así que no hace falta ningún backfill manual. Las acciones de Repro
@@ -1834,8 +1842,9 @@ vencimiento son lo único que lo acota.
 - **Health**: `curl https://<domain>/api/health` → `{ "ok": true, … }` (public,
   no secrets) confirms the deployment is serving.
 - **Backfill parity**: in Shopify Admin, filter orders by `tag:kapso` for a date
-  range and compare the count with the dashboard's order count for the same
-  range. They should match.
+  range and compare the count with the sum of `ordenes` in «Resumen diario del
+  bot CSV» for the same range. They should match. (Since 0259 the headline
+  «Pedidos» counts ALL orders, MOM §17.4: compare it with the Master instead.)
 - **Webhook**: create a test order in Shopify (or re-trigger a webhook) → it
   appears in the dashboard within seconds; re-delivering it does not duplicate.
 - **Cron**: `curl -H "Authorization: Bearer $CRON_SECRET" https://<domain>/api/cron/sync`
@@ -2584,7 +2593,9 @@ el webhook no la trajo, tal como viene de Shopify.
      el periodo 14-09 → 13-10-2026: asesora 2.651 pedidos y S/ 481.451 de
      S/ 1.181.080 en total (≈ 41 %).
    - Las cifras de arriba (Ingresos, Pedidos, Conversión) siguen siendo solo
-     del bot (§5h), pero ya no suben unos minutos con cada venta de asesora: la
+     del bot (§5h; con la 0259, Ingresos, Pedidos y Ticket pasan a todas las
+     ventas y la Conversión sigue siendo del bot, ahora «Conversión del bot»;
+     ver su entrada), pero ya no suben unos minutos con cada venta de asesora: la
      etiqueta `kapso` que les ponía el botón duraba hasta la siguiente
      sincronización. Es más correcto; el cambio es pequeño y se nota sobre
      todo en el día en curso.
@@ -2593,7 +2604,8 @@ el webhook no la trajo, tal como viene de Shopify.
      tienda (su primera fila de `order_sales` o, sin ninguna, su primer lead:
      25-06 y 04-07-2026 en las dos tiendas de hoy). Antes, una venta de asesora
      caería en «Web» u «Otros». En el Consolidado cuenta desde la tienda que
-     empezó último (hoy, 04-07-2026) y el aviso la nombra. Un periodo que empieza
+     empezó último (hoy, 04-07-2026) y el aviso la nombra (**corrección, mismo
+     día, 0259:** cada tienda cuenta desde su propio día, ver su entrada). Un periodo que empieza
      antes se cuenta desde ese día y la tarjeta lo dice; uno entero anterior
      vuelve a la vista de respaldo con su aviso. Una tienda que todavía no usa
      Kapta queda fuera del conteo, nombrada; si no se puede leer desde cuándo
@@ -2620,3 +2632,96 @@ el webhook no la trajo, tal como viene de Shopify.
 4. **Marcha atrás**: revertir el código basta; la función puede quedarse (es
    de lectura y nadie más la llama). Si se quiere quitar:
    `drop function if exists public.canal_de_cierre(uuid[], date, date);`
+
+### 14-10-2026 · Ventas del periodo por origen y conversión por fuente (0259, MOM §17.4)
+
+Las cifras de cabecera (Ingresos, Pedidos, Ticket promedio), «Ventas por día»
+y «Por tienda» dejan de contar solo los pedidos con `kapso` y cuentan TODAS las
+ventas de la tienda, partidas por quién las cerró con la regla de «Canal de
+cierre». «Conversión» pasa a llamarse «Conversión del bot». Nace la tarjeta
+«Conversión por fuente»: de los leads que llegaron en el periodo, cuántos
+compraron en sus primeros 7 días, por fuente. Cada tienda cuenta desde su
+propio día en Kapta, también en «Canal de cierre».
+
+0. **Los dos índices, a mano y PRIMERO**, fuera de una transacción (`psql`
+   en modo normal; `apply_migration` no sirve porque envuelve en transacción),
+   uno por uno:
+   `create index concurrently if not exists leads_store_first_seen_idx on public.leads (store_id, first_seen_at);`
+   `create index concurrently if not exists leads_store_created_sin_first_seen_idx on public.leads (store_id, created_at) where first_seen_at is null;`
+   Un `create index` normal bloquearía las escrituras de `leads` mientras se
+   construye. La migración los vuelve a pedir con `if not exists`, que entonces
+   no hace nada. Son de columnas simples a propósito: la app lee como
+   `authenticated`, bajo RLS, y Postgres no lleva al índice un rango sobre
+   `coalesce(first_seen_at, created_at)`. Comprobar que quedaron válidos:
+   `select indexrelid::regclass, indisvalid from pg_index where indexrelid in ('public.leads_store_first_seen_idx'::regclass, 'public.leads_store_created_sin_first_seen_idx'::regclass);`
+   → `t` en los dos (si uno da `f`, `drop index concurrently` de ese y
+   repetirlo).
+1. **Migración `0259_ventas_por_origen.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0259_ventas_por_origen.sql`. Crea la
+   vista `pedidos_canal` (con la sesión de quien mira; `authenticated` solo
+   puede leerla y `anon` nada), rehace `canal_de_cierre` encima de ella —mismo
+   resultado que la 0258, la regla del canal pasa a vivir en un solo lugar— y
+   crea las funciones de lectura `ventas_por_origen` y `conversion_por_fuente`
+   (SECURITY INVOKER, sin `anon`). No escribe datos y no lleva `drop`. Medido
+   en producción como el owner, 30 días, con la primera versión de la consulta:
+   la cohorte de `conversion_por_fuente`, 0,39 s recorriendo los 59.598 leads.
+   La versión final parte el nacimiento en dos rangos de columnas simples y
+   materializa las tiendas, para que bajo RLS los rangos de `leads` y de
+   `orders` vayan por índice. Medido en una base de prueba con la cadena entera
+   de migraciones, 60.000 leads y unos 440.000 pedidos, como el owner bajo RLS
+   y sin JIT (producción lo tiene apagado): `conversion_por_fuente` de 465 a
+   66 ms, `ventas_por_origen` de 110 a 69 ms y `canal_de_cierre` de 198 a 88 ms,
+   con el mismo resultado byte a byte; antes leía todos los pedidos y todos
+   los leads de la tienda en cada llamada. (Después, la cohorte dejó fuera las
+   filas que Kapta crea desde su propio pedido, MOM §17.4: eso sí cambia
+   «Orgánico», a propósito.)
+   **Sin ella el código no se rompe**: la cabecera, «Ventas por día» y «Por
+   tienda» vuelven a la vista anterior —«Ingresos del bot», «Pedidos del bot»…—
+   con un aviso arriba de las cifras («Falta aplicar la migración 0259…»), y
+   «Conversión por fuente» dice lo mismo. «Canal de cierre» sigue con la 0258.
+   **No está aplicada en producción**: necesita la autorización del owner.
+2. **Qué cambia en las cifras**:
+   - La cabecera sube unas once veces: del 14-09 al 13-10-2026 pasa de cerca de
+     600 pedidos del bot a 6.622 pedidos y S/ 1.181.080. Es el mismo total que
+     «Canal de cierre»: cuadran entre sí.
+   - El cambio contra el periodo anterior solo aparece si cada tienda contaba
+     el periodo anterior entero (con las tiendas de hoy, cuando el periodo
+     anterior empieza el 04-07-2026 o después); si no, «sin comparar: el
+     anterior no tiene todas las ventas».
+   - «Conversión del bot» es pedidos del canal «Bot de Kapso» ÷
+     conversaciones: casi igual que la «Conversión» de antes (las ventas de
+     asesora ya no conservaban `kapso`, §5h), ahora con el nombre que dice lo
+     que mide.
+   - «Ventas por día» parte cada día por grupo de cierre; «Por tienda» suma
+     todas las ventas de cada tienda, con la parte de la asesora; «Canal de
+     cierre» gana el cambio contra el periodo anterior por canal.
+   - «Conversión por fuente», medido en el mes: Anuncios de Meta 6,3 %, Carritos
+     COD 30,2 %, Orgánico 9,4 %, Web de Facebook 15,9 %, Búsquedas abandonadas
+     3,6 % (MOM §17.4). Junto, el cierre de las asesoras, como en Productividad
+     pero con leads distintos por tienda.
+   - Con varias tiendas, cada una cuenta desde su propio día en Kapta (antes
+     «Canal de cierre» recortaba todas al día de la que empezó último) y un aviso
+     arriba de las cifras nombra cada tienda que cuenta desde otra fecha.
+   - Siguen siendo solo del bot, y lo dicen: «Conversión del bot», Productos,
+     Fuente, Embudo y su salud, los ingresos de Carritos y de Números de
+     WhatsApp, Desglose de negocio, Integridad y Patrón de horas. «Resumen diario CSV»
+     se llama ahora «Resumen diario del bot CSV» (el mismo archivo).
+3. **Qué mirar después**:
+   - «Ingresos» de la cabecera es igual al total de «Canal de cierre» del mismo
+     periodo y se parece a los pedidos del Master, no a los S/ ~100k del bot;
+   - con una tienda recortada (un periodo de junio, por ejemplo), el aviso
+     azul nombra la tienda y el día, y no hay cambio contra el anterior;
+   - que la cohorte va por los índices nuevos bajo RLS. `explain` de la
+     función no sirve (solo muestra un `Result`: Postgres no la expande); se
+     mira la consulta de la cohorte, como el owner:
+     `begin; select set_config('request.jwt.claims', '{"sub":"<uid del owner>","role":"authenticated"}', true); set local role authenticated; explain analyze select count(*) from public.leads where store_id = '<tienda>' and first_seen_at >= '<desde>T00:00-05' and first_seen_at < '<hasta + 1>T00:00-05'; rollback;`
+     → `Index Cond` sobre `leads_store_first_seen_idx` con el rango de fechas.
+4. **Marcha atrás**: revertir el código basta; las funciones y la vista pueden
+   quedarse (son de lectura). Para quitarlas, primero devolver `canal_de_cierre`
+   a la 0258 y después borrar lo demás:
+   `psql "$DATABASE_URL" -f db/migrations/0258_canal_de_cierre.sql`,
+   `drop function if exists public.ventas_por_origen(uuid[], date, date);`,
+   `drop function if exists public.conversion_por_fuente(uuid[], date, date);`,
+   `drop view if exists public.pedidos_canal;` y, si se quiere,
+   `drop index concurrently if exists public.leads_store_first_seen_idx;` y
+   `drop index concurrently if exists public.leads_store_created_sin_first_seen_idx;`.

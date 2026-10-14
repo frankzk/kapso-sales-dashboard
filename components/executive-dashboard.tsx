@@ -43,11 +43,22 @@ import { ConsolidadoFilters, ConsolidadoNav, PendingDim, type PeriodLink } from 
 import { ModuleBoard, type ModuleCell, type ModuleGroup } from "@/components/module-board";
 import { BarsGlyph, ColumnsGlyph, DotsGlyph, LineGlyph, StackGlyph, type DotTone } from "@/components/dashboard-viz";
 import { CHANNEL_SHADE, CLOSING_GROUP_SHADE, SOURCE_SERIES, VIZ, trendColor } from "@/components/palette";
-import { DailyBars, DailyLine, SalesAttributionModule, TrendLines } from "@/components/lazy-dashboard-modules";
+import { DailyBars, DailyLine, SalesAttributionModule, StackedDailyBars, TrendLines } from "@/components/lazy-dashboard-modules";
 import { CampaignTable } from "@/components/campaign-table";
 import { BotVsAdvisor, CHANNEL_COLS } from "@/components/bot-vs-advisor";
 import { ClosingChannels } from "@/components/closing-channels";
-import { CLOSING_GROUPS, GROUP_LABEL, coverageCopy, noCoverageCopy, type ClosingChannelResult } from "@/lib/closing-channel";
+import { CLOSING_GROUPS, GROUP_LABEL, type ClosingChannelResult, type ClosingGroupKey } from "@/lib/closing-channel";
+import { coverageCopy, noCoverageCopy, type WindowPlan } from "@/lib/sales-coverage";
+import {
+  CONVERSION_DAYS,
+  SOURCE_LABEL,
+  salesPeriod,
+  sourceNoRateCause,
+  type OriginSalesResult,
+  type SalesDay,
+  type SourceConversionResult,
+} from "@/lib/consolidado-origen";
+import { SourceConversion } from "@/components/source-conversion";
 import { HorizontalFunnel } from "@/components/funnel-horizontal";
 import { LossReasonBars, LostRevenueCards, sharePct } from "@/components/loss-reasons";
 import { FunnelHealth, HEALTH } from "@/components/funnel-health";
@@ -59,7 +70,14 @@ import { IconDownload } from "@/components/icons";
 // periodo); debajo, el periodo de ventas con sus cifras contra el anterior y
 // una rejilla con cada análisis reducido a su cifra y un gráfico de bolsillo.
 // El módulo entero se abre en un panel lateral. Los cálculos son los de
-// lib/metrics, sin tocar: aquí solo se decide cómo se leen.
+// lib/metrics y lib/consolidado-origen: aquí solo se decide cómo se leen.
+//
+// Qué cuenta qué (MOM §17.4): la cabecera, «Ventas por día», «Por tienda»,
+// «Canal de cierre» y «Conversión por fuente» cuentan TODAS las ventas de la
+// tienda, por quién las cerró. «Conversión del bot» y los módulos que leen los
+// pedidos del bot (`orders`, `daily_rollups`) siguen siendo solo del bot, y lo
+// dicen. Sin la migración 0259 la cabecera vuelve a la vista anterior —solo el
+// bot— con un aviso, nunca en silencio.
 
 interface OpsPayload {
   health?: { status?: string } | null;
@@ -172,11 +190,15 @@ interface DayPoint {
   orders: number;
   revenue: number;
   conversations: number;
-  conversionRate: number;
+  /** null sin conversaciones ese día. */
+  conversionRate: number | null;
 }
 
-/** La tabla gemela de los gráficos por día: el más reciente arriba. */
-function DayTable({ days, currency }: { days: DayPoint[]; currency: string }) {
+/**
+ * La tabla gemela de los gráficos por día del bot: el más reciente arriba. Sin
+ * `currency` no lleva ingresos (la conversión del bot por día no los tiene).
+ */
+function DayTable({ days, currency, ordersLabel = "Pedidos" }: { days: DayPoint[]; currency?: string; ordersLabel?: string }) {
   return (
     <div className="max-h-80 overflow-y-auto rounded-lg ring-1 ring-line">
       <table className="w-full text-sm">
@@ -184,18 +206,50 @@ function DayTable({ days, currency }: { days: DayPoint[]; currency: string }) {
           <tr>
             <th scope="col" className={TH}>Día</th>
             <th scope="col" className={cn(TH, "text-right")}>Conversaciones</th>
-            <th scope="col" className={cn(TH, "text-right")}>Pedidos</th>
+            <th scope="col" className={cn(TH, "text-right")}>{ordersLabel}</th>
             <th scope="col" className={cn(TH, "text-right")}>Conversión</th>
+            {currency && <th scope="col" className={cn(TH, "text-right")}>Ingresos</th>}
+          </tr>
+        </thead>
+        <tbody>
+          {[...days].reverse().map((d) => (
+            <tr key={d.date} className="border-t border-line first:border-0">
+              <td className="whitespace-nowrap px-3 py-2 text-ink-700">{shortDay(d.date)}</td>
+              <td className="px-3 py-2 text-right tabular-nums text-ink-600">{nf.format(d.conversations)}</td>
+              <td className="px-3 py-2 text-right tabular-nums text-ink-900">{nf.format(d.orders)}</td>
+              <td className="px-3 py-2 text-right tabular-nums text-ink-600">{d.conversations && d.conversionRate != null ? pct(d.conversionRate) : "—"}</td>
+              {currency && <td className="px-3 py-2 text-right font-semibold tabular-nums text-ink-900">{money(d.revenue, currency)}</td>}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** «Día por día» de todas las ventas: los ingresos de cada grupo de cierre en su columna. */
+function OriginDayTable({ days, groups, currency }: { days: SalesDay[]; groups: ClosingGroupKey[]; currency: string }) {
+  return (
+    <div className="max-h-80 overflow-auto rounded-lg ring-1 ring-line">
+      <table className="w-full min-w-[560px] text-sm">
+        <thead className="sticky top-0 bg-white text-left shadow-[inset_0_-1px_0_var(--color-line)]">
+          <tr>
+            <th scope="col" className={TH}>Día</th>
+            <th scope="col" className={cn(TH, "text-right")}>Pedidos</th>
+            {groups.map((g) => (
+              <th key={g} scope="col" className={cn(TH, "text-right")}>{GROUP_LABEL[g]}</th>
+            ))}
             <th scope="col" className={cn(TH, "text-right")}>Ingresos</th>
           </tr>
         </thead>
         <tbody>
           {[...days].reverse().map((d) => (
             <tr key={d.date} className="border-t border-line first:border-0">
-              <td className="px-3 py-2 text-ink-700">{shortDay(d.date)}</td>
-              <td className="px-3 py-2 text-right tabular-nums text-ink-600">{nf.format(d.conversations)}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-ink-700">{shortDay(d.date)}</td>
               <td className="px-3 py-2 text-right tabular-nums text-ink-900">{nf.format(d.orders)}</td>
-              <td className="px-3 py-2 text-right tabular-nums text-ink-600">{d.conversations ? pct(d.conversionRate) : "—"}</td>
+              {groups.map((g) => (
+                <td key={g} className="px-3 py-2 text-right tabular-nums text-ink-600">{money(d.byGroup[g].revenue, currency)}</td>
+              ))}
               <td className="px-3 py-2 text-right font-semibold tabular-nums text-ink-900">{money(d.revenue, currency)}</td>
             </tr>
           ))}
@@ -235,6 +289,8 @@ export function ExecutiveDashboard({
   waNumbers,
   attribution,
   closing,
+  origin,
+  sourceConversion,
   metaSpend,
   campaignDeliveries,
   campaignLeads,
@@ -268,6 +324,13 @@ export function ExecutiveDashboard({
    *  él —o sin la migración— «Canal de cierre» vuelve a la vista anterior, que
    *  solo ve los pedidos del bot, y lo dice. */
   closing?: ClosingChannelResult;
+  /** TODAS las ventas por tienda, día y canal (MOM §17.4, función 0259): la
+   *  cabecera, «Ventas por día» y «Por tienda». Obligatoria por la misma razón
+   *  que `attribution`: sin ella la cabecera volvería a contar solo el bot en
+   *  silencio. Sin la migración, la vista anterior con un aviso. */
+  origin: OriginSalesResult;
+  /** Conversión de cada fuente de leads, cohorte de 7 días (MOM §17.4). */
+  sourceConversion: SourceConversionResult;
   metaSpend?: number | null;
   campaignDeliveries?: import("@/lib/types").CampaignDeliveryOutcome[];
   campaignLeads?: LeadRow[];
@@ -283,16 +346,74 @@ export function ExecutiveDashboard({
   nowIso?: string;
 }) {
   const names: Record<string, string> = Object.fromEntries(stores.map((s) => [s.id, s.name]));
+  // Los cierres diarios del bot (`daily_rollups`): la conversión del bot, la
+  // primera respuesta, el embudo y, sin la 0259, la vista anterior de cabecera.
   const totals = aggregateRollups(rollups);
   const prev = aggregateRollups(prevRollups);
   const hasPrev = prevRollups.length > 0;
-  const cmp = comparePeriods(
-    { ordersCount: totals.ordersCount, revenue: totals.revenue, aov: totals.aov },
-    { ordersCount: prev.ordersCount, revenue: prev.revenue, aov: prev.aov },
-  );
   const series = rollupSeries(rollups);
   const prevRange = previousRange(range);
   const now = nowIso ?? new Date().toISOString();
+
+  // ── Todas las ventas por origen (MOM §17.4) ────────────────────────────────
+  // `period` es null si la 0259 no responde (sin migración, sin cobertura o con
+  // error): la cabecera vuelve a los cierres diarios del bot y lo dice.
+  const period = origin.status === "ok" ? salesPeriod(origin, rollups, prevRollups, prevRange) : null;
+  const fullDay = (iso: string) => `${shortDay(iso)} ${iso.slice(0, 4)}`;
+  const storeName = (id: string) => stores.find((s) => s.id === id)?.name ?? "una de las tiendas";
+  const subOf = (copy: { sub: string[] } | null) => (copy?.sub.length ? `${SEP}${copy.sub.join(SEP)}` : "");
+  const originCopy = origin.status === "ok" ? coverageCopy(origin.plan, storeName, fullDay) : null;
+  const originNote =
+    origin.status === "sin_migracion"
+      ? `Falta aplicar la migración 0259 en la base: mientras tanto ${singleStore ? "estas cifras y «Ventas por día»" : "estas cifras, «Ventas por día» y «Por tienda»"} cuentan solo los pedidos del bot de Kapso.`
+      : origin.status === "sin_cobertura"
+        ? noCoverageCopy(origin.plan, storeName, fullDay).note
+        : origin.status === "error"
+          ? `No se pudieron contar todas las ventas (${origin.message}). Mientras tanto estas cifras cuentan solo los pedidos del bot de Kapso.`
+          : null;
+  // La cabecera: todas las ventas o, en la vista anterior, las del bot. El
+  // anterior solo existe si se puede comparar (cada tienda lo contaba entero).
+  const head = period
+    ? {
+        revenue: period.totals.revenue,
+        orders: period.totals.orders,
+        aov: period.totals.aov,
+        cancelled: period.totals.cancelled,
+        prev: period.prev ? { revenue: period.prev.revenue, orders: period.prev.orders, aov: period.prev.aov } : null,
+      }
+    : {
+        revenue: totals.revenue,
+        orders: totals.ordersCount,
+        aov: totals.aov,
+        cancelled: totals.cancelledOrders,
+        prev: hasPrev ? { revenue: prev.revenue, orders: prev.ordersCount, aov: prev.aov } : null,
+      };
+  const headCmp = head.prev
+    ? comparePeriods(
+        { ordersCount: head.orders, revenue: head.revenue, aov: head.aov },
+        { ordersCount: head.prev.orders, revenue: head.prev.revenue, aov: head.prev.aov },
+      )
+    : null;
+  /** «del bot» en las etiquetas de la vista anterior; nada cuando cuentan todas las ventas. */
+  const of = period ? "" : " del bot";
+  // «Conversión del bot»: pedidos que cerró el bot ÷ conversaciones, los dos en
+  // la ventana de cada tienda. En la vista anterior, los cierres diarios.
+  const bot = period
+    ? period.bot
+    : {
+        orders: totals.ordersCount,
+        conversations: totals.conversationsCount,
+        rate: totals.conversationsCount ? totals.conversionRate : null,
+        prev: hasPrev
+          ? { orders: prev.ordersCount, conversations: prev.conversationsCount, rate: prev.conversationsCount ? prev.conversionRate : null }
+          : null,
+      };
+  const botDelta = bot.prev && bot.rate != null && bot.prev.rate != null ? (bot.rate - bot.prev.rate) * 100 : null;
+  /** El rango que de verdad cuenta: en una sola tienda recortada, desde su primer día. */
+  const countedMeta = (plan: WindowPlan | null) => {
+    const w = plan && !plan.multiStore ? plan.windows[0] : undefined;
+    return w?.clipped ? `${rangeLabel({ from: w.from, to: w.to })}${SEP}${scopeLabel}` : periodMeta;
+  };
 
   // by-store totals (from rollups, authoritative beyond the order cap)
   const storeAgg = new Map<string, { orders: number; revenue: number; conversations: number }>();
@@ -310,7 +431,7 @@ export function ExecutiveDashboard({
       orders: t.orders,
       revenue: t.revenue,
       aov: t.orders ? t.revenue / t.orders : 0,
-      conv: t.conversations ? t.orders / t.conversations : 0,
+      conv: t.conversations ? t.orders / t.conversations : null,
     }))
     .sort((a, b) => b.revenue - a.revenue);
 
@@ -322,7 +443,8 @@ export function ExecutiveDashboard({
   // Leads-derived (Phase B)
   const leadList = leads ?? [];
   const loss = lossReasons(leadList);
-  const lostRev = lostRevenueByReason(loss, totals.aov);
+  // El ticket de todas las ventas: lo que vale, en promedio, una compra.
+  const lostRev = lostRevenueByReason(loss, head.aov);
   // Los canales por etiquetas de los pedidos del bot salen de la MISMA
   // atribución que alimenta el panel de «Fuente». Ya no son el «Canal de
   // cierre» de la tienda (MOM §17.3): solo los usa la vista de respaldo cuando
@@ -384,56 +506,97 @@ export function ExecutiveDashboard({
 
   const scopeLabel = singleStore ? singleStore.name : stores.length > 1 ? "todas las tiendas" : (stores[0]?.name ?? "");
   const periodMeta = `${rangeLabel(range)}${SEP}${scopeLabel}`;
-  const context = [rangeLabel(range), hasPrev ? `comparado con ${prevRange.from === prevRange.to ? "el " : ""}${rangeLabel(prevRange)}` : null]
+  const context = [rangeLabel(range), head.prev ? `comparado con ${prevRange.from === prevRange.to ? "el " : ""}${rangeLabel(prevRange)}` : null]
     .filter(Boolean)
     .join(SEP);
   const storeList = new Intl.ListFormat("es", { type: "conjunction" }).format(stores.map((s) => s.name));
 
   // ── Los días del periodo (con los vacíos en cero) ──────────────────────────
+  // Los del bot salen de los cierres diarios; los de todas las ventas, desde el
+  // primer día que cuenta alguna tienda.
   const byDate = new Map(series.map((s) => [s.date, s]));
-  const days: DayPoint[] = daysOf(range).map(
+  const legacyDays: DayPoint[] = daysOf(range).map(
     (date) => byDate.get(date) ?? { date, orders: 0, revenue: 0, conversations: 0, conversionRate: 0 },
   );
-  const nDays = days.length;
-  const best = series.length ? series.reduce((a, b) => (b.revenue > a.revenue ? b : a)) : null;
+  const saleDays: { date: string; orders: number; revenue: number }[] = period ? period.days : legacyDays;
+  const botDays: DayPoint[] = period
+    ? period.days.map((d) => ({ date: d.date, orders: d.botOrders, revenue: 0, conversations: d.conversations, conversionRate: d.botRate }))
+    : legacyDays;
+  const nDays = saleDays.length;
+  const soldDays = saleDays.filter((d) => d.orders > 0 || d.revenue !== 0);
+  const sold = soldDays.length > 0;
+  const best = sold ? soldDays.reduce((a, b) => (b.revenue > a.revenue ? b : a)) : null;
+  // Los grupos de cierre que vendieron en el periodo, en su orden canónico.
+  const shownGroups = period ? CLOSING_GROUPS.filter((g) => period.totals.byGroup[g].orders > 0) : [];
+  const groupSeries = shownGroups.map((g) => ({ key: g, label: GROUP_LABEL[g], color: CLOSING_GROUP_SHADE[g] }));
+  const groupRows = (pick: (a: { orders: number; revenue: number }) => number) =>
+    (period?.days ?? []).map((d) => ({ date: d.date, ...Object.fromEntries(shownGroups.map((g) => [g, pick(d.byGroup[g])])) }));
+  const originBanner = originCopy?.title ? (
+    <Banner tone="info" role="status" title={originCopy.title}>
+      {originCopy.body}
+    </Banner>
+  ) : null;
 
   // ── Celdas ─────────────────────────────────────────────────────────────────
+  const salesFigures = (
+    <dl className={cn(FIGURE_FRAME, "grid-cols-1 shadow-none sm:grid-cols-3")}>
+      <Figure label={`Ingresos${of}`} value={money(head.revenue, currency)} delta={headCmp ? <Change pct={headCmp.revenueDeltaPct} /> : undefined} />
+      <Figure label={`Pedidos${of}`} value={nf.format(head.orders)} delta={headCmp ? <Change pct={headCmp.ordersDeltaPct} /> : undefined} />
+      <Figure label={`Ticket promedio${of}`} value={money(head.aov, currency)} delta={headCmp ? <Change pct={headCmp.aovDeltaPct} /> : undefined} />
+    </dl>
+  );
   const ventasDia: ModuleCell = {
     id: "ventas-dia",
     title: "Ventas por día",
-    figure: money(nDays ? totals.revenue / nDays : 0, currency),
-    sub: series.length
-      ? `promedio por día${best && nDays > 1 ? `${SEP}mejor día ${shortDay(best.date)}, ${money(best.revenue, currency)}` : ""}`
-      : "Sin ventas en el periodo",
-    tone: series.length ? undefined : "muted",
+    figure: money(nDays ? head.revenue / nDays : 0, currency),
+    sub: sold
+      ? `promedio por día${best && nDays > 1 ? `${SEP}mejor día ${shortDay(best.date)}, ${money(best.revenue, currency)}` : ""}${period ? subOf(originCopy) : `${SEP}solo el bot`}`
+      : subOf(originCopy)
+        ? `Sin ventas en lo contado${subOf(originCopy)}`
+        : `Sin ventas${of} en el periodo`,
+    tone: sold ? undefined : "muted",
     glyph:
-      nDays > 1 && series.length ? (
+      nDays > 1 && sold ? (
         <ColumnsGlyph
-          values={days.map((d) => d.revenue)}
-          highlight={best ? days.findIndex((d) => d.date === best.date) : undefined}
+          values={saleDays.map((d) => d.revenue)}
+          highlight={best ? saleDays.findIndex((d) => d.date === best.date) : undefined}
           label={`Ingresos por día; resaltado el mejor día${best ? `, ${shortDay(best.date)}` : ""}`}
         />
       ) : undefined,
-    panel: series.length
+    panel: sold
       ? {
-          meta: periodMeta,
+          meta: period ? `Todas las ventas${SEP}${countedMeta(origin.status === "ok" ? origin.plan : null)}` : `Pedidos del bot${SEP}${periodMeta}`,
           width: "max-w-[760px]",
           body: (
             <div className="flex flex-col gap-6">
-              <dl className={cn(FIGURE_FRAME, "grid-cols-1 shadow-none sm:grid-cols-3")}>
-                <Figure label="Ingresos" value={money(totals.revenue, currency)} delta={hasPrev ? <Change pct={cmp.revenueDeltaPct} /> : undefined} />
-                <Figure label="Pedidos" value={nf.format(totals.ordersCount)} delta={hasPrev ? <Change pct={cmp.ordersDeltaPct} /> : undefined} />
-                <Figure label="Ticket promedio" value={money(totals.aov, currency)} delta={hasPrev ? <Change pct={cmp.aovDeltaPct} /> : undefined} />
-              </dl>
-              <PanelSection title="Ingresos por día">
-                <DailyBars data={days.map((d) => ({ date: d.date, value: d.revenue }))} kind="money" currency={currency} name="Ingresos" />
-              </PanelSection>
-              <PanelSection title="Pedidos por día" help="El mismo eje de días; cada medida en su propio gráfico.">
-                <DailyBars data={days.map((d) => ({ date: d.date, value: d.orders }))} kind="count" name="Pedidos" height={160} />
-              </PanelSection>
-              <PanelSection title="Día por día">
-                <DayTable days={days} currency={currency} />
-              </PanelSection>
+              {originBanner}
+              {salesFigures}
+              {period ? (
+                <>
+                  <PanelSection title="Ingresos por día" help="Cada día partido por quién cerró la venta, con la regla de «Canal de cierre».">
+                    <Legend items={groupSeries.map((g) => ({ label: g.label, color: g.color }))} />
+                    <StackedDailyBars rows={groupRows((a) => a.revenue)} series={groupSeries} currency={currency} kind="money" />
+                  </PanelSection>
+                  <PanelSection title="Pedidos por día" help="El mismo eje de días; cada medida en su propio gráfico.">
+                    <StackedDailyBars rows={groupRows((a) => a.orders)} series={groupSeries} kind="count" height={180} />
+                  </PanelSection>
+                  <PanelSection title="Día por día">
+                    <OriginDayTable days={period.days} groups={shownGroups} currency={currency} />
+                  </PanelSection>
+                </>
+              ) : (
+                <>
+                  <PanelSection title="Ingresos por día">
+                    <DailyBars data={legacyDays.map((d) => ({ date: d.date, value: d.revenue }))} kind="money" currency={currency} name="Ingresos" />
+                  </PanelSection>
+                  <PanelSection title="Pedidos por día" help="El mismo eje de días; cada medida en su propio gráfico.">
+                    <DailyBars data={legacyDays.map((d) => ({ date: d.date, value: d.orders }))} kind="count" name="Pedidos" height={160} />
+                  </PanelSection>
+                  <PanelSection title="Día por día">
+                    <DayTable days={legacyDays} currency={currency} />
+                  </PanelSection>
+                </>
+              )}
             </div>
           ),
         }
@@ -442,36 +605,57 @@ export function ExecutiveDashboard({
 
   const conversion: ModuleCell = {
     id: "conversion",
-    title: "Conversión",
-    figure: totals.conversationsCount ? pct(totals.conversionRate) : "—",
-    tone: totals.conversationsCount ? undefined : "muted",
-    sub: totals.conversationsCount
-      ? `${nf.format(totals.ordersCount)} pedidos de ${nf.format(totals.conversationsCount)} conversaciones`
-      : "Sin conversaciones en el periodo",
-    glyph: nDays > 1 && totals.conversationsCount ? <LineGlyph values={days.map((d) => d.conversionRate)} label="Conversión por día" /> : undefined,
-    panel: totals.conversationsCount
+    title: "Conversión del bot",
+    figure: bot.rate != null ? pct(bot.rate) : "—",
+    tone: bot.conversations ? undefined : "muted",
+    // Numerador y denominador solo de lo que cuenta: si alguna tienda queda
+    // fuera o recortada, se dice aquí también.
+    sub: bot.conversations
+      ? `${nf.format(bot.orders)} pedidos del bot de ${nf.format(bot.conversations)} conversaciones${subOf(originCopy)}`
+      : subOf(originCopy)
+        ? `Sin conversaciones en lo contado${subOf(originCopy)}`
+        : "Sin conversaciones en el periodo",
+    glyph:
+      botDays.length > 1 && bot.conversations ? (
+        <LineGlyph values={botDays.map((d) => d.conversionRate ?? 0)} label="Conversión del bot por día" />
+      ) : undefined,
+    panel: bot.conversations
       ? {
-          meta: periodMeta,
+          meta: period ? countedMeta(origin.status === "ok" ? origin.plan : null) : periodMeta,
           width: "max-w-[760px]",
           body: (
             <div className="flex flex-col gap-6">
+              {originBanner}
+              <p className="max-w-[68ch] text-[13px] leading-5 text-ink-600">
+                {period
+                  ? "Los pedidos que cerró el bot de Kapso sobre las conversaciones de los mismos días y tiendas. Lo que cerró una asesora, la web u otro canal no entra: eso está en «Canal de cierre» y, por fuente del lead, en «Conversión por fuente»."
+                  : "Los pedidos con la etiqueta de Kapso sobre las conversaciones de cada día, de los cierres diarios: la vista anterior, que también cuenta como del bot la venta que cerró una asesora sobre un pedido del bot."}
+              </p>
               <dl className={cn(FIGURE_FRAME, "grid-cols-1 shadow-none sm:grid-cols-3")}>
                 <Figure
-                  label="Conversión"
-                  value={pct(totals.conversionRate)}
-                  delta={hasPrev ? <Change pct={prev.conversationsCount ? (totals.conversionRate - prev.conversionRate) * 100 : null} unit="pts" /> : undefined}
+                  label="Conversión del bot"
+                  value={bot.rate != null ? pct(bot.rate) : "—"}
+                  delta={bot.prev ? <Change pct={botDelta} unit="pts" /> : undefined}
                 />
-                <Figure label="Conversaciones" value={nf.format(totals.conversationsCount)} delta={hasPrev ? <Change pct={pctDelta(totals.conversationsCount, prev.conversationsCount)} /> : undefined} />
-                <Figure label="Pedidos" value={nf.format(totals.ordersCount)} delta={hasPrev ? <Change pct={cmp.ordersDeltaPct} /> : undefined} />
+                <Figure
+                  label="Conversaciones"
+                  value={nf.format(bot.conversations)}
+                  delta={bot.prev ? <Change pct={pctDelta(bot.conversations, bot.prev.conversations)} /> : undefined}
+                />
+                <Figure
+                  label="Pedidos del bot"
+                  value={nf.format(bot.orders)}
+                  delta={bot.prev ? <Change pct={pctDelta(bot.orders, bot.prev.orders)} /> : undefined}
+                />
               </dl>
-              <PanelSection title="Conversión por día" help="Pedidos sobre conversaciones de cada día.">
-                <DailyLine data={days.map((d) => ({ date: d.date, value: d.conversionRate }))} kind="pct" name="Conversión" />
+              <PanelSection title="Conversión por día" help="Pedidos del bot sobre conversaciones de cada día.">
+                <DailyLine data={botDays.map((d) => ({ date: d.date, value: d.conversionRate ?? 0 }))} kind="pct" name="Conversión del bot" />
               </PanelSection>
               <PanelSection title="Conversaciones por día">
-                <DailyBars data={days.map((d) => ({ date: d.date, value: d.conversations }))} kind="count" name="Conversaciones" height={160} />
+                <DailyBars data={botDays.map((d) => ({ date: d.date, value: d.conversations }))} kind="count" name="Conversaciones" height={160} />
               </PanelSection>
               <PanelSection title="Día por día">
-                <DayTable days={days} currency={currency} />
+                <DayTable days={botDays} ordersLabel="Pedidos del bot" currency={period ? undefined : currency} />
               </PanelSection>
             </div>
           ),
@@ -479,7 +663,20 @@ export function ExecutiveDashboard({
       : null,
   };
 
-  const topStore = byStore[0];
+  // «Por tienda»: todas las ventas de cada tienda en su ventana o, en la vista
+  // anterior, los cierres diarios del bot.
+  const storeRows = period
+    ? period.stores.map((r) => ({
+        id: r.storeId,
+        name: names[r.storeId] ?? r.storeId,
+        orders: r.orders,
+        revenue: r.revenue,
+        aov: r.aov,
+        conv: r.botRate,
+        advisorShare: r.revenue ? r.byGroup.humano.revenue / r.revenue : null,
+      }))
+    : byStore.map((r) => ({ ...r, advisorShare: null as number | null }));
+  const topStore = storeRows[0];
   const storeCell: ModuleCell =
     singleStore && pattern
       ? {
@@ -487,72 +684,95 @@ export function ExecutiveDashboard({
           title: "Patrón de horas",
           figure: pattern.peak ? `${WEEKDAYS[pattern.peak.weekday]} ${String(pattern.peak.hour).padStart(2, "0")}:00` : "—",
           tone: pattern.peak ? undefined : "muted",
-          sub: pattern.peak ? `el pico, con ${nf.format(pattern.peak.count)} órdenes${SEP}${timezone}` : "Sin órdenes en el periodo",
+          sub: pattern.peak ? `el pico, con ${nf.format(pattern.peak.count)} órdenes del bot${SEP}${timezone}` : "Sin órdenes del bot en el periodo",
           glyph: pattern.peak ? (
             <ColumnsGlyph
               values={pattern.byHour}
               highlight={pattern.byHour.indexOf(Math.max(...pattern.byHour))}
-              label="Órdenes por hora del día; la hora con más resaltada"
+              label="Órdenes del bot por hora del día; la hora con más resaltada"
             />
           ) : undefined,
           panel: pattern.peak
-            ? { meta: `${periodMeta}${SEP}${timezone}`, width: "max-w-[640px]", body: <HourPattern pattern={pattern} /> }
+            ? { meta: `Pedidos del bot${SEP}${periodMeta}${SEP}${timezone}`, width: "max-w-[640px]", body: <HourPattern pattern={pattern} /> }
             : null,
         }
       : {
           id: "tiendas",
           title: "Por tienda",
-          figure: topStore && totals.revenue ? pct(topStore.revenue / totals.revenue, 0) : "—",
-          tone: topStore ? undefined : "muted",
-          sub: topStore ? `de los ingresos son de ${topStore.name}` : "Aún no hay tiendas con datos",
-          glyph: byStore.length ? (
-            <BarsGlyph rows={byStore.slice(0, 3).map((s) => ({ label: s.name, value: s.revenue, display: money(s.revenue, currency) }))} />
-          ) : undefined,
-          panel: byStore.length
+          figure: sold && topStore && head.revenue ? pct(topStore.revenue / head.revenue, 0) : "—",
+          tone: sold && topStore ? undefined : "muted",
+          sub:
+            sold && topStore
+              ? `de los ingresos${of} son de ${topStore.name}${subOf(originCopy)}`
+              : subOf(originCopy)
+                ? `Sin ventas en lo contado${subOf(originCopy)}`
+                : storeRows.length
+                  ? `Sin ventas${of} en el periodo`
+                  : "Aún no hay tiendas con datos",
+          glyph:
+            sold && storeRows.length ? (
+              <BarsGlyph rows={storeRows.slice(0, 3).map((r) => ({ label: r.name, value: r.revenue, display: money(r.revenue, currency) }))} />
+            ) : undefined,
+          // Sin ventas, el panel se abre igual si hay algo que decir de la
+          // cobertura, como en «Canal de cierre».
+          panel: (sold && storeRows.length) || originCopy?.title
             ? {
-                meta: rangeLabel(range),
-                width: "max-w-[720px]",
+                meta: period ? `Todas las ventas${SEP}${rangeLabel(range)}` : `Pedidos del bot${SEP}${rangeLabel(range)}`,
+                width: "max-w-[760px]",
                 body: (
-                  <PanelSection
-                    title="Resumen por tienda"
-                    help="De los cierres diarios de cada tienda; la conversión es pedidos sobre conversaciones."
-                    aside={
-                      <a href={`/api/export?kind=rollups&${exportBase}`} className={opsButtonClass("secondary", "sm", "pointer-coarse:h-11")}>
-                        <IconDownload />
-                        CSV
-                      </a>
-                    }
-                  >
-                    <div className="overflow-x-auto">
-                      <table className="w-full min-w-[520px] text-sm">
-                        <thead>
-                          <tr className="border-b border-line text-left">
-                            <th scope="col" className={cn(TH, "pl-0")}>Tienda</th>
-                            <th scope="col" className={cn(TH, "text-right")}>Órdenes</th>
-                            <th scope="col" className={cn(TH, "text-right")}>Ingresos</th>
-                            <th scope="col" className={cn(TH, "text-right")}>Ticket</th>
-                            <th scope="col" className={cn(TH, "pr-0 text-right")}>Conversión</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {byStore.map((r) => (
-                            <tr key={r.id} className="border-b border-line">
-                              <td className="py-2.5 pr-3">
-                                <span className="block font-medium text-ink-900">{r.name}</span>
-                                <span className="mt-1.5 block h-1 w-full max-w-48 rounded-full bg-line">
-                                  <span className="block h-full rounded-full bg-ink-500" style={{ width: `${totals.revenue ? Math.max(2, (r.revenue / totals.revenue) * 100) : 0}%` }} />
-                                </span>
-                              </td>
-                              <td className="px-3 py-2.5 text-right tabular-nums text-ink-700">{nf.format(r.orders)}</td>
-                              <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-ink-900">{formatCurrency(r.revenue, currency)}</td>
-                              <td className="px-3 py-2.5 text-right tabular-nums text-ink-700">{formatCurrency(r.aov, currency)}</td>
-                              <td className="py-2.5 pl-3 text-right tabular-nums text-ink-700">{pct(r.conv)}</td>
+                  <div className="flex flex-col gap-4">
+                    {originBanner}
+                    <PanelSection
+                      title="Resumen por tienda"
+                      help={
+                        period
+                          ? "Todas las ventas de cada tienda desde el día en que cuenta. «De asesora» es la parte de los ingresos que cerró una asesora; la conversión del bot, los pedidos del bot sobre las conversaciones."
+                          : "De los cierres diarios del bot de cada tienda; la conversión es pedidos sobre conversaciones."
+                      }
+                      aside={
+                        period ? undefined : (
+                          <a href={`/api/export?kind=rollups&${exportBase}`} className={opsButtonClass("secondary", "sm", "pointer-coarse:h-11")}>
+                            <IconDownload />
+                            CSV
+                          </a>
+                        )
+                      }
+                    >
+                      <div className="overflow-x-auto">
+                        <table className="w-full min-w-[600px] text-sm">
+                          <thead>
+                            <tr className="border-b border-line text-left">
+                              <th scope="col" className={cn(TH, "pl-0")}>Tienda</th>
+                              <th scope="col" className={cn(TH, "text-right")}>Pedidos</th>
+                              <th scope="col" className={cn(TH, "text-right")}>Ingresos</th>
+                              <th scope="col" className={cn(TH, "text-right")}>Ticket</th>
+                              {period && <th scope="col" className={cn(TH, "text-right")}>De asesora</th>}
+                              <th scope="col" className={cn(TH, "pr-0 text-right")}>{period ? "Conversión del bot" : "Conversión"}</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </PanelSection>
+                          </thead>
+                          <tbody>
+                            {storeRows.map((r) => (
+                              <tr key={r.id} className="border-b border-line">
+                                <td className="py-2.5 pr-3">
+                                  <span className="block font-medium text-ink-900">{r.name}</span>
+                                  <span className="mt-1.5 block h-1 w-full max-w-48 rounded-full bg-line">
+                                    <span className="block h-full rounded-full bg-ink-500" style={{ width: `${head.revenue ? Math.max(2, (r.revenue / head.revenue) * 100) : 0}%` }} />
+                                  </span>
+                                </td>
+                                <td className="px-3 py-2.5 text-right tabular-nums text-ink-700">{nf.format(r.orders)}</td>
+                                <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-ink-900">{formatCurrency(r.revenue, currency)}</td>
+                                <td className="px-3 py-2.5 text-right tabular-nums text-ink-700">{formatCurrency(r.aov, currency)}</td>
+                                {period && (
+                                  <td className="px-3 py-2.5 text-right tabular-nums text-ink-700">{r.advisorShare != null ? pct(r.advisorShare, 0) : "—"}</td>
+                                )}
+                                <td className="py-2.5 pl-3 text-right tabular-nums text-ink-700">{r.conv != null ? pct(r.conv) : "—"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </PanelSection>
+                  </div>
                 ),
               }
             : null,
@@ -564,13 +784,13 @@ export function ExecutiveDashboard({
     title: "Productos",
     figure: topProduct ? `${nf.format(topProduct.quantity)} u` : "—",
     tone: topProduct ? undefined : "muted",
-    sub: topProduct ? `${topProduct.title}, el más vendido` : "Sin líneas de producto en el periodo",
+    sub: topProduct ? `${topProduct.title}, el más vendido por el bot` : "Sin líneas de producto del bot en el periodo",
     glyph: products.length ? (
       <BarsGlyph rows={products.slice(0, 3).map((p) => ({ label: p.title, value: p.quantity, display: `${nf.format(p.quantity)} u` }))} />
     ) : undefined,
     panel: products.length
       ? {
-          meta: periodMeta,
+          meta: `Pedidos del bot${SEP}${periodMeta}`,
           width: "max-w-[720px]",
           body: (
             <PanelSection title={`Los ${products.length} con más unidades`} help="Por SKU, o por título cuando no hay SKU. Las órdenes canceladas no cuentan.">
@@ -613,7 +833,7 @@ export function ExecutiveDashboard({
     title: "Fuente de las ventas",
     figure: topSource ? pct(topSource.pct / 100, 0) : "—",
     tone: topSource ? undefined : "muted",
-    sub: topSource ? `de las ventas vienen de ${topSource.label}` : "Sin pedidos en el periodo para atribuir",
+    sub: topSource ? `de las ventas del bot vienen de ${topSource.label}` : "Sin pedidos del bot en el periodo para atribuir",
     glyph: attribution.total.orders ? (
       <StackGlyph
         parts={[...attribution.sources]
@@ -632,17 +852,32 @@ export function ExecutiveDashboard({
 
   // «Canal de cierre» (MOM §17.3): quién cerró TODAS las ventas de la tienda,
   // por la venta registrada de la asesora y no por etiquetas que la
-  // sincronización con Shopify borra. Si la función 0258 no está (deploy no
-  // aplica migraciones), falla, o el periodo cae antes de que Kapta tuviera
-  // todos los pedidos y las ventas de las asesoras, vuelve la vista anterior
-  // —solo pedidos del bot— con un aviso y sin cifra de cabecera: su porcentaje
-  // sería el número equivocado.
+  // sincronización con Shopify borra. Es LA tarjeta por origen (MOM §17.4): la
+  // cabecera cuenta las mismas ventas. Si la función 0258 no está (deploy no
+  // aplica migraciones), falla, o ninguna tienda cuenta en el periodo, vuelve la
+  // vista anterior —solo pedidos del bot— con un aviso y sin cifra de cabecera:
+  // su porcentaje sería el número equivocado.
   const closingSummary = closing?.status === "ok" ? closing.summary : null;
-  const fullDay = (iso: string) => `${shortDay(iso)} ${iso.slice(0, 4)}`;
-  const storeName = (id: string) => stores.find((s) => s.id === id)?.name ?? "una de las tiendas";
-  const closingCopy = closing?.status === "ok" ? coverageCopy(closing.coverage, storeName, fullDay) : null;
-  const closingFrom = closing?.status === "ok" ? closing.coverage.from : null;
-  const noCoverage = closing?.status === "sin_cobertura" ? noCoverageCopy(closing.coverage, storeName, fullDay) : null;
+  const closingCopy = closing?.status === "ok" ? coverageCopy(closing.plan, storeName, fullDay) : null;
+  const noCoverage = closing?.status === "sin_cobertura" ? noCoverageCopy(closing.plan, storeName, fullDay) : null;
+  // El periodo anterior de cada canal sale de las mismas ventas por origen, y
+  // solo si se puede comparar.
+  const closingPrev = period?.prev ?? null;
+  // Lo que cuenta qué, con los módulos que hay en ESTA página (en la de una
+  // tienda «Por tienda» es «Patrón de horas»).
+  const listFmt = new Intl.ListFormat("es", { type: "conjunction" });
+  const allSalesModules = ["Las cifras de cabecera", "«Ventas por día»", ...(singleStore ? [] : ["«Por tienda»"]), "esta tarjeta", "«Conversión por fuente»"];
+  const botOnlyModules = [
+    "«Conversión del bot»",
+    "Productos",
+    "Fuente",
+    "Embudo y su salud",
+    "los ingresos de Carritos",
+    "los ingresos de Números de WhatsApp",
+    "Desglose de negocio",
+    "Integridad",
+    ...(singleStore ? ["Patrón de horas"] : []),
+  ];
   const channelTotal = CHANNEL_COLS.reduce((s, c) => s + channels[c.key].revenue, 0);
   const legacyCanalNote =
     closing?.status === "sin_migracion"
@@ -652,7 +887,7 @@ export function ExecutiveDashboard({
         : closing?.status === "error"
           ? `No se pudo calcular el canal de todas las ventas (${closing.message}). Esto es la vista anterior: solo los pedidos del bot de Kapso.`
           : null;
-  const coverageSub = closingCopy?.sub.length ? `${SEP}${closingCopy.sub.join(SEP)}` : "";
+  const coverageSub = subOf(closingCopy);
   const closingSold = closingSummary ? closingSummary.total.revenue > 0 : false;
   const canal: ModuleCell = closingSummary
     ? {
@@ -676,7 +911,7 @@ export function ExecutiveDashboard({
         panel:
           closingSold || closingCopy?.title
             ? {
-                meta: `Todas las ventas de la tienda${SEP}${closingFrom ? `${rangeLabel({ from: closingFrom, to: range.to })}${SEP}${scopeLabel}` : periodMeta}`,
+                meta: `Todas las ventas de la tienda${SEP}${countedMeta(closing?.status === "ok" ? closing.plan : null)}`,
                 width: "max-w-[880px]",
                 body: (
                   <div className="flex flex-col gap-4">
@@ -691,15 +926,18 @@ export function ExecutiveDashboard({
                           Cada venta cae en un solo canal, así que los canales suman el total de la tienda: la venta que una asesora
                           registró en el dashboard es suya aunque el pedido lleve otra etiqueta. «Ayudados por asesora» marca lo que
                           cerró otro canal después de que una asesora gestionara a la clienta en los 7 días previos: ayudar no es cerrar,
-                          por eso no se suma a la asesora. En «Ventas del periodo», salvo esta tarjeta y «Anuncios de Meta», los pedidos
-                          y los ingresos —las cifras de cabecera, Ventas por día, Productos, Fuente, Embudo, Carritos, Números de
-                          WhatsApp, Venta perdida y los demás módulos— cuentan solo los pedidos del bot de Kapso.
+                          por eso no se suma a la asesora.
+                        </p>
+                        <p className="max-w-[72ch] text-[13px] leading-5 text-ink-600">
+                          {period
+                            ? `${listFmt.format(allSalesModules)} cuentan todas las ventas${closingPrev ? ", y el cambio contra el periodo anterior sale de las mismas ventas" : "; no hay cambio contra el periodo anterior porque alguna tienda no lo contaba entero"}. ${listFmt.format(botOnlyModules)} siguen contando solo los pedidos del bot de Kapso.`
+                            : "Esta tarjeta cuenta todas las ventas. Las cifras de cabecera y los demás módulos de «Ventas del periodo», salvo «Anuncios de Meta», cuentan por ahora solo los pedidos del bot de Kapso: lo dice el aviso de arriba."}
                         </p>
                         <p className="max-w-[72ch] text-[13px] leading-5 text-ink-600">
                           Un carrito de EasySell que completa el bot de Kapso por WhatsApp hoy cuenta como «Web»: Shopify no le pone
                           ninguna marca que lo distinga de uno que la clienta terminó sola.
                         </p>
-                        <ClosingChannels summary={closingSummary} currency={currency} />
+                        <ClosingChannels summary={closingSummary} currency={currency} prev={closingPrev} />
                       </>
                     ) : (
                       <p className="text-[13px] leading-5 text-ink-600">Sin ventas en lo contado.</p>
@@ -743,6 +981,88 @@ export function ExecutiveDashboard({
                     </p>
                     <BotVsAdvisor channels={channels} currency={currency} />
                   </div>
+                ),
+              }
+            : null,
+      };
+
+  // «Conversión por fuente» (MOM §17.4): una cohorte —los leads que llegaron
+  // en el periodo y ya cumplieron 7 días— y si compraron en esos 7 días por
+  // cualquier canal. No se compara con el periodo anterior: los últimos leads
+  // de cualquier periodo todavía están madurando.
+  const sc = sourceConversion;
+  const scSummary = sc.status === "ok" ? sc.summary : null;
+  const scPlan = sc.status === "ok" ? sc.plan : null;
+  const scCopy = scPlan ? coverageCopy(scPlan, storeName, fullDay) : null;
+  const scBorn = scSummary ? scSummary.sources.reduce((n, x) => n + x.born, 0) + scSummary.noRate.born : 0;
+  const scCause = scSummary ? sourceNoRateCause(scSummary) : null;
+  const scTop = scSummary ? scSummary.sources.filter((x) => x.rate != null).sort((a, b) => b.prospects - a.prospects).slice(0, 3) : [];
+  const conversionFuente: ModuleCell = scSummary
+    ? {
+        id: "conversion-fuente",
+        title: "Conversión por fuente",
+        figure: scSummary.total.rate != null ? pct(scSummary.total.rate) : "—",
+        tone: scSummary.total.rate != null ? undefined : "muted",
+        sub:
+          scSummary.total.rate != null
+            ? `de ${nf.format(scSummary.total.prospects)} leads nuevos compraron en ${CONVERSION_DAYS} días${subOf(scCopy)}`
+            : scCause === "ya_clientas"
+              ? `Los leads con ${CONVERSION_DAYS} días ya eran clientas${subOf(scCopy)}`
+              : scCause === "maduran"
+                ? `${nf.format(scSummary.total.maturing)} leads todavía no cumplen ${CONVERSION_DAYS} días`
+                : scCause === "sin_tasa"
+                  ? "Solo leads sin tasa: venta telefónica o fuente no reconocida"
+                  : `Sin leads nuevos en el periodo${subOf(scCopy)}`,
+        glyph: scTop.length ? (
+          <BarsGlyph rows={scTop.map((x) => ({ label: SOURCE_LABEL[x.key].title, value: x.rate ?? 0, display: pct(x.rate ?? 0) }))} />
+        ) : undefined,
+        panel: scBorn
+          ? {
+              meta: `Leads del periodo, por fuente${SEP}${countedMeta(scPlan)}`,
+              width: "max-w-[880px]",
+              body: (
+                <div className="flex flex-col gap-4">
+                  {scCopy?.title && (
+                    <Banner tone="info" role="status" title={scCopy.title}>
+                      {scCopy.body}
+                    </Banner>
+                  )}
+                  <p className="max-w-[72ch] text-[13px] leading-5 text-ink-600">
+                    De los leads que llegaron en el periodo y ya cumplieron {CONVERSION_DAYS} días, cuántos compraron en sus primeros{" "}
+                    {CONVERSION_DAYS} días por cualquier canal: el bot, una asesora o la web. Las que ya eran clientas antes de escribir van
+                    aparte: comprar otra vez no es convertir. Es una cohorte, así que no se compara con el periodo anterior.
+                  </p>
+                  <SourceConversion summary={scSummary} />
+                  <p className="max-w-[72ch] text-[13px] leading-5 text-ink-600">
+                    «Cierre de las asesoras» son las ventas que registraron en el periodo, también las que después se anularon, sobre los
+                    leads distintos que trabajaron, de cualquier fuente y de cualquier fecha. Productividad suma esos leads por asesora, así
+                    que allí un lead que trabajaron dos cuenta dos veces.
+                  </p>
+                </div>
+              ),
+            }
+          : null,
+      }
+    : {
+        id: "conversion-fuente",
+        title: "Conversión por fuente",
+        figure: "—",
+        tone: "muted",
+        sub:
+          sc.status === "sin_migracion"
+            ? "Falta aplicar la migración 0259"
+            : sc.status === "sin_cobertura"
+              ? noCoverageCopy(sc.plan, storeName, fullDay).sub
+              : "No se pudo calcular",
+        panel:
+          sc.status === "error"
+            ? {
+                meta: periodMeta,
+                width: "max-w-[560px]",
+                body: (
+                  <Banner tone="warn" role="status" title="No se pudo calcular la conversión por fuente">
+                    {sc.message}
+                  </Banner>
                 ),
               }
             : null,
@@ -859,7 +1179,7 @@ export function ExecutiveDashboard({
     tone: firstStage?.value ? undefined : "muted",
     sub:
       firstStage?.value && lastStage
-        ? `${nf.format(lastStage.value)} ${lastStage.label.toLowerCase()} de ${nf.format(firstStage.value)} ${firstStage.label.toLowerCase()}`
+        ? `${nf.format(lastStage.value)} ${lastStage.label.toLowerCase()}${lastStage.key === "pedidos" ? " por el bot" : ""} de ${nf.format(firstStage.value)} ${firstStage.label.toLowerCase()}`
         : "Sin mensajes en el periodo",
     // Tres etapas con su cifra, desde la conversación: los mensajes son otra
     // unidad (varios por conversación) y con ellos el resto quedaba en puntos.
@@ -871,7 +1191,7 @@ export function ExecutiveDashboard({
       />
     ) : undefined,
     panel: firstStage?.value
-      ? { meta: periodMeta, width: "max-w-[640px]", body: <HorizontalFunnel stages={funnelStages} /> }
+      ? { meta: `Pedidos del bot${SEP}${periodMeta}`, width: "max-w-[640px]", body: <HorizontalFunnel stages={funnelStages} /> }
       : null,
   };
 
@@ -893,7 +1213,7 @@ export function ExecutiveDashboard({
           }))}
       />
     ) : undefined,
-    panel: critical ? { meta: periodMeta, width: "max-w-[640px]", body: <FunnelHealth stages={health.stages} critical={critical} /> } : null,
+    panel: critical ? { meta: `Pedidos del bot${SEP}${periodMeta}`, width: "max-w-[640px]", body: <FunnelHealth stages={health.stages} critical={critical} /> } : null,
   };
 
   const topReason = loss.reasons[0];
@@ -916,7 +1236,7 @@ export function ExecutiveDashboard({
     title: "Venta perdida estimada",
     figure: lostRev.items.length ? money(lostRev.total, currency) : "—",
     tone: lostRev.items.length ? undefined : "muted",
-    sub: lostRev.items.length ? `leads sin comprar × ticket de ${money(totals.aov, currency)}` : "Sin pérdidas estimadas en el periodo",
+    sub: lostRev.items.length ? `leads sin comprar × ticket de ${money(head.aov, currency)}` : "Sin pérdidas estimadas en el periodo",
     glyph: lostRev.items.length ? (
       <BarsGlyph rows={[...lostRev.items].sort((a, b) => b.estRevenue - a.estRevenue).slice(0, 3).map((r) => ({ label: r.label, value: r.estRevenue, display: money(r.estRevenue, currency) }))} />
     ) : undefined,
@@ -927,7 +1247,7 @@ export function ExecutiveDashboard({
           body: (
             <div className="flex flex-col gap-4">
               <p className="max-w-[68ch] text-[13px] leading-5 text-ink-600">
-                Una estimación gruesa: cuántos leads no compraron por cada motivo, por el ticket promedio del periodo ({formatCurrency(totals.aov, currency)}).
+                Una estimación gruesa: cuántos leads no compraron por cada motivo, por el ticket promedio{of} del periodo ({formatCurrency(head.aov, currency)}).
               </p>
               <LostRevenueCards items={lostRev.items} total={lostRev.total} currency={currency} />
             </div>
@@ -957,15 +1277,21 @@ export function ExecutiveDashboard({
           body: (
             <div className="flex flex-col gap-5">
               <p className="max-w-[68ch] text-[13px] leading-5 text-ink-600">
-                Carritos abandonados (formulario COD o borradores de Shopify) que se convirtieron en pedido real.
+                Carritos abandonados (formulario COD o borradores de Shopify) que se convirtieron en pedido real. Los ingresos
+                recuperados solo suman los pedidos del bot de Kapso; la compra de un carrito por cualquier canal está en
+                «Conversión por fuente».
               </p>
               <dl className={cn(FIGURE_FRAME, "grid-cols-2 shadow-none")}>
                 <Figure label="Carritos del periodo" value={nf.format(cartStats.total)} sub={`${nf.format(cartStats.pendientes)} por trabajar`} />
                 <Figure label="Recuperados" value={nf.format(cartStats.recuperados)} delta={<span className="text-[13px] font-semibold tabular-nums text-ink-600">{pct(cartStats.tasaRecuperacion)}</span>} sub="se volvieron pedido" />
                 <Figure
-                  label="Ingresos recuperados"
+                  label="Ingresos recuperados del bot"
                   value={formatCurrency(cartStats.ingresosRecuperados, currency)}
-                  sub={cartStats.recuperados ? `ticket promedio ${formatCurrency(cartStats.ticketPromedio, currency)}` : undefined}
+                  sub={
+                    cartStats.recuperadosBot
+                      ? `ticket promedio ${formatCurrency(cartStats.ticketPromedio, currency)} en ${nf.format(cartStats.recuperadosBot)} con pedido del bot`
+                      : undefined
+                  }
                 />
                 <Figure label="Valor en riesgo" value={formatCurrency(cartStats.valorEnRiesgo, currency)} sub="carritos abiertos sin cerrar" />
               </dl>
@@ -995,16 +1321,19 @@ export function ExecutiveDashboard({
     title: "Números de WhatsApp",
     figure: waStats.length ? `${nf.format(waStats.length)} ${waStats.length === 1 ? "número" : "números"}` : "—",
     tone: waStats.length ? undefined : "muted",
-    sub: topWa ? `${waLabelOf(topWa.phoneNumberId)} vende más${SEP}${money(topWa.ingresos, currency)}` : "Sin leads en el periodo",
+    sub: topWa ? `${waLabelOf(topWa.phoneNumberId)} vende más por el bot${SEP}${money(topWa.ingresos, currency)}` : "Sin leads en el periodo",
     glyph: waStats.length ? (
       <BarsGlyph rows={[...waStats].sort((a, b) => b.leads - a.leads).slice(0, 3).map((r) => ({ label: waLabelOf(r.phoneNumberId), value: r.leads, display: `${nf.format(r.leads)} leads` }))} />
     ) : undefined,
     panel: waStats.length
       ? {
-          meta: periodMeta,
+          meta: `Ingresos del bot${SEP}${periodMeta}`,
           width: "max-w-[760px]",
           body: (
-            <PanelSection title="Leads, conversión e ingresos" help="Según el número por el que escribió el cliente.">
+            <PanelSection
+              title="Leads, conversión e ingresos"
+              help="Según el número por el que escribió el cliente. Los pedidos son los leads que compraron por cualquier vía; los ingresos, solo los de los pedidos del bot de Kapso."
+            >
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[560px] text-sm">
                   <thead>
@@ -1013,7 +1342,7 @@ export function ExecutiveDashboard({
                       <th scope="col" className={cn(TH, "text-right")}>Leads</th>
                       <th scope="col" className={cn(TH, "text-right")}>Pedidos</th>
                       <th scope="col" className={cn(TH, "text-right")}>Conversión</th>
-                      <th scope="col" className={cn(TH, "pr-0 text-right")}>Ingresos</th>
+                      <th scope="col" className={cn(TH, "pr-0 text-right")}>Ingresos del bot</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1056,11 +1385,11 @@ export function ExecutiveDashboard({
     tone: breakdown.total ? undefined : "muted",
     sub: breakdown.total
       ? `con promo${SEP}${nf.format(breakdown.stockValidarOrders)} con stock por validar`
-      : "Sin órdenes en el periodo",
+      : "Sin órdenes del bot en el periodo",
     glyph: breakdown.total ? <StackGlyph parts={shipping} /> : undefined,
     panel: breakdown.total
       ? {
-          meta: periodMeta,
+          meta: `Pedidos del bot${SEP}${periodMeta}`,
           width: "max-w-[640px]",
           body: (
             <div className="flex flex-col gap-6">
@@ -1117,7 +1446,7 @@ export function ExecutiveDashboard({
         />
       ) : undefined,
     panel: !(fine.ordersWithConversationId || fine.orphanOrders) ? null : {
-      meta: periodMeta,
+      meta: `Pedidos del bot${SEP}${periodMeta}`,
       width: "max-w-[560px]",
       body: (
         <div className="flex flex-col gap-4">
@@ -1209,7 +1538,7 @@ export function ExecutiveDashboard({
 
   const groups: ModuleGroup[] = [
     { id: "ventas", label: "Ventas", cells: [ventasDia, conversion, storeCell, productos] },
-    { id: "origen", label: "Origen y cierre", cells: [fuente, canal, anuncios, tendencia] },
+    { id: "origen", label: "Origen y cierre", cells: [canal, conversionFuente, fuente, anuncios, tendencia] },
     { id: "perdida", label: "Lo que se pierde", cells: [embudo, saludEmbudo, motivos, impacto, carritos] },
     { id: "sistema", label: "Números, negocio y sistema", cells: [whatsapp, negocio, integridad, saludOp] },
   ];
@@ -1250,7 +1579,7 @@ export function ExecutiveDashboard({
               </a>
               <a href={`/api/export?kind=rollups&${exportBase}`} className={opsButtonClass("ghost", "sm", "pointer-coarse:h-11")}>
                 <IconDownload />
-                Resumen diario CSV
+                Resumen diario del bot CSV
               </a>
             </div>
           </div>
@@ -1267,29 +1596,41 @@ export function ExecutiveDashboard({
           />
 
           <PendingDim className="flex flex-col gap-6">
+            {originNote && (
+              <Banner tone="warn" role="status" title="Estas cifras solo ven los pedidos del bot">
+                {originNote}
+              </Banner>
+            )}
+            {originBanner}
             <dl className={cn(FIGURE_FRAME, "grid-cols-2 lg:grid-cols-5")}>
               <Figure
-                label="Ingresos"
-                value={money(totals.revenue, currency)}
-                delta={hasPrev ? <Change pct={cmp.revenueDeltaPct} /> : undefined}
-                sub={hasPrev ? `antes ${money(prev.revenue, currency)}` : "sin periodo anterior con datos"}
+                label={`Ingresos${of}`}
+                value={money(head.revenue, currency)}
+                delta={headCmp ? <Change pct={headCmp.revenueDeltaPct} /> : undefined}
+                sub={
+                  head.prev
+                    ? `antes ${money(head.prev.revenue, currency)}`
+                    : period
+                      ? "sin comparar: el anterior no tiene todas las ventas"
+                      : "sin periodo anterior con datos"
+                }
               />
               <Figure
-                label="Pedidos"
-                value={nf.format(totals.ordersCount)}
-                delta={hasPrev ? <Change pct={cmp.ordersDeltaPct} /> : undefined}
-                sub={totals.cancelledOrders ? `${nf.format(totals.cancelledOrders)} cancelados aparte` : undefined}
+                label={`Pedidos${of}`}
+                value={nf.format(head.orders)}
+                delta={headCmp ? <Change pct={headCmp.ordersDeltaPct} /> : undefined}
+                sub={head.cancelled ? `${nf.format(head.cancelled)} cancelados aparte` : undefined}
               />
               <Figure
-                label="Ticket promedio"
-                value={money(totals.aov, currency)}
-                delta={hasPrev ? <Change pct={cmp.aovDeltaPct} /> : undefined}
+                label={`Ticket promedio${of}`}
+                value={money(head.aov, currency)}
+                delta={headCmp ? <Change pct={headCmp.aovDeltaPct} /> : undefined}
               />
               <Figure
-                label="Conversión"
-                value={totals.conversationsCount ? pct(totals.conversionRate) : "—"}
-                delta={hasPrev && totals.conversationsCount ? <Change pct={prev.conversationsCount ? (totals.conversionRate - prev.conversionRate) * 100 : null} unit="pts" /> : undefined}
-                sub={`de ${nf.format(totals.conversationsCount)} conversaciones`}
+                label="Conversión del bot"
+                value={bot.rate != null ? pct(bot.rate) : "—"}
+                delta={bot.prev && bot.conversations ? <Change pct={botDelta} unit="pts" /> : undefined}
+                sub={`${nf.format(bot.orders)} pedidos del bot de ${nf.format(bot.conversations)} conversaciones`}
               />
               <Figure
                 label="Primera respuesta"

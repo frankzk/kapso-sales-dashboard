@@ -13,8 +13,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // la fila que trajo Shopify.
 
 vi.mock("server-only", () => ({}));
+type RpcResult = { data: unknown; error: null | { code?: string; message: string } };
 const rpc = vi.hoisted(() => ({
   result: { data: null as unknown, error: null as null | { code?: string; message: string } },
+  // Si está, responde por llamada (una por tienda): gana sobre `result`.
+  handler: null as null | ((name: string, args: Record<string, unknown>) => RpcResult),
   calls: [] as Record<string, unknown>[],
   // Las tablas que lee el inicio de cada tienda (stores, order_sales, leads), y
   // las que tienen que fallar.
@@ -42,9 +45,9 @@ vi.mock("@/lib/db", () => {
   };
   const client = {
     from,
-    rpc: async (_name: string, args: Record<string, unknown>) => {
+    rpc: async (name: string, args: Record<string, unknown>) => {
       rpc.calls.push(args);
-      return rpc.result;
+      return rpc.handler ? rpc.handler(name, args) : rpc.result;
     },
   };
   return { createServerSupabase: async () => client, createAdminSupabase: () => client };
@@ -53,15 +56,11 @@ vi.mock("@/lib/db", () => {
 import {
   CLOSING_CHANNELS,
   CHANNEL_LABEL,
-  clampToCoverage,
-  coverageCopy,
   isMissingFunctionError,
-  noCoverageCopy,
-  planCoverage,
-  type ClosingCoverage,
   parseClosingChannels,
   summarizeClosingChannels,
 } from "@/lib/closing-channel";
+import { comparablePrev, coverageCopy, noCoverageCopy, planWindows, type WindowPlan } from "@/lib/sales-coverage";
 import { getClosingChannels } from "@/lib/access";
 import { insertOrderIfAbsent, recomputeRollupsForLocalDay } from "@/lib/order-sale";
 import { getDraftOrderOrder } from "@/lib/shopify";
@@ -167,52 +166,63 @@ describe("isMissingFunctionError", () => {
   });
 });
 
-describe("clampToCoverage", () => {
-  const desde = "2026-06-01";
-  it("un rango dentro de la cobertura queda igual", () => {
-    expect(clampToCoverage({ from: "2026-09-14", to: "2026-10-13" }, desde)).toEqual({ from: "2026-09-14", to: "2026-10-13", clipped: false });
-    expect(clampToCoverage({ from: desde, to: desde }, desde)).toEqual({ from: desde, to: desde, clipped: false });
-  });
+describe("planWindows: cada tienda cuenta desde su propio día", () => {
+  const julio = { from: "2026-07-01", to: "2026-07-31" };
 
-  it("un rango que empieza antes se cuenta desde la cobertura, y lo dice", () => {
-    expect(clampToCoverage({ from: "2026-05-01", to: "2026-06-30" }, desde)).toEqual({ from: desde, to: "2026-06-30", clipped: true });
-  });
-
-  it("un rango que termina antes no tiene con qué responder", () => {
-    expect(clampToCoverage({ from: "2026-05-01", to: "2026-05-31" }, desde)).toBeNull();
-  });
-});
-
-describe("planCoverage", () => {
-  it("manda el más tardío entre ORDERS_SYNC_FROM y el inicio de cada tienda, y dice cuál", () => {
-    expect(planCoverage("2026-06-01", [{ id: "A", start: "2026-06-25" }, { id: "B", start: "2026-07-04" }])).toEqual({
-      counted: ["A", "B"],
-      from: "2026-07-04",
-      cause: "tienda",
-      storeId: "B",
+  it("con dos tiendas, cada una en su ventana: no se recorta a todas al día de la última", () => {
+    expect(planWindows("2026-06-01", [{ id: "A", start: "2026-06-25" }, { id: "B", start: "2026-07-04" }], julio)).toEqual({
+      windows: [
+        { storeId: "A", from: "2026-07-01", to: "2026-07-31", floor: "2026-06-25", cause: "tienda", clipped: false },
+        { storeId: "B", from: "2026-07-04", to: "2026-07-31", floor: "2026-07-04", cause: "tienda", clipped: true },
+      ],
+      later: [],
       excluded: [],
       multiStore: true,
     });
   });
 
-  it("si ORDERS_SYNC_FROM es posterior, manda él", () => {
-    expect(planCoverage("2026-08-01", [{ id: "A", start: "2026-06-25" }])).toMatchObject({ from: "2026-08-01", cause: "sync", storeId: null });
+  it("si ORDERS_SYNC_FROM es posterior al inicio de la tienda, manda él y lo dice", () => {
+    const p = planWindows("2026-07-08", [{ id: "A", start: "2026-06-25" }], julio);
+    expect(p.windows).toEqual([{ storeId: "A", from: "2026-07-08", to: "2026-07-31", floor: "2026-07-08", cause: "sync", clipped: true }]);
+    expect(p.multiStore).toBe(false);
   });
 
-  it("una tienda que todavía no usa Kapta queda fuera del conteo, no «cubierta»", () => {
-    expect(planCoverage("2026-06-01", [{ id: "A", start: "2026-06-25" }, { id: "Z", start: null }])).toMatchObject({
-      counted: ["A"],
-      from: "2026-06-25",
-      excluded: ["Z"],
-    });
-    expect(planCoverage("2026-06-01", [{ id: "Z", start: null }])).toEqual({
-      counted: [],
-      from: null,
-      cause: null,
-      storeId: null,
-      excluded: ["Z"],
-      multiStore: false,
-    });
+  it("una tienda que empieza después del periodo no cuenta en cero: queda aparte, con su día", () => {
+    const p = planWindows("2026-06-01", [{ id: "A", start: "2026-06-25" }, { id: "B", start: "2026-07-04" }], { from: "2026-06-01", to: "2026-06-30" });
+    expect(p.windows.map((w) => w.storeId)).toEqual(["A"]);
+    expect(p.later).toEqual([{ storeId: "B", floor: "2026-07-04", cause: "tienda" }]);
+  });
+
+  it("una tienda que todavía no usa Kapta queda fuera y se nombra", () => {
+    const p = planWindows("2026-06-01", [{ id: "A", start: "2026-06-25" }, { id: "Z", start: null }], julio);
+    expect(p.windows.map((w) => w.storeId)).toEqual(["A"]);
+    expect(p.excluded).toEqual(["Z"]);
+  });
+});
+
+describe("comparablePrev: el cambio contra el anterior solo si las dos ventanas están enteras", () => {
+  const plan = (windows: Partial<WindowPlan["windows"][number]>[]): WindowPlan => ({
+    windows: windows.map((w) => ({ storeId: "A", from: "x", to: "y", floor: "2026-06-25", cause: "tienda", clipped: false, ...w })),
+    later: [],
+    excluded: [],
+    multiStore: windows.length > 1,
+  });
+
+  it("cada tienda entera en los dos periodos: se compara", () => {
+    expect(comparablePrev(plan([{ storeId: "A" }, { storeId: "B" }]), plan([{ storeId: "A" }, { storeId: "B" }]))).toBe(true);
+  });
+
+  it("el periodo actual recortado: no", () => {
+    expect(comparablePrev(plan([{ storeId: "A", clipped: true }]), plan([{ storeId: "A" }]))).toBe(false);
+  });
+
+  it("una tienda recortada o ausente en el anterior: no (el anterior saldría con menos ventas de las que hubo)", () => {
+    expect(comparablePrev(plan([{ storeId: "A" }, { storeId: "B" }]), plan([{ storeId: "A" }, { storeId: "B", clipped: true }]))).toBe(false);
+    expect(comparablePrev(plan([{ storeId: "A" }, { storeId: "B" }]), plan([{ storeId: "A" }]))).toBe(false);
+  });
+
+  it("sin ventanas, nada que comparar", () => {
+    expect(comparablePrev(plan([]), plan([]))).toBe(false);
   });
 });
 
@@ -239,6 +249,7 @@ const TIENDAS = {
 describe("getClosingChannels", () => {
   beforeEach(() => {
     rpc.result = { data: null, error: null };
+    rpc.handler = null;
     rpc.calls = [];
     rpc.tables = TIENDAS;
     rpc.failing = {};
@@ -251,7 +262,9 @@ describe("getClosingChannels", () => {
     expect(r.status).toBe("ok");
     if (r.status === "ok") {
       expect(r.summary.byChannel.asesora.revenue).toBe(300);
-      expect(r.coverage.from).toBeNull();
+      expect(r.plan.windows).toEqual([
+        { storeId: "A", from: "2026-09-14", to: "2026-10-13", floor: "2026-06-25", cause: "tienda", clipped: false },
+      ]);
     }
     expect(rpc.calls).toEqual([{ p_store_ids: ["A"], p_from: "2026-09-14", p_to: "2026-10-13" }]);
   });
@@ -261,41 +274,46 @@ describe("getClosingChannels", () => {
     const r = await getClosingChannels(["A"], { from: "2026-06-01", to: "2026-06-30" });
     // 2026-06-26T04:50Z es el 25-06 a las 23:50 en Lima.
     expect(rpc.calls).toEqual([{ p_store_ids: ["A"], p_from: "2026-06-25", p_to: "2026-06-30" }]);
-    expect(r).toMatchObject({ status: "ok", coverage: { from: "2026-06-25", cause: "tienda", storeId: "A", multiStore: false } });
+    expect(r).toMatchObject({ status: "ok", plan: { windows: [{ from: "2026-06-25", cause: "tienda", clipped: true }], multiStore: false } });
   });
 
   it("junio entero en la tienda que empezó el 04-07: `sin_cobertura`, nunca un «0 % asesora»", async () => {
     const r = await getClosingChannels(["B"], { from: "2026-06-01", to: "2026-06-30" });
     expect(r).toEqual({
       status: "sin_cobertura",
-      coverage: { from: "2026-07-04", cause: "tienda", storeId: "B", excluded: [], multiStore: false },
+      plan: { windows: [], later: [{ storeId: "B", floor: "2026-07-04", cause: "tienda" }], excluded: [], multiStore: false },
     });
     expect(rpc.calls).toEqual([]);
   });
 
-  it("con varias tiendas manda la que empezó último, y dice cuál", async () => {
-    rpc.result = { data: { version: 1, filas: [] }, error: null };
+  it("con varias tiendas, una llamada por tienda en su propia ventana, y se suman", async () => {
+    rpc.handler = (_name, args) => ({
+      data: { version: 1, filas: [fila({ store_id: (args.p_store_ids as string[])[0], canal: "asesora", pedidos: 1, ingresos: 100 })] },
+      error: null,
+    });
     const r = await getClosingChannels(["A", "B"], { from: "2026-07-01", to: "2026-07-31" });
-    expect(rpc.calls[0]).toMatchObject({ p_store_ids: ["A", "B"], p_from: "2026-07-04", p_to: "2026-07-31" });
-    expect(r).toMatchObject({ status: "ok", coverage: { from: "2026-07-04", cause: "tienda", storeId: "B", multiStore: true } });
+    expect(rpc.calls).toEqual([
+      { p_store_ids: ["A"], p_from: "2026-07-01", p_to: "2026-07-31" },
+      { p_store_ids: ["B"], p_from: "2026-07-04", p_to: "2026-07-31" },
+    ]);
+    expect(r).toMatchObject({ status: "ok", summary: { byChannel: { asesora: { orders: 2, revenue: 200 } } }, plan: { multiStore: true } });
   });
 
   it("una tienda sin ventas registradas empieza en su primer lead", async () => {
     rpc.result = { data: { version: 1, filas: [] }, error: null };
     const c = await getClosingChannels(["C"], { from: "2026-07-01", to: "2026-08-31" });
-    expect(c).toMatchObject({ status: "ok", coverage: { from: "2026-08-01" } }); // 03:00Z = 22:00 del 01-08 en Lima
+    expect(c).toMatchObject({ status: "ok", plan: { windows: [{ from: "2026-08-01" }] } }); // 03:00Z = 22:00 del 01-08 en Lima
   });
 
   it("una tienda que todavía no usa Kapta: sola, `sin_cobertura`; con otras, fuera del conteo y nombrada", async () => {
     const d = await getClosingChannels(["D"], { from: "2026-09-14", to: "2026-10-13" });
-    expect(d).toEqual({ status: "sin_cobertura", coverage: { from: null, cause: null, storeId: null, excluded: ["D"], multiStore: false } });
+    expect(d).toEqual({ status: "sin_cobertura", plan: { windows: [], later: [], excluded: ["D"], multiStore: false } });
     expect(rpc.calls).toEqual([]);
 
     rpc.result = { data: { version: 1, filas: [] }, error: null };
     const ad = await getClosingChannels(["A", "D"], { from: "2026-09-14", to: "2026-10-13" });
-    expect(rpc.calls[0]).toMatchObject({ p_store_ids: ["A"] });
-    // Se cuenta una sola tienda: los textos no hablan de «la última de las tiendas».
-    expect(ad).toMatchObject({ status: "ok", coverage: { from: null, excluded: ["D"], multiStore: false } });
+    expect(rpc.calls).toEqual([{ p_store_ids: ["A"], p_from: "2026-09-14", p_to: "2026-10-13" }]);
+    expect(ad).toMatchObject({ status: "ok", plan: { excluded: ["D"], multiStore: true } });
   });
 
   it("si no se puede leer desde cuándo usa Kapta una tienda, es un error: nunca un periodo sin recortar", async () => {
@@ -312,16 +330,16 @@ describe("getClosingChannels", () => {
   it("un periodo entero antes de ORDERS_SYNC_FROM: `sin_cobertura`, sin preguntarle a la función", async () => {
     vi.stubEnv("ORDERS_SYNC_FROM", "2026-08-01");
     const r = await getClosingChannels(["A"], { from: "2026-07-01", to: "2026-07-31" });
-    expect(r).toMatchObject({ status: "sin_cobertura", coverage: { from: "2026-08-01", cause: "sync" } });
+    expect(r).toMatchObject({ status: "sin_cobertura", plan: { later: [{ storeId: "A", floor: "2026-08-01", cause: "sync" }] } });
     expect(rpc.calls).toEqual([]);
   });
 
-  it("ORDERS_SYNC_FROM sigue siendo el piso: adelantarlo recorta", async () => {
+  it("ORDERS_SYNC_FROM sigue siendo el piso: adelantarlo recorta a cada tienda", async () => {
     vi.stubEnv("ORDERS_SYNC_FROM", "2026-07-08");
     rpc.result = { data: { version: 1, filas: [] }, error: null };
     const r = await getClosingChannels(["A", "B"], { from: "2026-07-01", to: "2026-07-14" });
-    expect(rpc.calls[0]).toMatchObject({ p_from: "2026-07-08" });
-    expect(r).toMatchObject({ status: "ok", coverage: { from: "2026-07-08", cause: "sync", storeId: null } });
+    expect(rpc.calls.map((c) => c.p_from)).toEqual(["2026-07-08", "2026-07-08"]);
+    expect(r).toMatchObject({ status: "ok", plan: { windows: [{ cause: "sync" }, { cause: "sync" }] } });
   });
 
   it("sin la migración: `sin_migracion`, nunca ceros", async () => {
@@ -332,6 +350,17 @@ describe("getClosingChannels", () => {
   it("otro error se dice tal cual", async () => {
     rpc.result = { data: null, error: { code: "57014", message: "statement timeout" } };
     expect(await getClosingChannels(["A"], { from: "2026-09-14", to: "2026-10-13" })).toEqual({
+      status: "error",
+      message: "statement timeout",
+    });
+  });
+
+  it("si falla UNA de las tiendas, es un error: nunca un total con una tienda de menos", async () => {
+    rpc.handler = (_name, args) =>
+      (args.p_store_ids as string[])[0] === "B"
+        ? { data: null, error: { code: "57014", message: "statement timeout" } }
+        : { data: { version: 1, filas: [fila({ canal: "asesora", pedidos: 1, ingresos: 100 })] }, error: null };
+    expect(await getClosingChannels(["A", "B"], { from: "2026-07-01", to: "2026-07-31" })).toEqual({
       status: "error",
       message: "statement timeout",
     });
@@ -472,9 +501,16 @@ describe("el orden de los canales es uno solo: SQL, código y MOM", () => {
     expect(order).toEqual([...CLOSING_CHANNELS]);
   });
 
+  it("la vista `pedidos_canal` de la 0259, que hoy usa la función, también", () => {
+    const sql = read("db/migrations/0259_ventas_por_origen.sql");
+    const view = sql.slice(sql.indexOf("create or replace view public.pedidos_canal"), sql.indexOf("revoke all on public.pedidos_canal"));
+    const order = [...view.matchAll(/then '([a-z_]+)'|else '([a-z_]+)'/g)].map((m) => m[1] ?? m[2]);
+    expect(order).toEqual([...CLOSING_CHANNELS]);
+  });
+
   it("la tabla del MOM §17.3 lista los canales en ese mismo orden", () => {
     const mom = read("docs/mom/master-pedidos-v1.md");
-    const sec = mom.slice(mom.indexOf("### 17.3 Canal de cierre"), mom.indexOf("## 18. Implementación incremental"));
+    const sec = mom.slice(mom.indexOf("### 17.3 Canal de cierre"), mom.indexOf("### 17.4 Ventas del periodo por origen"));
     const titles = [...sec.matchAll(/^\| (\d) \| ([^|]+?) \|/gm)].map((m) => m[2]!.trim());
     expect(titles).toEqual(CLOSING_CHANNELS.map((c) => CHANNEL_LABEL[c].title));
   });
@@ -490,57 +526,74 @@ describe("el orden de los canales es uno solo: SQL, código y MOM", () => {
 describe("los textos de la cobertura dicen qué fijó el día", () => {
   const name = (id: string) => ({ A: "Tienda Uno", B: "Tienda Dos", Z: "Tienda Nueva" })[id] ?? "?";
   const day = (iso: string) => `día ${iso}`;
-  const cov = (o: Partial<ClosingCoverage>): ClosingCoverage => ({ from: null, cause: null, storeId: null, excluded: [], multiStore: false, ...o });
+  const win = (o: Partial<WindowPlan["windows"][number]>) => ({
+    storeId: "A",
+    from: "2026-07-01",
+    to: "2026-07-31",
+    floor: "2026-06-25",
+    cause: "tienda" as const,
+    clipped: false,
+    ...o,
+  });
+  const plan = (o: Partial<WindowPlan>): WindowPlan => ({ windows: [], later: [], excluded: [], multiStore: false, ...o });
 
   it("sin recorte ni tiendas fuera, nada que decir", () => {
-    expect(coverageCopy(cov({}), name, day)).toEqual({ title: null, body: null, sub: [] });
+    expect(coverageCopy(plan({ windows: [win({})] }), name, day)).toEqual({ title: null, body: null, sub: [] });
+    expect(coverageCopy(plan({ windows: [win({}), win({ storeId: "B" })], multiStore: true }), name, day)).toEqual({ title: null, body: null, sub: [] });
   });
 
   it("una tienda: el día en que empezó a usar Kapta, y por qué recorta", () => {
-    const c = coverageCopy(cov({ from: "2026-07-04", cause: "tienda", storeId: "B" }), name, day);
+    const c = coverageCopy(plan({ windows: [win({ storeId: "B", from: "2026-07-04", floor: "2026-07-04", clipped: true })] }), name, day);
     expect(c.title).toBe("Cuenta desde el día 2026-07-04");
     expect(c.sub).toEqual(["desde el día 2026-07-04"]);
     expect(c.body).toContain("Ese día Tienda Dos empezó a usar Kapta");
     expect(c.body).toContain("«Web» u «Otros»");
-    expect(c.body).not.toContain("la última de las tiendas");
-  });
-
-  it("recortado y con una tienda fuera: la tarjeta dice las dos cosas", () => {
-    const c = coverageCopy(cov({ from: "2026-07-04", cause: "tienda", storeId: "B", excluded: ["Z"] }), name, day);
-    expect(c.sub).toEqual(["desde el día 2026-07-04", "sin Tienda Nueva"]);
-    expect(c.body).toContain("Ese día Tienda Dos empezó a usar Kapta.");
-    expect(c.body).toContain("Tienda Nueva todavía no usa Kapta");
-  });
-
-  it("varias tiendas: nombra la que empezó último y dice que cada página cuenta desde su inicio", () => {
-    const c = coverageCopy(cov({ from: "2026-07-04", cause: "tienda", storeId: "B", multiStore: true }), name, day);
-    expect(c.body).toContain("Ese día empezó a usar Kapta Tienda Dos, la última de las tiendas");
-    expect(c.body).toContain("La página de cada tienda cuenta desde su propio inicio");
   });
 
   it("si lo fijó ORDERS_SYNC_FROM, no culpa a las asesoras", () => {
-    const c = coverageCopy(cov({ from: "2026-08-01", cause: "sync" }), name, day);
+    const c = coverageCopy(plan({ windows: [win({ from: "2026-07-08", floor: "2026-07-08", cause: "sync", clipped: true })] }), name, day);
     expect(c.body).toContain("Kapta no tiene los pedidos que no son del bot");
     expect(c.body).not.toContain("asesora");
   });
 
-  it("una tienda que no usa Kapta se nombra y se dice que no entra", () => {
-    const c = coverageCopy(cov({ excluded: ["Z"], multiStore: true }), name, day);
-    expect(c).toEqual({
-      title: "No entran todas las tiendas",
-      body: "Tienda Nueva todavía no usa Kapta (sin ventas registradas ni leads): sus pedidos no entran en este total.",
-      sub: ["sin Tienda Nueva"],
-    });
+  it("varias tiendas: cada una dice desde cuándo cuenta, y la que no usa Kapta se nombra", () => {
+    const c = coverageCopy(
+      plan({
+        windows: [win({}), win({ storeId: "B", from: "2026-07-04", floor: "2026-07-04", clipped: true })],
+        excluded: ["Z"],
+        multiStore: true,
+      }),
+      name,
+      day,
+    );
+    expect(c.title).toBe("No todas las tiendas cuentan el periodo entero");
+    expect(c.body).toContain("Tienda Dos cuenta desde el día 2026-07-04, el día en que empezó a usar Kapta.");
+    expect(c.body).toContain("Tienda Nueva todavía no usa Kapta (sin ventas registradas ni leads): sus pedidos no entran en este total.");
+    expect(c.body).toContain("La página de cada tienda dice desde cuándo cuenta.");
+    expect(c.body).not.toContain("Tienda Uno");
+    expect(c.sub).toEqual(["Tienda Dos desde el día 2026-07-04", "sin Tienda Nueva"]);
+  });
+
+  it("una tienda que empieza después del periodo no entra, y se dice por qué", () => {
+    const c = coverageCopy(
+      plan({ windows: [win({})], later: [{ storeId: "B", floor: "2026-08-04", cause: "tienda" }], multiStore: true }),
+      name,
+      day,
+    );
+    expect(c.body).toContain("Tienda Dos no entra: empezó a usar Kapta el día 2026-08-04, después de este periodo.");
+    expect(c.sub).toEqual(["sin Tienda Dos"]);
   });
 
   it("sin cobertura: el aviso de la vista anterior según la causa", () => {
-    expect(noCoverageCopy(cov({}), name, day).note).toMatch(/^Esta tienda todavía no usa Kapta/);
-    expect(noCoverageCopy(cov({ multiStore: true }), name, day).note).toMatch(/^Ninguna de estas tiendas usa Kapta/);
-    const t = noCoverageCopy(cov({ from: "2026-07-04", cause: "tienda", storeId: "B", multiStore: true }), name, day);
-    expect(t.note).toContain("el día en que empezó a usar Kapta Tienda Dos, la última de las tiendas");
+    expect(noCoverageCopy(plan({ excluded: ["A"] }), name, day).note).toMatch(/^Esta tienda todavía no usa Kapta/);
+    const t = noCoverageCopy(plan({ later: [{ storeId: "B", floor: "2026-07-04", cause: "tienda" }] }), name, day);
+    expect(t.note).toContain("el día en que Tienda Dos empezó a usar Kapta");
     expect(t.note).toContain("Esto es la vista anterior: solo los pedidos del bot de Kapso.");
     expect(t.sub).toBe("Periodo anterior a que Kapta tuviera todas las ventas");
-    expect(noCoverageCopy(cov({ from: "2026-08-01", cause: "sync" }), name, day).note).not.toContain("asesora");
+    expect(noCoverageCopy(plan({ later: [{ storeId: "A", floor: "2026-08-01", cause: "sync" }] }), name, day).note).not.toContain("asesora");
+    const todas = noCoverageCopy(plan({ excluded: ["A", "Z"], multiStore: true }), name, day);
+    expect(todas.note).toMatch(/^Ninguna de estas tiendas tiene todas sus ventas en este periodo/);
+    expect(todas.sub).toBe("Las tiendas todavía no usan Kapta");
   });
 });
 
@@ -581,8 +634,8 @@ describe("el panel", () => {
 
   it("antes de la cobertura, también la vista anterior con su aviso; recortado, lo dice", () => {
     const dash = read("components/executive-dashboard.tsx");
-    expect(dash).toContain('closing?.status === "sin_cobertura" ? noCoverageCopy(closing.coverage, storeName, fullDay)');
-    expect(dash).toContain('closing?.status === "ok" ? coverageCopy(closing.coverage, storeName, fullDay)');
+    expect(dash).toContain('closing?.status === "sin_cobertura" ? noCoverageCopy(closing.plan, storeName, fullDay)');
+    expect(dash).toContain('closing?.status === "ok" ? coverageCopy(closing.plan, storeName, fullDay)');
     expect(dash).toContain("<Banner tone=\"info\" role=\"status\" title={closingCopy.title}>");
   });
 

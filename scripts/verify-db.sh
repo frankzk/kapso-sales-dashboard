@@ -237,5 +237,9 @@ echo "▶ Comprobantes por RUC (0257): semilla apagada, cuenta → RUC de su org
 $PSQL -f "$ROOT/scripts/sql/invoices_smoke.sql"
 echo "  ✅ GRUPO GF S.A.C. sembrado apagado y sin pisar al owner, real solo con token, fecha y prueba del mismo RUC, cada motivo del turno, tope del día, índice único, estados que solo avanzan, solo service_role"
 
+echo "▶ Ventas por origen y conversión por fuente (0259): día local, cancelados aparte, cohorte de 7 días por cualquier canal, ya clientas aparte, y RLS"
+$PSQL -f "$ROOT/scripts/sql/ventas_por_origen_smoke.sql"
+echo "  ✅ todas las ventas por día y canal, la regla del canal en una sola vista, conversión por nacimiento con 7 días, asesoras como en Productividad, cada quien sus tiendas"
+
 echo ""
 echo "✅ DB verification passed."
