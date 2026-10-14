@@ -2,7 +2,9 @@
 // §11.7). Con una base en memoria que corta cada respuesta en 1000 filas, como
 // PostgREST: la última llamada, la sugerencia de cerrar, la línea del fallo de
 // otro courier, el acuerdo para hoy que ya no alcanza y los cierres después de
-// responder, que releen la etapa antes de cerrar.
+// responder, que releen la etapa antes de cerrar. Para Almacén (entrega 1c):
+// la lectura que no cierra nada (`closeStale: false`), la salida propia y
+// cuándo se escribió el programa.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -277,5 +279,60 @@ describe("los cierres después de responder releen la etapa (F10)", () => {
     expect(byId("case-500").closed_at).toBeNull();
     expect(byId("case-x")).toMatchObject({ close_reason: "fuera_de_etapa" });
     expect(byId("case-x").closed_at).toBeTruthy();
+  });
+});
+
+describe("Almacén solo lee: `closeStale: false` (entrega 1c)", () => {
+  /** o1 en la etapa y un caso abierto de ox, que ya salió de ella. */
+  function staleSeed(): Record<string, Row[]> {
+    const s = seed({ cases: [openCase(), openCase({ id: "case-x", order_id: "ox", episode_key: "order:ox" })] });
+    s.order_master!.push(orderRow("ox", { macro_substage: "por_cerrar" }));
+    s.orders!.push({ id: "ox", store_id: "s1", cancelled_at: null });
+    return s;
+  }
+
+  it("por defecto, el cierre se programa después de responder", async () => {
+    const { tasks } = await load(staleSeed());
+    expect(tasks).toHaveLength(1);
+  });
+
+  it("con `closeStale: false` no se programa nada, ni con `after()`, y el caso sigue abierto", async () => {
+    const { after } = await import("next/server");
+    vi.mocked(after).mockClear();
+    const { admin, db } = fakeDb(staleSeed());
+    const tasks: Array<() => Promise<void>> = [];
+    const data = await loadReproLima(admin, scope, NOW, { defer: (task) => tasks.push(task), closeStale: false });
+    expect(tasks).toHaveLength(0);
+    await loadReproLima(admin, scope, NOW, { closeStale: false });
+    expect(after).not.toHaveBeenCalled();
+    expect(db.lima_repro_cases!.find((row) => row.id === "case-x")!.closed_at).toBeNull();
+    // La fila trata igual como ausente el caso que ya no sirve.
+    expect(data.rows.map((row) => row.orderId)).toEqual(["o1"]);
+  });
+});
+
+describe("la salida propia y el programa, para Almacén (entrega 1c)", () => {
+  it("la fila trae la salida propia que se reusa y cuándo se escribió el programa", async () => {
+    const s = seed({
+      cases: [],
+      events: [{ id: "ev-1", order_id: "o1", shipment_id: "sh1", kind: "returned_to_office", occurred_at: "2026-10-11T15:00:00Z" }],
+    });
+    s.gf_dispatch_programs = [{ order_id: "o1", store_id: "s1", scheduled_for: "2026-10-13", reason: "Programado por Despacho GF", set_at: "2026-10-12T14:10:00Z" }];
+    const { data } = await load(s);
+    const row = data.rows[0]!;
+    expect(row.ownOutput).toEqual({ id: "sh1", code: "KP1-S01" });
+    expect(row.program).toEqual({ scheduledFor: "2026-10-13", reason: "Programado por Despacho GF", origin: "grupo_gf", setAt: "2026-10-12T14:10:00Z" });
+  });
+
+  it("sin salida propia viva, `ownOutput` es null; sin programa, `program` también", async () => {
+    const swayp = {
+      id: "sw1", order_id: "o1", store_id: "s1", courier: "fenix", created_via: "fenix", delivery_status: "en_ruta",
+      custody_state: null, custody_transferred_at: null, output_number: 1, output_code: null, guide_code: "SW-1",
+      status_category: null, reported_status: null, swayp_state: 9, returned_at: null, dispatched_at: "2026-10-10T14:00:00Z",
+      updated_at: "2026-10-12T14:00:00Z", closed_at: null,
+    };
+    const { data } = await load(seed({ shipments: [swayp], stops: [], cases: [] }));
+    expect(data.rows[0]!.ownOutput).toBeNull();
+    expect(data.rows[0]!.program).toBeNull();
   });
 });

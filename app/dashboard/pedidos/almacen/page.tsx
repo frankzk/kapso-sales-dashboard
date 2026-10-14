@@ -17,6 +17,9 @@ export default async function WarehousePage() {
       </EmptyState>
     );
   }
+  // «Reintentos por salir» (entrega 1c) no se lee aquí: el escaneo que arma una
+  // caja revalida esta página y la vuelve a pintar en servidor, y la estación
+  // tiraría esa lectura. La estación la pide después de montar.
   const data = await getWarehouseStationData();
   return <WarehouseStation initialData={data} stores={stores} />;
 }
