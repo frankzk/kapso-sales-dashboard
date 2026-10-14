@@ -429,6 +429,15 @@ describe("el tablero (E31, E33)", () => {
     expect(board).toContain("todavía por entregar");
     expect(board).toContain('aria-label={todos ? "Todos" : LIST_CARD[list].label}');
     expect(board).toContain("<ReproLimaTodos breakdown={todos} lists={lists} onOpenList={onOpenList} />");
+    // Las cuatro listas de «Todos» se cuentan sin la búsqueda, y la búsqueda se
+    // quita aunque se llegue a «Todos» por la URL.
+    expect(board).toContain("for (const row of storeScoped) out[row.list] += 1;");
+    expect(board).toContain("count: storeCounts[l]");
+    expect(board).toContain('useEffect(() => { if (view === "todos") setQuery(""); }, [view]);');
+    // Sin conteo, `vista` sale de la URL; al abrir una lista desde «Todos» el foco va a la sección.
+    expect(board).toContain('const staleTodos = !openCounts && searchParams.get("vista") === "todos";');
+    expect(board).toContain("window.requestAnimationFrame(() => listSection.current?.focus());");
+    expect(board).toContain("<section ref={listSection} tabIndex={-1}");
   });
 
   it("«Todos» agrupa por etapa y subetapa del Master, con enlaces a sus colas (§9.5)", () => {
@@ -663,7 +672,7 @@ describe("el tablero con «Todos» (§9.5, 14-10-2026)", () => {
     expect(card(html)).toContain('aria-pressed="true"');
     // Ninguna lista elegida mientras se mira «Todos».
     expect(html.match(/aria-pressed="true"/g)?.length).toBe(1);
-    expect(html).toContain('<section aria-label="Todos"');
+    expect(html).toContain('<section tabindex="-1" aria-label="Todos"');
     expect(html).not.toContain('type="search"');
     expect(html).toContain('<b class="font-semibold text-ink-900">8</b> todavía por entregar · 7 por cerrar');
     expect(html).toContain("Todavía por entregar");

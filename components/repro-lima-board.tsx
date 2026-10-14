@@ -176,8 +176,22 @@ export function ReproLimaBoard({ data, openCounts = null }: { data: ReproLimaDat
   // La vista vive en la URL; sin conteo, siempre las listas.
   const view = openCounts && searchParams.get("vista") === "todos" ? "todos" : "listas";
   const todos = view === "todos" ? breakdown : null;
-  // Al entrar a «Todos» se quita la búsqueda: estas cifras son las de las tarjetas.
-  const lists = REPRO_LISTS.map((l) => ({ list: l, label: LIST_CARD[l].label.split(" · ")[0]!, count: counts[l] }));
+  // Las cuatro listas de «Todos» se cuentan con la tienda y sin la búsqueda, como
+  // «Por reprogramar Lima»: así siempre suman su cifra.
+  const storeCounts = useMemo(() => {
+    const out: Record<ReproList, number> = { por_decidir: 0, llamar_despues: 0, programados: 0, cerrados: 0 };
+    for (const row of storeScoped) out[row.list] += 1;
+    return out;
+  }, [storeScoped]);
+  const lists = REPRO_LISTS.map((l) => ({ list: l, label: LIST_CARD[l].label.split(" · ")[0]!, count: storeCounts[l] }));
+  // En «Todos» no hay búsqueda a la vista: se quita también si se llega por la URL
+  // (al releer, o con «atrás»), para que al volver a las listas no quede oculta.
+  useEffect(() => { if (view === "todos") setQuery(""); }, [view]);
+  // Sin conteo no hay «Todos»: se quita `vista` para que una relectura no cambie la pantalla sola.
+  const staleTodos = !openCounts && searchParams.get("vista") === "todos";
+  useEffect(() => { if (staleTodos) showView("listas"); });
+  // Al abrir una lista desde «Todos», el foco va a la sección (el control tocado ya no está).
+  const listSection = useRef<HTMLElement>(null);
 
   /** Cambia de vista sin volver a pedir la página y sin tocar los demás parámetros (`ficha`, `seccion`). */
   function showView(next: "listas" | "todos") {
@@ -192,6 +206,7 @@ export function ReproLimaBoard({ data, openCounts = null }: { data: ReproLimaDat
   function onOpenList(l: ReproList) {
     setList(l);
     showView("listas");
+    window.requestAnimationFrame(() => listSection.current?.focus());
   }
 
   // La fila viva de la hoja abierta: tras releer, la del servidor; si salió de
@@ -379,7 +394,7 @@ export function ReproLimaBoard({ data, openCounts = null }: { data: ReproLimaDat
         </Banner>
       )}
 
-      <section aria-label={todos ? "Todos" : LIST_CARD[list].label} className="rounded-lg bg-white shadow-control ring-1 ring-line">
+      <section ref={listSection} tabIndex={-1} aria-label={todos ? "Todos" : LIST_CARD[list].label} className="rounded-lg bg-white shadow-control ring-1 ring-line focus:outline-none">
         {/* Búsqueda y tienda, como en Stripe: la píldora es discontinua hasta que filtra.
             En «Todos» no hay búsqueda: se cuentan pedidos del Master, no casos. */}
         <div className="flex flex-wrap items-center gap-2 px-4 py-3">

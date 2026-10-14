@@ -1,9 +1,10 @@
 // «Repro Lima» (fase 1, entrega 1a; MOM §9.5, §29.6, §29.13): las piezas del
 // servidor en el código. Quién entra, las dos RPC, un solo escritor del
 // programa de Grupo GF, los tres ganchos de «Recibir en oficina», los kinds
-// nuevos del historial, la migración y el MOM.
+// nuevos del historial, la migración y el MOM. Y «Todos» (14-10-2026): la
+// migración 0256, su única lectura y lo que dicen el MOM y DESIGN.md.
 
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -13,6 +14,9 @@ import {
   CONFIRMATION_SIGNAL_KINDS,
 } from "@/lib/order-confirmation";
 import { REPRO_EVENT_KINDS } from "@/lib/repro-lima";
+import { masterQueueHref } from "@/lib/master-query";
+import { macroStageLabel } from "@/lib/order-macro-stage";
+import { TODOS_POR_ENTREGAR, TODOS_SIN_SUBETAPA } from "@/lib/repro-lima-todos";
 
 const root = process.cwd();
 const read = (path: string) => readFileSync(resolve(root, path), "utf8");
@@ -445,5 +449,171 @@ describe("el MOM lo documenta (§9.5, §29.6, §29.13)", () => {
     expect(s2913).toContain("solo un fallo nuevo (otro episodio) la quita");
     expect(s2913).toContain("Acordada con Tanders, Swayp o Axel no lleva chapa");
     expect(s2913).toContain("**En «Por QR», esa caja se recibe y ahí termina.**");
+  });
+});
+
+describe("la migración 0256 y «Todos» (§9.5, 14-10-2026)", () => {
+  const sql = read("db/migrations/0256_lima_open_counts.sql");
+  const todosAccess = read("lib/repro-lima-todos-access.ts");
+  const mom = read("docs/mom/master-pedidos-v1.md");
+  const HEADING = "**«Todos»: los pedidos de Lima sin estado final (14-10-2026, pedido del owner del 13-10-2026).**";
+  /** El párrafo de «Todos», hasta los estados del acuerdo, en una línea. */
+  const todosBlock = () => {
+    const from = mom.indexOf("**«Todos»: los pedidos de Lima sin estado final");
+    expect(from, "párrafo de «Todos»").toBeGreaterThanOrEqual(0);
+    return flat(mom.slice(from, mom.indexOf("**Estados derivados del acuerdo**", from)));
+  };
+
+  it("una sola función que lee: Lima por cobertura, sin Finalizado, días de Lima, solo service_role", () => {
+    // Un solo 0256: si choca con main o con otra entrega, se renumera en todas partes.
+    expect(readdirSync(resolve(root, "db/migrations")).filter((n) => n.startsWith("0256_"))).toEqual(["0256_lima_open_counts.sql"]);
+    expect(sql).toContain("create or replace function public.order_master_lima_open_counts(p_store_ids uuid[], p_today date)");
+    expect(sql).toContain("om.store_id = any(p_store_ids)");
+    expect(sql).toContain("om.coverage = 'lima'");
+    expect(sql).toContain("om.macro_stage is not null");
+    expect(sql).toContain("om.macro_stage <> 'finalizado'");
+    expect(sql).toContain("at time zone 'America/Lima'");
+    // Estrictos: 7 días justos no son «más de 7».
+    expect(sql).toContain("p_today - (om.macro_since at time zone 'America/Lima')::date > 7)::bigint");
+    expect(sql).toContain("p_today - (om.macro_since at time zone 'America/Lima')::date > 30)::bigint");
+    expect(sql).toContain("group by om.store_id, om.macro_stage, om.macro_substage;");
+    expect(sql).toContain("security invoker");
+    expect(sql).not.toMatch(/security definer/i);
+    expect(sql).toContain("revoke all on function public.order_master_lima_open_counts(uuid[], date) from public, anon, authenticated;");
+    expect(sql).toContain("grant execute on function public.order_master_lima_open_counts(uuid[], date) to service_role;");
+    // Solo lee.
+    expect(sql).not.toMatch(/\b(insert|update|delete)\b/i);
+    // Ni `drop` ni begin/commit, tampoco en los comentarios (DEPLOY.md, 0251).
+    expect(sql).not.toMatch(/\bdrop\b/i);
+    expect(sql).not.toMatch(/\bbegin\b/i);
+    expect(sql).not.toMatch(/\bcommit\b/i);
+  });
+
+  it("se aplica y se prueba con las demás: apply.sql, apply_bundled.sql y verify-db.sh", () => {
+    const apply = read("db/apply.sql");
+    expect(apply).toContain("\\ir migrations/0256_lima_open_counts.sql");
+    expect(apply.indexOf("\\ir migrations/0256_lima_open_counts.sql")).toBeLessThan(apply.indexOf("\\echo 'Done.'"));
+    expect(read("db/apply_bundled.sql")).toContain("create or replace function public.order_master_lima_open_counts(p_store_ids uuid[], p_today date)");
+    const verify = read("scripts/verify-db.sh");
+    expect(verify).toContain('$PSQL -f "$ROOT/scripts/sql/lima_open_counts_smoke.sql"');
+    expect(verify.indexOf("restock_reminders_smoke.sql")).toBeLessThan(verify.indexOf("lima_open_counts_smoke.sql"));
+    const smoke = read("scripts/sql/lima_open_counts_smoke.sql");
+    expect(smoke).toContain("set role authenticated;");
+    expect(smoke).toContain("insufficient_privilege");
+  });
+
+  it("una sola lectura, sin los hechos de cada pedido, y solo la llama la página", () => {
+    expect(todosAccess).toContain('rpc("order_master_lima_open_counts"');
+    expect(todosAccess).not.toContain("loadReproFacts");
+    expect(todosAccess).toContain('console.error("repro-lima: conteo de Todos", error.code, error.message);');
+    const files = ["app", "lib", "components"].flatMap(sourceFiles);
+    expect(files.filter((f) => read(f).includes('"order_master_lima_open_counts"'))).toEqual(["lib/repro-lima-todos-access.ts"]);
+    expect(files.filter((f) => read(f).includes("loadLimaOpenCounts(")).sort()).toEqual([
+      "app/dashboard/pedidos/repro-lima/page.tsx",
+      "lib/repro-lima-todos-access.ts",
+    ]);
+  });
+
+  it("el MOM lo documenta en §9.5, antes de los estados del acuerdo y fuera de la entrega 1c", () => {
+    const at = mom.indexOf("**«Todos»: los pedidos de Lima sin estado final");
+    expect(at).toBeGreaterThan(mom.indexOf("### 9.5 Reprogramación en Lima: «Repro Lima» (fase 1, entregas 1a y 1c)"));
+    expect(at).toBeGreaterThan(mom.indexOf("Orden de «Por decidir»: primero los fallos del último día de reparto"));
+    expect(at).toBeLessThan(mom.indexOf("**Estados derivados del acuerdo** (`agreementState`)."));
+    expect(at).toBeLessThan(mom.indexOf("#### Almacén: «Reintentos por salir» (fase 1, entrega 1c, 13-10-2026)"));
+    expect(mom.indexOf("**«Todos»: los pedidos de Lima sin estado final", at + 1)).toBe(-1);
+    expect(flat(mom)).toContain(HEADING);
+    const block = todosBlock();
+    for (const quote of [
+      "No crea estados y `MOM_RESOLUTION_VERSION` no cambia (`mom-v1.26`).",
+      "cobertura Lima (`order_master.coverage = 'lima'`) en cualquier macroetapa menos «Finalizado», la única terminal (§6.6).",
+      "**Decisión del owner (14-10-2026):** a la pregunta de si «Por cerrar» suma a la tarjeta respondió «como mejor lo creas conveniente», y se tomó la opción recomendada.",
+      "No suma a la cifra de la tarjeta.",
+      "Estas cifras no filtran: el Master no filtra por días en la etapa.",
+      "su cifra es la suma de las cuatro listas",
+      "en Por cerrar es el primer motivo abierto y los demás quedan en `macro_reasons`. Las subetapas suman su etapa.",
+      "«Todos» no escribe, no abre casos ni toma el candado.",
+    ]) {
+      expect(block, quote).toContain(quote);
+    }
+  });
+
+  it("cita lo que dicen la tarjeta y el resumen", () => {
+    const block = todosBlock();
+    const board = read("components/repro-lima-board.tsx");
+    const todos = read("components/repro-lima-todos.tsx");
+    const pure = read("lib/repro-lima-todos.ts");
+    const pairs: Array<[mom: string, src: string, code: string]> = [
+      ["«Todos · por entregar»", board, 'label="Todos · por entregar"'],
+      ["«Todavía por entregar»", todos, 'title="Todavía por entregar"'],
+      ["«Ya entregado, anulado o devuelto: falta cerrar»", todos, 'title="Ya entregado, anulado o devuelto: falta cerrar"'],
+      ["«En Lima, lo que no se entrega vuelve a «Por reprogramar Lima»; solo la entrega lo pasa a «Por cerrar».»", todos, 'note="En Lima, lo que no se entrega vuelve a «Por reprogramar Lima»; solo la entrega lo pasa a «Por cerrar»."'],
+      ["«No hay pedidos de Lima sin estado final.»", todos, ">No hay pedidos de Lima sin estado final.</p>"],
+      ["«N todavía por entregar · M por cerrar», sin la segunda parte si es cero.", board, "</b> todavía por entregar"],
+      ["«N todavía por entregar · M por cerrar», sin la segunda parte si es cero.", board, '{todos.totals.porCerrar > 0 && ` · ${todos.totals.porCerrar.toLocaleString("es-PE")} por cerrar`}'],
+      ["como «Sin subetapa»", pure, 'export const TODOS_SIN_SUBETAPA = "Sin subetapa";'],
+      ["la ámbar «N con más de 7 días»", todos, '<Badge tone="warn">{`${fmt(s.over7)} con más de 7 días`}</Badge>'],
+      ["la crítica «N con más de 30»", todos, '<Badge tone="crit">{`${fmt(s.over30)} con más de 30`}</Badge>'],
+      ["«6 d en la etapa» de la fila", read("components/repro-lima-sheet.tsx"), "`${days} d en la etapa`"],
+      ["«repro-lima: conteo de Todos»", todosAccess, '"repro-lima: conteo de Todos"'],
+      ["(`?vista=todos`)", board, 'searchParams.get("vista") === "todos"'],
+      ["la fila abre «Por decidir»", todos, 'onOpenList("por_decidir")'],
+      ["Al tocarla se quita la búsqueda", board, 'onClick={() => { setQuery(""); showView("todos"); }}'],
+      ["con la tienda elegida y nunca con la búsqueda", board, "reproAging(storeScoped)"],
+    ];
+    for (const [quote, src, code] of pairs) {
+      expect(block, quote).toContain(quote);
+      expect(src, code).toContain(code);
+    }
+  });
+
+  it("y lo que dice el MOM es lo que hace el código", () => {
+    const block = todosBlock();
+    // Las etapas que suman a la tarjeta, con sus nombres del Master.
+    const labels = TODOS_POR_ENTREGAR.map((stage) => macroStageLabel(stage));
+    expect(block).toContain(`**La cifra de la tarjeta** es lo que todavía no se entrega: ${labels.slice(0, -1).join(", ")} y ${labels.at(-1)}.`);
+    expect(TODOS_POR_ENTREGAR).not.toContain("por_cerrar");
+    expect(TODOS_SIN_SUBETAPA).toBe("Sin subetapa");
+    // El enlace a la cola, con los parámetros en el orden que cita el MOM.
+    expect(block).toContain("`/dashboard/pedidos?st=…&cv=lima&view=…&substage=…`");
+    expect(masterQueueHref({ view: "en_curso", substage: "en_transito", coverages: ["lima"], storeIds: ["s1"] })).toBe(
+      "/dashboard/pedidos?st=s1&cv=lima&view=en_curso&substage=en_transito",
+    );
+    expect(block).toContain("sin tienda elegida no lleva `st`");
+    expect(masterQueueHref({ view: "por_cerrar", coverages: ["lima"] })).toBe("/dashboard/pedidos?cv=lima&view=por_cerrar");
+    // Cada archivo que nombra la implementación existe.
+    for (const file of [
+      "db/migrations/0256_lima_open_counts.sql",
+      "lib/repro-lima-todos.ts",
+      "lib/repro-lima-todos-access.ts",
+      "lib/master-query.ts",
+      "components/repro-lima-todos.tsx",
+      "components/repro-lima-board.tsx",
+      "test/repro-lima-todos.test.ts",
+      "test/repro-lima-todos-access.test.ts",
+      "test/master-query.test.ts",
+      "test/repro-lima-ui.test.ts",
+      "test/repro-lima-source.test.ts",
+      "scripts/sql/lima_open_counts_smoke.sql",
+    ]) {
+      expect(block, file).toContain(`\`${file}\``);
+      expect(existsSync(resolve(root, file)), file).toBe(true);
+    }
+    expect(block).toContain("`app/dashboard/pedidos/repro-lima/` (`page.tsx` y `loading.tsx`)");
+    for (const file of ["app/dashboard/pedidos/repro-lima/page.tsx", "app/dashboard/pedidos/repro-lima/loading.tsx"]) {
+      expect(existsSync(resolve(root, file)), file).toBe(true);
+    }
+  });
+
+  it("DESIGN.md y DEPLOY.md", () => {
+    const design = flat(read("DESIGN.md"));
+    expect(design).toContain(
+      "cuatro tarjetas de estado que filtran y dicen su número («Por decidir», «Llamar después», «Programados» y «Cerrados») y, desde el 14-10-2026, una quinta, «Todos · por entregar»",
+    );
+    expect(design).toContain(
+      "que abre el resumen de los pedidos de Lima sin estado final por etapa y subetapa del Master, cada subetapa con su cifra, sus chapas de antigüedad y el enlace a su lista del Master («Por reprogramar Lima» abre sus cuatro listas)",
+    );
+    const deploy = flat(read("DEPLOY.md"));
+    expect(deploy).toContain("### 14-10-2026 · Repro Lima «Todos» (0256)");
+    expect(deploy).toContain("`repro-lima: conteo de Todos`");
   });
 });
