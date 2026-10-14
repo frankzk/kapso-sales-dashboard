@@ -1477,28 +1477,6 @@ export function LeadsBoard({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <label className="relative block w-full sm:w-64">
-            <span className="sr-only">Buscar lead por nombre o celular</span>
-            <IconSearch className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-ink-500" />
-            <input
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.currentTarget.value)}
-              placeholder="Buscar por nombre o celular"
-              aria-label="Buscar lead por nombre o celular"
-              className={cn(FIELD_BOX, "h-9 w-full pl-8 pr-8 pointer-coarse:h-11")}
-            />
-            {query && (
-              <button
-                type="button"
-                onClick={() => setQuery("")}
-                aria-label="Limpiar búsqueda"
-                className="absolute right-1.5 top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded text-ink-500 hover:text-ink-900"
-              >
-                <IconX className="size-3.5" />
-              </button>
-            )}
-          </label>
           {stores.length > 1 &&
             (allStoresAvailable ? (
               <span onPointerEnter={prefetchOtherStores} onFocusCapture={prefetchOtherStores}>
@@ -1580,11 +1558,13 @@ export function LeadsBoard({
           Leads). Arriba, qué lista; abajo, qué leads dentro de ella. Lo que no
           entra va a «Más filtros». */}
       <div className="flex flex-col gap-2">
-        {/* «Más filtros» cierra la primera fila a la derecha, como en la imagen
-            aprobada (J). En la cabecera de la cola, junto a «Orden», nadie lo
-            encontraba (Frankz, 14-10-2026). Donde no cabe al lado de los chips,
-            baja a su propia línea antes que tapar un chip; si los chips solos
-            tampoco caben (un teléfono), se desplazan por dentro sin barra. */}
+        {/* La búsqueda y «Más filtros» cierran la primera fila a la derecha:
+            «Más filtros» como en la imagen aprobada (J; en la cabecera de la
+            cola nadie lo encontraba) y la búsqueda a su lado, bajada de la
+            cabecera de la página (Frankz, 14-10-2026). Donde no caben al lado
+            de los chips, bajan juntas a su propia línea antes que tapar un
+            chip; si los chips solos tampoco caben (un teléfono), se desplazan
+            por dentro sin barra. */}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <div className={CHIP_ROW}>
             <QueueChip
@@ -1628,7 +1608,29 @@ export function LeadsBoard({
               />
             ))}
           </div>
-          <div className="ml-auto">
+          <div className="ml-auto flex w-full items-center gap-2 sm:w-auto">
+            <label className="relative block min-w-0 flex-1 sm:w-64 sm:flex-none">
+              <span className="sr-only">Buscar lead por nombre o celular</span>
+              <IconSearch className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-ink-500" />
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.currentTarget.value)}
+                placeholder="Buscar por nombre o celular"
+                aria-label="Buscar lead por nombre o celular"
+                className={cn(FIELD_BOX, "h-8 w-full pl-8 pr-8 pointer-coarse:h-11 [&::-webkit-search-cancel-button]:hidden")}
+              />
+              {query && (
+                <button
+                  type="button"
+                  onClick={() => setQuery("")}
+                  aria-label="Limpiar búsqueda"
+                  className="absolute right-1.5 top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded text-ink-500 hover:text-ink-900"
+                >
+                  <IconX className="size-3.5" />
+                </button>
+              )}
+            </label>
             <FilterPill
               ref={filtersPillRef}
               label="Más filtros"
