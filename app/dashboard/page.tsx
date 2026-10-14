@@ -31,6 +31,7 @@ import {
   MomOwnerSummarySkeleton,
 } from "@/components/mom-owner-summary";
 import { getMomOwnerSummary } from "@/lib/mom-owner-summary-access";
+import { Banner } from "@/components/ops-ui";
 import { LtvCpaPanel, LtvCpaSkeleton } from "@/components/ltv-cpa";
 import { getLtvInputs } from "@/lib/ltv-access";
 import { buildCohorts } from "@/lib/ltv";
@@ -164,39 +165,44 @@ async function ConsolidatedContent({
   const currency = stores.every((s) => s.currency === first.currency) ? first.currency : "PEN";
 
   return (
-    <div className="space-y-5">
-      <Suspense fallback={<MomOwnerSummarySkeleton />}>
-        <MomOwnerSummaryLoader
-          storeIds={storeIds}
-          orgIds={[...new Set(stores.map((store) => store.org_id))]}
-        />
-      </Suspense>
-      <Suspense fallback={<LtvCpaSkeleton />}>
-        <LtvCpaLoader stores={stores.map((store) => ({ id: store.id, name: store.name, currency: store.currency }))} />
-      </Suspense>
-      <ExecutiveDashboard
-        stores={stores}
-        scope="all"
-        range={range}
-        rollups={rollups}
-        prevRollups={prevRollups}
-        orders={orders}
-        conversations={conversations}
-        leads={leads}
-        ops={ops}
-        currency={currency}
-        timezone={first.timezone}
-        adNames={adNames}
-        waNumbers={waNumbers}
-        attribution={attribution}
-        campaignDeliveries={campaignDeliveries}
-        campaignLeads={campaignLeads}
-        campaignOrders={campaignOrders}
-        metaAdPerformance={metaAdPerformance}
-        webAdOrders={webAdOrders}
-        metaAdCatalog={metaAdCatalog}
-      />
-    </div>
+    <ExecutiveDashboard
+      operations={
+        // La operación del MOM y LTV : CPA (MOM §17.2, «debajo del resumen
+        // operativo») no siguen al periodo: llegan cada una por su lado y no
+        // frenan el tablero comercial.
+        <>
+          <Suspense fallback={<MomOwnerSummarySkeleton />}>
+            <MomOwnerSummaryLoader
+              storeIds={storeIds}
+              orgIds={[...new Set(stores.map((store) => store.org_id))]}
+            />
+          </Suspense>
+          <Suspense fallback={<LtvCpaSkeleton />}>
+            <LtvCpaLoader stores={stores.map((store) => ({ id: store.id, name: store.name, currency: store.currency }))} />
+          </Suspense>
+        </>
+      }
+      stores={stores}
+      scope="all"
+      range={range}
+      rollups={rollups}
+      prevRollups={prevRollups}
+      orders={orders}
+      conversations={conversations}
+      leads={leads}
+      ops={ops}
+      currency={currency}
+      timezone={first.timezone}
+      adNames={adNames}
+      waNumbers={waNumbers}
+      attribution={attribution}
+      campaignDeliveries={campaignDeliveries}
+      campaignLeads={campaignLeads}
+      campaignOrders={campaignOrders}
+      metaAdPerformance={metaAdPerformance}
+      webAdOrders={webAdOrders}
+      metaAdCatalog={metaAdCatalog}
+    />
   );
 }
 
@@ -213,9 +219,9 @@ async function MomOwnerSummaryLoader({
   } catch (error) {
     console.error("No se pudo cargar el resumen operativo MOM", error);
     return (
-      <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-        El resumen operativo no pudo actualizarse. El dashboard comercial y el Master siguen disponibles.
-      </div>
+      <Banner tone="warn" role="status" title="La operación no pudo actualizarse">
+        Las ventas del periodo y el Master de Pedidos siguen disponibles.
+      </Banner>
     );
   }
 }
@@ -230,9 +236,9 @@ async function LtvCpaLoader({ stores }: { stores: { id: string; name: string; cu
   } catch (error) {
     console.error("No se pudo cargar LTV : CPA", error);
     return (
-      <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+      <Banner tone="warn" role="status">
         LTV : CPA no pudo calcularse ahora. El resto del Consolidado sigue disponible.
-      </div>
+      </Banner>
     );
   }
 }

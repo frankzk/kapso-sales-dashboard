@@ -419,6 +419,11 @@ export interface TimelineEntry {
   statusLabel: string | null;
   /** Canal y resultado, cuando la entrada es un intento de confirmación. */
   confirmation: ConfirmationAttemptDetail | null;
+  /**
+   * El estado CRUDO del lead, solo en las entradas de Leads: el marcador de la
+   * Actividad reconoce «Pedido generado» sin comparar etiquetas traducidas.
+   */
+  leadStatus?: string | null;
 }
 
 /** Lo que hace falta de `lead_calls` para la línea de tiempo del pedido. */
@@ -460,6 +465,7 @@ export function leadCallsToTimeline(
     // dejarlo aquí haría que la interfaz lo tradujera con la tabla equivocada.
     newStatus: null,
     statusLabel: c.new_status ? leadStatusLabel(c.new_status) : null,
+    leadStatus: c.new_status,
     note: c.note,
     reason: null,
     actorName: c.vendedora ? (names.get(c.vendedora) ?? null) : null,
