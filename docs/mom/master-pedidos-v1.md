@@ -12969,6 +12969,22 @@ canal es WhatsApp: solo ~1 % de los pedidos trae correo.
 - **Si contesta BAJA:** se anota en silencio. No se le contesta con otro
   mensaje a quien pidió no recibir más.
 - **El bot no debe contestar también al botón** (docs/kapso-functions/README.md).
+- **El número que envía necesita el webhook de «mensaje recibido» (15-10-2026).**
+  - **Lo que pasó.** El 451 no lo tenía en Kapso. El 14-10, 11 clientas
+    contestaron el recordatorio y Kapta no se enteró: nadie las pasó a
+    «Atender ahora».
+  - **Configuración.** En Kapso → Webhooks → el número, se configura con la
+    misma URL de la tienda (`/api/webhooks/kapso/<storeId>?secret=…`), el
+    evento `whatsapp.message.received` y sin agrupar mensajes.
+  - **Además, un barrido** (`sweepRestockReplies`, 0258) revisa en cada pase
+    del cron los recordatorios de las últimas 72 h sin respuesta cuya clienta
+    escribió después:
+    - lee su conversación en Kapso y trata cada mensaje entrante posterior por
+      el mismo camino del webhook;
+    - si el webhook ya lo había atendido, la reserva por mensaje
+      (`wa_auto_replies`) impide hacerlo dos veces;
+    - no relee una conversación si la clienta no volvió a escribir
+      (`reply_checked_at`).
 
 **Grupo de control.**
 

@@ -577,6 +577,11 @@ export function mapKapsoConversation(
 // and bounded to a single page; most sales conversations fit in 100 messages.
 // ---------------------------------------------------------------------------
 
+/** El instante de un mensaje crudo de Kapso, en ms. Null si no trae uno legible. */
+export function messageTimeMs(m: unknown): number | null {
+  return msgTimeMs(m);
+}
+
 function msgTimeMs(m: any): number | null {
   const t =
     m?.created_at ?? m?.timestamp ?? m?.inserted_at ?? m?.sent_at ?? m?.occurred_at ??

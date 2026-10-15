@@ -64,7 +64,7 @@ import { autoTrialDeps, processAutoOrderTrials } from "@/lib/auto-order-trials";
 import { abDeps, enrollAbCohorts } from "@/lib/auto-order-ab";
 import { runReturnRecovery } from "@/lib/return-recovery";
 import { runDeliveredThanks } from "@/lib/delivered-thanks";
-import { runRestockReminders } from "@/lib/restock-reminder";
+import { runRestockReminders, sweepRestockReplies } from "@/lib/restock-reminder";
 import { enrichLeadLocationsFromShopify } from "@/lib/lead-shopify-location";
 import type { ConversationRow, DraftOrderRow, OrderRow } from "@/lib/types";
 
@@ -1503,6 +1503,12 @@ export async function runStoreSync(
       if (restock.failed) report.errors.push(`restock: ${restock.failed} envíos fallidos`);
     } catch (e: any) {
       report.errors.push(`restock: ${e.message}`);
+    }
+    // Las respuestas que el webhook no trajo (ver sweepRestockReplies).
+    try {
+      await sweepRestockReplies(admin, storeId, creds);
+    } catch (e: any) {
+      report.errors.push(`restock sweep: ${e.message}`);
     }
   }
 
