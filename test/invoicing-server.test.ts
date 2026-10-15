@@ -16,7 +16,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   INVOICE_MAX_PER_RUN,
   LIVE_REAL_STATUSES,
@@ -37,6 +37,7 @@ import {
   InvoiceMigrationMissingError,
   SHOPIFY_LEVEL_REASONS,
   emitInvoiceNow,
+  invoiceEmitAllowedHere,
   invoiceEmitNowReadiness,
   invoiceExistingFrom,
   invoiceUnreconciledError,
@@ -2459,10 +2460,22 @@ describe("runInvoiceSweep: un RUC en «Manual» se barre como simulación y se c
 describe("emitInvoiceNow: «Emitir esta boleta», la emisión real del barrido para un pedido (§35.7)", () => {
   /** Quien pulsa: un usuario con `invoices.manage` (lo comprueba la acción del panel). */
   const OWNER = "7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
-  const emit = (db: Db, deps: ReturnType<typeof makeDeps>, input: { orderId?: string; userId?: string } = {}) => {
+  const emit = (
+    db: Db,
+    deps: ReturnType<typeof makeDeps>,
+    input: Partial<Parameters<typeof emitInvoiceNow>[1]> = {},
+  ) => {
     db.clock.now = deps.now();
     return emitInvoiceNow(db.admin, { orderId: "ord-1", userId: OWNER, ...input }, deps);
   };
+  // Solo producción emite (`invoiceEmitAllowedHere`); las pruebas de la vista
+  // previa lo cambian.
+  beforeEach(() => {
+    vi.stubEnv("VERCEL_ENV", "production");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
   const nothingSent = (db: Db, deps: ReturnType<typeof makeDeps>) => {
     expect(deps.createSale).not.toHaveBeenCalled();
     expect(db.t("order_invoices").filter((r) => r.mode === "real" && r.status === "emitiendo")).toEqual([]);
@@ -2938,6 +2951,152 @@ describe("emitInvoiceNow: «Emitir esta boleta», la emisión real del barrido p
   });
 });
 
+// ── emitInvoiceNow: lo que se vio, solo Manual y solo producción ─────────────
+
+describe("emitInvoiceNow: lo que vio la persona es lo que sale, solo en Manual y solo en producción (§35.7)", () => {
+  const OWNER = "7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+  /** Lo que confirmó la persona en el pedido de prueba: el RUC de GRUPO GF y S/ 150. */
+  const VIO = { issuerId: ISS, totalCents: 15_000 };
+  const emit = (
+    db: Db,
+    deps: ReturnType<typeof makeDeps>,
+    input: Partial<Parameters<typeof emitInvoiceNow>[1]> = {},
+  ) => {
+    db.clock.now = deps.now();
+    return emitInvoiceNow(db.admin, { orderId: "ord-1", userId: OWNER, manualOnly: true, expected: VIO, ...input }, deps);
+  };
+  /** Ni el token, ni Shopify, ni el turno, ni SimpleFact, ni una fila. */
+  const nadaDeNada = (db: Db, deps: ReturnType<typeof makeDeps>) => {
+    expect(deps.decryptToken).not.toHaveBeenCalled();
+    expect(deps.fetchOrder).not.toHaveBeenCalled();
+    expect(claims(db)).toEqual([]);
+    expect(deps.createSale).not.toHaveBeenCalled();
+    expect(db.t("order_invoices")).toEqual([]);
+  };
+  beforeEach(() => {
+    vi.stubEnv("VERCEL_ENV", "production");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("lo que vio coincide con lo que sale: emite, con un solo turno y un solo POST", async () => {
+    const db = world({ mode: "manual" });
+    addOrder(db, 1);
+    const deps = makeDeps();
+    expect(await emit(db, deps)).toMatchObject({ ok: true, status: "emitida" });
+    expect(claims(db)[0]!.args).toMatchObject({ p_issuer: VIO.issuerId, p_total: VIO.totalCents / 100 });
+    expect(deps.createSale).toHaveBeenCalledTimes(1);
+  });
+
+  // FIX: la acción comparaba lo que vio la persona con SU lectura y
+  // `emitInvoiceNow` volvía a leer sin comparar: si el pedido cambiaba entre las
+  // dos, salía una boleta que nadie confirmó.
+  it.each<[string, (db: Db) => void]>([
+    // Se agregó un pago y cambió el total: la persona vio S/ 150.
+    ["el total cambió", (db) => ((db.t("orders")[0]!.total_amount = 140), (db.t("order_payments")[0]!.amount = 140))],
+    // La cuenta del pago pasó a otro RUC de la organización.
+    [
+      "la cuenta del pago es ahora de otro RUC",
+      (db) => {
+        db.t("invoice_issuers").push({ ...issuerRow(db), id: ISS2, ruc: RUC_OTRO, legal_name: "OTRA", simplefact_subdomain: "otra", checked_ruc: RUC_OTRO });
+        db.t("store_collection_accounts").find((a) => a.id === "acc-flow")!.invoice_issuer_id = ISS2;
+      },
+    ],
+  ])("si %s desde que lo vio, `pedido_cambio`: sin token, sin Shopify, sin turno y sin POST", async (_label, cambiar) => {
+    const db = world({ mode: "manual" });
+    addOrder(db, 1);
+    cambiar(db);
+    const deps = makeDeps();
+    expect(await emit(db, deps)).toEqual({ ok: false, reason: "pedido_cambio" });
+    nadaDeNada(db, deps);
+  });
+
+  it.each<[string, unknown]>([
+    ["otro RUC", { issuerId: ISS2, totalCents: 15_000 }],
+    ["otro total", { issuerId: ISS, totalCents: 14_999 }],
+    ["un RUC vacío", { issuerId: "", totalCents: 15_000 }],
+    ["un total con fracción de céntimo", { issuerId: ISS, totalCents: 15_000.4 }],
+    ["un total que no es número", { issuerId: ISS, totalCents: Number.NaN }],
+    ["un RUC que no es texto", { issuerId: 7, totalCents: 15_000 }],
+  ])("lo confirmado no coincide (%s): `pedido_cambio`, y no se llama a nada", async (_label, expected) => {
+    const db = world({ mode: "manual" });
+    addOrder(db, 1);
+    const deps = makeDeps();
+    expect(await emit(db, deps, { expected: expected as never })).toEqual({ ok: false, reason: "pedido_cambio" });
+    nadaDeNada(db, deps);
+  });
+
+  it("el botón sin lo que se confirmó (`expected` ausente o nulo) no emite: `pedido_cambio`, y no se llama a nada", async () => {
+    for (const expected of [undefined, null]) {
+      const db = world({ mode: "manual" });
+      addOrder(db, 1);
+      const deps = makeDeps();
+      expect(await emit(db, deps, { expected: expected as never })).toEqual({ ok: false, reason: "pedido_cambio" });
+      nadaDeNada(db, deps);
+    }
+  });
+
+  it("las reglas van primero: un pedido que ya no cumple dice por qué, no que cambió", async () => {
+    const db = world({ mode: "manual" });
+    addOrder(db, 1);
+    db.t("orders")[0]!.cancelled_at = NOW.toISOString();
+    const deps = makeDeps();
+    expect(await emit(db, deps, { expected: { issuerId: ISS2, totalCents: 1 } })).toMatchObject({ ok: false, reason: "anulado" });
+    nadaDeNada(db, deps);
+  });
+
+  it("con `manualOnly`, en «Real» no emite: `modo_distinto` con el porqué, sin token ni Shopify", async () => {
+    const db = world({ mode: "real" });
+    addOrder(db, 1);
+    const deps = makeDeps();
+    expect(await emit(db, deps)).toEqual({
+      ok: false,
+      reason: "modo_distinto",
+      detail: "El RUC está en «Real»: a mano solo se emite en «Manual».",
+    });
+    nadaDeNada(db, deps);
+    // Sin `manualOnly`, la DECISIÓN de siempre: en «Real» también emite.
+    expect(await emit(db, deps, { manualOnly: undefined })).toMatchObject({ ok: true, status: "emitida" });
+  });
+
+  it("con `manualOnly`, Simulación y Apagado dicen lo de las reglas", async () => {
+    for (const [mode, reason] of [["simulacion", "modo_distinto"], ["apagado", "ruc_apagado"]] as const) {
+      const db = world({ mode });
+      addOrder(db, 1);
+      const deps = makeDeps();
+      expect(await emit(db, deps), mode).toMatchObject({ ok: false, reason });
+      nadaDeNada(db, deps);
+    }
+  });
+
+  // FIX: una vista previa comparte la base y `ENCRYPTION_KEY` con producción;
+  // el barrido no emitía fuera de ella, pero «Emitir esta boleta» sí.
+  it.each([["preview"], ["development"], [""], [undefined]])(
+    "fuera de producción (VERCEL_ENV=%s): `no_produccion`, sin leer nada de la base",
+    async (env) => {
+      vi.stubEnv("VERCEL_ENV", env);
+      expect(invoiceEmitAllowedHere()).toBe(false);
+      const db = world({ mode: "manual" });
+      addOrder(db, 1);
+      const deps = makeDeps();
+      expect(await emit(db, deps)).toEqual({ ok: false, reason: "no_produccion" });
+      expect(db.log).toEqual([]);
+      expect(db.rpcLog).toEqual([]);
+      nadaDeNada(db, deps);
+    },
+  );
+
+  it("solo `VERCEL_ENV=production` es producción", () => {
+    vi.stubEnv("VERCEL_ENV", "production");
+    expect(invoiceEmitAllowedHere()).toBe(true);
+    for (const env of ["Production", "PRODUCTION", " production", "prod"]) {
+      vi.stubEnv("VERCEL_ENV", env);
+      expect(invoiceEmitAllowedHere(), env).toBe(false);
+    }
+  });
+});
+
 // ── ¿Se ofrece «Emitir esta boleta»? El drawer y Ajustes ─────────────────────
 
 describe("loadInvoiceEmitNowOffers: el «Emitir» de Ajustes sale solo cuando el drawer ofrecería «Emitir esta boleta» (§35.7)", () => {
@@ -2989,6 +3148,27 @@ describe("loadInvoiceEmitNowOffers: el «Emitir» de Ajustes sale solo cuando el
   }
   const shopifyCheck = (db: Db, reason: string, checkedAt: string, mode = "simulacion") =>
     db.t("invoice_order_checks").push({ order_id: "ord-1", mode, reason, detail: null, issuer_id: ISS, checked_at: checkedAt });
+  // Solo producción ofrece «Emitir» (`invoiceEmitAllowedHere`).
+  beforeEach(() => {
+    vi.stubEnv("VERCEL_ENV", "production");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  // FIX: Ajustes ofrecía «Emitir» en una vista previa, donde la acción no emite.
+  it("fuera de producción no ofrece ninguno, y no lee nada", async () => {
+    const db = world({ mode: "manual" });
+    addOrder(db, 1);
+    simulada(db, "ord-1");
+    expect([...(await loadInvoiceEmitNowOffers(db.admin, ["ord-1"])).values()]).toEqual([OFERTA]);
+    for (const env of ["preview", "development", undefined]) {
+      vi.stubEnv("VERCEL_ENV", env);
+      db.log.splice(0);
+      expect((await loadInvoiceEmitNowOffers(db.admin, ["ord-1"])).size, String(env)).toBe(0);
+      expect(db.log, String(env)).toEqual([]);
+    }
+  });
 
   const casos: Array<[string, (db: Db) => void, typeof OFERTA | null]> = [
     ["lista: RUC en Manual, las reglas como emisión real, tienda activa y sin bloqueo", () => {}, OFERTA],

@@ -368,3 +368,57 @@ describe("invoices.manage (Boletas y facturas)", () => {
     expect(mom).toContain("**solo el owner lo da** (§16, `ownerOnly`)");
   });
 });
+
+// «Solo quienes tienen acceso de Admin pueden realizar esa acción» (decisión
+// del dueño, 15-10-2026, MOM §16): cambiar a mano el estado de un pedido. Iba
+// dentro de «Gestionar pedidos», que tienen la vendedora y los siete roles.
+describe("master.set_status (Registrar estado a mano)", () => {
+  it("lo tienen owner y admin por su acceso", () => {
+    expect(isPermission("master.set_status")).toBe(true);
+    expect(permissionsFor(["owner"]).has("master.set_status")).toBe(true);
+    expect(permissionsFor(["admin"]).has("master.set_status")).toBe(true);
+  });
+
+  it("vendedora, solo lectura y motorizado no, aunque la vendedora gestione pedidos", () => {
+    for (const role of ["vendedora", "viewer", "motorizado"]) {
+      expect(permissionsFor([role]).has("master.set_status"), role).toBe(false);
+    }
+    expect(permissionsFor(["vendedora"]).has("master.edit")).toBe(true);
+  });
+
+  it("ningún rol por función lo trae: ni solo, ni todos juntos, ni Supervisión que corrige cierres", () => {
+    for (const fn of FUNCTIONAL_ROLES) {
+      expect((fn.permissions as readonly string[]).includes("master.set_status"), fn.role).toBe(false);
+      const alone = permissionsFor(["vendedora"], [], [fn.role]);
+      expect(alone.has("master.edit"), fn.role).toBe(true);
+      expect(alone.has("master.set_status"), fn.role).toBe(false);
+    }
+    const all = FUNCTIONAL_ROLES.map((fn) => fn.role);
+    expect(permissionsFor(["vendedora"], [], all).has("master.set_status")).toBe(false);
+    expect(permissionsFor(["viewer"], [], all).has("master.set_status")).toBe(false);
+    const supervision = permissionsFor(["vendedora"], [], ["supervision"]);
+    expect(supervision.has("master.override_status")).toBe(true);
+    expect(supervision.has("master.set_status")).toBe(false);
+  });
+
+  it("va con el acceso, no se concede uno por uno", () => {
+    expect(isGrantedOneByOne("master.set_status")).toBe(false);
+    expect(GRANTED_ONE_BY_ONE.map((g) => g.permission)).not.toContain("master.set_status");
+  });
+
+  it("una revocación puntual se lo quita a un admin, como cualquier permiso", () => {
+    expect(permissionsFor(["admin"], [{ permission: "master.set_status", granted: false }]).has("master.set_status")).toBe(false);
+  });
+
+  it("tiene nombre, explicación y área en Equipo", () => {
+    expect(PERMISSION_LABEL["master.set_status"]).toBe("Registrar estado a mano");
+    const help = PERMISSION_HELP["master.set_status"];
+    expect(help).toContain("«Gestión manual»");
+    expect(help).toContain("Solo dueño y admin.");
+    expect(help.length).toBeLessThanOrEqual(130);
+    const areas = PERMISSION_AREAS.filter((area) => (area.permissions as readonly string[]).includes("master.set_status"));
+    expect(areas.map((area) => area.key)).toEqual(["pedidos"]);
+    // «Gestionar pedidos» ya no promete cambiar el estado.
+    expect(PERMISSION_HELP["master.edit"]).not.toMatch(/estado/);
+  });
+});

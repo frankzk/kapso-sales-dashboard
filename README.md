@@ -40,7 +40,7 @@ Kapso    ──pull conversaciones/mensajes────▶  /api/cron/sync  (Pla
 ```
 
 `daily_rollups` solo cuenta los pedidos del bot (`tag:kapso`). Desde la
-migración 0262 la cabecera del tablero, «Ventas por día», «Por tienda»,
+migración 0265 la cabecera del tablero, «Ventas por día», «Por tienda»,
 «Canal de cierre» y «Conversión por fuente» cuentan TODAS las ventas de la
 tienda, con su canal de cierre, por funciones de lectura en Postgres
 (`ventas_por_origen`, `canal_de_cierre`, `conversion_por_fuente`; MOM §17.3 y

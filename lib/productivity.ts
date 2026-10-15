@@ -181,6 +181,9 @@ export interface AdvisorCall {
   lead_id: string;
   kind: string;
   occurred_at: string;
+  /** La tienda de la gestión: el tablero de Leads lee las horas de todas y el
+   *  trabajo solo de las que se miran, con una sola lectura. */
+  store_id?: string | null;
 }
 
 /** Advisor lead_calls in [startIso..endIso], PAGED past PostgREST's silent
@@ -210,7 +213,7 @@ async function fetchAdvisorLeadCallsPaged(
       offsets.map((offset) => {
         const base = sb
           .from("lead_calls")
-          .select("vendedora, lead_id, kind, occurred_at")
+          .select("vendedora, lead_id, kind, occurred_at, store_id")
           .in("store_id", storeIds)
           .gte("occurred_at", startIso)
           .lte("occurred_at", endIso);
@@ -993,6 +996,125 @@ export async function getWeekActivity(
     tz,
     days,
   );
+}
+
+/** Una venta registrada, lo justo para contarla por hora y por persona. */
+export interface SaleTick {
+  vendedora: string;
+  occurredAt: string;
+}
+
+/** Ventas registradas del rango, solo quién y cuándo (sin el pedido ni la
+ *  fuente): para la carrera del día y el «vs. ayer» basta con contarlas. */
+async function fetchSaleTicksPaged(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  storeIds: string[],
+  startIso: string,
+  endIso: string,
+): Promise<SaleTick[]> {
+  const PAGE = 1000;
+  const CAP = 20000;
+  const out: SaleTick[] = [];
+  for (let from = 0; from < CAP; from += PAGE) {
+    const { data, error } = await sb
+      .from("order_sales")
+      .select("vendedora, occurred_at")
+      .in("store_id", storeIds)
+      .gte("occurred_at", startIso)
+      .lte("occurred_at", endIso)
+      .order("occurred_at", { ascending: true })
+      .order("order_id", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) break;
+    const batch = (data as { vendedora: string | null; occurred_at: string | null }[]) ?? [];
+    for (const r of batch) {
+      if (r.vendedora && r.occurred_at) out.push({ vendedora: r.vendedora, occurredAt: r.occurred_at });
+    }
+    if (batch.length < PAGE) break;
+  }
+  return out;
+}
+
+/** Lo que el «Tablero de hoy» de Leads lee de la base, antes de armarlo. */
+export interface TeamTodayRaw {
+  /** Hoy, en las tiendas que se miran: llamadas, leads trabajados y pedidos. */
+  stats: AdvisorStat[];
+  /** Hoy, en TODAS las tiendas de quien mira (leads y envíos): horas activas,
+   *  primera y última actividad. Las horas son de la persona, como en la
+   *  semana de Productividad, no de la tienda que se mira. */
+  activity: Record<string, DayActivity>;
+  /** Ventas registradas de hoy, de ayer y del mismo día de la semana pasada
+   *  (días locales enteros), en las tiendas que se miran. */
+  sales: { hoy: SaleTick[]; ayer: SaleTick[]; semana: SaleTick[] };
+  /** Las tres fechas locales y el día ISO de hoy (1 = lunes … 7 = domingo). */
+  days: { hoy: string; ayer: string; semana: string; isoDow: number };
+}
+
+/**
+ * El equipo de hoy para el tablero de Leads, en una sola lectura de las
+ * gestiones del día: el trabajo y los pedidos de las tiendas que se miran
+ * (`scopeIds`) y las horas de todas (`hoursStoreIds`). RLS como el resto.
+ * Best-effort como los demás fetchers: una página que falla aporta lo leído.
+ */
+export async function getTeamToday(
+  scopeIds: string[],
+  hoursStoreIds: string[],
+  tz: string,
+  nowIso = new Date().toISOString(),
+): Promise<TeamTodayRaw> {
+  const nowMs = Date.parse(nowIso);
+  const local = tzParts(nowIso, tz);
+  const hoy = local.date;
+  const ayer = tzParts(new Date(nowMs - 86_400_000).toISOString(), tz).date;
+  const semana = tzParts(new Date(nowMs - 7 * 86_400_000).toISOString(), tz).date;
+  const isoDow = local.weekday === 0 ? 7 : local.weekday;
+  const empty: TeamTodayRaw = { stats: [], activity: {}, sales: { hoy: [], ayer: [], semana: [] }, days: { hoy, ayer, semana, isoDow } };
+  if (!scopeIds.length) return empty;
+
+  const sb = await createServerSupabase();
+  const today = localRangeBoundsIso(hoy, hoy, tz);
+  const yesterday = localRangeBoundsIso(ayer, ayer, tz);
+  const lastWeek = localRangeBoundsIso(semana, semana, tz);
+  const hoursIds = [...new Set([...scopeIds, ...hoursStoreIds])];
+  const [callsAll, shipEvents, sales, ticksAyer, ticksSemana] = await Promise.all([
+    fetchAdvisorLeadCallsPaged(sb, hoursIds, today.startIso, today.endIso),
+    fetchShipmentEventsPaged(sb, hoursIds, today.startIso, today.endIso),
+    fetchAdvisorSalesPaged(sb, scopeIds, today.startIso, today.endIso),
+    fetchSaleTicksPaged(sb, scopeIds, yesterday.startIso, yesterday.endIso),
+    fetchSaleTicksPaged(sb, scopeIds, lastWeek.startIso, lastWeek.endIso),
+  ]);
+
+  const inScope = new Set(scopeIds);
+  const calls = callsAll.filter((c) => inScope.has(c.store_id ?? ""));
+  let stats: AdvisorStat[] = [];
+  if (calls.length || sales.length) {
+    const { scopedCalls, leadStore, scopedSales } = await buildAdvisorInputs(sb, calls, null, sales);
+    const emailById = await resolveEmails([
+      ...new Set([...scopedCalls.map((c) => c.vendedora), ...scopedSales.map((s) => s.vendedora)]),
+    ]);
+    stats = computeAdvisorStats({ calls: scopedCalls, sales: scopedSales, leadStore, emailById }, tz);
+  }
+
+  const byAgent = computeWeekActivity(
+    [...callsAll.map((c) => ({ agent: c.vendedora, occurred_at: c.occurred_at })), ...shipEvents],
+    tz,
+    [{ date: hoy, isoDow }],
+  );
+  const activity: Record<string, DayActivity> = {};
+  for (const [agent, days] of Object.entries(byAgent)) {
+    if (days[0]) activity[agent] = days[0];
+  }
+
+  return {
+    stats,
+    activity,
+    sales: {
+      hoy: sales.map((s) => ({ vendedora: s.vendedora, occurredAt: s.occurredAt })),
+      ayer: ticksAyer,
+      semana: ticksSemana,
+    },
+    days: { hoy, ayer, semana, isoDow },
+  };
 }
 
 /** Paged shipment_calls events (agent + occurred_at + shipment ref) for the

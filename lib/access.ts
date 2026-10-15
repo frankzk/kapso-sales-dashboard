@@ -153,7 +153,7 @@ export const getUserRoleSummary = cache(getUserRoleSummaryUncached);
 
 /**
  * Los cierres diarios: SOLO los pedidos del bot (`tag:kapso`), sus
- * conversaciones y la primera respuesta. Desde la 0262 no son la cabecera
+ * conversaciones y la primera respuesta. Desde la 0265 no son la cabecera
  * (MOM §17.4): dan el denominador de «Conversión del bot» y la vista anterior
  * cuando las ventas por origen no responden.
  */
@@ -251,7 +251,7 @@ export async function getOrders(
         .in("store_id", storeIds)
         // Kapso orders only (tag:kapso). The webhook path can transiently write a
         // non-Kapso order before it's tagged; keep the funnel/integrity/export
-        // reads in parity with the bot rollups regardless. Desde la 0262 la
+        // reads in parity with the bot rollups regardless. Desde la 0265 la
         // cabecera ya no sale de aquí: cuenta todas las ventas con
         // `getOriginSales` (MOM §17.4); esto alimenta los módulos del bot.
         .contains("tags", ["kapso"])
@@ -776,7 +776,7 @@ export async function getSourceConversion(storeIds: string[], range: DateRange):
  * `order_sales` o, si todavía no tiene ninguna, su primer lead; null si no tiene
  * ninguno de los dos. La de `order_sales` va por su índice (store_id,
  * occurred_at) con `limit 1`; la de leads no tiene índice por `created_at`
- * (los de la 0262 son por `first_seen_at` y por `created_at` solo sin él) y
+ * (los de la 0265 son por `first_seen_at` y por `created_at` solo sin él) y
  * recorre los leads de la tienda, pero solo corre mientras la tienda no
  * registró ninguna venta.
  * Cualquier lectura que falle es un error, no un «no tiene».

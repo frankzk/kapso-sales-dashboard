@@ -501,8 +501,8 @@ describe("el orden de los canales es uno solo: SQL, código y MOM", () => {
     expect(order).toEqual([...CLOSING_CHANNELS]);
   });
 
-  it("la vista `pedidos_canal` de la 0262, que hoy usa la función, también", () => {
-    const sql = read("db/migrations/0262_ventas_por_origen.sql");
+  it("la vista `pedidos_canal` de la 0265, que hoy usa la función, también", () => {
+    const sql = read("db/migrations/0265_ventas_por_origen.sql");
     const view = sql.slice(sql.indexOf("create or replace view public.pedidos_canal"), sql.indexOf("revoke all on public.pedidos_canal"));
     const order = [...view.matchAll(/then '([a-z_]+)'|else '([a-z_]+)'/g)].map((m) => m[1] ?? m[2]);
     expect(order).toEqual([...CLOSING_CHANNELS]);

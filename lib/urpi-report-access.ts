@@ -20,3 +20,10 @@ export async function requireUrpiReportOrg(orgId: string, permission: "sheets.ed
   const visibleStoreIds = new Set(accessible.filter((store) => store.org_id === orgId).map((store) => store.id));
   return { user, admin, stores: data as { id: string; name: string }[], visibleStoreIds };
 }
+
+/** ¿Puede quien carga o vincula marcar entregados en el Master? Desde el
+ * 15-10-2026 la carga los marca sola (MOM §30.11), pero con el permiso de
+ * siempre: sin `master.edit` quedan en «Entregados por marcar». */
+export async function canMarkUrpiDeliveries(orgId: string): Promise<boolean> {
+  return hasOrgPermission(orgId, "master.edit");
+}

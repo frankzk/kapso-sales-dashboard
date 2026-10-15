@@ -119,13 +119,17 @@ const LeadsInsightsPanel = dynamic(
   () => import("@/components/leads-insights").then((module) => module.LeadsInsightsPanel),
   {
     ssr: false,
+    // La misma forma que el tablero (el equipo a la izquierda, dos tarjetas a
+    // la derecha) para que nada salte cuando llega el módulo.
     loading: () => (
-      <section className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
-        <div className="mb-4 h-7 w-44 animate-pulse rounded-lg bg-slate-200/70" />
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-          {Array.from({ length: 4 }).map((_, index) => (
-            <div key={index} className="h-56 animate-pulse rounded-xl bg-slate-200/60" />
-          ))}
+      <section aria-busy="true" aria-label="Cargando el tablero">
+        <div className="mb-2 h-5 w-32 animate-pulse rounded bg-wash motion-reduce:animate-none" />
+        <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+          <div className="min-h-[360px] rounded-lg bg-white shadow-control ring-1 ring-line" />
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-1">
+            <div className="min-h-[220px] rounded-lg bg-white shadow-control ring-1 ring-line" />
+            <div className="min-h-[220px] rounded-lg bg-white shadow-control ring-1 ring-line" />
+          </div>
         </div>
       </section>
     ),
@@ -589,11 +593,11 @@ export function LeadsBoard({
   const [sortMode, setSortMode] = useState<"prioridad" | "reciente">("prioridad");
   const [exportingAudience, setExportingAudience] = useState(false);
 
-  // Panel de gráficos (burndown, sin-llamar 7d, conversión, productividad). Se
+  // «Tablero de hoy» (el equipo, sin llamar 7d y la carrera de pedidos). Se
   // recarga cuando cambia el conteo de la cola — y con el auto-refresco en vivo
   // eso pasa muy seguido. IMPORTANTE: NO se vacía insightsData antes de recargar;
-  // si se vaciara, los cuatro gráficos parpadearían a esqueleto varios segundos
-  // en CADA recarga. Se deja el panel anterior a la vista y se reemplaza recién
+  // si se vaciara, el tablero parpadearía a esqueleto varios segundos en CADA
+  // recarga. Se deja el panel anterior a la vista y se reemplaza recién
   // cuando llegan los datos nuevos (el usuario no ve el refetch). Cambiar de
   // tienda no arrastra datos viejos: la página remonta el board con
   // key={storeId}:{view}.
@@ -616,7 +620,7 @@ export function LeadsBoard({
       };
     }
     insightsLoadedAtRef.current = { scopeKey, at: Date.now() };
-    void loadLeadsInsightsPanel(scope, timezone, counts.sin_llamar).then((result) => {
+    void loadLeadsInsightsPanel(scope, timezone).then((result) => {
       if (alive && !("error" in result)) setInsightsData(result);
     }).catch(() => { /* retain the last analytical snapshot on a network failure */ });
     return () => {
@@ -1585,10 +1589,11 @@ export function LeadsBoard({
         </div>
       </header>
 
-      {/* El tablero de hoy (burndown · sin llamar · conversión · productividad), sin tocar. */}
+      {/* El tablero de hoy (opción K): el equipo como ranking contra ayer, sin
+          llamar por día y la carrera de pedidos (DESIGN.md › Leads). */}
       <LeadsInsightsPanel
         data={insightsData}
-        allStores={allStores}
+        productividadHref={allStores ? "/dashboard/productividad" : `/dashboard/productividad?store=${storeId}`}
         interactionDateFilter={interactionDateFilter}
         onInteractionDateFilterChange={changeInteractionDateFilter}
       />

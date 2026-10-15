@@ -1,5 +1,5 @@
 // Todas las ventas por origen y la conversión de cada fuente (MOM §17.4,
-// migración 0262).
+// migración 0265).
 //
 // Postgres clasifica (`ventas_por_origen`, `conversion_por_fuente`, sobre la
 // misma regla del canal que «Canal de cierre»: la vista `pedidos_canal`). Acá
@@ -246,7 +246,7 @@ export function salesPeriod(
 
 // ── Conversión por fuente ───────────────────────────────────────────────────
 
-/** Días de vida que necesita un lead para entrar a la tasa, y ventana de compra. Igual que la 0262. */
+/** Días de vida que necesita un lead para entrar a la tasa, y ventana de compra. Igual que la 0265. */
 export const CONVERSION_DAYS = 7;
 
 /** Las fuentes con tasa, en el orden de la tabla. */

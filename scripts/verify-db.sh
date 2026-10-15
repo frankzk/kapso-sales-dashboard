@@ -231,17 +231,19 @@ echo "  ✅ asesora > recompra > bot Kapso > bot externo > web > otros, cancelad
 # SimpleFact no tiene llave de idempotencia: la misma boleta mandada dos veces
 # son dos boletas ante SUNAT, y una boleta enviada no se borra. Lo que lo impide
 # —el turno con candado, un solo comprobante real vivo por pedido, estados que
-# solo avanzan, «real» y «manual» solo con la conexión probada— vive en la base
-# (0257, 0260 y 0261, MOM §35), así que se prueba en la base y no solo en el
-# código. La 0257 ya corrió en producción y no se reescribe: la 0260 cambia
-# cuatro de sus funciones y la 0261 trae el modo «Manual» (el turno da la fila
-# que se pide, y quién la pidió); la prueba corre cada una sobre lo que había
-# en producción cuando se aplicó.
-echo "▶ Comprobantes por RUC (0257, 0260 y 0261): semilla apagada, cuenta → RUC de su organización, turno con candado, uno real vivo por pedido, la 0260 sobre la 0257 y el modo «Manual»"
+# solo avanzan, «real» y «manual» solo con la conexión probada, y ninguna fila
+# sin que la empresa haya recibido el pago— vive en la base (0257, 0260, 0261 y
+# 0262, MOM §35), así que se prueba en la base y no solo en el código. La 0257
+# ya corrió en producción y no se reescribe: la 0260 cambia cuatro de sus
+# funciones, la 0261 trae el modo «Manual» (el turno da la fila que se pide, y
+# quién la pidió) y la 0262 hace que el turno vuelva a revisar el pago (un pago
+# rechazado entre la lectura del código y el turno no deja fila); la prueba
+# corre cada una sobre lo que había en producción cuando se aplicó.
+echo "▶ Comprobantes por RUC (0257, 0260, 0261 y 0262): semilla apagada, cuenta → RUC de su organización, turno con candado, uno real vivo por pedido, la 0260 sobre la 0257, el modo «Manual» y el pago revisado en el turno"
 $PSQL -f "$ROOT/scripts/sql/invoices_smoke.sql"
-echo "  ✅ GRUPO GF S.A.C. sembrado apagado y sin pisar al owner, real solo con token, fecha y prueba del mismo RUC, cada motivo del turno, tope del día, índice único, estados que solo avanzan, solo service_role; la 0260 cambia las cuatro funciones sin tocar datos ni triggers, y dos veces es una; la 0261 admite «Manual» con lo que exige Real, baja como Real, da la fila pedida con quién la pidió (modo_distinto si no), cuenta el tope por modo pedido, deja un solo turno que el código de hoy llama con nueve argumentos por nombre, y dos veces es una"
+echo "  ✅ GRUPO GF S.A.C. sembrado apagado y sin pisar al owner, real solo con token, fecha y prueba del mismo RUC, cada motivo del turno, tope del día, índice único, estados que solo avanzan, solo service_role; la 0260 cambia las cuatro funciones sin tocar datos ni triggers, y dos veces es una; la 0261 admite «Manual» con lo que exige Real, baja como Real, da la fila pedida con quién la pidió (modo_distinto si no), cuenta el tope por modo pedido, deja un solo turno que el código de hoy llama con nueve argumentos por nombre, y dos veces es una; con la 0262 el turno no da fila si lo validado no cubre el total, si un pago de la base del comprobante ya no está validado o si el prepago no es un prepago web sin comprobantes, bloquea los pagos mientras dura, cambia solo el turno en su lugar, se detiene sin la 0261 delante, y dos veces es una (los tres ERROR de su guarda se esperan)"
 
-echo "▶ Ventas por origen y conversión por fuente (0262): día local, cancelados aparte, cohorte de 7 días por cualquier canal, ya clientas aparte, y RLS"
+echo "▶ Ventas por origen y conversión por fuente (0265): día local, cancelados aparte, cohorte de 7 días por cualquier canal, ya clientas aparte, y RLS"
 $PSQL -f "$ROOT/scripts/sql/ventas_por_origen_smoke.sql"
 echo "  ✅ todas las ventas por día y canal, la regla del canal en una sola vista, conversión por nacimiento con 7 días, asesoras como en Productividad, cada quien sus tiendas"
 

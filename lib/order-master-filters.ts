@@ -36,6 +36,8 @@ export interface MasterFilters {
    * Provincia, sobre pedidos en vez de guías.
    */
   swaypAvailability: Set<string>;
+  /** Canal de venta (lib/sales-channel.ts). Vacío = no filtra. */
+  salesChannels: Set<string>;
   /** YYYY-MM-DD; extremos inclusive, vacío = sin límite. */
   createdFrom: string;
   createdTo: string;
@@ -49,7 +51,9 @@ export interface MasterFilters {
   /** Sin movimientos en los últimos `staleDays` días. 0 = filtro apagado. */
   staleDays: number;
   multiCourier: boolean;
-  multiAttempt: boolean;
+  /** Intentos de entrega: 0, 1, 2 o 3 exactos; `ATTEMPTS_OR_MORE` es «4 a
+   *  más». `null` = filtro apagado. Reemplaza a «Más de un intento» (15-10-2026). */
+  attempts: number | null;
   /** Sub-estados del flujo de agencia (§10). Vacío = no filtra. */
   pickupStates: Set<string>;
   /** Solo pedidos en agencia con el plazo de recojo a punto de vencer. */
@@ -123,6 +127,7 @@ export function emptyFilters(): MasterFilters {
     districts: new Set(),
     coverages: new Set(),
     swaypAvailability: new Set(),
+    salesChannels: new Set(),
     createdFrom: "",
     createdTo: "",
     dispatchedFrom: "",
@@ -134,13 +139,22 @@ export function emptyFilters(): MasterFilters {
     withComments: false,
     staleDays: 0,
     multiCourier: false,
-    multiAttempt: false,
+    attempts: null,
     pickupStates: new Set(),
     expiringSoon: false,
     search: "",
     confirmationDue: "",
     managementDays: new Set(),
   };
+}
+
+/** El último valor del filtro de intentos: «4 a más». */
+export const ATTEMPTS_OR_MORE = 4;
+
+/** ¿Cumple el filtro de intentos? 0-3 exactos, 4 = cuatro o más, null = todos. Pura. */
+export function matchesAttempts(count: number, filter: number | null): boolean {
+  if (filter === null) return true;
+  return filter >= ATTEMPTS_OR_MORE ? count >= ATTEMPTS_OR_MORE : count === filter;
 }
 
 /** ¿Hay algún filtro activo? Para poder ofrecer "limpiar filtros". */
@@ -157,6 +171,7 @@ export function hasActiveFilters(f: MasterFilters): boolean {
     f.districts.size > 0 ||
     f.coverages.size > 0 ||
     f.swaypAvailability.size > 0 ||
+    f.salesChannels.size > 0 ||
     Boolean(f.createdFrom || f.createdTo) ||
     Boolean(f.dispatchedFrom || f.dispatchedTo) ||
     Boolean(f.movementFrom || f.movementTo) ||
@@ -164,7 +179,7 @@ export function hasActiveFilters(f: MasterFilters): boolean {
     f.withComments ||
     f.staleDays > 0 ||
     f.multiCourier ||
-    f.multiAttempt ||
+    f.attempts !== null ||
     f.pickupStates.size > 0 ||
     f.expiringSoon ||
     f.search.trim().length > 0
@@ -257,6 +272,7 @@ export function matchesFilters(
   if (!inSet(f.districts, row.district)) return false;
   if (!inSet(f.coverages, row.coverage)) return false;
   if (!inSet(f.swaypAvailability, row.swayp_availability)) return false;
+  if (!inSet(f.salesChannels, row.sales_channel)) return false;
 
   // El filtro de courier mira el actual Y el último: buscar "los pedidos que
   // tocó Fenix" no debe perder los que ya pasaron a otra guía.
@@ -281,7 +297,7 @@ export function matchesFilters(
 
   if (f.withComments && row.comment_count <= 0) return false;
   if (f.multiCourier && row.courier_count <= 1) return false;
-  if (f.multiAttempt && row.attempt_count <= 1) return false;
+  if (!matchesAttempts(row.attempt_count, f.attempts)) return false;
 
   if (!inSet(f.pickupStates, row.pickup_state)) return false;
 
