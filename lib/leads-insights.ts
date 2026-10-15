@@ -1,238 +1,31 @@
-// Dashboard insights for the Leads page: today's "Sin llamar" burndown, the
-// 7-day sin-llamar flow, and today's per-advisor productivity.
+// El «Tablero de hoy» de Leads (opción K, Frankz 15-10-2026):
 //
-// Everything is RECONSTRUCTED from existing timestamps — no snapshot job:
-//   • a lead ENTERS "Sin llamar" when it's created (status `nuevo`) ≈ `first_seen_at`;
-//   • a lead LEAVES "Sin llamar" at its FIRST gestión — the earliest `lead_calls`
-//     row that moved its status off `nuevo` (`occurred_at`); re-touches don't recount;
-//   • the current backlog (`pendingNow` = "Sin llamar" count) is the anchor.
-// Walking those flows back from the anchor yields REAL history from day one.
-// RLS-scoped.
+//   • el equipo de hoy como ranking: pedidos, la diferencia contra ayer a esta
+//     misma hora, el % de cierre, las horas activas contra la meta del día y
+//     las llamadas;
+//   • los leads sin llamar, por día de su última interacción (se filtran);
+//   • la carrera de pedidos del día contra ayer y contra el mismo día de la
+//     semana pasada.
+//
+// Nada se guarda aparte. El trabajo y las horas salen de las gestiones del día
+// con las MISMAS cuentas que Productividad (lib/productivity.ts y
+// lib/productivity-week.ts), los pedidos de `order_sales` y los sin llamar del
+// RPC `lead_insights_rollup` (0155). RLS como el resto; la meta y el horario
+// (0245) se leen con el cliente de servicio y a una vendedora solo le llegan
+// los suyos, como en Productividad.
 
-import { chunk } from "@/lib/access";
-import { createServerSupabase } from "@/lib/db";
+import { getAccessibleStores, getCurrentUser, getUserRoleSummary } from "@/lib/access";
+import { getAdvisorSchedules } from "@/lib/advisor-schedules";
+import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { tzParts } from "@/lib/metrics";
-import { getAdvisorProductivity } from "@/lib/productivity";
+import { getTeamToday } from "@/lib/productivity";
+import type { AdvisorSchedule } from "@/lib/productivity-week";
+import { buildTeamToday, type TeamToday } from "@/lib/leads-team-today";
 import type { StoreScope } from "@/lib/leads-access";
 
-export const SHIFT_START = 8;
-export const SHIFT_END = 20;
-
-export interface BurndownPoint {
-  h: string; // "08h".."20h"
-  real: number | null; // backlog reconstructed up to each past hour (null in the future)
-  ritmo: number; // ideal straight line from the day's initial backlog to 0 at SHIFT_END
-  proy: number | null; // projection at the current clearing pace (null before "ahora")
-}
-
-export interface TrendPoint {
-  dia: string; // weekday label, or "Hoy"
-  saldo: number; // backlog at end of day
-  entran: number; // leads created that day
-  cierran: number; // leads that left the queue that day
-}
-
-export interface AdvisorToday {
-  name: string;
-  /** Leads distintos TRABAJADOS hoy: cualquier acción de venta (llamada, mensaje,
-   *  cambio de estado, "generar pedido"). Ordenar la cola con "Resuelto" no cuenta
-   *  — no es trabajar el lead. Es el denominador del % de cierre — el mismo que
-   *  usa la página de Productividad, para que ambas vistas coincidan. */
-  leads: number;
-  llamadas: number; // solo kind="call" registradas hoy (subconjunto de `leads`)
-  pedidos: number; // ventas que ELLA registró hoy (`order_sales`)
-  pedidosDetalle: { code: string | null; fecha: string | null }[]; // "#AUR1091" + "05/07/26"
-}
-
-/** One day of the team conversion chart: contactos (gestión calls) vs pedidos.
- *  El pedido cae el día en que se REGISTRÓ la venta, misma fuente que el panel
- *  de Productividad — así el "Hoy" del gráfico cuadra con la suma de pedidos por
- *  asesora. contactos sigue contando solo kind="call", así que en un día muy
- *  flojo pedidos podría superar contactos; el gráfico recorta el relleno verde y
- *  topa el % a 100. */
-export interface ConversionDay {
-  dia: string; // weekday label, or "Hoy"
-  contactos: number; // kind="call" calls that day
-  pedidos: number; // ventas registradas ese día
-}
-
-/**
- * Team conversion per day. contactos = kind="call" calls; el pedido cae el día en
- * que se registró la venta (`order_sales.occurred_at`), no el del último toque —
- * antes reabrir un lead una semana después movía la venta de día. Pura para poder
- * probarla. `calls` son los lead_calls de asesora (`vendedora` not null) de la
- * ventana; `sales` las ventas registradas en ella.
- */
-export function computeTeamConversionByDay(opts: {
-  calls: { lead_id: string; kind: string | null; occurred_at: string | null }[];
-  sales: { occurredAt: string | null }[];
-  days: { date: string; label: string }[];
-  tz: string;
-}): ConversionDay[] {
-  const daySet = new Set(opts.days.map((d) => d.date));
-  const contactosByDate: Record<string, number> = {};
-  for (const c of opts.calls) {
-    if (!c.occurred_at) continue;
-    if (c.kind === "call") {
-      const d = tzParts(c.occurred_at, opts.tz).date;
-      if (daySet.has(d)) contactosByDate[d] = (contactosByDate[d] ?? 0) + 1;
-    }
-  }
-  const pedidosByDate: Record<string, number> = {};
-  for (const s of opts.sales) {
-    if (!s.occurredAt) continue;
-    const d = tzParts(s.occurredAt, opts.tz).date;
-    if (daySet.has(d)) pedidosByDate[d] = (pedidosByDate[d] ?? 0) + 1;
-  }
-  return opts.days.map((dd) => ({
-    dia: dd.label,
-    contactos: contactosByDate[dd.date] ?? 0,
-    pedidos: pedidosByDate[dd.date] ?? 0,
-  }));
-}
-
-/**
- * Fetch + compute the team conversion series, robust to PostgREST's `max-rows`
- * cap. PAGES the window's advisor calls (a `.limit()` alone is silently capped, so
- * a busy store would only get an arbitrary slice) y pagina igual las ventas
- * registradas. Best-effort.
- */
-async function computeTeamConversion(
-  sb: Awaited<ReturnType<typeof createServerSupabase>>,
-  storeIds: StoreScope,
-  sinceIso: string,
-  days: { date: string; label: string }[],
-  tz: string,
-): Promise<ConversionDay[]> {
-  const PAGE = 1000;
-  const CAP = 40000; // absolute safety bound on a runaway store
-  const calls: { lead_id: string; kind: string | null; occurred_at: string | null }[] = [];
-  for (let from = 0; from < CAP; from += PAGE) {
-    const { data, error } = await sb
-      .from("lead_calls")
-      .select("lead_id, kind, occurred_at")
-      .in("store_id", storeIds)
-      .not("vendedora", "is", null)
-      .gte("occurred_at", sinceIso)
-      .order("occurred_at", { ascending: false })
-      .order("id", { ascending: false }) // stable tiebreak so pages don't overlap/skip
-      .range(from, from + PAGE - 1);
-    if (error) break;
-    const batch = (data as typeof calls) ?? [];
-    calls.push(...batch);
-    if (batch.length < PAGE) break;
-  }
-  // Las ventas registradas de la ventana. Antes acá se buscaba qué leads siguen
-  // `won` y el pedido caía el día del último toque — por eso una venta se movía
-  // de día (y de asesora) cuando alguien reabría el lead una semana después.
-  const sales: { occurredAt: string | null }[] = [];
-  for (let from = 0; from < CAP; from += PAGE) {
-    const { data, error } = await sb
-      .from("order_sales")
-      .select("order_id, occurred_at")
-      .in("store_id", storeIds)
-      .gte("occurred_at", sinceIso)
-      .order("occurred_at", { ascending: false })
-      .order("order_id", { ascending: false })
-      .range(from, from + PAGE - 1);
-    if (error) break;
-    const batch = (data as { occurred_at: string | null }[]) ?? [];
-    for (const r of batch) sales.push({ occurredAt: r.occurred_at });
-    if (batch.length < PAGE) break;
-  }
-  return computeTeamConversionByDay({ calls, sales, days, tz });
-}
-
-const PAGE_SIZE = 1000;
-const PAGE_CAP = 20_000; // absolute safety bound per fetch (≈20 páginas)
-
-type Sb = Awaited<ReturnType<typeof createServerSupabase>>;
-
-/**
- * Drena una consulta PostgREST por páginas de `.range()`. Una sola llamada
- * devuelve como máximo ~1000 filas (max-rows) AUNQUE se pida `.limit(5000)`,
- * y el recorte es silencioso. El builder debe llevar un orden estable (id o
- * occurred_at+id) para que las páginas no se solapen ni salten filas.
- */
-async function pageAll<T>(
-  build: (from: number, to: number) => PromiseLike<{ data: unknown; error: unknown }>,
-): Promise<T[]> {
-  const out: T[] = [];
-  for (let from = 0; from < PAGE_CAP; from += PAGE_SIZE) {
-    const { data, error } = await build(from, from + PAGE_SIZE - 1);
-    if (error) break;
-    const batch = (data as T[] | null) ?? [];
-    out.push(...batch);
-    if (batch.length < PAGE_SIZE) break;
-  }
-  return out;
-}
-
-/**
- * Salidas de "Sin llamar" DENTRO de la ventana: la primera fila in-window de
- * lead_calls que movió el status del lead fuera de `nuevo`, descartando los
- * leads que ya tenían una gestión así ANTES de la ventana (su salida real fue
- * entonces; un re-toque posterior no recuenta). Equivale al viejo "primera
- * gestión de todo el historial" pero acotado para siempre: se pagina solo la
- * ventana y el pasado se consulta puntualmente (chunked) para los leads
- * tocados. Devuelve el occurred_at de cada salida.
- */
-async function fetchQueueLeavers(sb: Sb, storeIds: StoreScope, windowStartIso: string): Promise<string[]> {
-  const rows = await pageAll<{ lead_id: string; occurred_at: string | null }>((from, to) =>
-    sb
-      .from("lead_calls")
-      .select("lead_id, occurred_at")
-      .in("store_id", storeIds)
-      .not("new_status", "is", null)
-      .neq("new_status", "nuevo")
-      .gte("occurred_at", windowStartIso)
-      .order("occurred_at", { ascending: true })
-      .order("id", { ascending: true })
-      .range(from, to),
-  );
-  const firstInWindow = new Map<string, string>(); // lead → su primera gestión in-window
-  for (const r of rows) {
-    if (r.occurred_at && !firstInWindow.has(r.lead_id)) firstInWindow.set(r.lead_id, r.occurred_at);
-  }
-  // Un lead con gestión previa a la ventana ya había salido de la cola: fuera.
-  // Chunk corto (150) para que ni un lead muy re-tocado acerque la respuesta
-  // del lookup al tope de filas. Los trozos NO dependen entre sí: se preguntan
-  // todos a la vez. En serie, una tienda con miles de gestiones en la semana
-  // encadenaba una decena de viajes y el panel de gráficos tardaba en aparecer.
-  const parts = chunk([...firstInWindow.keys()], 150);
-  const previous = await Promise.all(
-    parts.map((part) =>
-      sb
-        .from("lead_calls")
-        .select("lead_id")
-        .in("store_id", storeIds)
-        .not("new_status", "is", null)
-        .neq("new_status", "nuevo")
-        .lt("occurred_at", windowStartIso)
-        .in("lead_id", part),
-    ),
-  );
-  for (const { data } of previous) {
-    for (const r of (data as { lead_id: string }[] | null) ?? []) firstInWindow.delete(r.lead_id);
-  }
-  return [...firstInWindow.values()];
-}
-
-/** ISO → "dd/mm/aa" in the store's timezone (null-safe), for the pedidos tooltip. */
-export function shortLocalDate(iso: string | null | undefined, tz: string): string | null {
-  if (!iso) return null;
-  const d = tzParts(iso, tz).date; // YYYY-MM-DD
-  return `${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(2, 4)}`;
-}
-
 export interface LeadsInsights {
-  burndown: BurndownPoint[];
-  trend: TrendPoint[];
-  saldoInicio: number; // saldo of the oldest day in the window (reference line)
-  pendingNow: number;
-  nowHourLabel: string; // e.g. "15h" — the "ahora" marker
-  productivity: AdvisorToday[];
-  conversion: ConversionDay[]; // contactos vs pedidos por día (equipo), últimos 7 días
+  /** El equipo de hoy; null si no se pudo leer (el resto del tablero sigue). */
+  team: TeamToday | null;
   sinLlamar: { date: string; dia: string; count: number }[]; // sin-gestión leads por día de última interacción
   sinLlamarTotal: number; // total sin llamar (incl. older than the window)
   sinLlamarOlder: number; // sin llamar cuya última interacción fue hace +7 días (la alarma)
@@ -241,73 +34,6 @@ export interface LeadsInsights {
 
 const WEEKDAYS = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 
-function hourLabel(h: number): string {
-  return `${String(h).padStart(2, "0")}h`;
-}
-
-const clampHour = (h: number): number => Math.min(SHIFT_END, Math.max(SHIFT_START, h));
-
-/**
- * Today's burndown from the day's entrants/leavers (by local hour) + the current
- * backlog. Pure. `real(h)` = backlog at h:00 = now − (entered since h) + (left
- * since h). `ritmo` is the ideal line to 0; `proy` extrapolates the pace so far.
- */
-export function buildBurndown(opts: {
-  pendingNow: number;
-  nowHour: number;
-  entrantHours: number[]; // local hour (0..23) of each lead created today
-  leaverHours: number[]; // local hour of each lead that left the queue today
-}): BurndownPoint[] {
-  const { pendingNow, entrantHours, leaverHours } = opts;
-  const nowHour = clampHour(opts.nowHour);
-  const since = (hours: number[], h: number) => hours.reduce((n, x) => (x >= h ? n + 1 : n), 0);
-  const real = (h: number) => pendingNow - since(entrantHours, h) + since(leaverHours, h);
-  const inicial = real(SHIFT_START);
-  const current = real(nowHour);
-  const pace = (inicial - current) / Math.max(1, nowHour - SHIFT_START); // net cierres/h so far
-  const span = SHIFT_END - SHIFT_START;
-  const points: BurndownPoint[] = [];
-  for (let h = SHIFT_START; h <= SHIFT_END; h++) {
-    points.push({
-      h: hourLabel(h),
-      real: h <= nowHour ? Math.max(0, Math.round(real(h))) : null,
-      ritmo: Math.max(0, Math.round((inicial * (SHIFT_END - h)) / span)),
-      proy: h >= nowHour ? Math.max(0, Math.round(current - pace * (h - nowHour))) : null,
-    });
-  }
-  return points;
-}
-
-/**
- * 7-day flow + saldo. Walks the saldo back from the current backlog using the
- * identity saldo(d-1) = saldo(d) − entran(d) + cierran(d). Pure.
- */
-export function buildTrend(opts: {
-  days: { date: string; label: string }[]; // oldest → newest (today last)
-  pendingNow: number;
-  entranByDate: Record<string, number>;
-  cierranByDate: Record<string, number>;
-}): { trend: TrendPoint[]; saldoInicio: number } {
-  const { days, pendingNow, entranByDate, cierranByDate } = opts;
-  const saldo: Record<string, number> = {};
-  for (let i = days.length - 1; i >= 0; i--) {
-    const d = days[i]!.date;
-    if (i === days.length - 1) {
-      saldo[d] = pendingNow;
-    } else {
-      const next = days[i + 1]!.date;
-      saldo[d] = saldo[next]! - (entranByDate[next] ?? 0) + (cierranByDate[next] ?? 0);
-    }
-  }
-  const trend: TrendPoint[] = days.map((dd) => ({
-    dia: dd.label,
-    saldo: Math.max(0, Math.round(saldo[dd.date]!)),
-    entran: entranByDate[dd.date] ?? 0,
-    cierran: cierranByDate[dd.date] ?? 0,
-  }));
-  return { trend, saldoInicio: trend[0]?.saldo ?? 0 };
-}
-
 /** Una fila del RPC `lead_insights_rollup` (0155): cubo, día u hora, conteo. */
 export interface RollupRow {
   bucket: string;
@@ -315,153 +41,116 @@ export interface RollupRow {
   n: number | string;
 }
 
-export interface RollupInputs {
-  entranByDate: Record<string, number>;
-  cierranByDate: Record<string, number>;
-  entrantHours: number[];
-  leaverHours: number[];
-  sinLlamarByDate: Record<string, number>;
-  contactosByDate: Record<string, number>;
-  pedidosByDate: Record<string, number>;
-}
-
 /**
- * De las filas agrupadas a lo que consumen `buildBurndown` y `buildTrend`.
- * Pura. Los histogramas por hora se expanden a la lista de horas que esperan
- * los constructores: son decenas de leads al día, no miles.
+ * De las filas agrupadas en la base, los leads sin llamar por día de su última
+ * interacción. Pura. Los demás cubos del RPC (entran, cierran, contactos,
+ * pedidos) eran del tablero anterior y se ignoran.
  */
-export function rollupToInputs(rows: readonly RollupRow[]): RollupInputs {
-  const out: RollupInputs = {
-    entranByDate: {},
-    cierranByDate: {},
-    entrantHours: [],
-    leaverHours: [],
-    sinLlamarByDate: {},
-    contactosByDate: {},
-    pedidosByDate: {},
-  };
-  const byDate: Record<string, Record<string, number> | undefined> = {
-    entran: out.entranByDate,
-    cierran: out.cierranByDate,
-    sin_llamar: out.sinLlamarByDate,
-    contactos: out.contactosByDate,
-    pedidos: out.pedidosByDate,
-  };
-  const byHour: Record<string, number[] | undefined> = {
-    entran_hora: out.entrantHours,
-    cierran_hora: out.leaverHours,
-  };
+export function sinLlamarFromRollup(rows: readonly RollupRow[]): Record<string, number> {
+  const out: Record<string, number> = {};
   for (const r of rows) {
+    if (r.bucket !== "sin_llamar") continue;
     const n = Number(r.n);
     if (!Number.isFinite(n) || n <= 0) continue;
-    const dates = byDate[r.bucket];
-    if (dates) {
-      dates[r.key] = (dates[r.key] ?? 0) + n;
-      continue;
+    out[r.key] = (out[r.key] ?? 0) + n;
+  }
+  return out;
+}
+
+type Sb = Awaited<ReturnType<typeof createServerSupabase>>;
+
+const PAGE_SIZE = 1000;
+const PAGE_CAP = 20_000; // absolute safety bound per fetch (≈20 páginas)
+
+/**
+ * Los mismos sin llamar, drenando filas (el camino de antes). Queda como
+ * respaldo para una base sin la 0155 aplicada: el panel sigue saliendo, solo
+ * que caro. Una sola llamada devuelve como máximo ~1000 filas (max-rows) y el
+ * recorte es silencioso: se pagina con un orden estable.
+ */
+async function drainSinLlamar(sb: Sb, storeIds: StoreScope, tz: string): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  for (let from = 0; from < PAGE_CAP; from += PAGE_SIZE) {
+    const { data, error } = await sb
+      .from("leads")
+      .select("last_interaction_at, first_seen_at")
+      .in("store_id", storeIds)
+      .in("category", ["open", "hot"])
+      .eq("status", "nuevo")
+      .order("id", { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+    if (error) break;
+    const batch = (data as { last_interaction_at: string | null; first_seen_at: string | null }[] | null) ?? [];
+    for (const r of batch) {
+      const ts = r.last_interaction_at ?? r.first_seen_at;
+      if (!ts) continue;
+      const d = tzParts(ts, tz).date;
+      out[d] = (out[d] ?? 0) + 1;
     }
-    const hours = byHour[r.bucket];
-    if (hours) {
-      const h = Number(r.key);
-      if (!Number.isFinite(h)) continue;
-      for (let i = 0; i < n; i++) hours.push(h);
-    }
+    if (batch.length < PAGE_SIZE) break;
   }
   return out;
 }
 
 /**
- * Los mismos conteos, drenando filas (el camino de antes). Queda como respaldo
- * para una base sin la 0155 aplicada: el panel sigue saliendo, solo que caro.
+ * Sin llamar por día de última interacción. LOS CONTEOS SE AGRUPAN EN LA BASE
+ * (RPC `lead_insights_rollup`, 0155): unas cuarenta filas en vez de las
+ * ~17.000 que se drenaban por carga (medido el 10-09-2026: 28 millones de
+ * filas al día solo de este panel). El drenado queda como respaldo si el RPC
+ * no existe todavía.
  */
-async function drainInputs(
+async function loadSinLlamar(
   sb: Sb,
   storeIds: StoreScope,
   windowStartIso: string,
-  todayDate: string,
-  days: { date: string; label: string }[],
   tz: string,
-): Promise<RollupInputs> {
-  const [entrantRows, leaverAts, sinLlamarRows] = await Promise.all([
-    pageAll<{ created_at: string | null; first_seen_at: string | null }>((from, to) =>
-      sb
-        .from("leads")
-        .select("created_at, first_seen_at")
-        .in("store_id", storeIds)
-        .or(`first_seen_at.gte.${windowStartIso},and(first_seen_at.is.null,created_at.gte.${windowStartIso})`)
-        .order("id", { ascending: true })
-        .range(from, to),
-    ),
-    fetchQueueLeavers(sb, storeIds, windowStartIso),
-    pageAll<{ last_interaction_at: string | null; first_seen_at: string | null }>((from, to) =>
-      sb
-        .from("leads")
-        .select("last_interaction_at, first_seen_at")
-        .in("store_id", storeIds)
-        .in("category", ["open", "hot"])
-        .eq("status", "nuevo")
-        .order("id", { ascending: true })
-        .range(from, to),
-    ),
-  ]);
-  const out: RollupInputs = {
-    entranByDate: {},
-    cierranByDate: {},
-    entrantHours: [],
-    leaverHours: [],
-    sinLlamarByDate: {},
-    contactosByDate: {},
-    pedidosByDate: {},
-  };
-  for (const r of entrantRows) {
-    const arrived = r.first_seen_at ?? r.created_at;
-    if (!arrived) continue;
-    const p = tzParts(arrived, tz);
-    out.entranByDate[p.date] = (out.entranByDate[p.date] ?? 0) + 1;
-    if (p.date === todayDate) out.entrantHours.push(p.hour);
+  todayDate: string,
+): Promise<Record<string, number>> {
+  const rollup = await sb.rpc("lead_insights_rollup", {
+    p_store_ids: storeIds,
+    p_window_start: windowStartIso,
+    p_tz: tz,
+    p_today: todayDate,
+  });
+  if (!rollup.error && Array.isArray(rollup.data)) {
+    return sinLlamarFromRollup(rollup.data as RollupRow[]);
   }
-  for (const at of leaverAts) {
-    const p = tzParts(at, tz);
-    out.cierranByDate[p.date] = (out.cierranByDate[p.date] ?? 0) + 1;
-    if (p.date === todayDate) out.leaverHours.push(p.hour);
-  }
-  for (const r of sinLlamarRows) {
-    const ts = r.last_interaction_at ?? r.first_seen_at;
-    if (!ts) continue;
-    const d = tzParts(ts, tz).date;
-    out.sinLlamarByDate[d] = (out.sinLlamarByDate[d] ?? 0) + 1;
-  }
-  try {
-    for (const c of await computeTeamConversion(sb, storeIds, windowStartIso, days, tz)) {
-      const date = days.find((d) => d.label === c.dia)?.date;
-      if (!date) continue;
-      out.contactosByDate[date] = c.contactos;
-      out.pedidosByDate[date] = c.pedidos;
-    }
-  } catch {
-    /* best-effort — deja el gráfico en ceros si falla */
-  }
-  return out;
+  return await drainSinLlamar(sb, storeIds, tz);
 }
 
 /**
- * Assemble the Leads dashboard insights for one store. `pendingNow` is the
- * current "por llamar" count (already computed by the page, passed in as the
- * anchor). RLS-scoped reads; productivity is best-effort.
- *
- * LOS CONTEOS SE AGRUPAN EN LA BASE (RPC `lead_insights_rollup`, 0155): unas
- * cuarenta filas en vez de las ~17.000 que se drenaban por carga. Medido el
- * 10-09-2026: 28 millones de filas al día solo de este panel. El drenado queda
- * como respaldo si el RPC no existe todavía.
+ * El equipo de hoy con lo que quien mira puede ver. Las horas son de la
+ * persona (todas sus tiendas, como la semana de Productividad); a una
+ * vendedora solo le llegan las suyas: al navegador no viaja la jornada de
+ * nadie más.
  */
-export async function getLeadsInsights(
-  storeIds: StoreScope,
-  tz: string,
-  pendingNow: number,
-): Promise<LeadsInsights> {
+async function loadTeamToday(storeIds: StoreScope, tz: string, nowIso: string): Promise<TeamToday> {
+  const [stores, role, user] = await Promise.all([getAccessibleStores(), getUserRoleSummary(), getCurrentUser()]);
+  const horasDeTodas = !role.isVendedoraOnly;
+  // Las organizaciones de todas sus tiendas, como Productividad: el horario es
+  // de la persona y vale el mismo se mire la tienda que se mire.
+  const orgIds = [...new Set(stores.map((s) => s.org_id))];
+  const [raw, schedules] = await Promise.all([
+    getTeamToday(
+      storeIds,
+      stores.map((s) => s.id),
+      tz,
+      nowIso,
+    ),
+    getAdvisorSchedules(createAdminSupabase(), orgIds).catch(() => new Map<string, AdvisorSchedule>()),
+  ]);
+  return buildTeamToday({ raw, schedules, tz, nowIso, viewerId: user?.id ?? null, horasDeTodas });
+}
+
+/**
+ * Assemble the Leads dashboard for the stores in scope. RLS-scoped reads; the
+ * team is best-effort: if it fails, «Sin llamar» still shows.
+ */
+export async function getLeadsInsights(storeIds: StoreScope, tz: string): Promise<LeadsInsights> {
   const sb = await createServerSupabase();
-  const nowMs = Date.now();
-  const now = tzParts(new Date(nowMs).toISOString(), tz);
-  const todayDate = now.date;
+  const nowIso = new Date().toISOString();
+  const nowMs = Date.parse(nowIso);
+  const todayDate = tzParts(nowIso, tz).date;
 
   // The last 7 local dates (today back 6 days), with weekday labels.
   const days: { date: string; label: string }[] = [];
@@ -471,21 +160,10 @@ export async function getLeadsInsights(
   }
   const windowStartIso = new Date(nowMs - 7 * 86_400_000).toISOString();
 
-  // Primero el RPC; si no existe (base sin la 0155), el drenado de siempre.
-  let inputs: RollupInputs;
-  const rollup = await sb.rpc("lead_insights_rollup", {
-    p_store_ids: storeIds,
-    p_window_start: windowStartIso,
-    p_tz: tz,
-    p_today: todayDate,
-  });
-  if (!rollup.error && Array.isArray(rollup.data)) {
-    inputs = rollupToInputs(rollup.data as RollupRow[]);
-  } else {
-    inputs = await drainInputs(sb, storeIds, windowStartIso, todayDate, days, tz);
-  }
-  const { entranByDate, cierranByDate, entrantHours, leaverHours, sinLlamarByDate, contactosByDate, pedidosByDate } =
-    inputs;
+  const [sinLlamarByDate, team] = await Promise.all([
+    loadSinLlamar(sb, storeIds, windowStartIso, tz, todayDate),
+    loadTeamToday(storeIds, tz, nowIso).catch(() => null),
+  ]);
 
   // "Sin llamar" por día de última interacción (+ cuántos son de hace +7 días).
   const daySet = new Set(days.map((d) => d.date));
@@ -501,51 +179,5 @@ export async function getLeadsInsights(
   }));
   const sinLlamarTotal = sinLlamar.reduce((s, x) => s + x.count, 0) + sinLlamarOlder;
 
-  // Conversión por día (equipo): contactos = llamadas de asesora; el pedido cae
-  // el día en que se registró la venta.
-  const conversion: ConversionDay[] = days.map((dd) => ({
-    dia: dd.label,
-    contactos: contactosByDate[dd.date] ?? 0,
-    pedidos: pedidosByDate[dd.date] ?? 0,
-  }));
-
-  const burndown = buildBurndown({ pendingNow, nowHour: now.hour, entrantHours, leaverHours });
-  const { trend, saldoInicio } = buildTrend({ days, pendingNow, entranByDate, cierranByDate });
-
-  // Today's per-advisor productivity — reuses the Productividad aggregation
-  // (RLS-scoped, team-visible, resolves names). pedidos = wins attributed by
-  // last-touch. El % se calcula sobre `leads` (leads trabajados), NO sobre
-  // llamadas: un pedido no requiere una llamada registrada (se puede cerrar por
-  // WhatsApp o con "Generar pedido"), así que pedidos/llamadas daba >100% y no
-  // cuadraba con el "% cierre" de Productividad. Best-effort: never block the board.
-  let productivity: AdvisorToday[] = [];
-  try {
-    const rows = await getAdvisorProductivity(storeIds, { from: todayDate, to: todayDate }, null, tz);
-    productivity = rows
-      .map((r) => ({
-        name: r.email.includes("@") ? r.email.split("@")[0]! : r.email,
-        leads: r.leadsTrabajados,
-        llamadas: r.llamadas,
-        pedidos: r.cerrados,
-        pedidosDetalle: r.cerradosDetalle.map((o) => ({ code: o.name, fecha: shortLocalDate(o.at, tz) })),
-      }))
-      .filter((r) => r.leads > 0 || r.pedidos > 0)
-      .sort((a, b) => b.pedidos - a.pedidos || b.leads - a.leads);
-  } catch {
-    /* best-effort */
-  }
-
-  return {
-    burndown,
-    trend,
-    saldoInicio,
-    pendingNow,
-    nowHourLabel: hourLabel(clampHour(now.hour)),
-    productivity,
-    conversion,
-    sinLlamar,
-    sinLlamarTotal,
-    sinLlamarOlder,
-    sinLlamarOlderBefore: firstDay,
-  };
+  return { team, sinLlamar, sinLlamarTotal, sinLlamarOlder, sinLlamarOlderBefore: firstDay };
 }
