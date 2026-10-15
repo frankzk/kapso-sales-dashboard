@@ -1,6 +1,6 @@
 // Los comprobantes por RUC (MOM §35) están escritos en prosa, y la regla que de
 // verdad corre vive en sitios que nadie compila juntos: las reglas puras
-// (lib/invoicing/rules.ts), la 0257 y la 0258 (lo que la base acepta y lo que
+// (lib/invoicing/rules.ts), la 0257 y la 0260 (lo que la base acepta y lo que
 // el turno vuelve a revisar), los permisos y el cron. Ninguno falla solo si se separa del
 // MOM: un motivo que el panel no sabe decir, un tope que el MOM promete y la
 // base no guarda, un estado «vivo» que el índice único no cuenta, un 4xx que el
@@ -72,23 +72,23 @@ const MOM = read("docs/mom/master-pedidos-v1.md");
 /**
  * La 0257 corrió en producción el 14-10-2026 tal como está y no se reescribe:
  * las tablas, sus restricciones e índices, los permisos de las tablas y la
- * semilla se leen en ella. La 0258 vuelve a escribir cuatro de sus funciones
+ * semilla se leen en ella. La 0260 vuelve a escribir cuatro de sus funciones
  * (los arreglos de la revisión adversaria): lo que dice una función se lee en
  * su última versión, con `funcion`.
  */
 const SQL_0257 = read("db/migrations/0257_invoices.sql");
 const SQL_0257_FLAT = flat(SQL_0257);
-const SQL_0258 = read("db/migrations/0258_invoices_hardening.sql");
-const SQL_0258_FLAT = flat(SQL_0258);
-/** Lo que la 0258 vuelve a escribir (o crea), y nada más. */
-const FUNCIONES_0258 = ["invoice_issuers_touch", "order_invoices_guard", "invoice_claim", "invoice_candidates"];
+const SQL_0260 = read("db/migrations/0260_invoices_hardening.sql");
+const SQL_0260_FLAT = flat(SQL_0260);
+/** Lo que la 0260 vuelve a escribir (o crea), y nada más. */
+const FUNCIONES_0260 = ["invoice_issuers_touch", "order_invoices_guard", "invoice_claim", "invoice_candidates"];
 
 /**
  * La versión vigente de una función: su último `create or replace` en la 0257 y
- * la 0258, en ese orden, hasta su `$$;`, en una línea. "" si no está.
+ * la 0260, en ese orden, hasta su `$$;`, en una línea. "" si no está.
  */
 function funcion(nombre: string): string {
-  const todo = flat(`${SQL_0257}\n${SQL_0258}`);
+  const todo = flat(`${SQL_0257}\n${SQL_0260}`);
   const desde = todo.lastIndexOf(`create or replace function ${nombre}(`);
   return desde < 0 ? "" : todo.slice(desde, todo.indexOf("$$;", desde) + 3);
 }
@@ -140,7 +140,7 @@ describe("MOM §35: la sección existe y dice su estado", () => {
     expect(estado.startsWith("Estado: construido y apagado.")).toBe(true);
     // Las dos migraciones, y lo que trae cada una.
     expect(estado).toContain(
-      "Existen las migraciones 0257 (empresas emisoras, cuenta → RUC, comprobantes y el candado de emisión) y 0258 (los arreglos de la revisión adversaria sobre la 0257: el turno que vuelve a revisar los pagos, la excepción de borrar la cuenta de una persona, el token nuevo que borra el motivo de la prueba anterior y los pedidos por revisar)",
+      "Existen las migraciones 0257 (empresas emisoras, cuenta → RUC, comprobantes y el candado de emisión) y 0260 (los arreglos de la revisión adversaria sobre la 0257: el turno que vuelve a revisar los pagos, la excepción de borrar la cuenta de una persona, el token nuevo que borra el motivo de la prueba anterior y los pedidos por revisar)",
     );
     expect(estado).toContain("**Ningún RUC emite**");
     expect(estado).toContain(`GRUPO GF S.A.C. nace dado de alta, en «${INVOICE_MODE_LABEL.apagado}» y sin token`);
@@ -170,7 +170,7 @@ describe("MOM §35: la sección existe y dice su estado", () => {
       expect(desde).toBeGreaterThan(0);
       for (const capa of [
         "db/migrations/0257_invoices.sql",
-        "db/migrations/0258_invoices_hardening.sql",
+        "db/migrations/0260_invoices_hardening.sql",
         "lib/invoicing/rules.ts",
         "lib/invoicing/server.ts",
         "app/api/cron/invoices/route.ts",
@@ -216,39 +216,39 @@ describe("MOM §35: la sección existe y dice su estado", () => {
       expect(r0257).toContain("la función `invoice_claim` (el turno) y la semilla de GRUPO GF S.A.C.");
       expect(SQL_0257).toContain("create or replace function invoice_claim(");
       expect(r0257).toContain(
-        "Es la que corrió en producción el 14-10-2026, y no se reescribe: lo que cambió después va en la 0258.",
+        "Es la que corrió en producción el 14-10-2026, y no se reescribe: lo que cambió después va en la 0260.",
       );
     });
 
     it("la 0257 es la que corrió en producción el 14-10-2026: no se reescribe", () => {
       // Producción no la vuelve a correr: lo que se le cambie no llega nunca, y
       // una base nueva quedaría distinta de producción bajo el mismo número. Lo
-      // nuevo va en una migración nueva, como la 0258.
+      // nuevo va en una migración nueva, como la 0260.
       const huella = createHash("sha256").update(SQL_0257.replace(/\r\n/g, "\n")).digest("hex");
       expect(huella).toBe("cc38c9c4c96a4c63b1e788dd54d4ad6cdbbffbbb7678ca2f7d4078eb1ab8f33f");
     });
 
-    it("la 0258 vuelve a escribir las cuatro funciones que nombra, y nada más", () => {
-      const r0258 = renglon("db/migrations/0258_invoices_hardening.sql");
-      expect(r0258).toContain(
+    it("la 0260 vuelve a escribir las cuatro funciones que nombra, y nada más", () => {
+      const r0260 = renglon("db/migrations/0260_invoices_hardening.sql");
+      expect(r0260).toContain(
         "las funciones `invoice_claim` (el turno) e `invoice_candidates` (qué pedidos mira el barrido)",
       );
-      expect(r0258).toContain(
+      expect(r0260).toContain(
         "y las de los triggers `invoice_issuers_touch` (un token nuevo borra también el motivo de la prueba anterior) y `order_invoices_guard` (la excepción de borrar la cuenta de una persona, 35.6).",
       );
-      expect(r0258).toContain("Solo funciones: no toca datos ni recrea triggers.");
-      // Cada una, en su versión vigente, es la de la 0258; y la 0258 no tiene otra.
-      const creadas = [...SQL_0258.matchAll(/^create or replace function (\w+)\(/gm)].map((m) => m[1]);
-      expect(creadas).toEqual(FUNCIONES_0258);
-      for (const nombre of FUNCIONES_0258) {
-        expect(r0258, nombre).toContain(`\`${nombre}\``);
+      expect(r0260).toContain("Solo funciones: no toca datos ni recrea triggers.");
+      // Cada una, en su versión vigente, es la de la 0260; y la 0260 no tiene otra.
+      const creadas = [...SQL_0260.matchAll(/^create or replace function (\w+)\(/gm)].map((m) => m[1]);
+      expect(creadas).toEqual(FUNCIONES_0260);
+      for (const nombre of FUNCIONES_0260) {
+        expect(r0260, nombre).toContain(`\`${nombre}\``);
         expect(funcion(nombre), nombre).not.toBe("");
-        expect(SQL_0258_FLAT, nombre).toContain(funcion(nombre));
+        expect(SQL_0260_FLAT, nombre).toContain(funcion(nombre));
       }
       // Ni tablas, ni datos, ni triggers: lo que va en la columna 0 son las
       // funciones y sus permisos (dentro de una función, todo va indentado).
-      expect(SQL_0258).not.toMatch(/^(?:insert|update|delete|truncate|alter|drop|comment|do|create (?!or replace function ))/im);
-      expect([...SQL_0258.matchAll(/^(revoke all on function|grant execute on function) (\w+)\(/gm)].map((m) => `${m[1]} ${m[2]}`)).toEqual([
+      expect(SQL_0260).not.toMatch(/^(?:insert|update|delete|truncate|alter|drop|comment|do|create (?!or replace function ))/im);
+      expect([...SQL_0260.matchAll(/^(revoke all on function|grant execute on function) (\w+)\(/gm)].map((m) => `${m[1]} ${m[2]}`)).toEqual([
         "revoke all on function invoice_issuers_touch",
         "revoke all on function order_invoices_guard",
         "revoke all on function invoice_claim",
@@ -256,15 +256,15 @@ describe("MOM §35: la sección existe y dice su estado", () => {
         "revoke all on function invoice_candidates",
         "grant execute on function invoice_candidates",
       ]);
-      expect(SQL_0258_FLAT).toContain(
+      expect(SQL_0260_FLAT).toContain(
         "revoke all on function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb) from public, anon, authenticated;",
       );
-      expect(SQL_0258_FLAT).toContain(
+      expect(SQL_0260_FLAT).toContain(
         "grant execute on function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb) to service_role;",
       );
       // La cabecera, como las otras: dice qué pasaba y que se aplica a mano.
-      expect(SQL_0258_FLAT).toContain("-- QUÉ PASABA. La 0257 se aplicó en producción el 14-10-2026");
-      expect(SQL_0258_FLAT).toContain("-- Se aplica a mano ANTES del código (DEPLOY.md). Es idempotente.");
+      expect(SQL_0260_FLAT).toContain("-- QUÉ PASABA. La 0257 se aplicó en producción el 14-10-2026");
+      expect(SQL_0260_FLAT).toContain("-- Se aplica a mano ANTES del código (DEPLOY.md). Es idempotente.");
     });
 
     it("la prueba SQL que nombra corre en verify-db", () => {
@@ -348,9 +348,9 @@ describe("MOM §35.2 y §35.3: los motivos", () => {
     expect(turno).toContain(
       "Esa fecha y la que manda el barrido tienen que ser las dos desde «Emitir desde»; si falta una, o una es anterior, no da el turno (`antes_de_inicio`).",
     );
-    // El turno vigente es el de la 0258: la 0257 que corrió no lo revisaba.
+    // El turno vigente es el de la 0260: la 0257 que corrió no lo revisaba.
     const fn = funcion("invoice_claim");
-    expect(SQL_0258_FLAT).toContain(fn);
+    expect(SQL_0260_FLAT).toContain(fn);
     // Un pago vivo que no está validado (`posible_duplicado` incluido, y uno sin
     // estado) no da turno: la misma condición 2 de las reglas.
     expect(fn).toContain(
@@ -395,7 +395,7 @@ describe("MOM §35.2 y §35.3: los motivos", () => {
   });
 });
 
-describe("MOM §35: las cifras son las del código y las de la base (0257 y 0258)", () => {
+describe("MOM §35: las cifras son las del código y las de la base (0257 y 0260)", () => {
   const item = (priceCents: number) => ({ code: "SKU-1", name: "Producto", qty: 1, priceCents });
   const payload = (totalCents: number) =>
     buildSalePayload({
@@ -529,8 +529,8 @@ describe("MOM §35: las cifras son las del código y las de la base (0257 y 0258
 describe("MOM §35.4, §35.6 y §35.8: modos, estados y candados", () => {
   it("los modos de la base son INVOICE_MODES, y §35.8 los nombra con sus etiquetas", () => {
     const checks = [...SQL_0257_FLAT.matchAll(/check \(mode in \(([^)]*)\)\)/g)].map((m) => sqlList(m[1]));
-    // La 0258 no tiene tablas: los modos de la base son los de la 0257.
-    expect(SQL_0258_FLAT).not.toMatch(/check \(mode in/);
+    // La 0260 no tiene tablas: los modos de la base son los de la 0257.
+    expect(SQL_0260_FLAT).not.toMatch(/check \(mode in/);
     // invoice_issuers, order_invoices e invoice_order_checks, en ese orden.
     expect(checks).toEqual([[...INVOICE_MODES], WRITE_MODES, WRITE_MODES]);
     expect(flat(sub(8))).toContain(
@@ -635,7 +635,7 @@ describe("MOM §35.4, §35.6 y §35.8: modos, estados y candados", () => {
     // «Sin policy de lectura: solo la lee el servidor.»
     expect(flat(sub(6))).toContain("Sin policy de lectura: solo la lee el servidor");
     expect(SQL_0257).not.toMatch(/create policy/i);
-    expect(SQL_0258).not.toMatch(/create policy/i);
+    expect(SQL_0260).not.toMatch(/create policy/i);
     for (const tabla of ["invoice_issuers", "order_invoices", "invoice_order_checks"]) {
       expect(SQL_0257).toContain(`alter table ${tabla} enable row level security;`);
     }
@@ -881,22 +881,22 @@ describe("MOM §35.3: cuándo quedó pagado y qué cobró Flow", () => {
 describe("MOM §35.4: qué mira el barrido (`invoice_candidates`)", () => {
   const s4 = flat(sub(4));
   const SERVER = read("lib/invoicing/server.ts");
-  /** El cuerpo de la función, de `create` a su `$$;`: la crea la 0258. */
+  /** El cuerpo de la función, de `create` a su `$$;`: la crea la 0260. */
   const fn = funcion("invoice_candidates");
   const horas = INVOICE_SHOPIFY_RECHECK_MS / 3_600_000;
 
   it("la lista la da la base, solo al servidor, y el barrido la pide por modo", () => {
     expect(fn).not.toBe("");
-    // La crea la 0258: la 0257 que corrió en producción no la tenía.
-    expect(SQL_0258_FLAT).toContain(fn);
+    // La crea la 0260: la 0257 que corrió en producción no la tenía.
+    expect(SQL_0260_FLAT).toContain(fn);
     expect(SQL_0257).not.toContain("invoice_candidates");
     expect(s4).toContain(
-      "Cada 10 minutos, por organización y por cada modo con un RUC encendido, los pedidos que le da la base (`invoice_candidates`, 0258)",
+      "Cada 10 minutos, por organización y por cada modo con un RUC encendido, los pedidos que le da la base (`invoice_candidates`, 0260)",
     );
     expect(SERVER).toContain('admin.rpc("invoice_candidates", {');
     const firma = "invoice_candidates(uuid, text, timestamptz, integer, text[], uuid)";
-    expect(SQL_0258_FLAT).toContain(`revoke all on function ${firma} from public, anon, authenticated;`);
-    expect(SQL_0258_FLAT).toContain(`grant execute on function ${firma} to service_role;`);
+    expect(SQL_0260_FLAT).toContain(`revoke all on function ${firma} from public, anon, authenticated;`);
+    expect(SQL_0260_FLAT).toContain(`grant execute on function ${firma} to service_role;`);
     expect(s4).toContain("La lista solo dice qué mirar: deciden `invoiceEligibility` y, al final, `invoice_claim`.");
   });
 
@@ -1080,9 +1080,9 @@ describe("MOM §35.6 y §35.7: lo que no se edita y lo que el panel dice", () =>
     const sin = `array[${quien.map((c) => `'${c}'`).join(", ")}]`;
     // Solo dentro de la cascada: la acción de la llave corre como trigger del
     // sistema, así que el candado la ve un nivel más hondo que un UPDATE directo.
-    // La excepción la trae la 0258: la 0257 que corrió en producción no la tenía.
+    // La excepción la trae la 0260: la 0257 que corrió en producción no la tenía.
     const candado = funcion("order_invoices_guard");
-    expect(SQL_0258_FLAT).toContain(candado);
+    expect(SQL_0260_FLAT).toContain(candado);
     expect(SQL_0257).not.toContain("pg_trigger_depth");
     expect(candado).toContain(`if pg_trigger_depth() > 1 and (to_jsonb(new) - ${sin}) = (to_jsonb(old) - ${sin})`);
     expect(flat(sub(6))).toContain(
@@ -1216,7 +1216,7 @@ describe("MOM §35.6 y §35.7: lo que no se edita y lo que el panel dice", () =>
   });
 });
 
-describe("MOM §35.8 y §35.9: antes de la 0257 y la 0258, y lo que falta confirmar", () => {
+describe("MOM §35.8 y §35.9: antes de la 0257 y la 0260, y lo que falta confirmar", () => {
   /**
    * Una base a la que le falta algo: toda tabla y toda función contesta «no
    * existe», nombrando `falta` como lo nombran Postgres y PostgREST.
@@ -1256,15 +1256,15 @@ describe("MOM §35.8 y §35.9: antes de la 0257 y la 0258, y lo que falta confir
     }
   });
 
-  describe("«falta una migración de comprobantes» es solo lo que crean la 0257 y la 0258", () => {
+  describe("«falta una migración de comprobantes» es solo lo que crean la 0257 y la 0260", () => {
     const parrafo = flat(sub(8).slice(sub(8).indexOf("Para el barrido, «falta una migración de comprobantes»")));
     const hasta = parrafo.indexOf(". Si lo que falta es otra cosa");
-    const la0258 = parrafo.indexOf(" o la 0258 ");
+    const la0260 = parrafo.indexOf(" o la 0260 ");
     const deLasMigraciones = codigos(parrafo.slice(0, hasta));
-    /** Qué crea cada una, según el MOM: lo nombrado antes de «o la 0258» es de la 0257. */
-    const segunElMom: Record<"0257" | "0258", string[]> = {
-      "0257": codigos(parrafo.slice(0, la0258)),
-      "0258": codigos(parrafo.slice(la0258, hasta)),
+    /** Qué crea cada una, según el MOM: lo nombrado antes de «o la 0260» es de la 0257. */
+    const segunElMom: Record<"0257" | "0260", string[]> = {
+      "0257": codigos(parrafo.slice(0, la0260)),
+      "0260": codigos(parrafo.slice(la0260, hasta)),
     };
     const ajenos = codigos(parrafo.slice(hasta));
 
@@ -1273,11 +1273,11 @@ describe("MOM §35.8 y §35.9: antes de la 0257 y la 0258, y lo que falta confir
         "Para el barrido, «falta una migración de comprobantes» es solo un «no existe» (de tabla o de función) que nombra algo que crean la 0257",
       );
       expect(parrafo).toContain("no es una migración de comprobantes sino una base rota, y el cron se pone rojo (502).");
-      expect(la0258).toBeGreaterThan(0);
-      expect(la0258).toBeLessThan(hasta);
+      expect(la0260).toBeGreaterThan(0);
+      expect(la0260).toBeLessThan(hasta);
       expect([...deLasMigraciones].sort()).toEqual(Object.keys(INVOICE_MIGRATION_OBJECTS).sort());
-      const sql = { "0257": SQL_0257_FLAT, "0258": SQL_0258_FLAT } as const;
-      for (const migracion of ["0257", "0258"] as const) {
+      const sql = { "0257": SQL_0257_FLAT, "0260": SQL_0260_FLAT } as const;
+      for (const migracion of ["0257", "0260"] as const) {
         expect(segunElMom[migracion].length, migracion).toBeGreaterThan(0);
         for (const nombre of segunElMom[migracion]) {
           expect(INVOICE_MIGRATION_OBJECTS[nombre as keyof typeof INVOICE_MIGRATION_OBJECTS], nombre).toBe(migracion);
@@ -1293,11 +1293,11 @@ describe("MOM §35.8 y §35.9: antes de la 0257 y la 0258, y lo que falta confir
       expect(ajenos).toEqual(["orders", "order_payments", "order_master"]);
       for (const nombre of ajenos) {
         expect(SQL_0257_FLAT, nombre).not.toContain(`create table if not exists ${nombre} (`);
-        expect(SQL_0258_FLAT, nombre).not.toContain(`create table if not exists ${nombre} (`);
+        expect(SQL_0260_FLAT, nombre).not.toContain(`create table if not exists ${nombre} (`);
       }
     });
 
-    it("lo que falta de la 0257 o la 0258 deja el barrido en `sin_migracion`; lo demás, en rojo", async () => {
+    it("lo que falta de la 0257 o la 0260 deja el barrido en `sin_migracion`; lo demás, en rojo", async () => {
       // Los nombres salen del MOM: sin ese párrafo no hay nada que probar.
       expect(deLasMigraciones.length).toBeGreaterThanOrEqual(6);
       expect(ajenos.length).toBeGreaterThanOrEqual(3);
@@ -1324,20 +1324,20 @@ describe("MOM §35.8 y §35.9: antes de la 0257 y la 0258, y lo que falta confir
     it("DEPLOY.md lo dice igual", () => {
       const deploy = flat(section(read("DEPLOY.md"), "### 14-10-2026 · Comprobantes SimpleFact por RUC (MOM §35)", "\n### "));
       expect(deploy).toContain(
-        "Solo cuenta como `sin_migracion` lo que crean la 0257 y la 0258: si lo que falta es otra tabla o función (`orders`, `order_payments`, `order_master`…), el cron responde 502 con el error en `errors`",
+        "Solo cuenta como `sin_migracion` lo que crean la 0257 y la 0260: si lo que falta es otra tabla o función (`orders`, `order_payments`, `order_master`…), el cron responde 502 con el error en `errors`",
       );
     });
   });
 
-  it("§35.8: sin la 0258 el panel y Ajustes se ven, pero el barrido no simula ni emite", () => {
+  it("§35.8: sin la 0260 el panel y Ajustes se ven, pero el barrido no simula ni emite", () => {
     const s8 = flat(sub(8));
     expect(s8).toContain(
-      "Sin la 0258, el panel y Ajustes se ven, pero el barrido no tiene la lista de pedidos por revisar (`invoice_candidates`) y no simula ni emite nada.",
+      "Sin la 0260, el panel y Ajustes se ven, pero el barrido no tiene la lista de pedidos por revisar (`invoice_candidates`) y no simula ni emite nada.",
     );
     expect(s8).toContain(
       "La 0257 es la que corrió en producción el 14-10-2026 y no se reescribe: lo que cambia después va en una migración nueva.",
     );
-    // El panel y Ajustes no leen nada de la 0258: solo el barrido la llama.
+    // El panel y Ajustes no leen nada de la 0260: solo el barrido la llama.
     for (const archivo of [
       "app/dashboard/pedidos/invoice-actions.ts",
       "app/dashboard/[storeId]/settings/invoice-actions.ts",
@@ -1349,16 +1349,16 @@ describe("MOM §35.8 y §35.9: antes de la 0257 y la 0258, y lo que falta confir
     }
   });
 
-  it("DEPLOY.md: la 0257 ya corrió en producción, y la 0258 va antes del código", () => {
+  it("DEPLOY.md: la 0257 ya corrió en producción, y la 0260 va antes del código", () => {
     const seccion = flat(section(read("DEPLOY.md"), "### 14-10-2026 · Comprobantes SimpleFact por RUC (MOM §35)", "\n### "));
     expect(seccion).toContain(
       "**Migración `0257_invoices.sql`.** **Ya aplicada en producción el 14-10-2026**: no se vuelve a pegar ni se edita.",
     );
-    const paso0258 = seccion.indexOf(
-      "**Migración `0258_invoices_hardening.sql`**, a mano, sobre la 0257 y ANTES de que el código con `invoice_candidates` llegue a `main`",
+    const paso0260 = seccion.indexOf(
+      "**Migración `0260_invoices_hardening.sql`**, a mano, sobre la 0257 y ANTES de que el código con `invoice_candidates` llegue a `main`",
     );
-    expect(paso0258).toBeGreaterThan(seccion.indexOf("**Migración `0257_invoices.sql`.**"));
-    expect(paso0258).toBeLessThan(seccion.indexOf("**Desplegar.**"));
+    expect(paso0260).toBeGreaterThan(seccion.indexOf("**Migración `0257_invoices.sql`.**"));
+    expect(paso0260).toBeLessThan(seccion.indexOf("**Desplegar.**"));
     expect(seccion).toContain(
       "**Si el código llega antes, el barrido dice `sin_migracion` y no simula ni emite nada hasta aplicarla**",
     );
@@ -1373,16 +1373,16 @@ describe("MOM §35.8 y §35.9: antes de la 0257 y la 0258, y lo que falta confir
     expect(seccion).toContain(
       "pg_get_functiondef('public.invoice_issuers_touch()'::regprocedure) like '%check_error := null%'",
     );
-    // Lo que buscan esas consultas está en la 0258, y no en la 0257 que corrió:
-    // dan `true` solo si la 0258 se aplicó.
+    // Lo que buscan esas consultas está en la 0260, y no en la 0257 que corrió:
+    // dan `true` solo si la 0260 se aplicó.
     expect(funcion("order_invoices_guard")).toContain("pg_trigger_depth()");
     expect(funcion("invoice_claim")).toContain("pagos_en_revision");
     expect(funcion("invoice_issuers_touch")).toContain("check_error := null");
     for (const huella of ["pg_trigger_depth()", "pagos_en_revision", "check_error := null", "invoice_candidates"]) {
-      expect(SQL_0258, huella).toContain(huella);
+      expect(SQL_0260, huella).toContain(huella);
       expect(SQL_0257, huella).not.toContain(huella);
     }
-    expect(SQL_0258_FLAT).toContain(`grant execute on function ${turno} to service_role;`);
+    expect(SQL_0260_FLAT).toContain(`grant execute on function ${turno} to service_role;`);
   });
 
   it("DEPLOY.md dice lo mismo: 200 con `sin_migracion`, y verifica las dos funciones", () => {
@@ -1396,7 +1396,7 @@ describe("MOM §35.8 y §35.9: antes de la 0257 y la 0258, y lo que falta confir
     expect(seccion).toContain("las funciones `invoice_claim` (el turno) e `invoice_candidates` (qué pedidos mira el barrido)");
     const firma = "invoice_candidates(uuid, text, timestamptz, integer, text[], uuid)";
     expect(seccion).toContain(`'public.${firma}', 'execute'`);
-    expect(SQL_0258_FLAT).toContain(`grant execute on function ${firma} to service_role;`);
+    expect(SQL_0260_FLAT).toContain(`grant execute on function ${firma} to service_role;`);
     // Los prepagos web por Flow se revisan en la simulación (§35.9).
     expect(seccion).toContain("**Los prepagos web por Flow tienen que salir** (MOM §35.9)");
     // Un `en_duda` se resuelve con las dos salidas del panel (§35.4, §35.7), y

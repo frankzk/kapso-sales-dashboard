@@ -1564,14 +1564,14 @@ describe("MOM §35.9 — creditNoteWarning: Kapta avisa, no emite la nota de cr�
   });
 });
 
-// ── Constantes, etiquetas, la 0257 y la 0258 ─────────────────────────────────
+// ── Constantes, etiquetas, la 0257 y la 0260 ─────────────────────────────────
 
 describe("MOM §35.3 a §35.6 — los motivos, las etiquetas y la base dicen lo mismo", () => {
   // Las tablas, sus restricciones y sus índices son de la 0257, que corrió en
-  // producción y no se reescribe; el turno vigente es el de la 0258.
+  // producción y no se reescribe; el turno vigente es el de la 0260.
   const sql = readFileSync(resolve(process.cwd(), "db/migrations/0257_invoices.sql"), "utf8");
-  const sql0258 = readFileSync(resolve(process.cwd(), "db/migrations/0258_invoices_hardening.sql"), "utf8");
-  const claim = /create or replace function invoice_claim\([\s\S]*?\n\$\$;/.exec(sql0258)?.[0] ?? "";
+  const sql0260 = readFileSync(resolve(process.cwd(), "db/migrations/0260_invoices_hardening.sql"), "utf8");
+  const claim = /create or replace function invoice_claim\([\s\S]*?\n\$\$;/.exec(sql0260)?.[0] ?? "";
   const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8");
 
   it("cada motivo y cada estado tiene su texto para el panel", () => {

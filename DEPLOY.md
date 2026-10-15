@@ -2436,7 +2436,7 @@ escribe, no abre casos ni toma el candado. Sin variables de entorno nuevas.
 **Marcha atrás.** Revertir el código basta. La función no molesta al código
 anterior y se queda.
 
-### 14-10-2026 · Comprobantes SimpleFact por RUC (MOM §35) — needs migrations 0257 and 0258
+### 14-10-2026 · Comprobantes SimpleFact por RUC (MOM §35) — needs migrations 0257 and 0260
 
 Kapta emite, en la cuenta de SimpleFact de la empresa que recibió el dinero, la
 boleta de un pedido ya cobrado: un RUC por cuenta de cobro (MOM §35). **Sale
@@ -2449,7 +2449,7 @@ tienda y el cron usa `CRON_SECRET`. Sin cambio del resolver:
 
 1. **Migración `0257_invoices.sql`.** **Ya aplicada en producción el
    14-10-2026**: no se vuelve a pegar ni se edita. Lo que cambió después —los
-   arreglos de la revisión adversaria— va en la 0258 (paso 2): producción no
+   arreglos de la revisión adversaria— va en la 0260 (paso 2): producción no
    vuelve a correr la 0257, y lo que se le escribiera nunca le llegaría. En una
    base nueva se aplica a mano y ANTES del código: pegar el archivo en el
    editor SQL de Supabase (o
@@ -2479,10 +2479,10 @@ tienda y el cron usa `CRON_SECRET`. Sin cambio del resolver:
      `invoice_order_checks`);
    - `select has_function_privilege('authenticated', 'public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)', 'execute');`
      tiene que dar `false` (y lo mismo con `anon`).
-2. **Migración `0258_invoices_hardening.sql`**, a mano, sobre la 0257 y ANTES
+2. **Migración `0260_invoices_hardening.sql`**, a mano, sobre la 0257 y ANTES
    de que el código con `invoice_candidates` llegue a `main`: pegar el archivo
    en el editor SQL de Supabase (o
-   `psql "$DATABASE_URL" -f db/migrations/0258_invoices_hardening.sql`). Son los
+   `psql "$DATABASE_URL" -f db/migrations/0260_invoices_hardening.sql`). Son los
    arreglos de la revisión adversaria (MOM §35.3, §35.4 y §35.6), que se habían
    escrito dentro de la 0257 cuando esta ya había corrido en producción.
    Escribe las funciones `invoice_claim` (el turno) e `invoice_candidates` (qué
@@ -2531,10 +2531,10 @@ tienda y el cron usa `CRON_SECRET`. Sin cambio del resolver:
    no se pone rojo: cada pasada responde 200 con `"skipped":"sin_migracion"`
    en la línea `[invoices] {…}`. Sin la 0257, además, el panel «Comprobante»
    del drawer no aparece y Ajustes dice «No se pudieron leer los RUC de la
-   organización.»; sin la 0258, el panel y Ajustes se ven, pero el barrido no
+   organización.»; sin la 0260, el panel y Ajustes se ven, pero el barrido no
    simula ni emite. Aplicar lo que falte y la pasada siguiente pasa a
    `sin_ruc_encendido`, o barre los RUC encendidos. Solo cuenta como
-   `sin_migracion` lo que crean la 0257 y la 0258: si lo que falta es otra
+   `sin_migracion` lo que crean la 0257 y la 0260: si lo que falta es otra
    tabla o función (`orders`, `order_payments`, `order_master`…), el cron
    responde 502 con el error en `errors`, y eso no se arregla aplicando una
    migración de comprobantes: la base está rota y hay que mirarla.
@@ -2600,7 +2600,7 @@ tienda y el cron usa `CRON_SECRET`. Sin cambio del resolver:
 
 **Antes de subir**: `npm test`, `npm run typecheck`, `bash scripts/verify-db.sh`
 (clúster desechable; corre `scripts/sql/invoices_smoke.sql`, que también corre
-la 0258 sobre la 0257 tal como corrió en producción) y `next build`.
+la 0260 sobre la 0257 tal como corrió en producción) y `next build`.
 
 **Marcha atrás.** Poner cada RUC en «Apagado» (Ajustes → «Boletas y
 facturas», o `update invoice_issuers set mode = 'apagado';`): el barrido deja
@@ -2609,7 +2609,7 @@ de leer y de emitir en la pasada siguiente. Un comprobante que haya quedado en
 llamar a SimpleFact, y lo revisa una persona. No hace falta revertir el código.
 Lo emitido no se borra —ya está en SUNAT—: una boleta que no correspondía la
 anula una persona con nota de crédito en SimpleFact (MOM §35.9). Las tablas no
-molestan al código anterior y se quedan. La 0258 tampoco se revierte: el código
+molestan al código anterior y se quedan. La 0260 tampoco se revierte: el código
 anterior pide el mismo turno y no llama a `invoice_candidates`.
 
 **Qué mirar después.** Cada pasada escribe una línea `[invoices] {…}` en los

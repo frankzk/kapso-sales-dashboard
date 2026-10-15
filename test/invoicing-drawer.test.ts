@@ -691,8 +691,8 @@ describe("loadInvoicePanel: lo que frena Shopify no es «lista» (FIX G)", () =>
   it("la lista del panel es la que salta la base: `p_blocked` y 6 horas", () => {
     expect(shopifyBlockedReasons()).toEqual([...SHOPIFY_LEVEL_REASONS].sort());
     expect(read("lib/invoicing/server.ts")).toContain("p_blocked: shopifyBlockedReasons(),");
-    // `invoice_candidates` la crea la 0258 (la 0257 que corrió en producción no la tenía).
-    const sql = read("db/migrations/0258_invoices_hardening.sql").replace(/\s+/g, " ");
+    // `invoice_candidates` la crea la 0260 (la 0257 que corrió en producción no la tenía).
+    const sql = read("db/migrations/0260_invoices_hardening.sql").replace(/\s+/g, " ");
     expect(sql).toContain("and c.reason = any (coalesce(p_blocked, '{}'::text[])) and c.checked_at > now() - interval '6 hours'");
   });
 

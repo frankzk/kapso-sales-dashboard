@@ -13012,7 +13012,7 @@ Implementación:
 ## 35. Comprobantes electrónicos por RUC (SimpleFact, 14-10-2026)
 
 Estado: construido y apagado. Existen las migraciones 0257 (empresas emisoras,
-cuenta → RUC, comprobantes y el candado de emisión) y 0258 (los arreglos de la
+cuenta → RUC, comprobantes y el candado de emisión) y 0260 (los arreglos de la
 revisión adversaria sobre la 0257: el turno que vuelve a revisar los pagos, la
 excepción de borrar la cuenta de una persona, el token nuevo que borra el
 motivo de la prueba anterior y los pedidos por revisar), las reglas puras, el
@@ -13245,7 +13245,7 @@ comprobante armado con datos a medias puede ir al RUC equivocado.
   ‹motivo›. Prueba la conexión antes de pasar a Real.».
 - **Qué mira el barrido.** Cada 10 minutos, por organización y por cada modo
   con un RUC encendido, los pedidos que le da la base (`invoice_candidates`,
-  0258): de una tienda activa; pagados según el Master (`order_master`), por
+  0260): de una tienda activa; pagados según el Master (`order_master`), por
   comprobantes o por la pasarela web; de los últimos 60 días (Shopify no deja
   leer pedidos más viejos sin `read_all_orders`); con un pago validado
   registrado desde el «Emitir desde» más antiguo de los RUC de ese modo o, si
@@ -13407,11 +13407,11 @@ Orden de encendido:
 Ajustes muestra, por RUC, lo de hoy (emitidas, simuladas, en duda y con error)
 y los últimos comprobantes.
 
-**Antes de la 0257 y la 0258.** Las migraciones se aplican a mano (DEPLOY.md),
+**Antes de la 0257 y la 0260.** Las migraciones se aplican a mano (DEPLOY.md),
 y el código puede llegar antes que ellas. Entonces no se emite nada y nada se
 pone rojo: el barrido responde sin error con `skipped: "sin_migracion"`. Sin la
 0257, además, el panel «Comprobante» no aparece y Ajustes dice que no pudo leer
-los RUC. Sin la 0258, el panel y Ajustes se ven, pero el barrido no tiene la
+los RUC. Sin la 0260, el panel y Ajustes se ven, pero el barrido no tiene la
 lista de pedidos por revisar (`invoice_candidates`) y no simula ni emite nada.
 Aplicadas las dos, la pasada siguiente sigue como siempre. La 0257 es la que
 corrió en producción el 14-10-2026 y no se reescribe: lo que cambia después va
@@ -13420,7 +13420,7 @@ en una migración nueva.
 Para el barrido, «falta una migración de comprobantes» es solo un «no existe»
 (de tabla o de función) que nombra algo que crean la 0257 —`invoice_issuers`,
 `order_invoices`, `invoice_order_checks`, `invoice_claim` o
-`invoice_issuer_id`— o la 0258 —`invoice_candidates`—. Si lo que falta es otra
+`invoice_issuer_id`— o la 0260 —`invoice_candidates`—. Si lo que falta es otra
 cosa —`orders`, `order_payments`, `order_master`—, no es una migración de
 comprobantes sino una base rota, y el cron se pone rojo (502).
 
@@ -13466,8 +13466,8 @@ Implementación:
   `store_collection_accounts.invoice_issuer_id` con su trigger,
   `order_invoices`, `invoice_order_checks`, la función `invoice_claim` (el
   turno) y la semilla de GRUPO GF S.A.C. Es la que corrió en producción el
-  14-10-2026, y no se reescribe: lo que cambió después va en la 0258.
-- `db/migrations/0258_invoices_hardening.sql`: los arreglos de la revisión
+  14-10-2026, y no se reescribe: lo que cambió después va en la 0260.
+- `db/migrations/0260_invoices_hardening.sql`: los arreglos de la revisión
   adversaria, sobre la 0257: las funciones `invoice_claim` (el turno) e
   `invoice_candidates` (qué pedidos mira el barrido), y las de los triggers
   `invoice_issuers_touch` (un token nuevo borra también el motivo de la prueba

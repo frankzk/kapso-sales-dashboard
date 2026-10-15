@@ -14,10 +14,10 @@
 // Fuera de producción no emite (un preview no manda boletas a SUNAT aunque se
 // copien las credenciales); con ?dry=1 sí corre, para probar.
 //
-// Sin la migración 0257 o la 0258 (el código puede llegar a producción antes
+// Sin la migración 0257 o la 0260 (el código puede llegar a producción antes
 // que ellas, que se aplican a mano) responde 200 con `skipped: "sin_migracion"`:
 // no hay nada que barrer, y un cron rojo cada 10 minutos solo taparía lo que sí
-// falla. Solo si lo que falta es de la 0257 o la 0258
+// falla. Solo si lo que falta es de la 0257 o la 0260
 // (`isInvoiceMigrationMissing`): otra tabla que no existe es una base rota, y el
 // cron se ve rojo.
 

@@ -6,7 +6,7 @@
 // manda boletas a SUNAT), que ?dry=1 sirva en cualquier lado, que el cron se
 // vea rojo si algo falló, y la línea de log sin datos de clientas. También que
 // vercel.json lo corra cada 10 minutos sin caer en el minuto de otro barrido,
-// que sin la 0257 o la 0258 aplicadas todo el camino responda 200 sin lanzar
+// que sin la 0257 o la 0260 aplicadas todo el camino responda 200 sin lanzar
 // (pero que otra tabla que falta lo ponga rojo), y que una lista de candidatos
 // llena se vea en la línea de log.
 
@@ -279,7 +279,7 @@ function conLa0257(over: { tables?: Record<string, Result>; rpcs?: Record<string
   );
 }
 
-describe("/api/cron/invoices sin la 0257 o la 0258 aplicadas", () => {
+describe("/api/cron/invoices sin la 0257 o la 0260 aplicadas", () => {
   it.each(["42P01", "PGRST205"] as const)("%s: 200, `sin_migracion`, sin errores y una sola línea de log", async (code) => {
     for (const q of ["", "?dry=1", `?storeId=${STORE}`]) {
       const db = sinMigracion(code);
@@ -301,10 +301,10 @@ describe("/api/cron/invoices sin la 0257 o la 0258 aplicadas", () => {
   });
 
   it.each(["42883", "PGRST202"] as const)(
-    "con la 0257 y sin la 0258 (%s), con un RUC en simulación: 200, `sin_migracion`, y ni simula ni pide el turno",
+    "con la 0257 y sin la 0260 (%s), con un RUC en simulación: 200, `sin_migracion`, y ni simula ni pide el turno",
     async (code) => {
       // Como producción el 15-10-2026: la 0257 aplicada, un RUC en simulación,
-      // y sin `invoice_candidates`, que la trae la 0258.
+      // y sin `invoice_candidates`, que la trae la 0260.
       const message =
         code === "42883"
           ? "function public.invoice_candidates(uuid, text, timestamp with time zone, integer, text[], uuid) does not exist"

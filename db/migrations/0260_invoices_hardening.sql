@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0258_invoices_hardening.sql — comprobantes por RUC: los arreglos de la
+-- 0260_invoices_hardening.sql — comprobantes por RUC: los arreglos de la
 -- revisión adversaria, sobre la 0257 que ya corrió (MOM §35, 15-10-2026).
 --
 -- QUÉ PASABA. La 0257 se aplicó en producción el 14-10-2026, antes de la
