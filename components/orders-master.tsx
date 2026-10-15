@@ -104,6 +104,7 @@ import {
   type MasterFilters,
   type MasterSortKey,
 } from "@/lib/order-master-filters";
+import { SALES_CHANNEL_OPTIONS } from "@/lib/sales-channel";
 import { buildMasterQuery } from "@/lib/master-query";
 import { receiveSearchValue, shouldSendSearch } from "@/lib/search-input-echo";
 import { OrderLineItems } from "@/components/order-line-items";
@@ -771,6 +772,15 @@ export function OrdersMasterBoard({
                 selected={filters.swaypAvailability}
                 onChange={(swaypAvailability) => patch({ swaypAvailability })}
               />
+              {/* Por dónde se generó el pedido: lo dicen sus etiquetas de
+                  Shopify (0264). Opciones fijas, como «Swayp». */}
+              <FacetPill
+                label="Canal"
+                allLabel="Todos los canales"
+                options={SALES_CHANNEL_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+                selected={filters.salesChannels}
+                onChange={(salesChannels) => patch({ salesChannels })}
+              />
               {facets.pickup.length > 0 && (
                 <FacetPill
                   label="Agencia"
@@ -983,6 +993,7 @@ function pillFilterCount(f: MasterFilters, withManagement: boolean): number {
     f.districts,
     f.coverages,
     f.swaypAvailability,
+    f.salesChannels,
     f.pickupStates,
     ...(withManagement ? [f.managementDays] : []),
   ].filter((set) => set.size > 0).length;
@@ -1015,6 +1026,7 @@ const CLEARED_PILL_FILTERS: Partial<MasterFilters> = {
   districts: new Set(),
   coverages: new Set(),
   swaypAvailability: new Set(),
+  salesChannels: new Set(),
   pickupStates: new Set(),
   managementDays: new Set(),
   ...CLEARED_MORE_FILTERS,

@@ -36,6 +36,8 @@ export interface MasterFilters {
    * Provincia, sobre pedidos en vez de guías.
    */
   swaypAvailability: Set<string>;
+  /** Canal de venta (lib/sales-channel.ts). Vacío = no filtra. */
+  salesChannels: Set<string>;
   /** YYYY-MM-DD; extremos inclusive, vacío = sin límite. */
   createdFrom: string;
   createdTo: string;
@@ -125,6 +127,7 @@ export function emptyFilters(): MasterFilters {
     districts: new Set(),
     coverages: new Set(),
     swaypAvailability: new Set(),
+    salesChannels: new Set(),
     createdFrom: "",
     createdTo: "",
     dispatchedFrom: "",
@@ -168,6 +171,7 @@ export function hasActiveFilters(f: MasterFilters): boolean {
     f.districts.size > 0 ||
     f.coverages.size > 0 ||
     f.swaypAvailability.size > 0 ||
+    f.salesChannels.size > 0 ||
     Boolean(f.createdFrom || f.createdTo) ||
     Boolean(f.dispatchedFrom || f.dispatchedTo) ||
     Boolean(f.movementFrom || f.movementTo) ||
@@ -268,6 +272,7 @@ export function matchesFilters(
   if (!inSet(f.districts, row.district)) return false;
   if (!inSet(f.coverages, row.coverage)) return false;
   if (!inSet(f.swaypAvailability, row.swayp_availability)) return false;
+  if (!inSet(f.salesChannels, row.sales_channel)) return false;
 
   // El filtro de courier mira el actual Y el último: buscar "los pedidos que
   // tocó Fenix" no debe perder los que ya pasaron a otra guía.
