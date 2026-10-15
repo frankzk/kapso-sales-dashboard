@@ -20,8 +20,11 @@
 --   · la fecha: lo pagado antes de «Emitir desde» pasa solo con `p_backfill`,
 --     una fila real, el RUC en Manual, una persona detrás (`p_created_by`) y
 --     las dos fechas —la que manda el código y la de la base— del 01/10/2026
---     00:00 (hora de Lima) en adelante. Sin «Emitir desde» o sin fecha de
---     pago, `antes_de_inicio`, como siempre;
+--     00:00 (hora de Lima) en adelante, y también el primer dinero: la fecha
+--     más temprana entre la del comprobante (`paid_at`, cuándo se movió la
+--     plata) y la de registro de cada pago validado. Un pago cuyo comprobante
+--     dice 29/09 y que entró a Kapta el 01/10 no pasa. Sin «Emitir desde» o
+--     sin fecha de pago, `antes_de_inicio`, como siempre;
 --   · la fila que nace así lo dice en su base:
 --     `pagado_antes_de_emitir_desde: true`.
 -- El código manda `p_backfill` solo desde el botón, y solo después de que la
@@ -108,6 +111,7 @@ declare
   v_prepaid   boolean;
   v_web       boolean;
   v_backfill  boolean := false;
+  v_first     timestamptz;
 begin
   select org_id into v_org from stores where id = p_store and status = 'active';
   if v_org is null then
@@ -261,11 +265,25 @@ begin
   -- la suya. El barrido nunca manda `p_backfill`, y en Real no pasa: ahí no hay
   -- botón. Con `p_backfill` y un pedido pagado desde «Emitir desde», nada
   -- cambia: no entra aquí.
+  --
+  -- El piso también para el primer dinero (`v_first`): la fecha más temprana
+  -- entre la del comprobante (`paid_at`, cuándo se movió la plata; puede
+  -- faltar) y la de registro de cada pago validado. Un pago cuyo comprobante
+  -- dice 29/09 y que entró a Kapta el 01/10 movió la plata cuando las boletas
+  -- se emitían a mano: no pasa. Sin pagos validados (el prepago web), la fecha
+  -- del pedido.
   if p_paid_at < v_iss.emit_from or v_paid < v_iss.emit_from then
+    select min(least(coalesce(paid_at, registered_at), registered_at)) into v_first
+      from order_payments
+     where order_id = p_order and validation_status = 'validado';
+    if v_live = 0 then
+      v_first := v_paid;
+    end if;
     if coalesce(p_backfill, false)
        and v_mode = 'real' and v_iss.mode = 'manual' and p_created_by is not null
        and p_paid_at >= timestamptz '2026-10-01 00:00:00-05'
-       and v_paid >= timestamptz '2026-10-01 00:00:00-05' then
+       and v_paid >= timestamptz '2026-10-01 00:00:00-05'
+       and v_first >= timestamptz '2026-10-01 00:00:00-05' then
       v_backfill := true;
     else
       return jsonb_build_object('reason', 'antes_de_inicio');

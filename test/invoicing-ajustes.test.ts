@@ -155,7 +155,13 @@ vi.mock("@/lib/db", () => {
 });
 
 import { encrypt, decrypt } from "@/lib/crypto";
-import { isValidRuc, INVOICE_DAILY_LIMIT_MAX, INVOICE_DAILY_LIMIT_MIN, INVOICE_REASON_LABEL } from "@/lib/invoicing/rules";
+import {
+  isValidRuc,
+  INVOICE_BACKFILL_FROM,
+  INVOICE_DAILY_LIMIT_MAX,
+  INVOICE_DAILY_LIMIT_MIN,
+  INVOICE_REASON_LABEL,
+} from "@/lib/invoicing/rules";
 import {
   saveInvoiceIssuer,
   setAccountInvoiceIssuer,
@@ -183,6 +189,13 @@ const NOW = "2026-10-14T15:00:00.000Z"; // 10:00 en Lima
 const BOTH = ["stores.manage", "invoices.manage"];
 
 const SIN_PERMISO = "Sin permiso: «Boletas y facturas» lo configura quien tiene ese permiso (solo lo da el owner).";
+/**
+ * Lo que dice Ajustes cuando un cambio de modo mueve «Emitir desde» (MOM
+ * §35.4): el barrido no va hacia atrás; lo de antes, desde el 01/10/2026, solo
+ * con el botón (owner, 15-10-2026). Ya no «ningún RUC emite hacia atrás».
+ */
+const MODO_MOVIO_FECHA =
+  "Al cambiar de modo, «Emitir desde» quedó en ahora: el barrido no emite nada pagado antes. En Manual, lo pagado desde el 01/10/2026 solo sale con «Emitir esta boleta», después de revisar SimpleFact.";
 
 function issuerRow(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -504,7 +517,10 @@ describe("saveInvoiceIssuer: «Emitir desde» nunca queda atrás", () => {
     st.issuer = issuerRow({ mode: "apagado" });
     const r = await saveInvoiceIssuer("store", {}, issuerForm({ mode: "simulacion", emit_from: "2026-10-10T10:00" }));
     expect(lastWrite()!.payload!.emit_from).toBe(NOW);
-    expect(r.notice).toContain("Al cambiar de modo, «Emitir desde» quedó en ahora");
+    // El aviso entero: que el barrido no va hacia atrás, y que lo de antes solo
+    // sale con el botón. «Ningún RUC emite hacia atrás» ya no es cierto.
+    expect(r.notice!.split("\n")).toContain(MODO_MOVIO_FECHA);
+    expect(r.notice).not.toContain("ningún RUC emite hacia atrás");
   });
 
   it("al cambiar de modo sin fecha, también queda en ahora", async () => {
@@ -1258,8 +1274,9 @@ describe("la sección, pintada: Manual", () => {
     // no lo de la simulada: si el pedido cambió, la confirmación lo dice.
     expect(view).toContain("emit={offer}");
     // Con la casilla «Revisé en SimpleFact…» de un pedido pagado antes de
-    // «Emitir desde», como el drawer.
-    expect(view).toContain("onEmit={(simplefactChecked) => onEmit(r, offer, simplefactChecked)}");
+    // «Emitir desde», como el drawer, y con la oferta que se vio al abrir la
+    // confirmación (`shown`).
+    expect(view).toContain("onEmit={(shown, simplefactChecked) => onEmit(r, shown, simplefactChecked)}");
     expect(emit).toContain(
       "res = await emitInvoiceAction(orderId, { issuerId: offer.issuerId, total: offer.total, simplefactChecked });",
     );
@@ -1289,6 +1306,45 @@ describe("la sección, pintada: Manual", () => {
     const list = SECTION.slice(SECTION.indexOf("function RecentList("), SECTION.indexOf("function placeOutcomes("));
     expect(list).toContain("async function emit(row: InvoiceRecentView, offer: InvoicePanelEmitNow, simplefactChecked: boolean) {");
     expect(list).toContain("total: offer.total, simplefactChecked });");
+    // Y lo que viaja es la oferta que se vio en la confirmación (`shown`), no la
+    // de la fila al pulsar: si la fila cambió, el servidor dice `pedido_cambio`.
+    expect(SECTION).toContain("onEmit={(shown, simplefactChecked) => onEmit(r, shown, simplefactChecked)}");
+    expect(SECTION).not.toContain("onEmit(r, offer, simplefactChecked)");
+  });
+
+  // Owner, 15-10-2026: con la excepción del botón, «nada pagado antes sale» ya
+  // no es cierto. Ajustes dice lo que de verdad pasa, con las mismas palabras
+  // que el MOM (§35.4): el barrido no va hacia atrás; una persona, sí.
+  it("Ajustes no promete de más: el barrido no va hacia atrás, y lo de antes solo sale con el botón", () => {
+    const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8");
+    const s4 = mom.slice(mom.indexOf("### 35.4 Topes y candados"), mom.indexOf("### 35.5 ")).replace(/\s+/g, " ");
+    const plano = (t: string) => t.replace(/\s+/g, " ");
+    // El aviso del cambio de modo.
+    expect(ACTIONS).toContain(`const EMIT_FROM_MOVED_NOTICE =\n  "${MODO_MOVIO_FECHA}";`);
+    expect(ACTIONS).toContain("if (!notes.length) notes.push(EMIT_FROM_MOVED_NOTICE);");
+    expect(s4).toContain(`al mover la fecha por un cambio de modo, «${MODO_MOVIO_FECHA}»`);
+    // La ayuda de «Emitir desde».
+    const ayuda =
+      "El barrido solo toma pedidos que quedaron pagados desde aquí (en Manual, «Emitir esta boleta» también puede emitir lo pagado desde el 01/10/2026, después de revisar SimpleFact)";
+    expect(plano(SECTION)).toContain(`Hora de Lima. ${ayuda}: una fecha en el pasado se guarda como ahora`);
+    expect(s4).toContain(`junto a «Emitir desde», «${ayuda}»`);
+    // Las cuentas de cobro.
+    const cuentas = "Asignar un RUC no hace que el barrido emita nada pagado antes de su «Emitir desde».";
+    expect(plano(SECTION)).toContain(cuentas);
+    expect(s4).toContain(`en las cuentas de cobro, «${cuentas}»`);
+    expect(ACTIONS).toContain(" * emite. Asignar no hace que el barrido emita nada pagado antes de «Emitir\n * desde» del RUC");
+    // Lo de antes no vuelve.
+    for (const viejo of [
+      "ningún RUC emite hacia atrás",
+      "Solo entran pedidos que quedaron pagados desde aquí",
+      "Asignar un RUC no emite nada pagado antes",
+      "Asignar no emite nada pagado antes",
+    ]) {
+      expect(plano(ACTIONS), viejo).not.toContain(viejo);
+      expect(plano(SECTION), viejo).not.toContain(viejo);
+    }
+    // El piso del texto es el de las reglas.
+    expect(INVOICE_BACKFILL_FROM).toBe("2026-10-01T05:00:00.000Z");
   });
 
   // FIX: la página marcaba «Emitir» con solo dos cosas —el RUC de la simulada en

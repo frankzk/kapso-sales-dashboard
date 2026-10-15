@@ -327,8 +327,10 @@ function fakeDb(initialNow: Date) {
    * cuenta las filas de ese modo), y `created_by` es `p_created_by`.
    *
    * La 0266: con `p_backfill`, una fila real de un RUC en «Manual» pedida por
-   * alguien deja pasar lo pagado antes de «Emitir desde», si las dos fechas son
-   * desde el 01/10/2026 00:00 de Lima; la base del comprobante lo anota.
+   * alguien deja pasar lo pagado antes de «Emitir desde», si las dos fechas y
+   * el primer dinero (la más temprana entre `paid_at` y `registered_at` de los
+   * pagos validados; sin ellos, la fecha del pedido) son desde el 01/10/2026
+   * 00:00 de Lima; la base del comprobante lo anota.
    */
   const claim = (a: Record<string, unknown>): unknown => {
     const now = clock.now;
@@ -363,13 +365,26 @@ function fakeDb(initialNow: Date) {
     if (Math.abs(Number(order.total_amount) - total) >= 0.005) return { reason: "total_distinto" };
     if (!iss.emit_from || !a.p_paid_at || !paid) return { reason: "antes_de_inicio" };
     const before = cmp(a.p_paid_at, iss.emit_from) < 0 || cmp(paid, iss.emit_from) < 0;
+    // El primer dinero (0266): `least(coalesce(paid_at, registered_at), registered_at)`
+    // de cada pago validado, el menor; sin pagos validados, la fecha del pedido.
+    const first: string | null = !live.length
+      ? paid
+      : live
+          .map((p) => {
+            const reg = p.registered_at as string;
+            const rec = (p.paid_at ?? null) as string | null;
+            return rec !== null && cmp(rec, reg) < 0 ? rec : reg;
+          })
+          .reduce((x, y) => (cmp(y, x) < 0 ? y : x));
     const backfill =
       a.p_backfill === true &&
       rowMode === "real" &&
       iss.mode === "manual" &&
       !!a.p_created_by &&
       cmp(a.p_paid_at, PISO_0266) >= 0 &&
-      cmp(paid, PISO_0266) >= 0;
+      cmp(paid, PISO_0266) >= 0 &&
+      first !== null &&
+      cmp(first, PISO_0266) >= 0;
     if (before && !backfill) return { reason: "antes_de_inicio" };
     if (!a.p_request || typeof a.p_request !== "object") return { reason: "sin_boleta" };
     const mine = t("order_invoices").filter((r) => r.order_id === a.p_order);
@@ -542,6 +557,8 @@ interface OrderOpts {
   validatedAt?: string;
   /** Cuándo entró el pago a Kapta: lo que decide «Emitir desde» (§35.3, condición 8). */
   registeredAt?: string;
+  /** La fecha del comprobante (`paid_at`): solo cuenta para el piso de lo pagado antes de «Emitir desde». */
+  receiptAt?: string | null;
   /** El pago no dice a qué cuenta entró. */
   sinCuenta?: boolean;
   inMaster?: boolean;
@@ -589,6 +606,7 @@ function addOrder(db: Db, n: number, o: OrderOpts = {}): string {
       validation_status: "validado",
       validated_at: o.validatedAt ?? PAGADO,
       registered_at: o.registeredAt ?? PAGADO,
+      paid_at: o.receiptAt ?? null,
       vision: {},
     });
     if (!o.sinCuenta) db.t("flowcl_payment_links").push({ id: `link-${n}`, order_id: id, payment_id: `pay-${n}` });
@@ -747,6 +765,7 @@ describe("loadInvoiceOrderFacts: los hechos de cada pedido (§35.2, §35.3)", ()
         validation_status: "validado",
         validated_at: "2026-10-14T16:00:00.000Z",
         registered_at: "2026-10-14T15:30:00.000Z",
+        paid_at: "2026-10-14T15:10:00.000Z",
         vision: { extracted: { recipient_name: "Grupo GF S.A.C." } },
       },
       {
@@ -810,6 +829,8 @@ describe("loadInvoiceOrderFacts: los hechos de cada pedido (§35.2, §35.3)", ()
         amount: 150,
         validationStatus: "validado",
         registeredAt: PAGADO,
+        // Sin fecha de comprobante en la base: null, no se inventa.
+        paidAt: null,
         validatedAt: PAGADO,
         vision: {},
         flowLinked: true,
@@ -821,6 +842,8 @@ describe("loadInvoiceOrderFacts: los hechos de cada pedido (§35.2, §35.3)", ()
         amount: 30.5,
         validationStatus: "validado",
         registeredAt: "2026-10-14T15:30:00.000Z",
+        // La fecha del comprobante (`paid_at`), tal cual: el piso de la 0266.
+        paidAt: "2026-10-14T15:10:00.000Z",
         validatedAt: "2026-10-14T16:00:00.000Z",
         vision: { extracted: { recipient_name: "Grupo GF S.A.C." } },
         flowLinked: false,
@@ -832,6 +855,7 @@ describe("loadInvoiceOrderFacts: los hechos de cada pedido (§35.2, §35.3)", ()
         amount: 10,
         validationStatus: "rechazado",
         registeredAt: "2026-10-14T12:00:00.000Z",
+        paidAt: null,
         validatedAt: null,
         vision: {},
         flowLinked: false,
@@ -3138,6 +3162,7 @@ describe("loadInvoiceEmitNowOffers: el «Emitir» de Ajustes sale solo cuando el
     // Pagado desde «Emitir desde»: no es de antes, y las fechas van en ISO.
     beforeStart: false,
     paidAt: PAGADO,
+    firstPaidAt: PAGADO,
     emitFrom: DESDE,
   };
   /** La simulada que el barrido en «Manual» escribió para el pedido: la fila de Ajustes que lleva «Emitir». */
@@ -3479,6 +3504,7 @@ describe("emitInvoiceNow: lo pagado antes de «Emitir desde» sale con el botón
       total: 150,
       beforeStart: true,
       paidAt: ANTES,
+      firstPaidAt: ANTES,
       emitFrom: DESDE,
     };
     expect((await loadInvoiceEmitNowOffers(db.admin, ["ord-1"])).get("ord-1")).toEqual(oferta);
@@ -3493,5 +3519,58 @@ describe("emitInvoiceNow: lo pagado antes de «Emitir desde» sale con el botón
     issuerRow(db).mode = "manual";
     db.t("order_payments")[0]!.registered_at = "2026-09-30T12:00:00.000Z";
     expect((await loadInvoiceEmitNowOffers(db.admin, ["ord-1"])).size).toBe(0);
+    // Ni cuando el comprobante dice que la plata se movió antes del piso,
+    // aunque se registrara después.
+    db.t("order_payments")[0]!.registered_at = ANTES;
+    db.t("order_payments")[0]!.paid_at = "2026-09-29T15:00:00.000Z";
+    expect((await loadInvoiceEmitNowOffers(db.admin, ["ord-1"])).size).toBe(0);
+    // Con el comprobante del 08/10, sí, y la oferta dice desde cuándo buscar.
+    db.t("order_payments")[0]!.paid_at = "2026-10-08T23:05:00.000Z";
+    expect((await loadInvoiceEmitNowOffers(db.admin, ["ord-1"])).get("ord-1")).toEqual({
+      ...oferta,
+      firstPaidAt: "2026-10-08T23:05:00.000Z",
+    });
+  });
+
+  it("el piso cuenta desde el primer dinero: un comprobante del 29/09 registrado el 10/10 no sale, ni con la casilla", async () => {
+    // Lo que dice el comprobante (`paid_at`) es anterior al 01/10 de Lima: la
+    // plata se movió cuando las boletas se emitían a mano.
+    for (const receiptAt of ["2026-09-29T15:00:00.000Z", "2026-10-01T04:59:59.999Z"]) {
+      const db = world({ mode: "manual" });
+      addOrder(db, 1, { registeredAt: ANTES, receiptAt });
+      const deps = makeDeps();
+      expect(await emit(db, deps), receiptAt).toEqual({ ok: false, reason: "antes_de_inicio" });
+      nadaDeNada(db, deps);
+    }
+    // Sin fecha de comprobante cuenta el registro; un comprobante posterior al
+    // registro no corre la fecha: cuenta la más temprana de las dos.
+    for (const receiptAt of [null, "2026-10-12T15:00:00.000Z", "2026-10-01T05:00:00.000Z"]) {
+      const db = world({ mode: "manual" });
+      addOrder(db, 1, { registeredAt: "2026-10-05T15:00:00.000Z", receiptAt });
+      const deps = makeDeps();
+      expect(await emit(db, deps), String(receiptAt)).toMatchObject({ ok: true, status: "emitida" });
+      expect(claims(db)[0]!.args, String(receiptAt)).toMatchObject({ p_backfill: true });
+    }
+    // Un pedido pagado desde «Emitir desde» no mira el comprobante: la
+    // condición 8 no cambia.
+    const despues = world({ mode: "manual" });
+    addOrder(despues, 1, { registeredAt: PAGADO, receiptAt: "2026-09-29T15:00:00.000Z" });
+    expect(await emit(despues, makeDeps())).toMatchObject({ ok: true, status: "emitida" });
+    expect("p_backfill" in claims(despues)[0]!.args).toBe(false);
+  });
+
+  it("el turno también mide el primer dinero: si el código se equivocara, la base no da la fila", async () => {
+    // El código ve un pago del 10/10 sin comprobante; la base, al pedir el
+    // turno, ya tiene la fecha del comprobante del 29/09 (se leyó tarde).
+    const db = deAntes();
+    const deps = makeDeps();
+    deps.fetchOrder.mockImplementationOnce(async (input) => {
+      db.t("order_payments")[0]!.paid_at = "2026-09-29T15:00:00.000Z";
+      return okRead(input.shopifyOrderId);
+    });
+    expect(await emit(db, deps)).toMatchObject({ ok: false, reason: "antes_de_inicio" });
+    expect(claims(db)).toHaveLength(1);
+    expect(db.t("order_invoices")).toEqual([]);
+    expect(deps.createSale).not.toHaveBeenCalled();
   });
 });

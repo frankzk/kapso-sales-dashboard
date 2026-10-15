@@ -63,9 +63,11 @@
 --      sobre ella cambia solo el turno, y correrla dos veces es correrla una;
 --   l) la 0266: «Emitir esta boleta» emite lo pagado antes de «Emitir desde»
 --      solo con `p_backfill`, una fila real pedida por una persona, el RUC en
---      Manual y las dos fechas desde el 01/10/2026 00:00 de Lima, y la fila lo
---      dice en su base; el barrido, una simulada, el RUC en Real o una fecha
---      anterior siguen en `antes_de_inicio`. Sobre la 0262 cambia solo el
+--      Manual y las dos fechas desde el 01/10/2026 00:00 de Lima —y el primer
+--      dinero: la fecha más temprana entre el comprobante (`paid_at`) y el
+--      registro de cada pago validado—, y la fila lo dice en su base; el
+--      barrido, una simulada, el RUC en Real o una fecha anterior siguen en
+--      `antes_de_inicio`. Sobre la 0262 cambia solo el
 --      turno —el de once se va, nace el de doce con el mismo cuerpo salvo la
 --      fecha y la base de la fila—, solo para `service_role`; se detiene sin
 --      la 0262 delante, y correrla dos veces es correrla una.
@@ -2630,7 +2632,8 @@ begin
     raise exception '0266 quitó del turno de la 0262: %', v_quitadas;
   end if;
   -- Lo que se pone, sin contar comentarios ni líneas en blanco: la excepción de
-  -- la fecha y la marca en la base de la fila. Nada más.
+  -- la fecha (con el primer dinero, `v_first`) y la marca en la base de la
+  -- fila. Nada más.
   select coalesce(array_agg(l order by l collate "C"), '{}') into v_puestas from (
     select l from unnest(string_to_array((select prosrc from pg_proc where oid = to_regprocedure(c_claim12)), E'\n')) as l
     except all
@@ -2638,12 +2641,20 @@ begin
   ) q where btrim(l) <> '' and btrim(l) not like '--%';
   if v_puestas is distinct from (select array_agg(l order by l collate "C") from unnest(array[
        '  v_backfill  boolean := false;',
+       '  v_first     timestamptz;',
        '  if v_iss.emit_from is null or p_paid_at is null or v_paid is null then',
        '  if p_paid_at < v_iss.emit_from or v_paid < v_iss.emit_from then',
+       '    select min(least(coalesce(paid_at, registered_at), registered_at)) into v_first',
+       '      from order_payments',
+       '     where order_id = p_order and validation_status = ''validado'';',
+       '    if v_live = 0 then',
+       '      v_first := v_paid;',
+       '    end if;',
        '    if coalesce(p_backfill, false)',
        '       and v_mode = ''real'' and v_iss.mode = ''manual'' and p_created_by is not null',
        '       and p_paid_at >= timestamptz ''2026-10-01 00:00:00-05''',
-       '       and v_paid >= timestamptz ''2026-10-01 00:00:00-05'' then',
+       '       and v_paid >= timestamptz ''2026-10-01 00:00:00-05''',
+       '       and v_first >= timestamptz ''2026-10-01 00:00:00-05'' then',
        '      v_backfill := true;',
        '    else',
        '      return jsonb_build_object(''reason'', ''antes_de_inicio'');',
@@ -2684,7 +2695,7 @@ begin
   end if;
 end $$;
 
-\echo '  0266: con la 0261 corrida otra vez quedan dos turnos y la llamada por nombre falla; la 0266 lo deja en uno, el mismo'
+\echo '  0266: con la 0261 corrida otra vez quedan dos turnos y la llamada por nombre falla; la 0262 otra vez no lo arregla; la 0266 lo deja en uno, el mismo'
 \ir ../../db/migrations/0261_invoices_manual.sql
 do $$
 begin
@@ -2692,6 +2703,21 @@ begin
     raise exception 'la 0261 sobre la 0266 no dejó los dos turnos';
   end if;
   -- Ambigua: no emite nada, falla.
+  perform pg_temp.debe_fallar(
+    $q$select invoice_claim(p_id => gen_random_uuid(), p_issuer => gen_random_uuid(), p_store => gen_random_uuid(),
+                            p_order => gen_random_uuid(), p_total => 100, p_paid_at => now(), p_order_name => '#X',
+                            p_basis => '{}', p_request => '{}', p_mode => 'real', p_created_by => null::uuid)$q$,
+    '42725');
+end $$;
+-- Lo que decía el arreglo de antes («volver a correr la 0262 después de la
+-- 0261») ya no arregla nada: la 0262 pasa su guarda (está el de once) y deja
+-- los dos turnos, y la llamada sigue ambigua. Lo que arregla es la 0266.
+\ir ../../db/migrations/0262_invoices_claim_coverage.sql
+do $$
+begin
+  if (select count(*) from pg_proc where pronamespace = 'public'::regnamespace and proname = 'invoice_claim') <> 2 then
+    raise exception 'la 0262 tras la 0261 sobre la 0266 no dejó los dos turnos';
+  end if;
   perform pg_temp.debe_fallar(
     $q$select invoice_claim(p_id => gen_random_uuid(), p_issuer => gen_random_uuid(), p_store => gen_random_uuid(),
                             p_order => gen_random_uuid(), p_total => 100, p_paid_at => now(), p_order_name => '#X',
@@ -2770,7 +2796,7 @@ begin
   end if;
 end $$;
 
-\echo '  0266: «Emitir esta boleta» emite lo pagado antes de «Emitir desde» solo con p_backfill, una real pedida por una persona, el RUC en Manual y las dos fechas desde el 01/10/2026 00:00 de Lima; la fila lo dice en su base'
+\echo '  0266: «Emitir esta boleta» emite lo pagado antes de «Emitir desde» solo con p_backfill, una real pedida por una persona, el RUC en Manual y las dos fechas y el primer dinero (comprobante o registro, el más temprano) desde el 01/10/2026 00:00 de Lima; la fila lo dice en su base'
 -- Una organización aparte, con su RUC en Manual (token, prueba del mismo RUC) y
 -- «Emitir desde» el 12/10/2026 00:00 de Lima, puesto después del cambio de modo
 -- (sin cambio de modo, la fecha no se mueve). Fechas fijas: la del 01/10/2026
@@ -2791,8 +2817,10 @@ create function pg_temp.desde_r() returns timestamptz language sql immutable as 
 $$;
 
 -- Un pedido de R de S/ 100, cobrado a mano, con su pago validado registrado
--- cuando se dice. Devuelve la base del comprobante, con ese pago.
-create function pg_temp.pedido_r(n integer, p_pagado timestamptz) returns jsonb language plpgsql as $$
+-- cuando se dice y, si se da, la fecha de su comprobante (`paid_at`, cuándo se
+-- movió la plata). Devuelve la base del comprobante, con ese pago.
+create function pg_temp.pedido_r(n integer, p_pagado timestamptz, p_comprobante timestamptz default null)
+returns jsonb language plpgsql as $$
 declare
   v_pago uuid;
 begin
@@ -2800,8 +2828,8 @@ begin
                       financial_status, payment_gateway)
   values (pg_temp.pedido(n), '25700000-0000-0000-0000-0000000000b7', 'inv-r' || n, '#INVR' || n, p_pagado, 100.00, 'PEN',
           null, 0, 'pending', 'manual');
-  insert into order_payments (store_id, order_id, kind, amount, validation_status, registered_at, validated_at)
-  values ('25700000-0000-0000-0000-0000000000b7', pg_temp.pedido(n), 'total', 100, 'validado', p_pagado, now())
+  insert into order_payments (store_id, order_id, kind, amount, validation_status, registered_at, validated_at, paid_at)
+  values ('25700000-0000-0000-0000-0000000000b7', pg_temp.pedido(n), 'total', 100, 'validado', p_pagado, now(), p_comprobante)
   returning id into v_pago;
   return pg_temp.base(array[v_pago]);
 end $$;
@@ -2979,6 +3007,53 @@ begin
     raise exception 'pagado después, sin p_backfill, marcó la base';
   end if;
 
+  -- El primer dinero: el piso vale también para la fecha más temprana entre la
+  -- del comprobante (`paid_at`, cuándo se movió la plata) y la de registro de
+  -- cada pago validado. #30: registrado el 05/10, pero el comprobante dice
+  -- 29/09: no, ni con todo lo demás. #32: el comprobante, un microsegundo antes
+  -- del 01/10 de Lima: no.
+  r := pg_temp.turno_r(pg_temp.pedido(30), pg_temp.pedido_r(30, c_entre, timestamptz '2026-09-29 10:00:00-05'), c_entre);
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception 'comprobante del 29/09, registrado el 05/10: %', r; end if;
+  r := pg_temp.turno_r(pg_temp.pedido(32), pg_temp.pedido_r(32, c_entre, timestamptz '2026-10-01 04:59:59.999999+00'), c_entre);
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception 'comprobante del 30/09 de Lima: %', r; end if;
+  -- #31: el comprobante es posterior al registro: cuenta el registro (la más
+  -- temprana), y entra. #33: el comprobante justo el 01/10 00:00 de Lima: entra.
+  r := pg_temp.turno_r(pg_temp.pedido(31), pg_temp.pedido_r(31, c_entre, c_despues), c_entre);
+  if not r ? 'id' then raise exception 'comprobante posterior al registro: %', r; end if;
+  r := pg_temp.turno_r(pg_temp.pedido(33), pg_temp.pedido_r(33, c_entre, c_inicio), c_entre);
+  if not r ? 'id' then raise exception 'comprobante del 01/10 a las 00:00 de Lima: %', r; end if;
+  -- #34: dos pagos que cubren el total; el adelanto entró el 02/10, pero su
+  -- comprobante dice 25/09. El primer dinero es de TODOS los pagos validados.
+  insert into orders (id, store_id, shopify_order_id, name, created_at, total_amount, currency, cancelled_at, total_refunded,
+                      financial_status, payment_gateway)
+  values (pg_temp.pedido(34), '25700000-0000-0000-0000-0000000000b7', 'inv-r34', '#INVR34', c_entre, 100.00, 'PEN',
+          null, 0, 'pending', 'manual');
+  insert into order_payments (store_id, order_id, kind, amount, validation_status, registered_at, validated_at, paid_at) values
+    ('25700000-0000-0000-0000-0000000000b7', pg_temp.pedido(34), 'adelanto', 50, 'validado',
+     timestamptz '2026-10-02 10:00:00-05', now(), timestamptz '2026-09-25 10:00:00-05'),
+    ('25700000-0000-0000-0000-0000000000b7', pg_temp.pedido(34), 'diferencia', 50, 'validado', c_entre, now(), null);
+  r := pg_temp.turno_r(pg_temp.pedido(34),
+                       pg_temp.base(array(select id from order_payments where order_id = pg_temp.pedido(34) order by kind)), c_entre);
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception 'adelanto con comprobante del 25/09: %', r; end if;
+  -- #35: un pago rechazado con un comprobante viejo no cuenta: no es dinero
+  -- que recibió la empresa.
+  v_b := pg_temp.pedido_r(35, c_entre);
+  insert into order_payments (store_id, order_id, kind, amount, validation_status, registered_at, paid_at)
+  values ('25700000-0000-0000-0000-0000000000b7', pg_temp.pedido(35), 'adelanto', 30, 'rechazado',
+          timestamptz '2026-09-20 10:00:00-05', timestamptz '2026-09-20 10:00:00-05');
+  r := pg_temp.turno_r(pg_temp.pedido(35), v_b, c_entre);
+  if not r ? 'id' then raise exception 'un rechazado con comprobante viejo frenó: %', r; end if;
+  -- #36: pagado desde «Emitir desde» (condición 8, sin excepción): el
+  -- comprobante no se mira, como siempre, y la base va sin marca.
+  v_b := pg_temp.pedido_r(36, c_despues, timestamptz '2026-09-29 10:00:00-05');
+  r := pg_temp.turno_r(pg_temp.pedido(36), v_b, c_despues);
+  if not r ? 'id' or (select basis from order_invoices where id = (r->>'id')::uuid) is distinct from v_b then
+    raise exception 'pagado desde «Emitir desde», con un comprobante viejo: %', r;
+  end if;
+  if exists (select 1 from order_invoices where order_id in (pg_temp.pedido(30), pg_temp.pedido(32), pg_temp.pedido(34))) then
+    raise exception 'un rechazo por el primer dinero dejó fila';
+  end if;
+
   -- #99 sin «Emitir desde»: no, ni con `p_backfill`. Un RUC en Manual sin fecha
   -- no puede existir (lo prueba la sección j): se levantan el check y el
   -- trigger en una subtransacción que se deshace.
@@ -3039,10 +3114,12 @@ end $$;
 reset role;
 
 -- Lo que quedó en R: las reales de antes de «Emitir desde» con su marca, las
--- de después sin ella; ningún rechazo dejó fila (92 a 95 no tienen ninguna).
+-- de después sin ella; ningún rechazo dejó fila (30, 32, 34 y 92 a 95 no
+-- tienen ninguna).
 do $$
 begin
   if pg_temp.comprobantes_r() is distinct from
+       '31:real:emitiendo:c:atrás, 33:real:emitiendo:c:atrás, 35:real:emitiendo:c:atrás, 36:real:emitiendo:c:-, '
        '90:real:emitiendo:c:atrás, 91:real:emitiendo:c:atrás, 96:real:emitiendo:c:atrás, '
        '97:real:emitiendo:c:-, 98:real:emitiendo:c:-, 98:simulacion:simulada:-:-, 99:real:emitiendo:c:atrás' then
     raise exception 'comprobantes de R: %', pg_temp.comprobantes_r();

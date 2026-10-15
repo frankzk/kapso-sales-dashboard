@@ -102,6 +102,14 @@ const SQL_0262 = read("db/migrations/0262_invoices_claim_coverage.sql");
 const SQL_0262_FLAT = flat(SQL_0262);
 const SQL_0266 = read("db/migrations/0266_invoices_backfill.sql");
 const SQL_0266_FLAT = flat(SQL_0266);
+/**
+ * El primer dinero de la 0266 (revisión 15-10-2026): la fecha más temprana
+ * entre el comprobante (`paid_at`) y el registro de los pagos validados; sin
+ * ellos, la fecha del pedido. Va dentro de lo pagado antes de «Emitir desde»,
+ * antes de la excepción.
+ */
+const PRIMER_DINERO_SQL =
+  "select min(least(coalesce(paid_at, registered_at), registered_at)) into v_first from order_payments where order_id = p_order and validation_status = 'validado'; if v_live = 0 then v_first := v_paid; end if;";
 /** Lo que la 0260 vuelve a escribir (o crea), y nada más. */
 const FUNCIONES_0260 = ["invoice_issuers_touch", "order_invoices_guard", "invoice_claim", "invoice_candidates"];
 /** Lo que la 0261 vuelve a escribir de la 0260, y nada más. */
@@ -454,7 +462,7 @@ describe("MOM §35: la sección existe y dice su estado", () => {
         "lo pagado antes de «Emitir desde» con «Emitir esta boleta» (owner 15-10-2026), sobre la 0262: solo `invoice_claim`, que pasa a doce argumentos con `p_backfill` (falso por defecto) y borra la firma de once.",
       );
       expect(r0266).toContain(
-        "El cuerpo es el de la 0262 salvo dos cosas: con `p_backfill`, una fila real, el RUC en Manual y quién la pide (`p_created_by`), da el turno a lo pagado antes de «Emitir desde» si las dos fechas son del 01/10/2026 00:00 (hora de Lima) en adelante; y esa fila lleva en su base `pagado_antes_de_emitir_desde`. Se detiene con el turno de nueve argumentos, o sin el de once ni el de doce. No toca filas.",
+        "El cuerpo es el de la 0262 salvo dos cosas: con `p_backfill`, una fila real, el RUC en Manual y quién la pide (`p_created_by`), da el turno a lo pagado antes de «Emitir desde» si las dos fechas son del 01/10/2026 00:00 (hora de Lima) en adelante, y también el primer dinero (la fecha más temprana entre `paid_at` y `registered_at` de sus pagos validados); y esa fila lleva en su base `pagado_antes_de_emitir_desde`. Se detiene con el turno de nueve argumentos, o sin el de once ni el de doce. No toca filas.",
       );
       // Solo el turno, y el vigente es el suyo.
       const creadas = [...SQL_0266.matchAll(/^create or replace function (\w+)\(/gm)].map((m) => m[1]);
@@ -470,11 +478,11 @@ describe("MOM §35: la sección existe y dice su estado", () => {
           "p_created_by uuid default null ) returns jsonb",
           "p_created_by uuid default null, p_backfill boolean default false ) returns jsonb",
         ],
-        ["v_web boolean; begin", "v_web boolean; v_backfill boolean := false; begin"],
+        ["v_web boolean; begin", "v_web boolean; v_backfill boolean := false; v_first timestamptz; begin"],
         [
           "if v_iss.emit_from is null or p_paid_at is null or p_paid_at < v_iss.emit_from or v_paid is null or v_paid < v_iss.emit_from then return jsonb_build_object('reason', 'antes_de_inicio'); end if;",
           "if v_iss.emit_from is null or p_paid_at is null or v_paid is null then return jsonb_build_object('reason', 'antes_de_inicio'); end if; " +
-            "if p_paid_at < v_iss.emit_from or v_paid < v_iss.emit_from then if coalesce(p_backfill, false) and v_mode = 'real' and v_iss.mode = 'manual' and p_created_by is not null and p_paid_at >= timestamptz '2026-10-01 00:00:00-05' and v_paid >= timestamptz '2026-10-01 00:00:00-05' then v_backfill := true; else return jsonb_build_object('reason', 'antes_de_inicio'); end if; end if;",
+            `if p_paid_at < v_iss.emit_from or v_paid < v_iss.emit_from then ${PRIMER_DINERO_SQL} if coalesce(p_backfill, false) and v_mode = 'real' and v_iss.mode = 'manual' and p_created_by is not null and p_paid_at >= timestamptz '2026-10-01 00:00:00-05' and v_paid >= timestamptz '2026-10-01 00:00:00-05' and v_first >= timestamptz '2026-10-01 00:00:00-05' then v_backfill := true; else return jsonb_build_object('reason', 'antes_de_inicio'); end if; end if;`,
         ],
         [
           "greatest(p_paid_at, v_paid), coalesce(p_basis, '{}'::jsonb), p_request,",
@@ -640,6 +648,8 @@ describe("MOM §35.2 y §35.3: los motivos", () => {
               // argumento del turno y la marca de la fila, no motivos.
               "p_backfill",
               "pagado_antes_de_emitir_desde",
+              // El primer dinero de la excepción: columnas de los pagos.
+              "paid_at",
             ].includes(c),
         ),
       ),
@@ -789,7 +799,12 @@ describe("MOM §35.2 y §35.3: los motivos", () => {
     // (0266): `p_backfill`, una fila real, el RUC en Manual, quién la pide y
     // las dos fechas desde el 01/10/2026 00:00 de Lima.
     expect(fn).toContain(
-      "if p_paid_at < v_iss.emit_from or v_paid < v_iss.emit_from then if coalesce(p_backfill, false) and v_mode = 'real' and v_iss.mode = 'manual' and p_created_by is not null and p_paid_at >= timestamptz '2026-10-01 00:00:00-05' and v_paid >= timestamptz '2026-10-01 00:00:00-05' then v_backfill := true; else return jsonb_build_object('reason', 'antes_de_inicio'); end if; end if;",
+      `if p_paid_at < v_iss.emit_from or v_paid < v_iss.emit_from then ${PRIMER_DINERO_SQL} if coalesce(p_backfill, false) and v_mode = 'real' and v_iss.mode = 'manual' and p_created_by is not null and p_paid_at >= timestamptz '2026-10-01 00:00:00-05' and v_paid >= timestamptz '2026-10-01 00:00:00-05' and v_first >= timestamptz '2026-10-01 00:00:00-05' then v_backfill := true; else return jsonb_build_object('reason', 'antes_de_inicio'); end if; end if;`,
+    );
+    // El primer dinero, también de la base (0266): la fecha más temprana entre
+    // el comprobante y el registro de los pagos validados.
+    expect(turno).toContain(
+      "El primer dinero también lo saca de la base: la fecha más temprana entre `paid_at` y `registered_at` de los pagos validados (sin ellos, la fecha del pedido), y tiene que ser del 01/10/2026 00:00 (hora de Lima) en adelante.",
     );
     expect(turno).toContain(
       "La única excepción es la de arriba, y la base la vuelve a exigir entera (0266): da el turno a algo pagado antes de «Emitir desde» solo si se pide con `p_backfill`, una fila real, el RUC en Manual, quién la pide (`p_created_by`) y las dos fechas del 01/10/2026 00:00 (hora de Lima) en adelante. Sin «Emitir desde» o sin una de las fechas, sigue `antes_de_inicio`.",
@@ -815,6 +830,10 @@ describe("MOM §35.2 y §35.3: los motivos", () => {
       "p_basis",
       "p_backfill",
       "pagado_antes_de_emitir_desde",
+      // El primer dinero de la excepción (0266): columnas y su nombre en las reglas.
+      "paid_at",
+      "order_payments.paid_at",
+      "firstPaidAt",
     ]);
     expect(INVOICE_STATUSES).toContain("error");
     const enS3 = codigos(s3).filter((c) => !noSonMotivos.has(c));
@@ -1165,6 +1184,7 @@ describe("MOM §35.3: cuándo quedó pagado y qué cobró Flow", () => {
     amount: 150,
     validationStatus: "validado",
     registeredAt: despues(1),
+    paidAt: null,
     validatedAt: despues(1),
     vision: null,
     flowLinked: true,
@@ -1864,6 +1884,7 @@ describe("MOM §35.1, §35.3, §35.6 y §35.7: el modo Manual y «Emitir esta bo
           amount: 150,
           validationStatus: "validado",
           registeredAt: PAGADO,
+          paidAt: null,
           validatedAt: PAGADO,
           vision: null,
           flowLinked: true,
@@ -2285,6 +2306,7 @@ describe("MOM §35.3, §35.4, §35.7 y §35.8: lo pagado antes de «Emitir desde
         amount: 150,
         validationStatus: "validado",
         registeredAt: pagado,
+        paidAt: null,
         validatedAt: DESDE,
         vision: null,
         flowLinked: true,
@@ -2323,14 +2345,24 @@ describe("MOM §35.3, §35.4, §35.7 y §35.8: lo pagado antes de «Emitir desde
     expect(SQL_0266).toContain("p_backfill");
     expect(SQL_0266_FLAT).toContain(`p_paid_at >= ${PISO_SQL}`);
     expect(SQL_0266_FLAT).toContain(`v_paid >= ${PISO_SQL}`);
-    expect(funcion("invoice_claim")).toContain(`and p_paid_at >= ${PISO_SQL} and v_paid >= ${PISO_SQL} then v_backfill := true;`);
+    expect(funcion("invoice_claim")).toContain(
+      `and p_paid_at >= ${PISO_SQL} and v_paid >= ${PISO_SQL} and v_first >= ${PISO_SQL} then v_backfill := true;`,
+    );
     // El MOM: la condición 8, la excepción, el turno, «Emitir desde» y el botón.
     expect(s3).toContain(
       "Un pago validado sin fecha de registro, o un RUC sin fecha de inicio, no emite. La única excepción es de «Emitir esta boleta» con el RUC en Manual: lo pagado antes, pero desde el 01/10/2026 00:00 (hora de Lima), si quien pulsa confirma que en SimpleFact no tiene boleta (abajo; owner 15-10-2026) | `antes_de_inicio` |",
     );
     expect(s3).toContain(
-      "«Emitir esta boleta» (35.7), con el RUC en Manual, deja pasar un pedido que quedó pagado antes de «Emitir desde» si quedó pagado desde el **01/10/2026 00:00** (hora de Lima, `INVOICE_BACKFILL_FROM`), con la misma cuenta de la condición 8.",
+      "«Emitir esta boleta» (35.7), con el RUC en Manual, deja pasar un pedido que quedó pagado antes de «Emitir desde» si quedó pagado desde el **01/10/2026 00:00** (hora de Lima, `INVOICE_BACKFILL_FROM`), con la misma cuenta de la condición 8, **y si su primer dinero también es de esa hora en adelante**.",
     );
+    // «Pagado», para la excepción: también el primer dinero (revisión 15-10-2026).
+    expect(s3).toContain(
+      "Para esta excepción, «pagado» es además la fecha más temprana entre la del comprobante (`order_payments.paid_at`, cuándo se movió la plata según el comprobante; puede faltar) y la de registro (`registered_at`) de cada uno de sus pagos validados; en un prepago web, la fecha del pedido (`firstPaidAt`).",
+    );
+    expect(s3).toContain(
+      "Un pago cuyo comprobante dice 29/09 y que se registró en Kapta el 01/10 no pasa: la plata se movió cuando las boletas se emitían a mano.",
+    );
+    expect(s3).toContain("La condición 8 no cambia: lo pagado desde «Emitir desde» no mira el comprobante.");
     expect(s4).toContain(
       "con el RUC en Manual, «Emitir esta boleta» emite lo pagado antes de «Emitir desde» si quedó pagado desde el 01/10/2026 00:00 (hora de Lima) y quien pulsa confirmó que en SimpleFact no tiene boleta.",
     );
@@ -2357,6 +2389,16 @@ describe("MOM §35.3, §35.4, §35.7 y §35.8: lo pagado antes de «Emitir desde
     expect(sale(hechos(antes, { emitFrom: null }), true)).toBe("antes_de_inicio");
     // Pagado desde «Emitir desde», nada cambia: sin la marca.
     expect(sale(hechos("2026-10-15T06:00:00.000Z"), true)).toBe("real");
+    // El primer dinero (revisión 15-10-2026): el comprobante del 29/09 de un
+    // pago registrado el 05/10 no pasa; sin comprobante, cuenta el registro.
+    const conComprobante = (paidAt: string | null) => {
+      const f = hechos(antes);
+      return { ...f, payments: [{ ...f.payments[0]!, paidAt }] };
+    };
+    expect(sale(conComprobante("2026-09-29T15:00:00.000Z"), true)).toBe("antes_de_inicio");
+    expect(sale(conComprobante(new Date(Date.parse(INVOICE_BACKFILL_FROM) - 1).toISOString()), true)).toBe("antes_de_inicio");
+    expect(sale(conComprobante(INVOICE_BACKFILL_FROM), true)).toBe("real (antes)");
+    expect(sale(conComprobante(null), true)).toBe("real (antes)");
     // Lo demás de §35.3 vale igual: lo real vivo frena.
     expect(sale({ ...hechos(antes), existing: { realLive: true, simulated: false, errorBlocked: false } }, true)).toBe("ya_tiene");
     expect(s3).toContain(
@@ -2419,9 +2461,32 @@ describe("MOM §35.3, §35.4, §35.7 y §35.8: lo pagado antes de «Emitir desde
       "La casilla empieza sin marcar cada vez que se abre la confirmación, y se desmarca al cancelar y al volver la respuesta. «Sí, emitir» no se puede pulsar hasta marcarla.",
     );
     const control = cuerpo(PANEL, "export function EmitInvoiceControl(");
-    expect(control).toContain("const [simplefactChecked, setSimplefactChecked] = useState(false);");
-    expect(control.match(/setSimplefactChecked\(false\);/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
-    expect(control).toContain("await onEmit(simplefactChecked);");
+    // La casilla vive con la oferta de la confirmación (`emitControlReducer`):
+    // nace sin marcar al abrir, y cancelar y la respuesta la cierran.
+    expect(control).toContain("const [state, dispatch] = useReducer(emitControlReducer, EMIT_CONTROL_CLOSED);");
+    const reducer = cuerpo(PANEL, "export function emitControlReducer(");
+    expect(reducer).toContain('case "abrir":\n      return { shown: action.offer, simplefactChecked: false };');
+    expect(reducer).toContain('case "cerrar":\n      return EMIT_CONTROL_CLOSED;');
+    expect(control).toContain('onCancel={() => dispatch({ type: "cerrar" })}');
+    expect(control).toContain("await onEmit(offer, simplefactChecked);");
+    // La confirmación es de la oferta que se veía al abrirla (revisión
+    // 15-10-2026): si cambia, se cierra y se desmarca, y «Sí, emitir» manda
+    // la que se vio.
+    expect(s7).toContain(
+      "**La confirmación es de la oferta que se veía al abrirla**: si el panel se relee con ella abierta y cambia el RUC, el total, las fechas o si es de antes de «Emitir desde», se cierra y la casilla se desmarca —lo revisado en SimpleFact era para la otra, y cada RUC tiene su SimpleFact—; y «Sí, emitir» manda lo que se vio, no lo que diga el panel al pulsar: si cambió, el servidor contesta `pedido_cambio`.",
+    );
+    expect(reducer).toContain(
+      'case "oferta":\n      return state.shown && emitOfferKey(state.shown) !== emitOfferKey(action.offer) ? EMIT_CONTROL_CLOSED : state;',
+    );
+    const clave = cuerpo(PANEL, "export function emitOfferKey(");
+    for (const campo of ["issuerId", "ruc", "legalName", "total", "beforeStart", "paidAt", "firstPaidAt", "emitFrom"]) {
+      expect(clave, campo).toContain(`offer.${campo}`);
+    }
+    // El primer pago, como lo cita el MOM.
+    expect(s7).toContain(
+      "Si el primer pago es de otro momento (la fecha más temprana entre su comprobante y su registro), entre las dos frases dice «El primer pago se hizo el ‹dd/mm/aaaa hh:mm›.»: una boleta hecha a mano pudo salir desde ahí, y con esa fecha se busca en SimpleFact.",
+    );
+    expect(PANEL).toContain('const firstText = first && first !== paid ? ` El primer pago se hizo el ${first}.` : "";');
     // Sin la excepción, nada cambia.
     expect(s7).toContain("Sin esta excepción nada cambia: un pedido pagado desde «Emitir desde» no lleva ni el texto ni la casilla.");
     expect(PANEL).toContain("if (emit.beforeStart !== true) return null;");
@@ -2431,8 +2496,9 @@ describe("MOM §35.3, §35.4, §35.7 y §35.8: lo pagado antes de «Emitir desde
     expect(AJUSTES).toContain(
       "res = await emitInvoiceAction(orderId, { issuerId: offer.issuerId, total: offer.total, simplefactChecked });",
     );
+    // Lo que se vio en la confirmación (`shown`), no la oferta de ahora.
     expect(PANEL).toContain(
-      "emitInvoiceAction(orderId, { issuerId: emit.issuerId, total: emit.total, simplefactChecked }),",
+      "emitInvoiceAction(orderId, { issuerId: shown.issuerId, total: shown.total, simplefactChecked }),",
     );
     // Si ya tiene boleta, se registra; no se emite.
     expect(s7).toContain("Si en SimpleFact ya tiene boleta, no se emite: se registra con «Ya tiene comprobante».");
@@ -2514,6 +2580,49 @@ describe("MOM §35.3, §35.4, §35.7 y §35.8: lo pagado antes de «Emitir desde
     );
     expect(s8).toContain(
       "Si después alguien vuelve a correr la 0261, quedan dos turnos —el de once y el de doce— y la llamada por nombre del código falla: no se simula ni se emite nada hasta volver a correr la 0266.",
+    );
+  });
+
+  // Revisión (15-10-2026): el arreglo de la 0262 («volver a correr la 0262
+  // después de la 0261») ya no arregla nada con la 0266 aplicada —la 0262 pasa
+  // su guarda y deja los dos turnos—, y el paso 9 de DEPLOY decía «nada pagado
+  // antes sale», que con la excepción del botón ya no es cierto.
+  it("los arreglos y el paso a Manual dicen lo que de verdad pasa con la 0266", () => {
+    const recuperar =
+      "Con la 0266 aplicada, lo que se vuelve a correr después de la 0261 es la 0266 (no la 0262): la 0262 pasaría su guarda y dejaría los dos turnos.";
+    expect(s8).toContain(
+      `Si después alguien vuelve a correr la 0261, el turno queda otra vez sin esta revisión hasta volver a correr la 0262. ${recuperar}`,
+    );
+    // La guarda de la 0262 no mira el turno de doce: con el de once al lado, pasa.
+    expect(SQL_0262_FLAT).not.toContain(FIRMA_TURNO_12);
+    const deploy = flat(read("DEPLOY.md"));
+    expect(deploy).toContain(
+      "**Si alguien vuelve a correr la 0261 después, hay que volver a correr la 0262**: la 0261 reescribe el turno sin esta revisión, y nada lo avisa. **Con la 0266 aplicada, lo que se vuelve a correr después de la 0261 es la 0266 (no la 0262)**: la 0262 pasaría su guarda y dejaría los dos turnos, el de once y el de doce, y la llamada por nombre del código seguiría fallando",
+    );
+    // La prueba SQL lo comprueba: la 0262 tras la 0261 no lo arregla; la 0266 sí.
+    const smoke = read("scripts/sql/invoices_smoke.sql");
+    expect(smoke).toContain("raise exception 'la 0262 tras la 0261 sobre la 0266 no dejó los dos turnos';");
+    // El paso 9: el barrido no emite lo de antes; el botón, sí, con la casilla.
+    expect(deploy).toContain(
+      "«Emitir desde» se mueve al momento del cambio: el barrido no emite nada pagado antes. Un pedido pagado desde el 01/10/2026 y antes de ese momento solo sale con «Emitir esta boleta» y la casilla «Revisé en SimpleFact y este pedido no tiene boleta»",
+    );
+    expect(deploy).not.toContain("nada pagado antes sale");
+    // La sección de la 0266: el primer dinero, en la migración, al emitir y al revisar.
+    const s0266 = flat(
+      section(read("DEPLOY.md"), "### 15-10-2026 · «Emitir esta boleta» para lo pagado antes de «Emitir desde» (0266, MOM §35)", "\n### "),
+    );
+    expect(s0266).toContain(
+      "el último pago registrado y también el primer dinero, la fecha más temprana entre la del comprobante (`order_payments.paid_at`, cuándo se movió la plata) y la de registro de cada pago validado. Un pago cuyo comprobante dice 29/09 y que entró a Kapta el 01/10 no pasa.",
+    );
+    expect(s0266).toContain(
+      "y el primer dinero también: la fecha más temprana entre `paid_at` y `registered_at` de los pagos validados (sin ellos, la fecha del pedido).",
+    );
+    expect(s0266).toContain("(por su número, su total y su fecha, desde la del primer pago)");
+    expect(s0266).toContain(
+      "select i.order_name, min(least(coalesce(p.paid_at, p.registered_at), p.registered_at)) as primer_dinero from order_invoices i join order_payments p on p.order_id = i.order_id and p.validation_status = 'validado' where i.basis ? 'pagado_antes_de_emitir_desde' group by 1 order by 2;",
+    );
+    expect(s0266).toContain(
+      "Si el panel se relee con la confirmación abierta y cambia el RUC, el total o las fechas, la confirmación se cierra y la casilla se desmarca: se vuelve a abrir y a revisar.",
     );
   });
 });

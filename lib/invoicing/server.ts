@@ -462,6 +462,7 @@ interface PaymentRow {
   validation_status: string;
   validated_at: string | null;
   registered_at: string | null;
+  paid_at: string | null;
   vision: unknown;
 }
 
@@ -524,7 +525,7 @@ async function loadOrders(admin: SupabaseClient, orderIds: string[]): Promise<Ma
     selectIn<PaymentRow>(
       admin,
       "order_payments",
-      "id,order_id,kind,amount,validation_status,validated_at,registered_at,vision",
+      "id,order_id,kind,amount,validation_status,validated_at,registered_at,paid_at,vision",
       "order_id",
       found,
     ),
@@ -589,6 +590,9 @@ async function loadOrders(admin: SupabaseClient, orderIds: string[]): Promise<Ma
       // Cuándo quedó pagado el pedido sale del último pago REGISTRADO (§35.3,
       // condición 8): es la fecha que mira `invoice_candidates`.
       registeredAt: p.registered_at,
+      // La fecha del comprobante: solo para el piso de lo pagado antes de
+      // «Emitir desde» (el primer dinero, `firstPaidAt`), no para la condición 8.
+      paidAt: p.paid_at ?? null,
       vision: p.vision,
       flowLinked: flowLinked.has(p.id),
       statementDestination: destinationByPayment.get(p.id) ?? null,
@@ -2097,8 +2101,10 @@ export interface InvoiceEmitNowRow {
  *
  * `beforeStart`: quedó pagado antes de «Emitir desde» (la excepción de
  * `INVOICE_BACKFILL_FROM`). La confirmación lo dice, con cuándo quedó pagado
- * (`paidAt`) y desde cuándo emite el RUC (`emitFrom`), y pide marcar que se
- * revisó en SimpleFact. Las dos fechas en ISO, o null si no se entienden.
+ * (`paidAt`), cuándo se movió el primer dinero (`firstPaidAt`, la fecha más
+ * temprana entre el comprobante y el registro de sus pagos: desde ahí se busca
+ * en SimpleFact) y desde cuándo emite el RUC (`emitFrom`), y pide marcar que
+ * se revisó en SimpleFact. Las fechas en ISO, o null si no se entienden.
  */
 export interface InvoiceEmitNowOffer {
   issuerId: string;
@@ -2107,6 +2113,7 @@ export interface InvoiceEmitNowOffer {
   total: number;
   beforeStart: boolean;
   paidAt: string | null;
+  firstPaidAt: string | null;
   emitFrom: string | null;
 }
 
@@ -2244,6 +2251,7 @@ export function invoiceEmitNowReadiness(input: {
       total: elig.totalCents / 100,
       beforeStart: elig.beforeStart,
       paidAt: isoOrNull(elig.paidAt),
+      firstPaidAt: isoOrNull(elig.firstPaidAt),
       emitFrom: isoOrNull(elig.issuer.emitFrom),
     },
   };

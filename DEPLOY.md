@@ -2635,6 +2635,10 @@ no se borra, así que se cerró lo que podía mandar una que nadie pidió:
    0261: aplica primero db/migrations/0261_invoices_manual.sql.» y no cambia
    nada. **Si alguien vuelve a correr la 0261 después, hay que volver a correr
    la 0262**: la 0261 reescribe el turno sin esta revisión, y nada lo avisa.
+   **Con la 0266 aplicada, lo que se vuelve a correr después de la 0261 es la
+   0266 (no la 0262)**: la 0262 pasaría su guarda y dejaría los dos turnos, el
+   de once y el de doce, y la llamada por nombre del código seguiría fallando
+   (sección «15-10-2026 · 0266», más abajo).
    **Se puede aplicar ya, con el código que hoy está en producción** (con la
    0261 delante): ese código pide el turno con los nueve argumentos por nombre
    y ya manda en `p_basis` si es prepago web y el id de cada pago, que es lo
@@ -2712,7 +2716,10 @@ no se borra, así que se cerró lo que podía mandar una que nadie pidió:
 9. **Manual: las primeras boletas reales, una a una** (MOM §35.7). Pasar el
    RUC a «Manual» en Ajustes. La base lo rechaza sin token, sin «Emitir desde»
    o sin una prueba de conexión que leyó el mismo RUC, y «Emitir desde» se
-   mueve al momento del cambio: nada pagado antes sale. El barrido sigue
+   mueve al momento del cambio: el barrido no emite nada pagado antes. Un
+   pedido pagado desde el 01/10/2026 y antes de ese momento solo sale con
+   «Emitir esta boleta» y la casilla «Revisé en SimpleFact y este pedido no
+   tiene boleta» (sección «15-10-2026 · 0266», más abajo). El barrido sigue
    simulando, nunca le pide a SimpleFact una venta, y concilia lo que quede en
    duda. Antes, la 0262 aplicada (paso 4). Para emitir, en producción —una
    vista previa no emite (paso 5)—: abrir el pedido, panel «Comprobante»,
@@ -2834,7 +2841,11 @@ volver a Real hay que corregir lo que falló (el token o el subdominio) y pulsar
 
 Decisión del owner (15-10-2026). Con el RUC en «Manual», «Emitir esta boleta»
 también sirve para un pedido pagado **antes** de «Emitir desde», si se pagó
-desde el **01/10/2026 00:00 (hora de Lima)**. Antes de Kapta las boletas se
+desde el **01/10/2026 00:00 (hora de Lima)**: el último pago registrado y
+también el primer dinero, la fecha más temprana entre la del comprobante
+(`order_payments.paid_at`, cuándo se movió la plata) y la de registro de cada
+pago validado. Un pago cuyo comprobante dice 29/09 y que entró a Kapta el
+01/10 no pasa. Antes de Kapta las boletas se
 emitían a mano en SimpleFact, y Kapta no sabe si ese pedido ya tiene la suya:
 por eso la confirmación pide marcar «Revisé en SimpleFact y este pedido no
 tiene boleta», y sin esa marca no emite. Una boleta de más es pagar el
@@ -2856,12 +2867,16 @@ variables de entorno nuevas; `MOM_RESOLUTION_VERSION` no cambia.
    - la fecha: lo pagado antes de «Emitir desde» pasa solo con `p_backfill`,
      una fila real, el RUC en Manual, quién la pidió (`p_created_by`) y las
      dos fechas de pago —la del código y la de la base— desde el 01/10/2026
-     00:00 de Lima. Sin «Emitir desde» o sin fecha de pago, `antes_de_inicio`,
+     00:00 de Lima, y el primer dinero también: la fecha más temprana entre
+     `paid_at` y `registered_at` de los pagos validados (sin ellos, la fecha
+     del pedido). Sin «Emitir desde» o sin fecha de pago, `antes_de_inicio`,
      como siempre;
    - la fila que sale así lleva en su base `pagado_antes_de_emitir_desde: true`.
 
    El turno sigue solo para `service_role`. No toca filas, ni triggers, ni otra
-   función, y no toma candados de tablas. Es idempotente. **Va después de la
+   función, y no toma candados de tablas. Es idempotente: si en alguna base ya
+   se corrió una versión anterior de la 0266 (sin el primer dinero), se vuelve
+   a correr y el turno queda con él (`like '%v_first%'`, abajo). **Va después de la
    0262**: si sigue el turno de nueve argumentos, o no hay ni el de once ni el
    de doce, se detiene con «La 0266 va después de la 0262: aplica primero
    db/migrations/0261_invoices_manual.sql y
@@ -2885,26 +2900,34 @@ variables de entorno nuevas; `MOM_RESOLUTION_VERSION` no cambia.
    - `select to_regprocedure('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)') is null;`
      tiene que dar `true`: el de once ya no está;
    - `select pg_get_functiondef('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)'::regprocedure) like '%pagado_antes_de_emitir_desde%';`
-     tiene que dar `true` (y lo mismo con `like '%sin_pago_completo%'` y con
-     `like '%for share%'`, que trae de la 0262);
+     tiene que dar `true` (y lo mismo con `like '%v_first%'`, el primer
+     dinero, y con `like '%sin_pago_completo%'` y `like '%for share%'`, que
+     trae de la 0262);
    - `select has_function_privilege('authenticated', 'public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)', 'execute');`
      tiene que dar `false` (y lo mismo con `anon`; con `service_role`, `true`);
    - `select ruc, mode, emit_from, checked_ruc, check_error from invoice_issuers;`
      y `select count(*) from order_invoices;` dicen lo mismo que antes de
      aplicarla.
 2. **Desplegar** el código. Desde ahí, en un pedido pagado desde el 01/10 y
-   antes de «Emitir desde», con el RUC en «Manual», el panel «Comprobante» (y
-   «Emitir» en Ajustes → últimos comprobantes) ofrece «Emitir esta boleta», y
-   la confirmación dice cuándo se pagó y desde cuándo emite el RUC. **Antes de
-   marcar la casilla, buscar el pedido en SimpleFact** (por su número, su
-   fecha y su total): si ya tiene boleta, no se emite; se registra con «Ya
-   tiene comprobante». En una vista previa no hay botón, como siempre.
+   antes de «Emitir desde» (con su primer dinero también desde el 01/10), con
+   el RUC en «Manual», el panel «Comprobante» (y «Emitir» en Ajustes →
+   últimos comprobantes) ofrece «Emitir esta boleta», y la confirmación dice
+   cuándo se pagó, desde cuándo emite el RUC y, si es de otro momento, cuándo
+   se hizo el primer pago. **Antes de marcar la casilla, buscar el pedido en
+   SimpleFact** (por su número, su total y su fecha, desde la del primer
+   pago): si ya tiene boleta, no se emite; se registra con «Ya tiene
+   comprobante». Si el panel se relee con la confirmación abierta y cambia el
+   RUC, el total o las fechas, la confirmación se cierra y la casilla se
+   desmarca: se vuelve a abrir y a revisar. En una vista previa no hay botón,
+   como siempre.
 
 **Qué mirar después**, solo lectura:
 `select order_name, paid_at, mode, status, created_by is not null as con_quien from order_invoices where basis ? 'pagado_antes_de_emitir_desde' order by created_at desc;`
 — cada fila `real`, con `con_quien = true` y `paid_at` desde el 01/10/2026
-05:00 UTC; nada en `emitiendo` por más de unos minutos. Revisar cada una en
-SimpleFact, como las demás de Manual.
+05:00 UTC; nada en `emitiendo` por más de unos minutos. Y el primer dinero de
+cada una, también desde el 01/10/2026 05:00 UTC:
+`select i.order_name, min(least(coalesce(p.paid_at, p.registered_at), p.registered_at)) as primer_dinero from order_invoices i join order_payments p on p.order_id = i.order_id and p.validation_status = 'validado' where i.basis ? 'pagado_antes_de_emitir_desde' group by 1 order by 2;`
+Revisar cada una en SimpleFact, como las demás de Manual.
 
 **Antes de subir**: `bash scripts/verify-db.sh` corre
 `scripts/sql/invoices_smoke.sql`, que también corre la 0266 sobre la 0262 (dos

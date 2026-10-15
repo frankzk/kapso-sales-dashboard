@@ -328,11 +328,12 @@ export interface InvoicePanelCheck {
  * emisión real, en soles.
  *
  * `beforeStart`: quedó pagado antes de «Emitir desde» (owner, 15-10-2026). La
- * confirmación dice cuándo quedó pagado (`paidAt`) y desde cuándo emite el RUC
- * (`emitFrom`), en ISO, y pide marcar «Revisé en SimpleFact y este pedido no
- * tiene boleta». El servidor (`invoiceEmitNowReadiness`) siempre los manda.
- * Sin ellos el panel no pide la casilla, y si el pedido es de antes, el
- * servidor no emite (`sin_revision_simplefact`): falla cerrada.
+ * confirmación dice cuándo quedó pagado (`paidAt`), cuándo se movió el primer
+ * dinero (`firstPaidAt`) y desde cuándo emite el RUC (`emitFrom`), en ISO, y
+ * pide marcar «Revisé en SimpleFact y este pedido no tiene boleta». El
+ * servidor (`invoiceEmitNowReadiness`) siempre los manda. Sin ellos el panel
+ * no pide la casilla, y si el pedido es de antes, el servidor no emite
+ * (`sin_revision_simplefact`): falla cerrada.
  */
 export interface InvoicePanelEmitNow {
   issuerId: string;
@@ -341,6 +342,7 @@ export interface InvoicePanelEmitNow {
   total: number;
   beforeStart?: boolean;
   paidAt?: string | null;
+  firstPaidAt?: string | null;
   emitFrom?: string | null;
 }
 

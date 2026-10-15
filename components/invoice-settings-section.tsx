@@ -396,8 +396,9 @@ function IssuerFields({ idPrefix, issuer }: { idPrefix: string; issuer: InvoiceI
           htmlFor={id("emit_from")}
           hint={
             <p>
-              Hora de Lima. Solo entran pedidos que quedaron pagados desde aquí: una fecha en el pasado se guarda
-              como ahora, y al cambiar de modo, si quedó atrás, se mueve sola a ese momento.
+              Hora de Lima. El barrido solo toma pedidos que quedaron pagados desde aquí (en Manual, «Emitir esta
+              boleta» también puede emitir lo pagado desde el 01/10/2026, después de revisar SimpleFact): una fecha
+              en el pasado se guarda como ahora, y al cambiar de modo, si quedó atrás, se mueve sola a ese momento.
             </p>
           }
         >
@@ -899,7 +900,11 @@ export function RecentListView({
   sending: ReadonlySet<string>;
   /** La página se está refrescando. */
   pending: boolean;
-  /** `simplefactChecked`: la casilla de un pedido pagado antes de «Emitir desde». */
+  /**
+   * `offer`: la que se vio en la confirmación (`EmitInvoiceControl`), no la de
+   * la fila al pulsar. `simplefactChecked`: la casilla de un pedido pagado
+   * antes de «Emitir desde».
+   */
   onEmit: (row: InvoiceRecentView, offer: InvoicePanelEmitNow, simplefactChecked: boolean) => Promise<void>;
 }) {
   const { byRow, orphans } = placeOutcomes(rows ?? [], outcomes);
@@ -1012,7 +1017,7 @@ export function RecentListView({
                     label="Emitir"
                     emit={offer}
                     pending={pending || sending.has(r.orderId)}
-                    onEmit={(simplefactChecked) => onEmit(r, offer, simplefactChecked)}
+                    onEmit={(shown, simplefactChecked) => onEmit(r, shown, simplefactChecked)}
                   />
                 </div>
               ) : null;
@@ -1111,7 +1116,7 @@ export function InvoiceSettingsSection({
                 <p>
                   Las cuentas contra las que Kapta verifica los comprobantes. Una cuenta en{" "}
                   <strong>Sin comprobante</strong> no emite: el dinero que entra ahí no es de ninguna empresa
-                  emisora. Asignar un RUC no emite nada pagado antes de su «Emitir desde».
+                  emisora. Asignar un RUC no hace que el barrido emita nada pagado antes de su «Emitir desde».
                 </p>
               }
             />
