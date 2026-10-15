@@ -1786,7 +1786,8 @@ decían «0 intentos» (#KP140941: salió el 13/10 y el 14/10 con Roy, «No
 contesta» las dos veces, y la fila decía 0).
 
 - **No cambia el costo.** El costo logístico sigue con los intentos del
-  courier: ni Grupo GF ni Urpi cobran por intento adicional en las tarifas, y sumar sus visitas a la
+  courier: ni Grupo GF, ni Urpi, ni Swayp ni Tanders cobran por intento
+  adicional en las tarifas, y sumar sus visitas a la
   tarifa de otro courier (un pedido que luego salió con Aliclik) inventaría un
   costo.
 - **No cambia la etapa.** Es un dato de la fila; la macroetapa se decide como
@@ -1811,9 +1812,20 @@ contesta» las dos veces, y la fila decía 0).
   del pedido: un intento nuevo, cambiado o vinculado a mano recalcula su fila.
   Lo que no la recalcula: si un envío se re-vincula de un pedido a otro, el
   pedido que lo pierde conserva el número hasta su próximo recálculo.
-- **Lo que todavía no cuenta.** Tanders, Shalom y Olva no reportan intentos.
-  La programación enviada a Urpi (§30.10) tampoco: dice qué se mandó, no qué
-  pasó en la puerta.
+- **Swayp y Tanders, por sus estados (v1.29, 15-10-2026).** No mandan un
+  número de intentos, pero sus estados lo dejan ver (`courierVisitAttempts`).
+  En Swayp cada «Novedad» (6) que llegó como estado es una visita fallida y
+  «Entregada» (7) es otra; si la guía terminó en Devolución (8, 9 o 12) sin que
+  se viera ninguna, cuenta una, porque el barrido no siempre alcanza a ver la
+  Novedad. Tanders solo da el estado actual: llegar a «Delivered», «Returning»
+  o «Returned» (o entregarse) es una visita por guía; si Tanders reintentó por
+  su cuenta, Kapta no lo sabe. Solo se suma lo que pase de lo que la guía ya
+  traía (las reprogramaciones del equipo). Caso: los 11 «Por reprogramar Lima»
+  del 11 y 12/10 con «0 intentos» y la Devolución de Swayp o el Returned de
+  Tanders en su Actividad.
+- **Lo que todavía no cuenta.** Shalom y Olva (agencia: la clienta recoge) no
+  tienen visitas. La programación enviada a Urpi (§30.10) tampoco: dice qué se
+  mandó, no qué pasó en la puerta.
 
 ### 9.4 Reportes, pagos y devoluciones físicas de Lima
 

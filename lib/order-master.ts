@@ -44,6 +44,7 @@ import {
 } from "@/lib/order-macro-stage";
 import {
   isGeneralStatus,
+  courierVisitAttempts,
   isOperationalStatus,
   ownRiderAttempts,
   resolveOrderState,
@@ -1232,7 +1233,16 @@ export async function recomputeOrderMaster(
       // `state.attemptCount`: ni Grupo GF ni Urpi cobran por intento adicional
       // en `cost_tariffs`, y sumar sus visitas a la tarifa de otro courier (un
       // pedido que luego salió con Aliclik) inventaría un costo.
-      attempt_count: state.attemptCount + ownRiderAttempts(stateEvents) + (urpiAttemptsByOrder.get(order.id) ?? 0),
+      attempt_count:
+        state.attemptCount +
+        // Swayp y Tanders no mandan el número: se deduce de sus estados, y solo
+        // suma lo que pase de lo que ya traía la guía (las reprogramaciones).
+        guides.reduce(
+          (sum, g) => sum + Math.max(0, courierVisitAttempts(g, orderEvents) - (g.aliclik_attempts ?? g.reroute_attempts ?? 0)),
+          0,
+        ) +
+        ownRiderAttempts(stateEvents) +
+        (urpiAttemptsByOrder.get(order.id) ?? 0),
       guide_code: state.guideCode,
       // De la guía VIGENTE, igual que el costo real de arriba: si un pedido
       // salió dos veces, lo que importa es el cobro de la que está entregando.

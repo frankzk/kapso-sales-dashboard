@@ -29,6 +29,12 @@ import {
   swaypNoEntregoMotivo,
 } from "@/lib/swayp-desde-confirmacion";
 
+// v1.29 (15-10-2026): la columna de intentos suma las visitas que se deducen
+// de los estados de Swayp y de Tanders (`courierVisitAttempts`, MOM §9.3): los
+// 11 «Por reprogramar Lima» del 11 y 12/10 decían «0 intentos» con la
+// Devolución de Swayp o el Returned de Tanders a la vista. No cambia etapas ni
+// costos. La versión sube para que el cron recalcule.
+//
 // v1.28 (15-10-2026): la columna de intentos suma también los que reporta Urpi
 // en su export (`urpiAttempts`, MOM §9.3, §30.11): #KP131545, cancelado por
 // Urpi el 01/09, decía «0 intentos». No cambia etapas ni costos. La versión sube
@@ -179,7 +185,7 @@ import {
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.28" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.29" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"

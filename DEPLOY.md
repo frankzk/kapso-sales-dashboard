@@ -2855,3 +2855,10 @@ y #KP140941 dice 2 intentos (3 si la salida del 15/10 ya se reportó).
 
 **Qué mirar después.** #KP131545 dice 1 intento cuando su fila tenga
 `macro_version = 'mom-v1.28'`.
+
+### 15-10-2026 · Intentos de Swayp y Tanders (`mom-v1.29`)
+
+Sin migraciones. `MOM_RESOLUTION_VERSION` sube a `mom-v1.29`: la columna de
+intentos suma las visitas que se deducen de los estados de Swayp (Novedad,
+Entregada, Devolución) y de Tanders (Delivered, Returning, Returned). No cambia
+etapas ni costos.
