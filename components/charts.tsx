@@ -224,16 +224,19 @@ export function TrendLines({
   );
 }
 
-/** Ingresos por día apilados por fuente, con 2 px de aire entre segmentos. */
+/** Una medida por día apilada por serie (fuente, quién cerró…), con aire entre segmentos. */
 export function StackedDailyBars({
   rows,
   series,
   currency,
+  kind = "money",
   height = 240,
 }: {
   rows: Array<Record<string, string | number>>;
   series: { key: string; label: string; color: string }[];
-  currency: string;
+  currency?: string;
+  /** Dinero por defecto; «count» para pedidos. */
+  kind?: "money" | "count";
   height?: number;
 }) {
   return (
@@ -248,14 +251,21 @@ export function StackedDailyBars({
           axisLine={{ stroke: VIZ.lineStrong }}
           minTickGap={24}
         />
-        <YAxis tickFormatter={(v: number) => axisValue(v, "money")} tick={TICK} tickLine={false} axisLine={false} width={52} />
-        <Tooltip cursor={{ fill: VIZ.line, fillOpacity: 0.7 }} content={(p) => <Tip {...p} kind="money" currency={currency} sorted />} />
+        <YAxis
+          tickFormatter={(v: number) => axisValue(v, kind)}
+          allowDecimals={kind !== "count"}
+          tick={TICK}
+          tickLine={false}
+          axisLine={false}
+          width={52}
+        />
+        <Tooltip cursor={{ fill: VIZ.line, fillOpacity: 0.7 }} content={(p) => <Tip {...p} kind={kind} currency={currency} sorted />} />
         {series.map((s, i) => (
           <Bar
             key={s.key}
             dataKey={s.key}
             name={s.label}
-            stackId="ingresos"
+            stackId="pila"
             fill={s.color}
             stroke="#fff"
             strokeWidth={1}

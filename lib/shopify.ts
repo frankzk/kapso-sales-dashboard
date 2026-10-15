@@ -592,8 +592,10 @@ export function buildKapsoOrdersSearchQuery(
  * Convive con `buildKapsoOrdersSearchQuery` a propósito: los KPIs (ventas,
  * embudo, rollups) siguen contando únicamente `tag:kapso`, tanto en
  * `recompute_daily_rollups` como en `lib/access.ts:getOrders`, así que traer el
- * resto de pedidos no mueve ninguna métrica histórica. Cada pasada lleva su
- * propio cursor en `sync_state` (`shopify` vs `shopify_all`).
+ * resto de pedidos no mueve esas métricas. La cabecera del tablero, «Canal de
+ * cierre» y «Conversión por fuente» sí leen todos los pedidos que trae esta
+ * pasada (0259 y 0268, MOM §17.3 y §17.4). Cada pasada lleva su propio cursor
+ * en `sync_state` (`shopify` vs `shopify_all`).
  */
 export function buildAllOrdersSearchQuery(
   updatedAtCursorIso?: string | null,

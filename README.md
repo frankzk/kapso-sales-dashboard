@@ -39,6 +39,13 @@ Kapso    ──pull conversaciones/mensajes────▶  /api/cron/sync  (Pla
                          Dashboards (lib/metrics.ts) — por tienda + consolidado
 ```
 
+`daily_rollups` solo cuenta los pedidos del bot (`tag:kapso`). «Canal de
+cierre» cuenta TODAS las ventas de la tienda desde la migración 0259, y desde
+la 0268 también la cabecera del tablero, «Ventas por día», «Por tienda» y
+«Conversión por fuente», con su canal de cierre, por funciones de lectura en Postgres
+(`ventas_por_origen`, `canal_de_cierre`, `conversion_por_fuente`; MOM §17.3 y
+§17.4). Los módulos que siguen leyendo los pedidos del bot lo dicen.
+
 El enlace orden ↔ conversación se hace con los `note_attributes` que el bot
 escribe en cada orden Shopify: `kapso_conversation_id`, `kapso_phone_number_id`,
 `source=whatsapp-bot`.

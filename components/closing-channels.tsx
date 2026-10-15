@@ -1,5 +1,5 @@
 import { cn } from "@/components/ui";
-import { Figure, FIGURE_FRAME, pctText } from "@/components/figures";
+import { Change, Figure, FIGURE_FRAME, pctText } from "@/components/figures";
 import { CLOSING_GROUP_SHADE } from "@/components/palette";
 import { formatCurrency } from "@/lib/metrics";
 import {
@@ -10,8 +10,14 @@ import {
   GROUP_LABEL,
   type ClosingChannelSummary,
 } from "@/lib/closing-channel";
+import type { SalesTotals } from "@/lib/consolidado-origen";
 
 const nf = new Intl.NumberFormat("es-PE");
+
+function pctDelta(cur: number, prev: number): number | null {
+  if (prev === 0) return cur === 0 ? 0 : null;
+  return Math.round(((cur - prev) / prev) * 1000) / 10;
+}
 
 /**
  * Quién cerró cada venta de la tienda (MOM §17.3): arriba los cuatro grupos, de
@@ -20,12 +26,26 @@ const nf = new Intl.NumberFormat("es-PE");
  * Ayudar no es cerrar: un pedido del bot que una asesora trabajó antes sigue
  * siendo del bot, y la ayuda se cuenta aparte en su fila. Así los canales suman
  * el total de la tienda y el porcentaje de la asesora no se infla ni se hunde.
+ *
+ * `prev`: las mismas ventas del periodo anterior, solo si se puede comparar
+ * (cada tienda lo contaba entero, MOM §17.4). Sin él no hay columna de cambio.
  */
-export function ClosingChannels({ summary, currency }: { summary: ClosingChannelSummary; currency: string }) {
+export function ClosingChannels({
+  summary,
+  currency,
+  prev,
+}: {
+  summary: ClosingChannelSummary;
+  currency: string;
+  prev?: SalesTotals | null;
+}) {
   const { byChannel, byGroup, total } = summary;
   const share = (revenue: number) => (total.revenue ? revenue / total.revenue : 0);
   const shownGroups = CLOSING_GROUPS.filter((g) => byGroup[g].revenue > 0);
-  const rows = CLOSING_CHANNELS.filter((c) => byChannel[c].orders > 0 || byChannel[c].cancelled > 0);
+  // Un canal que vendía antes y ahora no también es una fila: su caída es el dato.
+  const rows = CLOSING_CHANNELS.filter(
+    (c) => byChannel[c].orders > 0 || byChannel[c].cancelled > 0 || (prev?.byChannel[c].orders ?? 0) > 0,
+  );
   return (
     <div className="flex flex-col gap-5">
       <dl className={cn(FIGURE_FRAME, "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4")}>
@@ -41,6 +61,7 @@ export function ClosingChannels({ summary, currency }: { summary: ClosingChannel
                 </span>
               }
               value={formatCurrency(f.revenue, currency)}
+              delta={prev ? <Change pct={pctDelta(f.revenue, prev.byGroup[g].revenue)} /> : undefined}
               sub={
                 <>
                   {pctText(share(f.revenue))} de los ingresos{" · "}
@@ -72,12 +93,15 @@ export function ClosingChannels({ summary, currency }: { summary: ClosingChannel
             {nf.format(total.orders)} pedidos
             {total.cancelled ? ` · ${nf.format(total.cancelled)} cancelados aparte` : ""}
           </span>
-          <span className="text-base font-semibold tabular-nums text-ink-900">{formatCurrency(total.revenue, currency)}</span>
+          <span className="text-base font-semibold tabular-nums text-ink-900">
+            {formatCurrency(total.revenue, currency)}
+            {prev && <span className="ml-2 text-xs font-normal text-ink-500">antes {formatCurrency(prev.revenue, currency)}</span>}
+          </span>
         </p>
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[620px] text-sm">
+        <table className={cn("w-full text-sm", prev ? "min-w-[720px]" : "min-w-[620px]")}>
           <caption className="sr-only">Ventas por canal de cierre</caption>
           <thead>
             <tr className="border-b border-line text-left text-xs font-medium text-ink-500">
@@ -85,6 +109,7 @@ export function ClosingChannels({ summary, currency }: { summary: ClosingChannel
               <th scope="col" className="py-2 px-3 text-right font-medium">Pedidos</th>
               <th scope="col" className="py-2 px-3 text-right font-medium">Ingresos</th>
               <th scope="col" className="py-2 px-3 text-right font-medium">% ingresos</th>
+              {prev && <th scope="col" className="py-2 px-3 text-right font-medium">Ingresos contra el anterior</th>}
               <th scope="col" className="py-2 px-3 text-right font-medium">Ayudados por asesora</th>
               <th scope="col" className="py-2 pl-3 text-right font-medium">Cancelados aparte</th>
             </tr>
@@ -104,6 +129,11 @@ export function ClosingChannels({ summary, currency }: { summary: ClosingChannel
                   <td className="py-2.5 px-3 text-right tabular-nums text-ink-700">{nf.format(f.orders)}</td>
                   <td className="py-2.5 px-3 text-right tabular-nums text-ink-700">{formatCurrency(f.revenue, currency)}</td>
                   <td className="py-2.5 px-3 text-right tabular-nums text-ink-700">{pctText(share(f.revenue))}</td>
+                  {prev && (
+                    <td className="py-2.5 px-3 text-right">
+                      <Change pct={pctDelta(f.revenue, prev.byChannel[c].revenue)} />
+                    </td>
+                  )}
                   <td className="py-2.5 px-3 text-right tabular-nums text-ink-700">
                     {c === "asesora" ? (
                       <span className="text-ink-500">—</span>

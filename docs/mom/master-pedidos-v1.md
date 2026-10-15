@@ -8446,22 +8446,26 @@ vez, todos los pedidos de la tienda y las ventas que registran sus asesoras:
   ninguna venta registrada; su primera es del 04-07-2026, y la de la otra
   tienda del 25-06-2026.
 
-La tarjeta cuenta desde el más tardío de esos días. Con varias tiendas, desde
-el de la que empezó último, para que el total sea de un solo periodo, y el
-aviso nombra esa tienda y dice que la página de cada tienda cuenta desde su
-propio inicio. Un periodo que empieza antes se cuenta desde ese día y la
-tarjeta lo dice («desde el 4 jul 2026»), con la razón que fijó el día: el
-inicio de la tienda en Kapta o `ORDERS_SYNC_FROM`. Uno que termina antes no
-tiene con qué responder y la tarjeta vuelve a la vista anterior con un aviso,
-sin cifra de cabecera.
+Cada tienda cuenta desde el más tardío de esos días, **su propio día** (desde
+el 14-10-2026, §17.4: antes, con varias tiendas, se recortaba a todas al día
+de la que empezó último, y conectar una tienda nueva habría dejado el total de
+todas en un solo día). Con varias tiendas, cada una suma su parte del periodo
+y el aviso nombra cada tienda que cuenta desde otra fecha. Un periodo que
+empieza antes se cuenta desde ese día y la tarjeta lo dice («desde el 4 jul
+2026», o «Aurela desde el 4 jul 2026»), con la razón que fijó el día: el
+inicio de la tienda en Kapta o `ORDERS_SYNC_FROM`. Una tienda cuyo día cae
+después del periodo no entra, y el aviso lo dice («no entra: empezó a usar
+Kapta el …»). Si ninguna tienda tiene con qué responder, la tarjeta vuelve a la
+vista anterior con un aviso, sin cifra de cabecera.
 
 Una tienda que todavía no usa Kapta —sin ventas registradas ni leads— no tiene
 inicio: sola, su tarjeta vuelve a la vista anterior con ese aviso; con otras
 tiendas, queda fuera del conteo y la tarjeta la nombra («sus pedidos no entran
 en este total»). Si no se puede leer desde cuándo usa Kapta una tienda, es un
 error y la tarjeta lo dice: contar sin saberlo es justo el «0 % asesora» falso.
-Mover `ORDERS_SYNC_FROM` hacia atrás no amplía la tarjeta más allá del inicio
-de cada tienda; adelantarlo sí la recorta.
+Si falla la lectura de UNA tienda, también: nunca un total con una tienda de
+menos. Mover `ORDERS_SYNC_FROM` hacia atrás no amplía la tarjeta más allá del
+inicio de cada tienda; adelantarlo sí la recorta.
 
 **Un canal por pedido**, el primero que aplique en este orden. Así los canales
 suman el total de la tienda:
@@ -8520,16 +8524,19 @@ Productividad cuenta ventas registradas por la fecha en que la asesora apretó
 el botón e incluye las que después se cancelaron; el canal cuenta pedidos por
 su fecha de creación en Shopify y deja los cancelados aparte.
 
-**Lo que todavía no cambia.** En «Ventas del periodo», salvo esta tarjeta y
-«Anuncios de Meta», los pedidos y los ingresos —las cifras de cabecera, Ventas
-por día, Por tienda o Patrón de horas, Productos, Fuente, Embudo y su salud,
-Venta perdida, Carritos, Números de WhatsApp, Desglose de negocio e
-Integridad— siguen contando solo los pedidos del bot de Kapso (DEPLOY.md §5h).
-La operación del Master y LTV : CPA (§17.2), arriba de esa sección en el
-Consolidado, cuentan todos los pedidos del Master. La tarjeta lo dice,
-porque su total —todas las ventas— es mayor. El panel de «Fuente» conserva su
-propio cierre por etiquetas, ahora con el nombre «Cierre de los pedidos del
-bot, por etiquetas»: no ve las ventas de las asesoras y remite a esta tarjeta.
+**Lo que todavía no cambia.** Desde el 14-10-2026 (§17.4) las cifras de
+cabecera, «Ventas por día», «Por tienda» y «Conversión por fuente» cuentan
+también todas las ventas, y esta tarjeta es la que las parte por origen, con
+el cambio contra el periodo anterior por canal. Siguen contando solo los
+pedidos del bot de Kapso, y lo dicen: «Conversión del bot», Productos, Fuente,
+Embudo y su salud, los ingresos de Carritos y de Números de WhatsApp, Desglose
+de negocio, Integridad y, en la página de una tienda, Patrón de horas
+(DEPLOY.md §5h). La
+operación del Master y LTV : CPA (§17.2), arriba de esa sección en el
+Consolidado, cuentan todos los pedidos del Master. El panel de «Fuente»
+conserva su propio cierre por etiquetas, con el nombre «Cierre de los pedidos
+del bot, por etiquetas»: no ve las ventas de las asesoras y remite a esta
+tarjeta.
 
 Medido del 14-09 al 13-10-2026, días de Lima, pedidos activos:
 
@@ -8544,10 +8551,154 @@ Medido del 14-09 al 13-10-2026, días de Lima, pedidos activos:
 
 Cómo se calcula: `canal_de_cierre` (migración 0259, de lectura, con la sesión
 de quien mira: cada persona ve solo sus tiendas), resumido en
-`lib/closing-channel.ts` y dibujado en `components/closing-channels.tsx`. Si la
-migración todavía no se aplicó o la función falla, la tarjeta vuelve a la
-vista anterior (solo pedidos del bot) con un aviso y sin cifra de cabecera
-(«—»): su porcentaje sería el número equivocado. Nunca con ceros.
+`lib/closing-channel.ts` y dibujado en `components/closing-channels.tsx`. Desde
+la 0268 la regla del canal —la tabla de arriba— vive en un solo lugar, la vista
+`pedidos_canal` (con la sesión de quien mira, solo de lectura), y la función la
+lee; las ventas por origen de §17.4 leen la misma vista. Una llamada por tienda,
+en su ventana (`lib/sales-coverage.ts`). Si la migración todavía no se aplicó o
+la función falla, la tarjeta vuelve a la vista anterior (solo pedidos del bot)
+con un aviso y sin cifra de cabecera («—»): su porcentaje sería el número
+equivocado. Nunca con ceros.
+
+### 17.4 Ventas del periodo por origen y conversión por fuente (14-10-2026)
+
+Responde cuánto vendió la tienda —todas sus ventas, no solo las del bot—, quién
+las cerró y, por cada fuente de leads, cuántos de los que llegaron compraron.
+Está en **Consolidado** y en la página de cada tienda, en «Ventas del periodo».
+
+**Por qué cambió.** Las cifras de cabecera (Ingresos, Pedidos, Ticket
+promedio), «Ventas por día» y «Por tienda» salían de `daily_rollups`, que solo
+cuenta los pedidos con la etiqueta `kapso`. Del 14-09 al 13-10-2026 eran cerca
+de 600 de 6.622 pedidos activos: el tablero enseñaba la undécima parte del
+negocio, y
+«Canal de cierre» (§17.3) —que ya contaba todo— no cuadraba con la cabecera de
+arriba.
+
+**Universo.** El mismo de §17.3: todos los pedidos de la tienda (`orders`), por
+el día **local** en que se crearon, con los cancelados aparte y el ingreso como
+total − reembolsado. Cada pedido con su canal de la tabla de §17.3, leído de la
+vista `pedidos_canal`: la cabecera, «Ventas por día», «Por tienda» y «Canal de
+cierre» son las mismas ventas y cuadran entre sí.
+
+| Módulo | Qué cuenta ahora |
+| --- | --- |
+| Ingresos, Pedidos, Ticket promedio | Todas las ventas de las tiendas que cuentan, cada una en su ventana |
+| Ventas por día | Las mismas, cada día partido por grupo de cierre (asesora, bot o automatización, la clienta sola en la web, otros) |
+| Por tienda | Las mismas por tienda, con la parte que cerró una asesora y la conversión del bot de cada una |
+| Canal de cierre | Las mismas por canal (§17.3), con el cambio contra el periodo anterior |
+| Conversión del bot | Pedidos del canal «Bot de Kapso» ÷ conversaciones (abajo) |
+| Conversión por fuente | La cohorte de leads del periodo (abajo) |
+
+**Desde cuándo.** Cada tienda cuenta desde su propio día, como en §17.3: el más
+tardío de `ORDERS_SYNC_FROM` y su inicio en Kapta. Con varias tiendas, la
+cabecera suma cada tienda en su ventana y un aviso arriba de las cifras nombra
+cada tienda que cuenta desde otra fecha, la que empieza después del periodo (no
+entra) y la que todavía no usa Kapta (fuera). Los días de «Ventas por día» van
+desde el primero que cuenta alguna tienda. Si ninguna tienda tiene ventas que
+contar en el periodo, la cabecera vuelve a la vista anterior con un aviso.
+
+**Contra el periodo anterior.** El cambio («+7,7 %») solo se muestra si cada
+tienda que cuenta ahora contaba el periodo anterior **entero**. Si no —el
+periodo actual está recortado, o el anterior cae antes del inicio de alguna
+tienda—, el anterior saldría con menos ventas de las que hubo y el cambio sería
+falso: las cifras dicen «sin comparar: el anterior no tiene todas las ventas».
+El anterior sale de las mismas ventas por origen, con la misma regla.
+
+**«Conversión del bot»** (antes «Conversión»). Los pedidos del canal «Bot de
+Kapso» ÷ las conversaciones de `daily_rollups`, los dos en la ventana de cada
+tienda: dividir un numerador recortado por un denominador entero daría una
+tasa falsa. Un pedido con `kapso` que registró una asesora es de la asesora
+(§17.3) y no entra en el numerador; lo que cerró la web u otro canal, tampoco.
+En el mes medido casi ninguna venta de asesora conservaba `kapso` (§17.3), así
+que la tasa casi no se mueve, pero ahora dice lo que mide.
+
+**Lo que sigue siendo solo del bot, y lo dice.** «Conversión del bot» lo dice
+en su nombre. Productos, Fuente, Embudo y su salud, Desglose de negocio,
+Integridad y Patrón de horas leen los pedidos del bot y llevan «Pedidos del
+bot» en el contexto de su panel; donde la tarjeta enseña pedidos o ingresos,
+también lo dice («pedidos creados por el bot»). Carritos y Números de WhatsApp
+cuentan como compra la del lead por cualquier vía, pero sus ingresos solo
+suman pedidos del bot y lo dicen («Ingresos recuperados del bot», con el ticket
+sobre los carritos que trajeron un pedido del bot; «vende más por el bot»,
+«Ingresos del bot»). La Primera respuesta sale de los cierres diarios. «Venta perdida estimada» multiplica los leads que
+no compraron por el ticket de todas las ventas. El CSV de los cierres diarios
+se llama «Resumen diario del bot CSV».
+
+**Sin la migración 0268**, con error o sin ninguna tienda que contar, la
+cabecera, «Ventas por día» y «Por tienda» vuelven a la vista anterior —los
+cierres diarios del bot, con las etiquetas «Ingresos del bot», «Pedidos del
+bot» y «Ticket promedio del bot»— y un aviso arriba de las cifras dice por qué.
+Nunca con ceros.
+
+**«Conversión por fuente».** Una cohorte: de los leads que **nacieron** en el
+periodo, cuántos compraron en sus primeros 7 días.
+
+- **Nacer.** El día local de la tienda de `coalesce(first_seen_at,
+  created_at)`, dentro de la ventana de su tienda. No nace la fila que Kapta
+  creó desde un pedido del bot cuyo teléfono no tenía lead (llega sin
+  `first_seen_at` y después de su propio pedido): no es alguien que escribió.
+  Medido: 120 de unos 21.800 leads en 30 días.
+- **Madurar.** Un lead entra en la tasa cuando cumplió 7 días al momento de
+  mirar. Los más nuevos son «por madurar»: se cuentan, pero no entran. Por eso
+  esta tarjeta no se compara con el periodo anterior: los últimos días de
+  cualquier periodo todavía están madurando.
+- **Ya era clienta.** Un lead maduro con un pedido activo de la misma tienda
+  **antes** de nacer, por su teléfono o por su propio pedido (`order_id`). Va
+  aparte: comprar otra vez no es convertir. `leads.has_order` no sirve para
+  esto: se marca con cualquier pedido del teléfono, también los anteriores al
+  lead y los cancelados, y nunca se borra. Límite conocido: antes de
+  `ORDERS_SYNC_FROM` (2026-06-01) Kapta solo tiene los pedidos del bot, así
+  que una compra anterior por la web de esa época no se ve; en las cohortes
+  cercanas al inicio de cada tienda alguna clienta puede contar como nueva.
+  El error se achica a medida que el periodo se aleja de esa fecha.
+- **Convirtió.** Un pedido activo de la misma tienda, por el teléfono del lead
+  o su `order_id`, creado después de nacer y antes de 7 días, **por cualquier
+  canal**. Se toma el primero, y su canal (§17.3) dice quién cerró la compra.
+  Un lead sin teléfono (solo `bsuid`) convierte solo por su `order_id`.
+- **La tasa** es convertidos ÷ los maduros que no eran clientas. Sin ninguno,
+  la tasa dice «Sin datos», nunca 0 %. Con varias tiendas se suman
+  numeradores y denominadores; nunca se promedian porcentajes.
+
+| Fuente | `leads.source` |
+| --- | --- |
+| Anuncios de Meta | `meta_ad` |
+| Carritos COD abandonados | `cod_cart` |
+| Orgánico de WhatsApp | sin fuente, o `whatsapp-bot` (la marca que recibe el lead orgánico que ganó, `lib/leads-ingest.ts`) |
+| Web de Facebook | `fb_web` |
+| Búsquedas abandonadas | `abandoned_browse` |
+
+La venta telefónica (`manual`) y cualquier fuente que no esté en la tabla no
+tienen tasa —no hay un canal que medir—: se cuentan aparte, en una línea bajo
+la tabla.
+
+**«Cierre de las asesoras».** En el mismo panel: las ventas que registraron en
+`order_sales` en el periodo, por la hora del botón y también las que después se
+anularon (contadas aparte), ÷ los leads **distintos** de la tienda que
+trabajaron —una gestión firmada de `lead_calls` que no es `system` ni
+`voice_agent`—. No es la conversión de una fuente: una asesora trabaja leads de
+cualquier fuente y de cualquier fecha. Productividad suma esos leads por
+asesora, así que allí un lead que trabajaron dos cuenta dos veces y aquí una.
+
+Medido del 14-09 al 13-10-2026, días de Lima, con la regla de arriba:
+
+| Fuente | Conversión en 7 días | Compras que cerró una asesora |
+| --- | --- | --- |
+| Anuncios de Meta | 6,3 % | 240 de 324 |
+| Carritos COD abandonados | 30,2 % | 714 de 917 |
+| Orgánico de WhatsApp | 9,4 % | 262 de 355 |
+| Web de Facebook | 15,9 % | — |
+| Búsquedas abandonadas | 3,6 % | — |
+
+Cómo se calcula: `ventas_por_origen` y `conversion_por_fuente` (migración 0268,
+de lectura, con la sesión de quien mira), una llamada por tienda en su ventana
+(`getOriginSales` y `getSourceConversion` en `lib/access.ts`), leídas en
+`lib/consolidado-origen.ts` y dibujadas en `components/executive-dashboard.tsx`
+y `components/source-conversion.tsx`. La cohorte parte el nacimiento en dos
+rangos de columnas simples —`first_seen_at` y, sin él, `created_at`— con sus
+índices (`leads_store_first_seen_idx` y `leads_store_created_sin_first_seen_idx`),
+que en producción se crean a mano con `create index concurrently` antes de la
+migración (DEPLOY.md): bajo RLS, Postgres no lleva al índice un rango sobre
+`coalesce(...)`.
 
 ## 18. Implementación incremental
 

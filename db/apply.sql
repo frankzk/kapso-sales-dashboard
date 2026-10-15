@@ -537,4 +537,6 @@
 \ir migrations/0266_order_master_dispatched_with.sql
 \echo 'Applying 0267_invoices_backfill.sql'
 \ir migrations/0267_invoices_backfill.sql
+\echo 'Applying 0268_ventas_por_origen.sql'
+\ir migrations/0268_ventas_por_origen.sql
 \echo 'Done.'
