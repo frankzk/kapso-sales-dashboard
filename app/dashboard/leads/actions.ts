@@ -167,10 +167,9 @@ async function allowedScope(requested: StoreScope): Promise<StoreScope> {
 export async function loadLeadsInsightsPanel(
   storeIds: StoreScope,
   timezone: string,
-  pendingNow: number,
 ): Promise<LeadsInsights | { error: string }> {
   try {
-    return await getLeadsInsights(await allowedScope(storeIds), timezone, pendingNow);
+    return await getLeadsInsights(await allowedScope(storeIds), timezone);
   } catch {
     return { error: "No se pudo cargar el tablero." };
   }

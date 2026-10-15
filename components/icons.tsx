@@ -398,6 +398,24 @@ export function IconArrowLeft(props: IconProps) {
   );
 }
 
+/** Subió contra la referencia (el «vs. ayer» del tablero de Leads). */
+export function IconArrowUp(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M12 19V5M5 12l7-7 7 7" />
+    </svg>
+  );
+}
+
+/** Bajó contra la referencia. */
+export function IconArrowDown(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M12 5v14M19 12l-7 7-7-7" />
+    </svg>
+  );
+}
+
 /** Navegar: la flecha de «ir» de los mapas. */
 export function IconNavigate(props: IconProps) {
   return (
