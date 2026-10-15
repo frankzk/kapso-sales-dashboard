@@ -525,4 +525,10 @@
 \ir migrations/0260_invoices_hardening.sql
 \echo 'Applying 0261_invoices_manual.sql'
 \ir migrations/0261_invoices_manual.sql
+\echo 'Applying 0262_invoices_claim_coverage.sql'
+\ir migrations/0262_invoices_claim_coverage.sql
+\echo 'Applying 0263_lead_insights_rollup_sin_llamar.sql'
+\ir migrations/0263_lead_insights_rollup_sin_llamar.sql
+\echo 'Applying 0264_order_master_sales_channel.sql'
+\ir migrations/0264_order_master_sales_channel.sql
 \echo 'Done.'

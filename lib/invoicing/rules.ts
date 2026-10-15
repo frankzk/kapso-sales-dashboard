@@ -330,6 +330,13 @@ export const INVOICE_REASONS = [
   // es del pedido sino de Kapta, y que la persona que pulsó tiene que leer.
   "sin_migracion",
   "turno_fallido",
+  // Lo que la persona confirmó (el RUC y el total) ya no es lo que saldría: el
+  // pedido, sus pagos o la cuenta del RUC cambiaron desde que lo abrió. Lo dice
+  // `emitInvoiceNow` con SU lectura, la misma con la que arma la boleta.
+  "pedido_cambio",
+  // El despliegue no es producción: una vista previa comparte la base y la
+  // llave de cifrado con producción, y desde ella saldría una boleta real.
+  "no_produccion",
 ] as const;
 export type InvoiceReason = (typeof INVOICE_REASONS)[number];
 
@@ -375,6 +382,9 @@ export const INVOICE_REASON_LABEL: Record<InvoiceReason, string> = {
   modo_distinto: "El RUC no está en ese modo.",
   sin_migracion: "Falta aplicar una migración de comprobantes: no se emitió nada.",
   turno_fallido: "El turno de la base no respondió como se esperaba: no se envió nada a SimpleFact.",
+  pedido_cambio:
+    "El pedido cambió desde que lo abriste (el RUC o el total): vuelve a abrirlo y revisa la boleta antes de emitirla.",
+  no_produccion: "Emitir solo funciona en producción: este despliegue es una vista previa.",
 };
 
 // ── A qué cuenta entró cada pago (MOM §35.2) ─────────────────────────────────
@@ -874,6 +884,81 @@ export function findSaleByNote(body: unknown, invoiceId: string): unknown | null
   const ref = invoiceNoteRef(invoiceId).toLowerCase();
   const hits = data.filter((sale) => (text(obj(sale).notes) ?? "").toLowerCase().includes(ref));
   return hits.length === 1 ? hits[0] : null;
+}
+
+// ── Liberar un `en_duda` (MOM §35.4) ─────────────────────────────────────────
+
+/**
+ * Cuánto tiene que llevar un comprobante en duda antes de que una persona lo
+ * libere con «No está en SimpleFact: volver a intentar»: 30 minutos.
+ *
+ * POR QUÉ ESPERAR. Un POST que se cortó por tiempo puede haber llegado:
+ * SimpleFact recibió la venta y todavía no la muestra en su lista. Quien busca
+ * la nota «Kapta ‹ref›» en ese rato no la encuentra, la libera, vuelve a pulsar
+ * «Emitir esta boleta» y salen DOS boletas a SUNAT, que no se borran. Mientras
+ * espera, la conciliación del barrido (cada 10 minutos) la sigue buscando y, si
+ * aparece, la deja `emitida` sola. Confirmar que SÍ está en SimpleFact
+ * («registrar su serie») no espera: registrar una boleta que existe no emite
+ * otra.
+ */
+export const INVOICE_RELEASE_MIN_AGE_MS = 30 * 60_000;
+
+/**
+ * Desde cuándo se puede liberar un `en_duda` (ISO), redondeado hacia arriba al
+ * minuto: el aviso dice «hasta las HH:MM», y a esa hora ya se puede.
+ *
+ * EL RELOJ EMPIEZA CUANDO QUEDÓ EN DUDA: `updated_at`. El candado de la base
+ * (`order_invoices_guard`, 0257/0260) lo pone en now() en cada UPDATE que deja
+ * pasar, y Kapta solo le escribe a una fila `en_duda` para sacarla de la duda
+ * (a `emitida` o a `error`); la cascada de borrar una cuenta tampoco lo mueve
+ * (0260). Así, mientras sigue en duda, `updated_at` es cuando pasó a `en_duda`:
+ * al contestar SimpleFact, o en la conciliación pasados los 10 minutos de
+ * `emitiendo`. Es más tarde que el POST, nunca antes, así que espera de más y
+ * no de menos. `created_at` (el turno, justo antes del POST) queda de piso.
+ *
+ * null si no se sabe cuándo quedó en duda: entonces no se libera (falla
+ * cerrada).
+ */
+export function invoiceReleaseAvailableAt(row: {
+  createdAt: string | null | undefined;
+  updatedAt: string | null | undefined;
+}): string | null {
+  const since = time(row.updatedAt);
+  if (since === null) return null;
+  const start = Math.max(since, time(row.createdAt) ?? since);
+  return new Date(Math.ceil((start + INVOICE_RELEASE_MIN_AGE_MS) / 60_000) * 60_000).toISOString();
+}
+
+/**
+ * «15:42», en hora de Lima. A mano y no con Intl, como `limaShort`
+ * (lib/payment-review.ts): Perú es UTC-5 fijo, sin horario de verano.
+ */
+function limaHourMinute(iso: string): string {
+  return new Date(Date.parse(iso) - 5 * 3_600_000).toISOString().slice(11, 16);
+}
+
+/** Lo que se le dice a quien quiere liberar un `en_duda` antes de tiempo. */
+export function invoiceReleaseWaitText(availableAt: string): string {
+  return `Espera hasta las ${limaHourMinute(availableAt)} (hora de Lima): SimpleFact puede tardar en mostrar una boleta que sí recibió. Mientras tanto Kapta la sigue buscando.`;
+}
+
+/** No se supo cuándo quedó en duda: no se libera. */
+export const INVOICE_RELEASE_UNKNOWN_TEXT =
+  "No se pudo saber desde cuándo está en duda: no se libera. Vuelve a abrir el pedido.";
+
+/**
+ * ¿Se puede liberar ya este `en_duda`? null: sí. Si no, lo que se le dice a la
+ * persona: hasta qué hora esperar, o que no se supo desde cuándo está en duda.
+ */
+export function invoiceReleaseBlock(
+  row: { createdAt: string | null | undefined; updatedAt: string | null | undefined },
+  now: Date,
+): string | null {
+  const availableAt = invoiceReleaseAvailableAt(row);
+  if (availableAt === null) return INVOICE_RELEASE_UNKNOWN_TEXT;
+  // Un reloj que no se entiende no cuenta como «ya pasó».
+  const at = now.getTime();
+  return !Number.isFinite(at) || at < Date.parse(availableAt) ? invoiceReleaseWaitText(availableAt) : null;
 }
 
 // ── Avisos después de emitir (MOM §35.9) ─────────────────────────────────────

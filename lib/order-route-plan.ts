@@ -224,7 +224,7 @@ export function routeDeskGate(order: {
 
   const terminal = terminalOrderBlocker(order.generalStatus ?? "");
   if (terminal) {
-    blockers.push({ text: terminal, target: "acciones", cta: "Ir a Registrar estado ↓" });
+    blockers.push({ text: terminal, target: "acciones", cta: "Ir a Gestión manual ↓" });
     blockedActions.add("tanders");
     blockedActions.add("shalom");
     if (!order.closedByFailedDelivery) blockedActions.add("manual");

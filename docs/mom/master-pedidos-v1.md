@@ -63,6 +63,34 @@ trajo viaja en `orders.utm_meta`, y las reglas para leerlo están en
 clienta sola en la web— se decide por hechos que la sincronización no borra,
 no por etiquetas locales (§17.3).
 
+**Canal de venta (15-10-2026).** Todos los pedidos nacen en Shopify, pero no
+por el mismo camino, y lo dicen las etiquetas que cada camino le pone. El
+Master lo guarda en `order_master.sales_channel` (0264) y lo filtra con la
+píldora «Canal» (parámetro `cn` de la URL). Un pedido tiene un solo canal; si
+lleva marcas de dos, gana el primero de esta lista —quien cerró la venta antes
+que la herramienta donde quedó escrita—:
+
+| Canal | Etiqueta en Shopify | 45 días al 15-10-2026 |
+| --- | --- | --- |
+| Asesora (Leads) | `venta_manual`, `carrito_recuperado` | 15 % |
+| Chatbot WhatsApp | `kapso`, `whatsapp`, o el pedido trae conversación de Kapso | 9 % |
+| Bot de carritos | `CARRITO RECUPERADO`, `BOT`, `BOT (whatsapp_cloud)` | 4 % |
+| Catálogo WhatsApp | `catalogo-wsp` (el catálogo privado del agradecimiento, §31) | 1 % |
+| Web · carrito completado | `easysell-abandoned-checkout` (formulario abandonado que la clienta completó después) | 15 % |
+| Web · formulario | `easysell_cod_form` | 55 % |
+| Sin marca | ninguna de las anteriores (sobre todo pedidos creados a mano en Shopify con el nombre de la asesora como etiqueta) | 1,5 % |
+
+La regla vive en `lib/sales-channel.ts` y la escribe el recálculo del pedido;
+la misma regla en SQL (`order_sales_channel`) solo rellenó lo existente al
+aplicar la 0264. No se usa para atribuir ventas a una asesora: eso lo decide
+`order_sales`, y el Consolidado reparte las ventas con «Canal de cierre»
+(§17.3), que además marca la venta que ayudó una gestión de asesora. Por eso
+las dos cifras no coinciden: cuando la asesora completa un carrito abandonado
+de EasySell, el borrador conserva sus etiquetas y no recibe `venta_manual`.
+Del 14-09 al 13-10-2026, de 1.105 pedidos activos «Web · carrito completado»,
+1.076 tenían venta de asesora en `order_sales`, y 294 de 3.229 «Web ·
+formulario» también.
+
 ### Salida
 
 Intento físico de entregar un pedido. Una salida corresponde a un paquete, un
@@ -489,7 +517,8 @@ Registro:
   es opcional.
 - Los comentarios y el cambio manual de estado **no** son registro de gestión.
   El cambio manual es un override que congela el pedido frente al recálculo:
-  usarlo como bitácora de llamadas lo desconecta del MOM.
+  usarlo como bitácora de llamadas lo desconecta del MOM. Desde el 15-10-2026,
+  además, el cambio manual es solo de owner y admin (`master.set_status`, §16).
 - **El congelamiento es frente a lo automático, no frente a otra persona.**
   Anular el pedido en Shopify también lo decide alguien, así que entre dos
   decisiones humanas manda la más reciente: una anulación **posterior** al cambio
@@ -1198,8 +1227,8 @@ corresponde. Queda con actor, fecha y motivo sobre el pedido anterior:
   entregada: esa puerta es del courier (§11). Lo que cambia es el pedido.
 - **Entrega declarada** se cierra cuando el pedido pasa a `entregado` —lo
   reporta el courier o se confirma a mano, y desde ahí manda la liquidación— o
-  cuando alguien fija el estado en «Gestión manual» después de la declaración,
-  también si resultó falsa. Una declaración sin salida sería otro pedido
+  cuando un admin fija el estado en «Gestión manual» después de la declaración
+  (solo owner y admin, §16, 15-10-2026), también si resultó falsa. Una declaración sin salida sería otro pedido
   atascado.
 - **La pérdida declarada abre la indemnización** igual que la solicitud formal;
   finanzas la completa con monto y la cierra con «Resolver indemnización».
@@ -1742,7 +1771,8 @@ Reglas:
   toca, como ya hacía «Abrir Mesa de cierre ↓».
 - El motivo nombra **dónde se arregla**, porque hay dos «reabrir» y no sirven
   para lo mismo: el del expediente vive en la **Mesa de cierre** y el del estado
-  en **Gestión manual → Registrar estado**. Un aviso que manda a un panel
+  en **Gestión manual → Registrar estado**, que desde el 15-10-2026 solo ve un
+  admin (§16): el aviso dice que lo reabre un admin. Un aviso que manda a un panel
   inexistente es peor que no decir nada — el de Tanders mandaba a «Estado del
   pedido», que no existe con ese nombre.
 - La frase la escribe una sola función para las tres pantallas. Cuando cada una
@@ -1750,6 +1780,38 @@ Reglas:
 - Si alguien acaba de anular la salida para cambiar de courier, el aviso lo dice:
   ese estado **se recalcula solo** en cuanto exista otra salida viva y no hace
   falta corregirlo a mano.
+
+#### Intentos de entrega (15-10-2026)
+
+La columna de intentos del Master (`order_master.attempt_count`, «Propio · 2
+intentos» bajo el courier) suma lo que reportan los couriers externos —los
+intentos de Aliclik o, si no los trae, las reprogramaciones que gestionó el
+equipo— y, desde el 15-10-2026, **cada parada que reporta un motorizado propio
+es un intento** (`ownRiderAttempts`, evento `stop_reported`): entregada o no.
+Dos «No contesta» y una entrega son tres intentos; una parada que se corrige de
+«No entregado» a «Entregado» es la misma visita y cuenta una vez. Antes el
+Master solo sumaba lo externo: los 487 pedidos con un «No entregado» de Grupo GF
+decían «0 intentos» (#KP140941: salió el 13/10 y el 14/10 con Roy, «No
+contesta» las dos veces, y la fila decía 0).
+
+- **No cambia el costo.** El costo logístico sigue con los intentos del
+  courier: Grupo GF no cobra por intento adicional, y sumar sus visitas a la
+  tarifa de otro courier (un pedido que luego salió con Aliclik) inventaría un
+  costo.
+- **No cambia la etapa.** Es un dato de la fila; la macroetapa se decide como
+  antes. `MOM_RESOLUTION_VERSION` sube a `mom-v1.27` para que el cron recalcule
+  la columna.
+- **El filtro.** En «Más filtros», «Intentos de entrega»: Todos, 0 intentos, 1
+  intento, 2 intentos, 3 intentos y 4 a más intentos (parámetro `at` de la URL,
+  de 0 a 4). Reemplaza la casilla «Más de un intento»; un enlace viejo con esa
+  casilla abre el listado sin ese filtro. «0 intentos» es «ningún intento
+  reportado», no «nunca salió»: también cae ahí lo que entregaron Tanders,
+  Shalom, Olva o Urpi, que no reportan intentos a la columna (abajo). Para
+  acercarse a «nunca salió», se combina con la etapa (Preparación o Por
+  despachar).
+- **Lo que todavía no cuenta.** Los intentos que Urpi reporta en su export
+  (§30.11) viven en su propia tabla y no entran en la columna; tampoco Tanders,
+  Shalom ni Olva, que no reportan intentos.
 
 ### 9.4 Reportes, pagos y devoluciones físicas de Lima
 
@@ -3253,7 +3315,9 @@ Marcar `recogido`, `entregado`, `disponible_para_recojo` o cualquier otro estado
 que signifique que la caja ya está en la sucursal **exige que exista una salida**.
 Si el pedido es de cobertura Agencia y no consta ninguna, el Master pide **por qué
 agencia se envió** —Shalom u Olva— y registra la salida con la firma de quien
-marca. Sin courier elegido el marcado no se guarda.
+marca. Sin courier elegido el marcado no se guarda. Quien marca es, desde el
+15-10-2026, un owner o un admin: el estado a mano ya no es de «Gestionar
+pedidos» (§16).
 
 **Por qué.** Una salida es lo único por lo que el tablero sabe que un pedido se
 despachó. Un pedido que llega a la agencia sin ella desaparece de los indicadores
@@ -6433,7 +6497,11 @@ sin entrega). La simulación muestra qué saldría hoy sin enviar nada.
   días al 13-10, segundos después de consultarla, con el paquete todavía en la
   agencia. Si la clienta la perdía y la pedía días después, «pedido cerrado» la
   bloqueaba, y la salida era devolver el pedido a «pendiente» a mano (motivo
-  «dar clave»). Ahora «entregado» solo cierra la clave si lo **validado** no
+  «dar clave»). Desde el 15-10-2026 ni ese marcado ni esa vuelta atrás los hace
+  una vendedora o asesora que dicta la clave: el estado a mano es de owner y
+  admin (§16), y el pedido sigue al rastreo de Shalom.
+
+  Desde el 13-10-2026, «entregado» solo cierra la clave si lo **validado** no
   cubre el total (o el checkout no lo cobró): con el dinero confirmado no hay
   nada que proteger. **Anulado y devuelto siguen cerrándola** siempre.
 - La clave pertenece a la salida Shalom: se registra, consulta y entrega desde
@@ -7227,7 +7295,8 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   operación ya hacía a mano pegando el número en `tracking.olvaexpress.pe`.
   La apikey es de Olva y la pueden rotar sin aviso: vive en el entorno
   (`OLVA_TRACKING_APIKEY`) y, cuando falle, **el cron reporta y no toca
-  estados**; el marcado a mano sigue siendo el camino de respaldo.
+  estados**; el marcado a mano sigue siendo el camino de respaldo, y desde el
+  15-10-2026 lo hace un admin (§16).
 - **Manda el estado que Olva declara vigente** (`nombre_estado_tracking`), no el
   hito «más avanzado» como en Shalom. Se comprobó en un envío real: asignado a
   un operador el 09/09, confirmado en tienda el 10/09 y asignado de nuevo el
@@ -7820,7 +7889,7 @@ registra en cada evento.
   | Despacho y Grupo GF | Gestionar pedidos, despachar, entregar la caja al motorizado, reprogramar entregas en Lima (§9.5), armar rutas, reportar entregas por un motorizado, subir reportes de couriers, manejar stock de Swayp y Fénix, preparar paquetes, crear guías, recibir devoluciones |
   | Liquidaciones | Gestionar pedidos, subir y cerrar liquidaciones de motorizados, cuadrar hojas de couriers, conciliar el dinero del pedido |
   | Cobranza | Gestionar pedidos, subir comprobantes, ver y registrar claves de recojo, aprobar cobros de Tanders rechazados |
-  | Supervisión | Gestionar pedidos, corregir pedidos cerrados, cerrar o reabrir pedidos, anular guías de Aliclik, recibir devoluciones, reingresar al inventario, ver reportes del negocio |
+  | Supervisión | Gestionar pedidos, registrar la devolución de pedidos cerrados, cerrar o reabrir el expediente de cierre, anular guías de Aliclik, recibir devoluciones, reingresar al inventario, ver reportes del negocio (el estado a mano, no: es de admin) |
   | Administración | Gestionar pedidos, gestionar el equipo, administrar tiendas, editar costos, manejar stock, editar el catálogo de Aliclik, asignar producto a anuncios, configurar hojas de couriers, dar de alta motorizados, subir reportes de couriers, ver reportes del negocio |
 
   Reglas:
@@ -7832,6 +7901,9 @@ registra en cada evento.
     Grupo GF, exportar datos, boletas y facturas), ni confirmar reembolsos. Lo
     fija una prueba.
   - Una revocación puntual sigue ganando sobre cualquier rol.
+  - «Gestionar pedidos» ya **no** incluye cambiar el estado a mano
+    (15-10-2026, abajo): eso es «Registrar estado a mano»
+    (`master.set_status`), de owner y admin, y ningún rol lo trae.
   - Solo el dueño asigna o quita roles. Equipo muestra, para cada persona, lo
     que puede hacer hoy y de dónde le viene (ver «Glosario de Equipo»).
   - Lo que el código decidía con «¿es owner o admin?» ahora pide un permiso:
@@ -7845,7 +7917,8 @@ registra en cada evento.
     la misma regla: armar rutas ← Despacho, cerrar liquidaciones ←
     Liquidaciones, costos ← Administración.
 
-  Mientras nadie tenga roles, todos ven y pueden lo mismo que antes. Antes de
+  Mientras nadie tenga roles, todos ven y pueden lo mismo que antes, salvo el
+  estado a mano, que desde el 15-10-2026 es solo de owner y admin. Antes de
   bajar a alguien de admin a vendedora hay que darle acceso explícito a sus
   tiendas (`user_store_access`): owner y admin ven todas las tiendas de la
   organización sin esa lista.
@@ -7892,6 +7965,52 @@ registra en cada evento.
 
   `test/escrituras-piden-permiso.test.ts` falla si una acción de Repro
   Provincia vuelve a escribir sin pedir permiso.
+- **El estado a mano es de un admin (15-10-2026).** Decisión del dueño, con
+  sus palabras: «solo quienes tienen acceso de Admin pueden realizar esa
+  acción». La acción es **Gestión manual → Registrar estado** en la ficha del
+  pedido y **Registrar estado…** en la barra de lote del Master: cambiar a mano
+  el estado general y el operativo de un pedido, un cambio que **congela** el
+  pedido frente al recálculo (§6.1). Pedía «Gestionar pedidos» (`master.edit`),
+  que traen el paquete de la vendedora y los siete roles por función.
+  - **Permiso propio: `master.set_status`** («Registrar estado a mano»). Lo
+    tienen **owner y admin por su acceso**. No se concede uno por uno en
+    **Equipo** ni lo trae ningún rol, tampoco Supervisión, que corrige pedidos
+    cerrados (`master.override_status`) y aun así no cambia estados a mano.
+    Una revocación puntual se lo quita a un admin, como cualquier permiso.
+  - **Lo exige el servidor**, en la **organización del pedido**
+    (`hasOrgPermission`, no la unión de las de la persona: ser admin en otra
+    empresa no sirve), después de comprobar que el pedido se ve y antes de leer
+    o escribir nada más. El lote no intenta ningún pedido sin el permiso y
+    después lo pregunta pedido por pedido. Responde «Solo un admin puede
+    registrar el estado a mano.» (`setOrderStatus`, `applyOrderStatusBulk`).
+  - **No cambia lo demás.** `master.edit` sigue haciendo falta, y un pedido
+    cerrado pide además `master.override_status` y motivo
+    (`closedStatusChangeError`). Comentar, registrar la devolución, corregir el
+    vínculo de una guía, confirmar, crear salidas y el resto de escrituras del
+    Master siguen con «Gestionar pedidos».
+  - **En pantalla.** Sin el permiso, la ficha no pinta la tarjeta y deja en su
+    sitio «Registrar el estado a mano lo hace un admin.»; la barra de lote no
+    ofrece «Registrar estado…». Los avisos que mandan a reabrir un pedido
+    cerrado dicen que lo hace un admin (`REOPEN_HINT`), y la entrega declarada
+    de la Mesa de cierre, que el estado lo fija un admin.
+  - **No son «Registrar estado»**, y siguen con su permiso: «Registrar
+    devolución» (§13; escribe `devuelto` solo con despacho y guía), las
+    entregas por la puerta única de Rutas, Liquidaciones 1 y 2 y Urpi (§11.4,
+    §29.12, §30.8), anular una guía de Aliclik (`aliclik.cancel_guide`), el
+    resultado del courier y el estado de la guía en Repro Provincia (son de la
+    salida, no del pedido: principio 8, §2), la gestión de confirmación (§8),
+    el pedido acompañante (§32) y finalizar o reabrir el expediente en la Mesa
+    de cierre.
+  - **Lo que deja de hacer el equipo.** Marcar «Entregado» al dictar la clave
+    de Shalom (469 veces en los 30 días al 13-10, §12), el marcado a mano de
+    los pedidos de Agencia (§10) y el respaldo de Olva cuando su rastreo falla
+    (§12): ahora el estado sigue al rastreo y, cuando haga falta a mano, lo
+    registra un admin.
+
+  `test/estado-a-mano-solo-admin.test.ts` lo fija contra la acción de verdad, y
+  `test/escrituras-piden-permiso.test.ts` falla si otra acción de
+  `app/dashboard/pedidos/actions.ts` (salvo `registerReturn`) escribe un
+  `status_override` sin preguntarlo.
 
 ### 16.1 Bandeja de validación de pagos
 
@@ -12293,7 +12412,9 @@ Runbook: `docs/runbooks/urpi-programaciones.md`. Persistencia: migraciones 0215�
 
 `/dashboard/urpi?vista=resultados` carga el export «Reporte del mes – detallado»
 del AppSheet de Urpi (.csv). Es lo que Urpi **dice** que pasó en cada intento:
-Kapta lo registra, lo vincula al pedido y propone; no lo da por hecho.
+Kapta lo registra y lo vincula al pedido. Desde el 15-10-2026 las **entregas**
+se marcan solas en el Master al cargar el reporte (ver «Marcado automático»);
+cancelados y reprogramados solo se registran.
 
 **Identidad.** Urpi exporta una fila por **intento**, no por pedido, con su
 número de fila («_RowNumber») como identidad. Un reintento apunta al anterior en
@@ -12321,8 +12442,8 @@ pedido. Esta regla vale para el reporte de resultados; la programación enviada
 
 | Urpi | Kapta |
 | --- | --- |
-| Entregado, pedido abierto en Kapta | «Entregados por marcar». Quien tiene `master.edit` los marca entregados, uno a uno o en lote, por la única puerta (§11.4, `lib/master-door.ts`): `status_override` con fuente `liquidacion`, courier `urpi`, mediodía de Lima del día del reporte y la fila de Urpi como evidencia. |
-| Entregado, pedido anulado **solo en Kapta** (Shopify vivo) | También «Entregados por marcar»: solo Shopify termina una venta (v1.23). Caso real: #KP135768, entregado por Urpi el 23/09 y cerrado como anulado porque esa tarde se le emitió una guía de Tanders que se anuló sin salir. |
+| Entregado, pedido abierto en Kapta | Se marca entregado **al cargar el reporte** (desde el 15-10-2026) por la única puerta (§11.4, `lib/master-door.ts`): `status_override` con fuente `liquidacion`, courier `urpi`, mediodía de Lima del día del reporte y la fila de Urpi como evidencia. Lo que la carga no pudo marcar queda en «Entregados por marcar», para marcarlo uno a uno o en lote. |
+| Entregado, pedido anulado **solo en Kapta** (Shopify vivo) | Igual, se marca: solo Shopify termina una venta (v1.23). Caso real: #KP135768, entregado por Urpi el 23/09 y cerrado como anulado porque esa tarde se le emitió una guía de Tanders que se anuló sin salir. |
 | Entregado, pedido anulado **en Shopify** o devuelto | Observación. Nunca se marca. Se resuelve de dos formas: si el pedido se rehízo en Shopify, se vincula el envío al pedido nuevo con su código (y pasa a «por marcar»); si no, se **cierra con motivo** —evento `urpi_observation_resolved` en el historial del pedido, que no cambia su estado— y el dinero se cuadra en la liquidación de Urpi. Un intento posterior de Urpi la reabre. El 05-10-2026 eran 6: anulados en Shopify entre 7 y 14 días después de que Urpi los entregara y cobrara. |
 | Cancelado | Se registra con su motivo, detalle y fotos y se lista en «Cancelados por Urpi» para Seguimiento Lima. **No cambia el estado del Master** ni anula el pedido en Shopify. |
 | Reprogramado | Se registra y se lista con su nuevo día: el siguiente de lunes a sábado desde la fecha del reporte (§30.10). No cambia el estado del Master. |
@@ -12349,6 +12470,39 @@ definir»— no se sabe qué caja se llevó Urpi y no se toca; sin «por definir
 se crea una salida. La pantalla ofrece completar las ya marcadas antes de esta
 regla con el mismo botón.
 
+**Marcado automático (decisión del owner, 15-10-2026).** Hasta esta fecha
+una persona revisaba «Entregados por marcar» y pulsaba «Marcar entregados».
+Nadie lo hacía a tiempo, y Urpi ya liquida y paga la recaudación de esas
+entregas: el pedido seguía «Por despachar · Listo para asignar» con el dinero
+cobrado. Caso real: #KP138847, entregado por Urpi el 06/10 (efectivo, S/ 367) y
+todavía «en proceso» el 15/10. Ese día había 26 por marcar —22 en «Listo para
+asignar», 3 en «Por reprogramar Lima», 1 anulado solo en Kapta— y 87 pedidos
+entregados por la carga histórica del cuaderno de Urpi (agosto y septiembre)
+con su caja todavía «por definir».
+
+Así funciona desde entonces (`lib/urpi-report-apply.ts`):
+
+- **Cuándo.** Después de guardar el reporte, Kapta toma todos los pedidos con
+  algún intento «Entregado» de los últimos 60 días (los mismos que muestra la
+  pantalla) y decide con el **último** intento de cada uno, igual que antes: si
+  después hubo un cancelado o un reprogramado, no se marca. También al vincular
+  a mano un envío que Urpi entregó.
+- **Qué hace.** Lo mismo que el botón: marca entregado lo que Kapta tiene
+  abierto (o anulado solo en Kapta) y rellena la caja «por definir» como salida
+  de Urpi entregada, también en los ya entregados que la tenían pendiente.
+  Anulado en Shopify o devuelto sigue siendo observación y no se toca.
+- **Quién.** El actor del evento es quien cargó el reporte (o vinculó), con el
+  motivo «…, marcado al cargar el reporte» («…, marcado al vincular el envío»)
+  y `payload.auto` = `carga` / `vinculo`. Exige `master.edit`, como siempre:
+  si quien carga solo tiene `sheets.edit`, el reporte se guarda y los
+  entregados quedan en «Entregados por marcar» para quien sí lo tenga.
+- **Si falla.** El reporte ya quedó guardado; la carga lo dice y «Entregados
+  por marcar» sigue para hacerlo a mano. Volver a cargar el archivo lo reintenta.
+- **Lo que se informa.** Solo lo que cambió y lo que alguien tiene que mirar:
+  pedidos marcados, salidas rellenadas, marcados esta vez con otra salida viva
+  (su salida se revisa a mano) y salidas que no se pudieron actualizar. Lo que
+  ya estaba al día no se repite en cada carga.
+
 **Por qué cancelado y reprogramado no mueven el Master.** «Por reprogramar
 Lima» (§9) exige una salida que conste fuera. Los despachos a Urpi salen del
 Google Sheet de programación, no de la ruta de Urpi de Kapta (6 salidas de Urpi
@@ -12364,7 +12518,7 @@ desaparezca del export. Los intentos se ven también en la ficha del pedido
 
 **Permisos.** Cargar el reporte y vincular exige `sheets.edit` en la
 organización, igual que cerrar una observación con motivo; marcar entregados
-(y rellenar la salida), `master.edit`. Vincular y marcar solo alcanzan
+(y rellenar la salida), `master.edit`, también cuando lo hace la carga sola. Vincular y marcar solo alcanzan
 pedidos de las tiendas que la persona ve. RLS: una fila vinculada se lee
 con su tienda (`auth_store_ids()`); una sin vincular, con la organización
 (`auth_org_ids()`). Escritura solo del servidor.
@@ -13169,11 +13323,13 @@ Estado: construido, y ningún RUC emite todavía. Existen las migraciones 0257
 (los arreglos de la revisión adversaria sobre la 0257: el turno que vuelve a
 revisar los pagos, la excepción de borrar la cuenta de una persona, el token
 nuevo que borra el motivo de la prueba anterior y los pedidos por revisar), las
-dos ya corridas en producción, y la 0261 (el modo «Manual» y el turno que dice
-qué fila pide y quién la pidió, 15-10-2026), que se aplica a mano antes de su
-código (35.8). Están también las reglas puras, el cliente de SimpleFact,
-el barrido (`/api/cron/invoices`), la sección «Boletas y facturas» de Ajustes
-y el panel «Comprobante» del drawer, con su «Emitir esta boleta» (35.7).
+dos ya corridas en producción; la 0261 (el modo «Manual» y el turno que dice
+qué fila pide y quién la pidió, 15-10-2026), y la 0262 (el turno que vuelve a
+revisar que la empresa recibió el pago, 15-10-2026), que se aplican a mano, en
+ese orden, antes de su código (35.8). Están también las reglas puras, el
+cliente de SimpleFact, el barrido (`/api/cron/invoices`), la sección «Boletas
+y facturas» de Ajustes y el panel «Comprobante» del drawer, con su «Emitir esta
+boleta» (35.7), que solo emite en producción.
 **Ningún RUC emite**: GRUPO GF S.A.C. nace dado de alta, en «Apagado» y sin
 token, con sus cuentas ya asignadas (35.2), y al 15-10-2026 está en
 «Simulación», con el token probado y ningún comprobante. Se enciende primero en
@@ -13322,11 +13478,11 @@ Flow si su pasarela es ese checkout o dice «flow» como palabra entera;
 cualquier otra, o ninguna, es de otra pasarela.
 
 Recién entonces se pide el turno (`invoice_claim`, 35.4), que revisa de nuevo,
-dentro de la base, que el pedido siga sin anular ni reembolsar y en soles, el
-modo, la conexión, el monto, que no haya otro comprobante y el tope del día:
-`sin_conexion`, `tope`. **Quien pide el turno dice qué fila pide** (0261). Sin
-decirlo, la del modo del RUC: real en Real, y simulada en Simulación y en
-Manual. El barrido pide la simulada de un RUC en Manual, y «Emitir esta
+dentro de la base, que el pedido siga sin anular ni reembolsar y en soles, que
+la empresa haya recibido el pago (0262, abajo), el modo, la conexión, el monto,
+que no haya otro comprobante y el tope del día: `sin_conexion`, `tope`.
+**Quien pide el turno dice qué fila pide** (0261). Sin decirlo, la del modo del
+RUC: real en Real, y simulada en Simulación y en Manual. El barrido pide la simulada de un RUC en Manual, y «Emitir esta
 boleta», la real. Una fila real solo la da un RUC en Real, o uno en Manual si
 se dice quién la pide (`p_created_by`), y una simulada, uno en Simulación o en
 Manual; si el RUC ya no está en ese modo —el owner lo cambió mientras tanto—,
@@ -13342,6 +13498,30 @@ anterior, no da el turno (`antes_de_inicio`). Así, un error en las reglas o en
 una lectura no manda a SUNAT la boleta de algo pagado antes de la fecha de
 inicio.
 
+**Que la empresa recibió el pago tampoco se lo cree** (0262). Entre la lectura
+del código y el turno pasa la relectura en Shopify, y en ese rato un pago
+validado se puede rechazar: rechazado el único, el turno se quedaba sin pagos y
+lo tomaba por un prepago web; rechazado uno de varios, lo validado ya no cubría
+el total. En los dos casos daba una fila real por un dinero que la empresa no
+recibió. Ahora, justo después de `pagos_en_revision`, el turno vuelve a revisar
+la condición 3 con los pagos y el pedido guardados, por el camino que dice la
+base del comprobante que manda el código (`p_basis`: prepago web o no). Sin
+prepago, tiene que haber pagos validados y su suma tiene que cubrir el total
+que se va a emitir, al céntimo (`sin_pago_completo`); y si el pedido guardado
+es un prepago web con pagos validados, `prepago_con_comprobantes`, como en las
+reglas. Con prepago, no puede quedar ningún pago vivo
+(`prepago_con_comprobantes`) y el pedido guardado tiene que ser de verdad un
+prepago web: pagado, por el checkout y sin nada reembolsado
+(`sin_pago_completo`). En los dos caminos, cada pago que nombra la base del
+comprobante tiene que seguir validado y ser de ese pedido
+(`sin_pago_completo`): la suma podría cubrir con otro, pero el comprobante
+diría que el dinero entró a la cuenta —y al RUC— de uno que ya no cuenta. Y los
+pagos del pedido quedan bloqueados hasta que el turno termina (35.4). Van en el
+orden de la tabla, antes que el RUC, el monto y el tope: un pedido que dejó de
+estar pagado contesta `sin_pago_completo` aunque su RUC esté apagado. Son
+motivos del pedido y no del RUC: el barrido sigue con los demás pedidos de ese
+RUC, y «Emitir esta boleta» dice el motivo sin haber llamado a SimpleFact.
+
 **Falla cerrada.** Si no se pudo leer algo —pagos, cuentas, el estado de
 cuenta, los links de Flow, Shopify—, el pedido no se emite en esa pasada. Un
 comprobante armado con datos a medias puede ir al RUC equivocado.
@@ -13355,6 +13535,14 @@ comprobante armado con datos a medias puede ir al RUC equivocado.
   RUC, revisa todo de nuevo, cuenta el tope del día y deja la fila en
   `emitiendo`. Recién entonces se llama a SimpleFact. «Emitir esta boleta»
   (35.7) pasa por el mismo turno, pidiendo una fila real.
+- **Los pagos, quietos mientras dura el turno** (0262). El turno bloquea los
+  pagos del pedido (`for share`) antes de revisarlos, hasta que termina. Cada
+  consulta de una función ve lo último que se guardó: sin el bloqueo, un pago
+  rechazado entre la revisión y la fila se colaba igual. Con él, quien rechaza
+  u observa un pago de ese pedido espera a que el turno termine y encuentra la
+  fila ya tomada: lo emitido no se toca, y el panel avisa «Un pago del
+  comprobante ya no está validado: revisa si corresponde una nota de
+  crédito.» (35.9).
 - **Lo que contestó SimpleFact:**
   - `emitida`: contestó con la venta (id, serie y correlativo).
   - `error`: contestó que no, con un 4xx que no deja duda (400, 401, 403, 404,
@@ -13371,6 +13559,20 @@ comprobante armado con datos a medias puede ir al RUC equivocado.
     registrar su serie», y pasa a `emitida`. Si confirma que no existe, la
     libera con «No está en SimpleFact: volver a intentar». Liberar una que
     existe es emitir otra.
+  - **Liberar espera 30 minutos desde que quedó en duda** (15-10-2026). Un
+    envío cortado por tiempo puede haber llegado, y SimpleFact tardar en
+    listarlo: quien no la encuentra en ese rato la libera, vuelve a pulsar
+    «Emitir esta boleta» y salen dos boletas. Mientras espera, la conciliación
+    la sigue buscando. El reloj es `updated_at`: el candado de la base lo pone
+    en cada cambio que deja pasar, y a una fila en duda solo se le escribe para
+    sacarla de la duda, así que es cuando pasó a `en_duda`; `created_at` queda
+    de piso. Antes de esa hora el servidor no la libera: «Espera hasta las
+    ‹HH:MM› (hora de Lima): SimpleFact puede tardar en mostrar una boleta que
+    sí recibió. Mientras tanto Kapta la sigue buscando.». La hora va redondeada
+    hacia arriba al minuto: a las ‹HH:MM› ya se puede. Si no se sabe desde
+    cuándo está en duda, no se libera: «No se pudo saber desde cuándo está en
+    duda: no se libera. Vuelve a abrir el pedido.». Registrar su serie no
+    espera: registrar una boleta que existe no emite otra.
   - Un `emitiendo` sin respuesta (la función se cortó a mitad del envío, o no
     se pudo guardar lo que contestó) se concilia igual pasados 10 minutos; si
     no aparece, pasa a `en_duda`. Uno que ninguna conciliación va a mirar —su
@@ -13591,8 +13793,14 @@ Reglas de esa tabla:
   qué queda: «Queda como emitida: ‹serie› de ‹razón social› (RUC ‹ruc›). No se
   puede corregir después.». La misma fila pasa a `emitida`: el RUC, el total y
   lo enviado no cambian. **Liberar** pide una nota con lo que se revisó en
-  SimpleFact. Si la conciliación u otra persona lo resolvió mientras tanto,
-  vale lo suyo y el panel lo dice.
+  SimpleFact, y solo pasados los 30 minutos (35.4): hasta entonces «No está en
+  SimpleFact: volver a intentar» está deshabilitado y el panel dice «Podrás
+  liberarla desde las ‹HH:MM› (hora de Lima): SimpleFact puede tardar en
+  mostrar una boleta que sí recibió.»; a esa hora se habilita solo, sin
+  releer el panel. Si no se sabe desde cuándo está en duda, sigue
+  deshabilitado y lo dice, como el servidor. «Sí está en SimpleFact: registrar
+  su serie» no espera. Si la conciliación u otra persona lo resolvió mientras
+  tanto, vale lo suyo y el panel lo dice.
 - **Emitir a mano es solo de Manual (owner, 15-10-2026; 35.1).** En Real emite
   solo el barrido y no hay botón «Emitir»; en Simulación y en Apagado no se
   emite. Con el RUC del pedido en Manual, quien tiene `invoices.manage` emite
@@ -13600,9 +13808,21 @@ Reglas de esa tabla:
   simulada de los últimos comprobantes de Ajustes: la misma acción, con la
   misma confirmación. El botón no fuerza nada: un pedido que no cumple las
   reglas no se emite desde Kapta.
-  - **Cuándo aparece.** Solo a quien tiene el permiso, con la tienda activa,
-    sin comprobante real vivo, con las reglas de 35.3 cumplidas como una
-    emisión real (cuentan el error sin reintento y la conexión del RUC; una
+  - **Solo en producción** (`invoiceEmitAllowedHere`: `VERCEL_ENV` es
+    `production`; sin él, en local, tampoco). Una vista previa de Vercel
+    comparte con producción la base y la llave de cifrado: descifra el token
+    igual, y una boleta pedida desde ella es tan real como cualquiera. El
+    barrido nunca emitió fuera de producción; ahora el botón tampoco. En una
+    vista previa el panel no ofrece «Emitir esta boleta» y, donde lo habría, a
+    quien gestiona le dice «Emitir solo funciona en producción: este
+    despliegue es una vista previa.» (`no_produccion`). Ajustes no ofrece
+    «Emitir» y, con un RUC en Manual, lo dice con la misma frase. La acción lo
+    rechaza antes de leer nada, y `emitInvoiceNow` lo vuelve a pedir, primero
+    que todo, con el entorno y no con un parámetro: ningún llamador lo puede
+    encender.
+  - **Cuándo aparece.** Solo en producción, a quien tiene el permiso, con la
+    tienda activa, sin comprobante real vivo, con las reglas de 35.3 cumplidas
+    como una emisión real (cuentan el error sin reintento y la conexión del RUC; una
     simulación no frena) y sin que la última pasada lo haya frenado por lo que
     dijo Shopify: ahí el panel dice ese motivo, como siempre. El badge dice
     «Lista para emitir». Con el RUC en Manual, si algo de la emisión real lo
@@ -13617,22 +13837,30 @@ Reglas de esa tabla:
     puede borrar.», con «Sí, emitir» y «Cancelar». Desde el primer «Sí,
     emitir» hasta que vuelve la respuesta, no sale un segundo envío y los
     botones quedan deshabilitados.
-  - **Qué hace el servidor** (`emitInvoiceAction`). Primero lo que es de quien
-    pulsa: que ve el pedido y tiene `invoices.manage`, antes de leer nada con
-    el service role; que la tienda está activa; que el RUC sigue en Manual
-    (en Real lo rechaza: «…a mano solo se emite en «Manual»»), y que el RUC y
-    el total que se van a enviar son los que confirmó. Si el pedido cambió
-    desde que lo abrió, no emite: «El pedido cambió desde que lo abriste (el
-    RUC o el total): vuelve a abrirlo y revisa la boleta antes de emitirla.».
-    Después, `emitInvoiceNow`: exactamente la emisión real del barrido, con el
-    mismo código. Los hechos del pedido, las reglas como emisión real, el
-    token, la relectura en Shopify (el total y, en un prepago web, lo que
-    cobró Flow), la boleta, el turno pidiendo una fila real con quien pulsó
-    (35.3), UNA llamada a SimpleFact, la lectura de la respuesta, la fila
-    (solo si sigue en `emitiendo`) y las reglas que apagan el RUC (35.4). Los
-    mismos candados: un comprobante real vivo por pedido (el índice único), el
-    tope del día de lo real y el turno que vuelve a revisar todo en la base.
-    Si algo no se pudo leer antes del turno, no pide el turno ni llama a nada.
+  - **Qué hace el servidor** (`emitInvoiceAction`). Primero, que es
+    producción, antes de leer nada. Después lo que es de quien pulsa: que ve
+    el pedido y tiene `invoices.manage`, antes de leer nada con el service
+    role; que trae lo que confirmó (el RUC y el total: sin eso no hay con qué
+    comparar), y que la tienda está activa. Después, `emitInvoiceNow`:
+    exactamente la emisión real del barrido, con el mismo código. Los hechos
+    del pedido y las reglas como emisión real; con ESA lectura —la misma con
+    que arma la boleta y pide el turno— y antes del token, de Shopify y del
+    turno, que el RUC sigue en Manual (en Real lo rechaza: «…a mano solo se
+    emite en «Manual»») y que el RUC y el total que se van a enviar son los
+    que confirmó. Si el pedido cambió desde que lo abrió, no emite
+    (`pedido_cambio`): «El pedido cambió desde que lo abriste (el RUC o el
+    total): vuelve a abrirlo y revisa la boleta antes de emitirla.». La acción
+    no lee el pedido por su cuenta: antes comparaba con una lectura propia,
+    `emitInvoiceNow` volvía a leer sin comparar, y entre las dos el pedido
+    podía cambiar y salir una boleta que nadie confirmó. Después, el token, la
+    relectura en Shopify (el total y, en un prepago web, lo que cobró Flow),
+    la boleta, el turno pidiendo una fila real con quien pulsó (35.3), UNA
+    llamada a SimpleFact, la lectura de la respuesta, la fila (solo si sigue
+    en `emitiendo`) y las reglas que apagan el RUC (35.4). Los mismos
+    candados: un comprobante real vivo por pedido (el índice único), el tope
+    del día de lo real y el turno que vuelve a revisar todo en la base,
+    también que la empresa recibió el pago (0262). Si algo no se pudo leer
+    antes del turno, no pide el turno ni llama a nada.
   - **Quién pulsó** queda en la fila (`created_by`, 35.6). Sin saber quién
     pulsa, no se pide el turno, y la base tampoco lo da: en Manual, una fila
     real pedida sin quién (`p_created_by`) es `modo_distinto` (0261).
@@ -13641,9 +13869,26 @@ Reglas de esa tabla:
     ‹ref›» antes de nada.», y la concilia el barrido como cualquier `en_duda`
     (35.4); `error`, con el mensaje de SimpleFact; o, sin haber llamado a
     SimpleFact, el motivo por el que no salió, con las frases del panel y del
-    barrido. Volver a pulsar después de una duda da «Ya tiene comprobante.»:
-    no hay segundo envío. Si algo falla después de reservar el turno, la fila
-    queda en `emitiendo` y contesta en duda: se concilia, nunca se repite.
+    barrido. Si el turno encuentra que el pago ya no cubre el total, o que un
+    pago de la base del comprobante dejó de estar validado (0262, 35.3),
+    contesta ese motivo (`sin_pago_completo`, `prepago_con_comprobantes`) y no
+    sale nada. Volver a pulsar después de una duda da «Ya tiene
+    comprobante.»: no hay segundo envío. Si algo falla después de reservar el
+    turno, la fila queda en `emitiendo` y contesta en duda: se concilia, nunca
+    se repite.
+  - **En Ajustes, la respuesta se queda a la vista** (15-10-2026). Después de
+    «Emitir» la página se refresca, y el pedido ya no lleva oferta: tiene una
+    real viva, o el RUC se apagó. La respuesta —con las instrucciones de un
+    «En duda», el «Ver PDF» o el motivo del error— se guarda por pedido en la
+    lista y no en el botón: queda en la fila donde se pulsó; si esa fila salió
+    de las 20, en la más nueva de su pedido; y si no queda ninguna de su
+    pedido, o la lista no se pudo leer, arriba, con el enlace al pedido. Con
+    una respuesta a la vista, ese pedido no vuelve a tener «Emitir»: para
+    intentar otra vez se abre el pedido. Mientras un «Emitir» está en vuelo,
+    no sale otro del mismo pedido, aunque el refresco vuelva a montar el
+    botón. Una respuesta que no dice nada se lee como «No se pudo completar la
+    acción. Antes de intentar de nuevo, abre el pedido: si quedó «Emitiendo» o
+    «En duda», búscala en SimpleFact.».
   - **No es el barrido.** No escribe su revisión (`invoice_order_checks`), y
     relee Shopify aunque la última lectura sea de hace menos de 6 horas: es
     una persona y un pedido. Después de «Volver a intentar», o de liberar un
@@ -13672,11 +13917,11 @@ Simulación):
    que los prepagos web por Flow salen (35.9).
 3. Confirma con el contador la convención «CLIENTES VARIOS» / `00000000` y el
    umbral de S/ 700 (35.5).
-4. Pasa a Manual, con «Emitir desde» del momento del cambio. El barrido sigue
-   simulando. Emite las primeras boletas reales una a una con «Emitir esta
-   boleta» y revisa cada una en SimpleFact antes de la siguiente: la serie, el
-   total, los ítems con el IGV incluido, «CLIENTES VARIOS» y la nota «Pedido
-   #KP… · Kapta ‹ref›».
+4. Pasa a Manual, con «Emitir desde» del momento del cambio, y con la 0262 ya
+   aplicada (abajo). El barrido sigue simulando. Emite las primeras boletas
+   reales una a una con «Emitir esta boleta» y revisa cada una en SimpleFact
+   antes de la siguiente: la serie, el total, los ítems con el IGV incluido,
+   «CLIENTES VARIOS» y la nota «Pedido #KP… · Kapta ‹ref›».
 5. Pasa a Real: desde entonces el barrido emite solo y no hay botón. «Emitir
    desde» se mueve al momento del cambio: lo pagado en Manual que nadie emitió
    no sale (35.4).
@@ -13712,6 +13957,21 @@ nueve argumentos de siempre, por nombre, y los dos nuevos quedan en su valor
 por defecto (nulo): el turno hace lo de antes. Ese código no conoce Manual: no
 deja elegirlo en Ajustes ni barre un RUC en Manual, y si pidiera el turno de
 uno, recibiría una simulada, nunca una real.
+
+**Antes de la 0262.** También se aplica a mano, después de la 0261 y antes de
+la primera boleta real —con «Emitir esta boleta» o con un RUC en Real—
+(DEPLOY.md). El código no la nombra ni la necesita para correr: si llega
+antes, nada se pone rojo y todo sigue como con la 0261 —el barrido simula y,
+en Real, emite; el botón emite—, pero el turno no vuelve a revisar que la
+empresa recibió el pago (35.3), y un pago rechazado mientras se relee Shopify
+se colaría en una boleta real. Por eso no se emite nada real hasta aplicarla.
+No cambia la firma del turno: es la de once argumentos de la 0261, con
+`create or replace`, y el código de antes y el de ahora la llaman igual. Los
+dos mandan, en la base del comprobante, si es prepago web y el id de cada
+pago, que es lo que el turno revisa: lo bien pagado sigue dando su fila. Va
+después de la 0261: sin ella —sigue el turno de nueve argumentos, o falta el
+de once— se detiene sin cambiar nada. Si después alguien vuelve a correr la
+0261, el turno queda otra vez sin esta revisión hasta volver a correr la 0262.
 
 Para el barrido, «falta una migración de comprobantes» es solo un «no existe»
 (de tabla o de función) que nombra algo que crean la 0257 —`invoice_issuers`,
@@ -13762,8 +14022,8 @@ Implementación:
   `store_collection_accounts.invoice_issuer_id` con su trigger,
   `order_invoices`, `invoice_order_checks`, la función `invoice_claim` (el
   turno) y la semilla de GRUPO GF S.A.C. Es la que corrió en producción el
-  14-10-2026, y no se reescribe: lo que cambió después va en la 0260 y la
-  0261.
+  14-10-2026, y no se reescribe: lo que cambió después va en la 0260, la 0261
+  y la 0262.
 - `db/migrations/0260_invoices_hardening.sql`: los arreglos de la revisión
   adversaria, sobre la 0257: las funciones `invoice_claim` (el turno) e
   `invoice_candidates` (qué pedidos mira el barrido), y las de los triggers
@@ -13776,16 +14036,26 @@ Implementación:
   del trigger `invoice_issuers_touch` (lo que baja Real a Simulación baja
   también Manual) y `invoice_claim` (el turno) con `p_mode` y `p_created_by`,
   que reemplaza la firma de nueve argumentos. No toca filas.
+- `db/migrations/0262_invoices_claim_coverage.sql`: el turno que vuelve a
+  revisar que la empresa recibió el pago, sobre la 0261: solo `invoice_claim`,
+  con `create or replace` y la misma firma de once argumentos, que revisa la
+  condición 3 de 35.3 con los pagos y el pedido guardados (`sin_pago_completo`,
+  `prepago_con_comprobantes`), que cada pago de la base del comprobante siga
+  validado, y bloquea los pagos del pedido mientras dura. Se detiene sin la
+  0261 delante. No toca filas.
 - `lib/invoicing/rules.ts`: reglas puras (cuenta y RUC de cada pago,
-  elegibilidad, la boleta, la lectura de la respuesta).
+  elegibilidad, la boleta, la lectura de la respuesta) y cuándo se puede
+  liberar un `en_duda` (`invoiceReleaseAvailableAt` e `invoiceReleaseBlock`,
+  con `INVOICE_RELEASE_MIN_AGE_MS`).
 - `lib/invoicing/shopify-order.ts`: la lectura del pedido en Shopify y su
   mapeo al céntimo.
 - `lib/invoicing/simplefact.ts`: el cliente de SimpleFact.
 - `lib/invoicing/server.ts`: lo que el barrido y el panel leen de la base, el
   barrido, la conciliación, `emitInvoiceNow` («Emitir esta boleta»: la misma
-  emisión real del barrido, para un pedido) e `invoiceEmitNowReadiness` /
-  `loadInvoiceEmitNowOffers` (cuándo se ofrece el botón, en el panel y en
-  Ajustes).
+  emisión real del barrido, para un pedido, que compara lo que la persona
+  confirmó) e `invoiceEmitNowReadiness` / `loadInvoiceEmitNowOffers` (cuándo
+  se ofrece el botón, en el panel y en Ajustes), y `invoiceEmitAllowedHere`
+  (solo producción emite).
 - `app/api/cron/invoices/route.ts`: el barrido, cada 10 minutos.
 - Ajustes, en `app/dashboard/[storeId]/settings/invoice-actions.ts` y
   `components/invoice-settings-section.tsx`; el panel, en

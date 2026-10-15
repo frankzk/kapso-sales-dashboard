@@ -73,6 +73,7 @@ import type {
 } from "@/lib/types";
 import {
   AGENCY_AVAILABLE_STATES,
+  ATTEMPTS_OR_MORE,
   emptyFilters,
   MANAGEMENT_DAY_STEPS,
   masterSearchTerm,
@@ -133,7 +134,7 @@ export class OrderMasterReadError extends Error {
 const MASTER_COLUMNS =
   "id,store_id,order_id,order_name,order_created_at,customer_name," +
   "customer_phone,region,province,district," +
-  "coverage,swayp_availability," +
+  "coverage,swayp_availability,sales_channel," +
   "shipping_mode,order_total,general_status," +
   "operational_status,macro_stage,macro_substage,macro_reasons,macro_operation,macro_version,macro_since," +
   "confirmation_active,confirmation_day_count,confirmation_last_contact_at," +
@@ -1170,6 +1171,7 @@ export function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T 
   if (f.districts.size) q = q.in("district", [...f.districts]);
   if (f.coverages.size) q = q.in("coverage", [...f.coverages]);
   if (f.swaypAvailability.size) q = q.in("swayp_availability", [...f.swaypAvailability]);
+  if (f.salesChannels.size) q = q.in("sales_channel", [...f.salesChannels]);
   if (f.pickupStates.size) q = q.in("pickup_state", [...f.pickupStates]);
 
   // Días con gestión. La columna es un entero y el filtro viaja por la URL como
@@ -1222,7 +1224,9 @@ export function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T 
 
   if (f.withComments) q = q.gt("comment_count", 0);
   if (f.multiCourier) q = q.gt("courier_count", 1);
-  if (f.multiAttempt) q = q.gt("attempt_count", 1);
+  if (f.attempts !== null) {
+    q = f.attempts >= ATTEMPTS_OR_MORE ? q.gte("attempt_count", ATTEMPTS_OR_MORE) : q.eq("attempt_count", f.attempts);
+  }
 
   if (f.expiringSoon) {
     // Incluye lo ya vencido: es justamente lo que hay que trabajar hoy para que

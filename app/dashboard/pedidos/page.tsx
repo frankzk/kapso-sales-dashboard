@@ -152,6 +152,9 @@ async function PedidosContent({
       canEdit={!perms.readOnly}
       canExport={perms.can("data.export")}
       canOverride={perms.can("master.override_status")}
+      // «Registrar estado» a mano: owner y admin (MOM §16, 15-10-2026). Solo
+      // decide qué se pinta; el servidor lo vuelve a preguntar por pedido.
+      canSetStatus={perms.can("master.set_status")}
       canCreateGuide={perms.can("aliclik.create_guide")}
       canCreateTandersGuide={perms.can("tanders.create_guide")}
       canCreateShalomGuide={perms.can("shalom.create_guide")}

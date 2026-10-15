@@ -16,7 +16,11 @@ import { RESTOCK_CATALOG_DAYS, RESTOCK_RESULTS_DAYS } from "@/lib/restock-view";
 import { limaDateTimeInputValue } from "@/lib/repro-lima";
 import { limaDayStartIso } from "@/lib/auto-order-ab";
 import type { InvoiceMode, InvoiceStatus, InvoiceWriteMode } from "@/lib/invoicing/rules";
-import { loadInvoiceEmitNowOffers, type InvoiceEmitNowOffer } from "@/lib/invoicing/server";
+import {
+  invoiceEmitAllowedHere,
+  loadInvoiceEmitNowOffers,
+  type InvoiceEmitNowOffer,
+} from "@/lib/invoicing/server";
 import { EmptyState } from "@/components/ui";
 import { StoreSettings, type StoreSettingsData } from "@/components/store-settings";
 import type { InvoiceSettingsData } from "@/components/invoice-settings-section";
@@ -44,8 +48,16 @@ const SHOPIFY_ERRORS: Record<string, string> = {
   "guardado-fallo": "No se pudo guardar el token.",
 };
 
-/** Sin permiso, o si la lectura entera se cayó: nada que mostrar. */
-const NO_INVOICES: Omit<InvoiceSettingsData, "canManage"> = { issuers: null, accounts: null, recent: null };
+/**
+ * Sin permiso, o si la lectura entera se cayó: nada que mostrar, y sin «Emitir»
+ * (falla cerrada).
+ */
+const NO_INVOICES: Omit<InvoiceSettingsData, "canManage"> = {
+  emitHere: false,
+  issuers: null,
+  accounts: null,
+  recent: null,
+};
 
 /** Lo de hoy por RUC (MOM §35.8): los cuatro estados que se miran a diario. */
 const INVOICE_TODAY_STATUSES = ["emitida", "simulada", "en_duda", "error"] as const;
@@ -59,7 +71,8 @@ const INVOICE_TODAY_STATUSES = ["emitida", "simulada", "en_duda", "error"] as co
  * De esos últimos, cuáles llevan «Emitir» (`emitNow`): la simulada más nueva
  * de cada pedido, cuando el drawer de ese pedido ofrecería «Emitir esta
  * boleta» (`loadInvoiceEmitNowOffers`). Si algo no se pudo leer, ninguna lo
- * lleva (falla cerrada). Al pulsar, el servidor vuelve a revisar todo.
+ * lleva (falla cerrada). Al pulsar, el servidor vuelve a revisar todo. Fuera
+ * de producción, ninguna (`emitHere`, `invoiceEmitAllowedHere`).
  *
  * `token_enc` no se selecciona nunca: si hay token se sabe con un filtro
  * (`not token_enc is null`) que devuelve solo ids.
@@ -168,8 +181,14 @@ async function loadInvoiceSettings(
     }
   }
   let offers = new Map<string, InvoiceEmitNowOffer>();
+  // SOLO EN PRODUCCIÓN. Una vista previa comparte la base y la llave de cifrado
+  // con producción: desde ella «Emitir» mandaría una boleta real a SUNAT. La
+  // acción ya la rechaza ahí y `loadInvoiceEmitNowOffers` no ofrece nada, pero
+  // la página no se fía de que otro lo diga: ni pregunta, y la sección dice por
+  // qué no hay botón (`emitHere`).
+  const emitHere = invoiceEmitAllowedHere();
   // Sin un RUC en «Manual» no hay botón posible: ni se pregunta.
-  if (newestSimulated.size && (rows ?? []).some((r) => r.mode === "manual")) {
+  if (emitHere && newestSimulated.size && (rows ?? []).some((r) => r.mode === "manual")) {
     try {
       offers = await loadInvoiceEmitNowOffers(admin, [...newestSimulated.keys()]);
     } catch (cause) {
@@ -185,6 +204,7 @@ async function loadInvoiceSettings(
   const emitNowOf = (r: RecentRow) => (newestSimulated.get(r.order_id) === r.id ? offers.get(r.order_id) ?? null : null);
 
   return {
+    emitHere,
     issuers:
       rows?.map((r, i) => ({
         id: r.id,

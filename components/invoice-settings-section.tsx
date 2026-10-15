@@ -16,7 +16,7 @@
 // lib/invoicing/server.ts): las reglas puras, las acciones de servidor y las
 // piezas del panel del drawer (que tampoco lo arrastran), nada más.
 
-import { useActionState, useEffect, useState, useTransition, type FormEvent, type ReactNode } from "react";
+import { useActionState, useEffect, useRef, useState, useTransition, type FormEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/components/ui";
 import { Badge, Banner, FIELD, OpsButton, type BadgeTone } from "@/components/ops-ui";
@@ -29,6 +29,7 @@ import {
   INVOICE_DAILY_LIMIT_MAX,
   INVOICE_DAILY_LIMIT_MIN,
   INVOICE_MODE_LABEL,
+  INVOICE_REASON_LABEL,
   INVOICE_STATUS_LABEL,
   type InvoiceMode,
   type InvoiceStatus,
@@ -116,6 +117,13 @@ export interface InvoiceRecentView {
 export interface InvoiceSettingsData {
   /** Quien mira tiene «Boletas y facturas». Sin él no se manda nada más. */
   canManage: boolean;
+  /**
+   * Este despliegue emite: es producción (`invoiceEmitAllowedHere`). En una
+   * vista previa no hay «Emitir» —comparte la base y la llave de cifrado con
+   * producción, y desde ella saldría una boleta real— y, con un RUC en
+   * «Manual», se dice por qué. false si no se supo (falla cerrada).
+   */
+  emitHere: boolean;
   issuers: InvoiceIssuerView[] | null;
   accounts: InvoiceAccountView[] | null;
   recent: InvoiceRecentView[] | null;
@@ -747,59 +755,178 @@ function AccountRow({
 
 const RECENT_COLS = "sm:grid-cols-[7.5rem_minmax(0,1fr)_minmax(0,1.3fr)_7.5rem_minmax(0,1fr)_5.5rem]";
 
-/**
- * «Emitir» de una simulada (owner, 15-10-2026): la misma acción, la misma
- * confirmación y los mismos candados que «Emitir esta boleta» del drawer, con
- * lo mismo que confirmaría el drawer (`offer`: el RUC y el total de ahora). Lo
- * que contesta se queda en la fila; después la página se refresca y, si salió
- * la real, la fila ya no lleva el botón. Con una respuesta a la vista el botón
- * no vuelve: para intentar otra vez, se abre el pedido.
- */
-function RecentEmit({ row, offer }: { row: InvoiceRecentView; offer: InvoicePanelEmitNow }) {
-  const [outcome, setOutcome] = useState<EmitInvoiceState | null>(null);
-  const [refreshing, startRefresh] = useTransition();
-  const router = useRouter();
-  return (
-    <div className="space-y-2 sm:col-span-full">
-      {!outcome && (
-        <EmitInvoiceControl
-          label="Emitir"
-          emit={offer}
-          pending={refreshing}
-          onEmit={async () => {
-            let res: EmitInvoiceState;
-            try {
-              res = await emitInvoiceAction(row.orderId, { issuerId: offer.issuerId, total: offer.total });
-            } catch {
-              // La acción no llegó o no volvió: pudo haber salido. Se dice así.
-              res = {
-                error:
-                  "No se pudo completar la acción. Antes de intentar de nuevo, abre el pedido: si quedó «Emitiendo» o «En duda», búscala en SimpleFact.",
-              };
-            }
-            setOutcome(res);
-            startRefresh(() => router.refresh());
-          }}
-        />
-      )}
-      {outcome && <EmitOutcome state={outcome} />}
-    </div>
-  );
+/** La acción no llegó, no volvió o volvió sin decir nada: pudo haber salido. */
+const EMIT_LOST =
+  "No se pudo completar la acción. Antes de intentar de nuevo, abre el pedido: si quedó «Emitiendo» o «En duda», búscala en SimpleFact.";
+
+/** Lo que contestó «Emitir» para un pedido, y en qué fila se pulsó. */
+export interface RecentEmitOutcome {
+  /** La fila donde se pulsó: la respuesta se queda ahí mientras siga en la lista. */
+  rowId: string;
+  orderId: string;
+  orderName: string | null;
+  state: EmitInvoiceState;
 }
 
+/**
+ * Lo que contestó cada «Emitir», por pedido. Vive en la lista y no en el botón
+ * (revisión del 15-10-2026): después de emitir la página se refresca, y
+ * el pedido ya no lleva oferta —tiene una real viva, o el RUC se apagó—. Cuando
+ * la respuesta vivía dentro del botón, se desmontaba con él en cuanto llegaba
+ * el refresco, y con ella las instrucciones de un «En duda» («búscala por su
+ * nota antes de nada»), el «Ver PDF» o el motivo del error.
+ */
+export type RecentEmitOutcomes = Readonly<Record<string, RecentEmitOutcome>>;
+
+/**
+ * Los últimos comprobantes, con su «Emitir» (owner, 15-10-2026): la misma
+ * acción, la misma confirmación y los mismos candados que «Emitir esta boleta»
+ * del drawer, con lo mismo que confirmaría el drawer (`emitNow`: el RUC y el
+ * total de ahora).
+ *
+ * Lo que contesta se guarda por pedido (`RecentEmitOutcomes`) y se enseña haya
+ * o no oferta; después la página se refresca. Con una respuesta a la vista el
+ * botón de ese pedido no vuelve: para intentar otra vez, se abre el pedido.
+ * Siempre montada, aunque el refresco no haya podido leer la lista: si no, la
+ * respuesta se perdía justo ahí.
+ *
+ * NUNCA DOS ENVÍOS DEL MISMO PEDIDO desde aquí. El candado del botón
+ * (`sendOnce`) es del botón: si el refresco lo desmonta y lo vuelve a montar
+ * mientras la acción sigue en vuelo, el nuevo nace suelto. Este candado es de
+ * la lista, por pedido, y dura hasta que vuelve la respuesta.
+ */
 function RecentList({
   rows,
   issuers,
   canEmit,
+  emitHere,
 }: {
-  rows: InvoiceRecentView[];
+  /** null: no se pudo leer. */
+  rows: InvoiceRecentView[] | null;
   /** Los RUC de la organización: la razón social y el modo de cada uno. */
   issuers: InvoiceIssuerView[];
   /** Quien mira tiene «Boletas y facturas». */
   canEmit: boolean;
+  /** Este despliegue emite (producción). */
+  emitHere: boolean;
 }) {
+  const [outcomes, setOutcomes] = useState<RecentEmitOutcomes>({});
+  const [sending, setSending] = useState<ReadonlySet<string>>(() => new Set());
+  const inFlight = useRef(new Set<string>());
+  const [refreshing, startRefresh] = useTransition();
+  const router = useRouter();
+
+  async function emit(row: InvoiceRecentView, offer: InvoicePanelEmitNow) {
+    const orderId = row.orderId;
+    if (inFlight.current.has(orderId)) return;
+    inFlight.current.add(orderId);
+    setSending((prev) => new Set(prev).add(orderId));
+    let res: EmitInvoiceState;
+    try {
+      res = await emitInvoiceAction(orderId, { issuerId: offer.issuerId, total: offer.total });
+    } catch {
+      // La acción no llegó o no volvió: pudo haber salido. Se dice así.
+      res = { error: EMIT_LOST };
+    }
+    // Una respuesta sin aviso ni error no se pinta: no se sabe qué pasó.
+    if (!res?.error && !res?.notice) res = { error: EMIT_LOST };
+    setOutcomes((prev) => ({ ...prev, [orderId]: { rowId: row.id, orderId, orderName: row.orderName, state: res } }));
+    inFlight.current.delete(orderId);
+    setSending((prev) => {
+      const next = new Set(prev);
+      next.delete(orderId);
+      return next;
+    });
+    startRefresh(() => router.refresh());
+  }
+
+  return (
+    <RecentListView
+      rows={rows}
+      issuers={issuers}
+      canEmit={canEmit}
+      emitHere={emitHere}
+      outcomes={outcomes}
+      sending={sending}
+      pending={refreshing}
+      onEmit={emit}
+    />
+  );
+}
+
+/**
+ * Dónde va cada respuesta: en la fila donde se pulsó; si ya no está entre las
+ * 20 (la real nueva la empujó fuera), en la más nueva de su pedido; y si
+ * ninguna de su pedido está, o la lista no se pudo leer, arriba, con el pedido
+ * (`orphans`). Nunca se pierde una.
+ */
+function placeOutcomes(
+  rows: readonly InvoiceRecentView[],
+  outcomes: RecentEmitOutcomes,
+): { byRow: Map<string, RecentEmitOutcome>; orphans: RecentEmitOutcome[] } {
+  const byRow = new Map<string, RecentEmitOutcome>();
+  const orphans: RecentEmitOutcome[] = [];
+  for (const outcome of Object.values(outcomes)) {
+    // Del más nuevo al más viejo: la primera de su pedido es la más nueva.
+    const host = rows.find((r) => r.id === outcome.rowId) ?? rows.find((r) => r.orderId === outcome.orderId);
+    if (host) byRow.set(host.id, outcome);
+    else orphans.push(outcome);
+  }
+  return { byRow, orphans };
+}
+
+/** La lista con lo que ya contestó cada «Emitir». Separada para pintarla en las pruebas. */
+export function RecentListView({
+  rows,
+  issuers,
+  canEmit,
+  emitHere,
+  outcomes,
+  sending,
+  pending,
+  onEmit,
+}: {
+  rows: InvoiceRecentView[] | null;
+  issuers: InvoiceIssuerView[];
+  canEmit: boolean;
+  emitHere: boolean;
+  outcomes: RecentEmitOutcomes;
+  /** Pedidos con un «Emitir» en vuelo: su botón no sale otra vez. */
+  sending: ReadonlySet<string>;
+  /** La página se está refrescando. */
+  pending: boolean;
+  onEmit: (row: InvoiceRecentView, offer: InvoicePanelEmitNow) => Promise<void>;
+}) {
+  const { byRow, orphans } = placeOutcomes(rows ?? [], outcomes);
+  const orphanList = orphans.length ? (
+    <ul className="divide-y divide-line">
+      {orphans.map((o) => (
+        <li key={o.orderId} className="space-y-1 px-4 py-3 text-sm sm:px-5">
+          <OrderLink orderId={o.orderId} className="font-medium text-brand-700 hover:underline">
+            {o.orderName ?? "Ver pedido"}
+          </OrderLink>
+          <EmitOutcome state={o.state} />
+        </li>
+      ))}
+    </ul>
+  ) : null;
+
+  if (rows === null || rows.length === 0) {
+    return (
+      <>
+        {orphanList}
+        <EmptyRow>
+          {rows === null
+            ? "No se pudieron leer los comprobantes."
+            : "Todavía no hay comprobantes: con los RUC apagados no se revisa ni se emite nada."}
+        </EmptyRow>
+      </>
+    );
+  }
+
   return (
     <>
+      {orphanList}
       <div
         aria-hidden
         className={cn("hidden gap-x-4 px-4 py-2.5 text-xs font-semibold leading-4 text-ink-600 sm:grid sm:px-5", RECENT_COLS)}
@@ -851,13 +978,38 @@ function RecentList({
               )
             )}
             {(() => {
-              // Solo una simulada que la página marcó (el drawer ofrecería el
-              // botón), de un RUC que sigue en «Manual» en lo que se ve, y solo
-              // a quien gestiona.
+              // Lo que contestó «Emitir» va primero y no depende de la oferta:
+              // después de emitir, el refresco la quita.
+              const outcome = byRow.get(r.id);
+              if (outcome) {
+                return (
+                  <div className="sm:col-span-full">
+                    <EmitOutcome state={outcome.state} />
+                  </div>
+                );
+              }
+              // El botón: solo en una producción, en una simulada que la página
+              // marcó (el drawer ofrecería el botón), de un RUC que sigue en
+              // «Manual» en lo que se ve, solo a quien gestiona y sin una
+              // respuesta de su pedido a la vista.
               const offer = r.emitNow;
               const issuer = offer ? issuers.find((i) => i.id === offer.issuerId) : undefined;
-              return canEmit && offer && r.status === "simulada" && issuer?.mode === "manual" ? (
-                <RecentEmit row={r} offer={offer} />
+              const show =
+                canEmit &&
+                emitHere &&
+                !!offer &&
+                r.status === "simulada" &&
+                issuer?.mode === "manual" &&
+                !outcomes[r.orderId];
+              return show && offer ? (
+                <div className="sm:col-span-full">
+                  <EmitInvoiceControl
+                    label="Emitir"
+                    emit={offer}
+                    pending={pending || sending.has(r.orderId)}
+                    onEmit={() => onEmit(r, offer)}
+                  />
+                </div>
               ) : null;
             })()}
           </li>
@@ -984,13 +1136,15 @@ export function InvoiceSettingsSection({
           title="Últimos comprobantes de esta tienda"
           description="Los 20 más recientes, simulados y reales, en hora de Lima. El detalle de cada uno está en la ficha del pedido."
         />
-        {data.recent === null ? (
-          <EmptyRow>No se pudieron leer los comprobantes.</EmptyRow>
-        ) : data.recent.length === 0 ? (
-          <EmptyRow>Todavía no hay comprobantes: con los RUC apagados no se revisa ni se emite nada.</EmptyRow>
-        ) : (
-          <RecentList rows={data.recent} issuers={issuers ?? []} canEmit={data.canManage} />
+        {/* Con un RUC en «Manual», en una vista previa se dice por qué no hay
+            «Emitir», con la frase del drawer (`no_produccion`). */}
+        {!data.emitHere && manual > 0 && (
+          <p className={cn(ROW, "text-[13px] leading-5 text-ink-600")}>
+            «Emitir» no está disponible: {INVOICE_REASON_LABEL.no_produccion}
+          </p>
         )}
+        {/* Siempre montada, también sin lista: guarda lo que contestó «Emitir». */}
+        <RecentList rows={data.recent} issuers={issuers ?? []} canEmit={data.canManage} emitHere={data.emitHere} />
       </div>
     </SettingsSection>
   );

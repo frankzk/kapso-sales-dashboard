@@ -155,7 +155,7 @@ vi.mock("@/lib/db", () => {
 });
 
 import { encrypt, decrypt } from "@/lib/crypto";
-import { isValidRuc, INVOICE_DAILY_LIMIT_MAX, INVOICE_DAILY_LIMIT_MIN } from "@/lib/invoicing/rules";
+import { isValidRuc, INVOICE_DAILY_LIMIT_MAX, INVOICE_DAILY_LIMIT_MIN, INVOICE_REASON_LABEL } from "@/lib/invoicing/rules";
 import {
   saveInvoiceIssuer,
   setAccountInvoiceIssuer,
@@ -164,9 +164,11 @@ import {
 import {
   InvoiceSettingsSection,
   MODE_HELP,
+  RecentListView,
   type InvoiceIssuerView,
   type InvoiceRecentView,
   type InvoiceSettingsData,
+  type RecentEmitOutcomes,
 } from "@/components/invoice-settings-section";
 
 const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
@@ -815,7 +817,7 @@ function render(data: Partial<InvoiceSettingsData>, paymentMethods = METHODS): s
   return renderToStaticMarkup(
     createElement(InvoiceSettingsSection, {
       storeId: "store",
-      data: { canManage: true, issuers: [issuerView()], accounts: ACCOUNTS, recent: RECENT, ...data },
+      data: { canManage: true, emitHere: true, issuers: [issuerView()], accounts: ACCOUNTS, recent: RECENT, ...data },
       paymentMethods,
     }),
   );
@@ -1236,28 +1238,36 @@ describe("la sección, pintada: Manual", () => {
     const html = render({ canManage: false, issuers: [issuerView({ mode: "manual" })], recent: [simulada()] });
     expect(html).not.toMatch(BOTON);
     expect(SECTION).toContain("const issuer = offer ? issuers.find((i) => i.id === offer.issuerId) : undefined;");
-    expect(SECTION).toContain("return canEmit && offer && r.status === \"simulada\" && issuer?.mode === \"manual\" ? (");
-    expect(SECTION).toContain("<RecentList rows={data.recent} issuers={issuers ?? []} canEmit={data.canManage} />");
+    expect(SECTION).toMatch(
+      /const show =\s*canEmit &&\s*emitHere &&\s*!!offer &&\s*r\.status === "simulada" &&\s*issuer\?\.mode === "manual" &&\s*!outcomes\[r\.orderId\];/,
+    );
+    expect(SECTION).toContain(
+      "<RecentList rows={data.recent} issuers={issuers ?? []} canEmit={data.canManage} emitHere={data.emitHere} />",
+    );
   });
 
   it("es la acción del drawer, con su confirmación, lo que vio la persona y la respuesta en la fila", () => {
-    const emit = SECTION.slice(SECTION.indexOf("function RecentEmit("), SECTION.indexOf("function RecentList("));
+    const emit = SECTION.slice(SECTION.indexOf("function RecentList("), SECTION.indexOf("function placeOutcomes("));
+    const view = SECTION.slice(SECTION.indexOf("export function RecentListView("), SECTION.indexOf("// ── La sección"));
     expect(SECTION).toContain('import { EmitInvoiceControl, EmitOutcome } from "@/components/order-invoice-panel";');
     expect(SECTION).toMatch(
       /import \{\s*emitInvoiceAction,\s*type EmitInvoiceState,\s*type InvoicePanelEmitNow,\s*\} from "@\/app\/dashboard\/pedidos\/invoice-actions";/,
     );
-    expect(emit).toContain("<EmitInvoiceControl");
+    expect(view).toContain("<EmitInvoiceControl");
     // Confirma y envía lo que confirmaría el drawer (el RUC y el total de ahora),
     // no lo de la simulada: si el pedido cambió, la confirmación lo dice.
-    expect(emit).toContain("emit={offer}");
-    expect(emit).toContain("res = await emitInvoiceAction(row.orderId, { issuerId: offer.issuerId, total: offer.total });");
+    expect(view).toContain("emit={offer}");
+    expect(view).toContain("onEmit={() => onEmit(r, offer)}");
+    expect(emit).toContain("res = await emitInvoiceAction(orderId, { issuerId: offer.issuerId, total: offer.total });");
     expect(emit).not.toContain("row.total");
     expect(emit).not.toContain("row.ruc");
-    expect(emit).toContain("setOutcome(res);");
+    // La respuesta se guarda en la lista, por pedido, y después se refresca.
+    expect(emit).toContain("const [outcomes, setOutcomes] = useState<RecentEmitOutcomes>({});");
+    expect(emit).toContain(
+      "setOutcomes((prev) => ({ ...prev, [orderId]: { rowId: row.id, orderId, orderName: row.orderName, state: res } }));",
+    );
     expect(emit).toContain("startRefresh(() => router.refresh());");
-    // Con una respuesta a la vista el botón no vuelve: no hay segundo envío desde aquí.
-    expect(emit).toContain("{!outcome && (");
-    expect(emit).toContain("{outcome && <EmitOutcome state={outcome} />}");
+    expect(emit.indexOf("setOutcomes(")).toBeLessThan(emit.indexOf("startRefresh(() => router.refresh());"));
   });
 
   // FIX: la página marcaba «Emitir» con solo dos cosas —el RUC de la simulada en
@@ -1269,7 +1279,9 @@ describe("la sección, pintada: Manual", () => {
   it("la página marca «Emitir» con la función del drawer, de una vez para la lista, y si no pudo leer, en ninguna", () => {
     const recent = PAGE.slice(PAGE.indexOf('.from("order_invoices")'), PAGE.indexOf(".limit(20)"));
     expect(recent).toMatch(/\.select\("[^"]*\bissuer_id\b[^"]*"\)/);
-    expect(PAGE).toContain('import { loadInvoiceEmitNowOffers, type InvoiceEmitNowOffer } from "@/lib/invoicing/server";');
+    expect(PAGE).toMatch(
+      /import \{\s*invoiceEmitAllowedHere,\s*loadInvoiceEmitNowOffers,\s*type InvoiceEmitNowOffer,\s*\} from "@\/lib\/invoicing\/server";/,
+    );
     const marca = PAGE.slice(PAGE.indexOf("const newestSimulated"), PAGE.indexOf("  return {", PAGE.indexOf("const newestSimulated")));
     // La simulada más nueva de cada pedido.
     expect(marca).toContain('if (r.status === "simulada" && r.mode === "simulacion" && !newestSimulated.has(r.order_id)) {');
@@ -1297,5 +1309,211 @@ describe("la sección, pintada: Manual", () => {
     expect(drawer.slice(0, drawer.indexOf("\n}\n"))).toContain(
       "const ready = invoiceEmitNowReadiness({ facts, invoices, checks, storeActive });",
     );
+  });
+});
+
+// ── «Emitir»: lo que contesta no se pierde con el refresco (§35.7) ───────────
+
+describe("«Emitir» en los últimos comprobantes: la respuesta se queda", () => {
+  const OFERTA = { issuerId: "iss-1", ruc: GF, legalName: "GRUPO GF S.A.C.", total: 85 };
+  const MANUAL = [issuerView({ mode: "manual" })];
+  const PDF = "https://grupogf.simplefact.pe/files/20556792829-03-B001-97.pdf";
+  const EN_DUDA = "SimpleFact no respondió: queda En duda; búscala por su nota «Kapta inv-real» antes de nada.";
+  const BOTON = /<button[^>]*>Emitir<\/button>/;
+  const ENCABEZADO = "<span>Fecha</span>";
+
+  /** La simulada donde se pulsa «Emitir». */
+  const simulada = (over: Partial<InvoiceRecentView> = {}): InvoiceRecentView => ({
+    id: "inv-sim",
+    orderId: "ord-9",
+    orderName: "#KP136199",
+    issuerId: "iss-1",
+    ruc: GF,
+    mode: "simulacion",
+    status: "simulada",
+    serie: null,
+    correlative: null,
+    total: 85,
+    error: null,
+    createdAt: "2026-10-14T14:20:00.000Z",
+    rucMismatch: false,
+    emitNow: OFERTA,
+    ...over,
+  });
+  /** La real que nació al pulsar: la más nueva de la lista, ya sin oferta. */
+  const real = (over: Partial<InvoiceRecentView> = {}): InvoiceRecentView =>
+    simulada({ id: "inv-real", mode: "real", status: "en_duda", createdAt: NOW, emitNow: null, ...over });
+  /** Lo que contestó «Emitir» del pedido ord-9, pulsado en la simulada. */
+  const outcome = (state: { error?: string; notice?: string; pdfUrl?: string }, rowId = "inv-sim"): RecentEmitOutcomes => ({
+    "ord-9": { rowId, orderId: "ord-9", orderName: "#KP136199", state },
+  });
+
+  function lista(props: Partial<Parameters<typeof RecentListView>[0]> = {}): string {
+    return renderToStaticMarkup(
+      createElement(RecentListView, {
+        rows: [simulada()],
+        issuers: MANUAL,
+        canEmit: true,
+        emitHere: true,
+        outcomes: {},
+        sending: new Set<string>(),
+        pending: false,
+        onEmit: async () => {},
+        ...props,
+      }),
+    );
+  }
+
+  // FIX: la respuesta vivía dentro del botón, que solo se pintaba con oferta
+  // (`r.emitNow`). Después de emitir la página se refresca y el pedido ya no
+  // tiene oferta: el botón se desmontaba y con él las instrucciones de un «En
+  // duda», el «Ver PDF» o el error, en cuanto llegaba el refresco.
+  it("re-pintada sin oferta después de la respuesta: las instrucciones del En duda siguen a la vista", () => {
+    // Antes de pulsar: el botón.
+    expect(lista()).toMatch(BOTON);
+    // Llega el refresco: la real nueva arriba y la simulada ya sin oferta.
+    const html = lista({ rows: [real(), simulada({ emitNow: null })], outcomes: outcome({ error: EN_DUDA }) });
+    expect(html).toContain(EN_DUDA);
+    expect(html).toMatch(/<p role="alert"[^>]*>SimpleFact no respondió: queda En duda/);
+    expect(html).not.toMatch(BOTON);
+  });
+
+  it("y el «Ver PDF» de la que salió", () => {
+    const html = lista({
+      rows: [real({ status: "emitida", serie: "B001", correlative: "97" }), simulada({ emitNow: null })],
+      outcomes: outcome({ notice: "Emitida B001-97", pdfUrl: PDF }),
+    });
+    expect(html).toContain("Emitida B001-97");
+    expect(html).toContain(`href="${PDF}"`);
+    expect(html).toMatch(/>Ver PDF<svg/);
+    expect(html).not.toMatch(BOTON);
+  });
+
+  it("y el error, también cuando la emisión apagó el RUC", () => {
+    const apagado = "Token rechazado por SimpleFact (401): Kapta apagó el RUC.";
+    const html = lista({
+      rows: [simulada({ emitNow: null })],
+      issuers: [issuerView({ mode: "apagado" })],
+      outcomes: outcome({ error: apagado }),
+    });
+    expect(html).toContain(apagado);
+    expect(html).not.toMatch(BOTON);
+  });
+
+  it("con una respuesta a la vista el botón de ese pedido no vuelve, aunque vuelva la oferta", () => {
+    const cambio = INVOICE_REASON_LABEL.pedido_cambio;
+    const html = lista({ outcomes: outcome({ error: cambio }) });
+    expect(html).toContain(cambio);
+    expect(html).not.toMatch(BOTON);
+    // Tampoco si la respuesta quedó en otra fila del mismo pedido.
+    const enOtraFila = lista({ rows: [real(), simulada()], outcomes: outcome({ error: EN_DUDA }, "inv-real") });
+    expect(enOtraFila).toContain(EN_DUDA);
+    expect(enOtraFila).not.toMatch(BOTON);
+    // La de otro pedido no lo esconde.
+    const otro: RecentEmitOutcomes = {
+      "ord-otro": { rowId: "inv-x", orderId: "ord-otro", orderName: "#KP1", state: { notice: "Emitida B001-1" } },
+    };
+    expect(lista({ outcomes: otro })).toMatch(BOTON);
+  });
+
+  it("si la fila donde se pulsó ya no está, va en la más nueva de su pedido; si ninguna está, arriba con el pedido", () => {
+    // La real nueva empujó a la simulada fuera de las 20: va en la real, dentro de la lista.
+    const enLaReal = lista({ rows: [real()], outcomes: outcome({ error: EN_DUDA }) });
+    expect(enLaReal.split(EN_DUDA)).toHaveLength(2);
+    expect(enLaReal.indexOf(EN_DUDA)).toBeGreaterThan(enLaReal.indexOf(ENCABEZADO));
+    // Ninguna de su pedido está: arriba, antes de la lista, con el enlace al pedido.
+    const ajena = simulada({ id: "inv-x", orderId: "ord-x", orderName: "#KP1", emitNow: null });
+    const arriba = lista({ rows: [ajena], outcomes: outcome({ error: EN_DUDA }) });
+    expect(arriba.indexOf(EN_DUDA)).toBeGreaterThan(-1);
+    expect(arriba.indexOf(EN_DUDA)).toBeLessThan(arriba.indexOf(ENCABEZADO));
+    expect(arriba).toContain("?ficha=ord-9");
+    expect(arriba).toContain("#KP136199");
+    // El refresco no pudo leer la lista: se dice, y la respuesta sigue.
+    const sinLista = lista({ rows: null, outcomes: outcome({ error: EN_DUDA }) });
+    expect(sinLista).toContain("No se pudieron leer los comprobantes.");
+    expect(sinLista).toContain(EN_DUDA);
+    expect(sinLista).toContain("?ficha=ord-9");
+    const vacia = lista({ rows: [], outcomes: outcome({ notice: "Emitida B001-97", pdfUrl: PDF }) });
+    expect(vacia).toContain("Todavía no hay comprobantes");
+    expect(vacia).toContain(`href="${PDF}"`);
+  });
+
+  it("mientras sale, el botón de ese pedido queda deshabilitado aunque se vuelva a montar", () => {
+    expect(lista({ sending: new Set(["ord-9"]) })).toMatch(/<button[^>]*disabled=""[^>]*>Emitir<\/button>/);
+    expect(lista()).not.toMatch(/<button[^>]*disabled=""[^>]*>Emitir<\/button>/);
+  });
+
+  it("la lista guarda la respuesta por pedido, con candado por pedido, y la sección la monta siempre", () => {
+    const list = SECTION.slice(SECTION.indexOf("function RecentList("), SECTION.indexOf("function placeOutcomes("));
+    // Un segundo envío del mismo pedido no sale mientras el primero no vuelve.
+    expect(list).toContain("if (inFlight.current.has(orderId)) return;");
+    expect(list.indexOf("inFlight.current.add(orderId);")).toBeLessThan(list.indexOf("await emitInvoiceAction("));
+    expect(list.indexOf("inFlight.current.delete(orderId);")).toBeGreaterThan(list.indexOf("setOutcomes("));
+    // Lo que no llegó, lanzó o volvió sin decir nada: «no se sabe», nunca en blanco.
+    expect(list).toContain("res = { error: EMIT_LOST };");
+    expect(list).toContain("if (!res?.error && !res?.notice) res = { error: EMIT_LOST };");
+    // Montada siempre, también sin lista: si no, el refresco que no pudo leer la borraba.
+    expect(SECTION).not.toContain("data.recent === null ? (");
+    expect(SECTION).not.toContain("function RecentEmit(");
+    // Y la sección entera la pinta con lo que no se pudo leer.
+    expect(render({ recent: null })).toContain("No se pudieron leer los comprobantes.");
+    expect(render({ recent: [] })).toContain("Todavía no hay comprobantes");
+  });
+});
+
+// ── «Emitir» solo en producción (§35.7) ──────────────────────────────────────
+
+describe("fuera de producción, Ajustes no ofrece «Emitir»", () => {
+  const OFERTA = { issuerId: "iss-1", ruc: GF, legalName: "GRUPO GF S.A.C.", total: 85 };
+  const marcada: InvoiceRecentView = {
+    id: "inv-sim",
+    orderId: "ord-9",
+    orderName: "#KP136199",
+    issuerId: "iss-1",
+    ruc: GF,
+    mode: "simulacion",
+    status: "simulada",
+    serie: null,
+    correlative: null,
+    total: 85,
+    error: null,
+    createdAt: "2026-10-14T14:20:00.000Z",
+    rucMismatch: false,
+    emitNow: OFERTA,
+  };
+  const BOTON = /<button[^>]*>Emitir<\/button>/;
+  const POR_QUE = `«Emitir» no está disponible: ${INVOICE_REASON_LABEL.no_produccion}`;
+  const t = (html: string) => html.replace(/<[^>]+>/g, "");
+
+  // FIX: una vista previa comparte la base y la llave de cifrado con
+  // producción: desde ella «Emitir» mandaba una boleta real a SUNAT. La página
+  // ya no pregunta qué simuladas lo llevan y la sección no pinta el botón ni
+  // aunque llegara una oferta.
+  it("sin botón aunque llegue una simulada marcada, y con un RUC en Manual dice por qué", () => {
+    const manual = [issuerView({ mode: "manual" })];
+    const preview = render({ emitHere: false, issuers: manual, recent: [marcada] });
+    expect(preview).not.toMatch(BOTON);
+    expect(t(preview)).toContain(POR_QUE);
+    // En producción, el botón y nada que explicar.
+    const prod = render({ emitHere: true, issuers: manual, recent: [marcada] });
+    expect(prod).toMatch(BOTON);
+    expect(t(prod)).not.toContain(POR_QUE);
+    // Sin un RUC en Manual no hay botón que echar de menos: no se dice nada.
+    expect(t(render({ emitHere: false, recent: [marcada] }))).not.toContain(POR_QUE);
+  });
+
+  it("la página pregunta a `invoiceEmitAllowedHere` antes que a nadie, y sin datos no emite", () => {
+    const marca = PAGE.slice(PAGE.indexOf("let offers = new Map"), PAGE.indexOf("const emitNowOf = "));
+    expect(marca).toContain("const emitHere = invoiceEmitAllowedHere();");
+    expect(marca).toContain(
+      'if (emitHere && newestSimulated.size && (rows ?? []).some((r) => r.mode === "manual")) {',
+    );
+    expect(marca.indexOf("const emitHere = invoiceEmitAllowedHere();")).toBeLessThan(
+      marca.indexOf("offers = await loadInvoiceEmitNowOffers("),
+    );
+    // Lo que la sección sabe de dónde corre es lo mismo que decidió las ofertas.
+    expect(PAGE).toMatch(/return \{\s*emitHere,\s*issuers:/);
+    // Sin permiso o con la lectura caída, tampoco (falla cerrada).
+    expect(PAGE).toMatch(/const NO_INVOICES: Omit<InvoiceSettingsData, "canManage"> = \{\s*emitHere: false,/);
   });
 });

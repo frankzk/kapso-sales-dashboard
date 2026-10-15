@@ -76,11 +76,13 @@ describe("cómo se suman", () => {
 });
 
 describe("lo que ningún rol puede traer", () => {
-  it("los permisos de dinero o datos que da el dueño uno por uno, ni reembolsos", () => {
+  it("los permisos de dinero o datos que da el dueño uno por uno, ni reembolsos, ni el estado a mano", () => {
     const forbidden = new Set<string>([
       ...GRANTED_ONE_BY_ONE.filter((entry) => entry.ownerOnly).map((entry) => entry.permission),
       "closure.refund",
       "shalom.validate_payment",
+      // Cambiar el estado a mano es del acceso admin (15-10-2026, MOM §16).
+      "master.set_status",
     ]);
     for (const entry of FUNCTIONAL_ROLES) {
       for (const perm of entry.permissions) expect(forbidden.has(perm), `${entry.role} trae ${perm}`).toBe(false);

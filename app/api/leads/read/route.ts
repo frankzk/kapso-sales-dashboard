@@ -13,7 +13,10 @@ const schemas = {
   loadNextLeadCart: lead,
   loadLeadDeliveryCoverage: lead,
   loadLeadVoicePanel: lead,
-  loadLeadsInsightsPanel: z.tuple([scope, z.string().min(1).max(100), z.number().int().nonnegative()]),
+  // Dos argumentos desde el tablero K (15-10-2026). Una pestaña vieja que manda
+  // tres recibe un error y se queda con lo que ya tenía, en vez de pintar con
+  // el código viejo una respuesta de forma nueva.
+  loadLeadsInsightsPanel: z.tuple([scope, z.string().min(1).max(100)]),
   pollLeadsQueue: z.tuple([scope]),
   searchLeads: z.tuple([scope, z.string().max(200)]),
   loadLeadsForAudience: z.tuple([scope, z.enum(["por_llamar", "handoff", "yape", "seguimientos", "ganados", "perdidos"])]),

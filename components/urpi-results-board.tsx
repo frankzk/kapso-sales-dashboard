@@ -30,10 +30,10 @@ const RESULT_TONE: Record<string, string> = {
 };
 
 const TABS: { key: UrpiBucket; label: string; help: string }[] = [
-  { key: "por_aplicar", label: "Entregados por marcar", help: "Urpi los entregó y Kapta todavía no lo sabe. Revisa y márcalos entregados: van al Master por la misma vía que la liquidación, y su salida «Por definir» pasa a ser la salida de Urpi entregada." },
+  { key: "por_aplicar", label: "Entregados por marcar", help: "Al cargar el reporte, Kapta marca solos los entregados por Urpi. Aquí queda lo que no pudo marcar: quien cargó no tenía permiso para editar el Master, o algo falló. Márcalos: van al Master por la misma vía que la liquidación, y su salida «Por definir» pasa a ser la salida de Urpi entregada." },
   { key: "cancelado", label: "Cancelados por Urpi", help: "Urpi los canceló y siguen abiertos en Kapta. Seguimiento Lima decide si se llaman, salen con otro courier o vuelven. Kapta no cambia su estado." },
   { key: "reprogramado", label: "Reprogramados", help: "Urpi los reintenta el siguiente día de lunes a sábado desde la fecha del reporte." },
-  { key: "por_vincular_entregado", label: "Por vincular – entregados", help: "Urpi los entregó, pero el teléfono no lleva a un único pedido. Elige el pedido o escribe su código: se vincula todo el envío y pasa a «Entregados por marcar»." },
+  { key: "por_vincular_entregado", label: "Por vincular – entregados", help: "Urpi los entregó, pero el teléfono no lleva a un único pedido. Elige el pedido o escribe su código: se vincula todo el envío y queda marcado entregado en el Master." },
   { key: "por_vincular_otro", label: "Por vincular – otros", help: "Cancelados, reprogramados o en curso cuyo teléfono no lleva a un único pedido. Elige el pedido o escribe su código: se vincula todo el envío." },
   { key: "observacion", label: "Observaciones", help: "Urpi entregó y cobró, pero el pedido está anulado en Shopify o devuelto. No se marca entregado: solo Shopify termina una venta. Si se rehízo el pedido en Shopify, vincúlalo al nuevo; si no, ciérrala con el motivo (queda en la actividad del pedido)." },
   { key: "no_reconocido", label: "Estado no reconocido", help: "Urpi escribió un estado que Kapta no conoce. Se guarda tal cual y no se interpreta." },
@@ -189,7 +189,7 @@ export function UrpiResultsBoard({ nav, orgId, canImport, canApply, days, lastIm
       </div>
       <div className="flex items-center justify-between text-sm text-slate-500"><span>{visible.length ? page * 50 + 1 : 0}–{Math.min((page + 1) * 50, visible.length)} de {visible.length}</span><div className="flex gap-2"><button className={button} disabled={page === 0} onClick={() => setPage((value) => value - 1)}>Anterior</button><button className={button} disabled={(page + 1) * 50 >= visible.length} onClick={() => setPage((value) => value + 1)}>Siguiente</button></div></div>
     </>}
-    <p className="border-t border-slate-200 pt-4 text-xs text-slate-500">Urpi no envía el código de pedido: el vínculo se hace por teléfono con un único pedido de los 45 días previos al envío; con varios, decides tú. Marcar entregados exige permiso para editar el Master y convierte la salida «Por definir» del pedido en la salida de Urpi entregada. Cancelados y reprogramados quedan registrados y no cambian el estado del pedido.</p>
+    <p className="border-t border-slate-200 pt-4 text-xs text-slate-500">Urpi no envía el código de pedido: el vínculo se hace por teléfono con un único pedido de los 45 días previos al envío; con varios, decides tú. Al cargar el reporte, los entregados se marcan solos en el Master si quien carga tiene permiso para editarlo, y la salida «Por definir» del pedido pasa a ser la salida de Urpi entregada. Cancelados y reprogramados quedan registrados y no cambian el estado del pedido.</p>
   </div>;
 }
 

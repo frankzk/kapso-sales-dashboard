@@ -26,6 +26,8 @@ import {
   INVOICE_MODE_LABEL,
   INVOICE_REASON_LABEL,
   INVOICE_REASONS,
+  INVOICE_RELEASE_MIN_AGE_MS,
+  INVOICE_RELEASE_UNKNOWN_TEXT,
   INVOICE_STATUS_LABEL,
   INVOICE_STATUSES,
   LIVE_REAL_STATUSES,
@@ -39,6 +41,9 @@ import {
   invoiceEligibility,
   invoiceNote,
   invoiceNoteRef,
+  invoiceReleaseAvailableAt,
+  invoiceReleaseBlock,
+  invoiceReleaseWaitText,
   invoiceSweepMode,
   isValidRuc,
   normalizeSubdomain,
@@ -915,6 +920,87 @@ describe("MOM §35.8 — «Manual» y «Emitir esta boleta» (owner, 15-10-2026)
       arreglar();
     }
     expect(emitir(f)).toMatchObject({ ok: true, mode: "real" });
+  });
+});
+
+describe("MOM §35.7 — «Emitir esta boleta»: lo que cambió y la vista previa tienen su frase", () => {
+  it("`pedido_cambio`: la frase de siempre de la confirmación", () => {
+    expect(INVOICE_REASON_LABEL.pedido_cambio).toBe(
+      "El pedido cambió desde que lo abriste (el RUC o el total): vuelve a abrirlo y revisa la boleta antes de emitirla.",
+    );
+  });
+
+  it("`no_produccion`: una vista previa no emite", () => {
+    expect(INVOICE_REASON_LABEL.no_produccion).toBe("Emitir solo funciona en producción: este despliegue es una vista previa.");
+  });
+
+  it("van después de los motivos de la base y de Shopify: no son reglas del pedido", () => {
+    for (const r of ["pedido_cambio", "no_produccion"] as const) {
+      expect(INVOICE_REASONS.indexOf(r)).toBeGreaterThan(INVOICE_REASONS.indexOf("turno_fallido"));
+    }
+  });
+});
+
+describe("MOM §35.4 — un `en_duda` no se libera recién nacido (30 minutos desde que quedó en duda)", () => {
+  // FIX: «No está en SimpleFact: volver a intentar» se podía pulsar al instante.
+  // Un POST cortado por tiempo puede haber llegado a SimpleFact sin que lo liste
+  // todavía: liberar y volver a emitir eran dos boletas.
+  const EN_DUDA = "2026-10-14T19:45:10.000Z"; // 14:45:10 de Lima
+  const TURNO = "2026-10-14T19:44:50.000Z";
+
+  it("la espera es de 30 minutos", () => {
+    expect(INVOICE_RELEASE_MIN_AGE_MS).toBe(1_800_000);
+  });
+
+  it("se cuenta desde que quedó en duda (`updated_at`), al minuto hacia arriba", () => {
+    expect(invoiceReleaseAvailableAt({ createdAt: TURNO, updatedAt: EN_DUDA })).toBe("2026-10-14T20:16:00.000Z");
+    // En el minuto justo, no se corre.
+    expect(invoiceReleaseAvailableAt({ createdAt: TURNO, updatedAt: "2026-10-14T19:45:00.000Z" })).toBe(
+      "2026-10-14T20:15:00.000Z",
+    );
+    // La conciliación lo pasó a en duda 20 minutos después del turno: cuenta desde ahí.
+    expect(invoiceReleaseAvailableAt({ createdAt: "2026-10-14T19:25:00.000Z", updatedAt: EN_DUDA })).toBe(
+      "2026-10-14T20:16:00.000Z",
+    );
+  });
+
+  it("`created_at` es el piso: nunca antes de 30 minutos desde el turno", () => {
+    // Un `updated_at` anterior al turno no se cree: manda el turno.
+    expect(invoiceReleaseAvailableAt({ createdAt: EN_DUDA, updatedAt: "2026-10-14T18:00:00.000Z" })).toBe(
+      "2026-10-14T20:16:00.000Z",
+    );
+    // Un turno ilegible no estorba: cuenta `updated_at`.
+    expect(invoiceReleaseAvailableAt({ createdAt: null, updatedAt: EN_DUDA })).toBe("2026-10-14T20:16:00.000Z");
+  });
+
+  it.each([null, undefined, "", "ayer"])("sin saber cuándo quedó en duda (%s), no se sabe: null", (updatedAt) => {
+    expect(invoiceReleaseAvailableAt({ createdAt: TURNO, updatedAt })).toBeNull();
+  });
+
+  it("lo que se dice: hasta qué hora de Lima esperar, y por qué", () => {
+    expect(invoiceReleaseWaitText("2026-10-14T20:16:00.000Z")).toBe(
+      "Espera hasta las 15:16 (hora de Lima): SimpleFact puede tardar en mostrar una boleta que sí recibió. Mientras tanto Kapta la sigue buscando.",
+    );
+    // Pasada la medianoche de Lima (05:00 UTC), la hora sigue siendo la de Lima.
+    expect(invoiceReleaseWaitText("2026-10-15T05:10:00.000Z")).toMatch(/^Espera hasta las 00:10 \(hora de Lima\)/);
+    expect(invoiceReleaseWaitText("2026-10-15T04:59:00.000Z")).toMatch(/^Espera hasta las 23:59 /);
+  });
+
+  it("invoiceReleaseBlock: antes de la hora dice cuánto esperar; a la hora, null (se libera)", () => {
+    const row = { createdAt: TURNO, updatedAt: EN_DUDA };
+    expect(invoiceReleaseBlock(row, new Date("2026-10-14T19:45:11.000Z"))).toBe(
+      invoiceReleaseWaitText("2026-10-14T20:16:00.000Z"),
+    );
+    expect(invoiceReleaseBlock(row, new Date("2026-10-14T20:15:59.999Z"))).toMatch(/^Espera hasta las 15:16 /);
+    expect(invoiceReleaseBlock(row, new Date("2026-10-14T20:16:00.000Z"))).toBeNull();
+    expect(invoiceReleaseBlock(row, new Date("2026-10-15T09:00:00.000Z"))).toBeNull();
+  });
+
+  it("falla cerrada: sin saber desde cuándo, o con un reloj ilegible, no se libera", () => {
+    expect(invoiceReleaseBlock({ createdAt: TURNO, updatedAt: null }, new Date("2026-10-20T00:00:00.000Z"))).toBe(
+      INVOICE_RELEASE_UNKNOWN_TEXT,
+    );
+    expect(invoiceReleaseBlock({ createdAt: TURNO, updatedAt: EN_DUDA }, new Date(Number.NaN))).toMatch(/^Espera hasta las/);
   });
 });
 

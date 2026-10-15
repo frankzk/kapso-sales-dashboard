@@ -45,11 +45,13 @@ import {
 import {
   isGeneralStatus,
   isOperationalStatus,
+  ownRiderAttempts,
   resolveOrderState,
   type GuideSnapshot,
   type OrderEventSnapshot,
   type StatusOverride,
 } from "@/lib/order-status";
+import { salesChannel } from "@/lib/sales-channel";
 import {
   activeCompanionLinks,
   borrowedHostEvents,
@@ -58,7 +60,7 @@ import {
 } from "@/lib/order-companion";
 
 const ORDER_COLUMNS =
-  "id,store_id,shopify_order_id,name,created_at,cancelled_at,financial_status,payment_gateway,shipping_mode,customer_phone,total_amount,total_refunded,raw";
+  "id,store_id,shopify_order_id,name,created_at,cancelled_at,financial_status,payment_gateway,shipping_mode,customer_phone,total_amount,total_refunded,raw,tags,kapso_conversation_id";
 
 // Las columnas de gestión (assigned_at … agency_expires_at) las añade 0047. El
 // código se despliega antes que la migración, así que se intenta el conjunto
@@ -145,6 +147,8 @@ interface OrderRecord {
   total_amount: number | null;
   total_refunded: number | null;
   raw: unknown;
+  tags?: string[] | null;
+  kapso_conversation_id?: string | null;
 }
 
 interface ShipmentRecord {
@@ -1177,6 +1181,9 @@ export async function recomputeOrderMaster(
       longitude,
       geo_source: geoSource,
       shipping_mode: order.shipping_mode,
+      // Por dónde se generó (formulario web, asesora, chatbot…): el filtro
+      // «Canal» del Master (0264, lib/sales-channel.ts).
+      sales_channel: salesChannel(order.tags, order.kapso_conversation_id),
       order_total: order.total_amount,
       general_status: state.general,
       operational_status: state.operational,
@@ -1200,7 +1207,11 @@ export async function recomputeOrderMaster(
       current_courier: state.currentCourier,
       last_courier: state.lastCourier,
       courier_count: state.courierCount,
-      attempt_count: state.attemptCount,
+      // Lo que reportan los couriers más las paradas de nuestros motorizados.
+      // El costo logístico sigue con `state.attemptCount`: Grupo GF no cobra
+      // por intento adicional, y sumarle sus visitas a la tarifa de otro
+      // courier (un pedido que luego salió con Aliclik) inventaría un costo.
+      attempt_count: state.attemptCount + ownRiderAttempts(stateEvents),
       guide_code: state.guideCode,
       // De la guía VIGENTE, igual que el costo real de arriba: si un pedido
       // salió dos veces, lo que importa es el cobro de la que está entregando.

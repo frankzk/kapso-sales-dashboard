@@ -47,6 +47,7 @@ import {
   type OrderMasterDetail,
 } from "@/lib/orders-master-access";
 import {
+  SET_STATUS_DENIED,
   closedStatusChangeError,
   defaultOperationalFor,
   isGeneralStatus,
@@ -148,6 +149,22 @@ async function authorizeOrder(orderId: string): Promise<OrderContext | null> {
   if (!data) return null;
   const row = data as unknown as OrderMasterRow;
   return { userId: user.id, storeId: row.store_id, row };
+}
+
+/**
+ * ¿Puede quien pide cambiar A MANO el estado de este pedido? Owner o admin de
+ * la organización de su tienda (`master.set_status`, MOM §16, 15-10-2026).
+ *
+ * No la unión de `getMasterPermissions()`: con ella, ser admin en una empresa
+ * habilitaba el cambio en los pedidos de otra donde se es vendedora. La tienda
+ * se lee por RLS, como el pedido; si no se puede leer, no se concede.
+ */
+async function canSetStatusIn(ctx: OrderContext): Promise<boolean> {
+  const sb = await createServerSupabase();
+  const { data: store, error } = await sb.from("stores").select("org_id").eq("id", ctx.storeId).maybeSingle();
+  const orgId = (store as { org_id?: string | null } | null)?.org_id;
+  if (error || !orgId) return false;
+  return hasOrgPermission(orgId, "master.set_status");
 }
 
 /** Escribe un movimiento en la línea de tiempo. Nunca se puede borrar (0045). */
@@ -1347,6 +1364,12 @@ export async function applyOrderStatusBulk(
   if (!perms.can("master.edit")) {
     return { error: "Tu rol no permite modificar pedidos.", applied: [], failed: [] };
   }
+  // Sin «Registrar estado a mano» en NINGUNA organización no se intenta ni un
+  // pedido. La unión solo sirve para cortar antes: quien decide pedido por
+  // pedido es `setOrderStatus`, contra la organización de cada uno.
+  if (!perms.can("master.set_status")) {
+    return { error: SET_STATUS_DENIED, applied: [], failed: [] };
+  }
   if (!isGeneralStatus(input.general)) {
     return { error: "Estado general inválido.", applied: [], failed: [] };
   }
@@ -1411,8 +1434,15 @@ export async function applyOrderStatusBulk(
  * Registra el estado de un pedido. Es un override manual: congela el estado
  * frente al recálculo automático hasta que alguien lo vuelva a mover a mano.
  *
- * Cambiar un pedido ya cerrado (entregado, anulado o devuelto) exige el permiso
- * `master.override_status` y un motivo obligatorio — §4: "los cambios
+ * Lo hacen solo owner y admin (`master.set_status`): decisión del dueño del
+ * 15-10-2026, «solo quienes tienen acceso de Admin pueden realizar esa acción»
+ * (MOM §16). Se pregunta en la organización DE ESTE PEDIDO —ser admin en una
+ * empresa no da mando sobre los pedidos de otra donde se es vendedora— y antes
+ * de leer o escribir nada más. `master.edit` sigue haciendo falta, y comentar,
+ * devolver o corregir vínculos se queda en él.
+ *
+ * Cambiar un pedido ya cerrado (entregado, anulado o devuelto) exige además el
+ * permiso `master.override_status` y un motivo obligatorio — §4: "los cambios
  * posteriores sobre un pedido entregado deberán requerir una modificación
  * manual y deberán quedar registrados en el historial".
  */
@@ -1436,6 +1466,7 @@ export async function setOrderStatus(
   }
   const ctx = await authorizeOrder(orderId);
   if (!ctx) return { error: "Sin acceso a este pedido." };
+  if (!(await canSetStatusIn(ctx))) return { error: SET_STATUS_DENIED };
 
   const target: GeneralStatus = input.general;
   const reason = input.reason?.trim() ?? "";
