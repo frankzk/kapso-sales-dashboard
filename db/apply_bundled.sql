@@ -23588,7 +23588,93 @@ grant execute on function order_master_stale(uuid, int) to service_role;
 
 -- ---- 0266 ----
 -- ============================================================================
--- 0266_invoices_backfill.sql — comprobantes por RUC: «Emitir esta boleta» para
+-- 0266_order_master_dispatched_with.sql — «Salió con»: con quién salió de
+-- verdad cada pedido (MOM §9.3, 15-10-2026, pedido de Frankz).
+--
+-- POR QUÉ. El filtro «Courier» mira el courier vigente y el último, y para
+-- Grupo GF solo dice «Propio». No responde con quién se intentó: ¿Roy, Alexis,
+-- Yhoni, Tanders, Urpi? Esta columna guarda a todos.
+--
+-- QUÉ GUARDA. Códigos, sin repetir: `gf:<Nombre>` por cada motorizado de
+-- Grupo GF que tuvo una parada reportada con el pedido (o lo lleva ahora),
+-- `gf` si salió con Grupo GF sin parada conocida, y el código del courier
+-- externo cuya guía llegó a salir (`aliclik`, `fenix` = Swayp, `tanders`,
+-- `urpi`, `shalom`, `olva`…). La escribe el recálculo del pedido
+-- (lib/dispatched-with.ts); `mom-v1.30` la rellena para todos.
+--
+-- `master_facets` la devuelve como opciones del filtro: los nombres de los
+-- motorizados salen de los datos, no de una lista escrita a mano.
+-- ============================================================================
+
+alter table order_master add column if not exists dispatched_with text[] not null default '{}';
+
+create index if not exists order_master_dispatched_with_idx
+  on order_master using gin (dispatched_with);
+
+create or replace function public.master_facets(p_store_ids uuid[])
+returns jsonb
+language sql
+stable
+set search_path to 'public'
+as $function$
+  select jsonb_build_object(
+    'operational', coalesce((
+      select jsonb_agg(v order by v) from (
+        select distinct operational_status as v
+        from order_master where store_id = any(p_store_ids) and operational_status is not null
+      ) q
+    ), '[]'::jsonb),
+    'courier', coalesce((
+      select jsonb_agg(v order by v) from (
+        select current_courier as v from order_master
+        where store_id = any(p_store_ids) and current_courier is not null
+        union
+        select last_courier as v from order_master
+        where store_id = any(p_store_ids) and last_courier is not null
+      ) q
+    ), '[]'::jsonb),
+    'region', coalesce((
+      select jsonb_agg(v order by v) from (
+        select distinct region as v from order_master
+        where store_id = any(p_store_ids) and region is not null
+      ) q
+    ), '[]'::jsonb),
+    'province', coalesce((
+      select jsonb_agg(v order by v) from (
+        select distinct province as v from order_master
+        where store_id = any(p_store_ids) and province is not null
+      ) q
+    ), '[]'::jsonb),
+    'district', coalesce((
+      select jsonb_agg(v order by v) from (
+        select distinct district as v from order_master
+        where store_id = any(p_store_ids) and district is not null
+      ) q
+    ), '[]'::jsonb),
+    'coverage', coalesce((
+      select jsonb_agg(v order by v) from (
+        select distinct coverage as v from order_master
+        where store_id = any(p_store_ids) and coverage is not null
+      ) q
+    ), '[]'::jsonb),
+    'pickup', coalesce((
+      select jsonb_agg(v order by v) from (
+        select distinct pickup_state as v from order_master
+        where store_id = any(p_store_ids) and pickup_state is not null
+      ) q
+    ), '[]'::jsonb),
+    'dispatched_with', coalesce((
+      select jsonb_agg(v order by v) from (
+        select distinct unnest(dispatched_with) as v from order_master
+        where store_id = any(p_store_ids)
+      ) q
+    ), '[]'::jsonb)
+  );
+$function$;
+
+-- ---- 0267 ----
+-- ============================================================================
+-- 0267_invoices_backfill.sql — comprobantes por RUC: «Emitir esta boleta» para
 -- lo pagado antes de «Emitir desde», desde el 01/10/2026 (MOM §35, owner
 -- 15-10-2026).
 --
@@ -23637,12 +23723,12 @@ grant execute on function order_master_stale(uuid, int) to service_role;
 -- doce, se detiene sin cambiar nada. Si después alguien vuelve a correr la
 -- 0261, quedan dos turnos —el de once y éste— y la llamada por nombre del
 -- código se vuelve ambigua (falla, no emite) hasta que se vuelva a correr la
--- 0266. En el SQL Editor corre en una sola transacción; con psql,
+-- 0267. En el SQL Editor corre en una sola transacción; con psql,
 -- `psql -1 -v ON_ERROR_STOP=1`.
 --
 -- Se aplica a mano ANTES del código (DEPLOY.md). Es idempotente. El código
 -- tolera que falte: lo pagado desde «Emitir desde» se emite como hoy, y un
--- pedido pagado antes contesta `sin_migracion`, nombrando la 0266.
+-- pedido pagado antes contesta `sin_migracion`, nombrando la 0267.
 -- ============================================================================
 
 -- ── 1. Solo sobre la 0262 ────────────────────────────────────────────────────
@@ -23656,7 +23742,7 @@ begin
   if to_regprocedure('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)') is not null
      or (to_regprocedure('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)') is null
          and to_regprocedure('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)') is null) then
-    raise exception 'La 0266 va después de la 0262: aplica primero db/migrations/0261_invoices_manual.sql y db/migrations/0262_invoices_claim_coverage.sql.';
+    raise exception 'La 0267 va después de la 0262: aplica primero db/migrations/0261_invoices_manual.sql y db/migrations/0262_invoices_claim_coverage.sql.';
   end if;
 end $$;
 
@@ -23853,7 +23939,7 @@ begin
   end if;
   -- Pagado antes de «Emitir desde»: no, salvo lo que pide una persona con
   -- «Emitir esta boleta» después de revisar en SimpleFact que el pedido no
-  -- tiene boleta (0266, owner 15-10-2026): una fila real, con el RUC en Manual,
+  -- tiene boleta (0267, owner 15-10-2026): una fila real, con el RUC en Manual,
   -- quién la pidió, «Emitir desde» ya llegado y las dos fechas del 01/10/2026
   -- 00:00 (hora de Lima) en adelante. Más atrás las boletas se emitían a mano
   -- y no se sabe cuál tiene la suya. Con «Emitir desde» en el futuro (Ajustes
@@ -23930,7 +24016,7 @@ begin
     return jsonb_build_object('reason', 'tope');
   end if;
 
-  -- La fila de lo pagado antes de «Emitir desde» lo dice en su base (0266):
+  -- La fila de lo pagado antes de «Emitir desde» lo dice en su base (0267):
   -- quien la mire sabe que salió por la excepción, después de que una persona
   -- revisó SimpleFact.
   insert into order_invoices (

@@ -531,6 +531,8 @@
 \ir migrations/0264_order_master_sales_channel.sql
 \echo 'Applying 0265_order_master_stale_urpi.sql'
 \ir migrations/0265_order_master_stale_urpi.sql
-\echo 'Applying 0266_invoices_backfill.sql'
-\ir migrations/0266_invoices_backfill.sql
+\echo 'Applying 0266_order_master_dispatched_with.sql'
+\ir migrations/0266_order_master_dispatched_with.sql
+\echo 'Applying 0267_invoices_backfill.sql'
+\ir migrations/0267_invoices_backfill.sql
 \echo 'Done.'

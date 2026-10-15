@@ -13225,7 +13225,7 @@ nuevo que borra el motivo de la prueba anterior y los pedidos por revisar), las
 dos ya corridas en producción; la 0261 (el modo «Manual» y el turno que dice
 qué fila pide y quién la pidió, 15-10-2026), y la 0262 (el turno que vuelve a
 revisar que la empresa recibió el pago, 15-10-2026), que se aplican a mano, en
-ese orden, antes de su código (35.8). La 0266 (el turno que deja a «Emitir esta
+ese orden, antes de su código (35.8). La 0267 (el turno que deja a «Emitir esta
 boleta» emitir lo pagado antes de «Emitir desde», 15-10-2026) va después de la
 0262, también a mano y antes de su código. Están también las reglas puras, el
 cliente de SimpleFact, el barrido (`/api/cron/invoices`), la sección «Boletas
@@ -13426,7 +13426,7 @@ el barrido tienen que ser las dos desde «Emitir desde»; si falta una, o una es
 anterior, no da el turno (`antes_de_inicio`). Así, un error en las reglas o en
 una lectura no manda a SUNAT la boleta de algo pagado antes de la fecha de
 inicio. La única excepción es la de arriba, y la base la vuelve a exigir
-entera (0266): da el turno a algo pagado antes de «Emitir desde» solo si se
+entera (0267): da el turno a algo pagado antes de «Emitir desde» solo si se
 pide con `p_backfill`, una fila real, el RUC en Manual, quién la pide
 (`p_created_by`) y las dos fechas del 01/10/2026 00:00 (hora de Lima) en
 adelante. Sin «Emitir desde», con «Emitir desde» todavía en el futuro (la base
@@ -13850,7 +13850,7 @@ Reglas de esa tabla:
     podía cambiar y salir una boleta que nadie confirmó. Después, el token, la
     relectura en Shopify (el total y, en un prepago web, lo que cobró Flow),
     la boleta, el turno pidiendo una fila real con quien pulsó (35.3) —y, si
-    quedó pagado antes de «Emitir desde», con `p_backfill` (0266)—, UNA
+    quedó pagado antes de «Emitir desde», con `p_backfill` (0267)—, UNA
     llamada a SimpleFact, la lectura de la respuesta, la fila (solo si sigue
     en `emitiendo`) y las reglas que apagan el RUC (35.4). Los mismos
     candados: un comprobante real vivo por pedido (el índice único), el tope
@@ -13968,26 +13968,26 @@ pago, que es lo que el turno revisa: lo bien pagado sigue dando su fila. Va
 después de la 0261: sin ella —sigue el turno de nueve argumentos, o falta el
 de once— se detiene sin cambiar nada. Si después alguien vuelve a correr la
 0261, el turno queda otra vez sin esta revisión hasta volver a correr la 0262.
-Con la 0266 aplicada, lo que se vuelve a correr después de la 0261 es la 0266
+Con la 0267 aplicada, lo que se vuelve a correr después de la 0261 es la 0267
 (no la 0262): la 0262 pasaría su guarda y dejaría los dos turnos.
 
-**Antes de la 0266** (owner, 15-10-2026). También se aplica a mano, después de
+**Antes de la 0267** (owner, 15-10-2026). También se aplica a mano, después de
 la 0262 y antes de su código (DEPLOY.md). Cambia la firma del turno: borra la
 de once argumentos y crea la de doce, con `p_backfill` al final, falso por
 defecto; el cuerpo es el de la 0262. El código de antes y el de ahora piden el
 turno por nombre, y con un solo turno esas llamadas van al de doce con
 `p_backfill` en falso: hace lo mismo que la 0262. El código solo manda
 `p_backfill` desde «Emitir esta boleta», con un pedido pagado antes de «Emitir
-desde» (35.3). Si llega antes que la 0266, nada se emite de más y nada se pone
+desde» (35.3). Si llega antes que la 0267, nada se emite de más y nada se pone
 rojo: lo pagado desde «Emitir desde» se simula y se emite como siempre, y un
 pedido pagado antes no reserva ni envía nada: es `sin_migracion`, y «Emitir
-esta boleta» dice «Falta aplicar la migración 0266 de comprobantes
-(invoice_claim con p_backfill).». La 0266 se reconoce por ese parámetro
+esta boleta» dice «Falta aplicar la migración 0267 de comprobantes
+(invoice_claim con p_backfill).». La 0267 se reconoce por ese parámetro
 (`INVOICE_CLAIM_BACKFILL_MIGRATION`). Va después de la 0262: con el turno de
 nueve argumentos, o sin el de once ni el de doce, se detiene sin cambiar nada.
 Si después alguien vuelve a correr la 0261, quedan dos turnos —el de once y el
 de doce— y la llamada por nombre del código falla: no se simula ni se emite
-nada hasta volver a correr la 0266.
+nada hasta volver a correr la 0267.
 
 Para el barrido, «falta una migración de comprobantes» es solo un «no existe»
 (de tabla o de función) que nombra algo que crean la 0257 —`invoice_issuers`,
@@ -14039,7 +14039,7 @@ Implementación:
   `order_invoices`, `invoice_order_checks`, la función `invoice_claim` (el
   turno) y la semilla de GRUPO GF S.A.C. Es la que corrió en producción el
   14-10-2026, y no se reescribe: lo que cambió después va en la 0260, la 0261,
-  la 0262 y la 0266.
+  la 0262 y la 0267.
 - `db/migrations/0260_invoices_hardening.sql`: los arreglos de la revisión
   adversaria, sobre la 0257: las funciones `invoice_claim` (el turno) e
   `invoice_candidates` (qué pedidos mira el barrido), y las de los triggers
@@ -14059,7 +14059,7 @@ Implementación:
   `prepago_con_comprobantes`), que cada pago de la base del comprobante siga
   validado, y bloquea los pagos del pedido mientras dura. Se detiene sin la
   0261 delante. No toca filas.
-- `db/migrations/0266_invoices_backfill.sql`: lo pagado antes de «Emitir
+- `db/migrations/0267_invoices_backfill.sql`: lo pagado antes de «Emitir
   desde» con «Emitir esta boleta» (owner 15-10-2026), sobre la 0262: solo
   `invoice_claim`, que pasa a doce argumentos con `p_backfill` (falso por
   defecto) y borra la firma de once. El cuerpo es el de la 0262 salvo dos
@@ -14085,7 +14085,7 @@ Implementación:
   se ofrece el botón, en el panel y en Ajustes), y `invoiceEmitAllowedHere`
   (solo producción emite). Con un pedido pagado antes de «Emitir desde»,
   `emitInvoiceNow` pide la casilla (`sin_revision_simplefact`) y el turno va
-  con `p_backfill`; sin la 0266, contesta `sin_migracion`
+  con `p_backfill`; sin la 0267, contesta `sin_migracion`
   (`INVOICE_CLAIM_BACKFILL_MIGRATION`).
 - `app/api/cron/invoices/route.ts`: el barrido, cada 10 minutos.
 - Ajustes, en `app/dashboard/[storeId]/settings/invoice-actions.ts` y

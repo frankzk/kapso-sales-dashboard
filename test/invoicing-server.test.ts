@@ -161,8 +161,8 @@ function invoiceGuard(old: Row, values: Row): string | null {
 
 const LIVE = ["emitiendo", "emitida", "en_duda", "externa"];
 
-/** El piso de la 0266: `timestamptz '2026-10-01 00:00:00-05'`. */
-const PISO_0266 = "2026-10-01T05:00:00.000Z";
+/** El piso de la 0267: `timestamptz '2026-10-01 00:00:00-05'`. */
+const PISO_0267 = "2026-10-01T05:00:00.000Z";
 
 /** Lo que contesta la base cuando falta la 0257 o la 0260: la tabla o la función no existe. */
 const MISSING = {
@@ -186,8 +186,8 @@ function fakeDb(initialNow: Date) {
     candidatesError: null as string | null,
     /** La base no tiene la 0261: el turno no tiene `p_mode` ni `p_created_by`. */
     sin0261: false,
-    /** La base no tiene la 0266: el turno no tiene `p_backfill` (sigue el de once argumentos). */
-    sin0266: false,
+    /** La base no tiene la 0267: el turno no tiene `p_backfill` (sigue el de once argumentos). */
+    sin0267: false,
   };
   // El reloj de la base (`now()`): `sweep` lo pone en el `now` de la pasada.
   const clock = { now: initialNow };
@@ -326,7 +326,7 @@ function fakeDb(initialNow: Date) {
    * `modo_distinto`. Lo demás se revisa con el modo de la FILA (el tope del día
    * cuenta las filas de ese modo), y `created_by` es `p_created_by`.
    *
-   * La 0266: con `p_backfill`, una fila real de un RUC en «Manual» pedida por
+   * La 0267: con `p_backfill`, una fila real de un RUC en «Manual» pedida por
    * alguien deja pasar lo pagado antes de «Emitir desde», si «Emitir desde» ya
    * llegó (`emit_from <= now()`, con el reloj de la base) y las dos fechas y
    * el primer dinero (la más temprana entre `paid_at` y `registered_at` de los
@@ -366,7 +366,7 @@ function fakeDb(initialNow: Date) {
     if (Math.abs(Number(order.total_amount) - total) >= 0.005) return { reason: "total_distinto" };
     if (!iss.emit_from || !a.p_paid_at || !paid) return { reason: "antes_de_inicio" };
     const before = cmp(a.p_paid_at, iss.emit_from) < 0 || cmp(paid, iss.emit_from) < 0;
-    // El primer dinero (0266): `least(coalesce(paid_at, registered_at), registered_at)`
+    // El primer dinero (0267): `least(coalesce(paid_at, registered_at), registered_at)`
     // de cada pago validado, el menor; sin pagos validados, la fecha del pedido.
     const first: string | null = !live.length
       ? paid
@@ -383,10 +383,10 @@ function fakeDb(initialNow: Date) {
       iss.mode === "manual" &&
       !!a.p_created_by &&
       cmp(iss.emit_from, now.toISOString()) <= 0 &&
-      cmp(a.p_paid_at, PISO_0266) >= 0 &&
-      cmp(paid, PISO_0266) >= 0 &&
+      cmp(a.p_paid_at, PISO_0267) >= 0 &&
+      cmp(paid, PISO_0267) >= 0 &&
       first !== null &&
-      cmp(first, PISO_0266) >= 0;
+      cmp(first, PISO_0267) >= 0;
     if (before && !backfill) return { reason: "antes_de_inicio" };
     if (!a.p_request || typeof a.p_request !== "object") return { reason: "sin_boleta" };
     const mine = t("order_invoices").filter((r) => r.order_id === a.p_order);
@@ -451,8 +451,8 @@ function fakeDb(initialNow: Date) {
           },
         };
       }
-      // Sin la 0266, tampoco la firma con `p_backfill`.
-      if (state.sin0266 && "p_backfill" in args) {
+      // Sin la 0267, tampoco la firma con `p_backfill`.
+      if (state.sin0267 && "p_backfill" in args) {
         return {
           data: null,
           error: {
@@ -844,7 +844,7 @@ describe("loadInvoiceOrderFacts: los hechos de cada pedido (§35.2, §35.3)", ()
         amount: 30.5,
         validationStatus: "validado",
         registeredAt: "2026-10-14T15:30:00.000Z",
-        // La fecha del comprobante (`paid_at`), tal cual: el piso de la 0266.
+        // La fecha del comprobante (`paid_at`), tal cual: el piso de la 0267.
         paidAt: "2026-10-14T15:10:00.000Z",
         validatedAt: "2026-10-14T16:00:00.000Z",
         vision: { extracted: { recipient_name: "Grupo GF S.A.C." } },
@@ -3425,20 +3425,20 @@ describe("emitInvoiceNow: lo pagado antes de «Emitir desde» sale con el botón
     expect(invoice(db, "ord-1")!.basis).not.toHaveProperty("pagado_antes_de_emitir_desde");
   });
 
-  it("sin la 0266: lo normal se sigue emitiendo; uno de antes dice `sin_migracion` con la 0266, sin fila ni POST", async () => {
-    expect(INVOICE_CLAIM_BACKFILL_MIGRATION).toBe("0266");
+  it("sin la 0267: lo normal se sigue emitiendo; uno de antes dice `sin_migracion` con la 0267, sin fila ni POST", async () => {
+    expect(INVOICE_CLAIM_BACKFILL_MIGRATION).toBe("0267");
     // Lo normal no manda `p_backfill`: el turno de once argumentos lo atiende.
     const normal = deAntes("manual", PAGADO);
-    normal.state.sin0266 = true;
+    normal.state.sin0267 = true;
     expect(await emit(normal, makeDeps())).toMatchObject({ ok: true, status: "emitida" });
     // Uno de antes, sí: y no se reserva ni se envía nada.
     const db = deAntes();
-    db.state.sin0266 = true;
+    db.state.sin0267 = true;
     const deps = makeDeps();
     expect(await emit(db, deps)).toEqual({
       ok: false,
       reason: "sin_migracion",
-      detail: "Falta aplicar la migración 0266 de comprobantes (invoice_claim con p_backfill).",
+      detail: "Falta aplicar la migración 0267 de comprobantes (invoice_claim con p_backfill).",
     });
     expect(claims(db)).toHaveLength(1);
     expect(db.t("order_invoices")).toEqual([]);
