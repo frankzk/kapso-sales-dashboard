@@ -55,8 +55,9 @@ export const PERMISSIONS = [
   // pasar un RUC a «Real» o darle una cuenta decide qué empresa paga el
   // impuesto de qué venta, y una boleta que llegó a SUNAT no se borra. Por eso
   // no cae bajo `stores.manage` —que Ajustes pide además— y se concede persona
-  // por persona: solo el dueño. Emitir no es parte del permiso: lo hace solo el
-  // barrido, y no hay botón para forzarlo.
+  // por persona: solo el dueño. En modo Real emite solo el barrido; en modo
+  // Manual, quien tiene este permiso emite pedido por pedido con «Emitir esta
+  // boleta» (decisión del owner, 15-10-2026, MOM §35.7): es mandar a SUNAT.
   "invoices.manage",
   // Costos
   "costs.manage",
@@ -240,7 +241,7 @@ export const PERMISSION_HELP: Record<Permission, string> = {
   "shalom.reveal_pickup_key": "Ver la clave de Shalom cuando el pedido está pagado completo. Queda registrado quién la vio.",
   "shalom.view_pickup_key": "Guardar o reemplazar la clave de recojo de Shalom y verla siempre.",
   "shalom.override_payment_validation": "Pasar un pago a otro pedido o forzar su estado.",
-  "invoices.manage": "Configurar cada RUC de SimpleFact con su token y su modo, asignarle cuentas de cobro y registrar boletas emitidas fuera de Kapta.",
+  "invoices.manage": "Configurar los RUC de SimpleFact, asignarles cuentas, emitir boletas en modo Manual y registrar las emitidas fuera de Kapta.",
   "costs.manage": "Costos de producto, tarifas y gastos adicionales.",
   "logistics.manage": "Tarifas, clientes, pago de motorizados y exceso de efectivo del Grupo GF.",
   "aliclik.create_guide": "Crear la guía en Aliclik. Sale de verdad hacia el courier.",

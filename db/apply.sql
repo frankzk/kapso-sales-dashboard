@@ -521,4 +521,6 @@
 \ir migrations/0258_restock_reply_sweep.sql
 \echo 'Applying 0260_invoices_hardening.sql'
 \ir migrations/0260_invoices_hardening.sql
+\echo 'Applying 0261_invoices_manual.sql'
+\ir migrations/0261_invoices_manual.sql
 \echo 'Done.'

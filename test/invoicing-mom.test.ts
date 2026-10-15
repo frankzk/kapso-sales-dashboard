@@ -1,7 +1,8 @@
 // Los comprobantes por RUC (MOM §35) están escritos en prosa, y la regla que de
 // verdad corre vive en sitios que nadie compila juntos: las reglas puras
-// (lib/invoicing/rules.ts), la 0257 y la 0260 (lo que la base acepta y lo que
-// el turno vuelve a revisar), los permisos y el cron. Ninguno falla solo si se separa del
+// (lib/invoicing/rules.ts), la 0257, la 0260 y la 0261 (lo que la base acepta y
+// lo que el turno vuelve a revisar), los permisos, el cron y «Emitir esta
+// boleta» (el modo Manual, owner 15-10-2026). Ninguno falla solo si se separa del
 // MOM: un motivo que el panel no sabe decir, un tope que el MOM promete y la
 // base no guarda, un estado «vivo» que el índice único no cuenta, un 4xx que el
 // MOM da por «no hay boleta» y el código trata como duda. Y una boleta de más
@@ -33,6 +34,7 @@ import {
   invoiceEligibility,
   invoiceNote,
   invoiceNoteRef,
+  invoiceSweepMode,
   isValidRuc,
   normalizeSubdomain,
   rucFromSimplefactText,
@@ -43,11 +45,13 @@ import {
   type InvoicePayment,
 } from "@/lib/invoicing/rules";
 import {
+  INVOICE_CLAIM_MODE_MIGRATION,
   INVOICE_MIGRATION_OBJECTS,
   INVOICE_SHOPIFY_RECHECK_MS,
   INVOICE_STALE_EMITTING_MS,
   INVOICE_SWEEP_MAX_CANDIDATES,
   INVOICE_UNRECONCILED_BATCH,
+  InvoiceMigrationMissingError,
   SHOPIFY_LEVEL_REASONS,
   invoiceUnreconciledError,
   isInvoiceMigrationMissing,
@@ -73,22 +77,30 @@ const MOM = read("docs/mom/master-pedidos-v1.md");
  * La 0257 corrió en producción el 14-10-2026 tal como está y no se reescribe:
  * las tablas, sus restricciones e índices, los permisos de las tablas y la
  * semilla se leen en ella. La 0260 vuelve a escribir cuatro de sus funciones
- * (los arreglos de la revisión adversaria): lo que dice una función se lee en
- * su última versión, con `funcion`.
+ * (los arreglos de la revisión adversaria), y la 0261 dos de ellas otra vez y
+ * los CHECK del modo (el modo «Manual», 15-10-2026): lo que dice una función se
+ * lee en su última versión, con `funcion`.
  */
 const SQL_0257 = read("db/migrations/0257_invoices.sql");
 const SQL_0257_FLAT = flat(SQL_0257);
 const SQL_0260 = read("db/migrations/0260_invoices_hardening.sql");
 const SQL_0260_FLAT = flat(SQL_0260);
+const SQL_0261 = read("db/migrations/0261_invoices_manual.sql");
+const SQL_0261_FLAT = flat(SQL_0261);
 /** Lo que la 0260 vuelve a escribir (o crea), y nada más. */
 const FUNCIONES_0260 = ["invoice_issuers_touch", "order_invoices_guard", "invoice_claim", "invoice_candidates"];
+/** Lo que la 0261 vuelve a escribir de la 0260, y nada más. */
+const FUNCIONES_0261 = ["invoice_issuers_touch", "invoice_claim"];
+/** Las firmas del turno: la de la 0257 y la 0260, que la 0261 borra, y la de la 0261. */
+const FIRMA_TURNO_9 = "invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)";
+const FIRMA_TURNO_11 = "invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)";
 
 /**
- * La versión vigente de una función: su último `create or replace` en la 0257 y
- * la 0260, en ese orden, hasta su `$$;`, en una línea. "" si no está.
+ * La versión vigente de una función: su último `create or replace` en la 0257,
+ * la 0260 y la 0261, en ese orden, hasta su `$$;`, en una línea. "" si no está.
  */
 function funcion(nombre: string): string {
-  const todo = flat(`${SQL_0257}\n${SQL_0260}`);
+  const todo = flat(`${SQL_0257}\n${SQL_0260}\n${SQL_0261}`);
   const desde = todo.lastIndexOf(`create or replace function ${nombre}(`);
   return desde < 0 ? "" : todo.slice(desde, todo.indexOf("$$;", desde) + 3);
 }
@@ -125,7 +137,11 @@ const S35 = section(MOM, "## 35. Comprobantes electrónicos por RUC", "\n## ");
 const sub = (n: number) => section(S35, `### 35.${n} `, "\n### ");
 
 const REASON_SET: ReadonlySet<string> = new Set(INVOICE_REASONS);
-const WRITE_MODES = INVOICE_MODES.filter((m) => m !== "apagado");
+/**
+ * Los modos de un comprobante (`order_invoices.mode`): los que escribe el turno.
+ * Manual no es uno: su barrido escribe simuladas y su botón, reales.
+ */
+const WRITE_MODES = [...new Set(INVOICE_MODES.map(invoiceSweepMode).filter((m) => m !== null))];
 
 describe("MOM §35: la sección existe y dice su estado", () => {
   it("encabezado exacto, y nada de §35 colgando dentro de otra sección", () => {
@@ -137,13 +153,22 @@ describe("MOM §35: la sección existe y dice su estado", () => {
     const desde = S35.indexOf("Estado:");
     expect(desde).toBeGreaterThan(0);
     const estado = flat(S35.slice(desde, S35.indexOf("\n\n", desde)));
-    expect(estado.startsWith("Estado: construido y apagado.")).toBe(true);
-    // Las dos migraciones, y lo que trae cada una.
+    expect(estado.startsWith("Estado: construido, y ningún RUC emite todavía.")).toBe(true);
+    // Las tres migraciones, y lo que trae cada una.
     expect(estado).toContain(
       "Existen las migraciones 0257 (empresas emisoras, cuenta → RUC, comprobantes y el candado de emisión) y 0260 (los arreglos de la revisión adversaria sobre la 0257: el turno que vuelve a revisar los pagos, la excepción de borrar la cuenta de una persona, el token nuevo que borra el motivo de la prueba anterior y los pedidos por revisar)",
     );
+    expect(estado).toContain(
+      "y la 0261 (el modo «Manual» y el turno que dice qué fila pide y quién la pidió, 15-10-2026), que se aplica a mano antes de su código (35.8).",
+    );
     expect(estado).toContain("**Ningún RUC emite**");
     expect(estado).toContain(`GRUPO GF S.A.C. nace dado de alta, en «${INVOICE_MODE_LABEL.apagado}» y sin token`);
+    // El orden de encendido, con Manual entre la simulación y lo automático.
+    expect(estado).toContain(
+      "Se enciende primero en simulación, después en manual —las primeras boletas reales, una a una— y recién entonces en real",
+    );
+    // «Nada pasa a Manual solo»: la 0261 no escribe ningún RUC.
+    expect(SQL_0261_FLAT).not.toMatch(/\b(?:insert into|update|delete from) invoice_issuers\b/);
     // «Apagado y sin token» no lo dice el código del barrido sino la base: el
     // modo nace en apagado y la semilla no escribe ni el modo ni el token.
     expect(SQL_0257_FLAT).toContain("mode text not null default 'apagado'");
@@ -171,6 +196,7 @@ describe("MOM §35: la sección existe y dice su estado", () => {
       for (const capa of [
         "db/migrations/0257_invoices.sql",
         "db/migrations/0260_invoices_hardening.sql",
+        "db/migrations/0261_invoices_manual.sql",
         "lib/invoicing/rules.ts",
         "lib/invoicing/server.ts",
         "app/api/cron/invoices/route.ts",
@@ -216,7 +242,7 @@ describe("MOM §35: la sección existe y dice su estado", () => {
       expect(r0257).toContain("la función `invoice_claim` (el turno) y la semilla de GRUPO GF S.A.C.");
       expect(SQL_0257).toContain("create or replace function invoice_claim(");
       expect(r0257).toContain(
-        "Es la que corrió en producción el 14-10-2026, y no se reescribe: lo que cambió después va en la 0260.",
+        "Es la que corrió en producción el 14-10-2026, y no se reescribe: lo que cambió después va en la 0260 y la 0261.",
       );
     });
 
@@ -237,13 +263,14 @@ describe("MOM §35: la sección existe y dice su estado", () => {
         "y las de los triggers `invoice_issuers_touch` (un token nuevo borra también el motivo de la prueba anterior) y `order_invoices_guard` (la excepción de borrar la cuenta de una persona, 35.6).",
       );
       expect(r0260).toContain("Solo funciones: no toca datos ni recrea triggers.");
-      // Cada una, en su versión vigente, es la de la 0260; y la 0260 no tiene otra.
+      // Cada una, en su versión vigente, es la de la 0260 —o la de la 0261, que
+      // vuelve a escribir dos—; y la 0260 no tiene otra.
       const creadas = [...SQL_0260.matchAll(/^create or replace function (\w+)\(/gm)].map((m) => m[1]);
       expect(creadas).toEqual(FUNCIONES_0260);
       for (const nombre of FUNCIONES_0260) {
         expect(r0260, nombre).toContain(`\`${nombre}\``);
         expect(funcion(nombre), nombre).not.toBe("");
-        expect(SQL_0260_FLAT, nombre).toContain(funcion(nombre));
+        expect(FUNCIONES_0261.includes(nombre) ? SQL_0261_FLAT : SQL_0260_FLAT, nombre).toContain(funcion(nombre));
       }
       // Ni tablas, ni datos, ni triggers: lo que va en la columna 0 son las
       // funciones y sus permisos (dentro de una función, todo va indentado).
@@ -265,6 +292,56 @@ describe("MOM §35: la sección existe y dice su estado", () => {
       // La cabecera, como las otras: dice qué pasaba y que se aplica a mano.
       expect(SQL_0260_FLAT).toContain("-- QUÉ PASABA. La 0257 se aplicó en producción el 14-10-2026");
       expect(SQL_0260_FLAT).toContain("-- Se aplica a mano ANTES del código (DEPLOY.md). Es idempotente.");
+    });
+
+    it("la 0261 trae el modo «Manual»: los dos CHECK, el trigger y el turno que nombra, y nada más", () => {
+      const r0261 = renglon("db/migrations/0261_invoices_manual.sql");
+      expect(r0261).toContain(
+        "el CHECK del modo (`invoice_issuers_mode_check`, ahora con nombre) y el de Real (`invoice_issuers_real_ready`), que pide lo mismo a Manual;",
+      );
+      expect(r0261).toContain(
+        "la función del trigger `invoice_issuers_touch` (lo que baja Real a Simulación baja también Manual) y `invoice_claim` (el turno) con `p_mode` y `p_created_by`, que reemplaza la firma de nueve argumentos. No toca filas.",
+      );
+      // Las dos funciones, y ninguna más; la vigente de cada una es la suya.
+      const creadas = [...SQL_0261.matchAll(/^create or replace function (\w+)\(/gm)].map((m) => m[1]);
+      expect(creadas).toEqual(FUNCIONES_0261);
+      for (const nombre of FUNCIONES_0261) expect(SQL_0261_FLAT, nombre).toContain(funcion(nombre));
+      // Los dos CHECK, con su nombre.
+      for (const check of ["invoice_issuers_mode_check", "invoice_issuers_real_ready"]) {
+        expect(r0261, check).toContain(`\`${check}\``);
+        expect(SQL_0261_FLAT, check).toContain(`alter table invoice_issuers add constraint ${check} check (`);
+      }
+      // La firma de nueve se borra ANTES de crear la de once: con las dos, una
+      // llamada por nombre con los nueve de siempre no sabría a cuál ir.
+      const borra = SQL_0261_FLAT.indexOf(`drop function if exists ${FIRMA_TURNO_9};`);
+      expect(borra).toBeGreaterThan(0);
+      expect(borra).toBeLessThan(SQL_0261_FLAT.indexOf("create or replace function invoice_claim("));
+      // El turno, solo para el servidor.
+      expect([...SQL_0261.matchAll(/^(revoke all on function|grant execute on function) (\w+)\(/gm)].map((m) => `${m[1]} ${m[2]}`)).toEqual([
+        "revoke all on function invoice_issuers_touch",
+        "revoke all on function invoice_claim",
+        "grant execute on function invoice_claim",
+      ]);
+      expect(SQL_0261_FLAT).toContain(`revoke all on function ${FIRMA_TURNO_11} from public, anon, authenticated;`);
+      expect(SQL_0261_FLAT).toContain(`grant execute on function ${FIRMA_TURNO_11} to service_role;`);
+      // «No toca filas»: en la columna 0 no hay escrituras de datos.
+      expect(SQL_0261).not.toMatch(/^(?:insert|update|delete|truncate)\b/im);
+      // La cabecera, como las otras: qué pasaba, y que se aplica a mano.
+      expect(SQL_0261_FLAT).toContain("-- QUÉ PASABA.");
+      expect(SQL_0261_FLAT).toContain("-- Se aplica a mano ANTES del código (DEPLOY.md). Es idempotente.");
+    });
+
+    it("«Emitir esta boleta» está donde dice: `emitInvoiceNow` y `emitInvoiceAction`", () => {
+      expect(renglon("lib/invoicing/server.ts")).toContain(
+        "el barrido, la conciliación, `emitInvoiceNow` («Emitir esta boleta»: la misma emisión real del barrido, para un pedido) e `invoiceEmitNowReadiness` / `loadInvoiceEmitNowOffers` (cuándo se ofrece el botón, en el panel y en Ajustes).",
+      );
+      expect(read("lib/invoicing/server.ts")).toContain("export async function emitInvoiceNow(");
+      expect(read("lib/invoicing/server.ts")).toContain("export function invoiceEmitNowReadiness(");
+      expect(read("lib/invoicing/server.ts")).toContain("export async function loadInvoiceEmitNowOffers(");
+      expect(flat(impl)).toContain(
+        "`app/dashboard/pedidos/invoice-actions.ts` (con `emitInvoiceAction`, lo que corre al pulsar «Emitir esta boleta») y `components/order-invoice-panel.tsx`",
+      );
+      expect(read("app/dashboard/pedidos/invoice-actions.ts")).toContain("export async function emitInvoiceAction(");
     });
 
     it("la prueba SQL que nombra corre en verify-db", () => {
@@ -331,9 +408,42 @@ describe("MOM §35.2 y §35.3: los motivos", () => {
     const desde = s3.indexOf("Recién entonces se pide el turno");
     const hasta = s3.indexOf("**Falla cerrada.**");
     expect(hasta).toBeGreaterThan(desde);
-    const nombrados = codigos(s3.slice(desde, hasta)).filter((c) => c !== "invoice_claim" && c !== "registered_at");
-    expect(nombrados).toEqual(["sin_conexion", "tope", "pagos_en_revision", "antes_de_inicio"]);
+    const nombrados = codigos(s3.slice(desde, hasta)).filter(
+      (c) => c !== "invoice_claim" && c !== "registered_at" && c !== "p_created_by",
+    );
+    expect(nombrados).toEqual(["sin_conexion", "tope", "modo_distinto", "pagos_en_revision", "antes_de_inicio"]);
     for (const code of nombrados) expect(delTurno, code).toContain(code);
+  });
+
+  it("quien pide el turno dice qué fila pide (0261): el MOM, la base, el barrido y el botón dicen lo mismo", () => {
+    const turno = flat(s3.slice(s3.indexOf("Recién entonces se pide el turno"), s3.indexOf("**Falla cerrada.**")));
+    expect(turno).toContain(
+      "**Quien pide el turno dice qué fila pide** (0261). Sin decirlo, la del modo del RUC: real en Real, y simulada en Simulación y en Manual. El barrido pide la simulada de un RUC en Manual, y «Emitir esta boleta», la real. Una fila real solo la da un RUC en Real, o uno en Manual si se dice quién la pide (`p_created_by`), y una simulada, uno en Simulación o en Manual; si el RUC ya no está en ese modo —el owner lo cambió mientras tanto—, no da el turno (`modo_distinto`). Lo que el turno revisa depende de la fila pedida: la conexión y el error sin reintento, solo para una real.",
+    );
+    const fn = funcion("invoice_claim");
+    // La fila, con el modo del RUC leído bajo su candado.
+    expect(fn).toContain(
+      "v_mode := case when p_mode is null then case when v_iss.mode = 'real' then 'real' else 'simulacion' end when p_mode = 'real' and v_iss.mode = 'real' then 'real' when p_mode = 'real' and v_iss.mode = 'manual' and p_created_by is not null then 'real' when p_mode = 'simulacion' and v_iss.mode in ('simulacion', 'manual') then 'simulacion' end; if v_mode is null then return jsonb_build_object('reason', 'modo_distinto');",
+    );
+    expect(fn.indexOf("pg_advisory_xact_lock")).toBeLessThan(fn.indexOf("v_mode := case"));
+    // Justo después de `ruc_apagado`, como en las reglas del botón (§35.3).
+    expect(fn.indexOf("'ruc_apagado'")).toBeLessThan(fn.indexOf("'modo_distinto'"));
+    expect(fn.indexOf("'modo_distinto'")).toBeLessThan(fn.indexOf("'monto_cero'"));
+    // La conexión y el error sin reintento, solo para una fila real.
+    const simulada = fn.indexOf("if v_mode = 'simulacion' then");
+    const real = fn.indexOf(" else ", simulada);
+    expect(simulada).toBeGreaterThan(0);
+    for (const reason of ["'sin_conexion'", "'error_previo'"]) expect(fn.indexOf(reason), reason).toBeGreaterThan(real);
+    // Los argumentos nuevos tienen valor por defecto: el código que ya corre
+    // pide el turno con los nueve de siempre, por nombre, y hace lo de antes.
+    expect(fn).toContain("p_request jsonb, p_mode text default null, p_created_by uuid default null ) returns jsonb");
+    // El barrido: simulada para un RUC en Manual; sin `p_mode` en los otros.
+    const SERVER = read("lib/invoicing/server.ts");
+    expect(SERVER).toContain('const askedMode: InvoiceWriteMode | null = issuer.issuerMode === "manual" ? "simulacion" : null;');
+    expect(SERVER).toContain("...(extra.mode ? { p_mode: extra.mode } : {}),");
+    // El botón: la real, con quién pulsó.
+    expect(SERVER).toContain('const args = claimArgs(facts, elig, prepared, { mode: "real", createdBy: input.userId });');
+    expect(INVOICE_REASON_LABEL.modo_distinto).toBe("El RUC no está en ese modo.");
   });
 
   it("el turno saca la fecha de pago de los pagos de la base, no de lo que manda el barrido", () => {
@@ -348,9 +458,11 @@ describe("MOM §35.2 y §35.3: los motivos", () => {
     expect(turno).toContain(
       "Esa fecha y la que manda el barrido tienen que ser las dos desde «Emitir desde»; si falta una, o una es anterior, no da el turno (`antes_de_inicio`).",
     );
-    // El turno vigente es el de la 0260: la 0257 que corrió no lo revisaba.
+    // El turno vigente es el de la 0261, que rehace el de la 0260: la 0257 que
+    // corrió no lo revisaba.
     const fn = funcion("invoice_claim");
-    expect(SQL_0260_FLAT).toContain(fn);
+    expect(SQL_0261_FLAT).toContain(fn);
+    expect(SQL_0257_FLAT).not.toContain("'pagos_en_revision'");
     // Un pago vivo que no está validado (`posible_duplicado` incluido, y uno sin
     // estado) no da turno: la misma condición 2 de las reglas.
     expect(fn).toContain(
@@ -368,8 +480,8 @@ describe("MOM §35.2 y §35.3: los motivos", () => {
     expect(fn).toContain(
       "if v_iss.emit_from is null or p_paid_at is null or p_paid_at < v_iss.emit_from or v_paid is null or v_paid < v_iss.emit_from then return jsonb_build_object('reason', 'antes_de_inicio');",
     );
-    // «En los dos modos»: antes de que el turno se separe por modo.
-    const porModo = fn.indexOf("if v_iss.mode = 'simulacion' then");
+    // «En los dos modos»: antes de que el turno se separe por la fila pedida.
+    const porModo = fn.indexOf("if v_mode = 'simulacion' then");
     expect(porModo).toBeGreaterThan(0);
     expect(fn.indexOf("'pagos_en_revision'")).toBeLessThan(porModo);
     expect(fn.indexOf("'antes_de_inicio'")).toBeLessThan(porModo);
@@ -378,7 +490,7 @@ describe("MOM §35.2 y §35.3: los motivos", () => {
   it("todo motivo que nombra el MOM tiene su texto en INVOICE_REASON_LABEL", () => {
     // En §35.3 todo código entre comillas invertidas es un motivo, salvo tres
     // nombres de la base y el estado `error` de la condición 10.
-    const noSonMotivos = new Set(["invoice_claim", "registered_at", "validated_at", "error"]);
+    const noSonMotivos = new Set(["invoice_claim", "registered_at", "validated_at", "error", "p_created_by"]);
     expect(INVOICE_STATUSES).toContain("error");
     const enS3 = codigos(s3).filter((c) => !noSonMotivos.has(c));
     expect(enS3.length).toBeGreaterThan(deLaTabla.length);
@@ -395,7 +507,7 @@ describe("MOM §35.2 y §35.3: los motivos", () => {
   });
 });
 
-describe("MOM §35: las cifras son las del código y las de la base (0257 y 0260)", () => {
+describe("MOM §35: las cifras son las del código y las de la base (0257, 0260 y 0261)", () => {
   const item = (priceCents: number) => ({ code: "SKU-1", name: "Producto", qty: 1, priceCents });
   const payload = (totalCents: number) =>
     buildSalePayload({
@@ -429,9 +541,11 @@ describe("MOM §35: las cifras son las del código y las de la base (0257 y 0260
     );
   });
 
-  it("el tope cuenta lo que el MOM dice, en su modo, desde el inicio del día de Lima", () => {
+  it("el tope cuenta lo que el MOM dice, en el modo pedido, desde el inicio del día de Lima", () => {
+    // `v_mode` es la fila que se pide (0261), no el modo del RUC: en Manual, las
+    // simuladas del barrido y las reales del botón tienen cada una su tope.
     const cuenta =
-      /select count\(\*\) into v_count from order_invoices where issuer_id = p_issuer and mode = v_iss\.mode and status in \(([^)]*)\) and created_at >= \(date_trunc\('day', now\(\) at time zone 'America\/Lima'\) at time zone 'America\/Lima'\)/.exec(
+      /select count\(\*\) into v_count from order_invoices where issuer_id = p_issuer and mode = v_mode and status in \(([^)]*)\) and created_at >= \(date_trunc\('day', now\(\) at time zone 'America\/Lima'\) at time zone 'America\/Lima'\)/.exec(
         funcion("invoice_claim"),
       );
     expect(cuenta).not.toBeNull();
@@ -439,7 +553,7 @@ describe("MOM §35: las cifras son las del código y las de la base (0257 y 0260
     // simulado. Un `error` no es boleta y una `externa` no la emitió Kapta.
     expect(sqlList(cuenta![1])).toEqual(["simulada", "emitiendo", "emitida", "en_duda"]);
     expect(flat(sub(4))).toContain(
-      "Cuenta lo emitido, lo que se está emitiendo y lo que está en duda; en simulación, lo simulado.",
+      "Cuenta lo emitido, lo que se está emitiendo y lo que está en duda; en simulación, lo simulado. Cuenta solo las filas del modo que se pide (0261): en Manual, las simuladas del barrido y las reales de «Emitir esta boleta» tienen cada una el tope entero, y una simulación no le quita lugar a una boleta real, ni al revés.",
     );
   });
 
@@ -529,12 +643,20 @@ describe("MOM §35: las cifras son las del código y las de la base (0257 y 0260
 describe("MOM §35.4, §35.6 y §35.8: modos, estados y candados", () => {
   it("los modos de la base son INVOICE_MODES, y §35.8 los nombra con sus etiquetas", () => {
     const checks = [...SQL_0257_FLAT.matchAll(/check \(mode in \(([^)]*)\)\)/g)].map((m) => sqlList(m[1]));
-    // La 0260 no tiene tablas: los modos de la base son los de la 0257.
+    // La 0260 no tiene tablas.
     expect(SQL_0260_FLAT).not.toMatch(/check \(mode in/);
-    // invoice_issuers, order_invoices e invoice_order_checks, en ese orden.
-    expect(checks).toEqual([[...INVOICE_MODES], WRITE_MODES, WRITE_MODES]);
+    // invoice_issuers, order_invoices e invoice_order_checks, en ese orden. Los
+    // de los comprobantes y las revisiones son los de una fila (WRITE_MODES).
+    expect(checks.slice(1)).toEqual([WRITE_MODES, WRITE_MODES]);
+    expect(WRITE_MODES).toEqual(["simulacion", "real"]);
+    // El de los RUC lo rehace la 0261, con nombre y con «Manual»: son
+    // INVOICE_MODES, y la 0257 los tenía todos menos ese.
+    const deLaBase = /add constraint invoice_issuers_mode_check check \(mode in \(([^)]*)\)\)/.exec(SQL_0261_FLAT);
+    expect(sqlList(deLaBase?.[1])).toEqual([...INVOICE_MODES]);
+    expect(checks[0]).toEqual(INVOICE_MODES.filter((m) => m !== "manual"));
+    expect(invoiceSweepMode("manual")).toBe("simulacion");
     expect(flat(sub(8))).toContain(
-      `Cada RUC tiene tres modos: **${INVOICE_MODE_LABEL.apagado}** (no hace nada), **${INVOICE_MODE_LABEL.simulacion}** (revisa todo, arma la boleta y la guarda sin enviarla) y **${INVOICE_MODE_LABEL.real}**.`,
+      `Cada RUC tiene cuatro modos: **${INVOICE_MODE_LABEL.apagado}** (no hace nada), **${INVOICE_MODE_LABEL.simulacion}** (revisa todo, arma la boleta y la guarda sin enviarla), **${INVOICE_MODE_LABEL.manual}** (el barrido simula como en Simulación, y una persona emite cada boleta real con «Emitir esta boleta», 35.7) y **${INVOICE_MODE_LABEL.real}** (el barrido emite solo).`,
     );
   });
 
@@ -588,12 +710,30 @@ describe("MOM §35.4, §35.6 y §35.8: modos, estados y candados", () => {
     expect(liberar).toContain('.eq("status", "en_duda")');
   });
 
-  it("pasar a Real exige token, «Emitir desde» y la prueba del mismo RUC", () => {
+  it("pasar a Manual o a Real exige token, «Emitir desde» y la prueba del mismo RUC", () => {
     expect(flat(sub(8))).toContain(
-      "Para pasar a Real, la base exige token, «Emitir desde» y una prueba de conexión que leyó el mismo RUC declarado.",
+      "Para pasar a Manual o a Real, la base exige token, «Emitir desde» y una prueba de conexión que leyó el mismo RUC declarado: Manual también manda boletas a SUNAT.",
     );
+    // La 0257 lo pedía para Real; la 0261 lo rehace para los dos.
     expect(SQL_0257_FLAT).toContain(
       "constraint invoice_issuers_real_ready check ( mode <> 'real' or (token_enc is not null and emit_from is not null and checked_ruc is not null and checked_ruc = ruc) )",
+    );
+    expect(SQL_0261_FLAT).toContain(
+      "alter table invoice_issuers add constraint invoice_issuers_real_ready check ( mode not in ('real', 'manual') or (token_enc is not null and emit_from is not null and checked_ruc is not null and checked_ruc = ruc) );",
+    );
+    // Y lo que baja un RUC en Real a Simulación baja igual uno en Manual.
+    expect(flat(sub(8))).toContain(
+      "Lo que baja un RUC en Real a Simulación —un token, un subdominio o un RUC nuevo, una prueba repetida que no confirma el RUC (35.4)— baja igual uno en Manual, y lo que lo apaga solo, también.",
+    );
+    const touch = funcion("invoice_issuers_touch");
+    expect(SQL_0261_FLAT).toContain(touch);
+    // Sin los comentarios de dentro: lo que corre.
+    const corre = touch.replace(/-- .*?(?=new\.)/g, "");
+    expect(corre).toContain(
+      "or new.ruc is distinct from old.ruc ) then new.checked_at := null; new.checked_ruc := null; new.check_error := null; if new.mode in ('real', 'manual') then new.mode := 'simulacion'; end if; end if;",
+    );
+    expect(touch).toContain(
+      "if tg_op = 'UPDATE' and old.mode in ('real', 'manual') and new.mode = old.mode and new.checked_ruc is distinct from new.ruc then new.mode := 'simulacion'; end if;",
     );
   });
 
@@ -954,7 +1094,7 @@ describe("MOM §35.4: qué mira el barrido (`invoice_candidates`)", () => {
     expect(turno).toContain(
       `if exists ( select 1 from order_invoices where order_id = p_order and ${sinReintento.replace(/i\./g, "")} ) then return jsonb_build_object('reason', 'error_previo');`,
     );
-    const simulacion = turno.indexOf("if v_iss.mode = 'simulacion' then");
+    const simulacion = turno.indexOf("if v_mode = 'simulacion' then");
     const otroModo = turno.indexOf(" else ", simulacion);
     expect(turno.indexOf("'error_previo'")).toBeGreaterThan(otroModo);
     expect(otroModo).toBeGreaterThan(simulacion);
@@ -1012,8 +1152,16 @@ describe("MOM §35.4: lo que queda a medias y el RUC que se apaga solo", () => {
       `Un \`emitiendo\` sin respuesta (la función se cortó a mitad del envío, o no se pudo guardar lo que contestó) se concilia igual pasados ${minutos} minutos; si no aparece, pasa a \`en_duda\`.`,
     );
     expect(s4).toContain(
-      "Uno que ninguna conciliación va a mirar —su RUC ya no está en Real o no tiene token, o es de antes de ayer— pasa a `en_duda` al empezar la pasada siguiente, sin llamar a SimpleFact",
+      "Uno que ninguna conciliación va a mirar —su RUC ya no está en Real ni en Manual, o no tiene token, o es de antes de ayer— pasa a `en_duda` al empezar la pasada siguiente, sin llamar a SimpleFact",
     );
+    // «Ninguna conciliación»: la concilian los RUC en Real y en Manual (las
+    // boletas que emitió una persona también pueden quedar en duda).
+    expect(s4).toContain(
+      "Concilia los RUC en Real y en Manual: en Manual el barrido no emite, pero las boletas que emitió una persona pueden quedar en duda igual.",
+    );
+    expect(SERVER).toContain('const RECONCILE_MODES: ReadonlySet<string> = new Set<InvoiceEnabledMode>(["manual", "real"]);');
+    expect(SERVER).toContain("reconciled = new Set(modes.filter((r) => RECONCILE_MODES.has(r.mode) && hasToken.has(r.id)).map((r) => r.id));");
+    expect(SERVER).toContain("if (!RECONCILE_MODES.has(issuer.issuerMode) || (issuer.stopped && NO_RECONCILE.has(issuer.stopped))) continue;");
     // El aviso del MOM es el que guarda la base, con la nota de §35.5.
     const id = "6f1c2a3b-0000-4000-8000-000000000000";
     const aviso = invoiceUnreconciledError(id);
@@ -1074,7 +1222,7 @@ describe("MOM §35.6 y §35.7: lo que no se edita y lo que el panel dice", () =>
   it("§35.6: la única excepción es borrar la cuenta de una persona", () => {
     const quien = ["created_by", "retry_requested_by", "resolved_by"];
     expect(flat(sub(6))).toContain(
-      `La única excepción es borrar la cuenta de una persona: la base deja en blanco quién la registró, pidió el reintento o la resolvió (${quien.map((c) => `\`${c}\``).join(", ")}) y nada más de la fila cambia`,
+      `La única excepción es borrar la cuenta de una persona: la base deja en blanco quién la emitió o la registró, pidió el reintento o la resolvió (${quien.map((c) => `\`${c}\``).join(", ")}) y nada más de la fila cambia`,
     );
     for (const c of quien) expect(SQL_0257_FLAT, c).toContain(`${c} uuid references auth.users(id) on delete set null`);
     const sin = `array[${quien.map((c) => `'${c}'`).join(", ")}]`;
@@ -1197,21 +1345,303 @@ describe("MOM §35.6 y §35.7: lo que no se edita y lo que el panel dice", () =>
       expect(cuerpo(accion), accion).toMatch(/^[^]*?const auth = await authorizeInvoice\(invoiceId\);\s*if \("error" in auth\) return/);
     }
     expect(cuerpo("registerExternalInvoice")).toContain('if (!(await hasOrgPermission(ctx.orgId, "invoices.manage"))) return { error: SIN_PERMISO };');
+    // «Emitir esta boleta», también: el permiso antes de leer con el service
+    // role y antes de emitir.
+    expect(s7).toContain(
+      "asignar cuentas, emitir un pedido con «Emitir esta boleta» cuando su RUC está en Manual, registrar un comprobante externo",
+    );
+    const emitir = cuerpo("emitInvoiceAction");
+    const permiso = emitir.indexOf('if (!(await hasOrgPermission(ctx.orgId, "invoices.manage"))) return { error: SIN_PERMISO };');
+    expect(permiso).toBeGreaterThan(emitir.indexOf("const auth = await authorizeOrder(orderId);"));
+    expect(permiso).toBeLessThan(emitir.indexOf("createAdminSupabase()"));
+    expect(permiso).toBeLessThan(emitir.indexOf("emitInvoiceNow("));
   });
 
   it("§35.4: Ajustes dice por qué Kapta apagó un RUC", () => {
     const s4 = flat(sub(4));
     const AJUSTES = read("components/invoice-settings-section.tsx");
     expect(s4).toContain(
-      "Ajustes dice el motivo en rojo: «Apagado por Kapta: ‹motivo›. Prueba la conexión antes de volver a Real.». Si alguien lo vuelve a encender sin probar, dice «Sin probar. Lo último que falló: ‹motivo›. Prueba la conexión antes de pasar a Real.».",
+      "Ajustes dice el motivo en rojo: «Apagado por Kapta: ‹motivo›. Prueba la conexión antes de volver a Real o a Manual.». Si alguien lo vuelve a encender sin probar, dice «Sin probar. Lo último que falló: ‹motivo›. Prueba la conexión antes de pasar a Real.».",
     );
     expect(AJUSTES).toMatch(
-      /if \(why && i\.mode === "apagado"\) \{\s*return \(\s*<span className="text-crit-fg">\s*Apagado por Kapta: \{why\}\. Prueba la conexión antes de volver a Real\.\s*<\/span>/,
+      /if \(why && i\.mode === "apagado"\) \{\s*return \(\s*<span className="text-crit-fg">\s*Apagado por Kapta: \{why\}\. Prueba la conexión antes de volver a Real o a Manual\.\s*<\/span>/,
     );
     expect(AJUSTES).toContain("Sin probar. Lo último que falló: {why}. Prueba la conexión antes de pasar a Real.");
     // El motivo es el que deja el barrido al apagarlo, sin la prueba de conexión.
     expect(read("lib/invoicing/server.ts")).toMatch(
       /\.update\(\{ mode: "apagado", checked_ruc: null, checked_at: null, check_error: /,
+    );
+  });
+});
+
+describe("MOM §35.1, §35.3, §35.6 y §35.7: el modo Manual y «Emitir esta boleta» (owner, 15-10-2026)", () => {
+  const PANEL = read("components/order-invoice-panel.tsx");
+  const ACTIONS = read("app/dashboard/pedidos/invoice-actions.ts");
+  const SERVER = read("lib/invoicing/server.ts");
+  const s7 = flat(sub(7));
+
+  /** El cuerpo de una función exportada de un archivo, hasta su `}` de columna 0. */
+  const cuerpo = (texto: string, firma: string) => {
+    const desde = texto.indexOf(firma);
+    expect(desde, firma).toBeGreaterThan(0);
+    return texto.slice(desde, texto.indexOf("\n}\n", desde));
+  };
+
+  it("§35.1: la decisión del owner, palabra por palabra", () => {
+    expect(flat(sub(1))).toContain(
+      "**Un paso a mano antes de lo automático (owner, 15-10-2026).** Entre la simulación y lo automático, el owner eligió: «Nuevo modo «Manual»: el barrido solo simula y tú pulsas «Emitir» pedido por pedido en el panel (solo el owner o quien tenga el permiso), con los mismos candados. Las primeras boletas reales salen una a una y las revisas en SimpleFact antes de pasar a automático.»",
+    );
+    expect(INVOICE_MODE_LABEL.manual).toBe("Manual");
+    expect(INVOICE_MODES).toEqual(["apagado", "simulacion", "manual", "real"]);
+  });
+
+  describe("§35.3: un RUC en Manual se evalúa de dos maneras", () => {
+    const DESDE = "2026-10-15T05:00:00.000Z";
+    const PAGADO = "2026-10-15T06:00:00.000Z";
+    const MANUAL: InvoiceIssuer = {
+      id: "iss-gf",
+      orgId: "org-grupo-gf",
+      ruc: "20556792829",
+      legalName: "GRUPO GF S.A.C.",
+      mode: "manual",
+      emitFrom: DESDE,
+      dailyLimit: INVOICE_DAILY_LIMIT_DEFAULT,
+      hasToken: true,
+      checkedRuc: "20556792829",
+    };
+    const PASARELA: InvoiceAccount = { id: "acc-flow", label: "Aurela Kenku", aliases: [], phoneLastDigits: null, issuerId: MANUAL.id };
+    const hechos = (over: Partial<InvoiceOrderFacts> = {}, issuer: Partial<InvoiceIssuer> = {}): InvoiceOrderFacts => ({
+      orderId: "ord-1",
+      storeId: "store-1",
+      orderName: "#KP136181",
+      total: 150,
+      currency: "PEN",
+      cancelledAt: null,
+      totalRefunded: 0,
+      financialStatus: "pending",
+      paymentGateway: "manual",
+      orderDate: DESDE,
+      customerName: null,
+      payments: [
+        {
+          id: "pay-1",
+          kind: "total",
+          amount: 150,
+          validationStatus: "validado",
+          registeredAt: PAGADO,
+          validatedAt: PAGADO,
+          vision: null,
+          flowLinked: true,
+          statementDestination: null,
+        },
+      ],
+      accounts: [PASARELA],
+      issuers: [{ ...MANUAL, ...issuer }],
+      existing: { realLive: false, simulated: false, errorBlocked: false },
+      ...over,
+    });
+    /** El modo en que sale, o el motivo por el que no. */
+    const sale = (f: InvoiceOrderFacts, emitNow?: boolean) => {
+      const r = emitNow ? invoiceEligibility(f, { emitNow }) : invoiceEligibility(f);
+      return r.ok ? r.mode : r.reason;
+    };
+
+    it("el MOM lo dice", () => {
+      expect(flat(sub(3))).toContain(
+        "**Un RUC en Manual** (35.8) se evalúa de dos maneras. El barrido y el panel lo evalúan como uno en Simulación: en la condición 9 cuenta su simulación y la 10 no se mira, porque ahí el barrido no emite. «Emitir esta boleta» (35.7) evalúa el pedido como una emisión real (`invoiceEligibility` con `emitNow`): en la 9 cuenta solo lo real —una simulación no frena—, la 10 se mira, y también la conexión del RUC (`sin_conexion`). Y justo después de la condición 7, el RUC tiene que estar en Manual o en Real (`modo_distinto`); el botón, además, solo emite en Manual (35.7).",
+      );
+    });
+
+    it("el barrido (sin `emitNow`) lo evalúa como Simulación: nunca sale real", () => {
+      expect(sale(hechos())).toBe("simulacion");
+      const simulado = { realLive: false, simulated: true, errorBlocked: false };
+      expect(sale(hechos({ existing: simulado }))).toBe("ya_simulado");
+      // La 10 y la conexión no se miran: ahí el barrido no emite.
+      expect(sale(hechos({ existing: { realLive: false, simulated: false, errorBlocked: true } }))).toBe("simulacion");
+      expect(sale(hechos({}, { hasToken: false, checkedRuc: null }))).toBe("simulacion");
+    });
+
+    it("«Emitir esta boleta» (`emitNow`) lo evalúa como una emisión real", () => {
+      expect(sale(hechos(), true)).toBe("real");
+      // Una simulación no frena; lo real, sí.
+      expect(sale(hechos({ existing: { realLive: false, simulated: true, errorBlocked: false } }), true)).toBe("real");
+      expect(sale(hechos({ existing: { realLive: true, simulated: true, errorBlocked: false } }), true)).toBe("ya_tiene");
+      // La 10 y la conexión, sí.
+      expect(sale(hechos({ existing: { realLive: false, simulated: false, errorBlocked: true } }), true)).toBe("error_previo");
+      expect(sale(hechos({}, { hasToken: false }), true)).toBe("sin_conexion");
+      expect(sale(hechos({}, { checkedRuc: "20000000001" }), true)).toBe("sin_conexion");
+    });
+
+    it("con `emitNow`, el RUC tiene que estar en Manual o en Real, justo después de la condición 7", () => {
+      expect(sale(hechos({}, { mode: "simulacion" }), true)).toBe("modo_distinto");
+      expect(sale(hechos({}, { mode: "apagado" }), true)).toBe("ruc_apagado");
+      // Las reglas dejan Real; el botón no (lo rechaza `emitInvoiceAction`).
+      expect(sale(hechos({}, { mode: "real" }), true)).toBe("real");
+      // Después de la 6 y antes de la 8.
+      expect(sale(hechos({ total: 850, payments: [{ ...hechos().payments[0]!, amount: 850 }] }, { mode: "simulacion" }), true)).toBe(
+        "monto_mayor_700",
+      );
+      expect(sale(hechos({}, { mode: "simulacion", emitFrom: null }), true)).toBe("modo_distinto");
+      expect(INVOICE_REASONS.indexOf("modo_distinto")).toBeGreaterThan(INVOICE_REASONS.indexOf("error_previo"));
+    });
+  });
+
+  it("§35.4: «Emitir desde» se mueve también al pasar de Manual a Real", () => {
+    expect(flat(sub(4))).toContain(
+      "Pasar de Manual a Real también es cambiar de modo: lo que quedó pagado en Manual y nadie emitió con «Emitir esta boleta» no sale en Real. Se emite antes de cambiar, o a mano en SimpleFact y se registra con «Ya tiene comprobante».",
+    );
+    expect(flat(sub(8))).toContain("«Emitir desde» se mueve al momento del cambio: lo pagado en Manual que nadie emitió no sale (35.4).");
+    expect(funcion("invoice_issuers_touch")).toContain(
+      "if new.mode <> 'apagado' and (tg_op = 'INSERT' or new.mode is distinct from old.mode) and new.emit_from < now() then new.emit_from := now(); end if;",
+    );
+  });
+
+  it("§35.4: un RUC en Manual se barre como Simulación y se concilia como Real", () => {
+    expect(flat(sub(4))).toContain(
+      "**Un RUC en Manual se barre como uno en Simulación** y se concilia como uno en Real: entra en la lista de simulación, el barrido arma y guarda su simulada, y nunca le pide a SimpleFact una venta; sus boletas reales las emite una persona (35.7). Si el RUC cambia de modo entre la lista y el turno, el turno contesta `modo_distinto` y ese RUC no sigue ni concilia en esa pasada. En la línea del log del cron, su `mode` es `manual`.",
+    );
+    expect(invoiceSweepMode("manual")).toBe("simulacion");
+    expect(invoiceSweepMode("simulacion")).toBe("simulacion");
+    expect(invoiceSweepMode("real")).toBe("real");
+    expect(invoiceSweepMode("apagado")).toBeNull();
+    expect(SERVER).toContain('const SWEEP_MODES: readonly InvoiceEnabledMode[] = ["simulacion", "manual", "real"];');
+    // `modo_distinto` detiene el RUC y no concilia.
+    expect(cuerpo(SERVER, "const ISSUER_WIDE_CLAIM_REASONS")).toContain('"modo_distinto",');
+    expect(SERVER).toContain('const NO_RECONCILE = new Set<string>([STOP.apagado, STOP.espera, STOP.sinToken, "sin_conexion", "modo_distinto"]);');
+    // El reporte lleva el modo del RUC.
+    expect(SERVER).toContain("report: emptyIssuerReport({ id: row.id, ruc: row.ruc, mode: issuerMode }),");
+  });
+
+  it("§35.6: `created_by` es quien pulsó; el barrido no pone a nadie", () => {
+    expect(flat(sub(6))).toContain(
+      "**Quién la pidió** (`created_by`). En una fila real, es quien pulsó «Emitir esta boleta» con el RUC en Manual (35.7): el turno la escribe al reservarla, con quien le pasa el servidor (0261). En una externa, quien la registró. Una fila del barrido —simulada o real— va sin nadie: la pidió Kapta.",
+    );
+    expect(flat(sub(6))).toContain("quién la emitió con «Emitir esta boleta» o la registró como externa (`created_by`) y quién pidió reintentar");
+    const turno = funcion("invoice_claim");
+    expect(turno).toMatch(/insert into order_invoices \( [^)]*\bcreated_by \) values \( [^;]*\bp_created_by \);/);
+    // El barrido nunca manda `createdBy`; el botón, siempre, y sin quién no pide el turno.
+    expect(SERVER.match(/createdBy:/g)).toHaveLength(1);
+    expect(SERVER).toContain("...(extra.createdBy ? { p_created_by: extra.createdBy } : {}),");
+    const emitir = cuerpo(SERVER, "async function emitNow(");
+    expect(emitir.indexOf('return blocked("turno_fallido", "No se sabe quién emite: no se pidió el turno.");')).toBeLessThan(
+      emitir.indexOf('admin.rpc("invoice_claim"'),
+    );
+    expect(ACTIONS).toContain("result = await emitInvoiceNow(admin, { orderId: ctx.orderId, userId: ctx.userId });");
+  });
+
+  it("§35.7: solo en Manual hay botón, y el servidor lo vuelve a exigir", () => {
+    expect(s7).toContain(
+      "**Emitir a mano es solo de Manual (owner, 15-10-2026; 35.1).** En Real emite solo el barrido y no hay botón «Emitir»; en Simulación y en Apagado no se emite.",
+    );
+    expect(s7).not.toContain("Emitir lo hace solo el barrido");
+    // El panel: solo con el RUC del pedido en Manual.
+    const ofrece = cuerpo(ACTIONS, "function emitNowOf(");
+    expect(ofrece).toContain("if (!canManage || !storeActive) return none;");
+    expect(ofrece).toContain("const ready = invoiceEmitNowReadiness({ facts, invoices, checks, storeActive });");
+    // La misma decisión para el drawer y para Ajustes (§35.7).
+    const decide = cuerpo(SERVER, "export function invoiceEmitNowReadiness(");
+    expect(decide).toContain("if (!storeActive) return no();");
+    expect(decide).toContain("const elig = invoiceEligibility(facts, { emitNow: true });");
+    expect(decide).toContain('if (elig.issuer.mode !== "manual") return no();');
+    expect(decide).toContain("if (emitNowShopifyBlock(checks, invoices)) return no();");
+    // El servidor, al pulsar: Real se rechaza, y lo confirmado tiene que ser lo que sale.
+    const emitir = cuerpo(ACTIONS, "export async function emitInvoiceAction(");
+    expect(emitir).toContain('if (elig.issuer.mode !== "manual") {');
+    expect(emitir).toContain("a mano solo se emite en «Manual».");
+    expect(s7).toContain("(en Real lo rechaza: «…a mano solo se emite en «Manual»»)");
+    expect(emitir).toContain("if (elig.issuer.id !== shownIssuer || elig.totalCents !== shownCents) return { error: EMIT_CAMBIO };");
+    const cambio = "El pedido cambió desde que lo abriste (el RUC o el total): vuelve a abrirlo y revisa la boleta antes de emitirla.";
+    expect(ACTIONS).toContain(`"${cambio}"`);
+    expect(s7).toContain(`Si el pedido cambió desde que lo abrió, no emite: «${cambio}».`);
+    // El badge.
+    expect(s7).toContain("El badge dice «Lista para emitir».");
+    expect(PANEL).toContain('badge = { tone: "info", label: "Lista para emitir" };');
+  });
+
+  it("§35.7: lo que dice antes de emitir, y un envío a la vez", () => {
+    expect(s7).toContain(
+      "**Qué dice antes.** Pide confirmar: «Se emite una boleta de S/ ‹total› a CLIENTES VARIOS con el RUC ‹ruc› (‹razón social›). Va a SUNAT y no se puede borrar.», con «Sí, emitir» y «Cancelar».",
+    );
+    expect(PANEL).toContain(
+      "return `Se emite una boleta de ${soles(emit.total)} a CLIENTES VARIOS con el RUC ${emit.ruc} (${emit.legalName}). Va a SUNAT y no se puede borrar.`;",
+    );
+    expect(PANEL).toMatch(/function soles\(value: number\): string \{\s*return `S\/ \$\{/);
+    expect(PANEL).toContain('{busy ? "Emitiendo…" : "Sí, emitir"}');
+    expect(PANEL).toContain("export async function sendOnce<T>(lock: { current: boolean }, send: () => Promise<T>): Promise<T | null> {");
+  });
+
+  it("§35.7: la emisión es la del barrido, con el mismo código", () => {
+    expect(s7).toContain(
+      "Después, `emitInvoiceNow`: exactamente la emisión real del barrido, con el mismo código.",
+    );
+    // Las piezas compartidas: el barrido y el botón llaman a las mismas.
+    const barrido = cuerpo(SERVER, "async function sweepOrg(");
+    const boton = cuerpo(SERVER, "async function emitNow(");
+    for (const pieza of ["prepareSale(", "claimArgs(", "sendClaimedSale(", "turnOffReason("]) {
+      expect(barrido, pieza).toContain(pieza);
+      expect(boton, pieza).toContain(pieza);
+    }
+    expect(boton).toContain("invoiceEligibility(facts, { emitNow: true })");
+    // El token antes del turno, y SimpleFact solo con un turno real.
+    expect(boton.indexOf("loadIssuerConn(")).toBeLessThan(boton.indexOf('admin.rpc("invoice_claim"'));
+    expect(boton.indexOf('answer.mode !== "real"')).toBeLessThan(boton.indexOf("sendClaimedSale("));
+  });
+
+  it("§35.7: lo que contesta, con sus frases", () => {
+    expect(s7).toContain(
+      "`en_duda`, «SimpleFact no respondió: queda En duda; búscala por su nota «Kapta ‹ref›» antes de nada.», y la concilia el barrido como cualquier `en_duda` (35.4)",
+    );
+    expect(ACTIONS).toContain(
+      "`SimpleFact no respondió: queda En duda; búscala por su nota «${invoiceNoteRef(result.invoiceId)}» antes de nada.`",
+    );
+    expect(s7).toContain("Volver a pulsar después de una duda da «Ya tiene comprobante.»: no hay segundo envío.");
+    expect(INVOICE_REASON_LABEL.ya_tiene).toBe("Ya tiene comprobante.");
+    expect(s7).toContain(
+      "Si algo falla después de reservar el turno, la fila queda en `emitiendo` y contesta en duda: se concilia, nunca se repite.",
+    );
+    const nunca = cuerpo(SERVER, "export async function emitInvoiceNow(");
+    expect(nunca).toMatch(/if \(state\.claimed\) \{\s*return \{\s*ok: true,\s*status: "en_duda",/);
+  });
+
+  it("§35.7: con el RUC en Manual el panel no promete «Lista para emitirse»", () => {
+    expect(s7).toContain(
+      "dice «Lista para simularse en la próxima pasada (RUC ‹ruc›, modo Manual)» y «En Manual el barrido solo simula: la boleta real la emite, pedido por pedido, quien tiene «Boletas y facturas».».",
+    );
+    expect(PANEL).toContain("Lista para simularse en la próxima pasada (RUC {review.ruc}, modo {INVOICE_MODE_LABEL.manual}).");
+    expect(PANEL).toContain(
+      '"En Manual el barrido solo simula: la boleta real la emite, pedido por pedido, quien tiene «Boletas y facturas».";',
+    );
+  });
+
+  it("§35.8: Manual va entre Simulación y Real en el orden de encendido", () => {
+    const s8 = flat(sub(8));
+    enOrden(s8, [
+      "2. Pone el RUC en Simulación",
+      "3. Confirma con el contador",
+      "4. Pasa a Manual, con «Emitir desde» del momento del cambio.",
+      "Emite las primeras boletas reales una a una con «Emitir esta boleta» y revisa cada una en SimpleFact antes de la siguiente",
+      "5. Pasa a Real: desde entonces el barrido emite solo y no hay botón.",
+    ]);
+  });
+
+  it("§35.8: antes de la 0261, Ajustes no deja Manual y el barrido sigue igual", () => {
+    const s8 = flat(sub(8));
+    const ajustes = "La base todavía no admite el modo Manual: falta aplicar la migración 0261.";
+    expect(s8).toContain(`Ajustes no deja pasar un RUC a Manual y lo dice, «${ajustes}».`);
+    expect(read("app/dashboard/[storeId]/settings/invoice-actions.ts")).toContain(`return "${ajustes}";`);
+    // Sin la 0261 la base no conoce el modo: `invoice_issuers_mode_check` es el
+    // CHECK de la 0257 (sin nombre, Postgres le puso ese), y la 0261 lo rehace.
+    expect(SQL_0257_FLAT).toContain("mode text not null default 'apagado' check (mode in ('apagado', 'simulacion', 'real'))");
+    // El mensaje del botón sin la 0261 es el de la base que falta.
+    const falta = "Falta aplicar la migración 0261 de comprobantes (invoice_claim con p_mode y p_created_by).";
+    expect(s8).toContain(`«Emitir esta boleta» dice «${falta}»`);
+    expect(INVOICE_CLAIM_MODE_MIGRATION).toBe("0261");
+    expect(new InvoiceMigrationMissingError("invoice_claim con p_mode y p_created_by", "invoice_claim", "0261").message).toBe(falta);
+    expect(SERVER).toContain('const CLAIM_0261_PARAMS = ["p_mode", "p_created_by"] as const;');
+    expect(SERVER).toContain('new InvoiceMigrationMissingError(`invoice_claim con ${sent.join(" y ")}`, "invoice_claim", INVOICE_CLAIM_MODE_MIGRATION)');
+    // Y el código anterior con la 0261: los nueve de siempre, por nombre.
+    expect(s8).toContain(
+      "ese código pide el turno con los nueve argumentos de siempre, por nombre, y los dos nuevos quedan en su valor por defecto (nulo): el turno hace lo de antes.",
     );
   });
 });
@@ -1411,10 +1841,79 @@ describe("MOM §35.8 y §35.9: antes de la 0257 y la 0260, y lo que falta confir
     expect(seccion).toContain(
       `\`"lleno":{"real":true}\` (o \`"simulacion"\`) dice que \`invoice_candidates\` devolvió los ${INVOICE_SWEEP_MAX_CANDIDATES} pedidos de ese modo`,
     );
-    expect(seccion).toContain("Ajustes lo dice en rojo: «Apagado por Kapta: ‹motivo›. Prueba la conexión antes de volver a Real.».");
+    expect(seccion).toContain("Ajustes lo dice en rojo: «Apagado por Kapta: ‹motivo›. Prueba la conexión antes de volver a Real o a Manual.».");
   });
 
-  it("§35.9: los prepagos web por Flow se confirman en simulación antes de Real", () => {
+  it("DEPLOY.md: la 0261 va después de la 0260 y antes del código, y se comprueba con la firma de once", () => {
+    const seccion = flat(section(read("DEPLOY.md"), "### 14-10-2026 · Comprobantes SimpleFact por RUC (MOM §35)", "\n### "));
+    expect(seccion).toContain("### 14-10-2026 · Comprobantes SimpleFact por RUC (MOM §35) — needs migrations 0257, 0260 and 0261");
+    // Lo que hay en producción, y que la 0260 no se vuelve a pegar.
+    expect(seccion).toContain(
+      "**Producción al 15-10-2026**: la 0257 y la 0260 aplicadas, GRUPO GF S.A.C. en «Simulación» con el token probado y ningún comprobante.",
+    );
+    expect(seccion).toContain("**Ya aplicada en producción**: no se vuelve a pegar ni se edita. En una base nueva:");
+    const paso0260 = seccion.indexOf("**Migración `0260_invoices_hardening.sql`**");
+    const paso0261 = seccion.indexOf(
+      "**Migración `0261_invoices_manual.sql`**, a mano, sobre la 0260 y ANTES de que el código con «Manual» (el que pide el turno con `p_mode` y `p_created_by`) llegue a `main`",
+    );
+    expect(paso0261).toBeGreaterThan(paso0260);
+    expect(paso0261).toBeLessThan(seccion.indexOf("**Desplegar.**"));
+    // Las dos direcciones: la 0261 con el código de hoy, y el código antes que la 0261.
+    expect(seccion).toContain(
+      "**Se puede aplicar ya, con el código que hoy está en producción**: ese código pide el turno con los nueve argumentos de siempre, por nombre, y los dos nuevos quedan en nulo —el turno hace lo de antes—",
+    );
+    expect(funcion("invoice_claim")).toContain("p_mode text default null, p_created_by uuid default null");
+    expect(seccion).toContain("**Si el código llega antes que la 0261, no se emite nada de más y nada se pone rojo**");
+    expect(seccion).toContain("(«La base todavía no admite el modo Manual: falta aplicar la migración 0261.»)");
+    expect(seccion).toContain(
+      "«Emitir esta boleta» contesta «Falta aplicar la migración 0261 de comprobantes (invoice_claim con p_mode y p_created_by).»",
+    );
+    // El barrido de Simulación y de Real no manda `p_mode`: sigue con el turno de la 0260.
+    expect(seccion).toContain("el barrido de Simulación y de Real pide el turno como siempre, sin `p_mode`, contra el de la 0260, y sigue igual.");
+    expect(read("lib/invoicing/server.ts")).toContain(
+      'const askedMode: InvoiceWriteMode | null = issuer.issuerMode === "manual" ? "simulacion" : null;',
+    );
+    // Las comprobaciones, solo de lectura, con las firmas de verdad: dan lo
+    // esperado solo si la 0261 se aplicó.
+    expect(seccion).toContain(
+      `select to_regprocedure('public.${FIRMA_TURNO_11}') is not null, to_regprocedure('public.${FIRMA_TURNO_9}') is null;`,
+    );
+    expect(SQL_0261_FLAT).toContain(`drop function if exists ${FIRMA_TURNO_9};`);
+    expect(SQL_0261_FLAT).toContain(`grant execute on function ${FIRMA_TURNO_11} to service_role;`);
+    expect(seccion).toContain(`select pg_get_functiondef('public.${FIRMA_TURNO_11}'::regprocedure) like '%modo_distinto%';`);
+    expect(funcion("invoice_claim")).toContain("'modo_distinto'");
+    expect(SQL_0260).not.toContain("modo_distinto");
+    expect(seccion).toContain(
+      "pg_get_functiondef('public.invoice_issuers_touch()'::regprocedure) like '%(''real'', ''manual'')%'",
+    );
+    expect(funcion("invoice_issuers_touch")).toContain("('real', 'manual')");
+    expect(SQL_0260).not.toContain("'manual'");
+    expect(seccion).toContain(
+      "conname in ('invoice_issuers_mode_check', 'invoice_issuers_real_ready') order by 1;` — dos filas, y las dos nombran `'manual'`;",
+    );
+    expect(seccion).toContain(`select has_function_privilege('authenticated', 'public.${FIRMA_TURNO_11}', 'execute');`);
+    // La comprobación de la 0260 con la firma de nueve deja de servir después.
+    expect(seccion).toContain(
+      "La del turno, con la firma de nueve argumentos, sirve solo antes de la 0261: después esa firma no existe y la consulta falla («does not exist»)",
+    );
+    // El encendido: Simulación → Manual → Real.
+    enOrden(seccion, [
+      "6. **Simulación.**",
+      "8. **Manual: las primeras boletas reales, una a una** (MOM §35.7).",
+      "Revisar cada boleta en SimpleFact **antes de emitir la siguiente**",
+      "9. **Real.** Pasar el RUC a «Real»: desde entonces el barrido emite solo y el botón desaparece.",
+    ]);
+    expect(seccion).toContain("**lo pagado durante Manual que nadie emitió con el botón no sale en Real**");
+    // En Manual toda boleta real la pidió una persona (§35.6).
+    expect(seccion).toContain("created_by is not null as con_quien");
+    // Marcha atrás: el código anterior no conoce Manual.
+    expect(seccion).toContain("Antes de volver al código anterior, bajar a «Simulación» todo RUC en «Manual»");
+  });
+
+  it("§35.9: los prepagos web por Flow se confirman en simulación antes de Manual", () => {
+    expect(flat(sub(9))).toContain(
+      "Antes de pasar a Manual hay que ver en las simuladas que los prepagos web por Flow salen.",
+    );
     expect(flat(sub(9))).toContain(
       "Si todos salen con `pago_web_no_confirmado`, el texto es otro y se ajusta la regla (`lib/invoicing/shopify-order.ts`) antes de encender.",
     );

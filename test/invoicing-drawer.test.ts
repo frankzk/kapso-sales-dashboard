@@ -7,9 +7,11 @@
 // liberar uno en duda piden «Boletas y facturas» y solo valen desde el estado
 // que corresponde; una emitida con archivos de otro RUC no se pinta como una
 // emitida más; lo que Shopify frena no se dice «lista para emitirse»; la
-// externa va con el RUC de la cuenta que recibió el pago; y el panel no
-// arrastra node:crypto al navegador. La base, los permisos y las funciones del
-// barrido van simulados (sus constantes no): aquí se mira el drawer.
+// externa va con el RUC de la cuenta que recibió el pago; «Emitir esta boleta»
+// existe solo con el RUC en «Manual», pide el permiso antes de nada, dice antes
+// qué sale y no se envía dos veces; y el panel no arrastra node:crypto al
+// navegador. La base, los permisos y las funciones del barrido (también
+// `emitInvoiceNow`) van simulados (sus constantes no): aquí se mira el drawer.
 
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -41,6 +43,10 @@ const st = vi.hoisted(() => ({
   facts: new Map<string, unknown>(),
   factsError: null as Error | null,
   factsArgs: [] as unknown[][],
+  /** Lo que contesta `emitInvoiceNow` (la emisión del barrido, simulada aquí). */
+  emitResult: null as unknown,
+  emitThrows: null as Error | null,
+  emitArgs: [] as unknown[][],
   db: {} as {
     orderMaster: unknown;
     orderMasterError: DbError | null;
@@ -87,6 +93,11 @@ vi.mock("@/lib/invoicing/server", async (importOriginal) => ({
     st.factsArgs.push(a);
     if (st.factsError) throw st.factsError;
     return st.facts;
+  },
+  emitInvoiceNow: async (...a: unknown[]) => {
+    st.emitArgs.push(a);
+    if (st.emitThrows) throw st.emitThrows;
+    return st.emitResult;
   },
 }));
 vi.mock("@/lib/db", () => {
@@ -145,6 +156,7 @@ vi.mock("@/lib/db", () => {
 
 import {
   confirmDoubtfulInvoice,
+  emitInvoiceAction,
   loadInvoicePanel,
   registerExternalInvoice,
   releaseDoubtfulInvoice,
@@ -154,7 +166,11 @@ import {
 } from "@/app/dashboard/pedidos/invoice-actions";
 import {
   ConfirmDoubtForm,
+  EmitInvoiceConfirm,
+  EmitInvoiceControl,
+  EmitOutcome,
   ExternalInvoiceForm,
+  MANUAL_WHO_TEXT,
   OrderInvoicePanel,
   OrderInvoicePanelView,
   ReleaseDoubtForm,
@@ -163,12 +179,15 @@ import {
   SHOPIFY_NO_TOKEN_TEXT,
   SHOPIFY_RETRY_TEXT,
   doubtConfirmation,
+  emitConfirmation,
   externalInvoiceConfirmation,
   invoicePanelView,
+  releaseDoubtText,
   reviewIssuerId,
+  sendOnce,
   shopifyNextText,
 } from "@/components/order-invoice-panel";
-import { SHOPIFY_LEVEL_REASONS, shopifyBlockedReasons } from "@/lib/invoicing/server";
+import { SHOPIFY_LEVEL_REASONS, invoiceEmitNowReadiness, shopifyBlockedReasons } from "@/lib/invoicing/server";
 import {
   INVOICE_REASONS,
   INVOICE_REASON_LABEL,
@@ -281,8 +300,10 @@ const panelData = (over: Partial<InvoicePanelData> = {}): InvoicePanelData => ({
   review: { state: "lista", ruc: RUC, legalName: "GRUPO GF S.A.C.", mode: "simulacion", issuerId: ISSUER.id },
   check: null,
   creditNote: null,
-  issuers: [{ id: ISSUER.id, ruc: RUC, legalName: "GRUPO GF S.A.C." }],
+  issuers: [{ id: ISSUER.id, ruc: RUC, legalName: "GRUPO GF S.A.C.", mode: "simulacion" }],
   canManage: false,
+  emitNow: null,
+  emitNowBlocked: null,
   ...over,
 });
 
@@ -322,6 +343,9 @@ beforeEach(() => {
   st.facts = new Map([[ORDER, factsFor()]]);
   st.factsError = null;
   st.factsArgs = [];
+  st.emitResult = null;
+  st.emitThrows = null;
+  st.emitArgs = [];
   st.db = {
     orderMaster: { order_id: ORDER, store_id: STORE },
     orderMasterError: null,
@@ -434,7 +458,10 @@ describe("loadInvoicePanel: lo ve quien ve el pedido (§35.7)", () => {
     st.db.invoices = [dbRow()];
     const res = await loadInvoicePanel(ORDER);
     expect(JSON.stringify(res)).not.toMatch(/token|secreto/i);
-    expect("data" in res && res.data.issuers).toEqual([{ id: ISSUER.id, ruc: RUC, legalName: "GRUPO GF S.A.C." }]);
+    // El modo sí viaja: con él el panel sabe si el RUC está en «Manual».
+    expect("data" in res && res.data.issuers).toEqual([
+      { id: ISSUER.id, ruc: RUC, legalName: "GRUPO GF S.A.C.", mode: "simulacion" },
+    ]);
     // Ninguna consulta del panel pide el token, ni la tabla de RUC directamente.
     expect(st.calls.some((c) => /token/i.test(`${c.cols ?? ""}${c.returning ?? ""}`))).toBe(false);
     expect(callsTo("invoice_issuers")).toEqual([]);
@@ -963,6 +990,41 @@ describe("registerExternalInvoice: el RUC es el de la cuenta que recibió el pag
   });
 });
 
+/** Lo que se dice después de «Volver a intentar» o de liberar, sin saber el modo del RUC. */
+const NEXT_UNKNOWN =
+  "con el RUC en Real se vuelve a intentar en la próxima pasada, y en Manual vuelve a aparecer «Emitir esta boleta» en el pedido, si sigue cumpliendo las reglas.";
+
+/** El modo del RUC del pedido y lo que se promete después de reintentar o liberar. */
+const NEXT_ATTEMPT: Array<[string, () => void, string]> = [
+  [
+    "Real: el barrido, en la próxima pasada",
+    () => (st.facts = new Map([[ORDER, factsFor({ issuers: [{ ...ISSUER, mode: "real" }] })]])),
+    "se vuelve a intentar en la próxima pasada, si el pedido sigue cumpliendo las reglas.",
+  ],
+  [
+    "Manual: vuelve el botón, no la pasada",
+    () => (st.facts = new Map([[ORDER, factsFor({ issuers: [{ ...ISSUER, mode: "manual" }] })]])),
+    "vuelve a aparecer «Emitir esta boleta» en el pedido, si sigue cumpliendo las reglas.",
+  ],
+  [
+    "Manual, aunque ya tenga su simulada",
+    () =>
+      (st.facts = new Map([
+        [ORDER, factsFor({ issuers: [{ ...ISSUER, mode: "manual" }], existing: { realLive: false, simulated: true, errorBlocked: false } })],
+      ])),
+    "vuelve a aparecer «Emitir esta boleta» en el pedido, si sigue cumpliendo las reglas.",
+  ],
+  ["Simulación: los dos caminos", () => {}, NEXT_UNKNOWN],
+  [
+    "las reglas no llegan a saber el RUC: los dos caminos",
+    () =>
+      (st.facts = new Map([
+        [ORDER, factsFor({ issuers: [{ ...ISSUER, mode: "manual" }], payments: [{ ...factsFor().payments[0]!, validationStatus: "pendiente_revision" }] })],
+      ])),
+    NEXT_UNKNOWN,
+  ],
+];
+
 describe("requestInvoiceRetry: «Volver a intentar» (§35.4)", () => {
   it("pide «Boletas y facturas» y no escribe sin él", async () => {
     st.orgPerms = { [ORG]: [] };
@@ -1028,6 +1090,24 @@ describe("requestInvoiceRetry: «Volver a intentar» (§35.4)", () => {
     st.db.updateData = [];
     expect(await requestInvoiceRetry(INVOICE)).toEqual({ error: "Ya se pidió volver a intentar este comprobante." });
   });
+
+  // FIX: decía «se vuelve a intentar en la próxima pasada» también con el RUC
+  // en Manual, donde el barrido solo simula y no lo intenta: lo que vuelve es
+  // el botón, y lo pulsa una persona.
+  it.each(NEXT_ATTEMPT)("lo que pasa después depende del modo del RUC del pedido (%s)", async (_mode, arrange, next) => {
+    arrange();
+    const res = await requestInvoiceRetry(INVOICE);
+    expect(res).toEqual({ notice: `Listo: ${next}` });
+    // El modo es el del RUC que las reglas le dan al pedido: se leen sus hechos.
+    expect(st.factsArgs.at(-1)?.[1]).toEqual([ORDER]);
+  });
+
+  it("si no se pudo leer el modo, el reintento queda pedido igual y se dicen los dos caminos", async () => {
+    st.factsError = new Error("timeout");
+    const res = await requestInvoiceRetry(INVOICE);
+    expect(res).toEqual({ notice: `Listo: ${NEXT_UNKNOWN}` });
+    expect(callsTo("order_invoices", "update")).toHaveLength(1);
+  });
 });
 
 describe("releaseDoubtfulInvoice: «No está en SimpleFact: volver a intentar» (§35.4)", () => {
@@ -1085,6 +1165,21 @@ describe("releaseDoubtfulInvoice: «No está en SimpleFact: volver a intentar» 
   it("si la conciliación la resolvió entre tanto, no se pisa", async () => {
     st.db.updateData = [];
     expect((await releaseDoubtfulInvoice(INVOICE, "Busqué la nota y no aparece")).error).toMatch(/ya no está en duda/);
+  });
+
+  // FIX: «Liberado: se vuelve a intentar en la próxima pasada» también en
+  // Manual, donde la pasada no lo intenta.
+  it.each(NEXT_ATTEMPT)("lo que pasa después depende del modo del RUC del pedido (%s)", async (_mode, arrange, next) => {
+    arrange();
+    const res = await releaseDoubtfulInvoice(INVOICE, "Busqué la nota y no aparece");
+    expect(res).toEqual({ notice: `Liberado: ${next}` });
+    expect(st.factsArgs.at(-1)?.[1]).toEqual([ORDER]);
+  });
+
+  it("si no se pudo leer el modo, queda liberado igual y se dicen los dos caminos", async () => {
+    st.factsError = new Error("timeout");
+    expect(await releaseDoubtfulInvoice(INVOICE, "Busqué la nota y no aparece")).toEqual({ notice: `Liberado: ${NEXT_UNKNOWN}` });
+    expect(callsTo("order_invoices", "update")).toHaveLength(1);
   });
 });
 
@@ -1232,22 +1327,28 @@ describe("las escrituras piden permiso antes de escribir (§35.7, como escritura
   }
   const bodies = exportedBodies(ACTIONS);
 
-  it("leer, registrar, reintentar, confirmar y liberar: no hay «Emitir» (emite solo el barrido)", () => {
+  it("leer, registrar, reintentar, confirmar, liberar y emitir a mano: emitir pasa SOLO por `emitInvoiceNow`", () => {
     expect([...bodies.keys()].sort()).toEqual([
       "confirmDoubtfulInvoice",
+      "emitInvoiceAction",
       "loadInvoicePanel",
       "registerExternalInvoice",
       "releaseDoubtfulInvoice",
       "requestInvoiceRetry",
     ]);
+    // Ni el turno ni SimpleFact por su cuenta: la emisión es la del barrido.
     expect(ACTIONS).not.toMatch(/invoice_claim|simplefactCreateSale|runInvoiceSweep|\.rpc\(/);
+    expect(ACTIONS.match(/\bemitInvoiceNow\(/g)).toHaveLength(1);
+    expect(bodies.get("emitInvoiceAction")).toContain("emitInvoiceNow(admin, { orderId: ctx.orderId, userId: ctx.userId })");
   });
 
-  it("cada una que escribe pregunta «invoices.manage» antes de su escritura", () => {
-    const WRITES = /\.(insert|update|upsert|delete)\(/;
+  it("cada una que escribe (o emite) pregunta «invoices.manage» antes de su escritura", () => {
+    // Emitir escribe la fila del turno y llama a SimpleFact: cuenta como escritura.
+    const WRITES = /\.(insert|update|upsert|delete)\(|emitInvoiceNow\(/;
     const conEscritura = [...bodies].filter(([, body]) => WRITES.test(body));
     expect(conEscritura.map(([name]) => name).sort()).toEqual([
       "confirmDoubtfulInvoice",
+      "emitInvoiceAction",
       "registerExternalInvoice",
       "releaseDoubtfulInvoice",
       "requestInvoiceRetry",
@@ -1733,6 +1834,44 @@ describe("el panel: «Ya tiene comprobante»", () => {
     expect(html).toContain("<textarea");
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Liberar y volver a intentar<\/button>/);
   });
+
+  // FIX: prometía «la próxima pasada» también con el RUC en Manual, donde el
+  // barrido no emite: lo que vuelve es «Emitir esta boleta».
+  it("liberar dice qué pasa después según el modo del RUC del pedido", () => {
+    const antes = "Libérala solo si confirmaste en SimpleFact que la boleta no existe: ";
+    expect(releaseDoubtText("real")).toBe(
+      `${antes}pasa a error y se vuelve a intentar en la próxima pasada. Si existiera, saldría otra.`,
+    );
+    expect(releaseDoubtText("manual")).toBe(
+      `${antes}pasa a error y vuelve a aparecer «Emitir esta boleta» en el pedido. Si existiera, saldría otra.`,
+    );
+    expect(releaseDoubtText("manual")).not.toMatch(/próxima pasada/);
+    // Sin saber el modo (o en un modo que no emite), los dos caminos.
+    for (const mode of [null, "simulacion", "apagado"] as const) {
+      const t = releaseDoubtText(mode);
+      expect(t, String(mode)).toContain("con el RUC en Real, se vuelve a intentar en la próxima pasada");
+      expect(t, String(mode)).toContain("en Manual, vuelve a aparecer «Emitir esta boleta» en el pedido");
+    }
+    const html = (mode: "real" | "manual" | null) =>
+      texto(renderToStaticMarkup(createElement(ReleaseDoubtForm, { mode, pending: false, onSubmit: async () => true, onCancel: () => {} })));
+    expect(html("manual")).toContain(releaseDoubtText("manual"));
+    expect(html("real")).toContain(releaseDoubtText("real"));
+    expect(texto(renderToStaticMarkup(createElement(ReleaseDoubtForm, { pending: false, onSubmit: async () => true, onCancel: () => {} })))).toContain(
+      releaseDoubtText(null),
+    );
+  });
+
+  it("el panel le pasa el modo del RUC que dicen las reglas del pedido", () => {
+    const enDuda = row({ status: "en_duda", serie: null, correlative: null, pdfUrl: null });
+    const review = { state: "no", reason: "ya_tiene", detail: null, issuerId: ISSUER.id } as const;
+    const issuers = (mode: InvoiceIssuer["mode"]) => [{ id: ISSUER.id, ruc: RUC, legalName: "GRUPO GF S.A.C.", mode }];
+    expect(invoicePanelView(panelData({ invoices: [enDuda], review, issuers: issuers("manual") })).rucMode).toBe("manual");
+    expect(invoicePanelView(panelData({ invoices: [enDuda], review, issuers: issuers("real") })).rucMode).toBe("real");
+    // Sin revisar, o con un RUC que no está, no se sabe.
+    expect(invoicePanelView(panelData({ invoices: [enDuda], review: { state: "sin_revisar", error: "x" }, issuers: issuers("manual") })).rucMode).toBeNull();
+    expect(invoicePanelView(panelData({ invoices: [enDuda], review: { ...review, issuerId: "otro" }, issuers: issuers("manual") })).rucMode).toBeNull();
+    expect(read("components/order-invoice-panel.tsx")).toMatch(/<ReleaseDoubtForm\s+mode=\{view\.rucMode\}/);
+  });
 });
 
 // ── Lo que el navegador no puede importar, y dónde va montado ────────────────
@@ -1828,5 +1967,583 @@ describe("el drawer lo monta bajo el cobro (§35.7)", () => {
     expect(src).toContain("Intentar nuevamente");
     // Validar un pago en «Cobro» cambia si lleva boleta: el panel se entera.
     expect(src).toContain("subscribePaymentPanelChange(orderId");
+  });
+});
+
+// ── «Emitir esta boleta» (owner, 15-10-2026: el modo «Manual») ───────────────
+
+/** Grupo GF en «Manual»: el barrido simula y una persona emite pedido por pedido. */
+const MANUAL: InvoiceIssuer = { ...ISSUER, mode: "manual" };
+const manualFacts = (over: Partial<InvoiceOrderFacts> = {}): InvoiceOrderFacts =>
+  factsFor({ issuers: [MANUAL], ...over });
+/** Lo que vio la persona en la confirmación: el RUC y el total del pedido de prueba. */
+const SHOWN = { issuerId: ISSUER.id, total: 85 };
+const PDF = "https://grupogf.simplefact.pe/files/20556792829-03-B001-97.pdf";
+/** Lo que contesta `emitInvoiceNow` cuando SimpleFact emitió la boleta. */
+const EMITIDA = {
+  ok: true,
+  status: "emitida",
+  invoiceId: INVOICE,
+  serie: "B001",
+  correlative: "97",
+  pdfUrl: PDF,
+  error: null,
+  rucMismatch: false,
+};
+
+describe("emitInvoiceAction: quién puede y cuándo (§35.7, Manual)", () => {
+  beforeEach(() => {
+    st.issuers = [MANUAL];
+    st.facts = new Map([[ORDER, manualFacts()]]);
+    st.emitResult = { ...EMITIDA };
+  });
+
+  it("el pedido de prueba se emite a mano: RUC en Manual y las reglas como emisión real (sanidad)", () => {
+    const elig = invoiceEligibility(manualFacts(), { emitNow: true });
+    expect(elig.ok && elig.mode).toBe("real");
+    expect(elig.ok && elig.totalCents).toBe(8500);
+  });
+
+  it("emite con la emisión del barrido: el cliente del servidor, el pedido y quién pulsó", async () => {
+    const r = await emitInvoiceAction(ORDER, SHOWN);
+    expect(r).toEqual({ notice: "Emitida B001-97", pdfUrl: PDF });
+    expect(st.emitArgs).toHaveLength(1);
+    const [admin, input, deps] = st.emitArgs[0]!;
+    expect(typeof (admin as { from?: unknown }).from).toBe("function");
+    expect(input).toEqual({ orderId: ORDER, userId: "user-1" });
+    // Sin dependencias de más: las de verdad, las mismas del barrido.
+    expect(deps).toBeUndefined();
+  });
+
+  it("sin acceso al pedido no pregunta el permiso, no lee nada con el service role y no emite", async () => {
+    st.db.orderMaster = null;
+    expect(await emitInvoiceAction(ORDER, SHOWN)).toEqual({ error: "Sin acceso a este pedido." });
+    expect(st.permArgs).toEqual([]);
+    expect(st.factsArgs).toEqual([]);
+    expect(st.emitArgs).toEqual([]);
+    expect(st.calls.filter((c) => c.client === "admin")).toEqual([]);
+  });
+
+  it("pide «Boletas y facturas» en la organización del pedido ANTES de leer con el service role o emitir", async () => {
+    st.orgPerms = { [ORG]: [], "org-2": ["invoices.manage"] };
+    const r = await emitInvoiceAction(ORDER, SHOWN);
+    expect(r.error).toMatch(/^Sin permiso: los comprobantes los gestiona quien tiene «Boletas y facturas»/);
+    expect(st.permArgs).toEqual([[ORG, "invoices.manage"]]);
+    expect(st.factsArgs).toEqual([]);
+    expect(st.emitArgs).toEqual([]);
+    expect(st.calls.filter((c) => c.client === "admin")).toEqual([]);
+  });
+
+  it("sin sesión manda a entrar; una lectura caída del pedido se dice y no emite", async () => {
+    st.user = null;
+    await expect(emitInvoiceAction(ORDER, SHOWN)).rejects.toThrow("redirect:/login");
+    st.user = { id: "user-1" };
+    st.db.orderMasterError = { message: "timeout" };
+    expect(await emitInvoiceAction(ORDER, SHOWN)).toEqual({ error: "No se pudo leer el pedido: timeout" });
+    expect(st.emitArgs).toEqual([]);
+  });
+
+  it("en una tienda que no está activa no se emite: el barrido tampoco pasa por ella", async () => {
+    st.db.store = { org_id: ORG, status: "paused" };
+    expect(await emitInvoiceAction(ORDER, SHOWN)).toEqual({ error: INVOICE_REASON_LABEL.tienda });
+    expect(st.emitArgs).toEqual([]);
+  });
+
+  it("solo en «Manual»: en Real emite el barrido; en Simulación y en Apagado no se emite", async () => {
+    const casos: Array<[InvoiceIssuer["mode"], string]> = [
+      ["real", `${INVOICE_REASON_LABEL.modo_distinto} El RUC está en «Real»: a mano solo se emite en «Manual».`],
+      ["simulacion", `${INVOICE_REASON_LABEL.modo_distinto} El RUC está en «Simulación».`],
+      ["apagado", INVOICE_REASON_LABEL.ruc_apagado],
+    ];
+    for (const [mode, error] of casos) {
+      st.facts = new Map([[ORDER, factsFor({ issuers: [{ ...ISSUER, mode }] })]]);
+      expect(await emitInvoiceAction(ORDER, SHOWN), mode).toEqual({ error });
+    }
+    expect(st.emitArgs).toEqual([]);
+  });
+
+  it("lo que vio la persona es lo que sale: otro RUC u otro total no se emiten", async () => {
+    const cambio = /^El pedido cambió desde que lo abriste \(el RUC o el total\)/;
+    expect((await emitInvoiceAction(ORDER, { ...SHOWN, total: 84.99 })).error).toMatch(cambio);
+    expect((await emitInvoiceAction(ORDER, { ...SHOWN, issuerId: OTRO.id })).error).toMatch(cambio);
+    expect(st.factsArgs).toHaveLength(2);
+    // Sin lo que vio, no hay con qué comparar: no se emite a ciegas, y ni se lee
+    // el pedido con el service role.
+    st.factsArgs = [];
+    expect((await emitInvoiceAction(ORDER, undefined as never)).error).toMatch(cambio);
+    expect((await emitInvoiceAction(ORDER, { issuerId: "", total: 85 })).error).toMatch(cambio);
+    expect((await emitInvoiceAction(ORDER, { ...SHOWN, total: Number.NaN })).error).toMatch(cambio);
+    expect((await emitInvoiceAction(ORDER, { ...SHOWN, total: 0 })).error).toMatch(cambio);
+    expect(st.factsArgs).toEqual([]);
+    expect(st.emitArgs).toEqual([]);
+    // El total al céntimo: 85 y 85.001 son lo mismo; lo que se envía son céntimos.
+    await emitInvoiceAction(ORDER, { ...SHOWN, total: 85.001 });
+    expect(st.emitArgs).toHaveLength(1);
+  });
+
+  it("si los hechos no se pudieron leer, no emite (falla cerrada)", async () => {
+    st.factsError = new Error("statement timeout");
+    expect(await emitInvoiceAction(ORDER, SHOWN)).toEqual({
+      error: "No se pudo leer el pedido: no se emitió nada (statement timeout).",
+    });
+    st.factsError = null;
+    st.facts = new Map();
+    expect(await emitInvoiceAction(ORDER, SHOWN)).toEqual({ error: "No se encontró el pedido: no se emitió nada." });
+    expect(st.emitArgs).toEqual([]);
+  });
+
+  it("las reglas como emisión real frenan antes de emitir; una simulación no frena", async () => {
+    const casos: Array<[Partial<InvoiceOrderFacts>, InvoiceReason]> = [
+      [{ existing: { realLive: true, simulated: false, errorBlocked: false } }, "ya_tiene"],
+      [{ existing: { realLive: false, simulated: false, errorBlocked: true } }, "error_previo"],
+      [{ issuers: [{ ...MANUAL, hasToken: false }] }, "sin_conexion"],
+      [{ issuers: [{ ...MANUAL, checkedRuc: OTRO_RUC }] }, "sin_conexion"],
+      [{ total: 800, payments: [{ ...factsFor().payments[0]!, amount: 800 }] }, "monto_mayor_700"],
+    ];
+    for (const [over, reason] of casos) {
+      st.facts = new Map([[ORDER, manualFacts(over)]]);
+      const r = await emitInvoiceAction(ORDER, SHOWN);
+      expect(r.error, reason).toContain(INVOICE_REASON_LABEL[reason]);
+    }
+    expect(st.emitArgs).toEqual([]);
+    st.facts = new Map([[ORDER, manualFacts({ existing: { realLive: false, simulated: true, errorBlocked: false } })]]);
+    expect(await emitInvoiceAction(ORDER, SHOWN)).toEqual({ notice: "Emitida B001-97", pdfUrl: PDF });
+  });
+});
+
+describe("emitInvoiceAction: lo que pasó, en palabras", () => {
+  beforeEach(() => {
+    st.issuers = [MANUAL];
+    st.facts = new Map([[ORDER, manualFacts()]]);
+  });
+  const emite = async (result: unknown) => {
+    st.emitResult = result;
+    return emitInvoiceAction(ORDER, SHOWN);
+  };
+
+  it("emitida: «Emitida B001-97» y su PDF; un PDF que no es https no viaja", async () => {
+    expect(await emite(EMITIDA)).toEqual({ notice: "Emitida B001-97", pdfUrl: PDF });
+    expect(await emite({ ...EMITIDA, pdfUrl: "http://otro.example/x.pdf" })).toEqual({ notice: "Emitida B001-97" });
+    expect(await emite({ ...EMITIDA, pdfUrl: "javascript:alert(1)" })).toEqual({ notice: "Emitida B001-97" });
+  });
+
+  it("emitida pero con algo que leer (no se guardó, el RUC se apagó): va como error, con su serie", async () => {
+    const r = await emite({ ...EMITIDA, error: "No se pudo guardar la respuesta en Kapta: el comprobante sigue «Emitiendo»." });
+    expect(r).toEqual({
+      error: "Emitida B001-97. No se pudo guardar la respuesta en Kapta: el comprobante sigue «Emitiendo».",
+      pdfUrl: PDF,
+    });
+  });
+
+  it("emitida con archivos de otro RUC: en rojo, con el aviso de revisarla y el RUC apagado", async () => {
+    const r = await emite({
+      ...EMITIDA,
+      rucMismatch: true,
+      error: `SimpleFact contestó con archivos del RUC ${OTRO_RUC}, no del ${RUC}. El RUC quedó apagado: prueba la conexión antes de volver a encenderlo.`,
+    });
+    expect(r.notice).toBeUndefined();
+    expect(r.error).toBe(
+      `Emitida B001-97, pero con archivos de otro RUC. Revísala en SimpleFact: puede necesitar anularse o una nota de crédito. SimpleFact contestó con archivos del RUC ${OTRO_RUC}, no del ${RUC}. El RUC quedó apagado: prueba la conexión antes de volver a encenderlo.`,
+    );
+    expect(r.pdfUrl).toBe(PDF);
+  });
+
+  it("en duda: queda En duda y se busca por su nota antes de nada", async () => {
+    const r = await emite({
+      ...EMITIDA,
+      status: "en_duda",
+      serie: null,
+      correlative: null,
+      pdfUrl: null,
+      error: "SimpleFact no respondió (timeout).",
+    });
+    expect(r).toEqual({
+      error: `SimpleFact no respondió: queda En duda; búscala por su nota «${invoiceNoteRef(INVOICE)}» antes de nada. Detalle: SimpleFact no respondió (timeout).`,
+    });
+    expect(invoiceNoteRef(INVOICE)).toBe("Kapta 6f1c2a3b");
+  });
+
+  it("error: lo que dijo SimpleFact, sin inventar una serie", async () => {
+    const r = await emite({ ...EMITIDA, status: "error", serie: null, correlative: null, pdfUrl: null, error: "Token rechazado (401)." });
+    expect(r).toEqual({ error: "SimpleFact no la emitió: Token rechazado (401)." });
+    expect(await emite({ ...EMITIDA, status: "error", serie: null, error: null })).toEqual({
+      error: "SimpleFact no la emitió: no dio el motivo.",
+    });
+  });
+
+  // FIX: «Se llegó al tope diario del RUC: sale mañana.» y «No se pudo leer el
+  // pedido: se vuelve a intentar en la próxima pasada.» son lo que hace el
+  // barrido en Real. Con el RUC en Manual nada de eso sale solo: se vuelve a
+  // pulsar.
+  it("no se envió nada en Manual: lo que promete el barrido no se promete, se vuelve a pulsar", async () => {
+    const tope = await emite({ ok: false, reason: "tope" });
+    expect(tope).toEqual({
+      error: "Se llegó al tope diario del RUC y no se emitió. En Manual no sale sola: mañana se emite con «Emitir esta boleta».",
+    });
+    const lectura = await emite({ ok: false, reason: "lectura_fallida", detail: "Shopify no respondió." });
+    expect(lectura).toEqual({
+      error:
+        "No se pudo leer el pedido y no se emitió nada. En Manual no se reintenta solo: vuelve a pulsar «Emitir esta boleta». Shopify no respondió.",
+    });
+    for (const r of [tope, lectura]) {
+      expect(r.error).not.toMatch(/próxima pasada|sale mañana/);
+    }
+  });
+
+  it("no se envió nada: el motivo con la frase del panel y su detalle", async () => {
+    expect(await emite({ ok: false, reason: "editado", detail: "La línea 2 cambió." })).toEqual({
+      error: `${INVOICE_REASON_LABEL.editado} La línea 2 cambió.`,
+    });
+    expect(await emite({ ok: false, reason: "sin_migracion", detail: "Falta aplicar la migración 0261." })).toEqual({
+      error: `${INVOICE_REASON_LABEL.sin_migracion} Falta aplicar la migración 0261.`,
+    });
+  });
+
+  it("si no se sabe qué pasó, no se afirma nada: ni que salió ni que no", async () => {
+    const sinSaber = /^No se supo qué pasó con la emisión\. Vuelve a abrir el pedido antes de intentar de nuevo/;
+    expect((await emite({ ...EMITIDA, status: "emitiendo" })).error).toMatch(sinSaber);
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    st.emitThrows = new Error("se cortó con el token tok-secreto-123");
+    const r = await emitInvoiceAction(ORDER, SHOWN);
+    expect(r.error).toMatch(sinSaber);
+    expect(r.notice).toBeUndefined();
+    // Al log no va el texto del error: pudo haber tocado el token.
+    expect(JSON.stringify(log.mock.calls)).not.toContain("tok-secreto");
+    log.mockRestore();
+  });
+});
+
+describe("loadInvoicePanel: «Emitir esta boleta» solo en Manual", () => {
+  beforeEach(() => {
+    st.issuers = [MANUAL];
+    st.facts = new Map([[ORDER, manualFacts()]]);
+  });
+  const load = async () => {
+    const res = await loadInvoicePanel(ORDER);
+    if (!("data" in res)) throw new Error(res.error);
+    return res.data;
+  };
+  const BOTON = { issuerId: ISSUER.id, ruc: RUC, legalName: "GRUPO GF S.A.C.", total: 85 };
+
+  it("con el RUC en Manual, las reglas cumplidas como emisión real y el permiso: hay botón, con lo que se enviará", async () => {
+    const data = await load();
+    expect(data.emitNow).toEqual(BOTON);
+    expect(data.emitNowBlocked).toBeNull();
+    // La revisión sigue siendo la del barrido, que en Manual simula.
+    expect(data.review).toMatchObject({ state: "lista", mode: "simulacion" });
+    expect(data.issuers).toEqual([{ id: ISSUER.id, ruc: RUC, legalName: "GRUPO GF S.A.C.", mode: "manual" }]);
+  });
+
+  it("en Real, en Simulación o Apagado no hay botón", async () => {
+    for (const mode of ["real", "simulacion", "apagado"] as const) {
+      st.facts = new Map([[ORDER, factsFor({ issuers: [{ ...ISSUER, mode }] })]]);
+      const data = await load();
+      expect(data.emitNow, mode).toBeNull();
+      expect(data.emitNowBlocked, mode).toBeNull();
+    }
+  });
+
+  it("sin el permiso no hay botón, ni el porqué", async () => {
+    st.orgPerms = { [ORG]: [] };
+    expect((await load()).emitNow).toBeNull();
+    st.facts = new Map([[ORDER, manualFacts({ issuers: [{ ...MANUAL, hasToken: false }] })]]);
+    expect((await load()).emitNowBlocked).toBeNull();
+  });
+
+  it("con un comprobante real vivo no hay botón, aunque los hechos no lo sepan todavía", async () => {
+    for (const status of ["emitiendo", "emitida", "en_duda", "externa"]) {
+      st.db.invoices = [dbRow({ status })];
+      expect((await load()).emitNow, status).toBeNull();
+    }
+  });
+
+  it("una simulación no lo quita: el botón va al lado de lo que habría enviado", async () => {
+    st.facts = new Map([[ORDER, manualFacts({ existing: { realLive: false, simulated: true, errorBlocked: false } })]]);
+    st.db.invoices = [dbRow({ mode: "simulacion", status: "simulada", serie: null, correlative: null, pdf_url: null })];
+    expect((await load()).emitNow).toEqual(BOTON);
+  });
+
+  it("en una tienda que no está activa, o sin los hechos, no hay botón (falla cerrada)", async () => {
+    st.db.store = { org_id: ORG, status: "paused" };
+    expect((await load()).emitNow).toBeNull();
+    st.db.store = { org_id: ORG, status: "active" };
+    st.factsError = new Error("timeout");
+    const data = await load();
+    expect(data.review.state).toBe("sin_revisar");
+    expect(data.emitNow).toBeNull();
+    expect(data.emitNowBlocked).toBeNull();
+  });
+
+  it("un error sin reintento quita el botón; el porqué ya lo dice su «Volver a intentar»", async () => {
+    st.facts = new Map([[ORDER, manualFacts({ existing: { realLive: false, simulated: false, errorBlocked: true } })]]);
+    const data = await load();
+    expect(data.emitNow).toBeNull();
+    expect(data.emitNowBlocked).toBeNull();
+  });
+
+  it("sin la conexión probada no hay botón, y a quien gestiona se le dice por qué", async () => {
+    st.facts = new Map([[ORDER, manualFacts({ issuers: [{ ...MANUAL, checkedRuc: null }] })]]);
+    const data = await load();
+    expect(data.emitNow).toBeNull();
+    expect(data.emitNowBlocked).toEqual({ reason: "sin_conexion", detail: null });
+    // Lo que la revisión ya dice no se repite.
+    st.facts = new Map([[ORDER, manualFacts({ cancelledAt: "2026-10-14T16:00:00Z" })]]);
+    expect(await load()).toMatchObject({ emitNow: null, emitNowBlocked: null, review: { state: "no", reason: "anulado" } });
+  });
+
+  it("si la última pasada lo frenó en Shopify, no hay botón", async () => {
+    const shopify = (reason: string, mode = "simulacion", checked_at = "2026-10-14T14:50:00Z") => ({
+      mode,
+      reason,
+      detail: null,
+      checked_at,
+    });
+    for (const reason of ["editado", "no_encontrado", "sin_token_shopify", "lectura_fallida"]) {
+      st.db.checks = [shopify(reason)];
+      expect((await load()).emitNow, reason).toBeNull();
+    }
+    // La del otro modo también, si es de Shopify y la más nueva (como el panel).
+    st.db.checks = [shopify("prueba", "real", "2026-10-14T15:00:00Z"), shopify("tope", "simulacion", "2026-10-14T14:00:00Z")];
+    expect((await load()).emitNow).toBeNull();
+    // Un motivo que no es de Shopify (el tope del día) no quita el botón.
+    st.db.checks = [shopify("tope")];
+    expect((await load()).emitNow).toEqual(BOTON);
+  });
+
+  // FIX: Ajustes decidía su «Emitir» por su cuenta. Ahora el drawer y Ajustes
+  // preguntan a la misma función (`invoiceEmitNowReadiness`); aquí se fija que
+  // el drawer dice exactamente lo que ella dice, y test/invoicing-server.test.ts
+  // fija que Ajustes también (`loadInvoiceEmitNowOffers`).
+  it("el botón es exactamente lo que dice `invoiceEmitNowReadiness`, la función que comparte con Ajustes", async () => {
+    const simulada = dbRow({ mode: "simulacion", status: "simulada", serie: null, correlative: null, pdf_url: null });
+    const casos: Array<[string, () => void]> = [
+      ["lista", () => {}],
+      ["pasa de S/ 700", () => (st.facts = new Map([[ORDER, manualFacts({ total: 800, payments: [{ ...factsFor().payments[0]!, amount: 800 }] })]]))],
+      ["sin conexión", () => (st.facts = new Map([[ORDER, manualFacts({ issuers: [{ ...MANUAL, checkedRuc: null }] })]]))],
+      ["en Real", () => (st.facts = new Map([[ORDER, factsFor({ issuers: [{ ...ISSUER, mode: "real" }] })]]))],
+      ["tienda pausada", () => (st.db.store = { org_id: ORG, status: "paused" })],
+      ["real viva", () => (st.db.invoices = [dbRow({ status: "en_duda" })])],
+      ["Shopify lo frenó", () => (st.db.checks = [checkRow("editado")])],
+      ["Shopify lo frenó antes de la simulada", () => ((st.db.checks = [checkRow("editado", { checked_at: "2026-10-12T10:00:00Z" })]), (st.db.invoices = [simulada]))],
+      ["el tope no frena", () => (st.db.checks = [checkRow("tope")])],
+    ];
+    for (const [label, arrange] of casos) {
+      st.facts = new Map([[ORDER, manualFacts()]]);
+      st.db.store = { org_id: ORG, status: "active" };
+      st.db.invoices = [];
+      st.db.checks = [];
+      arrange();
+      const data = await load();
+      const ready = invoiceEmitNowReadiness({
+        facts: st.facts.get(ORDER) as InvoiceOrderFacts,
+        invoices: data.invoices,
+        checks: st.db.checks as never,
+        storeActive: (st.db.store as { status: string }).status === "active",
+      });
+      expect(data.emitNow, label).toEqual(ready.ok ? ready.offer : null);
+    }
+    // Y no tiene una copia propia de las reglas del botón.
+    const ACTIONS = read("app/dashboard/pedidos/invoice-actions.ts");
+    const ofrece = ACTIONS.slice(ACTIONS.indexOf("function emitNowOf("), ACTIONS.indexOf("\n}\n", ACTIONS.indexOf("function emitNowOf(")));
+    expect(ofrece).toContain("const ready = invoiceEmitNowReadiness({ facts, invoices, checks, storeActive });");
+    expect(ofrece).not.toContain("invoiceEligibility(");
+    expect(ofrece).not.toContain("ShopifyBlock(");
+  });
+
+  it("una simulación DESPUÉS del bloqueo de Shopify lo deja atrás: volvió a leer Shopify y armó la boleta", async () => {
+    st.facts = new Map([[ORDER, manualFacts({ existing: { realLive: false, simulated: true, errorBlocked: false } })]]);
+    st.db.checks = [{ mode: "simulacion", reason: "no_encontrado", detail: null, checked_at: "2026-10-12T10:00:00Z" }];
+    const simulada = (created_at: string) =>
+      dbRow({ mode: "simulacion", status: "simulada", serie: null, correlative: null, pdf_url: null, created_at });
+    st.db.invoices = [simulada("2026-10-14T15:00:00Z")];
+    expect((await load()).emitNow).toEqual(BOTON);
+    // Una de antes del bloqueo no: lo último que se supo de Shopify es el bloqueo.
+    st.db.invoices = [simulada("2026-10-11T15:00:00Z")];
+    expect((await load()).emitNow).toBeNull();
+  });
+});
+
+describe("el panel: «Emitir esta boleta»", () => {
+  const MANUAL_ISSUERS: InvoicePanelData["issuers"] = [
+    { id: ISSUER.id, ruc: RUC, legalName: "GRUPO GF S.A.C.", mode: "manual" },
+  ];
+  const conBoton = (over: Partial<InvoicePanelData> = {}) =>
+    panelData({
+      canManage: true,
+      issuers: MANUAL_ISSUERS,
+      emitNow: { issuerId: ISSUER.id, ruc: RUC, legalName: "GRUPO GF S.A.C.", total: 85 },
+      ...over,
+    });
+  const BOTON_RE = /<button[^>]*>Emitir esta boleta<\/button>/;
+
+  it("con el botón: primario, habilitado y con su chapa", () => {
+    const html = pinta(conBoton());
+    expect(html).toMatch(BOTON_RE);
+    expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>Emitir esta boleta<\/button>/);
+    expect(invoicePanelView(conBoton()).badge).toEqual({ tone: "info", label: "Lista para emitir" });
+    // La confirmación no se enseña hasta pulsar.
+    expect(texto(html)).not.toContain("Sí, emitir");
+  });
+
+  it("de lo que decidió el servidor al panel: solo en Manual hay botón", async () => {
+    for (const mode of ["manual", "real", "simulacion", "apagado"] as const) {
+      st.issuers = [{ ...ISSUER, mode }];
+      st.facts = new Map([[ORDER, factsFor({ issuers: [{ ...ISSUER, mode }] })]]);
+      const res = await loadInvoicePanel(ORDER);
+      if (!("data" in res)) throw new Error(res.error);
+      expect(BOTON_RE.test(pinta(res.data)), mode).toBe(mode === "manual");
+    }
+  });
+
+  it("sin el permiso, con un comprobante vivo o sin lo que decidió el servidor, no hay botón", () => {
+    expect(pinta(conBoton({ canManage: false }))).not.toMatch(BOTON_RE);
+    expect(pinta(conBoton({ invoices: [row({ status: "en_duda" })] }))).not.toMatch(BOTON_RE);
+    expect(pinta(conBoton({ emitNow: null }))).not.toMatch(BOTON_RE);
+    expect(invoicePanelView(conBoton({ invoices: [row()] })).canEmitNow).toBe(false);
+  });
+
+  it("deshabilitado mientras el drawer trabaja", () => {
+    const html = renderToStaticMarkup(
+      createElement(OrderInvoicePanelView, { orderId: ORDER, data: conBoton(), pending: true, run: async () => true }),
+    );
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Emitir esta boleta<\/button>/);
+    const suelto = renderToStaticMarkup(
+      createElement(EmitInvoiceControl, {
+        emit: { ruc: RUC, legalName: "GRUPO GF S.A.C.", total: 85 },
+        pending: true,
+        onEmit: async () => {},
+        label: "Emitir",
+      }),
+    );
+    expect(suelto).toMatch(/<button[^>]*disabled=""[^>]*>Emitir<\/button>/);
+  });
+
+  it("con la simulada, el botón va justo después de lo que habría enviado", () => {
+    const simulada = row({
+      mode: "simulacion",
+      status: "simulada",
+      serie: null,
+      correlative: null,
+      pdfUrl: null,
+      items: [{ code: "SKU-1", name: "Shampoo Birú", qty: 1, price: 85 }],
+    });
+    const t = texto(
+      pinta(
+        conBoton({
+          invoices: [simulada],
+          review: { state: "no", reason: "ya_simulado", detail: null, issuerId: ISSUER.id },
+        }),
+      ),
+    );
+    expect(t).toContain("Shampoo Birú");
+    expect(t.indexOf("Shampoo Birú")).toBeLessThan(t.indexOf("Emitir esta boleta"));
+    expect(t).not.toContain(INVOICE_REASON_LABEL.ya_simulado);
+  });
+
+  it("la confirmación dice qué sale, por cuánto, a quién y de qué RUC, y que no se borra", () => {
+    expect(emitConfirmation({ ruc: RUC, legalName: "GRUPO GF S.A.C.", total: 85 })).toBe(
+      `Se emite una boleta de S/ 85.00 a CLIENTES VARIOS con el RUC ${RUC} (GRUPO GF S.A.C.). Va a SUNAT y no se puede borrar.`,
+    );
+    const html = renderToStaticMarkup(
+      createElement(EmitInvoiceConfirm, {
+        emit: { ruc: RUC, legalName: "GRUPO GF S.A.C.", total: 120.5 },
+        busy: false,
+        onConfirm: () => {},
+        onCancel: () => {},
+      }),
+    );
+    const t = texto(html);
+    expect(t).toContain(
+      `Se emite una boleta de S/ 120.50 a CLIENTES VARIOS con el RUC ${RUC} (GRUPO GF S.A.C.). Va a SUNAT y no se puede borrar.`,
+    );
+    expect(html).toMatch(/<button(?![^>]*disabled="")[^>]*>Sí, emitir<\/button>/);
+    expect(html).toMatch(/<button(?![^>]*disabled="")[^>]*>Cancelar<\/button>/);
+  });
+
+  it("mientras sale: «Emitiendo…», sin «Sí, emitir» y sin cancelar", () => {
+    const html = renderToStaticMarkup(
+      createElement(EmitInvoiceConfirm, {
+        emit: { ruc: RUC, legalName: "GRUPO GF S.A.C.", total: 85 },
+        busy: true,
+        onConfirm: () => {},
+        onCancel: () => {},
+      }),
+    );
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Emitiendo…<\/button>/);
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Cancelar<\/button>/);
+    expect(html).not.toContain("Sí, emitir");
+  });
+
+  it("nunca dos envíos: el segundo «Sí, emitir» antes de que vuelva el primero no sale", async () => {
+    const lock = { current: false };
+    let suelta!: (v: string) => void;
+    const send = vi.fn(() => new Promise<string>((r) => (suelta = r)));
+    const primero = sendOnce(lock, send);
+    expect(lock.current).toBe(true);
+    expect(await sendOnce(lock, send)).toBeNull();
+    expect(await sendOnce(lock, send)).toBeNull();
+    expect(send).toHaveBeenCalledTimes(1);
+    suelta("listo");
+    expect(await primero).toBe("listo");
+    // Vuelta la respuesta, se suelta, también si lo enviado lanzó.
+    expect(lock.current).toBe(false);
+    await expect(sendOnce(lock, async () => Promise.reject(new Error("caída")))).rejects.toThrow("caída");
+    expect(lock.current).toBe(false);
+    expect(await sendOnce(lock, async () => "otra")).toBe("otra");
+  });
+
+  it("el botón pasa por el candado, y el panel emite con lo que vio y se relee después", () => {
+    const src = read("components/order-invoice-panel.tsx");
+    const control = src.slice(src.indexOf("export function EmitInvoiceControl("), src.indexOf("export function EmitInvoiceConfirm("));
+    expect(control).toContain("const lock = useRef(false);");
+    expect(control).toMatch(/const confirmar = \(\) =>\s*void sendOnce\(lock, async \(\) => \{\s*setSending\(true\);/);
+    expect(control).toContain("const busy = pending || sending;");
+    expect(control).toContain("onConfirm={confirmar}");
+    expect(src).toContain(
+      "await run(() => emitInvoiceAction(orderId, { issuerId: emit.issuerId, total: emit.total }));\n            await onEmitted?.();",
+    );
+    expect(src).toContain("<OrderInvoicePanelView orderId={orderId} data={data} pending={pending} run={run} onEmitted={cargar} />");
+  });
+
+  it("en Manual, «lista» es para simularse: la boleta real la emite una persona", () => {
+    const t = texto(pinta(panelData({ issuers: [{ id: ISSUER.id, ruc: RUC, legalName: "GRUPO GF S.A.C.", mode: "manual" }] })));
+    expect(t).toContain(`Lista para simularse en la próxima pasada (RUC ${RUC}, modo Manual).`);
+    expect(t).toContain(MANUAL_WHO_TEXT);
+    expect(t).not.toContain("Lista para emitirse");
+    // Fuera de Manual, como siempre.
+    expect(texto(pinta(panelData()))).toContain("Lista para emitirse en la próxima pasada");
+  });
+
+  it("a quien gestiona, por qué no hay botón cuando nada más lo dice; a quien no, quién emite", () => {
+    const t = texto(
+      pinta(panelData({ canManage: true, issuers: MANUAL_ISSUERS, emitNowBlocked: { reason: "sin_conexion", detail: null } })),
+    );
+    expect(t).toContain(`«Emitir esta boleta» no está disponible: ${INVOICE_REASON_LABEL.sin_conexion}`);
+    const simulada = row({ mode: "simulacion", status: "simulada", serie: null, correlative: null, pdfUrl: null, items: [] });
+    const ajeno = texto(
+      pinta(
+        panelData({
+          issuers: MANUAL_ISSUERS,
+          invoices: [simulada],
+          review: { state: "no", reason: "ya_simulado", detail: null, issuerId: ISSUER.id },
+        }),
+      ),
+    );
+    expect(ajeno).toContain(MANUAL_WHO_TEXT);
+    expect(ajeno).not.toContain("Emitir esta boleta»");
+  });
+
+  it("lo que contestó, donde no hay cabecera (Ajustes): el aviso y «Ver PDF»", () => {
+    const ok = renderToStaticMarkup(createElement(EmitOutcome, { state: { notice: "Emitida B001-97", pdfUrl: PDF } }));
+    expect(texto(ok)).toBe("Emitida B001-97 · Ver PDF");
+    expect(ok).toContain(`href="${PDF}"`);
+    expect(ok).toContain('role="status"');
+    const mal = renderToStaticMarkup(
+      createElement(EmitOutcome, { state: { error: "SimpleFact no la emitió: Token rechazado (401).", pdfUrl: "http://x" } }),
+    );
+    expect(mal).toContain('role="alert"');
+    expect(mal).toContain("text-crit-fg");
+    expect(mal).not.toContain("Ver PDF");
+    expect(renderToStaticMarkup(createElement(EmitOutcome, { state: {} }))).toBe("");
   });
 });

@@ -2,9 +2,13 @@
 //
 // Cada 10 minutos, desfasado de los demás barridos para no caer en el mismo
 // minuto que el sync ni que el recálculo del Master. Por organización con un
-// RUC en simulación o en real revisa sus pedidos pagados (§35.3), vuelve a
-// leerlos en Shopify, pide el turno en la base (`invoice_claim`) y simula o
-// emite en SimpleFact; después concilia lo que quedó sin respuesta (§35.4).
+// RUC en simulación, en manual o en real revisa sus pedidos pagados (§35.3),
+// vuelve a leerlos en Shopify, pide el turno en la base (`invoice_claim`) y
+// simula o emite en SimpleFact; después concilia lo que quedó sin respuesta
+// (§35.4). Un RUC en «Manual» aquí solo simula: sus boletas reales las emite
+// una persona desde el panel («Emitir esta boleta», `emitInvoiceNow`), y este
+// barrido las concilia como las suyas. La línea de log lo dice por RUC
+// (`"mode":"manual"`).
 //
 //   ?dry=1          revisa, lee en Shopify y arma la boleta, sin escribir nada
 //                   en la base ni llamar a SimpleFact (tampoco concilia). Sirve

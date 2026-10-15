@@ -5,9 +5,9 @@
 // Tres acciones: guardar un RUC (alta o cambios), probar su conexión con
 // SimpleFact y asignar el RUC a una cuenta de cobro de la tienda. Van aparte de
 // actions.ts porque piden un permiso más: además de «Administrar tiendas», el de
-// «Boletas y facturas», que solo da el owner. Pasar un RUC a Real o darle una
-// cuenta decide qué empresa paga el impuesto de qué venta, y una boleta que
-// llegó a SUNAT no se borra.
+// «Boletas y facturas», que solo da el owner. Pasar un RUC a Manual o a Real o
+// darle una cuenta decide qué empresa paga el impuesto de qué venta, y una
+// boleta que llegó a SUNAT no se borra.
 //
 // Lo que estas acciones cuidan, y por qué:
 //
@@ -18,7 +18,9 @@
 //    como ahora, y al cambiar de modo, si quedó atrás, se mueve a ahora. La base
 //    hace lo segundo por su cuenta (`invoice_issuers_touch`, 0257); aquí se hace
 //    también para poder decirlo en pantalla.
-//  · REAL SE GANA CON UNA PRUEBA. La base lo exige (`invoice_issuers_real_ready`)
+//  · MANUAL Y REAL SE GANAN CON UNA PRUEBA. Los dos emiten boletas reales: en
+//    Real el barrido, en Manual una persona con «Emitir esta boleta» (owner,
+//    15-10-2026). La base lo exige (`invoice_issuers_real_ready`, 0257 y 0261)
 //    y aquí se explica qué falta antes de llegar a chocar con ella.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -37,6 +39,13 @@ import {
   normalizeSubdomain,
   type InvoiceMode,
 } from "@/lib/invoicing/rules";
+
+/**
+ * Los modos que emiten boletas reales y por eso piden token, «Emitir desde» y
+ * una prueba de conexión que leyó el RUC declarado: Real (el barrido) y Manual
+ * (una persona, pedido por pedido). Lo que baja uno baja el otro (0261).
+ */
+const EMITTING_MODES: ReadonlySet<InvoiceMode> = new Set<InvoiceMode>(["manual", "real"]);
 import { testSimplefactConnection } from "@/lib/invoicing/simplefact";
 import type { SettingsState } from "./actions";
 
@@ -83,12 +92,16 @@ const TOKEN_RE = /^[\x21-\x7e]+$/;
 const TOKEN_MAX = 2_000;
 
 /** Lo que la base dijo que no, en palabras de quien configura. */
-function issuerWriteError(error: { code?: string; message?: string }): string {
+function issuerWriteError(error: { code?: string; message?: string }, mode: InvoiceMode): string {
   const message = error.message ?? "";
   if (error.code === "23505") return "Ese RUC ya está dado de alta.";
   if (error.code === "23514") {
     if (message.includes("invoice_issuers_real_ready")) {
-      return "Para pasar a Real hacen falta el token, «Emitir desde» y una prueba de conexión que leyó este mismo RUC.";
+      return `Para pasar a ${EMITTING_MODES.has(mode) ? INVOICE_MODE_LABEL[mode] : "Real"} hacen falta el token, «Emitir desde» y una prueba de conexión que leyó este mismo RUC.`;
+    }
+    // Sin la 0261 la base no conoce «Manual»: no es que el modo no exista.
+    if (message.includes("invoice_issuers_mode_check") && mode === "manual") {
+      return "La base todavía no admite el modo Manual: falta aplicar la migración 0261.";
     }
     if (message.includes("invoice_issuers_ruc_check")) return "El RUC no es válido.";
     if (message.includes("invoice_issuers_legal_name_check")) return "La razón social va de 1 a 200 caracteres.";
@@ -149,7 +162,7 @@ export async function saveInvoiceIssuer(
     return { error: "El token va en una sola línea, sin espacios: vuelve a copiarlo de SimpleFact." };
   }
   if (!(INVOICE_MODES as readonly string[]).includes(mode)) {
-    return { error: "Elige un modo: Apagado, Simulación o Real." };
+    return { error: "Elige un modo: Apagado, Simulación, Manual o Real." };
   }
   const dailyLimit = Number(limitRaw);
   if (!/^\d+$/.test(limitRaw) || dailyLimit < INVOICE_DAILY_LIMIT_MIN || dailyLimit > INVOICE_DAILY_LIMIT_MAX) {
@@ -189,25 +202,28 @@ export async function saveInvoiceIssuer(
     hasToken = Boolean(withToken.data);
   }
 
-  // ── Real se gana con una prueba (MOM §35.8) ───────────────────────────────
-  // Un token, RUC o subdominio nuevo invalida la prueba al guardarse (0257): no
-  // se puede pasar a Real en el mismo guardado que los cambia.
-  if (mode === "real" && current?.mode !== "real") {
+  // ── Manual y Real se ganan con una prueba (MOM §35.8) ─────────────────────
+  // Un token, RUC o subdominio nuevo invalida la prueba al guardarse (0257,
+  // 0261): no se puede pasar a Manual ni a Real en el mismo guardado que los
+  // cambia. Manual pide exactamente lo mismo que Real, con las mismas frases:
+  // también manda boletas a SUNAT.
+  if (EMITTING_MODES.has(mode) && current?.mode !== mode) {
+    const target = INVOICE_MODE_LABEL[mode];
     if (!current) {
       return {
-        error: "Un RUC nuevo empieza en Apagado o Simulación: guarda su token y prueba la conexión antes de pasar a Real.",
+        error: `Un RUC nuevo empieza en Apagado o Simulación: guarda su token y prueba la conexión antes de pasar a ${target}.`,
       };
     }
-    if (token) return { error: "Guarda primero el token nuevo y prueba la conexión antes de pasar a Real." };
+    if (token) return { error: `Guarda primero el token nuevo y prueba la conexión antes de pasar a ${target}.` };
     if (current.ruc !== ruc || current.simplefact_subdomain !== subdomain) {
-      return { error: "Cambiaste el RUC o el subdominio: guarda y prueba la conexión antes de pasar a Real." };
+      return { error: `Cambiaste el RUC o el subdominio: guarda y prueba la conexión antes de pasar a ${target}.` };
     }
-    if (!hasToken) return { error: "Falta el token de SimpleFact: ponlo y prueba la conexión antes de pasar a Real." };
+    if (!hasToken) return { error: `Falta el token de SimpleFact: ponlo y prueba la conexión antes de pasar a ${target}.` };
     if (current.checked_ruc !== ruc) {
       return {
         error: current.checked_ruc
-          ? `Prueba la conexión antes de pasar a Real: la última prueba leyó el RUC ${current.checked_ruc}, no el ${ruc}.`
-          : "Prueba la conexión antes de pasar a Real: todavía no hay una prueba que haya leído este RUC.",
+          ? `Prueba la conexión antes de pasar a ${target}: la última prueba leyó el RUC ${current.checked_ruc}, no el ${ruc}.`
+          : `Prueba la conexión antes de pasar a ${target}: todavía no hay una prueba que haya leído este RUC.`,
       };
     }
   }
@@ -278,14 +294,14 @@ export async function saveInvoiceIssuer(
         .select("id,mode")
         .maybeSingle();
   const { data: saved, error } = await write;
-  if (error) return { error: issuerWriteError(error) };
+  if (error) return { error: issuerWriteError(error, mode) };
   if (!saved) return { error: RUC_AJENO };
 
   // Lo que quedó lo dice la base: un token, RUC o subdominio nuevo baja un RUC
-  // en Real a Simulación (0257), y eso se tiene que ver.
+  // en Manual o en Real a Simulación (0257, 0261), y eso se tiene que ver.
   const savedMode = (saved as { mode: InvoiceMode }).mode;
   const credentialsChanged = Boolean(token) || (current !== null && (current.ruc !== ruc || current.simplefact_subdomain !== subdomain));
-  if (current && mode === "real" && savedMode !== "real") {
+  if (current && EMITTING_MODES.has(mode) && savedMode !== mode) {
     notes.unshift(
       `${token ? "El token cambió" : "Cambió el RUC o el subdominio"}: el RUC bajó a ${INVOICE_MODE_LABEL[savedMode]} hasta que vuelvas a probar la conexión.`,
     );
@@ -293,6 +309,11 @@ export async function saveInvoiceIssuer(
     notes.unshift("Cambió la conexión: vuelve a pulsar «Probar conexión».");
   } else if (!current && token) {
     notes.unshift("Token guardado cifrado: pulsa «Probar conexión».");
+  }
+  // Recién pasado a Manual: qué cambia, para que nadie espere que el barrido
+  // emita. Lo dice solo si la base lo dejó en Manual.
+  if (savedMode === "manual" && current?.mode !== "manual") {
+    notes.push("En Manual el barrido solo simula: cada boleta real se emite con «Emitir esta boleta» en el pedido.");
   }
 
   revalidatePath(settingsPath(storeId));
@@ -354,8 +375,9 @@ export async function testInvoiceIssuer(storeId: string, issuerId: string): Prom
 
   revalidatePath(settingsPath(storeId));
   if (!result.ok) {
-    // Un RUC en Real cuya prueba ya no confirma su RUC baja a Simulación (0257).
-    const demoted = row.mode === "real" && (saved as { mode: InvoiceMode }).mode !== "real";
+    // Un RUC en Real o en Manual cuya prueba ya no confirma su RUC baja a
+    // Simulación (0257, 0261).
+    const demoted = EMITTING_MODES.has(row.mode) && (saved as { mode: InvoiceMode }).mode !== row.mode;
     const message = /[.!?]$/.test(result.error) ? result.error : `${result.error}.`;
     return {
       error: demoted ? `${message}\nEl RUC bajó a Simulación hasta que una prueba confirme el RUC.` : message,
