@@ -14,6 +14,9 @@
 // «Real» emite el barrido y no hay botón. El botón no fuerza nada: el servidor
 // corre la misma emisión real del barrido, con los mismos candados, y antes de
 // pulsar «Sí, emitir» el panel dice qué boleta sale, por cuánto y de qué RUC.
+// Si el pedido quedó pagado antes de «Emitir desde» (desde el 01/10/2026, owner
+// 15-10-2026), además pide marcar que se revisó en SimpleFact: antes de Kapta
+// las boletas se emitían a mano ahí.
 //
 // Es una zona más de la tarjeta «Cobro», sobre su hairline, como el agente de
 // voz en la de confirmación. Las acciones pasan por el `run` del drawer: sus
@@ -24,7 +27,7 @@
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { cn } from "@/components/ui";
-import { Badge, Banner, CARD_ZONE, FIELD, OpsButton, type BadgeTone } from "@/components/ops-ui";
+import { Badge, Banner, CARD_ZONE, CHECKBOX, FIELD, OpsButton, type BadgeTone } from "@/components/ops-ui";
 import { IconArrowUpRight } from "@/components/icons";
 import {
   confirmDoubtfulInvoice,
@@ -171,6 +174,40 @@ function horaLima(iso: string): string | null {
   return Number.isFinite(t) ? new Date(t - 5 * 3_600_000).toISOString().slice(11, 16) : null;
 }
 
+/** «30/09/2026 18:05», en hora de Lima: a mano, como `horaLima`. null si no es una fecha. */
+function fechaHoraLima(iso: string | null | undefined): string | null {
+  const t = iso ? Date.parse(iso) : Number.NaN;
+  if (!Number.isFinite(t)) return null;
+  const lima = new Date(t - 5 * 3_600_000).toISOString();
+  return `${lima.slice(8, 10)}/${lima.slice(5, 7)}/${lima.slice(0, 4)} ${lima.slice(11, 16)}`;
+}
+
+/** La casilla que pide la confirmación de un pedido pagado antes de «Emitir desde». */
+export const SIMPLEFACT_CHECK_LABEL = "Revisé en SimpleFact y este pedido no tiene boleta";
+
+/**
+ * Lo que la confirmación agrega cuando el pedido quedó pagado antes de «Emitir
+ * desde» (owner, 15-10-2026). Antes de Kapta las boletas se emitían a mano en
+ * SimpleFact, y Kapta no sabe si este pedido ya tiene una: dos boletas son dos
+ * veces el impuesto. null si el pedido no es de antes.
+ */
+export function emitBeforeStartText(emit: Pick<InvoicePanelEmitNow, "beforeStart" | "paidAt" | "emitFrom">): string | null {
+  if (emit.beforeStart !== true) return null;
+  const paid = fechaHoraLima(emit.paidAt);
+  const from = fechaHoraLima(emit.emitFrom);
+  const head =
+    paid && from ? `Quedó pagado el ${paid}, antes de «Emitir desde» (${from}).` : "Quedó pagado antes de «Emitir desde».";
+  return `${head} Kapta no sabe si ya se emitió a mano: búscalo en SimpleFact antes de emitir.`;
+}
+
+/**
+ * Lo pagado antes de «Emitir desde» no sale solo, pero con el botón sí se puede
+ * emitir: sin esto, el motivo (`antes_de_inicio`) contradecía al botón de al
+ * lado.
+ */
+export const BACKFILL_REVIEW_TEXT =
+  "No sale sola: se puede emitir con «Emitir esta boleta» después de revisar SimpleFact.";
+
 /**
  * ¿Se puede pulsar ya «No está en SimpleFact: volver a intentar» en este
  * `en_duda`? null: sí. Si no, lo que se dice junto al botón, que queda
@@ -239,6 +276,12 @@ export interface InvoicePanelView {
    * vuelve a exigir lo que se ve: quien gestiona y sin comprobante real vivo.
    */
   canEmitNow: boolean;
+  /**
+   * Ese botón es para un pedido pagado antes de «Emitir desde»
+   * (`emitNow.beforeStart`): la revisión, que dice `antes_de_inicio`, agrega
+   * que se puede emitir con el botón.
+   */
+  backfillOffered: boolean;
   /** El RUC del pedido, según las reglas, está en «Manual». */
   manualRuc: boolean;
   /**
@@ -303,6 +346,7 @@ export function invoicePanelView(data: InvoicePanelData): InvoicePanelView {
     canConfirm: data.canManage && live?.status === "en_duda",
     canRegisterExternal: data.canManage && !live && data.issuers.length > 0,
     canEmitNow,
+    backfillOffered: canEmitNow && data.emitNow?.beforeStart === true,
     manualRuc: reviewIssuer?.mode === "manual",
     rucMode: reviewIssuer?.mode ?? null,
   };
@@ -543,7 +587,9 @@ export function OrderInvoicePanelView({
         </div>
       )}
 
-      {view.showReview && <Review data={data} hideSimulated={!!simulated} manual={view.manualRuc} />}
+      {view.showReview && (
+        <Review data={data} hideSimulated={!!simulated} manual={view.manualRuc} backfill={view.backfillOffered} />
+      )}
 
       {view.check && (
         <p className="text-[13px] leading-5 text-ink-500">
@@ -560,11 +606,13 @@ export function OrderInvoicePanelView({
         <EmitInvoiceControl
           emit={data.emitNow}
           pending={pending}
-          onEmit={async () => {
+          onEmit={async (simplefactChecked) => {
             const emit = data.emitNow!;
             // El aviso va en la cabecera del drawer, como el de toda acción; el
             // panel se relee después, y la boleta que salió aparece con su PDF.
-            await run(() => emitInvoiceAction(orderId, { issuerId: emit.issuerId, total: emit.total }));
+            await run(() =>
+              emitInvoiceAction(orderId, { issuerId: emit.issuerId, total: emit.total, simplefactChecked }),
+            );
             await onEmitted?.();
           }}
         />
@@ -683,8 +731,22 @@ function LiveInvoice({ row }: { row: InvoicePanelRow }) {
 export const MANUAL_WHO_TEXT =
   "En Manual el barrido solo simula: la boleta real la emite, pedido por pedido, quien tiene «Boletas y facturas».";
 
-/** Lo que dicen hoy las reglas (§35.3), o que no se pudo revisar. Nunca las dos. */
-function Review({ data, hideSimulated, manual }: { data: InvoicePanelData; hideSimulated: boolean; manual: boolean }) {
+/**
+ * Lo que dicen hoy las reglas (§35.3), o que no se pudo revisar. Nunca las dos.
+ * `backfill`: hay «Emitir esta boleta» para un pedido pagado antes de «Emitir
+ * desde»; su `antes_de_inicio` dice que con el botón sí se puede.
+ */
+function Review({
+  data,
+  hideSimulated,
+  manual,
+  backfill,
+}: {
+  data: InvoicePanelData;
+  hideSimulated: boolean;
+  manual: boolean;
+  backfill: boolean;
+}) {
   const review = data.review;
   if (review.state === "sin_revisar") {
     // FALLA CERRADA: sin los hechos no se dice «lista» ni ningún motivo.
@@ -736,7 +798,15 @@ function Review({ data, hideSimulated, manual }: { data: InvoicePanelData; hideS
   }
   // La simulación ya se ve abajo: repetir «Ya tiene su simulación» no dice nada.
   if (review.reason === "ya_simulado" && hideSimulated) return null;
-  return <p className="text-[13px] leading-5 text-ink-600">{motivo(review.reason, review.detail)}</p>;
+  // «Quedó pagado antes de «Emitir desde»» al lado de un botón que lo emite se
+  // contradice: el barrido no lo emite, una persona sí (owner, 15-10-2026).
+  const extra = backfill && review.reason === "antes_de_inicio" ? ` ${BACKFILL_REVIEW_TEXT}` : "";
+  return (
+    <p className="text-[13px] leading-5 text-ink-600">
+      {motivo(review.reason, review.detail)}
+      {extra}
+    </p>
+  );
 }
 
 /** «Simulada: lo que habría enviado» — la boleta exacta, que no salió de Kapta. */
@@ -790,6 +860,13 @@ function SimulatedInvoice({ row }: { row: InvoicePanelRow }) {
  * la fila) también lo deshabilita. Mientras sale no se puede cancelar: lo que
  * se envió ya no se recoge.
  *
+ * PAGADO ANTES DE «EMITIR DESDE» (`emit.beforeStart`, owner 15-10-2026). La
+ * confirmación pide marcar «Revisé en SimpleFact y este pedido no tiene
+ * boleta», y «Sí, emitir» no se puede pulsar sin eso. La casilla nace sin
+ * marcar cada vez que se abre la confirmación, y se desmarca al cancelar y al
+ * volver la respuesta. `onEmit` recibe si quedó marcada; el servidor la vuelve
+ * a exigir (`sin_revision_simplefact`).
+ *
  * Quien lo usa decide qué hacer con la respuesta (`onEmit`), y no lanza.
  */
 export function EmitInvoiceControl({
@@ -798,13 +875,14 @@ export function EmitInvoiceControl({
   onEmit,
   label = "Emitir esta boleta",
 }: {
-  emit: Pick<InvoicePanelEmitNow, "ruc" | "legalName" | "total">;
+  emit: EmitInvoiceShownOffer;
   pending: boolean;
-  onEmit: () => Promise<void>;
+  onEmit: (simplefactChecked: boolean) => Promise<void>;
   label?: string;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [sending, setSending] = useState(false);
+  const [simplefactChecked, setSimplefactChecked] = useState(false);
   const lock = useRef(false);
   const busy = pending || sending;
 
@@ -812,10 +890,11 @@ export function EmitInvoiceControl({
     void sendOnce(lock, async () => {
       setSending(true);
       try {
-        await onEmit();
+        await onEmit(simplefactChecked);
       } finally {
         setSending(false);
         setConfirming(false);
+        setSimplefactChecked(false);
       }
     }).catch(() => {
       // `onEmit` no lanza; si lo hiciera, el aviso es de quien lo usa. Aquí
@@ -823,14 +902,29 @@ export function EmitInvoiceControl({
     });
 
   if (confirming) {
-    return <EmitInvoiceConfirm emit={emit} busy={busy} onConfirm={confirmar} onCancel={() => setConfirming(false)} />;
+    return (
+      <EmitInvoiceConfirm
+        emit={emit}
+        busy={busy}
+        simplefactChecked={simplefactChecked}
+        onSimplefactChecked={setSimplefactChecked}
+        onConfirm={confirmar}
+        onCancel={() => {
+          setSimplefactChecked(false);
+          setConfirming(false);
+        }}
+      />
+    );
   }
   return (
     <OpsButton
       size="sm"
       variant="primary"
       disabled={busy}
-      onClick={() => setConfirming(true)}
+      onClick={() => {
+        setSimplefactChecked(false);
+        setConfirming(true);
+      }}
       className="pointer-coarse:h-11"
     >
       {label}
@@ -838,29 +932,67 @@ export function EmitInvoiceControl({
   );
 }
 
+/** Lo que enseña la confirmación: el RUC, el total y, si es de antes, las dos fechas. */
+type EmitInvoiceShownOffer = Pick<
+  InvoicePanelEmitNow,
+  "ruc" | "legalName" | "total" | "beforeStart" | "paidAt" | "emitFrom"
+>;
+
 /**
  * El paso de confirmación: qué boleta sale, por cuánto y de qué RUC, y que no
  * se puede borrar. «Sí, emitir» queda deshabilitado mientras sale.
+ *
+ * Si el pedido quedó pagado antes de «Emitir desde» (`emit.beforeStart`), dice
+ * cuándo quedó pagado y desde cuándo emite el RUC, y pide la casilla
+ * «Revisé en SimpleFact y este pedido no tiene boleta»: sin marcarla, «Sí,
+ * emitir» no se puede pulsar. Sin `beforeStart` no cambia nada.
  */
 export function EmitInvoiceConfirm({
   emit,
   busy,
+  simplefactChecked,
+  onSimplefactChecked,
   onConfirm,
   onCancel,
 }: {
-  emit: Pick<InvoicePanelEmitNow, "ruc" | "legalName" | "total">;
+  emit: EmitInvoiceShownOffer;
   busy: boolean;
+  /** La casilla «Revisé en SimpleFact…»: la guarda quien la usa (`EmitInvoiceControl`). */
+  simplefactChecked: boolean;
+  onSimplefactChecked: (checked: boolean) => void;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const beforeStart = emitBeforeStartText(emit);
   return (
     <div role="group" aria-label="Confirmar la emisión" className="space-y-3 rounded-lg bg-wash p-3">
       <p className="text-[13px] leading-5 text-ink-900">{emitConfirmation(emit)}</p>
+      {beforeStart && (
+        <>
+          <p className="text-[13px] leading-5 text-warn-fg">{beforeStart}</p>
+          <label className="flex items-start gap-2 text-[13px] font-medium leading-5 text-ink-900 pointer-coarse:min-h-11">
+            <input
+              type="checkbox"
+              checked={simplefactChecked}
+              disabled={busy}
+              onChange={(e) => onSimplefactChecked(e.target.checked)}
+              className={cn(CHECKBOX, "mt-0.5")}
+            />
+            {SIMPLEFACT_CHECK_LABEL}
+          </label>
+        </>
+      )}
       <p className="text-[13px] leading-5 text-ink-600">
         Antes de emitir otra, revisa esta en SimpleFact: el RUC, los ítems y el total.
       </p>
       <div className="flex flex-wrap gap-2">
-        <OpsButton size="sm" variant="primary" disabled={busy} onClick={onConfirm} className="pointer-coarse:h-11">
+        <OpsButton
+          size="sm"
+          variant="primary"
+          disabled={busy || (beforeStart !== null && !simplefactChecked)}
+          onClick={onConfirm}
+          className="pointer-coarse:h-11"
+        >
           {busy ? "Emitiendo…" : "Sí, emitir"}
         </OpsButton>
         <OpsButton size="sm" variant="ghost" disabled={busy} onClick={onCancel} className="pointer-coarse:h-11">

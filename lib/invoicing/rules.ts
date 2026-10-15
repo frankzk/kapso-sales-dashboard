@@ -96,6 +96,17 @@ export const INVOICE_DAILY_LIMIT_MAX = 300;
 /** A lo más tantos comprobantes por RUC en una pasada del barrido (MOM §35.4). */
 export const INVOICE_MAX_PER_RUN = 15;
 
+/**
+ * Desde cuándo «Emitir esta boleta» puede emitir un pedido que quedó pagado
+ * ANTES de «Emitir desde» del RUC: el 01/10/2026 00:00 de Lima (owner,
+ * 15-10-2026). Solo con el RUC en «Manual», solo con el botón (una persona) y
+ * solo si esa persona confirma que lo buscó en SimpleFact y no tiene boleta
+ * (`sin_revision_simplefact`): antes de Kapta las boletas se emitían a mano, y
+ * Kapta no sabe si ese pedido ya tiene una. Dos boletas son dos veces el
+ * impuesto. El barrido nunca va hacia atrás. La base exige lo mismo (0266).
+ */
+export const INVOICE_BACKFILL_FROM = "2026-10-01T05:00:00.000Z";
+
 /** El IGV va incluido en el precio de Shopify (owner, 14-10-2026). */
 export const IGV_PERCENT = 18;
 
@@ -334,6 +345,10 @@ export const INVOICE_REASONS = [
   // pedido, sus pagos o la cuenta del RUC cambiaron desde que lo abrió. Lo dice
   // `emitInvoiceNow` con SU lectura, la misma con la que arma la boleta.
   "pedido_cambio",
+  // Quedó pagado antes de «Emitir desde» (`INVOICE_BACKFILL_FROM`) y quien
+  // pulsó no marcó que lo revisó en SimpleFact. Es de quien pulsa, no del
+  // pedido: solo lo dice `emitInvoiceNow`, y el barrido nunca lo guarda.
+  "sin_revision_simplefact",
   // El despliegue no es producción: una vista previa comparte la base y la
   // llave de cifrado con producción, y desde ella saldría una boleta real.
   "no_produccion",
@@ -384,6 +399,8 @@ export const INVOICE_REASON_LABEL: Record<InvoiceReason, string> = {
   turno_fallido: "El turno de la base no respondió como se esperaba: no se envió nada a SimpleFact.",
   pedido_cambio:
     "El pedido cambió desde que lo abriste (el RUC o el total): vuelve a abrirlo y revisa la boleta antes de emitirla.",
+  sin_revision_simplefact:
+    "Quedó pagado antes de «Emitir desde»: falta confirmar que en SimpleFact no tiene boleta.",
   no_produccion: "Emitir solo funciona en producción: este despliegue es una vista previa.",
 };
 
@@ -522,6 +539,13 @@ export type InvoiceEligibility =
        * validados, o la fecha del pedido en el prepago web (§35.3, fila 8).
        */
       paidAt: string;
+      /**
+       * Quedó pagado antes de «Emitir desde» y solo pasa por la excepción de
+       * «Emitir esta boleta» (`INVOICE_BACKFILL_FROM`). Con él, `emitInvoiceNow`
+       * pide que la persona confirme que lo revisó en SimpleFact y el turno va
+       * con `p_backfill` (0266). Siempre false sin `emitNow`.
+       */
+      beforeStart: boolean;
       basis: InvoiceBasis;
     }
   | {
@@ -558,6 +582,10 @@ export interface InvoiceEligibilityOptions {
    * RUC tiene que estar en «Manual» o en «Real»; si no, `modo_distinto`. Sin
    * esto (el barrido y el panel) un RUC en «Manual» se evalúa como en
    * «Simulación»: el barrido no emite por él.
+   *
+   * Y con el RUC en «Manual», un pedido pagado antes de «Emitir desde» pero
+   * desde `INVOICE_BACKFILL_FROM` pasa la condición 8 con `beforeStart` (owner,
+   * 15-10-2026). Sin `emitNow`, o en «Real», nunca.
    */
   emitNow?: boolean;
 }
@@ -666,9 +694,16 @@ export function invoiceEligibility(
   // no se emite.
   const undated = !prepaid && live.some((p) => time(p.registeredAt) === null);
   const from = time(issuer.emitFrom);
-  if (paidTime === null || undated || from === null || paidTime < from) {
-    return fail("antes_de_inicio", undefined, issuer.id);
-  }
+  if (paidTime === null || undated || from === null) return fail("antes_de_inicio", undefined, issuer.id);
+  // La excepción (owner, 15-10-2026): lo pagado antes de «Emitir desde», pero
+  // desde el 01/10/2026 00:00 de Lima, lo puede emitir una persona con «Emitir
+  // esta boleta» y el RUC en «Manual». Antes de Kapta las boletas se emitían a
+  // mano en SimpleFact: quien pulsa tiene que confirmar que lo revisó ahí
+  // (`emitInvoiceNow`). El barrido nunca va hacia atrás, y en «Real» tampoco.
+  const backfill =
+    opts.emitNow === true && issuer.mode === "manual" && paidTime >= time(INVOICE_BACKFILL_FROM)!;
+  if (paidTime < from && !backfill) return fail("antes_de_inicio", undefined, issuer.id);
+  const beforeStart = paidTime < from;
 
   // 9. Uno por pedido.
   if (facts.existing.realLive) return fail("ya_tiene", undefined, issuer.id);
@@ -690,6 +725,7 @@ export function invoiceEligibility(
     mode,
     totalCents,
     paidAt: paidAt!,
+    beforeStart,
     basis: {
       prepaid,
       payments: resolved.map((r) => ({

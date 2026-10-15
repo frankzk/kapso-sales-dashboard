@@ -109,6 +109,8 @@ export interface InvoiceRecentView {
    * bloqueo de Shopify). El RUC y el total son los de las reglas de ahora, que
    * pueden no ser los de la simulada: la confirmación dice lo que de verdad se
    * envía. null: no lleva botón. Al pulsar, el servidor vuelve a revisar todo.
+   * Un pedido pagado antes de «Emitir desde» (`beforeStart`) lo lleva igual, y
+   * su confirmación pide la casilla «Revisé en SimpleFact…», como el drawer.
    */
   emitNow: InvoicePanelEmitNow | null;
 }
@@ -816,14 +818,16 @@ function RecentList({
   const [refreshing, startRefresh] = useTransition();
   const router = useRouter();
 
-  async function emit(row: InvoiceRecentView, offer: InvoicePanelEmitNow) {
+  async function emit(row: InvoiceRecentView, offer: InvoicePanelEmitNow, simplefactChecked: boolean) {
     const orderId = row.orderId;
     if (inFlight.current.has(orderId)) return;
     inFlight.current.add(orderId);
     setSending((prev) => new Set(prev).add(orderId));
     let res: EmitInvoiceState;
     try {
-      res = await emitInvoiceAction(orderId, { issuerId: offer.issuerId, total: offer.total });
+      // La casilla «Revisé en SimpleFact…» de un pedido pagado antes de «Emitir
+      // desde» viaja como en el drawer: el servidor la vuelve a exigir.
+      res = await emitInvoiceAction(orderId, { issuerId: offer.issuerId, total: offer.total, simplefactChecked });
     } catch {
       // La acción no llegó o no volvió: pudo haber salido. Se dice así.
       res = { error: EMIT_LOST };
@@ -895,7 +899,8 @@ export function RecentListView({
   sending: ReadonlySet<string>;
   /** La página se está refrescando. */
   pending: boolean;
-  onEmit: (row: InvoiceRecentView, offer: InvoicePanelEmitNow) => Promise<void>;
+  /** `simplefactChecked`: la casilla de un pedido pagado antes de «Emitir desde». */
+  onEmit: (row: InvoiceRecentView, offer: InvoicePanelEmitNow, simplefactChecked: boolean) => Promise<void>;
 }) {
   const { byRow, orphans } = placeOutcomes(rows ?? [], outcomes);
   const orphanList = orphans.length ? (
@@ -1007,7 +1012,7 @@ export function RecentListView({
                     label="Emitir"
                     emit={offer}
                     pending={pending || sending.has(r.orderId)}
-                    onEmit={() => onEmit(r, offer)}
+                    onEmit={(simplefactChecked) => onEmit(r, offer, simplefactChecked)}
                   />
                 </div>
               ) : null;
