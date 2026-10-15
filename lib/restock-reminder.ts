@@ -34,7 +34,14 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { StoreCreds } from "@/lib/ingest";
 import { applyHandoff, isSendablePhone, isTierLimitError, sanitizeTemplateParam } from "@/lib/leads-ingest";
 import { handoffStatus } from "@/lib/leads";
-import { sendWhatsappTemplate, sendWhatsappText, type InboundMessage } from "@/lib/kapso";
+import {
+  listMessages,
+  messageTimeMs,
+  parseInboundMessage,
+  sendWhatsappTemplate,
+  sendWhatsappText,
+  type InboundMessage,
+} from "@/lib/kapso";
 import { firstName, recoveryWithinHours } from "@/lib/return-recovery";
 import { THANKS_BATCH_CAP, thanksPaceBudget } from "@/lib/delivered-thanks";
 import { waImageUrl } from "@/lib/cart-image-test";
@@ -637,4 +644,158 @@ export async function handleRestockReply(
     .eq("inbound_message_id", msg.id);
 
   return { reason: `restock:${kind};handoff:${res.ok ? "ok" : res.reason}${ok ? "" : `;reply_failed:${error}`}` };
+}
+
+// ── El barrido de respuestas ────────────────────────────────────────────────
+//
+// POR QUÉ EXISTE (14-10-2026). El número 451 no tenía en Kapso el webhook de
+// «mensaje recibido»: 11 clientas contestaron el recordatorio y Kapta no se
+// enteró, así que nadie las pasó a «Atender ahora». Un webhook puede faltar o
+// caerse, y el «sí» de una clienta no puede perderse por eso.
+//
+// QUÉ HACE. Cada pase del cron mira los recordatorios de las últimas 72 h sin
+// respuesta registrada cuya clienta escribió DESPUÉS (`leads.last_inbound_at`,
+// que trae la sincronización de leads). A esas —y solo a esas— les lee la
+// conversación en Kapso y le pasa cada mensaje entrante posterior al
+// recordatorio a `handleRestockReply`, el mismo camino del webhook. Si el
+// webhook ya lo había atendido, la reserva por `wamid` en `wa_auto_replies`
+// impide atenderlo dos veces. `reply_checked_at` (0258) evita releer la misma
+// conversación si la clienta no volvió a escribir.
+
+/** Cuántas conversaciones se leen por pase, como mucho. */
+export const RESTOCK_SWEEP_CAP = 15;
+
+interface SweepSend {
+  id: string;
+  phone: string;
+  sent_at: string;
+  reply_checked_at: string | null;
+}
+
+/**
+ * Los recordatorios cuya conversación hay que leer: la clienta escribió
+ * después del recordatorio y después de la última revisión. Pura.
+ */
+export function sendsToSweep(
+  sends: readonly SweepSend[],
+  lastInboundByPhone: ReadonlyMap<string, string | null>,
+  cap = RESTOCK_SWEEP_CAP,
+): SweepSend[] {
+  return sends
+    .filter((s) => {
+      const last = lastInboundByPhone.get(s.phone);
+      if (!last) return false;
+      if (Date.parse(last) <= Date.parse(s.sent_at)) return false;
+      return !s.reply_checked_at || Date.parse(last) > Date.parse(s.reply_checked_at);
+    })
+    .slice(0, cap);
+}
+
+export interface RestockSweepReport {
+  checked: number;
+  matched: number;
+}
+
+/** Un pase del barrido para una tienda. Nunca lanza por una conversación. */
+export async function sweepRestockReplies(
+  admin: SupabaseClient,
+  storeId: string,
+  creds: StoreCreds,
+  opts: {
+    list?: typeof listMessages;
+    sendText?: typeof sendWhatsappText;
+    handoff?: typeof applyHandoff;
+    nowIso?: string;
+  } = {},
+): Promise<RestockSweepReport> {
+  const report: RestockSweepReport = { checked: 0, matched: 0 };
+  if (!creds.kapso_api_key) return report;
+  const nowIso = opts.nowIso ?? new Date().toISOString();
+  const nowMs = Date.parse(nowIso);
+  const since = new Date(nowMs - RESTOCK_REPLY_WINDOW_HOURS * 3_600_000).toISOString();
+
+  const { data: sendRows, error } = await admin
+    .from("restock_sends")
+    .select("id, phone, sent_at, reply_checked_at")
+    .eq("store_id", storeId)
+    .eq("arm", "enviado")
+    .eq("ok", true)
+    .is("replied_at", null)
+    .gte("sent_at", since);
+  if (error) throw new Error(`restock sweep: ${error.message}`);
+  const sends = (sendRows ?? []) as SweepSend[];
+  if (!sends.length) return report;
+
+  const phones = [...new Set(sends.map((s) => s.phone))];
+  const { data: leadRows, error: leadsError } = await admin
+    .from("leads")
+    .select("phone, last_inbound_at")
+    .eq("store_id", storeId)
+    .in("phone", phones);
+  if (leadsError) throw new Error(`restock sweep leads: ${leadsError.message}`);
+  const lastInbound = new Map<string, string | null>();
+  for (const l of (leadRows ?? []) as { phone: string; last_inbound_at: string | null }[]) {
+    const prev = lastInbound.get(l.phone);
+    if (!prev || (l.last_inbound_at && l.last_inbound_at > prev)) lastInbound.set(l.phone, l.last_inbound_at);
+  }
+  const todo = sendsToSweep(sends, lastInbound);
+  if (!todo.length) return report;
+
+  const phoneNumberId = creds.restock_phone_number_id?.trim() || creds.whatsapp_phone_number_id;
+  const list = opts.list ?? listMessages;
+  for (const send of todo) {
+    report.checked += 1;
+    try {
+      // Las conversaciones de ese celular en el número del recordatorio que
+      // tuvieron movimiento después del envío.
+      const { data: convs } = await admin
+        .from("conversations")
+        .select("kapso_conversation_id, phone:raw->>phone_number, last_message_at")
+        .eq("store_id", storeId)
+        .eq("phone_number_id", phoneNumberId)
+        .gt("last_message_at", send.sent_at);
+      const mine = ((convs ?? []) as { kapso_conversation_id: string; phone: string | null }[]).filter(
+        (c) => String(c.phone ?? "").replace(/\D/g, "") === send.phone,
+      );
+      let done = false;
+      for (const conv of mine) {
+        if (done) break;
+        const page = await list({ apiKey: creds.kapso_api_key }, {
+          conversationId: conv.kapso_conversation_id,
+          direction: "inbound",
+          limit: 20,
+          fields: "kapso(default)",
+        });
+        const raw = ((page?.data ?? []) as unknown[])
+          .map((m) => ({ m, t: messageTimeMs(m) }))
+          .filter((x) => x.t != null && x.t > Date.parse(send.sent_at))
+          .sort((a, b) => a.t! - b.t!);
+        for (const { m } of raw) {
+          const parsed = parseInboundMessage(m);
+          if (!parsed || parsed.direction === "outbound") continue;
+          const msg: InboundMessage = {
+            ...parsed,
+            phoneNumberId: parsed.phoneNumberId ?? phoneNumberId ?? null,
+            conversationId: parsed.conversationId ?? conv.kapso_conversation_id,
+          };
+          const res = await handleRestockReply(admin, storeId, creds, msg, {
+            sendText: opts.sendText,
+            handoff: opts.handoff,
+            nowIso,
+          });
+          if (res) {
+            if (res.reason.startsWith("restock:")) report.matched += 1;
+            done = true;
+            break;
+          }
+        }
+      }
+    } catch {
+      // Una conversación que no se pudo leer se reintenta en el próximo pase:
+      // no se marca como revisada.
+      continue;
+    }
+    await admin.from("restock_sends").update({ reply_checked_at: nowIso }).eq("id", send.id);
+  }
+  return report;
 }
