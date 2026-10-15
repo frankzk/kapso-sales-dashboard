@@ -443,14 +443,82 @@ const HUMAN_GUIDE_EVENTS = new Set(["guide_registered", "guide_created", COMPANI
  * «No entregado» de motorizado propio decían «0 intentos» (#KP140941: dos
  * salidas con Roy, «No contesta» las dos). Pura.
  */
-export function ownRiderAttempts(events: readonly { kind: string; payload?: unknown }[]): number {
+export function ownRiderAttempts(
+  events: readonly { kind: string; payload?: unknown }[],
+  // Las paradas de las rutas (delivery_stops), con el histórico del cuaderno
+  // que se cargó sin evento (`reported_by` null): 4.745 de las 5.652 paradas
+  // reportadas al 15-10-2026 no tenían `stop_reported`.
+  routeStops: readonly { id: string; status: string | null }[] = [],
+): number {
   const stops = new Set<string>();
   for (const event of events) {
     if (event.kind !== "stop_reported") continue;
     const payload = event.payload as { stop_id?: unknown } | null | undefined;
     if (typeof payload?.stop_id === "string" && payload.stop_id) stops.add(payload.stop_id);
   }
+  for (const stop of routeStops) {
+    if (stop.status === "entregado" || stop.status === "no_entregado") stops.add(stop.id);
+  }
   return stops.size;
+}
+
+/**
+ * Resultados del reporte de Urpi que son una visita: entregó, canceló o
+ * reprogramó en la puerta. «Programado», «En coordinación» y «Sin resultado»
+ * todavía no son un intento, y un estado que Kapta no reconoce no se cuenta.
+ */
+export const URPI_ATTEMPT_RESULTS: ReadonlySet<string> = new Set(["entregado", "cancelado", "reprogramado"]);
+
+/**
+ * Intentos de entrega que Urpi reportó en su export (MOM §30.11): una fila por
+ * intento, vinculada al pedido. Hasta el 15-10-2026 la columna no los sumaba
+ * (#KP131545: Urpi lo canceló el 01/09 y la fila decía «0 intentos»). Pura.
+ */
+export function urpiAttempts(rows: readonly { result_code: string | null }[]): number {
+  return rows.filter((row) => row.result_code != null && URPI_ATTEMPT_RESULTS.has(row.result_code)).length;
+}
+
+/** Estados de Swayp que dicen que el motorizado llegó a la puerta (lib/swayp-states.ts). */
+const SWAYP_NOVEDAD = 6;
+const SWAYP_ENTREGADA = 7;
+const SWAYP_DEVOLUCION = new Set([8, 9, 12]);
+/** Estados de Tanders que solo se alcanzan después de ir a la puerta (lib/tanders/status.ts). */
+const TANDERS_VISITED = new Set(["DELIVERED", "RETURNING", "RETURNED"]);
+
+/**
+ * Visitas que se deducen de lo que informa el courier de una guía cuando el
+ * courier no manda un número de intentos (MOM §9.3, 15-10-2026):
+ *
+ *  - Swayp (`fenix`): cada «Novedad» (6) que llegó como estado es una visita
+ *    fallida y «Entregada» (7) es otra. Si la guía terminó en Devolución (8, 9
+ *    o 12) sin que se viera ninguna, hubo al menos una: el barrido no siempre
+ *    alcanza a ver la Novedad antes de la Devolución.
+ *  - Tanders: solo da el estado actual. Llegar a «Delivered», «Returning» o
+ *    «Returned» exige haber ido a la puerta: es una visita.
+ *
+ * Los demás couriers no informan visitas: 0. Pura.
+ */
+export function courierVisitAttempts(
+  guide: { id: string; courier: string | null; delivery_status: string | null; reported_status?: string | null; swayp_state?: number | null },
+  events: readonly { kind: string; shipment_id?: string | null; payload?: unknown }[],
+): number {
+  const courier = (guide.courier ?? "").toLowerCase();
+  if (courier === "fenix") {
+    const states = events
+      .filter((e) => e.kind === "courier_status" && e.shipment_id === guide.id)
+      .map((e) => Number((e.payload as { swayp_state?: unknown } | null | undefined)?.swayp_state))
+      .filter((state) => Number.isFinite(state));
+    const delivered = guide.delivery_status === "entregado" || guide.swayp_state === SWAYP_ENTREGADA || states.includes(SWAYP_ENTREGADA);
+    const visits = states.filter((state) => state === SWAYP_NOVEDAD).length + (delivered ? 1 : 0);
+    if (visits) return visits;
+    const returned = SWAYP_DEVOLUCION.has(guide.swayp_state ?? -1) || guide.swayp_state === SWAYP_NOVEDAD || states.some((state) => SWAYP_DEVOLUCION.has(state));
+    return returned ? 1 : 0;
+  }
+  if (courier === "tanders") {
+    const code = (guide.reported_status ?? "").trim().toUpperCase();
+    return guide.delivery_status === "entregado" || TANDERS_VISITED.has(code) ? 1 : 0;
+  }
+  return 0;
 }
 
 export function isAgencyCourier(courier: string | null | undefined): boolean {

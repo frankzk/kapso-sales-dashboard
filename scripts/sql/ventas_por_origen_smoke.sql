@@ -1,4 +1,4 @@
--- Ventas por origen y conversión por fuente (migración 0265). Corre en el
+-- Ventas por origen y conversión por fuente (migración 0268). Corre en el
 -- clúster desechable después de todas las migraciones y reutiliza las tiendas
 -- y usuarios de rls_smoke.sql: A (viewer de la tienda A), C (owner de las dos),
 -- D (sin tiendas). Todo dentro de una transacción que se deshace al final.
@@ -217,7 +217,7 @@ do $$
 begin
   if has_function_privilege('anon', 'public.ventas_por_origen(uuid[], date, date)', 'execute')
      or has_function_privilege('anon', 'public.conversion_por_fuente(uuid[], date, date)', 'execute') then
-    raise exception 'anon no debe poder ejecutar las funciones de 0265';
+    raise exception 'anon no debe poder ejecutar las funciones de 0268';
   end if;
   if has_table_privilege('anon', 'public.pedidos_canal', 'select') then
     raise exception 'anon no debe poder leer pedidos_canal';

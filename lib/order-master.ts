@@ -44,14 +44,17 @@ import {
 } from "@/lib/order-macro-stage";
 import {
   isGeneralStatus,
+  courierVisitAttempts,
   isOperationalStatus,
   ownRiderAttempts,
   resolveOrderState,
+  urpiAttempts,
   type GuideSnapshot,
   type OrderEventSnapshot,
   type StatusOverride,
 } from "@/lib/order-status";
 import { salesChannel } from "@/lib/sales-channel";
+import { dispatchedWith, type RiderStop } from "@/lib/dispatched-with";
 import {
   activeCompanionLinks,
   borrowedHostEvents,
@@ -779,6 +782,46 @@ async function fetchGeoOverrides(
 }
 
 
+/**
+ * Las paradas de Grupo GF de cada pedido, con el motorizado de su ruta: los
+ * intentos del motorizado propio y el «Salió con» (MOM §9.3). Si la tabla no
+ * responde, el recálculo sigue sin ellas.
+ */
+async function fetchRiderStops(admin: SupabaseClient, ids: string[]): Promise<Map<string, RiderStop[]>> {
+  const out = new Map<string, RiderStop[]>();
+  for (const batch of chunk(ids, ID_BATCH)) {
+    const { data, error } = await admin
+      .from("delivery_stops")
+      .select("id,order_id,status,shipment_id,delivery_routes(riders(full_name))")
+      .in("order_id", batch);
+    if (error) return out;
+    type Row = { id: string; order_id: string; status: string | null; shipment_id: string | null; delivery_routes: { riders: { full_name: string | null } | null } | null };
+    for (const row of (data ?? []) as unknown as Row[]) {
+      const stop: RiderStop = { id: row.id, status: row.status, shipment_id: row.shipment_id, rider: row.delivery_routes?.riders?.full_name ?? null };
+      out.set(row.order_id, [...(out.get(row.order_id) ?? []), stop]);
+    }
+  }
+  return out;
+}
+
+/**
+ * Intentos que reportó Urpi, por pedido (MOM §30.11). Es un dato de la fila,
+ * no decide la etapa: si la tabla no responde, el recálculo sigue sin ellos.
+ */
+async function fetchUrpiAttempts(admin: SupabaseClient, ids: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  for (const batch of chunk(ids, ID_BATCH)) {
+    const { data, error } = await admin
+      .from("urpi_report_rows")
+      .select("order_id,result_code")
+      .in("order_id", batch);
+    if (error) return out;
+    const byOrder = groupBy((data ?? []) as { order_id: string; result_code: string | null }[], (row) => row.order_id);
+    for (const [orderId, rows] of byOrder) out.set(orderId, urpiAttempts(rows));
+  }
+  return out;
+}
+
 export interface RecomputeResult {
   requested: number;
   written: number;
@@ -847,6 +890,8 @@ export async function recomputeOrderMaster(
   const drafts = await fetchDraftAddresses(admin, orders);
   const geoOverrides = await fetchGeoOverrides(admin, ids);
   const signals = await fetchPaymentSignals(admin, ids);
+  const urpiAttemptsByOrder = await fetchUrpiAttempts(admin, ids);
+  const riderStopsByOrder = await fetchRiderStops(admin, ids);
   const {
     tariffs,
     orgByStore,
@@ -1207,11 +1252,29 @@ export async function recomputeOrderMaster(
       current_courier: state.currentCourier,
       last_courier: state.lastCourier,
       courier_count: state.courierCount,
-      // Lo que reportan los couriers más las paradas de nuestros motorizados.
-      // El costo logístico sigue con `state.attemptCount`: Grupo GF no cobra
-      // por intento adicional, y sumarle sus visitas a la tarifa de otro
-      // courier (un pedido que luego salió con Aliclik) inventaría un costo.
-      attempt_count: state.attemptCount + ownRiderAttempts(stateEvents),
+      // Lo que reportan los couriers, más las paradas de nuestros motorizados
+      // y los intentos del reporte de Urpi. El costo logístico sigue con
+      // `state.attemptCount`: ni Grupo GF ni Urpi cobran por intento adicional
+      // en `cost_tariffs`, y sumar sus visitas a la tarifa de otro courier (un
+      // pedido que luego salió con Aliclik) inventaría un costo.
+      attempt_count:
+        state.attemptCount +
+        // Swayp y Tanders no mandan el número: se deduce de sus estados, y solo
+        // suma lo que pase de lo que ya traía la guía (las reprogramaciones).
+        guides.reduce(
+          (sum, g) => sum + Math.max(0, courierVisitAttempts(g, orderEvents) - (g.aliclik_attempts ?? g.reroute_attempts ?? 0)),
+          0,
+        ) +
+        ownRiderAttempts(stateEvents, riderStopsByOrder.get(order.id) ?? []) +
+        (urpiAttemptsByOrder.get(order.id) ?? 0),
+      // Con quién salió: cada motorizado de Grupo GF y cada courier externo
+      // cuya guía llegó a salir (0266, lib/dispatched-with.ts).
+      dispatched_with: dispatchedWith({
+        guides,
+        stops: riderStopsByOrder.get(order.id) ?? [],
+        events: orderEvents,
+        urpiAttempts: urpiAttemptsByOrder.get(order.id) ?? 0,
+      }),
       guide_code: state.guideCode,
       // De la guía VIGENTE, igual que el costo real de arriba: si un pedido
       // salió dos veces, lo que importa es el cobro de la que está entregando.

@@ -76,7 +76,7 @@ import { IconDownload } from "@/components/icons";
 // «Canal de cierre» y «Conversión por fuente» cuentan TODAS las ventas de la
 // tienda, por quién las cerró. «Conversión del bot» y los módulos que leen los
 // pedidos del bot (`orders`, `daily_rollups`) siguen siendo solo del bot, y lo
-// dicen. Sin la migración 0265 la cabecera vuelve a la vista anterior —solo el
+// dicen. Sin la migración 0268 la cabecera vuelve a la vista anterior —solo el
 // bot— con un aviso, nunca en silencio.
 
 interface OpsPayload {
@@ -324,7 +324,7 @@ export function ExecutiveDashboard({
    *  él —o sin la migración— «Canal de cierre» vuelve a la vista anterior, que
    *  solo ve los pedidos del bot, y lo dice. */
   closing?: ClosingChannelResult;
-  /** TODAS las ventas por tienda, día y canal (MOM §17.4, función 0265): la
+  /** TODAS las ventas por tienda, día y canal (MOM §17.4, función 0268): la
    *  cabecera, «Ventas por día» y «Por tienda». Obligatoria por la misma razón
    *  que `attribution`: sin ella la cabecera volvería a contar solo el bot en
    *  silencio. Sin la migración, la vista anterior con un aviso. */
@@ -347,7 +347,7 @@ export function ExecutiveDashboard({
 }) {
   const names: Record<string, string> = Object.fromEntries(stores.map((s) => [s.id, s.name]));
   // Los cierres diarios del bot (`daily_rollups`): la conversión del bot, la
-  // primera respuesta, el embudo y, sin la 0265, la vista anterior de cabecera.
+  // primera respuesta, el embudo y, sin la 0268, la vista anterior de cabecera.
   const totals = aggregateRollups(rollups);
   const prev = aggregateRollups(prevRollups);
   const hasPrev = prevRollups.length > 0;
@@ -356,7 +356,7 @@ export function ExecutiveDashboard({
   const now = nowIso ?? new Date().toISOString();
 
   // ── Todas las ventas por origen (MOM §17.4) ────────────────────────────────
-  // `period` es null si la 0265 no responde (sin migración, sin cobertura o con
+  // `period` es null si la 0268 no responde (sin migración, sin cobertura o con
   // error): la cabecera vuelve a los cierres diarios del bot y lo dice.
   const period = origin.status === "ok" ? salesPeriod(origin, rollups, prevRollups, prevRange) : null;
   const fullDay = (iso: string) => `${shortDay(iso)} ${iso.slice(0, 4)}`;
@@ -365,7 +365,7 @@ export function ExecutiveDashboard({
   const originCopy = origin.status === "ok" ? coverageCopy(origin.plan, storeName, fullDay) : null;
   const originNote =
     origin.status === "sin_migracion"
-      ? `Falta aplicar la migración 0265 en la base: mientras tanto ${singleStore ? "estas cifras y «Ventas por día»" : "estas cifras, «Ventas por día» y «Por tienda»"} cuentan solo los pedidos del bot de Kapso.`
+      ? `Falta aplicar la migración 0268 en la base: mientras tanto ${singleStore ? "estas cifras y «Ventas por día»" : "estas cifras, «Ventas por día» y «Por tienda»"} cuentan solo los pedidos del bot de Kapso.`
       : origin.status === "sin_cobertura"
         ? noCoverageCopy(origin.plan, storeName, fullDay).note
         : origin.status === "error"
@@ -1050,7 +1050,7 @@ export function ExecutiveDashboard({
         tone: "muted",
         sub:
           sc.status === "sin_migracion"
-            ? "Falta aplicar la migración 0265"
+            ? "Falta aplicar la migración 0268"
             : sc.status === "sin_cobertura"
               ? noCoverageCopy(sc.plan, storeName, fullDay).sub
               : "No se pudo calcular",

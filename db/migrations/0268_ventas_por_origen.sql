@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0265_ventas_por_origen.sql — el Consolidado cuenta TODAS las ventas de la
+-- 0268_ventas_por_origen.sql — el Consolidado cuenta TODAS las ventas de la
 -- tienda, por origen, y la conversión de cada fuente de leads (MOM §17.4,
 -- 14-10-2026).
 --
@@ -76,11 +76,16 @@
 -- ============================================================================
 
 -- 5. Nacimiento del lead, por tienda. En producción: concurrently, a mano, antes.
+-- Aun con los índices ya creados, `if not exists` toma por un instante un
+-- bloqueo de escritura sobre `leads` antes de ver que existen: si tuviera que
+-- esperar a otra transacción, que falle en limpio en vez de encolar escrituras.
+set lock_timeout = '5s';
 create index if not exists leads_store_first_seen_idx
   on public.leads (store_id, first_seen_at);
 create index if not exists leads_store_created_sin_first_seen_idx
   on public.leads (store_id, created_at)
   where first_seen_at is null;
+reset lock_timeout;
 
 -- 1. La regla del canal, en un solo lugar (movida tal cual de 0259).
 create or replace view public.pedidos_canal with (security_invoker = true) as

@@ -30,6 +30,7 @@ const SET_KEYS: { param: string; field: keyof MasterFilters }[] = [
   { param: "cv", field: "coverages" },
   { param: "sw", field: "swaypAvailability" },
   { param: "cn", field: "salesChannels" },
+  { param: "sc", field: "dispatchedWith" },
   { param: "pk", field: "pickupStates" },
   { param: "gd", field: "managementDays" },
 ];

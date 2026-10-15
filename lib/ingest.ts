@@ -891,7 +891,7 @@ async function processOrderWebhook(
   // sobre tag:kapso en `recompute_daily_rollups` y en lib/access.ts:getOrders,
   // así que ampliar la ingesta no mueve ninguna cifra histórica de esos
   // módulos. La cabecera del tablero, en cambio, cuenta todos los pedidos
-  // desde la 0265 (`ventas_por_origen`, MOM §17.4).
+  // desde la 0268 (`ventas_por_origen`, MOM §17.4).
   const isKapsoOrder = hasKapsoTag(row.tags);
 
   const orderId = payload?.id != null ? String(payload.id) : null;

@@ -462,6 +462,10 @@ describe("las tres vías que crean pedidos ya no inventan `kapso`", () => {
     const gen = src.slice(src.indexOf("export async function generateOrder"));
     expect(gen).toContain("insertOrderIfAbsent(admin, {");
     expect(gen).not.toMatch(/tags:\s*reuseExistingDraft\s*\?\s*\[\s*"kapso"/);
+    // Ni la conversación del lead: el borrador no la lleva a Shopify, y con
+    // ella el Master clasificaría el carrito reusado como «Chatbot».
+    const insert = gen.slice(gen.indexOf("insertOrderIfAbsent(admin, {"));
+    expect(insert.slice(0, insert.indexOf("});"))).toContain("kapso_conversation_id: null,");
     expect(gen).not.toContain('nowIso.slice(0, 10)');
     expect(gen).toContain("recomputeRollupsForLocalDay(admin, ctx.storeId, nowIso)");
   });
@@ -501,8 +505,8 @@ describe("el orden de los canales es uno solo: SQL, código y MOM", () => {
     expect(order).toEqual([...CLOSING_CHANNELS]);
   });
 
-  it("la vista `pedidos_canal` de la 0265, que hoy usa la función, también", () => {
-    const sql = read("db/migrations/0265_ventas_por_origen.sql");
+  it("la vista `pedidos_canal` de la 0268, que hoy usa la función, también", () => {
+    const sql = read("db/migrations/0268_ventas_por_origen.sql");
     const view = sql.slice(sql.indexOf("create or replace view public.pedidos_canal"), sql.indexOf("revoke all on public.pedidos_canal"));
     const order = [...view.matchAll(/then '([a-z_]+)'|else '([a-z_]+)'/g)].map((m) => m[1] ?? m[2]);
     expect(order).toEqual([...CLOSING_CHANNELS]);

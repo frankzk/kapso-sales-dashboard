@@ -374,7 +374,7 @@ neto, canal, cupón) and sanity-check the assignment.
   queda casi siempre en cero. La tarjeta «Canal de cierre» del Consolidado ya
   no usa esto desde el 14-10-2026: clasifica TODAS las ventas por
   `order_sales` (0259, MOM §17.3).
-- **Corrección (14-10-2026, 0265):** desde la 0265 la cabecera del tablero
+- **Corrección (14-10-2026, 0268):** desde la 0268 la cabecera del tablero
   cuenta todas las ventas (MOM §17.4). Este módulo sigue sobre los pedidos del
   bot: cuadra con el total de esos pedidos, no con la cabecera.
 - **ROAS** on the Meta row = attributed revenue / Meta ad spend for the range
@@ -501,7 +501,7 @@ de couriers, intentos y comentarios.
   la pasada `shopify_all` y el webhook reescriben `tags` con lo de Shopify, y
   esos pedidos salían del conteo en minutos (1 de 2.916 ventas de asesora la
   conservaba). Desde el 14-10-2026 ya no se escribe; quién cerró cada venta lo
-  decide `canal_de_cierre` (0259, MOM §17.3). Y desde la 0265 (MOM §17.4) la
+  decide `canal_de_cierre` (0259, MOM §17.3). Y desde la 0268 (MOM §17.4) la
   cabecera, «Ventas por día» y «Por tienda» cuentan todas las ventas con
   `ventas_por_origen`; `getOrders`, `getRollups` y `recompute_daily_rollups`
   siguen con `tag:kapso` para los módulos que son del bot y lo dicen.
@@ -514,7 +514,7 @@ de couriers, intentos y comentarios.
   También es el piso de «Canal de cierre» (MOM §17.3), que cuenta desde el más
   tardío entre esta fecha y el día en que cada tienda empezó a usar Kapta (su
   primera venta de asesora registrada o, sin ninguna, su primer lead); con
-  varias tiendas, cada una desde su propio día (desde la 0265; antes, desde la
+  varias tiendas, cada una desde su propio día (desde la 0268; antes, desde la
   que empezó último). Lo mismo vale para la cabecera y «Conversión por fuente»
   (MOM §17.4). Moverla hacia atrás no amplía nada más allá de ese inicio;
   adelantarla sí recorta.
@@ -1843,7 +1843,7 @@ vencimiento son lo único que lo acota.
   no secrets) confirms the deployment is serving.
 - **Backfill parity**: in Shopify Admin, filter orders by `tag:kapso` for a date
   range and compare the count with the sum of `ordenes` in «Resumen diario del
-  bot CSV» for the same range. They should match. (Since 0265 the headline
+  bot CSV» for the same range. They should match. (Since 0268 the headline
   «Pedidos» counts ALL orders, MOM §17.4: compare it with the Master instead.)
 - **Webhook**: create a test order in Shopify (or re-trigger a webhook) → it
   appears in the dashboard within seconds; re-delivering it does not duplicate.
@@ -2660,6 +2660,10 @@ no se borra, así que se cerró lo que podía mandar una que nadie pidió:
    0261: aplica primero db/migrations/0261_invoices_manual.sql.» y no cambia
    nada. **Si alguien vuelve a correr la 0261 después, hay que volver a correr
    la 0262**: la 0261 reescribe el turno sin esta revisión, y nada lo avisa.
+   **Con la 0267 aplicada, lo que se vuelve a correr después de la 0261 es la
+   0267 (no la 0262)**: la 0262 pasaría su guarda y dejaría los dos turnos, el
+   de once y el de doce, y la llamada por nombre del código seguiría fallando
+   (sección «15-10-2026 · 0267», más abajo).
    **Se puede aplicar ya, con el código que hoy está en producción** (con la
    0261 delante): ese código pide el turno con los nueve argumentos por nombre
    y ya manda en `p_basis` si es prepago web y el id de cada pago, que es lo
@@ -2737,7 +2741,10 @@ no se borra, así que se cerró lo que podía mandar una que nadie pidió:
 9. **Manual: las primeras boletas reales, una a una** (MOM §35.7). Pasar el
    RUC a «Manual» en Ajustes. La base lo rechaza sin token, sin «Emitir desde»
    o sin una prueba de conexión que leyó el mismo RUC, y «Emitir desde» se
-   mueve al momento del cambio: nada pagado antes sale. El barrido sigue
+   mueve al momento del cambio: el barrido no emite nada pagado antes. Un
+   pedido pagado desde el 01/10/2026 y antes de ese momento solo sale con
+   «Emitir esta boleta» y la casilla «Revisé en SimpleFact y este pedido no
+   tiene boleta» (sección «15-10-2026 · 0267», más abajo). El barrido sigue
    simulando, nunca le pide a SimpleFact una venta, y concilia lo que quede en
    duda. Antes, la 0262 aplicada (paso 4). Para emitir, en producción —una
    vista previa no emite (paso 5)—: abrir el pedido, panel «Comprobante»,
@@ -2855,6 +2862,118 @@ conexión, también cuando sale de «Emitir esta boleta». Ajustes lo dice en ro
 volver a Real hay que corregir lo que falló (el token o el subdominio) y pulsar
 «Probar conexión» de nuevo. Lo mismo para volver a Manual.
 
+### 15-10-2026 · «Emitir esta boleta» para lo pagado antes de «Emitir desde» (0267, MOM §35)
+
+Decisión del owner (15-10-2026). Con el RUC en «Manual», «Emitir esta boleta»
+también sirve para un pedido pagado **antes** de «Emitir desde», si se pagó
+desde el **01/10/2026 00:00 (hora de Lima)**: el último pago registrado y
+también el primer dinero, la fecha más temprana entre la del comprobante
+(`order_payments.paid_at`, cuándo se movió la plata) y la de registro de cada
+pago validado. Un pago cuyo comprobante dice 29/09 y que entró a Kapta el
+01/10 no pasa. Antes de Kapta las boletas se
+emitían a mano en SimpleFact, y Kapta no sabe si ese pedido ya tiene la suya:
+por eso la confirmación pide marcar «Revisé en SimpleFact y este pedido no
+tiene boleta», y sin esa marca no emite. Una boleta de más es pagar el
+impuesto dos veces. **El barrido nunca va hacia atrás**: en Simulación, en
+Manual y en Real, lo pagado antes de «Emitir desde» sigue en
+`antes_de_inicio`. «Emitir desde» no cambia: Ajustes sigue sin aceptar una
+fecha pasada, y un cambio de modo la sigue moviendo al momento del cambio. Con
+«Emitir desde» en el futuro, nada pagado antes de él sale, ni con el botón. Sin
+variables de entorno nuevas; `MOM_RESOLUTION_VERSION` no cambia.
+
+1. **Migración `0267_invoices_backfill.sql`**, a mano, DESPUÉS de la 0262 y
+   ANTES del código que manda `p_backfill`. Pegar el archivo en el editor SQL
+   de Supabase, que la corre en una transacción (con `psql`:
+   `psql -1 -v ON_ERROR_STOP=1 "$DATABASE_URL" -f db/migrations/0267_invoices_backfill.sql`;
+   sin `-1` hay un instante sin `invoice_claim` entre el `drop` de la firma de
+   once y el `create` de la de doce). Cambia solo `invoice_claim`: borra la
+   firma de once argumentos y crea la de doce, con un argumento nuevo al
+   final, `p_backfill boolean default false`, y el cuerpo de la 0262 tal cual
+   salvo dos cosas:
+   - la fecha: lo pagado antes de «Emitir desde» pasa solo con `p_backfill`,
+     una fila real, el RUC en Manual, quién la pidió (`p_created_by`) y las
+     dos fechas de pago —la del código y la de la base— desde el 01/10/2026
+     00:00 de Lima, y el primer dinero también: la fecha más temprana entre
+     `paid_at` y `registered_at` de los pagos validados (sin ellos, la fecha
+     del pedido). Y solo con «Emitir desde» ya llegado
+     (`v_iss.emit_from <= now()`). Sin «Emitir desde» o sin fecha de pago,
+     `antes_de_inicio`, como siempre;
+   - la fila que sale así lleva en su base `pagado_antes_de_emitir_desde: true`.
+
+   El turno sigue solo para `service_role`. No toca filas, ni triggers, ni otra
+   función, y no toma candados de tablas. Es idempotente: si en alguna base ya
+   se corrió una versión anterior de la 0267 (sin el primer dinero, o sin
+   mirar que «Emitir desde» ya llegó), se vuelve a correr y el turno queda con
+   los dos (`like '%v_first%'` y `like '%v_iss.emit_from <= now()%'`, abajo).
+   **Va después de la 0262**: si sigue el turno de nueve argumentos, o no hay
+   ni el de once ni el de doce, se detiene con «La 0267 va después de la 0262:
+   aplica primero db/migrations/0261_invoices_manual.sql y
+   db/migrations/0262_invoices_claim_coverage.sql.» y no cambia nada. **Si
+   alguien vuelve a correr la 0261 después, hay que volver a correr la 0267**:
+   quedan dos turnos, el de once y el de doce, y la llamada por nombre del
+   código falla por ambigua: no emite ni simula nada hasta volver a correr la
+   0267. La 0262 sola, después de la 0267, se detiene en su guarda y no
+   cambia nada.
+   **Se puede aplicar ya, con el código que hoy está en producción**: ese
+   código pide el turno por nombre, con nueve u once argumentos, y con un solo
+   turno esas llamadas van al de doce con `p_backfill` en falso: hace lo mismo
+   que antes. **Si el código llega antes que la 0267, nada se emite de más y
+   nada se pone rojo**: lo pagado desde «Emitir desde» se emite como siempre
+   (el código no manda `p_backfill` en un pedido normal), y un pedido pagado
+   antes contesta `sin_migracion`, nombrando la 0267, sin reservar ni enviar
+   nada. Aplicarla y volver a pulsar.
+   **Comprobar**, solo lectura:
+   - `select pg_get_function_identity_arguments(oid) from pg_proc where proname = 'invoice_claim' and pronamespace = 'public'::regnamespace;`
+     — una sola fila, que termina en `p_created_by uuid, p_backfill boolean`;
+   - `select to_regprocedure('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)') is null;`
+     tiene que dar `true`: el de once ya no está;
+   - `select pg_get_functiondef('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)'::regprocedure) like '%pagado_antes_de_emitir_desde%';`
+     tiene que dar `true` (y lo mismo con `like '%v_first%'`, el primer
+     dinero, con `like '%v_iss.emit_from <= now()%'`, «Emitir desde» ya
+     llegado, y con `like '%sin_pago_completo%'` y `like '%for share%'`, que
+     trae de la 0262);
+   - `select has_function_privilege('authenticated', 'public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)', 'execute');`
+     tiene que dar `false` (y lo mismo con `anon`; con `service_role`, `true`);
+   - `select ruc, mode, emit_from, checked_ruc, check_error from invoice_issuers;`
+     y `select count(*) from order_invoices;` dicen lo mismo que antes de
+     aplicarla.
+2. **Desplegar** el código. Desde ahí, en un pedido pagado desde el 01/10 y
+   antes de «Emitir desde» (con su primer dinero también desde el 01/10), con
+   el RUC en «Manual», el panel «Comprobante» (y «Emitir» en Ajustes →
+   últimos comprobantes) ofrece «Emitir esta boleta», y la confirmación dice
+   cuándo se pagó, desde cuándo emite el RUC y, si es de otro momento, cuándo
+   se hizo el primer pago. **Antes de marcar la casilla, buscar el pedido en
+   SimpleFact** (por su número, su total y su fecha, desde la del primer
+   pago): si ya tiene boleta, no se emite; se registra con «Ya tiene
+   comprobante». Si el panel se relee con la confirmación abierta y cambia el
+   RUC, el total o las fechas, la confirmación se cierra y la casilla se
+   desmarca: se vuelve a abrir y a revisar. En una vista previa no hay botón,
+   como siempre.
+
+**Qué mirar después**, solo lectura:
+`select order_name, paid_at, mode, status, created_by is not null as con_quien from order_invoices where basis ? 'pagado_antes_de_emitir_desde' order by created_at desc;`
+— cada fila `real`, con `con_quien = true` y `paid_at` desde el 01/10/2026
+05:00 UTC; nada en `emitiendo` por más de unos minutos. Y el primer dinero de
+cada una, también desde el 01/10/2026 05:00 UTC:
+`select i.order_name, min(least(coalesce(p.paid_at, p.registered_at), p.registered_at)) as primer_dinero from order_invoices i join order_payments p on p.order_id = i.order_id and p.validation_status = 'validado' where i.basis ? 'pagado_antes_de_emitir_desde' group by 1 order by 2;`
+Revisar cada una en SimpleFact, como las demás de Manual.
+
+**Antes de subir**: `bash scripts/verify-db.sh` corre
+`scripts/sql/invoices_smoke.sql`, que también corre la 0267 sobre la 0262 (dos
+veces), con la 0261 corrida otra vez después, y su guarda sin la 0262 delante.
+
+**Marcha atrás.** Lo emitido no se borra: ya está en SUNAT, y una boleta que no
+correspondía se anula con nota de crédito en SimpleFact (MOM §35.9). Para que
+nadie más emita hacia atrás basta con no pulsar el botón en esos pedidos, o
+bajar el RUC a «Simulación». No hace falta revertir la 0267: el código
+anterior pide el turno por nombre, sin `p_backfill`, y el de doce lo acepta con
+`p_backfill` en falso. Si aun así se quiere volver al turno de la 0262, en una
+sola transacción:
+`psql -1 -v ON_ERROR_STOP=1 "$DATABASE_URL" -c "drop function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean);" -f db/migrations/0261_invoices_manual.sql -f db/migrations/0262_invoices_claim_coverage.sql`
+(la 0261 recrea el turno de once y la 0262 le pone la revisión del pago).
+Desde ahí, el código nuevo contesta `sin_migracion` en lo pagado antes de
+«Emitir desde», y lo demás sigue igual.
+
 ### 15-10-2026 · Intentos del motorizado propio y filtro de intentos (`mom-v1.27`)
 
 Sin migraciones, variables de entorno ni RPC nuevas. `MOM_RESOLUTION_VERSION`
@@ -2866,6 +2985,36 @@ con un «No entregado» de motorizado propio tenían `attempt_count = 0`.
 **Qué mirar después.** Cuando el cron termine,
 `select count(*) from order_master where macro_version <> 'mom-v1.27';` da `0`,
 y #KP140941 dice 2 intentos (3 si la salida del 15/10 ya se reportó).
+
+### 15-10-2026 · Intentos de Urpi en el Master (0265, `mom-v1.28`) y canal de venta (0264)
+
+- **0264** (ya aplicada en producción antes del #977): `order_master.sales_channel`
+  y su relleno.
+- **0265 antes del código**: `order_master_stale` mira también la última
+  escritura de `urpi_report_rows`. Misma firma y permisos; `create or replace`,
+  sin `drop`.
+- `MOM_RESOLUTION_VERSION` sube a `mom-v1.28`: el cron recalcula y la columna de
+  intentos suma los de Urpi (entregado, cancelado, reprogramado). No cambia
+  etapas ni costos.
+
+**Qué mirar después.** #KP131545 dice 1 intento cuando su fila tenga
+`macro_version = 'mom-v1.28'`.
+
+### 15-10-2026 · Intentos de Swayp y Tanders (`mom-v1.29`)
+
+Sin migraciones. `MOM_RESOLUTION_VERSION` sube a `mom-v1.29`: la columna de
+intentos suma las visitas que se deducen de los estados de Swayp (Novedad,
+Entregada, Devolución) y de Tanders (Delivered, Returning, Returned). No cambia
+etapas ni costos.
+
+### 15-10-2026 · «Salió con» y paradas del cuaderno en los intentos (0266, `mom-v1.30`)
+
+- **0266 antes del código**: `order_master.dispatched_with` (text[], índice
+  GIN) y `master_facets` con la clave `dispatched_with`. `create or replace`,
+  sin `drop`; el recálculo escribe la columna, así que tiene que existir antes.
+- `MOM_RESOLUTION_VERSION` sube a `mom-v1.30`: el cron rellena «Salió con» y
+  suma a los intentos de Grupo GF las paradas del cuaderno histórico. No cambia
+  etapas ni costos.
 
 ### 14-10-2026 · Canal de cierre de todas las ventas (0259, MOM §17.3)
 
@@ -2901,7 +3050,7 @@ el webhook no la trajo, tal como viene de Shopify.
      el periodo 14-09 → 13-10-2026: asesora 2.651 pedidos y S/ 481.451 de
      S/ 1.181.080 en total (≈ 41 %).
    - Las cifras de arriba (Ingresos, Pedidos, Conversión) siguen siendo solo
-     del bot (§5h; con la 0265, Ingresos, Pedidos y Ticket pasan a todas las
+     del bot (§5h; con la 0268, Ingresos, Pedidos y Ticket pasan a todas las
      ventas y la Conversión sigue siendo del bot, ahora «Conversión del bot»;
      ver su entrada), pero ya no suben unos minutos con cada venta de asesora: la
      etiqueta `kapso` que les ponía el botón duraba hasta la siguiente
@@ -2913,7 +3062,7 @@ el webhook no la trajo, tal como viene de Shopify.
      25-06 y 04-07-2026 en las dos tiendas de hoy). Antes, una venta de asesora
      caería en «Web» u «Otros». En el Consolidado cuenta desde la tienda que
      empezó último (hoy, 04-07-2026) y el aviso la nombra (**corrección, mismo
-     día, 0265:** cada tienda cuenta desde su propio día, ver su entrada). Un periodo que empieza
+     día, 0268:** cada tienda cuenta desde su propio día, ver su entrada). Un periodo que empieza
      antes se cuenta desde ese día y la tarjeta lo dice; uno entero anterior
      vuelve a la vista de respaldo con su aviso. Una tienda que todavía no usa
      Kapta queda fuera del conteo, nombrada; si no se puede leer desde cuándo
@@ -2941,7 +3090,7 @@ el webhook no la trajo, tal como viene de Shopify.
    de lectura y nadie más la llama). Si se quiere quitar:
    `drop function if exists public.canal_de_cierre(uuid[], date, date);`
 
-### 14-10-2026 · Ventas del periodo por origen y conversión por fuente (0265, MOM §17.4)
+### 14-10-2026 · Ventas del periodo por origen y conversión por fuente (0268, MOM §17.4)
 
 Las cifras de cabecera (Ingresos, Pedidos, Ticket promedio), «Ventas por día»
 y «Por tienda» dejan de contar solo los pedidos con `kapso` y cuentan TODAS las
@@ -2958,19 +3107,24 @@ propio día en Kapta, también en «Canal de cierre».
    `create index concurrently if not exists leads_store_created_sin_first_seen_idx on public.leads (store_id, created_at) where first_seen_at is null;`
    Un `create index` normal bloquearía las escrituras de `leads` mientras se
    construye. La migración los vuelve a pedir con `if not exists`, que entonces
-   no hace nada. Son de columnas simples a propósito: la app lee como
+   no los construye, pero toma por un instante un bloqueo de escritura sobre
+   `leads`; por eso la migración pone `lock_timeout = '5s'` en esas dos líneas y
+   falla en limpio si tuviera que esperar (se reintenta). Son de columnas simples a propósito: la app lee como
    `authenticated`, bajo RLS, y Postgres no lleva al índice un rango sobre
    `coalesce(first_seen_at, created_at)`. Comprobar que quedaron válidos:
    `select indexrelid::regclass, indisvalid from pg_index where indexrelid in ('public.leads_store_first_seen_idx'::regclass, 'public.leads_store_created_sin_first_seen_idx'::regclass);`
    → `t` en los dos (si uno da `f`, `drop index concurrently` de ese y
    repetirlo).
-1. **Migración `0265_ventas_por_origen.sql`**, a mano y ANTES del código:
-   `psql "$DATABASE_URL" -f db/migrations/0265_ventas_por_origen.sql`. Crea la
+1. **Migración `0268_ventas_por_origen.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0268_ventas_por_origen.sql`. Crea la
    vista `pedidos_canal` (con la sesión de quien mira; `authenticated` solo
    puede leerla y `anon` nada), rehace `canal_de_cierre` encima de ella —mismo
    resultado que la 0259, la regla del canal pasa a vivir en un solo lugar— y
    crea las funciones de lectura `ventas_por_origen` y `conversion_por_fuente`
-   (SECURITY INVOKER, sin `anon`). No escribe datos y no lleva `drop`. Medido
+   (SECURITY INVOKER, sin `anon`). No escribe datos y no lleva `drop`. Solo
+   necesita la 0259 delante; no depende de la 0264 a la 0267 (Master y
+   comprobantes), que llevan número menor solo porque llegaron antes a la
+   integración. Medido
    en producción como el owner, 30 días, con la primera versión de la consulta:
    la cohorte de `conversion_por_fuente`, 0,39 s recorriendo los 59.598 leads.
    La versión final parte el nacimiento en dos rangos de columnas simples y
@@ -2985,7 +3139,7 @@ propio día en Kapta, también en «Canal de cierre».
    «Orgánico», a propósito.)
    **Sin ella el código no se rompe**: la cabecera, «Ventas por día» y «Por
    tienda» vuelven a la vista anterior —«Ingresos del bot», «Pedidos del bot»…—
-   con un aviso arriba de las cifras («Falta aplicar la migración 0265…»), y
+   con un aviso arriba de las cifras («Falta aplicar la migración 0268…»), y
    «Conversión por fuente» dice lo mismo. «Canal de cierre» sigue con la 0259.
    **No está aplicada en producción**: necesita la autorización del owner.
 2. **Qué cambia en las cifras**:
