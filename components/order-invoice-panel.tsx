@@ -43,6 +43,7 @@ import {
 import {
   INVOICE_MODE_LABEL,
   INVOICE_REASON_LABEL,
+  INVOICE_RELEASE_UNKNOWN_TEXT,
   INVOICE_STATUS_LABEL,
   LIVE_REAL_STATUSES,
   invoiceNoteRef,
@@ -161,6 +162,40 @@ export function emitConfirmation(emit: Pick<InvoicePanelEmitNow, "ruc" | "legalN
 }
 
 /**
+ * «15:42», en hora de Lima. A mano y no con Intl, como `invoiceReleaseWaitText`
+ * en lib/invoicing/rules.ts: Perú es UTC-5 fijo, sin horario de verano, y así
+ * el panel dice la misma hora que el servidor. null si no es una fecha.
+ */
+function horaLima(iso: string): string | null {
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? new Date(t - 5 * 3_600_000).toISOString().slice(11, 16) : null;
+}
+
+/**
+ * ¿Se puede pulsar ya «No está en SimpleFact: volver a intentar» en este
+ * `en_duda`? null: sí. Si no, lo que se dice junto al botón, que queda
+ * deshabilitado (§35.4).
+ *
+ * POR QUÉ ESPERAR. Un POST que se cortó por tiempo puede haber llegado, y
+ * SimpleFact tardar en listarlo: quien no la encuentra en ese rato la libera,
+ * vuelve a pulsar «Emitir esta boleta» y salen dos boletas a SUNAT. El servidor
+ * no la libera antes de `releaseAvailableAt` (`releaseDoubtfulInvoice`); el
+ * panel no ofrece un botón que va a decir que no. «Sí está en SimpleFact:
+ * registrar su serie» no espera: registrar una boleta que existe no emite otra.
+ *
+ * FALLA CERRADA. Sin `releaseAvailableAt` (no se supo desde cuándo está en
+ * duda) o con una fecha que no se entiende, tampoco: el servidor no la libera.
+ * Un reloj que no se entiende no cuenta como «ya pasó».
+ */
+export function releaseWaitText(releaseAvailableAt: string | null, now: number): string | null {
+  const at = releaseAvailableAt ? Date.parse(releaseAvailableAt) : Number.NaN;
+  const hora = releaseAvailableAt ? horaLima(releaseAvailableAt) : null;
+  if (!Number.isFinite(at) || !hora) return INVOICE_RELEASE_UNKNOWN_TEXT;
+  if (Number.isFinite(now) && now >= at) return null;
+  return `Podrás liberarla desde las ${hora} (hora de Lima): SimpleFact puede tardar en mostrar una boleta que sí recibió.`;
+}
+
+/**
  * Un envío a la vez. Mientras el primero no vuelve, el segundo no sale y
  * devuelve null: SimpleFact no tiene llave de idempotencia y el mismo pedido
  * mandado dos veces son dos boletas (§35.1). El índice de la base frena la
@@ -222,7 +257,10 @@ export function invoicePanelView(data: InvoicePanelData): InvoicePanelView {
   const failed = !live && lastReal?.status === "error" ? lastReal : null;
   const history = data.invoices.filter((i) => i.mode === "real" && i.status === "error" && i.id !== failed?.id);
   const reviewReason = data.review.state === "no" || data.review.state === "shopify" ? data.review.reason : null;
-  const canEmitNow = data.canManage && !live && data.emitNow !== null;
+  // `data.canEmitNow`: este despliegue es producción. Fuera de ella el servidor
+  // ya no manda `emitNow`; si llegara uno, tampoco hay botón (falla cerrada): la
+  // acción diría que no, y una vista previa comparte la base con producción.
+  const canEmitNow = data.canManage && !live && data.emitNow !== null && data.canEmitNow === true;
   const reviewIssuer = data.issuers.find((i) => i.id === reviewIssuerId(data.review));
 
   let badge: InvoicePanelView["badge"];
@@ -364,6 +402,22 @@ export function OrderInvoicePanelView({
   const { live, simulated, failed } = view;
   const review = data.review;
 
+  // «No está en SimpleFact: volver a intentar» espera a `releaseAvailableAt`
+  // (`releaseWaitText`). Se mide con la hora de cada pintada, y a esa hora el
+  // panel se vuelve a pintar solo: sin eso el botón seguía deshabilitado hasta
+  // que algo releyera el panel.
+  const releaseAt = live?.status === "en_duda" ? live.releaseAvailableAt : null;
+  const releaseWait = live?.status === "en_duda" ? releaseWaitText(releaseAt, Date.now()) : null;
+  const releaseWaitId = useId();
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const ms = (releaseAt ? Date.parse(releaseAt) : Number.NaN) - Date.now();
+    if (!(ms > 0)) return;
+    // setTimeout no espera más de ~24 días: si salta antes, `tick` lo reprograma.
+    const timer = setTimeout(() => setTick((n) => n + 1), Math.min(ms + 250, 2_147_483_647));
+    return () => clearTimeout(timer);
+  }, [releaseAt, tick]);
+
   return (
     <section aria-labelledby={`comprobante-${orderId}`} className={cn(CARD_ZONE, "mt-4 space-y-3 sm:mt-5")}>
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -396,7 +450,9 @@ export function OrderInvoicePanelView({
                 return ok;
               }}
             />
-          ) : doubt === "liberar" ? (
+          ) : doubt === "liberar" && !releaseWait ? (
+            // Abierto solo mientras se puede liberar: si el panel se releyó con
+            // un `en_duda` que todavía espera, vuelven los dos botones.
             <ReleaseDoubtForm
               mode={view.rucMode}
               pending={pending}
@@ -410,26 +466,36 @@ export function OrderInvoicePanelView({
           ) : (
             // Las dos salidas, una al lado de la otra: lo que se encontró en
             // SimpleFact decide cuál. Liberar una que existe es emitir otra.
-            <div className="flex flex-wrap gap-2">
-              {view.canConfirm && (
-                <OpsButton
-                  size="sm"
-                  disabled={pending}
-                  onClick={() => setDoubt("confirmar")}
-                  className="pointer-coarse:h-11"
-                >
-                  Sí está en SimpleFact: registrar su serie
-                </OpsButton>
-              )}
-              {view.canRelease && (
-                <OpsButton
-                  size="sm"
-                  disabled={pending}
-                  onClick={() => setDoubt("liberar")}
-                  className="pointer-coarse:h-11"
-                >
-                  No está en SimpleFact: volver a intentar
-                </OpsButton>
+            // Liberar espera a `releaseAvailableAt` y dice hasta cuándo;
+            // registrar su serie no espera.
+            <div className="space-y-2">
+              <div className="flex flex-wrap gap-2">
+                {view.canConfirm && (
+                  <OpsButton
+                    size="sm"
+                    disabled={pending}
+                    onClick={() => setDoubt("confirmar")}
+                    className="pointer-coarse:h-11"
+                  >
+                    Sí está en SimpleFact: registrar su serie
+                  </OpsButton>
+                )}
+                {view.canRelease && (
+                  <OpsButton
+                    size="sm"
+                    disabled={pending || releaseWait !== null}
+                    aria-describedby={releaseWait ? releaseWaitId : undefined}
+                    onClick={() => setDoubt("liberar")}
+                    className="pointer-coarse:h-11"
+                  >
+                    No está en SimpleFact: volver a intentar
+                  </OpsButton>
+                )}
+              </div>
+              {view.canRelease && releaseWait && (
+                <p id={releaseWaitId} className="text-[13px] leading-5 text-ink-600">
+                  {releaseWait}
+                </p>
               )}
             </div>
           )

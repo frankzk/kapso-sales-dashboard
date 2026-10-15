@@ -13032,11 +13032,13 @@ Estado: construido, y ningún RUC emite todavía. Existen las migraciones 0257
 (los arreglos de la revisión adversaria sobre la 0257: el turno que vuelve a
 revisar los pagos, la excepción de borrar la cuenta de una persona, el token
 nuevo que borra el motivo de la prueba anterior y los pedidos por revisar), las
-dos ya corridas en producción, y la 0261 (el modo «Manual» y el turno que dice
-qué fila pide y quién la pidió, 15-10-2026), que se aplica a mano antes de su
-código (35.8). Están también las reglas puras, el cliente de SimpleFact,
-el barrido (`/api/cron/invoices`), la sección «Boletas y facturas» de Ajustes
-y el panel «Comprobante» del drawer, con su «Emitir esta boleta» (35.7).
+dos ya corridas en producción; la 0261 (el modo «Manual» y el turno que dice
+qué fila pide y quién la pidió, 15-10-2026), y la 0262 (el turno que vuelve a
+revisar que la empresa recibió el pago, 15-10-2026), que se aplican a mano, en
+ese orden, antes de su código (35.8). Están también las reglas puras, el
+cliente de SimpleFact, el barrido (`/api/cron/invoices`), la sección «Boletas
+y facturas» de Ajustes y el panel «Comprobante» del drawer, con su «Emitir esta
+boleta» (35.7), que solo emite en producción.
 **Ningún RUC emite**: GRUPO GF S.A.C. nace dado de alta, en «Apagado» y sin
 token, con sus cuentas ya asignadas (35.2), y al 15-10-2026 está en
 «Simulación», con el token probado y ningún comprobante. Se enciende primero en
@@ -13185,11 +13187,11 @@ Flow si su pasarela es ese checkout o dice «flow» como palabra entera;
 cualquier otra, o ninguna, es de otra pasarela.
 
 Recién entonces se pide el turno (`invoice_claim`, 35.4), que revisa de nuevo,
-dentro de la base, que el pedido siga sin anular ni reembolsar y en soles, el
-modo, la conexión, el monto, que no haya otro comprobante y el tope del día:
-`sin_conexion`, `tope`. **Quien pide el turno dice qué fila pide** (0261). Sin
-decirlo, la del modo del RUC: real en Real, y simulada en Simulación y en
-Manual. El barrido pide la simulada de un RUC en Manual, y «Emitir esta
+dentro de la base, que el pedido siga sin anular ni reembolsar y en soles, que
+la empresa haya recibido el pago (0262, abajo), el modo, la conexión, el monto,
+que no haya otro comprobante y el tope del día: `sin_conexion`, `tope`.
+**Quien pide el turno dice qué fila pide** (0261). Sin decirlo, la del modo del
+RUC: real en Real, y simulada en Simulación y en Manual. El barrido pide la simulada de un RUC en Manual, y «Emitir esta
 boleta», la real. Una fila real solo la da un RUC en Real, o uno en Manual si
 se dice quién la pide (`p_created_by`), y una simulada, uno en Simulación o en
 Manual; si el RUC ya no está en ese modo —el owner lo cambió mientras tanto—,
@@ -13205,6 +13207,30 @@ anterior, no da el turno (`antes_de_inicio`). Así, un error en las reglas o en
 una lectura no manda a SUNAT la boleta de algo pagado antes de la fecha de
 inicio.
 
+**Que la empresa recibió el pago tampoco se lo cree** (0262). Entre la lectura
+del código y el turno pasa la relectura en Shopify, y en ese rato un pago
+validado se puede rechazar: rechazado el único, el turno se quedaba sin pagos y
+lo tomaba por un prepago web; rechazado uno de varios, lo validado ya no cubría
+el total. En los dos casos daba una fila real por un dinero que la empresa no
+recibió. Ahora, justo después de `pagos_en_revision`, el turno vuelve a revisar
+la condición 3 con los pagos y el pedido guardados, por el camino que dice la
+base del comprobante que manda el código (`p_basis`: prepago web o no). Sin
+prepago, tiene que haber pagos validados y su suma tiene que cubrir el total
+que se va a emitir, al céntimo (`sin_pago_completo`); y si el pedido guardado
+es un prepago web con pagos validados, `prepago_con_comprobantes`, como en las
+reglas. Con prepago, no puede quedar ningún pago vivo
+(`prepago_con_comprobantes`) y el pedido guardado tiene que ser de verdad un
+prepago web: pagado, por el checkout y sin nada reembolsado
+(`sin_pago_completo`). En los dos caminos, cada pago que nombra la base del
+comprobante tiene que seguir validado y ser de ese pedido
+(`sin_pago_completo`): la suma podría cubrir con otro, pero el comprobante
+diría que el dinero entró a la cuenta —y al RUC— de uno que ya no cuenta. Y los
+pagos del pedido quedan bloqueados hasta que el turno termina (35.4). Van en el
+orden de la tabla, antes que el RUC, el monto y el tope: un pedido que dejó de
+estar pagado contesta `sin_pago_completo` aunque su RUC esté apagado. Son
+motivos del pedido y no del RUC: el barrido sigue con los demás pedidos de ese
+RUC, y «Emitir esta boleta» dice el motivo sin haber llamado a SimpleFact.
+
 **Falla cerrada.** Si no se pudo leer algo —pagos, cuentas, el estado de
 cuenta, los links de Flow, Shopify—, el pedido no se emite en esa pasada. Un
 comprobante armado con datos a medias puede ir al RUC equivocado.
@@ -13218,6 +13244,14 @@ comprobante armado con datos a medias puede ir al RUC equivocado.
   RUC, revisa todo de nuevo, cuenta el tope del día y deja la fila en
   `emitiendo`. Recién entonces se llama a SimpleFact. «Emitir esta boleta»
   (35.7) pasa por el mismo turno, pidiendo una fila real.
+- **Los pagos, quietos mientras dura el turno** (0262). El turno bloquea los
+  pagos del pedido (`for share`) antes de revisarlos, hasta que termina. Cada
+  consulta de una función ve lo último que se guardó: sin el bloqueo, un pago
+  rechazado entre la revisión y la fila se colaba igual. Con él, quien rechaza
+  u observa un pago de ese pedido espera a que el turno termine y encuentra la
+  fila ya tomada: lo emitido no se toca, y el panel avisa «Un pago del
+  comprobante ya no está validado: revisa si corresponde una nota de
+  crédito.» (35.9).
 - **Lo que contestó SimpleFact:**
   - `emitida`: contestó con la venta (id, serie y correlativo).
   - `error`: contestó que no, con un 4xx que no deja duda (400, 401, 403, 404,
@@ -13234,6 +13268,20 @@ comprobante armado con datos a medias puede ir al RUC equivocado.
     registrar su serie», y pasa a `emitida`. Si confirma que no existe, la
     libera con «No está en SimpleFact: volver a intentar». Liberar una que
     existe es emitir otra.
+  - **Liberar espera 30 minutos desde que quedó en duda** (15-10-2026). Un
+    envío cortado por tiempo puede haber llegado, y SimpleFact tardar en
+    listarlo: quien no la encuentra en ese rato la libera, vuelve a pulsar
+    «Emitir esta boleta» y salen dos boletas. Mientras espera, la conciliación
+    la sigue buscando. El reloj es `updated_at`: el candado de la base lo pone
+    en cada cambio que deja pasar, y a una fila en duda solo se le escribe para
+    sacarla de la duda, así que es cuando pasó a `en_duda`; `created_at` queda
+    de piso. Antes de esa hora el servidor no la libera: «Espera hasta las
+    ‹HH:MM› (hora de Lima): SimpleFact puede tardar en mostrar una boleta que
+    sí recibió. Mientras tanto Kapta la sigue buscando.». La hora va redondeada
+    hacia arriba al minuto: a las ‹HH:MM› ya se puede. Si no se sabe desde
+    cuándo está en duda, no se libera: «No se pudo saber desde cuándo está en
+    duda: no se libera. Vuelve a abrir el pedido.». Registrar su serie no
+    espera: registrar una boleta que existe no emite otra.
   - Un `emitiendo` sin respuesta (la función se cortó a mitad del envío, o no
     se pudo guardar lo que contestó) se concilia igual pasados 10 minutos; si
     no aparece, pasa a `en_duda`. Uno que ninguna conciliación va a mirar —su
@@ -13454,8 +13502,14 @@ Reglas de esa tabla:
   qué queda: «Queda como emitida: ‹serie› de ‹razón social› (RUC ‹ruc›). No se
   puede corregir después.». La misma fila pasa a `emitida`: el RUC, el total y
   lo enviado no cambian. **Liberar** pide una nota con lo que se revisó en
-  SimpleFact. Si la conciliación u otra persona lo resolvió mientras tanto,
-  vale lo suyo y el panel lo dice.
+  SimpleFact, y solo pasados los 30 minutos (35.4): hasta entonces «No está en
+  SimpleFact: volver a intentar» está deshabilitado y el panel dice «Podrás
+  liberarla desde las ‹HH:MM› (hora de Lima): SimpleFact puede tardar en
+  mostrar una boleta que sí recibió.»; a esa hora se habilita solo, sin
+  releer el panel. Si no se sabe desde cuándo está en duda, sigue
+  deshabilitado y lo dice, como el servidor. «Sí está en SimpleFact: registrar
+  su serie» no espera. Si la conciliación u otra persona lo resolvió mientras
+  tanto, vale lo suyo y el panel lo dice.
 - **Emitir a mano es solo de Manual (owner, 15-10-2026; 35.1).** En Real emite
   solo el barrido y no hay botón «Emitir»; en Simulación y en Apagado no se
   emite. Con el RUC del pedido en Manual, quien tiene `invoices.manage` emite
@@ -13463,9 +13517,21 @@ Reglas de esa tabla:
   simulada de los últimos comprobantes de Ajustes: la misma acción, con la
   misma confirmación. El botón no fuerza nada: un pedido que no cumple las
   reglas no se emite desde Kapta.
-  - **Cuándo aparece.** Solo a quien tiene el permiso, con la tienda activa,
-    sin comprobante real vivo, con las reglas de 35.3 cumplidas como una
-    emisión real (cuentan el error sin reintento y la conexión del RUC; una
+  - **Solo en producción** (`invoiceEmitAllowedHere`: `VERCEL_ENV` es
+    `production`; sin él, en local, tampoco). Una vista previa de Vercel
+    comparte con producción la base y la llave de cifrado: descifra el token
+    igual, y una boleta pedida desde ella es tan real como cualquiera. El
+    barrido nunca emitió fuera de producción; ahora el botón tampoco. En una
+    vista previa el panel no ofrece «Emitir esta boleta» y, donde lo habría, a
+    quien gestiona le dice «Emitir solo funciona en producción: este
+    despliegue es una vista previa.» (`no_produccion`). Ajustes no ofrece
+    «Emitir» y, con un RUC en Manual, lo dice con la misma frase. La acción lo
+    rechaza antes de leer nada, y `emitInvoiceNow` lo vuelve a pedir, primero
+    que todo, con el entorno y no con un parámetro: ningún llamador lo puede
+    encender.
+  - **Cuándo aparece.** Solo en producción, a quien tiene el permiso, con la
+    tienda activa, sin comprobante real vivo, con las reglas de 35.3 cumplidas
+    como una emisión real (cuentan el error sin reintento y la conexión del RUC; una
     simulación no frena) y sin que la última pasada lo haya frenado por lo que
     dijo Shopify: ahí el panel dice ese motivo, como siempre. El badge dice
     «Lista para emitir». Con el RUC en Manual, si algo de la emisión real lo
@@ -13480,22 +13546,30 @@ Reglas de esa tabla:
     puede borrar.», con «Sí, emitir» y «Cancelar». Desde el primer «Sí,
     emitir» hasta que vuelve la respuesta, no sale un segundo envío y los
     botones quedan deshabilitados.
-  - **Qué hace el servidor** (`emitInvoiceAction`). Primero lo que es de quien
-    pulsa: que ve el pedido y tiene `invoices.manage`, antes de leer nada con
-    el service role; que la tienda está activa; que el RUC sigue en Manual
-    (en Real lo rechaza: «…a mano solo se emite en «Manual»»), y que el RUC y
-    el total que se van a enviar son los que confirmó. Si el pedido cambió
-    desde que lo abrió, no emite: «El pedido cambió desde que lo abriste (el
-    RUC o el total): vuelve a abrirlo y revisa la boleta antes de emitirla.».
-    Después, `emitInvoiceNow`: exactamente la emisión real del barrido, con el
-    mismo código. Los hechos del pedido, las reglas como emisión real, el
-    token, la relectura en Shopify (el total y, en un prepago web, lo que
-    cobró Flow), la boleta, el turno pidiendo una fila real con quien pulsó
-    (35.3), UNA llamada a SimpleFact, la lectura de la respuesta, la fila
-    (solo si sigue en `emitiendo`) y las reglas que apagan el RUC (35.4). Los
-    mismos candados: un comprobante real vivo por pedido (el índice único), el
-    tope del día de lo real y el turno que vuelve a revisar todo en la base.
-    Si algo no se pudo leer antes del turno, no pide el turno ni llama a nada.
+  - **Qué hace el servidor** (`emitInvoiceAction`). Primero, que es
+    producción, antes de leer nada. Después lo que es de quien pulsa: que ve
+    el pedido y tiene `invoices.manage`, antes de leer nada con el service
+    role; que trae lo que confirmó (el RUC y el total: sin eso no hay con qué
+    comparar), y que la tienda está activa. Después, `emitInvoiceNow`:
+    exactamente la emisión real del barrido, con el mismo código. Los hechos
+    del pedido y las reglas como emisión real; con ESA lectura —la misma con
+    que arma la boleta y pide el turno— y antes del token, de Shopify y del
+    turno, que el RUC sigue en Manual (en Real lo rechaza: «…a mano solo se
+    emite en «Manual»») y que el RUC y el total que se van a enviar son los
+    que confirmó. Si el pedido cambió desde que lo abrió, no emite
+    (`pedido_cambio`): «El pedido cambió desde que lo abriste (el RUC o el
+    total): vuelve a abrirlo y revisa la boleta antes de emitirla.». La acción
+    no lee el pedido por su cuenta: antes comparaba con una lectura propia,
+    `emitInvoiceNow` volvía a leer sin comparar, y entre las dos el pedido
+    podía cambiar y salir una boleta que nadie confirmó. Después, el token, la
+    relectura en Shopify (el total y, en un prepago web, lo que cobró Flow),
+    la boleta, el turno pidiendo una fila real con quien pulsó (35.3), UNA
+    llamada a SimpleFact, la lectura de la respuesta, la fila (solo si sigue
+    en `emitiendo`) y las reglas que apagan el RUC (35.4). Los mismos
+    candados: un comprobante real vivo por pedido (el índice único), el tope
+    del día de lo real y el turno que vuelve a revisar todo en la base,
+    también que la empresa recibió el pago (0262). Si algo no se pudo leer
+    antes del turno, no pide el turno ni llama a nada.
   - **Quién pulsó** queda en la fila (`created_by`, 35.6). Sin saber quién
     pulsa, no se pide el turno, y la base tampoco lo da: en Manual, una fila
     real pedida sin quién (`p_created_by`) es `modo_distinto` (0261).
@@ -13504,9 +13578,26 @@ Reglas de esa tabla:
     ‹ref›» antes de nada.», y la concilia el barrido como cualquier `en_duda`
     (35.4); `error`, con el mensaje de SimpleFact; o, sin haber llamado a
     SimpleFact, el motivo por el que no salió, con las frases del panel y del
-    barrido. Volver a pulsar después de una duda da «Ya tiene comprobante.»:
-    no hay segundo envío. Si algo falla después de reservar el turno, la fila
-    queda en `emitiendo` y contesta en duda: se concilia, nunca se repite.
+    barrido. Si el turno encuentra que el pago ya no cubre el total, o que un
+    pago de la base del comprobante dejó de estar validado (0262, 35.3),
+    contesta ese motivo (`sin_pago_completo`, `prepago_con_comprobantes`) y no
+    sale nada. Volver a pulsar después de una duda da «Ya tiene
+    comprobante.»: no hay segundo envío. Si algo falla después de reservar el
+    turno, la fila queda en `emitiendo` y contesta en duda: se concilia, nunca
+    se repite.
+  - **En Ajustes, la respuesta se queda a la vista** (15-10-2026). Después de
+    «Emitir» la página se refresca, y el pedido ya no lleva oferta: tiene una
+    real viva, o el RUC se apagó. La respuesta —con las instrucciones de un
+    «En duda», el «Ver PDF» o el motivo del error— se guarda por pedido en la
+    lista y no en el botón: queda en la fila donde se pulsó; si esa fila salió
+    de las 20, en la más nueva de su pedido; y si no queda ninguna de su
+    pedido, o la lista no se pudo leer, arriba, con el enlace al pedido. Con
+    una respuesta a la vista, ese pedido no vuelve a tener «Emitir»: para
+    intentar otra vez se abre el pedido. Mientras un «Emitir» está en vuelo,
+    no sale otro del mismo pedido, aunque el refresco vuelva a montar el
+    botón. Una respuesta que no dice nada se lee como «No se pudo completar la
+    acción. Antes de intentar de nuevo, abre el pedido: si quedó «Emitiendo» o
+    «En duda», búscala en SimpleFact.».
   - **No es el barrido.** No escribe su revisión (`invoice_order_checks`), y
     relee Shopify aunque la última lectura sea de hace menos de 6 horas: es
     una persona y un pedido. Después de «Volver a intentar», o de liberar un
@@ -13535,11 +13626,11 @@ Simulación):
    que los prepagos web por Flow salen (35.9).
 3. Confirma con el contador la convención «CLIENTES VARIOS» / `00000000` y el
    umbral de S/ 700 (35.5).
-4. Pasa a Manual, con «Emitir desde» del momento del cambio. El barrido sigue
-   simulando. Emite las primeras boletas reales una a una con «Emitir esta
-   boleta» y revisa cada una en SimpleFact antes de la siguiente: la serie, el
-   total, los ítems con el IGV incluido, «CLIENTES VARIOS» y la nota «Pedido
-   #KP… · Kapta ‹ref›».
+4. Pasa a Manual, con «Emitir desde» del momento del cambio, y con la 0262 ya
+   aplicada (abajo). El barrido sigue simulando. Emite las primeras boletas
+   reales una a una con «Emitir esta boleta» y revisa cada una en SimpleFact
+   antes de la siguiente: la serie, el total, los ítems con el IGV incluido,
+   «CLIENTES VARIOS» y la nota «Pedido #KP… · Kapta ‹ref›».
 5. Pasa a Real: desde entonces el barrido emite solo y no hay botón. «Emitir
    desde» se mueve al momento del cambio: lo pagado en Manual que nadie emitió
    no sale (35.4).
@@ -13575,6 +13666,21 @@ nueve argumentos de siempre, por nombre, y los dos nuevos quedan en su valor
 por defecto (nulo): el turno hace lo de antes. Ese código no conoce Manual: no
 deja elegirlo en Ajustes ni barre un RUC en Manual, y si pidiera el turno de
 uno, recibiría una simulada, nunca una real.
+
+**Antes de la 0262.** También se aplica a mano, después de la 0261 y antes de
+la primera boleta real —con «Emitir esta boleta» o con un RUC en Real—
+(DEPLOY.md). El código no la nombra ni la necesita para correr: si llega
+antes, nada se pone rojo y todo sigue como con la 0261 —el barrido simula y,
+en Real, emite; el botón emite—, pero el turno no vuelve a revisar que la
+empresa recibió el pago (35.3), y un pago rechazado mientras se relee Shopify
+se colaría en una boleta real. Por eso no se emite nada real hasta aplicarla.
+No cambia la firma del turno: es la de once argumentos de la 0261, con
+`create or replace`, y el código de antes y el de ahora la llaman igual. Los
+dos mandan, en la base del comprobante, si es prepago web y el id de cada
+pago, que es lo que el turno revisa: lo bien pagado sigue dando su fila. Va
+después de la 0261: sin ella —sigue el turno de nueve argumentos, o falta el
+de once— se detiene sin cambiar nada. Si después alguien vuelve a correr la
+0261, el turno queda otra vez sin esta revisión hasta volver a correr la 0262.
 
 Para el barrido, «falta una migración de comprobantes» es solo un «no existe»
 (de tabla o de función) que nombra algo que crean la 0257 —`invoice_issuers`,
@@ -13625,8 +13731,8 @@ Implementación:
   `store_collection_accounts.invoice_issuer_id` con su trigger,
   `order_invoices`, `invoice_order_checks`, la función `invoice_claim` (el
   turno) y la semilla de GRUPO GF S.A.C. Es la que corrió en producción el
-  14-10-2026, y no se reescribe: lo que cambió después va en la 0260 y la
-  0261.
+  14-10-2026, y no se reescribe: lo que cambió después va en la 0260, la 0261
+  y la 0262.
 - `db/migrations/0260_invoices_hardening.sql`: los arreglos de la revisión
   adversaria, sobre la 0257: las funciones `invoice_claim` (el turno) e
   `invoice_candidates` (qué pedidos mira el barrido), y las de los triggers
@@ -13639,16 +13745,26 @@ Implementación:
   del trigger `invoice_issuers_touch` (lo que baja Real a Simulación baja
   también Manual) y `invoice_claim` (el turno) con `p_mode` y `p_created_by`,
   que reemplaza la firma de nueve argumentos. No toca filas.
+- `db/migrations/0262_invoices_claim_coverage.sql`: el turno que vuelve a
+  revisar que la empresa recibió el pago, sobre la 0261: solo `invoice_claim`,
+  con `create or replace` y la misma firma de once argumentos, que revisa la
+  condición 3 de 35.3 con los pagos y el pedido guardados (`sin_pago_completo`,
+  `prepago_con_comprobantes`), que cada pago de la base del comprobante siga
+  validado, y bloquea los pagos del pedido mientras dura. Se detiene sin la
+  0261 delante. No toca filas.
 - `lib/invoicing/rules.ts`: reglas puras (cuenta y RUC de cada pago,
-  elegibilidad, la boleta, la lectura de la respuesta).
+  elegibilidad, la boleta, la lectura de la respuesta) y cuándo se puede
+  liberar un `en_duda` (`invoiceReleaseAvailableAt` e `invoiceReleaseBlock`,
+  con `INVOICE_RELEASE_MIN_AGE_MS`).
 - `lib/invoicing/shopify-order.ts`: la lectura del pedido en Shopify y su
   mapeo al céntimo.
 - `lib/invoicing/simplefact.ts`: el cliente de SimpleFact.
 - `lib/invoicing/server.ts`: lo que el barrido y el panel leen de la base, el
   barrido, la conciliación, `emitInvoiceNow` («Emitir esta boleta»: la misma
-  emisión real del barrido, para un pedido) e `invoiceEmitNowReadiness` /
-  `loadInvoiceEmitNowOffers` (cuándo se ofrece el botón, en el panel y en
-  Ajustes).
+  emisión real del barrido, para un pedido, que compara lo que la persona
+  confirmó) e `invoiceEmitNowReadiness` / `loadInvoiceEmitNowOffers` (cuándo
+  se ofrece el botón, en el panel y en Ajustes), y `invoiceEmitAllowedHere`
+  (solo producción emite).
 - `app/api/cron/invoices/route.ts`: el barrido, cada 10 minutos.
 - Ajustes, en `app/dashboard/[storeId]/settings/invoice-actions.ts` y
   `components/invoice-settings-section.tsx`; el panel, en

@@ -523,4 +523,6 @@
 \ir migrations/0260_invoices_hardening.sql
 \echo 'Applying 0261_invoices_manual.sql'
 \ir migrations/0261_invoices_manual.sql
+\echo 'Applying 0262_invoices_claim_coverage.sql'
+\ir migrations/0262_invoices_claim_coverage.sql
 \echo 'Done.'

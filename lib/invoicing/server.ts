@@ -43,6 +43,7 @@ import type { PaymentGateway } from "@/lib/payment-gateway";
 import {
   INVOICE_MAX_PER_RUN,
   INVOICE_MODES,
+  INVOICE_MODE_LABEL,
   INVOICE_REASONS,
   LIVE_REAL_STATUSES,
   buildSalePayload,
@@ -1761,6 +1762,25 @@ async function turnOffIssuer(
 // ── «Emitir esta boleta» ─────────────────────────────────────────────────────
 
 /**
+ * ¿Este despliegue puede mandar boletas a SUNAT? Solo producción
+ * (`VERCEL_ENV === "production"`).
+ *
+ * Una vista previa de Vercel comparte con producción la base y la llave de
+ * cifrado (`ENCRYPTION_KEY`): descifra el token de SimpleFact igual, y una
+ * boleta pedida desde ella es tan real como cualquiera. El barrido ya no emite
+ * fuera de producción (app/api/cron/invoices/route.ts); «Emitir esta boleta»
+ * tampoco. Sin `VERCEL_ENV` (en local) tampoco: falla cerrada.
+ *
+ * Lo usan la acción del panel (antes de leer nada), `emitInvoiceNow` (otra
+ * vez, por si alguien la llama desde otro lado), el panel (`canEmitNow`) y el
+ * «Emitir» de Ajustes (`loadInvoiceEmitNowOffers`), para no ofrecer un botón que
+ * va a decir que no.
+ */
+export function invoiceEmitAllowedHere(): boolean {
+  return process.env.VERCEL_ENV === "production";
+}
+
+/**
  * Lo que contesta «Emitir esta boleta».
  *
  *   ok: true  → se reservó el turno real y se llamó a SimpleFact UNA vez:
@@ -1812,6 +1832,22 @@ function blocked(reason: InvoiceReason, detail?: string | null): InvoiceEmitNowR
  * DECISIÓN: con el RUC en «Real» también emite (los mismos candados que el
  * barrido); el panel solo enseña el botón en «Manual», donde el barrido no
  * emite. En «Simulación» contesta `modo_distinto`; en «Apagado», `ruc_apagado`.
+ * Con `manualOnly` (el botón del panel, `emitInvoiceAction`), en «Real» también
+ * contesta `modo_distinto`: ahí emite el barrido, y el botón sería una segunda
+ * puerta a la misma boleta.
+ *
+ * LO QUE SE VIO ES LO QUE SE ENVÍA. `expected` es lo que la persona confirmó:
+ * el RUC y el total. Se compara con SU lectura —la misma con la que se arma la
+ * boleta y se pide el turno—, justo después de las reglas y antes del token, de
+ * Shopify y del turno. Si no coincide, `pedido_cambio` y no se llama a nada.
+ * Antes lo comparaba la acción con una lectura propia, y entre esa lectura y
+ * esta el pedido podía cambiar: salía una boleta que nadie confirmó.
+ *
+ * SOLO EN PRODUCCIÓN (`invoiceEmitAllowedHere`). La acción ya lo pide antes de
+ * leer nada; aquí se vuelve a pedir, primero que todo, por si alguien la llama
+ * desde otro lado. Se lee del entorno y no de `deps`: `deps` son los dobles de
+ * lo que se toca afuera, y un interruptor ahí lo podría encender cualquier
+ * llamador (o una prueba copiada). El entorno no se pasa por parámetro.
  *
  * No escribe `invoice_order_checks`, que es la revisión del barrido: quien pulsó
  * lee el motivo ahora. Y no respeta las 6 horas sin releer en Shopify: una
@@ -1823,9 +1859,22 @@ function blocked(reason: InvoiceReason, detail?: string | null): InvoiceEmitNowR
  * después del turno, la fila se queda en `emitiendo` y contesta `en_duda`: la
  * conciliación la busca por su nota, nunca se repite.
  */
+export interface InvoiceEmitNowInput {
+  orderId: string;
+  /** Quien pulsó: queda en la fila (`created_by`). Sin él no se pide el turno. */
+  userId: string;
+  /**
+   * Lo que la persona confirmó: el RUC y el total en céntimos. Si las reglas,
+   * con la lectura de aquí, dicen otro, no se emite (`pedido_cambio`).
+   */
+  expected?: { issuerId: string; totalCents: number };
+  /** Solo con el RUC en «Manual»: en «Real» emite el barrido (`modo_distinto`). */
+  manualOnly?: boolean;
+}
+
 export async function emitInvoiceNow(
   admin: SupabaseClient,
-  input: { orderId: string; userId: string },
+  input: InvoiceEmitNowInput,
   deps: Partial<InvoiceSweepDeps> = {},
 ): Promise<InvoiceEmitNowResult> {
   const state: EmitNowState = { secrets: new Set(), claimed: null };
@@ -1852,13 +1901,30 @@ export async function emitInvoiceNow(
   }
 }
 
+/**
+ * ¿Lo que confirmó la persona es lo que saldría? El mismo RUC y el mismo total
+ * al céntimo. Un `expected` mal formado no coincide con nada (falla cerrada).
+ */
+function sameAsExpected(elig: EligibleOrder, expected: NonNullable<InvoiceEmitNowInput["expected"]>): boolean {
+  return (
+    typeof expected.issuerId === "string" &&
+    expected.issuerId !== "" &&
+    Number.isInteger(expected.totalCents) &&
+    expected.issuerId === elig.issuer.id &&
+    expected.totalCents === elig.totalCents
+  );
+}
+
 async function emitNow(
   admin: SupabaseClient,
   deps: InvoiceSweepDeps,
-  input: { orderId: string; userId: string },
+  input: InvoiceEmitNowInput,
   state: EmitNowState,
   redact: (text: string) => string,
 ): Promise<InvoiceEmitNowResult> {
+  // Una vista previa no emite: antes de leer nada (`invoiceEmitAllowedHere`).
+  if (!invoiceEmitAllowedHere()) return blocked("no_produccion");
+
   // Quién pulsó queda en la fila (`created_by`): sin saberlo no se pide el turno.
   if (typeof input.userId !== "string" || !input.userId.trim()) {
     return blocked("turno_fallido", "No se sabe quién emite: no se pidió el turno.");
@@ -1873,6 +1939,23 @@ async function emitNow(
   const elig = invoiceEligibility(facts, { emitNow: true });
   if (!elig.ok) return blocked(elig.reason, elig.detail);
   const { issuer } = elig;
+
+  // 2b. El botón del panel, solo en «Manual». En «Real» emite el barrido.
+  if (input.manualOnly && issuer.mode !== "manual") {
+    return blocked(
+      "modo_distinto",
+      `El RUC está en «${INVOICE_MODE_LABEL[issuer.mode] ?? issuer.mode}»: a mano solo se emite en «Manual».`,
+    );
+  }
+
+  // 2c. Lo que vio la persona es lo que sale: el RUC y el total de ESTA lectura,
+  // antes del token, de Shopify y del turno. La boleta que va a SUNAT no se
+  // borra, y si el pedido cambió desde que lo abrió, confirmó otra.
+  // Quien pulsa siempre confirma algo: el botón (`manualOnly`) sin lo que se
+  // confirmó no emite. Si no, una llamada que olvidara mandarlo emitiría sin
+  // comparar.
+  if (input.manualOnly && !input.expected) return blocked("pedido_cambio");
+  if (input.expected && !sameAsExpected(elig, input.expected)) return blocked("pedido_cambio");
 
   // 3. El token antes del turno, como el barrido: un turno sin token dejaría una
   // fila `emitiendo` que nunca se envió.
@@ -2113,12 +2196,16 @@ export function invoiceEmitNowReadiness(input: {
  *
  * LANZA si algo no se pudo leer (falla cerrada): quien llama no ofrece ningún
  * botón. Un pedido que no existe no está en el mapa.
+ *
+ * Fuera de producción no ofrece ninguno, sin leer nada: la acción lo rechazaría
+ * igual (`invoiceEmitAllowedHere`), y un botón que dice que no es una trampa.
  */
 export async function loadInvoiceEmitNowOffers(
   admin: SupabaseClient,
   orderIds: string[],
 ): Promise<Map<string, InvoiceEmitNowOffer>> {
   const out = new Map<string, InvoiceEmitNowOffer>();
+  if (!invoiceEmitAllowedHere()) return out;
   const ids = unique(orderIds.filter(Boolean));
   if (!ids.length) return out;
   const [facts, invoices, checks] = await Promise.all([
