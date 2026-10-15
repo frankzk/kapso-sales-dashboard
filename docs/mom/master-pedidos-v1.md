@@ -4489,8 +4489,8 @@ bodega, «Enviar a Excel»), que se sube en Stock Swayp. Reglas:
 - **Un archivo por bodega**, y la ciudad sale de la columna `Bodega` del propio
   archivo. No hay selector: elegir la ciudad a mano es la forma de importar
   Trujillo sobre Juliaca y poner a cero una ciudad entera.
-- **Sólo se toca la ciudad del archivo.** Nuestra tabla cubre nueve ciudades y
-  Swayp tiene cinco bodegas: Cusco, Huancayo, Ica, Chiclayo y Chimbote se
+- **Sólo se toca la ciudad del archivo.** Nuestra tabla cubre más ciudades que
+  las bodegas que se leen de Swayp: Cusco, Huancayo, Chiclayo y Chimbote se
   abastecen de otra forma y un importador que «limpiara lo que no vino» las
   vaciaría de un plumazo.
 - **Lo que Swayp no lista queda en 0**, no se borra el renglón. La exportación de
@@ -4546,10 +4546,15 @@ de respaldo, con un token pegado a mano que no se guarda. Las reglas de arriba n
   le corresponde de nuestro lado pasa a 0**: para Kapta, Swayp no lo tiene. La
   pantalla lo avisa antes de aplicar cuando en una ciudad coinciden productos
   que van a 0 y códigos sin vincular; se vincula en Catálogo y se vuelve a leer.
-- **Sólo se sincronizan Arequipa, Trujillo, Juliaca, Piura y Lima**
-  (`CIUDADES_DEL_SYNC`), las mismas que el Excel sabía leer. Una bodega que
+- **Sólo se sincronizan Arequipa, Trujillo, Juliaca, Piura, Lima e Ica**
+  (`CIUDADES_DEL_SYNC`), las mismas que el Excel sabe leer. Una bodega que
   resuelva a otra ciudad, o que no resuelva, se muestra y **no se toca**.
-  Sumar una ciudad al sync es una decisión, no un efecto del mapeo.
+  Sumar una ciudad al sync es una decisión, no un efecto del mapeo. **Ica entró
+  el 15-10-2026** (decisión de Frankz: «ya tengo el stock habilitado en Swayp
+  por API»): su bodega es «BODEGA ICA», ubigeo `110101`, y desde ese día su
+  saldo lo pone el conteo de Swayp y no la carga a mano. Para emitir guías por
+  API, Ica necesita además su remitente en `SWAYP_SENDERS`; sin él, la ciudad
+  sigue por el Excel aunque su stock ya se lea.
 - **Una ciudad que no vino en la lectura no se vacía**, y una lectura vacía
   (0 filas) no se aplica: es un fallo de Swayp, no un inventario en cero.
 - Si dos bodegas caen en la misma ciudad, sus unidades **se suman**.
