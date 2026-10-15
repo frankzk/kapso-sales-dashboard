@@ -2830,6 +2830,98 @@ conexión, también cuando sale de «Emitir esta boleta». Ajustes lo dice en ro
 volver a Real hay que corregir lo que falló (el token o el subdominio) y pulsar
 «Probar conexión» de nuevo. Lo mismo para volver a Manual.
 
+### 15-10-2026 · «Emitir esta boleta» para lo pagado antes de «Emitir desde» (0266, MOM §35)
+
+Decisión del owner (15-10-2026). Con el RUC en «Manual», «Emitir esta boleta»
+también sirve para un pedido pagado **antes** de «Emitir desde», si se pagó
+desde el **01/10/2026 00:00 (hora de Lima)**. Antes de Kapta las boletas se
+emitían a mano en SimpleFact, y Kapta no sabe si ese pedido ya tiene la suya:
+por eso la confirmación pide marcar «Revisé en SimpleFact y este pedido no
+tiene boleta», y sin esa marca no emite. Una boleta de más es pagar el
+impuesto dos veces. **El barrido nunca va hacia atrás**: en Simulación, en
+Manual y en Real, lo pagado antes de «Emitir desde» sigue en
+`antes_de_inicio`. «Emitir desde» no cambia: Ajustes sigue sin aceptar una
+fecha pasada, y un cambio de modo la sigue moviendo al momento del cambio. Sin
+variables de entorno nuevas; `MOM_RESOLUTION_VERSION` no cambia.
+
+1. **Migración `0266_invoices_backfill.sql`**, a mano, DESPUÉS de la 0262 y
+   ANTES del código que manda `p_backfill`. Pegar el archivo en el editor SQL
+   de Supabase, que la corre en una transacción (con `psql`:
+   `psql -1 -v ON_ERROR_STOP=1 "$DATABASE_URL" -f db/migrations/0266_invoices_backfill.sql`;
+   sin `-1` hay un instante sin `invoice_claim` entre el `drop` de la firma de
+   once y el `create` de la de doce). Cambia solo `invoice_claim`: borra la
+   firma de once argumentos y crea la de doce, con un argumento nuevo al
+   final, `p_backfill boolean default false`, y el cuerpo de la 0262 tal cual
+   salvo dos cosas:
+   - la fecha: lo pagado antes de «Emitir desde» pasa solo con `p_backfill`,
+     una fila real, el RUC en Manual, quién la pidió (`p_created_by`) y las
+     dos fechas de pago —la del código y la de la base— desde el 01/10/2026
+     00:00 de Lima. Sin «Emitir desde» o sin fecha de pago, `antes_de_inicio`,
+     como siempre;
+   - la fila que sale así lleva en su base `pagado_antes_de_emitir_desde: true`.
+
+   El turno sigue solo para `service_role`. No toca filas, ni triggers, ni otra
+   función, y no toma candados de tablas. Es idempotente. **Va después de la
+   0262**: si sigue el turno de nueve argumentos, o no hay ni el de once ni el
+   de doce, se detiene con «La 0266 va después de la 0262: aplica primero
+   db/migrations/0261_invoices_manual.sql y
+   db/migrations/0262_invoices_claim_coverage.sql.» y no cambia nada. **Si
+   alguien vuelve a correr la 0261 después, hay que volver a correr la 0266**:
+   quedan dos turnos, el de once y el de doce, y la llamada por nombre del
+   código falla por ambigua: no emite ni simula nada hasta volver a correr la
+   0266. La 0262 sola, después de la 0266, se detiene en su guarda y no
+   cambia nada.
+   **Se puede aplicar ya, con el código que hoy está en producción**: ese
+   código pide el turno por nombre, con nueve u once argumentos, y con un solo
+   turno esas llamadas van al de doce con `p_backfill` en falso: hace lo mismo
+   que antes. **Si el código llega antes que la 0266, nada se emite de más y
+   nada se pone rojo**: lo pagado desde «Emitir desde» se emite como siempre
+   (el código no manda `p_backfill` en un pedido normal), y un pedido pagado
+   antes contesta `sin_migracion`, nombrando la 0266, sin reservar ni enviar
+   nada. Aplicarla y volver a pulsar.
+   **Comprobar**, solo lectura:
+   - `select pg_get_function_identity_arguments(oid) from pg_proc where proname = 'invoice_claim' and pronamespace = 'public'::regnamespace;`
+     — una sola fila, que termina en `p_created_by uuid, p_backfill boolean`;
+   - `select to_regprocedure('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)') is null;`
+     tiene que dar `true`: el de once ya no está;
+   - `select pg_get_functiondef('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)'::regprocedure) like '%pagado_antes_de_emitir_desde%';`
+     tiene que dar `true` (y lo mismo con `like '%sin_pago_completo%'` y con
+     `like '%for share%'`, que trae de la 0262);
+   - `select has_function_privilege('authenticated', 'public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)', 'execute');`
+     tiene que dar `false` (y lo mismo con `anon`; con `service_role`, `true`);
+   - `select ruc, mode, emit_from, checked_ruc, check_error from invoice_issuers;`
+     y `select count(*) from order_invoices;` dicen lo mismo que antes de
+     aplicarla.
+2. **Desplegar** el código. Desde ahí, en un pedido pagado desde el 01/10 y
+   antes de «Emitir desde», con el RUC en «Manual», el panel «Comprobante» (y
+   «Emitir» en Ajustes → últimos comprobantes) ofrece «Emitir esta boleta», y
+   la confirmación dice cuándo se pagó y desde cuándo emite el RUC. **Antes de
+   marcar la casilla, buscar el pedido en SimpleFact** (por su número, su
+   fecha y su total): si ya tiene boleta, no se emite; se registra con «Ya
+   tiene comprobante». En una vista previa no hay botón, como siempre.
+
+**Qué mirar después**, solo lectura:
+`select order_name, paid_at, mode, status, created_by is not null as con_quien from order_invoices where basis ? 'pagado_antes_de_emitir_desde' order by created_at desc;`
+— cada fila `real`, con `con_quien = true` y `paid_at` desde el 01/10/2026
+05:00 UTC; nada en `emitiendo` por más de unos minutos. Revisar cada una en
+SimpleFact, como las demás de Manual.
+
+**Antes de subir**: `bash scripts/verify-db.sh` corre
+`scripts/sql/invoices_smoke.sql`, que también corre la 0266 sobre la 0262 (dos
+veces), con la 0261 corrida otra vez después, y su guarda sin la 0262 delante.
+
+**Marcha atrás.** Lo emitido no se borra: ya está en SUNAT, y una boleta que no
+correspondía se anula con nota de crédito en SimpleFact (MOM §35.9). Para que
+nadie más emita hacia atrás basta con no pulsar el botón en esos pedidos, o
+bajar el RUC a «Simulación». No hace falta revertir la 0266: el código
+anterior pide el turno por nombre, sin `p_backfill`, y el de doce lo acepta con
+`p_backfill` en falso. Si aun así se quiere volver al turno de la 0262, en una
+sola transacción:
+`psql -1 -v ON_ERROR_STOP=1 "$DATABASE_URL" -c "drop function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean);" -f db/migrations/0261_invoices_manual.sql -f db/migrations/0262_invoices_claim_coverage.sql`
+(la 0261 recrea el turno de once y la 0262 le pone la revisión del pago).
+Desde ahí, el código nuevo contesta `sin_migracion` en lo pagado antes de
+«Emitir desde», y lo demás sigue igual.
+
 ### 15-10-2026 · Intentos del motorizado propio y filtro de intentos (`mom-v1.27`)
 
 Sin migraciones, variables de entorno ni RPC nuevas. `MOM_RESOLUTION_VERSION`

@@ -18,6 +18,7 @@ import {
   BOLETA_MAX_CENTS,
   BOLETA_TYPE,
   IGV_PERCENT,
+  INVOICE_BACKFILL_FROM,
   INVOICE_DAILY_LIMIT_DEFAULT,
   INVOICE_DAILY_LIMIT_MAX,
   INVOICE_DAILY_LIMIT_MIN,
@@ -231,6 +232,7 @@ describe("MOM §35.3 — invoiceEligibility: el pedido que sí lleva comprobante
       mode: "real",
       totalCents: 15_000,
       paidAt: PAGADO,
+      beforeStart: false,
       basis: {
         prepaid: false,
         payments: [
@@ -265,6 +267,7 @@ describe("MOM §35.3 — invoiceEligibility: el pedido que sí lleva comprobante
       mode: "real",
       totalCents: 15_000,
       paidAt: tarde,
+      beforeStart: false,
       basis: {
         prepaid: false,
         payments: [
@@ -480,6 +483,7 @@ describe("MOM §35.3 fila 3 — la empresa recibió el pago", () => {
       mode: "real",
       totalCents: 8990,
       paidAt: FECHA_PEDIDO,
+      beforeStart: false,
       basis: {
         prepaid: true,
         payments: [
@@ -923,6 +927,105 @@ describe("MOM §35.8 — «Manual» y «Emitir esta boleta» (owner, 15-10-2026)
   });
 });
 
+describe("MOM §35.3 fila 8 y §35.7 — lo pagado antes de «Emitir desde», con el botón (owner, 15-10-2026)", () => {
+  // Antes de Kapta las boletas se emitían a mano en SimpleFact. «Emitir esta
+  // boleta» puede emitir lo pagado desde el 01/10/2026 00:00 de Lima aunque
+  // sea antes de «Emitir desde», con el RUC en «Manual» y la casilla «Revisé en
+  // SimpleFact…» (`emitInvoiceNow`). El barrido nunca va hacia atrás.
+  const MANUAL: InvoiceIssuer = { ...GF, mode: "manual" };
+  /** Pagado el 10/10/2026 10:00 de Lima: después del piso, antes de «Emitir desde» (14/10). */
+  const ANTES = "2026-10-10T15:00:00.000Z";
+  const pagadoEl = (registeredAt: string | null, issuer: InvoiceIssuer = MANUAL) =>
+    hechos({ payments: [pago({ registeredAt })], issuers: [issuer] });
+  const alEmitir = (f: InvoiceOrderFacts) => invoiceEligibility(f, { emitNow: true });
+
+  it("el piso es el 01/10/2026 00:00 de Lima", () => {
+    expect(INVOICE_BACKFILL_FROM).toBe("2026-10-01T05:00:00.000Z");
+    expect(Date.parse(INVOICE_BACKFILL_FROM)).toBe(Date.parse("2026-10-01T00:00:00-05:00"));
+    // Antes de «Emitir desde» de las pruebas (14/10): si no, nada sería «de antes».
+    expect(Date.parse(INVOICE_BACKFILL_FROM)).toBeLessThan(Date.parse(DESDE));
+  });
+
+  it("con emitNow y el RUC en Manual, pagado entre el 01/10 y «Emitir desde»: sale, con beforeStart", () => {
+    expect(alEmitir(pagadoEl(ANTES))).toEqual({
+      ok: true,
+      issuer: MANUAL,
+      mode: "real",
+      totalCents: 15_000,
+      paidAt: ANTES,
+      beforeStart: true,
+      basis: {
+        prepaid: false,
+        payments: [
+          { id: "pay-1", amount: 150, source: "lectura_verificada", accountIds: ["acc-gf"], validatedAt: VALIDADO },
+        ],
+      },
+    });
+  });
+
+  it("justo en el piso: sale; un milisegundo antes: antes_de_inicio", () => {
+    expect(alEmitir(pagadoEl(INVOICE_BACKFILL_FROM))).toMatchObject({ ok: true, beforeStart: true });
+    expect(alEmitir(pagadoEl("2026-10-01T04:59:59.999Z"))).toEqual({
+      ok: false,
+      reason: "antes_de_inicio",
+      issuerId: GF.id,
+    });
+    // La misma hora escrita con la zona de Lima es la misma.
+    expect(alEmitir(pagadoEl("2026-10-01T00:00:00-05:00"))).toMatchObject({ ok: true, beforeStart: true });
+    expect(alEmitir(pagadoEl("2026-09-30T23:59:59-05:00"))).toMatchObject({ ok: false, reason: "antes_de_inicio" });
+  });
+
+  it("sin emitNow (el barrido y el panel), lo de antes sigue siendo antes_de_inicio", () => {
+    expect(invoiceEligibility(pagadoEl(ANTES))).toEqual({ ok: false, reason: "antes_de_inicio", issuerId: GF.id });
+    expect(invoiceEligibility(pagadoEl(ANTES), { emitNow: false })).toMatchObject({ reason: "antes_de_inicio" });
+    // Solo un `true` de verdad abre la excepción.
+    expect(invoiceEligibility(pagadoEl(ANTES), { emitNow: 1 as never })).toMatchObject({ reason: "antes_de_inicio" });
+  });
+
+  it("con el RUC en Real, ni con emitNow: ahí emite el barrido, que nunca va hacia atrás", () => {
+    expect(alEmitir(pagadoEl(ANTES, GF))).toEqual({ ok: false, reason: "antes_de_inicio", issuerId: GF.id });
+  });
+
+  it("sin fecha de registro, o con una que no se entiende, sigue sin emitir", () => {
+    expect(alEmitir(pagadoEl(null))).toMatchObject({ ok: false, reason: "antes_de_inicio" });
+    expect(alEmitir(pagadoEl("ayer"))).toMatchObject({ ok: false, reason: "antes_de_inicio" });
+    // Un pago sin fecha junto a uno de antes: no se sabe cuándo quedó pagado.
+    const f = hechos({
+      issuers: [MANUAL],
+      payments: [pago({ id: "p-1", amount: 100, registeredAt: ANTES }), pago({ id: "p-2", amount: 50, registeredAt: null })],
+    });
+    expect(alEmitir(f)).toMatchObject({ ok: false, reason: "antes_de_inicio" });
+  });
+
+  it("un RUC sin «Emitir desde», o con uno que no se entiende, sigue sin emitir", () => {
+    expect(alEmitir(pagadoEl(ANTES, { ...MANUAL, emitFrom: null }))).toMatchObject({ reason: "antes_de_inicio" });
+    expect(alEmitir(pagadoEl(ANTES, { ...MANUAL, emitFrom: "pronto" }))).toMatchObject({ reason: "antes_de_inicio" });
+  });
+
+  it("pagado desde «Emitir desde»: beforeStart false, también con emitNow", () => {
+    expect(alEmitir(pagadoEl(PAGADO))).toMatchObject({ ok: true, paidAt: PAGADO, beforeStart: false });
+    expect(alEmitir(pagadoEl(DESDE))).toMatchObject({ ok: true, beforeStart: false });
+    expect(invoiceEligibility(pagadoEl(PAGADO))).toMatchObject({ ok: true, mode: "simulacion", beforeStart: false });
+  });
+
+  it("los candados de después siguen: ya_tiene, error_previo y la conexión", () => {
+    const de = (existing: Partial<InvoiceOrderFacts["existing"]>, issuer = MANUAL) =>
+      alEmitir(hechos({ payments: [pago({ registeredAt: ANTES })], issuers: [issuer], existing: { ...SIN_NADA, ...existing } }));
+    expect(de({ realLive: true })).toMatchObject({ reason: "ya_tiene" });
+    expect(de({ errorBlocked: true })).toMatchObject({ reason: "error_previo" });
+    expect(de({}, { ...MANUAL, checkedRuc: null })).toMatchObject({ reason: "sin_conexion" });
+    // Una simulación no frena, como en toda emisión real.
+    expect(de({ simulated: true })).toMatchObject({ ok: true, beforeStart: true });
+  });
+
+  it("el prepago web cuenta desde la fecha del pedido, con el mismo piso", () => {
+    const web = (orderDate: string) => prepago({ orderDate, issuers: [MANUAL] });
+    expect(alEmitir(web(ANTES))).toMatchObject({ ok: true, beforeStart: true, paidAt: ANTES });
+    expect(alEmitir(web("2026-09-30T12:00:00.000Z"))).toMatchObject({ ok: false, reason: "antes_de_inicio" });
+    expect(invoiceEligibility(web(ANTES))).toMatchObject({ ok: false, reason: "antes_de_inicio" });
+  });
+});
+
 describe("MOM §35.7 — «Emitir esta boleta»: lo que cambió y la vista previa tienen su frase", () => {
   it("`pedido_cambio`: la frase de siempre de la confirmación", () => {
     expect(INVOICE_REASON_LABEL.pedido_cambio).toBe(
@@ -934,8 +1037,16 @@ describe("MOM §35.7 — «Emitir esta boleta»: lo que cambió y la vista previ
     expect(INVOICE_REASON_LABEL.no_produccion).toBe("Emitir solo funciona en producción: este despliegue es una vista previa.");
   });
 
+  it("`sin_revision_simplefact`: lo pagado antes de «Emitir desde» pide la casilla", () => {
+    expect(INVOICE_REASON_LABEL.sin_revision_simplefact).toBe(
+      "Quedó pagado antes de «Emitir desde»: falta confirmar que en SimpleFact no tiene boleta.",
+    );
+    // `antes_de_inicio` no cambia: es lo que dicen el barrido y el panel.
+    expect(INVOICE_REASON_LABEL.antes_de_inicio).toBe("Quedó pagado antes de «Emitir desde» del RUC.");
+  });
+
   it("van después de los motivos de la base y de Shopify: no son reglas del pedido", () => {
-    for (const r of ["pedido_cambio", "no_produccion"] as const) {
+    for (const r of ["pedido_cambio", "sin_revision_simplefact", "no_produccion"] as const) {
       expect(INVOICE_REASONS.indexOf(r)).toBeGreaterThan(INVOICE_REASONS.indexOf("turno_fallido"));
     }
   });

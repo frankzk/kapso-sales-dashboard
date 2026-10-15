@@ -1257,8 +1257,12 @@ describe("la sección, pintada: Manual", () => {
     // Confirma y envía lo que confirmaría el drawer (el RUC y el total de ahora),
     // no lo de la simulada: si el pedido cambió, la confirmación lo dice.
     expect(view).toContain("emit={offer}");
-    expect(view).toContain("onEmit={() => onEmit(r, offer)}");
-    expect(emit).toContain("res = await emitInvoiceAction(orderId, { issuerId: offer.issuerId, total: offer.total });");
+    // Con la casilla «Revisé en SimpleFact…» de un pedido pagado antes de
+    // «Emitir desde», como el drawer.
+    expect(view).toContain("onEmit={(simplefactChecked) => onEmit(r, offer, simplefactChecked)}");
+    expect(emit).toContain(
+      "res = await emitInvoiceAction(orderId, { issuerId: offer.issuerId, total: offer.total, simplefactChecked });",
+    );
     expect(emit).not.toContain("row.total");
     expect(emit).not.toContain("row.ruc");
     // La respuesta se guarda en la lista, por pedido, y después se refresca.
@@ -1268,6 +1272,23 @@ describe("la sección, pintada: Manual", () => {
     );
     expect(emit).toContain("startRefresh(() => router.refresh());");
     expect(emit.indexOf("setOutcomes(")).toBeLessThan(emit.indexOf("startRefresh(() => router.refresh());"));
+  });
+
+  // Owner, 15-10-2026: lo pagado antes de «Emitir desde» (desde el 01/10/2026)
+  // se emite con el botón y la casilla «Revisé en SimpleFact…». Ajustes no lo
+  // esconde: es la misma oferta y el mismo control que el drawer.
+  it("un pedido pagado antes de «Emitir desde» lleva «Emitir» igual, y la casilla viaja a la acción", () => {
+    const antes = { ...OFERTA, beforeStart: true, paidAt: "2026-10-10T15:00:00.000Z", emitFrom: "2026-10-14T05:00:00.000Z" };
+    const manual = [issuerView({ mode: "manual" })];
+    expect(render({ issuers: manual, recent: [simulada({ emitNow: antes })] }).match(BOTON)).toHaveLength(1);
+    // La página no filtra las ofertas de antes: pasan tal cual las da el servidor.
+    const marca = PAGE.slice(PAGE.indexOf("const newestSimulated"), PAGE.indexOf("  return {", PAGE.indexOf("const newestSimulated")));
+    expect(marca).not.toContain("beforeStart");
+    expect(SECTION.slice(SECTION.indexOf("export function RecentListView("))).not.toContain("beforeStart");
+    // Lo que se marcó en la confirmación llega a `emitInvoiceAction`.
+    const list = SECTION.slice(SECTION.indexOf("function RecentList("), SECTION.indexOf("function placeOutcomes("));
+    expect(list).toContain("async function emit(row: InvoiceRecentView, offer: InvoicePanelEmitNow, simplefactChecked: boolean) {");
+    expect(list).toContain("total: offer.total, simplefactChecked });");
   });
 
   // FIX: la página marcaba «Emitir» con solo dos cosas —el RUC de la simulada en
