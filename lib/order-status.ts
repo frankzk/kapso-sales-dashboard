@@ -427,12 +427,21 @@ const HUMAN_GUIDE_EVENTS = new Set(["guide_registered", "guide_created", COMPANI
  * «No entregado» de motorizado propio decían «0 intentos» (#KP140941: dos
  * salidas con Roy, «No contesta» las dos). Pura.
  */
-export function ownRiderAttempts(events: readonly { kind: string; payload?: unknown }[]): number {
+export function ownRiderAttempts(
+  events: readonly { kind: string; payload?: unknown }[],
+  // Las paradas de las rutas (delivery_stops), con el histórico del cuaderno
+  // que se cargó sin evento (`reported_by` null): 4.745 de las 5.652 paradas
+  // reportadas al 15-10-2026 no tenían `stop_reported`.
+  routeStops: readonly { id: string; status: string | null }[] = [],
+): number {
   const stops = new Set<string>();
   for (const event of events) {
     if (event.kind !== "stop_reported") continue;
     const payload = event.payload as { stop_id?: unknown } | null | undefined;
     if (typeof payload?.stop_id === "string" && payload.stop_id) stops.add(payload.stop_id);
+  }
+  for (const stop of routeStops) {
+    if (stop.status === "entregado" || stop.status === "no_entregado") stops.add(stop.id);
   }
   return stops.size;
 }

@@ -2862,3 +2862,12 @@ Sin migraciones. `MOM_RESOLUTION_VERSION` sube a `mom-v1.29`: la columna de
 intentos suma las visitas que se deducen de los estados de Swayp (Novedad,
 Entregada, Devolución) y de Tanders (Delivered, Returning, Returned). No cambia
 etapas ni costos.
+
+### 15-10-2026 · «Salió con» y paradas del cuaderno en los intentos (0266, `mom-v1.30`)
+
+- **0266 antes del código**: `order_master.dispatched_with` (text[], índice
+  GIN) y `master_facets` con la clave `dispatched_with`. `create or replace`,
+  sin `drop`; el recálculo escribe la columna, así que tiene que existir antes.
+- `MOM_RESOLUTION_VERSION` sube a `mom-v1.30`: el cron rellena «Salió con» y
+  suma a los intentos de Grupo GF las paradas del cuaderno histórico. No cambia
+  etapas ni costos.

@@ -51,7 +51,7 @@ describe("intentos del motorizado propio (MOM §14, 15-10-2026)", () => {
   it("el Master los suma a la columna, pero el costo sigue con los del courier", () => {
     const master = read("lib/order-master.ts");
     expect(master).toContain("(sum, g) => sum + Math.max(0, courierVisitAttempts(g, orderEvents) - (g.aliclik_attempts ?? g.reroute_attempts ?? 0)),");
-    expect(master).toContain("ownRiderAttempts(stateEvents) +");
+    expect(master).toContain("ownRiderAttempts(stateEvents, riderStopsByOrder.get(order.id) ?? []) +");
     expect(master).toContain("(urpiAttemptsByOrder.get(order.id) ?? 0),");
     expect(master).toContain("attempts: state.attemptCount,");
   });

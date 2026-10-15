@@ -302,10 +302,10 @@ describe("el historial: kinds propios que no gastan el cupo de confirmación (D3
     }
   });
 
-  it("el Master no lee nada de esto: Repro Lima no subió la versión (D2; de la v1.27 a la v1.29 son por los intentos)", () => {
+  it("el Master no lee nada de esto: Repro Lima no subió la versión (D2; de la v1.27 a la v1.30 son por los intentos y «Salió con»)", () => {
     const macro = read("lib/order-macro-stage.ts");
     expect(macro).not.toMatch(/lima_repro|requested_date/);
-    expect(macro).toContain('export const MOM_RESOLUTION_VERSION = "mom-v1.29" as const;');
+    expect(macro).toContain('export const MOM_RESOLUTION_VERSION = "mom-v1.30" as const;');
   });
 });
 
