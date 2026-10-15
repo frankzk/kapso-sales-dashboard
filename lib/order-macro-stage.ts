@@ -29,6 +29,12 @@ import {
   swaypNoEntregoMotivo,
 } from "@/lib/swayp-desde-confirmacion";
 
+// v1.28 (15-10-2026): la columna de intentos suma también los que reporta Urpi
+// en su export (`urpiAttempts`, MOM §9.3, §30.11): #KP131545, cancelado por
+// Urpi el 01/09, decía «0 intentos». No cambia etapas ni costos. La versión sube
+// para que el cron recalcule; desde la 0265 el barrido además detecta los
+// pedidos con filas de Urpi nuevas o cambiadas.
+//
 // v1.27 (15-10-2026): el número de intentos (`attempt_count`) cuenta también las
 // paradas que reportan nuestros motorizados (`ownRiderAttempts`, MOM §14). No
 // cambia ninguna etapa ni el costo, pero sí la columna de 487 pedidos con un «No
@@ -173,7 +179,7 @@ import {
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.27" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.28" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"

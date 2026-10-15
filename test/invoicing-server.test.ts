@@ -28,6 +28,7 @@ import type { InvoiceOrderRead } from "@/lib/invoicing/shopify-order";
 import { CHECKOUT_GATEWAYS } from "@/lib/payment-gateway";
 import type { SimplefactHttp } from "@/lib/invoicing/simplefact";
 import {
+  INVOICE_CLAIM_BACKFILL_MIGRATION,
   INVOICE_CLAIM_MODE_MIGRATION,
   INVOICE_MIGRATION_OBJECTS,
   INVOICE_NOT_FOUND_ERROR,
@@ -160,6 +161,9 @@ function invoiceGuard(old: Row, values: Row): string | null {
 
 const LIVE = ["emitiendo", "emitida", "en_duda", "externa"];
 
+/** El piso de la 0266: `timestamptz '2026-10-01 00:00:00-05'`. */
+const PISO_0266 = "2026-10-01T05:00:00.000Z";
+
 /** Lo que contesta la base cuando falta la 0257 o la 0260: la tabla o la función no existe. */
 const MISSING = {
   "42P01": (name: string) => `relation "public.${name}" does not exist`,
@@ -182,6 +186,8 @@ function fakeDb(initialNow: Date) {
     candidatesError: null as string | null,
     /** La base no tiene la 0261: el turno no tiene `p_mode` ni `p_created_by`. */
     sin0261: false,
+    /** La base no tiene la 0266: el turno no tiene `p_backfill` (sigue el de once argumentos). */
+    sin0266: false,
   };
   // El reloj de la base (`now()`): `sweep` lo pone en el `now` de la pasada.
   const clock = { now: initialNow };
@@ -319,6 +325,10 @@ function fakeDb(initialNow: Date) {
    * «Manual», `simulacion` solo si está en «Simulación» o «Manual», y si no,
    * `modo_distinto`. Lo demás se revisa con el modo de la FILA (el tope del día
    * cuenta las filas de ese modo), y `created_by` es `p_created_by`.
+   *
+   * La 0266: con `p_backfill`, una fila real de un RUC en «Manual» pedida por
+   * alguien deja pasar lo pagado antes de «Emitir desde», si las dos fechas son
+   * desde el 01/10/2026 00:00 de Lima; la base del comprobante lo anota.
    */
   const claim = (a: Record<string, unknown>): unknown => {
     const now = clock.now;
@@ -351,9 +361,16 @@ function fakeDb(initialNow: Date) {
     if (!(total > 0)) return { reason: "monto_cero" };
     if (total > 700) return { reason: "monto_mayor_700" };
     if (Math.abs(Number(order.total_amount) - total) >= 0.005) return { reason: "total_distinto" };
-    if (!iss.emit_from || !a.p_paid_at || cmp(a.p_paid_at, iss.emit_from) < 0 || !paid || cmp(paid, iss.emit_from) < 0) {
-      return { reason: "antes_de_inicio" };
-    }
+    if (!iss.emit_from || !a.p_paid_at || !paid) return { reason: "antes_de_inicio" };
+    const before = cmp(a.p_paid_at, iss.emit_from) < 0 || cmp(paid, iss.emit_from) < 0;
+    const backfill =
+      a.p_backfill === true &&
+      rowMode === "real" &&
+      iss.mode === "manual" &&
+      !!a.p_created_by &&
+      cmp(a.p_paid_at, PISO_0266) >= 0 &&
+      cmp(paid, PISO_0266) >= 0;
+    if (before && !backfill) return { reason: "antes_de_inicio" };
     if (!a.p_request || typeof a.p_request !== "object") return { reason: "sin_boleta" };
     const mine = t("order_invoices").filter((r) => r.order_id === a.p_order);
     if (mine.some((r) => r.mode === "real" && LIVE.includes(r.status as string))) return { reason: "ya_tiene" };
@@ -384,7 +401,7 @@ function fakeDb(initialNow: Date) {
       order_name: a.p_order_name,
       total,
       paid_at: a.p_paid_at,
-      basis: a.p_basis,
+      basis: before ? { ...(a.p_basis as Row), pagado_antes_de_emitir_desde: true } : a.p_basis,
       request: a.p_request,
       response: null,
       http_status: null,
@@ -414,6 +431,16 @@ function fakeDb(initialNow: Date) {
             code: "PGRST202",
             message: `Could not find the function public.invoice_claim(${Object.keys(args).sort().join(", ")}) in the schema cache`,
             hint: "Perhaps you meant to call the function public.invoice_claim(p_basis, p_id, p_issuer, p_order, p_order_name, p_paid_at, p_request, p_store, p_total)",
+          },
+        };
+      }
+      // Sin la 0266, tampoco la firma con `p_backfill`.
+      if (state.sin0266 && "p_backfill" in args) {
+        return {
+          data: null,
+          error: {
+            code: "PGRST202",
+            message: `Could not find the function public.invoice_claim(${Object.keys(args).sort().join(", ")}) in the schema cache`,
           },
         };
       }
@@ -2592,7 +2619,10 @@ describe("emitInvoiceNow: «Emitir esta boleta», la emisión real del barrido p
       (db) => db.t("order_payments").push({ id: "pay-x", order_id: "ord-1", kind: "diferencia", amount: 1, validation_status: "pendiente_revision", registered_at: PAGADO, vision: {} }),
       "pagos_en_revision",
     ],
-    ["pagado antes de «Emitir desde»", (db) => (db.t("order_payments")[0]!.registered_at = "2026-10-14T04:59:59.000Z"), "antes_de_inicio"],
+    // Antes del 01/10/2026 00:00 de Lima ni el botón va hacia atrás. Lo de
+    // después y antes de «Emitir desde» pide la casilla (abajo).
+    ["pagado antes de «Emitir desde» y del 01/10", (db) => (db.t("order_payments")[0]!.registered_at = "2026-10-01T04:59:59.000Z"), "antes_de_inicio"],
+    ["pagado antes de «Emitir desde», sin la casilla", (db) => (db.t("order_payments")[0]!.registered_at = "2026-10-14T04:59:59.000Z"), "sin_revision_simplefact"],
     [
       "ya tiene uno real",
       (db) => db.t("order_invoices").push({ id: "ya", order_id: "ord-1", issuer_id: ISS, mode: "real", status: "emitida", created_at: NOW.toISOString() }),
@@ -3100,7 +3130,16 @@ describe("emitInvoiceNow: lo que vio la persona es lo que sale, solo en Manual y
 // ── ¿Se ofrece «Emitir esta boleta»? El drawer y Ajustes ─────────────────────
 
 describe("loadInvoiceEmitNowOffers: el «Emitir» de Ajustes sale solo cuando el drawer ofrecería «Emitir esta boleta» (§35.7)", () => {
-  const OFERTA = { issuerId: ISS, ruc: RUC_GF, legalName: "GRUPO GF S.A.C.", total: 150 };
+  const OFERTA = {
+    issuerId: ISS,
+    ruc: RUC_GF,
+    legalName: "GRUPO GF S.A.C.",
+    total: 150,
+    // Pagado desde «Emitir desde»: no es de antes, y las fechas van en ISO.
+    beforeStart: false,
+    paidAt: PAGADO,
+    emitFrom: DESDE,
+  };
   /** La simulada que el barrido en «Manual» escribió para el pedido: la fila de Ajustes que lleva «Emitir». */
   const simulada = (db: Db, orderId: string, createdAt = "2026-10-14T19:00:00.000Z") =>
     db.t("order_invoices").push({
@@ -3204,7 +3243,7 @@ describe("loadInvoiceEmitNowOffers: el «Emitir» de Ajustes sale solo cuando el
     [
       "cambió el RUC del pedido a otro también en Manual: sale con el RUC nuevo, el que se enviaría",
       (db) => (otroRuc(db, "manual"), (db.t("store_collection_accounts").find((a) => a.id === "acc-flow")!.invoice_issuer_id = ISS2)),
-      { issuerId: ISS2, ruc: RUC_OTRO, legalName: "OTRA RAZÓN SOCIAL S.A.C.", total: 150 },
+      { ...OFERTA, issuerId: ISS2, ruc: RUC_OTRO, legalName: "OTRA RAZÓN SOCIAL S.A.C." },
     ],
     ["la tienda está pausada", (db) => (db.t("stores")[0]!.status = "paused"), null],
   ];
@@ -3253,5 +3292,206 @@ describe("loadInvoiceEmitNowOffers: el «Emitir» de Ajustes sale solo cuando el
     const db = world({ mode: "manual" });
     expect(await loadInvoiceEmitNowOffers(db.admin, [])).toEqual(new Map());
     expect(db.log).toEqual([]);
+  });
+});
+
+// ── Lo pagado antes de «Emitir desde», con el botón (owner, 15-10-2026) ──────
+
+describe("emitInvoiceNow: lo pagado antes de «Emitir desde» sale con el botón y la casilla «Revisé en SimpleFact…» (§35.3, §35.7)", () => {
+  const OWNER = "7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+  /** Pagado el 10/10/2026 10:00 de Lima: después del 01/10 y antes de «Emitir desde» (14/10). */
+  const ANTES = "2026-10-10T15:00:00.000Z";
+  /** Lo que confirmó la persona, con la casilla marcada. */
+  const REVISADO = { issuerId: ISS, totalCents: 15_000, simplefactChecked: true };
+  const emit = (
+    db: Db,
+    deps: ReturnType<typeof makeDeps>,
+    input: Partial<Parameters<typeof emitInvoiceNow>[1]> = {},
+  ) => {
+    db.clock.now = deps.now();
+    return emitInvoiceNow(db.admin, { orderId: "ord-1", userId: OWNER, manualOnly: true, expected: REVISADO, ...input }, deps);
+  };
+  /** Ni el token, ni Shopify, ni el turno, ni SimpleFact, ni una fila. */
+  const nadaDeNada = (db: Db, deps: ReturnType<typeof makeDeps>) => {
+    expect(deps.decryptToken).not.toHaveBeenCalled();
+    expect(deps.fetchOrder).not.toHaveBeenCalled();
+    expect(claims(db)).toEqual([]);
+    expect(deps.createSale).not.toHaveBeenCalled();
+    expect(db.t("order_invoices")).toEqual([]);
+  };
+  const deAntes = (mode: "manual" | "real" = "manual", registeredAt = ANTES) => {
+    const db = world({ mode });
+    addOrder(db, 1, { registeredAt });
+    return db;
+  };
+  beforeEach(() => {
+    vi.stubEnv("VERCEL_ENV", "production");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("sin la casilla: `sin_revision_simplefact`, sin token, sin Shopify, sin turno y sin POST", async () => {
+    for (const expected of [
+      { issuerId: ISS, totalCents: 15_000 },
+      { issuerId: ISS, totalCents: 15_000, simplefactChecked: false },
+      // Solo un `true` de verdad cuenta.
+      { issuerId: ISS, totalCents: 15_000, simplefactChecked: "true" },
+      { issuerId: ISS, totalCents: 15_000, simplefactChecked: 1 },
+    ]) {
+      const db = deAntes();
+      const deps = makeDeps();
+      expect(await emit(db, deps, { expected: expected as never }), JSON.stringify(expected)).toEqual({
+        ok: false,
+        reason: "sin_revision_simplefact",
+      });
+      nadaDeNada(db, deps);
+    }
+  });
+
+  it("sin `expected` (no es el botón): tampoco sale, aunque el RUC esté en Manual", async () => {
+    const db = deAntes();
+    const deps = makeDeps();
+    expect(await emit(db, deps, { manualOnly: undefined, expected: undefined })).toEqual({
+      ok: false,
+      reason: "sin_revision_simplefact",
+    });
+    nadaDeNada(db, deps);
+  });
+
+  it("lo que cambió va primero: si confirmó otro total, `pedido_cambio`, con o sin la casilla", async () => {
+    const db = deAntes();
+    const deps = makeDeps();
+    expect(await emit(db, deps, { expected: { ...REVISADO, totalCents: 14_000 } })).toEqual({
+      ok: false,
+      reason: "pedido_cambio",
+    });
+    nadaDeNada(db, deps);
+  });
+
+  it("con la casilla: el turno va con `p_backfill: true`, un solo POST, y la fila lo anota", async () => {
+    const db = deAntes();
+    const deps = makeDeps();
+    expect(await emit(db, deps)).toMatchObject({ ok: true, status: "emitida", serie: "B001" });
+    expect(claims(db)).toHaveLength(1);
+    expect(claims(db)[0]!.args).toMatchObject({
+      p_paid_at: ANTES,
+      p_mode: "real",
+      p_created_by: OWNER,
+      p_backfill: true,
+    });
+    expect(deps.createSale).toHaveBeenCalledTimes(1);
+    expect(invoice(db, "ord-1")).toMatchObject({
+      mode: "real",
+      status: "emitida",
+      created_by: OWNER,
+      basis: { pagado_antes_de_emitir_desde: true },
+    });
+  });
+
+  it("un pedido pagado desde «Emitir desde» no manda `p_backfill`, ni en false", async () => {
+    const db = deAntes("manual", PAGADO);
+    const deps = makeDeps();
+    // Con la casilla marcada de más, tampoco: no es de antes.
+    expect(await emit(db, deps)).toMatchObject({ ok: true, status: "emitida" });
+    expect("p_backfill" in claims(db)[0]!.args).toBe(false);
+    expect(invoice(db, "ord-1")!.basis).not.toHaveProperty("pagado_antes_de_emitir_desde");
+  });
+
+  it("sin la 0266: lo normal se sigue emitiendo; uno de antes dice `sin_migracion` con la 0266, sin fila ni POST", async () => {
+    expect(INVOICE_CLAIM_BACKFILL_MIGRATION).toBe("0266");
+    // Lo normal no manda `p_backfill`: el turno de once argumentos lo atiende.
+    const normal = deAntes("manual", PAGADO);
+    normal.state.sin0266 = true;
+    expect(await emit(normal, makeDeps())).toMatchObject({ ok: true, status: "emitida" });
+    // Uno de antes, sí: y no se reserva ni se envía nada.
+    const db = deAntes();
+    db.state.sin0266 = true;
+    const deps = makeDeps();
+    expect(await emit(db, deps)).toEqual({
+      ok: false,
+      reason: "sin_migracion",
+      detail: "Falta aplicar la migración 0266 de comprobantes (invoice_claim con p_backfill).",
+    });
+    expect(claims(db)).toHaveLength(1);
+    expect(db.t("order_invoices")).toEqual([]);
+    expect(deps.createSale).not.toHaveBeenCalled();
+  });
+
+  it("antes del 01/10/2026 00:00 de Lima, ni con la casilla: `antes_de_inicio`, sin turno", async () => {
+    const db = deAntes("manual", "2026-10-01T04:59:59.999Z");
+    const deps = makeDeps();
+    expect(await emit(db, deps)).toEqual({ ok: false, reason: "antes_de_inicio" });
+    nadaDeNada(db, deps);
+    // Justo en el piso, sí.
+    const enElPiso = deAntes("manual", "2026-10-01T05:00:00.000Z");
+    expect(await emit(enElPiso, makeDeps())).toMatchObject({ ok: true, status: "emitida" });
+    expect(claims(enElPiso)[0]!.args).toMatchObject({ p_backfill: true });
+  });
+
+  it("con el RUC en Real no hay excepción: `antes_de_inicio`, también sin `manualOnly`", async () => {
+    for (const manualOnly of [true, undefined]) {
+      const db = deAntes("real");
+      const deps = makeDeps();
+      expect(await emit(db, deps, { manualOnly }), String(manualOnly)).toEqual({ ok: false, reason: "antes_de_inicio" });
+      nadaDeNada(db, deps);
+    }
+  });
+
+  it("los demás candados siguen: un comprobante real vivo da `ya_tiene` antes de pedir la casilla", async () => {
+    const db = deAntes();
+    db.t("order_invoices").push({ id: "ya", order_id: "ord-1", issuer_id: ISS, mode: "real", status: "externa", created_at: NOW.toISOString() });
+    const deps = makeDeps();
+    expect(await emit(db, deps, { expected: { issuerId: ISS, totalCents: 15_000 } })).toEqual({ ok: false, reason: "ya_tiene" });
+    expect(claims(db)).toEqual([]);
+    expect(deps.createSale).not.toHaveBeenCalled();
+  });
+
+  it("el barrido nunca va hacia atrás: ni en Manual ni en Real pide el turno con `p_backfill`, ni guarda `sin_revision_simplefact`", async () => {
+    for (const mode of ["manual", "real"] as const) {
+      const db = deAntes(mode);
+      addOrder(db, 2);
+      const deps = makeDeps();
+      await sweep(db, deps);
+      // El de antes ni es candidato; el de hoy sí.
+      expect(claims(db).map((c) => c.args.p_order), mode).toEqual(["ord-2"]);
+      expect(claims(db).some((c) => "p_backfill" in c.args), mode).toBe(false);
+      expect(invoice(db, "ord-1"), mode).toBeUndefined();
+      expect(db.t("invoice_order_checks").map((c) => c.reason), mode).not.toContain("sin_revision_simplefact");
+    }
+  });
+
+  it("el «Emitir» de Ajustes y el drawer lo ofrecen igual, diciendo que es de antes y las dos fechas", async () => {
+    const db = deAntes();
+    db.t("order_invoices").push({
+      id: "sim-ord-1",
+      order_id: "ord-1",
+      store_id: STORE,
+      issuer_id: ISS,
+      mode: "simulacion",
+      status: "simulada",
+      created_at: "2026-10-12T19:00:00.000Z",
+    });
+    const oferta = {
+      issuerId: ISS,
+      ruc: RUC_GF,
+      legalName: "GRUPO GF S.A.C.",
+      total: 150,
+      beforeStart: true,
+      paidAt: ANTES,
+      emitFrom: DESDE,
+    };
+    expect((await loadInvoiceEmitNowOffers(db.admin, ["ord-1"])).get("ord-1")).toEqual(oferta);
+    const facts = (await loadInvoiceOrderFacts(db.admin, ["ord-1"])).get("ord-1")!;
+    expect(invoiceEmitNowReadiness({ facts, invoices: [], checks: [], storeActive: true })).toEqual({ ok: true, offer: oferta });
+    // Una fecha con otra escritura sale en ISO.
+    issuerRow(db).emit_from = "2026-10-14T00:00:00-05:00";
+    expect((await loadInvoiceEmitNowOffers(db.admin, ["ord-1"])).get("ord-1")).toMatchObject({ emitFrom: DESDE });
+    // En Real, ni de antes ni de después hay botón; antes del piso, tampoco.
+    issuerRow(db).mode = "real";
+    expect((await loadInvoiceEmitNowOffers(db.admin, ["ord-1"])).size).toBe(0);
+    issuerRow(db).mode = "manual";
+    db.t("order_payments")[0]!.registered_at = "2026-09-30T12:00:00.000Z";
+    expect((await loadInvoiceEmitNowOffers(db.admin, ["ord-1"])).size).toBe(0);
   });
 });

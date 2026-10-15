@@ -531,4 +531,8 @@
 \ir migrations/0263_lead_insights_rollup_sin_llamar.sql
 \echo 'Applying 0264_order_master_sales_channel.sql'
 \ir migrations/0264_order_master_sales_channel.sql
+\echo 'Applying 0265_order_master_stale_urpi.sql'
+\ir migrations/0265_order_master_stale_urpi.sql
+\echo 'Applying 0266_invoices_backfill.sql'
+\ir migrations/0266_invoices_backfill.sql
 \echo 'Done.'

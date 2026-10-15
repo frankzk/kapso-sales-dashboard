@@ -453,6 +453,22 @@ export function ownRiderAttempts(events: readonly { kind: string; payload?: unkn
   return stops.size;
 }
 
+/**
+ * Resultados del reporte de Urpi que son una visita: entregó, canceló o
+ * reprogramó en la puerta. «Programado», «En coordinación» y «Sin resultado»
+ * todavía no son un intento, y un estado que Kapta no reconoce no se cuenta.
+ */
+export const URPI_ATTEMPT_RESULTS: ReadonlySet<string> = new Set(["entregado", "cancelado", "reprogramado"]);
+
+/**
+ * Intentos de entrega que Urpi reportó en su export (MOM §30.11): una fila por
+ * intento, vinculada al pedido. Hasta el 15-10-2026 la columna no los sumaba
+ * (#KP131545: Urpi lo canceló el 01/09 y la fila decía «0 intentos»). Pura.
+ */
+export function urpiAttempts(rows: readonly { result_code: string | null }[]): number {
+  return rows.filter((row) => row.result_code != null && URPI_ATTEMPT_RESULTS.has(row.result_code)).length;
+}
+
 export function isAgencyCourier(courier: string | null | undefined): boolean {
   return AGENCY_COURIERS.has((courier ?? "").toLowerCase());
 }

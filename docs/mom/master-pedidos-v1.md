@@ -1795,7 +1795,7 @@ decían «0 intentos» (#KP140941: salió el 13/10 y el 14/10 con Roy, «No
 contesta» las dos veces, y la fila decía 0).
 
 - **No cambia el costo.** El costo logístico sigue con los intentos del
-  courier: Grupo GF no cobra por intento adicional, y sumar sus visitas a la
+  courier: ni Grupo GF ni Urpi cobran por intento adicional en las tarifas, y sumar sus visitas a la
   tarifa de otro courier (un pedido que luego salió con Aliclik) inventaría un
   costo.
 - **No cambia la etapa.** Es un dato de la fila; la macroetapa se decide como
@@ -1809,9 +1809,20 @@ contesta» las dos veces, y la fila decía 0).
   Shalom, Olva o Urpi, que no reportan intentos a la columna (abajo). Para
   acercarse a «nunca salió», se combina con la etapa (Preparación o Por
   despachar).
-- **Lo que todavía no cuenta.** Los intentos que Urpi reporta en su export
-  (§30.11) viven en su propia tabla y no entran en la columna; tampoco Tanders,
-  Shalom ni Olva, que no reportan intentos.
+- **Urpi también cuenta (v1.28, 15-10-2026).** Cada fila del reporte de Urpi
+  (§30.11) vinculada al pedido con resultado «Entregado», «Cancelado» o
+  «Reprogramado» es un intento (`urpiAttempts`); «Programado», «En
+  coordinación» y «Sin resultado» todavía no lo son. #KP131545: Urpi lo canceló
+  el 01/09 (fila 1906, vinculada por teléfono) y la fila decía «0 intentos»
+  aunque el intento ya estaba en su pestaña Actividad. Cargar el reporte no
+  toca guías ni eventos, así que desde la 0265 el barrido del Master
+  (`order_master_stale`) mira también la última escritura de las filas de Urpi
+  del pedido: un intento nuevo, cambiado o vinculado a mano recalcula su fila.
+  Lo que no la recalcula: si un envío se re-vincula de un pedido a otro, el
+  pedido que lo pierde conserva el número hasta su próximo recálculo.
+- **Lo que todavía no cuenta.** Tanders, Shalom y Olva no reportan intentos.
+  La programación enviada a Urpi (§30.10) tampoco: dice qué se mandó, no qué
+  pasó en la puerta.
 
 ### 9.4 Reportes, pagos y devoluciones físicas de Lima
 
@@ -13326,7 +13337,9 @@ nuevo que borra el motivo de la prueba anterior y los pedidos por revisar), las
 dos ya corridas en producción; la 0261 (el modo «Manual» y el turno que dice
 qué fila pide y quién la pidió, 15-10-2026), y la 0262 (el turno que vuelve a
 revisar que la empresa recibió el pago, 15-10-2026), que se aplican a mano, en
-ese orden, antes de su código (35.8). Están también las reglas puras, el
+ese orden, antes de su código (35.8). La 0266 (el turno que deja a «Emitir esta
+boleta» emitir lo pagado antes de «Emitir desde», 15-10-2026) va después de la
+0262, también a mano y antes de su código. Están también las reglas puras, el
 cliente de SimpleFact, el barrido (`/api/cron/invoices`), la sección «Boletas
 y facturas» de Ajustes y el panel «Comprobante» del drawer, con su «Emitir esta
 boleta» (35.7), que solo emite en producción.
@@ -13444,7 +13457,7 @@ panel (`invoiceEligibility`, función pura; los textos en
 | 5 | Todas sus cuentas tienen RUC, y es el mismo | `cuenta_sin_ruc` / `ruc_mezclados` |
 | 6 | El total es mayor que 0 y no pasa de S/ 700 (35.5) | `monto_cero` / `monto_mayor_700` |
 | 7 | Ese RUC no está apagado | `ruc_apagado` |
-| 8 | El pedido quedó pagado desde «Emitir desde» del RUC: cuenta cuándo se registró en Kapta el último de sus pagos validados (`registered_at`, que no cambia si el pago se observa y se vuelve a validar; la fecha de validación, `validated_at`, sí), o la fecha del pedido si es prepago web. Un pago validado sin fecha de registro, o un RUC sin fecha de inicio, no emite | `antes_de_inicio` |
+| 8 | El pedido quedó pagado desde «Emitir desde» del RUC: cuenta cuándo se registró en Kapta el último de sus pagos validados (`registered_at`, que no cambia si el pago se observa y se vuelve a validar; la fecha de validación, `validated_at`, sí), o la fecha del pedido si es prepago web. Un pago validado sin fecha de registro, o un RUC sin fecha de inicio, no emite. La única excepción es de «Emitir esta boleta» con el RUC en Manual: lo pagado antes, pero desde el 01/10/2026 00:00 (hora de Lima), si quien pulsa confirma que en SimpleFact no tiene boleta (abajo; owner 15-10-2026) | `antes_de_inicio` |
 | 9 | No tiene comprobante real vivo ni uno registrado como emitido fuera de Kapta (35.4). En simulación, tampoco una simulación | `ya_tiene` / `ya_simulado` |
 | 10 | Su último intento real no terminó en `error` sin que una persona pidiera reintentar | `error_previo` |
 
@@ -13456,6 +13469,21 @@ cuenta solo lo real —una simulación no frena—, la 10 se mira, y también la
 conexión del RUC (`sin_conexion`). Y justo después de la condición 7, el RUC
 tiene que estar en Manual o en Real (`modo_distinto`); el botón, además, solo
 emite en Manual (35.7).
+
+**Lo pagado antes de «Emitir desde»** (owner, 15-10-2026). La condición 8
+tiene una sola excepción, y es del botón. Antes de Kapta las boletas se
+emitían a mano en SimpleFact, y Kapta no sabe si un pedido de entonces ya tiene
+la suya: una boleta de más es pagar el impuesto dos veces. «Emitir esta
+boleta» (35.7), con el RUC en Manual, deja pasar un pedido que quedó pagado
+antes de «Emitir desde» si quedó pagado desde el **01/10/2026 00:00** (hora de
+Lima, `INVOICE_BACKFILL_FROM`), con la misma cuenta de la condición 8. Las
+reglas lo marcan (`beforeStart`), y quien pulsa tiene que confirmar que lo
+buscó en SimpleFact y no tiene boleta; sin eso no se emite
+(`sin_revision_simplefact`). Las demás condiciones valen igual. Sigue en
+`antes_de_inicio` lo pagado antes del 01/10/2026, lo que no tiene fecha de
+pago, un RUC sin «Emitir desde» y todo pedido de un RUC en Real, porque ahí no
+hay botón. **El barrido nunca va hacia atrás**: en Simulación, en Manual y en
+Real, lo pagado antes de «Emitir desde» no se simula ni se emite.
 
 **Justo antes de emitir, Kapta vuelve a leer el pedido en Shopify**
 (`fetchOrderForInvoice`), porque lo guardado no alcanza para armar la boleta
@@ -13496,7 +13524,13 @@ validado o, sin pagos validados, la fecha del pedido. Esa fecha y la que manda
 el barrido tienen que ser las dos desde «Emitir desde»; si falta una, o una es
 anterior, no da el turno (`antes_de_inicio`). Así, un error en las reglas o en
 una lectura no manda a SUNAT la boleta de algo pagado antes de la fecha de
-inicio.
+inicio. La única excepción es la de arriba, y la base la vuelve a exigir
+entera (0266): da el turno a algo pagado antes de «Emitir desde» solo si se
+pide con `p_backfill`, una fila real, el RUC en Manual, quién la pide
+(`p_created_by`) y las dos fechas del 01/10/2026 00:00 (hora de Lima) en
+adelante. Sin «Emitir desde» o sin una de las fechas, sigue `antes_de_inicio`.
+La fila que sale así lo dice en su base (`pagado_antes_de_emitir_desde`). El
+barrido nunca manda `p_backfill`.
 
 **Que la empresa recibió el pago tampoco se lo cree** (0262). Entre la lectura
 del código y el turno pasa la relectura en Shopify, y en ese rato un pago
@@ -13589,10 +13623,16 @@ comprobante armado con datos a medias puede ir al RUC equivocado.
   una boleta real, ni al revés. Lo que excede espera al día siguiente y no se
   pierde. El defecto cubre el pico medido (34) más los prepagos web.
 - **Por pasada,** a lo más 15 comprobantes por RUC.
-- **«Emitir desde».** Ningún RUC emite hacia atrás: solo pedidos que quedaron
-  pagados desde esa fecha, y Ajustes no la deja en el pasado. Al cambiar de
-  modo, si quedó atrás, se mueve sola al momento del cambio. Asignar un RUC a
-  una cuenta no emite nada pagado antes de esa fecha. Pasar de Manual a Real
+- **«Emitir desde».** El barrido nunca emite hacia atrás, en ningún modo: solo
+  pedidos que quedaron pagados desde esa fecha, y Ajustes no la deja en el
+  pasado. Al cambiar de modo, si quedó atrás, se mueve sola al momento del
+  cambio. Asignar un RUC a una cuenta no hace que el barrido emita nada pagado
+  antes de esa fecha. La única excepción es de una persona, no del barrido
+  (owner 15-10-2026; 35.3, 35.7): con el RUC en Manual, «Emitir esta boleta»
+  emite lo pagado antes de «Emitir desde» si quedó pagado desde el 01/10/2026
+  00:00 (hora de Lima) y quien pulsa confirmó que en SimpleFact no tiene
+  boleta. La excepción no cambia «Emitir desde»: Ajustes sigue sin aceptar una
+  fecha pasada, y un cambio de modo la sigue moviendo. Pasar de Manual a Real
   también es cambiar de modo: lo que quedó pagado en Manual y nadie emitió con
   «Emitir esta boleta» no sale en Real. Se emite antes de cambiar, o a mano en
   SimpleFact y se registra con «Ya tiene comprobante».
@@ -13713,7 +13753,7 @@ comprobante armado con datos a medias puede ir al RUC equivocado.
 | --- | --- |
 | `invoice_issuers` | Los RUC: subdominio, token cifrado (AES-256-GCM, `lib/crypto.ts`), modo, «Emitir desde», tope y la última prueba de conexión (RUC leído, fecha y error). Sin policy de lectura: solo la lee el servidor |
 | `store_collection_accounts.invoice_issuer_id` | El RUC de cada cuenta (35.2). Un trigger exige que el RUC sea de la misma organización que la tienda |
-| `order_invoices` | Una fila por intento: pedido, RUC (copiado), modo, estado, total, cuándo quedó pagado, los pagos y cuentas en que se basó (`basis`), lo enviado (`request`), lo recibido (`response` y código HTTP), el id de SimpleFact, serie, correlativo y enlaces al PDF y al XML, quién la emitió con «Emitir esta boleta» o la registró como externa (`created_by`) y quién pidió reintentar |
+| `order_invoices` | Una fila por intento: pedido, RUC (copiado), modo, estado, total, cuándo quedó pagado, los pagos y cuentas en que se basó (`basis`, que dice también si salió pagado antes de «Emitir desde», 35.3), lo enviado (`request`), lo recibido (`response` y código HTTP), el id de SimpleFact, serie, correlativo y enlaces al PDF y al XML, quién la emitió con «Emitir esta boleta» o la registró como externa (`created_by`) y quién pidió reintentar |
 | `invoice_order_checks` | La última revisión del barrido por pedido y modo (motivo y fecha). Con ella el panel dice por qué un pedido no lleva comprobante, y el barrido no relee en Shopify cada 10 minutos un pedido bloqueado |
 
 Reglas de esa tabla:
@@ -13825,7 +13865,9 @@ Reglas de esa tabla:
     como una emisión real (cuentan el error sin reintento y la conexión del RUC; una
     simulación no frena) y sin que la última pasada lo haya frenado por lo que
     dijo Shopify: ahí el panel dice ese motivo, como siempre. El badge dice
-    «Lista para emitir». Con el RUC en Manual, si algo de la emisión real lo
+    «Lista para emitir». Aparece también en un pedido pagado antes de «Emitir
+    desde», si quedó pagado desde el 01/10/2026 (35.3, abajo). Con el RUC en
+    Manual, si algo de la emisión real lo
     frena y el panel no lo dice de otra forma —sin la conexión probada, por
     ejemplo—, a quien gestiona le dice por qué no hay botón. En Ajustes,
     «Emitir» va en la simulada más nueva de un pedido solo cuando el panel de
@@ -13836,7 +13878,28 @@ Reglas de esa tabla:
     CLIENTES VARIOS con el RUC ‹ruc› (‹razón social›). Va a SUNAT y no se
     puede borrar.», con «Sí, emitir» y «Cancelar». Desde el primer «Sí,
     emitir» hasta que vuelve la respuesta, no sale un segundo envío y los
-    botones quedan deshabilitados.
+    botones quedan deshabilitados. Si el pedido quedó pagado antes de «Emitir
+    desde», pide además una casilla (abajo).
+  - **Lo pagado antes de «Emitir desde»** (owner, 15-10-2026; 35.3). Con el
+    RUC en Manual, el botón también emite un pedido que quedó pagado antes de
+    «Emitir desde», si quedó pagado desde el **01/10/2026 00:00** (hora de
+    Lima). Solo el botón: una persona, nunca el barrido. Antes de Kapta las
+    boletas se emitían a mano en SimpleFact, y Kapta no sabe si ese pedido ya
+    tiene la suya; una boleta de más es pagar el impuesto dos veces. Por eso
+    la confirmación agrega «Quedó pagado el ‹dd/mm/aaaa hh:mm›, antes de
+    «Emitir desde» (‹dd/mm/aaaa hh:mm›). Kapta no sabe si ya se emitió a mano:
+    búscalo en SimpleFact antes de emitir.» —cuándo quedó pagado y desde
+    cuándo emite el RUC, las dos en hora de Lima— y una casilla «Revisé en
+    SimpleFact y este pedido no tiene boleta». La casilla empieza sin marcar
+    cada vez que se abre la confirmación, y se desmarca al cancelar y al
+    volver la respuesta. «Sí, emitir» no se puede pulsar hasta marcarla. Si en
+    SimpleFact ya tiene boleta, no se emite: se registra con «Ya tiene
+    comprobante». Sin esta excepción nada cambia: un pedido pagado desde
+    «Emitir desde» no lleva ni el texto ni la casilla. En el panel, la
+    revisión sigue diciendo «Quedó pagado antes de «Emitir desde» del RUC.»
+    —el barrido no lo emite— y, al lado del botón, agrega «No sale sola: se
+    puede emitir con «Emitir esta boleta» después de revisar SimpleFact.».
+    «Emitir» en Ajustes es la misma acción, con la misma casilla.
   - **Qué hace el servidor** (`emitInvoiceAction`). Primero, que es
     producción, antes de leer nada. Después lo que es de quien pulsa: que ve
     el pedido y tiene `invoices.manage`, antes de leer nada con el service
@@ -13849,12 +13912,17 @@ Reglas de esa tabla:
     emite en «Manual»») y que el RUC y el total que se van a enviar son los
     que confirmó. Si el pedido cambió desde que lo abrió, no emite
     (`pedido_cambio`): «El pedido cambió desde que lo abriste (el RUC o el
-    total): vuelve a abrirlo y revisa la boleta antes de emitirla.». La acción
-    no lee el pedido por su cuenta: antes comparaba con una lectura propia,
+    total): vuelve a abrirlo y revisa la boleta antes de emitirla.». Si quedó
+    pagado antes de «Emitir desde» y quien pulsó no marcó la casilla, tampoco
+    emite (`sin_revision_simplefact`): «Quedó pagado antes de «Emitir desde»:
+    falta confirmar que en SimpleFact no tiene boleta.». Solo cuenta una
+    casilla marcada (`true`). La acción no lee el pedido por su cuenta:
+    antes comparaba con una lectura propia,
     `emitInvoiceNow` volvía a leer sin comparar, y entre las dos el pedido
     podía cambiar y salir una boleta que nadie confirmó. Después, el token, la
     relectura en Shopify (el total y, en un prepago web, lo que cobró Flow),
-    la boleta, el turno pidiendo una fila real con quien pulsó (35.3), UNA
+    la boleta, el turno pidiendo una fila real con quien pulsó (35.3) —y, si
+    quedó pagado antes de «Emitir desde», con `p_backfill` (0266)—, UNA
     llamada a SimpleFact, la lectura de la respuesta, la fila (solo si sigue
     en `emitiendo`) y las reglas que apagan el RUC (35.4). Los mismos
     candados: un comprobante real vivo por pedido (el índice único), el tope
@@ -13973,6 +14041,24 @@ después de la 0261: sin ella —sigue el turno de nueve argumentos, o falta el
 de once— se detiene sin cambiar nada. Si después alguien vuelve a correr la
 0261, el turno queda otra vez sin esta revisión hasta volver a correr la 0262.
 
+**Antes de la 0266** (owner, 15-10-2026). También se aplica a mano, después de
+la 0262 y antes de su código (DEPLOY.md). Cambia la firma del turno: borra la
+de once argumentos y crea la de doce, con `p_backfill` al final, falso por
+defecto; el cuerpo es el de la 0262. El código de antes y el de ahora piden el
+turno por nombre, y con un solo turno esas llamadas van al de doce con
+`p_backfill` en falso: hace lo mismo que la 0262. El código solo manda
+`p_backfill` desde «Emitir esta boleta», con un pedido pagado antes de «Emitir
+desde» (35.3). Si llega antes que la 0266, nada se emite de más y nada se pone
+rojo: lo pagado desde «Emitir desde» se simula y se emite como siempre, y un
+pedido pagado antes no reserva ni envía nada: es `sin_migracion`, y «Emitir
+esta boleta» dice «Falta aplicar la migración 0266 de comprobantes
+(invoice_claim con p_backfill).». La 0266 se reconoce por ese parámetro
+(`INVOICE_CLAIM_BACKFILL_MIGRATION`). Va después de la 0262: con el turno de
+nueve argumentos, o sin el de once ni el de doce, se detiene sin cambiar nada.
+Si después alguien vuelve a correr la 0261, quedan dos turnos —el de once y el
+de doce— y la llamada por nombre del código falla: no se simula ni se emite
+nada hasta volver a correr la 0266.
+
 Para el barrido, «falta una migración de comprobantes» es solo un «no existe»
 (de tabla o de función) que nombra algo que crean la 0257 —`invoice_issuers`,
 `order_invoices`, `invoice_order_checks`, `invoice_claim` o
@@ -14022,8 +14108,8 @@ Implementación:
   `store_collection_accounts.invoice_issuer_id` con su trigger,
   `order_invoices`, `invoice_order_checks`, la función `invoice_claim` (el
   turno) y la semilla de GRUPO GF S.A.C. Es la que corrió en producción el
-  14-10-2026, y no se reescribe: lo que cambió después va en la 0260, la 0261
-  y la 0262.
+  14-10-2026, y no se reescribe: lo que cambió después va en la 0260, la 0261,
+  la 0262 y la 0266.
 - `db/migrations/0260_invoices_hardening.sql`: los arreglos de la revisión
   adversaria, sobre la 0257: las funciones `invoice_claim` (el turno) e
   `invoice_candidates` (qué pedidos mira el barrido), y las de los triggers
@@ -14043,8 +14129,18 @@ Implementación:
   `prepago_con_comprobantes`), que cada pago de la base del comprobante siga
   validado, y bloquea los pagos del pedido mientras dura. Se detiene sin la
   0261 delante. No toca filas.
+- `db/migrations/0266_invoices_backfill.sql`: lo pagado antes de «Emitir
+  desde» con «Emitir esta boleta» (owner 15-10-2026), sobre la 0262: solo
+  `invoice_claim`, que pasa a doce argumentos con `p_backfill` (falso por
+  defecto) y borra la firma de once. El cuerpo es el de la 0262 salvo dos
+  cosas: con `p_backfill`, una fila real, el RUC en Manual y quién la pide
+  (`p_created_by`), da el turno a lo pagado antes de «Emitir desde» si las dos
+  fechas son del 01/10/2026 00:00 (hora de Lima) en adelante; y esa fila lleva
+  en su base `pagado_antes_de_emitir_desde`. Se detiene con el turno de nueve
+  argumentos, o sin el de once ni el de doce. No toca filas.
 - `lib/invoicing/rules.ts`: reglas puras (cuenta y RUC de cada pago,
-  elegibilidad, la boleta, la lectura de la respuesta) y cuándo se puede
+  elegibilidad —con `INVOICE_BACKFILL_FROM`, el 01/10/2026 de lo pagado antes
+  de «Emitir desde»—, la boleta, la lectura de la respuesta) y cuándo se puede
   liberar un `en_duda` (`invoiceReleaseAvailableAt` e `invoiceReleaseBlock`,
   con `INVOICE_RELEASE_MIN_AGE_MS`).
 - `lib/invoicing/shopify-order.ts`: la lectura del pedido en Shopify y su
@@ -14055,7 +14151,10 @@ Implementación:
   emisión real del barrido, para un pedido, que compara lo que la persona
   confirmó) e `invoiceEmitNowReadiness` / `loadInvoiceEmitNowOffers` (cuándo
   se ofrece el botón, en el panel y en Ajustes), y `invoiceEmitAllowedHere`
-  (solo producción emite).
+  (solo producción emite). Con un pedido pagado antes de «Emitir desde»,
+  `emitInvoiceNow` pide la casilla (`sin_revision_simplefact`) y el turno va
+  con `p_backfill`; sin la 0266, contesta `sin_migracion`
+  (`INVOICE_CLAIM_BACKFILL_MIGRATION`).
 - `app/api/cron/invoices/route.ts`: el barrido, cada 10 minutos.
 - Ajustes, en `app/dashboard/[storeId]/settings/invoice-actions.ts` y
   `components/invoice-settings-section.tsx`; el panel, en

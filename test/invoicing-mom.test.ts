@@ -1,8 +1,9 @@
 // Los comprobantes por RUC (MOM §35) están escritos en prosa, y la regla que de
 // verdad corre vive en sitios que nadie compila juntos: las reglas puras
-// (lib/invoicing/rules.ts), la 0257, la 0260, la 0261 y la 0262 (lo que la base
-// acepta y lo que el turno vuelve a revisar), los permisos, el cron y «Emitir
-// esta boleta» (el modo Manual, owner 15-10-2026). Ninguno falla solo si se separa del
+// (lib/invoicing/rules.ts), la 0257, la 0260, la 0261, la 0262 y la 0266 (lo
+// que la base acepta y lo que el turno vuelve a revisar), los permisos, el cron
+// y «Emitir esta boleta» (el modo Manual y lo pagado antes de «Emitir desde»,
+// owner 15-10-2026). Ninguno falla solo si se separa del
 // MOM: un motivo que el panel no sabe decir, un tope que el MOM promete y la
 // base no guarda, un estado «vivo» que el índice único no cuenta, un 4xx que el
 // MOM da por «no hay boleta» y el código trata como duda. Y una boleta de más
@@ -18,6 +19,7 @@ import {
   BOLETA_MAX_CENTS,
   BOLETA_TYPE,
   IGV_PERCENT,
+  INVOICE_BACKFILL_FROM,
   INVOICE_DAILY_LIMIT_DEFAULT,
   INVOICE_DAILY_LIMIT_MAX,
   INVOICE_DAILY_LIMIT_MIN,
@@ -50,6 +52,7 @@ import {
   type InvoicePayment,
 } from "@/lib/invoicing/rules";
 import {
+  INVOICE_CLAIM_BACKFILL_MIGRATION,
   INVOICE_CLAIM_MODE_MIGRATION,
   INVOICE_MIGRATION_OBJECTS,
   INVOICE_SHOPIFY_RECHECK_MS,
@@ -84,9 +87,10 @@ const MOM = read("docs/mom/master-pedidos-v1.md");
  * las tablas, sus restricciones e índices, los permisos de las tablas y la
  * semilla se leen en ella. La 0260 vuelve a escribir cuatro de sus funciones
  * (los arreglos de la revisión adversaria), la 0261 dos de ellas otra vez y
- * los CHECK del modo (el modo «Manual», 15-10-2026), y la 0262 el turno otra
- * vez (que la empresa recibió el pago, 15-10-2026): lo que dice una función se
- * lee en su última versión, con `funcion`.
+ * los CHECK del modo (el modo «Manual», 15-10-2026), la 0262 el turno otra
+ * vez (que la empresa recibió el pago, 15-10-2026) y la 0266 otra vez (lo
+ * pagado antes de «Emitir desde», 15-10-2026): lo que dice una función se lee
+ * en su última versión, con `funcion`.
  */
 const SQL_0257 = read("db/migrations/0257_invoices.sql");
 const SQL_0257_FLAT = flat(SQL_0257);
@@ -96,25 +100,46 @@ const SQL_0261 = read("db/migrations/0261_invoices_manual.sql");
 const SQL_0261_FLAT = flat(SQL_0261);
 const SQL_0262 = read("db/migrations/0262_invoices_claim_coverage.sql");
 const SQL_0262_FLAT = flat(SQL_0262);
+const SQL_0266 = read("db/migrations/0266_invoices_backfill.sql");
+const SQL_0266_FLAT = flat(SQL_0266);
 /** Lo que la 0260 vuelve a escribir (o crea), y nada más. */
 const FUNCIONES_0260 = ["invoice_issuers_touch", "order_invoices_guard", "invoice_claim", "invoice_candidates"];
 /** Lo que la 0261 vuelve a escribir de la 0260, y nada más. */
 const FUNCIONES_0261 = ["invoice_issuers_touch", "invoice_claim"];
 /** Lo que la 0262 vuelve a escribir de la 0261: solo el turno. */
 const FUNCIONES_0262 = ["invoice_claim"];
-/** Las firmas del turno: la de la 0257 y la 0260, que la 0261 borra, y la de la 0261. */
+/** Lo que la 0266 vuelve a escribir de la 0262: solo el turno. */
+const FUNCIONES_0266 = ["invoice_claim"];
+/**
+ * Las firmas del turno: la de la 0257 y la 0260, que la 0261 borra; la de la
+ * 0261 (y la 0262), que la 0266 borra; y la de la 0266.
+ */
 const FIRMA_TURNO_9 = "invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)";
 const FIRMA_TURNO_11 = "invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)";
+const FIRMA_TURNO_12 =
+  "invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)";
+/** Las migraciones de comprobantes, en el orden en que se aplican. */
+const MIGRACIONES = [SQL_0257, SQL_0260, SQL_0261, SQL_0262, SQL_0266];
+
+/**
+ * La última versión de una función en esas migraciones: su último `create or
+ * replace`, hasta su `$$;`, en una línea. Con `sinComentarios`, sin los `--`
+ * de dentro. "" si no está.
+ */
+function ultimaEn(sqls: readonly string[], nombre: string, sinComentarios = false): string {
+  const limpia = (sql: string) => (sinComentarios ? sql.replace(/--[^\n]*/g, "") : sql);
+  const todo = flat(sqls.map(limpia).join("\n"));
+  const desde = todo.lastIndexOf(`create or replace function ${nombre}(`);
+  return desde < 0 ? "" : todo.slice(desde, todo.indexOf("$$;", desde) + 3);
+}
 
 /**
  * La versión vigente de una función: su último `create or replace` en la 0257,
- * la 0260, la 0261 y la 0262, en ese orden, hasta su `$$;`, en una línea. ""
- * si no está.
+ * la 0260, la 0261, la 0262 y la 0266, en ese orden, hasta su `$$;`, en una
+ * línea. "" si no está.
  */
 function funcion(nombre: string): string {
-  const todo = flat(`${SQL_0257}\n${SQL_0260}\n${SQL_0261}\n${SQL_0262}`);
-  const desde = todo.lastIndexOf(`create or replace function ${nombre}(`);
-  return desde < 0 ? "" : todo.slice(desde, todo.indexOf("$$;", desde) + 3);
+  return ultimaEn(MIGRACIONES, nombre);
 }
 
 /**
@@ -122,14 +147,12 @@ function funcion(nombre: string): string {
  * un bloque entero aunque lleve un comentario en medio.
  */
 function funcionQueCorre(nombre: string): string {
-  const sinComentarios = (sql: string) => sql.replace(/--[^\n]*/g, "");
-  const todo = flat([SQL_0257, SQL_0260, SQL_0261, SQL_0262].map(sinComentarios).join("\n"));
-  const desde = todo.lastIndexOf(`create or replace function ${nombre}(`);
-  return desde < 0 ? "" : todo.slice(desde, todo.indexOf("$$;", desde) + 3);
+  return ultimaEn(MIGRACIONES, nombre, true);
 }
 
 /** La migración (en una línea) que escribe la versión vigente de una función. */
 function ultimaQueEscribe(nombre: string): string {
+  if (FUNCIONES_0266.includes(nombre)) return SQL_0266_FLAT;
   if (FUNCIONES_0262.includes(nombre)) return SQL_0262_FLAT;
   if (FUNCIONES_0261.includes(nombre)) return SQL_0261_FLAT;
   return SQL_0260_FLAT;
@@ -238,6 +261,7 @@ describe("MOM §35: la sección existe y dice su estado", () => {
         "db/migrations/0260_invoices_hardening.sql",
         "db/migrations/0261_invoices_manual.sql",
         "db/migrations/0262_invoices_claim_coverage.sql",
+        "db/migrations/0266_invoices_backfill.sql",
         "lib/invoicing/rules.ts",
         "lib/invoicing/server.ts",
         "app/api/cron/invoices/route.ts",
@@ -283,7 +307,7 @@ describe("MOM §35: la sección existe y dice su estado", () => {
       expect(r0257).toContain("la función `invoice_claim` (el turno) y la semilla de GRUPO GF S.A.C.");
       expect(SQL_0257).toContain("create or replace function invoice_claim(");
       expect(r0257).toContain(
-        "Es la que corrió en producción el 14-10-2026, y no se reescribe: lo que cambió después va en la 0260, la 0261 y la 0262.",
+        "Es la que corrió en producción el 14-10-2026, y no se reescribe: lo que cambió después va en la 0260, la 0261, la 0262 y la 0266.",
       );
     });
 
@@ -305,8 +329,8 @@ describe("MOM §35: la sección existe y dice su estado", () => {
       );
       expect(r0260).toContain("Solo funciones: no toca datos ni recrea triggers.");
       // Cada una, en su versión vigente, es la de la 0260 —o la de la 0261, que
-      // vuelve a escribir dos, o la de la 0262, que vuelve a escribir el
-      // turno—; y la 0260 no tiene otra.
+      // vuelve a escribir dos, o la de la 0262 y la 0266, que vuelven a
+      // escribir el turno—; y la 0260 no tiene otra.
       const creadas = [...SQL_0260.matchAll(/^create or replace function (\w+)\(/gm)].map((m) => m[1]);
       expect(creadas).toEqual(FUNCIONES_0260);
       for (const nombre of FUNCIONES_0260) {
@@ -345,7 +369,7 @@ describe("MOM §35: la sección existe y dice su estado", () => {
         "la función del trigger `invoice_issuers_touch` (lo que baja Real a Simulación baja también Manual) y `invoice_claim` (el turno) con `p_mode` y `p_created_by`, que reemplaza la firma de nueve argumentos. No toca filas.",
       );
       // Las dos funciones, y ninguna más; la vigente de cada una es la suya,
-      // salvo el turno, que la 0262 vuelve a escribir.
+      // salvo el turno, que la 0262 y la 0266 vuelven a escribir.
       const creadas = [...SQL_0261.matchAll(/^create or replace function (\w+)\(/gm)].map((m) => m[1]);
       expect(creadas).toEqual(FUNCIONES_0261);
       for (const nombre of FUNCIONES_0261) expect(ultimaQueEscribe(nombre), nombre).toContain(funcion(nombre));
@@ -380,10 +404,12 @@ describe("MOM §35: la sección existe y dice su estado", () => {
       expect(r0262).toContain(
         "el turno que vuelve a revisar que la empresa recibió el pago, sobre la 0261: solo `invoice_claim`, con `create or replace` y la misma firma de once argumentos, que revisa la condición 3 de 35.3 con los pagos y el pedido guardados (`sin_pago_completo`, `prepago_con_comprobantes`), que cada pago de la base del comprobante siga validado, y bloquea los pagos del pedido mientras dura. Se detiene sin la 0261 delante. No toca filas.",
       );
-      // Solo el turno, y el vigente es el suyo.
+      // Solo el turno. El vigente es el de la 0266, que es éste con la
+      // excepción de lo pagado antes de «Emitir desde» (abajo).
       const creadas = [...SQL_0262.matchAll(/^create or replace function (\w+)\(/gm)].map((m) => m[1]);
       expect(creadas).toEqual(FUNCIONES_0262);
-      expect(SQL_0262_FLAT).toContain(funcion("invoice_claim"));
+      expect(ultimaEn([SQL_0262], "invoice_claim")).not.toBe("");
+      expect(ultimaQueEscribe("invoice_claim")).toBe(SQL_0266_FLAT);
       // La misma firma, con los mismos nombres y valores por defecto, y sin
       // borrar nada: con otra firma nacería un segundo turno al lado, y la
       // llamada por nombre del código dejaría de saber a cuál ir.
@@ -422,6 +448,87 @@ describe("MOM §35: la sección existe y dice su estado", () => {
       );
     });
 
+    it("la 0266 vuelve a escribir solo el turno: el de la 0262 con `p_backfill`, la excepción de la fecha y la marca", () => {
+      const r0266 = renglon("db/migrations/0266_invoices_backfill.sql");
+      expect(r0266).toContain(
+        "lo pagado antes de «Emitir desde» con «Emitir esta boleta» (owner 15-10-2026), sobre la 0262: solo `invoice_claim`, que pasa a doce argumentos con `p_backfill` (falso por defecto) y borra la firma de once.",
+      );
+      expect(r0266).toContain(
+        "El cuerpo es el de la 0262 salvo dos cosas: con `p_backfill`, una fila real, el RUC en Manual y quién la pide (`p_created_by`), da el turno a lo pagado antes de «Emitir desde» si las dos fechas son del 01/10/2026 00:00 (hora de Lima) en adelante; y esa fila lleva en su base `pagado_antes_de_emitir_desde`. Se detiene con el turno de nueve argumentos, o sin el de once ni el de doce. No toca filas.",
+      );
+      // Solo el turno, y el vigente es el suyo.
+      const creadas = [...SQL_0266.matchAll(/^create or replace function (\w+)\(/gm)].map((m) => m[1]);
+      expect(creadas).toEqual(FUNCIONES_0266);
+      expect(SQL_0266_FLAT).toContain(funcion("invoice_claim"));
+      // «El cuerpo es el de la 0262 salvo dos cosas», letra por letra: lo que
+      // corre en la 0266 es lo que corre en la 0262 con `p_backfill` en la
+      // firma, la variable que dice si se usó la excepción, la fecha y la
+      // marca. Si la 0266 perdiera una revisión de la 0262 —que la empresa
+      // recibió el pago, el bloqueo de los pagos—, aquí se nota.
+      const cambios: Array<[string, string]> = [
+        [
+          "p_created_by uuid default null ) returns jsonb",
+          "p_created_by uuid default null, p_backfill boolean default false ) returns jsonb",
+        ],
+        ["v_web boolean; begin", "v_web boolean; v_backfill boolean := false; begin"],
+        [
+          "if v_iss.emit_from is null or p_paid_at is null or p_paid_at < v_iss.emit_from or v_paid is null or v_paid < v_iss.emit_from then return jsonb_build_object('reason', 'antes_de_inicio'); end if;",
+          "if v_iss.emit_from is null or p_paid_at is null or v_paid is null then return jsonb_build_object('reason', 'antes_de_inicio'); end if; " +
+            "if p_paid_at < v_iss.emit_from or v_paid < v_iss.emit_from then if coalesce(p_backfill, false) and v_mode = 'real' and v_iss.mode = 'manual' and p_created_by is not null and p_paid_at >= timestamptz '2026-10-01 00:00:00-05' and v_paid >= timestamptz '2026-10-01 00:00:00-05' then v_backfill := true; else return jsonb_build_object('reason', 'antes_de_inicio'); end if; end if;",
+        ],
+        [
+          "greatest(p_paid_at, v_paid), coalesce(p_basis, '{}'::jsonb), p_request,",
+          "greatest(p_paid_at, v_paid), case when v_backfill then coalesce(p_basis, '{}'::jsonb) || jsonb_build_object('pagado_antes_de_emitir_desde', true) else coalesce(p_basis, '{}'::jsonb) end, p_request,",
+        ],
+      ];
+      let esperado = ultimaEn([SQL_0262], "invoice_claim", true);
+      for (const [antes, despues] of cambios) {
+        expect(esperado.split(antes), antes).toHaveLength(2);
+        esperado = esperado.replace(antes, despues);
+      }
+      expect(funcionQueCorre("invoice_claim")).toBe(esperado);
+      // La firma de once se borra ANTES de crear la de doce: con las dos, la
+      // llamada por nombre del código calza en ambas y no se sabe a cuál va.
+      const borra = SQL_0266_FLAT.indexOf(`drop function if exists ${FIRMA_TURNO_11};`);
+      expect(borra).toBeGreaterThan(0);
+      expect(borra).toBeLessThan(SQL_0266_FLAT.indexOf("create or replace function invoice_claim("));
+      // Va después de la 0262: con el turno de nueve, o sin el de once ni el de
+      // doce, se detiene antes de borrar nada. Con el de doce ya puesto, pasa
+      // (es idempotente).
+      const guarda = SQL_0266_FLAT.indexOf(
+        `if to_regprocedure('public.${FIRMA_TURNO_9}') is not null or (to_regprocedure('public.${FIRMA_TURNO_11}') is null and to_regprocedure('public.${FIRMA_TURNO_12}') is null) then raise exception 'La 0266 va después de la 0262:`,
+      );
+      expect(guarda).toBeGreaterThan(0);
+      expect(guarda).toBeLessThan(borra);
+      // El turno, solo para el servidor.
+      expect([...SQL_0266.matchAll(/^(revoke all on function|grant execute on function) (\w+)\(/gm)].map((m) => `${m[1]} ${m[2]}`)).toEqual([
+        "revoke all on function invoice_claim",
+        "grant execute on function invoice_claim",
+      ]);
+      expect(SQL_0266_FLAT).toContain(`revoke all on function ${FIRMA_TURNO_12} from public, anon, authenticated;`);
+      expect(SQL_0266_FLAT).toContain(`grant execute on function ${FIRMA_TURNO_12} to service_role;`);
+      // «No toca filas»: en la columna 0, la guarda, el `drop` del de once, la
+      // función y sus permisos.
+      expect(SQL_0266).not.toMatch(/^(?:insert|update|delete|truncate|alter|comment|create (?!or replace function ))/im);
+      expect([...SQL_0266.matchAll(/^\s*drop .*$/gim)].map((m) => m[0])).toEqual([`drop function if exists ${FIRMA_TURNO_11};`]);
+      // La cabecera, como las otras: qué pasaba, qué cambia, a quién no, y que
+      // se aplica a mano, en una transacción.
+      for (const parte of [
+        "-- QUÉ PASABA.",
+        "-- QUÉ CAMBIA.",
+        "-- A QUIÉN NO.",
+        "-- Se aplica a mano ANTES del código (DEPLOY.md). Es idempotente.",
+        "psql -1 -v ON_ERROR_STOP=1",
+      ]) {
+        expect(SQL_0266_FLAT, parte).toContain(parte);
+      }
+      // El repaso de todas las migraciones la corre después de la 0262.
+      const apply = read("db/apply.sql");
+      expect(apply.indexOf("migrations/0266_invoices_backfill.sql")).toBeGreaterThan(
+        apply.indexOf("migrations/0262_invoices_claim_coverage.sql"),
+      );
+    });
+
     it("«Emitir esta boleta» está donde dice: `emitInvoiceNow` y `emitInvoiceAction`", () => {
       expect(renglon("lib/invoicing/server.ts")).toContain(
         "el barrido, la conciliación, `emitInvoiceNow` («Emitir esta boleta»: la misma emisión real del barrido, para un pedido, que compara lo que la persona confirmó) e `invoiceEmitNowReadiness` / `loadInvoiceEmitNowOffers` (cuándo se ofrece el botón, en el panel y en Ajustes), y `invoiceEmitAllowedHere` (solo producción emite).",
@@ -440,6 +547,16 @@ describe("MOM §35: la sección existe y dice su estado", () => {
       ]) {
         expect(read("lib/invoicing/rules.ts"), nombre).toContain(nombre);
       }
+      // Lo pagado antes de «Emitir desde» (owner, 15-10-2026): el piso, en las
+      // reglas; la casilla y `p_backfill`, en el servidor.
+      expect(renglon("lib/invoicing/rules.ts")).toContain(
+        "elegibilidad —con `INVOICE_BACKFILL_FROM`, el 01/10/2026 de lo pagado antes de «Emitir desde»—",
+      );
+      expect(read("lib/invoicing/rules.ts")).toContain("export const INVOICE_BACKFILL_FROM =");
+      expect(renglon("lib/invoicing/server.ts")).toContain(
+        "Con un pedido pagado antes de «Emitir desde», `emitInvoiceNow` pide la casilla (`sin_revision_simplefact`) y el turno va con `p_backfill`; sin la 0266, contesta `sin_migracion` (`INVOICE_CLAIM_BACKFILL_MIGRATION`).",
+      );
+      expect(read("lib/invoicing/server.ts")).toContain("export const INVOICE_CLAIM_BACKFILL_MIGRATION =");
       expect(flat(impl)).toContain(
         "`app/dashboard/pedidos/invoice-actions.ts` (con `emitInvoiceAction`, lo que corre al pulsar «Emitir esta boleta») y `components/order-invoice-panel.tsx`",
       );
@@ -513,7 +630,17 @@ describe("MOM §35.2 y §35.3: los motivos", () => {
     const nombrados = [
       ...new Set(
         codigos(s3.slice(desde, hasta)).filter(
-          (c) => c !== "invoice_claim" && c !== "registered_at" && c !== "p_created_by" && c !== "p_basis",
+          (c) =>
+            ![
+              "invoice_claim",
+              "registered_at",
+              "p_created_by",
+              "p_basis",
+              // La excepción de lo pagado antes de «Emitir desde» (0266): un
+              // argumento del turno y la marca de la fila, no motivos.
+              "p_backfill",
+              "pagado_antes_de_emitir_desde",
+            ].includes(c),
         ),
       ),
     ];
@@ -611,7 +738,10 @@ describe("MOM §35.2 y §35.3: los motivos", () => {
     for (const reason of ["'sin_conexion'", "'error_previo'"]) expect(fn.indexOf(reason), reason).toBeGreaterThan(real);
     // Los argumentos nuevos tienen valor por defecto: el código que ya corre
     // pide el turno con los nueve de siempre, por nombre, y hace lo de antes.
-    expect(fn).toContain("p_request jsonb, p_mode text default null, p_created_by uuid default null ) returns jsonb");
+    // También `p_backfill` (0266): sin él, falso, y nada cambia.
+    expect(fn).toContain(
+      "p_request jsonb, p_mode text default null, p_created_by uuid default null, p_backfill boolean default false ) returns jsonb",
+    );
     // El barrido: simulada para un RUC en Manual; sin `p_mode` en los otros.
     const SERVER = read("lib/invoicing/server.ts");
     expect(SERVER).toContain('const askedMode: InvoiceWriteMode | null = issuer.issuerMode === "manual" ? "simulacion" : null;');
@@ -633,10 +763,10 @@ describe("MOM §35.2 y §35.3: los motivos", () => {
     expect(turno).toContain(
       "Esa fecha y la que manda el barrido tienen que ser las dos desde «Emitir desde»; si falta una, o una es anterior, no da el turno (`antes_de_inicio`).",
     );
-    // El turno vigente es el de la 0262, que rehace el de la 0261 y éste el de
-    // la 0260: la 0257 que corrió no lo revisaba.
+    // El turno vigente es el de la 0266, que rehace el de la 0262, éste el de
+    // la 0261 y éste el de la 0260: la 0257 que corrió no lo revisaba.
     const fn = funcion("invoice_claim");
-    expect(SQL_0262_FLAT).toContain(fn);
+    expect(SQL_0266_FLAT).toContain(fn);
     expect(SQL_0257_FLAT).not.toContain("'pagos_en_revision'");
     // Un pago vivo que no está validado (`posible_duplicado` incluido, y uno sin
     // estado) no da turno: la misma condición 2 de las reglas.
@@ -653,7 +783,16 @@ describe("MOM §35.2 y §35.3: los motivos", () => {
     expect(read("lib/invoicing/server.ts")).toContain("orderDate: o.processed_at ?? o.created_at,");
     // Las dos fechas, y sin una de ellas no hay turno.
     expect(fn).toContain(
-      "if v_iss.emit_from is null or p_paid_at is null or p_paid_at < v_iss.emit_from or v_paid is null or v_paid < v_iss.emit_from then return jsonb_build_object('reason', 'antes_de_inicio');",
+      "if v_iss.emit_from is null or p_paid_at is null or v_paid is null then return jsonb_build_object('reason', 'antes_de_inicio');",
+    );
+    // Una anterior a «Emitir desde», tampoco, salvo la excepción del botón
+    // (0266): `p_backfill`, una fila real, el RUC en Manual, quién la pide y
+    // las dos fechas desde el 01/10/2026 00:00 de Lima.
+    expect(fn).toContain(
+      "if p_paid_at < v_iss.emit_from or v_paid < v_iss.emit_from then if coalesce(p_backfill, false) and v_mode = 'real' and v_iss.mode = 'manual' and p_created_by is not null and p_paid_at >= timestamptz '2026-10-01 00:00:00-05' and v_paid >= timestamptz '2026-10-01 00:00:00-05' then v_backfill := true; else return jsonb_build_object('reason', 'antes_de_inicio'); end if; end if;",
+    );
+    expect(turno).toContain(
+      "La única excepción es la de arriba, y la base la vuelve a exigir entera (0266): da el turno a algo pagado antes de «Emitir desde» solo si se pide con `p_backfill`, una fila real, el RUC en Manual, quién la pide (`p_created_by`) y las dos fechas del 01/10/2026 00:00 (hora de Lima) en adelante. Sin «Emitir desde» o sin una de las fechas, sigue `antes_de_inicio`.",
     );
     // «En los dos modos»: antes de que el turno se separe por la fila pedida.
     const porModo = fn.indexOf("if v_mode = 'simulacion' then");
@@ -664,9 +803,19 @@ describe("MOM §35.2 y §35.3: los motivos", () => {
 
   it("todo motivo que nombra el MOM tiene su texto en INVOICE_REASON_LABEL", () => {
     // En §35.3 todo código entre comillas invertidas es un motivo, salvo los
-    // nombres de la base (columnas y argumentos del turno) y el estado `error`
-    // de la condición 10.
-    const noSonMotivos = new Set(["invoice_claim", "registered_at", "validated_at", "error", "p_created_by", "p_basis"]);
+    // nombres de la base (columnas y argumentos del turno, y la marca de la
+    // fila de lo pagado antes de «Emitir desde») y el estado `error` de la
+    // condición 10.
+    const noSonMotivos = new Set([
+      "invoice_claim",
+      "registered_at",
+      "validated_at",
+      "error",
+      "p_created_by",
+      "p_basis",
+      "p_backfill",
+      "pagado_antes_de_emitir_desde",
+    ]);
     expect(INVOICE_STATUSES).toContain("error");
     const enS3 = codigos(s3).filter((c) => !noSonMotivos.has(c));
     expect(enS3.length).toBeGreaterThan(deLaTabla.length);
@@ -1839,7 +1988,7 @@ describe("MOM §35.1, §35.3, §35.6 y §35.7: el modo Manual y «Emitir esta bo
     // pedido podía cambiar: salía una boleta que nadie confirmó.
     const emitir = cuerpo(ACTIONS, "export async function emitInvoiceAction(");
     expect(emitir).toMatch(
-      /emitInvoiceNow\(admin, \{\s*orderId: ctx\.orderId,\s*userId: ctx\.userId,\s*manualOnly: true,\s*expected: \{ issuerId: shownIssuer, totalCents: shownCents \},\s*\}\)/,
+      /emitInvoiceNow\(admin, \{\s*orderId: ctx\.orderId,\s*userId: ctx\.userId,\s*manualOnly: true,\s*expected: \{ issuerId: shownIssuer, totalCents: shownCents, simplefactChecked \},\s*\}\)/,
     );
     // Una sola lectura: la acción no lee el pedido por su cuenta.
     for (const lectura of ["loadInvoiceOrderFacts(", "invoiceEligibility(", "elig."]) {
@@ -2077,13 +2226,295 @@ describe("MOM §35.1, §35.3, §35.6 y §35.7: el modo Manual y «Emitir esta bo
     // 0257, la 0260 y la 0261).
     expect(s8).toContain("No cambia la firma del turno: es la de once argumentos de la 0261, con `create or replace`");
     expect(INVOICE_CLAIM_MODE_MIGRATION).toBe("0261");
-    expect(funcion("invoice_claim")).toContain("p_mode text default null, p_created_by uuid default null ) returns jsonb");
+    expect(ultimaEn([SQL_0262], "invoice_claim")).toContain(
+      "p_mode text default null, p_created_by uuid default null ) returns jsonb",
+    );
     expect(SQL_0261_FLAT).toContain("p_mode text default null, p_created_by uuid default null ) returns jsonb");
     expect(s8).toContain(
       "Va después de la 0261: sin ella —sigue el turno de nueve argumentos, o falta el de once— se detiene sin cambiar nada. Si después alguien vuelve a correr la 0261, el turno queda otra vez sin esta revisión hasta volver a correr la 0262.",
     );
     // El encendido: Manual, con la 0262 ya aplicada.
     expect(s8).toContain("4. Pasa a Manual, con «Emitir desde» del momento del cambio, y con la 0262 ya aplicada (abajo).");
+  });
+});
+
+describe("MOM §35.3, §35.4, §35.7 y §35.8: lo pagado antes de «Emitir desde» (owner, 15-10-2026)", () => {
+  // Antes de Kapta las boletas se emitían a mano en SimpleFact, y Kapta no sabe
+  // si un pedido de entonces ya tiene la suya: una boleta de más es pagar el
+  // impuesto dos veces, y no se borra. Por eso la excepción es angosta —desde
+  // el 01/10/2026, solo el botón, solo en Manual, con la casilla— y la base la
+  // vuelve a exigir entera. Estas pruebas atan cada pieza al MOM.
+  const PANEL = read("components/order-invoice-panel.tsx");
+  const ACTIONS = read("app/dashboard/pedidos/invoice-actions.ts");
+  const SERVER = read("lib/invoicing/server.ts");
+  const AJUSTES = read("components/invoice-settings-section.tsx");
+  const s3 = flat(sub(3));
+  const s4 = flat(sub(4));
+  const s7 = flat(sub(7));
+  const s8 = flat(sub(8));
+  const CASILLA = "Revisé en SimpleFact y este pedido no tiene boleta";
+  /** El piso, como lo escribe la base. */
+  const PISO_SQL = "timestamptz '2026-10-01 00:00:00-05'";
+
+  const cuerpo = (texto: string, firma: string) => {
+    const desde = texto.indexOf(firma);
+    expect(desde, firma).toBeGreaterThan(0);
+    return texto.slice(desde, texto.indexOf("\n}\n", desde));
+  };
+
+  // Un pedido pagado por un link de Flow (fila 1 de 35.2), con «Emitir desde»
+  // del 15-10-2026 y todo lo demás en regla.
+  const DESDE = "2026-10-15T05:00:00.000Z";
+  const PASARELA: InvoiceAccount = { id: "acc-flow", label: "Aurela Kenku", aliases: [], phoneLastDigits: null, issuerId: "iss-gf" };
+  const hechos = (pagado: string | null, issuer: Partial<InvoiceIssuer> = {}): InvoiceOrderFacts => ({
+    orderId: "ord-1",
+    storeId: "store-1",
+    orderName: "#KP136181",
+    total: 150,
+    currency: "PEN",
+    cancelledAt: null,
+    totalRefunded: 0,
+    financialStatus: "pending",
+    paymentGateway: "manual",
+    orderDate: "2026-09-30T15:00:00.000Z",
+    customerName: null,
+    payments: [
+      {
+        id: "pay-1",
+        kind: "total",
+        amount: 150,
+        validationStatus: "validado",
+        registeredAt: pagado,
+        validatedAt: DESDE,
+        vision: null,
+        flowLinked: true,
+        statementDestination: null,
+      },
+    ],
+    accounts: [PASARELA],
+    issuers: [
+      {
+        id: "iss-gf",
+        orgId: "org-grupo-gf",
+        ruc: "20556792829",
+        legalName: "GRUPO GF S.A.C.",
+        mode: "manual",
+        emitFrom: DESDE,
+        dailyLimit: INVOICE_DAILY_LIMIT_DEFAULT,
+        hasToken: true,
+        checkedRuc: "20556792829",
+        ...issuer,
+      },
+    ],
+    existing: { realLive: false, simulated: false, errorBlocked: false },
+  });
+  /** El modo en que sale («real (antes)» si es por la excepción), o el motivo por el que no. */
+  const sale = (f: InvoiceOrderFacts, emitNow?: boolean) => {
+    const r = emitNow ? invoiceEligibility(f, { emitNow }) : invoiceEligibility(f);
+    return r.ok ? `${r.mode}${r.beforeStart ? " (antes)" : ""}` : r.reason;
+  };
+
+  it("el piso es el 01/10/2026 00:00 de Lima: el MOM, las reglas y la base dicen la misma hora", () => {
+    expect(INVOICE_BACKFILL_FROM).toBe("2026-10-01T05:00:00.000Z");
+    // Lima es UTC-5 fijo, sin horario de verano.
+    expect(new Date(Date.parse(INVOICE_BACKFILL_FROM) - 5 * 3_600_000).toISOString()).toBe("2026-10-01T00:00:00.000Z");
+    // La base, la misma hora, en las dos fechas: la que manda el código y la suya.
+    expect(Date.parse("2026-10-01T00:00:00-05:00")).toBe(Date.parse(INVOICE_BACKFILL_FROM));
+    expect(SQL_0266).toContain("p_backfill");
+    expect(SQL_0266_FLAT).toContain(`p_paid_at >= ${PISO_SQL}`);
+    expect(SQL_0266_FLAT).toContain(`v_paid >= ${PISO_SQL}`);
+    expect(funcion("invoice_claim")).toContain(`and p_paid_at >= ${PISO_SQL} and v_paid >= ${PISO_SQL} then v_backfill := true;`);
+    // El MOM: la condición 8, la excepción, el turno, «Emitir desde» y el botón.
+    expect(s3).toContain(
+      "Un pago validado sin fecha de registro, o un RUC sin fecha de inicio, no emite. La única excepción es de «Emitir esta boleta» con el RUC en Manual: lo pagado antes, pero desde el 01/10/2026 00:00 (hora de Lima), si quien pulsa confirma que en SimpleFact no tiene boleta (abajo; owner 15-10-2026) | `antes_de_inicio` |",
+    );
+    expect(s3).toContain(
+      "«Emitir esta boleta» (35.7), con el RUC en Manual, deja pasar un pedido que quedó pagado antes de «Emitir desde» si quedó pagado desde el **01/10/2026 00:00** (hora de Lima, `INVOICE_BACKFILL_FROM`), con la misma cuenta de la condición 8.",
+    );
+    expect(s4).toContain(
+      "con el RUC en Manual, «Emitir esta boleta» emite lo pagado antes de «Emitir desde» si quedó pagado desde el 01/10/2026 00:00 (hora de Lima) y quien pulsa confirmó que en SimpleFact no tiene boleta.",
+    );
+    expect(s7).toContain(
+      "**Lo pagado antes de «Emitir desde»** (owner, 15-10-2026; 35.3). Con el RUC en Manual, el botón también emite un pedido que quedó pagado antes de «Emitir desde», si quedó pagado desde el **01/10/2026 00:00** (hora de Lima). Solo el botón: una persona, nunca el barrido.",
+    );
+  });
+
+  it("solo el botón y solo en Manual: las reglas lo dejan pasar con `emitNow`, y nada más", () => {
+    const antes = "2026-10-05T15:00:00.000Z";
+    // El botón, con el RUC en Manual: sale, y las reglas lo marcan.
+    expect(sale(hechos(antes), true)).toBe("real (antes)");
+    // El barrido, en ningún modo.
+    for (const mode of ["simulacion", "manual", "real"] as const) {
+      expect(sale(hechos(antes, { mode })), mode).toBe("antes_de_inicio");
+    }
+    // El botón en Real tampoco: ahí no hay botón, y el barrido no va hacia atrás.
+    expect(sale(hechos(antes, { mode: "real" }), true)).toBe("antes_de_inicio");
+    // El piso, inclusive; un milisegundo antes, no.
+    expect(sale(hechos(INVOICE_BACKFILL_FROM), true)).toBe("real (antes)");
+    expect(sale(hechos(new Date(Date.parse(INVOICE_BACKFILL_FROM) - 1).toISOString()), true)).toBe("antes_de_inicio");
+    // Sin fecha de pago, o sin «Emitir desde», como siempre.
+    expect(sale(hechos(null), true)).toBe("antes_de_inicio");
+    expect(sale(hechos(antes, { emitFrom: null }), true)).toBe("antes_de_inicio");
+    // Pagado desde «Emitir desde», nada cambia: sin la marca.
+    expect(sale(hechos("2026-10-15T06:00:00.000Z"), true)).toBe("real");
+    // Lo demás de §35.3 vale igual: lo real vivo frena.
+    expect(sale({ ...hechos(antes), existing: { realLive: true, simulated: false, errorBlocked: false } }, true)).toBe("ya_tiene");
+    expect(s3).toContain(
+      "Sigue en `antes_de_inicio` lo pagado antes del 01/10/2026, lo que no tiene fecha de pago, un RUC sin «Emitir desde» y todo pedido de un RUC en Real, porque ahí no hay botón.",
+    );
+  });
+
+  it("el barrido nunca va hacia atrás: el MOM lo dice, y nunca manda `p_backfill`", () => {
+    expect(s3).toContain(
+      "**El barrido nunca va hacia atrás**: en Simulación, en Manual y en Real, lo pagado antes de «Emitir desde» no se simula ni se emite.",
+    );
+    expect(s3).toContain("El barrido nunca manda `p_backfill`.");
+    expect(s4).toContain(
+      "**«Emitir desde».** El barrido nunca emite hacia atrás, en ningún modo: solo pedidos que quedaron pagados desde esa fecha, y Ajustes no la deja en el pasado.",
+    );
+    expect(s4).toContain("La única excepción es de una persona, no del barrido (owner 15-10-2026; 35.3, 35.7)");
+    // `p_backfill` va solo con un pedido de antes y con quién lo pidió, y nunca
+    // en falso; quién lo pidió solo lo manda el botón (§35.6).
+    expect(SERVER).toContain("...(elig.beforeStart && extra.createdBy ? { p_backfill: true } : {}),");
+    expect(SERVER.match(/p_backfill:/g)).toHaveLength(1);
+    expect(SERVER.match(/createdBy:/g)).toHaveLength(1);
+    expect(cuerpo(SERVER, "async function emitNow(")).toContain(
+      'const args = claimArgs(facts, elig, prepared, { mode: "real", createdBy: input.userId });',
+    );
+    // Y la base: sin `p_backfill`, lo pagado antes sigue en `antes_de_inicio`.
+    expect(funcion("invoice_claim")).toContain("p_backfill boolean default false");
+    expect(funcion("invoice_claim")).toContain("if coalesce(p_backfill, false) and v_mode = 'real' and v_iss.mode = 'manual' and p_created_by is not null");
+    // «Emitir desde» no cambia: Ajustes no la acepta en el pasado, y un cambio
+    // de modo la sigue moviendo (la 0266 no toca el trigger).
+    expect(s4).toContain(
+      "La excepción no cambia «Emitir desde»: Ajustes sigue sin aceptar una fecha pasada, y un cambio de modo la sigue moviendo.",
+    );
+    expect(read("app/dashboard/[storeId]/settings/invoice-actions.ts")).toContain(
+      "«Emitir desde» no puede quedar en el pasado: se guardó con la hora de ahora.",
+    );
+    expect(SQL_0266).not.toContain("invoice_issuers_touch");
+    expect(funcion("invoice_issuers_touch")).toContain(
+      "if new.mode <> 'apagado' and (tg_op = 'INSERT' or new.mode is distinct from old.mode) and new.emit_from < now() then new.emit_from := now(); end if;",
+    );
+  });
+
+  it("la confirmación: el texto con las dos fechas y la casilla, como los cita el MOM", () => {
+    expect(s7).toContain(
+      "la confirmación agrega «Quedó pagado el ‹dd/mm/aaaa hh:mm›, antes de «Emitir desde» (‹dd/mm/aaaa hh:mm›). Kapta no sabe si ya se emitió a mano: búscalo en SimpleFact antes de emitir.» —cuándo quedó pagado y desde cuándo emite el RUC, las dos en hora de Lima—",
+    );
+    expect(PANEL).toContain("`Quedó pagado el ${paid}, antes de «Emitir desde» (${from}).`");
+    expect(PANEL).toContain("Kapta no sabe si ya se emitió a mano: búscalo en SimpleFact antes de emitir.");
+    // dd/mm/aaaa hh:mm, en hora de Lima (UTC-5 fijo).
+    const fecha = cuerpo(PANEL, "function fechaHoraLima(");
+    expect(fecha).toContain("const lima = new Date(t - 5 * 3_600_000).toISOString();");
+    expect(fecha).toContain("return `${lima.slice(8, 10)}/${lima.slice(5, 7)}/${lima.slice(0, 4)} ${lima.slice(11, 16)}`;");
+    // La casilla: una de verdad, con su texto, sin marcar, y «Sí, emitir» espera.
+    expect(s7).toContain(`y una casilla «${CASILLA}».`);
+    expect(PANEL).toContain(`export const SIMPLEFACT_CHECK_LABEL = "${CASILLA}";`);
+    const confirma = cuerpo(PANEL, "export function EmitInvoiceConfirm(");
+    expect(confirma).toContain('type="checkbox"');
+    expect(confirma).toContain("{SIMPLEFACT_CHECK_LABEL}");
+    expect(confirma).toContain("disabled={busy || (beforeStart !== null && !simplefactChecked)}");
+    expect(s7).toContain(
+      "La casilla empieza sin marcar cada vez que se abre la confirmación, y se desmarca al cancelar y al volver la respuesta. «Sí, emitir» no se puede pulsar hasta marcarla.",
+    );
+    const control = cuerpo(PANEL, "export function EmitInvoiceControl(");
+    expect(control).toContain("const [simplefactChecked, setSimplefactChecked] = useState(false);");
+    expect(control.match(/setSimplefactChecked\(false\);/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+    expect(control).toContain("await onEmit(simplefactChecked);");
+    // Sin la excepción, nada cambia.
+    expect(s7).toContain("Sin esta excepción nada cambia: un pedido pagado desde «Emitir desde» no lleva ni el texto ni la casilla.");
+    expect(PANEL).toContain("if (emit.beforeStart !== true) return null;");
+    // Ajustes: la misma acción, con la misma casilla.
+    expect(s7).toContain("«Emitir» en Ajustes es la misma acción, con la misma casilla.");
+    expect(AJUSTES).toContain('import { EmitInvoiceControl, EmitOutcome } from "@/components/order-invoice-panel";');
+    expect(AJUSTES).toContain(
+      "res = await emitInvoiceAction(orderId, { issuerId: offer.issuerId, total: offer.total, simplefactChecked });",
+    );
+    expect(PANEL).toContain(
+      "emitInvoiceAction(orderId, { issuerId: emit.issuerId, total: emit.total, simplefactChecked }),",
+    );
+    // Si ya tiene boleta, se registra; no se emite.
+    expect(s7).toContain("Si en SimpleFact ya tiene boleta, no se emite: se registra con «Ya tiene comprobante».");
+  });
+
+  it("el servidor la vuelve a exigir: `sin_revision_simplefact`, con su frase, antes del token, de Shopify y del turno", () => {
+    const frase = "Quedó pagado antes de «Emitir desde»: falta confirmar que en SimpleFact no tiene boleta.";
+    expect(INVOICE_REASON_LABEL.sin_revision_simplefact).toBe(frase);
+    expect(s7).toContain(
+      `Si quedó pagado antes de «Emitir desde» y quien pulsó no marcó la casilla, tampoco emite (\`sin_revision_simplefact\`): «${frase}». Solo cuenta una casilla marcada (\`true\`).`,
+    );
+    expect(s3).toContain("quien pulsa tiene que confirmar que lo buscó en SimpleFact y no tiene boleta; sin eso no se emite (`sin_revision_simplefact`).");
+    // Es de quien pulsa, no del pedido: no es una condición de la tabla.
+    expect(INVOICE_REASONS.indexOf("sin_revision_simplefact")).toBeGreaterThan(INVOICE_REASONS.indexOf("error_previo"));
+    // Solo un `true` cuenta.
+    expect(cuerpo(ACTIONS, "export async function emitInvoiceAction(")).toContain(
+      "const simplefactChecked = shown?.simplefactChecked === true;",
+    );
+    // Después de lo confirmado y antes del token, de Shopify y del turno; y lo
+    // dice solo `emitInvoiceNow`.
+    const boton = cuerpo(SERVER, "async function emitNow(");
+    const exige = boton.indexOf(
+      'if (elig.beforeStart && input.expected?.simplefactChecked !== true) return blocked("sin_revision_simplefact");',
+    );
+    expect(exige).toBeGreaterThan(
+      boton.indexOf('if (input.expected && !sameAsExpected(elig, input.expected)) return blocked("pedido_cambio");'),
+    );
+    for (const despues of ["loadIssuerConn(", "prepareSale(", 'admin.rpc("invoice_claim"']) {
+      expect(exige, despues).toBeLessThan(boton.indexOf(despues));
+    }
+    expect(cuerpo(SERVER, "async function sweepOrg(")).not.toContain("sin_revision_simplefact");
+    // El turno, con `p_backfill` (0266), y la fila lo dice en su base (§35.6).
+    expect(s7).toContain("el turno pidiendo una fila real con quien pulsó (35.3) —y, si quedó pagado antes de «Emitir desde», con `p_backfill` (0266)—");
+    expect(s3).toContain("La fila que sale así lo dice en su base (`pagado_antes_de_emitir_desde`).");
+    expect(flat(sub(6))).toContain("(`basis`, que dice también si salió pagado antes de «Emitir desde», 35.3)");
+    expect(funcion("invoice_claim")).toContain(
+      "case when v_backfill then coalesce(p_basis, '{}'::jsonb) || jsonb_build_object('pagado_antes_de_emitir_desde', true) else coalesce(p_basis, '{}'::jsonb) end",
+    );
+  });
+
+  it("el panel no se contradice: con el botón, `antes_de_inicio` dice que con el botón sí", () => {
+    const sigue = INVOICE_REASON_LABEL.antes_de_inicio;
+    expect(sigue).toBe("Quedó pagado antes de «Emitir desde» del RUC.");
+    const extra = "No sale sola: se puede emitir con «Emitir esta boleta» después de revisar SimpleFact.";
+    expect(s7).toContain(
+      `En el panel, la revisión sigue diciendo «${sigue}» —el barrido no lo emite— y, al lado del botón, agrega «${extra}».`,
+    );
+    expect(PANEL).toContain(`export const BACKFILL_REVIEW_TEXT =\n  "${extra}";`);
+    expect(PANEL).toContain('const extra = backfill && review.reason === "antes_de_inicio" ? ` ${BACKFILL_REVIEW_TEXT}` : "";');
+    expect(PANEL).toContain("backfillOffered: canEmitNow && data.emitNow?.beforeStart === true,");
+    expect(s7).toContain("Aparece también en un pedido pagado antes de «Emitir desde», si quedó pagado desde el 01/10/2026 (35.3, abajo).");
+  });
+
+  it("§35.8: sin la 0266 lo normal sigue; uno de antes dice `sin_migracion` nombrando la 0266", () => {
+    expect(flat(S35)).toContain(
+      "La 0266 (el turno que deja a «Emitir esta boleta» emitir lo pagado antes de «Emitir desde», 15-10-2026) va después de la 0262, también a mano y antes de su código.",
+    );
+    expect(s8).toContain(
+      "**Antes de la 0266** (owner, 15-10-2026). También se aplica a mano, después de la 0262 y antes de su código (DEPLOY.md).",
+    );
+    expect(s8).toContain(
+      "Cambia la firma del turno: borra la de once argumentos y crea la de doce, con `p_backfill` al final, falso por defecto; el cuerpo es el de la 0262.",
+    );
+    expect(s8).toContain(
+      "Si llega antes que la 0266, nada se emite de más y nada se pone rojo: lo pagado desde «Emitir desde» se simula y se emite como siempre, y un pedido pagado antes no reserva ni envía nada: es `sin_migracion`",
+    );
+    const falta = "Falta aplicar la migración 0266 de comprobantes (invoice_claim con p_backfill).";
+    expect(s8).toContain(`«Emitir esta boleta» dice «${falta}»`);
+    expect(INVOICE_CLAIM_BACKFILL_MIGRATION).toBe("0266");
+    expect(new InvoiceMigrationMissingError("invoice_claim con p_backfill", "invoice_claim", INVOICE_CLAIM_BACKFILL_MIGRATION).message).toBe(falta);
+    expect(cuerpo(SERVER, "function claimMissingError(")).toContain(
+      'if ("p_backfill" in args) {\n    return new InvoiceMigrationMissingError("invoice_claim con p_backfill", "invoice_claim", INVOICE_CLAIM_BACKFILL_MIGRATION);',
+    );
+    // «Lo normal sigue»: sin un pedido de antes, el turno se pide sin
+    // `p_backfill`, y el de once argumentos lo acepta.
+    expect(SERVER).not.toContain("p_backfill: false");
+    expect(s8).toContain(
+      "Va después de la 0262: con el turno de nueve argumentos, o sin el de once ni el de doce, se detiene sin cambiar nada.",
+    );
+    expect(s8).toContain(
+      "Si después alguien vuelve a correr la 0261, quedan dos turnos —el de once y el de doce— y la llamada por nombre del código falla: no se simula ni se emite nada hasta volver a correr la 0266.",
+    );
   });
 });
 
