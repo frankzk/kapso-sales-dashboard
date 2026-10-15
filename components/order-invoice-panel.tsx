@@ -25,7 +25,7 @@
 // No importa lib/invoicing/server ni lib/crypto: arrastran node:crypto al
 // navegador (test/invoicing-drawer.test.ts lo vigila). Las reglas puras sí.
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useReducer, useRef, useState } from "react";
 import { cn } from "@/components/ui";
 import { Badge, Banner, CARD_ZONE, CHECKBOX, FIELD, OpsButton, type BadgeTone } from "@/components/ops-ui";
 import { IconArrowUpRight } from "@/components/icons";
@@ -190,14 +190,23 @@ export const SIMPLEFACT_CHECK_LABEL = "Revisé en SimpleFact y este pedido no ti
  * desde» (owner, 15-10-2026). Antes de Kapta las boletas se emitían a mano en
  * SimpleFact, y Kapta no sabe si este pedido ya tiene una: dos boletas son dos
  * veces el impuesto. null si el pedido no es de antes.
+ *
+ * Si el primer dinero (`firstPaidAt`: la fecha más temprana entre el
+ * comprobante y el registro de sus pagos) es de otro momento que «quedó
+ * pagado», también lo dice: una boleta hecha a mano pudo salir desde ahí, y es
+ * la fecha con la que se busca en SimpleFact.
  */
-export function emitBeforeStartText(emit: Pick<InvoicePanelEmitNow, "beforeStart" | "paidAt" | "emitFrom">): string | null {
+export function emitBeforeStartText(
+  emit: Pick<InvoicePanelEmitNow, "beforeStart" | "paidAt" | "firstPaidAt" | "emitFrom">,
+): string | null {
   if (emit.beforeStart !== true) return null;
   const paid = fechaHoraLima(emit.paidAt);
   const from = fechaHoraLima(emit.emitFrom);
+  const first = fechaHoraLima(emit.firstPaidAt);
   const head =
     paid && from ? `Quedó pagado el ${paid}, antes de «Emitir desde» (${from}).` : "Quedó pagado antes de «Emitir desde».";
-  return `${head} Kapta no sabe si ya se emitió a mano: búscalo en SimpleFact antes de emitir.`;
+  const firstText = first && first !== paid ? ` El primer pago se hizo el ${first}.` : "";
+  return `${head}${firstText} Kapta no sabe si ya se emitió a mano: búscalo en SimpleFact antes de emitir.`;
 }
 
 /**
@@ -606,12 +615,13 @@ export function OrderInvoicePanelView({
         <EmitInvoiceControl
           emit={data.emitNow}
           pending={pending}
-          onEmit={async (simplefactChecked) => {
-            const emit = data.emitNow!;
+          onEmit={async (shown, simplefactChecked) => {
+            // Lo que se vio en la confirmación, no lo que diga el panel ahora:
+            // si se releyó con otra oferta, el servidor contesta `pedido_cambio`.
             // El aviso va en la cabecera del drawer, como el de toda acción; el
             // panel se relee después, y la boleta que salió aparece con su PDF.
             await run(() =>
-              emitInvoiceAction(orderId, { issuerId: emit.issuerId, total: emit.total, simplefactChecked }),
+              emitInvoiceAction(orderId, { issuerId: shown.issuerId, total: shown.total, simplefactChecked }),
             );
             await onEmitted?.();
           }}
@@ -867,6 +877,16 @@ function SimulatedInvoice({ row }: { row: InvoicePanelRow }) {
  * volver la respuesta. `onEmit` recibe si quedó marcada; el servidor la vuelve
  * a exigir (`sin_revision_simplefact`).
  *
+ * LA CONFIRMACIÓN ES DE UNA OFERTA. Al abrirla se guarda la oferta que se veía
+ * (`emitControlReducer`), la confirmación dice ésa, y `onEmit` recibe ésa: no
+ * la que tenga el panel al pulsar. Si el panel se relee con la confirmación
+ * abierta y la oferta cambia —otro RUC, otro total, otras fechas, o deja de ser
+ * (o pasa a ser) de antes de «Emitir desde»—, la confirmación se cierra y la
+ * casilla se desmarca: lo que se revisó en SimpleFact era para la otra (en
+ * otro RUC, otro SimpleFact). Así una casilla marcada nunca viaja con una
+ * oferta que nadie revisó; y si se alcanzara a pulsar, va la oferta vista, y el
+ * servidor contesta `pedido_cambio`.
+ *
  * Quien lo usa decide qué hacer con la respuesta (`onEmit`), y no lanza.
  */
 export function EmitInvoiceControl({
@@ -877,42 +897,45 @@ export function EmitInvoiceControl({
 }: {
   emit: EmitInvoiceShownOffer;
   pending: boolean;
-  onEmit: (simplefactChecked: boolean) => Promise<void>;
+  /** `shown`: la oferta de la confirmación que se pulsó, no la de ahora. */
+  onEmit: (shown: EmitInvoiceShownOffer, simplefactChecked: boolean) => Promise<void>;
   label?: string;
 }) {
-  const [confirming, setConfirming] = useState(false);
+  const [state, dispatch] = useReducer(emitControlReducer, EMIT_CONTROL_CLOSED);
   const [sending, setSending] = useState(false);
-  const [simplefactChecked, setSimplefactChecked] = useState(false);
   const lock = useRef(false);
   const busy = pending || sending;
 
-  const confirmar = () =>
+  // La oferta cambió con la confirmación abierta: se cierra y se desmarca.
+  useEffect(() => {
+    dispatch({ type: "oferta", offer: emit });
+  }, [emit]);
+  // Y mientras ese efecto llega, no se pinta una confirmación de otra oferta.
+  const shown = emitConfirmShown(state, emit);
+
+  const confirmar = (offer: EmitInvoiceShownOffer, simplefactChecked: boolean) =>
     void sendOnce(lock, async () => {
       setSending(true);
       try {
-        await onEmit(simplefactChecked);
+        await onEmit(offer, simplefactChecked);
       } finally {
         setSending(false);
-        setConfirming(false);
-        setSimplefactChecked(false);
+        dispatch({ type: "cerrar" });
       }
     }).catch(() => {
       // `onEmit` no lanza; si lo hiciera, el aviso es de quien lo usa. Aquí
       // solo se suelta el botón (ya lo hizo `finally`).
     });
 
-  if (confirming) {
+  if (shown) {
     return (
       <EmitInvoiceConfirm
-        emit={emit}
+        emit={shown}
         busy={busy}
-        simplefactChecked={simplefactChecked}
-        onSimplefactChecked={setSimplefactChecked}
-        onConfirm={confirmar}
-        onCancel={() => {
-          setSimplefactChecked(false);
-          setConfirming(false);
-        }}
+        simplefactChecked={state.simplefactChecked}
+        onSimplefactChecked={(checked) => dispatch({ type: "casilla", checked })}
+        onConfirm={() => confirmar(shown, state.simplefactChecked)}
+        onCancel={() => dispatch({ type: "cerrar" })}
       />
     );
   }
@@ -921,10 +944,7 @@ export function EmitInvoiceControl({
       size="sm"
       variant="primary"
       disabled={busy}
-      onClick={() => {
-        setSimplefactChecked(false);
-        setConfirming(true);
-      }}
+      onClick={() => dispatch({ type: "abrir", offer: emit })}
       className="pointer-coarse:h-11"
     >
       {label}
@@ -932,11 +952,79 @@ export function EmitInvoiceControl({
   );
 }
 
-/** Lo que enseña la confirmación: el RUC, el total y, si es de antes, las dos fechas. */
-type EmitInvoiceShownOffer = Pick<
+/**
+ * Lo que enseña la confirmación y lo que se envía al pulsar: el RUC (`issuerId`
+ * es el que compara el servidor), el total y, si es de antes de «Emitir
+ * desde», las fechas.
+ */
+export type EmitInvoiceShownOffer = Pick<
   InvoicePanelEmitNow,
-  "ruc" | "legalName" | "total" | "beforeStart" | "paidAt" | "emitFrom"
+  "issuerId" | "ruc" | "legalName" | "total" | "beforeStart" | "paidAt" | "firstPaidAt" | "emitFrom"
 >;
+
+/**
+ * Lo que hace distinta a una oferta para la confirmación: si cambia algo de
+ * esto, lo que la persona leyó (y revisó en SimpleFact) era otra cosa.
+ */
+export function emitOfferKey(offer: EmitInvoiceShownOffer): string {
+  return JSON.stringify([
+    offer.issuerId,
+    offer.ruc,
+    offer.legalName,
+    Math.round(Number(offer.total) * 100),
+    offer.beforeStart === true,
+    offer.paidAt ?? null,
+    offer.firstPaidAt ?? null,
+    offer.emitFrom ?? null,
+  ]);
+}
+
+/** La confirmación de «Emitir esta boleta»: la oferta que se veía al abrirla y la casilla. */
+export interface EmitControlState {
+  shown: EmitInvoiceShownOffer | null;
+  simplefactChecked: boolean;
+}
+
+export const EMIT_CONTROL_CLOSED: EmitControlState = { shown: null, simplefactChecked: false };
+
+export type EmitControlAction =
+  /** «Emitir esta boleta»: se abre con la oferta de ahora, sin marcar. */
+  | { type: "abrir"; offer: EmitInvoiceShownOffer }
+  /** La casilla «Revisé en SimpleFact…». Solo con la confirmación abierta. */
+  | { type: "casilla"; checked: boolean }
+  /** «Cancelar», o volvió la respuesta. */
+  | { type: "cerrar" }
+  /** El panel trae una oferta (otra vez la misma, o una distinta). */
+  | { type: "oferta"; offer: EmitInvoiceShownOffer };
+
+/**
+ * La confirmación, como función pura (`EmitInvoiceControl` la usa con
+ * `useReducer`). Nace cerrada; se abre con la oferta de ahora y la casilla sin
+ * marcar; cancelar y la respuesta la cierran y la desmarcan; y si llega otra
+ * oferta con la confirmación abierta, se cierra y se desmarca. La misma oferta
+ * releída (otro objeto, lo mismo) no cambia nada.
+ */
+export function emitControlReducer(state: EmitControlState, action: EmitControlAction): EmitControlState {
+  switch (action.type) {
+    case "abrir":
+      return { shown: action.offer, simplefactChecked: false };
+    case "casilla":
+      return state.shown ? { ...state, simplefactChecked: action.checked === true } : state;
+    case "cerrar":
+      return EMIT_CONTROL_CLOSED;
+    case "oferta":
+      return state.shown && emitOfferKey(state.shown) !== emitOfferKey(action.offer) ? EMIT_CONTROL_CLOSED : state;
+  }
+}
+
+/**
+ * La oferta que dice la confirmación abierta, o null si está cerrada o si ya no
+ * es la oferta de ahora (la cierra el efecto de `EmitInvoiceControl`; hasta
+ * entonces, no se pinta).
+ */
+export function emitConfirmShown(state: EmitControlState, now: EmitInvoiceShownOffer): EmitInvoiceShownOffer | null {
+  return state.shown && emitOfferKey(state.shown) === emitOfferKey(now) ? state.shown : null;
+}
 
 /**
  * El paso de confirmación: qué boleta sale, por cuánto y de qué RUC, y que no

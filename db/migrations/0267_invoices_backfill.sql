@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0266_invoices_backfill.sql — comprobantes por RUC: «Emitir esta boleta» para
+-- 0267_invoices_backfill.sql — comprobantes por RUC: «Emitir esta boleta» para
 -- lo pagado antes de «Emitir desde», desde el 01/10/2026 (MOM §35, owner
 -- 15-10-2026).
 --
@@ -20,8 +20,13 @@
 --   · la fecha: lo pagado antes de «Emitir desde» pasa solo con `p_backfill`,
 --     una fila real, el RUC en Manual, una persona detrás (`p_created_by`) y
 --     las dos fechas —la que manda el código y la de la base— del 01/10/2026
---     00:00 (hora de Lima) en adelante. Sin «Emitir desde» o sin fecha de
---     pago, `antes_de_inicio`, como siempre;
+--     00:00 (hora de Lima) en adelante, y también el primer dinero: la fecha
+--     más temprana entre la del comprobante (`paid_at`, cuándo se movió la
+--     plata) y la de registro de cada pago validado. Un pago cuyo comprobante
+--     dice 29/09 y que entró a Kapta el 01/10 no pasa. Y solo con «Emitir
+--     desde» ya llegado (`emit_from <= now()`): Ajustes acepta una fecha en el
+--     futuro, y lo pagado antes de ella no sale, ni con el botón. Sin «Emitir
+--     desde» o sin fecha de pago, `antes_de_inicio`, como siempre;
 --   · la fila que nace así lo dice en su base:
 --     `pagado_antes_de_emitir_desde: true`.
 -- El código manda `p_backfill` solo desde el botón, y solo después de que la
@@ -30,22 +35,25 @@
 --
 -- A QUIÉN NO. El barrido nunca va hacia atrás: no manda `p_backfill`, y en
 -- Simulación, en una simulada de Manual y en Real, lo pagado antes de «Emitir
--- desde» sigue en `antes_de_inicio`, se pida como se pida. «Emitir desde» no
--- cambia: Ajustes sigue sin aceptar una fecha pasada, y un cambio de modo la
--- sigue moviendo. No toca datos, ni triggers, ni otra función. El código que
--- hoy está en producción pide el turno por nombre, con nueve u once
--- argumentos: con un solo turno, el de doce, esas llamadas van a él con
--- `p_backfill` en falso, y hace lo mismo que antes. El turno sigue solo para
--- `service_role`. Va después de la 0262: si sigue el turno de nueve
--- argumentos, o no hay ni el de once ni el de doce, se detiene sin cambiar
--- nada. Si después alguien vuelve a correr la 0261, quedan dos turnos —el de
--- once y éste— y la llamada por nombre del código se vuelve ambigua (falla, no
--- emite) hasta que se vuelva a correr la 0266. En el SQL Editor corre en una
--- sola transacción; con psql, `psql -1 -v ON_ERROR_STOP=1`.
+-- desde» sigue en `antes_de_inicio`, se pida como se pida. Con «Emitir desde»
+-- en el futuro, también: la excepción es para lo pagado antes de un inicio
+-- que ya pasó, nunca para emitir antes de la fecha que puso el owner.
+-- «Emitir desde» no cambia: Ajustes sigue sin aceptar una fecha pasada (sí
+-- una futura), y un cambio de modo solo mueve la que quedó atrás. No toca
+-- datos, ni triggers, ni otra función. El código que hoy está en producción
+-- pide el turno por nombre, con nueve u once argumentos: con un solo turno, el
+-- de doce, esas llamadas van a él con `p_backfill` en falso, y hace lo mismo
+-- que antes. El turno sigue solo para `service_role`. Va después de la 0262:
+-- si sigue el turno de nueve argumentos, o no hay ni el de once ni el de
+-- doce, se detiene sin cambiar nada. Si después alguien vuelve a correr la
+-- 0261, quedan dos turnos —el de once y éste— y la llamada por nombre del
+-- código se vuelve ambigua (falla, no emite) hasta que se vuelva a correr la
+-- 0267. En el SQL Editor corre en una sola transacción; con psql,
+-- `psql -1 -v ON_ERROR_STOP=1`.
 --
 -- Se aplica a mano ANTES del código (DEPLOY.md). Es idempotente. El código
 -- tolera que falte: lo pagado desde «Emitir desde» se emite como hoy, y un
--- pedido pagado antes contesta `sin_migracion`, nombrando la 0266.
+-- pedido pagado antes contesta `sin_migracion`, nombrando la 0267.
 -- ============================================================================
 
 -- ── 1. Solo sobre la 0262 ────────────────────────────────────────────────────
@@ -59,14 +67,14 @@ begin
   if to_regprocedure('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)') is not null
      or (to_regprocedure('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)') is null
          and to_regprocedure('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)') is null) then
-    raise exception 'La 0266 va después de la 0262: aplica primero db/migrations/0261_invoices_manual.sql y db/migrations/0262_invoices_claim_coverage.sql.';
+    raise exception 'La 0267 va después de la 0262: aplica primero db/migrations/0261_invoices_manual.sql y db/migrations/0262_invoices_claim_coverage.sql.';
   end if;
 end $$;
 
 -- ── 2. El turno ──────────────────────────────────────────────────────────────
 -- Lo nuevo frente a la 0262: `p_backfill`, la excepción de la fecha para lo que
--- pide una persona con el RUC en Manual, y la marca en la base de esa fila. Lo
--- demás, igual, letra por letra.
+-- pide una persona con el RUC en Manual y «Emitir desde» ya llegado, y la marca
+-- en la base de esa fila. Lo demás, igual, letra por letra.
 --
 -- Revisa DENTRO de la base, con un candado por RUC, todo lo que no puede fallar:
 -- modo, conexión, monto, pagos validados que cubren el total, fecha de inicio,
@@ -108,6 +116,7 @@ declare
   v_prepaid   boolean;
   v_web       boolean;
   v_backfill  boolean := false;
+  v_first     timestamptz;
 begin
   select org_id into v_org from stores where id = p_store and status = 'active';
   if v_org is null then
@@ -255,17 +264,35 @@ begin
   end if;
   -- Pagado antes de «Emitir desde»: no, salvo lo que pide una persona con
   -- «Emitir esta boleta» después de revisar en SimpleFact que el pedido no
-  -- tiene boleta (0266, owner 15-10-2026): una fila real, con el RUC en Manual,
-  -- quién la pidió, y las dos fechas del 01/10/2026 00:00 (hora de Lima) en
-  -- adelante. Más atrás las boletas se emitían a mano y no se sabe cuál tiene
-  -- la suya. El barrido nunca manda `p_backfill`, y en Real no pasa: ahí no hay
-  -- botón. Con `p_backfill` y un pedido pagado desde «Emitir desde», nada
-  -- cambia: no entra aquí.
+  -- tiene boleta (0267, owner 15-10-2026): una fila real, con el RUC en Manual,
+  -- quién la pidió, «Emitir desde» ya llegado y las dos fechas del 01/10/2026
+  -- 00:00 (hora de Lima) en adelante. Más atrás las boletas se emitían a mano
+  -- y no se sabe cuál tiene la suya. Con «Emitir desde» en el futuro (Ajustes
+  -- lo acepta), nada pagado antes de él pasa: la excepción no adelanta la
+  -- fecha que puso el owner. `v_iss` se leyó bajo el candado del RUC. El
+  -- barrido nunca manda `p_backfill`, y en Real no pasa: ahí no hay botón. Con
+  -- `p_backfill` y un pedido pagado desde «Emitir desde», nada cambia: no
+  -- entra aquí.
+  --
+  -- El piso también para el primer dinero (`v_first`): la fecha más temprana
+  -- entre la del comprobante (`paid_at`, cuándo se movió la plata; puede
+  -- faltar) y la de registro de cada pago validado. Un pago cuyo comprobante
+  -- dice 29/09 y que entró a Kapta el 01/10 movió la plata cuando las boletas
+  -- se emitían a mano: no pasa. Sin pagos validados (el prepago web), la fecha
+  -- del pedido.
   if p_paid_at < v_iss.emit_from or v_paid < v_iss.emit_from then
+    select min(least(coalesce(paid_at, registered_at), registered_at)) into v_first
+      from order_payments
+     where order_id = p_order and validation_status = 'validado';
+    if v_live = 0 then
+      v_first := v_paid;
+    end if;
     if coalesce(p_backfill, false)
        and v_mode = 'real' and v_iss.mode = 'manual' and p_created_by is not null
+       and v_iss.emit_from <= now()
        and p_paid_at >= timestamptz '2026-10-01 00:00:00-05'
-       and v_paid >= timestamptz '2026-10-01 00:00:00-05' then
+       and v_paid >= timestamptz '2026-10-01 00:00:00-05'
+       and v_first >= timestamptz '2026-10-01 00:00:00-05' then
       v_backfill := true;
     else
       return jsonb_build_object('reason', 'antes_de_inicio');
@@ -314,7 +341,7 @@ begin
     return jsonb_build_object('reason', 'tope');
   end if;
 
-  -- La fila de lo pagado antes de «Emitir desde» lo dice en su base (0266):
+  -- La fila de lo pagado antes de «Emitir desde» lo dice en su base (0267):
   -- quien la mire sabe que salió por la excepción, después de que una persona
   -- revisó SimpleFact.
   insert into order_invoices (

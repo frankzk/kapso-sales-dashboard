@@ -298,16 +298,16 @@ const CLAIM_0261_PARAMS = ["p_mode", "p_created_by"] as const;
 
 /**
  * La migración que le deja al turno dar una fila real de un pedido pagado antes
- * de «Emitir desde» (`p_backfill`, owner 15-10-2026): la 0266. Como la 0261, no
+ * de «Emitir desde» (`p_backfill`, owner 15-10-2026): la 0267. Como la 0261, no
  * crea nada con nombre nuevo, así que se reconoce por el parámetro. Solo lo
  * manda «Emitir esta boleta» con un pedido de antes (`beforeStart`): sin la
- * 0266, lo demás se sigue emitiendo con el turno de once argumentos.
+ * 0267, lo demás se sigue emitiendo con el turno de once argumentos.
  */
-export const INVOICE_CLAIM_BACKFILL_MIGRATION = "0266";
+export const INVOICE_CLAIM_BACKFILL_MIGRATION = "0267";
 
 /**
  * El «no existe» del turno. Si se pidió con `p_backfill`, lo que falta es la
- * 0266: la 0261 ya corrió en producción. Si se pidió con `p_mode` o
+ * 0267: la 0261 ya corrió en producción. Si se pidió con `p_mode` o
  * `p_created_by`, lo que falta es la 0261: la 0257 y la 0260 crean el turno sin
  * esos parámetros, y PostgREST no encuentra esa firma (PGRST202). Quien llega
  * al turno ya leyó las tablas de la 0257, así que no son ellas. Sin esos
@@ -462,6 +462,7 @@ interface PaymentRow {
   validation_status: string;
   validated_at: string | null;
   registered_at: string | null;
+  paid_at: string | null;
   vision: unknown;
 }
 
@@ -524,7 +525,7 @@ async function loadOrders(admin: SupabaseClient, orderIds: string[]): Promise<Ma
     selectIn<PaymentRow>(
       admin,
       "order_payments",
-      "id,order_id,kind,amount,validation_status,validated_at,registered_at,vision",
+      "id,order_id,kind,amount,validation_status,validated_at,registered_at,paid_at,vision",
       "order_id",
       found,
     ),
@@ -589,6 +590,9 @@ async function loadOrders(admin: SupabaseClient, orderIds: string[]): Promise<Ma
       // Cuándo quedó pagado el pedido sale del último pago REGISTRADO (§35.3,
       // condición 8): es la fecha que mira `invoice_candidates`.
       registeredAt: p.registered_at,
+      // La fecha del comprobante: solo para el piso de lo pagado antes de
+      // «Emitir desde» (el primer dinero, `firstPaidAt`), no para la condición 8.
+      paidAt: p.paid_at ?? null,
       vision: p.vision,
       flowLinked: flowLinked.has(p.id),
       statementDestination: destinationByPayment.get(p.id) ?? null,
@@ -1612,10 +1616,10 @@ async function prepareSale(
  * (`p_created_by`) son de la 0261 y solo van si se dan: sin ellos el turno es
  * el de siempre, con el modo del RUC y sin quién.
  *
- * `p_backfill` (0266) va SOLO con un pedido pagado antes de «Emitir desde»
+ * `p_backfill` (0267) va SOLO con un pedido pagado antes de «Emitir desde»
  * (`beforeStart`, que solo da `emitNow`) y con quien lo pidió: el barrido
  * nunca lo manda. Nunca va en false: así lo demás se sigue pidiendo con el
- * turno de once argumentos aunque la 0266 no esté.
+ * turno de once argumentos aunque la 0267 no esté.
  */
 function claimArgs(
   facts: InvoiceOrderFacts,
@@ -1868,7 +1872,7 @@ function blocked(reason: InvoiceReason, detail?: string | null): InvoiceEmitNowR
  * de Kapta las boletas se emitían a mano en SimpleFact, así que, justo después
  * de comparar lo que vio, hace falta que la persona haya marcado que lo revisó
  * ahí (`expected.simplefactChecked`); si no, `sin_revision_simplefact` y no se
- * llama a nada. El turno va con `p_backfill` y la base exige lo mismo (0266).
+ * llama a nada. El turno va con `p_backfill` y la base exige lo mismo (0267).
  *
  * SOLO EN PRODUCCIÓN (`invoiceEmitAllowedHere`). La acción ya lo pide antes de
  * leer nada; aquí se vuelve a pedir, primero que todo, por si alguien la llama
@@ -2013,13 +2017,13 @@ async function emitNow(
 
   // 5. El turno: una fila REAL, con quién la pidió. La base vuelve a revisar
   // todo, con el candado del RUC y el tope del día de lo real. Un pedido de
-  // antes de «Emitir desde» va con `p_backfill` (0266): la base vuelve a exigir
+  // antes de «Emitir desde» va con `p_backfill` (0267): la base vuelve a exigir
   // la excepción entera.
   const args = claimArgs(facts, elig, prepared, { mode: "real", createdBy: input.userId });
   const claim = await admin.rpc("invoice_claim", args);
   if (claim.error) {
     // Sin la firma con `p_mode` y `p_created_by`: falta la 0261. Sin la de
-    // `p_backfill`: falta la 0266, y solo un pedido de antes lo nota.
+    // `p_backfill`: falta la 0267, y solo un pedido de antes lo nota.
     if (isInvoiceMigrationMissing(claim.error)) return blocked("sin_migracion", claimMissingError(args).message);
     return blocked("turno_fallido", `El turno falló (${sinTelefonos(claim.error.message)}).`);
   }
@@ -2097,8 +2101,10 @@ export interface InvoiceEmitNowRow {
  *
  * `beforeStart`: quedó pagado antes de «Emitir desde» (la excepción de
  * `INVOICE_BACKFILL_FROM`). La confirmación lo dice, con cuándo quedó pagado
- * (`paidAt`) y desde cuándo emite el RUC (`emitFrom`), y pide marcar que se
- * revisó en SimpleFact. Las dos fechas en ISO, o null si no se entienden.
+ * (`paidAt`), cuándo se movió el primer dinero (`firstPaidAt`, la fecha más
+ * temprana entre el comprobante y el registro de sus pagos: desde ahí se busca
+ * en SimpleFact) y desde cuándo emite el RUC (`emitFrom`), y pide marcar que
+ * se revisó en SimpleFact. Las fechas en ISO, o null si no se entienden.
  */
 export interface InvoiceEmitNowOffer {
   issuerId: string;
@@ -2107,6 +2113,7 @@ export interface InvoiceEmitNowOffer {
   total: number;
   beforeStart: boolean;
   paidAt: string | null;
+  firstPaidAt: string | null;
   emitFrom: string | null;
 }
 
@@ -2244,6 +2251,7 @@ export function invoiceEmitNowReadiness(input: {
       total: elig.totalCents / 100,
       beforeStart: elig.beforeStart,
       paidAt: isoOrNull(elig.paidAt),
+      firstPaidAt: isoOrNull(elig.firstPaidAt),
       emitFrom: isoOrNull(elig.issuer.emitFrom),
     },
   };

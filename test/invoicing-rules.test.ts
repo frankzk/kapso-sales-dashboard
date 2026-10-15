@@ -180,6 +180,7 @@ function pago(over: Partial<InvoicePayment> = {}): InvoicePayment {
     amount: 150,
     validationStatus: "validado",
     registeredAt: PAGADO,
+    paidAt: null,
     validatedAt: VALIDADO,
     vision: LECTURA_GF,
     flowLinked: false,
@@ -232,6 +233,7 @@ describe("MOM §35.3 — invoiceEligibility: el pedido que sí lleva comprobante
       mode: "real",
       totalCents: 15_000,
       paidAt: PAGADO,
+      firstPaidAt: PAGADO,
       beforeStart: false,
       basis: {
         prepaid: false,
@@ -267,6 +269,8 @@ describe("MOM §35.3 — invoiceEligibility: el pedido que sí lleva comprobante
       mode: "real",
       totalCents: 15_000,
       paidAt: tarde,
+      // El primer dinero: el adelanto, registrado antes.
+      firstPaidAt: PAGADO,
       beforeStart: false,
       basis: {
         prepaid: false,
@@ -483,6 +487,7 @@ describe("MOM §35.3 fila 3 — la empresa recibió el pago", () => {
       mode: "real",
       totalCents: 8990,
       paidAt: FECHA_PEDIDO,
+      firstPaidAt: FECHA_PEDIDO,
       beforeStart: false,
       basis: {
         prepaid: true,
@@ -664,7 +669,7 @@ describe("MOM §35.3 fila 7 — el RUC encendido", () => {
   });
 });
 
-describe("MOM §35.3 fila 8 y §35.4 — «Emitir desde»: ningún RUC emite hacia atrás", () => {
+describe("MOM §35.3 fila 8 y §35.4 — «Emitir desde»: el barrido nunca emite hacia atrás", () => {
   const conDesde = (emitFrom: string | null) => [{ ...GF, emitFrom }];
 
   it("sin «Emitir desde» no se emite", () => {
@@ -953,6 +958,7 @@ describe("MOM §35.3 fila 8 y §35.7 — lo pagado antes de «Emitir desde», co
       mode: "real",
       totalCents: 15_000,
       paidAt: ANTES,
+      firstPaidAt: ANTES,
       beforeStart: true,
       basis: {
         prepaid: false,
@@ -1002,6 +1008,44 @@ describe("MOM §35.3 fila 8 y §35.7 — lo pagado antes de «Emitir desde», co
     expect(alEmitir(pagadoEl(ANTES, { ...MANUAL, emitFrom: "pronto" }))).toMatchObject({ reason: "antes_de_inicio" });
   });
 
+  it("con «Emitir desde» en el futuro, nada pagado antes de él sale, ni con el botón: la excepción es para un inicio que ya llegó", () => {
+    // Ajustes acepta una fecha futura (un cambio de modo solo mueve una que
+    // quedó atrás). Con el RUC en Manual y «Emitir desde» el 20/10, un pedido
+    // pagado el 15/10 —después del piso y del cambio— no se emite antes de la
+    // fecha que puso el owner.
+    const HOY = new Date("2026-10-15T20:00:00.000Z");
+    const EL_20 = "2026-10-20T05:00:00.000Z";
+    const FUTURO: InvoiceIssuer = { ...MANUAL, emitFrom: EL_20 };
+    const PAGADO_HOY = "2026-10-15T15:00:00.000Z";
+    const conReloj = (f: InvoiceOrderFacts, now: Date) => invoiceEligibility(f, { emitNow: true, now });
+    expect(conReloj(pagadoEl(PAGADO_HOY, FUTURO), HOY)).toEqual({ ok: false, reason: "antes_de_inicio", issuerId: GF.id });
+    // Lo pagado entre el piso y hoy, tampoco; ni justo en el piso.
+    expect(conReloj(pagadoEl(ANTES, FUTURO), HOY)).toEqual({ ok: false, reason: "antes_de_inicio", issuerId: GF.id });
+    expect(conReloj(pagadoEl(INVOICE_BACKFILL_FROM, FUTURO), HOY)).toMatchObject({ reason: "antes_de_inicio" });
+    // Un milisegundo antes de que llegue, todavía no; justo cuando llega, sí.
+    expect(conReloj(pagadoEl(PAGADO_HOY, FUTURO), new Date(Date.parse(EL_20) - 1))).toMatchObject({
+      reason: "antes_de_inicio",
+    });
+    expect(conReloj(pagadoEl(PAGADO_HOY, FUTURO), new Date(EL_20))).toMatchObject({
+      ok: true,
+      mode: "real",
+      paidAt: PAGADO_HOY,
+      beforeStart: true,
+    });
+    // «Emitir desde» en el pasado: sale, como siempre.
+    expect(conReloj(pagadoEl(ANTES), HOY)).toMatchObject({ ok: true, beforeStart: true });
+    // Un reloj que no se entiende no cuenta como «ya llegó».
+    expect(conReloj(pagadoEl(ANTES), new Date("pronto"))).toEqual({ ok: false, reason: "antes_de_inicio", issuerId: GF.id });
+    // Sin `now`, el reloj de ahora: con «Emitir desde» lejos en el futuro, nada.
+    expect(alEmitir(pagadoEl(ANTES, { ...MANUAL, emitFrom: "2999-01-01T05:00:00.000Z" }))).toMatchObject({
+      reason: "antes_de_inicio",
+    });
+    // El reloj solo mira la excepción: lo pagado desde «Emitir desde» sale igual
+    // (la condición 8 no cambia), y el barrido sigue sin ir hacia atrás.
+    expect(conReloj(pagadoEl(PAGADO), new Date(Date.parse(DESDE) - 1))).toMatchObject({ ok: true, beforeStart: false });
+    expect(invoiceEligibility(pagadoEl(ANTES), { now: HOY })).toMatchObject({ reason: "antes_de_inicio" });
+  });
+
   it("pagado desde «Emitir desde»: beforeStart false, también con emitNow", () => {
     expect(alEmitir(pagadoEl(PAGADO))).toMatchObject({ ok: true, paidAt: PAGADO, beforeStart: false });
     expect(alEmitir(pagadoEl(DESDE))).toMatchObject({ ok: true, beforeStart: false });
@@ -1020,9 +1064,69 @@ describe("MOM §35.3 fila 8 y §35.7 — lo pagado antes de «Emitir desde», co
 
   it("el prepago web cuenta desde la fecha del pedido, con el mismo piso", () => {
     const web = (orderDate: string) => prepago({ orderDate, issuers: [MANUAL] });
-    expect(alEmitir(web(ANTES))).toMatchObject({ ok: true, beforeStart: true, paidAt: ANTES });
+    expect(alEmitir(web(ANTES))).toMatchObject({ ok: true, beforeStart: true, paidAt: ANTES, firstPaidAt: ANTES });
     expect(alEmitir(web("2026-09-30T12:00:00.000Z"))).toMatchObject({ ok: false, reason: "antes_de_inicio" });
     expect(invoiceEligibility(web(ANTES))).toMatchObject({ ok: false, reason: "antes_de_inicio" });
+  });
+
+  it("el piso cuenta desde el primer dinero: un comprobante del 29/09 registrado después del 01/10 no sale", () => {
+    // `registered_at` es cuándo entró a Kapta; `paid_at`, cuándo se movió la
+    // plata según el comprobante. Si la plata se movió antes del 01/10 de Lima,
+    // la boleta pudo salir a mano: no pasa, aunque se registrara después.
+    const conComprobante = (paidAt: string | null, registeredAt = ANTES) =>
+      hechos({ payments: [pago({ registeredAt, paidAt })], issuers: [MANUAL] });
+    expect(alEmitir(conComprobante("2026-09-29T15:00:00.000Z", "2026-10-01T13:00:00.000Z"))).toEqual({
+      ok: false,
+      reason: "antes_de_inicio",
+      issuerId: GF.id,
+    });
+    expect(alEmitir(conComprobante("2026-10-01T04:59:59.999Z"))).toMatchObject({ ok: false, reason: "antes_de_inicio" });
+    // Justo en el piso, sí; y la fecha del comprobante es la del primer dinero.
+    expect(alEmitir(conComprobante(INVOICE_BACKFILL_FROM))).toMatchObject({
+      ok: true,
+      beforeStart: true,
+      paidAt: ANTES,
+      firstPaidAt: INVOICE_BACKFILL_FROM,
+    });
+    // Sin fecha de comprobante, o con una que no se entiende, cuenta el registro.
+    for (const paidAt of [null, "ayer"]) {
+      expect(alEmitir(conComprobante(paidAt, "2026-10-05T15:00:00.000Z")), String(paidAt)).toMatchObject({
+        ok: true,
+        beforeStart: true,
+        firstPaidAt: "2026-10-05T15:00:00.000Z",
+      });
+    }
+    // Un comprobante posterior al registro no corre la fecha: la más temprana.
+    expect(alEmitir(conComprobante("2026-10-12T15:00:00.000Z", "2026-10-05T15:00:00.000Z"))).toMatchObject({
+      ok: true,
+      firstPaidAt: "2026-10-05T15:00:00.000Z",
+    });
+  });
+
+  it("el primer dinero es el de TODOS los pagos validados: un adelanto movido antes del 01/10 frena", () => {
+    const f = (adelanto: Partial<InvoicePayment>) =>
+      hechos({
+        issuers: [MANUAL],
+        payments: [
+          pago({ id: "ade", kind: "adelanto", amount: 50, registeredAt: "2026-10-02T15:00:00.000Z", ...adelanto }),
+          pago({ id: "dif", kind: "diferencia", amount: 100, registeredAt: ANTES }),
+        ],
+      });
+    expect(alEmitir(f({ paidAt: "2026-09-25T15:00:00.000Z" }))).toMatchObject({ ok: false, reason: "antes_de_inicio" });
+    expect(alEmitir(f({ registeredAt: "2026-09-25T15:00:00.000Z" }))).toMatchObject({ ok: false, reason: "antes_de_inicio" });
+    expect(alEmitir(f({}))).toMatchObject({ ok: true, paidAt: ANTES, firstPaidAt: "2026-10-02T15:00:00.000Z" });
+    // Un pago rechazado no cuenta.
+    const conRechazado = hechos({
+      issuers: [MANUAL],
+      payments: [pago({ registeredAt: ANTES }), pago({ id: "rech", validationStatus: "rechazado", paidAt: "2026-09-20T15:00:00.000Z" })],
+    });
+    expect(alEmitir(conRechazado)).toMatchObject({ ok: true, beforeStart: true });
+  });
+
+  it("la condición 8 no mira el comprobante: lo pagado desde «Emitir desde» sale igual, y sin emitNow nada cambia", () => {
+    const viejo = hechos({ payments: [pago({ paidAt: "2026-09-29T15:00:00.000Z" })], issuers: [MANUAL] });
+    expect(alEmitir(viejo)).toMatchObject({ ok: true, beforeStart: false, paidAt: PAGADO, firstPaidAt: "2026-09-29T15:00:00.000Z" });
+    expect(invoiceEligibility(viejo)).toMatchObject({ ok: true, mode: "simulacion", beforeStart: false });
   });
 });
 

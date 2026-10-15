@@ -99,11 +99,15 @@ export const INVOICE_MAX_PER_RUN = 15;
 /**
  * Desde cuándo «Emitir esta boleta» puede emitir un pedido que quedó pagado
  * ANTES de «Emitir desde» del RUC: el 01/10/2026 00:00 de Lima (owner,
- * 15-10-2026). Solo con el RUC en «Manual», solo con el botón (una persona) y
- * solo si esa persona confirma que lo buscó en SimpleFact y no tiene boleta
- * (`sin_revision_simplefact`): antes de Kapta las boletas se emitían a mano, y
+ * 15-10-2026), para su último registro y también para su primer dinero
+ * (`firstPaidAt`: la fecha más temprana entre el comprobante y el registro de
+ * sus pagos validados). Solo con el RUC en «Manual», solo con el botón (una
+ * persona) y solo si esa persona confirma que lo buscó en SimpleFact y no tiene
+ * boleta (`sin_revision_simplefact`): antes de Kapta las boletas se emitían a mano, y
  * Kapta no sabe si ese pedido ya tiene una. Dos boletas son dos veces el
- * impuesto. El barrido nunca va hacia atrás. La base exige lo mismo (0266).
+ * impuesto. Y solo si «Emitir desde» ya llegó: con una fecha en el futuro
+ * (Ajustes la acepta), nada pagado antes de ella sale, ni con el botón. El
+ * barrido nunca va hacia atrás. La base exige lo mismo (0267).
  */
 export const INVOICE_BACKFILL_FROM = "2026-10-01T05:00:00.000Z";
 
@@ -238,6 +242,14 @@ export interface InvoicePayment {
    * (MOM §35.3, fila 8).
    */
   registeredAt: string | null;
+  /**
+   * `order_payments.paid_at`: la fecha y hora del movimiento, como la dice el
+   * comprobante. Puede faltar (el lector no siempre la lee) y NO cuenta para la
+   * condición 8. Solo cuenta para el piso de lo pagado antes de «Emitir desde»
+   * (`INVOICE_BACKFILL_FROM`): ahí vale la más temprana entre ésta y
+   * `registeredAt`, porque la plata pudo moverse antes de entrar a Kapta.
+   */
+  paidAt: string | null;
   /**
    * `order_payments.validated_at`: solo para auditar la base del comprobante.
    * NO dice cuándo quedó pagado: observar un pago lo borra y volver a validarlo
@@ -540,10 +552,20 @@ export type InvoiceEligibility =
        */
       paidAt: string;
       /**
+       * Cuándo se movió el primer dinero del pedido: la fecha más temprana
+       * entre el comprobante (`paidAt` de cada pago) y su registro
+       * (`registeredAt`), de todos sus pagos validados; en el prepago web, la
+       * fecha del pedido. Es la que se mide contra el piso de lo pagado antes
+       * de «Emitir desde» (`INVOICE_BACKFILL_FROM`) y la que dice la
+       * confirmación. No cambia la condición 8.
+       */
+      firstPaidAt: string;
+      /**
        * Quedó pagado antes de «Emitir desde» y solo pasa por la excepción de
        * «Emitir esta boleta» (`INVOICE_BACKFILL_FROM`). Con él, `emitInvoiceNow`
        * pide que la persona confirme que lo revisó en SimpleFact y el turno va
-       * con `p_backfill` (0266). Siempre false sin `emitNow`.
+       * con `p_backfill` (0267). Siempre false sin `emitNow`, y con «Emitir
+       * desde» en el futuro.
        */
       beforeStart: boolean;
       basis: InvoiceBasis;
@@ -584,10 +606,18 @@ export interface InvoiceEligibilityOptions {
    * «Simulación»: el barrido no emite por él.
    *
    * Y con el RUC en «Manual», un pedido pagado antes de «Emitir desde» pero
-   * desde `INVOICE_BACKFILL_FROM` pasa la condición 8 con `beforeStart` (owner,
-   * 15-10-2026). Sin `emitNow`, o en «Real», nunca.
+   * desde `INVOICE_BACKFILL_FROM` —su último registro y su primer dinero
+   * (`firstPaidAt`)— pasa la condición 8 con `beforeStart` (owner,
+   * 15-10-2026), si «Emitir desde» ya llegó (`now`). Sin `emitNow`, en
+   * «Real» o con «Emitir desde» en el futuro, nunca.
    */
   emitNow?: boolean;
+  /**
+   * El reloj con que se mira si «Emitir desde» ya llegó, solo para la excepción
+   * de lo pagado antes (`emitNow`). Por defecto, ahora. Un reloj que no se
+   * entiende no cuenta como «ya llegó»: no hay excepción.
+   */
+  now?: Date;
 }
 
 /**
@@ -695,13 +725,42 @@ export function invoiceEligibility(
   const undated = !prepaid && live.some((p) => time(p.registeredAt) === null);
   const from = time(issuer.emitFrom);
   if (paidTime === null || undated || from === null) return fail("antes_de_inicio", undefined, issuer.id);
+  // El primer dinero: para el piso de la excepción no basta con cuándo entró a
+  // Kapta el último pago. Un pago cuyo comprobante dice 29/09 y que se registró
+  // el 01/10 movió la plata antes del piso, cuando las boletas se emitían a
+  // mano. Cuenta la fecha más temprana entre el comprobante (`paidAt`) y el
+  // registro de cada pago validado; sin fecha de comprobante, o con una que no
+  // se entiende, la de registro. En el prepago web, la fecha del pedido.
+  const firstPaidAt = prepaid
+    ? facts.orderDate
+    : live.reduce<string | null>((first, p) => {
+        const registered = time(p.registeredAt);
+        if (registered === null) return first;
+        const receipt = time(p.paidAt);
+        const at = receipt !== null && receipt < registered ? p.paidAt! : p.registeredAt!;
+        return first === null || time(at)! < time(first)! ? at : first;
+      }, null);
+  const firstTime = time(firstPaidAt);
   // La excepción (owner, 15-10-2026): lo pagado antes de «Emitir desde», pero
-  // desde el 01/10/2026 00:00 de Lima, lo puede emitir una persona con «Emitir
-  // esta boleta» y el RUC en «Manual». Antes de Kapta las boletas se emitían a
-  // mano en SimpleFact: quien pulsa tiene que confirmar que lo revisó ahí
-  // (`emitInvoiceNow`). El barrido nunca va hacia atrás, y en «Real» tampoco.
+  // desde el 01/10/2026 00:00 de Lima —el último registro Y el primer dinero—,
+  // lo puede emitir una persona con «Emitir esta boleta» y el RUC en «Manual».
+  // Antes de Kapta las boletas se emitían a mano en SimpleFact: quien pulsa
+  // tiene que confirmar que lo revisó ahí (`emitInvoiceNow`). El barrido nunca
+  // va hacia atrás, y en «Real» tampoco.
+  // Solo con «Emitir desde» ya llegado: Ajustes acepta una fecha en el futuro
+  // (un cambio de modo solo mueve una que quedó atrás), y lo pagado antes de
+  // ella no sale, ni con el botón. La excepción es para lo pagado antes de un
+  // inicio que ya pasó, nunca para emitir antes de la fecha que puso el owner.
+  const floor = time(INVOICE_BACKFILL_FROM)!;
+  const nowTime = (opts.now ?? new Date()).getTime();
   const backfill =
-    opts.emitNow === true && issuer.mode === "manual" && paidTime >= time(INVOICE_BACKFILL_FROM)!;
+    opts.emitNow === true &&
+    issuer.mode === "manual" &&
+    Number.isFinite(nowTime) &&
+    from <= nowTime &&
+    paidTime >= floor &&
+    firstTime !== null &&
+    firstTime >= floor;
   if (paidTime < from && !backfill) return fail("antes_de_inicio", undefined, issuer.id);
   const beforeStart = paidTime < from;
 
@@ -725,6 +784,7 @@ export function invoiceEligibility(
     mode,
     totalCents,
     paidAt: paidAt!,
+    firstPaidAt: firstPaidAt!,
     beforeStart,
     basis: {
       prepaid,

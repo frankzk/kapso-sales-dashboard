@@ -167,6 +167,7 @@ import {
 import {
   BACKFILL_REVIEW_TEXT,
   ConfirmDoubtForm,
+  EMIT_CONTROL_CLOSED,
   EmitInvoiceConfirm,
   EmitInvoiceControl,
   EmitOutcome,
@@ -182,7 +183,10 @@ import {
   SIMPLEFACT_CHECK_LABEL,
   doubtConfirmation,
   emitBeforeStartText,
+  emitConfirmShown,
   emitConfirmation,
+  emitControlReducer,
+  emitOfferKey,
   externalInvoiceConfirmation,
   invoicePanelView,
   releaseDoubtText,
@@ -248,6 +252,7 @@ const factsFor = (over: Partial<InvoiceOrderFacts> = {}): InvoiceOrderFacts => (
       amount: 85,
       validationStatus: "validado",
       registeredAt: "2026-10-14T11:00:00Z",
+      paidAt: null,
       validatedAt: "2026-10-14T12:00:00Z",
       vision: null,
       flowLinked: true,
@@ -2405,6 +2410,7 @@ describe("loadInvoicePanel: «Emitir esta boleta» solo en Manual", () => {
     // Pagado desde «Emitir desde»: no pide la casilla. Las fechas, en ISO.
     beforeStart: false,
     paidAt: "2026-10-14T11:00:00.000Z",
+    firstPaidAt: "2026-10-14T11:00:00.000Z",
     emitFrom: "2026-10-14T00:00:00.000Z",
   };
 
@@ -2612,7 +2618,7 @@ describe("el panel: «Emitir esta boleta»", () => {
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Emitir esta boleta<\/button>/);
     const suelto = renderToStaticMarkup(
       createElement(EmitInvoiceControl, {
-        emit: { ruc: RUC, legalName: "GRUPO GF S.A.C.", total: 85 },
+        emit: { issuerId: ISSUER.id, ruc: RUC, legalName: "GRUPO GF S.A.C.", total: 85 },
         pending: true,
         onEmit: async () => {},
         label: "Emitir",
@@ -2649,7 +2655,7 @@ describe("el panel: «Emitir esta boleta»", () => {
     );
     const html = renderToStaticMarkup(
       createElement(EmitInvoiceConfirm, {
-        emit: { ruc: RUC, legalName: "GRUPO GF S.A.C.", total: 120.5 },
+        emit: { issuerId: ISSUER.id, ruc: RUC, legalName: "GRUPO GF S.A.C.", total: 120.5 },
         busy: false,
         simplefactChecked: false,
         onSimplefactChecked: () => {},
@@ -2668,7 +2674,7 @@ describe("el panel: «Emitir esta boleta»", () => {
   it("mientras sale: «Emitiendo…», sin «Sí, emitir» y sin cancelar", () => {
     const html = renderToStaticMarkup(
       createElement(EmitInvoiceConfirm, {
-        emit: { ruc: RUC, legalName: "GRUPO GF S.A.C.", total: 85 },
+        emit: { issuerId: ISSUER.id, ruc: RUC, legalName: "GRUPO GF S.A.C.", total: 85 },
         busy: true,
         simplefactChecked: false,
         onSimplefactChecked: () => {},
@@ -2703,11 +2709,13 @@ describe("el panel: «Emitir esta boleta»", () => {
     const src = read("components/order-invoice-panel.tsx");
     const control = src.slice(src.indexOf("export function EmitInvoiceControl("), src.indexOf("export function EmitInvoiceConfirm("));
     expect(control).toContain("const lock = useRef(false);");
-    expect(control).toMatch(/const confirmar = \(\) =>\s*void sendOnce\(lock, async \(\) => \{\s*setSending\(true\);/);
+    expect(control).toMatch(
+      /const confirmar = \(offer: EmitInvoiceShownOffer, simplefactChecked: boolean\) =>\s*void sendOnce\(lock, async \(\) => \{\s*setSending\(true\);/,
+    );
     expect(control).toContain("const busy = pending || sending;");
-    expect(control).toContain("onConfirm={confirmar}");
+    expect(control).toContain("onConfirm={() => confirmar(shown, state.simplefactChecked)}");
     expect(src).toContain(
-      "await run(() =>\n              emitInvoiceAction(orderId, { issuerId: emit.issuerId, total: emit.total, simplefactChecked }),\n            );\n            await onEmitted?.();",
+      "await run(() =>\n              emitInvoiceAction(orderId, { issuerId: shown.issuerId, total: shown.total, simplefactChecked }),\n            );\n            await onEmitted?.();",
     );
     expect(src).toContain("<OrderInvoicePanelView orderId={orderId} data={data} pending={pending} run={run} onEmitted={cargar} />");
   });
@@ -2772,6 +2780,7 @@ describe("«Emitir esta boleta» de un pedido pagado antes de «Emitir desde»: 
     total: 85,
     beforeStart: true,
     paidAt: ANTES,
+    firstPaidAt: ANTES,
     emitFrom: DESDE,
   };
   const TEXTO_ANTES =
@@ -2784,7 +2793,7 @@ describe("«Emitir esta boleta» de un pedido pagado antes de «Emitir desde»: 
   const confirma = (emit: Record<string, unknown>, over: Record<string, unknown> = {}) =>
     renderToStaticMarkup(
       createElement(EmitInvoiceConfirm, {
-        emit: { ruc: RUC, legalName: "GRUPO GF S.A.C.", total: 85, ...emit },
+        emit: { issuerId: ISSUER.id, ruc: RUC, legalName: "GRUPO GF S.A.C.", total: 85, ...emit },
         busy: false,
         simplefactChecked: false,
         onSimplefactChecked: () => {},
@@ -2885,17 +2894,105 @@ describe("«Emitir esta boleta» de un pedido pagado antes de «Emitir desde»: 
   });
 
   it("la casilla nace sin marcar cada vez, se desmarca al cancelar y al volver, y viaja a `onEmit`", () => {
+    // La confirmación como función pura: lo que hace el control con ella.
+    const abierta = emitControlReducer(EMIT_CONTROL_CLOSED, { type: "abrir", offer: OFERTA_ANTES });
+    expect(abierta).toEqual({ shown: OFERTA_ANTES, simplefactChecked: false });
+    const marcada = emitControlReducer(abierta, { type: "casilla", checked: true });
+    expect(marcada).toEqual({ shown: OFERTA_ANTES, simplefactChecked: true });
+    // Cancelar, o volver la respuesta: cerrada y desmarcada.
+    expect(emitControlReducer(marcada, { type: "cerrar" })).toEqual(EMIT_CONTROL_CLOSED);
+    // Abrir otra vez: sin marcar, aunque la última vez quedara marcada.
+    expect(emitControlReducer(marcada, { type: "abrir", offer: OFERTA_ANTES }).simplefactChecked).toBe(false);
+    // Sin la confirmación abierta, la casilla no se marca.
+    expect(emitControlReducer(EMIT_CONTROL_CLOSED, { type: "casilla", checked: true })).toBe(EMIT_CONTROL_CLOSED);
+    // Solo un `true`.
+    expect(emitControlReducer(abierta, { type: "casilla", checked: 1 as never }).simplefactChecked).toBe(false);
+
+    // Y el control la usa así: abre con la oferta de ahora, cancela y vuelve
+    // cerrando, y a `onEmit` va la oferta de la confirmación con la casilla.
     const src = read("components/order-invoice-panel.tsx");
-    const control = src.slice(src.indexOf("export function EmitInvoiceControl("), src.indexOf("export function EmitInvoiceConfirm("));
-    expect(control).toContain("const [simplefactChecked, setSimplefactChecked] = useState(false);");
-    expect(control).toContain("await onEmit(simplefactChecked);");
-    // Al abrir, al cancelar y al volver la respuesta.
-    expect(control.match(/setSimplefactChecked\(false\);/g)).toHaveLength(3);
-    expect(control).toMatch(/onClick=\{\(\) => \{\s*setSimplefactChecked\(false\);\s*setConfirming\(true\);/);
-    expect(control).toMatch(/onCancel=\{\(\) => \{\s*setSimplefactChecked\(false\);\s*setConfirming\(false\);/);
-    expect(control).toMatch(/finally \{\s*setSending\(false\);\s*setConfirming\(false\);\s*setSimplefactChecked\(false\);/);
+    const control = src.slice(src.indexOf("export function EmitInvoiceControl("), src.indexOf("export type EmitInvoiceShownOffer"));
+    expect(control).toContain("const [state, dispatch] = useReducer(emitControlReducer, EMIT_CONTROL_CLOSED);");
+    expect(control).toContain('onClick={() => dispatch({ type: "abrir", offer: emit })}');
+    expect(control).toContain('onCancel={() => dispatch({ type: "cerrar" })}');
+    expect(control).toMatch(/finally \{\s*setSending\(false\);\s*dispatch\(\{ type: "cerrar" \}\);/);
+    expect(control).toContain("await onEmit(offer, simplefactChecked);");
+    expect(control).toContain("onConfirm={() => confirmar(shown, state.simplefactChecked)}");
+    expect(control).toContain("simplefactChecked={state.simplefactChecked}");
+    // La casilla ya no es estado suelto del control: vive con la oferta que se vio.
+    expect(control).not.toContain("setSimplefactChecked");
     const confirm = src.slice(src.indexOf("export function EmitInvoiceConfirm("), src.indexOf("export function EmitOutcome("));
     expect(confirm).toContain("disabled={busy || (beforeStart !== null && !simplefactChecked)}");
+  });
+
+  // Revisión (15-10-2026): la casilla era estado suelto del control, y el panel
+  // se relee con cada acción del drawer sin desmontarlo. Con la confirmación
+  // abierta y la casilla marcada para el RUC X, una relectura que trajera el
+  // RUC Y (otra cuenta → RUC en Ajustes) dejaba la casilla marcada, y «Sí,
+  // emitir» mandaba la oferta de AHORA: la boleta de Y salía sin que nadie
+  // revisara el SimpleFact de Y.
+  it("si la oferta cambia con la confirmación abierta, se cierra y la casilla se desmarca", () => {
+    const deX = OFERTA_ANTES;
+    const abiertaMarcada = emitControlReducer(
+      emitControlReducer(EMIT_CONTROL_CLOSED, { type: "abrir", offer: deX }),
+      { type: "casilla", checked: true },
+    );
+    // La misma oferta releída (otro objeto, lo mismo): nada cambia.
+    expect(emitControlReducer(abiertaMarcada, { type: "oferta", offer: { ...deX } })).toBe(abiertaMarcada);
+    expect(emitConfirmShown(abiertaMarcada, { ...deX })).toBe(deX);
+    // Cualquier cosa que la persona leyó o revisó, distinta: cerrada y desmarcada.
+    const cambios: Array<[string, Partial<typeof deX>]> = [
+      ["otro RUC", { issuerId: "iss-otro", ruc: "20100000009", legalName: "OTRA S.A.C." }],
+      ["otro issuerId con el mismo RUC a la vista", { issuerId: "iss-otro" }],
+      ["otro total", { total: 86 }],
+      ["un céntimo", { total: 85.01 }],
+      ["deja de ser de antes", { beforeStart: false }],
+      ["otra fecha de pago", { paidAt: "2026-10-11T15:00:00.000Z" }],
+      ["otro primer pago", { firstPaidAt: "2026-10-02T15:00:00.000Z" }],
+      ["otro «Emitir desde»", { emitFrom: "2026-10-15T05:00:00.000Z" }],
+    ];
+    for (const [porque, cambio] of cambios) {
+      const ahora = { ...deX, ...cambio };
+      expect(emitControlReducer(abiertaMarcada, { type: "oferta", offer: ahora }), porque).toEqual(EMIT_CONTROL_CLOSED);
+      // Y mientras llega el efecto, no se pinta la confirmación de la otra.
+      expect(emitConfirmShown(abiertaMarcada, ahora), porque).toBeNull();
+    }
+    // Pasar a ser de antes con la confirmación abierta (sin casilla): también.
+    const normal = { ...deX, beforeStart: false };
+    const abiertaNormal = emitControlReducer(EMIT_CONTROL_CLOSED, { type: "abrir", offer: normal });
+    expect(emitControlReducer(abiertaNormal, { type: "oferta", offer: deX })).toEqual(EMIT_CONTROL_CLOSED);
+    // Cerrada, una oferta nueva no abre nada.
+    expect(emitControlReducer(EMIT_CONTROL_CLOSED, { type: "oferta", offer: deX })).toBe(EMIT_CONTROL_CLOSED);
+    expect(emitConfirmShown(EMIT_CONTROL_CLOSED, deX)).toBeNull();
+    // La clave mira todo eso, y la misma oferta da la misma clave.
+    expect(emitOfferKey({ ...deX })).toBe(emitOfferKey(deX));
+    expect(emitOfferKey({ ...deX, total: 85.0 })).toBe(emitOfferKey(deX));
+
+    // El control: el efecto con cada oferta, la confirmación pintada de la
+    // vista, y `onEmit` con la oferta de la confirmación, no con la de ahora.
+    const src = read("components/order-invoice-panel.tsx");
+    const control = src.slice(src.indexOf("export function EmitInvoiceControl("), src.indexOf("export type EmitInvoiceShownOffer"));
+    expect(control).toMatch(/useEffect\(\(\) => \{\s*dispatch\(\{ type: "oferta", offer: emit \}\);\s*\}, \[emit\]\);/);
+    expect(control).toContain("const shown = emitConfirmShown(state, emit);");
+    expect(control).toContain("<EmitInvoiceConfirm\n        emit={shown}");
+    expect(control).toContain("onEmit: (shown: EmitInvoiceShownOffer, simplefactChecked: boolean) => Promise<void>;");
+    // El drawer manda lo que se vio; ya no relee `data.emitNow` al pulsar.
+    expect(src).toContain("onEmit={async (shown, simplefactChecked) => {");
+    expect(src).not.toContain("const emit = data.emitNow!;");
+  });
+
+  it("si el primer pago es de otro momento, la confirmación lo dice: con esa fecha se busca en SimpleFact", () => {
+    const conPrimero = { ...OFERTA_ANTES, firstPaidAt: "2026-10-02T23:05:00.000Z" };
+    expect(emitBeforeStartText(conPrimero)).toBe(
+      "Quedó pagado el 10/10/2026 10:00, antes de «Emitir desde» (14/10/2026 00:00). El primer pago se hizo el 02/10/2026 18:05. Kapta no sabe si ya se emitió a mano: búscalo en SimpleFact antes de emitir.",
+    );
+    expect(texto(confirma(conPrimero))).toContain("El primer pago se hizo el 02/10/2026 18:05.");
+    // El mismo minuto que «quedó pagado», sin fecha o con una que no se entiende: no se repite.
+    for (const firstPaidAt of [ANTES, "2026-10-10T15:00:30.000Z", null, undefined, "ayer"]) {
+      expect(emitBeforeStartText({ ...OFERTA_ANTES, firstPaidAt }), String(firstPaidAt)).toBe(TEXTO_ANTES);
+    }
+    // Sin `beforeStart`, nada.
+    expect(emitBeforeStartText({ ...conPrimero, beforeStart: false })).toBeNull();
   });
 
   it("el panel: el botón con su chapa, y la revisión dice que con él sí se puede", async () => {
@@ -2928,7 +3025,22 @@ describe("«Emitir esta boleta» de un pedido pagado antes de «Emitir desde»: 
 
   it("al pulsar, el panel manda la casilla con lo que vio", () => {
     const src = read("components/order-invoice-panel.tsx");
-    expect(src).toContain("onEmit={async (simplefactChecked) => {");
-    expect(src).toContain("emitInvoiceAction(orderId, { issuerId: emit.issuerId, total: emit.total, simplefactChecked })");
+    expect(src).toContain("onEmit={async (shown, simplefactChecked) => {");
+    expect(src).toContain("emitInvoiceAction(orderId, { issuerId: shown.issuerId, total: shown.total, simplefactChecked })");
+  });
+
+  it("la oferta del drawer trae el primer dinero; un comprobante de antes del 01/10 no deja botón", async () => {
+    const data = await load();
+    expect(data.emitNow).toMatchObject({ beforeStart: true, paidAt: ANTES, firstPaidAt: ANTES });
+    // El comprobante dice 29/09: la plata se movió antes del piso. Ni botón.
+    st.facts = new Map([
+      [ORDER, manualFacts({ issuers: [MANUAL_DESDE], payments: [{ ...factsFor().payments[0]!, registeredAt: ANTES, paidAt: "2026-09-29T15:00:00.000Z" }] })],
+    ]);
+    expect(await load()).toMatchObject({ emitNow: null, review: { reason: "antes_de_inicio" } });
+    // El comprobante dice 02/10: sí, y la oferta lo trae para la confirmación.
+    st.facts = new Map([
+      [ORDER, manualFacts({ issuers: [MANUAL_DESDE], payments: [{ ...factsFor().payments[0]!, registeredAt: ANTES, paidAt: "2026-10-02T23:05:00.000Z" }] })],
+    ]);
+    expect((await load()).emitNow).toMatchObject({ beforeStart: true, paidAt: ANTES, firstPaidAt: "2026-10-02T23:05:00.000Z" });
   });
 });
