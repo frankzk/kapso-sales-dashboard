@@ -517,4 +517,6 @@
 \ir migrations/0256_lima_open_counts.sql
 \echo 'Applying 0257_invoices.sql'
 \ir migrations/0257_invoices.sql
+\echo 'Applying 0258_restock_reply_sweep.sql'
+\ir migrations/0258_restock_reply_sweep.sql
 \echo 'Done.'
