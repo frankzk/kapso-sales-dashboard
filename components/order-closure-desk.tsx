@@ -264,12 +264,15 @@ export function OrderClosureDesk({
         </div>
       )}
       {/* Entrega declarada (MOM §8.3) no tiene botón aquí: la cierra el courier
-          al reportarla o quien la verifique fijando el estado. Sin esta línea
-          sería un pendiente sin salida a la vista. */}
+          al reportarla o un admin fijando el estado. Sin esta línea sería un
+          pendiente sin salida a la vista. Desde el 15-10-2026 el estado a mano
+          es solo de owner y admin (MOM §16): la frase dice quién lo fija, porque
+          esta mesa la ve también quien concilia o cierra sin ser admin. */}
       {openReasons.includes("entrega_declarada") && (
         <p className="text-[13px] leading-5 text-ink-600">
           Alguien declaró que el cliente recibió este envío y el courier no lo reportó. Confirma la entrega y el cobro
-          con el courier y fija el estado en «Gestión manual»: entregado si se confirmó; el que corresponda si no.
+          con el courier; el estado lo fija un admin en «Gestión manual»: entregado si se confirmó; el que corresponda si
+          no.
         </p>
       )}
 

@@ -203,6 +203,7 @@ export function OrdersMasterBoard({
   canEdit,
   canExport = false,
   canOverride,
+  canSetStatus,
   canCreateGuide,
   canCreateTandersGuide,
   canCreateShalomGuide,
@@ -249,6 +250,8 @@ export function OrdersMasterBoard({
   /** Descargar el Excel (`data.export`, 08-10-2026): owner, admin o concedido en Equipo. */
   canExport?: boolean;
   canOverride: boolean;
+  /** Cambiar el estado a mano (`master.set_status`): owner y admin (MOM §16, 15-10-2026). */
+  canSetStatus: boolean;
   canCreateGuide: boolean;
   canCreateTandersGuide: boolean;
   canCreateShalomGuide: boolean;
@@ -923,6 +926,7 @@ export function OrdersMasterBoard({
           orderId={openId}
           canEdit={canEdit}
           canOverride={canOverride}
+          canSetStatus={canSetStatus}
           canCreateGuide={canCreateGuide}
           canCreateTandersGuide={canCreateTandersGuide}
           canCreateShalomGuide={canCreateShalomGuide}
@@ -955,6 +959,7 @@ export function OrdersMasterBoard({
         visibleIds={rows.map((r) => r.order_id)}
         onToggleRow={toggleRow}
         canEdit={canEdit}
+        canSetStatus={canSetStatus}
         onClear={() => setSelectedIds(new Set())}
         // Solo refresca: limpiar la selección desmontaría la barra y con ella el
         // resumen de lo que acaba de pasar (incluidos los pedidos bloqueados).
@@ -1329,12 +1334,13 @@ async function downloadCombinadas(
   return downloadPdf(`${target.url}?orders=${orderIds.join(",")}`, "x-combinadas-omitidas", target.file);
 }
 
-function BulkBar({
+export function BulkBar({
   selectedIds,
   orderNames,
   orderCouriers,
   visibleIds,
   canEdit,
+  canSetStatus,
   onClear,
   onToggleRow,
   onCreated,
@@ -1346,6 +1352,12 @@ function BulkBar({
   /** Ids de la página visible, para avisar de lo elegido que no se ve. */
   visibleIds: string[];
   canEdit: boolean;
+  /**
+   * «Registrar estado…» en lote: solo owner y admin (`master.set_status`,
+   * decisión del dueño del 15-10-2026, MOM §16). Es el mismo gesto que la
+   * tarjeta de la ficha, y el servidor lo rechaza igual sin el permiso.
+   */
+  canSetStatus: boolean;
   onClear: () => void;
   onToggleRow: (orderId: string) => void;
   onCreated: () => void;
@@ -1575,7 +1587,7 @@ function BulkBar({
             {showCreate ? "Cancelar" : "Forzar courier…"}
           </OpsButton>
         )}
-        {canEdit && (
+        {canEdit && canSetStatus && (
           <OpsButton
             size="sm"
             aria-expanded={showStatus}
@@ -1676,7 +1688,7 @@ function BulkBar({
         </div>
       )}
 
-      {showStatus && (
+      {showStatus && canSetStatus && (
         <div className="flex flex-wrap items-end gap-3 border-t border-line pt-3">
           {/* El aviso no es decorativo: un override CONGELA el pedido frente al
               recálculo. Aplicado a cincuenta de golpe, cincuenta pedidos dejan
