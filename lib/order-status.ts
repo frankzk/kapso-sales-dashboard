@@ -453,6 +453,49 @@ export function urpiAttempts(rows: readonly { result_code: string | null }[]): n
   return rows.filter((row) => row.result_code != null && URPI_ATTEMPT_RESULTS.has(row.result_code)).length;
 }
 
+/** Estados de Swayp que dicen que el motorizado llegó a la puerta (lib/swayp-states.ts). */
+const SWAYP_NOVEDAD = 6;
+const SWAYP_ENTREGADA = 7;
+const SWAYP_DEVOLUCION = new Set([8, 9, 12]);
+/** Estados de Tanders que solo se alcanzan después de ir a la puerta (lib/tanders/status.ts). */
+const TANDERS_VISITED = new Set(["DELIVERED", "RETURNING", "RETURNED"]);
+
+/**
+ * Visitas que se deducen de lo que informa el courier de una guía cuando el
+ * courier no manda un número de intentos (MOM §9.3, 15-10-2026):
+ *
+ *  - Swayp (`fenix`): cada «Novedad» (6) que llegó como estado es una visita
+ *    fallida y «Entregada» (7) es otra. Si la guía terminó en Devolución (8, 9
+ *    o 12) sin que se viera ninguna, hubo al menos una: el barrido no siempre
+ *    alcanza a ver la Novedad antes de la Devolución.
+ *  - Tanders: solo da el estado actual. Llegar a «Delivered», «Returning» o
+ *    «Returned» exige haber ido a la puerta: es una visita.
+ *
+ * Los demás couriers no informan visitas: 0. Pura.
+ */
+export function courierVisitAttempts(
+  guide: { id: string; courier: string | null; delivery_status: string | null; reported_status?: string | null; swayp_state?: number | null },
+  events: readonly { kind: string; shipment_id?: string | null; payload?: unknown }[],
+): number {
+  const courier = (guide.courier ?? "").toLowerCase();
+  if (courier === "fenix") {
+    const states = events
+      .filter((e) => e.kind === "courier_status" && e.shipment_id === guide.id)
+      .map((e) => Number((e.payload as { swayp_state?: unknown } | null | undefined)?.swayp_state))
+      .filter((state) => Number.isFinite(state));
+    const delivered = guide.delivery_status === "entregado" || guide.swayp_state === SWAYP_ENTREGADA || states.includes(SWAYP_ENTREGADA);
+    const visits = states.filter((state) => state === SWAYP_NOVEDAD).length + (delivered ? 1 : 0);
+    if (visits) return visits;
+    const returned = SWAYP_DEVOLUCION.has(guide.swayp_state ?? -1) || guide.swayp_state === SWAYP_NOVEDAD || states.some((state) => SWAYP_DEVOLUCION.has(state));
+    return returned ? 1 : 0;
+  }
+  if (courier === "tanders") {
+    const code = (guide.reported_status ?? "").trim().toUpperCase();
+    return guide.delivery_status === "entregado" || TANDERS_VISITED.has(code) ? 1 : 0;
+  }
+  return 0;
+}
+
 export function isAgencyCourier(courier: string | null | undefined): boolean {
   return AGENCY_COURIERS.has((courier ?? "").toLowerCase());
 }
