@@ -107,17 +107,25 @@ en reportes de entrega ni cambia fechas por sí sola.
 3. Pulsar **Cargar reporte de Urpi** y elegir ese archivo. Se puede cargar el
    export completo cada día: lo ya guardado no se reescribe, solo entra lo nuevo
    o cambiado, y cada cambio deja versión.
+   Desde el 15-10-2026, si quien carga tiene `master.edit`, la misma carga
+   **marca entregados** en el Master los pedidos cuyo último intento de los
+   últimos 60 días es «Entregado» y convierte su salida «Por definir» en salida
+   de Urpi entregada (`lib/urpi-report-apply.ts`). El aviso de la carga dice
+   cuántos marcó y qué hay que mirar a mano.
 4. Revisar las listas:
-   - **Entregados por marcar**: seleccionar y «Marcar entregados». Exige
-     `master.edit`. Pasa por `lib/master-door.ts` como la liquidación y
-     convierte la salida «Por definir» del pedido en salida de Urpi entregada
+   - **Entregados por marcar**: lo que la carga no pudo marcar (quien cargó no
+     tenía `master.edit`, o algo falló). Seleccionar y «Marcar entregados».
+     Pasa por `lib/master-door.ts` como la liquidación y convierte la salida
+     «Por definir» del pedido en salida de Urpi entregada
      (`lib/urpi-salida.ts`). Incluye los anulados solo en Kapta.
-   - **Aviso de salidas «Por definir»**: entregados que se marcaron antes de que
-     existiera el relleno. «Pasar a salida de Urpi entregada» los completa.
+   - **Aviso de salidas «Por definir»**: entregados cuya caja sigue «Por
+     definir» porque la carga no pudo rellenarla. «Pasar a salida de Urpi
+     entregada» los completa.
    - **Cancelados por Urpi** y **Reprogramados**: para Seguimiento Lima; no
      cambian el Master.
    - **Por vincular – entregados / – otros**: elegir el pedido de la lista o
-     escribir su código. Se vincula toda la cadena de intentos y queda manual.
+     escribir su código. Se vincula toda la cadena de intentos y queda manual;
+     si Urpi lo entregó, queda marcado entregado al vincular.
    - **Observaciones**: Urpi entregó y cobró, pero el pedido está anulado en
      Shopify o devuelto. Vincular al pedido rehecho en Shopify, o «Cerrar con
      motivo» (queda en la actividad del pedido; no cambia su estado).
