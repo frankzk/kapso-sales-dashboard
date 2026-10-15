@@ -6,8 +6,9 @@
 // frases que guarda el barrido (`INVOICE_REASON_LABEL`). No tiene «Emitir»:
 // emitir lo hace solo el barrido, y un pedido que no cumple las reglas no se
 // fuerza desde aquí (§35.7). Quien tiene «Boletas y facturas» puede, además,
-// registrar una boleta emitida a mano, pedir que se vuelva a intentar un error y
-// liberar una en duda después de buscarla en SimpleFact.
+// registrar una boleta emitida a mano, pedir que se vuelva a intentar un error y,
+// de una en duda, después de buscarla en SimpleFact, registrar la serie con que
+// salió o liberarla porque no salió.
 //
 // Es una zona más de la tarjeta «Cobro», sobre su hairline, como el agente de
 // voz en la de confirmación. Las acciones pasan por el `run` del drawer: sus
@@ -21,12 +22,14 @@ import { cn } from "@/components/ui";
 import { Badge, Banner, CARD_ZONE, FIELD, OpsButton, type BadgeTone } from "@/components/ops-ui";
 import { IconArrowUpRight } from "@/components/icons";
 import {
+  confirmDoubtfulInvoice,
   loadInvoicePanel,
   registerExternalInvoice,
   releaseDoubtfulInvoice,
   requestInvoiceRetry,
   type InvoiceActionState,
   type InvoicePanelData,
+  type InvoicePanelReview,
   type InvoicePanelRow,
 } from "@/app/dashboard/pedidos/invoice-actions";
 import {
@@ -71,12 +74,72 @@ function motivo(reason: string, detail: string | null): string {
   return detail ? `${label} ${detail}` : label;
 }
 
+/** Lo que dijo Shopify y no cambia con otra pasada: qué hacer con el pedido. */
+export const SHOPIFY_MANUAL_TEXT =
+  "No se emite sola: se emite a mano en SimpleFact y se registra con «Ya tiene comprobante».";
+/** Se vuelve a intentar solo y el barrido lo relee en la próxima pasada (Shopify no se leyó). */
+export const SHOPIFY_RETRY_TEXT = "Se vuelve a intentar en la próxima pasada.";
+/**
+ * Se vuelve a intentar solo, pero NO en la próxima pasada: el barrido no relee
+ * Shopify por ese motivo en 6 horas (`waitsHours`). Prometer «la próxima
+ * pasada» mandaba a esperar diez minutos lo que no se mira en horas.
+ */
+export const SHOPIFY_LATER_TEXT = "Se vuelve a revisar en unas horas.";
+/** `sin_token_shopify`: lo mismo, con lo que falta para que salga. */
+export const SHOPIFY_NO_TOKEN_TEXT =
+  "Se vuelve a revisar en unas horas, cuando la tienda tenga conexión con Shopify.";
+
+/**
+ * Qué pasa ahora con un pedido que frenó Shopify, según lo que de verdad hace
+ * el barrido: si no sale solo, se emite a mano; si sale solo, cuándo lo vuelve
+ * a mirar —en horas lo de `SHOPIFY_LEVEL_REASONS` (`waitsHours`), en la
+ * próxima pasada lo demás—. null cuando el motivo ya lo dice.
+ */
+export function shopifyNextText(review: Extract<InvoicePanelReview, { state: "shopify" }>): string | null {
+  if (!review.retry) return SHOPIFY_MANUAL_TEXT;
+  if (review.waitsHours) return review.reason === "sin_token_shopify" ? SHOPIFY_NO_TOKEN_TEXT : SHOPIFY_LATER_TEXT;
+  // `lectura_fallida` ya dice que se reintenta en la próxima pasada: no se repite.
+  return /próxima pasada/i.test(motivo(review.reason, review.detail)) ? null : SHOPIFY_RETRY_TEXT;
+}
+
+/**
+ * SimpleFact contestó con archivos de otro RUC (`ruc_mismatch`): la boleta
+ * existe, y es de una empresa que no recibió el pago. Kapta no la anula (§2,
+ * principio 11): lo dice para que una persona la revise.
+ */
+export function rucMismatchText(error: string | null): string {
+  const why = (error ?? "").trim().replace(/[.\s]+$/, "");
+  return `SimpleFact la emitió con otro RUC${why ? `: ${why}` : ""}. Revísala en SimpleFact: puede necesitar anularse o una nota de crédito.`;
+}
+
 /**
  * El PDF viene en la respuesta de SimpleFact. Solo se enlaza si es https: un
  * enlace que no lo es no lo puso SimpleFact.
  */
 function pdfHref(url: string | null): string | null {
   return url && /^https:\/\//i.test(url.trim()) ? url.trim() : null;
+}
+
+/**
+ * El RUC que «Ya tiene comprobante» trae elegido: el que decidieron las reglas
+ * (el de la cuenta que recibió el pago). Sin revisar, ninguno.
+ */
+export function reviewIssuerId(review: InvoicePanelReview): string | null {
+  return review.state === "sin_revisar" ? null : review.issuerId;
+}
+
+/**
+ * Lo que se va a registrar, dicho antes de pulsar: la fila `externa` no se
+ * corrige después. Sin RUC elegido o sin serie, nada.
+ */
+export function externalInvoiceConfirmation(
+  issuer: { ruc: string; legalName: string } | null,
+  serieNumber: string,
+): string | null {
+  // Como la normaliza el servidor: sin espacios y en mayúsculas.
+  const serie = serieNumber.replace(/\s+/g, "").toUpperCase();
+  if (!issuer || !serie) return null;
+  return `Se registra como comprobante de ${issuer.legalName} (RUC ${issuer.ruc}), serie ${serie}. No se puede corregir después.`;
 }
 
 // ── Qué se enseña ────────────────────────────────────────────────────────────
@@ -95,7 +158,10 @@ export interface InvoicePanelView {
   /** La última pasada del barrido, si dice otra cosa que la revisión de ahora. */
   check: InvoicePanelData["check"];
   canRetry: boolean;
+  /** Un `en_duda` que no está en SimpleFact: liberarlo para que se reintente. */
   canRelease: boolean;
+  /** Un `en_duda` que SÍ está en SimpleFact: registrar la serie con que salió. */
+  canConfirm: boolean;
   canRegisterExternal: boolean;
 }
 
@@ -107,16 +173,22 @@ export function invoicePanelView(data: InvoicePanelData): InvoicePanelView {
   const lastReal = data.invoices.find((i) => i.mode === "real") ?? null;
   const failed = !live && lastReal?.status === "error" ? lastReal : null;
   const history = data.invoices.filter((i) => i.mode === "real" && i.status === "error" && i.id !== failed?.id);
-  const reviewReason = data.review.state === "no" ? data.review.reason : null;
+  const reviewReason = data.review.state === "no" || data.review.state === "shopify" ? data.review.reason : null;
 
   let badge: InvoicePanelView["badge"];
-  if (live) {
+  if (live?.rucMismatch) {
+    // Emitida, pero con archivos de otro RUC: no es la boleta que tocaba.
+    badge = { tone: "crit", label: "Emitida con otro RUC" };
+  } else if (live) {
     badge = {
       tone: live.status === "en_duda" ? "warn" : live.status === "emitiendo" ? "info" : "ok",
       label: INVOICE_STATUS_LABEL[live.status],
     };
   } else if (failed && !failed.retryRequestedAt) {
     badge = { tone: "crit", label: INVOICE_STATUS_LABEL.error };
+  } else if (data.review.state === "shopify") {
+    // El barrido lo sigue saltando por lo que dijo Shopify: no está «por emitir».
+    badge = { tone: "warn", label: data.review.retry ? "Espera a Shopify" : "Se emite a mano" };
   } else if (data.review.state === "lista") {
     badge = { tone: "info", label: data.review.mode === "real" ? "Por emitir" : "Por simular" };
   } else if (simulated) {
@@ -137,6 +209,7 @@ export function invoicePanelView(data: InvoicePanelData): InvoicePanelView {
     check: !live && data.check && data.check.reason !== reviewReason ? data.check : null,
     canRetry: data.canManage && !!failed && !failed.retryRequestedAt,
     canRelease: data.canManage && live?.status === "en_duda",
+    canConfirm: data.canManage && live?.status === "en_duda",
     canRegisterExternal: data.canManage && !live && data.issuers.length > 0,
   };
 }
@@ -226,7 +299,8 @@ export function OrderInvoicePanelView({
   run: Run;
 }) {
   const view = invoicePanelView(data);
-  const [releasing, setReleasing] = useState(false);
+  // De un `en_duda`, una de las dos salidas a la vez: o salió, o no salió.
+  const [doubt, setDoubt] = useState<"confirmar" | "liberar" | null>(null);
   const [registering, setRegistering] = useState(false);
   const { live, simulated, failed } = view;
   const review = data.review;
@@ -240,26 +314,64 @@ export function OrderInvoicePanelView({
         <Badge tone={view.badge.tone}>{view.badge.label}</Badge>
       </div>
 
+      {live?.rucMismatch && (
+        <Banner tone="crit" role="alert">
+          {rucMismatchText(live.error)}
+        </Banner>
+      )}
+
       {data.creditNote && <Banner tone="warn">{data.creditNote}</Banner>}
 
       {live && <LiveInvoice row={live} />}
 
       {live?.status === "en_duda" &&
-        (view.canRelease ? (
-          releasing ? (
+        (view.canConfirm || view.canRelease ? (
+          doubt === "confirmar" ? (
+            <ConfirmDoubtForm
+              row={live}
+              pending={pending}
+              onCancel={() => setDoubt(null)}
+              onSubmit={async (input) => {
+                const ok = await run(() => confirmDoubtfulInvoice(live.id, input.serieNumber, input.note));
+                if (ok) setDoubt(null);
+                return ok;
+              }}
+            />
+          ) : doubt === "liberar" ? (
             <ReleaseDoubtForm
               pending={pending}
-              onCancel={() => setReleasing(false)}
+              onCancel={() => setDoubt(null)}
               onSubmit={async (note) => {
                 const ok = await run(() => releaseDoubtfulInvoice(live.id, note));
-                if (ok) setReleasing(false);
+                if (ok) setDoubt(null);
                 return ok;
               }}
             />
           ) : (
-            <OpsButton size="sm" disabled={pending} onClick={() => setReleasing(true)} className="pointer-coarse:h-11">
-              No está en SimpleFact: volver a intentar
-            </OpsButton>
+            // Las dos salidas, una al lado de la otra: lo que se encontró en
+            // SimpleFact decide cuál. Liberar una que existe es emitir otra.
+            <div className="flex flex-wrap gap-2">
+              {view.canConfirm && (
+                <OpsButton
+                  size="sm"
+                  disabled={pending}
+                  onClick={() => setDoubt("confirmar")}
+                  className="pointer-coarse:h-11"
+                >
+                  Sí está en SimpleFact: registrar su serie
+                </OpsButton>
+              )}
+              {view.canRelease && (
+                <OpsButton
+                  size="sm"
+                  disabled={pending}
+                  onClick={() => setDoubt("liberar")}
+                  className="pointer-coarse:h-11"
+                >
+                  No está en SimpleFact: volver a intentar
+                </OpsButton>
+              )}
+            </div>
           )
         ) : (
           <p className="text-[13px] leading-5 text-ink-500">
@@ -336,6 +448,7 @@ export function OrderInvoicePanelView({
         (registering ? (
           <ExternalInvoiceForm
             issuers={data.issuers}
+            defaultIssuerId={reviewIssuerId(review)}
             pending={pending}
             onCancel={() => setRegistering(false)}
             onSubmit={async (input) => {
@@ -396,7 +509,8 @@ function LiveInvoice({ row }: { row: InvoicePanelRow }) {
           ayer por la nota «{invoiceNoteRef(row.id)}» y nunca la reenvía sola.
         </p>
       )}
-      {row.error && row.status !== "emitida" && <p className="text-ink-500">{row.error}</p>}
+      {/* Lo de una emitida con otro RUC va en el aviso de arriba, en rojo. */}
+      {row.error && row.status !== "emitida" && !row.rucMismatch && <p className="text-ink-500">{row.error}</p>}
       {row.note && <p className="text-ink-500">Nota: {row.note}</p>}
       {pdf && (
         <a
@@ -420,6 +534,21 @@ function Review({ data, hideSimulated }: { data: InvoicePanelData; hideSimulated
     // FALLA CERRADA: sin los hechos no se dice «lista» ni ningún motivo.
     return (
       <p className="text-[13px] leading-5 text-ink-600">No se pudo revisar si lleva comprobante: {review.error}</p>
+    );
+  }
+  if (review.state === "shopify") {
+    // Kapta dice que sí, pero el barrido lo frenó al leer Shopify y lo sigue
+    // saltando. «Lista para emitirse» aquí sería prometer una boleta que no sale.
+    const reason = motivo(review.reason, review.detail);
+    const next = shopifyNextText(review);
+    return (
+      <div className="space-y-0.5 text-[13px] leading-5">
+        <p className="text-ink-900">{reason}</p>
+        {next && <p className="text-ink-700">{next}</p>}
+        <p className="text-ink-500">
+          Última pasada ({INVOICE_MODE_LABEL[review.mode]}, {cuando(review.checkedAt)}) · RUC {review.ruc}.
+        </p>
+      </div>
     );
   }
   if (review.state === "lista") {
@@ -532,23 +661,114 @@ export function ReleaseDoubtForm({
 }
 
 /**
+ * Lo que va a quedar al confirmar un `en_duda`, dicho antes de pulsar: la fila
+ * pasa a `emitida` y no se corrige después. Sin serie, nada.
+ */
+export function doubtConfirmation(row: { ruc: string; legalName: string | null }, serieNumber: string): string | null {
+  // Como la normaliza el servidor: sin espacios y en mayúsculas.
+  const serie = serieNumber.replace(/\s+/g, "").toUpperCase();
+  if (!serie) return null;
+  const quien = row.legalName ? `${row.legalName} (RUC ${row.ruc})` : `RUC ${row.ruc}`;
+  return `Queda como emitida: ${serie} de ${quien}. No se puede corregir después.`;
+}
+
+/**
+ * Confirmar un `en_duda` (§35.4): la boleta SÍ está en SimpleFact —se encontró
+ * por su nota— y se registra con la serie y el número con que salió, dejando
+ * escrito dónde se encontró. El servidor valida la serie, que su letra sea la
+ * del tipo que se envió (B, boleta) y vuelve a exigir la nota.
+ */
+export function ConfirmDoubtForm({
+  row,
+  pending,
+  onSubmit,
+  onCancel,
+}: {
+  row: InvoicePanelRow;
+  pending: boolean;
+  onSubmit: (input: { serieNumber: string; note: string }) => Promise<boolean>;
+  onCancel: () => void;
+}) {
+  const [serieNumber, setSerieNumber] = useState("");
+  const [note, setNote] = useState("");
+  const confirmation = doubtConfirmation(row, serieNumber);
+  return (
+    <div className="space-y-3 rounded-lg bg-wash p-3">
+      <p className="text-[13px] leading-5 text-ink-700">
+        Regístrala solo si la encontraste en SimpleFact con la nota «{invoiceNoteRef(row.id)}», del RUC {row.ruc} y por{" "}
+        {soles(row.total)}: queda como emitida y Kapta no emitirá otra por este pedido.
+      </p>
+      <label className="grid gap-1.5 text-[13px] font-medium text-ink-700">
+        Serie y número
+        <input
+          value={serieNumber}
+          onChange={(e) => setSerieNumber(e.target.value)}
+          placeholder="B001-123"
+          autoCapitalize="characters"
+          className={cn(FIELD, "font-normal tabular-nums pointer-coarse:h-11")}
+        />
+      </label>
+      <label className="grid gap-1.5 text-[13px] font-medium text-ink-700">
+        Dónde la encontraste en SimpleFact
+        <textarea
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          rows={2}
+          maxLength={500}
+          placeholder="En las ventas de ayer, con la nota de Kapta"
+          className={cn(FIELD, "h-auto py-2 font-normal leading-5")}
+        />
+      </label>
+      {confirmation && <p className="text-[13px] leading-5 text-ink-900">{confirmation}</p>}
+      <div className="flex flex-wrap gap-2">
+        <OpsButton
+          size="sm"
+          variant="primary"
+          disabled={pending || !confirmation || !note.trim()}
+          onClick={() => void onSubmit({ serieNumber, note })}
+          className="pointer-coarse:h-11"
+        >
+          Registrar como emitida
+        </OpsButton>
+        <OpsButton size="sm" variant="ghost" onClick={onCancel} className="pointer-coarse:h-11">
+          Cancelar
+        </OpsButton>
+      </div>
+    </div>
+  );
+}
+
+/**
  * «Ya tiene comprobante» (§35.4): la boleta se emitió a mano en SimpleFact y se
- * registra para que Kapta no emita otra. El servidor valida la serie.
+ * registra para que Kapta no emita otra. El servidor valida la serie y que el
+ * RUC sea el de la cuenta que recibió el pago.
+ *
+ * El RUC NO viene elegido por orden alfabético: la fila `externa` no se corrige
+ * después, y un RUC equivocado deja al pedido con la boleta de otra empresa.
+ * Viene elegido solo si las reglas saben a qué RUC entró el pago
+ * (`defaultIssuerId`); si no, hay que elegirlo.
  */
 export function ExternalInvoiceForm({
   issuers,
+  defaultIssuerId = null,
   pending,
   onSubmit,
   onCancel,
 }: {
   issuers: InvoicePanelData["issuers"];
+  /** El RUC que decidieron las reglas (`review.issuerId`), si se sabe. */
+  defaultIssuerId?: string | null;
   pending: boolean;
   onSubmit: (input: { issuerId: string; serieNumber: string; note: string }) => Promise<boolean>;
   onCancel: () => void;
 }) {
-  const [issuerId, setIssuerId] = useState(issuers[0]?.id ?? "");
+  const [issuerId, setIssuerId] = useState(() =>
+    defaultIssuerId && issuers.some((i) => i.id === defaultIssuerId) ? defaultIssuerId : "",
+  );
   const [serieNumber, setSerieNumber] = useState("");
   const [note, setNote] = useState("");
+  const chosen = issuers.find((i) => i.id === issuerId) ?? null;
+  const confirmation = externalInvoiceConfirmation(chosen, serieNumber);
   return (
     <div className="space-y-3 rounded-lg bg-wash p-3">
       <p className="text-[13px] leading-5 text-ink-700">
@@ -560,9 +780,13 @@ export function ExternalInvoiceForm({
           RUC
           <select
             value={issuerId}
+            required
             onChange={(e) => setIssuerId(e.target.value)}
             className={cn(FIELD, "font-normal pointer-coarse:h-11")}
           >
+            <option value="" disabled>
+              Elige el RUC
+            </option>
             {issuers.map((i) => (
               <option key={i.id} value={i.id}>
                 {i.ruc} · {i.legalName}
@@ -591,11 +815,12 @@ export function ExternalInvoiceForm({
           className={cn(FIELD, "font-normal pointer-coarse:h-11")}
         />
       </label>
+      {confirmation && <p className="text-[13px] leading-5 text-ink-900">{confirmation}</p>}
       <div className="flex flex-wrap gap-2">
         <OpsButton
           size="sm"
           variant="primary"
-          disabled={pending || !issuerId || !serieNumber.trim()}
+          disabled={pending || !confirmation}
           onClick={() => void onSubmit({ issuerId, serieNumber, note })}
           className="pointer-coarse:h-11"
         >

@@ -1,6 +1,11 @@
--- Comprobantes electrónicos por RUC (0257, MOM §35). Corre solo en el clúster
--- desechable de verify-db, después de todas las migraciones, dentro de una
--- transacción que se deshace. Nunca llama a SimpleFact.
+-- Comprobantes electrónicos por RUC (0257 y 0260, MOM §35). Corre solo en el
+-- clúster desechable de verify-db, después de todas las migraciones, dentro de
+-- una transacción que se deshace. Nunca llama a SimpleFact.
+--
+-- La 0257 es la que corrió en producción el 14-10-2026, y la 0260 cambia cuatro
+-- de sus funciones (los arreglos de la revisión adversaria). Cada vez que esta
+-- prueba vuelve a correr la 0257, corre la 0260 justo después: la 0257 sola
+-- deja las funciones de antes, y el resto de la prueba es sobre las de ahora.
 --
 -- Reutiliza la organización y las tiendas A y B de rls_smoke.sql. Ya existían
 -- cuando corrieron la 0126, la 0198 y la 0257, así que tienen la semilla real:
@@ -11,16 +16,24 @@
 -- son dos boletas ante SUNAT, y una boleta enviada no se borra. Lo que lo impide
 -- vive en la base y no en el código, así que se prueba aquí:
 --   a) la semilla: un RUC por organización, apagado y sin token, en las dos
---      cuentas de la empresa y en ninguna personal; volver a correr la 0257 no
---      pisa lo que el owner cambió y solo siembra donde se cobra en esa cuenta;
+--      cuentas de la empresa y en ninguna personal; volver a correr la 0257 (y
+--      la 0260) no pisa lo que el owner cambió y solo siembra donde se cobra en
+--      esa cuenta;
 --   b) el emisor: RUC, subdominio de simplefact.pe (el token no viaja a otro
 --      sitio), tope de 1 a 300, y «real» solo con token, «Emitir desde» y una
 --      prueba que leyó el mismo RUC; un token nuevo lo baja a simulación;
 --   c) una cuenta no apunta al RUC de otra organización;
 --   d) invoice_claim: cada motivo, en simulación y en real, y el tope del día;
+--      cuándo quedó pagado lo vuelve a calcular con los pagos de la base;
 --   e) un solo comprobante real vivo por pedido, garantizado por el índice;
---   f) lo que pasó no se reescribe: los estados solo avanzan y nada se borra;
---   g) solo el servidor lee las tablas y pide el turno.
+--   f) lo que pasó no se reescribe: los estados solo avanzan y nada se borra,
+--      salvo quién lo hizo cuando se borra su cuenta (y solo por la cascada:
+--      a mano, ni con service_role);
+--   g) solo el servidor lee las tablas y pide el turno;
+--   h) invoice_candidates: qué pedidos revisa el barrido en cada pasada;
+--   i) la 0260 sobre la 0257 que corrió en producción: la 0257 sola deja las
+--      cuatro funciones de antes de la revisión; la 0260 las cambia sin tocar
+--      un dato ni recrear un trigger, y correrla dos veces es correrla una.
 begin;
 set local client_min_messages = warning;
 
@@ -128,7 +141,7 @@ begin
   end loop;
 end $$;
 
-\echo '  volver a correr la 0257 no pisa lo que el owner cambió, y siembra solo donde se cobra en esa cuenta'
+\echo '  volver a correr la 0257 (y la 0260) no pisa lo que el owner cambió, y siembra solo donde se cobra en esa cuenta'
 -- El owner deja el Yape ···309 de la tienda A en «Sin comprobante».
 update store_collection_accounts set invoice_issuer_id = null
  where store_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' and phone_last_digits = '309';
@@ -149,7 +162,10 @@ insert into store_collection_accounts (store_id, label, phone_last_digits, note)
 
 -- La migración entera, no una copia de su semilla: si la semilla cambia, la
 -- prueba prueba la nueva. Se declara idempotente (DEPLOY.md la aplica a mano).
+-- La 0260 va justo después: la 0257 sola vuelve a dejar las funciones de antes
+-- de la revisión, y las pruebas que siguen son de las de ahora.
 \ir ../../db/migrations/0257_invoices.sql
+\ir ../../db/migrations/0260_invoices_hardening.sql
 
 do $$
 declare
@@ -196,8 +212,8 @@ end $$;
 
 -- Y cambia de idea: borra el RUC sembrado (sus cuentas quedan sin RUC por el
 -- `on delete set null`) y da de alta otro, al que asigna el ···309. Volver a
--- correr la 0257 recrea GRUPO GF S.A.C. en Y, pero no le quita el ···309 al
--- RUC que eligió el owner: la semilla solo llena cuentas vacías.
+-- correr la 0257 (y la 0260) recrea GRUPO GF S.A.C. en Y, pero no le quita el
+-- ···309 al RUC que eligió el owner: la semilla solo llena cuentas vacías.
 delete from invoice_issuers where org_id = '25700000-0000-0000-0000-0000000000a1';
 insert into invoice_issuers (org_id, ruc, legal_name, simplefact_subdomain)
 values ('25700000-0000-0000-0000-0000000000a1', '20000000003', 'ELEGIDA POR EL OWNER S.A.C.', 'elegida');
@@ -206,6 +222,7 @@ update store_collection_accounts
  where store_id = '25700000-0000-0000-0000-0000000000b1' and phone_last_digits = '309';
 
 \ir ../../db/migrations/0257_invoices.sql
+\ir ../../db/migrations/0260_invoices_hardening.sql
 
 do $$
 declare
@@ -303,10 +320,15 @@ begin
   end if;
 
   -- Un token nuevo baja a simulación y borra la prueba: se prueba antes de emitir.
+  -- También el motivo de la prueba anterior: sin fecha de prueba y con motivo
+  -- queda solo lo que apagó el barrido («Apagado por Kapta», MOM §35.4).
+  update invoice_issuers set check_error = 'Token rechazado (401).' where id = v_gf;
   update invoice_issuers set token_enc = 'enc:otro-que-no-es-token' where id = v_gf;
   select * into v_iss from invoice_issuers where id = v_gf;
-  if v_iss.mode <> 'simulacion' or v_iss.checked_ruc is not null or v_iss.checked_at is not null then
-    raise exception 'token nuevo en real: modo % prueba % %', v_iss.mode, v_iss.checked_ruc, v_iss.checked_at;
+  if v_iss.mode <> 'simulacion' or v_iss.checked_ruc is not null or v_iss.checked_at is not null
+     or v_iss.check_error is not null then
+    raise exception 'token nuevo en real: modo % prueba % % motivo %',
+      v_iss.mode, v_iss.checked_ruc, v_iss.checked_at, v_iss.check_error;
   end if;
   -- Igual un subdominio nuevo.
   update invoice_issuers set checked_ruc = '20556792829', checked_at = now() where id = v_gf;
@@ -415,7 +437,19 @@ insert into orders (id, store_id, shopify_order_id, name, created_at, total_amou
   (pg_temp.pedido(12), 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'inv-12', '#INV12', now(), 100.00, 'PEN', null, 0),   -- en duda → error
   (pg_temp.pedido(13), 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'inv-13', '#INV13', now(), 100.00, 'PEN', null, 0),   -- de la tienda B
   (pg_temp.pedido(14), 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'inv-14', '#INV14', now(), 100.00, 'PEN', null, 0),   -- sin conexión
-  (pg_temp.pedido(15), 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'inv-15', '#INV15', now(), 100.00, 'PEN', null, 0);   -- tope en real
+  (pg_temp.pedido(15), 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'inv-15', '#INV15', now(), 100.00, 'PEN', null, 0),   -- tope en real
+  (pg_temp.pedido(16), 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'inv-16', '#INV16', now() - interval '3 days', 100.00, 'PEN', null, 0), -- pagado antes, según la base
+  (pg_temp.pedido(17), 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'inv-17', '#INV17', now(), 100.00, 'PEN', null, 0),   -- pagos en revisión
+  (pg_temp.pedido(18), 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'inv-18', '#INV18', now() - interval '1 day', 100.00, 'PEN', null, 0); -- sin pagos: la fecha del pedido
+
+-- Los pagos de esos tres, como los deja Kapta. #16: el adelanto validado se
+-- registró hace dos días y el total de hoy se rechazó. #17: el total validado
+-- hoy y una diferencia que todavía nadie revisó.
+insert into order_payments (store_id, order_id, kind, amount, validation_status, registered_at, validated_at) values
+  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', pg_temp.pedido(16), 'adelanto',   50, 'validado',  now() - interval '2 days', now()),
+  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', pg_temp.pedido(16), 'total',     100, 'rechazado', now(), null),
+  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', pg_temp.pedido(17), 'total',     100, 'validado',  now(), now()),
+  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', pg_temp.pedido(17), 'diferencia',  1, 'pendiente_revision', now(), null);
 
 \echo '  invoice_claim en simulación: cada motivo, y la boleta se guarda sin enviarla'
 do $$
@@ -425,6 +459,7 @@ declare
   v_z  constant uuid := (select id from invoice_issuers where ruc = '20000000001');
   r     jsonb;
   v_row order_invoices;
+  v_estado text;
 begin
   r := pg_temp.turno(pg_temp.pedido(1), 100);
   if r->>'reason' is distinct from 'ruc_apagado' then raise exception 'apagado: %', r; end if;
@@ -471,6 +506,43 @@ begin
   r := pg_temp.turno(pg_temp.pedido(4), 100, null);
   if r->>'reason' is distinct from 'antes_de_inicio' then raise exception 'sin fecha de pago: %', r; end if;
 
+  -- La fecha que manda el código no basta: la base la vuelve a calcular con sus
+  -- propios pagos. #16 llega con «pagado ahora», pero su último pago vivo se
+  -- registró hace dos días (el total de hoy está rechazado y no cuenta).
+  r := pg_temp.turno(pg_temp.pedido(16), 100, now());
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception 'pagado antes según la base: %', r; end if;
+  -- Con una diferencia validada que entró hoy, el último pago vivo es de hoy:
+  -- pasa la fecha (y se detiene en la boleta que falta, sin dejar fila).
+  insert into order_payments (store_id, order_id, kind, amount, validation_status, registered_at, validated_at)
+  values (v_a, pg_temp.pedido(16), 'diferencia', 50, 'validado', now(), now());
+  r := pg_temp.turno(pg_temp.pedido(16), 100, now(), v_a, null, null);
+  if r->>'reason' is distinct from 'sin_boleta' then raise exception 'último pago de hoy: %', r; end if;
+
+  -- Un pago vivo sin validar —en cualquiera de sus estados— no deja pedir el
+  -- turno, aunque lo validado cubra el total.
+  foreach v_estado in array array['pendiente_revision', 'posible_duplicado', 'info_incompleta', 'revision_admin'] loop
+    update order_payments set validation_status = v_estado
+     where order_id = pg_temp.pedido(17) and kind = 'diferencia';
+    r := pg_temp.turno(pg_temp.pedido(17), 100);
+    if r->>'reason' is distinct from 'pagos_en_revision' then raise exception 'pago %: %', v_estado, r; end if;
+  end loop;
+  -- Rechazado deja de contar.
+  update order_payments set validation_status = 'rechazado'
+   where order_id = pg_temp.pedido(17) and kind = 'diferencia';
+  r := pg_temp.turno(pg_temp.pedido(17), 100, now(), v_a, null, null);
+  if r->>'reason' is distinct from 'sin_boleta' then raise exception 'diferencia rechazada: %', r; end if;
+
+  -- Sin pagos vivos (el prepago web) cuenta la fecha del pedido: `processed_at`
+  -- y, si falta, `created_at`. #18 se creó ayer.
+  r := pg_temp.turno(pg_temp.pedido(18), 100, now());
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception 'pedido de ayer sin pagos: %', r; end if;
+  update orders set processed_at = now() where id = pg_temp.pedido(18);
+  r := pg_temp.turno(pg_temp.pedido(18), 100, now(), v_a, null, null);
+  if r->>'reason' is distinct from 'sin_boleta' then raise exception 'procesado hoy: %', r; end if;
+  update orders set processed_at = now() - interval '1 second' where id = pg_temp.pedido(18);
+  r := pg_temp.turno(pg_temp.pedido(18), 100, now());
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception 'procesado un segundo antes: %', r; end if;
+
   -- Sin boleta armada no hay turno.
   r := pg_temp.turno(pg_temp.pedido(4), 100, now(), v_a, null, null);
   if r->>'reason' is distinct from 'sin_boleta' then raise exception 'sin boleta: %', r; end if;
@@ -504,7 +576,8 @@ begin
   -- Ningún rechazo dejó fila.
   if exists (select 1 from order_invoices
               where order_id in (pg_temp.pedido(2), pg_temp.pedido(4), pg_temp.pedido(5), pg_temp.pedido(6),
-                                 pg_temp.pedido(7), pg_temp.pedido(13))) then
+                                 pg_temp.pedido(7), pg_temp.pedido(13), pg_temp.pedido(16), pg_temp.pedido(17),
+                                 pg_temp.pedido(18))) then
     raise exception 'un turno rechazado escribió una fila';
   end if;
 
@@ -539,6 +612,17 @@ begin
   end if;
   r := pg_temp.turno(pg_temp.pedido(1), 100);
   if r->>'reason' is distinct from 'ya_tiene' then raise exception 'segundo turno real: %', r; end if;
+
+  -- En real, igual: la base decide con sus pagos cuándo quedó pagado.
+  r := pg_temp.turno(pg_temp.pedido(18), 100, now());
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception 'real, pagado antes según la base: %', r; end if;
+  insert into order_payments (store_id, order_id, kind, amount, validation_status, registered_at)
+  values ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', pg_temp.pedido(17), 'diferencia', 1, 'pendiente_revision', now());
+  r := pg_temp.turno(pg_temp.pedido(17), 100);
+  if r->>'reason' is distinct from 'pagos_en_revision' then raise exception 'real, pago en revisión: %', r; end if;
+  if exists (select 1 from order_invoices where order_id in (pg_temp.pedido(17), pg_temp.pedido(18))) then
+    raise exception 'un turno real rechazado escribió una fila';
+  end if;
 
   -- SimpleFact dijo que no (4xx): no hay boleta, pero no se reintenta solo.
   r := pg_temp.turno(pg_temp.pedido(9), 100);
@@ -681,6 +765,27 @@ begin
   r := pg_temp.turno(pg_temp.pedido(3), 700.00);
   if r->>'reason' is distinct from 'ya_tiene' then raise exception 'turno con externa: %', r; end if;
 
+  -- emitiendo → en_duda → emitida (una persona la encontró en SimpleFact y
+  -- registró su serie): pasa la serie, la nota y quién; el RUC y el total no.
+  v_duda := pg_temp.fila(pg_temp.pedido(13), 'real', 'emitiendo');
+  update order_invoices set status = 'en_duda', error = 'SimpleFact no contestó' where id = v_duda;
+  perform pg_temp.debe_fallar(format(
+    $q$update order_invoices set status = 'emitida', serie = 'B001', correlative = '97', ruc = '20000000001' where id = %L$q$,
+    v_duda), 'P0001', 'Lo enviado de un comprobante no cambia');
+  perform pg_temp.debe_fallar(format(
+    $q$update order_invoices set status = 'emitida', serie = 'B001', correlative = '97', total = 1 where id = %L$q$,
+    v_duda), 'P0001', 'Lo enviado de un comprobante no cambia');
+  update order_invoices
+     set status = 'emitida', serie = 'B001', correlative = '97', note = 'Está en SimpleFact con su nota',
+         resolved_by = v_c, resolved_at = now()
+   where id = v_duda;
+  if (select (status, serie, correlative) from order_invoices where id = v_duda)
+       is distinct from ('emitida'::text, 'B001'::text, '97'::text) then
+    raise exception 'en_duda → emitida a mano no quedó';
+  end if;
+  perform pg_temp.debe_fallar(format($q$update order_invoices set note = 'otra' where id = %L$q$, v_duda),
+    'P0001', 'Un comprobante emitida no cambia');
+
   -- emitiendo → en_duda → error (una persona confirmó que no está en SimpleFact).
   v_duda := pg_temp.fila(pg_temp.pedido(12), 'real', 'emitiendo');
   update order_invoices set status = 'en_duda', error = 'SimpleFact no contestó' where id = v_duda;
@@ -702,7 +807,17 @@ begin
   perform pg_temp.debe_fallar(format(
     $q$update order_invoices set retry_requested_at = now() + interval '1 minute' where id = %L$q$, v_duda),
     'P0001', 'Un error solo admite pedir su reintento, una vez');
+  -- El reintento pedido no se borra, ni quién lo pidió. (Dejar en NULL solo
+  -- quién lo pidió lo hace borrar su cuenta, por la cascada: lo prueba el
+  -- bloque siguiente. A mano, no.)
+  perform pg_temp.debe_fallar(format($q$update order_invoices set retry_requested_at = null where id = %L$q$, v_duda),
+    'P0001', 'Un error solo admite pedir su reintento, una vez');
+  perform pg_temp.debe_fallar(format(
+    $q$update order_invoices set retry_requested_by = null, retry_requested_at = null where id = %L$q$, v_duda),
+    'P0001', 'Un error solo admite pedir su reintento, una vez');
   perform pg_temp.debe_fallar(format($q$update order_invoices set retry_requested_by = null where id = %L$q$, v_duda),
+    'P0001', 'Un error solo admite pedir su reintento, una vez');
+  perform pg_temp.debe_fallar(format($q$update order_invoices set resolved_by = null where id = %L$q$, v_duda),
     'P0001', 'Un error solo admite pedir su reintento, una vez');
 
   -- emitiendo no salta a simulada ni a externa.
@@ -711,6 +826,139 @@ begin
     'P0001', 'Transición de comprobante no permitida%');
   perform pg_temp.debe_fallar(format($q$update order_invoices set status = 'externa' where id = %L$q$, v_otro),
     'P0001', 'Transición de comprobante no permitida%');
+end $$;
+
+\echo '  borrar una cuenta que tocó comprobantes deja en NULL quién fue, y nada más'
+insert into auth.users (id, email) values ('25700000-0000-0000-0000-0000000000c1', 'se-va@kapta.test');
+do $$
+declare
+  v_u     constant uuid := '25700000-0000-0000-0000-0000000000c1';
+  v_c     constant uuid := '00000000-0000-0000-0000-00000000000c';
+  v_ext   uuid;
+  v_err   uuid;
+  v_res   uuid;
+begin
+  -- Una externa que registró (cerrada), un error cuyo reintento pidió, y un
+  -- en duda que resolvió y cuyo reintento también pidió: dos llaves a la misma
+  -- cuenta en una fila.
+  insert into order_invoices (id, org_id, store_id, order_id, issuer_id, ruc, mode, status, total, paid_at, request,
+                              serie, correlative, note, created_by)
+  values (gen_random_uuid(), '33333333-3333-3333-3333-333333333333', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+          pg_temp.pedido(5), pg_temp.gf(), '20556792829', 'real', 'externa', 100, now(), '{"invoice_type": "03"}',
+          'B001', '99', 'Emitida a mano en SimpleFact', v_u)
+  returning id into v_ext;
+  insert into order_invoices (id, org_id, store_id, order_id, issuer_id, ruc, mode, status, total, paid_at, request,
+                              http_status, error, retry_requested_at, retry_requested_by)
+  values (gen_random_uuid(), '33333333-3333-3333-3333-333333333333', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+          pg_temp.pedido(6), pg_temp.gf(), '20556792829', 'real', 'error', 100, now(), '{"invoice_type": "03"}',
+          422, 'SimpleFact: datos inválidos', now(), v_u)
+  returning id into v_err;
+  insert into order_invoices (id, org_id, store_id, order_id, issuer_id, ruc, mode, status, total, paid_at, request,
+                              error, resolved_by, resolved_at, retry_requested_at, retry_requested_by)
+  values (gen_random_uuid(), '33333333-3333-3333-3333-333333333333', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+          pg_temp.pedido(7), pg_temp.gf(), '20556792829', 'real', 'error', 100, now(), '{"invoice_type": "03"}',
+          'No está en SimpleFact', v_u, now(), now(), v_u)
+  returning id into v_res;
+
+  -- A mano, poner en NULL quién fue Y cambiar cualquier otra cosa sigue sin pasar.
+  perform pg_temp.debe_fallar(format($q$update order_invoices set created_by = null, note = 'otra' where id = %L$q$, v_ext),
+    'P0001', 'Lo enviado de un comprobante no cambia');
+  perform pg_temp.debe_fallar(format(
+    $q$update order_invoices set created_by = null, updated_at = now() - interval '1 day' where id = %L$q$, v_ext),
+    'P0001', 'Lo enviado de un comprobante no cambia');
+  perform pg_temp.debe_fallar(format(
+    $q$update order_invoices set created_by = null, status = 'emitida' where id = %L$q$, v_ext),
+    'P0001', 'Lo enviado de un comprobante no cambia');
+  perform pg_temp.debe_fallar(format(
+    $q$update order_invoices set retry_requested_by = null, error = 'otro texto' where id = %L$q$, v_err),
+    'P0001', 'Un error solo admite pedir su reintento, una vez');
+  perform pg_temp.debe_fallar(format(
+    $q$update order_invoices set resolved_by = null, resolved_at = null where id = %L$q$, v_res),
+    'P0001', 'Un error solo admite pedir su reintento, una vez');
+  -- Ni cambiar quién fue por otra persona.
+  perform pg_temp.debe_fallar(format($q$update order_invoices set created_by = %L where id = %L$q$, v_c, v_ext),
+    'P0001', 'Lo enviado de un comprobante no cambia');
+  perform pg_temp.debe_fallar(format($q$update order_invoices set resolved_by = %L where id = %L$q$, v_c, v_res),
+    'P0001', 'Un error solo admite pedir su reintento, una vez');
+  -- Y un UPDATE que no cambia nada sobre una fila cerrada sigue fallando.
+  perform pg_temp.debe_fallar(format($q$update order_invoices set note = note where id = %L$q$, v_ext),
+    'P0001', 'Un comprobante externa no cambia');
+
+  -- Poner en NULL SOLO quién fue, a mano, tampoco: eso lo hace únicamente la
+  -- cascada de borrar la cuenta. Es el mismo UPDATE que hace la cascada, pero
+  -- el candado corre un nivel más arriba (`pg_trigger_depth()` = 1).
+  perform pg_temp.debe_fallar(format($q$update order_invoices set created_by = null where id = %L$q$, v_ext),
+    'P0001', 'Lo enviado de un comprobante no cambia');
+  perform pg_temp.debe_fallar(format($q$update order_invoices set retry_requested_by = null where id = %L$q$, v_err),
+    'P0001', 'Un error solo admite pedir su reintento, una vez');
+  perform pg_temp.debe_fallar(format($q$update order_invoices set resolved_by = null where id = %L$q$, v_res),
+    'P0001', 'Un error solo admite pedir su reintento, una vez');
+  perform pg_temp.debe_fallar(format(
+    $q$update order_invoices set retry_requested_by = null, resolved_by = null where id = %L$q$, v_res),
+    'P0001', 'Un error solo admite pedir su reintento, una vez');
+end $$;
+
+-- Ni con el rol del servidor, que es el que escribe los comprobantes.
+set local role service_role;
+do $$
+declare
+  v_u   constant uuid := '25700000-0000-0000-0000-0000000000c1';
+  v_col text;
+  v_id  uuid;
+  v_n   integer := 0;
+begin
+  foreach v_col in array array['created_by', 'retry_requested_by', 'resolved_by'] loop
+    for v_id in execute format('select id from order_invoices where %I = %L', v_col, v_u) loop
+      begin
+        execute format('update order_invoices set %I = null where id = %L', v_col, v_id);
+        raise exception 'service_role dejó en NULL % a mano', v_col;
+      exception when sqlstate 'P0001' then
+        if sqlerrm not in ('Lo enviado de un comprobante no cambia', 'Un error solo admite pedir su reintento, una vez') then
+          raise;
+        end if;
+      end;
+      v_n := v_n + 1;
+    end loop;
+  end loop;
+  -- La externa (created_by), el error (retry_requested_by) y el resuelto (las dos).
+  if v_n <> 4 then raise exception 'service_role probó % columnas, se esperaban 4', v_n; end if;
+end $$;
+reset role;
+
+do $$
+declare
+  v_u     constant uuid := '25700000-0000-0000-0000-0000000000c1';
+  v_by    constant text[] := array['created_by', 'retry_requested_by', 'resolved_by'];
+  v_ids   uuid[];
+  v_antes jsonb;
+begin
+  select array_agg(id) into v_ids
+    from order_invoices where v_u in (created_by, retry_requested_by, resolved_by);
+  if coalesce(array_length(v_ids, 1), 0) <> 3 then
+    raise exception 'antes de borrar la cuenta: % filas suyas, se esperaban 3', coalesce(array_length(v_ids, 1), 0);
+  end if;
+  select jsonb_object_agg(id, to_jsonb(i) - v_by) into v_antes
+    from order_invoices i where id = any (v_ids);
+
+  -- Borrar la cuenta: `on delete set null` en las tres columnas, por el candado.
+  delete from auth.users where id = v_u;
+
+  if exists (select 1 from order_invoices
+              where v_u in (created_by, retry_requested_by, resolved_by)) then
+    raise exception 'quedó una referencia a la cuenta borrada';
+  end if;
+  if (select count(*) from order_invoices
+       where id = any (v_ids)
+         and created_by is null and retry_requested_by is null and resolved_by is null) <> 3 then
+    raise exception 'las filas no quedaron con quién fue en NULL';
+  end if;
+  -- Todo lo demás, igual: estado, fechas (también `updated_at` y el reintento
+  -- pedido), lo enviado y lo contestado.
+  if (select jsonb_object_agg(id, to_jsonb(i) - v_by) from order_invoices i where id = any (v_ids))
+       is distinct from v_antes then
+    raise exception 'borrar la cuenta cambió algo más que quién fue: %',
+      (select jsonb_object_agg(id, to_jsonb(i) - v_by) from order_invoices i where id = any (v_ids));
+  end if;
 end $$;
 
 \echo '  la última revisión del barrido: una por pedido y modo'
@@ -751,6 +999,9 @@ begin
     if has_function_privilege(v_rol, 'public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)', 'execute') then
       raise exception '% puede pedir el turno', v_rol;
     end if;
+    if has_function_privilege(v_rol, 'public.invoice_candidates(uuid, text, timestamptz, integer, text[], uuid)', 'execute') then
+      raise exception '% puede listar los pedidos por revisar', v_rol;
+    end if;
   end loop;
   foreach v_tabla in array array['invoice_issuers', 'order_invoices', 'invoice_order_checks'] loop
     if not has_table_privilege('service_role', 'public.' || v_tabla, 'select') then
@@ -759,6 +1010,9 @@ begin
   end loop;
   if not has_function_privilege('service_role', 'public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)', 'execute') then
     raise exception 'service_role no puede pedir el turno';
+  end if;
+  if not has_function_privilege('service_role', 'public.invoice_candidates(uuid, text, timestamptz, integer, text[], uuid)', 'execute') then
+    raise exception 'service_role no puede listar los pedidos por revisar';
   end if;
 end $$;
 
@@ -786,6 +1040,11 @@ begin
     perform invoice_claim(gen_random_uuid(), gen_random_uuid(), 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
                           '25700000-0000-0000-0000-000000000004', 100, now(), '#X', '{}', '{}');
     raise exception 'authenticated pidió el turno';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    perform 1 from invoice_candidates('33333333-3333-3333-3333-333333333333', 'real', now() - interval '1 day', 10, '{}');
+    raise exception 'authenticated listó los pedidos por revisar';
   exception when insufficient_privilege then null;
   end;
   -- Tampoco reasigna el RUC de una cuenta: store_collection_accounts no tiene
@@ -840,5 +1099,366 @@ begin
 end $$;
 reset role;
 
+-- ── h) Los pedidos por revisar ───────────────────────────────────────────────
+\echo '  invoice_candidates: pagados de tiendas activas, sin lo resuelto, desde «Emitir desde», 60 días, los más nuevos primero'
+-- Una organización aparte, para que nada de otras pruebas entre en la lista.
+insert into organizations (id, name) values ('25700000-0000-0000-0000-0000000000a3', 'Comprobantes C');
+insert into stores (id, org_id, name, shopify_domain, status) values
+  ('25700000-0000-0000-0000-0000000000b3', '25700000-0000-0000-0000-0000000000a3', 'Tienda C1', 'inv-c1.myshopify.com', 'active'),
+  ('25700000-0000-0000-0000-0000000000b4', '25700000-0000-0000-0000-0000000000a3', 'Tienda C2', 'inv-c2.myshopify.com', 'active'),
+  ('25700000-0000-0000-0000-0000000000b5', '25700000-0000-0000-0000-0000000000a3', 'Tienda C pausada', 'inv-c3.myshopify.com', 'paused');
+insert into invoice_issuers (org_id, ruc, legal_name, simplefact_subdomain)
+values ('25700000-0000-0000-0000-0000000000a3', '20000000007', 'CANDIDATOS S.A.C.', 'candidatos');
+
+-- Un pedido con su fila del Master y, si se da, un pago registrado entonces.
+create function pg_temp.candidato(
+  n            integer,
+  p_created    interval,
+  p_registered interval default null,
+  p_store      uuid default '25700000-0000-0000-0000-0000000000b3',
+  p_state      text default 'pago_completo',
+  p_gateway    text default 'manual',
+  p_financial  text default 'pending',
+  p_validation text default 'validado'
+) returns uuid language plpgsql as $$
+declare
+  v_id uuid := pg_temp.pedido(n);
+begin
+  insert into orders (id, store_id, shopify_order_id, name, created_at, total_amount, currency)
+  values (v_id, p_store, 'inv-c' || n, '#INVC' || n, now() - p_created, 100, 'PEN');
+  insert into order_master (order_id, store_id, shopify_order_id, order_name, order_created_at,
+                            payment_state, payment_gateway, financial_status)
+  values (v_id, p_store, 'inv-c' || n, '#INVC' || n, now() - p_created, p_state, p_gateway, p_financial);
+  if p_registered is not null then
+    insert into order_payments (store_id, order_id, kind, amount, validation_status, registered_at, validated_at)
+    values (p_store, v_id, 'total', 100, p_validation, now() - p_registered,
+            case when p_validation = 'validado' then now() else null end);
+  end if;
+  return v_id;
+end $$;
+
+-- Un comprobante de un pedido de la organización C (un error, con o sin su
+-- reintento pedido).
+create function pg_temp.comprobante_c(n integer, p_mode text, p_status text, p_retry timestamptz default null)
+returns void language sql as $$
+  insert into order_invoices (id, org_id, store_id, order_id, issuer_id, ruc, mode, status, total, paid_at, request,
+                              retry_requested_at)
+  values (gen_random_uuid(), '25700000-0000-0000-0000-0000000000a3', '25700000-0000-0000-0000-0000000000b3',
+          pg_temp.pedido(n), (select id from invoice_issuers where ruc = '20000000007'), '20000000007',
+          p_mode, p_status, 100, now(), '{"invoice_type": "03"}', p_retry)
+$$;
+
+-- La revisión del barrido de un pedido, hace tanto.
+create function pg_temp.revision_c(n integer, p_mode text, p_reason text, p_hace interval) returns void language sql as $$
+  insert into invoice_order_checks (order_id, mode, store_id, reason, checked_at)
+  values (pg_temp.pedido(n), p_mode, '25700000-0000-0000-0000-0000000000b3', p_reason, now() - p_hace)
+$$;
+
+-- La lista como «n,n,n», en el orden en que la devuelve la función.
+create function pg_temp.candidatos(
+  p_mode    text,
+  p_since   timestamptz default now() - interval '10 days',
+  p_limit   integer default 100,
+  p_blocked text[] default array['editado', 'propina'],
+  p_store   uuid default null,
+  p_org     uuid default '25700000-0000-0000-0000-0000000000a3'
+) returns text language sql as $$
+  select coalesce(string_agg(right(c.order_id::text, 12)::integer::text, ',' order by c.n), '')
+    from invoice_candidates(p_org, p_mode, p_since, p_limit, p_blocked, p_store) with ordinality as c(order_id, n)
+$$;
+
+do $$
+begin
+  -- Entran: pagados completos con un pago validado registrado desde «Emitir desde».
+  perform pg_temp.candidato(40, interval '2 days', interval '1 day');
+  perform pg_temp.candidato(41, interval '3 days', interval '1 day', '25700000-0000-0000-0000-0000000000b4'); -- otra tienda de C
+  perform pg_temp.candidato(43, interval '4 days', interval '1 day');   -- con un error real ya con su reintento pedido
+  perform pg_temp.candidato(44, interval '5 days', interval '1 day');   -- con su simulación: entra solo en real
+  perform pg_temp.candidato(45, interval '6 days', interval '1 day');   -- Shopify lo bloqueó en real hace 1 h
+  perform pg_temp.candidato(46, interval '7 days', interval '1 day');   -- … hace 7 h: se relee
+  perform pg_temp.candidato(47, interval '8 days', interval '1 day');   -- bloqueado hace 1 h por algo que no es de Shopify
+  perform pg_temp.candidato(49, interval '36 hours', null, p_state => null, p_gateway => 'checkout', p_financial => 'paid'); -- prepago web
+  perform pg_temp.candidato(54, interval '59 days', interval '1 day');  -- viejo, pagado hoy: entra
+  perform pg_temp.candidato(60, interval '20 days', interval '10 days'); -- registrado justo en «Emitir desde»
+  -- Con un error real sin reintento pedido: el turno real diría `error_previo`,
+  -- así que en real no ocupa lugar. En simulación el turno no lo mira: entra.
+  perform pg_temp.candidato(62, interval '21 days', interval '1 day');
+  -- Lo mismo si el reintento pedido volvió a terminar en error.
+  perform pg_temp.candidato(63, interval '22 days', interval '1 day');
+
+  -- No entran.
+  perform pg_temp.candidato(42, interval '1 day', interval '1 day');    -- emitida
+  perform pg_temp.candidato(57, interval '16 days', interval '1 day');  -- externa
+  perform pg_temp.candidato(58, interval '17 days', interval '1 day');  -- en duda
+  perform pg_temp.candidato(59, interval '18 days', interval '1 day');  -- emitiendo
+  perform pg_temp.candidato(48, interval '9 days', interval '1 day', p_state => 'pago_parcial'); -- no está pagado
+  perform pg_temp.candidato(50, interval '11 days', null, p_state => null, p_gateway => 'checkout', p_financial => 'paid'); -- prepago antes del inicio
+  perform pg_temp.candidato(51, interval '12 days', interval '11 days'); -- pagado antes del inicio
+  perform pg_temp.candidato(52, interval '13 days', interval '1 day', p_validation => 'pendiente_revision'); -- pago sin validar
+  perform pg_temp.candidato(53, interval '61 days', interval '1 day');  -- más de 60 días: Shopify ya no lo deja leer
+  perform pg_temp.candidato(55, interval '14 days', interval '1 day', '25700000-0000-0000-0000-0000000000b5'); -- tienda pausada
+  perform pg_temp.candidato(56, interval '15 days', interval '1 day', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'); -- otra organización
+  -- Registrado antes del inicio y validado hoy: cuenta cuándo se registró.
+  perform pg_temp.candidato(61, interval '19 days', interval '11 days');
+
+  perform pg_temp.comprobante_c(42, 'real', 'emitida');
+  perform pg_temp.comprobante_c(57, 'real', 'externa');
+  perform pg_temp.comprobante_c(58, 'real', 'en_duda');
+  perform pg_temp.comprobante_c(59, 'real', 'emitiendo');
+  perform pg_temp.comprobante_c(43, 'real', 'error', now());   -- un error no es boleta, y su reintento se pidió
+  perform pg_temp.comprobante_c(62, 'real', 'error');
+  perform pg_temp.comprobante_c(63, 'real', 'error', now() - interval '1 hour');
+  perform pg_temp.comprobante_c(63, 'real', 'error');
+  perform pg_temp.comprobante_c(44, 'simulacion', 'simulada');
+  perform pg_temp.revision_c(45, 'real', 'editado', interval '1 hour');
+  perform pg_temp.revision_c(46, 'real', 'editado', interval '7 hours');
+  perform pg_temp.revision_c(47, 'real', 'pago_sin_cuenta', interval '1 hour');
+
+  -- En real, sin 62 ni 63: esperan que una persona pida reintentar su error.
+  if pg_temp.candidatos('real') is distinct from '49,40,41,43,44,46,47,60,54' then
+    raise exception 'real: %', pg_temp.candidatos('real');
+  end if;
+  -- En simulación: sin la simulada (44); el bloqueo de Shopify es de real (45
+  -- entra), y un error real no frena una simulación (62 y 63 entran).
+  if pg_temp.candidatos('simulacion') is distinct from '49,40,41,43,45,46,47,60,62,63,54' then
+    raise exception 'simulación: %', pg_temp.candidatos('simulacion');
+  end if;
+  -- Sin la lista de motivos de Shopify, nada se salta.
+  if pg_temp.candidatos('real', p_blocked => null) is distinct from '49,40,41,43,44,45,46,47,60,54' then
+    raise exception 'sin motivos bloqueados: %', pg_temp.candidatos('real', p_blocked => null);
+  end if;
+  -- Un día más tarde de inicio: se va el registrado justo al borde (60).
+  if pg_temp.candidatos('real', now() - interval '9 days') is distinct from '49,40,41,43,44,46,47,54' then
+    raise exception 'desde hace 9 días: %', pg_temp.candidatos('real', now() - interval '9 days');
+  end if;
+  -- El límite se queda con los más nuevos.
+  if pg_temp.candidatos('real', p_limit => 2) is distinct from '49,40' then
+    raise exception 'límite 2: %', pg_temp.candidatos('real', p_limit => 2);
+  end if;
+  if pg_temp.candidatos('real', p_limit => 0) <> '' or pg_temp.candidatos('real', p_limit => null) <> ''
+     or pg_temp.candidatos('real', p_limit => -1) <> '' then
+    raise exception 'un límite de cero, nulo o negativo devolvió algo';
+  end if;
+  -- Una sola tienda.
+  if pg_temp.candidatos('real', p_store => '25700000-0000-0000-0000-0000000000b4') is distinct from '41' then
+    raise exception 'tienda C2: %', pg_temp.candidatos('real', p_store => '25700000-0000-0000-0000-0000000000b4');
+  end if;
+  -- Sin «Emitir desde», o con un modo que no es de escritura: nada.
+  if pg_temp.candidatos('real', null) <> '' then raise exception 'sin inicio: %', pg_temp.candidatos('real', null); end if;
+  if pg_temp.candidatos('apagado') <> '' or pg_temp.candidatos(null) <> '' then
+    raise exception 'un modo que no es de escritura devolvió algo';
+  end if;
+  -- El de la tienda A es de su organización, no de C.
+  if position(',56,' in ',' || pg_temp.candidatos('real', p_org => '33333333-3333-3333-3333-333333333333', p_limit => 1000) || ',') = 0 then
+    raise exception 'el pedido 56 no salió en su organización';
+  end if;
+
+  -- Una persona pide reintentar el error de 62: vuelve a entrar en real. El de
+  -- 63 sigue esperando (su primer reintento ya terminó en otro error).
+  update order_invoices set retry_requested_at = now()
+   where order_id = pg_temp.pedido(62) and status = 'error';
+  if pg_temp.candidatos('real') is distinct from '49,40,41,43,44,46,47,60,62,54' then
+    raise exception 'real con el reintento de 62 pedido: %', pg_temp.candidatos('real');
+  end if;
+end $$;
+
+-- Solo el servidor la llama.
+set local request.test_uid = '00000000-0000-0000-0000-00000000000c';
+set local role authenticated;
+do $$
+begin
+  perform 1 from invoice_candidates('25700000-0000-0000-0000-0000000000a3', 'real', now() - interval '10 days', 10, '{}');
+  raise exception 'authenticated listó los pedidos por revisar';
+exception when insufficient_privilege then null;
+end $$;
+reset role;
+set local role anon;
+do $$
+begin
+  perform 1 from invoice_candidates('25700000-0000-0000-0000-0000000000a3', 'real', now() - interval '10 days', 10, '{}');
+  raise exception 'anon listó los pedidos por revisar';
+exception when insufficient_privilege then null;
+end $$;
+reset role;
+set local role service_role;
+do $$
+begin
+  if (select count(*) from invoice_candidates('25700000-0000-0000-0000-0000000000a3', 'real',
+                                              now() - interval '10 days', 100, array['editado'])) <> 10 then
+    raise exception 'service_role no ve los pedidos por revisar';
+  end if;
+end $$;
+reset role;
+
+-- ── i) La 0260 sobre la 0257 que corrió en producción ───────────────────────
+\echo '  0260 sobre la 0257 de producción: las cuatro funciones de la revisión, sin tocar datos ni recrear triggers, y dos veces es una'
+-- Producción tiene la 0257 tal como está en el repositorio (14-10-2026), un RUC
+-- en simulación y ningún comprobante. La 0260 cambia cuatro funciones y nada
+-- más. Aquí, con un RUC en simulación y los comprobantes de las pruebas de
+-- arriba: la 0257 sola deja las funciones de antes de la revisión (es la que
+-- corrió: lo nuevo no se le escribe a ella); la 0260 deja las de ahora con los
+-- mismos oids, así que los triggers de la 0257 —que guardan el oid— las llaman
+-- sin recrearse; ninguna fila cambia; y correr la 0260 otra vez no cambia nada.
+update invoice_issuers set mode = 'simulacion', emit_from = now()
+ where org_id = '25700000-0000-0000-0000-0000000000a1' and ruc = '20556792829';
+
+-- Una foto por paso: cada función (su oid y su definición), los triggers que
+-- las llaman y los datos de comprobantes.
+create temp table foto_0260 (paso text, cosa text, valor text, primary key (paso, cosa));
+create function pg_temp.foto_0260(p_paso text) returns void language sql as $$
+  insert into foto_0260 (paso, cosa, valor)
+  select p_paso, f, coalesce(to_regprocedure(f)::oid::text, '-') || ' ' || coalesce(pg_get_functiondef(to_regprocedure(f)), '-')
+    from unnest(array[
+      'invoice_issuers_touch()',
+      'order_invoices_guard()',
+      'invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)',
+      'invoice_candidates(uuid, text, timestamptz, integer, text[], uuid)'
+    ]) as f
+  union all
+  select p_paso, 'triggers', string_agg(format('%s/%s→%s', tgname, oid, tgfoid::regprocedure), ', ' order by tgname)
+    from pg_trigger where tgname in ('invoice_issuers_touch', 'order_invoices_guard')
+  union all
+  select p_paso, 'datos', md5(concat_ws('|',
+    (select jsonb_agg(to_jsonb(i) order by i.id)::text from invoice_issuers i),
+    (select jsonb_agg(jsonb_build_array(a.id, a.invoice_issuer_id) order by a.id)::text from store_collection_accounts a),
+    (select jsonb_agg(to_jsonb(o) order by o.id)::text from order_invoices o),
+    (select jsonb_agg(to_jsonb(c) order by c.order_id, c.mode)::text from invoice_order_checks c)))
+$$;
+create function pg_temp.en_0260(p_paso text, p_cosa text) returns text language sql stable as $$
+  select valor from foto_0260 where paso = p_paso and cosa = p_cosa
+$$;
+
+do $$ begin perform pg_temp.foto_0260('antes'); end $$;
+\ir ../../db/migrations/0257_invoices.sql
+do $$ begin perform pg_temp.foto_0260('0257'); end $$;
+\ir ../../db/migrations/0260_invoices_hardening.sql
+do $$ begin perform pg_temp.foto_0260('0260'); end $$;
+\ir ../../db/migrations/0260_invoices_hardening.sql
+do $$ begin perform pg_temp.foto_0260('0260 otra vez'); end $$;
+
+do $$
+declare
+  c_touch      constant text := 'invoice_issuers_touch()';
+  c_guard      constant text := 'order_invoices_guard()';
+  c_claim      constant text := 'invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)';
+  c_candidates constant text := 'invoice_candidates(uuid, text, timestamptz, integer, text[], uuid)';
+  v_fn   text;
+  v_paso text;
+  v_rol  text;
+  v_n    integer;
+begin
+  if (select count(*) from invoice_issuers where mode = 'simulacion') = 0
+     or (select count(*) from order_invoices) = 0 then
+    raise exception 'la foto no tiene un RUC en simulación ni comprobantes que cuidar';
+  end if;
+  -- Cada paso con sus seis cosas, y cada función existe en cada paso: sin esto,
+  -- un NULL haría pasar en silencio las comparaciones de abajo.
+  if (select count(*) from foto_0260 where valor is not null and valor not like '-%') <> 24 then
+    raise exception 'foto incompleta: %', (select string_agg(paso || '/' || cosa, ', ') from foto_0260
+                                           where valor is null or valor like '-%');
+  end if;
+
+  -- La 0257 sola: las funciones de antes de la revisión. Si esto falla, alguien
+  -- volvió a escribir lo nuevo dentro de la 0257, que ya corrió en producción.
+  if (pg_temp.en_0260('0257', c_touch) like '%new.check_error := null;%') is not false then
+    raise exception 'la 0257 ya borra check_error: lo nuevo va en otra migración';
+  end if;
+  if (pg_temp.en_0260('0257', c_guard) like '%pg_trigger_depth()%') is not false then
+    raise exception 'la 0257 ya tiene la excepción de la cascada: lo nuevo va en otra migración';
+  end if;
+  if (pg_temp.en_0260('0257', c_claim) like '%pagos_en_revision%') is not false
+     or (pg_temp.en_0260('0257', c_claim) like '%max(registered_at)%') is not false then
+    raise exception 'la 0257 ya revisa los pagos en el turno: lo nuevo va en otra migración';
+  end if;
+  -- La 0257 no crea ni borra invoice_candidates: la que había sigue igual.
+  if pg_temp.en_0260('0257', c_candidates) is distinct from pg_temp.en_0260('antes', c_candidates) then
+    raise exception 'la 0257 tocó invoice_candidates';
+  end if;
+
+  -- La 0260: las cuatro de ahora, las mismas que deja la cadena entera.
+  if (pg_temp.en_0260('0260', c_touch) like '%new.check_error := null;%') is not true then
+    raise exception '0260: invoice_issuers_touch no borra check_error';
+  end if;
+  if (pg_temp.en_0260('0260', c_guard) like '%if pg_trigger_depth() > 1%') is not true then
+    raise exception '0260: order_invoices_guard sin la excepción de la cascada';
+  end if;
+  if (pg_temp.en_0260('0260', c_claim) like '%''reason'', ''pagos_en_revision''%') is not true
+     or (pg_temp.en_0260('0260', c_claim) like '%max(registered_at) into v_live, v_paid%') is not true
+     or (pg_temp.en_0260('0260', c_claim) like '%greatest(p_paid_at, v_paid)%') is not true then
+    raise exception '0260: invoice_claim no saca de la base cuándo quedó pagado';
+  end if;
+  if to_regprocedure(c_candidates) is null
+     or (pg_temp.en_0260('0260', c_candidates) like '%from order_master m%') is not true then
+    raise exception '0260: falta invoice_candidates';
+  end if;
+
+  foreach v_fn in array array[c_touch, c_guard, c_claim, c_candidates] loop
+    -- Lo que dejó verify-db (todas las migraciones, en orden) es la 0260.
+    if pg_temp.en_0260('antes', v_fn) is distinct from pg_temp.en_0260('0260', v_fn) then
+      raise exception 'la cadena de migraciones no deja % como la 0260', v_fn;
+    end if;
+    -- `create or replace` conserva el oid: lo que los triggers guardan.
+    foreach v_paso in array array['0257', '0260', '0260 otra vez'] loop
+      if split_part(pg_temp.en_0260(v_paso, v_fn), ' ', 1) is distinct from split_part(pg_temp.en_0260('antes', v_fn), ' ', 1) then
+        raise exception '% cambió de oid en el paso %', v_fn, v_paso;
+      end if;
+    end loop;
+    -- Una sola versión de cada una: ninguna sobrecarga olvidada.
+    select count(*) into v_n from pg_proc
+     where pronamespace = 'public'::regnamespace and proname = split_part(v_fn, '(', 1);
+    if v_n <> 1 then raise exception '% tiene % versiones', split_part(v_fn, '(', 1), v_n; end if;
+    -- Ni el navegador ni nadie más la ejecuta.
+    foreach v_rol in array array['anon', 'authenticated'] loop
+      if has_function_privilege(v_rol, v_fn, 'execute') then
+        raise exception '% puede ejecutar %', v_rol, v_fn;
+      end if;
+    end loop;
+  end loop;
+  if not has_function_privilege('service_role', c_claim, 'execute')
+     or not has_function_privilege('service_role', c_candidates, 'execute') then
+    raise exception 'service_role no puede pedir el turno o la lista';
+  end if;
+
+  -- La 0260 no recrea los triggers: los mismos, llamando a las mismas funciones.
+  if pg_temp.en_0260('0260', 'triggers') is distinct from pg_temp.en_0260('0257', 'triggers') then
+    raise exception 'la 0260 recreó triggers: % → %', pg_temp.en_0260('0257', 'triggers'), pg_temp.en_0260('0260', 'triggers');
+  end if;
+  if (pg_temp.en_0260('0260', 'triggers') like '%invoice_issuers_touch/%→invoice_issuers_touch()%') is not true
+     or (pg_temp.en_0260('0260', 'triggers') like '%order_invoices_guard/%→order_invoices_guard()%') is not true then
+    raise exception 'triggers: %', pg_temp.en_0260('0260', 'triggers');
+  end if;
+
+  -- Ningún dato cambia, en ningún paso; y la segunda 0260 es la primera.
+  foreach v_paso in array array['0257', '0260', '0260 otra vez'] loop
+    if pg_temp.en_0260(v_paso, 'datos') is distinct from pg_temp.en_0260('antes', 'datos') then
+      raise exception 'el paso % cambió datos de comprobantes', v_paso;
+    end if;
+  end loop;
+  if exists (
+    select 1
+      from (select cosa, valor from foto_0260 where paso = '0260') a
+      full join (select cosa, valor from foto_0260 where paso = '0260 otra vez') b using (cosa)
+     where a.valor is distinct from b.valor
+  ) then
+    raise exception 'correr la 0260 otra vez cambió algo';
+  end if;
+end $$;
+
+-- Y el trigger de siempre ya llama a la función nueva: un token nuevo borra el
+-- motivo de la prueba anterior.
+do $$
+declare
+  v_y invoice_issuers;
+begin
+  update invoice_issuers set check_error = 'Token rechazado (401).'
+   where org_id = '25700000-0000-0000-0000-0000000000a1' and ruc = '20556792829';
+  update invoice_issuers set token_enc = 'enc:otro-token'
+   where org_id = '25700000-0000-0000-0000-0000000000a1' and ruc = '20556792829'
+  returning * into v_y;
+  if v_y.check_error is not null or v_y.checked_at is not null or v_y.mode <> 'simulacion' then
+    raise exception 'token nuevo tras la 0260: % % %', v_y.check_error, v_y.checked_at, v_y.mode;
+  end if;
+end $$;
+
 rollback;
-\echo '  invoices: semilla, emisor, cuenta → RUC, turno, índice, estados y permisos OK'
+\echo '  invoices: semilla, emisor, cuenta → RUC, turno, índice, estados, cuentas borradas, pedidos por revisar, permisos y la 0260 sobre la 0257 OK'

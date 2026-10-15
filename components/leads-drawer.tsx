@@ -27,6 +27,8 @@ import {
 } from "react";
 import { CallQr } from "@/components/call-qr";
 import { SEGMENT_TONE } from "@/components/lead-segment-tone";
+import { CoverageBadge } from "@/components/coverage-badge";
+import type { OrderCoverage } from "@/lib/order-coverage";
 import { copyLabel, useCopyToClipboard } from "@/components/copy-button";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
 import {
@@ -119,6 +121,7 @@ import {
   listLeadTemplates,
   listQuickReplies,
   loadLeadConversation,
+  loadLeadDeliveryCoverage,
   loadOrderDraft,
   pollLeadState,
   searchStoreProducts,
@@ -425,6 +428,26 @@ export function LeadDrawer({
     readyReportedRef.current = true;
     onReady?.();
   }, [onReady]);
+
+  // La cobertura del Master para la dirección del lead (MOM §11): junto al
+  // distrito, la misma chapa que lleva el pedido. Se vuelve a preguntar si la
+  // dirección cambia; sin respuesta, el distrito se queda solo.
+  const [deliveryCoverage, setDeliveryCoverage] = useState<{ key: string; coverage: OrderCoverage | null } | null>(null);
+  const deliveryKey = [lead.id, lead.district, lead.province, lead.region].join("|");
+  useEffect(() => {
+    if (!lead.district) return;
+    let alive = true;
+    loadLeadDeliveryCoverage(lead.id).then(
+      (r) => {
+        if (alive) setDeliveryCoverage({ key: deliveryKey, coverage: "error" in r ? null : r.coverage });
+      },
+      () => {},
+    );
+    return () => {
+      alive = false;
+    };
+  }, [deliveryKey, lead.id, lead.district]);
+  const masterCoverage = deliveryCoverage?.key === deliveryKey ? deliveryCoverage.coverage : null;
 
   // La conversación queda fija bajo la cabecera del panel mientras se baja por
   // la columna de trabajo. La cabecera crece si las chapas o el contexto parten
@@ -785,9 +808,12 @@ export function LeadDrawer({
                     {showAddress && lead.district && (
                       <>
                         <dt className="text-ink-500">Distrito</dt>
-                        <dd className="min-w-0 break-words text-ink-900">
-                          {lead.district}
-                          {lead.province ? <span className="text-ink-500">{` · ${lead.province}`}</span> : null}
+                        <dd className="flex min-w-0 items-start gap-2 text-ink-900">
+                          {masterCoverage && <CoverageBadge coverage={masterCoverage} />}
+                          <span className="min-w-0 break-words">
+                            {lead.district}
+                            {lead.province ? <span className="text-ink-500">{` · ${lead.province}`}</span> : null}
+                          </span>
                         </dd>
                       </>
                     )}

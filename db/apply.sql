@@ -517,8 +517,12 @@
 \ir migrations/0256_lima_open_counts.sql
 \echo 'Applying 0257_invoices.sql'
 \ir migrations/0257_invoices.sql
-\echo 'Applying 0258_canal_de_cierre.sql'
-\ir migrations/0258_canal_de_cierre.sql
-\echo 'Applying 0259_ventas_por_origen.sql'
-\ir migrations/0259_ventas_por_origen.sql
+\echo 'Applying 0258_restock_reply_sweep.sql'
+\ir migrations/0258_restock_reply_sweep.sql
+\echo 'Applying 0259_canal_de_cierre.sql'
+\ir migrations/0259_canal_de_cierre.sql
+\echo 'Applying 0260_invoices_hardening.sql'
+\ir migrations/0260_invoices_hardening.sql
+\echo 'Applying 0261_ventas_por_origen.sql'
+\ir migrations/0261_ventas_por_origen.sql
 \echo 'Done.'

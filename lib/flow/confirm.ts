@@ -181,6 +181,10 @@ export async function confirmFlowPayment(
       order_id: row.order_id,
       kind: row.kind,
       amount,
+      // La orden de Flow ES el nº de operación de este cobro: con él, la misma
+      // constancia subida a mano choca con el índice único y no paga dos veces
+      // (lib/flow/verify.ts, MOM §12).
+      operation_number: status.flowOrder ? String(status.flowOrder) : null,
       paid_at: paidAt,
       // Validado por la pasarela, no por una persona (ver cabecera).
       validation_status: "validado",

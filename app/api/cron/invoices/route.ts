@@ -13,10 +13,17 @@
 //
 // Fuera de producción no emite (un preview no manda boletas a SUNAT aunque se
 // copien las credenciales); con ?dry=1 sí corre, para probar.
+//
+// Sin la migración 0257 o la 0260 (el código puede llegar a producción antes
+// que ellas, que se aplican a mano) responde 200 con `skipped: "sin_migracion"`:
+// no hay nada que barrer, y un cron rojo cada 10 minutos solo taparía lo que sí
+// falla. Solo si lo que falta es de la 0257 o la 0260
+// (`isInvoiceMigrationMissing`): otra tabla que no existe es una base rota, y el
+// cron se ve rojo.
 
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminSupabase } from "@/lib/db";
-import { runInvoiceSweep } from "@/lib/invoicing/server";
+import { isInvoiceMigrationMissing, runInvoiceSweep } from "@/lib/invoicing/server";
 import { internalAuthorized } from "@/lib/voice-recovery-server";
 
 export const runtime = "nodejs";
@@ -47,15 +54,21 @@ async function run(req: NextRequest) {
   try {
     report = await runInvoiceSweep(createAdminSupabase(), { dry, ...(storeId ? { storeId } : {}) });
   } catch (err) {
+    // El barrido ya lo convierte en `skipped`; esto cubre lo que lance antes.
+    if (isInvoiceMigrationMissing(err)) {
+      const skipped = { ok: true, dry, skipped: "sin_migracion" as const };
+      console.log(`[invoices] ${JSON.stringify(skipped)}`);
+      return NextResponse.json(skipped);
+    }
     const error = sinTelefonos(err instanceof Error ? err.message : "Error del barrido de comprobantes");
     console.log(`[invoices] ${JSON.stringify({ dry, error })}`);
     return NextResponse.json({ ok: false, dry, error }, { status: 500 });
   }
 
   // Vercel no guarda la respuesta del cron: sin esta línea, «no emitió nada» no
-  // se distingue de «nada era elegible» ni de «todo bloqueado por X». Solo ids
-  // de organización y de RUC, códigos de motivo y conteos: ni clientas, ni
-  // teléfonos, ni el token.
+  // se distingue de «nada era elegible», de «todo bloqueado por X» ni de «la
+  // lista de candidatos vino llena» (`lleno`). Solo ids de organización y de
+  // RUC, códigos de motivo y conteos: ni clientas, ni teléfonos, ni el token.
   console.log(`[invoices] ${JSON.stringify(report)}`);
   // Como Swayp automático: si algo falló, el cron se ve rojo.
   const failed = report.errors.length > 0;

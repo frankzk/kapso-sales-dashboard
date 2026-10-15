@@ -158,7 +158,11 @@ export async function applyPaymentValidation(
   await closeAlertsResolvedBy(
     admin,
     { storeId: who.storeId, orderId: payment.order_id, paymentId: payment.id },
-    who.source === "manual" ? "el pago se revisó en Kapta" : "el pago se concilió con el estado de cuenta",
+    who.source === "manual"
+      ? "el pago se revisó en Kapta"
+      : who.source === "flow"
+        ? "Flow confirmó el pago"
+        : "el pago se concilió con el estado de cuenta",
   );
   await recomputeOrderMasterSafe(admin, [payment.order_id]);
   return { ok: true, confirmado };

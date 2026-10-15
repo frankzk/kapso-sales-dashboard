@@ -13,10 +13,12 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  SIMPLEFACT_BODY_MAX_CHARS,
   SIMPLEFACT_GET_TIMEOUT_MS,
   SIMPLEFACT_POST_TIMEOUT_MS,
   SIMPLEFACT_RAW_MAX_CHARS,
   SIMPLEFACT_TEST_PAGE_SIZE,
+  SIMPLEFACT_TOKEN_MAX_CHARS,
   simplefactCreateSale,
   simplefactListSales,
   testSimplefactConnection,
@@ -281,6 +283,17 @@ describe("simplefactCreateSale: lo que vuelve", () => {
     expect(classifySaleResponse(res.http, res.body, RUC_GF).status).toBe("en_duda");
   });
 
+  it("una llave «__proto__» queda como dato: no cambia el prototipo ni se lee como parte de la respuesta", async () => {
+    const raw = `{"__proto__":{"success":true,"data":{"id":407,"serie":"B001","correlative":"97"}}}`;
+    const { fetchImpl } = fakeFetch(() => new Response(raw, { status: 200 }));
+    const res = await simplefactCreateSale(conn(fetchImpl), payload());
+    expect(Object.getPrototypeOf(res.body)).toBe(Object.prototype);
+    expect(Object.keys(res.body as object)).toEqual(["__proto__"]);
+    // Lo que se guarda es lo que se interpreta: sin `success` propio no hay venta.
+    expect(JSON.stringify(res.body)).toBe(raw);
+    expect(classifySaleResponse(res.http, res.body, RUC_GF).status).toBe("en_duda");
+  });
+
   it("un 200 que no es JSON (un portal cautivo) queda en duda, no emitido", async () => {
     const { fetchImpl } = fakeFetch(() => new Response("<html>Inicia sesión</html>", { status: 200 }));
     const res = await simplefactCreateSale(conn(fetchImpl), payload());
@@ -434,6 +447,17 @@ describe("el token no aparece en nada de lo que se devuelve", () => {
           () => new Response(`${"a".repeat(SIMPLEFACT_RAW_MAX_CHARS - 10)}${token}`, { status: 500 }),
         ).fetchImpl,
     ],
+    [
+      "una respuesta demasiado grande con el token justo en el corte",
+      TOKEN,
+      (token) =>
+        fakeFetch(
+          () =>
+            new Response(`${"a".repeat(SIMPLEFACT_RAW_MAX_CHARS - 10)}${token}${"x".repeat(SIMPLEFACT_BODY_MAX_CHARS)}`, {
+              status: 500,
+            }),
+        ).fetchImpl,
+    ],
   ];
 
   for (const [name, token, make] of leaks) {
@@ -459,6 +483,43 @@ describe("el token no aparece en nada de lo que se devuelve", () => {
     });
   }
 
+  describe("una respuesta demasiado grande: se limpia antes de recortar", () => {
+    /** El pedazo más largo del comienzo del token que quedó, si mide 8 o más. */
+    function tokenPrefixIn(out: string, token: string): string | null {
+      for (let n = token.length; n >= 8; n--) {
+        if (out.includes(token.slice(0, n))) return token.slice(0, n);
+      }
+      return null;
+    }
+
+    const relleno = "x".repeat(SIMPLEFACT_BODY_MAX_CHARS);
+    const cases: Array<[string, string]> = [
+      // El token cruza el carácter 2000: empieza antes del corte y termina después.
+      ...[TOKEN.length - 1, TOKEN.length - 8, 10, 8, 1].map(
+        (antes): [string, string] => [
+          `el token empieza ${antes} caracteres antes del corte`,
+          `${"a".repeat(SIMPLEFACT_RAW_MAX_CHARS - antes)}${TOKEN}${relleno}`,
+        ],
+      ),
+      // Cada token limpiado acorta el texto: con muchos antes del corte, uno que
+      // estaba más allá del margen de un recorte previo se correría hacia él.
+      ["el token repetido de corrido hasta pasar el corte", `${TOKEN.repeat(40)}${relleno}`],
+    ];
+
+    it.each(cases)("%s: no queda ni el token ni su comienzo", async (_label, body) => {
+      expect(body.length).toBeGreaterThan(SIMPLEFACT_BODY_MAX_CHARS);
+      const { fetchImpl } = fakeFetch(() => new Response(body, { status: 500 }));
+      const res = await simplefactCreateSale(conn(fetchImpl), payload());
+      expect(res.http).toBe(500);
+      expect(res.error).toBe("La respuesta de SimpleFact es demasiado grande");
+      const raw = (res.body as { raw: string }).raw;
+      // Se guarda el comienzo, limpio: lo de antes del token llega tal cual.
+      expect(raw.length).toBeLessThanOrEqual(SIMPLEFACT_RAW_MAX_CHARS);
+      expect(raw.length).toBeGreaterThan(SIMPLEFACT_RAW_MAX_CHARS - TOKEN.length);
+      expect(tokenPrefixIn(JSON.stringify(res), TOKEN)).toBeNull();
+    });
+  });
+
   it("el resto de la respuesta queda intacta", async () => {
     const { fetchImpl } = fakeFetch(() => json({ message: `Token ${TOKEN} inválido`, code: 401 }, 401));
     const res = await simplefactCreateSale(conn(fetchImpl), payload());
@@ -475,6 +536,256 @@ describe("el token no aparece en nada de lo que se devuelve", () => {
     // La dirección sale de rules.ts: un solo lugar decide adónde viaja el token.
     expect(src).toContain("simplefactBaseUrl(");
     expect(src).not.toMatch(/https:\/\/\$\{/);
+  });
+});
+
+// ── El token escapado tampoco sale ───────────────────────────────────────────
+
+describe("el token escapado (JSON, HTML, URL) tampoco sale", () => {
+  const BS = "\\";
+  /** Con todo lo que algún codificador escapa: / " \ < > & ' y además | + =. */
+  const ODD_TOKEN = `42|sf/Ab"Cd${BS}Ef<Gh>&Ij'Kl+Mn=Op0123456789`;
+  const SLASH_TOKEN = "42|sf/AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";
+
+  /** Barra invertida, «u» y cuatro dígitos hexadecimales: como escribe un carácter un codificador JSON. */
+  const u = (ch: string, upper = false) => {
+    const hex = ch.charCodeAt(0).toString(16).padStart(4, "0");
+    return `${BS}u${upper ? hex.toUpperCase() : hex}`;
+  };
+  const jsonEsc = (t: string) => JSON.stringify(t).slice(1, -1);
+  const php = (t: string) => jsonEsc(t).replace(/\//g, `${BS}/`);
+  const HTML: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" };
+  const html = (t: string) => t.replace(/[&<>"']/g, (c) => HTML[c]!);
+
+  /** Cómo escribe el token quien arma la respuesta. */
+  const ENCODINGS: Array<[string, (t: string) => string]> = [
+    ["tal cual", (t) => t],
+    ["JSON.stringify", jsonEsc],
+    ["PHP/Laravel, con la barra escapada", php],
+    [
+      "Symfony (JSON_HEX_*: comillas, < > & y apóstrofo en hexadecimal mayúscula)",
+      (t) => Array.from(t, (c) => (c === BS ? BS + BS : c === "/" ? `${BS}/` : `"<>&'`.includes(c) ? u(c, true) : c)).join(""),
+    ],
+    ["Go (< > & en hexadecimal minúscula)", (t) => jsonEsc(t).replace(/[<>&]/g, (c) => u(c))],
+    ["solo ASCII: cada carácter en hexadecimal", (t) => Array.from(t, (c) => u(c)).join("")],
+    ["solo ASCII: cada carácter en hexadecimal mayúscula", (t) => Array.from(t, (c) => u(c, true)).join("")],
+    ["un JSON de PHP dentro de otro", (t) => php(php(t))],
+    ["un JSON de PHP dentro de otro, dentro de otro", (t) => php(php(php(t)))],
+    ["un JSON de PHP dentro de uno que no escapa la barra", (t) => jsonEsc(php(t))],
+    ["HTML (htmlspecialchars)", html],
+    ["HTML con el JSON de PHP adentro", (t) => html(php(t))],
+    ["HTML: cada carácter como &#NN;", (t) => Array.from(t, (c) => `&#${c.charCodeAt(0)};`).join("")],
+    ["HTML: cada carácter como &#xNN;", (t) => Array.from(t, (c) => `&#x${c.charCodeAt(0).toString(16)};`).join("")],
+    ["URL (encodeURIComponent)", encodeURIComponent],
+  ];
+
+  const TOKENS: Array<[string, string]> = [
+    ["hexadecimal", TOKEN],
+    ["con barra («id|secreto»)", SLASH_TOKEN],
+    ["con todo lo que se escapa", ODD_TOKEN],
+  ];
+
+  /** Todo el texto de lo que se devuelve: llaves, valores y el error. */
+  function strings(value: unknown): string[] {
+    if (typeof value === "string") return [value];
+    if (Array.isArray(value)) return value.flatMap(strings);
+    if (value && typeof value === "object") return Object.entries(value).flatMap(([k, v]) => [k, ...strings(v)]);
+    return [];
+  }
+
+  /** El comienzo (8 caracteres) de alguna escritura del token que quedó en lo devuelto. */
+  function leak(res: unknown, token: string): string | null {
+    const texts = strings(res);
+    for (const [, enc] of ENCODINGS) {
+      const head = enc(token).slice(0, 8);
+      if (texts.some((t) => t.includes(head))) return head;
+    }
+    return null;
+  }
+
+  it("las escrituras del token de prueba son de verdad distintas", () => {
+    const forms = new Set(ENCODINGS.map(([, enc]) => enc(ODD_TOKEN)));
+    expect(forms.size).toBe(ENCODINGS.length);
+    expect(TOKEN.length).toBeGreaterThanOrEqual(8);
+  });
+
+  describe.each(TOKENS)("token %s", (_label, token) => {
+    it.each(ENCODINGS)("%s: una página de error que no es JSON", async (_e, enc) => {
+      const { fetchImpl } = fakeFetch(() => new Response(`<pre>Authorization: Bearer ${enc(token)}</pre>`, { status: 500 }));
+      const res = await simplefactCreateSale(conn(fetchImpl, { token }), payload());
+      expect(res).toEqual({ http: 500, body: { raw: "<pre>Authorization: Bearer [token]</pre>" } });
+    });
+
+    it.each(ENCODINGS)("%s: al listar ventas, en una página que no es JSON", async (_e, enc) => {
+      const { fetchImpl } = fakeFetch(() => new Response(`<pre>Authorization: Bearer ${enc(token)}</pre>`, { status: 200 }));
+      const res = await simplefactListSales(conn(fetchImpl, { token }), { shortdate: "today" });
+      expect(res).toEqual({ http: 200, body: { raw: "<pre>Authorization: Bearer [token]</pre>" } });
+    });
+
+    for (const [rama, cola] of [
+      ["no es JSON", "</pre>"],
+      ["demasiado grande", "x".repeat(SIMPLEFACT_BODY_MAX_CHARS)],
+    ] as const) {
+      it.each(ENCODINGS)(`%s: ${rama}, cruzando el corte de ${SIMPLEFACT_RAW_MAX_CHARS}`, async (_e, enc) => {
+        const form = enc(token);
+        for (const antes of [form.length - 1, Math.ceil(form.length / 2), 8, 1]) {
+          const head = "a".repeat(SIMPLEFACT_RAW_MAX_CHARS - antes);
+          const { fetchImpl } = fakeFetch(() => new Response(`${head}${form}${cola}`, { status: 500 }));
+          const res = await simplefactCreateSale(conn(fetchImpl, { token }), payload());
+          expect(res.http).toBe(500);
+          // Se limpió antes de recortar: lo de antes del token llega tal cual, y
+          // del token no queda ni su comienzo.
+          expect((res.body as { raw: string }).raw).toBe(`${head}[token]${cola}`.slice(0, SIMPLEFACT_RAW_MAX_CHARS));
+          expect(leak(res, token)).toBeNull();
+        }
+      });
+    }
+
+    it.each(ENCODINGS)("%s: en un JSON, como valor y como llave", async (_e, enc) => {
+      const form = enc(token);
+      const { fetchImpl } = fakeFetch(() => json({ message: `Bearer ${form}`, [form]: 1, code: 401 }, 401));
+      const res = await simplefactCreateSale(conn(fetchImpl, { token }), payload());
+      expect(res).toEqual({ http: 401, body: { message: "Bearer [token]", "[token]": 1, code: 401 } });
+    });
+
+    it.each(ENCODINGS)("%s: en el mensaje de un error de red", async (_e, enc) => {
+      const fetchImpl = vi.fn(async () => {
+        throw Object.assign(new TypeError("fetch failed"), { cause: { message: `bad header: "Bearer ${enc(token)}"` } });
+      }) as unknown as typeof fetch;
+      const res = await simplefactCreateSale(conn(fetchImpl, { token }), payload());
+      expect(res).toEqual({ http: null, body: null, error: `No hubo respuesta de SimpleFact (bad header: "Bearer [token]")` });
+    });
+  });
+
+  it("un token que termina en &, %, u o \\ se limpia con su escritura entera, sin dejar la cola", async () => {
+    for (const [token, form] of [
+      ["42|sfAbCdEf&", "42|sfAbCdEf&amp;"],
+      ["42|sfAbCdEf%", "42%7CsfAbCdEf%25"],
+      ["42|sfAbCdEfu", Array.from("42|sfAbCdEfu", (c) => u(c)).join("")],
+      // Texto crudo (la primera barra va sola) con la última escrita en hexadecimal.
+      [`42|sfAb${BS}Cd${BS}`, `42|sfAb${BS}Cd${u(BS)}`],
+    ]) {
+      const { fetchImpl } = fakeFetch(() => new Response(`<p>Bearer ${form} fin</p>`, { status: 500 }));
+      const res = await simplefactCreateSale(conn(fetchImpl, { token }), payload());
+      expect(res.body).toEqual({ raw: "<p>Bearer [token] fin</p>" });
+    }
+  });
+
+  it("una barra invertida del token escrita `\\u005c` dentro de un JSON guardado como texto (nivel 2: `\\\\u005c`)", async () => {
+    // En el nivel 2 la barra de `\` se escapa otra vez: dos barras y la u.
+    // Con una sola barra delante, la del escape quedaría suelta y el token
+    // entero pasaría sin limpiar.
+    const token = `42|sfAbCd${BS}EfGh1234`;
+    const nivel2 = `42|sfAbCd${BS}${BS}u005cEfGh1234`;
+    const { fetchImpl } = fakeFetch(() => new Response(`<p>debug: ${nivel2} fin</p>`, { status: 500 }));
+    const res = await simplefactCreateSale(conn(fetchImpl, { token }), payload());
+    expect(res.body).toEqual({ raw: "<p>debug: [token] fin</p>" });
+  });
+
+  it("tokens al azar con todo el ASCII visible: cada escritura se limpia entera", async () => {
+    // Semilla fija: la misma lista en cada corrida.
+    let seed = 20_261_014;
+    const next = () => (seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648) / 2_147_483_648;
+    const visible = Array.from({ length: 94 }, (_, i) => String.fromCharCode(33 + i)).join("");
+    // La mitad, con los caracteres que más se escapan, para que salgan seguido.
+    const escapados = `${BS}"/<>&'%u0123abcdef|+=;#x`;
+    for (let i = 0; i < 120; i++) {
+      const pool = i % 2 ? visible : escapados;
+      const token = Array.from({ length: 8 + Math.floor(next() * 40) }, () => pool[Math.floor(next() * pool.length)]).join("");
+      for (const [name, enc] of ENCODINGS) {
+        const { fetchImpl } = fakeFetch(() => new Response(`<p>Bearer ${enc(token)} fin</p>`, { status: 500 }));
+        const res = await simplefactCreateSale(conn(fetchImpl, { token }), payload());
+        expect(res.body, `${name}: ${JSON.stringify(token)}`).toEqual({ raw: "<p>Bearer [token] fin</p>" });
+      }
+    }
+  });
+
+  it("un JSON guardado como texto dentro del JSON (las cabeceras de un `debug`)", async () => {
+    const debug = JSON.stringify({ authorization: `Bearer ${php(ODD_TOKEN)}` });
+    const { fetchImpl } = fakeFetch(() => json({ message: "Unauthenticated.", debug }, 401));
+    const res = await simplefactCreateSale(conn(fetchImpl, { token: ODD_TOKEN }), payload());
+    expect(res).toEqual({ http: 401, body: { message: "Unauthenticated.", debug: '{"authorization":"Bearer [token]"}' } });
+  });
+
+  it("una tira larga de barras invertidas no cuelga la limpieza", async () => {
+    // Si una barra del token aceptara «de 1 a 8» barras, la expresión probaría
+    // cada reparto de las 100 barras entre las 12 del token: no terminaría.
+    const token = `a${BS.repeat(12)}z`;
+    const body = `a${BS.repeat(24)}z ${`a${BS.repeat(100)}`.repeat(500)}`;
+    const { fetchImpl } = fakeFetch(() => new Response(body, { status: 500 }));
+    const started = performance.now();
+    const res = await simplefactCreateSale(conn(fetchImpl, { token }), payload());
+    expect(performance.now() - started).toBeLessThan(2_000);
+    expect((res.body as { raw: string }).raw.startsWith(`[token] a${BS.repeat(100)}a`)).toBe(true);
+  });
+
+  it("un token de menos de 8 caracteres sale igual (no se limpia, y tampoco se prueba el limpiador)", async () => {
+    const { fetchImpl, calls } = fakeFetch(() => json({ message: "Token abc1234 inválido" }, 401));
+    const res = await simplefactCreateSale(conn(fetchImpl, { token: "abc1234" }), payload());
+    expect(calls).toHaveLength(1);
+    expect((calls[0]!.init.headers as Record<string, string>).Authorization).toBe("Bearer abc1234");
+    expect(res).toEqual({ http: 401, body: { message: "Token abc1234 inválido" } });
+  });
+
+  it(`un token de más de ${SIMPLEFACT_TOKEN_MAX_CHARS} caracteres no sale a la red`, async () => {
+    const { fetchImpl } = fakeFetch(() => json(DOC_CREATE));
+    const token = "A".repeat(SIMPLEFACT_TOKEN_MAX_CHARS + 1);
+    expect(await simplefactCreateSale(conn(fetchImpl, { token }), payload())).toEqual({
+      http: null,
+      body: null,
+      error: "El token de SimpleFact no es válido",
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it(`un token de ${SIMPLEFACT_TOKEN_MAX_CHARS} caracteres (un JWT largo) sí sale, y se limpia escapado`, async () => {
+    const token = "eyJhbGciOiJSUzI1NiJ9.Ab/c+D=_-".repeat(100).slice(0, SIMPLEFACT_TOKEN_MAX_CHARS);
+    const head = "a".repeat(SIMPLEFACT_RAW_MAX_CHARS - 100);
+    const { fetchImpl } = fakeFetch(() => new Response(`${head}${php(token)}${"x".repeat(SIMPLEFACT_BODY_MAX_CHARS)}`, { status: 500 }));
+    const res = await simplefactCreateSale(conn(fetchImpl, { token }), payload());
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect((res.body as { raw: string }).raw).toBe(`${head}[token]${"x".repeat(93)}`);
+  });
+
+  describe("si el motor no puede correr el limpiador (V8 sin pila al compilar)", () => {
+    type ReplaceFn = (this: RegExp, subject: string, replacement: string) => string;
+    const proto = RegExp.prototype as unknown as Record<typeof Symbol.replace, ReplaceFn>;
+
+    /** Hace fallar la expresión del limpiador (la única larga) cuando `when` lo dice. */
+    function breakScrubber(when: (subject: string) => boolean) {
+      const original = proto[Symbol.replace];
+      return vi.spyOn(proto, Symbol.replace).mockImplementation(function (this: RegExp, subject, replacement) {
+        if (this.source.length > 1_000 && when(String(subject))) {
+          throw new SyntaxError("Invalid regular expression: Stack overflow");
+        }
+        return original.call(this, subject, replacement);
+      });
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("si falla desde el comienzo, no se envía nada", async () => {
+      breakScrubber(() => true);
+      const { fetchImpl } = fakeFetch(() => json(DOC_CREATE));
+      const res = await simplefactCreateSale(conn(fetchImpl), payload());
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(res).toEqual({ http: null, body: null, error: "El token de SimpleFact no es válido" });
+    });
+
+    it("si falla con la respuesta, no se devuelve nada del texto, no lanza y el código sigue mandando", async () => {
+      breakScrubber((subject) => subject.length > 10_000);
+      const page = `<pre>Authorization: Bearer ${TOKEN}</pre>${" ".repeat(20_000)}`;
+      for (const status of [500, 201]) {
+        const { fetchImpl } = fakeFetch(() => new Response(page, { status }));
+        const res = await simplefactCreateSale(conn(fetchImpl), payload());
+        expect(res).toEqual({ http: status, body: { raw: "[token]" } });
+      }
+      const { fetchImpl } = fakeFetch(() => new Response(page, { status: 201 }));
+      const res = await simplefactCreateSale(conn(fetchImpl), payload());
+      expect(classifySaleResponse(res.http, res.body, RUC_GF).status).toBe("en_duda");
+    });
   });
 });
 

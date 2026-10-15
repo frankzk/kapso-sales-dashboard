@@ -34,6 +34,9 @@ const amt = (amount: string) => ({ shopMoney: { amount } });
 
 type Node = Record<string, unknown>;
 
+/** El nombre de la pasarela del checkout tal como sale en `paymentGatewayNames` (lib/payment-gateway.ts). */
+const FLOW_CHECKOUT = "Checkout Flow | Tarjeta, Transf., Cuotas débito";
+
 function lineNode(over: Node = {}): Node {
   return {
     id: "gid://shopify/LineItem/16401234567",
@@ -109,6 +112,7 @@ describe("mapOrderForInvoice: ítems al céntimo", () => {
       financialStatus: "PENDING",
       gatewayNames: ["Cash on Delivery (COD)"],
       paidCents: 0,
+      otherPaidCents: 0,
       netPaymentCents: 0,
       outstandingCents: 9990,
     });
@@ -320,6 +324,35 @@ describe("mapOrderForInvoice: ítems al céntimo", () => {
       ),
     );
     expect(read.payment.paidCents).toBe(9990);
+    expect(read.payment.otherPaidCents).toBe(0);
+  });
+
+  it("lo que cobró otra pasarela va aparte de lo de Flow", () => {
+    const tx = (gateway: unknown, status: string, amount: string, over: Node = {}) => ({
+      kind: "SALE",
+      status,
+      gateway,
+      test: false,
+      amountSet: amt(amount),
+      ...over,
+    });
+    const read = ok(
+      mapOrderForInvoice(
+        orderNode({
+          transactions: [
+            tx(FLOW_CHECKOUT, "SUCCESS", "40.0"),
+            tx("manual", "SUCCESS", "59.9"),
+            tx("gift_card", "SUCCESS", "5.0"),
+            tx("manual", "FAILURE", "99.9"),
+            tx("manual", "SUCCESS", "7.0", { test: true }),
+            // Sin nombre de pasarela no se sabe quién cobró: no es de Flow.
+            tx(null, "SUCCESS", "1.0"),
+          ],
+        }),
+      ),
+    );
+    expect(read.payment.paidCents).toBe(4000);
+    expect(read.payment.otherPaidCents).toBe(6590);
   });
 });
 
@@ -467,6 +500,8 @@ describe("mapOrderForInvoice: bloqueos", () => {
     ["sin impuesto cuando no va incluido", { taxesIncluded: false, totalTaxSet: null }],
     ["sin netPaymentSet", { netPaymentSet: undefined }],
     ["sin transacciones", { transactions: undefined }],
+    ["sin paymentGatewayNames", { paymentGatewayNames: undefined }],
+    ["una pasarela que no es texto", { paymentGatewayNames: [FLOW_CHECKOUT, null] }],
     ["sin líneas", { lineItems: undefined }],
     ["sin envíos", { shippingLines: undefined }],
     ["una cantidad que no es entera", { lineItems: { pageInfo: { hasNextPage: false }, nodes: [lineNode({ quantity: 1.5, currentQuantity: 1.5 })] } }],
@@ -495,29 +530,32 @@ describe("mapOrderForInvoice: bloqueos", () => {
 // ── webPrepaidConfirmed ──────────────────────────────────────────────────────
 
 describe("webPrepaidConfirmed", () => {
+  /** Una venta aprobada de la pasarela que se diga. */
+  const sale = (gateway: unknown, amount = "99.9", over: Node = {}): Node => ({
+    kind: "SALE",
+    status: "SUCCESS",
+    gateway,
+    formattedGateway: null,
+    test: false,
+    amountSet: amt(amount),
+    ...over,
+  });
+
   const prepaid = (over: Node = {}) =>
     ok(
       mapOrderForInvoice(
         orderNode({
           displayFinancialStatus: "PAID",
-          paymentGatewayNames: ["Checkout Flow | Tarjeta, Transf., Cuotas débito"],
+          paymentGatewayNames: [FLOW_CHECKOUT],
           netPaymentSet: amt("99.9"),
           totalOutstandingSet: amt("0.0"),
-          transactions: [
-            {
-              kind: "SALE",
-              status: "SUCCESS",
-              gateway: "Checkout Flow | Tarjeta, Transf., Cuotas débito",
-              test: false,
-              amountSet: amt("99.9"),
-            },
-          ],
+          transactions: [sale(FLOW_CHECKOUT)],
           ...over,
         }),
       ),
     );
 
-  it("pagado, lo aprobado igual al total, neto igual al total y nada pendiente", () => {
+  it("pagado, lo que cobró Flow igual al total, neto igual al total y nada pendiente", () => {
     expect(webPrepaidConfirmed(prepaid())).toBe(true);
   });
 
@@ -529,15 +567,111 @@ describe("webPrepaidConfirmed", () => {
   it.each<[string, Node]>([
     ["no dice pagado", { displayFinancialStatus: "PARTIALLY_PAID" }],
     ["estado vacío", { displayFinancialStatus: null }],
-    ["lo aprobado no llega al total", { transactions: [{ kind: "SALE", status: "SUCCESS", gateway: "x", test: false, amountSet: amt("50.0") }] }],
-    ["la transacción es de prueba", { transactions: [{ kind: "SALE", status: "SUCCESS", gateway: "x", test: true, amountSet: amt("99.9") }] }],
-    ["solo autorizado", { transactions: [{ kind: "AUTHORIZATION", status: "SUCCESS", gateway: "x", test: false, amountSet: amt("99.9") }] }],
+    ["lo aprobado no llega al total", { transactions: [sale(FLOW_CHECKOUT, "50.0")] }],
+    ["la transacción es de prueba", { transactions: [sale(FLOW_CHECKOUT, "99.9", { test: true })] }],
+    ["solo autorizado", { transactions: [sale(FLOW_CHECKOUT, "99.9", { kind: "AUTHORIZATION" })] }],
     ["lo neto no es el total", { netPaymentSet: amt("89.9") }],
     ["queda algo pendiente", { totalOutstandingSet: amt("10.0") }],
     ["pagado de más", { totalOutstandingSet: amt("-10.0") }],
     ["marcado a mano, sin transacciones", { paymentGatewayNames: ["manual"], transactions: [] }],
   ])("no confirma: %s", (_label, over) => {
     expect(webPrepaidConfirmed(prepaid(over))).toBe(false);
+  });
+
+  // La boleta va al RUC de la cuenta de Flow (§35.2): solo cubre lo que cobró
+  // Flow. `classifyPaymentGateway` dice «checkout» con que UNA pasarela sea
+  // Flow, así que un pedido Flow + «manual» llega hasta aquí como prepago web.
+  describe("solo cuenta el dinero que entró por Flow", () => {
+    it("Flow falló y alguien lo marcó pagado a mano por el total: no", () => {
+      const read = prepaid({
+        paymentGatewayNames: [FLOW_CHECKOUT, "manual"],
+        transactions: [sale(FLOW_CHECKOUT, "99.9", { status: "FAILURE" }), sale("manual")],
+      });
+      expect(read.payment).toMatchObject({ paidCents: 0, otherPaidCents: 9990, netPaymentCents: 9990 });
+      expect(webPrepaidConfirmed(read)).toBe(false);
+    });
+
+    it("Flow cobró una parte y el resto fue «manual»: no", () => {
+      const read = prepaid({
+        paymentGatewayNames: [FLOW_CHECKOUT, "manual"],
+        transactions: [sale(FLOW_CHECKOUT, "40.0"), sale("manual", "59.9")],
+      });
+      expect(read.payment).toMatchObject({ paidCents: 4000, otherPaidCents: 5990 });
+      expect(webPrepaidConfirmed(read)).toBe(false);
+    });
+
+    it("aunque las pasarelas del pedido sean solo Flow, una venta aprobada de otra pasarela bloquea", () => {
+      // El nombre del pedido no basta: la transacción dice quién cobró.
+      const read = prepaid({ transactions: [sale(FLOW_CHECKOUT, "40.0"), sale("manual", "59.9")] });
+      expect(webPrepaidConfirmed(read)).toBe(false);
+      const otra = prepaid({ transactions: [sale("manual")] });
+      expect(otra.payment).toMatchObject({ paidCents: 0, otherPaidCents: 9990 });
+      expect(webPrepaidConfirmed(otra)).toBe(false);
+    });
+
+    it("Flow cobró el total y además hay una tarjeta de regalo por S/ 0: no, la pasarela no es solo Flow", () => {
+      const read = prepaid({
+        paymentGatewayNames: [FLOW_CHECKOUT, "gift_card"],
+        transactions: [sale(FLOW_CHECKOUT), sale("gift_card", "0.0")],
+      });
+      expect(read.payment).toMatchObject({ paidCents: 9990, otherPaidCents: 0 });
+      expect(webPrepaidConfirmed(read)).toBe(false);
+    });
+
+    it.each<[string, string[]]>([
+      ["Flow y «manual»", [FLOW_CHECKOUT, "manual"]],
+      ["Flow y contraentrega", [FLOW_CHECKOUT, "Cash on Delivery (COD)"]],
+      ["Flow y una pasarela sin nombre", [FLOW_CHECKOUT, ""]],
+      ["un «Checkout Flow» que no es el confirmado", ["Checkout Flow"]],
+      ["solo «manual»", ["manual"]],
+      ["ninguna pasarela", []],
+    ])("las pasarelas del pedido son %s: no, aunque las transacciones cuadren", (_label, paymentGatewayNames) => {
+      const read = prepaid({ paymentGatewayNames });
+      expect(read.payment).toMatchObject({ paidCents: 9990, otherPaidCents: 0 });
+      expect(webPrepaidConfirmed(read)).toBe(false);
+    });
+
+    it("el nombre de la pasarela del pedido se compara sin tildes, mayúsculas ni espacios de más", () => {
+      const read = prepaid({ paymentGatewayNames: ["  checkout flow |  tarjeta, transf., CUOTAS DEBITO "] });
+      expect(webPrepaidConfirmed(read)).toBe(true);
+    });
+
+    // El texto de `gateway` de una transacción de Flow nunca se ha visto en
+    // producción: se acepta el nombre del checkout o la palabra «flow».
+    it.each<[string, Node]>([
+      ["el nombre del checkout, con tilde", sale(FLOW_CHECKOUT)],
+      ["el nombre del checkout, sin tilde", sale("Checkout Flow | Tarjeta, Transf., Cuotas debito")],
+      ["el nombre del checkout con la tilde descompuesta (NFD)", sale(FLOW_CHECKOUT.normalize("NFD"))],
+      ["solo en formattedGateway", sale(null, "99.9", { formattedGateway: FLOW_CHECKOUT })],
+      ["un handle «flow_cl»", sale("flow_cl")],
+      ["«Flow» a secas", sale("Flow")],
+      ["«FLOW» en formattedGateway y un handle raro en gateway", sale("pasarela_123", "99.9", { formattedGateway: "FLOW" })],
+      ["«Flow Chile»", sale("Flow Chile")],
+    ])("la transacción es de Flow: %s", (_label, transaction) => {
+      const read = prepaid({ transactions: [transaction] });
+      expect(read.payment).toMatchObject({ paidCents: 9990, otherPaidCents: 0 });
+      expect(webPrepaidConfirmed(read)).toBe(true);
+    });
+
+    it.each<[string, Node]>([
+      ["«manual»", sale("manual")],
+      ["contraentrega", sale("Cash on Delivery (COD)")],
+      ["tarjeta de regalo", sale("gift_card")],
+      ["sin gateway ni formattedGateway", sale(null)],
+      ["un texto vacío", sale("   ", "99.9", { formattedGateway: "" })],
+      ["«flow» dentro de otra palabra", sale("overflow_payments", "99.9", { formattedGateway: "Cashflow" })],
+      ["otra pasarela", sale("mercado_pago")],
+    ])("la transacción NO es de Flow: %s", (_label, transaction) => {
+      const read = prepaid({ transactions: [transaction] });
+      expect(read.payment).toMatchObject({ paidCents: 0, otherPaidCents: 9990 });
+      expect(webPrepaidConfirmed(read)).toBe(false);
+    });
+
+    it("un `payment` armado sin otherPaidCents no confirma", () => {
+      const read = prepaid();
+      const { otherPaidCents: _omitido, ...sinOtro } = read.payment;
+      expect(webPrepaidConfirmed({ ...read, payment: sinOtro as typeof read.payment })).toBe(false);
+    });
   });
 });
 
@@ -568,6 +702,8 @@ describe("ORDER_FOR_INVOICE_QUERY", () => {
       "shippingLines(first: 10, includeRemovals: true)",
       "isRemoved",
       "transactions(first: 20)",
+      "gateway",
+      "formattedGateway",
     ]) {
       expect(ORDER_FOR_INVOICE_QUERY).toContain(field);
     }

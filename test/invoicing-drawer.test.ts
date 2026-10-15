@@ -5,8 +5,11 @@
 // lectura caída no se pinta como «sin comprobante» ni como «lista para
 // emitirse» (§35.3, falla cerrada); registrar uno externo, pedir un reintento y
 // liberar uno en duda piden «Boletas y facturas» y solo valen desde el estado
-// que corresponde; y el panel no arrastra node:crypto al navegador. La base,
-// los permisos y el módulo del barrido van simulados: aquí se mira el drawer.
+// que corresponde; una emitida con archivos de otro RUC no se pinta como una
+// emitida más; lo que Shopify frena no se dice «lista para emitirse»; la
+// externa va con el RUC de la cuenta que recibió el pago; y el panel no
+// arrastra node:crypto al navegador. La base, los permisos y las funciones del
+// barrido van simulados (sus constantes no): aquí se mira el drawer.
 
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -71,7 +74,10 @@ vi.mock("@/lib/permissions-access", () => ({
   },
 }));
 // El módulo del barrido lo escribe otro: aquí se usa su contrato, no su base.
-vi.mock("@/lib/invoicing/server", () => ({
+// Sus constantes (`SHOPIFY_LEVEL_REASONS`) son las de verdad: si el barrido
+// suma un motivo de Shopify, el panel tiene que saber qué decir de él.
+vi.mock("@/lib/invoicing/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/invoicing/server")>()),
   loadInvoiceIssuers: async (...a: unknown[]) => {
     st.issuerArgs.push(a);
     if (st.issuersError) throw st.issuersError;
@@ -138,6 +144,7 @@ vi.mock("@/lib/db", () => {
 });
 
 import {
+  confirmDoubtfulInvoice,
   loadInvoicePanel,
   registerExternalInvoice,
   releaseDoubtfulInvoice,
@@ -146,18 +153,30 @@ import {
   type InvoicePanelRow,
 } from "@/app/dashboard/pedidos/invoice-actions";
 import {
+  ConfirmDoubtForm,
   ExternalInvoiceForm,
   OrderInvoicePanel,
   OrderInvoicePanelView,
   ReleaseDoubtForm,
+  SHOPIFY_LATER_TEXT,
+  SHOPIFY_MANUAL_TEXT,
+  SHOPIFY_NO_TOKEN_TEXT,
+  SHOPIFY_RETRY_TEXT,
+  doubtConfirmation,
+  externalInvoiceConfirmation,
   invoicePanelView,
+  reviewIssuerId,
+  shopifyNextText,
 } from "@/components/order-invoice-panel";
+import { SHOPIFY_LEVEL_REASONS, shopifyBlockedReasons } from "@/lib/invoicing/server";
 import {
+  INVOICE_REASONS,
   INVOICE_REASON_LABEL,
   invoiceEligibility,
   invoiceNoteRef,
   type InvoiceIssuer,
   type InvoiceOrderFacts,
+  type InvoiceReason,
 } from "@/lib/invoicing/rules";
 
 const read = (...p: string[]) => readFileSync(resolve(process.cwd(), ...p), "utf8");
@@ -180,6 +199,10 @@ const ISSUER: InvoiceIssuer = {
   checkedRuc: RUC,
 };
 
+/** Otro RUC de la misma organización: con él no entró el pago del pedido de prueba. */
+const OTRO_RUC = "20100000009";
+const OTRO: InvoiceIssuer = { ...ISSUER, id: "iss-2", ruc: OTRO_RUC, legalName: "OTRA EMPRESA S.A.C.", checkedRuc: OTRO_RUC };
+
 /** Un pedido que cumple todo (§35.3): pagado por link de Flow a la pasarela de Grupo GF. */
 const factsFor = (over: Partial<InvoiceOrderFacts> = {}): InvoiceOrderFacts => ({
   orderId: ORDER,
@@ -199,6 +222,7 @@ const factsFor = (over: Partial<InvoiceOrderFacts> = {}): InvoiceOrderFacts => (
       kind: "total",
       amount: 85,
       validationStatus: "validado",
+      registeredAt: "2026-10-14T11:00:00Z",
       validatedAt: "2026-10-14T12:00:00Z",
       vision: null,
       flowLinked: true,
@@ -226,6 +250,7 @@ const dbRow = (over: Record<string, unknown> = {}) => ({
   created_at: "2026-10-14T15:00:00Z",
   retry_requested_at: null,
   basis: { prepaid: false, payments: [{ id: "pay-1", amount: 85, source: "flow", accountIds: ["acc-flow"] }] },
+  ruc_mismatch: false,
   ...over,
 });
 
@@ -245,6 +270,7 @@ const row = (over: Partial<InvoicePanelRow> = {}): InvoicePanelRow => ({
   createdAt: "2026-10-14T15:00:00Z",
   retryRequestedAt: null,
   manual: false,
+  rucMismatch: false,
   items: null,
   ...over,
 });
@@ -252,7 +278,7 @@ const row = (over: Partial<InvoicePanelRow> = {}): InvoicePanelRow => ({
 const panelData = (over: Partial<InvoicePanelData> = {}): InvoicePanelData => ({
   active: true,
   invoices: [],
-  review: { state: "lista", ruc: RUC, legalName: "GRUPO GF S.A.C.", mode: "simulacion" },
+  review: { state: "lista", ruc: RUC, legalName: "GRUPO GF S.A.C.", mode: "simulacion", issuerId: ISSUER.id },
   check: null,
   creditNote: null,
   issuers: [{ id: ISSUER.id, ruc: RUC, legalName: "GRUPO GF S.A.C." }],
@@ -354,7 +380,13 @@ describe("loadInvoicePanel: lo ve quien ve el pedido (§35.7)", () => {
     if (!("data" in res)) return;
     expect(res.data.active).toBe(true);
     expect(res.data.invoices).toEqual([]);
-    expect(res.data.review).toEqual({ state: "lista", ruc: RUC, legalName: "GRUPO GF S.A.C.", mode: "simulacion" });
+    expect(res.data.review).toEqual({
+      state: "lista",
+      ruc: RUC,
+      legalName: "GRUPO GF S.A.C.",
+      mode: "simulacion",
+      issuerId: ISSUER.id,
+    });
     expect(res.data.canManage).toBe(true);
     expect(st.permArgs).toContainEqual([ORG, "invoices.manage"]);
     expect(st.factsArgs[0]?.[1]).toEqual([ORDER]);
@@ -389,6 +421,7 @@ describe("loadInvoicePanel: lo ve quien ve el pedido (§35.7)", () => {
       "created_at",
       "retry_requested_at",
       "basis",
+      "ruc_mismatch",
     ]);
     expect("data" in res && res.data.invoices).toEqual([
       row({ legalName: "GRUPO GF S.A.C.", items: null }),
@@ -509,7 +542,7 @@ describe("loadInvoicePanel: leer mal no es «no tiene» (§35.3, falla cerrada)"
   it("en una tienda que no está activa no se dice «lista»: el barrido no pasa por ella", async () => {
     st.db.store = { org_id: ORG, status: "inactive" };
     const res = await loadInvoicePanel(ORDER);
-    expect("data" in res && res.data.review).toEqual({ state: "no", reason: "tienda", detail: null });
+    expect("data" in res && res.data.review).toEqual({ state: "no", reason: "tienda", detail: null, issuerId: ISSUER.id });
   });
 
   it("un pedido que no cumple dice el primer motivo de §35.3, con su detalle", async () => {
@@ -519,7 +552,197 @@ describe("loadInvoicePanel: leer mal no es «no tiene» (§35.3, falla cerrada)"
       state: "no",
       reason: "cuenta_sin_ruc",
       detail: "Aurela Kenku no tiene RUC.",
+      // Sin RUC no hay a cuál preelegir en «Ya tiene comprobante».
+      issuerId: null,
     });
+  });
+
+  it("el de más de S/ 700 no sale solo, pero trae el RUC del pago: «Ya tiene comprobante» lo preelige", async () => {
+    const caro = factsFor({
+      total: 850,
+      issuers: [ISSUER, OTRO],
+      payments: [{ ...factsFor().payments[0]!, amount: 850 }],
+    });
+    const elig = invoiceEligibility(caro);
+    expect(elig).toMatchObject({ ok: false, reason: "monto_mayor_700" });
+    // OTRO primero: si el formulario tomara el primero de la lista, se notaría.
+    st.issuers = [OTRO, ISSUER];
+    st.facts = new Map([[ORDER, caro]]);
+    const res = await loadInvoicePanel(ORDER);
+    expect("data" in res && res.data.review).toEqual({
+      state: "no",
+      reason: "monto_mayor_700",
+      detail: elig.ok ? null : (elig.detail ?? null),
+      issuerId: ISSUER.id,
+    });
+    if (!("data" in res)) return;
+    expect(reviewIssuerId(res.data.review)).toBe(ISSUER.id);
+    const form = renderToStaticMarkup(
+      createElement(ExternalInvoiceForm, {
+        issuers: res.data.issuers,
+        defaultIssuerId: reviewIssuerId(res.data.review),
+        pending: false,
+        onSubmit: async () => true,
+        onCancel: () => {},
+      }),
+    );
+    expect(form).toContain(`<option value="${ISSUER.id}" selected="">${RUC} · GRUPO GF S.A.C.</option>`);
+    expect(form).not.toContain(`<option value="${OTRO.id}" selected="">`);
+  });
+});
+
+describe("loadInvoicePanel: una emitida con archivos de otro RUC (FIX F)", () => {
+  it("trae la marca `ruc_mismatch` y su error", async () => {
+    const error = `SimpleFact contestó con archivos del RUC ${OTRO_RUC}, no del ${RUC}.`;
+    st.db.invoices = [dbRow({ ruc_mismatch: true, error })];
+    const res = await loadInvoicePanel(ORDER);
+    expect("data" in res && res.data.invoices[0]).toMatchObject({ status: "emitida", rucMismatch: true, error });
+    st.db.invoices = [dbRow()];
+    const bien = await loadInvoicePanel(ORDER);
+    expect("data" in bien && bien.data.invoices[0]?.rucMismatch).toBe(false);
+  });
+});
+
+/** Lo que guarda el barrido en `invoice_order_checks`. */
+const checkRow = (reason: string, over: Record<string, unknown> = {}) => ({
+  mode: "simulacion",
+  reason,
+  detail: null,
+  checked_at: "2026-10-14T14:50:00Z",
+  ...over,
+});
+
+/** Cómo se dice cada motivo de Shopify. Un motivo nuevo sin fila aquí hace fallar la prueba. */
+const SHOPIFY_RETRY_EXPECTED: Record<string, boolean> = {
+  prueba: false,
+  editado: false,
+  cantidad_editada: false,
+  envio_editado: false,
+  propina: false,
+  gift_card: false,
+  linea_gratuita: false,
+  impuesto_encima: false,
+  demasiadas_lineas: false,
+  no_cuadra: false,
+  total_distinto: false,
+  pago_web_no_confirmado: false,
+  no_encontrado: false,
+  lectura_fallida: true,
+  sin_token_shopify: true,
+};
+
+describe("loadInvoicePanel: lo que frena Shopify no es «lista» (FIX G)", () => {
+  it("las reglas de Kapta se cumplen pero la última pasada lo frenó en Shopify: eso manda", async () => {
+    st.db.checks = [checkRow("editado")];
+    const res = await loadInvoicePanel(ORDER);
+    expect("data" in res && res.data.review).toEqual({
+      state: "shopify",
+      ruc: RUC,
+      legalName: "GRUPO GF S.A.C.",
+      mode: "simulacion",
+      issuerId: ISSUER.id,
+      reason: "editado",
+      detail: null,
+      checkedAt: "2026-10-14T14:50:00Z",
+      retry: false,
+      waitsHours: true,
+    });
+    // Hacen falta las dos revisiones (una por modo), no solo la más nueva.
+    expect((callsTo("invoice_order_checks")[0]?.filters ?? []).some(([m]) => m === "limit")).toBe(false);
+  });
+
+  it.each([...SHOPIFY_LEVEL_REASONS, "lectura_fallida" as InvoiceReason])(
+    "«%s» de Shopify frena, y se sabe si se reintenta solo",
+    async (reason) => {
+      expect(SHOPIFY_RETRY_EXPECTED[reason], `falta decir cómo se enseña «${reason}»`).toBeDefined();
+      st.db.checks = [checkRow(reason, { detail: reason === "no_cuadra" ? "Faltan S/ 0.01." : null })];
+      const res = await loadInvoicePanel(ORDER);
+      expect("data" in res && res.data.review).toMatchObject({
+        state: "shopify",
+        reason,
+        retry: SHOPIFY_RETRY_EXPECTED[reason],
+      });
+    },
+  );
+
+  // El texto lo manda la lista del barrido: si un motivo entra o sale de
+  // `SHOPIFY_LEVEL_REASONS` (el `p_blocked` de la base), lo que se promete cambia
+  // con él. Recorre TODOS los motivos, no una copia de la lista.
+  it.each([...INVOICE_REASONS])("«%s»: el panel promete lo que hace el barrido", async (reason) => {
+    st.db.checks = [checkRow(reason, { detail: reason === "no_cuadra" ? "Faltan S/ 0.01." : null })];
+    const res = await loadInvoicePanel(ORDER);
+    if (!("data" in res)) throw new Error(res.error);
+    const review = res.data.review;
+    const shopify = SHOPIFY_LEVEL_REASONS.has(reason) || reason === "lectura_fallida";
+    expect(review.state).toBe(shopify ? "shopify" : "lista");
+    if (review.state !== "shopify") return;
+    const t = texto(pinta(res.data));
+    expect(review.waitsHours).toBe(SHOPIFY_LEVEL_REASONS.has(reason));
+    if (SHOPIFY_LEVEL_REASONS.has(reason)) {
+      // No se relee en 6 horas: nada de «la próxima pasada».
+      expect(t).not.toMatch(/próxima pasada/i);
+      expect(t).toContain(review.retry ? "Se vuelve a revisar en unas horas" : SHOPIFY_MANUAL_TEXT);
+    } else {
+      // Se relee en la próxima pasada, y se dice una vez.
+      expect(t.match(/próxima pasada/gi)).toHaveLength(1);
+    }
+  });
+
+  it("la lista del panel es la que salta la base: `p_blocked` y 6 horas", () => {
+    expect(shopifyBlockedReasons()).toEqual([...SHOPIFY_LEVEL_REASONS].sort());
+    expect(read("lib/invoicing/server.ts")).toContain("p_blocked: shopifyBlockedReasons(),");
+    // `invoice_candidates` la crea la 0260 (la 0257 que corrió en producción no la tenía).
+    const sql = read("db/migrations/0260_invoices_hardening.sql").replace(/\s+/g, " ");
+    expect(sql).toContain("and c.reason = any (coalesce(p_blocked, '{}'::text[])) and c.checked_at > now() - interval '6 hours'");
+  });
+
+  it("cada motivo que el panel clasifica es de Shopify (la tabla no se queda con sobras)", () => {
+    const shopify = new Set<string>([...SHOPIFY_LEVEL_REASONS, "lectura_fallida"]);
+    expect(Object.keys(SHOPIFY_RETRY_EXPECTED).filter((r) => !shopify.has(r))).toEqual([]);
+  });
+
+  it("un motivo del turno (el tope) no frena las reglas: sigue lista y se enseña aparte", async () => {
+    st.db.checks = [checkRow("tope")];
+    const res = await loadInvoicePanel(ORDER);
+    expect("data" in res && res.data.review.state).toBe("lista");
+    expect("data" in res && res.data.check?.reason).toBe("tope");
+  });
+
+  it("un motivo que no se conoce no se inventa como bloqueo", async () => {
+    st.db.checks = [checkRow("algo_nuevo")];
+    const res = await loadInvoicePanel(ORDER);
+    expect("data" in res && res.data.review.state).toBe("lista");
+  });
+
+  it("si Kapta ya dice que no, ese es el motivo: Shopify viene después", async () => {
+    st.db.checks = [checkRow("editado")];
+    st.facts = new Map([[ORDER, factsFor({ cancelledAt: "2026-10-14T18:00:00Z" })]]);
+    const res = await loadInvoicePanel(ORDER);
+    expect("data" in res && res.data.review).toMatchObject({ state: "no", reason: "anulado" });
+  });
+
+  it("la revisión del otro modo frena si es de Shopify y más nueva (el barrido la respeta)", async () => {
+    st.db.checks = [
+      checkRow("editado", { mode: "real", checked_at: "2026-10-14T15:00:00Z" }),
+      checkRow("tope", { checked_at: "2026-10-14T14:00:00Z" }),
+    ];
+    let res = await loadInvoicePanel(ORDER);
+    expect("data" in res && res.data.review).toMatchObject({ state: "shopify", reason: "editado", mode: "simulacion" });
+    // Sin revisión propia, también.
+    st.db.checks = [checkRow("editado", { mode: "real" })];
+    res = await loadInvoicePanel(ORDER);
+    expect("data" in res && res.data.review.state).toBe("shopify");
+    // Una propia más nueva que no es de Shopify: Shopify ya se volvió a leer y pasó.
+    st.db.checks = [
+      checkRow("tope", { checked_at: "2026-10-14T15:00:00Z" }),
+      checkRow("editado", { mode: "real", checked_at: "2026-10-14T14:00:00Z" }),
+    ];
+    res = await loadInvoicePanel(ORDER);
+    expect("data" in res && res.data.review.state).toBe("lista");
+    // `lectura_fallida` del otro modo no cuenta: el barrido la reintenta siempre.
+    st.db.checks = [checkRow("lectura_fallida", { mode: "real" })];
+    res = await loadInvoicePanel(ORDER);
+    expect("data" in res && res.data.review.state).toBe("lista");
   });
 });
 
@@ -662,6 +885,84 @@ describe("registerExternalInvoice: «Ya tiene comprobante» (§35.4)", () => {
   });
 });
 
+describe("registerExternalInvoice: el RUC es el de la cuenta que recibió el pago (FIX H)", () => {
+  beforeEach(() => {
+    st.issuers = [ISSUER, OTRO];
+    st.facts = new Map([[ORDER, factsFor({ issuers: [ISSUER, OTRO] })]]);
+  });
+
+  const MISMO_RUC = `El pago entró a una cuenta del RUC ${RUC}: registra el comprobante de ese RUC.`;
+
+  it("con el pago en una cuenta de Grupo GF, la boleta de otro RUC no se registra", async () => {
+    expect(await registerExternalInvoice(ORDER, OTRO.id, "B001-123", "")).toEqual({ error: MISMO_RUC });
+    expect(writes()).toEqual([]);
+    expect(st.factsArgs[0]?.[1]).toEqual([ORDER]);
+  });
+
+  it("el de más de S/ 700 (el caso de la externa) también: las reglas saben el RUC aunque no emitan", async () => {
+    const caro = factsFor({
+      total: 850,
+      issuers: [ISSUER, OTRO],
+      payments: [{ ...factsFor().payments[0]!, amount: 850 }],
+    });
+    expect(invoiceEligibility(caro)).toMatchObject({ ok: false, reason: "monto_mayor_700", issuerId: ISSUER.id });
+    st.facts = new Map([[ORDER, caro]]);
+    expect(await registerExternalInvoice(ORDER, OTRO.id, "B001-123", "")).toEqual({ error: MISMO_RUC });
+    expect(writes()).toEqual([]);
+    expect((await registerExternalInvoice(ORDER, ISSUER.id, "B001-123", "")).notice).toMatch(/registrado/);
+    expect((callsTo("order_invoices", "insert")[0]!.payload as Record<string, unknown>).issuer_id).toBe(ISSUER.id);
+  });
+
+  it("si las reglas no saben el RUC (cuenta sin RUC), vale el que elige quien registra", async () => {
+    st.facts = new Map([
+      [ORDER, factsFor({ issuers: [ISSUER, OTRO], accounts: [{ ...factsFor().accounts[0]!, issuerId: null }] })],
+    ]);
+    expect((await registerExternalInvoice(ORDER, OTRO.id, "B001-123", "")).notice).toMatch(/registrado/);
+    expect((callsTo("order_invoices", "insert")[0]!.payload as Record<string, unknown>).ruc).toBe(OTRO_RUC);
+  });
+
+  it("con RUC mezclados las reglas tampoco lo saben: vale el que elige quien registra", async () => {
+    // Dos cuentas de la pasarela, cada una de un RUC: el pago por Flow no dice de cuál.
+    const mezclados = factsFor({
+      issuers: [ISSUER, OTRO],
+      accounts: [
+        factsFor().accounts[0]!,
+        { id: "acc-flow-2", label: "Otra pasarela", aliases: [], phoneLastDigits: null, issuerId: OTRO.id },
+      ],
+    });
+    expect(invoiceEligibility(mezclados)).toMatchObject({ ok: false, reason: "ruc_mezclados" });
+    st.facts = new Map([[ORDER, mezclados]]);
+    expect((await registerExternalInvoice(ORDER, OTRO.id, "B001-123", "")).notice).toMatch(/registrado/);
+  });
+
+  // FIX: una lectura caída de los hechos caía en «no se sabe» y dejaba registrar
+  // cualquier RUC. La externa no se corrige después: una caída de la base dejaba
+  // al pedido, para siempre, con la boleta de una empresa que no cobró.
+  const SIN_COMPROBAR = "No se pudo comprobar a qué RUC entró el pago; intenta de nuevo.";
+
+  it("si los hechos no se pudieron leer, no se registra: ni otro RUC ni el que sería (falla cerrada)", async () => {
+    st.factsError = new Error("No se pudo leer order_payments: timeout");
+    expect(await registerExternalInvoice(ORDER, OTRO.id, "B001-123", "")).toEqual({ error: SIN_COMPROBAR });
+    expect(await registerExternalInvoice(ORDER, ISSUER.id, "B001-123", "")).toEqual({ error: SIN_COMPROBAR });
+    expect(writes()).toEqual([]);
+    // Ni siquiera llega a leer el pedido para armar la fila.
+    expect(callsTo("orders")).toEqual([]);
+    // Cuando la lectura vuelve, se registra como siempre.
+    st.factsError = null;
+    expect((await registerExternalInvoice(ORDER, ISSUER.id, "B001-123", "")).notice).toMatch(/registrado/);
+  });
+
+  it("si el lector no devolvió el pedido, tampoco: no se comprobó nada", async () => {
+    st.facts = new Map();
+    expect(await registerExternalInvoice(ORDER, OTRO.id, "B001-124", "")).toEqual({ error: SIN_COMPROBAR });
+    expect(writes()).toEqual([]);
+  });
+
+  it("con el RUC correcto se registra como siempre", async () => {
+    expect((await registerExternalInvoice(ORDER, ISSUER.id, "B001-123", "")).notice).toMatch(/registrado/);
+  });
+});
+
 describe("requestInvoiceRetry: «Volver a intentar» (§35.4)", () => {
   it("pide «Boletas y facturas» y no escribe sin él", async () => {
     st.orgPerms = { [ORG]: [] };
@@ -787,6 +1088,136 @@ describe("releaseDoubtfulInvoice: «No está en SimpleFact: volver a intentar» 
   });
 });
 
+describe("confirmDoubtfulInvoice: «Sí está en SimpleFact: registrar su serie» (§35.4)", () => {
+  // Un `en_duda` que una persona SÍ encontró en SimpleFact. Antes la única
+  // salida era liberarlo, y liberar una boleta que existe es emitir otra.
+  const enDuda = (over: Record<string, unknown> = {}) => ({
+    id: INVOICE,
+    org_id: ORG,
+    order_id: ORDER,
+    mode: "real",
+    status: "en_duda",
+    retry_requested_at: null,
+    invoice_type: "03",
+    ...over,
+  });
+  const NOTA = "Encontrada en las ventas de ayer con la nota Kapta 6f1c2a3b";
+
+  beforeEach(() => {
+    st.db.invoiceRef = enDuda();
+  });
+
+  it("pasa a emitida con su serie, dónde se encontró y quién; filtra por el estado de partida", async () => {
+    const res = await confirmDoubtfulInvoice(INVOICE, " b001-0097 ", `  ${NOTA}  `);
+    expect(res).toEqual({
+      notice: "Comprobante B001-97 registrado como emitido: Kapta no emitirá otro por este pedido.",
+    });
+    const update = callsTo("order_invoices", "update")[0]!;
+    expect(update.client).toBe("admin");
+    const payload = update.payload as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      status: "emitida",
+      serie: "B001",
+      correlative: "97",
+      note: NOTA,
+      resolved_by: "user-1",
+    });
+    expect(Number.isFinite(Date.parse(String(payload.resolved_at)))).toBe(true);
+    // Solo eso: el RUC, el total, el tipo y lo enviado no cambian (0257).
+    expect(Object.keys(payload).sort()).toEqual(["correlative", "note", "resolved_at", "resolved_by", "serie", "status"]);
+    expect(has(update, "eq", "id", INVOICE)).toBe(true);
+    expect(has(update, "eq", "status", "en_duda")).toBe(true);
+    // El tipo de la fila se lee con ella.
+    expect(callsTo("order_invoices", "select")[0]?.cols).toContain("invoice_type");
+  });
+
+  it("si la conciliación (u otra persona) la resolvió entre tanto, no se pisa y se dice", async () => {
+    st.db.updateData = [];
+    expect(await confirmDoubtfulInvoice(INVOICE, "B001-97", NOTA)).toEqual({
+      error: "El comprobante ya no está en duda: vuelve a abrir el pedido para ver su estado.",
+    });
+  });
+
+  it("pide «Boletas y facturas» en la organización del pedido, antes de escribir", async () => {
+    st.orgPerms = { [ORG]: ["master.edit"], "otra-org": ["invoices.manage"] };
+    expect((await confirmDoubtfulInvoice(INVOICE, "B001-97", NOTA)).error).toMatch(/^Sin permiso/);
+    expect(st.permArgs).toEqual([[ORG, "invoices.manage"]]);
+    expect(writes()).toEqual([]);
+  });
+
+  it("el comprobante tiene que ser de un pedido que el usuario ve, y de su organización", async () => {
+    st.db.orderMaster = null;
+    expect(await confirmDoubtfulInvoice(INVOICE, "B001-97", NOTA)).toEqual({ error: "Sin acceso a este pedido." });
+    expect(st.permArgs).toEqual([]);
+    st.db.orderMaster = { order_id: ORDER, store_id: STORE };
+    st.db.invoiceRef = enDuda({ org_id: "otra-org" });
+    expect(await confirmDoubtfulInvoice(INVOICE, "B001-97", NOTA)).toEqual({ error: "Sin acceso a este pedido." });
+    st.db.invoiceRef = null;
+    expect(await confirmDoubtfulInvoice(INVOICE, "B001-97", NOTA)).toEqual({ error: "Ese comprobante no existe." });
+    expect(writes()).toEqual([]);
+  });
+
+  it.each(["error", "emitida", "emitiendo", "externa", "simulada"])("desde %s no se confirma", async (status) => {
+    st.db.invoiceRef = enDuda({ status });
+    expect(await confirmDoubtfulInvoice(INVOICE, "B001-97", NOTA)).toEqual({
+      error: "Solo se confirma un comprobante que está en duda.",
+    });
+    expect(writes()).toEqual([]);
+  });
+
+  it("una boleta (03) no se confirma con una serie de factura, ni al revés", async () => {
+    expect(await confirmDoubtfulInvoice(INVOICE, "F001-97", NOTA)).toEqual({
+      error: "Este comprobante es una boleta: su serie empieza con B.",
+    });
+    st.db.invoiceRef = enDuda({ invoice_type: "01" });
+    expect(await confirmDoubtfulInvoice(INVOICE, "B001-97", NOTA)).toEqual({
+      error: "Este comprobante es una factura: su serie empieza con F.",
+    });
+    expect(writes()).toEqual([]);
+    expect((await confirmDoubtfulInvoice(INVOICE, "F001-97", NOTA)).notice).toMatch(/^Comprobante F001-97/);
+  });
+
+  it("si no se sabe de qué tipo es la fila, no se adivina", async () => {
+    st.db.invoiceRef = enDuda({ invoice_type: null });
+    expect((await confirmDoubtfulInvoice(INVOICE, "B001-97", NOTA)).error).toMatch(/boleta o factura: no se confirma/);
+    expect(writes()).toEqual([]);
+  });
+
+  it.each(["97", "B01-1", "B001-", "B001-123456789", "B001 97", "B001-9a"])(
+    "«%s» no es una serie y número, como en «Ya tiene comprobante»",
+    async (typed) => {
+      expect(await confirmDoubtfulInvoice(INVOICE, typed, NOTA)).toEqual({
+        error: "Escribe la serie y el número como en SimpleFact: B001-123.",
+      });
+      expect(writes()).toEqual([]);
+    },
+  );
+
+  it("ni otra letra ni el número 0", async () => {
+    expect((await confirmDoubtfulInvoice(INVOICE, "E001-97", NOTA)).error).toBe(
+      "La serie empieza con B (boleta) o con F (factura).",
+    );
+    expect((await confirmDoubtfulInvoice(INVOICE, "B001-000", NOTA)).error).toBe(
+      "El número del comprobante no puede ser 0.",
+    );
+    expect(writes()).toEqual([]);
+  });
+
+  it.each(["", "   ", "ok", " ayer "])("sin decir dónde se encontró no se da por emitida («%s»)", async (note) => {
+    expect(await confirmDoubtfulInvoice(INVOICE, "B001-97", note)).toEqual({
+      error: "Escribe dónde la encontraste en SimpleFact: queda junto al comprobante.",
+    });
+    expect(writes()).toEqual([]);
+  });
+
+  it("un error de la base se dice, no se da por registrada", async () => {
+    st.db.updateError = { message: "Transición de comprobante no permitida: error → emitida" };
+    expect(await confirmDoubtfulInvoice(INVOICE, "B001-97", NOTA)).toEqual({
+      error: "No se pudo registrar la serie: Transición de comprobante no permitida: error → emitida",
+    });
+  });
+});
+
 describe("las escrituras piden permiso antes de escribir (§35.7, como escrituras-piden-permiso)", () => {
   const ACTIONS = read("app/dashboard/pedidos/invoice-actions.ts");
 
@@ -801,8 +1232,9 @@ describe("las escrituras piden permiso antes de escribir (§35.7, como escritura
   }
   const bodies = exportedBodies(ACTIONS);
 
-  it("leer, registrar, reintentar y liberar: no hay «Emitir» (emite solo el barrido)", () => {
+  it("leer, registrar, reintentar, confirmar y liberar: no hay «Emitir» (emite solo el barrido)", () => {
     expect([...bodies.keys()].sort()).toEqual([
+      "confirmDoubtfulInvoice",
       "loadInvoicePanel",
       "registerExternalInvoice",
       "releaseDoubtfulInvoice",
@@ -815,6 +1247,7 @@ describe("las escrituras piden permiso antes de escribir (§35.7, como escritura
     const WRITES = /\.(insert|update|upsert|delete)\(/;
     const conEscritura = [...bodies].filter(([, body]) => WRITES.test(body));
     expect(conEscritura.map(([name]) => name).sort()).toEqual([
+      "confirmDoubtfulInvoice",
       "registerExternalInvoice",
       "releaseDoubtfulInvoice",
       "requestInvoiceRetry",
@@ -872,9 +1305,34 @@ describe("el panel: el comprobante real vivo", () => {
     expect(gestor).toContain(`«${invoiceNoteRef(INVOICE)}»`);
     expect(gestor).toContain("SimpleFact no respondió.");
     expect(gestor).toContain("No está en SimpleFact: volver a intentar");
+    expect(gestor).toContain("Sí está en SimpleFact: registrar su serie");
     const otro = texto(pinta(panelData({ invoices: [enDuda], canManage: false })));
     expect(otro).not.toContain("No está en SimpleFact: volver a intentar");
+    expect(otro).not.toContain("Sí está en SimpleFact");
     expect(otro).toContain("la revisa quien tiene «Boletas y facturas»");
+  });
+
+  it("en duda: las dos salidas son de quien gestiona, y solo de un en_duda", () => {
+    const enDuda = row({ status: "en_duda", serie: null, correlative: null, pdfUrl: null });
+    expect(invoicePanelView(panelData({ invoices: [enDuda], canManage: true }))).toMatchObject({
+      canConfirm: true,
+      canRelease: true,
+    });
+    expect(invoicePanelView(panelData({ invoices: [enDuda], canManage: false }))).toMatchObject({
+      canConfirm: false,
+      canRelease: false,
+    });
+    for (const status of ["emitida", "emitiendo", "externa"] as const) {
+      const view = invoicePanelView(panelData({ invoices: [row({ status })], canManage: true }));
+      expect(view.canConfirm, status).toBe(false);
+      expect(texto(pinta(panelData({ invoices: [row({ status })], canManage: true })))).not.toContain(
+        "Sí está en SimpleFact",
+      );
+    }
+    // El panel manda la serie y la nota a la acción, con el id de la fila.
+    expect(read("components/order-invoice-panel.tsx")).toContain(
+      "run(() => confirmDoubtfulInvoice(live.id, input.serieNumber, input.note))",
+    );
   });
 
   it("externa: con su serie y que la registró una persona", () => {
@@ -902,6 +1360,119 @@ describe("el panel: el comprobante real vivo", () => {
   });
 });
 
+describe("el panel: emitida con otro RUC (FIX F)", () => {
+  const error = `SimpleFact contestó con archivos del RUC ${OTRO_RUC}, no del ${RUC}.`;
+
+  it("no se pinta como una emitida normal: chapa roja y el aviso con el error", () => {
+    const html = pinta(panelData({ invoices: [row({ rucMismatch: true, error })] }));
+    const t = texto(html);
+    expect(t).toContain("Emitida con otro RUC");
+    expect(html).toMatch(/<span[^>]*bg-crit-bg[^>]*>Emitida con otro RUC<\/span>/);
+    expect(t).toContain(
+      `SimpleFact la emitió con otro RUC: SimpleFact contestó con archivos del RUC ${OTRO_RUC}, no del ${RUC}. Revísala en SimpleFact: puede necesitar anularse o una nota de crédito.`,
+    );
+    expect(html).toMatch(/<div role="alert"[^>]*bg-crit-wash/);
+    // El error no se repite debajo de la boleta.
+    expect(t.split("SimpleFact contestó con archivos").length - 1).toBe(1);
+    expect(invoicePanelView(panelData({ invoices: [row({ rucMismatch: true, error })] })).badge).toEqual({
+      tone: "crit",
+      label: "Emitida con otro RUC",
+    });
+  });
+
+  it("sin el error guardado, igual avisa", () => {
+    const t = texto(pinta(panelData({ invoices: [row({ rucMismatch: true, error: null })] })));
+    expect(t).toContain("SimpleFact la emitió con otro RUC. Revísala en SimpleFact");
+  });
+
+  it("una emitida de su RUC sigue verde y sin aviso", () => {
+    const html = pinta(panelData({ invoices: [row()] }));
+    expect(texto(html)).not.toContain("otro RUC");
+    expect(html).not.toContain('role="alert"');
+    expect(invoicePanelView(panelData({ invoices: [row()] })).badge).toEqual({ tone: "ok", label: "Emitida" });
+  });
+});
+
+describe("el panel: lo que frena Shopify (FIX G)", () => {
+  const frenada = (reason: InvoiceReason, retry: boolean, detail: string | null = null) =>
+    panelData({
+      review: {
+        state: "shopify",
+        ruc: RUC,
+        legalName: "GRUPO GF S.A.C.",
+        mode: "real",
+        issuerId: ISSUER.id,
+        reason,
+        detail,
+        checkedAt: "2026-10-14T14:50:00Z",
+        retry,
+        waitsHours: SHOPIFY_LEVEL_REASONS.has(reason),
+      },
+      check: { mode: "real", reason, detail, checkedAt: "2026-10-14T14:50:00Z" },
+      canManage: true,
+    });
+
+  it("lo que no cambia con otra pasada: no sale sola, se emite a mano y se registra", () => {
+    const data = frenada("editado", false);
+    const t = texto(pinta(data));
+    expect(t).not.toContain("Lista para emitirse");
+    expect(t).not.toContain("Por emitir");
+    expect(t).toContain(INVOICE_REASON_LABEL.editado);
+    expect(t).toContain(SHOPIFY_MANUAL_TEXT);
+    expect(SHOPIFY_MANUAL_TEXT).toBe(
+      "No se emite sola: se emite a mano en SimpleFact y se registra con «Ya tiene comprobante».",
+    );
+    expect(t).toContain("Última pasada (Real,");
+    // La última pasada no se repite debajo: es lo mismo que ya se dijo.
+    expect(t.split("Última pasada").length - 1).toBe(1);
+    // Y se ofrece registrar la que se emita a mano.
+    expect(t).toContain("Ya tiene comprobante");
+    expect(invoicePanelView(data).badge).toEqual({ tone: "warn", label: "Se emite a mano" });
+  });
+
+  // FIX: decía «Se vuelve a intentar en la próxima pasada», pero el barrido no
+  // relee Shopify por `sin_token_shopify` en 6 horas (`p_blocked`).
+  it("sin conexión con Shopify se reintenta solo, pero en horas, no en la próxima pasada", () => {
+    const data = frenada("sin_token_shopify", true);
+    const t = texto(pinta(data));
+    expect(t).toContain(INVOICE_REASON_LABEL.sin_token_shopify);
+    expect(t).toContain(SHOPIFY_NO_TOKEN_TEXT);
+    expect(SHOPIFY_NO_TOKEN_TEXT).toBe(
+      "Se vuelve a revisar en unas horas, cuando la tienda tenga conexión con Shopify.",
+    );
+    expect(t).not.toMatch(/próxima pasada/i);
+    expect(t).not.toContain("se emite a mano");
+    expect(t).not.toContain("Lista para emitirse");
+    expect(invoicePanelView(data).badge).toEqual({ tone: "warn", label: "Espera a Shopify" });
+  });
+
+  it("qué pasa ahora sale de lo que hace el barrido: a mano, en horas o en la próxima pasada", () => {
+    const review = (reason: InvoiceReason, retry: boolean, waitsHours: boolean, detail: string | null = null) =>
+      ({ ...(frenada(reason, retry, detail).review as object), waitsHours }) as Parameters<typeof shopifyNextText>[0];
+    expect(shopifyNextText(review("editado", false, true))).toBe(SHOPIFY_MANUAL_TEXT);
+    expect(shopifyNextText(review("sin_token_shopify", true, true))).toBe(SHOPIFY_NO_TOKEN_TEXT);
+    // Un motivo nuevo que se reintenta y espera horas: en horas, sin inventar por qué.
+    expect(shopifyNextText(review("no_encontrado", true, true))).toBe(SHOPIFY_LATER_TEXT);
+    expect(SHOPIFY_LATER_TEXT).toBe("Se vuelve a revisar en unas horas.");
+    // `lectura_fallida` ya lo dice en su motivo: no se repite.
+    expect(shopifyNextText(review("lectura_fallida", true, false))).toBeNull();
+    // Uno que se relee en la próxima pasada y no lo dice: se dice.
+    expect(shopifyNextText(review("no_encontrado", true, false))).toBe(SHOPIFY_RETRY_TEXT);
+    expect(SHOPIFY_RETRY_TEXT).toBe("Se vuelve a intentar en la próxima pasada.");
+  });
+
+  it("«no se pudo leer» ya dice que se reintenta: no se repite", () => {
+    const t = texto(pinta(frenada("lectura_fallida", true)));
+    expect(t).toContain(INVOICE_REASON_LABEL.lectura_fallida);
+    expect(t.match(/próxima pasada/gi)).toHaveLength(1);
+  });
+
+  it("con el detalle de Shopify", () => {
+    const t = texto(pinta(frenada("no_cuadra", false, "Faltan S/ 0.01.")));
+    expect(t).toContain(`${INVOICE_REASON_LABEL.no_cuadra} Faltan S/ 0.01.`);
+  });
+});
+
 describe("el panel: simulación, errores y lo que dicen las reglas", () => {
   it("simulada: lo que habría enviado, con RUC, total e ítems", () => {
     const t = texto(
@@ -920,7 +1491,7 @@ describe("el panel: simulación, errores y lo que dicen las reglas", () => {
               ],
             }),
           ],
-          review: { state: "no", reason: "ya_simulado", detail: null },
+          review: { state: "no", reason: "ya_simulado", detail: null, issuerId: ISSUER.id },
         }),
       ),
     );
@@ -937,7 +1508,7 @@ describe("el panel: simulación, errores y lo que dicen las reglas", () => {
       pinta(
         panelData({
           invoices: [row({ mode: "simulacion", status: "simulada", items: [] })],
-          review: { state: "lista", ruc: RUC, legalName: "GRUPO GF S.A.C.", mode: "real" },
+          review: { state: "lista", ruc: RUC, legalName: "GRUPO GF S.A.C.", mode: "real", issuerId: ISSUER.id },
         }),
       ),
     );
@@ -947,7 +1518,10 @@ describe("el panel: simulación, errores y lo que dicen las reglas", () => {
 
   it("error: quien gestiona ve «Volver a intentar»; los demás, quién lo hace", () => {
     const error = row({ status: "error", serie: null, correlative: null, pdfUrl: null, error: "El total no cuadra." });
-    const data = { invoices: [error], review: { state: "no" as const, reason: "error_previo" as const, detail: null } };
+    const data = {
+      invoices: [error],
+      review: { state: "no" as const, reason: "error_previo" as const, detail: null, issuerId: ISSUER.id },
+    };
     const gestor = texto(pinta(panelData({ ...data, canManage: true })));
     expect(gestor).toContain("Error · S/ 85.00 · RUC 20556792829");
     expect(gestor).toContain("El total no cuadra.");
@@ -984,7 +1558,11 @@ describe("el panel: simulación, errores y lo que dicen las reglas", () => {
 
   it("sin nada y no cumple: la frase del barrido y su detalle", () => {
     const t = texto(
-      pinta(panelData({ review: { state: "no", reason: "pago_sin_cuenta", detail: "Cobro del courier sin estado de cuenta Yape." } })),
+      pinta(
+        panelData({
+          review: { state: "no", reason: "pago_sin_cuenta", detail: "Cobro del courier sin estado de cuenta Yape.", issuerId: null },
+        }),
+      ),
     );
     expect(t).toContain(`${INVOICE_REASON_LABEL.pago_sin_cuenta} Cobro del courier sin estado de cuenta Yape.`);
     expect(t).not.toContain("Lista para emitirse");
@@ -998,11 +1576,20 @@ describe("el panel: simulación, errores y lo que dicen las reglas", () => {
   });
 
   it("la última pasada se enseña solo si dice otra cosa que la revisión de ahora", () => {
-    const check = { mode: "simulacion", reason: "editado", detail: null, checkedAt: "2026-10-14T14:50:00Z" };
+    // Un motivo del turno (el tope) no frena las reglas: va aparte, debajo de «lista».
+    const check = { mode: "simulacion", reason: "tope", detail: null, checkedAt: "2026-10-14T14:50:00Z" };
     const distinta = texto(pinta(panelData({ check })));
+    expect(distinta).toContain("Lista para emitirse en la próxima pasada");
     expect(distinta).toContain(`Última pasada (Simulación,`);
-    expect(distinta).toContain(INVOICE_REASON_LABEL.editado);
-    const igual = texto(pinta(panelData({ check, review: { state: "no", reason: "editado", detail: null } })));
+    expect(distinta).toContain(INVOICE_REASON_LABEL.tope);
+    const igual = texto(
+      pinta(
+        panelData({
+          check: { ...check, reason: "pago_sin_cuenta" },
+          review: { state: "no", reason: "pago_sin_cuenta", detail: null, issuerId: null },
+        }),
+      ),
+    );
     expect(igual).not.toContain("Última pasada");
     // Con un comprobante vivo, la revisión vieja no importa.
     expect(texto(pinta(panelData({ check, invoices: [row()] })))).not.toContain("Última pasada");
@@ -1025,6 +1612,7 @@ describe("el panel: «Ya tiene comprobante»", () => {
     const html = renderToStaticMarkup(
       createElement(ExternalInvoiceForm, {
         issuers: [{ id: ISSUER.id, ruc: RUC, legalName: "GRUPO GF S.A.C." }],
+        defaultIssuerId: ISSUER.id,
         pending: false,
         onSubmit: async () => true,
         onCancel: () => {},
@@ -1034,6 +1622,107 @@ describe("el panel: «Ya tiene comprobante»", () => {
     expect(html).toContain('placeholder="B001-123"');
     expect(texto(html)).toContain("Kapta no emitirá otra por este pedido");
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Registrar<\/button>/);
+  });
+
+  // FIX H: la externa no se corrige después. Antes venía elegido el primer RUC
+  // por orden alfabético, y un clic sin mirar registraba la boleta de otra empresa.
+  it("sin un RUC que digan las reglas, no viene ninguno elegido: hay que elegirlo", () => {
+    const html = renderToStaticMarkup(
+      createElement(ExternalInvoiceForm, {
+        issuers: [
+          { id: OTRO.id, ruc: OTRO_RUC, legalName: "OTRA EMPRESA S.A.C." },
+          { id: ISSUER.id, ruc: RUC, legalName: "GRUPO GF S.A.C." },
+        ],
+        pending: false,
+        onSubmit: async () => true,
+        onCancel: () => {},
+      }),
+    );
+    expect(html).toContain('<option value="" disabled="" selected="">Elige el RUC</option>');
+    expect(html).not.toMatch(/<option value="iss-[^"]*" selected="">/);
+    expect(html).toMatch(/<select required=""/);
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Registrar<\/button>/);
+    expect(texto(html)).not.toContain("Se registra como comprobante");
+  });
+
+  it("viene elegido el RUC que decidieron las reglas, no el primero de la lista", () => {
+    const html = renderToStaticMarkup(
+      createElement(ExternalInvoiceForm, {
+        issuers: [
+          { id: OTRO.id, ruc: OTRO_RUC, legalName: "OTRA EMPRESA S.A.C." },
+          { id: ISSUER.id, ruc: RUC, legalName: "GRUPO GF S.A.C." },
+        ],
+        defaultIssuerId: ISSUER.id,
+        pending: false,
+        onSubmit: async () => true,
+        onCancel: () => {},
+      }),
+    );
+    expect(html).toContain(`<option value="${ISSUER.id}" selected="">`);
+    expect(html).not.toContain(`<option value="${OTRO.id}" selected="">`);
+    // Uno que ya no es de la organización no se elige.
+    const ajeno = renderToStaticMarkup(
+      createElement(ExternalInvoiceForm, {
+        issuers: [{ id: ISSUER.id, ruc: RUC, legalName: "GRUPO GF S.A.C." }],
+        defaultIssuerId: "iss-borrado",
+        pending: false,
+        onSubmit: async () => true,
+        onCancel: () => {},
+      }),
+    );
+    expect(ajeno).toContain('<option value="" disabled="" selected="">Elige el RUC</option>');
+  });
+
+  it("el RUC de las reglas viaja con la revisión: lista, frenada por Shopify o con motivo", () => {
+    expect(reviewIssuerId(panelData().review)).toBe(ISSUER.id);
+    expect(reviewIssuerId({ state: "no", reason: "monto_mayor_700", detail: null, issuerId: ISSUER.id })).toBe(ISSUER.id);
+    expect(reviewIssuerId({ state: "no", reason: "ruc_mezclados", detail: null, issuerId: null })).toBeNull();
+    expect(reviewIssuerId({ state: "sin_revisar", error: "timeout" })).toBeNull();
+    // El panel se lo pasa al formulario.
+    expect(read("components/order-invoice-panel.tsx")).toContain("defaultIssuerId={reviewIssuerId(review)}");
+  });
+
+  it("antes de registrar dice qué se registra y que no se corrige después", () => {
+    expect(externalInvoiceConfirmation({ ruc: RUC, legalName: "GRUPO GF S.A.C." }, " b001-123 ")).toBe(
+      `Se registra como comprobante de GRUPO GF S.A.C. (RUC ${RUC}), serie B001-123. No se puede corregir después.`,
+    );
+    expect(externalInvoiceConfirmation(null, "B001-123")).toBeNull();
+    expect(externalInvoiceConfirmation({ ruc: RUC, legalName: "GRUPO GF S.A.C." }, "   ")).toBeNull();
+    // El formulario la enseña, y sin ella no se puede pulsar «Registrar».
+    const form = read("components/order-invoice-panel.tsx");
+    expect(form).toContain("const confirmation = externalInvoiceConfirmation(chosen, serieNumber);");
+    expect(form).toMatch(/\{confirmation && <p[^>]*>\{confirmation\}<\/p>\}/);
+    expect(form).toContain("disabled={pending || !confirmation}");
+  });
+
+  it("confirmar un en_duda pide la serie y dónde se encontró, y dice antes qué queda", () => {
+    const enDuda = row({ status: "en_duda", serie: null, correlative: null, pdfUrl: null });
+    const html = renderToStaticMarkup(
+      createElement(ConfirmDoubtForm, { row: enDuda, pending: false, onSubmit: async () => true, onCancel: () => {} }),
+    );
+    const t = texto(html);
+    // Se busca por su nota, en el RUC y por el total de la fila.
+    expect(t).toContain(`«${invoiceNoteRef(INVOICE)}», del RUC ${RUC} y por S/ 85.00`);
+    expect(t).toContain("Kapta no emitirá otra por este pedido");
+    expect(t).toContain("Dónde la encontraste en SimpleFact");
+    expect(html).toContain('placeholder="B001-123"');
+    expect(html).toContain("<textarea");
+    // Sin serie ni nota no se puede pulsar.
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Registrar como emitida<\/button>/);
+    expect(t).not.toContain("Queda como emitida");
+    const form = read("components/order-invoice-panel.tsx");
+    expect(form).toContain("const confirmation = doubtConfirmation(row, serieNumber);");
+    expect(form).toContain("disabled={pending || !confirmation || !note.trim()}");
+  });
+
+  it("lo que queda al confirmar, dicho como lo normaliza el servidor", () => {
+    expect(doubtConfirmation({ ruc: RUC, legalName: "GRUPO GF S.A.C." }, " b001-97 ")).toBe(
+      `Queda como emitida: B001-97 de GRUPO GF S.A.C. (RUC ${RUC}). No se puede corregir después.`,
+    );
+    expect(doubtConfirmation({ ruc: RUC, legalName: null }, "B001-97")).toBe(
+      `Queda como emitida: B001-97 de RUC ${RUC}. No se puede corregir después.`,
+    );
+    expect(doubtConfirmation({ ruc: RUC, legalName: "GRUPO GF S.A.C." }, "   ")).toBeNull();
   });
 
   it("liberar pide escribir qué se revisó en SimpleFact", () => {

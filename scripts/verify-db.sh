@@ -224,20 +224,22 @@ echo "  ✅ unidades × días − días antes, ventana, quien volvió a comprar 
 echo "▶ Repro Lima «Todos» (0256): Lima sin Finalizado por etapa y subetapa, días de Lima, solo service_role"
 $PSQL -f "$ROOT/scripts/sql/lima_open_counts_smoke.sql"
 echo "  ✅ igual a un GROUP BY directo, sin Finalizado ni Provincia, borde de medianoche de Lima, authenticated sin permiso"
-echo "▶ Canal de cierre (0258): un canal por pedido, la venta registrada manda, «ayudado» solo con gestión de la misma tienda en 7 días, y RLS"
+echo "▶ Canal de cierre (0259): un canal por pedido, la venta registrada manda, «ayudado» solo con gestión de la misma tienda en 7 días, y RLS"
 $PSQL -f "$ROOT/scripts/sql/canal_de_cierre_smoke.sql"
 echo "  ✅ asesora > recompra > bot Kapso > bot externo > web > otros, cancelados aparte, día local, cada quien sus tiendas"
 
 # SimpleFact no tiene llave de idempotencia: la misma boleta mandada dos veces
 # son dos boletas ante SUNAT, y una boleta enviada no se borra. Lo que lo impide
 # —el turno con candado, un solo comprobante real vivo por pedido, estados que
-# solo avanzan, «real» solo con la conexión probada— vive en la base (0257, MOM
-# §35), así que se prueba en la base y no solo en el código.
-echo "▶ Comprobantes por RUC (0257): semilla apagada, cuenta → RUC de su organización, turno con candado y uno real vivo por pedido"
+# solo avanzan, «real» solo con la conexión probada— vive en la base (0257 y
+# 0260, MOM §35), así que se prueba en la base y no solo en el código. La 0257
+# ya corrió en producción y no se reescribe: la 0260 cambia cuatro de sus
+# funciones, y la prueba la corre sobre la 0257 como se corre en producción.
+echo "▶ Comprobantes por RUC (0257 y 0260): semilla apagada, cuenta → RUC de su organización, turno con candado, uno real vivo por pedido y la 0260 sobre la 0257"
 $PSQL -f "$ROOT/scripts/sql/invoices_smoke.sql"
-echo "  ✅ GRUPO GF S.A.C. sembrado apagado y sin pisar al owner, real solo con token, fecha y prueba del mismo RUC, cada motivo del turno, tope del día, índice único, estados que solo avanzan, solo service_role"
+echo "  ✅ GRUPO GF S.A.C. sembrado apagado y sin pisar al owner, real solo con token, fecha y prueba del mismo RUC, cada motivo del turno, tope del día, índice único, estados que solo avanzan, solo service_role; la 0260 cambia las cuatro funciones sin tocar datos ni triggers, y dos veces es una"
 
-echo "▶ Ventas por origen y conversión por fuente (0259): día local, cancelados aparte, cohorte de 7 días por cualquier canal, ya clientas aparte, y RLS"
+echo "▶ Ventas por origen y conversión por fuente (0261): día local, cancelados aparte, cohorte de 7 días por cualquier canal, ya clientas aparte, y RLS"
 $PSQL -f "$ROOT/scripts/sql/ventas_por_origen_smoke.sql"
 echo "  ✅ todas las ventas por día y canal, la regla del canal en una sola vista, conversión por nacimiento con 7 días, asesoras como en Productividad, cada quien sus tiendas"
 

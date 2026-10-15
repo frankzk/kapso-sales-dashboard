@@ -594,7 +594,7 @@ export function buildKapsoOrdersSearchQuery(
  * `recompute_daily_rollups` como en `lib/access.ts:getOrders`, así que traer el
  * resto de pedidos no mueve esas métricas. La cabecera del tablero, «Canal de
  * cierre» y «Conversión por fuente» sí leen todos los pedidos que trae esta
- * pasada (0258 y 0259, MOM §17.3 y §17.4). Cada pasada lleva su propio cursor
+ * pasada (0259 y 0261, MOM §17.3 y §17.4). Cada pasada lleva su propio cursor
  * en `sync_state` (`shopify` vs `shopify_all`).
  */
 export function buildAllOrdersSearchQuery(

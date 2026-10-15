@@ -62,6 +62,7 @@ import {
 } from "@/lib/voucher-inspect";
 import type { OrderMasterRow } from "@/lib/types";
 import { raiseRepeatedVoucherAlert } from "@/lib/repeated-voucher-alert";
+import { describeFlowReceipt, flowRegistrationStatus, type FlowReceiptCheck } from "@/lib/flow/verify";
 
 const MASTER_PATH = "/dashboard/pedidos";
 const PAYMENT_REVIEW_PATH = "/dashboard/pagos";
@@ -438,6 +439,8 @@ export interface VoucherPrefillFields {
   recipientReceivedView: boolean;
   /** Esa captura trae el aviso de Yape Empresa: es de nuestra cuenta. */
   recipientYapeEmpresa: boolean;
+  /** Constancia de Flow: lo que dijo Flow de su «Nº de orden» (MOM §12). */
+  flow: FlowReceiptCheck | null;
 }
 
 /**
@@ -488,6 +491,15 @@ export async function readVoucherFields(
       ? "captura de nuestro Yape Empresa («Te yapearon»)"
       : inspection.fields.recipientCheck === "verified" && "receptor verificado",
   ].filter(Boolean);
+
+  // Constancia de Flow: lo que importa no es qué se leyó sino qué dijo Flow.
+  if (inspection.fields.flow) {
+    return {
+      fields: inspection.fields,
+      isVoucher: inspection.isVoucher,
+      notice: describeFlowReceipt(inspection.fields.flow),
+    };
+  }
 
   return {
     fields: inspection.fields,
@@ -703,14 +715,56 @@ export async function registerPayment(
   // Un Yape de días antes de crearse el pedido no lo paga: es de otra venta.
   // Va a revisión administrativa con el motivo (lib/payment-date-guard.ts).
   const dateVerdict = paymentDateVerdict(paidAt, ctx.row.order_created_at);
+  // Constancia de Flow (MOM §12, 14-10-2026): si Flow confirmó la orden pagada
+  // en nuestra cuenta, entra validada por la pasarela, igual que un pago por
+  // link de Kapta. Si Flow la tiene sin pagar, es una constancia que no
+  // corresponde a dinero: revisión administrativa.
+  const flowCheck = vision.fields.flow;
+  if (flowCheck?.state === "pagado") {
+    // El mismo pago pudo entrar ya por un link de Kapta (lib/flow/confirm.ts),
+    // que no escribe nº de operación: se busca por la orden de Flow.
+    const { data: viaLink } = await admin
+      .from("flowcl_payment_links")
+      .select("order_id, payment_id")
+      .eq("flow_order", Number(flowCheck.flowOrder))
+      .not("payment_id", "is", null)
+      .limit(1)
+      .maybeSingle();
+    if (viaLink) {
+      const { data: otro } = await admin
+        .from("order_master")
+        .select("order_name")
+        .eq("order_id", (viaLink as { order_id: string }).order_id)
+        .maybeSingle();
+      return {
+        error: `Ese pago de Flow (orden ${flowCheck.flowOrder}) ya entró por el link de cobro de ${
+          (otro as { order_name: string | null } | null)?.order_name ?? "otro pedido"
+        }. No se registró de nuevo.`,
+      };
+    }
+  }
+  const flowStatus = flowRegistrationStatus(flowCheck, {
+    operation,
+    amount: amount ?? null,
+    identityDiscrepancy,
+    tooEarly: dateVerdict.tooEarly,
+  });
+  // Un pago que Flow confirmó entra como pendiente y se valida acto seguido
+  // por `applyPaymentValidation`, el mismo camino de toda validación: cierra la
+  // liquidación del courier, confirma la agencia y cierra alertas. Escribir
+  // «validado» directo en el insert se saltaría todo eso.
   const status =
-    vision.fields.recipientCheck === "mismatch" || identityDiscrepancy || dateVerdict.tooEarly
-      ? "revision_admin"
-      : !operation || (vision.ok && !vision.isVoucher)
-        ? "info_incompleta"
-        : "pendiente_revision";
+    flowStatus === "validado"
+      ? "pendiente_revision"
+      : flowStatus === "revision_admin" ||
+          vision.fields.recipientCheck === "mismatch" ||
+          identityDiscrepancy || dateVerdict.tooEarly
+        ? "revision_admin"
+        : !operation || (vision.ok && !vision.isVoucher)
+          ? "info_incompleta"
+          : "pendiente_revision";
 
-  const { error } = await admin.from("order_payments").insert({
+  const { data: inserted, error } = await admin.from("order_payments").insert({
     store_id: ctx.storeId,
     order_id: orderId,
     kind: input.kind,
@@ -723,7 +777,12 @@ export async function registerPayment(
     file_sha256: input.sha256,
     validation_status: status,
     registered_by: ctx.userId,
-    notes: input.notes ?? null,
+    notes:
+      flowStatus === "validado" && flowCheck
+        ? [input.notes, describeFlowReceipt(flowCheck).replace(" Al registrarlo entra validado por la pasarela.", "")]
+            .filter(Boolean)
+            .join(" · ")
+        : input.notes ?? null,
     vision: {
       ...vision.payload,
       reconciliation: {
@@ -735,7 +794,9 @@ export async function registerPayment(
         paid_too_early: dateVerdict.tooEarly,
       },
     },
-  });
+  })
+    .select("id, vision")
+    .single();
   if (error) {
     // Los índices únicos de 0049 son la última línea: si dos operadores suben el
     // mismo comprobante a la vez, uno de los dos choca aquí.
@@ -770,11 +831,49 @@ export async function registerPayment(
     kind: "payment",
     actor: ctx.userId,
     source: "manual",
-    note: `Yape de ${input.kind} registrado${input.amount ? ` (S/ ${input.amount})` : ""}.`,
+    note:
+      flowStatus === "validado"
+        ? `Pago con Flow de ${input.kind} registrado (S/ ${amount}).`
+        : `Yape de ${input.kind} registrado${input.amount ? ` (S/ ${input.amount})` : ""}.`,
   });
+
+  // VALIDADO POR LA PASARELA. Sin persona (`actor` NULL), como el cruce con el
+  // estado de cuenta: lo validó Flow, y la línea de tiempo lo dice.
+  if (flowStatus === "validado" && flowCheck?.state === "pagado" && inserted) {
+    const row = inserted as { id: string; vision: unknown };
+    const applied = await applyPaymentValidation(admin, {
+      payment: {
+        id: row.id,
+        order_id: orderId,
+        kind: input.kind,
+        validation_status: "pendiente_revision",
+        vision: row.vision,
+      },
+      who: { storeId: ctx.storeId, actor: null, source: "flow" },
+      note:
+        `${describeFlowReceipt(flowCheck).replace(" Al registrarlo entra validado por la pasarela.", "")} ` +
+        "Validado por la pasarela: Flow confirma el dinero en la cuenta.",
+      payload: { flow: flowCheck },
+      liquidationNote: "Cobro confirmado por Flow: el dinero de este pedido está confirmado.",
+      onlyIfStatus: "pendiente_revision",
+    });
+    revalidatePath(MASTER_PATH);
+    revalidatePath(PAYMENT_REVIEW_PATH);
+    if (applied.ok) {
+      return { notice: "Pago de Flow verificado con la pasarela: quedó registrado y validado." };
+    }
+    return {
+      notice: `Pago de Flow registrado, pero no se pudo validar solo (${applied.error}). Valídalo desde la bandeja.`,
+    };
+  }
+
   await recomputeOrderMasterSafe(admin, [orderId]);
   revalidatePath(MASTER_PATH);
   revalidatePath(PAYMENT_REVIEW_PATH);
+
+  if (flowCheck && flowCheck.state !== "pagado") {
+    return { notice: `Comprobante cargado. ${describeFlowReceipt(flowCheck)}` };
+  }
 
   // `vision.ok === false` NO significa "la imagen no se entiende": significa que
   // el lector no llegó a correr — clave de Anthropic ausente o inválida, modelo

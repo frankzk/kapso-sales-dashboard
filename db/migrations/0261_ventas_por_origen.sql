@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0259_ventas_por_origen.sql — el Consolidado cuenta TODAS las ventas de la
+-- 0261_ventas_por_origen.sql — el Consolidado cuenta TODAS las ventas de la
 -- tienda, por origen, y la conversión de cada fuente de leads (MOM §17.4,
 -- 14-10-2026).
 --
@@ -15,10 +15,10 @@
 --   1. `pedidos_canal`: la regla del canal de cierre (MOM §17.3) en UN solo
 --      lugar. Es una vista con la sesión de quien mira (security_invoker): las
 --      políticas de orders, order_sales y auto_order_trials siguen mandando.
---      Antes la regla vivía dentro de `canal_de_cierre` (0258); una segunda
+--      Antes la regla vivía dentro de `canal_de_cierre` (0259); una segunda
 --      copia en las funciones nuevas podía separarse sin que nadie lo notara.
 --
---   2. `canal_de_cierre` lee la vista. Mismo resultado que 0258 (su smoke lo
+--   2. `canal_de_cierre` lee la vista. Mismo resultado que 0259 (su smoke lo
 --      vuelve a probar), sin copia propia de la regla.
 --
 --   3. `ventas_por_origen(tiendas, desde, hasta)`: por tienda, día LOCAL y
@@ -82,7 +82,7 @@ create index if not exists leads_store_created_sin_first_seen_idx
   on public.leads (store_id, created_at)
   where first_seen_at is null;
 
--- 1. La regla del canal, en un solo lugar (movida tal cual de 0258).
+-- 1. La regla del canal, en un solo lugar (movida tal cual de 0259).
 create or replace view public.pedidos_canal with (security_invoker = true) as
 select o.id,
        o.store_id,
@@ -118,7 +118,7 @@ grant select on public.pedidos_canal to authenticated, service_role;
 comment on view public.pedidos_canal is
   'Cada pedido con su canal de cierre (MOM §17.3): asesora > recompra_auto > bot_kapso > bot_externo > web > otros. Única copia de la regla.';
 
--- 2. canal_de_cierre sobre la vista: mismo resultado que 0258.
+-- 2. canal_de_cierre sobre la vista: mismo resultado que 0259.
 create or replace function public.canal_de_cierre(
   p_store_ids uuid[],
   p_from      date,

@@ -82,6 +82,11 @@ export interface InvoiceRecentView {
   total: number;
   error: string | null;
   createdAt: string;
+  /**
+   * SimpleFact contestó con archivos de OTRO RUC (`ruc_mismatch`): la boleta
+   * existe, pero no es de la empresa que recibió el pago. El motivo va en `error`.
+   */
+  rucMismatch: boolean;
 }
 
 /** null en una lista = no se pudo leer (pre-0257 o una caída): no es «no hay». */
@@ -389,9 +394,36 @@ function IssuerFields({ idPrefix, issuer }: { idPrefix: string; issuer: InvoiceI
   );
 }
 
-/** La última prueba de conexión: qué RUC leyó y cuándo, o qué falló. */
+/**
+ * La última prueba de conexión: qué RUC leyó y cuándo, o qué falló.
+ *
+ * EL MOTIVO SE ENSEÑA SIEMPRE QUE ESTÉ. Cuando el barrido apaga un RUC por su
+ * cuenta (otro RUC en la respuesta, un token rechazado) borra la prueba
+ * —`checked_at` y `checked_ruc`— y deja el motivo en `check_error` (§35.4).
+ * Antes, sin fecha, esto decía «Sin probar» y el owner no sabía por qué se
+ * había apagado ni qué arreglar antes de volver a Real.
+ */
 function CheckLine({ issuer: i }: { issuer: InvoiceIssuerView }) {
   if (!i.checkedAt) {
+    // Como lo guardó quien lo escribió, sin el punto final: la frase sigue.
+    const why = (i.checkError ?? "").trim().replace(/[.\s]+$/, "");
+    if (why && i.mode === "apagado") {
+      return (
+        <span className="text-crit-fg">
+          Apagado por Kapta: {why}. Prueba la conexión antes de volver a Real.
+        </span>
+      );
+    }
+    if (why) {
+      // Sin fecha, con motivo y encendido: lo apagó el barrido y se volvió a
+      // encender sin probar, o se cambió el token después de una prueba
+      // fallida. En los dos casos lo cierto es que no está probado.
+      return (
+        <span className="text-warn-fg">
+          Sin probar. Lo último que falló: {why}. Prueba la conexión antes de pasar a Real.
+        </span>
+      );
+    }
     return (
       <span className="text-ink-500">
         Sin probar. «Probar conexión» lee las ventas de la cuenta y confirma de qué RUC son: sin eso no pasa a Real.
@@ -698,17 +730,32 @@ function RecentList({ rows }: { rows: InvoiceRecentView[] }) {
             <span className="min-w-0 tabular-nums text-ink-700">
               {r.ruc} <span className="text-ink-500">· {INVOICE_MODE_LABEL[r.mode] ?? r.mode}</span>
             </span>
-            <span>
-              <Badge tone={STATUS_TONE[r.status] ?? "neutral"}>{INVOICE_STATUS_LABEL[r.status] ?? r.status}</Badge>
+            <span className="flex flex-wrap items-center gap-1">
+              {/* Una emitida con otro RUC no es una emitida «bien»: va en rojo y marcada. */}
+              <Badge tone={r.rucMismatch ? "crit" : STATUS_TONE[r.status] ?? "neutral"}>
+                {INVOICE_STATUS_LABEL[r.status] ?? r.status}
+              </Badge>
+              {r.rucMismatch && <Badge tone="crit">Otro RUC</Badge>}
             </span>
             <span className="tabular-nums text-ink-700">
               {r.serie && r.correlative ? `${r.serie}-${r.correlative}` : "—"}
             </span>
             <span className="tabular-nums text-ink-900 sm:text-right">S/ {r.total.toFixed(2)}</span>
-            {(r.status === "error" || r.status === "en_duda") && r.error && (
-              <p className={cn("text-[13px] leading-5 sm:col-span-full", r.status === "error" ? "text-crit-fg" : "text-warn-fg")}>
-                {r.error}
+            {r.rucMismatch ? (
+              // Lo emitido no se toca (§2, principio 6): lo revisa una persona en SimpleFact.
+              <p className="text-[13px] leading-5 text-crit-fg sm:col-span-full">
+                {r.error ?? "SimpleFact la emitió con otro RUC."} Revísala en SimpleFact: puede necesitar anularse o
+                una nota de crédito.
               </p>
+            ) : (
+              (r.status === "error" || r.status === "en_duda") &&
+              r.error && (
+                <p
+                  className={cn("text-[13px] leading-5 sm:col-span-full", r.status === "error" ? "text-crit-fg" : "text-warn-fg")}
+                >
+                  {r.error}
+                </p>
+              )
             )}
           </li>
         ))}

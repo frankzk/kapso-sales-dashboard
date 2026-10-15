@@ -1721,9 +1721,16 @@ function VoucherForm({
         receivedView: result.fields.recipientReceivedView,
         yapeEmpresa: result.fields.recipientYapeEmpresa,
       });
-      setReadNotice(result.notice);
-      if (!result.isVoucher) {
-        setReadWarning("La imagen no parece un comprobante Yape completo. Revísala antes de registrar.");
+      // Constancia de Flow: lo que cuenta es lo que dijo Flow. Confirmada, es un
+      // aviso de éxito; sin confirmar, ese mismo texto va como advertencia.
+      const flow = result.fields.flow;
+      if (flow && flow.state !== "pagado") {
+        setReadWarning(result.notice);
+      } else {
+        setReadNotice(result.notice);
+        if (!result.isVoucher) {
+          setReadWarning("La imagen no parece un comprobante Yape completo. Revísala antes de registrar.");
+        }
       }
     } finally {
       setReading(false);

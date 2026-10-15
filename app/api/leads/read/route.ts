@@ -11,6 +11,7 @@ const schemas = {
   loadLeadCustomerHistory: lead,
   loadLeadDetail: lead,
   loadNextLeadCart: lead,
+  loadLeadDeliveryCoverage: lead,
   loadLeadVoicePanel: lead,
   loadLeadsInsightsPanel: z.tuple([scope, z.string().min(1).max(100), z.number().int().nonnegative()]),
   pollLeadsQueue: z.tuple([scope]),

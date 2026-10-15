@@ -31,11 +31,13 @@ import type { CustomerHistory } from "@/lib/leads-access";
 import { claimLead, releaseLead, type NextLeadCart } from "@/app/dashboard/leads/actions";
 // Las lecturas van por /api/leads/read, como las de la ficha: fuera de la cola
 // de Server Actions, que pondría la foto detrás de un guardado.
-import { loadLeadCustomerHistory, loadLeadDetail, loadNextLeadCart } from "@/lib/leads-read-client";
+import { loadLeadCustomerHistory, loadLeadDeliveryCoverage, loadLeadDetail, loadNextLeadCart } from "@/lib/leads-read-client";
 import type { LeadDrawerUpdate } from "@/components/leads-drawer";
 import { useCopyToClipboard } from "@/components/copy-button";
 import { Badge, Banner, OpsButton, Skeleton, type BadgeTone } from "@/components/ops-ui";
 import { SEGMENT_TONE } from "@/components/lead-segment-tone";
+import { CoverageBadge } from "@/components/coverage-badge";
+import type { OrderCoverage } from "@/lib/order-coverage";
 import { IconCheck, IconCopy, IconMapPin, IconPhone, IconWhatsApp } from "@/components/icons";
 
 // El chat y el resultado son los de la ficha, cargados aparte: la cola no paga
@@ -373,9 +375,11 @@ interface NextLeadContext {
   cart: Loaded<NextLeadCart>;
   history: Loaded<CustomerHistory | null>;
   calls: Loaded<LeadCallRow[]>;
+  /** La cobertura del Master para su dirección (`order_coverage_for`). */
+  delivery: Loaded<{ coverage: OrderCoverage | null }>;
 }
 
-const LOADING: NextLeadContext = { cart: "loading", history: "loading", calls: "loading" };
+const LOADING: NextLeadContext = { cart: "loading", history: "loading", calls: "loading", delivery: "loading" };
 
 /**
  * Lo que la fila de la cola no trae: el carrito con cantidades y su foto, los
@@ -403,6 +407,10 @@ function useNextLeadContext(leadId: string | null): NextLeadContext {
     loadLeadCustomerHistory(leadId).then(
       (r) => put({ history: "error" in r ? "error" : r.customerHistory }),
       () => put({ history: "error" }),
+    );
+    loadLeadDeliveryCoverage(leadId).then(
+      (r) => put({ delivery: "error" in r ? "error" : r }),
+      () => put({ delivery: "error" }),
     );
     return () => {
       alive = false;
@@ -436,6 +444,14 @@ function askedOf(
     ? { label: "Llegó por el anuncio", lines: [{ title: hook.text, quantity: null }], detail: null }
     : { label: "Lo que escribió", lines: [{ title: `«${hook.text}»`, quantity: null }], detail: null };
 }
+
+/** Lo que la cobertura le dice a la vendedora, en el título de la chapa. */
+const COVERAGE_HINT: Record<OrderCoverage, string> = {
+  lima: "Cobertura del Master para esta dirección: llega a domicilio y paga al recibir.",
+  provincia_cod: "Cobertura del Master para esta dirección: llega a domicilio y paga al recibir.",
+  agencia: "Cobertura del Master para esta dirección: va por agencia y se separa con adelanto.",
+  por_revisar: "La cobertura está por revisar: confirma el distrito en la llamada.",
+};
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -564,8 +580,15 @@ function ClientColumn({
 
   const street = usableAddress(lead.address1);
   const place = [...new Set([lead.district, lead.province ?? lead.region].map((v) => v?.trim()).filter(Boolean))].join(", ");
-  // «provincia» o «lima» solo cuando el lugar no lo dice ya («Miraflores, Lima · lima»).
-  const coverageLabel = coverage && coverage !== "sin_identificar" ? LEAD_COVERAGES.find((c) => c.key === coverage)?.label : null;
+  // Con dirección, la cobertura del Master (Lima, Provincia COD o Agencia):
+  // dice si paga al recibir o separa con adelanto. Sin ella, la pista de la
+  // cola en minúscula, y solo cuando el lugar no la dice ya («Miraflores, Lima ·
+  // lima»); mientras la del Master llega, nada, para que no cambie bajo la vista.
+  const masterCoverage = typeof context.delivery === "object" ? context.delivery.coverage : null;
+  const coverageLabel =
+    !masterCoverage && context.delivery !== "loading" && coverage && coverage !== "sin_identificar"
+      ? LEAD_COVERAGES.find((c) => c.key === coverage)?.label
+      : null;
   const coverageWord = coverageLabel && !place.toLowerCase().includes(coverageLabel.toLowerCase()) ? coverageLabel.toLowerCase() : null;
   const delivery = [street, place || null, coverageWord].filter(Boolean).join(" · ");
   const inbound = Number(lead.inbound_count ?? 0);
@@ -654,7 +677,16 @@ function ClientColumn({
           )}
         </Row>
         <Row label="Entrega">
-          {delivery ? <span>{delivery}</span> : <span className="text-ink-700">Sin datos todavía</span>}
+          {masterCoverage ? (
+            <span className="flex items-start gap-2" title={COVERAGE_HINT[masterCoverage]}>
+              <CoverageBadge coverage={masterCoverage} />
+              <span className="min-w-0">{delivery}</span>
+            </span>
+          ) : delivery ? (
+            <span>{delivery}</span>
+          ) : (
+            <span className="text-ink-700">Sin datos todavía</span>
+          )}
           {!street && (
             <span className="mt-0.5 flex items-center gap-1 text-xs text-warn-fg">
               <IconMapPin aria-hidden className="size-3.5 shrink-0" />

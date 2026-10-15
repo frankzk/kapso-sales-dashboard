@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Canal de cierre de todas las ventas (MOM §17.3, migración 0258).
+// Canal de cierre de todas las ventas (MOM §17.3, migración 0259).
 //
 // Lo que se fija: que el resumen cuadre (Σ canales = Σ grupos = total), que la
 // asesora nunca traiga «ayudados», que una función ausente vuelva a la vista
@@ -494,15 +494,15 @@ describe("las tres vías que crean pedidos ya no inventan `kapso`", () => {
 });
 
 describe("el orden de los canales es uno solo: SQL, código y MOM", () => {
-  it("la función 0258 evalúa los canales en el orden de CLOSING_CHANNELS", () => {
-    const sql = read("db/migrations/0258_canal_de_cierre.sql");
+  it("la función 0259 evalúa los canales en el orden de CLOSING_CHANNELS", () => {
+    const sql = read("db/migrations/0259_canal_de_cierre.sql");
     const body = sql.slice(sql.indexOf("as $$"));
     const order = [...body.matchAll(/then '([a-z_]+)'|else '([a-z_]+)'/g)].map((m) => m[1] ?? m[2]);
     expect(order).toEqual([...CLOSING_CHANNELS]);
   });
 
-  it("la vista `pedidos_canal` de la 0259, que hoy usa la función, también", () => {
-    const sql = read("db/migrations/0259_ventas_por_origen.sql");
+  it("la vista `pedidos_canal` de la 0261, que hoy usa la función, también", () => {
+    const sql = read("db/migrations/0261_ventas_por_origen.sql");
     const view = sql.slice(sql.indexOf("create or replace view public.pedidos_canal"), sql.indexOf("revoke all on public.pedidos_canal"));
     const order = [...view.matchAll(/then '([a-z_]+)'|else '([a-z_]+)'/g)].map((m) => m[1] ?? m[2]);
     expect(order).toEqual([...CLOSING_CHANNELS]);
@@ -516,7 +516,7 @@ describe("el orden de los canales es uno solo: SQL, código y MOM", () => {
   });
 
   it("la función es de lectura, con la sesión de quien mira y sin anon", () => {
-    const sql = read("db/migrations/0258_canal_de_cierre.sql");
+    const sql = read("db/migrations/0259_canal_de_cierre.sql");
     expect(sql).toMatch(/security invoker/);
     expect(sql).toMatch(/revoke all on function public\.canal_de_cierre\(uuid\[\], date, date\) from public, anon;/);
     expect(sql).not.toMatch(/^\s*(insert|update|delete|drop|truncate)\b/im);
@@ -629,7 +629,7 @@ describe("el panel", () => {
   it("sin la migración, la tarjeta vuelve a la vista anterior y lo dice", () => {
     const dash = read("components/executive-dashboard.tsx");
     expect(dash).toContain('closing?.status === "sin_migracion"');
-    expect(dash).toContain("Falta aplicar la migración 0258");
+    expect(dash).toContain("Falta aplicar la migración 0259");
   });
 
   it("antes de la cobertura, también la vista anterior con su aviso; recortado, lo dice", () => {

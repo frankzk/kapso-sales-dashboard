@@ -196,6 +196,17 @@ export interface InvoicePayment {
   kind: string;
   amount: number | null;
   validationStatus: string;
+  /**
+   * `order_payments.registered_at`: cuándo entró el pago a Kapta. Se fija al
+   * insertar y nada lo vuelve a escribir, así que es la fecha de «quedó pagado»
+   * (MOM §35.3, fila 8).
+   */
+  registeredAt: string | null;
+  /**
+   * `order_payments.validated_at`: solo para auditar la base del comprobante.
+   * NO dice cuándo quedó pagado: observar un pago lo borra y volver a validarlo
+   * lo pone en el momento de la nueva validación.
+   */
   validatedAt: string | null;
   /** `order_payments.vision`: lo que leyó el lector del comprobante. */
   vision: unknown;
@@ -353,6 +364,16 @@ function asCollectionAccounts(accounts: InvoiceAccount[]): Map<CollectionAccount
   return map;
 }
 
+/**
+ * ¿Flow confirmó esta constancia como pagada en la cuenta de la tienda? Es la
+ * marca que deja lib/flow/verify.ts al preguntarle a Flow por la orden; el
+ * lector no tiene nombre ni celular que contrastar en esa pantalla.
+ */
+function flowConfirmed(vision: unknown): boolean {
+  const root = obj(vision);
+  return obj(root.flow).state === "pagado";
+}
+
 /** Las cuentas sin celular: la pasarela Flow (0198). */
 export function gatewayAccounts(accounts: InvoiceAccount[]): InvoiceAccount[] {
   return accounts.filter((a) => a.phoneLastDigits === null);
@@ -368,12 +389,14 @@ export function resolvePaymentAccounts(
   accounts: InvoiceAccount[],
   customerName: string | null,
 ): PaymentAccountsResult {
-  // 1. Link de Flow: el dinero entró por la pasarela.
-  if (payment.flowLinked) {
+  // 1. Link de Flow, o una constancia de Flow que Flow confirmó pagada en la
+  // cuenta de la tienda (lib/flow/verify.ts deja `vision.flow.state =
+  // 'pagado'`, MOM §12): el dinero entró por la pasarela.
+  if (payment.flowLinked || flowConfirmed(payment.vision)) {
     const ids = gatewayAccounts(accounts).map((a) => a.id);
     return ids.length
       ? { ok: true, value: { paymentId: payment.id, source: "flow", accountIds: ids } }
-      : { ok: false, detail: "Pago por link de Flow y la tienda no tiene la cuenta de la pasarela." };
+      : { ok: false, detail: "Pago por Flow y la tienda no tiene la cuenta de la pasarela." };
   }
 
   // 2. Estado de cuenta Yape: el movimiento dice a qué cuenta llegó.
@@ -433,6 +456,10 @@ export interface InvoiceBasis {
     amount: number;
     source: AccountSource;
     accountIds: string[];
+    /**
+     * Cuándo se validó el pago, para auditar; en el prepago web, la fecha del
+     * pedido. La fecha que decide «Emitir desde» es `paidAt`, no ésta.
+     */
     validatedAt: string | null;
   }>;
 }
@@ -443,6 +470,10 @@ export type InvoiceEligibility =
       issuer: InvoiceIssuer;
       mode: InvoiceWriteMode;
       totalCents: number;
+      /**
+       * Cuándo quedó pagado: el `registeredAt` más tardío de sus pagos
+       * validados, o la fecha del pedido en el prepago web (§35.3, fila 8).
+       */
       paidAt: string;
       basis: InvoiceBasis;
     }
@@ -547,16 +578,21 @@ export function invoiceEligibility(facts: InvoiceOrderFacts): InvoiceEligibility
   if (issuer.mode === "apagado") return fail("ruc_apagado", undefined, issuer.id);
   const mode: InvoiceWriteMode = issuer.mode;
 
-  // 8. Pagado desde «Emitir desde».
+  // 8. Pagado desde «Emitir desde». Quedó pagado cuando entró a Kapta el ÚLTIMO
+  // de sus pagos validados (`registered_at`, que no cambia nunca), o en la fecha
+  // del pedido si es prepago web. No cuenta `validated_at`: observar un pago lo
+  // borra y volver a validarlo lo pone en ahora, y un pedido pagado antes de
+  // «Emitir desde» se colaría con una boleta hacia atrás.
   const paidAt = prepaid
     ? facts.orderDate
     : live.reduce<string | null>((latest, p) => {
-        if (!p.validatedAt || time(p.validatedAt) === null) return latest;
-        return latest === null || time(p.validatedAt)! > time(latest)! ? p.validatedAt : latest;
+        if (!p.registeredAt || time(p.registeredAt) === null) return latest;
+        return latest === null || time(p.registeredAt)! > time(latest)! ? p.registeredAt : latest;
       }, null);
   const paidTime = time(paidAt);
-  // Un pago validado sin fecha no deja saber cuándo quedó pagado: no se emite.
-  const undated = !prepaid && live.some((p) => time(p.validatedAt) === null);
+  // Un pago validado sin fecha de registro no deja saber cuándo quedó pagado:
+  // no se emite.
+  const undated = !prepaid && live.some((p) => time(p.registeredAt) === null);
   const from = time(issuer.emitFrom);
   if (paidTime === null || undated || from === null || paidTime < from) {
     return fail("antes_de_inicio", undefined, issuer.id);

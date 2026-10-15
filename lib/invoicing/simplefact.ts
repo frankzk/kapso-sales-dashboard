@@ -21,8 +21,9 @@
 //     y, al crear, queda `en_duda` —la venta pudo crearse antes de redirigir—.
 //     Ningún texto que devuelve este módulo lleva el token: los errores se
 //     arman aquí, y lo que contestó SimpleFact se limpia por si lo repite (una
-//     página de error que imprime las cabeceras), porque la respuesta se guarda
-//     en `order_invoices.response` y el panel la puede mostrar.
+//     página de error que imprime las cabeceras), tal cual o escapado (JSON,
+//     HTML, URL), porque la respuesta se guarda en `order_invoices.response` y
+//     el panel la puede mostrar.
 //
 //  3. NO LANZA. Todo termina en `{ http, body, error? }`. Quien decide qué
 //     quiere decir es `classifySaleResponse` (crear) o `testSimplefactConnection`
@@ -88,22 +89,137 @@ export interface SimplefactListQuery {
  */
 const TOKEN_RE = /^[\x21-\x7e]+$/;
 
+/**
+ * Lo más largo que se acepta, lo mismo que deja guardar Ajustes. El limpiador
+ * de abajo es una expresión con un grupo por carácter del token y V8 se queda
+ * sin pila al compilarla pasados unos 3.900: un token más largo no se envía.
+ */
+export const SIMPLEFACT_TOKEN_MAX_CHARS = 2_000;
+
 /** Por debajo de esto no es un token real y limpiarlo destrozaría el texto. */
 const SCRUB_MIN_LENGTH = 8;
 const REDACTED = "[token]";
 
-function scrubText(value: string, token: string): string {
-  return token.length >= SCRUB_MIN_LENGTH && value.includes(token) ? value.split(token).join(REDACTED) : value;
+// El token no vuelve solo tal cual. Una respuesta que lo repite lo trae como lo
+// escribió quien la armó, y en las ramas que no se interpretan (la respuesta
+// demasiado grande, la que no es JSON) llega así a `body.raw`:
+//
+//   - JSON: `"` → `\"` y `\` → `\\` (JSON.stringify); PHP/Laravel además
+//     `/` → `\/`; Symfony, Go o un codificador «solo ASCII» escriben cualquier
+//     carácter como `\u002F` o `\u002f`.
+//   - JSON guardado como texto dentro de otro JSON (un `debug` con las
+//     cabeceras ya codificadas): cada nivel duplica las barras invertidas.
+//   - HTML (una página de error que imprime las cabeceras): `&amp;`, `&quot;`,
+//     `&#039;`, `&#x2F;`…
+//   - URL: `%7C`, `%2F`…
+//
+// Buscar solo el token literal deja pasar todas estas. Por eso se arma una
+// expresión que, carácter por carácter, acepta el carácter o cualquiera de sus
+// escrituras, y se aplica igual a todo lo que se devuelve: valores y llaves del
+// JSON ya leído (un JSON dentro de un texto sigue escapado), el texto crudo y
+// los mensajes de error. Siempre ANTES de recortar: recortar primero parte el
+// token en el corte y su comienzo ya no se reconoce.
+
+/** Lo que escapa `htmlspecialchars` con ENT_QUOTES (más `&apos;` de HTML5). */
+const HTML_NAMED: Readonly<Record<string, string>> = { "&": "amp", "<": "lt", ">": "gt", '"': "quot", "'": "apos" };
+
+/** Hasta cuántos JSON uno dentro de otro se reconoce el token (3 = hasta 8 barras invertidas por una). */
+const SCRUB_JSON_DEPTH = 3;
+
+/** `abc` → `[aA][bB][cC]`: `\u002F` y `\u002f`, `&AMP;` y `&amp;` son lo mismo. */
+function anyCase(s: string): string {
+  return s.replace(/[a-z]/gi, (c) => `[${c.toLowerCase()}${c.toUpperCase()}]`);
+}
+
+function hexRe(code: number, width: number): string {
+  return anyCase(code.toString(16).padStart(width, "0"));
+}
+
+/** Un carácter del token como texto literal dentro de la expresión. */
+function literalRe(ch: string): string {
+  return ch.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+}
+
+/**
+ * Las escrituras de un carácter (que no es `\`) fuera de JSON. El carácter tal
+ * cual va al final: si fuera primero, un token que termina en `&` dejaría el
+ * `amp;` de `&amp;` fuera de lo limpiado (y un `%` el `25` de `%25`).
+ */
+function charFormsRe(ch: string): string {
+  const code = ch.charCodeAt(0);
+  const forms = [
+    `%${hexRe(code, 2)}`, // URL: %2F
+    `&#0{0,3}${code};`, // HTML decimal: &#47; &#039;
+    `&#[xX]0{0,2}${hexRe(code, 2)};`, // HTML hexadecimal: &#x2F;
+  ];
+  const named = HTML_NAMED[ch];
+  if (named) forms.push(`&${anyCase(named)};`);
+  forms.push(literalRe(ch));
+  return forms.join("|");
+}
+
+/**
+ * Un carácter del token escrito en el nivel `depth` de JSON (0 = texto crudo).
+ *
+ * En el nivel n, una barra invertida del token son exactamente 2^n, y delante
+ * de cualquier otro carácter caben de 0 a 2^n − 1 barras de escape (`\/`,
+ * `\\\"`). Las cuentas son exactas a propósito: una barra invertida que
+ * aceptara «de 1 a 8» dejaría a la expresión probar cada reparto posible de
+ * una tira larga de barras entre los caracteres del token, y una respuesta así
+ * colgaría la pasada. Con cuentas exactas cada carácter calza de una sola
+ * manera.
+ *
+ * La escritura `\u002F` va primero y con sus propias barras delante: si no, en
+ * `\u0075` las barras se llevarían la `\` y una «u» del token calzaría
+ * con la `u`, dejando `0075` fuera de lo limpiado.
+ */
+function unitRe(ch: string, depth: number): string {
+  if (ch === "\\") {
+    const viaU = Math.max(1, 2 ** (depth - 1)); // \u005c, y en el nivel 2 \\u005c
+    return `(?:\\\\{${viaU}}u${hexRe(92, 4)}|\\\\{${2 ** depth}}|%${hexRe(92, 2)}|&#0{0,3}92;|&#[xX]0{0,2}${hexRe(92, 2)};)`;
+  }
+  const escapes = 2 ** depth - 1;
+  const before = escapes > 0 ? `\\\\{0,${escapes}}` : "";
+  return `(?:${before}\\\\u${hexRe(ch.charCodeAt(0), 4)}|${before}(?:${charFormsRe(ch)}))`;
+}
+
+type Scrub = (value: string) => string;
+
+/**
+ * El limpiador de un token: cambia por `[token]` toda escritura suya. Sin
+ * barras invertidas en el token, el nivel más hondo acepta también los de
+ * arriba (0 barras de escape caben en «de 0 a 7»); con ellas, cada nivel va
+ * aparte porque una barra del token cuenta distinto en cada uno.
+ */
+function tokenScrubber(token: string): Scrub {
+  if (token.length < SCRUB_MIN_LENGTH) return (value) => value;
+  const depths = token.includes("\\")
+    ? Array.from({ length: SCRUB_JSON_DEPTH + 1 }, (_, i) => SCRUB_JSON_DEPTH - i)
+    : [SCRUB_JSON_DEPTH];
+  const re = new RegExp(depths.map((d) => Array.from(token, (ch) => unitRe(ch, d)).join("")).join("|"), "g");
+  return (value) => {
+    try {
+      return value.replace(re, REDACTED);
+    } catch {
+      // El motor no pudo correr la expresión (V8 la compila al usarla y una muy
+      // larga se queda sin pila). Sin poder buscar el token no se devuelve nada
+      // del texto: el código HTTP sigue mandando y el texto queda en blanco.
+      return REDACTED;
+    }
+  };
 }
 
 /** Quita el token de todo texto de la respuesta, valores y llaves. */
-function scrubDeep(value: unknown, token: string): unknown {
-  if (typeof value === "string") return scrubText(value, token);
-  if (Array.isArray(value)) return value.map((v) => scrubDeep(v, token));
+function scrubDeep(value: unknown, scrub: Scrub): unknown {
+  if (typeof value === "string") return scrub(value);
+  if (Array.isArray(value)) return value.map((v) => scrubDeep(v, scrub));
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[scrubText(k, token)] = scrubDeep(v, token);
+      // Como propiedad propia: una llave «__proto__» del JSON asignada con `=`
+      // cambiaría el prototipo, y lo que trae se leería como si fuera de la
+      // respuesta (un `success` heredado) sin aparecer en lo que se guarda.
+      Object.defineProperty(out, scrub(k), { value: scrubDeep(v, scrub), enumerable: true, writable: true, configurable: true });
     }
     return out;
   }
@@ -111,17 +227,17 @@ function scrubDeep(value: unknown, token: string): unknown {
 }
 
 /** Un motivo corto de un fallo de red: el código (ECONNRESET), nunca el objeto entero. */
-function networkReason(err: unknown, token: string): string {
+function networkReason(err: unknown, scrub: Scrub): string {
   const e = err as { name?: unknown; code?: unknown; message?: unknown; cause?: { code?: unknown; message?: unknown } };
   const raw = [e?.cause?.code, e?.code, e?.cause?.message, e?.message, e?.name].find(
     (v): v is string => typeof v === "string" && v.trim() !== "",
   );
-  return scrubText((raw ?? "error de red").trim(), token).slice(0, 200);
+  return scrub((raw ?? "error de red").trim()).slice(0, 200);
 }
 
 // ── Transporte ───────────────────────────────────────────────────────────────
 
-type Prepared = { ok: true; base: string; token: string } | { ok: false; error: string };
+type Prepared = { ok: true; base: string; token: string; scrub: Scrub } | { ok: false; error: string };
 
 /** Lo que se revisa antes de salir a la red: nada se envía si no sirve. */
 function prepare(conn: SimplefactConn): Prepared {
@@ -133,24 +249,46 @@ function prepare(conn: SimplefactConn): Prepared {
   }
   const token = (conn.token ?? "").trim();
   if (!token) return { ok: false, error: "Falta el token de SimpleFact" };
-  if (!TOKEN_RE.test(token)) return { ok: false, error: "El token de SimpleFact no es válido" };
-  return { ok: true, base, token };
+  if (!TOKEN_RE.test(token) || token.length > SIMPLEFACT_TOKEN_MAX_CHARS) {
+    return { ok: false, error: "El token de SimpleFact no es válido" };
+  }
+  // El limpiador se arma y se prueba antes de salir: si no reconoce el token tal
+  // cual y como lo escribe PHP, lo que vuelva no se podría limpiar, y no se
+  // envía nada. La prueba lleva texto alrededor porque un limpiador que no pudo
+  // correr devuelve todo en blanco, y eso no es reconocer el token. Un token de
+  // menos de 8 no se limpia (ver SCRUB_MIN_LENGTH) y tampoco se prueba.
+  let scrub: Scrub;
+  try {
+    scrub = tokenScrubber(token);
+    const php = JSON.stringify(token).slice(1, -1).replace(/\//g, "\\/");
+    for (const probe of token.length >= SCRUB_MIN_LENGTH ? [token, php] : []) {
+      if (scrub(`< ${probe} >`) !== `< ${REDACTED} >`) throw new Error("el limpiador no reconoce el token");
+    }
+  } catch {
+    return { ok: false, error: "El token de SimpleFact no es válido" };
+  }
+  return { ok: true, base, token, scrub };
 }
 
 /** Lee el cuerpo: JSON si lo es; si no, el texto recortado. Sin el token. */
-function parseBody(text: string, token: string): { body: unknown; error?: string } {
+function parseBody(text: string, scrub: Scrub): { body: unknown; error?: string } {
   if (text.length > SIMPLEFACT_BODY_MAX_CHARS) {
+    // Primero se limpia y después se recorta, como abajo: recortar antes parte
+    // un token que cruza el carácter 2000 y su comienzo ya no se reconoce. Un
+    // recorte previo con margen tampoco sirve: cada token limpiado acorta el
+    // texto y arrastra hacia el corte un pedazo del siguiente. El cuerpo ya está
+    // entero en memoria; limpiarlo es una pasada más.
     return {
-      body: { raw: scrubText(text.slice(0, SIMPLEFACT_RAW_MAX_CHARS), token) },
+      body: { raw: scrub(text).slice(0, SIMPLEFACT_RAW_MAX_CHARS) },
       error: "La respuesta de SimpleFact es demasiado grande",
     };
   }
   try {
-    return { body: scrubDeep(JSON.parse(text), token) };
+    return { body: scrubDeep(JSON.parse(text), scrub) };
   } catch {
     // Una página de error, un proxy o un portal cautivo: se guarda el comienzo.
     // Se limpia el texto entero antes de recortar, para no partir el token.
-    return { body: { raw: scrubText(text, token).slice(0, SIMPLEFACT_RAW_MAX_CHARS) } };
+    return { body: { raw: scrub(text).slice(0, SIMPLEFACT_RAW_MAX_CHARS) } };
   }
 }
 
@@ -161,7 +299,7 @@ async function send(
   path: string,
   payload?: SimplefactSalePayload,
 ): Promise<SimplefactHttp> {
-  const { base, token } = prepared;
+  const { base, token, scrub } = prepared;
   const fetchImpl = conn.fetchImpl ?? fetch;
   const timeoutMs =
     conn.timeoutMs !== undefined && Number.isFinite(conn.timeoutMs) && conn.timeoutMs > 0
@@ -211,7 +349,7 @@ async function send(
         body: null,
         error: controller.signal.aborted
           ? `SimpleFact no respondió en ${timeoutMs} ms`
-          : `No hubo respuesta de SimpleFact (${networkReason(err, token)})`,
+          : `No hubo respuesta de SimpleFact (${networkReason(err, scrub)})`,
       };
     }
 
@@ -230,15 +368,15 @@ async function send(
         body: null,
         error: controller.signal.aborted
           ? `SimpleFact no terminó de responder en ${timeoutMs} ms`
-          : `SimpleFact cortó la respuesta (${networkReason(err, token)})`,
+          : `SimpleFact cortó la respuesta (${networkReason(err, scrub)})`,
       };
     }
 
-    const parsed = parseBody(text, token);
+    const parsed = parseBody(text, scrub);
     return parsed.error ? { http: status, body: parsed.body, error: parsed.error } : { http: status, body: parsed.body };
   } catch (err) {
     // Nada de lo de arriba debería lanzar; si algo lo hace, es un no-respondió.
-    return { http: null, body: null, error: `Fallo al llamar a SimpleFact (${networkReason(err, token)})` };
+    return { http: null, body: null, error: `Fallo al llamar a SimpleFact (${networkReason(err, scrub)})` };
   } finally {
     clearTimeout(timer);
   }
