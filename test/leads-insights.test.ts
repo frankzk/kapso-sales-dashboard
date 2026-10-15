@@ -239,8 +239,9 @@ describe("dayWarnings: los avisos del día con las reglas de Productividad", () 
 });
 
 describe("sinLlamarFromRollup: de las filas agrupadas en la base al gráfico", () => {
-  // La 0155 devuelve una fila por (cubo, día) o (cubo, hora) en vez de las
-  // ~17.000 filas que se drenaban por carga (28 M al día, medido el 10-09-2026).
+  // El RPC devuelve una fila por día en vez de las ~17.000 filas que se
+  // drenaban por carga (28 M al día, medido el 10-09-2026). Desde la 0263 solo
+  // trae `sin_llamar`; con la versión de la 0155 los otros cubos se ignoran.
   it("toma solo el cubo sin_llamar y suma por día", () => {
     expect(
       sinLlamarFromRollup([
@@ -285,13 +286,27 @@ describe("el panel pregunta primero al RPC y la SQL dice lo mismo que el código
     expect(read("lib/leads-team-today.ts")).not.toMatch(/from "@\/lib\/(db|access|advisor-schedules|metrics)"/);
   });
 
-  it("el predicado de sin llamar de la 0155 es el mismo que el del drenado", () => {
+  it("el predicado de sin llamar del RPC vigente (0263) es el mismo que el del drenado", () => {
     // Si divergen, el panel dice una cosa con el RPC y otra sin él.
-    const sql = read("db/migrations/0155_lead_insights_rollup.sql");
-    expect(sql).toContain("and category in ('open', 'hot')\n      and status = 'nuevo'");
-    expect(sql).toContain("security invoker");
-    expect(sql).toContain("revoke all on function public.lead_insights_rollup");
     const src = read("lib/leads-insights.ts");
     expect(src).toContain('.in("category", ["open", "hot"])\n      .eq("status", "nuevo")');
+    for (const file of ["0155_lead_insights_rollup.sql", "0263_lead_insights_rollup_sin_llamar.sql"]) {
+      const sql = read(`db/migrations/${file}`);
+      expect(sql).toContain("and category in ('open', 'hot')\n      and status = 'nuevo'");
+      expect(sql).toContain("coalesce(last_interaction_at, first_seen_at)");
+      expect(sql).toContain("security invoker");
+      expect(sql).toContain("revoke all on function public.lead_insights_rollup");
+    }
+  });
+
+  it("la 0263 conserva la firma y deja solo el cubo sin_llamar", () => {
+    // La misma firma: el código que ya corre la llama igual, con la versión que
+    // encuentre. Y nada del tablero anterior: ni gestiones ni ventas.
+    const sql = read("db/migrations/0263_lead_insights_rollup_sin_llamar.sql");
+    const fn = sql.slice(sql.indexOf("create or replace function public.lead_insights_rollup("));
+    expect(fn).toContain("p_store_ids    uuid[],\n  p_window_start timestamptz,\n  p_tz           text,\n  p_today        text");
+    expect(fn).toContain("returns table (bucket text, key text, n bigint)");
+    expect(fn).not.toMatch(/lead_calls|order_sales|'entran|'cierran|'contactos|'pedidos/);
+    expect(fn).toContain("select 'sin_llamar', to_char(at at time zone p_tz, 'YYYY-MM-DD'), count(*)");
   });
 });

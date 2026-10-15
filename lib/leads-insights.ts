@@ -10,7 +10,7 @@
 // Nada se guarda aparte. El trabajo y las horas salen de las gestiones del día
 // con las MISMAS cuentas que Productividad (lib/productivity.ts y
 // lib/productivity-week.ts), los pedidos de `order_sales` y los sin llamar del
-// RPC `lead_insights_rollup` (0155). RLS como el resto; la meta y el horario
+// RPC `lead_insights_rollup` (0155, aligerado en la 0263). RLS como el resto; la meta y el horario
 // (0245) se leen con el cliente de servicio y a una vendedora solo le llegan
 // los suyos, como en Productividad.
 
@@ -34,7 +34,8 @@ export interface LeadsInsights {
 
 const WEEKDAYS = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 
-/** Una fila del RPC `lead_insights_rollup` (0155): cubo, día u hora, conteo. */
+/** Una fila del RPC `lead_insights_rollup`: cubo, día, conteo. Desde la 0263 solo
+ *  devuelve el cubo `sin_llamar`; la 0155 devolvía siete. */
 export interface RollupRow {
   bucket: string;
   key: string;
@@ -43,8 +44,8 @@ export interface RollupRow {
 
 /**
  * De las filas agrupadas en la base, los leads sin llamar por día de su última
- * interacción. Pura. Los demás cubos del RPC (entran, cierran, contactos,
- * pedidos) eran del tablero anterior y se ignoran.
+ * interacción. Pura. Filtra el cubo a propósito: si la base todavía tuviera
+ * la versión de la 0155, sus otros seis cubos (del tablero anterior) se ignoran.
  */
 export function sinLlamarFromRollup(rows: readonly RollupRow[]): Record<string, number> {
   const out: Record<string, number> = {};
@@ -64,7 +65,7 @@ const PAGE_CAP = 20_000; // absolute safety bound per fetch (≈20 páginas)
 
 /**
  * Los mismos sin llamar, drenando filas (el camino de antes). Queda como
- * respaldo para una base sin la 0155 aplicada: el panel sigue saliendo, solo
+ * respaldo para una base sin el RPC (0155): el panel sigue saliendo, solo
  * que caro. Una sola llamada devuelve como máximo ~1000 filas (max-rows) y el
  * recorte es silencioso: se pagina con un orden estable.
  */
@@ -94,10 +95,11 @@ async function drainSinLlamar(sb: Sb, storeIds: StoreScope, tz: string): Promise
 
 /**
  * Sin llamar por día de última interacción. LOS CONTEOS SE AGRUPAN EN LA BASE
- * (RPC `lead_insights_rollup`, 0155): unas cuarenta filas en vez de las
- * ~17.000 que se drenaban por carga (medido el 10-09-2026: 28 millones de
- * filas al día solo de este panel). El drenado queda como respaldo si el RPC
- * no existe todavía.
+ * (RPC `lead_insights_rollup`, 0155): una fila por día en vez de las ~17.000
+ * que se drenaban por carga (medido el 10-09-2026: 28 millones de filas al día
+ * solo de este panel). La 0263 le quitó los cubos del tablero anterior, que
+ * seguían costando: 162 ms → 15 ms por llamada (15-10-2026). El drenado queda
+ * como respaldo si el RPC no existe todavía.
  */
 async function loadSinLlamar(
   sb: Sb,
