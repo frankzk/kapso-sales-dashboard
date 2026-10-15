@@ -373,7 +373,7 @@ neto, canal, cupón) and sanity-check the assignment.
   etiquetas**, que la sincronización con Shopify reescribe: aquí «Asesora»
   queda casi siempre en cero. La tarjeta «Canal de cierre» del Consolidado ya
   no usa esto desde el 14-10-2026: clasifica TODAS las ventas por
-  `order_sales` (0258, MOM §17.3).
+  `order_sales` (0259, MOM §17.3).
 - **ROAS** on the Meta row = attributed revenue / Meta ad spend for the range
   (live from the Marketing API; shows "—" if Meta isn't connected).
 - Needs **migration 0030** (`discount_codes` on orders + `winback_sends`). Before
@@ -498,7 +498,7 @@ de couriers, intentos y comentarios.
   la pasada `shopify_all` y el webhook reescriben `tags` con lo de Shopify, y
   esos pedidos salían del conteo en minutos (1 de 2.916 ventas de asesora la
   conservaba). Desde el 14-10-2026 ya no se escribe; quién cerró cada venta lo
-  decide `canal_de_cierre` (0258, MOM §17.3).
+  decide `canal_de_cierre` (0259, MOM §17.3).
 - **`ORDERS_SYNC_FROM` acota el histórico** (por defecto `2026-06-01`). La pasada
   nueva solo trae pedidos **creados** a partir de esa fecha, así que no arrastra
   años de pedidos cerrados. Se filtra por `created_at` y no por `updated_at`, para
@@ -2452,7 +2452,7 @@ escribe, no abre casos ni toma el candado. Sin variables de entorno nuevas.
 **Marcha atrás.** Revertir el código basta. La función no molesta al código
 anterior y se queda.
 
-### 14-10-2026 · Comprobantes SimpleFact por RUC (MOM §35) — needs migration 0257
+### 14-10-2026 · Comprobantes SimpleFact por RUC (MOM §35) — needs migrations 0257 and 0260
 
 Kapta emite, en la cuenta de SimpleFact de la empresa que recibió el dinero, la
 boleta de un pedido ya cobrado: un RUC por cuenta de cobro (MOM §35). **Sale
@@ -2463,25 +2463,29 @@ nuevas**: el token se cifra con la misma `ENCRYPTION_KEY` de los tokens de
 tienda y el cron usa `CRON_SECRET`. Sin cambio del resolver:
 `MOM_RESOLUTION_VERSION` sigue en `mom-v1.26`.
 
-1. **Migración `0257_invoices.sql`**, a mano y ANTES del código: pegar el
-   archivo en el editor SQL de Supabase (o
+1. **Migración `0257_invoices.sql`.** **Ya aplicada en producción el
+   14-10-2026**: no se vuelve a pegar ni se edita. Lo que cambió después —los
+   arreglos de la revisión adversaria— va en la 0260 (paso 2): producción no
+   vuelve a correr la 0257, y lo que se le escribiera nunca le llegaría. En una
+   base nueva se aplica a mano y ANTES del código: pegar el archivo en el
+   editor SQL de Supabase (o
    `psql "$DATABASE_URL" -f db/migrations/0257_invoices.sql`). Crea
    `invoice_issuers`, `store_collection_accounts.invoice_issuer_id` (con el
    trigger que rechaza un RUC de otra organización), `order_invoices` (con el
    índice de un solo comprobante real vivo por pedido y el trigger que no deja
-   editar ni borrar lo emitido), `invoice_order_checks`, las funciones
-   `invoice_claim` (el turno) e `invoice_candidates` (qué pedidos mira el
-   barrido), y siembra GRUPO GF S.A.C. Las tres tablas quedan sin policies y
-   revocadas a `anon` y `authenticated`, y las dos funciones solo las ejecuta
-   `service_role`: solo las usa el servidor.
+   editar ni borrar lo emitido), `invoice_order_checks`, la función
+   `invoice_claim` (el turno), y siembra GRUPO GF S.A.C. Las tres tablas quedan
+   sin policies y revocadas a `anon` y `authenticated`, y el turno solo lo
+   ejecuta `service_role`: solo lo usa el servidor.
    Es idempotente, y la semilla no pisa una asignación que el owner ya haya
    cambiado. El `alter table` y los `drop trigger` sobre
    `store_collection_accounts` toman un candado breve de esa tabla: si se queda
    esperando, cortar y repetir con `set lock_timeout = '15s';` delante.
    **Comprobar**, solo lectura:
    - `select ruc, legal_name, simplefact_subdomain, mode, token_enc is null as sin_token, emit_from, daily_limit from invoice_issuers;`
-     — una fila por organización que cobra en la cuenta ···309: `20556792829`,
-     `grupogf`, `apagado`, `sin_token = true`, sin «Emitir desde» y tope 40;
+     — recién aplicada, una fila por organización que cobra en la cuenta
+     ···309: `20556792829`, `grupogf`, `apagado`, `sin_token = true`, sin
+     «Emitir desde» y tope 40;
    - `select s.name, a.label, a.phone_last_digits, i.ruc from store_collection_accounts a join stores s on s.id = a.store_id left join invoice_issuers i on i.id = a.invoice_issuer_id order by s.name, a.label;`
      — en cada tienda de esa organización, **dos** cuentas con `20556792829`:
      «Grupo GF S.A.C.» ···309 y «Aurela Kenku» (la pasarela Flow, sin
@@ -2489,23 +2493,68 @@ tienda y el cron usa `CRON_SECRET`. Sin cambio del resolver:
    - `select has_table_privilege('authenticated', 'public.invoice_issuers', 'select');`
      tiene que dar `false` (y lo mismo con `anon`, `order_invoices` e
      `invoice_order_checks`);
+   - `select has_function_privilege('authenticated', 'public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)', 'execute');`
+     tiene que dar `false` (y lo mismo con `anon`).
+2. **Migración `0260_invoices_hardening.sql`**, a mano, sobre la 0257 y ANTES
+   de que el código con `invoice_candidates` llegue a `main`: pegar el archivo
+   en el editor SQL de Supabase (o
+   `psql "$DATABASE_URL" -f db/migrations/0260_invoices_hardening.sql`). Son los
+   arreglos de la revisión adversaria (MOM §35.3, §35.4 y §35.6), que se habían
+   escrito dentro de la 0257 cuando esta ya había corrido en producción.
+   Escribe las funciones `invoice_claim` (el turno) e `invoice_candidates` (qué
+   pedidos mira el barrido), y las de los triggers `invoice_issuers_touch` y
+   `order_invoices_guard`:
+   - `invoice_claim`: el turno vuelve a sacar de los pagos de la base cuándo
+     quedó pagado el pedido, y no da el turno con un pago vivo sin validar
+     (`pagos_en_revision`) ni con una fecha anterior a «Emitir desde»
+     (`antes_de_inicio`);
+   - `invoice_candidates`, nueva: los pedidos que el barrido revisa en cada
+     pasada; solo la ejecuta `service_role`;
+   - `invoice_issuers_touch`: un token, un subdominio o un RUC nuevo borra
+     también el motivo de la prueba anterior (`check_error`);
+   - `order_invoices_guard`: borrar la cuenta de una persona deja en blanco
+     quién registró, pidió el reintento o resolvió, y solo dentro de esa
+     cascada.
+
+   Solo `create or replace function` y sus permisos: no toca datos (el RUC en
+   simulación, sus cuentas y los comprobantes quedan como están), no recrea
+   triggers (siguen llamando a las mismas funciones) y no toma candados de
+   tablas. Es idempotente. Se puede aplicar ya, con el código que hoy está en
+   producción: ese código pide el mismo turno, con los mismos parámetros, y ya
+   conoce `pagos_en_revision` y `antes_de_inicio`; `invoice_candidates` no la
+   llama. **Si el código llega antes, el barrido dice `sin_migracion` y no
+   simula ni emite nada hasta aplicarla**: cada pasada responde 200 con
+   `"skipped":"sin_migracion"`, sin errores, y el panel «Comprobante» y Ajustes
+   se ven como siempre. Aplicada, la pasada siguiente sigue sola.
+   **Comprobar**, solo lectura:
+   - `select to_regprocedure('public.invoice_candidates(uuid, text, timestamptz, integer, text[], uuid)') is not null;`
+     tiene que dar `true`;
+   - `select pg_get_functiondef('public.order_invoices_guard()'::regprocedure) like '%pg_trigger_depth()%';`
+     tiene que dar `true` (y lo mismo con
+     `pg_get_functiondef('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)'::regprocedure) like '%pagos_en_revision%'`
+     y con
+     `pg_get_functiondef('public.invoice_issuers_touch()'::regprocedure) like '%check_error := null%'`);
    - `select has_function_privilege('authenticated', 'public.invoice_candidates(uuid, text, timestamptz, integer, text[], uuid)', 'execute');`
-     tiene que dar `false` (y lo mismo con `anon`, y con
-     `public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)`).
-2. **Desplegar.** El cron `/api/cron/invoices` ya está en `vercel.json`, cada
+     tiene que dar `false` (y lo mismo con `anon`);
+   - `select ruc, mode, emit_from, checked_ruc, check_error from invoice_issuers;`
+     y `select count(*) from order_invoices;` dicen lo mismo que antes de
+     aplicarla.
+3. **Desplegar.** El cron `/api/cron/invoices` ya está en `vercel.json`, cada
    10 minutos (`6,16,26,…`), y solo emite en producción. Con todos los RUC en
    «Apagado» cada pasada deja en los logs de Vercel una línea `[invoices] {…}`
    con `"skipped":"sin_ruc_encendido"`, y no lee pedidos ni llama a SimpleFact.
-   **Si el código sale antes que la migración** no se emite nada y el cron no
-   se pone rojo: cada pasada responde 200 con `"skipped":"sin_migracion"` en
-   la línea `[invoices] {…}`, el panel «Comprobante» del drawer no aparece y
-   Ajustes dice «No se pudieron leer los RUC de la organización.». Aplicar la
-   0257 y la pasada siguiente pasa a `sin_ruc_encendido`. Solo cuenta como
-   `sin_migracion` lo que crea la 0257: si lo que falta es otra tabla o
-   función (`orders`, `order_payments`, `order_master`…), el cron responde
-   502 con el error en `errors`, y eso no se arregla aplicando la 0257: la
-   base está rota y hay que mirarla.
-3. **El token: lo pone el owner, y solo en Ajustes.** Regenerar en SimpleFact
+   **Si el código sale antes que las migraciones** no se emite nada y el cron
+   no se pone rojo: cada pasada responde 200 con `"skipped":"sin_migracion"`
+   en la línea `[invoices] {…}`. Sin la 0257, además, el panel «Comprobante»
+   del drawer no aparece y Ajustes dice «No se pudieron leer los RUC de la
+   organización.»; sin la 0260, el panel y Ajustes se ven, pero el barrido no
+   simula ni emite. Aplicar lo que falte y la pasada siguiente pasa a
+   `sin_ruc_encendido`, o barre los RUC encendidos. Solo cuenta como
+   `sin_migracion` lo que crean la 0257 y la 0260: si lo que falta es otra
+   tabla o función (`orders`, `order_payments`, `order_master`…), el cron
+   responde 502 con el error en `errors`, y eso no se arregla aplicando una
+   migración de comprobantes: la base está rota y hay que mirarla.
+4. **El token: lo pone el owner, y solo en Ajustes.** Regenerar en SimpleFact
    el token de la cuenta `grupogf`: **el anterior quedó expuesto en una captura
    y no se usa**. Pegar el nuevo **solo** en Ajustes de la tienda → «Boletas y
    facturas» (pide `stores.manage` y `invoices.manage`, que solo da el owner):
@@ -2514,7 +2563,7 @@ tienda y el cron usa `CRON_SECRET`. Sin cambio del resolver:
    emite nada, y tiene que confirmar el RUC 20556792829. Si dice otro RUC, el
    token es de otra empresa; si dice que la cuenta no tiene ventas con
    archivos, no se puede pasar a Real hasta que tenga una.
-4. **Simulación.** Poner el RUC en «Simulación» con «Emitir desde» de hoy (si
+5. **Simulación.** Poner el RUC en «Simulación» con «Emitir desde» de hoy (si
    quedó atrás, la base la mueve sola al momento del cambio). Cada pasada arma
    la boleta exacta de cada pedido que entraría y la guarda como `simulada`,
    hasta el tope del día, **sin llamar a SimpleFact**. Revisar unos días, en
@@ -2532,11 +2581,11 @@ tienda y el cron usa `CRON_SECRET`. Sin cambio del resolver:
    (`lib/invoicing/shopify-order.ts`) antes de pasar a Real. Solo lectura:
    - `select count(*) from order_invoices i join order_master m on m.order_id = i.order_id where i.mode = 'simulacion' and m.payment_gateway = 'checkout';`
    - `select c.reason, count(*) from invoice_order_checks c join order_master m on m.order_id = c.order_id where c.mode = 'simulacion' and m.payment_gateway = 'checkout' group by 1 order by 2 desc;`
-5. **Con el contador**: confirmar que una boleta hasta S/ 700 va a «CLIENTES
+6. **Con el contador**: confirmar que una boleta hasta S/ 700 va a «CLIENTES
    VARIOS» con DNI `00000000`, sin correo ni celular, y el umbral de S/ 700:
    por encima, la boleta se emite a mano con el DNI y se registra en el panel
    con «Ya tiene comprobante» (MOM §35.5).
-6. **Real.** Pasar el RUC a «Real». La base lo rechaza sin token, sin «Emitir
+7. **Real.** Pasar el RUC a «Real». La base lo rechaza sin token, sin «Emitir
    desde» o sin una prueba de conexión que leyó el mismo RUC, y «Emitir desde»
    se mueve al momento del cambio: nada pagado antes sale. Revisar en
    SimpleFact las primeras boletas: serie, total, ítems con el IGV incluido y
@@ -2557,16 +2606,17 @@ tienda y el cron usa `CRON_SECRET`. Sin cambio del resolver:
      pedido sigue cumpliendo las reglas.
      **Liberar una que existe es emitir otra**: ante la duda, se busca de
      nuevo y no se libera.
-7. **Pasada en seco, a mano.** La corre el owner o quien opera, no un agente:
+8. **Pasada en seco, a mano.** La corre el owner o quien opera, no un agente:
    `GET /api/cron/invoices?dry=1` con `Authorization: Bearer <CRON_SECRET>` (y
    `&storeId=<uuid>` para una sola tienda). Revisa, relee en Shopify y arma la
    boleta, pero no escribe nada en la base ni llama a SimpleFact: devuelve, por
    RUC, cuántos pedirían turno (`would_claim`) y los motivos de los demás. Con
    todos los RUC en «Apagado» responde `"skipped":"sin_ruc_encendido"`: sirve
-   desde el paso 4.
+   desde el paso 5.
 
 **Antes de subir**: `npm test`, `npm run typecheck`, `bash scripts/verify-db.sh`
-(clúster desechable; corre `scripts/sql/invoices_smoke.sql`) y `next build`.
+(clúster desechable; corre `scripts/sql/invoices_smoke.sql`, que también corre
+la 0260 sobre la 0257 tal como corrió en producción) y `next build`.
 
 **Marcha atrás.** Poner cada RUC en «Apagado» (Ajustes → «Boletas y
 facturas», o `update invoice_issuers set mode = 'apagado';`): el barrido deja
@@ -2575,7 +2625,8 @@ de leer y de emitir en la pasada siguiente. Un comprobante que haya quedado en
 llamar a SimpleFact, y lo revisa una persona. No hace falta revertir el código.
 Lo emitido no se borra —ya está en SUNAT—: una boleta que no correspondía la
 anula una persona con nota de crédito en SimpleFact (MOM §35.9). Las tablas no
-molestan al código anterior y se quedan.
+molestan al código anterior y se quedan. La 0260 tampoco se revierte: el código
+anterior pide el mismo turno y no llama a `invoice_candidates`.
 
 **Qué mirar después.** Cada pasada escribe una línea `[invoices] {…}` en los
 logs de Vercel, sin clientas, teléfonos ni token: por RUC, `simuladas`,
@@ -2583,7 +2634,7 @@ logs de Vercel, sin clientas, teléfonos ni token: por RUC, `simuladas`,
 por qué se detuvo (`stopped`). `errors` no vacío pone el cron en rojo (502).
 `sin_respuesta` cuenta los `emitiendo` que la pasada pasó a `en_duda` porque
 nadie los iba a conciliar: cada uno se busca en SimpleFact por su nota y se
-resuelve en el panel como en el paso 6. `"lleno":{"real":true}` (o
+resuelve en el panel como en el paso 7. `"lleno":{"real":true}` (o
 `"simulacion"`) dice que `invoice_candidates` devolvió los 500 pedidos de ese
 modo: lo más viejo pendiente no se miró en esa pasada. No pone el cron en
 rojo, pero si se repite hay que ver qué llena la lista (por ejemplo, con
@@ -2594,7 +2645,7 @@ conexión. Ajustes lo dice en rojo: «Apagado por Kapta: ‹motivo›. Prueba la
 conexión antes de volver a Real.». Para volver a Real hay que corregir lo que
 falló (el token o el subdominio) y pulsar «Probar conexión» de nuevo.
 
-### 14-10-2026 · Canal de cierre de todas las ventas (0258, MOM §17.3)
+### 14-10-2026 · Canal de cierre de todas las ventas (0259, MOM §17.3)
 
 La tarjeta «Canal de cierre» del Consolidado y de la página de cada tienda deja
 de mirar solo los pedidos con `kapso` y clasifica TODAS las ventas por quién
@@ -2605,8 +2656,8 @@ sin asesora y la recompra automática dejan de escribir `kapso` /
 `cod_recuperado` / `auto_recompra` en la copia local: registran la fila solo si
 el webhook no la trajo, tal como viene de Shopify.
 
-1. **Migración `0258_canal_de_cierre.sql`**, a mano y ANTES del código:
-   `psql "$DATABASE_URL" -f db/migrations/0258_canal_de_cierre.sql`. Crea solo
+1. **Migración `0259_canal_de_cierre.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0259_canal_de_cierre.sql`. Crea solo
    la función de lectura `canal_de_cierre(uuid[], date, date)` (SECURITY
    INVOKER, ejecutable por `authenticated` y `service_role`). No escribe datos,
    no toma bloqueos sobre tablas y no lleva `drop`. Medida en producción como
@@ -2616,8 +2667,9 @@ el webhook no la trajo, tal como viene de Shopify.
    de cabecera («—»), porque ese porcentaje es justo el número equivocado.
    **Ya aplicada en producción el 14-10-2026** con `apply_migration` (historial
    `20261014172812 0257_canal_de_cierre`: se aplicó con ese número y el mismo
-   día se renumeró a 0258, porque la integración ya tenía `0257_invoices.sql`;
-   la función es la misma y no hay que volver a aplicarla). Comprobado ese día: el cuerpo de la
+   día se renumeró a 0258, porque la integración ya tenía `0257_invoices.sql`,
+   y el 15-10 a 0259, porque llegó `0258_restock_reply_sweep.sql`; la función
+   es la misma y no hay que volver a aplicarla). Comprobado ese día: el cuerpo de la
    función es idéntico al del archivo (mismo md5), `anon` no la puede ejecutar,
    y como el owner, con RLS, del 14-09 al 13-10 ve las dos tiendas en 0,27 s con
    los mismos pedidos por canal que la tabla del MOM §17.3 (solo cambian los

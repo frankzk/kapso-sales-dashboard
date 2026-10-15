@@ -1564,10 +1564,14 @@ describe("MOM §35.9 — creditNoteWarning: Kapta avisa, no emite la nota de cr�
   });
 });
 
-// ── Constantes, etiquetas y la 0257 ──────────────────────────────────────────
+// ── Constantes, etiquetas, la 0257 y la 0260 ─────────────────────────────────
 
 describe("MOM §35.3 a §35.6 — los motivos, las etiquetas y la base dicen lo mismo", () => {
+  // Las tablas, sus restricciones y sus índices son de la 0257, que corrió en
+  // producción y no se reescribe; el turno vigente es el de la 0260.
   const sql = readFileSync(resolve(process.cwd(), "db/migrations/0257_invoices.sql"), "utf8");
+  const sql0260 = readFileSync(resolve(process.cwd(), "db/migrations/0260_invoices_hardening.sql"), "utf8");
+  const claim = /create or replace function invoice_claim\([\s\S]*?\n\$\$;/.exec(sql0260)?.[0] ?? "";
   const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8");
 
   it("cada motivo y cada estado tiene su texto para el panel", () => {
@@ -1590,8 +1594,10 @@ describe("MOM §35.3 a §35.6 — los motivos, las etiquetas y la base dicen lo 
   });
 
   it("cada motivo que devuelve invoice_claim existe en INVOICE_REASONS", () => {
-    const deLaBase = [...sql.matchAll(/'reason', '([a-z_0-9]+)'/g)].map((m) => m[1]);
+    expect(claim).not.toBe("");
+    const deLaBase = [...claim.matchAll(/'reason', '([a-z_0-9]+)'/g)].map((m) => m[1]);
     expect(deLaBase.length).toBeGreaterThan(5);
+    expect(deLaBase).toContain("pagos_en_revision");
     for (const r of deLaBase) expect(INVOICE_REASONS).toContain(r);
   });
 
@@ -1608,7 +1614,7 @@ describe("MOM §35.3 a §35.6 — los motivos, las etiquetas y la base dicen lo 
         `default ${INVOICE_DAILY_LIMIT_DEFAULT}\\s+check \\(daily_limit between ${INVOICE_DAILY_LIMIT_MIN} and ${INVOICE_DAILY_LIMIT_MAX}\\)`,
       ),
     );
-    expect(sql).toContain(`p_total > ${BOLETA_MAX_CENTS / 100}`);
+    expect(claim).toContain(`p_total > ${BOLETA_MAX_CENTS / 100}`);
     expect(INVOICE_MAX_PER_RUN).toBe(15);
     // La prosa del MOM se re-envuelve: se compara sin saltos de línea.
     expect(mom.replace(/\s+/g, " ")).toContain(`a lo más ${INVOICE_MAX_PER_RUN} comprobantes por RUC`);

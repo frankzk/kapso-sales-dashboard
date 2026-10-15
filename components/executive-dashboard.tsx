@@ -264,7 +264,7 @@ export function ExecutiveDashboard({
    *  que una asesora había trabajado, y encima se quedaba sin el módulo de
    *  fuente y cierre. Que el tipo lo exija impide que vuelva a pasar en silencio. */
   attribution: SalesAttribution;
-  /** Quién cerró TODAS las ventas de la tienda (MOM §17.3, función 0258). Sin
+  /** Quién cerró TODAS las ventas de la tienda (MOM §17.3, función 0259). Sin
    *  él —o sin la migración— «Canal de cierre» vuelve a la vista anterior, que
    *  solo ve los pedidos del bot, y lo dice. */
   closing?: ClosingChannelResult;
@@ -326,7 +326,7 @@ export function ExecutiveDashboard({
   // Los canales por etiquetas de los pedidos del bot salen de la MISMA
   // atribución que alimenta el panel de «Fuente». Ya no son el «Canal de
   // cierre» de la tienda (MOM §17.3): solo los usa la vista de respaldo cuando
-  // la función 0258 no responde.
+  // la función 0259 no responde.
   const channels = attribution.channels;
   const cartStats = cartRecovery(leadList, orders);
   const campaignStats = campaignBreakdown(
@@ -632,7 +632,7 @@ export function ExecutiveDashboard({
 
   // «Canal de cierre» (MOM §17.3): quién cerró TODAS las ventas de la tienda,
   // por la venta registrada de la asesora y no por etiquetas que la
-  // sincronización con Shopify borra. Si la función 0258 no está (deploy no
+  // sincronización con Shopify borra. Si la función 0259 no está (deploy no
   // aplica migraciones), falla, o el periodo cae antes de que Kapta tuviera
   // todos los pedidos y las ventas de las asesoras, vuelve la vista anterior
   // —solo pedidos del bot— con un aviso y sin cifra de cabecera: su porcentaje
@@ -646,7 +646,7 @@ export function ExecutiveDashboard({
   const channelTotal = CHANNEL_COLS.reduce((s, c) => s + channels[c.key].revenue, 0);
   const legacyCanalNote =
     closing?.status === "sin_migracion"
-      ? "Falta aplicar la migración 0258 en la base: mientras tanto este panel solo ve los pedidos del bot de Kapso y no puede contar las ventas de las asesoras."
+      ? "Falta aplicar la migración 0259 en la base: mientras tanto este panel solo ve los pedidos del bot de Kapso y no puede contar las ventas de las asesoras."
       : noCoverage
         ? noCoverage.note
         : closing?.status === "error"

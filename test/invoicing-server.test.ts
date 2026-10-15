@@ -3,9 +3,9 @@
 //
 // Aquí no hay red ni Supabase. La base es un doble en memoria que filtra de
 // verdad (eq, in, gte, or…), anota cada consulta y aplica las dos reglas de la
-// 0257 que importan para no emitir de más: `invoice_claim` (uno por pedido, el
-// tope del día, el modo) y el candado de `order_invoices` (los estados solo
-// avanzan). Shopify y SimpleFact son dobles inyectados: nunca se llama a nada.
+// base que importan para no emitir de más: `invoice_claim` (uno por pedido, el
+// tope del día, el modo; 0257, y la versión vigente de la 0260) y el candado de
+// `order_invoices` (los estados solo avanzan). Shopify y SimpleFact son dobles inyectados: nunca se llama a nada.
 //
 // Lo que se fija es lo que no se puede deshacer después: una boleta enviada a
 // SUNAT no se borra. El turno va ANTES del POST, un envío sin respuesta queda
@@ -27,6 +27,7 @@ import type { InvoiceOrderRead } from "@/lib/invoicing/shopify-order";
 import { CHECKOUT_GATEWAYS } from "@/lib/payment-gateway";
 import type { SimplefactHttp } from "@/lib/invoicing/simplefact";
 import {
+  INVOICE_MIGRATION_OBJECTS,
   INVOICE_NOT_FOUND_ERROR,
   INVOICE_SHOPIFY_RECHECK_MS,
   INVOICE_SWEEP_MAX_CANDIDATES,
@@ -135,7 +136,7 @@ function project(row: Row, cols: string | null): Row {
   return out;
 }
 
-/** El candado de `order_invoices` (0257): los estados solo avanzan y lo enviado no cambia. */
+/** El candado de `order_invoices` (0257, vigente en la 0260): los estados solo avanzan y lo enviado no cambia. */
 function invoiceGuard(old: Row, values: Row): string | null {
   if (["simulada", "emitida", "externa"].includes(old.status as string)) return `Un comprobante ${String(old.status)} no cambia`;
   const next = (values.status ?? old.status) as string;
@@ -152,7 +153,7 @@ function invoiceGuard(old: Row, values: Row): string | null {
 
 const LIVE = ["emitiendo", "emitida", "en_duda", "externa"];
 
-/** Lo que contesta la base cuando la 0257 no está: la tabla o la función no existe. */
+/** Lo que contesta la base cuando falta la 0257 o la 0260: la tabla o la función no existe. */
 const MISSING = {
   "42P01": (name: string) => `relation "public.${name}" does not exist`,
   "42883": (name: string) => `function public.${name}() does not exist`,
@@ -262,7 +263,7 @@ function fakeDb(initialNow: Date) {
     return b;
   };
 
-  /** `invoice_candidates` (0257, §7), con los mismos filtros y el mismo orden. */
+  /** `invoice_candidates` (0260, §4), con los mismos filtros y el mismo orden. */
   const candidates = (a: Record<string, unknown>): { order_id: string }[] => {
     if (!["simulacion", "real"].includes(a.p_mode as string) || !a.p_since) return [];
     const now = clock.now;
@@ -302,7 +303,7 @@ function fakeDb(initialNow: Date) {
       .map((m) => ({ order_id: m.order_id as string }));
   };
 
-  /** `invoice_claim` (0257, §6), con las mismas revisiones y en el mismo orden. */
+  /** `invoice_claim` (la versión vigente, 0260 §3), con las mismas revisiones y en el mismo orden. */
   const claim = (a: Record<string, unknown>): unknown => {
     const now = clock.now;
     const store = t("stores").find((s) => s.id === a.p_store && s.status === "active");
@@ -1973,8 +1974,10 @@ describe("runInvoiceSweep: un `emitiendo` que nadie va a conciliar pasa a en dud
   });
 });
 
-describe("invoice_candidates (0257) y el barrido dicen lo mismo", () => {
-  const sql = readFileSync(resolve(process.cwd(), "db/migrations/0257_invoices.sql"), "utf8");
+describe("invoice_candidates (0260) y el barrido dicen lo mismo", () => {
+  // La crea la 0260; el turno vigente también es el de la 0260 (la 0257 que
+  // corrió en producción no se reescribe).
+  const sql = readFileSync(resolve(process.cwd(), "db/migrations/0260_invoices_hardening.sql"), "utf8");
   const fn = /create or replace function invoice_candidates\([\s\S]*?\n\$\$;/.exec(sql)?.[0] ?? "";
   const flat = fn.replace(/\s+/g, " ");
 
@@ -2023,7 +2026,7 @@ describe("invoice_candidates (0257) y el barrido dicen lo mismo", () => {
   });
 });
 
-describe("runInvoiceSweep: el código llegó antes que la 0257", () => {
+describe("runInvoiceSweep: el código llegó antes que la 0257 o la 0260", () => {
   const TABLES = ["invoice_issuers", "order_invoices", "invoice_order_checks"];
 
   it.each(["42P01", "PGRST205"] as const)("sin las tablas (%s): sin_migracion, sin errores y sin tocar nada", async (code) => {
@@ -2040,7 +2043,7 @@ describe("runInvoiceSweep: el código llegó antes que la 0257", () => {
     }
   });
 
-  it.each(["42883", "PGRST202"] as const)("sin invoice_candidates (%s): sin_migracion, sin errores", async (code) => {
+  it.each(["42883", "PGRST202"] as const)("sin invoice_candidates, con la 0257 y sin la 0260 (%s): sin_migracion, sin errores", async (code) => {
     const db = world();
     addOrder(db, 1);
     db.missing.set("invoice_candidates", code);
@@ -2079,9 +2082,39 @@ describe("runInvoiceSweep: el código llegó antes que la 0257", () => {
     expect(err).toBeInstanceOf(InvoiceMigrationMissingError);
     expect(isInvoiceMigrationMissing(err)).toBe(true);
     expect(isInvoiceMigrationMissing(new Error("42P01"))).toBe(false);
+    // Sin una tabla de la 0257 faltan las dos: la 0260 no se aplica sin ella.
+    expect((err as Error).message).toBe(
+      "Falta aplicar las migraciones 0257 y 0260 de comprobantes (No se pudo leer invoice_issuers).",
+    );
   });
 
-  it("«no existe» solo es «falta la 0257» si nombra algo que crea la 0257", () => {
+  it("el error dice qué migración falta: sin `invoice_candidates`, solo la 0260", () => {
+    // Con la 0257 aplicada y sin la 0260: lo que contesta PostgREST al barrido.
+    const candidatos = new InvoiceMigrationMissingError(
+      "No se pudieron leer los pedidos por revisar (real)",
+      "Could not find the function public.invoice_candidates(p_blocked, p_limit, p_mode, p_org, p_since, p_store) in the schema cache",
+    );
+    expect(candidatos.message).toBe(
+      "Falta aplicar la migración 0260 de comprobantes (No se pudieron leer los pedidos por revisar (real)).",
+    );
+    // Lo que crea la 0257 (el turno también: la 0260 solo lo vuelve a escribir).
+    for (const name of ["invoice_issuers", "order_invoices", "invoice_order_checks", "invoice_claim", "invoice_issuer_id"]) {
+      expect(INVOICE_MIGRATION_OBJECTS[name as keyof typeof INVOICE_MIGRATION_OBJECTS], name).toBe("0257");
+      expect(new InvoiceMigrationMissingError(name).message, name).toBe(
+        `Falta aplicar las migraciones 0257 y 0260 de comprobantes (${name}).`,
+      );
+    }
+    expect(INVOICE_MIGRATION_OBJECTS.invoice_candidates).toBe("0260");
+    // Si nombra algo de las dos, o nada, se piden las dos.
+    expect(new InvoiceMigrationMissingError("x", "invoice_candidates: relation order_invoices does not exist").message).toContain(
+      "las migraciones 0257 y 0260",
+    );
+    expect(new InvoiceMigrationMissingError("x", "algo que no se nombra").message).toContain("las migraciones 0257 y 0260");
+    // Un nombre que solo empieza igual no cuenta.
+    expect(new InvoiceMigrationMissingError("x", "invoice_candidates_old").message).toContain("las migraciones 0257 y 0260");
+  });
+
+  it("«no existe» solo es «falta una migración de comprobantes» si nombra algo que crean la 0257 o la 0260", () => {
     const si: object[] = [
       { code: "42P01", message: 'relation "public.order_invoices" does not exist' },
       { code: "42P01", message: 'relation "invoice_order_checks" does not exist' },
@@ -2095,7 +2128,10 @@ describe("runInvoiceSweep: el código llegó antes que la 0257", () => {
         details: "Searched for the function public.invoice_candidates with parameters p_blocked, p_limit",
       },
     ];
-    // Cada cosa que crea la 0257, con el mensaje de Postgres.
+    // Cada cosa que crean la 0257 y la 0260, con el mensaje de Postgres.
+    expect(Object.keys(INVOICE_MIGRATION_OBJECTS).sort()).toEqual(
+      ["invoice_issuers", "order_invoices", "invoice_order_checks", "invoice_claim", "invoice_candidates", "invoice_issuer_id"].sort(),
+    );
     for (const name of ["invoice_issuers", "order_invoices", "invoice_order_checks", "invoice_claim", "invoice_candidates", "invoice_issuer_id"]) {
       si.push({ code: "42P01", message: `relation "public.${name}" does not exist` });
     }

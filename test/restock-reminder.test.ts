@@ -9,6 +9,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   RESTOCK_PHONE_COOLDOWN_DAYS,
   handleRestockReply,
+  sendsToSweep,
+  sweepRestockReplies,
   isControlPhone,
   matchRestockReply,
   restockBodyParams,
@@ -168,6 +170,7 @@ function fakeAdmin(opts: {
         is: (c: string, v: unknown) => (filters.push(["is", c, v]), chain),
         not: () => chain,
         gte: () => chain,
+        gt: () => chain,
         order: () => chain,
         limit: () => chain,
         maybeSingle: () => Promise.resolve({ data: opts.maybe?.[table] ?? null, error: null }),
@@ -443,6 +446,92 @@ describe("handleRestockReply", () => {
   });
 });
 
+// ── El barrido: respuestas que el webhook no trajo ─────────────────────────
+
+describe("el barrido de respuestas", () => {
+  const SENT = "2026-10-14T17:00:00Z";
+  const send = (over: Record<string, unknown> = {}) => ({
+    id: "s1",
+    phone: ENVIO,
+    sent_at: SENT,
+    reply_checked_at: null as string | null,
+    ...over,
+  });
+
+  it("solo lee a quien escribió después del recordatorio y de la última revisión", () => {
+    const last = new Map<string, string | null>([[ENVIO, "2026-10-14T18:00:00Z"]]);
+    expect(sendsToSweep([send()], last)).toHaveLength(1);
+    // Escribió antes del recordatorio: nada que leer.
+    expect(sendsToSweep([send()], new Map([[ENVIO, "2026-10-14T16:00:00Z"]]))).toHaveLength(0);
+    // Ya se revisó después de su último mensaje.
+    expect(sendsToSweep([send({ reply_checked_at: "2026-10-14T18:30:00Z" })], last)).toHaveLength(0);
+    // Volvió a escribir después de la revisión.
+    expect(sendsToSweep([send({ reply_checked_at: "2026-10-14T17:30:00Z" })], last)).toHaveLength(1);
+    // Sin lead, o sin mensajes.
+    expect(sendsToSweep([send()], new Map())).toHaveLength(0);
+  });
+
+  it("lee la conversación y atiende el «Sí, quiero» por el mismo camino del webhook", async () => {
+    const admin = fakeAdmin({
+      tables: {
+        restock_sends: [send()],
+        leads: [{ phone: ENVIO, last_inbound_at: "2026-10-14T18:00:00Z" }],
+        conversations: [
+          { kapso_conversation_id: "conv-451", phone: `+${ENVIO}`, last_message_at: "2026-10-14T18:00:00Z" },
+          { kapso_conversation_id: "otra", phone: "+51911111111", last_message_at: "2026-10-14T18:00:00Z" },
+        ],
+      },
+      maybe: { restock_sends: { ...SEND, sent_at: SENT } },
+    });
+    const list = vi.fn().mockResolvedValue({
+      data: [
+        // Anterior al recordatorio: no cuenta.
+        { id: "wamid.OLD", from: ENVIO, type: "text", text: { body: "sí" }, timestamp: String(Date.parse("2026-10-14T16:00:00Z") / 1000), kapso: { direction: "inbound" } },
+        { id: "wamid.BTN", from: ENVIO, type: "button", button: { text: "Sí, quiero", payload: "Sí, quiero" }, timestamp: String(Date.parse("2026-10-14T17:30:00Z") / 1000), kapso: { direction: "inbound", phone_number_id: "PN-451" } },
+      ],
+    });
+    const handoff = vi.fn().mockResolvedValue({ ok: true });
+    const sendText = vi.fn().mockResolvedValue({ ok: true, id: "wamid.OUT" });
+    const rep = await sweepRestockReplies(admin, "store", { ...CREDS, restock_phone_number_id: "PN-451" }, {
+      list,
+      handoff,
+      sendText,
+      nowIso: "2026-10-14T19:00:00Z",
+    });
+    expect(rep).toEqual({ checked: 1, matched: 1 });
+    // Solo la conversación de ese celular, y solo lo entrante.
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(list.mock.calls[0]![1]).toMatchObject({ conversationId: "conv-451", direction: "inbound" });
+    // La reserva por wamid es la del mensaje real: si el webhook lo trae después, no se atiende dos veces.
+    expect(admin.writes.find((w: any) => w.table === "wa_auto_replies" && w.op === "insert").row).toMatchObject({
+      inbound_message_id: "wamid.BTN",
+      trigger: "recompra",
+    });
+    expect(handoff).toHaveBeenCalledWith(admin, "store", expect.objectContaining({ reason: "recompra", conversation_id: "conv-451" }));
+    // Y queda marcado como revisado.
+    expect(admin.writes.at(-1)).toMatchObject({ table: "restock_sends", op: "update", row: { reply_checked_at: "2026-10-14T19:00:00Z" } });
+  });
+
+  it("si la conversación no se pudo leer, no se marca: se reintenta en el próximo pase", async () => {
+    const admin = fakeAdmin({
+      tables: {
+        restock_sends: [send()],
+        leads: [{ phone: ENVIO, last_inbound_at: "2026-10-14T18:00:00Z" }],
+        conversations: [{ kapso_conversation_id: "conv-451", phone: ENVIO, last_message_at: "2026-10-14T18:00:00Z" }],
+      },
+    });
+    const list = vi.fn().mockRejectedValue(new Error("kapso caído"));
+    const rep = await sweepRestockReplies(admin, "store", CREDS, { list, nowIso: "2026-10-14T19:00:00Z" });
+    expect(rep.checked).toBe(1);
+    expect(admin.writes.some((w: any) => w.table === "restock_sends" && w.row?.reply_checked_at)).toBe(false);
+  });
+
+  it("corre en el cron junto con el envío", () => {
+    const ingest = readFileSync(resolve(process.cwd(), "lib/ingest.ts"), "utf8");
+    expect(ingest).toContain("await sweepRestockReplies(admin, storeId, creds);");
+  });
+});
+
 // ── Ajustes ─────────────────────────────────────────────────────────────────
 
 describe("la lista de productos en Ajustes", () => {
@@ -513,5 +602,6 @@ describe("MOM §34", () => {
     expect(mom).toContain("lo toma una asesora");
     expect(mom).toContain("grupo de control");
     expect(mom).toContain("Un producto sin foto no recibe recordatorio");
+    expect(mom).toContain("El número que envía necesita el webhook de «mensaje recibido» (15-10-2026)");
   });
 });

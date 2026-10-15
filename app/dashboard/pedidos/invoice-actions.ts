@@ -198,8 +198,9 @@ async function authorizeInvoice(
 /**
  * La base todavía no tiene la 0257: el panel no se dibuja, no falla. Es la
  * misma regla del barrido (`isInvoiceMigrationMissing`): solo cuenta como
- * «falta la 0257» si lo que falta es un objeto de la 0257; cualquier otra tabla
- * ausente es un error de verdad y se dice.
+ * «falta una migración» si lo que falta es algo que crean la 0257 o la 0260 (el
+ * panel solo lee tablas de la 0257); cualquier otra tabla ausente es un error de
+ * verdad y se dice.
  */
 function isMissingInvoiceTable(error: unknown): boolean {
   return isInvoiceMigrationMissing(error);

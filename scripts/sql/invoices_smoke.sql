@@ -1,6 +1,11 @@
--- Comprobantes electrónicos por RUC (0257, MOM §35). Corre solo en el clúster
--- desechable de verify-db, después de todas las migraciones, dentro de una
--- transacción que se deshace. Nunca llama a SimpleFact.
+-- Comprobantes electrónicos por RUC (0257 y 0260, MOM §35). Corre solo en el
+-- clúster desechable de verify-db, después de todas las migraciones, dentro de
+-- una transacción que se deshace. Nunca llama a SimpleFact.
+--
+-- La 0257 es la que corrió en producción el 14-10-2026, y la 0260 cambia cuatro
+-- de sus funciones (los arreglos de la revisión adversaria). Cada vez que esta
+-- prueba vuelve a correr la 0257, corre la 0260 justo después: la 0257 sola
+-- deja las funciones de antes, y el resto de la prueba es sobre las de ahora.
 --
 -- Reutiliza la organización y las tiendas A y B de rls_smoke.sql. Ya existían
 -- cuando corrieron la 0126, la 0198 y la 0257, así que tienen la semilla real:
@@ -11,8 +16,9 @@
 -- son dos boletas ante SUNAT, y una boleta enviada no se borra. Lo que lo impide
 -- vive en la base y no en el código, así que se prueba aquí:
 --   a) la semilla: un RUC por organización, apagado y sin token, en las dos
---      cuentas de la empresa y en ninguna personal; volver a correr la 0257 no
---      pisa lo que el owner cambió y solo siembra donde se cobra en esa cuenta;
+--      cuentas de la empresa y en ninguna personal; volver a correr la 0257 (y
+--      la 0260) no pisa lo que el owner cambió y solo siembra donde se cobra en
+--      esa cuenta;
 --   b) el emisor: RUC, subdominio de simplefact.pe (el token no viaja a otro
 --      sitio), tope de 1 a 300, y «real» solo con token, «Emitir desde» y una
 --      prueba que leyó el mismo RUC; un token nuevo lo baja a simulación;
@@ -24,7 +30,10 @@
 --      salvo quién lo hizo cuando se borra su cuenta (y solo por la cascada:
 --      a mano, ni con service_role);
 --   g) solo el servidor lee las tablas y pide el turno;
---   h) invoice_candidates: qué pedidos revisa el barrido en cada pasada.
+--   h) invoice_candidates: qué pedidos revisa el barrido en cada pasada;
+--   i) la 0260 sobre la 0257 que corrió en producción: la 0257 sola deja las
+--      cuatro funciones de antes de la revisión; la 0260 las cambia sin tocar
+--      un dato ni recrear un trigger, y correrla dos veces es correrla una.
 begin;
 set local client_min_messages = warning;
 
@@ -132,7 +141,7 @@ begin
   end loop;
 end $$;
 
-\echo '  volver a correr la 0257 no pisa lo que el owner cambió, y siembra solo donde se cobra en esa cuenta'
+\echo '  volver a correr la 0257 (y la 0260) no pisa lo que el owner cambió, y siembra solo donde se cobra en esa cuenta'
 -- El owner deja el Yape ···309 de la tienda A en «Sin comprobante».
 update store_collection_accounts set invoice_issuer_id = null
  where store_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' and phone_last_digits = '309';
@@ -153,7 +162,10 @@ insert into store_collection_accounts (store_id, label, phone_last_digits, note)
 
 -- La migración entera, no una copia de su semilla: si la semilla cambia, la
 -- prueba prueba la nueva. Se declara idempotente (DEPLOY.md la aplica a mano).
+-- La 0260 va justo después: la 0257 sola vuelve a dejar las funciones de antes
+-- de la revisión, y las pruebas que siguen son de las de ahora.
 \ir ../../db/migrations/0257_invoices.sql
+\ir ../../db/migrations/0260_invoices_hardening.sql
 
 do $$
 declare
@@ -200,8 +212,8 @@ end $$;
 
 -- Y cambia de idea: borra el RUC sembrado (sus cuentas quedan sin RUC por el
 -- `on delete set null`) y da de alta otro, al que asigna el ···309. Volver a
--- correr la 0257 recrea GRUPO GF S.A.C. en Y, pero no le quita el ···309 al
--- RUC que eligió el owner: la semilla solo llena cuentas vacías.
+-- correr la 0257 (y la 0260) recrea GRUPO GF S.A.C. en Y, pero no le quita el
+-- ···309 al RUC que eligió el owner: la semilla solo llena cuentas vacías.
 delete from invoice_issuers where org_id = '25700000-0000-0000-0000-0000000000a1';
 insert into invoice_issuers (org_id, ruc, legal_name, simplefact_subdomain)
 values ('25700000-0000-0000-0000-0000000000a1', '20000000003', 'ELEGIDA POR EL OWNER S.A.C.', 'elegida');
@@ -210,6 +222,7 @@ update store_collection_accounts
  where store_id = '25700000-0000-0000-0000-0000000000b1' and phone_last_digits = '309';
 
 \ir ../../db/migrations/0257_invoices.sql
+\ir ../../db/migrations/0260_invoices_hardening.sql
 
 do $$
 declare
@@ -1277,5 +1290,175 @@ begin
 end $$;
 reset role;
 
+-- ── i) La 0260 sobre la 0257 que corrió en producción ───────────────────────
+\echo '  0260 sobre la 0257 de producción: las cuatro funciones de la revisión, sin tocar datos ni recrear triggers, y dos veces es una'
+-- Producción tiene la 0257 tal como está en el repositorio (14-10-2026), un RUC
+-- en simulación y ningún comprobante. La 0260 cambia cuatro funciones y nada
+-- más. Aquí, con un RUC en simulación y los comprobantes de las pruebas de
+-- arriba: la 0257 sola deja las funciones de antes de la revisión (es la que
+-- corrió: lo nuevo no se le escribe a ella); la 0260 deja las de ahora con los
+-- mismos oids, así que los triggers de la 0257 —que guardan el oid— las llaman
+-- sin recrearse; ninguna fila cambia; y correr la 0260 otra vez no cambia nada.
+update invoice_issuers set mode = 'simulacion', emit_from = now()
+ where org_id = '25700000-0000-0000-0000-0000000000a1' and ruc = '20556792829';
+
+-- Una foto por paso: cada función (su oid y su definición), los triggers que
+-- las llaman y los datos de comprobantes.
+create temp table foto_0260 (paso text, cosa text, valor text, primary key (paso, cosa));
+create function pg_temp.foto_0260(p_paso text) returns void language sql as $$
+  insert into foto_0260 (paso, cosa, valor)
+  select p_paso, f, coalesce(to_regprocedure(f)::oid::text, '-') || ' ' || coalesce(pg_get_functiondef(to_regprocedure(f)), '-')
+    from unnest(array[
+      'invoice_issuers_touch()',
+      'order_invoices_guard()',
+      'invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)',
+      'invoice_candidates(uuid, text, timestamptz, integer, text[], uuid)'
+    ]) as f
+  union all
+  select p_paso, 'triggers', string_agg(format('%s/%s→%s', tgname, oid, tgfoid::regprocedure), ', ' order by tgname)
+    from pg_trigger where tgname in ('invoice_issuers_touch', 'order_invoices_guard')
+  union all
+  select p_paso, 'datos', md5(concat_ws('|',
+    (select jsonb_agg(to_jsonb(i) order by i.id)::text from invoice_issuers i),
+    (select jsonb_agg(jsonb_build_array(a.id, a.invoice_issuer_id) order by a.id)::text from store_collection_accounts a),
+    (select jsonb_agg(to_jsonb(o) order by o.id)::text from order_invoices o),
+    (select jsonb_agg(to_jsonb(c) order by c.order_id, c.mode)::text from invoice_order_checks c)))
+$$;
+create function pg_temp.en_0260(p_paso text, p_cosa text) returns text language sql stable as $$
+  select valor from foto_0260 where paso = p_paso and cosa = p_cosa
+$$;
+
+do $$ begin perform pg_temp.foto_0260('antes'); end $$;
+\ir ../../db/migrations/0257_invoices.sql
+do $$ begin perform pg_temp.foto_0260('0257'); end $$;
+\ir ../../db/migrations/0260_invoices_hardening.sql
+do $$ begin perform pg_temp.foto_0260('0260'); end $$;
+\ir ../../db/migrations/0260_invoices_hardening.sql
+do $$ begin perform pg_temp.foto_0260('0260 otra vez'); end $$;
+
+do $$
+declare
+  c_touch      constant text := 'invoice_issuers_touch()';
+  c_guard      constant text := 'order_invoices_guard()';
+  c_claim      constant text := 'invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)';
+  c_candidates constant text := 'invoice_candidates(uuid, text, timestamptz, integer, text[], uuid)';
+  v_fn   text;
+  v_paso text;
+  v_rol  text;
+  v_n    integer;
+begin
+  if (select count(*) from invoice_issuers where mode = 'simulacion') = 0
+     or (select count(*) from order_invoices) = 0 then
+    raise exception 'la foto no tiene un RUC en simulación ni comprobantes que cuidar';
+  end if;
+  -- Cada paso con sus seis cosas, y cada función existe en cada paso: sin esto,
+  -- un NULL haría pasar en silencio las comparaciones de abajo.
+  if (select count(*) from foto_0260 where valor is not null and valor not like '-%') <> 24 then
+    raise exception 'foto incompleta: %', (select string_agg(paso || '/' || cosa, ', ') from foto_0260
+                                           where valor is null or valor like '-%');
+  end if;
+
+  -- La 0257 sola: las funciones de antes de la revisión. Si esto falla, alguien
+  -- volvió a escribir lo nuevo dentro de la 0257, que ya corrió en producción.
+  if (pg_temp.en_0260('0257', c_touch) like '%new.check_error := null;%') is not false then
+    raise exception 'la 0257 ya borra check_error: lo nuevo va en otra migración';
+  end if;
+  if (pg_temp.en_0260('0257', c_guard) like '%pg_trigger_depth()%') is not false then
+    raise exception 'la 0257 ya tiene la excepción de la cascada: lo nuevo va en otra migración';
+  end if;
+  if (pg_temp.en_0260('0257', c_claim) like '%pagos_en_revision%') is not false
+     or (pg_temp.en_0260('0257', c_claim) like '%max(registered_at)%') is not false then
+    raise exception 'la 0257 ya revisa los pagos en el turno: lo nuevo va en otra migración';
+  end if;
+  -- La 0257 no crea ni borra invoice_candidates: la que había sigue igual.
+  if pg_temp.en_0260('0257', c_candidates) is distinct from pg_temp.en_0260('antes', c_candidates) then
+    raise exception 'la 0257 tocó invoice_candidates';
+  end if;
+
+  -- La 0260: las cuatro de ahora, las mismas que deja la cadena entera.
+  if (pg_temp.en_0260('0260', c_touch) like '%new.check_error := null;%') is not true then
+    raise exception '0260: invoice_issuers_touch no borra check_error';
+  end if;
+  if (pg_temp.en_0260('0260', c_guard) like '%if pg_trigger_depth() > 1%') is not true then
+    raise exception '0260: order_invoices_guard sin la excepción de la cascada';
+  end if;
+  if (pg_temp.en_0260('0260', c_claim) like '%''reason'', ''pagos_en_revision''%') is not true
+     or (pg_temp.en_0260('0260', c_claim) like '%max(registered_at) into v_live, v_paid%') is not true
+     or (pg_temp.en_0260('0260', c_claim) like '%greatest(p_paid_at, v_paid)%') is not true then
+    raise exception '0260: invoice_claim no saca de la base cuándo quedó pagado';
+  end if;
+  if to_regprocedure(c_candidates) is null
+     or (pg_temp.en_0260('0260', c_candidates) like '%from order_master m%') is not true then
+    raise exception '0260: falta invoice_candidates';
+  end if;
+
+  foreach v_fn in array array[c_touch, c_guard, c_claim, c_candidates] loop
+    -- Lo que dejó verify-db (todas las migraciones, en orden) es la 0260.
+    if pg_temp.en_0260('antes', v_fn) is distinct from pg_temp.en_0260('0260', v_fn) then
+      raise exception 'la cadena de migraciones no deja % como la 0260', v_fn;
+    end if;
+    -- `create or replace` conserva el oid: lo que los triggers guardan.
+    foreach v_paso in array array['0257', '0260', '0260 otra vez'] loop
+      if split_part(pg_temp.en_0260(v_paso, v_fn), ' ', 1) is distinct from split_part(pg_temp.en_0260('antes', v_fn), ' ', 1) then
+        raise exception '% cambió de oid en el paso %', v_fn, v_paso;
+      end if;
+    end loop;
+    -- Una sola versión de cada una: ninguna sobrecarga olvidada.
+    select count(*) into v_n from pg_proc
+     where pronamespace = 'public'::regnamespace and proname = split_part(v_fn, '(', 1);
+    if v_n <> 1 then raise exception '% tiene % versiones', split_part(v_fn, '(', 1), v_n; end if;
+    -- Ni el navegador ni nadie más la ejecuta.
+    foreach v_rol in array array['anon', 'authenticated'] loop
+      if has_function_privilege(v_rol, v_fn, 'execute') then
+        raise exception '% puede ejecutar %', v_rol, v_fn;
+      end if;
+    end loop;
+  end loop;
+  if not has_function_privilege('service_role', c_claim, 'execute')
+     or not has_function_privilege('service_role', c_candidates, 'execute') then
+    raise exception 'service_role no puede pedir el turno o la lista';
+  end if;
+
+  -- La 0260 no recrea los triggers: los mismos, llamando a las mismas funciones.
+  if pg_temp.en_0260('0260', 'triggers') is distinct from pg_temp.en_0260('0257', 'triggers') then
+    raise exception 'la 0260 recreó triggers: % → %', pg_temp.en_0260('0257', 'triggers'), pg_temp.en_0260('0260', 'triggers');
+  end if;
+  if (pg_temp.en_0260('0260', 'triggers') like '%invoice_issuers_touch/%→invoice_issuers_touch()%') is not true
+     or (pg_temp.en_0260('0260', 'triggers') like '%order_invoices_guard/%→order_invoices_guard()%') is not true then
+    raise exception 'triggers: %', pg_temp.en_0260('0260', 'triggers');
+  end if;
+
+  -- Ningún dato cambia, en ningún paso; y la segunda 0260 es la primera.
+  foreach v_paso in array array['0257', '0260', '0260 otra vez'] loop
+    if pg_temp.en_0260(v_paso, 'datos') is distinct from pg_temp.en_0260('antes', 'datos') then
+      raise exception 'el paso % cambió datos de comprobantes', v_paso;
+    end if;
+  end loop;
+  if exists (
+    select 1
+      from (select cosa, valor from foto_0260 where paso = '0260') a
+      full join (select cosa, valor from foto_0260 where paso = '0260 otra vez') b using (cosa)
+     where a.valor is distinct from b.valor
+  ) then
+    raise exception 'correr la 0260 otra vez cambió algo';
+  end if;
+end $$;
+
+-- Y el trigger de siempre ya llama a la función nueva: un token nuevo borra el
+-- motivo de la prueba anterior.
+do $$
+declare
+  v_y invoice_issuers;
+begin
+  update invoice_issuers set check_error = 'Token rechazado (401).'
+   where org_id = '25700000-0000-0000-0000-0000000000a1' and ruc = '20556792829';
+  update invoice_issuers set token_enc = 'enc:otro-token'
+   where org_id = '25700000-0000-0000-0000-0000000000a1' and ruc = '20556792829'
+  returning * into v_y;
+  if v_y.check_error is not null or v_y.checked_at is not null or v_y.mode <> 'simulacion' then
+    raise exception 'token nuevo tras la 0260: % % %', v_y.check_error, v_y.checked_at, v_y.mode;
+  end if;
+end $$;
+
 rollback;
-\echo '  invoices: semilla, emisor, cuenta → RUC, turno, índice, estados, cuentas borradas, pedidos por revisar y permisos OK'
+\echo '  invoices: semilla, emisor, cuenta → RUC, turno, índice, estados, cuentas borradas, pedidos por revisar, permisos y la 0260 sobre la 0257 OK'
