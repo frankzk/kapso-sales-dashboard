@@ -47,6 +47,7 @@ import {
   isOperationalStatus,
   ownRiderAttempts,
   resolveOrderState,
+  urpiAttempts,
   type GuideSnapshot,
   type OrderEventSnapshot,
   type StatusOverride,
@@ -779,6 +780,24 @@ async function fetchGeoOverrides(
 }
 
 
+/**
+ * Intentos que reportó Urpi, por pedido (MOM §30.11). Es un dato de la fila,
+ * no decide la etapa: si la tabla no responde, el recálculo sigue sin ellos.
+ */
+async function fetchUrpiAttempts(admin: SupabaseClient, ids: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  for (const batch of chunk(ids, ID_BATCH)) {
+    const { data, error } = await admin
+      .from("urpi_report_rows")
+      .select("order_id,result_code")
+      .in("order_id", batch);
+    if (error) return out;
+    const byOrder = groupBy((data ?? []) as { order_id: string; result_code: string | null }[], (row) => row.order_id);
+    for (const [orderId, rows] of byOrder) out.set(orderId, urpiAttempts(rows));
+  }
+  return out;
+}
+
 export interface RecomputeResult {
   requested: number;
   written: number;
@@ -847,6 +866,7 @@ export async function recomputeOrderMaster(
   const drafts = await fetchDraftAddresses(admin, orders);
   const geoOverrides = await fetchGeoOverrides(admin, ids);
   const signals = await fetchPaymentSignals(admin, ids);
+  const urpiAttemptsByOrder = await fetchUrpiAttempts(admin, ids);
   const {
     tariffs,
     orgByStore,
@@ -1207,11 +1227,12 @@ export async function recomputeOrderMaster(
       current_courier: state.currentCourier,
       last_courier: state.lastCourier,
       courier_count: state.courierCount,
-      // Lo que reportan los couriers más las paradas de nuestros motorizados.
-      // El costo logístico sigue con `state.attemptCount`: Grupo GF no cobra
-      // por intento adicional, y sumarle sus visitas a la tarifa de otro
-      // courier (un pedido que luego salió con Aliclik) inventaría un costo.
-      attempt_count: state.attemptCount + ownRiderAttempts(stateEvents),
+      // Lo que reportan los couriers, más las paradas de nuestros motorizados
+      // y los intentos del reporte de Urpi. El costo logístico sigue con
+      // `state.attemptCount`: ni Grupo GF ni Urpi cobran por intento adicional
+      // en `cost_tariffs`, y sumar sus visitas a la tarifa de otro courier (un
+      // pedido que luego salió con Aliclik) inventaría un costo.
+      attempt_count: state.attemptCount + ownRiderAttempts(stateEvents) + (urpiAttemptsByOrder.get(order.id) ?? 0),
       guide_code: state.guideCode,
       // De la guía VIGENTE, igual que el costo real de arriba: si un pedido
       // salió dos veces, lo que importa es el cobro de la que está entregando.

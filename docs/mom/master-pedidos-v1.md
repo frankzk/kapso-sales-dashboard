@@ -1786,7 +1786,7 @@ decían «0 intentos» (#KP140941: salió el 13/10 y el 14/10 con Roy, «No
 contesta» las dos veces, y la fila decía 0).
 
 - **No cambia el costo.** El costo logístico sigue con los intentos del
-  courier: Grupo GF no cobra por intento adicional, y sumar sus visitas a la
+  courier: ni Grupo GF ni Urpi cobran por intento adicional en las tarifas, y sumar sus visitas a la
   tarifa de otro courier (un pedido que luego salió con Aliclik) inventaría un
   costo.
 - **No cambia la etapa.** Es un dato de la fila; la macroetapa se decide como
@@ -1800,9 +1800,20 @@ contesta» las dos veces, y la fila decía 0).
   Shalom, Olva o Urpi, que no reportan intentos a la columna (abajo). Para
   acercarse a «nunca salió», se combina con la etapa (Preparación o Por
   despachar).
-- **Lo que todavía no cuenta.** Los intentos que Urpi reporta en su export
-  (§30.11) viven en su propia tabla y no entran en la columna; tampoco Tanders,
-  Shalom ni Olva, que no reportan intentos.
+- **Urpi también cuenta (v1.28, 15-10-2026).** Cada fila del reporte de Urpi
+  (§30.11) vinculada al pedido con resultado «Entregado», «Cancelado» o
+  «Reprogramado» es un intento (`urpiAttempts`); «Programado», «En
+  coordinación» y «Sin resultado» todavía no lo son. #KP131545: Urpi lo canceló
+  el 01/09 (fila 1906, vinculada por teléfono) y la fila decía «0 intentos»
+  aunque el intento ya estaba en su pestaña Actividad. Cargar el reporte no
+  toca guías ni eventos, así que desde la 0265 el barrido del Master
+  (`order_master_stale`) mira también la última escritura de las filas de Urpi
+  del pedido: un intento nuevo, cambiado o vinculado a mano recalcula su fila.
+  Lo que no la recalcula: si un envío se re-vincula de un pedido a otro, el
+  pedido que lo pierde conserva el número hasta su próximo recálculo.
+- **Lo que todavía no cuenta.** Tanders, Shalom y Olva no reportan intentos.
+  La programación enviada a Urpi (§30.10) tampoco: dice qué se mandó, no qué
+  pasó en la puerta.
 
 ### 9.4 Reportes, pagos y devoluciones físicas de Lima
 
