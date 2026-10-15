@@ -38,6 +38,8 @@ export interface MasterFilters {
   swaypAvailability: Set<string>;
   /** Canal de venta (lib/sales-channel.ts). Vacío = no filtra. */
   salesChannels: Set<string>;
+  /** «Salió con» (lib/dispatched-with.ts): basta con uno. Vacío = no filtra. */
+  dispatchedWith: Set<string>;
   /** YYYY-MM-DD; extremos inclusive, vacío = sin límite. */
   createdFrom: string;
   createdTo: string;
@@ -128,6 +130,7 @@ export function emptyFilters(): MasterFilters {
     coverages: new Set(),
     swaypAvailability: new Set(),
     salesChannels: new Set(),
+    dispatchedWith: new Set(),
     createdFrom: "",
     createdTo: "",
     dispatchedFrom: "",
@@ -172,6 +175,7 @@ export function hasActiveFilters(f: MasterFilters): boolean {
     f.coverages.size > 0 ||
     f.swaypAvailability.size > 0 ||
     f.salesChannels.size > 0 ||
+    f.dispatchedWith.size > 0 ||
     Boolean(f.createdFrom || f.createdTo) ||
     Boolean(f.dispatchedFrom || f.dispatchedTo) ||
     Boolean(f.movementFrom || f.movementTo) ||
@@ -273,6 +277,7 @@ export function matchesFilters(
   if (!inSet(f.coverages, row.coverage)) return false;
   if (!inSet(f.swaypAvailability, row.swayp_availability)) return false;
   if (!inSet(f.salesChannels, row.sales_channel)) return false;
+  if (f.dispatchedWith.size && !(row.dispatched_with ?? []).some((code) => f.dispatchedWith.has(code))) return false;
 
   // El filtro de courier mira el actual Y el último: buscar "los pedidos que
   // tocó Fenix" no debe perder los que ya pasaron a otra guía.

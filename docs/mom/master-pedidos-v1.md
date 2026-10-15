@@ -1823,6 +1823,24 @@ contesta» las dos veces, y la fila decía 0).
   traía (las reprogramaciones del equipo). Caso: los 11 «Por reprogramar Lima»
   del 11 y 12/10 con «0 intentos» y la Devolución de Swayp o el Returned de
   Tanders en su Actividad.
+- **Grupo GF: también el cuaderno histórico (v1.30).** Los intentos del
+  motorizado propio salen de las paradas de las rutas (`delivery_stops`),
+  además de los eventos `stop_reported`: 4.745 de las 5.652 paradas reportadas
+  al 15-10-2026 eran las paradas del cuaderno histórico, cargadas sin evento, y
+  no se contaban. Una parada con evento cuenta una sola vez.
+- **«Salió con» (v1.30, 15-10-2026).** El filtro «Courier» mira el courier
+  vigente y el último, y para Grupo GF solo decía «Propio». La píldora «Salió
+  con» (parámetro `sc`) responde con quién salió de verdad el pedido:
+  `order_master.dispatched_with` (0266, `lib/dispatched-with.ts`) guarda cada
+  motorizado de Grupo GF que tuvo una parada reportada con el pedido —o lo
+  lleva ahora: parada pendiente y la caja con el courier— como «Grupo GF ·
+  Roy», y cada courier externo cuya guía llegó a salir (despachada, en ruta,
+  entregada, de vuelta o con intentos), y Urpi si su reporte tiene intentos.
+  Una salida de Grupo GF sin parada conocida queda como «Grupo GF». Basta con
+  uno para que el pedido entre en el filtro; las opciones salen de los datos
+  (`master_facets`), así que un motorizado nuevo aparece solo. La fila del
+  Master lo enseña bajo los intentos («Salió con Roy, Tanders»), y el courier
+  se nombra como lo dice el equipo: Grupo GF, Swayp, Por definir.
 - **Lo que todavía no cuenta.** Shalom y Olva (agencia: la clienta recoge) no
   tienen visitas. La programación enviada a Urpi (§30.10) tampoco: dice qué se
   mandó, no qué pasó en la puerta.

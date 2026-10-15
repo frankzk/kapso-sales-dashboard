@@ -105,6 +105,7 @@ import {
   type MasterSortKey,
 } from "@/lib/order-master-filters";
 import { SALES_CHANNEL_OPTIONS } from "@/lib/sales-channel";
+import { courierDisplayName, dispatchedWithLabel, dispatchedWithShort } from "@/lib/dispatched-with";
 import { buildMasterQuery } from "@/lib/master-query";
 import { receiveSearchValue, shouldSendSearch } from "@/lib/search-input-echo";
 import { OrderLineItems } from "@/components/order-line-items";
@@ -240,6 +241,7 @@ export function OrdersMasterBoard({
     district: string[];
     coverage: string[];
     pickup: string[];
+    dispatchedWith: string[];
   };
   /** Contado en la base: sobre una página daría números falsos sin avisar. */
   agency: AgencySummary;
@@ -716,7 +718,7 @@ export function OrdersMasterBoard({
               <FacetPill
                 label="Courier"
                 allLabel="Todos los couriers"
-                options={facets.courier.map((v) => ({ value: v, label: cap(v) }))}
+                options={facets.courier.map((v) => ({ value: v, label: courierDisplayName(v) }))}
                 selected={filters.couriers}
                 onChange={(couriers) => patch({ couriers })}
               />
@@ -771,6 +773,16 @@ export function OrdersMasterBoard({
                 options={SWAYP_AVAILABILITY_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
                 selected={filters.swaypAvailability}
                 onChange={(swaypAvailability) => patch({ swaypAvailability })}
+              />
+              {/* Con quién salió de verdad: cada motorizado de Grupo GF y cada
+                  courier cuya guía llegó a salir (0266). «Courier» mira solo
+                  el vigente y el último. */}
+              <FacetPill
+                label="Salió con"
+                allLabel="Con cualquiera"
+                options={facets.dispatchedWith.map((v) => ({ value: v, label: dispatchedWithLabel(v) }))}
+                selected={filters.dispatchedWith}
+                onChange={(dispatchedWith) => patch({ dispatchedWith })}
               />
               {/* Por dónde se generó el pedido: lo dicen sus etiquetas de
                   Shopify (0264). Opciones fijas, como «Swayp». */}
@@ -994,6 +1006,7 @@ function pillFilterCount(f: MasterFilters, withManagement: boolean): number {
     f.coverages,
     f.swaypAvailability,
     f.salesChannels,
+    f.dispatchedWith,
     f.pickupStates,
     ...(withManagement ? [f.managementDays] : []),
   ].filter((set) => set.size > 0).length;
@@ -1027,6 +1040,7 @@ const CLEARED_PILL_FILTERS: Partial<MasterFilters> = {
   coverages: new Set(),
   swaypAvailability: new Set(),
   salesChannels: new Set(),
+  dispatchedWith: new Set(),
   pickupStates: new Set(),
   managementDays: new Set(),
   ...CLEARED_MORE_FILTERS,
@@ -2031,7 +2045,8 @@ function MasterTable({
             const isOpen = openId === r.order_id;
             const isSelected = selected.has(r.order_id);
             const since = r.macro_since ?? r.status_since;
-            const showCourierCounts = Boolean(r.last_courier) || r.attempt_count > 0 || r.courier_count > 1;
+            const salioCon = r.dispatched_with ?? [];
+            const showCourierCounts = Boolean(r.last_courier) || r.attempt_count > 0 || r.courier_count > 1 || salioCon.length > 0;
             return (
               <tr
                 key={r.id}
@@ -2129,10 +2144,10 @@ function MasterTable({
                     // En la ficha del teléfono, un renglón con solo «—» sobra.
                     !r.last_courier && !showCourierCounts && "max-xl:hidden",
                   )}
-                  title={`${r.courier_count} ${r.courier_count === 1 ? "courier" : "couriers"} · ${r.attempt_count} ${r.attempt_count === 1 ? "intento" : "intentos"} de entrega`}
+                  title={`${r.courier_count} ${r.courier_count === 1 ? "courier" : "couriers"} · ${r.attempt_count} ${r.attempt_count === 1 ? "intento" : "intentos"} de entrega${salioCon.length ? ` · Salió con: ${salioCon.map(dispatchedWithLabel).join(", ")}` : ""}`}
                 >
                   <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 xl:block">
-                    <p className="truncate capitalize leading-5 text-ink-900">{r.last_courier ?? "—"}</p>
+                    <p className="truncate leading-5 text-ink-900">{courierDisplayName(r.last_courier)}</p>
                     {showCourierCounts && (
                       <>
                         <p className="text-[13px] leading-5 tabular-nums text-ink-500">
@@ -2147,6 +2162,12 @@ function MasterTable({
                             </>
                           )}
                         </p>
+                        {salioCon.length > 0 && (
+                          <p className="truncate text-[13px] leading-5 text-ink-500">
+                            <span aria-hidden className={cn(DOT, "mr-1.5")}>·</span>
+                            Salió con {salioCon.map(dispatchedWithShort).join(", ")}
+                          </p>
+                        )}
                       </>
                     )}
                   </div>

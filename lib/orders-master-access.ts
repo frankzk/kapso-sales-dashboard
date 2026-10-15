@@ -82,6 +82,7 @@ import {
   type MasterFilters,
   type MasterSortKey,
 } from "@/lib/order-master-filters";
+import { compareDispatchCodes } from "@/lib/dispatched-with";
 import {
   MACRO_SUBSTAGES_BY_STAGE,
   ORDER_MACRO_STAGES,
@@ -134,7 +135,7 @@ export class OrderMasterReadError extends Error {
 const MASTER_COLUMNS =
   "id,store_id,order_id,order_name,order_created_at,customer_name," +
   "customer_phone,region,province,district," +
-  "coverage,swayp_availability,sales_channel," +
+  "coverage,swayp_availability,sales_channel,dispatched_with," +
   "shipping_mode,order_total,general_status," +
   "operational_status,macro_stage,macro_substage,macro_reasons,macro_operation,macro_version,macro_since," +
   "confirmation_active,confirmation_day_count,confirmation_last_contact_at," +
@@ -1172,6 +1173,7 @@ export function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T 
   if (f.coverages.size) q = q.in("coverage", [...f.coverages]);
   if (f.swaypAvailability.size) q = q.in("swayp_availability", [...f.swaypAvailability]);
   if (f.salesChannels.size) q = q.in("sales_channel", [...f.salesChannels]);
+  if (f.dispatchedWith.size) q = q.overlaps("dispatched_with", [...f.dispatchedWith]);
   if (f.pickupStates.size) q = q.in("pickup_state", [...f.pickupStates]);
 
   // Días con gestión. La columna es un entero y el filtro viaja por la URL como
@@ -1593,7 +1595,7 @@ export async function getOrderMasterPage(
 const FACETS_TTL_SECONDS = 120;
 
 async function loadFacets(storeIds: string[]) {
-  const empty = { operational: [], courier: [], region: [], province: [], district: [], coverage: [], pickup: [] };
+  const empty = { operational: [], courier: [], region: [], province: [], district: [], coverage: [], pickup: [], dispatchedWith: [] };
   if (!storeIds.length) return empty;
   const admin = createAdminSupabase();
   const { data, error } = await admin.rpc("master_facets", { p_store_ids: storeIds });
@@ -1608,6 +1610,8 @@ async function loadFacets(storeIds: string[]) {
     district: list("district"),
     coverage: list("coverage"),
     pickup: list("pickup"),
+    // Primero los motorizados de Grupo GF, luego los couriers (0266).
+    dispatchedWith: [...(d.dispatched_with ?? [])].sort(compareDispatchCodes),
   };
 }
 
@@ -1715,8 +1719,9 @@ export async function getMasterFacets(storeIds: string[]): Promise<{
   district: string[];
   coverage: string[];
   pickup: string[];
+  dispatchedWith: string[];
 }> {
-  const empty = { operational: [], courier: [], region: [], province: [], district: [], coverage: [], pickup: [] };
+  const empty = { operational: [], courier: [], region: [], province: [], district: [], coverage: [], pickup: [], dispatchedWith: [] };
   if (!storeIds.length) return empty;
   const sb = await createServerSupabase();
   const { data, error } = await sb.rpc("master_facets", { p_store_ids: storeIds });
@@ -1731,6 +1736,7 @@ export async function getMasterFacets(storeIds: string[]): Promise<{
     district: list("district"),
     coverage: list("coverage"),
     pickup: list("pickup"),
+    dispatchedWith: [...(d.dispatched_with ?? [])].sort(compareDispatchCodes),
   };
 }
 
