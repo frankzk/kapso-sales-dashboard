@@ -966,7 +966,7 @@ function moreFilterCount(f: MasterFilters): number {
     f.shippingModes.size > 0,
     f.withComments,
     f.multiCourier,
-    f.attempts > 0,
+    f.attempts !== null,
     f.staleDays > 0,
   ].filter(Boolean).length;
 }
@@ -1000,7 +1000,7 @@ const CLEARED_MORE_FILTERS: Partial<MasterFilters> = {
   shippingModes: new Set(),
   withComments: false,
   multiCourier: false,
-  attempts: 0,
+  attempts: null,
   staleDays: 0,
 };
 
@@ -1152,11 +1152,12 @@ function MoreFilters({
         <label className="grid gap-1.5">
           <span className="text-[13px] font-medium text-ink-700">Intentos de entrega</span>
           <select
-            value={filters.attempts}
-            onChange={(e) => onPatch({ attempts: Number(e.target.value) })}
+            value={filters.attempts ?? ""}
+            onChange={(e) => onPatch({ attempts: e.target.value === "" ? null : Number(e.target.value) })}
             className={cn(FIELD_BOX, "h-9 w-40 px-3 pointer-coarse:h-11")}
           >
-            <option value={0}>Todos</option>
+            <option value="">Todos</option>
+            <option value={0}>0 intentos</option>
             <option value={1}>1 intento</option>
             <option value={2}>2 intentos</option>
             <option value={3}>3 intentos</option>

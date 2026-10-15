@@ -49,9 +49,9 @@ export interface MasterFilters {
   /** Sin movimientos en los últimos `staleDays` días. 0 = filtro apagado. */
   staleDays: number;
   multiCourier: boolean;
-  /** Intentos de entrega: 1, 2 o 3 exactos; `ATTEMPTS_OR_MORE` es «4 a más».
-   *  0 = filtro apagado. Reemplaza a «Más de un intento» (15-10-2026). */
-  attempts: number;
+  /** Intentos de entrega: 0, 1, 2 o 3 exactos; `ATTEMPTS_OR_MORE` es «4 a
+   *  más». `null` = filtro apagado. Reemplaza a «Más de un intento» (15-10-2026). */
+  attempts: number | null;
   /** Sub-estados del flujo de agencia (§10). Vacío = no filtra. */
   pickupStates: Set<string>;
   /** Solo pedidos en agencia con el plazo de recojo a punto de vencer. */
@@ -136,7 +136,7 @@ export function emptyFilters(): MasterFilters {
     withComments: false,
     staleDays: 0,
     multiCourier: false,
-    attempts: 0,
+    attempts: null,
     pickupStates: new Set(),
     expiringSoon: false,
     search: "",
@@ -148,9 +148,9 @@ export function emptyFilters(): MasterFilters {
 /** El último valor del filtro de intentos: «4 a más». */
 export const ATTEMPTS_OR_MORE = 4;
 
-/** ¿Cumple el filtro de intentos? 1-3 exactos, 4 = cuatro o más, 0 = todos. Pura. */
-export function matchesAttempts(count: number, filter: number): boolean {
-  if (!filter) return true;
+/** ¿Cumple el filtro de intentos? 0-3 exactos, 4 = cuatro o más, null = todos. Pura. */
+export function matchesAttempts(count: number, filter: number | null): boolean {
+  if (filter === null) return true;
   return filter >= ATTEMPTS_OR_MORE ? count >= ATTEMPTS_OR_MORE : count === filter;
 }
 
@@ -175,7 +175,7 @@ export function hasActiveFilters(f: MasterFilters): boolean {
     f.withComments ||
     f.staleDays > 0 ||
     f.multiCourier ||
-    f.attempts > 0 ||
+    f.attempts !== null ||
     f.pickupStates.size > 0 ||
     f.expiringSoon ||
     f.search.trim().length > 0
