@@ -51,6 +51,7 @@ import {
   type OrderEventSnapshot,
   type StatusOverride,
 } from "@/lib/order-status";
+import { salesChannel } from "@/lib/sales-channel";
 import {
   activeCompanionLinks,
   borrowedHostEvents,
@@ -59,7 +60,7 @@ import {
 } from "@/lib/order-companion";
 
 const ORDER_COLUMNS =
-  "id,store_id,shopify_order_id,name,created_at,cancelled_at,financial_status,payment_gateway,shipping_mode,customer_phone,total_amount,total_refunded,raw";
+  "id,store_id,shopify_order_id,name,created_at,cancelled_at,financial_status,payment_gateway,shipping_mode,customer_phone,total_amount,total_refunded,raw,tags,kapso_conversation_id";
 
 // Las columnas de gestión (assigned_at … agency_expires_at) las añade 0047. El
 // código se despliega antes que la migración, así que se intenta el conjunto
@@ -146,6 +147,8 @@ interface OrderRecord {
   total_amount: number | null;
   total_refunded: number | null;
   raw: unknown;
+  tags?: string[] | null;
+  kapso_conversation_id?: string | null;
 }
 
 interface ShipmentRecord {
@@ -1178,6 +1181,9 @@ export async function recomputeOrderMaster(
       longitude,
       geo_source: geoSource,
       shipping_mode: order.shipping_mode,
+      // Por dónde se generó (formulario web, asesora, chatbot…): el filtro
+      // «Canal» del Master (0264, lib/sales-channel.ts).
+      sales_channel: salesChannel(order.tags, order.kapso_conversation_id),
       order_total: order.total_amount,
       general_status: state.general,
       operational_status: state.operational,

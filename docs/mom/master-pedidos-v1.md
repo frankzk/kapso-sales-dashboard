@@ -61,6 +61,29 @@ lo que se calcula recorriendo leads: ese camino no los ve. El anuncio que los
 trajo viaja en `orders.utm_meta`, y las reglas para leerlo están en
 `lib/cod-cart-attribution.ts`.
 
+**Canal de venta (15-10-2026).** Todos los pedidos nacen en Shopify, pero no
+por el mismo camino, y lo dicen las etiquetas que cada camino le pone. El
+Master lo guarda en `order_master.sales_channel` (0264) y lo filtra con la
+píldora «Canal» (parámetro `cn` de la URL). Un pedido tiene un solo canal; si
+lleva marcas de dos, gana el primero de esta lista —quien cerró la venta antes
+que la herramienta donde quedó escrita—:
+
+| Canal | Etiqueta en Shopify | 45 días al 15-10-2026 |
+| --- | --- | --- |
+| Asesora (Leads) | `venta_manual`, `carrito_recuperado` | 15 % |
+| Chatbot WhatsApp | `kapso`, `whatsapp`, o el pedido trae conversación de Kapso | 9 % |
+| Bot de carritos | `CARRITO RECUPERADO`, `BOT`, `BOT (whatsapp_cloud)` | 4 % |
+| Catálogo WhatsApp | `catalogo-wsp` (el catálogo privado del agradecimiento, §31) | 1 % |
+| Web · carrito completado | `easysell-abandoned-checkout` (formulario abandonado que la clienta completó después) | 15 % |
+| Web · formulario | `easysell_cod_form` | 55 % |
+| Sin marca | ninguna de las anteriores (sobre todo pedidos creados a mano en Shopify con el nombre de la asesora como etiqueta) | 1,5 % |
+
+La regla vive en `lib/sales-channel.ts` y la escribe el recálculo del pedido;
+la misma regla en SQL (`order_sales_channel`) solo rellenó lo existente al
+aplicar la 0264. No se usa para atribuir ventas a una asesora: eso lo decide
+`order_sales` y el reparto bot/asesora de Consolidado (`lib/metrics.ts`), que
+además mira la gestión del lead.
+
 ### Salida
 
 Intento físico de entregar un pedido. Una salida corresponde a un paquete, un

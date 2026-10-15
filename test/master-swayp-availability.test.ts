@@ -87,7 +87,7 @@ describe("el filtro del Master", () => {
   it("se aplica en la base, no en la página", () => {
     const src = read("lib/orders-master-access.ts");
     expect(src).toContain('if (f.swaypAvailability.size) q = q.in("swayp_availability", [...f.swaypAvailability]);');
-    expect(src).toContain('"coverage,swayp_availability," +');
+    expect(src).toContain('"coverage,swayp_availability,sales_channel," +');
   });
 
   it("enseña los mismos textos que Repro Provincia", () => {
