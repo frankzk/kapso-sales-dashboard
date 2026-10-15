@@ -12156,7 +12156,9 @@ Runbook: `docs/runbooks/urpi-programaciones.md`. Persistencia: migraciones 0215�
 
 `/dashboard/urpi?vista=resultados` carga el export «Reporte del mes – detallado»
 del AppSheet de Urpi (.csv). Es lo que Urpi **dice** que pasó en cada intento:
-Kapta lo registra, lo vincula al pedido y propone; no lo da por hecho.
+Kapta lo registra y lo vincula al pedido. Desde el 15-10-2026 las **entregas**
+se marcan solas en el Master al cargar el reporte (ver «Marcado automático»);
+cancelados y reprogramados solo se registran.
 
 **Identidad.** Urpi exporta una fila por **intento**, no por pedido, con su
 número de fila («_RowNumber») como identidad. Un reintento apunta al anterior en
@@ -12184,8 +12186,8 @@ pedido. Esta regla vale para el reporte de resultados; la programación enviada
 
 | Urpi | Kapta |
 | --- | --- |
-| Entregado, pedido abierto en Kapta | «Entregados por marcar». Quien tiene `master.edit` los marca entregados, uno a uno o en lote, por la única puerta (§11.4, `lib/master-door.ts`): `status_override` con fuente `liquidacion`, courier `urpi`, mediodía de Lima del día del reporte y la fila de Urpi como evidencia. |
-| Entregado, pedido anulado **solo en Kapta** (Shopify vivo) | También «Entregados por marcar»: solo Shopify termina una venta (v1.23). Caso real: #KP135768, entregado por Urpi el 23/09 y cerrado como anulado porque esa tarde se le emitió una guía de Tanders que se anuló sin salir. |
+| Entregado, pedido abierto en Kapta | Se marca entregado **al cargar el reporte** (desde el 15-10-2026) por la única puerta (§11.4, `lib/master-door.ts`): `status_override` con fuente `liquidacion`, courier `urpi`, mediodía de Lima del día del reporte y la fila de Urpi como evidencia. Lo que la carga no pudo marcar queda en «Entregados por marcar», para marcarlo uno a uno o en lote. |
+| Entregado, pedido anulado **solo en Kapta** (Shopify vivo) | Igual, se marca: solo Shopify termina una venta (v1.23). Caso real: #KP135768, entregado por Urpi el 23/09 y cerrado como anulado porque esa tarde se le emitió una guía de Tanders que se anuló sin salir. |
 | Entregado, pedido anulado **en Shopify** o devuelto | Observación. Nunca se marca. Se resuelve de dos formas: si el pedido se rehízo en Shopify, se vincula el envío al pedido nuevo con su código (y pasa a «por marcar»); si no, se **cierra con motivo** —evento `urpi_observation_resolved` en el historial del pedido, que no cambia su estado— y el dinero se cuadra en la liquidación de Urpi. Un intento posterior de Urpi la reabre. El 05-10-2026 eran 6: anulados en Shopify entre 7 y 14 días después de que Urpi los entregara y cobrara. |
 | Cancelado | Se registra con su motivo, detalle y fotos y se lista en «Cancelados por Urpi» para Seguimiento Lima. **No cambia el estado del Master** ni anula el pedido en Shopify. |
 | Reprogramado | Se registra y se lista con su nuevo día: el siguiente de lunes a sábado desde la fecha del reporte (§30.10). No cambia el estado del Master. |
@@ -12212,6 +12214,39 @@ definir»— no se sabe qué caja se llevó Urpi y no se toca; sin «por definir
 se crea una salida. La pantalla ofrece completar las ya marcadas antes de esta
 regla con el mismo botón.
 
+**Marcado automático (decisión del owner, 15-10-2026).** Hasta esta fecha
+una persona revisaba «Entregados por marcar» y pulsaba «Marcar entregados».
+Nadie lo hacía a tiempo, y Urpi ya liquida y paga la recaudación de esas
+entregas: el pedido seguía «Por despachar · Listo para asignar» con el dinero
+cobrado. Caso real: #KP138847, entregado por Urpi el 06/10 (efectivo, S/ 367) y
+todavía «en proceso» el 15/10. Ese día había 26 por marcar —22 en «Listo para
+asignar», 3 en «Por reprogramar Lima», 1 anulado solo en Kapta— y 87 pedidos
+entregados por la carga histórica del cuaderno de Urpi (agosto y septiembre)
+con su caja todavía «por definir».
+
+Así funciona desde entonces (`lib/urpi-report-apply.ts`):
+
+- **Cuándo.** Después de guardar el reporte, Kapta toma todos los pedidos con
+  algún intento «Entregado» de los últimos 60 días (los mismos que muestra la
+  pantalla) y decide con el **último** intento de cada uno, igual que antes: si
+  después hubo un cancelado o un reprogramado, no se marca. También al vincular
+  a mano un envío que Urpi entregó.
+- **Qué hace.** Lo mismo que el botón: marca entregado lo que Kapta tiene
+  abierto (o anulado solo en Kapta) y rellena la caja «por definir» como salida
+  de Urpi entregada, también en los ya entregados que la tenían pendiente.
+  Anulado en Shopify o devuelto sigue siendo observación y no se toca.
+- **Quién.** El actor del evento es quien cargó el reporte (o vinculó), con el
+  motivo «…, marcado al cargar el reporte» («…, marcado al vincular el envío»)
+  y `payload.auto` = `carga` / `vinculo`. Exige `master.edit`, como siempre:
+  si quien carga solo tiene `sheets.edit`, el reporte se guarda y los
+  entregados quedan en «Entregados por marcar» para quien sí lo tenga.
+- **Si falla.** El reporte ya quedó guardado; la carga lo dice y «Entregados
+  por marcar» sigue para hacerlo a mano. Volver a cargar el archivo lo reintenta.
+- **Lo que se informa.** Solo lo que cambió y lo que alguien tiene que mirar:
+  pedidos marcados, salidas rellenadas, marcados esta vez con otra salida viva
+  (su salida se revisa a mano) y salidas que no se pudieron actualizar. Lo que
+  ya estaba al día no se repite en cada carga.
+
 **Por qué cancelado y reprogramado no mueven el Master.** «Por reprogramar
 Lima» (§9) exige una salida que conste fuera. Los despachos a Urpi salen del
 Google Sheet de programación, no de la ruta de Urpi de Kapta (6 salidas de Urpi
@@ -12227,7 +12262,7 @@ desaparezca del export. Los intentos se ven también en la ficha del pedido
 
 **Permisos.** Cargar el reporte y vincular exige `sheets.edit` en la
 organización, igual que cerrar una observación con motivo; marcar entregados
-(y rellenar la salida), `master.edit`. Vincular y marcar solo alcanzan
+(y rellenar la salida), `master.edit`, también cuando lo hace la carga sola. Vincular y marcar solo alcanzan
 pedidos de las tiendas que la persona ve. RLS: una fila vinculada se lee
 con su tienda (`auth_store_ids()`); una sin vincular, con la organización
 (`auth_org_ids()`). Escritura solo del servidor.
