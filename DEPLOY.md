@@ -2829,3 +2829,15 @@ conexión, también cuando sale de «Emitir esta boleta». Ajustes lo dice en ro
 «Apagado por Kapta: ‹motivo›. Prueba la conexión antes de volver a Real o a Manual.». Para
 volver a Real hay que corregir lo que falló (el token o el subdominio) y pulsar
 «Probar conexión» de nuevo. Lo mismo para volver a Manual.
+
+### 15-10-2026 · Intentos del motorizado propio y filtro de intentos (`mom-v1.27`)
+
+Sin migraciones, variables de entorno ni RPC nuevas. `MOM_RESOLUTION_VERSION`
+sube a `mom-v1.27`: el cron `master-reconcile` recalcula las filas y la columna
+de intentos pasa a sumar las paradas de Grupo GF (MOM §9.3, «Intentos de
+entrega»). No cambia etapas ni costos. Con la foto del 15-10-2026, 487 pedidos
+con un «No entregado» de motorizado propio tenían `attempt_count = 0`.
+
+**Qué mirar después.** Cuando el cron termine,
+`select count(*) from order_master where macro_version <> 'mom-v1.27';` da `0`,
+y #KP140941 dice 2 intentos (3 si la salida del 15/10 ya se reportó).

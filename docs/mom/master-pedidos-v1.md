@@ -1749,6 +1749,34 @@ Reglas:
   ese estado **se recalcula solo** en cuanto exista otra salida viva y no hace
   falta corregirlo a mano.
 
+#### Intentos de entrega (15-10-2026)
+
+La columna de intentos del Master (`order_master.attempt_count`, «Propio · 2
+intentos» bajo el courier) suma lo que reportan los couriers externos —los
+intentos de Aliclik o, si no los trae, las reprogramaciones que gestionó el
+equipo— y, desde el 15-10-2026, **cada parada que reporta un motorizado propio
+es un intento** (`ownRiderAttempts`, evento `stop_reported`): entregada o no.
+Dos «No contesta» y una entrega son tres intentos; una parada que se corrige de
+«No entregado» a «Entregado» es la misma visita y cuenta una vez. Antes el
+Master solo sumaba lo externo: los 487 pedidos con un «No entregado» de Grupo GF
+decían «0 intentos» (#KP140941: salió el 13/10 y el 14/10 con Roy, «No
+contesta» las dos veces, y la fila decía 0).
+
+- **No cambia el costo.** El costo logístico sigue con los intentos del
+  courier: Grupo GF no cobra por intento adicional, y sumar sus visitas a la
+  tarifa de otro courier (un pedido que luego salió con Aliclik) inventaría un
+  costo.
+- **No cambia la etapa.** Es un dato de la fila; la macroetapa se decide como
+  antes. `MOM_RESOLUTION_VERSION` sube a `mom-v1.27` para que el cron recalcule
+  la columna.
+- **El filtro.** En «Más filtros», «Intentos de entrega»: Todos, 1 intento, 2
+  intentos, 3 intentos y 4 a más intentos (parámetro `at` de la URL). Reemplaza
+  la casilla «Más de un intento»; un enlace viejo con esa casilla abre el
+  listado sin ese filtro.
+- **Lo que todavía no cuenta.** Los intentos que Urpi reporta en su export
+  (§30.11) viven en su propia tabla y no entran en la columna; tampoco Tanders,
+  Shalom ni Olva, que no reportan intentos.
+
 ### 9.4 Reportes, pagos y devoluciones físicas de Lima
 
 | Operador | Fuente del resultado | Momento observado |

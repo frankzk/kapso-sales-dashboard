@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { OPERATIONAL_STATUSES } from "@/lib/order-status";
 import {
   AGENCY_AVAILABLE_STATES,
+  ATTEMPTS_OR_MORE,
   agencyHasActivity,
   agencySummary,
   applyFilters,
@@ -171,11 +172,21 @@ describe("matchesFilters — banderas operativas", () => {
     expect(matchesFilters(row("2", { comment_count: 0 }), f, NOW)).toBe(false);
   });
 
-  it("más de un courier y más de un intento", () => {
+  it("más de un courier", () => {
     expect(matchesFilters(row("1", { courier_count: 2 }), withFilter({ multiCourier: true }), NOW)).toBe(true);
     expect(matchesFilters(row("2", { courier_count: 1 }), withFilter({ multiCourier: true }), NOW)).toBe(false);
-    expect(matchesFilters(row("3", { attempt_count: 3 }), withFilter({ multiAttempt: true }), NOW)).toBe(true);
-    expect(matchesFilters(row("4", { attempt_count: 1 }), withFilter({ multiAttempt: true }), NOW)).toBe(false);
+  });
+
+  it("intentos de entrega: 1, 2 y 3 exactos; 4 es «4 a más»", () => {
+    expect(matchesFilters(row("1", { attempt_count: 1 }), withFilter({ attempts: 1 }), NOW)).toBe(true);
+    expect(matchesFilters(row("2", { attempt_count: 2 }), withFilter({ attempts: 1 }), NOW)).toBe(false);
+    expect(matchesFilters(row("3", { attempt_count: 3 }), withFilter({ attempts: 3 }), NOW)).toBe(true);
+    expect(matchesFilters(row("4", { attempt_count: 4 }), withFilter({ attempts: 3 }), NOW)).toBe(false);
+    expect(matchesFilters(row("5", { attempt_count: 4 }), withFilter({ attempts: ATTEMPTS_OR_MORE }), NOW)).toBe(true);
+    expect(matchesFilters(row("6", { attempt_count: 7 }), withFilter({ attempts: ATTEMPTS_OR_MORE }), NOW)).toBe(true);
+    expect(matchesFilters(row("7", { attempt_count: 3 }), withFilter({ attempts: ATTEMPTS_OR_MORE }), NOW)).toBe(false);
+    expect(matchesFilters(row("8", { attempt_count: 0 }), withFilter({ attempts: 0 }), NOW)).toBe(true);
+    expect(hasActiveFilters(withFilter({ attempts: 2 }))).toBe(true);
   });
 
   it("sin movimientos recientes incluye a los que nunca se movieron", () => {
@@ -262,7 +273,7 @@ describe("matchesFilters — banderas operativas", () => {
     const f = withFilter({
       generalStatuses: new Set(["en_proceso"]),
       provinces: new Set(["Huancayo"]),
-      multiAttempt: true,
+      attempts: 2,
     });
     expect(matchesFilters(row("1", { attempt_count: 2 }), f, NOW)).toBe(true);
     expect(matchesFilters(row("2", { attempt_count: 0 }), f, NOW)).toBe(false);
