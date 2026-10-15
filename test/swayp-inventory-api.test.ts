@@ -78,6 +78,7 @@ describe("ciudadDeWarehouse", () => {
   it("en la dirección busca PALABRAS, desde el final: «República» no es Ica", () => {
     expect(ciudadDeWarehouse({ direccion: "Av. República de Panamá 3000" })).toBeNull();
     expect(ciudadDeWarehouse({ direccion: "Calle Lima 120, Ica" })).toBe("ica");
+    expect(ciudadDeWarehouse({ name: "BODEGA ICA" })).toBe("ica");
   });
 
   it("último recurso: rastrea la ciudad dentro de la dirección", () => {
@@ -278,6 +279,7 @@ describe("inventarioDesdeProductos (GET /v1/integrations/products)", () => {
           { idBodega: "40101", nombre: "Bodega Arequipa", lot: "", quantity: 18 },
           { idBodega: "150101", nombre: "Bodega Lima", lot: "", quantity: 10000 },
           { idBodega: "80101", nombre: "BODEGA CUSCO", lot: "", quantity: 10 },
+          { idBodega: "110101", nombre: "BODEGA ICA", lot: "", quantity: 12 },
         ],
       },
       {
@@ -302,6 +304,10 @@ describe("inventarioDesdeProductos (GET /v1/integrations/products)", () => {
       { codbar: "AURE003", nombre: "ETHIOPIAN OIL", bodega: "Bodega Arequipa", disponible: 75 },
     ]);
     expect(r.porCiudad.get("lima")?.[0]!.disponible).toBe(10000);
+    // Ica entra al sync desde el 15-10-2026: su stock ya está en la bodega de Swayp.
+    expect(r.porCiudad.get("ica")).toEqual([
+      { codbar: "AURE001", nombre: "CANDIDA CLEANSE", bodega: "BODEGA ICA", disponible: 12 },
+    ]);
     // Arequipa: «40101» se lee como 040101.
     expect(r.bodegas.find((b) => b.id === "40101")).toMatchObject({ ciudadInei: "040101", city: "arequipa" });
   });
@@ -312,13 +318,13 @@ describe("inventarioDesdeProductos (GET /v1/integrations/products)", () => {
     expect(r.sinCiudad).toEqual([
       { idWarehouse: "80101", ciudad: "cusco", nombre: "BODEGA CUSCO", ciudadInei: "080101", direccion: "", filas: 1 },
     ]);
-    expect(r.totalFilas).toBe(6);
+    expect(r.totalFilas).toBe(7);
     expect(r.filasPorBodega["40101"]).toBe(3);
   });
 
   it("acepta la lista en la raíz o en data, y una respuesta vacía no rompe", () => {
-    expect(inventarioDesdeProductos(respuesta.products).totalFilas).toBe(6);
-    expect(inventarioDesdeProductos({ data: respuesta.products }).totalFilas).toBe(6);
+    expect(inventarioDesdeProductos(respuesta.products).totalFilas).toBe(7);
+    expect(inventarioDesdeProductos({ data: respuesta.products }).totalFilas).toBe(7);
     expect(inventarioDesdeProductos({}).totalFilas).toBe(0);
     expect(inventarioDesdeProductos(null).totalFilas).toBe(0);
   });

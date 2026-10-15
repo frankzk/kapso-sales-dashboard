@@ -69,6 +69,8 @@ const BODEGA_A_CIUDAD: Record<string, string> = {
   juliaca: "juliaca",
   piura: "piura",
   lima: "lima",
+  // 15-10-2026: la bodega de Ica pasa a Swayp («BODEGA ICA»).
+  ica: "ica",
 };
 
 function sinTildes(s: string): string {
@@ -207,9 +209,9 @@ export interface PlanImportacion {
  * justamente el número fantasma que autoriza guías imposibles. No se borra el
  * renglón —el producto sigue existiendo y mañana puede reponerse—, se pone en 0.
  *
- * SÓLO SE TOCA LA CIUDAD IMPORTADA. Nuestra tabla cubre nueve ciudades y Swayp
- * tiene cinco bodegas: Cusco, Huancayo, Ica, Chiclayo y Chimbote se abastecen de
- * otra forma. Un importador que "limpiara lo que no vino en el archivo" a secas
+ * SÓLO SE TOCA LA CIUDAD IMPORTADA. Nuestra tabla cubre más ciudades que las
+ * bodegas que se leen de Swayp: Cusco, Huancayo, Chiclayo y Chimbote se
+ * abastecen de otra forma. Un importador que "limpiara lo que no vino en el archivo" a secas
  * las vaciaría de un plumazo.
  *
  * El emparejamiento es por CÓDIGO DE BARRAS vía Catálogo (codbar → SKU de
