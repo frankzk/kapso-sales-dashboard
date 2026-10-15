@@ -3,10 +3,12 @@
 // Lo que se fija aquí: que las tres acciones pidan los DOS permisos («Administrar
 // tiendas» y «Boletas y facturas») en la organización de la tienda; que un RUC
 // no se guarde con datos que la base rechazaría; que el token se cifre y nunca
-// vuelva; que «Emitir desde» no quede atrás; que Real se gane con una prueba de
-// conexión que leyó el RUC declarado; y que la sección del navegador no arrastre
-// `node:crypto` ni reciba el token. La base, la sesión, el cifrado y SimpleFact
-// van simulados: aquí no sale nada a la red.
+// vuelva; que «Emitir desde» no quede atrás; que Manual y Real se ganen con una
+// prueba de conexión que leyó el RUC declarado; que «Emitir» de los últimos
+// comprobantes salga solo en la simulada de un RUC en Manual; y que la sección
+// del navegador no arrastre `node:crypto` ni reciba el token. La base, la
+// sesión, el cifrado, SimpleFact y la acción de emitir van simulados: aquí no
+// sale nada a la red.
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -75,6 +77,16 @@ vi.mock("@/lib/crypto", () => ({
     if (st.decryptThrows) throw new Error("Unsupported state or unable to authenticate data");
     return spies.decrypt(payload);
   }),
+}));
+// La acción de emitir es la del drawer (test/invoicing-drawer.test.ts la
+// prueba): aquí solo se mira que Ajustes la use, y no se carga su servidor.
+vi.mock("@/app/dashboard/pedidos/invoice-actions", () => ({
+  emitInvoiceAction: vi.fn(async () => ({ notice: "Emitida B001-1" })),
+  loadInvoicePanel: vi.fn(),
+  registerExternalInvoice: vi.fn(),
+  requestInvoiceRetry: vi.fn(),
+  releaseDoubtfulInvoice: vi.fn(),
+  confirmDoubtfulInvoice: vi.fn(),
 }));
 vi.mock("@/lib/invoicing/simplefact", () => ({
   testSimplefactConnection: vi.fn(async (...args: unknown[]) => {
@@ -151,7 +163,9 @@ import {
 } from "@/app/dashboard/[storeId]/settings/invoice-actions";
 import {
   InvoiceSettingsSection,
+  MODE_HELP,
   type InvoiceIssuerView,
+  type InvoiceRecentView,
   type InvoiceSettingsData,
 } from "@/components/invoice-settings-section";
 
@@ -834,6 +848,8 @@ const RECENT: InvoiceSettingsData["recent"] = [
     error: null,
     createdAt: "2026-10-14T14:00:00.000Z",
     rucMismatch: false,
+    issuerId: "iss-1",
+    emitNow: null,
   },
   {
     id: "inv-2",
@@ -848,6 +864,8 @@ const RECENT: InvoiceSettingsData["recent"] = [
     error: "SimpleFact no respondió.",
     createdAt: "2026-10-14T14:10:00.000Z",
     rucMismatch: false,
+    issuerId: "iss-1",
+    emitNow: null,
   },
 ];
 
@@ -886,13 +904,16 @@ describe("la sección, pintada", () => {
   // FIX: cuando el barrido apaga un RUC borra `checked_at`/`checked_ruc` y deja
   // el motivo en `check_error`. Sin fecha, esto decía «Sin probar…» y escondía
   // el motivo: el owner no sabía por qué se apagó ni qué arreglar.
-  it("un RUC que Kapta apagó dice por qué y que hay que probar antes de volver a Real", () => {
+  // Y dice «o a Manual»: Manual también manda boletas a SUNAT y la base le
+  // exige la misma prueba (0261). Decir solo Real dejaba creer que a Manual se
+  // podía volver sin probar.
+  it("un RUC que Kapta apagó dice por qué y que hay que probar antes de volver a Real o a Manual", () => {
     const why = `SimpleFact emitió con archivos del RUC ${OTRO}: el token no es de este RUC.`;
     const html = render({
       issuers: [issuerView({ mode: "apagado", checkedAt: null, checkedRuc: null, checkError: why })],
     });
     expect(html).toContain(
-      `Apagado por Kapta: SimpleFact emitió con archivos del RUC ${OTRO}: el token no es de este RUC. Prueba la conexión antes de volver a Real.`,
+      `Apagado por Kapta: SimpleFact emitió con archivos del RUC ${OTRO}: el token no es de este RUC. Prueba la conexión antes de volver a Real o a Manual.`,
     );
     expect(html).toMatch(/<span class="text-crit-fg">Apagado por Kapta: /);
     expect(html).not.toContain("Sin probar");
@@ -996,5 +1017,285 @@ describe("MOM §35", () => {
     );
     expect(mom).toContain("Ajustes solo dice «Configurado» o «Sin configurar».");
     expect(mom).toContain("En Ajustes de la tienda se pide además `stores.manage`.");
+  });
+});
+
+// ── «Manual» (owner, 15-10-2026) ─────────────────────────────────────────────
+
+describe("saveInvoiceIssuer: Manual pide lo mismo que Real", () => {
+  it("sin una prueba que leyó el RUC no pasa, con la misma frase que Real, y no se escribe nada", async () => {
+    st.issuer = issuerRow({ mode: "simulacion", checked_ruc: null });
+    const r = await saveInvoiceIssuer("store", {}, issuerForm({ mode: "manual" }));
+    expect(r).toEqual({
+      error: "Prueba la conexión antes de pasar a Manual: todavía no hay una prueba que haya leído este RUC.",
+    });
+    st.issuer = issuerRow({ mode: "simulacion", checked_ruc: OTRO });
+    expect((await saveInvoiceIssuer("store", {}, issuerForm({ mode: "manual" }))).error).toBe(
+      `Prueba la conexión antes de pasar a Manual: la última prueba leyó el RUC ${OTRO}, no el ${GF}.`,
+    );
+    expect(writes()).toEqual([]);
+  });
+
+  it("sin token no pasa", async () => {
+    st.issuer = issuerRow({ mode: "simulacion", checked_ruc: GF });
+    st.hasToken = false;
+    expect(await saveInvoiceIssuer("store", {}, issuerForm({ mode: "manual" }))).toEqual({
+      error: "Falta el token de SimpleFact: ponlo y prueba la conexión antes de pasar a Manual.",
+    });
+    expect(writes()).toEqual([]);
+  });
+
+  it("no en el mismo guardado que cambia el token, el RUC o el subdominio", async () => {
+    st.issuer = issuerRow({ mode: "simulacion", checked_ruc: GF });
+    expect((await saveInvoiceIssuer("store", {}, issuerForm({ mode: "manual", token: SECRET }))).error).toBe(
+      "Guarda primero el token nuevo y prueba la conexión antes de pasar a Manual.",
+    );
+    expect((await saveInvoiceIssuer("store", {}, issuerForm({ mode: "manual", subdomain: "otra" }))).error).toBe(
+      "Cambiaste el RUC o el subdominio: guarda y prueba la conexión antes de pasar a Manual.",
+    );
+    expect((await saveInvoiceIssuer("store", {}, issuerForm({ mode: "manual", ruc: OTRO }))).error).toBe(
+      "Cambiaste el RUC o el subdominio: guarda y prueba la conexión antes de pasar a Manual.",
+    );
+    expect(writes()).toEqual([]);
+    expect(encrypt).not.toHaveBeenCalled();
+  });
+
+  it("un RUC nuevo no nace en Manual", async () => {
+    st.issuer = null;
+    const r = await saveInvoiceIssuer("store", {}, issuerForm({ issuer_id: "", mode: "manual" }));
+    expect(r.error).toBe(
+      "Un RUC nuevo empieza en Apagado o Simulación: guarda su token y prueba la conexión antes de pasar a Manual.",
+    );
+    expect(writes()).toEqual([]);
+  });
+
+  it("con token y la prueba del mismo RUC, pasa: «Emitir desde» a ahora y dice qué cambia", async () => {
+    st.issuer = issuerRow({ mode: "simulacion", checked_ruc: GF });
+    const r = await saveInvoiceIssuer("store", {}, issuerForm({ mode: "manual" }));
+    expect(r.error).toBeUndefined();
+    expect(lastWrite()!.payload).toMatchObject({ mode: "manual", emit_from: NOW });
+    expect(r.notice).toContain(`RUC ${GF} guardado ✓ · Manual`);
+    expect(r.notice).toContain("«Emitir desde» quedó en ahora");
+    expect(r.notice).toContain(
+      "En Manual el barrido solo simula: cada boleta real se emite con «Emitir esta boleta» en el pedido.",
+    );
+  });
+
+  it("de Manual a Real y de Real a Manual, con la prueba hecha, pasa", async () => {
+    st.issuer = issuerRow({ mode: "manual", checked_ruc: GF });
+    expect((await saveInvoiceIssuer("store", {}, issuerForm({ mode: "real" }))).notice).toContain("· Real");
+    st.issuer = issuerRow({ mode: "real", checked_ruc: GF });
+    expect((await saveInvoiceIssuer("store", {}, issuerForm({ mode: "manual" }))).notice).toContain("· Manual");
+    // Y sin la prueba, tampoco entre ellos: lo dice la base, y aquí antes.
+    st.issuer = issuerRow({ mode: "manual", checked_ruc: null });
+    expect((await saveInvoiceIssuer("store", {}, issuerForm({ mode: "real" }))).error).toMatch(
+      /^Prueba la conexión antes de pasar a Real/,
+    );
+  });
+
+  it("un RUC que ya está en Manual se edita (el tope) sin volver a probar, y sin repetir el aviso", async () => {
+    st.issuer = issuerRow({ mode: "manual", checked_ruc: GF });
+    const r = await saveInvoiceIssuer("store", {}, issuerForm({ mode: "manual", daily_limit: "10" }));
+    expect(r).toEqual({ notice: `RUC ${GF} guardado ✓ · Manual` });
+    expect(lastWrite()!.payload).toMatchObject({ mode: "manual", daily_limit: 10 });
+  });
+
+  it("cambiar el token de un RUC en Manual: la base lo baja a Simulación y se dice", async () => {
+    st.issuer = issuerRow({ mode: "manual", checked_ruc: GF });
+    st.written = { id: "iss-1", mode: "simulacion" };
+    const r = await saveInvoiceIssuer("store", {}, issuerForm({ mode: "manual", token: SECRET }));
+    expect(r.notice).toContain("El token cambió: el RUC bajó a Simulación hasta que vuelvas a probar la conexión.");
+    expect(r.notice).not.toContain("En Manual el barrido solo simula");
+  });
+
+  it("lo que la base rechaza de Manual vuelve en palabras; sin la 0261, lo dice", async () => {
+    st.issuer = issuerRow({ mode: "simulacion", checked_ruc: GF });
+    st.writeError = {
+      code: "23514",
+      message: 'new row for relation "invoice_issuers" violates check constraint "invoice_issuers_real_ready"',
+    };
+    expect((await saveInvoiceIssuer("store", {}, issuerForm({ mode: "manual" }))).error).toBe(
+      "Para pasar a Manual hacen falta el token, «Emitir desde» y una prueba de conexión que leyó este mismo RUC.",
+    );
+    st.writeError = {
+      code: "23514",
+      message: 'new row for relation "invoice_issuers" violates check constraint "invoice_issuers_mode_check"',
+    };
+    expect((await saveInvoiceIssuer("store", {}, issuerForm({ mode: "manual" }))).error).toBe(
+      "La base todavía no admite el modo Manual: falta aplicar la migración 0261.",
+    );
+    // Otro modo que choca con esa regla sigue siendo «ese modo no existe».
+    expect((await saveInvoiceIssuer("store", {}, issuerForm({ mode: "simulacion" }))).error).toBe("Ese modo no existe.");
+  });
+
+  it("el modo se elige entre los cuatro", async () => {
+    expect((await saveInvoiceIssuer("store", {}, issuerForm({ mode: "automatico" }))).error).toBe(
+      "Elige un modo: Apagado, Simulación, Manual o Real.",
+    );
+  });
+});
+
+describe("testInvoiceIssuer: un RUC en Manual cuya prueba falla", () => {
+  it("baja a Simulación, como Real, y se dice", async () => {
+    st.issuer = issuerRow({ mode: "manual", checked_ruc: GF });
+    st.probe = { ok: false, error: "Token rechazado", ruc: null };
+    st.written = { mode: "simulacion" };
+    const r = await testInvoiceIssuer("store", "iss-1");
+    expect(r.error).toBe("Token rechazado.\nEl RUC bajó a Simulación hasta que una prueba confirme el RUC.");
+    // Si la base no lo bajó, no se dice que bajó.
+    st.written = { mode: "manual" };
+    expect((await testInvoiceIssuer("store", "iss-1")).error).toBe("Token rechazado.");
+  });
+});
+
+describe("la sección, pintada: Manual", () => {
+  /** Lo que saldría si se pulsa: lo decide la página con la función del drawer. */
+  const OFERTA = { issuerId: "iss-1", ruc: GF, legalName: "GRUPO GF S.A.C.", total: 85 };
+  const simulada = (over: Partial<InvoiceRecentView> = {}): InvoiceRecentView => ({
+    id: "inv-sim",
+    orderId: "ord-9",
+    orderName: "#KP136199",
+    issuerId: "iss-1",
+    ruc: GF,
+    mode: "simulacion",
+    status: "simulada",
+    serie: null,
+    correlative: null,
+    total: 85,
+    error: null,
+    createdAt: "2026-10-14T14:20:00.000Z",
+    rucMismatch: false,
+    emitNow: OFERTA,
+    ...over,
+  });
+  const BOTON = /<button[^>]*>Emitir<\/button>/g;
+
+  it("un RUC ya dado de alta ofrece los cuatro modos; el alta, solo Apagado y Simulación", () => {
+    const html = render({ issuers: [issuerView({ mode: "manual" })] });
+    expect(html).toMatch(/<option value="manual" selected="">Manual<\/option>/);
+    expect(html).toContain('<option value="real">Real</option>');
+    // El formulario del alta no ofrece ni Manual ni Real.
+    const alta = render({ issuers: [] });
+    expect(alta).not.toContain('<option value="manual">');
+    expect(alta).not.toContain('<option value="real">');
+    expect(alta).toContain("Un RUC nuevo pasa a Manual o a Real después de probar su conexión.");
+  });
+
+  it("cada modo explicado en una línea: Manual, y Real como lo automático", () => {
+    expect(MODE_HELP.manual).toMatch(
+      /^Revisa y simula como Simulación; tú emites cada boleta con «Emitir esta boleta» en el pedido\./,
+    );
+    expect(MODE_HELP.real).toMatch(/^Automático: el barrido emite cada boleta en SimpleFact/);
+    const t = render({}).replace(/<[^>]+>/g, "");
+    expect(t).toContain(`Manual: ${MODE_HELP.manual}`);
+    expect(t).toContain(`Real: ${MODE_HELP.real}`);
+  });
+
+  it("la chapa de la sección dice «En manual», y Real manda sobre Manual", () => {
+    expect(render({ issuers: [issuerView({ mode: "manual" })] })).toMatch(/>En manual<\/span>/);
+    expect(render({ issuers: [issuerView({ mode: "manual" }), issuerView({ id: "iss-2", mode: "real" })] })).toMatch(
+      />En real<\/span>/,
+    );
+  });
+
+  it("«Hoy» enseña las emitidas también en Manual: las que salieron con el botón", () => {
+    const html = render({
+      issuers: [issuerView({ mode: "manual", today: { emitidas: 3, simuladas: 12, enDuda: 0, errores: 0 } })],
+    });
+    expect(html).toMatch(/>Emitidas<\/dt><dd[^>]*>3<\/dd>/);
+    expect(html).toMatch(/>Simuladas<\/dt><dd[^>]*>12<\/dd>/);
+  });
+
+  it("«Emitir» solo en la simulada que la página marcó, de un RUC que está en Manual", () => {
+    const manual = [issuerView({ mode: "manual" })];
+    expect(render({ issuers: manual, recent: [simulada()] }).match(BOTON)).toHaveLength(1);
+    // La página no la marcó (el drawer no lo ofrecería, no es la más nueva, o no se pudo leer).
+    expect(render({ issuers: manual, recent: [simulada({ emitNow: null })] })).not.toMatch(BOTON);
+    // El RUC no está en Manual en lo que se ve.
+    for (const mode of ["real", "simulacion", "apagado"] as const) {
+      expect(render({ issuers: [issuerView({ mode })], recent: [simulada()] }), mode).not.toMatch(BOTON);
+    }
+    // Una real nunca lleva «Emitir», aunque viniera marcada.
+    expect(render({ issuers: manual, recent: [simulada({ mode: "real", status: "error" })] })).not.toMatch(BOTON);
+    // Un RUC que ya no está, tampoco: el de lo que saldría, no el de la simulada.
+    expect(render({ issuers: manual, recent: [simulada({ emitNow: { ...OFERTA, issuerId: "iss-borrado" } })] })).not.toMatch(
+      BOTON,
+    );
+    // Si el pedido pasó a otro RUC también en Manual, sale con ese: es el que se enviaría.
+    const dos = [issuerView({ mode: "manual" }), issuerView({ id: "iss-2", ruc: OTRO, mode: "manual" })];
+    const otro = { issuerId: "iss-2", ruc: OTRO, legalName: "OTRA EMPRESA S.A.C.", total: 85 };
+    expect(render({ issuers: dos, recent: [simulada({ emitNow: otro })] }).match(BOTON)).toHaveLength(1);
+    // Y si ese RUC no está en Manual en lo que se ve, no.
+    const otroEnReal = [issuerView({ mode: "manual" }), issuerView({ id: "iss-2", ruc: OTRO, mode: "real" })];
+    expect(render({ issuers: otroEnReal, recent: [simulada({ emitNow: otro })] })).not.toMatch(BOTON);
+    // Ni si no se pudieron leer los RUC.
+    expect(render({ issuers: null, recent: [simulada()] })).not.toMatch(BOTON);
+  });
+
+  it("solo a quien tiene «Boletas y facturas»", () => {
+    const html = render({ canManage: false, issuers: [issuerView({ mode: "manual" })], recent: [simulada()] });
+    expect(html).not.toMatch(BOTON);
+    expect(SECTION).toContain("const issuer = offer ? issuers.find((i) => i.id === offer.issuerId) : undefined;");
+    expect(SECTION).toContain("return canEmit && offer && r.status === \"simulada\" && issuer?.mode === \"manual\" ? (");
+    expect(SECTION).toContain("<RecentList rows={data.recent} issuers={issuers ?? []} canEmit={data.canManage} />");
+  });
+
+  it("es la acción del drawer, con su confirmación, lo que vio la persona y la respuesta en la fila", () => {
+    const emit = SECTION.slice(SECTION.indexOf("function RecentEmit("), SECTION.indexOf("function RecentList("));
+    expect(SECTION).toContain('import { EmitInvoiceControl, EmitOutcome } from "@/components/order-invoice-panel";');
+    expect(SECTION).toMatch(
+      /import \{\s*emitInvoiceAction,\s*type EmitInvoiceState,\s*type InvoicePanelEmitNow,\s*\} from "@\/app\/dashboard\/pedidos\/invoice-actions";/,
+    );
+    expect(emit).toContain("<EmitInvoiceControl");
+    // Confirma y envía lo que confirmaría el drawer (el RUC y el total de ahora),
+    // no lo de la simulada: si el pedido cambió, la confirmación lo dice.
+    expect(emit).toContain("emit={offer}");
+    expect(emit).toContain("res = await emitInvoiceAction(row.orderId, { issuerId: offer.issuerId, total: offer.total });");
+    expect(emit).not.toContain("row.total");
+    expect(emit).not.toContain("row.ruc");
+    expect(emit).toContain("setOutcome(res);");
+    expect(emit).toContain("startRefresh(() => router.refresh());");
+    // Con una respuesta a la vista el botón no vuelve: no hay segundo envío desde aquí.
+    expect(emit).toContain("{!outcome && (");
+    expect(emit).toContain("{outcome && <EmitOutcome state={outcome} />}");
+  });
+
+  // FIX: la página marcaba «Emitir» con solo dos cosas —el RUC de la simulada en
+  // Manual y el pedido sin real viva— y nunca miraba lo que mira el drawer: las
+  // reglas como emisión real, la última pasada de Shopify, la tienda activa ni
+  // el RUC ACTUAL del pedido. Ahora pregunta a la misma función que el drawer
+  // (`invoiceEmitNowReadiness`, por `loadInvoiceEmitNowOffers`); lo que esa
+  // función decide se prueba en test/invoicing-server.test.ts, con la base.
+  it("la página marca «Emitir» con la función del drawer, de una vez para la lista, y si no pudo leer, en ninguna", () => {
+    const recent = PAGE.slice(PAGE.indexOf('.from("order_invoices")'), PAGE.indexOf(".limit(20)"));
+    expect(recent).toMatch(/\.select\("[^"]*\bissuer_id\b[^"]*"\)/);
+    expect(PAGE).toContain('import { loadInvoiceEmitNowOffers, type InvoiceEmitNowOffer } from "@/lib/invoicing/server";');
+    const marca = PAGE.slice(PAGE.indexOf("const newestSimulated"), PAGE.indexOf("  return {", PAGE.indexOf("const newestSimulated")));
+    // La simulada más nueva de cada pedido.
+    expect(marca).toContain('if (r.status === "simulada" && r.mode === "simulacion" && !newestSimulated.has(r.order_id)) {');
+    // Una sola pregunta para todos los pedidos de la lista, a la función del drawer.
+    expect(marca.match(/loadInvoiceEmitNowOffers\(/g)).toHaveLength(1);
+    expect(marca).toContain("offers = await loadInvoiceEmitNowOffers(admin, [...newestSimulated.keys()]);");
+    // Falla cerrada: si no pudo leer, ninguna lleva «Emitir», sin tumbar la sección.
+    expect(marca).toMatch(/\} catch \(cause\) \{[\s\S]*?offers = new Map\(\);\s*\}/);
+    // Ya no decide por su cuenta con el RUC de la simulada ni con su propia lectura.
+    expect(PAGE).not.toContain("manualIssuers");
+    expect(PAGE).not.toContain("LIVE_REAL_STATUSES");
+    expect(PAGE).not.toContain("invoiceEligibility");
+    expect(marca).toContain(
+      "const emitNowOf = (r: RecentRow) => (newestSimulated.get(r.order_id) === r.id ? offers.get(r.order_id) ?? null : null);",
+    );
+    expect(PAGE).toContain("emitNow: emitNowOf(r),");
+    expect(PAGE).toContain("issuerId: r.issuer_id,");
+    // Y la función es la misma que usa el drawer para su botón.
+    const SERVER = read("lib/invoicing/server.ts");
+    const loader = SERVER.slice(SERVER.indexOf("export async function loadInvoiceEmitNowOffers("));
+    expect(loader.match(/loadInvoiceOrderFacts\(admin, ids\)/g)).toHaveLength(1);
+    expect(loader).toContain("const ready = invoiceEmitNowReadiness({");
+    const ACTIONS_DRAWER = read("app/dashboard/pedidos/invoice-actions.ts");
+    const drawer = ACTIONS_DRAWER.slice(ACTIONS_DRAWER.indexOf("function emitNowOf("));
+    expect(drawer.slice(0, drawer.indexOf("\n}\n"))).toContain(
+      "const ready = invoiceEmitNowReadiness({ facts, invoices, checks, storeActive });",
+    );
   });
 });

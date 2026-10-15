@@ -6,6 +6,15 @@
 // en la base (`invoice_claim`, 0257) y se llama a SimpleFact. Después se
 // concilia lo que quedó sin respuesta.
 //
+// «Emitir esta boleta» (`emitInvoiceNow`, RUC en «Manual», owner 15-10-2026)
+// es la misma emisión real del barrido para UN pedido, pedida por una persona:
+// los mismos hechos, las mismas reglas, la misma relectura en Shopify, el mismo
+// turno y la misma lectura de la respuesta. El código de esos pasos es uno solo
+// (`prepareSale`, `claimArgs`, `sendClaimedSale`, `turnOffReason`): un candado
+// que se agregue al barrido lo tiene también el botón. Y si el botón se ofrece
+// lo decide una sola función (`invoiceEmitNowReadiness`), la misma para el
+// drawer y para el «Emitir» de Ajustes.
+//
 // Tres cosas mandan sobre este módulo:
 //
 //  1. FALLA CERRADA. Si no se pudo leer algo —pagos, cuentas, el estado de
@@ -41,7 +50,10 @@ import {
   findSaleByNote,
   invoiceEligibility,
   invoiceNoteRef,
+  invoiceSweepMode,
   type InvoiceAccount,
+  type InvoiceEligibility,
+  type InvoiceEnabledMode,
   type InvoiceExisting,
   type InvoiceIssuer,
   type InvoiceMode,
@@ -49,6 +61,7 @@ import {
   type InvoicePayment,
   type InvoiceReason,
   type InvoiceWriteMode,
+  type SaleOutcome,
   type SimplefactSalePayload,
 } from "@/lib/invoicing/rules";
 import { fetchOrderForInvoice, webPrepaidConfirmed, type InvoiceOrderRead } from "@/lib/invoicing/shopify-order";
@@ -136,6 +149,9 @@ const ISSUER_WIDE_CLAIM_REASONS: ReadonlySet<InvoiceReason> = new Set<InvoiceRea
   "sin_conexion",
   "ruc_apagado",
   "ruc_ajeno",
+  // El RUC cambió de modo después de leer la lista: lo que sigue de él se mira
+  // en la próxima pasada, con su modo nuevo.
+  "modo_distinto",
 ]);
 
 /**
@@ -257,10 +273,39 @@ function missingInvoiceMigrations(text: string): string {
  * que falta (por defecto, `what`), y de él sale cuál migración se pide.
  */
 export class InvoiceMigrationMissingError extends Error {
-  constructor(what: string, missing: string = what) {
-    super(`Falta aplicar ${missingInvoiceMigrations(missing)} de comprobantes (${what}).`);
+  /** `migration`: cuál falta, cuando se sabe por otro lado (la 0261, `claimMissingError`). */
+  constructor(what: string, missing: string = what, migration?: string) {
+    super(
+      `Falta aplicar ${migration ? `la migración ${migration}` : missingInvoiceMigrations(missing)} de comprobantes (${what}).`,
+    );
     this.name = "InvoiceMigrationMissingError";
   }
+}
+
+/**
+ * La migración que le da al turno el modo que se pide y quién lo pidió
+ * (`p_mode`, `p_created_by`): la 0261, con el modo «Manual». No crea nada con
+ * nombre nuevo —cambia la firma de `invoice_claim`, con valores por defecto
+ * para que el código que ya corre siga pidiendo el turno igual—, así que no
+ * está en INVOICE_MIGRATION_OBJECTS: se reconoce por los parámetros que se
+ * mandaron (`claimMissingError`).
+ */
+export const INVOICE_CLAIM_MODE_MIGRATION = "0261";
+
+/** Los parámetros del turno que trae la 0261. */
+const CLAIM_0261_PARAMS = ["p_mode", "p_created_by"] as const;
+
+/**
+ * El «no existe» del turno. Si se pidió con `p_mode` o `p_created_by`, lo que
+ * falta es la 0261: la 0257 y la 0260 crean el turno sin esos parámetros, y
+ * PostgREST no encuentra esa firma (PGRST202). Quien llega al turno ya leyó las
+ * tablas de la 0257, así que no son ellas. Sin esos parámetros, como siempre.
+ */
+function claimMissingError(args: Record<string, unknown>): InvoiceMigrationMissingError {
+  const sent = CLAIM_0261_PARAMS.filter((p) => p in args);
+  return sent.length
+    ? new InvoiceMigrationMissingError(`invoice_claim con ${sent.join(" y ")}`, "invoice_claim", INVOICE_CLAIM_MODE_MIGRATION)
+    : new InvoiceMigrationMissingError("invoice_claim");
 }
 
 /**
@@ -611,7 +656,11 @@ export interface InvoiceSweepDeps {
 export interface InvoiceIssuerSweepReport {
   issuerId: string;
   ruc: string;
-  mode: InvoiceWriteMode;
+  /**
+   * El modo del RUC al empezar la pasada. En `manual` la pasada solo simula
+   * (`simuladas`) y concilia lo real que emitió una persona (`conciliadas`).
+   */
+  mode: InvoiceEnabledMode;
   simuladas: number;
   emitidas: number;
   en_duda: number;
@@ -659,7 +708,7 @@ export interface InvoiceSweepReport {
   dry: boolean;
   at: string;
   /**
-   * sin_ruc_encendido → ningún RUC en simulación ni en real.
+   * sin_ruc_encendido → ningún RUC en simulación, en manual ni en real.
    * sin_migracion     → falta la 0257 o la 0260: no hay nada que barrer.
    */
   skipped?: "sin_ruc_encendido" | "sin_migracion";
@@ -687,6 +736,12 @@ export function defaultInvoiceSweepDeps(admin: SupabaseClient): InvoiceSweepDeps
 interface RunIssuer {
   id: string;
   ruc: string;
+  /** Su modo al empezar la pasada. */
+  issuerMode: InvoiceEnabledMode;
+  /**
+   * Bajo qué modo lo barre la pasada: el de las filas que pide su turno, el de
+   * su lista de candidatos y el de sus revisiones. En «Manual», simulación.
+   */
   mode: InvoiceWriteMode;
   emitFrom: string | null;
   report: InvoiceIssuerSweepReport;
@@ -712,7 +767,10 @@ const STOP = {
   base: "base",
   turno: "turno",
 } as const;
-const NO_RECONCILE = new Set<string>([STOP.apagado, STOP.espera, STOP.sinToken, "sin_conexion"]);
+// Un RUC que cambió de modo a mitad de la pasada (`modo_distinto`) tampoco: su
+// modo nuevo puede ser uno sin token probado, y la próxima pasada lo mira con
+// el modo que tenga.
+const NO_RECONCILE = new Set<string>([STOP.apagado, STOP.espera, STOP.sinToken, "sin_conexion", "modo_distinto"]);
 
 interface CheckRow {
   order_id: string;
@@ -732,7 +790,19 @@ interface PendingCheck {
   detail: string | null;
 }
 
+/** Los modos de una fila: lo que contesta el turno. */
 const CLAIM_MODES: readonly InvoiceWriteMode[] = ["simulacion", "real"];
+
+/** Los modos que mira el barrido: los encendidos. */
+const SWEEP_MODES: readonly InvoiceEnabledMode[] = ["simulacion", "manual", "real"];
+
+/**
+ * Los modos que pueden tener comprobantes reales sin respuesta y un token
+ * probado: el barrido los concilia, y no pasa a `en_duda` sus `emitiendo` de
+ * hoy y de ayer. «Manual» también: el barrido no emite por él, pero la persona
+ * que pulsa «Emitir esta boleta» sí, y esa boleta puede quedar en duda.
+ */
+const RECONCILE_MODES: ReadonlySet<string> = new Set<InvoiceEnabledMode>(["manual", "real"]);
 
 /** Quita los tokens de todo texto de un valor, llaves incluidas. */
 function redactDeep(value: unknown, redact: (text: string) => string): unknown {
@@ -764,7 +834,7 @@ function soles(cents: number): string {
   return (cents / 100).toFixed(2);
 }
 
-function emptyIssuerReport(i: { id: string; ruc: string; mode: InvoiceWriteMode }): InvoiceIssuerSweepReport {
+function emptyIssuerReport(i: { id: string; ruc: string; mode: InvoiceEnabledMode }): InvoiceIssuerSweepReport {
   return {
     issuerId: i.id,
     ruc: i.ruc,
@@ -783,9 +853,12 @@ function emptyIssuerReport(i: { id: string; ruc: string; mode: InvoiceWriteMode 
 
 /**
  * Una pasada del barrido (MOM §35.3, §35.4): por cada organización con un RUC
- * en simulación o en real, revisa sus pedidos pagados, simula o emite, y
- * concilia lo que quedó sin respuesta. Antes, fuera de `dry`, pasa a `en_duda`
- * los `emitiendo` sin respuesta que ninguna conciliación va a mirar.
+ * en simulación, en manual o en real, revisa sus pedidos pagados, simula o
+ * emite, y concilia lo que quedó sin respuesta. Un RUC en «Manual» se barre
+ * como en «Simulación» (nunca llama a SimpleFact para crear una venta) y se
+ * concilia como en «Real»: lo real de él lo emite una persona. Antes, fuera de
+ * `dry`, pasa a `en_duda` los `emitiendo` sin respuesta que ninguna
+ * conciliación va a mirar.
  *
  *   dry      → revisa, lee en Shopify y arma la boleta, pero no escribe nada en
  *              la base ni llama a SimpleFact (tampoco concilia).
@@ -809,11 +882,7 @@ export async function runInvoiceSweep(
   // cliente de SimpleFact ya limpia lo que contesta, pero un 401 que repite el
   // token no puede terminar en el log del cron por un descuido en otra capa.
   const secrets = new Set<string>();
-  const redact = (text: string) => {
-    let out = text;
-    for (const secret of secrets) if (secret.length >= 8) out = out.split(secret).join("[token]");
-    return out;
-  };
+  const redact = (text: string) => redactSecrets(text, secrets);
   const fail = (text: string) => report.errors.push(sinTelefonos(redact(text)));
 
   try {
@@ -864,8 +933,8 @@ async function sweepAll(ctx: SweepContext): Promise<void> {
   // su fila a medio enviar no puede quedarse así para siempre.
   if (!dry) await settleUnreconciledEmitting(ctx);
 
-  // c. Los RUC encendidos.
-  let issuersQuery = admin.from("invoice_issuers").select(ISSUER_COLUMNS).in("mode", [...CLAIM_MODES]);
+  // c. Los RUC encendidos: en simulación, en manual o en real.
+  let issuersQuery = admin.from("invoice_issuers").select(ISSUER_COLUMNS).in("mode", [...SWEEP_MODES]);
   if (onlyOrg) issuersQuery = issuersQuery.eq("org_id", onlyOrg);
   const { data: issuerData, error: issuerError } = await issuersQuery;
   if (issuerError) {
@@ -874,7 +943,7 @@ async function sweepAll(ctx: SweepContext): Promise<void> {
     return;
   }
   const enabled = ((issuerData ?? []) as IssuerRow[]).filter((r) =>
-    (CLAIM_MODES as readonly string[]).includes(r.mode),
+    (SWEEP_MODES as readonly string[]).includes(r.mode),
   );
   if (!enabled.length) {
     report.skipped = "sin_ruc_encendido";
@@ -889,13 +958,15 @@ async function sweepAll(ctx: SweepContext): Promise<void> {
   for (const [orgId, rows] of [...byOrg].sort(([a], [b]) => a.localeCompare(b))) {
     const issuers = new Map<string, RunIssuer>();
     for (const row of [...rows].sort((a, b) => a.id.localeCompare(b.id))) {
-      const mode = row.mode as InvoiceWriteMode;
+      const issuerMode = row.mode as InvoiceEnabledMode;
       issuers.set(row.id, {
         id: row.id,
         ruc: row.ruc,
-        mode,
+        issuerMode,
+        // `enabled` ya dejó fuera «Apagado» y lo que no se entiende.
+        mode: invoiceSweepMode(issuerMode)!,
         emitFrom: row.emit_from,
-        report: emptyIssuerReport({ id: row.id, ruc: row.ruc, mode }),
+        report: emptyIssuerReport({ id: row.id, ruc: row.ruc, mode: issuerMode }),
         taken: 0,
         stopped: null,
       });
@@ -949,12 +1020,12 @@ interface EmittingRow {
 /**
  * Un `emitiendo` es una boleta que pudo haber salido: la función se cortó a
  * mitad del POST, o no se pudo guardar lo que contestó SimpleFact. Lo resuelve
- * la conciliación (`reconcileIssuer`), pero solo la de un RUC en real con token
- * y solo con las ventas de hoy y de ayer de SimpleFact. Uno cuyo RUC pasó a
- * «Apagado» o a «Simulación» (la marcha atrás del owner, una prueba de conexión
- * fallida, un 401), o que es de antes de ayer, no lo miraba nadie, y el panel no
- * tiene acción para un `emitiendo`: se quedaba así para siempre, bloqueando el
- * pedido sin que nadie lo viera.
+ * la conciliación (`reconcileIssuer`), pero solo la de un RUC en real o en
+ * manual con token y solo con las ventas de hoy y de ayer de SimpleFact. Uno
+ * cuyo RUC pasó a «Apagado» o a «Simulación» (la marcha atrás del owner, una
+ * prueba de conexión fallida, un 401), o que es de antes de ayer, no lo miraba
+ * nadie, y el panel no tiene acción para un `emitiendo`: se quedaba así para
+ * siempre, bloqueando el pedido sin que nadie lo viera.
  *
  * Aquí pasa a `en_duda`, sin llamar a nada afuera: la boleta puede existir, así
  * que no se repite, y una persona la busca por su nota en SimpleFact antes de
@@ -981,7 +1052,9 @@ async function settleUnreconciledEmitting(ctx: SweepContext): Promise<void> {
   const rows = (data ?? []) as EmittingRow[];
   if (!rows.length) return;
 
-  // Qué RUC concilia esta pasada: en real y con token (como `sweepOrg`, g).
+  // Qué RUC concilia esta pasada: en real o en manual, y con token (como
+  // `sweepOrg`, g). Una boleta que emitió una persona con el RUC en «Manual» se
+  // busca en SimpleFact igual que una del barrido.
   let reconciled: Set<string>;
   try {
     const ids = unique(rows.map((r) => r.issuer_id));
@@ -990,7 +1063,7 @@ async function settleUnreconciledEmitting(ctx: SweepContext): Promise<void> {
       selectIn<{ id: string }>(admin, "invoice_issuers", "id", "id", ids, { notNull: "token_enc" }),
     ]);
     const hasToken = new Set(withToken.map((r) => r.id));
-    reconciled = new Set(modes.filter((r) => r.mode === "real" && hasToken.has(r.id)).map((r) => r.id));
+    reconciled = new Set(modes.filter((r) => RECONCILE_MODES.has(r.mode) && hasToken.has(r.id)).map((r) => r.id));
   } catch (err) {
     if (isInvoiceMigrationMissing(err)) throw err;
     // Sin saber el RUC no se toca nada: la próxima pasada lo vuelve a intentar.
@@ -1156,44 +1229,29 @@ async function sweepOrg(ctx: OrgContext): Promise<void> {
   const connFor = async (issuer: RunIssuer): Promise<SimplefactConn | null> => {
     if (issuer.conn !== undefined) return issuer.conn;
     issuer.conn = null;
-    const { data, error } = await admin
-      .from("invoice_issuers")
-      .select("simplefact_subdomain,token_enc")
-      .eq("id", issuer.id)
-      .maybeSingle();
-    const row = data as { simplefact_subdomain?: string | null; token_enc?: string | null } | null;
-    if (error || !row?.token_enc || !row.simplefact_subdomain) {
-      fail(`RUC ${issuer.ruc}: no se pudo leer su conexión con SimpleFact.`);
+    const loaded = await loadIssuerConn(admin, deps, issuer.id);
+    if (!loaded.ok) {
+      fail(
+        loaded.why === "descifrado"
+          ? `RUC ${issuer.ruc}: no se pudo descifrar el token de SimpleFact.`
+          : `RUC ${issuer.ruc}: no se pudo leer su conexión con SimpleFact.`,
+      );
       return null;
     }
-    let token: string;
-    try {
-      token = deps.decryptToken(row.token_enc);
-    } catch {
-      // Sin el mensaje: no se repite nada de lo que tocó el descifrado.
-      fail(`RUC ${issuer.ruc}: no se pudo descifrar el token de SimpleFact.`);
-      return null;
-    }
-    ctx.secrets.add(token.trim());
-    issuer.conn = { subdomain: row.simplefact_subdomain, token };
+    ctx.secrets.add(loaded.conn.token.trim());
+    issuer.conn = loaded.conn;
     return issuer.conn;
   };
 
   /**
    * Apaga el RUC con el motivo a la vista (§35.4) y lo detiene en esta pasada.
-   * También borra la prueba de conexión: si quedaba la vieja, el owner podía
-   * volver a «Real» sin probar de nuevo y emitir otra boleta con el token
-   * rechazado o de otra empresa. Real exige una prueba que leyó el mismo RUC
-   * (0257), así que vuelve solo con «Probar conexión». El motivo se queda.
+   * La escritura es `turnOffIssuer`, la misma de «Emitir esta boleta».
    */
   const turnOff = async (issuer: RunIssuer, why: string) => {
     stopIssuer(issuer, STOP.apagado);
     fail(`RUC ${issuer.ruc} apagado: ${why}`);
-    const { error } = await admin
-      .from("invoice_issuers")
-      .update({ mode: "apagado", checked_ruc: null, checked_at: null, check_error: redact(why).slice(0, 500) })
-      .eq("id", issuer.id);
-    if (error) fail(`RUC ${issuer.ruc}: no se pudo apagar (${error.message}).`);
+    const error = await turnOffIssuer(admin, issuer.id, why, redact);
+    if (error) fail(`RUC ${issuer.ruc}: no se pudo apagar (${error}).`);
   };
 
   // e. Pedido por pedido, del más nuevo al más viejo.
@@ -1229,31 +1287,12 @@ async function sweepOrg(ctx: OrgContext): Promise<void> {
     }
 
     // Justo antes de emitir, Shopify (§35.3): los ítems al céntimo.
-    const read = await deps.fetchOrder({ storeId: facts.storeId, shopifyOrderId: entry.shopifyOrderId ?? "" });
-    if (!read.ok) {
-      note(facts, read.reason, read.detail, issuer.id);
+    const prepared = await prepareSale(deps, facts, elig, entry.shopifyOrderId);
+    if (!prepared.ok) {
+      note(facts, prepared.reason, prepared.detail, issuer.id);
       continue;
     }
-    if (read.totalCents !== elig.totalCents) {
-      note(
-        facts,
-        "total_distinto",
-        `Shopify dice S/ ${soles(read.totalCents)}; Kapta, S/ ${soles(elig.totalCents)}.`,
-        issuer.id,
-      );
-      continue;
-    }
-    if (elig.basis.prepaid && !webPrepaidConfirmed(read)) {
-      note(facts, "pago_web_no_confirmado", null, issuer.id);
-      continue;
-    }
-    const invoiceId = deps.randomUUID();
-    const orderName = facts.orderName ?? read.name;
-    const payload = buildSalePayload({ invoiceId, orderName, items: read.items, totalCents: elig.totalCents });
-    if (!payload) {
-      note(facts, "no_cuadra", null, issuer.id);
-      continue;
-    }
+    const { invoiceId, orderName, payload } = prepared;
     if (dry) {
       issuer.taken += 1;
       issuer.report.would_claim += 1;
@@ -1262,20 +1301,22 @@ async function sweepOrg(ctx: OrgContext): Promise<void> {
 
     // f. El turno, dentro de la base: modo, conexión, monto, inicio, uno por
     // pedido y el tope del día, con un candado por RUC.
-    const claim = await admin.rpc("invoice_claim", {
-      p_id: invoiceId,
-      p_issuer: issuer.id,
-      p_store: facts.storeId,
-      p_order: facts.orderId,
-      p_total: elig.totalCents / 100,
-      p_paid_at: elig.paidAt,
-      p_order_name: orderName,
-      p_basis: elig.basis,
-      p_request: payload,
-    });
+    //
+    // DECISIÓN: el turno de un RUC en «Manual» se pide con `p_mode =
+    // 'simulacion'` (0261): el barrido nunca envía por él, y si el RUC pasó a
+    // «Real» entre la lista y el turno, la base contesta `modo_distinto` en vez
+    // de dejar una fila real que el barrido evaluó como simulación. El de un
+    // RUC en «Simulación» o en «Real» se pide como siempre, sin `p_mode` (null:
+    // el modo del RUC): así el barrido sigue simulando y emitiendo aunque este
+    // código llegue a producción antes que la 0261, y un RUC en «Manual» no
+    // existe sin ella (la 0257 no admite ese modo).
+    const askedMode: InvoiceWriteMode | null = issuer.issuerMode === "manual" ? "simulacion" : null;
+    const args = claimArgs(facts, elig, prepared, askedMode ? { mode: askedMode } : {});
+    const claim = await admin.rpc("invoice_claim", args);
     if (claim.error) {
-      // Sin la función no se reservó nada ni se llamó: falta la 0257 (y la 0260).
-      if (isInvoiceMigrationMissing(claim.error)) throw new InvoiceMigrationMissingError("invoice_claim");
+      // Sin la función (o sin su firma con `p_mode`) no se reservó nada ni se
+      // llamó: falta la 0257 y la 0260, o la 0261.
+      if (isInvoiceMigrationMissing(claim.error)) throw claimMissingError(args);
       // Sin respuesta del turno no se llama: si la fila llegó a quedar en
       // `emitiendo`, la conciliación la pasa a `en_duda` y la ve una persona.
       issuer.report.errores += 1;
@@ -1288,10 +1329,21 @@ async function sweepOrg(ctx: OrgContext): Promise<void> {
       if (ISSUER_WIDE_CLAIM_REASONS.has(answer.reason)) stopIssuer(issuer, answer.reason);
       continue;
     }
-    if (answer.id !== invoiceId || !(CLAIM_MODES as readonly unknown[]).includes(answer.mode)) {
+    if (
+      answer.id !== invoiceId ||
+      !(CLAIM_MODES as readonly unknown[]).includes(answer.mode) ||
+      (askedMode !== null && answer.mode !== askedMode)
+    ) {
       issuer.report.errores += 1;
       stopIssuer(issuer, STOP.turno);
       fail(`RUC ${issuer.ruc}: invoice_claim contestó algo que no se entiende.`);
+      // Un turno real que no se pidió (el de un RUC en «Manual» pidió
+      // simulación) no se envía, y la fila no se queda en `emitiendo`: nada
+      // salió, así que es un error cierto, no una duda.
+      if (answer.id === invoiceId && answer.mode === "real") {
+        const error = await closeUnsent(admin, invoiceId, "No se envió: el turno dio una emisión real que no se pidió.");
+        if (error) fail(`RUC ${issuer.ruc}: no se pudo cerrar un turno sin enviar (${error}).`);
+      }
       continue;
     }
     issuer.taken += 1;
@@ -1307,56 +1359,25 @@ async function sweepOrg(ctx: OrgContext): Promise<void> {
       // No se envió nada: es un no cierto, no una duda.
       stopIssuer(issuer, STOP.sinToken);
       issuer.report.errores += 1;
-      const closed = await admin
-        .from("order_invoices")
-        .update({ status: "error", error: "No se envió: no se pudo leer el token de SimpleFact." })
-        .eq("id", invoiceId)
-        .eq("status", "emitiendo")
-        .select("id");
-      if (closed.error) fail(`RUC ${issuer.ruc}: no se pudo cerrar un turno sin enviar (${closed.error.message}).`);
+      const error = await closeUnsent(admin, invoiceId, "No se envió: no se pudo leer el token de SimpleFact.");
+      if (error) fail(`RUC ${issuer.ruc}: no se pudo cerrar un turno sin enviar (${error}).`);
       continue;
     }
-    const res = await deps.createSale(conn, payload);
-    const outcome = classifySaleResponse(res.http, res.body, issuer.ruc);
-    const base = { response: storedResponse(res, redact), http_status: res.http };
-    let update: Record<string, unknown>;
-    if (outcome.status === "emitida") {
-      update = {
-        ...base,
-        status: "emitida",
-        simplefact_id: outcome.simplefactId,
-        serie: outcome.serie,
-        correlative: outcome.correlative,
-        pdf_url: outcome.pdfUrl,
-        xml_url: outcome.xmlUrl,
-        sunat_status: outcome.sunatStatus,
-        ruc_mismatch: outcome.rucMismatch,
-        error: outcome.rucMismatch ? `SimpleFact contestó con archivos del RUC ${outcome.ruc}, no del ${issuer.ruc}.` : null,
-      };
-      issuer.report.emitidas += 1;
-    } else {
-      const detail = res.error && res.error !== outcome.error ? `${outcome.error} (${res.error})` : outcome.error;
-      update = { ...base, status: outcome.status, error: redact(detail).slice(0, 500) };
-      if (outcome.status === "error") issuer.report.errores += 1;
-      else issuer.report.en_duda += 1;
-    }
-    const saved = await admin
-      .from("order_invoices")
-      .update(update)
-      .eq("id", invoiceId)
-      .eq("status", "emitiendo")
-      .select("id");
-    if (saved.error || !((saved.data ?? []) as unknown[]).length) {
+    const sent = await sendClaimedSale({ admin, deps, conn, ruc: issuer.ruc, invoiceId, payload, redact });
+    const { outcome } = sent;
+    if (outcome.status === "emitida") issuer.report.emitidas += 1;
+    else if (outcome.status === "error") issuer.report.errores += 1;
+    else issuer.report.en_duda += 1;
+    if (!sent.saved) {
       // La fila se queda en `emitiendo`: la conciliación la resuelve. Con la
       // base fallando no se sigue llamando a SimpleFact en esta pasada.
       stopIssuer(issuer, STOP.base);
-      fail(`RUC ${issuer.ruc}: no se pudo guardar la respuesta de SimpleFact de ${orderName ?? "un pedido"}${saved.error ? ` (${saved.error.message})` : ""}.`);
+      fail(`RUC ${issuer.ruc}: no se pudo guardar la respuesta de SimpleFact de ${orderName ?? "un pedido"}${sent.saveError ? ` (${sent.saveError})` : ""}.`);
     }
 
-    if (outcome.status === "emitida" && outcome.rucMismatch) {
-      await turnOff(issuer, `SimpleFact emitió con archivos del RUC ${outcome.ruc}: el token no es de este RUC.`);
-    } else if (outcome.status === "error" && outcome.stop === "issuer") {
-      await turnOff(issuer, outcome.error);
+    const offWhy = turnOffReason(outcome);
+    if (offWhy) {
+      await turnOff(issuer, offWhy);
     } else if (outcome.status === "error" && outcome.stop === "run") {
       run.stopped = true;
       stopIssuer(issuer, STOP.espera);
@@ -1394,9 +1415,10 @@ async function sweepOrg(ctx: OrgContext): Promise<void> {
     if (error) fail(`Organización ${orgId}: no se pudo guardar la revisión de los pedidos (${error.message}).`);
   }
 
-  // g. Conciliación de lo que quedó sin respuesta.
+  // g. Conciliación de lo que quedó sin respuesta: la de un RUC en real y la de
+  // uno en manual, que tiene las boletas que emitió una persona.
   for (const issuer of issuers.values()) {
-    if (issuer.mode !== "real" || (issuer.stopped && NO_RECONCILE.has(issuer.stopped))) continue;
+    if (!RECONCILE_MODES.has(issuer.issuerMode) || (issuer.stopped && NO_RECONCILE.has(issuer.stopped))) continue;
     await reconcileIssuer(ctx, issuer, connFor, turnOff);
   }
 }
@@ -1523,4 +1545,618 @@ async function reconcileIssuer(
       if (((saved.data ?? []) as unknown[]).length) issuer.report.en_duda += 1;
     }
   }
+}
+
+// ── Una emisión real: la misma en el barrido y en «Emitir esta boleta» ───────
+
+type EligibleOrder = Extract<InvoiceEligibility, { ok: true }>;
+
+/** Quita los tokens descifrados de un texto (solo los de 8 caracteres o más). */
+function redactSecrets(text: string, secrets: ReadonlySet<string>): string {
+  let out = text;
+  for (const secret of secrets) if (secret.length >= 8) out = out.split(secret).join("[token]");
+  return out;
+}
+
+/** La boleta lista para pedir el turno, o por qué no. */
+type PreparedSale =
+  | { ok: true; invoiceId: string; orderName: string | null; payload: SimplefactSalePayload }
+  | { ok: false; reason: InvoiceReason; detail: string | null };
+
+/**
+ * Lo que va entre las reglas y el turno (§35.3): vuelve a leer el pedido en
+ * Shopify, exige que su total sea el de Kapta y, en el prepago web, que Flow lo
+ * haya cobrado entero, y arma la boleta al céntimo con un id nuevo. No escribe
+ * nada ni llama a SimpleFact.
+ */
+async function prepareSale(
+  deps: InvoiceSweepDeps,
+  facts: InvoiceOrderFacts,
+  elig: EligibleOrder,
+  shopifyOrderId: string | null,
+): Promise<PreparedSale> {
+  const read = await deps.fetchOrder({ storeId: facts.storeId, shopifyOrderId: shopifyOrderId ?? "" });
+  if (!read.ok) return { ok: false, reason: read.reason, detail: read.detail ?? null };
+  if (read.totalCents !== elig.totalCents) {
+    return {
+      ok: false,
+      reason: "total_distinto",
+      detail: `Shopify dice S/ ${soles(read.totalCents)}; Kapta, S/ ${soles(elig.totalCents)}.`,
+    };
+  }
+  if (elig.basis.prepaid && !webPrepaidConfirmed(read)) return { ok: false, reason: "pago_web_no_confirmado", detail: null };
+  const invoiceId = deps.randomUUID();
+  const orderName = facts.orderName ?? read.name;
+  const payload = buildSalePayload({ invoiceId, orderName, items: read.items, totalCents: elig.totalCents });
+  if (!payload) return { ok: false, reason: "no_cuadra", detail: null };
+  return { ok: true, invoiceId, orderName, payload };
+}
+
+/**
+ * Los parámetros del turno (`invoice_claim`). `mode` (`p_mode`) y `createdBy`
+ * (`p_created_by`) son de la 0261 y solo van si se dan: sin ellos el turno es
+ * el de siempre, con el modo del RUC y sin quién.
+ */
+function claimArgs(
+  facts: InvoiceOrderFacts,
+  elig: EligibleOrder,
+  prepared: Extract<PreparedSale, { ok: true }>,
+  extra: { mode?: InvoiceWriteMode; createdBy?: string } = {},
+): Record<string, unknown> {
+  return {
+    p_id: prepared.invoiceId,
+    p_issuer: elig.issuer.id,
+    p_store: facts.storeId,
+    p_order: facts.orderId,
+    p_total: elig.totalCents / 100,
+    p_paid_at: elig.paidAt,
+    p_order_name: prepared.orderName,
+    p_basis: elig.basis,
+    p_request: prepared.payload,
+    ...(extra.mode ? { p_mode: extra.mode } : {}),
+    ...(extra.createdBy ? { p_created_by: extra.createdBy } : {}),
+  };
+}
+
+type IssuerConnLoad = { ok: true; conn: SimplefactConn } | { ok: false; why: "lectura" | "descifrado" };
+
+/**
+ * El subdominio y el token en claro de un RUC. Quien lo llama agrega el token a
+ * lo que se limpia de todo texto que sale. Si el descifrado falla no se guarda
+ * su mensaje: no se repite nada de lo que tocó.
+ */
+async function loadIssuerConn(admin: SupabaseClient, deps: InvoiceSweepDeps, issuerId: string): Promise<IssuerConnLoad> {
+  const { data, error } = await admin
+    .from("invoice_issuers")
+    .select("simplefact_subdomain,token_enc")
+    .eq("id", issuerId)
+    .maybeSingle();
+  const row = data as { simplefact_subdomain?: string | null; token_enc?: string | null } | null;
+  if (error || !row?.token_enc || !row.simplefact_subdomain) return { ok: false, why: "lectura" };
+  try {
+    return { ok: true, conn: { subdomain: row.simplefact_subdomain, token: deps.decryptToken(row.token_enc) } };
+  } catch {
+    return { ok: false, why: "descifrado" };
+  }
+}
+
+/**
+ * Cierra como `error` un turno real que no se envió (no se pudo leer el token,
+ * o el turno dio una emisión que no se pidió): nada salió, así que es un no
+ * cierto, no una duda. Solo si sigue en `emitiendo`. Devuelve el error de la
+ * base, o null.
+ */
+async function closeUnsent(admin: SupabaseClient, invoiceId: string, why: string): Promise<string | null> {
+  const closed = await admin
+    .from("order_invoices")
+    .update({ status: "error", error: why })
+    .eq("id", invoiceId)
+    .eq("status", "emitiendo")
+    .select("id");
+  return closed.error ? closed.error.message : null;
+}
+
+interface SentSale {
+  outcome: SaleOutcome;
+  /** Lo que quedó (o debía quedar) en `order_invoices.error`, sin el token. */
+  error: string | null;
+  /** La fila pasó de `emitiendo` a lo que contestó SimpleFact. */
+  saved: boolean;
+  saveError: string | null;
+}
+
+/**
+ * El envío de un turno real ya reservado (§35.4): UNA llamada a SimpleFact, lo
+ * que quiere decir lo que contestó, y la fila al estado que corresponde, solo si
+ * sigue en `emitiendo`. Nunca reintenta. Si el envío lanza, no se sabe si la
+ * venta se creó: es una duda (`en_duda`), nunca un no.
+ */
+async function sendClaimedSale(input: {
+  admin: SupabaseClient;
+  deps: InvoiceSweepDeps;
+  conn: SimplefactConn;
+  ruc: string;
+  invoiceId: string;
+  payload: SimplefactSalePayload;
+  redact: (text: string) => string;
+}): Promise<SentSale> {
+  const { admin, deps, conn, ruc, invoiceId, payload, redact } = input;
+  let res: SimplefactHttp;
+  try {
+    res = await deps.createSale(conn, payload);
+  } catch (err) {
+    res = { http: null, body: null, error: `El envío se cortó: ${err instanceof Error ? err.message : "error desconocido"}` };
+  }
+  const outcome = classifySaleResponse(res.http, res.body, ruc);
+  const base = { response: storedResponse(res, redact), http_status: res.http };
+  let update: Record<string, unknown>;
+  let error: string | null;
+  if (outcome.status === "emitida") {
+    error = outcome.rucMismatch ? `SimpleFact contestó con archivos del RUC ${outcome.ruc}, no del ${ruc}.` : null;
+    update = {
+      ...base,
+      status: "emitida",
+      simplefact_id: outcome.simplefactId,
+      serie: outcome.serie,
+      correlative: outcome.correlative,
+      pdf_url: outcome.pdfUrl,
+      xml_url: outcome.xmlUrl,
+      sunat_status: outcome.sunatStatus,
+      ruc_mismatch: outcome.rucMismatch,
+      error,
+    };
+  } else {
+    const detail = res.error && res.error !== outcome.error ? `${outcome.error} (${res.error})` : outcome.error;
+    error = redact(detail).slice(0, 500);
+    update = { ...base, status: outcome.status, error };
+  }
+  const saved = await admin
+    .from("order_invoices")
+    .update(update)
+    .eq("id", invoiceId)
+    .eq("status", "emitiendo")
+    .select("id");
+  return {
+    outcome,
+    error,
+    saved: !saved.error && ((saved.data ?? []) as unknown[]).length > 0,
+    saveError: saved.error ? saved.error.message : null,
+  };
+}
+
+/**
+ * Si lo que contestó SimpleFact apaga el RUC (§35.4), por qué: una venta con
+ * archivos de otro RUC (el token no es de este RUC), un token rechazado o una
+ * cuenta que no responde. null si no lo apaga.
+ */
+function turnOffReason(outcome: SaleOutcome): string | null {
+  if (outcome.status === "emitida" && outcome.rucMismatch) {
+    return `SimpleFact emitió con archivos del RUC ${outcome.ruc}: el token no es de este RUC.`;
+  }
+  if (outcome.status === "error" && outcome.stop === "issuer") return outcome.error;
+  return null;
+}
+
+/**
+ * Apaga el RUC con el motivo a la vista (§35.4), esté en «Real» o en «Manual».
+ * También borra la prueba de conexión: si quedaba la vieja, el owner podía
+ * volver a encenderlo sin probar de nuevo y emitir otra boleta con el token
+ * rechazado o de otra empresa. Real (0257) y Manual (0261) exigen una prueba
+ * que leyó el mismo RUC, así que vuelve solo con «Probar conexión». El motivo
+ * se queda. Devuelve el error de la base, o null.
+ */
+async function turnOffIssuer(
+  admin: SupabaseClient,
+  issuerId: string,
+  why: string,
+  redact: (text: string) => string,
+): Promise<string | null> {
+  const { error } = await admin
+    .from("invoice_issuers")
+    .update({ mode: "apagado", checked_ruc: null, checked_at: null, check_error: redact(why).slice(0, 500) })
+    .eq("id", issuerId);
+  return error ? error.message : null;
+}
+
+// ── «Emitir esta boleta» ─────────────────────────────────────────────────────
+
+/**
+ * Lo que contesta «Emitir esta boleta».
+ *
+ *   ok: true  → se reservó el turno real y se llamó a SimpleFact UNA vez:
+ *               `emitida` (serie, correlativo y PDF), `en_duda` (no se sabe si
+ *               salió: la concilia el barrido por su nota «Kapta ‹ref›») o
+ *               `error` (SimpleFact dijo que no, con su mensaje). `error` dice
+ *               además lo que la persona tiene que saber: otro RUC en los
+ *               archivos, el RUC que quedó apagado, una respuesta sin guardar.
+ *   ok: false → NO se llamó a SimpleFact. `reason` es el código del panel y del
+ *               barrido (INVOICE_REASON_LABEL) y `detail`, el porqué.
+ */
+export type InvoiceEmitNowResult =
+  | {
+      ok: true;
+      status: "emitida" | "en_duda" | "error";
+      invoiceId: string;
+      serie: string | null;
+      correlative: string | null;
+      pdfUrl: string | null;
+      error: string | null;
+      rucMismatch: boolean;
+    }
+  | { ok: false; reason: InvoiceReason; detail?: string };
+
+interface EmitNowState {
+  /** El token descifrado, para limpiarlo de todo texto que sale. */
+  secrets: Set<string>;
+  /** El id del turno real reservado. Desde ahí, lo que falle es una duda. */
+  claimed: string | null;
+}
+
+function blocked(reason: InvoiceReason, detail?: string | null): InvoiceEmitNowResult {
+  return detail ? { ok: false, reason, detail } : { ok: false, reason };
+}
+
+/**
+ * «Emitir esta boleta» (MOM §35.7, owner 15-10-2026): una persona con
+ * `invoices.manage` emite UN pedido de un RUC en «Manual». Es la emisión real
+ * del barrido, paso por paso y con el mismo código: los hechos del pedido,
+ * `invoiceEligibility` evaluada como emisión real (`emitNow`), el token, la
+ * relectura en Shopify con el total y el prepago web, la boleta con un id nuevo,
+ * el turno (`invoice_claim` con `p_mode = 'real'` y `p_created_by` = quien
+ * pulsó, 0261), UNA llamada a SimpleFact, la lectura de la respuesta, la fila
+ * (solo si sigue en `emitiendo`) y las reglas que apagan el RUC. Los mismos
+ * candados: un comprobante real vivo por pedido (el índice único de la 0257),
+ * el tope del día de lo real y el turno que revisa todo de nuevo en la base.
+ * Quien llama comprueba el permiso (`invoices.manage`); aquí no hay sesión.
+ *
+ * DECISIÓN: con el RUC en «Real» también emite (los mismos candados que el
+ * barrido); el panel solo enseña el botón en «Manual», donde el barrido no
+ * emite. En «Simulación» contesta `modo_distinto`; en «Apagado», `ruc_apagado`.
+ *
+ * No escribe `invoice_order_checks`, que es la revisión del barrido: quien pulsó
+ * lee el motivo ahora. Y no respeta las 6 horas sin releer en Shopify: una
+ * persona que pulsa quiere la lectura de ahora, y es un pedido, no una lista.
+ *
+ * NUNCA LANZA. Si algo no se pudo leer antes del turno, no se pide el turno ni
+ * se llama a nada (`lectura_fallida`; sin una migración, `sin_migracion`).
+ * SimpleFact solo se llama si el turno dio una fila real. Si algo lanzara
+ * después del turno, la fila se queda en `emitiendo` y contesta `en_duda`: la
+ * conciliación la busca por su nota, nunca se repite.
+ */
+export async function emitInvoiceNow(
+  admin: SupabaseClient,
+  input: { orderId: string; userId: string },
+  deps: Partial<InvoiceSweepDeps> = {},
+): Promise<InvoiceEmitNowResult> {
+  const state: EmitNowState = { secrets: new Set(), claimed: null };
+  const redact = (text: string) => redactSecrets(text, state.secrets);
+  try {
+    const full: InvoiceSweepDeps = { ...defaultInvoiceSweepDeps(admin), ...deps };
+    return await emitNow(admin, full, input, state, redact);
+  } catch (err) {
+    const message = sinTelefonos(redact(err instanceof Error ? err.message : String(err)));
+    if (state.claimed) {
+      return {
+        ok: true,
+        status: "en_duda",
+        invoiceId: state.claimed,
+        serie: null,
+        correlative: null,
+        pdfUrl: null,
+        error: `${invoiceUnreconciledError(state.claimed)}. (${message})`,
+        rucMismatch: false,
+      };
+    }
+    if (isInvoiceMigrationMissing(err)) return blocked("sin_migracion", message);
+    return blocked("lectura_fallida", `No se pudo leer el pedido en Kapta: no se emitió nada (${message}).`);
+  }
+}
+
+async function emitNow(
+  admin: SupabaseClient,
+  deps: InvoiceSweepDeps,
+  input: { orderId: string; userId: string },
+  state: EmitNowState,
+  redact: (text: string) => string,
+): Promise<InvoiceEmitNowResult> {
+  // Quién pulsó queda en la fila (`created_by`): sin saberlo no se pide el turno.
+  if (typeof input.userId !== "string" || !input.userId.trim()) {
+    return blocked("turno_fallido", "No se sabe quién emite: no se pidió el turno.");
+  }
+
+  // 1. Los hechos. Lanza si algo no se pudo leer, y no se emite (falla cerrada).
+  const loaded = (await loadOrders(admin, [input.orderId])).get(input.orderId);
+  if (!loaded) return blocked("pedido", "No se encontró el pedido.");
+  const { facts, shopifyOrderId } = loaded;
+
+  // 2. Las reglas de §35.3, como una emisión real: un RUC en «Manual» o «Real».
+  const elig = invoiceEligibility(facts, { emitNow: true });
+  if (!elig.ok) return blocked(elig.reason, elig.detail);
+  const { issuer } = elig;
+
+  // 3. El token antes del turno, como el barrido: un turno sin token dejaría una
+  // fila `emitiendo` que nunca se envió.
+  const conn = await loadIssuerConn(admin, deps, issuer.id);
+  if (!conn.ok) {
+    return blocked(
+      "sin_conexion",
+      conn.why === "descifrado"
+        ? "No se pudo descifrar el token de SimpleFact."
+        : "No se pudo leer la conexión del RUC con SimpleFact.",
+    );
+  }
+  state.secrets.add(conn.conn.token.trim());
+
+  // 4. Justo antes de emitir, Shopify (§35.3): los ítems al céntimo.
+  const prepared = await prepareSale(deps, facts, elig, shopifyOrderId);
+  if (!prepared.ok) return blocked(prepared.reason, prepared.detail);
+
+  // 5. El turno: una fila REAL, con quién la pidió. La base vuelve a revisar
+  // todo, con el candado del RUC y el tope del día de lo real.
+  const args = claimArgs(facts, elig, prepared, { mode: "real", createdBy: input.userId });
+  const claim = await admin.rpc("invoice_claim", args);
+  if (claim.error) {
+    // Sin la firma con `p_mode` y `p_created_by`: falta la 0261.
+    if (isInvoiceMigrationMissing(claim.error)) return blocked("sin_migracion", claimMissingError(args).message);
+    return blocked("turno_fallido", `El turno falló (${sinTelefonos(claim.error.message)}).`);
+  }
+  const answer = (claim.data ?? {}) as { id?: unknown; mode?: unknown; reason?: unknown };
+  if (isReason(answer.reason)) return blocked(answer.reason);
+  if (answer.id !== prepared.invoiceId || answer.mode !== "real") {
+    return blocked("turno_fallido", "El turno contestó algo que no se entiende: no se envió nada.");
+  }
+  state.claimed = prepared.invoiceId;
+
+  // 6. UNA llamada a SimpleFact, y la fila a lo que contestó.
+  const sent = await sendClaimedSale({
+    admin,
+    deps,
+    conn: conn.conn,
+    ruc: issuer.ruc,
+    invoiceId: prepared.invoiceId,
+    payload: prepared.payload,
+    redact,
+  });
+  const { outcome } = sent;
+  const notes: string[] = sent.error ? [sent.error] : [];
+  if (!sent.saved) {
+    notes.push("No se pudo guardar la respuesta en Kapta: el comprobante sigue «Emitiendo» y la conciliación lo resuelve.");
+    console.error(
+      `[invoices] emitir a mano: no se pudo guardar la respuesta de SimpleFact (${sinTelefonos(redact(sent.saveError ?? "la fila ya no estaba emitiendo"))}).`,
+    );
+  }
+
+  // 7. Las reglas que apagan el RUC, como en el barrido.
+  const offWhy = turnOffReason(outcome);
+  if (offWhy) {
+    const error = await turnOffIssuer(admin, issuer.id, offWhy, redact);
+    if (error) {
+      notes.push("El RUC tenía que apagarse y no se pudo: apágalo en Ajustes.");
+      console.error(`[invoices] emitir a mano: no se pudo apagar el RUC ${issuer.ruc} (${sinTelefonos(redact(error))}).`);
+    } else {
+      notes.push("El RUC quedó apagado: prueba la conexión antes de volver a encenderlo.");
+    }
+  }
+
+  return {
+    ok: true,
+    status: outcome.status,
+    invoiceId: prepared.invoiceId,
+    serie: outcome.status === "emitida" ? outcome.serie : null,
+    correlative: outcome.status === "emitida" ? outcome.correlative : null,
+    pdfUrl: outcome.status === "emitida" ? outcome.pdfUrl : null,
+    error: notes.length ? notes.join(" ") : null,
+    rucMismatch: outcome.status === "emitida" && outcome.rucMismatch,
+  };
+}
+
+// ── ¿Se ofrece «Emitir esta boleta»? El drawer y Ajustes ─────────────────────
+
+/** La última revisión del barrido de un pedido (`invoice_order_checks`): una por modo. */
+export interface InvoiceCheckRow {
+  mode: string;
+  reason: string;
+  detail: string | null;
+  checked_at: string;
+}
+
+/** Un comprobante del pedido, con lo que mira el botón: modo, estado y cuándo se escribió. */
+export interface InvoiceEmitNowRow {
+  mode: string;
+  status: string;
+  createdAt: string;
+}
+
+/**
+ * Lo que sale si se pulsa: el RUC y el total de las reglas evaluadas como una
+ * emisión real. Es lo que dice la confirmación y lo que `emitInvoiceAction`
+ * vuelve a comparar antes de emitir.
+ */
+export interface InvoiceEmitNowOffer {
+  issuerId: string;
+  ruc: string;
+  legalName: string;
+  total: number;
+}
+
+/**
+ * ok: hay botón, y esto es lo que sale. Si no, `rules` es lo que dijeron las
+ * reglas (con el RUC, si se llegó a saber) cuando son ellas las que lo frenan;
+ * null cuando lo frena otra cosa —la tienda, un comprobante real vivo, el modo
+ * del RUC o Shopify—, que el panel ya dice a su manera.
+ */
+export type InvoiceEmitNowReadiness =
+  | { ok: true; offer: InvoiceEmitNowOffer }
+  | { ok: false; rules: { reason: InvoiceReason; detail: string | null; issuer: InvoiceIssuer | null } | null };
+
+/**
+ * Lo que el barrido leyó en Shopify y lo frena. `lectura_fallida` no está en
+ * `SHOPIFY_LEVEL_REASONS` (el barrido la reintenta en cada pasada), pero
+ * mientras sea lo último que pasó, el pedido no está «listo»: tampoco salió.
+ */
+function isShopifySide(reason: string): reason is InvoiceReason {
+  return isReason(reason) && (SHOPIFY_LEVEL_REASONS.has(reason) || reason === "lectura_fallida");
+}
+
+/**
+ * ¿Lo frena Shopify? Las reglas de Kapta no leen Shopify: lo lee el barrido
+ * justo antes de pedir el turno, y si lo frena, deja el motivo en
+ * `invoice_order_checks` y no lo vuelve a leer en 6 horas. Mientras ese sea lo
+ * último que pasó, «lista para emitirse» es falso: el barrido lo salta.
+ *
+ * Manda la revisión del modo del RUC. La del otro modo cuenta solo si es un
+ * motivo de Shopify y es más nueva que la propia: el barrido también la respeta
+ * («un motivo de Shopify es del pedido en Shopify, no del modo», `sweepOrg`).
+ * Una revisión propia más nueva que no es de Shopify (el tope, por ejemplo)
+ * quiere decir que Shopify ya se volvió a leer y dejó pasar el pedido.
+ */
+export function invoiceShopifyBlock<C extends InvoiceCheckRow>(
+  checks: readonly C[],
+  mode: InvoiceWriteMode,
+): (C & { reason: InvoiceReason }) | null {
+  const own = checks.find((c) => c.mode === mode);
+  if (own && isShopifySide(own.reason)) return { ...own, reason: own.reason };
+  const other = checks.find((c) => c.mode !== mode && isReason(c.reason) && SHOPIFY_LEVEL_REASONS.has(c.reason));
+  // Una fecha que no se entiende cuenta como la más vieja.
+  if (other && (!own || (time(other.checked_at) ?? 0) > (time(own.checked_at) ?? 0))) {
+    return { ...other, reason: other.reason as InvoiceReason };
+  }
+  return null;
+}
+
+/**
+ * ¿Lo frena Shopify para emitir a mano? Es el bloqueo que enseña el panel
+ * (`invoiceShopifyBlock`) con el modo bajo el que el barrido revisa un RUC en
+ * «Manual»: simulación, porque ahí escribe sus revisiones.
+ *
+ * Con una diferencia: un comprobante que se escribió DESPUÉS de esa revisión
+ * la deja atrás. Un pedido simulado ya no vuelve a la lista del barrido, así que
+ * su revisión no se reescribe: sin esto, un «no se encontró en Shopify» de hace
+ * dos días escondería el botón para siempre aunque la simulación de después
+ * haya leído Shopify y armado la boleta. Una externa no cuenta: no leyó Shopify.
+ */
+function emitNowShopifyBlock(checks: readonly InvoiceCheckRow[], invoices: readonly InvoiceEmitNowRow[]): boolean {
+  const blocked = invoiceShopifyBlock(checks, "simulacion");
+  if (!blocked) return false;
+  const since = time(blocked.checked_at) ?? 0;
+  return !invoices.some((i) => i.status !== "externa" && (time(i.createdAt) ?? 0) > since);
+}
+
+/**
+ * ¿Hay «Emitir esta boleta» para este pedido? (MOM §35.7, owner 15-10-2026).
+ * UN SOLO LUGAR lo decide: el botón del drawer (`emitNowOf`,
+ * app/dashboard/pedidos/invoice-actions.ts) y el «Emitir» de los últimos
+ * comprobantes de Ajustes (`loadInvoiceEmitNowOffers`). Antes Ajustes lo decidía
+ * por su cuenta, solo con el modo del RUC de la simulada, y ofrecía emitir
+ * pedidos que el drawer no dejaba: uno que ya no cumplía las reglas, frenado por
+ * Shopify, de una tienda apagada o cuyo RUC ya no estaba en «Manual».
+ *
+ * Todo esto, y si falta uno, no hay botón:
+ *
+ *  · la tienda está activa (el barrido tampoco emite en una apagada);
+ *  · no hay comprobante real vivo: uno por pedido, aunque el índice de la base
+ *    lo garantice igual;
+ *  · las reglas de §35.3 se cumplen evaluadas COMO UNA EMISIÓN REAL
+ *    (`emitNow`): cuentan el error sin reintento y la conexión probada, y una
+ *    simulación no frena;
+ *  · el RUC que dicen HOY las reglas —el de la cuenta que recibió el pago, no
+ *    el de una simulada vieja— está en «Manual». En «Real» emite el barrido y un
+ *    botón sería una segunda puerta a la misma boleta; en «Simulación» y en
+ *    «Apagado» no se emite;
+ *  · Shopify no lo frena (`emitNowShopifyBlock`): un botón al lado de «Se emite
+ *    a mano» o de «Espera a Shopify» se contradice, y el servidor relee Shopify
+ *    igual antes de emitir.
+ *
+ * Quién mira (`invoices.manage`) lo pone quien llama. Esto solo decide si se
+ * enseña el botón: lo que se envía lo decide el servidor al pulsar, con todo
+ * leído de nuevo (`emitInvoiceAction`).
+ */
+export function invoiceEmitNowReadiness(input: {
+  facts: InvoiceOrderFacts;
+  invoices: readonly InvoiceEmitNowRow[];
+  checks: readonly InvoiceCheckRow[];
+  storeActive: boolean;
+}): InvoiceEmitNowReadiness {
+  const { facts, invoices, checks, storeActive } = input;
+  const no = (rules: Extract<InvoiceEmitNowReadiness, { ok: false }>["rules"] = null): InvoiceEmitNowReadiness => ({
+    ok: false,
+    rules,
+  });
+  if (!storeActive) return no();
+  if (invoices.some((i) => i.mode === "real" && (LIVE_REAL_STATUSES as readonly string[]).includes(i.status))) {
+    return no();
+  }
+  const elig = invoiceEligibility(facts, { emitNow: true });
+  if (!elig.ok) {
+    const issuer = facts.issuers.find((i) => i.id === elig.issuerId) ?? null;
+    return no({ reason: elig.reason, detail: elig.detail ?? null, issuer });
+  }
+  if (elig.issuer.mode !== "manual") return no();
+  if (emitNowShopifyBlock(checks, invoices)) return no();
+  return {
+    ok: true,
+    offer: {
+      issuerId: elig.issuer.id,
+      ruc: elig.issuer.ruc,
+      legalName: elig.issuer.legalName,
+      total: elig.totalCents / 100,
+    },
+  };
+}
+
+/**
+ * «Emitir» en los últimos comprobantes de Ajustes (§35.7): de estos pedidos,
+ * los que tendrían ahora «Emitir esta boleta» en el drawer, con lo que saldría.
+ * Es `invoiceEmitNowReadiness` con lo mismo que lee el drawer —los hechos, los
+ * comprobantes del pedido, sus revisiones y si la tienda está activa—, leído
+ * de una vez para toda la lista: una sola llamada a `loadInvoiceOrderFacts`.
+ *
+ * LANZA si algo no se pudo leer (falla cerrada): quien llama no ofrece ningún
+ * botón. Un pedido que no existe no está en el mapa.
+ */
+export async function loadInvoiceEmitNowOffers(
+  admin: SupabaseClient,
+  orderIds: string[],
+): Promise<Map<string, InvoiceEmitNowOffer>> {
+  const out = new Map<string, InvoiceEmitNowOffer>();
+  const ids = unique(orderIds.filter(Boolean));
+  if (!ids.length) return out;
+  const [facts, invoices, checks] = await Promise.all([
+    loadInvoiceOrderFacts(admin, ids),
+    selectIn<{ order_id: string; mode: string; status: string; created_at: string }>(
+      admin,
+      "order_invoices",
+      "order_id,mode,status,created_at",
+      "order_id",
+      ids,
+    ),
+    selectIn<InvoiceCheckRow & { order_id: string }>(
+      admin,
+      "invoice_order_checks",
+      "order_id,mode,reason,detail,checked_at",
+      "order_id",
+      ids,
+    ),
+  ]);
+  if (!facts.size) return out;
+  const stores = await selectIn<{ id: string; status: string | null }>(
+    admin,
+    "stores",
+    "id,status",
+    "id",
+    unique([...facts.values()].map((f) => f.storeId)),
+  );
+  const active = new Set(stores.filter((s) => s.status === "active").map((s) => s.id));
+  for (const [orderId, f] of facts) {
+    const ready = invoiceEmitNowReadiness({
+      facts: f,
+      invoices: invoices
+        .filter((r) => r.order_id === orderId)
+        .map((r) => ({ mode: r.mode, status: r.status, createdAt: r.created_at })),
+      checks: checks.filter((c) => c.order_id === orderId),
+      storeActive: active.has(f.storeId),
+    });
+    if (ready.ok) out.set(orderId, ready.offer);
+  }
+  return out;
 }

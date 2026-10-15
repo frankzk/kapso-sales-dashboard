@@ -231,15 +231,17 @@ echo "  ✅ asesora > recompra > bot Kapso > bot externo > web > otros, cancelad
 # SimpleFact no tiene llave de idempotencia: la misma boleta mandada dos veces
 # son dos boletas ante SUNAT, y una boleta enviada no se borra. Lo que lo impide
 # —el turno con candado, un solo comprobante real vivo por pedido, estados que
-# solo avanzan, «real» solo con la conexión probada— vive en la base (0257 y
-# 0260, MOM §35), así que se prueba en la base y no solo en el código. La 0257
-# ya corrió en producción y no se reescribe: la 0260 cambia cuatro de sus
-# funciones, y la prueba la corre sobre la 0257 como se corre en producción.
-echo "▶ Comprobantes por RUC (0257 y 0260): semilla apagada, cuenta → RUC de su organización, turno con candado, uno real vivo por pedido y la 0260 sobre la 0257"
+# solo avanzan, «real» y «manual» solo con la conexión probada— vive en la base
+# (0257, 0260 y 0261, MOM §35), así que se prueba en la base y no solo en el
+# código. La 0257 ya corrió en producción y no se reescribe: la 0260 cambia
+# cuatro de sus funciones y la 0261 trae el modo «Manual» (el turno da la fila
+# que se pide, y quién la pidió); la prueba corre cada una sobre lo que había
+# en producción cuando se aplicó.
+echo "▶ Comprobantes por RUC (0257, 0260 y 0261): semilla apagada, cuenta → RUC de su organización, turno con candado, uno real vivo por pedido, la 0260 sobre la 0257 y el modo «Manual»"
 $PSQL -f "$ROOT/scripts/sql/invoices_smoke.sql"
-echo "  ✅ GRUPO GF S.A.C. sembrado apagado y sin pisar al owner, real solo con token, fecha y prueba del mismo RUC, cada motivo del turno, tope del día, índice único, estados que solo avanzan, solo service_role; la 0260 cambia las cuatro funciones sin tocar datos ni triggers, y dos veces es una"
+echo "  ✅ GRUPO GF S.A.C. sembrado apagado y sin pisar al owner, real solo con token, fecha y prueba del mismo RUC, cada motivo del turno, tope del día, índice único, estados que solo avanzan, solo service_role; la 0260 cambia las cuatro funciones sin tocar datos ni triggers, y dos veces es una; la 0261 admite «Manual» con lo que exige Real, baja como Real, da la fila pedida con quién la pidió (modo_distinto si no), cuenta el tope por modo pedido, deja un solo turno que el código de hoy llama con nueve argumentos por nombre, y dos veces es una"
 
-echo "▶ Ventas por origen y conversión por fuente (0261): día local, cancelados aparte, cohorte de 7 días por cualquier canal, ya clientas aparte, y RLS"
+echo "▶ Ventas por origen y conversión por fuente (0262): día local, cancelados aparte, cohorte de 7 días por cualquier canal, ya clientas aparte, y RLS"
 $PSQL -f "$ROOT/scripts/sql/ventas_por_origen_smoke.sql"
 echo "  ✅ todas las ventas por día y canal, la regla del canal en una sola vista, conversión por nacimiento con 7 días, asesoras como en Productividad, cada quien sus tiendas"
 

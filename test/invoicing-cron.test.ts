@@ -7,8 +7,9 @@
 // vea rojo si algo falló, y la línea de log sin datos de clientas. También que
 // vercel.json lo corra cada 10 minutos sin caer en el minuto de otro barrido,
 // que sin la 0257 o la 0260 aplicadas todo el camino responda 200 sin lanzar
-// (pero que otra tabla que falta lo ponga rojo), y que una lista de candidatos
-// llena se vea en la línea de log.
+// (pero que otra tabla que falta lo ponga rojo), que una lista de candidatos
+// llena se vea en la línea de log, y que un RUC en «Manual» (owner, 15-10-2026)
+// se barra como simulación y se vea así en la línea de log.
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -217,15 +218,18 @@ function noExiste(code: "42P01" | "PGRST205", name: string): Result {
  */
 function fakeAdmin(tables: Record<string, Result>, rpcs: Record<string, Result> = {}) {
   const calls: string[] = [];
+  const rpcArgs: { fn: string; args: Record<string, unknown> }[] = [];
   return {
     calls,
+    rpcArgs,
     admin: {
       from: (table: string) => {
         calls.push(table);
         return chainOf(tables[table] ?? { data: [], error: null });
       },
-      rpc: async (fn: string) => {
+      rpc: async (fn: string, args: Record<string, unknown> = {}) => {
         calls.push(`rpc:${fn}`);
+        rpcArgs.push({ fn, args });
         return rpcs[fn] ?? { data: [], error: null };
       },
     },
@@ -450,5 +454,44 @@ describe("vercel.json: el barrido de comprobantes", () => {
     for (const c of crons.filter((x) => x.path !== "/api/cron/invoices")) {
       for (const m of minutesOf(c.schedule)) expect(mine.has(m), `${c.path} en el minuto ${m}`).toBe(false);
     }
+  });
+});
+
+describe("/api/cron/invoices: un RUC en «Manual»", () => {
+  it("se barre (no es `sin_ruc_encendido`): pide la lista de simulación, y la línea de log dice `manual`", async () => {
+    const db = conLa0257({
+      tables: {
+        invoice_issuers: {
+          data: [
+            {
+              id: "iss-gf",
+              org_id: "org-gf",
+              ruc: "20556792829",
+              legal_name: "GRUPO GF S.A.C.",
+              mode: "manual",
+              emit_from: "2026-10-14T05:00:00.000Z",
+              daily_limit: 40,
+              checked_ruc: "20556792829",
+            },
+          ],
+          error: null,
+        },
+      },
+      // Un pedido que ya no existe al leerlo: nada llega a Shopify ni a SimpleFact.
+      rpcs: { invoice_candidates: { data: [{ order_id: "ord-1" }], error: null } },
+    });
+    mocks.admin = db.admin;
+    mocks.real = true;
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const res = await GET(req());
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.skipped).toBeUndefined();
+    expect(body.orgs[0].issuers[0]).toMatchObject({ issuerId: "iss-gf", mode: "manual", simuladas: 0, emitidas: 0 });
+    // La única lista que pide es la de simulación: el barrido no emite por un RUC en «Manual».
+    expect(db.rpcArgs.filter((r) => r.fn === "invoice_candidates").map((r) => r.args.p_mode)).toEqual(["simulacion"]);
+    expect(db.calls).not.toContain("rpc:invoice_claim");
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(String(log.mock.calls[0]![0])).toContain('"mode":"manual"');
   });
 });

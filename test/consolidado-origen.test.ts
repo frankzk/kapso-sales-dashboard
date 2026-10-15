@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Todas las ventas por origen y la conversión por fuente (MOM §17.4, 0261).
+// Todas las ventas por origen y la conversión por fuente (MOM §17.4, 0262).
 //
 // Lo que se fija: que la cabecera sume TODAS las ventas y cuadre por canal y por
 // grupo; que cada tienda cuente en su propia ventana y la conversión del bot
@@ -235,7 +235,7 @@ describe("conversión por fuente", () => {
   });
 
   it("la ventana de 7 días es la misma en el código y en la función", () => {
-    const sql = read("db/migrations/0261_ventas_por_origen.sql");
+    const sql = read("db/migrations/0262_ventas_por_origen.sql");
     expect(CONVERSION_DAYS).toBe(7);
     expect(sql).toContain("<= now() - interval '7 days' as maduro");
     expect(sql.match(/< {1,2}m\.nace \+ interval '7 days'/g)).toHaveLength(2);
@@ -412,8 +412,8 @@ describe("getSourceConversion", () => {
   });
 });
 
-describe("la migración 0261", () => {
-  const sql = read("db/migrations/0261_ventas_por_origen.sql");
+describe("la migración 0262", () => {
+  const sql = read("db/migrations/0262_ventas_por_origen.sql");
 
   it("las tres funciones son de lectura, con la sesión de quien mira y sin anon", () => {
     for (const fn of ["canal_de_cierre", "ventas_por_origen", "conversion_por_fuente"]) {
@@ -479,10 +479,10 @@ describe("el tablero cuenta todas las ventas y lo dice", () => {
     expect(dash).toMatch(/\n\s+sourceConversion: SourceConversionResult;/);
   });
 
-  it("la cabecera lee todas las ventas; sin la 0261, la vista anterior con su aviso", () => {
+  it("la cabecera lee todas las ventas; sin la 0262, la vista anterior con su aviso", () => {
     expect(dash).toContain("value={money(head.revenue, currency)}");
     expect(dash).not.toContain("value={money(totals.revenue, currency)}");
-    expect(dash).toContain("Falta aplicar la migración 0261");
+    expect(dash).toContain("Falta aplicar la migración 0262");
     expect(dash).toContain('title="Estas cifras solo ven los pedidos del bot"');
     expect(dash).toContain('const of = period ? "" : " del bot";');
   });

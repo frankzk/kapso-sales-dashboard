@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0261_ventas_por_origen.sql — el Consolidado cuenta TODAS las ventas de la
+-- 0262_ventas_por_origen.sql — el Consolidado cuenta TODAS las ventas de la
 -- tienda, por origen, y la conversión de cada fuente de leads (MOM §17.4,
 -- 14-10-2026).
 --

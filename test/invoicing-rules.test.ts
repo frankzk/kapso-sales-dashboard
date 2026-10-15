@@ -11,7 +11,7 @@
 // de los dueños no tienen RUC (§35.2). La lectura de Shopify, el cliente de
 // SimpleFact y el barrido tienen sus propias pruebas (test/invoicing-*.test.ts).
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -23,6 +23,7 @@ import {
   INVOICE_DAILY_LIMIT_MIN,
   INVOICE_MAX_PER_RUN,
   INVOICE_MODES,
+  INVOICE_MODE_LABEL,
   INVOICE_REASON_LABEL,
   INVOICE_REASONS,
   INVOICE_STATUS_LABEL,
@@ -38,6 +39,7 @@ import {
   invoiceEligibility,
   invoiceNote,
   invoiceNoteRef,
+  invoiceSweepMode,
   isValidRuc,
   normalizeSubdomain,
   resolvePaymentAccounts,
@@ -48,6 +50,7 @@ import {
   type InvoiceAccount,
   type InvoiceIssuer,
   type InvoiceItem,
+  type InvoiceMode,
   type InvoiceOrderFacts,
   type InvoicePayment,
   type InvoiceReason,
@@ -806,6 +809,112 @@ describe("MOM §35.3 y §35.8 — la conexión del RUC (solo en real)", () => {
   it("en simulación no hace falta token ni prueba", () => {
     const sim: InvoiceIssuer = { ...GF, mode: "simulacion", hasToken: false, checkedRuc: RUC_OTRO };
     expect(motivo(hechos({ issuers: [sim] }))).toBe("ok");
+  });
+});
+
+describe("MOM §35.8 — «Manual» y «Emitir esta boleta» (owner, 15-10-2026)", () => {
+  const enModo = (mode: InvoiceMode, over: Partial<InvoiceIssuer> = {}): InvoiceIssuer => ({ ...GF, mode, ...over });
+  const emitir = (f: InvoiceOrderFacts) => invoiceEligibility(f, { emitNow: true });
+  const motivoAlEmitir = (f: InvoiceOrderFacts): InvoiceReason | "ok" => {
+    const r = emitir(f);
+    return r.ok ? "ok" : r.reason;
+  };
+
+  it("los cuatro modos, en este orden, y «Manual» se llama así", () => {
+    expect([...INVOICE_MODES]).toEqual(["apagado", "simulacion", "manual", "real"]);
+    expect(INVOICE_MODE_LABEL.manual).toBe("Manual");
+    expect(INVOICE_REASON_LABEL.modo_distinto).toBe("El RUC no está en ese modo.");
+  });
+
+  it("el barrido barre «Manual» como «Simulación»; «Apagado» no se barre", () => {
+    expect(INVOICE_MODES.map((m) => [m, invoiceSweepMode(m)])).toEqual([
+      ["apagado", null],
+      ["simulacion", "simulacion"],
+      ["manual", "simulacion"],
+      ["real", "real"],
+    ]);
+  });
+
+  // Cada modo, con y sin `emitNow`. Sin `emitNow` es el barrido (y el panel);
+  // con él, la persona que pulsa «Emitir esta boleta».
+  it.each<[InvoiceMode, boolean, InvoiceReason | "simulacion" | "real"]>([
+    ["apagado", false, "ruc_apagado"],
+    ["apagado", true, "ruc_apagado"],
+    ["simulacion", false, "simulacion"],
+    ["simulacion", true, "modo_distinto"],
+    ["manual", false, "simulacion"],
+    ["manual", true, "real"],
+    ["real", false, "real"],
+    // DECISIÓN: en «Real» también se puede emitir a mano, con los mismos candados.
+    ["real", true, "real"],
+  ])("RUC en %s, emitNow=%s → %s", (mode, emitNow, esperado) => {
+    const r = invoiceEligibility(hechos({ issuers: [enModo(mode)] }), { emitNow });
+    if (esperado === "simulacion" || esperado === "real") {
+      expect(r).toMatchObject({ ok: true, mode: esperado, issuer: { id: GF.id, mode } });
+    } else {
+      expect(r).toMatchObject({ ok: false, reason: esperado, issuerId: GF.id });
+    }
+  });
+
+  it("modo_distinto dice en qué modo está el RUC", () => {
+    expect(emitir(hechos({ issuers: [enModo("simulacion")] }))).toEqual({
+      ok: false,
+      reason: "modo_distinto",
+      detail: "El RUC está en «Simulación».",
+      issuerId: GF.id,
+    });
+  });
+
+  it("emitir a mano da la misma boleta que el barrido en real: RUC, total, fecha de pago y base", () => {
+    const real = invoiceEligibility(hechos());
+    expect(real.ok).toBe(true);
+    expect(emitir(hechos({ issuers: [enModo("manual")] }))).toEqual({ ...real, issuer: enModo("manual") });
+    expect(emitir(hechos())).toEqual(real);
+  });
+
+  it("sin emitNow, un RUC en «Manual» no pide token ni prueba, y frena con su simulación", () => {
+    const manual = enModo("manual", { hasToken: false, checkedRuc: null });
+    expect(invoiceEligibility(hechos({ issuers: [manual] }))).toMatchObject({ ok: true, mode: "simulacion" });
+    // Un error real no frena la simulación; una simulación previa, sí.
+    expect(motivo(hechos({ issuers: [manual], existing: { ...SIN_NADA, errorBlocked: true } }))).toBe("ok");
+    expect(motivo(hechos({ issuers: [manual], existing: { ...SIN_NADA, simulated: true } }))).toBe("ya_simulado");
+    expect(motivo(hechos({ issuers: [manual], existing: { ...SIN_NADA, realLive: true } }))).toBe("ya_tiene");
+  });
+
+  it("con emitNow cuentan los candados de real: ya_tiene, error_previo y la conexión; la simulación no frena", () => {
+    const manual = enModo("manual");
+    expect(motivoAlEmitir(hechos({ issuers: [manual], existing: { ...SIN_NADA, simulated: true } }))).toBe("ok");
+    expect(motivoAlEmitir(hechos({ issuers: [manual], existing: { ...SIN_NADA, realLive: true } }))).toBe("ya_tiene");
+    expect(motivoAlEmitir(hechos({ issuers: [manual], existing: { ...SIN_NADA, errorBlocked: true } }))).toBe(
+      "error_previo",
+    );
+    for (const over of [{ hasToken: false }, { checkedRuc: null }, { checkedRuc: RUC_OTRO }]) {
+      expect(motivoAlEmitir(hechos({ issuers: [enModo("manual", over)] })), JSON.stringify(over)).toBe("sin_conexion");
+    }
+  });
+
+  it("emitNow en orden: lo del pedido primero, después el modo, después «Emitir desde» y los candados", () => {
+    // Lo del pedido (el monto) le gana al modo.
+    const caro = hechos({ total: 800, payments: [pago({ amount: 800 })], issuers: [enModo("simulacion")] });
+    expect(motivoAlEmitir(caro)).toBe("monto_mayor_700");
+    // Apagado sigue siendo `ruc_apagado`, no un modo distinto.
+    expect(motivoAlEmitir(hechos({ issuers: [enModo("apagado")] }))).toBe("ruc_apagado");
+    // El modo le gana a «Emitir desde» y a los candados de real.
+    const sinNada = enModo("simulacion", { emitFrom: null, hasToken: false, checkedRuc: null });
+    const f = hechos({ issuers: [sinNada], existing: { realLive: true, simulated: true, errorBlocked: true } });
+    expect(motivoAlEmitir(f)).toBe("modo_distinto");
+    sinNada.mode = "manual";
+    const pasos: [InvoiceReason, () => void][] = [
+      ["antes_de_inicio", () => (sinNada.emitFrom = DESDE)],
+      ["ya_tiene", () => (f.existing.realLive = false)],
+      ["error_previo", () => (f.existing.errorBlocked = false)],
+      ["sin_conexion", () => ((sinNada.hasToken = true), (sinNada.checkedRuc = RUC_GF))],
+    ];
+    for (const [esperado, arreglar] of pasos) {
+      expect(motivoAlEmitir(f)).toBe(esperado);
+      arreglar();
+    }
+    expect(emitir(f)).toMatchObject({ ok: true, mode: "real" });
   });
 });
 
@@ -1602,10 +1711,38 @@ describe("MOM §35.3 a §35.6 — los motivos, las etiquetas y la base dicen lo 
   });
 
   it("modos, estados y el comprobante real vivo son los de la 0257", () => {
-    expect(sql).toContain(`check (mode in (${INVOICE_MODES.map((m) => `'${m}'`).join(", ")}))`);
+    // La 0257 corrió en producción con tres modos y no se reescribe: «Manual»
+    // lo agrega la 0261, con el resto en el mismo orden.
+    const de0257 = INVOICE_MODES.filter((m) => m !== "manual");
+    expect(de0257).toEqual(["apagado", "simulacion", "real"]);
+    expect(sql).toContain(`check (mode in (${de0257.map((m) => `'${m}'`).join(", ")}))`);
+    expect(sql).not.toContain("'manual'");
     expect(sql).toContain(`check (status in (${INVOICE_STATUSES.map((s) => `'${s}'`).join(", ")}))`);
     const indice = /create unique index if not exists order_invoices_one_real[\s\S]*?status in \(([^)]*)\)/.exec(sql);
     expect(indice?.[1]?.split(",").map((s) => s.trim().replace(/'/g, ""))).toEqual([...LIVE_REAL_STATUSES]);
+  });
+
+  // La 0261 (el modo «Manual» y el turno con `p_mode`) la escribe quien hace la
+  // migración. Cuando esté, sus modos son INVOICE_MODES y cada motivo de su
+  // turno existe aquí, `modo_distinto` incluido.
+  const path0261 = (() => {
+    const dir = resolve(process.cwd(), "db/migrations");
+    const name = readdirSync(dir).find((f) => f.startsWith("0261_"));
+    return name ? resolve(dir, name) : null;
+  })();
+  it.runIf(path0261 !== null)("la 0261 trae «Manual» y su turno solo contesta motivos que existen", () => {
+    const sql0261 = readFileSync(path0261!, "utf8");
+    const listas = [...sql0261.matchAll(/mode in \(([^)]*)\)/g)]
+      .map((m) => m[1]!.split(",").map((s) => s.trim().replace(/'/g, "")))
+      .filter((l) => l.includes("manual") && l.includes("apagado"));
+    expect(listas.length).toBeGreaterThan(0);
+    for (const l of listas) expect([...l].sort()).toEqual([...INVOICE_MODES].sort());
+    const turno = /create or replace function invoice_claim\([\s\S]*?\n\$\$;/.exec(sql0261)?.[0] ?? "";
+    expect(turno).toContain("p_mode");
+    expect(turno).toContain("p_created_by");
+    const motivos = [...turno.matchAll(/'reason', '([a-z_0-9]+)'/g)].map((m) => m[1]);
+    expect(motivos).toContain("modo_distinto");
+    for (const r of motivos) expect(INVOICE_REASONS).toContain(r);
   });
 
   it("el tope diario, el tope por pasada y los S/ 700 son los de la base y el MOM", () => {

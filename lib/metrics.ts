@@ -1557,7 +1557,7 @@ export function lostRevenueByReason(
 //
 // Every ACTIVE order is assigned exactly ONE acquisition source and ONE closing
 // channel, so the buckets always reconcile to the net revenue of the bot orders
-// it reads (Σ sources = Σ channels = total). Since 0261 the dashboard headline
+// it reads (Σ sources = Σ channels = total). Since 0262 the dashboard headline
 // counts ALL orders (MOM §17.4), so this total is smaller than the headline. This is the audit tool: the numbers can't silently
 // double-count or drop a sale, and each order carries its assigned source +
 // channel so the UI can drill down and a human can sanity-check the call.
