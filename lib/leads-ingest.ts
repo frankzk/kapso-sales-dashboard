@@ -22,6 +22,7 @@ import { analyzeYapeVoucher } from "@/lib/vision";
 import type { StoreCreds } from "@/lib/ingest";
 import { categoryOf, deriveAutoState, nextLeadState, statusDef } from "@/lib/leads";
 import { tzParts } from "@/lib/metrics";
+import { insertOrderIfAbsent } from "@/lib/order-sale";
 import { normalizePhone } from "@/lib/phone";
 import { LEAD_VOICE_KIND } from "@/lib/voice-leads";
 import {
@@ -2278,8 +2279,11 @@ function chunkIds<T>(arr: T[], size: number): T[][] {
 
 /** COMPLETED draft → won lead, y SOLO si fue una recuperación real (el draft
  *  estuvo abandonado ≥30 min o la orden trae tag de abandono — isRecoveredDraft)
- *  se captura la orden en `orders` con `kapso`+`cod_recuperado` para que el
- *  rollup kapso-only cuente su ingreso. Un draft que se completó al instante es
+ *  se captura la orden en `orders` si todavía no estaba, TAL COMO VIENE de
+ *  Shopify. Antes se le añadían `kapso`+`cod_recuperado` solo en nuestra copia,
+ *  y la siguiente sincronización los borraba: no era un pedido del bot y no
+ *  quedaba nada que lo distinguiera. Quién lo cerró lo dice el canal de cierre
+ *  (MOM §17.3), no una etiqueta local. Un draft que se completó al instante es
  *  una compra COD normal (EasySell crea y completa un draft por CADA pedido):
  *  NO se etiqueta, NO entra a orders/rollups y NO crea un lead nuevo — solo
  *  marca won un lead que YA existía (el cliente sí compró). Returns the
@@ -2316,18 +2320,11 @@ async function linkCompletedDraftToLead(
             orderTags: order.tags, // el tag de abandono (p.ej. easysell-abandoned-checkout) también prueba la recuperación
           });
           if (recovered) {
-            // `kapso` so the rollup (filters lower(t)='kapso') counts it; `cod_recuperado`
-            // keeps recovered sales distinguishable from bot orders.
-            order.tags = [...new Set([...order.tags, "kapso", "cod_recuperado"])];
-            await admin.from("orders").upsert([order], { onConflict: "store_id,shopify_order_id" });
+            // Sin etiquetas propias y sin pisar una fila que el webhook haya
+            // traído mientras tanto: las etiquetas que valen son las de Shopify.
+            const { id } = await insertOrderIfAbsent(admin, order as unknown as Record<string, unknown> & { store_id: string; shopify_order_id: string });
             recoveredAt = order.created_at;
-            const { data: ins } = await admin
-              .from("orders")
-              .select("id")
-              .eq("store_id", storeId)
-              .eq("shopify_order_id", order.shopify_order_id)
-              .maybeSingle();
-            orderId = (ins as { id: string } | null)?.id ?? null;
+            orderId = id;
           }
         }
       } catch {

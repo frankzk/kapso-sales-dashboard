@@ -224,6 +224,9 @@ echo "  ✅ unidades × días − días antes, ventana, quien volvió a comprar 
 echo "▶ Repro Lima «Todos» (0256): Lima sin Finalizado por etapa y subetapa, días de Lima, solo service_role"
 $PSQL -f "$ROOT/scripts/sql/lima_open_counts_smoke.sql"
 echo "  ✅ igual a un GROUP BY directo, sin Finalizado ni Provincia, borde de medianoche de Lima, authenticated sin permiso"
+echo "▶ Canal de cierre (0259): un canal por pedido, la venta registrada manda, «ayudado» solo con gestión de la misma tienda en 7 días, y RLS"
+$PSQL -f "$ROOT/scripts/sql/canal_de_cierre_smoke.sql"
+echo "  ✅ asesora > recompra > bot Kapso > bot externo > web > otros, cancelados aparte, día local, cada quien sus tiendas"
 
 # SimpleFact no tiene llave de idempotencia: la misma boleta mandada dos veces
 # son dos boletas ante SUNAT, y una boleta enviada no se borra. Lo que lo impide

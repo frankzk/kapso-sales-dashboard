@@ -59,7 +59,9 @@ venden también por un formulario COD en la web (EasySell, etiqueta
 nada —los 591 están en `order_master` y 499 ya tienen guía—, pero sí para todo
 lo que se calcula recorriendo leads: ese camino no los ve. El anuncio que los
 trajo viaja en `orders.utm_meta`, y las reglas para leerlo están en
-`lib/cod-cart-attribution.ts`.
+`lib/cod-cart-attribution.ts`. Quién cerró cada pedido —asesora, bot, la
+clienta sola en la web— se decide por hechos que la sincronización no borra,
+no por etiquetas locales (§17.3).
 
 **Canal de venta (15-10-2026).** Todos los pedidos nacen en Shopify, pero no
 por el mismo camino, y lo dicen las etiquetas que cada camino le pone. El
@@ -70,19 +72,27 @@ que la herramienta donde quedó escrita—:
 
 | Canal | Etiqueta en Shopify | 45 días al 15-10-2026 |
 | --- | --- | --- |
-| Asesora (Leads) | `venta_manual`, `carrito_recuperado` | 15 % |
+| Asesora (Leads) | `venta_manual` (la regla también acepta `carrito_recuperado`, pero esa era una etiqueta solo de la copia local: ningún pedido de Shopify la lleva y desde §17.3 nadie la escribe) | 15 % |
 | Chatbot WhatsApp | `kapso`, `whatsapp`, o el pedido trae conversación de Kapso | 9 % |
 | Bot de carritos | `CARRITO RECUPERADO`, `BOT`, `BOT (whatsapp_cloud)` | 4 % |
 | Catálogo WhatsApp | `catalogo-wsp` (el catálogo privado del agradecimiento, §31) | 1 % |
-| Web · carrito completado | `easysell-abandoned-checkout` (formulario abandonado que la clienta completó después) | 15 % |
+| Web · carrito completado | `easysell-abandoned-checkout`, `abandoned_checkout_releasit_cod_form` (formulario abandonado que se completó después; ver abajo quién lo completa) | 15 % |
 | Web · formulario | `easysell_cod_form` | 55 % |
 | Sin marca | ninguna de las anteriores (sobre todo pedidos creados a mano en Shopify con el nombre de la asesora como etiqueta) | 1,5 % |
 
 La regla vive en `lib/sales-channel.ts` y la escribe el recálculo del pedido;
 la misma regla en SQL (`order_sales_channel`) solo rellenó lo existente al
 aplicar la 0264. No se usa para atribuir ventas a una asesora: eso lo decide
-`order_sales` y el reparto bot/asesora de Consolidado (`lib/metrics.ts`), que
-además mira la gestión del lead.
+`order_sales`, y el Consolidado reparte las ventas con «Canal de cierre»
+(§17.3), que además marca la venta que ayudó una gestión de asesora. Por eso
+las dos cifras no coinciden: cuando la asesora completa un carrito abandonado
+de EasySell, el borrador conserva sus etiquetas y no recibe `venta_manual`.
+Del 14-09 al 13-10-2026, de 1.105 pedidos activos «Web · carrito completado»,
+1.076 tenían venta de asesora en `order_sales`, y 294 de 3.229 «Web ·
+formulario» también. La recompra automática tampoco deja marca propia en
+Shopify: sus 28 pedidos de ese periodo salen como «Web · carrito completado»
+(23) o «Web · formulario» (5), y en «Canal de cierre» como «Recompra
+automática».
 
 ### Salida
 
@@ -8403,6 +8413,141 @@ ratio en `lib/ltv.ts`):
 - **Para subirlo:** el recordatorio de reposición (§34) le escribe a la
   clienta cuando se le está por acabar lo que compró. Mide su efecto contra un
   grupo de control.
+
+### 17.3 Canal de cierre de todas las ventas (14-10-2026)
+
+Responde quién cerró cada venta de la tienda: una asesora, el bot o una
+automatización, la clienta sola en la web, u otra vía. Está en **Consolidado**
+y en la página de cada tienda, en la tarjeta «Canal de cierre».
+
+**Por qué cambió.** La tarjeta solo veía los pedidos con etiqueta `kapso` y
+decidía «asesora» por las etiquetas `venta_manual` / `carrito_recuperado`. El
+botón «Generar pedido» escribía `kapso` solo en la copia local del pedido —en
+Shopify el pedido nace con `venta_manual`, o con las etiquetas del borrador de
+EasySell cuando se reusa el carrito— y la sincronización con Shopify reescribe
+las etiquetas cada 5 minutos. Del 14-09 al 13-10-2026, de 2.916 pedidos de
+asesoras quedaba 1 con `kapso`: la tarjeta decía «0 % lo cerró una asesora»
+mientras Productividad les contaba S/ 484.645.
+
+**Universo.** Todos los pedidos de Shopify de la tienda (`orders`), por el día
+**local** de la tienda en que se crearon. Los cancelados van aparte —fuera de
+pedidos e ingresos—, y el ingreso es total − reembolsado, igual que el resto
+del Consolidado.
+
+**Desde cuándo responde.** El canal solo es verdad desde que Kapta tiene, a la
+vez, todos los pedidos de la tienda y las ventas que registran sus asesoras:
+
+- todos los pedidos, desde `ORDERS_SYNC_FROM` (2026-06-01): antes de esa fecha
+  la sincronización no trae los pedidos que no son del bot;
+- las ventas de las asesoras, desde el día local de la primera fila de
+  `order_sales` de la tienda (si todavía no tiene ninguna, el de su primer
+  lead). Antes, una venta de asesora no tenía dónde registrarse y caería en
+  «Web» u «Otros». Medido: una tienda tenía 3.898 pedidos en junio de 2026 y
+  ninguna venta registrada; su primera es del 04-07-2026, y la de la otra
+  tienda del 25-06-2026.
+
+La tarjeta cuenta desde el más tardío de esos días. Con varias tiendas, desde
+el de la que empezó último, para que el total sea de un solo periodo, y el
+aviso nombra esa tienda y dice que la página de cada tienda cuenta desde su
+propio inicio. Un periodo que empieza antes se cuenta desde ese día y la
+tarjeta lo dice («desde el 4 jul 2026»), con la razón que fijó el día: el
+inicio de la tienda en Kapta o `ORDERS_SYNC_FROM`. Uno que termina antes no
+tiene con qué responder y la tarjeta vuelve a la vista anterior con un aviso,
+sin cifra de cabecera.
+
+Una tienda que todavía no usa Kapta —sin ventas registradas ni leads— no tiene
+inicio: sola, su tarjeta vuelve a la vista anterior con ese aviso; con otras
+tiendas, queda fuera del conteo y la tarjeta la nombra («sus pedidos no entran
+en este total»). Si no se puede leer desde cuándo usa Kapta una tienda, es un
+error y la tarjeta lo dice: contar sin saberlo es justo el «0 % asesora» falso.
+Mover `ORDERS_SYNC_FROM` hacia atrás no amplía la tarjeta más allá del inicio
+de cada tienda; adelantarlo sí la recorta.
+
+**Un canal por pedido**, el primero que aplique en este orden. Así los canales
+suman el total de la tienda:
+
+| Orden | Canal | Cómo se reconoce | Grupo |
+| --- | --- | --- | --- |
+| 1 | Asesora | Tiene fila en `order_sales`: la venta que la asesora registró al generar el pedido | Asesora |
+| 2 | Recompra automática | Es el pedido de una prueba de recompra (`auto_order_trials` en `generado`; §11, «Prueba: pedido de recompra sin llamada») | Bot o automatización |
+| 3 | Bot de Kapso | Etiqueta `kapso` puesta en Shopify (sin distinguir mayúsculas) | Bot o automatización |
+| 4 | Bot de carritos externo | Etiquetas `BOT`, `CARRITO RECUPERADO` o `BOT (whatsapp_cloud)` | Bot o automatización |
+| 5 | Web, la clienta sola | Etiquetas de EasySell (`easysell_cod_form` y las que empiezan con `easysell`) | La clienta sola en la web |
+| 6 | Otros | Todo lo demás: catálogo de WhatsApp, pedidos hechos a mano en Shopify… | Otros |
+
+La venta de la asesora gana a cualquier etiqueta porque es el único hecho que
+nada sobrescribe: la asesora la registró y `order_sales` es append-only. El
+orden **sí decide**, y mucho: en el mes medido, 1.375 de las 2.651 ventas
+activas de asesora llevan las etiquetas de EasySell (la asesora reusó el
+borrador del carrito) y las 29 recompras llevan la etiqueta de otro canal. Sin
+el orden, la mitad de las ventas de asesora caería en «Web». Entre etiquetas no
+hubo choques: ningún pedido tenía `kapso` y además otra etiqueta de canal.
+
+**«Ayudado por asesora».** Para lo que NO cerró una asesora: una asesora
+gestionó a esa clienta en los 7 días previos al pedido, con una fila firmada de
+`lead_calls` de tipo `call`, `message` o `sale` (la misma definición de «tocado»
+del agente de voz, §33.2) en el lead de la **misma tienda** con el **mismo
+teléfono**. Ayudar no es cerrar: el pedido queda en su canal, y la ayuda se
+cuenta aparte en su fila. Una fila del sistema sin firma o una nota no es
+gestión.
+
+**Lo que no decide el canal.** Ninguna etiqueta que Kapta escriba en su copia:
+las tiendas no dieron `write_orders`, así que Kapta no puede etiquetar pedidos
+en Shopify, y lo que escribe solo en su copia lo borra la siguiente
+sincronización. Por eso, desde este cambio, «Generar pedido», la captura del
+carrito recuperado sin asesora y la recompra automática registran la fila local
+**solo si el webhook no la trajo ya, y tal como viene de Shopify**: sin `kapso`,
+sin `cod_recuperado`, sin pisar la fecha ni los productos reales.
+
+Si al completar el borrador Shopify contesta que ya estaba completado, Kapta
+le pregunta a Shopify cuál es el pedido real de ese borrador y registra la venta
+sobre él. Antes inventaba una fila `draft-<id>` que no era ningún pedido de
+Shopify: la venta se contaba dos veces, una en la fila inventada y otra en el
+pedido real que traía la sincronización. Solo si Shopify tampoco lo dice queda
+el respaldo de antes, la fila `draft-<id>`, para no perder la venta; hasta el
+14-10-2026 no había ninguna en la base.
+
+**Lo que el canal todavía no distingue.** Un carrito de EasySell que completa el
+bot de Kapso por WhatsApp (`draftOrderComplete` sobre el borrador del carrito)
+cuenta como **Web**: Shopify no le pone ninguna marca que lo separe del carrito
+que la clienta terminó sola, y Kapta no puede etiquetarlo. Para contarlo como
+del bot, el workflow del bot tendría que ponerle una etiqueta al borrador (por
+ejemplo `kapso`) antes de completarlo; eso es un cambio del bot, no de esta
+tarjeta.
+
+**Productividad y el canal no cuadran exacto, y no tienen por qué.**
+Productividad cuenta ventas registradas por la fecha en que la asesora apretó
+el botón e incluye las que después se cancelaron; el canal cuenta pedidos por
+su fecha de creación en Shopify y deja los cancelados aparte.
+
+**Lo que todavía no cambia.** En «Ventas del periodo», salvo esta tarjeta y
+«Anuncios de Meta», los pedidos y los ingresos —las cifras de cabecera, Ventas
+por día, Por tienda o Patrón de horas, Productos, Fuente, Embudo y su salud,
+Venta perdida, Carritos, Números de WhatsApp, Desglose de negocio e
+Integridad— siguen contando solo los pedidos del bot de Kapso (DEPLOY.md §5h).
+La operación del Master y LTV : CPA (§17.2), arriba de esa sección en el
+Consolidado, cuentan todos los pedidos del Master. La tarjeta lo dice,
+porque su total —todas las ventas— es mayor. El panel de «Fuente» conserva su
+propio cierre por etiquetas, ahora con el nombre «Cierre de los pedidos del
+bot, por etiquetas»: no ve las ventas de las asesoras y remite a esta tarjeta.
+
+Medido del 14-09 al 13-10-2026, días de Lima, pedidos activos:
+
+| Canal | Pedidos | Ingresos | Cancelados aparte | Ayudados |
+| --- | --- | --- | --- | --- |
+| Asesora | 2.651 | S/ 481.451 | 243 | — |
+| Recompra automática | 29 | S/ 5.826 | 11 | 0 |
+| Bot de Kapso | 593 | S/ 103.880 | 140 | 57 |
+| Bot de carritos externo | 244 | S/ 41.090 | 102 | 51 |
+| Web, la clienta sola | 3.012 | S/ 527.865 | 1.105 | 66 |
+| Otros | 93 | S/ 20.968 | 26 | 15 |
+
+Cómo se calcula: `canal_de_cierre` (migración 0259, de lectura, con la sesión
+de quien mira: cada persona ve solo sus tiendas), resumido en
+`lib/closing-channel.ts` y dibujado en `components/closing-channels.tsx`. Si la
+migración todavía no se aplicó o la función falla, la tarjeta vuelve a la
+vista anterior (solo pedidos del bot) con un aviso y sin cifra de cabecera
+(«—»): su porcentaje sería el número equivocado. Nunca con ceros.
 
 ## 18. Implementación incremental
 

@@ -369,7 +369,11 @@ neto, canal, cupón) and sanity-check the assignment.
   checkout / histórico, surfaced on purpose).
 - **Closing channel**: Asesora (closed via the dashboard: `venta_manual` /
   `carrito_recuperado`) ▸ Bot asistido (an advisor logged activity on the lead
-  ≤7 días antes del pedido) ▸ Bot.
+  ≤7 días antes del pedido) ▸ Bot. **Solo dentro de los pedidos del bot y por
+  etiquetas**, que la sincronización con Shopify reescribe: aquí «Asesora»
+  queda casi siempre en cero. La tarjeta «Canal de cierre» del Consolidado ya
+  no usa esto desde el 14-10-2026: clasifica TODAS las ventas por
+  `order_sales` (0259, MOM §17.3).
 - **ROAS** on the Meta row = attributed revenue / Meta ad spend for the range
   (live from the Marketing API; shows "—" if Meta isn't connected).
 - Needs **migration 0030** (`discount_codes` on orders + `winback_sends`). Before
@@ -488,12 +492,24 @@ de couriers, intentos y comentarios.
   **Las métricas no se mueven**: `recompute_daily_rollups` y
   `lib/access.ts:getOrders` siguen filtrando por `tag:kapso`, y los rollups y el
   vínculo con el lead solo se disparan para pedidos del bot.
+  **Corrección (14-10-2026): sí se movieron.** Esto suponía que la etiqueta
+  `kapso` que el dashboard añadía en su copia a las ventas de asesora, a los
+  carritos recuperados y a la recompra automática sobreviviría. No sobrevive:
+  la pasada `shopify_all` y el webhook reescriben `tags` con lo de Shopify, y
+  esos pedidos salían del conteo en minutos (1 de 2.916 ventas de asesora la
+  conservaba). Desde el 14-10-2026 ya no se escribe; quién cerró cada venta lo
+  decide `canal_de_cierre` (0259, MOM §17.3).
 - **`ORDERS_SYNC_FROM` acota el histórico** (por defecto `2026-06-01`). La pasada
   nueva solo trae pedidos **creados** a partir de esa fecha, así que no arrastra
   años de pedidos cerrados. Se filtra por `created_at` y no por `updated_at`, para
   que un pedido viejo que alguien edite hoy no vuelva a entrar. Para ampliar el
   histórico basta mover la variable en Vercel y borrar el cursor:
   `delete from sync_state where source = 'shopify_all';`
+  También es el piso de «Canal de cierre» (MOM §17.3), que cuenta desde el más
+  tardío entre esta fecha y el día en que cada tienda empezó a usar Kapta (su
+  primera venta de asesora registrada o, sin ninguna, su primer lead); con
+  varias tiendas, desde la que empezó último. Moverla hacia atrás no amplía la
+  tarjeta más allá de ese inicio; adelantarla sí la recorta.
 - **El Master se rellena solo.** `runStoreSync` termina con un barrido de
   reconciliación (`reconcileOrderMaster`) que crea o refresca las filas que
   falten, así que no hace falta ningún backfill manual. Las acciones de Repro
@@ -2990,3 +3006,74 @@ etapas ni costos.
 - `MOM_RESOLUTION_VERSION` sube a `mom-v1.30`: el cron rellena «Salió con» y
   suma a los intentos de Grupo GF las paradas del cuaderno histórico. No cambia
   etapas ni costos.
+
+### 14-10-2026 · Canal de cierre de todas las ventas (0259, MOM §17.3)
+
+La tarjeta «Canal de cierre» del Consolidado y de la página de cada tienda deja
+de mirar solo los pedidos con `kapso` y clasifica TODAS las ventas por quién
+las cerró: asesora (`order_sales`) > recompra automática > bot de Kapso > bot de
+carritos externo > la clienta sola en la web (EasySell) > otros, con la marca
+«ayudado por asesora». Y «Generar pedido», la captura del carrito recuperado
+sin asesora y la recompra automática dejan de escribir `kapso` /
+`cod_recuperado` / `auto_recompra` en la copia local: registran la fila solo si
+el webhook no la trajo, tal como viene de Shopify.
+
+1. **Migración `0259_canal_de_cierre.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0259_canal_de_cierre.sql`. Crea solo
+   la función de lectura `canal_de_cierre(uuid[], date, date)` (SECURITY
+   INVOKER, ejecutable por `authenticated` y `service_role`). No escribe datos,
+   no toma bloqueos sobre tablas y no lleva `drop`. Medida en producción como
+   el owner, 30 días y dos tiendas: 0,32 s, con los índices que ya existen.
+   **Sin ella el código no se rompe**: la tarjeta vuelve a la vista anterior
+   (solo pedidos del bot) con un aviso de que falta la migración y sin cifra
+   de cabecera («—»), porque ese porcentaje es justo el número equivocado.
+   **Ya aplicada en producción el 14-10-2026** con `apply_migration` (historial
+   `20261014172812 0257_canal_de_cierre`: se aplicó con ese número y el mismo
+   día se renumeró a 0258, porque la integración ya tenía `0257_invoices.sql`,
+   y el 15-10 a 0259, porque llegó `0258_restock_reply_sweep.sql`; la función
+   es la misma y no hay que volver a aplicarla). Comprobado ese día: el cuerpo de la
+   función es idéntico al del archivo (mismo md5), `anon` no la puede ejecutar,
+   y como el owner, con RLS, del 14-09 al 13-10 ve las dos tiendas en 0,27 s con
+   los mismos pedidos por canal que la tabla del MOM §17.3 (solo cambian los
+   que se cancelaron después de medirla).
+2. **Qué cambia en las cifras**:
+   - «Canal de cierre» pasa de «0 % lo cerró una asesora» a la parte real. Con
+     el periodo 14-09 → 13-10-2026: asesora 2.651 pedidos y S/ 481.451 de
+     S/ 1.181.080 en total (≈ 41 %).
+   - Las cifras de arriba (Ingresos, Pedidos, Conversión) siguen siendo solo
+     del bot (§5h), pero ya no suben unos minutos con cada venta de asesora: la
+     etiqueta `kapso` que les ponía el botón duraba hasta la siguiente
+     sincronización. Es más correcto; el cambio es pequeño y se nota sobre
+     todo en el día en curso.
+   - La tarjeta cuenta desde que Kapta tiene todos los pedidos
+     (`ORDERS_SYNC_FROM`, 2026-06-01) y las ventas de las asesoras de cada
+     tienda (su primera fila de `order_sales` o, sin ninguna, su primer lead:
+     25-06 y 04-07-2026 en las dos tiendas de hoy). Antes, una venta de asesora
+     caería en «Web» u «Otros». En el Consolidado cuenta desde la tienda que
+     empezó último (hoy, 04-07-2026) y el aviso la nombra. Un periodo que empieza
+     antes se cuenta desde ese día y la tarjeta lo dice; uno entero anterior
+     vuelve a la vista de respaldo con su aviso. Una tienda que todavía no usa
+     Kapta queda fuera del conteo, nombrada; si no se puede leer desde cuándo
+     usa Kapta una tienda, la tarjeta muestra el error.
+   - En el panel de «Fuente», el bloque que se llamaba «Canal de cierre» pasa a
+     llamarse «Cierre de los pedidos del bot, por etiquetas» y remite a la
+     tarjeta: es el mismo cálculo de siempre, solo sobre pedidos del bot.
+   - Limitación conocida: un carrito de EasySell que completa el bot de Kapso
+     por WhatsApp cuenta como «Web», porque Shopify no le deja ninguna marca
+     del bot. Para separarlo, el workflow del bot tendría que etiquetar el
+     borrador antes de completarlo (MOM §17.3).
+   - Si al generar el pedido Shopify contesta que el borrador ya estaba
+     completado, la venta se registra sobre el pedido real del borrador y no
+     sobre una fila inventada `draft-<id>`, que la contaba dos veces.
+3. **Qué mirar después**:
+   - la tarjeta muestra «Todas las ventas de la tienda» y su total se parece a
+     los pedidos del Master del mismo periodo, no a los S/ ~100k del bot;
+   - ninguna venta nueva de asesora queda con `kapso` en `orders`:
+     `select count(*) from orders o join order_sales v on v.order_id = o.id where o.created_at > '<hora del despliegue>' and 'kapso' = any(o.tags);`
+     tiene que dar 0, salvo que el borrador reusado ya trajera `kapso` de
+     Shopify;
+   - los pedidos generados desde el drawer conservan sus productos con SKU
+     después del webhook (antes nuestra copia los pisaba con líneas sin id).
+4. **Marcha atrás**: revertir el código basta; la función puede quedarse (es
+   de lectura y nadie más la llama). Si se quiere quitar:
+   `drop function if exists public.canal_de_cierre(uuid[], date, date);`

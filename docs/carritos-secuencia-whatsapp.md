@@ -166,9 +166,15 @@ plantillas. Configurar en el workflow del bot (por tienda):
      "pendiente de pago".
    - Nada más que hacer en el dashboard: el webhook de Shopify ya existente
      (`draft_orders/update` + `orders/create`) detecta el draft completado,
-     marca el lead **Ganado** (`pedido_generado`), etiqueta la orden
-     `kapso + cod_recuperado` para que cuente en ingresos, y la secuencia se
-     detiene sola (el carrito dejó de estar abierto).
+     marca el lead **Ganado** (`pedido_generado`) y la secuencia se detiene
+     sola (el carrito dejó de estar abierto). La orden queda con las
+     etiquetas que le pone Shopify: hasta el 14-10-2026 el dashboard le añadía
+     `kapso + cod_recuperado` en su copia, y la sincronización las borraba en
+     minutos. Ojo: el canal de cierre (MOM §17.3) todavía la cuenta como
+     «Web», porque Shopify no le pone ninguna marca que la separe del carrito
+     que la clienta terminó sola; para contarla como del bot, el workflow
+     tendría que etiquetar el borrador (por ejemplo `kapso`) antes de
+     completarlo.
 
 3. **Si duda o pregunta**: derivar al flujo normal del bot (o handoff a
    asesora). El inbound del cliente ya detuvo la secuencia automáticamente.

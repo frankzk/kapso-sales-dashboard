@@ -4,6 +4,7 @@
 
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { permissionsFor } from "@/lib/permissions";
+import { env } from "@/lib/env";
 import { cache } from "react";
 import { decryptOrNull } from "@/lib/crypto";
 import { fetchMetaSpend, normalizeMetaAdAccounts } from "@/lib/meta-marketing";
@@ -18,6 +19,14 @@ import type {
 import type { AdMeta } from "@/lib/meta-ads";
 import { idsEnUtm, type AnuncioMeta, type WebAdOrder } from "@/lib/cod-cart-attribution";
 import type { AttributionInputs, AttributionSource } from "@/lib/metrics";
+import {
+  clampToCoverage,
+  isMissingFunctionError,
+  parseClosingChannels,
+  planCoverage,
+  summarizeClosingChannels,
+  type ClosingChannelResult,
+} from "@/lib/closing-channel";
 import type { WaNumber } from "@/lib/wa-numbers";
 
 export interface DateRange {
@@ -622,6 +631,100 @@ export async function getAttributionInputs(
   for (const arr of winbackByPhone.values()) arr.sort();
 
   return { sourceByPhone, advisorTouchesByPhone, winbackByPhone };
+}
+
+/**
+ * Canal de cierre de TODAS las ventas de las tiendas en el rango (MOM §17.3),
+ * en el día local de cada tienda. Lo clasifica Postgres (`canal_de_cierre`,
+ * 0259) con la sesión de quien mira, así que cada persona ve solo sus tiendas;
+ * aquí solo se lee y se resume.
+ *
+ * Si la migración todavía no se aplicó, `sin_migracion`: el panel vuelve a la
+ * vista anterior con un aviso. Cualquier otro error se dice tal cual, nunca se
+ * convierte en ceros: un «0 % lo cerró una asesora» falso es lo que este cambio
+ * vino a corregir.
+ */
+export async function getClosingChannels(storeIds: string[], range: DateRange): Promise<ClosingChannelResult> {
+  if (!storeIds.length) {
+    return {
+      status: "ok",
+      summary: summarizeClosingChannels([]),
+      coverage: { from: null, cause: null, storeId: null, excluded: [], multiStore: false },
+    };
+  }
+  const sb = await createServerSupabase();
+  // El canal solo es verdad desde que Kapta tiene todos los pedidos Y las ventas
+  // de las asesoras (MOM §17.3): antes, una venta de asesora caería en «Web».
+  // Si no se puede saber desde cuándo, se dice: un periodo sin recortar es justo
+  // el «0 % asesora» equivocado.
+  const starts = await kaptaStartDays(sb, storeIds);
+  if ("error" in starts) return { status: "error", message: starts.error };
+  const plan = planCoverage(
+    env.ordersSyncFrom(),
+    storeIds.map((id, i) => ({ id, start: starts.days[i] ?? null })),
+  );
+  const coverage = (from: string | null) => ({
+    from,
+    cause: plan.cause,
+    storeId: plan.storeId,
+    excluded: plan.excluded,
+    multiStore: plan.multiStore,
+  });
+  if (!plan.from) return { status: "sin_cobertura", coverage: coverage(null) };
+  const window = clampToCoverage(range, plan.from);
+  if (!window) return { status: "sin_cobertura", coverage: coverage(plan.from) };
+  const { data, error } = await sb.rpc("canal_de_cierre", {
+    p_store_ids: plan.counted,
+    p_from: window.from,
+    p_to: window.to,
+  });
+  if (error) {
+    if (isMissingFunctionError(error)) return { status: "sin_migracion" };
+    console.error("[consolidado] canal_de_cierre", error.code, error.message);
+    return { status: "error", message: error.message };
+  }
+  return {
+    status: "ok",
+    summary: summarizeClosingChannels(parseClosingChannels(data)),
+    coverage: coverage(window.clipped ? plan.from : null),
+  };
+}
+
+/**
+ * El día local en que cada tienda empezó a usar Kapta: su primera fila de
+ * `order_sales` o, si todavía no tiene ninguna, su primer lead; null si no tiene
+ * ninguno de los dos. La de `order_sales` va por su índice (store_id,
+ * occurred_at) con `limit 1`; la de leads no tiene índice por fecha y recorre
+ * los leads de la tienda, pero solo corre mientras la tienda no registró ninguna
+ * venta. Cualquier lectura que falle es un error, no un «no tiene».
+ */
+async function kaptaStartDays(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  storeIds: string[],
+): Promise<{ days: (string | null)[] } | { error: string }> {
+  const first = async (table: "order_sales" | "leads", column: "occurred_at" | "created_at", storeId: string) => {
+    const { data, error } = await sb.from(table).select(column).eq("store_id", storeId).order(column, { ascending: true }).limit(1).maybeSingle();
+    if (error) throw new Error(`${table}: ${error.message}`);
+    return ((data as Record<string, string> | null)?.[column] ?? null) as string | null;
+  };
+  try {
+    const [stores, firsts] = await Promise.all([
+      sb.from("stores").select("id, timezone").in("id", storeIds),
+      Promise.all(storeIds.map(async (id) => (await first("order_sales", "occurred_at", id)) ?? (await first("leads", "created_at", id)))),
+    ]);
+    if (stores.error) throw new Error(`stores: ${stores.error.message}`);
+    const tz = new Map(((stores.data ?? []) as { id: string; timezone: string | null }[]).map((s) => [s.id, s.timezone || "UTC"]));
+    return {
+      days: storeIds.map((id, i) => {
+        const iso = firsts[i];
+        return iso ? tzParts(iso, tz.get(id) ?? "UTC").date : null;
+      }),
+    };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error("[consolidado] inicio de la tienda en Kapta", message);
+    return { error: `no se pudo leer desde cuándo usa Kapta cada tienda (${message})` };
+  }
 }
 
 /**

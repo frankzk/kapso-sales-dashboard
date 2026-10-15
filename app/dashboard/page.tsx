@@ -7,6 +7,7 @@ import {
   getAdNames,
   getAttributionInputs,
   getCampaignDeliveryOutcomes,
+  getClosingChannels,
   getCampaignLeadsForDashboard,
   getConversations,
   getLatestOps,
@@ -134,6 +135,7 @@ async function ConsolidatedContent({
     metaAdPerformance,
     webAdOrders,
     metaAdCatalog,
+    closing,
   ] =
     await Promise.all([
       getRollups(storeIds, range),
@@ -150,6 +152,8 @@ async function ConsolidatedContent({
       metaAdPerformancePromise,
       webAdOrdersPromise,
       metaAdCatalogPromise,
+      // Quién cerró TODAS las ventas de las tiendas, no solo las del bot (MOM §17.3).
+      getClosingChannels(storeIds, range),
     ]);
 
   // Atribución de fuente y canal de cierre, igual que en la página de tienda.
@@ -196,6 +200,7 @@ async function ConsolidatedContent({
       adNames={adNames}
       waNumbers={waNumbers}
       attribution={attribution}
+      closing={closing}
       campaignDeliveries={campaignDeliveries}
       campaignLeads={campaignLeads}
       campaignOrders={campaignOrders}
