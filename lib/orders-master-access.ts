@@ -1223,8 +1223,9 @@ export function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T 
 
   if (f.withComments) q = q.gt("comment_count", 0);
   if (f.multiCourier) q = q.gt("courier_count", 1);
-  if (f.attempts >= ATTEMPTS_OR_MORE) q = q.gte("attempt_count", ATTEMPTS_OR_MORE);
-  else if (f.attempts > 0) q = q.eq("attempt_count", f.attempts);
+  if (f.attempts !== null) {
+    q = f.attempts >= ATTEMPTS_OR_MORE ? q.gte("attempt_count", ATTEMPTS_OR_MORE) : q.eq("attempt_count", f.attempts);
+  }
 
   if (f.expiringSoon) {
     // Incluye lo ya vencido: es justamente lo que hay que trabajar hoy para que

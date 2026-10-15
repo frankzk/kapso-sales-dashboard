@@ -177,7 +177,9 @@ describe("matchesFilters — banderas operativas", () => {
     expect(matchesFilters(row("2", { courier_count: 1 }), withFilter({ multiCourier: true }), NOW)).toBe(false);
   });
 
-  it("intentos de entrega: 1, 2 y 3 exactos; 4 es «4 a más»", () => {
+  it("intentos de entrega: 0, 1, 2 y 3 exactos; 4 es «4 a más»", () => {
+    expect(matchesFilters(row("0", { attempt_count: 0 }), withFilter({ attempts: 0 }), NOW)).toBe(true);
+    expect(matchesFilters(row("0b", { attempt_count: 1 }), withFilter({ attempts: 0 }), NOW)).toBe(false);
     expect(matchesFilters(row("1", { attempt_count: 1 }), withFilter({ attempts: 1 }), NOW)).toBe(true);
     expect(matchesFilters(row("2", { attempt_count: 2 }), withFilter({ attempts: 1 }), NOW)).toBe(false);
     expect(matchesFilters(row("3", { attempt_count: 3 }), withFilter({ attempts: 3 }), NOW)).toBe(true);
@@ -185,8 +187,9 @@ describe("matchesFilters — banderas operativas", () => {
     expect(matchesFilters(row("5", { attempt_count: 4 }), withFilter({ attempts: ATTEMPTS_OR_MORE }), NOW)).toBe(true);
     expect(matchesFilters(row("6", { attempt_count: 7 }), withFilter({ attempts: ATTEMPTS_OR_MORE }), NOW)).toBe(true);
     expect(matchesFilters(row("7", { attempt_count: 3 }), withFilter({ attempts: ATTEMPTS_OR_MORE }), NOW)).toBe(false);
-    expect(matchesFilters(row("8", { attempt_count: 0 }), withFilter({ attempts: 0 }), NOW)).toBe(true);
-    expect(hasActiveFilters(withFilter({ attempts: 2 }))).toBe(true);
+    expect(matchesFilters(row("8", { attempt_count: 5 }), withFilter({ attempts: null }), NOW)).toBe(true);
+    expect(hasActiveFilters(withFilter({ attempts: 0 }))).toBe(true);
+    expect(hasActiveFilters(emptyFilters())).toBe(false);
   });
 
   it("sin movimientos recientes incluye a los que nunca se movieron", () => {

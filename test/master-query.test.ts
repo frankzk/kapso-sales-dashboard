@@ -41,13 +41,17 @@ describe("parseMasterQuery", () => {
     expect(parse("wc=0").filters.withComments).toBe(false);
   });
 
-  it("intentos: 1 a 4 («4 a más»); el viejo «Más de un intento» y lo raro se ignoran", () => {
+  it("intentos: 0 a 4 («4 a más»); el viejo «Más de un intento» y lo raro se ignoran", () => {
+    expect(parse("at=0").filters.attempts).toBe(0);
     expect(parse("at=2").filters.attempts).toBe(2);
     expect(parse("at=4").filters.attempts).toBe(4);
-    expect(parse("at=5").filters.attempts).toBe(0);
-    expect(parse("at=1.5").filters.attempts).toBe(0);
-    expect(parse("ma=1").filters.attempts).toBe(0);
+    expect(parse("at=").filters.attempts).toBeNull();
+    expect(parse("at=5").filters.attempts).toBeNull();
+    expect(parse("at=1.5").filters.attempts).toBeNull();
+    expect(parse("ma=1").filters.attempts).toBeNull();
     const f = emptyFilters();
+    f.attempts = 0;
+    expect(buildMasterQuery({ filters: f, sortKey: "created", page: 1 }).toString()).toBe("at=0");
     f.attempts = 3;
     expect(buildMasterQuery({ filters: f, sortKey: "created", page: 1 }).toString()).toBe("at=3");
   });

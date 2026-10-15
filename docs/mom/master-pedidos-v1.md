@@ -1769,10 +1769,14 @@ contesta» las dos veces, y la fila decía 0).
 - **No cambia la etapa.** Es un dato de la fila; la macroetapa se decide como
   antes. `MOM_RESOLUTION_VERSION` sube a `mom-v1.27` para que el cron recalcule
   la columna.
-- **El filtro.** En «Más filtros», «Intentos de entrega»: Todos, 1 intento, 2
-  intentos, 3 intentos y 4 a más intentos (parámetro `at` de la URL). Reemplaza
-  la casilla «Más de un intento»; un enlace viejo con esa casilla abre el
-  listado sin ese filtro.
+- **El filtro.** En «Más filtros», «Intentos de entrega»: Todos, 0 intentos, 1
+  intento, 2 intentos, 3 intentos y 4 a más intentos (parámetro `at` de la URL,
+  de 0 a 4). Reemplaza la casilla «Más de un intento»; un enlace viejo con esa
+  casilla abre el listado sin ese filtro. «0 intentos» es «ningún intento
+  reportado», no «nunca salió»: también cae ahí lo que entregaron Tanders,
+  Shalom, Olva o Urpi, que no reportan intentos a la columna (abajo). Para
+  acercarse a «nunca salió», se combina con la etapa (Preparación o Por
+  despachar).
 - **Lo que todavía no cuenta.** Los intentos que Urpi reporta en su export
   (§30.11) viven en su propia tabla y no entran en la columna; tampoco Tanders,
   Shalom ni Olva, que no reportan intentos.

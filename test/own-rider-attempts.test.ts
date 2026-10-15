@@ -32,6 +32,7 @@ describe("intentos del motorizado propio (MOM §14, 15-10-2026)", () => {
     const mom = read("docs/mom/master-pedidos-v1.md").replace(/\s+/g, " ");
     expect(mom).toContain("#### Intentos de entrega (15-10-2026)");
     expect(mom).toContain("cada parada que reporta un motorizado propio es un intento");
-    expect(mom).toContain("«Intentos de entrega»: Todos, 1 intento, 2 intentos, 3 intentos y 4 a más intentos");
+    expect(mom).toContain("«Intentos de entrega»: Todos, 0 intentos, 1 intento, 2 intentos, 3 intentos y 4 a más intentos");
+    expect(mom).toContain("«0 intentos» es «ningún intento reportado», no «nunca salió»");
   });
 });

@@ -99,10 +99,12 @@ export function parseMasterQuery(params: URLSearchParams | Record<string, string
   const stale = Number(get("sd") ?? "");
   if (Number.isFinite(stale) && stale > 0) f.staleDays = Math.trunc(stale);
 
-  // Intentos: 1, 2, 3 o 4 («4 a más»). El viejo `ma=1` («Más de un intento»)
-  // no tiene equivalente exacto y se ignora, como todo lo que no se entiende.
-  const attempts = Number(get("at") ?? "");
-  if (Number.isInteger(attempts) && attempts >= 1 && attempts <= ATTEMPTS_OR_MORE) f.attempts = attempts;
+  // Intentos: 0, 1, 2, 3 o 4 («4 a más»). El viejo `ma=1` («Más de un
+  // intento») no tiene equivalente exacto y se ignora, como todo lo que no se
+  // entiende. `at=` vacío no es 0: Number("") lo sería.
+  const rawAttempts = get("at")?.trim() ?? "";
+  const attempts = Number(rawAttempts);
+  if (rawAttempts && Number.isInteger(attempts) && attempts >= 0 && attempts <= ATTEMPTS_OR_MORE) f.attempts = attempts;
 
   f.search = get("q")?.trim() ?? "";
   const confirmationDue = get("cq") ?? "";
@@ -141,7 +143,7 @@ export function buildMasterQuery(q: MasterQuery): URLSearchParams {
     if (f[field] as boolean) out.set(param, "1");
   }
   if (f.staleDays > 0) out.set("sd", String(f.staleDays));
-  if (f.attempts > 0) out.set("at", String(f.attempts));
+  if (f.attempts !== null) out.set("at", String(f.attempts));
   if (f.search.trim()) out.set("q", f.search.trim());
   if (f.confirmationDue) out.set("cq", f.confirmationDue);
   if (q.sortKey !== "created") out.set("s", q.sortKey);
