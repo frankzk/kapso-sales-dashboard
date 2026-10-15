@@ -66,7 +66,7 @@ import {
 const ID_BATCH = 200;
 
 /**
- * Candidatos por organización y modo en una pasada (`invoice_candidates`, 0257).
+ * Candidatos por organización y modo en una pasada (`invoice_candidates`, 0258).
  * La base ya deja fuera lo resuelto —con comprobante real vivo o, en
  * simulación, con su simulación— y lo que Shopify bloqueó hace poco, así que el
  * límite es para lo que falta mirar: con ~26 pedidos pagados al día y los 60
@@ -203,7 +203,7 @@ function bump(counts: Record<string, number>, key: string): void {
   counts[key] = (counts[key] ?? 0) + 1;
 }
 
-// ── La 0257 todavía no está ──────────────────────────────────────────────────
+// ── Las migraciones de comprobantes todavía no están ─────────────────────────
 
 /**
  * «La tabla o la función no existe»: Postgres (42P01, 42883) y PostgREST
@@ -212,30 +212,61 @@ function bump(counts: Record<string, number>, key: string): void {
 const MISSING_SCHEMA_CODES: ReadonlySet<string> = new Set(["42P01", "42883", "PGRST205", "PGRST202"]);
 
 /**
- * Lo que crea la 0257. «No existe» solo es «falta la 0257» si lo que falta es
- * uno de estos: una tabla de antes que desaparece (`orders`, `order_payments`,
- * `order_master` dentro de `invoice_candidates`…) es una base rota, y tiene que
- * verse en rojo, no pasar en verde como `sin_migracion`.
+ * Lo que crean las migraciones de comprobantes, y cuál lo crea. La 0257 (las
+ * tablas, la columna y el turno) ya corrió en producción y no se reescribe; la
+ * 0258 trae `invoice_candidates` y vuelve a escribir el turno y los dos
+ * candados. «No existe» solo es «falta una migración de comprobantes» si lo que
+ * falta es uno de estos: una tabla de antes que desaparece (`orders`,
+ * `order_payments`, `order_master` dentro de `invoice_candidates`…) es una base
+ * rota, y tiene que verse en rojo, no pasar en verde como `sin_migracion`.
  */
-const MIGRATION_0257_OBJECTS =
-  /\b(?:invoice_issuers|order_invoices|invoice_order_checks|invoice_claim|invoice_candidates|invoice_issuer_id)\b/;
+export const INVOICE_MIGRATION_OBJECTS = {
+  invoice_issuers: "0257",
+  order_invoices: "0257",
+  invoice_order_checks: "0257",
+  invoice_claim: "0257",
+  invoice_issuer_id: "0257",
+  invoice_candidates: "0258",
+} as const satisfies Record<string, "0257" | "0258">;
+
+type InvoiceMigrationObject = keyof typeof INVOICE_MIGRATION_OBJECTS;
+
+/** Un nombre de INVOICE_MIGRATION_OBJECTS como palabra entera (`order_invoices_old` no lo es). */
+const INVOICE_MIGRATION_OBJECT = new RegExp(`\\b(?:${Object.keys(INVOICE_MIGRATION_OBJECTS).join("|")})\\b`);
+const INVOICE_MIGRATION_OBJECT_ALL = new RegExp(INVOICE_MIGRATION_OBJECT.source, "g");
 
 /**
- * Falta aplicar la 0257. Esta rama se integra a main desde otras sesiones y la
- * migración se aplica a mano (DEPLOY.md): el código puede llegar a producción
- * antes que la base. Eso no es un error que una persona tenga que mirar cada 10
- * minutos: el barrido lo reporta como `skipped: "sin_migracion"` y no hace nada.
+ * Qué falta aplicar, por lo que nombra el error. Si todo lo que nombra es de la
+ * 0258 (`invoice_candidates`), es la 0258: la 0257 está, porque sus tablas se
+ * leyeron. Si nombra algo de la 0257, o nada, son las dos: la 0258 no se aplica
+ * sin las tablas de la 0257.
+ */
+function missingInvoiceMigrations(text: string): string {
+  const named = [...text.matchAll(INVOICE_MIGRATION_OBJECT_ALL)].map(
+    (m) => INVOICE_MIGRATION_OBJECTS[m[0] as InvoiceMigrationObject],
+  );
+  return named.length > 0 && named.every((n) => n === "0258") ? "la migración 0258" : "las migraciones 0257 y 0258";
+}
+
+/**
+ * Falta aplicar una migración de comprobantes. Esta rama se integra a main
+ * desde otras sesiones y las migraciones se aplican a mano (DEPLOY.md): el
+ * código puede llegar a producción antes que la base. Eso no es un error que
+ * una persona tenga que mirar cada 10 minutos: el barrido lo reporta como
+ * `skipped: "sin_migracion"` y no hace nada. `missing` es el texto que nombra lo
+ * que falta (por defecto, `what`), y de él sale cuál migración se pide.
  */
 export class InvoiceMigrationMissingError extends Error {
-  constructor(what: string) {
-    super(`Falta aplicar la migración 0257 de comprobantes (${what}).`);
+  constructor(what: string, missing: string = what) {
+    super(`Falta aplicar ${missingInvoiceMigrations(missing)} de comprobantes (${what}).`);
     this.name = "InvoiceMigrationMissingError";
   }
 }
 
 /**
- * Si un error (de Supabase o lanzado aquí) dice que falta la 0257: un código de
- * «no existe» cuyo mensaje o detalle nombra algo que crea la 0257.
+ * Si un error (de Supabase o lanzado aquí) dice que falta una migración de
+ * comprobantes: un código de «no existe» cuyo mensaje o detalle nombra algo que
+ * crean la 0257 o la 0258.
  *
  * El `hint` no se mira a propósito: PostgREST pone ahí lo que SÍ existe («Perhaps
  * you meant the table 'public.order_invoices'»). Que nombre una tabla de la 0257
@@ -246,12 +277,14 @@ export function isInvoiceMigrationMissing(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const { code, message, details } = error as { code?: unknown; message?: unknown; details?: unknown };
   if (typeof code !== "string" || !MISSING_SCHEMA_CODES.has(code)) return false;
-  return [message, details].some((text) => typeof text === "string" && MIGRATION_0257_OBJECTS.test(text));
+  return [message, details].some((text) => typeof text === "string" && INVOICE_MIGRATION_OBJECT.test(text));
 }
 
-/** El error de una lectura o escritura: «falta la 0257», o el mensaje de la base. */
+/** El error de una lectura o escritura: «falta una migración», o el mensaje de la base. */
 function dbError(what: string, error: { message: string; code?: string; details?: string | null }): Error {
-  return isInvoiceMigrationMissing(error) ? new InvoiceMigrationMissingError(what) : new Error(`${what}: ${error.message}`);
+  return isInvoiceMigrationMissing(error)
+    ? new InvoiceMigrationMissingError(what, `${error.message} ${error.details ?? ""}`)
+    : new Error(`${what}: ${error.message}`);
 }
 
 /** Los filtros extra de una lectura por lotes. */
@@ -627,7 +660,7 @@ export interface InvoiceSweepReport {
   at: string;
   /**
    * sin_ruc_encendido → ningún RUC en simulación ni en real.
-   * sin_migracion     → la 0257 no está aplicada: no hay nada que barrer.
+   * sin_migracion     → falta la 0257 o la 0258: no hay nada que barrer.
    */
   skipped?: "sin_ruc_encendido" | "sin_migracion";
   /**
@@ -759,7 +792,8 @@ function emptyIssuerReport(i: { id: string; ruc: string; mode: InvoiceWriteMode 
  *   storeId  → solo esa tienda (y los RUC de su organización).
  *
  * No lanza por un problema de una organización: lo anota en `errors` y sigue
- * con la siguiente. Si falta la 0257, no hace nada y lo dice en `skipped`.
+ * con la siguiente. Si falta la 0257 o la 0258, no hace nada y lo dice en
+ * `skipped`.
  */
 export async function runInvoiceSweep(
   admin: SupabaseClient,
@@ -785,8 +819,9 @@ export async function runInvoiceSweep(
   try {
     await sweepAll({ admin, deps, dry, now, started, storeId: opts.storeId ?? null, report, fail, redact, secrets });
   } catch (err) {
-    // Sin la 0257 no hay RUC, ni comprobantes, ni turno: nada que barrer y
-    // nada que una persona tenga que mirar. Cualquier otra cosa sí lanza.
+    // Sin la 0257 no hay RUC, ni comprobantes, ni turno; sin la 0258, ni la
+    // lista de pedidos por revisar: nada que barrer y nada que una persona
+    // tenga que mirar. Cualquier otra cosa sí lanza.
     if (!isInvoiceMigrationMissing(err)) throw err;
     report.skipped = "sin_migracion";
   }
@@ -892,7 +927,7 @@ async function sweepAll(ctx: SweepContext): Promise<void> {
         secrets,
       });
     } catch (err) {
-      // Falta la 0257 (o parte): no es de esta organización, corta la pasada.
+      // Falta la 0257 o la 0258: no es de esta organización, corta la pasada.
       if (isInvoiceMigrationMissing(err)) throw err;
       fail(`Organización ${orgId}: ${err instanceof Error ? err.message : "error del barrido"}`);
     }
@@ -1008,7 +1043,7 @@ export function shopifyBlockedReasons(): string[] {
 
 /**
  * Los pedidos a revisar (§35.4, «Qué mira el barrido»), de `invoice_candidates`
- * (0257): una llamada por cada modo con un RUC encendido en la organización, con
+ * (0258): una llamada por cada modo con un RUC encendido en la organización, con
  * el «Emitir desde» más antiguo de los RUC de ese modo. Ningún pedido pagado
  * antes de ese momento puede salir en ese modo, y un RUC sin fecha no emite:
  * sin fecha, ese modo no tiene candidatos. Del más nuevo al más viejo, sin
@@ -1239,7 +1274,7 @@ async function sweepOrg(ctx: OrgContext): Promise<void> {
       p_request: payload,
     });
     if (claim.error) {
-      // Sin la función no se reservó nada ni se llamó: falta la 0257.
+      // Sin la función no se reservó nada ni se llamó: falta la 0257 (y la 0258).
       if (isInvoiceMigrationMissing(claim.error)) throw new InvoiceMigrationMissingError("invoice_claim");
       // Sin respuesta del turno no se llama: si la fila llegó a quedar en
       // `emitiendo`, la conciliación la pasa a `en_duda` y la ve una persona.

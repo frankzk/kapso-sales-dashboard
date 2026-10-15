@@ -14,11 +14,12 @@
 // Fuera de producción no emite (un preview no manda boletas a SUNAT aunque se
 // copien las credenciales); con ?dry=1 sí corre, para probar.
 //
-// Sin la migración 0257 (el código puede llegar a producción antes que ella,
-// que se aplica a mano) responde 200 con `skipped: "sin_migracion"`: no hay
-// nada que barrer, y un cron rojo cada 10 minutos solo taparía lo que sí falla.
-// Solo si lo que falta es de la 0257 (`isInvoiceMigrationMissing`): otra tabla
-// que no existe es una base rota, y el cron se ve rojo.
+// Sin la migración 0257 o la 0258 (el código puede llegar a producción antes
+// que ellas, que se aplican a mano) responde 200 con `skipped: "sin_migracion"`:
+// no hay nada que barrer, y un cron rojo cada 10 minutos solo taparía lo que sí
+// falla. Solo si lo que falta es de la 0257 o la 0258
+// (`isInvoiceMigrationMissing`): otra tabla que no existe es una base rota, y el
+// cron se ve rojo.
 
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminSupabase } from "@/lib/db";

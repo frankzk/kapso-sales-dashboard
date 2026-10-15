@@ -228,11 +228,13 @@ echo "  ✅ igual a un GROUP BY directo, sin Finalizado ni Provincia, borde de m
 # SimpleFact no tiene llave de idempotencia: la misma boleta mandada dos veces
 # son dos boletas ante SUNAT, y una boleta enviada no se borra. Lo que lo impide
 # —el turno con candado, un solo comprobante real vivo por pedido, estados que
-# solo avanzan, «real» solo con la conexión probada— vive en la base (0257, MOM
-# §35), así que se prueba en la base y no solo en el código.
-echo "▶ Comprobantes por RUC (0257): semilla apagada, cuenta → RUC de su organización, turno con candado y uno real vivo por pedido"
+# solo avanzan, «real» solo con la conexión probada— vive en la base (0257 y
+# 0258, MOM §35), así que se prueba en la base y no solo en el código. La 0257
+# ya corrió en producción y no se reescribe: la 0258 cambia cuatro de sus
+# funciones, y la prueba la corre sobre la 0257 como se corre en producción.
+echo "▶ Comprobantes por RUC (0257 y 0258): semilla apagada, cuenta → RUC de su organización, turno con candado, uno real vivo por pedido y la 0258 sobre la 0257"
 $PSQL -f "$ROOT/scripts/sql/invoices_smoke.sql"
-echo "  ✅ GRUPO GF S.A.C. sembrado apagado y sin pisar al owner, real solo con token, fecha y prueba del mismo RUC, cada motivo del turno, tope del día, índice único, estados que solo avanzan, solo service_role"
+echo "  ✅ GRUPO GF S.A.C. sembrado apagado y sin pisar al owner, real solo con token, fecha y prueba del mismo RUC, cada motivo del turno, tope del día, índice único, estados que solo avanzan, solo service_role; la 0258 cambia las cuatro funciones sin tocar datos ni triggers, y dos veces es una"
 
 echo ""
 echo "✅ DB verification passed."

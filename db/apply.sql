@@ -517,4 +517,6 @@
 \ir migrations/0256_lima_open_counts.sql
 \echo 'Applying 0257_invoices.sql'
 \ir migrations/0257_invoices.sql
+\echo 'Applying 0258_invoices_hardening.sql'
+\ir migrations/0258_invoices_hardening.sql
 \echo 'Done.'

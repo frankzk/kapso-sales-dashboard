@@ -13011,11 +13011,14 @@ Implementación:
 
 ## 35. Comprobantes electrónicos por RUC (SimpleFact, 14-10-2026)
 
-Estado: construido y apagado. Existen la migración 0257 (empresas emisoras,
-cuenta → RUC, comprobantes, el candado de emisión y los pedidos por revisar),
-las reglas puras, el cliente de SimpleFact, el barrido (`/api/cron/invoices`),
-la sección «Boletas y facturas» de Ajustes y el panel «Comprobante» del
-drawer. **Ningún RUC emite**:
+Estado: construido y apagado. Existen las migraciones 0257 (empresas emisoras,
+cuenta → RUC, comprobantes y el candado de emisión) y 0258 (los arreglos de la
+revisión adversaria sobre la 0257: el turno que vuelve a revisar los pagos, la
+excepción de borrar la cuenta de una persona, el token nuevo que borra el
+motivo de la prueba anterior y los pedidos por revisar), las reglas puras, el
+cliente de SimpleFact, el barrido (`/api/cron/invoices`), la sección «Boletas
+y facturas» de Ajustes y el panel «Comprobante» del drawer. **Ningún RUC
+emite**:
 GRUPO GF S.A.C. nace dado de alta, en «Apagado» y sin token, con sus cuentas ya
 asignadas (35.2). Se enciende primero en simulación y después en real, y lo
 enciende el owner (35.8).
@@ -13242,7 +13245,7 @@ comprobante armado con datos a medias puede ir al RUC equivocado.
   ‹motivo›. Prueba la conexión antes de pasar a Real.».
 - **Qué mira el barrido.** Cada 10 minutos, por organización y por cada modo
   con un RUC encendido, los pedidos que le da la base (`invoice_candidates`,
-  0257): de una tienda activa; pagados según el Master (`order_master`), por
+  0258): de una tienda activa; pagados según el Master (`order_master`), por
   comprobantes o por la pasarela web; de los últimos 60 días (Shopify no deja
   leer pedidos más viejos sin `read_all_orders`); con un pago validado
   registrado desde el «Emitir desde» más antiguo de los RUC de ese modo o, si
@@ -13404,18 +13407,22 @@ Orden de encendido:
 Ajustes muestra, por RUC, lo de hoy (emitidas, simuladas, en duda y con error)
 y los últimos comprobantes.
 
-**Antes de la 0257.** La migración se aplica a mano (DEPLOY.md), y el código
-puede llegar antes que ella. Entonces no se emite nada y nada se pone rojo: el
-barrido responde sin error con `skipped: "sin_migracion"`, el panel
-«Comprobante» no aparece y Ajustes dice que no pudo leer los RUC. Aplicada la
-0257, la pasada siguiente sigue como siempre.
+**Antes de la 0257 y la 0258.** Las migraciones se aplican a mano (DEPLOY.md),
+y el código puede llegar antes que ellas. Entonces no se emite nada y nada se
+pone rojo: el barrido responde sin error con `skipped: "sin_migracion"`. Sin la
+0257, además, el panel «Comprobante» no aparece y Ajustes dice que no pudo leer
+los RUC. Sin la 0258, el panel y Ajustes se ven, pero el barrido no tiene la
+lista de pedidos por revisar (`invoice_candidates`) y no simula ni emite nada.
+Aplicadas las dos, la pasada siguiente sigue como siempre. La 0257 es la que
+corrió en producción el 14-10-2026 y no se reescribe: lo que cambia después va
+en una migración nueva.
 
-Para el barrido, «falta la 0257» es solo un «no existe» (de tabla o de
-función) que nombra algo que crea la 0257: `invoice_issuers`,
-`order_invoices`, `invoice_order_checks`, `invoice_claim`,
-`invoice_candidates` o `invoice_issuer_id`. Si lo que falta es otra cosa
-—`orders`, `order_payments`, `order_master`—, no es la 0257 sino una base
-rota, y el cron se pone rojo (502).
+Para el barrido, «falta una migración de comprobantes» es solo un «no existe»
+(de tabla o de función) que nombra algo que crean la 0257 —`invoice_issuers`,
+`order_invoices`, `invoice_order_checks`, `invoice_claim` o
+`invoice_issuer_id`— o la 0258 —`invoice_candidates`—. Si lo que falta es otra
+cosa —`orders`, `order_payments`, `order_master`—, no es una migración de
+comprobantes sino una base rota, y el cron se pone rojo (502).
 
 ### 35.9 Pendientes
 
@@ -13457,9 +13464,15 @@ Implementación:
 
 - `db/migrations/0257_invoices.sql`: `invoice_issuers`,
   `store_collection_accounts.invoice_issuer_id` con su trigger,
-  `order_invoices`, `invoice_order_checks`, las funciones `invoice_claim` (el
-  turno) e `invoice_candidates` (qué pedidos mira el barrido) y la semilla de
-  GRUPO GF S.A.C.
+  `order_invoices`, `invoice_order_checks`, la función `invoice_claim` (el
+  turno) y la semilla de GRUPO GF S.A.C. Es la que corrió en producción el
+  14-10-2026, y no se reescribe: lo que cambió después va en la 0258.
+- `db/migrations/0258_invoices_hardening.sql`: los arreglos de la revisión
+  adversaria, sobre la 0257: las funciones `invoice_claim` (el turno) e
+  `invoice_candidates` (qué pedidos mira el barrido), y las de los triggers
+  `invoice_issuers_touch` (un token nuevo borra también el motivo de la prueba
+  anterior) y `order_invoices_guard` (la excepción de borrar la cuenta de una
+  persona, 35.6). Solo funciones: no toca datos ni recrea triggers.
 - `lib/invoicing/rules.ts`: reglas puras (cuenta y RUC de cada pago,
   elegibilidad, la boleta, la lectura de la respuesta).
 - `lib/invoicing/shopify-order.ts`: la lectura del pedido en Shopify y su

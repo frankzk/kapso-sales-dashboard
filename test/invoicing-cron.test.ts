@@ -6,9 +6,9 @@
 // manda boletas a SUNAT), que ?dry=1 sirva en cualquier lado, que el cron se
 // vea rojo si algo falló, y la línea de log sin datos de clientas. También que
 // vercel.json lo corra cada 10 minutos sin caer en el minuto de otro barrido,
-// que sin la 0257 aplicada todo el camino responda 200 sin lanzar (pero que otra
-// tabla que falta lo ponga rojo), y que una lista de candidatos llena se vea en
-// la línea de log.
+// que sin la 0257 o la 0258 aplicadas todo el camino responda 200 sin lanzar
+// (pero que otra tabla que falta lo ponga rojo), y que una lista de candidatos
+// llena se vea en la línea de log.
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -279,7 +279,7 @@ function conLa0257(over: { tables?: Record<string, Result>; rpcs?: Record<string
   );
 }
 
-describe("/api/cron/invoices sin la 0257 aplicada", () => {
+describe("/api/cron/invoices sin la 0257 o la 0258 aplicadas", () => {
   it.each(["42P01", "PGRST205"] as const)("%s: 200, `sin_migracion`, sin errores y una sola línea de log", async (code) => {
     for (const q of ["", "?dry=1", `?storeId=${STORE}`]) {
       const db = sinMigracion(code);
@@ -299,6 +299,53 @@ describe("/api/cron/invoices sin la 0257 aplicada", () => {
       err.mockRestore();
     }
   });
+
+  it.each(["42883", "PGRST202"] as const)(
+    "con la 0257 y sin la 0258 (%s), con un RUC en simulación: 200, `sin_migracion`, y ni simula ni pide el turno",
+    async (code) => {
+      // Como producción el 15-10-2026: la 0257 aplicada, un RUC en simulación,
+      // y sin `invoice_candidates`, que la trae la 0258.
+      const message =
+        code === "42883"
+          ? "function public.invoice_candidates(uuid, text, timestamp with time zone, integer, text[], uuid) does not exist"
+          : "Could not find the function public.invoice_candidates(p_blocked, p_limit, p_mode, p_org, p_since, p_store) in the schema cache";
+      for (const q of ["", "?dry=1"]) {
+        const db = conLa0257({
+          tables: {
+            invoice_issuers: {
+              data: [
+                {
+                  id: "iss-gf",
+                  org_id: "org-gf",
+                  ruc: "20556792829",
+                  legal_name: "GRUPO GF S.A.C.",
+                  mode: "simulacion",
+                  emit_from: "2026-10-14T05:00:00.000Z",
+                  daily_limit: 40,
+                  checked_ruc: null,
+                },
+              ],
+              error: null,
+            },
+          },
+          rpcs: { invoice_candidates: { data: null, error: { code, message } } },
+        });
+        mocks.admin = db.admin;
+        mocks.real = true;
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+        const err = vi.spyOn(console, "error").mockImplementation(() => {});
+        const res = await GET(req(q));
+        expect(res.status, q).toBe(200);
+        expect(await res.json(), q).toMatchObject({ ok: true, skipped: "sin_migracion", errors: [] });
+        expect(log, q).toHaveBeenCalledTimes(1);
+        expect(err, q).not.toHaveBeenCalled();
+        // Pidió la lista y, sin ella, no siguió: sin turno no hay boleta, ni simulada.
+        expect(db.calls.filter((c) => c.startsWith("rpc:")), q).toEqual(["rpc:invoice_candidates"]);
+        log.mockRestore();
+        err.mockRestore();
+      }
+    },
+  );
 
   it.each(["42P01", "PGRST205"] as const)(
     "%s de una tabla que NO es de la 0257: no es `sin_migracion`, el cron se ve rojo",
@@ -334,7 +381,7 @@ describe("/api/cron/invoices sin la 0257 aplicada", () => {
     expect(await res.json()).toMatchObject({ ok: false, errors: [expect.stringMatching(/order_master/)] });
   });
 
-  it("si algo del camino lanza «falta la 0257» igual responde 200", async () => {
+  it("si algo del camino lanza «falta una migración» igual responde 200", async () => {
     const { InvoiceMigrationMissingError } = await import("@/lib/invoicing/server");
     mocks.throws = new InvoiceMigrationMissingError("invoice_issuers");
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
