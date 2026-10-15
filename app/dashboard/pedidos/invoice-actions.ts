@@ -2,19 +2,27 @@
 
 // Panel «Comprobante» del drawer (MOM §35.4, §35.7, §35.9).
 //
-// Cinco acciones: leer el estado del comprobante del pedido, registrar uno
+// Seis acciones: leer el estado del comprobante del pedido, registrar uno
 // emitido fuera de Kapta, pedir que se vuelva a intentar uno que terminó en
-// error y, de uno que quedó en duda, registrar la serie con que sí salió o
-// liberarlo porque no salió. NO HAY «EMITIR»: emitir lo hace solo el barrido
-// (§35.7). Un pedido que no cumple las reglas no se fuerza desde aquí.
+// error, de uno que quedó en duda registrar la serie con que sí salió o
+// liberarlo porque no salió y, con el RUC en «Manual», «Emitir esta boleta».
+//
+// EMITIR A MANO ES SOLO DE «MANUAL» (owner, 15-10-2026). En «Real» emite el
+// barrido y aquí no hay botón; en «Simulación» no se emite. «Emitir esta
+// boleta» no fuerza nada: corre la MISMA emisión real del barrido
+// (`emitInvoiceNow`, lib/invoicing/server.ts) con los mismos candados, y un
+// pedido que no cumple las reglas tampoco sale por aquí. Esta capa no llama al
+// turno ni a SimpleFact por su cuenta: solo pide el permiso, confirma que lo que
+// la persona vio es lo que se va a enviar y traduce lo que pasó.
 //
 // Lo que estas acciones cuidan, y por qué:
 //
 //  · VER ES DE QUIEN VE EL PEDIDO; TOCAR, DE «BOLETAS Y FACTURAS». La lectura
 //    pasa por RLS (`authorizeOrder`) y las tablas de comprobantes se leen con el
-//    service role, porque no tienen policy para el navegador (0257). Las cuatro
+//    service role, porque no tienen policy para el navegador (0257). Las cinco
 //    escrituras piden además `invoices.manage` en la organización del pedido:
-//    decidir que una boleta existe o que no existe es un permiso de dinero.
+//    decidir que una boleta existe o que no existe, o mandarla a SUNAT, es un
+//    permiso de dinero.
 //  · EL TOKEN NO SALE. Nada de aquí lee `token_enc`: los RUC llegan por
 //    `loadInvoiceIssuers`, que ni siquiera lo trae, y al navegador solo viajan
 //    el RUC y la razón social.
@@ -33,16 +41,24 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { hasOrgPermission } from "@/lib/permissions-access";
 import {
   SHOPIFY_LEVEL_REASONS,
+  emitInvoiceNow,
+  invoiceEmitNowReadiness,
+  invoiceShopifyBlock,
   isInvoiceMigrationMissing,
   loadInvoiceIssuers,
   loadInvoiceOrderFacts,
+  type InvoiceCheckRow,
+  type InvoiceEmitNowResult,
 } from "@/lib/invoicing/server";
 import {
-  INVOICE_REASONS,
+  INVOICE_MODE_LABEL,
+  INVOICE_REASON_LABEL,
   LIVE_REAL_STATUSES,
   creditNoteWarning,
   invoiceEligibility,
+  invoiceNoteRef,
   type InvoiceIssuer,
+  type InvoiceMode,
   type InvoiceOrderFacts,
   type InvoiceReason,
   type InvoiceStatus,
@@ -198,7 +214,7 @@ async function authorizeInvoice(
 /**
  * La base todavía no tiene la 0257: el panel no se dibuja, no falla. Es la
  * misma regla del barrido (`isInvoiceMigrationMissing`): solo cuenta como
- * «falta una migración» si lo que falta es algo que crean la 0257 o la 0258 (el
+ * «falta una migración» si lo que falta es algo que crean la 0257 o la 0260 (el
  * panel solo lee tablas de la 0257); cualquier otra tabla ausente es un error de
  * verdad y se dice.
  */
@@ -289,6 +305,19 @@ export interface InvoicePanelCheck {
   checkedAt: string;
 }
 
+/**
+ * «Emitir esta boleta» está disponible, y lo que se va a enviar: lo que el
+ * panel dice en la confirmación y lo que el servidor vuelve a comparar antes de
+ * emitir (`emitInvoiceAction`). `total` es el de las reglas evaluadas como una
+ * emisión real, en soles.
+ */
+export interface InvoicePanelEmitNow {
+  issuerId: string;
+  ruc: string;
+  legalName: string;
+  total: number;
+}
+
 export interface InvoicePanelData {
   /**
    * false: la base no tiene las tablas (0257) o la organización no tiene ningún
@@ -302,10 +331,25 @@ export interface InvoicePanelData {
   check: InvoicePanelCheck | null;
   /** «Revisa si corresponde una nota de crédito» (§35.9), o null. */
   creditNote: string | null;
-  /** Los RUC de la organización, para registrar uno externo. Sin token. */
-  issuers: { id: string; ruc: string; legalName: string }[];
+  /**
+   * Los RUC de la organización, para registrar uno externo y para saber si el
+   * del pedido está en «Manual». Sin token.
+   */
+  issuers: { id: string; ruc: string; legalName: string; mode: InvoiceMode }[];
   /** Tiene «Boletas y facturas» en la organización del pedido. */
   canManage: boolean;
+  /**
+   * «Emitir esta boleta» (`emitNowOf`): solo a quien gestiona, con el RUC del
+   * pedido en «Manual», sin comprobante real vivo, con las reglas cumplidas
+   * como una emisión real y sin un bloqueo de Shopify vigente. null: no hay
+   * botón.
+   */
+  emitNow: InvoicePanelEmitNow | null;
+  /**
+   * Con el RUC en «Manual», por qué no hay botón cuando el panel no lo dice de
+   * otra forma (sin conexión probada, por ejemplo). Solo a quien gestiona.
+   */
+  emitNowBlocked: { reason: InvoiceReason; detail: string | null } | null;
 }
 
 const INVOICE_PANEL_COLUMNS =
@@ -328,23 +372,8 @@ interface InvoiceDbRow {
   ruc_mismatch: boolean | null;
 }
 
-interface CheckDbRow {
-  mode: string;
-  reason: string;
-  detail: string | null;
-  checked_at: string;
-}
-
-const KNOWN_REASONS = new Set<string>(INVOICE_REASONS);
-
-/**
- * Lo que el barrido leyó en Shopify y lo frena. `lectura_fallida` no está en
- * `SHOPIFY_LEVEL_REASONS` (el barrido la reintenta en cada pasada), pero
- * mientras sea lo último que pasó, el pedido no está «listo»: tampoco salió.
- */
-function isShopifySide(reason: string): reason is InvoiceReason {
-  return KNOWN_REASONS.has(reason) && (SHOPIFY_LEVEL_REASONS.has(reason as InvoiceReason) || reason === "lectura_fallida");
-}
+/** La última revisión del barrido, como la lee el panel: una por modo. */
+type CheckDbRow = InvoiceCheckRow;
 
 /**
  * Lo que dijo Shopify y no cambia con otra pasada: el pedido NO sale solo, se
@@ -372,11 +401,6 @@ const SHOPIFY_MANUAL_REASONS: ReadonlySet<InvoiceReason> = new Set<InvoiceReason
   "pago_web_no_confirmado",
   "no_encontrado",
 ]);
-
-function time(iso: string | null | undefined): number {
-  const t = Date.parse(iso ?? "");
-  return Number.isFinite(t) ? t : 0;
-}
 
 function obj(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
@@ -412,6 +436,8 @@ const inactive = (canManage: boolean): InvoicePanelData => ({
   creditNote: null,
   issuers: [],
   canManage,
+  emitNow: null,
+  emitNowBlocked: null,
 });
 
 /**
@@ -530,6 +556,11 @@ export async function loadInvoicePanel(orderId: string): Promise<{ data: Invoice
   // dice otra cosa que la revisión (el tope, por ejemplo).
   const checkRow = checks[0];
 
+  // «Emitir esta boleta»: sin los hechos no hay botón (falla cerrada).
+  const emit = facts
+    ? emitNowOf({ facts, invoices, checks, canManage, storeActive: ctx.storeActive, review })
+    : { emitNow: null, emitNowBlocked: null };
+
   return {
     data: {
       active: true,
@@ -539,10 +570,49 @@ export async function loadInvoicePanel(orderId: string): Promise<{ data: Invoice
         ? { mode: checkRow.mode, reason: checkRow.reason, detail: checkRow.detail, checkedAt: checkRow.checked_at }
         : null,
       creditNote,
-      issuers: issuers.map((i) => ({ id: i.id, ruc: i.ruc, legalName: i.legalName })),
+      issuers: issuers.map((i) => ({ id: i.id, ruc: i.ruc, legalName: i.legalName, mode: i.mode })),
       canManage,
+      ...emit,
     },
   };
+}
+
+/**
+ * ¿Hay «Emitir esta boleta» para este pedido? (owner, 15-10-2026). Quien mira
+ * tiene que tener «Boletas y facturas»; lo demás —la tienda activa, sin
+ * comprobante real vivo, las reglas como una emisión real, el RUC del pedido
+ * en «Manual» y sin un bloqueo de Shopify— lo decide `invoiceEmitNowReadiness`
+ * (lib/invoicing/server.ts), la MISMA función que decide el «Emitir» de los
+ * últimos comprobantes de Ajustes: los dos botones salen o no salen juntos.
+ *
+ * Aquí, además, el porqué cuando no hay botón y el panel no lo dice de otra
+ * forma (`emitNowBlocked`).
+ *
+ * Esto solo decide si se enseña el botón. Lo que se envía lo decide el servidor
+ * al pulsar, con todo leído de nuevo (`emitInvoiceAction`).
+ */
+function emitNowOf(input: {
+  facts: InvoiceOrderFacts;
+  invoices: InvoicePanelRow[];
+  checks: CheckDbRow[];
+  canManage: boolean;
+  storeActive: boolean;
+  review: InvoicePanelReview;
+}): Pick<InvoicePanelData, "emitNow" | "emitNowBlocked"> {
+  const none = { emitNow: null, emitNowBlocked: null };
+  const { facts, invoices, checks, canManage, storeActive, review } = input;
+  if (!canManage || !storeActive) return none;
+  const ready = invoiceEmitNowReadiness({ facts, invoices, checks, storeActive });
+  if (ready.ok) return { emitNow: ready.offer, emitNowBlocked: null };
+  // Con el RUC en «Manual», el porqué cuando el panel no lo dice ya: la
+  // revisión es la del barrido (que simula) y no mira la conexión ni los
+  // errores reales. Un error sin reintento ya se ve con su «Volver a
+  // intentar». Lo que no son las reglas (la tienda, un comprobante vivo,
+  // Shopify) el panel ya lo dice a su manera.
+  const why = ready.rules;
+  const shown = review.state === "no" ? review.reason : null;
+  if (!why || why.issuer?.mode !== "manual" || why.reason === shown || why.reason === "error_previo") return none;
+  return { emitNow: null, emitNowBlocked: { reason: why.reason, detail: why.detail } };
 }
 
 /**
@@ -555,7 +625,7 @@ function reviewOf(facts: InvoiceOrderFacts, storeActive: boolean, checks: CheckD
   const { issuer, mode } = elig;
   // El barrido solo recorre las tiendas activas: listo en una apagada sería mentir.
   if (!storeActive) return { state: "no", reason: "tienda", detail: null, issuerId: issuer.id };
-  const blocked = shopifyBlock(checks, mode);
+  const blocked = invoiceShopifyBlock(checks, mode);
   if (blocked) {
     return {
       state: "shopify",
@@ -573,33 +643,6 @@ function reviewOf(facts: InvoiceOrderFacts, storeActive: boolean, checks: CheckD
     };
   }
   return { state: "lista", ruc: issuer.ruc, legalName: issuer.legalName, mode, issuerId: issuer.id };
-}
-
-/**
- * ¿Lo frena Shopify? Las reglas de Kapta no leen Shopify: lo lee el barrido
- * justo antes de pedir el turno, y si lo frena, deja el motivo en
- * `invoice_order_checks` y no lo vuelve a leer en 6 horas. Mientras ese sea lo
- * último que pasó, «lista para emitirse» es falso: el barrido lo salta.
- *
- * Manda la revisión del modo del RUC. La del otro modo cuenta solo si es un
- * motivo de Shopify y es más nueva que la propia: el barrido también la respeta
- * («un motivo de Shopify es del pedido, no del modo», lib/invoicing/server.ts).
- * Una revisión propia más nueva que no es de Shopify (el tope, por ejemplo)
- * quiere decir que Shopify ya se volvió a leer y dejó pasar el pedido.
- */
-function shopifyBlock(
-  checks: CheckDbRow[],
-  mode: InvoiceWriteMode,
-): (CheckDbRow & { reason: InvoiceReason }) | null {
-  const own = checks.find((c) => c.mode === mode);
-  if (own && isShopifySide(own.reason)) return { ...own, reason: own.reason };
-  const other = checks.find(
-    (c) => c.mode !== mode && KNOWN_REASONS.has(c.reason) && SHOPIFY_LEVEL_REASONS.has(c.reason as InvoiceReason),
-  );
-  if (other && (!own || time(other.checked_at) > time(own.checked_at))) {
-    return { ...other, reason: other.reason as InvoiceReason };
-  }
-  return null;
 }
 
 // ── Escrituras ───────────────────────────────────────────────────────────────
@@ -634,6 +677,42 @@ async function expectedIssuer(
   const elig = invoiceEligibility(facts);
   const issuer = elig.ok ? elig.issuer : facts.issuers.find((i) => i.id === elig.issuerId);
   return { ok: true, issuer: issuer ? { id: issuer.id, ruc: issuer.ruc } : null };
+}
+
+/**
+ * El modo del RUC que las reglas le dan HOY al pedido (§35.2): el de la cuenta
+ * que recibió el pago, del que saldría la boleta. null si no se pudo leer o las
+ * reglas no llegan a saberlo. Solo elige qué se le dice a la persona después de
+ * «Volver a intentar» o de liberar un `en_duda` (`nextAttemptText`): no decide
+ * nada, así que una lectura caída no frena la acción, que ya se hizo.
+ */
+async function orderRucMode(
+  admin: ReturnType<typeof createAdminSupabase>,
+  orderId: string,
+): Promise<InvoiceMode | null> {
+  try {
+    const facts = (await loadInvoiceOrderFacts(admin, [orderId])).get(orderId);
+    if (!facts) return null;
+    const elig = invoiceEligibility(facts);
+    const issuer = elig.ok ? elig.issuer : facts.issuers.find((i) => i.id === elig.issuerId);
+    return issuer?.mode ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Qué pasa después de «Volver a intentar» o de liberar un `en_duda`, según el
+ * modo del RUC del pedido (§35.7). En «Real» lo vuelve a intentar el barrido en
+ * la próxima pasada. En «Manual» el barrido solo simula y NO lo intenta: lo que
+ * vuelve es «Emitir esta boleta» en el pedido, y lo pulsa una persona. Antes se
+ * decía «la próxima pasada» también en Manual, y se esperaba una boleta que
+ * nunca iba a salir sola. Sin saber el modo, se dicen los dos.
+ */
+function nextAttemptText(mode: InvoiceMode | null): string {
+  if (mode === "real") return "se vuelve a intentar en la próxima pasada, si el pedido sigue cumpliendo las reglas.";
+  if (mode === "manual") return "vuelve a aparecer «Emitir esta boleta» en el pedido, si sigue cumpliendo las reglas.";
+  return "con el RUC en Real se vuelve a intentar en la próxima pasada, y en Manual vuelve a aparecer «Emitir esta boleta» en el pedido, si sigue cumpliendo las reglas.";
 }
 
 /**
@@ -723,7 +802,8 @@ export async function registerExternalInvoice(
 /**
  * «Volver a intentar» (§35.4): un `error` es que SimpleFact dijo que no, así que
  * no hay boleta, pero no se reintenta solo. Una persona lo pide, una vez; el
- * barrido escribe una fila nueva y esta se queda como historia.
+ * barrido (en «Real») o quien pulsa «Emitir esta boleta» (en «Manual») escribe
+ * una fila nueva y esta se queda como historia.
  */
 export async function requestInvoiceRetry(invoiceId: string): Promise<InvoiceActionState> {
   const auth = await authorizeInvoice(invoiceId);
@@ -743,7 +823,7 @@ export async function requestInvoiceRetry(invoiceId: string): Promise<InvoiceAct
   if (error) return { error: `No se pudo pedir el reintento: ${error.message}` };
   // Otra persona lo pidió entre la lectura y la escritura: la suya vale.
   if (!(data as unknown[] | null)?.length) return { error: "Ya se pidió volver a intentar este comprobante." };
-  return { notice: "Listo: se vuelve a intentar en la próxima pasada, si el pedido sigue cumpliendo las reglas." };
+  return { notice: `Listo: ${nextAttemptText(await orderRucMode(createAdminSupabase(), ctx.orderId))}` };
 }
 
 /**
@@ -780,7 +860,7 @@ export async function releaseDoubtfulInvoice(invoiceId: string, note: string): P
   if (error) return { error: `No se pudo liberar el comprobante: ${error.message}` };
   // La conciliación la encontró (o alguien la liberó) entre la lectura y ahora.
   if (!(data as unknown[] | null)?.length) return { error: YA_NO_EN_DUDA };
-  return { notice: "Liberado: se vuelve a intentar en la próxima pasada, si el pedido sigue cumpliendo las reglas." };
+  return { notice: `Liberado: ${nextAttemptText(await orderRucMode(createAdminSupabase(), ctx.orderId))}` };
 }
 
 /**
@@ -845,4 +925,173 @@ export async function confirmDoubtfulInvoice(
   // La conciliación la encontró (o alguien la liberó) entre la lectura y ahora.
   if (!(data as unknown[] | null)?.length) return { error: YA_NO_EN_DUDA };
   return { notice: `Comprobante ${serie}-${correlative} registrado como emitido: Kapta no emitirá otro por este pedido.` };
+}
+
+// ── «Emitir esta boleta» ─────────────────────────────────────────────────────
+
+/** Lo que contesta «Emitir esta boleta»: el aviso y, si salió, su PDF. */
+export interface EmitInvoiceState extends InvoiceActionState {
+  /** El PDF de la boleta que SimpleFact acaba de emitir. Solo https. */
+  pdfUrl?: string;
+}
+
+/**
+ * Lo que la persona vio en la confirmación: el RUC y el total. El servidor lo
+ * vuelve a comparar con lo que se va a enviar.
+ */
+export interface EmitInvoiceShown {
+  issuerId: string;
+  total: number;
+}
+
+/**
+ * Lo que vio la persona y lo que se iba a enviar dejaron de coincidir: el
+ * pedido, sus pagos o la cuenta del RUC cambiaron desde que se abrió.
+ */
+const EMIT_CAMBIO =
+  "El pedido cambió desde que lo abriste (el RUC o el total): vuelve a abrirlo y revisa la boleta antes de emitirla.";
+
+/** emitInvoiceNow lanzó, aunque su contrato es no lanzar: no se sabe si salió. */
+const EMIT_SIN_SABER =
+  "No se supo qué pasó con la emisión. Vuelve a abrir el pedido antes de intentar de nuevo: si quedó «Emitiendo» o «En duda», búscala en SimpleFact por su nota.";
+
+/** Un motivo con la frase del panel y del barrido, y su detalle. */
+function reasonText(reason: InvoiceReason, detail?: string | null): string {
+  const label = INVOICE_REASON_LABEL[reason] ?? reason;
+  return detail ? `${label} ${detail}` : label;
+}
+
+/**
+ * Las frases del barrido que prometen lo que hace el barrido: «se vuelve a
+ * intentar en la próxima pasada», «sale mañana». «Emitir esta boleta» emite con
+ * el RUC en «Manual», donde el barrido solo simula: nada de eso sale solo, y lo
+ * que sigue es volver a pulsar. Con su frase, la persona esperaba una boleta
+ * que nunca iba a salir.
+ */
+const EMIT_NOW_REASON_LABEL: Partial<Record<InvoiceReason, string>> = {
+  lectura_fallida:
+    "No se pudo leer el pedido y no se emitió nada. En Manual no se reintenta solo: vuelve a pulsar «Emitir esta boleta».",
+  tope: "Se llegó al tope diario del RUC y no se emitió. En Manual no sale sola: mañana se emite con «Emitir esta boleta».",
+};
+
+/** Un motivo de «Emitir esta boleta», con la frase del panel salvo las que prometen al barrido. */
+function emitReasonText(reason: InvoiceReason, detail?: string | null): string {
+  const label = EMIT_NOW_REASON_LABEL[reason];
+  if (!label) return reasonText(reason, detail);
+  return detail ? `${label} ${detail}` : label;
+}
+
+/**
+ * Lo que pasó, en lo que lee quien pulsó. Solo una boleta que salió bien, de su
+ * RUC y sin nada más que decir, es un aviso verde; todo lo demás va como error,
+ * para que se lea: una en duda se busca en SimpleFact antes de nada, una con
+ * archivos de otro RUC puede necesitar anularse, y un «no» de SimpleFact o un
+ * bloqueo no emitieron nada.
+ */
+function emitResultState(result: InvoiceEmitNowResult): EmitInvoiceState {
+  if (!result.ok) return { error: emitReasonText(result.reason, result.detail) };
+  const extra = result.error?.trim() ? result.error.trim() : null;
+  if (result.status === "emitida") {
+    const serie = result.serie ? (result.correlative ? `${result.serie}-${result.correlative}` : result.serie) : null;
+    const head = serie ? `Emitida ${serie}` : "Emitida (SimpleFact no devolvió la serie)";
+    const pdf = result.pdfUrl && /^https:\/\//i.test(result.pdfUrl.trim()) ? result.pdfUrl.trim() : undefined;
+    const withPdf = (state: EmitInvoiceState): EmitInvoiceState => (pdf ? { ...state, pdfUrl: pdf } : state);
+    if (result.rucMismatch) {
+      return withPdf({
+        error: [
+          `${head}, pero con archivos de otro RUC. Revísala en SimpleFact: puede necesitar anularse o una nota de crédito.`,
+          extra,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      });
+    }
+    return withPdf(extra ? { error: `${head}. ${extra}` } : { notice: head });
+  }
+  if (result.status === "en_duda") {
+    return {
+      error: [
+        `SimpleFact no respondió: queda En duda; búscala por su nota «${invoiceNoteRef(result.invoiceId)}» antes de nada.`,
+        extra ? `Detalle: ${extra}` : null,
+      ]
+        .filter(Boolean)
+        .join(" "),
+    };
+  }
+  if (result.status === "error") {
+    return { error: `SimpleFact no la emitió: ${extra ?? "no dio el motivo."}` };
+  }
+  // Un estado que no es ninguno de los tres: no se afirma nada (falla cerrada).
+  return { error: EMIT_SIN_SABER };
+}
+
+/**
+ * «Emitir esta boleta» (MOM §35.7, owner 15-10-2026): con el RUC del pedido en
+ * «Manual», una persona con «Boletas y facturas» emite ESTE pedido. Las
+ * primeras boletas reales salen una a una y se revisan en SimpleFact antes de
+ * pasar a «Real».
+ *
+ * La emisión es `emitInvoiceNow`, la misma del barrido en real: los hechos, las
+ * reglas como emisión real, la relectura en Shopify, el turno con quién pulsó
+ * (`created_by`), UNA llamada a SimpleFact y las reglas que apagan el RUC. Aquí,
+ * antes, solo lo que es de quien pulsa:
+ *
+ *  1. Ve el pedido (RLS) y tiene `invoices.manage` en su organización, ANTES
+ *     de leer nada con el service role o de escribir.
+ *  2. La tienda está activa: el barrido tampoco emite en una apagada.
+ *  3. El RUC está en «Manual». En «Real» emite el barrido: este botón sería una
+ *     segunda puerta a la misma boleta.
+ *  4. Lo que se va a enviar es lo que vio en la confirmación (`shown`): el RUC
+ *     y el total que dicen las reglas ahora. Si el pedido o la cuenta del RUC
+ *     cambiaron desde que lo abrió, no se emite: la boleta que va a SUNAT no se
+ *     borra, y la persona confirmó otra.
+ *
+ * Si los hechos no se pudieron leer, no se emite (falla cerrada).
+ */
+export async function emitInvoiceAction(orderId: string, shown: EmitInvoiceShown): Promise<EmitInvoiceState> {
+  const auth = await authorizeOrder(orderId);
+  if ("error" in auth) return { error: auth.error };
+  const { ctx } = auth;
+  if (!(await hasOrgPermission(ctx.orgId, "invoices.manage"))) return { error: SIN_PERMISO };
+
+  // Sin lo que vio la persona no hay con qué comparar: no se emite a ciegas.
+  const shownIssuer = typeof shown?.issuerId === "string" ? shown.issuerId : "";
+  const shownCents = Math.round(Number(shown?.total) * 100);
+  if (!shownIssuer || !Number.isFinite(shownCents) || shownCents <= 0) return { error: EMIT_CAMBIO };
+
+  if (!ctx.storeActive) return { error: INVOICE_REASON_LABEL.tienda };
+
+  const admin = createAdminSupabase();
+  let facts: InvoiceOrderFacts | undefined;
+  try {
+    facts = (await loadInvoiceOrderFacts(admin, [ctx.orderId])).get(ctx.orderId);
+  } catch (cause) {
+    return {
+      error: `No se pudo leer el pedido: no se emitió nada (${cause instanceof Error ? cause.message : String(cause)}).`,
+    };
+  }
+  if (!facts) return { error: "No se encontró el pedido: no se emitió nada." };
+  const elig = invoiceEligibility(facts, { emitNow: true });
+  if (!elig.ok) return { error: reasonText(elig.reason, elig.detail) };
+  if (elig.issuer.mode !== "manual") {
+    return {
+      error: reasonText(
+        "modo_distinto",
+        `El RUC está en «${INVOICE_MODE_LABEL[elig.issuer.mode] ?? elig.issuer.mode}»: a mano solo se emite en «Manual».`,
+      ),
+    };
+  }
+  if (elig.issuer.id !== shownIssuer || elig.totalCents !== shownCents) return { error: EMIT_CAMBIO };
+
+  let result: InvoiceEmitNowResult;
+  try {
+    result = await emitInvoiceNow(admin, { orderId: ctx.orderId, userId: ctx.userId });
+  } catch (cause) {
+    // No debería lanzar. Si lo hace, el turno pudo haberse pedido: no se dice
+    // ni que salió ni que no salió, y el panel, al releerse, enseña lo que hay.
+    // Al log va solo el tipo del error: su texto pudo haber tocado el token.
+    console.error(`[invoices] emitir a mano: emitInvoiceNow lanzó (${cause instanceof Error ? cause.name : typeof cause}).`);
+    return { error: EMIT_SIN_SABER };
+  }
+  return emitResultState(result);
 }

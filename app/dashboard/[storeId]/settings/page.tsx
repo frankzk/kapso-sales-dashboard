@@ -16,6 +16,7 @@ import { RESTOCK_CATALOG_DAYS, RESTOCK_RESULTS_DAYS } from "@/lib/restock-view";
 import { limaDateTimeInputValue } from "@/lib/repro-lima";
 import { limaDayStartIso } from "@/lib/auto-order-ab";
 import type { InvoiceMode, InvoiceStatus, InvoiceWriteMode } from "@/lib/invoicing/rules";
+import { loadInvoiceEmitNowOffers, type InvoiceEmitNowOffer } from "@/lib/invoicing/server";
 import { EmptyState } from "@/components/ui";
 import { StoreSettings, type StoreSettingsData } from "@/components/store-settings";
 import type { InvoiceSettingsData } from "@/components/invoice-settings-section";
@@ -55,6 +56,11 @@ const INVOICE_TODAY_STATUSES = ["emitida", "simulada", "en_duda", "error"] as co
  * comprobantes de la tienda. Cada lectura que falla deja su lista en null, que
  * la sección dice como «no se pudo leer» y no como «no hay».
  *
+ * De esos últimos, cuáles llevan «Emitir» (`emitNow`): la simulada más nueva
+ * de cada pedido, cuando el drawer de ese pedido ofrecería «Emitir esta
+ * boleta» (`loadInvoiceEmitNowOffers`). Si algo no se pudo leer, ninguna lo
+ * lleva (falla cerrada). Al pulsar, el servidor vuelve a revisar todo.
+ *
  * `token_enc` no se selecciona nunca: si hay token se sabe con un filtro
  * (`not token_enc is null`) que devuelve solo ids.
  */
@@ -78,7 +84,7 @@ async function loadInvoiceSettings(
       .order("label", { ascending: true }),
     admin
       .from("order_invoices")
-      .select("id,order_id,order_name,ruc,mode,status,serie,correlative,total,error,created_at,ruc_mismatch")
+      .select("id,order_id,order_name,issuer_id,ruc,mode,status,serie,correlative,total,error,created_at,ruc_mismatch")
       .eq("store_id", storeId)
       .order("created_at", { ascending: false })
       .limit(20),
@@ -131,6 +137,7 @@ async function loadInvoiceSettings(
     id: string;
     order_id: string;
     order_name: string | null;
+    issuer_id: string | null;
     ruc: string;
     mode: InvoiceWriteMode;
     status: InvoiceStatus;
@@ -142,6 +149,40 @@ async function loadInvoiceSettings(
     /** SimpleFact contestó con archivos de otro RUC: la emitida no es de quien cobró. */
     ruc_mismatch: boolean | null;
   };
+
+  // «Emitir» en los últimos comprobantes (owner, 15-10-2026): en la simulada
+  // más nueva de cada pedido, y solo si el drawer ofrecería ahora «Emitir esta
+  // boleta» para ese pedido. Lo decide la MISMA función que el drawer
+  // (`invoiceEmitNowReadiness`, por `loadInvoiceEmitNowOffers`): la tienda
+  // activa, sin comprobante real vivo, las reglas como una emisión real, el RUC
+  // ACTUAL del pedido en «Manual» y sin un bloqueo de Shopify de la última
+  // pasada. Antes bastaba con que el RUC de la simulada estuviera en Manual y el
+  // pedido no tuviera real viva, y el botón salía en pedidos que el drawer no
+  // dejaba emitir. Los pedidos de la lista se leen de una vez.
+  const recent = recentRows.error ? null : ((recentRows.data ?? []) as RecentRow[]);
+  // Del más nuevo al más viejo: la primera simulada de cada pedido es la que vale.
+  const newestSimulated = new Map<string, string>();
+  for (const r of recent ?? []) {
+    if (r.status === "simulada" && r.mode === "simulacion" && !newestSimulated.has(r.order_id)) {
+      newestSimulated.set(r.order_id, r.id);
+    }
+  }
+  let offers = new Map<string, InvoiceEmitNowOffer>();
+  // Sin un RUC en «Manual» no hay botón posible: ni se pregunta.
+  if (newestSimulated.size && (rows ?? []).some((r) => r.mode === "manual")) {
+    try {
+      offers = await loadInvoiceEmitNowOffers(admin, [...newestSimulated.keys()]);
+    } catch (cause) {
+      // FALLA CERRADA: sin saber si el drawer lo ofrecería, ninguna lleva
+      // «Emitir». El resto de la sección se ve igual. El mensaje es de la base
+      // (tablas y columnas), sin datos de la clienta.
+      console.error(
+        `[invoices] Ajustes: no se pudo revisar qué simuladas llevan «Emitir» — ${cause instanceof Error ? cause.message : String(cause)}`,
+      );
+      offers = new Map();
+    }
+  }
+  const emitNowOf = (r: RecentRow) => (newestSimulated.get(r.order_id) === r.id ? offers.get(r.order_id) ?? null : null);
 
   return {
     issuers:
@@ -168,22 +209,23 @@ async function loadInvoiceSettings(
           phoneLastDigits: a.phone_last_digits,
           issuerId: a.invoice_issuer_id,
         })),
-    recent: recentRows.error
-      ? null
-      : ((recentRows.data ?? []) as RecentRow[]).map((r) => ({
-          id: r.id,
-          orderId: r.order_id,
-          orderName: r.order_name,
-          ruc: r.ruc,
-          mode: r.mode,
-          status: r.status,
-          serie: r.serie,
-          correlative: r.correlative,
-          total: Number(r.total),
-          error: r.error,
-          createdAt: r.created_at,
-          rucMismatch: r.ruc_mismatch === true,
-        })),
+    recent:
+      recent?.map((r) => ({
+        id: r.id,
+        orderId: r.order_id,
+        orderName: r.order_name,
+        issuerId: r.issuer_id,
+        ruc: r.ruc,
+        mode: r.mode,
+        status: r.status,
+        serie: r.serie,
+        correlative: r.correlative,
+        total: Number(r.total),
+        error: r.error,
+        createdAt: r.created_at,
+        rucMismatch: r.ruc_mismatch === true,
+        emitNow: emitNowOf(r),
+      })) ?? null,
   };
 }
 
