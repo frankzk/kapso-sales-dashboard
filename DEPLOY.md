@@ -2841,3 +2841,17 @@ con un «No entregado» de motorizado propio tenían `attempt_count = 0`.
 **Qué mirar después.** Cuando el cron termine,
 `select count(*) from order_master where macro_version <> 'mom-v1.27';` da `0`,
 y #KP140941 dice 2 intentos (3 si la salida del 15/10 ya se reportó).
+
+### 15-10-2026 · Intentos de Urpi en el Master (0265, `mom-v1.28`) y canal de venta (0264)
+
+- **0264** (ya aplicada en producción antes del #977): `order_master.sales_channel`
+  y su relleno.
+- **0265 antes del código**: `order_master_stale` mira también la última
+  escritura de `urpi_report_rows`. Misma firma y permisos; `create or replace`,
+  sin `drop`.
+- `MOM_RESOLUTION_VERSION` sube a `mom-v1.28`: el cron recalcula y la columna de
+  intentos suma los de Urpi (entregado, cancelado, reprogramado). No cambia
+  etapas ni costos.
+
+**Qué mirar después.** #KP131545 dice 1 intento cuando su fila tenga
+`macro_version = 'mom-v1.28'`.

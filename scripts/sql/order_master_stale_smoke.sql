@@ -121,9 +121,27 @@ begin
     raise exception 'el barrido (service_role) tiene que poder llamar a order_master_stale';
   end if;
 
+  -- 11. EL REPORTE DE URPI (0265). Un pedido sin guías en Kapta, con un intento
+  --     de Urpi guardado después de su recálculo, está desfasado: su columna de
+  --     intentos cambió (#KP131545). Y uno guardado antes, no.
+  insert into urpi_report_imports (id, org_id) values
+    ('22222222-0000-0000-0000-000000000265', '33333333-3333-3333-3333-333333333333');
+  insert into urpi_report_rows (org_id, urpi_row, report_date, result_code, data, digest, order_id, store_id,
+                                link_status, link_method, first_import_id, last_import_id, updated_at) values
+    ('33333333-3333-3333-3333-333333333333', 1906, current_date, 'cancelado', '{}'::jsonb, repeat('a', 64),
+     v_sin, v_store, 'vinculado', 'telefono', '22222222-0000-0000-0000-000000000265', '22222222-0000-0000-0000-000000000265',
+     now() - interval '5 minutes');
+  select count(*) into v_n from order_master_stale(v_store) where order_id = v_sin;
+  if v_n <> 1 then raise exception 'un intento de Urpi posterior al recálculo debería contar'; end if;
+  update order_master set recomputed_at = now() where order_id = v_sin;
+  select count(*) into v_n from order_master_stale(v_store) where order_id = v_sin;
+  if v_n <> 0 then raise exception 'un intento de Urpi anterior al recálculo no debería contar'; end if;
+  delete from urpi_report_rows where org_id = '33333333-3333-3333-3333-333333333333' and urpi_row = 1906;
+  delete from urpi_report_imports where id = '22222222-0000-0000-0000-000000000265';
+
   delete from order_master where store_id = v_store;
   delete from shipments    where store_id = v_store;
   delete from orders       where store_id = v_store;
 
-  raise notice 'order_master_stale: 10 comprobaciones OK';
+  raise notice 'order_master_stale: 11 comprobaciones OK';
 end $$;
