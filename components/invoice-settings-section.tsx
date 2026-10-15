@@ -396,9 +396,10 @@ function IssuerFields({ idPrefix, issuer }: { idPrefix: string; issuer: InvoiceI
           htmlFor={id("emit_from")}
           hint={
             <p>
-              Hora de Lima. El barrido solo toma pedidos que quedaron pagados desde aquí (en Manual, «Emitir esta
-              boleta» también puede emitir lo pagado desde el 01/10/2026, después de revisar SimpleFact): una fecha
-              en el pasado se guarda como ahora, y al cambiar de modo, si quedó atrás, se mueve sola a ese momento.
+              Hora de Lima. El barrido solo toma pedidos que quedaron pagados desde aquí (en Manual y con esta fecha
+              ya llegada, «Emitir esta boleta» también puede emitir lo pagado desde el 01/10/2026, después de revisar
+              SimpleFact): una fecha en el pasado se guarda como ahora, y al cambiar de modo, si quedó atrás, se mueve
+              sola a ese momento.
             </p>
           }
         >

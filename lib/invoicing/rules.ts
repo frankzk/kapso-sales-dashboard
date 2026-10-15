@@ -105,7 +105,9 @@ export const INVOICE_MAX_PER_RUN = 15;
  * persona) y solo si esa persona confirma que lo buscó en SimpleFact y no tiene
  * boleta (`sin_revision_simplefact`): antes de Kapta las boletas se emitían a mano, y
  * Kapta no sabe si ese pedido ya tiene una. Dos boletas son dos veces el
- * impuesto. El barrido nunca va hacia atrás. La base exige lo mismo (0266).
+ * impuesto. Y solo si «Emitir desde» ya llegó: con una fecha en el futuro
+ * (Ajustes la acepta), nada pagado antes de ella sale, ni con el botón. El
+ * barrido nunca va hacia atrás. La base exige lo mismo (0266).
  */
 export const INVOICE_BACKFILL_FROM = "2026-10-01T05:00:00.000Z";
 
@@ -562,7 +564,8 @@ export type InvoiceEligibility =
        * Quedó pagado antes de «Emitir desde» y solo pasa por la excepción de
        * «Emitir esta boleta» (`INVOICE_BACKFILL_FROM`). Con él, `emitInvoiceNow`
        * pide que la persona confirme que lo revisó en SimpleFact y el turno va
-       * con `p_backfill` (0266). Siempre false sin `emitNow`.
+       * con `p_backfill` (0266). Siempre false sin `emitNow`, y con «Emitir
+       * desde» en el futuro.
        */
       beforeStart: boolean;
       basis: InvoiceBasis;
@@ -605,9 +608,16 @@ export interface InvoiceEligibilityOptions {
    * Y con el RUC en «Manual», un pedido pagado antes de «Emitir desde» pero
    * desde `INVOICE_BACKFILL_FROM` —su último registro y su primer dinero
    * (`firstPaidAt`)— pasa la condición 8 con `beforeStart` (owner,
-   * 15-10-2026). Sin `emitNow`, o en «Real», nunca.
+   * 15-10-2026), si «Emitir desde» ya llegó (`now`). Sin `emitNow`, en
+   * «Real» o con «Emitir desde» en el futuro, nunca.
    */
   emitNow?: boolean;
+  /**
+   * El reloj con que se mira si «Emitir desde» ya llegó, solo para la excepción
+   * de lo pagado antes (`emitNow`). Por defecto, ahora. Un reloj que no se
+   * entiende no cuenta como «ya llegó»: no hay excepción.
+   */
+  now?: Date;
 }
 
 /**
@@ -737,10 +747,17 @@ export function invoiceEligibility(
   // Antes de Kapta las boletas se emitían a mano en SimpleFact: quien pulsa
   // tiene que confirmar que lo revisó ahí (`emitInvoiceNow`). El barrido nunca
   // va hacia atrás, y en «Real» tampoco.
+  // Solo con «Emitir desde» ya llegado: Ajustes acepta una fecha en el futuro
+  // (un cambio de modo solo mueve una que quedó atrás), y lo pagado antes de
+  // ella no sale, ni con el botón. La excepción es para lo pagado antes de un
+  // inicio que ya pasó, nunca para emitir antes de la fecha que puso el owner.
   const floor = time(INVOICE_BACKFILL_FROM)!;
+  const nowTime = (opts.now ?? new Date()).getTime();
   const backfill =
     opts.emitNow === true &&
     issuer.mode === "manual" &&
+    Number.isFinite(nowTime) &&
+    from <= nowTime &&
     paidTime >= floor &&
     firstTime !== null &&
     firstTime >= floor;

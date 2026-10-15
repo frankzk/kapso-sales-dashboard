@@ -462,7 +462,7 @@ describe("MOM §35: la sección existe y dice su estado", () => {
         "lo pagado antes de «Emitir desde» con «Emitir esta boleta» (owner 15-10-2026), sobre la 0262: solo `invoice_claim`, que pasa a doce argumentos con `p_backfill` (falso por defecto) y borra la firma de once.",
       );
       expect(r0266).toContain(
-        "El cuerpo es el de la 0262 salvo dos cosas: con `p_backfill`, una fila real, el RUC en Manual y quién la pide (`p_created_by`), da el turno a lo pagado antes de «Emitir desde» si las dos fechas son del 01/10/2026 00:00 (hora de Lima) en adelante, y también el primer dinero (la fecha más temprana entre `paid_at` y `registered_at` de sus pagos validados); y esa fila lleva en su base `pagado_antes_de_emitir_desde`. Se detiene con el turno de nueve argumentos, o sin el de once ni el de doce. No toca filas.",
+        "El cuerpo es el de la 0262 salvo dos cosas: con `p_backfill`, una fila real, el RUC en Manual, quién la pide (`p_created_by`) y «Emitir desde» ya llegado, da el turno a lo pagado antes de «Emitir desde» si las dos fechas son del 01/10/2026 00:00 (hora de Lima) en adelante, y también el primer dinero (la fecha más temprana entre `paid_at` y `registered_at` de sus pagos validados); y esa fila lleva en su base `pagado_antes_de_emitir_desde`. Se detiene con el turno de nueve argumentos, o sin el de once ni el de doce. No toca filas.",
       );
       // Solo el turno, y el vigente es el suyo.
       const creadas = [...SQL_0266.matchAll(/^create or replace function (\w+)\(/gm)].map((m) => m[1]);
@@ -482,7 +482,7 @@ describe("MOM §35: la sección existe y dice su estado", () => {
         [
           "if v_iss.emit_from is null or p_paid_at is null or p_paid_at < v_iss.emit_from or v_paid is null or v_paid < v_iss.emit_from then return jsonb_build_object('reason', 'antes_de_inicio'); end if;",
           "if v_iss.emit_from is null or p_paid_at is null or v_paid is null then return jsonb_build_object('reason', 'antes_de_inicio'); end if; " +
-            `if p_paid_at < v_iss.emit_from or v_paid < v_iss.emit_from then ${PRIMER_DINERO_SQL} if coalesce(p_backfill, false) and v_mode = 'real' and v_iss.mode = 'manual' and p_created_by is not null and p_paid_at >= timestamptz '2026-10-01 00:00:00-05' and v_paid >= timestamptz '2026-10-01 00:00:00-05' and v_first >= timestamptz '2026-10-01 00:00:00-05' then v_backfill := true; else return jsonb_build_object('reason', 'antes_de_inicio'); end if; end if;`,
+            `if p_paid_at < v_iss.emit_from or v_paid < v_iss.emit_from then ${PRIMER_DINERO_SQL} if coalesce(p_backfill, false) and v_mode = 'real' and v_iss.mode = 'manual' and p_created_by is not null and v_iss.emit_from <= now() and p_paid_at >= timestamptz '2026-10-01 00:00:00-05' and v_paid >= timestamptz '2026-10-01 00:00:00-05' and v_first >= timestamptz '2026-10-01 00:00:00-05' then v_backfill := true; else return jsonb_build_object('reason', 'antes_de_inicio'); end if; end if;`,
         ],
         [
           "greatest(p_paid_at, v_paid), coalesce(p_basis, '{}'::jsonb), p_request,",
@@ -796,10 +796,11 @@ describe("MOM §35.2 y §35.3: los motivos", () => {
       "if v_iss.emit_from is null or p_paid_at is null or v_paid is null then return jsonb_build_object('reason', 'antes_de_inicio');",
     );
     // Una anterior a «Emitir desde», tampoco, salvo la excepción del botón
-    // (0266): `p_backfill`, una fila real, el RUC en Manual, quién la pide y
-    // las dos fechas desde el 01/10/2026 00:00 de Lima.
+    // (0266): `p_backfill`, una fila real, el RUC en Manual, quién la pide,
+    // «Emitir desde» ya llegado y las dos fechas desde el 01/10/2026 00:00 de
+    // Lima.
     expect(fn).toContain(
-      `if p_paid_at < v_iss.emit_from or v_paid < v_iss.emit_from then ${PRIMER_DINERO_SQL} if coalesce(p_backfill, false) and v_mode = 'real' and v_iss.mode = 'manual' and p_created_by is not null and p_paid_at >= timestamptz '2026-10-01 00:00:00-05' and v_paid >= timestamptz '2026-10-01 00:00:00-05' and v_first >= timestamptz '2026-10-01 00:00:00-05' then v_backfill := true; else return jsonb_build_object('reason', 'antes_de_inicio'); end if; end if;`,
+      `if p_paid_at < v_iss.emit_from or v_paid < v_iss.emit_from then ${PRIMER_DINERO_SQL} if coalesce(p_backfill, false) and v_mode = 'real' and v_iss.mode = 'manual' and p_created_by is not null and v_iss.emit_from <= now() and p_paid_at >= timestamptz '2026-10-01 00:00:00-05' and v_paid >= timestamptz '2026-10-01 00:00:00-05' and v_first >= timestamptz '2026-10-01 00:00:00-05' then v_backfill := true; else return jsonb_build_object('reason', 'antes_de_inicio'); end if; end if;`,
     );
     // El primer dinero, también de la base (0266): la fecha más temprana entre
     // el comprobante y el registro de los pagos validados.
@@ -807,7 +808,7 @@ describe("MOM §35.2 y §35.3: los motivos", () => {
       "El primer dinero también lo saca de la base: la fecha más temprana entre `paid_at` y `registered_at` de los pagos validados (sin ellos, la fecha del pedido), y tiene que ser del 01/10/2026 00:00 (hora de Lima) en adelante.",
     );
     expect(turno).toContain(
-      "La única excepción es la de arriba, y la base la vuelve a exigir entera (0266): da el turno a algo pagado antes de «Emitir desde» solo si se pide con `p_backfill`, una fila real, el RUC en Manual, quién la pide (`p_created_by`) y las dos fechas del 01/10/2026 00:00 (hora de Lima) en adelante. Sin «Emitir desde» o sin una de las fechas, sigue `antes_de_inicio`.",
+      "La única excepción es la de arriba, y la base la vuelve a exigir entera (0266): da el turno a algo pagado antes de «Emitir desde» solo si se pide con `p_backfill`, una fila real, el RUC en Manual, quién la pide (`p_created_by`) y las dos fechas del 01/10/2026 00:00 (hora de Lima) en adelante. Sin «Emitir desde», con «Emitir desde» todavía en el futuro (la base exige `emit_from <= now()`) o sin una de las fechas, sigue `antes_de_inicio`.",
     );
     // «En los dos modos»: antes de que el turno se separe por la fila pedida.
     const porModo = fn.indexOf("if v_mode = 'simulacion' then");
@@ -2404,6 +2405,45 @@ describe("MOM §35.3, §35.4, §35.7 y §35.8: lo pagado antes de «Emitir desde
     expect(s3).toContain(
       "Sigue en `antes_de_inicio` lo pagado antes del 01/10/2026, lo que no tiene fecha de pago, un RUC sin «Emitir desde» y todo pedido de un RUC en Real, porque ahí no hay botón.",
     );
+  });
+
+  // Revisión (15-10-2026): Ajustes acepta un «Emitir desde» en el futuro (un
+  // cambio de modo solo mueve el que quedó atrás). Con el RUC en Manual y
+  // «Emitir desde» el 20/10, un pedido pagado el 15/10 era «de antes» y salía
+  // con el botón: la excepción adelantaba la fecha que puso el owner.
+  it("con «Emitir desde» en el futuro, nada pagado antes de él sale, ni con el botón: el MOM, las reglas, la base y DEPLOY", () => {
+    expect(s3).toContain(
+      "**Con «Emitir desde» en el futuro** (Ajustes lo acepta), nada pagado antes de él sale, ni con el botón: la excepción es para lo pagado antes de un inicio que ya llegó, nunca para emitir antes de la fecha que puso el owner.",
+    );
+    expect(s3).toContain(
+      "Sin «Emitir desde», con «Emitir desde» todavía en el futuro (la base exige `emit_from <= now()`) o sin una de las fechas, sigue `antes_de_inicio`.",
+    );
+    expect(s7).toContain("Con «Emitir desde» en el futuro, nada pagado antes de él sale, ni con el botón (35.3).");
+    // Las reglas: el 15/10, con «Emitir desde» el 20/10, no; el 20/10, sí.
+    const futuro = hechos("2026-10-15T15:00:00.000Z", { emitFrom: "2026-10-20T05:00:00.000Z" });
+    const alBoton = (now: string) => {
+      const r = invoiceEligibility(futuro, { emitNow: true, now: new Date(now) });
+      return r.ok ? `${r.mode}${r.beforeStart ? " (antes)" : ""}` : r.reason;
+    };
+    expect(alBoton("2026-10-15T20:00:00.000Z")).toBe("antes_de_inicio");
+    expect(alBoton("2026-10-20T04:59:59.999Z")).toBe("antes_de_inicio");
+    expect(alBoton("2026-10-20T05:00:00.000Z")).toBe("real (antes)");
+    expect(read("lib/invoicing/rules.ts")).toContain("    from <= nowTime &&\n");
+    // La base, con el RUC leído bajo su candado.
+    const fn = funcion("invoice_claim");
+    expect(fn).toContain("and p_created_by is not null and v_iss.emit_from <= now() and p_paid_at >=");
+    expect(fn.indexOf("select * into v_iss from invoice_issuers where id = p_issuer for update;")).toBeLessThan(
+      fn.indexOf("v_iss.emit_from <= now()"),
+    );
+    // DEPLOY y la prueba SQL lo dicen igual.
+    const s0266 = flat(
+      section(read("DEPLOY.md"), "### 15-10-2026 · «Emitir esta boleta» para lo pagado antes de «Emitir desde» (0266, MOM §35)", "\n### "),
+    );
+    expect(s0266).toContain("Con «Emitir desde» en el futuro, nada pagado antes de él sale, ni con el botón.");
+    expect(s0266).toContain("like '%v_iss.emit_from <= now()%'");
+    const smoke = read("scripts/sql/invoices_smoke.sql");
+    expect(smoke).toContain("raise exception '«Emitir desde» en el futuro, pagado ahora: %', r;");
+    expect(smoke).toContain("raise exception '«Emitir desde» justo ahora: %', r;");
   });
 
   it("el barrido nunca va hacia atrás: el MOM lo dice, y nunca manda `p_backfill`", () => {

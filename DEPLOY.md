@@ -2852,7 +2852,8 @@ tiene boleta», y sin esa marca no emite. Una boleta de más es pagar el
 impuesto dos veces. **El barrido nunca va hacia atrás**: en Simulación, en
 Manual y en Real, lo pagado antes de «Emitir desde» sigue en
 `antes_de_inicio`. «Emitir desde» no cambia: Ajustes sigue sin aceptar una
-fecha pasada, y un cambio de modo la sigue moviendo al momento del cambio. Sin
+fecha pasada, y un cambio de modo la sigue moviendo al momento del cambio. Con
+«Emitir desde» en el futuro, nada pagado antes de él sale, ni con el botón. Sin
 variables de entorno nuevas; `MOM_RESOLUTION_VERSION` no cambia.
 
 1. **Migración `0266_invoices_backfill.sql`**, a mano, DESPUÉS de la 0262 y
@@ -2869,17 +2870,19 @@ variables de entorno nuevas; `MOM_RESOLUTION_VERSION` no cambia.
      dos fechas de pago —la del código y la de la base— desde el 01/10/2026
      00:00 de Lima, y el primer dinero también: la fecha más temprana entre
      `paid_at` y `registered_at` de los pagos validados (sin ellos, la fecha
-     del pedido). Sin «Emitir desde» o sin fecha de pago, `antes_de_inicio`,
-     como siempre;
+     del pedido). Y solo con «Emitir desde» ya llegado
+     (`v_iss.emit_from <= now()`). Sin «Emitir desde» o sin fecha de pago,
+     `antes_de_inicio`, como siempre;
    - la fila que sale así lleva en su base `pagado_antes_de_emitir_desde: true`.
 
    El turno sigue solo para `service_role`. No toca filas, ni triggers, ni otra
    función, y no toma candados de tablas. Es idempotente: si en alguna base ya
-   se corrió una versión anterior de la 0266 (sin el primer dinero), se vuelve
-   a correr y el turno queda con él (`like '%v_first%'`, abajo). **Va después de la
-   0262**: si sigue el turno de nueve argumentos, o no hay ni el de once ni el
-   de doce, se detiene con «La 0266 va después de la 0262: aplica primero
-   db/migrations/0261_invoices_manual.sql y
+   se corrió una versión anterior de la 0266 (sin el primer dinero, o sin
+   mirar que «Emitir desde» ya llegó), se vuelve a correr y el turno queda con
+   los dos (`like '%v_first%'` y `like '%v_iss.emit_from <= now()%'`, abajo).
+   **Va después de la 0262**: si sigue el turno de nueve argumentos, o no hay
+   ni el de once ni el de doce, se detiene con «La 0266 va después de la 0262:
+   aplica primero db/migrations/0261_invoices_manual.sql y
    db/migrations/0262_invoices_claim_coverage.sql.» y no cambia nada. **Si
    alguien vuelve a correr la 0261 después, hay que volver a correr la 0266**:
    quedan dos turnos, el de once y el de doce, y la llamada por nombre del
@@ -2901,7 +2904,8 @@ variables de entorno nuevas; `MOM_RESOLUTION_VERSION` no cambia.
      tiene que dar `true`: el de once ya no está;
    - `select pg_get_functiondef('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)'::regprocedure) like '%pagado_antes_de_emitir_desde%';`
      tiene que dar `true` (y lo mismo con `like '%v_first%'`, el primer
-     dinero, y con `like '%sin_pago_completo%'` y `like '%for share%'`, que
+     dinero, con `like '%v_iss.emit_from <= now()%'`, «Emitir desde» ya
+     llegado, y con `like '%sin_pago_completo%'` y `like '%for share%'`, que
      trae de la 0262);
    - `select has_function_privilege('authenticated', 'public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)', 'execute');`
      tiene que dar `false` (y lo mismo con `anon`; con `service_role`, `true`);

@@ -13380,8 +13380,11 @@ confirmar que lo buscó en SimpleFact y no tiene boleta; sin eso no se emite
 (`sin_revision_simplefact`). Las demás condiciones valen igual. Sigue en
 `antes_de_inicio` lo pagado antes del 01/10/2026, lo que no tiene fecha de
 pago, un RUC sin «Emitir desde» y todo pedido de un RUC en Real, porque ahí no
-hay botón. **El barrido nunca va hacia atrás**: en Simulación, en Manual y en
-Real, lo pagado antes de «Emitir desde» no se simula ni se emite.
+hay botón. **Con «Emitir desde» en el futuro** (Ajustes lo acepta), nada pagado
+antes de él sale, ni con el botón: la excepción es para lo pagado antes de un
+inicio que ya llegó, nunca para emitir antes de la fecha que puso el owner.
+**El barrido nunca va hacia atrás**: en Simulación, en Manual y en Real, lo
+pagado antes de «Emitir desde» no se simula ni se emite.
 
 **Justo antes de emitir, Kapta vuelve a leer el pedido en Shopify**
 (`fetchOrderForInvoice`), porque lo guardado no alcanza para armar la boleta
@@ -13426,7 +13429,8 @@ inicio. La única excepción es la de arriba, y la base la vuelve a exigir
 entera (0266): da el turno a algo pagado antes de «Emitir desde» solo si se
 pide con `p_backfill`, una fila real, el RUC en Manual, quién la pide
 (`p_created_by`) y las dos fechas del 01/10/2026 00:00 (hora de Lima) en
-adelante. Sin «Emitir desde» o sin una de las fechas, sigue `antes_de_inicio`.
+adelante. Sin «Emitir desde», con «Emitir desde» todavía en el futuro (la base
+exige `emit_from <= now()`) o sin una de las fechas, sigue `antes_de_inicio`.
 El primer dinero también lo saca de la base: la fecha más temprana entre
 `paid_at` y `registered_at` de los pagos validados (sin ellos, la fecha del
 pedido), y tiene que ser del 01/10/2026 00:00 (hora de Lima) en adelante.
@@ -13533,10 +13537,12 @@ comprobante armado con datos a medias puede ir al RUC equivocado.
   emite lo pagado antes de «Emitir desde» si quedó pagado desde el 01/10/2026
   00:00 (hora de Lima) y quien pulsa confirmó que en SimpleFact no tiene
   boleta. La excepción no cambia «Emitir desde»: Ajustes sigue sin aceptar una
-  fecha pasada, y un cambio de modo la sigue moviendo. Ajustes dice lo mismo,
-  sin prometer de más: junto a «Emitir desde», «El barrido solo toma pedidos
-  que quedaron pagados desde aquí (en Manual, «Emitir esta boleta» también
-  puede emitir lo pagado desde el 01/10/2026, después de revisar SimpleFact)»;
+  fecha pasada, y un cambio de modo la sigue moviendo. Con «Emitir desde» en el
+  futuro, nada pagado antes de él sale, ni con el botón (35.3). Ajustes dice lo
+  mismo, sin prometer de más: junto a «Emitir desde», «El barrido solo toma
+  pedidos que quedaron pagados desde aquí (en Manual y con esta fecha ya
+  llegada, «Emitir esta boleta» también puede emitir lo pagado desde el
+  01/10/2026, después de revisar SimpleFact)»;
   al mover la fecha por un cambio de modo, «Al cambiar de modo, «Emitir desde»
   quedó en ahora: el barrido no emite nada pagado antes. En Manual, lo pagado
   desde el 01/10/2026 solo sale con «Emitir esta boleta», después de revisar
@@ -13792,11 +13798,13 @@ Reglas de esa tabla:
   - **Lo pagado antes de «Emitir desde»** (owner, 15-10-2026; 35.3). Con el
     RUC en Manual, el botón también emite un pedido que quedó pagado antes de
     «Emitir desde», si quedó pagado desde el **01/10/2026 00:00** (hora de
-    Lima). Solo el botón: una persona, nunca el barrido. «Quedó pagado» es
-    aquí también el primer dinero (35.3): un pago cuyo comprobante es de antes
-    del 01/10/2026 no lleva botón, aunque se registrara después. Antes de
-    Kapta las boletas se emitían a mano en SimpleFact, y Kapta no sabe si ese
-    pedido ya tiene la suya; una boleta de más es pagar el impuesto dos veces.
+    Lima). Solo el botón: una persona, nunca el barrido. Con «Emitir desde»
+    en el futuro, nada pagado antes de él sale, ni con el botón (35.3).
+    «Quedó pagado» es aquí también el primer dinero (35.3): un pago cuyo
+    comprobante es de antes del 01/10/2026 no lleva botón, aunque se
+    registrara después. Antes de Kapta las boletas se emitían a mano en
+    SimpleFact, y Kapta no sabe si ese pedido ya tiene la suya; una boleta de
+    más es pagar el impuesto dos veces.
     Por eso la confirmación agrega «Quedó pagado el ‹dd/mm/aaaa hh:mm›, antes
     de «Emitir desde» (‹dd/mm/aaaa hh:mm›). Kapta no sabe si ya se emitió a
     mano: búscalo en SimpleFact antes de emitir.» —cuándo quedó pagado y desde
@@ -14055,12 +14063,12 @@ Implementación:
   desde» con «Emitir esta boleta» (owner 15-10-2026), sobre la 0262: solo
   `invoice_claim`, que pasa a doce argumentos con `p_backfill` (falso por
   defecto) y borra la firma de once. El cuerpo es el de la 0262 salvo dos
-  cosas: con `p_backfill`, una fila real, el RUC en Manual y quién la pide
-  (`p_created_by`), da el turno a lo pagado antes de «Emitir desde» si las dos
-  fechas son del 01/10/2026 00:00 (hora de Lima) en adelante, y también el
-  primer dinero (la fecha más temprana entre `paid_at` y `registered_at` de
-  sus pagos validados); y esa fila lleva en su base
-  `pagado_antes_de_emitir_desde`. Se detiene con el turno de nueve
+  cosas: con `p_backfill`, una fila real, el RUC en Manual, quién la pide
+  (`p_created_by`) y «Emitir desde» ya llegado, da el turno a lo pagado antes
+  de «Emitir desde» si las dos fechas son del 01/10/2026 00:00 (hora de Lima)
+  en adelante, y también el primer dinero (la fecha más temprana entre
+  `paid_at` y `registered_at` de sus pagos validados); y esa fila lleva en su
+  base `pagado_antes_de_emitir_desde`. Se detiene con el turno de nueve
   argumentos, o sin el de once ni el de doce. No toca filas.
 - `lib/invoicing/rules.ts`: reglas puras (cuenta y RUC de cada pago,
   elegibilidad —con `INVOICE_BACKFILL_FROM`, el 01/10/2026 de lo pagado antes

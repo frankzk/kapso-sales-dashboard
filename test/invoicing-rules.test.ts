@@ -1008,6 +1008,44 @@ describe("MOM §35.3 fila 8 y §35.7 — lo pagado antes de «Emitir desde», co
     expect(alEmitir(pagadoEl(ANTES, { ...MANUAL, emitFrom: "pronto" }))).toMatchObject({ reason: "antes_de_inicio" });
   });
 
+  it("con «Emitir desde» en el futuro, nada pagado antes de él sale, ni con el botón: la excepción es para un inicio que ya llegó", () => {
+    // Ajustes acepta una fecha futura (un cambio de modo solo mueve una que
+    // quedó atrás). Con el RUC en Manual y «Emitir desde» el 20/10, un pedido
+    // pagado el 15/10 —después del piso y del cambio— no se emite antes de la
+    // fecha que puso el owner.
+    const HOY = new Date("2026-10-15T20:00:00.000Z");
+    const EL_20 = "2026-10-20T05:00:00.000Z";
+    const FUTURO: InvoiceIssuer = { ...MANUAL, emitFrom: EL_20 };
+    const PAGADO_HOY = "2026-10-15T15:00:00.000Z";
+    const conReloj = (f: InvoiceOrderFacts, now: Date) => invoiceEligibility(f, { emitNow: true, now });
+    expect(conReloj(pagadoEl(PAGADO_HOY, FUTURO), HOY)).toEqual({ ok: false, reason: "antes_de_inicio", issuerId: GF.id });
+    // Lo pagado entre el piso y hoy, tampoco; ni justo en el piso.
+    expect(conReloj(pagadoEl(ANTES, FUTURO), HOY)).toEqual({ ok: false, reason: "antes_de_inicio", issuerId: GF.id });
+    expect(conReloj(pagadoEl(INVOICE_BACKFILL_FROM, FUTURO), HOY)).toMatchObject({ reason: "antes_de_inicio" });
+    // Un milisegundo antes de que llegue, todavía no; justo cuando llega, sí.
+    expect(conReloj(pagadoEl(PAGADO_HOY, FUTURO), new Date(Date.parse(EL_20) - 1))).toMatchObject({
+      reason: "antes_de_inicio",
+    });
+    expect(conReloj(pagadoEl(PAGADO_HOY, FUTURO), new Date(EL_20))).toMatchObject({
+      ok: true,
+      mode: "real",
+      paidAt: PAGADO_HOY,
+      beforeStart: true,
+    });
+    // «Emitir desde» en el pasado: sale, como siempre.
+    expect(conReloj(pagadoEl(ANTES), HOY)).toMatchObject({ ok: true, beforeStart: true });
+    // Un reloj que no se entiende no cuenta como «ya llegó».
+    expect(conReloj(pagadoEl(ANTES), new Date("pronto"))).toEqual({ ok: false, reason: "antes_de_inicio", issuerId: GF.id });
+    // Sin `now`, el reloj de ahora: con «Emitir desde» lejos en el futuro, nada.
+    expect(alEmitir(pagadoEl(ANTES, { ...MANUAL, emitFrom: "2999-01-01T05:00:00.000Z" }))).toMatchObject({
+      reason: "antes_de_inicio",
+    });
+    // El reloj solo mira la excepción: lo pagado desde «Emitir desde» sale igual
+    // (la condición 8 no cambia), y el barrido sigue sin ir hacia atrás.
+    expect(conReloj(pagadoEl(PAGADO), new Date(Date.parse(DESDE) - 1))).toMatchObject({ ok: true, beforeStart: false });
+    expect(invoiceEligibility(pagadoEl(ANTES), { now: HOY })).toMatchObject({ reason: "antes_de_inicio" });
+  });
+
   it("pagado desde «Emitir desde»: beforeStart false, también con emitNow", () => {
     expect(alEmitir(pagadoEl(PAGADO))).toMatchObject({ ok: true, paidAt: PAGADO, beforeStart: false });
     expect(alEmitir(pagadoEl(DESDE))).toMatchObject({ ok: true, beforeStart: false });

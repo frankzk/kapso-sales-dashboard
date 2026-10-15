@@ -2632,8 +2632,8 @@ begin
     raise exception '0266 quitó del turno de la 0262: %', v_quitadas;
   end if;
   -- Lo que se pone, sin contar comentarios ni líneas en blanco: la excepción de
-  -- la fecha (con el primer dinero, `v_first`) y la marca en la base de la
-  -- fila. Nada más.
+  -- la fecha (con el primer dinero, `v_first`, y «Emitir desde» ya llegado) y
+  -- la marca en la base de la fila. Nada más.
   select coalesce(array_agg(l order by l collate "C"), '{}') into v_puestas from (
     select l from unnest(string_to_array((select prosrc from pg_proc where oid = to_regprocedure(c_claim12)), E'\n')) as l
     except all
@@ -2652,6 +2652,7 @@ begin
        '    end if;',
        '    if coalesce(p_backfill, false)',
        '       and v_mode = ''real'' and v_iss.mode = ''manual'' and p_created_by is not null',
+       '       and v_iss.emit_from <= now()',
        '       and p_paid_at >= timestamptz ''2026-10-01 00:00:00-05''',
        '       and v_paid >= timestamptz ''2026-10-01 00:00:00-05''',
        '       and v_first >= timestamptz ''2026-10-01 00:00:00-05'' then',
@@ -2796,7 +2797,7 @@ begin
   end if;
 end $$;
 
-\echo '  0266: «Emitir esta boleta» emite lo pagado antes de «Emitir desde» solo con p_backfill, una real pedida por una persona, el RUC en Manual y las dos fechas y el primer dinero (comprobante o registro, el más temprano) desde el 01/10/2026 00:00 de Lima; la fila lo dice en su base'
+\echo '  0266: «Emitir esta boleta» emite lo pagado antes de «Emitir desde» solo con p_backfill, una real pedida por una persona, el RUC en Manual, «Emitir desde» ya llegado y las dos fechas y el primer dinero (comprobante o registro, el más temprano) desde el 01/10/2026 00:00 de Lima; la fila lo dice en su base'
 -- Una organización aparte, con su RUC en Manual (token, prueba del mismo RUC) y
 -- «Emitir desde» el 12/10/2026 00:00 de Lima, puesto después del cambio de modo
 -- (sin cambio de modo, la fecha no se mueve). Fechas fijas: la del 01/10/2026
@@ -3054,6 +3055,38 @@ begin
     raise exception 'un rechazo por el primer dinero dejó fila';
   end if;
 
+  -- «Emitir desde» en el futuro (Ajustes lo acepta; sin cambio de modo, la
+  -- fecha no se mueve): nada pagado antes de él pasa, ni con `p_backfill` y
+  -- todo lo demás. La excepción es para lo pagado antes de un inicio que ya
+  -- llegó, nunca para emitir antes de la fecha que puso el owner. #37, pagado
+  -- el 05/10 (desde el piso), y #38, pagado ahora (después del cambio de
+  -- modo): los dos, `antes_de_inicio`, sin fila.
+  update invoice_issuers set emit_from = now() + interval '5 days' where id = pg_temp.r();
+  if (select (mode, emit_from) from invoice_issuers where id = pg_temp.r())
+       is distinct from ('manual'::text, now() + interval '5 days') then
+    raise exception 'R con «Emitir desde» en el futuro: %', (select (mode, emit_from) from invoice_issuers where id = pg_temp.r());
+  end if;
+  v_b := pg_temp.pedido_r(37, c_entre);
+  r := pg_temp.turno_r(pg_temp.pedido(37), v_b, c_entre);
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception '«Emitir desde» en el futuro, pagado el 05/10: %', r; end if;
+  r := pg_temp.turno_r(pg_temp.pedido(38), pg_temp.pedido_r(38, now()), now());
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception '«Emitir desde» en el futuro, pagado ahora: %', r; end if;
+  -- Un microsegundo en el futuro, todavía no.
+  update invoice_issuers set emit_from = now() + interval '1 microsecond' where id = pg_temp.r();
+  r := pg_temp.turno_r(pg_temp.pedido(37), v_b, c_entre);
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception '«Emitir desde» un microsegundo en el futuro: %', r; end if;
+  if exists (select 1 from order_invoices where order_id in (pg_temp.pedido(37), pg_temp.pedido(38))) then
+    raise exception 'un rechazo por «Emitir desde» en el futuro dejó fila';
+  end if;
+  -- Justo ahora (`now()`), ya llegó: #37 pasa, con su marca.
+  update invoice_issuers set emit_from = now() where id = pg_temp.r();
+  r := pg_temp.turno_r(pg_temp.pedido(37), v_b, c_entre);
+  if not r ? 'id' or (select basis->'pagado_antes_de_emitir_desde' from order_invoices where id = (r->>'id')::uuid)
+                       is distinct from 'true'::jsonb then
+    raise exception '«Emitir desde» justo ahora: %', r;
+  end if;
+  update invoice_issuers set emit_from = pg_temp.desde_r() where id = pg_temp.r();
+
   -- #99 sin «Emitir desde»: no, ni con `p_backfill`. Un RUC en Manual sin fecha
   -- no puede existir (lo prueba la sección j): se levantan el check y el
   -- trigger en una subtransacción que se deshace.
@@ -3114,13 +3147,13 @@ end $$;
 reset role;
 
 -- Lo que quedó en R: las reales de antes de «Emitir desde» con su marca, las
--- de después sin ella; ningún rechazo dejó fila (30, 32, 34 y 92 a 95 no
+-- de después sin ella; ningún rechazo dejó fila (30, 32, 34, 38 y 92 a 95 no
 -- tienen ninguna).
 do $$
 begin
   if pg_temp.comprobantes_r() is distinct from
        '31:real:emitiendo:c:atrás, 33:real:emitiendo:c:atrás, 35:real:emitiendo:c:atrás, 36:real:emitiendo:c:-, '
-       '90:real:emitiendo:c:atrás, 91:real:emitiendo:c:atrás, 96:real:emitiendo:c:atrás, '
+       '37:real:emitiendo:c:atrás, 90:real:emitiendo:c:atrás, 91:real:emitiendo:c:atrás, 96:real:emitiendo:c:atrás, '
        '97:real:emitiendo:c:-, 98:real:emitiendo:c:-, 98:simulacion:simulada:-:-, 99:real:emitiendo:c:atrás' then
     raise exception 'comprobantes de R: %', pg_temp.comprobantes_r();
   end if;

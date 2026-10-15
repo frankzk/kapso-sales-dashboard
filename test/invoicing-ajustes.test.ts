@@ -1323,11 +1323,14 @@ describe("la sección, pintada: Manual", () => {
     expect(ACTIONS).toContain(`const EMIT_FROM_MOVED_NOTICE =\n  "${MODO_MOVIO_FECHA}";`);
     expect(ACTIONS).toContain("if (!notes.length) notes.push(EMIT_FROM_MOVED_NOTICE);");
     expect(s4).toContain(`al mover la fecha por un cambio de modo, «${MODO_MOVIO_FECHA}»`);
-    // La ayuda de «Emitir desde».
+    // La ayuda de «Emitir desde». Ajustes acepta una fecha en el futuro, y con
+    // ella nada pagado antes sale, ni con el botón (revisión 15-10-2026): la
+    // ayuda no promete el botón antes de que la fecha llegue.
     const ayuda =
-      "El barrido solo toma pedidos que quedaron pagados desde aquí (en Manual, «Emitir esta boleta» también puede emitir lo pagado desde el 01/10/2026, después de revisar SimpleFact)";
+      "El barrido solo toma pedidos que quedaron pagados desde aquí (en Manual y con esta fecha ya llegada, «Emitir esta boleta» también puede emitir lo pagado desde el 01/10/2026, después de revisar SimpleFact)";
     expect(plano(SECTION)).toContain(`Hora de Lima. ${ayuda}: una fecha en el pasado se guarda como ahora`);
     expect(s4).toContain(`junto a «Emitir desde», «${ayuda}»`);
+    expect(s4).toContain("Con «Emitir desde» en el futuro, nada pagado antes de él sale, ni con el botón (35.3).");
     // Las cuentas de cobro.
     const cuentas = "Asignar un RUC no hace que el barrido emita nada pagado antes de su «Emitir desde».";
     expect(plano(SECTION)).toContain(cuentas);
@@ -1339,6 +1342,7 @@ describe("la sección, pintada: Manual", () => {
       "Solo entran pedidos que quedaron pagados desde aquí",
       "Asignar un RUC no emite nada pagado antes",
       "Asignar no emite nada pagado antes",
+      "(en Manual, «Emitir esta boleta» también puede emitir",
     ]) {
       expect(plano(ACTIONS), viejo).not.toContain(viejo);
       expect(plano(SECTION), viejo).not.toContain(viejo);

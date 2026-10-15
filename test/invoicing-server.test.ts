@@ -327,7 +327,8 @@ function fakeDb(initialNow: Date) {
    * cuenta las filas de ese modo), y `created_by` es `p_created_by`.
    *
    * La 0266: con `p_backfill`, una fila real de un RUC en «Manual» pedida por
-   * alguien deja pasar lo pagado antes de «Emitir desde», si las dos fechas y
+   * alguien deja pasar lo pagado antes de «Emitir desde», si «Emitir desde» ya
+   * llegó (`emit_from <= now()`, con el reloj de la base) y las dos fechas y
    * el primer dinero (la más temprana entre `paid_at` y `registered_at` de los
    * pagos validados; sin ellos, la fecha del pedido) son desde el 01/10/2026
    * 00:00 de Lima; la base del comprobante lo anota.
@@ -381,6 +382,7 @@ function fakeDb(initialNow: Date) {
       rowMode === "real" &&
       iss.mode === "manual" &&
       !!a.p_created_by &&
+      cmp(iss.emit_from, now.toISOString()) <= 0 &&
       cmp(a.p_paid_at, PISO_0266) >= 0 &&
       cmp(paid, PISO_0266) >= 0 &&
       first !== null &&
@@ -3572,5 +3574,72 @@ describe("emitInvoiceNow: lo pagado antes de «Emitir desde» sale con el botón
     expect(claims(db)).toHaveLength(1);
     expect(db.t("order_invoices")).toEqual([]);
     expect(deps.createSale).not.toHaveBeenCalled();
+  });
+
+  describe("con «Emitir desde» en el futuro (Ajustes lo acepta), nada pagado antes de él sale, ni con el botón", () => {
+    /** «Emitir desde» el 20/10/2026 00:00 de Lima: después de hoy (NOW, el 14/10). */
+    const EL_20 = "2026-10-20T05:00:00.000Z";
+    beforeEach(() => {
+      // Las reglas miran el reloj de ahora (`invoiceEligibility` sin `now`); la
+      // base, el de `deps.now()`. Los dos, el mismo.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(NOW);
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("ni con la casilla: `antes_de_inicio`, sin token, sin Shopify, sin turno y sin POST; y sin botón en el panel ni en Ajustes", async () => {
+      // Pagado el 10/10 (desde el piso) y pagado hoy, después del cambio: los dos
+      // son de antes del 20/10, y ninguno se adelanta.
+      for (const registeredAt of [ANTES, PAGADO]) {
+        const db = deAntes("manual", registeredAt);
+        issuerRow(db).emit_from = EL_20;
+        const deps = makeDeps();
+        expect(await emit(db, deps), registeredAt).toEqual({ ok: false, reason: "antes_de_inicio" });
+        nadaDeNada(db, deps);
+        db.t("order_invoices").push({
+          id: "sim-ord-1",
+          order_id: "ord-1",
+          store_id: STORE,
+          issuer_id: ISS,
+          mode: "simulacion",
+          status: "simulada",
+          created_at: "2026-10-14T19:00:00.000Z",
+        });
+        expect((await loadInvoiceEmitNowOffers(db.admin, ["ord-1"])).size, registeredAt).toBe(0);
+        const facts = (await loadInvoiceOrderFacts(db.admin, ["ord-1"])).get("ord-1")!;
+        expect(invoiceEmitNowReadiness({ facts, invoices: [], checks: [], storeActive: true }), registeredAt).toMatchObject({
+          ok: false,
+          rules: { reason: "antes_de_inicio" },
+        });
+      }
+    });
+
+    it("cuando «Emitir desde» llega, lo de antes ya sale con el botón y la casilla", async () => {
+      vi.setSystemTime(new Date(EL_20));
+      const db = deAntes();
+      issuerRow(db).emit_from = EL_20;
+      const deps = makeDeps({ now: () => new Date(EL_20) });
+      expect(await emit(db, deps)).toMatchObject({ ok: true, status: "emitida" });
+      expect(claims(db)[0]!.args).toMatchObject({ p_backfill: true, p_created_by: OWNER });
+      expect(invoice(db, "ord-1")).toMatchObject({ basis: { pagado_antes_de_emitir_desde: true } });
+    });
+
+    it("el turno también lo mide: si «Emitir desde» pasó al futuro mientras se leía Shopify, la base no da la fila", async () => {
+      // Las reglas vieron «Emitir desde» el 14/10, ya llegado; el owner lo movió
+      // al 20/10 en Ajustes antes del turno. La base lo lee bajo el candado.
+      const db = deAntes();
+      const deps = makeDeps();
+      deps.fetchOrder.mockImplementationOnce(async (input) => {
+        issuerRow(db).emit_from = EL_20;
+        return okRead(input.shopifyOrderId);
+      });
+      expect(await emit(db, deps)).toEqual({ ok: false, reason: "antes_de_inicio" });
+      expect(claims(db)).toHaveLength(1);
+      expect(claims(db)[0]!.args).toMatchObject({ p_backfill: true });
+      expect(db.t("order_invoices")).toEqual([]);
+      expect(deps.createSale).not.toHaveBeenCalled();
+    });
   });
 });
