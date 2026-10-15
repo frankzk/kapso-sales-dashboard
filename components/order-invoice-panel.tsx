@@ -3,12 +3,17 @@
 // Panel «Comprobante» en el drawer del pedido (MOM §35.4, §35.7, §35.9).
 //
 // Dice si el pedido tiene boleta y cuál, o por qué no la lleva, con las mismas
-// frases que guarda el barrido (`INVOICE_REASON_LABEL`). No tiene «Emitir»:
-// emitir lo hace solo el barrido, y un pedido que no cumple las reglas no se
-// fuerza desde aquí (§35.7). Quien tiene «Boletas y facturas» puede, además,
-// registrar una boleta emitida a mano, pedir que se vuelva a intentar un error y,
-// de una en duda, después de buscarla en SimpleFact, registrar la serie con que
-// salió o liberarla porque no salió.
+// frases que guarda el barrido (`INVOICE_REASON_LABEL`). Quien tiene «Boletas y
+// facturas» puede, además, registrar una boleta emitida a mano, pedir que se
+// vuelva a intentar un error y, de una en duda, después de buscarla en
+// SimpleFact, registrar la serie con que salió o liberarla porque no salió.
+//
+// «Emitir esta boleta» aparece SOLO con el RUC del pedido en «Manual» (owner,
+// 15-10-2026): el barrido simula y una persona emite pedido por pedido, para
+// revisar en SimpleFact las primeras boletas reales antes de pasar a «Real». En
+// «Real» emite el barrido y no hay botón. El botón no fuerza nada: el servidor
+// corre la misma emisión real del barrido, con los mismos candados, y antes de
+// pulsar «Sí, emitir» el panel dice qué boleta sale, por cuánto y de qué RUC.
 //
 // Es una zona más de la tarjeta «Cobro», sobre su hairline, como el agente de
 // voz en la de confirmación. Las acciones pasan por el `run` del drawer: sus
@@ -23,12 +28,15 @@ import { Badge, Banner, CARD_ZONE, FIELD, OpsButton, type BadgeTone } from "@/co
 import { IconArrowUpRight } from "@/components/icons";
 import {
   confirmDoubtfulInvoice,
+  emitInvoiceAction,
   loadInvoicePanel,
   registerExternalInvoice,
   releaseDoubtfulInvoice,
   requestInvoiceRetry,
+  type EmitInvoiceState,
   type InvoiceActionState,
   type InvoicePanelData,
+  type InvoicePanelEmitNow,
   type InvoicePanelReview,
   type InvoicePanelRow,
 } from "@/app/dashboard/pedidos/invoice-actions";
@@ -38,6 +46,7 @@ import {
   INVOICE_STATUS_LABEL,
   LIVE_REAL_STATUSES,
   invoiceNoteRef,
+  type InvoiceMode,
   type InvoiceReason,
 } from "@/lib/invoicing/rules";
 import { subscribePaymentPanelChange } from "@/lib/payment-panel-sync";
@@ -142,6 +151,32 @@ export function externalInvoiceConfirmation(
   return `Se registra como comprobante de ${issuer.legalName} (RUC ${issuer.ruc}), serie ${serie}. No se puede corregir después.`;
 }
 
+/**
+ * Lo que sale al pulsar «Sí, emitir», dicho antes (§35.5): por cuánto, a quién
+ * —hasta S/ 700 la boleta va a «CLIENTES VARIOS»— y de qué RUC. Una boleta que
+ * llegó a SUNAT no se borra.
+ */
+export function emitConfirmation(emit: Pick<InvoicePanelEmitNow, "ruc" | "legalName" | "total">): string {
+  return `Se emite una boleta de ${soles(emit.total)} a CLIENTES VARIOS con el RUC ${emit.ruc} (${emit.legalName}). Va a SUNAT y no se puede borrar.`;
+}
+
+/**
+ * Un envío a la vez. Mientras el primero no vuelve, el segundo no sale y
+ * devuelve null: SimpleFact no tiene llave de idempotencia y el mismo pedido
+ * mandado dos veces son dos boletas (§35.1). El índice de la base frena la
+ * segunda, pero no se llega a pedir. El candado se suelta al volver, también si
+ * lo que se envió lanzó.
+ */
+export async function sendOnce<T>(lock: { current: boolean }, send: () => Promise<T>): Promise<T | null> {
+  if (lock.current) return null;
+  lock.current = true;
+  try {
+    return await send();
+  } finally {
+    lock.current = false;
+  }
+}
+
 // ── Qué se enseña ────────────────────────────────────────────────────────────
 
 export interface InvoicePanelView {
@@ -163,6 +198,19 @@ export interface InvoicePanelView {
   /** Un `en_duda` que SÍ está en SimpleFact: registrar la serie con que salió. */
   canConfirm: boolean;
   canRegisterExternal: boolean;
+  /**
+   * «Emitir esta boleta»: lo decidió el servidor (`data.emitNow`, RUC en
+   * «Manual», reglas como emisión real, sin bloqueo de Shopify) y aquí se
+   * vuelve a exigir lo que se ve: quien gestiona y sin comprobante real vivo.
+   */
+  canEmitNow: boolean;
+  /** El RUC del pedido, según las reglas, está en «Manual». */
+  manualRuc: boolean;
+  /**
+   * El modo del RUC del pedido según las reglas; null si no se sabe. Decide qué
+   * se promete después de liberar un `en_duda` (`releaseDoubtText`).
+   */
+  rucMode: InvoiceMode | null;
 }
 
 const LIVE = new Set<string>(LIVE_REAL_STATUSES);
@@ -174,6 +222,8 @@ export function invoicePanelView(data: InvoicePanelData): InvoicePanelView {
   const failed = !live && lastReal?.status === "error" ? lastReal : null;
   const history = data.invoices.filter((i) => i.mode === "real" && i.status === "error" && i.id !== failed?.id);
   const reviewReason = data.review.state === "no" || data.review.state === "shopify" ? data.review.reason : null;
+  const canEmitNow = data.canManage && !live && data.emitNow !== null;
+  const reviewIssuer = data.issuers.find((i) => i.id === reviewIssuerId(data.review));
 
   let badge: InvoicePanelView["badge"];
   if (live?.rucMismatch) {
@@ -189,6 +239,9 @@ export function invoicePanelView(data: InvoicePanelData): InvoicePanelView {
   } else if (data.review.state === "shopify") {
     // El barrido lo sigue saltando por lo que dijo Shopify: no está «por emitir».
     badge = { tone: "warn", label: data.review.retry ? "Espera a Shopify" : "Se emite a mano" };
+  } else if (canEmitNow) {
+    // En «Manual» lo que falta es que una persona pulse: el barrido no la emite.
+    badge = { tone: "info", label: "Lista para emitir" };
   } else if (data.review.state === "lista") {
     badge = { tone: "info", label: data.review.mode === "real" ? "Por emitir" : "Por simular" };
   } else if (simulated) {
@@ -211,6 +264,9 @@ export function invoicePanelView(data: InvoicePanelData): InvoicePanelView {
     canRelease: data.canManage && live?.status === "en_duda",
     canConfirm: data.canManage && live?.status === "en_duda",
     canRegisterExternal: data.canManage && !live && data.issuers.length > 0,
+    canEmitNow,
+    manualRuc: reviewIssuer?.mode === "manual",
+    rucMode: reviewIssuer?.mode ?? null,
   };
 }
 
@@ -283,7 +339,7 @@ export function OrderInvoicePanel({
   // Mientras carga, nada: una organización sin RUC no dibuja el panel, y un
   // esqueleto que aparece y se va es peor que esperar.
   if (!data?.active) return null;
-  return <OrderInvoicePanelView orderId={orderId} data={data} pending={pending} run={run} />;
+  return <OrderInvoicePanelView orderId={orderId} data={data} pending={pending} run={run} onEmitted={cargar} />;
 }
 
 /** El panel con sus datos ya leídos. Separado para poder pintarlo en las pruebas. */
@@ -292,11 +348,14 @@ export function OrderInvoicePanelView({
   data,
   pending,
   run,
+  onEmitted,
 }: {
   orderId: string;
   data: InvoicePanelData;
   pending: boolean;
   run: Run;
+  /** Al volver «Emitir esta boleta», sea lo que sea que pasó: el panel se relee. */
+  onEmitted?: () => void | Promise<void>;
 }) {
   const view = invoicePanelView(data);
   // De un `en_duda`, una de las dos salidas a la vez: o salió, o no salió.
@@ -339,6 +398,7 @@ export function OrderInvoicePanelView({
             />
           ) : doubt === "liberar" ? (
             <ReleaseDoubtForm
+              mode={view.rucMode}
               pending={pending}
               onCancel={() => setDoubt(null)}
               onSubmit={async (note) => {
@@ -417,7 +477,7 @@ export function OrderInvoicePanelView({
         </div>
       )}
 
-      {view.showReview && <Review data={data} hideSimulated={!!simulated} />}
+      {view.showReview && <Review data={data} hideSimulated={!!simulated} manual={view.manualRuc} />}
 
       {view.check && (
         <p className="text-[13px] leading-5 text-ink-500">
@@ -427,6 +487,32 @@ export function OrderInvoicePanelView({
       )}
 
       {simulated && <SimulatedInvoice row={simulated} />}
+
+      {view.canEmitNow && data.emitNow && (
+        // Debajo de la simulada: lo que habría enviado queda a la vista de quien
+        // va a emitir de verdad.
+        <EmitInvoiceControl
+          emit={data.emitNow}
+          pending={pending}
+          onEmit={async () => {
+            const emit = data.emitNow!;
+            // El aviso va en la cabecera del drawer, como el de toda acción; el
+            // panel se relee después, y la boleta que salió aparece con su PDF.
+            await run(() => emitInvoiceAction(orderId, { issuerId: emit.issuerId, total: emit.total }));
+            await onEmitted?.();
+          }}
+        />
+      )}
+
+      {!live && view.manualRuc && data.emitNowBlocked && (
+        <p className="text-[13px] leading-5 text-ink-600">
+          «Emitir esta boleta» no está disponible: {motivo(data.emitNowBlocked.reason, data.emitNowBlocked.detail)}
+        </p>
+      )}
+
+      {!live && view.manualRuc && !data.canManage && review.state === "no" && review.reason === "ya_simulado" && (
+        <p className="text-[13px] leading-5 text-ink-500">{MANUAL_WHO_TEXT}</p>
+      )}
 
       {view.history.length > 0 && (
         <div className="space-y-1">
@@ -527,8 +613,12 @@ function LiveInvoice({ row }: { row: InvoicePanelRow }) {
   );
 }
 
+/** En «Manual» la boleta real no la emite el barrido: quién la emite. */
+export const MANUAL_WHO_TEXT =
+  "En Manual el barrido solo simula: la boleta real la emite, pedido por pedido, quien tiene «Boletas y facturas».";
+
 /** Lo que dicen hoy las reglas (§35.3), o que no se pudo revisar. Nunca las dos. */
-function Review({ data, hideSimulated }: { data: InvoicePanelData; hideSimulated: boolean }) {
+function Review({ data, hideSimulated, manual }: { data: InvoicePanelData; hideSimulated: boolean; manual: boolean }) {
   const review = data.review;
   if (review.state === "sin_revisar") {
     // FALLA CERRADA: sin los hechos no se dice «lista» ni ningún motivo.
@@ -548,6 +638,19 @@ function Review({ data, hideSimulated }: { data: InvoicePanelData; hideSimulated
         <p className="text-ink-500">
           Última pasada ({INVOICE_MODE_LABEL[review.mode]}, {cuando(review.checkedAt)}) · RUC {review.ruc}.
         </p>
+      </div>
+    );
+  }
+  if (review.state === "lista" && manual) {
+    // La revisión es la del barrido, que en «Manual» simula: «lista para
+    // emitirse en la próxima pasada» prometería una boleta que el barrido no
+    // emite.
+    return (
+      <div className="space-y-0.5 text-[13px] leading-5">
+        <p className="text-ink-900">
+          Lista para simularse en la próxima pasada (RUC {review.ruc}, modo {INVOICE_MODE_LABEL.manual}).
+        </p>
+        <p className="text-ink-500">{MANUAL_WHO_TEXT}</p>
       </div>
     );
   }
@@ -612,14 +715,160 @@ function SimulatedInvoice({ row }: { row: InvoicePanelRow }) {
 }
 
 /**
+ * «Emitir esta boleta» (§35.7, owner 15-10-2026), con su paso de confirmación.
+ * Se usa en el drawer y en Ajustes → «Últimos comprobantes».
+ *
+ * NUNCA DOS ENVÍOS. Desde el primer «Sí, emitir» hasta que vuelve la respuesta,
+ * el botón queda deshabilitado y un segundo clic no sale (`sendOnce`): no se
+ * espera a que React pinte el deshabilitado. `pending` (el del drawer, o el de
+ * la fila) también lo deshabilita. Mientras sale no se puede cancelar: lo que
+ * se envió ya no se recoge.
+ *
+ * Quien lo usa decide qué hacer con la respuesta (`onEmit`), y no lanza.
+ */
+export function EmitInvoiceControl({
+  emit,
+  pending,
+  onEmit,
+  label = "Emitir esta boleta",
+}: {
+  emit: Pick<InvoicePanelEmitNow, "ruc" | "legalName" | "total">;
+  pending: boolean;
+  onEmit: () => Promise<void>;
+  label?: string;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [sending, setSending] = useState(false);
+  const lock = useRef(false);
+  const busy = pending || sending;
+
+  const confirmar = () =>
+    void sendOnce(lock, async () => {
+      setSending(true);
+      try {
+        await onEmit();
+      } finally {
+        setSending(false);
+        setConfirming(false);
+      }
+    }).catch(() => {
+      // `onEmit` no lanza; si lo hiciera, el aviso es de quien lo usa. Aquí
+      // solo se suelta el botón (ya lo hizo `finally`).
+    });
+
+  if (confirming) {
+    return <EmitInvoiceConfirm emit={emit} busy={busy} onConfirm={confirmar} onCancel={() => setConfirming(false)} />;
+  }
+  return (
+    <OpsButton
+      size="sm"
+      variant="primary"
+      disabled={busy}
+      onClick={() => setConfirming(true)}
+      className="pointer-coarse:h-11"
+    >
+      {label}
+    </OpsButton>
+  );
+}
+
+/**
+ * El paso de confirmación: qué boleta sale, por cuánto y de qué RUC, y que no
+ * se puede borrar. «Sí, emitir» queda deshabilitado mientras sale.
+ */
+export function EmitInvoiceConfirm({
+  emit,
+  busy,
+  onConfirm,
+  onCancel,
+}: {
+  emit: Pick<InvoicePanelEmitNow, "ruc" | "legalName" | "total">;
+  busy: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div role="group" aria-label="Confirmar la emisión" className="space-y-3 rounded-lg bg-wash p-3">
+      <p className="text-[13px] leading-5 text-ink-900">{emitConfirmation(emit)}</p>
+      <p className="text-[13px] leading-5 text-ink-600">
+        Antes de emitir otra, revisa esta en SimpleFact: el RUC, los ítems y el total.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <OpsButton size="sm" variant="primary" disabled={busy} onClick={onConfirm} className="pointer-coarse:h-11">
+          {busy ? "Emitiendo…" : "Sí, emitir"}
+        </OpsButton>
+        <OpsButton size="sm" variant="ghost" disabled={busy} onClick={onCancel} className="pointer-coarse:h-11">
+          Cancelar
+        </OpsButton>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Lo que contestó «Emitir esta boleta», donde no hay cabecera del drawer
+ * (Ajustes): el aviso y, si salió, «Ver PDF». En rojo todo lo que no es una
+ * boleta que salió bien.
+ */
+export function EmitOutcome({ state }: { state: EmitInvoiceState }) {
+  const text = state.error ?? state.notice;
+  if (!text) return null;
+  const pdf = pdfHref(state.pdfUrl ?? null);
+  return (
+    <p
+      role={state.error ? "alert" : "status"}
+      className={cn("text-[13px] leading-5", state.error ? "text-crit-fg" : "text-ok-fg")}
+    >
+      {text}
+      {pdf && (
+        <>
+          {" · "}
+          <a
+            href={pdf}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 font-medium text-brand-700 underline-offset-2 hover:underline"
+          >
+            Ver PDF
+            <IconArrowUpRight aria-hidden className="size-3.5" />
+          </a>
+        </>
+      )}
+    </p>
+  );
+}
+
+/**
+ * Lo que pasa al liberar un `en_duda`, según el modo del RUC del pedido. En
+ * «Real» lo vuelve a intentar el barrido en la próxima pasada. En «Manual» el
+ * barrido solo simula y NO lo intenta: vuelve «Emitir esta boleta» y lo pulsa
+ * una persona. Prometer «la próxima pasada» en Manual dejaba esperando una
+ * boleta que no iba a salir sola. Sin saber el modo, los dos. Es lo mismo que
+ * dice el servidor al terminar (`nextAttemptText` en
+ * app/dashboard/pedidos/invoice-actions.ts, que no se puede importar aquí).
+ */
+export function releaseDoubtText(mode: InvoiceMode | null): string {
+  const next =
+    mode === "real"
+      ? "pasa a error y se vuelve a intentar en la próxima pasada"
+      : mode === "manual"
+        ? "pasa a error y vuelve a aparecer «Emitir esta boleta» en el pedido"
+        : "pasa a error y, con el RUC en Real, se vuelve a intentar en la próxima pasada; en Manual, vuelve a aparecer «Emitir esta boleta» en el pedido";
+  return `Libérala solo si confirmaste en SimpleFact que la boleta no existe: ${next}. Si existiera, saldría otra.`;
+}
+
+/**
  * Liberar un `en_duda` (§35.4): solo después de buscarlo en SimpleFact, y
  * dejando escrito qué se revisó. El servidor vuelve a exigir la nota.
  */
 export function ReleaseDoubtForm({
+  mode = null,
   pending,
   onSubmit,
   onCancel,
 }: {
+  /** El modo del RUC del pedido (`view.rucMode`): decide qué se promete. */
+  mode?: InvoiceMode | null;
   pending: boolean;
   onSubmit: (note: string) => Promise<boolean>;
   onCancel: () => void;
@@ -627,10 +876,7 @@ export function ReleaseDoubtForm({
   const [note, setNote] = useState("");
   return (
     <div className="space-y-3 rounded-lg bg-wash p-3">
-      <p className="text-[13px] leading-5 text-ink-700">
-        Libérala solo si confirmaste en SimpleFact que la boleta no existe: pasa a error y se vuelve a intentar en la
-        próxima pasada. Si existiera, saldría otra.
-      </p>
+      <p className="text-[13px] leading-5 text-ink-700">{releaseDoubtText(mode)}</p>
       <label className="grid gap-1.5 text-[13px] font-medium text-ink-700">
         Qué revisaste en SimpleFact
         <textarea
@@ -755,7 +1001,8 @@ export function ExternalInvoiceForm({
   onSubmit,
   onCancel,
 }: {
-  issuers: InvoicePanelData["issuers"];
+  /** Los RUC que se pueden elegir: el formulario no necesita su modo. */
+  issuers: Pick<InvoicePanelData["issuers"][number], "id" | "ruc" | "legalName">[];
   /** El RUC que decidieron las reglas (`review.issuerId`), si se sabe. */
   defaultIssuerId?: string | null;
   pending: boolean;

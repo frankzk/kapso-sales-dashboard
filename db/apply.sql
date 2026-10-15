@@ -523,4 +523,6 @@
 \ir migrations/0259_canal_de_cierre.sql
 \echo 'Applying 0260_invoices_hardening.sql'
 \ir migrations/0260_invoices_hardening.sql
+\echo 'Applying 0261_invoices_manual.sql'
+\ir migrations/0261_invoices_manual.sql
 \echo 'Done.'

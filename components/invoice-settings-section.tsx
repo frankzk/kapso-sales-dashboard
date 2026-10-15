@@ -2,7 +2,10 @@
 
 // Ajustes → «Boletas y facturas» (MOM §35): los RUC de la organización con su
 // cuenta de SimpleFact, a qué RUC va el dinero de cada cuenta de cobro de esta
-// tienda y los últimos comprobantes.
+// tienda y los últimos comprobantes. Con un RUC en «Manual», la simulada más
+// nueva de un pedido lleva «Emitir» exactamente cuando el drawer de ese pedido
+// ofrecería «Emitir esta boleta»: lo decide la misma función en el servidor, y
+// es la misma acción con la misma confirmación.
 //
 // Va en su propio archivo, fuera de store-settings.tsx, porque no guarda en la
 // fila de la tienda: los RUC son de la organización y las acciones piden un
@@ -10,7 +13,8 @@
 //
 // El token no llega nunca aquí: la página manda solo si hay uno (`hasToken`).
 // Este archivo no importa nada que arrastre `node:crypto` (lib/crypto.ts,
-// lib/invoicing/server.ts): las reglas puras y las acciones de servidor, nada más.
+// lib/invoicing/server.ts): las reglas puras, las acciones de servidor y las
+// piezas del panel del drawer (que tampoco lo arrastran), nada más.
 
 import { useActionState, useEffect, useState, useTransition, type FormEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
@@ -19,6 +23,7 @@ import { Badge, Banner, FIELD, OpsButton, type BadgeTone } from "@/components/op
 import { CARD, CardHeader, EmptyRow, Field, HELP, NUMBER_NARROW, ROW, RowList, SettingsSection } from "@/components/settings-ui";
 import { IconAlert, IconCheckCircle } from "@/components/icons";
 import { OrderLink } from "@/components/order-link";
+import { EmitInvoiceControl, EmitOutcome } from "@/components/order-invoice-panel";
 import {
   INVOICE_DAILY_LIMIT_DEFAULT,
   INVOICE_DAILY_LIMIT_MAX,
@@ -36,6 +41,12 @@ import {
   testInvoiceIssuer,
 } from "@/app/dashboard/[storeId]/settings/invoice-actions";
 import type { SettingsState } from "@/app/dashboard/[storeId]/settings/actions";
+// La acción del drawer: la emisión y sus candados son los mismos desde aquí.
+import {
+  emitInvoiceAction,
+  type EmitInvoiceState,
+  type InvoicePanelEmitNow,
+} from "@/app/dashboard/pedidos/invoice-actions";
 
 const initial: SettingsState = {};
 
@@ -74,6 +85,8 @@ export interface InvoiceRecentView {
   id: string;
   orderId: string;
   orderName: string | null;
+  /** El RUC del comprobante (`issuer_id`): con él se emite la real de una simulada. */
+  issuerId: string | null;
   ruc: string;
   mode: InvoiceWriteMode;
   status: InvoiceStatus;
@@ -87,6 +100,16 @@ export interface InvoiceRecentView {
    * existe, pero no es de la empresa que recibió el pago. El motivo va en `error`.
    */
   rucMismatch: boolean;
+  /**
+   * Lleva «Emitir», y lo que saldría: la simulada más nueva de su pedido, y el
+   * drawer ofrecería ahora «Emitir esta boleta» para ese pedido
+   * (`invoiceEmitNowReadiness`: tienda activa, sin comprobante real vivo, las
+   * reglas como una emisión real, el RUC ACTUAL del pedido en «Manual» y sin un
+   * bloqueo de Shopify). El RUC y el total son los de las reglas de ahora, que
+   * pueden no ser los de la simulada: la confirmación dice lo que de verdad se
+   * envía. null: no lleva botón. Al pulsar, el servidor vuelve a revisar todo.
+   */
+  emitNow: InvoicePanelEmitNow | null;
 }
 
 /** null en una lista = no se pudo leer (pre-0257 o una caída): no es «no hay». */
@@ -120,7 +143,7 @@ function when(iso: string | null): string {
   return Number.isFinite(t) ? DATE_TIME.format(new Date(t)) : "—";
 }
 
-const MODE_TONE: Record<InvoiceMode, BadgeTone> = { apagado: "neutral", simulacion: "info", real: "ok" };
+const MODE_TONE: Record<InvoiceMode, BadgeTone> = { apagado: "neutral", simulacion: "info", manual: "brand", real: "ok" };
 
 const STATUS_TONE: Record<InvoiceStatus, BadgeTone> = {
   simulada: "info",
@@ -131,12 +154,21 @@ const STATUS_TONE: Record<InvoiceStatus, BadgeTone> = {
   externa: "neutral",
 };
 
-/** Qué hace cada modo, en una línea (MOM §35.8). */
-const MODE_HELP: Record<InvoiceMode, string> = {
+/**
+ * Qué hace cada modo, en una línea (MOM §35.8). «Manual» es el paso entre la
+ * simulación y lo automático (owner, 15-10-2026): las primeras boletas reales
+ * salen una a una y se revisan en SimpleFact antes de pasar a Real.
+ */
+export const MODE_HELP: Record<InvoiceMode, string> = {
   apagado: "No revisa ni emite nada.",
   simulacion: "Revisa cada pedido y guarda la boleta que habría enviado, sin mandarla a SimpleFact.",
-  real: "Emite la boleta en SimpleFact, que la manda a SUNAT. Pide token, «Emitir desde» y una prueba de conexión que leyó este RUC.",
+  manual:
+    "Revisa y simula como Simulación; tú emites cada boleta con «Emitir esta boleta» en el pedido. Pide lo mismo que Real.",
+  real: "Automático: el barrido emite cada boleta en SimpleFact, que la manda a SUNAT. Pide token, «Emitir desde» y una prueba de conexión que leyó este RUC.",
 };
+
+/** Los modos en el orden en que se enciende un RUC. */
+const MODE_ORDER: readonly InvoiceMode[] = ["apagado", "simulacion", "manual", "real"];
 
 function ModeBadge({ mode }: { mode: InvoiceMode }) {
   return <Badge tone={MODE_TONE[mode] ?? "neutral"}>{INVOICE_MODE_LABEL[mode] ?? mode}</Badge>;
@@ -161,7 +193,7 @@ function TokenField({ id, set }: { id: string; set: boolean }) {
       hint={
         <p>
           Se guarda <strong>cifrado</strong> y no se vuelve a mostrar. Pégalo aquí, nunca en un chat. Cambiarlo pide
-          volver a probar la conexión: un RUC en Real baja a Simulación.
+          volver a probar la conexión: un RUC en Manual o en Real baja a Simulación.
         </p>
       }
     >
@@ -273,12 +305,13 @@ function FormFooter({
 }
 
 /**
- * Los campos de un RUC. `issuer` null = alta: nace Apagado, y Real no se ofrece
- * porque pide una prueba de conexión que un RUC nuevo todavía no tiene.
+ * Los campos de un RUC. `issuer` null = alta: nace Apagado, y Manual y Real no
+ * se ofrecen porque piden una prueba de conexión que un RUC nuevo todavía no
+ * tiene.
  */
 function IssuerFields({ idPrefix, issuer }: { idPrefix: string; issuer: InvoiceIssuerView | null }) {
   const id = (name: string) => `${idPrefix}-${name}`;
-  const modes: InvoiceMode[] = issuer ? ["apagado", "simulacion", "real"] : ["apagado", "simulacion"];
+  const modes: readonly InvoiceMode[] = issuer ? MODE_ORDER : ["apagado", "simulacion"];
   return (
     <div className={cn(ROW, "grid gap-x-4 gap-y-5 sm:grid-cols-2")}>
       <Field label="RUC" htmlFor={id("ruc")}>
@@ -330,12 +363,12 @@ function IssuerFields({ idPrefix, issuer }: { idPrefix: string; issuer: InvoiceI
         htmlFor={id("mode")}
         hint={
           <ul className="space-y-1">
-            {(["apagado", "simulacion", "real"] as const).map((m) => (
+            {MODE_ORDER.map((m) => (
               <li key={m}>
                 <strong>{INVOICE_MODE_LABEL[m]}:</strong> {MODE_HELP[m]}
               </li>
             ))}
-            {!issuer && <li>Un RUC nuevo pasa a Real después de probar su conexión.</li>}
+            {!issuer && <li>Un RUC nuevo pasa a Manual o a Real después de probar su conexión.</li>}
           </ul>
         }
       >
@@ -372,7 +405,8 @@ function IssuerFields({ idPrefix, issuer }: { idPrefix: string; issuer: InvoiceI
           hint={
             <p>
               Boletas por día de Lima, de {INVOICE_DAILY_LIMIT_MIN} a {INVOICE_DAILY_LIMIT_MAX}. Cuenta lo emitido, lo
-              que se está emitiendo y lo que está en duda; lo que pasa del tope sale al día siguiente.
+              que se está emitiendo y lo que está en duda; lo que pasa del tope sale al día siguiente. En Manual, lo
+              simulado y lo emitido con el botón cuentan cada uno por su lado.
             </p>
           }
         >
@@ -407,10 +441,13 @@ function CheckLine({ issuer: i }: { issuer: InvoiceIssuerView }) {
   if (!i.checkedAt) {
     // Como lo guardó quien lo escribió, sin el punto final: la frase sigue.
     const why = (i.checkError ?? "").trim().replace(/[.\s]+$/, "");
+    // «o a Manual»: Manual también manda boletas a SUNAT y la base le exige la
+    // misma prueba que a Real (0261). Decir solo Real dejaba creer que a Manual
+    // se podía volver sin probar.
     if (why && i.mode === "apagado") {
       return (
         <span className="text-crit-fg">
-          Apagado por Kapta: {why}. Prueba la conexión antes de volver a Real.
+          Apagado por Kapta: {why}. Prueba la conexión antes de volver a Real o a Manual.
         </span>
       );
     }
@@ -426,7 +463,8 @@ function CheckLine({ issuer: i }: { issuer: InvoiceIssuerView }) {
     }
     return (
       <span className="text-ink-500">
-        Sin probar. «Probar conexión» lee las ventas de la cuenta y confirma de qué RUC son: sin eso no pasa a Real.
+        Sin probar. «Probar conexión» lee las ventas de la cuenta y confirma de qué RUC son: sin eso no pasa a Manual
+        ni a Real.
       </span>
     );
   }
@@ -453,6 +491,11 @@ function CheckLine({ issuer: i }: { issuer: InvoiceIssuerView }) {
   );
 }
 
+/**
+ * Lo de hoy del RUC. «Emitidas» cuenta las reales de hoy en cualquier modo: en
+ * Manual son las que salieron con «Emitir esta boleta», y son las que hay que
+ * revisar en SimpleFact antes de pasar a Real.
+ */
 function TodayCounts({ issuer: i }: { issuer: InvoiceIssuerView }) {
   if (!i.today) return <p className={HELP}>No se pudo leer lo de hoy.</p>;
   const items: Array<[string, number, string]> = [
@@ -704,7 +747,57 @@ function AccountRow({
 
 const RECENT_COLS = "sm:grid-cols-[7.5rem_minmax(0,1fr)_minmax(0,1.3fr)_7.5rem_minmax(0,1fr)_5.5rem]";
 
-function RecentList({ rows }: { rows: InvoiceRecentView[] }) {
+/**
+ * «Emitir» de una simulada (owner, 15-10-2026): la misma acción, la misma
+ * confirmación y los mismos candados que «Emitir esta boleta» del drawer, con
+ * lo mismo que confirmaría el drawer (`offer`: el RUC y el total de ahora). Lo
+ * que contesta se queda en la fila; después la página se refresca y, si salió
+ * la real, la fila ya no lleva el botón. Con una respuesta a la vista el botón
+ * no vuelve: para intentar otra vez, se abre el pedido.
+ */
+function RecentEmit({ row, offer }: { row: InvoiceRecentView; offer: InvoicePanelEmitNow }) {
+  const [outcome, setOutcome] = useState<EmitInvoiceState | null>(null);
+  const [refreshing, startRefresh] = useTransition();
+  const router = useRouter();
+  return (
+    <div className="space-y-2 sm:col-span-full">
+      {!outcome && (
+        <EmitInvoiceControl
+          label="Emitir"
+          emit={offer}
+          pending={refreshing}
+          onEmit={async () => {
+            let res: EmitInvoiceState;
+            try {
+              res = await emitInvoiceAction(row.orderId, { issuerId: offer.issuerId, total: offer.total });
+            } catch {
+              // La acción no llegó o no volvió: pudo haber salido. Se dice así.
+              res = {
+                error:
+                  "No se pudo completar la acción. Antes de intentar de nuevo, abre el pedido: si quedó «Emitiendo» o «En duda», búscala en SimpleFact.",
+              };
+            }
+            setOutcome(res);
+            startRefresh(() => router.refresh());
+          }}
+        />
+      )}
+      {outcome && <EmitOutcome state={outcome} />}
+    </div>
+  );
+}
+
+function RecentList({
+  rows,
+  issuers,
+  canEmit,
+}: {
+  rows: InvoiceRecentView[];
+  /** Los RUC de la organización: la razón social y el modo de cada uno. */
+  issuers: InvoiceIssuerView[];
+  /** Quien mira tiene «Boletas y facturas». */
+  canEmit: boolean;
+}) {
   return (
     <>
       <div
@@ -757,6 +850,16 @@ function RecentList({ rows }: { rows: InvoiceRecentView[] }) {
                 </p>
               )
             )}
+            {(() => {
+              // Solo una simulada que la página marcó (el drawer ofrecería el
+              // botón), de un RUC que sigue en «Manual» en lo que se ve, y solo
+              // a quien gestiona.
+              const offer = r.emitNow;
+              const issuer = offer ? issuers.find((i) => i.id === offer.issuerId) : undefined;
+              return canEmit && offer && r.status === "simulada" && issuer?.mode === "manual" ? (
+                <RecentEmit row={r} offer={offer} />
+              ) : null;
+            })()}
           </li>
         ))}
       </ul>
@@ -789,9 +892,12 @@ export function InvoiceSettingsSection({
 
   const issuers = data.issuers;
   const real = issuers?.filter((i) => i.mode === "real").length ?? 0;
+  const manual = issuers?.filter((i) => i.mode === "manual").length ?? 0;
   const sim = issuers?.filter((i) => i.mode === "simulacion").length ?? 0;
   const badge = !issuers ? undefined : real ? (
     <Badge tone="ok">En real</Badge>
+  ) : manual ? (
+    <Badge tone="brand">En manual</Badge>
   ) : sim ? (
     <Badge tone="info">En simulación</Badge>
   ) : (
@@ -809,7 +915,8 @@ export function InvoiceSettingsSection({
           <p>
             La boleta la emite <strong>la empresa que recibió el pago</strong>, en su cuenta de SimpleFact: una por
             pedido, cuando lo validado cubre el total y hasta S/ 700. Cada RUC nace <strong>apagado</strong>; se
-            prueba en Simulación antes de pasar a Real.
+            prueba en Simulación, sus primeras boletas reales se emiten una a una en Manual y recién después pasa a
+            Real, donde el barrido las emite solo.
           </p>
           <p>
             El RUC sale de la cuenta que recibió el dinero. Bajo cada cuenta se ven las{" "}
@@ -882,7 +989,7 @@ export function InvoiceSettingsSection({
         ) : data.recent.length === 0 ? (
           <EmptyRow>Todavía no hay comprobantes: con los RUC apagados no se revisa ni se emite nada.</EmptyRow>
         ) : (
-          <RecentList rows={data.recent} />
+          <RecentList rows={data.recent} issuers={issuers ?? []} canEmit={data.canManage} />
         )}
       </div>
     </SettingsSection>

@@ -23,16 +23,41 @@ import type { PaymentGateway } from "@/lib/payment-gateway";
 
 // ── Constantes ───────────────────────────────────────────────────────────────
 
-export const INVOICE_MODES = ["apagado", "simulacion", "real"] as const;
+/**
+ * Los modos de un RUC (MOM §35.8). «Manual» es el paso entre la simulación y lo
+ * automático (owner, 15-10-2026): el barrido solo simula, y una persona con
+ * `invoices.manage` emite pedido por pedido con «Emitir esta boleta», con los
+ * mismos candados que el barrido en real. Las primeras boletas reales salen una
+ * a una y se revisan en SimpleFact antes de pasar a «Real».
+ */
+export const INVOICE_MODES = ["apagado", "simulacion", "manual", "real"] as const;
 export type InvoiceMode = (typeof INVOICE_MODES)[number];
-/** Los modos que escriben un comprobante: apagado no hace nada. */
-export type InvoiceWriteMode = Exclude<InvoiceMode, "apagado">;
+/** Los modos encendidos: los que el barrido mira. */
+export type InvoiceEnabledMode = Exclude<InvoiceMode, "apagado">;
+/**
+ * Los modos de un comprobante (`order_invoices.mode`, 0257): la simulación y lo
+ * enviado. Un RUC en «Manual» escribe de los dos: el barrido simula y la
+ * persona que pulsa «Emitir esta boleta» envía.
+ */
+export type InvoiceWriteMode = Extract<InvoiceMode, "simulacion" | "real">;
 
 export const INVOICE_MODE_LABEL: Record<InvoiceMode, string> = {
   apagado: "Apagado",
   simulacion: "Simulación",
+  manual: "Manual",
   real: "Real",
 };
+
+/**
+ * Bajo qué modo barre el barrido un RUC: el de la fila que escribe su turno. En
+ * «Manual» el barrido no envía nada, simula como en «Simulación»: lo real lo
+ * emite una persona. Apagado no se barre (null).
+ */
+export function invoiceSweepMode(mode: InvoiceMode): InvoiceWriteMode | null {
+  if (mode === "real") return "real";
+  if (mode === "simulacion" || mode === "manual") return "simulacion";
+  return null;
+}
 
 export const INVOICE_STATUSES = [
   "simulada",
@@ -296,6 +321,15 @@ export const INVOICE_REASONS = [
   "pedido",
   "ruc_ajeno",
   "sin_boleta",
+  // El turno pidió un modo en que el RUC no está (0261). «Emitir esta boleta»
+  // también lo dice antes del turno, justo después de `ruc_apagado`: emitir a
+  // mano pide un RUC en «Manual» (o «Real»). Va aquí, y no en la tabla de §35.3,
+  // porque esa tabla es la del barrido, que nunca pide otro modo que el suyo.
+  "modo_distinto",
+  // «Emitir esta boleta» (`emitInvoiceNow`, lib/invoicing/server.ts): lo que no
+  // es del pedido sino de Kapta, y que la persona que pulsó tiene que leer.
+  "sin_migracion",
+  "turno_fallido",
 ] as const;
 export type InvoiceReason = (typeof INVOICE_REASONS)[number];
 
@@ -338,6 +372,9 @@ export const INVOICE_REASON_LABEL: Record<InvoiceReason, string> = {
   pedido: "El pedido no es de esta tienda.",
   ruc_ajeno: "El RUC no es de la organización de la tienda.",
   sin_boleta: "No se pudo armar la boleta.",
+  modo_distinto: "El RUC no está en ese modo.",
+  sin_migracion: "Falta aplicar una migración de comprobantes: no se emitió nada.",
+  turno_fallido: "El turno de la base no respondió como se esperaba: no se envió nada a SimpleFact.",
 };
 
 // ── A qué cuenta entró cada pago (MOM §35.2) ─────────────────────────────────
@@ -503,6 +540,18 @@ const fail = (reason: InvoiceReason, detail?: string, issuerId?: string | null):
   ...(issuerId !== undefined ? { issuerId } : {}),
 });
 
+export interface InvoiceEligibilityOptions {
+  /**
+   * «Emitir esta boleta» (§35.7): una persona emite ESTE pedido ahora. Se
+   * evalúa como una emisión real del barrido —cuentan el comprobante real vivo,
+   * el error sin reintento y la conexión del RUC; una simulación no frena—, y el
+   * RUC tiene que estar en «Manual» o en «Real»; si no, `modo_distinto`. Sin
+   * esto (el barrido y el panel) un RUC en «Manual» se evalúa como en
+   * «Simulación»: el barrido no emite por él.
+   */
+  emitNow?: boolean;
+}
+
 /**
  * ¿Este pedido lleva comprobante, de qué RUC y en qué modo? Las condiciones van
  * en el orden de MOM §35.3 y la primera que falla es el motivo.
@@ -511,7 +560,10 @@ const fail = (reason: InvoiceReason, detail?: string, issuerId?: string | null):
  * céntimo) y el turno en la base (`invoice_claim`) vienen después y vuelven a
  * revisar lo que pueden.
  */
-export function invoiceEligibility(facts: InvoiceOrderFacts): InvoiceEligibility {
+export function invoiceEligibility(
+  facts: InvoiceOrderFacts,
+  opts: InvoiceEligibilityOptions = {},
+): InvoiceEligibility {
   // 1. Anulado, reembolsado, en soles.
   if (facts.cancelledAt) return fail("anulado");
   const refunded = Number(facts.totalRefunded ?? 0);
@@ -575,8 +627,18 @@ export function invoiceEligibility(facts: InvoiceOrderFacts): InvoiceEligibility
   if (totalCents > BOLETA_MAX_CENTS) return fail("monto_mayor_700", undefined, issuer.id);
 
   // 7. RUC encendido.
-  if (issuer.mode === "apagado") return fail("ruc_apagado", undefined, issuer.id);
-  const mode: InvoiceWriteMode = issuer.mode;
+  const sweepMode = invoiceSweepMode(issuer.mode);
+  if (sweepMode === null) return fail("ruc_apagado", undefined, issuer.id);
+  // Emitir a mano es una emisión real, y solo la hace un RUC que emite de
+  // verdad: en «Manual» (para eso existe) o en «Real» (los mismos candados que
+  // el barrido). Un RUC en «Simulación» no tiene su token probado para emitir:
+  // la base no lo deja pasar a real sin esa prueba (0257), y aquí tampoco.
+  if (opts.emitNow && issuer.mode !== "manual" && issuer.mode !== "real") {
+    return fail("modo_distinto", `El RUC está en «${INVOICE_MODE_LABEL[issuer.mode]}».`, issuer.id);
+  }
+  // Sin `emitNow`, un RUC en «Manual» se evalúa como en «Simulación»: es lo
+  // que hace el barrido con él.
+  const mode: InvoiceWriteMode = opts.emitNow ? "real" : sweepMode;
 
   // 8. Pagado desde «Emitir desde». Quedó pagado cuando entró a Kapta el ÚLTIMO
   // de sus pagos validados (`registered_at`, que no cambia nunca), o en la fecha
