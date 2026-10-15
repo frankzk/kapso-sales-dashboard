@@ -510,7 +510,8 @@ Registro:
   es opcional.
 - Los comentarios y el cambio manual de estado **no** son registro de gestión.
   El cambio manual es un override que congela el pedido frente al recálculo:
-  usarlo como bitácora de llamadas lo desconecta del MOM.
+  usarlo como bitácora de llamadas lo desconecta del MOM. Desde el 15-10-2026,
+  además, el cambio manual es solo de owner y admin (`master.set_status`, §16).
 - **El congelamiento es frente a lo automático, no frente a otra persona.**
   Anular el pedido en Shopify también lo decide alguien, así que entre dos
   decisiones humanas manda la más reciente: una anulación **posterior** al cambio
@@ -1219,8 +1220,8 @@ corresponde. Queda con actor, fecha y motivo sobre el pedido anterior:
   entregada: esa puerta es del courier (§11). Lo que cambia es el pedido.
 - **Entrega declarada** se cierra cuando el pedido pasa a `entregado` —lo
   reporta el courier o se confirma a mano, y desde ahí manda la liquidación— o
-  cuando alguien fija el estado en «Gestión manual» después de la declaración,
-  también si resultó falsa. Una declaración sin salida sería otro pedido
+  cuando un admin fija el estado en «Gestión manual» después de la declaración
+  (solo owner y admin, §16, 15-10-2026), también si resultó falsa. Una declaración sin salida sería otro pedido
   atascado.
 - **La pérdida declarada abre la indemnización** igual que la solicitud formal;
   finanzas la completa con monto y la cierra con «Resolver indemnización».
@@ -1763,7 +1764,8 @@ Reglas:
   toca, como ya hacía «Abrir Mesa de cierre ↓».
 - El motivo nombra **dónde se arregla**, porque hay dos «reabrir» y no sirven
   para lo mismo: el del expediente vive en la **Mesa de cierre** y el del estado
-  en **Gestión manual → Registrar estado**. Un aviso que manda a un panel
+  en **Gestión manual → Registrar estado**, que desde el 15-10-2026 solo ve un
+  admin (§16): el aviso dice que lo reabre un admin. Un aviso que manda a un panel
   inexistente es peor que no decir nada — el de Tanders mandaba a «Estado del
   pedido», que no existe con ese nombre.
 - La frase la escribe una sola función para las tres pantallas. Cuando cada una
@@ -3306,7 +3308,9 @@ Marcar `recogido`, `entregado`, `disponible_para_recojo` o cualquier otro estado
 que signifique que la caja ya está en la sucursal **exige que exista una salida**.
 Si el pedido es de cobertura Agencia y no consta ninguna, el Master pide **por qué
 agencia se envió** —Shalom u Olva— y registra la salida con la firma de quien
-marca. Sin courier elegido el marcado no se guarda.
+marca. Sin courier elegido el marcado no se guarda. Quien marca es, desde el
+15-10-2026, un owner o un admin: el estado a mano ya no es de «Gestionar
+pedidos» (§16).
 
 **Por qué.** Una salida es lo único por lo que el tablero sabe que un pedido se
 despachó. Un pedido que llega a la agencia sin ella desaparece de los indicadores
@@ -6486,7 +6490,11 @@ sin entrega). La simulación muestra qué saldría hoy sin enviar nada.
   días al 13-10, segundos después de consultarla, con el paquete todavía en la
   agencia. Si la clienta la perdía y la pedía días después, «pedido cerrado» la
   bloqueaba, y la salida era devolver el pedido a «pendiente» a mano (motivo
-  «dar clave»). Ahora «entregado» solo cierra la clave si lo **validado** no
+  «dar clave»). Desde el 15-10-2026 ni ese marcado ni esa vuelta atrás los hace
+  una vendedora o asesora que dicta la clave: el estado a mano es de owner y
+  admin (§16), y el pedido sigue al rastreo de Shalom.
+
+  Desde el 13-10-2026, «entregado» solo cierra la clave si lo **validado** no
   cubre el total (o el checkout no lo cobró): con el dinero confirmado no hay
   nada que proteger. **Anulado y devuelto siguen cerrándola** siempre.
 - La clave pertenece a la salida Shalom: se registra, consulta y entrega desde
@@ -7280,7 +7288,8 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   operación ya hacía a mano pegando el número en `tracking.olvaexpress.pe`.
   La apikey es de Olva y la pueden rotar sin aviso: vive en el entorno
   (`OLVA_TRACKING_APIKEY`) y, cuando falle, **el cron reporta y no toca
-  estados**; el marcado a mano sigue siendo el camino de respaldo.
+  estados**; el marcado a mano sigue siendo el camino de respaldo, y desde el
+  15-10-2026 lo hace un admin (§16).
 - **Manda el estado que Olva declara vigente** (`nombre_estado_tracking`), no el
   hito «más avanzado» como en Shalom. Se comprobó en un envío real: asignado a
   un operador el 09/09, confirmado en tienda el 10/09 y asignado de nuevo el
@@ -7873,7 +7882,7 @@ registra en cada evento.
   | Despacho y Grupo GF | Gestionar pedidos, despachar, entregar la caja al motorizado, reprogramar entregas en Lima (§9.5), armar rutas, reportar entregas por un motorizado, subir reportes de couriers, manejar stock de Swayp y Fénix, preparar paquetes, crear guías, recibir devoluciones |
   | Liquidaciones | Gestionar pedidos, subir y cerrar liquidaciones de motorizados, cuadrar hojas de couriers, conciliar el dinero del pedido |
   | Cobranza | Gestionar pedidos, subir comprobantes, ver y registrar claves de recojo, aprobar cobros de Tanders rechazados |
-  | Supervisión | Gestionar pedidos, corregir pedidos cerrados, cerrar o reabrir pedidos, anular guías de Aliclik, recibir devoluciones, reingresar al inventario, ver reportes del negocio |
+  | Supervisión | Gestionar pedidos, registrar la devolución de pedidos cerrados, cerrar o reabrir el expediente de cierre, anular guías de Aliclik, recibir devoluciones, reingresar al inventario, ver reportes del negocio (el estado a mano, no: es de admin) |
   | Administración | Gestionar pedidos, gestionar el equipo, administrar tiendas, editar costos, manejar stock, editar el catálogo de Aliclik, asignar producto a anuncios, configurar hojas de couriers, dar de alta motorizados, subir reportes de couriers, ver reportes del negocio |
 
   Reglas:
@@ -7885,6 +7894,9 @@ registra en cada evento.
     Grupo GF, exportar datos, boletas y facturas), ni confirmar reembolsos. Lo
     fija una prueba.
   - Una revocación puntual sigue ganando sobre cualquier rol.
+  - «Gestionar pedidos» ya **no** incluye cambiar el estado a mano
+    (15-10-2026, abajo): eso es «Registrar estado a mano»
+    (`master.set_status`), de owner y admin, y ningún rol lo trae.
   - Solo el dueño asigna o quita roles. Equipo muestra, para cada persona, lo
     que puede hacer hoy y de dónde le viene (ver «Glosario de Equipo»).
   - Lo que el código decidía con «¿es owner o admin?» ahora pide un permiso:
@@ -7898,7 +7910,8 @@ registra en cada evento.
     la misma regla: armar rutas ← Despacho, cerrar liquidaciones ←
     Liquidaciones, costos ← Administración.
 
-  Mientras nadie tenga roles, todos ven y pueden lo mismo que antes. Antes de
+  Mientras nadie tenga roles, todos ven y pueden lo mismo que antes, salvo el
+  estado a mano, que desde el 15-10-2026 es solo de owner y admin. Antes de
   bajar a alguien de admin a vendedora hay que darle acceso explícito a sus
   tiendas (`user_store_access`): owner y admin ven todas las tiendas de la
   organización sin esa lista.
@@ -7945,6 +7958,52 @@ registra en cada evento.
 
   `test/escrituras-piden-permiso.test.ts` falla si una acción de Repro
   Provincia vuelve a escribir sin pedir permiso.
+- **El estado a mano es de un admin (15-10-2026).** Decisión del dueño, con
+  sus palabras: «solo quienes tienen acceso de Admin pueden realizar esa
+  acción». La acción es **Gestión manual → Registrar estado** en la ficha del
+  pedido y **Registrar estado…** en la barra de lote del Master: cambiar a mano
+  el estado general y el operativo de un pedido, un cambio que **congela** el
+  pedido frente al recálculo (§6.1). Pedía «Gestionar pedidos» (`master.edit`),
+  que traen el paquete de la vendedora y los siete roles por función.
+  - **Permiso propio: `master.set_status`** («Registrar estado a mano»). Lo
+    tienen **owner y admin por su acceso**. No se concede uno por uno en
+    **Equipo** ni lo trae ningún rol, tampoco Supervisión, que corrige pedidos
+    cerrados (`master.override_status`) y aun así no cambia estados a mano.
+    Una revocación puntual se lo quita a un admin, como cualquier permiso.
+  - **Lo exige el servidor**, en la **organización del pedido**
+    (`hasOrgPermission`, no la unión de las de la persona: ser admin en otra
+    empresa no sirve), después de comprobar que el pedido se ve y antes de leer
+    o escribir nada más. El lote no intenta ningún pedido sin el permiso y
+    después lo pregunta pedido por pedido. Responde «Solo un admin puede
+    registrar el estado a mano.» (`setOrderStatus`, `applyOrderStatusBulk`).
+  - **No cambia lo demás.** `master.edit` sigue haciendo falta, y un pedido
+    cerrado pide además `master.override_status` y motivo
+    (`closedStatusChangeError`). Comentar, registrar la devolución, corregir el
+    vínculo de una guía, confirmar, crear salidas y el resto de escrituras del
+    Master siguen con «Gestionar pedidos».
+  - **En pantalla.** Sin el permiso, la ficha no pinta la tarjeta y deja en su
+    sitio «Registrar el estado a mano lo hace un admin.»; la barra de lote no
+    ofrece «Registrar estado…». Los avisos que mandan a reabrir un pedido
+    cerrado dicen que lo hace un admin (`REOPEN_HINT`), y la entrega declarada
+    de la Mesa de cierre, que el estado lo fija un admin.
+  - **No son «Registrar estado»**, y siguen con su permiso: «Registrar
+    devolución» (§13; escribe `devuelto` solo con despacho y guía), las
+    entregas por la puerta única de Rutas, Liquidaciones 1 y 2 y Urpi (§11.4,
+    §29.12, §30.8), anular una guía de Aliclik (`aliclik.cancel_guide`), el
+    resultado del courier y el estado de la guía en Repro Provincia (son de la
+    salida, no del pedido: principio 8, §2), la gestión de confirmación (§8),
+    el pedido acompañante (§32) y finalizar o reabrir el expediente en la Mesa
+    de cierre.
+  - **Lo que deja de hacer el equipo.** Marcar «Entregado» al dictar la clave
+    de Shalom (469 veces en los 30 días al 13-10, §12), el marcado a mano de
+    los pedidos de Agencia (§10) y el respaldo de Olva cuando su rastreo falla
+    (§12): ahora el estado sigue al rastreo y, cuando haga falta a mano, lo
+    registra un admin.
+
+  `test/estado-a-mano-solo-admin.test.ts` lo fija contra la acción de verdad, y
+  `test/escrituras-piden-permiso.test.ts` falla si otra acción de
+  `app/dashboard/pedidos/actions.ts` (salvo `registerReturn`) escribe un
+  `status_override` sin preguntarlo.
 
 ### 16.1 Bandeja de validación de pagos
 

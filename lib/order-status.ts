@@ -201,6 +201,17 @@ export function closedStatusChangeError(
   if (!reason.trim()) return "Describe el motivo del cambio: quedará en el historial.";
   return null;
 }
+/**
+ * Cambiar a mano el estado de un pedido es de owner y admin
+ * (`master.set_status`). Decisión del dueño del 15-10-2026, con sus palabras:
+ * «solo quienes tienen acceso de Admin pueden realizar esa acción» (MOM §16).
+ * Lo dice el servidor al rechazarlo y, en la ficha, la línea que queda donde
+ * estaba la tarjeta «Registrar estado». Viven aquí y no en las acciones porque
+ * un archivo "use server" solo exporta funciones.
+ */
+export const SET_STATUS_DENIED = "Solo un admin puede registrar el estado a mano.";
+export const SET_STATUS_ADMIN_NOTE = "Registrar el estado a mano lo hace un admin.";
+
 /** Estados operativos válidos para un estado general dado (para los selectores). */
 export function operationalStatusesFor(general: GeneralStatus): OperationalStatusDef[] {
   return OPERATIONAL_STATUSES.filter((s) => s.general === general);
@@ -214,9 +225,14 @@ export function operationalStatusesFor(general: GeneralStatus): OperationalStatu
  * panel que no existe con ese nombre. El que sí existe es «Gestión manual →
  * Registrar estado», al final de la pestaña Operar del pedido. Mandar a alguien a
  * un sitio inexistente es peor que no decirle nada: se pasa el rato buscándolo.
+ *
+ * Desde el 15-10-2026 esa tarjeta solo la ve un admin (`master.set_status`,
+ * MOM §16), y esta frase la leen sobre todo vendedoras y asesoras en los
+ * modales de guía: decirles «vuelve a abrirlo» las mandaba a buscar algo que
+ * ya no tienen. Dice quién lo hace y dónde, y sirve igual al admin que la lee.
  */
 export const REOPEN_HINT =
-  "Vuelve a abrirlo en «Gestión manual → Registrar estado», al final de la pestaña Operar del pedido.";
+  "Lo vuelve a abrir un admin en «Gestión manual → Registrar estado», al final de la pestaña Operar del pedido.";
 
 /**
  * Por qué un pedido cerrado no admite una salida nueva, y qué hacer.

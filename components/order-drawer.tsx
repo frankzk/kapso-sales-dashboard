@@ -130,6 +130,7 @@ import {
 } from "@/lib/order-coverage";
 import {
   GENERAL_STATUSES,
+  SET_STATUS_ADMIN_NOTE,
   daysInAgency,
   daysInStatus,
   generalLabel,
@@ -626,6 +627,7 @@ export function OrderDrawer({
   orderId,
   canEdit,
   canOverride,
+  canSetStatus,
   canCreateGuide,
   canCreateTandersGuide,
   canCreateShalomGuide,
@@ -641,6 +643,8 @@ export function OrderDrawer({
   orderId: string;
   canEdit: boolean;
   canOverride: boolean;
+  /** «Registrar estado» a mano (`master.set_status`): owner y admin, MOM §16. */
+  canSetStatus: boolean;
   canCreateGuide: boolean;
   canCreateTandersGuide: boolean;
   canCreateShalomGuide: boolean;
@@ -1907,6 +1911,7 @@ export function OrderDrawer({
                   <OrderActions
                     row={detail.row}
                     canOverride={canOverride}
+                    canSetStatus={canSetStatus}
                     pending={pending}
                     outputCount={detail.routePlan.outputCount}
                     onStatus={(general, operational, reason, agencyCourier) =>
@@ -3023,9 +3028,10 @@ function ConfirmationDesk({
   );
 }
 
-function OrderActions({
+export function OrderActions({
   row,
   canOverride,
+  canSetStatus,
   pending,
   outputCount,
   onStatus,
@@ -3035,6 +3041,14 @@ function OrderActions({
 }: {
   row: OrderMasterRow;
   canOverride: boolean;
+  /**
+   * La tarjeta «Registrar estado» solo la ven owner y admin
+   * (`master.set_status`). Decisión del dueño del 15-10-2026: «solo quienes
+   * tienen acceso de Admin pueden realizar esa acción» (MOM §16). El resto de
+   * «Gestión manual» —comentar, devolver, corregir vínculos— sigue con
+   * «Gestionar pedidos».
+   */
+  canSetStatus: boolean;
   pending: boolean;
   /** Cuántas salidas tiene el pedido, activas o no. Un pedido de agencia que
    *  llega a la sucursal con CERO salidas es el que hay que preguntar. */
@@ -3080,102 +3094,116 @@ function OrderActions({
     <section className="space-y-5">
       <SectionHead
         title="Gestión manual"
-        help="Registra el resultado operativo o deja una nota. Las correcciones excepcionales están separadas al final."
+        help={
+          canSetStatus
+            ? "Registra el resultado operativo o deja una nota. Las correcciones excepcionales están separadas al final."
+            : "Deja una nota. Las correcciones excepcionales están separadas al final."
+        }
       />
-      <div className={cn(CARD_ZONE, "space-y-3")}>
-        <h4 className="text-sm font-semibold text-ink-900">Registrar estado</h4>
-        <div className="grid gap-3 sm:grid-cols-2">
+      {/* Sin el permiso, una línea donde estaba la tarjeta: sin ella, quien la
+          usaba a diario la buscaría sin saber que ahora es de un admin. */}
+      {!canSetStatus && (
+        <p className="flex items-center gap-2 text-[13px] leading-5 text-ink-600">
+          <IconLock aria-hidden className="size-4 shrink-0 text-ink-500" />
+          {SET_STATUS_ADMIN_NOTE}
+        </p>
+      )}
+      {canSetStatus && (
+        <div className={cn(CARD_ZONE, "space-y-3")}>
+          <h4 className="text-sm font-semibold text-ink-900">Registrar estado</h4>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className={LABEL}>
+              Estado
+              <select
+                value={general}
+                onChange={(e) => setGeneral(e.target.value as GeneralStatus)}
+                className={cn(FIELD, "font-normal pointer-coarse:h-11")}
+              >
+                {GENERAL_STATUSES.map((s) => (
+                  <option key={s.code} value={s.code}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={LABEL}>
+              Detalle
+              <select
+                value={operational}
+                onChange={(e) => setOperational(e.target.value)}
+                className={cn(FIELD, "font-normal pointer-coarse:h-11")}
+              >
+                {options.map((o) => (
+                  <option key={o.code} value={o.code}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {changingClosed && (
+            <Banner tone="warn">
+              Este pedido ya está {generalLabel(row.general_status).toLowerCase()}. Cambiarlo exige un
+              motivo y queda registrado en el historial
+              {!canOverride && "; tu rol no lo permite"}.
+            </Banner>
+          )}
+          {/* UN PEDIDO DE AGENCIA NO PUEDE HABER LLEGADO SIN HABER SALIDO.
+              Medido el 09-09-2026: los pedidos de agencia cuyo estado viene del
+              rastreo de Shalom tienen salida el 100% de las veces (107 de 107); los
+              marcados a mano fallan el 18,5% (42 de 227). Son 43 pedidos y S/6.140
+              desde agosto invisibles para todo indicador de envío, y ocho seguían
+              en la agencia sin aviso de vencimiento, el más viejo de 62 días.
+              Se pregunta AQUÍ y no en un formulario aparte porque el formulario
+              aparte ya existe —la salida manual admite Olva— y no se usó ni una vez
+              en 40 días contra 866 salidas de Shalom. */}
+          {needsAgencyCourier && (
+            <Banner tone="warn" title="¿Por qué agencia se envió?">
+              <p>
+                Este pedido no tiene ninguna salida registrada. Queda como salida con tu firma, y sin
+                ella el pedido no aparece en los indicadores de envío ni en el aviso de vencimiento en
+                agencia.
+              </p>
+              <select
+                value={agencyCourier}
+                onChange={(e) => setAgencyCourier(e.target.value)}
+                aria-label="Agencia por la que se envió"
+                className={cn(FIELD_BOX, "mt-2 h-9 w-auto px-3 pointer-coarse:h-11")}
+              >
+                <option value="">Elige la agencia…</option>
+                {AGENCY_COURIER_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </Banner>
+          )}
           <label className={LABEL}>
-            Estado
-            <select
-              value={general}
-              onChange={(e) => setGeneral(e.target.value as GeneralStatus)}
+            {changingClosed ? "Motivo (obligatorio)" : "Motivo u observación"}
+            <input
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder={changingClosed ? "Por qué se corrige un pedido cerrado" : "Opcional"}
               className={cn(FIELD, "font-normal pointer-coarse:h-11")}
-            >
-              {GENERAL_STATUSES.map((s) => (
-                <option key={s.code} value={s.code}>
-                  {s.label}
-                </option>
-              ))}
-            </select>
+            />
           </label>
-          <label className={LABEL}>
-            Detalle
-            <select
-              value={operational}
-              onChange={(e) => setOperational(e.target.value)}
-              className={cn(FIELD, "font-normal pointer-coarse:h-11")}
+          <div className="pt-1">
+            <OpsButton
+              variant="primary"
+              disabled={
+                pending ||
+                (changingClosed && (!canOverride || !reason.trim())) ||
+                (needsAgencyCourier && !agencyCourier)
+              }
+              onClick={() => onStatus(general, operational, reason, agencyCourier || undefined)}
+              className="pointer-coarse:h-11"
             >
-              {options.map((o) => (
-                <option key={o.code} value={o.code}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </label>
+              Guardar estado
+            </OpsButton>
+          </div>
         </div>
-        {changingClosed && (
-          <Banner tone="warn">
-            Este pedido ya está {generalLabel(row.general_status).toLowerCase()}. Cambiarlo exige un
-            motivo y queda registrado en el historial
-            {!canOverride && "; tu rol no lo permite"}.
-          </Banner>
-        )}
-        {/* UN PEDIDO DE AGENCIA NO PUEDE HABER LLEGADO SIN HABER SALIDO.
-            Medido el 09-09-2026: los pedidos de agencia cuyo estado viene del
-            rastreo de Shalom tienen salida el 100% de las veces (107 de 107); los
-            marcados a mano fallan el 18,5% (42 de 227). Son 43 pedidos y S/6.140
-            desde agosto invisibles para todo indicador de envío, y ocho seguían
-            en la agencia sin aviso de vencimiento, el más viejo de 62 días.
-            Se pregunta AQUÍ y no en un formulario aparte porque el formulario
-            aparte ya existe —la salida manual admite Olva— y no se usó ni una vez
-            en 40 días contra 866 salidas de Shalom. */}
-        {needsAgencyCourier && (
-          <Banner tone="warn" title="¿Por qué agencia se envió?">
-            <p>
-              Este pedido no tiene ninguna salida registrada. Queda como salida con tu firma, y sin
-              ella el pedido no aparece en los indicadores de envío ni en el aviso de vencimiento en
-              agencia.
-            </p>
-            <select
-              value={agencyCourier}
-              onChange={(e) => setAgencyCourier(e.target.value)}
-              aria-label="Agencia por la que se envió"
-              className={cn(FIELD_BOX, "mt-2 h-9 w-auto px-3 pointer-coarse:h-11")}
-            >
-              <option value="">Elige la agencia…</option>
-              {AGENCY_COURIER_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </Banner>
-        )}
-        <label className={LABEL}>
-          {changingClosed ? "Motivo (obligatorio)" : "Motivo u observación"}
-          <input
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            placeholder={changingClosed ? "Por qué se corrige un pedido cerrado" : "Opcional"}
-            className={cn(FIELD, "font-normal pointer-coarse:h-11")}
-          />
-        </label>
-        <div className="pt-1">
-          <OpsButton
-            variant="primary"
-            disabled={
-              pending ||
-              (changingClosed && (!canOverride || !reason.trim())) ||
-              (needsAgencyCourier && !agencyCourier)
-            }
-            onClick={() => onStatus(general, operational, reason, agencyCourier || undefined)}
-            className="pointer-coarse:h-11"
-          >
-            Guardar estado
-          </OpsButton>
-        </div>
-      </div>
+      )}
 
       <div className={cn(CARD_ZONE, "space-y-3")}>
         <h4 className="text-sm font-semibold text-ink-900">Comentario</h4>
