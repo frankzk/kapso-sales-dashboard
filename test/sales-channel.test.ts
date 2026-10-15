@@ -13,7 +13,7 @@ describe("canal de venta (MOM §3, 15-10-2026)", () => {
     expect(salesChannel(["easysell_cod_form", "CONFIRMADO", "draft_order_for_checkout_button"])).toBe("web_formulario");
     expect(salesChannel(["easysell_cod_form", "easysell-abandoned-checkout"])).toBe("web_carrito");
     expect(salesChannel(["venta_manual", "Rosario"])).toBe("asesora");
-    expect(salesChannel(["kapso", "carrito_recuperado"])).toBe("asesora");
+    expect(salesChannel(["venta_manual", "kapso"])).toBe("asesora");
     expect(salesChannel(["aurela", "contraentrega", "kapso", "whatsapp"])).toBe("chatbot");
     expect(salesChannel(["BOT", "CARRITO RECUPERADO"])).toBe("bot_carritos");
     expect(salesChannel(["BOT (whatsapp_cloud)"])).toBe("bot_carritos");

@@ -433,6 +433,10 @@ describe("las tres vías que crean pedidos ya no inventan `kapso`", () => {
     const gen = src.slice(src.indexOf("export async function generateOrder"));
     expect(gen).toContain("insertOrderIfAbsent(admin, {");
     expect(gen).not.toMatch(/tags:\s*reuseExistingDraft\s*\?\s*\[\s*"kapso"/);
+    // Ni la conversación del lead: el borrador no la lleva a Shopify, y con
+    // ella el Master clasificaría el carrito reusado como «Chatbot».
+    const insert = gen.slice(gen.indexOf("insertOrderIfAbsent(admin, {"));
+    expect(insert.slice(0, insert.indexOf("});"))).toContain("kapso_conversation_id: null,");
     expect(gen).not.toContain('nowIso.slice(0, 10)');
     expect(gen).toContain("recomputeRollupsForLocalDay(admin, ctx.storeId, nowIso)");
   });

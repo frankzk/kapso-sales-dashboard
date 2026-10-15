@@ -2804,7 +2804,9 @@ export async function generateOrder(
     stock_por_validar: false,
     shipping_mode: "cod",
     line_items: products,
-    kapso_conversation_id: l.kapso_conversation_id ?? null,
+    // El borrador no lleva la conversación de Kapso, así que Shopify la trae
+    // vacía; con la del lead, el Master vería «Chatbot» hasta el webhook.
+    kapso_conversation_id: null,
   });
   if (orderErr || !internalOrderId) {
     return { error: `Pedido generado en Shopify, pero no se pudo registrar localmente: ${orderErr ?? "error"}` };

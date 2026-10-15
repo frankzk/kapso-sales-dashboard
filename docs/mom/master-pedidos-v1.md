@@ -72,11 +72,11 @@ que la herramienta donde quedó escrita—:
 
 | Canal | Etiqueta en Shopify | 45 días al 15-10-2026 |
 | --- | --- | --- |
-| Asesora (Leads) | `venta_manual`, `carrito_recuperado` | 15 % |
+| Asesora (Leads) | `venta_manual` (la regla también acepta `carrito_recuperado`, pero esa era una etiqueta solo de la copia local: ningún pedido de Shopify la lleva y desde §17.3 nadie la escribe) | 15 % |
 | Chatbot WhatsApp | `kapso`, `whatsapp`, o el pedido trae conversación de Kapso | 9 % |
 | Bot de carritos | `CARRITO RECUPERADO`, `BOT`, `BOT (whatsapp_cloud)` | 4 % |
 | Catálogo WhatsApp | `catalogo-wsp` (el catálogo privado del agradecimiento, §31) | 1 % |
-| Web · carrito completado | `easysell-abandoned-checkout` (formulario abandonado que la clienta completó después) | 15 % |
+| Web · carrito completado | `easysell-abandoned-checkout`, `abandoned_checkout_releasit_cod_form` (formulario abandonado que se completó después; ver abajo quién lo completa) | 15 % |
 | Web · formulario | `easysell_cod_form` | 55 % |
 | Sin marca | ninguna de las anteriores (sobre todo pedidos creados a mano en Shopify con el nombre de la asesora como etiqueta) | 1,5 % |
 
@@ -89,7 +89,10 @@ las dos cifras no coinciden: cuando la asesora completa un carrito abandonado
 de EasySell, el borrador conserva sus etiquetas y no recibe `venta_manual`.
 Del 14-09 al 13-10-2026, de 1.105 pedidos activos «Web · carrito completado»,
 1.076 tenían venta de asesora en `order_sales`, y 294 de 3.229 «Web ·
-formulario» también.
+formulario» también. La recompra automática tampoco deja marca propia en
+Shopify: sus 28 pedidos de ese periodo salen como «Web · carrito completado»
+(23) o «Web · formulario» (5), y en «Canal de cierre» como «Recompra
+automática».
 
 ### Salida
 
