@@ -45,6 +45,7 @@ import {
 import {
   isGeneralStatus,
   isOperationalStatus,
+  ownRiderAttempts,
   resolveOrderState,
   type GuideSnapshot,
   type OrderEventSnapshot,
@@ -1200,7 +1201,11 @@ export async function recomputeOrderMaster(
       current_courier: state.currentCourier,
       last_courier: state.lastCourier,
       courier_count: state.courierCount,
-      attempt_count: state.attemptCount,
+      // Lo que reportan los couriers más las paradas de nuestros motorizados.
+      // El costo logístico sigue con `state.attemptCount`: Grupo GF no cobra
+      // por intento adicional, y sumarle sus visitas a la tarifa de otro
+      // courier (un pedido que luego salió con Aliclik) inventaría un costo.
+      attempt_count: state.attemptCount + ownRiderAttempts(stateEvents),
       guide_code: state.guideCode,
       // De la guía VIGENTE, igual que el costo real de arriba: si un pedido
       // salió dos veces, lo que importa es el cobro de la que está entregando.

@@ -12,7 +12,7 @@
 // manipulada o de una versión vieja tiene que dar un listado sensato, no un
 // error — es la pantalla de trabajo diaria del equipo.
 
-import { emptyFilters, type MasterFilters, type MasterSortKey } from "@/lib/order-master-filters";
+import { ATTEMPTS_OR_MORE, emptyFilters, type MasterFilters, type MasterSortKey } from "@/lib/order-master-filters";
 import { MASTER_PATH } from "@/lib/order-drawer-href";
 
 /** Claves cortas: la URL se lee y se comparte, y `?d=lince,ate` gana a
@@ -47,7 +47,6 @@ const DATE_KEYS: { param: string; field: keyof MasterFilters }[] = [
 const FLAG_KEYS: { param: string; field: keyof MasterFilters }[] = [
   { param: "wc", field: "withComments" },
   { param: "mc", field: "multiCourier" },
-  { param: "ma", field: "multiAttempt" },
   { param: "ex", field: "expiringSoon" },
 ];
 
@@ -100,6 +99,11 @@ export function parseMasterQuery(params: URLSearchParams | Record<string, string
   const stale = Number(get("sd") ?? "");
   if (Number.isFinite(stale) && stale > 0) f.staleDays = Math.trunc(stale);
 
+  // Intentos: 1, 2, 3 o 4 («4 a más»). El viejo `ma=1` («Más de un intento»)
+  // no tiene equivalente exacto y se ignora, como todo lo que no se entiende.
+  const attempts = Number(get("at") ?? "");
+  if (Number.isInteger(attempts) && attempts >= 1 && attempts <= ATTEMPTS_OR_MORE) f.attempts = attempts;
+
   f.search = get("q")?.trim() ?? "";
   const confirmationDue = get("cq") ?? "";
   if (["vencido", "hoy", "proximo"].includes(confirmationDue)) {
@@ -137,6 +141,7 @@ export function buildMasterQuery(q: MasterQuery): URLSearchParams {
     if (f[field] as boolean) out.set(param, "1");
   }
   if (f.staleDays > 0) out.set("sd", String(f.staleDays));
+  if (f.attempts > 0) out.set("at", String(f.attempts));
   if (f.search.trim()) out.set("q", f.search.trim());
   if (f.confirmationDue) out.set("cq", f.confirmationDue);
   if (q.sortKey !== "created") out.set("s", q.sortKey);

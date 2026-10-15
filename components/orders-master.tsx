@@ -91,6 +91,7 @@ import {
 } from "@/lib/agency-attested-shipment";
 import {
   agencyHasActivity,
+  ATTEMPTS_OR_MORE,
   emptyFilters,
   hasActiveFilters,
   MANAGEMENT_DAY_STEPS,
@@ -965,7 +966,7 @@ function moreFilterCount(f: MasterFilters): number {
     f.shippingModes.size > 0,
     f.withComments,
     f.multiCourier,
-    f.multiAttempt,
+    f.attempts > 0,
     f.staleDays > 0,
   ].filter(Boolean).length;
 }
@@ -999,7 +1000,7 @@ const CLEARED_MORE_FILTERS: Partial<MasterFilters> = {
   shippingModes: new Set(),
   withComments: false,
   multiCourier: false,
-  multiAttempt: false,
+  attempts: 0,
   staleDays: 0,
 };
 
@@ -1149,6 +1150,20 @@ function MoreFilters({
           </select>
         </label>
         <label className="grid gap-1.5">
+          <span className="text-[13px] font-medium text-ink-700">Intentos de entrega</span>
+          <select
+            value={filters.attempts}
+            onChange={(e) => onPatch({ attempts: Number(e.target.value) })}
+            className={cn(FIELD_BOX, "h-9 w-40 px-3 pointer-coarse:h-11")}
+          >
+            <option value={0}>Todos</option>
+            <option value={1}>1 intento</option>
+            <option value={2}>2 intentos</option>
+            <option value={3}>3 intentos</option>
+            <option value={ATTEMPTS_OR_MORE}>4 a más intentos</option>
+          </select>
+        </label>
+        <label className="grid gap-1.5">
           <span className="text-[13px] font-medium text-ink-700">Sin movimientos hace</span>
           <select
             value={filters.staleDays}
@@ -1173,11 +1188,6 @@ function MoreFilters({
             label="Más de un courier"
             checked={filters.multiCourier}
             onChange={(multiCourier) => onPatch({ multiCourier })}
-          />
-          <Toggle
-            label="Más de un intento"
-            checked={filters.multiAttempt}
-            onChange={(multiAttempt) => onPatch({ multiAttempt })}
           />
         </fieldset>
       </div>

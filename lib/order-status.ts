@@ -416,6 +416,27 @@ const AGENCY_COURIERS = new Set(["shalom", "olva"]);
  *  drawer, y por eso cuenta igual. */
 const HUMAN_GUIDE_EVENTS = new Set(["guide_registered", "guide_created", COMPANION_LINKED]);
 
+/**
+ * Intentos de entrega de nuestros motorizados (Grupo GF, courier `propio`).
+ * Cada parada que el motorizado reportó es un intento, entregada o no: dos «No
+ * contesta» y una entrega son tres. Una parada que se corrige (de «no
+ * entregado» a «entregado») sigue siendo una visita, así que cuenta una vez.
+ *
+ * Hasta el 15-10-2026 el Master solo sumaba lo que reportan los couriers
+ * externos (`aliclik_attempts`, `reroute_attempts`) y los 487 pedidos con un
+ * «No entregado» de motorizado propio decían «0 intentos» (#KP140941: dos
+ * salidas con Roy, «No contesta» las dos). Pura.
+ */
+export function ownRiderAttempts(events: readonly { kind: string; payload?: unknown }[]): number {
+  const stops = new Set<string>();
+  for (const event of events) {
+    if (event.kind !== "stop_reported") continue;
+    const payload = event.payload as { stop_id?: unknown } | null | undefined;
+    if (typeof payload?.stop_id === "string" && payload.stop_id) stops.add(payload.stop_id);
+  }
+  return stops.size;
+}
+
 export function isAgencyCourier(courier: string | null | undefined): boolean {
   return AGENCY_COURIERS.has((courier ?? "").toLowerCase());
 }

@@ -41,6 +41,17 @@ describe("parseMasterQuery", () => {
     expect(parse("wc=0").filters.withComments).toBe(false);
   });
 
+  it("intentos: 1 a 4 («4 a más»); el viejo «Más de un intento» y lo raro se ignoran", () => {
+    expect(parse("at=2").filters.attempts).toBe(2);
+    expect(parse("at=4").filters.attempts).toBe(4);
+    expect(parse("at=5").filters.attempts).toBe(0);
+    expect(parse("at=1.5").filters.attempts).toBe(0);
+    expect(parse("ma=1").filters.attempts).toBe(0);
+    const f = emptyFilters();
+    f.attempts = 3;
+    expect(buildMasterQuery({ filters: f, sortKey: "created", page: 1 }).toString()).toBe("at=3");
+  });
+
   it("acepta también un objeto de searchParams, como los da Next", () => {
     const q = parseMasterQuery({ d: "Lince", s: "movement", pg: "3" });
     expect([...q.filters.districts]).toEqual(["Lince"]);
