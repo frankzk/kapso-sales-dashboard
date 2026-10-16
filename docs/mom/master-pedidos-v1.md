@@ -9710,6 +9710,17 @@ el equipo que opera desde una computadora y se divide en tres espacios estables:
    motivos y correcciones. Es evidencia de solo lectura; no compite con el
    trabajo pendiente.
 
+**El historial del lead se reparte entre los pedidos del cliente (16-10-2026).**
+La Actividad trae también las gestiones de Leads (llamadas, mensajes, la venta
+y las notas del sistema), pero un cliente tiene un solo lead por tienda y ese
+lead apunta a su última venta. Por eso cada gestión pertenece a **un** pedido
+del cliente (`lib/lead-calls-by-order.ts`): a la venta que nombra su nota
+(«pedido #KP134581»); si no nombra ninguna, a la primera venta creada después
+de ella (con 10 minutos de margen para la nota «Venta cerrada»); y lo posterior
+a la última venta, a esa última. Con una sola compra no cambia nada. Pasó con
+#KP141951: el lead pasó a apuntarle y su Actividad mostraba la guía de
+septiembre de #KP134581, que a su vez se había quedado sin su historial.
+
 Dentro de `Operar`, el orden de decisión es:
 
 1. **Dónde está:** macroetapa, subetapa, antigüedad y avance dentro de las seis

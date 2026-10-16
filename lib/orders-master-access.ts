@@ -12,6 +12,7 @@ import { unstable_cache } from "next/cache";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
+import { leadCallsForOrder, type CustomerOrderRef } from "@/lib/lead-calls-by-order";
 import {
   shopifyDepartamentoElegido,
   shopifyOrderNote,
@@ -922,7 +923,37 @@ export async function getOrderMasterDetail(
   // El vínculo es `leads.order_id`. Se leen todos los que apunten a este pedido
   // —normalmente uno— porque dos leads del mismo cliente pueden acabar en el
   // mismo pedido y descartar el segundo escondería trabajo que sí ocurrió.
-  const { data: leadRows } = await sb.from("leads").select("id").eq("order_id", orderId);
+  //
+  // Y los que apuntan a OTRO pedido del mismo cliente: el lead apunta a la
+  // última venta, así que el pedido anterior solo encuentra su historial por
+  // ahí. Cada gestión se queda en el pedido al que pertenece
+  // (`leadCallsForOrder`, MOM §25): sin eso el pedido nuevo heredaba el ciclo
+  // del anterior —#KP141951 mostraba la guía de #KP134581— y el anterior lo
+  // perdía.
+  let customerOrders: CustomerOrderRef[] = [
+    { order_id: orderId, order_name: row.order_name, order_created_at: row.order_created_at },
+  ];
+  const customerPhone = (row.customer_phone ?? "").trim();
+  if (customerPhone) {
+    const { data, error } = await sb
+      .from("order_master")
+      .select("order_id,order_name,order_created_at")
+      .eq("store_id", row.store_id)
+      .eq("customer_phone", customerPhone)
+      .order("order_created_at", { ascending: false })
+      .limit(50);
+    if (!error && data?.length) {
+      const others = (data as CustomerOrderRef[]).filter((o) => o.order_id !== orderId);
+      customerOrders = [...customerOrders, ...others];
+    }
+  }
+  const { data: leadRows } = await sb
+    .from("leads")
+    .select("id")
+    .in(
+      "order_id",
+      customerOrders.map((o) => o.order_id),
+    );
   const leadIds = ((leadRows ?? []) as { id: string }[]).map((l) => l.id);
   let leadCalls: LeadCallTimelineRow[] = [];
   if (leadIds.length) {
@@ -931,7 +962,7 @@ export async function getOrderMasterDetail(
       .select("id,lead_id,vendedora,kind,new_status,note,occurred_at")
       .in("lead_id", leadIds)
       .order("occurred_at", { ascending: true });
-    leadCalls = (data ?? []) as unknown as LeadCallTimelineRow[];
+    leadCalls = leadCallsForOrder((data ?? []) as unknown as LeadCallTimelineRow[], customerOrders, orderId);
   }
 
   let calls: ShipmentCallRow[] = [];
