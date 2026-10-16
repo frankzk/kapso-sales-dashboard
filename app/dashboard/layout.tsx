@@ -28,11 +28,25 @@ export default async function DashboardLayout({ children }: { children: React.Re
     permissions.can("routes.manage") ||
     permissions.can("dispatch.manage") ||
     permissions.can("dispatch.pickup");
+  // «Repro Lima» es de quien llama a los clientes o despacha
+  // (`repro_lima.manage`, MOM §9.5). La página y cada acción lo vuelven a pedir.
+  const canReproLima = permissions.can("repro_lima.manage");
   // Lo que espera a una persona en «Cotejar Olva» (MOM §12). Un fallo aquí no
   // puede tumbar el panel entero: sin número, el menú sigue funcionando.
   const olvaPending = canManageLogistics
     ? await countOlvaCotejoPending(createAdminSupabase(), [...new Set(stores.map((s) => s.org_id))]).catch(() => 0)
     : 0;
+  // El menú por permisos (MOM §16): owner y admin los tienen todos. Quien solo
+  // mira (viewer) conserva el Consolidado que siempre vio.
+  const viewerOnly = roles.length > 0 && roles.every((r) => r === "viewer");
+  const navAccess = {
+    reports: permissions.can("reports.view") || viewerOnly,
+    catalog: permissions.can("aliclik.manage_catalog"),
+    mapAds: permissions.can("leads.map_ads"),
+    stores: permissions.can("stores.manage"),
+    costs: permissions.can("costs.manage"),
+    team: permissions.can("team.manage"),
+  };
   const roleLabel = isVendedoraOnly
     ? "Vendedora"
     : roles.includes("owner") || roles.includes("admin")
@@ -48,6 +62,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
       yapeAlertsEnabled={roles.includes("vendedora")}
       canValidatePayments={canValidatePayments}
       canManageLogistics={canManageLogistics}
+      canReproLima={canReproLima}
+      navAccess={navAccess}
       badges={olvaPending > 0 ? { "/dashboard/olva": olvaPending } : undefined}
     >
       {children}

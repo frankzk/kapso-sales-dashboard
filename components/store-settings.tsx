@@ -32,9 +32,33 @@ import {
 } from "@/components/settings-ui";
 import { IconAlert, IconArrowLeft, IconCheckCircle, IconChevronDown, IconCopy } from "@/components/icons";
 import { copyLabel, useCopyToClipboard } from "@/components/copy-button";
-import { STORE_STATUSES, STORE_STATUS_LABEL } from "@/lib/store-settings";
+import {
+  STORE_STATUSES,
+  STORE_STATUS_LABEL,
+  VOICE_LEAD_LIMITS,
+  VOICE_LEAD_OFFER_MAX,
+  VOICE_LEAD_PRODUCT_MAX,
+  LEAD_VOICE_CAMPAIGN_DAYS,
+  LEAD_VOICE_CAMPAIGN_TOP,
+  type LeadVoiceCampaignOption,
+} from "@/lib/store-settings";
+import { LEAD_VOICE_MOTIVO_LABEL } from "@/lib/voice-lead-labels";
+import type { LeadVoicePilotReport } from "@/lib/voice-leads-server";
 import { imageTestSummary, type ImageTestRow } from "@/lib/cart-image-test";
+import {
+  RESTOCK_CATALOG_DAYS,
+  RESTOCK_DEFAULT_DAYS,
+  RESTOCK_RESULTS_DAYS,
+  restockProductList,
+  restockResultsSummary,
+  suggestShortName,
+  type RestockCatalogRow,
+  type RestockListItem,
+  type RestockProductRow,
+  type RestockResultRow,
+} from "@/lib/restock-view";
 import type { MetaAdAccount, MetaConnectionProbe, StoreMetaAdAccount } from "@/lib/meta-marketing";
+import { InvoiceSettingsSection, type InvoiceSettingsData } from "@/components/invoice-settings-section";
 import {
   addPaymentMethod,
   addReplyTemplate,
@@ -57,6 +81,8 @@ import {
   addEscalationStep,
   moveEscalationStep,
   removeEscalationStep,
+  removeRestockProduct,
+  saveRestockProduct,
   sendTransitQueueNow,
   testFlowclLink,
   syncAliclikCatalogNow,
@@ -124,6 +150,18 @@ export interface StoreSettingsData {
     delivered_thanks_max_hours: number;
     delivered_thanks_pace_count: number;
     delivered_thanks_pace_minutes: number;
+    restock_enabled: boolean;
+    restock_template_name: string | null;
+    restock_template_language: string | null;
+    restock_params: string | null;
+    restock_phone_number_id: string | null;
+    restock_button_label: string | null;
+    restock_hour_start: number;
+    restock_hour_end: number;
+    restock_pace_count: number;
+    restock_pace_minutes: number;
+    restock_days_before: number;
+    restock_control_pct: number;
     /** Agente de voz para Reproprovincia (MOM §11.8, migración 0190). */
     voice_recovery_enabled: boolean;
     voice_recovery_auto: boolean;
@@ -135,6 +173,19 @@ export interface StoreSettingsData {
     voice_recovery_hour_end: number;
     voice_recovery_agent_number: string | null;
     voice_recovery_zadarma_sip: string | null;
+    /** Agente de voz para leads, piloto Biru (MOM §33, migración 0247). */
+    voice_lead_enabled: boolean;
+    voice_lead_auto: boolean;
+    voice_lead_daily_cap: number;
+    voice_lead_max_attempts: number;
+    voice_lead_wait_minutes: number;
+    voice_lead_max_age_hours: number;
+    voice_lead_holdout_pct: number;
+    voice_lead_hour_start: number;
+    voice_lead_hour_end: number;
+    voice_lead_campaign_ids: string[];
+    voice_lead_product: string | null;
+    voice_lead_offer: string | null;
     /** Ciclo de recontacto en confirmación (MOM §6.1, migración 0133). */
     confirmation_cycle_days: number;
     telegram_chat_id: string | null;
@@ -211,6 +262,17 @@ export interface StoreSettingsData {
     olvaPortalPassword: boolean;
   };
   oauthAvailable: boolean;
+  /** Lo del agente de leads (MOM §33) que no es una columna de la tienda. */
+  leadVoice: {
+    /** Telnyx, la puerta SIP y el secreto propio del agente de leads están en Vercel. */
+    configured: boolean;
+    /** Hay número propio para leads (TELNYX_LEADS_FROM_NUMBER). Solo sí/no. */
+    ownNumber: boolean;
+    /** Las campañas que se pueden marcar: las de más leads y las ya elegidas. */
+    campaigns: LeadVoiceCampaignOption[];
+    /** El tablero del piloto; null si no se pudo leer. */
+    report: LeadVoicePilotReport | null;
+  };
   siteUrl: string;
   sync: Array<{
     source: string;
@@ -243,12 +305,23 @@ export interface StoreSettingsData {
     active: boolean;
     sort: number;
   }>;
+  /** «Boletas y facturas» (MOM §35): los RUC, sus cuentas y los últimos
+   *  comprobantes. Sin el token: solo si hay uno. */
+  invoices: InvoiceSettingsData;
   /** La escalera de la cola de cobranza (0172), en orden. */
   escalation: Array<{ id: string; userId: string; name: string; minutes: number; sort: number }>;
   /** Usuarios de la tienda que pueden entrar en la escalera. */
   escalationCandidates: Array<{ id: string; name: string }>;
   /** Resultado de la prueba de imagen en carritos (0233), por brazo. */
   cartImageTest: ImageTestRow[];
+  /** Recordatorio de reposición (0255): vendido, configurado y resultados. */
+  restock: {
+    catalog: RestockCatalogRow[];
+    products: RestockProductRow[];
+    results: RestockResultRow[];
+    /** Productos con foto en Shopify (`shopify_product_images`). */
+    withImage: string[];
+  };
   replyTemplates: Array<{
     id: string;
     label: string;
@@ -315,8 +388,10 @@ const INDEX: IndexGroup[] = [
       { id: "drip", label: "Drip sin respuesta" },
       { id: "carritos", label: "Carritos abandonados" },
       { id: "agradecer", label: "Agradecer al entregar" },
+      { id: "reposicion", label: "Recordatorio de reposición" },
       { id: "devueltos", label: "Pedidos devueltos" },
       { id: "agente-voz", label: "Agente de voz" },
+      { id: "agente-voz-leads", label: "Agente de voz · Leads" },
       { id: "avisos-shalom", label: "Avisos de Shalom" },
       { id: "avisos-olva", label: "Avisos de Olva" },
       { id: "plantillas", label: "Plantillas de respuesta" },
@@ -326,6 +401,7 @@ const INDEX: IndexGroup[] = [
     title: "Cobranza",
     items: [
       { id: "cuentas", label: "Cuentas de cobro" },
+      { id: "boletas", label: "Boletas y facturas" },
       { id: "escalera", label: "Quién atiende la cobranza" },
     ],
   },
@@ -511,6 +587,7 @@ export function StoreSettings({
 
           <SettingsGroup title="Cobranza">
             <PaymentMethodsSection storeId={s.id} rows={data.paymentMethods} />
+            <InvoiceSettingsSection storeId={s.id} data={data.invoices} paymentMethods={data.paymentMethods} />
             <EscalationSection storeId={s.id} rows={data.escalation} candidates={data.escalationCandidates} />
           </SettingsGroup>
 
@@ -1912,6 +1989,342 @@ function CartImageTestResult({ rows, since }: { rows: ImageTestRow[]; since: str
   );
 }
 
+/**
+ * Recordatorio de reposición (MOM §34): la configuración del envío, cuánto
+ * dura cada producto y cómo le va contra el grupo de control.
+ */
+function RestockSection({ data }: { data: StoreSettingsData }) {
+  const s = data.store;
+  const items = restockProductList(data.restock.catalog, data.restock.products, data.restock.withImage);
+  const on = items.filter((i) => i.config);
+  const off = items.filter((i) => !i.config);
+  return (
+    <SettingsSection
+      id="reposicion"
+      title="Recordatorio de reposición"
+      badge={<OnOff on={s.restock_enabled} />}
+      description={
+        <>
+          <p>
+            Cuando a la clienta se le está por acabar lo que compró, le llega una plantilla con el botón{" "}
+            <strong>«{s.restock_button_label || "Sí, quiero"}»</strong>. Si lo toca —o contesta «sí»— el lead sube a{" "}
+            <strong>Atender ahora</strong> con lo que quiere reponer, y una asesora le escribe para armar el pedido.
+          </p>
+          <p>
+            Solo reciben recordatorio los productos que tienen <strong>días por unidad</strong> y{" "}
+            <strong>foto en Shopify</strong>: la plantilla lleva la foto del producto en la cabecera. A quien ya volvió
+            a comprar no se le escribe, y un grupo de control no lo recibe: así se sabe cuánto vende de verdad. La
+            plantilla va aprobada en Meta como <strong>Marketing</strong>, con cabecera de imagen y el botón como
+            respuesta rápida.
+          </p>
+        </>
+      }
+    >
+      <StoreForm
+        storeId={s.id}
+        persisted={[
+          s.restock_enabled,
+          s.restock_template_name,
+          s.restock_template_language,
+          s.restock_params,
+          s.restock_button_label,
+          s.restock_days_before,
+          s.restock_hour_start,
+          s.restock_hour_end,
+          s.restock_pace_count,
+          s.restock_pace_minutes,
+          s.restock_control_pct,
+          s.restock_phone_number_id,
+        ]}
+      >
+        <ToggleRow name="restock_enabled" label="Envío" defaultChecked={s.restock_enabled} />
+        <FieldGrid cols={3}>
+          <TemplateFields
+            nameField="restock_template_name"
+            langField="restock_template_language"
+            name={s.restock_template_name}
+            lang={s.restock_template_language}
+            placeholder="recordatorio_reposicion"
+            nameLabel="Plantilla · nombre"
+            langLabel="Plantilla · idioma"
+          />
+          <Field
+            label="Variables del texto"
+            htmlFor="restock_params"
+            hint={
+              <p>
+                Una por cada {"{{n}}"} del texto, en orden. Disponibles: <code>nombre</code>, <code>producto</code>{" "}
+                (el nombre corto de abajo), <code>unidades</code>, <code>pedido</code>.
+              </p>
+            }
+          >
+            <input
+              id="restock_params"
+              name="restock_params"
+              defaultValue={s.restock_params ?? ""}
+              placeholder="nombre,producto"
+              className={FIELD}
+            />
+          </Field>
+          <Field
+            label="Rótulo del botón"
+            htmlFor="restock_button_label"
+            className="lg:col-span-2"
+            hint={<p>Igual que en la plantilla. Quien lo toca pasa a una asesora; nadie arma el pedido solo.</p>}
+          >
+            <input
+              id="restock_button_label"
+              name="restock_button_label"
+              defaultValue={s.restock_button_label ?? ""}
+              placeholder="Sí, quiero"
+              className={FIELD}
+            />
+          </Field>
+        </FieldGrid>
+        <SubRow title="Cuándo y a qué ritmo">
+          <NumberField
+            name="restock_days_before"
+            label="Días antes de que se acabe"
+            min={0}
+            max={60}
+            value={s.restock_days_before}
+            hint={<p>Contados desde la entrega: un frasco de 30 días con 7 de aviso sale el día 23.</p>}
+          />
+          <HourRange
+            label="Horario de envío (hora local)"
+            startName="restock_hour_start"
+            endName="restock_hour_end"
+            start={s.restock_hour_start}
+            end={s.restock_hour_end}
+          />
+          <div className="min-w-0">
+            <p className="text-[13px] font-medium leading-5 text-ink-700">Ritmo</p>
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
+              <input
+                aria-label="Ritmo · mensajes"
+                name="restock_pace_count"
+                type="number"
+                min={1}
+                max={25}
+                defaultValue={s.restock_pace_count}
+                className={cn(NUMBER_NARROW, "w-20")}
+              />
+              <span className="text-sm text-ink-500">cada</span>
+              <input
+                aria-label="Ritmo · cada (minutos)"
+                name="restock_pace_minutes"
+                type="number"
+                min={5}
+                max={1440}
+                defaultValue={s.restock_pace_minutes}
+                className={cn(NUMBER_NARROW, "w-20")}
+              />
+              <span className="text-sm text-ink-500">min</span>
+            </div>
+            <p className={cn(HELP, "mt-1.5")}>Lo que no sale hoy sale mañana: hay dos semanas de margen.</p>
+          </div>
+          <NumberField
+            name="restock_control_pct"
+            label="Grupo de control (%)"
+            min={0}
+            max={50}
+            value={s.restock_control_pct}
+            hint={<p>Clientas que no lo reciben, siempre las mismas. 0 = a todas, sin poder medir.</p>}
+          />
+        </SubRow>
+        <div className={ROW}>
+          <Field label="Enviar desde otro número (opcional)" htmlFor="restock_phone_number_id">
+            <input
+              id="restock_phone_number_id"
+              name="restock_phone_number_id"
+              defaultValue={s.restock_phone_number_id ?? ""}
+              placeholder="Vacío = el número de la tienda"
+              className={cn(FIELD, "sm:max-w-md")}
+            />
+          </Field>
+        </div>
+      </StoreForm>
+
+      <div className={cn(CARD, "divide-y divide-line")}>
+        <CardHeader
+          title="Cuánto dura cada producto"
+          description={
+            <p>
+              Días por unidad: lo que dura uno con la dosis normal. Dos unidades duran el doble. El nombre corto es como
+              sale en el mensaje.
+            </p>
+          }
+        />
+        {on.length > 0 ? (
+          <RowList>
+            {on.map((item) => (
+              <RestockProductEditor key={item.key} storeId={s.id} item={item} />
+            ))}
+          </RowList>
+        ) : (
+          <EmptyRow>Ningún producto recibe recordatorio todavía. Actívalos abajo.</EmptyRow>
+        )}
+        {off.length > 0 && (
+          <details className="group">
+            <summary
+              className={cn(
+                ROW,
+                "flex cursor-pointer list-none items-center gap-2 text-sm font-medium text-ink-700 hover:text-ink-900 [&::-webkit-details-marker]:hidden",
+              )}
+            >
+              <IconChevronDown className="size-4 shrink-0 text-ink-400 transition-transform group-open:rotate-180" />
+              Agregar un producto · {off.length} vendidos en los últimos {RESTOCK_CATALOG_DAYS} días
+            </summary>
+            <RowList>
+              {off.map((item) => (
+                <RestockProductEditor key={item.key} storeId={s.id} item={item} />
+              ))}
+            </RowList>
+          </details>
+        )}
+      </div>
+
+      {data.restock.results.length > 0 && <RestockResults rows={data.restock.results} />}
+    </SettingsSection>
+  );
+}
+
+/** Una fila de producto: nombre corto y días, con guardar y quitar. */
+function RestockProductEditor({ storeId, item }: { storeId: string; item: RestockListItem }) {
+  const [shortName, setShortName] = useState(item.config?.shortName ?? suggestShortName(item.title));
+  const [days, setDays] = useState(String(item.config?.days ?? RESTOCK_DEFAULT_DAYS));
+  const [pending, startTransition] = useTransition();
+  const [msg, setMsg] = useState<string | null>(null);
+  const router = useRouter();
+  const id = `rs-${item.key.replace(/[^a-zA-Z0-9]/g, "").slice(0, 24) || "p"}`;
+
+  function save() {
+    startTransition(async () => {
+      const res = await saveRestockProduct(storeId, {
+        productKey: item.key,
+        title: item.title,
+        shortName,
+        days: Number(days),
+      });
+      setMsg(res.error ?? res.notice ?? null);
+      if (!res.error) router.refresh();
+    });
+  }
+
+  function remove() {
+    if (!confirm(`¿Dejar de recordar «${item.config?.shortName ?? item.title}»? Lo ya enviado queda registrado.`)) return;
+    startTransition(async () => {
+      const res = await removeRestockProduct(storeId, item.key);
+      setMsg(res.error ?? res.notice ?? null);
+      if (!res.error) router.refresh();
+    });
+  }
+
+  return (
+    <li className={cn(ROW, "space-y-3")}>
+      <div className="min-w-0">
+        <p className="text-sm font-medium leading-5 text-ink-900 [overflow-wrap:anywhere]">{item.title}</p>
+        <p className="mt-0.5 text-xs tabular-nums text-ink-500">
+          {item.pedidos > 0
+            ? `${item.pedidos.toLocaleString("es-PE")} pedidos · ${item.unidades.toLocaleString("es-PE")} unidades en ${RESTOCK_CATALOG_DAYS} días`
+            : `Sin ventas en los últimos ${RESTOCK_CATALOG_DAYS} días`}
+        </p>
+        {!item.hasImage && (
+          <p className="mt-1 text-xs font-medium text-warn-fg">
+            Sin foto en Shopify: no se le envía aunque tenga días.
+          </p>
+        )}
+      </div>
+      <div className="flex flex-wrap items-end gap-x-3 gap-y-3">
+        <div className="min-w-0 flex-1 basis-56">
+          <label htmlFor={`${id}-name`} className="text-[13px] font-medium leading-5 text-ink-700">
+            Nombre en el mensaje
+          </label>
+          <input
+            id={`${id}-name`}
+            value={shortName}
+            maxLength={60}
+            onChange={(e) => setShortName(e.target.value)}
+            className={cn(FIELD, "mt-1.5")}
+          />
+        </div>
+        <div>
+          <label htmlFor={`${id}-days`} className="text-[13px] font-medium leading-5 text-ink-700">
+            Días por unidad
+          </label>
+          <input
+            id={`${id}-days`}
+            type="number"
+            min={1}
+            max={365}
+            value={days}
+            onChange={(e) => setDays(e.target.value)}
+            className={cn(NUMBER_NARROW, "mt-1.5 block w-24")}
+          />
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <OpsButton variant={item.config ? "secondary" : "primary"} disabled={pending} onClick={save}>
+            {pending ? "Guardando…" : item.config ? "Guardar" : "Activar"}
+          </OpsButton>
+          {item.config && (
+            <OpsButton variant="danger" disabled={pending} onClick={remove}>
+              Quitar
+            </OpsButton>
+          )}
+        </div>
+      </div>
+      {msg && (
+        <p role="status" className="text-[13px] leading-5 text-ink-600">
+          {msg}
+        </p>
+      )}
+    </li>
+  );
+}
+
+/** Cómo le va al recordatorio contra el grupo de control. */
+function RestockResults({ rows }: { rows: RestockResultRow[] }) {
+  const r = restockResultsSummary(rows);
+  const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
+  const arms = [
+    { label: "Con recordatorio", a: r.enviado, replies: true },
+    { label: "Sin recordatorio (control)", a: r.control, replies: false },
+  ];
+  return (
+    <div className={CARD}>
+      <CardHeader title="Resultado" description={<p>Últimos {RESTOCK_RESULTS_DAYS} días.</p>} />
+      <table className="w-full text-[13px] tabular-nums shadow-[inset_0_1px_0_var(--color-line)]">
+        <thead>
+          <tr className="text-left text-xs text-ink-500">
+            <th className="px-4 py-2 font-medium sm:px-5">Grupo</th>
+            <th className="px-2 py-2 text-right font-medium">Clientas</th>
+            <th className="hidden px-2 py-2 text-right font-medium sm:table-cell">Contestaron sí</th>
+            <th className="px-2 py-2 text-right font-medium">Compraron</th>
+            <th className="px-4 py-2 text-right font-medium sm:px-5">Tasa</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-line">
+          {arms.map(({ label, a, replies }) => (
+            <tr key={label}>
+              <td className="px-4 py-2 text-ink-900 sm:px-5">{label}</td>
+              <td className="px-2 py-2 text-right">{a.clientas.toLocaleString("es-PE")}</td>
+              <td className="hidden px-2 py-2 text-right sm:table-cell">
+                {replies ? a.respondieron.toLocaleString("es-PE") : "—"}
+              </td>
+              <td className="px-2 py-2 text-right">{a.compraron.toLocaleString("es-PE")}</td>
+              <td className="whitespace-nowrap px-4 py-2 text-right font-semibold text-ink-900 sm:px-5">{pct(a.tasa)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="px-4 py-3 text-[13px] text-ink-700 shadow-[inset_0_1px_0_var(--color-line)] sm:px-5">
+        {r.veredicto}{" "}
+        <span className="text-ink-500">Compra = pedido no anulado en los 30 días siguientes al recordatorio.</span>
+      </p>
+    </div>
+  );
+}
+
 function AutomationSections({ data }: { data: StoreSettingsData }) {
   const s = data.store;
   return (
@@ -2285,6 +2698,8 @@ function AutomationSections({ data }: { data: StoreSettingsData }) {
         </StoreForm>
       </SettingsSection>
 
+      <RestockSection data={data} />
+
       <SettingsSection
         id="devueltos"
         title="Recuperar pedidos devueltos"
@@ -2332,7 +2747,7 @@ function AutomationSections({ data }: { data: StoreSettingsData }) {
             label="Envío automático"
             defaultChecked={s.return_recovery_auto}
             on="Automático"
-            off="A mano"
+            off="Apagado"
           />
           <FieldGrid cols={3}>
             <TemplateFields
@@ -2510,10 +2925,12 @@ function AutomationSections({ data }: { data: StoreSettingsData }) {
           </FieldGrid>
           <BannerRow title="Caller ID peruano">
             La extensión tiene que tener como caller ID un <strong>número peruano</strong>: sin ella Kapta no llama,
-            porque la clienta vería el número de EE. UU. de la cuenta de Zadarma. Los domingos el agente no llama.
+            porque la clienta vería el número de EE. UU. de la cuenta de Zadarma. Los domingos empieza a las 11:00.
           </BannerRow>
         </StoreForm>
       </SettingsSection>
+
+      <LeadVoiceSection data={data} />
 
       <ShalomNoticesSection data={data} />
 
@@ -2663,6 +3080,354 @@ function AutomationSections({ data }: { data: StoreSettingsData }) {
         </StoreForm>
       </SettingsSection>
     </>
+  );
+}
+
+/* ── Agente de voz para leads (MOM §33) ─────────────────────────────────── */
+
+/**
+ * El agente de leads, piloto Biru. Va en su propia sección y no dentro de la
+ * de Reproprovincia a propósito: es otro agente, con otro carril, otro tope y
+ * otra puerta SIP, y nada de lo que se mueve aquí cambia al de pedidos.
+ */
+function LeadVoiceSection({ data }: { data: StoreSettingsData }) {
+  const s = data.store;
+  const lv = data.leadVoice;
+  const selected = new Set(s.voice_lead_campaign_ids);
+  return (
+    <SettingsSection
+      id="agente-voz-leads"
+      title="Agente de voz · Leads (piloto)"
+      badge={
+        s.voice_lead_enabled ? (
+          <Badge tone="ok">{s.voice_lead_auto ? "Activo · automático" : "Activo · sin llamar"}</Badge>
+        ) : (
+          <Badge>Apagado</Badge>
+        )
+      }
+      description={
+        <>
+          <p>
+            Otro agente de voz, separado del de Reproprovincia, llama a los <strong>leads de anuncio</strong> que
+            conversaron con el bot, no compraron y ninguna asesora tocó (MOM §33). Pregunta qué le faltó, responde
+            con la oferta de abajo y, si quiere comprar, lo deja en <strong>«Atender ahora»</strong> con los datos
+            que tomó para que una asesora genere el pedido: <strong>no crea pedidos</strong> ni cobra.
+          </p>
+          <p>
+            Son <strong>dos interruptores</strong>: el primero habilita al agente; el segundo deja que el barrido
+            llame solo. Solo llama el barrido: no hay llamada a mano desde el drawer, para que el sorteo no dependa de
+            a quién elige una asesora. «Probar en mi teléfono» funciona con los dos apagados.
+          </p>
+        </>
+      }
+    >
+      <StoreForm
+        storeId={s.id}
+        persisted={[
+          s.voice_lead_enabled,
+          s.voice_lead_auto,
+          s.voice_lead_daily_cap,
+          s.voice_lead_max_attempts,
+          s.voice_lead_wait_minutes,
+          s.voice_lead_max_age_hours,
+          s.voice_lead_holdout_pct,
+          s.voice_lead_hour_start,
+          s.voice_lead_hour_end,
+          s.voice_lead_campaign_ids,
+          s.voice_lead_product,
+          s.voice_lead_offer,
+        ]}
+      >
+        {!lv.configured && (
+          <BannerRow title="Falta preparar la línea del agente">
+            En Vercel falta Telnyx, la puerta SIP del agente de leads (<code>TELNYX_LEADS_SIP_URI</code>) o su
+            secreto (<code>VOICE_LEADS_TOOLS_SECRET</code>, distinto de los de Reproprovincia). Sin eso el agente no
+            puede atender: no lo enciendas todavía.
+          </BannerRow>
+        )}
+        {lv.ownNumber ? (
+          <BannerRow tone="info" title="Número que ve el lead">
+            Las llamadas salen del número propio del agente de leads (<code>TELNYX_LEADS_FROM_NUMBER</code>).
+          </BannerRow>
+        ) : (
+          <BannerRow title="Número que ve el lead">
+            No hay número propio (<code>TELNYX_LEADS_FROM_NUMBER</code>): el lead ve el número de Telnyx de
+            Reproprovincia (<code>TELNYX_FROM_NUMBER</code>). Si ese número no es peruano, contestan menos.
+          </BannerRow>
+        )}
+        <ToggleRow
+          name="voice_lead_enabled"
+          label="Agente de leads"
+          description="Apagado, el agente no llama a ningún lead. «Probar en mi teléfono» funciona igual: sirve para escucharlo antes."
+          defaultChecked={s.voice_lead_enabled}
+          on="Habilitado"
+          off="Deshabilitado"
+        />
+        <ToggleRow
+          name="voice_lead_auto"
+          label="Llamadas automáticas"
+          description="El barrido llama solo, a un lead a la vez. Apagarlo es la marcha atrás del piloto: el grupo de cada lead se conserva."
+          defaultChecked={s.voice_lead_auto}
+          on="Automático"
+          off="A mano"
+        />
+        <FieldGrid cols={3}>
+          <NumberField
+            name="voice_lead_daily_cap"
+            label="Llamadas por día (tope)"
+            {...VOICE_LEAD_LIMITS.voice_lead_daily_cap}
+            value={s.voice_lead_daily_cap}
+            hint="Solo las llamadas a leads: el tope de Reproprovincia va aparte."
+          />
+          <NumberField
+            name="voice_lead_max_attempts"
+            label="Intentos del agente por lead"
+            {...VOICE_LEAD_LIMITS.voice_lead_max_attempts}
+            value={s.voice_lead_max_attempts}
+          />
+          <NumberField
+            name="voice_lead_holdout_pct"
+            label="Grupo de control (%)"
+            {...VOICE_LEAD_LIMITS.voice_lead_holdout_pct}
+            value={s.voice_lead_holdout_pct}
+            hint="De los leads que entran a la cola, los que el agente nunca llama. Cambiarlo solo mueve a los que aún no tienen grupo."
+          />
+          <NumberField
+            name="voice_lead_wait_minutes"
+            label="Turno de las asesoras (minutos)"
+            {...VOICE_LEAD_LIMITS.voice_lead_wait_minutes}
+            value={s.voice_lead_wait_minutes}
+            hint="Desde el último mensaje del lead: antes, el agente no lo llama, para que una asesora lo tome primero."
+          />
+          <NumberField
+            name="voice_lead_max_age_hours"
+            label="Ventana del agente (horas)"
+            {...VOICE_LEAD_LIMITS.voice_lead_max_age_hours}
+            value={s.voice_lead_max_age_hours}
+            hint="Pasado esto desde su último mensaje (o desde la hora que pidió que lo vuelva a llamar), ya no lo llama."
+          />
+          <HourRange
+            label="Horario de llamadas (hora de Lima)"
+            startName="voice_lead_hour_start"
+            endName="voice_lead_hour_end"
+            start={s.voice_lead_hour_start}
+            end={s.voice_lead_hour_end}
+            hint="Los domingos empieza a las 11:00."
+          />
+        </FieldGrid>
+        <div className={ROW}>
+          <fieldset className="min-w-0">
+            <legend className="text-sm font-semibold leading-5 text-ink-900">Campañas del piloto</legend>
+            <p className={cn(HELP, "mt-0.5 max-w-[68ch]")}>
+              El agente solo llama a leads de las campañas marcadas: <strong>ninguna marcada, no llama a nadie</strong>.
+              Salen las {LEAD_VOICE_CAMPAIGN_TOP} con más leads de la tienda en los últimos {LEAD_VOICE_CAMPAIGN_DAYS}{" "}
+              días, y las ya elegidas.
+            </p>
+            {/* Siempre viaja, aunque no haya ninguna marcada: una casilla sin
+                marcar no se envía, y sin este vacío desmarcar la última no se
+                guardaría (el servidor leería «no vino» como «no lo cambies»). */}
+            <input type="hidden" name="voice_lead_campaign_ids" value="" />
+            {lv.campaigns.length > 0 ? (
+              <ul className="mt-3 divide-y divide-line rounded-lg ring-1 ring-line">
+                {lv.campaigns.map((c) => (
+                  <li key={c.id}>
+                    <label className="flex cursor-pointer items-center gap-3 px-3 py-2.5 text-sm transition-colors hover:bg-wash pointer-coarse:min-h-11">
+                      <input
+                        type="checkbox"
+                        name="voice_lead_campaign_ids"
+                        value={c.id}
+                        defaultChecked={selected.has(c.id)}
+                        className={CHECKBOX}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="font-medium text-ink-900">{c.name ?? "Campaña sin nombre"}</span>{" "}
+                        <span className="break-all text-[13px] tabular-nums text-ink-500">{c.id}</span>
+                      </span>
+                      <span className="shrink-0 text-[13px] tabular-nums text-ink-500">
+                        {c.leads.toLocaleString("es-PE")} {c.leads === 1 ? "lead" : "leads"}
+                      </span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className={cn(HELP, "mt-3")}>
+                Ningún lead de los últimos {LEAD_VOICE_CAMPAIGN_DAYS} días viene de un anuncio de Meta conocido.
+              </p>
+            )}
+          </fieldset>
+        </div>
+        <FieldGrid>
+          <Field
+            label="Producto"
+            htmlFor="voice_lead_product"
+            hint="Cómo lo nombra el agente. Vacío = lo que dice el anuncio del lead."
+          >
+            <input
+              id="voice_lead_product"
+              name="voice_lead_product"
+              maxLength={VOICE_LEAD_PRODUCT_MAX}
+              defaultValue={s.voice_lead_product ?? ""}
+              placeholder="Ej.: Shampoo Birú anticaspa"
+              className={FIELD}
+            />
+          </Field>
+          <Field
+            label="Oferta que puede decir"
+            htmlFor="voice_lead_offer"
+            className="sm:col-span-2"
+            hint={
+              <p>
+                Precios y promociones, tal cual los dirá el agente: <strong>lo que no esté aquí no lo ofrece</strong>.
+                Ej.: «Shampoo Birú anticaspa: 1 unidad S/ 85; 3x2: 3 por S/ 170; 5x3: 5 por S/ 255».
+              </p>
+            }
+          >
+            <textarea
+              id="voice_lead_offer"
+              name="voice_lead_offer"
+              rows={3}
+              maxLength={VOICE_LEAD_OFFER_MAX}
+              defaultValue={s.voice_lead_offer ?? ""}
+              className={TEXTAREA}
+            />
+          </Field>
+        </FieldGrid>
+        <BannerRow tone="info" title="El grupo de control nunca se llama">
+          Y en el drawer las asesoras no ven quién es de control ni quién está en la cola del agente: así se mide si el
+          agente vende más de lo que venderían las asesoras solas. Tampoco llama a quien pidió no ser contactado, se lo haya dicho a este agente o al de Reproprovincia.
+        </BannerRow>
+      </StoreForm>
+
+      <LeadVoicePilotBoard report={lv.report} />
+    </SettingsSection>
+  );
+}
+
+/**
+ * El tablero del piloto (MOM §33), por grupo y por intención de tratar: un lead
+ * del tratamiento cuenta aunque el agente no haya llegado a llamarlo. Comparar
+ * solo a los que contestaron contra todo el control le daría al agente el
+ * mérito de los que igual iban a comprar.
+ */
+function LeadVoicePilotBoard({ report }: { report: LeadVoicePilotReport | null }) {
+  const n = (x: number) => x.toLocaleString("es-PE");
+  const dec1 = (x: number) => x.toLocaleString("es-PE", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  const pct = (x: number | null) => (x == null ? "—" : `${dec1(x)}%`);
+  const usd = (x: number) => `US$ ${x.toLocaleString("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const maduros = report ? report.arms.reduce((t, a) => t + a.leads, 0) : 0;
+  const pendientes = report ? report.arms.reduce((t, a) => t + a.pendientes, 0) : 0;
+  const sorteados = maduros + pendientes;
+  const trat = report?.arms.find((a) => a.arm === "tratamiento");
+  const ctrl = report?.arms.find((a) => a.arm === "control");
+  const diff = trat?.conversion != null && ctrl?.conversion != null ? trat.conversion - ctrl.conversion : null;
+  const ag = report?.agente;
+  return (
+    <div className={cn(CARD, "divide-y divide-line")}>
+      <CardHeader
+        title="Tablero del piloto"
+        description={
+          <p>
+            Por grupo, contando a cada lead sorteado aunque el agente no haya llegado a llamarlo, y solo los sorteados
+            hace 7 días o más: el agente vende antes y, con los recientes adentro, un adelanto se leería como venta
+            extra. El control nunca se llama: la medida es la{" "}
+            <strong>conversión del tratamiento menos la del control</strong>, con al menos dos semanas de datos.
+          </p>
+        }
+        aside={
+          report?.since ? (
+            <p className="text-xs tabular-nums text-ink-500">
+              Desde el{" "}
+              {new Date(report.since).toLocaleDateString("es-PE", { day: "numeric", month: "short", timeZone: "America/Lima" })}
+            </p>
+          ) : undefined
+        }
+      />
+      {!report ? (
+        <EmptyRow>No se pudo leer el tablero. Antes de aplicar la migración 0247 es lo esperado.</EmptyRow>
+      ) : sorteados === 0 ? (
+        <EmptyRow>Todavía no hay leads sorteados: el sorteo empieza cuando el agente está encendido y llamando.</EmptyRow>
+      ) : (
+        <>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px] text-[13px] tabular-nums">
+              <thead>
+                <tr className="text-left text-xs text-ink-500">
+                  <th className="px-4 py-2 font-medium sm:px-5">Grupo</th>
+                  <th className="px-2 py-2 text-right font-medium">Leads</th>
+                  <th className="px-2 py-2 text-right font-medium">Llamados por el agente</th>
+                  <th className="px-2 py-2 text-right font-medium">Contestaron</th>
+                  <th className="px-2 py-2 text-right font-medium">Atender ahora</th>
+                  <th className="px-2 py-2 text-right font-medium">Tocados por asesora</th>
+                  <th className="px-2 py-2 text-right font-medium">Ventas</th>
+                  <th className="px-4 py-2 text-right font-medium sm:px-5">Conversión</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-line">
+                {report.arms.map((a) => (
+                  <tr key={a.arm} className="text-ink-700">
+                    <td className="whitespace-nowrap px-4 py-2 text-ink-900 sm:px-5">
+                      {a.arm === "control" ? "Control (no se llama)" : "Tratamiento"}
+                    </td>
+                    <td className="px-2 py-2 text-right">{n(a.leads)}</td>
+                    {/* En el control tiene que ser 0: otra cifra es una llamada que no debió salir. */}
+                    <td className={cn("px-2 py-2 text-right", a.arm === "control" && a.llamados > 0 && "font-semibold text-crit-fg")}>
+                      {n(a.llamados)}
+                    </td>
+                    <td className="px-2 py-2 text-right">{n(a.contestaron)}</td>
+                    <td className="px-2 py-2 text-right">{n(a.atenderAhora)}</td>
+                    <td className="px-2 py-2 text-right">{n(a.tocadosPorAsesora)}</td>
+                    <td className="px-2 py-2 text-right">{n(a.ventas)}</td>
+                    <td className="px-4 py-2 text-right font-semibold text-ink-900 sm:px-5">{pct(a.conversion)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className={cn(ROW, "space-y-1.5 text-[13px] leading-5 text-ink-700")}>
+            {pendientes > 0 && (
+              <p className="text-ink-500">
+                {n(pendientes)} {pendientes === 1 ? "lead sorteado espera" : "leads sorteados esperan"} sus 7 días para
+                entrar a la comparación.
+              </p>
+            )}
+            <p>
+              {diff == null ? (
+                "Todavía falta un grupo con leads para comparar."
+              ) : (
+                <>
+                  Tratamiento − control:{" "}
+                  <strong className="font-semibold tabular-nums text-ink-900">
+                    {diff > 0 ? "+" : diff < 0 ? "−" : ""}
+                    {dec1(Math.abs(diff))} puntos
+                  </strong>
+                  .
+                </>
+              )}
+            </p>
+            {ag && (
+              <p className="tabular-nums">
+                El agente: {n(ag.llamadas)} {ag.llamadas === 1 ? "llamada" : "llamadas"} · {n(ag.contestadas)}{" "}
+                contestadas · {n(ag.sinGestion)} sin gestión · costo de línea{" "}
+                {ag.conCosto ? usd(ag.costoLinea) : "—"}
+                {ag.conCosto > 0 && ag.conCosto < ag.llamadas && (
+                  <span className="text-ink-500">
+                    {" "}
+                    ({n(ag.conCosto)} de {n(ag.llamadas)} con costo)
+                  </span>
+                )}
+              </p>
+            )}
+            {report.motivos.length > 0 && (
+              <p>
+                Por qué no compran:{" "}
+                {report.motivos.map((m) => `${LEAD_VOICE_MOTIVO_LABEL[m.motivo] ?? m.motivo} (${n(m.n)})`).join(" · ")}
+              </p>
+            )}
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 

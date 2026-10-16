@@ -32,7 +32,9 @@ heredados continúan disponibles como evidencia y compatibilidad.
 3. Kapta no crea pedidos comerciales. Las correcciones comerciales se realizan
    anulando el pedido incorrecto en Shopify y creando otro.
 4. Kapta es la fuente de verdad operativa, logística, financiera y de auditoría.
-5. El historial se conserva indefinidamente.
+5. El historial se conserva indefinidamente. Excepción: los datos personales
+   del comprador de una tienda cliente de otra organización se anonimizan
+   según §29.15.9; los hechos operativos y financieros se conservan.
 6. Los hechos no se sobrescriben ni se eliminan. Una corrección genera un nuevo
    evento que conserva el valor anterior.
 7. Un pedido puede tener varias salidas físicas simultáneas o sucesivas.
@@ -58,6 +60,29 @@ nada —los 591 están en `order_master` y 499 ya tienen guía—, pero sí para
 lo que se calcula recorriendo leads: ese camino no los ve. El anuncio que los
 trajo viaja en `orders.utm_meta`, y las reglas para leerlo están en
 `lib/cod-cart-attribution.ts`.
+
+**Canal de venta (15-10-2026).** Todos los pedidos nacen en Shopify, pero no
+por el mismo camino, y lo dicen las etiquetas que cada camino le pone. El
+Master lo guarda en `order_master.sales_channel` (0264) y lo filtra con la
+píldora «Canal» (parámetro `cn` de la URL). Un pedido tiene un solo canal; si
+lleva marcas de dos, gana el primero de esta lista —quien cerró la venta antes
+que la herramienta donde quedó escrita—:
+
+| Canal | Etiqueta en Shopify | 45 días al 15-10-2026 |
+| --- | --- | --- |
+| Asesora (Leads) | `venta_manual`, `carrito_recuperado` | 15 % |
+| Chatbot WhatsApp | `kapso`, `whatsapp`, o el pedido trae conversación de Kapso | 9 % |
+| Bot de carritos | `CARRITO RECUPERADO`, `BOT`, `BOT (whatsapp_cloud)` | 4 % |
+| Catálogo WhatsApp | `catalogo-wsp` (el catálogo privado del agradecimiento, §31) | 1 % |
+| Web · carrito completado | `easysell-abandoned-checkout` (formulario abandonado que la clienta completó después) | 15 % |
+| Web · formulario | `easysell_cod_form` | 55 % |
+| Sin marca | ninguna de las anteriores (sobre todo pedidos creados a mano en Shopify con el nombre de la asesora como etiqueta) | 1,5 % |
+
+La regla vive en `lib/sales-channel.ts` y la escribe el recálculo del pedido;
+la misma regla en SQL (`order_sales_channel`) solo rellenó lo existente al
+aplicar la 0264. No se usa para atribuir ventas a una asesora: eso lo decide
+`order_sales` y el reparto bot/asesora de Consolidado (`lib/metrics.ts`), que
+además mira la gestión del lead.
 
 ### Salida
 
@@ -113,6 +138,10 @@ Reglas:
   `pedido + consecutivo` y el rótulo dice `Por definir`.
 - La regla de repetición por modalidad se evalúa cuando el courier se conoce; el
   máximo de cinco salidas rige siempre, porque no depende del courier.
+- **«Sacar con salida nueva» (12-10-2026, §29.13)** abre un consecutivo más
+  mientras el motorizado todavía tiene la caja anterior: cuenta en el máximo de
+  cinco. La salida reemplazada conserva su consecutivo, código, QR y rótulo
+  —es la caja que vuelve— y nunca se reutiliza.
 - **Crear la guía de un courier (Tanders, Aliclik, Shalom) RELLENA la salida
   `por definir` del pedido en vez de abrir una segunda.** Fijar el courier es lo
   que la salida estaba esperando; es la misma caja, ya armada y rotulada. Se
@@ -528,6 +557,34 @@ Subetapas:
 - `por_armar`.
 - `incidencia_preparacion`.
 
+#### Programar envío (15-10-2026)
+
+Un pedido confirmado puede tener un día acordado para salir —la clienta recibe
+en su trabajo el lunes, o pidió que se despache el sábado—. Hasta esta fecha el
+equipo lo anotaba en su Excel de provincia («enviar lunes 26-10») y en Kapta el
+pedido aparecía como confirmado sin guía, igual que uno olvidado (#KP140347).
+
+- **Dónde.** En la ficha, pestaña Operar, dentro de «Elegir ruta y generar el
+  rótulo»: **«Programar envío»**, con la fecha y una nota opcional. Solo en
+  Preparación · Por generar rótulo, con permiso para editar el Master.
+  Programar otra vez cambia la fecha; **«Quitar»** pide motivo.
+- **Qué queda.** Un hecho del historial con actor: `dispatch_date_set` (fecha
+  y nota) o `dispatch_date_cleared` (motivo). Manda el último. Se programa hoy
+  o hasta 45 días adelante.
+- **Qué se ve.** La fila del Master y el encabezado de la ficha llevan una
+  chapa: «Programado · sale lun 26/10», «Programado · sale hoy» o, si el día
+  pasó sin guía, «Programado para el lun 19/10 y no salió» en rojo. El filtro
+  «Envío programado» de Más filtros (parámetro `ep`) separa programados a
+  futuro, los que salen hoy, los que no salieron y los que no tienen fecha.
+- **Cuándo deja de valer.** Al crear la guía o la salida el pedido sale de Por
+  generar rótulo y la fecha deja de mostrarse (`order_master.dispatch_scheduled_on`,
+  0267, solo se llena en esa subetapa). Si esa guía después se anula, el pedido
+  no hereda la fecha vieja: una salida creada después de programar la deja sin
+  efecto.
+- **No cambia la etapa** ni es la «salida programada» de Grupo GF en Lima
+  (`dispatch_programmed`, §29.13), que ya tiene caja y motorizado: esta es
+  anterior a la guía.
+
 Flujo físico:
 
 ```text
@@ -548,6 +605,11 @@ Reglas:
   cola es la de esta fase (`Preparación · Por armar`); allá se decide qué caja
   va con qué courier. Quien arma no necesita permisos de ruta y ve su pendiente
   además de lo que ya escaneó.
+- La misma pantalla tiene un apartado aparte, «Reintentos por salir» (§9.5):
+  las cajas de «Por reprogramar Lima» que salen hoy y mañana. No es esta cola:
+  no entra en los recuadros de «Por empacar» ni en el pendiente de la Mesa de
+  despacho, no usa los cortes de turno, y lo que ya está en «Por armar» no se
+  cuenta dos veces.
 - La cola de armado se define por el PEDIDO, no por la salida suelta: una salida
   cuyo pedido ya no está en `Por armar` —cancelado, o despachado por otra caja—
   no es trabajo de almacén y no se lista.
@@ -924,7 +986,7 @@ Ejemplos:
 | Cualquier courier de Lima anuló la guía con la caja ya fuera (v1.23) | En curso | Por reprogramar Lima |
 | Ruta cerrada con la parada entregada, sin liquidar | Por cerrar | Pendiente de liquidación |
 | Aliclik retornando y Swayp repartiendo | En curso | En reparto |
-| Una salida entregó y otra sigue activa | Por cerrar | Salida adicional activa |
+| Una salida entregó y otra sigue activa (la reemplazada que vuelve con el motorizado no cuenta: es «Devolución física pendiente», §29.13) | Por cerrar | Salida adicional activa |
 | Entregado, courier aún no liquidó | Por cerrar | Pendiente de liquidación |
 | Entregado (no Agencia) sin ninguna salida ni motorizado, pagado completo a la tienda (v1.25, §6.5) | Finalizado | Entregado y cerrado |
 | Entregado (no Agencia) sin ninguna salida, sin pago completo validado | Por cerrar | Pendiente de liquidación |
@@ -1471,7 +1533,11 @@ intento fallido (`apiGuideReceivedBack`, `lib/reproprovincia.ts`), con la misma
 ventana y la misma ancla. Grupo GF y el motorizado propio no entran: su
 «Recibir en oficina» devuelve la salida a «por asignar». Lo que el motorizado
 propio no entregó se reprograma desde «Desde la lista» con su misma salida,
-también sin solicitud de Grupo GF (06-10-2026, §29.13).
+también sin solicitud de Grupo GF (06-10-2026, §29.13). Si el motorizado
+todavía tiene la caja y el pedido tiene que salir antes, sale con una salida
+nueva y la anterior queda «en devolución» a su nombre (12-10-2026, §29.13):
+esa salida no bloquea la toma, no se reusa ni se rotula, no es la salida
+vigente del pedido y no abre una recuperación.
 
 Lo que queda fuera: Axel no reporta sus no entregados a Kapta —solo llegan por
 la liquidación, que únicamente mueve entregas—. Urpi sí los reporta desde el
@@ -1510,26 +1576,32 @@ Responsable principal: Daysi. Diana apoya rutas y cotejo.
 ### 9.1 Preparación, corte y capacidad diaria
 
 - Almacén: Yelitza y Matías.
-- El corte operativo actual se realiza aproximadamente hasta las 11:00.
 - Los pedidos de Lima centro se distribuyen principalmente entre los
-  motorizados propios Johnny, Roy y Douglas.
-- Axel Courier es operado por Alexis. Daysi llama y confirma aproximadamente
-  entre 30 y 40 puntos diarios antes de entregarle la ruta.
-- Las entregas de Alexis comienzan normalmente entre 14:00 y 15:00 y continúan
-  durante la tarde.
+  motorizados propios Johnny (Yhoni), Roy y Duglas.
 - La preferencia de entrega indicada previamente por el cliente en WhatsApp
   debe formar parte de la sugerencia de ruta.
 
-Los cortes previamente declarados siguen como referencia para automatización:
+**Hora de decisión y salida real, por courier (12-10-2026, decisiones 11 y 12
+del owner).** Reemplaza el corte de almacén de «aproximadamente las 11:00» y
+los cortes declarados antes como referencia (motorizados propios hasta las
+10:30, Axel Courier hasta las 12:00): ya no rigen. La hora de decisión es
+capacidad u horario de ruta, no un estado del pedido. Lo que se decide después
+sale en la siguiente salida de ese courier.
 
-- Motorizados propios: mismo día hasta 10:30.
-- Axel Courier: mismo día hasta 12:00.
-- Swayp: rutas enviadas 16:00–17:00 para el día siguiente.
-- Tanders: normalmente día siguiente.
+| Courier | Hasta cuándo se decide | Cuándo sale de verdad |
+| --- | --- | --- |
+| Grupo GF Courier: Johnny (Yhoni), Roy, Duglas y Alexis | Hasta las 12:00 del mismo día (`same_day_cutoff` del proveedor, abajo). Después, al día siguiente, salvo que Despacho GF apruebe el cambio (§29.6) | Alexis recoge a las 12:30 y reparte esa tarde en todo Lima; sus entregas empiezan normalmente entre 14:00 y 15:00 |
+| Swayp | De 16:00 a 17:00 del día anterior, de lunes a sábado | Al día siguiente; nunca el mismo día ni en domingo (§11.6.1) |
+| Tanders | Antes de su recojo | El día en que recolecta (§9) |
+| Urpi | Solo primeros despachos, en una ruta de Urpi de la Mesa de despacho («Excel para Urpi») | En su turno de mañana o de tarde (§9.2). Un reprogramado no pasa a Urpi (§9.5); desde Kapta, en la fase 2 |
+| Axel Courier | Por la Mesa de despacho; ya no se sugiere (§9.2) | Sin horario vigente: el de antes era el de Alexis |
 
-La diferencia entre el corte general de almacén (aprox. 11:00) y los cortes de
-cada courier debe modelarse como capacidad/horario de ruta, no como un estado
-del pedido.
+- **Alexis es motorizado de Grupo GF** (decisión 11), no el operador de Axel
+  Courier como decía esta sección: reparte con caja de Grupo GF, la trae a la
+  oficina cada dos o tres días y reporta como los demás (§9.4). Johnny y Yhoni
+  son la misma persona. Daysi llamaba y confirmaba entre 30 y 40 puntos
+  diarios antes de entregarle la ruta; un reprogramado de Lima se confirma
+  ahora en «Repro Lima» (§9.5).
 
 **Corte de Grupo GF a las 12:00 (11-10-2026, decisión del owner).** Lo que se
 programa o se toma hasta las 12:00 del mismo día sale esa tarde: Alexis recoge
@@ -1543,7 +1615,7 @@ estado del pedido.
 La decisión final sigue siendo de Seguimiento Lima. La sugerencia actual parte
 de estas reglas observadas por Daysi:
 
-1. Lima centro: Johnny, Roy o Douglas.
+1. Lima centro: Johnny, Roy o Duglas.
 2. Cliente que pidió la tarde o puede recibir desde las 14:00: Axel Courier.
 3. Distritos del sur, incluidos Punta Hermosa y Pachacámac: priorizar Swayp.
 4. Si el cliente no puede recibir en el horario de Axel: Swayp, después Tanders
@@ -1585,7 +1657,10 @@ entonces:
   paquete, puede reintentarlo con la misma salida.
 - Si cambia el producto, courier o día de salida, se crea una salida nueva con
   QR nuevo. Almacén reimprime, arma otra caja y la coloca en la agrupación del
-  nuevo courier.
+  nuevo courier. **Con Grupo GF, un cambio de día solo no crea salida**
+  (12-10-2026): su misma salida vuelve a salir el día nuevo (excepción de
+  Grupo GF, abajo). Lo que hace Almacén con la caja lo dice la tabla «Qué
+  hacer con la caja» (abajo).
 - **En Lima, cuando otro courier no entregó y su caja vuelve (09-10-2026,
   decisión del owner).** Lo que se reimprime es **el rótulo de la salida nueva**, no el del
   courier que no entregó: después de la llamada, «Imprimir rótulo de la salida
@@ -1598,9 +1673,18 @@ entonces:
   (S01), la caja se armó con él, Grupo GF creó al tomarla una S02 cuyo rótulo
   nadie imprimió, y en «Verificar caja» el QR de la caja no cuadraba.
 - Excepción de Grupo GF: si no cambia el producto ni el courier, su propia
-  salida vuelve a salir otro día con el mismo envío, QR y rótulo —recibida en
-  oficina (§29.5, v1.15) o, sin solicitud de Grupo GF, desde «Desde la lista»
-  (06-10-2026, §29.13)—. No se arma otra caja para el mismo paquete.
+  salida vuelve a salir otro día con la misma salida y QR —recibida en oficina
+  (§29.5, v1.15) o, sin solicitud de Grupo GF, desde «Desde la lista»
+  (06-10-2026, §29.13)—. Se reimprime el rótulo de la misma salida («REIMPRESO
+  dd-mm») si cambió la dirección o el monto (12-10-2026); si no, sale con el
+  mismo rótulo. No se arma otra caja para el mismo paquete, salvo
+  **«Sacar con salida nueva»** (12-10-2026, §29.13): si el motorizado todavía
+  tiene la caja y el pedido debe salir antes de que la devuelva, se arma otra
+  caja desde stock con salida, QR y rótulo nuevos. La anterior queda en
+  devolución a su nombre (custodia `retorno`, evento `output_replaced`) y, al
+  recibirla en oficina, se desarma y vuelve a stock: no se reutiliza ni vuelve a
+  la cola. Cuenta dentro de las cinco salidas; el motivo de salida adicional lo
+  escribe el sistema.
 - La nueva salida no debe borrar ni cerrar automáticamente la devolución física
   de la salida anterior.
 - El equipo revisa el courier anterior y el motivo antes de elegir el siguiente.
@@ -1611,6 +1695,61 @@ entonces:
 La entrevista menciona como posibilidad volver a enviar por Swayp. Esto queda
 registrado como discrepancia operativa, pero no modifica la política del owner
 hasta que Frankz la cambie expresamente.
+
+#### Qué hacer con la caja (12-10-2026, decisión 8 del owner)
+
+Cuando un «No entregado» de Lima vuelve a salir, la caja se mantiene por
+defecto. La acción **la calcula Kapta; Almacén no la elige**: la lee. Se
+calcula al guardar el acuerdo en «Repro Lima» (§9.5) con los cambios que
+declara quien habló con el cliente, el courier acordado, dónde está la caja y
+las salidas usadas (`reproBoxAction`, `lib/repro-box-action.ts`), y se guarda
+en el caso con quién decidió y cuándo. Almacén la lee en «Reintentos por salir»
+(§9.5). La primera fila que aplica gana:
+
+| Orden | Qué pasó | Acción | Salida, QR y rótulo | Lista para |
+| --- | --- | --- | --- | --- |
+| 1 | El cliente ya no lo quiere, o quien decide cierra el caso sin llamada (plazo sugerido o cinco salidas usadas, §9.5) | **Desarmar y cerrar**: Almacén la desarma cuando está en oficina (cuaderno «DESARMAR»). No anula la venta | La salida no vuelve a salir | El día en que la caja está en oficina |
+| 2 | La caja sigue con el motorizado o vuelve con Tanders o Swayp, y el cliente la quiere ya («No esperar la caja»). Con la caja que no consta, solo en un caso reabierto después de «Desarmar y cerrar» (§9.5) | **Caja nueva desde stock**: con Grupo GF, «Sacar con salida nueva» en Despacho del día (§29.13); con otro courier, su salida desde la Mesa de ruta. La anterior se desarma al recibirla, o si aparece | Nuevos; cuenta para las cinco. En el caso reabierto con la salida propia de Grupo GF que estaba en oficina, **la misma salida**: se reimprime su rótulo (mismo QR) y Grupo GF la toma en Despacho del día; no nace salida ni cuenta para las cinco | Grupo GF: hoy si se confirma hasta el corte, en el anaquel antes de las 12:30. Tanders o Axel: hoy, antes del recojo. Swayp: desde mañana |
+| 3 | Cambia el producto, la talla, el color o la cantidad, o la caja está abierta o dañada | **Desarmar y rearmar** | Nuevos; cuenta para las cinco | Desde mañana: se prepara la noche anterior |
+| 4 | Cambia el courier, o el pedido no tiene una salida propia viva | **Salida nueva y rearmado**. De otro courier a Grupo GF, el rótulo nuevo va encima del anterior, tapando su QR (09-10-2026, arriba). De Grupo GF a otro courier, se rearma y se retira la etiqueta vieja | Nuevos; cuenta para las cinco | Desde mañana: se prepara la noche anterior |
+| 5 | Cambia la dirección o la referencia —corregida antes en el editor de destino de la salida— o el monto, y sigue con el mismo courier | **Reimprimir el rótulo de la misma salida**: se retira el rótulo viejo (o se tacha el monto), se marca «REIMPRESO dd-mm» y el despachador compara el monto | Misma salida y QR; rótulo reimpreso | Desde mañana: se prepara la noche anterior |
+| 6 | Nada más: solo cambia el día, o el teléfono | **Mantener**: pasa del estante al anaquel del día. El teléfono nuevo se anota en la ficha y se le pasa al motorizado (§9.5, paso 4) | Misma salida, QR y rótulo | Hoy si se confirma hasta el corte de las 12:00 |
+
+- «No esperar la caja» solo se ofrece con la caja en manos del motorizado o
+  volviendo con su courier, y gana a un cambio de producto: con el producto
+  cambiado y la caja fuera, es la única acción que no espera la caja. Que la
+  caja vuelva con Tanders o Swayp no basta: sin «No esperar la caja», el
+  acuerdo espera a que se reciba (§9.5). Con la caja que no consta, solo en
+  un caso reabierto después de «Desarmar y cerrar» (§9.5): Almacén pudo
+  haberla desarmado. Sin reabrir, primero se busca («Ya la encontré:
+  programar»). La hoja y el servidor lo deciden igual, con el caso reabierto
+  (`noEsperarCajaAplica`).
+- Con Grupo GF y la caja que vuelve con su courier o que no consta, la
+  salida nueva la crea Grupo GF al tomarlo solo si el pedido entra como
+  reintento. Si nadie puede sacarla, «Caja nueva desde stock» lo dice («falta
+  la salida nueva de Grupo GF (Kapta todavía no la crea; avisa a Despacho
+  GF)») y no se programa (`falta_salida`, §9.5).
+- Una caja de «Desarmar y cerrar» que todavía estaba en la caja de un
+  motorizado de un día anterior y se escanea en «Por QR» se recibe en oficina
+  y ahí termina: no se programa, no se toma ni se asigna (§29.13).
+- La fecha del acuerdo respeta «Lista para»: Kapta no deja elegir hoy para una
+  acción que se prepara la noche anterior.
+- Lo que impide una acción se dice y no se resuelve solo: otra guía viva de
+  otro courier («La guía de Tanders sigue viva: la trabaja ese courier»), Urpi
+  para un reprogramado (§9.5), Tanders o Swayp que ya llevaron el pedido (una
+  sola vez en Lima) y las cinco salidas usadas («Ya usó las 5 salidas: solo
+  queda «Desarmar y cerrar».»). Ninguno cierra el caso por su cuenta.
+- Reimprimir es de la **misma salida**: no crea salida ni QR. El rótulo viejo
+  se retira para que la caja lleve un solo rótulo vigente.
+- Sin acuerdo de Repro Lima (un «Programar» de Grupo GF o una fecha del
+  motorizado, §29.7), nadie declaró cambios: Almacén ve la acción de esta
+  tabla con lo que hay —«Mantener» con la salida propia viva; «Salida nueva y
+  rearmado» si el pedido entra como reintento de otro courier— con «Por
+  defecto: sin acuerdo de Repro Lima» (decisión 1 del owner, 13-10-2026). Si
+  el cliente cambió algo, lo decide Repro Lima. Lo mismo vale para el programa
+  que dejó un acuerdo anterior, y para el programa de un pedido cuyo acuerdo
+  venció sin programarse: ese acuerdo ya no manda (§9.5). Si algo impide la
+  acción (arriba), no hay acción: la fila dice el problema.
 
 #### Un pedido cerrado se dice igual en todas las pantallas, y con el sitio donde se abre
 
@@ -1661,11 +1800,84 @@ Reglas:
   ese estado **se recalcula solo** en cuanto exista otra salida viva y no hace
   falta corregirlo a mano.
 
+#### Intentos de entrega (15-10-2026)
+
+La columna de intentos del Master (`order_master.attempt_count`, «Propio · 2
+intentos» bajo el courier) suma lo que reportan los couriers externos —los
+intentos de Aliclik o, si no los trae, las reprogramaciones que gestionó el
+equipo— y, desde el 15-10-2026, **cada parada que reporta un motorizado propio
+es un intento** (`ownRiderAttempts`, evento `stop_reported`): entregada o no.
+Dos «No contesta» y una entrega son tres intentos; una parada que se corrige de
+«No entregado» a «Entregado» es la misma visita y cuenta una vez. Antes el
+Master solo sumaba lo externo: los 487 pedidos con un «No entregado» de Grupo GF
+decían «0 intentos» (#KP140941: salió el 13/10 y el 14/10 con Roy, «No
+contesta» las dos veces, y la fila decía 0).
+
+- **No cambia el costo.** El costo logístico sigue con los intentos del
+  courier: ni Grupo GF, ni Urpi, ni Swayp ni Tanders cobran por intento
+  adicional en las tarifas, y sumar sus visitas a la
+  tarifa de otro courier (un pedido que luego salió con Aliclik) inventaría un
+  costo.
+- **No cambia la etapa.** Es un dato de la fila; la macroetapa se decide como
+  antes. `MOM_RESOLUTION_VERSION` sube a `mom-v1.27` para que el cron recalcule
+  la columna.
+- **El filtro.** En «Más filtros», «Intentos de entrega»: Todos, 0 intentos, 1
+  intento, 2 intentos, 3 intentos y 4 a más intentos (parámetro `at` de la URL,
+  de 0 a 4). Reemplaza la casilla «Más de un intento»; un enlace viejo con esa
+  casilla abre el listado sin ese filtro. «0 intentos» es «ningún intento
+  reportado», no «nunca salió»: también cae ahí lo que entregaron Tanders,
+  Shalom, Olva o Urpi, que no reportan intentos a la columna (abajo). Para
+  acercarse a «nunca salió», se combina con la etapa (Preparación o Por
+  despachar).
+- **Urpi también cuenta (v1.28, 15-10-2026).** Cada fila del reporte de Urpi
+  (§30.11) vinculada al pedido con resultado «Entregado», «Cancelado» o
+  «Reprogramado» es un intento (`urpiAttempts`); «Programado», «En
+  coordinación» y «Sin resultado» todavía no lo son. #KP131545: Urpi lo canceló
+  el 01/09 (fila 1906, vinculada por teléfono) y la fila decía «0 intentos»
+  aunque el intento ya estaba en su pestaña Actividad. Cargar el reporte no
+  toca guías ni eventos, así que desde la 0265 el barrido del Master
+  (`order_master_stale`) mira también la última escritura de las filas de Urpi
+  del pedido: un intento nuevo, cambiado o vinculado a mano recalcula su fila.
+  Lo que no la recalcula: si un envío se re-vincula de un pedido a otro, el
+  pedido que lo pierde conserva el número hasta su próximo recálculo.
+- **Swayp y Tanders, por sus estados (v1.29, 15-10-2026).** No mandan un
+  número de intentos, pero sus estados lo dejan ver (`courierVisitAttempts`).
+  En Swayp cada «Novedad» (6) que llegó como estado es una visita fallida y
+  «Entregada» (7) es otra; si la guía terminó en Devolución (8, 9 o 12) sin que
+  se viera ninguna, cuenta una, porque el barrido no siempre alcanza a ver la
+  Novedad. Tanders solo da el estado actual: llegar a «Delivered», «Returning»
+  o «Returned» (o entregarse) es una visita por guía; si Tanders reintentó por
+  su cuenta, Kapta no lo sabe. Solo se suma lo que pase de lo que la guía ya
+  traía (las reprogramaciones del equipo). Caso: los 11 «Por reprogramar Lima»
+  del 11 y 12/10 con «0 intentos» y la Devolución de Swayp o el Returned de
+  Tanders en su Actividad.
+- **Grupo GF: también el cuaderno histórico (v1.30).** Los intentos del
+  motorizado propio salen de las paradas de las rutas (`delivery_stops`),
+  además de los eventos `stop_reported`: 4.745 de las 5.652 paradas reportadas
+  al 15-10-2026 eran las paradas del cuaderno histórico, cargadas sin evento, y
+  no se contaban. Una parada con evento cuenta una sola vez.
+- **«Salió con» (v1.30, 15-10-2026).** El filtro «Courier» mira el courier
+  vigente y el último, y para Grupo GF solo decía «Propio». La píldora «Salió
+  con» (parámetro `sc`) responde con quién salió de verdad el pedido:
+  `order_master.dispatched_with` (0266, `lib/dispatched-with.ts`) guarda cada
+  motorizado de Grupo GF que tuvo una parada reportada con el pedido —o lo
+  lleva ahora: parada pendiente y la caja con el courier— como «Grupo GF ·
+  Roy», y cada courier externo cuya guía llegó a salir (despachada, en ruta,
+  entregada, de vuelta o con intentos), y Urpi si su reporte tiene intentos.
+  Una salida de Grupo GF sin parada conocida queda como «Grupo GF». Basta con
+  uno para que el pedido entre en el filtro; las opciones salen de los datos
+  (`master_facets`), así que un motorizado nuevo aparece solo. La fila del
+  Master lo enseña bajo los intentos («Salió con Roy, Tanders»), y el courier
+  se nombra como lo dice el equipo: Grupo GF, Swayp, Por definir.
+- **Lo que todavía no cuenta.** Shalom y Olva (agencia: la clienta recoge) no
+  tienen visitas. La programación enviada a Urpi (§30.10) tampoco: dice qué se
+  mandó, no qué pasó en la puerta.
+
 ### 9.4 Reportes, pagos y devoluciones físicas de Lima
 
 | Operador | Fuente del resultado | Momento observado |
 | --- | --- | --- |
-| Johnny, Roy y Douglas | WhatsApp; `entregado` o `entregado en efectivo`, más evidencia para Yape, Plin, link o POS | Durante/final de ruta |
+| Johnny (Yhoni), Roy, Alexis y Duglas | WhatsApp; `entregado` o `entregado en efectivo`, más evidencia para Yape, Plin, link o POS | Durante/final de ruta |
 | Axel Courier | Cuadro de entregados y devueltos; devolución física normalmente al día siguiente | Día siguiente |
 | Swayp | Excel/plataforma en tiempo real | Durante la ruta |
 | Urpi | Plataforma en tiempo real; su export «Reporte del mes – detallado» se carga en Kapta (§30.11) | Durante la ruta |
@@ -2010,13 +2222,20 @@ sin tope de antigüedad. Reglas:
 
 Devoluciones físicas:
 
-- Motorizados propios: el saldo no entregado se coteja físicamente al día
-  siguiente, pedido por pedido.
+- Motorizados propios: el saldo no entregado se queda con el motorizado hasta
+  que lo trae a la oficina, y de noche no se recibe nada. Johnny (Yhoni) y Roy
+  lo traen al día siguiente; Alexis, cada dos o tres días (owner, 12-10-2026).
+  Se recibe en oficina («Recibir en oficina», §29.13) el día que llega, pedido
+  por pedido y por su salida/QR. Hasta entonces la salida sigue «No entregado»
+  a su nombre. Para Duglas no hay una cadencia confirmada.
 - Axel: Daysi o Diana fotografía y coteja los paquetes devueltos y la fecha.
 - Swayp y Urpi: el recojo de devoluciones ocurre actualmente cada semana o cada
-  quince días; cada salida debe permanecer abierta hasta recibir su caja.
+  quince días (Urpi, cada una o dos semanas); cada salida debe permanecer
+  abierta hasta recibir su caja.
 - Si ya existe otra caja armada para el mismo pedido, la devolución anterior se
-  identifica por su salida/QR; nunca se concilia solo por número de pedido.
+  identifica por su salida/QR; nunca se concilia solo por número de pedido. Si
+  la otra caja salió con «Sacar con salida nueva» (§29.13), la anterior se
+  recibe por su salida/QR y se desarma: vuelve a stock.
 - Los pedidos que el cliente rechazó definitivamente y que fueron anulados en
   Shopify no se vuelven a armar.
 
@@ -2031,17 +2250,24 @@ Cobros y liquidación observados:
   financieros definidos en la sección de Liquidaciones no cambian: el sistema
   debe separar `resultado reportado`, `pago verificado` y `lote conciliado`.
 
-### 9.5 Reprogramación en Lima: procedimiento de la fase 0 (11-10-2026)
+### 9.5 Reprogramación en Lima: «Repro Lima» (fase 1, entregas 1a y 1c)
+
+Desde el 12-10-2026 la tienda llama al cliente de Lima que no recibió, confirma
+fecha y courier y deja el acuerdo en **«Repro Lima»** (abajo); Kapta lo lleva a
+Grupo GF, que ejecuta y reporta. El procedimiento de la fase 0 sigue siendo el
+recorrido físico de la caja, con los pasos 1 y 3 al día.
+
+#### Procedimiento de la fase 0 (11-10-2026)
 
 Decisión del owner sobre la propuesta «Reprogramación en Lima: quién hace
 qué». Ordena el trabajo con las pantallas que ya existen; no crea etapas,
-subetapas ni estados nuevos. La pantalla propia de la tienda («Repro Lima») y
-la lista de Almacén «Reintentos por salir» quedan para una fase posterior.
+subetapas ni estados nuevos.
 
 - **Cualquiera del equipo** llama, gestiona, reprograma, programa y recibe en
   oficina; no hay una persona asignada. Lo hacen desde Grupo GF Courier →
   Despacho del día, abierto a quien despacha (`dispatch.manage`) o administra
-  el courier (`logistics.manage`, §29.10). El actor real queda en cada evento.
+  el courier (`logistics.manage`, §29.10). Desde la fase 1, la llamada y el
+  acuerdo van por «Repro Lima». El actor real queda en cada evento.
 - **Grupo GF toma cualquier pedido de la cola**, también un reprogramado que
   todavía no tiene fecha (§29.13, decisión del 06-10-2026): no se agrega un
   bloqueo por fecha.
@@ -2050,38 +2276,756 @@ la lista de Almacén «Reintentos por salir» quedan para una fase posterior.
   aprueba Despacho GF (§29.6).
 - **Paso a paso de un «No entregado» de Grupo GF:**
   1. El motorizado reporta el motivo y la foto en su ruta; si el cliente pide
-     otro día, lo escribe en la nota. Puede reintentarlo el mismo día con la
-     misma caja (§9.3). Al terminar, entrega en oficina toda caja no entregada.
-  2. Esa misma noche alguien del equipo lo recibe con «Recibir en oficina»
-     (escaneo o lista, §29.13): al día siguiente no queda ninguna caja «No
-     entregado» a nombre de un motorizado. La caja va al estante de
-     reprogramados, en la bandeja del día en que se recibió.
-  3. Alguien del equipo contacta al cliente y deja la fecha con «Programar»
-     en Despacho del día (motivo «Confirmado con cliente: …», §29.6), o anota
-     en la ficha por qué no se programó. «Programar» solo guarda el día y el
-     pedido sigue con Grupo GF; si el cliente necesita otro courier no se usa:
-     se arma otra salida desde la mesa de ruta del pedido (§9.3). La fecha que
-     el cliente dio en la puerta se confirma antes de programarla.
-  4. Para el día programado, la caja pasa del estante al anaquel del día. Por
-     defecto **se mantiene**: misma salida, QR y rótulo (excepción de Grupo GF,
-     §9.3). Se reimprime el rótulo de la misma salida si cambió la dirección
-     —corregida antes con el editor de destino de la salida, que la guarda en
-     la salida y en Shopify; corregirla solo en Shopify no cambia el rótulo— o
-     el monto (el rótulo lo lee del pedido). El teléfono del rótulo es el que
-     se guardó al crear la salida y hoy Kapta no lo cambia: el número nuevo se
-     anota en la ficha y se le pasa al motorizado al asignarlo. Se arma otra
-     salida si cambia el producto o el courier (§9.3); se desarma si el cliente
-     ya no lo quiere o el pedido se cancela.
+     otro día, lo anota en **«Fecha que pidió el cliente»** (§29.7): queda en
+     la parada para que la tienda la confirme y no programa nada. Puede
+     reintentarlo el mismo día con la misma caja (§9.3). La caja no entregada
+     se queda con él hasta que la trae a la oficina: Johnny (Yhoni) y Roy al
+     día siguiente, Alexis cada dos o tres días (§9.4).
+  2. El día que el motorizado la trae, alguien del equipo la recibe con
+     «Recibir en oficina» (escaneo o lista, §29.13); de noche no se recibe
+     nada. Hasta entonces la salida sigue «No entregado» a nombre del
+     motorizado: es lo esperado, no una caja perdida. La caja va al estante de
+     reprogramados, en la bandeja del día en que se recibió (bandejas fijas:
+     una por día de recepción y una «sin fecha / más de 7 días», plan del
+     11-10-2026). Si ya tenía un
+     acuerdo de Repro Lima esperando la caja, al recibirla queda programado y
+     la caja va al anaquel de ese día (§29.13).
+  3. Alguien del equipo contacta al cliente desde **«Repro Lima»**: registra
+     el resultado y, si confirma, la fecha, el courier y lo que cambió. Con
+     Grupo GF, Kapta escribe el programa al decidir o al recibir la caja (motivo
+     «Repro Lima: confirmado con el cliente (…)», §29.6). Si el cliente
+     necesita otro courier, el acuerdo se guarda y la salida se arma desde la
+     mesa de ruta del pedido (§9.3). La fecha que el cliente dio en la puerta
+     se confirma antes de programarla. «Programar» de Despacho del día sigue
+     siendo de Despacho GF.
+  4. Para el día programado, la caja pasa del estante al anaquel del día.
+     Almacén lo lee en «Reintentos por salir» (abajo): qué cajas salen hoy y
+     mañana y qué hacer con cada una. Lo
+     que hace Almacén con ella lo dice el acuerdo (tabla «Qué hacer con la
+     caja», §9.3). Por defecto **se mantiene**: misma salida, QR y rótulo
+     (excepción de Grupo GF, §9.3). Si el motorizado todavía no la trajo y el
+     pedido tiene que salir antes —con Alexis puede tardar dos o tres días—,
+     «Sacar con salida nueva» en Despacho del día arma otra caja desde stock
+     (§29.13); la que vuelve se recibe después y se desarma. Se reimprime el
+     rótulo de la misma salida si cambió la dirección —corregida antes con el
+     editor de destino de la salida, que la guarda en la salida y en Shopify;
+     corregirla solo en Shopify no cambia el rótulo— o el monto (el rótulo lo
+     lee del pedido). El teléfono del rótulo es el que se guardó al crear la
+     salida y hoy Kapta no lo cambia: el número nuevo se anota en la ficha y se
+     le pasa al motorizado al asignarlo. Se arma otra salida si cambia el
+     producto o el courier (§9.3); se desarma si el cliente ya no lo quiere o
+     el pedido se cancela.
   5. Despacho GF lo asigna a un motorizado desde «Programados hoy» o por QR.
 - **Barrido inicial.** Las cajas «No entregado» que siguen registradas en la
-  caja de un motorizado se reciben en oficina una por una. Lo que no aparezca
-  físicamente no se recibe en oficina: se anota en la ficha del pedido (caja,
+  caja de un motorizado se reciben en oficina una por una. Una caja de Johnny
+  o Roy del día anterior, o de Alexis con menos de tres días, no es faltante:
+  está con el motorizado. Lo que no aparezca físicamente no se recibe en
+  oficina: se anota en la ficha del pedido (caja,
   motorizado, quién buscó y cuándo) y se avisa a Frankz o Yohalis para decidir
   merma, descuento al motorizado o reclamo. No es una búsqueda en la calle. Un
   registro propio de paquete que no consta queda para una fase posterior: §13
   todavía no lo define.
 - **Urpi**, mientras no se registre su despacho en Kapta (§30.11): un pedido con
   reporte de Urpi no se toma en Grupo GF sin revisar antes si ya salió con Urpi.
+
+#### «Repro Lima» (fase 1, entrega 1a, 12-10-2026)
+
+Decisión del owner sobre el plan de la fase 1 (decisiones 1 a 12, 12-10-2026):
+la fecha que da el cliente en la puerta se confirma con él y **nunca se
+programa sola** (decisión 7).
+
+- **Dónde.** `/dashboard/pedidos/repro-lima`: «Repro Lima» en la navegación,
+  justo después de «Repro Provincia».
+- **Quién.** Quien llama a los clientes o despacha: permiso propio
+  `repro_lima.manage` («Repro Lima: llamar y reprogramar en Lima», 13-10-2026,
+  decisión del owner), que traen los roles «Asesora» y «Despacho y Grupo GF»
+  (§16), la vendedora que aún no tiene roles, los admins y el owner. La Asesora
+  lo tiene sin tener Despacho del día (`dispatch.manage`). Vale en las tiendas
+  que la persona tiene asignadas en Equipo: el mismo alcance que Despacho del
+  día (`getAccessibleStores`). Sin el permiso, la pantalla dice «Repro Lima es
+  de quien llama a los clientes o despacha (rol «Asesora» o «Despacho y Grupo
+  GF»). Pide uno de esos roles en Equipo.»; sin tiendas, «No tienes tiendas
+  asignadas». El actor real queda en cada llamada y en cada evento.
+- **Qué pedidos.** Todo pedido de esas tiendas en «En curso · Por reprogramar
+  Lima» (`order_master`), de cualquier courier. La lista se calcula desde el
+  Master, no desde los casos.
+
+**El caso y el episodio.**
+
+- Un pedido tiene a lo sumo **un caso abierto** (`lima_repro_cases`, índice
+  único parcial, 0251). Nace con el primer gesto («Atender»), sin trigger ni
+  barrido: un pedido sin caso se ve igual en la lista.
+- El caso atiende un **episodio**: el fallo que lo abrió, que es la parada «No
+  entregado» más reciente y la salida de otro courier que no entregó
+  (`reproEpisodeKey`, `lib/repro-lima.ts`). Un reintento del mismo día reusa su
+  parada y sigue en el mismo episodio. Un día nuevo, o un courier nuevo que no
+  entrega, abre otro.
+- La parada más reciente se elige **por el día de su ruta**; en el mismo día,
+  por la que nació después (`delivery_stops.created_at`: la parada nace al
+  entregar la carga), y solo después por la hora del reporte
+  (`compareEpisodeStops`). Corregir el reporte de una parada anterior
+  (Liquidaciones 2, «Completar reportes anteriores») —de un día anterior, o
+  de otra ruta del mismo día, como la del motorizado que tenía la caja antes
+  de «Sacar con salida nueva»— reescribe esa hora, pero no la vuelve el fallo
+  más reciente: no abre otro episodio ni cierra el caso como `nuevo_intento`.
+  La línea del fallo compara igual una parada y la guía de otro courier del
+  mismo día.
+- Motivos de cierre (`close_reason`):
+  - `desarmar_cerrar`: «Ya no lo quiere» o «Desarmar y cerrar sin llamada». Es
+    el único cierre con evento (`lima_repro_closed`).
+  - `fuera_de_etapa`: el pedido ya no está en «Por reprogramar Lima» (salió,
+    se entregó o se anuló).
+  - `nuevo_intento`: el pedido tuvo un fallo posterior. Solo un fallo más
+    reciente cierra el caso; si la hoja se abrió con datos viejos, pide
+    volver a intentarlo.
+- Los dos últimos los cierra Kapta al leer o al actuar, sin evento. La fila ya
+  los trata como ausentes. Un «No entregado» nuevo después del cierre abre un
+  caso nuevo.
+
+**El candado.** «Atender» toma el caso por 10 minutos y lo renueva cada 4
+mientras la hoja esté abierta, como Envíos (`lib/shipments.ts`). Al cerrar la
+hoja o la pestaña, se suelta; también cuando la hoja se va sin «Cerrar» ni
+«Soltar» (atrás del navegador, el gesto de volver, un enlace de la ficha). Si
+la página vuelve del bfcache después de que el beacon lo soltó, la hoja lo
+vuelve a tomar sola y conserva lo escrito. Si otra persona lo tiene, la hoja
+se abre solo para leer: «Diana está atendiendo este pedido; se libera a las
+10:42.», con «Reintentar». Si se pierde, la hoja lo dice («Ya no tienes este
+caso», con «Volver a tomarlo») y conserva lo escrito. Lo mismo al guardar: si
+el servidor responde «Ya no tienes este caso: vuelve a tomarlo.» —lo note la
+acción o la RPC—, la hoja pasa a ese aviso en vez de dejar solo el error. Si
+tomarlo falla, la hoja dice «No pudimos tomar el caso. Vuelve a intentarlo.»,
+también con «Reintentar». Mientras el caso no es tuyo (se está tomando, lo
+tiene otra persona, falló o se perdió), lo escrito sigue a la vista pero sin
+poder editarse («Lo que escribiste sigue aquí. Reintenta para guardarlo.»), y
+cerrar con algo sin guardar siempre avisa (§11.5). Guardar exige el candado vivo y el mismo episodio (`lima_repro_record`).
+**Solo vale dentro de Repro Lima**:
+Grupo GF sigue tomando, programando y asignando el pedido. «Ver acuerdo» y
+«Cerrados» se abren solo para leer, sin candado.
+
+**Cuatro listas: etiquetas de pantalla, no subetapas.** «Por decidir»,
+«Llamar después», «Programados» y «Cerrados» se derivan del caso, del Master y
+del programa de Grupo GF. Ninguna es una subetapa: el pedido sigue en «En curso
+· Por reprogramar Lima» y `MOM_RESOLUTION_VERSION` no cambia (`mom-v1.26`).
+Cada lista es una tarjeta de estado que filtra y dice su número. La primera
+regla que aplica gana:
+
+1. **Cerrados**: sin caso abierto, y el último caso del episodio vigente se
+   cerró con «Desarmar y cerrar». Espera que Shopify anule la venta. No tiene
+   plazo: sale cuando el pedido deja la etapa o un fallo nuevo abre otro
+   episodio.
+2. **Programados**: un acuerdo vigente (su día no pasó), programado o no.
+   Si además hay una llamada pendiente, lleva «Toca llamar · 15:00».
+3. **Llamar después**: la próxima llamada todavía no llega. Si quedó un
+   acuerdo, lleva «Acuerdo anterior: …».
+4. **Por decidir**, vencido: un acuerdo cuyo día pasó sin programarse, que
+   era para hoy y ya no alcanza (`acuerdo_vencido`, abajo), o cuyo programa
+   pasó sin salir. La chapa dice cuál: «Acuerdo vencido: era para el jue
+   15/10», «Acuerdo vencido: era para hoy y ya no alcanza» o, si Grupo GF lo
+   programó para un día anterior al acordado y ese día pasó sin salir mientras
+   el acordado todavía no pasa, «Grupo GF lo programó para el mié 14/10 y no
+   salió; acordado vie 16/10».
+5. Un programa de Grupo GF sin acuerdo vigente. Si lo puso Grupo GF
+   («Programar»), va a **Programados** con «Programado en Grupo GF · sin
+   acuerdo». Si es de un acuerdo anterior, a **Por decidir** con «Programado
+   por un acuerdo anterior». Si lo creó el reporte del motorizado entre el 10
+   y el 12-10-2026 (§29.7), a **Por decidir** con «Fecha del motorizado sin
+   confirmar: mié 14/10».
+6. **Por decidir**: lo demás. Una llamada que ya toca cuenta como vencida.
+
+Orden de «Por decidir»: primero los fallos del último día de reparto (ayer, o
+el sábado si hoy es lunes); después lo vencido; después lo que lleva más de 7
+días en la etapa. En esos tres grupos va primero lo más antiguo; en el resto,
+lo más nuevo. El día del fallo de Tanders y Swayp, que no sellan cuándo
+fallaron, es el día en que salió el intento: el mismo ancla que `macro_since`
+(§11.7). «Llamar después» va por la hora de la llamada. «Programados»
+pone primero lo que pide a alguien (derivas, vencidos, lo que falta y lo que
+no se programó) y después sigue la fecha acordada. «Cerrados» pone arriba el
+último cierre.
+
+**«Todos»: los pedidos de Lima sin estado final (14-10-2026, pedido del owner
+del 13-10-2026).** Además de las cuatro listas, Repro Lima tiene una quinta
+tarjeta, «Todos · por entregar», para ver en qué anda cada pedido de Lima que
+todavía no tiene un estado final y darle curso sin perder ninguno. No es una
+lista de casos ni una subetapa: agrupa por la macroetapa y la subetapa del
+Master (`order_master.macro_stage` y `macro_substage`, §6), con sus nombres
+(`lib/order-macro-stage.ts`). No crea estados y `MOM_RESOLUTION_VERSION` no
+cambia (`mom-v1.26`).
+
+- **Qué pedidos.** Los de las tiendas a su alcance (`getAccessibleStores`) con
+  cobertura Lima (`order_master.coverage = 'lima'`) en cualquier macroetapa
+  menos «Finalizado», la única terminal (§6.6). Son los que cuenta el Master
+  con la cobertura «Lima» (`cv=lima`), así que cada cifra es la que el Master
+  da a esa etapa y subetapa. Incluye los pocos de Lima que se atienden por
+  agencia. «Por reprogramar Lima» es la excepción: su cifra sale de las filas
+  de las cuatro listas («Qué pedidos», arriba), con la tienda elegida y nunca
+  con la búsqueda.
+- **La cifra de la tarjeta** es lo que todavía no se entrega: Por confirmar,
+  Preparación, Por despachar y En curso. En Lima lo que no se entrega vuelve a
+  «Por reprogramar Lima»: solo la entrega lleva a Por cerrar y solo la
+  anulación en Shopify termina la venta (§9, 30-09-2026). **Decisión del owner
+  (14-10-2026):** a la pregunta de si «Por cerrar» suma a la tarjeta respondió
+  «como mejor lo creas conveniente», y se tomó la opción recomendada. «Por
+  cerrar» va aparte, en el bloque «Ya entregado, anulado o devuelto: falta
+  cerrar», abierto y con su total: el resultado ya se decidió y queda una
+  obligación (§6.5), y ahí siguen cajas que están afuera, como «Salida
+  adicional activa» y «Devolución física pendiente». No suma a la cifra de la
+  tarjeta.
+- **La pantalla.** En el teléfono la tarjeta va a todo el ancho, debajo de las
+  cuatro; desde 1024 px es la quinta columna. Al tocarla se quita la búsqueda
+  y no hay buscador (se cuentan pedidos del Master, no casos); la tienda sigue
+  en su píldora. La línea de cifras dice «N todavía por entregar · M por
+  cerrar», sin la segunda parte si es cero. Dos bloques: «Todavía por
+  entregar», con la línea «En Lima, lo que no se entrega vuelve a «Por
+  reprogramar Lima»; solo la entrega lo pasa a «Por cerrar».», y «Ya
+  entregado, anulado o devuelto: falta cerrar»; uno debajo del otro en el
+  teléfono y uno al lado del otro desde 1024 px. Sin ningún pedido, «No hay
+  pedidos de Lima sin estado final.».
+- **El resumen** sigue el orden del MOM: las etapas en el orden de §6 y, dentro
+  de cada una, sus subetapas en el orden canónico (`MACRO_SUBSTAGES_BY_STAGE`).
+  Solo aparecen las que tienen pedidos, así que una subetapa nueva aparece sola
+  en su lugar; una que el MOM ya no lista para esa etapa va después, por su
+  código, y los pedidos sin subetapa van al final, como «Sin subetapa». Una
+  etapa sin pedidos no se muestra; como Lima omite Por confirmar (§6.1), esa
+  etapa por lo general no aparece. Cada etapa lleva una línea que resume
+  §6.1-6.5: texto de pantalla, no estados. Cada pedido cuenta una vez, en su
+  subetapa: en Por cerrar es el primer motivo abierto y los demás quedan en
+  `macro_reasons`. Las subetapas suman su etapa.
+- **Antigüedad.** Cada subetapa dice cuántos llevan más de 7 días y más de 30
+  días en la etapa, en días de Lima desde `macro_since`: el mismo conteo que
+  «6 d en la etapa» de la fila y que la regla de 7 días que ordena «Por
+  decidir». Las chapas, la ámbar «N con más de 7 días» y la crítica «N con más
+  de 30», salen solo si hay alguno. En Por cerrar, «Por generar rótulo» y «Por
+  armar», `macro_since` es el último cambio de estado del pedido (en Por
+  cerrar, por ejemplo, la entrega). Estas cifras no filtran: el Master no
+  filtra por días en la etapa.
+- **Darle curso.** Cada subetapa abre el Master de Pedidos en esa etapa y
+  subetapa, con la cobertura «Lima» y la tienda elegida (`masterQueueHref`:
+  `/dashboard/pedidos?st=…&cv=lima&view=…&substage=…`; sin tienda elegida no
+  lleva `st` y el Master usa las mismas tiendas a su alcance). Una subetapa que
+  el MOM no lista para la etapa, o «Sin subetapa», abre la etapa entera, porque
+  el Master solo acepta las subetapas de esa etapa. El Master cuenta lo mismo
+  (§6: los contadores cuentan lo que muestra la lista) y cada pedido se opera
+  desde su ficha, con su próxima acción y sus permisos. «Por reprogramar Lima»
+  no sale de la pantalla: su cifra es la suma de las cuatro listas; la fila
+  abre «Por decidir» y, debajo, cada lista se abre con un toque. La vista va en
+  la URL (`?vista=todos`): al volver del Master, Repro Lima sigue en «Todos».
+  La tienda elegida no va en la URL y vuelve a todas.
+- **Solo lee.** «Todos» no escribe, no abre casos ni toma el candado. El
+  conteo es una sola lectura agrupada, `order_master_lima_open_counts` (0256),
+  solo para el cliente de servicio y después de `requireReproLima`. Si no se
+  puede leer (por ejemplo, sin la migración 0256), deja «repro-lima: conteo de
+  Todos» en el log, la tarjeta no aparece y el resto de Repro Lima sigue igual.
+
+Implementación: `db/migrations/0256_lima_open_counts.sql`
+(`order_master_lima_open_counts`, solo para el cliente de servicio),
+`lib/repro-lima-todos.ts` (las reglas, puras), `lib/repro-lima-todos-access.ts`
+(la lectura), `masterQueueHref` en `lib/master-query.ts`,
+`components/repro-lima-todos.tsx`, `components/repro-lima-board.tsx` y
+`app/dashboard/pedidos/repro-lima/` (`page.tsx` y `loading.tsx`). Pruebas en
+`test/repro-lima-todos.test.ts`, `test/repro-lima-todos-access.test.ts`,
+`test/master-query.test.ts`, `test/repro-lima-ui.test.ts`,
+`test/repro-lima-source.test.ts` y `scripts/sql/lima_open_counts_smoke.sql`.
+
+**Estados derivados del acuerdo** (`agreementState`). Tampoco son estados del
+Master: se calculan al leer, y el caso nunca se reescribe.
+
+| Estado | Cuándo | Qué dice la fila |
+| --- | --- | --- |
+| `sin_acuerdo` | No hay acuerdo vigente | Nada |
+| `acuerdo_vencido` | El día acordado pasó sin programarse, o sin su programa (también si Grupo GF quitó la fecha). O, con Grupo GF, el acuerdo es para hoy, no se programó y ya no alcanza hoy: pasó el corte (`same_day_cutoff`), o «Programar ahora» lo rechazaría porque su acción de caja se prepara la noche anterior; si espera la caja, solo cuenta el corte. Solo vence así lo que un botón programaría hoy («Programar ahora», «Ya la encontré» o la recepción): si falta la salida nueva, sigue en `falta_salida` todo su día y vence al siguiente | «El acuerdo era para el jue 15/10 y ya pasó: confírmalo de nuevo»; para hoy, «El acuerdo era para hoy (lun 12/10) y ya no alcanza: confírmalo de nuevo» |
+| `otro_courier` | Acordado con Tanders, Swayp o Axel | «Sale jue 15/10 con Tanders · crea la salida en la Mesa de ruta» |
+| `falta_salida` | Hace falta una salida nueva de Grupo GF que Kapta todavía no crea (lagunas, abajo), o «Caja nueva desde stock» sin quien saque la salida (abajo) | «Falta la salida nueva» |
+| `falta_ubicar` | No consta dónde está la caja | «No consta dónde está la caja: búscala antes de programar», con «Ya la encontré: programar» |
+| `falta_recibir_devolucion` | La caja vuelve con Tanders o Swayp | «Vuelve con Tanders: se programa cuando llegue (Devoluciones)» |
+| `esperando_caja` | La caja sigue con el motorizado de Grupo GF: se programa al recibirla | «Sale jue 15/10 con Grupo GF · esperando la caja» |
+| `por_programar` | Se puede programar y todavía no se hizo | «Sale jue 15/10 con Grupo GF · falta programarlo», con «Programar ahora» |
+| `deriva_quitado` | Grupo GF quitó la fecha, o la reemplazó al asignar, y el día acordado no pasó. Pasado ese día, es `acuerdo_vencido` | «Grupo GF no tiene la fecha (acordado jue 15/10)» |
+| `deriva_movido` | Grupo GF lo programó para otro día | «Grupo GF lo movió al vie 16/10 («motivo»)» |
+| `falta_sacar` | Caja nueva desde stock, con la caja anterior todavía con el motorizado | «Falta: Sacar con salida nueva» |
+| `programado_vencido` | Su día pasó y no salió | «Programado para el jue 15/10 y no salió» |
+| `programado` | Programado para el día acordado | «Programado · sale jue 15/10 con Grupo GF» |
+
+Dónde está la caja (`boxLocation`), para la fila y para la acción de la caja:
+`con_motorizado` («Con Roy desde sáb 10/10», también si su parada todavía no
+tiene reporte), `en_oficina` (recibida: Grupo GF puede tomarla, o la devolvió
+su courier), `volviendo_courier` («Vuelve con Tanders») o `desconocida` («No
+consta dónde está la caja»).
+
+- La salida propia que está en la solicitud vigente de Grupo GF del mismo
+  pedido —la que `gf_return_to_office` devuelve a `accepted` al recibirla— no
+  está «en otra solicitud»: recibida en oficina es `en_oficina`, y «Mantener»
+  se programa al decidir. Solo otra solicitud, también una cancelada, la deja
+  en «No consta».
+- En un caso reabierto después de «Desarmar y cerrar», la caja que ya estaba
+  en oficina antes de reabrir (o sin fecha de recepción) se lee «No consta»:
+  Almacén pudo haberla desarmado. La que se recibe después de reabrir sigue
+  «En oficina»: con el caso abierto, la recepción no pide desarmarla, y
+  «Mantener» se programa al decidir. Con el motorizado o volviendo con su
+  courier, no cambia.
+
+Cuándo se programa (`materializationPlan`): `ahora`, `al_recibir`, o no se
+programa por `otro_courier`, `falta_salida`, `falta_ubicar` o
+`falta_recibir_devolucion`.
+
+**Cuatro resultados por llamada** (§11.4). Canal: llamada o WhatsApp.
+
+- **Confirma fecha**: día, courier (Grupo GF por defecto, Tanders, Swayp o
+  Axel) y «¿Qué cambió?» (dirección o referencia, teléfono, monto, producto,
+  caja abierta o dañada, y «No esperar la caja» cuando aplica). Kapta calcula
+  la acción de la caja (§9.3) y la muestra con su «Lista para» antes de
+  guardar. Si cambia mientras se decide, pide revisarla: el servidor no
+  guarda («La caja cambió mientras decidías: revisa «Qué hacer con la caja» y
+  vuelve a guardar.», un problema de caja que la hoja no vio, como las cinco
+  salidas, o «El pedido cambió mientras lo abrías: vuelve a intentarlo.») y
+  se lo dice a la hoja. La hoja relee los hechos del pedido y recalcula «Qué
+  hacer con la caja»; lo escrito se conserva, y el siguiente «Guardar» usa la
+  acción nueva en vez de repetir el mismo rechazo.
+- **Llamar después**: día y hora de la llamada, a 60 días como máximo. Puede
+  ser hoy, para la vuelta de las 15:00.
+- **No contesta**: suma un intento y propone la vuelta siguiente (hoy a las
+  15:00, o mañana a las 08:30), que se puede quitar.
+- **Ya no lo quiere**: motivo de 8 caracteres como mínimo y segundo clic que
+  nombra el pedido (§11.5).
+
+«Desarmar y cerrar sin llamada» registra lo mismo con el canal `sin_contacto`.
+Cada resultado deja una fila en `lima_repro_calls` (append-only) y un evento
+con kind propio: `lima_repro_agreed` (confirma), `lima_repro_closed` (ya no lo
+quiere, o desarmar y cerrar) y `lima_repro_call` (llamar después y no
+contesta). Nunca `call`, `confirmation_contact` ni `contact_attempt`, que
+gastan el cupo de confirmación (`lib/order-confirmation.ts`). «Confirma» fija
+el acuerdo. «Llamar después» y «Ya no lo quiere» lo vacían; queda en el
+historial de llamadas. «No contesta» lo conserva. Un doble clic no registra dos
+llamadas.
+
+«Guardar y pasar al siguiente» abre el siguiente pedido de la misma lista que
+nadie más esté atendiendo. Si el guardado deja un error (por ejemplo «no se
+pudo programar… Usa «Programar ahora».») o pide crear la salida en la Mesa de
+ruta (otro courier), no pasa: la hoja se cierra y el aviso queda en el
+tablero. Si no, pasa, y el aviso del pedido anterior («Avisa a Almacén: la caja
+tiene que estar en el anaquel antes de las 12:30.») queda arriba de la hoja
+siguiente, con el nombre de ese pedido.
+
+**Fechas.**
+
+- Hoy o después, hasta 60 días (`rescheduleDateProblem`). Se comprueba en la
+  hoja, en la acción y en la base (§11.6).
+- El corte se lee del proveedor (`same_day_cutoff`, hoy 12:00); nunca es fijo.
+  La cabecera dice «Lo que confirmes hasta las 12:00 sale hoy» o «Pasó el
+  corte: lo confirmado sale mañana».
+- Grupo GF: «Hoy» solo hasta el corte. Después, Repro Lima propone mañana; un
+  cambio para hoy lo aprueba Despacho GF desde «Programar» (§29.6). Un acuerdo
+  para hoy pide avisar a Almacén: la caja tiene que estar en el anaquel antes
+  de las 12:30.
+- Swayp: desde mañana y nunca en domingo (§11.6.1), con la lista de días de
+  Swayp hasta los mismos 60 días, no solo las próximas 24 fechas: una fecha
+  que viene de «Otra fecha» de Grupo GF se ve en la lista.
+- Tanders y Axel: desde hoy.
+- «Lista para» de la acción de la caja (§9.3): reimprimir el rótulo, salida
+  nueva y rearmado, y desarmar y rearmar, desde mañana; mantener, hoy hasta el
+  corte.
+- La fecha que pidió el cliente (§29.7) sale como chapa, «Pidió mié 14/10 ·
+  sin confirmar» (o «· ya pasó»). Nunca se preselecciona.
+
+**Cuándo se escribe el programa de Grupo GF.** Solo para un acuerdo con Grupo
+GF, siempre por `writeGfDispatchProgram` (el mismo escritor que «Programar»),
+con el motivo «Repro Lima: confirmado con el cliente (Diana, 12/10)» y el actor
+real (§29.6):
+
+- **Al decidir**: con la caja en oficina, con «Caja nueva desde stock» (abajo),
+  o cuando Grupo GF crea la salida nueva al tomarlo (reintento de otro
+  courier).
+- **«Caja nueva desde stock»** se programa al decidir solo si alguien puede
+  sacar la salida con la que sale la caja nueva: la caja sigue con el
+  motorizado («Sacar con salida nueva», §29.13); la salida propia está en
+  oficina, o es la del caso reabierto que estaba en oficina (sale con la misma
+  salida, §9.3); o la caja es de otro courier y el pedido entra como reintento
+  (Grupo GF crea la salida al tomarlo). Si no, queda «Falta la salida nueva»
+  (`falta_salida`) y se quita todo programa de Grupo GF, con el aviso
+  «Acuerdo guardado. Falta la salida nueva: Kapta todavía no la crea para una
+  caja nueva desde stock. Anótalo en la ficha y avisa a Despacho GF.». Antes
+  de guardar, «Qué hacer con la caja» lo dice igual: solo promete que Grupo
+  GF crea la salida al tomarlo cuando el pedido entra como reintento; si no,
+  «Caja nueva desde stock: falta la salida nueva de Grupo GF (Kapta todavía
+  no la crea; avisa a Despacho GF).», con lo que pasa con la caja anterior.
+- **Al recibir la caja en oficina**, si sigue con el motorizado: el acuerdo
+  queda «esperando la caja» y «Recibir en oficina» lo programa (§29.13).
+- **Con «Ya la encontré: programar»**, si no consta dónde está la caja: quien
+  la encuentra en la oficina confirma con un segundo clic, «La caja está en la
+  oficina», y Kapta programa el acuerdo.
+- **Con «Programar ahora»**, si se podía programar y no se hizo (por ejemplo,
+  porque falló la escritura). Este botón y «Ya la encontré» toman antes el
+  candado de **ese** caso con una escritura condicional (libre, vencido o ya
+  propio, y el caso abierto), como el candado de Envíos. Nunca abren otro
+  caso. Si el caso se cerró mientras tanto (por ejemplo, «Ya no lo quiere»),
+  responden «El caso ya está cerrado.»; si otra persona lo tiene, «Diana está
+  atendiendo este pedido.».
+
+Antes de escribir, Kapta comprueba que el pedido sigue en «Por reprogramar
+Lima», sin anular y en el mismo episodio. Si no, cierra el caso y no programa.
+Un programa del mismo día puesto por otro se reescribe con el motivo de Repro
+Lima. Si el acuerdo cambia mientras se programa, el programa se quita («Repro
+Lima: el acuerdo cambió mientras se programaba»), salvo que el acuerdo nuevo ya
+se haya programado para el mismo día: cuenta con ese programa y se conserva.
+Si el acuerdo nuevo es de otro día, todavía no se programó o el caso se cerró,
+se quita.
+
+Un acuerdo que no se programa al decidir quita el programa de Grupo GF que
+hubiera (`dispatch_program_cleared`, «Repro Lima: el acuerdo con el cliente es
+otro.»). La excepción es un acuerdo que espera la caja para ese mismo día: su
+programa se conserva. «Llamar después» quita el programa que había puesto un
+acuerdo de Repro Lima.
+
+Si tocaba programarlo al decidir y no se pudo (falló la escritura, u otra
+persona lo marcó o cambió el caso antes), igual se quita el programa de Grupo
+GF de **otro** día, porque contradice el acuerdo guardado. Se quita solo si
+sigue siendo el que se leyó: no toca uno que otro acaba de escribir. El aviso
+dice «Acuerdo guardado, pero no se pudo programar: … Se quitó la fecha que
+tenía en Grupo GF. Usa «Programar ahora».». Si el caso se cerró (otro intento,
+fuera de la etapa), el acuerdo ya no vale y el programa no se toca.
+
+**La deriva se muestra, nunca se reescribe.** Si Grupo GF mueve el día
+(«Programar» con otro día), quita la fecha o asigna el pedido a la caja de otro
+día, el caso no cambia. La fila muestra el acuerdo frente al programa vigente
+(«Grupo GF lo movió al vie 16/10 («…»)», «Grupo GF no tiene la fecha (acordado
+jue 15/10)») y va primero en «Programados» para que la tienda lo vea. Grupo GF
+sigue mandando en su ruta.
+
+**Otros couriers, por la Mesa de ruta.** Con Tanders, Swayp o Axel, el acuerdo
+se guarda y la fila enlaza a la Mesa de ruta del pedido («Crear la salida en la
+Mesa de ruta»). Ahí se crea la salida con `canRepeatCourier` y el tope de cinco
+salidas. Repro Lima no crea salidas en la entrega 1a. Cambiar de courier es
+salida nueva y rearmado (decisión 9, §9.3). **Urpi está apagado en la 1a**:
+«Urpi solo lleva primeros despachos (§9.1); un reprogramado no pasa a Urpi en
+esta fase.». Un reprogramado de Grupo GF nunca pasa a Urpi. Urpi desde Kapta
+llega en la fase 2 (decisión 12).
+
+**«Ya no lo quiere» quita la fecha y no anula la venta.** Cierra el caso con
+«Desarmar y cerrar» y quita el programa de Grupo GF que hubiera
+(`dispatch_program_cleared`, «Repro Lima: el cliente ya no lo quiere.»). La
+caja se desarma cuando está en oficina (cuaderno «DESARMAR»). Solo la anulación
+en Shopify termina la venta (§9, principio 10): el pedido sigue en «Por
+reprogramar Lima» y en «Cerrados» hasta que la anulen. Grupo GF todavía puede
+tomarlo (decisión 4). Al recibir esa caja, el aviso dice que el cliente ya no
+lo quiere; si todavía estaba en la caja del motorizado, escanearla en «Por QR»
+la recibe sin asignarla (§29.13).
+
+**«Volver a atender» un caso cerrado pide un segundo clic**: «Si Almacén ya la
+desarmó, elige «No esperar la caja».».
+
+- Lo comprueba la base, dentro del candado del pedido: `lima_repro_claim`
+  (0251) recibe `p_reopen` (por defecto false). Sin caso abierto, si el último
+  caso cerrado del pedido es «Desarmar y cerrar» del mismo episodio, no abre
+  otro y responde `needs_reopen` («Este pedido se cerró con «Desarmar y
+  cerrar». «Volver a atender» lo reabre.»), salvo con el segundo clic. Un
+  cierre que llega entre la lectura del servidor y la RPC ya no se reabre
+  solo. Un fallo nuevo (otro episodio) abre caso sin segundo clic.
+- En la hoja, «Sí, volver a atender» reabre una sola vez. «Reintentar» (otra
+  persona lo tenía) y «Volver a tomarlo» toman sin reabrir: si alguien acaba
+  de cerrar el caso con «Desarmar y cerrar», se vuelve a pedir el segundo
+  clic.
+- En el caso reabierto, la caja que ya estaba en oficina antes de reabrir no
+  consta (arriba) y «No esperar la caja» se ofrece también así (§9.3). Con
+  Grupo GF y su salida propia, si nada la bloquea, «Caja nueva desde stock»
+  sale con la misma salida: se reimprime su rótulo (mismo QR) y Grupo GF la
+  toma en Despacho del día; no nace salida ni cuenta para las cinco. Si
+  aparece la caja anterior, se desarma.
+
+**Plazo sugerido, nunca automático.** Con 10 días desde la recepción en oficina
+y 3 «No contesta», la fila muestra «Sugerido: desarmar y cerrar» (decisión 10).
+Los 10 días cuentan desde la recepción de la caja del episodio vigente —desde
+el día de la ruta del fallo o la salida de la guía que falló—, y la chapa solo
+sale con la caja en oficina. Una recepción de un episodio anterior no cuenta.
+Es solo una chapa. Lo decide una persona con «Desarmar y cerrar sin llamada»,
+porque la merma no se automatiza (principio 11).
+
+#### Almacén: «Reintentos por salir» (fase 1, entrega 1c, 13-10-2026)
+
+Decisiones del owner sobre el diseño de la entrega 1c (13-10-2026):
+
+1. Un programa de Grupo GF sin acuerdo vigente de Repro Lima muestra la acción
+   por defecto que Kapta calcula con los hechos y sin cambios declarados (§9.3),
+   con «Por defecto: sin acuerdo de Repro Lima». Si la fecha es del motorizado
+   o de un acuerdo anterior, la fila también dice que la caja no va al anaquel
+   hasta que Repro Lima la confirme.
+2. El cuaderno «DESARMAR» sigue siendo el registro de lo que se desarma. La
+   lista solo marca en rojo la caja de «no lo quiere» que Grupo GF volvió a
+   programar.
+
+- **Dónde y quién.**
+  - Apartado de `/dashboard/pedidos/almacen`, debajo de la estación, para quien
+    prepara paquetes (`warehouse.prepare`) en sus tiendas de Equipo
+    (`getAccessibleStores`). La cabecera de la estación enlaza al apartado con
+    la cifra de hoy.
+  - El rol «Almacén» no abre Despacho del día ni Repro Lima: aquí ve sus
+    fechas. La puerta va dentro del cargador (`requireWarehouse`) y no es la de
+    Repro Lima.
+  - Dice «Cajas de «Por reprogramar Lima» que salen hoy o mañana, con lo que
+    Kapta dice que hagas con cada una. No cuentan en «Por empacar».».
+- **Solo lee.**
+  - No programa, no toma, no asigna, no cambia fechas, no cierra casos ni
+    escribe eventos. Lee con el mismo motor que Repro Lima, sin cerrar los
+    casos que quedaron viejos (`closeStale: false`).
+  - No es la cola de armado (§6.2).
+  - Si no carga, dice «No pudimos cargar «Reintentos por salir».», con
+    «Reintentar», y la estación de arriba sigue funcionando. También si falla
+    la primera lectura.
+  - Se lee después de que carga la estación, no al pintar la página en el
+    servidor: el escaneo que arma una caja vuelve a pintar la página, y esa
+    lectura se haría con cada escaneo. Mientras llega, el apartado tiene su
+    título y su ayuda, y «Hoy» y «Mañana» en esqueleto, sin «Actualizar».
+    Hasta entonces no hay enlace en la cabecera, ni chapa «Reintento · …» en
+    «Por armar», ni segundo aviso del escáner.
+  - Llega por GET (`/api/almacen/reintentos`), no por una acción de
+    servidor: las acciones de una pestaña van en fila, y el primer escaneo
+    esperaría a que la lista termine de leerse. Así el escáner nunca espera.
+  - Se vuelve a leer con «Actualizar», y al volver a la pestaña si pasaron 5
+    minutos o cambió el día. Nunca después de cada escaneo de armado.
+  - Una sola lectura a la vez: la que se pide mientras otra sigue en curso (el
+    segundo aviso al volver a la pestaña, «Actualizar» o «Reintentar») no se
+    hace ni queda en cola.
+- **Etiquetas, no subetapas.**
+  - «Hoy», «Mañana» y sus apartados («Con aviso», «Al anaquel», «Todavía
+    fuera», «Prepárala hoy», «Ya en «Por armar»») se calculan al leer.
+  - Sin migración ni kinds nuevos: `MOM_RESOLUTION_VERSION` sigue en
+    `mom-v1.26`.
+- **Qué pedidos.**
+  - Los de «En curso · Por reprogramar Lima» con un programa de Grupo GF para
+    hoy, mañana o un día que pasó sin salir. El programa de un pedido que ya
+    dejó la etapa no se lista.
+  - Sin programa, los que tienen un acuerdo vigente de Repro Lima para hoy o
+    mañana, de cualquier courier, con «Sin programa en Grupo GF» y el estado
+    del acuerdo («Sale jue 15/10 con Grupo GF · esperando la caja», «Sale jue
+    15/10 con Tanders · crea la salida en la Mesa de ruta»).
+  - Sin programa ni acuerdo no hay fecha y la caja se queda en el estante. Un
+    acuerdo vencido sin programa vuelve a «Por decidir», y un «Desarmar y
+    cerrar» sin programa no sale: ninguno de los dos se lista.
+  - La fecha de una solicitud tomada no cuenta: Despacho tampoco la cuenta.
+  - Se leen hasta 300 pedidos, primero los de día más antiguo. Si hay más, la
+    pantalla dice cuántos quedaron fuera.
+- **Qué día manda.**
+  - El del programa vigente, que es lo que ejecuta Despacho GF («Programados
+    hoy», §29.6). Si difiere del acuerdo, la fila lo dice («Grupo GF lo movió
+    al vie 16/10 («motivo»)») y el caso no cambia.
+  - Lo mismo si el acuerdo vigente no se programó y hay un programa de otro
+    día, o el acuerdo es con otro courier: «Grupo GF lo programó para el mar
+    13/10; acordado jue 15/10 con Tanders», en ámbar. Manda el programa y el
+    caso no cambia.
+  - «Hoy» incluye lo vencido («Vencido · era para el lun 12/10»): «Lo
+    programado hasta el corte de las 12:00 sale esta tarde; lo vencido sigue
+    aquí hasta que salga o se reprograme.». El corte se lee del proveedor
+    (`same_day_cutoff`), nunca es fijo.
+  - «Mañana» es el día siguiente del calendario (el sábado, el domingo):
+    «Déjalo listo esta tarde: primero lo que se prepara la noche anterior.».
+    Lo de después no se lista.
+- **Qué hacer con la caja.**
+  - La acción guardada en el acuerdo vigente (§9.3), en su chapa y con su
+    línea; Almacén no la elige. La fila dice lo que cambió el cliente y quién
+    decidió y cuándo («Decidió Diana 12/10 15:20»). También cuando lo que el
+    acuerdo programó no salió («Programado para el lun 12/10 y no salió») o
+    Grupo GF lo movió: ese programa sigue siendo suyo, y su estado va en azul.
+  - Kapta la vuelve a calcular con los hechos de ahora, igual que al guardar.
+    Si saldría otra: «Los hechos cambiaron desde el acuerdo: confírmalo con
+    Repro Lima antes de tocarla.». La chapa sigue siendo la guardada y el caso
+    no cambia.
+  - Acordado con otro courier, que su salida ya exista mientras la de Grupo GF
+    sigue viva (primera laguna, abajo) no es un cambio de los hechos: «La
+    salida de Tanders ya existe: rearma la caja del estante con su etiqueta y
+    retira la vieja.» y «La salida de Grupo GF sigue viva: avisa a Despacho
+    GF.».
+  - Sin acuerdo vigente (decisión 1 del 13-10-2026), la acción por defecto de
+    la tabla, con «Por defecto: sin acuerdo de Repro Lima», la chapa de Repro
+    Lima («Programado en Grupo GF · sin acuerdo», «Fecha del motorizado sin
+    confirmar: mié 14/10» o «Programado por un acuerdo anterior») y el motivo
+    del programa tal cual, sin «Decidió …» ni lo que cambió el cliente. Si la
+    tabla da un problema, no hay chapa de acción: la fila dice el problema.
+  - Un acuerdo vencido cuenta como sin acuerdo vigente: nunca se programó, así
+    que el programa es de otro (Grupo GF, el motorizado o un acuerdo anterior).
+    En vez de la chapa de Repro Lima, la fila lleva su estado en ámbar: «El
+    acuerdo era para el lun 12/10 y ya pasó: confírmalo de nuevo» o, el del
+    mismo día que ya no alcanza, «El acuerdo era para hoy (mar 13/10) y ya no
+    alcanza: confírmalo de nuevo». Estar vencido no la pasa a «Con aviso»:
+    con el programa de Grupo GF puede ir «Al anaquel», con ese aviso. Con la
+    fecha del motorizado o de un acuerdo anterior lleva la línea de abajo y va
+    «Con aviso» (sin confirmar), salvo que la caja siga fuera.
+  - Si la fecha es del motorizado o de un acuerdo anterior: «No va al anaquel
+    hasta que Repro Lima la confirme.»
+  - Si el último caso del episodio es «Desarmar y cerrar» y Grupo GF lo
+    programó: «Desarmar y cerrar», «Repro Lima: no lo quiere · desarmar» y «No
+    va al anaquel aunque Grupo GF lo programó: avisa a Despacho GF.», en rojo
+    (decisión 2 del 13-10-2026).
+  - Lo que se prepara la noche anterior (reimprimir, salida nueva y rearmado,
+    desarmar y rearmar: «Lista para», §9.3) lleva en «Mañana» «Prepárala hoy:
+    se prepara la noche anterior». En «Hoy», si se agregó hoy, «Se prepara la
+    noche anterior y se programó hoy: prepárala ya», salvo que el programa no
+    sea el del acuerdo vigente (el acuerdo no se programó y el programa lo dejó
+    otro): ese programa no la prepara.
+- **Dónde está la caja.** La chapa de Repro Lima («Con Roy desde lun 12/10»,
+  «Vuelve con Tanders» o, en rojo, «No consta dónde está la caja»). Con la
+  caja en oficina, además:
+  - Lo de «Desarmar y cerrar» nunca dice que debería estar en el anaquel. Si
+    se recibió después del cierre, la recepción pidió desarmarla (§29.13): «Al
+    recibirla se pidió desarmarla (cuaderno «DESARMAR»): no va al estante.».
+    Si se recibió antes, o falta alguna de las dos horas, su bandeja (abajo).
+  - «Debería estar en el anaquel del jue 15/10» si tenía su programa cuando se
+    recibió: el programa ya existía antes de la recepción, o lo escribió la
+    recepción misma («Recibir en oficina» programa el acuerdo que esperaba la
+    caja, §29.13, y lo escribe segundos después de registrarla). Esto último
+    se reconoce porque el programa es de Repro Lima y se escribió hasta 2
+    minutos después de la recepción. Un programa escrito más tarde (una
+    confirmación posterior, «Programar ahora») no cuenta, aunque sea del mismo
+    acuerdo: la caja sigue en su bandeja;
+  - también si la recepción misma programó el acuerdo vigente aunque Grupo GF
+    reescribiera el programa después o lo quitara: se reconoce porque la marca
+    del acuerdo (`materialized_at`) cae entre la recepción y 2 minutos
+    después. Es el anaquel del día marcado (`materialized_on`, o el acordado).
+    Si Grupo GF lo movió a otro día: «Debería estar en el anaquel del mié
+    14/10: pásala al del mar 13/10». Una marca anterior a la recepción, o de
+    más de 2 minutos después (una confirmación posterior), no cuenta;
+  - si no, «En el estante · bandeja del lun 12/10», la del día en que se
+    recibió, hasta 7 días;
+  - sin recepción registrada o con más de 7 días, «En el estante · bandeja
+    «sin fecha / más de 7 días»».
+  - Sin recepción registrada, Kapta no la da por puesta: «Kapta la cuenta en
+    oficina, pero nadie registró su recepción: búscala en el estante.» o, con
+    la caja de otro courier, «Tanders la da por devuelta; nadie la escaneó en
+    Devoluciones.».
+- **Avisos.**
+  - «Agregado hoy 09:40» si el programa o el acuerdo se escribió hoy: no
+    estaba en la cuenta de la mañana. En «Hoy», pasado el corte, «Agregado hoy
+    12:40, después del corte».
+  - «La dirección cambió el 12/10, después de armar la caja: el rótulo tiene
+    la anterior. Avisa a Repro Lima.», si la dirección de la salida propia
+    cambió después de armarla y la acción no es reimprimir. Se muestra; la
+    acción no cambia.
+  - Con programa, el estado del acuerdo que la deja «Con aviso», en ámbar:
+    «Sale jue 15/10 con Tanders · crea la salida en la Mesa de ruta», «Falta
+    la salida nueva» o «Sale mar 13/10 con Grupo GF · falta programarlo». Si
+    falta ubicar la caja, basta la chapa roja «No consta dónde está la caja»:
+    no se repite el estado, que pide buscarla «antes de programar» y Grupo GF
+    ya la programó.
+- **Apartados y orden.** La primera regla que aplica gana:
+  1. **Con aviso**, en rojo: no lo quiere, los hechos cambiaron o no consta la
+     caja.
+  2. **Todavía fuera**: con el motorizado o volviendo con su courier.
+  3. **Con aviso**: sin confirmar; otro courier, falta la salida, falta
+     ubicarla, falta programarla o Grupo GF quitó la fecha; un problema de la
+     tabla; sin recepción registrada; la dirección cambió; o la salida del
+     otro courier ya existe.
+  4. **Al anaquel**: lo demás.
+
+  Van «Con aviso» (lo rojo primero), «Al anaquel» y «Todavía fuera». En
+  «Mañana», antes que todos, «Prepárala hoy»: lo que se prepara la noche
+  anterior y no tiene aviso que resolver (lo que sí tiene, sigue en «Con
+  aviso»). Dentro de cada uno, lo vencido primero y lo más antiguo antes;
+  después por bandeja (lo que no tiene, al final) y por pedido.
+- **Cifras.** «Hoy» dice cuántas salen, cuántas están en oficina y cuántas
+  fuera; «Mañana», cuántas se preparan esta noche. Solo cuentan los pedidos de
+  la etapa. Sin nada, la zona lo dice: «Nada de reintentos sale hoy.» o «Nada
+  de reintentos sale mañana.».
+- **Ya en «Por armar».**
+  - Un acuerdo cuya salida nueva ya nació (salida nueva y rearmado, desarmar y
+    rearmar o caja nueva desde stock) deja la etapa y su salida se arma en
+    «Por armar» (§6.2).
+  - La fila sigue aquí, sin contarse («Se cuentan en «Por armar».»), si el
+    caso sigue abierto o se cerró por dejar la etapa en los últimos 14 días,
+    es el último del pedido, ninguna salida nacida después del acuerdo falló o
+    volvió, el pedido está en «Preparación · Por armar» y su día es hoy, uno
+    que pasó o mañana. El caso sigue abierto hasta que alguien abre Repro
+    Lima, que es quien lo cierra: Almacén lee sin cerrar casos.
+  - Si una salida nacida después del acuerdo falló («No entregado» de Grupo
+    GF, o el fallo o la anulación de otro courier después de salir) o volvió
+    (devuelta, o en retorno), el pedido está en «Por armar» por otro intento
+    sin caso nuevo, y la fila no se lista (ni su chapa en «Por armar» ni su
+    aviso del escáner): su instrucción ya no vale. El fallo de una salida
+    anterior al acuerdo no cuenta.
+  - Su día es el del programa vigente de Grupo GF, sea cual sea su fecha
+    (también si lo adelantó antes del acordado); sin programa, el de la caja de
+    Grupo GF donde ya entró su salida nueva (al asignarla, el programa se
+    borra), si no la quitaron de ella y la caja no está anulada; sin caja, el
+    acordado. Si ese día es después de mañana, no se lista.
+  - Dice lo que se hace con la caja del estante: «Pega el rótulo de la salida
+    nueva encima del anterior, tapando su QR, y escanéala.» (Grupo GF), «Rearma
+    la caja del estante con la etiqueta de Tanders y retira la vieja.»,
+    «Desarma la caja del estante y arma otra con la salida nueva.» o «Arma la
+    caja nueva desde stock con la salida nueva; la anterior se desarma al
+    recibirla.». Y cómo va la salida nueva: «Falta armarla · KP1-S03». Al
+    armarla, el pedido pasa a «Por despachar» y la fila sale de la lista
+    («Armada 10:12 · KP1-S03» solo se vería si el Master del pedido quedó sin
+    recalcular).
+  - La acción es la guardada: fuera de la etapa no se recalcula.
+  - La fila de «Por armar» lleva «Reintento · Salida nueva y rearmado».
+- **Rótulo.**
+  - «Imprimir rótulo» abre el de la misma salida (`/api/pedidos/rotulos`, la
+    lectura de siempre) cuando la acción es reimprimir o la caja nueva con la
+    misma salida del caso reabierto (§9.3), y Kapta la confirma con los hechos
+    de ahora. En «Prepárala hoy», con dos o más, «Imprimir los 3 rótulos» los
+    imprime juntos (hasta 200).
+  - «REIMPRESO dd-mm» se escribe a mano. Imprimir no deja evento.
+- **Escáner.** Uno solo. Arma como siempre (`markShipmentReady`, una vez por
+  escaneo). Si el escaneo de esa caja sale bien en Almacén (queda lista para
+  despacho o ya lo estaba) y es de un reintento listado, también de «Ya en
+  «Por armar»», un segundo aviso dice qué hacer con ella, en rojo si es
+  «Desarmar y cerrar».
+  - Si el escaneo la rechaza, no hay segundo aviso, aunque la caja sea de un
+    reintento listado.
+  - Le pasa a la caja devuelta de otro courier (Tanders, Swayp): ya no está en
+    custodia de la empresa y el escáner de Almacén no la arma.
+  - El aviso no confirma que la caja está en el anaquel.
+- **Horas de Almacén** (plan del 11-10-2026):
+  - 07:30-09:30 cuenta el anaquel de hoy contra «Hoy»;
+  - 12:00-12:30 última revisión (lo programado hasta el corte sale con Alexis
+    a las 12:30);
+  - 17:00-18:00 deja listo «Mañana».
+  - Son guía, no corte: los cortes de 10:20 y 21:20 son del armado (§6.2). La
+    pantalla no muestra reloj ni cuenta atrás.
+- **Desarmar** (decisión 2 del 13-10-2026). Lo que se desarma sigue en el
+  cuaderno «DESARMAR» (§9.3, fila 1), que es el registro en la entrega 1c. No
+  es el estado «DESARMAR» de Liquidaciones 2.
+
+**Lagunas conocidas de las entregas 1a y 1c.**
+
+- Kapta no puede anular una salida de Grupo GF (`manualOutputIsCancelable`).
+  Un cambio de producto con su salida viva queda «Falta la salida nueva», y
+  pasar de Grupo GF a otro courier deja viva la salida anterior de Grupo GF.
+  Se anota en la ficha y se avisa a Despacho GF. Lo resuelve la fase 2.
+- La recepción de Tanders o Swayp en Devoluciones no programa el acuerdo: al
+  llegar la caja, la fila ofrece «Programar ahora».
+- «Reprogramar para» de Liquidaciones 2 sigue desconectado.
+- «MAÑANA» en el cuaderno queda en la nota: solo un día de la semana se vuelve
+  fecha que pidió el cliente (§29.7).
+- El WhatsApp con plantilla al marcar «No entregado» (entrega 1b) llega
+  después.
+- Kapta no registra «en el anaquel», «reimpreso» ni «desarmada»: «Reintentos
+  por salir» dice qué hacer, no que se hizo.
+- El reintento que Grupo GF toma sin programa no tiene fecha para Almacén.
+- Una salida de Tanders creada sin «por definir» puede nacer `no_iniciado` y
+  no entra en «Por armar».
+- Kapta no guarda qué programa tenía la caja al recibirla. Si el programa ya
+  existía antes de la recepción y Grupo GF lo reescribe después, «Reintentos
+  por salir» dice su bandeja («En el estante · bandeja …») aunque la caja fue
+  al anaquel.
+- Con la fecha del motorizado o de un acuerdo anterior que ya existía al
+  recibirla, la fila dice «Debería estar en el anaquel del …» y también «No va
+  al anaquel hasta que Repro Lima la confirme.», y va «Con aviso».
+
+Implementación: `lib/repro-lima.ts`, `lib/repro-box-action.ts`,
+`lib/repro-lima-access.ts`, `lib/repro-lima-program.ts`,
+`app/dashboard/pedidos/repro-lima/`, `components/repro-lima-board.tsx`,
+`components/repro-lima-sheet.tsx` y la migración `0251_lima_repro.sql`.
+Pruebas en `test/repro-lima.test.ts`, `test/repro-box-action.test.ts`,
+`test/repro-lima-program.test.ts`, `test/repro-lima-access.test.ts`,
+`test/repro-lima-actions.test.ts`, `test/repro-lima-scan.test.ts`,
+`test/repro-lima-ui.test.ts`, `test/repro-lima-source.test.ts` y
+`scripts/sql/repro_lima_smoke.sql`.
+
+La entrega 1c: `lib/warehouse-retries.ts` (las reglas, puras),
+`lib/warehouse-retries-access.ts` (la puerta y las lecturas),
+la ruta `app/api/almacen/reintentos/route.ts` (la lectura por GET),
+`app/dashboard/pedidos/almacen/page.tsx`, `components/warehouse-retries.tsx`
+y `components/warehouse-station.tsx`. Pruebas en
+`test/warehouse-retries.test.ts`, `test/warehouse-retries-access.test.ts`,
+`test/warehouse-retries-ui.test.ts`, `test/warehouse-retries-source.test.ts` y
+`test/repro-lima-access.test.ts`.
 
 ## 10. Provincia COD y Aliclik
 
@@ -2956,6 +3900,35 @@ de Lima Metropolitana por su distrito. Las frases del bot que el lector del
 chat guardó como distrito («indicarte bien 🚚», «coordinarlo») no son lugar y
 quedan Sin identificar.
 
+**La cobertura en «Entrega» (14-10-2026).** La tarjeta del siguiente lead y la
+ficha ponen, junto a la dirección, la cobertura **del Master** —Lima, Provincia
+COD o Agencia, la misma chapa que lleva el pedido—, porque es lo que la
+vendedora dice en la llamada: paga al recibir o separa con adelanto (§12). No
+reemplaza a la pista de la cola de arriba: esa sigue repartiendo llamadas en
+Lima / Provincia / Sin identificar.
+
+- **Una sola definición.** Se le pregunta a `order_coverage_for` (§5) lo que
+  le preguntaría el pedido si naciera con esa dirección, armada como en el
+  Master (`lib/lead-delivery-coverage.ts`): el distrito del lead; la provincia
+  del INEI que le da `peru_districts` (Shopify llama `province` al
+  departamento); la región del lead o, si no la hay, el departamento; y la
+  coordenada que Shopify geocodificó en el carrito, solo si el carrito es del
+  mismo distrito. Lo que las excepciones de `district_coverage`, Cañete o los
+  puntos COD deciden para el pedido lo deciden igual aquí.
+- **La coordenada no es opcional.** Sin ella no entra el desempate por
+  cercanía a un punto COD (0100): en los pedidos de los últimos 60 días, 370
+  de 7.441 Provincia COD habrían salido Agencia; 1 de cada 7 «Agencia» habría
+  sido falsa. El 94 % de los carritos trae la coordenada.
+- **Sin un distrito que sirva, no hay chapa.** Un «-» o un vacío no es una
+  dirección: la base clasificaría por el centro del departamento. La línea se
+  queda como estaba —la pista de la cola en minúscula y el aviso «Falta la
+  dirección exacta»—, igual que si la base no responde.
+- **Medido al abrirlo**: de 2.213 carritos de los últimos 45 días que
+  terminaron en pedido, 2.094 (94,6 %) dan la misma cobertura que su pedido;
+  92 no tenían distrito en el carrito; 27 (1,2 %) difieren, casi todos porque
+  el cliente dio otra dirección al comprar (Sullana en el carrito, Lima en el
+  pedido).
+
 **Qué cuenta como distrito dicho en el chat (05-10-2026).** El lector
 (`parseOrderSignals`, `lib/kapso.ts`) guardaba como distrito cosas que no lo
 eran: medido en la cola, 459 leads, el 40 % de los que tenían distrito sin
@@ -3010,6 +3983,50 @@ migración aplicada, la cola se ordena como antes.
 Esto ordena la llamada, no la reemplaza. Se descartó crear el pedido de forma
 automática para esta señal: incluso aquí, 6 de cada 10 carritos que siguen
 abiertos a las dos horas no terminan en pedido.
+
+**El siguiente lead de cada vendedora (14-10-2026).** Arriba de «Sin llamar»,
+cada vendedora ve UN lead para llamar ahora, con lo que pidió, el chat y el
+resultado de la llamada, y nunca el mismo que otra (`pickNextLead`,
+`lib/leads.ts`). Es el primero de **su** cola tal como la está mirando —con sus
+chips de segmento y cobertura, en el orden de «lo que más cierra» o «Más
+recientes»— que sigue `nuevo`, que nadie más tiene reservado y que ella no
+saltó.
+
+- **La reserva es la de siempre.** Aparecer en la tarjeta reserva el lead
+  (`claimLead`): 10 minutos (`CLAIM_TTL_MINUTES`) y **cuenta como una de las
+  dos** que puede tener (`MAX_OPEN_LEADS`). Mientras la pestaña se ve, se
+  renueva sola; al cerrarla se suelta (el mismo beacon de la ficha). Para las
+  demás aparece «Tomado · nombre», y el agente de voz no lo llama (§33.2,
+  condición 12).
+- **Abrir otro lead de la cola suelta el siguiente** antes de reservar el otro,
+  y pasa a otra vendedora. Al cerrar esa ficha, la tarjeta vuelve a reservar.
+- **La reserva de la ficha abierta también se renueva (14-10-2026).**
+  - **Lo que pasaba.** Abrir un lead lo reservaba 10 minutos y la reserva
+    vencía aunque la ficha siguiera abierta. Una asesora en una llamada larga,
+    o escribiéndole a la clienta, perdía el lead sin enterarse, y otra podía
+    tomarlo encima. Lo reportó Daphne: ella y Ross tenían el mismo lead a la
+    vez.
+  - **Ahora**, con la ficha abierta, la reserva se renueva cada 3 minutos
+    (`renewLeadClaim`, `CLAIM_HEARTBEAT_MS`), siempre que la asesora haya
+    tocado la página (mouse, teclado o toque) en los últimos 10 minutos.
+  - **Una ficha olvidada abierta** deja de renovarse y el lead se suelta solo,
+    como antes.
+  - **Si otra asesora ya lo tomó** cuando la reserva había vencido, no se le
+    quita a nadie: la ficha avisa quién lo tiene.
+- **Saltar** lo suelta y no se le vuelve a ofrecer en esa pestaña; para las
+  demás sigue en la cola.
+- **Guardar el resultado** desde la tarjeta es lo mismo que guardarlo en la
+  ficha; el lead deja «Sin llamar», se suelta y entra el siguiente.
+- Si ya tiene dos abiertos, la tarjeta lo dice y no reserva nada.
+- El que tiene se queda aunque entre otro con más puntaje: la tarjeta no
+  cambia bajo la mano; ese será el siguiente.
+- Solo la ve quien tiene el rol `vendedora`, y solo en «Sin llamar» sin
+  búsqueda: quien solo supervisa no retiene leads por mirar la cola.
+
+La cola de abajo sigue siendo **una sola lista** en el orden medido, con la
+edad en cada fila. Se descartó agruparla por edad (hora dorada, 1–6 h, …):
+dejaba un carrito de dos días, que cierra 9 a 12 veces más, debajo de un frío
+de diez minutos.
 
 **Carrito que ya es pedido (29-09-2026).** Un carrito sale de la cola de
 llamadas en cuanto llega un pedido que cumple cuatro variables fijas:
@@ -3452,6 +4469,24 @@ se rechaza: un nombre ambiguo como «San Juan» o «Huachipa» no se adivina.
 Esto vino de #KP132394, donde la cobertura aceptaba la guía y el ubigeo la
 negaba —comparaban distinto— y la salida se creó con código manual.
 
+**Grafías sin el «de» o pegadas (owner, 12-10-2026; migración 0246).** Se
+escriben sin el «de» y siguen siendo el mismo distrito: «San Juan Lurigancho»
+es San Juan de Lurigancho, **nunca** Lurigancho-Chosica; «San Juan Miraflores»
+es San Juan de Miraflores y «San Martín Porres» es San Martín de Porres.
+«Pachamamac» es Pachacámac, y «Cercado delima» o «Cercado Lima» son Lima
+(Cercado). Antes de estos alias, la búsqueda dentro del texto encontraba el
+distrito oficial más corto con que terminaba el texto: «San Juan Lurigancho»
+caía en Lurigancho y los otros quedaban como distrito inválido, fuera de la
+cola de Grupo GF. La lista de alias es una sola regla en dos lugares
+(`DISTRICT_ALIASES` en `lib/order-coverage.ts` y `lima_district_aliases()` en
+la base), y una prueba exige que digan lo mismo.
+
+Un distrito de **otro departamento** con la región «Lima (provincia)» no es un
+alias: #KP130975 trae «HUARAZ», que es Áncash. Se corrige en la ficha con
+«Corregir ubicación» (Áncash / Huaraz / Huaraz); el pedido pasa a Provincia
+COD y sale por Reproprovincia con Aliclik. No se decide por la provincia sola:
+hay pedidos de San Miguel de Lima que llegan con la provincia «San Román».
+
 Falta la configuración de bodega Swayp (`senders`) de las cuatro ciudades
 nuevas; sin ella la guía se niega aunque el ubigeo resuelva. Es configuración
 operativa, no código.
@@ -3482,8 +4517,8 @@ bodega, «Enviar a Excel»), que se sube en Stock Swayp. Reglas:
 - **Un archivo por bodega**, y la ciudad sale de la columna `Bodega` del propio
   archivo. No hay selector: elegir la ciudad a mano es la forma de importar
   Trujillo sobre Juliaca y poner a cero una ciudad entera.
-- **Sólo se toca la ciudad del archivo.** Nuestra tabla cubre nueve ciudades y
-  Swayp tiene cinco bodegas: Cusco, Huancayo, Ica, Chiclayo y Chimbote se
+- **Sólo se toca la ciudad del archivo.** Nuestra tabla cubre más ciudades que
+  las bodegas que se leen de Swayp: Cusco, Huancayo, Chiclayo y Chimbote se
   abastecen de otra forma y un importador que «limpiara lo que no vino» las
   vaciaría de un plumazo.
 - **Lo que Swayp no lista queda en 0**, no se borra el renglón. La exportación de
@@ -3539,10 +4574,15 @@ de respaldo, con un token pegado a mano que no se guarda. Las reglas de arriba n
   le corresponde de nuestro lado pasa a 0**: para Kapta, Swayp no lo tiene. La
   pantalla lo avisa antes de aplicar cuando en una ciudad coinciden productos
   que van a 0 y códigos sin vincular; se vincula en Catálogo y se vuelve a leer.
-- **Sólo se sincronizan Arequipa, Trujillo, Juliaca, Piura y Lima**
-  (`CIUDADES_DEL_SYNC`), las mismas que el Excel sabía leer. Una bodega que
+- **Sólo se sincronizan Arequipa, Trujillo, Juliaca, Piura, Lima e Ica**
+  (`CIUDADES_DEL_SYNC`), las mismas que el Excel sabe leer. Una bodega que
   resuelva a otra ciudad, o que no resuelva, se muestra y **no se toca**.
-  Sumar una ciudad al sync es una decisión, no un efecto del mapeo.
+  Sumar una ciudad al sync es una decisión, no un efecto del mapeo. **Ica entró
+  el 15-10-2026** (decisión de Frankz: «ya tengo el stock habilitado en Swayp
+  por API»): su bodega es «BODEGA ICA», ubigeo `110101`, y desde ese día su
+  saldo lo pone el conteo de Swayp y no la carga a mano. Para emitir guías por
+  API, Ica necesita además su remitente en `SWAYP_SENDERS`; sin él, la ciudad
+  sigue por el Excel aunque su stock ya se lea.
 - **Una ciudad que no vino en la lectura no se vacía**, y una lectura vacía
   (0 filas) no se aplica: es un fallo de Swayp, no un inventario en cero.
 - Si dos bodegas caen en la misma ciudad, sus unidades **se suman**.
@@ -4082,6 +5122,15 @@ pide elegir entre Aliclik y Swayp, lo dice; y el formulario manual de guía
 Swayp, con fecha propia, queda plegado salvo cuando el envío no tiene número
 de pedido, único caso en que es el camino obligado.
 
+**Repro Lima usa los mismos cuatro resultados (12-10-2026).** «Confirma
+fecha», «Llamar después», «No contesta» y «Ya no lo quiere» (§9.5), con kinds
+propios: `lima_repro_agreed`, `lima_repro_call` y `lima_repro_closed`. No usa
+los de Envíos ni los de confirmación (`call`, `confirmation_contact`,
+`contact_attempt`), así que no gasta el cupo de confirmación. Tampoco es una
+puerta a «entregado»: «Confirma fecha» guarda un acuerdo, no un resultado. Y
+«Ya no lo quiere» no anula nada: cierra el caso para desarmar la caja, y la
+venta sigue hasta que Shopify la anule.
+
 ### 11.5 Lo que cierra una venta se confirma, y se avisa antes
 
 Tres salidas del cajón de Envíos terminan una venta. Las tres piden la misma
@@ -4104,6 +5153,14 @@ Y lo que **no** es terminal pero se perdía igual: al cerrar el cajón o saltar 
 otra guía con una nota a medio escribir, el texto se descartaba sin preguntar.
 Ahora se avisa y se puede volver. En una cola de llamadas, ese texto es lo que
 la asesora acaba de oír por teléfono.
+
+**En Repro Lima, la misma ceremonia (12-10-2026).** «Ya no lo quiere» y
+«Desarmar y cerrar sin llamada» (§9.5) cierran el caso y mandan a desarmar la
+caja. Piden lo mismo que el descarte: un motivo de `DISCARD_REASON_MIN`
+caracteres como mínimo y un segundo clic que nombra el pedido («Sí, desarmar y
+cerrar #KP138029»), con «No anula la venta: solo Shopify la anula.» al lado. El
+servidor vuelve a comparar el nombre del pedido. La hoja también avisa antes de
+cerrarse con una nota a medio escribir.
 
 ### 11.6 Una reprogramación confirmada no puede ser de ayer
 
@@ -4147,6 +5204,17 @@ cajón, la columna de la cola y los mensajes del servidor muestran `MAX_INTENTOS
 aplican la transición y la ventana de reprogramación. El mínimo del motivo de
 descarte sale igual de `DISCARD_REASON_MIN`.
 
+**La fecha de un acuerdo de Repro Lima sigue la misma lección (12-10-2026).**
+No es una guía Swayp, pero la regla vive en cada sitio que la escribe: en la
+hoja (`min` y `max` del campo), en la acción (`agreementDateProblem`), en la
+base (`lima_repro_record`: de hoy a 60 días, en hora de Lima) y, con Grupo GF,
+al programarlo: un acuerdo cuyo día ya pasó no se programa al recibir la caja
+y vuelve a «Por decidir» (§9.5). **Hoy sí vale** (con Grupo GF, hasta el
+corte, §9.1): es un despacho, no una guía con la fecha en su número. Swayp
+sigue el §11.6.1. La próxima llamada de «Llamar después» también puede ser
+hoy, para la segunda vuelta de la tarde, siempre a una hora que no pasó y a 60
+días como máximo.
+
 #### 11.6.1 Swayp despacha de lunes a sábado (10-10-2026)
 
 Toda **fecha de despacho de una guía Swayp** es de lunes a sábado: Swayp no
@@ -4160,7 +5228,10 @@ reparte los domingos (§11, «Horarios Swayp documentados»). Decisión del owne
   desde Por confirmar, §11.11), que propone el primer día válido; **Cliente
   confirma** por Swayp; la **guía Swayp a mano** y la **nueva fecha de la
   excepción** de una guía anulada. «Cliente confirma» por Aliclik y «Programar
-  llamada» siguen con el calendario: no son despachos Swayp.
+  llamada» siguen con el calendario: no son despachos Swayp. La lista ofrece
+  las próximas 24 fechas; la hoja de Repro Lima (§9.5) la usa también, pero
+  hasta los 60 días que acepta su servidor (`lastDay`), para que toda fecha
+  válida del acuerdo esté en la lista.
 - **En el servidor**, la misma regla (`isSwaypDispatchDay`) en
   `createDirectFenixGuide`, `createFenixGuide`, `registerRerouteCall` con
   «confirma» por Swayp y `reenviarGuiaAnulada` (que usan también el reenvío por
@@ -4188,6 +5259,21 @@ Donde no hay motivo **no va un guion**. Un guion se lee «no hay nada que decir�
 y lo que pasa es otra cosa: de 130 devoluciones candidatas medidas el 2026-08-10,
 100 no traían motivo alguno. Va escrito «sin motivo del courier · no consta si la
 rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
+
+**Repro Lima lo aplica al «No entregado» de Lima (12-10-2026).** «Antes de
+llamar», arriba de los resultados, la hoja muestra el motivo, la nota, la foto,
+el motorizado y el día del fallo («No entregado por Roy el sáb 10/10 · Rechazó
+el pedido · «nota»»), o el motivo del courier (`motivoDelCourier`). La lista
+muestra la misma línea. El rechazo va destacado. Sin motivo dice «sin motivo
+del motorizado · no consta si lo rechazó en la puerta».
+
+De otro courier, la línea dice el día que de verdad se conoce. Tanders y Swayp
+no sellan cuándo falló el intento, así que dice el día en que **salió**:
+«Salió el lun 12/10 con Swayp · motivo». Aliclik, que sella el cierre, sigue
+con «No entregado por Aliclik el …». Para elegir cuál es el último fallo —la
+parada o la guía de otro courier— se comparan primero los días (el de la ruta
+de la parada, el del fallo de la guía) y después las horas, porque la hora de
+la parada se reescribe al corregir su reporte (§9.5).
 
 ### 11.8 Recuperación por agente de voz
 
@@ -4275,6 +5361,8 @@ una condición existe en otra pantalla, se lee de la misma función.
    (ver pendientes).
 9. El teléfono **no pidió que no lo llamen** (`no_llamar`, abajo) en esa
    tienda.
+   La lista es una por tienda para los dos agentes de voz (12-10-2026): incluye
+   a quien se lo pidió al agente de leads (§33.7).
 
 Orden de la cola: **fecha pactada por el propio agente → guía cerrada más
 reciente primero**. Lo mismo que §6.1 con la antigüedad invertida: aquí lo
@@ -4290,6 +5378,10 @@ razón: el primer lote de cada tienda se mira antes de soltarlo.
 - `voice_recovery_auto`: el barrido llama solo. Apagarlo es la marcha atrás.
 - `voice_recovery_daily_cap` (30 por defecto): llamadas salientes por tienda y
   día de Lima. Se cuenta sobre `voice_calls`, no sobre un contador.
+- **Solo llamadas de pedido (12-10-2026).** El tope diario, «Gestión por
+  persona», «Llamando ahora» y la última llamada de la línea «Agente de voz»
+  cuentan solo `voice_calls.purpose = 'order'`. Las del agente de leads (§33)
+  tienen su propio tope (`voice_lead_daily_cap`) y su propio tablero.
 - **Una llamada del agente por pedido y día**, y **`voice_recovery_max_attempts`**
   (2 por defecto) llamadas del agente por pedido en total. Agotadas, el pedido
   sigue en la cola de Reproprovincia para una persona, marcado «el agente ya
@@ -4757,6 +5849,56 @@ Reglas de esa tabla:
       no se usa antes de que la clienta hable.
     - **Sin razonamiento interno** (`thinking_budget` = 0). En esa respuesta,
       el modelo generó 841 tokens para una sola frase.
+    **Guion en pasos cortos y registro que no se cancela (13-10-2026).** Se
+    revisaron las 61 conversaciones del Agente ElevenLabs entre el 06-10 y
+    el 13-10:
+    - 15 terminaron registradas;
+    - en 27 la clienta nunca habló (20 se cerraron por 20 s de silencio; en
+      las dos revisadas a fondo, ElevenLabs recibió 0 s de audio: posible
+      audio en un solo sentido, pendiente de escuchar las grabaciones);
+    - 19 se cortaron sin registro. En 10 de ellas fue durante el pitch o
+      justo después.
+
+    Lo que se vio en esas 19:
+    - el pitch era largo, se interrumpió en 12 de 19 y el agente lo
+      repetía entero;
+    - arrancaba sin confirmar identidad;
+    - no decía quién llamaba cuando se lo preguntaban;
+    - ignoraba «estoy ocupado»;
+    - preguntaba el motivo antes de registrar un «no»;
+    - el registro se cancelaba si la clienta hablaba encima;
+    - usaba `identificar_llamada` teniendo la ficha (una vez inventó un
+      número y cortó);
+    - dijo el producto a otra persona.
+
+    Cambios en ElevenLabs:
+    - **guion en pasos:** primero la identidad; después una sola frase de
+      motivo («el courier no pudo entregárselo en {distrito}. ¿Todavía lo
+      desea recibir?»), sin el nombre largo del producto; recién después el
+      reenvío. Si interrumpen, responde sin repetir. A «¿quién habla?»
+      responde quién es. «Ocupado» u otra persona se registran como
+      programar, y a otra persona nunca se le dice el producto. Un «no» se
+      registra al momento, sin preguntar antes el motivo;
+    - **`registrar_gestion`:** con `interruption_mode =
+      disable_during_tool`, para que no se cancele si la clienta habla, y
+      con una descripción que pide llamarla en cuanto hay decisión;
+    - **`identificar_llamada`, quitada de este agente:** la ficha llega
+      precargada. Sin ficha, el agente se disculpa y cuelga;
+    - **modelo de respaldo:** `gemini-2.0-flash`, en vez del de ElevenLabs
+      por defecto (`gemini-2.5-flash`, que tardó 5 a 7 s).
+
+    Cambios en Kapta (valen también para los agentes Grok):
+    - **`producto_corto`** ya no termina en «e», «o», «u», «al», «por» ni
+      «sin». Salía «Gel Íntimo Reafirmante e»;
+    - **la dirección de la ficha** trae los números de tres cifras o más
+      separados, cifra por cifra (`direccionHablada`): el agente leyó «104»
+      como «diez y ocho».
+
+    **No es el agente de leads (12-10-2026).** Hay un segundo agente de
+    ElevenLabs que llama a leads, no a pedidos (§33). Comparte la conexión de
+    Telnyx, pero tiene su propia puerta SIP, su secreto, su inicio de
+    conversación y su carril, y sus llamadas no cuentan en ningún tablero de
+    esta sección.
   - **«Llamando ahora» (Envíos, 05-10-2026).** En la pestaña Pendiente, la
     pantalla pregunta cada 5 s por las llamadas del agente abiertas: reales,
     marcando o en conversación, y sin las caducadas (`getLiveVoiceCalls`).
@@ -5017,6 +6159,8 @@ poner las dos columnas una al lado de la otra.
   anuncia la grabación. Antes del piloto con clientas reales, confirmar con
   quien asesore en protección de datos si eso es aceptable; si no lo es, o se
   apaga la grabación (queda la transcripción) o el aviso vuelve al saludo.
+- **Leads por voz** (12-10-2026): es otro agente y otro piloto, con su cola,
+  su grupo de control y sus pendientes, en §33.
 
 ### 11.9 Reintento automático Aliclik → Swayp sin contacto (01-10-2026)
 
@@ -5288,6 +6432,80 @@ pedidos; y cuántos **salen solo con ese producto** (no les falta nada más). Ca
 fila se abre en sus pedidos, con enlace al Master, ordenados primero por los que
 salen solo con eso y después por los días que llevan en su etapa.
 
+### 11.13 Swayp automático desde Por confirmar, piloto A/B (13-10-2026)
+
+Una pasada diaria hace lo mismo que el botón «Enviar por Swayp» de §11.11, sin
+persona, sobre un grupo angosto de pedidos y con la mitad como grupo de control.
+Si Swayp no entrega, el pedido vuelve a «Por confirmar · Swayp no entregó» igual
+que con el botón. Nace **apagado**; lo activa quien tiene «Administrar tiendas»
+desde el registro de Swayp desde Por confirmar.
+
+**Por qué así (números del 13-10-2026).** El botón llevaba 22 envíos: 2
+entregados de 15 resueltos (13 %), 7 en reparto. Los 6 más viejos —de 4 a 7
+llamadas sin respuesta, de 5 a 14 días esperando— fallaron todos; las 2 entregas
+fueron pedidos del día con una sola llamada. En todas las guías Swayp desde el
+15-09, se entrega el 27 % cuando el cliente confirmó, el 17 % con el automático
+Aliclik → Swayp (§11.9) y el 13 % con el botón; el primer motivo de fallo es
+«destinatario no contesta» (41 %), después los rechazos (22 %) y las fallas de la
+propia bodega (12 %). Quien no le contesta a la asesora tampoco le contesta al
+motorizado: el automático va a pedidos **frescos**, no a los que llevan días sin
+contestar.
+
+**Decisiones del owner:** sin aviso previo por WhatsApp; pedidos de hasta 48 h;
+piloto A/B de 10 por día. Los demás umbrales son de la propuesta y viven en
+`swayp_pc_auto_settings` (0253), no en el código.
+
+**Quién entra** (`lib/swayp-por-confirmar-auto.ts`, pura):
+
+- Por confirmar, subetapa «Sin llamar» o «Por confirmar» (no «Volver a
+  contactar», «Pendiente de abono» ni «Swayp no entregó»); provincia COD; Swayp
+  ok en el Master.
+- Pedido de hasta 48 h, sano (sin anular ni reembolsar, en soles, pago
+  pendiente), sin pagos registrados y sin otra salida viva.
+- Al menos 1 llamada (la asesora va primero) y no más de 2 sin respuesta; sin
+  fecha para volver a contactar.
+- Dirección con número, o con manzana y lote (§11.12 usa la misma idea). No
+  cuentan la fecha que nombra una calle («Av. 31 de Octubre»), la etapa de una
+  urbanización ni un código pegado («Las Dunas D2»). Sin recojo en agencia.
+- Teléfono válido y limpio: sin rechazos previos (novedades 15 y 16 de Swayp,
+  descarte de la recuperación, una nota que dice que no), y sin otro pedido vivo
+  —o entregado en 30 días— con el mismo producto.
+- Hasta S/ 300.
+
+Para los que pasan, el servidor (`swayp-por-confirmar-auto-server.ts`) mira lo
+que pide red, **para los dos brazos**, porque el control tiene que ser el mismo
+tipo de pedido:
+
+- La bodega no tuvo fallas propias (novedades 18 y 20) en los últimos 7 días.
+- La ubicación se corrobora con Aliclik: el pin del GPS tiene que resolver al
+  mismo ubigeo que la dirección. Es lo que deja fuera Majes o La Joya cuando el
+  distrito dice «Arequipa».
+- Cada producto tiene su vínculo con Swayp y stock completo leído en vivo.
+
+**El A/B.** El brazo sale del id del pedido (FNV-1a, mitad y mitad): el mismo
+pedido cae siempre del mismo lado. A sale por Swayp; B sigue la cola de
+llamadas. Cuando un pedido es elegible, su decisión queda fija con su brazo
+(`swayp_pc_auto_decisions`). Primero van quienes ya compraron y recibieron (el
+84 % de esas entregas llegó en el histórico); después el más antiguo de la
+ventana.
+
+**Límites y freno.** 10 por día y 3 por bodega; corre a las 6:30 p. m. de Lima
+para despachar el siguiente día de despacho (lunes a sábado; en Arequipa no el
+sábado, como §11.9). Si de los últimos 20 casos resueltos del brazo A se entrega
+menos del 35 %, se apaga solo y deja el motivo; volver a activarlo lo decide una
+persona.
+
+**Un solo camino de emisión.** La guía la emite `emitirGuiaSwaypDirecta`
+(`lib/swayp-directa.ts`), la misma función que usa el botón desde el 13-10-2026:
+mismas rejas de pedido, salidas vivas, stock de todos los productos, vínculo,
+fecha y número emitido por Swayp. El hecho `swayp_desde_por_confirmar` del
+automático va con `source = 'system'`, sin actor, y su evidencia en el payload;
+el registro lo muestra como «Automático».
+
+**Cómo se mide.** El panel compara la tasa de entrega de los resueltos de cada
+brazo: A por su guía Swayp; B por el Master (entregado por quien sea, o cerrado
+sin entrega). La simulación muestra qué saldría hoy sin enviar nada.
+
 ## 12. Agencia: Shalom y Olva
 
 ### Shalom
@@ -5313,6 +6531,38 @@ salen solo con eso y después por los días que llevan en su etapa.
 - Se permiten varios pagos; se libera la clave cuando la suma validada alcanza
   el total exigido.
 - Sin pago completo no se entrega la clave.
+- **Excepción por descuento** (13-10-2026, decisión del owner). Cuando lo que
+  falta es un descuento de último momento —la clienta pagó el envío de Shalom y
+  se le descontó de la diferencia—, la diferencia nunca llega entera y la única
+  salida era pedirle la clave a un administrador. Ahora quien ya puede ver la
+  clave (una vendedora como Gerardo) la muestra con **«Mostrar con
+  descuento»**, si se cumple todo esto (`discountException`,
+  `lib/pickup-key.ts`):
+  - hay **al menos dos comprobantes VALIDADOS** —el adelanto y la
+    diferencia—; lo cargado sin validar no cuenta;
+  - lo que falta para el total, con lo validado, **no pasa de S/ 15**
+    (`DISCOUNT_EXCEPTION_MAX`); con más hace falta un administrador;
+  - ningún comprobante observado ni de otro pedido, la clave registrada y el
+    pedido ni anulado ni devuelto;
+  - y **siempre con el motivo escrito**: la consulta queda como excepción en
+    `pickup_key_views` (con lo que faltaba) y en la línea de tiempo.
+  - **Cuando no aplica, se dice por qué** (13-10-2026), pero solo si lo que
+    bloquea es que el dinero cargado no alcanza: «falta validar uno»,
+    «faltan S/ 20 y la excepción cubre hasta S/ 15»… Sin esto el botón
+    simplemente no salía y nadie sabía qué faltaba. Con la diferencia sin
+    cargar no se menciona: el aviso de siempre ya lo dice.
+  Con el descuento aceptado el pedido cuenta como cobrado: no espera a que el
+  paquete llegue ni lo cierra «entregado». El servidor vuelve a comprobarlo al
+  revelar; el panel solo decide si ofrece el botón. La excepción del
+  administrador —cualquier condición, con motivo— sigue igual.
+- **«Entregado» con el pago entero deja volver a ver la clave** (13-10-2026).
+  El equipo marca «Entregado» en cuanto dicta la clave: 469 veces en los 30
+  días al 13-10, segundos después de consultarla, con el paquete todavía en la
+  agencia. Si la clienta la perdía y la pedía días después, «pedido cerrado» la
+  bloqueaba, y la salida era devolver el pedido a «pendiente» a mano (motivo
+  «dar clave»). Ahora «entregado» solo cierra la clave si lo **validado** no
+  cubre el total (o el checkout no lo cobró): con el dinero confirmado no hay
+  nada que proteger. **Anulado y devuelto siguen cerrándola** siempre.
 - La clave pertenece a la salida Shalom: se registra, consulta y entrega desde
   **Salidas y guías**, no desde el formulario de comprobantes. El pago solo
   gobierna si la credencial puede revelarse.
@@ -5558,6 +6808,38 @@ salen solo con eso y después por los días que llevan en su etapa.
       seguiría viendo una deuda que ya pagó y la clave de recojo esperaría a que
       una persona hiciera clic. `validated_by` queda en **NULL**: no lo validó
       nadie, lo validó la pasarela, y la línea de tiempo lo dice.
+    - **Una constancia de Flow subida a mano se verifica con Flow (14-10-2026).**
+      - **El caso.** La clienta paga con tarjeta por Flow, con un link que no
+        salió de Kapta, y manda la pantalla «¡Tu pago se ha concretado
+        exitosamente!». Esa pantalla trae monto, «Nº de orden», fecha, medio,
+        tarjeta y «Pago exitoso», pero no «Pagado a» ni un nº de operación de
+        banco.
+      - **El problema.** El lector no encontraba nada seguro y la daba por «no
+        parece un Yape» (#KP141432, orden 184932654).
+      - **Ahora el lector lee el «Nº de orden»**, que es el `flowOrder`, y Kapta
+        le pregunta a Flow con las credenciales de la tienda
+        (`payment/getStatusByFlowOrder`).
+      - **Si Flow la confirma pagada en nuestra cuenta,** el pago entra
+        **validado por la pasarela**:
+        - es el mismo criterio que el link de arriba, sin persona y con la
+          fuente «flow» en la línea de tiempo;
+        - pasa por la validación de siempre, que cierra la liquidación del
+          courier, confirma la agencia y cierra alertas;
+        - el monto es el que entró según Flow;
+        - el nº de operación es la orden de Flow, así que la misma constancia
+          no paga dos pedidos.
+      - **No entra validado** si:
+        - el monto registrado supera lo que entró;
+        - el nº escrito no es el de la imagen;
+        - el pago es anterior al pedido;
+        - o Flow no conoce la orden en nuestra cuenta.
+
+        En esos casos sigue el camino de siempre.
+      - **Si Flow tiene la orden sin pagar,** la constancia no corresponde a
+        dinero y va a **revisión administrativa**.
+      - **Pago que ya entró por un link de Kapta.** No se registra dos veces:
+        los pagos por link guardan ahora la orden de Flow como nº de operación,
+        y el registro busca la orden en los links.
     - **Nunca dos cobros vivos por el mismo saldo.** Si ya hay un link vivo por
       el mismo importe se reenvía ese; solo un importe distinto justifica otro,
       y el anterior se deja de ofrecer. Pulsar el botón dos veces no puede
@@ -6530,6 +7812,11 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
 - Almacén registra recepción y coteja solicitado contra recibido.
 - Actualmente se verifica principalmente que llegó la caja.
 - Yelitza decide reingreso a inventario o merma.
+- La caja reemplazada por «Sacar con salida nueva» (§29.13) se recibe en
+  oficina, se desarma y se registra como reingreso a inventario
+  (`inventory_restock`, permiso `closure.inventory`) sobre ESA salida. Si el
+  pedido ya se entregó con la salida nueva, el cierre espera ese registro
+  (`Por cerrar · Devolución pendiente de inventario`, v1.26).
 - Una devolución posterior del cliente mantiene el resultado Entregado y abre
   `Por cerrar · Devolución del cliente`.
 - Solo Frankz y Yohalis pueden reabrir una devolución finalizada.
@@ -6546,7 +7833,7 @@ Couriers que cobran y luego liquidan: Aliclik, Swayp, Axel y Urpi.
 - Neto esperado: cobrado menos costo logístico aplicable.
 - La cabecera distingue el emisor del lote de una persona repartidora: Axel,
   Aliclik, Swayp y Urpi se asignan como **courier**. El campo motorizado se usa
-  únicamente cuando la liquidación corresponde a Johnny, Roy, Douglas u otro
+  únicamente cuando la liquidación corresponde a Johnny, Roy, Duglas u otro
   motorizado propio. Un lote de Axel no exige crear a «Axel Courier» como
   usuario ni calcularle tarifas de motorizado propio.
 - Conciliación: guía y pedido Shopify, con nombre/teléfono como apoyo.
@@ -6632,6 +7919,106 @@ registra en cada evento.
 - Retirar del manifiesto: motivo obligatorio.
 - Corrección de resultado courier: evento de corrección, nunca edición destructiva.
 - Cerrar liquidación observada: rol financiero autorizado.
+- **Solo el dueño reparte poder (12-10-2026).** En **Equipo**, solo el owner
+  cambia roles, invita a alguien como admin y quita a un admin. Un admin invita
+  y quita vendedoras y solo lectura, y nada más. Los permisos de dinero y de
+  datos —«Validar pagos», «Corregir pagos», «Alerta de comprobante repetido»,
+  «Administrar Grupo GF» (tarifas y pago de motorizados), «Exportar datos» y
+  «Boletas y facturas» (§35.7)— solo los da o los quita el owner, también a sí
+  mismo; un admin sigue concediendo lo operativo («Reportar entregas de
+  rutas»). Las casillas que no puede tocar le salen apagadas, con el motivo al
+  pasar el ratón, y el servidor lo rechaza igual (`lib/team.ts`,
+  `GRANTED_ONE_BY_ONE[].ownerOnly`).
+
+  Por qué: con doce admins, la regla de «Validar pagos se concede uno por uno»
+  no protegía nada, porque cualquier admin podía concedérselo. Al 12-10-2026 una
+  admin se había dado «Corregir pagos», «Administrar Grupo GF» y «Reportar
+  entregas de rutas», y dos admins habían dado «Validar pagos» a otras dos
+  personas. Lo ya concedido se mantiene; revisarlo es decisión del owner.
+- **Roles que se acumulan (12-10-2026, migración 0250).** Encima del acceso de
+  cada persona (dueño, admin, vendedora, solo lectura, motorizado), el dueño le
+  asigna en **Equipo** uno o varios roles por función, y sus permisos se suman
+  (`FUNCTIONAL_ROLES`, lib/permissions.ts):
+
+  | Rol | Qué trae |
+  | --- | --- |
+  | Asesora | Gestionar pedidos, subir comprobantes, ver la clave de recojo (con el cobro completo, o con la excepción por descuento, §12), crear guías de Aliclik, Tanders y Shalom, crear pedidos en Shopify, responder novedades de Swayp, escribir a clientas con devolución, reprogramar entregas en Lima (§9.5), recibir devoluciones |
+  | Almacén | Gestionar pedidos, preparar paquetes, recibir devoluciones, reingresar al inventario |
+  | Despacho y Grupo GF | Gestionar pedidos, despachar, entregar la caja al motorizado, reprogramar entregas en Lima (§9.5), armar rutas, reportar entregas por un motorizado, subir reportes de couriers, manejar stock de Swayp y Fénix, preparar paquetes, crear guías, recibir devoluciones |
+  | Liquidaciones | Gestionar pedidos, subir y cerrar liquidaciones de motorizados, cuadrar hojas de couriers, conciliar el dinero del pedido |
+  | Cobranza | Gestionar pedidos, subir comprobantes, ver y registrar claves de recojo, aprobar cobros de Tanders rechazados |
+  | Supervisión | Gestionar pedidos, corregir pedidos cerrados, cerrar o reabrir pedidos, anular guías de Aliclik, recibir devoluciones, reingresar al inventario, ver reportes del negocio |
+  | Administración | Gestionar pedidos, gestionar el equipo, administrar tiendas, editar costos, manejar stock, editar el catálogo de Aliclik, asignar producto a anuncios, configurar hojas de couriers, dar de alta motorizados, subir reportes de couriers, ver reportes del negocio |
+
+  Reglas:
+  - Quien tiene acceso «vendedora» y algún rol recibe **solo** lo de sus roles;
+    el paquete «vendedora» es el de quien aún no tiene roles. Owner y admin ya
+    lo tienen todo: un rol no les suma nada.
+  - Ningún rol trae los permisos de dinero o datos que da el dueño uno por uno
+    (validar y corregir pagos, alerta de comprobante repetido, Administrar
+    Grupo GF, exportar datos, boletas y facturas), ni confirmar reembolsos. Lo
+    fija una prueba.
+  - Una revocación puntual sigue ganando sobre cualquier rol.
+  - Solo el dueño asigna o quita roles. Equipo muestra, para cada persona, lo
+    que puede hacer hoy y de dónde le viene (ver «Glosario de Equipo»).
+  - Lo que el código decidía con «¿es owner o admin?» ahora pide un permiso:
+    «Gestionar el equipo» (Equipo), «Administrar tiendas» (tiendas, ajustes,
+    ciclo de confirmación, cobertura de Aliclik por distrito, despacho
+    automático de Swayp, emparejamiento masivo), «Stock de couriers» (Swayp y
+    Fénix), «Costos» y «Ver reportes» (Consolidado, panel de tienda,
+    productividad de todo el equipo, repartir leads). Owner y admin los tienen;
+    el menú muestra a cada quien las entradas de sus permisos.
+  - `rider_pay_allowed` (pago de motorizados, en la base) reconoce los roles con
+    la misma regla: armar rutas ← Despacho, cerrar liquidaciones ←
+    Liquidaciones, costos ← Administración.
+
+  Mientras nadie tenga roles, todos ven y pueden lo mismo que antes. Antes de
+  bajar a alguien de admin a vendedora hay que darle acceso explícito a sus
+  tiendas (`user_store_access`): owner y admin ven todas las tiendas de la
+  organización sin esa lista.
+- **Glosario de Equipo (13-10-2026).** Cada permiso tiene en pantalla un
+  nombre de verbo y objeto, sin jerga, una explicación de una línea y un área
+  (Pedidos; Pagos y claves de recojo; Guías y couriers; Almacén y despacho;
+  Rutas y motorizados; Devoluciones y cierre del pedido; Liquidaciones;
+  Administración). Los nombres los aprobó el dueño y viven en
+  `lib/permissions.ts` (`PERMISSION_LABEL`, `PERMISSION_HELP`,
+  `PERMISSION_AREAS`). Los accesos se leen Dueño, Admin, Vendedora, Solo
+  lectura y Motorizado. Para que no se confundan: «Subir comprobantes» es
+  adjuntar el Yape al pedido y «Validar pagos» es confirmar que el dinero llegó;
+  «Ver la clave de recojo» es con el pedido pagado completo y «Registrar claves
+  de recojo» es guardarla o reemplazarla; «Conciliar el dinero del pedido» es el
+  cierre financiero de cada pedido, y «Subir» y «Cerrar liquidaciones de
+  motorizados» son las del pago al motorizado.
+
+  En **Equipo**, «¿Qué hace cada rol?» abre una guía en un panel lateral: un
+  índice con los siete roles, la vendedora sin roles, los permisos que se dan
+  uno por uno y los accesos (en el teléfono, un selector), y al lado lo elegido
+  con sus permisos por área y quiénes lo tienen. En cada fila, «N permisos» abre
+  lo que puede hacer esa persona, por área y con el origen de cada permiso (el
+  rol que lo trae o «Dado uno por uno»; lo que trae el acceso se dice una vez
+  arriba) y, aparte, lo que se le quitó a mano (`explainPermissions`). Las
+  explicaciones se leen al tocar, no solo al pasar el ratón.
+- **Ver no es tocar (13-10-2026).** Poder ver un pedido o un envío (RLS) no
+  da permiso para escribir en él. Toda escritura pide un permiso en el
+  servidor, también para quien es de solo lectura:
+  - **Repro Provincia** (`app/dashboard/envios/actions.ts`): reservar el
+    envío, registrar una gestión o la llamada de recuperación (también
+    «no quiere»), cambiar el estado o la dirección, crear la guía de Swayp
+    (también la directa y la de «Enviar por Swayp»), vincular el pedido y
+    editar la nota de una gestión. Todo pide `master.edit`, lo mismo que el
+    Master pide para esos mismos hechos; stock y novedades de Swayp conservan
+    su permiso propio. Al abrir un envío sin el permiso, la reserva rebota con
+    «Tu rol no permite gestionar envíos.» y el panel queda bloqueado. Soltar
+    la reserva no lleva puerta porque solo suelta la propia.
+  - **Datos de Shalom** (DNI y agencia antes de la guía): `master.edit`.
+    Guardarlos puede confirmar el pedido, igual que una confirmación.
+  - **Pedido cerrado**: «Registrar devolución» sobre un pedido entregado o
+    anulado pide `master.override_status` y motivo, como «Cambiar estado»
+    (`closedStatusChangeError`, lib/order-status.ts). Antes pasaba un
+    entregado a devuelto con solo `master.edit`.
+
+  `test/escrituras-piden-permiso.test.ts` falla si una acción de Repro
+  Provincia vuelve a escribir sin pedir permiso.
 
 ### 16.1 Bandeja de validación de pagos
 
@@ -6940,6 +8327,57 @@ Alertas críticas iniciales:
 3. Manifiesto incompleto.
 4. Pedido sin movimiento por 60 días, salvo reprogramación explícita.
 
+### 17.2 LTV : CPA (13-10-2026)
+
+El dueño eligió esta métrica para saber si el negocio se sostiene: lo que vende
+cada clienta nueva en sus primeros días por cada sol que costó traerla. Está en
+**Consolidado**, debajo del resumen operativo, con la escala del dueño:
+
+| Ratio | Lectura |
+| --- | --- |
+| Menos de 3 | Pierde caja: se pierde flujo de caja en cada venta |
+| 3 a 3.5 | Estable, pero no escala de forma eficiente |
+| 3.5 a 4 | Gana cuota: lo que compra después sostiene la pauta |
+| Más de 4 | Dominio: se puede pagar un CPA más alto que la competencia |
+
+Cómo se calcula (`ltv_cohorts` y `meta_spend_by_month`, migración 0252; el
+ratio en `lib/ltv.ts`):
+
+- **Clienta nueva:** el teléfono (últimos nueve dígitos, §8.1) en su primera
+  entrega. Se agrupa por el mes de esa primera entrega, en hora de Lima.
+- **Valor (LTV):** el ingreso bruto de los pedidos entregados de esa clienta a
+  30, 60, 90, 180 y 365 días desde su primera compra. Solo cuenta lo
+  entregado: en contraentrega, lo que no se entrega no se cobra. No resta el
+  costo de producto, porque no está cargado en Costos.
+- **Costo (CPA):** el gasto de Meta del mes ÷ las clientas nuevas con entrega
+  ese mes. Las cuentas de Meta en dólares se convierten a S/ 3.75, el cambio
+  que fijó el dueño. Otros canales pagados no entran; una moneda que no se
+  sabe convertir no se suma y se avisa.
+- **Ratio:** valor ÷ gasto del mes, que es lo mismo que LTV por clienta ÷ CPA.
+- **Cuándo se lee.** Un horizonte se lee cuando la última clienta nueva del mes
+  lo cumple, así que un mes recién da su ratio a 30 días un mes después de
+  terminar. Las tres semanas siguientes es provisional (*), porque todavía se
+  entregan pedidos de esos días. El CPA de un mes terminado también es
+  provisional esas tres semanas: siguen apareciendo clientas nuevas del mes a
+  medida que se entregan sus pedidos. El mes en curso no da CPA: con la mitad
+  de sus pedidos sin entregar sale inflado.
+- **Lo primero que se lee, por tienda:**
+  - el ratio a 30 días del último mes que ya los cumple;
+  - el CPA del último mes ya terminado que todavía no cumple 30 días, comparado
+    con el anterior, porque un salto en lo que cuesta traer a una clienta tiene
+    que verse antes de que cierre su ratio;
+  - lo que la recompra le sumó al mes más antiguo, de 30 días a su horizonte
+    más largo.
+
+  Plegado, «Ver mes por mes» trae cada mes con sus clientas nuevas, gasto, CPA,
+  el ratio y el valor por clienta a cada horizonte y la recompra a 90 días.
+- **Historial.** Empieza en junio de 2026 (`ORDERS_SYNC_FROM`): las clientas
+  de junio pueden incluir algunas que ya habían comprado antes, y el año 1
+  completo se podrá leer desde julio de 2027.
+- **Para subirlo:** el recordatorio de reposición (§34) le escribe a la
+  clienta cuando se le está por acabar lo que compró. Mide su efecto contra un
+  grupo de control.
+
 ## 18. Implementación incremental
 
 ### Fase 1 — Fundaciones
@@ -7016,7 +8454,7 @@ segunda es un error: los paquetes quedan repartidos entre dos manifiestos y el
 cotejo de ninguno cuadra. Lo impide la base, no solo la interfaz.
 
 La unicidad sigue a la identidad de la ruta: **con motorizado**, uno por
-motorizado y día —así Johnny, Roy y Douglas tienen cada uno la suya aunque los
+motorizado y día —así Johnny, Roy y Duglas tienen cada uno la suya aunque los
 tres sean «motorizados propios»—; **sin motorizado**, uno por courier y día, que
 es el caso de Aliclik, las agencias y las rutas «Sin asignar».
 
@@ -7167,8 +8605,8 @@ Primer bloque publicado en el drawer del Master:
   reembolsos; los permisos puntuales de `user_permissions` siguen prevaleciendo.
 - El resolver quedó versionado —`mom-v1.4` en este bloque; la versión vigente es
   siempre `MOM_RESOLUTION_VERSION` en `lib/order-macro-stage.ts`, hoy
-  `mom-v1.25` (10-10-2026: pagado a la tienda y sin courier no espera
-  liquidación, §6.5)—; el cron detecta versiones anteriores y recalcula el histórico por
+  `mom-v1.26` (12-10-2026: «Sacar con salida nueva», la salida reemplazada
+  que el motorizado todavía tiene no es la vigente, §29.13)—; el cron detecta versiones anteriores y recalcula el histórico por
   lotes hasta que todo el Master converja, sin necesitar credenciales locales ni
   detener la sincronización. Toda regla que cambie el resultado de filas que
   nadie tocó debe subir esa constante, o el histórico queda con el veredicto
@@ -7181,12 +8619,15 @@ Segundo bloque publicado en el Dashboard consolidado:
   eventos y manifiestos.
 - Las tasas de Confirmación Provincia COD, Adelanto de Agencia, Entrega Aliclik,
   Entrega Lima y Pago completo de Agencia muestran porcentaje, numerador y
-  denominador en las cinco ventanas de la sección 17.1.
+  denominador en las cinco ventanas de la sección 17.1. Desde el 13-10-2026 la
+  ventana se elige en chips (Hoy, Ayer, 7 días —la de entrada—, Este mes y Mes
+  anterior) en vez de una tabla con las cinco a la vez; las ventanas siguen
+  fijas y no siguen al periodo de ventas que se elija debajo.
 - Las alertas `Recogido sin pago completo`, `Liquidación vencida`, `Manifiesto
   incompleto` y `Sin movimiento por 60 días` muestran conteos reales y abren la
   cola correspondiente; el resumen no cambia estados ni ejecuta cierres.
 - Los plazos de liquidación distinguen Aliclik/motorizado propio, Axel/Urpi,
-  Swayp y Tanders, incluyendo Johnny, Roy y Douglas como motorizados propios.
+  Swayp y Tanders, incluyendo Johnny, Roy y Duglas como motorizados propios.
 - Un universo vacío se presenta como `Sin datos`, nunca como una tasa falsa de
   0 %, y el cálculo conserva la unidad pedido o salida aprobada en el MOM.
 
@@ -7279,6 +8720,29 @@ un destino.
 nuevos. Sin eso la excepción sería cierta para el futuro y mentira para lo que ya
 está en pantalla, que es el desfase de §19.1. Los finalizados no se tocan: su
 historia queda como ocurrió.
+
+**Cada cambio de cobertura que causa una persona queda registrado
+(13-10-2026).** La cobertura no se escribe a mano: la decide
+`order_coverage_for` a partir de la ubicación y de estas decisiones. Lo que una
+persona cambia es la causa, y hasta esta fecha eso dejaba un comentario genérico
+—«Ubicación corregida…»— sin decir que el pedido había pasado de Provincia COD a
+Lima. Ahora, cuando la cobertura de un pedido cambia por una acción humana, se
+escribe el hecho `coverage_changed` con el antes, el después y la causa
+(`lib/coverage-change.ts`), visible en Actividad como «Cobertura cambiada»:
+
+| Acción | Causa registrada | Pedidos |
+| --- | --- | --- |
+| Corregir la ubicación del pedido | `ubicacion_corregida` | Ese pedido |
+| Retirar la corrección de ubicación | `ubicacion_restaurada` | Ese pedido |
+| Guardar o eliminar una excepción de distrito en Ajustes, o marcar el distrito como Provincia COD desde la cotización de Aliclik | `decision_distrito` | Los abiertos de ese distrito |
+
+Es la puerta estándar para el pedido mal clasificado, y la que pide «Descargar
+rótulos» (§28) cuando un pedido de «Provincia COD» resulta ser de Lima. **Solo las
+acciones humanas**: el recálculo del Master corre en tandas de miles y una
+tarifa nueva puede reclasificar un distrito entero, así que registrar ahí cada
+cambio llenaría el historial sin que nadie haya decidido nada. Si el registro no
+se puede escribir, la acción no se deshace —la corrección ya está guardada y la
+cobertura nueva es la verdadera— y el error se muestra.
 
 **La cobertura se calcula sobre `peru_districts`, que es texto libre.** El
 Master rellena la región y la provincia del pedido desde esa tabla
@@ -8102,10 +9566,33 @@ Por cada pedido seleccionado:
 | Situación | Qué ocurre |
 | --- | --- |
 | Ya tiene una salida **viva** en custodia de la empresa | Se **reimprime esa**; no se crea otra. No cuentan una anulada, entregada o `transferido` —la custodia `empresa` sola no basta— ni una que su courier no entregó (abajo) |
-| No tiene ninguna salida | Se **crea** una sin courier decidido |
-| Su última salida fue **devuelta** | Se **crea** una nueva: rearmar es reprogramación normal, no una salida simultánea |
+| No tiene ninguna salida | **En Lima** se **crea** una sin courier decidido. **Fuera de Lima no se crea nada** (abajo) |
+| Su última salida fue **devuelta** | **En Lima** se **crea** una nueva: rearmar es reprogramación normal, no una salida simultánea |
 | **En Lima**, una salida **no la entregó su courier** (Tanders `RETURNING`/`RETURNED`, Swayp Devolución, anulada después de salir) | Se **crea** la salida nueva con **motivo automático** (09-10-2026): la anterior no está «en la calle» aunque su courier la siga dando en ruta, porque nadie la trabaja |
 | Tiene una salida **todavía en la calle** (viva de verdad) | No se crea nada: una salida adicional exige justificación auditada (§23) y se hace desde el pedido |
+
+**Fuera de Lima el rótulo no crea salida (13-10-2026, decisión del owner).**
+Solo en Lima el rótulo interno es el de verdad: la caja se arma antes de saber
+con qué motorizado o courier sale. En **Provincia COD y Agencia** la caja viaja
+con el rótulo del courier —Aliclik, Shalom, Olva— y el escáner del despacho ya
+acepta su número de guía, así que una salida «por definir» no la necesita
+nadie. Medido del 13-09 al 13-10-2026: de unas 4.200 guías de provincia y
+agencia, 19 pasaron por un rótulo interno y 10 terminaron con la «por definir»
+anulada a mano. La del 13-10 (#KP141065) la creó «Descargar rótulos» sobre una
+tanda que mezclaba coberturas, y la operadora creyó que el sistema había
+generado una guía sola.
+
+- Decide `macro_operation`, la misma que ya separaba Lima en esta tabla.
+- **Solo cambia CREAR.** Un pedido de provincia que ya tiene su salida con la
+  empresa —por ejemplo, la guía de su courier escrita encima de una «por
+  definir» anterior— se sigue reimprimiendo igual.
+- El pedido queda en la lista de la tanda con su motivo: no lleva rótulo
+  interno, la caja viaja con el del courier y su guía se crea desde el pedido.
+  Los demás pedidos de la tanda siguen.
+- **El pedido mal clasificado** —Provincia COD o Agencia que en realidad es de
+  Lima— no tiene atajo para forzar el rótulo: se corrige su **ubicación** en el
+  pedido, la cobertura se recalcula y el cambio queda registrado
+  (`coverage_changed`, §19.0.1). Desde ahí el rótulo se descarga normal.
 
 **La salida que su courier no entregó (09-10-2026, decisión del owner).**
 «Descargar rótulos» respondía «Tiene 1 salida todavía en la calle» a un pedido
@@ -8582,6 +10069,31 @@ repite la comprobación (`programNeedsConfirm`): un programado vencido no pide
 confirmar, porque que salga es justo lo que falta. Lo confirmado queda como
 `dispatch_program_overridden`, con el día programado y el de la caja.
 
+**Quién escribe el programa (12-10-2026).** Dos caminos, los dos por
+`writeGfDispatchProgram` (`lib/gf-dispatch-program.ts`), con actor y motivo:
+
+- **«Programar»** de Despacho del día, como arriba. Es el de Despacho GF, y el
+  que aprueba un cambio para hoy después del corte.
+- **«Repro Lima»** (§9.5), con el motivo «Repro Lima: confirmado con el cliente
+  (…)»: al decidir el acuerdo, o al recibir en oficina la caja que el acuerdo
+  esperaba (§29.13).
+
+El reporte de la parada ya no programa: desde el 12-10-2026 la fecha que da el
+cliente en la puerta queda como «Fecha que pidió el cliente» y se confirma en
+Repro Lima (§29.7). Los programas que creó entre el 10 y el 12-10-2026 se
+respetan.
+
+**Excepción: «Caja nueva desde stock».** Repro Lima programa ese acuerdo al
+decidir aunque la caja anterior siga en la caja del motorizado, porque sale
+otra caja con «Sacar con salida nueva» (§29.13) y la anterior se desarma al
+recibirla. Hasta que se saque, la fila de Repro Lima dice «Falta: Sacar con
+salida nueva». Sin nadie que saque la salida (por ejemplo, la caja de otro
+courier sin que el pedido entre como reintento), no se programa: «Falta la
+salida nueva» (§9.5). La regla de arriba sigue para todo lo demás: un pedido
+en la caja de un motorizado no se programa. Un acuerdo con otro día que llega
+al escaneo se lee como cualquier programado de otro día: «Programado para el
+jue 15/10 («Repro Lima: …»): confirma para que salga hoy.».
+
 ### 29.7 Resultado y evidencia
 
 El resultado lo reporta el motorizado o, excepcionalmente, Daysi/Frankz en su
@@ -8725,21 +10237,35 @@ cargar: #KP138029 (S/ 89) y #KP138037 (S/ 567) del 01/10, entregados el 02/10.
 - Si la hoja del día siguiente no lo trae, no se pasa: se le pregunta a quien
   liquida, porque una parada sin reporte frena el cierre de esa ruta.
 
-**La fecha del reprogramado va en el mismo reporte (10-10-2026, pedido de
-Frankz).** Antes, quien reportaba «No entregado · Reprogramado por el cliente»
-tenía que ir después a Grupo GF a programar el día que pidió el cliente.
+**La fecha que pidió el cliente (12-10-2026).** Del 10 al 12-10-2026 el
+reporte «No entregado · Reprogramado por el cliente» ofrecía «Nueva fecha
+(opcional)» y, con fecha, programaba la salida en Grupo GF con el motivo
+«Reprogramado por el cliente (reporte de la parada de …)». Era dar por buena
+una fecha que nadie había confirmado con el cliente. Decisión del owner
+(decisión 7 de la fase 1): esa fecha se confirma con el cliente y **nunca
+programa sola**.
 
 - El reporte de la parada, del motorizado o de Coordinación por él, ofrece
-  «Nueva fecha (opcional)» solo con ese motivo. No acepta días anteriores a hoy
-  ni posteriores a 60 días.
-- Con fecha, la salida queda agendada para ese día por el mismo camino que
-  «Programar» de Grupo GF (`lib/gf-dispatch-program.ts`): el programa, la
-  solicitud movida a ese día y `dispatch_programmed` en el historial, con el
-  motivo «Reprogramado por el cliente (reporte de la parada de …)».
-- La fecha se valida antes de escribir el reporte. Si el reporte queda y el
-  programa no, la pantalla lo dice y pide programarlo en Grupo GF.
+  **«Fecha que pidió el cliente (opcional)»** solo con ese motivo, con la ayuda
+  «La tienda la confirma con el cliente antes de programarla.». No acepta días
+  anteriores a hoy ni posteriores a 60 días; el servidor lo comprueba antes de
+  escribir el reporte.
+- La fecha queda en la parada (`delivery_stops.requested_date`, 0251) y en el
+  `stop_reported` del historial («pidió el mié 14/10 (sin confirmar)»). Solo la
+  escribe `writeStopReport`, y solo puede existir con «No entregado ·
+  Reprogramado»: un CHECK de la base lo exige, y otro motivo u otro estado la
+  borran. Liquidaciones 2 no la escribe: la conserva si el reporte sigue
+  siendo ese.
+- **No programa.** La tienda la ve en «Repro Lima» como «Pidió mié 14/10 · sin
+  confirmar» (o «· ya pasó») y la confirma con el cliente antes de programarla
+  (§9.5). Nunca sale preseleccionada.
+- Los programas que el reporte creó del 10 al 12-10-2026 se respetan: no se
+  borran. Repro Lima los muestra en «Por decidir» con «Fecha del motorizado sin
+  confirmar: mié 14/10».
 - Sin fecha, todo sigue igual: el pedido va a «En curso · Por reprogramar
   Lima».
+- El traspaso del reprogramado que el motorizado conserva (07-10-2026, arriba)
+  no cambia.
 
 **La hoja del motorizado sin app se carga desde Kapta (08-10-2026, decisión de
 Frankz).** Hasta el 07/10 cada hoja de Alexis se cargaba con SQL desde una
@@ -8762,7 +10288,11 @@ Courier (`routes.manage`), desde «Reparto y liquidación» de la ruta, con
 - **Vocabulario.** El de arriba, más: SOLO ENTREGA, YAPE PROV y PAGADO son
   «Entregado · Sin cobro» (ya estaba pagado); NO ESTABA, DIRECCIÓN y SIN
   DINERO, su motivo; un día de la semana («MIÉRCOLES»), «Reprogramado» con el
-  día en la nota. Lo que no se entiende («CAMBIO») queda sin decidir.
+  día en la nota y como **fecha que pidió el cliente** (12-10-2026, arriba): el
+  primer día con ese nombre después del día de la ruta (`nextNamedDayIso`).
+  Nunca programa. Si ese día ya pasó al cargar la hoja, queda solo en la nota
+  («Ya había pasado al cargarla: queda solo en la nota.»). «MAÑANA» no da
+  fecha: queda en la nota. Lo que no se entiende («CAMBIO») queda sin decidir.
 - **Avisos.** Cobro menor que el saldo (se carga y la nota lo dice), mayor que
   el saldo (no se carga), «Sin cobro» con saldo pendiente, plata anotada en una
   no entrega y un total escrito que no cuadra con la suma de las filas.
@@ -9540,7 +11070,9 @@ Decisión del owner (06-10-2026):
 - **Si sigue en una caja** y lo último que su motorizado reportó en ESA caja
   es «No entregado» —lo mismo que exige `gf_return_to_office`, 0206—, aparece
   con la chapa «No entregado · motivo» para **«Recibir en oficina»** —o se
-  escanea, que lo recibe y lo asigna— y después se toma con la misma salida.
+  escanea, que lo recibe y lo asigna— y después se toma con la misma salida; o,
+  si el motorizado aún la tiene y el pedido debe salir antes, **«Sacar con
+  salida nueva»** (12-10-2026, abajo).
   Sin ese reporte (solo la parada del cuaderno, o la de la caja dice otra cosa)
   va a «Sin condiciones · En una caja sin "No entregado" de esa caja»: hay que
   revisar la parada antes de sacarlo otra vez (#KP134157, #KP134960 y #KP134917
@@ -9591,6 +11123,137 @@ Implementación: `lib/gf-retry.ts`, `app/dashboard/courier/actions.ts`
 `assignRouteCore`), `lib/order-route-plan.ts` y
 `components/dispatch-day-board.tsx`. Pruebas en `test/gf-own-retry.test.ts`.
 
+**«Sacar con salida nueva»: el pedido sale mientras el motorizado todavía tiene la caja (12-10-2026, decisión del owner).**
+De noche no se recibe nada y cada motorizado trae lo no entregado cuando vuelve:
+Johnny (Yhoni) y Roy al día siguiente, Alexis cada dos o tres días (§9.4). Hasta
+ahora un «No entregado» de Grupo GF solo podía volver a salir con su misma
+salida, después de «Recibir en oficina»: si el cliente lo pedía antes, había que
+esperar al motorizado. Un mismo pedido puede tener una salida «en devolución»
+sin devolver y otra saliendo (principio 7, §7).
+
+- **Para cualquier motorizado con caja de Grupo GF** (`propio`), sin umbral de
+  días: la cadencia de cada uno es un dato, no una regla. Urpi no tiene caja en
+  Kapta y sigue por la v1.19.
+- **Dónde.** Despacho del día → la fila «No entregado · motivo» de un pedido en
+  «Por reprogramar Lima» cuya salida sigue en la caja del motorizado (con
+  solicitud de Grupo GF o sin ella) → marcarla → **«Sacar con salida nueva»**.
+  La confirmación dice qué salida sigue con quién, desde qué día y el motivo,
+  y recuerda que Johnny y Roy la traen al día siguiente: si el pedido puede
+  esperar, se recibe en oficina y sale con su misma salida.
+- **Quién.** Quien organiza rutas (`dispatch.manage`) en las tiendas que tiene
+  en Equipo (§29.10).
+- **Qué pasa** (`replaceOwnOutputs`, `app/dashboard/courier/actions.ts`, y
+  `gf_replace_output`, 0248):
+  - Nace una salida nueva de Grupo GF con su consecutivo, QR y rótulo
+    (`rotulo_generado`, custodia `empresa`): Almacén arma otra caja desde stock
+    y el pedido pasa a «Preparación · Por armar». Cuenta dentro de las cinco
+    salidas; el motivo de salida adicional lo escribe el sistema
+    (`additional_output_reason`: «Alexis no entregó KP140009-S01 (caja del
+    09/10) y todavía la tiene…»).
+  - La salida anterior solo cambia de custodia, a `retorno`: conserva su parada
+    «No entregado», su lugar en la caja del motorizado y `dispatched_at`. No se
+    escribe `return_started`.
+  - La solicitud viva de Grupo GF pasa a la salida nueva, aceptada y con su día
+    (el programado, o el primero posible según el corte de las 12:00). Si la
+    anterior salió sin solicitud (por el cuaderno, o antes de las solicitudes),
+    se abre una. Si la solicitud viva del pedido es de otra salida, no se saca.
+  - Eventos `output_replaced` en el pedido (sobre la salida anterior), en la
+    caja y en la solicitud. **Ese evento es la marca de la salida
+    reemplazada** (`gf_output_replaced`, 0248): la custodia `retorno` sola no
+    basta, porque «Solicitar devolución» (§13) también la pone, y esa salida se
+    sigue reportando, recibiendo y reprogramando como siempre: «Desde la
+    lista» la ofrece para «Recibir en oficina», al recibirla vuelve a «por
+    asignar», y no se saca con salida nueva («ya está en devolución»).
+  - No se saca si el pedido ya no está en «Por reprogramar Lima», si tiene una
+    salida entregada, si la salida ya no está en la caja o su parada no dice
+    «No entregado», si el pedido tiene otra salida viva o si ya tiene cinco
+    salidas. Dos clics o dos pestañas no crean dos: el segundo dice «ya salió
+    con otra salida». Si la base rechaza el reemplazo, la salida nueva se borra
+    y la solicitud abierta para ella también.
+- **La caja que vuelve** sale en la píldora **«En devolución»** de Despacho del
+  día («S01 vuelve con Alexis · 3 d · sale con S02»), con su propio «Recibir en
+  oficina». También la recibe «Devoluciones» (con la chapa «reemplazada · a
+  stock»), el escaneo de «Por QR» y el escaneo de Almacén: queda `devuelto` con
+  `returned_at` y conserva `dispatched_at`; el pedido NO vuelve a «por asignar»
+  y el escaneo no la asigna —ni en su caja ni ya recibida: un QR de la caja
+  reemplazada nunca toma ni asigna la salida nueva—. La línea del escaneo dice
+  «recibida… desármala» en azul, no «No elegible». Se escribe `return_received`
+  (no `returned_to_office`, que `gf_order_departures` cuenta como salida). Se
+  desarma y se registra el reingreso a stock sobre esa salida (§13).
+- **Recibir en oficina va por salida, en todas partes.** Un pedido puede tener
+  dos cajas «No entregado» con dos motorizados (la reemplazada con Alexis, la
+  nueva con Johnny): recibir una nunca recibe la otra. La lista de Despacho del
+  día, la fila de «Devoluciones», su QR y el cierre de una ruta (solo las
+  cajas de esa ruta) reciben la caja concreta. Por número de pedido, si el
+  pedido tiene dos cajas por recibir, no se recibe ninguna y se pide el QR de
+  la que llegó (§9.4: nunca se concilia solo por número de pedido).
+- **Por número de pedido, mientras la reemplazada siga fuera, el escaneo no
+  elige: pide el QR.** La caja anterior y la nueva llevan el mismo código de
+  barras (el número de pedido, §4), así que el número no dice cuál está en la
+  mano. Mientras la reemplazada esté en devolución sin recibir, un escaneo o
+  un número escrito no toma, asigna, recibe, prepara ni coteja ninguna salida
+  del pedido: la línea pide el QR de la caja. El QR, el código de salida y la
+  guía siguen designando su caja. Ya recibida la anterior, el número vuelve a
+  funcionar como siempre.
+- **La Mesa de cierre no recibe una caja que sigue con el motorizado.**
+  «Registrar recepción» sobre una salida de Grupo GF que sigue en la caja de un
+  motorizado se niega y manda a «Recibir en oficina», que es lo que la saca de
+  la caja. Si ya constaba devuelta y sigue en la caja (registrada antes de
+  este cambio), «Recibir en oficina» la saca y la deja devuelta, sin volver a
+  «por asignar».
+- **El motorizado ya no la entrega.** La parada de una salida reemplazada no
+  cambia de estado —ni entregarla ni deshacer su «No entregado»—: lo impide el
+  trigger `delivery_stops_guard_replaced` (0248), también si el motorizado
+  escribe su parada directamente, y el reporte lo dice antes
+  (`writeStopReport`). Corregir la nota o el motivo sin cambiar el estado sí se
+  puede. Tampoco se mueve a otro motorizado ni pasa a su ruta siguiente desde
+  el cuaderno: `gf_carry_over` la excluye —por su evento: una en `retorno` por
+  «Solicitar devolución» pasa como siempre— y toma primero los candados de
+  todo el lote (ítems y cajas, en orden) y relee cada paquete, así que un
+  reemplazo o una recepción simultáneos no se pisan ni se bloquean en cruz.
+  Tampoco se añade el pedido como punto a mano (el teléfono del motorizado,
+  Rutas): una parada sin salida no dice de qué caja habla, y la nueva va por
+  Despacho del día con su caja.
+- **La salida nueva no va con el mismo motorizado el mismo día** que la caja
+  reemplazada: la ruta del día tiene una parada por pedido y la de la caja
+  anterior ya la ocupa. Asignarla ahí se niega con el motivo
+  (`dispatch_items_guard_replaced_route`, 0248); va con otro motorizado u otro
+  día.
+- **Master** (v1.26): la salida reemplazada (en devolución y con
+  `output_replaced`, `isReplacedOwnOutput`) sigue activa —el pedido no se
+  finaliza mientras el motorizado la tenga—, pero no es la vigente: el pedido
+  sigue a la salida nueva (Por armar → Por despachar → En curso) y nunca vuelve
+  a «Por reprogramar Lima» por el «No entregado» de la anterior. Si la nueva se
+  entrega con la anterior todavía fuera, queda «Por cerrar · Devolución física
+  pendiente»; recibida y sin reingreso, «Devolución pendiente de inventario».
+  Una parada sin salida (del cuaderno o a mano) nunca se le atribuye a la caja
+  reemplazada, y a la salida nueva solo si es posterior a que naciera. Una
+  salida en `retorno` por «Solicitar devolución», sin el evento, resuelve como
+  antes de la v1.26 (sigue siendo «salida adicional activa» y su «No
+  entregado» sigue mandando). `MOM_RESOLUTION_VERSION` sube a `mom-v1.26`.
+- **Si la base no responde** al sacarla, antes de deshacer nada se comprueba si
+  el reemplazo quedó hecho (la solicitud ya apunta a la salida nueva): si se
+  hizo, se da por hecho y no se anula la salida nueva. Lo que no se pudo sacar
+  se dice con su pedido y su motivo, también junto a lo que sí.
+- **Al recibir, el aviso dice lo que hizo la base.** Si un reemplazo termina
+  mientras alguien recibe esa caja, la base la manda a stock: el aviso («a
+  stock» o «vuelve a por asignar») y el escaneo de «Por QR» se deciden
+  releyendo la salida después de recibirla, y un escaneo cuya caja fue a stock
+  no toma ni asigna la salida nueva.
+- **Límites conocidos.** Kapta no lleva un libro de stock: la caja nueva se
+  arma aunque falte producto, y lo dirá la incidencia de preparación. Si la
+  salida nueva se anula con la anterior todavía en devolución, el pedido queda
+  sin salida viva en la cola y se resuelve en la ficha. Si el motorizado
+  entregara la caja anterior pese al bloqueo, es una incidencia: se anula la
+  nueva si no salió y se corrige en la ficha.
+
+Implementación: `lib/gf-replaced-output.ts`, `lib/gf-retry.ts`
+(`ownReplaceDecision`), `app/dashboard/courier/actions.ts` (`replaceOwnOutputs`,
+`returnUndeliveredShipments`, `loadReturningOutputs`), `lib/order-macro-stage.ts`,
+`lib/order-status.ts`, `components/dispatch-day-board.tsx` y la migración
+`0248_gf_replace_output.sql`. Pruebas en `test/gf-replace-output.test.ts` y
+`scripts/sql/gf_replace_output_smoke.sql`.
+
 **Escanear un «No entregado» de una caja anterior lo recibe y lo asigna
 (29-09-2026).** #KP136779 y #KP136896 salieron el 26/09 con Yhoni y volvieron
 «No entregado · reprogramado». La ruta se cerró el 28/09, pero nadie los
@@ -9612,8 +11275,22 @@ prueba que volvió, igual que en «Devoluciones».
 
 Si algo impide asignarlo después de recibirlo (programado para otro día,
 límite de efectivo), la línea lo dice y el paquete queda recibido, «por
-asignar». Lo del **mismo día** no cambia: «Ya estaba» es solo la caja de ese
-día, y la de otro motorizado ofrece «Mover».
+asignar». Si el cliente ya no lo quiere (Repro Lima, «Desarmar y cerrar»,
+§9.5), lo recibe y no lo asigna (abajo). Lo del **mismo día** no cambia: «Ya
+estaba» es solo la caja de ese día, y la de otro motorizado ofrece «Mover».
+
+**«Ya estaba» dice la carga y lo que falta (12-10-2026).** #KP139615 volvió de
+la ruta del 08/10 y el escaneo lo puso en la Carga 5 de Alexis, una carga nueva
+que nadie verificó. La parada de la ruta nace al verificar y entregar la carga,
+así que el pedido no salía en la hoja de Alexis, y el segundo escaneo respondía
+solo «Ya estaba»: parecía que no estaba en ningún lado. Ahora la chapa dice la
+carga y el paso pendiente (`lib/gf-scan-already-in-box.ts`):
+
+| La carga donde está | Chapa | Aviso completo |
+| --- | --- | --- |
+| Sin verificar | «Ya está en la Carga 5 · falta verificarla» | «…: falta verificar esa carga en «Cajas de hoy». Hasta entonces no sale en su ruta.» |
+| Verificada, sin entregar | «Ya está en la Carga 5 · falta entregarla» | «…, verificado en oficina: falta entregársela.» |
+| Entregada al motorizado | «Ya está en la Carga 3 · la tiene Alexis» | «…, que Alexis ya tiene.» |
 
 **«Mover» un paquete que está en la oficina (05-10-2026).** Con verificación
 «exigir», un paquete que el motorizado confirmó al recibir su caja no se puede
@@ -9647,6 +11324,65 @@ Solo la anulación en Shopify termina la venta: un anulado que vuelve se recibe
 igual —la caja tiene que salir de la del motorizado— y el aviso dice que está
 anulado y se separa para el stock. Aliclik y los demás siguen recibiéndose desde
 el Master. Pruebas en `test/gf-returns-scan.test.ts`.
+
+**«Recibir en oficina» programa el acuerdo de Repro Lima que esperaba la caja
+(12-10-2026).** Un acuerdo de Repro Lima con Grupo GF cuya caja seguía con el
+motorizado queda «esperando la caja» (§9.5). Al recibirla, Kapta programa el
+día acordado con el mismo escritor que «Programar» (`writeGfDispatchProgram`,
+motivo «Repro Lima: confirmado con el cliente (…)») y con el actor que recibe.
+La caja va al anaquel de ese día, no al estante de reprogramados.
+
+- **Por las tres puertas** que llaman a `gf_return_to_office`: «Recibir en
+  oficina» de Despacho del día (lista, QR de «Devoluciones», número de pedido
+  y cierre de una ruta: `returnUndeliveredShipments`), Devoluciones de Almacén
+  (`receiveGrupoGfReturn`) y el escaneo de una caja anterior en «Por QR»
+  (`scanAssignToRider`, antes de comprobar el programa). Solo lo que vuelve a
+  «por asignar»: la caja reemplazada, que va a stock, no programa nada.
+- **Qué acuerdos.** Con Grupo GF, «Mantener» o «Reimprimir el rótulo de la
+  misma salida», sin programar todavía, del mismo episodio, con el pedido
+  todavía en «Por reprogramar Lima» y sin anular. Si no, no programa.
+- **Si el día acordado ya pasó**, no lo programa. El aviso dice «{m} con fecha
+  acordada que ya pasó: vuelve a confirmarla en Repro Lima.». Si es hoy y ya
+  pasó el corte, tampoco lo programa al recibir por la lista, el QR o
+  Devoluciones: ya no alcanza a salir hoy y se confirma de nuevo (la fila de
+  Repro Lima dice «El acuerdo era para hoy (lun 12/10) y ya no alcanza:
+  confírmalo de nuevo», §9.5). El escaneo de asignación sí lo programa,
+  porque ahí Grupo GF lo está asignando.
+- **Aviso.** Suma «{n} con acuerdo de Repro Lima: quedaron programados para su
+  día (van al anaquel de ese día).». En el escaneo, un día acordado distinto
+  del de la caja se lee como cualquier programado de otro día (§29.6): la línea
+  pide confirmar antes de asignarlo.
+- **Es idempotente.** Una segunda recepción la niega la base («Ese paquete ya
+  no está en la caja.»), cada acuerdo se marca una sola vez y el programa se
+  reescribe sobre el mismo pedido. Si programar falla, la recepción queda hecha
+  y la fila de Repro Lima ofrece «Programar ahora».
+- **«El cliente ya no lo quiere».** Si el último caso del episodio recibido se
+  cerró con «Desarmar y cerrar» (§9.5), el aviso añade «Repro Lima: el cliente
+  ya no lo quiere. Desármala (cuaderno «DESARMAR»); no va al estante.».
+- **En «Por QR», esa caja se recibe y ahí termina.** El escaneo de una caja
+  anterior la recibe en oficina, recalcula el Master del pedido y no mira el
+  programa, no la toma ni la asigna: la salida no vuelve a salir (§9.3, fila
+  1). La línea es informativa (estado `recibido_a_stock`, como la caja
+  reemplazada) y dice «Recibido en oficina (salió de la caja de Johnny del
+  12/10). Repro Lima: el cliente ya no lo quiere. Desármala (cuaderno
+  «DESARMAR»); no va al estante. No se asigna.». Solo en la recepción: una
+  caja que ya se recibió antes sigue el escaneo de siempre, porque Grupo GF
+  todavía puede tomarla (§9.5); la fila de la cola lleva la chapa de abajo.
+- **Chapas en la cola de Despacho del día.** El pedido lleva «Repro Lima: no
+  lo quiere · desarmar» mientras el último caso, cerrado con «Desarmar y
+  cerrar», sea del episodio vigente y no haya otro abierto. Recibir la caja en
+  oficina o corregir el reporte de la parada después del cierre no la quitan;
+  solo un fallo nuevo (otro episodio) la quita. El episodio se lee con los
+  hechos del pedido, solo para esos pedidos; si esa lectura falla, la chapa
+  sigue mientras el pedido no haya vuelto a salir después del cierre. Una caja
+  con el motorizado o en devolución cuyo acuerdo es caja nueva desde stock
+  **con Grupo GF** lleva «Repro Lima: caja nueva desde stock, sale jue
+  15/10»: en la salida propia sin solicitud, en «En devolución» y también en
+  la fila de un pedido ya tomado (con solicitud de Grupo GF) cuya caja sigue
+  con el motorizado con «No entregado», que es donde se ofrece «Sacar con
+  salida nueva». Acordada con Tanders, Swayp o Axel no lleva chapa: su salida
+  se crea desde la Mesa de ruta (§9.3, fila 2), no con «Sacar con salida
+  nueva».
 
 **Un pedido anulado se dice primero, en cualquier escaneo (05-10-2026).** Al
 escanear un paquete —armado en almacén, agregar a una ruta, cotejo de la caja o
@@ -9772,6 +11508,10 @@ recibe el pedido en la puerta.
 - **Alta por invitación.** El registro público de Kapta sigue cerrado. Grupo GF
   invita por correo al dueño de la tienda; el dueño entra, crea su
   organización, conecta su Shopify y acepta el contrato con un código.
+- La tienda conecta su Shopify instalando **la app pública de Kapta para
+  tiendas cliente**, desde el enlace que le da Grupo GF. No escribe el dominio
+  de su tienda. Aurela y Kenku siguen con su app actual. Cómo se reclama la
+  instalación y qué pasa al desinstalar: §29.15.9, «Implementación».
 - El contrato nace en `draft` y pasa a `active` solo cuando la tienda lo
   acepta. Kapta comprueba que la tienda pertenece a la organización cliente
   del contrato. Grupo GF nunca vincula una tienda ajena por su cuenta.
@@ -9966,7 +11706,77 @@ COD cobrado por Grupo GF
   del Yape de Grupo GF. El cruce automático, operación por operación, queda
   para después.
 
-#### 29.15.9 Lo que no cambia
+#### 29.15.9 Datos personales del comprador (aprobado el 08-10-2026)
+
+La tienda cliente se conecta con una app pública de Shopify, que obliga a
+borrar datos personales cuando el comprador o la tienda lo piden. Para estas
+tiendas, §2.5 se cumple así: **los hechos se conservan y los datos personales
+del comprador se anonimizan.** Aurela y Kenku no cambian.
+
+- **Dato personal del comprador:**
+  - nombre, teléfono, correo, dirección y referencia, coordenadas y documento;
+  - notas y conversaciones;
+  - fotos de entrega y comprobantes de pago;
+  - nombre y teléfono de quien pagó.
+- **Lo que se conserva:**
+  - número de pedido, montos, fechas, estados y distrito;
+  - salidas, cajas, rutas y paradas (resultado, medio y monto cobrado);
+  - liquidaciones y cuenta corriente;
+  - los eventos, sin datos personales.
+- **Anonimizar** es reemplazar cada dato por «Comprador anonimizado» y borrar
+  los archivos. Queda un evento con fecha y motivo, sin los datos borrados. No
+  se puede deshacer.
+- **Se anonimiza cuando:**
+  1. el comprador pide que se borren sus datos (Shopify, `customers/redact`):
+     ese comprador, en esa tienda;
+  2. la tienda desinstala la app (Shopify, `shop/redact`): todos los
+     compradores de esa tienda. Además se borran sus credenciales de Shopify y
+     la tienda queda desconectada. Sus liquidaciones aprobadas y su cuenta
+     corriente siguen;
+  3. vence el plazo de retención que fije la política de privacidad.
+
+  Un pedido con liquidación por aprobar se anonimiza igual: la liquidación se
+  calcula con el número de pedido y los montos, no con el comprador.
+- **Si el comprador pide sus datos** (Shopify, `customers/data_request`),
+  Kapta le entrega a la tienda lo que guarda de él, dentro del plazo que exija
+  Shopify.
+- **Registro de accesos.** Se registra quién consulta datos personales de
+  compradores de una tienda cliente: persona, fecha y pedido.
+- **Sin cruces entre organizaciones.** Los compradores de una tienda cliente no
+  se usan para Aurela, Kenku ni otra tienda. Ninguna regla los cruza por
+  teléfono con pedidos de otra organización: riesgo, pedidos anteriores,
+  confirmación o campañas.
+
+**Implementación (Fase 1b, primera parte, 10-10-2026).**
+
+- **Qué app usa cada tienda.** Cada tienda guarda con qué app de Shopify se
+  conectó: `interna` (la app actual de Aurela y Kenku) o `clientes` (la app
+  pública). No hay otro valor. Un mismo dominio de Shopify no puede estar en
+  dos tiendas con la app de clientes, y la app de clientes no toma una tienda
+  que ya está con la interna.
+- **Instalación.** La tienda instala desde Shopify y autoriza en el acto. Kapta
+  guarda esa autorización como **instalación pendiente** por 30 minutos. El
+  dueño la reclama dentro de Kapta: elige una organización donde sea owner o
+  admin, o crea una nueva en ese momento, y la tienda se crea ahí con el
+  dominio que trajo Shopify. Una
+  instalación pendiente vencida o ya reclamada no sirve.
+- **Cada aviso de privacidad se registra** con su firma verificada (firma
+  inválida: 401, sin escribir nada) y una sola vez por aviso. Su estado es
+  `pendiente` hasta que se cumple y `atendida` después, con fecha. No hay otro
+  estado. Un aviso de una tienda que no está en Kapta se registra igual, sin
+  tienda.
+- **Al desinstalar** (`app/uninstalled`) y al llegar `shop/redact`: se borra el
+  token de Shopify, la tienda pasa a `disabled` y se anota la fecha de
+  desinstalación (la primera; un aviso posterior no la cambia). Los procesos
+  automáticos ya solo toman tiendas `active`. Pedidos, historial y
+  liquidaciones no se tocan. Si la tienda reinstala, vuelve a `active` con el
+  token nuevo.
+- **Falta (segunda parte):** cumplir los avisos pendientes (anonimizar y
+  entregar datos) y el registro de accesos. Hasta entonces los avisos quedan
+  `pendiente`, dentro del plazo de 30 días de Shopify, y la app no se envía a
+  revisión.
+
+#### 29.15.10 Lo que no cambia
 
 - Shopify sigue siendo la única fuente de pedidos (§2). Kapta no crea pedidos
   para la tienda, y cancelar una solicitud no cancela el pedido en Shopify.
@@ -9975,7 +11785,7 @@ COD cobrado por Grupo GF
 - Rutas que mezclan tiendas, cotejos, custodia, reportes y pago del motorizado
   funcionan igual para todos.
 
-#### 29.15.10 Fuera de esta versión
+#### 29.15.11 Fuera de esta versión
 
 - Entrada por API o Excel para tiendas sin Shopify (§29.11).
 - Conteo, reserva, recepción y retiro del inventario de la tienda (§29.3).
@@ -9985,7 +11795,7 @@ COD cobrado por Grupo GF
 - Cruce automático del Yape de Grupo GF con su estado de cuenta.
 - Cobro de la suscripción de Kapta a la tienda.
 
-#### 29.15.11 Criterios de aceptación
+#### 29.15.12 Criterios de aceptación
 
 - Una tienda invitada que acepta el contrato con su código lo deja `active`.
   Un código equivocado o de otra invitación no lo activa.
@@ -10030,6 +11840,15 @@ COD cobrado por Grupo GF
 - Aprobar la liquidación deja los pedidos entregados de la tienda en
   «Finalizado · Entregado y liquidado». Una corrección posterior aparece como
   ajuste en la cuenta corriente, sin cambiar la liquidación aprobada.
+- Un `customers/redact` deja a ese comprador como «Comprador anonimizado» en
+  todos sus pedidos de esa tienda y borra sus fotos y comprobantes. Montos,
+  estados, rutas y liquidaciones no cambian.
+- Un `shop/redact` anonimiza a todos los compradores de la tienda, borra sus
+  credenciales de Shopify y la deja desconectada. Su cuenta corriente sigue
+  visible.
+- Un webhook de privacidad con firma inválida responde 401 y no toca nada.
+- Un pedido de tienda cliente no aparece en los cruces por teléfono de los
+  pedidos de Aurela o Kenku, ni al revés.
 
 ## 30. Liquidaciones 2 — hojas por dominio
 
@@ -10112,16 +11931,20 @@ decía «Ya estaba». Había 78 así, en cajas del 16 al 28/09, y 20 rechazos.
   ítem activo en la caja (`stopsNotReceived`, el mismo criterio del escaneo).
 - **Se puede cerrar igual, a conciencia** («Cerrar igual», con confirmación):
   cerrar no espera a que se reciba el saldo no entregado, y exigirlo antes del
-  cierre frenaría la liquidación del efectivo. Desde la fase 0 (11-10-2026,
-  §9.5) el motorizado entrega ese saldo en oficina al terminar y alguien del
-  equipo lo recibe esa misma noche: a la mañana siguiente no queda ninguna caja
-  «No entregado» a su nombre (antes se devolvía al día siguiente). Lo que queda sigue
-  en «Devoluciones» y el escaneo de «Por QR» lo recibe al volver a asignarlo.
+  cierre frenaría la liquidación del efectivo. El motorizado trae ese saldo a
+  la oficina cuando vuelve —Johnny (Yhoni) y Roy al día siguiente, Alexis cada
+  dos o tres días; de noche no se recibe nada (§9.4, §9.5)— y ese día se
+  recibe en oficina. Hasta entonces la caja «No entregado» sigue a su nombre.
+  Lo que queda sigue en «Devoluciones» y el escaneo de «Por QR» lo recibe al
+  volver a asignarlo; la caja reemplazada por otra salida (§29.13) la recibe
+  y no la asigna.
   Es lo único que se fuerza en Grupo GF; lo sin reportar y la foto no.
 - **«Recibir en oficina»** en la misma fila (`receiveRouteReturns`) los recibe
-  de una vez por la puerta de «Devoluciones» (`returnUndeliveredToOffice`,
-  0188/0206): vuelven a «por asignar», rechazos incluidos (v1.23). Pulsarlo es
-  decir que las cajas están en la oficina, y lo confirma.
+  de una vez por la puerta de «Devoluciones» (`returnUndeliveredOutputs`,
+  0188/0206), por salida y solo de las cajas de esa ruta: vuelven a «por
+  asignar», rechazos incluidos (v1.23); la caja reemplazada por otra salida
+  vuelve a stock (0248). Pulsarlo es decir que las cajas están en la oficina, y
+  lo confirma.
 - La tabla de la ruta filtra **«Por devolver»** con el mismo criterio.
 
 **Reabrir ruta.** Una ruta cerrada vuelve a «en curso» (`reopenRoute`, permiso
@@ -10462,7 +12285,9 @@ Runbook: `docs/runbooks/urpi-programaciones.md`. Persistencia: migraciones 0215�
 
 `/dashboard/urpi?vista=resultados` carga el export «Reporte del mes – detallado»
 del AppSheet de Urpi (.csv). Es lo que Urpi **dice** que pasó en cada intento:
-Kapta lo registra, lo vincula al pedido y propone; no lo da por hecho.
+Kapta lo registra y lo vincula al pedido. Desde el 15-10-2026 las **entregas**
+se marcan solas en el Master al cargar el reporte (ver «Marcado automático»);
+cancelados y reprogramados solo se registran.
 
 **Identidad.** Urpi exporta una fila por **intento**, no por pedido, con su
 número de fila («_RowNumber») como identidad. Un reintento apunta al anterior en
@@ -10490,8 +12315,8 @@ pedido. Esta regla vale para el reporte de resultados; la programación enviada
 
 | Urpi | Kapta |
 | --- | --- |
-| Entregado, pedido abierto en Kapta | «Entregados por marcar». Quien tiene `master.edit` los marca entregados, uno a uno o en lote, por la única puerta (§11.4, `lib/master-door.ts`): `status_override` con fuente `liquidacion`, courier `urpi`, mediodía de Lima del día del reporte y la fila de Urpi como evidencia. |
-| Entregado, pedido anulado **solo en Kapta** (Shopify vivo) | También «Entregados por marcar»: solo Shopify termina una venta (v1.23). Caso real: #KP135768, entregado por Urpi el 23/09 y cerrado como anulado porque esa tarde se le emitió una guía de Tanders que se anuló sin salir. |
+| Entregado, pedido abierto en Kapta | Se marca entregado **al cargar el reporte** (desde el 15-10-2026) por la única puerta (§11.4, `lib/master-door.ts`): `status_override` con fuente `liquidacion`, courier `urpi`, mediodía de Lima del día del reporte y la fila de Urpi como evidencia. Lo que la carga no pudo marcar queda en «Entregados por marcar», para marcarlo uno a uno o en lote. |
+| Entregado, pedido anulado **solo en Kapta** (Shopify vivo) | Igual, se marca: solo Shopify termina una venta (v1.23). Caso real: #KP135768, entregado por Urpi el 23/09 y cerrado como anulado porque esa tarde se le emitió una guía de Tanders que se anuló sin salir. |
 | Entregado, pedido anulado **en Shopify** o devuelto | Observación. Nunca se marca. Se resuelve de dos formas: si el pedido se rehízo en Shopify, se vincula el envío al pedido nuevo con su código (y pasa a «por marcar»); si no, se **cierra con motivo** —evento `urpi_observation_resolved` en el historial del pedido, que no cambia su estado— y el dinero se cuadra en la liquidación de Urpi. Un intento posterior de Urpi la reabre. El 05-10-2026 eran 6: anulados en Shopify entre 7 y 14 días después de que Urpi los entregara y cobrara. |
 | Cancelado | Se registra con su motivo, detalle y fotos y se lista en «Cancelados por Urpi» para Seguimiento Lima. **No cambia el estado del Master** ni anula el pedido en Shopify. |
 | Reprogramado | Se registra y se lista con su nuevo día: el siguiente de lunes a sábado desde la fecha del reporte (§30.10). No cambia el estado del Master. |
@@ -10518,6 +12343,39 @@ definir»— no se sabe qué caja se llevó Urpi y no se toca; sin «por definir
 se crea una salida. La pantalla ofrece completar las ya marcadas antes de esta
 regla con el mismo botón.
 
+**Marcado automático (decisión del owner, 15-10-2026).** Hasta esta fecha
+una persona revisaba «Entregados por marcar» y pulsaba «Marcar entregados».
+Nadie lo hacía a tiempo, y Urpi ya liquida y paga la recaudación de esas
+entregas: el pedido seguía «Por despachar · Listo para asignar» con el dinero
+cobrado. Caso real: #KP138847, entregado por Urpi el 06/10 (efectivo, S/ 367) y
+todavía «en proceso» el 15/10. Ese día había 26 por marcar —22 en «Listo para
+asignar», 3 en «Por reprogramar Lima», 1 anulado solo en Kapta— y 87 pedidos
+entregados por la carga histórica del cuaderno de Urpi (agosto y septiembre)
+con su caja todavía «por definir».
+
+Así funciona desde entonces (`lib/urpi-report-apply.ts`):
+
+- **Cuándo.** Después de guardar el reporte, Kapta toma todos los pedidos con
+  algún intento «Entregado» de los últimos 60 días (los mismos que muestra la
+  pantalla) y decide con el **último** intento de cada uno, igual que antes: si
+  después hubo un cancelado o un reprogramado, no se marca. También al vincular
+  a mano un envío que Urpi entregó.
+- **Qué hace.** Lo mismo que el botón: marca entregado lo que Kapta tiene
+  abierto (o anulado solo en Kapta) y rellena la caja «por definir» como salida
+  de Urpi entregada, también en los ya entregados que la tenían pendiente.
+  Anulado en Shopify o devuelto sigue siendo observación y no se toca.
+- **Quién.** El actor del evento es quien cargó el reporte (o vinculó), con el
+  motivo «…, marcado al cargar el reporte» («…, marcado al vincular el envío»)
+  y `payload.auto` = `carga` / `vinculo`. Exige `master.edit`, como siempre:
+  si quien carga solo tiene `sheets.edit`, el reporte se guarda y los
+  entregados quedan en «Entregados por marcar» para quien sí lo tenga.
+- **Si falla.** El reporte ya quedó guardado; la carga lo dice y «Entregados
+  por marcar» sigue para hacerlo a mano. Volver a cargar el archivo lo reintenta.
+- **Lo que se informa.** Solo lo que cambió y lo que alguien tiene que mirar:
+  pedidos marcados, salidas rellenadas, marcados esta vez con otra salida viva
+  (su salida se revisa a mano) y salidas que no se pudieron actualizar. Lo que
+  ya estaba al día no se repite en cada carga.
+
 **Por qué cancelado y reprogramado no mueven el Master.** «Por reprogramar
 Lima» (§9) exige una salida que conste fuera. Los despachos a Urpi salen del
 Google Sheet de programación, no de la ruta de Urpi de Kapta (6 salidas de Urpi
@@ -10533,7 +12391,7 @@ desaparezca del export. Los intentos se ven también en la ficha del pedido
 
 **Permisos.** Cargar el reporte y vincular exige `sheets.edit` en la
 organización, igual que cerrar una observación con motivo; marcar entregados
-(y rellenar la salida), `master.edit`. Vincular y marcar solo alcanzan
+(y rellenar la salida), `master.edit`, también cuando lo hace la carga sola. Vincular y marcar solo alcanzan
 pedidos de las tiendas que la persona ve. RLS: una fila vinculada se lee
 con su tienda (`auth_store_ids()`); una sin vincular, con la organización
 (`auth_org_ids()`). Escritura solo del servidor.
@@ -10726,3 +12584,1355 @@ prestada), `lib/order-macro-stage.ts` (`en_caja_de_otro_pedido`),
 `app/dashboard/pedidos/companion-actions.ts` y
 `components/order-companion-panel.tsx`. Pruebas en
 `test/order-companion.test.ts`.
+
+## 33. Agente de voz para leads (piloto Biru, 12-10-2026)
+
+Estado: construido, apagado por tienda. Existen la migración 0247, la cola y su
+sorteo, el inicio de conversación y las dos tools del agente, el barrido
+(`/api/cron/voice-leads`), el panel del drawer del lead, los ajustes de la
+tienda y el tablero del piloto. **Ninguna tienda lo tiene encendido**: no se
+llama a ningún lead hasta que el owner encienda el piloto (33.8). El guion
+versionado y la configuración del agente en ElevenLabs viven en
+`docs/voz-leads-agente.md`; esta sección define las reglas.
+
+Un **agente de voz para leads** es un segundo agente de ElevenLabs, separado
+del de Reproprovincia (§11.8), que llama a los **leads de anuncio** que
+conversaron con el bot de WhatsApp, no compraron y ninguna asesora tocó.
+Le ofrece el producto directo con la oferta de la tienda, resuelve sus dudas y,
+si quiere comprar, toma los datos y deja el lead en **«Atender ahora»** para que
+una asesora genere el pedido. **No crea pedidos** (§2, principio 3) ni cobra, y
+no tiene estados propios: escribe con el catálogo de estados de las asesoras.
+
+### 33.1 Qué es y por qué
+
+- **Nadie los toca.** En Biru entran unos **33 leads por día** que conversan
+  con el bot, no compran y ninguna asesora toca.
+- **Los tocados convierten.** Los leads que una asesora toca convierten
+  ~38-40 %; los que nadie toca, ~0,5-0,7 %.
+- **Esa diferencia no es lo que vale tocar.** Las asesoras eligen a quién
+  tocar —al que pregunta el precio, al que da sus datos—, así que la
+  comparación arrastra un **sesgo de selección**: los tocados ya iban a
+  comprar más. Por eso el piloto lleva grupo de control (33.3) y la única cifra
+  que decide es la conversión del tratamiento contra la del control, no contra
+  el 0,5 %.
+
+### 33.2 Quién entra a la cola del agente
+
+Las condiciones van **en este orden** y la primera que falla es la razón que
+cuentan el log del barrido y la cola en seco (`leadVoiceEligible`,
+`lib/voice-leads.ts`, una función pura; los textos en
+`LEAD_VOICE_EXCLUSION_LABEL`). El drawer de las asesoras no la muestra (33.3).
+
+| # | Condición | Si falla |
+| --- | --- | --- |
+| 1 | La tienda tiene el agente de leads habilitado (`voice_lead_enabled`) | `agente_apagado` |
+| 2 | Celular peruano: 9 dígitos que empiezan en 9, con o sin 51. Un fijo no es de quien escribió por WhatsApp | `sin_telefono` |
+| 3 | No pidió que no lo contacten: `leads.contact_opt_out_at` vacío y el teléfono fuera de la lista «no llamar» de la tienda (33.7) | `no_contactar` |
+| 4 | No tiene pedido: ni `won`, ni `has_order`, ni `order_id` | `ya_compro` |
+| 5 | Viene de una campaña del piloto: `source = 'meta_ad'` y la campaña de su anuncio (`meta_ads.campaign_id` por `ad_id`) está en `voice_lead_campaign_ids`. Lista vacía = ninguna | `fuera_de_campana` |
+| 6 | No está en Perdidos (`category = 'lost'`) | `perdido` |
+| 7 | Escribió dos veces o más (`inbound_count`, `LEAD_VOICE_MIN_INBOUND`): el que escribió una sola vez no conversó | `poco_interes` |
+| 8 | Si el propio agente agendó volver a llamar (el lead está en `volver_a_llamar` por SU última llamada que de verdad salió: una que Telnyx rechazó, `cancelled`, no corta el «volver a llamar»), la hora ya llegó | `callback_pendiente` |
+| 9 | Estado `nuevo` (primera llamada) o ese «volver a llamar» del agente. Cualquier otro —también un «Volver a llamar» que puso una asesora— queda fuera | `estado` |
+| 10 | Ninguna asesora lo tocó desde que llegó: ninguna fila de `lead_calls` firmada (`vendedora` no nula) de tipo `call`, `message` o `sale` desde `first_seen_at` | `atendido_por_asesora` |
+| 11 | Volver a llamar: no volvió a escribir después de la llamada del agente con un handoff del bot (`handoff_at` posterior a esa llamada). Ese mensaje lo contesta una asesora; si el agente llamara, su resultado lo sacaría de «Atender ahora» con el mensaje sin responder | `handoff_pendiente` |
+| 12 | Ninguna asesora lo tiene tomado ahora (reserva vigente, `isClaimActive`) | `reservado` |
+| 13 | Primera llamada: pasaron `voice_lead_wait_minutes` desde su último mensaje —las asesoras van primero— y no más de `voice_lead_max_age_hours` (sin fecha, también fuera). Volver a llamar: no más de `voice_lead_max_age_hours` desde la hora pactada | `muy_pronto` / `muy_antiguo` |
+| 14 | El sorteo lo dejó en el tratamiento (33.3) | `grupo_control` |
+| 15 | No hay otra llamada del agente abierta para ese lead | `llamada_abierta` |
+| 16 | Le quedan intentos: menos de `voice_lead_max_attempts` llamadas reales. Solo la que Telnyx rechazó antes de marcar (`cancelled`) no gasta intento; la que la persona contestó y se cortó porque el puente al agente falló, sí (`attemptCounts`) | `intentos_agotados` |
+| 17 | Primera llamada: pasaron 3 horas desde el intento anterior (`LEAD_VOICE_RETRY_GAP_HOURS`). Un «volver a llamar» no espera: la persona pidió esa hora | `reintento_pronto` |
+
+Las condiciones 1 a 13 deciden si el lead es **elegible**; recién ahí se sortea
+su brazo, con las mismas reglas para los dos lados. De la 14 en adelante son
+del agente.
+
+**Orden de la cola** (`sortLeadVoiceQueue`): primero los «volver a llamar»
+vencidos, de la hora pactada más antigua a la más nueva; después las primeras
+llamadas, del que escribió más recientemente al más antiguo: el interés se
+enfría rápido.
+
+La consulta a la base prefiltra (fuente, categoría, estado, dos mensajes,
+teléfono y ventana) solo para no leer la tienda entera; quien decide es la
+función. **La cola falla cerrada**: si no se pudo leer la lista «no llamar»,
+los toques de las asesoras, los intentos o los brazos, no hay candidatos. Una
+cola armada a medias llamaría a quien no debe.
+
+### 33.3 El grupo de control
+
+- **El sorteo** es `leadVoiceArm(lead, voice_lead_holdout_pct)`: determinista
+  (el mismo lead cae siempre del mismo lado), con el experimento
+  `agente_voz_leads_v1` como sal, así que el **reparto** es independiente del
+  de `frio_cobertura_v1` (`lib/lead-experiment.ts`).
+- **Pero el agente sí toca a ese otro experimento.** Casi todos los leads de
+  Biru también están en `frio_cobertura_v1`. A los de su tratamiento las
+  asesoras los llaman en las primeras horas (el empujón por Telegram), así que
+  casi nunca llegan al agente (condición 10); el agente llama sobre todo a los
+  que nadie tocó, que son en su mayoría su **control**. Mientras dure el piloto,
+  la lectura de `frio_cobertura_v1` para las campañas del piloto queda mezclada
+  con el agente: se lee sin ellas, o se pausa ese experimento para esas
+  campañas. **Decisión pendiente del owner** (33.9).
+- **Se guarda** en `lead_experiments` (0144), con experimento
+  `agente_voz_leads_v1` y brazo `tratamiento` o `control`. La tabla es de solo
+  agregar y **el primero manda**: si dos pasadas sortean a la vez, gana el que
+  quedó guardado.
+- **Cuándo.** La primera vez que el lead es elegible (condiciones 1 a 13),
+  **sea cual sea su brazo**: el control también, o el análisis no lo vería. Y
+  solo cuando la tienda de verdad está llamando: el barrido con el automático
+  encendido, dentro del horario, con cupo del día, el carril libre y la línea
+  configurada. La cola en seco (`?dry=1`) no sortea.
+- **El porcentaje queda fijo** en cuanto el piloto sortea al primer lead:
+  Ajustes rechaza cambiar `voice_lead_holdout_pct` con sorteos guardados (lo
+  avisa y conserva el anterior). El tablero junta todos los sorteos en una
+  comparación, y con 50/50 dos semanas y 90/10 otras dos una diferencia de
+  época se leería como efecto del agente. Otra proporción es otro piloto.
+- **Solo llama el barrido.** No hay «Llamar con el agente» en el drawer: si una
+  asesora eligiera a quién mandar al agente, el tratamiento serían los leads
+  que ella eligió y el control no tendría su par.
+- **A ciegas para las asesoras.** El panel del drawer muestra lo que el agente
+  ya hizo (sus llamadas, si pidió no ser contactado) y «Probar en mi
+  teléfono», pero **no** si el lead entra a la cola ni a qué brazo cayó. Una
+  asesora que lee «grupo de control» o «a este lo llama el agente» lo trabaja
+  distinto —el experimento del frío ya lo midió (v1: con la marca 🧪 se llamó
+  menos)— y el control deja de ser «lo de siempre». El brazo y las razones
+  solo se ven en el tablero de Ajustes y en el log del barrido.
+- **El control nunca se llama.** Tampoco con «Probar en mi teléfono»: la
+  prueba no deja marcar el número del lead (33.6).
+- Si el brazo no se pudo guardar, ese lead no se llama en esa pasada: una
+  llamada sin brazo no se podría medir.
+- **Intención de tratar.** El tablero cuenta todo lead del tratamiento, lo
+  haya alcanzado a llamar el agente o no (tope, no contestó, una asesora llegó
+  antes).
+
+### 33.4 Interruptores y topes por tienda
+
+Se mueven en Ajustes → «Agente de voz · Leads (piloto)» (owner o admin de la
+organización). Los defectos son los de la migración 0247:
+
+| Ajuste | Defecto | Rango | Qué hace |
+| --- | --- | --- | --- |
+| `voice_lead_enabled` | apagado | — | Habilita la cola del agente y la reposición de «Atender ahora» |
+| `voice_lead_auto` | apagado | — | El barrido llama solo. Apagarlo es la marcha atrás; el sorteo se conserva |
+| `voice_lead_daily_cap` | 40 | 0–300 | Llamadas reales a leads por tienda y día de Lima. No comparte el tope de Reproprovincia |
+| `voice_lead_max_attempts` | 2 | 1–4 | Llamadas reales del agente por lead, en total |
+| `voice_lead_wait_minutes` | 120 | 0–1440 | Turno de las asesoras: desde el último mensaje, el agente espera esto |
+| `voice_lead_max_age_hours` | 48 | 1–168 | Ventana del agente: pasado esto desde el último mensaje, ya no llama |
+| `voice_lead_holdout_pct` | 50 | 0–90 | Porcentaje de elegibles que van al grupo de control |
+| `voice_lead_hour_start` / `voice_lead_hour_end` | 9 / 20 | 0–23 / 1–24 | Horario de Lima. Los domingos empieza a las 11:00, como §11.8 (`withinVoiceHours`) |
+| `voice_lead_campaign_ids` | vacío | — | Campañas de Meta cuyos leads llama. Vacío = ninguna |
+| `voice_lead_product` | vacío | ≤ 120 | Cómo nombra el producto. Vacío = el titular del anuncio del lead |
+| `voice_lead_offer` | vacío | ≤ 800 | Precios y promociones que puede decir, tal cual. Lo que no esté aquí no lo ofrece |
+
+- **Un lead a la vez para todas las tiendas.** Hay un agente y un carril
+  (`leads`), así que hay a lo más una llamada de leads abierta (33.7).
+- **El barrido** corre cada cinco minutos, en los minutos 2, 7, 12… 57 (dos
+  después del de Reproprovincia). Por tienda habilitada repone los «Atender
+  ahora» que el sync pisó (33.6); con el automático, dentro del horario, con
+  cupo y con el carril libre, arma la cola, guarda los sorteos y prueba hasta
+  **tres** candidatos (30 s como mucho) hasta que uno sale. Fuera de
+  producción no llama.
+
+### 33.5 El guion
+
+El texto completo, el primer mensaje y las tools están versionados en
+`docs/voz-leads-agente.md`. Aquí van las reglas que no cambian con el
+redactado:
+
+- Se presenta **con su nombre y el de la tienda**. **Si le preguntan si es una
+  persona, dice que es un asistente de IA. Nunca lo niega** (igual que §11.8).
+- Sabe con quién habla: recibe al conectar el nombre, el producto, la oferta, la
+  primera consulta y la conversación de WhatsApp del lead (sin enlaces, los
+  mensajes más recientes). No empieza de cero ni repregunta lo que ya está en el
+  chat.
+- **Abre con calidez**: si sabía su nombre y la persona lo confirma, pregunta
+  «¿Qué tal, cómo le va?» y en el turno siguiente se presenta y dice por qué
+  llama. Sin nombre, el «Mucho gusto» y la pregunta por el WhatsApp hacen ese
+  papel. Si antes de confirmar le preguntan «¿de parte de quién?», dice solo
+  su nombre y el de la tienda: el producto y el chat, recién con el sí.
+- **Va directo a ofrecer** (cambio del owner, 13-10-2026, tras la primera
+  prueba por teléfono): dice el precio y las promociones de la oferta en dos
+  frases cortas, sin volver a nombrar el producto (owner, 13-10-2026), pregunta
+  si tiene alguna duda y pregunta si lleva una unidad o una promoción. Las
+  dudas las responde solo con la oferta: lo que la tienda dijo en el chat
+  (descuentos de asesora, adelantos, días de entrega) no es oferta, y lo que no
+  sabe (ingredientes, modo de uso) se lo detalla la asesora que confirma el
+  pedido. Pago, adelanto y si llega a su zona, solo con `consultar_cobertura`.
+  Si quiere comprar, **toma los datos y lo pasa a una asesora**. Si no,
+  pregunta una sola vez por qué: el motivo se mide (33.8). Antes empezaba
+  preguntando «qué le faltó para animarse».
+- **Sin ficha, solo se disculpa**: si Kapta no encontró la llamada (entra por
+  otro número o no hay ninguna marcando), manda `encontrada = no` y un aviso
+  que el prompt lee arriba y abajo: su única frase es «Disculpe, me equivoqué
+  de llamada. Que tenga buen día.» y cuelga, sin presentarse. Es una orden que
+  solo llega en ese caso, no una condición dentro del guion: con la condición
+  sola se presentaba igual a quien preguntaba «¿de qué se trata?» (2 a 3 de
+  cada 10 pruebas, 13-10-2026).
+- **Sin muletillas automáticas** («Ajá…», «Un momentito…»): si el modelo
+  tarda, ElevenLabs pasa a GPT-4o a los 2,5 s en vez de rellenar con palabras
+  sueltas (mismo cambio del owner).
+- **Cobertura y pago, solo con `consultar_cobertura`**: la misma cobertura
+  canónica del Master (`order_coverage_for`), no una lista propia. Lima y
+  provincia contra entrega: paga al recibir. Agencia: se separa con el
+  adelanto de `ADELANTO_MINIMO` (§12, `lib/adelanto-minimo.ts`) y una asesora
+  le escribe por WhatsApp para eso. Sin respuesta: una asesora lo confirma.
+- **Registra antes de anunciar o despedirse**, una sola vez
+  (`registrar_resultado_lead`), la lección de §11.8 del 08-10-2026.
+- Dura **cinco minutos como mucho** (`max_duration` de ElevenLabs).
+- Corta por silencio a los **40 s** desde la última vez que habló la persona
+  (`silence_end_call_timeout`): alcanza para insistir dos veces y registrar
+  «no contesta». Con los 20 s del agente de §11.8 cortaba antes de registrar, y
+  un buzón o una línea muda contaban como «contestó, sin gestión» (33.8).
+
+**Lo que el agente nunca hace.** Crear pedidos, ni decir que el pedido quedó
+hecho: lo confirma una asesora. Pedir o recibir pagos, datos de tarjeta o
+Yape. Ofrecer precios, promociones o descuentos que no estén en
+`voice_lead_offer`. Negar que es una IA. Prometer hora de entrega. Llamar al
+grupo de control o a quien pidió no ser contactado: no están en su cola
+(33.2). Llamar fuera de horario o por encima del tope (33.4).
+
+### 33.6 Lo que escribe
+
+El agente registra un resultado con `registrar_resultado_lead`. Kapta lo
+traduce (`translateLeadResult`, `leadPatchFor`) y escribe **sobre el lead,
+nunca sobre un pedido**:
+
+| `resultado` | Estado del lead | Además | `voice_calls.outcome` |
+| --- | --- | --- | --- |
+| `atender_ahora` | `casi_cierra` y **«Atender ahora»**: `needs_attention`, `handoff_reason = 'agente_voz'`, `handoff_context` con los datos que tomó, `handoff_at`. Seguimiento: el futuro que tenga o el automático de §6 (`defaultFollowupAt`) | La captura queda en `outcome_payload.captura` | `atender_ahora` |
+| `volver_a_llamar` | `volver_a_llamar`, con `next_followup_at` a la fecha y hora que pidió (Lima; sin hora, 10:00; sin fecha futura, la automática de §6) | El agente vuelve a llamar a esa hora (33.2, condiciones 8 y 9) | `volver_a_llamar` |
+| `no_compra` | Según el motivo: `precio`, `desconfianza` y `otro` → `cancelado_cliente`; `ya_compro` → `ya_compro_otro_lado`; `solo_miraba` → `solo_miraba`; `solo_informacion` → `solo_informacion`; `fuera_de_cobertura` → `fuera_de_ciudad`. Seguimiento borrado | El motivo, en la nota y en `outcome_payload.motivo`. Un motivo desconocido es `otro` | `no_compra` |
+| `no_llamar` | `cancelado_cliente`, seguimiento borrado | **No contactar**: `leads.contact_opt_out_at` y `outcome_payload.no_llamar` | `no_llamar` |
+| `no_contesta` | **No cambia**, ni `last_interaction_at` | Solo la nota «No contestó (intento N de M)» | `no_contesta` |
+
+Una llamada que nadie registró —el vigilante la cerró, o la línea avisó el
+corte— se escribe como `no_contesta`: la misma nota y el lead sin tocar. Una
+que Telnyx rechazó sin marcar (respondió con error) queda `cancelled` con
+`sin_resultado` y no gasta intento ni cupo; una que sonó y no llegó al agente
+(`failed` con `sin_resultado`) sí lo gasta, para que una línea caída no la
+vuelva a llamar cada tres horas sin tope. Si Telnyx **no respondió** (15 s sin
+contestar), la llamada puede estar sonando: queda `failed`, gasta intento y el
+barrido no marca a nadie más en esa pasada, de ninguna tienda.
+
+Reglas de esa tabla:
+
+- **Siempre una nota en el historial del lead**: `lead_calls` con
+  `kind = 'voice_agent'` y **sin vendedora**, `new_status` con el estado
+  aplicado (o vacío). No es `call`: `call` firmado es una asesora, y así lo
+  leen los experimentos, la cobertura y Productividad. El drawer la muestra
+  firmada «Agente de voz».
+- **No contactar va siempre.** También cuando el resultado es `no_compra` y el
+  resumen dice «no me llamen» (`pideNoContactar`: la idea de §11.8, más
+  estricta porque aquí el «sí» apaga también los WhatsApp; «no la llamaron»,
+  «no la llamen ahorita» o «no llamar antes de las 10» no cuentan). Con
+  `volver_a_llamar` o `atender_ahora` el resumen nunca la dispara: ahí un «que
+  no la llamen ahora» es una hora, no un pedido. Va
+  también cuando la guarda de estado (abajo) no deja aplicar el resto: es la
+  voluntad de la persona, no una disposición que una asesora pueda pisar. Se
+  conserva la primera fecha. Desde ahí no la llama ningún agente (la marca de
+  la llamada entra a la lista «no llamar» de la tienda, 33.7), y con
+  `contact_opt_out_at` el drip, la secuencia de carritos y el winback de
+  Shopify Flow la saltan (`no_contactar`). Una asesora todavía puede
+  responderle si ella escribe.
+- **La captura vive en la llamada**, no en `leads.address1`, `district` y
+  compañía: el sync de conversaciones pisa esas columnas y el reenvío Swayp las
+  usa como dirección. **«Generar pedido»** (`loadOrderDraft`) usa la captura de
+  la última llamada **real** del agente que terminó en `atender_ahora` en los
+  últimos 7 días. Si la persona dictó una dirección y el formulario no trae la
+  de un carrito, la toma **en bloque**: dirección, distrito, región (el
+  departamento, o la provincia si no lo dijo) y referencia juntas, para no
+  dejar una calle de un distrito con el distrito que el bot adivinó del chat.
+  Sin dirección dictada, solo completa lo vacío. El nombre que dio en la
+  llamada reemplaza al del perfil de WhatsApp cuando no hay carrito. **Nunca
+  líneas de producto**: las elige la asesora.
+- **Guardas para no pisar a una asesora.** El estado del lead se escribe solo
+  si, al registrar, el lead sigue en el estado que tenía al marcar
+  (`lead_context.estado_al_marcar`), en `open` u `hot`, sin pedido, ninguna
+  asesora firmó algo en su historial después de `dialed_at`, y el bot no lo
+  pasó a «Atender ahora» durante la llamada (`handoff_at` posterior a
+  `dialed_at`: escribió por WhatsApp mientras hablaba, y ese mensaje lo
+  contesta una asesora). La guarda de verdad es el `update` condicional. Si no pasa, el lead no cambia, la nota
+  empieza con «(no aplicado: …)» y el motivo queda en `outcome_payload.omitido`.
+- **El sync puede pisar un «Atender ahora» recién escrito** con lo que leyó
+  antes (carrera conocida de `lib/leads-ingest`). Dos defensas: el sync cuenta
+  las notas del agente con estado como una disposición (`lastDispositionAtByPhone`),
+  y cada pasada del barrido repone, en las tiendas habilitadas, los «Atender
+  ahora» del agente de las últimas 24 h que volvieron a `nuevo` sin atención
+  (`reflagAgentHandoffs`).
+- **Una sola vez por llamada.** Antes de escribir sobre el lead se reserva la
+  fila (`outcome` vacío → el resultado): un segundo registro, o el aviso de
+  corte que llega a la vez, no escribe encima. Si la escritura falla, la fila
+  queda `failed` y el agente no reintenta: retoma una persona con la nota. Si
+  el cierre de la fila (con la captura y el «no llamar») no llega, se reintenta
+  una vez y si no, la tool responde el fallo; y el vigilante cierra una fila de
+  lead ya reservada con **su** resultado, nunca con un «no contestó» encima.
+- **Modo prueba** (`mode = 'test'`, «Probar en mi teléfono» del drawer): usa la
+  ficha y el chat de un lead real, llama al teléfono de quien prueba y **no
+  escribe nada sobre el lead**: solo su fila. No exige el agente encendido ni
+  que el lead sea elegible, y no cuenta para el tope ni para el tablero. Un
+  «no me llamen» de quien prueba tampoco entra a la lista «no llamar». **No
+  marca el número del lead** (sería llamarlo a mano, por fuera del sorteo, y
+  su «no me llamen» se perdería por ser prueba), **ni el de otro lead de la
+  tienda** (recibiría la ficha y el chat ajenos), **ni uno que pidió no ser
+  contactado**, y pide `master.edit` en la organización de ese lead.
+- **El tope que no se puede leer no deja llamar.** Si `realCallsToday` no
+  puede contar (de los dos carriles), devuelve null: nadie llama en esa pasada
+  y el barrido lo informa como error, no como «tope del día» (antes devolvía 0
+  y el tope dejaba de frenar). Las llamadas de lead que Telnyx rechazó antes de
+  marcar (`cancelled`) no gastan cupo.
+- **La conversación** llega después, por el aviso «post-call» de ElevenLabs, a
+  `voice_calls.transcript`: turnos (los últimos 80), duración, costo de
+  ElevenLabs y su resumen. Solo de llamadas de lead y solo con la firma de
+  ElevenLabs (`ELEVENLABS_WEBHOOK_SECRET`).
+
+### 33.7 Separado de Reproprovincia
+
+Los dos agentes comparten la tabla `voice_calls`, la conexión de Telnyx y el
+vigilante. Nada más:
+
+- **`voice_calls.purpose`**: `order` (por defecto, todas las de §11.8) o
+  `lead`. La base exige que una de pedido tenga `order_id` y no `lead_id`, y
+  una de lead al revés, y valida los resultados por carril: un lead nunca
+  `confirma`, que es la marca que dispara la salida Swayp
+  (`salidasSwaypPendientes`).
+- **Carril**: `agent_number = 'leads'`, sin dígitos a propósito: los carriles
+  de §11.8 se comparan por dígitos y este no coincide con ninguno. El índice
+  único de 0190 deja una sola llamada de leads abierta, para todas las tiendas.
+- **Atadura**: el inicio y las tools de cada agente solo ven las llamadas
+  abiertas de su propósito (`openCalls`). La fila de pedido (`loadCall`) no
+  devuelve una de lead, y la de lead (`loadLeadCall`) no devuelve una de
+  pedido, aunque alguien pase su id. Las tools de leads se atan **solo** por el
+  `voice_call_id` que el inicio le dio al agente: sin él no registran nada
+  (una conversación sin id es una que el inicio no reconoció). Y el inicio
+  entrega la ficha solo si la conversación entra con el número de salida del
+  agente de leads (`caller_id`): quien llama al número del agente mientras
+  este marca a otra persona no recibe la ficha ajena (la regla de §11.8 del
+  24-09-2026). Si el aviso de ElevenLabs no trae `caller_id` (o el número de
+  salida no está configurado), no hay con qué comparar y se acepta: **hay que
+  confirmar en las primeras llamadas reales que ElevenLabs lo manda** (33.9).
+- **Secreto**: `VOICE_LEADS_TOOLS_SECRET` firma el inicio y las tools del
+  agente de leads. Si es igual a uno de los de §11.8, Kapta lo trata como vacío
+  y rechaza todo; y las tools de §11.8 no lo aceptan.
+- **Puerta SIP y número**: cuando el lead contesta, el aviso de Telnyx abre el
+  tramo a `TELNYX_LEADS_SIP_URI`, con el número `TELNYX_LEADS_FROM_NUMBER`
+  (vacío = el de §11.8). Sin esa puerta la llamada falla: **nunca** cae al
+  agente de Reproprovincia, que leería un pedido que no existe. El número se
+  importa en ElevenLabs aceptando solo las direcciones de Telnyx
+  (`192.76.120.0/24`, `64.16.250.0/24`), como el de §11.8. Sin esa lista,
+  cualquiera que mande un INVITE a la puerta llega al agente y, mientras Kapta
+  marca a un lead, recibe su ficha. La puerta del agente de leads es el
+  +1 645 654 0729 («Nicol Leads Telnyx», 12-10-2026).
+- **El vigilante** (`sweepStaleCalls`) cierra las abiertas de los dos. Una de
+  lead en conversación dura hasta **8 minutos** antes de darse por caída
+  (`LEAD_IN_PROGRESS_TTL_MINUTES`; marcando, 3 como todas): el agente toma más
+  datos y ElevenLabs la corta a los 5. Su «no contesta» es una nota del lead
+  (`writeLeadNoAnswer`), nunca `register_confirmation_attempt_v2` ni el Master.
+- **Topes y tableros**: el tope diario se cuenta por carril (`realCallsToday`
+  con propósito). «Gestión por persona», «Llamando ahora», la última llamada de
+  la línea «Agente de voz» de Envíos y el reintento de la salida Swayp leen
+  solo `purpose = 'order'`. El agente de leads tiene su tablero (33.8).
+- **El candado del reintento automático Swayp** (`swayp_auto_voice_interlock`,
+  0209) solo corre para llamadas con pedido: con `order_id` nulo nunca
+  bloqueaba, pero tomaba el lock de la organización que también toma
+  `swayp_emission_claim`, y cada llamada de lead se ponía en fila con Swayp.
+- **La lista «no llamar» es una por tienda para los dos agentes, a
+  propósito.** Se lee por teléfono de `voice_calls.outcome_payload.no_llamar`
+  sin filtro de propósito (`loadDoNotCallPhones`): quien se lo pidió a
+  cualquiera de los dos no recibe más llamadas de ninguno.
+
+### 33.8 Piloto y medida
+
+- **Una tienda (Kenku) y una campaña (Biru).** Se enciende en este orden:
+  campaña, producto y oferta; la cola en seco (`?dry=1`, que la mira como si
+  el agente estuviera encendido); «Probar en mi teléfono» con leads reales de
+  la campaña; el porcentaje de control (queda fijo en el primer sorteo); y
+  recién entonces «Agente de leads» y «Llamadas automáticas». Los pasos están en
+  `docs/voz-leads-agente.md`.
+- **El tablero** (Ajustes → «Agente de voz · Leads (piloto)»,
+  `loadLeadVoicePilotReport`) va por brazo y por intención de tratar:
+
+  | Columna | Qué cuenta |
+  | --- | --- |
+  | Leads | Sorteados a ese brazo hace **7 días o más** (`LEAD_VOICE_MATURATION_DAYS`, el corte de `read_lead_experiment`). Los más recientes salen aparte, «esperan sus 7 días»: el agente vende antes y, con ellos adentro, un adelanto se leería como venta extra. Todas las columnas son de estos leads |
+  | Llamados por el agente | Con al menos una llamada real que marcó |
+  | Contestaron | Con una llamada atendida (la regla de §11.8, `voiceCallAnswered`) |
+  | Atender ahora | Que el agente pasó a una asesora |
+  | Tocados por asesora | Con una llamada, mensaje o venta firmados después del sorteo |
+  | Ventas | Con pedido o ganados, por el canal que sea |
+  | Conversión | Ventas / leads, en % |
+
+  Más la línea del agente (llamadas, contestadas, sin gestión —contestó y no
+  registró nada—, costo de línea de Telnyx en US$ y cuántas llamadas lo
+  traen si faltan algunas) y los motivos de no compra. La línea del agente
+  cuenta **todas** sus llamadas, también a los leads que todavía no maduran:
+  para el costo por venta incremental se toma el costo de las llamadas a los
+  leads maduros.
+- **Regla de decisión.** Con **dos semanas o más**, se compara la conversión
+  del tratamiento menos la del control. Se sigue si la diferencia es positiva y
+  el **costo por venta incremental** —lo que costó el agente (línea de Telnyx
+  más los minutos de ElevenLabs) dividido por las ventas del tratamiento que el
+  control no explica— queda por debajo del **techo de S/ 16,2 de Biru**. Si no,
+  se apaga. El tablero muestra solo el costo de línea (US$): el de ElevenLabs
+  llega en la transcripción (`transcript.costo`) **en créditos**, y se pasa a
+  dinero con el precio por crédito del plan antes de sumarlo.
+- «Tocados por asesora» dice cuánto se contaminó la comparación: las asesoras
+  siguen trabajando los dos brazos. Si el tratamiento tiene muchos menos
+  tocados que el control, el agente está reemplazando a una asesora, no
+  sumando.
+
+### 33.9 Pendientes
+
+- **El agente en ElevenLabs ya existe** (12-10-2026, «Agente de leads · Kenku
+  Biru (piloto)»), configurado según `docs/voz-leads-agente.md`; se presenta
+  como Nicol, usa Gemini 2.5 Flash sin razonamiento (con Flash Lite fallaba las
+  pruebas del guion, §11 de ese documento) y ya tiene `VOICE_LEADS_TOOLS_SECRET`
+  en sus dos tools y en el inicio. En las tools está comprobado con una
+  simulación que llamó a Kapta; el inicio solo lo llama una llamada por
+  teléfono, así que se comprueba en la primera prueba. **Su puerta también
+  existe** (12-10-2026): el +1 645 654 0729, comprado en Telnyx e importado en
+  ElevenLabs por SIP trunk como «Nicol Leads Telnyx» (solo entrada desde las
+  direcciones de Telnyx, sin usuario ni contraseña) y asignado a él;
+  `TELNYX_LEADS_SIP_URI` ya está en Vercel y producción la lee desde el deploy
+  de las 17:00 del 12-10-2026. Falta: producto y oferta de Kenku (sin cargar todavía, a
+  propósito), «Probar en mi teléfono» y recién entonces encender (33.8).
+- **Unir el guion con el aviso sin ficha** (13-10-2026): el prompt con
+  `{{aviso}}` (33.5) se probó en una rama del agente en ElevenLabs y se unió a
+  la principal recién cuando producción mandó la variable `aviso` desde el
+  inicio, antes de encender. Con el prompt nuevo y el inicio viejo, ElevenLabs
+  no arranca la conversación si exige la variable. **Hecho el 13-10-2026**,
+  después del deploy de #946.
+- **Número peruano en Telnyx** para el agente de leads
+  (`TELNYX_LEADS_FROM_NUMBER`). Sin él, el lead ve el número de Telnyx de
+  Reproprovincia, que hoy es de EE. UU., y contesta menos. **Decisión del owner
+  (12-10-2026):** mientras llega, el piloto sale con el de EE. UU.
+  (`TELNYX_LEADS_FROM_NUMBER` vacío); las primeras semanas miden al agente con
+  ese número. El +1 645 de la puerta no es el que ve el lead: cuando llegue el
+  peruano, va solo en `TELNYX_LEADS_FROM_NUMBER`, y redeploy.
+- **Revisión legal** del cierre «Gracias, no insisto» y del consentimiento para
+  llamar a quien escribió por un anuncio, igual que el aviso de grabación de
+  §11.8.
+- **El adelanto que dice el bot.** El bot de Kapso dice en el chat un adelanto
+  de S/ 30, y Kapta exige `ADELANTO_MINIMO` (`lib/adelanto-minimo.ts`). El
+  agente dice el que devuelve `consultar_cobertura`, así que la persona puede
+  oír una cifra distinta de la que leyó. Hay que alinear el bot.
+- **Transcripciones**: solo si el owner configura el webhook «post-call» de
+  ElevenLabs con `ELEVENLABS_WEBHOOK_SECRET`. Sin él,
+  `voice_calls.transcript` queda vacío.
+- **Que ElevenLabs mande `caller_id`** en el inicio de las llamadas por SIP:
+  revisarlo en las primeras llamadas reales (33.7). Sin él, el control de
+  «otro número» no hace nada. Indicio (12-10-2026): en las llamadas SIP de
+  Reproprovincia, que salen con el mismo número, ElevenLabs registra quién
+  llama como `+19182386713`, un E.164 solo, que es lo que el control acepta.
+- **`frio_cobertura_v1` sobre las campañas del piloto** (33.3): el owner decide
+  si se pausa ese experimento para las campañas del piloto o si su lectura las
+  deja fuera mientras dure.
+- **Productividad no cuenta al agente**: sus filas `voice_agent` no tienen
+  vendedora y además están en `NON_SALES_KINDS`. Su trabajo solo se ve en el
+  tablero del piloto.
+- **La fecha de volver a llamar.** El agente recibe `hoy` (AAAA-MM-DD) y
+  `hoy_texto` («lunes 12 de octubre») y manda la fecha como AAAA-MM-DD y la
+  hora como HH:MM. Una fecha que no existe, mal formada o pasada cae a la hora
+  automática de §6, y una hora que no es HH:MM, a las 10:00.
+
+Implementación: `db/migrations/0247_voice_lead_calls.sql`;
+`lib/voice-leads.ts` (reglas puras), `lib/voice-lead-labels.ts`,
+`lib/voice-leads-server.ts` (cola, sorteo, ficha, marcado, cobertura, tablero),
+`lib/voice-leads-writeback.ts` (lo que se escribe sobre el lead);
+`app/api/voice/leads/inicio`, `app/api/voice/leads/registrar`,
+`app/api/voice/leads/cobertura`, `app/api/voice/elevenlabs/post-call`,
+`app/api/cron/voice-leads`; el aislamiento en `lib/voice-recovery.ts`,
+`lib/voice-recovery-server.ts`, `app/api/webhooks/telnyx/route.ts` y
+`lib/shipments-access.ts`; el lado de leads en `app/dashboard/leads/actions.ts`,
+`components/lead-voice-agent-panel.tsx`, `components/leads-drawer.tsx`,
+`lib/leads-ingest.ts` y `lib/cart-sequence.ts`; los ajustes en
+`lib/store-settings.ts` y `components/store-settings.tsx`. Pruebas en
+`test/voice-leads.test.ts`, `test/voice-leads-server.test.ts`,
+`test/voice-leads-rutas.test.ts`, `test/voice-leads-aislamiento.test.ts`,
+`test/voice-leads-drawer.test.ts`, `test/voice-leads-ajustes.test.ts`,
+`test/voice-leads-mom.test.ts` y `scripts/sql/voice_lead_smoke.sql`.
+
+## 34. Recordatorio de reposición (13-10-2026)
+
+Para subir el LTV (§17.2), el dueño pidió escribirle a la clienta cuando se le
+está por acabar lo que compró, «en 1, 3 o 5 meses según cuántos frascos
+compró». Y que, si responde que sí, **lo tome una asesora**. Kapta no arma
+ningún pedido por su cuenta.
+
+Por qué hacía falta: la recompra del mismo producto era baja. En el aceite de
+semilla negra, el más vendido de Kenku, era el 4,5 %, a los ~46 días. Y el
+canal es WhatsApp: solo ~1 % de los pedidos trae correo.
+
+**Cómo funciona.**
+
+- **Cada producto tiene sus días por unidad**, en Ajustes → «Recordatorio de
+  reposición» (`restock_products`). Ese número es lo que dura uno con la dosis
+  normal: dos frascos de 30 días duran 60.
+  - **Solo reciben recordatorio los productos que tienen días.** Así una faja
+    o un pelador nunca reciben un «se te está por acabar».
+  - Al activar un producto, Ajustes propone **30 días por unidad** (un frasco,
+    un mes). El dueño corrige cada uno según su dosis.
+- **Cuándo sale:** el recordatorio sale `días antes` (7 por defecto) de que
+  se acabe, contando desde la entrega (`delivered_at`). Por ejemplo, un frasco
+  de 30 días sale el día 23.
+  - Si un pedido trae varios productos con días, se avisa por el que se acaba
+    primero entre los que vencen ahora.
+  - Hay dos semanas de margen. Pasado ese plazo, ya no se envía, porque
+    llegaría tarde.
+- **A quién no se le envía:**
+  - a quien volvió a comprar después de esa entrega (un pedido nuevo no
+    anulado con el mismo teléfono);
+  - a quien ya recibió el recordatorio de ese pedido;
+  - a quien recibió otro recordatorio hace menos de 20 días;
+  - a quien pidió que no le escriban: «BAJA» a un recordatorio
+    (`contact_opt_outs`), o «no me contacten» al agente de voz
+    (`leads.contact_opt_out_at`, §33);
+  - a quien no tiene nombre ni un celular válido.
+- **La plantilla** es de **Marketing**, aprobada en Meta en la WABA de la
+  tienda.
+  - Lleva un botón de respuesta rápida (por defecto «Sí, quiero»).
+  - Sus variables son `nombre`, `producto` (el nombre corto configurado),
+    `unidades` y `pedido`.
+  - La oferta, si la hay, va escrita en la plantilla. En Kenku es el 3×2 que
+    la tienda ya vende: «llévate 3 frascos y paga solo 2» (S/ 298 en vez de
+    S/ 149 cada uno).
+- **Con foto, o no sale (14-10-2026).** Decisión del dueño:
+  - La plantilla lleva **cabecera de imagen**, y cada envío pone la foto del
+    producto en Shopify (`shopify_product_images`).
+  - La foto se convierte a JPG en `/api/wa-image`, porque Meta no acepta el
+    WebP de Shopify.
+  - **Un producto sin foto no recibe recordatorio**, ni la clienta ni el grupo
+    de control. Ajustes lo avisa en la fila del producto.
+- **El número.** Kenku lo envía desde el **451** (`restock_phone_number_id`),
+  el mismo número del agradecimiento (§31), porque el 981 está degradado en
+  Meta. La plantilla vive en la cuenta de negocio del 451, y el «sí» de la
+  clienta llega a ese número.
+- **Ritmo y horario:** igual que el agradecimiento (§31): 5 cada 20 minutos, de
+  9 a 20 h. Si Meta pone su tope de mensajería, el lote se corta.
+
+**Cuando contesta «sí», lo toma una asesora.**
+
+- **Qué cuenta como «sí»:** el botón de la plantilla, o un «sí» escrito. Este
+  último tiene que llegar dentro de las 72 h siguientes al recordatorio.
+  - Los «sí» escritos que valen forman una **lista cerrada** (`sí`,
+    `sí quiero`, `sí por favor`, `claro`, `me interesa`…).
+  - Un «sí, pero ¿cuánto cuesta?» no está en la lista y sigue con el bot y la
+    asesora, como siempre. Es la misma regla que en los botones de pago
+    (§12): Kapta no interpreta texto libre.
+- **El lead sube a «Atender ahora»** por el mismo camino que el handoff del bot
+  (`applyHandoff`), con el motivo `recompra`.
+  - El contexto dice qué quiere reponer y cuál fue su último pedido.
+  - El contexto va **sin palabras de cobro**, para que no caiga en la pestaña
+    Yape/Shalom.
+  - Si ya compró antes, el lead conserva su estado y solo se marca para
+    atender.
+- **La clienta recibe una confirmación:** «¡Gracias, Ana! 🙌 Ya le avisé a una
+  asesora: te escribe por aquí para coordinar tu Aceite de Semilla Negra». El
+  mensaje no promete minutos, porque ella puede contestar a las once de la
+  noche.
+- **Sin repeticiones:** se responde una sola vez por recordatorio, y una
+  reentrega del webhook no deriva dos veces (`wa_auto_replies`).
+- **Si contesta BAJA:** se anota en silencio. No se le contesta con otro
+  mensaje a quien pidió no recibir más.
+- **El bot no debe contestar también al botón** (docs/kapso-functions/README.md).
+- **El número que envía necesita el webhook de «mensaje recibido» (15-10-2026).**
+  - **Lo que pasó.** El 451 no lo tenía en Kapso. El 14-10, 11 clientas
+    contestaron el recordatorio y Kapta no se enteró: nadie las pasó a
+    «Atender ahora».
+  - **Configuración.** En Kapso → Webhooks → el número, se configura con la
+    misma URL de la tienda (`/api/webhooks/kapso/<storeId>?secret=…`), el
+    evento `whatsapp.message.received` y sin agrupar mensajes.
+  - **Además, un barrido** (`sweepRestockReplies`, 0258) revisa en cada pase
+    del cron los recordatorios de las últimas 72 h sin respuesta cuya clienta
+    escribió después:
+    - lee su conversación en Kapso y trata cada mensaje entrante posterior por
+      el mismo camino del webhook;
+    - si el webhook ya lo había atendido, la reserva por mensaje
+      (`wa_auto_replies`) impide hacerlo dos veces;
+    - no relee una conversación si la clienta no volvió a escribir
+      (`reply_checked_at`).
+
+**Grupo de control.**
+
+- **Quiénes son:** el 10 % de las clientas (configurable de 0 a 50). Se eligen
+  por su teléfono, así que una clienta siempre cae del mismo lado.
+- **Qué pasa con ellas:** se registran igual que las demás, pero **no se les
+  envía nada**.
+- **Por qué existe:** sin él no se sabe si el recordatorio vende o si la
+  clienta iba a volver igual. El winback de Kenku se midió sin control, y su
+  3,9 % no dice nada.
+- **Resultado en Ajustes (últimos 60 días):** por grupo, cuántas clientas,
+  cuántas contestaron sí y cuántas compraron en los 30 días siguientes.
+  - Lo que vende el recordatorio es la **diferencia** de tasa contra el
+    control.
+  - Con menos de 30 clientas en el control no se concluye nada.
+
+**Nace apagado en todas las tiendas.**
+
+Para encenderlo se necesitan tres cosas:
+
+1. la plantilla aprobada;
+2. los productos con sus días;
+3. el interruptor «Envío».
+
+Cada envío, cada fila de control y cada rechazo quedan en `restock_sends`, una
+fila por pedido atendido. Kapta nunca reescribe esa historia.
+
+Implementación:
+
+- `db/migrations/0255_restock_reminders.sql`: las funciones
+  `restock_candidates`, `restock_product_catalog` y `restock_results`. Una línea
+  sin `product_id` se reconoce por su título.
+- `lib/restock-reminder.ts`: envío, control y respuesta.
+- `lib/restock-view.ts`: lo que muestra Ajustes.
+- La respuesta se atiende en `lib/wa-button-replies.ts`, antes del acuse.
+- El cron, en `lib/ingest.ts`.
+- Los ajustes, en `lib/store-settings.ts` y `components/store-settings.tsx`.
+- Pruebas: `test/restock-reminder.test.ts` y
+  `scripts/sql/restock_reminders_smoke.sql`.
+
+## 35. Comprobantes electrónicos por RUC (SimpleFact, 14-10-2026)
+
+Estado: construido, y ningún RUC emite todavía. Existen las migraciones 0257
+(empresas emisoras, cuenta → RUC, comprobantes y el candado de emisión) y 0260
+(los arreglos de la revisión adversaria sobre la 0257: el turno que vuelve a
+revisar los pagos, la excepción de borrar la cuenta de una persona, el token
+nuevo que borra el motivo de la prueba anterior y los pedidos por revisar), las
+dos ya corridas en producción; la 0261 (el modo «Manual» y el turno que dice
+qué fila pide y quién la pidió, 15-10-2026), y la 0262 (el turno que vuelve a
+revisar que la empresa recibió el pago, 15-10-2026), que se aplican a mano, en
+ese orden, antes de su código (35.8). Están también las reglas puras, el
+cliente de SimpleFact, el barrido (`/api/cron/invoices`), la sección «Boletas
+y facturas» de Ajustes y el panel «Comprobante» del drawer, con su «Emitir esta
+boleta» (35.7), que solo emite en producción.
+**Ningún RUC emite**: GRUPO GF S.A.C. nace dado de alta, en «Apagado» y sin
+token, con sus cuentas ya asignadas (35.2), y al 15-10-2026 está en
+«Simulación», con el token probado y ningún comprobante. Se enciende primero en
+simulación, después en manual —las primeras boletas reales, una a una— y recién
+entonces en real, y lo enciende el owner (35.8).
+
+Un **comprobante electrónico** es la boleta (o factura) que emite, en su cuenta
+de SimpleFact, **la empresa que recibió el dinero** de un pedido; SimpleFact la
+manda a SUNAT. Grupo GF tiene **cuatro razones sociales**, cada una con su RUC y
+su propia cuenta de SimpleFact (subdominio, usuario y token distintos). Kapta
+decide si el pedido lleva comprobante y de qué RUC, lo emite **una sola vez** y
+guarda lo que mandó y lo que contestó SimpleFact (§2, principio 4). Kapta no
+edita ni borra un comprobante emitido (§2, principio 6) y no emite notas de
+crédito: deshacer una venta es de una persona (§2, principio 11).
+
+Cubre las ventas de las tiendas propias. Las tiendas cliente de otra
+organización facturan fuera de Kapta (§29.15).
+
+### 35.1 Qué es y por qué
+
+- **Las reglas son del owner (14-10-2026):** «un comprobante por pedido»;
+  «solo se emite el comprobante si la empresa recibió el pago»; automático,
+  «con restricciones como que coincida el método de pago con la conexión al
+  RUC»; un tope de S/ 700; y «cuidarnos de que no se generen boletas de más y
+  tengamos que pagar muchos impuestos». Boleta por defecto, y el IGV ya está
+  incluido en el precio de Shopify.
+- **Un paso a mano antes de lo automático (owner, 15-10-2026).** Entre la
+  simulación y lo automático, el owner eligió: «Nuevo modo «Manual»: el barrido
+  solo simula y tú pulsas «Emitir» pedido por pedido en el panel (solo el owner
+  o quien tenga el permiso), con los mismos candados. Las primeras boletas
+  reales salen una a una y las revisas en SimpleFact antes de pasar a
+  automático.» Es el modo Manual (35.7, 35.8).
+- **Cuántos pedidos entran.** En los 30 días al 14-10-2026 quedaron pagados
+  completos en Kapta unos **780 pedidos** de unos 8.300: por comprobantes
+  validados o por la pasarela web. De los pagados con comprobante, **~21 al
+  día** (pico de 34) tienen todos sus pagos en cuentas de Grupo GF S.A.C. y no
+  pasan de S/ 700. Los prepagos web por Flow suman ~3 al día. Solo 2 pedidos
+  pagados pasaron de S/ 700.
+- **El resto todavía no.** La mayoría de los pedidos se cobra en la puerta, con
+  motorizado o courier. Ese dinero recién es de la empresa cuando se aprueba la
+  liquidación (§14, §29.10), y Kapta no sabe a qué cuenta se depositó. Queda
+  para una segunda fase (35.9).
+- **Por qué un candado y no una cola.** SimpleFact no tiene llave de
+  idempotencia: el mismo pedido mandado dos veces son dos boletas, y una boleta
+  enviada a SUNAT no se borra. Es el mismo problema que Swayp
+  (`swayp_emission_claim`, 0209): el turno se reserva en la base antes de
+  llamar, y un envío sin respuesta se concilia, nunca se repite.
+
+### 35.2 Cuenta receptora → RUC
+
+- **Los RUC.** Cada empresa emisora es una fila de `invoice_issuers`, por
+  organización: RUC, razón social, subdominio de SimpleFact (`grupogf` →
+  `https://grupogf.simplefact.pe/api/v1`), token cifrado, modo, «Emitir desde»
+  y tope diario. El token solo viaja a un subdominio de `simplefact.pe`.
+- **Las cuentas.** El RUC se asigna a las **cuentas contra las que Kapta
+  verifica los comprobantes** (`store_collection_accounts`, §12 Pagos), con un
+  desplegable por cuenta en Ajustes → «Boletas y facturas». Una cuenta en «Sin
+  comprobante» **no emite**: el dinero que entra ahí no es de ninguna empresa
+  emisora.
+- **Por titular, no por banco.** Kapta reconoce a quién le llegó el pago por el
+  titular de la cuenta, y un Yape y una transferencia al mismo titular se ven
+  igual: la máscara «**** 0012» de una constancia BCP se aparta y no se juzga
+  (§12 Pagos). Por eso el BCP ···0-12 de Grupo GF S.A.C. va con la fila «Grupo
+  GF S.A.C. · ···309». Ajustes lista bajo cada titular las cuentas que se le
+  enseñan a la clienta con ese titular (`store_payment_methods`), para que se
+  vea qué cubre cada fila. Si dos cuentas del mismo titular tuvieran que ir a
+  RUC distintos, primero hay que enseñarle al lector a guardar la máscara
+  (35.9).
+- **Semilla (decisión del owner, 14-10-2026).** El Yape ···309, el BCP ···0-12
+  y la cuenta de Flow son de **GRUPO GF S.A.C., RUC 20556792829**. La 0257 da de
+  alta ese RUC (subdominio `grupogf`, apagado y sin token) y le asigna «Grupo GF
+  S.A.C.» ···309 y «Aurela Kenku» (la pasarela Flow, sin celular, 0198) en las
+  tiendas de la organización. Las cuentas personales de los dueños quedan sin
+  RUC.
+
+**A qué cuenta entró cada pago.** Se decide por cada pago validado, con la
+primera señal que exista y en este orden (`resolvePaymentAccounts`,
+`lib/invoicing/rules.ts`):
+
+| # | Señal | Cuentas candidatas |
+| --- | --- | --- |
+| 1 | El pago nació de un link de Flow (`flowcl_payment_links.payment_id`), o es una constancia de Flow que Flow confirmó pagada en la cuenta de la tienda (`vision.flow.state = 'pagado'`, §12) | Las cuentas sin celular de la tienda: la pasarela (0198) |
+| 2 | Lo validó el estado de cuenta Yape (`yape_statement_matches`, §16.2) | La cuenta cuyo nombre o alias es el destino del movimiento (`statementAccountKey`) |
+| 3 | El lector del comprobante encajó con una cuenta (`verified`) | Esa cuenta |
+| 4 | El lector quedó en `partial`: nombre recortado, o solo el celular | Todas las cuentas con las que esa lectura encaja, verificada o parcial |
+| — | Cualquier otro caso: sin lectura, un `mismatch` validado con excepción, «Te yapearon» (no dice cuál de nuestras cuentas), un cobro del courier sin estado de cuenta | Ninguna: `pago_sin_cuenta` |
+
+La lectura se recalcula con las cuentas vivas (`yapeRecipientReadingFromVision`,
+§12 Pagos), nunca con el `recipient_check` guardado. El prepago web por el
+checkout de Flow (`payment_gateway = 'checkout'`) no deja filas de pago: su
+cuenta es la pasarela de la tienda, como en la fila 1.
+
+**El RUC del pedido** es el de sus cuentas candidatas, y solo si **todas** las
+de todos sus pagos validados tienen **el mismo RUC**. Una candidata sin RUC da
+`cuenta_sin_ruc`, y dos RUC distintos, `ruc_mezclados`. En la duda no se elige:
+el pedido no lleva comprobante y el panel dice por qué. Es la regla del owner:
+el método de pago tiene que coincidir con la conexión al RUC.
+
+### 35.3 Cuándo se emite
+
+Un pedido lleva comprobante cuando cumple todo esto. Las condiciones van **en
+este orden**, y la primera que falla es el motivo que guardan el barrido y el
+panel (`invoiceEligibility`, función pura; los textos en
+`INVOICE_REASON_LABEL`):
+
+| # | Condición | Si falla |
+| --- | --- | --- |
+| 1 | El pedido no está anulado ni reembolsado y está en soles | `anulado` / `reembolsado` / `moneda` |
+| 2 | Todos sus pagos vivos (no rechazados) están validados. Un posible duplicado bloquea aunque cubra el total | `posible_duplicado` / `pagos_en_revision` |
+| 3 | La empresa recibió el pago: lo validado cubre el total del pedido, o es un prepago web confirmado (§6.5, §12 Pagos). Un prepago web que además tiene comprobantes cargados no se adivina | `sin_pago_completo` / `prepago_con_comprobantes` |
+| 4 | Cada pago validado tiene cuenta (35.2) | `pago_sin_cuenta` |
+| 5 | Todas sus cuentas tienen RUC, y es el mismo | `cuenta_sin_ruc` / `ruc_mezclados` |
+| 6 | El total es mayor que 0 y no pasa de S/ 700 (35.5) | `monto_cero` / `monto_mayor_700` |
+| 7 | Ese RUC no está apagado | `ruc_apagado` |
+| 8 | El pedido quedó pagado desde «Emitir desde» del RUC: cuenta cuándo se registró en Kapta el último de sus pagos validados (`registered_at`, que no cambia si el pago se observa y se vuelve a validar; la fecha de validación, `validated_at`, sí), o la fecha del pedido si es prepago web. Un pago validado sin fecha de registro, o un RUC sin fecha de inicio, no emite | `antes_de_inicio` |
+| 9 | No tiene comprobante real vivo ni uno registrado como emitido fuera de Kapta (35.4). En simulación, tampoco una simulación | `ya_tiene` / `ya_simulado` |
+| 10 | Su último intento real no terminó en `error` sin que una persona pidiera reintentar | `error_previo` |
+
+**Un RUC en Manual** (35.8) se evalúa de dos maneras. El barrido y el panel lo
+evalúan como uno en Simulación: en la condición 9 cuenta su simulación y la 10
+no se mira, porque ahí el barrido no emite. «Emitir esta boleta» (35.7) evalúa
+el pedido como una emisión real (`invoiceEligibility` con `emitNow`): en la 9
+cuenta solo lo real —una simulación no frena—, la 10 se mira, y también la
+conexión del RUC (`sin_conexion`). Y justo después de la condición 7, el RUC
+tiene que estar en Manual o en Real (`modo_distinto`); el botón, además, solo
+emite en Manual (35.7).
+
+**Justo antes de emitir, Kapta vuelve a leer el pedido en Shopify**
+(`fetchOrderForInvoice`), porque lo guardado no alcanza para armar la boleta
+(35.5). Esa lectura bloquea un pedido de prueba (`prueba`), anulado,
+reembolsado o en otra moneda, uno editado (`editado`, `cantidad_editada`,
+`envio_editado`), con propina, con tarjeta de regalo (`gift_card`), con una
+línea gratis (`linea_gratuita`), con impuesto sumado encima
+(`impuesto_encima`), con más de 100 líneas (`demasiadas_lineas`), uno cuyo
+detalle no suma el total (`no_cuadra`) y uno cuyo total no es el de Kapta
+(`total_distinto`). En un prepago web exige además que Shopify diga pagado, sin
+nada reembolsado ni pendiente; que **todas** las pasarelas del pedido sean el
+checkout de Flow (el nombre de `CHECKOUT_GATEWAYS`, `lib/payment-gateway.ts`,
+sin contar mayúsculas, tildes ni espacios de más); y que lo cobrado —ventas y
+capturas aprobadas, no de prueba— haya entrado por Flow y sume el total, sin un
+céntimo cobrado por otra pasarela (`pago_web_no_confirmado`). La boleta va al
+RUC de la cuenta de Flow (35.2), así que solo puede cubrir lo que cobró Flow: un
+pedido marcado pagado a mano, o pagado en todo o en parte contraentrega o con
+tarjeta de regalo, no lleva boleta automática. Una transacción cuenta como de
+Flow si su pasarela es ese checkout o dice «flow» como palabra entera;
+cualquier otra, o ninguna, es de otra pasarela.
+
+Recién entonces se pide el turno (`invoice_claim`, 35.4), que revisa de nuevo,
+dentro de la base, que el pedido siga sin anular ni reembolsar y en soles, que
+la empresa haya recibido el pago (0262, abajo), el modo, la conexión, el monto,
+que no haya otro comprobante y el tope del día: `sin_conexion`, `tope`.
+**Quien pide el turno dice qué fila pide** (0261). Sin decirlo, la del modo del
+RUC: real en Real, y simulada en Simulación y en Manual. El barrido pide la simulada de un RUC en Manual, y «Emitir esta
+boleta», la real. Una fila real solo la da un RUC en Real, o uno en Manual si
+se dice quién la pide (`p_created_by`), y una simulada, uno en Simulación o en
+Manual; si el RUC ya no está en ese modo —el owner lo cambió mientras tanto—,
+no da el turno (`modo_distinto`). Lo que el
+turno revisa depende de la fila pedida: la conexión y el error sin reintento,
+solo para una real. **La fecha de pago no se la cree al barrido**: la
+vuelve a sacar de los pagos de la base, con la cuenta de las condiciones 2 y 8,
+en los dos modos. Si queda un pago vivo (no rechazado) sin validar, no da el
+turno (`pagos_en_revision`). Si no, cuenta el `registered_at` del último pago
+validado o, sin pagos validados, la fecha del pedido. Esa fecha y la que manda
+el barrido tienen que ser las dos desde «Emitir desde»; si falta una, o una es
+anterior, no da el turno (`antes_de_inicio`). Así, un error en las reglas o en
+una lectura no manda a SUNAT la boleta de algo pagado antes de la fecha de
+inicio.
+
+**Que la empresa recibió el pago tampoco se lo cree** (0262). Entre la lectura
+del código y el turno pasa la relectura en Shopify, y en ese rato un pago
+validado se puede rechazar: rechazado el único, el turno se quedaba sin pagos y
+lo tomaba por un prepago web; rechazado uno de varios, lo validado ya no cubría
+el total. En los dos casos daba una fila real por un dinero que la empresa no
+recibió. Ahora, justo después de `pagos_en_revision`, el turno vuelve a revisar
+la condición 3 con los pagos y el pedido guardados, por el camino que dice la
+base del comprobante que manda el código (`p_basis`: prepago web o no). Sin
+prepago, tiene que haber pagos validados y su suma tiene que cubrir el total
+que se va a emitir, al céntimo (`sin_pago_completo`); y si el pedido guardado
+es un prepago web con pagos validados, `prepago_con_comprobantes`, como en las
+reglas. Con prepago, no puede quedar ningún pago vivo
+(`prepago_con_comprobantes`) y el pedido guardado tiene que ser de verdad un
+prepago web: pagado, por el checkout y sin nada reembolsado
+(`sin_pago_completo`). En los dos caminos, cada pago que nombra la base del
+comprobante tiene que seguir validado y ser de ese pedido
+(`sin_pago_completo`): la suma podría cubrir con otro, pero el comprobante
+diría que el dinero entró a la cuenta —y al RUC— de uno que ya no cuenta. Y los
+pagos del pedido quedan bloqueados hasta que el turno termina (35.4). Van en el
+orden de la tabla, antes que el RUC, el monto y el tope: un pedido que dejó de
+estar pagado contesta `sin_pago_completo` aunque su RUC esté apagado. Son
+motivos del pedido y no del RUC: el barrido sigue con los demás pedidos de ese
+RUC, y «Emitir esta boleta» dice el motivo sin haber llamado a SimpleFact.
+
+**Falla cerrada.** Si no se pudo leer algo —pagos, cuentas, el estado de
+cuenta, los links de Flow, Shopify—, el pedido no se emite en esa pasada. Un
+comprobante armado con datos a medias puede ir al RUC equivocado.
+
+### 35.4 Topes y candados
+
+- **Uno por pedido, en la base.** Un índice único deja a cada pedido con a lo
+  más un comprobante real vivo: `emitiendo`, `emitida`, `en_duda` o `externa`.
+  Lo garantiza Postgres, no el código.
+- **El turno se reserva antes de llamar.** `invoice_claim` toma un candado por
+  RUC, revisa todo de nuevo, cuenta el tope del día y deja la fila en
+  `emitiendo`. Recién entonces se llama a SimpleFact. «Emitir esta boleta»
+  (35.7) pasa por el mismo turno, pidiendo una fila real.
+- **Los pagos, quietos mientras dura el turno** (0262). El turno bloquea los
+  pagos del pedido (`for share`) antes de revisarlos, hasta que termina. Cada
+  consulta de una función ve lo último que se guardó: sin el bloqueo, un pago
+  rechazado entre la revisión y la fila se colaba igual. Con él, quien rechaza
+  u observa un pago de ese pedido espera a que el turno termine y encuentra la
+  fila ya tomada: lo emitido no se toca, y el panel avisa «Un pago del
+  comprobante ya no está validado: revisa si corresponde una nota de
+  crédito.» (35.9).
+- **Lo que contestó SimpleFact:**
+  - `emitida`: contestó con la venta (id, serie y correlativo).
+  - `error`: contestó que no, con un 4xx que no deja duda (400, 401, 403, 404,
+    405, 409, 422 o 429) y su mensaje: no hay boleta. No se reintenta solo. Una
+    persona pulsa «Volver a intentar» y la fila queda como historia.
+  - `en_duda`: no contestó, contestó un 5xx u otro código, o algo que no se
+    entiende. La boleta puede existir, así que **nunca se reintenta sola**. El
+    barrido la concilia buscando en las ventas de hoy y de ayer de SimpleFact
+    la nota «Kapta ‹ref›» (35.5); si aparece, pasa a `emitida`. Concilia los
+    RUC en Real y en Manual: en Manual el barrido no emite, pero las boletas
+    que emitió una persona pueden quedar en duda igual. Si no aparece,
+    la ve una persona y la busca en SimpleFact por esa nota. Si la encuentra,
+    registra la serie y el número con que salió con «Sí está en SimpleFact:
+    registrar su serie», y pasa a `emitida`. Si confirma que no existe, la
+    libera con «No está en SimpleFact: volver a intentar». Liberar una que
+    existe es emitir otra.
+  - **Liberar espera 30 minutos desde que quedó en duda** (15-10-2026). Un
+    envío cortado por tiempo puede haber llegado, y SimpleFact tardar en
+    listarlo: quien no la encuentra en ese rato la libera, vuelve a pulsar
+    «Emitir esta boleta» y salen dos boletas. Mientras espera, la conciliación
+    la sigue buscando. El reloj es `updated_at`: el candado de la base lo pone
+    en cada cambio que deja pasar, y a una fila en duda solo se le escribe para
+    sacarla de la duda, así que es cuando pasó a `en_duda`; `created_at` queda
+    de piso. Antes de esa hora el servidor no la libera: «Espera hasta las
+    ‹HH:MM› (hora de Lima): SimpleFact puede tardar en mostrar una boleta que
+    sí recibió. Mientras tanto Kapta la sigue buscando.». La hora va redondeada
+    hacia arriba al minuto: a las ‹HH:MM› ya se puede. Si no se sabe desde
+    cuándo está en duda, no se libera: «No se pudo saber desde cuándo está en
+    duda: no se libera. Vuelve a abrir el pedido.». Registrar su serie no
+    espera: registrar una boleta que existe no emite otra.
+  - Un `emitiendo` sin respuesta (la función se cortó a mitad del envío, o no
+    se pudo guardar lo que contestó) se concilia igual pasados 10 minutos; si
+    no aparece, pasa a `en_duda`. Uno que ninguna conciliación va a mirar —su
+    RUC ya no está en Real ni en Manual, o no tiene token, o es de antes de
+    ayer— pasa a `en_duda` al empezar la pasada siguiente, sin llamar a
+    SimpleFact, con el aviso «Sin respuesta de SimpleFact: búscala por su nota
+    «Kapta ‹ref›» antes de liberarla», y lo ve una persona. Pasa aunque ningún
+    RUC esté encendido: a lo más 100 por pasada, del más viejo.
+- **Tope diario por RUC** (`daily_limit`): 40 por defecto, de 1 a 300, por día
+  de Lima. Cuenta lo emitido, lo que se está emitiendo y lo que está en duda;
+  en simulación, lo simulado. Cuenta solo las filas del modo que se pide
+  (0261): en Manual, las simuladas del barrido y las reales de «Emitir esta
+  boleta» tienen cada una el tope entero, y una simulación no le quita lugar a
+  una boleta real, ni al revés. Lo que excede espera al día siguiente y no se
+  pierde. El defecto cubre el pico medido (34) más los prepagos web.
+- **Por pasada,** a lo más 15 comprobantes por RUC.
+- **«Emitir desde».** Ningún RUC emite hacia atrás: solo pedidos que quedaron
+  pagados desde esa fecha, y Ajustes no la deja en el pasado. Al cambiar de
+  modo, si quedó atrás, se mueve sola al momento del cambio. Asignar un RUC a
+  una cuenta no emite nada pagado antes de esa fecha. Pasar de Manual a Real
+  también es cambiar de modo: lo que quedó pagado en Manual y nadie emitió con
+  «Emitir esta boleta» no sale en Real. Se emite antes de cambiar, o a mano en
+  SimpleFact y se registra con «Ya tiene comprobante».
+- **Emitido fuera de Kapta.** Si una persona emite la boleta a mano en
+  SimpleFact —por ejemplo, la de un pedido de más de S/ 700 con DNI—, la
+  registra en el panel con «Ya tiene comprobante», con su RUC, serie y número.
+  Queda una fila `externa` y Kapta no vuelve a emitir por ese pedido. La fila
+  no se corrige después, así que el RUC se elige a mano —viene elegido solo el
+  de la cuenta que recibió el pago, si las reglas lo saben— y antes de
+  registrar el panel dice qué queda: «Se registra como comprobante de ‹razón
+  social› (RUC ‹ruc›), serie ‹serie›. No se puede corregir después.». Si las
+  reglas saben a qué RUC entró el pago (35.2), no se registra el comprobante de
+  otro RUC. Lo saben cuando el pedido pasa la condición 5 de 35.3. Si se frenó
+  antes —pagos en revisión, un pago sin cuenta, una cuenta sin RUC, RUC
+  mezclados—, no lo saben, y vale el que eligió la persona: registrar la boleta
+  que ya está en SimpleFact es lo que impide una segunda. Pero si el pedido o
+  sus pagos no se pudieron leer, no se registra nada: «No se pudo comprobar a
+  qué RUC entró el pago; intenta de nuevo.». Que no se pudo comprobar no quiere
+  decir que no se sepa, y la fila no se corrige después.
+- **El token tiene que ser del RUC.** «Probar conexión» lee las ventas de la
+  cuenta y saca el RUC del nombre de sus archivos (`20556792829-03-B001-…`).
+  Si no es el RUC declarado, no se puede pasar a Manual ni a Real. Si se
+  vuelve a probar con el RUC en Manual o en Real y la prueba no confirma el
+  RUC, baja solo a Simulación; lo mismo al cambiar el token, el subdominio o el
+  RUC. Cada respuesta de una
+  emisión (y cada venta que encuentra la conciliación) se contrasta igual: si
+  trae otro RUC, el comprobante queda marcado (`ruc_mismatch`, 35.7) y el RUC
+  se apaga solo.
+- **Un token rechazado** (401 o 403), o una cuenta que no responde (404 o
+  405), apaga el RUC con el motivo a la vista: seguir intentando solo llenaría
+  de errores. Tras un 429 (SimpleFact pide esperar) no se emite nada más en
+  esa pasada. Tras una respuesta en duda, ese RUC tampoco emite nada más en la
+  pasada. Una boleta de «Emitir esta boleta» apaga el RUC igual, y el panel
+  lo dice.
+- **Apagado solo, se vuelve a probar.** Cuando el barrido apaga un RUC por su
+  cuenta (otro RUC en la respuesta, un token rechazado, una cuenta que no
+  responde), borra también su última prueba de conexión y deja el motivo. Para
+  volver a Real hace falta pulsar de nuevo «Probar conexión» y que confirme el
+  RUC (35.8): sin eso, el owner podría volver a Real con el mismo token
+  rechazado o de otra empresa. Lo mismo cuando lo apaga «Emitir esta boleta»,
+  y lo mismo para volver a Manual. Ajustes dice el motivo en rojo: «Apagado por
+  Kapta: ‹motivo›. Prueba la conexión antes de volver a Real o a Manual.». Si alguien lo
+  vuelve a encender sin probar, dice «Sin probar. Lo último que falló:
+  ‹motivo›. Prueba la conexión antes de pasar a Real.».
+- **Qué mira el barrido.** Cada 10 minutos, por organización y por cada modo
+  con un RUC encendido, los pedidos que le da la base (`invoice_candidates`,
+  0260): de una tienda activa; pagados según el Master (`order_master`), por
+  comprobantes o por la pasarela web; de los últimos 60 días (Shopify no deja
+  leer pedidos más viejos sin `read_all_orders`); con un pago validado
+  registrado desde el «Emitir desde» más antiguo de los RUC de ese modo o, si
+  es prepago web, creados desde entonces; sin comprobante real vivo ni, en
+  simulación, su simulación; en real, sin un `error` real que espera a que una
+  persona pida reintentar; y sin un bloqueo de Shopify en ese modo de las
+  últimas 6 horas. A lo más 500 por organización y modo, del pedido más nuevo
+  al más viejo, y primero el modo real. Lo que ya tiene su comprobante no
+  ocupa lugar: el límite es para lo pendiente. Un `error` sin reintento
+  tampoco: el turno lo rechazaría (`error_previo`), y vuelve a entrar cuando
+  una persona pulsa «Volver a intentar». En simulación sí entra, porque la
+  simulación no mira los errores reales. Un modo cuyos RUC no tienen «Emitir
+  desde» no tiene candidatos. La lista solo dice qué mirar: deciden
+  `invoiceEligibility` y, al final, `invoice_claim`.
+- **Un RUC en Manual se barre como uno en Simulación** y se concilia como uno
+  en Real: entra en la lista de simulación, el barrido arma y guarda su
+  simulada, y nunca le pide a SimpleFact una venta; sus boletas reales las
+  emite una persona (35.7). Si el RUC cambia de modo entre la lista y el turno,
+  el turno contesta `modo_distinto` y ese RUC no sigue ni concilia en esa
+  pasada. En la línea del log del cron, su `mode` es `manual`.
+- **Una lista llena se ve.** Si `invoice_candidates` devuelve los 500, la
+  línea del log del cron lo anota por modo (`"lleno":{"real":true}`): lo más
+  viejo pendiente de ese modo no se miró en esa pasada. No es un error y no
+  pone el cron en rojo, pero sin la marca una lista cortada no se distingue de
+  una que trajo todo.
+- **Shopify no se relee en cada pasada.** Un pedido bloqueado por lo que dijo
+  Shopify —incluida una tienda sin conexión con Shopify (`sin_token_shopify`)—
+  no se vuelve a leer en Shopify antes de 6 horas, bajo ninguno de los dos
+  modos. Un corte de Shopify (`lectura_fallida`) se reintenta en la pasada
+  siguiente. «Emitir esta boleta» sí relee Shopify al pulsar, aunque la última
+  lectura sea de hace menos de 6 horas: es una persona y un pedido.
+- **Presupuesto de la pasada.** No empieza un pedido nuevo pasados 20 segundos
+  de la pasada: una función cortada a la mitad de un envío deja la fila en
+  `emitiendo`, y la pasada siguiente la concilia o, si nadie la va a conciliar,
+  la pasa a `en_duda`.
+
+### 35.5 Boleta, IGV y comprador
+
+- **Boleta** (`invoice_type = '03'`) por defecto. La factura (`'01'`) necesita
+  el RUC del comprador y queda fuera de esta versión (35.9).
+- **El precio de Shopify ya incluye el IGV** (owner, 14-10-2026). Cada ítem va
+  con su precio unitario con IGV y `tax_percent` 18, y SimpleFact separa la base
+  y el impuesto. Kapta no suma IGV encima: si Shopify sumó impuesto aparte
+  (`taxesIncluded = false` con impuesto), no emite.
+- **Los ítems salen de Shopify, al céntimo.** La línea neta es precio original
+  × cantidad − descuentos asignados a la línea, que incluyen los descuentos del
+  pedido entero. Si no se divide exacto entre la cantidad, la línea se parte en
+  dos ítems cuyos precios difieren en un céntimo. El envío cobrado va como ítem
+  «Servicio de envío». La suma tiene que dar exactamente el total de Shopify y
+  el de Kapta, o no se emite.
+- **El tope de S/ 700.** Una boleta de más de S/ 700 tiene que identificar al
+  comprador con su documento. Kapta no tiene el DNI de forma confiable (en
+  Shopify llega en texto libre), así que **no emite boletas de más de S/ 700**:
+  esas se emiten a mano y se registran como externas (35.4). El owner lo planteó
+  como el máximo de ley; para SUNAT es el umbral de identificación del
+  comprador. El efecto en Kapta es el mismo.
+- **Comprador sin identificar.** Hasta S/ 700 la boleta va a «CLIENTES VARIOS»
+  con DNI `00000000`, sin correo ni celular, y SimpleFact no le escribe a nadie
+  (`email_send = false`). Kapta no le manda a SimpleFact datos de la clienta que
+  la boleta no necesita. La convención se confirma con el contador y con la
+  primera boleta real (35.8).
+- **La nota.** Cada boleta lleva «Pedido #KP… · Kapta ‹ref›», donde ‹ref› son
+  los primeros 8 caracteres del id del comprobante en Kapta. Sirve para
+  conciliar un `en_duda` y para encontrarla en SimpleFact.
+- **Una por pedido, por su total.** Un pedido acompañante (§32) lleva su propia
+  boleta por su propio total, nunca la suma de la guía.
+
+### 35.6 Lo que escribe
+
+| Dónde | Qué guarda |
+| --- | --- |
+| `invoice_issuers` | Los RUC: subdominio, token cifrado (AES-256-GCM, `lib/crypto.ts`), modo, «Emitir desde», tope y la última prueba de conexión (RUC leído, fecha y error). Sin policy de lectura: solo la lee el servidor |
+| `store_collection_accounts.invoice_issuer_id` | El RUC de cada cuenta (35.2). Un trigger exige que el RUC sea de la misma organización que la tienda |
+| `order_invoices` | Una fila por intento: pedido, RUC (copiado), modo, estado, total, cuándo quedó pagado, los pagos y cuentas en que se basó (`basis`), lo enviado (`request`), lo recibido (`response` y código HTTP), el id de SimpleFact, serie, correlativo y enlaces al PDF y al XML, quién la emitió con «Emitir esta boleta» o la registró como externa (`created_by`) y quién pidió reintentar |
+| `invoice_order_checks` | La última revisión del barrido por pedido y modo (motivo y fecha). Con ella el panel dice por qué un pedido no lleva comprobante, y el barrido no relee en Shopify cada 10 minutos un pedido bloqueado |
+
+Reglas de esa tabla:
+
+- **Un comprobante no se edita ni se borra.** Sus estados solo avanzan:
+  `emitiendo` → `emitida`, `error` o `en_duda`; y `en_duda` → `emitida` (se
+  concilió, o una persona la encontró en SimpleFact y registró su serie) o
+  `error` (una persona confirmó que no existe). Un reintento es una fila nueva
+  y la anterior se queda. La única excepción es borrar la cuenta de una
+  persona: la base deja en blanco quién la emitió o la registró, pidió el
+  reintento o la resolvió (`created_by`, `retry_requested_by`,
+  `resolved_by`) y nada más de la fila cambia; el hecho y su fecha se quedan.
+  Pasa **solo dentro de esa cascada** (la llave hacia la cuenta, `on delete
+  set null`): poner esas
+  columnas en blanco a mano, sin borrar la cuenta, el candado lo rechaza como
+  cualquier otro cambio, aunque lo intente el servidor.
+- **La simulación escribe la misma fila,** con modo `simulacion` y estado
+  `simulada`, con la boleta exacta que habría enviado, y **no llama a
+  SimpleFact**. Una simulación no impide la emisión real.
+- **Quién la pidió** (`created_by`). En una fila real, es quien pulsó «Emitir
+  esta boleta» con el RUC en Manual (35.7): el turno la escribe al reservarla,
+  con quien le pasa el servidor (0261). En una externa, quien la registró. Una
+  fila del barrido —simulada o real— va sin nadie: la pidió Kapta. El barrido
+  nunca pide una fila real para un RUC en Manual (35.4), así que las boletas
+  reales de ese tiempo llevan a quien pulsó, y la base lo exige: con el RUC en
+  Manual, el turno no da una fila real sin quién.
+- **El token nunca sale al navegador ni a un log.** Ajustes solo dice
+  «Configurado» o «Sin configurar».
+
+### 35.7 Permisos
+
+- **`invoices.manage` («Boletas y facturas»)**: dar de alta un RUC, poner su
+  token, cambiar su modo, su «Emitir desde» y su tope, asignar cuentas, emitir
+  un pedido con «Emitir esta boleta» cuando su RUC está en Manual,
+  registrar un comprobante externo, pedir un reintento y resolver un
+  `en_duda`: registrar su serie si está en SimpleFact, o liberarlo si no está.
+  Es un permiso de dinero: **solo el owner lo da** (§16, `ownerOnly`), y ningún
+  rol lo trae salvo el del owner. En Ajustes de la tienda se pide además
+  `stores.manage`. Equipo no deja sin él a la última persona que lo tiene:
+  alguien tiene que poder apagar un RUC.
+- **El panel «Comprobante» del drawer** lo ve quien ve el pedido: estado, serie
+  y número, PDF y motivo. Nunca credenciales. No aparece si la organización no
+  tiene ningún RUC y el pedido no tiene comprobantes (las tiendas cliente
+  facturan fuera de Kapta, §29.15).
+- **Lo que el panel no calla:**
+  - Una boleta que SimpleFact emitió con archivos de otro RUC
+    (`ruc_mismatch`) se ve como «Emitida con otro RUC», en rojo, con el aviso
+    de revisarla en SimpleFact: puede necesitar anularse o una nota de crédito,
+    y eso lo hace una persona (§2, principio 11). Ajustes la marca igual en
+    los últimos comprobantes.
+  - Si las reglas de Kapta se cumplen pero la última pasada lo frenó por lo
+    que dijo Shopify (35.3), el panel no dice «Lista para emitirse»: dice el
+    motivo, de qué pasada es y qué pasa ahora. Si se vuelve a intentar solo
+    (Shopify no se pudo leer, o la tienda no tiene conexión con Shopify), dice
+    «Espera a Shopify» y cuándo, como lo hace el barrido (35.4): un corte de
+    Shopify, en la próxima pasada; una tienda sin conexión, «Se vuelve a
+    revisar en unas horas, cuando la tienda tenga conexión con Shopify.»,
+    porque ese pedido no se relee antes de 6 horas. Si no —un pedido de
+    prueba, editado, con propina, con tarjeta de regalo, un prepago web que
+    Flow no cobró entero—, dice «Se emite a mano»: no se emite sola, se emite a
+    mano en SimpleFact y se registra con «Ya tiene comprobante».
+  - Con el RUC en Manual, el panel tampoco dice «Lista para emitirse», porque
+    el barrido no la emite: dice «Lista para simularse en la próxima pasada
+    (RUC ‹ruc›, modo Manual)» y «En Manual el barrido solo simula: la boleta
+    real la emite, pedido por pedido, quien tiene «Boletas y facturas».».
+- **Registrar uno externo** pide elegir el RUC y la serie y número tal como
+  salió en SimpleFact: `B…` es boleta y `F…` factura. El RUC no viene elegido
+  salvo el de la cuenta que recibió el pago, el panel dice antes qué se va a
+  registrar, y el servidor rechaza un RUC distinto del de esa cuenta cuando las
+  reglas lo saben. Si no pudo leer el pedido o sus pagos, no registra ninguno
+  (35.4).
+- **Resolver un `en_duda`** (35.4) ofrece las dos salidas, una al lado de la
+  otra: «Sí está en SimpleFact: registrar su serie» y «No está en SimpleFact:
+  volver a intentar». **Registrar su serie** pide la serie y el número con que
+  salió, con la letra de lo que se envió (`B…` si fue boleta, `F…` si fue
+  factura), y una nota de dónde se encontró. Antes de registrar, el panel dice
+  qué queda: «Queda como emitida: ‹serie› de ‹razón social› (RUC ‹ruc›). No se
+  puede corregir después.». La misma fila pasa a `emitida`: el RUC, el total y
+  lo enviado no cambian. **Liberar** pide una nota con lo que se revisó en
+  SimpleFact, y solo pasados los 30 minutos (35.4): hasta entonces «No está en
+  SimpleFact: volver a intentar» está deshabilitado y el panel dice «Podrás
+  liberarla desde las ‹HH:MM› (hora de Lima): SimpleFact puede tardar en
+  mostrar una boleta que sí recibió.»; a esa hora se habilita solo, sin
+  releer el panel. Si no se sabe desde cuándo está en duda, sigue
+  deshabilitado y lo dice, como el servidor. «Sí está en SimpleFact: registrar
+  su serie» no espera. Si la conciliación u otra persona lo resolvió mientras
+  tanto, vale lo suyo y el panel lo dice.
+- **Emitir a mano es solo de Manual (owner, 15-10-2026; 35.1).** En Real emite
+  solo el barrido y no hay botón «Emitir»; en Simulación y en Apagado no se
+  emite. Con el RUC del pedido en Manual, quien tiene `invoices.manage` emite
+  **ese** pedido con «Emitir esta boleta» en el panel, o con «Emitir» en su
+  simulada de los últimos comprobantes de Ajustes: la misma acción, con la
+  misma confirmación. El botón no fuerza nada: un pedido que no cumple las
+  reglas no se emite desde Kapta.
+  - **Solo en producción** (`invoiceEmitAllowedHere`: `VERCEL_ENV` es
+    `production`; sin él, en local, tampoco). Una vista previa de Vercel
+    comparte con producción la base y la llave de cifrado: descifra el token
+    igual, y una boleta pedida desde ella es tan real como cualquiera. El
+    barrido nunca emitió fuera de producción; ahora el botón tampoco. En una
+    vista previa el panel no ofrece «Emitir esta boleta» y, donde lo habría, a
+    quien gestiona le dice «Emitir solo funciona en producción: este
+    despliegue es una vista previa.» (`no_produccion`). Ajustes no ofrece
+    «Emitir» y, con un RUC en Manual, lo dice con la misma frase. La acción lo
+    rechaza antes de leer nada, y `emitInvoiceNow` lo vuelve a pedir, primero
+    que todo, con el entorno y no con un parámetro: ningún llamador lo puede
+    encender.
+  - **Cuándo aparece.** Solo en producción, a quien tiene el permiso, con la
+    tienda activa, sin comprobante real vivo, con las reglas de 35.3 cumplidas
+    como una emisión real (cuentan el error sin reintento y la conexión del RUC; una
+    simulación no frena) y sin que la última pasada lo haya frenado por lo que
+    dijo Shopify: ahí el panel dice ese motivo, como siempre. El badge dice
+    «Lista para emitir». Con el RUC en Manual, si algo de la emisión real lo
+    frena y el panel no lo dice de otra forma —sin la conexión probada, por
+    ejemplo—, a quien gestiona le dice por qué no hay botón. En Ajustes,
+    «Emitir» va en la simulada más nueva de un pedido solo cuando el panel de
+    ese pedido ofrecería el botón: es la misma decisión
+    (`invoiceEmitNowReadiness`), con el RUC y el total de ahora. Si no se pudo
+    leer algo, en ninguna.
+  - **Qué dice antes.** Pide confirmar: «Se emite una boleta de S/ ‹total› a
+    CLIENTES VARIOS con el RUC ‹ruc› (‹razón social›). Va a SUNAT y no se
+    puede borrar.», con «Sí, emitir» y «Cancelar». Desde el primer «Sí,
+    emitir» hasta que vuelve la respuesta, no sale un segundo envío y los
+    botones quedan deshabilitados.
+  - **Qué hace el servidor** (`emitInvoiceAction`). Primero, que es
+    producción, antes de leer nada. Después lo que es de quien pulsa: que ve
+    el pedido y tiene `invoices.manage`, antes de leer nada con el service
+    role; que trae lo que confirmó (el RUC y el total: sin eso no hay con qué
+    comparar), y que la tienda está activa. Después, `emitInvoiceNow`:
+    exactamente la emisión real del barrido, con el mismo código. Los hechos
+    del pedido y las reglas como emisión real; con ESA lectura —la misma con
+    que arma la boleta y pide el turno— y antes del token, de Shopify y del
+    turno, que el RUC sigue en Manual (en Real lo rechaza: «…a mano solo se
+    emite en «Manual»») y que el RUC y el total que se van a enviar son los
+    que confirmó. Si el pedido cambió desde que lo abrió, no emite
+    (`pedido_cambio`): «El pedido cambió desde que lo abriste (el RUC o el
+    total): vuelve a abrirlo y revisa la boleta antes de emitirla.». La acción
+    no lee el pedido por su cuenta: antes comparaba con una lectura propia,
+    `emitInvoiceNow` volvía a leer sin comparar, y entre las dos el pedido
+    podía cambiar y salir una boleta que nadie confirmó. Después, el token, la
+    relectura en Shopify (el total y, en un prepago web, lo que cobró Flow),
+    la boleta, el turno pidiendo una fila real con quien pulsó (35.3), UNA
+    llamada a SimpleFact, la lectura de la respuesta, la fila (solo si sigue
+    en `emitiendo`) y las reglas que apagan el RUC (35.4). Los mismos
+    candados: un comprobante real vivo por pedido (el índice único), el tope
+    del día de lo real y el turno que vuelve a revisar todo en la base,
+    también que la empresa recibió el pago (0262). Si algo no se pudo leer
+    antes del turno, no pide el turno ni llama a nada.
+  - **Quién pulsó** queda en la fila (`created_by`, 35.6). Sin saber quién
+    pulsa, no se pide el turno, y la base tampoco lo da: en Manual, una fila
+    real pedida sin quién (`p_created_by`) es `modo_distinto` (0261).
+  - **Qué contesta.** `emitida`, con su serie-correlativo y el PDF; `en_duda`,
+    «SimpleFact no respondió: queda En duda; búscala por su nota «Kapta
+    ‹ref›» antes de nada.», y la concilia el barrido como cualquier `en_duda`
+    (35.4); `error`, con el mensaje de SimpleFact; o, sin haber llamado a
+    SimpleFact, el motivo por el que no salió, con las frases del panel y del
+    barrido. Si el turno encuentra que el pago ya no cubre el total, o que un
+    pago de la base del comprobante dejó de estar validado (0262, 35.3),
+    contesta ese motivo (`sin_pago_completo`, `prepago_con_comprobantes`) y no
+    sale nada. Volver a pulsar después de una duda da «Ya tiene
+    comprobante.»: no hay segundo envío. Si algo falla después de reservar el
+    turno, la fila queda en `emitiendo` y contesta en duda: se concilia, nunca
+    se repite.
+  - **En Ajustes, la respuesta se queda a la vista** (15-10-2026). Después de
+    «Emitir» la página se refresca, y el pedido ya no lleva oferta: tiene una
+    real viva, o el RUC se apagó. La respuesta —con las instrucciones de un
+    «En duda», el «Ver PDF» o el motivo del error— se guarda por pedido en la
+    lista y no en el botón: queda en la fila donde se pulsó; si esa fila salió
+    de las 20, en la más nueva de su pedido; y si no queda ninguna de su
+    pedido, o la lista no se pudo leer, arriba, con el enlace al pedido. Con
+    una respuesta a la vista, ese pedido no vuelve a tener «Emitir»: para
+    intentar otra vez se abre el pedido. Mientras un «Emitir» está en vuelo,
+    no sale otro del mismo pedido, aunque el refresco vuelva a montar el
+    botón. Una respuesta que no dice nada se lee como «No se pudo completar la
+    acción. Antes de intentar de nuevo, abre el pedido: si quedó «Emitiendo» o
+    «En duda», búscala en SimpleFact.».
+  - **No es el barrido.** No escribe su revisión (`invoice_order_checks`), y
+    relee Shopify aunque la última lectura sea de hace menos de 6 horas: es
+    una persona y un pedido. Después de «Volver a intentar», o de liberar un
+    `en_duda`, en Manual la pasada no lo intenta: vuelve el botón.
+
+### 35.8 Encendido
+
+Cada RUC tiene cuatro modos: **Apagado** (no hace nada), **Simulación** (revisa
+todo, arma la boleta y la guarda sin enviarla), **Manual** (el barrido simula
+como en Simulación, y una persona emite cada boleta real con «Emitir esta
+boleta», 35.7) y **Real** (el barrido emite solo). Para pasar a Manual o a
+Real, la base exige token, «Emitir desde» y una prueba de conexión que leyó el
+mismo RUC declarado: Manual también manda boletas a SUNAT. Lo que baja un RUC
+en Real a Simulación —un token, un subdominio o un RUC nuevo, una prueba
+repetida que no confirma el RUC (35.4)— baja igual uno en Manual, y lo que lo
+apaga solo, también.
+
+Orden de encendido (15-10-2026: el paso 1 está hecho y el RUC está en
+Simulación):
+
+1. El owner regenera el token de SimpleFact de Grupo GF (el anterior quedó
+   expuesto en una captura) y lo pega directo en Ajustes → «Boletas y
+   facturas», nunca en un chat. Pulsa «Probar conexión».
+2. Pone el RUC en Simulación con «Emitir desde» de hoy, y revisa unos días las
+   simuladas: el RUC, los ítems, el total, los motivos de lo que no entró y
+   que los prepagos web por Flow salen (35.9).
+3. Confirma con el contador la convención «CLIENTES VARIOS» / `00000000` y el
+   umbral de S/ 700 (35.5).
+4. Pasa a Manual, con «Emitir desde» del momento del cambio, y con la 0262 ya
+   aplicada (abajo). El barrido sigue simulando. Emite las primeras boletas
+   reales una a una con «Emitir esta boleta» y revisa cada una en SimpleFact
+   antes de la siguiente: la serie, el total, los ítems con el IGV incluido,
+   «CLIENTES VARIOS» y la nota «Pedido #KP… · Kapta ‹ref›».
+5. Pasa a Real: desde entonces el barrido emite solo y no hay botón. «Emitir
+   desde» se mueve al momento del cambio: lo pagado en Manual que nadie emitió
+   no sale (35.4).
+
+Ajustes muestra, por RUC, lo de hoy (emitidas, simuladas, en duda y con error)
+y los últimos comprobantes. En Manual, «Emitidas» son las del botón, y la
+simulada de un pedido lleva «Emitir» cuando el panel ofrecería el botón
+(35.7).
+
+**Antes de la 0257 y la 0260.** Las migraciones se aplican a mano (DEPLOY.md),
+y el código puede llegar antes que ellas. Entonces no se emite nada y nada se
+pone rojo: el barrido responde sin error con `skipped: "sin_migracion"`. Sin la
+0257, además, el panel «Comprobante» no aparece y Ajustes dice que no pudo leer
+los RUC. Sin la 0260, el panel y Ajustes se ven, pero el barrido no tiene la
+lista de pedidos por revisar (`invoice_candidates`) y no simula ni emite nada.
+Aplicadas las dos, la pasada siguiente sigue como siempre. La 0257 es la que
+corrió en producción el 14-10-2026 y no se reescribe: lo que cambia después va
+en una migración nueva.
+
+**Antes de la 0261.** También se aplica a mano, antes del código que pide el
+turno con `p_mode` (DEPLOY.md). Si el código llega antes, la base no admite
+Manual: Ajustes no deja pasar un RUC a Manual y lo dice, «La base todavía no
+admite el modo Manual: falta aplicar la migración 0261.». Sin un RUC en Manual
+no hay botón, y el barrido de Simulación y de Real pide el turno como siempre,
+sin `p_mode`, contra el turno de la 0260: sigue simulando y emitiendo igual. Si
+aun así se pidiera el turno con `p_mode` o `p_created_by`, no se reserva ni se
+envía nada: es `sin_migracion`, y «Emitir esta boleta» dice «Falta aplicar la
+migración 0261 de comprobantes (invoice_claim con p_mode y p_created_by).». La
+0261 no crea nada con nombre nuevo —cambia la firma del turno—, así que se
+reconoce por esos dos parámetros (`INVOICE_CLAIM_MODE_MIGRATION`). Al revés,
+con la 0261 aplicada y el código anterior: ese código pide el turno con los
+nueve argumentos de siempre, por nombre, y los dos nuevos quedan en su valor
+por defecto (nulo): el turno hace lo de antes. Ese código no conoce Manual: no
+deja elegirlo en Ajustes ni barre un RUC en Manual, y si pidiera el turno de
+uno, recibiría una simulada, nunca una real.
+
+**Antes de la 0262.** También se aplica a mano, después de la 0261 y antes de
+la primera boleta real —con «Emitir esta boleta» o con un RUC en Real—
+(DEPLOY.md). El código no la nombra ni la necesita para correr: si llega
+antes, nada se pone rojo y todo sigue como con la 0261 —el barrido simula y,
+en Real, emite; el botón emite—, pero el turno no vuelve a revisar que la
+empresa recibió el pago (35.3), y un pago rechazado mientras se relee Shopify
+se colaría en una boleta real. Por eso no se emite nada real hasta aplicarla.
+No cambia la firma del turno: es la de once argumentos de la 0261, con
+`create or replace`, y el código de antes y el de ahora la llaman igual. Los
+dos mandan, en la base del comprobante, si es prepago web y el id de cada
+pago, que es lo que el turno revisa: lo bien pagado sigue dando su fila. Va
+después de la 0261: sin ella —sigue el turno de nueve argumentos, o falta el
+de once— se detiene sin cambiar nada. Si después alguien vuelve a correr la
+0261, el turno queda otra vez sin esta revisión hasta volver a correr la 0262.
+
+Para el barrido, «falta una migración de comprobantes» es solo un «no existe»
+(de tabla o de función) que nombra algo que crean la 0257 —`invoice_issuers`,
+`order_invoices`, `invoice_order_checks`, `invoice_claim` o
+`invoice_issuer_id`— o la 0260 —`invoice_candidates`—. Si lo que falta es otra
+cosa —`orders`, `order_payments`, `order_master`—, no es una migración de
+comprobantes sino una base rota, y el cron se pone rojo (502).
+
+### 35.9 Pendientes
+
+- **Confirmar en simulación los prepagos web por Flow.** Qué texto pone Shopify
+  en la pasarela de una transacción de Flow no se ha visto en producción: los
+  pedidos guardados solo traen los nombres de sus pasarelas, y la regla de
+  35.3 acepta el nombre del checkout o la palabra «flow». Antes de pasar a
+  Manual hay que ver en las simuladas que los prepagos web por Flow salen. Si
+  todos salen con `pago_web_no_confirmado`, el texto es otro y se ajusta la
+  regla (`lib/invoicing/shopify-order.ts`) antes de encender.
+- **Cobros en la puerta (fase 2).** El efectivo, el Yape y el POS que cobra el
+  motorizado (`delivery_stops.payment_method`) no son pagos validados ni dicen
+  a qué cuenta llegaron: «el monto reportado no equivale a ingreso bancario
+  validado» (§29.10). Entran cuando la liquidación aprobada diga a qué cuenta se
+  depositó.
+- **Couriers que liquidan** (Aliclik, Swayp, Axel, Urpi, §14). Depositan neto y
+  el MOM no dice a qué cuenta. La boleta iría por el total del pedido, no por el
+  neto. Falta decidir la señal (`liquidation_closed`) y la cuenta.
+- **Cobro del courier Tanders sin estado de cuenta.** Su lectura tiene otra
+  forma (`vision.method`, `to_yape`) y otra regla de receptor; hoy solo entra si
+  lo validó el estado de cuenta Yape (35.2, fila 2).
+- **«Te yapearon» con Yape Empresa.** La captura no dice cuál de nuestras
+  cuentas recibió: 2 pagos en 30 días. Hace falta marcar qué cuenta es la de
+  Yape Empresa.
+- **Separar el BCP del Yape del mismo titular:** guardar la máscara de la
+  constancia (35.2).
+- **Facturas** con el RUC del comprador, y **boletas de más de S/ 700** con su
+  DNI desde Kapta.
+- **Notas de crédito.** Si después de emitida un pago deja de estar validado, o
+  el pedido se anula o se reembolsa, el panel avisa «Revisa si corresponde una
+  nota de crédito». La nota la emite una persona en SimpleFact (§2, principio
+  11).
+- **Adelanto retenido** cuando la clienta rechaza el saldo (§12 Pagos): es
+  ingreso sin pago completo. **Decisión pendiente del owner.**
+- **Los otros tres RUC.** El owner los da de alta con su subdominio y su token,
+  y les asigna cuentas.
+
+Implementación:
+
+- `db/migrations/0257_invoices.sql`: `invoice_issuers`,
+  `store_collection_accounts.invoice_issuer_id` con su trigger,
+  `order_invoices`, `invoice_order_checks`, la función `invoice_claim` (el
+  turno) y la semilla de GRUPO GF S.A.C. Es la que corrió en producción el
+  14-10-2026, y no se reescribe: lo que cambió después va en la 0260, la 0261
+  y la 0262.
+- `db/migrations/0260_invoices_hardening.sql`: los arreglos de la revisión
+  adversaria, sobre la 0257: las funciones `invoice_claim` (el turno) e
+  `invoice_candidates` (qué pedidos mira el barrido), y las de los triggers
+  `invoice_issuers_touch` (un token nuevo borra también el motivo de la prueba
+  anterior) y `order_invoices_guard` (la excepción de borrar la cuenta de una
+  persona, 35.6). Solo funciones: no toca datos ni recrea triggers.
+- `db/migrations/0261_invoices_manual.sql`: el modo «Manual», sobre la 0260:
+  el CHECK del modo (`invoice_issuers_mode_check`, ahora con nombre) y el de
+  Real (`invoice_issuers_real_ready`), que pide lo mismo a Manual; la función
+  del trigger `invoice_issuers_touch` (lo que baja Real a Simulación baja
+  también Manual) y `invoice_claim` (el turno) con `p_mode` y `p_created_by`,
+  que reemplaza la firma de nueve argumentos. No toca filas.
+- `db/migrations/0262_invoices_claim_coverage.sql`: el turno que vuelve a
+  revisar que la empresa recibió el pago, sobre la 0261: solo `invoice_claim`,
+  con `create or replace` y la misma firma de once argumentos, que revisa la
+  condición 3 de 35.3 con los pagos y el pedido guardados (`sin_pago_completo`,
+  `prepago_con_comprobantes`), que cada pago de la base del comprobante siga
+  validado, y bloquea los pagos del pedido mientras dura. Se detiene sin la
+  0261 delante. No toca filas.
+- `lib/invoicing/rules.ts`: reglas puras (cuenta y RUC de cada pago,
+  elegibilidad, la boleta, la lectura de la respuesta) y cuándo se puede
+  liberar un `en_duda` (`invoiceReleaseAvailableAt` e `invoiceReleaseBlock`,
+  con `INVOICE_RELEASE_MIN_AGE_MS`).
+- `lib/invoicing/shopify-order.ts`: la lectura del pedido en Shopify y su
+  mapeo al céntimo.
+- `lib/invoicing/simplefact.ts`: el cliente de SimpleFact.
+- `lib/invoicing/server.ts`: lo que el barrido y el panel leen de la base, el
+  barrido, la conciliación, `emitInvoiceNow` («Emitir esta boleta»: la misma
+  emisión real del barrido, para un pedido, que compara lo que la persona
+  confirmó) e `invoiceEmitNowReadiness` / `loadInvoiceEmitNowOffers` (cuándo
+  se ofrece el botón, en el panel y en Ajustes), y `invoiceEmitAllowedHere`
+  (solo producción emite).
+- `app/api/cron/invoices/route.ts`: el barrido, cada 10 minutos.
+- Ajustes, en `app/dashboard/[storeId]/settings/invoice-actions.ts` y
+  `components/invoice-settings-section.tsx`; el panel, en
+  `app/dashboard/pedidos/invoice-actions.ts` (con `emitInvoiceAction`, lo que
+  corre al pulsar «Emitir esta boleta») y `components/order-invoice-panel.tsx`;
+  el permiso, en `lib/permissions.ts`.
+- Pruebas: `test/invoicing-*.test.ts` y `scripts/sql/invoices_smoke.sql`.

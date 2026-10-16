@@ -201,9 +201,10 @@ describe("el servidor no se fía del modal", () => {
   const src = readFileSync(resolve(process.cwd(), "app/dashboard/envios/actions.ts"), "utf8");
 
   it("la creación rechaza antes de llamar a Swayp", () => {
-    // Acotado a `createDirectFenixGuide`: el archivo llama a la API de Swayp
-    // desde varios sitios, y el primero es el de la reprogramación.
-    const inicio = src.indexOf("export async function createDirectFenixGuide");
+    // Desde el 13-10-2026 la guía directa se emite en lib/swayp-directa.ts (el
+    // botón y el automático); se acota a su función.
+    const src = readFileSync(resolve(process.cwd(), "lib/swayp-directa.ts"), "utf8");
+    const inicio = src.indexOf("export async function emitirGuiaSwaypDirecta");
     expect(inicio).toBeGreaterThan(-1);
     const cuerpo = src.slice(inicio);
     const gate = cuerpo.indexOf("const sinVinculo = productosSinVinculo(");

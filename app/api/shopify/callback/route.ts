@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
+import { hasOrgPermission } from "@/lib/permissions-access";
 import { encrypt } from "@/lib/crypto";
 import { env } from "@/lib/env";
 import {
@@ -63,13 +64,8 @@ export async function GET(req: NextRequest) {
   if (String(store.shopify_domain).toLowerCase() !== shop) {
     return back(req, storeId, { shopify_error: "shop-no-coincide" });
   }
-  const { data: m } = await sb
-    .from("memberships")
-    .select("role")
-    .eq("org_id", store.org_id)
-    .eq("user_id", user.id)
-    .maybeSingle();
-  if (!m || (m.role !== "owner" && m.role !== "admin")) {
+  // «Administrar tiendas» (MOM §16): owner/admin, o el rol Administración.
+  if (!(await hasOrgPermission(store.org_id, "stores.manage"))) {
     return back(req, storeId, { shopify_error: "sin-permiso" });
   }
 

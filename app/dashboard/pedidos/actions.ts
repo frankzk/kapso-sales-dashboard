@@ -15,9 +15,10 @@ import { loadAliclikDuplicateHold } from "@/lib/aliclik-duplicate-access";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
-import { getMasterPermissions } from "@/lib/permissions-access";
+import { getMasterPermissions, hasOrgPermission } from "@/lib/permissions-access";
 import { getCurrentUser } from "@/lib/access";
 import { applyConfirmationCycleToStore, recomputeOrderMasterSafe } from "@/lib/order-master";
+import { coverageLabel, recordCoverageChanges } from "@/lib/coverage-change";
 import {
   VOICE_STORE_COLUMNS,
   loadVoiceQueue,
@@ -46,6 +47,7 @@ import {
   type OrderMasterDetail,
 } from "@/lib/orders-master-access";
 import {
+  closedStatusChangeError,
   defaultOperationalFor,
   isGeneralStatus,
   isOperationalStatus,
@@ -54,6 +56,7 @@ import {
 } from "@/lib/order-status";
 import { etiquetaDiceTerminoSinEntregar } from "@/lib/aliclik-status";
 import { limaTodayKey, normalizeDistrict } from "@/lib/shipments";
+import { DISPATCH_DATE_CLEARED, DISPATCH_DATE_SET, dispatchDateError, dispatchDateLabel } from "@/lib/dispatch-date";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
 import { agencyPaymentReady, classifyOperation, type OperationKind } from "@/lib/order-macro-stage";
 import {
@@ -84,7 +87,9 @@ import { cancelGuides, swaypOptsFromEnv } from "@/lib/swayp";
 import { env } from "@/lib/env";
 import {
   decideLabelAction,
+  labelCreatesOutput,
   listNames,
+  nonLimaLabelMessage,
   type OutputForDecision,
 } from "@/lib/labels/resolve-output";
 import {
@@ -283,15 +288,9 @@ export async function setStoreConfirmationCycle(
     .maybeSingle();
   if (!store) return { error: "Sin acceso a esta tienda." };
 
-  const { data: membership } = await sb
-    .from("memberships")
-    .select("role")
-    .eq("org_id", (store as { org_id: string }).org_id)
-    .eq("user_id", user.id)
-    .maybeSingle();
-  const role = (membership as { role?: string } | null)?.role;
-  if (role !== "owner" && role !== "admin") {
-    return { error: "Solo un owner o admin de la tienda puede cambiar el ciclo." };
+  // «Administrar tiendas» (MOM §16): owner/admin, o el rol Administración.
+  if (!(await hasOrgPermission((store as { org_id: string }).org_id, "stores.manage"))) {
+    return { error: "Tu rol no permite cambiar el ciclo de la tienda." };
   }
 
   const admin = createAdminSupabase();
@@ -1073,7 +1072,7 @@ export async function resolveLabelsForOrders(orderIds: string[]): Promise<Resolv
   // si la salida que no entregó su courier libera el rótulo: solo en Lima (§28).
   const [{ data: shipmentRows, error: shipmentError }, { data: masterRows, error: masterError }] = await Promise.all([
     admin.from("shipments").select(labelColumns).in("order_id", unique),
-    admin.from("order_master").select("order_id,macro_operation").in("order_id", unique),
+    admin.from("order_master").select("order_id,order_name,macro_operation").in("order_id", unique),
   ]);
   if (shipmentError || masterError) {
     return {
@@ -1081,10 +1080,11 @@ export async function resolveLabelsForOrders(orderIds: string[]): Promise<Resolv
       shipmentIds: [], created: 0, reused: 0, reusedOrders: [], reprogrammedOrders: [], blocked: [],
     };
   }
+  const master = (masterRows ?? []) as { order_id: string; order_name: string | null; macro_operation: string | null }[];
+  const operationByOrder = new Map(master.map((row) => [row.order_id, row.macro_operation]));
+  const masterNameByOrder = new Map(master.map((row) => [row.order_id, row.order_name]));
   const limaOrders = new Set(
-    ((masterRows ?? []) as { order_id: string; macro_operation: string | null }[])
-      .filter((row) => row.macro_operation === "lima")
-      .map((row) => row.order_id),
+    master.filter((row) => labelCreatesOutput(row.macro_operation)).map((row) => row.order_id),
   );
 
   type LabelOutputRow = OutputForDecision & {
@@ -1138,6 +1138,15 @@ export async function resolveLabelsForOrders(orderIds: string[]): Promise<Resolv
       // El nombre sale de la salida que se reusa, que por definición existe.
       const name = nameByOrder.get(orderId);
       if (name) reusedOrders.push(name);
+      continue;
+    }
+    // Fuera de Lima no se CREA la salida interna: la caja viaja con el rótulo
+    // del courier (13-10-2026). Reusar y reimprimir siguen igual, arriba.
+    if (decision.kind === "create" && !limaOrders.has(orderId)) {
+      blocked.push({
+        orderId,
+        error: nonLimaLabelMessage(masterNameByOrder.get(orderId) ?? nameByOrder.get(orderId) ?? null, operationByOrder.get(orderId)),
+      });
       continue;
     }
     if (decision.kind === "needs_justification") {
@@ -1430,19 +1439,10 @@ export async function setOrderStatus(
   if (!ctx) return { error: "Sin acceso a este pedido." };
 
   const target: GeneralStatus = input.general;
-  const wasClosed = isTerminalGeneral(ctx.row.general_status);
   const reason = input.reason?.trim() ?? "";
 
-  if (wasClosed && target !== ctx.row.general_status) {
-    if (!perms.can("master.override_status")) {
-      return {
-        error: `Este pedido ya está ${ctx.row.general_status.replace("_", " ")}; solo un administrador puede cambiarlo.`,
-      };
-    }
-    if (!reason) {
-      return { error: "Describe el motivo del cambio: quedará en el historial." };
-    }
-  }
+  const closedError = closedStatusChangeError(ctx.row.general_status, target, perms.can("master.override_status"), reason);
+  if (closedError) return { error: closedError };
 
   const operational =
     input.operational && isOperationalStatus(input.operational)
@@ -1740,6 +1740,64 @@ export async function registerConfirmationAttempt(
   };
 }
 
+/**
+ * «Programar envío» (MOM §6.2, 15-10-2026): la fecha acordada para despachar
+ * un pedido confirmado que todavía no tiene guía. Queda en el historial con
+ * quien lo programó y la nota; programar otra vez cambia la fecha.
+ */
+export async function scheduleOrderDispatch(
+  orderId: string,
+  input: { date: string; note?: string | null },
+): Promise<MasterActionState> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite programar envíos." };
+  const date = input.date.trim();
+  const dateError = dispatchDateError(date, limaTodayKey());
+  if (dateError) return { error: dateError };
+  const note = input.note?.trim() || null;
+  if (note && note.length > 500) return { error: "La nota es demasiado larga (máx. 500)." };
+
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  if (ctx.row.macro_stage !== "preparacion" || ctx.row.macro_substage !== "por_generar_rotulo") {
+    return { error: "Solo se programa un envío que todavía no tiene guía (Preparación · Por generar rótulo)." };
+  }
+
+  const admin = createAdminSupabase();
+  const eventError = await recordEvent(admin, ctx, {
+    kind: DISPATCH_DATE_SET,
+    reason: note ?? `Envío programado para el ${dispatchDateLabel(date)}.`,
+    payload: { date, ...(note ? { note } : {}) },
+  });
+  if (eventError) return { error: eventError };
+  await recomputeOrderMasterSafe(admin, [orderId]);
+  revalidatePath(MASTER_PATH);
+  return { notice: `Envío programado para el ${dispatchDateLabel(date)}.` };
+}
+
+/** Quita la fecha programada, con motivo: el historial dice por qué ya no vale. */
+export async function clearOrderDispatchDate(orderId: string, reason: string): Promise<MasterActionState> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite cambiar la programación." };
+  const why = reason.trim();
+  if (why.length < 3) return { error: "Escribe por qué se quita la fecha." };
+  if (why.length > 500) return { error: "El motivo es demasiado largo (máx. 500)." };
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  if (!ctx.row.dispatch_scheduled_on) return { error: "Este pedido no tiene un envío programado." };
+
+  const admin = createAdminSupabase();
+  const eventError = await recordEvent(admin, ctx, {
+    kind: DISPATCH_DATE_CLEARED,
+    reason: why,
+    payload: { from: ctx.row.dispatch_scheduled_on },
+  });
+  if (eventError) return { error: eventError };
+  await recomputeOrderMasterSafe(admin, [orderId]);
+  revalidatePath(MASTER_PATH);
+  return { notice: "Se quitó la fecha programada." };
+}
+
 /** Comentario interno del equipo (§12). Complementa al estado, no lo sustituye. */
 export async function addOrderComment(
   orderId: string,
@@ -1808,6 +1866,12 @@ export async function registerReturn(
         "Retorno registrado. El pedido no se marca como devuelto todavía: falta el despacho o la guía que lo respalde.",
     };
   }
+
+  // Devolver un pedido que ya se cerró —entregado o anulado— es corregir el
+  // cierre: la misma regla que «Cambiar estado» (MOM §16). Sin ella, esta
+  // puerta pasaba un entregado a devuelto con solo `master.edit`.
+  const closedError = closedStatusChangeError(ctx.row.general_status, "devuelto", perms.can("master.override_status"), reason);
+  if (closedError) return { error: closedError };
 
   const admin = createAdminSupabase();
   const occurredAt = input.occurredAt || new Date().toISOString();
@@ -2008,6 +2072,25 @@ export async function registerClosureAction(
     (selectedShipment?.custody_state === "devuelto" || Boolean(selectedShipment?.returned_at))
   ) {
     return { error: "Esta salida ya fue recibida físicamente en almacén." };
+  }
+  // Una caja de Grupo GF que sigue en la caja de un motorizado se recibe por
+  // «Recibir en oficina» (Despacho del día, «Devoluciones» o su QR): eso la
+  // saca de la caja. Registrarla aquí la dejaba devuelta pero dentro de la caja,
+  // y al recibirla después volvía a «por asignar» (0248, MOM §29.13).
+  if (action === "return_receive" && selectedShipment && (selectedShipment.courier ?? "").toLowerCase() === "propio") {
+    const { data: boxItem } = await admin
+      .from("dispatch_manifest_items")
+      .select("id,dispatch_manifests!inner(courier,driver_name)")
+      .eq("shipment_id", selectedShipment.id)
+      .is("removed_at", null)
+      .eq("dispatch_manifests.courier", "propio")
+      .limit(1)
+      .maybeSingle();
+    if (boxItem) {
+      const manifest = (boxItem as { dispatch_manifests: { driver_name: string | null } | { driver_name: string | null }[] }).dispatch_manifests;
+      const rider = (Array.isArray(manifest) ? manifest[0]?.driver_name : manifest?.driver_name) ?? "un motorizado";
+      return { error: `Esta salida sigue en la caja de ${rider}: recíbela en Despacho del día («En devolución» o «Devoluciones», o escaneando su QR). Eso la saca de la caja.` };
+    }
   }
   const selectedReturnReceived =
     selectedShipment?.custody_state === "devuelto" || Boolean(selectedShipment?.returned_at);
@@ -2315,11 +2398,25 @@ export async function updateOrderGeo(
   if (eventError) return { error: eventError };
 
   await recomputeOrderMasterSafe(admin, [orderId]);
+  // Si la corrección movió la cobertura —p. ej. un pedido de «Provincia COD»
+  // que era de Lima—, queda escrito con el antes y el después (MOM §19.0.1).
+  const coverage = await recordCoverageChanges(
+    admin,
+    [{ order_id: orderId, store_id: ctx.storeId, coverage: ctx.row.coverage ?? null }],
+    { cause: "ubicacion_corregida", actor: ctx.userId, reason: patch.note },
+  );
   revalidatePath(MASTER_PATH);
+  const moved = coverage.changed[0];
   return {
-    notice: learned
-      ? "Ubicación corregida. La provincia queda recordada para los próximos pedidos de ese distrito."
-      : "Ubicación corregida.",
+    notice: [
+      learned
+        ? "Ubicación corregida. La provincia queda recordada para los próximos pedidos de ese distrito."
+        : "Ubicación corregida.",
+      moved ? `Cobertura: ${coverageLabel(moved.from)} → ${coverageLabel(moved.to)}.` : null,
+      coverage.error,
+    ]
+      .filter(Boolean)
+      .join(" "),
   };
 }
 
@@ -2357,8 +2454,22 @@ export async function clearOrderGeo(orderId: string): Promise<MasterActionState>
     note: "Corrección manual de ubicación retirada: vuelve a la dirección de origen.",
   });
   await recomputeOrderMasterSafe(admin, [orderId]);
+  const coverage = await recordCoverageChanges(
+    admin,
+    [{ order_id: orderId, store_id: ctx.storeId, coverage: ctx.row.coverage ?? null }],
+    { cause: "ubicacion_restaurada", actor: ctx.userId },
+  );
   revalidatePath(MASTER_PATH);
-  return { notice: "Corrección retirada." };
+  const moved = coverage.changed[0];
+  return {
+    notice: [
+      "Corrección retirada.",
+      moved ? `Cobertura: ${coverageLabel(moved.from)} → ${coverageLabel(moved.to)}.` : null,
+      coverage.error,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  };
 }
 
 /**
@@ -2450,7 +2561,9 @@ export async function llamarConAgente(orderId: string): Promise<MasterActionStat
     };
   }
   const admin = createAdminSupabase();
-  if ((await realCallsToday(admin, store.id, now)) >= store.voice_recovery_daily_cap) {
+  const used = await realCallsToday(admin, store.id, now);
+  if (used === null) return { error: "No se pudo leer el tope de llamadas de hoy. Intenta de nuevo." };
+  if (used >= store.voice_recovery_daily_cap) {
     return { error: "La tienda ya llegó al tope de llamadas del agente de hoy." };
   }
   const queue = await loadVoiceQueue(admin, store, now, orderId);

@@ -18,6 +18,7 @@ import { chunk, defaultRange, parseRange, previousRange, type DateRange } from "
 import { onlineVendedoraIds } from "@/lib/presence";
 import { leadSegment, type LeadSegment } from "@/lib/leads";
 import type { DayTotals } from "@/lib/productivity-month";
+import { activeHoursFromTimes, computeWeekActivity, daysBetween, type DayActivity, type WeekDay } from "@/lib/productivity-week";
 
 const DB_READ_CONCURRENCY = 4;
 
@@ -129,8 +130,11 @@ export function storeInitials(name: string | null | undefined): string {
 }
 
 /** `kind`s de `lead_calls` que NO son trabajo de venta: anotaciones de máquina.
- *  Agregar acá cualquier `kind` nuevo que escriba el sistema y no una persona. */
-const NON_SALES_KINDS = new Set(["system"]);
+ *  Agregar acá cualquier `kind` nuevo que escriba el sistema y no una persona.
+ *  `voice_agent` (= LEAD_VOICE_KIND, MOM §33) lo escribe el agente de voz de
+ *  leads sin vendedora, así que hoy ya no entra al tablero; va aquí por si un
+ *  día una fila suya llegara firmada: una llamada del robot no es de nadie. */
+const NON_SALES_KINDS = new Set(["system", "voice_agent"]);
 
 /**
  * ¿Este toque es TRABAJO sobre el lead?
@@ -177,6 +181,9 @@ export interface AdvisorCall {
   lead_id: string;
   kind: string;
   occurred_at: string;
+  /** La tienda de la gestión: el tablero de Leads lee las horas de todas y el
+   *  trabajo solo de las que se miran, con una sola lectura. */
+  store_id?: string | null;
 }
 
 /** Advisor lead_calls in [startIso..endIso], PAGED past PostgREST's silent
@@ -206,7 +213,7 @@ async function fetchAdvisorLeadCallsPaged(
       offsets.map((offset) => {
         const base = sb
           .from("lead_calls")
-          .select("vendedora, lead_id, kind, occurred_at")
+          .select("vendedora, lead_id, kind, occurred_at, store_id")
           .in("store_id", storeIds)
           .gte("occurred_at", startIso)
           .lte("occurred_at", endIso);
@@ -510,26 +517,8 @@ export interface ProductivityInput {
   emailById: Map<string, string>;
 }
 
-const ACTIVE_GAP_MS = 45 * 60 * 1000; // a gap >45 min splits work blocks (lunch/break)
-
-/** Active hours from sorted action timestamps (ms), summing blocks split on idle
- *  gaps. A lone action contributes ~0 (can't infer a span from one point). */
-function activeHoursFromTimes(sorted: number[]): number {
-  if (sorted.length < 2) return 0;
-  let total = 0;
-  let blockStart = sorted[0]!;
-  let prev = sorted[0]!;
-  for (let i = 1; i < sorted.length; i++) {
-    const t = sorted[i]!;
-    if (t - prev > ACTIVE_GAP_MS) {
-      total += prev - blockStart;
-      blockStart = t;
-    }
-    prev = t;
-  }
-  total += prev - blockStart;
-  return total / 3_600_000;
-}
+// Las horas activas (bloques cortados en pausas de más de 45 min) se calculan
+// en lib/productivity-week.ts: la semana contra la meta usa la misma cuenta.
 
 /**
  * Actividad por asesora + sus ventas REGISTRADAS + horas activas inferidas del
@@ -975,6 +964,157 @@ export interface ProductivityBoardData {
    *  del mes. `dailyByAgent` es lo mismo por asesora, para «Mi productividad». */
   daily: DayTotals[];
   dailyByAgent: Record<string, DayTotals[]>;
+  /** Con más de un día: los días del rango y, por persona, sus horas activas,
+   *  primera y última actividad de cada uno — la franja día por día. Todo el
+   *  trabajo registrado (leads y envíos), sin la lente de fuente, como la
+   *  franja por hora: mide si estuvo trabajando, no qué vendió. */
+  periodDays: WeekDay[];
+  activityByDay: Record<string, DayActivity[]>;
+}
+
+/**
+ * La semana de trabajo de cada persona: horas activas, primera y última
+ * actividad por día, de lunes a domingo. Cuenta TODO lo registrado —gestiones
+ * de leads y de envíos—, sin la lente de fuente ni de tienda: las horas son de
+ * la persona, no de lo que vende. Best-effort: una página que falla aporta lo
+ * que alcanzó a leer.
+ */
+export async function getWeekActivity(
+  storeIds: string[],
+  tz: string,
+  days: WeekDay[],
+): Promise<Record<string, DayActivity[]>> {
+  if (!storeIds.length || !days.length) return {};
+  const sb = await createServerSupabase();
+  const { startIso, endIso } = localRangeBoundsIso(days[0]!.date, days[days.length - 1]!.date, tz);
+  const [calls, shipEvents] = await Promise.all([
+    fetchAdvisorLeadCallsPaged(sb, storeIds, startIso, endIso),
+    fetchShipmentEventsPaged(sb, storeIds, startIso, endIso),
+  ]);
+  return computeWeekActivity(
+    [...calls.map((c) => ({ agent: c.vendedora, occurred_at: c.occurred_at })), ...shipEvents],
+    tz,
+    days,
+  );
+}
+
+/** Una venta registrada, lo justo para contarla por hora y por persona. */
+export interface SaleTick {
+  vendedora: string;
+  occurredAt: string;
+}
+
+/** Ventas registradas del rango, solo quién y cuándo (sin el pedido ni la
+ *  fuente): para la carrera del día y el «vs. ayer» basta con contarlas. */
+async function fetchSaleTicksPaged(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  storeIds: string[],
+  startIso: string,
+  endIso: string,
+): Promise<SaleTick[]> {
+  const PAGE = 1000;
+  const CAP = 20000;
+  const out: SaleTick[] = [];
+  for (let from = 0; from < CAP; from += PAGE) {
+    const { data, error } = await sb
+      .from("order_sales")
+      .select("vendedora, occurred_at")
+      .in("store_id", storeIds)
+      .gte("occurred_at", startIso)
+      .lte("occurred_at", endIso)
+      .order("occurred_at", { ascending: true })
+      .order("order_id", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) break;
+    const batch = (data as { vendedora: string | null; occurred_at: string | null }[]) ?? [];
+    for (const r of batch) {
+      if (r.vendedora && r.occurred_at) out.push({ vendedora: r.vendedora, occurredAt: r.occurred_at });
+    }
+    if (batch.length < PAGE) break;
+  }
+  return out;
+}
+
+/** Lo que el «Tablero de hoy» de Leads lee de la base, antes de armarlo. */
+export interface TeamTodayRaw {
+  /** Hoy, en las tiendas que se miran: llamadas, leads trabajados y pedidos. */
+  stats: AdvisorStat[];
+  /** Hoy, en TODAS las tiendas de quien mira (leads y envíos): horas activas,
+   *  primera y última actividad. Las horas son de la persona, como en la
+   *  semana de Productividad, no de la tienda que se mira. */
+  activity: Record<string, DayActivity>;
+  /** Ventas registradas de hoy, de ayer y del mismo día de la semana pasada
+   *  (días locales enteros), en las tiendas que se miran. */
+  sales: { hoy: SaleTick[]; ayer: SaleTick[]; semana: SaleTick[] };
+  /** Las tres fechas locales y el día ISO de hoy (1 = lunes … 7 = domingo). */
+  days: { hoy: string; ayer: string; semana: string; isoDow: number };
+}
+
+/**
+ * El equipo de hoy para el tablero de Leads, en una sola lectura de las
+ * gestiones del día: el trabajo y los pedidos de las tiendas que se miran
+ * (`scopeIds`) y las horas de todas (`hoursStoreIds`). RLS como el resto.
+ * Best-effort como los demás fetchers: una página que falla aporta lo leído.
+ */
+export async function getTeamToday(
+  scopeIds: string[],
+  hoursStoreIds: string[],
+  tz: string,
+  nowIso = new Date().toISOString(),
+): Promise<TeamTodayRaw> {
+  const nowMs = Date.parse(nowIso);
+  const local = tzParts(nowIso, tz);
+  const hoy = local.date;
+  const ayer = tzParts(new Date(nowMs - 86_400_000).toISOString(), tz).date;
+  const semana = tzParts(new Date(nowMs - 7 * 86_400_000).toISOString(), tz).date;
+  const isoDow = local.weekday === 0 ? 7 : local.weekday;
+  const empty: TeamTodayRaw = { stats: [], activity: {}, sales: { hoy: [], ayer: [], semana: [] }, days: { hoy, ayer, semana, isoDow } };
+  if (!scopeIds.length) return empty;
+
+  const sb = await createServerSupabase();
+  const today = localRangeBoundsIso(hoy, hoy, tz);
+  const yesterday = localRangeBoundsIso(ayer, ayer, tz);
+  const lastWeek = localRangeBoundsIso(semana, semana, tz);
+  const hoursIds = [...new Set([...scopeIds, ...hoursStoreIds])];
+  const [callsAll, shipEvents, sales, ticksAyer, ticksSemana] = await Promise.all([
+    fetchAdvisorLeadCallsPaged(sb, hoursIds, today.startIso, today.endIso),
+    fetchShipmentEventsPaged(sb, hoursIds, today.startIso, today.endIso),
+    fetchAdvisorSalesPaged(sb, scopeIds, today.startIso, today.endIso),
+    fetchSaleTicksPaged(sb, scopeIds, yesterday.startIso, yesterday.endIso),
+    fetchSaleTicksPaged(sb, scopeIds, lastWeek.startIso, lastWeek.endIso),
+  ]);
+
+  const inScope = new Set(scopeIds);
+  const calls = callsAll.filter((c) => inScope.has(c.store_id ?? ""));
+  let stats: AdvisorStat[] = [];
+  if (calls.length || sales.length) {
+    const { scopedCalls, leadStore, scopedSales } = await buildAdvisorInputs(sb, calls, null, sales);
+    const emailById = await resolveEmails([
+      ...new Set([...scopedCalls.map((c) => c.vendedora), ...scopedSales.map((s) => s.vendedora)]),
+    ]);
+    stats = computeAdvisorStats({ calls: scopedCalls, sales: scopedSales, leadStore, emailById }, tz);
+  }
+
+  const byAgent = computeWeekActivity(
+    [...callsAll.map((c) => ({ agent: c.vendedora, occurred_at: c.occurred_at })), ...shipEvents],
+    tz,
+    [{ date: hoy, isoDow }],
+  );
+  const activity: Record<string, DayActivity> = {};
+  for (const [agent, days] of Object.entries(byAgent)) {
+    if (days[0]) activity[agent] = days[0];
+  }
+
+  return {
+    stats,
+    activity,
+    sales: {
+      hoy: sales.map((s) => ({ vendedora: s.vendedora, occurredAt: s.occurredAt })),
+      ayer: ticksAyer,
+      semana: ticksSemana,
+    },
+    days: { hoy, ayer, semana, isoDow },
+  };
 }
 
 /** Paged shipment_calls events (agent + occurred_at + shipment ref) for the
@@ -1115,6 +1255,8 @@ export async function getProductivityBoard(
     firstTouch: emptyFirstTouchStats(),
     daily: [],
     dailyByAgent: {},
+    periodDays: [],
+    activityByDay: {},
   };
   if (!storeIds.length) return empty;
   const sb = await createServerSupabase();
@@ -1180,14 +1322,14 @@ export async function getProductivityBoard(
 
   // Heatmap: ALL human events in range (no source lens) + Envíos gestiones,
   // counted as DISTINCT leads/shipments per hour.
-  const heat = computeHourlyActivity({
-    events: [
-      ...calls.map((c) => ({ agent: c.vendedora, occurred_at: c.occurred_at, ref: c.lead_id })),
-      ...shipEvents,
-    ],
-    tz,
-    rangeDays,
-  });
+  const workEvents = [
+    ...calls.map((c) => ({ agent: c.vendedora, occurred_at: c.occurred_at, ref: c.lead_id })),
+    ...shipEvents,
+  ];
+  const heat = computeHourlyActivity({ events: workEvents, tz, rangeDays });
+  // Más de un día: las horas de cada día, con los mismos eventos.
+  const periodDays = rangeDays > 1 ? daysBetween(range.from, range.to) : [];
+  const activityByDay = periodDays.length ? computeWeekActivity(workEvents, tz, periodDays) : {};
 
   // Velocidad de 1ª gestión: leads creados en el rango × primer toque humano
   // (calls SIN lente de fuente, igual que el heatmap — mide disciplina).
@@ -1223,6 +1365,8 @@ export async function getProductivityBoard(
     firstTouch,
     daily: daily.team,
     dailyByAgent: daily.byAgent,
+    periodDays,
+    activityByDay,
   };
 }
 

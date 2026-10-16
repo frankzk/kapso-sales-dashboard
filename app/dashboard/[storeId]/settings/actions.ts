@@ -1,6 +1,7 @@
 "use server";
 
 import { randomBytes } from "node:crypto";
+import { hasOrgPermission } from "@/lib/permissions-access";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -26,6 +27,7 @@ import { REPLY_TOKENS } from "@/lib/wa-reply-templates";
 import { PAYMENT_METHOD_KINDS } from "@/lib/payment-methods";
 import { normalizeDistrictKey, type DistrictCoverageValue } from "@/lib/district-coverage";
 import { saveDistrictCoverageRow } from "@/lib/district-coverage-access";
+import { recordCoverageChanges, type CoverageSnapshot } from "@/lib/coverage-change";
 import { applyConfirmationCycleToStore, recomputeOrderMasterSafe } from "@/lib/order-master";
 import { describeShalomError, describeShalomProbeFailure } from "@/lib/shalom/client";
 import { clientFor, loadStoreShalom, mintSession, publicClient } from "@/lib/shalom/session";
@@ -33,6 +35,7 @@ import { FlowClient } from "@/lib/flow/client";
 import { confirmationUrl } from "@/lib/flow/link";
 import { processTransitNotifications } from "@/lib/shalom/transit-notify";
 import { resolveAgentNames } from "@/lib/agent-names";
+import { LEAD_VOICE_EXPERIMENT } from "@/lib/voice-leads";
 
 export interface SettingsState {
   error?: string;
@@ -54,7 +57,7 @@ export interface SettingsState {
 
 async function requireStoreAdmin(
   storeId: string,
-): Promise<{ admin: SupabaseClient; orgId: string } | null> {
+): Promise<{ admin: SupabaseClient; orgId: string; userId: string } | null> {
   if (!storeId) return null;
   const admin = createAdminSupabase();
   const { data: store } = await admin
@@ -69,14 +72,9 @@ async function requireStoreAdmin(
     data: { user },
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
-  const { data: m } = await sb
-    .from("memberships")
-    .select("role")
-    .eq("org_id", store.org_id)
-    .eq("user_id", user.id)
-    .maybeSingle();
-  if (!m || (m.role !== "owner" && m.role !== "admin")) return null;
-  return { admin, orgId: store.org_id };
+  // «Administrar tiendas» (MOM §16): owner/admin, o el rol Administración.
+  if (!(await hasOrgPermission(store.org_id, "stores.manage"))) return null;
+  return { admin, orgId: store.org_id, userId: user.id };
 }
 
 function errMsg(e: unknown): string {
@@ -94,6 +92,13 @@ export async function updateStore(
   const get = (k: string) => {
     const v = formData.get(k);
     return v == null ? undefined : String(v);
+  };
+  // Las casillas de campañas del agente de leads viajan como VARIOS valores
+  // con el mismo nombre: `get` se quedaría solo con el primero. Ausente = esta
+  // tarjeta no las trae y no se tocan.
+  const getAll = (k: string) => {
+    const v = formData.getAll(k);
+    return v.length ? v.map(String) : undefined;
   };
 
   // El email de Shalom llega rellenado en cada guardado: hace falta el valor
@@ -159,6 +164,18 @@ export async function updateStore(
     delivered_thanks_max_hours: get("delivered_thanks_max_hours"),
     delivered_thanks_pace_count: get("delivered_thanks_pace_count"),
     delivered_thanks_pace_minutes: get("delivered_thanks_pace_minutes"),
+    restock_enabled: get("restock_enabled"),
+    restock_template_name: get("restock_template_name"),
+    restock_template_language: get("restock_template_language"),
+    restock_params: get("restock_params"),
+    restock_phone_number_id: get("restock_phone_number_id"),
+    restock_button_label: get("restock_button_label"),
+    restock_hour_start: get("restock_hour_start"),
+    restock_hour_end: get("restock_hour_end"),
+    restock_pace_count: get("restock_pace_count"),
+    restock_pace_minutes: get("restock_pace_minutes"),
+    restock_days_before: get("restock_days_before"),
+    restock_control_pct: get("restock_control_pct"),
     voice_recovery_enabled: get("voice_recovery_enabled"),
     voice_recovery_auto: get("voice_recovery_auto"),
     voice_recovery_can_discard: get("voice_recovery_can_discard"),
@@ -169,6 +186,19 @@ export async function updateStore(
     voice_recovery_hour_end: get("voice_recovery_hour_end"),
     voice_recovery_agent_number: get("voice_recovery_agent_number"),
     voice_recovery_zadarma_sip: get("voice_recovery_zadarma_sip"),
+    // Agente de voz para leads, piloto Biru (MOM §33, 0247).
+    voice_lead_enabled: get("voice_lead_enabled"),
+    voice_lead_auto: get("voice_lead_auto"),
+    voice_lead_daily_cap: get("voice_lead_daily_cap"),
+    voice_lead_max_attempts: get("voice_lead_max_attempts"),
+    voice_lead_wait_minutes: get("voice_lead_wait_minutes"),
+    voice_lead_max_age_hours: get("voice_lead_max_age_hours"),
+    voice_lead_holdout_pct: get("voice_lead_holdout_pct"),
+    voice_lead_hour_start: get("voice_lead_hour_start"),
+    voice_lead_hour_end: get("voice_lead_hour_end"),
+    voice_lead_campaign_ids: getAll("voice_lead_campaign_ids"),
+    voice_lead_product: get("voice_lead_product"),
+    voice_lead_offer: get("voice_lead_offer"),
     confirmation_cycle_days: get("confirmation_cycle_days"),
     telegram_chat_id: get("telegram_chat_id"),
     urgent_telegram_chat_id: get("urgent_telegram_chat_id"),
@@ -242,7 +272,29 @@ export async function updateStore(
     shalom_pro_email: (currentStore as { shalom_pro_email?: string | null } | null)?.shalom_pro_email ?? null,
   });
 
-  if (!Object.keys(patch).length) return { notice: "No hay cambios para guardar." };
+  // El porcentaje del grupo de control del agente de leads queda fijo con el
+  // piloto en marcha (MOM §33.3): el tablero junta todos los sorteos en una
+  // sola comparación, y cambiar la proporción a mitad de camino la sesga
+  // (con 50/50 dos semanas y 90/10 otras dos, una diferencia de época se lee
+  // como efecto del agente). Para otra proporción, un piloto nuevo.
+  let holdoutAviso: string | null = null;
+  if (typeof patch.voice_lead_holdout_pct === "number") {
+    const [{ data: prevHoldout }, { count: sorteados }] = await Promise.all([
+      ctx.admin.from("stores").select("voice_lead_holdout_pct").eq("id", storeId).maybeSingle(),
+      ctx.admin
+        .from("lead_experiments")
+        .select("lead_id", { count: "exact", head: true })
+        .eq("store_id", storeId)
+        .eq("experiment", LEAD_VOICE_EXPERIMENT),
+    ]);
+    const antes = (prevHoldout as { voice_lead_holdout_pct?: number | null } | null)?.voice_lead_holdout_pct;
+    if (antes != null && antes !== patch.voice_lead_holdout_pct && (sorteados ?? 0) > 0) {
+      delete patch.voice_lead_holdout_pct;
+      holdoutAviso = `El grupo de control se queda en ${antes} %: el piloto ya sorteó leads con ese porcentaje.`;
+    }
+  }
+
+  if (!Object.keys(patch).length) return { notice: holdoutAviso ?? "No hay cambios para guardar." };
 
   // Prueba de imagen (0233): al encenderla se anota desde cuándo, y los
   // resultados cuentan desde ahí. Guardar el formulario con la prueba ya
@@ -272,7 +324,7 @@ export async function updateStore(
   revalidatePath(`/dashboard/${storeId}/settings`);
   revalidatePath(`/dashboard/${storeId}`);
   revalidatePath("/dashboard/stores");
-  return { notice: "Tienda actualizada." };
+  return { notice: holdoutAviso ? `Tienda actualizada. ${holdoutAviso}` : "Tienda actualizada." };
 }
 
 /**
@@ -1291,19 +1343,24 @@ async function recomputeDistrictOrders(
   storeId: string,
   district: string,
   scopeAllStores: boolean,
-): Promise<number> {
+  actor: string,
+  reason: string | null,
+): Promise<{ written: number; moved: number; error: string | null }> {
   let q = admin
     .from("order_master")
-    .select("order_id")
+    .select("order_id,store_id,coverage")
     .ilike("district", district)
     .not("macro_stage", "in", "(finalizado)")
     .limit(2000);
   if (!scopeAllStores) q = q.eq("store_id", storeId);
   const { data } = await q;
-  const ids = ((data ?? []) as { order_id: string }[]).map((r) => r.order_id);
-  if (!ids.length) return 0;
-  const done = await recomputeOrderMasterSafe(admin, ids);
-  return done.written;
+  const before = (data ?? []) as CoverageSnapshot[];
+  if (!before.length) return { written: 0, moved: 0, error: null };
+  const done = await recomputeOrderMasterSafe(admin, before.map((r) => r.order_id));
+  // Cada pedido abierto que la decisión movió queda con su antes y su después
+  // (MOM §19.0.1): una decisión por distrito es una decisión humana.
+  const coverage = await recordCoverageChanges(admin, before, { cause: "decision_distrito", actor, reason });
+  return { written: done.written, moved: coverage.changed.length, error: coverage.error };
 }
 
 export async function saveDistrictCoverage(
@@ -1334,13 +1391,15 @@ export async function saveDistrictCoverage(
   });
   if (error) return { error };
 
-  const recomputed = await recomputeDistrictOrders(ctx.admin, storeId, district, allStores);
+  const recomputed = await recomputeDistrictOrders(ctx.admin, storeId, district, allStores, ctx.userId, note);
   revalidatePath(`/dashboard/${storeId}/settings`);
   revalidatePath("/dashboard/pedidos");
   return {
     notice:
       `«${raw}» queda como ${coverage === "provincia_cod" ? "Provincia COD" : coverage === "lima" ? "Lima" : "Agencia"}.` +
-      (recomputed ? ` ${recomputed} pedido(s) abiertos reclasificados.` : ""),
+      (recomputed.written ? ` ${recomputed.written} pedido(s) abiertos recalculados` : "") +
+      (recomputed.written ? `, ${recomputed.moved} cambiaron de cobertura y quedó registrado.` : "") +
+      (recomputed.error ? ` ${recomputed.error}` : ""),
   };
 }
 
@@ -1361,13 +1420,14 @@ export async function deleteDistrictCoverage(
 
   const target = row as { district: string; store_id: string | null } | null;
   const recomputed = target
-    ? await recomputeDistrictOrders(ctx.admin, storeId, target.district, target.store_id === null)
-    : 0;
+    ? await recomputeDistrictOrders(ctx.admin, storeId, target.district, target.store_id === null, ctx.userId, "Excepción de cobertura eliminada")
+    : { written: 0, moved: 0, error: null };
   revalidatePath(`/dashboard/${storeId}/settings`);
   return {
     notice:
       "Excepción eliminada; ese distrito vuelve a la regla general." +
-      (recomputed ? ` ${recomputed} pedido(s) abiertos reclasificados.` : ""),
+      (recomputed.written ? ` ${recomputed.written} pedido(s) abiertos recalculados, ${recomputed.moved} cambiaron de cobertura.` : "") +
+      (recomputed.error ? ` ${recomputed.error}` : ""),
   };
 }
 
@@ -1461,4 +1521,62 @@ export async function moveEscalationStep(
   await ctx.admin.from("store_collection_escalation").update({ sort: rows[i]!.sort }).eq("id", rows[j]!.id);
   revalidatePath(`/dashboard/${storeId}/settings`);
   return { notice: "Orden actualizado ✓" };
+}
+
+// ---------------------------------------------------------------------------
+// Recordatorio de reposición: cuánto dura cada producto (0255, MOM §34)
+// ---------------------------------------------------------------------------
+//
+// Un producto recibe recordatorio solo si tiene días por unidad. Quitarlo no
+// toca los recordatorios ya enviados: su historia queda en `restock_sends`.
+
+export async function saveRestockProduct(
+  storeId: string,
+  input: { productKey: string; title: string; shortName: string; days: number },
+): Promise<SettingsState> {
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso para editar esta tienda." };
+  const productKey = String(input.productKey ?? "").trim();
+  const title = String(input.title ?? "").trim();
+  const shortName = String(input.shortName ?? "").replace(/\s+/g, " ").trim();
+  const days = Math.round(Number(input.days));
+  if (!productKey || !title) return { error: "Falta el producto." };
+  if (!shortName || shortName.length > 60) {
+    return { error: "Ponle el nombre con que se nombra en el mensaje (máx. 60)." };
+  }
+  if (!Number.isFinite(days) || days < 1 || days > 365) {
+    return { error: "Los días por unidad van de 1 a 365." };
+  }
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  const { error } = await ctx.admin.from("restock_products").upsert(
+    {
+      store_id: storeId,
+      product_key: productKey,
+      shopify_title: title,
+      short_name: shortName,
+      days_per_unit: days,
+      updated_by: user?.id ?? null,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "store_id,product_key" },
+  );
+  if (error) return { error: error.message };
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  return { notice: `«${shortName}»: ${days} días por unidad ✓` };
+}
+
+export async function removeRestockProduct(storeId: string, productKey: string): Promise<SettingsState> {
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso para editar esta tienda." };
+  const { error } = await ctx.admin
+    .from("restock_products")
+    .delete()
+    .eq("store_id", storeId)
+    .eq("product_key", productKey);
+  if (error) return { error: error.message };
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  return { notice: "Ese producto ya no recibe recordatorio." };
 }

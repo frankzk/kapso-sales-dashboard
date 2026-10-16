@@ -1,9 +1,34 @@
 "use client";
 
+// La ficha del lead (14-10-2026, mundo de operación): un `SidePanel` de
+// 1.040 px con la conversación de WhatsApp fija a la izquierda —estilo Kapta:
+// hilo sobre `wash`, burbujas blancas del cliente y en `line` las nuestras— y
+// el trabajo a la derecha en tarjetas: lo que pidió, el resumen del bot, el
+// resultado de la llamada, el historial y el resto, con «Generar pedido»
+// pegado al pie de esa columna. Bajo 1.024 px es una sola columna.
+//
+// `CallForm` y `WhatsappChat` se exportan con `variant="card"` para la tarjeta
+// del siguiente lead de la lista: la misma conducta sin el marco de la ficha.
+
 import { mergeConversationMessages } from "@/lib/conversation-merge";
 import { canUseActiveChatPoll, chatContextAfterRead } from "@/lib/leads-chat-poll";
-import { type ReactNode, useActionState, useCallback, useEffect, useRef, useState, useTransition } from "react";
+import {
+  type ComponentType,
+  Fragment,
+  type ReactNode,
+  type SVGProps,
+  useActionState,
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import { CallQr } from "@/components/call-qr";
+import { SEGMENT_TONE } from "@/components/lead-segment-tone";
+import { CoverageBadge } from "@/components/coverage-badge";
+import type { OrderCoverage } from "@/lib/order-coverage";
 import { copyLabel, useCopyToClipboard } from "@/components/copy-button";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
 import {
@@ -16,7 +41,50 @@ import {
 import { waKindLabel, type WaNumber } from "@/lib/wa-numbers";
 import type { CustomerHistory } from "@/lib/leads-access";
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
-import { SECTION_CARD } from "@/components/ops-ui";
+import {
+  LEAD_VOICE_AGENT_HANDOFF,
+  LEAD_VOICE_AGENT_KIND,
+  LEAD_VOICE_AGENT_NAME,
+  LeadVoiceAgentPanel,
+  leadVoiceAgentTitle,
+} from "@/components/lead-voice-agent-panel";
+import {
+  Badge,
+  Banner,
+  CARD_ZONE,
+  CHECKBOX,
+  ChoiceChip,
+  FIELD,
+  FIELD_BOX,
+  OpsButton,
+  SECTION_CARD,
+  SectionHead,
+  SidePanel,
+  Skeleton,
+  choiceChipClass,
+  opsButtonClass,
+  type BadgeTone,
+} from "@/components/ops-ui";
+import {
+  IconAlert,
+  IconArrowUpRight,
+  IconCamera,
+  IconChat,
+  IconCheck,
+  IconCheckCircle,
+  IconChevronDown,
+  IconChevronRight,
+  IconClock,
+  IconCopy,
+  IconImage,
+  IconInfo,
+  IconMic,
+  IconPlus,
+  IconReceipt,
+  IconRepeat,
+  IconSearch,
+  IconX,
+} from "@/components/icons";
 import { EmojiPicker } from "@/components/emoji-picker";
 import { insertAtCursor } from "@/lib/emoji";
 import {
@@ -26,11 +94,11 @@ import {
   leadQueueBucket,
   leadWindowInfo,
   yapeKind,
-  type LeadWindow,
   type QueueBucket,
   type YapeKind,
   leadHandle,
   leadCanCall,
+  leadPhoneLabel,
 } from "@/lib/leads";
 import {
   confirmLeadWon,
@@ -53,6 +121,7 @@ import {
   listLeadTemplates,
   listQuickReplies,
   loadLeadConversation,
+  loadLeadDeliveryCoverage,
   loadOrderDraft,
   pollLeadState,
   searchStoreProducts,
@@ -84,9 +153,21 @@ export type LeadDrawerUpdate = {
   refreshList?: boolean;
 };
 
-const inputCls =
-  "mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100";
-const labelCls = "block text-sm font-medium text-slate-700";
+/** Etiqueta de campo (13 px, tinta media), como en la ficha del pedido. */
+const LABEL = "block text-[13px] font-medium leading-5 text-ink-700";
+
+/** La franja del agente de voz: lo mínimo, una línea con «Probar en mi
+ *  teléfono» (Frankz, 14-10-2026); crece solo con sus llamadas o al probar. */
+const VOICE_STRIP = "rounded-lg bg-white px-4 py-3 shadow-control ring-1 ring-line sm:px-5";
+
+/** Botón de solo icono: 32 px (44 con el dedo), en reposo sin fondo. El color
+ *  lo pone quien lo usa: `cn` no resuelve dos `text-*` que choquen. */
+const ICON_BTN =
+  "grid size-8 shrink-0 place-items-center rounded-md transition-colors hover:bg-wash hover:text-ink-900 disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:size-11";
+
+/** Respuesta rápida: píldora de 28 px sobre el pie del chat. */
+const QUICK_PILL =
+  "inline-flex h-7 max-w-full items-center whitespace-nowrap rounded-full bg-white px-2.5 text-xs font-medium text-ink-700 ring-1 ring-inset ring-line-strong transition-shadow hover:ring-ink-300 disabled:opacity-50 pointer-coarse:h-11";
 
 function startUiMeasure(name: string) {
   if (typeof performance === "undefined") return;
@@ -138,94 +219,114 @@ function orderDateShort(value: string | null | undefined): string {
   return new Date(value).toLocaleDateString("es-PE", { day: "numeric", month: "short" });
 }
 
-/** One label/value line inside the Meta attribution block (drawer). */
+/** Monto corto para una chapa: «129» o «129.9», con el formato es-PE. */
+function fmtAmount(value: number): string {
+  return Number(value).toLocaleString("es-PE", { maximumFractionDigits: 2 });
+}
+
+/** Una fila etiqueta / valor de la tarjeta «Origen». */
 function MetaField({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex gap-2">
-      <dt className="w-20 shrink-0 text-xs font-medium text-violet-700/70">{label}</dt>
-      <dd className="min-w-0 flex-1 break-words text-violet-900">{children}</dd>
+    <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-x-3">
+      <dt className="text-ink-500">{label}</dt>
+      <dd className="min-w-0 break-words text-ink-900">{children}</dd>
     </div>
   );
 }
 
-/** Full Meta ad attribution for the lead drawer: the real creative plus the
- *  campaign / adset / objective / status chain behind the Click-to-WhatsApp
- *  lead. Falls back to a one-liner when the ad_id hasn't been resolved into the
- *  `meta_ads` lookup yet (only headline + id are then known). */
-function MetaAttribution({ lead, adMeta }: { lead: LeadRow; adMeta: AdMeta | null }) {
+/** De dónde llegó el lead: el número de WhatsApp al que escribió y, si vino por
+ *  un anuncio Click-to-WhatsApp, el creativo real con su cadena campaña /
+ *  conjunto / objetivo / estado. Plegado muestra una línea; si el ad_id todavía
+ *  no se resolvió en `meta_ads`, solo se conocen el titular y el id. */
+function LeadOrigin({ lead, adMeta, waNumber }: { lead: LeadRow; adMeta: AdMeta | null; waNumber: WaNumber | null }) {
   const [open, setOpen] = useState(false);
+  const detailsId = useId();
+  const isAd = lead.source === "meta_ad";
   const name = adMeta?.adName ? prettyAdName(adMeta.adName) : null;
   const href = adsManagerUrl(adMeta?.accountId ?? null, lead.ad_id ?? "");
   const objective = adObjectiveLabel(adMeta?.objective ?? null);
   const status = adStatusLabel(adMeta?.status ?? null);
+  const kind = waKindLabel(waNumber?.kind ?? null);
   return (
-    <div className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-sm text-violet-900">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between gap-2"
-      >
-        <span className="text-xs font-semibold tracking-wide uppercase opacity-80">📣 Campaña Meta</span>
-        <span className="shrink-0 text-xs text-violet-700">{open ? "ocultar ▲" : "ver más ▼"}</span>
-      </button>
-      {!open ? (
-        <p className="mt-1 truncate text-xs text-violet-800">
-          {lead.ad_headline || name || "Llegó por un anuncio de Meta"}
-        </p>
-      ) : (
-        <dl className="mt-1.5 space-y-1">
-        {lead.ad_headline && <MetaField label="Titular">{lead.ad_headline}</MetaField>}
-        {name ? (
+    <section aria-label="Origen del lead" className={SECTION_CARD}>
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold text-ink-900">Origen</h3>
+        {isAd && (
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            aria-controls={detailsId}
+            className="inline-flex items-center gap-1 rounded text-[13px] font-medium text-brand-700 hover:underline pointer-coarse:min-h-11"
+          >
+            {open ? "Ocultar" : "Ver más"}
+            <IconChevronDown
+              aria-hidden
+              className={cn("size-4 transition-transform motion-reduce:transition-none", open && "rotate-180")}
+            />
+          </button>
+        )}
+      </div>
+      <dl id={detailsId} className="mt-3 space-y-1 text-[13px] leading-5">
+        {lead.wa_phone_number_id && (
+          <MetaField label="WhatsApp">
+            {waNumber?.name ?? waNumber?.displayPhone ?? "número sin nombre"}
+            {kind ? <span className="text-ink-500">{` · ${kind}`}</span> : null}
+          </MetaField>
+        )}
+        {isAd && !open && (
           <MetaField label="Anuncio">
-            {href ? (
-              <a
-                href={href}
-                target="_blank"
-                rel="noreferrer"
-                className="font-medium text-violet-800 underline decoration-violet-300 hover:decoration-violet-600"
-              >
-                {name}
-              </a>
-            ) : (
-              <span className="font-medium">{name}</span>
+            <span className="block truncate">{lead.ad_headline || name || "Llegó por un anuncio de Meta"}</span>
+          </MetaField>
+        )}
+        {isAd && open && (
+          <>
+            {lead.ad_headline && <MetaField label="Titular">{lead.ad_headline}</MetaField>}
+            <MetaField label="Anuncio">
+              {name ? (
+                href ? (
+                  <a
+                    href={href}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 font-medium text-brand-700 hover:underline"
+                  >
+                    {name}
+                    <IconArrowUpRight aria-hidden className="size-3.5 shrink-0" />
+                  </a>
+                ) : (
+                  <span className="font-medium">{name}</span>
+                )
+              ) : (
+                "Llegó por un anuncio de Meta (Click-to-WhatsApp)"
+              )}
+            </MetaField>
+            {adMeta?.adsetName && <MetaField label="Conjunto">{adMeta.adsetName}</MetaField>}
+            {adMeta?.campaignName && <MetaField label="Campaña">{adMeta.campaignName}</MetaField>}
+            {objective && <MetaField label="Objetivo">{objective}</MetaField>}
+            {status && (
+              <MetaField label="Estado">
+                {status.label}
+                {adMeta?.fetchedAt
+                  ? ` · al ${new Date(adMeta.fetchedAt).toLocaleDateString("es-PE")}`
+                  : ""}
+              </MetaField>
             )}
-          </MetaField>
-        ) : (
-          <p className="text-violet-800">📣 Llegó por un anuncio de Meta (Click-to-WhatsApp)</p>
+          </>
         )}
-        {adMeta?.adsetName && <MetaField label="Conjunto">{adMeta.adsetName}</MetaField>}
-        {adMeta?.campaignName && <MetaField label="Campaña">{adMeta.campaignName}</MetaField>}
-        {objective && <MetaField label="Objetivo">{objective}</MetaField>}
-        {status && (
-          <MetaField label="Estado">
-            {status.label}
-            {adMeta?.fetchedAt
-              ? ` · al ${new Date(adMeta.fetchedAt).toLocaleDateString("es-PE")}`
-              : ""}
-          </MetaField>
-        )}
-        {lead.ad_id && (
-          <p className="pt-0.5 text-xs break-all text-violet-700/70">
-            id {lead.ad_id}
-            {lead.ctwa_clid ? ` · clic ${lead.ctwa_clid}` : ""}
-          </p>
-        )}
-        </dl>
+      </dl>
+      {isAd && open && lead.ad_id && (
+        <p className="mt-2 break-all text-xs text-ink-500">
+          id {lead.ad_id}
+          {lead.ctwa_clid ? ` · clic ${lead.ctwa_clid}` : ""}
+        </p>
       )}
-    </div>
+    </section>
   );
 }
 
-// Same buckets and colors as the row pill in components/leads.tsx.
-const SEGMENT_BADGE: Record<QueueBucket, string> = {
-  carrito: "bg-emerald-50 text-emerald-700",
-  distrito: "bg-amber-50 text-amber-700",
-  producto: "bg-yellow-50 text-yellow-800",
-  converso: "bg-blue-50 text-blue-700",
-  frio: "bg-slate-100 text-slate-500",
-};
-
-// Plain calificación labels (no emoji) for the row/drawer pills, per the redesign.
+// Las mismas etiquetas de calificación que la fila de components/leads.tsx,
+// sin emoji. La chapa es neutra: la calificación clasifica, no avisa.
 const SEG_PILL_LABEL: Record<QueueBucket, string> = {
   carrito: "Con carrito",
   distrito: "Dio distrito",
@@ -235,121 +336,69 @@ const SEG_PILL_LABEL: Record<QueueBucket, string> = {
 };
 
 // Terminal outcomes shown in the Calificación column instead of an engagement
-// segment — a cancelled lead is "Perdidos", not "🛒 Con carrito".
-const OUTCOME_SEG_BADGE: Record<"won" | "lost", { label: string; cls: string }> = {
-  won: { label: "Ganados", cls: "bg-emerald-100 text-emerald-700" },
-  lost: { label: "Perdidos", cls: "bg-slate-200 text-slate-600" },
+// segment — a cancelled lead is "Perdidos", not "Con carrito".
+const OUTCOME_SEG_BADGE: Record<"won" | "lost", { label: string; tone: BadgeTone }> = {
+  won: { label: "Ganados", tone: "ok" },
+  lost: { label: "Perdidos", tone: "neutral" },
 };
 
 /** Calificación chip per row. Active leads (open/hot) show their engagement level
- *  (Frío → Conversó → Vio producto → Dio distrito → Con carrito); leads that are already won or
- *  lost show the outcome (Ganados/Perdidos) — the engagement level is meaningless
- *  once the lead is closed, and "Con carrito" on a cancelled lead is misleading.
- *  The specific reason (e.g. "Cancelado por cliente") stays available on hover. */
-function SegmentBadge({ lead }: { lead: LeadRow }) {
+ *  (Frío → Conversó → Vio producto → Dio distrito → Con carrito, con el monto del
+ *  carrito); leads that are already won or lost show the outcome
+ *  (Ganados/Perdidos) — the engagement level is meaningless once the lead is
+ *  closed, and "Con carrito" on a cancelled lead is misleading. The specific
+ *  reason (e.g. "Cancelado por cliente") stays available on hover. */
+function SegmentBadge({ lead, currency }: { lead: LeadRow; currency: string }) {
   const cat = categoryOf(lead.status);
   if (cat === "won" || cat === "lost") {
     const b = OUTCOME_SEG_BADGE[cat];
     return (
-      <span
-        className={cn("whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium", b.cls)}
-        title={labelOf(lead.status)}
-      >
+      <Badge tone={b.tone} title={labelOf(lead.status)}>
         {b.label}
-      </span>
+      </Badge>
     );
   }
   const seg = leadQueueBucket(lead);
   return (
-    <span className={cn("whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium", SEGMENT_BADGE[seg])}>
+    <Badge tone={SEGMENT_TONE[seg]}>
       {SEG_PILL_LABEL[seg]}
-    </span>
+      {seg === "carrito" && lead.cart_value != null && (
+        <span className="font-semibold tabular-nums text-orange-950">
+          {currency} {fmtAmount(lead.cart_value)}
+        </span>
+      )}
+    </Badge>
   );
 }
 
-const AVATAR_TINTS = [
-  "bg-brand-50 text-brand-700",
-  "bg-violet-50 text-violet-700",
-  "bg-emerald-50 text-emerald-700",
-  "bg-amber-50 text-amber-700",
-  "bg-sky-50 text-sky-700",
-  "bg-orange-50 text-orange-700",
-];
-function avatarTint(id: string): string {
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = (h + id.charCodeAt(i)) % AVATAR_TINTS.length;
-  return AVATAR_TINTS[h]!;
-}
-
-// Square source chip (📣 Campaña / 🌐 Meta/Web / 🛒 Carrito / 🔎 Búsqueda / "Directo").
-const SOURCE_CHIP: Record<
+// La fuente del lead, dicha en palabras en la línea de contexto de la cabecera.
+const SOURCE_META: Record<
   "meta_ad" | "fb_web" | "cod_cart" | "abandoned_browse" | "organic",
-  { glyph: string; label: string; cls: string; title: string; isText?: boolean }
+  { label: string; title: string }
 > = {
-  meta_ad: { glyph: "📣", label: "Campaña", cls: "bg-violet-100 text-violet-700", title: "Campaña Meta (Click-to-WhatsApp, con anuncio)" },
-  fb_web: { glyph: "🌐", label: "Meta/Web", cls: "bg-sky-100 text-sky-700", title: "Llegó por un link de Meta (Facebook/Instagram) en la web (sin anuncio confirmado)" },
-  cod_cart: { glyph: "🛒", label: "Carrito", cls: "bg-emerald-100 text-emerald-700", title: "Carrito abandonado (formulario COD)" },
-  abandoned_browse: { glyph: "🔎", label: "Búsqueda", cls: "bg-orange-100 text-orange-700", title: "Búsqueda abandonada" },
-  organic: { glyph: "Directo", label: "Directo", cls: "bg-slate-100 text-slate-500", title: "Orgánico / directo", isText: true },
-};
-function SourceChip({ source }: { source: string | null | undefined }) {
-  const s = SOURCE_CHIP[leadSourceKey(source)];
-  return (
-    <span
-      title={s.title}
-      className={cn(
-        "inline-flex h-5 min-w-[22px] shrink-0 items-center justify-center rounded-md px-1.5 font-semibold leading-none",
-        s.isText ? "text-[10px]" : "text-[11px]",
-        s.cls,
-      )}
-    >
-      {s.glyph}
-    </span>
-  );
-}
-
-const WIN_DISPLAY: Record<"fresca" | "por_vencer" | "cerrada", { dot: string; fg: string; accent: string }> = {
-  fresca: { dot: "bg-emerald-500", fg: "text-emerald-700", accent: "#34d399" },
-  por_vencer: { dot: "bg-amber-500", fg: "text-amber-700", accent: "#fbbf24" },
-  cerrada: { dot: "bg-slate-400", fg: "text-slate-500", accent: "#cbd5e1" },
-};
-function winKey(state: LeadWindow | null): "fresca" | "por_vencer" | "cerrada" {
-  if (state === "por_vencer" || state === "critica") return "por_vencer";
-  if (state === "cerrada") return "cerrada";
-  return "fresca"; // fresca or null (no inbound yet) → neutral-fresh accent
-}
-
-/** Small rounded pill (header/drawer chips). */
-function Pill({ children, className, title }: { children: ReactNode; className?: string; title?: string }) {
-  return (
-    <span
-      title={title}
-      className={cn(
-        "inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium",
-        className,
-      )}
-    >
-      {children}
-    </span>
-  );
-}
-
-// Chip para leads Yape/Shalom: distingue si el handoff fue por 💰 pago (verificar
-// Yape) o 📦 agencia (coordinar el envío por Shalom/Olva). Se deriva del motivo del
-// handoff — no parte la pestaña, solo aclara de un vistazo qué media es.
-const YAPE_KIND_CHIP: Record<YapeKind, { glyph: string; label: string; cls: string; title: string }> = {
-  pago: { glyph: "💰", label: "Pago", cls: "bg-amber-100 text-amber-800", title: "Verificar el pago (Yape / comprobante)" },
-  agencia: { glyph: "📦", label: "Agencia", cls: "bg-indigo-100 text-indigo-700", title: "Coordinar el envío por agencia (Shalom / Olva)" },
+  meta_ad: { label: "Campaña Meta", title: "Campaña Meta (Click-to-WhatsApp, con anuncio)" },
+  fb_web: { label: "Meta/Web", title: "Llegó por un link de Meta (Facebook/Instagram) en la web (sin anuncio confirmado)" },
+  cod_cart: { label: "Carrito", title: "Carrito abandonado (formulario COD)" },
+  abandoned_browse: { label: "Búsqueda", title: "Búsqueda abandonada" },
+  organic: { label: "Directo", title: "Orgánico / directo" },
 };
 
-/** Chip 💰 Pago / 📦 Agencia — solo para leads en Yape/Shalom (`yape_por_verificar`). */
+// Chapa para leads Yape/Shalom: distingue si el handoff fue por pago (verificar
+// Yape) o por agencia (coordinar el envío por Shalom/Olva). Se deriva del motivo
+// del handoff — no parte la pestaña, solo aclara de un vistazo qué media es.
+const YAPE_KIND_CHIP: Record<YapeKind, { label: string; tone: BadgeTone; title: string }> = {
+  pago: { label: "Pago", tone: "warn", title: "Verificar el pago (Yape / comprobante)" },
+  agencia: { label: "Agencia", tone: "info", title: "Coordinar el envío por agencia (Shalom / Olva)" },
+};
+
+/** Chapa Pago / Agencia — solo para leads en Yape/Shalom (`yape_por_verificar`). */
 function YapeKindChip({ lead }: { lead: LeadRow }) {
   if (lead.status !== "yape_por_verificar") return null;
   const k = YAPE_KIND_CHIP[yapeKind(lead.handoff_reason, lead.handoff_context)];
   return (
-    <Pill className={k.cls} title={k.title}>
-      {`${k.glyph} ${k.label}`}
-    </Pill>
+    <Badge tone={k.tone} title={k.title}>
+      {k.label}
+    </Badge>
   );
 }
 
@@ -365,11 +414,14 @@ export function LeadDrawer({
   onRegistered,
   onReady,
 }: LeadDrawerProps) {
-  const handoffTone = categoryOf(lead.status) === "hot" ? "red" : "amber";
   const [orderOpen, setOrderOpen] = useState(false);
   const { state: copied, copy } = useCopyToClipboard();
   const [confirmingWon, startConfirmWon] = useTransition();
   const readyReportedRef = useRef(false);
+  const gridRef = useRef<HTMLDivElement>(null);
+  const orderRef = useRef<HTMLDivElement>(null);
+  const ctaRef = useRef<HTMLButtonElement>(null);
+  const orderWasOpenRef = useRef(false);
 
   useEffect(() => {
     if (readyReportedRef.current) return;
@@ -377,10 +429,60 @@ export function LeadDrawer({
     onReady?.();
   }, [onReady]);
 
+  // La cobertura del Master para la dirección del lead (MOM §11): junto al
+  // distrito, la misma chapa que lleva el pedido. Se vuelve a preguntar si la
+  // dirección cambia; sin respuesta, el distrito se queda solo.
+  const [deliveryCoverage, setDeliveryCoverage] = useState<{ key: string; coverage: OrderCoverage | null } | null>(null);
+  const deliveryKey = [lead.id, lead.district, lead.province, lead.region].join("|");
+  useEffect(() => {
+    if (!lead.district) return;
+    let alive = true;
+    loadLeadDeliveryCoverage(lead.id).then(
+      (r) => {
+        if (alive) setDeliveryCoverage({ key: deliveryKey, coverage: "error" in r ? null : r.coverage });
+      },
+      () => {},
+    );
+    return () => {
+      alive = false;
+    };
+  }, [deliveryKey, lead.id, lead.district]);
+  const masterCoverage = deliveryCoverage?.key === deliveryKey ? deliveryCoverage.coverage : null;
+
+  // La conversación queda fija bajo la cabecera del panel mientras se baja por
+  // la columna de trabajo. La cabecera crece si las chapas o el contexto parten
+  // en dos líneas, así que se mide en vez de suponerla: el alto va en
+  // `--lead-head` y de él salen el `top` y el alto del chat y el margen al que
+  // salta el formulario de pedido.
+  useEffect(() => {
+    const grid = gridRef.current;
+    const head = grid?.closest('[role="dialog"]')?.querySelector<HTMLElement>(":scope > header");
+    if (!grid || !head) return;
+    const sync = () => grid.style.setProperty("--lead-head", `${Math.round(head.getBoundingClientRect().height)}px`);
+    sync();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(sync);
+    observer.observe(head);
+    return () => observer.disconnect();
+  }, []);
+
+  // El formulario de pedido ocupa la columna de trabajo: al abrirlo se lleva a
+  // la vista y recibe el foco (el botón que lo abrió desaparece); al cerrarlo,
+  // el foco vuelve al botón del pie.
+  useEffect(() => {
+    if (orderOpen) {
+      orderRef.current?.scrollIntoView({ block: "start" });
+      orderRef.current?.focus({ preventScroll: true });
+    } else if (orderWasOpenRef.current) {
+      ctaRef.current?.focus();
+    }
+    orderWasOpenRef.current = orderOpen;
+  }, [orderOpen]);
+
   // Live sync while a lead WITHOUT an order is open: a Yape/bot purchase links the
   // order a few seconds later (webhook → lead becomes won). Poll the lead's
   // order/status signal every 12s and, the moment it flips, refresh the drawer —
-  // so the asesora sees "✅ Pedido generado" instead of a stale "pendiente" (which
+  // so the asesora sees "Pedido generado" instead of a stale "pendiente" (which
   // is what led to mistakenly marking a real sale as "ya compró en otro lado").
   // Stops once the lead has an order (deps change) or the drawer closes (unmount).
   const onRegisteredRef = useRef(onRegistered);
@@ -419,490 +521,578 @@ export function LeadDrawer({
   // the (authoritative) Shopify "Pedidos anteriores" list, which catches customers
   // whose past orders were placed outside the bot (not in the kapso-only table).
   const isRecurrent = !!history?.lastOrderAt || (history?.recentOrders?.length ?? 0) > 0;
+  const priorOrders = history?.orderCount ?? 0;
+  const priorText = !isRecurrent
+    ? null
+    : priorOrders > 0
+      ? `${priorOrders.toLocaleString("es-PE")} ${priorOrders === 1 ? "pedido" : "pedidos"} antes`
+      : "Recurrente";
   const { state: winState, msLeft } = leadWindowInfo(lead.last_inbound_at ?? lead.last_interaction_at, Date.now());
-  const wd = WIN_DISPLAY[winKey(winState)];
+  const hoursLeft = Math.max(1, Math.ceil((msLeft ?? 0) / 3_600_000));
   const winLabel =
     winState === null
       ? "Sin ventana"
       : winState === "cerrada"
         ? "Ventana vencida"
-        : `${Math.max(1, Math.ceil((msLeft ?? 0) / 3_600_000))}h restantes`;
-  const src = SOURCE_CHIP[leadSourceKey(lead.source)];
+        : `Ventana: ${hoursLeft}\u00a0h`;
+  const winTitle =
+    winState === null
+      ? "El cliente todavía no ha escrito por WhatsApp"
+      : winState === "cerrada"
+        ? "Pasaron más de 24 h desde su último mensaje: solo se puede enviar una plantilla aprobada"
+        : `Quedan ${hoursLeft} h de la ventana de 24 h para escribirle por WhatsApp`;
+  const winTone: BadgeTone =
+    winState === null ? "neutral" : winState === "cerrada" ? "crit" : winState === "fresca" ? "ok" : "warn";
+  const sourceKey = leadSourceKey(lead.source);
+  const src = SOURCE_META[sourceKey];
+  const campaignLabel =
+    sourceKey === "meta_ad"
+      ? (adMeta?.campaignName ?? (adMeta?.adName ? prettyAdName(adMeta.adName) : null) ?? lead.ad_headline ?? null)
+      : null;
+  const sourceText = campaignLabel ? `Campaña «${campaignLabel}»` : src.label;
   // Un lead sin teléfono (0105) se nombra por @username o BSUID. `leadHandle`
   // es la única fuente de esa decisión, para que la lista y el drawer no puedan
   // discrepar sobre cómo se llama la misma persona.
   const handle = leadHandle(lead);
   const canCall = leadCanCall(lead);
-  const initial = (lead.name || handle).trim()[0]?.toUpperCase() || "?";
+  const title = lead.name || handle;
+
+  // «Lo que pidió»: el carrito o el producto visto, la entrega y las palabras
+  // con las que abrió. Las palabras se muestran siempre que existan (incluso un
+  // "hola" pelado), que ya le dice a la asesora que no hay más contexto que
+  // trabajar; en la lista se filtran los saludos vacíos para no llenarla.
+  const firstText = (lead.first_inbound_text ?? "").trim();
+  const showContext = !!(lead.cart_item_count || lead.district || lead.draft_order_gid || lead.cart_summary);
+  const askLine: ReactNode[] = [];
+  if (showContext && lead.draft_order_gid) {
+    const recovered = lead.draft_order_status === "completed";
+    askLine.push(
+      <span key="draft" className={recovered ? "font-medium text-ok-fg" : undefined}>
+        {recovered ? "Carrito recuperado" : "Carrito abandonado"}
+        {lead.draft_order_name ? ` ${lead.draft_order_name}` : ""}
+      </span>,
+    );
+  }
+  if (showContext && lead.cart_item_count) {
+    askLine.push(
+      <span key="cart">
+        {lead.draft_order_gid ? "" : "Carrito: "}
+        {lead.cart_summary || `${lead.cart_item_count} producto(s)`}
+      </span>,
+    );
+    if (lead.cart_value != null) {
+      askLine.push(
+        <span key="value" className="font-semibold tabular-nums text-ink-900">
+          {currency} {Number(lead.cart_value).toFixed(2)}
+        </span>,
+      );
+    }
+  } else if (showContext && lead.cart_summary) {
+    askLine.push(
+      <span key="seen">
+        <span className="text-ink-500">Vio: </span>
+        {lead.cart_summary}
+      </span>,
+    );
+  }
+  const showRecibe = showContext && !!lead.ship_name && lead.ship_name !== lead.name;
+  const showAddress = showContext && !!(lead.ship_name || lead.address1 || lead.district || lead.referencia);
+  const hasAskRows = (showAddress && !!(showRecibe || lead.address1 || lead.referencia || lead.district)) || !!firstText;
 
   return (
-    <>
-      <div className="fixed inset-0 z-10 bg-slate-900/30" onClick={onClose} aria-hidden="true" />
-      <aside className="@container fixed inset-y-0 right-0 z-20 flex h-full w-[min(880px,96%)] flex-col border-l border-slate-200 bg-slate-50 shadow-xl">
-        {/* Header */}
-        <div className="border-b border-slate-200 bg-white px-5 py-4">
-          <div className="flex items-start gap-3">
-            <span
-              className={cn(
-                "flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-base font-semibold",
-                avatarTint(lead.id),
-              )}
-            >
-              {initial}
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-lg font-semibold text-slate-900">{lead.name || handle}</h2>
-                {isRecurrent && <Pill className="bg-amber-50 text-amber-700">★ Recurrente</Pill>}
-              </div>
-              <div className="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm">
-                <span className="tabular-nums text-slate-700">{handle}</span>
-                <button
-                  type="button"
-                  onClick={() => copy(handle)}
-                  className="inline-flex items-center gap-1 text-xs font-medium text-brand-700 hover:underline"
-                >
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="9" y="9" width="11" height="11" rx="2" />
-                    <path d="M5 15V5a2 2 0 0 1 2-2h10" />
-                  </svg>
-                  {copyLabel(copied, "copiar")}
-                </button>
-                {canCall ? (
-                  <a href={`tel:+${lead.phone}`} className="text-xs text-slate-400 hover:text-slate-600">
-                    · llamar
-                  </a>
-                ) : (
-                  // Sin número no hay llamada: decirlo es más útil que ofrecer un
-                  // botón que no marca. La acción real es escribirle por WhatsApp
-                  // pidiéndole el teléfono — el hilo ya está a la izquierda.
-                  <span className="text-xs font-medium text-amber-700">· sin número — pídeselo por chat</span>
-                )}
-              </div>
-              {/* Chips de estado bajo el teléfono: rellenan el alto del QR para
-                  que el header quede balanceado, sin el hueco en blanco. */}
-              <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                <Pill className="bg-slate-100">
-                  <span className={cn("h-1.5 w-1.5 rounded-full", wd.dot)} />
-                  <span className={wd.fg}>{winLabel}</span>
-                </Pill>
-                <SegmentBadge lead={lead} />
-                <Pill className={src.cls}>{src.isText ? src.label : `${src.glyph} ${src.label}`}</Pill>
-                <YapeKindChip lead={lead} />
-              </div>
-            </div>
-            {/* QR tel: — solo en panel ancho (desktop): la asesora escanea con
-                su celular y el marcador abre listo. En móvil ya está «llamar». */}
-            {canCall && (
-              <div className="hidden shrink-0 self-start @min-[720px]:block">
-                <CallQr phone={lead.phone as string} size={72} />
-              </div>
-            )}
+    <SidePanel
+      label={title}
+      title={title}
+      badge={
+        <>
+          <SegmentBadge lead={lead} currency={currency} />
+          <Badge tone={winTone} title={winTitle}>
+            {winLabel}
+          </Badge>
+          <YapeKindChip lead={lead} />
+          {/* Se lo pidió al agente de voz (MOM §33): ni el agente ni el
+              drip ni la secuencia de carritos lo vuelven a contactar. Una
+              persona sí puede; la chapa es para que lo sepa antes. */}
+          {lead.contact_opt_out_at && (
+            <Badge tone="crit" title="Pidió no ser contactado">
+              No contactar
+            </Badge>
+          )}
+        </>
+      }
+      meta={
+        <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+          {/* El número y «copiar» parten juntos: sueltos, el número bajaba
+              solo y el botón quedaba colgando en la línea siguiente. */}
+          <span className="inline-flex items-center gap-1 whitespace-nowrap">
+            <span className="tabular-nums text-ink-700">{leadPhoneLabel(lead)}</span>
             <button
               type="button"
-              onClick={onClose}
-              aria-label="Cerrar"
-              className="shrink-0 rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+              onClick={() => copy(handle)}
+              title={copyLabel(copied, `Copiar ${handle}`)}
+              aria-label={`Copiar ${handle}`}
+              className="inline-flex items-center gap-1 rounded px-0.5 text-ink-500 transition-colors hover:text-ink-900 pointer-coarse:min-w-11 pointer-coarse:justify-center"
             >
-              ✕
+              {copied === "ok" ? (
+                <IconCheck aria-hidden className="size-3.5 text-ok-fg" />
+              ) : copied === "fail" ? (
+                <IconX aria-hidden className="size-3.5 text-crit-fg" />
+              ) : (
+                <IconCopy aria-hidden className="size-3.5" />
+              )}
+              {copied !== "idle" && (
+                <span className={copied === "ok" ? "text-ok-fg" : "text-crit-fg"}>{copyLabel(copied)}</span>
+              )}
             </button>
+            <span role="status" className="sr-only">
+              {copied === "idle" ? "" : copyLabel(copied)}
+            </span>
+          </span>
+          {canCall ? (
+            <>
+              <span aria-hidden>·</span>
+              <a
+                href={`tel:+${lead.phone}`}
+                className="inline-flex items-center font-medium text-brand-700 hover:underline pointer-coarse:min-h-11"
+              >
+                Llamar
+              </a>
+            </>
+          ) : (
+            // Sin número no hay llamada: decirlo es más útil que ofrecer un
+            // botón que no marca. La acción real es escribirle por WhatsApp
+            // pidiéndole el teléfono — el hilo ya está a la izquierda.
+            <span className="font-medium text-warn-fg">· sin número, pídeselo por chat</span>
+          )}
+          <span aria-hidden>·</span>
+          <span title={src.title} className="max-w-[40ch] truncate">
+            {sourceText}
+          </span>
+          {priorText && (
+            <>
+              <span aria-hidden>·</span>
+              <span>{priorText}</span>
+            </>
+          )}
+        </span>
+      }
+      actions={
+        // QR tel: arriba a la derecha y solo, como siempre estuvo (Frankz,
+        // 14-10-2026): la asesora lo escanea con su celular y el marcador abre
+        // listo. Solo en escritorio; en el teléfono ya está «Llamar».
+        canCall ? (
+          <div className="hidden lg:block">
+            <CallQr phone={lead.phone as string} size={64} />
           </div>
+        ) : null
+      }
+      width="max-w-[1040px]"
+      onClose={onClose}
+    >
+      {/* Conversación (izq., fija) · trabajo (der.). Una sola columna bajo 1.024 px. */}
+      <div
+        ref={gridRef}
+        className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]"
+      >
+        <div
+          className={cn(
+            "min-w-0 lg:sticky lg:top-[calc(var(--lead-head,78px)_+_1.25rem)] lg:h-[calc(100dvh_-_var(--lead-head,78px)_-_2.5rem)]",
+            hasWa && "h-[min(36rem,70dvh)]",
+          )}
+        >
+          {hasWa ? (
+            <WhatsappChat
+              leadId={lead.id}
+              lastInboundAt={lead.last_inbound_at}
+              hasConversation={!!(lead.kapso_conversation_id || lead.phone)}
+              onSent={onRegistered}
+            />
+          ) : (
+            <section
+              aria-label="Conversación de WhatsApp"
+              className="flex flex-col items-center justify-center gap-3 rounded-lg bg-white px-6 py-10 text-center shadow-control ring-1 ring-line lg:h-full"
+            >
+              <span className="grid size-12 place-items-center rounded-full bg-wash text-ink-500">
+                <IconChat aria-hidden className="size-6" />
+              </span>
+              <div>
+                <p className="text-sm font-semibold text-ink-900">Sin conversación de WhatsApp</p>
+                <p className="mx-auto mt-1 max-w-[40ch] text-[13px] leading-5 text-ink-500">
+                  El cliente abandonó un carrito web sin escribir. Llámalo para recuperar la venta.
+                </p>
+              </div>
+              <OpsButton onClick={() => copy(handle)}>
+                <IconCopy aria-hidden className="text-ink-500" />
+                {copyLabel(copied, `Copiar ${handle}`)}
+              </OpsButton>
+            </section>
+          )}
         </div>
 
-        {/* Body: conversación (izq) · acción (der). Se apila ≤720px de ancho del panel. */}
-        <div className="flex min-h-0 flex-1 flex-col @min-[720px]:flex-row">
-          {/* Izquierda · conversación de WhatsApp */}
-          <div className="flex max-h-[55vh] min-h-0 flex-col border-b border-slate-200 @min-[720px]:max-h-none @min-[720px]:w-1/2 @min-[720px]:border-r @min-[720px]:border-b-0">
-            {hasWa ? (
-              <WhatsappChat
+        {/* Trabajo. En escritorio llega al menos al pie del chat, para que
+            «Generar pedido» quede a la altura del «Enviar» de la conversación. */}
+        <div className="flex min-w-0 flex-col gap-4 lg:min-h-[calc(100dvh_-_var(--lead-head,78px)_-_2.5rem)]">
+          {/* Formulario de pedido: lo abre el botón del pie y ocupa la columna
+              de trabajo, sin tapar la conversación.
+              noReutilizarBorrador: este pedido es nuevo, no toques el borrador del anterior. */}
+          {orderOpen && (
+            <div
+              ref={orderRef}
+              tabIndex={-1}
+              // Recibe el foco solo para que Tab siga dentro del formulario;
+              // no es un control, así que sin anillo.
+              style={{ outline: "none" }}
+              className="scroll-mt-[calc(var(--lead-head,78px)_+_1.25rem)]"
+            >
+              <OrderFormPanel
                 leadId={lead.id}
-                lastInboundAt={lead.last_inbound_at}
-                hasConversation={!!(lead.kapso_conversation_id || lead.phone)}
-                onSent={onRegistered}
+                currency={currency}
+                hasCart={hasCart}
+                noReutilizarBorrador={lead.has_order}
+                onRegistered={onRegistered}
+                onClose={() => setOrderOpen(false)}
               />
-            ) : (
-              <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
-                <span className="flex h-12 w-12 items-center justify-center rounded-full bg-violet-100 text-violet-700">
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z" />
-                    <path d="m4 4 16 16" />
-                  </svg>
-                </span>
-                <div>
-                  <p className="text-sm font-semibold text-slate-800">Sin conversación de WhatsApp</p>
-                  <p className="mt-1 text-sm text-slate-500">
-                    El cliente abandonó un carrito web sin escribir. Llámalo para recuperar la venta.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => copy(handle)}
-                  className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-brand-700 hover:bg-slate-50"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="9" y="9" width="11" height="11" rx="2" />
-                    <path d="M5 15V5a2 2 0 0 1 2-2h10" />
-                  </svg>
-                  {copyLabel(copied, `Copiar ${handle}`)}
-                </button>
-              </div>
-            )}
-          </div>
+            </div>
+          )}
 
-          {/* Derecha · acción (scroll propio; el formulario de pedido la cubre al abrirse) */}
-          <div className="relative min-h-0 flex-1 @min-[720px]:w-1/2">
-            <div className="h-full space-y-4 overflow-y-auto p-5">
-              {/* Con qué abrir: las palabras exactas del cliente. En el detalle
-                  se muestra siempre que exista (incluso un "hola" pelado), que
-                  ya le dice a la asesora que no hay más contexto que trabajar.
-                  En la lista se filtran los saludos vacíos para no llenarla. */}
-              {(lead.first_inbound_text ?? "").trim() && (
-                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700">
-                  <p className="mb-0.5 text-xs font-semibold tracking-wide text-slate-500 uppercase">
-                    💬 Escribió primero
-                  </p>
-                  <p className="italic text-slate-800">“{lead.first_inbound_text}”</p>
-                </div>
-              )}
-
-              {/* Contexto: carrito/producto visto + entrega */}
-              {(lead.cart_item_count || lead.district || lead.draft_order_gid || lead.cart_summary) && (
-                <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-900">
-                  {lead.draft_order_gid && (
-                    <p className="mb-1 text-xs font-semibold tracking-wide text-emerald-700/80 uppercase">
-                      {lead.draft_order_status === "completed" ? "✅ Carrito recuperado" : "🛒 Carrito abandonado"}
-                      {lead.draft_order_name ? ` · ${lead.draft_order_name}` : ""}
-                    </p>
-                  )}
-                  {lead.cart_item_count ? (
-                    <p>
-                      🛒 <span className="font-medium">Carrito:</span>{" "}
-                      {lead.cart_summary || `${lead.cart_item_count} producto(s)`}
-                      {lead.cart_value != null ? ` · ${currency} ${Number(lead.cart_value).toFixed(2)}` : ""}
-                    </p>
-                  ) : lead.cart_summary ? (
-                    <p>
-                      🔎 <span className="font-medium">Vio:</span> {lead.cart_summary}
-                    </p>
-                  ) : null}
-                  {(lead.ship_name || lead.address1 || lead.district || lead.referencia) && (
-                    <div className={lead.cart_item_count ? "mt-1 space-y-0.5" : "space-y-0.5"}>
-                      {lead.ship_name && lead.ship_name !== lead.name && (
-                        <p>
-                          👤 <span className="font-medium">Recibe:</span> {lead.ship_name}
-                        </p>
-                      )}
-                      {lead.address1 && (
-                        <p>
-                          🏠 <span className="font-medium">Dirección:</span> {lead.address1}
-                        </p>
-                      )}
-                      {lead.referencia && <p className="text-emerald-800/90">Ref: {lead.referencia}</p>}
-                      {lead.district && (
-                        <p>
-                          📍 <span className="font-medium">Distrito:</span> {lead.district}
-                          {lead.province ? <span className="text-emerald-800/70"> · {lead.province}</span> : null}
-                        </p>
-                      )}
-                    </div>
-                  )}
-                  {draftOrderHref && (
+          {/* Las tarjetas se ocultan —no se desmontan— mientras el formulario
+              está abierto: una nota a medio escribir en el resultado de la
+              llamada o el panel de la guía siguen ahí al cerrarlo. */}
+          <div className={orderOpen ? "hidden" : "flex flex-col gap-4"}>
+            {(showContext || firstText) && (
+              <section aria-label="Lo que pidió" className={SECTION_CARD}>
+                <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                  <h3 className="text-sm font-semibold text-ink-900">Lo que pidió</h3>
+                  {showContext && draftOrderHref && (
                     <a
                       href={draftOrderHref}
                       target="_blank"
                       rel="noreferrer"
-                      className="mt-1.5 inline-block text-xs font-medium text-emerald-700 underline hover:text-emerald-900"
+                      className="inline-flex items-center gap-1 text-[13px] font-medium text-brand-700 hover:underline pointer-coarse:min-h-11"
                     >
-                      Ver borrador en Shopify ↗
+                      Ver borrador en Shopify
+                      <IconArrowUpRight aria-hidden className="size-3.5" />
                     </a>
                   )}
                 </div>
-              )}
-
-              {/* Resumen del bot */}
-              {lead.handoff_context && (
-                <div
-                  className={cn(
-                    "rounded-xl border px-3 py-2.5 text-sm",
-                    handoffTone === "red"
-                      ? "border-red-200 bg-red-50 text-red-800"
-                      : "border-amber-200 bg-amber-50 text-amber-800",
-                  )}
-                >
-                  <p className="text-xs font-semibold tracking-wide uppercase opacity-80">Resumen del bot</p>
-                  <p className="mt-1 whitespace-pre-wrap">{lead.handoff_context}</p>
-                </div>
-              )}
-
-              {/* Asignar Yape (solo admins; se auto-oculta para vendedoras) */}
-              {lead.status === "yape_por_verificar" && (
-                <YapeAssign leadId={lead.id} storeId={lead.store_id} onAssigned={onRegistered} />
-              )}
-
-              {/* Crear guía en Aliclik. Es EL MISMO componente que usa el Master de
-                  Pedidos, con las mismas server actions: crear desde aquí o desde
-                  allí escribe la misma fila de `shipments`, porque las dos cuelgan
-                  del id interno del pedido. No hay una versión "de Leads".
-
-                  Va en esta columna y no en un modal a propósito: la vendedora
-                  necesita seguir viendo la conversación de WhatsApp mientras crea
-                  la guía —de ahí sale la ubicación cuando Shopify no la trae— y un
-                  modal taparía justo lo que tiene que mirar.
-
-                  Se muestra en CUALQUIER lead con pedido y sin guía, no solo tras
-                  generarlo: si entra una llamada y cierra el drawer, puede volver
-                  y terminar aquí en vez de irse al Master a buscar el pedido. */}
-              {/* Guía ya creada: bloque permanente. Antes, en cuanto la guía
-                  existía el panel desaparecía y con él la confirmación, así que
-                  la vendedora la veía dos segundos y se quedaba sin saber qué
-                  código se había generado. Los dos códigos juntos —el pedido de
-                  Shopify y la guía— son los que hay que cruzar si algo se
-                  tuerce, así que se enseñan siempre. */}
-              {history?.currentOrderGuide && (
-                <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5">
-                  <p className="text-xs font-semibold tracking-wide text-emerald-700 uppercase">
-                    Guía de Aliclik
-                  </p>
-                  <p className="mt-1 font-mono text-sm font-semibold text-emerald-900">
-                    {history.currentOrderGuide}
-                  </p>
-                  {history.currentOrderName && (
-                    <p className="mt-0.5 text-xs text-emerald-800">
-                      Pedido {history.currentOrderName}
-                    </p>
-                  )}
-                </div>
-              )}
-
-              {/* El panel trae su contenido sin marco (en la ficha lo enmarca la
-                  tarjeta de su sección); aquí lleva su propia tarjeta. */}
-              {history?.currentOrderId && !history.currentOrderGuide && (
-                <div className={SECTION_CARD}>
-                  <AliclikGuidePanel
-                    // `key` = candado de identidad. Sin ella, si la vendedora pulsa
-                    // "Generar nuevo pedido" con el panel abierto, React reutiliza
-                    // la instancia: cambia `orderId` pero se queda dentro la
-                    // cotización del pedido ANTERIOR. Crear entonces mandaría a
-                    // Aliclik el courier y el precio de un pedido y el id de otro.
-                    // Con la key el panel se monta de cero para cada pedido.
-                    key={history.currentOrderId}
-                    orderId={history.currentOrderId}
-                    hasCoordinate={history.currentOrderHasCoordinate}
-                    health={history.currentOrderAliclikHealth}
-                    // Sin argumento a propósito: `{refreshList:true}` toma un atajo
-                    // que NO recarga el historial, y el panel se quedaría visible
-                    // ofreciendo crear una guía que ya existe.
-                    onCreated={() => onRegistered()}
-                  />
-                </div>
-              )}
-
-              {/* Pedidos anteriores: últimos 3 pedidos de Shopify de este cliente */}
-              {history && history.recentOrders.length > 0 && (
-                <div>
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <p className="text-xs font-semibold tracking-wide text-slate-400 uppercase">
-                      Pedidos anteriores · {history.recentOrders.length}
-                    </p>
-                    <span className="shrink-0 text-xs font-semibold text-emerald-700">
-                      {currency} {history.recentOrders.reduce((s, o) => s + o.amount, 0).toFixed(2)} en total
-                    </span>
-                  </div>
-                  <div className="space-y-1.5">
-                    {history.recentOrders.map((o, i) => (
-                      <div
-                        key={o.name ?? i}
-                        className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2"
-                      >
-                        <span className="truncate text-sm font-medium text-slate-800">Pedido {o.name ?? "—"}</span>
-                        <span className="flex shrink-0 items-center gap-2.5">
-                          <span className="text-xs text-slate-400">{orderDateShort(o.createdAt)}</span>
-                          <span className="text-sm font-semibold text-emerald-700">
-                            {currency} {o.amount.toFixed(2)}
-                          </span>
-                          {o.adminUrl && (
-                            <a
-                              href={o.adminUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              title="Abrir en Shopify"
-                              aria-label={`Abrir ${o.name ?? "pedido"} en Shopify (nueva pestaña)`}
-                              className="inline-flex shrink-0 items-center justify-center rounded-md p-1 text-slate-400 transition hover:bg-slate-100 hover:text-brand-600"
-                            >
-                              <svg
-                                width="13"
-                                height="13"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="2.2"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                aria-hidden="true"
-                              >
-                                <path d="M7 17 17 7" />
-                                <path d="M8 7h9v9" />
-                              </svg>
-                            </a>
-                          )}
-                        </span>
-                      </div>
+                {askLine.length > 0 && (
+                  <p className="mt-1 text-[13px] leading-5 text-ink-700">
+                    {askLine.map((part, i) => (
+                      <Fragment key={i}>
+                        {i > 0 && " · "}
+                        {part}
+                      </Fragment>
                     ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Resultado de la llamada */}
-              <CallForm key={lead.id} leadId={lead.id} onRegistered={onRegistered} />
-
-              {/* Historial (timeline) */}
-              <section>
-                <p className="mb-2 text-xs font-semibold tracking-wide text-slate-400 uppercase">Historial</p>
-                {calls === null ? (
-                  <p className="text-sm text-slate-400">Cargando historial…</p>
-                ) : calls.length ? (
-                  <div>
-                    {calls.map((c, i) => {
-                      const last = i === calls.length - 1;
-                      return (
-                        <div key={c.id ?? i} className="flex gap-2.5">
-                          <div className="flex flex-col items-center">
-                            <span
-                              className={cn(
-                                "mt-1 h-2.5 w-2.5 shrink-0 rounded-full border-2 bg-white",
-                                c.kind === "message"
-                                  ? "border-emerald-500"
-                                  : c.new_status
-                                    ? "border-brand-500"
-                                    : "border-slate-300",
-                              )}
-                            />
-                            {!last && <span className="my-0.5 w-0.5 flex-1 bg-slate-200" />}
-                          </div>
-                          <div className={cn("min-w-0", last ? "pb-0" : "pb-3")}>
-                            <p className="text-sm text-slate-800">
-                              {c.kind === "message" ? (
-                                <span className="font-medium text-brand-700">📤 WhatsApp</span>
-                              ) : c.new_status ? (
-                                <span className="font-medium">{labelOf(c.new_status)}</span>
-                              ) : (
-                                <span className="text-slate-500">Nota</span>
-                              )}
-                            </p>
-                            {c.note && <p className="mt-0.5 text-sm text-slate-600">{c.note}</p>}
-                            <p className="mt-0.5 text-[11px] text-slate-400">
-                              {fmtDate(c.occurred_at)}
-                              {c.vendedora_name ? ` · ${c.vendedora_name}` : ""}
-                            </p>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <p className="text-sm text-slate-400">Sin actividad todavía.</p>
+                  </p>
+                )}
+                {hasAskRows && (
+                  <dl className="mt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-[13px] leading-5">
+                    {showRecibe && (
+                      <>
+                        <dt className="text-ink-500">Recibe</dt>
+                        <dd className="min-w-0 break-words text-ink-900">{lead.ship_name}</dd>
+                      </>
+                    )}
+                    {showAddress && lead.address1 && (
+                      <>
+                        <dt className="text-ink-500">Dirección</dt>
+                        <dd className="min-w-0 break-words text-ink-900">{lead.address1}</dd>
+                      </>
+                    )}
+                    {showAddress && lead.referencia && (
+                      <>
+                        <dt className="text-ink-500">Referencia</dt>
+                        <dd className="min-w-0 break-words text-ink-900">{lead.referencia}</dd>
+                      </>
+                    )}
+                    {showAddress && lead.district && (
+                      <>
+                        <dt className="text-ink-500">Distrito</dt>
+                        <dd className="flex min-w-0 items-start gap-2 text-ink-900">
+                          {masterCoverage && <CoverageBadge coverage={masterCoverage} />}
+                          <span className="min-w-0 break-words">
+                            {lead.district}
+                            {lead.province ? <span className="text-ink-500">{` · ${lead.province}`}</span> : null}
+                          </span>
+                        </dd>
+                      </>
+                    )}
+                    {firstText && (
+                      <>
+                        <dt className="text-ink-500">Escribió primero</dt>
+                        <dd className="min-w-0 break-words text-ink-900">“{lead.first_inbound_text}”</dd>
+                      </>
+                    )}
+                  </dl>
                 )}
               </section>
+            )}
 
-              {/* Número de WhatsApp */}
-              {lead.wa_phone_number_id && (
-                <p className="text-xs text-slate-500">
-                  📱 WhatsApp:{" "}
-                  <span className="font-medium text-slate-700">
-                    {waNumber?.name ?? waNumber?.displayPhone ?? "número sin nombre"}
+            {/* Pedidos anteriores: los 3 últimos de Shopify, justo bajo «Lo que pidió»:
+                es lo primero que se mira al abrir la ficha (Frankz, 14-10-2026). */}
+            {history && history.recentOrders.length > 0 && (
+              <section aria-label="Pedidos anteriores" className={SECTION_CARD}>
+                <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                  <h3 className="text-sm font-semibold text-ink-900">
+                    Pedidos anteriores{" "}
+                    <span className="font-normal tabular-nums text-ink-500">· {history.recentOrders.length}</span>
+                  </h3>
+                  <span className="text-[13px] tabular-nums text-ink-600">
+                    {currency}{" "}
+                    {history.recentOrders
+                      .filter((o) => !o.cancelled)
+                      .reduce((s, o) => s + o.amount, 0)
+                      .toFixed(2)}{" "}
+                    en total
                   </span>
-                  {waKindLabel(waNumber?.kind ?? null) ? ` · ${waKindLabel(waNumber?.kind ?? null)}` : ""}
+                </div>
+                <ul className="-mx-4 -mb-4 mt-3 divide-y divide-line border-t border-line sm:-mx-5 sm:-mb-5">
+                  {history.recentOrders.map((o, i) => (
+                    <li key={o.name ?? i} className="flex items-center justify-between gap-3 px-4 py-2.5 sm:px-5">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="truncate text-sm font-medium text-ink-900">Pedido {o.name ?? "—"}</span>
+                        {o.cancelled && <Badge tone="crit">Anulado</Badge>}
+                      </span>
+                      <span className="flex shrink-0 items-center gap-3">
+                        <span className="text-xs tabular-nums text-ink-500">{orderDateShort(o.createdAt)}</span>
+                        <span
+                          className={cn(
+                            "text-sm font-semibold tabular-nums",
+                            o.cancelled ? "text-ink-500 line-through decoration-ink-300" : "text-ink-900",
+                          )}
+                        >
+                          {currency} {o.amount.toFixed(2)}
+                        </span>
+                        {o.adminUrl && (
+                          <a
+                            href={o.adminUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Abrir en Shopify"
+                            aria-label={`Abrir ${o.name ?? "pedido"} en Shopify (nueva pestaña)`}
+                            className="-mr-1.5 grid size-7 shrink-0 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:size-11"
+                          >
+                            <IconArrowUpRight aria-hidden className="size-4" />
+                          </a>
+                        )}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
+            {/* Resumen del bot */}
+            {lead.handoff_context && (
+              <Banner
+                tone="info"
+                title={lead.handoff_reason === LEAD_VOICE_AGENT_HANDOFF ? "Resumen del agente de voz" : "Resumen del bot"}
+              >
+                <p className="mt-0.5 whitespace-pre-wrap">{lead.handoff_context}</p>
+              </Banner>
+            )}
+
+            {/* Asignar Yape (solo admins; se auto-oculta para vendedoras) */}
+            {lead.status === "yape_por_verificar" && (
+              <YapeAssign leadId={lead.id} storeId={lead.store_id} onAssigned={onRegistered} />
+            )}
+
+            {/* Crear guía en Aliclik. Es EL MISMO componente que usa el Master de
+                Pedidos, con las mismas server actions: crear desde aquí o desde
+                allí escribe la misma fila de `shipments`, porque las dos cuelgan
+                del id interno del pedido. No hay una versión "de Leads".
+
+                Va en esta columna y no en un modal a propósito: la vendedora
+                necesita seguir viendo la conversación de WhatsApp mientras crea
+                la guía —de ahí sale la ubicación cuando Shopify no la trae— y un
+                modal taparía justo lo que tiene que mirar.
+
+                Se muestra en CUALQUIER lead con pedido y sin guía, no solo tras
+                generarlo: si entra una llamada y cierra el drawer, puede volver
+                y terminar aquí en vez de irse al Master a buscar el pedido. */}
+            {/* Guía ya creada: bloque permanente. Antes, en cuanto la guía
+                existía el panel desaparecía y con él la confirmación, así que
+                la vendedora la veía dos segundos y se quedaba sin saber qué
+                código se había generado. Los dos códigos juntos —el pedido de
+                Shopify y la guía— son los que hay que cruzar si algo se
+                tuerce, así que se enseñan siempre. */}
+            {history?.currentOrderGuide && (
+              <section aria-label="Guía de Aliclik" className={SECTION_CARD}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-sm font-semibold text-ink-900">Guía de Aliclik</h3>
+                  <Badge tone="ok">Creada</Badge>
+                </div>
+                <p className="mt-2 break-all font-mono text-sm font-semibold text-ink-900">
+                  {history.currentOrderGuide}
                 </p>
-              )}
+                {history.currentOrderName && (
+                  <p className="mt-0.5 text-[13px] text-ink-500">Pedido {history.currentOrderName}</p>
+                )}
+              </section>
+            )}
 
-              {/* Campaña Meta */}
-              {lead.source === "meta_ad" && <MetaAttribution lead={lead} adMeta={adMeta} />}
-            </div>
-
-            {/* Formulario de pedido: lo abre el CTA del footer; cubre la columna de acción.
-                noReutilizarBorrador: este pedido es nuevo, no toques el borrador del anterior. */}
-            {orderOpen && (
-              <div className="absolute inset-0 overflow-y-auto bg-slate-50 p-4">
-                <OrderFormPanel
-                  leadId={lead.id}
-                  currency={currency}
-                  hasCart={hasCart}
-                  noReutilizarBorrador={lead.has_order}
-                  onRegistered={onRegistered}
-                  onClose={() => setOrderOpen(false)}
+            {/* El panel trae su contenido sin marco (en la ficha lo enmarca la
+                tarjeta de su sección); aquí lleva su propia tarjeta. */}
+            {history?.currentOrderId && !history.currentOrderGuide && (
+              <div className={SECTION_CARD}>
+                <AliclikGuidePanel
+                  // `key` = candado de identidad. Sin ella, si la vendedora pulsa
+                  // "Generar nuevo pedido" con el panel abierto, React reutiliza
+                  // la instancia: cambia `orderId` pero se queda dentro la
+                  // cotización del pedido ANTERIOR. Crear entonces mandaría a
+                  // Aliclik el courier y el precio de un pedido y el id de otro.
+                  // Con la key el panel se monta de cero para cada pedido.
+                  key={history.currentOrderId}
+                  orderId={history.currentOrderId}
+                  hasCoordinate={history.currentOrderHasCoordinate}
+                  health={history.currentOrderAliclikHealth}
+                  // Sin argumento a propósito: `{refreshList:true}` toma un atajo
+                  // que NO recarga el historial, y el panel se quedaría visible
+                  // ofreciendo crear una guía que ya existe.
+                  onCreated={() => onRegistered()}
                 />
               </div>
             )}
-          </div>
-        </div>
 
-        {/* Footer CTA: cierre de venta (oculto mientras el formulario está abierto) */}
-        {!orderOpen && (
-          <div className="border-t border-slate-200 bg-white p-3.5">
-            {lead.has_order ? (
-              <div className="space-y-2">
-                {/* Lead has an order but the auto-linker didn't mark it won (a later
-                    call disposition took precedence). Let the asesor confirm it. */}
-                {lead.category !== "won" && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      startConfirmWon(async () => {
-                        const res = await confirmLeadWon(lead.id);
-                        onRegistered({ leadPatch: res.leadPatch, refreshList: true });
-                      })
-                    }
-                    disabled={confirmingWon}
-                    className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
-                  >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M20 6 9 17l-5-5" />
-                    </svg>
-                    {confirmingWon ? "Marcando…" : "Marcar como ganado (ya tiene pedido)"}
-                  </button>
-                )}
-                <div className="flex items-center justify-between gap-3">
-                  <p className="min-w-0 truncate text-sm font-medium text-emerald-700">
-                    ✅ Pedido generado{history?.currentOrderName ? ` · ${history.currentOrderName}` : ""}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setOrderOpen(true)}
-                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700"
-                  >
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M12 5v14M5 12h14" />
-                    </svg>
-                    Generar nuevo pedido
-                  </button>
-                </div>
+            {/* Agente de voz de leads (MOM §33): si entra a su cola, llamar o
+                probarlo, y sus llamadas. Solo con teléfono: sin número no hay
+                a quién llamar. Sin argumento en onRegistered a propósito: lo
+                que el agente escribe toca lead, historial y lista. */}
+            {canCall && (
+              <div className={VOICE_STRIP}>
+                <LeadVoiceAgentPanel key={lead.id} leadId={lead.id} onChanged={() => onRegistered()} />
               </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setOrderOpen(true)}
-                className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M9 11l3 3 8-8" />
-                  <path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" />
-                </svg>
-                {hasCart ? "Generar pedido (contraentrega)" : "Registrar pedido (contraentrega)"}
-              </button>
+            )}
+
+            {/* Resultado de la llamada */}
+            <CallForm key={lead.id} leadId={lead.id} onRegistered={onRegistered} />
+
+            {/* Historial (timeline) */}
+            <section aria-label="Historial" className={SECTION_CARD}>
+              <h3 className="text-sm font-semibold text-ink-900">Historial</h3>
+              {calls === null ? (
+                <div role="status" className="mt-3 space-y-2">
+                  <span className="sr-only">Cargando historial…</span>
+                  <Skeleton className="h-10" />
+                  <Skeleton className="h-10" />
+                </div>
+              ) : calls.length ? (
+                <ol className="mt-3 flex flex-col gap-3 text-[13px] leading-5">
+                  {calls.map((c, i) => (
+                    <li key={c.id ?? i} className="grid grid-cols-[12px_minmax(0,1fr)] gap-2">
+                      {/* Un cambio de estado se lee antes que un mensaje o una nota. */}
+                      <span
+                        aria-hidden
+                        className={cn(
+                          "mt-1.5 size-2 rounded-full",
+                          c.kind !== "message" && c.new_status ? "bg-ink-600" : "bg-ink-300",
+                        )}
+                      />
+                      <div className="min-w-0">
+                        <p className="font-medium text-ink-900">
+                          {c.kind === "message" ? (
+                            "WhatsApp enviado"
+                          ) : c.kind === LEAD_VOICE_AGENT_KIND ? (
+                            // El agente de voz de leads: que no se lea como
+                            // una asesora ni como el drip (MOM §33).
+                            leadVoiceAgentTitle(c.new_status)
+                          ) : c.new_status ? (
+                            labelOf(c.new_status)
+                          ) : (
+                            <span className="font-normal text-ink-500">Nota</span>
+                          )}
+                        </p>
+                        {c.note && <p className="break-words text-ink-600">{c.note}</p>}
+                        <p className="text-xs tabular-nums text-ink-500">
+                          {fmtDate(c.occurred_at)}
+                          {c.vendedora_name
+                            ? ` · ${c.vendedora_name}`
+                            : c.kind === LEAD_VOICE_AGENT_KIND
+                              ? ` · ${LEAD_VOICE_AGENT_NAME}`
+                              : ""}
+                        </p>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="mt-2 text-[13px] text-ink-500">Sin actividad todavía.</p>
+              )}
+            </section>
+
+            {/* Número de WhatsApp y campaña Meta */}
+            {(lead.wa_phone_number_id || lead.source === "meta_ad") && (
+              <LeadOrigin lead={lead} adMeta={adMeta} waNumber={waNumber} />
             )}
           </div>
-        )}
-      </aside>
-    </>
+
+          {/* Cierre de venta, pegado al pie de la columna (oculto mientras el
+              formulario está abierto). El margen negativo cubre el relleno del
+              panel: así el botón queda a la altura del «Enviar» del chat tanto
+              pegado como al final del desplazamiento. */}
+          {!orderOpen && (
+            <div className="sticky bottom-0 z-[1] -mx-1 -mb-5 mt-auto bg-white px-1 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3">
+              {lead.has_order ? (
+                <div className="space-y-2">
+                  {/* Lead has an order but the auto-linker didn't mark it won (a later
+                      call disposition took precedence). Let the asesor confirm it. */}
+                  {lead.category !== "won" && (
+                    <OpsButton
+                      variant="primary"
+                      size="lg"
+                      className="w-full"
+                      onClick={() =>
+                        startConfirmWon(async () => {
+                          const res = await confirmLeadWon(lead.id);
+                          onRegistered({ leadPatch: res.leadPatch, refreshList: true });
+                        })
+                      }
+                      disabled={confirmingWon}
+                    >
+                      <IconCheck aria-hidden />
+                      {confirmingWon ? "Marcando…" : "Marcar como ganado (ya tiene pedido)"}
+                    </OpsButton>
+                  )}
+                  <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+                    <p className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-ok-fg">
+                      <IconCheckCircle aria-hidden className="size-4 shrink-0" />
+                      <span className="truncate">
+                        Pedido generado{history?.currentOrderName ? ` · ${history.currentOrderName}` : ""}
+                      </span>
+                    </p>
+                    <OpsButton ref={ctaRef} onClick={() => setOrderOpen(true)}>
+                      <IconPlus aria-hidden className="text-ink-500" />
+                      Generar nuevo pedido
+                    </OpsButton>
+                  </div>
+                </div>
+              ) : (
+                <OpsButton
+                  ref={ctaRef}
+                  variant="primary"
+                  size="lg"
+                  className="w-full"
+                  onClick={() => setOrderOpen(true)}
+                >
+                  {hasCart ? "Generar pedido (contraentrega)" : "Registrar pedido (contraentrega)"}
+                </OpsButton>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </SidePanel>
   );
 }
 
-const MEDIA_KIND_META: Record<NonNullable<LeadConversationMessage["mediaKind"]>, { icon: string; label: string }> = {
-  image: { icon: "🖼️", label: "Imagen" },
-  audio: { icon: "🎧", label: "Audio" },
-  video: { icon: "🎬", label: "Video" },
-  document: { icon: "📄", label: "Documento" },
-  sticker: { icon: "🩷", label: "Sticker" },
+type GlyphIcon = ComponentType<SVGProps<SVGSVGElement>>;
+
+const MEDIA_KIND_META: Record<NonNullable<LeadConversationMessage["mediaKind"]>, { icon: GlyphIcon; label: string }> = {
+  image: { icon: IconImage, label: "Imagen" },
+  audio: { icon: IconMic, label: "Audio" },
+  video: { icon: IconCamera, label: "Video" },
+  document: { icon: IconReceipt, label: "Documento" },
+  sticker: { icon: IconImage, label: "Sticker" },
 };
 
 /** yyyy-mm-dd key (local) for grouping chat messages by day. */
@@ -932,19 +1122,25 @@ function chatTime(iso: string): string {
 /**
  * The lead's WhatsApp chat as a self-contained widget — the full conversation
  * (text + inline images like Yape vouchers) with the composer attached at the
- * bottom, styled like WhatsApp. Loads when the drawer opens (resolving the
- * conversation by phone if no id was stored) and refreshes after each send.
+ * bottom, in the Kapta style (thread on `wash`). Loads when it mounts (resolving
+ * the conversation by phone if no id was stored) and refreshes after each send.
+ *
+ * `variant="panel"` (la ficha): tarjeta propia que llena el alto que le da quien
+ * la monta. `variant="card"` (la tarjeta del siguiente lead): sin marco, el hilo
+ * con 320 px como máximo y desplazamiento propio; la misma conducta.
  */
-function WhatsappChat({
+export function WhatsappChat({
   leadId,
   lastInboundAt,
   hasConversation,
   onSent,
+  variant = "panel",
 }: {
   leadId: string;
   lastInboundAt?: string | null;
   hasConversation: boolean;
   onSent: (update?: LeadDrawerUpdate) => void;
+  variant?: "panel" | "card";
 }) {
   const [state, setState] = useState<
     | { status: "loading" }
@@ -1186,6 +1382,7 @@ function WhatsappChat({
 
   if (!hasConversation) return null;
 
+  const card = variant === "card";
   const threads = state.status === "ready" ? state.threads : [];
   const activeId = state.status === "ready" ? state.activeId : null;
   const activePhoneNumberId = state.status === "ready" ? state.activePhoneNumberId : null;
@@ -1202,6 +1399,13 @@ function WhatsappChat({
       : null;
   const q = search.trim().toLowerCase();
   const messages = q ? allMessages.filter((m) => m.text.toLowerCase().includes(q)) : allMessages;
+  const total = allMessages.length;
+  const headContext = [
+    total > 0 ? `${total.toLocaleString("es-PE")} ${total === 1 ? "mensaje" : "mensajes"}` : null,
+    activeThread?.label ? `desde ${activeThread.label}` : null,
+  ].filter(Boolean);
+  // La hairline bajo cada franja de la tarjeta; en la variante sin marco basta el aire.
+  const band = card ? "pb-2" : "px-4 py-2 shadow-[inset_0_-1px_0_var(--color-line)]";
   // Interleave day separators ("Hoy", "Ayer", "26 jun") into the (filtered) thread.
   const rows: ReactNode[] = [];
   let lastDay = "";
@@ -1209,8 +1413,8 @@ function WhatsappChat({
     const day = dayKeyOf(m.at);
     if (day !== lastDay) {
       rows.push(
-        <div key={`day-${i}`} className="flex justify-center py-1.5">
-          <span className="rounded-full bg-white/80 px-2.5 py-0.5 text-[11px] font-medium text-slate-500 shadow-sm">
+        <div key={`day-${i}`} className="flex justify-center py-1">
+          <span className="rounded-full bg-white px-2.5 py-0.5 text-xs font-medium text-ink-500 ring-1 ring-line">
             {chatDayLabel(m.at)}
           </span>
         </div>,
@@ -1230,75 +1434,73 @@ function WhatsappChat({
   });
 
   return (
-    <section className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-white">
-      {/* Cabecera estilo WhatsApp */}
-      <div className="flex items-center justify-between gap-2 bg-emerald-600 px-3 py-2 text-white">
-        <div className="flex min-w-0 items-center gap-2">
-          <span aria-hidden>💬</span>
-          <span className="truncate text-sm font-semibold">Conversación de WhatsApp</span>
-          {state.status === "ready" && state.messages.length > 0 && (
-            <span className="shrink-0 text-xs text-emerald-100">· {state.messages.length}</span>
+    <section
+      aria-label="Conversación de WhatsApp"
+      className={
+        card
+          ? "flex h-full min-h-0 min-w-0 flex-col"
+          : "flex h-full min-h-0 min-w-0 flex-col rounded-lg bg-white shadow-control ring-1 ring-line"
+      }
+    >
+      {/* Cabecera: qué es, cuántos mensajes y desde qué número; buscar y actualizar. */}
+      <div className={cn("flex items-center justify-between gap-2", card ? "pb-2 shadow-[inset_0_-1px_0_var(--color-line)]" : "px-4 py-1.5 shadow-[inset_0_-1px_0_var(--color-line)]")}>
+        <p className="min-w-0 truncate text-sm font-semibold text-ink-900">
+          Conversación
+          {headContext.length > 0 && (
+            <span className="font-normal tabular-nums text-ink-500">{` · ${headContext.join(" · ")}`}</span>
           )}
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
+        </p>
+        <div className="-mr-1.5 flex shrink-0 items-center gap-0.5">
           <button
             type="button"
             onClick={() => setSearchOpen((s) => !s)}
             title="Buscar en la conversación"
             aria-label="Buscar"
-            className={cn(
-              "rounded-full px-1.5 text-base leading-none hover:bg-white/15 hover:text-white",
-              searchOpen ? "text-white" : "text-emerald-100",
-            )}
+            aria-pressed={searchOpen}
+            className={cn(ICON_BTN, searchOpen ? "bg-wash text-ink-900" : "text-ink-500")}
           >
-            🔍
+            <IconSearch aria-hidden className="size-4" />
           </button>
           <button
             type="button"
             onClick={() => load()}
             title="Actualizar"
             aria-label="Actualizar conversación"
-            className="rounded-full px-1.5 text-lg leading-none text-emerald-100 hover:bg-white/15 hover:text-white"
+            className={cn(ICON_BTN, "text-ink-500")}
           >
-            ↻
+            <IconRepeat aria-hidden className="size-4" />
           </button>
         </div>
       </div>
 
       {/* Selector de número: solo si el cliente escribió a más de un número */}
       {threads.length > 1 && (
-        <div className="flex gap-1 overflow-x-auto border-b border-slate-200 bg-slate-50 px-2 py-1.5">
+        <div className={cn("flex gap-1.5 overflow-x-auto", band)}>
           {threads.map((t) => (
-            <button
+            <ChoiceChip
               key={t.conversationId}
-              type="button"
+              label={t.label}
+              active={t.conversationId === activeId}
               onClick={() => switchThread(t.conversationId)}
               title={t.displayPhone ?? undefined}
-              className={cn(
-                "shrink-0 rounded-full px-2.5 py-1 text-xs font-medium",
-                t.conversationId === activeId
-                  ? "bg-emerald-600 text-white"
-                  : "border border-slate-300 bg-white text-slate-600 hover:bg-slate-100",
-              )}
-            >
-              {t.label}
-            </button>
+            />
           ))}
         </div>
       )}
 
       {/* Buscar dentro de la conversación */}
       {searchOpen && (
-        <div className="flex items-center gap-2 border-b border-slate-200 bg-white px-3 py-2">
+        <div className={cn("flex items-center gap-2", band)}>
           <input
             autoFocus
             value={search}
             onChange={(e) => setSearch(e.currentTarget.value)}
             placeholder="Buscar en la conversación…"
-            className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+            aria-label="Buscar en la conversación"
+            className={cn(FIELD_BOX, "h-8 w-full px-3")}
           />
           {q && (
-            <span className="shrink-0 text-xs text-slate-500">
+            <span className="shrink-0 text-xs tabular-nums text-ink-500">
               {messages.length} {messages.length === 1 ? "coincidencia" : "coincidencias"}
             </span>
           )}
@@ -1308,27 +1510,32 @@ function WhatsappChat({
               setSearch("");
               setSearchOpen(false);
             }}
-            className="shrink-0 text-sm text-slate-400 hover:text-slate-700"
+            className={cn(ICON_BTN, "text-ink-500")}
             aria-label="Cerrar búsqueda"
           >
-            ✕
+            <IconX aria-hidden className="size-4" />
           </button>
         </div>
       )}
 
       {/* Hilo de mensajes */}
+      {/* En la tarjeta el hilo no decide el alto: se desplaza dentro del que
+          marcan las otras dos columnas. */}
       <div className="relative min-h-0 flex-1">
         <div
           ref={scrollRef}
           onScroll={onThreadScroll}
-          className="absolute inset-0 space-y-1 overflow-y-auto bg-[#efeae2] px-3 py-3"
+          className={cn(
+            "absolute inset-0 space-y-2 overflow-y-auto overscroll-contain bg-wash",
+            card ? "rounded-md px-1 py-3" : "px-4 py-4",
+          )}
         >
           {state.status === "loading" ? (
-            <p className="py-10 text-center text-sm text-slate-500">Cargando conversación…</p>
+            <p className="py-10 text-center text-[13px] text-ink-500">Cargando conversación…</p>
           ) : messages.length ? (
             rows
           ) : (
-            <p className="py-10 text-center text-sm text-slate-500">
+            <p className="py-10 text-center text-[13px] text-ink-500">
               {state.status !== "ready"
                 ? ""
                 : q
@@ -1341,9 +1548,10 @@ function WhatsappChat({
           <button
             type="button"
             onClick={jumpToBottom}
-            className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-emerald-600 px-3 py-1 text-xs font-medium text-white shadow-md hover:bg-emerald-700"
+            className="absolute bottom-3 left-1/2 inline-flex h-8 -translate-x-1/2 items-center gap-1 rounded-full bg-white px-3 text-[13px] font-medium text-brand-700 shadow-control ring-1 ring-inset ring-line-strong hover:bg-wash"
           >
-            ↓ Nuevos mensajes
+            <IconChevronDown aria-hidden className="size-4" />
+            Nuevos mensajes
           </button>
         )}
       </div>
@@ -1354,6 +1562,7 @@ function WhatsappChat({
         lastInboundAt={effectiveLastInboundAt}
         phoneNumberId={activePhoneNumberId}
         numberHint={numberHint}
+        compact={card}
         onOptimisticSend={addOptimisticMessage}
         onSendSettled={settleOptimisticMessage}
         onSent={(leadPatch) => onSent({ leadPatch })}
@@ -1366,7 +1575,7 @@ function WhatsappChat({
 function linkify(text: string): ReactNode[] {
   return text.split(/(https?:\/\/[^\s]+)/g).map((part, i) =>
     /^https?:\/\//.test(part) ? (
-      <a key={i} href={part} target="_blank" rel="noreferrer" className="underline">
+      <a key={i} href={part} target="_blank" rel="noreferrer" className="break-all text-brand-700 underline">
         {part}
       </a>
     ) : (
@@ -1384,7 +1593,7 @@ function highlightText(text: string, term: string): ReactNode[] {
   while (pos >= 0 && term) {
     if (pos > 0) out.push(<span key={`t${k}`}>{rest.slice(0, pos)}</span>);
     out.push(
-      <mark key={`h${k}`} className="rounded bg-yellow-200 px-0.5">
+      <mark key={`h${k}`} className="rounded-sm bg-warn-bg px-0.5 text-ink-900">
         {rest.slice(pos, pos + term.length)}
       </mark>,
     );
@@ -1396,30 +1605,49 @@ function highlightText(text: string, term: string): ReactNode[] {
   return out;
 }
 
-/** WhatsApp delivery ticks for an outbound message (null = no indicator). */
-function statusTicks(status: string | null): { marks: string; cls: string; label: string } | null {
+type TickKind = "read" | "delivered" | "sent" | "pending" | "unknown" | "failed";
+
+/** WhatsApp delivery state for an outbound message (null = no indicator). */
+function statusTicks(status: string | null): { kind: TickKind; cls: string; label: string } | null {
   switch (status) {
     case "read":
-      return { marks: "✓✓", cls: "text-sky-500", label: "Leído" };
+      return { kind: "read", cls: "text-info-fg", label: "Leído" };
     case "delivered":
-      return { marks: "✓✓", cls: "text-emerald-800/50", label: "Entregado" };
+      return { kind: "delivered", cls: "text-ink-500", label: "Entregado" };
     case "sent":
-      return { marks: "✓", cls: "text-emerald-800/50", label: "Enviado" };
+      return { kind: "sent", cls: "text-ink-500", label: "Enviado" };
     case "pending":
     case "sending":
-      return { marks: "◷", cls: "text-emerald-800/40", label: "Enviando" };
+      return { kind: "pending", cls: "text-ink-500", label: "Enviando" };
     case "unknown":
-      return { marks: "?", cls: "text-amber-600", label: "Estado por confirmar" };
+      return { kind: "unknown", cls: "text-warn-fg", label: "Estado por confirmar" };
     case "failed":
     case "error":
-      return { marks: "⚠", cls: "text-red-500", label: "No se envió" };
+      return { kind: "failed", cls: "text-crit-fg", label: "No se envió" };
     default:
       return null;
   }
 }
 
-/** One WhatsApp bubble: customer (left/white) vs. business (right/WA green), with
- *  inline image/audio/video players, delivery ticks (outbound) and clickable links. */
+/** El dibujo del estado: uno o dos vistos, el reloj mientras sale, o el aviso. */
+function TickGlyph({ kind }: { kind: TickKind }) {
+  if (kind === "read" || kind === "delivered") {
+    return (
+      <span aria-hidden className="inline-flex">
+        <IconCheck className="size-3" strokeWidth={2.4} />
+        <IconCheck className="-ml-1.5 size-3" strokeWidth={2.4} />
+      </span>
+    );
+  }
+  if (kind === "sent") return <IconCheck aria-hidden className="size-3" strokeWidth={2.4} />;
+  if (kind === "pending") return <IconClock aria-hidden className="size-3" />;
+  if (kind === "unknown") return <IconInfo aria-hidden className="size-3" />;
+  return <IconAlert aria-hidden className="size-3" />;
+}
+
+/** One WhatsApp bubble: customer (left, white with ring) vs. business (right, on
+ *  `line`), with inline image/audio/video players, delivery state (outbound) and
+ *  clickable links. */
 function ChatBubble({
   leadId,
   msg,
@@ -1436,13 +1664,25 @@ function ChatBubble({
   const outbound = msg.direction === "outbound";
   const mediaSrc = msg.mediaUrl ? `/api/leads/${leadId}/media?u=${encodeURIComponent(msg.mediaUrl)}` : null;
   const meta = msg.mediaKind ? MEDIA_KIND_META[msg.mediaKind] : null;
+  const MediaGlyph = meta?.icon;
   const ticks = outbound ? statusTicks(msg.status) : null;
+  // La hora va al final del texto, como en WhatsApp; sin texto, sola a la derecha.
+  const stamp = (
+    <span className="ml-2 inline-flex translate-y-0.5 items-center gap-1 whitespace-nowrap align-baseline text-xs leading-none tabular-nums text-ink-500">
+      {chatTime(msg.at)}
+      {ticks && (
+        <span className={ticks.cls} title={ticks.label} role="img" aria-label={ticks.label}>
+          <TickGlyph kind={ticks.kind} />
+        </span>
+      )}
+    </span>
+  );
   return (
     <div className={cn("flex", outbound ? "justify-end" : "justify-start")}>
       <div
         className={cn(
-          "max-w-[85%] rounded-2xl px-2.5 py-1.5 text-sm shadow-sm",
-          outbound ? "rounded-tr-sm bg-[#d9fdd3] text-slate-900" : "rounded-tl-sm bg-white text-slate-800",
+          "max-w-[80%] rounded-lg px-3 py-2 text-[13px] leading-5 text-ink-900",
+          outbound ? "bg-line" : "bg-white shadow-control ring-1 ring-line",
         )}
       >
         {mediaSrc && (msg.mediaKind === "image" || msg.mediaKind === "sticker") ? (
@@ -1453,7 +1693,7 @@ function ChatBubble({
               alt={msg.text || "Imagen"}
               loading="lazy"
               className={cn(
-                "rounded-lg object-cover",
+                "rounded-md object-cover",
                 msg.mediaKind === "sticker" ? "max-h-28" : "mb-1 max-h-64 w-full",
               )}
             />
@@ -1462,52 +1702,44 @@ function ChatBubble({
           <audio controls preload="none" src={mediaSrc} className="mb-1 h-9 w-56 max-w-full" />
         ) : mediaSrc && msg.mediaKind === "video" ? (
           // eslint-disable-next-line jsx-a11y/media-has-caption
-          <video controls preload="none" src={mediaSrc} className="mb-1 max-h-64 w-full rounded-lg" />
-        ) : mediaSrc && meta ? (
+          <video controls preload="none" src={mediaSrc} className="mb-1 max-h-64 w-full rounded-md" />
+        ) : mediaSrc && meta && MediaGlyph ? (
           <a
             href={mediaSrc}
             target="_blank"
             rel="noreferrer"
-            className="mb-0.5 flex items-center gap-1.5 font-medium text-emerald-700 hover:underline"
+            className="mb-0.5 flex items-center gap-1.5 font-medium text-brand-700 hover:underline"
           >
-            <span>{meta.icon}</span> {meta.label}
+            <MediaGlyph aria-hidden className="size-4 shrink-0" />
+            {meta.label}
           </a>
         ) : null}
-        {msg.text && (
-          <p className="break-words whitespace-pre-wrap">
+        {msg.text ? (
+          <p className="whitespace-pre-wrap break-words">
             {highlight ? highlightText(msg.text, highlight) : linkify(msg.text)}
+            {stamp}
           </p>
+        ) : (
+          <p className="text-right">{stamp}</p>
         )}
-        <p
-          className={cn(
-            "mt-0.5 flex items-center justify-end gap-1 text-[10px]",
-            outbound ? "text-emerald-800/60" : "text-slate-400",
-          )}
-        >
-          <span>{chatTime(msg.at)}</span>
-          {ticks && (
-            <span className={ticks.cls} title={ticks.label} aria-label={ticks.label}>
-              {ticks.marks}
-            </span>
-          )}
-        </p>
         {outbound && msg.status === "unknown" && (
-          <p className="mt-1 text-[11px] text-amber-700">
+          <p className="mt-1 text-xs text-warn-fg">
             Estado por confirmar. Actualiza el chat antes de volver a enviar.
           </p>
         )}
         {outbound && (msg.status === "failed" || msg.status === "error") && (
-          <div className="mt-1 flex items-center justify-end gap-2 text-[11px] text-red-700">
+          <div className="mt-1.5 flex items-center justify-end gap-2 text-xs text-crit-fg">
             <span className="min-w-0 truncate" title={msg.error ?? undefined}>No se envió</span>
             {msg.retryable && msg.outboxId && (
               <button
                 type="button"
                 onClick={() => onRetry(msg)}
                 disabled={retrying}
-                className="shrink-0 rounded-full border border-red-300 bg-white/70 px-2 py-0.5 font-semibold hover:bg-white disabled:opacity-60"
+                className="inline-flex h-6 shrink-0 items-center gap-1 rounded-md bg-white px-2 font-semibold text-ink-700 shadow-control ring-1 ring-inset ring-line-strong hover:bg-wash disabled:opacity-50"
                 aria-label="Reintentar mensaje fallido"
               >
-                {retrying ? "Reintentando…" : "↻ Reintentar"}
+                <IconRepeat aria-hidden className="size-3.5" />
+                {retrying ? "Reintentando…" : "Reintentar"}
               </button>
             )}
           </div>
@@ -1517,14 +1749,15 @@ function ChatBubble({
   );
 }
 
-/** WhatsApp-style composer bar, attached under the conversation: quick replies,
- *  inline attach (📎), Ctrl+V-to-attach, Enter-to-send. Enabled only inside the
- *  24h session window; otherwise shows why the customer must write first. */
+/** El pie del chat: respuestas rápidas, adjuntar (o pegar con Ctrl+V), emojis,
+ *  Enter para enviar. Solo dentro de la ventana de 24 h; fuera de ella ofrece
+ *  las plantillas aprobadas y dice por qué. */
 function WhatsappComposer({
   leadId,
   lastInboundAt,
   phoneNumberId,
   numberHint,
+  compact = false,
   onOptimisticSend,
   onSendSettled,
   onSent,
@@ -1533,6 +1766,8 @@ function WhatsappComposer({
   lastInboundAt?: string | null;
   phoneNumberId?: string | null;
   numberHint?: string | null;
+  /** Variante sin marco (la tarjeta del siguiente lead): sin relleno lateral ni hairline. */
+  compact?: boolean;
   onOptimisticSend: (body: string) => string;
   onSendSettled: (localId: string, sent: LeadConversationMessage | null) => void;
   onSent: (leadPatch?: LeadActionState["leadPatch"]) => void;
@@ -1547,6 +1782,7 @@ function WhatsappComposer({
   const [msg, setMsg] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const foot = compact ? "pt-2" : "px-4 py-3 shadow-[inset_0_1px_0_var(--color-line)]";
 
   // Auto-grow the input as the advisor types (capped), like a real chat box.
   useEffect(() => {
@@ -1630,11 +1866,7 @@ function WhatsappComposer({
   }
 
   if (win.loading) {
-    return (
-      <div className="border-t border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-400">
-        Verificando ventana de 24h…
-      </div>
-    );
+    return <p className={cn("text-xs text-ink-500", foot)}>Verificando ventana de 24h…</p>;
   }
   if (!win.open) {
     return (
@@ -1642,6 +1874,7 @@ function WhatsappComposer({
         leadId={leadId}
         phoneNumberId={phoneNumberId}
         reason={win.reason ?? "El cliente debe escribirte primero."}
+        compact={compact}
         onOptimisticSend={onOptimisticSend}
         onSendSettled={onSendSettled}
         onSent={onSent}
@@ -1650,29 +1883,25 @@ function WhatsappComposer({
   }
 
   return (
-    <div className="border-t border-slate-200 bg-white">
-      <div className="px-2 pt-2">
-        <QuickReplyBar leadId={leadId} onInsert={(b) => setText(b)} />
-      </div>
+    <div className={cn("flex flex-col gap-2", foot)}>
+      <QuickReplyBar leadId={leadId} onInsert={(b) => setText(b)} />
       {numberHint && (
-        <p className="px-3 pt-1 text-[11px] text-slate-500">
-          Respondes desde <span className="font-medium text-slate-700">{numberHint}</span>
+        <p className="text-xs text-ink-500">
+          Respondes desde <span className="font-medium text-ink-700">{numberHint}</span>
         </p>
       )}
       {attachFile && (
-        <div className="px-2 pt-2">
-          <MediaAttach
-            leadId={leadId}
-            file={attachFile}
-            setFile={setAttachFile}
-            disabled={pending}
-            phoneNumberId={phoneNumberId}
-            onSent={onSent}
-            onWindowClosed={() => setWin({ loading: false, open: false, reason: "Se cerró la ventana de 24h." })}
-          />
-        </div>
+        <MediaAttach
+          leadId={leadId}
+          file={attachFile}
+          setFile={setAttachFile}
+          disabled={pending}
+          phoneNumberId={phoneNumberId}
+          onSent={onSent}
+          onWindowClosed={() => setWin({ loading: false, open: false, reason: "Se cerró la ventana de 24h." })}
+        />
       )}
-      <div className="flex items-end gap-1.5 px-2 py-2">
+      <div className="flex items-end gap-2">
         <input
           ref={fileRef}
           type="file"
@@ -1683,17 +1912,19 @@ function WhatsappComposer({
             setMsg(null);
           }}
         />
-        <button
-          type="button"
-          onClick={() => fileRef.current?.click()}
-          disabled={pending}
-          title="Adjuntar imagen, PDF o video"
-          aria-label="Adjuntar"
-          className="shrink-0 rounded-full p-2 text-lg leading-none text-slate-500 hover:bg-slate-100 disabled:opacity-60"
-        >
-          📎
-        </button>
-        <EmojiPicker disabled={pending} onPick={insertEmoji} />
+        <div className="flex shrink-0 items-center">
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            disabled={pending}
+            title="Adjuntar imagen, PDF o video"
+            aria-label="Adjuntar"
+            className="grid size-9 shrink-0 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900 disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:size-11"
+          >
+            <IconPlus aria-hidden className="size-5" />
+          </button>
+          <EmojiPicker disabled={pending} onPick={insertEmoji} />
+        </div>
         <textarea
           ref={taRef}
           value={text}
@@ -1714,30 +1945,25 @@ function WhatsappComposer({
           }}
           rows={1}
           placeholder="Escribe un mensaje…"
+          aria-label="Mensaje"
           disabled={pending}
-          className="grow resize-none overflow-y-auto rounded-2xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+          className={cn(FIELD_BOX, "flex-1 resize-none overflow-y-auto px-3 py-2 leading-5", compact ? "min-h-9" : "min-h-16")}
         />
-        <button
-          type="button"
-          onClick={send}
-          disabled={pending || !text.trim()}
-          title="Enviar"
-          aria-label="Enviar"
-          className="shrink-0 rounded-full bg-emerald-600 p-2.5 text-sm leading-none text-white hover:bg-emerald-700 disabled:opacity-50"
-        >
-          {pending ? "…" : "➤"}
-        </button>
+        <OpsButton variant="primary" onClick={send} disabled={pending || !text.trim()}>
+          {pending ? "Enviando…" : "Enviar"}
+        </OpsButton>
       </div>
       {msg && (
-        <div className="flex items-center gap-2 px-3 pb-2 text-xs">
-          <span className="text-red-600">{msg}</span>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+          <span role="alert" className="text-crit-fg">{msg}</span>
           <button
             type="button"
             onClick={send}
             disabled={pending}
-            className="shrink-0 font-medium text-emerald-700 hover:underline disabled:opacity-60"
+            className="inline-flex shrink-0 items-center gap-1 font-medium text-brand-700 hover:underline disabled:opacity-50"
           >
-            ↻ Reintentar
+            <IconRepeat aria-hidden className="size-3.5" />
+            Reintentar
           </button>
         </div>
       )}
@@ -1763,6 +1989,7 @@ function TemplateComposer({
   leadId,
   phoneNumberId,
   reason,
+  compact = false,
   onOptimisticSend,
   onSendSettled,
   onSent,
@@ -1770,6 +1997,7 @@ function TemplateComposer({
   leadId: string;
   phoneNumberId?: string | null;
   reason: string;
+  compact?: boolean;
   onOptimisticSend: (body: string) => string;
   onSendSettled: (localId: string, sent: LeadConversationMessage | null) => void;
   onSent: (leadPatch?: LeadActionState["leadPatch"]) => void;
@@ -1847,26 +2075,33 @@ function TemplateComposer({
   }
 
   return (
-    <div className="border-t border-slate-200 bg-white px-3 py-2.5">
-      <p className="text-xs text-slate-500">
-        ⏳ {reason} Fuera de las 24h solo se puede enviar una plantilla aprobada.
-      </p>
+    <div className={cn("flex flex-col gap-2", compact ? "pt-2" : "px-4 py-3 shadow-[inset_0_1px_0_var(--color-line)]")}>
+      {/* En la tarjeta, sin plantillas los dos avisos van en uno: la columna
+          del chat es angosta y dos cajas seguidas se comían el hilo. */}
+      <Banner tone="warn">
+        {reason} Fuera de las 24h solo se puede enviar una plantilla aprobada
+        {compact && templates?.length === 0
+          ? ", y esta tienda todavía no tiene ninguna: se cargan en Ajustes, en «Plantillas de respuesta»."
+          : "."}
+      </Banner>
 
       {templates === null ? (
-        <p className="mt-2 text-xs text-slate-400">Buscando plantillas…</p>
+        <p className="text-xs text-ink-500">Buscando plantillas…</p>
       ) : templates.length === 0 ? (
-        <p className="mt-2 text-xs text-slate-400">
-          Esta tienda todavía no tiene plantillas cargadas. Se configuran en Ajustes → Plantillas de
-          respuesta, con el nombre exacto aprobado en Meta.
-        </p>
+        compact ? null : (
+          <p className="text-xs leading-5 text-ink-500">
+            Esta tienda todavía no tiene plantillas cargadas. Se configuran en Ajustes, en «Plantillas de
+            respuesta», con el nombre exacto aprobado en Meta.
+          </p>
+        )
       ) : (
-        <div className="mt-2 space-y-2">
+        <div className="space-y-2">
           <select
             value={selectedId}
             onChange={(e) => pick(e.currentTarget.value)}
             disabled={pending}
             aria-label="Plantilla"
-            className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-emerald-500"
+            className={FIELD}
           >
             <option value="">Elige una plantilla…</option>
             {templates.map((t) => (
@@ -1877,10 +2112,10 @@ function TemplateComposer({
           </select>
 
           {selected && selected.tokens.length > 0 && (
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               {selected.tokens.map((tok, i) => (
                 <label key={`${selected.id}:${i}`} className="block">
-                  <span className="text-[11px] text-slate-500">
+                  <span className="text-xs text-ink-600">
                     {REPLY_TOKEN_LABEL[tok]} · {`{{${i + 1}}}`}
                   </span>
                   <input
@@ -1893,36 +2128,32 @@ function TemplateComposer({
                     }}
                     disabled={pending}
                     placeholder={REPLY_TOKEN_LABEL[tok]}
-                    className="w-full rounded border border-slate-300 px-2 py-1 text-sm outline-none focus:border-emerald-500"
+                    className={cn(FIELD_BOX, "mt-1 h-8 w-full px-3")}
                   />
                 </label>
               ))}
             </div>
           )}
 
+          {/* La vista previa se ve como la burbuja que va a salir. */}
           {selected && preview && (
-            <div className="rounded-lg bg-emerald-50 px-2.5 py-2 text-sm leading-snug text-slate-700 whitespace-pre-wrap">
+            <div className="whitespace-pre-wrap rounded-lg bg-line px-3 py-2 text-[13px] leading-5 text-ink-900">
               {preview}
             </div>
           )}
 
           {selected && !selected.bodyPreview && (
-            <p className="text-[11px] text-amber-700">
+            <p className="text-xs text-warn-fg">
               Esta plantilla no tiene el cuerpo cargado en Ajustes, así que no se puede previsualizar
               lo que se enviará.
             </p>
           )}
 
-          <button
-            type="button"
-            onClick={send}
-            disabled={pending || !selected}
-            className="w-full rounded-full bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
-          >
+          <OpsButton variant="primary" className="w-full" onClick={send} disabled={pending || !selected}>
             {pending ? "Enviando…" : "Enviar plantilla"}
-          </button>
+          </OpsButton>
 
-          {msg && <p className="text-xs text-red-600">{msg}</p>}
+          {msg && <p role="alert" className="text-xs text-crit-fg">{msg}</p>}
         </div>
       )}
     </div>
@@ -1961,7 +2192,7 @@ async function resizeImageToBlob(file: File, maxDim = 1600, quality = 0.8): Prom
   }
 }
 
-/** Per-store canned messages: chips that fill the composer + an inline manager. */
+/** Per-store canned messages: pills that fill the composer + an inline manager. */
 function QuickReplyBar({ leadId, onInsert }: { leadId: string; onInsert: (body: string) => void }) {
   const [replies, setReplies] = useState<QuickReply[]>([]);
   const [manage, setManage] = useState(false);
@@ -2002,51 +2233,53 @@ function QuickReplyBar({ leadId, onInsert }: { leadId: string; onInsert: (body: 
   }
 
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-1.5">
         {replies.map((r) => (
-          <button
-            key={r.id}
-            type="button"
-            onClick={() => onInsert(r.body)}
-            title={r.body}
-            className="rounded-full border border-brand-200 bg-brand-50 px-2.5 py-0.5 text-xs text-brand-700 hover:bg-brand-100"
-          >
+          <button key={r.id} type="button" onClick={() => onInsert(r.body)} title={r.body} className={QUICK_PILL}>
             {r.label}
           </button>
         ))}
         <button
           type="button"
           onClick={() => setManage((m) => !m)}
-          className="rounded-full border border-slate-200 px-2 py-0.5 text-xs text-slate-500 hover:bg-slate-100"
+          aria-expanded={manage}
+          className="inline-flex h-7 items-center rounded-full px-2.5 text-xs font-medium text-ink-600 transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:h-11"
         >
-          {manage ? "✕ cerrar" : "✎ respuestas"}
+          {manage ? "Cerrar" : "Editar respuestas"}
         </button>
       </div>
       {manage && (
-        <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
-          {replies.length === 0 && <p className="text-xs text-slate-400">Aún no hay respuestas rápidas.</p>}
-          {replies.map((r) => (
-            <div key={r.id} className="flex items-center gap-2 text-xs">
-              <span className="min-w-[90px] font-medium text-slate-700">{r.label}</span>
-              <span className="flex-1 truncate text-slate-500">{r.body}</span>
-              <button
-                type="button"
-                onClick={() => remove(r.id)}
-                disabled={pending}
-                className="text-slate-400 hover:text-red-600"
-                aria-label="Eliminar"
-              >
-                ✕
-              </button>
-            </div>
-          ))}
-          <div className="grid gap-1.5 border-t border-slate-200 pt-2">
+        <div className="space-y-2 rounded-md bg-wash p-3">
+          {replies.length === 0 ? (
+            <p className="text-xs text-ink-500">Aún no hay respuestas rápidas.</p>
+          ) : (
+            <ul className="divide-y divide-line">
+              {replies.map((r) => (
+                <li key={r.id} className="flex items-center gap-2 py-1 text-xs">
+                  <span className="min-w-[90px] font-medium text-ink-900">{r.label}</span>
+                  <span className="min-w-0 flex-1 truncate text-ink-600">{r.body}</span>
+                  <button
+                    type="button"
+                    onClick={() => remove(r.id)}
+                    disabled={pending}
+                    className="grid size-7 shrink-0 place-items-center rounded-md text-ink-500 transition-colors hover:bg-white hover:text-crit-fg disabled:opacity-50 pointer-coarse:size-11"
+                    title="Eliminar"
+                    aria-label={`Eliminar ${r.label}`}
+                  >
+                    <IconX aria-hidden className="size-3.5" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="grid gap-2 border-t border-line pt-2">
             <input
               value={label}
               onChange={(e) => setLabel(e.currentTarget.value)}
               placeholder="Título (ej. Datos de pago)"
-              className="rounded border border-slate-200 px-2 py-1 text-xs"
+              aria-label="Título de la respuesta"
+              className={cn(FIELD_BOX, "h-8 w-full px-3")}
               disabled={pending}
             />
             <textarea
@@ -2054,19 +2287,16 @@ function QuickReplyBar({ leadId, onInsert }: { leadId: string; onInsert: (body: 
               onChange={(e) => setBody(e.currentTarget.value)}
               rows={2}
               placeholder="Mensaje…"
-              className="rounded border border-slate-200 px-2 py-1 text-xs"
+              aria-label="Mensaje de la respuesta"
+              className={cn(FIELD_BOX, "w-full px-3 py-1.5")}
               disabled={pending}
             />
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={add}
-                disabled={pending || !label.trim() || !body.trim()}
-                className="rounded border border-brand-300 px-2 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-60"
-              >
-                + Agregar
-              </button>
-              {msg && <span className="text-xs text-red-600">{msg}</span>}
+            <div className="flex flex-wrap items-center gap-2">
+              <OpsButton size="sm" onClick={add} disabled={pending || !label.trim() || !body.trim()}>
+                <IconPlus aria-hidden className="text-ink-500" />
+                Agregar
+              </OpsButton>
+              {msg && <span role="alert" className="text-xs text-crit-fg">{msg}</span>}
             </div>
           </div>
         </div>
@@ -2169,50 +2399,45 @@ function MediaAttach({
       : "documento";
 
   return (
-    <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+    <div className="space-y-2 rounded-md bg-wash p-3">
       {file.type.startsWith("image/") ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={preview ?? ""} alt="Vista previa" className="max-h-40 rounded" />
+        <img src={preview ?? ""} alt="Vista previa" className="max-h-40 rounded-md" />
       ) : file.type.startsWith("video/") ? (
         // eslint-disable-next-line jsx-a11y/media-has-caption
-        <video src={preview ?? ""} controls className="max-h-40 rounded" />
+        <video src={preview ?? ""} controls className="max-h-40 rounded-md" />
       ) : (
-        <div className="flex items-center gap-2 text-sm text-slate-600">
-          📄 <span className="truncate">{file.name || "Documento"}</span>
+        <div className="flex items-center gap-2 text-[13px] text-ink-700">
+          <IconReceipt aria-hidden className="size-4 shrink-0 text-ink-500" />
+          <span className="truncate">{file.name || "Documento"}</span>
         </div>
       )}
       <input
         value={caption}
         onChange={(e) => setCaption(e.currentTarget.value)}
         placeholder="Texto (opcional)"
+        aria-label="Texto del adjunto"
         disabled={pending}
-        className="w-full rounded border border-slate-200 px-2 py-1 text-sm"
+        className={cn(FIELD_BOX, "h-8 w-full px-3")}
       />
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={send}
-          disabled={disabled || pending}
-          className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
-        >
+      <div className="flex flex-wrap items-center gap-2">
+        <OpsButton variant="primary" size="sm" onClick={send} disabled={disabled || pending}>
           {pending ? "Enviando…" : `Enviar ${kindLabel}`}
-        </button>
-        <button type="button" onClick={clear} disabled={pending} className="text-xs text-slate-500 hover:underline">
+        </OpsButton>
+        <OpsButton variant="ghost" size="sm" onClick={clear} disabled={pending}>
           Quitar
-        </button>
-        {msg && <span className="text-xs text-red-600">{msg}</span>}
+        </OpsButton>
+        {msg && <span role="alert" className="text-xs text-crit-fg">{msg}</span>}
       </div>
     </div>
   );
 }
 
-/** Close a sale by phone (contraentrega / COD). Records a lightweight manual
- *  order, marks the lead Ganado and credits the advisor. Collapsed by default to
- *  keep the drawer tidy; expands into the amount / products / district form. */
 // ---------------------------------------------------------------------------
 // Unified order form (supersedes Cerrar venta + Generar pedido). Pre-fills from
 // the cart's draft (or blank for a new sale), products from the real catalog
-// (or a custom item), required address, then generates a REAL Shopify order.
+// (or a custom item), required address, then generates a REAL Shopify order
+// (contraentrega / COD: pago pendiente, lead Ganado, crédito a la asesora).
 // ---------------------------------------------------------------------------
 
 type OrderItem = {
@@ -2236,7 +2461,7 @@ const PERU_REGIONS = [
 /** Map a free-text province (e.g. "Lima (provincia)") to a canonical Peru region. */
 function matchPeruRegion(v: string | null | undefined): string {
   if (!v) return "";
-  const norm = (s: string) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  const norm = (s: string) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const nv = norm(v);
   return PERU_REGIONS.find((r) => nv.includes(norm(r))) ?? v;
 }
@@ -2282,6 +2507,9 @@ function OrderFormPanel({
   const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
   const [generatedOrder, setGeneratedOrder] = useState<NonNullable<LeadActionState["generatedOrder"]> | null>(null);
   const { state: copiedOrder, copy: copyOrder, reset: resetCopiedOrder } = useCopyToClipboard();
+  const headingId = useId();
+  const provinceId = useId();
+  const noteId = useId();
 
   useEffect(() => {
     let alive = true;
@@ -2406,115 +2634,140 @@ function OrderFormPanel({
   }
 
   return (
-    <section className="space-y-3 rounded-xl border border-emerald-300 bg-emerald-50/50 p-3">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold tracking-wide text-emerald-800 uppercase">
-          {hasCart ? "Generar pedido · contraentrega" : "Registrar pedido · contraentrega"}
-        </h3>
-        <button type="button" onClick={onClose} disabled={pending} className="text-xs text-slate-500 hover:underline">
-          Cerrar
-        </button>
-      </div>
+    <section aria-labelledby={headingId} className={SECTION_CARD}>
+      <SectionHead
+        id={headingId}
+        title={hasCart ? "Generar pedido · contraentrega" : "Registrar pedido · contraentrega"}
+        aside={
+          <OpsButton variant="ghost" size="sm" onClick={onClose} disabled={pending}>
+            Cerrar
+          </OpsButton>
+        }
+      />
 
       {loading ? (
-        <p className="text-sm text-slate-400">Cargando datos del pedido…</p>
+        <div role="status" className="space-y-2 pt-4 sm:pt-5">
+          <span className="sr-only">Cargando datos del pedido…</span>
+          <Skeleton className="h-12" />
+          <Skeleton className="h-9" />
+          <Skeleton className="h-9" />
+        </div>
       ) : (
         <>
-          <div className="space-y-1.5">
-            <p className={labelCls}>Productos</p>
+          {/* Productos y total */}
+          <div className="space-y-3 pt-4 sm:pt-5">
+            <p className={LABEL}>Productos</p>
             {items.length === 0 && (
-              <p className="text-xs text-slate-400">Sin productos. Agrega del catálogo o un ítem manual.</p>
+              <p className="text-[13px] text-ink-500">Sin productos. Agrega del catálogo o un ítem manual.</p>
             )}
-            {items.map((it) => (
-              <div key={it.key} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5">
-                <div className="flex items-start gap-2">
-                  {it.variantId ? (
-                    <span className="flex-1 text-sm text-slate-800">{it.title}</span>
-                  ) : (
-                    <input
-                      value={it.title}
-                      onChange={(e) => patchItem(it.key, { title: e.currentTarget.value })}
-                      placeholder="Producto (ítem manual)"
-                      className="flex-1 rounded border border-slate-200 px-2 py-1 text-sm"
-                      disabled={pending}
-                    />
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => removeItem(it.key)}
-                    disabled={pending}
-                    className="text-slate-400 hover:text-red-600"
-                    aria-label="Quitar"
-                  >
-                    ✕
-                  </button>
-                </div>
-                <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
-                  <label className="flex items-center gap-1">
-                    Cant.
-                    <input
-                      type="number"
-                      min={1}
-                      value={it.quantity}
-                      onChange={(e) => patchItem(it.key, { quantity: Math.max(1, Number(e.currentTarget.value) || 1) })}
-                      className="w-14 rounded border border-slate-200 px-1.5 py-0.5 text-sm"
-                      disabled={pending}
-                    />
-                  </label>
-                  {it.variantId ? (
-                    // Catalog product: unit price is fixed to the catalog (read-only).
-                    // Any reduction is handled via the order-level "Descuento" field.
-                    <span className="flex items-center gap-1 text-slate-500">
-                      {currency} {(it.unitPrice ?? 0).toFixed(2)}
-                      <span className="text-[10px] text-slate-400">c/u</span>
-                    </span>
-                  ) : (
-                    // Manual item: no catalog price to pull from, so it stays editable.
-                    <label className="flex items-center gap-1">
-                      {currency}
-                      <input
-                        type="number"
-                        min={0}
-                        step="0.01"
-                        value={it.unitPrice ?? ""}
-                        onChange={(e) =>
-                          patchItem(it.key, {
-                            unitPrice: e.currentTarget.value === "" ? null : Number(e.currentTarget.value),
-                          })
-                        }
-                        className="w-20 rounded border border-slate-200 px-1.5 py-0.5 text-sm"
+            {items.length > 0 && (
+              <ul className="-mx-4 divide-y divide-line border-y border-line sm:-mx-5">
+                {items.map((it) => (
+                  <li key={it.key} className="px-4 py-2.5 sm:px-5">
+                    <div className="flex items-start gap-2">
+                      {it.variantId ? (
+                        <span className="min-w-0 flex-1 pt-1.5 text-sm text-ink-900">{it.title}</span>
+                      ) : (
+                        <input
+                          value={it.title}
+                          onChange={(e) => patchItem(it.key, { title: e.currentTarget.value })}
+                          placeholder="Producto (ítem manual)"
+                          aria-label="Producto (ítem manual)"
+                          className={cn(FIELD_BOX, "h-8 min-w-0 flex-1 px-2.5")}
+                          disabled={pending}
+                        />
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => removeItem(it.key)}
                         disabled={pending}
-                      />
-                    </label>
-                  )}
-                  <span className="ml-auto font-medium text-slate-700">
-                    {currency} {((it.unitPrice ?? 0) * (Number(it.quantity) || 0)).toFixed(2)}
-                  </span>
-                </div>
-              </div>
-            ))}
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setShowPicker(true)}
-                disabled={pending}
-                className="rounded-lg border border-emerald-300 px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
-              >
-                + Producto del catálogo
-              </button>
-              <button
-                type="button"
+                        className="grid size-8 shrink-0 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-crit-fg disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:size-11"
+                        title="Quitar"
+                        aria-label="Quitar"
+                      >
+                        <IconX aria-hidden className="size-4" />
+                      </button>
+                    </div>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[13px] text-ink-600">
+                      <label className="flex items-center gap-1.5">
+                        Cant.
+                        <input
+                          type="number"
+                          min={1}
+                          value={it.quantity}
+                          onChange={(e) => patchItem(it.key, { quantity: Math.max(1, Number(e.currentTarget.value) || 1) })}
+                          className={cn(FIELD_BOX, "h-8 w-16 px-2 tabular-nums")}
+                          disabled={pending}
+                        />
+                      </label>
+                      {it.variantId ? (
+                        // Catalog product: unit price is fixed to the catalog (read-only).
+                        // Any reduction is handled via the order-level "Descuento" field.
+                        <span className="tabular-nums">
+                          {currency} {(it.unitPrice ?? 0).toFixed(2)}{" "}
+                          <span className="text-xs text-ink-500">c/u</span>
+                        </span>
+                      ) : (
+                        // Manual item: no catalog price to pull from, so it stays editable.
+                        <label className="flex items-center gap-1.5">
+                          {currency}
+                          <input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={it.unitPrice ?? ""}
+                            onChange={(e) =>
+                              patchItem(it.key, {
+                                unitPrice: e.currentTarget.value === "" ? null : Number(e.currentTarget.value),
+                              })
+                            }
+                            className={cn(FIELD_BOX, "h-8 w-24 px-2 tabular-nums")}
+                            disabled={pending}
+                          />
+                        </label>
+                      )}
+                      <span className="ml-auto font-medium tabular-nums text-ink-900">
+                        {currency} {((it.unitPrice ?? 0) * (Number(it.quantity) || 0)).toFixed(2)}
+                      </span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="flex flex-wrap items-center gap-2">
+              <OpsButton size="sm" onClick={() => setShowPicker(true)} disabled={pending}>
+                <IconPlus aria-hidden className="text-ink-500" />
+                Producto del catálogo
+              </OpsButton>
+              <OpsButton
+                variant="ghost"
+                size="sm"
                 onClick={() => setItems((x) => [...x, { key: rid(), variantId: null, title: "", quantity: 1, unitPrice: null }])}
                 disabled={pending}
-                className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100"
               >
-                + Ítem manual
-              </button>
+                <IconPlus aria-hidden />
+                Ítem manual
+              </OpsButton>
             </div>
+            {showPicker && (
+              <ProductPicker
+                leadId={leadId}
+                currency={currency}
+                onPick={(p) => {
+                  setItems((x) => [
+                    ...x,
+                    { key: rid(), variantId: p.variantId, title: p.title, quantity: 1, unitPrice: p.price },
+                  ]);
+                  setShowPicker(false);
+                }}
+                onClose={() => setShowPicker(false)}
+              />
+            )}
 
-            <div className="rounded-lg border border-slate-200 bg-white px-2 py-2">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-medium text-slate-600">Descuento</span>
+            {/* Descuento y total: un marco de cifras sobre el lavado. */}
+            <div className="rounded-md bg-wash px-3 py-2.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[13px] font-medium text-ink-700">Descuento</span>
                 <select
                   value={discountKind}
                   onChange={(e) => {
@@ -2523,7 +2776,8 @@ function OrderFormPanel({
                     if (k === "none") setDiscountValue(null);
                   }}
                   disabled={pending}
-                  className="rounded border border-slate-200 px-1.5 py-0.5 text-xs"
+                  aria-label="Tipo de descuento"
+                  className={cn(FIELD_BOX, "h-8 px-2")}
                 >
                   <option value="none">Sin descuento</option>
                   <option value="fixed">Monto ({currency})</option>
@@ -2540,20 +2794,21 @@ function OrderFormPanel({
                       setDiscountValue(e.currentTarget.value === "" ? null : Math.max(0, Number(e.currentTarget.value)))
                     }
                     placeholder={discountKind === "percent" ? "%" : currency}
+                    aria-label="Valor del descuento"
                     disabled={pending}
-                    className="w-24 rounded border border-slate-200 px-1.5 py-0.5 text-sm"
+                    className={cn(FIELD_BOX, "h-8 w-24 px-2 tabular-nums")}
                   />
                 )}
               </div>
               {discountAmount > 0 && (
-                <div className="mt-2 space-y-0.5">
-                  <div className="flex justify-between text-xs text-slate-500">
+                <div className="mt-2 space-y-0.5 text-[13px] tabular-nums text-ink-600">
+                  <div className="flex justify-between">
                     <span>Subtotal</span>
                     <span>
                       {currency} {subtotal.toFixed(2)}
                     </span>
                   </div>
-                  <div className="flex justify-between text-xs text-rose-600">
+                  <div className="flex justify-between">
                     <span>
                       Descuento
                       {discountKind === "percent" && discountValue ? ` (${Math.min(100, discountValue)}%)` : ""}
@@ -2564,207 +2819,166 @@ function OrderFormPanel({
                   </div>
                 </div>
               )}
-              <div className="mt-1 flex justify-between text-sm font-semibold text-emerald-800">
+              <div className="mt-2 flex justify-between border-t border-line-strong pt-2 text-sm font-semibold tabular-nums text-ink-900">
                 <span>Total</span>
                 <span>
                   {currency} {total.toFixed(2)}
                 </span>
               </div>
             </div>
-            {showPicker && (
-              <ProductPicker
-                leadId={leadId}
-                currency={currency}
-                onPick={(p) => {
-                  setItems((x) => [
-                    ...x,
-                    { key: rid(), variantId: p.variantId, title: p.title, quantity: 1, unitPrice: p.price },
-                  ]);
-                  setShowPicker(false);
-                }}
-                onClose={() => setShowPicker(false)}
-              />
-            )}
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="Cliente" value={name} onChange={setName} disabled={pending} placeholder="Nombre" />
-            <PeruMobileField value={phone} onChange={setPhone} disabled={pending} problem={phoneProblem} />
-          </div>
-          <Field label="Dirección *" value={address1} onChange={setAddress1} disabled={pending} placeholder="Av. / Calle y número" />
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="Distrito *" value={district} onChange={setDistrict} disabled={pending} placeholder="Distrito de entrega" />
+          {/* Entrega */}
+          <div className={cn(CARD_ZONE, "mt-4 space-y-3 sm:mt-5")}>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Field label="Cliente" value={name} onChange={setName} disabled={pending} placeholder="Nombre" />
+              <PeruMobileField value={phone} onChange={setPhone} disabled={pending} problem={phoneProblem} />
+            </div>
+            <Field label="Dirección *" value={address1} onChange={setAddress1} disabled={pending} placeholder="Av. / Calle y número" />
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Field label="Distrito *" value={district} onChange={setDistrict} disabled={pending} placeholder="Distrito de entrega" />
+              <div className="min-w-0">
+                <label htmlFor={provinceId} className={LABEL}>Provincia / Región</label>
+                <select
+                  id={provinceId}
+                  value={province}
+                  onChange={(e) => setProvince(e.currentTarget.value)}
+                  className={cn(FIELD, "mt-1")}
+                  disabled={pending}
+                >
+                  <option value="">—</option>
+                  {province && !PERU_REGIONS.includes(province) && <option value={province}>{province}</option>}
+                  {PERU_REGIONS.map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <Field label="Referencia" value={referencia} onChange={setReferencia} disabled={pending} placeholder="Frente a…, color de puerta…" />
+
             <div>
-              <label className={labelCls}>Provincia / Región</label>
-              <select
-                value={province}
-                onChange={(e) => setProvince(e.currentTarget.value)}
-                className={inputCls}
+              <label htmlFor={noteId} className={LABEL}>Notas del pedido</label>
+              <textarea
+                id={noteId}
+                value={orderNote}
+                onChange={(e) => setOrderNote(e.currentTarget.value)}
+                rows={2}
+                placeholder="Ej: enviar con Alexis (opcional)"
+                className={cn(FIELD_BOX, "mt-1 w-full px-3 py-2")}
                 disabled={pending}
-              >
-                <option value="">—</option>
-                {province && !PERU_REGIONS.includes(province) && <option value={province}>{province}</option>}
-                {PERU_REGIONS.map((r) => (
-                  <option key={r} value={r}>
-                    {r}
-                  </option>
-                ))}
-              </select>
+              />
+              <p className="mt-1 text-xs text-ink-500">
+                Se guarda en las Notas del pedido en Shopify (no se envía al cliente).
+              </p>
             </div>
           </div>
-          <Field label="Referencia" value={referencia} onChange={setReferencia} disabled={pending} placeholder="Frente a…, color de puerta…" />
 
-          <div>
-            <label className={labelCls}>Notas del pedido</label>
-            <textarea
-              value={orderNote}
-              onChange={(e) => setOrderNote(e.currentTarget.value)}
-              rows={2}
-              placeholder="Ej: enviar con Alexis (opcional)"
-              className={inputCls}
-              disabled={pending}
-            />
-            <p className="mt-1 text-xs text-slate-400">
-              Se guarda en las Notas del pedido en Shopify (no se envía al cliente).
-            </p>
-          </div>
-
-          <div className="rounded-lg border border-slate-200 bg-white p-2">
-            <label className="flex items-center gap-2 text-sm text-slate-700">
-              <input
-                type="checkbox"
-                checked={sendConfirm}
-                onChange={(e) => setSendConfirm(e.currentTarget.checked)}
-                disabled={pending || !windowOpen}
-              />
-              Enviar confirmación por WhatsApp al cliente
-            </label>
-            {windowOpen ? (
-              sendConfirm && (
-                <textarea
-                  value={confirmText}
-                  onChange={(e) => setConfirmText(e.currentTarget.value)}
-                  rows={3}
-                  placeholder="(Se usa un mensaje de confirmación por defecto si lo dejas vacío)"
-                  className="mt-1.5 w-full rounded border border-slate-200 px-2 py-1 text-sm"
-                  disabled={pending}
+          {/* Confirmación y creación */}
+          <div className={cn(CARD_ZONE, "mt-4 space-y-3 sm:mt-5")}>
+            <div>
+              <label className="flex items-center gap-2 text-sm text-ink-900">
+                <input
+                  type="checkbox"
+                  className={CHECKBOX}
+                  checked={sendConfirm}
+                  onChange={(e) => setSendConfirm(e.currentTarget.checked)}
+                  disabled={pending || !windowOpen}
                 />
-              )
-            ) : (
-              <p className="mt-1 text-xs text-slate-400">
-                Ventana de 24h cerrada — no se puede enviar texto libre (se necesitaría una plantilla).
+                Enviar confirmación por WhatsApp al cliente
+              </label>
+              {windowOpen ? (
+                sendConfirm && (
+                  <textarea
+                    value={confirmText}
+                    onChange={(e) => setConfirmText(e.currentTarget.value)}
+                    rows={3}
+                    placeholder="(Se usa un mensaje de confirmación por defecto si lo dejas vacío)"
+                    aria-label="Mensaje de confirmación"
+                    className={cn(FIELD_BOX, "mt-2 w-full px-3 py-2")}
+                    disabled={pending}
+                  />
+                )
+              ) : (
+                <p className="mt-1 text-xs text-ink-500">
+                  Ventana de 24h cerrada — no se puede enviar texto libre (se necesitaría una plantilla).
+                </p>
+              )}
+            </div>
+
+            {!generatedOrder && (
+              <p className="text-xs leading-5 text-ink-500">
+                Pago contraentrega: queda como <span className="font-medium text-ink-700">pago pendiente</span> y sube
+                como pedido real a Shopify. Marca el lead <span className="font-medium text-ink-700">Ganado</span> y suma
+                a tu productividad.
               </p>
             )}
-          </div>
 
-          {!generatedOrder && (
-            <p className="text-xs text-emerald-700/80">
-              Pago contraentrega → queda como <span className="font-medium">pago pendiente</span> y sube como pedido
-              real a Shopify. Marca el lead <span className="font-medium">Ganado</span> y suma a tu productividad.
-            </p>
-          )}
-
-          {generatedOrder && (
-            <div className="space-y-2">
-              <div className="flex items-start gap-2 rounded-xl border border-emerald-500 bg-emerald-600 px-3 py-2.5 text-white shadow-sm shadow-emerald-900/10">
-                <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/20 text-base font-bold">
-                  ✓
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold leading-tight">Pedido generado correctamente</p>
-                  <p className="mt-0.5 text-xs leading-snug text-emerald-50">
+            {generatedOrder && (
+              <div className="space-y-3">
+                <Banner tone="ok" role="status" title="Pedido generado correctamente">
+                  <p className="mt-0.5 font-medium text-ink-900">{generatedOrder.name || generatedOrder.id || msg}</p>
+                  <p className="tabular-nums">
                     {generatedOrder.currency} {generatedOrder.total.toFixed(2)}
                     {generatedOrder.confirmationSent ? " · confirmación enviada por WhatsApp" : " · sin confirmación por WhatsApp"}
                   </p>
+                </Banner>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <OpsButton size="sm" onClick={copyGeneratedOrder}>
+                    <IconCopy aria-hidden className="text-ink-500" />
+                    {copyLabel(copiedOrder, "Copiar pedido")}
+                  </OpsButton>
+                  {generatedOrder.adminUrl && (
+                    <a
+                      href={generatedOrder.adminUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className={opsButtonClass("secondary", "sm", "pointer-coarse:h-11")}
+                    >
+                      Ver en Shopify
+                      <IconArrowUpRight aria-hidden className="text-ink-500" />
+                    </a>
+                  )}
+                  {/* La única salida del formulario. Antes, tras generar el pedido
+                      solo quedaban "Copiar" y "Ver en Shopify": el formulario se
+                      quedaba abierto tapando la columna entera, y el panel para
+                      crear la guía de Aliclik —que está justo debajo— era
+                      inalcanzable sin recargar la página. */}
+                  <OpsButton variant="primary" size="sm" onClick={onClose}>
+                    Continuar · crear guía
+                  </OpsButton>
                 </div>
               </div>
+            )}
 
-              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-emerald-200 bg-white px-3 py-2">
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 text-lg font-semibold text-emerald-700">
-                  ✓
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-emerald-900">Pedido generado</p>
-                  <p className="truncate text-xs text-slate-500">{generatedOrder.name || generatedOrder.id || msg}</p>
+            {!generatedOrder && duplicateWarning && (
+              <Banner tone="warn" role="alert">
+                <p>{duplicateWarning}</p>
+                {/* Los botones dentro de un aviso son secundarios (DESIGN.md). */}
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <OpsButton size="sm" onClick={() => submit(true)} disabled={pending || !valid}>
+                    {pending ? "Generando..." : "Sí, crear otro pedido"}
+                  </OpsButton>
+                  <OpsButton variant="ghost" size="sm" onClick={() => setDuplicateWarning(null)} disabled={pending}>
+                    No, revisar primero
+                  </OpsButton>
                 </div>
-                <button
-                  type="button"
-                  onClick={copyGeneratedOrder}
-                  className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
-                >
-                  {copyLabel(copiedOrder, "Copiar pedido")}
-                </button>
-                {generatedOrder.adminUrl && (
-                  <a
-                    href={generatedOrder.adminUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
-                  >
-                    Ver en Shopify
-                  </a>
-                )}
-                {/* La única salida del formulario. Antes, tras generar el pedido
-                    solo quedaban "Copiar" y "Ver en Shopify": el formulario se
-                    quedaba abierto tapando la columna entera con un `absolute
-                    inset-0`, y el panel para crear la guía de Aliclik —que está
-                    justo debajo— era inalcanzable sin recargar la página. */}
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="rounded-lg bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
-                >
-                  Continuar · crear guía
-                </button>
-              </div>
-            </div>
-          )}
+              </Banner>
+            )}
 
-          {!generatedOrder && duplicateWarning && (
-            <div role="alert" className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
-              <p className="text-xs text-amber-900">{duplicateWarning}</p>
+            {!generatedOrder && !duplicateWarning && (
               <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => submit(true)}
-                  disabled={pending || !valid}
-                  className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
-                >
-                  {pending ? "Generando..." : "Sí, crear otro pedido"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDuplicateWarning(null)}
-                  disabled={pending}
-                  className="text-xs text-slate-600 hover:underline disabled:opacity-60"
-                >
-                  No, revisar primero
-                </button>
+                <OpsButton variant="primary" onClick={() => submit()} disabled={pending || !valid}>
+                  {pending ? "Generando..." : "Generar pedido"}
+                </OpsButton>
+                <OpsButton variant="ghost" onClick={onClose} disabled={pending}>
+                  Cancelar
+                </OpsButton>
+                {msg && <span role="alert" className="text-[13px] text-crit-fg">{msg}</span>}
               </div>
-            </div>
-          )}
-
-          {!generatedOrder && !duplicateWarning && (
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => submit()}
-                disabled={pending || !valid}
-                className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
-              >
-                {pending ? "Generando..." : "Generar pedido"}
-              </button>
-              <button
-                type="button"
-                onClick={onClose}
-                disabled={pending}
-                className="text-sm text-slate-500 hover:underline disabled:opacity-60"
-              >
-                Cancelar
-              </button>
-              {msg && <span className="text-xs text-slate-600">{msg}</span>}
-            </div>
-          )}
+            )}
+          </div>
         </>
       )}
     </section>
@@ -2796,34 +3010,35 @@ function PeruMobileField({
   disabled?: boolean;
   problem: string | null;
 }) {
+  const id = useId();
   // Solo se avisa de lo que ya se escribió: gritarle "faltan 9 dígitos" a un
   // campo vacío que nadie ha tocado es ruido, no ayuda.
   const showProblem = Boolean(problem) && peruMobileDigits(value).length > 0;
   return (
-    <div>
-      <label className={labelCls}>Teléfono *</label>
-      <div
-        className={cn(
-          "flex items-center overflow-hidden rounded-lg border bg-white",
-          showProblem ? "border-red-300" : "border-slate-200",
-        )}
-      >
-        <span className="select-none border-r border-slate-200 bg-slate-50 px-2 py-1.5 text-xs font-medium text-slate-500">
+    <div className="min-w-0">
+      <label htmlFor={id} className={LABEL}>Teléfono *</label>
+      {/* El anillo va en el marco y no en el campo: el `+51` queda dentro. */}
+      <div className="mt-1 flex h-9 items-stretch overflow-hidden rounded-md bg-white shadow-control ring-1 ring-inset ring-line-strong transition-shadow focus-within:ring-2 focus-within:ring-brand-500 pointer-coarse:h-11">
+        <span className="flex select-none items-center border-r border-line px-2.5 text-[13px] font-medium text-ink-500">
           +51
         </span>
         <input
+          id={id}
           value={value}
           onChange={(e) => onChange(formatPeruMobile(e.currentTarget.value))}
           // `tel` saca el teclado numérico en el móvil, que es donde más se usa.
           type="tel"
           inputMode="numeric"
           placeholder="988-805-509"
-          className="w-full px-2 py-1.5 text-xs text-slate-700 outline-none disabled:bg-slate-50"
+          // El foco lo dibuja el marco; el contorno global iría alrededor del campo solo.
+          style={{ outline: "none" }}
+          className="h-full w-full min-w-0 bg-transparent px-2.5 text-sm tabular-nums text-ink-900 placeholder:text-ink-500 disabled:text-ink-500"
           disabled={disabled}
           aria-invalid={showProblem}
+          aria-describedby={showProblem ? `${id}-problema` : undefined}
         />
       </div>
-      {showProblem && <p className="mt-1 text-[11px] text-red-600">{problem}</p>}
+      {showProblem && <p id={`${id}-problema`} className="mt-1 text-xs text-crit-fg">{problem}</p>}
     </div>
   );
 }
@@ -2841,14 +3056,16 @@ function Field({
   disabled?: boolean;
   placeholder?: string;
 }) {
+  const id = useId();
   return (
-    <div>
-      <label className={labelCls}>{label}</label>
+    <div className="min-w-0">
+      <label htmlFor={id} className={LABEL}>{label}</label>
       <input
+        id={id}
         value={value}
         onChange={(e) => onChange(e.currentTarget.value)}
         placeholder={placeholder}
-        className={inputCls}
+        className={cn(FIELD, "mt-1")}
         disabled={disabled}
       />
     </div>
@@ -2908,25 +3125,29 @@ function ProductPicker({
     };
   }, [q, leadId]);
   return (
-    <div className="rounded-lg border border-emerald-200 bg-white p-2">
+    <div className="rounded-md bg-wash p-3">
       <div className="flex items-center gap-2">
-        <input
-          autoFocus
-          value={q}
-          onChange={(e) => setQ(e.currentTarget.value)}
-          placeholder="Buscar producto…"
-          className="flex-1 rounded border border-slate-200 px-2 py-1 text-sm"
-        />
-        <button type="button" onClick={onClose} className="text-xs text-slate-500 hover:underline">
+        <div className="relative min-w-0 flex-1">
+          <IconSearch aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-ink-500" />
+          <input
+            autoFocus
+            value={q}
+            onChange={(e) => setQ(e.currentTarget.value)}
+            placeholder="Buscar producto…"
+            aria-label="Buscar producto"
+            className={cn(FIELD_BOX, "h-8 w-full pl-8 pr-3")}
+          />
+        </div>
+        <OpsButton variant="ghost" size="sm" onClick={onClose}>
           Cerrar
-        </button>
+        </OpsButton>
       </div>
-      {searching && <p className="mt-1 text-xs text-slate-400">Buscando…</p>}
+      {searching && <p className="mt-2 text-xs text-ink-500">Buscando…</p>}
       {results && results.length === 0 && !searching && (
-        <p className="mt-1 text-xs text-slate-400">Sin resultados (o falta el permiso read_products).</p>
+        <p className="mt-2 text-xs text-ink-500">Sin resultados (o falta el permiso read_products).</p>
       )}
       {results && results.length > 0 && (
-        <ul className="mt-1 max-h-56 overflow-y-auto">
+        <ul className="mt-2 max-h-56 overflow-y-auto overscroll-contain">
           {results.map((p) => {
             const single = p.variants.length === 1; // sin variantes reales → se agrega directo
             const expanded = openProd === p.productId;
@@ -2936,39 +3157,45 @@ function ProductPicker({
                 <button
                   type="button"
                   onClick={() => (single ? pick(p, p.variants[0]!) : setOpenProd(expanded ? null : p.productId))}
-                  className="flex w-full items-center gap-2 rounded px-1.5 py-1 text-left hover:bg-emerald-50"
+                  aria-expanded={single ? undefined : expanded}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-white"
                 >
-                  {!single && <span className="text-slate-300">{expanded ? "▾" : "▸"}</span>}
-                  <span className="flex-1 text-sm text-slate-800">{p.title}</span>
+                  {!single &&
+                    (expanded ? (
+                      <IconChevronDown aria-hidden className="size-4 shrink-0 text-ink-500" />
+                    ) : (
+                      <IconChevronRight aria-hidden className="size-4 shrink-0 text-ink-500" />
+                    ))}
+                  <span className="min-w-0 flex-1 text-sm text-ink-900">{p.title}</span>
                   {single ? (
                     <>
-                      <span className={cn("text-xs", (p.variants[0]!.inventory ?? 0) > 0 ? "text-slate-500" : "text-amber-600")}>
+                      <span className={cn("text-xs tabular-nums", (p.variants[0]!.inventory ?? 0) > 0 ? "text-ink-500" : "text-warn-fg")}>
                         {p.variants[0]!.inventory != null ? `stock ${p.variants[0]!.inventory}` : ""}
                       </span>
-                      <span className="text-sm font-medium text-slate-700">
+                      <span className="text-sm font-medium tabular-nums text-ink-900">
                         {currency} {(p.variants[0]!.price ?? 0).toFixed(2)}
                       </span>
                     </>
                   ) : (
-                    <span className="text-xs text-slate-400">
+                    <span className="text-xs tabular-nums text-ink-500">
                       {p.variants.length} variantes{totalStock > 0 ? ` · stock ${totalStock}` : ""}
                     </span>
                   )}
                 </button>
                 {expanded && !single && (
-                  <ul className="mb-1 ml-4 border-l border-slate-200 pl-2">
+                  <ul className="mb-1 ml-4 border-l border-line-strong pl-2">
                     {p.variants.map((v) => (
                       <li key={v.variantId}>
                         <button
                           type="button"
                           onClick={() => pick(p, v)}
-                          className="flex w-full items-center gap-2 rounded px-1.5 py-1 text-left hover:bg-emerald-50"
+                          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-white"
                         >
-                          <span className="flex-1 text-sm text-slate-700">{v.variantTitle || "Estándar"}</span>
-                          <span className={cn("text-xs", (v.inventory ?? 0) > 0 ? "text-slate-500" : "text-amber-600")}>
+                          <span className="min-w-0 flex-1 text-sm text-ink-700">{v.variantTitle || "Estándar"}</span>
+                          <span className={cn("text-xs tabular-nums", (v.inventory ?? 0) > 0 ? "text-ink-500" : "text-warn-fg")}>
                             {v.inventory != null ? `stock ${v.inventory}` : ""}
                           </span>
-                          <span className="text-sm font-medium text-slate-700">
+                          <span className="text-sm font-medium tabular-nums text-ink-900">
                             {currency} {(v.price ?? 0).toFixed(2)}
                           </span>
                         </button>
@@ -2985,15 +3212,33 @@ function ProductPicker({
   );
 }
 
-function CallForm({
+/**
+ * El resultado de la llamada: los estados más usados como chips y el resto en
+ * «Otro estado» (registerCall acepta cualquier estado válido, así que no se
+ * pierde ninguno), la fecha del próximo seguimiento y una nota.
+ *
+ * `variant="panel"` (la ficha): tarjeta propia con su título. `variant="card"`
+ * (la tarjeta del siguiente lead): sin marco ni título —los pone quien la
+ * monta—, los chips en una fila y debajo, en otra, la fecha, la nota de una
+ * línea y el botón. La conducta es la misma en las dos.
+ */
+export function CallForm({
   leadId,
   onRegistered,
+  submitLabel = "Guardar resultado",
+  variant = "panel",
+  footer,
 }: {
   leadId: string;
   onRegistered: (update?: LeadDrawerUpdate) => void;
+  submitLabel?: string;
+  variant?: "panel" | "card";
+  /** Solo en la tarjeta: lo que va bajo el botón de guardar («Abrir ficha», «Saltar»). */
+  footer?: ReactNode;
 }) {
   const [state, action, pending] = useActionState<LeadActionState, FormData>(registerCall, {});
   const [status, setStatus] = useState("");
+  const headingId = useId();
   useEffect(() => {
     if (state.notice || state.error) finishUiMeasure("kapso:call-save");
     if (state.notice) {
@@ -3002,15 +3247,15 @@ function CallForm({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
-  // Disposiciones más usadas como chips; el resto en el <select> "Otros estados"
+  // Disposiciones más usadas como chips; el resto en el <select> "Otro estado"
   // (registerCall acepta cualquier estado válido, así que no se pierde ninguno).
   const CHIPS: [string, string][] = [
-    ["casi_cierra", "🔥 Casi cierra"],
-    ["no_responde", "🚫 No contestó"],
-    ["volver_a_llamar", "📞 Volver a llamar"],
-    ["contactado_dejo_wsp", "💬 Contactado"],
-    ["buzon", "📭 Buzón"],
-    ["sin_stock", "📦 Sin stock"],
+    ["casi_cierra", "Casi cierra"],
+    ["no_responde", "No contestó"],
+    ["volver_a_llamar", "Volver a llamar"],
+    ["contactado_dejo_wsp", "Contactado"],
+    ["buzon", "Buzón"],
+    ["sin_stock", "Sin stock"],
   ];
   const chipKeys = new Set(CHIPS.map(([k]) => k));
   // El desplegable lista TODOS los estados (los de los chips primero, con su
@@ -3020,70 +3265,139 @@ function CallForm({
     ...CHIPS.map(([code]) => ({ code, label: labelOf(code) })),
     ...MANUAL_STATUSES.filter((s) => !chipKeys.has(s.code)).map((s) => ({ code: s.code, label: s.label })),
   ];
-  return (
-    <section>
-      <p className="mb-2 text-xs font-semibold tracking-wide text-slate-400 uppercase">Resultado de la llamada</p>
-      <form action={action} onSubmit={() => startUiMeasure("kapso:call-save")} className="space-y-2.5">
-        <input type="hidden" name="lead_id" value={leadId} />
-        <input type="hidden" name="status" value={status} />
-        <div className="flex flex-wrap gap-1.5">
-          {CHIPS.map(([k, label]) => {
-            const on = status === k;
-            return (
-              <button
-                key={k}
-                type="button"
-                onClick={() => setStatus(on ? "" : k)}
-                className={cn(
-                  "rounded-full border px-3 py-1.5 text-xs font-semibold transition",
-                  on
-                    ? "border-brand-600 bg-brand-600 text-white"
-                    : "border-slate-300 bg-white text-slate-600 hover:bg-slate-50",
-                )}
-              >
-                {label}
-              </button>
-            );
-          })}
-        </div>
-        <select
-          value={status}
-          onChange={(e) => setStatus(e.currentTarget.value)}
-          className={inputCls}
-          aria-label="Estado de la llamada"
-        >
-          <option value="">(mantener estado)</option>
-          {STATUS_OPTIONS.map((s) => (
-            <option key={s.code} value={s.code}>
-              {s.label}
-            </option>
-          ))}
-        </select>
-        <textarea name="note" rows={2} placeholder="Nota rápida…" className={inputCls} />
-        {(status === "casi_cierra" || status === "volver_a_llamar") && (
-          <p className="text-[11px] leading-snug text-slate-400">
-            Sin fecha se agenda solo: <span className="font-medium text-slate-500">hoy 18:00</span> (si aún no son las
-            16h) o <span className="font-medium text-slate-500">mañana 10:00</span> — lo verás en la vista
-            Seguimientos a esa hora.
-          </p>
-        )}
-        <div className="flex gap-2">
-          <input
-            name="next_followup_at"
-            type="datetime-local"
-            aria-label="Reprogramar seguimiento"
-            className={cn(inputCls, "flex-1")}
-          />
-          <button
-            type="submit"
-            disabled={pending}
-            className="shrink-0 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-60"
+  const card = variant === "card";
+  const chips = CHIPS.map(([k, label]) => {
+    const on = status === k;
+    return <ChoiceChip key={k} label={label} active={on} onClick={() => setStatus(on ? "" : k)} />;
+  });
+  const options = STATUS_OPTIONS.map((s) => (
+    <option key={s.code} value={s.code}>
+      {s.label}
+    </option>
+  ));
+  const autoHint = (status === "casi_cierra" || status === "volver_a_llamar") && (
+    <p className="text-xs leading-5 text-ink-500">
+      Sin fecha se agenda solo: <span className="font-medium text-ink-700">hoy 18:00</span> (si aún no son las
+      16:00) o <span className="font-medium text-ink-700">mañana 10:00</span>. Lo verás en la vista Seguimientos a
+      esa hora.
+    </p>
+  );
+  const feedback = (state.error || state.notice) && (
+    <div className="min-w-0 text-[13px]">
+      {state.error && <p role="alert" className="text-crit-fg">{state.error}</p>}
+      {state.notice && <p role="status" className="text-ok-fg">{state.notice}</p>}
+    </div>
+  );
+  const fields = (
+    <>
+      <input type="hidden" name="lead_id" value={leadId} />
+      <input type="hidden" name="status" value={status} />
+    </>
+  );
+
+  if (card) {
+    // La columna del medio de la tarjeta del siguiente lead (DESIGN.md › Leads):
+    // registrar la gestión de arriba abajo, con «Guardar y siguiente» al pie.
+    return (
+      <form action={action} onSubmit={() => startUiMeasure("kapso:call-save")} className="flex flex-1 flex-col gap-4">
+        {fields}
+        <div className="space-y-2">
+          <div role="group" aria-label="Resultado" className="grid grid-cols-2 gap-1.5 @xs:grid-cols-3">
+            {CHIPS.map(([k, label]) => {
+              const on = status === k;
+              return (
+                <button
+                  key={k}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() => setStatus(on ? "" : k)}
+                  className={cn(choiceChipClass(on), "w-full justify-center")}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+          {/* «Otro estado» con el aspecto del chip: encendido solo cuando lo
+              elegido no es uno de los chips. */}
+          <select
+            value={status}
+            onChange={(e) => setStatus(e.currentTarget.value)}
+            className={cn(choiceChipClass(status !== "" && !chipKeys.has(status)), "w-full cursor-pointer")}
+            aria-label="Estado de la llamada"
           >
-            {pending ? "Guardando…" : "Guardar"}
-          </button>
+            <option value="">Otro estado</option>
+            {options}
+          </select>
         </div>
-        {state.error && <p className="text-sm text-red-600">{state.error}</p>}
-        {state.notice && <p className="text-sm text-emerald-600">{state.notice}</p>}
+        <label className="block min-w-0">
+          <span className="mb-1 block text-xs text-ink-600">Próximo seguimiento</span>
+          <input name="next_followup_at" type="datetime-local" className={cn(FIELD_BOX, "h-9 w-full px-3 tabular-nums")} />
+        </label>
+        {autoHint}
+        <label className="block min-w-0">
+          <span className="mb-1 block text-xs text-ink-600">Nota</span>
+          <textarea
+            name="note"
+            rows={3}
+            placeholder="Lo que te dijo, qué quedó pendiente…"
+            className={cn(FIELD_BOX, "w-full resize-none px-3 py-2 leading-5")}
+          />
+        </label>
+        <div className="mt-auto space-y-2 pt-1">
+          {feedback}
+          <OpsButton type="submit" variant="primary" size="lg" className="w-full" disabled={pending}>
+            {pending ? "Guardando…" : submitLabel}
+          </OpsButton>
+          {footer}
+        </div>
+      </form>
+    );
+  }
+
+  return (
+    <section aria-labelledby={headingId} className={SECTION_CARD}>
+      <h3 id={headingId} className="text-sm font-semibold text-ink-900">Resultado de la llamada</h3>
+      <form action={action} onSubmit={() => startUiMeasure("kapso:call-save")} className="mt-3 space-y-3">
+        {fields}
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">{chips}</div>
+        <div className="grid grid-cols-1 gap-x-2 gap-y-3 sm:grid-cols-2">
+          <label className="block min-w-0">
+            <span className={LABEL}>Otro estado</span>
+            <select
+              value={status}
+              onChange={(e) => setStatus(e.currentTarget.value)}
+              className={cn(FIELD, "mt-1")}
+              aria-label="Estado de la llamada"
+            >
+              <option value="">Mantener estado</option>
+              {options}
+            </select>
+          </label>
+          <label className="block min-w-0">
+            <span className={LABEL}>Próximo seguimiento</span>
+            <input
+              name="next_followup_at"
+              type="datetime-local"
+              aria-label="Reprogramar seguimiento"
+              className={cn(FIELD, "mt-1 tabular-nums")}
+            />
+          </label>
+        </div>
+        <textarea
+          name="note"
+          rows={2}
+          placeholder="Nota rápida…"
+          aria-label="Nota"
+          className={cn(FIELD_BOX, "min-h-16 w-full px-3 py-2 leading-5")}
+        />
+        {autoHint}
+        <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
+          <div className="mr-auto">{feedback}</div>
+          <OpsButton type="submit" variant="primary" disabled={pending}>
+            {pending ? "Guardando…" : submitLabel}
+          </OpsButton>
+        </div>
       </form>
     </section>
   );

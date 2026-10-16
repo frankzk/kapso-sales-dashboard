@@ -38,6 +38,8 @@ describe("el nombre de la bodega de Swayp se traduce a nuestra ciudad", () => {
     expect(ciudadDeBodega("BODEGA TRUJILLO")).toBe("trujillo");
     expect(ciudadDeBodega("Bodega Arequipa")).toBe("arequipa");
     expect(ciudadDeBodega("BODEGA PIURA")).toBe("piura");
+    // Desde el 15-10-2026: el Excel de la bodega de Ica también se puede importar.
+    expect(ciudadDeBodega("BODEGA ICA")).toBe("ica");
   });
 
   it("Juliaca-Puno cae en juliaca, NO en las dos", () => {
@@ -229,8 +231,8 @@ describe("el plan de importación", () => {
   });
 
   it("no toca ninguna ciudad que no sea la importada", () => {
-    // Nuestra tabla cubre nueve ciudades y Swayp tiene cinco bodegas: Cusco,
-    // Huancayo, Ica, Chiclayo y Chimbote se abastecen de otra forma.
+    // Nuestra tabla cubre más ciudades que las bodegas que se leen de Swayp:
+    // Cusco, Huancayo, Chiclayo y Chimbote se abastecen de otra forma.
     const filas = [stock({ city: "trujillo", quantity: 3 })];
     const plan = planearImportacion("trujillo", leerExcelSwayp([fila()]).entradas, filas, mapa, etiquetas);
     expect(plan.ajustes.every((a) => filas.some((f) => f.id === a.id))).toBe(true);

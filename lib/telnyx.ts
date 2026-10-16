@@ -92,6 +92,12 @@ export interface TelnyxConfig {
   xaiSipUri: string;
   /** Puerta SIP del agente de ElevenLabs para este número; vacía si no está configurada. */
   elevenLabsSipUri: string;
+  /**
+   * Puerta SIP del agente de LEADS (MOM §33), otro agente de ElevenLabs; vacía
+   * si no está configurada. Opcional: una llamada de pedido nunca la usa, y
+   * una de lead nunca cae a las de arriba.
+   */
+  leadsSipUri?: string;
 }
 
 /** Qué agente atiende la llamada: Grok (xAI) o ElevenLabs. Es `voice_calls.provider`. */

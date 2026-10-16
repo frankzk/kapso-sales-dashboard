@@ -254,13 +254,15 @@ describe("el registro dice lo mismo que el Master", () => {
 });
 
 describe("el botón", () => {
-  it("la acción valida Por confirmar y provincia COD, y graba el hecho antes de recalcular", () => {
-    const src = read("app/dashboard/envios/actions.ts");
+  it("la emisión valida Por confirmar y provincia COD, y graba el hecho antes de recalcular", () => {
+    // Desde el 13-10-2026 vive en lib/swayp-directa.ts: la usan el botón y el automático.
+    const src = read("lib/swayp-directa.ts");
+    expect(read("app/dashboard/envios/actions.ts")).toContain("origen: input.origen,");
     expect(src).toContain('if (input.origen === "por_confirmar") {');
     expect(src).toContain('if (m?.macro_stage !== "por_confirmar") {');
     expect(src).toContain('if (m.coverage !== "provincia_cod") {');
     const hecho = src.indexOf("kind: SWAYP_DESDE_CONFIRMACION_KIND,");
-    const recalculo = src.indexOf("await syncMasterForShipment(admin, childId);");
+    const recalculo = src.indexOf("await recomputeOrderMasterForShipmentsSafe(admin, [childId]);");
     expect(hecho).toBeGreaterThan(0);
     expect(hecho).toBeLessThan(recalculo);
   });
@@ -273,7 +275,7 @@ describe("el botón", () => {
   });
 
   it("la versión sube y el MOM lo documenta", () => {
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.25");
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.30");
     expect(read("docs/mom/master-pedidos-v1.md")).toContain("### 11.11 Swayp desde Por confirmar (v1.24, 09-10-2026)");
   });
 });

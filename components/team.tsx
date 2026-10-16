@@ -4,11 +4,12 @@ import Link from "next/link";
 import { useActionState, useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { Role } from "@/lib/types";
-import { ROLES } from "@/lib/team";
-import { GRANTED_ONE_BY_ONE } from "@/lib/permissions";
+import { ROLES, invitableRoles } from "@/lib/team";
+import { ACCESS_LABEL, FUNCTIONAL_ROLES, GRANTED_ONE_BY_ONE } from "@/lib/permissions";
 import {
   addMember,
   removeMember,
+  setMemberFunctionRole,
   setMemberRole,
   setPaymentValidationPermission,
   setStoreAccess,
@@ -19,6 +20,17 @@ import {
   type TeamActionState,
 } from "@/app/dashboard/team/actions";
 import { Card, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
+import { SchedulesTab } from "@/components/team-schedules";
+import { OpsButton } from "@/components/ops-ui";
+import { IconChevronRight, IconInfo } from "@/components/icons";
+import {
+  MemberAccessPanel,
+  RolesGuidePanel,
+  displayName,
+  type AccessMember,
+  type GuideSection,
+} from "@/components/team-permissions";
+import type { AdvisorSchedule } from "@/lib/productivity-week";
 import {
   DISPATCH_COURIERS,
   GROUP_GF_RIDER_COURIER,
@@ -50,11 +62,20 @@ function useSavedFlash(pending: boolean, notice: string | undefined): boolean {
 export interface TeamMember {
   user_id: string;
   email: string;
+  /** El nombre con que entró, si lo dio. */
+  name: string | null;
   role: Role;
   stores: string[]; // store ids the member has explicit access to
   /** Permiso de concesión individual → si esta persona lo tiene hoy. */
   grants: Record<string, boolean>;
+  /** Roles acumulables (0250, MOM §16). */
+  functions: string[];
+  /** Lo que puede hacer hoy y de dónde le viene (`explainPermissions`). */
+  access: AccessMember["access"];
 }
+
+/** Qué panel lateral está abierto: la guía de roles o lo que puede hacer una persona. */
+type AccessPanel = { kind: "guide"; section: GuideSection } | { kind: "member"; userId: string } | null;
 
 interface Store {
   id: string;
@@ -74,7 +95,7 @@ export interface RiderRow {
   user_email: string | null;
 }
 
-type TeamTab = "usuarios" | "motorizados";
+type TeamTab = "usuarios" | "motorizados" | "horarios";
 
 export function TeamManager({
   org,
@@ -84,6 +105,9 @@ export function TeamManager({
   stores,
   members,
   riders,
+  schedules,
+  initialTab = "usuarios",
+  initialScheduleUserId = null,
 }: {
   org: { id: string; name: string };
   orgs: { id: string; name: string }[];
@@ -92,9 +116,18 @@ export function TeamManager({
   stores: Store[];
   members: TeamMember[];
   riders: RiderRow[];
+  /** Meta y horario por persona (Equipo › Horarios, migración 0245). */
+  schedules: Record<string, AdvisorSchedule>;
+  initialTab?: TeamTab;
+  /** Desde Productividad, «Editar horario» abre el de esa persona. */
+  initialScheduleUserId?: string | null;
 }) {
   const ownerCnt = members.filter((m) => m.role === "owner").length;
-  const [tab, setTab] = useState<TeamTab>("usuarios");
+  const [tab, setTab] = useState<TeamTab>(initialTab);
+  const [panel, setPanel] = useState<AccessPanel>(null);
+  const openGuide = (section: GuideSection) => setPanel({ kind: "guide", section });
+  const openMember = (userId: string) => setPanel({ kind: "member", userId });
+  const panelMember = panel?.kind === "member" ? members.find((m) => m.user_id === panel.userId) : undefined;
 
   return (
     <div className="space-y-6">
@@ -102,7 +135,7 @@ export function TeamManager({
         <div>
           <h1 className="text-xl font-semibold text-slate-900">Equipo y accesos</h1>
           <p className="text-sm text-slate-500">
-            Organización <strong>{org.name}</strong> · tu rol: {myRole}
+            Organización <strong>{org.name}</strong> · tu acceso: {ACCESS_LABEL[myRole] ?? myRole}
           </p>
         </div>
         {orgs.length > 1 && (
@@ -128,6 +161,7 @@ export function TeamManager({
         {(
           [
             ["usuarios", "Usuarios y accesos"],
+            ["horarios", "Horarios"],
             ["motorizados", "Motorizados"],
           ] as [TeamTab, string][]
         ).map(([key, label]) => (
@@ -147,27 +181,33 @@ export function TeamManager({
         <>
           <AddMemberForm orgId={org.id} myRole={myRole} />
           <Card>
-            {/* El texto se arma desde la misma lista que las casillas: con la
-                frase escrita a mano, añadir un permiso dejaba la explicación
-                hablando solo del primero. */}
-            <p className="mb-3 text-xs text-slate-500">
-              Estos permisos se conceden persona por persona según su responsabilidad; solo
-              «Exportar datos» viene ya con dueño y admin. Los accesos correspondientes aparecen
-              en su menú al recargar.{" "}
-              {GRANTED_ONE_BY_ONE.map((entry) => (
-                <span key={entry.permission} className="mr-1 inline-block">
-                  <strong className="font-semibold text-slate-700">{entry.label}</strong>:{" "}
-                  {entry.description}
-                </span>
-              ))}
-            </p>
+            {/* Antes, dos párrafos enumeraban cada rol y cada permiso de corrido, y el
+                resto solo salía al pasar el ratón. Ahora una frase y la guía. */}
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="max-w-[68ch] text-[13px] leading-5 text-ink-600">
+                Cada persona tiene un <strong className="font-semibold text-ink-900">acceso</strong> y, encima,{" "}
+                <strong className="font-semibold text-ink-900">roles</strong> que le suman permisos. Los de dinero y
+                datos se dan uno por uno. Toca «permisos» en una fila para ver qué puede hacer esa persona y por qué.
+              </p>
+              <OpsButton size="sm" className="shrink-0" onClick={() => openGuide(FUNCTIONAL_ROLES[0].role)}>
+                <IconInfo width={16} height={16} aria-hidden />
+                ¿Qué hace cada rol?
+              </OpsButton>
+            </div>
             <div className={TABLE_WRAP_FROM[1110]}>
-              <table className="w-full min-w-[880px] text-sm">
+              <table className="w-full min-w-[1040px] text-sm">
                 <thead>
                   <tr className={cn(STICKY_HEAD, "text-xs text-slate-500")}>
                     <th className="py-2 text-left font-medium">Miembro</th>
-                    <th className="py-2 text-left font-medium">Permisos por persona</th>
-                    <th className="py-2 text-left font-medium">Rol</th>
+                    <th className="py-2 text-left font-medium">
+                      <HeadWithGuide label="Roles" onOpen={() => openGuide(FUNCTIONAL_ROLES[0].role)} />
+                    </th>
+                    <th className="py-2 text-left font-medium">
+                      <HeadWithGuide label="Permisos por persona" onOpen={() => openGuide("uno-por-uno")} />
+                    </th>
+                    <th className="py-2 text-left font-medium">
+                      <HeadWithGuide label="Acceso" onOpen={() => openGuide("accesos")} />
+                    </th>
                     <th className="py-2 text-left font-medium">Acceso a tiendas</th>
                     <th className="py-2 text-right font-medium">Acción</th>
                   </tr>
@@ -176,10 +216,20 @@ export function TeamManager({
                   {members.map((m) => (
                     <tr key={m.user_id} className="border-b border-slate-100 align-top last:border-0">
                       <td className="py-3 text-slate-800">
-                        {m.email}
+                        {m.name ?? m.email}
                         {m.user_id === currentUserId && (
                           <span className="ml-1 text-xs text-slate-400">(tú)</span>
                         )}
+                        {m.name && <span className="block text-xs text-slate-500">{m.email}</span>}
+                      </td>
+                      <td className="py-3">
+                        <FunctionRolesCell
+                          orgId={org.id}
+                          member={m}
+                          myRole={myRole}
+                          onOpenGuide={openGuide}
+                          onOpenMember={() => openMember(m.user_id)}
+                        />
                       </td>
                       <td className="py-3">
                         <PaymentValidationToggle orgId={org.id} member={m} myRole={myRole} />
@@ -197,7 +247,7 @@ export function TeamManager({
                   ))}
                   {!members.length && (
                     <tr>
-                      <td colSpan={5} className="py-4 text-sm text-slate-400">
+                      <td colSpan={6} className="py-4 text-sm text-slate-400">
                         Sin miembros todavía.
                       </td>
                     </tr>
@@ -206,7 +256,27 @@ export function TeamManager({
               </table>
             </div>
           </Card>
+          {panel?.kind === "guide" && (
+            <RolesGuidePanel
+              section={panel.section}
+              onSelect={openGuide}
+              members={members}
+              onClose={() => setPanel(null)}
+            />
+          )}
+          {panelMember && (
+            <MemberAccessPanel member={panelMember} onOpenGuide={openGuide} onClose={() => setPanel(null)} />
+          )}
         </>
+      )}
+
+      {tab === "horarios" && (
+        <SchedulesTab
+          orgId={org.id}
+          members={members.map((m) => ({ user_id: m.user_id, email: m.email, role: m.role }))}
+          schedules={schedules}
+          initialEditUserId={initialScheduleUserId}
+        />
       )}
 
       {tab === "motorizados" && (
@@ -241,7 +311,7 @@ function AddMemberForm({ orgId, myRole }: { orgId: string; myRole: Role }) {
         </div>
         <div>
           <label className="block text-sm font-medium text-slate-700" htmlFor="role">
-            Rol
+            Acceso
           </label>
           <select
             id="role"
@@ -249,9 +319,10 @@ function AddMemberForm({ orgId, myRole }: { orgId: string; myRole: Role }) {
             defaultValue="viewer"
             className="mt-1 rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500"
           >
-            {roleOptions(myRole === "owner").map((r) => (
+            {/* Un admin solo invita vendedoras y solo lectura (MOM §16). */}
+            {invitableRoles(myRole).map((r) => (
               <option key={r} value={r}>
-                {r}
+                {ACCESS_LABEL[r] ?? r}
               </option>
             ))}
           </select>
@@ -285,7 +356,8 @@ function RoleForm({
   const saved = useSavedFlash(pending, state.notice);
   const isOwnerTarget = member.role === "owner";
   const lastOwner = isOwnerTarget && ownerCnt <= 1;
-  const canEdit = myRole === "owner" || !isOwnerTarget;
+  // Solo el dueño cambia roles (MOM §16, 12-10-2026).
+  const canEdit = myRole === "owner";
   const disabled = pending || lastOwner || !canEdit;
   // Always include the current role as an option so the value is valid.
   const showOwnerOption = myRole === "owner" || isOwnerTarget;
@@ -299,11 +371,11 @@ function RoleForm({
         disabled={disabled}
         onChange={(e) => e.currentTarget.form?.requestSubmit()}
         className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-brand-500 disabled:bg-slate-50 disabled:text-slate-400"
-        title={lastOwner ? "No puedes cambiar al único owner" : undefined}
+        title={lastOwner ? "No puedes cambiar al único owner" : !canEdit ? "Solo el dueño cambia roles" : undefined}
       >
         {roleOptions(showOwnerOption).map((r) => (
           <option key={r} value={r}>
-            {r}
+            {ACCESS_LABEL[r] ?? r}
           </option>
         ))}
       </select>
@@ -313,6 +385,110 @@ function RoleForm({
         <span className="text-xs font-medium text-emerald-600">Guardado ✓</span>
       ) : null}
       {state.error && <span className="text-xs text-red-600">{state.error}</span>}
+    </form>
+  );
+}
+
+/**
+ * Los roles acumulables de una persona (MOM §16). El dueño los marca y desmarca;
+ * los demás los ven. Debajo, plegado, todo lo que la persona puede hacer hoy.
+ */
+/** Encabezado de columna con un botón que abre su parte de la guía. */
+function HeadWithGuide({ label, onOpen }: { label: string; onOpen: () => void }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      {label}
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-label={`Qué significa «${label}»`}
+        className="grid size-6 place-items-center rounded text-ink-500 transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:size-11"
+      >
+        <IconInfo width={14} height={14} aria-hidden />
+      </button>
+    </span>
+  );
+}
+
+function FunctionRolesCell({
+  orgId,
+  member,
+  myRole,
+  onOpenGuide,
+  onOpenMember,
+}: {
+  orgId: string;
+  member: TeamMember;
+  myRole: Role;
+  onOpenGuide: (section: GuideSection) => void;
+  onOpenMember: () => void;
+}) {
+  const canEdit = myRole === "owner";
+  const count = member.access.granted.length;
+  return (
+    <div className="flex flex-col gap-1">
+      {canEdit ? (
+        FUNCTIONAL_ROLES.map((entry) => (
+          <FunctionRoleToggle key={entry.role} orgId={orgId} member={member} entry={entry} />
+        ))
+      ) : member.functions.length ? (
+        <div className="flex max-w-56 flex-wrap gap-1">
+          {FUNCTIONAL_ROLES.filter((entry) => member.functions.includes(entry.role)).map((entry) => (
+            <button
+              key={entry.role}
+              type="button"
+              onClick={() => onOpenGuide(entry.role)}
+              className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-700 transition-colors hover:bg-slate-200"
+            >
+              {entry.label}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <span className="text-xs text-slate-400" title="Solo el dueño asigna roles">Sin roles</span>
+      )}
+      <button
+        type="button"
+        onClick={onOpenMember}
+        aria-label={`Qué puede hacer ${displayName(member)}`}
+        className="mt-1 inline-flex w-fit items-center gap-0.5 rounded text-xs font-medium text-brand-700 underline-offset-2 hover:underline pointer-coarse:min-h-11"
+      >
+        {count ? `${count} ${count === 1 ? "permiso" : "permisos"}` : "Solo mira"}
+        <IconChevronRight width={14} height={14} aria-hidden />
+      </button>
+    </div>
+  );
+}
+
+function FunctionRoleToggle({
+  orgId,
+  member,
+  entry,
+}: {
+  orgId: string;
+  member: TeamMember;
+  entry: (typeof FUNCTIONAL_ROLES)[number];
+}) {
+  const [state, action, pending] = useActionState(setMemberFunctionRole, initial);
+  const has = member.functions.includes(entry.role);
+  return (
+    <form action={action} className="flex flex-col">
+      <input type="hidden" name="org_id" value={orgId} />
+      <input type="hidden" name="user_id" value={member.user_id} />
+      <input type="hidden" name="role" value={entry.role} />
+      <input type="hidden" name="grant" value={has ? "0" : "1"} />
+      <label className="inline-flex w-fit cursor-pointer items-center gap-2 text-xs font-medium text-slate-700" title={entry.description}>
+        <input
+          type="checkbox"
+          defaultChecked={has}
+          disabled={pending}
+          onChange={(event) => event.currentTarget.form?.requestSubmit()}
+          aria-label={`${entry.label} — rol de ${member.email}`}
+          className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+        />
+        {entry.label}
+      </label>
+      {state.error && <span className="max-w-56 text-[11px] text-red-600">{state.error}</span>}
     </form>
   );
 }
@@ -330,7 +506,8 @@ function RemoveForm({
 }) {
   const [state, action, pending] = useActionState(removeMember, initial);
   const lastOwner = member.role === "owner" && ownerCnt <= 1;
-  const canRemove = myRole === "owner" || member.role !== "owner";
+  // A un admin u owner solo lo quita el dueño (MOM §16).
+  const canRemove = myRole === "owner" || (member.role !== "owner" && member.role !== "admin");
   const disabled = pending || lastOwner || !canRemove;
   return (
     <form action={action} className="inline-flex flex-col items-end gap-1">
@@ -340,7 +517,7 @@ function RemoveForm({
         type="submit"
         disabled={disabled}
         className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:text-slate-300 disabled:hover:bg-transparent"
-        title={lastOwner ? "No puedes remover al único owner" : undefined}
+        title={lastOwner ? "No puedes remover al único owner" : !canRemove ? "Solo el dueño puede quitar a un admin" : undefined}
       >
         Quitar
       </button>
@@ -462,7 +639,8 @@ function OneByOneToggle({
 }) {
   const [state, action, pending] = useActionState(setPaymentValidationPermission, initial);
   const saved = useSavedFlash(pending, state.notice);
-  const canEdit = myRole === "owner" || member.role !== "owner";
+  // Dinero y datos: solo el dueño los da o los quita, también a sí mismo (MOM §16).
+  const canEdit = myRole === "owner" || (!entry.ownerOnly && member.role !== "owner");
   const has = member.grants[entry.permission] ?? false;
   return (
     <form action={action} className="flex flex-col gap-0.5">
@@ -475,7 +653,7 @@ function OneByOneToggle({
           "inline-flex w-fit items-center gap-2 text-xs font-medium",
           canEdit ? "cursor-pointer text-slate-700" : "cursor-not-allowed text-slate-400",
         )}
-        title={entry.description}
+        title={!canEdit && entry.ownerOnly ? `${entry.description} Solo el dueño lo da o lo quita.` : entry.description}
       >
         <input
           type="checkbox"

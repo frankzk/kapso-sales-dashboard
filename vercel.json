@@ -13,6 +13,10 @@
       "schedule": "12,42 * * * *"
     },
     {
+      "path": "/api/cron/swayp-pc-auto",
+      "schedule": "30 23 * * *"
+    },
+    {
       "path": "/api/cron/sync",
       "schedule": "*/5 * * * *"
     },
@@ -86,12 +90,20 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron/voice-leads",
+      "schedule": "2,7,12,17,22,27,32,37,42,47,52,57 * * * *"
+    },
+    {
       "path": "/api/cron/swayp-inventory",
       "schedule": "40 * * * *"
     },
     {
       "path": "/api/cron/swayp-status",
       "schedule": "22,52 * * * *"
+    },
+    {
+      "path": "/api/cron/invoices",
+      "schedule": "6,16,26,36,46,56 * * * *"
     }
   ]
 }

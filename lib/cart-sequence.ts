@@ -66,6 +66,8 @@ export interface CartSeqLead {
   address1?: string | null;
   district?: string | null;
   referencia?: string | null;
+  /** Pidió no ser contactado (0247, MOM §33). Pre-0247 no viene. */
+  contact_opt_out_at?: string | null;
 }
 
 /** Snapshot del draft (la fuente del carrito) para armar las variables de la
@@ -159,11 +161,13 @@ export function cartSeqTouchesFor(
 /**
  * Por qué un lead NO recibe el siguiente toque ahora (null = elegible).
  * Pure — es LA regla de la secuencia; el fetch solo pre-filtra lo barato.
- * Paradas acordadas: ya tiene pedido / quedó won (ganado) o lost (perdido,
- * lista negra, número inválido…) / el carrito se completó o borró / el
- * cliente escribió DESPUÉS de crear el carrito (lo lleva el bot o la
- * asesora). Además: sin nombre no hay {{1}}; y el toque respeta su hora
- * ancla + el espaciado mínimo entre toques.
+ * Paradas acordadas: pidió no ser contactado (se lo dijo al agente de voz
+ * de leads, MOM §33: va primero y no tiene vuelta, aunque llegue un carrito
+ * nuevo) / ya tiene pedido / quedó won (ganado) o lost (perdido, lista
+ * negra, número inválido…) / el carrito se completó o borró / el cliente
+ * escribió DESPUÉS de crear el carrito (lo lleva el bot o la asesora).
+ * Además: sin nombre no hay {{1}}; y el toque respeta su hora ancla + el
+ * espaciado mínimo entre toques.
  */
 export function cartSeqSkipReason(
   l: CartSeqLead,
@@ -171,6 +175,7 @@ export function cartSeqSkipReason(
   nowMs: number,
   cfg: CartSeqConfig,
 ): string | null {
+  if (l.contact_opt_out_at) return "no_contactar";
   if (!l.draft_order_gid) return "sin_carrito";
   if (l.draft_order_status !== "open" && l.draft_order_status !== "invoice_sent") {
     return "carrito_cerrado";
@@ -259,18 +264,24 @@ export async function runCartSequence(
   // filtro de toques NO va en SQL porque un carrito nuevo (gid distinto)
   // reinicia el contador — lo decide la regla pura. El volumen está acotado
   // por la ventana de ingesta de drafts (2 días), así que es barato.
-  const { data, error } = await admin
-    .from("leads")
-    .select(
-      "id, phone, name, category, has_order, draft_order_gid, draft_order_status, last_inbound_at, cart_seq_touches, last_cart_seq_at, cart_seq_gid, cart_summary, cart_value, address1, district, referencia, wa_phone_number_id",
-    )
-    .eq("store_id", storeId)
-    .eq("has_order", false)
-    .in("category", ["open", "hot"])
-    .not("draft_order_gid", "is", null)
-    .in("draft_order_status", ["open", "invoice_sent"])
-    .order("last_interaction_at", { ascending: false })
-    .limit(300);
+  const buildSelect = (cols: string) =>
+    admin
+      .from("leads")
+      .select(cols)
+      .eq("store_id", storeId)
+      .eq("has_order", false)
+      .in("category", ["open", "hot"])
+      .not("draft_order_gid", "is", null)
+      .in("draft_order_status", ["open", "invoice_sent"])
+      .order("last_interaction_at", { ascending: false })
+      .limit(300);
+  const COLS =
+    "id, phone, name, category, has_order, draft_order_gid, draft_order_status, last_inbound_at, cart_seq_touches, last_cart_seq_at, cart_seq_gid, cart_summary, cart_value, address1, district, referencia, wa_phone_number_id";
+  let { data, error } = await buildSelect(`${COLS}, contact_opt_out_at`);
+  if (error && /contact_opt_out_at/i.test(error.message)) {
+    // Pre-0247: sin la columna nadie pudo pedir todavía que no lo contacten.
+    ({ data, error } = await buildSelect(COLS));
+  }
   if (error) throw new Error(`cart_seq select: ${error.message}`);
   const rows = (data as CartSeqLead[] | null) ?? [];
   if (!rows.length) return report;

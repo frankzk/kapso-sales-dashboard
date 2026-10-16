@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
-import { Sidebar } from "@/components/sidebar";
+import { Sidebar, type NavAccess } from "@/components/sidebar";
 import { YapeAlerts } from "@/components/yape-alerts";
 import { CollectionAlerts } from "@/components/collection-alerts";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
@@ -21,6 +21,8 @@ export function DashboardShell({
   yapeAlertsEnabled,
   canValidatePayments,
   canManageLogistics,
+  canReproLima = false,
+  navAccess,
   badges,
 }: {
   children: ReactNode;
@@ -31,6 +33,9 @@ export function DashboardShell({
   yapeAlertsEnabled: boolean;
   canValidatePayments: boolean;
   canManageLogistics: boolean;
+  /** `repro_lima.manage`: la entrada «Repro Lima» (MOM §9.5). */
+  canReproLima?: boolean;
+  navAccess?: NavAccess;
   badges?: Record<string, number>;
 }) {
   const pathname = usePathname();
@@ -57,6 +62,8 @@ export function DashboardShell({
         roleLabel={roleLabel}
         canValidatePayments={canValidatePayments}
         canManageLogistics={canManageLogistics}
+        canReproLima={canReproLima}
+        navAccess={navAccess}
         badges={badges}
         pendingHref={routePending ? pendingHref : null}
         onNavigate={setPendingHref}

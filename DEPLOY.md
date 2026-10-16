@@ -169,6 +169,9 @@ roles and the `auth` schema, so it just works.
      covers table-level loss (bad migration, accidental DROP), not "whole
      project gone". **Restore:** download the CSV from the bucket and `COPY`/
      import it back into the table.
+   - `/api/cron/invoices` — cada 10 min (a los :06, :16, …). Emite o simula las
+     boletas por RUC (MOM §35). No hace nada mientras todos los RUC estén
+     «Apagado»; ver la sección «Comprobantes SimpleFact por RUC».
 
 ### Pases a mano (bajo `/api/cron`, pero SIN horario)
 
@@ -2072,6 +2075,104 @@ desafío. Solo cambia desde qué red sale la petición, igual que elegir la regi
 3. **Grupo de Telegram** con esas personas y el bot de la tienda; su chat id en
    Ajustes → Telegram → Alertas urgentes («Buscar grupos» lo encuentra).
 
+### 10-10-2026 · App de Shopify para tiendas cliente, primera parte (0249, MOM §29.15.9)
+
+Segunda app de Shopify, pública y oculta, para las tiendas de organizaciones
+cliente de Grupo GF. Aurela y Kenku siguen con la app actual (§5); nada de lo
+suyo cambia.
+
+1. **Migración `0249_shopify_client_app.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0249_shopify_client_app.sql`.
+   Añade `stores.shopify_app` (`interna` por defecto, así que las tiendas de hoy
+   quedan como están) y `stores.shopify_uninstalled_at`, y crea
+   `shopify_pending_installs` y `shopify_privacy_requests`. Sin ella, la
+   desinstalación de una tienda falla al escribir la fecha y la búsqueda de
+   tiendas conectadas de la app nueva responde error.
+   **Ya aplicada en producción el 12-10-2026**, en dos pasos del historial de
+   Supabase: `0245_shopify_client_app` y `0245_shopify_client_app_revoke_defaults`
+   (el `revoke` a `anon` y `authenticated` se añadió después; el fichero ya lo
+   trae completo). Allí quedó con el nombre `0245_…`: el fichero pasó a ser la
+   `0249` porque la `0245` a la `0248` ya estaban tomadas en la integración. Es
+   la misma migración; no se vuelve a correr.
+2. **La app «Kapta» en el Dev Dashboard** (organización Grupo GF SAC), distinta
+   de «kapso-sales-dashboard-aurelape». **Creada el 12-10-2026**; la versión
+   `kapta-3` es la que tiene todo. Su configuración completa:
+
+   ```toml
+   client_id = "…"            # el de la app; no va al repositorio
+   name = "Kapta"
+   application_url = "https://kapso-sales-dashboard.vercel.app/api/shopify/clientes/entrada"
+   embedded = false           # Kapta abre en su pestaña; incrustada no hay login ni OAuth
+
+   [build]
+   automatically_update_urls_on_dev = false
+
+   [webhooks]
+   api_version = "2026-10"
+
+     [[webhooks.subscriptions]]
+     compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+     uri = "https://kapso-sales-dashboard.vercel.app/api/shopify/clientes/cumplimiento"
+
+   [access_scopes]
+   # = SHOPIFY_CLIENT_APP_SCOPES: los de la app interna más write_orders
+   scopes = "read_customers,write_draft_orders,read_draft_orders,read_orders,write_orders,read_products"
+   optional_scopes = [ ]
+   use_legacy_install_flow = false   # instalación gestionada por Shopify
+
+   [auth]
+   redirect_urls = [
+     "https://kapso-sales-dashboard.vercel.app/api/shopify/clientes/callback"
+   ]
+   ```
+
+   - **Los webhooks de privacidad no se pueden poner desde el formulario** del
+     Dev Dashboard (ni al crear ni en «Crear versión»). Se suben con la CLI:
+     `npm init @shopify/app@latest` → «Build an extension-only app» → org
+     Grupo GF SAC → «No, connect it to an existing app» → Kapta. Eso deja una
+     carpeta con `shopify.app.toml`; se deja igual al bloque de arriba y se
+     corre `shopify app deploy`, revisando el resumen antes de confirmar.
+   - **La plantilla trae ejemplos que NO deben subirse:** bloques
+     `[metaobjects.app.faq…]`, `[product.metafields.app.faq…]`, `[sidekick]` y
+     `[access.admin]` en el toml, y las extensiones `extensions/app-home` y
+     `extensions/app-tools`. Se borran antes del `deploy` («Extensions: None»
+     en el resumen).
+   - **Nunca `shopify app dev`** con esta app: cambia las URLs por un túnel
+     temporal.
+   - **Alcances:** cada uno tiene que poder justificarse en la revisión.
+     `write_orders` sirve para corregir la dirección de un pedido ya creado y
+     etiquetarlo. Si se cambian, cambiar también `SHOPIFY_CLIENT_APP_SCOPES`.
+   - **Distribución**: pública, visibilidad **oculta**. Es definitivo. **No**
+     enviar a revisión todavía: falta la segunda parte (anonimizar y entregar
+     datos, registro de accesos).
+   - **Datos protegidos de clientes** (nombre, teléfono y dirección del
+     comprador): se piden aparte, con la justificación «entrega contraentrega».
+3. **Variables en Vercel** (Production), copiadas directo del Dev Dashboard,
+   nunca por chat ni al repositorio:
+   - `SHOPIFY_CLIENT_APP_API_KEY` = Client ID de la app nueva.
+   - `SHOPIFY_CLIENT_APP_API_SECRET` = Client secret de la app nueva.
+   Sin ellas, la entrada y el callback responden «app no configurada» y los
+   avisos de privacidad reciben 401.
+4. **Prueba con una tienda de desarrollo** (no con Aurela ni Kenku: esas están
+   con la app interna y la app nueva las rechaza a propósito):
+   - instalar la app desde el enlace de instalación del Dev Dashboard;
+   - Shopify pide autorizar y vuelve a Kapta, que cae en
+     `/dashboard/conectar-shopify` con el dominio de la tienda (sin sesión
+     abierta, pasa antes por el login y el panel lo devuelve ahí);
+   - elegir la organización y «Conectar tienda»: la tienda queda creada, con
+     webhooks de pedidos y `app/uninstalled`, y empieza la sincronización;
+   - abrir la app otra vez desde el admin de Shopify: entra directo al
+     dashboard de esa tienda;
+   - desinstalar: la tienda pasa a `disabled`, sin token y con
+     `shopify_uninstalled_at`.
+5. **Qué mirar después**:
+   `select topic, shop_domain, status, received_at from shopify_privacy_requests order by received_at desc limit 20;`
+   — cada aviso de privacidad queda `pendiente` hasta la segunda parte. Shopify
+   da 30 días para cumplirlos.
+6. **Webhook de una tienda cliente** que diga `app/uninstalled` en
+   `webhook_events` con la tienda aún activa: el webhook llegó pero no se
+   desactivó; revisar la fila de `stores`.
+
 ### 11-10-2026 · Recordatorio de recojo, día 3 y día 7 en la agencia (0242, MOM §12)
 
 1. **Migración `0242_pickup_reminder.sql`**, a mano y ANTES del código:
@@ -2102,3 +2203,678 @@ ya en el día 7 o más; medido el 11-10-2026): entran de a 10 por tienda
 que la tanda tarda uno o dos días. Cada envío queda en
 la línea de tiempo («Recordatorio de recojo (día 3)…») y la foto que viajó en
 `shalom_transit_notifications.header_image_url`.
+
+### 12-10-2026 · Horas de la semana por asesora (0245)
+
+1. **Migración `0245_advisor_schedules.sql`**, a mano y antes del código:
+   `psql "$DATABASE_URL" -f db/migrations/0245_advisor_schedules.sql`. Crea
+   `advisor_schedules` (meta de horas por semana, días y horario de cada
+   persona; solo el servidor la lee y la escribe). Sin ella, Productividad
+   carga igual y usa la meta por defecto (48 h, lunes a sábado, sin horario),
+   pero Equipo › Horarios no puede guardar y lo dice. **Ya aplicada en
+   producción** el 12-10-2026, pegando el SQL en el editor de Supabase.
+2. **Cargar el horario de cada asesora** en Equipo › Horarios (owner o admin):
+   meta de la semana, días que trabaja y, si tiene, su horario de entrada y
+   salida. Con horario, Productividad marca la primera actividad tarde y la
+   última antes de la salida (10 minutos de gracia).
+
+### 12-10-2026 · Agente de voz para leads, piloto Biru (0247, MOM §33)
+
+1. **Migración `0247_voice_lead_calls.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0247_voice_lead_calls.sql`. Agrega a
+   `voice_calls` a qué llama cada fila (`purpose`: `order` por defecto, o
+   `lead`), `lead_id` y `lead_context`; `order_id` queda nulo solo en las de
+   lead; los resultados se validan por carril. Además `leads.contact_opt_out_at`,
+   los ajustes `stores.voice_lead_*` (apagados) y el trigger
+   `swayp_auto_voice_interlock` solo para llamadas con pedido. **El orden
+   importa también para Reproprovincia**: el código nuevo filtra sus llamadas
+   por `purpose` (atadura de las tools, tope diario, «Gestión por persona»,
+   «Llamando ahora»), y sin la columna esas lecturas fallan y el agente de
+   pedidos deja de llamar. **Ya aplicada en producción** el 12-10-2026,
+   pegando el SQL en el editor de Supabase (las 1.068 llamadas que había
+   quedaron `purpose = 'order'`).
+2. **Secretos en Vercel (Production)**. Se generan en tu máquina
+   (`openssl rand -hex 24`) y se pegan directo en Vercel y en ElevenLabs:
+   **nunca en un chat**, ni en un ticket.
+   - `VOICE_LEADS_TOOLS_SECRET`: firma el inicio de conversación y las dos
+     tools del agente de leads. **Distinto** de `VOICE_TOOLS_SECRET` y de
+     `VOICE_TOOLS_SECRET_ELEVENLABS`: si es igual a uno de ellos, Kapta lo trata
+     como vacío y rechaza todo (un secreto compartido abriría las tools de un
+     agente al otro).
+   - `ELEVENLABS_WEBHOOK_SECRET`: el secreto HMAC que ElevenLabs genera al crear
+     el webhook «post-call». Sin él, `/api/voice/elevenlabs/post-call` responde
+     401 y no se guardan transcripciones; el resto funciona igual.
+3. **El agente en ElevenLabs**: **ya creado** el 12-10-2026 («Agente de leads
+   · Kenku Biru (piloto)»), con guion, primer mensaje, las tools
+   `consultar_cobertura` y `registrar_resultado_lead`, el webhook de inicio
+   (`/api/voice/leads/inicio`) y los ajustes de `docs/voz-leads-agente.md`.
+   Se presenta como Nicol. `VOICE_LEADS_TOOLS_SECRET` ya está en Vercel y, como
+   secreto del workspace `kapta_voice_leads`, en la cabecera `x-voice-secret`
+   de las dos tools y del inicio (12-10-2026). Falta, si se quiere, el
+   post-call. **Guion con `{{aviso}}`** (13-10-2026): va en la rama
+   `sin-ficha-por-regla` del agente y se une a la principal **después** del
+   deploy que manda la variable `aviso` desde `/api/voice/leads/inicio`
+   (`docs/voz-leads-agente.md` §3). **Hecho el 13-10-2026**, con el deploy de
+   #946 ya en producción.
+4. **El número**, después del agente: un número propio del agente de leads
+   importado en ElevenLabs por SIP trunk, aceptando solo las direcciones de
+   Telnyx (`192.76.120.0/24`, `64.16.250.0/24`), y asignado al agente de leads.
+   **Hecho el 12-10-2026**: el +1 645 654 0729, comprado en Telnyx, importado
+   como «Nicol Leads Telnyx» (solo entrada, cifrado de medios «Allowed», sin
+   usuario ni contraseña), igual que el número de Reproprovincia. Recién
+   entonces, en Vercel, y redeploy:
+   - `TELNYX_LEADS_SIP_URI`: la puerta SIP de ese número, con el formato de
+     `TELNYX_ELEVENLABS_SIP_URI`
+     (`sip:+16456540729@sip.rtc.elevenlabs.io:5061;transport=tls`). **Puesta
+     el 12-10-2026.** Sin ella no se llama a ningún lead: el aviso de Telnyx
+     corta el tramo, nunca lo manda al agente de Reproprovincia.
+   - `TELNYX_LEADS_FROM_NUMBER` (opcional): el número que ve el lead. Vacío =
+     el mismo `TELNYX_FROM_NUMBER` de Reproprovincia, que es como sale el
+     piloto mientras llega el número peruano (decisión del owner, 12-10-2026).
+     El +1 645 de la puerta no va aquí: el lead nunca lo ve.
+   - **Ya en producción**: la variable se puso a las 16:51 y los deploys de
+     main de las 17:00 y las 17:08 (12-10-2026) ya la leen. Si Ajustes todavía
+     dice «Falta preparar la línea del agente», redeploy.
+5. **El barrido** `/api/cron/voice-leads` ya está en `vercel.json` (cada cinco
+   minutos, desfasado dos del de Reproprovincia). Solo corre en producción y
+   sin tiendas con el agente encendido no hace nada. La cola se mira sin llamar
+   ni escribir con
+   `GET /api/cron/voice-leads?dry=1&storeId=<uuid>` y
+   `Authorization: Bearer <CRON_SECRET>`: la mira como si el agente estuviera
+   encendido y devuelve cuántos entran y cuántos quedan fuera por cada motivo.
+6. **Encendido por tienda** (Ajustes → «Agente de voz · Leads (piloto)»),
+   con la puerta del paso 4 ya en producción, en este orden: campaña, producto
+   y oferta; «Probar en mi teléfono» desde el drawer de un lead; el porcentaje de control (queda fijo en el primer
+   sorteo); y recién entonces «Agente de leads» y «Llamadas automáticas». Los
+   pasos completos y la campaña de Biru están en `docs/voz-leads-agente.md`.
+
+**Marcha atrás.** Apagar «Llamadas automáticas» (o «Agente de leads») detiene
+el barrido. El sorteo del grupo de control queda guardado y nada se borra.
+
+**Qué mirar después.** Cada pasada escribe una línea `[voice-leads] {…}` en los
+logs de Vercel, sin nombres ni teléfonos: qué hizo cada tienda (`llamada`,
+`cola_vacia`, `fuera_de_horario`, `tope_diario`, `agente_ocupado`,
+`sin_configurar`, `manual`, `apagado`, `error`), el tamaño de la cola, las exclusiones por motivo, los
+brazos sorteados y los «Atender ahora» repuestos. El tablero del piloto está en
+la misma sección de Ajustes.
+
+### 12-10-2026 · Distritos sin el «de» (0246) y «Sacar con salida nueva» (0248, `mom-v1.26`)
+
+1. **Migración `0246_district_aliases_sin_de.sql`**, a mano, antes o después
+   del código: `psql "$DATABASE_URL" -f db/migrations/0246_district_aliases_sin_de.sql`.
+   Solo redefine `lima_district_aliases()` («San Juan Lurigancho», «Pachamamac»,
+   «Cercado delima»…). La cola de Grupo GF usa los alias de TypeScript y se
+   desbloquea con el despliegue; la base los usa en la cobertura y en el pago
+   del motorizado en vivo. **Ya aplicada en producción** el 12-10-2026.
+2. **Migración `0248_gf_replace_output.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0248_gf_replace_output.sql`. Crea
+   `gf_output_replaced` y `gf_replace_output`, redefine `gf_return_to_office`
+   (la 0206 más la rama «a stock») y `gf_carry_over` (la 0234 sin la caja
+   reemplazada —por su evento— y con los candados del lote primero), y crea
+   los triggers
+   `delivery_stops_guard_replaced` y `dispatch_items_guard_replaced_route`. Sin
+   ella, «Sacar con salida nueva» falla y deshace la salida nueva que había
+   creado: no deja salidas huérfanas. **Ya aplicada en producción** el
+   12-10-2026, antes del código. En el historial de Supabase figura dos veces:
+   `0247_gf_replace_output` y, al renumerarla tras llegar a `main` la
+   `0247_voice_lead_calls`, `0248_gf_replace_output` (la misma, idempotente;
+   solo cambia el número en los comentarios); sin efecto sobre el código anterior (en
+   producción no había ninguna salida propia en `retorno` ni devuelta dentro
+   de una caja).
+3. **Después del despliegue**, el cron recalcula el Master por la versión
+   `mom-v1.26`. Con la foto del 12-10-2026 no hay ninguna salida reemplazada
+   (`output_replaced`); cambian pocos pedidos: los que tienen una parada del
+   cuaderno anterior a la salida a la que se atribuía.
+
+### 12-10-2026 · Repro Lima y fecha que pidió el cliente (0251)
+
+Se escribió como `0249` y pasó a `0251` al traer main: la `0249` es la app de
+Shopify para tiendas cliente y la `0250`, los roles que se acumulan.
+
+1. **Migración `0251_lima_repro.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0251_lima_repro.sql`. Agrega
+   `delivery_stops.requested_date` con el CHECK
+   `delivery_stops_requested_date_ck` (la fecha solo existe en un «No
+   entregado · Reprogramado»), crea `lima_repro_cases` y `lima_repro_calls`
+   (lectura por tienda, escritura solo del servidor, llamadas append-only) y
+   las RPC `lima_repro_claim` y `lima_repro_record`. **El orden importa**: el
+   código nuevo lee `requested_date` en `STOP_COLUMNS`
+   (lib/routes-access.ts). Sin la columna, `getRouteDetail` devuelve la ruta
+   **vacía y sin ningún error** (`stopRows ?? []`): /reparto, Coordinación,
+   «Reparto y liquidación» de Despacho del día y Rutas muestran rutas sin
+   paradas, y todo reporte de parada falla. Repro Lima tampoco puede tomar un
+   caso. `lima_repro_claim` lleva `p_reopen` (el segundo clic de «Volver a
+   atender», MOM §9.5) y el código lo manda siempre. La migración no lleva
+   ningún `drop`: con uno, `apply_migration` de Supabase se queda esperando
+   hasta cortarse a los 60 s sin aplicar nada (pasó con la 0248 y con el
+   primer intento de esta). Los triggers son `create or replace` y las
+   políticas se crean si faltan; el archivo es idempotente. Una base de prueba
+   que tuviera la firma de seis parámetros (sin `p_reopen`) la borra a mano
+   antes de correrlo.
+   **Ya aplicada en producción el 13-10-2026** (historial
+   `20261013024826 0251_lima_repro`, con `set local lock_timeout = '15s'`
+   delante). Los cuerpos de `lima_repro_claim` y `lima_repro_record` son los
+   del archivo (md5 igual), el CHECK quedó validado sobre las 5664 paradas y
+   el código anterior sigue funcionando: no escribe `requested_date`.
+2. Sin subir versión ni recálculo: el resolver no lee nada de esto
+   (`MOM_RESOLUTION_VERSION` sigue en `mom-v1.26`). Los casos nacen solos al
+   primer gesto en Repro Lima: no hay backfill.
+3. **Qué mirar después**:
+   - el reporte del motorizado ya no programa. Ningún `dispatch_programmed`
+     nuevo con el motivo del reporte:
+     `select count(*) from order_events where kind = 'dispatch_programmed' and payload->>'reason' like 'Reprogramado por el cliente (reporte%' and occurred_at > '<hora del despliegue>';`
+     tiene que dar 0. Los programas que ya creó #908 se respetan: salen en
+     «Por decidir» como «Fecha del motorizado sin confirmar»;
+   - Por decidir + Llamar después + Programados + Cerrados ≈ el mosaico «Por
+     reprogramar Lima» del Master;
+   - el primer programa con motivo «Repro Lima:» aparece en «Programados» de
+     Despacho del día.
+4. **Marcha atrás**: PRIMERO
+   `alter table public.delivery_stops drop constraint if exists delivery_stops_requested_date_ck;`
+   y DESPUÉS revertir el código. El `writeStopReport` anterior no conoce
+   `requested_date`: al pasar una parada con fecha de «Reprogramado» a
+   «Entregado» o a otro motivo violaría el CHECK y el reporte fallaría. Las
+   tablas, las RPC y la columna no molestan al código anterior y se quedan.
+
+### 13-10-2026 · Repro Lima, entrega 1c: «Reintentos por salir» en Almacén
+
+Entrega 1c: sin migración. La última sigue siendo la 0251; no hay variables de
+entorno ni RPC nuevas, y `MOM_RESOLUTION_VERSION` sigue en `mom-v1.26`. El
+apartado solo lee (MOM §9.5): no programa, no cierra casos ni escribe eventos.
+La página no lo lee al pintar en el servidor: la estación lo pide después de
+cargar, y mientras llega la tarjeta se ve en esqueleto.
+
+1. **Qué mirar después**, solo lectura: sin casos de Repro Lima, los programas
+   de pedidos de la etapa con fecha de mañana o anterior son las filas de la
+   lista. El 13-10-2026 eran 6, todas en la zona «Hoy» y vencidas, con la
+   chapa roja «Vencido · era para el …»:
+   `select count(*) from gf_dispatch_programs p join order_master m on m.order_id = p.order_id where m.macro_stage = 'en_curso' and m.macro_substage = 'por_reprogramar_lima' and p.scheduled_for <= '<mañana>';`
+2. **Antes del primer día** (plan del 11-10-2026): contar las cajas reales del
+   estante y rotular las bandejas fijas, una por día de recepción y una «sin
+   fecha / más de 7 días».
+3. **Despacho GF** limpia los programas viejos con «Quitar la fecha»: el
+   13-10-2026, 13 de 14 estaban vencidos y 6 estaban en pedidos fuera de la
+   etapa.
+
+### 14-10-2026 · Repro Lima «Todos» (0256)
+
+Una quinta tarjeta en Repro Lima, «Todos · por entregar»: los pedidos de Lima
+sin estado final por etapa y subetapa del Master (MOM §9.5). Solo lee: no
+escribe, no abre casos ni toma el candado. Sin variables de entorno nuevas.
+
+1. **Migración `0256_lima_open_counts.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0256_lima_open_counts.sql`. Crea una
+   sola función, `order_master_lima_open_counts(uuid[], date)`: los pedidos de
+   `order_master` con `coverage = 'lima'` y sin «Finalizado», agrupados por
+   tienda, macroetapa y subetapa, con cuántos llevan más de 7 y de 30 días de
+   Lima desde `macro_since`. `security invoker` y solo para `service_role`
+   (revocada a `public`, `anon` y `authenticated`). Sin índice nuevo (usa
+   `order_master_store_coverage_idx`, unos 18 ms sobre ~8,3k filas) y sin
+   ningún `drop` ni `begin`/`commit`: es `create or replace` y se puede
+   repetir. Se aplica también con `apply_migration` de Supabase.
+   **Ya aplicada en producción el 14-10-2026** (historial
+   `20261014131234 0256_lima_open_counts`). Comprobado ese día: 8.358 pedidos (1.968 por
+   entregar y 6.390 por cerrar), y `anon` y `authenticated` no la pueden
+   ejecutar.
+2. **Comprobar en producción**, solo lectura:
+   - `select sum(total) from order_master_lima_open_counts(array(select id from stores)::uuid[], (now() at time zone 'America/Lima')::date);`
+     da unos 8,3k (el 14-10-2026: 1.940 por entregar y 6.393 por cerrar);
+   - `select has_function_privilege('authenticated', 'public.order_master_lima_open_counts(uuid[], date)', 'execute');`
+     tiene que dar `false` (y lo mismo con `anon`).
+3. Sin backfill, sin cambio del resolver y sin subir versión:
+   `MOM_RESOLUTION_VERSION` sigue en `mom-v1.26`.
+4. **Si el código sale antes que la migración**, la tarjeta «Todos» no
+   aparece y el resto de Repro Lima sigue igual. En los logs de Vercel se ve
+   `repro-lima: conteo de Todos` con el código del error (`PGRST202`: falta la
+   función). Aplicar la migración y la tarjeta aparece en la siguiente carga.
+5. **Antes de subir**: `npm test`, `npm run typecheck`,
+   `bash scripts/verify-db.sh` (clúster desechable) y `next build`. A mano a
+   360, 768 y 1280 px: en el teléfono las cuatro listas en 2×2 y «Todos» en
+   una fila entera debajo; desde 1024 px, la quinta columna; nada se desplaza
+   de lado; y «Atrás» desde el Master vuelve a «Todos» (`?vista=todos`).
+
+**Marcha atrás.** Revertir el código basta. La función no molesta al código
+anterior y se queda.
+
+### 14-10-2026 · Comprobantes SimpleFact por RUC (MOM §35) — needs migrations 0257, 0260, 0261 and 0262
+
+Kapta emite, en la cuenta de SimpleFact de la empresa que recibió el dinero, la
+boleta de un pedido ya cobrado: un RUC por cuenta de cobro (MOM §35). **Sale
+apagado**: la 0257 da de alta GRUPO GF S.A.C. (RUC 20556792829, subdominio
+`grupogf`) en «Apagado» y sin token, y mientras todos los RUC estén apagados el
+barrido no lee pedidos ni llama a SimpleFact. **Sin variables de entorno
+nuevas**: el token se cifra con la misma `ENCRYPTION_KEY` de los tokens de
+tienda y el cron usa `CRON_SECRET`. Lo que solo pasa en producción —el barrido
+que emite y «Emitir esta boleta»— lo decide `VERCEL_ENV`, que pone Vercel. Sin
+cambio del resolver: `MOM_RESOLUTION_VERSION` sigue en `mom-v1.26`.
+
+**15-10-2026 · el modo «Manual» (0261).** Decisión del owner: un paso a mano
+entre la simulación y lo automático. En «Manual» el barrido solo simula, y quien
+tiene «Boletas y facturas» emite pedido por pedido con «Emitir esta boleta» en
+el panel «Comprobante» del drawer, con los mismos candados que el barrido en
+Real (MOM §35.7). El encendido pasa a ser Simulación → Manual (las primeras
+boletas reales, una a una, revisadas en SimpleFact) → Real (pasos 7, 9 y 10).
+**Producción al 15-10-2026**: la 0257 y la 0260 aplicadas, GRUPO GF S.A.C. en
+«Simulación» con el token probado y ningún comprobante. La 0261 y la 0262 son
+nuevas y van en los pasos 3 y 4, en ese orden y antes del código.
+
+**15-10-2026 · la revisión de «Emitir esta boleta» (0262).** Una boleta enviada
+no se borra, así que se cerró lo que podía mandar una que nadie pidió:
+- el turno vuelve a revisar, en la base, que la empresa recibió el pago: que
+  lo validado cubre el total, o que el prepago web lo es de verdad, y que los
+  pagos del comprobante siguen validados (`sin_pago_completo`,
+  `prepago_con_comprobantes`), con los pagos del pedido bloqueados mientras
+  dura (0262, paso 4; MOM §35.3 y §35.4);
+- lo que se envía es lo que la persona confirmó: `emitInvoiceNow` compara el
+  RUC y el total confirmados con su propia lectura, la misma con que arma la
+  boleta (`pedido_cambio`, MOM §35.7);
+- solo producción emite: en una vista previa —que comparte la base y la llave
+  de cifrado— no hay botón, ni en el panel ni en Ajustes, y la acción lo
+  rechaza antes de leer nada (MOM §35.7);
+- un `en_duda` se libera recién 30 minutos después de quedar en duda; registrar
+  su serie sigue siendo inmediato (MOM §35.4);
+- en Ajustes, lo que contestó «Emitir» se queda a la vista después del
+  refresco de la página (MOM §35.7).
+
+1. **Migración `0257_invoices.sql`.** **Ya aplicada en producción el
+   14-10-2026**: no se vuelve a pegar ni se edita. Lo que cambió después —los
+   arreglos de la revisión adversaria— va en la 0260 (paso 2): producción no
+   vuelve a correr la 0257, y lo que se le escribiera nunca le llegaría. En una
+   base nueva se aplica a mano y ANTES del código: pegar el archivo en el
+   editor SQL de Supabase (o
+   `psql "$DATABASE_URL" -f db/migrations/0257_invoices.sql`). Crea
+   `invoice_issuers`, `store_collection_accounts.invoice_issuer_id` (con el
+   trigger que rechaza un RUC de otra organización), `order_invoices` (con el
+   índice de un solo comprobante real vivo por pedido y el trigger que no deja
+   editar ni borrar lo emitido), `invoice_order_checks`, la función
+   `invoice_claim` (el turno), y siembra GRUPO GF S.A.C. Las tres tablas quedan
+   sin policies y revocadas a `anon` y `authenticated`, y el turno solo lo
+   ejecuta `service_role`: solo lo usa el servidor.
+   Es idempotente, y la semilla no pisa una asignación que el owner ya haya
+   cambiado. El `alter table` y los `drop trigger` sobre
+   `store_collection_accounts` toman un candado breve de esa tabla: si se queda
+   esperando, cortar y repetir con `set lock_timeout = '15s';` delante.
+   **Comprobar**, solo lectura:
+   - `select ruc, legal_name, simplefact_subdomain, mode, token_enc is null as sin_token, emit_from, daily_limit from invoice_issuers;`
+     — recién aplicada, una fila por organización que cobra en la cuenta
+     ···309: `20556792829`, `grupogf`, `apagado`, `sin_token = true`, sin
+     «Emitir desde» y tope 40;
+   - `select s.name, a.label, a.phone_last_digits, i.ruc from store_collection_accounts a join stores s on s.id = a.store_id left join invoice_issuers i on i.id = a.invoice_issuer_id order by s.name, a.label;`
+     — en cada tienda de esa organización, **dos** cuentas con `20556792829`:
+     «Grupo GF S.A.C.» ···309 y «Aurela Kenku» (la pasarela Flow, sin
+     celular). Las cuentas personales de los dueños, con `ruc` nulo;
+   - `select has_table_privilege('authenticated', 'public.invoice_issuers', 'select');`
+     tiene que dar `false` (y lo mismo con `anon`, `order_invoices` e
+     `invoice_order_checks`);
+   - `select has_function_privilege('authenticated', 'public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)', 'execute');`
+     tiene que dar `false` (y lo mismo con `anon`). Esa firma de nueve
+     argumentos existe hasta la 0261, que la borra: después se comprueba la de
+     once (paso 3).
+2. **Migración `0260_invoices_hardening.sql`**, a mano, sobre la 0257 y ANTES
+   de que el código con `invoice_candidates` llegue a `main`. **Ya aplicada en
+   producción**: no se vuelve a pegar ni se edita. En una base nueva: pegar el
+   archivo en el editor SQL de Supabase (o
+   `psql "$DATABASE_URL" -f db/migrations/0260_invoices_hardening.sql`). Son los
+   arreglos de la revisión adversaria (MOM §35.3, §35.4 y §35.6), que se habían
+   escrito dentro de la 0257 cuando esta ya había corrido en producción.
+   Escribe las funciones `invoice_claim` (el turno) e `invoice_candidates` (qué
+   pedidos mira el barrido), y las de los triggers `invoice_issuers_touch` y
+   `order_invoices_guard`:
+   - `invoice_claim`: el turno vuelve a sacar de los pagos de la base cuándo
+     quedó pagado el pedido, y no da el turno con un pago vivo sin validar
+     (`pagos_en_revision`) ni con una fecha anterior a «Emitir desde»
+     (`antes_de_inicio`);
+   - `invoice_candidates`, nueva: los pedidos que el barrido revisa en cada
+     pasada; solo la ejecuta `service_role`;
+   - `invoice_issuers_touch`: un token, un subdominio o un RUC nuevo borra
+     también el motivo de la prueba anterior (`check_error`);
+   - `order_invoices_guard`: borrar la cuenta de una persona deja en blanco
+     quién registró, pidió el reintento o resolvió, y solo dentro de esa
+     cascada.
+
+   Solo `create or replace function` y sus permisos: no toca datos (el RUC en
+   simulación, sus cuentas y los comprobantes quedan como están), no recrea
+   triggers (siguen llamando a las mismas funciones) y no toma candados de
+   tablas. Es idempotente. Se puede aplicar ya, con el código que hoy está en
+   producción: ese código pide el mismo turno, con los mismos parámetros, y ya
+   conoce `pagos_en_revision` y `antes_de_inicio`; `invoice_candidates` no la
+   llama. **Si el código llega antes, el barrido dice `sin_migracion` y no
+   simula ni emite nada hasta aplicarla**: cada pasada responde 200 con
+   `"skipped":"sin_migracion"`, sin errores, y el panel «Comprobante» y Ajustes
+   se ven como siempre. Aplicada, la pasada siguiente sigue sola.
+   **Comprobar** (en una base nueva, recién aplicada), solo lectura:
+   - `select to_regprocedure('public.invoice_candidates(uuid, text, timestamptz, integer, text[], uuid)') is not null;`
+     tiene que dar `true`;
+   - `select pg_get_functiondef('public.order_invoices_guard()'::regprocedure) like '%pg_trigger_depth()%';`
+     tiene que dar `true` (y lo mismo con
+     `pg_get_functiondef('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)'::regprocedure) like '%pagos_en_revision%'`
+     y con
+     `pg_get_functiondef('public.invoice_issuers_touch()'::regprocedure) like '%check_error := null%'`).
+     La del turno, con la firma de nueve argumentos, sirve solo antes de la
+     0261: después esa firma no existe y la consulta falla («does not exist»);
+     se comprueba la de once, que también trae `pagos_en_revision` (paso 3);
+   - `select has_function_privilege('authenticated', 'public.invoice_candidates(uuid, text, timestamptz, integer, text[], uuid)', 'execute');`
+     tiene que dar `false` (y lo mismo con `anon`);
+   - `select ruc, mode, emit_from, checked_ruc, check_error from invoice_issuers;`
+     y `select count(*) from order_invoices;` dicen lo mismo que antes de
+     aplicarla.
+3. **Migración `0261_invoices_manual.sql`**, a mano, sobre la 0260 y ANTES de
+   que el código con «Manual» (el que pide el turno con `p_mode` y
+   `p_created_by`) llegue a `main`: pegar el archivo en el editor SQL de
+   Supabase, que la corre entera en una transacción (con `psql`, siempre con
+   `-1`: `psql -1 "$DATABASE_URL" -f db/migrations/0261_invoices_manual.sql`;
+   sin `-1` cada sentencia va sola y hay un instante sin `invoice_claim` entre
+   el `drop` de la firma vieja y el `create` de la nueva).
+   Trae el modo «Manual» (MOM §35.8):
+   - `invoice_issuers_mode_check` (ahora con nombre) admite `manual`, y
+     `invoice_issuers_real_ready` le exige a Manual lo mismo que a Real: token,
+     «Emitir desde» y una prueba de conexión que leyó el mismo RUC;
+   - `invoice_issuers_touch`: un token, un subdominio o un RUC nuevo, o una
+     prueba repetida que no confirma el RUC, baja Manual a Simulación, como
+     baja Real;
+   - `invoice_claim` con dos argumentos nuevos, con valor por defecto:
+     `p_mode` (la fila que se pide: `simulacion`, `real` o nulo) y
+     `p_created_by` (quién pulsó «Emitir esta boleta»). Sin `p_mode`, lo de
+     siempre; con un modo en que el RUC no está, `modo_distinto`; con el RUC en
+     Manual, una fila real solo con quién la pidió. El tope del
+     día cuenta las filas del modo pedido. Borra la firma de nueve argumentos y
+     crea la de once, solo para `service_role`.
+
+   No toca filas: el RUC sigue en Simulación y nada pasa a Manual solo. Es
+   idempotente, y el editor SQL la corre en una sola transacción. Los dos
+   CHECK toman un candado breve de `invoice_issuers`: si se queda esperando,
+   cortar y repetir con `set lock_timeout = '15s';` delante. **Se puede
+   aplicar ya, con el código que hoy está en producción**: ese código pide el
+   turno con los nueve argumentos de siempre, por nombre, y los dos nuevos
+   quedan en nulo —el turno hace lo de antes—; no conoce «Manual», así que no
+   deja elegirlo ni barre un RUC en Manual. **Si el código llega antes que la
+   0261, no se emite nada de más y nada se pone rojo**: la base no admite
+   Manual y Ajustes lo dice al intentar el cambio («La base todavía no admite
+   el modo Manual: falta aplicar la migración 0261.»); sin un RUC en Manual no
+   hay botón, y el barrido de Simulación y de Real pide el turno como siempre,
+   sin `p_mode`, contra el de la 0260, y sigue igual. Si aun así algo pidiera
+   el turno con `p_mode` o `p_created_by`, no se reserva ni se envía nada:
+   «Emitir esta boleta» contesta «Falta aplicar la migración 0261 de
+   comprobantes (invoice_claim con p_mode y p_created_by).», y el barrido,
+   `"skipped":"sin_migracion"`. **Comprobar**, solo lectura:
+   - `select to_regprocedure('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)') is not null, to_regprocedure('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)') is null;`
+     tiene que dar `true` y `true`: queda solo el turno de once argumentos;
+   - `select pg_get_functiondef('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)'::regprocedure) like '%modo_distinto%';`
+     tiene que dar `true` (y lo mismo con `like '%pagos_en_revision%'`, que
+     trae de la 0260, y con
+     `pg_get_functiondef('public.invoice_issuers_touch()'::regprocedure) like '%(''real'', ''manual'')%'`);
+   - `select conname, pg_get_constraintdef(oid) from pg_constraint where conrelid = 'public.invoice_issuers'::regclass and conname in ('invoice_issuers_mode_check', 'invoice_issuers_real_ready') order by 1;`
+     — dos filas, y las dos nombran `'manual'`;
+   - `select has_function_privilege('authenticated', 'public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)', 'execute');`
+     tiene que dar `false` (y lo mismo con `anon`; con `service_role`, `true`);
+   - `select ruc, mode, emit_from, checked_ruc, check_error from invoice_issuers;`
+     y `select count(*) from order_invoices;` dicen lo mismo que antes de
+     aplicarla.
+4. **Migración `0262_invoices_claim_coverage.sql`**, a mano, DESPUÉS de la 0261
+   y ANTES de la primera boleta real: antes de pulsar «Emitir esta boleta» y
+   antes de pasar un RUC a «Real». Pegar el archivo en el editor SQL de
+   Supabase, que la corre en una transacción (con `psql`:
+   `psql -1 -v ON_ERROR_STOP=1 "$DATABASE_URL" -f db/migrations/0262_invoices_claim_coverage.sql`).
+   Cambia solo `invoice_claim` (MOM §35.3 y §35.4), con `create or replace` y
+   la misma firma de once argumentos de la 0261: la misma función, con sus
+   permisos y sus valores por defecto. Lo nuevo:
+   - justo después de `pagos_en_revision`, el turno revisa con los pagos y el
+     pedido guardados que la empresa recibió el pago: sin prepago, que lo
+     validado cubra el total que se va a emitir (`sin_pago_completo`); con
+     prepago, que no quede un pago vivo (`prepago_con_comprobantes`) y que el
+     pedido sea de verdad un prepago web —pagado, por el checkout y sin
+     reembolsos— (`sin_pago_completo`); y en los dos, que cada pago de la base
+     del comprobante siga validado y sea de ese pedido (`sin_pago_completo`);
+   - bloquea los pagos del pedido (`for share`) mientras dura el turno: quien
+     rechace u observe un pago de ese pedido en ese instante espera a que el
+     turno termine.
+
+   No toca filas, ni triggers, ni otra función, y no toma candados de tablas.
+   Es idempotente. **Va después de la 0261**: si sigue el turno de nueve
+   argumentos, o falta el de once, se detiene con «La 0262 va después de la
+   0261: aplica primero db/migrations/0261_invoices_manual.sql.» y no cambia
+   nada. **Si alguien vuelve a correr la 0261 después, hay que volver a correr
+   la 0262**: la 0261 reescribe el turno sin esta revisión, y nada lo avisa.
+   **Se puede aplicar ya, con el código que hoy está en producción** (con la
+   0261 delante): ese código pide el turno con los nueve argumentos por nombre
+   y ya manda en `p_basis` si es prepago web y el id de cada pago, que es lo
+   que el turno revisa: lo bien pagado sigue dando su fila. **Si el código
+   llega antes que la 0262, nada se pone rojo y nada lo avisa**: el código no
+   la nombra, el barrido y «Emitir esta boleta» siguen como con la 0261, y el
+   turno no vuelve a revisar el pago; un pago rechazado mientras se relee
+   Shopify se colaría en una boleta real. Por eso no se pulsa «Emitir esta
+   boleta» ni se pasa un RUC a «Real» hasta aplicarla (en «Simulación», a lo
+   más queda la simulada de un pedido que dejó de estar pagado).
+   **Comprobar**, solo lectura:
+   - `select pg_get_functiondef('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)'::regprocedure) like '%sin_pago_completo%';`
+     tiene que dar `true` (y lo mismo con `like '%for share%'`); con solo la
+     0261, da `false`;
+   - `select count(*) from pg_proc where proname = 'invoice_claim' and pronamespace = 'public'::regnamespace;`
+     tiene que dar `1`: un solo turno;
+   - `select has_function_privilege('authenticated', 'public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)', 'execute');`
+     tiene que dar `false` (y lo mismo con `anon`; con `service_role`, `true`);
+   - `select ruc, mode, emit_from, checked_ruc, check_error from invoice_issuers;`
+     y `select count(*) from order_invoices;` dicen lo mismo que antes de
+     aplicarla.
+5. **Desplegar.** El cron `/api/cron/invoices` ya está en `vercel.json`, cada
+   10 minutos (`6,16,26,…`), y solo emite en producción. «Emitir esta boleta»
+   y el «Emitir» de Ajustes, tampoco fuera de ella: una vista previa comparte
+   la base y `ENCRYPTION_KEY` con producción, y desde ella saldría una boleta
+   real. En una vista previa el panel no tiene el botón y, donde lo habría,
+   dice «Emitir solo funciona en producción: este despliegue es una vista
+   previa.»; Ajustes no ofrece «Emitir» y, con un RUC en «Manual», dice lo
+   mismo; y la acción lo rechaza antes de leer nada. Con todos los RUC en
+   «Apagado» cada pasada deja en los logs de Vercel una línea `[invoices] {…}`
+   con `"skipped":"sin_ruc_encendido"`, y no lee pedidos ni llama a SimpleFact.
+   **Si el código sale antes que las migraciones** no se emite nada y el cron
+   no se pone rojo: cada pasada responde 200 con `"skipped":"sin_migracion"`
+   en la línea `[invoices] {…}`. Sin la 0257, además, el panel «Comprobante»
+   del drawer no aparece y Ajustes dice «No se pudieron leer los RUC de la
+   organización.»; sin la 0260, el panel y Ajustes se ven, pero el barrido no
+   simula ni emite; sin la 0261, ver el paso 3, y sin la 0262, el paso 4.
+   Aplicar lo que falte y la pasada siguiente pasa a `sin_ruc_encendido`, o
+   barre los RUC encendidos.
+   Solo cuenta como `sin_migracion` lo que crean la 0257 y la 0260: si lo que
+   falta es otra tabla o función (`orders`, `order_payments`, `order_master`…),
+   el cron responde 502 con el error en `errors`, y eso no se arregla aplicando
+   una migración de comprobantes: la base está rota y hay que mirarla.
+6. **El token: lo pone el owner, y solo en Ajustes.** Regenerar en SimpleFact
+   el token de la cuenta `grupogf`: **el anterior quedó expuesto en una captura
+   y no se usa**. Pegar el nuevo **solo** en Ajustes de la tienda → «Boletas y
+   facturas» (pide `stores.manage` y `invoices.manage`, que solo da el owner):
+   nunca en un chat, un ticket, Vercel ni el editor SQL. Ajustes solo dice
+   «Configurado». Pulsar «Probar conexión»: lee las ventas de la cuenta, no
+   emite nada, y tiene que confirmar el RUC 20556792829. Si dice otro RUC, el
+   token es de otra empresa; si dice que la cuenta no tiene ventas con
+   archivos, no se puede pasar a Manual ni a Real hasta que tenga una.
+7. **Simulación.** Poner el RUC en «Simulación» con «Emitir desde» de hoy (si
+   quedó atrás, la base la mueve sola al momento del cambio). Cada pasada arma
+   la boleta exacta de cada pedido que entraría y la guarda como `simulada`,
+   hasta el tope del día, **sin llamar a SimpleFact**. Revisar unos días, en
+   Ajustes (lo de hoy y los últimos comprobantes) y en el panel «Comprobante»
+   del drawer: el RUC, los ítems, el total y los motivos de lo que no entró.
+   En SQL, solo lectura:
+   - `select status, count(*) from order_invoices where mode = 'simulacion' group by 1;`
+   - `select reason, count(*) from invoice_order_checks where mode = 'simulacion' group by 1 order by 2 desc;`
+   - `select order_name, total, request->>'notes', request->'items' from order_invoices where mode = 'simulacion' order by created_at desc limit 10;`
+
+   **Los prepagos web por Flow tienen que salir** (MOM §35.9): Kapta nunca vio
+   el texto que pone Shopify en la pasarela de una transacción de Flow. Si
+   hubo prepagos web desde «Emitir desde» y ninguno sale como `simulada` —todos
+   quedan en `pago_web_no_confirmado`—, ese texto es otro: se ajusta la regla
+   (`lib/invoicing/shopify-order.ts`) antes de pasar a Manual. Solo lectura:
+   - `select count(*) from order_invoices i join order_master m on m.order_id = i.order_id where i.mode = 'simulacion' and m.payment_gateway = 'checkout';`
+   - `select c.reason, count(*) from invoice_order_checks c join order_master m on m.order_id = c.order_id where c.mode = 'simulacion' and m.payment_gateway = 'checkout' group by 1 order by 2 desc;`
+8. **Con el contador**: confirmar que una boleta hasta S/ 700 va a «CLIENTES
+   VARIOS» con DNI `00000000`, sin correo ni celular, y el umbral de S/ 700:
+   por encima, la boleta se emite a mano con el DNI y se registra en el panel
+   con «Ya tiene comprobante» (MOM §35.5).
+9. **Manual: las primeras boletas reales, una a una** (MOM §35.7). Pasar el
+   RUC a «Manual» en Ajustes. La base lo rechaza sin token, sin «Emitir desde»
+   o sin una prueba de conexión que leyó el mismo RUC, y «Emitir desde» se
+   mueve al momento del cambio: nada pagado antes sale. El barrido sigue
+   simulando, nunca le pide a SimpleFact una venta, y concilia lo que quede en
+   duda. Antes, la 0262 aplicada (paso 4). Para emitir, en producción —una
+   vista previa no emite (paso 5)—: abrir el pedido, panel «Comprobante»,
+   «Emitir esta boleta» (o «Emitir» en su simulada, en Ajustes → últimos
+   comprobantes); leer la confirmación —el total, «CLIENTES VARIOS» y el RUC—
+   y pulsar «Sí, emitir». Pide `invoices.manage`, que solo da el owner. Si el
+   pedido cambió desde que se abrió (el RUC o el total), no emite y pide
+   volver a abrirlo. En Ajustes, lo que contesta se queda a la vista después
+   del refresco de la página, y ese pedido no vuelve a tener «Emitir»: para
+   intentar otra vez se abre el pedido. Revisar cada boleta en SimpleFact
+   **antes de emitir la siguiente**: serie, total, ítems con el IGV incluido y
+   la nota «Pedido #KP… · Kapta ‹ref›». En Kapta, solo lectura:
+   `select status, ruc_mismatch, created_by is not null as con_quien, count(*) from order_invoices where mode = 'real' group by 1, 2, 3;`
+   — en Manual, toda boleta real con `con_quien = true` (la pidió una
+   persona), nada en `emitiendo` por más de unos minutos, ningún
+   `ruc_mismatch`, y cada `en_duda` conciliado solo o revisado por una persona
+   (MOM §35.4). Un `en_duda` con «Sin respuesta de SimpleFact: búscala por su
+   nota…» lo dejó así la pasada porque nadie lo iba a conciliar. **Un
+   `en_duda` se busca en SimpleFact por su nota «Kapta ‹ref›» antes de
+   tocarlo**, y se resuelve en el panel «Comprobante» del pedido (pide
+   `invoices.manage`):
+   - **Si está**, «Sí está en SimpleFact: registrar su serie», con la serie y
+     el número con que salió (`B…` si es boleta) y dónde se encontró. Queda
+     `emitida` y Kapta no emite otra. No se corrige después: revisar la serie
+     antes de confirmar.
+   - **Si no está**, «No está en SimpleFact: volver a intentar», con lo que se
+     revisó, y solo pasados 30 minutos desde que quedó en duda: SimpleFact
+     puede tardar en listar una boleta que sí recibió. Hasta entonces el botón
+     está deshabilitado y el panel dice desde qué hora («Podrás liberarla
+     desde las ‹HH:MM› (hora de Lima)…»), y el servidor tampoco la libera; «Sí
+     está…» no espera. Pasa a `error`. En Manual la pasada no lo vuelve a
+     intentar: vuelve el botón, y se emite otra vez con «Emitir esta boleta».
+     En Real lo vuelve a intentar la pasada siguiente, si el pedido sigue
+     cumpliendo las reglas.
+     **Liberar una que existe es emitir otra**: ante la duda, se busca de
+     nuevo y no se libera.
+10. **Real.** Pasar el RUC a «Real»: desde entonces el barrido emite solo y el
+   botón desaparece. La base pide lo mismo que para Manual, y «Emitir desde»
+   se mueve al momento del cambio: **lo pagado durante Manual que nadie emitió
+   con el botón no sale en Real**. Se emite antes de cambiar, o a mano en
+   SimpleFact y se registra con «Ya tiene comprobante» (MOM §35.4). En Kapta,
+   solo lectura:
+   `select status, ruc_mismatch, count(*) from order_invoices where mode = 'real' group by 1, 2;`
+   — nada en `emitiendo` por más de unos minutos, ningún `ruc_mismatch`, y
+   cada `en_duda` conciliado solo o resuelto como en el paso 9.
+11. **Pasada en seco, a mano.** La corre el owner o quien opera, no un agente:
+   `GET /api/cron/invoices?dry=1` con `Authorization: Bearer <CRON_SECRET>` (y
+   `&storeId=<uuid>` para una sola tienda). Revisa, relee en Shopify y arma la
+   boleta, pero no escribe nada en la base ni llama a SimpleFact: devuelve, por
+   RUC, cuántos pedirían turno (`would_claim`; en Manual, simulaciones) y los
+   motivos de los demás. Con todos los RUC en «Apagado» responde
+   `"skipped":"sin_ruc_encendido"`: sirve desde el paso 7.
+
+**Antes de subir**: `npm test`, `npm run typecheck`, `bash scripts/verify-db.sh`
+(clúster desechable; corre `scripts/sql/invoices_smoke.sql`, que también corre
+la 0260 sobre la 0257 tal como corrió en producción, la 0261 sobre las dos y la
+0262 sobre la 0261) y `next build`.
+
+**Marcha atrás.** Poner cada RUC en «Apagado» (Ajustes → «Boletas y
+facturas», o `update invoice_issuers set mode = 'apagado';`): el barrido deja
+de leer y de emitir en la pasada siguiente. Con este código, un comprobante
+que haya quedado en `emitiendo` más de 10 minutos pasa a `en_duda` al empezar
+una pasada, sin llamar a SimpleFact, y lo revisa una persona. No hace falta
+revertir el código. Lo emitido no se borra —ya está en SUNAT—: una boleta que
+no correspondía la anula una persona con nota de crédito en SimpleFact (MOM
+§35.9). Las tablas no molestan al código anterior y se quedan. La 0260 tampoco
+se revierte: el código anterior pide el mismo turno y no llama a
+`invoice_candidates`. La 0261 tampoco: el código anterior pide el turno con los
+nueve argumentos por nombre, y el de once los acepta. La 0262 tampoco: el
+código anterior manda en `p_basis` si es prepago web y el id de cada pago, y lo
+bien pagado sigue dando su fila.
+
+**Antes de volver al código anterior** (el de `main` antes de estos commits,
+0f7c79c6): ese código no conoce «Manual» y lo trata como «Apagado»; solo
+concilia los RUC en «Real»; no pasa a `en_duda` un `emitiendo` que nadie
+concilia; y su panel no tiene «Sí está en SimpleFact: registrar su serie». Con
+él, una fila real en `emitiendo` o `en_duda` de un RUC que no está en «Real»
+se queda así para siempre, bloqueando su pedido sin que nadie la vea. Por eso,
+con este código todavía desplegado y en este orden:
+1. Bajar a «Simulación» todo RUC en «Manual» (Ajustes, o
+   `update invoice_issuers set mode = 'simulacion' where mode = 'manual';`):
+   desde ahí nadie emite a mano. Un RUC que siga en «Real» se baja también
+   (a «Apagado», como arriba, o a «Simulación»): la cuenta del punto 4 es de
+   todas las filas reales.
+2. Esperar una pasada de este código que empiece al menos 10 minutos después
+   del último «Emitir esta boleta» (su línea `[invoices] {…}` en los logs de
+   Vercel): pasa a `en_duda` cada `emitiendo` sin respuesta, sin llamar a
+   SimpleFact (`sin_respuesta`). Con el RUC en «Simulación», la conciliación
+   ya no busca sus boletas: las ve una persona.
+3. Resolver a mano cada `en_duda`, como en el paso 9: buscarlo en SimpleFact
+   por su nota «Kapta ‹ref›»; si está, «Sí está en SimpleFact: registrar su
+   serie»; si no, «No está en SimpleFact: volver a intentar», pasados los 30
+   minutos.
+4. Comprobar, solo lectura,
+   `select count(*) from order_invoices where mode = 'real' and status in ('emitiendo', 'en_duda');`
+   — tiene que dar `0`. Recién entonces volver al código anterior.
+
+**Qué mirar después.** Cada pasada escribe una línea `[invoices] {…}` en los
+logs de Vercel, sin clientas, teléfonos ni token: por RUC, `simuladas`,
+`emitidas`, `en_duda`, `errores`, `conciliadas`, `pendientes`, los motivos y
+por qué se detuvo (`stopped`). El `mode` de cada RUC es el suyo: uno en
+`"manual"` cuenta `simuladas` (el barrido) y concilia lo que emitió una persona
+(`conciliadas`, `en_duda`), y nunca `emitidas`. `errors` no vacío pone el cron
+en rojo (502). `sin_respuesta` cuenta los `emitiendo` que la pasada pasó a
+`en_duda` porque nadie los iba a conciliar: cada uno se busca en SimpleFact por
+su nota y se resuelve en el panel como en el paso 9. `"lleno":{"real":true}` (o
+`"simulacion"`) dice que `invoice_candidates` devolvió los 500 pedidos de ese
+modo: lo más viejo pendiente no se miró en esa pasada. No pone el cron en
+rojo, pero si se repite hay que ver qué llena la lista (por ejemplo, con
+`select reason, count(*) from invoice_order_checks where mode = 'real' group by 1 order by 2 desc;`).
+Un token rechazado (401 o 403), una cuenta que no responde (404 o 405) o una
+venta con archivos de otro RUC apaga el RUC solo y borra su prueba de
+conexión, también cuando sale de «Emitir esta boleta». Ajustes lo dice en rojo:
+«Apagado por Kapta: ‹motivo›. Prueba la conexión antes de volver a Real o a Manual.». Para
+volver a Real hay que corregir lo que falló (el token o el subdominio) y pulsar
+«Probar conexión» de nuevo. Lo mismo para volver a Manual.
+
+### 15-10-2026 · Intentos del motorizado propio y filtro de intentos (`mom-v1.27`)
+
+Sin migraciones, variables de entorno ni RPC nuevas. `MOM_RESOLUTION_VERSION`
+sube a `mom-v1.27`: el cron `master-reconcile` recalcula las filas y la columna
+de intentos pasa a sumar las paradas de Grupo GF (MOM §9.3, «Intentos de
+entrega»). No cambia etapas ni costos. Con la foto del 15-10-2026, 487 pedidos
+con un «No entregado» de motorizado propio tenían `attempt_count = 0`.
+
+**Qué mirar después.** Cuando el cron termine,
+`select count(*) from order_master where macro_version <> 'mom-v1.27';` da `0`,
+y #KP140941 dice 2 intentos (3 si la salida del 15/10 ya se reportó).
+
+### 15-10-2026 · Intentos de Urpi en el Master (0265, `mom-v1.28`) y canal de venta (0264)
+
+- **0264** (ya aplicada en producción antes del #977): `order_master.sales_channel`
+  y su relleno.
+- **0265 antes del código**: `order_master_stale` mira también la última
+  escritura de `urpi_report_rows`. Misma firma y permisos; `create or replace`,
+  sin `drop`.
+- `MOM_RESOLUTION_VERSION` sube a `mom-v1.28`: el cron recalcula y la columna de
+  intentos suma los de Urpi (entregado, cancelado, reprogramado). No cambia
+  etapas ni costos.
+
+**Qué mirar después.** #KP131545 dice 1 intento cuando su fila tenga
+`macro_version = 'mom-v1.28'`.
+
+### 15-10-2026 · Intentos de Swayp y Tanders (`mom-v1.29`)
+
+Sin migraciones. `MOM_RESOLUTION_VERSION` sube a `mom-v1.29`: la columna de
+intentos suma las visitas que se deducen de los estados de Swayp (Novedad,
+Entregada, Devolución) y de Tanders (Delivered, Returning, Returned). No cambia
+etapas ni costos.
+
+### 15-10-2026 · «Salió con» y paradas del cuaderno en los intentos (0266, `mom-v1.30`)
+
+- **0266 antes del código**: `order_master.dispatched_with` (text[], índice
+  GIN) y `master_facets` con la clave `dispatched_with`. `create or replace`,
+  sin `drop`; el recálculo escribe la columna, así que tiene que existir antes.
+- `MOM_RESOLUTION_VERSION` sube a `mom-v1.30`: el cron rellena «Salió con» y
+  suma a los intentos de Grupo GF las paradas del cuaderno histórico. No cambia
+  etapas ni costos.
+
+### 16-10-2026 · Programar envío (0267)
+
+- **0267 antes del código**: `order_master.dispatch_scheduled_on` (date) e
+  índice parcial. El recálculo la escribe; sin la columna el upsert fallaría.
+- Sin cambio de versión: nadie había programado un envío, así que no hay nada
+  que rellenar. Los pedidos la toman cuando alguien programa.

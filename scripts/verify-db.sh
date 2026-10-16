@@ -107,6 +107,8 @@ echo "▶ cobertura por coordenada"
 $PSQL -f "$ROOT/scripts/sql/coverage_smoke.sql" >/dev/null
 echo "▶ order_master_stale (0123, 0240, 0241): el desfase se ve aunque sea ANTIGUO o RECIÉN recalculado, y solo lo pide el servidor"
 $PSQL -f "$ROOT/scripts/sql/order_master_stale_smoke.sql"
+echo "▶ membership_roles (0250): los roles se suman también en la base y se van con la membresía"
+$PSQL -f "$ROOT/scripts/sql/membership_roles_smoke.sql"
 # Qué escritura cuenta como cambio (0204): un sello de lectura de la API o un
 # recálculo sin cambios no pueden mover `updated_at`, o vuelve la cascada de
 # recálculos y recargas del Master. Y la búsqueda con índice no ve más que la RLS.
@@ -167,6 +169,13 @@ echo "  ✅ apply_bundled.sql levanta el esquema completo desde cero"
 echo "▶ automático Aliclik → Swayp: reserva, cupo, evidencia y RLS"
 $PSQL -f "$ROOT/scripts/sql/swayp_auto_smoke.sql"
 
+# Las llamadas de pedido (§11.8) y las del agente de leads (0247, MOM §33)
+# comparten `voice_calls`: lo que impide que una se tome por la otra son las
+# reglas de la base, así que se prueban aquí y no solo en el código.
+echo "▶ agente de voz para leads (0247): pedidos y leads no se mezclan en voice_calls"
+$PSQL -f "$ROOT/scripts/sql/voice_lead_smoke.sql"
+echo "  ✅ cada fila es de un pedido o de un lead, con los resultados de su carril; el candado Swayp no corre por un lead; una sola llamada de leads abierta"
+
 echo "▶ doble cotejo de despacho"
 $PSQL -f "$ROOT/scripts/sql/dispatch_smoke.sql"
 echo "  ✅ la custodia solo cambia después de cotejar el 100 % dos veces"
@@ -188,6 +197,9 @@ echo "  ✅ asignar da custodia con paradas por confirmar; confirmar marca el í
 echo "▶ «Recibir en oficina» (0188): un no entregado sale de la caja en custodia, también en exigir"
 $PSQL -f "$ROOT/scripts/sql/gf_return_to_office_smoke.sql"
 echo "  ✅ sale con rastro, custodia a la empresa, solicitud a por asignar; la parada se conserva; un rechazo también vuelve a por asignar (0206)"
+echo "▶ «Sacar con salida nueva» (0248): la caja que el motorizado todavía tiene queda en devolución y el pedido sale con otra"
+$PSQL -f "$ROOT/scripts/sql/gf_replace_output_smoke.sql"
+echo "  ✅ la S01 pasa a retorno sin salir de la caja; la solicitud pasa a la S02; su parada ya no cambia; al recibirla vuelve a stock sin volver a por asignar; tope de cinco"
 echo "▶ caja abierta durante el cotejo (0196): se suma en paralelo y sale al 100 % o con la diferencia retirada"
 $PSQL -f "$ROOT/scripts/sql/gf_parallel_box_smoke.sql"
 echo "  ✅ misma caja durante el cotejo; lo nuevo reabre oficina; se recibe lo verificado; custodia al 100 % o al retirar la diferencia; carga 2 solo tras la custodia"
@@ -200,6 +212,33 @@ echo "  ✅ entrega y rechazo del cuaderno sin foto no frenan el pago y se pagan
 echo "▶ el reprogramado que el motorizado conserva pasa a su ruta siguiente (0234)"
 $PSQL -f "$ROOT/scripts/sql/gf_carry_over_smoke.sql"
 echo "  ✅ sale de la caja anterior con rastro, entra cotejado en una carga en custodia con su parada pendiente; no contesta, anulado y repetidos no pasan; todo o nada"
+echo "▶ «Repro Lima» (0251): un caso abierto por pedido, candado, llamadas append-only y fecha que pidió el cliente"
+$PSQL -f "$ROOT/scripts/sql/repro_lima_smoke.sql"
+echo "  ✅ caso perezoso único, episodio, candado de 10 min, cuatro resultados, idempotencia, RLS por tienda"
+echo "▶ LTV : CPA (0252): clientas nuevas por mes de primera entrega, valor a cada horizonte, gasto por moneda y RLS"
+$PSQL -f "$ROOT/scripts/sql/ltv_cohorts_smoke.sql"
+echo "  ✅ solo entregados desde la primera compra, teléfono por sus 9 dígitos, gasto por mes y moneda, cada quien sus tiendas"
+echo "▶ Recordatorio de reposición (0255): quién vence hoy, línea sin id por su título, uno por pedido, resultados por grupo y RLS"
+$PSQL -f "$ROOT/scripts/sql/restock_reminders_smoke.sql"
+echo "  ✅ unidades × días − días antes, ventana, quien volvió a comprar no, uno por pedido, control aparte, cada quien sus tiendas"
+echo "▶ Repro Lima «Todos» (0256): Lima sin Finalizado por etapa y subetapa, días de Lima, solo service_role"
+$PSQL -f "$ROOT/scripts/sql/lima_open_counts_smoke.sql"
+echo "  ✅ igual a un GROUP BY directo, sin Finalizado ni Provincia, borde de medianoche de Lima, authenticated sin permiso"
+
+# SimpleFact no tiene llave de idempotencia: la misma boleta mandada dos veces
+# son dos boletas ante SUNAT, y una boleta enviada no se borra. Lo que lo impide
+# —el turno con candado, un solo comprobante real vivo por pedido, estados que
+# solo avanzan, «real» y «manual» solo con la conexión probada, y ninguna fila
+# sin que la empresa haya recibido el pago— vive en la base (0257, 0260, 0261 y
+# 0262, MOM §35), así que se prueba en la base y no solo en el código. La 0257
+# ya corrió en producción y no se reescribe: la 0260 cambia cuatro de sus
+# funciones, la 0261 trae el modo «Manual» (el turno da la fila que se pide, y
+# quién la pidió) y la 0262 hace que el turno vuelva a revisar el pago (un pago
+# rechazado entre la lectura del código y el turno no deja fila); la prueba
+# corre cada una sobre lo que había en producción cuando se aplicó.
+echo "▶ Comprobantes por RUC (0257, 0260, 0261 y 0262): semilla apagada, cuenta → RUC de su organización, turno con candado, uno real vivo por pedido, la 0260 sobre la 0257, el modo «Manual» y el pago revisado en el turno"
+$PSQL -f "$ROOT/scripts/sql/invoices_smoke.sql"
+echo "  ✅ GRUPO GF S.A.C. sembrado apagado y sin pisar al owner, real solo con token, fecha y prueba del mismo RUC, cada motivo del turno, tope del día, índice único, estados que solo avanzan, solo service_role; la 0260 cambia las cuatro funciones sin tocar datos ni triggers, y dos veces es una; la 0261 admite «Manual» con lo que exige Real, baja como Real, da la fila pedida con quién la pidió (modo_distinto si no), cuenta el tope por modo pedido, deja un solo turno que el código de hoy llama con nueve argumentos por nombre, y dos veces es una; con la 0262 el turno no da fila si lo validado no cubre el total, si un pago de la base del comprobante ya no está validado o si el prepago no es un prepago web sin comprobantes, bloquea los pagos mientras dura, cambia solo el turno en su lugar, se detiene sin la 0261 delante, y dos veces es una (los tres ERROR de su guarda se esperan)"
 
 echo ""
 echo "✅ DB verification passed."

@@ -17,6 +17,8 @@
 //   4. En proceso                — hay gestión logística iniciada sin resultado.
 //   5. Pendiente                 — todavía no arrancó bien el proceso logístico.
 
+import { PERMISSION_LABEL } from "@/lib/permissions";
+import { NO_REPLACED_OUTPUTS, replacedOutputIds } from "@/lib/gf-replaced-output";
 import { hasConfirmationSignal } from "@/lib/order-confirmation";
 import { COMPANION_LINKED } from "@/lib/order-companion";
 import { recoveryActive } from "@/lib/reproprovincia";
@@ -179,6 +181,26 @@ export function isOperationalStatus(code: string | null | undefined): boolean {
 export function isTerminalGeneral(code: string): boolean {
   return GENERAL_BY_CODE.get(code as GeneralStatus)?.terminal ?? false;
 }
+
+/**
+ * Pasar un pedido YA cerrado (entregado, anulado o devuelto) a otro estado es
+ * corregir el cierre: pide `master.override_status` y un motivo (MOM §16).
+ * Devuelve el error a mostrar, o `null` si se puede. Lo preguntan igual
+ * «Cambiar estado» y «Registrar devolución»: dos puertas al mismo hecho.
+ */
+export function closedStatusChangeError(
+  current: string,
+  target: GeneralStatus,
+  canOverride: boolean,
+  reason: string,
+): string | null {
+  if (!isTerminalGeneral(current) || current === target) return null;
+  if (!canOverride) {
+    return `Este pedido ya está ${current.replace("_", " ")}; solo quien puede «${PERMISSION_LABEL["master.override_status"]}» lo cambia.`;
+  }
+  if (!reason.trim()) return "Describe el motivo del cambio: quedará en el historial.";
+  return null;
+}
 /** Estados operativos válidos para un estado general dado (para los selectores). */
 export function operationalStatusesFor(general: GeneralStatus): OperationalStatusDef[] {
   return OPERATIONAL_STATUSES.filter((s) => s.general === general);
@@ -260,6 +282,8 @@ export interface GuideSnapshot {
   payment_check_state?: string | null;
   /** Cuándo la caja pasó al motorizado. Nulo = nunca salió de la empresa. */
   custody_transferred_at?: string | null;
+  /** empresa | courier | retorno | devuelto: la que vuelve no es la vigente. */
+  custody_state?: string | null;
   /** La etiqueta cruda de Aliclik (`status · dispatch · call`). Es lo único que
    *  distingue «el courier no pudo entregar» de «nos cancelaron la venta». */
   reported_status?: string | null;
@@ -392,6 +416,95 @@ const AGENCY_COURIERS = new Set(["shalom", "olva"]);
  *  drawer, y por eso cuenta igual. */
 const HUMAN_GUIDE_EVENTS = new Set(["guide_registered", "guide_created", COMPANION_LINKED]);
 
+/**
+ * Intentos de entrega de nuestros motorizados (Grupo GF, courier `propio`).
+ * Cada parada que el motorizado reportó es un intento, entregada o no: dos «No
+ * contesta» y una entrega son tres. Una parada que se corrige (de «no
+ * entregado» a «entregado») sigue siendo una visita, así que cuenta una vez.
+ *
+ * Hasta el 15-10-2026 el Master solo sumaba lo que reportan los couriers
+ * externos (`aliclik_attempts`, `reroute_attempts`) y los 487 pedidos con un
+ * «No entregado» de motorizado propio decían «0 intentos» (#KP140941: dos
+ * salidas con Roy, «No contesta» las dos). Pura.
+ */
+export function ownRiderAttempts(
+  events: readonly { kind: string; payload?: unknown }[],
+  // Las paradas de las rutas (delivery_stops), con el histórico del cuaderno
+  // que se cargó sin evento (`reported_by` null): 4.745 de las 5.652 paradas
+  // reportadas al 15-10-2026 no tenían `stop_reported`.
+  routeStops: readonly { id: string; status: string | null }[] = [],
+): number {
+  const stops = new Set<string>();
+  for (const event of events) {
+    if (event.kind !== "stop_reported") continue;
+    const payload = event.payload as { stop_id?: unknown } | null | undefined;
+    if (typeof payload?.stop_id === "string" && payload.stop_id) stops.add(payload.stop_id);
+  }
+  for (const stop of routeStops) {
+    if (stop.status === "entregado" || stop.status === "no_entregado") stops.add(stop.id);
+  }
+  return stops.size;
+}
+
+/**
+ * Resultados del reporte de Urpi que son una visita: entregó, canceló o
+ * reprogramó en la puerta. «Programado», «En coordinación» y «Sin resultado»
+ * todavía no son un intento, y un estado que Kapta no reconoce no se cuenta.
+ */
+export const URPI_ATTEMPT_RESULTS: ReadonlySet<string> = new Set(["entregado", "cancelado", "reprogramado"]);
+
+/**
+ * Intentos de entrega que Urpi reportó en su export (MOM §30.11): una fila por
+ * intento, vinculada al pedido. Hasta el 15-10-2026 la columna no los sumaba
+ * (#KP131545: Urpi lo canceló el 01/09 y la fila decía «0 intentos»). Pura.
+ */
+export function urpiAttempts(rows: readonly { result_code: string | null }[]): number {
+  return rows.filter((row) => row.result_code != null && URPI_ATTEMPT_RESULTS.has(row.result_code)).length;
+}
+
+/** Estados de Swayp que dicen que el motorizado llegó a la puerta (lib/swayp-states.ts). */
+const SWAYP_NOVEDAD = 6;
+const SWAYP_ENTREGADA = 7;
+const SWAYP_DEVOLUCION = new Set([8, 9, 12]);
+/** Estados de Tanders que solo se alcanzan después de ir a la puerta (lib/tanders/status.ts). */
+const TANDERS_VISITED = new Set(["DELIVERED", "RETURNING", "RETURNED"]);
+
+/**
+ * Visitas que se deducen de lo que informa el courier de una guía cuando el
+ * courier no manda un número de intentos (MOM §9.3, 15-10-2026):
+ *
+ *  - Swayp (`fenix`): cada «Novedad» (6) que llegó como estado es una visita
+ *    fallida y «Entregada» (7) es otra. Si la guía terminó en Devolución (8, 9
+ *    o 12) sin que se viera ninguna, hubo al menos una: el barrido no siempre
+ *    alcanza a ver la Novedad antes de la Devolución.
+ *  - Tanders: solo da el estado actual. Llegar a «Delivered», «Returning» o
+ *    «Returned» exige haber ido a la puerta: es una visita.
+ *
+ * Los demás couriers no informan visitas: 0. Pura.
+ */
+export function courierVisitAttempts(
+  guide: { id: string; courier: string | null; delivery_status: string | null; reported_status?: string | null; swayp_state?: number | null },
+  events: readonly { kind: string; shipment_id?: string | null; payload?: unknown }[],
+): number {
+  const courier = (guide.courier ?? "").toLowerCase();
+  if (courier === "fenix") {
+    const states = events
+      .filter((e) => e.kind === "courier_status" && e.shipment_id === guide.id)
+      .map((e) => Number((e.payload as { swayp_state?: unknown } | null | undefined)?.swayp_state))
+      .filter((state) => Number.isFinite(state));
+    const delivered = guide.delivery_status === "entregado" || guide.swayp_state === SWAYP_ENTREGADA || states.includes(SWAYP_ENTREGADA);
+    const visits = states.filter((state) => state === SWAYP_NOVEDAD).length + (delivered ? 1 : 0);
+    if (visits) return visits;
+    const returned = SWAYP_DEVOLUCION.has(guide.swayp_state ?? -1) || guide.swayp_state === SWAYP_NOVEDAD || states.some((state) => SWAYP_DEVOLUCION.has(state));
+    return returned ? 1 : 0;
+  }
+  if (courier === "tanders") {
+    const code = (guide.reported_status ?? "").trim().toUpperCase();
+    return guide.delivery_status === "entregado" || TANDERS_VISITED.has(code) ? 1 : 0;
+  }
+  return 0;
+}
+
 export function isAgencyCourier(courier: string | null | undefined): boolean {
   return AGENCY_COURIERS.has((courier ?? "").toLowerCase());
 }
@@ -400,13 +513,20 @@ export function isAgencyCourier(courier: string | null | undefined): boolean {
  * La guía "vigente": la que el equipo está trabajando ahora. Se descartan las
  * congeladas (transferido/anulado) mientras haya alguna activa; si no queda
  * ninguna activa, gana la que se movió más recientemente.
+ *
+ * Entre las activas, la que se trabaja gana a la reemplazada (12-10-2026,
+ * «Sacar con salida nueva»; `replaced` son las salidas con `output_replaced`,
+ * de `replacedOutputIds`): con el motorizado o ya recibida sigue `pendiente`, y
+ * su recepción la haría parecer la más reciente aunque el pedido ya salga con
+ * otra. Una en `retorno` por «Solicitar devolución» compite como siempre.
  */
-export function currentGuide(guides: GuideSnapshot[]): GuideSnapshot | null {
+export function currentGuide(guides: GuideSnapshot[], replaced: ReadonlySet<string> = NO_REPLACED_OUTPUTS): GuideSnapshot | null {
   if (!guides.length) return null;
   const active = guides.filter(
     (g) => g.delivery_status === "pendiente" || g.delivery_status === "en_ruta",
   );
-  const pool = active.length ? active : guides;
+  const working = active.filter((g) => !replaced.has(g.id));
+  const pool = working.length ? working : active.length ? active : guides;
   let best = pool[0]!;
   for (const g of pool) {
     const a = guideMovedAt(g);
@@ -522,11 +642,12 @@ export function resolveOrderState(inputs: ResolveInputs): ResolvedOrderState {
   // pedido por perdido ni para decir que hay gestión en curso.
   const corregidas = correctedShipmentIds(events);
   const real = guides.filter((g) => !cancelledAsRecordCorrection(g, corregidas));
-  const currentReal = currentGuide(real);
+  const replaced = replacedOutputIds(events);
+  const currentReal = currentGuide(real, replaced);
 
   // ── Rollup logístico (independiente del estado: se calcula siempre)
   const couriers = [...new Set(guides.map((g) => g.courier).filter(Boolean))];
-  const current = currentGuide(guides);
+  const current = currentGuide(guides, replaced);
   const byRecency = [...guides].sort((a, b) => {
     const av = guideMovedAt(a) ?? "";
     const bv = guideMovedAt(b) ?? "";

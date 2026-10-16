@@ -21,6 +21,7 @@ import {
   mapRestDraftOrder,
   mapRestOrder,
   verifyShopifyHmac,
+  routeShopifyTopic,
 } from "@/lib/shopify";
 import {
   classifyKapsoEvent,
@@ -63,6 +64,7 @@ import { autoTrialDeps, processAutoOrderTrials } from "@/lib/auto-order-trials";
 import { abDeps, enrollAbCohorts } from "@/lib/auto-order-ab";
 import { runReturnRecovery } from "@/lib/return-recovery";
 import { runDeliveredThanks } from "@/lib/delivered-thanks";
+import { runRestockReminders, sweepRestockReplies } from "@/lib/restock-reminder";
 import { enrichLeadLocationsFromShopify } from "@/lib/lead-shopify-location";
 import type { ConversationRow, DraftOrderRow, OrderRow } from "@/lib/types";
 
@@ -145,6 +147,19 @@ export interface StoreCreds {
   /** Ritmo (0195): como mucho `count` intentos cada `minutes` minutos. */
   delivered_thanks_pace_count: number;
   delivered_thanks_pace_minutes: number;
+  /** Recordatorio de reposición (0255). Ver lib/restock-reminder.ts. */
+  restock_enabled: boolean;
+  restock_template_name: string | null;
+  restock_template_language: string | null;
+  restock_params: string | null;
+  restock_phone_number_id: string | null;
+  restock_button_label: string | null;
+  restock_hour_start: number;
+  restock_hour_end: number;
+  restock_pace_count: number;
+  restock_pace_minutes: number;
+  restock_days_before: number;
+  restock_control_pct: number;
   telegram_bot_token: string | null;
   telegram_chat_id: string | null;
   meta_access_token: string | null;
@@ -307,6 +322,19 @@ export async function getStoreCreds(
     // Pre-0195 ⇒ el ritmo por defecto, 5 cada 20 minutos.
     delivered_thanks_pace_count: data.delivered_thanks_pace_count ?? 5,
     delivered_thanks_pace_minutes: data.delivered_thanks_pace_minutes ?? 20,
+    // Pre-0255 las columnas no existen (select * → undefined) ⇒ apagado.
+    restock_enabled: data.restock_enabled ?? false,
+    restock_template_name: data.restock_template_name ?? null,
+    restock_template_language: data.restock_template_language ?? null,
+    restock_params: data.restock_params ?? null,
+    restock_phone_number_id: data.restock_phone_number_id ?? null,
+    restock_button_label: data.restock_button_label ?? null,
+    restock_hour_start: data.restock_hour_start ?? 9,
+    restock_hour_end: data.restock_hour_end ?? 20,
+    restock_pace_count: data.restock_pace_count ?? 5,
+    restock_pace_minutes: data.restock_pace_minutes ?? 20,
+    restock_days_before: data.restock_days_before ?? 7,
+    restock_control_pct: data.restock_control_pct ?? 10,
     telegram_bot_token: decryptOrNull(data.telegram_bot_token_enc),
     telegram_chat_id: data.telegram_chat_id ?? null,
     meta_access_token: decryptOrNull(data.meta_access_token_enc),
@@ -607,10 +635,52 @@ export async function processShopifyWebhook(
   }
 
   // Route by topic. Order topics (orders/*) and draft topics (draft_orders/*)
-  // share the HMAC/idempotency/JSON prefix above, then diverge.
-  return params.topic.startsWith("draft_orders/")
-    ? processDraftOrderWebhook(admin, creds, params, payload, webhookId)
-    : processOrderWebhook(admin, creds, params, payload, webhookId);
+  // share the HMAC/idempotency/JSON prefix above, then diverge. La
+  // desinstalación tiene su rama; un tema desconocido ya no entra como pedido.
+  switch (routeShopifyTopic(params.topic)) {
+    case "draft":
+      return processDraftOrderWebhook(admin, creds, params, payload, webhookId);
+    case "order":
+      return processOrderWebhook(admin, creds, params, payload, webhookId);
+    case "uninstalled":
+      return processAppUninstalled(admin, params, webhookId);
+    default:
+      return { status: "ok", message: `tema ignorado: ${params.topic}` };
+  }
+}
+
+/**
+ * `app/uninstalled` (MOM §29.15.9): la tienda desinstaló la app. Queda
+ * deshabilitada (los crons solo corren sobre tiendas activas) y sin token, que
+ * Shopify ya revocó. No se borra nada: pedidos e historial siguen. Los datos
+ * personales de sus compradores se anonimizan cuando llega el `shop/redact`.
+ */
+async function processAppUninstalled(
+  admin: SupabaseClient,
+  params: ProcessWebhookParams,
+  webhookId: string,
+): Promise<WebhookResult> {
+  const { error: insErr } = await admin.from("webhook_events").insert({
+    store_id: params.storeId,
+    topic: params.topic,
+    shopify_id: null,
+    webhook_id: webhookId,
+    processed: true,
+  });
+  if (insErr) {
+    if ((insErr as any).code === "23505") return { status: "duplicate" };
+    throw new Error(`webhook_events insert: ${insErr.message}`);
+  }
+  const { error } = await admin
+    .from("stores")
+    .update({
+      shopify_token_enc: null,
+      status: "disabled",
+      shopify_uninstalled_at: new Date().toISOString(),
+    })
+    .eq("id", params.storeId);
+  if (error) throw new Error(`stores update: ${error.message}`);
+  return { status: "ok" };
 }
 
 export interface FlowWebhookParams {
@@ -994,6 +1064,7 @@ export interface SyncReport {
   cartSeqSent: number; // plantillas de carrito abandonado enviadas esta corrida
   returnRecoverySent: number; // plantillas de recuperación de devueltos enviadas
   deliveredThanksSent: number; // agradecimientos con catálogo al entregar
+  restockSent: number; // recordatorios de reposición (sin contar el grupo de control)
   requeued: number; // carritos reencolados con atención (olas, máx 2 por lead)
   cartsClosedByOrder: number; // carritos que salieron de la cola porque ya son pedido
   autoOrdersGenerated: number; // pedidos de la prueba de recompra automática (0214)
@@ -1079,6 +1150,7 @@ export async function runStoreSync(
     cartSeqSent: 0,
     returnRecoverySent: 0,
     deliveredThanksSent: 0,
+    restockSent: 0,
     requeued: 0,
     cartsClosedByOrder: 0,
     autoOrdersGenerated: 0,
@@ -1418,6 +1490,25 @@ export async function runStoreSync(
       if (thanks.failed) report.errors.push(`delivered_thanks: ${thanks.failed} envíos fallidos`);
     } catch (e: any) {
       report.errors.push(`delivered_thanks: ${e.message}`);
+    }
+  }
+
+  // 2c.59) Recordatorio de reposición (MOM §34): a la clienta a la que se le
+  //         está por acabar lo que compró, con su grupo de control. Mismo ritmo
+  //         y horario que el agradecimiento. Apagado por defecto. Best-effort.
+  if (creds.restock_enabled) {
+    try {
+      const restock = await runRestockReminders(admin, storeId, creds);
+      report.restockSent = restock.sent;
+      if (restock.failed) report.errors.push(`restock: ${restock.failed} envíos fallidos`);
+    } catch (e: any) {
+      report.errors.push(`restock: ${e.message}`);
+    }
+    // Las respuestas que el webhook no trajo (ver sweepRestockReplies).
+    try {
+      await sweepRestockReplies(admin, storeId, creds);
+    } catch (e: any) {
+      report.errors.push(`restock sweep: ${e.message}`);
     }
   }
 

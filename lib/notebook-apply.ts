@@ -1,6 +1,7 @@
 // Aplicar la hoja revisada (MOM §29.7, 08-10-2026): pasa a la ruta los
 // reprogramados que el motorizado conserva y reporta cada parada por el único
-// camino de reporte (lib/stop-report.ts), en modo cuaderno.
+// camino de reporte (lib/stop-report.ts), en modo cuaderno. Un día de la
+// semana escrito queda como fecha que pidió el cliente (12-10-2026, D9).
 //
 // Se revalida TODO contra la base de ahora, no contra la de cuando se leyó la
 // foto: entre leer y aplicar alguien pudo reportar una parada o recibir una
@@ -16,7 +17,7 @@ import { limaDateKey } from "@/lib/aliclik-geo";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { writeStopReport } from "@/lib/stop-report";
 import { loadNotebookContext, type NotebookStopRef, type NotebookTarget } from "@/lib/notebook-import-access";
-import { notebookStopNote, outcomeCode, type NotebookDecision, type NotebookOutcome, type PlanRow } from "@/lib/notebook-import";
+import { nextNamedDayIso, notebookStopNote, outcomeCode, type NotebookDecision, type NotebookOutcome, type PlanRow } from "@/lib/notebook-import";
 
 export interface NotebookApplyRow {
   index: number;
@@ -176,6 +177,12 @@ export async function applyNotebookImport(
       ? { ...t.row, match: { ...t.row.match, via: null, kind: "pendiente" as const } }
       : t.row;
     const note = notebookStopNote({ riderName, routeDate: row.route_date, row: rowForNote, outcome: t.outcome, loadedBy, loadedOn });
+    // El día de la semana escrito en el cuaderno es la fecha que pidió el
+    // cliente (D9): queda en la parada, nunca programa. Si ya pasó al cargar
+    // la hoja, queda solo en la nota. «MAÑANA» o «REPRO» no dan fecha.
+    const day = t.outcome.status === "no_entregado" && t.outcome.reason === "reprogramado" ? t.row.interpretation.day : null;
+    const iso = day ? nextNamedDayIso(row.route_date, day) : null;
+    const requestedDate = day ? (iso && iso >= loadedOn ? iso : null) : undefined;
     const res = await writeStopReport(
       admin,
       {
@@ -190,6 +197,7 @@ export async function applyNotebookImport(
         writtenStatusCode: outcomeCode(t.outcome),
         writtenPayment: t.outcome.status === "entregado" ? written : null,
         notebook: { riderName, importId },
+        requestedDate,
       },
       { stop: t.stop!, routeStatus: routeNow?.status },
     );

@@ -45,7 +45,7 @@ export default async function RepartoPage({
           <h1 className="text-lg font-semibold text-ink-900">Reparto</h1>
           <p className="mt-2 text-sm text-ink-600">
             Si eres motorizado, pide vincular tu ficha a <strong className="font-semibold text-ink-900">{user.email}</strong>.
-            Si eres jefe o coordinador, pide activar «Reportar entregas de rutas» en Equipo. No necesitas una ficha de motorizado.
+            Si eres jefe o coordinador, pide el rol «Despacho y Grupo GF» o el permiso «Reportar entregas por un motorizado» en Equipo. No necesitas una ficha de motorizado.
           </p>
         </div>
       </main>

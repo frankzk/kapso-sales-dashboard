@@ -75,6 +75,18 @@ export interface StoreSettingsInput {
   delivered_thanks_max_hours?: string;
   delivered_thanks_pace_count?: string;
   delivered_thanks_pace_minutes?: string;
+  restock_enabled?: string | boolean;
+  restock_template_name?: string;
+  restock_template_language?: string;
+  restock_params?: string;
+  restock_phone_number_id?: string;
+  restock_button_label?: string;
+  restock_hour_start?: string;
+  restock_hour_end?: string;
+  restock_pace_count?: string;
+  restock_pace_minutes?: string;
+  restock_days_before?: string;
+  restock_control_pct?: string;
   // Agente de voz para Reproprovincia (MOM §11.8, 0190).
   voice_recovery_enabled?: string | boolean;
   voice_recovery_auto?: string | boolean;
@@ -86,6 +98,21 @@ export interface StoreSettingsInput {
   voice_recovery_hour_end?: string;
   voice_recovery_agent_number?: string;
   voice_recovery_zadarma_sip?: string;
+  // Agente de voz para leads, piloto Biru (MOM §33, 0247). Otro agente, con
+  // sus propios interruptores y topes: no comparte nada con el de arriba.
+  voice_lead_enabled?: string | boolean;
+  voice_lead_auto?: string | boolean;
+  voice_lead_daily_cap?: string;
+  voice_lead_max_attempts?: string;
+  voice_lead_wait_minutes?: string;
+  voice_lead_max_age_hours?: string;
+  voice_lead_holdout_pct?: string;
+  voice_lead_hour_start?: string;
+  voice_lead_hour_end?: string;
+  /** Ids de campaña de Meta: varios valores (las casillas) o uno con comas. */
+  voice_lead_campaign_ids?: string | string[];
+  voice_lead_product?: string;
+  voice_lead_offer?: string;
   /** Ciclo de recontacto en confirmación, en días (MOM §6.1). */
   confirmation_cycle_days?: string;
   // Telegram daily summary: chat id is plain, token is a secret.
@@ -179,6 +206,37 @@ function clean(v: string | undefined): string | null {
   if (v === undefined || v === null) return null;
   const t = v.trim();
   return t === "" ? null : t;
+}
+
+/**
+ * Los rangos de los números del agente de leads: los mismos CHECK de 0247.
+ * Uno que la base rechazara tumbaría el guardado de TODA la tarjeta, así que
+ * aquí un valor fuera de rango se omite (conserva el actual), como los demás.
+ * El formulario usa estos mismos límites para no ofrecer lo que no se guarda.
+ */
+export const VOICE_LEAD_LIMITS = {
+  voice_lead_daily_cap: { min: 0, max: 300 },
+  voice_lead_max_attempts: { min: 1, max: 4 },
+  voice_lead_wait_minutes: { min: 0, max: 1440 },
+  voice_lead_max_age_hours: { min: 1, max: 168 },
+  voice_lead_holdout_pct: { min: 0, max: 90 },
+  voice_lead_hour_start: { min: 0, max: 23 },
+  voice_lead_hour_end: { min: 1, max: 24 },
+} as const;
+export type VoiceLeadLimitField = keyof typeof VOICE_LEAD_LIMITS;
+
+/** Largo máximo del producto que nombra el agente de leads. */
+export const VOICE_LEAD_PRODUCT_MAX = 120;
+/** Largo máximo de la oferta: es lo que llega entero a la ficha del agente. */
+export const VOICE_LEAD_OFFER_MAX = 800;
+
+/**
+ * Las campañas elegidas, sin vacíos ni repetidas. Llegan como varias casillas
+ * con el mismo nombre o como un solo valor con comas; las dos formas valen.
+ */
+export function voiceLeadCampaignIds(raw: string | readonly string[]): string[] {
+  const parts = (typeof raw === "string" ? [raw] : raw).flatMap((v) => String(v ?? "").split(","));
+  return [...new Set(parts.map((p) => p.trim()).filter(Boolean))];
 }
 
 /**
@@ -355,6 +413,31 @@ export function buildStoreUpdate(
   const dtPaceMinutes = intField(input.delivered_thanks_pace_minutes, 5, 1440);
   if (dtPaceMinutes !== null) patch.delivered_thanks_pace_minutes = dtPaceMinutes;
 
+  // Recordatorio de reposición (0255). El toggle tiene que poder APAGARSE; el
+  // nombre de la plantilla y el número propio son vaciables.
+  if (input.restock_enabled !== undefined) {
+    patch.restock_enabled = input.restock_enabled === true || input.restock_enabled === "true";
+  }
+  for (const k of ["restock_template_language", "restock_params", "restock_button_label"] as const) {
+    const v = clean(input[k]);
+    if (v !== null) patch[k] = v;
+  }
+  for (const k of ["restock_template_name", "restock_phone_number_id"] as const) {
+    if (input[k] !== undefined) patch[k] = clean(input[k]);
+  }
+  const rsStart = intField(input.restock_hour_start, 0, 23);
+  if (rsStart !== null) patch.restock_hour_start = rsStart;
+  const rsEnd = intField(input.restock_hour_end, 1, 24);
+  if (rsEnd !== null) patch.restock_hour_end = rsEnd;
+  const rsPaceCount = intField(input.restock_pace_count, 1, 25);
+  if (rsPaceCount !== null) patch.restock_pace_count = rsPaceCount;
+  const rsPaceMinutes = intField(input.restock_pace_minutes, 5, 1440);
+  if (rsPaceMinutes !== null) patch.restock_pace_minutes = rsPaceMinutes;
+  const rsBefore = intField(input.restock_days_before, 0, 60);
+  if (rsBefore !== null) patch.restock_days_before = rsBefore;
+  const rsControl = intField(input.restock_control_pct, 0, 50);
+  if (rsControl !== null) patch.restock_control_pct = rsControl;
+
   // Agente de voz (MOM §11.8). Los tres toggles tienen que poder APAGARSE, y
   // el número del agente y la extensión son vaciables: sin ellos Kapta no
   // llama, que es el estado seguro.
@@ -374,6 +457,36 @@ export function buildStoreUpdate(
   if (vStart !== null) patch.voice_recovery_hour_start = vStart;
   const vEnd = intField(input.voice_recovery_hour_end, 1, 24);
   if (vEnd !== null) patch.voice_recovery_hour_end = vEnd;
+
+  // Agente de voz para leads (MOM §33, 0247). Mismas reglas que el de arriba:
+  // los dos toggles tienen que poder APAGARSE (apagar `auto` es la marcha
+  // atrás del piloto) y un número fuera de rango conserva el actual.
+  for (const k of ["voice_lead_enabled", "voice_lead_auto"] as const) {
+    if (input[k] !== undefined) patch[k] = input[k] === true || input[k] === "true";
+  }
+  for (const k of Object.keys(VOICE_LEAD_LIMITS) as VoiceLeadLimitField[]) {
+    const n = intField(input[k], VOICE_LEAD_LIMITS[k].min, VOICE_LEAD_LIMITS[k].max);
+    if (n !== null) patch[k] = n;
+  }
+  // Las campañas son VACIABLES: sin ninguna el agente no llama a nadie, que es
+  // el estado seguro y tiene que poder recuperarse. Por eso el formulario manda
+  // siempre un oculto vacío junto a las casillas: desmarcar la última llega
+  // como [""] ⇒ []. Una tarjeta que no trae el campo no lo toca.
+  if (input.voice_lead_campaign_ids !== undefined) {
+    patch.voice_lead_campaign_ids = voiceLeadCampaignIds(input.voice_lead_campaign_ids);
+  }
+  // Producto y oferta, vaciables: el agente dice la oferta TAL CUAL y no
+  // ofrece nada que no esté ahí. Un texto más largo que el tope no se guarda
+  // (conserva el actual): recortarlo podría dejar un precio a medias.
+  for (const [k, max] of [
+    ["voice_lead_product", VOICE_LEAD_PRODUCT_MAX],
+    ["voice_lead_offer", VOICE_LEAD_OFFER_MAX],
+  ] as const) {
+    if (input[k] === undefined) continue;
+    const v = clean(input[k]);
+    if (v === null || v.length <= max) patch[k] = v;
+  }
+
   const cycle = intField(
     input.confirmation_cycle_days,
     CONFIRMATION_CYCLE_MIN_DAYS,
@@ -603,4 +716,151 @@ export async function storeVisionCreds(
     anthropicApiKey: decryptOrNull(row?.anthropic_api_key_enc ?? null),
     anthropicModel: row?.anthropic_model ?? null,
   };
+}
+
+/**
+ * ¿El agente de leads llama desde un número PROPIO? Sin TELNYX_LEADS_FROM_NUMBER
+ * sale con TELNYX_FROM_NUMBER, el de Reproprovincia, y uno con los mismos
+ * dígitos es el mismo número aunque esté escrito distinto. Solo sí/no: la
+ * página llega al navegador y los números no.
+ */
+export function leadVoiceOwnNumber(leadsFrom: string | undefined, mainFrom: string | undefined): boolean {
+  const digits = (v: string | undefined) => (v ?? "").replace(/\D/g, "");
+  const own = digits(leadsFrom);
+  return own !== "" && own !== digits(mainFrom);
+}
+
+// ── Campañas que se pueden elegir para el agente de leads (MOM §33) ─────────
+
+/** Una campaña de Meta en la lista de casillas del agente de leads. */
+export interface LeadVoiceCampaignOption {
+  id: string;
+  name: string | null;
+  /** Leads de la tienda de los últimos `LEAD_VOICE_CAMPAIGN_DAYS` días que vienen de ella. */
+  leads: number;
+}
+
+/** Una fila de `meta_ads`, lo justo para pasar de anuncio a campaña. */
+export interface LeadVoiceCampaignAd {
+  ad_id: string | null;
+  campaign_id: string | null;
+  campaign_name: string | null;
+}
+
+export const LEAD_VOICE_CAMPAIGN_DAYS = 30;
+export const LEAD_VOICE_CAMPAIGN_TOP = 20;
+
+/**
+ * La lista de casillas: las campañas con más leads, y DESPUÉS las ya elegidas
+ * que no quedaron arriba, aunque no tengan leads. Que una elegida falte de la
+ * lista no es un detalle visual: su casilla no viajaría al guardar y la
+ * tarjeta la quitaría sin que nadie la desmarcara.
+ */
+export function leadVoiceCampaignOptions(
+  leadAdIds: readonly string[],
+  ads: readonly LeadVoiceCampaignAd[],
+  selected: readonly string[],
+): LeadVoiceCampaignOption[] {
+  const campaignOf = new Map<string, string>();
+  const names = new Map<string, string>();
+  for (const a of ads) {
+    const id = a.campaign_id?.trim();
+    if (!id) continue;
+    if (a.ad_id) campaignOf.set(a.ad_id, id);
+    const name = a.campaign_name?.trim();
+    if (name && !names.has(id)) names.set(id, name);
+  }
+  const counts = new Map<string, number>();
+  for (const adId of leadAdIds) {
+    const id = campaignOf.get(adId);
+    if (id) counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  const option = (id: string): LeadVoiceCampaignOption => ({
+    id,
+    name: names.get(id) ?? null,
+    leads: counts.get(id) ?? 0,
+  });
+  const top = [...counts.keys()]
+    .map(option)
+    .sort((a, b) => b.leads - a.leads || (a.name ?? a.id).localeCompare(b.name ?? b.id))
+    .slice(0, LEAD_VOICE_CAMPAIGN_TOP);
+  const shown = new Set(top.map((o) => o.id));
+  const extra = voiceLeadCampaignIds(selected)
+    .filter((id) => !shown.has(id))
+    .map(option);
+  return [...top, ...extra];
+}
+
+const CAMPAIGN_PAGE = 1000;
+const CAMPAIGN_CHUNK = 200;
+
+/**
+ * Las campañas de Meta de las que llegaron leads a la tienda en los últimos
+ * 30 días, para elegir las del piloto. `meta_ads` no tiene lectura por RLS
+ * (0034): va con la llave de servicio, y los anuncios salen de los leads de
+ * la propia tienda, así que no se ve nada ajeno.
+ *
+ * Nunca falla: si una lectura falla, la lista queda con las ya elegidas (sin
+ * conteo) para que guardar la tarjeta no las borre.
+ */
+export async function loadLeadVoiceCampaigns(
+  admin: SupabaseClient,
+  storeId: string,
+  selected: readonly string[],
+  now: Date,
+): Promise<LeadVoiceCampaignOption[]> {
+  const since = new Date(now.getTime() - LEAD_VOICE_CAMPAIGN_DAYS * 86_400_000).toISOString();
+  let leadAdIds: string[] = [];
+  let ads: LeadVoiceCampaignAd[] = [];
+  try {
+    for (let from = 0; ; from += CAMPAIGN_PAGE) {
+      const { data, error } = await admin
+        .from("leads")
+        .select("id, ad_id")
+        .eq("store_id", storeId)
+        .not("ad_id", "is", null)
+        .gte("first_seen_at", since)
+        .order("id")
+        .range(from, from + CAMPAIGN_PAGE - 1);
+      if (error) throw new Error(error.message);
+      const rows = (data ?? []) as { ad_id: string | null }[];
+      for (const r of rows) if (r.ad_id) leadAdIds.push(r.ad_id);
+      if (rows.length < CAMPAIGN_PAGE) break;
+    }
+    const unique = [...new Set(leadAdIds)];
+    const parts: string[][] = [];
+    for (let i = 0; i < unique.length; i += CAMPAIGN_CHUNK) parts.push(unique.slice(i, i + CAMPAIGN_CHUNK));
+    const batches = await Promise.all(
+      parts.map(async (part) => {
+        const { data, error } = await admin.from("meta_ads").select("ad_id, campaign_id, campaign_name").in("ad_id", part);
+        if (error) throw new Error(error.message);
+        return (data ?? []) as LeadVoiceCampaignAd[];
+      }),
+    );
+    ads = batches.flat();
+  } catch {
+    // Un conteo a medias diría que una campaña tiene menos leads de los que
+    // tiene: mejor ninguno.
+    leadAdIds = [];
+    ads = [];
+  }
+
+  // El nombre de las elegidas que no aparecieron por sus leads (una campaña
+  // apagada, o elegida antes de traer leads). Sin nombre igual se listan.
+  const known = new Set(ads.map((a) => a.campaign_id).filter(Boolean));
+  const missing = voiceLeadCampaignIds(selected).filter((id) => !known.has(id));
+  if (missing.length) {
+    try {
+      const { data, error } = await admin
+        .from("meta_ads")
+        .select("ad_id, campaign_id, campaign_name")
+        .in("campaign_id", missing)
+        .not("campaign_name", "is", null)
+        .limit(CAMPAIGN_PAGE);
+      if (!error) ads = [...ads, ...((data ?? []) as LeadVoiceCampaignAd[])];
+    } catch {
+      // Sin nombre: la casilla sale con el id, que es lo que se guarda.
+    }
+  }
+  return leadVoiceCampaignOptions(leadAdIds, ads, selected);
 }

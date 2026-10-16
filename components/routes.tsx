@@ -1285,7 +1285,7 @@ function RouteClosePanel({
                         type="button"
                         disabled={disabled}
                         onClick={() => {
-                          if (!confirm(`¿Las ${plural(b.stops.length, "caja", "cajas")} ya ${b.stops.length === 1 ? "está" : "están"} en la oficina? Salen de la caja del motorizado y vuelven a «por asignar», también los rechazados.`)) return;
+                          if (!confirm(`¿Las ${plural(b.stops.length, "caja", "cajas")} ya ${b.stops.length === 1 ? "está" : "están"} en la oficina? Salen de la caja del motorizado y vuelven a «por asignar», también los rechazados; una caja reemplazada por otra salida vuelve a stock.`)) return;
                           onRun(() => receiveRouteReturns(routeId));
                         }}
                         className={BTN_LINK}

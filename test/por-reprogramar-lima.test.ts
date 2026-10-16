@@ -401,7 +401,7 @@ describe("las piezas en el código", () => {
     // sigue distinguiendo el reintento de otro courier (test/gf-own-retry.test.ts).
     expect(body).toContain("${REPROGRAM_QUEUE_FILTER}");
     expect(body).toContain("isRetryAdmission(order.macro_stage, order.macro_substage, order.operational_status)");
-    expect(body).toContain("activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : outputsBlockingRetry(outputs), fillable?.id ?? null)");
+    expect(body).toContain("activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : outputsBlockingRetry(outputs, replacedIds), fillable?.id ?? null)");
     expect(body).toContain("const needsExistingBox = !review && !retry && !own && order.macro_substage !== \"por_generar_rotulo\"");
     expect(body).toContain("failedOutput: retry ? lastFailedOutput(outputs) : null");
   });
@@ -444,7 +444,7 @@ describe("las piezas en el código", () => {
     // La v1.21 (adelanto mínimo de Agencia, #KP134162) y la v1.22 (Swayp que
     // no entrega) vinieron después; lo que se vigila aquí es que el MOM
     // documente la v1.19.
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.25");
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.30");
     const mom = read("docs/mom/master-pedidos-v1.md");
     expect(mom).toContain("#### Lo que Tanders no entrega también es «Por reprogramar Lima» (v1.19, 29-09-2026)");
     expect(mom).toContain("**Crear la guía directa no es reprogramar (v1.19, 29-09-2026).**");

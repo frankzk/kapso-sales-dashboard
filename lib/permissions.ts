@@ -48,6 +48,17 @@ export const PERMISSIONS = [
   // de la misma familia que darlo por bueno, y venía incluido en el rol `admin`
   // —catorce personas— sin que nadie lo hubiera decidido.
   "shalom.override_payment_validation",
+  // Comprobantes electrónicos por RUC (MOM §35.7, 14-10-2026): dar de alta un
+  // RUC con su token de SimpleFact, cambiar su modo, su «Emitir desde» y su
+  // tope, asignarle cuentas de cobro, registrar un comprobante emitido fuera de
+  // Kapta, pedir un reintento y liberar un `en_duda`. Es dinero y es fiscal:
+  // pasar un RUC a «Real» o darle una cuenta decide qué empresa paga el
+  // impuesto de qué venta, y una boleta que llegó a SUNAT no se borra. Por eso
+  // no cae bajo `stores.manage` —que Ajustes pide además— y se concede persona
+  // por persona: solo el dueño. En modo Real emite solo el barrido; en modo
+  // Manual, quien tiene este permiso emite pedido por pedido con «Emitir esta
+  // boleta» (decisión del owner, 15-10-2026, MOM §35.7): es mandar a SUNAT.
+  "invoices.manage",
   // Costos
   "costs.manage",
   // Grupo GF Courier: contratos, tarifas, clientes y parámetros operativos.
@@ -111,6 +122,11 @@ export const PERMISSIONS = [
   // plata por adelantado—, y un envío desafortunado no se retira: se reporta, y
   // los reportes le cuestan la plantilla a toda la tienda.
   "recovery.contact",
+  // «Repro Lima» (MOM §9.5, 13-10-2026): llamar al cliente de Lima con entrega
+  // fallida y dejar el acuerdo, que Kapta programa en Grupo GF. Es de quien
+  // llama —la Asesora— y de quien despacha: permiso propio para que el rol
+  // «Asesora» lo traiga sin traer Despacho del día (`dispatch.manage`).
+  "repro_lima.manage",
   // Registro de motorizados: alta/edición de la ficha y vínculo con un usuario
   // para dar acceso a /reparto. Vive en Equipo (owner/admin). El alta rápida por
   // nombre desde Liquidaciones sigue bajo settlements.manage.
@@ -133,6 +149,14 @@ export const PERMISSIONS = [
   // vendedora la necesita para trabajar: ve en pantalla lo que gestiona. Viene
   // con owner y admin; a una vendedora de confianza se le concede en Equipo.
   "data.export",
+  // Lo que hasta el 12-10-2026 se preguntaba como «¿es owner o admin?» en el
+  // código, en vez de pedir un permiso (MOM §16). Vienen con owner y admin, así
+  // que para ellos nada cambia; existen para que el rol «Administración» o
+  // «Supervisión» los dé sin hacer admin a nadie.
+  "team.manage", // Equipo: invitar y quitar vendedoras y solo lectura, tiendas por persona, horarios, motorizados
+  "stores.manage", // Tiendas: conectar, ajustes, ciclo de confirmación y procesos masivos de la tienda
+  "stock.manage", // Stock Swayp y Fénix: cargar, mover e importar inventario
+  "reports.view", // Consolidado, panel de cada tienda y productividad de todo el equipo
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -140,6 +164,215 @@ export type Permission = (typeof PERMISSIONS)[number];
 export function isPermission(value: string): value is Permission {
   return (PERMISSIONS as readonly string[]).includes(value);
 }
+
+// ---------------------------------------------------------------------------
+// Glosario de Equipo (13-10-2026, MOM §16). Cada permiso con el nombre que se
+// lee en pantalla, lo que deja hacer en una línea y el área donde vive. Los
+// nombres los aprobó el dueño: «Registrar comprobantes» no decía que era subir
+// el Yape, y tres permisos se llamaban «liquidaciones» sin decir cuál era cuál.
+// Un nombre por permiso y sin repetir (lo fija una prueba).
+// ---------------------------------------------------------------------------
+
+/** Cómo se llama cada permiso en Equipo: verbo y objeto, sin jerga interna. */
+export const PERMISSION_LABEL: Record<Permission, string> = {
+  "master.edit": "Gestionar pedidos",
+  "master.override_status": "Corregir pedidos cerrados",
+  "master.import_report": "Subir reportes de couriers",
+  "warehouse.prepare": "Preparar paquetes",
+  "dispatch.manage": "Despachar",
+  "dispatch.pickup": "Entregar la caja al motorizado",
+  "closure.return": "Recibir devoluciones",
+  "closure.inventory": "Reingresar al inventario",
+  "closure.finance": "Conciliar el dinero del pedido",
+  "closure.finalize": "Cerrar o reabrir pedidos",
+  "closure.refund": "Confirmar reembolsos",
+  "shalom.register_payment": "Subir comprobantes",
+  "payments.validate": "Validar pagos",
+  "shalom.validate_payment": "Validar pagos (permiso antiguo)",
+  "shalom.reveal_pickup_key": "Ver la clave de recojo",
+  "shalom.view_pickup_key": "Registrar claves de recojo",
+  "shalom.override_payment_validation": "Corregir pagos",
+  "invoices.manage": "Boletas y facturas",
+  "costs.manage": "Editar costos",
+  "logistics.manage": "Administrar Grupo GF",
+  "aliclik.create_guide": "Crear guías de Aliclik",
+  "aliclik.cancel_guide": "Anular guías de Aliclik",
+  "aliclik.manage_catalog": "Editar el catálogo de Aliclik",
+  "tanders.create_guide": "Crear guías de Tanders",
+  "shalom.create_guide": "Crear guías de Shalom",
+  "swayp.solve_novelty": "Responder novedades de Swayp",
+  "tanders.review_payment": "Aprobar cobros de Tanders rechazados",
+  "settlements.manage": "Subir liquidaciones de motorizados",
+  "settlements.close": "Cerrar liquidaciones de motorizados",
+  "sheets.edit": "Cuadrar hojas de couriers",
+  "sheets.manage": "Configurar hojas de couriers",
+  "routes.manage": "Armar rutas",
+  "routes.deliver": "Reportar su propia ruta",
+  "routes.report_others": "Reportar entregas por un motorizado",
+  "alerts.repeated_voucher": "Alerta de comprobante repetido",
+  "recovery.contact": "Escribir a clientas con devolución",
+  "repro_lima.manage": "Reprogramar entregas en Lima",
+  "riders.manage": "Dar de alta motorizados",
+  "leads.map_ads": "Asignar producto a anuncios",
+  "orders.create": "Crear pedidos en Shopify",
+  "data.export": "Descargar la base de pedidos",
+  "team.manage": "Gestionar el equipo",
+  "stores.manage": "Administrar tiendas",
+  "stock.manage": "Manejar stock de Swayp y Fénix",
+  "reports.view": "Ver reportes del negocio",
+};
+
+/** Lo que deja hacer cada permiso, en una línea que se lee sin pasar el ratón. */
+export const PERMISSION_HELP: Record<Permission, string> = {
+  "master.edit": "Confirmar, cambiar el estado, comentar, crear salidas y corregir vínculos, en el Master y en Repro Provincia.",
+  "master.override_status": "Cambiar un pedido que ya está entregado, anulado o devuelto. Pide un motivo.",
+  "master.import_report": "Subir el archivo del courier que actualiza el estado de las guías.",
+  "warehouse.prepare": "Escanear el paquete y dejarlo listo para despacho.",
+  "dispatch.manage": "El Despacho del día: armar cajas, verificarlas en oficina, asignar motorizado y sacar paquetes.",
+  "dispatch.pickup": "Escanear la caja cuando el motorizado se la lleva.",
+  "closure.return": "Registrar que el paquete volvió a la oficina.",
+  "closure.inventory": "Devolver el producto al inventario o darlo por perdido (merma).",
+  "closure.finance": "Marcar que el cobro y el costo del courier cuadran, observar diferencias y pedir indemnizaciones a Aliclik.",
+  "closure.finalize": "Dar un pedido por terminado o reabrirlo.",
+  "closure.refund": "Confirmar que el reembolso a la clienta ya se hizo.",
+  "shalom.register_payment": "Adjuntar el Yape o la transferencia al pedido. No lo da por bueno: eso es validar.",
+  "payments.validate": "Confirmar que el dinero llegó a la cuenta.",
+  "shalom.validate_payment": "Nombre anterior de «Validar pagos». Ya no se concede.",
+  "shalom.reveal_pickup_key": "Ver la clave de Shalom cuando el pedido está pagado completo. Queda registrado quién la vio.",
+  "shalom.view_pickup_key": "Guardar o reemplazar la clave de recojo de Shalom y verla siempre.",
+  "shalom.override_payment_validation": "Pasar un pago a otro pedido o forzar su estado.",
+  "invoices.manage": "Configurar los RUC de SimpleFact, asignarles cuentas, emitir boletas en modo Manual y registrar las emitidas fuera de Kapta.",
+  "costs.manage": "Costos de producto, tarifas y gastos adicionales.",
+  "logistics.manage": "Tarifas, clientes, pago de motorizados y exceso de efectivo del Grupo GF.",
+  "aliclik.create_guide": "Crear la guía en Aliclik. Sale de verdad hacia el courier.",
+  "aliclik.cancel_guide": "Anular una guía de Aliclik dentro del plazo que da el courier.",
+  "aliclik.manage_catalog": "Vincular cada producto de la tienda con el suyo en Aliclik. Sin eso no se crean guías.",
+  "tanders.create_guide": "Crear la guía en Tanders. Sale de verdad hacia el courier.",
+  "shalom.create_guide": "Crear la guía en Shalom. No da acceso a la clave de recojo.",
+  "swayp.solve_novelty": "Decirle al mensajero de Swayp si reintenta, reprograma o devuelve el paquete.",
+  "tanders.review_payment": "Destrabar un comprobante de Tanders que el lector marcó como sospechoso, por ejemplo un Yape a otra cuenta.",
+  "settlements.manage": "Cargar la liquidación de un motorizado y corregir sus vínculos.",
+  "settlements.close": "Congelar lo que se le paga al motorizado. No se deshace.",
+  "sheets.edit": "En Liquidaciones 2, llenar celdas y resolver las observaciones del cuadre.",
+  "sheets.manage": "Las hojas, columnas y equivalencias de estado de Liquidaciones 2.",
+  "routes.manage": "Armar la ruta del día de cada motorizado y asignársela.",
+  "routes.deliver": "Reportar sus propias paradas desde el celular. Es del motorizado.",
+  "routes.report_others": "Marcar entregado o no entregado en nombre del motorizado, con evidencia y motivo.",
+  "alerts.repeated_voucher": "Recibir el aviso urgente cuando el mismo comprobante aparece en dos pedidos.",
+  "recovery.contact": "Enviar el WhatsApp que ofrece reenviar un pedido devuelto con adelanto.",
+  "repro_lima.manage": "Llamar al cliente de Lima cuya entrega falló y dejar el acuerdo. Kapta lo programa en Grupo GF.",
+  "riders.manage": "Crear la ficha del motorizado y darle acceso a su ruta en el celular.",
+  "leads.map_ads": "Decir qué producto vende cada anuncio de Meta, para ordenar la cola de leads.",
+  "orders.create": "Crear un pedido desde Kapta. Se crea de verdad en la tienda de Shopify.",
+  "data.export": "Descargar en Excel o CSV el Master de Pedidos, con nombres y teléfonos de las clientas.",
+  "team.manage": "Invitar y quitar vendedoras, darles tiendas y fijar sus horarios.",
+  "stores.manage": "Conectar Shopify, los ajustes de cada tienda y su ciclo de confirmación.",
+  "stock.manage": "Cargar, mover e importar el inventario de los almacenes de Swayp y Fénix.",
+  "reports.view": "Consolidado, panel de cada tienda y productividad de todo el equipo.",
+};
+
+/**
+ * Dónde vive cada permiso, en el orden en que se leen en Equipo. Cada permiso
+ * está en un área y solo en una (lo fija una prueba).
+ */
+export const PERMISSION_AREAS = [
+  {
+    key: "pedidos",
+    label: "Pedidos",
+    permissions: ["master.edit", "master.override_status", "orders.create", "master.import_report", "data.export"],
+  },
+  {
+    key: "pagos",
+    label: "Pagos y claves de recojo",
+    permissions: [
+      "shalom.register_payment",
+      "payments.validate",
+      "shalom.validate_payment",
+      "shalom.override_payment_validation",
+      "tanders.review_payment",
+      "alerts.repeated_voucher",
+      // Una boleta sale de un pago validado y de la cuenta que lo recibió (§35.2).
+      "invoices.manage",
+      "shalom.reveal_pickup_key",
+      "shalom.view_pickup_key",
+    ],
+  },
+  {
+    key: "guias",
+    label: "Guías y couriers",
+    permissions: [
+      "aliclik.create_guide",
+      "tanders.create_guide",
+      "shalom.create_guide",
+      "aliclik.cancel_guide",
+      "swayp.solve_novelty",
+      "recovery.contact",
+      "repro_lima.manage",
+      "aliclik.manage_catalog",
+    ],
+  },
+  {
+    key: "despacho",
+    label: "Almacén y despacho",
+    permissions: ["warehouse.prepare", "dispatch.manage", "dispatch.pickup", "stock.manage", "logistics.manage"],
+  },
+  {
+    key: "rutas",
+    label: "Rutas y motorizados",
+    permissions: ["routes.manage", "routes.report_others", "routes.deliver", "riders.manage"],
+  },
+  {
+    key: "cierre",
+    label: "Devoluciones y cierre del pedido",
+    permissions: ["closure.return", "closure.inventory", "closure.finance", "closure.finalize", "closure.refund"],
+  },
+  {
+    key: "liquidaciones",
+    label: "Liquidaciones",
+    permissions: ["settlements.manage", "settlements.close", "sheets.edit", "sheets.manage"],
+  },
+  {
+    key: "administracion",
+    label: "Administración",
+    permissions: ["team.manage", "stores.manage", "costs.manage", "leads.map_ads", "reports.view"],
+  },
+] as const satisfies readonly { key: string; label: string; permissions: readonly Permission[] }[];
+
+/**
+ * Los permisos de una lista, repartidos por área y en su orden. Las áreas sin
+ * ninguno no salen.
+ */
+export function groupByArea<T extends { permission: Permission }>(
+  items: readonly T[],
+): { key: string; label: string; items: T[] }[] {
+  const byPermission = new Map(items.map((item) => [item.permission, item]));
+  return PERMISSION_AREAS.map((area) => ({
+    key: area.key,
+    label: area.label,
+    items: area.permissions.flatMap((permission) => {
+      const item = byPermission.get(permission);
+      return item ? [item] : [];
+    }),
+  })).filter((area) => area.items.length > 0);
+}
+
+/** El acceso de cada persona (`memberships.role`), dicho como se lee en Equipo. */
+export const ACCESS_LABEL: Record<string, string> = {
+  owner: "Dueño",
+  admin: "Admin",
+  vendedora: "Vendedora",
+  viewer: "Solo lectura",
+  motorizado: "Motorizado",
+};
+
+/** Qué significa cada acceso, para la guía de Equipo. */
+export const ACCESS_HELP: Record<string, string> = {
+  owner: "Todo, también confirmar reembolsos. Es quien reparte roles y los permisos de dinero y datos.",
+  admin: "Todo menos confirmar reembolsos y los permisos que se dan uno por uno.",
+  vendedora: "Sin roles, el paquete de siempre de la vendedora. Con roles, solo lo de sus roles.",
+  viewer: "Mira pedidos, filtros e historial. No cambia nada.",
+  motorizado: "Solo su ruta, desde el celular.",
+};
 
 /**
  * Permisos por rol.
@@ -173,45 +406,68 @@ export function isPermission(value: string): value is Permission {
 export const GRANTED_ONE_BY_ONE = [
   {
     permission: "routes.report_others",
-    label: "Reportar entregas de rutas",
-    description: "Registrar entregas o no entregas por un motorizado, con evidencia y motivo. No permite cerrar liquidaciones.",
+    label: PERMISSION_LABEL["routes.report_others"],
+    description: `${PERMISSION_HELP["routes.report_others"]} No cierra liquidaciones.`,
     lastOneMatters: false,
+    // Operativo: un admin lo puede conceder.
+    ownerOnly: false,
   },
   {
     permission: "payments.validate",
-    label: "Validar pagos",
+    label: PERMISSION_LABEL["payments.validate"],
     /** Lo que se le dice a quien concede, no el nombre técnico. */
-    description: "Dar por bueno un comprobante y el dinero que representa.",
+    description: PERMISSION_HELP["payments.validate"],
     /** Sin nadie con este permiso, la cola de validación se queda parada. */
     lastOneMatters: true,
+    /** Dinero: solo el dueño lo da o lo quita (lib/team.ts, MOM §16). */
+    ownerOnly: true,
   },
   {
     permission: "shalom.override_payment_validation",
-    label: "Corregir pagos",
-    description: "Mover un pago al pedido correcto o forzar su estado.",
+    label: PERMISSION_LABEL["shalom.override_payment_validation"],
+    description: PERMISSION_HELP["shalom.override_payment_validation"],
     lastOneMatters: true,
+    ownerOnly: true,
   },
   {
     permission: "alerts.repeated_voucher",
-    label: "Alerta de comprobante repetido",
-    description: "Recibir la alerta urgente cuando un mismo comprobante aparece en más de un pedido.",
+    label: PERMISSION_LABEL["alerts.repeated_voucher"],
+    description: PERMISSION_HELP["alerts.repeated_voucher"],
     /** Sin nadie que la reciba, un pago cobrado dos veces vuelve a pasar en silencio. */
     lastOneMatters: true,
+    ownerOnly: true,
+  },
+  {
+    permission: "invoices.manage",
+    label: PERMISSION_LABEL["invoices.manage"],
+    description: PERMISSION_HELP["invoices.manage"],
+    /**
+     * Sin nadie con este permiso el barrido sigue emitiendo con lo configurado,
+     * pero nadie puede apagar un RUC, liberar un `en_duda` ni registrar una
+     * boleta hecha a mano: emisión sin nadie al volante (MOM §35.4).
+     */
+    lastOneMatters: true,
+    // Cada boleta es impuesto de una empresa y no se borra (MOM §35.7).
+    ownerOnly: true,
   },
   {
     permission: "logistics.manage",
-    label: "Administrar Grupo GF Courier",
-    description: "Gestionar clientes, tarifas y parámetros del operador logístico.",
+    label: PERMISSION_LABEL["logistics.manage"],
+    description: PERMISSION_HELP["logistics.manage"],
     lastOneMatters: false,
+    // Tarifas, pago de motorizados y exceso de efectivo (§29.9): es dinero.
+    ownerOnly: true,
   },
   {
     permission: "data.export",
-    label: "Exportar datos",
-    description: "Descargar en Excel o CSV el Master de Pedidos, los pedidos y el resumen diario. Viene con dueño y admin.",
+    label: PERMISSION_LABEL["data.export"],
+    description: `${PERMISSION_HELP["data.export"]} Viene con dueño y admin.`,
     lastOneMatters: false,
     // Owner y admin ya exportaban: quitárselo no es lo que se pidió. La casilla
     // está para concedérselo a una vendedora concreta (08-10-2026).
     withAdminRole: true,
+    // La base de clientes entera: la concede el dueño.
+    ownerOnly: true,
   },
 ] as const satisfies readonly {
   permission: Permission;
@@ -220,6 +476,8 @@ export const GRANTED_ONE_BY_ONE = [
   lastOneMatters: boolean;
   /** Viene con el rol admin y además tiene casilla en Equipo para los demás roles. */
   withAdminRole?: boolean;
+  /** Solo el dueño lo da o lo quita: dinero o datos (12-10-2026, MOM §16). */
+  ownerOnly: boolean;
 }[];
 
 const ONE_BY_ONE: ReadonlySet<string> = new Set(
@@ -284,6 +542,8 @@ const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
     // Recuperar una devolución es gestión de venta, que es su trabajo: la misma
     // persona que llamaría a esa clienta es la que manda el mensaje.
     "recovery.contact",
+    // Lo mismo con el cliente de Lima que no recibió: lo llama y deja el acuerdo.
+    "repro_lima.manage",
     // Coordinar el reparto es operativo, no financiero: arma la ruta del día.
     "routes.manage",
     // Generar el pedido ES su trabajo: la vendedora cierra la venta por teléfono
@@ -298,6 +558,125 @@ const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
   // no toca liquidaciones — la suya la cierra el coordinador.
   motorizado: ["routes.deliver"],
 };
+
+/**
+ * Roles que se acumulan (12-10-2026, MOM §16): cada uno es el paquete de
+ * permisos de una función de la operación, y una persona puede tener varios.
+ * Viven en `membership_roles`, encima del acceso de `memberships.role`.
+ *
+ * Reglas:
+ *  - Los permisos de todos sus roles se SUMAN, más las concesiones puntuales,
+ *    menos las revocaciones puntuales (que siguen ganando siempre).
+ *  - Quien tiene acceso «vendedora» y al menos un rol recibe SOLO lo de sus
+ *    roles: el paquete «vendedora» es el de quien aún no tiene roles. Si no,
+ *    darle «Almacén» a una vendedora no le quitaría nada de lo que no usa.
+ *  - Ningún rol trae los permisos de dinero o datos que da el dueño uno por
+ *    uno (`GRANTED_ONE_BY_ONE[].ownerOnly`): lo fija una prueba.
+ *  - Solo el dueño asigna roles (lib/team.ts).
+ */
+export const FUNCTIONAL_ROLES = [
+  {
+    role: "asesora",
+    label: "Asesora",
+    description: "Para quien confirma y vende: gestiona pedidos, sube comprobantes, crea guías y pedidos, recupera devoluciones y llama a los clientes de Repro Lima.",
+    permissions: [
+      "master.edit",
+      "shalom.register_payment",
+      "shalom.reveal_pickup_key",
+      "aliclik.create_guide",
+      "tanders.create_guide",
+      "shalom.create_guide",
+      "swayp.solve_novelty",
+      "recovery.contact",
+      "repro_lima.manage",
+      "orders.create",
+      "closure.return",
+    ],
+  },
+  {
+    role: "almacen",
+    label: "Almacén",
+    description: "Para quien arma paquetes: los deja listos, recibe devoluciones y las reingresa al inventario.",
+    permissions: ["master.edit", "warehouse.prepare", "closure.return", "closure.inventory"],
+  },
+  {
+    role: "despacho",
+    label: "Despacho y Grupo GF",
+    description: "Para quien despacha: cajas del día, rutas, entrega al motorizado, reportes de couriers y stock de Swayp y Fénix.",
+    permissions: [
+      "master.edit",
+      "master.import_report",
+      "warehouse.prepare",
+      "dispatch.manage",
+      "dispatch.pickup",
+      "repro_lima.manage",
+      "routes.manage",
+      "routes.report_others",
+      // «Motorizados» vive en Equipo, que es de Administración: sin Equipo,
+      // este permiso no tendría dónde usarse.
+      "stock.manage",
+      "closure.return",
+      "aliclik.create_guide",
+      "tanders.create_guide",
+      "shalom.create_guide",
+    ],
+  },
+  {
+    role: "liquidaciones",
+    label: "Liquidaciones",
+    description: "Para quien cuadra el dinero: liquidaciones de motorizados, hojas de couriers y conciliación de cada pedido.",
+    permissions: ["master.edit", "settlements.manage", "settlements.close", "sheets.edit", "closure.finance"],
+  },
+  {
+    role: "cobranza",
+    label: "Cobranza",
+    description: "Para quien cobra sin ser asesora: sube comprobantes, maneja las claves de recojo y aprueba cobros de Tanders rechazados.",
+    permissions: ["master.edit", "shalom.register_payment", "shalom.reveal_pickup_key", "shalom.view_pickup_key", "tanders.review_payment"],
+  },
+  {
+    role: "supervision",
+    label: "Supervisión",
+    description: "Para quien corrige y cierra: pedidos cerrados, cerrar o reabrir pedidos, anular guías de Aliclik y ver los reportes.",
+    permissions: [
+      "master.edit",
+      "master.override_status",
+      "closure.finalize",
+      "closure.return",
+      "closure.inventory",
+      "aliclik.cancel_guide",
+      "reports.view",
+    ],
+  },
+  {
+    role: "administracion",
+    label: "Administración",
+    description: "Para quien administra: equipo, tiendas, costos, stock, catálogo de Aliclik, anuncios, hojas y reportes.",
+    permissions: [
+      "master.edit",
+      "master.import_report",
+      "team.manage",
+      "stores.manage",
+      "stock.manage",
+      "costs.manage",
+      "aliclik.manage_catalog",
+      "sheets.manage",
+      "riders.manage",
+      "leads.map_ads",
+      "reports.view",
+    ],
+  },
+] as const satisfies readonly {
+  role: string;
+  label: string;
+  description: string;
+  permissions: readonly Permission[];
+}[];
+
+export type FunctionalRole = (typeof FUNCTIONAL_ROLES)[number]["role"];
+
+export function isFunctionalRole(value: string): value is FunctionalRole {
+  return FUNCTIONAL_ROLES.some((entry) => entry.role === value);
+}
 
 /** Concesión o revocación explícita para un usuario concreto. */
 export interface PermissionGrant {
@@ -314,10 +693,18 @@ export interface PermissionGrant {
 export function permissionsFor(
   roles: readonly string[],
   grants: readonly PermissionGrant[] = [],
+  /** Roles acumulables (`membership_roles`). */
+  functionalRoles: readonly string[] = [],
 ): Set<Permission> {
   const out = new Set<Permission>();
+  const functions = FUNCTIONAL_ROLES.filter((entry) => functionalRoles.includes(entry.role));
   for (const role of roles) {
+    // Con roles asignados, el paquete «vendedora» no suma: manda lo de sus roles.
+    if (role === "vendedora" && functions.length) continue;
     for (const p of ROLE_PERMISSIONS[role] ?? []) out.add(p);
+  }
+  for (const entry of functions) {
+    for (const p of entry.permissions) out.add(p);
   }
   const hasNewPaymentGrant = grants.some((grant) => grant.permission === "payments.validate");
   for (const g of grants) {
@@ -340,8 +727,57 @@ export function hasPermission(
   roles: readonly string[],
   permission: Permission,
   grants: readonly PermissionGrant[] = [],
+  functionalRoles: readonly string[] = [],
 ): boolean {
-  return permissionsFor(roles, grants).has(permission);
+  return permissionsFor(roles, grants, functionalRoles).has(permission);
+}
+
+/** De dónde le viene un permiso a una persona. */
+export type PermissionSource =
+  | { kind: "access"; role: string }
+  | { kind: "function"; role: FunctionalRole }
+  | { kind: "grant" };
+
+/**
+ * Lo que puede hacer una persona y POR QUÉ: cada permiso con sus orígenes (su
+ * acceso, cada rol que lo trae, una concesión uno por uno) y aparte lo que se le
+ * quitó a mano aunque un rol se lo diera. El conjunto sale de `permissionsFor`,
+ * así que la explicación no puede contradecir lo que la persona puede hacer.
+ */
+export function explainPermissions(
+  roles: readonly string[],
+  grants: readonly PermissionGrant[] = [],
+  functionalRoles: readonly string[] = [],
+): { granted: { permission: Permission; sources: PermissionSource[] }[]; revoked: Permission[] } {
+  const effective = permissionsFor(roles, grants, functionalRoles);
+  const functions = FUNCTIONAL_ROLES.filter((entry) => functionalRoles.includes(entry.role));
+  const accessRoles = roles.filter((role) => !(role === "vendedora" && functions.length));
+  const granted = PERMISSIONS.filter((permission) => effective.has(permission)).map((permission) => {
+    const sources: PermissionSource[] = [];
+    for (const role of accessRoles) {
+      if ((ROLE_PERMISSIONS[role] ?? []).includes(permission)) sources.push({ kind: "access", role });
+    }
+    for (const entry of functions) {
+      if ((entry.permissions as readonly Permission[]).includes(permission)) sources.push({ kind: "function", role: entry.role });
+    }
+    const byGrant = grants.some(
+      (grant) =>
+        grant.granted !== false &&
+        (grant.permission === permission ||
+          // El nombre histórico sigue habilitando la bandeja (ver `permissionsFor`).
+          (permission === "payments.validate" && grant.permission === "shalom.validate_payment")),
+    );
+    if (byGrant) sources.push({ kind: "grant" });
+    return { permission, sources };
+  });
+  const fromBundles = permissionsFor(roles, [], functionalRoles);
+  const revoked = PERMISSIONS.filter(
+    (permission) =>
+      fromBundles.has(permission) &&
+      !effective.has(permission) &&
+      grants.some((grant) => grant.permission === permission && grant.granted === false),
+  );
+  return { granted, revoked };
 }
 
 /**
@@ -365,8 +801,9 @@ export function canOperateGroupGf(can: (permission: Permission) => boolean): boo
 export function isReadOnly(
   roles: readonly string[],
   grants: readonly PermissionGrant[] = [],
+  functionalRoles: readonly string[] = [],
 ): boolean {
-  return !hasPermission(roles, "master.edit", grants);
+  return !hasPermission(roles, "master.edit", grants, functionalRoles);
 }
 
 /** Etiqueta legible del rol, para la cabecera del panel. */

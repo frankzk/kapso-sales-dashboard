@@ -46,12 +46,41 @@ describe("los días de despacho Swayp", () => {
     expect(firstSwaypDispatchDay("2026-10-10")).toBe("2026-10-12");
     expect(swaypDispatchDayOptions("2026-10-10", 1)[0]!.label.startsWith("Mañana")).toBe(false);
   });
+
+  it("sin `lastDay`, las mismas 24 fechas de siempre", () => {
+    const opts = swaypDispatchDayOptions("2026-10-12");
+    expect(opts).toHaveLength(24);
+    expect(swaypDispatchDayOptions("2026-10-12", 24, undefined)).toEqual(opts);
+    expect(swaypDispatchDayOptions("2026-10-12", 24, null)).toEqual(opts);
+    expect(opts.at(-1)!.value).toBe("2026-11-09");
+  });
+
+  it("con `lastDay`, todos los días de despacho hasta ese día inclusive (Repro Lima: 60 días)", () => {
+    // Lunes 12-10-2026: de mar 13/10 a vie 11/12, sin sus 8 domingos.
+    const opts = swaypDispatchDayOptions("2026-10-12", undefined, "2026-12-11");
+    expect(opts).toHaveLength(52);
+    expect(opts[0]).toEqual({ value: "2026-10-13", label: expect.stringMatching(/^Mañana · /) });
+    expect(opts.at(-1)!.value).toBe("2026-12-11");
+    expect(opts.every((o) => isSwaypDispatchDay(o.value))).toBe(true);
+    // vie 20/11 (39 días): más allá de las 24 fechas de siempre.
+    expect(opts.map((o) => o.value)).toContain("2026-11-20");
+    expect(swaypDispatchDayOptions("2026-10-12").map((o) => o.value)).not.toContain("2026-11-20");
+  });
+
+  it("un `lastDay` que no es fecha usa las 24 de siempre; antes de mañana no ofrece nada; nunca más de un año", () => {
+    expect(swaypDispatchDayOptions("2026-10-12", 24, "abc")).toEqual(swaypDispatchDayOptions("2026-10-12"));
+    expect(swaypDispatchDayOptions("2026-10-12", 24, "")).toEqual(swaypDispatchDayOptions("2026-10-12"));
+    expect(swaypDispatchDayOptions("2026-10-12", 24, "2026-10-12")).toEqual([]);
+    const far = swaypDispatchDayOptions("2026-10-12", 24, "9999-12-31");
+    expect(far.at(-1)!.value <= "2027-10-13").toBe(true);
+  });
 });
 
 describe("todas las puertas lo aplican", () => {
   it("el servidor rechaza el domingo en la guía directa, la guía manual y el reenvío", () => {
     const actions = read("app/dashboard/envios/actions.ts");
-    expect(actions).toContain("if (!isSwaypDispatchDay(dispatchDay)) return { error: SWAYP_SUNDAY_ERROR };");
+    // La guía directa se emite en lib/swayp-directa.ts desde el 13-10-2026.
+    expect(read("lib/swayp-directa.ts")).toContain("if (!isSwaypDispatchDay(dispatchDay)) return { error: SWAYP_SUNDAY_ERROR };");
     expect(actions).toContain("if (!isSwaypDispatchDay(input.nextFollowupAt)) return { error: SWAYP_SUNDAY_ERROR };");
     expect(read("lib/swayp-reenvio.ts")).toContain("if (!isSwaypDispatchDay(input.nextFollowupAt)) return { error: SWAYP_SUNDAY_ERROR };");
     // «Cliente confirma» por Swayp emite la guía nueva con esa fecha.

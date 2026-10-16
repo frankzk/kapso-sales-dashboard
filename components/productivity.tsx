@@ -1,7 +1,10 @@
 import type { ReactNode } from "react";
 import { cn } from "@/components/ui";
 import { Badge } from "@/components/ops-ui";
-import { ProductivityTable } from "@/components/productivity-table";
+import { Change, Figure } from "@/components/figures";
+import { ProductivityTable, type ProductivityPeriod, type ProductivityWeek } from "@/components/productivity-table";
+
+export type { ProductivityPeriod, ProductivityWeek };
 import { ProductivityFilters, type PeriodLink } from "@/components/productivity-filters";
 import type { DateRange } from "@/lib/access";
 import type { MonthPace, MonthView } from "@/lib/productivity-month";
@@ -33,7 +36,6 @@ export interface ProductivityMonth {
 }
 
 const nf = new Intl.NumberFormat("es-PE");
-const nf1 = new Intl.NumberFormat("es-PE", { maximumFractionDigits: 1 });
 
 function money(n: number, currency: string): string {
   return new Intl.NumberFormat("es-PE", { style: "currency", currency, maximumFractionDigits: 0 }).format(n);
@@ -110,6 +112,8 @@ export function ProductivityBoard({
   solo = false,
   month = null,
   months = [],
+  week = null,
+  period = null,
 }: {
   rows: AdvisorBoardRow[];
   prevTotals: ProductivityTotals;
@@ -134,6 +138,10 @@ export function ProductivityBoard({
   month?: ProductivityMonth | null;
   /** Los meses que se pueden elegir, del actual hacia atrás. */
   months?: { month: string; label: string }[];
+  /** La semana en curso contra la meta de cada persona (siempre lunes a domingo). */
+  week?: ProductivityWeek | null;
+  /** Con más de un día: cada día de cada asesora contra su meta (la franja por día). */
+  period?: ProductivityPeriod | null;
 }) {
   const totals = rows.reduce(
     (a, r) => ({
@@ -326,6 +334,8 @@ export function ProductivityBoard({
           initialOnlineIds={initialOnlineIds}
           solo={solo}
           periodLabel={periodLabel}
+          week={week}
+          period={period}
         />
       </section>
     </div>
@@ -333,43 +343,6 @@ export function ProductivityBoard({
 }
 
 /** Una celda del marco de cifras: etiqueta, cifra con su cambio y una línea. */
-function Figure({
-  label,
-  value,
-  delta,
-  sub,
-  className,
-}: {
-  label: string;
-  value: string;
-  delta?: ReactNode;
-  sub?: ReactNode;
-  className?: string;
-}) {
-  return (
-    <div className={cn("flex min-w-0 flex-col bg-white px-4 py-3", className)}>
-      <dt className="text-[13px] font-medium leading-5 text-ink-600">{label}</dt>
-      <dd className="mt-0.5 flex flex-wrap items-baseline gap-x-2">
-        <span className="text-xl font-semibold leading-7 tabular-nums text-ink-900">{value}</span>
-        {delta}
-      </dd>
-      {sub && <dd className="mt-0.5 text-pretty text-xs leading-4 text-ink-500">{sub}</dd>}
-    </div>
-  );
-}
-
-/** El cambio contra el periodo anterior, en su tono: sube en verde, baja en rojo. */
-function Change({ pct }: { pct: number | null }) {
-  if (pct === null) return <span className="text-xs font-medium text-ink-500">sin base</span>;
-  const tone = pct > 0 ? "text-ok-fg" : pct < 0 ? "text-crit-fg" : "text-ink-500";
-  return (
-    <span className={cn("text-[13px] font-semibold tabular-nums", tone)} title="Contra el periodo anterior">
-      {pct > 0 ? "+" : pct < 0 ? "−" : ""}
-      {nf1.format(Math.abs(pct))}{"\u00a0"}%
-    </span>
-  );
-}
-
 /**
  * Las líneas bajo las cifras en la vista por mes. En las de trabajo, la cifra
  * con la que se compara (solo con base del equipo). En cerrados e ingresos, el

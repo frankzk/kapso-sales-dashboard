@@ -491,4 +491,48 @@
 \ir migrations/0243_telnyx_webrtc_credentials.sql
 \echo 'Applying 0244_gf_same_day_cutoff_noon.sql'
 \ir migrations/0244_gf_same_day_cutoff_noon.sql
+\echo 'Applying 0245_advisor_schedules.sql'
+\ir migrations/0245_advisor_schedules.sql
+\echo 'Applying 0246_district_aliases_sin_de.sql'
+\ir migrations/0246_district_aliases_sin_de.sql
+\echo 'Applying 0247_voice_lead_calls.sql'
+\ir migrations/0247_voice_lead_calls.sql
+\echo 'Applying 0248_gf_replace_output.sql'
+\ir migrations/0248_gf_replace_output.sql
+\echo 'Applying 0249_shopify_client_app.sql'
+\ir migrations/0249_shopify_client_app.sql
+\echo 'Applying 0250_membership_roles.sql'
+\ir migrations/0250_membership_roles.sql
+\echo 'Applying 0251_lima_repro.sql'
+\ir migrations/0251_lima_repro.sql
+\echo 'Applying 0252_ltv_cohorts.sql'
+\ir migrations/0252_ltv_cohorts.sql
+\echo 'Applying 0253_swayp_pc_auto.sql'
+\ir migrations/0253_swayp_pc_auto.sql
+\echo 'Applying 0254_swayp_actividad_backfill.sql'
+\ir migrations/0254_swayp_actividad_backfill.sql
+\echo 'Applying 0255_restock_reminders.sql'
+\ir migrations/0255_restock_reminders.sql
+\echo 'Applying 0256_lima_open_counts.sql'
+\ir migrations/0256_lima_open_counts.sql
+\echo 'Applying 0257_invoices.sql'
+\ir migrations/0257_invoices.sql
+\echo 'Applying 0258_restock_reply_sweep.sql'
+\ir migrations/0258_restock_reply_sweep.sql
+\echo 'Applying 0260_invoices_hardening.sql'
+\ir migrations/0260_invoices_hardening.sql
+\echo 'Applying 0261_invoices_manual.sql'
+\ir migrations/0261_invoices_manual.sql
+\echo 'Applying 0262_invoices_claim_coverage.sql'
+\ir migrations/0262_invoices_claim_coverage.sql
+\echo 'Applying 0263_lead_insights_rollup_sin_llamar.sql'
+\ir migrations/0263_lead_insights_rollup_sin_llamar.sql
+\echo 'Applying 0264_order_master_sales_channel.sql'
+\ir migrations/0264_order_master_sales_channel.sql
+\echo 'Applying 0265_order_master_stale_urpi.sql'
+\ir migrations/0265_order_master_stale_urpi.sql
+\echo 'Applying 0266_order_master_dispatched_with.sql'
+\ir migrations/0266_order_master_dispatched_with.sql
+\echo 'Applying 0267_order_master_dispatch_scheduled_on.sql'
+\ir migrations/0267_order_master_dispatch_scheduled_on.sql
 \echo 'Done.'

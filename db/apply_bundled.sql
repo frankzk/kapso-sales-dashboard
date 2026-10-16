@@ -19825,3 +19825,3872 @@ update public.logistics_service_agreements a
 
 alter table public.logistics_providers
   alter column same_day_cutoff set default time '12:00';
+
+-- ---- 0245 ----
+-- ============================================================================
+-- 0245_advisor_schedules.sql — la meta de horas por semana y el horario de cada
+-- persona del equipo de venta, para Productividad.
+--
+-- DECISIÓN DEL OWNER (12-10-2026): con asesoras en remoto hace falta saber que
+-- cumplen su horario y sus horas de la semana (48 h). Se eligió:
+--
+--   * Las horas que cuentan son las ACTIVAS, las mismas que ya calcula
+--     Productividad: bloques entre la primera y la última acción, cortados en
+--     pausas de más de 45 minutos. No se registra la presencia.
+--   * Meta y horario POR PERSONA, editables en Equipo › Horarios.
+--   * En Productividad, la semana en curso contra la meta (columna y panel).
+--
+-- QUÉ GUARDA. Una fila por persona y organización:
+--
+--   * `weekly_hours`: la meta de la semana (48 por defecto).
+--   * `days`: los días que trabaja, ISO (1 = lunes … 7 = domingo); la meta se
+--     reparte por igual entre ellos.
+--   * `start_time` / `end_time`: el horario, opcional. Con horario, Productividad
+--     marca la primera actividad tarde y la última antes de la salida; sin él,
+--     solo compara horas.
+--
+-- Quien no tiene fila usa la meta por defecto (48 h, lunes a sábado, sin
+-- horario): así la columna dice algo desde el primer día.
+--
+-- Solo la leen y la escriben el servidor (`service_role`) tras comprobar el rol:
+-- la escribe un owner/admin desde Equipo y la lee Productividad, donde una
+-- vendedora solo recibe la suya.
+--
+-- Idempotente: correrla dos veces no cambia nada. Sin `begin`/`commit` propios,
+-- como el resto de migraciones: dentro del bundle concatenado cortarían el script.
+-- ============================================================================
+
+create table if not exists advisor_schedules (
+  org_id       uuid not null references organizations(id) on delete cascade,
+  user_id      uuid not null references auth.users(id) on delete cascade,
+  weekly_hours numeric(4,1) not null default 48
+               check (weekly_hours >= 0 and weekly_hours <= 84),
+  days         smallint[] not null default '{1,2,3,4,5,6}'
+               check (days <@ '{1,2,3,4,5,6,7}'::smallint[]),
+  start_time   time,
+  end_time     time,
+  updated_by   uuid references auth.users(id) on delete set null,
+  updated_at   timestamptz not null default now(),
+  primary key (org_id, user_id),
+  -- El horario va entero o no va: una entrada sin salida no se puede juzgar.
+  constraint advisor_schedules_window_ck check (
+    (start_time is null and end_time is null)
+    or (start_time is not null and end_time is not null and start_time < end_time)
+  )
+);
+
+comment on table advisor_schedules is
+  'Meta de horas por semana y horario de cada persona del equipo de venta (Productividad). Solo el servidor.';
+
+alter table advisor_schedules enable row level security;
+revoke all on advisor_schedules from anon, authenticated;
+grant all privileges on advisor_schedules to service_role;
+
+-- ---- 0246 ----
+-- ============================================================================
+-- 0246_district_aliases_sin_de.sql — los distritos que se escriben sin el «de»
+-- o pegados.
+--
+-- DECISIÓN DEL OWNER (12-10-2026, «Reprogramación en Lima»):
+--
+--   * «San Juan Lurigancho» es San Juan de Lurigancho, NUNCA Lurigancho-Chosica.
+--     Sin el «de» no era un alias, y la búsqueda dentro del texto encontraba el
+--     distrito oficial más corto con que terminaba el texto: «lurigancho».
+--   * «Pachamamac» es Pachacámac.
+--   * «Cercado delima» y «Cercado Lima» son Lima (Cercado).
+--   * Por lo mismo: «San Juan Miraflores» y «San Martín Porres».
+--
+-- QUÉ CAMBIA: solo `lima_district_aliases()`, con la misma firma y la lista de
+-- la 0081 íntegra más las filas nuevas. `lima_search_terms()` y
+-- `resolve_lima_district()` la leen al ejecutarse; ningún índice ni vista
+-- depende de ella. Es el mismo cambio que `DISTRICT_ALIASES` en
+-- `lib/order-coverage.ts`: las dos listas dicen lo mismo (MOM §9, grafías).
+--
+-- Huaraz (#KP130975) no es alias de nada: es Áncash y se corrige en la ficha
+-- con «Corregir ubicación».
+--
+-- Idempotente. Sin `begin`/`commit` propios, como el resto de migraciones.
+-- ============================================================================
+
+create or replace function lima_district_aliases()
+returns table(term text, district text)
+language sql
+immutable
+parallel safe
+as $$
+  values
+    ('agustino', 'el agustino'),
+    ('ate vitarte', 'ate'),
+    ('cercado', 'lima'),
+    ('cercado de lima', 'lima'),
+    ('cercado d elima', 'lima'),
+    ('cercado delima', 'lima'),
+    ('cercado lima', 'lima'),
+    ('carmen de la legua', 'carmen de la legua reynoso'),
+    ('chosica', 'lurigancho'),
+    ('colonial', 'lima'),
+    ('el cercado', 'lima'),
+    ('huachipa', 'lurigancho'),
+    ('jesus', 'jesus maria'),
+    ('la colonial', 'lima'),
+    ('lima cercado', 'lima'),
+    ('magdalena', 'magdalena del mar'),
+    ('molina', 'la molina'),
+    ('pachamamac', 'pachacamac'),
+    ('pantanos de villa', 'chorrillos'),
+    ('puente de piedra', 'puente piedra'),
+    ('s j l', 'san juan de lurigancho'),
+    ('s j m', 'san juan de miraflores'),
+    ('s m p', 'san martin de porres'),
+    ('san juan de lurigancho sjl', 'san juan de lurigancho'),
+    ('san juan lurigancho', 'san juan de lurigancho'),
+    ('san juan miraflores', 'san juan de miraflores'),
+    ('san martin de porras', 'san martin de porres'),
+    ('san martin porres', 'san martin de porres'),
+    ('sanjuan de lurigancho', 'san juan de lurigancho'),
+    ('sanjuan de miraflores', 'san juan de miraflores'),
+    ('sanjuan lurigancho', 'san juan de lurigancho'),
+    ('santa beatriz', 'lima'),
+    ('santa maria de huachipa', 'lurigancho'),
+    ('sjl', 'san juan de lurigancho'),
+    ('sjm', 'san juan de miraflores'),
+    ('smp', 'san martin de porres'),
+    ('surco', 'santiago de surco'),
+    ('surco viejo', 'santiago de surco'),
+    ('ves', 'villa el salvador'),
+    ('villa maria', 'villa maria del triunfo'),
+    ('vitarte', 'ate'),
+    ('vmt', 'villa maria del triunfo');
+$$;
+
+revoke all on function lima_district_aliases() from public, anon, authenticated;
+grant execute on function lima_district_aliases() to service_role;
+
+-- ---- 0247 ----
+-- ============================================================================
+-- 0247_voice_lead_calls.sql — agente de voz para leads, piloto Biru (MOM §33).
+--
+-- Un agente de ElevenLabs SEPARADO del de Reproprovincia llama a los leads de
+-- anuncio que conversaron con el bot, no compraron y ninguna asesora tocó. No
+-- crea pedidos: toma los datos y deja el lead en «Atender ahora», o anota por
+-- qué no compra, o agenda volver a llamar, o registra que no quiere llamadas.
+--
+-- Cuatro piezas, ningún estado nuevo del pedido:
+--   1. `voice_calls` aprende a qué llama (`purpose`): un pedido (lo de siempre)
+--      o un lead. Las de lead no tienen `order_id` y nunca lo tendrán, así
+--      ninguna lectura por pedido (cola, candado Swayp, panel del Master) las ve.
+--      Sus resultados son otros y se validan por carril.
+--   2. `leads.contact_opt_out_at`: la persona pidió no ser contactada. Ningún
+--      agente la vuelve a llamar y los envíos automáticos de WhatsApp la saltan.
+--   3. Ajustes por tienda `stores.voice_lead_*`, apagados por defecto.
+--   4. El candado del reintento automático Swayp (0209) deja de tomar el lock de
+--      la organización en cada llamada de lead: solo aplica a llamadas con pedido.
+--
+-- El grupo de control NO necesita tabla: va en `lead_experiments` (0144) con el
+-- experimento `agente_voz_leads_v1`, sorteado con su propia sal e independiente
+-- de `frio_cobertura_v1`.
+--
+-- Se aplica a mano ANTES del código (DEPLOY.md). Es idempotente.
+-- ============================================================================
+
+-- ── 1. voice_calls: pedido o lead ───────────────────────────────────────────
+alter table voice_calls
+  add column if not exists purpose text not null default 'order',
+  add column if not exists lead_id uuid references leads(id) on delete cascade,
+  -- Lo que el agente de leads recibió al marcar (nombre, producto, oferta, lo
+  -- que la persona escribió en el chat). Va aparte de `outcome_payload`, que
+  -- las tools reescriben enteras.
+  add column if not exists lead_context jsonb;
+
+alter table voice_calls alter column order_id drop not null;
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'voice_calls_purpose_check') then
+    alter table voice_calls add constraint voice_calls_purpose_check
+      check (purpose in ('order', 'lead'));
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'voice_calls_target_check') then
+    alter table voice_calls add constraint voice_calls_target_check check (
+      (purpose = 'order' and order_id is not null and lead_id is null)
+      or (purpose = 'lead' and lead_id is not null and order_id is null)
+    );
+  end if;
+end $$;
+
+-- Los resultados por carril. Los de pedido no cambian (§11.8). Los de lead son
+-- los de §33; `no_contesta` y `sin_resultado` son de los dos porque los
+-- escriben la línea y el barrido, que no distinguen. Un lead NUNCA usa
+-- `confirma`: es la marca que dispara la salida Swayp (`salidasSwaypPendientes`).
+alter table voice_calls drop constraint if exists voice_calls_outcome_check;
+alter table voice_calls add constraint voice_calls_outcome_check check (
+  outcome is null
+  or (purpose = 'order' and outcome in ('confirma', 'programar', 'no_contesta', 'cancela', 'sin_resultado'))
+  or (purpose = 'lead' and outcome in (
+    'atender_ahora', 'volver_a_llamar', 'no_compra', 'no_llamar', 'no_contesta', 'sin_resultado'
+  ))
+);
+
+create index if not exists voice_calls_lead_idx
+  on voice_calls(lead_id, queued_at desc) where lead_id is not null;
+
+comment on column voice_calls.purpose is
+  'MOM §33. order = agente de pedidos (§11.8, order_id); lead = agente de leads (lead_id). '
+  'Nunca se mezclan en topes, cola, tableros ni escrituras.';
+comment on column voice_calls.lead_id is
+  'MOM §33. El lead que llama el agente de leads. Solo con purpose = lead; ese agente no crea pedidos.';
+comment on column voice_calls.lead_context is
+  'MOM §33. Lo que el agente de leads recibió al marcar (ficha y chat). Se escribe una vez, al marcar.';
+
+-- ── 2. Pidió no ser contactado ──────────────────────────────────────────────
+alter table leads
+  add column if not exists contact_opt_out_at timestamptz;
+
+comment on column leads.contact_opt_out_at is
+  'MOM §33. La persona pidió no ser contactada (se lo dijo al agente de voz). Ningún agente la llama '
+  'y el drip y la secuencia de carritos la saltan. Una asesora todavía puede responderle si ella escribe.';
+
+-- ── 3. Ajustes por tienda ───────────────────────────────────────────────────
+alter table stores
+  add column if not exists voice_lead_enabled boolean not null default false,
+  add column if not exists voice_lead_auto boolean not null default false,
+  add column if not exists voice_lead_daily_cap integer not null default 40
+    check (voice_lead_daily_cap between 0 and 300),
+  add column if not exists voice_lead_max_attempts integer not null default 2
+    check (voice_lead_max_attempts between 1 and 4),
+  add column if not exists voice_lead_wait_minutes integer not null default 120
+    check (voice_lead_wait_minutes between 0 and 1440),
+  add column if not exists voice_lead_max_age_hours integer not null default 48
+    check (voice_lead_max_age_hours between 1 and 168),
+  add column if not exists voice_lead_holdout_pct integer not null default 50
+    check (voice_lead_holdout_pct between 0 and 90),
+  add column if not exists voice_lead_hour_start integer not null default 9
+    check (voice_lead_hour_start between 0 and 23),
+  add column if not exists voice_lead_hour_end integer not null default 20
+    check (voice_lead_hour_end between 1 and 24),
+  add column if not exists voice_lead_campaign_ids text[] not null default '{}',
+  add column if not exists voice_lead_product text,
+  add column if not exists voice_lead_offer text;
+
+comment on column stores.voice_lead_enabled is
+  'MOM §33. Habilita el agente de leads: su cola y el botón del drawer del lead. Apagado por defecto.';
+comment on column stores.voice_lead_auto is
+  'MOM §33. El barrido llama solo. Apagarlo es la marcha atrás sin perder el sorteo.';
+comment on column stores.voice_lead_holdout_pct is
+  'MOM §33. Porcentaje de los leads elegibles que van al grupo de control: el agente nunca los llama.';
+comment on column stores.voice_lead_campaign_ids is
+  'MOM §33. Campañas de Meta (campaign_id) cuyos leads llama el agente. Vacío = ninguna.';
+comment on column stores.voice_lead_offer is
+  'MOM §33. Precios y promociones que el agente puede decir, tal cual. Lo que no esté aquí no lo ofrece.';
+
+-- ── 4. El candado Swayp solo aplica a llamadas con pedido ───────────────────
+-- La función no cambia (0209). Con `order_id` nulo nunca levantaba el error,
+-- pero tomaba el lock de la organización que también toma
+-- `swayp_emission_claim`: cada llamada de lead se ponía en fila con Swayp.
+drop trigger if exists swayp_auto_voice_interlock on voice_calls;
+create trigger swayp_auto_voice_interlock before insert on voice_calls for each row
+  when (new.mode = 'real' and new.order_id is not null) execute function swayp_auto_voice_interlock();
+
+-- ---- 0248 ----
+-- ============================================================================
+-- 0248_gf_replace_output.sql — «Sacar con salida nueva»: el pedido vuelve a
+-- salir mientras el motorizado todavía tiene la caja que no entregó.
+--
+-- DECISIÓN DEL OWNER (12-10-2026, «Reprogramación en Lima»): un mismo pedido
+-- puede tener una salida «en devolución» sin devolver y otra saliendo. Johnny
+-- (Yhoni) y Roy traen lo no entregado al día siguiente; Alexis cada dos o tres
+-- días; de noche no se recibe nada. Si el pedido tiene que salir antes, Almacén
+-- arma otra caja desde stock con salida, QR y rótulo nuevos, y la caja anterior
+-- queda en devolución a nombre del motorizado hasta que la trae. Al recibirla,
+-- se desarma y vuelve a stock: no se reutiliza ni vuelve a la cola. Vale para
+-- cualquier motorizado con caja de Grupo GF. MOM §9.3, §29.13.
+--
+-- QUÉ CAMBIA:
+--
+--   0) `gf_output_replaced(salida)`: la salida se reemplazó por otra (tiene el
+--      evento `output_replaced`). Es la marca: la custodia `retorno` sola no
+--      basta, porque «Solicitar devolución» (§13) también la pone.
+--   a) `gf_replace_output`: la salida anterior (S01, «No entregado» en la caja
+--      del motorizado) pasa a custodia `retorno` y conserva todo lo demás —su
+--      parada, su ítem activo en la caja y `dispatched_at`—. La solicitud de
+--      Grupo GF pasa a la salida nueva (S02), aceptada y con su día. La S02 la
+--      crea Kapta antes de llamar (con su consecutivo, QR y rótulo); aquí solo
+--      se comprueba que es del mismo pedido y no salió. Se repite el tope de
+--      cinco salidas. Eventos `output_replaced` en el pedido, la caja y la
+--      solicitud.
+--   b) `gf_return_to_office` gana una rama «a stock» para la salida
+--      reemplazada (en `retorno`) y para la que ya consta devuelta pero sigue en
+--      la caja (la recepción de la Mesa de cierre no la saca): queda `devuelto`
+--      (conserva el `returned_at` que tuviera), conserva `dispatched_at` —salió
+--      de verdad, así que nunca vuelve a «Por despachar»— y NO vuelve a «por
+--      asignar». Escribe `return_received` (si no estaba), no
+--      `returned_to_office`, que `gf_order_departures` (0199) cuenta como salida
+--      del pedido. El resto de la función es la de la 0206, sin cambios.
+--   c) Trigger `delivery_stops_guard_replaced`: la parada de una salida
+--      reemplazada que el motorizado todavía tiene no cambia de estado. Si
+--      deshiciera su «No entregado», la parada volvería a `pendiente` y las
+--      funciones de custodia (`gf_withdraw_in_custody`, `gf_office_reclaim`,
+--      `gf_rider_decline`) la devolverían a la empresa: habría dos salidas vivas
+--      del mismo pedido. Bloquea también entregarla, soltarla de su salida o de
+--      su caja y borrarla. Es `security definer`: el motorizado puede escribir
+--      su parada directamente (política `delivery_stops_report`, 0066) sin
+--      poder leer `shipments`.
+--   d) `gf_carry_over` (0234) no pasa a la ruta siguiente del motorizado una
+--      salida reemplazada (`gf_output_replaced`; una en `retorno` por
+--      «Solicitar devolución» pasa como siempre). Bloquea primero los ítems y
+--      las cajas de todo el lote, en orden, y vuelve a leer con candado cada
+--      paquete antes de sacarlo de la caja anterior: un reemplazo o una
+--      recepción simultáneos no se pisan ni se bloquean en cruz. El resto de la
+--      función es la de la 0234.
+--   e) Trigger `dispatch_items_guard_replaced_route`: la salida nueva no entra
+--      en una caja del mismo motorizado y el mismo día que la parada de la caja
+--      reemplazada. La ruta del día tiene una parada por pedido
+--      (`delivery_stops`, único por ruta y pedido) y la custodia de toda la
+--      carga fallaría con un error confuso.
+--
+-- Aplicar a mano ANTES de desplegar el código (DEPLOY.md). Sin `begin`/`commit`
+-- propios, como el resto de migraciones. Idempotente.
+-- ============================================================================
+
+-- 0) La marca de la salida reemplazada ----------------------------------------
+
+create or replace function public.gf_output_replaced(p_shipment uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from order_events where shipment_id = p_shipment and kind = 'output_replaced'
+  );
+$$;
+
+revoke all on function public.gf_output_replaced(uuid) from public, anon, authenticated;
+grant execute on function public.gf_output_replaced(uuid) to service_role;
+
+-- a) Reemplazar la salida que el motorizado todavía tiene ----------------------
+
+create or replace function public.gf_replace_output(
+  p_item_id uuid,
+  p_new_shipment uuid,
+  p_request_id uuid,
+  p_scheduled_for date,
+  p_reason text,
+  p_actor uuid
+)
+returns jsonb
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_item dispatch_manifest_items%rowtype;
+  v_manifest dispatch_manifests%rowtype;
+  v_stop delivery_stops%rowtype;
+  v_old shipments%rowtype;
+  v_new shipments%rowtype;
+  v_req uuid;
+  v_prev text;
+  v_count int;
+  v_rider text;
+  v_old_code text;
+  v_new_code text;
+  v_note text;
+begin
+  -- Mismo orden de bloqueo que `gf_return_to_office`: ítem, caja, parada,
+  -- salida. Así las dos no se cruzan.
+  select * into v_item from dispatch_manifest_items where id = p_item_id for update;
+  if not found or v_item.removed_at is not null then
+    raise exception 'RECIBIDA: ya se recibió en oficina; tómalo con su misma salida.';
+  end if;
+  select * into v_manifest from dispatch_manifests where id = v_item.manifest_id for update;
+  if v_manifest.courier <> 'propio' then raise exception 'Solo para cajas de Grupo GF.'; end if;
+  select * into v_stop from delivery_stops
+    where shipment_id = v_item.shipment_id and dispatch_manifest_id = v_item.manifest_id
+    order by reported_at desc nulls last limit 1 for update;
+  if not found or v_stop.status <> 'no_entregado' then
+    raise exception 'Solo se saca con salida nueva un paquete reportado «No entregado».';
+  end if;
+
+  select * into v_old from shipments where id = v_item.shipment_id for update;
+  if v_old.custody_state = 'retorno' and not gf_output_replaced(v_old.id) then
+    raise exception 'La salida ya está en devolución (se pidió su retorno): no se saca con salida nueva.';
+  end if;
+  if v_old.custody_state = 'retorno' then
+    select s.output_code into v_prev
+      from order_events e join shipments s on s.id = (e.payload->>'replaced_by')::uuid
+     where e.kind = 'output_replaced' and e.shipment_id = v_old.id
+     order by e.occurred_at desc limit 1;
+    raise exception 'REPLACED:%', coalesce(v_prev, '');
+  end if;
+  if v_old.courier <> 'propio' or v_old.delivery_status <> 'pendiente'
+     or v_old.returned_at is not null or v_old.custody_state = 'devuelto' then
+    raise exception 'La salida ya no está «No entregado» con el motorizado.';
+  end if;
+
+  select * into v_new from shipments where id = p_new_shipment for update;
+  if not found or v_new.id = v_old.id or v_new.order_id is distinct from v_old.order_id
+     or v_new.courier <> 'propio' or v_new.delivery_status <> 'pendiente'
+     or v_new.custody_state is distinct from 'empresa' or v_new.dispatched_at is not null then
+    raise exception 'La salida nueva no corresponde a este pedido.';
+  end if;
+
+  -- La S02 ya existe: con ella, el pedido no puede pasar de cinco salidas.
+  select count(*) into v_count from shipments where order_id = v_old.order_id;
+  if v_count > 5 then raise exception 'TOPE: el pedido ya alcanzó el máximo de 5 salidas.'; end if;
+
+  v_rider := coalesce(v_manifest.driver_name, 'el motorizado');
+  v_old_code := coalesce(v_old.output_code, v_old.guide_code, 'La salida anterior');
+  v_new_code := coalesce(v_new.output_code, v_new.guide_code, 'una salida nueva');
+  v_note := v_old_code || ' sigue con ' || v_rider || ' (en devolución); el pedido sale con ' || v_new_code || '.';
+
+  update shipments set custody_state = 'retorno' where id = v_old.id;
+
+  -- La solicitud viva de la salida anterior pasa a la nueva. Si la anterior no
+  -- tenía (salió por el cuaderno o antes de las solicitudes), Kapta abrió una en
+  -- `accepting` y aquí se acepta.
+  update logistics_requests
+     set shipment_id = p_new_shipment, status = 'accepted', scheduled_for = p_scheduled_for,
+         observation = left(coalesce(p_reason, v_note), 300)
+   where shipment_id = v_old.id and status in ('accepted', 'scheduled', 'in_route')
+  returning id into v_req;
+  if v_req is null and p_request_id is not null then
+    update logistics_requests
+       set shipment_id = p_new_shipment, status = 'accepted', accepted_at = now(),
+           accepted_by = p_actor, scheduled_for = p_scheduled_for, observation = null
+     where id = p_request_id and status = 'accepting' and order_id = v_old.order_id
+    returning id into v_req;
+  end if;
+  if v_req is null then
+    raise exception 'El pedido no tiene solicitud de Grupo GF para la salida nueva.';
+  end if;
+
+  insert into logistics_request_events(request_id, kind, status, actor, note, payload)
+  values (v_req, 'output_replaced', 'accepted', p_actor, v_note,
+          jsonb_build_object('from', v_old.id, 'from_code', v_old.output_code,
+                             'to', p_new_shipment, 'to_code', v_new.output_code,
+                             'scheduled_for', p_scheduled_for));
+  insert into dispatch_events(org_id, manifest_id, shipment_id, actor, kind, payload)
+  values (v_manifest.org_id, v_item.manifest_id, v_old.id, p_actor, 'output_replaced',
+          jsonb_build_object('stop_id', v_stop.id, 'outcome_reason', v_stop.outcome_reason,
+                             'replaced_by', p_new_shipment, 'replaced_by_code', v_new.output_code));
+  if v_old.order_id is not null then
+    insert into order_events(store_id, order_id, kind, actor, source, courier, guide_code, shipment_id, reason, note, payload)
+    values (v_old.store_id, v_old.order_id, 'output_replaced', p_actor, 'dispatch', 'propio',
+            v_old.guide_code, v_old.id, v_stop.outcome_reason, v_note,
+            jsonb_build_object('replaced_by', p_new_shipment, 'replaced_by_code', v_new.output_code,
+                               'manifest_id', v_item.manifest_id, 'rider_id', v_manifest.rider_id,
+                               'route_date', v_manifest.route_date, 'stop_id', v_stop.id,
+                               'outcome_reason', v_stop.outcome_reason, 'request_id', v_req));
+  end if;
+
+  return jsonb_build_object('order_id', v_old.order_id, 'request_id', v_req,
+                            'old_code', v_old.output_code, 'new_code', v_new.output_code);
+end;
+$$;
+
+revoke all on function public.gf_replace_output(uuid, uuid, uuid, date, text, uuid) from public, anon, authenticated;
+grant execute on function public.gf_replace_output(uuid, uuid, uuid, date, text, uuid) to service_role;
+
+-- b) «Recibir en oficina» de la salida en devolución --------------------------
+-- El cuerpo es el de la 0206 más la rama de `retorno`, justo después de leer la
+-- salida.
+
+create or replace function public.gf_return_to_office(p_item_id uuid, p_actor uuid)
+returns uuid language plpgsql set search_path = public as $$
+declare
+  v_item dispatch_manifest_items%rowtype;
+  v_manifest dispatch_manifests%rowtype;
+  v_shipment shipments%rowtype;
+  v_stop delivery_stops%rowtype;
+  v_reason text;
+  v_rider text;
+  v_replaced boolean;
+  v_code text;
+begin
+  select * into v_item from dispatch_manifest_items where id = p_item_id for update;
+  if not found or v_item.removed_at is not null then raise exception 'Ese paquete ya no está en la caja.'; end if;
+  select * into v_manifest from dispatch_manifests where id = v_item.manifest_id for update;
+  if v_manifest.courier <> 'propio' then raise exception 'Solo para cajas de Grupo GF.'; end if;
+  select * into v_stop from delivery_stops
+    where shipment_id = v_item.shipment_id and dispatch_manifest_id = v_item.manifest_id
+    order by reported_at desc nulls last limit 1 for update;
+  if not found or v_stop.status <> 'no_entregado' then
+    raise exception 'Solo se recibe en oficina un paquete reportado «No entregado».';
+  end if;
+  select * into v_shipment from shipments where id = v_item.shipment_id for update;
+  v_rider := coalesce(v_manifest.driver_name, 'el motorizado');
+  v_reason := 'No entregado por ' || v_rider || coalesce(' (' || v_stop.outcome_reason || ')', '') || ': recibido en oficina';
+
+  -- A stock (0248): la salida reemplazada —el pedido ya salió con otra— y la
+  -- que ya consta devuelta pero sigue en la caja. Queda devuelta; no vuelve a
+  -- «por asignar» ni a la cola. Una en `retorno` sin reemplazo («Solicitar
+  -- devolución») sigue el camino de siempre.
+  v_replaced := gf_output_replaced(v_shipment.id);
+  if v_shipment.custody_state = 'devuelto' or v_shipment.returned_at is not null
+     or (v_shipment.custody_state = 'retorno' and v_replaced) then
+    v_code := coalesce(v_shipment.output_code, v_shipment.guide_code, 'La salida');
+    perform set_config('gf.withdraw', 'on', true);
+    update dispatch_manifest_items
+       set removed_at = now(), removed_by = p_actor,
+           removal_reason = left(case when v_replaced
+             then 'Salida reemplazada: recibida en oficina, vuelve a stock (' || v_rider || ')'
+             else 'Ya constaba devuelta: recibida en oficina, sale de la caja (' || v_rider || ')' end, 300)
+     where id = p_item_id;
+    perform set_config('gf.withdraw', 'off', true);
+
+    -- Conserva `dispatched_at`: salió de verdad y la devolución está probada.
+    -- Una recepción anterior conserva su sello.
+    update shipments
+       set custody_state = 'devuelto', returned_at = coalesce(returned_at, now()),
+           returned_by = coalesce(returned_by, p_actor), returned_source = coalesce(returned_source, 'manual')
+     where id = v_item.shipment_id;
+    -- Defensivo: la solicitud ya pasó a la salida nueva al reemplazarla.
+    update logistics_requests
+       set status = 'cancelled', observation = 'Salida devuelta recibida en oficina'
+     where shipment_id = v_item.shipment_id and status in ('accepted', 'scheduled');
+
+    insert into dispatch_events(org_id, manifest_id, shipment_id, actor, kind, payload)
+    values (v_manifest.org_id, v_item.manifest_id, v_item.shipment_id, p_actor, 'returned_to_office',
+            jsonb_build_object('stop_id', v_stop.id, 'outcome_reason', v_stop.outcome_reason, 'replaced', v_replaced, 'to_stock', true));
+    if v_shipment.order_id is not null and not exists (
+      select 1 from order_events where shipment_id = v_item.shipment_id and kind = 'return_received'
+    ) then
+      insert into order_events(store_id, order_id, kind, actor, source, courier, guide_code, shipment_id, reason, note, payload)
+      values (v_shipment.store_id, v_shipment.order_id, 'return_received', p_actor, 'dispatch', 'propio',
+              v_shipment.guide_code, v_item.shipment_id, v_stop.outcome_reason,
+              case when v_replaced
+                then v_code || ' recibida en oficina (' || v_rider
+                  || '): era la caja reemplazada. Desármala y devuelve el producto a stock; no se reprograma.'
+                else v_code || ' recibida en oficina (' || v_rider
+                  || '): ya constaba devuelta. Sale de la caja; no vuelve a «por asignar».' end,
+              jsonb_build_object('manifest_id', v_item.manifest_id, 'rider_id', v_manifest.rider_id,
+                                 'route_date', v_manifest.route_date, 'stop_id', v_stop.id, 'replaced', v_replaced));
+    end if;
+    return v_shipment.order_id;
+  end if;
+
+  perform set_config('gf.withdraw', 'on', true);
+  update dispatch_manifest_items
+     set removed_at = now(), removed_by = p_actor, removal_reason = left(v_reason, 300)
+   where id = p_item_id;
+  perform set_config('gf.withdraw', 'off', true);
+
+  -- Cualquier motivo, rechazo incluido: la caja vuelve a la empresa y la
+  -- solicitud queda aceptada para el siguiente intento.
+  update shipments
+     set custody_state = 'empresa', custody_transferred_at = null, custody_transferred_by = null, dispatched_at = null
+   where id = v_item.shipment_id;
+  update logistics_requests
+     set status = 'accepted', observation = left(v_reason, 300)
+   where shipment_id = v_item.shipment_id and status = 'scheduled';
+
+  insert into dispatch_events(org_id, manifest_id, shipment_id, actor, kind, payload)
+  values (v_manifest.org_id, v_item.manifest_id, v_item.shipment_id, p_actor, 'returned_to_office',
+          jsonb_build_object('stop_id', v_stop.id, 'outcome_reason', v_stop.outcome_reason));
+  if v_shipment.order_id is not null then
+    insert into order_events(store_id, order_id, kind, actor, source, courier, guide_code, shipment_id, reason, note, payload)
+    values (v_shipment.store_id, v_shipment.order_id, 'returned_to_office', p_actor, 'dispatch', 'propio',
+            v_shipment.guide_code, v_item.shipment_id, v_stop.outcome_reason,
+            v_reason || '. Vuelve a «por asignar».',
+            jsonb_build_object('manifest_id', v_item.manifest_id, 'rider_id', v_manifest.rider_id,
+                               'route_date', v_manifest.route_date, 'stop_id', v_stop.id));
+  end if;
+  return v_shipment.order_id;
+end;
+$$;
+
+revoke all on function public.gf_return_to_office(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.gf_return_to_office(uuid, uuid) to service_role;
+
+-- c) La parada de la salida en devolución no cambia ----------------------------
+
+-- `security definer`: el motorizado escribe su parada bajo RLS y no ve
+-- `shipments`; leída como él, la guarda no encontraría nada. Mira la salida de
+-- ANTES del cambio: soltar la parada de su salida (`shipment_id`) o de su caja
+-- también la sacaría de la guarda. Corregir la nota o el motivo sin cambiar el
+-- estado sí se puede.
+create or replace function public.gf_guard_replaced_stop()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if tg_op = 'UPDATE'
+     and new.status is not distinct from old.status
+     and new.shipment_id is not distinct from old.shipment_id
+     and new.dispatch_manifest_id is not distinct from old.dispatch_manifest_id then
+    return new;
+  end if;
+  if exists (
+    select 1 from shipments s
+     where s.id = old.shipment_id and s.courier = 'propio'
+       and s.custody_state = 'retorno' and s.returned_at is null
+  ) and gf_output_replaced(old.shipment_id) then
+    raise exception 'Este paquete ya salió con otra salida: no se entrega ni se reporta. Tráelo a la oficina.';
+  end if;
+  if tg_op = 'DELETE' then return old; end if;
+  return new;
+end;
+$$;
+
+revoke all on function public.gf_guard_replaced_stop() from public, anon, authenticated;
+
+-- `create or replace trigger` y no drop + create (como la 0204): atómico.
+create or replace trigger delivery_stops_guard_replaced
+  before update of status, shipment_id, dispatch_manifest_id or delete on public.delivery_stops
+  for each row
+  when (old.shipment_id is not null)
+  execute function public.gf_guard_replaced_stop();
+
+-- d) El traspaso del cuaderno no se lleva la caja reemplazada -----------------
+-- El cuerpo es el de la 0234 con una condición más sobre la salida.
+
+create or replace function public.gf_carry_over(
+  p_rider_id uuid,
+  p_to_date date,
+  p_shipment_ids uuid[],
+  p_actor uuid
+)
+returns uuid
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_rider riders%rowtype;
+  v_load uuid;
+  r record;
+  v_item_row dispatch_manifest_items%rowtype;
+  v_stop_row delivery_stops%rowtype;
+  v_custody text;
+  v_replaced int;
+  v_n int := 0;
+  v_reason text;
+  v_wanted int := (select count(distinct x) from unnest(p_shipment_ids) as x);
+begin
+  if v_wanted = 0 then raise exception 'No hay paquetes que pasar.'; end if;
+  select * into v_rider from riders where id = p_rider_id;
+  if not found then raise exception 'Motorizado no encontrado.'; end if;
+
+  -- 0248: los candados de todo el lote antes que nada, ítems y después cajas,
+  -- cada uno por id. `gf_replace_output` y `gf_return_to_office` toman ítem y
+  -- luego caja: así ninguna espera a la otra en cruz por dos ítems de la misma
+  -- caja. Las relecturas de cada paquete, abajo, vuelven a pedirlos.
+  perform 1 from dispatch_manifest_items
+   where shipment_id = any(p_shipment_ids) and removed_at is null
+   order by id for update;
+  perform 1 from dispatch_manifests
+   where id in (select manifest_id from dispatch_manifest_items
+                 where shipment_id = any(p_shipment_ids) and removed_at is null)
+   order by id for update;
+
+  for r in
+    select distinct on (sh.id)
+           sh.id shipment_id, sh.order_id, sh.store_id ship_store, sh.guide_code,
+           i.id item_id, i.store_id item_store, m.id old_manifest, m.org_id, m.route_date old_date, s.id old_stop
+      from unnest(p_shipment_ids) as x(shipment_id)
+      join shipments sh on sh.id = x.shipment_id
+           -- 0248: la caja reemplazada no pasa a otra ruta: vuelve a la oficina.
+           -- Su marca es el evento; `retorno` solo también es «Solicitar devolución».
+           and not (sh.custody_state = 'retorno' and public.gf_output_replaced(sh.id))
+      join orders o on o.id = sh.order_id and o.cancelled_at is null
+      join dispatch_manifest_items i on i.shipment_id = sh.id and i.removed_at is null
+      join dispatch_manifests m on m.id = i.manifest_id and m.rider_id = p_rider_id and m.courier = 'propio'
+           and m.state = 'in_custody' and m.route_date < p_to_date
+      join delivery_stops s on s.dispatch_manifest_id = m.id and s.shipment_id = sh.id
+           and s.status = 'no_entregado' and s.outcome_reason = 'reprogramado'
+     order by sh.id, s.reported_at desc nulls last
+  loop
+    if exists (select 1 from delivery_routes dr join delivery_stops ds on ds.route_id = dr.id
+                where dr.rider_id = p_rider_id and dr.route_date = p_to_date and ds.order_id = r.order_id) then
+      raise exception 'El pedido ya tiene parada en la ruta del %.', to_char(p_to_date, 'DD/MM');
+    end if;
+    if v_load is null then
+      v_load := public.gf_dispatch_load(r.org_id, p_rider_id, p_to_date, p_actor);
+      -- gf_dispatch_load devuelve la carga que Despacho esté armando para ese
+      -- día. Esa no se toca: pasarla a custodia sacaría su caja a medio cotejar.
+      if exists (select 1 from dispatch_manifest_items where manifest_id = v_load) then
+        raise exception 'Despacho está armando la carga de % del %: pasa los reprogramados cuando él la reciba.',
+          v_rider.full_name, to_char(p_to_date, 'DD/MM');
+      end if;
+    end if;
+    v_reason := 'Reprogramado el ' || to_char(r.old_date, 'DD/MM') || ': ' || v_rider.full_name
+             || ' se quedó con el paquete y sale en su ruta del ' || to_char(p_to_date, 'DD/MM') || ', ya cotejado.';
+
+    -- 0248: releído con candado, en el orden de `gf_replace_output` (ítem,
+    -- caja, parada, salida). La consulta del bucle se leyó antes de que un
+    -- «Sacar con salida nueva» o un «Recibir en oficina» simultáneo terminara
+    -- de cambiar el paquete, y el UPDATE de abajo no lo vería.
+    select * into v_item_row from dispatch_manifest_items where id = r.item_id for update;
+    if v_item_row.removed_at is not null then
+      raise exception 'Un paquete ya no está en la caja anterior: alguien lo recibió o lo movió. Vuelve a leer la hoja.';
+    end if;
+    perform 1 from dispatch_manifests where id = r.old_manifest for update;
+    select * into v_stop_row from delivery_stops where id = r.old_stop for update;
+    if v_stop_row.status <> 'no_entregado' or v_stop_row.outcome_reason is distinct from 'reprogramado' then
+      raise exception 'Un paquete ya no está reprogramado: vuelve a leer la hoja.';
+    end if;
+    select custody_state into v_custody from shipments where id = r.shipment_id for update;
+    if v_custody = 'retorno' and public.gf_output_replaced(r.shipment_id) then
+      raise exception 'Una caja ya salió con otra salida y vuelve a la oficina: no pasa a la ruta. Vuelve a leer la hoja.';
+    end if;
+
+    -- 1. Sale de la caja anterior: no volvió a la oficina, sigue con él.
+    perform set_config('gf.withdraw', 'on', true);
+    update dispatch_manifest_items
+       set removed_at = clock_timestamp(), removed_by = p_actor, removal_reason = left(v_reason, 300)
+     where id = r.item_id;
+    perform set_config('gf.withdraw', 'off', true);
+    insert into dispatch_events(org_id, manifest_id, shipment_id, actor, kind, payload)
+    values (r.org_id, r.old_manifest, r.shipment_id, p_actor, 'carried_over',
+            jsonb_build_object('stop_id', r.old_stop, 'to_route_date', p_to_date, 'to_manifest_id', v_load, 'reason', v_reason));
+    -- Un segundo antes de la custodia de la carga nueva: la señal del motorizado
+    -- que manda en el Master es la recepción (gfRiderSignal, mom-v1.14).
+    insert into order_events(store_id, order_id, kind, occurred_at, actor, source, courier, guide_code, shipment_id, reason, note, payload)
+    values (r.ship_store, r.order_id, 'package_removed', now() - interval '1 second', p_actor, 'dispatch', 'propio',
+            r.guide_code, r.shipment_id, 'reprogramado', v_reason,
+            jsonb_build_object('manifest_id', r.old_manifest, 'rider_id', p_rider_id, 'route_date', r.old_date,
+                               'carried_over', true, 'to_route_date', p_to_date, 'to_manifest_id', v_load));
+
+    -- 2. Entra en la carga del día, cotejada por oficina y por el motorizado:
+    --    él ya lo tiene, no hay nada que cotejar.
+    insert into dispatch_manifest_items(manifest_id, shipment_id, store_id, added_by,
+      office_checked_at, office_checked_by, pickup_checked_at, pickup_checked_by)
+    values (v_load, r.shipment_id, r.item_store, p_actor, clock_timestamp(), p_actor, clock_timestamp(), p_actor);
+    insert into dispatch_events(org_id, manifest_id, shipment_id, actor, kind, payload) values
+      (r.org_id, v_load, r.shipment_id, p_actor, 'package_added',
+       jsonb_build_object('source', 'grupo_gf_courier', 'riderId', p_rider_id, 'carried_from_manifest', r.old_manifest,
+                          'carried_from_date', r.old_date, 'note', v_reason)),
+      (r.org_id, v_load, r.shipment_id, p_actor, 'office_checked', jsonb_build_object('carried_over', true)),
+      (r.org_id, v_load, r.shipment_id, p_actor, 'pickup_checked', jsonb_build_object('carried_over', true));
+    v_n := v_n + 1;
+  end loop;
+
+  if v_n <> v_wanted then
+    select count(*) into v_replaced from shipments sh
+     where sh.id = any(p_shipment_ids) and sh.custody_state = 'retorno' and public.gf_output_replaced(sh.id);
+    raise exception 'Solo % de % paquetes son reprogramados que % conserva en una caja anterior.%', v_n, v_wanted, v_rider.full_name,
+      case when v_replaced > 0 then ' Una caja reemplazada por otra salida no pasa: vuelve a la oficina.' else '' end;
+  end if;
+  -- 3. La carga pasa a custodia: nacen las paradas pendientes de la ruta del día.
+  perform public.finalize_dispatch_manifest(v_load, p_actor);
+  return v_load;
+end;
+$$;
+revoke all on function public.gf_carry_over(uuid, date, uuid[], uuid) from public, anon, authenticated;
+grant execute on function public.gf_carry_over(uuid, date, uuid[], uuid) to service_role;
+
+-- e) La salida nueva no va en la ruta del mismo día que la caja reemplazada ----
+
+create or replace function public.gf_guard_replaced_same_route()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_manifest dispatch_manifests%rowtype;
+  v_order uuid;
+  v_code text;
+begin
+  select * into v_manifest from dispatch_manifests where id = new.manifest_id;
+  if not found or v_manifest.courier <> 'propio' or v_manifest.rider_id is null then return new; end if;
+  select order_id into v_order from shipments where id = new.shipment_id;
+  if v_order is null then return new; end if;
+  select coalesce(s.output_code, s.guide_code) into v_code
+    from delivery_routes dr
+    join delivery_stops ds on ds.route_id = dr.id
+    join shipments s on s.id = ds.shipment_id
+   where dr.org_id = v_manifest.org_id and dr.rider_id = v_manifest.rider_id
+     and dr.route_date = v_manifest.route_date and ds.order_id = v_order
+     and ds.shipment_id is distinct from new.shipment_id
+     and gf_output_replaced(ds.shipment_id)
+   limit 1;
+  if found then
+    raise exception 'Este pedido tiene su caja anterior (%) en la ruta de % del %: la salida nueva va con otro motorizado u otro día.',
+      coalesce(v_code, 'en devolución'), coalesce(v_manifest.driver_name, 'ese motorizado'), to_char(v_manifest.route_date, 'DD/MM');
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function public.gf_guard_replaced_same_route() from public, anon, authenticated;
+
+create or replace trigger dispatch_items_guard_replaced_route
+  before insert on public.dispatch_manifest_items
+  for each row
+  execute function public.gf_guard_replaced_same_route();
+
+-- ---- 0249 ----
+-- 0249_shopify_client_app.sql — la app de Shopify para tiendas cliente
+-- (MOM §29.15.1 y §29.15.9, plan clientes-externos-gf, Fase 1b).
+--
+-- QUÉ PASABA. Kapta tenía UNA app de Shopify, la de Aurela y Kenku, con
+-- distribución personalizada: no se puede instalar en una tienda ajena y nunca
+-- pasó la revisión pública de Shopify. Para conectar tiendas cliente se crea
+-- una segunda app, pública y oculta. La revisión exige tres cosas que Kapta no
+-- tenía: que la instalación empiece en Shopify sin escribir el dominio, que se
+-- atiendan los tres webhooks obligatorios de privacidad, y que la tienda quede
+-- desconectada cuando desinstala la app.
+--
+-- QUÉ CAMBIA.
+--   stores.shopify_app            con qué app se conectó la tienda: 'interna'
+--                                 (la de siempre) o 'clientes' (la nueva).
+--   stores.shopify_uninstalled_at cuándo desinstaló la app; la tienda queda
+--                                 deshabilitada y sin token (el estado
+--                                 'disabled' ya existía).
+--   shopify_pending_installs      el token que Shopify entrega al terminar el
+--                                 OAuth, guardado cifrado hasta que el dueño
+--                                 entra a Kapta y elige su organización. Vence.
+--   shopify_privacy_requests      cada aviso de privacidad recibido, verificado
+--                                 y guardado ANTES de responder 200: pendiente
+--                                 hasta que se atiende (anonimizar o entregar
+--                                 los datos), con fecha y nota.
+--
+-- Las dos tablas nuevas solo las toca el rol de servicio: RLS activa, sin
+-- políticas para usuarios y sin los privilegios que Supabase concede por
+-- defecto a anon y authenticated (DEPLOY.md §5m).
+
+alter table stores
+  add column if not exists shopify_app text not null default 'interna';
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'stores_shopify_app_check'
+  ) then
+    alter table stores
+      add constraint stores_shopify_app_check
+      check (shopify_app in ('interna', 'clientes'));
+  end if;
+end $$;
+
+alter table stores
+  add column if not exists shopify_uninstalled_at timestamptz;
+
+-- Una tienda de Shopify conectada con la app de clientes es UNA tienda de
+-- Kapta, en una sola organización: los avisos de privacidad llegan con el
+-- dominio, no con el id de Kapta, y tienen que caer en una sola tienda. La
+-- unicidad de siempre es por organización (0001) y no alcanza.
+create unique index if not exists stores_client_app_shop_uniq
+  on stores (lower(shopify_domain))
+  where shopify_app = 'clientes';
+
+comment on column stores.shopify_app is
+  'App de Shopify con la que se conectó: interna (Aurela y Kenku) o clientes (app pública para tiendas cliente, MOM §29.15.1).';
+comment on column stores.shopify_uninstalled_at is
+  'Cuándo la tienda desinstaló la app de Shopify. La tienda queda deshabilitada y sin token; su historial no se borra.';
+
+create table if not exists shopify_pending_installs (
+  id                uuid primary key default gen_random_uuid(),
+  shop_domain       text not null,
+  token_enc         text not null,
+  scope             text,
+  created_at        timestamptz not null default now(),
+  expires_at        timestamptz not null default now() + interval '30 minutes',
+  claimed_at        timestamptz,
+  claimed_store_id  uuid references stores(id) on delete set null,
+  claimed_by        uuid references auth.users(id) on delete set null,
+  check (shop_domain ~ '^[a-z0-9][a-z0-9-]*\.myshopify\.com$'),
+  check (expires_at > created_at)
+);
+
+create index if not exists shopify_pending_installs_shop_idx
+  on shopify_pending_installs(shop_domain, created_at desc);
+
+comment on table shopify_pending_installs is
+  'Token de una instalación de la app de clientes que todavía no tiene tienda en Kapta. Cifrado y con vencimiento; lo reclama un owner/admin desde /dashboard/conectar-shopify.';
+
+create table if not exists shopify_privacy_requests (
+  id            uuid primary key default gen_random_uuid(),
+  topic         text not null
+    check (topic in ('customers/data_request', 'customers/redact', 'shop/redact')),
+  shop_domain   text not null,
+  shop_id       text,
+  store_id      uuid references stores(id) on delete set null,
+  webhook_id    text not null,
+  payload       jsonb not null default '{}'::jsonb,
+  status        text not null default 'pendiente'
+    check (status in ('pendiente', 'atendida')),
+  received_at   timestamptz not null default now(),
+  processed_at  timestamptz,
+  note          text,
+  check (length(trim(webhook_id)) > 0),
+  check ((status = 'atendida') = (processed_at is not null))
+);
+
+create unique index if not exists shopify_privacy_requests_webhook_uniq
+  on shopify_privacy_requests(webhook_id);
+create index if not exists shopify_privacy_requests_pending_idx
+  on shopify_privacy_requests(status, received_at)
+  where status = 'pendiente';
+create index if not exists shopify_privacy_requests_store_idx
+  on shopify_privacy_requests(store_id, received_at desc);
+
+comment on table shopify_privacy_requests is
+  'Avisos de privacidad de Shopify (customers/data_request, customers/redact, shop/redact) de la app de clientes. Pendiente hasta que se anonimiza o se entregan los datos (MOM §29.15.9).';
+
+alter table shopify_pending_installs enable row level security;
+alter table shopify_privacy_requests enable row level security;
+
+revoke all on shopify_pending_installs from anon, authenticated;
+revoke all on shopify_privacy_requests from anon, authenticated;
+grant all privileges on shopify_pending_installs, shopify_privacy_requests to service_role;
+
+-- ---- 0250 ----
+-- ============================================================================
+-- 0250_membership_roles.sql — roles que se acumulan (MOM §16, 12-10-2026).
+--
+-- QUÉ ES. Hasta hoy cada persona tenía UN rol por organización
+-- (`memberships.role`: owner, admin, vendedora, viewer, motorizado). Doce
+-- personas eran admin para poder hacer una o dos cosas que la vendedora no
+-- traía, y con eso recibían unos cuarenta permisos que no usaban. Ahora, encima
+-- de ese acceso, una persona puede tener varios roles por función —Asesora,
+-- Almacén, Despacho y Grupo GF, Liquidaciones, Cobranza, Supervisión,
+-- Administración— y sus permisos se suman (lib/permissions.ts,
+-- `FUNCTIONAL_ROLES`).
+--
+-- Una fila por persona, organización y rol. Si la persona sale de la
+-- organización, sus roles se van con ella (la clave foránea a `memberships`).
+-- Solo el servidor escribe, y solo el dueño asigna (lib/team.ts).
+--
+-- `rider_pay_allowed` (0162) repite en SQL el mapa de rol a permiso para tres
+-- permisos —armar rutas, cerrar liquidaciones y costos—. Se le enseñan los
+-- roles nuevos con la misma regla que lib/permissions.ts: quien es vendedora y
+-- tiene roles recibe solo lo de sus roles. test/membership-roles.test.ts
+-- comprueba que las dos definiciones digan lo mismo.
+-- ============================================================================
+
+create table if not exists membership_roles (
+  user_id uuid not null,
+  org_id uuid not null,
+  role text not null check (role in ('asesora', 'almacen', 'despacho', 'liquidaciones', 'cobranza', 'supervision', 'administracion')),
+  granted_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  primary key (user_id, org_id, role),
+  foreign key (user_id, org_id) references memberships(user_id, org_id) on delete cascade
+);
+
+create index if not exists membership_roles_org_idx on membership_roles (org_id);
+
+comment on table membership_roles is
+  'Roles acumulables por persona y organización (MOM §16). Sus permisos se suman a los del acceso de memberships.role; los asigna solo el dueño desde Equipo.';
+
+alter table membership_roles enable row level security;
+
+-- Como `user_permissions`: cada quien ve los suyos, y owner/admin los de su
+-- organización para pintar Equipo.
+create policy membership_roles_select on membership_roles
+  for select to authenticated
+  using (user_id = auth.uid() or org_id in (select auth_admin_org_ids()));
+
+revoke all on membership_roles from anon, authenticated;
+grant select on membership_roles to authenticated;
+grant all privileges on membership_roles to service_role;
+
+create or replace function rider_pay_allowed(p_org uuid, p_actor uuid, p_permission text)
+returns boolean language sql stable set search_path = public as $$
+  select coalesce((select coalesce(
+    (select granted from user_permissions where org_id = p_org and user_id = p_actor and permission = p_permission),
+    m.role in ('owner', 'admin')
+    -- El paquete «vendedora» solo cuenta mientras la persona no tenga roles.
+    or (m.role = 'vendedora' and p_permission = 'routes.manage'
+        and not exists (select 1 from membership_roles r where r.org_id = p_org and r.user_id = p_actor))
+    or exists (
+      select 1 from membership_roles r
+      where r.org_id = p_org and r.user_id = p_actor and (
+           (p_permission = 'routes.manage' and r.role = 'despacho')
+        or (p_permission = 'settlements.close' and r.role = 'liquidaciones')
+        or (p_permission = 'costs.manage' and r.role = 'administracion'))))
+    from memberships m where m.org_id = p_org and m.user_id = p_actor), false);
+$$;
+
+-- ---- 0251 ----
+-- ============================================================================
+-- 0251_lima_repro.sql — «Repro Lima»: la tienda llama al cliente de Lima que no
+-- recibió su pedido, confirma fecha y courier, y Kapta programa la salida. Y la
+-- fecha que el cliente le pidió al motorizado queda guardada sin programar nada.
+--
+-- DECISIÓN DEL OWNER (12-10-2026, D1-D13; fase 1, entrega 1a; MOM §9.5, §11.4,
+-- §29.7): la fecha que el cliente da en la puerta se confirma con él antes de
+-- programarla, NUNCA de forma automática. Quien llama o despacha (en la app,
+-- `repro_lima.manage`: Asesora, Despacho y Grupo GF, admin, owner) atiende
+-- cada pedido de Lima en `en_curso / por_reprogramar_lima` desde una
+-- pantalla propia, con un candado de 10 minutos para que dos personas no llamen
+-- al mismo cliente. «Por decidir», «Llamar después», «Programados» y
+-- «Cerrados» son etiquetas de esa pantalla, no subetapas del Master: el
+-- resolver no lee nada de esto y `MOM_RESOLUTION_VERSION` no sube.
+--
+-- QUÉ CAMBIA:
+--
+--   a) `delivery_stops.requested_date`: la fecha que pidió el cliente
+--      (motorizado, coordinación o cuaderno). Es informativa: nunca programa.
+--      Solo existe en un «No entregado · Reprogramado» (CHECK); la escribe solo
+--      `writeStopReport`. Sin CHECK contra la fecha de hoy: el cuaderno se carga
+--      días después.
+--   b) `lima_repro_cases`: un caso ABIERTO por pedido (índice único parcial).
+--      Nace perezoso al primer gesto (tomar, llamar, decidir): sin trigger ni
+--      backfill. Guarda el episodio (el fallo de entrega que se está
+--      atendiendo, `episode_key` + `episode_at`), el candado, los contadores de
+--      llamadas, la próxima llamada y el acuerdo vigente (fecha, courier,
+--      cambios declarados, qué hacer con la caja). Se cierra con «Desarmar y
+--      cerrar», al salir de la etapa (`fuera_de_etapa`) o con un fallo nuevo
+--      (`nuevo_intento`).
+--   c) `lima_repro_calls`: cada llamada, append-only. Cuatro resultados
+--      (§11.4): confirma, llamar después, no contesta, no quiere. «Desarmar y
+--      cerrar» sin llamada es un `no_quiere` por el canal `sin_contacto`.
+--   d) `lima_repro_claim` y `lima_repro_record`: las dos únicas RPC. Tomar el
+--      caso (y abrirlo si no hay) y registrar una llamada son una transacción
+--      cada una, con candado de fila; el evento del pedido (`lima_repro_call`,
+--      `lima_repro_agreed`, `lima_repro_closed`) se escribe junto con la llamada.
+--      Kinds nuevos: nunca `call`, `confirmation_contact` ni `contact_attempt`,
+--      que consumen el cupo de confirmación.
+--
+-- Lecturas por tienda (`auth_store_ids()`); escrituras solo del servidor.
+-- Aplicar a mano ANTES del código (DEPLOY.md): sin la columna, `/reparto`
+-- carga la ruta vacía. Sin `begin`/`commit` propios, como el resto de
+-- migraciones. Idempotente.
+-- ============================================================================
+
+-- a) La fecha que pidió el cliente --------------------------------------------
+
+alter table public.delivery_stops add column if not exists requested_date date;
+
+comment on column public.delivery_stops.requested_date is
+  'Fecha que pidió el cliente (motorizado, coordinación o cuaderno). Informativa: nunca programa; la tienda la confirma en Repro Lima (MOM §9.5, §29.7). Solo la escribe writeStopReport.';
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'delivery_stops_requested_date_ck') then
+    alter table public.delivery_stops add constraint delivery_stops_requested_date_ck
+      check (requested_date is null or (status = 'no_entregado' and outcome_reason = 'reprogramado')) not valid;
+  end if;
+end $$;
+
+alter table public.delivery_stops validate constraint delivery_stops_requested_date_ck;
+-- Sin CHECK contra current_date: el cuaderno se carga días después.
+
+-- b) El caso ------------------------------------------------------------------
+
+create table if not exists public.lima_repro_cases (
+  id                uuid primary key default gen_random_uuid(),
+  store_id          uuid not null references public.stores(id) on delete cascade,
+  order_id          uuid not null references public.orders(id) on delete cascade,
+  -- El fallo que se atiende: la última parada «No entregado» y la salida
+  -- fallida. Un fallo nuevo es otro episodio y cierra el caso (`nuevo_intento`).
+  episode_key       text not null check (char_length(episode_key) between 3 and 160),
+  -- Cuándo pasó ese fallo. Decide qué episodio es el más nuevo.
+  episode_at        timestamptz not null,
+  opened_at         timestamptz not null default now(),
+  opened_by         uuid references auth.users(id) on delete set null,
+  claimed_by        uuid references auth.users(id) on delete set null,
+  claimed_until     timestamptz,
+  call_count        int not null default 0,
+  no_answer_count   int not null default 0,
+  last_call_at      timestamptz,
+  last_outcome      text check (last_outcome in ('confirma', 'llamar_despues', 'no_contesta', 'no_quiere')),
+  next_call_at      timestamptz,
+  -- El acuerdo vigente. `agreement_call_id` es a la vez el rastro (la llamada
+  -- que lo fijó) y la ficha de la escritura condicional que lo programa.
+  agreement_call_id uuid,
+  agreed_on         date,
+  agreed_courier    text check (agreed_courier in ('propio', 'tanders', 'fenix', 'urpi', 'axel')),
+  changes           jsonb not null default '{}'::jsonb check (jsonb_typeof(changes) = 'object'),
+  box_action        text check (box_action in (
+                      'mantener', 'reimprimir_misma_salida', 'salida_nueva_rearmar',
+                      'desarmar_rearmar', 'caja_nueva_stock', 'desarmar_cerrar')),
+  box_location      text check (box_location in ('con_motorizado', 'en_oficina', 'volviendo_courier', 'desconocida')),
+  decided_by        uuid references auth.users(id) on delete set null,
+  decided_at        timestamptz,
+  materialized_at   timestamptz,
+  materialized_on   date,
+  closed_at         timestamptz,
+  closed_by         uuid references auth.users(id) on delete set null,
+  close_reason      text check (close_reason in ('desarmar_cerrar', 'fuera_de_etapa', 'nuevo_intento')),
+  close_note        text check (close_note is null or char_length(close_note) <= 500),
+  updated_at        timestamptz not null default now(),
+  constraint lima_repro_cases_claim_pair check ((claimed_by is null) = (claimed_until is null)),
+  constraint lima_repro_cases_close_pair check ((closed_at is null) = (close_reason is null)),
+  constraint lima_repro_cases_closed_free check (closed_at is null or claimed_by is null),
+  constraint lima_repro_cases_agreement_whole check (
+    (agreement_call_id is null) = (agreed_on is null) and (agreed_on is null) = (agreed_courier is null)
+    and (agreed_on is null or (box_action is not null and decided_at is not null))),
+  constraint lima_repro_cases_mat_pair check ((materialized_at is null) = (materialized_on is null))
+);
+
+comment on table public.lima_repro_cases is
+  'Repro Lima (MOM §9.5): un caso abierto por pedido y episodio de «No entregado». Lleva el candado, la próxima llamada y el acuerdo vigente; nunca se reescribe por lo que haga Grupo GF después (la pantalla muestra la diferencia).';
+comment on column public.lima_repro_cases.episode_at is
+  'Momento del fallo que define el episodio: reported_at de la parada «No entregado» del episodio (la del último día de ruta; en el mismo día, la creada después), o el de la salida fallida; si no hay, opened_at. Un caso de otro episodio solo se cierra si el nuevo es posterior.';
+
+create unique index if not exists lima_repro_cases_open_uniq
+  on public.lima_repro_cases(order_id) where closed_at is null;
+create index if not exists lima_repro_cases_store_open_idx
+  on public.lima_repro_cases(store_id) where closed_at is null;
+create index if not exists lima_repro_cases_order_idx
+  on public.lima_repro_cases(order_id, opened_at desc);
+
+-- touch_updated_at() se define en 0004_leads.sql. `create or replace trigger`
+-- y no drop + create, como la 0248: atómico.
+create or replace trigger lima_repro_cases_touch before update on public.lima_repro_cases
+  for each row execute function public.touch_updated_at();
+
+-- c) Las llamadas (append-only) -----------------------------------------------
+
+create table if not exists public.lima_repro_calls (
+  id           uuid primary key default gen_random_uuid(),
+  case_id      uuid not null references public.lima_repro_cases(id) on delete cascade,
+  store_id     uuid not null references public.stores(id) on delete cascade,
+  order_id     uuid not null references public.orders(id) on delete cascade,
+  -- Un gesto de la pantalla = una llamada: un doble clic o un reintento de red
+  -- devuelve la misma fila.
+  operation_id uuid not null unique,
+  outcome      text not null check (outcome in ('confirma', 'llamar_despues', 'no_contesta', 'no_quiere')),
+  -- `sin_contacto`: «Desarmar y cerrar» sin llamada (solo con `no_quiere`).
+  channel      text not null check (channel in ('llamada', 'whatsapp', 'sin_contacto')),
+  next_call_at timestamptz,
+  agreed_on    date,
+  courier      text check (courier in ('propio', 'tanders', 'fenix', 'urpi', 'axel')),
+  changes      jsonb not null default '{}'::jsonb check (jsonb_typeof(changes) = 'object'),
+  box_action   text check (box_action in (
+                 'mantener', 'reimprimir_misma_salida', 'salida_nueva_rearmar',
+                 'desarmar_rearmar', 'caja_nueva_stock', 'desarmar_cerrar')),
+  box_location text check (box_location in ('con_motorizado', 'en_oficina', 'volviendo_courier', 'desconocida')),
+  note         text check (note is null or char_length(note) <= 1000),
+  actor        uuid references auth.users(id) on delete set null,
+  occurred_at  timestamptz not null default now(),
+  constraint lima_repro_calls_shape check (
+       (outcome = 'confirma' and agreed_on is not null and courier is not null and box_action is not null
+          and box_action <> 'desarmar_cerrar' and next_call_at is null)
+    or (outcome = 'llamar_despues' and next_call_at is not null and agreed_on is null and box_action is null)
+    or (outcome = 'no_contesta' and agreed_on is null and box_action is null)
+    -- `is not distinct from`: con `=` un box_action nulo daba NULL y el CHECK
+    -- lo dejaba pasar.
+    or (outcome = 'no_quiere' and box_action is not distinct from 'desarmar_cerrar' and agreed_on is null
+          and next_call_at is null and char_length(btrim(coalesce(note, ''))) >= 8)),
+  constraint lima_repro_calls_sin_contacto check (channel <> 'sin_contacto' or outcome = 'no_quiere')
+);
+
+comment on table public.lima_repro_calls is
+  'Repro Lima: cada llamada al cliente con su resultado (MOM §11.4). Append-only; el caso guarda solo lo vigente.';
+
+create index if not exists lima_repro_calls_case_idx
+  on public.lima_repro_calls(case_id, occurred_at desc);
+
+create or replace trigger lima_repro_calls_append_only before update or delete on lima_repro_calls
+  for each row execute function public.reject_mutation();
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'lima_repro_cases_agreement_fk') then
+    alter table public.lima_repro_cases add constraint lima_repro_cases_agreement_fk
+      foreign key (agreement_call_id) references public.lima_repro_calls(id);
+  end if;
+end $$;
+
+-- Lecturas por tienda; escrituras solo del servidor. Supabase concede todo a
+-- los tres roles al crear la tabla: sin el revoke, el grant no restringe nada.
+
+alter table public.lima_repro_cases enable row level security;
+alter table public.lima_repro_calls enable row level security;
+
+revoke all on public.lima_repro_cases from anon, authenticated, service_role;
+revoke all on public.lima_repro_calls from anon, authenticated, service_role;
+grant select on public.lima_repro_cases to authenticated;
+grant select on public.lima_repro_calls to authenticated;
+grant select, insert, update on public.lima_repro_cases to service_role;
+grant select, insert on public.lima_repro_calls to service_role;
+
+-- Sin `drop policy`: la herramienta que aplica migraciones en producción se
+-- queda esperando con cualquier `drop` (DEPLOY.md, 0248). Se crea si falta.
+do $$
+begin
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'lima_repro_cases'
+                   and policyname = 'lima_repro_cases_select') then
+    create policy lima_repro_cases_select on public.lima_repro_cases for select to authenticated
+      using (store_id in (select public.auth_store_ids()));
+  end if;
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'lima_repro_calls'
+                   and policyname = 'lima_repro_calls_select') then
+    create policy lima_repro_calls_select on public.lima_repro_calls for select to authenticated
+      using (store_id in (select public.auth_store_ids()));
+  end if;
+end $$;
+
+-- d1) Tomar el caso -----------------------------------------------------------
+--
+-- Abre el caso si no hay (D1) y entrega el candado por `p_ttl_minutes`. El
+-- candado solo vale dentro de Repro Lima: no bloquea a Grupo GF.
+--   · Caso abierto de OTRO episodio: se cierra como `nuevo_intento` solo si el
+--     episodio que trae quien llama es posterior (`p_episode_at`). Si es más
+--     viejo, quien llama leyó hechos de antes: no cierra el caso bueno.
+--   · Pedido fuera de «Por reprogramar Lima»: no se toma. El cierre
+--     `fuera_de_etapa` lo hace la carga de la pantalla (`after()`): un `raise`
+--     aquí desharía cualquier escritura de esta misma llamada.
+--   · Candado vivo de otra persona: `claimed:false` con quién y hasta cuándo.
+--   · Sin caso abierto, si el último cerrado del pedido es «Desarmar y cerrar»
+--     de ESTE episodio, no se abre otro: `needs_reopen:true`, salvo
+--     `p_reopen` («Volver a atender», segundo clic, E29). Se mira aquí, dentro
+--     del candado: un cierre que llega entre la lectura del servidor y esta
+--     llamada no se reabre solo.
+-- La firma sin `p_reopen` nunca llegó a producción: no hay otra función al
+-- lado que borrar (y un `drop` deja colgada la herramienta, DEPLOY.md).
+create or replace function public.lima_repro_claim(
+  p_order uuid,
+  p_store uuid,
+  p_actor uuid,
+  p_episode text,
+  p_episode_at timestamptz default null,
+  p_ttl_minutes integer default 10,
+  p_reopen boolean default false
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_case lima_repro_cases%rowtype;
+  v_open boolean;
+  v_until timestamptz;
+  v_last lima_repro_cases%rowtype;
+begin
+  if p_actor is null then
+    raise exception 'Falta quién atiende el caso.';
+  end if;
+  if p_ttl_minutes is null or p_ttl_minutes not between 1 and 15 then
+    raise exception 'El candado dura entre 1 y 15 minutos.';
+  end if;
+  if p_episode is null or char_length(p_episode) not between 3 and 160 then
+    raise exception 'Falta el episodio del pedido.';
+  end if;
+  if not exists (select 1 from orders where id = p_order and store_id = p_store) then
+    raise exception 'El pedido no pertenece a la tienda indicada.';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended('lima_repro:' || p_order::text, 0));
+
+  select * into v_case
+    from lima_repro_cases
+   where order_id = p_order and closed_at is null
+   for update;
+  v_open := found;
+
+  if v_open and v_case.episode_key <> p_episode then
+    if p_episode_at is null or p_episode_at <= v_case.episode_at then
+      raise exception 'El pedido cambió mientras lo abrías: vuelve a intentarlo.';
+    end if;
+    update lima_repro_cases
+       set closed_at = now(), close_reason = 'nuevo_intento', claimed_by = null, claimed_until = null
+     where id = v_case.id;
+    v_open := false;
+  end if;
+
+  if not exists (
+    select 1 from order_master
+     where order_id = p_order and macro_stage = 'en_curso' and macro_substage = 'por_reprogramar_lima'
+  ) then
+    raise exception 'Este pedido ya no está en «Por reprogramar Lima».';
+  end if;
+
+  if not v_open then
+    select * into v_last
+      from lima_repro_cases
+     where order_id = p_order and closed_at is not null
+     order by closed_at desc, opened_at desc
+     limit 1;
+    if found and v_last.close_reason = 'desarmar_cerrar' and v_last.episode_key = p_episode
+       and not coalesce(p_reopen, false) then
+      return jsonb_build_object('claimed', false, 'needs_reopen', true);
+    end if;
+    insert into lima_repro_cases (store_id, order_id, episode_key, episode_at, opened_by)
+    values (p_store, p_order, p_episode, coalesce(p_episode_at, now()), p_actor)
+    returning * into v_case;
+  end if;
+
+  if v_case.claimed_by is not null and v_case.claimed_by <> p_actor and v_case.claimed_until > now() then
+    return jsonb_build_object(
+      'case_id', v_case.id, 'claimed', false,
+      'holder', v_case.claimed_by, 'until', v_case.claimed_until);
+  end if;
+
+  v_until := now() + make_interval(mins => p_ttl_minutes);
+  update lima_repro_cases set claimed_by = p_actor, claimed_until = v_until where id = v_case.id;
+  return jsonb_build_object('case_id', v_case.id, 'claimed', true, 'until', v_until);
+end;
+$$;
+
+revoke all on function public.lima_repro_claim(uuid, uuid, uuid, text, timestamptz, integer, boolean) from public, anon, authenticated;
+grant execute on function public.lima_repro_claim(uuid, uuid, uuid, text, timestamptz, integer, boolean) to service_role;
+
+-- d2) Registrar una llamada ---------------------------------------------------
+--
+-- Una transacción: la llamada, el caso y el evento del pedido. El
+-- `operation_id` se mira DESPUÉS del candado de fila, así un doble clic
+-- devuelve `duplicate` sin carrera; el mismo `operation_id` con otro resultado
+-- u otra fecha es otro formulario y se rechaza. Después: caso abierto, candado
+-- vivo de quien llama y mismo episodio. La fecha acordada es de hoy (Lima) a
+-- 60 días; la próxima llamada, futura y a 60 días como mucho (§11.6).
+--   · `confirma` fija el acuerdo (y lo deja sin programar).
+--   · `llamar_despues` y `no_quiere` vacían el acuerdo; la historia queda en
+--     las llamadas. `no_quiere` además cierra el caso (`desarmar_cerrar`) y
+--     suelta el candado: no anula la venta, solo Shopify la anula.
+--   · `no_contesta` cuenta el intento y conserva el acuerdo vigente.
+--   · `sin_contacto` no es una llamada: no cuenta como intento.
+create or replace function public.lima_repro_record(
+  p_case uuid,
+  p_actor uuid,
+  p_operation uuid,
+  p_episode text,
+  p_outcome text,
+  p_channel text,
+  p_next_call_at timestamptz default null,
+  p_agreed_on date default null,
+  p_courier text default null,
+  p_changes jsonb default '{}'::jsonb,
+  p_box_action text default null,
+  p_box_location text default null,
+  p_note text default null,
+  p_event_note text default null,
+  p_ttl_minutes integer default 10
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_case lima_repro_cases%rowtype;
+  v_prev lima_repro_calls%rowtype;
+  v_call uuid;
+  v_today date := (now() at time zone 'America/Lima')::date;
+  v_changes jsonb := coalesce(p_changes, '{}'::jsonb);
+  v_contact integer := case when p_channel = 'sin_contacto' then 0 else 1 end;
+  v_until timestamptz;
+begin
+  if p_actor is null then
+    raise exception 'Falta quién registra la llamada.';
+  end if;
+  if p_operation is null then
+    raise exception 'Falta el identificador del envío.';
+  end if;
+  if p_outcome is null or p_outcome not in ('confirma', 'llamar_despues', 'no_contesta', 'no_quiere') then
+    raise exception 'Resultado de la llamada inválido.';
+  end if;
+  if p_channel is null or p_channel not in ('llamada', 'whatsapp', 'sin_contacto') then
+    raise exception 'Canal de la llamada inválido.';
+  end if;
+  if p_ttl_minutes is null or p_ttl_minutes not between 1 and 15 then
+    raise exception 'El candado dura entre 1 y 15 minutos.';
+  end if;
+
+  select * into v_case from lima_repro_cases where id = p_case for update;
+  if not found then
+    raise exception 'No encontramos el caso.';
+  end if;
+
+  select * into v_prev from lima_repro_calls where operation_id = p_operation;
+  if found then
+    if v_prev.case_id <> p_case or v_prev.outcome <> p_outcome
+       or v_prev.agreed_on is distinct from p_agreed_on then
+      raise exception 'Ya se guardó otra llamada con este envío: vuelve a abrir el caso.';
+    end if;
+    return jsonb_build_object('call_id', v_prev.id, 'duplicate', true);
+  end if;
+
+  if v_case.closed_at is not null then
+    raise exception 'El caso ya está cerrado.';
+  end if;
+  if v_case.claimed_by is distinct from p_actor or v_case.claimed_until <= now() then
+    raise exception 'Ya no tienes este caso: vuelve a tomarlo.';
+  end if;
+  if v_case.episode_key is distinct from p_episode then
+    raise exception 'El pedido tuvo otro intento de entrega: vuelve a abrirlo.';
+  end if;
+
+  if p_outcome = 'confirma' and p_agreed_on is not null then
+    if p_agreed_on < v_today then
+      raise exception 'La nueva fecha no puede ser anterior a hoy.';
+    end if;
+    if p_agreed_on > v_today + 60 then
+      raise exception 'La nueva fecha no puede pasar de 60 días.';
+    end if;
+  end if;
+  if p_next_call_at is not null then
+    if p_next_call_at <= now() then
+      raise exception 'Elige una hora que todavía no pasó.';
+    end if;
+    if p_next_call_at > now() + interval '60 days' then
+      raise exception 'La próxima llamada no puede pasar de 60 días.';
+    end if;
+  end if;
+
+  -- La forma (qué lleva cada resultado) la valida el CHECK de la tabla.
+  insert into lima_repro_calls (
+    case_id, store_id, order_id, operation_id, outcome, channel, next_call_at,
+    agreed_on, courier, changes, box_action, box_location, note, actor
+  ) values (
+    p_case, v_case.store_id, v_case.order_id, p_operation, p_outcome, p_channel, p_next_call_at,
+    p_agreed_on, p_courier, v_changes, p_box_action, p_box_location, nullif(btrim(p_note), ''), p_actor
+  ) returning id into v_call;
+
+  v_until := now() + make_interval(mins => p_ttl_minutes);
+
+  if p_outcome = 'confirma' then
+    update lima_repro_cases
+       set call_count = call_count + v_contact,
+           last_call_at = now(), last_outcome = p_outcome, next_call_at = null,
+           agreement_call_id = v_call, agreed_on = p_agreed_on, agreed_courier = p_courier,
+           changes = v_changes, box_action = p_box_action, box_location = p_box_location,
+           decided_by = p_actor, decided_at = now(),
+           materialized_at = null, materialized_on = null,
+           claimed_until = v_until
+     where id = p_case;
+  elsif p_outcome = 'no_contesta' then
+    update lima_repro_cases
+       set call_count = call_count + v_contact, no_answer_count = no_answer_count + 1,
+           last_call_at = now(), last_outcome = p_outcome, next_call_at = p_next_call_at,
+           claimed_until = v_until
+     where id = p_case;
+  elsif p_outcome = 'llamar_despues' then
+    update lima_repro_cases
+       set call_count = call_count + v_contact,
+           last_call_at = now(), last_outcome = p_outcome, next_call_at = p_next_call_at,
+           agreement_call_id = null, agreed_on = null, agreed_courier = null,
+           changes = '{}'::jsonb, box_action = null, box_location = null,
+           decided_by = null, decided_at = null,
+           materialized_at = null, materialized_on = null,
+           claimed_until = v_until
+     where id = p_case;
+  else
+    update lima_repro_cases
+       set call_count = call_count + v_contact,
+           last_call_at = case when v_contact = 1 then now() else last_call_at end,
+           last_outcome = case when v_contact = 1 then p_outcome else last_outcome end,
+           next_call_at = null,
+           agreement_call_id = null, agreed_on = null, agreed_courier = null,
+           changes = '{}'::jsonb, box_action = 'desarmar_cerrar', box_location = null,
+           decided_by = null, decided_at = null,
+           materialized_at = null, materialized_on = null,
+           closed_at = now(), closed_by = p_actor, close_reason = 'desarmar_cerrar',
+           close_note = left(btrim(p_note), 500),
+           claimed_by = null, claimed_until = null
+     where id = p_case;
+  end if;
+
+  insert into order_events (store_id, order_id, kind, actor, source, note, operation_id, payload)
+  values (
+    v_case.store_id, v_case.order_id,
+    case p_outcome
+      when 'confirma' then 'lima_repro_agreed'
+      when 'no_quiere' then 'lima_repro_closed'
+      else 'lima_repro_call'
+    end,
+    p_actor, 'repro_lima', nullif(btrim(p_event_note), ''), p_operation,
+    jsonb_build_object(
+      'case_id', p_case,
+      'call_id', v_call,
+      'outcome', p_outcome,
+      'channel', p_channel,
+      'next_call_at', p_next_call_at,
+      'agreed_on', p_agreed_on,
+      'courier', p_courier,
+      'changes', v_changes,
+      'box_action', p_box_action,
+      'box_location', p_box_location
+    )
+  );
+
+  return jsonb_build_object('call_id', v_call, 'duplicate', false);
+end;
+$$;
+
+revoke all on function public.lima_repro_record(uuid, uuid, uuid, text, text, text, timestamptz, date, text, jsonb, text, text, text, text, integer) from public, anon, authenticated;
+grant execute on function public.lima_repro_record(uuid, uuid, uuid, text, text, text, timestamptz, date, text, jsonb, text, text, text, text, integer) to service_role;
+
+-- ---- 0252 ----
+-- ============================================================================
+-- 0252_ltv_cohorts.sql — LTV : CPA por mes de primera compra (MOM §17,
+-- 13-10-2026).
+--
+-- QUÉ ES. La métrica que el dueño eligió para saber si el negocio se sostiene:
+-- lo que vende cada clienta nueva en sus primeros días, por cada sol que costó
+-- traerla. Dos funciones que agregan en Postgres —para no bajar decenas de
+-- miles de filas en cada carga de Consolidado— y dejan el cálculo del ratio en
+-- lib/ltv.ts:
+--
+--   - `ltv_cohorts`: por tienda y mes de la PRIMERA entrega de cada clienta,
+--     cuántas clientas nuevas hubo, lo que compraron (ingreso bruto de pedidos
+--     entregados) dentro de 30, 60, 90, 180 y 365 días desde esa primera
+--     compra, y cuántas volvieron a comprar en 90 días.
+--   - `meta_spend_by_month`: el gasto de Meta por tienda, mes y moneda. La
+--     conversión de dólares a soles la hace el código (lib/ltv.ts): la cuenta
+--     de Meta puede estar en USD aunque la tienda venda en soles.
+--
+-- La clienta es su teléfono: los últimos nueve dígitos (MOM §8.1, en un COD de
+-- Shopify no hay cuenta ni documento). El mes es el de Lima. Solo cuentan los
+-- pedidos entregados: en contraentrega, lo que no se entrega no se cobra.
+--
+-- SECURITY INVOKER a propósito: las políticas de `order_master` y de
+-- `meta_ad_insights_daily` siguen mandando, así que cada persona ve solo sus
+-- tiendas.
+-- ============================================================================
+
+create or replace function public.ltv_cohorts(p_store_ids uuid[], p_since date)
+returns table (
+  store_id uuid,
+  cohort_month date,
+  new_customers integer,
+  last_first_at timestamptz,
+  value_30 numeric,
+  value_60 numeric,
+  value_90 numeric,
+  value_180 numeric,
+  value_365 numeric,
+  repeat_90 integer
+)
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  with entregas as (
+    select om.store_id,
+           right(regexp_replace(om.customer_phone, '\D', '', 'g'), 9) as tel,
+           om.order_created_at as t,
+           coalesce(om.order_total, 0) as total
+      from public.order_master om
+     where om.store_id = any(p_store_ids)
+       and om.general_status = 'entregado'
+       and om.order_created_at >= p_since
+       and length(regexp_replace(coalesce(om.customer_phone, ''), '\D', '', 'g')) >= 9
+  ), primeras as (
+    select e.store_id, e.tel, min(e.t) as primera
+      from entregas e
+     group by e.store_id, e.tel
+  ), por_clienta as (
+    select p.store_id, p.primera,
+           sum(e.total) filter (where e.t < p.primera + interval '30 days')  as v30,
+           sum(e.total) filter (where e.t < p.primera + interval '60 days')  as v60,
+           sum(e.total) filter (where e.t < p.primera + interval '90 days')  as v90,
+           sum(e.total) filter (where e.t < p.primera + interval '180 days') as v180,
+           sum(e.total) filter (where e.t < p.primera + interval '365 days') as v365,
+           count(*) filter (where e.t < p.primera + interval '90 days')       as n90
+      from primeras p
+      join entregas e on e.store_id = p.store_id and e.tel = p.tel
+     group by p.store_id, p.tel, p.primera
+  )
+  select c.store_id,
+         date_trunc('month', c.primera at time zone 'America/Lima')::date as cohort_month,
+         count(*)::integer as new_customers,
+         max(c.primera) as last_first_at,
+         coalesce(sum(c.v30), 0)  as value_30,
+         coalesce(sum(c.v60), 0)  as value_60,
+         coalesce(sum(c.v90), 0)  as value_90,
+         coalesce(sum(c.v180), 0) as value_180,
+         coalesce(sum(c.v365), 0) as value_365,
+         (count(*) filter (where c.n90 >= 2))::integer as repeat_90
+    from por_clienta c
+   group by c.store_id, date_trunc('month', c.primera at time zone 'America/Lima')
+   order by c.store_id, cohort_month;
+$$;
+
+revoke all on function public.ltv_cohorts(uuid[], date) from public, anon;
+grant execute on function public.ltv_cohorts(uuid[], date) to authenticated, service_role;
+
+create or replace function public.meta_spend_by_month(p_store_ids uuid[], p_since date)
+returns table (
+  store_id uuid,
+  month date,
+  currency text,
+  spend numeric
+)
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  select i.store_id,
+         date_trunc('month', i.date)::date as month,
+         upper(coalesce(nullif(i.currency, ''), '?')) as currency,
+         coalesce(sum(i.spend), 0) as spend
+    from public.meta_ad_insights_daily i
+   where i.store_id = any(p_store_ids)
+     and i.date >= p_since
+   group by i.store_id, date_trunc('month', i.date), upper(coalesce(nullif(i.currency, ''), '?'))
+   order by i.store_id, month;
+$$;
+
+revoke all on function public.meta_spend_by_month(uuid[], date) from public, anon;
+grant execute on function public.meta_spend_by_month(uuid[], date) to authenticated, service_role;
+
+-- ---- 0253 ----
+-- 0253_swayp_pc_auto.sql — Swayp automático desde Por confirmar, piloto A/B
+-- (MOM §11.13, 13-10-2026).
+--
+-- QUÉ ES. Una pasada diaria que hace lo mismo que el botón «Enviar por Swayp»
+-- de la mesa de confirmación (§11.11) sobre pedidos frescos —hasta 48 h, con
+-- 1 o 2 llamadas sin respuesta, dirección con número o manzana y lote, sin
+-- agencia, ubicación corroborada y stock completo—. La mitad de los elegibles
+-- sale por Swayp y la otra mitad sigue la cola de llamadas, para medir si de
+-- verdad suma. Decisiones del owner: sin aviso por WhatsApp, 48 h, A/B de 10
+-- por día.
+--
+-- APAGADO AL INSTALAR. La fila de cada organización nace con `enabled = false`;
+-- lo activa una persona con «Administrar tiendas» desde el registro de Swayp
+-- desde Por confirmar. Y se apaga sola —el freno— si de los últimos
+-- `brake_window` casos resueltos se entrega menos de `brake_min_rate`.
+--
+-- Las tres tablas siguen el patrón del automático Aliclik → Swayp (0209): la
+-- lectura respeta organización y tiendas por RLS y solo el servidor escribe.
+
+create table if not exists swayp_pc_auto_settings (
+  org_id            uuid primary key references organizations(id),
+  enabled           boolean not null default false,
+  daily_cap         integer not null default 10 check (daily_cap between 1 and 50),
+  per_warehouse_cap integer not null default 3 check (per_warehouse_cap between 1 and 50),
+  max_age_hours     integer not null default 48 check (max_age_hours between 1 and 168),
+  min_attempts      integer not null default 1 check (min_attempts between 0 and 10),
+  max_unanswered    integer not null default 2 check (max_unanswered between 0 and 10),
+  max_amount        numeric not null default 300 check (max_amount > 0),
+  brake_window      integer not null default 20 check (brake_window between 5 and 200),
+  brake_min_rate    numeric not null default 0.35 check (brake_min_rate between 0 and 1),
+  -- Por qué está apagado, si lo apagó el freno (null si lo apagó una persona).
+  paused_reason     text,
+  paused_at         timestamptz,
+  updated_by        uuid references auth.users(id) on delete set null,
+  updated_at        timestamptz not null default now()
+);
+
+-- Una decisión por pedido. Mientras no es elegible se reescribe en cada pasada
+-- (el motivo cambia: hoy sin llamada, mañana sí); en cuanto es elegible queda
+-- fija con su brazo, para que el A/B no cambie de lado a nadie.
+create table if not exists swayp_pc_auto_decisions (
+  order_id    uuid primary key references orders(id) on delete cascade,
+  store_id    uuid not null references stores(id),
+  org_id      uuid not null references organizations(id),
+  arm         text check (arm in ('swayp', 'control')),
+  reason      text not null,
+  eligible    boolean not null default false,
+  shipment_id uuid references shipments(id) on delete set null,
+  evidence    jsonb not null default '{}',
+  decided_at  timestamptz not null default now(),
+  checked_at  timestamptz not null default now()
+);
+create index if not exists swayp_pc_auto_decisions_org_idx
+  on swayp_pc_auto_decisions (org_id, eligible, decided_at desc);
+
+create table if not exists swayp_pc_auto_runs (
+  id         uuid primary key default gen_random_uuid(),
+  org_id     uuid not null references organizations(id),
+  summary    jsonb not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists swayp_pc_auto_runs_org_idx on swayp_pc_auto_runs (org_id, created_at desc);
+
+alter table swayp_pc_auto_settings enable row level security;
+alter table swayp_pc_auto_decisions enable row level security;
+alter table swayp_pc_auto_runs enable row level security;
+drop policy if exists swayp_pc_auto_settings_read on swayp_pc_auto_settings;
+create policy swayp_pc_auto_settings_read on swayp_pc_auto_settings
+  for select to authenticated using (org_id in (select auth_org_ids()));
+drop policy if exists swayp_pc_auto_decisions_read on swayp_pc_auto_decisions;
+create policy swayp_pc_auto_decisions_read on swayp_pc_auto_decisions
+  for select to authenticated using (store_id in (select auth_store_ids()));
+drop policy if exists swayp_pc_auto_runs_read on swayp_pc_auto_runs;
+create policy swayp_pc_auto_runs_read on swayp_pc_auto_runs
+  for select to authenticated using (org_id in (select auth_org_ids()));
+grant select on swayp_pc_auto_settings, swayp_pc_auto_decisions, swayp_pc_auto_runs to authenticated;
+grant all on swayp_pc_auto_settings, swayp_pc_auto_decisions, swayp_pc_auto_runs to service_role;
+
+-- Una fila apagada por organización con tiendas activas.
+insert into swayp_pc_auto_settings (org_id)
+select distinct org_id from stores where status = 'active' and org_id is not null
+on conflict (org_id) do nothing;
+
+-- ---- 0254 ----
+-- 0254_swayp_actividad_backfill.sql — la Actividad de los pedidos Swayp, completa.
+--
+-- QUÉ PASABA (13-10-2026). El webhook y el barrido de Swayp escribían el estado
+-- en la guía y en nada más: #KP140633 decía «Entregado» en Salidas y guías y la
+-- pestaña Actividad no tenía una sola línea de la entrega. Aliclik y Shalom
+-- dejan un `courier_status` por transición; Swayp no dejaba ninguno. Desde este
+-- cambio lo deja (`swaypStatusEvent`, lib/swayp-ingest.ts).
+--
+-- ESTE RELLENO deja, para cada guía Swayp que ya se movió (estado 5 en
+-- adelante: reparto, novedad, entregada, devolución) y no tiene ninguna línea,
+-- UNA línea con su último estado conocido. El camino que tuvo hasta ahí no se
+-- puede reconstruir: Swayp no lo guardamos. La nota lo dice.
+--
+-- La hora: el cierre si lo hay (entregada, devolución confirmada); si no, la
+-- salida a reparto o el despacho. Idempotente: no toca una guía que ya tenga su
+-- `courier_status` de Swayp.
+
+insert into order_events (store_id, order_id, kind, occurred_at, actor, source, courier, guide_code, shipment_id, new_status, note, payload)
+select s.store_id, s.order_id, 'courier_status',
+       coalesce(s.closed_at, s.out_for_delivery_at, s.dispatched_at, s.updated_at),
+       null, 'fenix', 'fenix', s.guide_code, s.id, s.delivery_status,
+       'Swayp: ' ||
+         case s.swayp_state
+           when 5 then 'Reparto' when 6 then 'Novedad' when 7 then 'Entregada' when 8 then 'Devolución'
+           when 9 then 'Devolución confirmada' when 10 then 'Cancelada' when 11 then 'Indemnizada'
+           when 12 then 'Devolución confirmada con cobro' else 'Estado ' || s.swayp_state
+         end || ' (' || s.swayp_state || ')' ||
+         case when s.reported_status like 'Swayp · %' then ' · ' || substr(s.reported_status, 9) else '' end ||
+         '. Último estado conocido, registrado el 13-10-2026 al completar la Actividad.',
+       jsonb_build_object('swayp_state', s.swayp_state, 'relleno', true)
+  from shipments s
+ where s.courier = 'fenix'
+   and s.swayp_state >= 5
+   and s.order_id is not null
+   and s.store_id is not null
+   and not exists (
+     select 1 from order_events e
+      where e.order_id = s.order_id and e.kind = 'courier_status' and e.source = 'fenix'
+        and e.guide_code is not distinct from s.guide_code
+   );
+
+-- ---- 0255 ----
+-- ============================================================================
+-- 0255_restock_reminders.sql — recordatorio de reposición (MOM §34,
+-- 13-10-2026).
+--
+-- QUÉ ES. Cuando a la clienta se le está por acabar lo que compró, se le manda
+-- una plantilla de WhatsApp con un botón «Sí, quiero». Si lo toca, una asesora
+-- la atiende: el lead sube a «Atender ahora» con lo que quiere reponer. El dueño
+-- lo pidió para subir el LTV (§17.2): la recompra del mismo producto era baja
+-- —4,5 % en el aceite de semilla negra, que vuelve a los ~46 días—.
+--
+-- CUÁNDO. Cada producto tiene sus días por unidad (`restock_products`): un
+-- frasco de 30 días, comprado en dos unidades, dura 60. El recordatorio sale
+-- unos días antes de que se acabe (`restock_days_before`), contados desde la
+-- entrega. Un producto sin días no recibe recordatorio: así una cartera o un
+-- pelador nunca reciben «se te está acabando».
+--
+-- A QUIÉN NO. A quien ya volvió a comprar después de esa entrega; a quien ya se
+-- le recordó ese pedido; a quien pidió que no le escriban. Y a un grupo de
+-- control (`restock_control_pct`, 10 % por defecto, elegido por el teléfono):
+-- se registra igual pero no se le envía, para saber si el recordatorio vende o
+-- si la clienta iba a volver igual.
+--
+-- Nace APAGADO por tienda. Escribe solo el servidor; las tablas se leen por
+-- tienda.
+-- ============================================================================
+
+alter table stores
+  add column if not exists restock_enabled boolean not null default false,
+  add column if not exists restock_template_name text,
+  add column if not exists restock_template_language text not null default 'es',
+  add column if not exists restock_params text not null default 'nombre,producto',
+  add column if not exists restock_phone_number_id text,
+  add column if not exists restock_button_label text not null default 'Sí, quiero',
+  add column if not exists restock_hour_start integer not null default 9
+    check (restock_hour_start between 0 and 23),
+  add column if not exists restock_hour_end integer not null default 20
+    check (restock_hour_end between 1 and 24),
+  add column if not exists restock_pace_count integer not null default 5
+    check (restock_pace_count between 1 and 25),
+  add column if not exists restock_pace_minutes integer not null default 20
+    check (restock_pace_minutes between 5 and 1440),
+  add column if not exists restock_days_before integer not null default 7
+    check (restock_days_before between 0 and 60),
+  add column if not exists restock_control_pct integer not null default 10
+    check (restock_control_pct between 0 and 50);
+
+-- Cuánto dura cada producto. La clave es el `product_id` de Shopify de la línea
+-- del pedido (o el título, si la línea no lo trae). `short_name` es como se
+-- nombra en el mensaje: el título de Shopify suele ser una frase entera.
+create table if not exists restock_products (
+  store_id uuid not null references stores(id) on delete cascade,
+  product_key text not null,
+  shopify_title text not null,
+  short_name text not null check (length(btrim(short_name)) > 0),
+  days_per_unit integer not null check (days_per_unit between 1 and 365),
+  updated_by uuid references auth.users(id) on delete set null,
+  updated_at timestamptz not null default now(),
+  primary key (store_id, product_key)
+);
+
+-- Un registro por pedido recordado (o apartado como control) y por intento
+-- fallido. `ok` es «quedó atendido»: el envío aceptado o la fila de control.
+create table if not exists restock_sends (
+  id uuid primary key default gen_random_uuid(),
+  store_id uuid not null references stores(id) on delete cascade,
+  order_id uuid not null references orders(id) on delete cascade,
+  phone text not null,
+  product_key text not null,
+  product_name text not null,
+  units integer not null,
+  due_at timestamptz not null,
+  arm text not null check (arm in ('enviado', 'control')),
+  template_name text,
+  ok boolean not null,
+  error text,
+  sent_at timestamptz not null default now(),
+  replied_at timestamptz,
+  reply_kind text check (reply_kind in ('boton', 'si'))
+);
+
+create unique index if not exists restock_sends_order_ok on restock_sends (order_id) where ok;
+create index if not exists restock_sends_store_phone on restock_sends (store_id, phone, sent_at desc);
+create index if not exists restock_sends_store_sent on restock_sends (store_id, sent_at desc);
+
+-- Quien respondió «BAJA» a un recordatorio. No hace falta que tenga lead: muchas
+-- compraron por la web y nunca escribieron.
+create table if not exists contact_opt_outs (
+  store_id uuid not null references stores(id) on delete cascade,
+  phone text not null,
+  source text not null,
+  created_at timestamptz not null default now(),
+  primary key (store_id, phone)
+);
+
+alter table restock_products enable row level security;
+alter table restock_sends enable row level security;
+alter table contact_opt_outs enable row level security;
+
+do $$
+begin
+  if not exists (select 1 from pg_policies where tablename = 'restock_products' and policyname = 'restock_products_select') then
+    create policy restock_products_select on restock_products for select to authenticated
+      using (store_id in (select auth_store_ids()));
+  end if;
+  if not exists (select 1 from pg_policies where tablename = 'restock_sends' and policyname = 'restock_sends_select') then
+    create policy restock_sends_select on restock_sends for select to authenticated
+      using (store_id in (select auth_store_ids()));
+  end if;
+  if not exists (select 1 from pg_policies where tablename = 'contact_opt_outs' and policyname = 'contact_opt_outs_select') then
+    create policy contact_opt_outs_select on contact_opt_outs for select to authenticated
+      using (store_id in (select auth_store_ids()));
+  end if;
+end $$;
+
+revoke all on restock_products, restock_sends, contact_opt_outs from anon, authenticated;
+grant select on restock_products, restock_sends, contact_opt_outs to authenticated;
+grant all privileges on restock_products, restock_sends, contact_opt_outs to service_role;
+
+-- Las líneas de pedido traen el `product_id` de Shopify, pero las que arma el
+-- bot como línea suelta traen solo el título: en Aurela, el pelador aparece 371
+-- veces con id y 89 sin él. Un producto se configura UNA vez (por su id) y se le
+-- reconoce también por su título; si no, la mitad de sus clientas no recibiría
+-- el recordatorio.
+create or replace function public.restock_line_matches(
+  p_key text,
+  p_title text,
+  p_line_id text,
+  p_line_title text
+)
+returns boolean
+language sql
+immutable
+set search_path = public
+as $$
+  select (p_line_id is not null and p_key = p_line_id)
+      or (p_line_title is not null and (p_key = p_line_title
+          or lower(btrim(p_title)) = lower(btrim(p_line_title))));
+$$;
+
+-- Los pedidos entregados cuyo producto se acaba ahora: el recordatorio vence
+-- (entrega + unidades × días por unidad − días antes) dentro de la ventana, la
+-- clienta no volvió a comprar después de esa entrega y el pedido no tiene ya su
+-- recordatorio. Por pedido, el producto que se acaba primero.
+create or replace function public.restock_candidates(
+  p_store_id uuid,
+  p_now timestamptz,
+  p_days_before integer,
+  p_window_days integer,
+  p_limit integer
+)
+returns table (
+  order_id uuid,
+  order_name text,
+  customer_name text,
+  customer_phone text,
+  delivered_at timestamptz,
+  product_key text,
+  product_name text,
+  units integer,
+  due_at timestamptz
+)
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  with lineas as (
+    select om.order_id, om.order_name, om.customer_name, om.customer_phone, om.delivered_at,
+           nullif(li->>'product_id', '') as line_id,
+           nullif(btrim(li->>'title'), '') as line_title,
+           greatest(coalesce((li->>'quantity')::numeric::integer, 1), 1) as qty
+      from public.order_master om
+      join public.orders o on o.id = om.order_id
+     cross join lateral jsonb_array_elements(
+             case when jsonb_typeof(o.line_items) = 'array' then o.line_items else '[]'::jsonb end) li
+     where om.store_id = p_store_id
+       and om.general_status = 'entregado'
+       and om.delivered_at is not null
+       and om.delivered_at < p_now
+       and om.delivered_at > p_now - interval '400 days'
+       and om.customer_phone is not null
+  ), por_producto as (
+    select l.order_id, l.order_name, l.customer_name, l.customer_phone, l.delivered_at,
+           rp.product_key, rp.short_name, rp.days_per_unit, sum(l.qty)::integer as units
+      from lineas l
+      -- Una línea, un producto: si dos filas la reconocen, gana la del id.
+      join lateral (
+        select r.product_key, r.short_name, r.days_per_unit
+          from public.restock_products r
+         where r.store_id = p_store_id
+           and public.restock_line_matches(r.product_key, r.shopify_title, l.line_id, l.line_title)
+         order by (r.product_key = l.line_id) desc nulls last
+         limit 1
+      ) rp on true
+     group by l.order_id, l.order_name, l.customer_name, l.customer_phone, l.delivered_at,
+              rp.product_key, rp.short_name, rp.days_per_unit
+  ), vencen as (
+    -- La ventana va ANTES de elegir el producto: si el pedido trae dos y el que
+    -- se acabó primero ya quedó atrás, el otro igual tiene su recordatorio.
+    select p.*, p.delivered_at + make_interval(days => p.units * p.days_per_unit - p_days_before) as vence
+      from por_producto p
+  ), primero as (
+    select distinct on (v.order_id) v.*
+      from vencen v
+     where v.vence <= p_now
+       and v.vence > p_now - make_interval(days => p_window_days)
+     order by v.order_id, v.vence
+  )
+  select f.order_id, f.order_name, f.customer_name, f.customer_phone, f.delivered_at,
+         f.product_key, f.short_name, f.units, f.vence
+    from primero f
+   where not exists (
+       select 1 from public.order_master o2
+        where o2.store_id = p_store_id
+          and o2.customer_phone = f.customer_phone
+          and o2.order_id <> f.order_id
+          and o2.order_created_at > f.delivered_at
+          and o2.general_status <> 'anulado')
+     and not exists (select 1 from public.restock_sends s where s.order_id = f.order_id and s.ok)
+   order by f.vence desc
+   limit p_limit;
+$$;
+
+revoke all on function public.restock_candidates(uuid, timestamptz, integer, integer, integer) from public, anon, authenticated;
+grant execute on function public.restock_candidates(uuid, timestamptz, integer, integer, integer) to service_role;
+
+-- Lo que se vendió en los últimos días, por producto, para elegir en Ajustes
+-- cuáles reciben recordatorio. Las líneas sin id se suman al producto con id
+-- del mismo título.
+create or replace function public.restock_product_catalog(p_store_id uuid, p_since timestamptz)
+returns table (product_key text, title text, pedidos integer, unidades integer)
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  with lineas as (
+    select o.id as order_id,
+           nullif(li->>'product_id', '') as line_id,
+           nullif(btrim(li->>'title'), '') as line_title,
+           greatest(coalesce((li->>'quantity')::numeric::integer, 1), 1) as qty
+      from public.orders o
+     cross join lateral jsonb_array_elements(
+             case when jsonb_typeof(o.line_items) = 'array' then o.line_items else '[]'::jsonb end) li
+     where o.store_id = p_store_id
+       and o.created_at >= p_since
+  ), id_por_titulo as (
+    select distinct on (lower(line_title)) lower(line_title) as t, line_id
+      from lineas
+     where line_id is not null and line_title is not null
+     group by lower(line_title), line_id
+     order by lower(line_title), count(*) desc
+  )
+  select coalesce(l.line_id, i.line_id, l.line_title) as product_key,
+         mode() within group (order by l.line_title) as title,
+         count(distinct l.order_id)::integer,
+         sum(l.qty)::integer
+    from lineas l
+    left join id_por_titulo i on l.line_id is null and i.t = lower(l.line_title)
+   where coalesce(l.line_id, l.line_title) is not null
+   group by 1
+   order by 3 desc
+   limit 80;
+$$;
+
+revoke all on function public.restock_product_catalog(uuid, timestamptz) from public, anon;
+grant execute on function public.restock_product_catalog(uuid, timestamptz) to authenticated, service_role;
+
+-- Lo que se lee en Ajustes: por grupo, cuántas clientas, cuántas respondieron
+-- y cuántas compraron (y recibieron) en los 30 días siguientes.
+create or replace function public.restock_results(p_store_id uuid, p_since timestamptz)
+returns table (arm text, clientas integer, respondieron integer, compraron integer, entregados integer)
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  select s.arm,
+         count(*)::integer,
+         (count(*) filter (where s.replied_at is not null))::integer,
+         (count(*) filter (where exists (
+            select 1 from public.order_master o
+             where o.store_id = s.store_id and o.customer_phone = s.phone
+               and o.order_id <> s.order_id
+               and o.order_created_at between s.sent_at and s.sent_at + interval '30 days'
+               and o.general_status <> 'anulado')))::integer,
+         (count(*) filter (where exists (
+            select 1 from public.order_master o
+             where o.store_id = s.store_id and o.customer_phone = s.phone
+               and o.order_id <> s.order_id
+               and o.order_created_at between s.sent_at and s.sent_at + interval '30 days'
+               and o.general_status = 'entregado')))::integer
+    from public.restock_sends s
+   where s.store_id = p_store_id and s.ok and s.sent_at >= p_since
+   group by s.arm;
+$$;
+
+revoke all on function public.restock_results(uuid, timestamptz) from public, anon;
+grant execute on function public.restock_results(uuid, timestamptz) to authenticated, service_role;
+
+-- ---- 0256 ----
+-- ============================================================================
+-- 0256_lima_open_counts.sql
+-- «Todos» de Repro Lima (MOM §9.5): los pedidos de Lima sin estado final, por
+-- tienda, macroetapa y subetapa del Master, con cuántos llevan más de 7 y de 30
+-- días de Lima en la etapa. Una lectura agrupada (PostgREST no agrega en
+-- producción). Solo para el cliente de servicio, después de requireReproLima.
+--
+-- DECISIÓN DEL OWNER (13-10 y 14-10-2026): Repro Lima suma una quinta tarjeta,
+-- «Todos · por entregar», con lo que todavía no se entrega (Por confirmar,
+-- Preparación, Por despachar y En curso) y, aparte y con su total, lo que falta
+-- cerrar (Por cerrar). No crea estados: agrupa por `macro_stage` y
+-- `macro_substage`, que escribe el resolver; `MOM_RESOLUTION_VERSION` no cambia.
+--
+-- QUÉ PEDIDOS. Los de las tiendas que se piden (`p_store_ids`, el alcance que
+-- ya resolvió el servidor con getAccessibleStores) con cobertura Lima
+-- (`order_master.coverage = 'lima'`, la columna que escribe el trigger
+-- `order_master_coverage`, 0083) en cualquier macroetapa menos «Finalizado».
+-- Es el mismo filtro que aplica el Master con la cobertura «Lima»
+-- (`in("coverage", …)`), así que cada cifra coincide con la lista que abre.
+--
+-- ANTIGÜEDAD. Días de Lima desde `macro_since`: la fecha de Lima de hoy
+-- (`p_today`, la manda el servidor con limaClock) menos la fecha de Lima en
+-- que entró a la etapa, estrictamente más de 7 y más de 30. Un pedido sin
+-- `macro_since` cuenta solo en el total.
+--
+-- COSTO. Usa `order_master_store_coverage_idx` (0078): unos 18 ms sobre ~8,3k
+-- filas abiertas de Lima el 14-10-2026, y devuelve a lo más unas 40 filas. Sin
+-- índice nuevo.
+--
+-- Idempotente: `create or replace` y permisos que se pueden repetir. Sin
+-- sentencias destructivas, que dejan colgado `apply_migration` de Supabase.
+-- ============================================================================
+
+create or replace function public.order_master_lima_open_counts(p_store_ids uuid[], p_today date)
+returns table (store_id uuid, macro_stage text, macro_substage text, total bigint, over_7 bigint, over_30 bigint)
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  select om.store_id, om.macro_stage, om.macro_substage,
+         count(*)::bigint,
+         count(*) filter (where p_today - (om.macro_since at time zone 'America/Lima')::date > 7)::bigint,
+         count(*) filter (where p_today - (om.macro_since at time zone 'America/Lima')::date > 30)::bigint
+  from public.order_master as om
+  where om.store_id = any(p_store_ids)
+    and om.coverage = 'lima'
+    and om.macro_stage is not null
+    and om.macro_stage <> 'finalizado'
+  group by om.store_id, om.macro_stage, om.macro_substage;
+$$;
+
+revoke all on function public.order_master_lima_open_counts(uuid[], date) from public, anon, authenticated;
+grant execute on function public.order_master_lima_open_counts(uuid[], date) to service_role;
+
+comment on function public.order_master_lima_open_counts(uuid[], date) is
+  'Repro Lima «Todos»: pedidos de Lima (coverage) sin Finalizado, por tienda, macroetapa y subetapa, con más de 7 y 30 días de Lima en la etapa.';
+
+-- ---- 0257 ----
+-- ============================================================================
+-- 0257_invoices.sql — comprobantes electrónicos por RUC con SimpleFact (MOM §35,
+-- 14-10-2026).
+--
+-- QUÉ PASABA. Grupo GF tiene cuatro razones sociales, cada una con su RUC y su
+-- propia cuenta de SimpleFact, y la boleta de una venta la emite la empresa que
+-- recibió el dinero. Kapta no sabía a qué empresa pertenece cada cuenta de
+-- cobro, ni dejaba rastro de ningún comprobante.
+--
+-- QUÉ CAMBIA.
+--   · `invoice_issuers`: las empresas emisoras de la organización (RUC, razón
+--     social, subdominio de SimpleFact, token cifrado, modo, «Emitir desde» y
+--     tope diario). Pasar a «real» exige token, fecha de inicio y una prueba de
+--     conexión que leyó el mismo RUC.
+--   · `store_collection_accounts.invoice_issuer_id`: el RUC de cada cuenta de
+--     cobro. Una cuenta sin RUC no emite.
+--   · `order_invoices`: una fila por intento, simulado o real. Un índice único
+--     deja un solo comprobante real vivo por pedido, y un trigger impide editar
+--     o borrar lo que ya pasó.
+--   · `invoice_order_checks`: la última revisión del barrido por pedido.
+--   · `invoice_claim`: reserva el turno ANTES de llamar a SimpleFact. SimpleFact
+--     no tiene llave de idempotencia: un envío sin respuesta se concilia, nunca
+--     se repite (el mismo criterio que `swayp_emission_claim`, 0209).
+--   · Semilla: GRUPO GF S.A.C. (RUC 20556792829, subdominio `grupogf`) con el
+--     Yape ···309 y la pasarela Flow «Aurela Kenku», como lo dijo el owner.
+--
+-- A QUIÉN NO. Nace APAGADO y sin token: nada se emite ni se simula hasta que el
+-- owner ponga el token en Ajustes y encienda el RUC. Las cuentas personales de
+-- los dueños quedan sin RUC. Todo lo escribe y lo lee solo el servidor.
+--
+-- Se aplica a mano ANTES del código (DEPLOY.md). Es idempotente.
+-- ============================================================================
+
+-- ── 1. Empresas emisoras ─────────────────────────────────────────────────────
+create table if not exists invoice_issuers (
+  id                   uuid primary key default gen_random_uuid(),
+  org_id               uuid not null references organizations(id) on delete cascade,
+  ruc                  text not null
+                         check (ruc ~ '^(10|15|16|17|20)[0-9]{9}$'),
+  legal_name           text not null
+                         check (length(btrim(legal_name)) between 1 and 200),
+  -- Solo el subdominio: el token nunca viaja fuera de *.simplefact.pe.
+  simplefact_subdomain text not null
+                         check (simplefact_subdomain ~ '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'),
+  token_enc            text,
+  mode                 text not null default 'apagado'
+                         check (mode in ('apagado', 'simulacion', 'real')),
+  emit_from            timestamptz,
+  daily_limit          integer not null default 40
+                         check (daily_limit between 1 and 300),
+  -- La última prueba de conexión: qué RUC dicen los archivos de esa cuenta.
+  checked_at           timestamptz,
+  checked_ruc          text,
+  check_error          text,
+  created_at           timestamptz not null default now(),
+  updated_at           timestamptz not null default now(),
+  unique (org_id, ruc),
+  -- `checked_ruc is not null` va escrito: sin él, un RUC SIN prueba daba
+  -- `null = ruc` → NULL, y un CHECK con NULL pasa. Se podía poner en real sin
+  -- haber probado la conexión nunca.
+  constraint invoice_issuers_real_ready check (
+    mode <> 'real'
+    or (token_enc is not null and emit_from is not null and checked_ruc is not null and checked_ruc = ruc)
+  )
+);
+
+comment on table invoice_issuers is
+  'Empresas emisoras (RUC) de la organización, cada una con su cuenta de SimpleFact (MOM §35.2). Solo la lee el servidor.';
+comment on column invoice_issuers.token_enc is
+  'Token de la API de SimpleFact cifrado con lib/crypto.ts (AES-256-GCM). Nunca sale al navegador.';
+comment on column invoice_issuers.mode is
+  'apagado = no hace nada; simulacion = arma la boleta y la guarda sin enviarla; real = emite (MOM §35.8).';
+comment on column invoice_issuers.emit_from is
+  'Solo se emiten pedidos que quedaron pagados desde esta fecha: ningún RUC emite hacia atrás. Al encender o cambiar de modo, si quedó atrás, se mueve sola a ese momento (MOM §35.4).';
+comment on column invoice_issuers.checked_ruc is
+  'RUC leído en los archivos de la cuenta por «Probar conexión». Pasar a real exige que sea el RUC declarado.';
+
+-- Cambiar el token, el subdominio o el RUC invalida la prueba de conexión, y un
+-- RUC en real baja a simulación: un token nuevo se prueba antes de emitir.
+--
+-- Lo mismo si la prueba se repite con el RUC ya en real y no confirma el RUC
+-- (leyó otro, o no pudo leer): sin esto, guardar el resultado de esa prueba
+-- chocaba con `invoice_issuers_real_ready` y Ajustes no podía registrarlo, con
+-- el RUC emitiendo sobre la prueba vieja. Real exige, mientras dure, que la
+-- última prueba sea la del RUC declarado.
+--
+-- «Emitir desde» no queda atrás al encender ni al cambiar de modo (MOM §35.4):
+-- la fecha que sirvió para la simulación de ayer no habilita, al pasar a real,
+-- las boletas de todo lo que se pagó desde entonces.
+create or replace function invoice_issuers_touch() returns trigger
+language plpgsql security invoker set search_path = public as $$
+begin
+  new.updated_at := now();
+  if tg_op = 'UPDATE' and (
+    new.token_enc is distinct from old.token_enc
+    or new.simplefact_subdomain is distinct from old.simplefact_subdomain
+    or new.ruc is distinct from old.ruc
+  ) then
+    new.checked_at := null;
+    new.checked_ruc := null;
+    if new.mode = 'real' then
+      new.mode := 'simulacion';
+    end if;
+  end if;
+  if tg_op = 'UPDATE' and old.mode = 'real' and new.mode = 'real'
+     and new.checked_ruc is distinct from new.ruc then
+    new.mode := 'simulacion';
+  end if;
+  if new.mode <> 'apagado'
+     and (tg_op = 'INSERT' or new.mode is distinct from old.mode)
+     and new.emit_from < now() then
+    new.emit_from := now();
+  end if;
+  return new;
+end;
+$$;
+revoke all on function invoice_issuers_touch() from public, anon, authenticated;
+drop trigger if exists invoice_issuers_touch on invoice_issuers;
+create trigger invoice_issuers_touch before insert or update on invoice_issuers
+  for each row execute function invoice_issuers_touch();
+
+-- ── 2. Cuenta de cobro → RUC ─────────────────────────────────────────────────
+alter table store_collection_accounts
+  add column if not exists invoice_issuer_id uuid references invoice_issuers(id) on delete set null;
+
+comment on column store_collection_accounts.invoice_issuer_id is
+  'Empresa emisora del dinero que entra a esta cuenta (MOM §35.2). NULL = «Sin comprobante»: no emite.';
+
+create or replace function store_collection_accounts_issuer_org() returns trigger
+language plpgsql security invoker set search_path = public as $$
+begin
+  if new.invoice_issuer_id is not null and not exists (
+    select 1
+    from invoice_issuers i
+    join stores s on s.org_id = i.org_id
+    where i.id = new.invoice_issuer_id and s.id = new.store_id
+  ) then
+    raise exception 'El RUC no es de la organización de la tienda';
+  end if;
+  return new;
+end;
+$$;
+revoke all on function store_collection_accounts_issuer_org() from public, anon, authenticated;
+drop trigger if exists store_collection_accounts_issuer_org on store_collection_accounts;
+create trigger store_collection_accounts_issuer_org
+  before insert or update of invoice_issuer_id, store_id on store_collection_accounts
+  for each row execute function store_collection_accounts_issuer_org();
+
+-- ── 3. Comprobantes ──────────────────────────────────────────────────────────
+create table if not exists order_invoices (
+  id                 uuid primary key,
+  org_id             uuid not null references organizations(id),
+  store_id           uuid not null references stores(id),
+  order_id           uuid not null references orders(id),
+  issuer_id          uuid not null references invoice_issuers(id),
+  -- Copiado: el comprobante es de ese RUC aunque la fila del emisor cambie.
+  ruc                text not null,
+  mode               text not null check (mode in ('simulacion', 'real')),
+  status             text not null
+                       check (status in ('simulada', 'emitiendo', 'emitida', 'en_duda', 'error', 'externa')),
+  invoice_type       text not null default '03' check (invoice_type in ('01', '03')),
+  order_name         text,
+  total              numeric(12, 2) not null check (total > 0),
+  -- Cuándo quedó pagado el pedido: el último pago validado, o la fecha del
+  -- pedido si fue prepago web.
+  paid_at            timestamptz,
+  -- En qué se basó: los pagos, sus cuentas y la señal de cada una.
+  basis              jsonb not null default '{}'::jsonb,
+  request            jsonb,
+  response           jsonb,
+  http_status        integer,
+  simplefact_id      bigint,
+  serie              text,
+  correlative        text,
+  pdf_url            text,
+  xml_url            text,
+  sunat_status       text,
+  -- SimpleFact contestó con archivos de OTRO RUC. Se marca y el RUC se apaga.
+  ruc_mismatch       boolean not null default false,
+  error              text,
+  note               text,
+  created_by         uuid references auth.users(id) on delete set null,
+  retry_requested_by uuid references auth.users(id) on delete set null,
+  retry_requested_at timestamptz,
+  resolved_by        uuid references auth.users(id) on delete set null,
+  resolved_at        timestamptz,
+  created_at         timestamptz not null default now(),
+  updated_at         timestamptz not null default now(),
+  constraint order_invoices_mode_status check ((mode = 'simulacion') = (status = 'simulada'))
+);
+
+comment on table order_invoices is
+  'Comprobantes por pedido, simulados o reales (MOM §35.6). Una fila por intento; lo emitido no se edita ni se borra.';
+comment on column order_invoices.status is
+  'simulada | emitiendo (turno reservado, llamando) | emitida | en_duda (puede existir: se concilia, nunca se repite) | error (SimpleFact dijo que no) | externa (emitida a mano fuera de Kapta).';
+
+-- UNO POR PEDIDO, EN LA BASE: un solo comprobante real vivo, y una sola
+-- simulación. Un `error` no cuenta: no hay boleta.
+create unique index if not exists order_invoices_one_real
+  on order_invoices (order_id)
+  where mode = 'real' and status in ('emitiendo', 'emitida', 'en_duda', 'externa');
+create unique index if not exists order_invoices_one_simulation
+  on order_invoices (order_id)
+  where mode = 'simulacion';
+create index if not exists order_invoices_issuer_created
+  on order_invoices (issuer_id, created_at desc);
+create index if not exists order_invoices_store_created
+  on order_invoices (store_id, created_at desc);
+create index if not exists order_invoices_order
+  on order_invoices (order_id, created_at desc);
+create index if not exists order_invoices_open
+  on order_invoices (issuer_id, created_at)
+  where status in ('emitiendo', 'en_duda');
+
+-- LO QUE PASÓ NO SE REESCRIBE. Los estados solo avanzan, lo enviado no cambia y
+-- nada se borra (§2, principio 6).
+create or replace function order_invoices_guard() returns trigger
+language plpgsql security invoker set search_path = public as $$
+begin
+  if tg_op = 'DELETE' then
+    raise exception 'Un comprobante no se borra';
+  end if;
+  if new.id <> old.id or new.org_id <> old.org_id or new.store_id <> old.store_id
+     or new.order_id <> old.order_id or new.issuer_id <> old.issuer_id or new.ruc <> old.ruc
+     or new.mode <> old.mode or new.invoice_type <> old.invoice_type or new.total <> old.total
+     or new.paid_at is distinct from old.paid_at or new.basis <> old.basis
+     or new.request is distinct from old.request or new.created_at <> old.created_at
+     or new.created_by is distinct from old.created_by then
+    raise exception 'Lo enviado de un comprobante no cambia';
+  end if;
+  -- Cerrada no cambia: lo simulado, lo emitido y lo registrado como externo.
+  if old.status in ('simulada', 'emitida', 'externa') then
+    raise exception 'Un comprobante % no cambia', old.status;
+  end if;
+  if not (
+    new.status = old.status
+    or (old.status = 'emitiendo' and new.status in ('emitida', 'error', 'en_duda'))
+    or (old.status = 'en_duda' and new.status in ('emitida', 'error'))
+  ) then
+    raise exception 'Transición de comprobante no permitida: % → %', old.status, new.status;
+  end if;
+  -- Un error solo admite que una persona pida su reintento, una vez. El
+  -- reintento es una fila nueva; esta se queda como historia.
+  if old.status = 'error' and (
+    old.retry_requested_at is not null
+    or new.retry_requested_at is null
+    or row(new.response, new.http_status, new.simplefact_id, new.serie, new.correlative,
+           new.pdf_url, new.xml_url, new.sunat_status, new.ruc_mismatch, new.error, new.note,
+           new.resolved_by, new.resolved_at)
+       is distinct from
+       row(old.response, old.http_status, old.simplefact_id, old.serie, old.correlative,
+           old.pdf_url, old.xml_url, old.sunat_status, old.ruc_mismatch, old.error, old.note,
+           old.resolved_by, old.resolved_at)
+  ) then
+    raise exception 'Un error solo admite pedir su reintento, una vez';
+  end if;
+  new.updated_at := now();
+  return new;
+end;
+$$;
+revoke all on function order_invoices_guard() from public, anon, authenticated;
+drop trigger if exists order_invoices_guard on order_invoices;
+create trigger order_invoices_guard before update or delete on order_invoices
+  for each row execute function order_invoices_guard();
+
+-- ── 4. La última revisión del barrido ────────────────────────────────────────
+create table if not exists invoice_order_checks (
+  order_id   uuid not null references orders(id) on delete cascade,
+  mode       text not null check (mode in ('simulacion', 'real')),
+  store_id   uuid not null references stores(id) on delete cascade,
+  issuer_id  uuid references invoice_issuers(id) on delete set null,
+  reason     text not null,
+  detail     text,
+  checked_at timestamptz not null default now(),
+  primary key (order_id, mode)
+);
+
+comment on table invoice_order_checks is
+  'Por qué el barrido no emitió un pedido, la última vez que lo miró (MOM §35.6). Es una caché de la revisión, no un hecho.';
+
+create index if not exists invoice_order_checks_store
+  on invoice_order_checks (store_id, checked_at desc);
+
+-- ── 5. Solo el servidor ──────────────────────────────────────────────────────
+alter table invoice_issuers enable row level security;
+alter table order_invoices enable row level security;
+alter table invoice_order_checks enable row level security;
+-- SIN policies: ni el token cifrado ni los comprobantes se leen desde el
+-- navegador. Las pantallas pasan por acciones de servidor con permiso.
+revoke all on invoice_issuers, order_invoices, invoice_order_checks from anon, authenticated;
+grant all privileges on invoice_issuers, order_invoices, invoice_order_checks to service_role;
+
+-- ── 6. El turno ──────────────────────────────────────────────────────────────
+-- Revisa DENTRO de la base, con un candado por RUC, todo lo que no puede fallar:
+-- modo, conexión, monto, fecha de inicio, uno por pedido y el tope del día. Deja
+-- la fila en `emitiendo` (real) o `simulada`. Sin desbloqueo por tiempo: una
+-- fila `emitiendo` que se quedó sin respuesta se concilia, no se repite.
+create or replace function invoice_claim(
+  p_id uuid,
+  p_issuer uuid,
+  p_store uuid,
+  p_order uuid,
+  p_total numeric,
+  p_paid_at timestamptz,
+  p_order_name text,
+  p_basis jsonb,
+  p_request jsonb
+) returns jsonb
+language plpgsql security invoker set search_path = public as $$
+declare
+  v_org   uuid;
+  v_order orders;
+  v_iss   invoice_issuers;
+  v_count integer;
+begin
+  select org_id into v_org from stores where id = p_store and status = 'active';
+  if v_org is null then
+    return jsonb_build_object('reason', 'tienda');
+  end if;
+  select * into v_order from orders where id = p_order and store_id = p_store;
+  if v_order.id is null then
+    return jsonb_build_object('reason', 'pedido');
+  end if;
+  if v_order.cancelled_at is not null then
+    return jsonb_build_object('reason', 'anulado');
+  end if;
+  if coalesce(v_order.total_refunded, 0) <> 0 then
+    return jsonb_build_object('reason', 'reembolsado');
+  end if;
+  -- La boleta va en soles: un total en otra moneda se emitiría como si lo fuera.
+  if upper(coalesce(v_order.currency, '')) <> 'PEN' then
+    return jsonb_build_object('reason', 'moneda');
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended(p_issuer::text, 257));
+  select * into v_iss from invoice_issuers where id = p_issuer for update;
+  if v_iss.id is null or v_iss.org_id <> v_org then
+    return jsonb_build_object('reason', 'ruc_ajeno');
+  end if;
+  if v_iss.mode = 'apagado' then
+    return jsonb_build_object('reason', 'ruc_apagado');
+  end if;
+  if p_total is null or p_total <= 0 then
+    return jsonb_build_object('reason', 'monto_cero');
+  end if;
+  if p_total > 700 then
+    return jsonb_build_object('reason', 'monto_mayor_700');
+  end if;
+  if v_order.total_amount is null or abs(v_order.total_amount - p_total) >= 0.005 then
+    return jsonb_build_object('reason', 'total_distinto');
+  end if;
+  if v_iss.emit_from is null or p_paid_at is null or p_paid_at < v_iss.emit_from then
+    return jsonb_build_object('reason', 'antes_de_inicio');
+  end if;
+  if p_request is null or jsonb_typeof(p_request) <> 'object' then
+    return jsonb_build_object('reason', 'sin_boleta');
+  end if;
+
+  if exists (
+    select 1 from order_invoices
+    where order_id = p_order and mode = 'real'
+      and status in ('emitiendo', 'emitida', 'en_duda', 'externa')
+  ) then
+    return jsonb_build_object('reason', 'ya_tiene');
+  end if;
+
+  if v_iss.mode = 'simulacion' then
+    if exists (select 1 from order_invoices where order_id = p_order and mode = 'simulacion') then
+      return jsonb_build_object('reason', 'ya_simulado');
+    end if;
+  else
+    if v_iss.token_enc is null or v_iss.checked_ruc is distinct from v_iss.ruc then
+      return jsonb_build_object('reason', 'sin_conexion');
+    end if;
+    if exists (
+      select 1 from order_invoices
+      where order_id = p_order and mode = 'real' and status = 'error' and retry_requested_at is null
+    ) then
+      return jsonb_build_object('reason', 'error_previo');
+    end if;
+  end if;
+
+  select count(*) into v_count
+  from order_invoices
+  where issuer_id = p_issuer
+    and mode = v_iss.mode
+    and status in ('simulada', 'emitiendo', 'emitida', 'en_duda')
+    and created_at >= (date_trunc('day', now() at time zone 'America/Lima') at time zone 'America/Lima');
+  if v_count >= v_iss.daily_limit then
+    return jsonb_build_object('reason', 'tope');
+  end if;
+
+  insert into order_invoices (
+    id, org_id, store_id, order_id, issuer_id, ruc, mode, status,
+    order_name, total, paid_at, basis, request
+  ) values (
+    p_id, v_org, p_store, p_order, p_issuer, v_iss.ruc, v_iss.mode,
+    case when v_iss.mode = 'real' then 'emitiendo' else 'simulada' end,
+    p_order_name, p_total, p_paid_at, coalesce(p_basis, '{}'::jsonb), p_request
+  );
+  return jsonb_build_object('id', p_id, 'mode', v_iss.mode);
+end;
+$$;
+revoke all on function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)
+  from public, anon, authenticated;
+grant execute on function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)
+  to service_role;
+
+-- ── 7. Semilla: GRUPO GF S.A.C. ──────────────────────────────────────────────
+-- Decisión del owner (14-10-2026): el Yape ···309, el BCP ···0-12 (mismo
+-- titular, Kapta no los distingue: MOM §35.2) y la cuenta de Flow son de GRUPO
+-- GF S.A.C., RUC 20556792829. Solo en las organizaciones que cobran en esa
+-- cuenta, y solo la primera vez: si el owner cambia una asignación, volver a
+-- correr esta migración no la pisa.
+do $$
+declare
+  v_org    record;
+  v_issuer uuid;
+begin
+  for v_org in
+    select distinct s.org_id
+    from stores s
+    join store_collection_accounts a on a.store_id = s.id
+    where a.phone_last_digits = '309' and lower(a.label) = lower('Grupo GF S.A.C.')
+  loop
+    if not exists (
+      select 1 from invoice_issuers where org_id = v_org.org_id and ruc = '20556792829'
+    ) then
+      insert into invoice_issuers (org_id, ruc, legal_name, simplefact_subdomain)
+      values (v_org.org_id, '20556792829', 'GRUPO GF S.A.C.', 'grupogf')
+      returning id into v_issuer;
+
+      update store_collection_accounts a
+      set invoice_issuer_id = v_issuer
+      from stores s
+      where s.id = a.store_id
+        and s.org_id = v_org.org_id
+        and a.invoice_issuer_id is null
+        and (
+          (a.phone_last_digits = '309' and lower(a.label) = lower('Grupo GF S.A.C.'))
+          or (a.phone_last_digits is null and lower(a.label) = lower('Aurela Kenku'))
+        );
+    end if;
+  end loop;
+end $$;
+
+-- ---- 0258 ----
+-- ============================================================================
+-- 0258_restock_reply_sweep.sql — barrido de respuestas al recordatorio de
+-- reposición (MOM §34, 15-10-2026).
+--
+-- El 14-10-2026 el número 451 no tenía el webhook de «mensaje recibido» en
+-- Kapso: 11 clientas contestaron el recordatorio y Kapta no se enteró. El
+-- barrido revisa, con la API de Kapso, la conversación de quien escribió
+-- después de su recordatorio y todavía no tiene respuesta registrada.
+-- `reply_checked_at` es la última vez que se revisó: solo se vuelve a mirar
+-- si la clienta escribió algo después.
+-- ============================================================================
+
+alter table restock_sends
+  add column if not exists reply_checked_at timestamptz;
+
+-- ---- 0260 ----
+-- ============================================================================
+-- 0260_invoices_hardening.sql — comprobantes por RUC: los arreglos de la
+-- revisión adversaria, sobre la 0257 que ya corrió (MOM §35, 15-10-2026).
+--
+-- QUÉ PASABA. La 0257 se aplicó en producción el 14-10-2026, antes de la
+-- revisión adversaria, y sus arreglos se escribieron después DENTRO de la 0257.
+-- Una migración que ya corrió no se vuelve a correr: lo que se le cambió nunca
+-- iba a llegar a producción, y una base nueva y producción quedaban con
+-- funciones distintas bajo el mismo número. La 0257 vuelve a ser, byte a byte,
+-- la que corrió, y los arreglos van aquí.
+--
+-- QUÉ CAMBIA. Cuatro funciones, con `create or replace`:
+--   · `invoice_issuers_touch`: un token, un subdominio o un RUC nuevo borra
+--     también el motivo de la prueba anterior (`check_error`). Sin eso, Ajustes
+--     lo mostraba como si Kapta hubiera apagado el RUC.
+--   · `order_invoices_guard`: borrar una cuenta de auth.users deja en NULL
+--     quién registró, pidió el reintento o resolvió, y nada más, solo dentro de
+--     esa cascada (`pg_trigger_depth() > 1`). Sin eso no se podía borrar a
+--     nadie que hubiera tocado un comprobante; a mano, sin borrar la cuenta,
+--     sigue sin poderse.
+--   · `invoice_claim`: el turno vuelve a sacar de los pagos de la base cuándo
+--     quedó pagado el pedido (`pagos_en_revision` si queda uno vivo sin
+--     validar; si no, el `registered_at` del último validado o la fecha del
+--     pedido) y no da el turno si esa fecha o la que manda el código es
+--     anterior a «Emitir desde». Un error en las reglas no manda a SUNAT una
+--     boleta de antes.
+--   · `invoice_candidates` (nueva): los pedidos que el barrido revisa en cada
+--     pasada, sin los que ya tienen su comprobante ni los que esperan que una
+--     persona pida reintentar un error. El barrido de este código la llama: sin
+--     ella dice `sin_migracion` y no simula ni emite nada.
+-- Los triggers de la 0257 no se recrean: guardan el oid de su función, y
+-- `create or replace` lo conserva.
+--
+-- A QUIÉN NO. No toca datos: ni los RUC, ni sus cuentas, ni los comprobantes.
+-- Es segura sobre lo que hay en producción (15-10-2026: un RUC en simulación y
+-- ningún comprobante). Ninguna regla que el MOM no diga ya (§35.3, §35.4,
+-- §35.6). El turno y la lista siguen solo para `service_role`, y el código que
+-- hoy está en producción pide el mismo turno y conoce sus motivos. Va después
+-- de la 0257, que crea las tablas que estas funciones usan.
+--
+-- Se aplica a mano ANTES del código (DEPLOY.md). Es idempotente.
+-- ============================================================================
+
+-- ── 1. Empresas emisoras: un token nuevo se prueba de cero ───────────────────
+-- Lo nuevo frente a la 0257: también se borra el motivo de la prueba vieja.
+--
+-- Cambiar el token, el subdominio o el RUC invalida la prueba de conexión, y un
+-- RUC en real baja a simulación: un token nuevo se prueba antes de emitir.
+--
+-- Lo mismo si la prueba se repite con el RUC ya en real y no confirma el RUC
+-- (leyó otro, o no pudo leer): sin esto, guardar el resultado de esa prueba
+-- chocaba con `invoice_issuers_real_ready` y Ajustes no podía registrarlo, con
+-- el RUC emitiendo sobre la prueba vieja. Real exige, mientras dure, que la
+-- última prueba sea la del RUC declarado.
+--
+-- «Emitir desde» no queda atrás al encender ni al cambiar de modo (MOM §35.4):
+-- la fecha que sirvió para la simulación de ayer no habilita, al pasar a real,
+-- las boletas de todo lo que se pagó desde entonces.
+create or replace function invoice_issuers_touch() returns trigger
+language plpgsql security invoker set search_path = public as $$
+begin
+  new.updated_at := now();
+  if tg_op = 'UPDATE' and (
+    new.token_enc is distinct from old.token_enc
+    or new.simplefact_subdomain is distinct from old.simplefact_subdomain
+    or new.ruc is distinct from old.ruc
+  ) then
+    new.checked_at := null;
+    new.checked_ruc := null;
+    -- El motivo de la prueba anterior era de otro token: sin borrarlo, Ajustes
+    -- lo mostraría como si Kapta hubiera apagado el RUC (solo el barrido deja
+    -- una fila sin fecha de prueba y con motivo, MOM §35.4).
+    new.check_error := null;
+    if new.mode = 'real' then
+      new.mode := 'simulacion';
+    end if;
+  end if;
+  if tg_op = 'UPDATE' and old.mode = 'real' and new.mode = 'real'
+     and new.checked_ruc is distinct from new.ruc then
+    new.mode := 'simulacion';
+  end if;
+  if new.mode <> 'apagado'
+     and (tg_op = 'INSERT' or new.mode is distinct from old.mode)
+     and new.emit_from < now() then
+    new.emit_from := now();
+  end if;
+  return new;
+end;
+$$;
+revoke all on function invoice_issuers_touch() from public, anon, authenticated;
+
+-- ── 2. Comprobantes: quién, cuando se borra su cuenta ────────────────────────
+-- Lo nuevo frente a la 0257: la cascada de auth.users pasa, y solo ella.
+--
+-- LO QUE PASÓ NO SE REESCRIBE. Los estados solo avanzan, lo enviado no cambia y
+-- nada se borra (§2, principio 6).
+create or replace function order_invoices_guard() returns trigger
+language plpgsql security invoker set search_path = public as $$
+begin
+  if tg_op = 'DELETE' then
+    raise exception 'Un comprobante no se borra';
+  end if;
+  -- Borrar una cuenta de auth.users deja en NULL quién registró, pidió el
+  -- reintento o resolvió (`on delete set null`), y Postgres lo hace con un
+  -- UPDATE que pasa por este candado: sin esto, no se podía borrar a nadie que
+  -- hubiera tocado un comprobante. Pasa solo un UPDATE cuyo único cambio es
+  -- poner en NULL alguna de esas tres columnas: todo lo demás de la fila, hasta
+  -- `updated_at`, queda igual. Se pierde quién; el hecho (`retry_requested_at`,
+  -- `resolved_at`) se queda. Un UPDATE que no cambia nada sigue por el camino
+  -- de siempre (y en una fila cerrada, falla).
+  --
+  -- Y pasa SOLO si viene de esa cascada. La acción de la llave foránea es un
+  -- trigger del sistema que hace el UPDATE por dentro, así que este candado
+  -- corre un nivel más hondo (`pg_trigger_depth()` = 2; un UPDATE directo, 1).
+  -- Sin esa condición, el servidor (o cualquiera con service_role) podía borrar
+  -- a mano quién emitió, pidió el reintento o resolvió, sin borrar la cuenta.
+  if pg_trigger_depth() > 1
+     and (to_jsonb(new) - array['created_by', 'retry_requested_by', 'resolved_by'])
+       = (to_jsonb(old) - array['created_by', 'retry_requested_by', 'resolved_by'])
+     and (new.created_by is null or new.created_by = old.created_by)
+     and (new.retry_requested_by is null or new.retry_requested_by = old.retry_requested_by)
+     and (new.resolved_by is null or new.resolved_by = old.resolved_by)
+     and (new.created_by is distinct from old.created_by
+          or new.retry_requested_by is distinct from old.retry_requested_by
+          or new.resolved_by is distinct from old.resolved_by) then
+    return new;
+  end if;
+  if new.id <> old.id or new.org_id <> old.org_id or new.store_id <> old.store_id
+     or new.order_id <> old.order_id or new.issuer_id <> old.issuer_id or new.ruc <> old.ruc
+     or new.mode <> old.mode or new.invoice_type <> old.invoice_type or new.total <> old.total
+     or new.paid_at is distinct from old.paid_at or new.basis <> old.basis
+     or new.request is distinct from old.request or new.created_at <> old.created_at
+     or new.created_by is distinct from old.created_by then
+    raise exception 'Lo enviado de un comprobante no cambia';
+  end if;
+  -- Cerrada no cambia: lo simulado, lo emitido y lo registrado como externo.
+  if old.status in ('simulada', 'emitida', 'externa') then
+    raise exception 'Un comprobante % no cambia', old.status;
+  end if;
+  if not (
+    new.status = old.status
+    or (old.status = 'emitiendo' and new.status in ('emitida', 'error', 'en_duda'))
+    or (old.status = 'en_duda' and new.status in ('emitida', 'error'))
+  ) then
+    raise exception 'Transición de comprobante no permitida: % → %', old.status, new.status;
+  end if;
+  -- Un error solo admite que una persona pida su reintento, una vez. El
+  -- reintento es una fila nueva; esta se queda como historia.
+  if old.status = 'error' and (
+    old.retry_requested_at is not null
+    or new.retry_requested_at is null
+    or row(new.response, new.http_status, new.simplefact_id, new.serie, new.correlative,
+           new.pdf_url, new.xml_url, new.sunat_status, new.ruc_mismatch, new.error, new.note,
+           new.resolved_by, new.resolved_at)
+       is distinct from
+       row(old.response, old.http_status, old.simplefact_id, old.serie, old.correlative,
+           old.pdf_url, old.xml_url, old.sunat_status, old.ruc_mismatch, old.error, old.note,
+           old.resolved_by, old.resolved_at)
+  ) then
+    raise exception 'Un error solo admite pedir su reintento, una vez';
+  end if;
+  new.updated_at := now();
+  return new;
+end;
+$$;
+revoke all on function order_invoices_guard() from public, anon, authenticated;
+
+-- ── 3. El turno ──────────────────────────────────────────────────────────────
+-- Lo nuevo frente a la 0257: cuándo quedó pagado lo dicen los pagos de la base.
+--
+-- Revisa DENTRO de la base, con un candado por RUC, todo lo que no puede fallar:
+-- modo, conexión, monto, pagos validados, fecha de inicio, uno por pedido y el
+-- tope del día. Deja la fila en `emitiendo` (real) o `simulada`. Sin desbloqueo
+-- por tiempo: una fila `emitiendo` que se quedó sin respuesta se concilia, no se
+-- repite.
+create or replace function invoice_claim(
+  p_id uuid,
+  p_issuer uuid,
+  p_store uuid,
+  p_order uuid,
+  p_total numeric,
+  p_paid_at timestamptz,
+  p_order_name text,
+  p_basis jsonb,
+  p_request jsonb
+) returns jsonb
+language plpgsql security invoker set search_path = public as $$
+declare
+  v_org   uuid;
+  v_order orders;
+  v_iss   invoice_issuers;
+  v_count integer;
+  v_live  integer;
+  v_paid  timestamptz;
+begin
+  select org_id into v_org from stores where id = p_store and status = 'active';
+  if v_org is null then
+    return jsonb_build_object('reason', 'tienda');
+  end if;
+  select * into v_order from orders where id = p_order and store_id = p_store;
+  if v_order.id is null then
+    return jsonb_build_object('reason', 'pedido');
+  end if;
+  if v_order.cancelled_at is not null then
+    return jsonb_build_object('reason', 'anulado');
+  end if;
+  if coalesce(v_order.total_refunded, 0) <> 0 then
+    return jsonb_build_object('reason', 'reembolsado');
+  end if;
+  -- La boleta va en soles: un total en otra moneda se emitiría como si lo fuera.
+  if upper(coalesce(v_order.currency, '')) <> 'PEN' then
+    return jsonb_build_object('reason', 'moneda');
+  end if;
+
+  -- Cuándo quedó pagado, con los pagos de la base y no con lo que manda quien
+  -- pide el turno (MOM §35.3, condiciones 2 y 8). `p_paid_at` lo calcula el
+  -- código: si una regla o una lectura se equivocara, la boleta de algo pagado
+  -- antes de «Emitir desde» iría igual a SUNAT, y una boleta enviada no se
+  -- borra. Es la misma cuenta que `invoiceEligibility`: todos los pagos vivos
+  -- (no rechazados) validados, y el `registered_at` del último, que no cambia
+  -- si el pago se observa y se vuelve a validar; sin pagos vivos, la fecha del
+  -- pedido (el prepago web).
+  if exists (
+    select 1 from order_payments
+    where order_id = p_order
+      and validation_status is distinct from 'rechazado'
+      and validation_status is distinct from 'validado'
+  ) then
+    return jsonb_build_object('reason', 'pagos_en_revision');
+  end if;
+  select count(*), max(registered_at) into v_live, v_paid
+  from order_payments
+  where order_id = p_order and validation_status = 'validado';
+  if v_live = 0 then
+    v_paid := coalesce(v_order.processed_at, v_order.created_at);
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended(p_issuer::text, 257));
+  select * into v_iss from invoice_issuers where id = p_issuer for update;
+  if v_iss.id is null or v_iss.org_id <> v_org then
+    return jsonb_build_object('reason', 'ruc_ajeno');
+  end if;
+  if v_iss.mode = 'apagado' then
+    return jsonb_build_object('reason', 'ruc_apagado');
+  end if;
+  if p_total is null or p_total <= 0 then
+    return jsonb_build_object('reason', 'monto_cero');
+  end if;
+  if p_total > 700 then
+    return jsonb_build_object('reason', 'monto_mayor_700');
+  end if;
+  if v_order.total_amount is null or abs(v_order.total_amount - p_total) >= 0.005 then
+    return jsonb_build_object('reason', 'total_distinto');
+  end if;
+  -- Las dos fechas: la que manda el código y la que dice la base. Sin una de
+  -- ellas no se sabe cuándo quedó pagado, y no se emite.
+  if v_iss.emit_from is null
+     or p_paid_at is null or p_paid_at < v_iss.emit_from
+     or v_paid is null or v_paid < v_iss.emit_from then
+    return jsonb_build_object('reason', 'antes_de_inicio');
+  end if;
+  if p_request is null or jsonb_typeof(p_request) <> 'object' then
+    return jsonb_build_object('reason', 'sin_boleta');
+  end if;
+
+  if exists (
+    select 1 from order_invoices
+    where order_id = p_order and mode = 'real'
+      and status in ('emitiendo', 'emitida', 'en_duda', 'externa')
+  ) then
+    return jsonb_build_object('reason', 'ya_tiene');
+  end if;
+
+  if v_iss.mode = 'simulacion' then
+    if exists (select 1 from order_invoices where order_id = p_order and mode = 'simulacion') then
+      return jsonb_build_object('reason', 'ya_simulado');
+    end if;
+  else
+    if v_iss.token_enc is null or v_iss.checked_ruc is distinct from v_iss.ruc then
+      return jsonb_build_object('reason', 'sin_conexion');
+    end if;
+    if exists (
+      select 1 from order_invoices
+      where order_id = p_order and mode = 'real' and status = 'error' and retry_requested_at is null
+    ) then
+      return jsonb_build_object('reason', 'error_previo');
+    end if;
+  end if;
+
+  select count(*) into v_count
+  from order_invoices
+  where issuer_id = p_issuer
+    and mode = v_iss.mode
+    and status in ('simulada', 'emitiendo', 'emitida', 'en_duda')
+    and created_at >= (date_trunc('day', now() at time zone 'America/Lima') at time zone 'America/Lima');
+  if v_count >= v_iss.daily_limit then
+    return jsonb_build_object('reason', 'tope');
+  end if;
+
+  insert into order_invoices (
+    id, org_id, store_id, order_id, issuer_id, ruc, mode, status,
+    order_name, total, paid_at, basis, request
+  ) values (
+    p_id, v_org, p_store, p_order, p_issuer, v_iss.ruc, v_iss.mode,
+    case when v_iss.mode = 'real' then 'emitiendo' else 'simulada' end,
+    p_order_name, p_total, greatest(p_paid_at, v_paid), coalesce(p_basis, '{}'::jsonb), p_request
+  );
+  return jsonb_build_object('id', p_id, 'mode', v_iss.mode);
+end;
+$$;
+revoke all on function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)
+  from public, anon, authenticated;
+grant execute on function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)
+  to service_role;
+
+-- ── 4. Los pedidos por revisar ───────────────────────────────────────────────
+-- Nueva: la 0257 no la tenía.
+--
+-- Qué pedidos mira el barrido en cada pasada, por organización y modo (MOM
+-- §35.4). Antes eran los 300 más nuevos del Master y los 300 pagos validados
+-- más nuevos: con ~26 pedidos pagados al día cubrían ~11 días, y los pedidos ya
+-- resueltos ocupaban los lugares, así que uno que quedaba elegible tarde podía
+-- no entrar nunca. Aquí lo resuelto no entra y el límite es para lo pendiente.
+--
+-- Entra un pedido de una tienda ACTIVA de la organización (o solo de
+-- `p_store`) que:
+--   · está pagado según el Master: pagado completo, o prepago web confirmado;
+--   · es de los últimos 60 días: Shopify no deja leer pedidos más viejos sin
+--     `read_all_orders`, y el barrido relee cada pedido antes de emitir;
+--   · no tiene comprobante real vivo y, en simulación, tampoco su simulación;
+--   · en real, no tiene un `error` real sin reintento pedido: el turno lo
+--     rechaza (`error_previo`) y solo ocupaba un lugar. Vuelve a entrar cuando
+--     una persona pide reintentar. En simulación el turno no lo mira, y entra;
+--   · no lo bloqueó Shopify en este modo hace menos de 6 horas. `p_blocked` son
+--     los motivos de Shopify, y los manda el barrido (SHOPIFY_LEVEL_REASONS en
+--     lib/invoicing/server.ts): la lista vive en un solo lugar;
+--   · quedó pagado desde `p_since` (el «Emitir desde» más antiguo de los RUC en
+--     ese modo): un pago validado registrado desde entonces, o el prepago web
+--     de un pedido creado desde entonces. Sin `p_since`, nada.
+-- Del más nuevo al más viejo, a lo más `p_limit`. Solo elige qué mirar: lo que
+-- decide es `invoiceEligibility` y, al final, `invoice_claim`.
+create or replace function invoice_candidates(
+  p_org uuid,
+  p_mode text,
+  p_since timestamptz,
+  p_limit integer,
+  p_blocked text[],
+  p_store uuid default null
+) returns table (order_id uuid)
+language sql stable security invoker set search_path = public as $$
+  select m.order_id
+  from order_master m
+  join stores s on s.id = m.store_id
+  where s.org_id = p_org
+    and s.status = 'active'
+    and (p_store is null or m.store_id = p_store)
+    and p_mode in ('simulacion', 'real')
+    and (m.payment_state = 'pago_completo'
+         or (m.payment_gateway = 'checkout' and m.financial_status = 'paid'))
+    and m.order_created_at >= now() - interval '60 days'
+    and not exists (
+      select 1 from order_invoices i
+      where i.order_id = m.order_id and i.mode = 'real'
+        and i.status in ('emitiendo', 'emitida', 'en_duda', 'externa')
+    )
+    and (p_mode = 'real' or not exists (
+      select 1 from order_invoices i where i.order_id = m.order_id and i.mode = 'simulacion'
+    ))
+    and (p_mode <> 'real' or not exists (
+      select 1 from order_invoices i
+      where i.order_id = m.order_id and i.mode = 'real'
+        and i.status = 'error' and i.retry_requested_at is null
+    ))
+    and not exists (
+      select 1 from invoice_order_checks c
+      where c.order_id = m.order_id and c.mode = p_mode
+        and c.reason = any (coalesce(p_blocked, '{}'::text[]))
+        and c.checked_at > now() - interval '6 hours'
+    )
+    and (
+      exists (
+        select 1 from order_payments p
+        where p.order_id = m.order_id and p.validation_status = 'validado' and p.registered_at >= p_since
+      )
+      or (m.payment_gateway = 'checkout' and m.financial_status = 'paid' and m.order_created_at >= p_since)
+    )
+  order by m.order_created_at desc, m.order_id
+  limit greatest(coalesce(p_limit, 0), 0)
+$$;
+revoke all on function invoice_candidates(uuid, text, timestamptz, integer, text[], uuid)
+  from public, anon, authenticated;
+grant execute on function invoice_candidates(uuid, text, timestamptz, integer, text[], uuid)
+  to service_role;
+
+-- ---- 0261 ----
+-- ============================================================================
+-- 0261_invoices_manual.sql — comprobantes por RUC: el modo «Manual», un paso
+-- entre la simulación y lo automático (MOM §35, 15-10-2026).
+--
+-- QUÉ PASABA. De Simulación a Real había un solo salto: desde ese momento el
+-- barrido emitía solo, hasta el tope del día, y la primera boleta real que el
+-- owner podía revisar en SimpleFact ya llegaba con otras detrás. Una boleta
+-- enviada a SUNAT no se borra.
+--
+-- QUÉ CAMBIA. Decisión del owner (15-10-2026): un paso manual antes de lo
+-- automático. En «Manual» el barrido solo simula, y una persona con
+-- `invoices.manage` pulsa «Emitir esta boleta» pedido por pedido, con los
+-- mismos candados. Las primeras boletas reales salen una a una y se revisan en
+-- SimpleFact antes de pasar a Real.
+--   · `invoice_issuers.mode` admite 'manual' (`invoice_issuers_mode_check`,
+--     ahora con nombre).
+--   · `invoice_issuers_real_ready`: Manual exige lo mismo que Real —token,
+--     «Emitir desde» y una prueba de conexión que leyó el RUC declarado—,
+--     porque también emite boletas reales.
+--   · `invoice_issuers_touch`: un token, un subdominio o un RUC nuevo, o una
+--     prueba repetida que no confirma el RUC, baja Manual a Simulación, como
+--     baja Real. «Emitir desde» se mueve al cambiar de modo como hasta hoy:
+--     Manual cuenta como encendido.
+--   · `invoice_claim` recibe dos argumentos nuevos, con valor por defecto:
+--     `p_mode`, la fila que pide quien llama ('simulacion', 'real' o NULL), y
+--     `p_created_by`, quién pulsó «Emitir». Sin `p_mode`, lo de siempre: un RUC
+--     en Real da una fila real, y uno en Simulación o en Manual, una simulada.
+--     'real' solo si el RUC está en Real o en Manual; 'simulacion', solo si
+--     está en Simulación o en Manual; si no, `modo_distinto`. El tope del día
+--     cuenta las filas del modo pedido. La firma de nueve argumentos se borra:
+--     con las dos, una llamada por nombre con los nueve de siempre no sabría a
+--     cuál ir.
+--
+-- A QUIÉN NO. No toca datos: el RUC de producción sigue en Simulación (15-10-
+-- 2026: un RUC en simulación y ningún comprobante) y nada pasa a Manual solo.
+-- El código que hoy está en producción pide el turno con los nueve argumentos
+-- por nombre: los dos nuevos quedan en NULL y el turno hace lo mismo que
+-- antes. Ese código no conoce «Manual» y trata un RUC en Manual como apagado;
+-- y si pidiera el turno de uno, sin `p_mode` recibiría una simulada: una
+-- boleta real en Manual solo sale si quien llama la pide. `invoice_candidates`
+-- no cambia (el barrido la llama con 'simulacion' para un RUC en Manual). El
+-- turno sigue solo para `service_role`. Va después de la 0260: sus funciones
+-- son la base de las de aquí. En el SQL Editor corre en una sola transacción:
+-- quien pida el turno mientras tanto ve la firma de antes o la de ahora, nunca
+-- ninguna ni las dos.
+--
+-- Se aplica a mano ANTES del código (DEPLOY.md). Es idempotente.
+-- ============================================================================
+
+-- ── 1. Manual exige lo mismo que Real ────────────────────────────────────────
+-- Va antes de admitir el modo: en ningún momento puede existir un RUC en Manual
+-- sin token, sin «Emitir desde» o sin la prueba de su RUC.
+--
+-- `checked_ruc is not null` va escrito por lo mismo que en la 0257: sin él, un
+-- RUC sin prueba daba `null = ruc` → NULL, y un CHECK con NULL pasa.
+--
+-- Se rehace solo si todavía es la de la 0257 (no nombra 'manual'): correr esta
+-- migración otra vez no la toca.
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+     where conrelid = 'public.invoice_issuers'::regclass
+       and conname = 'invoice_issuers_real_ready'
+       and pg_get_constraintdef(oid) like '%''manual''%'
+  ) then
+    alter table invoice_issuers drop constraint if exists invoice_issuers_real_ready;
+    alter table invoice_issuers add constraint invoice_issuers_real_ready check (
+      mode not in ('real', 'manual')
+      or (token_enc is not null and emit_from is not null and checked_ruc is not null and checked_ruc = ruc)
+    );
+  end if;
+end $$;
+
+-- ── 2. El modo «Manual» ──────────────────────────────────────────────────────
+-- La 0257 escribió el CHECK del modo dentro de la columna, sin nombre, y
+-- Postgres le puso uno. No se adivina: se borra todo CHECK de la columna `mode`
+-- sola que todavía no admite 'manual', y se crea con nombre. Es el mismo que
+-- Postgres le había puesto, y Ajustes lo reconoce («Ese modo no existe.»).
+-- Correr esta migración otra vez no lo toca.
+do $$
+declare
+  v_name text;
+begin
+  for v_name in
+    select c.conname
+      from pg_constraint c
+     where c.conrelid = 'public.invoice_issuers'::regclass
+       and c.contype = 'c'
+       and c.conkey = array[(select a.attnum from pg_attribute a
+                              where a.attrelid = 'public.invoice_issuers'::regclass and a.attname = 'mode')]
+       and pg_get_constraintdef(c.oid) not like '%''manual''%'
+  loop
+    execute format('alter table invoice_issuers drop constraint %I', v_name);
+  end loop;
+  if not exists (
+    select 1 from pg_constraint
+     where conrelid = 'public.invoice_issuers'::regclass and conname = 'invoice_issuers_mode_check'
+  ) then
+    alter table invoice_issuers add constraint invoice_issuers_mode_check
+      check (mode in ('apagado', 'simulacion', 'manual', 'real'));
+  end if;
+end $$;
+
+comment on column invoice_issuers.mode is
+  'apagado = no hace nada; simulacion = arma la boleta y la guarda sin enviarla; manual = el barrido simula y una persona emite pedido por pedido con «Emitir esta boleta»; real = el barrido emite (MOM §35.8).';
+comment on column order_invoices.created_by is
+  'Quién pulsó «Emitir esta boleta» (modo manual) o registró la externa. NULL: la escribió el barrido, o se borró la cuenta de esa persona.';
+
+-- ── 3. Empresas emisoras: Manual baja como Real ──────────────────────────────
+-- Lo nuevo frente a la 0260: lo que bajaba Real a Simulación baja también
+-- Manual, que emite boletas reales con el mismo token.
+--
+-- Cambiar el token, el subdominio o el RUC invalida la prueba de conexión, y un
+-- RUC en Real o en Manual baja a Simulación: un token nuevo se prueba antes de
+-- emitir. Se borra también el motivo de la prueba anterior (0260).
+--
+-- Lo mismo si la prueba se repite sin cambiar de modo y no confirma el RUC
+-- (leyó otro, o no pudo leer): sin esto, guardar el resultado de esa prueba
+-- chocaba con `invoice_issuers_real_ready` y Ajustes no podía registrarlo, con
+-- el RUC emitiendo sobre la prueba vieja. Pedir a la vez otro modo encendido y
+-- guardar una prueba que no confirma sigue fallando: no se calla.
+--
+-- «Emitir desde» no queda atrás al encender ni al cambiar de modo (MOM §35.4):
+-- la fecha que sirvió para la simulación de ayer no habilita, al pasar a Manual
+-- o a Real, las boletas de todo lo que se pagó desde entonces.
+create or replace function invoice_issuers_touch() returns trigger
+language plpgsql security invoker set search_path = public as $$
+begin
+  new.updated_at := now();
+  if tg_op = 'UPDATE' and (
+    new.token_enc is distinct from old.token_enc
+    or new.simplefact_subdomain is distinct from old.simplefact_subdomain
+    or new.ruc is distinct from old.ruc
+  ) then
+    new.checked_at := null;
+    new.checked_ruc := null;
+    -- El motivo de la prueba anterior era de otro token: sin borrarlo, Ajustes
+    -- lo mostraría como si Kapta hubiera apagado el RUC (solo el barrido deja
+    -- una fila sin fecha de prueba y con motivo, MOM §35.4).
+    new.check_error := null;
+    if new.mode in ('real', 'manual') then
+      new.mode := 'simulacion';
+    end if;
+  end if;
+  if tg_op = 'UPDATE' and old.mode in ('real', 'manual') and new.mode = old.mode
+     and new.checked_ruc is distinct from new.ruc then
+    new.mode := 'simulacion';
+  end if;
+  if new.mode <> 'apagado'
+     and (tg_op = 'INSERT' or new.mode is distinct from old.mode)
+     and new.emit_from < now() then
+    new.emit_from := now();
+  end if;
+  return new;
+end;
+$$;
+revoke all on function invoice_issuers_touch() from public, anon, authenticated;
+
+-- ── 4. El turno ──────────────────────────────────────────────────────────────
+-- Lo nuevo frente a la 0260: quien llama dice qué fila pide (`p_mode`) y quién
+-- la pidió (`p_created_by`).
+--
+-- Revisa DENTRO de la base, con un candado por RUC, todo lo que no puede fallar:
+-- modo, conexión, monto, pagos validados, fecha de inicio, uno por pedido y el
+-- tope del día. Deja la fila en `emitiendo` (real) o `simulada`. Sin desbloqueo
+-- por tiempo: una fila `emitiendo` que se quedó sin respuesta se concilia, no se
+-- repite.
+--
+-- La firma de nueve argumentos se borra antes de crear la de once: con las dos,
+-- `invoice_claim(p_id => …, …, p_request => …)` —como llama el código que hoy
+-- está en producción— calza en ambas, y Postgres no elige. Con una sola, esa
+-- llamada va a esta con `p_mode` y `p_created_by` en NULL.
+drop function if exists invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb);
+
+create or replace function invoice_claim(
+  p_id uuid,
+  p_issuer uuid,
+  p_store uuid,
+  p_order uuid,
+  p_total numeric,
+  p_paid_at timestamptz,
+  p_order_name text,
+  p_basis jsonb,
+  p_request jsonb,
+  p_mode text default null,
+  p_created_by uuid default null
+) returns jsonb
+language plpgsql security invoker set search_path = public as $$
+declare
+  v_org   uuid;
+  v_order orders;
+  v_iss   invoice_issuers;
+  v_mode  text;
+  v_count integer;
+  v_live  integer;
+  v_paid  timestamptz;
+begin
+  select org_id into v_org from stores where id = p_store and status = 'active';
+  if v_org is null then
+    return jsonb_build_object('reason', 'tienda');
+  end if;
+  select * into v_order from orders where id = p_order and store_id = p_store;
+  if v_order.id is null then
+    return jsonb_build_object('reason', 'pedido');
+  end if;
+  if v_order.cancelled_at is not null then
+    return jsonb_build_object('reason', 'anulado');
+  end if;
+  if coalesce(v_order.total_refunded, 0) <> 0 then
+    return jsonb_build_object('reason', 'reembolsado');
+  end if;
+  -- La boleta va en soles: un total en otra moneda se emitiría como si lo fuera.
+  if upper(coalesce(v_order.currency, '')) <> 'PEN' then
+    return jsonb_build_object('reason', 'moneda');
+  end if;
+
+  -- Cuándo quedó pagado, con los pagos de la base y no con lo que manda quien
+  -- pide el turno (MOM §35.3, condiciones 2 y 8). `p_paid_at` lo calcula el
+  -- código: si una regla o una lectura se equivocara, la boleta de algo pagado
+  -- antes de «Emitir desde» iría igual a SUNAT, y una boleta enviada no se
+  -- borra. Es la misma cuenta que `invoiceEligibility`: todos los pagos vivos
+  -- (no rechazados) validados, y el `registered_at` del último, que no cambia
+  -- si el pago se observa y se vuelve a validar; sin pagos vivos, la fecha del
+  -- pedido (el prepago web).
+  if exists (
+    select 1 from order_payments
+    where order_id = p_order
+      and validation_status is distinct from 'rechazado'
+      and validation_status is distinct from 'validado'
+  ) then
+    return jsonb_build_object('reason', 'pagos_en_revision');
+  end if;
+  select count(*), max(registered_at) into v_live, v_paid
+  from order_payments
+  where order_id = p_order and validation_status = 'validado';
+  if v_live = 0 then
+    v_paid := coalesce(v_order.processed_at, v_order.created_at);
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended(p_issuer::text, 257));
+  select * into v_iss from invoice_issuers where id = p_issuer for update;
+  if v_iss.id is null or v_iss.org_id <> v_org then
+    return jsonb_build_object('reason', 'ruc_ajeno');
+  end if;
+  if v_iss.mode = 'apagado' then
+    return jsonb_build_object('reason', 'ruc_apagado');
+  end if;
+  -- Qué fila, con el modo del RUC leído bajo el candado. Sin `p_mode`, la de
+  -- siempre: real solo en Real; en Manual, una simulada, porque una boleta real
+  -- en Manual la pide una persona, pedido por pedido (MOM §35.8). Con `p_mode`,
+  -- la pedida, si el RUC está en un modo que la da; si no —el owner cambió el
+  -- modo mientras tanto, o un valor que no es un modo—, nada.
+  -- En Manual, una boleta real solo con una persona detrás (`p_created_by`):
+  -- el barrido nunca la pide, y si un error del código la pidiera sin nadie,
+  -- la base la rechaza.
+  v_mode := case
+    when p_mode is null then case when v_iss.mode = 'real' then 'real' else 'simulacion' end
+    when p_mode = 'real' and v_iss.mode = 'real' then 'real'
+    when p_mode = 'real' and v_iss.mode = 'manual' and p_created_by is not null then 'real'
+    when p_mode = 'simulacion' and v_iss.mode in ('simulacion', 'manual') then 'simulacion'
+  end;
+  if v_mode is null then
+    return jsonb_build_object('reason', 'modo_distinto');
+  end if;
+  if p_total is null or p_total <= 0 then
+    return jsonb_build_object('reason', 'monto_cero');
+  end if;
+  if p_total > 700 then
+    return jsonb_build_object('reason', 'monto_mayor_700');
+  end if;
+  if v_order.total_amount is null or abs(v_order.total_amount - p_total) >= 0.005 then
+    return jsonb_build_object('reason', 'total_distinto');
+  end if;
+  -- Las dos fechas: la que manda el código y la que dice la base. Sin una de
+  -- ellas no se sabe cuándo quedó pagado, y no se emite.
+  if v_iss.emit_from is null
+     or p_paid_at is null or p_paid_at < v_iss.emit_from
+     or v_paid is null or v_paid < v_iss.emit_from then
+    return jsonb_build_object('reason', 'antes_de_inicio');
+  end if;
+  if p_request is null or jsonb_typeof(p_request) <> 'object' then
+    return jsonb_build_object('reason', 'sin_boleta');
+  end if;
+
+  if exists (
+    select 1 from order_invoices
+    where order_id = p_order and mode = 'real'
+      and status in ('emitiendo', 'emitida', 'en_duda', 'externa')
+  ) then
+    return jsonb_build_object('reason', 'ya_tiene');
+  end if;
+
+  -- Lo que se revisa depende de la fila pedida, no del modo del RUC: una
+  -- simulada en Manual no mira la conexión ni los errores reales, y una real
+  -- en Manual los mira como en Real.
+  if v_mode = 'simulacion' then
+    if exists (select 1 from order_invoices where order_id = p_order and mode = 'simulacion') then
+      return jsonb_build_object('reason', 'ya_simulado');
+    end if;
+  else
+    if v_iss.token_enc is null or v_iss.checked_ruc is distinct from v_iss.ruc then
+      return jsonb_build_object('reason', 'sin_conexion');
+    end if;
+    if exists (
+      select 1 from order_invoices
+      where order_id = p_order and mode = 'real' and status = 'error' and retry_requested_at is null
+    ) then
+      return jsonb_build_object('reason', 'error_previo');
+    end if;
+  end if;
+
+  -- El tope del día cuenta las filas del modo pedido: en Manual, las simuladas
+  -- del barrido no le quitan lugar a las boletas reales, ni al revés.
+  select count(*) into v_count
+  from order_invoices
+  where issuer_id = p_issuer
+    and mode = v_mode
+    and status in ('simulada', 'emitiendo', 'emitida', 'en_duda')
+    and created_at >= (date_trunc('day', now() at time zone 'America/Lima') at time zone 'America/Lima');
+  if v_count >= v_iss.daily_limit then
+    return jsonb_build_object('reason', 'tope');
+  end if;
+
+  insert into order_invoices (
+    id, org_id, store_id, order_id, issuer_id, ruc, mode, status,
+    order_name, total, paid_at, basis, request, created_by
+  ) values (
+    p_id, v_org, p_store, p_order, p_issuer, v_iss.ruc, v_mode,
+    case when v_mode = 'real' then 'emitiendo' else 'simulada' end,
+    p_order_name, p_total, greatest(p_paid_at, v_paid), coalesce(p_basis, '{}'::jsonb), p_request,
+    p_created_by
+  );
+  return jsonb_build_object('id', p_id, 'mode', v_mode);
+end;
+$$;
+revoke all on function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)
+  from public, anon, authenticated;
+grant execute on function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)
+  to service_role;
+
+-- ---- 0262 ----
+-- ============================================================================
+-- 0262_invoices_claim_coverage.sql — comprobantes por RUC: el turno vuelve a
+-- revisar que la empresa recibió el pago (MOM §35, 15-10-2026).
+--
+-- QUÉ PASABA. El turno (`invoice_claim`, 0260 y 0261) volvía a sacar de la base
+-- CUÁNDO quedó pagado el pedido, pero no SI quedó pagado. La condición 3 de
+-- §35.3 —lo validado cubre el total, o es un prepago web— la decidía solo el
+-- código, con lo que leyó antes de pedir el turno, y entre esa lectura y el
+-- turno pasa la lectura de Shopify. Un pago validado se puede rechazar
+-- (`validado → rechazado`) en ese rato. Si se rechazaba el único, el turno se
+-- quedaba sin pagos validados y lo tomaba por un prepago web —con la fecha del
+-- pedido— sin mirar si lo era; si se rechazaba uno de varios, lo validado que
+-- quedaba ya no cubría el total. En los dos casos daba una fila real, y la
+-- boleta iba a SUNAT por un dinero que la empresa no recibió. Una boleta
+-- enviada no se borra.
+--
+-- QUÉ CAMBIA. Solo `invoice_claim`, con `create or replace` y la firma de once
+-- argumentos de la 0261 tal cual (los mismos nombres y valores por defecto: no
+-- nace otra versión al lado, y la llamada por nombre del código no se vuelve
+-- ambigua). Justo después de `pagos_en_revision`, la condición 3 se revisa con
+-- los pagos y el pedido guardados, por el camino que dice la base del
+-- comprobante que manda el código (`p_basis`):
+--   · Sin prepago (`prepaid` falso o ausente): tiene que haber pagos validados
+--     y su suma tiene que cubrir el total que se va a emitir; si no,
+--     `sin_pago_completo`. Si el pedido guardado es un prepago web y tiene
+--     pagos validados, `prepago_con_comprobantes`, como en las reglas.
+--   · Con prepago: ningún pago vivo (`prepago_con_comprobantes`), y el pedido
+--     tiene que ser de verdad un prepago web —`financial_status` pagado,
+--     `payment_gateway` el checkout y nada reembolsado—; si no,
+--     `sin_pago_completo`.
+--   · Cada pago que nombra `p_basis` sigue validado y es de este pedido; si
+--     no, `sin_pago_completo`.
+-- Y los pagos del pedido quedan bloqueados (`for share`) hasta que el turno
+-- termina: un rechazo que llega mientras tanto espera a que la fila exista, y
+-- lo ve el aviso de nota de crédito (§35.9), en vez de colarse entre la
+-- revisión y la fila.
+--
+-- A QUIÉN NO. No toca datos, ni triggers, ni otra función. Los dos motivos ya
+-- existen en las reglas, y el código los conoce. El código que hoy está en
+-- producción pide el turno con sus nueve argumentos por nombre y ya manda
+-- `prepaid` y los pagos en `p_basis`: lo que estaba bien pagado sigue dando su
+-- fila. El turno sigue solo para `service_role`. Va después de la 0261: si
+-- sigue el turno de nueve argumentos, o falta el de once, se detiene sin
+-- cambiar nada. Si después alguien vuelve a correr la 0261, el turno queda otra
+-- vez sin esta revisión hasta que se vuelva a correr la 0262. En el SQL Editor
+-- corre en una sola transacción; con psql, `psql -1 -v ON_ERROR_STOP=1`.
+--
+-- Se aplica a mano ANTES del código (DEPLOY.md). Es idempotente.
+-- ============================================================================
+
+-- ── 1. Solo sobre la 0261 ────────────────────────────────────────────────────
+-- Sobre la 0260 sin la 0261, el `create or replace` de abajo crearía el turno de
+-- once al lado del de nueve, y la llamada por nombre del código de producción
+-- dejaría de saber a cuál ir. Peor: al aplicar después la 0261, su turno
+-- reemplazaría a éste y la revisión se perdería sin que nadie lo note.
+do $$
+begin
+  if to_regprocedure('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)') is not null
+     or to_regprocedure('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)') is null then
+    raise exception 'La 0262 va después de la 0261: aplica primero db/migrations/0261_invoices_manual.sql.';
+  end if;
+end $$;
+
+-- ── 2. El turno ──────────────────────────────────────────────────────────────
+-- Lo nuevo frente a la 0261: los pagos del pedido bloqueados mientras dura el
+-- turno, y la condición 3 de §35.3 revisada dentro de la base. Lo demás, igual.
+--
+-- Revisa DENTRO de la base, con un candado por RUC, todo lo que no puede fallar:
+-- modo, conexión, monto, pagos validados que cubren el total, fecha de inicio,
+-- uno por pedido y el tope del día. Deja la fila en `emitiendo` (real) o
+-- `simulada`. Sin desbloqueo por tiempo: una fila `emitiendo` que se quedó sin
+-- respuesta se concilia, no se repite.
+create or replace function invoice_claim(
+  p_id uuid,
+  p_issuer uuid,
+  p_store uuid,
+  p_order uuid,
+  p_total numeric,
+  p_paid_at timestamptz,
+  p_order_name text,
+  p_basis jsonb,
+  p_request jsonb,
+  p_mode text default null,
+  p_created_by uuid default null
+) returns jsonb
+language plpgsql security invoker set search_path = public as $$
+declare
+  v_org       uuid;
+  v_order     orders;
+  v_iss       invoice_issuers;
+  v_mode      text;
+  v_count     integer;
+  v_live      integer;
+  v_paid      timestamptz;
+  v_validated numeric;
+  v_prepaid   boolean;
+  v_web       boolean;
+begin
+  select org_id into v_org from stores where id = p_store and status = 'active';
+  if v_org is null then
+    return jsonb_build_object('reason', 'tienda');
+  end if;
+  select * into v_order from orders where id = p_order and store_id = p_store;
+  if v_order.id is null then
+    return jsonb_build_object('reason', 'pedido');
+  end if;
+  if v_order.cancelled_at is not null then
+    return jsonb_build_object('reason', 'anulado');
+  end if;
+  if coalesce(v_order.total_refunded, 0) <> 0 then
+    return jsonb_build_object('reason', 'reembolsado');
+  end if;
+  -- La boleta va en soles: un total en otra moneda se emitiría como si lo fuera.
+  if upper(coalesce(v_order.currency, '')) <> 'PEN' then
+    return jsonb_build_object('reason', 'moneda');
+  end if;
+
+  -- Los pagos del pedido, bloqueados hasta que termine el turno (0262). Cada
+  -- consulta de una función ve lo último que se guardó, así que sin esto un
+  -- pago rechazado entre la revisión de abajo y la fila se colaba igual. Con
+  -- esto, quien rechaza u observa un pago espera a que el turno termine y
+  -- encuentra la fila ya tomada: lo emitido no se toca, y el panel avisa que
+  -- un pago del comprobante ya no está validado (§35.9).
+  perform 1 from order_payments where order_id = p_order for share;
+
+  -- Cuándo quedó pagado, con los pagos de la base y no con lo que manda quien
+  -- pide el turno (MOM §35.3, condiciones 2 y 8). `p_paid_at` lo calcula el
+  -- código: si una regla o una lectura se equivocara, la boleta de algo pagado
+  -- antes de «Emitir desde» iría igual a SUNAT, y una boleta enviada no se
+  -- borra. Es la misma cuenta que `invoiceEligibility`: todos los pagos vivos
+  -- (no rechazados) validados, y el `registered_at` del último, que no cambia
+  -- si el pago se observa y se vuelve a validar; sin pagos vivos, la fecha del
+  -- pedido (el prepago web, que se comprueba abajo).
+  if exists (
+    select 1 from order_payments
+    where order_id = p_order
+      and validation_status is distinct from 'rechazado'
+      and validation_status is distinct from 'validado'
+  ) then
+    return jsonb_build_object('reason', 'pagos_en_revision');
+  end if;
+  select count(*), max(registered_at), coalesce(sum(amount), 0) into v_live, v_paid, v_validated
+  from order_payments
+  where order_id = p_order and validation_status = 'validado';
+  if v_live = 0 then
+    v_paid := coalesce(v_order.processed_at, v_order.created_at);
+  end if;
+
+  -- La empresa recibió el pago (MOM §35.3, condición 3), con los pagos y el
+  -- pedido de la base (0262). El código lo decide con lo que leyó antes de la
+  -- lectura de Shopify, y un pago validado se puede rechazar en ese rato: sin
+  -- esto, rechazar el único dejaba al turno sin pagos y lo tomaba por un prepago
+  -- web, y rechazar uno de varios dejaba un total sin cubrir. `p_basis` dice
+  -- qué camino tomó el código, y aquí ese camino se comprueba con lo guardado.
+  --
+  -- Prepago web, como `isWebPrepaid`: pagado en Shopify, por el checkout y sin
+  -- reembolsos. Nada se deduce: sin `payment_gateway`, no es prepago.
+  v_web := coalesce(lower(v_order.financial_status) = 'paid', false)
+           and coalesce(v_order.payment_gateway = 'checkout', false)
+           and coalesce(v_order.total_refunded, 0) = 0;
+  v_prepaid := coalesce((p_basis->>'prepaid')::boolean, false);
+  if v_prepaid then
+    -- Un prepago con comprobantes cargados no se adivina (§35.3): ¿pagó dos
+    -- veces, o subió la captura del checkout? Lo ve una persona.
+    if exists (
+      select 1 from order_payments
+      where order_id = p_order and validation_status is distinct from 'rechazado'
+    ) then
+      return jsonb_build_object('reason', 'prepago_con_comprobantes');
+    end if;
+    if not v_web then
+      return jsonb_build_object('reason', 'sin_pago_completo');
+    end if;
+  else
+    -- Lo mismo al revés: si mientras tanto el pedido pasó a prepago web y tiene
+    -- pagos validados, no se elige uno de los dos dineros.
+    if v_web and v_live > 0 then
+      return jsonb_build_object('reason', 'prepago_con_comprobantes');
+    end if;
+    -- Lo validado cubre el total que se va a emitir, al céntimo y sin redondeos
+    -- (los montos son numeric). Un total nulo lo rechaza `monto_cero` más abajo.
+    if v_live = 0 or v_validated < p_total then
+      return jsonb_build_object('reason', 'sin_pago_completo');
+    end if;
+  end if;
+  -- Cada pago en que se apoya el comprobante sigue validado y es de este pedido.
+  -- La suma puede seguir cubriendo con otro pago, pero el comprobante diría que
+  -- lo pagó uno que ya no cuenta, en la cuenta (y el RUC) de ése. Un id que no
+  -- es el de un pago validado de este pedido, cualquiera que sea, no pasa.
+  if exists (
+    select 1
+      from jsonb_array_elements(case when jsonb_typeof(p_basis->'payments') = 'array'
+                                     then p_basis->'payments' else '[]'::jsonb end) as b(pago)
+     where b.pago->>'id' is not null
+       and not exists (
+         select 1 from order_payments op
+          where op.order_id = p_order and op.validation_status = 'validado'
+            and op.id::text = b.pago->>'id'
+       )
+  ) then
+    return jsonb_build_object('reason', 'sin_pago_completo');
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended(p_issuer::text, 257));
+  select * into v_iss from invoice_issuers where id = p_issuer for update;
+  if v_iss.id is null or v_iss.org_id <> v_org then
+    return jsonb_build_object('reason', 'ruc_ajeno');
+  end if;
+  if v_iss.mode = 'apagado' then
+    return jsonb_build_object('reason', 'ruc_apagado');
+  end if;
+  -- Qué fila, con el modo del RUC leído bajo el candado. Sin `p_mode`, la de
+  -- siempre: real solo en Real; en Manual, una simulada, porque una boleta real
+  -- en Manual la pide una persona, pedido por pedido (MOM §35.8). Con `p_mode`,
+  -- la pedida, si el RUC está en un modo que la da; si no —el owner cambió el
+  -- modo mientras tanto, o un valor que no es un modo—, nada.
+  -- En Manual, una boleta real solo con una persona detrás (`p_created_by`):
+  -- el barrido nunca la pide, y si un error del código la pidiera sin nadie,
+  -- la base la rechaza.
+  v_mode := case
+    when p_mode is null then case when v_iss.mode = 'real' then 'real' else 'simulacion' end
+    when p_mode = 'real' and v_iss.mode = 'real' then 'real'
+    when p_mode = 'real' and v_iss.mode = 'manual' and p_created_by is not null then 'real'
+    when p_mode = 'simulacion' and v_iss.mode in ('simulacion', 'manual') then 'simulacion'
+  end;
+  if v_mode is null then
+    return jsonb_build_object('reason', 'modo_distinto');
+  end if;
+  if p_total is null or p_total <= 0 then
+    return jsonb_build_object('reason', 'monto_cero');
+  end if;
+  if p_total > 700 then
+    return jsonb_build_object('reason', 'monto_mayor_700');
+  end if;
+  if v_order.total_amount is null or abs(v_order.total_amount - p_total) >= 0.005 then
+    return jsonb_build_object('reason', 'total_distinto');
+  end if;
+  -- Las dos fechas: la que manda el código y la que dice la base. Sin una de
+  -- ellas no se sabe cuándo quedó pagado, y no se emite.
+  if v_iss.emit_from is null
+     or p_paid_at is null or p_paid_at < v_iss.emit_from
+     or v_paid is null or v_paid < v_iss.emit_from then
+    return jsonb_build_object('reason', 'antes_de_inicio');
+  end if;
+  if p_request is null or jsonb_typeof(p_request) <> 'object' then
+    return jsonb_build_object('reason', 'sin_boleta');
+  end if;
+
+  if exists (
+    select 1 from order_invoices
+    where order_id = p_order and mode = 'real'
+      and status in ('emitiendo', 'emitida', 'en_duda', 'externa')
+  ) then
+    return jsonb_build_object('reason', 'ya_tiene');
+  end if;
+
+  -- Lo que se revisa depende de la fila pedida, no del modo del RUC: una
+  -- simulada en Manual no mira la conexión ni los errores reales, y una real
+  -- en Manual los mira como en Real.
+  if v_mode = 'simulacion' then
+    if exists (select 1 from order_invoices where order_id = p_order and mode = 'simulacion') then
+      return jsonb_build_object('reason', 'ya_simulado');
+    end if;
+  else
+    if v_iss.token_enc is null or v_iss.checked_ruc is distinct from v_iss.ruc then
+      return jsonb_build_object('reason', 'sin_conexion');
+    end if;
+    if exists (
+      select 1 from order_invoices
+      where order_id = p_order and mode = 'real' and status = 'error' and retry_requested_at is null
+    ) then
+      return jsonb_build_object('reason', 'error_previo');
+    end if;
+  end if;
+
+  -- El tope del día cuenta las filas del modo pedido: en Manual, las simuladas
+  -- del barrido no le quitan lugar a las boletas reales, ni al revés.
+  select count(*) into v_count
+  from order_invoices
+  where issuer_id = p_issuer
+    and mode = v_mode
+    and status in ('simulada', 'emitiendo', 'emitida', 'en_duda')
+    and created_at >= (date_trunc('day', now() at time zone 'America/Lima') at time zone 'America/Lima');
+  if v_count >= v_iss.daily_limit then
+    return jsonb_build_object('reason', 'tope');
+  end if;
+
+  insert into order_invoices (
+    id, org_id, store_id, order_id, issuer_id, ruc, mode, status,
+    order_name, total, paid_at, basis, request, created_by
+  ) values (
+    p_id, v_org, p_store, p_order, p_issuer, v_iss.ruc, v_mode,
+    case when v_mode = 'real' then 'emitiendo' else 'simulada' end,
+    p_order_name, p_total, greatest(p_paid_at, v_paid), coalesce(p_basis, '{}'::jsonb), p_request,
+    p_created_by
+  );
+  return jsonb_build_object('id', p_id, 'mode', v_mode);
+end;
+$$;
+revoke all on function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)
+  from public, anon, authenticated;
+grant execute on function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)
+  to service_role;
+
+-- ---- 0263 ----
+-- ============================================================================
+-- 0263_lead_insights_rollup_sin_llamar.sql — el RPC del «Tablero de hoy» de
+-- Leads cuenta solo lo que el tablero todavía usa: los sin llamar.
+--
+-- QUÉ PASABA. Desde el 15-10-2026 el «Tablero de hoy» es la opción K (el equipo
+-- como ranking contra ayer, sin llamar por día y la carrera de pedidos). De los
+-- siete cubos de `lead_insights_rollup` (0155) solo lee `sin_llamar`; los otros
+-- seis eran del burndown, del flujo de 7 días y de la conversión que ya no
+-- existen. Y seguían calculándose en cada carga: el más caro, `cierran`,
+-- recorre TODO el historial de gestiones de la tienda (sin límite de fechas)
+-- para descartar a quien ya había salido de la cola antes de la ventana.
+-- Medido en producción el 15-10-2026 con las dos tiendas: 162 ms y 15.290
+-- bloques por llamada; solo `sin_llamar`, 15 ms y 2.287 bloques.
+--
+-- QUÉ CAMBIA. La misma función, con la MISMA firma y el mismo tipo de retorno
+-- (create or replace): el código que ya corre la llama igual y filtra el cubo
+-- `sin_llamar` (`sinLlamarFromRollup`), así que da lo mismo cuál de las dos
+-- versiones encuentre. `p_window_start` y `p_today` se quedan en la firma sin
+-- usarse por eso mismo: cambiarla exigiría salir con el código a la vez.
+--
+-- El predicado es copia EXACTA del de la 0155 y del drenado de respaldo en
+-- lib/leads-insights.ts (`drainSinLlamar`): leads open/hot con status 'nuevo',
+-- por día local de su última interacción (o de su primer contacto).
+--
+-- `security invoker`: la RLS de leads sigue mandando. Idempotente. No toca
+-- datos. Se puede aplicar antes o después del código.
+-- ============================================================================
+
+create or replace function public.lead_insights_rollup(
+  p_store_ids    uuid[],
+  p_window_start timestamptz,
+  p_tz           text,
+  p_today        text
+)
+returns table (bucket text, key text, n bigint)
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  with sin_llamar as (
+    select coalesce(last_interaction_at, first_seen_at) as at
+    from public.leads
+    where store_id = any(p_store_ids)
+      and category in ('open', 'hot')
+      and status = 'nuevo'
+  )
+  select 'sin_llamar', to_char(at at time zone p_tz, 'YYYY-MM-DD'), count(*)
+    from sin_llamar where at is not null group by 2
+$$;
+
+comment on function public.lead_insights_rollup(uuid[], timestamptz, text, text) is
+  'Leads sin llamar por día local de su última interacción, agrupados en la base para el «Tablero de hoy» de Leads (0263; antes, 0155, siete cubos). p_window_start y p_today siguen en la firma sin usarse. security invoker: la RLS sigue mandando.';
+
+revoke all on function public.lead_insights_rollup(uuid[], timestamptz, text, text) from public, anon;
+grant execute on function public.lead_insights_rollup(uuid[], timestamptz, text, text) to authenticated, service_role;
+
+-- ---- 0264 ----
+-- 0264_order_master_sales_channel.sql — el canal de venta de cada pedido, para
+-- filtrar el Master por cómo se generó (MOM §3, «Pedido», 15-10-2026, pedido de
+-- Frankz).
+--
+-- QUÉ ES. Todos los pedidos nacen en Shopify, pero no por el mismo camino, y lo
+-- dicen sus etiquetas: el formulario COD de la web, un carrito abandonado que se
+-- completó, una asesora desde Leads, el chatbot de WhatsApp (Kapso), el bot de
+-- carritos o el catálogo privado. Un pedido tiene UN canal; con marcas de dos
+-- gana quien cerró la venta antes que la herramienta donde quedó escrita.
+--
+-- QUIÉN LA ESCRIBE. El recálculo del pedido (lib/order-master.ts) con
+-- `salesChannel` (lib/sales-channel.ts). `order_sales_channel` es la misma regla
+-- en SQL y solo sirve para rellenar lo que ya existe al aplicar esta migración;
+-- test/sales-channel.test.ts comprueba que las dos digan lo mismo.
+--
+-- El Master filtra en la base y pagina, así que el filtro necesita la columna.
+
+alter table order_master add column if not exists sales_channel text;
+
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'order_master_sales_channel_check') then
+    alter table order_master add constraint order_master_sales_channel_check
+      check (sales_channel in ('asesora', 'chatbot', 'bot_carritos', 'catalogo', 'web_carrito', 'web_formulario', 'otro'));
+  end if;
+end $$;
+
+create or replace function order_sales_channel(p_tags text[], p_kapso_conversation_id text)
+returns text
+language sql
+immutable
+set search_path = public
+as $$
+  with t as (
+    select coalesce(array(select lower(btrim(x)) from unnest(coalesce(p_tags, '{}'::text[])) x), '{}'::text[]) as lt
+  )
+  select case
+    when lt && array['venta_manual', 'carrito_recuperado'] then 'asesora'
+    when nullif(p_kapso_conversation_id, '') is not null or lt && array['kapso', 'whatsapp'] then 'chatbot'
+    when lt && array['carrito recuperado', 'bot', 'bot (whatsapp_cloud)'] then 'bot_carritos'
+    when lt && array['catalogo-wsp'] then 'catalogo'
+    when lt && array['easysell-abandoned-checkout', 'abandoned_checkout_releasit_cod_form'] then 'web_carrito'
+    when lt && array['easysell_cod_form'] then 'web_formulario'
+    else 'otro'
+  end
+  from t
+$$;
+
+-- Relleno de lo existente. Re-aplicarla no cambia nada: solo escribe la fila
+-- cuyo canal es distinto del que dice la regla.
+update order_master om
+   set sales_channel = order_sales_channel(o.tags, o.kapso_conversation_id)
+  from orders o
+ where o.id = om.order_id
+   and om.sales_channel is distinct from order_sales_channel(o.tags, o.kapso_conversation_id);
+
+create index if not exists order_master_store_sales_channel_idx
+  on order_master(store_id, sales_channel);
+
+-- ---- 0265 ----
+-- ============================================================================
+-- 0265_order_master_stale_urpi.sql — el desfase del Master también mira el
+-- reporte de Urpi (MOM §9.3 «Intentos de entrega», §30.11, 15-10-2026).
+--
+-- POR QUÉ. Desde el 15-10-2026 la columna de intentos del Master suma los que
+-- reporta Urpi en su export (`urpi_report_rows`): #KP131545, cancelado por Urpi
+-- el 01/09, decía «0 intentos». Cargar el reporte escribe esas filas, pero no
+-- toca guías ni eventos del pedido, así que el barrido no se enteraba y la
+-- columna se quedaba con el número viejo hasta que otra cosa moviera el pedido.
+--
+-- QUÉ CAMBIA. La misma función de la 0241 —misma firma, mismos permisos—, con
+-- una fuente más: la última escritura de una fila de Urpi vinculada al pedido
+-- (`updated_at`, que cambia al guardar un intento nuevo o cambiado y al
+-- vincular a mano) cuenta igual que la de una guía. Se ancla en el dato, no en
+-- que la carga se acuerde de recalcular, que es la regla de la 0123.
+--
+-- Correrla otra vez no cambia nada (`create or replace`).
+-- ============================================================================
+
+create or replace function order_master_stale(
+  p_store_id uuid,
+  p_limit int default 1000
+)
+returns table (order_id uuid, recomputed_at timestamptz, guide_updated_at timestamptz)
+language sql
+stable
+security definer
+set search_path to 'public'
+as $function$
+  select m.order_id, m.recomputed_at, g.guide_updated_at
+  from order_master m
+  join (
+    select x.order_id, max(x.touched_at) as guide_updated_at
+    from (
+      select s.order_id, s.updated_at as touched_at from shipments s
+      union all
+      select r.order_id, r.updated_at from urpi_report_rows r where r.order_id is not null
+    ) x
+    group by x.order_id
+  ) g on g.order_id = m.order_id
+  where m.store_id = p_store_id
+    and g.guide_updated_at > m.recomputed_at
+  order by m.recomputed_at asc
+  limit p_limit;
+$function$;
+
+comment on function order_master_stale(uuid, int) is
+  'Pedidos cuya fila del Master es anterior a la última escritura de sus guías o de sus filas del reporte de Urpi (0265). Definición canónica del desfase (0123); sin tope de recorrido desde la 0240.';
+
+revoke all on function order_master_stale(uuid, int) from public, anon, authenticated;
+grant execute on function order_master_stale(uuid, int) to service_role;
+
+-- ---- 0266 ----
+-- ============================================================================
+-- 0266_order_master_dispatched_with.sql — «Salió con»: con quién salió de
+-- verdad cada pedido (MOM §9.3, 15-10-2026, pedido de Frankz).
+--
+-- POR QUÉ. El filtro «Courier» mira el courier vigente y el último, y para
+-- Grupo GF solo dice «Propio». No responde con quién se intentó: ¿Roy, Alexis,
+-- Yhoni, Tanders, Urpi? Esta columna guarda a todos.
+--
+-- QUÉ GUARDA. Códigos, sin repetir: `gf:<Nombre>` por cada motorizado de
+-- Grupo GF que tuvo una parada reportada con el pedido (o lo lleva ahora),
+-- `gf` si salió con Grupo GF sin parada conocida, y el código del courier
+-- externo cuya guía llegó a salir (`aliclik`, `fenix` = Swayp, `tanders`,
+-- `urpi`, `shalom`, `olva`…). La escribe el recálculo del pedido
+-- (lib/dispatched-with.ts); `mom-v1.30` la rellena para todos.
+--
+-- `master_facets` la devuelve como opciones del filtro: los nombres de los
+-- motorizados salen de los datos, no de una lista escrita a mano.
+-- ============================================================================
+
+alter table order_master add column if not exists dispatched_with text[] not null default '{}';
+
+create index if not exists order_master_dispatched_with_idx
+  on order_master using gin (dispatched_with);
+
+create or replace function public.master_facets(p_store_ids uuid[])
+returns jsonb
+language sql
+stable
+set search_path to 'public'
+as $function$
+  select jsonb_build_object(
+    'operational', coalesce((
+      select jsonb_agg(v order by v) from (
+        select distinct operational_status as v
+        from order_master where store_id = any(p_store_ids) and operational_status is not null
+      ) q
+    ), '[]'::jsonb),
+    'courier', coalesce((
+      select jsonb_agg(v order by v) from (
+        select current_courier as v from order_master
+        where store_id = any(p_store_ids) and current_courier is not null
+        union
+        select last_courier as v from order_master
+        where store_id = any(p_store_ids) and last_courier is not null
+      ) q
+    ), '[]'::jsonb),
+    'region', coalesce((
+      select jsonb_agg(v order by v) from (
+        select distinct region as v from order_master
+        where store_id = any(p_store_ids) and region is not null
+      ) q
+    ), '[]'::jsonb),
+    'province', coalesce((
+      select jsonb_agg(v order by v) from (
+        select distinct province as v from order_master
+        where store_id = any(p_store_ids) and province is not null
+      ) q
+    ), '[]'::jsonb),
+    'district', coalesce((
+      select jsonb_agg(v order by v) from (
+        select distinct district as v from order_master
+        where store_id = any(p_store_ids) and district is not null
+      ) q
+    ), '[]'::jsonb),
+    'coverage', coalesce((
+      select jsonb_agg(v order by v) from (
+        select distinct coverage as v from order_master
+        where store_id = any(p_store_ids) and coverage is not null
+      ) q
+    ), '[]'::jsonb),
+    'pickup', coalesce((
+      select jsonb_agg(v order by v) from (
+        select distinct pickup_state as v from order_master
+        where store_id = any(p_store_ids) and pickup_state is not null
+      ) q
+    ), '[]'::jsonb),
+    'dispatched_with', coalesce((
+      select jsonb_agg(v order by v) from (
+        select distinct unnest(dispatched_with) as v from order_master
+        where store_id = any(p_store_ids)
+      ) q
+    ), '[]'::jsonb)
+  );
+$function$;
+
+-- ---- 0267 ----
+-- ============================================================================
+-- 0267_order_master_dispatch_scheduled_on.sql — «Programar envío»: la fecha
+-- acordada para despachar un pedido confirmado que todavía no tiene guía
+-- (MOM §6.2, 15-10-2026, pedido de Frankz).
+--
+-- POR QUÉ. Un pedido en Preparación · Por generar rótulo que el equipo tenía
+-- programado en su Excel («enviar lunes 26-10») parecía olvidado en Kapta
+-- (#KP140347). La fecha ahora es un hecho del historial (`dispatch_date_set`
+-- con actor y nota; `dispatch_date_cleared` con motivo) y el Master la guarda
+-- aquí para poder filtrar y enseñarla.
+--
+-- QUIÉN LA ESCRIBE. El recálculo del pedido (lib/dispatch-date.ts), y solo
+-- mientras el pedido está en Por generar rótulo: con la guía creada vuelve a
+-- null. No hace falta rellenar nada: hasta hoy nadie había programado un envío.
+-- ============================================================================
+
+alter table order_master add column if not exists dispatch_scheduled_on date;
+
+create index if not exists order_master_store_dispatch_scheduled_idx
+  on order_master(store_id, dispatch_scheduled_on)
+  where dispatch_scheduled_on is not null;

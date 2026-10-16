@@ -1,13 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { maybeSingle, membershipUserEq, membershipOrgEq, permissionOrgEq, permissionUserEq } = vi.hoisted(() => {
+const { maybeSingle, membershipUserEq, membershipOrgEq, permissionOrgEq, permissionUserEq, roleUserEq } = vi.hoisted(() => {
   const maybeSingle = vi.fn(async () => ({ data: { role: "owner" }, error: null }));
   const membershipUserEq = vi.fn(() => ({ maybeSingle }));
   const membershipOrgEq = vi.fn(() => ({ eq: membershipUserEq }));
   const permissionUserEq = vi.fn(async () => ({ data: [], error: null }));
   const permissionOrgEq = vi.fn((column: string) => column === "user_id"
     ? Promise.resolve({ data: [], error: null }) : { eq: permissionUserEq });
-  return { maybeSingle, membershipUserEq, membershipOrgEq, permissionOrgEq, permissionUserEq };
+  // Roles acumulables (0250): una vendedora de Liquidaciones en la org.
+  const roleUserEq = vi.fn(async () => ({ data: [{ org_id: "org-aurela", role: "liquidaciones" }], error: null }));
+  return { maybeSingle, membershipUserEq, membershipOrgEq, permissionOrgEq, permissionUserEq, roleUserEq };
 });
 
 vi.mock("@/lib/access", () => ({
@@ -27,6 +29,9 @@ vi.mock("@/lib/db", () => ({
       }
       if (table === "user_permissions") {
         return { select: () => ({ eq: permissionOrgEq }) };
+      }
+      if (table === "membership_roles") {
+        return { select: () => ({ eq: roleUserEq }) };
       }
       throw new Error(`Tabla inesperada: ${table}`);
     },
@@ -53,5 +58,15 @@ describe("hasOrgPermission", () => {
     expect(maybeSingle).toHaveBeenCalledOnce();
     expect(permissionOrgEq).toHaveBeenCalledWith("org_id", "org-aurela");
     expect(permissionUserEq).toHaveBeenCalledWith("user_id", "user-frankz");
+  });
+
+  it("los roles acumulables se leen solo los PROPIOS y cuentan en su organización", async () => {
+    maybeSingle.mockResolvedValue({ data: { role: "vendedora" }, error: null });
+    const { hasOrgPermission } = await import("@/lib/permissions-access");
+    // Vendedora con Liquidaciones: cierra liquidaciones, ya no crea pedidos.
+    await expect(hasOrgPermission("org-aurela", "settlements.close")).resolves.toBe(true);
+    await expect(hasOrgPermission("org-aurela", "orders.create")).resolves.toBe(false);
+    expect(roleUserEq).toHaveBeenCalledWith("user_id", "user-frankz");
+    maybeSingle.mockResolvedValue({ data: { role: "owner" }, error: null });
   });
 });

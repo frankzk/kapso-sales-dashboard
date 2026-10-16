@@ -19,7 +19,7 @@ import { getCurrentUser } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { routeReportAccess } from "@/lib/route-report-access";
 import type { StopStatus } from "@/lib/routes";
-import { writeStopReport } from "@/lib/stop-report";
+import { ordersWithReplacedOutputOut, replacedOutputStopError, writeStopReport } from "@/lib/stop-report";
 import { explainStopAmount, riderSheetFor, syncStopsToSheet } from "@/lib/sheets/stop-sync";
 import { getMyRider } from "@/lib/routes-access";
 import { getRiderSheet, loadRiderOrders, searchRiderOrders, type RiderOrderCandidate } from "@/lib/sheets/rider-access";
@@ -27,9 +27,7 @@ import { buildNewPoint, montoDiffers } from "@/lib/sheets/rider-cuaderno";
 import { amountDue } from "@/lib/sheets/monto";
 import { loadRouteCollectionBalances } from "@/lib/route-collection-access";
 import { normalizeAlias } from "@/lib/sheets/statuses";
-import { rescheduleDateProblem, writeGfDispatchProgram } from "@/lib/gf-dispatch-program";
 import { programDayLabel } from "@/lib/dispatch-day";
-import { limaTodayKey } from "@/lib/shipments";
 
 export interface ReportResult {
   ok: boolean;
@@ -57,8 +55,12 @@ export interface ReportStopInput {
    *  de S/ 0,50 (MOM §30.9): abren la observación de monto con su motivo. */
   reasonCode?: string | null;
   reasonNote?: string | null;
-  /** «Reprogramado por el cliente» con fecha (10-10-2026, opcional): agenda la
-   *  salida de Grupo GF para ese día en el mismo gesto (YYYY-MM-DD, Lima). */
+  /** Fecha que pidió el cliente (YYYY-MM-DD, Lima; 12-10-2026, MOM §9.5): queda
+   *  en la parada; la tienda la confirma en Repro Lima; nunca programa.
+   *  undefined conserva la que ya tenía; null la borra. */
+  requestedDate?: string | null;
+  /** @deprecated Nombre de la pantalla del 10-10-2026 (pestañas abiertas sin
+   *  recargar). Se lee como `requestedDate`: ya no agenda nada. */
   rescheduleOn?: string | null;
 }
 
@@ -113,16 +115,11 @@ export async function reportStop(input: ReportStopInput): Promise<ReportResult> 
     .maybeSingle();
   const routeStatus = (routeRow as { status?: string } | null)?.status;
 
-  // La fecha se valida ANTES de escribir: una fecha mala no deja el reporte a
-  // medias. Solo cuenta con «Reprogramado por el cliente».
-  const rescheduleOn =
-    input.status === "no_entregado" && input.outcomeReason === "reprogramado" && input.rescheduleOn?.trim()
-      ? input.rescheduleOn.trim()
-      : null;
-  if (rescheduleOn) {
-    const problem = rescheduleDateProblem(rescheduleOn, limaTodayKey());
-    if (problem) return { ok: false, error: problem };
-  }
+  // La fecha que pidió el cliente (D9, 12-10-2026): queda en la parada y la
+  // tienda la confirma en Repro Lima antes de programarla. La valida
+  // writeStopReport antes de escribir. `rescheduleOn` es el nombre viejo.
+  const requested = input.requestedDate !== undefined ? input.requestedDate : input.rescheduleOn;
+  const requestedDate = requested === undefined ? undefined : requested?.trim() || null;
 
   // Motivo obligatorio: entrega cobrada distinto a lo que había que cobrar
   // (MOM §30.9). Lo que había que cobrar es el SALDO, no el total: un pedido
@@ -181,6 +178,7 @@ export async function reportStop(input: ReportStopInput): Promise<ReportResult> 
     writtenStatusCode: input.writtenStatusCode ?? null,
     writtenPayment: input.writtenPayment ?? null,
     delegated: access.delegated,
+    requestedDate,
   }, { stop, routeStatus });
   if (!written.ok) return { ok: false, error: written.error };
 
@@ -219,71 +217,21 @@ export async function reportStop(input: ReportStopInput): Promise<ReportResult> 
     }
   }
 
-  // «Reprogramado por el cliente» con fecha: queda agendado de una vez, por el
-  // mismo camino que «Programar» de Grupo GF. Si falla, el reporte ya quedó y
-  // se dice qué falta.
-  let programNotice = "";
-  if (rescheduleOn) {
-    const orgId = (routeRow as { org_id?: string } | null)?.org_id ?? null;
-    const problem = orgId
-      ? await programFromReport(admin, { orgId, orderId: stop.order_id, day: rescheduleOn, actor: user.id, riderName: access.riderName })
-      : "No se encontró la ruta.";
-    programNotice = problem
-      ? ` No se pudo agendar el ${programDayLabel(rescheduleOn)} (${problem}): prográmalo en Grupo GF.`
-      : ` Agendado para el ${programDayLabel(rescheduleOn)}.`;
-  }
-
   revalidatePath("/reparto");
   revalidatePath("/dashboard/courier/reparto");
   revalidatePath("/dashboard/courier");
   revalidatePath("/dashboard/liquidaciones-2");
+  revalidatePath("/dashboard/pedidos/repro-lima");
+  // La fecha que pidió el cliente no agenda nada (D9): se dice que la tienda
+  // la confirma antes de programarla.
+  const asked =
+    input.status === "no_entregado" && input.outcomeReason === "reprogramado" && requestedDate
+      ? ` Fecha que pidió el cliente: ${programDayLabel(requestedDate)}. La tienda la confirma antes de programarla.`
+      : "";
   return {
     ok: true,
-    message: input.status === "entregado" ? "Entrega registrada." : `Reportado como no entregado.${programNotice}`,
+    message: input.status === "entregado" ? "Entrega registrada." : `Reportado como no entregado.${asked}`,
   };
-}
-
-/**
- * Agenda la salida del pedido para el día que pidió el cliente. Devuelve el
- * problema, o null si quedó. No lanza: el reporte ya está escrito.
- */
-async function programFromReport(
-  admin: ReturnType<typeof createAdminSupabase>,
-  a: { orgId: string; orderId: string; day: string; actor: string; riderName: string | null },
-): Promise<string | null> {
-  try {
-    const [{ data: provider }, { data: order }, { data: previous }] = await Promise.all([
-      admin.from("logistics_providers").select("id").eq("org_id", a.orgId).eq("code", "grupo-gf-courier").maybeSingle(),
-      admin.from("orders").select("store_id").eq("id", a.orderId).maybeSingle(),
-      admin.from("gf_dispatch_programs").select("scheduled_for").eq("order_id", a.orderId).maybeSingle(),
-    ]);
-    const storeId = (order as { store_id?: string } | null)?.store_id;
-    if (!storeId) return "no se encontró el pedido";
-    const providerId = (provider as { id?: string } | null)?.id;
-    const { data: request } = providerId
-      ? await admin
-          .from("logistics_requests")
-          .select("id,scheduled_for,shipment_id")
-          .eq("provider_id", providerId)
-          .eq("order_id", a.orderId)
-          .neq("status", "cancelled")
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle()
-      : { data: null };
-    const result = await writeGfDispatchProgram(admin, {
-      orderId: a.orderId,
-      storeId,
-      day: a.day,
-      reason: `Reprogramado por el cliente (reporte de la parada${a.riderName ? ` de ${a.riderName}` : ""})`,
-      actor: a.actor,
-      request: (request as { id: string; scheduled_for: string | null; shipment_id: string | null } | null) ?? null,
-      from: (previous as { scheduled_for?: string } | null)?.scheduled_for ?? null,
-    });
-    return result.written ? null : result.error ?? "no se pudo guardar";
-  } catch (e) {
-    return e instanceof Error ? e.message : String(e);
-  }
 }
 
 /** Lleva UNA parada a la hoja del motorizado de esa ruta. No lanza. */
@@ -353,6 +301,10 @@ export async function addManualStop(input: { orderId: string; fecha: string }): 
   const { data: order } = await g.admin.from("orders").select("id,store_id,stores(org_id)").eq("id", input.orderId).maybeSingle();
   const o = order as unknown as { id: string; store_id: string; stores: { org_id: string } | null } | null;
   if (!o || o.stores?.org_id !== g.sheet.org_id) return { ok: false, error: "Ese pedido no es de tu organización." };
+  // Con una caja reemplazada todavía fuera (0248), una parada sin salida no
+  // dice de qué caja habla: no se añade.
+  const replacedOut = await ordersWithReplacedOutputOut(g.admin, [o.id]);
+  if (replacedOut.has(o.id)) return { ok: false, error: replacedOutputStopError(info.order_name, replacedOut.get(o.id)) };
 
   const { data: existingRoute } = await g.admin
     .from("delivery_routes")

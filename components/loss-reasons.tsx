@@ -1,50 +1,48 @@
-import { cn } from "@/components/ui";
 import { formatCurrency, type LossReason, type LostRevenue } from "@/lib/metrics";
 
-// Reason bucket → bar color (mirrors the mockup's red/orange/yellow/blue/violet/gray).
-const REASON_BAR: Record<string, string> = {
-  no_respondio: "bg-red-500",
-  compro_otro_lado: "bg-orange-500",
-  solo_info: "bg-yellow-500",
-  sin_stock: "bg-blue-500",
-  cancelado: "bg-violet-500",
-  otros: "bg-slate-400",
-};
+/** La parte de un motivo con un decimal como mucho: «45.5 %», no «45.45 %». */
+export function sharePct(pct: number): string {
+  return `${pct.toLocaleString("es-PE", { maximumFractionDigits: 1 })}\u00a0%`;
+}
 
+/**
+ * Por qué no compraron: una fila por motivo con su parte y su barra. Las
+ * barras van en una sola tinta —es la misma medida para todos los motivos—;
+ * el color por motivo no decía nada que la etiqueta no diga.
+ */
 export function LossReasonBars({ items, total }: { items: LossReason[]; total: number }) {
   if (!items.length) {
-    return <p className="text-sm text-slate-400">Sin leads sin convertir en el rango.</p>;
+    return <p className="text-sm text-ink-500">Sin leads sin convertir en el periodo.</p>;
   }
   const max = Math.max(1, ...items.map((i) => i.count));
   return (
-    <div className="space-y-3">
-      <div className="space-y-2.5">
+    <div>
+      <ul className="flex flex-col gap-3">
         {items.map((it) => (
-          <div key={it.bucket} className="space-y-1">
-            <div className="flex items-baseline justify-between gap-2 text-sm">
-              <span className="truncate text-slate-700">{it.label}</span>
-              <span className="shrink-0 text-slate-500">
-                <span className="font-semibold text-slate-900">{it.pct}%</span> ·{" "}
+          <li key={it.bucket}>
+            <div className="flex items-baseline justify-between gap-3 text-sm">
+              <span className="truncate text-ink-900">{it.label}</span>
+              <span className="shrink-0 tabular-nums text-ink-600">
+                <span className="font-semibold text-ink-900">{sharePct(it.pct)}</span>
+                {"\u00a0· "}
                 {it.count.toLocaleString("es-PE")}
               </span>
             </div>
-            <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
-              <div
-                className={cn("h-full rounded-full", REASON_BAR[it.bucket] ?? "bg-slate-400")}
-                style={{ width: `${Math.round((it.count / max) * 100)}%` }}
-              />
+            <div className="mt-1.5 h-2 rounded-full bg-line">
+              <div className="h-full rounded-full bg-ink-500" style={{ width: `${Math.max(2, Math.round((it.count / max) * 100))}%` }} />
             </div>
-          </div>
+          </li>
         ))}
-      </div>
-      <p className="border-t border-slate-100 pt-2 text-xs text-slate-500">
-        Total oportunidades perdidas:{" "}
-        <span className="font-semibold text-slate-800">{total.toLocaleString("es-PE")}</span>
+      </ul>
+      <p className="mt-4 flex items-baseline justify-between border-t border-line pt-3 text-sm text-ink-600">
+        Oportunidades perdidas
+        <span className="font-semibold tabular-nums text-ink-900">{total.toLocaleString("es-PE")}</span>
       </p>
     </div>
   );
 }
 
+/** Lo que se dejó de vender, estimado por motivo: personas × ticket promedio. */
 export function LostRevenueCards({
   items,
   total,
@@ -55,33 +53,33 @@ export function LostRevenueCards({
   currency: string;
 }) {
   if (!items.length) {
-    return <p className="text-sm text-slate-400">Sin pérdidas estimadas en el rango.</p>;
+    return <p className="text-sm text-ink-500">Sin pérdidas estimadas en el periodo.</p>;
   }
   return (
-    <div className="space-y-2.5">
-      {items.map((it) => (
-        <div
-          key={it.bucket}
-          className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50/60 px-3 py-2"
-        >
-          <div className="min-w-0">
-            <p className="truncate text-sm font-medium text-slate-700">{it.label}</p>
-            <p className="text-xs text-slate-400">
-              {it.lostCount.toLocaleString("es-PE")} personas
-            </p>
-          </div>
-          <div className="shrink-0 text-right">
-            <p className="text-sm font-semibold text-red-600">
-              {formatCurrency(it.estRevenue, currency)}
-            </p>
-            <p className="text-[11px] text-slate-400">potencial perdido</p>
-          </div>
-        </div>
-      ))}
-      <div className="flex items-center justify-between border-t border-slate-100 pt-2 text-sm">
-        <span className="font-medium text-slate-600">Total potencial perdido</span>
-        <span className="font-semibold text-red-600">{formatCurrency(total, currency)}</span>
-      </div>
-    </div>
+    <table className="w-full text-sm">
+      <thead>
+        <tr className="border-b border-line text-left text-xs font-semibold text-ink-600">
+          <th scope="col" className="py-2 pr-3 font-semibold">Motivo</th>
+          <th scope="col" className="px-3 py-2 text-right font-semibold">Personas</th>
+          <th scope="col" className="py-2 pl-3 text-right font-semibold">Potencial perdido</th>
+        </tr>
+      </thead>
+      <tbody>
+        {items.map((it) => (
+          <tr key={it.bucket} className="border-b border-line">
+            <td className="py-2.5 pr-3 text-ink-900">{it.label}</td>
+            <td className="px-3 py-2.5 text-right tabular-nums text-ink-600">{it.lostCount.toLocaleString("es-PE")}</td>
+            <td className="py-2.5 pl-3 text-right font-semibold tabular-nums text-ink-900">{formatCurrency(it.estRevenue, currency)}</td>
+          </tr>
+        ))}
+      </tbody>
+      <tfoot>
+        <tr className="font-semibold text-ink-900">
+          <td className="py-2.5 pr-3">Total</td>
+          <td className="px-3 py-2.5 text-right tabular-nums">{items.reduce((s, it) => s + it.lostCount, 0).toLocaleString("es-PE")}</td>
+          <td className="py-2.5 pl-3 text-right tabular-nums">{formatCurrency(total, currency)}</td>
+        </tr>
+      </tfoot>
+    </table>
   );
 }

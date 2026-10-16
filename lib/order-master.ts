@@ -44,12 +44,18 @@ import {
 } from "@/lib/order-macro-stage";
 import {
   isGeneralStatus,
+  courierVisitAttempts,
   isOperationalStatus,
+  ownRiderAttempts,
   resolveOrderState,
+  urpiAttempts,
   type GuideSnapshot,
   type OrderEventSnapshot,
   type StatusOverride,
 } from "@/lib/order-status";
+import { salesChannel } from "@/lib/sales-channel";
+import { dispatchedWith, type RiderStop } from "@/lib/dispatched-with";
+import { currentDispatchDate } from "@/lib/dispatch-date";
 import {
   activeCompanionLinks,
   borrowedHostEvents,
@@ -58,7 +64,7 @@ import {
 } from "@/lib/order-companion";
 
 const ORDER_COLUMNS =
-  "id,store_id,shopify_order_id,name,created_at,cancelled_at,financial_status,payment_gateway,shipping_mode,customer_phone,total_amount,total_refunded,raw";
+  "id,store_id,shopify_order_id,name,created_at,cancelled_at,financial_status,payment_gateway,shipping_mode,customer_phone,total_amount,total_refunded,raw,tags,kapso_conversation_id";
 
 // Las columnas de gestión (assigned_at … agency_expires_at) las añade 0047. El
 // código se despliega antes que la migración, así que se intenta el conjunto
@@ -145,6 +151,8 @@ interface OrderRecord {
   total_amount: number | null;
   total_refunded: number | null;
   raw: unknown;
+  tags?: string[] | null;
+  kapso_conversation_id?: string | null;
 }
 
 interface ShipmentRecord {
@@ -280,6 +288,7 @@ function toGuideSnapshot(s: ShipmentRecord, calls: CallRecord[]): GuideSnapshot 
     // `custody_transferred_at` es una de las guardas de la corrección de
     // registro: si la caja llegó a salir, no se toca el estado.
     custody_transferred_at: s.custody_transferred_at ?? null,
+    custody_state: s.custody_state ?? null,
     created_at: s.created_at,
     // Una gestión registrada por el equipo también es un movimiento del pedido.
     updated_at:
@@ -308,6 +317,7 @@ function toMacroGuideSnapshot(s: ShipmentRecord, calls: CallRecord[]): MacroGuid
     swayp_state: guide.swayp_state ?? null,
     closed_at: guide.closed_at,
     updated_at: guide.updated_at,
+    created_at: guide.created_at,
   };
 }
 
@@ -773,6 +783,46 @@ async function fetchGeoOverrides(
 }
 
 
+/**
+ * Las paradas de Grupo GF de cada pedido, con el motorizado de su ruta: los
+ * intentos del motorizado propio y el «Salió con» (MOM §9.3). Si la tabla no
+ * responde, el recálculo sigue sin ellas.
+ */
+async function fetchRiderStops(admin: SupabaseClient, ids: string[]): Promise<Map<string, RiderStop[]>> {
+  const out = new Map<string, RiderStop[]>();
+  for (const batch of chunk(ids, ID_BATCH)) {
+    const { data, error } = await admin
+      .from("delivery_stops")
+      .select("id,order_id,status,shipment_id,delivery_routes(riders(full_name))")
+      .in("order_id", batch);
+    if (error) return out;
+    type Row = { id: string; order_id: string; status: string | null; shipment_id: string | null; delivery_routes: { riders: { full_name: string | null } | null } | null };
+    for (const row of (data ?? []) as unknown as Row[]) {
+      const stop: RiderStop = { id: row.id, status: row.status, shipment_id: row.shipment_id, rider: row.delivery_routes?.riders?.full_name ?? null };
+      out.set(row.order_id, [...(out.get(row.order_id) ?? []), stop]);
+    }
+  }
+  return out;
+}
+
+/**
+ * Intentos que reportó Urpi, por pedido (MOM §30.11). Es un dato de la fila,
+ * no decide la etapa: si la tabla no responde, el recálculo sigue sin ellos.
+ */
+async function fetchUrpiAttempts(admin: SupabaseClient, ids: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  for (const batch of chunk(ids, ID_BATCH)) {
+    const { data, error } = await admin
+      .from("urpi_report_rows")
+      .select("order_id,result_code")
+      .in("order_id", batch);
+    if (error) return out;
+    const byOrder = groupBy((data ?? []) as { order_id: string; result_code: string | null }[], (row) => row.order_id);
+    for (const [orderId, rows] of byOrder) out.set(orderId, urpiAttempts(rows));
+  }
+  return out;
+}
+
 export interface RecomputeResult {
   requested: number;
   written: number;
@@ -841,6 +891,8 @@ export async function recomputeOrderMaster(
   const drafts = await fetchDraftAddresses(admin, orders);
   const geoOverrides = await fetchGeoOverrides(admin, ids);
   const signals = await fetchPaymentSignals(admin, ids);
+  const urpiAttemptsByOrder = await fetchUrpiAttempts(admin, ids);
+  const riderStopsByOrder = await fetchRiderStops(admin, ids);
   const {
     tariffs,
     orgByStore,
@@ -1175,6 +1227,9 @@ export async function recomputeOrderMaster(
       longitude,
       geo_source: geoSource,
       shipping_mode: order.shipping_mode,
+      // Por dónde se generó (formulario web, asesora, chatbot…): el filtro
+      // «Canal» del Master (0264, lib/sales-channel.ts).
+      sales_channel: salesChannel(order.tags, order.kapso_conversation_id),
       order_total: order.total_amount,
       general_status: state.general,
       operational_status: state.operational,
@@ -1184,6 +1239,12 @@ export async function recomputeOrderMaster(
       macro_operation: macro.operation,
       macro_version: macro.version,
       macro_since: macro.since,
+      // «Programar envío» (0267, MOM §6.2): la fecha acordada para despachar,
+      // solo mientras el pedido sigue sin guía en Por generar rótulo.
+      dispatch_scheduled_on:
+        macro.stage === "preparacion" && macro.substage === "por_generar_rotulo"
+          ? currentDispatchDate(orderEvents, guides.map((g) => g.created_at))?.date ?? null
+          : null,
       // Cómo se cobró: lo necesitan la compuerta de la clave, el panel del
       // drawer y el rótulo, y los tres leen esta tabla (0128).
       financial_status: order.financial_status,
@@ -1198,7 +1259,29 @@ export async function recomputeOrderMaster(
       current_courier: state.currentCourier,
       last_courier: state.lastCourier,
       courier_count: state.courierCount,
-      attempt_count: state.attemptCount,
+      // Lo que reportan los couriers, más las paradas de nuestros motorizados
+      // y los intentos del reporte de Urpi. El costo logístico sigue con
+      // `state.attemptCount`: ni Grupo GF ni Urpi cobran por intento adicional
+      // en `cost_tariffs`, y sumar sus visitas a la tarifa de otro courier (un
+      // pedido que luego salió con Aliclik) inventaría un costo.
+      attempt_count:
+        state.attemptCount +
+        // Swayp y Tanders no mandan el número: se deduce de sus estados, y solo
+        // suma lo que pase de lo que ya traía la guía (las reprogramaciones).
+        guides.reduce(
+          (sum, g) => sum + Math.max(0, courierVisitAttempts(g, orderEvents) - (g.aliclik_attempts ?? g.reroute_attempts ?? 0)),
+          0,
+        ) +
+        ownRiderAttempts(stateEvents, riderStopsByOrder.get(order.id) ?? []) +
+        (urpiAttemptsByOrder.get(order.id) ?? 0),
+      // Con quién salió: cada motorizado de Grupo GF y cada courier externo
+      // cuya guía llegó a salir (0266, lib/dispatched-with.ts).
+      dispatched_with: dispatchedWith({
+        guides,
+        stops: riderStopsByOrder.get(order.id) ?? [],
+        events: orderEvents,
+        urpiAttempts: urpiAttemptsByOrder.get(order.id) ?? 0,
+      }),
       guide_code: state.guideCode,
       // De la guía VIGENTE, igual que el costo real de arriba: si un pedido
       // salió dos veces, lo que importa es el cobro de la que está entregando.

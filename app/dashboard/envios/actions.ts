@@ -4,7 +4,6 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { SWAYP_SUNDAY_ERROR, isSwaypDispatchDay } from "@/lib/swayp-dispatch-days";
-import { SWAYP_DESDE_CONFIRMACION_KIND } from "@/lib/swayp-desde-confirmacion";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { resolveAgentName, resolveAgentNames } from "@/lib/agent-names";
 import { recomputeOrderMasterForShipmentsSafe } from "@/lib/order-master";
@@ -38,7 +37,6 @@ import {
   isCallable,
   isFenixCity,
   isValidStatus,
-  limaTodayKey,
   nextShipmentTransition,
   normalizeCity,
   rescheduleGuideCode,
@@ -80,9 +78,15 @@ import {
   type StockMovementKind,
   type StockMovementRow,
 } from "@/lib/fenix-ledger";
-import { writeCourierGuide } from "@/lib/route-output-fill";
 import {
-  isFillableRouteOutput,
+  DIRECT_GUIDE_ACTIVE_STATUSES,
+  type DirectGuideExisting,
+  emitirGuiaSwaypDirecta,
+  esRellenable,
+  findGuidesOfOrder,
+  operacionDelPedido,
+} from "@/lib/swayp-directa";
+import {
   pickFillableRouteOutput,
   puertaDeSalidaAdicional,
 } from "@/lib/shipment-output";
@@ -132,9 +136,8 @@ import {
 import { avisoSinVinculoSwayp, normalizeSku, productosSinVinculo } from "@/lib/swayp-productos";
 import { cargarMapaSwayp, cargarMapaSwaypDeOrg } from "@/lib/swayp-sku-map";
 import { NOVELTY_ACTIONS, buildNoveltySolution, noveltyActionIsReturn } from "@/lib/swayp-novelty";
-import { getMasterPermissions } from "@/lib/permissions-access";
+import { getMasterPermissions, orgsWithPermission } from "@/lib/permissions-access";
 import {
-  createFenixGuideViaApi,
   DIRECT_GUIDE_ORDER_COLUMNS,
   origenReenvioSwayp,
   reenviarGuiaAnulada,
@@ -236,6 +239,19 @@ async function syncMasterForShipment(
   );
   revalidatePath("/dashboard/pedidos");
 }
+
+/**
+ * Escribir en un envío —reservarlo, registrar una gestión, cambiar su estado o
+ * su dirección, crear o vincular una guía— es gestionar el pedido: pide
+ * `master.edit`, lo mismo que el Master pide para esos mismos hechos (MOM §16).
+ * Ver el envío (RLS, `authorizeShipment`) no alcanza: quien es de solo lectura
+ * lo ve y no lo toca. Al abrirlo, la reserva le rebota con este mensaje y el
+ * panel queda bloqueado.
+ */
+async function canManageShipments(): Promise<boolean> {
+  return (await getMasterPermissions()).can("master.edit");
+}
+const READ_ONLY_SHIPMENTS = "Tu rol no permite gestionar envíos.";
 
 async function authorizeShipment(
   shipmentId: string,
@@ -385,13 +401,14 @@ export async function loadShipmentDetail(
   };
 }
 
-/** Editar la nota (texto libre) de una gestión del historial. Cualquiera con
- *  acceso a la guía puede editarla; deja traza de quién y cuándo la modificó.
+/** Editar la nota (texto libre) de una gestión del historial. Cualquiera que
+ *  vea la guía y gestione envíos puede editarla; deja traza de quién y cuándo.
  *  Solo cambia la nota — nunca el estado, la fecha ni el tipo de gestión. */
 export async function updateShipmentCallNote(
   callId: string,
   note: string,
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const sb = await createServerSupabase();
   const {
     data: { user },
@@ -447,6 +464,7 @@ export async function searchOrdersToLink(query: string): Promise<OrderLinkCandid
 
 /** Claim a shipment (one at a time). Succeeds if free, stale, or already mine. */
 export async function claimShipment(shipmentId: string): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
   const admin = createAdminSupabase();
@@ -474,6 +492,7 @@ export async function claimShipment(shipmentId: string): Promise<ShipmentActionS
 
 /** Keep an existing reservation alive while its drawer remains open. */
 export async function renewShipmentClaim(shipmentId: string): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
   const admin = createAdminSupabase();
@@ -525,6 +544,7 @@ export async function registerRerouteCall(
     forceAliclik?: boolean;
   },
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
   const admin = createAdminSupabase();
@@ -826,6 +846,7 @@ export async function registerRecoveryCall(
     nextFollowupAt?: string | null;
   },
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
   const admin = createAdminSupabase();
@@ -940,6 +961,7 @@ export async function updateShipmentDeliveryAddress(
   shipmentId: string,
   input: ShipmentAddressInput,
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
 
@@ -1096,6 +1118,7 @@ export async function registerCourierReportResult(
     note?: string | null;
   },
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a esta guía." };
 
@@ -1210,6 +1233,7 @@ export async function setShipmentStatus(
   status: string,
   note?: string,
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso." };
   if (!isValidStatus(status)) return { error: "Estado inválido." };
@@ -1244,6 +1268,7 @@ export async function reprogramCancelledShipmentException(
   shipmentId: string,
   input: { nextFollowupAt?: string | null; note?: string | null },
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a esta guía." };
 
@@ -1271,6 +1296,7 @@ export async function createFenixGuide(
   shipmentId: string,
   input: { guideCode: string; nextFollowupAt?: string | null },
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso." };
 
@@ -1313,92 +1339,6 @@ export async function createFenixGuide(
   await syncMasterForShipment(admin, shipmentId, r.childId);
   revalidatePath("/dashboard/envios");
   return { notice: `Guía Swayp ${r.guideCode} registrada.` };
-}
-
-// ── Guía Swayp DIRECTA: desde un pedido, sin guía Aliclik madre ──────────────
-// Urgencias que salen del almacén regional de Swayp sin pasar por Aliclik. La
-// guía nace En ruta con su fecha de despacho (desde mañana) y entra al Excel de
-// programación de ese día como cualquier guía Swayp. Gate de creación: cobertura
-// + stock de TODOS los productos del pedido; el descuento de inventario sigue
-// ocurriendo al entregar (salida_entrega), igual que el resto de guías.
-
-interface DirectGuideExisting {
-  id: string;
-  guide_code: string;
-  courier: string;
-  delivery_status: string;
-  // Lo que hace falta para saber si es una salida «por definir» rellenable, en
-  // vez de una guía que de verdad estorba. Ver `esRellenable`.
-  created_via?: string | null;
-  custody_state?: string | null;
-  custody_transferred_at?: string | null;
-  output_number?: number | null;
-  output_code?: string | null;
-}
-
-/**
- * ¿Esta salida se RELLENA con la guía de Swayp en vez de estorbarla?
- *
- * Una salida «por definir» es una caja armada y rotulada esperando courier. Las
- * guías de Grupo GF, Tanders, Aliclik y Shalom le escriben el courier encima
- * (`writeCourierGuide`); Swayp era el único que no, así que pedía anularla
- * primero — y anular arrastra el pedido a `anulado` (#KP127639), que es
- * exactamente el rodeo que ese mecanismo vino a cerrar.
- *
- * Delega en `isFillableRouteOutput`: dos definiciones de «rellenable» harían
- * que el aviso de la mesa prometiera una cosa y el servidor hiciera otra.
- */
-function esRellenable(g: DirectGuideExisting): boolean {
-  return isFillableRouteOutput({
-    courier: g.courier,
-    created_via: g.created_via ?? null,
-    delivery_status: g.delivery_status,
-    custody_state: g.custody_state ?? null,
-    custody_transferred_at: g.custody_transferred_at ?? null,
-  });
-}
-
-/** Every guide already tied to the order (by FK or by carried order name). */
-async function findGuidesOfOrder(
-  admin: SupabaseClient,
-  order: { id: string; store_id: string; name: string | null },
-): Promise<DirectGuideExisting[]> {
-  const cols =
-    "id,guide_code,courier,delivery_status,created_via,custody_state,custody_transferred_at,output_number,output_code";
-  const { data: byOrder } = await admin.from("shipments").select(cols).eq("order_id", order.id).limit(50);
-  let byName: DirectGuideExisting[] = [];
-  if (order.name) {
-    const { data } = await admin
-      .from("shipments")
-      .select(cols)
-      .eq("store_id", order.store_id)
-      .eq("order_name", order.name)
-      .limit(50);
-    byName = (data as DirectGuideExisting[]) ?? [];
-  }
-  const merged = new Map<string, DirectGuideExisting>();
-  for (const g of [...((byOrder as DirectGuideExisting[]) ?? []), ...byName]) merged.set(g.id, g);
-  return [...merged.values()];
-}
-
-const DIRECT_GUIDE_ACTIVE_STATUSES = new Set(["pendiente", "en_ruta", "por_preparar"]);
-
-/**
- * Lima, provincia o agencia, leído de donde lo lee la mesa de ruta manual:
- * `order_master.macro_operation`. Decide si otra salida viva bloquea (fuera de
- * Lima) o solo pide motivo (en Lima). Ver `puertaDeSalidaAdicional`.
- */
-async function operacionDelPedido(
-  admin: SupabaseClient,
-  orderId: string,
-): Promise<"lima" | "provincia_cod" | "agencia" | "desconocida"> {
-  const { data } = await admin
-    .from("order_master")
-    .select("macro_operation")
-    .eq("order_id", orderId)
-    .maybeSingle();
-  const op = (data as { macro_operation?: string | null } | null)?.macro_operation ?? "";
-  return op === "lima" || op === "provincia_cod" || op === "agencia" ? op : "desconocida";
 }
 
 export interface DirectFenixGuidePreview {
@@ -1511,6 +1451,7 @@ export async function previewDirectFenixGuide(input: {
   orderGid?: string;
   storeId?: string;
 }): Promise<DirectFenixGuidePreview | { error: string }> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const sb = await createServerSupabase();
   const {
     data: { user },
@@ -1692,6 +1633,7 @@ export async function createDirectFenixGuide(input: {
    */
   origen?: "por_confirmar";
 }): Promise<ShipmentActionState & { shipmentId?: string }> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const sb = await createServerSupabase();
   const {
     data: { user },
@@ -1707,271 +1649,18 @@ export async function createDirectFenixGuide(input: {
   const order = data as unknown as DirectGuideOrderRecord | null;
   if (!order) return { error: "Pedido inválido o sin acceso." };
 
-  if (order.cancelled_at) {
-    return { error: "El pedido está cancelado en Shopify; no se puede crear la guía." };
-  }
-  const totalRefunded = order.total_refunded ?? 0;
-  if ((order.total_amount ?? 0) > 0 && totalRefunded >= (order.total_amount ?? 0)) {
-    return { error: "El pedido fue reembolsado por completo en Shopify; no se puede crear la guía." };
-  }
-
-  const admin = createAdminSupabase();
-
-  // El botón de Por confirmar solo vale donde el owner lo pensó: provincia COD
-  // que todavía está por confirmar. Se lee del Master, que es donde vive esa
-  // respuesta; un pedido que avanzó entre abrir la ficha y pulsar ya no es eso.
-  if (input.origen === "por_confirmar") {
-    const { data: master } = await admin
-      .from("order_master")
-      .select("macro_stage,coverage")
-      .eq("order_id", order.id)
-      .maybeSingle();
-    const m = master as { macro_stage: string | null; coverage: string | null } | null;
-    if (m?.macro_stage !== "por_confirmar") {
-      return { error: "El pedido ya no está en Por confirmar. Actualiza la ficha." };
-    }
-    if (m.coverage !== "provincia_cod") {
-      return { error: "«Enviar por Swayp» desde Por confirmar es solo para pedidos de provincia COD." };
-    }
-  }
-
-  const { address } = await resolveDirectGuideAddress(admin, order);
-  const district = address?.city ?? null;
-  const region = address?.province ?? null;
-  const city = deriveFenixCoverageCity(district, region);
-  if (!district) {
-    return {
-      error:
-        "El pedido no tiene distrito/ciudad de envío, así que no se puede validar la cobertura ni el stock Swayp. Complétalo en Shopify y reintenta.",
-    };
-  }
-
-  const { data: store } = await admin
-    .from("stores")
-    .select("org_id")
-    .eq("id", order.store_id)
-    .maybeSingle();
-  const orgId = (store as { org_id?: string } | null)?.org_id;
-  if (!orgId) return { error: "No se encontró la organización de la tienda." };
-
-  // Otra salida viva: fuera de Lima bloquea; en Lima pide motivo (MOM
-  // principio 7 y §9 — no hay que esperar el reporte del otro courier). Una
-  // «por definir» todavía en casa no cuenta: se rellena. Ver
-  // `puertaDeSalidaAdicional`, la misma regla que Tanders.
-  const guides = await findGuidesOfOrder(admin, order);
-  const puerta = puertaDeSalidaAdicional({
-    courier: "fenix",
-    operation: await operacionDelPedido(admin, order.id),
-    outputs: guides,
-    motivo: input.motivoSalidaAdicional,
+  const r = await emitirGuiaSwaypDirecta(createAdminSupabase(), {
+    order,
+    actorId: user.id,
+    dispatchDateIso: input.dispatchDateIso,
+    guideCode: input.guideCode,
+    note: input.note,
+    motivoSalidaAdicional: input.motivoSalidaAdicional,
+    origen: input.origen,
   });
-  if (!puerta.ok) return { error: puerta.error };
-
-  // Stock gate: EVERY line item must have stock in the destination city.
-  const { data: stock, error: stockError } = await admin
-    .from("fenix_stock")
-    .select("city,product,sku,quantity,unlimited")
-    .eq("org_id", orgId);
-  if (stockError) return { error: `No se pudo consultar el stock Swayp: ${stockError.message}` };
-  const lineItems = (order.line_items ?? []).map((li) => ({
-    title: li.title ?? "",
-    quantity: li.quantity ?? 1,
-    sku: li.sku ?? null,
-  }));
-  const check = evaluateDirectFenixStock(city, (stock as FenixStockRow[]) ?? [], lineItems);
-  if (!check.ok) {
-    if (check.reason === "sin_stock") {
-      return {
-        error: `Sin stock Swayp en ${city} para: ${check.uncovered.join(", ")}. Actualiza el inventario en Stock Swayp e intenta de nuevo.`,
-      };
-    }
-    return { error: `Swayp no tiene cobertura en ${district || "el destino del pedido"}.` };
-  }
-
-  // REJA DEL VÍNCULO. Sin esto, un producto que Swayp no conoce llegaba hasta la
-  // llamada a la API, esta fallaba con «Falta vincular a Swayp», y el flujo caía
-  // al código local y CREABA LA GUÍA IGUAL: una caja despachada contra un número
-  // que Swayp nunca emitió, con el fallo contado en un aviso al final.
-  //
-  // El respaldo del código local sigue vivo para lo que de verdad es una
-  // limitación de Swayp —una ciudad que su API no atiende—. Un vínculo que falta
-  // es un hueco NUESTRO, se arregla en dos minutos y no puede despachar una caja
-  // mientras tanto.
-  const sinVinculo = productosSinVinculo(lineItems, await cargarMapaSwayp(admin, order.store_id));
-  if (sinVinculo.length) return { error: avisoSinVinculoSwayp(sinVinculo) };
-
-  // Dispatch date: required, from tomorrow (Lima) onward — the day's Excel is
-  // usually already sent, so a same-day guide would never reach Swayp.
-  const dispatchDay = (input.dispatchDateIso || "").slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dispatchDay) || Number.isNaN(Date.parse(input.dispatchDateIso))) {
-    return { error: "Elige la fecha de despacho." };
-  }
-  if (dispatchDay <= limaTodayKey()) {
-    return { error: "Elige una fecha de despacho desde mañana." };
-  }
-  if (!isSwaypDispatchDay(dispatchDay)) return { error: SWAYP_SUNDAY_ERROR };
-
-  // Guía por API. Sólo cuando el operador NO escribió un código a mano: si lo
-  // escribió es porque la generó él en el sistema de Swayp, y pedir otra
-  // duplicaría el paquete. Cuando Swayp responde, SU número pasa a ser el
-  // guide_code — el punto de todo esto es dejar de inventarlo localmente.
-  let swaypGuide: string | null = null;
-  let swaypState: number | null = null;
-  const swaypNotice = "";
-  if (!input.guideCode?.trim()) {
-    const viaApi = await createFenixGuideViaApi({
-      admin,
-      orderId: order.id,
-      sourceKey: `direct:${order.id}:${input.dispatchDateIso}`,
-      storeId: order.store_id,
-      city,
-      district,
-      customerName: address?.name ?? null,
-      customerPhone: order.customer_phone ?? normalizePhone(address?.phone) ?? null,
-      address1: address?.address1 ?? null,
-      reference: address?.address2 ?? null,
-      lineItems,
-      codAmount: Math.max(0, (order.total_amount ?? 0) - totalRefunded),
-      dispatchDateIso: input.dispatchDateIso,
-      observaciones: input.note?.trim() || null,
-    });
-    // Sin número de Swayp no hay guía. Ver la reja gemela en `registerRerouteCall`.
-    if (!viaApi.ok) {
-      return { error: `Swayp no emitió la guía: ${viaApi.reason}. No se creó ninguna salida.` };
-    }
-    swaypGuide = viaApi.guia;
-    swaypState = viaApi.idEstado;
-  }
-
-  // El código escrito a mano tiene que SER de Swayp. Autogenerarlo con el
-  // pedido y la fecha era acuñar un número que Swayp no conoce, que es
-  // justamente lo que esta regla cierra.
-  const escrito = input.guideCode?.trim().toUpperCase() ?? "";
-  if (escrito && !esNumeroDeGuiaSwayp(escrito)) {
-    return {
-      error:
-        `«${escrito}» no es un número de guía de Swayp: los suyos son solo dígitos, como 50000132589. ` +
-        `Cópialo de su panel, o deja el campo vacío para que Swayp lo emita.`,
-    };
-  }
-  const code = swaypGuide ?? escrito;
-  if (!code) {
-    return { error: "Swayp no devolvió número de guía. Vuelve a intentarlo." };
-  }
-
-  const insertRow = {
-    courier: "fenix",
-    guide_code: code,
-    swayp_guide: swaypGuide,
-    swayp_state: swaypState,
-    store_id: order.store_id,
-    order_id: order.id,
-    matched: true,
-    match_method: "manual",
-    order_name: order.name,
-    customer_name: address?.name ?? null,
-    customer_phone: order.customer_phone ?? normalizePhone(address?.phone) ?? null,
-    product: lineItems.map((li) => li.title).filter(Boolean).join(" | ") || null,
-    district,
-    province: null,
-    city,
-    region,
-    delivery_address: address?.address1 ?? null,
-    delivery_reference: address?.address2 ?? null,
-    latitude: null,
-    longitude: null,
-    delivery_status: "en_ruta",
-    status_category: "in_route",
-    next_followup_at: input.dispatchDateIso,
-    fenix_eligible: true,
-    created_via: "fenix_directo",
-  };
-  // RELLENA la salida «por definir» si la hay, y si no crea una nueva. Es el
-  // mismo camino que Grupo GF, Tanders, Aliclik y Shalom: sin esto, Swayp era
-  // el único courier que obligaba a anular la salida para poder emitir, y
-  // anularla arrastra el pedido a `anulado` (#KP127639).
-  //
-  // Se queda además con el reintento por columna faltante que la inserción a
-  // mano traía suelto, pero con una diferencia que importa: `created_via` es
-  // esencial y ya no se suelta. Rellenar sin él dejaría la salida marcada como
-  // ruta manual, con «Anular salida» ofreciéndose sobre una guía que ya existe
-  // en Swayp — anularla de nuestro lado la dejaría viva del otro (MOM §4).
-  const written = await writeCourierGuide(admin, order.id, insertRow);
-  if ("error" in written) {
-    const dup = written.error.includes("23505") || written.error.toLowerCase().includes("duplicate");
-    return {
-      error: dup
-        ? `Ya existe una guía Swayp con el código ${code}. Cambia la fecha o edita el código.`
-        : written.error,
-    };
-  }
-  const childId = written.shipmentId;
-
-  // Gestión del día de quien la creó (kind reroute + new_status null: cuenta
-  // como gestión sin inflar "reprogramadas", y la guía —sin madre— queda fuera
-  // del universo de Reprogramados en Kapso).
-  await admin.from("shipment_calls").insert({
-    shipment_id: childId,
-    store_id: order.store_id,
-    agent: user.id,
-    kind: "reroute",
-    new_status: null,
-    note: [`Guía Swayp directa creada: ${code} (pedido ${order.name ?? "sin número"}).`, input.note?.trim() || null]
-      .filter(Boolean)
-      .join(" "),
-    next_followup_at: input.dispatchDateIso,
-  });
-
-  // La justificación auditada de la salida adicional (MOM §23), en su propio
-  // evento y con las salidas que seguían vivas.
-  if (puerta.motivo) {
-    await admin.from("order_events").insert({
-      store_id: order.store_id,
-      order_id: order.id,
-      kind: "additional_output_reason",
-      occurred_at: new Date().toISOString(),
-      actor: user.id,
-      source: "fenix",
-      courier: "fenix",
-      guide_code: code,
-      shipment_id: childId,
-      reason: puerta.motivo,
-      note: `Salida adicional por Swayp con ${puerta.estorban.length} salida(s) todavía viva(s).`,
-      payload: {
-        salidas_vivas: puerta.estorban.map((o) => ({
-          codigo: o.output_code ?? o.guide_code ?? null,
-          courier: o.courier,
-          estado: o.delivery_status,
-        })),
-      },
-    });
-  }
-
-  // El hecho que hace volver el pedido a Por confirmar si Swayp no entrega (MOM
-  // §11.11). Va ANTES de recalcular el Master: el recálculo lo lee.
-  let avisoOrigen = "";
-  if (input.origen === "por_confirmar") {
-    const { error: caseError } = await admin.from("order_events").insert({
-      store_id: order.store_id,
-      order_id: order.id,
-      kind: SWAYP_DESDE_CONFIRMACION_KIND,
-      occurred_at: new Date().toISOString(),
-      actor: user.id,
-      source: "manual",
-      courier: "fenix",
-      guide_code: code,
-      shipment_id: childId,
-      note: "Enviado por Swayp desde Por confirmar, sin confirmación. Si Swayp no entrega, vuelve a Por confirmar.",
-    });
-    // La guía ya existe en Swayp: no se deshace por esto, pero se dice, porque
-    // sin el hecho el pedido no volvería solo a Por confirmar.
-    avisoOrigen = caseError
-      ? ` No se pudo marcar como «desde Por confirmar» (${caseError.message}): si Swayp no entrega, avisa para devolverlo a mano.`
-      : " Si Swayp no la entrega, el pedido vuelve a Por confirmar.";
-    revalidatePath("/dashboard/pedidos");
-  }
-
-  await syncMasterForShipment(admin, childId);
+  if ("error" in r) return { error: r.error };
+  const { code, childId, avisoOrigen } = r;
+  revalidatePath("/dashboard/pedidos");
   revalidatePath("/dashboard/envios");
   // `es-PE` con mes corto ya trae punto —«11 set.»— y la frase añade el suyo,
   // así que el aviso salía «despacho 11-set..». Se quita el de la fecha y lo
@@ -1984,11 +1673,11 @@ export async function createDirectFenixGuide(input: {
   // porque la guía nueva no pertenece a esa lista.
   // Se dice cuándo se RELLENÓ una salida y cuál: quien arma la caja tiene el
   // rótulo delante y necesita saber que es ese bulto y no uno nuevo.
-  const relleno = written.filled
-    ? ` Se escribió sobre la salida ${written.outputCode ?? "por definir"}, sin abrir otra.`
+  const relleno = r.filled
+    ? ` Se escribió sobre la salida ${r.outputCode ?? "por definir"}, sin abrir otra.`
     : "";
   return {
-    notice: `Guía Swayp directa ${code} creada — En ruta, despacho ${fecha}.${relleno}${swaypNotice}${avisoOrigen}`,
+    notice: `Guía Swayp directa ${code} creada — En ruta, despacho ${fecha}.${relleno}${avisoOrigen}`,
     shipmentId: childId,
   };
 }
@@ -2008,6 +1697,7 @@ export async function resolveShipmentMatch(
   shipmentId: string,
   input: { orderId?: string | null },
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
   const admin = createAdminSupabase();
@@ -2119,6 +1809,7 @@ export async function linkShipmentToShopifyOrder(
   orderGid: string,
   storeId: string,
 ): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
   const sb = await createServerSupabase();
@@ -2176,11 +1867,9 @@ export async function processSuggestionBatch(): Promise<
     data: { user },
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
-  const { data: mem } = await sb.from("memberships").select("org_id,role");
-  const adminOrg = ((mem as { org_id: string; role: string }[]) ?? []).find(
-    (m) => m.role === "owner" || m.role === "admin",
-  );
-  if (!adminOrg) return { error: "Solo un administrador puede ejecutar el emparejamiento automático." };
+  // Quien tenga el permiso, no solo owner/admin (MOM §16, 12-10-2026).
+  const adminOrg = (await orgsWithPermission("stores.manage"))[0];
+  if (!adminOrg) return { error: "Tu rol no permite ejecutar el emparejamiento automático (lo hace «Administración»)." };
 
   const stores = await getAccessibleStores();
   const storeIds = stores.map((s) => s.id);
@@ -2195,6 +1884,7 @@ export async function processSuggestionBatch(): Promise<
  * Revisión, still searchable manually via OrderLinkPicker underneath.
  */
 export async function clearShipmentSuggestion(shipmentId: string): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
   const admin = createAdminSupabase();
@@ -2255,11 +1945,9 @@ export async function upsertFenixStock(input: {
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
   // resolve the caller's admin org (first one)
-  const { data: mem } = await sb.from("memberships").select("org_id,role");
-  const adminOrg = ((mem as { org_id: string; role: string }[]) ?? []).find(
-    (m) => m.role === "owner" || m.role === "admin",
-  );
-  if (!adminOrg) return { error: "Solo un administrador puede editar el stock." };
+  // Quien tenga el permiso, no solo owner/admin (MOM §16, 12-10-2026).
+  const adminOrg = (await orgsWithPermission("stock.manage"))[0];
+  if (!adminOrg) return { error: "Tu rol no permite editar el stock." };
 
   const city = input.city.trim().toLowerCase();
   const product = input.product.trim();
@@ -2348,11 +2036,9 @@ export async function importarInventarioSwayp(
     data: { user },
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
-  const { data: mem } = await sb.from("memberships").select("org_id,role");
-  const adminOrg = ((mem as { org_id: string; role: string }[]) ?? []).find(
-    (m) => m.role === "owner" || m.role === "admin",
-  );
-  if (!adminOrg) return { error: "Solo un administrador puede importar el stock." };
+  // Quien tenga el permiso, no solo owner/admin (MOM §16, 12-10-2026).
+  const adminOrg = (await orgsWithPermission("stock.manage"))[0];
+  if (!adminOrg) return { error: "Tu rol no permite importar el stock." };
 
   const file = formData.get("archivo");
   if (!(file instanceof File) || file.size === 0) {
@@ -2502,11 +2188,9 @@ async function prepararSyncSwayp(
     data: { user },
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
-  const { data: mem } = await sb.from("memberships").select("org_id,role");
-  const adminOrg = ((mem as { org_id: string; role: string }[]) ?? []).find(
-    (m) => m.role === "owner" || m.role === "admin",
-  );
-  if (!adminOrg) return { error: "Solo un administrador puede sincronizar el stock." };
+  // Quien tenga el permiso, no solo owner/admin (MOM §16, 12-10-2026).
+  const adminOrg = (await orgsWithPermission("stock.manage"))[0];
+  if (!adminOrg) return { error: "Tu rol no permite sincronizar el stock." };
 
   // Un «Bearer » pegado de más duplicaría el prefijo y Swayp respondería 403.
   const token = (input.token ?? "").trim().replace(/^bearer\s+/i, "");
@@ -2637,11 +2321,9 @@ export async function swaypInventoryEstado(): Promise<SwaypSyncEstado | { error:
     data: { user },
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
-  const { data: mem } = await sb.from("memberships").select("org_id,role");
-  const adminOrg = ((mem as { org_id: string; role: string }[]) ?? []).find(
-    (m) => m.role === "owner" || m.role === "admin",
-  );
-  if (!adminOrg) return { error: "Solo un administrador puede ver el sync de Swayp." };
+  // Quien tenga el permiso, no solo owner/admin (MOM §16, 12-10-2026).
+  const adminOrg = (await orgsWithPermission("stock.manage"))[0];
+  if (!adminOrg) return { error: "Tu rol no permite ver el sync de Swayp." };
 
   const auto = fuenteAutomaticaDesdeEnv();
   const { data } = await createAdminSupabase()
@@ -2660,8 +2342,11 @@ export async function swaypInventoryEstado(): Promise<SwaypSyncEstado | { error:
 
 /** Delete a Swayp stock row (admin). */
 export async function deleteFenixStock(id: string): Promise<ShipmentActionState> {
-  const sb = await createServerSupabase();
-  const { error } = await sb.from("fenix_stock").delete().eq("id", id);
+  // Con el permiso y no por RLS de admin: quien edita el stock por su rol
+  // (Despacho, Administración) también lo borra, solo en sus organizaciones.
+  const orgIds = (await orgsWithPermission("stock.manage")).map((m) => m.org_id);
+  if (!orgIds.length) return { error: "Tu rol no permite editar el stock." };
+  const { error } = await createAdminSupabase().from("fenix_stock").delete().eq("id", id).in("org_id", orgIds);
   if (error) return { error: errorDeBase(error, "borrar el stock Swayp") };
   const sync = await recomputeFenixEligibility();
   revalidatePath("/dashboard/envios/stock");
@@ -2691,11 +2376,9 @@ export async function recordFenixStockMovement(input: {
     data: { user },
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
-  const { data: mem } = await sb.from("memberships").select("org_id,role");
-  const adminOrgs = ((mem as { org_id: string; role: string }[]) ?? [])
-    .filter((m) => m.role === "owner" || m.role === "admin")
-    .map((m) => m.org_id);
-  if (!adminOrgs.length) return { error: "Solo un administrador puede mover el stock." };
+  // Quien tenga el permiso, no solo owner/admin (MOM §16, 12-10-2026).
+  const adminOrgs = (await orgsWithPermission("stock.manage")).map((m) => m.org_id);
+  if (!adminOrgs.length) return { error: "Tu rol no permite mover el stock." };
 
   const admin = createAdminSupabase();
   const { data: stock } = await admin
@@ -2789,11 +2472,9 @@ export async function recomputeFenixEligibility(): Promise<
     data: { user },
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
-  const { data: mem } = await sb.from("memberships").select("org_id,role");
-  const adminOrg = ((mem as { org_id: string; role: string }[]) ?? []).find(
-    (m) => m.role === "owner" || m.role === "admin",
-  );
-  if (!adminOrg) return { error: "Solo un administrador puede recalcular la elegibilidad." };
+  // Quien tenga el permiso, no solo owner/admin (MOM §16, 12-10-2026).
+  const adminOrg = (await orgsWithPermission("stock.manage"))[0];
+  if (!adminOrg) return { error: "Tu rol no permite recalcular la elegibilidad." };
 
   const stores = (await getAccessibleStores()).filter((s) => s.org_id === adminOrg.org_id);
   const storeIds = stores.map((s) => s.id);

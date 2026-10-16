@@ -64,6 +64,27 @@ begin
     raise exception 'la región no debe resolverse buscando dentro del texto';
   end if;
 
+  -- 6b. Grafías sin el «de» (0246, owner 12-10-2026): «San Juan Lurigancho» es
+  --     SJL, nunca Lurigancho-Chosica, también dentro de una frase.
+  if resolve_lima_district('San juan lurigancho', false) is distinct from 'san juan de lurigancho' then
+    raise exception 'San Juan Lurigancho debe ser San Juan de Lurigancho';
+  end if;
+  if resolve_lima_district('Mz B San Juan Lurigancho', true) is distinct from 'san juan de lurigancho' then
+    raise exception 'dentro de una frase, San Juan Lurigancho no debe caer en Lurigancho';
+  end if;
+  if resolve_lima_district('Pachamamac', false) is distinct from 'pachacamac' then
+    raise exception 'Pachamamac debe ser Pachacamac';
+  end if;
+  if resolve_lima_district('cercado delima', false) is distinct from 'lima' then
+    raise exception 'cercado delima debe ser Lima (Cercado)';
+  end if;
+  if resolve_lima_district('Lurigancho-Chosica', false) is distinct from 'lurigancho chosica' then
+    raise exception 'Lurigancho-Chosica debe seguir siendo Lurigancho-Chosica';
+  end if;
+  if resolve_lima_district('HUARAZ', true) is not null then
+    raise exception 'Huaraz es Áncash: no debe resolver a un distrito de Lima';
+  end if;
+
   ------------------------------------------------- las ramas de siempre
   -- 7. Lima y Callao siguen resolviéndose antes de llegar a la rama nueva.
   if not is_lima_metropolitana('Lima (Metropolitana)', null, null) then

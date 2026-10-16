@@ -9,19 +9,26 @@ import { GRANTED_ONE_BY_ONE, permissionsFor, type Permission } from "@/lib/permi
 import {
   canAddMember,
   canRemoveMember,
+  canSetFunctionRole,
   canSetPaymentValidator,
   canSetRole,
   isRole,
   type MemberLite,
 } from "@/lib/team";
+import { hasOrgPermission } from "@/lib/permissions-access";
 import { GROUP_GF_RIDER_COURIER } from "@/lib/couriers/catalog";
+import { parseScheduleInput } from "@/lib/productivity-week";
 
 export interface TeamActionState {
   error?: string;
   notice?: string;
 }
 
-/** Verify the caller is owner/admin of `orgId`; returns their role or null. */
+/**
+ * Verify the caller manages the team of `orgId` —owner/admin, or the
+ * «Gestionar el equipo» permission of the «Administración» role (MOM §16)—;
+ * returns their access role or null. What each one may do lives in lib/team.ts.
+ */
 async function requireOrgAdmin(orgId: string): Promise<{ userId: string; role: Role } | null> {
   if (!orgId) return null;
   const sb = await createServerSupabase();
@@ -35,7 +42,8 @@ async function requireOrgAdmin(orgId: string): Promise<{ userId: string; role: R
     .eq("org_id", orgId)
     .eq("user_id", user.id)
     .maybeSingle();
-  if (!data || (data.role !== "owner" && data.role !== "admin")) return null;
+  if (!data) return null;
+  if (data.role !== "owner" && data.role !== "admin" && !(await hasOrgPermission(orgId, "team.manage"))) return null;
   return { userId: user.id, role: data.role as Role };
 }
 
@@ -64,6 +72,12 @@ async function orgGrantHolderIds(
     .eq("org_id", orgId)
     .in("permission", [...GRANTED_ONE_BY_ONE.map((g) => g.permission), "shalom.validate_payment"]);
   if (error) return { ids: [], error: error.message };
+  // Los roles acumulables también dan permisos (0250). Sin la tabla, ninguno.
+  const { data: functionRows } = await admin.from("membership_roles").select("user_id, role").eq("org_id", orgId);
+  const functionsByUser = new Map<string, string[]>();
+  for (const row of (functionRows as { user_id: string; role: string }[] | null) ?? []) {
+    functionsByUser.set(row.user_id, [...(functionsByUser.get(row.user_id) ?? []), row.role]);
+  }
   const grantsByUser = new Map<string, { permission: string; granted: boolean }[]>();
   for (const row of
     (data as { user_id: string; permission: string; granted: boolean }[]) ?? []) {
@@ -74,7 +88,7 @@ async function orgGrantHolderIds(
   return {
     ids: members
       .filter((member) =>
-        permissionsFor([member.role], grantsByUser.get(member.user_id) ?? []).has(permission),
+        permissionsFor([member.role], grantsByUser.get(member.user_id) ?? [], functionsByUser.get(member.user_id) ?? []).has(permission),
       )
       .map((member) => member.user_id),
   };
@@ -307,6 +321,7 @@ export async function setPaymentValidationPermission(
     actor.role,
     holders.ids,
     entry.lastOneMatters ? entry.label : null,
+    entry.ownerOnly ? entry.label : null,
   );
   if (!guard.ok) return { error: guard.reason };
 
@@ -451,4 +466,93 @@ export async function unlinkRiderUser(orgId: string, riderId: string): Promise<T
   if (error) return { error: error.message };
   revalidatePath("/dashboard/team");
   return { notice: "Usuario desvinculado." };
+}
+
+// ---------------------------------------------------------------------------
+// Horarios (migración 0245): la meta de horas por semana y el horario de cada
+// persona, que Productividad compara con sus horas activas.
+
+/** Guarda la meta y el horario de una persona de la organización. */
+export async function saveAdvisorSchedule(input: {
+  orgId: string;
+  userId: string;
+  weeklyHours: string;
+  days: number[];
+  start: string | null;
+  end: string | null;
+}): Promise<TeamActionState> {
+  const actor = await requireOrgAdmin(input.orgId);
+  if (!actor) return { error: "Sin permiso en esta organización." };
+  const parsed = parseScheduleInput(input);
+  if ("error" in parsed) return { error: parsed.error };
+  const admin = createAdminSupabase();
+  const members = await orgMembers(admin, input.orgId);
+  if (!members.some((m) => m.user_id === input.userId)) return { error: "Esa persona no es de esta organización." };
+  const { schedule } = parsed;
+  const { error } = await admin.from("advisor_schedules").upsert(
+    {
+      org_id: input.orgId,
+      user_id: input.userId,
+      weekly_hours: schedule.weeklyHours,
+      days: schedule.days,
+      start_time: schedule.start,
+      end_time: schedule.end,
+      updated_by: actor.userId,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "org_id,user_id" },
+  );
+  if (error) {
+    // Sin la migración 0245 la tabla no existe: que se entienda qué falta.
+    return {
+      error: /advisor_schedules/.test(error.message)
+        ? "Falta aplicar la migración 0245 (horarios) en la base de datos."
+        : error.message,
+    };
+  }
+  revalidatePath("/dashboard/team");
+  revalidatePath("/dashboard/productividad");
+  return { notice: "Horario guardado." };
+}
+
+/** Quita el horario: la persona vuelve a la meta por defecto (48 h, lunes a sábado). */
+export async function clearAdvisorSchedule(orgId: string, userId: string): Promise<TeamActionState> {
+  const actor = await requireOrgAdmin(orgId);
+  if (!actor) return { error: "Sin permiso en esta organización." };
+  const admin = createAdminSupabase();
+  const { error } = await admin.from("advisor_schedules").delete().eq("org_id", orgId).eq("user_id", userId);
+  if (error) return { error: error.message };
+  revalidatePath("/dashboard/team");
+  revalidatePath("/dashboard/productividad");
+  return { notice: "Vuelve a la meta por defecto: 48 h, lunes a sábado, sin horario." };
+}
+
+/**
+ * Da o quita un rol acumulable (MOM §16, 0250). Solo el dueño (lib/team.ts).
+ * Darlo dos veces no duplica; quitar uno que no tenía no falla.
+ */
+export async function setMemberFunctionRole(
+  _prev: TeamActionState,
+  formData: FormData,
+): Promise<TeamActionState> {
+  const orgId = String(formData.get("org_id") ?? "");
+  const actor = await requireOrgAdmin(orgId);
+  if (!actor) return { error: "Sin permiso." };
+
+  const userId = String(formData.get("user_id") ?? "");
+  const role = String(formData.get("role") ?? "");
+  const grant = String(formData.get("grant") ?? "") === "1";
+  const admin = createAdminSupabase();
+  const members = await orgMembers(admin, orgId);
+  const guard = canSetFunctionRole(members, userId, role, actor.role);
+  if (!guard.ok) return { error: guard.reason };
+
+  const { error } = grant
+    ? await admin
+        .from("membership_roles")
+        .upsert({ user_id: userId, org_id: orgId, role, granted_by: actor.userId }, { onConflict: "user_id,org_id,role", ignoreDuplicates: true })
+    : await admin.from("membership_roles").delete().eq("user_id", userId).eq("org_id", orgId).eq("role", role);
+  if (error) return { error: error.message };
+  revalidatePath("/dashboard/team");
+  return { notice: grant ? "Rol asignado." : "Rol quitado." };
 }

@@ -448,17 +448,17 @@ describe("las piezas en el código", () => {
     expect(body).toContain("${REPROGRAM_QUEUE_FILTER}");
     expect(body).not.toContain("${RETRY_QUEUE_FILTER}");
     expect(body).toContain("const own = retry || review ? null : ownByOrder.get(order.order_id) ?? null;");
-    expect(body).toContain("if (isReprogramStage(order.macro_stage, order.macro_substage)) block(order, reprogramBlockReason(outputs));");
+    expect(body).toContain("if (isReprogramStage(order.macro_stage, order.macro_substage)) block(order, reprogramBlockReason(outputs, replacedIds));");
     expect(body).toContain("const decision = own ? ownRetryDecision(own, ownBox, ownInRequest.has(own.id)) : null;");
-    expect(body).toContain("returnable.push({ ...row, route: ownBox })");
+    expect(body).toContain("returnable.push({ ...row, route: ownBox, shipmentId: own.id })");
     // Una salida con solicitud activa va por `accepted`, nunca por aquí.
     expect(body).toContain("if (activeOrderIds.has(order.order_id) || isRetryAdmission(");
-    expect(body).toContain("return { available, returnable, accepted,");
+    expect(body).toContain("return { available, returnable, returning, accepted,");
   });
 
   it("la toma usa la misma regla y adopta la S01 en vez de escribir una guía", () => {
     const body = between("async function takeOrdersCore(", "\nexport ");
-    expect(body).toContain("ownRetryOutput(row, outputs)");
+    expect(body).toContain("ownRetryOutput(row, outputs, replacedIds)");
     expect(body).toContain("const decision = ownRetryDecision(own, box, Boolean(priorRequest));");
     // Desde el 09-10-2026 el reintento rellena la «por definir» que nació al
     // pedir su rótulo (test/reprogramar-salida-nueva.test.ts); la propia, nunca.

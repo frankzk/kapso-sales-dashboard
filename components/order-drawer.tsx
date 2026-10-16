@@ -95,9 +95,14 @@ import {
   type OrderGeoInput,
 } from "@/app/dashboard/pedidos/actions";
 import { VoiceAgentPanel } from "@/components/voice-agent-panel";
+import { OrderInvoicePanel } from "@/components/order-invoice-panel";
 import { BrowserCallButton } from "@/components/browser-call";
 import { UrpiAttemptsSection } from "@/components/urpi-attempts-section";
 import { limaTodayKey } from "@/lib/shipments";
+import { DispatchDatePanel } from "@/components/dispatch-date-panel";
+import { DISPATCH_DATE_SET, dispatchDateBadge } from "@/lib/dispatch-date";
+
+const DISPATCH_BADGE_TONE: Record<"info" | "warn" | "danger", BadgeTone> = { info: "info", warn: "warn", danger: "crit" };
 import { downloadPdf } from "@/lib/download-pdf";
 import {
   isFailedOutput,
@@ -207,6 +212,7 @@ import {
   ShalomCancelButton,
   StatusBadge,
   TIMELINE_LABEL,
+  TimelineMarker,
   fmtAge,
   fmtDate,
   fmtDateTime,
@@ -1025,6 +1031,16 @@ export function OrderDrawer({
     ? { ...reprogramState, received: (detail?.receivedReturnIds ?? []).includes(reprogramState.failed.shipmentId) }
     : null;
   const nextAction = detail ? drawerNextAction(detail.row, showPaymentPanel, gfDeliverySentence(gfActive), reprogram) : null;
+  // La última programación de envío (MOM §6.2): su nota y quién la puso.
+  const dispatchDateEvent = useMemo(() => {
+    if (!detail?.row.dispatch_scheduled_on) return null;
+    const last = [...detail.timeline]
+      .filter((e) => e.kind === DISPATCH_DATE_SET)
+      .sort((a, b) => b.occurredAt.localeCompare(a.occurredAt))[0];
+    if (!last) return null;
+    const reason = last.reason?.trim() || null;
+    return { note: reason && !reason.startsWith("Envío programado para el") ? reason : null, by: last.actorName };
+  }, [detail]);
   // Imprimir el rótulo de la salida nueva: «Descargar rótulos» de un solo
   // pedido. La salida nace aquí, «por definir», con el motivo escrito solo.
   const offerNewOutputLabel = Boolean(
@@ -1400,6 +1416,11 @@ export function OrderDrawer({
                           gestión: el pedido se ve entero sin abrir nada. En Por cerrar
                           los motivos son el trabajo mismo y los lista la mesa de cierre,
                           así que no se repiten aquí. */}
+                      {detail.row.dispatch_scheduled_on && (
+                        <Badge tone={DISPATCH_BADGE_TONE[dispatchDateBadge(detail.row.dispatch_scheduled_on, limaTodayKey()).tone]}>
+                          {dispatchDateBadge(detail.row.dispatch_scheduled_on, limaTodayKey()).text}
+                        </Badge>
+                      )}
                       {detail.row.macro_stage !== "por_cerrar" &&
                         (detail.row.macro_reasons ?? []).map((reason) => (
                           <Badge key={reason} tone="warn">
@@ -1425,6 +1446,21 @@ export function OrderDrawer({
                       «Salidas y guías». Va DENTRO de la tarjeta de la acción, en
                       su zona: suelto debajo era una tarjeta sin título. */}
                   <DrawerNextActionCard action={nextAction} onJump={jumpTo}>
+                    {canEdit &&
+                      detail.row.macro_stage === "preparacion" &&
+                      detail.row.macro_substage === "por_generar_rotulo" && (
+                        <DispatchDatePanel
+                          orderId={detail.row.order_id}
+                          scheduledOn={detail.row.dispatch_scheduled_on ?? null}
+                          note={dispatchDateEvent?.note ?? null}
+                          scheduledBy={dispatchDateEvent?.by ?? null}
+                          today={limaTodayKey()}
+                          onSaved={() => {
+                            void reload();
+                            onSaved();
+                          }}
+                        />
+                      )}
                     {gfActive && (
                       <>
                         <p className="text-[13px] font-medium text-ink-700">Motorizado Grupo GF</p>
@@ -1826,6 +1862,10 @@ export function OrderDrawer({
                     gatewayNote={gatewayNote}
                     onChanged={onSaved}
                   />
+                  {/* MOM §35: la boleta sale del dinero que ya entró, así que
+                      vive bajo el cobro. Se dibuja solo si la organización
+                      tiene algún RUC o comprobante. */}
+                  <OrderInvoicePanel orderId={orderId} pending={pending} run={run} />
                 </div>
               )}
               {/* Crear guía: solo tiene sentido en un pedido que todavía no tiene
@@ -2057,27 +2097,14 @@ export function OrderDrawer({
                 {detail.timeline.length === 0 ? (
                   <p className="text-sm text-ink-500">Sin movimientos registrados.</p>
                 ) : (
-                  <ol className="relative space-y-5 pl-6 before:absolute before:bottom-1 before:left-[5px] before:top-1.5 before:w-px before:bg-line-strong">
+                  <ol className="relative space-y-5 pl-10 before:absolute before:bottom-3.5 before:left-[13.5px] before:top-3.5 before:w-px before:bg-line-strong">
                     {detail.timeline.map((t) => (
                       <li key={t.id} className="relative">
-                        {/* El punto dice de qué parte del recorrido es el hecho
-                            (los tonos de macroetapa del MOM); el texto lo dice
-                            igual, así que el color nunca es la única señal. */}
-                        <span
-                          aria-hidden
-                          className={cn(
-                            "absolute -left-6 top-1.5 size-[11px] rounded-full ring-[3px] ring-white",
-                            t.origin === "leads"
-                              ? "bg-ink-700"
-                              : /payment|liquidation|entregado/.test(t.kind)
-                                ? "bg-emerald-500"
-                              : /return|refund|merma|anulado/.test(t.kind)
-                                ? "bg-orange-500"
-                                : /guide|dispatch|route|custody/.test(t.kind)
-                                  ? "bg-indigo-500"
-                                  : "bg-ink-300",
-                          )}
-                        />
+                        {/* El icono dice qué hecho es; el tono, de qué parte del
+                            recorrido (los matices de macroetapa del MOM), y solo
+                            en los hitos. El texto lo dice igual, así que ni el
+                            icono ni el color son nunca la única señal. */}
+                        <TimelineMarker entry={t} />
                         <p className="text-sm font-medium leading-5 text-ink-900">
                           {TIMELINE_LABEL[t.kind] ?? t.kind}
                           {/* El resultado va pegado al título, no en la línea de

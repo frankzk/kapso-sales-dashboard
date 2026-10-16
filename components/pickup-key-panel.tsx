@@ -57,6 +57,7 @@ import {
   saveShalomOrderDraft,
   searchShalomAgencies,
 } from "@/app/dashboard/pedidos/shalom-actions";
+import { announcePaymentPanelChange, subscribePaymentPanelChange } from "@/lib/payment-panel-sync";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 import {
   PAYMENT_STATE_LABEL,
@@ -194,7 +195,25 @@ function usePaymentPanel(orderId: string) {
     void reload();
   }, [reload]);
 
-  return { panel, error, setError, notice, setNotice, pending, startTransition, reload };
+  // El OTRO panel del mismo pedido cambió los pagos: registrar la diferencia en
+  // «Cobro» tiene que encender «Mostrar clave» en «Salidas y guías» sin
+  // actualizar la página (lib/payment-panel-sync.ts).
+  const source = useId();
+  useEffect(
+    () => subscribePaymentPanelChange(orderId, source, () => void reload()),
+    [orderId, source, reload],
+  );
+
+  /** Recarga este panel y avisa a los demás del pedido. */
+  const changed = useMemo(
+    () => async () => {
+      await reload();
+      announcePaymentPanelChange(orderId, source);
+    },
+    [orderId, source, reload],
+  );
+
+  return { panel, error, setError, notice, setNotice, pending, startTransition, reload, changed };
 }
 
 /**
@@ -239,7 +258,7 @@ export function PickupKeyPanel({
    */
   gatewayNote?: string | null;
 }) {
-  const { panel, error, setError, notice, setNotice, pending, startTransition, reload } =
+  const { panel, error, setError, notice, setNotice, pending, startTransition, reload, changed } =
     usePaymentPanel(orderId);
 
   function run(action: () => Promise<{ error?: string; notice?: string }>) {
@@ -248,7 +267,7 @@ export function PickupKeyPanel({
       setError(res.error ?? null);
       setNotice(res.notice ?? null);
       if (!res.error) {
-        await reload();
+        await changed();
         onChanged();
       }
     });
@@ -393,7 +412,7 @@ export function PickupKeyPanel({
           shalomGuide={panel.shalomGuide}
           pending={pending}
           onRegistered={() => {
-            void reload();
+            void changed();
             onChanged();
           }}
           onError={setError}
@@ -417,7 +436,7 @@ export function ShalomPickupKeyPanel({
   orderId: string;
   onChanged: () => void;
 }) {
-  const { panel, error, setError, notice, setNotice, pending, startTransition, reload } =
+  const { panel, error, setError, notice, setNotice, pending, startTransition, reload, changed } =
     usePaymentPanel(orderId);
 
   function run(action: () => Promise<{ error?: string; notice?: string }>) {
@@ -426,7 +445,7 @@ export function ShalomPickupKeyPanel({
       setError(res.error ?? null);
       setNotice(res.notice ?? null);
       if (!res.error) {
-        await reload();
+        await changed();
         onChanged();
       }
     });
@@ -1702,9 +1721,16 @@ function VoucherForm({
         receivedView: result.fields.recipientReceivedView,
         yapeEmpresa: result.fields.recipientYapeEmpresa,
       });
-      setReadNotice(result.notice);
-      if (!result.isVoucher) {
-        setReadWarning("La imagen no parece un comprobante Yape completo. Revísala antes de registrar.");
+      // Constancia de Flow: lo que cuenta es lo que dijo Flow. Confirmada, es un
+      // aviso de éxito; sin confirmar, ese mismo texto va como advertencia.
+      const flow = result.fields.flow;
+      if (flow && flow.state !== "pagado") {
+        setReadWarning(result.notice);
+      } else {
+        setReadNotice(result.notice);
+        if (!result.isVoucher) {
+          setReadWarning("La imagen no parece un comprobante Yape completo. Revísala antes de registrar.");
+        }
       }
     } finally {
       setReading(false);
@@ -2262,11 +2288,15 @@ function KeySection({
   const [shareNote, setShareNote] = useState("");
   const [busy, setBusy] = useState(false);
 
-  async function reveal(override: boolean) {
+  async function reveal(mode: "normal" | "override" | "discount") {
     setBusy(true);
     onError(null);
     try {
-      const res = await revealPickupKey(orderId, { reason, override });
+      const res = await revealPickupKey(orderId, {
+        reason,
+        override: mode === "override",
+        discount: mode === "discount",
+      });
       if ("error" in res) {
         onError(res.error);
         setRevealed(null);
@@ -2332,12 +2362,55 @@ function KeySection({
                   <OpsButton
                     variant="primary"
                     disabled={busy || !panel.canReveal}
-                    onClick={() => reveal(false)}
+                    onClick={() => reveal("normal")}
                     className="pointer-coarse:h-11"
                   >
                     Mostrar clave
                   </OpsButton>
-                  {!panel.canReveal && panel.canOverride && (
+                  {/* La excepción por descuento (MOM §12): la clave está
+                      bloqueada solo porque a lo validado le falta un descuento
+                      de hasta S/ 15. Va antes que la del administrador porque
+                      es la que corresponde, y también la puede usar él. */}
+                  {!panel.canReveal && panel.discountException.eligible && (
+                    <div className="basis-full space-y-2 rounded-md bg-wash px-3 py-2.5 ring-1 ring-inset ring-line">
+                      <p className="text-[13px] leading-5 text-ink-700">
+                        <strong className="font-semibold text-ink-900">Excepción por descuento.</strong>{" "}
+                        Con los comprobantes validados faltan{" "}
+                        <strong className="font-semibold tabular-nums text-ink-900">
+                          S/ {panel.discountException.shortfall.toFixed(2)}
+                        </strong>{" "}
+                        para el total (se permite hasta S/ {panel.discountException.max}). Si fue un descuento —por
+                        ejemplo, el cliente pagó el envío de Shalom y se le descontó de la diferencia—, escribe el
+                        motivo y muestra la clave.
+                      </p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <input
+                          value={reason}
+                          onChange={(e) => setReason(e.target.value)}
+                          placeholder="Motivo del descuento (obligatorio)"
+                          aria-label="Motivo del descuento"
+                          className={cn(FIELD_BOX, "h-9 min-w-48 flex-1 px-3 pointer-coarse:h-11")}
+                        />
+                        <OpsButton
+                          variant="secondary"
+                          disabled={busy || !reason.trim()}
+                          onClick={() => reveal("discount")}
+                          className="pointer-coarse:h-11"
+                        >
+                          Mostrar con descuento
+                        </OpsButton>
+                      </div>
+                    </div>
+                  )}
+                  {/* Por qué NO aplica, cuando lo que falta es dinero: sin esto
+                      el botón simplemente no salía y nadie sabía qué faltaba. */}
+                  {!panel.canReveal && !panel.discountException.eligible && panel.discountException.reason && (
+                    <p className="basis-full text-[13px] leading-5 text-ink-500">
+                      <span className="font-medium text-ink-700">Excepción por descuento no disponible:</span>{" "}
+                      {panel.discountException.reason}
+                    </p>
+                  )}
+                  {!panel.canReveal && !panel.discountException.eligible && panel.canOverride && (
                     <>
                       <input
                         value={reason}
@@ -2349,7 +2422,7 @@ function KeySection({
                       <OpsButton
                         variant="danger"
                         disabled={busy || !reason.trim()}
-                        onClick={() => reveal(true)}
+                        onClick={() => reveal("override")}
                         className="pointer-coarse:h-11"
                       >
                         Mostrar como excepción
@@ -2384,7 +2457,7 @@ function KeySection({
             </div>
           )}
 
-          {panel.canViewKey && panel.canReveal && (
+          {panel.canViewKey && (panel.canReveal || revealed) && (
             <div className="flex flex-wrap gap-2 pt-1">
               <select
                 value={channel}

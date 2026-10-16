@@ -340,6 +340,29 @@ export function IconPackage(props: IconProps) {
   );
 }
 
+/** Caja con visto: «entregado». */
+export function IconPackageCheck(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M20 11V7.5L12 3 4 7.5v9l8 4.5 1.5-.85" />
+      <path d="m4 7.5 8 4.5 8-4.5M12 12v9M8 5.3l8 4.5" />
+      <path d="m15.5 17.5 2 2 4-4" />
+    </svg>
+  );
+}
+
+/** Calendario con flecha de vuelta: «reprogramado». */
+export function IconCalendarRepeat(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M20.5 10.5V7a2 2 0 0 0-2-2h-13a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2H11" />
+      <path d="M3.5 10h17M8 3v4M16 3v4" />
+      <path d="M21.5 17.5a4 4 0 1 1-1.2-2.85" />
+      <path d="M21 12.5v2.4h-2.4" />
+    </svg>
+  );
+}
+
 export function IconMore(props: IconProps) {
   return (
     <svg {...base(props)}>
@@ -375,11 +398,39 @@ export function IconArrowLeft(props: IconProps) {
   );
 }
 
+/** Subió contra la referencia (el «vs. ayer» del tablero de Leads). */
+export function IconArrowUp(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M12 19V5M5 12l7-7 7 7" />
+    </svg>
+  );
+}
+
+/** Bajó contra la referencia. */
+export function IconArrowDown(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M12 5v14M19 12l-7 7-7-7" />
+    </svg>
+  );
+}
+
 /** Navegar: la flecha de «ir» de los mapas. */
 export function IconNavigate(props: IconProps) {
   return (
     <svg {...base(props)}>
       <path d="M20.5 3.5 3.5 10.6l7 2.9 2.9 7z" />
+    </svg>
+  );
+}
+
+/** Emojis: una cara sonriente, el botón del selector del chat. */
+export function IconSmile(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M8.5 14a4.5 4.5 0 0 0 7 0M9.5 9.5h.01M14.5 9.5h.01" />
     </svg>
   );
 }

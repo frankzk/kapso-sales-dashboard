@@ -91,6 +91,7 @@ import {
 } from "@/lib/agency-attested-shipment";
 import {
   agencyHasActivity,
+  ATTEMPTS_OR_MORE,
   emptyFilters,
   hasActiveFilters,
   MANAGEMENT_DAY_STEPS,
@@ -103,6 +104,9 @@ import {
   type MasterFilters,
   type MasterSortKey,
 } from "@/lib/order-master-filters";
+import { SALES_CHANNEL_OPTIONS } from "@/lib/sales-channel";
+import { courierDisplayName, dispatchedWithLabel, dispatchedWithShort } from "@/lib/dispatched-with";
+import { dispatchDateBadge } from "@/lib/dispatch-date";
 import { buildMasterQuery } from "@/lib/master-query";
 import { receiveSearchValue, shouldSendSearch } from "@/lib/search-input-echo";
 import { OrderLineItems } from "@/components/order-line-items";
@@ -238,6 +242,7 @@ export function OrdersMasterBoard({
     district: string[];
     coverage: string[];
     pickup: string[];
+    dispatchedWith: string[];
   };
   /** Contado en la base: sobre una página daría números falsos sin avisar. */
   agency: AgencySummary;
@@ -714,7 +719,7 @@ export function OrdersMasterBoard({
               <FacetPill
                 label="Courier"
                 allLabel="Todos los couriers"
-                options={facets.courier.map((v) => ({ value: v, label: cap(v) }))}
+                options={facets.courier.map((v) => ({ value: v, label: courierDisplayName(v) }))}
                 selected={filters.couriers}
                 onChange={(couriers) => patch({ couriers })}
               />
@@ -769,6 +774,25 @@ export function OrdersMasterBoard({
                 options={SWAYP_AVAILABILITY_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
                 selected={filters.swaypAvailability}
                 onChange={(swaypAvailability) => patch({ swaypAvailability })}
+              />
+              {/* Con quién salió de verdad: cada motorizado de Grupo GF y cada
+                  courier cuya guía llegó a salir (0266). «Courier» mira solo
+                  el vigente y el último. */}
+              <FacetPill
+                label="Salió con"
+                allLabel="Con cualquiera"
+                options={facets.dispatchedWith.map((v) => ({ value: v, label: dispatchedWithLabel(v) }))}
+                selected={filters.dispatchedWith}
+                onChange={(dispatchedWith) => patch({ dispatchedWith })}
+              />
+              {/* Por dónde se generó el pedido: lo dicen sus etiquetas de
+                  Shopify (0264). Opciones fijas, como «Swayp». */}
+              <FacetPill
+                label="Canal"
+                allLabel="Todos los canales"
+                options={SALES_CHANNEL_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+                selected={filters.salesChannels}
+                onChange={(salesChannels) => patch({ salesChannels })}
               />
               {facets.pickup.length > 0 && (
                 <FacetPill
@@ -965,7 +989,8 @@ function moreFilterCount(f: MasterFilters): number {
     f.shippingModes.size > 0,
     f.withComments,
     f.multiCourier,
-    f.multiAttempt,
+    f.attempts !== null,
+    Boolean(f.dispatchDate),
     f.staleDays > 0,
   ].filter(Boolean).length;
 }
@@ -982,6 +1007,8 @@ function pillFilterCount(f: MasterFilters, withManagement: boolean): number {
     f.districts,
     f.coverages,
     f.swaypAvailability,
+    f.salesChannels,
+    f.dispatchedWith,
     f.pickupStates,
     ...(withManagement ? [f.managementDays] : []),
   ].filter((set) => set.size > 0).length;
@@ -999,7 +1026,8 @@ const CLEARED_MORE_FILTERS: Partial<MasterFilters> = {
   shippingModes: new Set(),
   withComments: false,
   multiCourier: false,
-  multiAttempt: false,
+  attempts: null,
+  dispatchDate: "",
   staleDays: 0,
 };
 
@@ -1014,6 +1042,8 @@ const CLEARED_PILL_FILTERS: Partial<MasterFilters> = {
   districts: new Set(),
   coverages: new Set(),
   swaypAvailability: new Set(),
+  salesChannels: new Set(),
+  dispatchedWith: new Set(),
   pickupStates: new Set(),
   managementDays: new Set(),
   ...CLEARED_MORE_FILTERS,
@@ -1149,6 +1179,35 @@ function MoreFilters({
           </select>
         </label>
         <label className="grid gap-1.5">
+          <span className="text-[13px] font-medium text-ink-700">Intentos de entrega</span>
+          <select
+            value={filters.attempts ?? ""}
+            onChange={(e) => onPatch({ attempts: e.target.value === "" ? null : Number(e.target.value) })}
+            className={cn(FIELD_BOX, "h-9 w-40 px-3 pointer-coarse:h-11")}
+          >
+            <option value="">Todos</option>
+            <option value={0}>0 intentos</option>
+            <option value={1}>1 intento</option>
+            <option value={2}>2 intentos</option>
+            <option value={3}>3 intentos</option>
+            <option value={ATTEMPTS_OR_MORE}>4 a más intentos</option>
+          </select>
+        </label>
+        <label className="grid gap-1.5">
+          <span className="text-[13px] font-medium text-ink-700">Envío programado</span>
+          <select
+            value={filters.dispatchDate}
+            onChange={(e) => onPatch({ dispatchDate: e.target.value as MasterFilters["dispatchDate"] })}
+            className={cn(FIELD_BOX, "h-9 w-56 px-3 pointer-coarse:h-11")}
+          >
+            <option value="">Todos</option>
+            <option value="programado">Programados a futuro</option>
+            <option value="hoy">Salen hoy</option>
+            <option value="vencido">Programados que no salieron</option>
+            <option value="sin">Sin programar</option>
+          </select>
+        </label>
+        <label className="grid gap-1.5">
           <span className="text-[13px] font-medium text-ink-700">Sin movimientos hace</span>
           <select
             value={filters.staleDays}
@@ -1173,11 +1232,6 @@ function MoreFilters({
             label="Más de un courier"
             checked={filters.multiCourier}
             onChange={(multiCourier) => onPatch({ multiCourier })}
-          />
-          <Toggle
-            label="Más de un intento"
-            checked={filters.multiAttempt}
-            onChange={(multiAttempt) => onPatch({ multiAttempt })}
           />
         </fieldset>
       </div>
@@ -2008,7 +2062,8 @@ function MasterTable({
             const isOpen = openId === r.order_id;
             const isSelected = selected.has(r.order_id);
             const since = r.macro_since ?? r.status_since;
-            const showCourierCounts = Boolean(r.last_courier) || r.attempt_count > 0 || r.courier_count > 1;
+            const salioCon = r.dispatched_with ?? [];
+            const showCourierCounts = Boolean(r.last_courier) || r.attempt_count > 0 || r.courier_count > 1 || salioCon.length > 0;
             return (
               <tr
                 key={r.id}
@@ -2106,10 +2161,10 @@ function MasterTable({
                     // En la ficha del teléfono, un renglón con solo «—» sobra.
                     !r.last_courier && !showCourierCounts && "max-xl:hidden",
                   )}
-                  title={`${r.courier_count} ${r.courier_count === 1 ? "courier" : "couriers"} · ${r.attempt_count} ${r.attempt_count === 1 ? "intento" : "intentos"} de entrega`}
+                  title={`${r.courier_count} ${r.courier_count === 1 ? "courier" : "couriers"} · ${r.attempt_count} ${r.attempt_count === 1 ? "intento" : "intentos"} de entrega${salioCon.length ? ` · Salió con: ${salioCon.map(dispatchedWithLabel).join(", ")}` : ""}`}
                 >
                   <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 xl:block">
-                    <p className="truncate capitalize leading-5 text-ink-900">{r.last_courier ?? "—"}</p>
+                    <p className="truncate leading-5 text-ink-900">{courierDisplayName(r.last_courier)}</p>
                     {showCourierCounts && (
                       <>
                         <p className="text-[13px] leading-5 tabular-nums text-ink-500">
@@ -2124,6 +2179,12 @@ function MasterTable({
                             </>
                           )}
                         </p>
+                        {salioCon.length > 0 && (
+                          <p className="truncate text-[13px] leading-5 text-ink-500">
+                            <span aria-hidden className={cn(DOT, "mr-1.5")}>·</span>
+                            Salió con {salioCon.map(dispatchedWithShort).join(", ")}
+                          </p>
+                        )}
                       </>
                     )}
                   </div>
@@ -2143,6 +2204,14 @@ function MasterTable({
                       <span aria-hidden className={DOT}>·</span>
                       <span className="truncate">{macroSubstageLabel(r.macro_substage)}</span>
                     </p>
+                    {r.dispatch_scheduled_on && (() => {
+                      const badge = dispatchDateBadge(r.dispatch_scheduled_on, limaTodayKey());
+                      return (
+                        <Badge tone={badge.tone === "danger" ? "crit" : badge.tone} className="xl:mt-0.5">
+                          {badge.text}
+                        </Badge>
+                      );
+                    })()}
                   </div>
                 </td>
                 {showConfirmation && (

@@ -20,7 +20,31 @@
 // parpadear a vacío.
 
 import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
-import { IconLock } from "@/components/icons";
+import {
+  IconActivity,
+  IconAlert,
+  IconBot,
+  IconCalendar,
+  IconCalendarRepeat,
+  IconCart,
+  IconChat,
+  IconCheck,
+  IconClipboard,
+  IconHeadset,
+  IconLock,
+  IconMapPin,
+  IconMoney,
+  IconNavigate,
+  IconPackage,
+  IconPackageCheck,
+  IconPhone,
+  IconReceipt,
+  IconTruck,
+  IconUndo,
+  IconWhatsApp,
+  IconX,
+} from "@/components/icons";
+import { timelineFact, type TimelineFactInput, type TimelineIcon } from "@/lib/order-timeline-fact";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Card, cn, EmptyState, STICKY_HEAD, TABLE_LAYER, TABLE_WRAP_PAGE_X } from "@/components/ui";
@@ -501,6 +525,55 @@ export function MacroStageDot({ stage }: { stage: string }) {
   return <span aria-hidden className={cn("size-2 shrink-0 rounded-[2px]", MACRO_STAGE_DOT[stage] ?? "bg-ink-300")} />;
 }
 
+const TIMELINE_ICON: Record<TimelineIcon, (props: { className?: string; strokeWidth?: number }) => ReactNode> = {
+  pedido: IconCart,
+  confirmado: IconCheck,
+  llamada: IconPhone,
+  agente: IconHeadset,
+  mensaje: IconWhatsApp,
+  nota: IconChat,
+  pago: IconMoney,
+  guia: IconReceipt,
+  paquete: IconPackage,
+  programado: IconCalendar,
+  despacho: IconTruck,
+  motorizado: IconNavigate,
+  entregado: IconPackageCheck,
+  reprogramado: IconCalendarRepeat,
+  fallo: IconAlert,
+  devuelto: IconUndo,
+  anulado: IconX,
+  expediente: IconClipboard,
+  clave: IconLock,
+  automatico: IconBot,
+  ubicacion: IconMapPin,
+  estado: IconActivity,
+};
+
+/**
+ * El marcador de un movimiento en la Actividad de la ficha: un disco de 28 px
+ * sobre el riel con el icono de 16 px del hecho (`lib/order-timeline-fact.ts`). Los
+ * hitos toman el par de su macroetapa (el mismo de `MacroStageBadge`); el resto
+ * va en el lavado gris de consulta. Decorativo: el título dice lo mismo.
+ */
+export function TimelineMarker({ entry }: { entry: TimelineFactInput }) {
+  const fact = timelineFact(entry);
+  const Icon = fact.icon ? TIMELINE_ICON[fact.icon] : null;
+  return (
+    <span
+      aria-hidden
+      data-timeline-fact={fact.icon ?? "otro"}
+      data-timeline-stage={fact.stage ?? "consulta"}
+      className={cn(
+        "absolute -left-10 -top-1 grid size-7 place-items-center rounded-full ring-[3px] ring-white",
+        fact.stage ? MACRO_STAGE_TONE[fact.stage] : "bg-wash text-ink-500",
+      )}
+    >
+      {Icon ? <Icon className="size-4" /> : <span className="size-1.5 rounded-full bg-ink-300" />}
+    </span>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Board
 // ---------------------------------------------------------------------------
@@ -573,6 +646,18 @@ export const TIMELINE_LABEL: Record<string, string> = {
   attempt_failed: "Intento fallido",
   novelty_solved: "Novedad de Swayp resuelta",
   comment: "Comentario",
+  // Tipos que salían con el código crudo (13-10-2026). La nota dice el detalle.
+  whatsapp_template: "Plantilla de WhatsApp enviada",
+  key_view: "Clave de recojo consultada",
+  key_shared: "Clave de recojo enviada",
+  payment: "Pago",
+  payment_recipient_exception: "Pago validado con cuenta receptora no verificada",
+  aliclik_risk_exception: "Excepción al riesgo de Aliclik",
+  additional_output_reason: "Motivo de la salida adicional",
+  recovery_discarded: "Recuperación de provincia descartada",
+  confirmation_cancellation_task_created: "Tarea de anulación creada",
+  // Repro Provincia: el resultado que informa el courier («Resultado Swayp: No contesta»).
+  courier_report: "Resultado informado por el courier",
   confirmation_contact: "Intento de confirmación",
   // MOM §8.5: la llamada que hizo una persona desde la ficha, por Telnyx.
   browser_call: "Llamada desde Kapta",
@@ -581,6 +666,11 @@ export const TIMELINE_LABEL: Record<string, string> = {
   reroute: "Reprogramación",
   courier_change: "Cambio de courier",
   delivered: "Entrega confirmada",
+  // Lo que informa el courier por su API o su barrido (Aliclik, Shalom, Swayp):
+  // la nota dice el estado crudo. Salía como «courier_status» sin traducir.
+  courier_status: "Estado informado por el courier",
+  // MOM §11.11 y §11.13: salió por Swayp sin confirmar; si no entrega, vuelve.
+  swayp_desde_por_confirmar: "Enviado por Swayp desde Por confirmar",
   return_started: "Retorno iniciado",
   return_requested: "Retorno solicitado",
   return_received: "Devolución recibida en almacén",
@@ -601,6 +691,9 @@ export const TIMELINE_LABEL: Record<string, string> = {
   order_finalized: "Expediente finalizado",
   order_reopened: "Expediente reabierto",
   status_override: "Estado cambiado manualmente",
+  // MOM §19.0.1: una corrección de ubicación o una decisión por distrito movió
+  // la cobertura. La nota dice el antes, el después y la causa.
+  coverage_changed: "Cobertura cambiada",
   // Pedido acompañante (MOM §32): el mismo hecho en los dos pedidos; la nota
   // dice de qué lado está cada uno.
   companion_linked: "Caja compartida con otro pedido",
@@ -612,6 +705,9 @@ export const TIMELINE_LABEL: Record<string, string> = {
   dispatch_programmed: "Salida programada",
   dispatch_program_cleared: "Salida programada quitada",
   dispatch_program_overridden: "Salió otro día que el programado",
+  // «Programar envío» (MOM §6.2): la fecha acordada antes de tener guía.
+  dispatch_date_set: "Envío programado",
+  dispatch_date_cleared: "Programación de envío quitada",
   dispatch_route_assigned: "Asignado a la caja del motorizado",
   dispatch_route_reassigned: "Movido a la caja de otro motorizado",
   package_ready: "Paquete armado en almacén",
@@ -622,6 +718,11 @@ export const TIMELINE_LABEL: Record<string, string> = {
   pickup_declined: "No lo llevó el motorizado",
   returned_to_office: "No entregado: recibido en oficina",
   stop_reported: "Reporte del motorizado",
+  // Repro Lima (MOM §9.5): kinds propios. Nunca `call`, `confirmation_contact`
+  // ni `contact_attempt`, que gastan el cupo de confirmación.
+  lima_repro_call: "Repro Lima: llamada",
+  lima_repro_agreed: "Repro Lima: acuerdo",
+  lima_repro_closed: "Repro Lima: caso cerrado",
   route_reopened: "Ruta reabierta",
   delivered_unconfirmed_pickup: "Entregado sin confirmar recojo",
   handed_to_courier: "Entregado al courier",
@@ -640,5 +741,8 @@ export const TIMELINE_LABEL: Record<string, string> = {
   lead_call: "Llamada al cliente (Leads)",
   lead_state_change: "Cambio de estado del lead",
   lead_note: "Nota de la asesora",
+  lead_message: "Mensaje de la asesora (Leads)",
   lead_system: "Automático (Leads)",
+  // Lo que escribe el agente de voz de leads (MOM §33): no es una asesora.
+  lead_voice_agent: "Agente de voz (leads)",
 };

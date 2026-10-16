@@ -12,7 +12,8 @@
 // manipulada o de una versión vieja tiene que dar un listado sensato, no un
 // error — es la pantalla de trabajo diaria del equipo.
 
-import { emptyFilters, type MasterFilters, type MasterSortKey } from "@/lib/order-master-filters";
+import { ATTEMPTS_OR_MORE, DISPATCH_DATE_FILTERS, emptyFilters, type MasterFilters, type MasterSortKey } from "@/lib/order-master-filters";
+import { MASTER_PATH } from "@/lib/order-drawer-href";
 
 /** Claves cortas: la URL se lee y se comparte, y `?d=lince,ate` gana a
  *  `?districts=lince%2Cate` para algo que se mira todo el día. */
@@ -28,6 +29,8 @@ const SET_KEYS: { param: string; field: keyof MasterFilters }[] = [
   { param: "d", field: "districts" },
   { param: "cv", field: "coverages" },
   { param: "sw", field: "swaypAvailability" },
+  { param: "cn", field: "salesChannels" },
+  { param: "sc", field: "dispatchedWith" },
   { param: "pk", field: "pickupStates" },
   { param: "gd", field: "managementDays" },
 ];
@@ -46,7 +49,6 @@ const DATE_KEYS: { param: string; field: keyof MasterFilters }[] = [
 const FLAG_KEYS: { param: string; field: keyof MasterFilters }[] = [
   { param: "wc", field: "withComments" },
   { param: "mc", field: "multiCourier" },
-  { param: "ma", field: "multiAttempt" },
   { param: "ex", field: "expiringSoon" },
 ];
 
@@ -99,6 +101,17 @@ export function parseMasterQuery(params: URLSearchParams | Record<string, string
   const stale = Number(get("sd") ?? "");
   if (Number.isFinite(stale) && stale > 0) f.staleDays = Math.trunc(stale);
 
+  // «Programar envío»: programado, hoy, vencido o sin fecha.
+  const dispatchDate = get("ep") ?? "";
+  if ((DISPATCH_DATE_FILTERS as readonly string[]).includes(dispatchDate)) f.dispatchDate = dispatchDate as MasterFilters["dispatchDate"];
+
+  // Intentos: 0, 1, 2, 3 o 4 («4 a más»). El viejo `ma=1` («Más de un
+  // intento») no tiene equivalente exacto y se ignora, como todo lo que no se
+  // entiende. `at=` vacío no es 0: Number("") lo sería.
+  const rawAttempts = get("at")?.trim() ?? "";
+  const attempts = Number(rawAttempts);
+  if (rawAttempts && Number.isInteger(attempts) && attempts >= 0 && attempts <= ATTEMPTS_OR_MORE) f.attempts = attempts;
+
   f.search = get("q")?.trim() ?? "";
   const confirmationDue = get("cq") ?? "";
   if (["vencido", "hoy", "proximo"].includes(confirmationDue)) {
@@ -136,6 +149,8 @@ export function buildMasterQuery(q: MasterQuery): URLSearchParams {
     if (f[field] as boolean) out.set(param, "1");
   }
   if (f.staleDays > 0) out.set("sd", String(f.staleDays));
+  if (f.attempts !== null) out.set("at", String(f.attempts));
+  if (f.dispatchDate) out.set("ep", f.dispatchDate);
   if (f.search.trim()) out.set("q", f.search.trim());
   if (f.confirmationDue) out.set("cq", f.confirmationDue);
   if (q.sortKey !== "created") out.set("s", q.sortKey);
@@ -156,4 +171,18 @@ export function hasQueryFilters(f: MasterFilters): boolean {
     Boolean(f.search.trim())
     || Boolean(f.confirmationDue)
   );
+}
+
+/** Enlace a una cola del Master: etapa, subetapa y filtros por la URL (lo que lee app/dashboard/pedidos/page.tsx). Quien llama valida que la subetapa sea de esa etapa. */
+export function masterQueueHref(opts: {
+  view: string;
+  substage?: string | null;
+  coverages?: readonly string[];
+  storeIds?: readonly string[];
+}): string {
+  const filters = { ...emptyFilters(), coverages: new Set(opts.coverages ?? []), stores: new Set(opts.storeIds ?? []) };
+  const params = buildMasterQuery({ filters, sortKey: "created", page: 1 });
+  params.set("view", opts.view);
+  if (opts.substage) params.set("substage", opts.substage);
+  return `${MASTER_PATH}?${params.toString()}`;
 }

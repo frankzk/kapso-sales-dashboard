@@ -139,16 +139,26 @@ export function sameOutcome(a: NotebookOutcome | null, b: NotebookOutcome | null
   return a.status === "no_entregado" && b.status === "no_entregado" && a.reason === b.reason;
 }
 
-/** «miércoles 07/10»: el primer día con ese nombre después de la ruta. */
-export function nextNamedDay(routeDate: string, day: string): string | null {
+/**
+ * «2026-10-07»: el primer día con ese nombre después de la ruta. Es la fecha
+ * que pidió el cliente (12-10-2026, D9): «MAÑANA» no da fecha y queda en la nota.
+ */
+export function nextNamedDayIso(routeDate: string, day: string): string | null {
   const target = DAYS.indexOf(day as (typeof DAYS)[number]);
   if (target < 0 || !/^\d{4}-\d{2}-\d{2}$/.test(routeDate)) return null;
   const base = new Date(`${routeDate}T12:00:00Z`);
+  if (Number.isNaN(base.getTime())) return null;
   for (let i = 1; i <= 7; i++) {
     const d = new Date(base.getTime() + i * 86_400_000);
-    if (d.getUTCDay() === target) return `${DAY_LABEL[day]} ${ddmm(d.toISOString().slice(0, 10))}`;
+    if (d.getUTCDay() === target) return d.toISOString().slice(0, 10);
   }
   return null;
+}
+
+/** «miércoles 07/10»: el primer día con ese nombre después de la ruta. */
+export function nextNamedDay(routeDate: string, day: string): string | null {
+  const iso = nextNamedDayIso(routeDate, day);
+  return iso ? `${DAY_LABEL[day]} ${ddmm(iso)}` : null;
 }
 
 export function ddmm(isoDay: string): string {
@@ -456,6 +466,19 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/** Lo que dice la nota cuando el día escrito ya pasó al cargar la hoja (D9). */
+export const NOTEBOOK_PAST_DAY_NOTE = "Ya había pasado al cargarla: queda solo en la nota.";
+
+/**
+ * ¿El día escrito en el cuaderno ya pasó cuando se carga la hoja? Entonces no
+ * se guarda como fecha que pidió el cliente: queda solo en la nota (D9).
+ * Sin día de la semana («MAÑANA», «REPRO») no hay fecha y devuelve false.
+ */
+export function requestedDayPassed(routeDate: string, day: string | null | undefined, loadedOn: string): boolean {
+  const iso = day ? nextNamedDayIso(routeDate, day) : null;
+  return Boolean(iso && iso < loadedOn);
+}
+
 /**
  * La nota de la parada: de dónde salió el reporte, quién lo cargó y lo que la
  * palabra escrita no dice sola. Es la misma forma que las cargas a mano del
@@ -488,6 +511,9 @@ export function notebookStopNote(input: {
   } else if (outcome.status === "no_entregado" && outcome.reason === "reprogramado" && row.interpretation.day) {
     const when = nextNamedDay(routeDate, row.interpretation.day);
     parts.push(`${written} en el cuaderno: reprogramado para el ${when ?? DAY_LABEL[row.interpretation.day]}.`);
+    // Una fecha que ya pasó al cargarla no se guarda como fecha que pidió el
+    // cliente (no vale para Repro Lima): queda solo aquí (D9).
+    if (requestedDayPassed(routeDate, row.interpretation.day, input.loadedOn)) parts.push(NOTEBOOK_PAST_DAY_NOTE);
   }
   if (row.interpretation.outcome && !sameOutcome(row.interpretation.outcome, outcome)) {
     parts.push(`La hoja dice ${written || "nada"} (${outcomeLabel(row.interpretation.outcome)}); quien cargó lo dejó como ${outcomeLabel(outcome)}.`);

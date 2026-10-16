@@ -768,7 +768,7 @@ describe("pagado completo a la tienda y sin courier: no espera liquidación (v1.
   });
 
   it("la versión sube y el MOM lo documenta", () => {
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.25");
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.30");
     const mom = readFileSync(join(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8");
     expect(mom).toContain("#### Pagado a la tienda y sin courier: no espera liquidación (v1.25, 10-10-2026)");
     expect(mom).toContain("`MOM_RESOLUTION_VERSION` sube a `mom-v1.25`");
@@ -856,6 +856,121 @@ describe("el sub-estado de agencia prueba custodia (v1.7)", () => {
       paymentState: "adelanto_cargado",
     });
     expect(state.stage).not.toBe("en_curso");
+  });
+});
+
+describe("«Sacar con salida nueva»: la caja en devolución no es la vigente (v1.26, MOM §29.13)", () => {
+  // KP-S01 salió con Alexis el 09/10 y volvió «No entregado»; el 10/10, con la
+  // caja todavía en su poder, el pedido sale con KP-S02 armada desde stock.
+  const D = (day: string, h: string) => `2026-10-${day}T${h}:00.000Z`;
+  const s01 = (over: Partial<MacroGuideSnapshot> = {}) => guide({
+    id: "s01",
+    courier: "propio",
+    preparation_state: "listo_despacho",
+    custody_state: "retorno",
+    assigned_at: D("09", "10:00"),
+    dispatched_at: D("09", "14:00"),
+    created_at: D("08", "10:00"),
+    ...over,
+  });
+  const s02 = (over: Partial<MacroGuideSnapshot> = {}) => guide({
+    id: "s02",
+    courier: "propio",
+    preparation_state: "rotulo_generado",
+    custody_state: "empresa",
+    assigned_at: D("10", "09:00"),
+    created_at: D("10", "09:00"),
+    ...over,
+  });
+  const stopOn = (shipment_id: string | null, status: string, at: string, outcome_reason: string | null = null): MacroEventSnapshot =>
+    ({ kind: "stop_reported", occurred_at: at, shipment_id, payload: { status, outcome_reason } });
+  const replacedAt: MacroEventSnapshot = { kind: "output_replaced", occurred_at: D("10", "09:00"), shipment_id: "s01" };
+  const base = [stopOn("s01", "no_entregado", D("09", "19:00"), "no_contesta"), replacedAt];
+  const gf = (guides: MacroGuideSnapshot[], events: MacroEventSnapshot[] = base, legacy: ResolveMacroStageInput["legacy"] = { general: "en_proceso", operational: "asignado_a_courier", since: CREATED }) => resolve({
+    order: order({ region: "Lima", province: "Lima", district: "Surco", coverage: "lima" }),
+    guides,
+    events,
+    legacy,
+  });
+
+  it("la salida nueva por armar: Preparación · Por armar, no Por reprogramar Lima", () => {
+    expect(gf([s01(), s02()])).toMatchObject({ stage: "preparacion", substage: "por_armar" });
+    // Sin reemplazo, el mismo «No entregado» sigue en Por reprogramar Lima.
+    expect(gf([s01({ custody_state: "courier" })], [base[0]!], { general: "en_proceso", operational: "despachado", since: CREATED })).toMatchObject({ stage: "en_curso", substage: "por_reprogramar_lima" });
+  });
+
+  it("armada pasa a Por despachar; en la caja nueva, En curso con su propia señal", () => {
+    expect(gf([s01(), s02({ preparation_state: "listo_despacho" })]).stage).toBe("por_despachar");
+    const out = s02({ preparation_state: "listo_despacho", custody_state: "courier", dispatched_at: D("11", "14:00") });
+    expect(gf([s01(), out])).toMatchObject({ stage: "en_curso", substage: "en_transito" });
+    const pickup: MacroEventSnapshot = { kind: "pickup_checked", occurred_at: D("11", "15:00"), shipment_id: "s02" };
+    expect(gf([s01(), out], [...base, pickup])).toMatchObject({ stage: "en_curso", substage: "en_reparto" });
+    // Lo que reporta de la nueva manda: entregada → Por cerrar.
+    expect(gf([s01(), out], [...base, stopOn("s02", "entregado", D("11", "18:00"))])).toMatchObject({ stage: "por_cerrar", substage: "validacion_cierre_pendiente" });
+  });
+
+  it("una parada del cuaderno anterior a la salida nueva no es suya; una posterior, sí", () => {
+    const out = s02({ preparation_state: "listo_despacho", custody_state: "courier", dispatched_at: D("11", "14:00") });
+    expect(gf([s01(), out], [...base, stopOn(null, "no_entregado", D("09", "19:30"), "no_contesta")])).toMatchObject({ stage: "en_curso", substage: "en_transito" });
+    expect(gf([s01(), out], [...base, stopOn(null, "no_entregado", D("11", "19:30"), "no_contesta")])).toMatchObject({ stage: "en_curso", substage: "por_reprogramar_lima" });
+  });
+
+  it("entregada con la caja anterior todavía fuera: Devolución física pendiente, no salida adicional activa", () => {
+    const delivered = s02({ delivery_status: "entregado", custody_state: "courier", dispatched_at: D("11", "14:00") });
+    const state = gf([s01(), delivered], base, { general: "entregado", operational: "entregado", since: D("11", "18:00") });
+    expect(state).toMatchObject({ stage: "por_cerrar" });
+    expect(state.reasons).toContain("devolucion_fisica_pendiente");
+    expect(state.reasons).not.toContain("salida_adicional_activa");
+  });
+
+  it("recibida a stock: espera el reingreso; con él y la liquidación, Finalizado", () => {
+    const back = s01({ custody_state: "devuelto", returned_at: D("12", "10:00") });
+    const delivered = s02({ delivery_status: "entregado", custody_state: "courier", dispatched_at: D("11", "14:00") });
+    const received: MacroEventSnapshot = { kind: "return_received", occurred_at: D("12", "10:00"), shipment_id: "s01" };
+    const settled: MacroEventSnapshot = { kind: "liquidation_closed", occurred_at: D("12", "11:00") };
+    const legacy = { general: "entregado", operational: "entregado", since: D("11", "18:00") } as const;
+    const pending = gf([back, delivered], [...base, received, settled], legacy);
+    expect(pending).toMatchObject({ stage: "por_cerrar", substage: "devolucion_pendiente_inventario" });
+    const restocked: MacroEventSnapshot = { kind: "inventory_reconciled", occurred_at: D("12", "12:00"), shipment_id: "s01" };
+    expect(gf([back, delivered], [...base, received, settled, restocked], legacy)).toMatchObject({ stage: "finalizado", substage: "entregado_cerrado" });
+  });
+
+  it("recibida con «Rechazó el pedido» y la nueva viva: nunca vuelve a Por reprogramar Lima", () => {
+    const rejected = [stopOn("s01", "no_entregado", D("09", "19:00"), "rechazado"), replacedAt];
+    const back = s01({ custody_state: "devuelto", returned_at: D("12", "10:00") });
+    expect(gf([back, s02()], rejected).substage).not.toBe("por_reprogramar_lima");
+    expect(gf([back, s02()], rejected)).toMatchObject({ stage: "preparacion", substage: "por_armar" });
+    // Sin `output_replaced`, el rechazo recibido como devuelto (0189) sí se reprograma.
+    expect(gf([back], [rejected[0]!]).substage).toBe("por_reprogramar_lima");
+  });
+
+  it("no se finaliza mientras el motorizado tenga la caja anterior", () => {
+    const delivered = s02({ delivery_status: "entregado", custody_state: "courier", dispatched_at: D("11", "14:00") });
+    const finalized: MacroEventSnapshot = { kind: "order_finalized", occurred_at: D("12", "12:00") };
+    expect(gf([s01(), delivered], [...base, finalized], { general: "entregado", operational: "entregado", since: D("11", "18:00") }).stage).not.toBe("finalizado");
+  });
+
+  it("una parada sin salida nunca es de la caja reemplazada: entregada así, el pedido no se finaliza con ella fuera", () => {
+    // Un punto a mano (sin `shipment_id`) entregado después del reemplazo es de
+    // la salida nueva; la S01 sigue con el motorizado.
+    const settled: MacroEventSnapshot = { kind: "liquidation_closed", occurred_at: D("12", "11:00") };
+    const legacy = { general: "entregado", operational: "entregado", since: D("11", "18:00") } as const;
+    const state = gf([s01(), s02({ preparation_state: "listo_despacho" })], [...base, stopOn(null, "entregado", D("11", "18:00")), settled], legacy);
+    expect(state.stage).not.toBe("finalizado");
+    expect(state).toMatchObject({ stage: "por_cerrar" });
+    expect(state.reasons).toContain("devolucion_fisica_pendiente");
+  });
+
+  it("una salida en `retorno` sin reemplazo («Solicitar devolución») resuelve como antes de la v1.26", () => {
+    const requested = s01();
+    const noEvent = [base[0]!];
+    // Con otra salida entregada, sigue siendo una salida adicional activa.
+    const aliclikDelivered = guide({ id: "a01", courier: "aliclik", delivery_status: "entregado", custody_state: "courier", dispatched_at: D("10", "14:00"), created_at: D("10", "09:00") });
+    const closing = gf([requested, aliclikDelivered], noEvent, { general: "entregado", operational: "entregado", since: D("11", "18:00") });
+    expect(closing.reasons).toContain("salida_adicional_activa");
+    // Con otra salida rotulada en la empresa, el «No entregado» sigue mandando.
+    const aliclikLabelled = guide({ id: "a01", courier: "aliclik", preparation_state: "rotulo_generado", custody_state: "empresa", created_at: D("10", "09:00") });
+    expect(gf([requested, aliclikLabelled], noEvent)).toMatchObject({ stage: "en_curso", substage: "por_reprogramar_lima" });
   });
 });
 
