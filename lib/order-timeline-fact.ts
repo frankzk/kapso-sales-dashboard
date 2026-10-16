@@ -82,6 +82,8 @@ const POR_KIND: Record<string, TimelineFact> = {
   guide_registered: hito("guia", "preparacion"),
   route_output_created: hito("guia", "preparacion"),
   route_output_filled: consulta("guia"),
+  guide_link_updated: consulta("guia"),
+  guide_check: consulta("guia"),
   courier_assigned: consulta("guia"),
   courier_change: consulta("guia"),
   olva_tracking_linked: consulta("guia"),

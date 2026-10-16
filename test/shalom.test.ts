@@ -24,6 +24,7 @@ import {
   describeShalomProbeFailure,
   findCreatedOrder,
   sessionIsFresh,
+  isShalomRateLimited,
   shalomRetryDelay,
   ShalomClient,
 } from "@/lib/shalom/client";
@@ -944,5 +945,17 @@ describe("qué documento viaja al guardar solo el borrador de Shalom", () => {
     // Si se conservara lo anterior, quitar un DNI equivocado sería imposible.
     expect(shalomDraftDocumentToSave("", true, "18002660")).toBeNull();
     expect(shalomDraftDocumentToSave("   ", true, "18002660")).toBeNull();
+  });
+});
+
+describe("el cupo de la API key (15-10-2026)", () => {
+  it("un 429 o `rate_limited` es cupo agotado; lo demás no", () => {
+    expect(isShalomRateLimited(new ShalomApiError("cupo", 429, "rate_limited"))).toBe(true);
+    expect(isShalomRateLimited(new ShalomApiError("cupo", 429))).toBe(true);
+    expect(isShalomRateLimited(new ShalomApiError("cupo", 400, "rate_limited"))).toBe(true);
+    expect(isShalomRateLimited(new ShalomApiError("caído", 502))).toBe(false);
+    expect(isShalomRateLimited(new ShalomApiError("clave", 401, "unauthorized"))).toBe(false);
+    expect(isShalomRateLimited(new ShalomTimeoutError("sin respuesta"))).toBe(false);
+    expect(isShalomRateLimited(new Error("429"))).toBe(false);
   });
 });

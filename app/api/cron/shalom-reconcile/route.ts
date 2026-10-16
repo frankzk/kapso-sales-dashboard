@@ -3,7 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createAdminSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
 import { publicClient } from "@/lib/shalom/session";
-import { describeShalomError } from "@/lib/shalom/client";
+import { describeShalomError, isShalomRateLimited, type ShalomRateLimit } from "@/lib/shalom/client";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { shalomNeedsTracking, type ShalomTrackingStatus } from "@/lib/shalom/tracking";
 import { applyShalomTracking, type ShalomLiveGuide } from "@/lib/shalom/reconcile";
@@ -83,13 +83,22 @@ export async function GET(req: NextRequest) {
   // gastaría cupo compartido a cambio de nada. El rastreo público necesita el
   // número de guía, NO el OSE ID ni una sesión de Shalom Pro. Por eso también
   // entran las guías creadas fuera de Kapta y vinculadas durante una caída.
+  //
+  // PRIMERO LA QUE HACE MÁS QUE NO CONTESTA (15-10-2026). Se ordenaba por
+  // `updated_at`, que mueve CUALQUIER cambio de la fila: corregirle el código a
+  // una guía la mandaba al final de la fila. Y como cada pasada solo consigue
+  // respuesta para las primeras ~75-120 de ~460, #KP137651 —recién corregida,
+  // con el paquete ya en la agencia— quedaba a ~2,5 h de su primera respuesta.
+  // `last_report_at` es cuándo contestó Shalom por última vez: la que nunca
+  // contestó va primero, y después la que lleva más tiempo sin hacerlo.
   const { data, error } = await admin
     .from("shipments")
     .select("id,store_id,order_id,guide_code,shalom_codigo,shalom_ose_id,delivery_status,pickup_state")
     .eq("courier", "shalom")
     .not("guide_code", "is", null)
     .not("delivery_status", "in", "(entregado,anulado,transferido)")
-    .order("updated_at", { ascending: true })
+    .order("last_report_at", { ascending: true, nullsFirst: true })
+    .order("created_at", { ascending: true })
     .limit(MAX_PER_RUN);
   if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
 
@@ -109,9 +118,29 @@ export async function GET(req: NextRequest) {
   let queued = 0;
   /** Motivo de rechazo → cuántas y una guía de muestra para ir a comprobarla. */
   const rejected = new Map<string, { count: number; ejemplo: string | null }>();
+  /**
+   * Qué pasó con cada lote (15-10-2026). Cada pasada consigue respuesta para
+   * ~75-120 de ~460 guías y termina en ~20 s, así que los lotes que faltan
+   * fallan rápido, no por tiempo. Sin esto no hay cómo saber si es el cupo de
+   * 60 llamadas por minuto, un error del lote entero o Shalom rechazando guía
+   * a guía: la respuesta del cron no se guarda en ningún sitio.
+   */
+  const lotes: {
+    guias: number;
+    ok: number;
+    rechazadas: number;
+    ms: number;
+    error?: string;
+    cupo: ShalomRateLimit;
+  }[] = [];
+  /** Por qué no se preguntó por todas: se acabó el cupo de la API key. */
+  let cortadoPor: "cupo" | null = null;
+  let preguntadas = 0;
 
   for (let i = 0; i < live.length; i += BATCH_SIZE) {
     const slice = live.slice(i, i + BATCH_SIZE);
+    const loteStart = Date.now();
+    preguntadas += slice.length;
     let results;
     try {
       results = await client.trackBatch(
@@ -151,9 +180,34 @@ export async function GET(req: NextRequest) {
     } catch (err) {
       // Un batch caído no debe tumbar la pasada entera: se anota y se sigue con
       // el siguiente, que puede ser de otra tienda.
-      errors.push(describeShalomError(err));
+      const message = describeShalomError(err);
+      errors.push(message);
+      lotes.push({
+        guias: slice.length,
+        ok: 0,
+        rechazadas: 0,
+        ms: Date.now() - loteStart,
+        error: message,
+        cupo: { ...client.rateLimit },
+      });
+      // Salvo que se haya acabado el cupo: entonces los lotes que siguen van a
+      // fallar igual y solo le quitan al panel las llamadas que necesita para
+      // crear guías. Las que quedan van primero en la pasada siguiente, porque
+      // la fila va por quién contestó hace más tiempo.
+      if (isShalomRateLimited(err)) {
+        cortadoPor = "cupo";
+        break;
+      }
       continue;
     }
+    const lote = {
+      guias: slice.length,
+      ok: 0,
+      rechazadas: 0,
+      ms: Date.now() - loteStart,
+      cupo: { ...client.rateLimit },
+    };
+    lotes.push(lote);
 
     // Guías por las que Shalom SÍ contestó, hayan cambiado o no. Se sella abajo
     // el `last_report_at` de todas juntas — ver el porqué antes del update.
@@ -170,6 +224,7 @@ export async function GET(req: NextRequest) {
         // motivo viene en la respuesta, así que tirarlo era perder el dato justo
         // en el sitio donde se necesita.
         failed += 1;
+        lote.rechazadas += 1;
         const why =
           [r.error?.code, r.error?.message].filter(Boolean).join(": ") || "sin motivo declarado";
         const seen = rejected.get(why);
@@ -180,6 +235,7 @@ export async function GET(req: NextRequest) {
         continue;
       }
       answered.push(guide.id);
+      lote.ok += 1;
 
       // Leer el hito, decidir si un «entregado» fue el recojo o el retorno, y
       // escribirlo en la guía y en la línea de tiempo: lib/shalom/reconcile.ts.
@@ -272,9 +328,35 @@ export async function GET(req: NextRequest) {
   });
   errors.push(...avisos.errors);
 
+  const topRechazos = Object.fromEntries(
+    [...rejected.entries()].sort((a, b) => b[1].count - a[1].count).slice(0, 5),
+  );
+  // La respuesta del cron no se guarda en ningún sitio; la bitácora sí. Una
+  // línea por pasada con lo que hace falta para leer el rastreo sin relanzarlo.
+  console.info(
+    "[shalom-reconcile]",
+    JSON.stringify({
+      vivas: live.length,
+      preguntadas,
+      reported,
+      applied,
+      failed,
+      cortadoPor,
+      lotes,
+      rechazos: topRechazos,
+      encolados: queued,
+      errors: errors.slice(0, 5),
+      ms: Date.now() - startedAt,
+    }),
+  );
+
   return NextResponse.json({
     ok: true,
     scanned: live.length,
+    preguntadas,
+    // Si se cortó antes de preguntar por todas, por qué («cupo»).
+    cortadoPor,
+    lotes,
     // Avisos de tránsito: cuántos entraron a la cola en esta pasada y cómo
     // quedó la cola tras drenarla.
     avisos: { encolados: queued, ...avisos },
@@ -298,13 +380,7 @@ export async function GET(req: NextRequest) {
     failed,
     // Por qué las rechazó, agrupado. Con `failed` a secas no hay nada que hacer;
     // con el motivo y una guía de muestra se va directo a comprobarlo.
-    ...(rejected.size
-      ? {
-          rechazos: Object.fromEntries(
-            [...rejected.entries()].sort((a, b) => b[1].count - a[1].count).slice(0, 5),
-          ),
-        }
-      : {}),
+    ...(rejected.size ? { rechazos: topRechazos } : {}),
     ...(errors.length ? { errors: errors.slice(0, 10) } : {}),
   });
 }

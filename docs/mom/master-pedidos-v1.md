@@ -7326,6 +7326,59 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   del destinatario y de la clave (`contrato`), y cuántas guías manuales vivas
   esperaban clave, cuántas la recibieron y, si ninguna, por qué (`claves`).
 
+#### El código de la guía manual y el rastreo (decidido el 15-10-2026)
+
+- **El caso.** #KP137651 se registró a mano el 01-10-2026 con la guía
+  98130498 y el código **V929**; el ticket de Shalom decía **D7MN**. El
+  rastreo pide **número y código juntos** (`trackBy`, `trackBatch`): con el
+  código mal, Shalom rechaza la guía y nada se mueve. Del 01-10 al 15-10 la
+  guía siguió «Pendiente de envío», la clienta no recibió ningún aviso, y
+  cuando se corrigió a mano el paquete ya estaba en la agencia de La
+  Tinguiña. El 15-10 había otras dos guías manuales del mismo día a las que
+  Shalom nunca había contestado (#KP138088 y #KP137999).
+- **Cotejar Shalom revisa el código** de cada guía hecha a mano
+  (`shalom_pro_manual`), viva y **por la que el rastreo nunca contestó**
+  (`last_report_at` vacío, registrada hace más de 2 h). Una guía así también
+  hace leer el listado, aunque no haya candidatos que vincular.
+  - **Solo si se comprueba**, como el destinatario y la clave: en las guías
+    que Kapta creó por API el código lo devolvió la propia API, así que el
+    `codigo` del listado tiene que coincidir con el suyo en **nueve de cada
+    diez, con diez como mínimo** (bloque `contrato.codigo`). Si no pasa, no se
+    corrige ninguno y el informe dice por qué.
+  - **Si pasa**, el código del listado manda sobre el tecleado: se guarda en
+    `shalom_codigo`, `shalom_raw` conserva el anterior (`codigo_anterior`,
+    `codigo_corregido_por: cotejar_shalom`) y queda en la línea de tiempo un
+    `guide_link_updated` («Guía actualizada»), fuente `shalom`, sin persona,
+    con la nota «Código de la guía Shalom … corregido de V929 a D7MN: así
+    figura en el listado de Shalom Pro (Cotejar Shalom)…». El mismo código
+    escrito con otras mayúsculas o espacios no es un error. Con dos códigos
+    para la misma guía en el listado no se elige ninguno. La escritura exige
+    el código que se leyó: una corrección que hizo alguien entre la lectura y
+    la escritura se queda.
+  - **Si el listado ni siquiera trae la guía**, estando entero para su fecha
+    (registrada desde el día siguiente al inicio del listado), el número está
+    casi seguro mal puesto. Eso no se adivina: queda **una sola vez** en la
+    línea de tiempo un `guide_check` («Guía revisada con Shalom») que pide
+    revisar el número con el ticket, y la guía sale en `guiasDesconocidas`.
+  - La respuesta de `/api/cron/shalom-cotejo` dice cuántos se corrigieron
+    (`codigosCorregidos`), cuántas guías no están (`guiasDesconocidas`) y, por
+    cuenta, cuáles (`codigos`).
+- **El rastreo pregunta primero por la que lleva más tiempo sin contestar.**
+  Cada pasada de media hora conseguía respuesta para las primeras ~75-120 de
+  ~460 guías vivas, y la fila iba por `updated_at`, que mueve **cualquier**
+  cambio de la fila: corregir el código mandó a #KP137651 al final, a ~2,5 h
+  de su primera respuesta. Desde el 15-10-2026 la fila va por
+  `last_report_at` —cuándo contestó Shalom por última vez—: la que nunca
+  contestó primero, después la que hace más que no lo hace.
+- **El rastreo deja su línea en la bitácora** (`[shalom-reconcile]`): cuántas
+  guías vivas, cuántas preguntadas, contestadas, cambiadas y rechazadas, y por
+  cada lote de 50 cuántas contestaron, cuántas rechazó, cuánto tardó, el error
+  si cayó entero y el cupo que quedaba (`x-ratelimit-*`). Si un lote cae por
+  **cupo agotado** (429 o `rate_limited`), la pasada **no pide más lotes**
+  (`cortadoPor: "cupo"`): fallarían igual y gastarían las llamadas que el
+  panel necesita para crear guías. Las que quedaron van primero en la pasada
+  siguiente.
+
 ### Olva
 
 - Regla normal: pago completo.
