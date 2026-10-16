@@ -106,6 +106,7 @@ import {
 } from "@/lib/order-master-filters";
 import { SALES_CHANNEL_OPTIONS } from "@/lib/sales-channel";
 import { courierDisplayName, dispatchedWithLabel, dispatchedWithShort } from "@/lib/dispatched-with";
+import { dispatchDateBadge } from "@/lib/dispatch-date";
 import { buildMasterQuery } from "@/lib/master-query";
 import { receiveSearchValue, shouldSendSearch } from "@/lib/search-input-echo";
 import { OrderLineItems } from "@/components/order-line-items";
@@ -994,6 +995,7 @@ function moreFilterCount(f: MasterFilters): number {
     f.withComments,
     f.multiCourier,
     f.attempts !== null,
+    Boolean(f.dispatchDate),
     f.staleDays > 0,
   ].filter(Boolean).length;
 }
@@ -1030,6 +1032,7 @@ const CLEARED_MORE_FILTERS: Partial<MasterFilters> = {
   withComments: false,
   multiCourier: false,
   attempts: null,
+  dispatchDate: "",
   staleDays: 0,
 };
 
@@ -1193,6 +1196,20 @@ function MoreFilters({
             <option value={2}>2 intentos</option>
             <option value={3}>3 intentos</option>
             <option value={ATTEMPTS_OR_MORE}>4 a más intentos</option>
+          </select>
+        </label>
+        <label className="grid gap-1.5">
+          <span className="text-[13px] font-medium text-ink-700">Envío programado</span>
+          <select
+            value={filters.dispatchDate}
+            onChange={(e) => onPatch({ dispatchDate: e.target.value as MasterFilters["dispatchDate"] })}
+            className={cn(FIELD_BOX, "h-9 w-56 px-3 pointer-coarse:h-11")}
+          >
+            <option value="">Todos</option>
+            <option value="programado">Programados a futuro</option>
+            <option value="hoy">Salen hoy</option>
+            <option value="vencido">Programados que no salieron</option>
+            <option value="sin">Sin programar</option>
           </select>
         </label>
         <label className="grid gap-1.5">
@@ -2199,6 +2216,14 @@ function MasterTable({
                       <span aria-hidden className={DOT}>·</span>
                       <span className="truncate">{macroSubstageLabel(r.macro_substage)}</span>
                     </p>
+                    {r.dispatch_scheduled_on && (() => {
+                      const badge = dispatchDateBadge(r.dispatch_scheduled_on, limaTodayKey());
+                      return (
+                        <Badge tone={badge.tone === "danger" ? "crit" : badge.tone} className="xl:mt-0.5">
+                          {badge.text}
+                        </Badge>
+                      );
+                    })()}
                   </div>
                 </td>
                 {showConfirmation && (

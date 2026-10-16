@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   checkListingContract,
+  codigoKey,
   collectListingPages,
   LISTING_WINDOW_DAYS,
   listingFromDate,
@@ -11,8 +12,10 @@ import {
   COTEJO_HORAS_LIMA,
   COVERAGE_MIN,
   listingCoverage,
+  listingCodes,
   listingPickupCodes,
   matchShalomListing,
+  planCodeFixes,
   planKeyBackfill,
   readListingGuide,
   readListingPickupCode,
@@ -20,6 +23,7 @@ import {
   usableListingKey,
   WINDOW_AFTER_DAYS,
   WINDOW_BEFORE_DAYS,
+  type CodeCheckCandidate,
   type CotejoShalomOrder,
   type KeyBackfillCandidate,
   type KnownApiGuide,
@@ -475,6 +479,103 @@ describe("la clave de recojo del listado", () => {
   });
 });
 
+// 15-10-2026: #KP137651 se registró a mano con el código V929; el ticket decía
+// D7MN. El rastreo pide número y código, así que Shalom la rechazó del 01-10 al
+// 15-10 y la clienta no recibió ningún aviso con el paquete en la agencia.
+describe("el código de la guía manual", () => {
+  const CODIGOS = ["D7MN", "77PH", "Q2RT", "H8KD", "M4XZ", "B9TC", "P3WL", "K6VN", "R5JS", "T1GF", "W8AE", "Z2NB"];
+  const listado = CODIGOS.map((codigo, i) => guia({ guia: `9820${String(i).padStart(4, "0")}`, codigo }));
+  const conocidas: KnownApiGuide[] = listado.map((g, i) => ({
+    guideCode: g.guia,
+    document: g.document,
+    phone: g.phone,
+    codigo: CODIGOS[i]!,
+  }));
+
+  const manual = (over: Partial<CodeCheckCandidate> = {}): CodeCheckCandidate => ({
+    orderId: "o-137651",
+    storeId: "kenku",
+    shipmentId: "s-137651",
+    guideCode: "98130498",
+    codigo: "V929",
+    createdAt: "2026-10-01T22:46:15Z",
+    ...over,
+  });
+  const desde = "2026-09-01T00:00:00Z";
+
+  it("se compara como lo compara el rastreo: sin espacios y en mayúsculas", () => {
+    expect(codigoKey(" d7mn ")).toBe("D7MN");
+    expect(codigoKey("D7 MN")).toBe("D7MN");
+    expect(codigoKey("")).toBeNull();
+    expect(codigoKey(null)).toBeNull();
+    expect(codigoKey("D7MN!")).toBeNull();
+  });
+
+  it("la misma guía dos veces con códigos distintos no da ninguno", () => {
+    const m = listingCodes([
+      guia({ guia: "98200000", codigo: "D7MN" }),
+      guia({ guia: "98200001", codigo: "77PH" }),
+      guia({ guia: "98200001", codigo: "Q2RT" }),
+      guia({ guia: "98200002", codigo: null }),
+    ]);
+    expect([...m.entries()]).toEqual([["98200000", "D7MN"]]);
+  });
+
+  it("el código del listado se comprueba con el que devolvió la API al crear", () => {
+    expect(checkListingContract(listado, conocidas).codigo).toEqual({
+      comparadas: CODIGOS.length,
+      coinciden: CODIGOS.length,
+      confiable: true,
+    });
+    const cruzados = conocidas.map((k, i) => ({ ...k, codigo: CODIGOS[(i + 1) % CODIGOS.length]! }));
+    expect(checkListingContract(listado, cruzados).codigo.confiable).toBe(false);
+    // El destinatario no depende del código.
+    expect(checkListingContract(listado, cruzados).documento.confiable).toBe(true);
+    const pocas = conocidas.slice(0, CONTRACT_MIN_COMPARED - 1);
+    expect(checkListingContract(listado, pocas).codigo.confiable).toBe(false);
+  });
+
+  it("#KP137651: V929 tecleado, D7MN en el listado → se corrige a D7MN", () => {
+    const conLaGuia = [...listado, guia({ guia: "98130498", codigo: "D7MN" })];
+    const plan = planCodeFixes([manual()], conLaGuia, { trusted: true, fromIso: desde });
+    expect(plan.fixes).toEqual([{ candidate: manual(), codigo: "D7MN" }]);
+    expect(plan.missing).toEqual([]);
+  });
+
+  it("sin el código comprobado en esta lectura no se toca nada", () => {
+    const conLaGuia = [...listado, guia({ guia: "98130498", codigo: "D7MN" })];
+    expect(planCodeFixes([manual()], conLaGuia, { trusted: false, fromIso: desde }).fixes).toEqual([]);
+  });
+
+  it("el mismo código escrito distinto no es un error; uno vacío se rellena", () => {
+    const conLaGuia = [...listado, guia({ guia: "98130498", codigo: "D7MN" })];
+    expect(planCodeFixes([manual({ codigo: " d7mn" })], conLaGuia, { trusted: true, fromIso: desde }).fixes).toEqual([]);
+    expect(planCodeFixes([manual({ codigo: null })], conLaGuia, { trusted: true, fromIso: desde }).fixes).toEqual([
+      { candidate: manual({ codigo: null }), codigo: "D7MN" },
+    ]);
+  });
+
+  it("con dos códigos para la misma guía no se elige ninguno", () => {
+    const dudoso = [...listado, guia({ guia: "98130498", codigo: "D7MN" }), guia({ guia: "98130498", codigo: "V929" })];
+    const plan = planCodeFixes([manual()], dudoso, { trusted: true, fromIso: desde });
+    expect(plan.fixes).toEqual([]);
+    expect(plan.missing).toEqual([]);
+  });
+
+  it("una guía que el listado no trae se avisa, solo si el listado cubre su fecha", () => {
+    // #KP137999: 98058249, registrada el 01-10, nunca apareció en el listado.
+    const perdida = manual({ guideCode: "98058249", shipmentId: "s-137999", codigo: "AB12" });
+    expect(planCodeFixes([perdida], listado, { trusted: true, fromIso: desde }).missing).toEqual([perdida]);
+    // Aunque el código no se haya comprobado: el número no depende de eso.
+    expect(planCodeFixes([perdida], listado, { trusted: false, fromIso: desde }).missing).toEqual([perdida]);
+    // Registrada antes de lo que cubre el listado: su ausencia no dice nada.
+    const vieja = manual({ guideCode: "98058249", createdAt: "2026-09-01T10:00:00Z" });
+    expect(planCodeFixes([vieja], listado, { trusted: true, fromIso: desde }).missing).toEqual([]);
+    const sinFecha = manual({ guideCode: "98058249", createdAt: null });
+    expect(planCodeFixes([sinFecha], listado, { trusted: true, fromIso: desde }).missing).toEqual([]);
+  });
+});
+
 describe("desde cuándo se pide el listado", () => {
   const DAY = 86_400_000;
   const now = Date.parse("2026-10-11T19:00:00Z");
@@ -622,6 +723,25 @@ describe("una sola puerta para registrar una guía existente", () => {
     expect(setPickupKey).not.toContain('kind: "key_shared"');
   });
 
+  it("el código del listado entra solo comprobado, y la guía desconocida se avisa una vez", () => {
+    const cotejo = read("lib/shalom/account-cotejo.ts");
+    expect(cotejo).toContain("planCodeFixes(waitingCode, guides, { trusted: codeTrusted, fromIso })");
+    expect(cotejo).toContain('GUIDE_CHECK_EVENT = "guide_check"');
+    // La escritura exige el código que se leyó: no pisa una corrección de otra persona.
+    expect(cotejo).toContain('update.is("shalom_codigo", null) : update.eq("shalom_codigo", m.codigo)');
+  });
+
+  it("el rastreo pregunta primero por la que hace más que no contesta, al ritmo del cupo", () => {
+    const rastreo = read("app/api/cron/shalom-reconcile/route.ts");
+    expect(rastreo).toContain('.order("last_report_at", { ascending: true, nullsFirst: true })');
+    expect(rastreo).not.toContain('.order("updated_at", { ascending: true })');
+    expect(rastreo).toContain("if (isShalomRateLimited(err)) {");
+    expect(rastreo).toContain("const espera = quota.waitFor(slice.length);");
+    expect(rastreo).toContain("shalomTrackItem(g, SHALOM_ORIGIN.manual)");
+    expect(rastreo).toContain("const TRACK_BUDGET_MS = 90_000;");
+    expect(rastreo).toContain('"[shalom-reconcile]"');
+  });
+
   it("el cotejo tiene cron propio, fuera del rastreo de media hora", () => {
     // Colgado del final de shalom-reconcile se quedaba sin tiempo para bajar el
     // listado (10-10-2026, 16:00): no vuelve ahí.
@@ -649,6 +769,15 @@ describe("el MOM dice lo mismo que el código (§12, Cotejar Shalom)", () => {
   it("y el tope por pasada", () => {
     expect(read("lib/shalom/account-cotejo.ts")).toContain("MAX_LINKS_PER_RUN = 10;");
     expect(mom).toContain("**Tope de 10 guías por pasada**");
+  });
+
+  it("y el código de la guía manual (15-10-2026)", () => {
+    expect(mom).toContain("#### El código de la guía manual y el rastreo");
+    expect(mom).toContain("`guide_check`");
+    expect(mom).toContain("`codigosCorregidos`");
+    expect(mom).toContain("`[shalom-reconcile]`");
+    expect(mom).toContain("**120 guías de\n  una vez que se reponen a 2 por segundo**");
+    expect(mom).toContain("El rastreo tiene **90 s** por pasada");
   });
 
   it("y la clave de recojo del listado (12-10-2026)", () => {

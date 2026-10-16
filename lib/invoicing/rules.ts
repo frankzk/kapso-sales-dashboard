@@ -107,7 +107,7 @@ export const INVOICE_MAX_PER_RUN = 15;
  * Kapta no sabe si ese pedido ya tiene una. Dos boletas son dos veces el
  * impuesto. Y solo si «Emitir desde» ya llegó: con una fecha en el futuro
  * (Ajustes la acepta), nada pagado antes de ella sale, ni con el botón. El
- * barrido nunca va hacia atrás. La base exige lo mismo (0267).
+ * barrido nunca va hacia atrás. La base exige lo mismo (0269).
  */
 export const INVOICE_BACKFILL_FROM = "2026-10-01T05:00:00.000Z";
 
@@ -564,7 +564,7 @@ export type InvoiceEligibility =
        * Quedó pagado antes de «Emitir desde» y solo pasa por la excepción de
        * «Emitir esta boleta» (`INVOICE_BACKFILL_FROM`). Con él, `emitInvoiceNow`
        * pide que la persona confirme que lo revisó en SimpleFact y el turno va
-       * con `p_backfill` (0267). Siempre false sin `emitNow`, y con «Emitir
+       * con `p_backfill` (0269). Siempre false sin `emitNow`, y con «Emitir
        * desde» en el futuro.
        */
       beforeStart: boolean;

@@ -2660,10 +2660,10 @@ no se borra, así que se cerró lo que podía mandar una que nadie pidió:
    0261: aplica primero db/migrations/0261_invoices_manual.sql.» y no cambia
    nada. **Si alguien vuelve a correr la 0261 después, hay que volver a correr
    la 0262**: la 0261 reescribe el turno sin esta revisión, y nada lo avisa.
-   **Con la 0267 aplicada, lo que se vuelve a correr después de la 0261 es la
-   0267 (no la 0262)**: la 0262 pasaría su guarda y dejaría los dos turnos, el
+   **Con la 0269 aplicada, lo que se vuelve a correr después de la 0261 es la
+   0269 (no la 0262)**: la 0262 pasaría su guarda y dejaría los dos turnos, el
    de once y el de doce, y la llamada por nombre del código seguiría fallando
-   (sección «15-10-2026 · 0267», más abajo).
+   (sección «15-10-2026 · 0269», más abajo).
    **Se puede aplicar ya, con el código que hoy está en producción** (con la
    0261 delante): ese código pide el turno con los nueve argumentos por nombre
    y ya manda en `p_basis` si es prepago web y el id de cada pago, que es lo
@@ -2744,7 +2744,7 @@ no se borra, así que se cerró lo que podía mandar una que nadie pidió:
    mueve al momento del cambio: el barrido no emite nada pagado antes. Un
    pedido pagado desde el 01/10/2026 y antes de ese momento solo sale con
    «Emitir esta boleta» y la casilla «Revisé en SimpleFact y este pedido no
-   tiene boleta» (sección «15-10-2026 · 0267», más abajo). El barrido sigue
+   tiene boleta» (sección «15-10-2026 · 0269», más abajo). El barrido sigue
    simulando, nunca le pide a SimpleFact una venta, y concilia lo que quede en
    duda. Antes, la 0262 aplicada (paso 4). Para emitir, en producción —una
    vista previa no emite (paso 5)—: abrir el pedido, panel «Comprobante»,
@@ -2862,7 +2862,7 @@ conexión, también cuando sale de «Emitir esta boleta». Ajustes lo dice en ro
 volver a Real hay que corregir lo que falló (el token o el subdominio) y pulsar
 «Probar conexión» de nuevo. Lo mismo para volver a Manual.
 
-### 15-10-2026 · «Emitir esta boleta» para lo pagado antes de «Emitir desde» (0267, MOM §35)
+### 15-10-2026 · «Emitir esta boleta» para lo pagado antes de «Emitir desde» (0269, MOM §35)
 
 Decisión del owner (15-10-2026). Con el RUC en «Manual», «Emitir esta boleta»
 también sirve para un pedido pagado **antes** de «Emitir desde», si se pagó
@@ -2881,10 +2881,19 @@ fecha pasada, y un cambio de modo la sigue moviendo al momento del cambio. Con
 «Emitir desde» en el futuro, nada pagado antes de él sale, ni con el botón. Sin
 variables de entorno nuevas; `MOM_RESOLUTION_VERSION` no cambia.
 
-1. **Migración `0267_invoices_backfill.sql`**, a mano, DESPUÉS de la 0262 y
+**En producción ya está aplicada (15-10-2026, editor SQL de Supabase).** Se
+aplicó con el número 0267, antes de que main tomara ese número para
+«Programar envío» (`0267_order_master_dispatch_scheduled_on.sql`); la 0268 es
+«Ventas por origen», así que el archivo pasó a 0269, con el mismo contenido.
+Como se corrió desde el editor, no figura en el historial de migraciones de
+Supabase. Comprobada el mismo día: queda solo el turno de doce argumentos, con
+su cuerpo igual al del archivo y `execute` solo para `service_role`. No hace
+falta volver a correrla.
+
+1. **Migración `0269_invoices_backfill.sql`**, a mano, DESPUÉS de la 0262 y
    ANTES del código que manda `p_backfill`. Pegar el archivo en el editor SQL
    de Supabase, que la corre en una transacción (con `psql`:
-   `psql -1 -v ON_ERROR_STOP=1 "$DATABASE_URL" -f db/migrations/0267_invoices_backfill.sql`;
+   `psql -1 -v ON_ERROR_STOP=1 "$DATABASE_URL" -f db/migrations/0269_invoices_backfill.sql`;
    sin `-1` hay un instante sin `invoice_claim` entre el `drop` de la firma de
    once y el `create` de la de doce). Cambia solo `invoice_claim`: borra la
    firma de once argumentos y crea la de doce, con un argumento nuevo al
@@ -2902,25 +2911,25 @@ variables de entorno nuevas; `MOM_RESOLUTION_VERSION` no cambia.
 
    El turno sigue solo para `service_role`. No toca filas, ni triggers, ni otra
    función, y no toma candados de tablas. Es idempotente: si en alguna base ya
-   se corrió una versión anterior de la 0267 (sin el primer dinero, o sin
+   se corrió una versión anterior de la 0269 (sin el primer dinero, o sin
    mirar que «Emitir desde» ya llegó), se vuelve a correr y el turno queda con
    los dos (`like '%v_first%'` y `like '%v_iss.emit_from <= now()%'`, abajo).
    **Va después de la 0262**: si sigue el turno de nueve argumentos, o no hay
-   ni el de once ni el de doce, se detiene con «La 0267 va después de la 0262:
+   ni el de once ni el de doce, se detiene con «La 0269 va después de la 0262:
    aplica primero db/migrations/0261_invoices_manual.sql y
    db/migrations/0262_invoices_claim_coverage.sql.» y no cambia nada. **Si
-   alguien vuelve a correr la 0261 después, hay que volver a correr la 0267**:
+   alguien vuelve a correr la 0261 después, hay que volver a correr la 0269**:
    quedan dos turnos, el de once y el de doce, y la llamada por nombre del
    código falla por ambigua: no emite ni simula nada hasta volver a correr la
-   0267. La 0262 sola, después de la 0267, se detiene en su guarda y no
+   0269. La 0262 sola, después de la 0269, se detiene en su guarda y no
    cambia nada.
    **Se puede aplicar ya, con el código que hoy está en producción**: ese
    código pide el turno por nombre, con nueve u once argumentos, y con un solo
    turno esas llamadas van al de doce con `p_backfill` en falso: hace lo mismo
-   que antes. **Si el código llega antes que la 0267, nada se emite de más y
+   que antes. **Si el código llega antes que la 0269, nada se emite de más y
    nada se pone rojo**: lo pagado desde «Emitir desde» se emite como siempre
    (el código no manda `p_backfill` en un pedido normal), y un pedido pagado
-   antes contesta `sin_migracion`, nombrando la 0267, sin reservar ni enviar
+   antes contesta `sin_migracion`, nombrando la 0269, sin reservar ni enviar
    nada. Aplicarla y volver a pulsar.
    **Comprobar**, solo lectura:
    - `select pg_get_function_identity_arguments(oid) from pg_proc where proname = 'invoice_claim' and pronamespace = 'public'::regnamespace;`
@@ -2959,13 +2968,13 @@ cada una, también desde el 01/10/2026 05:00 UTC:
 Revisar cada una en SimpleFact, como las demás de Manual.
 
 **Antes de subir**: `bash scripts/verify-db.sh` corre
-`scripts/sql/invoices_smoke.sql`, que también corre la 0267 sobre la 0262 (dos
+`scripts/sql/invoices_smoke.sql`, que también corre la 0269 sobre la 0262 (dos
 veces), con la 0261 corrida otra vez después, y su guarda sin la 0262 delante.
 
 **Marcha atrás.** Lo emitido no se borra: ya está en SUNAT, y una boleta que no
 correspondía se anula con nota de crédito en SimpleFact (MOM §35.9). Para que
 nadie más emita hacia atrás basta con no pulsar el botón en esos pedidos, o
-bajar el RUC a «Simulación». No hace falta revertir la 0267: el código
+bajar el RUC a «Simulación». No hace falta revertir la 0269: el código
 anterior pide el turno por nombre, sin `p_backfill`, y el de doce lo acepta con
 `p_backfill` en falso. Si aun así se quiere volver al turno de la 0262, en una
 sola transacción:
@@ -3122,9 +3131,9 @@ propio día en Kapta, también en «Canal de cierre».
    resultado que la 0259, la regla del canal pasa a vivir en un solo lugar— y
    crea las funciones de lectura `ventas_por_origen` y `conversion_por_fuente`
    (SECURITY INVOKER, sin `anon`). No escribe datos y no lleva `drop`. Solo
-   necesita la 0259 delante; no depende de la 0264 a la 0267 (Master y
-   comprobantes), que llevan número menor solo porque llegaron antes a la
-   integración. Medido
+   necesita la 0259 delante; no depende de la 0264 a la 0267 (Master), que
+   llevan número menor solo porque llegaron antes a la integración, ni de la
+   0269 (comprobantes). Medido
    en producción como el owner, 30 días, con la primera versión de la consulta:
    la cohorte de `conversion_por_fuente`, 0,39 s recorriendo los 59.598 leads.
    La versión final parte el nacimiento en dos rangos de columnas simples y
@@ -3187,3 +3196,10 @@ propio día en Kapta, también en «Canal de cierre».
    `drop view if exists public.pedidos_canal;` y, si se quiere,
    `drop index concurrently if exists public.leads_store_first_seen_idx;` y
    `drop index concurrently if exists public.leads_store_created_sin_first_seen_idx;`.
+
+### 16-10-2026 · Programar envío (0267)
+
+- **0267 antes del código**: `order_master.dispatch_scheduled_on` (date) e
+  índice parcial. El recálculo la escribe; sin la columna el upsert fallaría.
+- Sin cambio de versión: nadie había programado un envío, así que no hay nada
+  que rellenar. Los pedidos la toman cuando alguien programa.

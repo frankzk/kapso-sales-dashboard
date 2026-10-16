@@ -535,8 +535,10 @@
 \ir migrations/0265_order_master_stale_urpi.sql
 \echo 'Applying 0266_order_master_dispatched_with.sql'
 \ir migrations/0266_order_master_dispatched_with.sql
-\echo 'Applying 0267_invoices_backfill.sql'
-\ir migrations/0267_invoices_backfill.sql
+\echo 'Applying 0267_order_master_dispatch_scheduled_on.sql'
+\ir migrations/0267_order_master_dispatch_scheduled_on.sql
 \echo 'Applying 0268_ventas_por_origen.sql'
 \ir migrations/0268_ventas_por_origen.sql
+\echo 'Applying 0269_invoices_backfill.sql'
+\ir migrations/0269_invoices_backfill.sql
 \echo 'Done.'

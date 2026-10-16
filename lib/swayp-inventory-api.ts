@@ -262,11 +262,13 @@ export function ciudadDeWarehouse(w: {
 /**
  * Ciudades que el sync por API puede escribir: las mismas que el importador de
  * Excel sabe leer (`BODEGA_A_CIUDAD`). Una bodega que resuelva a otra ciudad
- * —Cusco, Huancayo, Ica, Chiclayo, Chimbote— se informa y NO se toca: esas
+ * —Cusco, Huancayo, Chiclayo, Chimbote— se informa y NO se toca: esas
  * ciudades se abastecen de otra forma (MOM, «De dónde sale el stock») y
  * sincronizarlas es una decisión de negocio, no un efecto colateral del mapeo.
+ * Ica entró el 15-10-2026 (decisión de Frankz: su stock ya está en la bodega
+ * de Swayp y se lee por API).
  */
-export const CIUDADES_DEL_SYNC: ReadonlySet<string> = new Set(["arequipa", "trujillo", "juliaca", "piura", "lima"]);
+export const CIUDADES_DEL_SYNC: ReadonlySet<string> = new Set(["arequipa", "trujillo", "juliaca", "piura", "lima", "ica"]);
 
 /** Una bodega de fulfillment de Swayp, con su ciudad ya resuelta (o null si no la conocemos). */
 export interface SwaypWarehouse {

@@ -632,6 +632,11 @@ export const TIMELINE_LABEL: Record<string, string> = {
   guide_registered: "Guía registrada",
   guide_created: "Guía creada",
   guide_cancelled: "Guía anulada",
+  // Se completó o corrigió un dato de la guía (el código, por ejemplo). La
+  // nota dice cuál y de dónde salió.
+  guide_link_updated: "Guía actualizada",
+  // Cotejar Shalom no encontró la guía en el listado de la cuenta (MOM §12).
+  guide_check: "Guía revisada con Shalom",
   // MOM §12: la clave quedó guardada (a mano o del listado de Shalom Pro). No
   // es darla: eso es `key_shared`.
   key_registered: "Clave de recojo registrada",
@@ -705,6 +710,9 @@ export const TIMELINE_LABEL: Record<string, string> = {
   dispatch_programmed: "Salida programada",
   dispatch_program_cleared: "Salida programada quitada",
   dispatch_program_overridden: "Salió otro día que el programado",
+  // «Programar envío» (MOM §6.2): la fecha acordada antes de tener guía.
+  dispatch_date_set: "Envío programado",
+  dispatch_date_cleared: "Programación de envío quitada",
   dispatch_route_assigned: "Asignado a la caja del motorizado",
   dispatch_route_reassigned: "Movido a la caja de otro motorizado",
   package_ready: "Paquete armado en almacén",

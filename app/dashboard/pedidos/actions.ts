@@ -57,6 +57,7 @@ import {
 } from "@/lib/order-status";
 import { etiquetaDiceTerminoSinEntregar } from "@/lib/aliclik-status";
 import { limaTodayKey, normalizeDistrict } from "@/lib/shipments";
+import { DISPATCH_DATE_CLEARED, DISPATCH_DATE_SET, dispatchDateError, dispatchDateLabel } from "@/lib/dispatch-date";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
 import { agencyPaymentReady, classifyOperation, type OperationKind } from "@/lib/order-macro-stage";
 import {
@@ -1768,6 +1769,64 @@ export async function registerConfirmationAttempt(
       ? `Este intento ya estaba registrado; no se duplicó.`
       : `Intento registrado, día ${days} de ${CONFIRMATION_MAX_DAYS}.`,
   };
+}
+
+/**
+ * «Programar envío» (MOM §6.2, 15-10-2026): la fecha acordada para despachar
+ * un pedido confirmado que todavía no tiene guía. Queda en el historial con
+ * quien lo programó y la nota; programar otra vez cambia la fecha.
+ */
+export async function scheduleOrderDispatch(
+  orderId: string,
+  input: { date: string; note?: string | null },
+): Promise<MasterActionState> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite programar envíos." };
+  const date = input.date.trim();
+  const dateError = dispatchDateError(date, limaTodayKey());
+  if (dateError) return { error: dateError };
+  const note = input.note?.trim() || null;
+  if (note && note.length > 500) return { error: "La nota es demasiado larga (máx. 500)." };
+
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  if (ctx.row.macro_stage !== "preparacion" || ctx.row.macro_substage !== "por_generar_rotulo") {
+    return { error: "Solo se programa un envío que todavía no tiene guía (Preparación · Por generar rótulo)." };
+  }
+
+  const admin = createAdminSupabase();
+  const eventError = await recordEvent(admin, ctx, {
+    kind: DISPATCH_DATE_SET,
+    reason: note ?? `Envío programado para el ${dispatchDateLabel(date)}.`,
+    payload: { date, ...(note ? { note } : {}) },
+  });
+  if (eventError) return { error: eventError };
+  await recomputeOrderMasterSafe(admin, [orderId]);
+  revalidatePath(MASTER_PATH);
+  return { notice: `Envío programado para el ${dispatchDateLabel(date)}.` };
+}
+
+/** Quita la fecha programada, con motivo: el historial dice por qué ya no vale. */
+export async function clearOrderDispatchDate(orderId: string, reason: string): Promise<MasterActionState> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite cambiar la programación." };
+  const why = reason.trim();
+  if (why.length < 3) return { error: "Escribe por qué se quita la fecha." };
+  if (why.length > 500) return { error: "El motivo es demasiado largo (máx. 500)." };
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  if (!ctx.row.dispatch_scheduled_on) return { error: "Este pedido no tiene un envío programado." };
+
+  const admin = createAdminSupabase();
+  const eventError = await recordEvent(admin, ctx, {
+    kind: DISPATCH_DATE_CLEARED,
+    reason: why,
+    payload: { from: ctx.row.dispatch_scheduled_on },
+  });
+  if (eventError) return { error: eventError };
+  await recomputeOrderMasterSafe(admin, [orderId]);
+  revalidatePath(MASTER_PATH);
+  return { notice: "Se quitó la fecha programada." };
 }
 
 /** Comentario interno del equipo (§12). Complementa al estado, no lo sustituye. */

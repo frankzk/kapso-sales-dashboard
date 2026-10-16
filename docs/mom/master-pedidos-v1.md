@@ -568,6 +568,34 @@ Subetapas:
 - `por_armar`.
 - `incidencia_preparacion`.
 
+#### Programar envío (15-10-2026)
+
+Un pedido confirmado puede tener un día acordado para salir —la clienta recibe
+en su trabajo el lunes, o pidió que se despache el sábado—. Hasta esta fecha el
+equipo lo anotaba en su Excel de provincia («enviar lunes 26-10») y en Kapta el
+pedido aparecía como confirmado sin guía, igual que uno olvidado (#KP140347).
+
+- **Dónde.** En la ficha, pestaña Operar, dentro de «Elegir ruta y generar el
+  rótulo»: **«Programar envío»**, con la fecha y una nota opcional. Solo en
+  Preparación · Por generar rótulo, con permiso para editar el Master.
+  Programar otra vez cambia la fecha; **«Quitar»** pide motivo.
+- **Qué queda.** Un hecho del historial con actor: `dispatch_date_set` (fecha
+  y nota) o `dispatch_date_cleared` (motivo). Manda el último. Se programa hoy
+  o hasta 45 días adelante.
+- **Qué se ve.** La fila del Master y el encabezado de la ficha llevan una
+  chapa: «Programado · sale lun 26/10», «Programado · sale hoy» o, si el día
+  pasó sin guía, «Programado para el lun 19/10 y no salió» en rojo. El filtro
+  «Envío programado» de Más filtros (parámetro `ep`) separa programados a
+  futuro, los que salen hoy, los que no salieron y los que no tienen fecha.
+- **Cuándo deja de valer.** Al crear la guía o la salida el pedido sale de Por
+  generar rótulo y la fecha deja de mostrarse (`order_master.dispatch_scheduled_on`,
+  0267, solo se llena en esa subetapa). Si esa guía después se anula, el pedido
+  no hereda la fecha vieja: una salida creada después de programar la deja sin
+  efecto.
+- **No cambia la etapa** ni es la «salida programada» de Grupo GF en Lima
+  (`dispatch_programmed`, §29.13), que ya tiene caja y motorizado: esta es
+  anterior a la guía.
+
 Flujo físico:
 
 ```text
@@ -4503,8 +4531,8 @@ bodega, «Enviar a Excel»), que se sube en Stock Swayp. Reglas:
 - **Un archivo por bodega**, y la ciudad sale de la columna `Bodega` del propio
   archivo. No hay selector: elegir la ciudad a mano es la forma de importar
   Trujillo sobre Juliaca y poner a cero una ciudad entera.
-- **Sólo se toca la ciudad del archivo.** Nuestra tabla cubre nueve ciudades y
-  Swayp tiene cinco bodegas: Cusco, Huancayo, Ica, Chiclayo y Chimbote se
+- **Sólo se toca la ciudad del archivo.** Nuestra tabla cubre más ciudades que
+  las bodegas que se leen de Swayp: Cusco, Huancayo, Chiclayo y Chimbote se
   abastecen de otra forma y un importador que «limpiara lo que no vino» las
   vaciaría de un plumazo.
 - **Lo que Swayp no lista queda en 0**, no se borra el renglón. La exportación de
@@ -4560,10 +4588,15 @@ de respaldo, con un token pegado a mano que no se guarda. Las reglas de arriba n
   le corresponde de nuestro lado pasa a 0**: para Kapta, Swayp no lo tiene. La
   pantalla lo avisa antes de aplicar cuando en una ciudad coinciden productos
   que van a 0 y códigos sin vincular; se vincula en Catálogo y se vuelve a leer.
-- **Sólo se sincronizan Arequipa, Trujillo, Juliaca, Piura y Lima**
-  (`CIUDADES_DEL_SYNC`), las mismas que el Excel sabía leer. Una bodega que
+- **Sólo se sincronizan Arequipa, Trujillo, Juliaca, Piura, Lima e Ica**
+  (`CIUDADES_DEL_SYNC`), las mismas que el Excel sabe leer. Una bodega que
   resuelva a otra ciudad, o que no resuelva, se muestra y **no se toca**.
-  Sumar una ciudad al sync es una decisión, no un efecto del mapeo.
+  Sumar una ciudad al sync es una decisión, no un efecto del mapeo. **Ica entró
+  el 15-10-2026** (decisión de Frankz: «ya tengo el stock habilitado en Swayp
+  por API»): su bodega es «BODEGA ICA», ubigeo `110101`, y desde ese día su
+  saldo lo pone el conteo de Swayp y no la carga a mano. Para emitir guías por
+  API, Ica necesita además su remitente en `SWAYP_SENDERS`; sin él, la ciudad
+  sigue por el Excel aunque su stock ya se lea.
 - **Una ciudad que no vino en la lectura no se vacía**, y una lectura vacía
   (0 filas) no se aplica: es un fallo de Swayp, no un inventario en cero.
 - Si dos bodegas caen en la misma ciudad, sus unidades **se suman**.
@@ -7310,6 +7343,82 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   por cuenta, cuántas guías trajo el listado, su cobertura, la comprobación
   del destinatario y de la clave (`contrato`), y cuántas guías manuales vivas
   esperaban clave, cuántas la recibieron y, si ninguna, por qué (`claves`).
+
+#### El código de la guía manual y el rastreo (decidido el 15-10-2026)
+
+- **El caso.** #KP137651 se registró a mano el 01-10-2026 con la guía
+  98130498 y el código **V929**; el ticket de Shalom decía **D7MN**. El
+  rastreo pide **número y código juntos** (`trackBy`, `trackBatch`): con el
+  código mal, Shalom rechaza la guía y nada se mueve. Del 01-10 al 15-10 la
+  guía siguió «Pendiente de envío», la clienta no recibió ningún aviso, y
+  cuando se corrigió a mano el paquete ya estaba en la agencia de La
+  Tinguiña. El 15-10 había otras dos guías manuales del mismo día a las que
+  Shalom nunca había contestado (#KP138088 y #KP137999).
+- **Cotejar Shalom revisa el código** de cada guía hecha a mano
+  (`shalom_pro_manual`), viva y **por la que el rastreo nunca contestó**
+  (`last_report_at` vacío, registrada hace más de 2 h). Una guía así también
+  hace leer el listado, aunque no haya candidatos que vincular.
+  - **Solo si se comprueba**, como el destinatario y la clave: en las guías
+    que Kapta creó por API el código lo devolvió la propia API, así que el
+    `codigo` del listado tiene que coincidir con el suyo en **nueve de cada
+    diez, con diez como mínimo** (bloque `contrato.codigo`). Si no pasa, no se
+    corrige ninguno y el informe dice por qué.
+  - **Si pasa**, el código del listado manda sobre el tecleado: se guarda en
+    `shalom_codigo`, `shalom_raw` conserva el anterior (`codigo_anterior`,
+    `codigo_corregido_por: cotejar_shalom`) y queda en la línea de tiempo un
+    `guide_link_updated` («Guía actualizada»), fuente `shalom`, sin persona,
+    con la nota «Código de la guía Shalom … corregido de V929 a D7MN: así
+    figura en el listado de Shalom Pro (Cotejar Shalom)…». El mismo código
+    escrito con otras mayúsculas o espacios no es un error. Con dos códigos
+    para la misma guía en el listado no se elige ninguno. La escritura exige
+    el código que se leyó: una corrección que hizo alguien entre la lectura y
+    la escritura se queda.
+  - **Si el listado ni siquiera trae la guía**, estando entero para su fecha
+    (registrada desde el día siguiente al inicio del listado), el número está
+    casi seguro mal puesto. Eso no se adivina: queda **una sola vez** en la
+    línea de tiempo un `guide_check` («Guía revisada con Shalom») que pide
+    revisar el número con el ticket, y la guía sale en `guiasDesconocidas`.
+  - La respuesta de `/api/cron/shalom-cotejo` dice cuántos se corrigieron
+    (`codigosCorregidos`), cuántas guías no están (`guiasDesconocidas`) y, por
+    cuenta, cuáles (`codigos`).
+- **El rastreo pregunta primero por la que lleva más tiempo sin contestar.**
+  Cada pasada de media hora conseguía respuesta para las primeras ~75-120 de
+  ~460 guías vivas, y la fila iba por `updated_at`, que mueve **cualquier**
+  cambio de la fila: corregir el código mandó a #KP137651 al final, a ~2,5 h
+  de su primera respuesta. Desde el 15-10-2026 la fila va por
+  `last_report_at` —cuándo contestó Shalom por última vez—: la que nunca
+  contestó primero, después la que hace más que no lo hace.
+- **El rastreo deja su línea en la bitácora** (`[shalom-reconcile]`): cuántas
+  guías vivas, cuántas sin cómo preguntar (`sinIdentificador`), cuántas
+  preguntadas, contestadas, cambiadas y rechazadas, y por cada lote de 50
+  cuántas contestaron, cuántas rechazó, cuánto esperó al cupo, cuánto tardó y
+  el error si cayó entero.
+- **El cupo del rastreo, medido** (16-10-2026, 04:00 de Lima, la primera
+  pasada con bitácora). Es propio del rastreo y se cuenta **guía a guía**: dos
+  lotes de 50 pasaron y el tercero volvió con 429 «pediste 50 guías y superás
+  tu cupo de rastreo por minuto; reintentá en 12s». Cuadra con **120 guías de
+  una vez que se reponen a 2 por segundo**. Las cabeceras `x-ratelimit-*` no
+  lo dicen (son de las llamadas). Los lotes salían seguidos: la pasada
+  terminaba en 4 s habiendo preguntado por **100 de 459**, y una guía
+  esperaba 2-3 h entre respuesta y respuesta.
+  - Desde entonces cada lote **espera lo que le falta al cupo**
+    (`lib/shalom/track-pace.ts`), y un 429 espera lo que Shalom dice y
+    **repite el mismo lote**. Tres 429 seguidos es que algo más está gastando
+    el cupo y la pasada deja de preguntar (`cortadoPor: "cupo"`).
+  - El rastreo tiene **90 s** por pasada, unas **250 guías**; lo demás de la
+    función es para el OSE ID manual y los avisos. Lo que no entra
+    (`cortadoPor: "tiempo"`) va primero en la pasada siguiente: con ~460 vivas,
+    cada guía se pregunta al menos cada hora.
+- **Con qué se pregunta por cada guía** (16-10-2026):
+  - la **hecha a mano** que tiene **OSE ID**, por el OSE ID, que resuelve
+    solo. Su código lo tecleó una persona: #KP137651 tenía su OSE ID desde el
+    principio y Shalom la rechazó dos semanas por el código. El OSE ID sale del
+    listado comprobado (arriba);
+  - la de la **API**, por número y código, que dio la propia API;
+  - sin código, por el OSE ID si lo tiene;
+  - sin código ni OSE ID **no se pregunta**: el número solo siempre vuelve
+    rechazado («falta codigo»). Era la salida de mentira de un estado
+    atestiguado (`MOM-KP123525-SHALOM-…`), que gastaba cupo en cada pasada.
 
 ### Olva
 
@@ -13521,7 +13630,7 @@ nuevo que borra el motivo de la prueba anterior y los pedidos por revisar), las
 dos ya corridas en producción; la 0261 (el modo «Manual» y el turno que dice
 qué fila pide y quién la pidió, 15-10-2026), y la 0262 (el turno que vuelve a
 revisar que la empresa recibió el pago, 15-10-2026), que se aplican a mano, en
-ese orden, antes de su código (35.8). La 0267 (el turno que deja a «Emitir esta
+ese orden, antes de su código (35.8). La 0269 (el turno que deja a «Emitir esta
 boleta» emitir lo pagado antes de «Emitir desde», 15-10-2026) va después de la
 0262, también a mano y antes de su código. Están también las reglas puras, el
 cliente de SimpleFact, el barrido (`/api/cron/invoices`), la sección «Boletas
@@ -13722,7 +13831,7 @@ el barrido tienen que ser las dos desde «Emitir desde»; si falta una, o una es
 anterior, no da el turno (`antes_de_inicio`). Así, un error en las reglas o en
 una lectura no manda a SUNAT la boleta de algo pagado antes de la fecha de
 inicio. La única excepción es la de arriba, y la base la vuelve a exigir
-entera (0267): da el turno a algo pagado antes de «Emitir desde» solo si se
+entera (0269): da el turno a algo pagado antes de «Emitir desde» solo si se
 pide con `p_backfill`, una fila real, el RUC en Manual, quién la pide
 (`p_created_by`) y las dos fechas del 01/10/2026 00:00 (hora de Lima) en
 adelante. Sin «Emitir desde», con «Emitir desde» todavía en el futuro (la base
@@ -14146,7 +14255,7 @@ Reglas de esa tabla:
     podía cambiar y salir una boleta que nadie confirmó. Después, el token, la
     relectura en Shopify (el total y, en un prepago web, lo que cobró Flow),
     la boleta, el turno pidiendo una fila real con quien pulsó (35.3) —y, si
-    quedó pagado antes de «Emitir desde», con `p_backfill` (0267)—, UNA
+    quedó pagado antes de «Emitir desde», con `p_backfill` (0269)—, UNA
     llamada a SimpleFact, la lectura de la respuesta, la fila (solo si sigue
     en `emitiendo`) y las reglas que apagan el RUC (35.4). Los mismos
     candados: un comprobante real vivo por pedido (el índice único), el tope
@@ -14264,26 +14373,26 @@ pago, que es lo que el turno revisa: lo bien pagado sigue dando su fila. Va
 después de la 0261: sin ella —sigue el turno de nueve argumentos, o falta el
 de once— se detiene sin cambiar nada. Si después alguien vuelve a correr la
 0261, el turno queda otra vez sin esta revisión hasta volver a correr la 0262.
-Con la 0267 aplicada, lo que se vuelve a correr después de la 0261 es la 0267
+Con la 0269 aplicada, lo que se vuelve a correr después de la 0261 es la 0269
 (no la 0262): la 0262 pasaría su guarda y dejaría los dos turnos.
 
-**Antes de la 0267** (owner, 15-10-2026). También se aplica a mano, después de
+**Antes de la 0269** (owner, 15-10-2026). También se aplica a mano, después de
 la 0262 y antes de su código (DEPLOY.md). Cambia la firma del turno: borra la
 de once argumentos y crea la de doce, con `p_backfill` al final, falso por
 defecto; el cuerpo es el de la 0262. El código de antes y el de ahora piden el
 turno por nombre, y con un solo turno esas llamadas van al de doce con
 `p_backfill` en falso: hace lo mismo que la 0262. El código solo manda
 `p_backfill` desde «Emitir esta boleta», con un pedido pagado antes de «Emitir
-desde» (35.3). Si llega antes que la 0267, nada se emite de más y nada se pone
+desde» (35.3). Si llega antes que la 0269, nada se emite de más y nada se pone
 rojo: lo pagado desde «Emitir desde» se simula y se emite como siempre, y un
 pedido pagado antes no reserva ni envía nada: es `sin_migracion`, y «Emitir
-esta boleta» dice «Falta aplicar la migración 0267 de comprobantes
-(invoice_claim con p_backfill).». La 0267 se reconoce por ese parámetro
+esta boleta» dice «Falta aplicar la migración 0269 de comprobantes
+(invoice_claim con p_backfill).». La 0269 se reconoce por ese parámetro
 (`INVOICE_CLAIM_BACKFILL_MIGRATION`). Va después de la 0262: con el turno de
 nueve argumentos, o sin el de once ni el de doce, se detiene sin cambiar nada.
 Si después alguien vuelve a correr la 0261, quedan dos turnos —el de once y el
 de doce— y la llamada por nombre del código falla: no se simula ni se emite
-nada hasta volver a correr la 0267.
+nada hasta volver a correr la 0269.
 
 Para el barrido, «falta una migración de comprobantes» es solo un «no existe»
 (de tabla o de función) que nombra algo que crean la 0257 —`invoice_issuers`,
@@ -14335,7 +14444,7 @@ Implementación:
   `order_invoices`, `invoice_order_checks`, la función `invoice_claim` (el
   turno) y la semilla de GRUPO GF S.A.C. Es la que corrió en producción el
   14-10-2026, y no se reescribe: lo que cambió después va en la 0260, la 0261,
-  la 0262 y la 0267.
+  la 0262 y la 0269.
 - `db/migrations/0260_invoices_hardening.sql`: los arreglos de la revisión
   adversaria, sobre la 0257: las funciones `invoice_claim` (el turno) e
   `invoice_candidates` (qué pedidos mira el barrido), y las de los triggers
@@ -14355,7 +14464,7 @@ Implementación:
   `prepago_con_comprobantes`), que cada pago de la base del comprobante siga
   validado, y bloquea los pagos del pedido mientras dura. Se detiene sin la
   0261 delante. No toca filas.
-- `db/migrations/0267_invoices_backfill.sql`: lo pagado antes de «Emitir
+- `db/migrations/0269_invoices_backfill.sql`: lo pagado antes de «Emitir
   desde» con «Emitir esta boleta» (owner 15-10-2026), sobre la 0262: solo
   `invoice_claim`, que pasa a doce argumentos con `p_backfill` (falso por
   defecto) y borra la firma de once. El cuerpo es el de la 0262 salvo dos
@@ -14381,7 +14490,7 @@ Implementación:
   se ofrece el botón, en el panel y en Ajustes), y `invoiceEmitAllowedHere`
   (solo producción emite). Con un pedido pagado antes de «Emitir desde»,
   `emitInvoiceNow` pide la casilla (`sin_revision_simplefact`) y el turno va
-  con `p_backfill`; sin la 0267, contesta `sin_migracion`
+  con `p_backfill`; sin la 0269, contesta `sin_migracion`
   (`INVOICE_CLAIM_BACKFILL_MIGRATION`).
 - `app/api/cron/invoices/route.ts`: el barrido, cada 10 minutos.
 - Ajustes, en `app/dashboard/[storeId]/settings/invoice-actions.ts` y

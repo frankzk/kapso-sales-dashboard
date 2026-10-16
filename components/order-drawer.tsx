@@ -99,6 +99,10 @@ import { OrderInvoicePanel } from "@/components/order-invoice-panel";
 import { BrowserCallButton } from "@/components/browser-call";
 import { UrpiAttemptsSection } from "@/components/urpi-attempts-section";
 import { limaTodayKey } from "@/lib/shipments";
+import { DispatchDatePanel } from "@/components/dispatch-date-panel";
+import { DISPATCH_DATE_SET, dispatchDateBadge } from "@/lib/dispatch-date";
+
+const DISPATCH_BADGE_TONE: Record<"info" | "warn" | "danger", BadgeTone> = { info: "info", warn: "warn", danger: "crit" };
 import { downloadPdf } from "@/lib/download-pdf";
 import {
   isFailedOutput,
@@ -1031,6 +1035,16 @@ export function OrderDrawer({
     ? { ...reprogramState, received: (detail?.receivedReturnIds ?? []).includes(reprogramState.failed.shipmentId) }
     : null;
   const nextAction = detail ? drawerNextAction(detail.row, showPaymentPanel, gfDeliverySentence(gfActive), reprogram) : null;
+  // La última programación de envío (MOM §6.2): su nota y quién la puso.
+  const dispatchDateEvent = useMemo(() => {
+    if (!detail?.row.dispatch_scheduled_on) return null;
+    const last = [...detail.timeline]
+      .filter((e) => e.kind === DISPATCH_DATE_SET)
+      .sort((a, b) => b.occurredAt.localeCompare(a.occurredAt))[0];
+    if (!last) return null;
+    const reason = last.reason?.trim() || null;
+    return { note: reason && !reason.startsWith("Envío programado para el") ? reason : null, by: last.actorName };
+  }, [detail]);
   // Imprimir el rótulo de la salida nueva: «Descargar rótulos» de un solo
   // pedido. La salida nace aquí, «por definir», con el motivo escrito solo.
   const offerNewOutputLabel = Boolean(
@@ -1406,6 +1420,11 @@ export function OrderDrawer({
                           gestión: el pedido se ve entero sin abrir nada. En Por cerrar
                           los motivos son el trabajo mismo y los lista la mesa de cierre,
                           así que no se repiten aquí. */}
+                      {detail.row.dispatch_scheduled_on && (
+                        <Badge tone={DISPATCH_BADGE_TONE[dispatchDateBadge(detail.row.dispatch_scheduled_on, limaTodayKey()).tone]}>
+                          {dispatchDateBadge(detail.row.dispatch_scheduled_on, limaTodayKey()).text}
+                        </Badge>
+                      )}
                       {detail.row.macro_stage !== "por_cerrar" &&
                         (detail.row.macro_reasons ?? []).map((reason) => (
                           <Badge key={reason} tone="warn">
@@ -1431,6 +1450,21 @@ export function OrderDrawer({
                       «Salidas y guías». Va DENTRO de la tarjeta de la acción, en
                       su zona: suelto debajo era una tarjeta sin título. */}
                   <DrawerNextActionCard action={nextAction} onJump={jumpTo}>
+                    {canEdit &&
+                      detail.row.macro_stage === "preparacion" &&
+                      detail.row.macro_substage === "por_generar_rotulo" && (
+                        <DispatchDatePanel
+                          orderId={detail.row.order_id}
+                          scheduledOn={detail.row.dispatch_scheduled_on ?? null}
+                          note={dispatchDateEvent?.note ?? null}
+                          scheduledBy={dispatchDateEvent?.by ?? null}
+                          today={limaTodayKey()}
+                          onSaved={() => {
+                            void reload();
+                            onSaved();
+                          }}
+                        />
+                      )}
                     {gfActive && (
                       <>
                         <p className="text-[13px] font-medium text-ink-700">Motorizado Grupo GF</p>

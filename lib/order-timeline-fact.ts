@@ -82,6 +82,8 @@ const POR_KIND: Record<string, TimelineFact> = {
   guide_registered: hito("guia", "preparacion"),
   route_output_created: hito("guia", "preparacion"),
   route_output_filled: consulta("guia"),
+  guide_link_updated: consulta("guia"),
+  guide_check: consulta("guia"),
   courier_assigned: consulta("guia"),
   courier_change: consulta("guia"),
   olva_tracking_linked: consulta("guia"),
@@ -95,6 +97,8 @@ const POR_KIND: Record<string, TimelineFact> = {
   dispatch_programmed: consulta("programado"),
   dispatch_program_cleared: consulta("programado"),
   dispatch_program_overridden: consulta("programado"),
+  dispatch_date_set: consulta("programado"),
+  dispatch_date_cleared: consulta("programado"),
 
   // Despacho (índigo): el paquete sale de nuestras manos.
   swayp_desde_por_confirmar: hito("despacho", "por_despachar"),

@@ -12,7 +12,7 @@
 // manipulada o de una versión vieja tiene que dar un listado sensato, no un
 // error — es la pantalla de trabajo diaria del equipo.
 
-import { ATTEMPTS_OR_MORE, emptyFilters, type MasterFilters, type MasterSortKey } from "@/lib/order-master-filters";
+import { ATTEMPTS_OR_MORE, DISPATCH_DATE_FILTERS, emptyFilters, type MasterFilters, type MasterSortKey } from "@/lib/order-master-filters";
 import { MASTER_PATH } from "@/lib/order-drawer-href";
 
 /** Claves cortas: la URL se lee y se comparte, y `?d=lince,ate` gana a
@@ -101,6 +101,10 @@ export function parseMasterQuery(params: URLSearchParams | Record<string, string
   const stale = Number(get("sd") ?? "");
   if (Number.isFinite(stale) && stale > 0) f.staleDays = Math.trunc(stale);
 
+  // «Programar envío»: programado, hoy, vencido o sin fecha.
+  const dispatchDate = get("ep") ?? "";
+  if ((DISPATCH_DATE_FILTERS as readonly string[]).includes(dispatchDate)) f.dispatchDate = dispatchDate as MasterFilters["dispatchDate"];
+
   // Intentos: 0, 1, 2, 3 o 4 («4 a más»). El viejo `ma=1` («Más de un
   // intento») no tiene equivalente exacto y se ignora, como todo lo que no se
   // entiende. `at=` vacío no es 0: Number("") lo sería.
@@ -146,6 +150,7 @@ export function buildMasterQuery(q: MasterQuery): URLSearchParams {
   }
   if (f.staleDays > 0) out.set("sd", String(f.staleDays));
   if (f.attempts !== null) out.set("at", String(f.attempts));
+  if (f.dispatchDate) out.set("ep", f.dispatchDate);
   if (f.search.trim()) out.set("q", f.search.trim());
   if (f.confirmationDue) out.set("cq", f.confirmationDue);
   if (q.sortKey !== "created") out.set("s", q.sortKey);

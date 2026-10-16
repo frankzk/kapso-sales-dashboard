@@ -531,6 +531,16 @@ export function shalomRetryDelay(err: unknown, attempt: number): number | null {
 }
 
 /**
+ * ¿Se acabó el cupo de la API key? 60 llamadas por minuto, compartidas por
+ * todas las tiendas y por el panel. Quien recorre muchas guías tiene que
+ * pararse aquí: seguir pidiendo solo gasta el cupo que el panel necesita para
+ * crear guías, y todo lo que pida en ese minuto también va a fallar.
+ */
+export function isShalomRateLimited(err: unknown): boolean {
+  return err instanceof ShalomApiError && (err.status === 429 || err.code === "rate_limited");
+}
+
+/**
  * Traduce un fallo de la API a algo accionable para el operador. Los códigos
  * salen de la tabla de errores de la documentación.
  */
@@ -550,10 +560,13 @@ export function describeShalomError(err: unknown): string {
           // tiendas. Mandar a un administrador a buscarla en una pantalla donde
           // no existe es peor que no dar pista ninguna.
           " Es la API key global del wrapper (SHALOM_API_KEY), que vive en las variables de entorno del despliegue, NO en los ajustes de la tienda. Si se pegó cortada o vencida, hay que corregirla ahí y volver a desplegar."
-        : err.code === "rate_limited"
+        : err.code === "rate_limited" || err.status === 429
           ? // El cupo es de la API key, que es una sola para TODAS las tiendas:
-            // se puede agotar sin que esta tienda haya hecho nada.
-            " Se superaron las 60 llamadas por minuto de la API key, que es compartida por todas las tiendas: espera un momento."
+            // se puede agotar sin que esta tienda haya hecho nada. El rastreo
+            // tiene uno propio, contado por guía (lib/shalom/track-pace.ts).
+            /rastreo/i.test(err.message)
+            ? " Es el cupo del rastreo: 120 guías por minuto, compartido por todas las tiendas."
+            : " Se superaron las 60 llamadas por minuto de la API key, que es compartida por todas las tiendas: espera un momento."
           : err.code === "upstream_rejected"
             ? " Es una regla de negocio de Shalom (cuenta sin servicio de cobranza, producto restringido para esa ruta, etc.)."
             : err.code === "conflict"

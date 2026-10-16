@@ -1,4 +1,4 @@
--- Comprobantes electrónicos por RUC (0257, 0260, 0261, 0262 y 0267, MOM §35).
+-- Comprobantes electrónicos por RUC (0257, 0260, 0261, 0262 y 0269, MOM §35).
 -- Corre solo en el clúster desechable de verify-db, después de todas las
 -- migraciones, dentro de una transacción que se deshace. Nunca llama a
 -- SimpleFact.
@@ -6,11 +6,11 @@
 -- La 0257 es la que corrió en producción el 14-10-2026, la 0260 cambia cuatro
 -- de sus funciones (los arreglos de la revisión adversaria), la 0261 trae el
 -- modo «Manual» (el turno con `p_mode` y `p_created_by`), la 0262 hace que el
--- turno vuelva a revisar que la empresa recibió el pago y la 0267 deja emitir
+-- turno vuelva a revisar que la empresa recibió el pago y la 0269 deja emitir
 -- con el botón lo pagado antes de «Emitir desde», desde el 01/10/2026 (el
 -- turno de doce argumentos, con `p_backfill`). Cada vez que esta prueba vuelve
--- a correr la 0257, corre la 0260, la 0261, la 0262 y la 0267 justo después; y
--- cada vez que vuelve a correr la 0261, la 0262 y la 0267 detrás: la 0257 sola
+-- a correr la 0257, corre la 0260, la 0261, la 0262 y la 0269 justo después; y
+-- cada vez que vuelve a correr la 0261, la 0262 y la 0269 detrás: la 0257 sola
 -- deja las funciones de antes (y el turno de nueve argumentos, que junto al de
 -- doce vuelve ambigua una llamada por nombre), la 0261 sola deja el turno de
 -- once al lado del de doce (otra vez ambigua), y el resto de la prueba es
@@ -61,7 +61,7 @@
 --      la base del comprobante sigue validado; un pago rechazado entre la
 --      lectura del código y el turno no deja fila. Va solo después de la 0261,
 --      sobre ella cambia solo el turno, y correrla dos veces es correrla una;
---   l) la 0267: «Emitir esta boleta» emite lo pagado antes de «Emitir desde»
+--   l) la 0269: «Emitir esta boleta» emite lo pagado antes de «Emitir desde»
 --      solo con `p_backfill`, una fila real pedida por una persona, el RUC en
 --      Manual y las dos fechas desde el 01/10/2026 00:00 de Lima —y el primer
 --      dinero: la fecha más temprana entre el comprobante (`paid_at`) y el
@@ -187,7 +187,7 @@ begin
   end loop;
 end $$;
 
-\echo '  volver a correr la 0257 (y la 0260, la 0261, la 0262 y la 0267) no pisa lo que el owner cambió, y siembra solo donde se cobra en esa cuenta'
+\echo '  volver a correr la 0257 (y la 0260, la 0261, la 0262 y la 0269) no pisa lo que el owner cambió, y siembra solo donde se cobra en esa cuenta'
 -- El owner deja el Yape ···309 de la tienda A en «Sin comprobante».
 update store_collection_accounts set invoice_issuer_id = null
  where store_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' and phone_last_digits = '309';
@@ -208,16 +208,16 @@ insert into store_collection_accounts (store_id, label, phone_last_digits, note)
 
 -- La migración entera, no una copia de su semilla: si la semilla cambia, la
 -- prueba prueba la nueva. Se declara idempotente (DEPLOY.md la aplica a mano).
--- La 0260, la 0261, la 0262 y la 0267 van justo después: la 0257 sola vuelve
+-- La 0260, la 0261, la 0262 y la 0269 van justo después: la 0257 sola vuelve
 -- a dejar las funciones de antes de la revisión, y las pruebas que siguen son
 -- de las de ahora (sin la 0261 quedarían dos turnos, el de nueve argumentos y
 -- el de doce; sin la 0262, un turno que no mira si el pedido quedó pagado; sin
--- la 0267, el de once al lado del de doce).
+-- la 0269, el de once al lado del de doce).
 \ir ../../db/migrations/0257_invoices.sql
 \ir ../../db/migrations/0260_invoices_hardening.sql
 \ir ../../db/migrations/0261_invoices_manual.sql
 \ir ../../db/migrations/0262_invoices_claim_coverage.sql
-\ir ../../db/migrations/0267_invoices_backfill.sql
+\ir ../../db/migrations/0269_invoices_backfill.sql
 
 do $$
 declare
@@ -264,7 +264,7 @@ end $$;
 
 -- Y cambia de idea: borra el RUC sembrado (sus cuentas quedan sin RUC por el
 -- `on delete set null`) y da de alta otro, al que asigna el ···309. Volver a
--- correr la 0257 (y la 0260, la 0261, la 0262 y la 0267) recrea GRUPO GF S.A.C. en Y,
+-- correr la 0257 (y la 0260, la 0261, la 0262 y la 0269) recrea GRUPO GF S.A.C. en Y,
 -- pero no le quita el ···309 al RUC que eligió el owner: la semilla solo llena
 -- cuentas vacías.
 delete from invoice_issuers where org_id = '25700000-0000-0000-0000-0000000000a1';
@@ -278,7 +278,7 @@ update store_collection_accounts
 \ir ../../db/migrations/0260_invoices_hardening.sql
 \ir ../../db/migrations/0261_invoices_manual.sql
 \ir ../../db/migrations/0262_invoices_claim_coverage.sql
-\ir ../../db/migrations/0267_invoices_backfill.sql
+\ir ../../db/migrations/0269_invoices_backfill.sql
 
 do $$
 declare
@@ -1374,12 +1374,12 @@ reset role;
 -- 0257 —que guardan el oid— las llaman sin recrearse; ninguna fila cambia; y
 -- correr la 0260 otra vez no cambia nada.
 --
--- Después vinieron la 0261, la 0262 y la 0267, y lo que deja la cadena entera
+-- Después vinieron la 0261, la 0262 y la 0269, y lo que deja la cadena entera
 -- ya no es la 0260 en dos de esas funciones: `invoice_issuers_touch` y el
 -- turno, que pasó a tener once argumentos (0261), a revisar el pago (0262) y a
--- tener doce (0267, `p_backfill`). La 0257 y la 0260 vuelven a crear el de
+-- tener doce (0269, `p_backfill`). La 0257 y la 0260 vuelven a crear el de
 -- nueve junto al de doce; la 0261, al final, lo borra y crea el de once, la
--- 0262 lo reescribe, y la 0267 lo borra: todo queda como lo dejó la cadena.
+-- 0262 lo reescribe, y la 0269 lo borra: todo queda como lo dejó la cadena.
 update invoice_issuers set mode = 'simulacion', emit_from = now()
  where org_id = '25700000-0000-0000-0000-0000000000a1' and ruc = '20556792829';
 
@@ -1419,8 +1419,8 @@ do $$ begin perform pg_temp.foto_0260('0260'); end $$;
 do $$ begin perform pg_temp.foto_0260('0260 otra vez'); end $$;
 \ir ../../db/migrations/0261_invoices_manual.sql
 \ir ../../db/migrations/0262_invoices_claim_coverage.sql
-\ir ../../db/migrations/0267_invoices_backfill.sql
-do $$ begin perform pg_temp.foto_0260('0267'); end $$;
+\ir ../../db/migrations/0269_invoices_backfill.sql
+do $$ begin perform pg_temp.foto_0260('0269'); end $$;
 
 do $$
 declare
@@ -1442,10 +1442,10 @@ begin
   -- esto, un NULL haría pasar en silencio las comparaciones de abajo. La única
   -- que falta es el turno de nueve antes y después de la cadena: la 0261 lo
   -- borra, y la 0257 y la 0260 lo vuelven a crear. El de once no está en la
-  -- foto: nace con la 0261 y la 0267 lo borra, dentro del último paso.
+  -- foto: nace con la 0261 y la 0269 lo borra, dentro del último paso.
   if (select count(*) from foto_0260 where valor is not null and valor not like '-%') <> 5 * 7 - 2
      or (pg_temp.en_0260('antes', c_claim) like '-%') is not true
-     or (pg_temp.en_0260('0267', c_claim) like '-%') is not true then
+     or (pg_temp.en_0260('0269', c_claim) like '-%') is not true then
     raise exception 'foto incompleta: %', (select string_agg(paso || '/' || cosa, ', ') from foto_0260
                                            where valor is null or valor like '-%');
   end if;
@@ -1494,7 +1494,7 @@ begin
   end if;
 
   -- Lo que dejó verify-db (todas las migraciones, en orden): la 0260 en las dos
-  -- que la 0261 no toca, la 0261 en `invoice_issuers_touch` y la 0267 en el
+  -- que la 0261 no toca, la 0261 en `invoice_issuers_touch` y la 0269 en el
   -- turno.
   foreach v_fn in array array[c_guard, c_candidates] loop
     if pg_temp.en_0260('antes', v_fn) is distinct from pg_temp.en_0260('0260', v_fn) then
@@ -1502,16 +1502,16 @@ begin
     end if;
   end loop;
   foreach v_fn in array array[c_touch, c_claim, c_claim12, c_candidates, c_guard] loop
-    if pg_temp.en_0260('antes', v_fn) is distinct from pg_temp.en_0260('0267', v_fn) then
-      raise exception 'la 0261, la 0262 y la 0267 al final no dejan % como la dejó la cadena', v_fn;
+    if pg_temp.en_0260('antes', v_fn) is distinct from pg_temp.en_0260('0269', v_fn) then
+      raise exception 'la 0261, la 0262 y la 0269 al final no dejan % como la dejó la cadena', v_fn;
     end if;
   end loop;
 
   -- `create or replace` conserva el oid: lo que los triggers guardan. El turno
-  -- de doce tampoco cambia de oid: ninguna lo borra, y la 0267 lo reemplaza en
+  -- de doce tampoco cambia de oid: ninguna lo borra, y la 0269 lo reemplaza en
   -- su lugar.
   foreach v_fn in array array[c_touch, c_guard, c_claim12, c_candidates] loop
-    foreach v_paso in array array['0257', '0260', '0260 otra vez', '0267'] loop
+    foreach v_paso in array array['0257', '0260', '0260 otra vez', '0269'] loop
       if split_part(pg_temp.en_0260(v_paso, v_fn), ' ', 1) is distinct from split_part(pg_temp.en_0260('antes', v_fn), ' ', 1) then
         raise exception '% cambió de oid en el paso %', v_fn, v_paso;
       end if;
@@ -1526,7 +1526,7 @@ begin
 
   foreach v_fn in array array[c_touch, c_guard, c_claim12, c_candidates] loop
     -- Una sola versión de cada una: ninguna sobrecarga olvidada (tampoco el
-    -- turno de nueve, que la 0261 borró, ni el de once, que borró la 0267).
+    -- turno de nueve, que la 0261 borró, ni el de once, que borró la 0269).
     select count(*) into v_n from pg_proc
      where pronamespace = 'public'::regnamespace and proname = split_part(v_fn, '(', 1);
     if v_n <> 1 then raise exception '% tiene % versiones', split_part(v_fn, '(', 1), v_n; end if;
@@ -1542,9 +1542,9 @@ begin
     raise exception 'service_role no puede pedir el turno o la lista';
   end if;
 
-  -- Ni la 0260, ni la 0261, ni la 0262, ni la 0267 recrean los triggers: los
+  -- Ni la 0260, ni la 0261, ni la 0262, ni la 0269 recrean los triggers: los
   -- mismos, llamando a las mismas funciones.
-  foreach v_paso in array array['0260', '0260 otra vez', '0267'] loop
+  foreach v_paso in array array['0260', '0260 otra vez', '0269'] loop
     if pg_temp.en_0260(v_paso, 'triggers') is distinct from pg_temp.en_0260('0257', 'triggers') then
       raise exception 'el paso % recreó triggers: % → %', v_paso, pg_temp.en_0260('0257', 'triggers'),
         pg_temp.en_0260(v_paso, 'triggers');
@@ -1556,7 +1556,7 @@ begin
   end if;
 
   -- Ningún dato cambia, en ningún paso; y la segunda 0260 es la primera.
-  foreach v_paso in array array['0257', '0260', '0260 otra vez', '0267'] loop
+  foreach v_paso in array array['0257', '0260', '0260 otra vez', '0269'] loop
     if pg_temp.en_0260(v_paso, 'datos') is distinct from pg_temp.en_0260('antes', 'datos') then
       raise exception 'el paso % cambió datos de comprobantes', v_paso;
     end if;
@@ -1583,7 +1583,7 @@ begin
    where org_id = '25700000-0000-0000-0000-0000000000a1' and ruc = '20556792829'
   returning * into v_y;
   if v_y.check_error is not null or v_y.checked_at is not null or v_y.mode <> 'simulacion' then
-    raise exception 'token nuevo tras la 0260, la 0261, la 0262 y la 0267: % % %', v_y.check_error, v_y.checked_at, v_y.mode;
+    raise exception 'token nuevo tras la 0260, la 0261, la 0262 y la 0269: % % %', v_y.check_error, v_y.checked_at, v_y.mode;
   end if;
 end $$;
 
@@ -1653,11 +1653,11 @@ $$;
 do $$ begin perform pg_temp.foto_0261('produccion'); end $$;
 \ir ../../db/migrations/0261_invoices_manual.sql
 do $$ begin perform pg_temp.foto_0261('0261'); end $$;
--- La 0262 y la 0267 detrás: el resto de la prueba es sobre el turno de ahora.
--- Lo que la 0262 cambia sobre la 0261 lo prueba la sección k; lo que la 0267
+-- La 0262 y la 0269 detrás: el resto de la prueba es sobre el turno de ahora.
+-- Lo que la 0262 cambia sobre la 0261 lo prueba la sección k; lo que la 0269
 -- cambia sobre la 0262, la sección l.
 \ir ../../db/migrations/0262_invoices_claim_coverage.sql
-\ir ../../db/migrations/0267_invoices_backfill.sql
+\ir ../../db/migrations/0269_invoices_backfill.sql
 
 do $$
 declare
@@ -1757,7 +1757,7 @@ alter table invoice_issuers drop constraint invoice_issuers_mode_check;
 alter table invoice_issuers add constraint invoice_issuers_modo_0257 check (mode in ('apagado', 'simulacion', 'real'));
 \ir ../../db/migrations/0261_invoices_manual.sql
 \ir ../../db/migrations/0262_invoices_claim_coverage.sql
-\ir ../../db/migrations/0267_invoices_backfill.sql
+\ir ../../db/migrations/0269_invoices_backfill.sql
 do $$
 begin
   if pg_temp.checks_del_modo() <> 'invoice_issuers_mode_check' then
@@ -2101,7 +2101,7 @@ end $$;
 reset role;
 
 -- El navegador, ni con los nueve ni con los once. El turno de ahora es el de
--- doce (0267): las dos llamadas van a él.
+-- doce (0269): las dos llamadas van a él.
 do $$
 declare
   c_turno constant text := 'invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)';
@@ -2154,11 +2154,11 @@ exception when insufficient_privilege then null;
 end $$;
 reset role;
 
-\echo '  correr la 0261 otra vez (con la 0262 y la 0267 detrás), con un RUC en Manual y sus boletas, no cambia nada'
+\echo '  correr la 0261 otra vez (con la 0262 y la 0269 detrás), con un RUC en Manual y sus boletas, no cambia nada'
 do $$ begin perform pg_temp.foto_0261('manual'); end $$;
 \ir ../../db/migrations/0261_invoices_manual.sql
 \ir ../../db/migrations/0262_invoices_claim_coverage.sql
-\ir ../../db/migrations/0267_invoices_backfill.sql
+\ir ../../db/migrations/0269_invoices_backfill.sql
 do $$ begin perform pg_temp.foto_0261('0261 otra vez'); end $$;
 do $$
 begin
@@ -2435,7 +2435,7 @@ reset role;
 
 \echo '  0262 sobre la 0261: cambia solo el turno, en su lugar y con su firma; dos veces es una; y sin la 0261 se detiene sin cambiar nada'
 -- Lo que habrá en producción cuando se aplique: la 0257, la 0260 y la 0261, y
--- todavía no la 0267 (su turno de doce se quita aquí; la sección l lo vuelve a
+-- todavía no la 0269 (su turno de doce se quita aquí; la sección l lo vuelve a
 -- poner). Volver a correr la 0261 deja su turno, sin la revisión del pago: por
 -- eso la 0262 va siempre después.
 drop function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean);
@@ -2566,20 +2566,20 @@ begin
   end if;
 end $$;
 
--- ── l) Lo pagado antes de «Emitir desde», con el botón (0267) ───────────────
-\echo '  0267 sobre la 0262: se va el turno de once y nace el de doce, con el mismo cuerpo salvo la fecha y la base de la fila; solo service_role; dos veces es una'
+-- ── l) Lo pagado antes de «Emitir desde», con el botón (0269) ───────────────
+\echo '  0269 sobre la 0262: se va el turno de once y nace el de doce, con el mismo cuerpo salvo la fecha y la base de la fila; solo service_role; dos veces es una'
 -- Lo que hay en producción el 15-10-2026: la 0257, la 0260, la 0261 y la 0262
--- (lo que dejó la sección k). Se corre la 0267 encima, y otra vez. El cuerpo
--- del turno de la 0262 se guarda antes: la 0267 lo copia letra por letra salvo
+-- (lo que dejó la sección k). Se corre la 0269 encima, y otra vez. El cuerpo
+-- del turno de la 0262 se guarda antes: la 0269 lo copia letra por letra salvo
 -- la fecha y la base de la fila, y eso se comprueba línea por línea.
 create temp table turno_0262 as
   select prosrc from pg_proc
    where oid = to_regprocedure('invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)');
 do $$ begin perform pg_temp.foto_0261('l 0262'); end $$;
-\ir ../../db/migrations/0267_invoices_backfill.sql
-do $$ begin perform pg_temp.foto_0261('l 0267'); end $$;
-\ir ../../db/migrations/0267_invoices_backfill.sql
-do $$ begin perform pg_temp.foto_0261('l 0267 otra vez'); end $$;
+\ir ../../db/migrations/0269_invoices_backfill.sql
+do $$ begin perform pg_temp.foto_0261('l 0269'); end $$;
+\ir ../../db/migrations/0269_invoices_backfill.sql
+do $$ begin perform pg_temp.foto_0261('l 0269 otra vez'); end $$;
 
 do $$
 declare
@@ -2597,23 +2597,23 @@ begin
      or (pg_temp.en_0261('l 0262', c_claim9) like '-%') is not true
      or (pg_temp.en_0261('l 0262', c_claim11) like '-%') is not false
      or (pg_temp.en_0261('l 0262', c_claim12) like '-%') is not true then
-    raise exception 'la foto de antes de la 0267 no es la de producción';
+    raise exception 'la foto de antes de la 0269 no es la de producción';
   end if;
 
   -- Después, un solo turno: el de doce, con `p_backfill` al final y en falso
   -- por defecto. Sin el de once, la llamada por nombre del código va a éste.
-  if (pg_temp.en_0261('l 0267', c_claim9) like '-%') is not true
-     or (pg_temp.en_0261('l 0267', c_claim11) like '-%') is not true
-     or (pg_temp.en_0261('l 0267', c_claim12) like '-%') is not false
+  if (pg_temp.en_0261('l 0269', c_claim9) like '-%') is not true
+     or (pg_temp.en_0261('l 0269', c_claim11) like '-%') is not true
+     or (pg_temp.en_0261('l 0269', c_claim12) like '-%') is not false
      or (select count(*) from pg_proc where pronamespace = 'public'::regnamespace and proname = 'invoice_claim') <> 1 then
-    raise exception '0267: los turnos quedaron así: once %, doce %', left(pg_temp.en_0261('l 0267', c_claim11), 20),
-      left(pg_temp.en_0261('l 0267', c_claim12), 20);
+    raise exception '0269: los turnos quedaron así: once %, doce %', left(pg_temp.en_0261('l 0269', c_claim11), 20),
+      left(pg_temp.en_0261('l 0269', c_claim12), 20);
   end if;
   if pg_get_function_arguments(to_regprocedure(c_claim12)) is distinct from
        'p_id uuid, p_issuer uuid, p_store uuid, p_order uuid, p_total numeric, p_paid_at timestamp with time zone, '
        'p_order_name text, p_basis jsonb, p_request jsonb, p_mode text DEFAULT NULL::text, '
        'p_created_by uuid DEFAULT NULL::uuid, p_backfill boolean DEFAULT false' then
-    raise exception '0267: la firma quedó así: %', pg_get_function_arguments(to_regprocedure(c_claim12));
+    raise exception '0269: la firma quedó así: %', pg_get_function_arguments(to_regprocedure(c_claim12));
   end if;
 
   -- El cuerpo de la 0262, letra por letra, salvo la fecha y la base de la fila.
@@ -2629,7 +2629,7 @@ begin
        '     or v_paid is null or v_paid < v_iss.emit_from then',
        '    p_order_name, p_total, greatest(p_paid_at, v_paid), coalesce(p_basis, ''{}''::jsonb), p_request,'
      ]) as l) then
-    raise exception '0267 quitó del turno de la 0262: %', v_quitadas;
+    raise exception '0269 quitó del turno de la 0262: %', v_quitadas;
   end if;
   -- Lo que se pone, sin contar comentarios ni líneas en blanco: la excepción de
   -- la fecha (con el primer dinero, `v_first`, y «Emitir desde» ya llegado) y
@@ -2667,7 +2667,7 @@ begin
        '         else coalesce(p_basis, ''{}''::jsonb) end,',
        '    p_request,'
      ]) as l) then
-    raise exception '0267 puso en el turno de la 0262: %', v_puestas;
+    raise exception '0269 puso en el turno de la 0262: %', v_puestas;
   end if;
 
   -- Solo para el servidor: ni anon, ni authenticated, ni PUBLIC.
@@ -2675,33 +2675,33 @@ begin
      or not has_function_privilege('service_role', c_claim12, 'execute')
      or exists (select 1 from pg_proc p, aclexplode(p.proacl) a
                  where p.oid = to_regprocedure(c_claim12) and a.grantee = 0 and a.privilege_type = 'EXECUTE') then
-    raise exception '0267: el turno no quedó solo para service_role';
+    raise exception '0269: el turno no quedó solo para service_role';
   end if;
 
   -- Nada más cambia: ni las otras funciones, ni los CHECK, ni los triggers, ni
   -- los datos, ni los comentarios.
   for v_cosa in select cosa from foto_0261 where paso = 'l 0262' and cosa not in (c_claim11, c_claim12) loop
-    if pg_temp.en_0261('l 0267', v_cosa) is distinct from pg_temp.en_0261('l 0262', v_cosa) then
-      raise exception '0267 tocó %', v_cosa;
+    if pg_temp.en_0261('l 0269', v_cosa) is distinct from pg_temp.en_0261('l 0262', v_cosa) then
+      raise exception '0269 tocó %', v_cosa;
     end if;
   end loop;
   -- Y correrla otra vez no cambia nada: ni el oid del turno, ni sus permisos.
   if exists (
     select 1
-      from (select cosa, valor from foto_0261 where paso = 'l 0267') a
-      full join (select cosa, valor from foto_0261 where paso = 'l 0267 otra vez') b using (cosa)
+      from (select cosa, valor from foto_0261 where paso = 'l 0269') a
+      full join (select cosa, valor from foto_0261 where paso = 'l 0269 otra vez') b using (cosa)
      where a.valor is distinct from b.valor
   ) then
-    raise exception 'correr la 0267 otra vez cambió algo';
+    raise exception 'correr la 0269 otra vez cambió algo';
   end if;
 end $$;
 
-\echo '  0267: con la 0261 corrida otra vez quedan dos turnos y la llamada por nombre falla; la 0262 otra vez no lo arregla; la 0267 lo deja en uno, el mismo'
+\echo '  0269: con la 0261 corrida otra vez quedan dos turnos y la llamada por nombre falla; la 0262 otra vez no lo arregla; la 0269 lo deja en uno, el mismo'
 \ir ../../db/migrations/0261_invoices_manual.sql
 do $$
 begin
   if (select count(*) from pg_proc where pronamespace = 'public'::regnamespace and proname = 'invoice_claim') <> 2 then
-    raise exception 'la 0261 sobre la 0267 no dejó los dos turnos';
+    raise exception 'la 0261 sobre la 0269 no dejó los dos turnos';
   end if;
   -- Ambigua: no emite nada, falla.
   perform pg_temp.debe_fallar(
@@ -2712,12 +2712,12 @@ begin
 end $$;
 -- Lo que decía el arreglo de antes («volver a correr la 0262 después de la
 -- 0261») ya no arregla nada: la 0262 pasa su guarda (está el de once) y deja
--- los dos turnos, y la llamada sigue ambigua. Lo que arregla es la 0267.
+-- los dos turnos, y la llamada sigue ambigua. Lo que arregla es la 0269.
 \ir ../../db/migrations/0262_invoices_claim_coverage.sql
 do $$
 begin
   if (select count(*) from pg_proc where pronamespace = 'public'::regnamespace and proname = 'invoice_claim') <> 2 then
-    raise exception 'la 0262 tras la 0261 sobre la 0267 no dejó los dos turnos';
+    raise exception 'la 0262 tras la 0261 sobre la 0269 no dejó los dos turnos';
   end if;
   perform pg_temp.debe_fallar(
     $q$select invoice_claim(p_id => gen_random_uuid(), p_issuer => gen_random_uuid(), p_store => gen_random_uuid(),
@@ -2725,67 +2725,67 @@ begin
                             p_basis => '{}', p_request => '{}', p_mode => 'real', p_created_by => null::uuid)$q$,
     '42725');
 end $$;
-\ir ../../db/migrations/0267_invoices_backfill.sql
-do $$ begin perform pg_temp.foto_0261('l 0267 tras la 0261'); end $$;
+\ir ../../db/migrations/0269_invoices_backfill.sql
+do $$ begin perform pg_temp.foto_0261('l 0269 tras la 0261'); end $$;
 do $$
 begin
   if exists (
     select 1
-      from (select cosa, valor from foto_0261 where paso = 'l 0267') a
-      full join (select cosa, valor from foto_0261 where paso = 'l 0267 tras la 0261') b using (cosa)
+      from (select cosa, valor from foto_0261 where paso = 'l 0269') a
+      full join (select cosa, valor from foto_0261 where paso = 'l 0269 tras la 0261') b using (cosa)
      where a.valor is distinct from b.valor
   ) then
-    raise exception 'la 0267 tras la 0261 no dejó el turno como estaba';
+    raise exception 'la 0269 tras la 0261 no dejó el turno como estaba';
   end if;
 end $$;
 
--- Sin la 0262 delante, la 0267 se detiene antes de tocar nada. Tres casos: la
--- 0260 corrida otra vez después de la 0267 (el de nueve al lado del de doce),
+-- Sin la 0262 delante, la 0269 se detiene antes de tocar nada. Tres casos: la
+-- 0260 corrida otra vez después de la 0269 (el de nueve al lado del de doce),
 -- la 0260 sin la 0261 (solo el de nueve) y ningún turno. El primero y el
 -- último prueban cada mitad de la guarda por separado. Como en la sección k,
 -- psql corre cada sentencia con su punto de guardado (`ON_ERROR_ROLLBACK`): el
--- resto de la 0267 corre igual después de la guarda, y lo deshace el punto de
+-- resto de la 0269 corre igual después de la guarda, y lo deshace el punto de
 -- guardado de afuera. En el SQL Editor y con `psql -1 -v ON_ERROR_STOP=1`, la
 -- guarda deshace la migración entera.
 savepoint sin_0262;
 \ir ../../db/migrations/0260_invoices_hardening.sql
-\echo '  (los tres ERROR que siguen son la guarda de la 0267, y se esperan)'
+\echo '  (los tres ERROR que siguen son la guarda de la 0269, y se esperan)'
 \set VERBOSITY terse
 \set ON_ERROR_STOP off
 \set ON_ERROR_ROLLBACK on
 \set LAST_ERROR_MESSAGE ''
 \set LAST_ERROR_SQLSTATE ''
-\ir ../../db/migrations/0267_invoices_backfill.sql
-select :'LAST_ERROR_SQLSTATE' = 'P0001' and :'LAST_ERROR_MESSAGE' like 'La 0267 va después de la 0262%' as guarda67_con_nueve \gset
+\ir ../../db/migrations/0269_invoices_backfill.sql
+select :'LAST_ERROR_SQLSTATE' = 'P0001' and :'LAST_ERROR_MESSAGE' like 'La 0269 va después de la 0262%' as guarda69_con_nueve \gset
 -- Lo que deja la 0260 sin la 0261: solo el turno de nueve.
 drop function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean);
 \set LAST_ERROR_MESSAGE ''
 \set LAST_ERROR_SQLSTATE ''
-\ir ../../db/migrations/0267_invoices_backfill.sql
-select :'LAST_ERROR_SQLSTATE' = 'P0001' and :'LAST_ERROR_MESSAGE' like 'La 0267 va después de la 0262%' as guarda67_solo_nueve \gset
--- Ningún turno (con ON_ERROR_ROLLBACK, la 0267 de arriba dejó el de doce).
+\ir ../../db/migrations/0269_invoices_backfill.sql
+select :'LAST_ERROR_SQLSTATE' = 'P0001' and :'LAST_ERROR_MESSAGE' like 'La 0269 va después de la 0262%' as guarda69_solo_nueve \gset
+-- Ningún turno (con ON_ERROR_ROLLBACK, la 0269 de arriba dejó el de doce).
 drop function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb);
 drop function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean);
 \set LAST_ERROR_MESSAGE ''
 \set LAST_ERROR_SQLSTATE ''
-\ir ../../db/migrations/0267_invoices_backfill.sql
-select :'LAST_ERROR_SQLSTATE' = 'P0001' and :'LAST_ERROR_MESSAGE' like 'La 0267 va después de la 0262%' as guarda67_sin_turno \gset
+\ir ../../db/migrations/0269_invoices_backfill.sql
+select :'LAST_ERROR_SQLSTATE' = 'P0001' and :'LAST_ERROR_MESSAGE' like 'La 0269 va después de la 0262%' as guarda69_sin_turno \gset
 \set ON_ERROR_ROLLBACK off
 \set ON_ERROR_STOP on
 \set VERBOSITY default
 rollback to savepoint sin_0262;
 release savepoint sin_0262;
-\if :guarda67_con_nueve
+\if :guarda69_con_nueve
 \else
-do $$ begin raise exception 'la 0267 corrió con el turno de nueve en pie'; end $$;
+do $$ begin raise exception 'la 0269 corrió con el turno de nueve en pie'; end $$;
 \endif
-\if :guarda67_solo_nueve
+\if :guarda69_solo_nueve
 \else
-do $$ begin raise exception 'la 0267 corrió sobre la 0260 sin la 0261'; end $$;
+do $$ begin raise exception 'la 0269 corrió sobre la 0260 sin la 0261'; end $$;
 \endif
-\if :guarda67_sin_turno
+\if :guarda69_sin_turno
 \else
-do $$ begin raise exception 'la 0267 corrió sin el turno de once ni el de doce'; end $$;
+do $$ begin raise exception 'la 0269 corrió sin el turno de once ni el de doce'; end $$;
 \endif
 -- Y lo de afuera quedó como estaba: el turno de doce, uno solo.
 do $$
@@ -2793,11 +2793,11 @@ begin
   if (select count(*) from pg_proc where pronamespace = 'public'::regnamespace and proname = 'invoice_claim') <> 1
      or (pg_get_functiondef(to_regprocedure('invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)'))
            like '%pagado_antes_de_emitir_desde%') is not true then
-    raise exception 'la prueba de la guarda de la 0267 no se deshizo';
+    raise exception 'la prueba de la guarda de la 0269 no se deshizo';
   end if;
 end $$;
 
-\echo '  0267: «Emitir esta boleta» emite lo pagado antes de «Emitir desde» solo con p_backfill, una real pedida por una persona, el RUC en Manual, «Emitir desde» ya llegado y las dos fechas y el primer dinero (comprobante o registro, el más temprano) desde el 01/10/2026 00:00 de Lima; la fila lo dice en su base'
+\echo '  0269: «Emitir esta boleta» emite lo pagado antes de «Emitir desde» solo con p_backfill, una real pedida por una persona, el RUC en Manual, «Emitir desde» ya llegado y las dos fechas y el primer dinero (comprobante o registro, el más temprano) desde el 01/10/2026 00:00 de Lima; la fila lo dice en su base'
 -- Una organización aparte, con su RUC en Manual (token, prueba del mismo RUC) y
 -- «Emitir desde» el 12/10/2026 00:00 de Lima, puesto después del cambio de modo
 -- (sin cambio de modo, la fecha no se mueve). Fechas fijas: la del 01/10/2026
@@ -3160,4 +3160,4 @@ begin
 end $$;
 
 rollback;
-\echo '  invoices: semilla, emisor, cuenta → RUC, turno, índice, estados, cuentas borradas, pedidos por revisar, permisos, la 0260 sobre la 0257, la 0261 con el modo «Manual», la 0262 con el pago revisado en el turno y la 0267 con lo pagado antes de «Emitir desde» OK'
+\echo '  invoices: semilla, emisor, cuenta → RUC, turno, índice, estados, cuentas borradas, pedidos por revisar, permisos, la 0260 sobre la 0257, la 0261 con el modo «Manual», la 0262 con el pago revisado en el turno y la 0269 con lo pagado antes de «Emitir desde» OK'

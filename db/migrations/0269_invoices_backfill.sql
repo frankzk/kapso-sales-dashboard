@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0267_invoices_backfill.sql — comprobantes por RUC: «Emitir esta boleta» para
+-- 0269_invoices_backfill.sql — comprobantes por RUC: «Emitir esta boleta» para
 -- lo pagado antes de «Emitir desde», desde el 01/10/2026 (MOM §35, owner
 -- 15-10-2026).
 --
@@ -48,12 +48,12 @@
 -- doce, se detiene sin cambiar nada. Si después alguien vuelve a correr la
 -- 0261, quedan dos turnos —el de once y éste— y la llamada por nombre del
 -- código se vuelve ambigua (falla, no emite) hasta que se vuelva a correr la
--- 0267. En el SQL Editor corre en una sola transacción; con psql,
+-- 0269. En el SQL Editor corre en una sola transacción; con psql,
 -- `psql -1 -v ON_ERROR_STOP=1`.
 --
 -- Se aplica a mano ANTES del código (DEPLOY.md). Es idempotente. El código
 -- tolera que falte: lo pagado desde «Emitir desde» se emite como hoy, y un
--- pedido pagado antes contesta `sin_migracion`, nombrando la 0267.
+-- pedido pagado antes contesta `sin_migracion`, nombrando la 0269.
 -- ============================================================================
 
 -- ── 1. Solo sobre la 0262 ────────────────────────────────────────────────────
@@ -67,7 +67,7 @@ begin
   if to_regprocedure('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)') is not null
      or (to_regprocedure('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)') is null
          and to_regprocedure('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)') is null) then
-    raise exception 'La 0267 va después de la 0262: aplica primero db/migrations/0261_invoices_manual.sql y db/migrations/0262_invoices_claim_coverage.sql.';
+    raise exception 'La 0269 va después de la 0262: aplica primero db/migrations/0261_invoices_manual.sql y db/migrations/0262_invoices_claim_coverage.sql.';
   end if;
 end $$;
 
@@ -264,7 +264,7 @@ begin
   end if;
   -- Pagado antes de «Emitir desde»: no, salvo lo que pide una persona con
   -- «Emitir esta boleta» después de revisar en SimpleFact que el pedido no
-  -- tiene boleta (0267, owner 15-10-2026): una fila real, con el RUC en Manual,
+  -- tiene boleta (0269, owner 15-10-2026): una fila real, con el RUC en Manual,
   -- quién la pidió, «Emitir desde» ya llegado y las dos fechas del 01/10/2026
   -- 00:00 (hora de Lima) en adelante. Más atrás las boletas se emitían a mano
   -- y no se sabe cuál tiene la suya. Con «Emitir desde» en el futuro (Ajustes
@@ -341,7 +341,7 @@ begin
     return jsonb_build_object('reason', 'tope');
   end if;
 
-  -- La fila de lo pagado antes de «Emitir desde» lo dice en su base (0267):
+  -- La fila de lo pagado antes de «Emitir desde» lo dice en su base (0269):
   -- quien la mire sabe que salió por la excepción, después de que una persona
   -- revisó SimpleFact.
   insert into order_invoices (
