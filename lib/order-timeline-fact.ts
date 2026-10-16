@@ -95,6 +95,8 @@ const POR_KIND: Record<string, TimelineFact> = {
   dispatch_programmed: consulta("programado"),
   dispatch_program_cleared: consulta("programado"),
   dispatch_program_overridden: consulta("programado"),
+  dispatch_date_set: consulta("programado"),
+  dispatch_date_cleared: consulta("programado"),
 
   // Despacho (índigo): el paquete sale de nuestras manos.
   swayp_desde_por_confirmar: hito("despacho", "por_despachar"),

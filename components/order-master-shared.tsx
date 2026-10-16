@@ -705,6 +705,9 @@ export const TIMELINE_LABEL: Record<string, string> = {
   dispatch_programmed: "Salida programada",
   dispatch_program_cleared: "Salida programada quitada",
   dispatch_program_overridden: "Salió otro día que el programado",
+  // «Programar envío» (MOM §6.2): la fecha acordada antes de tener guía.
+  dispatch_date_set: "Envío programado",
+  dispatch_date_cleared: "Programación de envío quitada",
   dispatch_route_assigned: "Asignado a la caja del motorizado",
   dispatch_route_reassigned: "Movido a la caja de otro motorizado",
   package_ready: "Paquete armado en almacén",

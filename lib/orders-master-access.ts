@@ -135,7 +135,7 @@ export class OrderMasterReadError extends Error {
 const MASTER_COLUMNS =
   "id,store_id,order_id,order_name,order_created_at,customer_name," +
   "customer_phone,region,province,district," +
-  "coverage,swayp_availability,sales_channel,dispatched_with," +
+  "coverage,swayp_availability,sales_channel,dispatched_with,dispatch_scheduled_on," +
   "shipping_mode,order_total,general_status," +
   "operational_status,macro_stage,macro_substage,macro_reasons,macro_operation,macro_version,macro_since," +
   "confirmation_active,confirmation_day_count,confirmation_last_contact_at," +
@@ -1174,6 +1174,14 @@ export function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T 
   if (f.swaypAvailability.size) q = q.in("swayp_availability", [...f.swaypAvailability]);
   if (f.salesChannels.size) q = q.in("sales_channel", [...f.salesChannels]);
   if (f.dispatchedWith.size) q = q.overlaps("dispatched_with", [...f.dispatchedWith]);
+  // «Programar envío» (0267): el día se compara contra hoy en Lima.
+  if (f.dispatchDate) {
+    const today = limaTodayKey(now);
+    if (f.dispatchDate === "sin") q = q.is("dispatch_scheduled_on", null);
+    else if (f.dispatchDate === "programado") q = q.gt("dispatch_scheduled_on", today);
+    else if (f.dispatchDate === "hoy") q = q.eq("dispatch_scheduled_on", today);
+    else q = q.lt("dispatch_scheduled_on", today);
+  }
   if (f.pickupStates.size) q = q.in("pickup_state", [...f.pickupStates]);
 
   // Días con gestión. La columna es un entero y el filtro viaja por la URL como
