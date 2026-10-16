@@ -37,6 +37,8 @@ import { env } from "@/lib/env";
 import { dispatchFallsOnSunday, expectedDispatchDate } from "@/lib/aliclik-dispatch-date";
 import { getStoreCreds } from "@/lib/ingest";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { resolveEmails } from "@/lib/productivity";
+import { guideCreatorPhrase } from "@/lib/guide-note";
 import {
   getOrderConfirmationBrief,
   getOrderMasterDetail,
@@ -1157,6 +1159,7 @@ export async function createAliclikGuideFor(
       .maybeSingle();
     const leadId = (lead as { id: string } | null)?.id;
     if (leadId) {
+      const creator = ctx.userId ? (await resolveEmails([ctx.userId])).get(ctx.userId) ?? null : null;
       await admin.from("lead_calls").insert({
         lead_id: leadId,
         store_id: ctx.storeId,
@@ -1166,15 +1169,16 @@ export async function createAliclikGuideFor(
         // la cerró y se la daría a quien creó la guía — que puede ser otra
         // persona, o la misma en lote horas después. Quién creó la guía consta
         // en `order_events`, que es la auditoría de verdad; esto es solo la
-        // anotación en el historial del lead.
+        // anotación en el historial del lead. Por eso el nombre va en el TEXTO
+        // (`guideCreatorPhrase`): sin él la nota se leía como «Automático».
         vendedora: null,
         kind: "system",
         new_status: null,
         note:
-          `Guía de Aliclik creada · ${orderNumber} · pedido ${ctx.row.order_name ?? "—"} · ` +
+          `Guía de Aliclik creada ${guideCreatorPhrase(creator, Boolean(origin))} · ${orderNumber} · ` +
+          `pedido ${ctx.row.order_name ?? "—"} · ` +
           `cobrar S/ ${(preview.collectTotal ?? 0).toFixed(2)} · ` +
-          `${courierBlock.transportName ?? "courier"} S/ ${courierBlock.deliveryCost}` +
-          (origin ? " · automática, envío programado" : ""),
+          `${courierBlock.transportName ?? "courier"} S/ ${courierBlock.deliveryCost}`,
       });
     }
   } catch {
