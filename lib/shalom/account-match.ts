@@ -288,6 +288,8 @@ export interface KnownApiGuide {
    * cuentas.
    */
   pickupCode?: string | null;
+  /** El código de la guía que devolvió la API al crearla (`shipments.shalom_codigo`). */
+  codigo?: string | null;
 }
 
 export interface FieldCheck {
@@ -301,6 +303,8 @@ export interface ListingContract {
   telefono: FieldCheck;
   /** ¿El `pickup_code` del listado es la clave de recojo? Solo cuentas, nunca claves. */
   clave: FieldCheck;
+  /** ¿El `codigo` del listado es el código que pide el rastreo? (15-10-2026) */
+  codigo: FieldCheck;
 }
 
 /** Con menos guías conocidas que esto no hay muestra para fiarse. */
@@ -334,6 +338,10 @@ function fieldCheck(pairs: [string | null, string | null][]): FieldCheck {
  * porque la eligió y la mandó al crearla. `listingKeys` son las claves del
  * listado por guía (`listingPickupCodes`), y `known[].pickupCode` las que
  * Kapta guardó. Solo vuelven cuentas: ninguna clave sale de aquí.
+ *
+ * Y el código (15-10-2026): el de esas guías lo devolvió la API al crearlas,
+ * así que también se sabe. Si el `codigo` del listado es ese mismo campo, se
+ * puede usar para corregir el de las guías manuales (`planCodeFixes`).
  */
 export function checkListingContract(
   guides: readonly ShalomListingGuide[],
@@ -345,14 +353,21 @@ export function checkListingContract(
   const docs: [string | null, string | null][] = [];
   const phones: [string | null, string | null][] = [];
   const keys: [string | null, string | null][] = [];
+  const codes: [string | null, string | null][] = [];
   for (const k of known) {
     const g = byGuia.get(guideCodeKey(k.guideCode));
     if (!g) continue;
     docs.push([k.document, g.document]);
     phones.push([k.phone, g.phone]);
     keys.push([(k.pickupCode ?? "").trim() || null, listingKeys.get(g.guia) ?? null]);
+    codes.push([codigoKey(k.codigo), codigoKey(g.codigo)]);
   }
-  return { documento: fieldCheck(docs), telefono: fieldCheck(phones), clave: fieldCheck(keys) };
+  return {
+    documento: fieldCheck(docs),
+    telefono: fieldCheck(phones),
+    clave: fieldCheck(keys),
+    codigo: fieldCheck(codes),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -475,6 +490,110 @@ export function planKeyBackfill(
     out.push({ orderId: c.orderId, storeId: c.storeId, shipmentId: c.shipmentId, guideCode, pickupCode });
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// El código de la guía manual (15-10-2026)
+// ---------------------------------------------------------------------------
+//
+// El rastreo pide número Y código (client.ts, `trackBy`): con el código mal,
+// Shalom rechaza la guía y nada se mueve. En la guía hecha a mano el código lo
+// teclea una persona. #KP137651 entró como V929 y el ticket decía D7MN: del
+// 01-10 al 15-10-2026 la guía no tuvo rastreo, la clienta no recibió ningún
+// aviso y el paquete llevaba ya horas en la agencia cuando se vio.
+//
+// El listado trae el `codigo` de cada guía. Si en ESTA lectura coincide con el
+// de las guías de la API (`checkListingContract`, bloque `codigo`), el del
+// listado manda sobre el tecleado. Y una guía manual que el listado no trae,
+// estando el listado entero para su fecha, es casi seguro un número mal
+// puesto: eso no se adivina, se avisa.
+
+/**
+ * El código como lo compara el rastreo: sin espacios y en mayúsculas, con la
+ * misma forma que acepta «Ya la creé en Shalom Pro» (lib/shalom/manual.ts).
+ */
+export function codigoKey(raw: unknown): string | null {
+  const v = String(raw ?? "").trim().replace(/\s+/g, "").toUpperCase();
+  return v && v.length <= 32 && /^[A-Z0-9._/-]+$/.test(v) ? v : null;
+}
+
+/**
+ * El código del listado por número de guía. Si la misma guía sale dos veces
+ * con códigos distintos, no se queda con ninguno: no se elige.
+ */
+export function listingCodes(guides: readonly ShalomListingGuide[]): Map<string, string> {
+  const seen = new Map<string, Set<string | null>>();
+  for (const g of guides) {
+    const codes = seen.get(g.guia) ?? new Set<string | null>();
+    codes.add(codigoKey(g.codigo));
+    seen.set(g.guia, codes);
+  }
+  const out = new Map<string, string>();
+  for (const [guia, codes] of seen) {
+    const [only] = [...codes];
+    if (codes.size === 1 && only) out.set(guia, only);
+  }
+  return out;
+}
+
+/** Una salida de Shalom hecha a mano, viva, por la que el rastreo nunca contestó. */
+export interface CodeCheckCandidate {
+  orderId: string;
+  storeId: string;
+  shipmentId: string;
+  guideCode: string;
+  /** Como está guardado (`shipments.shalom_codigo`), sin normalizar. */
+  codigo: string | null;
+  /** Cuándo se registró la salida en Kapta. */
+  createdAt: string | null;
+}
+
+export interface CodeFix<C extends CodeCheckCandidate = CodeCheckCandidate> {
+  candidate: C;
+  /** El código del listado, normalizado. */
+  codigo: string;
+}
+
+export interface CodeCheckPlan<C extends CodeCheckCandidate = CodeCheckCandidate> {
+  /** Guías cuyo código guardado no es el del listado. */
+  fixes: CodeFix<C>[];
+  /** Guías que el listado, entero para su fecha, no trae: número a revisar. */
+  missing: C[];
+}
+
+/**
+ * Qué guías manuales que el rastreo no contesta tienen el código cambiado, y
+ * cuáles no salen en el listado. PURA.
+ *
+ *   - El código se corrige solo con `trusted` —el `codigo` del listado se
+ *     comprobó en esta lectura— y si el del listado es uno solo y válido.
+ *   - «No sale» se dice solo de la guía registrada desde el día siguiente a
+ *     `fromIso`: antes, el listado no la cubre y su ausencia no dice nada.
+ *     Quien llama solo pide el plan con la cobertura del listado comprobada.
+ */
+export function planCodeFixes<C extends CodeCheckCandidate>(
+  candidates: readonly C[],
+  guides: readonly ShalomListingGuide[],
+  opts: { trusted: boolean; fromIso: string },
+): CodeCheckPlan<C> {
+  const inListing = new Set(guides.map((g) => g.guia));
+  const codes = listingCodes(guides);
+  const coveredFrom = Date.parse(opts.fromIso) + DAY_MS;
+  const fixes: CodeFix<C>[] = [];
+  const missing: C[] = [];
+  for (const c of candidates) {
+    const guia = guideCodeKey(c.guideCode);
+    if (!guia) continue;
+    if (!inListing.has(guia)) {
+      const t = Date.parse(c.createdAt ?? "");
+      if (Number.isFinite(t) && Number.isFinite(coveredFrom) && t >= coveredFrom) missing.push(c);
+      continue;
+    }
+    const codigo = codes.get(guia);
+    if (!opts.trusted || !codigo || codigo === codigoKey(c.codigo)) continue;
+    fixes.push({ candidate: c, codigo });
+  }
+  return { fixes, missing };
 }
 
 export interface ListingCoverage {

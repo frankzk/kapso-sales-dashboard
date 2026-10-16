@@ -632,6 +632,11 @@ export const TIMELINE_LABEL: Record<string, string> = {
   guide_registered: "Guía registrada",
   guide_created: "Guía creada",
   guide_cancelled: "Guía anulada",
+  // Se completó o corrigió un dato de la guía (el código, por ejemplo). La
+  // nota dice cuál y de dónde salió.
+  guide_link_updated: "Guía actualizada",
+  // Cotejar Shalom no encontró la guía en el listado de la cuenta (MOM §12).
+  guide_check: "Guía revisada con Shalom",
   // MOM §12: la clave quedó guardada (a mano o del listado de Shalom Pro). No
   // es darla: eso es `key_shared`.
   key_registered: "Clave de recojo registrada",

@@ -531,6 +531,16 @@ export function shalomRetryDelay(err: unknown, attempt: number): number | null {
 }
 
 /**
+ * ¿Se acabó el cupo de la API key? 60 llamadas por minuto, compartidas por
+ * todas las tiendas y por el panel. Quien recorre muchas guías tiene que
+ * pararse aquí: seguir pidiendo solo gasta el cupo que el panel necesita para
+ * crear guías, y todo lo que pida en ese minuto también va a fallar.
+ */
+export function isShalomRateLimited(err: unknown): boolean {
+  return err instanceof ShalomApiError && (err.status === 429 || err.code === "rate_limited");
+}
+
+/**
  * Traduce un fallo de la API a algo accionable para el operador. Los códigos
  * salen de la tabla de errores de la documentación.
  */

@@ -64,6 +64,9 @@ export async function GET(req: NextRequest) {
     sinCotejar: cotejo.sinCotejar,
     // Solo la cuenta: las claves nunca salen en la respuesta ni en la bitácora.
     clavesRellenadas: cotejo.clavesRellenadas,
+    // El código de las guías manuales que el rastreo no contesta (MOM §12).
+    codigosCorregidos: cotejo.codigosCorregidos,
+    guiasDesconocidas: cotejo.guiasDesconocidas,
     cuentas: cotejo.cuentas,
     detalle: cotejo.detalle,
     errores: cotejo.errores,
