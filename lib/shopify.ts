@@ -592,8 +592,10 @@ export function buildKapsoOrdersSearchQuery(
  * Convive con `buildKapsoOrdersSearchQuery` a propósito: los KPIs (ventas,
  * embudo, rollups) siguen contando únicamente `tag:kapso`, tanto en
  * `recompute_daily_rollups` como en `lib/access.ts:getOrders`, así que traer el
- * resto de pedidos no mueve ninguna métrica histórica. Cada pasada lleva su
- * propio cursor en `sync_state` (`shopify` vs `shopify_all`).
+ * resto de pedidos no mueve esas métricas. La cabecera del tablero, «Canal de
+ * cierre» y «Conversión por fuente» sí leen todos los pedidos que trae esta
+ * pasada (0259 y 0268, MOM §17.3 y §17.4). Cada pasada lleva su propio cursor
+ * en `sync_state` (`shopify` vs `shopify_all`).
  */
 export function buildAllOrdersSearchQuery(
   updatedAtCursorIso?: string | null,
@@ -1112,6 +1114,27 @@ export async function completeDraftOrder(
     orderName: draft?.order?.name ?? null,
     status: normalizeDraftStatus(draft?.status),
   };
+}
+
+const DRAFT_ORDER_ORDER_QUERY = /* GraphQL */ `
+  query DraftOrderOrder($id: ID!) {
+    draftOrder(id: $id) { id order { id name } }
+  }
+`;
+
+/**
+ * El pedido REAL de un borrador ya completado. Cuando `draftOrderComplete`
+ * responde «ya completado» —la clienta lo cerró segundos antes, o un primer
+ * intento sí llegó— no trae el pedido, y sin él la venta quedaba en una fila
+ * `draft-<id>` al lado del pedido verdadero: dos filas para una venta, y el
+ * canal de cierre (MOM §17.3) la contaba dos veces. null si no hay pedido.
+ */
+export async function getDraftOrderOrder(
+  opts: ShopifyClientOpts & { gid: string },
+): Promise<{ orderGid: string; orderName: string | null } | null> {
+  const data = await shopifyGraphQL<any>({ ...opts, query: DRAFT_ORDER_ORDER_QUERY, variables: { id: opts.gid } });
+  const order = data?.draftOrder?.order;
+  return order?.id ? { orderGid: String(order.id), orderName: order.name ?? null } : null;
 }
 
 // ---------------------------------------------------------------------------

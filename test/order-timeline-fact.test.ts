@@ -66,7 +66,18 @@ describe("timelineFact: los hitos de la Actividad (13-10-2026)", () => {
   });
 
   it("lo de rutina lleva icono pero va en gris", () => {
-    for (const kind of ["comment", "key_view", "key_shared", "whatsapp_template", "package_ready", "stop_reported", "coverage_changed"]) {
+    for (const kind of [
+      "comment",
+      "key_view",
+      "key_shared",
+      "whatsapp_template",
+      "package_ready",
+      "stop_reported",
+      "coverage_changed",
+      // Cotejar Shalom corrige el código o avisa de una guía que no está (15-10-2026).
+      "guide_link_updated",
+      "guide_check",
+    ]) {
       const f = timelineFact(e(kind));
       expect(f.icon, kind).not.toBeNull();
       expect(f.stage, kind).toBeNull();
@@ -114,6 +125,8 @@ describe("la ficha pinta el marcador y las etiquetas", () => {
       "confirmation_cancellation_task_created",
       "courier_report",
       "lead_message",
+      "guide_link_updated",
+      "guide_check",
     ]) {
       expect(shared, kind).toMatch(new RegExp(`\\n  ${kind}: "`));
     }

@@ -1,6 +1,6 @@
 // «Cotejar Shalom» (MOM §12): vincula a su pedido las guías que una persona
-// creó a mano en pro.shalom.pe y nunca registró en Kapta. Lo corre el cron de
-// Shalom (`/api/cron/shalom-reconcile`) cuatro veces al día.
+// creó a mano en pro.shalom.pe y nunca registró en Kapta. Lo corre su propio
+// cron (`/api/cron/shalom-cotejo`) cuatro veces al día.
 //
 // Qué es una pareja segura lo decide lib/shalom/account-match.ts, puro y con
 // pruebas. Aquí solo está el viaje: leer los candidatos, bajar el listado de la
@@ -15,6 +15,13 @@
 // sin clave se les pone la suya (paso 3b). Las claves se descifran y se cifran
 // aquí, en el servidor, y NUNCA van al informe, a la bitácora ni a la línea de
 // tiempo: de ellas solo salen cuentas.
+//
+// EL CÓDIGO DE LA GUÍA MANUAL (15-10-2026). El rastreo pide número y código, y
+// el código de una guía hecha a mano lo teclea una persona: #KP137651 entró
+// como V929 y era D7MN, y estuvo dos semanas sin rastreo ni avisos. Si el
+// `codigo` del listado se comprueba contra las guías de la API, corrige el de
+// las manuales que el rastreo nunca contestó (paso 3c); a la que el listado ni
+// siquiera trae le deja un aviso en la línea de tiempo, una sola vez.
 //
 // SERVER-ONLY: usa el cliente admin, la sesión de Shalom Pro de la tienda y la
 // clave de cifrado.
@@ -35,10 +42,13 @@ import {
   listingFromDate,
   listingPickupCodes,
   matchShalomListing,
+  planCodeFixes,
   planKeyBackfill,
   readListingGuide,
   usableListingKey,
   WINDOW_AFTER_DAYS,
+  type CodeCheckCandidate,
+  type CodeFix,
   type CotejoShalomOrder,
   type KeyBackfill,
   type KeyBackfillCandidate,
@@ -112,6 +122,39 @@ export const LISTING_KEY_NOTE = "Clave de recojo tomada del listado de Shalom Pr
  */
 export const KEY_REGISTERED_EVENT = "key_registered";
 
+/** El código de las guías manuales que el rastreo no contesta (15-10-2026). */
+export interface CotejoCodesReport {
+  /** Guías manuales vivas por las que el rastreo nunca contestó. */
+  sinRespuesta: number;
+  /** Las que tenían otro código que el del listado y se corrigieron. */
+  corregidas: string[];
+  /** Las que el listado, entero para su fecha, no trae: el número a revisar. */
+  desconocidas: string[];
+  /** Por qué no se corrigió ninguna (el código del listado no se comprobó…). */
+  motivo: string | null;
+}
+
+/** Nota de la línea de tiempo cuando el código sale del listado. */
+export function listingCodeNote(guia: string, antes: string | null, despues: string): string {
+  return (
+    `Código de la guía Shalom ${guia} corregido de ${antes ?? "(vacío)"} a ${despues}: así figura en el listado de ` +
+    "Shalom Pro (Cotejar Shalom). Con el código anterior el rastreo de Shalom no contestaba."
+  );
+}
+
+/**
+ * El hecho de la línea de tiempo cuando el listado no trae la guía. Uno por
+ * salida: se escribe la primera vez y no se repite en cada pasada.
+ */
+export const GUIDE_CHECK_EVENT = "guide_check";
+
+export function unknownGuideNote(guia: string): string {
+  return (
+    `Cotejar Shalom: la guía ${guia} no aparece en el listado de la cuenta de Shalom Pro, que sí trae las demás ` +
+    "guías de esas fechas. Así Shalom no la rastrea y la clienta no recibe avisos: revisa el número con el ticket de Shalom."
+  );
+}
+
 export interface CotejoAccountReport {
   tiendas: string[];
   candidatos: number;
@@ -123,6 +166,7 @@ export interface CotejoAccountReport {
   /** El `id` del listado se comprobó como OSE ID: la guía entra con su ticket. */
   oseVerificado: boolean;
   claves: CotejoKeysReport;
+  codigos: CotejoCodesReport;
   /** Por qué esta cuenta no se coteja (listado incompleto, error de Shalom…). */
   motivo: string | null;
 }
@@ -138,6 +182,10 @@ export interface ShalomCotejoReport {
   sinCotejar: number;
   /** Guías manuales vivas que recibieron su clave de recojo del listado. */
   clavesRellenadas: number;
+  /** Guías manuales cuyo código se corrigió con el del listado. */
+  codigosCorregidos: number;
+  /** Guías manuales que el listado no trae: el número a revisar. */
+  guiasDesconocidas: number;
   cuentas: CotejoAccountReport[];
   detalle: CotejoDetail[];
   errores: string[];
@@ -213,9 +261,13 @@ async function loadCandidates(admin: SupabaseClient, errores: string[]): Promise
 }
 
 /** Una guía manual viva de Kapta, con lo que hace falta para darle su clave. */
-interface ManualGuideRow extends KeyBackfillCandidate {
+interface ManualGuideRow extends KeyBackfillCandidate, CodeCheckCandidate {
   /** Fecha del pedido: el listado se pide desde antes de él. */
   orderCreatedAt: string | null;
+  /** El rastreo nunca contestó por esta guía (`last_report_at` vacío). */
+  unanswered: boolean;
+  /** `shipments.shalom_raw`, para anotar el código anterior sin perder lo demás. */
+  raw: Record<string, unknown> | null;
 }
 
 /**
@@ -227,7 +279,9 @@ async function loadManualGuides(admin: SupabaseClient, errores: string[]): Promi
   const since = new Date(Date.now() - LOOKBACK_DAYS * DAY_MS).toISOString();
   const { data, error } = await admin
     .from("shipments")
-    .select("id,order_id,store_id,guide_code,created_via,delivery_status")
+    .select(
+      "id,order_id,store_id,guide_code,created_via,delivery_status,shalom_codigo,last_report_at,created_at,shalom_raw",
+    )
     .eq("courier", "shalom")
     .eq("created_via", SHALOM_ORIGIN.manual)
     .in("delivery_status", [...ACTIVE_GUIDE_STATUSES])
@@ -246,6 +300,10 @@ async function loadManualGuides(admin: SupabaseClient, errores: string[]): Promi
     guide_code: string;
     created_via: string | null;
     delivery_status: string;
+    shalom_codigo: string | null;
+    last_report_at: string | null;
+    created_at: string | null;
+    shalom_raw: Record<string, unknown> | null;
   }[];
   if (!rows.length) return [];
 
@@ -274,6 +332,10 @@ async function loadManualGuides(admin: SupabaseClient, errores: string[]): Promi
     live: ACTIVE_GUIDE_STATUSES.has(r.delivery_status),
     hasKey: withKey.has(r.order_id),
     orderCreatedAt: createdAt.get(r.order_id) ?? null,
+    codigo: r.shalom_codigo,
+    createdAt: r.created_at,
+    unanswered: !r.last_report_at,
+    raw: r.shalom_raw,
   }));
 }
 
@@ -361,6 +423,104 @@ async function fillListingKeys(
 }
 
 /**
+ * Pone a cada guía el código del listado. Solo si nadie lo cambió entre la
+ * lectura y esto: la escritura exige el código que se leyó. Devuelve las guías
+ * corregidas.
+ */
+async function fixListingCodes(
+  admin: SupabaseClient,
+  fixes: readonly CodeFix<ManualGuideRow>[],
+  errores: string[],
+): Promise<string[]> {
+  const fixed: string[] = [];
+  for (const { candidate: m, codigo } of fixes) {
+    const now = new Date().toISOString();
+    const update = admin
+      .from("shipments")
+      .update({
+        shalom_codigo: codigo,
+        shalom_raw: {
+          ...(m.raw ?? {}),
+          codigo,
+          codigo_anterior: m.codigo,
+          codigo_corregido_at: now,
+          codigo_corregido_por: COTEJAR_SHALOM,
+        },
+      })
+      .eq("id", m.shipmentId);
+    const guarded = m.codigo == null ? update.is("shalom_codigo", null) : update.eq("shalom_codigo", m.codigo);
+    const { data, error } = await guarded.select("id");
+    if (error) {
+      errores.push(`código de la guía ${m.guideCode}: ${error.message}`);
+      continue;
+    }
+    if (!((data ?? []) as unknown[]).length) continue;
+    fixed.push(m.guideCode);
+    await admin.from("order_events").insert({
+      store_id: m.storeId,
+      order_id: m.orderId,
+      kind: "guide_link_updated",
+      occurred_at: now,
+      actor: null,
+      source: "shalom",
+      courier: "shalom",
+      guide_code: m.guideCode,
+      shipment_id: m.shipmentId,
+      note: listingCodeNote(m.guideCode, m.codigo, codigo),
+      payload: {
+        registered_by: COTEJAR_SHALOM,
+        origen: "listado_shalom_pro",
+        campo: "shalom_codigo",
+        antes: m.codigo,
+        despues: codigo,
+      },
+    });
+  }
+  return fixed;
+}
+
+/**
+ * Avisa en la línea de tiempo de cada guía que el listado no trae, la primera
+ * vez: una salida que ya tiene su `guide_check` no recibe otro. Devuelve todas
+ * las del plan, avisadas antes o ahora.
+ */
+async function flagUnknownGuides(
+  admin: SupabaseClient,
+  missing: readonly ManualGuideRow[],
+  errores: string[],
+): Promise<string[]> {
+  if (!missing.length) return [];
+  const { data, error } = await admin
+    .from("order_events")
+    .select("shipment_id")
+    .eq("kind", GUIDE_CHECK_EVENT)
+    .in("shipment_id", missing.map((m) => m.shipmentId));
+  if (error) {
+    // Sin saber si ya se avisó, no se avisa: repetirlo en cada pasada es ruido.
+    errores.push(`avisos de guías desconocidas: ${error.message}`);
+    return missing.map((m) => m.guideCode);
+  }
+  const flagged = new Set(((data ?? []) as { shipment_id: string | null }[]).map((r) => r.shipment_id));
+  for (const m of missing) {
+    if (flagged.has(m.shipmentId)) continue;
+    await admin.from("order_events").insert({
+      store_id: m.storeId,
+      order_id: m.orderId,
+      kind: GUIDE_CHECK_EVENT,
+      occurred_at: new Date().toISOString(),
+      actor: null,
+      source: "shalom",
+      courier: "shalom",
+      guide_code: m.guideCode,
+      shipment_id: m.shipmentId,
+      note: unknownGuideNote(m.guideCode),
+      payload: { registered_by: COTEJAR_SHALOM, origen: "listado_shalom_pro", motivo: "guia_no_esta_en_el_listado" },
+    });
+  }
+  return missing.map((m) => m.guideCode);
+}
+
+/**
  * El documento apuntado para el envío de cada pedido. Un fallo de lectura
  * SUBE: un DNI que no se leyó haría pasar por libre a quien podía discutir
  * la pareja.
@@ -381,6 +541,7 @@ async function loadDocuments(admin: SupabaseClient, orderIds: readonly string[])
 interface KnownRow {
   guide_code: string;
   shalom_ose_id: number | null;
+  shalom_codigo: string | null;
   order_id: string | null;
   created_at: string;
 }
@@ -391,7 +552,7 @@ async function loadKnownApiGuides(admin: SupabaseClient, storeIds: string[], fro
   for (let page = 0; page < 10; page += 1) {
     const { data, error } = await admin
       .from("shipments")
-      .select("guide_code,shalom_ose_id,order_id,created_at")
+      .select("guide_code,shalom_ose_id,shalom_codigo,order_id,created_at")
       .in("store_id", storeIds)
       .eq("courier", "shalom")
       .eq("created_via", SHALOM_ORIGIN.api)
@@ -559,8 +720,8 @@ function pushDetail(report: ShalomCotejoReport, d: CotejoDetail): void {
 
 /**
  * Una pasada de Cotejar Shalom. Barata cuando no hay nada que buscar —ningún
- * candidato y ninguna guía manual viva sin clave—: dos consultas y vuelve, sin
- * llamar a Shalom.
+ * candidato, ninguna guía manual viva sin clave y ninguna que el rastreo no
+ * conteste—: dos consultas y vuelve, sin llamar a Shalom.
  *
  * @param deadlineMs  hora límite (epoch ms) para terminar de bajar el listado.
  *                    Un listado a medias no vincula nada.
@@ -577,6 +738,8 @@ export async function cotejarShalom(
     porTope: 0,
     sinCotejar: 0,
     clavesRellenadas: 0,
+    codigosCorregidos: 0,
+    guiasDesconocidas: 0,
     cuentas: [],
     detalle: [],
     errores: [],
@@ -585,7 +748,11 @@ export async function cotejarShalom(
   report.candidatos = candidates.length;
   const manual = await loadManualGuides(admin, report.errores);
   const keyless = (m: ManualGuideRow) => !m.hasKey;
-  if (!candidates.length && !manual.some(keyless)) return report;
+  // Una guía recién registrada todavía no tuvo pasada del rastreo: se le da el
+  // mismo margen que a la cobertura antes de revisarle el código.
+  const codeLag = Date.now() - COVERAGE_LAG_MS;
+  const unanswered = (m: ManualGuideRow) => m.unanswered && Date.parse(m.createdAt ?? "") <= codeLag;
+  if (!candidates.length && !manual.some(keyless) && !manual.some(unanswered)) return report;
 
   const { groups, sinCuenta } = await groupByAccount(admin, candidates, manual, report.errores);
   report.sinCotejar += sinCuenta.length;
@@ -593,10 +760,16 @@ export async function cotejarShalom(
 
   for (const group of groups) {
     const waitingKey = group.manual.filter(keyless);
-    // Una cuenta sin candidatos ni claves que poner no se lee: el listado cuesta.
-    if (!group.candidates.length && !waitingKey.length) continue;
+    const waitingCode = group.manual.filter(unanswered);
+    // Una cuenta sin candidatos, ni claves que poner, ni códigos que revisar
+    // no se lee: el listado cuesta.
+    if (!group.candidates.length && !waitingKey.length && !waitingCode.length) continue;
     const oldest = Math.min(
-      ...[...group.candidates.map((c) => c.order_created_at), ...waitingKey.map((m) => m.orderCreatedAt)]
+      ...[
+        ...group.candidates.map((c) => c.order_created_at),
+        ...waitingKey.map((m) => m.orderCreatedAt),
+        ...waitingCode.map((m) => m.orderCreatedAt),
+      ]
         .map((iso) => Date.parse(iso ?? ""))
         .filter(Number.isFinite),
     );
@@ -612,6 +785,7 @@ export async function cotejarShalom(
       contrato: null,
       oseVerificado: false,
       claves: { sinClave: waitingKey.length, rellenadas: 0, motivo: null },
+      codigos: { sinRespuesta: waitingCode.length, corregidas: [], desconocidas: [], motivo: null },
       motivo: null,
     };
     report.cuentas.push(account);
@@ -677,6 +851,7 @@ export async function cotejarShalom(
         document: sampleDocs.get(k.order_id as string) ?? null,
         phone: samplePhones.get(k.order_id as string) ?? null,
         pickupCode: sampleKeys.get(k.order_id as string) ?? null,
+        codigo: k.shalom_codigo,
       }));
       const listingKeys = listingPickupCodes(collected.orders);
       account.contrato = checkListingContract(guides, knownReceivers, listingKeys);
@@ -695,6 +870,23 @@ export async function cotejarShalom(
           account.claves.motivo =
             `la clave del listado no se comprobó con las guías creadas por API (coinciden ${c.coinciden} de ${c.comparadas}; ` +
             `hacen falta ${CONTRACT_MIN_COMPARED} y nueve de cada diez): no se toma ninguna clave`;
+        }
+      }
+
+      // 3c. El código de las guías manuales que el rastreo no contesta. Va por
+      // número de guía, como la clave: no depende del destinatario.
+      if (waitingCode.length) {
+        const codeTrusted = account.contrato.codigo.confiable;
+        const plan = planCodeFixes(waitingCode, guides, { trusted: codeTrusted, fromIso });
+        account.codigos.corregidas = await fixListingCodes(admin, plan.fixes, report.errores);
+        account.codigos.desconocidas = await flagUnknownGuides(admin, plan.missing, report.errores);
+        report.codigosCorregidos += account.codigos.corregidas.length;
+        report.guiasDesconocidas += account.codigos.desconocidas.length;
+        if (!codeTrusted) {
+          const c = account.contrato.codigo;
+          account.codigos.motivo =
+            `el código del listado no se comprobó con las guías creadas por API (coinciden ${c.coinciden} de ${c.comparadas}; ` +
+            `hacen falta ${CONTRACT_MIN_COMPARED} y nueve de cada diez): no se corrige ninguno`;
         }
       }
 

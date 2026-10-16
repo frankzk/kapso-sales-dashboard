@@ -75,6 +75,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
         stores={stores.map((s) => ({ id: s.id, name: s.name, shopify_domain: s.shopify_domain ?? null }))}
         canEdit={!permissions.readOnly}
         canOverride={permissions.can("master.override_status")}
+        canSetStatus={permissions.can("master.set_status")}
         canCreateGuide={permissions.can("aliclik.create_guide")}
         canCreateTandersGuide={permissions.can("tanders.create_guide")}
         canCreateShalomGuide={permissions.can("shalom.create_guide")}

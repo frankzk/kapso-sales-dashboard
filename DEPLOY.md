@@ -161,6 +161,13 @@ roles and the `auth` schema, so it just works.
      `maxDuration`. Si vuelven a fallar, el informe dice por dónde: `orphansHeld`
      explica cada candado que no se soltó y `sweepAgeMinutes` delata un barrido
      que dejó de completarse.
+   - `/api/cron/aliclik-scheduled` — cada hora de 8:00 a 13:00 de Lima
+     (`7 13-18 * * *` UTC). Crea la guía Aliclik de los pedidos de Provincia COD
+     programados para hoy (MOM §6.2), por el mismo camino que el botón y sin
+     levantar excepciones. Lo que falla avisa por Telegram, un mensaje por
+     pedido, al grupo urgente de la tienda o, si no tiene, al del resumen diario.
+     Solo en producción y con `ALICLIK_WRITE_ENABLED=true`; `?dry=1` cotiza y
+     dice qué haría sin crear ni avisar. **Sin migración.**
    - `/api/cron/backup` — daily 08:00 UTC (~03:00 Lima). Snapshots the
      dashboard-native tables (`leads`, `lead_calls`, `shipment_calls`) to CSV in
      the private Supabase Storage bucket `db-backups` (auto-created, keeps the
@@ -369,7 +376,14 @@ neto, canal, cupón) and sanity-check the assignment.
   checkout / histórico, surfaced on purpose).
 - **Closing channel**: Asesora (closed via the dashboard: `venta_manual` /
   `carrito_recuperado`) ▸ Bot asistido (an advisor logged activity on the lead
-  ≤7 días antes del pedido) ▸ Bot.
+  ≤7 días antes del pedido) ▸ Bot. **Solo dentro de los pedidos del bot y por
+  etiquetas**, que la sincronización con Shopify reescribe: aquí «Asesora»
+  queda casi siempre en cero. La tarjeta «Canal de cierre» del Consolidado ya
+  no usa esto desde el 14-10-2026: clasifica TODAS las ventas por
+  `order_sales` (0259, MOM §17.3).
+- **Corrección (14-10-2026, 0268):** desde la 0268 la cabecera del tablero
+  cuenta todas las ventas (MOM §17.4). Este módulo sigue sobre los pedidos del
+  bot: cuadra con el total de esos pedidos, no con la cabecera.
 - **ROAS** on the Meta row = attributed revenue / Meta ad spend for the range
   (live from the Marketing API; shows "—" if Meta isn't connected).
 - Needs **migration 0030** (`discount_codes` on orders + `winback_sends`). Before
@@ -488,12 +502,29 @@ de couriers, intentos y comentarios.
   **Las métricas no se mueven**: `recompute_daily_rollups` y
   `lib/access.ts:getOrders` siguen filtrando por `tag:kapso`, y los rollups y el
   vínculo con el lead solo se disparan para pedidos del bot.
+  **Corrección (14-10-2026): sí se movieron.** Esto suponía que la etiqueta
+  `kapso` que el dashboard añadía en su copia a las ventas de asesora, a los
+  carritos recuperados y a la recompra automática sobreviviría. No sobrevive:
+  la pasada `shopify_all` y el webhook reescriben `tags` con lo de Shopify, y
+  esos pedidos salían del conteo en minutos (1 de 2.916 ventas de asesora la
+  conservaba). Desde el 14-10-2026 ya no se escribe; quién cerró cada venta lo
+  decide `canal_de_cierre` (0259, MOM §17.3). Y desde la 0268 (MOM §17.4) la
+  cabecera, «Ventas por día» y «Por tienda» cuentan todas las ventas con
+  `ventas_por_origen`; `getOrders`, `getRollups` y `recompute_daily_rollups`
+  siguen con `tag:kapso` para los módulos que son del bot y lo dicen.
 - **`ORDERS_SYNC_FROM` acota el histórico** (por defecto `2026-06-01`). La pasada
   nueva solo trae pedidos **creados** a partir de esa fecha, así que no arrastra
   años de pedidos cerrados. Se filtra por `created_at` y no por `updated_at`, para
   que un pedido viejo que alguien edite hoy no vuelva a entrar. Para ampliar el
   histórico basta mover la variable en Vercel y borrar el cursor:
   `delete from sync_state where source = 'shopify_all';`
+  También es el piso de «Canal de cierre» (MOM §17.3), que cuenta desde el más
+  tardío entre esta fecha y el día en que cada tienda empezó a usar Kapta (su
+  primera venta de asesora registrada o, sin ninguna, su primer lead); con
+  varias tiendas, cada una desde su propio día (desde la 0268; antes, desde la
+  que empezó último). Lo mismo vale para la cabecera y «Conversión por fuente»
+  (MOM §17.4). Moverla hacia atrás no amplía nada más allá de ese inicio;
+  adelantarla sí recorta.
 - **El Master se rellena solo.** `runStoreSync` termina con un barrido de
   reconciliación (`reconcileOrderMaster`) que crea o refresca las filas que
   falten, así que no hace falta ningún backfill manual. Las acciones de Repro
@@ -1818,8 +1849,9 @@ vencimiento son lo único que lo acota.
 - **Health**: `curl https://<domain>/api/health` → `{ "ok": true, … }` (public,
   no secrets) confirms the deployment is serving.
 - **Backfill parity**: in Shopify Admin, filter orders by `tag:kapso` for a date
-  range and compare the count with the dashboard's order count for the same
-  range. They should match.
+  range and compare the count with the sum of `ordenes` in «Resumen diario del
+  bot CSV» for the same range. They should match. (Since 0268 the headline
+  «Pedidos» counts ALL orders, MOM §17.4: compare it with the Master instead.)
 - **Webhook**: create a test order in Shopify (or re-trigger a webhook) → it
   appears in the dashboard within seconds; re-delivering it does not duplicate.
 - **Cron**: `curl -H "Authorization: Bearer $CRON_SECRET" https://<domain>/api/cron/sync`
@@ -2635,6 +2667,10 @@ no se borra, así que se cerró lo que podía mandar una que nadie pidió:
    0261: aplica primero db/migrations/0261_invoices_manual.sql.» y no cambia
    nada. **Si alguien vuelve a correr la 0261 después, hay que volver a correr
    la 0262**: la 0261 reescribe el turno sin esta revisión, y nada lo avisa.
+   **Con la 0269 aplicada, lo que se vuelve a correr después de la 0261 es la
+   0269 (no la 0262)**: la 0262 pasaría su guarda y dejaría los dos turnos, el
+   de once y el de doce, y la llamada por nombre del código seguiría fallando
+   (sección «15-10-2026 · 0269», más abajo).
    **Se puede aplicar ya, con el código que hoy está en producción** (con la
    0261 delante): ese código pide el turno con los nueve argumentos por nombre
    y ya manda en `p_basis` si es prepago web y el id de cada pago, que es lo
@@ -2712,7 +2748,10 @@ no se borra, así que se cerró lo que podía mandar una que nadie pidió:
 9. **Manual: las primeras boletas reales, una a una** (MOM §35.7). Pasar el
    RUC a «Manual» en Ajustes. La base lo rechaza sin token, sin «Emitir desde»
    o sin una prueba de conexión que leyó el mismo RUC, y «Emitir desde» se
-   mueve al momento del cambio: nada pagado antes sale. El barrido sigue
+   mueve al momento del cambio: el barrido no emite nada pagado antes. Un
+   pedido pagado desde el 01/10/2026 y antes de ese momento solo sale con
+   «Emitir esta boleta» y la casilla «Revisé en SimpleFact y este pedido no
+   tiene boleta» (sección «15-10-2026 · 0269», más abajo). El barrido sigue
    simulando, nunca le pide a SimpleFact una venta, y concilia lo que quede en
    duda. Antes, la 0262 aplicada (paso 4). Para emitir, en producción —una
    vista previa no emite (paso 5)—: abrir el pedido, panel «Comprobante»,
@@ -2830,6 +2869,127 @@ conexión, también cuando sale de «Emitir esta boleta». Ajustes lo dice en ro
 volver a Real hay que corregir lo que falló (el token o el subdominio) y pulsar
 «Probar conexión» de nuevo. Lo mismo para volver a Manual.
 
+### 15-10-2026 · «Emitir esta boleta» para lo pagado antes de «Emitir desde» (0269, MOM §35)
+
+Decisión del owner (15-10-2026). Con el RUC en «Manual», «Emitir esta boleta»
+también sirve para un pedido pagado **antes** de «Emitir desde», si se pagó
+desde el **01/10/2026 00:00 (hora de Lima)**: el último pago registrado y
+también el primer dinero, la fecha más temprana entre la del comprobante
+(`order_payments.paid_at`, cuándo se movió la plata) y la de registro de cada
+pago validado. Un pago cuyo comprobante dice 29/09 y que entró a Kapta el
+01/10 no pasa. Antes de Kapta las boletas se
+emitían a mano en SimpleFact, y Kapta no sabe si ese pedido ya tiene la suya:
+por eso la confirmación pide marcar «Revisé en SimpleFact y este pedido no
+tiene boleta», y sin esa marca no emite. Una boleta de más es pagar el
+impuesto dos veces. **El barrido nunca va hacia atrás**: en Simulación, en
+Manual y en Real, lo pagado antes de «Emitir desde» sigue en
+`antes_de_inicio`. «Emitir desde» no cambia: Ajustes sigue sin aceptar una
+fecha pasada, y un cambio de modo la sigue moviendo al momento del cambio. Con
+«Emitir desde» en el futuro, nada pagado antes de él sale, ni con el botón. Sin
+variables de entorno nuevas; `MOM_RESOLUTION_VERSION` no cambia.
+
+**En producción ya está aplicada (15-10-2026, editor SQL de Supabase).** Se
+aplicó con el número 0267, antes de que main tomara ese número para
+«Programar envío» (`0267_order_master_dispatch_scheduled_on.sql`); la 0268 es
+«Ventas por origen», así que el archivo pasó a 0269, con el mismo contenido.
+Como se corrió desde el editor, no figura en el historial de migraciones de
+Supabase. Comprobada el mismo día: queda solo el turno de doce argumentos, con
+su cuerpo igual al del archivo y `execute` solo para `service_role`. No hace
+falta volver a correrla.
+
+1. **Migración `0269_invoices_backfill.sql`**, a mano, DESPUÉS de la 0262 y
+   ANTES del código que manda `p_backfill`. Pegar el archivo en el editor SQL
+   de Supabase, que la corre en una transacción (con `psql`:
+   `psql -1 -v ON_ERROR_STOP=1 "$DATABASE_URL" -f db/migrations/0269_invoices_backfill.sql`;
+   sin `-1` hay un instante sin `invoice_claim` entre el `drop` de la firma de
+   once y el `create` de la de doce). Cambia solo `invoice_claim`: borra la
+   firma de once argumentos y crea la de doce, con un argumento nuevo al
+   final, `p_backfill boolean default false`, y el cuerpo de la 0262 tal cual
+   salvo dos cosas:
+   - la fecha: lo pagado antes de «Emitir desde» pasa solo con `p_backfill`,
+     una fila real, el RUC en Manual, quién la pidió (`p_created_by`) y las
+     dos fechas de pago —la del código y la de la base— desde el 01/10/2026
+     00:00 de Lima, y el primer dinero también: la fecha más temprana entre
+     `paid_at` y `registered_at` de los pagos validados (sin ellos, la fecha
+     del pedido). Y solo con «Emitir desde» ya llegado
+     (`v_iss.emit_from <= now()`). Sin «Emitir desde» o sin fecha de pago,
+     `antes_de_inicio`, como siempre;
+   - la fila que sale así lleva en su base `pagado_antes_de_emitir_desde: true`.
+
+   El turno sigue solo para `service_role`. No toca filas, ni triggers, ni otra
+   función, y no toma candados de tablas. Es idempotente: si en alguna base ya
+   se corrió una versión anterior de la 0269 (sin el primer dinero, o sin
+   mirar que «Emitir desde» ya llegó), se vuelve a correr y el turno queda con
+   los dos (`like '%v_first%'` y `like '%v_iss.emit_from <= now()%'`, abajo).
+   **Va después de la 0262**: si sigue el turno de nueve argumentos, o no hay
+   ni el de once ni el de doce, se detiene con «La 0269 va después de la 0262:
+   aplica primero db/migrations/0261_invoices_manual.sql y
+   db/migrations/0262_invoices_claim_coverage.sql.» y no cambia nada. **Si
+   alguien vuelve a correr la 0261 después, hay que volver a correr la 0269**:
+   quedan dos turnos, el de once y el de doce, y la llamada por nombre del
+   código falla por ambigua: no emite ni simula nada hasta volver a correr la
+   0269. La 0262 sola, después de la 0269, se detiene en su guarda y no
+   cambia nada.
+   **Se puede aplicar ya, con el código que hoy está en producción**: ese
+   código pide el turno por nombre, con nueve u once argumentos, y con un solo
+   turno esas llamadas van al de doce con `p_backfill` en falso: hace lo mismo
+   que antes. **Si el código llega antes que la 0269, nada se emite de más y
+   nada se pone rojo**: lo pagado desde «Emitir desde» se emite como siempre
+   (el código no manda `p_backfill` en un pedido normal), y un pedido pagado
+   antes contesta `sin_migracion`, nombrando la 0269, sin reservar ni enviar
+   nada. Aplicarla y volver a pulsar.
+   **Comprobar**, solo lectura:
+   - `select pg_get_function_identity_arguments(oid) from pg_proc where proname = 'invoice_claim' and pronamespace = 'public'::regnamespace;`
+     — una sola fila, que termina en `p_created_by uuid, p_backfill boolean`;
+   - `select to_regprocedure('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)') is null;`
+     tiene que dar `true`: el de once ya no está;
+   - `select pg_get_functiondef('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)'::regprocedure) like '%pagado_antes_de_emitir_desde%';`
+     tiene que dar `true` (y lo mismo con `like '%v_first%'`, el primer
+     dinero, con `like '%v_iss.emit_from <= now()%'`, «Emitir desde» ya
+     llegado, y con `like '%sin_pago_completo%'` y `like '%for share%'`, que
+     trae de la 0262);
+   - `select has_function_privilege('authenticated', 'public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)', 'execute');`
+     tiene que dar `false` (y lo mismo con `anon`; con `service_role`, `true`);
+   - `select ruc, mode, emit_from, checked_ruc, check_error from invoice_issuers;`
+     y `select count(*) from order_invoices;` dicen lo mismo que antes de
+     aplicarla.
+2. **Desplegar** el código. Desde ahí, en un pedido pagado desde el 01/10 y
+   antes de «Emitir desde» (con su primer dinero también desde el 01/10), con
+   el RUC en «Manual», el panel «Comprobante» (y «Emitir» en Ajustes →
+   últimos comprobantes) ofrece «Emitir esta boleta», y la confirmación dice
+   cuándo se pagó, desde cuándo emite el RUC y, si es de otro momento, cuándo
+   se hizo el primer pago. **Antes de marcar la casilla, buscar el pedido en
+   SimpleFact** (por su número, su total y su fecha, desde la del primer
+   pago): si ya tiene boleta, no se emite; se registra con «Ya tiene
+   comprobante». Si el panel se relee con la confirmación abierta y cambia el
+   RUC, el total o las fechas, la confirmación se cierra y la casilla se
+   desmarca: se vuelve a abrir y a revisar. En una vista previa no hay botón,
+   como siempre.
+
+**Qué mirar después**, solo lectura:
+`select order_name, paid_at, mode, status, created_by is not null as con_quien from order_invoices where basis ? 'pagado_antes_de_emitir_desde' order by created_at desc;`
+— cada fila `real`, con `con_quien = true` y `paid_at` desde el 01/10/2026
+05:00 UTC; nada en `emitiendo` por más de unos minutos. Y el primer dinero de
+cada una, también desde el 01/10/2026 05:00 UTC:
+`select i.order_name, min(least(coalesce(p.paid_at, p.registered_at), p.registered_at)) as primer_dinero from order_invoices i join order_payments p on p.order_id = i.order_id and p.validation_status = 'validado' where i.basis ? 'pagado_antes_de_emitir_desde' group by 1 order by 2;`
+Revisar cada una en SimpleFact, como las demás de Manual.
+
+**Antes de subir**: `bash scripts/verify-db.sh` corre
+`scripts/sql/invoices_smoke.sql`, que también corre la 0269 sobre la 0262 (dos
+veces), con la 0261 corrida otra vez después, y su guarda sin la 0262 delante.
+
+**Marcha atrás.** Lo emitido no se borra: ya está en SUNAT, y una boleta que no
+correspondía se anula con nota de crédito en SimpleFact (MOM §35.9). Para que
+nadie más emita hacia atrás basta con no pulsar el botón en esos pedidos, o
+bajar el RUC a «Simulación». No hace falta revertir la 0269: el código
+anterior pide el turno por nombre, sin `p_backfill`, y el de doce lo acepta con
+`p_backfill` en falso. Si aun así se quiere volver al turno de la 0262, en una
+sola transacción:
+`psql -1 -v ON_ERROR_STOP=1 "$DATABASE_URL" -c "drop function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean);" -f db/migrations/0261_invoices_manual.sql -f db/migrations/0262_invoices_claim_coverage.sql`
+(la 0261 recrea el turno de once y la 0262 le pone la revisión del pago).
+Desde ahí, el código nuevo contesta `sin_migracion` en lo pagado antes de
+«Emitir desde», y lo demás sigue igual.
+
 ### 15-10-2026 · Intentos del motorizado propio y filtro de intentos (`mom-v1.27`)
 
 Sin migraciones, variables de entorno ni RPC nuevas. `MOM_RESOLUTION_VERSION`
@@ -2871,6 +3031,185 @@ etapas ni costos.
 - `MOM_RESOLUTION_VERSION` sube a `mom-v1.30`: el cron rellena «Salió con» y
   suma a los intentos de Grupo GF las paradas del cuaderno histórico. No cambia
   etapas ni costos.
+
+### 14-10-2026 · Canal de cierre de todas las ventas (0259, MOM §17.3)
+
+La tarjeta «Canal de cierre» del Consolidado y de la página de cada tienda deja
+de mirar solo los pedidos con `kapso` y clasifica TODAS las ventas por quién
+las cerró: asesora (`order_sales`) > recompra automática > bot de Kapso > bot de
+carritos externo > la clienta sola en la web (EasySell) > otros, con la marca
+«ayudado por asesora». Y «Generar pedido», la captura del carrito recuperado
+sin asesora y la recompra automática dejan de escribir `kapso` /
+`cod_recuperado` / `auto_recompra` en la copia local: registran la fila solo si
+el webhook no la trajo, tal como viene de Shopify.
+
+1. **Migración `0259_canal_de_cierre.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0259_canal_de_cierre.sql`. Crea solo
+   la función de lectura `canal_de_cierre(uuid[], date, date)` (SECURITY
+   INVOKER, ejecutable por `authenticated` y `service_role`). No escribe datos,
+   no toma bloqueos sobre tablas y no lleva `drop`. Medida en producción como
+   el owner, 30 días y dos tiendas: 0,32 s, con los índices que ya existen.
+   **Sin ella el código no se rompe**: la tarjeta vuelve a la vista anterior
+   (solo pedidos del bot) con un aviso de que falta la migración y sin cifra
+   de cabecera («—»), porque ese porcentaje es justo el número equivocado.
+   **Ya aplicada en producción el 14-10-2026** con `apply_migration` (historial
+   `20261014172812 0257_canal_de_cierre`: se aplicó con ese número y el mismo
+   día se renumeró a 0258, porque la integración ya tenía `0257_invoices.sql`,
+   y el 15-10 a 0259, porque llegó `0258_restock_reply_sweep.sql`; la función
+   es la misma y no hay que volver a aplicarla). Comprobado ese día: el cuerpo de la
+   función es idéntico al del archivo (mismo md5), `anon` no la puede ejecutar,
+   y como el owner, con RLS, del 14-09 al 13-10 ve las dos tiendas en 0,27 s con
+   los mismos pedidos por canal que la tabla del MOM §17.3 (solo cambian los
+   que se cancelaron después de medirla).
+2. **Qué cambia en las cifras**:
+   - «Canal de cierre» pasa de «0 % lo cerró una asesora» a la parte real. Con
+     el periodo 14-09 → 13-10-2026: asesora 2.651 pedidos y S/ 481.451 de
+     S/ 1.181.080 en total (≈ 41 %).
+   - Las cifras de arriba (Ingresos, Pedidos, Conversión) siguen siendo solo
+     del bot (§5h; con la 0268, Ingresos, Pedidos y Ticket pasan a todas las
+     ventas y la Conversión sigue siendo del bot, ahora «Conversión del bot»;
+     ver su entrada), pero ya no suben unos minutos con cada venta de asesora: la
+     etiqueta `kapso` que les ponía el botón duraba hasta la siguiente
+     sincronización. Es más correcto; el cambio es pequeño y se nota sobre
+     todo en el día en curso.
+   - La tarjeta cuenta desde que Kapta tiene todos los pedidos
+     (`ORDERS_SYNC_FROM`, 2026-06-01) y las ventas de las asesoras de cada
+     tienda (su primera fila de `order_sales` o, sin ninguna, su primer lead:
+     25-06 y 04-07-2026 en las dos tiendas de hoy). Antes, una venta de asesora
+     caería en «Web» u «Otros». En el Consolidado cuenta desde la tienda que
+     empezó último (hoy, 04-07-2026) y el aviso la nombra (**corrección, mismo
+     día, 0268:** cada tienda cuenta desde su propio día, ver su entrada). Un periodo que empieza
+     antes se cuenta desde ese día y la tarjeta lo dice; uno entero anterior
+     vuelve a la vista de respaldo con su aviso. Una tienda que todavía no usa
+     Kapta queda fuera del conteo, nombrada; si no se puede leer desde cuándo
+     usa Kapta una tienda, la tarjeta muestra el error.
+   - En el panel de «Fuente», el bloque que se llamaba «Canal de cierre» pasa a
+     llamarse «Cierre de los pedidos del bot, por etiquetas» y remite a la
+     tarjeta: es el mismo cálculo de siempre, solo sobre pedidos del bot.
+   - Limitación conocida: un carrito de EasySell que completa el bot de Kapso
+     por WhatsApp cuenta como «Web», porque Shopify no le deja ninguna marca
+     del bot. Para separarlo, el workflow del bot tendría que etiquetar el
+     borrador antes de completarlo (MOM §17.3).
+   - Si al generar el pedido Shopify contesta que el borrador ya estaba
+     completado, la venta se registra sobre el pedido real del borrador y no
+     sobre una fila inventada `draft-<id>`, que la contaba dos veces.
+3. **Qué mirar después**:
+   - la tarjeta muestra «Todas las ventas de la tienda» y su total se parece a
+     los pedidos del Master del mismo periodo, no a los S/ ~100k del bot;
+   - ninguna venta nueva de asesora queda con `kapso` en `orders`:
+     `select count(*) from orders o join order_sales v on v.order_id = o.id where o.created_at > '<hora del despliegue>' and 'kapso' = any(o.tags);`
+     tiene que dar 0, salvo que el borrador reusado ya trajera `kapso` de
+     Shopify;
+   - los pedidos generados desde el drawer conservan sus productos con SKU
+     después del webhook (antes nuestra copia los pisaba con líneas sin id).
+4. **Marcha atrás**: revertir el código basta; la función puede quedarse (es
+   de lectura y nadie más la llama). Si se quiere quitar:
+   `drop function if exists public.canal_de_cierre(uuid[], date, date);`
+
+### 14-10-2026 · Ventas del periodo por origen y conversión por fuente (0268, MOM §17.4)
+
+Las cifras de cabecera (Ingresos, Pedidos, Ticket promedio), «Ventas por día»
+y «Por tienda» dejan de contar solo los pedidos con `kapso` y cuentan TODAS las
+ventas de la tienda, partidas por quién las cerró con la regla de «Canal de
+cierre». «Conversión» pasa a llamarse «Conversión del bot». Nace la tarjeta
+«Conversión por fuente»: de los leads que llegaron en el periodo, cuántos
+compraron en sus primeros 7 días, por fuente. Cada tienda cuenta desde su
+propio día en Kapta, también en «Canal de cierre».
+
+0. **Los dos índices, a mano y PRIMERO**, fuera de una transacción (`psql`
+   en modo normal; `apply_migration` no sirve porque envuelve en transacción),
+   uno por uno:
+   `create index concurrently if not exists leads_store_first_seen_idx on public.leads (store_id, first_seen_at);`
+   `create index concurrently if not exists leads_store_created_sin_first_seen_idx on public.leads (store_id, created_at) where first_seen_at is null;`
+   Un `create index` normal bloquearía las escrituras de `leads` mientras se
+   construye. La migración los vuelve a pedir con `if not exists`, que entonces
+   no los construye, pero toma por un instante un bloqueo de escritura sobre
+   `leads`; por eso la migración pone `lock_timeout = '5s'` en esas dos líneas y
+   falla en limpio si tuviera que esperar (se reintenta). Son de columnas simples a propósito: la app lee como
+   `authenticated`, bajo RLS, y Postgres no lleva al índice un rango sobre
+   `coalesce(first_seen_at, created_at)`. Comprobar que quedaron válidos:
+   `select indexrelid::regclass, indisvalid from pg_index where indexrelid in ('public.leads_store_first_seen_idx'::regclass, 'public.leads_store_created_sin_first_seen_idx'::regclass);`
+   → `t` en los dos (si uno da `f`, `drop index concurrently` de ese y
+   repetirlo).
+1. **Migración `0268_ventas_por_origen.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0268_ventas_por_origen.sql`. Crea la
+   vista `pedidos_canal` (con la sesión de quien mira; `authenticated` solo
+   puede leerla y `anon` nada), rehace `canal_de_cierre` encima de ella —mismo
+   resultado que la 0259, la regla del canal pasa a vivir en un solo lugar— y
+   crea las funciones de lectura `ventas_por_origen` y `conversion_por_fuente`
+   (SECURITY INVOKER, sin `anon`). No escribe datos y no lleva `drop`. Solo
+   necesita la 0259 delante; no depende de la 0264 a la 0267 (Master), que
+   llevan número menor solo porque llegaron antes a la integración, ni de la
+   0269 (comprobantes). Medido
+   en producción como el owner, 30 días, con la primera versión de la consulta:
+   la cohorte de `conversion_por_fuente`, 0,39 s recorriendo los 59.598 leads.
+   La versión final parte el nacimiento en dos rangos de columnas simples y
+   materializa las tiendas, para que bajo RLS los rangos de `leads` y de
+   `orders` vayan por índice. Medido en una base de prueba con la cadena entera
+   de migraciones, 60.000 leads y unos 440.000 pedidos, como el owner bajo RLS
+   y sin JIT (producción lo tiene apagado): `conversion_por_fuente` de 465 a
+   66 ms, `ventas_por_origen` de 110 a 69 ms y `canal_de_cierre` de 198 a 88 ms,
+   con el mismo resultado byte a byte; antes leía todos los pedidos y todos
+   los leads de la tienda en cada llamada. (Después, la cohorte dejó fuera las
+   filas que Kapta crea desde su propio pedido, MOM §17.4: eso sí cambia
+   «Orgánico», a propósito.)
+   **Sin ella el código no se rompe**: la cabecera, «Ventas por día» y «Por
+   tienda» vuelven a la vista anterior —«Ingresos del bot», «Pedidos del bot»…—
+   con un aviso arriba de las cifras («Falta aplicar la migración 0268…»), y
+   «Conversión por fuente» dice lo mismo. «Canal de cierre» sigue con la 0259.
+   **No está aplicada en producción**: necesita la autorización del owner.
+2. **Qué cambia en las cifras**:
+   - La cabecera sube unas once veces: del 14-09 al 13-10-2026 pasa de cerca de
+     600 pedidos del bot a 6.622 pedidos y S/ 1.181.080. Es el mismo total que
+     «Canal de cierre»: cuadran entre sí.
+   - El cambio contra el periodo anterior solo aparece si cada tienda contaba
+     el periodo anterior entero (con las tiendas de hoy, cuando el periodo
+     anterior empieza el 04-07-2026 o después); si no, «sin comparar: el
+     anterior no tiene todas las ventas».
+   - «Conversión del bot» es pedidos del canal «Bot de Kapso» ÷
+     conversaciones: casi igual que la «Conversión» de antes (las ventas de
+     asesora ya no conservaban `kapso`, §5h), ahora con el nombre que dice lo
+     que mide.
+   - «Ventas por día» parte cada día por grupo de cierre; «Por tienda» suma
+     todas las ventas de cada tienda, con la parte de la asesora; «Canal de
+     cierre» gana el cambio contra el periodo anterior por canal.
+   - «Conversión por fuente», medido en el mes: Anuncios de Meta 6,3 %, Carritos
+     COD 30,2 %, Orgánico 9,4 %, Web de Facebook 15,9 %, Búsquedas abandonadas
+     3,6 % (MOM §17.4). Junto, el cierre de las asesoras, como en Productividad
+     pero con leads distintos por tienda.
+   - Con varias tiendas, cada una cuenta desde su propio día en Kapta (antes
+     «Canal de cierre» recortaba todas al día de la que empezó último) y un aviso
+     arriba de las cifras nombra cada tienda que cuenta desde otra fecha.
+   - Siguen siendo solo del bot, y lo dicen: «Conversión del bot», Productos,
+     Fuente, Embudo y su salud, los ingresos de Carritos y de Números de
+     WhatsApp, Desglose de negocio, Integridad y Patrón de horas. «Resumen diario CSV»
+     se llama ahora «Resumen diario del bot CSV» (el mismo archivo).
+3. **Qué mirar después**:
+   - «Ingresos» de la cabecera es igual al total de «Canal de cierre» del mismo
+     periodo y se parece a los pedidos del Master, no a los S/ ~100k del bot;
+   - con una tienda recortada (un periodo de junio, por ejemplo), el aviso
+     azul nombra la tienda y el día, y no hay cambio contra el anterior;
+   - que la cohorte va por los índices nuevos bajo RLS. `explain` de la
+     función no sirve (solo muestra un `Result`: Postgres no la expande); se
+     mira la consulta de la cohorte, como el owner:
+     `begin; select set_config('request.jwt.claims', '{"sub":"<uid del owner>","role":"authenticated"}', true); set local role authenticated; explain analyze select count(*) from public.leads where store_id = '<tienda>' and first_seen_at >= '<desde>T00:00-05' and first_seen_at < '<hasta + 1>T00:00-05'; rollback;`
+     → `Index Cond` sobre `leads_store_first_seen_idx` con el rango de fechas.
+4. **Marcha atrás**: revertir el código basta; las funciones y la vista pueden
+   quedarse (son de lectura). Para quitarlas, primero devolver `canal_de_cierre`
+   a la 0259 y después borrar lo demás:
+   `psql "$DATABASE_URL" -f db/migrations/0259_canal_de_cierre.sql`,
+   `drop function if exists public.ventas_por_origen(uuid[], date, date);`,
+   `drop function if exists public.conversion_por_fuente(uuid[], date, date);`,
+   `drop view if exists public.pedidos_canal;` y, si se quiere,
+   `drop index concurrently if exists public.leads_store_first_seen_idx;` y
+   `drop index concurrently if exists public.leads_store_created_sin_first_seen_idx;`.
+
+### 16-10-2026 · Programar envío (0267)
+
+- **0267 antes del código**: `order_master.dispatch_scheduled_on` (date) e
+  índice parcial. El recálculo la escribe; sin la columna el upsert fallaría.
+- Sin cambio de versión: nadie había programado un envío, así que no hay nada
+  que rellenar. Los pedidos la toman cuando alguien programa.
 
 ### 15-10-2026 · Arreglos de la auditoría del atraso de Lima (sin migración)
 

@@ -261,9 +261,11 @@ describe("(b) applyOrderStatusBulk a entregado salta la observación de cuadre a
   });
 
   beforeEach(() => {
-    perms.granted = new Set(["master.edit"]);
+    perms.granted = new Set(["master.edit", "master.set_status"]);
     db.tables = {
       order_master: [order("a"), order("b")],
+      // «Registrar estado a mano» se decide por la organización de la tienda.
+      stores: [{ id: "store", org_id: "org" }],
       sheet_observations: [{ id: "obs-1", order_id: "b", status: "abierta" }],
       shipments: [],
       order_events: [],

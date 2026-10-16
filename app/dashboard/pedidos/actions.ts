@@ -59,6 +59,7 @@ import {
   type OrderMasterDetail,
 } from "@/lib/orders-master-access";
 import {
+  SET_STATUS_DENIED,
   closedStatusChangeError,
   defaultOperationalFor,
   isGeneralStatus,
@@ -68,6 +69,7 @@ import {
 } from "@/lib/order-status";
 import { etiquetaDiceTerminoSinEntregar } from "@/lib/aliclik-status";
 import { limaTodayKey, normalizeDistrict } from "@/lib/shipments";
+import { DISPATCH_DATE_CLEARED, DISPATCH_DATE_SET, dispatchDateError, dispatchDateLabel } from "@/lib/dispatch-date";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
 import { agencyPaymentReady, classifyOperation, type OperationKind } from "@/lib/order-macro-stage";
 import {
@@ -160,6 +162,22 @@ async function authorizeOrder(orderId: string): Promise<OrderContext | null> {
   if (!data) return null;
   const row = data as unknown as OrderMasterRow;
   return { userId: user.id, storeId: row.store_id, row };
+}
+
+/**
+ * ¿Puede quien pide cambiar A MANO el estado de este pedido? Owner o admin de
+ * la organización de su tienda (`master.set_status`, MOM §16, 15-10-2026).
+ *
+ * No la unión de `getMasterPermissions()`: con ella, ser admin en una empresa
+ * habilitaba el cambio en los pedidos de otra donde se es vendedora. La tienda
+ * se lee por RLS, como el pedido; si no se puede leer, no se concede.
+ */
+async function canSetStatusIn(ctx: OrderContext): Promise<boolean> {
+  const sb = await createServerSupabase();
+  const { data: store, error } = await sb.from("stores").select("org_id").eq("id", ctx.storeId).maybeSingle();
+  const orgId = (store as { org_id?: string | null } | null)?.org_id;
+  if (error || !orgId) return false;
+  return hasOrgPermission(orgId, "master.set_status");
 }
 
 /** Escribe un movimiento en la línea de tiempo. Nunca se puede borrar (0045). */
@@ -1368,6 +1386,12 @@ export async function applyOrderStatusBulk(
   if (!perms.can("master.edit")) {
     return { error: "Tu rol no permite modificar pedidos.", applied: [], failed: [] };
   }
+  // Sin «Registrar estado a mano» en NINGUNA organización no se intenta ni un
+  // pedido. La unión solo sirve para cortar antes: quien decide pedido por
+  // pedido es `setOrderStatus`, contra la organización de cada uno.
+  if (!perms.can("master.set_status")) {
+    return { error: SET_STATUS_DENIED, applied: [], failed: [] };
+  }
   if (!isGeneralStatus(input.general)) {
     return { error: "Estado general inválido.", applied: [], failed: [] };
   }
@@ -1472,8 +1496,15 @@ export async function applyOrderStatusBulk(
  * Registra el estado de un pedido. Es un override manual: congela el estado
  * frente al recálculo automático hasta que alguien lo vuelva a mover a mano.
  *
- * Cambiar un pedido ya cerrado (entregado, anulado o devuelto) exige el permiso
- * `master.override_status` y un motivo obligatorio — §4: "los cambios
+ * Lo hacen solo owner y admin (`master.set_status`): decisión del dueño del
+ * 15-10-2026, «solo quienes tienen acceso de Admin pueden realizar esa acción»
+ * (MOM §16). Se pregunta en la organización DE ESTE PEDIDO —ser admin en una
+ * empresa no da mando sobre los pedidos de otra donde se es vendedora— y antes
+ * de leer o escribir nada más. `master.edit` sigue haciendo falta, y comentar,
+ * devolver o corregir vínculos se queda en él.
+ *
+ * Cambiar un pedido ya cerrado (entregado, anulado o devuelto) exige además el
+ * permiso `master.override_status` y un motivo obligatorio — §4: "los cambios
  * posteriores sobre un pedido entregado deberán requerir una modificación
  * manual y deberán quedar registrados en el historial".
  */
@@ -1497,6 +1528,7 @@ export async function setOrderStatus(
   }
   const ctx = await authorizeOrder(orderId);
   if (!ctx) return { error: "Sin acceso a este pedido." };
+  if (!(await canSetStatusIn(ctx))) return { error: SET_STATUS_DENIED };
 
   const target: GeneralStatus = input.general;
   const reason = input.reason?.trim() ?? "";
@@ -1711,6 +1743,8 @@ export async function registerConfirmationAttempt(
     channel: string;
     note?: string;
     nextContactOn?: string;
+    /** «Programar envío» en vivo (MOM §6.2): solo con «Confirmó el pedido». */
+    dispatchOn?: string;
     operationId?: string;
   },
 ): Promise<MasterActionState> {
@@ -1737,6 +1771,14 @@ export async function registerConfirmationAttempt(
 
   const note = input.note?.trim() ?? "";
   if (note.length > 2000) return { error: "La nota es demasiado larga (máx. 2000)." };
+
+  // La fecha de envío acordada en la llamada. Se valida antes de registrar el
+  // intento: un error después dejaría la confirmación sin su fecha.
+  const dispatchOn = result.confirms ? input.dispatchOn?.trim() ?? "" : "";
+  if (dispatchOn) {
+    const dateError = dispatchDateError(dispatchOn, limaTodayKey());
+    if (dateError) return { error: `Fecha de envío: ${dateError}` };
+  }
 
   const ctx = await authorizeOrder(orderId);
   if (!ctx) return { error: "Sin acceso a este pedido." };
@@ -1765,14 +1807,30 @@ export async function registerConfirmationAttempt(
   });
   if (error) return { error: `No se pudo registrar el intento: ${error.message}` };
 
-  await recomputeOrderMasterSafe(admin, [orderId]);
-  revalidatePath(MASTER_PATH);
-
   const response = (data ?? {}) as {
     duplicate?: boolean;
     day_count?: number;
     last_attempt?: boolean;
   };
+
+  // Programado en vivo: el mismo actor, justo después de la confirmación. Un
+  // reintento de la misma operación (`duplicate`) no lo repite.
+  let scheduledNotice = "";
+  if (dispatchOn && !response.duplicate) {
+    const scheduleError = await recordEvent(admin, ctx, {
+      kind: DISPATCH_DATE_SET,
+      occurredAt: new Date(Date.parse(occurredAt) + 1).toISOString(),
+      // La nota del intento es lo que dijo el cliente, no una nota del envío.
+      reason: `Envío programado para el ${dispatchDateLabel(dispatchOn)}, acordado al confirmar.`,
+      payload: { date: dispatchOn, at_confirmation: true },
+    });
+    scheduledNotice = scheduleError
+      ? ` No se pudo guardar la fecha de envío (${scheduleError}): prográmala desde la ficha.`
+      : ` Envío programado para el ${dispatchDateLabel(dispatchOn)}.`;
+  }
+
+  await recomputeOrderMasterSafe(admin, [orderId]);
+  revalidatePath(MASTER_PATH);
   const days = Number(response.day_count ?? 0);
   if (result.confirms) {
     // Agencia no queda confirmada por la palabra del cliente: el pedido sigue en
@@ -1783,9 +1841,10 @@ export async function registerConfirmationAttempt(
       ctx.row.payment_state,
     );
     return {
-      notice: paymentReady
-        ? "Pedido confirmado; pasa a Preparación."
-        : "Confirmado de palabra. Sigue en confirmación hasta validar el pago exigido.",
+      notice:
+        (paymentReady
+          ? "Pedido confirmado; pasa a Preparación."
+          : "Confirmado de palabra. Sigue en confirmación hasta validar el pago exigido.") + scheduledNotice,
     };
   }
   if (days >= CONFIRMATION_MAX_DAYS) {
@@ -1798,6 +1857,64 @@ export async function registerConfirmationAttempt(
       ? `Este intento ya estaba registrado; no se duplicó.`
       : `Intento registrado, día ${days} de ${CONFIRMATION_MAX_DAYS}.`,
   };
+}
+
+/**
+ * «Programar envío» (MOM §6.2, 15-10-2026): la fecha acordada para despachar
+ * un pedido confirmado que todavía no tiene guía. Queda en el historial con
+ * quien lo programó y la nota; programar otra vez cambia la fecha.
+ */
+export async function scheduleOrderDispatch(
+  orderId: string,
+  input: { date: string; note?: string | null },
+): Promise<MasterActionState> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite programar envíos." };
+  const date = input.date.trim();
+  const dateError = dispatchDateError(date, limaTodayKey());
+  if (dateError) return { error: dateError };
+  const note = input.note?.trim() || null;
+  if (note && note.length > 500) return { error: "La nota es demasiado larga (máx. 500)." };
+
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  if (ctx.row.macro_stage !== "preparacion" || ctx.row.macro_substage !== "por_generar_rotulo") {
+    return { error: "Solo se programa un envío que todavía no tiene guía (Preparación · Por generar rótulo)." };
+  }
+
+  const admin = createAdminSupabase();
+  const eventError = await recordEvent(admin, ctx, {
+    kind: DISPATCH_DATE_SET,
+    reason: note ?? `Envío programado para el ${dispatchDateLabel(date)}.`,
+    payload: { date, ...(note ? { note } : {}) },
+  });
+  if (eventError) return { error: eventError };
+  await recomputeOrderMasterSafe(admin, [orderId]);
+  revalidatePath(MASTER_PATH);
+  return { notice: `Envío programado para el ${dispatchDateLabel(date)}.` };
+}
+
+/** Quita la fecha programada, con motivo: el historial dice por qué ya no vale. */
+export async function clearOrderDispatchDate(orderId: string, reason: string): Promise<MasterActionState> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite cambiar la programación." };
+  const why = reason.trim();
+  if (why.length < 3) return { error: "Escribe por qué se quita la fecha." };
+  if (why.length > 500) return { error: "El motivo es demasiado largo (máx. 500)." };
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  if (!ctx.row.dispatch_scheduled_on) return { error: "Este pedido no tiene un envío programado." };
+
+  const admin = createAdminSupabase();
+  const eventError = await recordEvent(admin, ctx, {
+    kind: DISPATCH_DATE_CLEARED,
+    reason: why,
+    payload: { from: ctx.row.dispatch_scheduled_on },
+  });
+  if (eventError) return { error: eventError };
+  await recomputeOrderMasterSafe(admin, [orderId]);
+  revalidatePath(MASTER_PATH);
+  return { notice: "Se quitó la fecha programada." };
 }
 
 /** Comentario interno del equipo (§12). Complementa al estado, no lo sustituye. */

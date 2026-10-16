@@ -62,6 +62,7 @@ import {
 import { salesChannel } from "@/lib/sales-channel";
 import { dispatchedWith, type RiderStop } from "@/lib/dispatched-with";
 import { costCourier } from "@/lib/delivery-courier";
+import { currentDispatchDate } from "@/lib/dispatch-date";
 import {
   activeCompanionLinks,
   borrowedHostEvents,
@@ -1369,6 +1370,12 @@ export async function recomputeOrderMaster(
       macro_operation: macro.operation,
       macro_version: macro.version,
       macro_since: macro.since,
+      // «Programar envío» (0267, MOM §6.2): la fecha acordada para despachar,
+      // solo mientras el pedido sigue sin guía en Por generar rótulo.
+      dispatch_scheduled_on:
+        macro.stage === "preparacion" && macro.substage === "por_generar_rotulo"
+          ? currentDispatchDate(orderEvents, guides.map((g) => g.created_at))?.date ?? null
+          : null,
       // Cómo se cobró: lo necesitan la compuerta de la clave, el panel del
       // drawer y el rótulo, y los tres leen esta tabla (0128).
       financial_status: order.financial_status,

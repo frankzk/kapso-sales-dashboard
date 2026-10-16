@@ -514,6 +514,8 @@ export interface OrderMasterRow {
   coverage?: "lima" | "provincia_cod" | "agencia" | "por_revisar" | null;
   /** ¿Swayp puede llevarlo hoy? Misma regla que Repro Provincia (0235); null fuera de las etapas que la usan. */
   swayp_availability?: "ok" | "sin_stock" | "sin_cobertura" | null;
+  /** «Programar envío» (0267, lib/dispatch-date.ts): fecha acordada, YYYY-MM-DD. */
+  dispatch_scheduled_on?: string | null;
   /** Con quién salió (0266, lib/dispatched-with.ts): `gf:Roy`, `tanders`… */
   dispatched_with?: string[] | null;
   /** Por dónde se generó el pedido (0264, lib/sales-channel.ts). */

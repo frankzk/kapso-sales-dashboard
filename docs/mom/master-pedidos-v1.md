@@ -59,7 +59,9 @@ venden también por un formulario COD en la web (EasySell, etiqueta
 nada —los 591 están en `order_master` y 499 ya tienen guía—, pero sí para todo
 lo que se calcula recorriendo leads: ese camino no los ve. El anuncio que los
 trajo viaja en `orders.utm_meta`, y las reglas para leerlo están en
-`lib/cod-cart-attribution.ts`.
+`lib/cod-cart-attribution.ts`. Quién cerró cada pedido —asesora, bot, la
+clienta sola en la web— se decide por hechos que la sincronización no borra,
+no por etiquetas locales (§17.3).
 
 **Canal de venta (15-10-2026).** Todos los pedidos nacen en Shopify, pero no
 por el mismo camino, y lo dicen las etiquetas que cada camino le pone. El
@@ -70,19 +72,27 @@ que la herramienta donde quedó escrita—:
 
 | Canal | Etiqueta en Shopify | 45 días al 15-10-2026 |
 | --- | --- | --- |
-| Asesora (Leads) | `venta_manual`, `carrito_recuperado` | 15 % |
+| Asesora (Leads) | `venta_manual` (la regla también acepta `carrito_recuperado`, pero esa era una etiqueta solo de la copia local: ningún pedido de Shopify la lleva y desde §17.3 nadie la escribe) | 15 % |
 | Chatbot WhatsApp | `kapso`, `whatsapp`, o el pedido trae conversación de Kapso | 9 % |
 | Bot de carritos | `CARRITO RECUPERADO`, `BOT`, `BOT (whatsapp_cloud)` | 4 % |
 | Catálogo WhatsApp | `catalogo-wsp` (el catálogo privado del agradecimiento, §31) | 1 % |
-| Web · carrito completado | `easysell-abandoned-checkout` (formulario abandonado que la clienta completó después) | 15 % |
+| Web · carrito completado | `easysell-abandoned-checkout`, `abandoned_checkout_releasit_cod_form` (formulario abandonado que se completó después; ver abajo quién lo completa) | 15 % |
 | Web · formulario | `easysell_cod_form` | 55 % |
 | Sin marca | ninguna de las anteriores (sobre todo pedidos creados a mano en Shopify con el nombre de la asesora como etiqueta) | 1,5 % |
 
 La regla vive en `lib/sales-channel.ts` y la escribe el recálculo del pedido;
 la misma regla en SQL (`order_sales_channel`) solo rellenó lo existente al
 aplicar la 0264. No se usa para atribuir ventas a una asesora: eso lo decide
-`order_sales` y el reparto bot/asesora de Consolidado (`lib/metrics.ts`), que
-además mira la gestión del lead.
+`order_sales`, y el Consolidado reparte las ventas con «Canal de cierre»
+(§17.3), que además marca la venta que ayudó una gestión de asesora. Por eso
+las dos cifras no coinciden: cuando la asesora completa un carrito abandonado
+de EasySell, el borrador conserva sus etiquetas y no recibe `venta_manual`.
+Del 14-09 al 13-10-2026, de 1.105 pedidos activos «Web · carrito completado»,
+1.076 tenían venta de asesora en `order_sales`, y 294 de 3.229 «Web ·
+formulario» también. La recompra automática tampoco deja marca propia en
+Shopify: sus 28 pedidos de ese periodo salen como «Web · carrito completado»
+(23) o «Web · formulario» (5), y en «Canal de cierre» como «Recompra
+automática».
 
 ### Salida
 
@@ -510,7 +520,8 @@ Registro:
   es opcional.
 - Los comentarios y el cambio manual de estado **no** son registro de gestión.
   El cambio manual es un override que congela el pedido frente al recálculo:
-  usarlo como bitácora de llamadas lo desconecta del MOM.
+  usarlo como bitácora de llamadas lo desconecta del MOM. Desde el 15-10-2026,
+  además, el cambio manual es solo de owner y admin (`master.set_status`, §16).
 - **El congelamiento es frente a lo automático, no frente a otra persona.**
   Anular el pedido en Shopify también lo decide alguien, así que entre dos
   decisiones humanas manda la más reciente: una anulación **posterior** al cambio
@@ -556,6 +567,88 @@ Subetapas:
 - `por_generar_rotulo`.
 - `por_armar`.
 - `incidencia_preparacion`.
+
+#### Programar envío (15-10-2026)
+
+Un pedido confirmado puede tener un día acordado para salir —la clienta recibe
+en su trabajo el lunes, o pidió que se despache el sábado—. Hasta esta fecha el
+equipo lo anotaba en su Excel de provincia («enviar lunes 26-10») y en Kapta el
+pedido aparecía como confirmado sin guía, igual que uno olvidado (#KP140347).
+
+- **Dónde.** En vivo, al confirmar: en la gestión de confirmación, con
+  «Confirmó el pedido», el campo **«Sale el (opcional)»** guarda la fecha
+  acordada en la llamada junto con el intento (vacío = sale apenas se genere la
+  guía). Y después, en la ficha, pestaña Operar, dentro de «Elegir ruta y
+  generar el rótulo»: **«Programar envío»**, con la fecha y una nota opcional,
+  solo en Preparación · Por generar rótulo. Las dos exigen permiso para editar
+  el Master. Programar otra vez cambia la fecha; **«Quitar»** pide motivo. En
+  Agencia, confirmar de palabra no basta para pasar a Preparación (§6.1): la
+  fecha se guarda igual y aparece cuando el pago exigido se valida.
+- **Qué queda.** Un hecho del historial con actor: `dispatch_date_set` (fecha
+  y nota) o `dispatch_date_cleared` (motivo). Manda el último. Se programa hoy
+  o hasta 45 días adelante.
+- **Qué se ve.** La fila del Master y el encabezado de la ficha llevan una
+  chapa: «Programado · sale lun 26/10», «Programado · sale hoy» o, si el día
+  pasó sin guía, «Programado para el lun 19/10 y no salió» en rojo. El filtro
+  «Envío programado» de Más filtros (parámetro `ep`) separa programados a
+  futuro, los que salen hoy, los que no salieron y los que no tienen fecha.
+- **Cuándo deja de valer.** Al crear la guía o la salida el pedido sale de Por
+  generar rótulo y la fecha deja de mostrarse (`order_master.dispatch_scheduled_on`,
+  0267, solo se llena en esa subetapa). Si esa guía después se anula, el pedido
+  no hereda la fecha vieja: una salida creada después de programar la deja sin
+  efecto.
+- **No cambia la etapa** ni es la «salida programada» de Grupo GF en Lima
+  (`dispatch_programmed`, §29.13), que ya tiene caja y motorizado: esta es
+  anterior a la guía.
+
+#### Guía Aliclik automática el día programado (16-10-2026)
+
+Decisión del owner: en **Provincia COD**, el día programado la guía Aliclik se
+crea sola. Solo esos pedidos: «el automático solo lo programamos en fecha». Un
+pedido sin fecha programada sigue esperando a que una persona cree su guía.
+
+- **Cuándo.** Cada hora de 8:00 a. m. a 1:00 p. m. de Lima
+  (`/api/cron/aliclik-scheduled`, 13–18 UTC), antes del corte de Aliclik
+  (~14:00), para que lo recojan ese mismo día. Varias pasadas y no una: un
+  pedido programado para hoy a media mañana también entra.
+- **Qué pedidos.** Provincia COD, en Preparación · Por generar rótulo, con
+  `dispatch_scheduled_on` = hoy, de una tienda con Aliclik habilitado. Ni Lima
+  ni Agencia, ni una fecha futura, ni una que ya pasó: si su día pasó sin guía,
+  la chapa roja «no salió» es para una persona. Un pedido de Provincia COD
+  programado que vaya a salir con otro courier (Swayp, Shalom) necesita su guía
+  antes de ese día; si no, sale por Aliclik.
+- **Por dónde.** El mismo camino que el botón «Crear guía» (§10.2):
+  `lib/aliclik-guide.ts`, con todas sus compuertas —prepago, rechazos en la
+  puerta, posible duplicado, riesgo del historial, guía viva, pin respaldado,
+  monto recalculado— y el mismo candado. Transportadora: la más barata de las
+  que se pueden agendar, que es la que el panel preselecciona. Sin sesión, el
+  historial del cliente se lee con el service role **acotado a las tiendas de
+  la organización** del pedido.
+- **Sin excepciones.** El automático no escribe motivos por nadie: si una
+  compuerta pide una excepción justificada (el pago que exige el historial, un
+  pin que el pedido no respalda), no la levanta. Falla y avisa.
+- **Qué queda.** La guía creada lleva su hecho `guide_registered` sin actor
+  (lo creó el sistema), con el motivo «Guía automática: envío programado para
+  el lun 26/10.» y `payload.auto` con el día. La nota del lead dice
+  «automática, envío programado».
+- **Si falla: una alerta por ese pedido.** Telegram al grupo de alertas urgentes
+  de la tienda (o, si no tiene, al del resumen diario) con el pedido, la
+  clienta, el motivo y el enlace a la ficha; y el hecho
+  `aliclik_auto_guide_failed` en el historial («Guía automática no creada»), con
+  el motivo y la fecha. **Un intento por pedido y fecha**: lo que falló lo toma
+  una persona —crea la guía a mano o reprograma—; reprogramado a otro día,
+  vuelve a intentarse ese día.
+- **No es un fallo y no avisa:** que otra creación del mismo pedido tenga el
+  candado (una persona creándola en ese momento, o un timeout que el barrido
+  todavía resuelve), ni que el pedido ya tenga guía y el Master no lo haya
+  recalculado. Con Aliclik en rojo —la sonda de cotización falla o las últimas
+  creaciones fallaron (§10.2)— la pasada espera a la hora siguiente sin avisar,
+  salvo en la de la 1:00 p. m.: ahí se intenta igual y lo que falle avisa.
+- **Interruptores.** Los mismos de toda escritura hacia Aliclik:
+  `ALICLIK_WRITE_ENABLED` y `stores.aliclik_enabled`. `?dry=1` cotiza y dice qué
+  haría, sin crear ni avisar.
+- **Se dice al programar.** En un pedido de Provincia COD, «Programar envío» y
+  «Sale el (opcional)» avisan que ese día la guía se crea sola.
 
 Flujo físico:
 
@@ -1219,8 +1312,8 @@ corresponde. Queda con actor, fecha y motivo sobre el pedido anterior:
   entregada: esa puerta es del courier (§11). Lo que cambia es el pedido.
 - **Entrega declarada** se cierra cuando el pedido pasa a `entregado` —lo
   reporta el courier o se confirma a mano, y desde ahí manda la liquidación— o
-  cuando alguien fija el estado en «Gestión manual» después de la declaración,
-  también si resultó falsa. Una declaración sin salida sería otro pedido
+  cuando un admin fija el estado en «Gestión manual» después de la declaración
+  (solo owner y admin, §16, 15-10-2026), también si resultó falsa. Una declaración sin salida sería otro pedido
   atascado.
 - **La pérdida declarada abre la indemnización** igual que la solicitud formal;
   finanzas la completa con monto y la cierra con «Resolver indemnización».
@@ -1763,7 +1856,8 @@ Reglas:
   toca, como ya hacía «Abrir Mesa de cierre ↓».
 - El motivo nombra **dónde se arregla**, porque hay dos «reabrir» y no sirven
   para lo mismo: el del expediente vive en la **Mesa de cierre** y el del estado
-  en **Gestión manual → Registrar estado**. Un aviso que manda a un panel
+  en **Gestión manual → Registrar estado**, que desde el 15-10-2026 solo ve un
+  admin (§16): el aviso dice que lo reabre un admin. Un aviso que manda a un panel
   inexistente es peor que no decir nada — el de Tanders mandaba a «Estado del
   pedido», que no existe con ese nombre.
 - La frase la escribe una sola función para las tres pantallas. Cuando cada una
@@ -3427,7 +3521,9 @@ Marcar `recogido`, `entregado`, `disponible_para_recojo` o cualquier otro estado
 que signifique que la caja ya está en la sucursal **exige que exista una salida**.
 Si el pedido es de cobertura Agencia y no consta ninguna, el Master pide **por qué
 agencia se envió** —Shalom u Olva— y registra la salida con la firma de quien
-marca. Sin courier elegido el marcado no se guarda.
+marca. Sin courier elegido el marcado no se guarda. Quien marca es, desde el
+15-10-2026, un owner o un admin: el estado a mano ya no es de «Gestionar
+pedidos» (§16).
 
 **Por qué.** Una salida es lo único por lo que el tablero sabe que un pedido se
 despachó. Un pedido que llega a la agencia sin ella desaparece de los indicadores
@@ -3561,6 +3657,11 @@ candado.
 - **Un timeout no es un rechazo.** Aliclik pudo haber creado el pedido y
   habérsenos perdido la respuesta. La intención queda a la espera y **sigue
   bloqueando** el reintento: reintentar a ciegas es lo que crea el duplicado.
+- **El botón y la guía automática pasan por la misma puerta.** Desde el
+  16-10-2026 cotizar y crear viven en `lib/aliclik-guide.ts`; la acción del
+  Master solo añade el permiso y la sesión de quien pulsa. La guía automática
+  del día programado (§6.2) usa ese mismo núcleo, con el mismo candado, y no
+  levanta ninguna excepción por nadie.
 
 El barrido periódico resuelve esa espera, y tiene que cerrar **las dos** ramas
 posibles:
@@ -6643,7 +6744,11 @@ sin entrega). La simulación muestra qué saldría hoy sin enviar nada.
   días al 13-10, segundos después de consultarla, con el paquete todavía en la
   agencia. Si la clienta la perdía y la pedía días después, «pedido cerrado» la
   bloqueaba, y la salida era devolver el pedido a «pendiente» a mano (motivo
-  «dar clave»). Ahora «entregado» solo cierra la clave si lo **validado** no
+  «dar clave»). Desde el 15-10-2026 ni ese marcado ni esa vuelta atrás los hace
+  una vendedora o asesora que dicta la clave: el estado a mano es de owner y
+  admin (§16), y el pedido sigue al rastreo de Shalom.
+
+  Desde el 13-10-2026, «entregado» solo cierra la clave si lo **validado** no
   cubre el total (o el checkout no lo cobró): con el dinero confirmado no hay
   nada que proteger. **Anulado y devuelto siguen cerrándola** siempre.
 - La clave pertenece a la salida Shalom: se registra, consulta y entrega desde
@@ -7409,6 +7514,82 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   del destinatario y de la clave (`contrato`), y cuántas guías manuales vivas
   esperaban clave, cuántas la recibieron y, si ninguna, por qué (`claves`).
 
+#### El código de la guía manual y el rastreo (decidido el 15-10-2026)
+
+- **El caso.** #KP137651 se registró a mano el 01-10-2026 con la guía
+  98130498 y el código **V929**; el ticket de Shalom decía **D7MN**. El
+  rastreo pide **número y código juntos** (`trackBy`, `trackBatch`): con el
+  código mal, Shalom rechaza la guía y nada se mueve. Del 01-10 al 15-10 la
+  guía siguió «Pendiente de envío», la clienta no recibió ningún aviso, y
+  cuando se corrigió a mano el paquete ya estaba en la agencia de La
+  Tinguiña. El 15-10 había otras dos guías manuales del mismo día a las que
+  Shalom nunca había contestado (#KP138088 y #KP137999).
+- **Cotejar Shalom revisa el código** de cada guía hecha a mano
+  (`shalom_pro_manual`), viva y **por la que el rastreo nunca contestó**
+  (`last_report_at` vacío, registrada hace más de 2 h). Una guía así también
+  hace leer el listado, aunque no haya candidatos que vincular.
+  - **Solo si se comprueba**, como el destinatario y la clave: en las guías
+    que Kapta creó por API el código lo devolvió la propia API, así que el
+    `codigo` del listado tiene que coincidir con el suyo en **nueve de cada
+    diez, con diez como mínimo** (bloque `contrato.codigo`). Si no pasa, no se
+    corrige ninguno y el informe dice por qué.
+  - **Si pasa**, el código del listado manda sobre el tecleado: se guarda en
+    `shalom_codigo`, `shalom_raw` conserva el anterior (`codigo_anterior`,
+    `codigo_corregido_por: cotejar_shalom`) y queda en la línea de tiempo un
+    `guide_link_updated` («Guía actualizada»), fuente `shalom`, sin persona,
+    con la nota «Código de la guía Shalom … corregido de V929 a D7MN: así
+    figura en el listado de Shalom Pro (Cotejar Shalom)…». El mismo código
+    escrito con otras mayúsculas o espacios no es un error. Con dos códigos
+    para la misma guía en el listado no se elige ninguno. La escritura exige
+    el código que se leyó: una corrección que hizo alguien entre la lectura y
+    la escritura se queda.
+  - **Si el listado ni siquiera trae la guía**, estando entero para su fecha
+    (registrada desde el día siguiente al inicio del listado), el número está
+    casi seguro mal puesto. Eso no se adivina: queda **una sola vez** en la
+    línea de tiempo un `guide_check` («Guía revisada con Shalom») que pide
+    revisar el número con el ticket, y la guía sale en `guiasDesconocidas`.
+  - La respuesta de `/api/cron/shalom-cotejo` dice cuántos se corrigieron
+    (`codigosCorregidos`), cuántas guías no están (`guiasDesconocidas`) y, por
+    cuenta, cuáles (`codigos`).
+- **El rastreo pregunta primero por la que lleva más tiempo sin contestar.**
+  Cada pasada de media hora conseguía respuesta para las primeras ~75-120 de
+  ~460 guías vivas, y la fila iba por `updated_at`, que mueve **cualquier**
+  cambio de la fila: corregir el código mandó a #KP137651 al final, a ~2,5 h
+  de su primera respuesta. Desde el 15-10-2026 la fila va por
+  `last_report_at` —cuándo contestó Shalom por última vez—: la que nunca
+  contestó primero, después la que hace más que no lo hace.
+- **El rastreo deja su línea en la bitácora** (`[shalom-reconcile]`): cuántas
+  guías vivas, cuántas sin cómo preguntar (`sinIdentificador`), cuántas
+  preguntadas, contestadas, cambiadas y rechazadas, y por cada lote de 50
+  cuántas contestaron, cuántas rechazó, cuánto esperó al cupo, cuánto tardó y
+  el error si cayó entero.
+- **El cupo del rastreo, medido** (16-10-2026, 04:00 de Lima, la primera
+  pasada con bitácora). Es propio del rastreo y se cuenta **guía a guía**: dos
+  lotes de 50 pasaron y el tercero volvió con 429 «pediste 50 guías y superás
+  tu cupo de rastreo por minuto; reintentá en 12s». Cuadra con **120 guías de
+  una vez que se reponen a 2 por segundo**. Las cabeceras `x-ratelimit-*` no
+  lo dicen (son de las llamadas). Los lotes salían seguidos: la pasada
+  terminaba en 4 s habiendo preguntado por **100 de 459**, y una guía
+  esperaba 2-3 h entre respuesta y respuesta.
+  - Desde entonces cada lote **espera lo que le falta al cupo**
+    (`lib/shalom/track-pace.ts`), y un 429 espera lo que Shalom dice y
+    **repite el mismo lote**. Tres 429 seguidos es que algo más está gastando
+    el cupo y la pasada deja de preguntar (`cortadoPor: "cupo"`).
+  - El rastreo tiene **90 s** por pasada, unas **250 guías**; lo demás de la
+    función es para el OSE ID manual y los avisos. Lo que no entra
+    (`cortadoPor: "tiempo"`) va primero en la pasada siguiente: con ~460 vivas,
+    cada guía se pregunta al menos cada hora.
+- **Con qué se pregunta por cada guía** (16-10-2026):
+  - la **hecha a mano** que tiene **OSE ID**, por el OSE ID, que resuelve
+    solo. Su código lo tecleó una persona: #KP137651 tenía su OSE ID desde el
+    principio y Shalom la rechazó dos semanas por el código. El OSE ID sale del
+    listado comprobado (arriba);
+  - la de la **API**, por número y código, que dio la propia API;
+  - sin código, por el OSE ID si lo tiene;
+  - sin código ni OSE ID **no se pregunta**: el número solo siempre vuelve
+    rechazado («falta codigo»). Era la salida de mentira de un estado
+    atestiguado (`MOM-KP123525-SHALOM-…`), que gastaba cupo en cada pasada.
+
 ### Olva
 
 - Regla normal: pago completo.
@@ -7437,7 +7618,8 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   operación ya hacía a mano pegando el número en `tracking.olvaexpress.pe`.
   La apikey es de Olva y la pueden rotar sin aviso: vive en el entorno
   (`OLVA_TRACKING_APIKEY`) y, cuando falle, **el cron reporta y no toca
-  estados**; el marcado a mano sigue siendo el camino de respaldo.
+  estados**; el marcado a mano sigue siendo el camino de respaldo, y desde el
+  15-10-2026 lo hace un admin (§16).
 - **Manda el estado que Olva declara vigente** (`nombre_estado_tracking`), no el
   hito «más avanzado» como en Shalom. Se comprobó en un envío real: asignado a
   un operador el 09/09, confirmado en tienda el 10/09 y asignado de nuevo el
@@ -8109,7 +8291,7 @@ registra en cada evento.
   | Despacho y Grupo GF | Gestionar pedidos, despachar, entregar la caja al motorizado, reprogramar entregas en Lima (§9.5), armar rutas, reportar entregas por un motorizado, subir reportes de couriers, manejar stock de Swayp y Fénix, preparar paquetes, crear guías, recibir devoluciones |
   | Liquidaciones | Gestionar pedidos, subir y cerrar liquidaciones de motorizados, cuadrar hojas de couriers, conciliar el dinero del pedido |
   | Cobranza | Gestionar pedidos, subir comprobantes, ver y registrar claves de recojo, aprobar cobros de Tanders rechazados |
-  | Supervisión | Gestionar pedidos, corregir pedidos cerrados, cerrar o reabrir pedidos, anular guías de Aliclik, recibir devoluciones, reingresar al inventario, ver reportes del negocio |
+  | Supervisión | Gestionar pedidos, registrar la devolución de pedidos cerrados, cerrar o reabrir el expediente de cierre, anular guías de Aliclik, recibir devoluciones, reingresar al inventario, ver reportes del negocio (el estado a mano, no: es de admin) |
   | Administración | Gestionar pedidos, gestionar el equipo, administrar tiendas, editar costos, manejar stock, editar el catálogo de Aliclik, asignar producto a anuncios, configurar hojas de couriers, dar de alta motorizados, subir reportes de couriers, ver reportes del negocio |
 
   Reglas:
@@ -8121,6 +8303,9 @@ registra en cada evento.
     Grupo GF, exportar datos, boletas y facturas), ni confirmar reembolsos. Lo
     fija una prueba.
   - Una revocación puntual sigue ganando sobre cualquier rol.
+  - «Gestionar pedidos» ya **no** incluye cambiar el estado a mano
+    (15-10-2026, abajo): eso es «Registrar estado a mano»
+    (`master.set_status`), de owner y admin, y ningún rol lo trae.
   - Solo el dueño asigna o quita roles. Equipo muestra, para cada persona, lo
     que puede hacer hoy y de dónde le viene (ver «Glosario de Equipo»).
   - Lo que el código decidía con «¿es owner o admin?» ahora pide un permiso:
@@ -8134,7 +8319,8 @@ registra en cada evento.
     la misma regla: armar rutas ← Despacho, cerrar liquidaciones ←
     Liquidaciones, costos ← Administración.
 
-  Mientras nadie tenga roles, todos ven y pueden lo mismo que antes. Antes de
+  Mientras nadie tenga roles, todos ven y pueden lo mismo que antes, salvo el
+  estado a mano, que desde el 15-10-2026 es solo de owner y admin. Antes de
   bajar a alguien de admin a vendedora hay que darle acceso explícito a sus
   tiendas (`user_store_access`): owner y admin ven todas las tiendas de la
   organización sin esa lista.
@@ -8181,6 +8367,52 @@ registra en cada evento.
 
   `test/escrituras-piden-permiso.test.ts` falla si una acción de Repro
   Provincia vuelve a escribir sin pedir permiso.
+- **El estado a mano es de un admin (15-10-2026).** Decisión del dueño, con
+  sus palabras: «solo quienes tienen acceso de Admin pueden realizar esa
+  acción». La acción es **Gestión manual → Registrar estado** en la ficha del
+  pedido y **Registrar estado…** en la barra de lote del Master: cambiar a mano
+  el estado general y el operativo de un pedido, un cambio que **congela** el
+  pedido frente al recálculo (§6.1). Pedía «Gestionar pedidos» (`master.edit`),
+  que traen el paquete de la vendedora y los siete roles por función.
+  - **Permiso propio: `master.set_status`** («Registrar estado a mano»). Lo
+    tienen **owner y admin por su acceso**. No se concede uno por uno en
+    **Equipo** ni lo trae ningún rol, tampoco Supervisión, que corrige pedidos
+    cerrados (`master.override_status`) y aun así no cambia estados a mano.
+    Una revocación puntual se lo quita a un admin, como cualquier permiso.
+  - **Lo exige el servidor**, en la **organización del pedido**
+    (`hasOrgPermission`, no la unión de las de la persona: ser admin en otra
+    empresa no sirve), después de comprobar que el pedido se ve y antes de leer
+    o escribir nada más. El lote no intenta ningún pedido sin el permiso y
+    después lo pregunta pedido por pedido. Responde «Solo un admin puede
+    registrar el estado a mano.» (`setOrderStatus`, `applyOrderStatusBulk`).
+  - **No cambia lo demás.** `master.edit` sigue haciendo falta, y un pedido
+    cerrado pide además `master.override_status` y motivo
+    (`closedStatusChangeError`). Comentar, registrar la devolución, corregir el
+    vínculo de una guía, confirmar, crear salidas y el resto de escrituras del
+    Master siguen con «Gestionar pedidos».
+  - **En pantalla.** Sin el permiso, la ficha no pinta la tarjeta y deja en su
+    sitio «Registrar el estado a mano lo hace un admin.»; la barra de lote no
+    ofrece «Registrar estado…». Los avisos que mandan a reabrir un pedido
+    cerrado dicen que lo hace un admin (`REOPEN_HINT`), y la entrega declarada
+    de la Mesa de cierre, que el estado lo fija un admin.
+  - **No son «Registrar estado»**, y siguen con su permiso: «Registrar
+    devolución» (§13; escribe `devuelto` solo con despacho y guía), las
+    entregas por la puerta única de Rutas, Liquidaciones 1 y 2 y Urpi (§11.4,
+    §29.12, §30.8), anular una guía de Aliclik (`aliclik.cancel_guide`), el
+    resultado del courier y el estado de la guía en Repro Provincia (son de la
+    salida, no del pedido: principio 8, §2), la gestión de confirmación (§8),
+    el pedido acompañante (§32) y finalizar o reabrir el expediente en la Mesa
+    de cierre.
+  - **Lo que deja de hacer el equipo.** Marcar «Entregado» al dictar la clave
+    de Shalom (469 veces en los 30 días al 13-10, §12), el marcado a mano de
+    los pedidos de Agencia (§10) y el respaldo de Olva cuando su rastreo falla
+    (§12): ahora el estado sigue al rastreo y, cuando haga falta a mano, lo
+    registra un admin.
+
+  `test/estado-a-mano-solo-admin.test.ts` lo fija contra la acción de verdad, y
+  `test/escrituras-piden-permiso.test.ts` falla si otra acción de
+  `app/dashboard/pedidos/actions.ts` (salvo `registerReturn`) escribe un
+  `status_override` sin preguntarlo.
 
 ### 16.1 Bandeja de validación de pagos
 
@@ -8574,6 +8806,292 @@ ratio en `lib/ltv.ts`):
 - **Para subirlo:** el recordatorio de reposición (§34) le escribe a la
   clienta cuando se le está por acabar lo que compró. Mide su efecto contra un
   grupo de control.
+
+### 17.3 Canal de cierre de todas las ventas (14-10-2026)
+
+Responde quién cerró cada venta de la tienda: una asesora, el bot o una
+automatización, la clienta sola en la web, u otra vía. Está en **Consolidado**
+y en la página de cada tienda, en la tarjeta «Canal de cierre».
+
+**Por qué cambió.** La tarjeta solo veía los pedidos con etiqueta `kapso` y
+decidía «asesora» por las etiquetas `venta_manual` / `carrito_recuperado`. El
+botón «Generar pedido» escribía `kapso` solo en la copia local del pedido —en
+Shopify el pedido nace con `venta_manual`, o con las etiquetas del borrador de
+EasySell cuando se reusa el carrito— y la sincronización con Shopify reescribe
+las etiquetas cada 5 minutos. Del 14-09 al 13-10-2026, de 2.916 pedidos de
+asesoras quedaba 1 con `kapso`: la tarjeta decía «0 % lo cerró una asesora»
+mientras Productividad les contaba S/ 484.645.
+
+**Universo.** Todos los pedidos de Shopify de la tienda (`orders`), por el día
+**local** de la tienda en que se crearon. Los cancelados van aparte —fuera de
+pedidos e ingresos—, y el ingreso es total − reembolsado, igual que el resto
+del Consolidado.
+
+**Desde cuándo responde.** El canal solo es verdad desde que Kapta tiene, a la
+vez, todos los pedidos de la tienda y las ventas que registran sus asesoras:
+
+- todos los pedidos, desde `ORDERS_SYNC_FROM` (2026-06-01): antes de esa fecha
+  la sincronización no trae los pedidos que no son del bot;
+- las ventas de las asesoras, desde el día local de la primera fila de
+  `order_sales` de la tienda (si todavía no tiene ninguna, el de su primer
+  lead). Antes, una venta de asesora no tenía dónde registrarse y caería en
+  «Web» u «Otros». Medido: una tienda tenía 3.898 pedidos en junio de 2026 y
+  ninguna venta registrada; su primera es del 04-07-2026, y la de la otra
+  tienda del 25-06-2026.
+
+Cada tienda cuenta desde el más tardío de esos días, **su propio día** (desde
+el 14-10-2026, §17.4: antes, con varias tiendas, se recortaba a todas al día
+de la que empezó último, y conectar una tienda nueva habría dejado el total de
+todas en un solo día). Con varias tiendas, cada una suma su parte del periodo
+y el aviso nombra cada tienda que cuenta desde otra fecha. Un periodo que
+empieza antes se cuenta desde ese día y la tarjeta lo dice («desde el 4 jul
+2026», o «Aurela desde el 4 jul 2026»), con la razón que fijó el día: el
+inicio de la tienda en Kapta o `ORDERS_SYNC_FROM`. Una tienda cuyo día cae
+después del periodo no entra, y el aviso lo dice («no entra: empezó a usar
+Kapta el …»). Si ninguna tienda tiene con qué responder, la tarjeta vuelve a la
+vista anterior con un aviso, sin cifra de cabecera.
+
+Una tienda que todavía no usa Kapta —sin ventas registradas ni leads— no tiene
+inicio: sola, su tarjeta vuelve a la vista anterior con ese aviso; con otras
+tiendas, queda fuera del conteo y la tarjeta la nombra («sus pedidos no entran
+en este total»). Si no se puede leer desde cuándo usa Kapta una tienda, es un
+error y la tarjeta lo dice: contar sin saberlo es justo el «0 % asesora» falso.
+Si falla la lectura de UNA tienda, también: nunca un total con una tienda de
+menos. Mover `ORDERS_SYNC_FROM` hacia atrás no amplía la tarjeta más allá del
+inicio de cada tienda; adelantarlo sí la recorta.
+
+**Un canal por pedido**, el primero que aplique en este orden. Así los canales
+suman el total de la tienda:
+
+| Orden | Canal | Cómo se reconoce | Grupo |
+| --- | --- | --- | --- |
+| 1 | Asesora | Tiene fila en `order_sales`: la venta que la asesora registró al generar el pedido | Asesora |
+| 2 | Recompra automática | Es el pedido de una prueba de recompra (`auto_order_trials` en `generado`; §11, «Prueba: pedido de recompra sin llamada») | Bot o automatización |
+| 3 | Bot de Kapso | Etiqueta `kapso` puesta en Shopify (sin distinguir mayúsculas) | Bot o automatización |
+| 4 | Bot de carritos externo | Etiquetas `BOT`, `CARRITO RECUPERADO` o `BOT (whatsapp_cloud)` | Bot o automatización |
+| 5 | Web, la clienta sola | Etiquetas de EasySell (`easysell_cod_form` y las que empiezan con `easysell`) | La clienta sola en la web |
+| 6 | Otros | Todo lo demás: catálogo de WhatsApp, pedidos hechos a mano en Shopify… | Otros |
+
+La venta de la asesora gana a cualquier etiqueta porque es el único hecho que
+nada sobrescribe: la asesora la registró y `order_sales` es append-only. El
+orden **sí decide**, y mucho: en el mes medido, 1.375 de las 2.651 ventas
+activas de asesora llevan las etiquetas de EasySell (la asesora reusó el
+borrador del carrito) y las 29 recompras llevan la etiqueta de otro canal. Sin
+el orden, la mitad de las ventas de asesora caería en «Web». Entre etiquetas no
+hubo choques: ningún pedido tenía `kapso` y además otra etiqueta de canal.
+
+**«Ayudado por asesora».** Para lo que NO cerró una asesora: una asesora
+gestionó a esa clienta en los 7 días previos al pedido, con una fila firmada de
+`lead_calls` de tipo `call`, `message` o `sale` (la misma definición de «tocado»
+del agente de voz, §33.2) en el lead de la **misma tienda** con el **mismo
+teléfono**. Ayudar no es cerrar: el pedido queda en su canal, y la ayuda se
+cuenta aparte en su fila. Una fila del sistema sin firma o una nota no es
+gestión.
+
+**Lo que no decide el canal.** Ninguna etiqueta que Kapta escriba en su copia:
+las tiendas no dieron `write_orders`, así que Kapta no puede etiquetar pedidos
+en Shopify, y lo que escribe solo en su copia lo borra la siguiente
+sincronización. Por eso, desde este cambio, «Generar pedido», la captura del
+carrito recuperado sin asesora y la recompra automática registran la fila local
+**solo si el webhook no la trajo ya, y tal como viene de Shopify**: sin `kapso`,
+sin `cod_recuperado`, sin pisar la fecha ni los productos reales.
+
+Si al completar el borrador Shopify contesta que ya estaba completado, Kapta
+le pregunta a Shopify cuál es el pedido real de ese borrador y registra la venta
+sobre él. Antes inventaba una fila `draft-<id>` que no era ningún pedido de
+Shopify: la venta se contaba dos veces, una en la fila inventada y otra en el
+pedido real que traía la sincronización. Solo si Shopify tampoco lo dice queda
+el respaldo de antes, la fila `draft-<id>`, para no perder la venta; hasta el
+14-10-2026 no había ninguna en la base.
+
+**Lo que el canal todavía no distingue.** Un carrito de EasySell que completa el
+bot de Kapso por WhatsApp (`draftOrderComplete` sobre el borrador del carrito)
+cuenta como **Web**: Shopify no le pone ninguna marca que lo separe del carrito
+que la clienta terminó sola, y Kapta no puede etiquetarlo. Para contarlo como
+del bot, el workflow del bot tendría que ponerle una etiqueta al borrador (por
+ejemplo `kapso`) antes de completarlo; eso es un cambio del bot, no de esta
+tarjeta.
+
+**Productividad y el canal no cuadran exacto, y no tienen por qué.**
+Productividad cuenta ventas registradas por la fecha en que la asesora apretó
+el botón e incluye las que después se cancelaron; el canal cuenta pedidos por
+su fecha de creación en Shopify y deja los cancelados aparte.
+
+**Lo que todavía no cambia.** Desde el 14-10-2026 (§17.4) las cifras de
+cabecera, «Ventas por día», «Por tienda» y «Conversión por fuente» cuentan
+también todas las ventas, y esta tarjeta es la que las parte por origen, con
+el cambio contra el periodo anterior por canal. Siguen contando solo los
+pedidos del bot de Kapso, y lo dicen: «Conversión del bot», Productos, Fuente,
+Embudo y su salud, los ingresos de Carritos y de Números de WhatsApp, Desglose
+de negocio, Integridad y, en la página de una tienda, Patrón de horas
+(DEPLOY.md §5h). La
+operación del Master y LTV : CPA (§17.2), arriba de esa sección en el
+Consolidado, cuentan todos los pedidos del Master. El panel de «Fuente»
+conserva su propio cierre por etiquetas, con el nombre «Cierre de los pedidos
+del bot, por etiquetas»: no ve las ventas de las asesoras y remite a esta
+tarjeta.
+
+Medido del 14-09 al 13-10-2026, días de Lima, pedidos activos:
+
+| Canal | Pedidos | Ingresos | Cancelados aparte | Ayudados |
+| --- | --- | --- | --- | --- |
+| Asesora | 2.651 | S/ 481.451 | 243 | — |
+| Recompra automática | 29 | S/ 5.826 | 11 | 0 |
+| Bot de Kapso | 593 | S/ 103.880 | 140 | 57 |
+| Bot de carritos externo | 244 | S/ 41.090 | 102 | 51 |
+| Web, la clienta sola | 3.012 | S/ 527.865 | 1.105 | 66 |
+| Otros | 93 | S/ 20.968 | 26 | 15 |
+
+Cómo se calcula: `canal_de_cierre` (migración 0259, de lectura, con la sesión
+de quien mira: cada persona ve solo sus tiendas), resumido en
+`lib/closing-channel.ts` y dibujado en `components/closing-channels.tsx`. Desde
+la 0268 la regla del canal —la tabla de arriba— vive en un solo lugar, la vista
+`pedidos_canal` (con la sesión de quien mira, solo de lectura), y la función la
+lee; las ventas por origen de §17.4 leen la misma vista. Una llamada por tienda,
+en su ventana (`lib/sales-coverage.ts`). Si la migración todavía no se aplicó o
+la función falla, la tarjeta vuelve a la vista anterior (solo pedidos del bot)
+con un aviso y sin cifra de cabecera («—»): su porcentaje sería el número
+equivocado. Nunca con ceros.
+
+### 17.4 Ventas del periodo por origen y conversión por fuente (14-10-2026)
+
+Responde cuánto vendió la tienda —todas sus ventas, no solo las del bot—, quién
+las cerró y, por cada fuente de leads, cuántos de los que llegaron compraron.
+Está en **Consolidado** y en la página de cada tienda, en «Ventas del periodo».
+
+**Por qué cambió.** Las cifras de cabecera (Ingresos, Pedidos, Ticket
+promedio), «Ventas por día» y «Por tienda» salían de `daily_rollups`, que solo
+cuenta los pedidos con la etiqueta `kapso`. Del 14-09 al 13-10-2026 eran cerca
+de 600 de 6.622 pedidos activos: el tablero enseñaba la undécima parte del
+negocio, y
+«Canal de cierre» (§17.3) —que ya contaba todo— no cuadraba con la cabecera de
+arriba.
+
+**Universo.** El mismo de §17.3: todos los pedidos de la tienda (`orders`), por
+el día **local** en que se crearon, con los cancelados aparte y el ingreso como
+total − reembolsado. Cada pedido con su canal de la tabla de §17.3, leído de la
+vista `pedidos_canal`: la cabecera, «Ventas por día», «Por tienda» y «Canal de
+cierre» son las mismas ventas y cuadran entre sí.
+
+| Módulo | Qué cuenta ahora |
+| --- | --- |
+| Ingresos, Pedidos, Ticket promedio | Todas las ventas de las tiendas que cuentan, cada una en su ventana |
+| Ventas por día | Las mismas, cada día partido por grupo de cierre (asesora, bot o automatización, la clienta sola en la web, otros) |
+| Por tienda | Las mismas por tienda, con la parte que cerró una asesora y la conversión del bot de cada una |
+| Canal de cierre | Las mismas por canal (§17.3), con el cambio contra el periodo anterior |
+| Conversión del bot | Pedidos del canal «Bot de Kapso» ÷ conversaciones (abajo) |
+| Conversión por fuente | La cohorte de leads del periodo (abajo) |
+
+**Desde cuándo.** Cada tienda cuenta desde su propio día, como en §17.3: el más
+tardío de `ORDERS_SYNC_FROM` y su inicio en Kapta. Con varias tiendas, la
+cabecera suma cada tienda en su ventana y un aviso arriba de las cifras nombra
+cada tienda que cuenta desde otra fecha, la que empieza después del periodo (no
+entra) y la que todavía no usa Kapta (fuera). Los días de «Ventas por día» van
+desde el primero que cuenta alguna tienda. Si ninguna tienda tiene ventas que
+contar en el periodo, la cabecera vuelve a la vista anterior con un aviso.
+
+**Contra el periodo anterior.** El cambio («+7,7 %») solo se muestra si cada
+tienda que cuenta ahora contaba el periodo anterior **entero**. Si no —el
+periodo actual está recortado, o el anterior cae antes del inicio de alguna
+tienda—, el anterior saldría con menos ventas de las que hubo y el cambio sería
+falso: las cifras dicen «sin comparar: el anterior no tiene todas las ventas».
+El anterior sale de las mismas ventas por origen, con la misma regla.
+
+**«Conversión del bot»** (antes «Conversión»). Los pedidos del canal «Bot de
+Kapso» ÷ las conversaciones de `daily_rollups`, los dos en la ventana de cada
+tienda: dividir un numerador recortado por un denominador entero daría una
+tasa falsa. Un pedido con `kapso` que registró una asesora es de la asesora
+(§17.3) y no entra en el numerador; lo que cerró la web u otro canal, tampoco.
+En el mes medido casi ninguna venta de asesora conservaba `kapso` (§17.3), así
+que la tasa casi no se mueve, pero ahora dice lo que mide.
+
+**Lo que sigue siendo solo del bot, y lo dice.** «Conversión del bot» lo dice
+en su nombre. Productos, Fuente, Embudo y su salud, Desglose de negocio,
+Integridad y Patrón de horas leen los pedidos del bot y llevan «Pedidos del
+bot» en el contexto de su panel; donde la tarjeta enseña pedidos o ingresos,
+también lo dice («pedidos creados por el bot»). Carritos y Números de WhatsApp
+cuentan como compra la del lead por cualquier vía, pero sus ingresos solo
+suman pedidos del bot y lo dicen («Ingresos recuperados del bot», con el ticket
+sobre los carritos que trajeron un pedido del bot; «vende más por el bot»,
+«Ingresos del bot»). La Primera respuesta sale de los cierres diarios. «Venta perdida estimada» multiplica los leads que
+no compraron por el ticket de todas las ventas. El CSV de los cierres diarios
+se llama «Resumen diario del bot CSV».
+
+**Sin la migración 0268**, con error o sin ninguna tienda que contar, la
+cabecera, «Ventas por día» y «Por tienda» vuelven a la vista anterior —los
+cierres diarios del bot, con las etiquetas «Ingresos del bot», «Pedidos del
+bot» y «Ticket promedio del bot»— y un aviso arriba de las cifras dice por qué.
+Nunca con ceros.
+
+**«Conversión por fuente».** Una cohorte: de los leads que **nacieron** en el
+periodo, cuántos compraron en sus primeros 7 días.
+
+- **Nacer.** El día local de la tienda de `coalesce(first_seen_at,
+  created_at)`, dentro de la ventana de su tienda. No nace la fila que Kapta
+  creó desde un pedido del bot cuyo teléfono no tenía lead (llega sin
+  `first_seen_at` y después de su propio pedido): no es alguien que escribió.
+  Medido: 120 de unos 21.800 leads en 30 días.
+- **Madurar.** Un lead entra en la tasa cuando cumplió 7 días al momento de
+  mirar. Los más nuevos son «por madurar»: se cuentan, pero no entran. Por eso
+  esta tarjeta no se compara con el periodo anterior: los últimos días de
+  cualquier periodo todavía están madurando.
+- **Ya era clienta.** Un lead maduro con un pedido activo de la misma tienda
+  **antes** de nacer, por su teléfono o por su propio pedido (`order_id`). Va
+  aparte: comprar otra vez no es convertir. `leads.has_order` no sirve para
+  esto: se marca con cualquier pedido del teléfono, también los anteriores al
+  lead y los cancelados, y nunca se borra. Límite conocido: antes de
+  `ORDERS_SYNC_FROM` (2026-06-01) Kapta solo tiene los pedidos del bot, así
+  que una compra anterior por la web de esa época no se ve; en las cohortes
+  cercanas al inicio de cada tienda alguna clienta puede contar como nueva.
+  El error se achica a medida que el periodo se aleja de esa fecha.
+- **Convirtió.** Un pedido activo de la misma tienda, por el teléfono del lead
+  o su `order_id`, creado después de nacer y antes de 7 días, **por cualquier
+  canal**. Se toma el primero, y su canal (§17.3) dice quién cerró la compra.
+  Un lead sin teléfono (solo `bsuid`) convierte solo por su `order_id`.
+- **La tasa** es convertidos ÷ los maduros que no eran clientas. Sin ninguno,
+  la tasa dice «Sin datos», nunca 0 %. Con varias tiendas se suman
+  numeradores y denominadores; nunca se promedian porcentajes.
+
+| Fuente | `leads.source` |
+| --- | --- |
+| Anuncios de Meta | `meta_ad` |
+| Carritos COD abandonados | `cod_cart` |
+| Orgánico de WhatsApp | sin fuente, o `whatsapp-bot` (la marca que recibe el lead orgánico que ganó, `lib/leads-ingest.ts`) |
+| Web de Facebook | `fb_web` |
+| Búsquedas abandonadas | `abandoned_browse` |
+
+La venta telefónica (`manual`) y cualquier fuente que no esté en la tabla no
+tienen tasa —no hay un canal que medir—: se cuentan aparte, en una línea bajo
+la tabla.
+
+**«Cierre de las asesoras».** En el mismo panel: las ventas que registraron en
+`order_sales` en el periodo, por la hora del botón y también las que después se
+anularon (contadas aparte), ÷ los leads **distintos** de la tienda que
+trabajaron —una gestión firmada de `lead_calls` que no es `system` ni
+`voice_agent`—. No es la conversión de una fuente: una asesora trabaja leads de
+cualquier fuente y de cualquier fecha. Productividad suma esos leads por
+asesora, así que allí un lead que trabajaron dos cuenta dos veces y aquí una.
+
+Medido del 14-09 al 13-10-2026, días de Lima, con la regla de arriba:
+
+| Fuente | Conversión en 7 días | Compras que cerró una asesora |
+| --- | --- | --- |
+| Anuncios de Meta | 6,3 % | 240 de 324 |
+| Carritos COD abandonados | 30,2 % | 714 de 917 |
+| Orgánico de WhatsApp | 9,4 % | 262 de 355 |
+| Web de Facebook | 15,9 % | — |
+| Búsquedas abandonadas | 3,6 % | — |
+
+Cómo se calcula: `ventas_por_origen` y `conversion_por_fuente` (migración 0268,
+de lectura, con la sesión de quien mira), una llamada por tienda en su ventana
+(`getOriginSales` y `getSourceConversion` en `lib/access.ts`), leídas en
+`lib/consolidado-origen.ts` y dibujadas en `components/executive-dashboard.tsx`
+y `components/source-conversion.tsx`. La cohorte parte el nacimiento en dos
+rangos de columnas simples —`first_seen_at` y, sin él, `created_at`— con sus
+índices (`leads_store_first_seen_idx` y `leads_store_created_sin_first_seen_idx`),
+que en producción se crean a mano con `create index concurrently` antes de la
+migración (DEPLOY.md): bajo RLS, Postgres no lleva al índice un rango sobre
+`coalesce(...)`.
 
 ## 18. Implementación incremental
 
@@ -13493,7 +14011,9 @@ nuevo que borra el motivo de la prueba anterior y los pedidos por revisar), las
 dos ya corridas en producción; la 0261 (el modo «Manual» y el turno que dice
 qué fila pide y quién la pidió, 15-10-2026), y la 0262 (el turno que vuelve a
 revisar que la empresa recibió el pago, 15-10-2026), que se aplican a mano, en
-ese orden, antes de su código (35.8). Están también las reglas puras, el
+ese orden, antes de su código (35.8). La 0269 (el turno que deja a «Emitir esta
+boleta» emitir lo pagado antes de «Emitir desde», 15-10-2026) va después de la
+0262, también a mano y antes de su código. Están también las reglas puras, el
 cliente de SimpleFact, el barrido (`/api/cron/invoices`), la sección «Boletas
 y facturas» de Ajustes y el panel «Comprobante» del drawer, con su «Emitir esta
 boleta» (35.7), que solo emite en producción.
@@ -13611,7 +14131,7 @@ panel (`invoiceEligibility`, función pura; los textos en
 | 5 | Todas sus cuentas tienen RUC, y es el mismo | `cuenta_sin_ruc` / `ruc_mezclados` |
 | 6 | El total es mayor que 0 y no pasa de S/ 700 (35.5) | `monto_cero` / `monto_mayor_700` |
 | 7 | Ese RUC no está apagado | `ruc_apagado` |
-| 8 | El pedido quedó pagado desde «Emitir desde» del RUC: cuenta cuándo se registró en Kapta el último de sus pagos validados (`registered_at`, que no cambia si el pago se observa y se vuelve a validar; la fecha de validación, `validated_at`, sí), o la fecha del pedido si es prepago web. Un pago validado sin fecha de registro, o un RUC sin fecha de inicio, no emite | `antes_de_inicio` |
+| 8 | El pedido quedó pagado desde «Emitir desde» del RUC: cuenta cuándo se registró en Kapta el último de sus pagos validados (`registered_at`, que no cambia si el pago se observa y se vuelve a validar; la fecha de validación, `validated_at`, sí), o la fecha del pedido si es prepago web. Un pago validado sin fecha de registro, o un RUC sin fecha de inicio, no emite. La única excepción es de «Emitir esta boleta» con el RUC en Manual: lo pagado antes, pero desde el 01/10/2026 00:00 (hora de Lima), si quien pulsa confirma que en SimpleFact no tiene boleta (abajo; owner 15-10-2026) | `antes_de_inicio` |
 | 9 | No tiene comprobante real vivo ni uno registrado como emitido fuera de Kapta (35.4). En simulación, tampoco una simulación | `ya_tiene` / `ya_simulado` |
 | 10 | Su último intento real no terminó en `error` sin que una persona pidiera reintentar | `error_previo` |
 
@@ -13623,6 +14143,34 @@ cuenta solo lo real —una simulación no frena—, la 10 se mira, y también la
 conexión del RUC (`sin_conexion`). Y justo después de la condición 7, el RUC
 tiene que estar en Manual o en Real (`modo_distinto`); el botón, además, solo
 emite en Manual (35.7).
+
+**Lo pagado antes de «Emitir desde»** (owner, 15-10-2026). La condición 8
+tiene una sola excepción, y es del botón. Antes de Kapta las boletas se
+emitían a mano en SimpleFact, y Kapta no sabe si un pedido de entonces ya tiene
+la suya: una boleta de más es pagar el impuesto dos veces. «Emitir esta
+boleta» (35.7), con el RUC en Manual, deja pasar un pedido que quedó pagado
+antes de «Emitir desde» si quedó pagado desde el **01/10/2026 00:00** (hora de
+Lima, `INVOICE_BACKFILL_FROM`), con la misma cuenta de la condición 8, **y si
+su primer dinero también es de esa hora en adelante**. Para esta excepción,
+«pagado» es además la fecha más temprana entre la del comprobante
+(`order_payments.paid_at`, cuándo se movió la plata según el comprobante;
+puede faltar) y la de registro (`registered_at`) de cada uno de sus pagos
+validados; en un prepago web, la fecha del pedido (`firstPaidAt`). Sin fecha
+de comprobante, o con una que no se entiende, cuenta la de registro. Un pago
+cuyo comprobante dice 29/09 y que se registró en Kapta el 01/10 no pasa: la
+plata se movió cuando las boletas se emitían a mano. Un adelanto movido antes
+del 01/10 tampoco, aunque la diferencia sea de después; un pago rechazado no
+cuenta. La condición 8 no cambia: lo pagado desde «Emitir desde» no mira el
+comprobante. Las reglas lo marcan (`beforeStart`), y quien pulsa tiene que
+confirmar que lo buscó en SimpleFact y no tiene boleta; sin eso no se emite
+(`sin_revision_simplefact`). Las demás condiciones valen igual. Sigue en
+`antes_de_inicio` lo pagado antes del 01/10/2026, lo que no tiene fecha de
+pago, un RUC sin «Emitir desde» y todo pedido de un RUC en Real, porque ahí no
+hay botón. **Con «Emitir desde» en el futuro** (Ajustes lo acepta), nada pagado
+antes de él sale, ni con el botón: la excepción es para lo pagado antes de un
+inicio que ya llegó, nunca para emitir antes de la fecha que puso el owner.
+**El barrido nunca va hacia atrás**: en Simulación, en Manual y en Real, lo
+pagado antes de «Emitir desde» no se simula ni se emite.
 
 **Justo antes de emitir, Kapta vuelve a leer el pedido en Shopify**
 (`fetchOrderForInvoice`), porque lo guardado no alcanza para armar la boleta
@@ -13663,7 +14211,17 @@ validado o, sin pagos validados, la fecha del pedido. Esa fecha y la que manda
 el barrido tienen que ser las dos desde «Emitir desde»; si falta una, o una es
 anterior, no da el turno (`antes_de_inicio`). Así, un error en las reglas o en
 una lectura no manda a SUNAT la boleta de algo pagado antes de la fecha de
-inicio.
+inicio. La única excepción es la de arriba, y la base la vuelve a exigir
+entera (0269): da el turno a algo pagado antes de «Emitir desde» solo si se
+pide con `p_backfill`, una fila real, el RUC en Manual, quién la pide
+(`p_created_by`) y las dos fechas del 01/10/2026 00:00 (hora de Lima) en
+adelante. Sin «Emitir desde», con «Emitir desde» todavía en el futuro (la base
+exige `emit_from <= now()`) o sin una de las fechas, sigue `antes_de_inicio`.
+El primer dinero también lo saca de la base: la fecha más temprana entre
+`paid_at` y `registered_at` de los pagos validados (sin ellos, la fecha del
+pedido), y tiene que ser del 01/10/2026 00:00 (hora de Lima) en adelante.
+La fila que sale así lo dice en su base (`pagado_antes_de_emitir_desde`). El
+barrido nunca manda `p_backfill`.
 
 **Que la empresa recibió el pago tampoco se lo cree** (0262). Entre la lectura
 del código y el turno pasa la relectura en Shopify, y en ese rato un pago
@@ -13756,10 +14314,26 @@ comprobante armado con datos a medias puede ir al RUC equivocado.
   una boleta real, ni al revés. Lo que excede espera al día siguiente y no se
   pierde. El defecto cubre el pico medido (34) más los prepagos web.
 - **Por pasada,** a lo más 15 comprobantes por RUC.
-- **«Emitir desde».** Ningún RUC emite hacia atrás: solo pedidos que quedaron
-  pagados desde esa fecha, y Ajustes no la deja en el pasado. Al cambiar de
-  modo, si quedó atrás, se mueve sola al momento del cambio. Asignar un RUC a
-  una cuenta no emite nada pagado antes de esa fecha. Pasar de Manual a Real
+- **«Emitir desde».** El barrido nunca emite hacia atrás, en ningún modo: solo
+  pedidos que quedaron pagados desde esa fecha, y Ajustes no la deja en el
+  pasado. Al cambiar de modo, si quedó atrás, se mueve sola al momento del
+  cambio. Asignar un RUC a una cuenta no hace que el barrido emita nada pagado
+  antes de esa fecha. La única excepción es de una persona, no del barrido
+  (owner 15-10-2026; 35.3, 35.7): con el RUC en Manual, «Emitir esta boleta»
+  emite lo pagado antes de «Emitir desde» si quedó pagado desde el 01/10/2026
+  00:00 (hora de Lima) y quien pulsa confirmó que en SimpleFact no tiene
+  boleta. La excepción no cambia «Emitir desde»: Ajustes sigue sin aceptar una
+  fecha pasada, y un cambio de modo la sigue moviendo. Con «Emitir desde» en el
+  futuro, nada pagado antes de él sale, ni con el botón (35.3). Ajustes dice lo
+  mismo, sin prometer de más: junto a «Emitir desde», «El barrido solo toma
+  pedidos que quedaron pagados desde aquí (en Manual y con esta fecha ya
+  llegada, «Emitir esta boleta» también puede emitir lo pagado desde el
+  01/10/2026, después de revisar SimpleFact)»;
+  al mover la fecha por un cambio de modo, «Al cambiar de modo, «Emitir desde»
+  quedó en ahora: el barrido no emite nada pagado antes. En Manual, lo pagado
+  desde el 01/10/2026 solo sale con «Emitir esta boleta», después de revisar
+  SimpleFact.»; y en las cuentas de cobro, «Asignar un RUC no hace que el
+  barrido emita nada pagado antes de su «Emitir desde».». Pasar de Manual a Real
   también es cambiar de modo: lo que quedó pagado en Manual y nadie emitió con
   «Emitir esta boleta» no sale en Real. Se emite antes de cambiar, o a mano en
   SimpleFact y se registra con «Ya tiene comprobante».
@@ -13880,7 +14454,7 @@ comprobante armado con datos a medias puede ir al RUC equivocado.
 | --- | --- |
 | `invoice_issuers` | Los RUC: subdominio, token cifrado (AES-256-GCM, `lib/crypto.ts`), modo, «Emitir desde», tope y la última prueba de conexión (RUC leído, fecha y error). Sin policy de lectura: solo la lee el servidor |
 | `store_collection_accounts.invoice_issuer_id` | El RUC de cada cuenta (35.2). Un trigger exige que el RUC sea de la misma organización que la tienda |
-| `order_invoices` | Una fila por intento: pedido, RUC (copiado), modo, estado, total, cuándo quedó pagado, los pagos y cuentas en que se basó (`basis`), lo enviado (`request`), lo recibido (`response` y código HTTP), el id de SimpleFact, serie, correlativo y enlaces al PDF y al XML, quién la emitió con «Emitir esta boleta» o la registró como externa (`created_by`) y quién pidió reintentar |
+| `order_invoices` | Una fila por intento: pedido, RUC (copiado), modo, estado, total, cuándo quedó pagado, los pagos y cuentas en que se basó (`basis`, que dice también si salió pagado antes de «Emitir desde», 35.3), lo enviado (`request`), lo recibido (`response` y código HTTP), el id de SimpleFact, serie, correlativo y enlaces al PDF y al XML, quién la emitió con «Emitir esta boleta» o la registró como externa (`created_by`) y quién pidió reintentar |
 | `invoice_order_checks` | La última revisión del barrido por pedido y modo (motivo y fecha). Con ella el panel dice por qué un pedido no lleva comprobante, y el barrido no relee en Shopify cada 10 minutos un pedido bloqueado |
 
 Reglas de esa tabla:
@@ -13992,7 +14566,9 @@ Reglas de esa tabla:
     como una emisión real (cuentan el error sin reintento y la conexión del RUC; una
     simulación no frena) y sin que la última pasada lo haya frenado por lo que
     dijo Shopify: ahí el panel dice ese motivo, como siempre. El badge dice
-    «Lista para emitir». Con el RUC en Manual, si algo de la emisión real lo
+    «Lista para emitir». Aparece también en un pedido pagado antes de «Emitir
+    desde», si quedó pagado desde el 01/10/2026 (35.3, abajo). Con el RUC en
+    Manual, si algo de la emisión real lo
     frena y el panel no lo dice de otra forma —sin la conexión probada, por
     ejemplo—, a quien gestiona le dice por qué no hay botón. En Ajustes,
     «Emitir» va en la simulada más nueva de un pedido solo cuando el panel de
@@ -14003,7 +14579,41 @@ Reglas de esa tabla:
     CLIENTES VARIOS con el RUC ‹ruc› (‹razón social›). Va a SUNAT y no se
     puede borrar.», con «Sí, emitir» y «Cancelar». Desde el primer «Sí,
     emitir» hasta que vuelve la respuesta, no sale un segundo envío y los
-    botones quedan deshabilitados.
+    botones quedan deshabilitados. Si el pedido quedó pagado antes de «Emitir
+    desde», pide además una casilla (abajo).
+  - **Lo pagado antes de «Emitir desde»** (owner, 15-10-2026; 35.3). Con el
+    RUC en Manual, el botón también emite un pedido que quedó pagado antes de
+    «Emitir desde», si quedó pagado desde el **01/10/2026 00:00** (hora de
+    Lima). Solo el botón: una persona, nunca el barrido. Con «Emitir desde»
+    en el futuro, nada pagado antes de él sale, ni con el botón (35.3).
+    «Quedó pagado» es aquí también el primer dinero (35.3): un pago cuyo
+    comprobante es de antes del 01/10/2026 no lleva botón, aunque se
+    registrara después. Antes de Kapta las boletas se emitían a mano en
+    SimpleFact, y Kapta no sabe si ese pedido ya tiene la suya; una boleta de
+    más es pagar el impuesto dos veces.
+    Por eso la confirmación agrega «Quedó pagado el ‹dd/mm/aaaa hh:mm›, antes
+    de «Emitir desde» (‹dd/mm/aaaa hh:mm›). Kapta no sabe si ya se emitió a
+    mano: búscalo en SimpleFact antes de emitir.» —cuándo quedó pagado y desde
+    cuándo emite el RUC, las dos en hora de Lima— y una casilla «Revisé en
+    SimpleFact y este pedido no tiene boleta». Si el primer pago es de otro
+    momento (la fecha más temprana entre su comprobante y su registro), entre
+    las dos frases dice «El primer pago se hizo el ‹dd/mm/aaaa hh:mm›.»: una
+    boleta hecha a mano pudo salir desde ahí, y con esa fecha se busca en
+    SimpleFact. La casilla empieza sin marcar cada vez que se abre la
+    confirmación, y se desmarca al cancelar y al volver la respuesta. «Sí,
+    emitir» no se puede pulsar hasta marcarla. **La confirmación es de la
+    oferta que se veía al abrirla**: si el panel se relee con ella abierta y
+    cambia el RUC, el total, las fechas o si es de antes de «Emitir desde», se
+    cierra y la casilla se desmarca —lo revisado en SimpleFact era para la
+    otra, y cada RUC tiene su SimpleFact—; y «Sí, emitir» manda lo que se vio,
+    no lo que diga el panel al pulsar: si cambió, el servidor contesta
+    `pedido_cambio`. Si en SimpleFact ya tiene boleta, no se emite: se
+    registra con «Ya tiene comprobante». Sin esta excepción nada cambia: un pedido pagado desde
+    «Emitir desde» no lleva ni el texto ni la casilla. En el panel, la
+    revisión sigue diciendo «Quedó pagado antes de «Emitir desde» del RUC.»
+    —el barrido no lo emite— y, al lado del botón, agrega «No sale sola: se
+    puede emitir con «Emitir esta boleta» después de revisar SimpleFact.».
+    «Emitir» en Ajustes es la misma acción, con la misma casilla.
   - **Qué hace el servidor** (`emitInvoiceAction`). Primero, que es
     producción, antes de leer nada. Después lo que es de quien pulsa: que ve
     el pedido y tiene `invoices.manage`, antes de leer nada con el service
@@ -14016,12 +14626,17 @@ Reglas de esa tabla:
     emite en «Manual»») y que el RUC y el total que se van a enviar son los
     que confirmó. Si el pedido cambió desde que lo abrió, no emite
     (`pedido_cambio`): «El pedido cambió desde que lo abriste (el RUC o el
-    total): vuelve a abrirlo y revisa la boleta antes de emitirla.». La acción
-    no lee el pedido por su cuenta: antes comparaba con una lectura propia,
+    total): vuelve a abrirlo y revisa la boleta antes de emitirla.». Si quedó
+    pagado antes de «Emitir desde» y quien pulsó no marcó la casilla, tampoco
+    emite (`sin_revision_simplefact`): «Quedó pagado antes de «Emitir desde»:
+    falta confirmar que en SimpleFact no tiene boleta.». Solo cuenta una
+    casilla marcada (`true`). La acción no lee el pedido por su cuenta:
+    antes comparaba con una lectura propia,
     `emitInvoiceNow` volvía a leer sin comparar, y entre las dos el pedido
     podía cambiar y salir una boleta que nadie confirmó. Después, el token, la
     relectura en Shopify (el total y, en un prepago web, lo que cobró Flow),
-    la boleta, el turno pidiendo una fila real con quien pulsó (35.3), UNA
+    la boleta, el turno pidiendo una fila real con quien pulsó (35.3) —y, si
+    quedó pagado antes de «Emitir desde», con `p_backfill` (0269)—, UNA
     llamada a SimpleFact, la lectura de la respuesta, la fila (solo si sigue
     en `emitiendo`) y las reglas que apagan el RUC (35.4). Los mismos
     candados: un comprobante real vivo por pedido (el índice único), el tope
@@ -14139,6 +14754,26 @@ pago, que es lo que el turno revisa: lo bien pagado sigue dando su fila. Va
 después de la 0261: sin ella —sigue el turno de nueve argumentos, o falta el
 de once— se detiene sin cambiar nada. Si después alguien vuelve a correr la
 0261, el turno queda otra vez sin esta revisión hasta volver a correr la 0262.
+Con la 0269 aplicada, lo que se vuelve a correr después de la 0261 es la 0269
+(no la 0262): la 0262 pasaría su guarda y dejaría los dos turnos.
+
+**Antes de la 0269** (owner, 15-10-2026). También se aplica a mano, después de
+la 0262 y antes de su código (DEPLOY.md). Cambia la firma del turno: borra la
+de once argumentos y crea la de doce, con `p_backfill` al final, falso por
+defecto; el cuerpo es el de la 0262. El código de antes y el de ahora piden el
+turno por nombre, y con un solo turno esas llamadas van al de doce con
+`p_backfill` en falso: hace lo mismo que la 0262. El código solo manda
+`p_backfill` desde «Emitir esta boleta», con un pedido pagado antes de «Emitir
+desde» (35.3). Si llega antes que la 0269, nada se emite de más y nada se pone
+rojo: lo pagado desde «Emitir desde» se simula y se emite como siempre, y un
+pedido pagado antes no reserva ni envía nada: es `sin_migracion`, y «Emitir
+esta boleta» dice «Falta aplicar la migración 0269 de comprobantes
+(invoice_claim con p_backfill).». La 0269 se reconoce por ese parámetro
+(`INVOICE_CLAIM_BACKFILL_MIGRATION`). Va después de la 0262: con el turno de
+nueve argumentos, o sin el de once ni el de doce, se detiene sin cambiar nada.
+Si después alguien vuelve a correr la 0261, quedan dos turnos —el de once y el
+de doce— y la llamada por nombre del código falla: no se simula ni se emite
+nada hasta volver a correr la 0269.
 
 Para el barrido, «falta una migración de comprobantes» es solo un «no existe»
 (de tabla o de función) que nombra algo que crean la 0257 —`invoice_issuers`,
@@ -14189,8 +14824,8 @@ Implementación:
   `store_collection_accounts.invoice_issuer_id` con su trigger,
   `order_invoices`, `invoice_order_checks`, la función `invoice_claim` (el
   turno) y la semilla de GRUPO GF S.A.C. Es la que corrió en producción el
-  14-10-2026, y no se reescribe: lo que cambió después va en la 0260, la 0261
-  y la 0262.
+  14-10-2026, y no se reescribe: lo que cambió después va en la 0260, la 0261,
+  la 0262 y la 0269.
 - `db/migrations/0260_invoices_hardening.sql`: los arreglos de la revisión
   adversaria, sobre la 0257: las funciones `invoice_claim` (el turno) e
   `invoice_candidates` (qué pedidos mira el barrido), y las de los triggers
@@ -14210,8 +14845,20 @@ Implementación:
   `prepago_con_comprobantes`), que cada pago de la base del comprobante siga
   validado, y bloquea los pagos del pedido mientras dura. Se detiene sin la
   0261 delante. No toca filas.
+- `db/migrations/0269_invoices_backfill.sql`: lo pagado antes de «Emitir
+  desde» con «Emitir esta boleta» (owner 15-10-2026), sobre la 0262: solo
+  `invoice_claim`, que pasa a doce argumentos con `p_backfill` (falso por
+  defecto) y borra la firma de once. El cuerpo es el de la 0262 salvo dos
+  cosas: con `p_backfill`, una fila real, el RUC en Manual, quién la pide
+  (`p_created_by`) y «Emitir desde» ya llegado, da el turno a lo pagado antes
+  de «Emitir desde» si las dos fechas son del 01/10/2026 00:00 (hora de Lima)
+  en adelante, y también el primer dinero (la fecha más temprana entre
+  `paid_at` y `registered_at` de sus pagos validados); y esa fila lleva en su
+  base `pagado_antes_de_emitir_desde`. Se detiene con el turno de nueve
+  argumentos, o sin el de once ni el de doce. No toca filas.
 - `lib/invoicing/rules.ts`: reglas puras (cuenta y RUC de cada pago,
-  elegibilidad, la boleta, la lectura de la respuesta) y cuándo se puede
+  elegibilidad —con `INVOICE_BACKFILL_FROM`, el 01/10/2026 de lo pagado antes
+  de «Emitir desde»—, la boleta, la lectura de la respuesta) y cuándo se puede
   liberar un `en_duda` (`invoiceReleaseAvailableAt` e `invoiceReleaseBlock`,
   con `INVOICE_RELEASE_MIN_AGE_MS`).
 - `lib/invoicing/shopify-order.ts`: la lectura del pedido en Shopify y su
@@ -14222,7 +14869,10 @@ Implementación:
   emisión real del barrido, para un pedido, que compara lo que la persona
   confirmó) e `invoiceEmitNowReadiness` / `loadInvoiceEmitNowOffers` (cuándo
   se ofrece el botón, en el panel y en Ajustes), y `invoiceEmitAllowedHere`
-  (solo producción emite).
+  (solo producción emite). Con un pedido pagado antes de «Emitir desde»,
+  `emitInvoiceNow` pide la casilla (`sin_revision_simplefact`) y el turno va
+  con `p_backfill`; sin la 0269, contesta `sin_migracion`
+  (`INVOICE_CLAIM_BACKFILL_MIGRATION`).
 - `app/api/cron/invoices/route.ts`: el barrido, cada 10 minutos.
 - Ajustes, en `app/dashboard/[storeId]/settings/invoice-actions.ts` y
   `components/invoice-settings-section.tsx`; el panel, en

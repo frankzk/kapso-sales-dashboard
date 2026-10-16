@@ -28,6 +28,7 @@ import {
 import { extractNumericId } from "@/lib/shopify-urls";
 import { peruMobileDigits } from "@/lib/phone";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { insertOrderIfAbsent } from "@/lib/order-sale";
 
 /** Etiqueta común a todas las pruebas; la del grupo (`cohort`) va además. */
 export const AUTO_TRIAL_TAG = "auto_recompra";
@@ -394,19 +395,14 @@ export function autoTrialDeps(
       const order = await fetchOrderById({ ...shopify, storeId, orderGid });
       let orderId: string | null = null;
       if (order?.shopify_order_id) {
-        // Mismas etiquetas locales que un carrito recuperado sin asesora
-        // (linkCompletedDraftToLead): `kapso` para que cuente en los rollups,
-        // `cod_recuperado` para distinguirlo de los pedidos del bot.
-        order.tags = [...new Set([...order.tags, "kapso", "cod_recuperado", AUTO_TRIAL_TAG, row.cohort])];
-        const { error } = await admin.from("orders").upsert([order], { onConflict: "store_id,shopify_order_id" });
-        if (error) throw new Error(`orders: ${error.message}`);
-        const { data } = await admin
-          .from("orders")
-          .select("id")
-          .eq("store_id", storeId)
-          .eq("shopify_order_id", order.shopify_order_id)
-          .maybeSingle();
-        orderId = (data as { id: string } | null)?.id ?? null;
+        // TAL COMO VIENE de Shopify y sin pisar la fila del webhook. Antes se le
+        // añadían `kapso`, `cod_recuperado`, `auto_recompra` y la cohorte solo
+        // en nuestra copia, y la sincronización los borraba en minutos (sin
+        // `write_orders` tampoco quedan en Shopify). Que es una recompra lo dice
+        // esta tabla, y así lo clasifica el canal de cierre (MOM §17.3).
+        const { id, error } = await insertOrderIfAbsent(admin, order as unknown as Record<string, unknown> & { store_id: string; shopify_order_id: string });
+        if (error) throw new Error(`orders: ${error}`);
+        orderId = id;
         if (orderId) await recomputeOrderMasterSafe(admin, [orderId]);
       }
       const name = orderName ?? order?.name ?? "pedido";

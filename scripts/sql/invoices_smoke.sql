@@ -1,16 +1,20 @@
--- Comprobantes electrónicos por RUC (0257, 0260, 0261 y 0262, MOM §35). Corre
--- solo en el clúster desechable de verify-db, después de todas las migraciones,
--- dentro de una transacción que se deshace. Nunca llama a SimpleFact.
+-- Comprobantes electrónicos por RUC (0257, 0260, 0261, 0262 y 0269, MOM §35).
+-- Corre solo en el clúster desechable de verify-db, después de todas las
+-- migraciones, dentro de una transacción que se deshace. Nunca llama a
+-- SimpleFact.
 --
 -- La 0257 es la que corrió en producción el 14-10-2026, la 0260 cambia cuatro
 -- de sus funciones (los arreglos de la revisión adversaria), la 0261 trae el
--- modo «Manual» (el turno con `p_mode` y `p_created_by`) y la 0262 hace que el
--- turno vuelva a revisar que la empresa recibió el pago. Cada vez que esta
--- prueba vuelve a correr la 0257, corre la 0260, la 0261 y la 0262 justo
--- después; y cada vez que vuelve a correr la 0261, la 0262 detrás: la 0257
--- sola deja las funciones de antes (y el turno de nueve argumentos, que junto
--- al de once vuelve ambigua una llamada por nombre), la 0261 sola deja el turno
--- sin la revisión del pago, y el resto de la prueba es sobre las de ahora.
+-- modo «Manual» (el turno con `p_mode` y `p_created_by`), la 0262 hace que el
+-- turno vuelva a revisar que la empresa recibió el pago y la 0269 deja emitir
+-- con el botón lo pagado antes de «Emitir desde», desde el 01/10/2026 (el
+-- turno de doce argumentos, con `p_backfill`). Cada vez que esta prueba vuelve
+-- a correr la 0257, corre la 0260, la 0261, la 0262 y la 0269 justo después; y
+-- cada vez que vuelve a correr la 0261, la 0262 y la 0269 detrás: la 0257 sola
+-- deja las funciones de antes (y el turno de nueve argumentos, que junto al de
+-- doce vuelve ambigua una llamada por nombre), la 0261 sola deja el turno de
+-- once al lado del de doce (otra vez ambigua), y el resto de la prueba es
+-- sobre las de ahora.
 --
 -- Desde la 0262 el turno no da una fila sin pago: los pedidos de las pruebas
 -- que lo piden tienen sus pagos validados, o son prepagos web de verdad
@@ -56,7 +60,17 @@
 --      un prepago web de verdad sin comprobantes—, y que cada pago que nombra
 --      la base del comprobante sigue validado; un pago rechazado entre la
 --      lectura del código y el turno no deja fila. Va solo después de la 0261,
---      sobre ella cambia solo el turno, y correrla dos veces es correrla una.
+--      sobre ella cambia solo el turno, y correrla dos veces es correrla una;
+--   l) la 0269: «Emitir esta boleta» emite lo pagado antes de «Emitir desde»
+--      solo con `p_backfill`, una fila real pedida por una persona, el RUC en
+--      Manual y las dos fechas desde el 01/10/2026 00:00 de Lima —y el primer
+--      dinero: la fecha más temprana entre el comprobante (`paid_at`) y el
+--      registro de cada pago validado—, y la fila lo dice en su base; el
+--      barrido, una simulada, el RUC en Real o una fecha anterior siguen en
+--      `antes_de_inicio`. Sobre la 0262 cambia solo el
+--      turno —el de once se va, nace el de doce con el mismo cuerpo salvo la
+--      fecha y la base de la fila—, solo para `service_role`; se detiene sin
+--      la 0262 delante, y correrla dos veces es correrla una.
 begin;
 set local client_min_messages = warning;
 
@@ -173,7 +187,7 @@ begin
   end loop;
 end $$;
 
-\echo '  volver a correr la 0257 (y la 0260, la 0261 y la 0262) no pisa lo que el owner cambió, y siembra solo donde se cobra en esa cuenta'
+\echo '  volver a correr la 0257 (y la 0260, la 0261, la 0262 y la 0269) no pisa lo que el owner cambió, y siembra solo donde se cobra en esa cuenta'
 -- El owner deja el Yape ···309 de la tienda A en «Sin comprobante».
 update store_collection_accounts set invoice_issuer_id = null
  where store_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' and phone_last_digits = '309';
@@ -194,14 +208,16 @@ insert into store_collection_accounts (store_id, label, phone_last_digits, note)
 
 -- La migración entera, no una copia de su semilla: si la semilla cambia, la
 -- prueba prueba la nueva. Se declara idempotente (DEPLOY.md la aplica a mano).
--- La 0260, la 0261 y la 0262 van justo después: la 0257 sola vuelve a dejar
--- las funciones de antes de la revisión, y las pruebas que siguen son de las de
--- ahora (sin la 0261 quedarían dos turnos, el de nueve argumentos y el de once;
--- sin la 0262, un turno que no mira si el pedido quedó pagado).
+-- La 0260, la 0261, la 0262 y la 0269 van justo después: la 0257 sola vuelve
+-- a dejar las funciones de antes de la revisión, y las pruebas que siguen son
+-- de las de ahora (sin la 0261 quedarían dos turnos, el de nueve argumentos y
+-- el de doce; sin la 0262, un turno que no mira si el pedido quedó pagado; sin
+-- la 0269, el de once al lado del de doce).
 \ir ../../db/migrations/0257_invoices.sql
 \ir ../../db/migrations/0260_invoices_hardening.sql
 \ir ../../db/migrations/0261_invoices_manual.sql
 \ir ../../db/migrations/0262_invoices_claim_coverage.sql
+\ir ../../db/migrations/0269_invoices_backfill.sql
 
 do $$
 declare
@@ -248,7 +264,7 @@ end $$;
 
 -- Y cambia de idea: borra el RUC sembrado (sus cuentas quedan sin RUC por el
 -- `on delete set null`) y da de alta otro, al que asigna el ···309. Volver a
--- correr la 0257 (y la 0260, la 0261 y la 0262) recrea GRUPO GF S.A.C. en Y,
+-- correr la 0257 (y la 0260, la 0261, la 0262 y la 0269) recrea GRUPO GF S.A.C. en Y,
 -- pero no le quita el ···309 al RUC que eligió el owner: la semilla solo llena
 -- cuentas vacías.
 delete from invoice_issuers where org_id = '25700000-0000-0000-0000-0000000000a1';
@@ -262,6 +278,7 @@ update store_collection_accounts
 \ir ../../db/migrations/0260_invoices_hardening.sql
 \ir ../../db/migrations/0261_invoices_manual.sql
 \ir ../../db/migrations/0262_invoices_claim_coverage.sql
+\ir ../../db/migrations/0269_invoices_backfill.sql
 
 do $$
 declare
@@ -1052,7 +1069,7 @@ begin
         end if;
       end loop;
     end loop;
-    if has_function_privilege(v_rol, 'public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)', 'execute') then
+    if has_function_privilege(v_rol, 'public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)', 'execute') then
       raise exception '% puede pedir el turno', v_rol;
     end if;
     if has_function_privilege(v_rol, 'public.invoice_candidates(uuid, text, timestamptz, integer, text[], uuid)', 'execute') then
@@ -1064,7 +1081,7 @@ begin
       raise exception 'service_role no lee %', v_tabla;
     end if;
   end loop;
-  if not has_function_privilege('service_role', 'public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)', 'execute') then
+  if not has_function_privilege('service_role', 'public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)', 'execute') then
     raise exception 'service_role no puede pedir el turno';
   end if;
   if not has_function_privilege('service_role', 'public.invoice_candidates(uuid, text, timestamptz, integer, text[], uuid)', 'execute') then
@@ -1357,11 +1374,12 @@ reset role;
 -- 0257 —que guardan el oid— las llaman sin recrearse; ninguna fila cambia; y
 -- correr la 0260 otra vez no cambia nada.
 --
--- Después vinieron la 0261 y la 0262, y lo que deja la cadena entera ya no es
--- la 0260 en dos de esas funciones: `invoice_issuers_touch` y el turno, que
--- pasó a tener once argumentos (0261) y a revisar el pago (0262). La 0257 y la
--- 0260 vuelven a crear el de nueve junto al de once; la 0261, al final, lo
--- borra, y con la 0262 detrás todo queda como lo dejó la cadena.
+-- Después vinieron la 0261, la 0262 y la 0269, y lo que deja la cadena entera
+-- ya no es la 0260 en dos de esas funciones: `invoice_issuers_touch` y el
+-- turno, que pasó a tener once argumentos (0261), a revisar el pago (0262) y a
+-- tener doce (0269, `p_backfill`). La 0257 y la 0260 vuelven a crear el de
+-- nueve junto al de doce; la 0261, al final, lo borra y crea el de once, la
+-- 0262 lo reescribe, y la 0269 lo borra: todo queda como lo dejó la cadena.
 update invoice_issuers set mode = 'simulacion', emit_from = now()
  where org_id = '25700000-0000-0000-0000-0000000000a1' and ruc = '20556792829';
 
@@ -1375,7 +1393,7 @@ create function pg_temp.foto_0260(p_paso text) returns void language sql as $$
       'invoice_issuers_touch()',
       'order_invoices_guard()',
       'invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)',
-      'invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)',
+      'invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)',
       'invoice_candidates(uuid, text, timestamptz, integer, text[], uuid)'
     ]) as f
   union all
@@ -1401,14 +1419,15 @@ do $$ begin perform pg_temp.foto_0260('0260'); end $$;
 do $$ begin perform pg_temp.foto_0260('0260 otra vez'); end $$;
 \ir ../../db/migrations/0261_invoices_manual.sql
 \ir ../../db/migrations/0262_invoices_claim_coverage.sql
-do $$ begin perform pg_temp.foto_0260('0262'); end $$;
+\ir ../../db/migrations/0269_invoices_backfill.sql
+do $$ begin perform pg_temp.foto_0260('0269'); end $$;
 
 do $$
 declare
   c_touch      constant text := 'invoice_issuers_touch()';
   c_guard      constant text := 'order_invoices_guard()';
   c_claim      constant text := 'invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)';
-  c_claim11    constant text := 'invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)';
+  c_claim12    constant text := 'invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)';
   c_candidates constant text := 'invoice_candidates(uuid, text, timestamptz, integer, text[], uuid)';
   v_fn   text;
   v_paso text;
@@ -1422,10 +1441,11 @@ begin
   -- Cada paso con sus siete cosas, y cada función existe en cada paso: sin
   -- esto, un NULL haría pasar en silencio las comparaciones de abajo. La única
   -- que falta es el turno de nueve antes y después de la cadena: la 0261 lo
-  -- borra, y la 0257 y la 0260 lo vuelven a crear.
+  -- borra, y la 0257 y la 0260 lo vuelven a crear. El de once no está en la
+  -- foto: nace con la 0261 y la 0269 lo borra, dentro del último paso.
   if (select count(*) from foto_0260 where valor is not null and valor not like '-%') <> 5 * 7 - 2
      or (pg_temp.en_0260('antes', c_claim) like '-%') is not true
-     or (pg_temp.en_0260('0262', c_claim) like '-%') is not true then
+     or (pg_temp.en_0260('0269', c_claim) like '-%') is not true then
     raise exception 'foto incompleta: %', (select string_agg(paso || '/' || cosa, ', ') from foto_0260
                                            where valor is null or valor like '-%');
   end if;
@@ -1442,13 +1462,13 @@ begin
      or (pg_temp.en_0260('0257', c_claim) like '%max(registered_at)%') is not false then
     raise exception 'la 0257 ya revisa los pagos en el turno: lo nuevo va en otra migración';
   end if;
-  -- La 0257 no crea ni borra invoice_candidates, ni toca el turno de once: los
+  -- La 0257 no crea ni borra invoice_candidates, ni toca el turno de doce: los
   -- que había siguen igual.
   if pg_temp.en_0260('0257', c_candidates) is distinct from pg_temp.en_0260('antes', c_candidates) then
     raise exception 'la 0257 tocó invoice_candidates';
   end if;
-  if pg_temp.en_0260('0257', c_claim11) is distinct from pg_temp.en_0260('antes', c_claim11) then
-    raise exception 'la 0257 tocó el turno de once argumentos';
+  if pg_temp.en_0260('0257', c_claim12) is distinct from pg_temp.en_0260('antes', c_claim12) then
+    raise exception 'la 0257 tocó el turno de doce argumentos';
   end if;
 
   -- La 0260: las cuatro de ahora.
@@ -1474,21 +1494,24 @@ begin
   end if;
 
   -- Lo que dejó verify-db (todas las migraciones, en orden): la 0260 en las dos
-  -- que la 0261 no toca, y la 0261 (con el turno de la 0262) en las otras dos.
+  -- que la 0261 no toca, la 0261 en `invoice_issuers_touch` y la 0269 en el
+  -- turno.
   foreach v_fn in array array[c_guard, c_candidates] loop
     if pg_temp.en_0260('antes', v_fn) is distinct from pg_temp.en_0260('0260', v_fn) then
       raise exception 'la cadena de migraciones no deja % como la 0260', v_fn;
     end if;
   end loop;
-  foreach v_fn in array array[c_touch, c_claim, c_claim11, c_candidates, c_guard] loop
-    if pg_temp.en_0260('antes', v_fn) is distinct from pg_temp.en_0260('0262', v_fn) then
-      raise exception 'la 0261 y la 0262 al final no dejan % como la dejó la cadena', v_fn;
+  foreach v_fn in array array[c_touch, c_claim, c_claim12, c_candidates, c_guard] loop
+    if pg_temp.en_0260('antes', v_fn) is distinct from pg_temp.en_0260('0269', v_fn) then
+      raise exception 'la 0261, la 0262 y la 0269 al final no dejan % como la dejó la cadena', v_fn;
     end if;
   end loop;
 
-  -- `create or replace` conserva el oid: lo que los triggers guardan.
-  foreach v_fn in array array[c_touch, c_guard, c_claim11, c_candidates] loop
-    foreach v_paso in array array['0257', '0260', '0260 otra vez', '0262'] loop
+  -- `create or replace` conserva el oid: lo que los triggers guardan. El turno
+  -- de doce tampoco cambia de oid: ninguna lo borra, y la 0269 lo reemplaza en
+  -- su lugar.
+  foreach v_fn in array array[c_touch, c_guard, c_claim12, c_candidates] loop
+    foreach v_paso in array array['0257', '0260', '0260 otra vez', '0269'] loop
       if split_part(pg_temp.en_0260(v_paso, v_fn), ' ', 1) is distinct from split_part(pg_temp.en_0260('antes', v_fn), ' ', 1) then
         raise exception '% cambió de oid en el paso %', v_fn, v_paso;
       end if;
@@ -1501,9 +1524,9 @@ begin
     end if;
   end loop;
 
-  foreach v_fn in array array[c_touch, c_guard, c_claim11, c_candidates] loop
+  foreach v_fn in array array[c_touch, c_guard, c_claim12, c_candidates] loop
     -- Una sola versión de cada una: ninguna sobrecarga olvidada (tampoco el
-    -- turno de nueve, que la 0261 borró).
+    -- turno de nueve, que la 0261 borró, ni el de once, que borró la 0269).
     select count(*) into v_n from pg_proc
      where pronamespace = 'public'::regnamespace and proname = split_part(v_fn, '(', 1);
     if v_n <> 1 then raise exception '% tiene % versiones', split_part(v_fn, '(', 1), v_n; end if;
@@ -1514,14 +1537,14 @@ begin
       end if;
     end loop;
   end loop;
-  if not has_function_privilege('service_role', c_claim11, 'execute')
+  if not has_function_privilege('service_role', c_claim12, 'execute')
      or not has_function_privilege('service_role', c_candidates, 'execute') then
     raise exception 'service_role no puede pedir el turno o la lista';
   end if;
 
-  -- Ni la 0260, ni la 0261, ni la 0262 recrean los triggers: los mismos,
-  -- llamando a las mismas funciones.
-  foreach v_paso in array array['0260', '0260 otra vez', '0262'] loop
+  -- Ni la 0260, ni la 0261, ni la 0262, ni la 0269 recrean los triggers: los
+  -- mismos, llamando a las mismas funciones.
+  foreach v_paso in array array['0260', '0260 otra vez', '0269'] loop
     if pg_temp.en_0260(v_paso, 'triggers') is distinct from pg_temp.en_0260('0257', 'triggers') then
       raise exception 'el paso % recreó triggers: % → %', v_paso, pg_temp.en_0260('0257', 'triggers'),
         pg_temp.en_0260(v_paso, 'triggers');
@@ -1533,7 +1556,7 @@ begin
   end if;
 
   -- Ningún dato cambia, en ningún paso; y la segunda 0260 es la primera.
-  foreach v_paso in array array['0257', '0260', '0260 otra vez', '0262'] loop
+  foreach v_paso in array array['0257', '0260', '0260 otra vez', '0269'] loop
     if pg_temp.en_0260(v_paso, 'datos') is distinct from pg_temp.en_0260('antes', 'datos') then
       raise exception 'el paso % cambió datos de comprobantes', v_paso;
     end if;
@@ -1560,7 +1583,7 @@ begin
    where org_id = '25700000-0000-0000-0000-0000000000a1' and ruc = '20556792829'
   returning * into v_y;
   if v_y.check_error is not null or v_y.checked_at is not null or v_y.mode <> 'simulacion' then
-    raise exception 'token nuevo tras la 0260, la 0261 y la 0262: % % %', v_y.check_error, v_y.checked_at, v_y.mode;
+    raise exception 'token nuevo tras la 0260, la 0261, la 0262 y la 0269: % % %', v_y.check_error, v_y.checked_at, v_y.mode;
   end if;
 end $$;
 
@@ -1569,8 +1592,8 @@ end $$;
 -- Producción (15-10-2026) tiene la 0257 y la 0260: el CHECK del modo que la
 -- 0257 escribió dentro de la columna (sin 'manual', con el nombre que le puso
 -- Postgres), `invoice_issuers_real_ready` solo para Real, el turno de nueve
--- argumentos y no el de once. Se deja la base así, con los RUC y los
--- comprobantes de las pruebas de arriba, y se corre la 0261 encima.
+-- argumentos y ni el de once ni el de doce. Se deja la base así, con los RUC y
+-- los comprobantes de las pruebas de arriba, y se corre la 0261 encima.
 alter table invoice_issuers drop constraint invoice_issuers_mode_check;
 alter table invoice_issuers add check (mode in ('apagado', 'simulacion', 'real'));
 alter table invoice_issuers drop constraint invoice_issuers_real_ready;
@@ -1578,7 +1601,7 @@ alter table invoice_issuers add constraint invoice_issuers_real_ready check (
   mode <> 'real'
   or (token_enc is not null and emit_from is not null and checked_ruc is not null and checked_ruc = ruc)
 );
-drop function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid);
+drop function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean);
 \ir ../../db/migrations/0260_invoices_hardening.sql
 
 -- Una foto por paso: cada función (oid, definición y permisos), cada CHECK de
@@ -1593,6 +1616,7 @@ create function pg_temp.foto_0261(p_paso text) returns void language sql as $$
       'order_invoices_guard()',
       'invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)',
       'invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)',
+      'invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)',
       'invoice_candidates(uuid, text, timestamptz, integer, text[], uuid)'
     ]) as f
     left join pg_proc p on p.oid = to_regprocedure(f)
@@ -1629,9 +1653,11 @@ $$;
 do $$ begin perform pg_temp.foto_0261('produccion'); end $$;
 \ir ../../db/migrations/0261_invoices_manual.sql
 do $$ begin perform pg_temp.foto_0261('0261'); end $$;
--- La 0262 detrás: el resto de la prueba es sobre el turno de ahora. Lo que la
--- 0262 cambia sobre la 0261 lo prueba la sección k.
+-- La 0262 y la 0269 detrás: el resto de la prueba es sobre el turno de ahora.
+-- Lo que la 0262 cambia sobre la 0261 lo prueba la sección k; lo que la 0269
+-- cambia sobre la 0262, la sección l.
 \ir ../../db/migrations/0262_invoices_claim_coverage.sql
+\ir ../../db/migrations/0269_invoices_backfill.sql
 
 do $$
 declare
@@ -1639,12 +1665,13 @@ declare
   c_guard   constant text := 'order_invoices_guard()';
   c_claim9  constant text := 'invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)';
   c_claim11 constant text := 'invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)';
+  c_claim12 constant text := 'invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)';
   c_cand    constant text := 'invoice_candidates(uuid, text, timestamptz, integer, text[], uuid)';
   v_cosa text;
 begin
   -- La foto de producción es la de producción: RUC y comprobantes que cuidar,
   -- el CHECK del modo sin 'manual' con el nombre que le puso Postgres, real
-  -- listo solo para Real, y el turno de nueve sin el de once.
+  -- listo solo para Real, y el turno de nueve sin el de once ni el de doce.
   if (select count(*) from invoice_issuers where mode in ('simulacion', 'real')) = 0
      or (select count(*) from order_invoices) = 0 then
     raise exception 'la foto de producción no tiene RUC encendidos ni comprobantes que cuidar';
@@ -1654,7 +1681,8 @@ begin
      or (pg_temp.en_0261('produccion', 'check invoice_issuers_real_ready') like '%''real''%') is not true
      or (pg_temp.en_0261('produccion', 'check invoice_issuers_real_ready') like '%''manual''%') is not false
      or (pg_temp.en_0261('produccion', c_claim9) like '-%') is not false
-     or (pg_temp.en_0261('produccion', c_claim11) like '-%') is not true then
+     or (pg_temp.en_0261('produccion', c_claim11) like '-%') is not true
+     or (pg_temp.en_0261('produccion', c_claim12) like '-%') is not true then
     raise exception 'la foto de producción no es la de producción: %',
       (select string_agg(cosa || ' = ' || left(valor, 60), '; ') from foto_0261 where paso = 'produccion');
   end if;
@@ -1689,6 +1717,7 @@ begin
   -- de hoy no es ambigua.
   if (pg_temp.en_0261('0261', c_claim9) like '-%') is not true
      or (pg_temp.en_0261('0261', c_claim11) like '-%') is not false
+     or (pg_temp.en_0261('0261', c_claim12) like '-%') is not true
      or (select count(*) from pg_proc where pronamespace = 'public'::regnamespace and proname = 'invoice_claim') <> 1 then
     raise exception '0261: los turnos quedaron así: nueve %, once %', left(pg_temp.en_0261('0261', c_claim9), 20),
       left(pg_temp.en_0261('0261', c_claim11), 20);
@@ -1728,6 +1757,7 @@ alter table invoice_issuers drop constraint invoice_issuers_mode_check;
 alter table invoice_issuers add constraint invoice_issuers_modo_0257 check (mode in ('apagado', 'simulacion', 'real'));
 \ir ../../db/migrations/0261_invoices_manual.sql
 \ir ../../db/migrations/0262_invoices_claim_coverage.sql
+\ir ../../db/migrations/0269_invoices_backfill.sql
 do $$
 begin
   if pg_temp.checks_del_modo() <> 'invoice_issuers_mode_check' then
@@ -2070,24 +2100,25 @@ begin
 end $$;
 reset role;
 
--- El navegador, ni con los nueve ni con los once.
+-- El navegador, ni con los nueve ni con los once. El turno de ahora es el de
+-- doce (0269): las dos llamadas van a él.
 do $$
 declare
-  c_claim11 constant text := 'invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)';
+  c_turno constant text := 'invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)';
   v_rol text;
 begin
   foreach v_rol in array array['anon', 'authenticated'] loop
-    if has_function_privilege(v_rol, c_claim11, 'execute') then
-      raise exception '% puede pedir el turno de once', v_rol;
+    if has_function_privilege(v_rol, c_turno, 'execute') then
+      raise exception '% puede pedir el turno', v_rol;
     end if;
   end loop;
   -- Tampoco PUBLIC: una función nace ejecutable por todos.
   if exists (select 1 from pg_proc p, aclexplode(p.proacl) a
-              where p.oid = to_regprocedure(c_claim11) and a.grantee = 0 and a.privilege_type = 'EXECUTE') then
-    raise exception 'PUBLIC puede pedir el turno de once';
+              where p.oid = to_regprocedure(c_turno) and a.grantee = 0 and a.privilege_type = 'EXECUTE') then
+    raise exception 'PUBLIC puede pedir el turno';
   end if;
-  if not has_function_privilege('service_role', c_claim11, 'execute') then
-    raise exception 'service_role no puede pedir el turno de once';
+  if not has_function_privilege('service_role', c_turno, 'execute') then
+    raise exception 'service_role no puede pedir el turno';
   end if;
 end $$;
 set local request.test_uid = '00000000-0000-0000-0000-00000000000c';
@@ -2123,10 +2154,11 @@ exception when insufficient_privilege then null;
 end $$;
 reset role;
 
-\echo '  correr la 0261 otra vez (con la 0262 detrás), con un RUC en Manual y sus boletas, no cambia nada'
+\echo '  correr la 0261 otra vez (con la 0262 y la 0269 detrás), con un RUC en Manual y sus boletas, no cambia nada'
 do $$ begin perform pg_temp.foto_0261('manual'); end $$;
 \ir ../../db/migrations/0261_invoices_manual.sql
 \ir ../../db/migrations/0262_invoices_claim_coverage.sql
+\ir ../../db/migrations/0269_invoices_backfill.sql
 do $$ begin perform pg_temp.foto_0261('0261 otra vez'); end $$;
 do $$
 begin
@@ -2402,9 +2434,11 @@ end $$;
 reset role;
 
 \echo '  0262 sobre la 0261: cambia solo el turno, en su lugar y con su firma; dos veces es una; y sin la 0261 se detiene sin cambiar nada'
--- Lo que habrá en producción cuando se aplique: la 0257, la 0260 y la 0261.
--- Volver a correr la 0261 deja su turno, sin la revisión del pago: por eso la
--- 0262 va siempre después.
+-- Lo que habrá en producción cuando se aplique: la 0257, la 0260 y la 0261, y
+-- todavía no la 0269 (su turno de doce se quita aquí; la sección l lo vuelve a
+-- poner). Volver a correr la 0261 deja su turno, sin la revisión del pago: por
+-- eso la 0262 va siempre después.
+drop function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean);
 \ir ../../db/migrations/0261_invoices_manual.sql
 do $$ begin perform pg_temp.foto_0261('k 0261'); end $$;
 \ir ../../db/migrations/0262_invoices_claim_coverage.sql
@@ -2532,5 +2566,598 @@ begin
   end if;
 end $$;
 
+-- ── l) Lo pagado antes de «Emitir desde», con el botón (0269) ───────────────
+\echo '  0269 sobre la 0262: se va el turno de once y nace el de doce, con el mismo cuerpo salvo la fecha y la base de la fila; solo service_role; dos veces es una'
+-- Lo que hay en producción el 15-10-2026: la 0257, la 0260, la 0261 y la 0262
+-- (lo que dejó la sección k). Se corre la 0269 encima, y otra vez. El cuerpo
+-- del turno de la 0262 se guarda antes: la 0269 lo copia letra por letra salvo
+-- la fecha y la base de la fila, y eso se comprueba línea por línea.
+create temp table turno_0262 as
+  select prosrc from pg_proc
+   where oid = to_regprocedure('invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)');
+do $$ begin perform pg_temp.foto_0261('l 0262'); end $$;
+\ir ../../db/migrations/0269_invoices_backfill.sql
+do $$ begin perform pg_temp.foto_0261('l 0269'); end $$;
+\ir ../../db/migrations/0269_invoices_backfill.sql
+do $$ begin perform pg_temp.foto_0261('l 0269 otra vez'); end $$;
+
+do $$
+declare
+  c_claim9  constant text := 'invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)';
+  c_claim11 constant text := 'invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)';
+  c_claim12 constant text := 'invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)';
+  v_quitadas text[];
+  v_puestas  text[];
+  v_cosa     text;
+begin
+  -- La foto de antes es la de producción: solo el turno de once, con la
+  -- revisión del pago de la 0262.
+  if (select count(*) from turno_0262) <> 1
+     or (select prosrc from turno_0262) not like '%''reason'', ''sin_pago_completo''%'
+     or (pg_temp.en_0261('l 0262', c_claim9) like '-%') is not true
+     or (pg_temp.en_0261('l 0262', c_claim11) like '-%') is not false
+     or (pg_temp.en_0261('l 0262', c_claim12) like '-%') is not true then
+    raise exception 'la foto de antes de la 0269 no es la de producción';
+  end if;
+
+  -- Después, un solo turno: el de doce, con `p_backfill` al final y en falso
+  -- por defecto. Sin el de once, la llamada por nombre del código va a éste.
+  if (pg_temp.en_0261('l 0269', c_claim9) like '-%') is not true
+     or (pg_temp.en_0261('l 0269', c_claim11) like '-%') is not true
+     or (pg_temp.en_0261('l 0269', c_claim12) like '-%') is not false
+     or (select count(*) from pg_proc where pronamespace = 'public'::regnamespace and proname = 'invoice_claim') <> 1 then
+    raise exception '0269: los turnos quedaron así: once %, doce %', left(pg_temp.en_0261('l 0269', c_claim11), 20),
+      left(pg_temp.en_0261('l 0269', c_claim12), 20);
+  end if;
+  if pg_get_function_arguments(to_regprocedure(c_claim12)) is distinct from
+       'p_id uuid, p_issuer uuid, p_store uuid, p_order uuid, p_total numeric, p_paid_at timestamp with time zone, '
+       'p_order_name text, p_basis jsonb, p_request jsonb, p_mode text DEFAULT NULL::text, '
+       'p_created_by uuid DEFAULT NULL::uuid, p_backfill boolean DEFAULT false' then
+    raise exception '0269: la firma quedó así: %', pg_get_function_arguments(to_regprocedure(c_claim12));
+  end if;
+
+  -- El cuerpo de la 0262, letra por letra, salvo la fecha y la base de la fila.
+  -- Lo que se quita: la condición de la fecha y la línea de la base.
+  select coalesce(array_agg(l order by l collate "C"), '{}') into v_quitadas from (
+    select l from unnest(string_to_array((select prosrc from turno_0262), E'\n')) as l
+    except all
+    select l from unnest(string_to_array((select prosrc from pg_proc where oid = to_regprocedure(c_claim12)), E'\n')) as l
+  ) q;
+  if v_quitadas is distinct from (select array_agg(l order by l collate "C") from unnest(array[
+       '  if v_iss.emit_from is null',
+       '     or p_paid_at is null or p_paid_at < v_iss.emit_from',
+       '     or v_paid is null or v_paid < v_iss.emit_from then',
+       '    p_order_name, p_total, greatest(p_paid_at, v_paid), coalesce(p_basis, ''{}''::jsonb), p_request,'
+     ]) as l) then
+    raise exception '0269 quitó del turno de la 0262: %', v_quitadas;
+  end if;
+  -- Lo que se pone, sin contar comentarios ni líneas en blanco: la excepción de
+  -- la fecha (con el primer dinero, `v_first`, y «Emitir desde» ya llegado) y
+  -- la marca en la base de la fila. Nada más.
+  select coalesce(array_agg(l order by l collate "C"), '{}') into v_puestas from (
+    select l from unnest(string_to_array((select prosrc from pg_proc where oid = to_regprocedure(c_claim12)), E'\n')) as l
+    except all
+    select l from unnest(string_to_array((select prosrc from turno_0262), E'\n')) as l
+  ) q where btrim(l) <> '' and btrim(l) not like '--%';
+  if v_puestas is distinct from (select array_agg(l order by l collate "C") from unnest(array[
+       '  v_backfill  boolean := false;',
+       '  v_first     timestamptz;',
+       '  if v_iss.emit_from is null or p_paid_at is null or v_paid is null then',
+       '  if p_paid_at < v_iss.emit_from or v_paid < v_iss.emit_from then',
+       '    select min(least(coalesce(paid_at, registered_at), registered_at)) into v_first',
+       '      from order_payments',
+       '     where order_id = p_order and validation_status = ''validado'';',
+       '    if v_live = 0 then',
+       '      v_first := v_paid;',
+       '    end if;',
+       '    if coalesce(p_backfill, false)',
+       '       and v_mode = ''real'' and v_iss.mode = ''manual'' and p_created_by is not null',
+       '       and v_iss.emit_from <= now()',
+       '       and p_paid_at >= timestamptz ''2026-10-01 00:00:00-05''',
+       '       and v_paid >= timestamptz ''2026-10-01 00:00:00-05''',
+       '       and v_first >= timestamptz ''2026-10-01 00:00:00-05'' then',
+       '      v_backfill := true;',
+       '    else',
+       '      return jsonb_build_object(''reason'', ''antes_de_inicio'');',
+       '    end if;',
+       '  end if;',
+       '    p_order_name, p_total, greatest(p_paid_at, v_paid),',
+       '    case when v_backfill',
+       '         then coalesce(p_basis, ''{}''::jsonb) || jsonb_build_object(''pagado_antes_de_emitir_desde'', true)',
+       '         else coalesce(p_basis, ''{}''::jsonb) end,',
+       '    p_request,'
+     ]) as l) then
+    raise exception '0269 puso en el turno de la 0262: %', v_puestas;
+  end if;
+
+  -- Solo para el servidor: ni anon, ni authenticated, ni PUBLIC.
+  if has_function_privilege('anon', c_claim12, 'execute') or has_function_privilege('authenticated', c_claim12, 'execute')
+     or not has_function_privilege('service_role', c_claim12, 'execute')
+     or exists (select 1 from pg_proc p, aclexplode(p.proacl) a
+                 where p.oid = to_regprocedure(c_claim12) and a.grantee = 0 and a.privilege_type = 'EXECUTE') then
+    raise exception '0269: el turno no quedó solo para service_role';
+  end if;
+
+  -- Nada más cambia: ni las otras funciones, ni los CHECK, ni los triggers, ni
+  -- los datos, ni los comentarios.
+  for v_cosa in select cosa from foto_0261 where paso = 'l 0262' and cosa not in (c_claim11, c_claim12) loop
+    if pg_temp.en_0261('l 0269', v_cosa) is distinct from pg_temp.en_0261('l 0262', v_cosa) then
+      raise exception '0269 tocó %', v_cosa;
+    end if;
+  end loop;
+  -- Y correrla otra vez no cambia nada: ni el oid del turno, ni sus permisos.
+  if exists (
+    select 1
+      from (select cosa, valor from foto_0261 where paso = 'l 0269') a
+      full join (select cosa, valor from foto_0261 where paso = 'l 0269 otra vez') b using (cosa)
+     where a.valor is distinct from b.valor
+  ) then
+    raise exception 'correr la 0269 otra vez cambió algo';
+  end if;
+end $$;
+
+\echo '  0269: con la 0261 corrida otra vez quedan dos turnos y la llamada por nombre falla; la 0262 otra vez no lo arregla; la 0269 lo deja en uno, el mismo'
+\ir ../../db/migrations/0261_invoices_manual.sql
+do $$
+begin
+  if (select count(*) from pg_proc where pronamespace = 'public'::regnamespace and proname = 'invoice_claim') <> 2 then
+    raise exception 'la 0261 sobre la 0269 no dejó los dos turnos';
+  end if;
+  -- Ambigua: no emite nada, falla.
+  perform pg_temp.debe_fallar(
+    $q$select invoice_claim(p_id => gen_random_uuid(), p_issuer => gen_random_uuid(), p_store => gen_random_uuid(),
+                            p_order => gen_random_uuid(), p_total => 100, p_paid_at => now(), p_order_name => '#X',
+                            p_basis => '{}', p_request => '{}', p_mode => 'real', p_created_by => null::uuid)$q$,
+    '42725');
+end $$;
+-- Lo que decía el arreglo de antes («volver a correr la 0262 después de la
+-- 0261») ya no arregla nada: la 0262 pasa su guarda (está el de once) y deja
+-- los dos turnos, y la llamada sigue ambigua. Lo que arregla es la 0269.
+\ir ../../db/migrations/0262_invoices_claim_coverage.sql
+do $$
+begin
+  if (select count(*) from pg_proc where pronamespace = 'public'::regnamespace and proname = 'invoice_claim') <> 2 then
+    raise exception 'la 0262 tras la 0261 sobre la 0269 no dejó los dos turnos';
+  end if;
+  perform pg_temp.debe_fallar(
+    $q$select invoice_claim(p_id => gen_random_uuid(), p_issuer => gen_random_uuid(), p_store => gen_random_uuid(),
+                            p_order => gen_random_uuid(), p_total => 100, p_paid_at => now(), p_order_name => '#X',
+                            p_basis => '{}', p_request => '{}', p_mode => 'real', p_created_by => null::uuid)$q$,
+    '42725');
+end $$;
+\ir ../../db/migrations/0269_invoices_backfill.sql
+do $$ begin perform pg_temp.foto_0261('l 0269 tras la 0261'); end $$;
+do $$
+begin
+  if exists (
+    select 1
+      from (select cosa, valor from foto_0261 where paso = 'l 0269') a
+      full join (select cosa, valor from foto_0261 where paso = 'l 0269 tras la 0261') b using (cosa)
+     where a.valor is distinct from b.valor
+  ) then
+    raise exception 'la 0269 tras la 0261 no dejó el turno como estaba';
+  end if;
+end $$;
+
+-- Sin la 0262 delante, la 0269 se detiene antes de tocar nada. Tres casos: la
+-- 0260 corrida otra vez después de la 0269 (el de nueve al lado del de doce),
+-- la 0260 sin la 0261 (solo el de nueve) y ningún turno. El primero y el
+-- último prueban cada mitad de la guarda por separado. Como en la sección k,
+-- psql corre cada sentencia con su punto de guardado (`ON_ERROR_ROLLBACK`): el
+-- resto de la 0269 corre igual después de la guarda, y lo deshace el punto de
+-- guardado de afuera. En el SQL Editor y con `psql -1 -v ON_ERROR_STOP=1`, la
+-- guarda deshace la migración entera.
+savepoint sin_0262;
+\ir ../../db/migrations/0260_invoices_hardening.sql
+\echo '  (los tres ERROR que siguen son la guarda de la 0269, y se esperan)'
+\set VERBOSITY terse
+\set ON_ERROR_STOP off
+\set ON_ERROR_ROLLBACK on
+\set LAST_ERROR_MESSAGE ''
+\set LAST_ERROR_SQLSTATE ''
+\ir ../../db/migrations/0269_invoices_backfill.sql
+select :'LAST_ERROR_SQLSTATE' = 'P0001' and :'LAST_ERROR_MESSAGE' like 'La 0269 va después de la 0262%' as guarda69_con_nueve \gset
+-- Lo que deja la 0260 sin la 0261: solo el turno de nueve.
+drop function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean);
+\set LAST_ERROR_MESSAGE ''
+\set LAST_ERROR_SQLSTATE ''
+\ir ../../db/migrations/0269_invoices_backfill.sql
+select :'LAST_ERROR_SQLSTATE' = 'P0001' and :'LAST_ERROR_MESSAGE' like 'La 0269 va después de la 0262%' as guarda69_solo_nueve \gset
+-- Ningún turno (con ON_ERROR_ROLLBACK, la 0269 de arriba dejó el de doce).
+drop function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb);
+drop function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean);
+\set LAST_ERROR_MESSAGE ''
+\set LAST_ERROR_SQLSTATE ''
+\ir ../../db/migrations/0269_invoices_backfill.sql
+select :'LAST_ERROR_SQLSTATE' = 'P0001' and :'LAST_ERROR_MESSAGE' like 'La 0269 va después de la 0262%' as guarda69_sin_turno \gset
+\set ON_ERROR_ROLLBACK off
+\set ON_ERROR_STOP on
+\set VERBOSITY default
+rollback to savepoint sin_0262;
+release savepoint sin_0262;
+\if :guarda69_con_nueve
+\else
+do $$ begin raise exception 'la 0269 corrió con el turno de nueve en pie'; end $$;
+\endif
+\if :guarda69_solo_nueve
+\else
+do $$ begin raise exception 'la 0269 corrió sobre la 0260 sin la 0261'; end $$;
+\endif
+\if :guarda69_sin_turno
+\else
+do $$ begin raise exception 'la 0269 corrió sin el turno de once ni el de doce'; end $$;
+\endif
+-- Y lo de afuera quedó como estaba: el turno de doce, uno solo.
+do $$
+begin
+  if (select count(*) from pg_proc where pronamespace = 'public'::regnamespace and proname = 'invoice_claim') <> 1
+     or (pg_get_functiondef(to_regprocedure('invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)'))
+           like '%pagado_antes_de_emitir_desde%') is not true then
+    raise exception 'la prueba de la guarda de la 0269 no se deshizo';
+  end if;
+end $$;
+
+\echo '  0269: «Emitir esta boleta» emite lo pagado antes de «Emitir desde» solo con p_backfill, una real pedida por una persona, el RUC en Manual, «Emitir desde» ya llegado y las dos fechas y el primer dinero (comprobante o registro, el más temprano) desde el 01/10/2026 00:00 de Lima; la fila lo dice en su base'
+-- Una organización aparte, con su RUC en Manual (token, prueba del mismo RUC) y
+-- «Emitir desde» el 12/10/2026 00:00 de Lima, puesto después del cambio de modo
+-- (sin cambio de modo, la fecha no se mueve). Fechas fijas: la del 01/10/2026
+-- también lo es.
+insert into organizations (id, name) values ('25700000-0000-0000-0000-0000000000a5', 'Comprobantes R');
+insert into stores (id, org_id, name, shopify_domain, status) values
+  ('25700000-0000-0000-0000-0000000000b7', '25700000-0000-0000-0000-0000000000a5', 'Tienda R', 'inv-r.myshopify.com', 'active');
+insert into invoice_issuers (org_id, ruc, legal_name, simplefact_subdomain, token_enc, checked_ruc, checked_at)
+values ('25700000-0000-0000-0000-0000000000a5', '20000000012', 'RETRO S.A.C.', 'retro', 'enc:r-no-es-token', '20000000012', now());
+
+create function pg_temp.r() returns uuid language sql stable as $$
+  select id from invoice_issuers where org_id = '25700000-0000-0000-0000-0000000000a5' and ruc = '20000000012'
+$$;
+
+-- «Emitir desde» del RUC de R: el 12/10/2026 00:00 de Lima.
+create function pg_temp.desde_r() returns timestamptz language sql immutable as $$
+  select timestamptz '2026-10-12 00:00:00-05'
+$$;
+
+-- Un pedido de R de S/ 100, cobrado a mano, con su pago validado registrado
+-- cuando se dice y, si se da, la fecha de su comprobante (`paid_at`, cuándo se
+-- movió la plata). Devuelve la base del comprobante, con ese pago.
+create function pg_temp.pedido_r(n integer, p_pagado timestamptz, p_comprobante timestamptz default null)
+returns jsonb language plpgsql as $$
+declare
+  v_pago uuid;
+begin
+  insert into orders (id, store_id, shopify_order_id, name, created_at, total_amount, currency, cancelled_at, total_refunded,
+                      financial_status, payment_gateway)
+  values (pg_temp.pedido(n), '25700000-0000-0000-0000-0000000000b7', 'inv-r' || n, '#INVR' || n, p_pagado, 100.00, 'PEN',
+          null, 0, 'pending', 'manual');
+  insert into order_payments (store_id, order_id, kind, amount, validation_status, registered_at, validated_at, paid_at)
+  values ('25700000-0000-0000-0000-0000000000b7', pg_temp.pedido(n), 'total', 100, 'validado', p_pagado, now(), p_comprobante)
+  returning id into v_pago;
+  return pg_temp.base(array[v_pago]);
+end $$;
+
+-- El turno de R, con los doce por nombre. Por defecto, lo que pide «Emitir esta
+-- boleta» después de marcar «Revisé en SimpleFact y este pedido no tiene
+-- boleta»: una real, pedida por una persona, con `p_backfill`.
+create function pg_temp.turno_r(
+  p_order    uuid,
+  p_basis    jsonb,
+  p_pagado   timestamptz,
+  p_backfill boolean default true,
+  p_modo     text default 'real',
+  p_quien    uuid default '00000000-0000-0000-0000-00000000000c'
+) returns jsonb language sql as $$
+  select invoice_claim(p_id => gen_random_uuid(), p_issuer => pg_temp.r(),
+                       p_store => '25700000-0000-0000-0000-0000000000b7', p_order => p_order,
+                       p_total => 100, p_paid_at => p_pagado, p_order_name => '#SMOKE-R',
+                       p_basis => p_basis, p_request => '{"invoice_type": "03", "note": "Pedido #SMOKE-R · Kapta smoke"}',
+                       p_mode => p_modo, p_created_by => p_quien, p_backfill => p_backfill)
+$$;
+
+-- Los comprobantes de R como «n:modo:estado:quién:atrás».
+create function pg_temp.comprobantes_r() returns text language sql stable as $$
+  select coalesce(string_agg(format('%s:%s:%s:%s:%s', right(order_id::text, 2), mode, status,
+                                    case when created_by is null then '-' else 'c' end,
+                                    case when basis ? 'pagado_antes_de_emitir_desde' then 'atrás' else '-' end),
+                             ', ' order by right(order_id::text, 2), mode, status), '')
+    from order_invoices where issuer_id = pg_temp.r()
+$$;
+
+do $$
+declare
+  c_inicio constant timestamptz := timestamptz '2026-10-01 00:00:00-05';
+  c_entre  constant timestamptz := timestamptz '2026-10-05 10:00:00-05';
+  c_despues constant timestamptz := timestamptz '2026-10-13 10:00:00-05';
+  v_c constant uuid := '00000000-0000-0000-0000-00000000000c';
+  r      jsonb;
+  v_b    jsonb;
+  v_row  order_invoices;
+  v_modo text;
+begin
+  -- A Manual (con fecha de hoy: un cambio de modo no deja «Emitir desde» atrás)
+  -- y después «Emitir desde» al 12/10, sin cambiar de modo.
+  update invoice_issuers set mode = 'manual', emit_from = now() where id = pg_temp.r();
+  update invoice_issuers set emit_from = pg_temp.desde_r() where id = pg_temp.r();
+  if (select (mode, emit_from) from invoice_issuers where id = pg_temp.r()) is distinct from ('manual'::text, pg_temp.desde_r()) then
+    raise exception 'R: %', (select (mode, emit_from) from invoice_issuers where id = pg_temp.r());
+  end if;
+  -- Las fechas de la prueba: el 01/10 de Lima es el 01/10 05:00 UTC, y el 05/10
+  -- queda entre ese día y «Emitir desde».
+  if c_inicio <> timestamptz '2026-10-01 05:00:00+00' or not (c_inicio < c_entre and c_entre < pg_temp.desde_r()
+                                                                and pg_temp.desde_r() < c_despues) then
+    raise exception 'las fechas de la prueba no son las que dice';
+  end if;
+
+  -- #90, pagado el 05/10, después del 01/10 y antes de «Emitir desde».
+  v_b := pg_temp.pedido_r(90, c_entre);
+  -- Sin `p_backfill`, como pide el turno el código de hoy (once por nombre): no.
+  r := invoice_claim(p_id => gen_random_uuid(), p_issuer => pg_temp.r(), p_store => '25700000-0000-0000-0000-0000000000b7',
+                     p_order => pg_temp.pedido(90), p_total => 100, p_paid_at => c_entre, p_order_name => '#SMOKE-R',
+                     p_basis => v_b, p_request => '{"invoice_type": "03"}'::jsonb, p_mode => 'real', p_created_by => v_c);
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception 'sin p_backfill: %', r; end if;
+  -- En falso o nulo, tampoco.
+  r := pg_temp.turno_r(pg_temp.pedido(90), v_b, c_entre, false);
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception 'p_backfill falso: %', r; end if;
+  r := pg_temp.turno_r(pg_temp.pedido(90), v_b, c_entre, null);
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception 'p_backfill nulo: %', r; end if;
+  -- El barrido nunca va hacia atrás: ni una simulada pedida, ni sin `p_mode`
+  -- (en Manual, una simulada), aunque llegara `p_backfill`.
+  r := pg_temp.turno_r(pg_temp.pedido(90), v_b, c_entre, true, 'simulacion', null);
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception 'simulada con p_backfill: %', r; end if;
+  r := pg_temp.turno_r(pg_temp.pedido(90), v_b, c_entre, true, null, null);
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception 'barrido con p_backfill: %', r; end if;
+  -- Ni con una persona detrás: lo que pasa es la fila real, no quien la pide.
+  foreach v_modo in array array['simulacion', null] loop
+    r := pg_temp.turno_r(pg_temp.pedido(90), v_b, c_entre, true, v_modo, v_c);
+    if r->>'reason' is distinct from 'antes_de_inicio' then raise exception 'simulada (%) con quién y p_backfill: %', v_modo, r; end if;
+  end loop;
+  -- Una real sin nadie detrás: en Manual no hay real (la regla de la 0261 va
+  -- antes que la fecha).
+  r := pg_temp.turno_r(pg_temp.pedido(90), v_b, c_entre, true, 'real', null);
+  if r->>'reason' is distinct from 'modo_distinto' then raise exception 'real sin quién, con p_backfill: %', r; end if;
+  if exists (select 1 from order_invoices where order_id = pg_temp.pedido(90)) then
+    raise exception 'un rechazo de #90 dejó fila';
+  end if;
+  -- Con todo: la real, emitiendo, con quién la pidió, la fecha de pago de
+  -- verdad, y la base que se mandó más la marca.
+  r := pg_temp.turno_r(pg_temp.pedido(90), v_b, c_entre);
+  if not r ? 'id' or r->>'mode' is distinct from 'real' then raise exception 'pagado antes, con el botón: %', r; end if;
+  select * into v_row from order_invoices where id = (r->>'id')::uuid;
+  if (v_row.mode, v_row.status, v_row.created_by, v_row.ruc, v_row.total, v_row.paid_at)
+       is distinct from ('real', 'emitiendo', v_c, '20000000012', 100.00::numeric, c_entre) then
+    raise exception 'la real de antes de «Emitir desde» dejó % % % % % %', v_row.mode, v_row.status, v_row.created_by,
+      v_row.ruc, v_row.total, v_row.paid_at;
+  end if;
+  if v_row.basis is distinct from v_b || '{"pagado_antes_de_emitir_desde": true}'::jsonb
+     or v_row.basis->'pagado_antes_de_emitir_desde' is distinct from 'true'::jsonb
+     or v_row.basis->'payments' is distinct from v_b->'payments' then
+    raise exception 'la base de la real de antes de «Emitir desde»: %', v_row.basis;
+  end if;
+  -- Una por pedido, como siempre.
+  r := pg_temp.turno_r(pg_temp.pedido(90), v_b, c_entre);
+  if r->>'reason' is distinct from 'ya_tiene' then raise exception 'segunda real de #90: %', r; end if;
+
+  -- #91, pagado justo el 01/10/2026 00:00 de Lima: entra.
+  r := pg_temp.turno_r(pg_temp.pedido(91), pg_temp.pedido_r(91, c_inicio), c_inicio);
+  if not r ? 'id' then raise exception 'pagado el 01/10 a las 00:00 de Lima: %', r; end if;
+  -- #92, el 30/09 a las 23:59 de Lima, y #93, un microsegundo antes del 01/10
+  -- de Lima (el 01/10 a las 04:59 UTC): no, aunque lo pida una persona.
+  r := pg_temp.turno_r(pg_temp.pedido(92), pg_temp.pedido_r(92, timestamptz '2026-09-30 23:59:00-05'),
+                       timestamptz '2026-09-30 23:59:00-05');
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception 'pagado el 30/09 de Lima: %', r; end if;
+  r := pg_temp.turno_r(pg_temp.pedido(93), pg_temp.pedido_r(93, timestamptz '2026-10-01 04:59:59.999999+00'),
+                       timestamptz '2026-10-01 04:59:59.999999+00');
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception 'pagado el 01/10 04:59 UTC: %', r; end if;
+  -- Las dos fechas: si la base dice antes del 01/10, no basta con que el código
+  -- diga después (#94); ni al revés (#95).
+  r := pg_temp.turno_r(pg_temp.pedido(94), pg_temp.pedido_r(94, timestamptz '2026-09-30 23:59:00-05'), c_entre);
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception 'la base dice 30/09: %', r; end if;
+  r := pg_temp.turno_r(pg_temp.pedido(95), pg_temp.pedido_r(95, c_entre), timestamptz '2026-09-30 23:59:00-05');
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception 'el código dice 30/09: %', r; end if;
+  -- Sin fecha de pago del código: no, como siempre.
+  r := pg_temp.turno_r(pg_temp.pedido(95), pg_temp.base(array[]::uuid[]), null);
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception 'sin fecha de pago, con p_backfill: %', r; end if;
+
+  -- #96 con el RUC en Real: no hay botón, y el turno tampoco va hacia atrás,
+  -- pídalo quien lo pida. Pasar a Real mueve «Emitir desde»: se vuelve a poner.
+  v_b := pg_temp.pedido_r(96, c_entre);
+  update invoice_issuers set mode = 'real' where id = pg_temp.r();
+  update invoice_issuers set emit_from = pg_temp.desde_r() where id = pg_temp.r();
+  foreach v_modo in array array['real', null] loop
+    r := pg_temp.turno_r(pg_temp.pedido(96), v_b, c_entre, true, v_modo, v_c);
+    if r->>'reason' is distinct from 'antes_de_inicio' then raise exception 'Real, p_mode %, con p_backfill: %', v_modo, r; end if;
+  end loop;
+  r := pg_temp.turno_r(pg_temp.pedido(96), v_b, c_entre, true, null, null);
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception 'barrido de Real con p_backfill: %', r; end if;
+  -- Y en Simulación, una real ni se pide: `modo_distinto`; la simulada, antes de
+  -- «Emitir desde».
+  update invoice_issuers set mode = 'simulacion' where id = pg_temp.r();
+  update invoice_issuers set emit_from = pg_temp.desde_r() where id = pg_temp.r();
+  r := pg_temp.turno_r(pg_temp.pedido(96), v_b, c_entre);
+  if r->>'reason' is distinct from 'modo_distinto' then raise exception 'Simulación, real con p_backfill: %', r; end if;
+  r := pg_temp.turno_r(pg_temp.pedido(96), v_b, c_entre, true, 'simulacion', null);
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception 'Simulación con p_backfill: %', r; end if;
+  -- De vuelta en Manual, la real con el botón, y cuenta para el tope del día:
+  -- con el tope en las dos de hoy (#90 y #91), no entra; con una más, sí.
+  update invoice_issuers set mode = 'manual' where id = pg_temp.r();
+  update invoice_issuers set emit_from = pg_temp.desde_r() where id = pg_temp.r();
+  update invoice_issuers set daily_limit = 2 where id = pg_temp.r();
+  r := pg_temp.turno_r(pg_temp.pedido(96), v_b, c_entre);
+  if r->>'reason' is distinct from 'tope' then raise exception 'tope con p_backfill: %', r; end if;
+  update invoice_issuers set daily_limit = 3 where id = pg_temp.r();
+  r := pg_temp.turno_r(pg_temp.pedido(96), v_b, c_entre);
+  if not r ? 'id' then raise exception 'pagado antes, con lugar en el tope: %', r; end if;
+  update invoice_issuers set daily_limit = 40 where id = pg_temp.r();
+
+  -- #97, pagado después de «Emitir desde», con `p_backfill`: lo de siempre, y
+  -- la base sin marca. #98, igual sin `p_backfill`: la simulada del barrido y
+  -- la real del botón, sin marca.
+  v_b := pg_temp.pedido_r(97, c_despues);
+  r := pg_temp.turno_r(pg_temp.pedido(97), v_b, c_despues);
+  if not r ? 'id' or r->>'mode' is distinct from 'real' then raise exception 'pagado después, con p_backfill: %', r; end if;
+  if (select basis from order_invoices where id = (r->>'id')::uuid) is distinct from v_b then
+    raise exception 'pagado después, con p_backfill, marcó la base: %', (select basis from order_invoices where id = (r->>'id')::uuid);
+  end if;
+  v_b := pg_temp.pedido_r(98, c_despues);
+  r := pg_temp.turno_r(pg_temp.pedido(98), v_b, c_despues, false, null, null);
+  if not r ? 'id' or r->>'mode' is distinct from 'simulacion' then raise exception 'barrido, pagado después: %', r; end if;
+  r := invoice_claim(p_id => gen_random_uuid(), p_issuer => pg_temp.r(), p_store => '25700000-0000-0000-0000-0000000000b7',
+                     p_order => pg_temp.pedido(98), p_total => 100, p_paid_at => c_despues, p_order_name => '#SMOKE-R',
+                     p_basis => v_b, p_request => '{"invoice_type": "03"}'::jsonb, p_mode => 'real', p_created_by => v_c);
+  if not r ? 'id' or r->>'mode' is distinct from 'real' then raise exception 'once por nombre, pagado después: %', r; end if;
+  if exists (select 1 from order_invoices where order_id = pg_temp.pedido(98) and basis <> v_b) then
+    raise exception 'pagado después, sin p_backfill, marcó la base';
+  end if;
+
+  -- El primer dinero: el piso vale también para la fecha más temprana entre la
+  -- del comprobante (`paid_at`, cuándo se movió la plata) y la de registro de
+  -- cada pago validado. #30: registrado el 05/10, pero el comprobante dice
+  -- 29/09: no, ni con todo lo demás. #32: el comprobante, un microsegundo antes
+  -- del 01/10 de Lima: no.
+  r := pg_temp.turno_r(pg_temp.pedido(30), pg_temp.pedido_r(30, c_entre, timestamptz '2026-09-29 10:00:00-05'), c_entre);
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception 'comprobante del 29/09, registrado el 05/10: %', r; end if;
+  r := pg_temp.turno_r(pg_temp.pedido(32), pg_temp.pedido_r(32, c_entre, timestamptz '2026-10-01 04:59:59.999999+00'), c_entre);
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception 'comprobante del 30/09 de Lima: %', r; end if;
+  -- #31: el comprobante es posterior al registro: cuenta el registro (la más
+  -- temprana), y entra. #33: el comprobante justo el 01/10 00:00 de Lima: entra.
+  r := pg_temp.turno_r(pg_temp.pedido(31), pg_temp.pedido_r(31, c_entre, c_despues), c_entre);
+  if not r ? 'id' then raise exception 'comprobante posterior al registro: %', r; end if;
+  r := pg_temp.turno_r(pg_temp.pedido(33), pg_temp.pedido_r(33, c_entre, c_inicio), c_entre);
+  if not r ? 'id' then raise exception 'comprobante del 01/10 a las 00:00 de Lima: %', r; end if;
+  -- #34: dos pagos que cubren el total; el adelanto entró el 02/10, pero su
+  -- comprobante dice 25/09. El primer dinero es de TODOS los pagos validados.
+  insert into orders (id, store_id, shopify_order_id, name, created_at, total_amount, currency, cancelled_at, total_refunded,
+                      financial_status, payment_gateway)
+  values (pg_temp.pedido(34), '25700000-0000-0000-0000-0000000000b7', 'inv-r34', '#INVR34', c_entre, 100.00, 'PEN',
+          null, 0, 'pending', 'manual');
+  insert into order_payments (store_id, order_id, kind, amount, validation_status, registered_at, validated_at, paid_at) values
+    ('25700000-0000-0000-0000-0000000000b7', pg_temp.pedido(34), 'adelanto', 50, 'validado',
+     timestamptz '2026-10-02 10:00:00-05', now(), timestamptz '2026-09-25 10:00:00-05'),
+    ('25700000-0000-0000-0000-0000000000b7', pg_temp.pedido(34), 'diferencia', 50, 'validado', c_entre, now(), null);
+  r := pg_temp.turno_r(pg_temp.pedido(34),
+                       pg_temp.base(array(select id from order_payments where order_id = pg_temp.pedido(34) order by kind)), c_entre);
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception 'adelanto con comprobante del 25/09: %', r; end if;
+  -- #35: un pago rechazado con un comprobante viejo no cuenta: no es dinero
+  -- que recibió la empresa.
+  v_b := pg_temp.pedido_r(35, c_entre);
+  insert into order_payments (store_id, order_id, kind, amount, validation_status, registered_at, paid_at)
+  values ('25700000-0000-0000-0000-0000000000b7', pg_temp.pedido(35), 'adelanto', 30, 'rechazado',
+          timestamptz '2026-09-20 10:00:00-05', timestamptz '2026-09-20 10:00:00-05');
+  r := pg_temp.turno_r(pg_temp.pedido(35), v_b, c_entre);
+  if not r ? 'id' then raise exception 'un rechazado con comprobante viejo frenó: %', r; end if;
+  -- #36: pagado desde «Emitir desde» (condición 8, sin excepción): el
+  -- comprobante no se mira, como siempre, y la base va sin marca.
+  v_b := pg_temp.pedido_r(36, c_despues, timestamptz '2026-09-29 10:00:00-05');
+  r := pg_temp.turno_r(pg_temp.pedido(36), v_b, c_despues);
+  if not r ? 'id' or (select basis from order_invoices where id = (r->>'id')::uuid) is distinct from v_b then
+    raise exception 'pagado desde «Emitir desde», con un comprobante viejo: %', r;
+  end if;
+  if exists (select 1 from order_invoices where order_id in (pg_temp.pedido(30), pg_temp.pedido(32), pg_temp.pedido(34))) then
+    raise exception 'un rechazo por el primer dinero dejó fila';
+  end if;
+
+  -- «Emitir desde» en el futuro (Ajustes lo acepta; sin cambio de modo, la
+  -- fecha no se mueve): nada pagado antes de él pasa, ni con `p_backfill` y
+  -- todo lo demás. La excepción es para lo pagado antes de un inicio que ya
+  -- llegó, nunca para emitir antes de la fecha que puso el owner. #37, pagado
+  -- el 05/10 (desde el piso), y #38, pagado ahora (después del cambio de
+  -- modo): los dos, `antes_de_inicio`, sin fila.
+  update invoice_issuers set emit_from = now() + interval '5 days' where id = pg_temp.r();
+  if (select (mode, emit_from) from invoice_issuers where id = pg_temp.r())
+       is distinct from ('manual'::text, now() + interval '5 days') then
+    raise exception 'R con «Emitir desde» en el futuro: %', (select (mode, emit_from) from invoice_issuers where id = pg_temp.r());
+  end if;
+  v_b := pg_temp.pedido_r(37, c_entre);
+  r := pg_temp.turno_r(pg_temp.pedido(37), v_b, c_entre);
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception '«Emitir desde» en el futuro, pagado el 05/10: %', r; end if;
+  r := pg_temp.turno_r(pg_temp.pedido(38), pg_temp.pedido_r(38, now()), now());
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception '«Emitir desde» en el futuro, pagado ahora: %', r; end if;
+  -- Un microsegundo en el futuro, todavía no.
+  update invoice_issuers set emit_from = now() + interval '1 microsecond' where id = pg_temp.r();
+  r := pg_temp.turno_r(pg_temp.pedido(37), v_b, c_entre);
+  if r->>'reason' is distinct from 'antes_de_inicio' then raise exception '«Emitir desde» un microsegundo en el futuro: %', r; end if;
+  if exists (select 1 from order_invoices where order_id in (pg_temp.pedido(37), pg_temp.pedido(38))) then
+    raise exception 'un rechazo por «Emitir desde» en el futuro dejó fila';
+  end if;
+  -- Justo ahora (`now()`), ya llegó: #37 pasa, con su marca.
+  update invoice_issuers set emit_from = now() where id = pg_temp.r();
+  r := pg_temp.turno_r(pg_temp.pedido(37), v_b, c_entre);
+  if not r ? 'id' or (select basis->'pagado_antes_de_emitir_desde' from order_invoices where id = (r->>'id')::uuid)
+                       is distinct from 'true'::jsonb then
+    raise exception '«Emitir desde» justo ahora: %', r;
+  end if;
+  update invoice_issuers set emit_from = pg_temp.desde_r() where id = pg_temp.r();
+
+  -- #99 sin «Emitir desde»: no, ni con `p_backfill`. Un RUC en Manual sin fecha
+  -- no puede existir (lo prueba la sección j): se levantan el check y el
+  -- trigger en una subtransacción que se deshace.
+  v_b := pg_temp.pedido_r(99, c_entre);
+  begin
+    alter table invoice_issuers drop constraint invoice_issuers_real_ready;
+    alter table invoice_issuers disable trigger invoice_issuers_touch;
+    update invoice_issuers set emit_from = null where id = pg_temp.r();
+    r := pg_temp.turno_r(pg_temp.pedido(99), v_b, c_entre);
+    if r->>'reason' is distinct from 'antes_de_inicio' then raise exception 'sin «Emitir desde», con p_backfill: %', r; end if;
+    raise exception using errcode = 'KP265';
+  exception when sqlstate 'KP265' then null;
+  end;
+  if not exists (select 1 from pg_constraint where conname = 'invoice_issuers_real_ready')
+     or (select tgenabled from pg_trigger where tgname = 'invoice_issuers_touch') <> 'O'
+     or (select emit_from from invoice_issuers where id = pg_temp.r()) is distinct from pg_temp.desde_r() then
+    raise exception 'la subtransacción de «sin Emitir desde» no se deshizo';
+  end if;
+end $$;
+
+-- El servidor la pide con los doce por nombre; el navegador, ni así.
+set local role service_role;
+do $$
+declare
+  r jsonb;
+begin
+  r := invoice_claim(p_id => gen_random_uuid(),
+                     p_issuer => (select id from invoice_issuers where org_id = '25700000-0000-0000-0000-0000000000a5'),
+                     p_store => '25700000-0000-0000-0000-0000000000b7', p_order => '25700000-0000-0000-0000-000000000099',
+                     p_total => 100, p_paid_at => timestamptz '2026-10-05 10:00:00-05', p_order_name => '#INVR99',
+                     p_basis => '{"prepaid": false, "payments": []}'::jsonb, p_request => '{"invoice_type": "03"}'::jsonb,
+                     p_mode => 'real', p_created_by => '00000000-0000-0000-0000-00000000000c', p_backfill => true);
+  if not r ? 'id' or r->>'mode' is distinct from 'real' then raise exception 'service_role con p_backfill: %', r; end if;
+end $$;
+reset role;
+set local request.test_uid = '00000000-0000-0000-0000-00000000000c';
+set local role authenticated;
+do $$
+begin
+  perform invoice_claim(p_id => gen_random_uuid(), p_issuer => gen_random_uuid(),
+                        p_store => '25700000-0000-0000-0000-0000000000b7', p_order => '25700000-0000-0000-0000-000000000092',
+                        p_total => 100, p_paid_at => now(), p_order_name => '#X', p_basis => '{}', p_request => '{}',
+                        p_mode => 'real', p_created_by => '00000000-0000-0000-0000-00000000000c', p_backfill => true);
+  raise exception 'authenticated pidió una boleta de antes de «Emitir desde»';
+exception when insufficient_privilege then null;
+end $$;
+reset role;
+set local role anon;
+do $$
+begin
+  perform invoice_claim(p_id => gen_random_uuid(), p_issuer => gen_random_uuid(),
+                        p_store => '25700000-0000-0000-0000-0000000000b7', p_order => '25700000-0000-0000-0000-000000000092',
+                        p_total => 100, p_paid_at => now(), p_order_name => '#X', p_basis => '{}', p_request => '{}',
+                        p_backfill => true);
+  raise exception 'anon pidió una boleta de antes de «Emitir desde»';
+exception when insufficient_privilege then null;
+end $$;
+reset role;
+
+-- Lo que quedó en R: las reales de antes de «Emitir desde» con su marca, las
+-- de después sin ella; ningún rechazo dejó fila (30, 32, 34, 38 y 92 a 95 no
+-- tienen ninguna).
+do $$
+begin
+  if pg_temp.comprobantes_r() is distinct from
+       '31:real:emitiendo:c:atrás, 33:real:emitiendo:c:atrás, 35:real:emitiendo:c:atrás, 36:real:emitiendo:c:-, '
+       '37:real:emitiendo:c:atrás, 90:real:emitiendo:c:atrás, 91:real:emitiendo:c:atrás, 96:real:emitiendo:c:atrás, '
+       '97:real:emitiendo:c:-, 98:real:emitiendo:c:-, 98:simulacion:simulada:-:-, 99:real:emitiendo:c:atrás' then
+    raise exception 'comprobantes de R: %', pg_temp.comprobantes_r();
+  end if;
+end $$;
+
 rollback;
-\echo '  invoices: semilla, emisor, cuenta → RUC, turno, índice, estados, cuentas borradas, pedidos por revisar, permisos, la 0260 sobre la 0257, la 0261 con el modo «Manual» y la 0262 con el pago revisado en el turno OK'
+\echo '  invoices: semilla, emisor, cuenta → RUC, turno, índice, estados, cuentas borradas, pedidos por revisar, permisos, la 0260 sobre la 0257, la 0261 con el modo «Manual», la 0262 con el pago revisado en el turno y la 0269 con lo pagado antes de «Emitir desde» OK'

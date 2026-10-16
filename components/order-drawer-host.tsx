@@ -33,6 +33,8 @@ export interface OrderDrawerHostProps {
   stores: OrderDrawerHostStore[];
   canEdit: boolean;
   canOverride: boolean;
+  /** «Registrar estado» a mano (`master.set_status`): owner y admin, MOM §16. */
+  canSetStatus: boolean;
   canCreateGuide: boolean;
   canCreateTandersGuide: boolean;
   canCreateShalomGuide: boolean;
@@ -89,6 +91,7 @@ function OrderDrawerHostInner({ stores, ...permissions }: OrderDrawerHostProps) 
       orderId={request.orderId}
       canEdit={permissions.canEdit}
       canOverride={permissions.canOverride}
+      canSetStatus={permissions.canSetStatus}
       canCreateGuide={permissions.canCreateGuide}
       canCreateTandersGuide={permissions.canCreateTandersGuide}
       canCreateShalomGuide={permissions.canCreateShalomGuide}

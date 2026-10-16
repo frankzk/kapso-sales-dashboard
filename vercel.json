@@ -13,6 +13,10 @@
       "schedule": "12,42 * * * *"
     },
     {
+      "path": "/api/cron/aliclik-scheduled",
+      "schedule": "7 13-18 * * *"
+    },
+    {
       "path": "/api/cron/swayp-pc-auto",
       "schedule": "30 23 * * *"
     },

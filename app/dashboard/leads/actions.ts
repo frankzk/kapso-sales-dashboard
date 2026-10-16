@@ -46,7 +46,7 @@ import { onlineVendedorasForStore } from "@/lib/presence";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
-import { recordOrderSale } from "@/lib/order-sale";
+import { insertOrderIfAbsent, recomputeRollupsForLocalDay, recordOrderSale } from "@/lib/order-sale";
 import { getMasterPermissions, hasOrgPermission } from "@/lib/permissions-access";
 import { getStoreCreds } from "@/lib/ingest";
 import {
@@ -56,6 +56,7 @@ import {
   extractNumericId,
   getCustomerRecentOrders,
   getDraftOrderForEdit,
+  getDraftOrderOrder,
   priceMismatchRejection,
   resolveOrderDiscount,
   searchCatalogProducts,
@@ -1158,8 +1159,7 @@ export async function closeSale(
   // 4) Recompute the day's rollups so revenue / COD / AOV reflect the sale now
   //    (otherwise it would only appear on the next 15-min cron).
   try {
-    const day = nowIso.slice(0, 10);
-    await admin.rpc("recompute_daily_rollups", { p_store_id: ctx.storeId, p_from: day, p_to: day });
+    await recomputeRollupsForLocalDay(admin, ctx.storeId, nowIso);
   } catch {
     /* non-fatal: the next sync's rollup recompute will pick it up */
   }
@@ -1214,7 +1214,9 @@ export async function recoverCart(leadId: string): Promise<LeadActionState> {
   } catch (e: any) {
     const msg = String(e?.message ?? e).toLowerCase();
     if (/already.*complet|complet.*already|has already|is complete/.test(msg)) {
-      completed = { orderGid: null, orderName: null, status: "completed" };
+      // Como en generateOrder: el pedido REAL del borrador, no una fila inventada.
+      const real = await getDraftOrderOrder({ domain: creds.shopify_domain, token: creds.shopify_token, gid: l.draft_order_gid }).catch(() => null);
+      completed = { orderGid: real?.orderGid ?? null, orderName: real?.orderName ?? null, status: "completed" };
     } else if (/write_draft_orders|access denied|not authorized|access scope|require/.test(msg)) {
       return { error: "Falta el permiso de escritura en Shopify (write_draft_orders). Re-autoriza la tienda en Ajustes." };
     } else {
@@ -1244,43 +1246,37 @@ export async function recoverCart(leadId: string): Promise<LeadActionState> {
       : [{ title: l.cart_summary || "Carrito recuperado", quantity: 1, price: amount }];
   const nowIso = new Date().toISOString();
 
-  // 3) Record the resulting order. Tagged `kapso` so recompute_daily_rollups
-  //    counts it; `carrito_recuperado` so it's identifiable. Use the real Shopify
-  //    id when returned (so a later order sync upserts the same row, no dup);
-  //    else a synthetic id. COD ⇒ financial_status 'pending'.
+  // 3) La fila local del pedido, SOLO si el webhook no la trajo ya, y con las
+  //    etiquetas que tiene en Shopify (MOM §17.3): una etiqueta local la borra la
+  //    siguiente sincronización, y pisar la fila real le quitaba fecha y
+  //    productos. Quién cerró lo decide `order_sales`, más abajo.
   const realOrderId = completed.orderGid ? extractNumericId(completed.orderGid) : null;
   const shopifyOrderId = realOrderId || `draft-${extractNumericId(l.draft_order_gid)}`;
-  const { data: order, error: orderErr } = await admin
-    .from("orders")
-    .upsert(
-      {
-        store_id: ctx.storeId,
-        shopify_order_id: shopifyOrderId,
-        name: completed.orderName ?? l.draft_order_name ?? `REC-${shopifyOrderId.slice(-6).toUpperCase()}`,
-        created_at: nowIso,
-        processed_at: nowIso,
-        total_amount: amount,
-        total_refunded: 0,
-        currency,
-        financial_status: "pending",
-        cancelled_at: null,
-        customer_phone: phone,
-        tags: ["kapso", "carrito_recuperado"],
-        promo_applied: false,
-        stock_por_validar: false,
-        shipping_mode: "cod",
-        line_items: lineItems,
-        kapso_conversation_id: null,
-      },
-      { onConflict: "store_id,shopify_order_id" },
-    )
-    .select("id")
-    .maybeSingle();
-  if (orderErr || !order) {
+  const { id: recoveredOrderId, error: orderErr } = await insertOrderIfAbsent(admin, {
+    store_id: ctx.storeId,
+    shopify_order_id: shopifyOrderId,
+    name: completed.orderName ?? l.draft_order_name ?? `REC-${shopifyOrderId.slice(-6).toUpperCase()}`,
+    created_at: nowIso,
+    processed_at: nowIso,
+    total_amount: amount,
+    total_refunded: 0,
+    currency,
+    financial_status: "pending",
+    cancelled_at: null,
+    customer_phone: phone,
+    tags: [],
+    promo_applied: false,
+    stock_por_validar: false,
+    shipping_mode: "cod",
+    line_items: lineItems,
+    kapso_conversation_id: null,
+  });
+  if (orderErr || !recoveredOrderId) {
     return {
-      error: `Pedido generado en Shopify, pero no se pudo registrar localmente: ${orderErr?.message ?? "error"}`,
+      error: `Pedido generado en Shopify, pero no se pudo registrar localmente: ${orderErr ?? "error"}`,
     };
   }
+  const order = { id: recoveredOrderId };
 
   // 4) Mark the lead won + link the order; reflect the draft as completed.
   await admin
@@ -1323,8 +1319,7 @@ export async function recoverCart(leadId: string): Promise<LeadActionState> {
 
   // 6) Recompute the day's rollups so revenue / COD reflect the recovery now.
   try {
-    const day = nowIso.slice(0, 10);
-    await admin.rpc("recompute_daily_rollups", { p_store_id: ctx.storeId, p_from: day, p_to: day });
+    await recomputeRollupsForLocalDay(admin, ctx.storeId, nowIso);
   } catch {
     /* non-fatal: the next sync's rollup recompute will pick it up */
   }
@@ -2764,7 +2759,12 @@ export async function generateOrder(
   } catch (e: any) {
     const msg = String(e?.message ?? e).toLowerCase();
     if (/already.*complet|complet.*already|has already|is complete/.test(msg)) {
-      completed = { orderGid: null, orderName: null, status: "completed" };
+      // Shopify ya lo completó (la clienta, o un primer intento que sí llegó):
+      // se busca el pedido REAL del borrador. Sin él la venta quedaba en una fila
+      // `draft-<id>` al lado del pedido verdadero y el canal de cierre la contaba
+      // dos veces (MOM §17.3). Si Shopify no lo devuelve, queda el respaldo.
+      const real = draftGid ? await getDraftOrderOrder({ ...sclient, gid: draftGid }).catch(() => null) : null;
+      completed = { orderGid: real?.orderGid ?? null, orderName: real?.orderName ?? null, status: "completed" };
     } else if (/write_draft_orders|access denied|not authorized|access scope|require/.test(msg)) {
       return { error: "Falta el permiso de escritura en Shopify (write_draft_orders). Re-autoriza la tienda en Ajustes." };
     } else {
@@ -2772,7 +2772,11 @@ export async function generateOrder(
     }
   }
 
-  // 2) Record the resulting order (tag:kapso so recompute_daily_rollups counts it).
+  // 2) La fila local del pedido, SOLO si el webhook de Shopify no la trajo ya
+  //    (MOM §17.3). Antes era un upsert con la etiqueta `kapso`, que en Shopify
+  //    no existe: pisaba la fila real (fecha, productos con id) y la etiqueta
+  //    duraba hasta la siguiente sincronización. La venta de la asesora no se
+  //    decide por etiquetas: la registra `order_sales` más abajo.
   const nowIso = new Date().toISOString();
   const realOrderId = completed.orderGid ? extractNumericId(completed.orderGid) : null;
   const shopifyOrderId = realOrderId || `draft-${extractNumericId(draftGid!)}`;
@@ -2781,36 +2785,32 @@ export async function generateOrder(
     quantity: li.quantity,
     price: li.unitPrice,
   }));
-  const { data: order, error: orderErr } = await admin
-    .from("orders")
-    .upsert(
-      {
-        store_id: ctx.storeId,
-        shopify_order_id: shopifyOrderId,
-        name: completed.orderName ?? `PED-${shopifyOrderId.slice(-6).toUpperCase()}`,
-        created_at: nowIso,
-        processed_at: nowIso,
-        total_amount: amount,
-        total_refunded: 0,
-        currency,
-        financial_status: "pending",
-        cancelled_at: null,
-        customer_phone: phone,
-        tags: reuseExistingDraft ? ["kapso", "carrito_recuperado"] : ["kapso", "venta_manual"],
-        promo_applied: false,
-        stock_por_validar: false,
-        shipping_mode: "cod",
-        line_items: products,
-        kapso_conversation_id: l.kapso_conversation_id ?? null,
-      },
-      { onConflict: "store_id,shopify_order_id" },
-    )
-    .select("id")
-    .maybeSingle();
-  if (orderErr || !order) {
-    return { error: `Pedido generado en Shopify, pero no se pudo registrar localmente: ${orderErr?.message ?? "error"}` };
+  const { id: internalOrderId, error: orderErr } = await insertOrderIfAbsent(admin, {
+    store_id: ctx.storeId,
+    shopify_order_id: shopifyOrderId,
+    name: completed.orderName ?? `PED-${shopifyOrderId.slice(-6).toUpperCase()}`,
+    created_at: nowIso,
+    processed_at: nowIso,
+    total_amount: amount,
+    total_refunded: 0,
+    currency,
+    financial_status: "pending",
+    cancelled_at: null,
+    customer_phone: phone,
+    // Lo mismo que lleva en Shopify: `venta_manual` en un borrador nuevo; el
+    // carrito reusado conserva las etiquetas del suyo, que llegan con el webhook.
+    tags: reuseExistingDraft ? [] : ["venta_manual"],
+    promo_applied: false,
+    stock_por_validar: false,
+    shipping_mode: "cod",
+    line_items: products,
+    // El borrador no lleva la conversación de Kapso, así que Shopify la trae
+    // vacía; con la del lead, el Master vería «Chatbot» hasta el webhook.
+    kapso_conversation_id: null,
+  });
+  if (orderErr || !internalOrderId) {
+    return { error: `Pedido generado en Shopify, pero no se pudo registrar localmente: ${orderErr ?? "error"}` };
   }
-  const internalOrderId = (order as { id: string }).id;
 
   // `order_master` NO es una vista: es una tabla derivada que alguien tiene que
   // rellenar. Hasta ahora esta acción escribía en `orders` y la fila del Master
@@ -2916,8 +2916,9 @@ export async function generateOrder(
   // Si fallara, el siguiente sync lo recalcula igual.
   after(async () => {
     try {
-      const day = nowIso.slice(0, 10);
-      await admin.rpc("recompute_daily_rollups", { p_store_id: ctx.storeId, p_from: day, p_to: day });
+      // El día LOCAL de la tienda: después de las 19:00 de Lima el día UTC ya
+      // es el siguiente, y se recalculaba el día equivocado.
+      await recomputeRollupsForLocalDay(admin, ctx.storeId, nowIso);
     } catch {
       /* next sync recomputes */
     }

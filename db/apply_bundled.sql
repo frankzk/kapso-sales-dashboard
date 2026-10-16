@@ -22374,6 +22374,180 @@ end $$;
 alter table restock_sends
   add column if not exists reply_checked_at timestamptz;
 
+-- ---- 0259 ----
+-- ============================================================================
+-- 0259_canal_de_cierre.sql — quién cerró cada venta de la tienda, con TODOS
+-- los pedidos y sin depender de etiquetas que la sincronización borra
+-- (MOM §17.3, 14-10-2026).
+--
+-- QUÉ PASABA. «Canal de cierre» del Consolidado solo veía los pedidos con
+-- etiqueta `kapso` y decidía «asesora» por las etiquetas `venta_manual` /
+-- `carrito_recuperado`. El botón de venta escribía `kapso` solo en nuestra
+-- copia del pedido —en Shopify el pedido nace con `venta_manual`, o con las
+-- etiquetas del borrador de EasySell cuando se reusa el carrito— y la pasada
+-- `shopify_all` del cron, cada 5 minutos, reescribe `tags` con lo que dice
+-- Shopify. Medido del 14-09 al 13-10-2026: de 2.916 pedidos de asesoras, 1
+-- conservaba `kapso`. El panel decía «0 % lo cerró una asesora» mientras
+-- Productividad, que lee `order_sales`, les contaba S/ 484.645.
+--
+-- QUÉ CAMBIA. Una función de lectura que clasifica cada pedido de las tiendas
+-- pedidas, en el día local de cada tienda, por hechos que nada sobrescribe:
+--
+--   1. asesora        — tiene fila en `order_sales` (la venta que registró una
+--                       asesora al apretar el botón; MOM: «eso lo decide
+--                       `order_sales`»).
+--   2. recompra_auto  — es el pedido de una prueba de recompra automática
+--                       (`auto_order_trials`, estado `generado`). Shopify no le
+--                       deja su etiqueta: las tiendas no dieron `write_orders`.
+--   3. bot_kapso      — etiqueta `kapso` en Shopify: lo creó el bot de Kapso.
+--   4. bot_externo    — etiquetas del otro bot de carritos («BOT», «CARRITO
+--                       RECUPERADO», «BOT (whatsapp_cloud)»).
+--   5. web            — formulario contraentrega de EasySell (etiquetas que
+--                       empiezan con `easysell`): la clienta compró sola.
+--   6. otros          — todo lo demás (catálogo de WhatsApp, pedidos hechos a
+--                       mano en Shopify…).
+--
+-- El orden SÍ decide: medido en el mismo mes, 1.375 de las 2.651 ventas
+-- activas de asesora llevan las etiquetas de EasySell (la asesora reusó el
+-- borrador del carrito) y las 29 recompras llevan la etiqueta de otro canal.
+-- Entre etiquetas no hubo choques. Un pedido cae en UN solo canal, así que los
+-- canales suman el total de la tienda.
+--
+-- Y una marca aparte, «ayudado por asesora», para lo que NO cerró una asesora:
+-- una asesora gestionó a esa clienta —fila firmada de `lead_calls` de tipo
+-- call, message o sale (la misma definición de «tocado» del MOM)— en el lead de
+-- la MISMA tienda con el MISMO teléfono, en los 7 días previos al pedido.
+-- Ayudar no es cerrar: la venta queda en su canal y la marca se cuenta aparte.
+--
+-- Igual que el resto del Consolidado: cancelados aparte (fuera de pedidos e
+-- ingresos), ingreso = total − reembolsado, día local de la tienda.
+--
+-- POR QUÉ UNA FUNCIÓN Y NO TYPESCRIPT. Clasificar un mes de Kenku desde la app
+-- era bajar ~7.000 pedidos y ~20.000 gestiones en cada carga de la página.
+-- Aquí, con los índices que ya existen (orders por tienda y fecha, leads por
+-- tienda y teléfono, lead_calls por lead y fecha, order_sales por pedido):
+-- 0,15 s para 30 días en producción. Devuelve un solo jsonb agregado por tienda
+-- y canal, así que no hay tope de filas de PostgREST que lo recorte.
+--
+-- SECURITY INVOKER a propósito, como 0252: las políticas de orders,
+-- order_sales, auto_order_trials, leads, lead_calls y stores siguen mandando,
+-- así que cada persona solo ve sus tiendas.
+--
+-- Solo lectura: no escribe nada. Si la app corre antes de que esto se aplique,
+-- el panel muestra la vista anterior con un aviso (lib/access.ts).
+-- ============================================================================
+
+create or replace function public.canal_de_cierre(
+  p_store_ids uuid[],
+  p_from      date,
+  p_to        date
+)
+returns jsonb
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  with tiendas as (
+    -- Medianoche local de p_from y del día siguiente a p_to (exclusivo), por
+    -- tienda: el mismo rango indexable que recompute_daily_rollups (0212).
+    select s.id as store_id,
+           p_from::timestamp at time zone coalesce(nullif(s.timezone, ''), 'UTC')       as t_from,
+           (p_to + 1)::timestamp at time zone coalesce(nullif(s.timezone, ''), 'UTC')   as t_to
+      from public.stores s
+     where s.id = any(p_store_ids)
+  ),
+  pedidos as (
+    select o.id,
+           o.store_id,
+           o.created_at,
+           o.customer_phone,
+           o.cancelled_at,
+           coalesce(o.total_amount, 0) - coalesce(o.total_refunded, 0) as neto,
+           case
+             when exists (select 1 from public.order_sales v where v.order_id = o.id)
+               then 'asesora'
+             when exists (select 1 from public.auto_order_trials a
+                           where a.store_id = o.store_id
+                             and a.shopify_order_id = o.shopify_order_id
+                             and a.status = 'generado')
+               then 'recompra_auto'
+             when exists (select 1 from unnest(o.tags) g where lower(g) = 'kapso')
+               then 'bot_kapso'
+             when exists (select 1 from unnest(o.tags) g
+                           where lower(g) in ('bot', 'carrito recuperado', 'bot (whatsapp_cloud)'))
+               then 'bot_externo'
+             when exists (select 1 from unnest(o.tags) g where lower(g) like 'easysell%')
+               then 'web'
+             else 'otros'
+           end as canal
+      from tiendas t
+      join public.orders o
+        on o.store_id = t.store_id
+       and o.created_at >= t.t_from
+       and o.created_at <  t.t_to
+  ),
+  marcados as (
+    -- CASE y no AND: Postgres no promete el orden de evaluación de un AND, y el
+    -- EXISTS es lo único caro. Solo se busca la gestión cuando puede contar.
+    select p.store_id,
+           p.canal,
+           p.cancelled_at,
+           p.neto,
+           case
+             when p.canal = 'asesora' or p.cancelled_at is not null or p.customer_phone is null then false
+             else exists (
+               select 1
+                 from public.leads l
+                 join public.lead_calls c on c.lead_id = l.id
+                where l.store_id = p.store_id
+                  and l.phone = p.customer_phone
+                  and c.vendedora is not null
+                  and c.kind in ('call', 'message', 'sale')
+                  and c.occurred_at <  p.created_at
+                  and c.occurred_at >= p.created_at - interval '7 days'
+             )
+           end as ayudado
+      from pedidos p
+  ),
+  por_canal as (
+    select m.store_id,
+           m.canal,
+           count(*) filter (where m.cancelled_at is null)                     as pedidos,
+           coalesce(sum(m.neto) filter (where m.cancelled_at is null), 0)     as ingresos,
+           count(*) filter (where m.cancelled_at is not null)                 as cancelados,
+           count(*) filter (where m.ayudado)                                   as ayudados,
+           coalesce(sum(m.neto) filter (where m.ayudado), 0)                   as ingresos_ayudados
+      from marcados m
+     group by m.store_id, m.canal
+  )
+  select jsonb_build_object(
+           'version', 1,
+           'filas', coalesce(
+             jsonb_agg(
+               jsonb_build_object(
+                 'store_id',          c.store_id,
+                 'canal',             c.canal,
+                 'pedidos',           c.pedidos,
+                 'ingresos',          c.ingresos,
+                 'cancelados',        c.cancelados,
+                 'ayudados',          c.ayudados,
+                 'ingresos_ayudados', c.ingresos_ayudados
+               )
+               order by c.store_id, c.canal
+             ),
+             '[]'::jsonb
+           )
+         )
+    from por_canal c;
+$$;
+
+revoke all on function public.canal_de_cierre(uuid[], date, date) from public, anon;
+grant execute on function public.canal_de_cierre(uuid[], date, date) to authenticated, service_role;
+
+comment on function public.canal_de_cierre(uuid[], date, date) is
+  'Canal de cierre de todos los pedidos de las tiendas en el rango local (MOM §17.3): asesora > recompra_auto > bot_kapso > bot_externo > web > otros, con marca «ayudado por asesora».';
+
 -- ---- 0260 ----
 -- ============================================================================
 -- 0260_invoices_hardening.sql — comprobantes por RUC: los arreglos de la
@@ -23671,3 +23845,882 @@ as $function$
     ), '[]'::jsonb)
   );
 $function$;
+
+-- ---- 0267 ----
+-- ============================================================================
+-- 0267_order_master_dispatch_scheduled_on.sql — «Programar envío»: la fecha
+-- acordada para despachar un pedido confirmado que todavía no tiene guía
+-- (MOM §6.2, 15-10-2026, pedido de Frankz).
+--
+-- POR QUÉ. Un pedido en Preparación · Por generar rótulo que el equipo tenía
+-- programado en su Excel («enviar lunes 26-10») parecía olvidado en Kapta
+-- (#KP140347). La fecha ahora es un hecho del historial (`dispatch_date_set`
+-- con actor y nota; `dispatch_date_cleared` con motivo) y el Master la guarda
+-- aquí para poder filtrar y enseñarla.
+--
+-- QUIÉN LA ESCRIBE. El recálculo del pedido (lib/dispatch-date.ts), y solo
+-- mientras el pedido está en Por generar rótulo: con la guía creada vuelve a
+-- null. No hace falta rellenar nada: hasta hoy nadie había programado un envío.
+-- ============================================================================
+
+alter table order_master add column if not exists dispatch_scheduled_on date;
+
+create index if not exists order_master_store_dispatch_scheduled_idx
+  on order_master(store_id, dispatch_scheduled_on)
+  where dispatch_scheduled_on is not null;
+
+-- ---- 0268 ----
+-- ============================================================================
+-- 0268_ventas_por_origen.sql — el Consolidado cuenta TODAS las ventas de la
+-- tienda, por origen, y la conversión de cada fuente de leads (MOM §17.4,
+-- 14-10-2026).
+--
+-- QUÉ PASABA. Las cifras de cabecera del Consolidado (Ingresos, Pedidos,
+-- Ticket), «Ventas por día» y «Por tienda» salían de `daily_rollups`, que solo
+-- cuenta los pedidos con etiqueta `kapso`: del 14-09 al 13-10-2026, unos 590
+-- pedidos y S/ 104.000 de los ~6.600 y S/ 1.180.000 que vendieron las tiendas.
+-- La «Conversión» de arriba (pedidos ÷ conversaciones) era la del bot sin
+-- decirlo, y no había ninguna tasa para las demás fuentes de leads.
+--
+-- QUÉ CAMBIA.
+--
+--   1. `pedidos_canal`: la regla del canal de cierre (MOM §17.3) en UN solo
+--      lugar. Es una vista con la sesión de quien mira (security_invoker): las
+--      políticas de orders, order_sales y auto_order_trials siguen mandando.
+--      Antes la regla vivía dentro de `canal_de_cierre` (0259); una segunda
+--      copia en las funciones nuevas podía separarse sin que nadie lo notara.
+--
+--   2. `canal_de_cierre` lee la vista. Mismo resultado que 0259 (su smoke lo
+--      vuelve a probar), sin copia propia de la regla.
+--
+--   3. `ventas_por_origen(tiendas, desde, hasta)`: por tienda, día LOCAL y
+--      canal, los pedidos activos, el ingreso (total − reembolsado) y los
+--      cancelados aparte. De ahí salen la cabecera, «Ventas por día», «Por
+--      tienda», el pedido del bot de «Conversión del bot» y la comparación con
+--      el periodo anterior.
+--
+--   4. `conversion_por_fuente(tiendas, desde, hasta)`: de los leads que
+--      NACIERON en el periodo (`coalesce(first_seen_at, created_at)`, día
+--      local), cuántos compraron en sus primeros 7 días, por cualquier canal, y
+--      quién cerró esa compra. Solo cuentan los leads con 7 días o más («por
+--      madurar», aparte) y quedan fuera, contadas aparte, las que ya eran
+--      clientas antes de nacer el lead. La compra es un pedido activo de la
+--      MISMA tienda con el mismo teléfono o el pedido del propio lead
+--      (`order_id`; un lead sin teléfono solo convierte por ahí), creado
+--      después de nacer el lead y antes de 7 días.
+--      `whatsapp-bot` es la marca que reciben los leads orgánicos que ganaron
+--      (lib/leads-ingest.ts): va con los de fuente vacía a «orgánico».
+--      `leads.has_order` NO sirve: se prende con cualquier pedido del teléfono,
+--      también con uno anterior al lead o cancelado, y nunca se apaga.
+--      Además, el cierre de las asesoras, parecido al de Productividad: ventas
+--      registradas (`order_sales`, por la hora del botón, anuladas incluidas y
+--      contadas aparte) sobre leads DISTINTOS trabajados (`lead_calls` firmadas
+--      que no son del sistema ni del agente de voz). Productividad suma los
+--      leads por asesora; aquí son los distintos de la tienda.
+--
+--   5. Dos índices para el nacimiento del lead, que `leads` no tenía por fecha:
+--      `leads_store_first_seen_idx` (store_id, first_seen_at) y
+--      `leads_store_created_sin_first_seen_idx` (store_id, created_at) donde
+--      `first_seen_at` es null. Son de columnas simples a propósito: la app
+--      consulta como `authenticated`, bajo la política de `leads`, y Postgres
+--      no lleva al índice un rango sobre `coalesce(...)` (coalesce no es
+--      leakproof): con un índice de expresión leía todos los leads de la tienda.
+--      Por eso `conversion_por_fuente` parte el nacimiento en dos ramas.
+--      EN PRODUCCIÓN SE CREAN A MANO Y ANTES, con `create index concurrently`
+--      (DEPLOY.md): un `create index` normal bloquea las escrituras en `leads`
+--      mientras se construye. Aquí quedan con `if not exists` para la base de
+--      CI y las bases nuevas.
+--
+--   Las tres funciones materializan `tiendas`: si Postgres la incrusta en la
+--   consulta, los límites del rango llegan como `timezone(coalesce(...))`, que
+--   tampoco es leakproof, y bajo RLS el rango de `orders` deja de ir por su
+--   índice (medido: 400.000 pedidos leídos en vez de los de la tienda).
+--
+-- QUÉ NO CAMBIA. `daily_rollups` sigue contando solo `kapso`: alimenta
+-- «Primera respuesta», las conversaciones de «Conversión del bot» y lo que el
+-- MOM §17.4 lista como «solo pedidos del bot». La cobertura (desde cuándo cada
+-- tienda tiene todas sus ventas) la decide la aplicación, no estas funciones:
+-- reciben una tienda y su rango ya recortado (lib/sales-coverage.ts).
+--
+-- Solo lectura: no escribe nada. Si la app corre antes de que esto se aplique,
+-- la cabecera vuelve a la vista anterior (solo el bot) con un aviso, nunca
+-- ceros (lib/access.ts).
+-- ============================================================================
+
+-- 5. Nacimiento del lead, por tienda. En producción: concurrently, a mano, antes.
+-- Aun con los índices ya creados, `if not exists` toma por un instante un
+-- bloqueo de escritura sobre `leads` antes de ver que existen: si tuviera que
+-- esperar a otra transacción, que falle en limpio en vez de encolar escrituras.
+set lock_timeout = '5s';
+create index if not exists leads_store_first_seen_idx
+  on public.leads (store_id, first_seen_at);
+create index if not exists leads_store_created_sin_first_seen_idx
+  on public.leads (store_id, created_at)
+  where first_seen_at is null;
+reset lock_timeout;
+
+-- 1. La regla del canal, en un solo lugar (movida tal cual de 0259).
+create or replace view public.pedidos_canal with (security_invoker = true) as
+select o.id,
+       o.store_id,
+       o.created_at,
+       o.customer_phone,
+       o.cancelled_at,
+       coalesce(o.total_amount, 0) - coalesce(o.total_refunded, 0) as neto,
+       case
+         when exists (select 1 from public.order_sales v where v.order_id = o.id)
+           then 'asesora'
+         when exists (select 1 from public.auto_order_trials a
+                       where a.store_id = o.store_id
+                         and a.shopify_order_id = o.shopify_order_id
+                         and a.status = 'generado')
+           then 'recompra_auto'
+         when exists (select 1 from unnest(o.tags) g where lower(g) = 'kapso')
+           then 'bot_kapso'
+         when exists (select 1 from unnest(o.tags) g
+                       where lower(g) in ('bot', 'carrito recuperado', 'bot (whatsapp_cloud)'))
+           then 'bot_externo'
+         when exists (select 1 from unnest(o.tags) g where lower(g) like 'easysell%')
+           then 'web'
+         else 'otros'
+       end as canal
+  from public.orders o;
+
+-- Una vista nueva nace con todos los permisos para anon y authenticated en
+-- Supabase (0213) y es actualizable en sus columnas simples: solo lectura, y
+-- solo para quien ya ve los pedidos.
+revoke all on public.pedidos_canal from public, anon, authenticated;
+grant select on public.pedidos_canal to authenticated, service_role;
+
+comment on view public.pedidos_canal is
+  'Cada pedido con su canal de cierre (MOM §17.3): asesora > recompra_auto > bot_kapso > bot_externo > web > otros. Única copia de la regla.';
+
+-- 2. canal_de_cierre sobre la vista: mismo resultado que 0259.
+create or replace function public.canal_de_cierre(
+  p_store_ids uuid[],
+  p_from      date,
+  p_to        date
+)
+returns jsonb
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  with tiendas as materialized (
+    -- materialized: así t_from/t_to llegan como valores y no como expresiones
+    -- con coalesce, y bajo RLS el rango va por el índice (ver arriba).
+    select s.id as store_id,
+           p_from::timestamp at time zone coalesce(nullif(s.timezone, ''), 'UTC')       as t_from,
+           (p_to + 1)::timestamp at time zone coalesce(nullif(s.timezone, ''), 'UTC')   as t_to
+      from public.stores s
+     where s.id = any(p_store_ids)
+  ),
+  pedidos as materialized (
+    -- materialized: el canal se usa dos veces abajo y no debe calcularse dos.
+    select v.id, v.store_id, v.created_at, v.customer_phone, v.cancelled_at, v.neto, v.canal
+      from tiendas t
+      join public.pedidos_canal v
+        on v.store_id = t.store_id
+       and v.created_at >= t.t_from
+       and v.created_at <  t.t_to
+  ),
+  marcados as (
+    select p.store_id,
+           p.canal,
+           p.cancelled_at,
+           p.neto,
+           case
+             when p.canal = 'asesora' or p.cancelled_at is not null or p.customer_phone is null then false
+             else exists (
+               select 1
+                 from public.leads l
+                 join public.lead_calls c on c.lead_id = l.id
+                where l.store_id = p.store_id
+                  and l.phone = p.customer_phone
+                  and c.vendedora is not null
+                  and c.kind in ('call', 'message', 'sale')
+                  and c.occurred_at <  p.created_at
+                  and c.occurred_at >= p.created_at - interval '7 days'
+             )
+           end as ayudado
+      from pedidos p
+  ),
+  por_canal as (
+    select m.store_id,
+           m.canal,
+           count(*) filter (where m.cancelled_at is null)                     as pedidos,
+           coalesce(sum(m.neto) filter (where m.cancelled_at is null), 0)     as ingresos,
+           count(*) filter (where m.cancelled_at is not null)                 as cancelados,
+           count(*) filter (where m.ayudado)                                   as ayudados,
+           coalesce(sum(m.neto) filter (where m.ayudado), 0)                   as ingresos_ayudados
+      from marcados m
+     group by m.store_id, m.canal
+  )
+  select jsonb_build_object(
+           'version', 1,
+           'filas', coalesce(
+             jsonb_agg(
+               jsonb_build_object(
+                 'store_id',          c.store_id,
+                 'canal',             c.canal,
+                 'pedidos',           c.pedidos,
+                 'ingresos',          c.ingresos,
+                 'cancelados',        c.cancelados,
+                 'ayudados',          c.ayudados,
+                 'ingresos_ayudados', c.ingresos_ayudados
+               )
+               order by c.store_id, c.canal
+             ),
+             '[]'::jsonb
+           )
+         )
+    from por_canal c;
+$$;
+
+revoke all on function public.canal_de_cierre(uuid[], date, date) from public, anon;
+grant execute on function public.canal_de_cierre(uuid[], date, date) to authenticated, service_role;
+
+-- 3. Todas las ventas por tienda, día local y canal.
+create or replace function public.ventas_por_origen(
+  p_store_ids uuid[],
+  p_from      date,
+  p_to        date
+)
+returns jsonb
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  with tiendas as materialized (
+    -- materialized: así t_from/t_to llegan como valores y no como expresiones
+    -- con coalesce, y bajo RLS el rango va por el índice (ver arriba).
+    select s.id as store_id,
+           coalesce(nullif(s.timezone, ''), 'UTC')                                         as tz,
+           p_from::timestamp at time zone coalesce(nullif(s.timezone, ''), 'UTC')       as t_from,
+           (p_to + 1)::timestamp at time zone coalesce(nullif(s.timezone, ''), 'UTC')   as t_to
+      from public.stores s
+     where s.id = any(p_store_ids)
+  ),
+  por_dia as (
+    select v.store_id,
+           (v.created_at at time zone t.tz)::date                               as dia,
+           v.canal,
+           count(*) filter (where v.cancelled_at is null)                       as pedidos,
+           coalesce(sum(v.neto) filter (where v.cancelled_at is null), 0)       as ingresos,
+           count(*) filter (where v.cancelled_at is not null)                   as cancelados
+      from tiendas t
+      join public.pedidos_canal v
+        on v.store_id = t.store_id
+       and v.created_at >= t.t_from
+       and v.created_at <  t.t_to
+     group by v.store_id, (v.created_at at time zone t.tz)::date, v.canal
+  )
+  select jsonb_build_object(
+           'version', 1,
+           'filas', coalesce(
+             jsonb_agg(
+               jsonb_build_object(
+                 'store_id',   d.store_id,
+                 'dia',        d.dia,
+                 'canal',      d.canal,
+                 'pedidos',    d.pedidos,
+                 'ingresos',   d.ingresos,
+                 'cancelados', d.cancelados
+               )
+               order by d.store_id, d.dia, d.canal
+             ),
+             '[]'::jsonb
+           )
+         )
+    from por_dia d;
+$$;
+
+revoke all on function public.ventas_por_origen(uuid[], date, date) from public, anon;
+grant execute on function public.ventas_por_origen(uuid[], date, date) to authenticated, service_role;
+
+comment on function public.ventas_por_origen(uuid[], date, date) is
+  'Todas las ventas de las tiendas por día local y canal de cierre (MOM §17.4): pedidos activos, ingreso neto y cancelados aparte.';
+
+-- 4. Conversión de cada fuente de leads, por cohorte de nacimiento.
+create or replace function public.conversion_por_fuente(
+  p_store_ids uuid[],
+  p_from      date,
+  p_to        date
+)
+returns jsonb
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  with tiendas as materialized (
+    -- materialized: así t_from/t_to llegan como valores y no como expresiones
+    -- con coalesce, y bajo RLS el rango va por el índice (ver arriba).
+    select s.id as store_id,
+           p_from::timestamp at time zone coalesce(nullif(s.timezone, ''), 'UTC')       as t_from,
+           (p_to + 1)::timestamp at time zone coalesce(nullif(s.timezone, ''), 'UTC')   as t_to
+      from public.stores s
+     where s.id = any(p_store_ids)
+  ),
+  nacidos as materialized (
+    select b.id,
+           b.store_id,
+           b.phone,
+           b.order_id,
+           b.nace,
+           b.nace <= now() - interval '7 days' as maduro,
+           case
+             when b.source in ('meta_ad', 'fb_web', 'cod_cart', 'abandoned_browse') then b.source
+             -- whatsapp-bot = un lead orgánico que ganó (lib/leads-ingest.ts).
+             when b.source is null or b.source = 'whatsapp-bot' then 'organico'
+             -- manual (venta telefónica) y cualquier otra: sin tasa.
+             else 'sin_tasa'
+           end as fuente
+      from (
+        -- Nacer = coalesce(first_seen_at, created_at), en dos ramas de columnas
+        -- simples para que bajo RLS cada rango vaya por su índice.
+        select l.id, l.store_id, l.phone, l.order_id, l.source, l.first_seen_at as nace
+          from tiendas t
+          join public.leads l
+            on l.store_id = t.store_id
+           and l.first_seen_at >= t.t_from
+           and l.first_seen_at <  t.t_to
+        union all
+        select l.id, l.store_id, l.phone, l.order_id, l.source, l.created_at as nace
+          from tiendas t
+          join public.leads l
+            on l.store_id = t.store_id
+           and l.first_seen_at is null
+           and l.created_at >= t.t_from
+           and l.created_at <  t.t_to
+         -- Una fila que Kapta creó desde su propio pedido (llega sin
+         -- first_seen_at y después del pedido) no es alguien que escribió: no
+         -- nace en la cohorte. Medido: 120 de ~21.800 leads en 30 días.
+         where not exists (select 1 from public.orders o
+                            where o.id = l.order_id
+                              and o.store_id = l.store_id
+                              and o.created_at <= l.created_at)
+      ) b
+  ),
+  marcados as materialized (
+    -- «Ya era clienta»: un pedido activo de la misma tienda ANTES de nacer el
+    -- lead. Solo importa para los maduros, que son los que entran a la tasa.
+    -- Antes de ORDERS_SYNC_FROM `orders` solo tiene los pedidos del bot, así
+    -- que una compra anterior por la web de esa época no se ve (MOM §17.4).
+    select n.*,
+           case when n.maduro then (
+             exists (select 1 from public.orders o
+                      where n.phone is not null
+                        and o.store_id = n.store_id
+                        and o.customer_phone = n.phone
+                        and o.cancelled_at is null
+                        and o.created_at < n.nace)
+             or exists (select 1 from public.orders o
+                         where n.order_id is not null
+                           and o.id = n.order_id
+                           and o.store_id = n.store_id
+                           and o.cancelled_at is null
+                           and o.created_at < n.nace)
+           ) else false end as ya_clienta
+      from nacidos n
+  ),
+  convertidos as (
+    -- La compra que convierte: el primer pedido activo, misma tienda, mismo
+    -- teléfono (o el del propio lead si no tiene teléfono), después de nacer
+    -- el lead y antes de 7 días. Solo para los maduros que no eran clientas.
+    -- Se lee de la vista: el canal se calcula solo para el pedido que
+    -- convierte, nunca para todos los pedidos de la tienda.
+    select m.store_id,
+           m.fuente,
+           m.maduro,
+           m.ya_clienta,
+           c.order_id as pedido_id,
+           c.canal
+      from marcados m
+      left join lateral (
+        select x.id as order_id, x.canal
+          from (
+            select o.id, o.created_at, o.canal
+              from public.pedidos_canal o
+             where m.maduro and not m.ya_clienta and m.phone is not null
+               and o.store_id = m.store_id
+               and o.customer_phone = m.phone
+               and o.cancelled_at is null
+               and o.created_at >  m.nace
+               and o.created_at <  m.nace + interval '7 days'
+            union all
+            select o.id, o.created_at, o.canal
+              from public.pedidos_canal o
+             where m.maduro and not m.ya_clienta and m.order_id is not null
+               and o.id = m.order_id
+               and o.store_id = m.store_id
+               and o.cancelled_at is null
+               and o.created_at >  m.nace
+               and o.created_at <  m.nace + interval '7 days'
+          ) x
+         order by x.created_at, x.id
+         limit 1
+      ) c on true
+  ),
+  por_fuente as (
+    select c.store_id,
+           c.fuente,
+           count(*)                                                     as nacidos,
+           count(*) filter (where not c.maduro)                         as por_madurar,
+           count(*) filter (where c.maduro and c.ya_clienta)            as ya_clientas,
+           count(*) filter (where c.maduro and not c.ya_clienta)        as prospectos,
+           count(*) filter (where c.pedido_id is not null)              as convertidos
+      from convertidos c
+     group by c.store_id, c.fuente
+  ),
+  cierres as (
+    select c.store_id, c.fuente, c.canal, count(*) as convertidos
+      from convertidos c
+     where c.pedido_id is not null
+     group by c.store_id, c.fuente, c.canal
+  ),
+  trabajados as (
+    -- Como Productividad: gestión firmada que no es del sistema ni del agente
+    -- de voz. Leads DISTINTOS de la tienda (Productividad suma por asesora).
+    select t.store_id, count(distinct c.lead_id) as leads
+      from tiendas t
+      join public.lead_calls c
+        on c.store_id = t.store_id
+       and c.occurred_at >= t.t_from
+       and c.occurred_at <  t.t_to
+     where c.vendedora is not null
+       and btrim(c.kind) not in ('system', 'voice_agent')
+     group by t.store_id
+  ),
+  ventas as (
+    -- Como Productividad: la venta registrada por la hora del botón, también
+    -- la que después se anuló (contada aparte).
+    select t.store_id,
+           count(*)                                            as ventas,
+           count(*) filter (where o.cancelled_at is not null)  as canceladas
+      from tiendas t
+      join public.order_sales v
+        on v.store_id = t.store_id
+       and v.occurred_at >= t.t_from
+       and v.occurred_at <  t.t_to
+      left join public.orders o on o.id = v.order_id
+     group by t.store_id
+  )
+  select jsonb_build_object(
+           'version', 1,
+           'fuentes', coalesce((
+             select jsonb_agg(
+                      jsonb_build_object(
+                        'store_id',    f.store_id,
+                        'fuente',      f.fuente,
+                        'nacidos',     f.nacidos,
+                        'por_madurar', f.por_madurar,
+                        'ya_clientas', f.ya_clientas,
+                        'prospectos',  f.prospectos,
+                        'convertidos', f.convertidos
+                      )
+                      order by f.store_id, f.fuente)
+               from por_fuente f
+           ), '[]'::jsonb),
+           'cierres', coalesce((
+             select jsonb_agg(
+                      jsonb_build_object(
+                        'store_id',    x.store_id,
+                        'fuente',      x.fuente,
+                        'canal',       x.canal,
+                        'convertidos', x.convertidos
+                      )
+                      order by x.store_id, x.fuente, x.canal)
+               from cierres x
+           ), '[]'::jsonb),
+           'asesoras', coalesce((
+             select jsonb_agg(
+                      jsonb_build_object(
+                        'store_id',         t.store_id,
+                        'leads_trabajados', coalesce(w.leads, 0),
+                        'ventas',           coalesce(s.ventas, 0),
+                        'canceladas',       coalesce(s.canceladas, 0)
+                      )
+                      order by t.store_id)
+               from tiendas t
+               left join trabajados w on w.store_id = t.store_id
+               left join ventas s on s.store_id = t.store_id
+           ), '[]'::jsonb)
+         );
+$$;
+
+revoke all on function public.conversion_por_fuente(uuid[], date, date) from public, anon;
+grant execute on function public.conversion_por_fuente(uuid[], date, date) to authenticated, service_role;
+
+comment on function public.conversion_por_fuente(uuid[], date, date) is
+  'Conversión de cada fuente de leads por cohorte de nacimiento (MOM §17.4): compra en 7 días por cualquier canal, con quién la cerró; y el % de cierre de las asesoras como en Productividad.';
+
+-- ---- 0269 ----
+-- ============================================================================
+-- 0269_invoices_backfill.sql — comprobantes por RUC: «Emitir esta boleta» para
+-- lo pagado antes de «Emitir desde», desde el 01/10/2026 (MOM §35, owner
+-- 15-10-2026).
+--
+-- QUÉ PASABA. El turno (`invoice_claim`, 0262) no da fila a un pedido pagado
+-- antes de «Emitir desde» (`antes_de_inicio`), y «Emitir desde» nunca queda
+-- atrás: al pasar el RUC a Manual se movió al momento del cambio. Lo pagado
+-- desde el 01/10/2026 hasta ese momento se quedaba sin boleta en Kapta: sin
+-- botón y sin barrido. Antes de Kapta las boletas se emitían a mano en
+-- SimpleFact, y Kapta no sabe si uno de esos pedidos ya tiene la suya. Una
+-- boleta de más es pagar el impuesto dos veces, y una boleta enviada no se
+-- borra.
+--
+-- QUÉ CAMBIA. Decisión del owner (15-10-2026): «Emitir esta boleta» también
+-- sirve para lo pagado antes de «Emitir desde», si se pagó desde el 01/10/2026
+-- 00:00 (hora de Lima). Solo `invoice_claim`, con un argumento nuevo al final,
+-- `p_backfill boolean default false`: se borra la firma de once argumentos de
+-- la 0261 y nace la de doce, con el cuerpo de la 0262 tal cual salvo dos cosas:
+--   · la fecha: lo pagado antes de «Emitir desde» pasa solo con `p_backfill`,
+--     una fila real, el RUC en Manual, una persona detrás (`p_created_by`) y
+--     las dos fechas —la que manda el código y la de la base— del 01/10/2026
+--     00:00 (hora de Lima) en adelante, y también el primer dinero: la fecha
+--     más temprana entre la del comprobante (`paid_at`, cuándo se movió la
+--     plata) y la de registro de cada pago validado. Un pago cuyo comprobante
+--     dice 29/09 y que entró a Kapta el 01/10 no pasa. Y solo con «Emitir
+--     desde» ya llegado (`emit_from <= now()`): Ajustes acepta una fecha en el
+--     futuro, y lo pagado antes de ella no sale, ni con el botón. Sin «Emitir
+--     desde» o sin fecha de pago, `antes_de_inicio`, como siempre;
+--   · la fila que nace así lo dice en su base:
+--     `pagado_antes_de_emitir_desde: true`.
+-- El código manda `p_backfill` solo desde el botón, y solo después de que la
+-- persona marcó «Revisé en SimpleFact y este pedido no tiene boleta»: lo que
+-- la base no puede saber lo confirma una persona.
+--
+-- A QUIÉN NO. El barrido nunca va hacia atrás: no manda `p_backfill`, y en
+-- Simulación, en una simulada de Manual y en Real, lo pagado antes de «Emitir
+-- desde» sigue en `antes_de_inicio`, se pida como se pida. Con «Emitir desde»
+-- en el futuro, también: la excepción es para lo pagado antes de un inicio
+-- que ya pasó, nunca para emitir antes de la fecha que puso el owner.
+-- «Emitir desde» no cambia: Ajustes sigue sin aceptar una fecha pasada (sí
+-- una futura), y un cambio de modo solo mueve la que quedó atrás. No toca
+-- datos, ni triggers, ni otra función. El código que hoy está en producción
+-- pide el turno por nombre, con nueve u once argumentos: con un solo turno, el
+-- de doce, esas llamadas van a él con `p_backfill` en falso, y hace lo mismo
+-- que antes. El turno sigue solo para `service_role`. Va después de la 0262:
+-- si sigue el turno de nueve argumentos, o no hay ni el de once ni el de
+-- doce, se detiene sin cambiar nada. Si después alguien vuelve a correr la
+-- 0261, quedan dos turnos —el de once y éste— y la llamada por nombre del
+-- código se vuelve ambigua (falla, no emite) hasta que se vuelva a correr la
+-- 0269. En el SQL Editor corre en una sola transacción; con psql,
+-- `psql -1 -v ON_ERROR_STOP=1`.
+--
+-- Se aplica a mano ANTES del código (DEPLOY.md). Es idempotente. El código
+-- tolera que falte: lo pagado desde «Emitir desde» se emite como hoy, y un
+-- pedido pagado antes contesta `sin_migracion`, nombrando la 0269.
+-- ============================================================================
+
+-- ── 1. Solo sobre la 0262 ────────────────────────────────────────────────────
+-- Con el turno de nueve en pie (la 0260 corrida otra vez después de la 0261),
+-- el de doce nacería a su lado y la llamada por nombre con nueve argumentos
+-- del código dejaría de saber a cuál ir. Sin el de once ni el de doce, falta
+-- la 0261. Con el de doce ya puesto (y sin el de once), es correrla otra vez:
+-- pasa, y no cambia nada.
+do $$
+begin
+  if to_regprocedure('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb)') is not null
+     or (to_regprocedure('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)') is null
+         and to_regprocedure('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)') is null) then
+    raise exception 'La 0269 va después de la 0262: aplica primero db/migrations/0261_invoices_manual.sql y db/migrations/0262_invoices_claim_coverage.sql.';
+  end if;
+end $$;
+
+-- ── 2. El turno ──────────────────────────────────────────────────────────────
+-- Lo nuevo frente a la 0262: `p_backfill`, la excepción de la fecha para lo que
+-- pide una persona con el RUC en Manual y «Emitir desde» ya llegado, y la marca
+-- en la base de esa fila. Lo demás, igual, letra por letra.
+--
+-- Revisa DENTRO de la base, con un candado por RUC, todo lo que no puede fallar:
+-- modo, conexión, monto, pagos validados que cubren el total, fecha de inicio,
+-- uno por pedido y el tope del día. Deja la fila en `emitiendo` (real) o
+-- `simulada`. Sin desbloqueo por tiempo: una fila `emitiendo` que se quedó sin
+-- respuesta se concilia, no se repite.
+--
+-- La firma de once argumentos se borra antes de crear la de doce: con las dos,
+-- `invoice_claim(p_id => …, …, p_created_by => …)` —como llama el código— calza
+-- en ambas, y Postgres no elige. Con una sola, esa llamada va a ésta con
+-- `p_backfill` en falso. En una transacción, nadie ve el instante entre el
+-- `drop` y el `create`.
+drop function if exists invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid);
+
+create or replace function invoice_claim(
+  p_id uuid,
+  p_issuer uuid,
+  p_store uuid,
+  p_order uuid,
+  p_total numeric,
+  p_paid_at timestamptz,
+  p_order_name text,
+  p_basis jsonb,
+  p_request jsonb,
+  p_mode text default null,
+  p_created_by uuid default null,
+  p_backfill boolean default false
+) returns jsonb
+language plpgsql security invoker set search_path = public as $$
+declare
+  v_org       uuid;
+  v_order     orders;
+  v_iss       invoice_issuers;
+  v_mode      text;
+  v_count     integer;
+  v_live      integer;
+  v_paid      timestamptz;
+  v_validated numeric;
+  v_prepaid   boolean;
+  v_web       boolean;
+  v_backfill  boolean := false;
+  v_first     timestamptz;
+begin
+  select org_id into v_org from stores where id = p_store and status = 'active';
+  if v_org is null then
+    return jsonb_build_object('reason', 'tienda');
+  end if;
+  select * into v_order from orders where id = p_order and store_id = p_store;
+  if v_order.id is null then
+    return jsonb_build_object('reason', 'pedido');
+  end if;
+  if v_order.cancelled_at is not null then
+    return jsonb_build_object('reason', 'anulado');
+  end if;
+  if coalesce(v_order.total_refunded, 0) <> 0 then
+    return jsonb_build_object('reason', 'reembolsado');
+  end if;
+  -- La boleta va en soles: un total en otra moneda se emitiría como si lo fuera.
+  if upper(coalesce(v_order.currency, '')) <> 'PEN' then
+    return jsonb_build_object('reason', 'moneda');
+  end if;
+
+  -- Los pagos del pedido, bloqueados hasta que termine el turno (0262). Cada
+  -- consulta de una función ve lo último que se guardó, así que sin esto un
+  -- pago rechazado entre la revisión de abajo y la fila se colaba igual. Con
+  -- esto, quien rechaza u observa un pago espera a que el turno termine y
+  -- encuentra la fila ya tomada: lo emitido no se toca, y el panel avisa que
+  -- un pago del comprobante ya no está validado (§35.9).
+  perform 1 from order_payments where order_id = p_order for share;
+
+  -- Cuándo quedó pagado, con los pagos de la base y no con lo que manda quien
+  -- pide el turno (MOM §35.3, condiciones 2 y 8). `p_paid_at` lo calcula el
+  -- código: si una regla o una lectura se equivocara, la boleta de algo pagado
+  -- antes de «Emitir desde» iría igual a SUNAT, y una boleta enviada no se
+  -- borra. Es la misma cuenta que `invoiceEligibility`: todos los pagos vivos
+  -- (no rechazados) validados, y el `registered_at` del último, que no cambia
+  -- si el pago se observa y se vuelve a validar; sin pagos vivos, la fecha del
+  -- pedido (el prepago web, que se comprueba abajo).
+  if exists (
+    select 1 from order_payments
+    where order_id = p_order
+      and validation_status is distinct from 'rechazado'
+      and validation_status is distinct from 'validado'
+  ) then
+    return jsonb_build_object('reason', 'pagos_en_revision');
+  end if;
+  select count(*), max(registered_at), coalesce(sum(amount), 0) into v_live, v_paid, v_validated
+  from order_payments
+  where order_id = p_order and validation_status = 'validado';
+  if v_live = 0 then
+    v_paid := coalesce(v_order.processed_at, v_order.created_at);
+  end if;
+
+  -- La empresa recibió el pago (MOM §35.3, condición 3), con los pagos y el
+  -- pedido de la base (0262). El código lo decide con lo que leyó antes de la
+  -- lectura de Shopify, y un pago validado se puede rechazar en ese rato: sin
+  -- esto, rechazar el único dejaba al turno sin pagos y lo tomaba por un prepago
+  -- web, y rechazar uno de varios dejaba un total sin cubrir. `p_basis` dice
+  -- qué camino tomó el código, y aquí ese camino se comprueba con lo guardado.
+  --
+  -- Prepago web, como `isWebPrepaid`: pagado en Shopify, por el checkout y sin
+  -- reembolsos. Nada se deduce: sin `payment_gateway`, no es prepago.
+  v_web := coalesce(lower(v_order.financial_status) = 'paid', false)
+           and coalesce(v_order.payment_gateway = 'checkout', false)
+           and coalesce(v_order.total_refunded, 0) = 0;
+  v_prepaid := coalesce((p_basis->>'prepaid')::boolean, false);
+  if v_prepaid then
+    -- Un prepago con comprobantes cargados no se adivina (§35.3): ¿pagó dos
+    -- veces, o subió la captura del checkout? Lo ve una persona.
+    if exists (
+      select 1 from order_payments
+      where order_id = p_order and validation_status is distinct from 'rechazado'
+    ) then
+      return jsonb_build_object('reason', 'prepago_con_comprobantes');
+    end if;
+    if not v_web then
+      return jsonb_build_object('reason', 'sin_pago_completo');
+    end if;
+  else
+    -- Lo mismo al revés: si mientras tanto el pedido pasó a prepago web y tiene
+    -- pagos validados, no se elige uno de los dos dineros.
+    if v_web and v_live > 0 then
+      return jsonb_build_object('reason', 'prepago_con_comprobantes');
+    end if;
+    -- Lo validado cubre el total que se va a emitir, al céntimo y sin redondeos
+    -- (los montos son numeric). Un total nulo lo rechaza `monto_cero` más abajo.
+    if v_live = 0 or v_validated < p_total then
+      return jsonb_build_object('reason', 'sin_pago_completo');
+    end if;
+  end if;
+  -- Cada pago en que se apoya el comprobante sigue validado y es de este pedido.
+  -- La suma puede seguir cubriendo con otro pago, pero el comprobante diría que
+  -- lo pagó uno que ya no cuenta, en la cuenta (y el RUC) de ése. Un id que no
+  -- es el de un pago validado de este pedido, cualquiera que sea, no pasa.
+  if exists (
+    select 1
+      from jsonb_array_elements(case when jsonb_typeof(p_basis->'payments') = 'array'
+                                     then p_basis->'payments' else '[]'::jsonb end) as b(pago)
+     where b.pago->>'id' is not null
+       and not exists (
+         select 1 from order_payments op
+          where op.order_id = p_order and op.validation_status = 'validado'
+            and op.id::text = b.pago->>'id'
+       )
+  ) then
+    return jsonb_build_object('reason', 'sin_pago_completo');
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended(p_issuer::text, 257));
+  select * into v_iss from invoice_issuers where id = p_issuer for update;
+  if v_iss.id is null or v_iss.org_id <> v_org then
+    return jsonb_build_object('reason', 'ruc_ajeno');
+  end if;
+  if v_iss.mode = 'apagado' then
+    return jsonb_build_object('reason', 'ruc_apagado');
+  end if;
+  -- Qué fila, con el modo del RUC leído bajo el candado. Sin `p_mode`, la de
+  -- siempre: real solo en Real; en Manual, una simulada, porque una boleta real
+  -- en Manual la pide una persona, pedido por pedido (MOM §35.8). Con `p_mode`,
+  -- la pedida, si el RUC está en un modo que la da; si no —el owner cambió el
+  -- modo mientras tanto, o un valor que no es un modo—, nada.
+  -- En Manual, una boleta real solo con una persona detrás (`p_created_by`):
+  -- el barrido nunca la pide, y si un error del código la pidiera sin nadie,
+  -- la base la rechaza.
+  v_mode := case
+    when p_mode is null then case when v_iss.mode = 'real' then 'real' else 'simulacion' end
+    when p_mode = 'real' and v_iss.mode = 'real' then 'real'
+    when p_mode = 'real' and v_iss.mode = 'manual' and p_created_by is not null then 'real'
+    when p_mode = 'simulacion' and v_iss.mode in ('simulacion', 'manual') then 'simulacion'
+  end;
+  if v_mode is null then
+    return jsonb_build_object('reason', 'modo_distinto');
+  end if;
+  if p_total is null or p_total <= 0 then
+    return jsonb_build_object('reason', 'monto_cero');
+  end if;
+  if p_total > 700 then
+    return jsonb_build_object('reason', 'monto_mayor_700');
+  end if;
+  if v_order.total_amount is null or abs(v_order.total_amount - p_total) >= 0.005 then
+    return jsonb_build_object('reason', 'total_distinto');
+  end if;
+  -- Las dos fechas: la que manda el código y la que dice la base. Sin una de
+  -- ellas no se sabe cuándo quedó pagado, y no se emite.
+  if v_iss.emit_from is null or p_paid_at is null or v_paid is null then
+    return jsonb_build_object('reason', 'antes_de_inicio');
+  end if;
+  -- Pagado antes de «Emitir desde»: no, salvo lo que pide una persona con
+  -- «Emitir esta boleta» después de revisar en SimpleFact que el pedido no
+  -- tiene boleta (0269, owner 15-10-2026): una fila real, con el RUC en Manual,
+  -- quién la pidió, «Emitir desde» ya llegado y las dos fechas del 01/10/2026
+  -- 00:00 (hora de Lima) en adelante. Más atrás las boletas se emitían a mano
+  -- y no se sabe cuál tiene la suya. Con «Emitir desde» en el futuro (Ajustes
+  -- lo acepta), nada pagado antes de él pasa: la excepción no adelanta la
+  -- fecha que puso el owner. `v_iss` se leyó bajo el candado del RUC. El
+  -- barrido nunca manda `p_backfill`, y en Real no pasa: ahí no hay botón. Con
+  -- `p_backfill` y un pedido pagado desde «Emitir desde», nada cambia: no
+  -- entra aquí.
+  --
+  -- El piso también para el primer dinero (`v_first`): la fecha más temprana
+  -- entre la del comprobante (`paid_at`, cuándo se movió la plata; puede
+  -- faltar) y la de registro de cada pago validado. Un pago cuyo comprobante
+  -- dice 29/09 y que entró a Kapta el 01/10 movió la plata cuando las boletas
+  -- se emitían a mano: no pasa. Sin pagos validados (el prepago web), la fecha
+  -- del pedido.
+  if p_paid_at < v_iss.emit_from or v_paid < v_iss.emit_from then
+    select min(least(coalesce(paid_at, registered_at), registered_at)) into v_first
+      from order_payments
+     where order_id = p_order and validation_status = 'validado';
+    if v_live = 0 then
+      v_first := v_paid;
+    end if;
+    if coalesce(p_backfill, false)
+       and v_mode = 'real' and v_iss.mode = 'manual' and p_created_by is not null
+       and v_iss.emit_from <= now()
+       and p_paid_at >= timestamptz '2026-10-01 00:00:00-05'
+       and v_paid >= timestamptz '2026-10-01 00:00:00-05'
+       and v_first >= timestamptz '2026-10-01 00:00:00-05' then
+      v_backfill := true;
+    else
+      return jsonb_build_object('reason', 'antes_de_inicio');
+    end if;
+  end if;
+  if p_request is null or jsonb_typeof(p_request) <> 'object' then
+    return jsonb_build_object('reason', 'sin_boleta');
+  end if;
+
+  if exists (
+    select 1 from order_invoices
+    where order_id = p_order and mode = 'real'
+      and status in ('emitiendo', 'emitida', 'en_duda', 'externa')
+  ) then
+    return jsonb_build_object('reason', 'ya_tiene');
+  end if;
+
+  -- Lo que se revisa depende de la fila pedida, no del modo del RUC: una
+  -- simulada en Manual no mira la conexión ni los errores reales, y una real
+  -- en Manual los mira como en Real.
+  if v_mode = 'simulacion' then
+    if exists (select 1 from order_invoices where order_id = p_order and mode = 'simulacion') then
+      return jsonb_build_object('reason', 'ya_simulado');
+    end if;
+  else
+    if v_iss.token_enc is null or v_iss.checked_ruc is distinct from v_iss.ruc then
+      return jsonb_build_object('reason', 'sin_conexion');
+    end if;
+    if exists (
+      select 1 from order_invoices
+      where order_id = p_order and mode = 'real' and status = 'error' and retry_requested_at is null
+    ) then
+      return jsonb_build_object('reason', 'error_previo');
+    end if;
+  end if;
+
+  -- El tope del día cuenta las filas del modo pedido: en Manual, las simuladas
+  -- del barrido no le quitan lugar a las boletas reales, ni al revés.
+  select count(*) into v_count
+  from order_invoices
+  where issuer_id = p_issuer
+    and mode = v_mode
+    and status in ('simulada', 'emitiendo', 'emitida', 'en_duda')
+    and created_at >= (date_trunc('day', now() at time zone 'America/Lima') at time zone 'America/Lima');
+  if v_count >= v_iss.daily_limit then
+    return jsonb_build_object('reason', 'tope');
+  end if;
+
+  -- La fila de lo pagado antes de «Emitir desde» lo dice en su base (0269):
+  -- quien la mire sabe que salió por la excepción, después de que una persona
+  -- revisó SimpleFact.
+  insert into order_invoices (
+    id, org_id, store_id, order_id, issuer_id, ruc, mode, status,
+    order_name, total, paid_at, basis, request, created_by
+  ) values (
+    p_id, v_org, p_store, p_order, p_issuer, v_iss.ruc, v_mode,
+    case when v_mode = 'real' then 'emitiendo' else 'simulada' end,
+    p_order_name, p_total, greatest(p_paid_at, v_paid),
+    case when v_backfill
+         then coalesce(p_basis, '{}'::jsonb) || jsonb_build_object('pagado_antes_de_emitir_desde', true)
+         else coalesce(p_basis, '{}'::jsonb) end,
+    p_request,
+    p_created_by
+  );
+  return jsonb_build_object('id', p_id, 'mode', v_mode);
+end;
+$$;
+revoke all on function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)
+  from public, anon, authenticated;
+grant execute on function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)
+  to service_role;

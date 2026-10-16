@@ -33,6 +33,15 @@ describe("cartRecovery (abandoned-cart recovery)", () => {
     expect(s.valorEnRiesgo).toBe(150); // only the open cart's value
   });
 
+  it("the ticket divides by the carts that brought bot revenue, not by every recovered cart", () => {
+    // A third cart recovered by an advisor or the web: recovered, but no bot order.
+    const s = cartRecovery([...leads, { phone: "51666", draft_order_gid: "gid3", has_order: true, category: "won" } as unknown as LeadRow], orders)!;
+    expect(s.recuperados).toBe(3);
+    expect(s.recuperadosBot).toBe(2);
+    expect(s.ingresosRecuperados).toBe(299);
+    expect(s.ticketPromedio).toBe(149.5); // not 299 / 3
+  });
+
   it("returns null when there are no cart leads (module stays hidden)", () => {
     const noCarts = [{ phone: "x", source: "meta_ad", has_order: false, category: "open" }] as unknown as LeadRow[];
     expect(cartRecovery(noCarts, orders)).toBeNull();

@@ -4,6 +4,7 @@
 
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { permissionsFor } from "@/lib/permissions";
+import { env } from "@/lib/env";
 import { cache } from "react";
 import { decryptOrNull } from "@/lib/crypto";
 import { fetchMetaSpend, normalizeMetaAdAccounts } from "@/lib/meta-marketing";
@@ -18,6 +19,20 @@ import type {
 import type { AdMeta } from "@/lib/meta-ads";
 import { idsEnUtm, type AnuncioMeta, type WebAdOrder } from "@/lib/cod-cart-attribution";
 import type { AttributionInputs, AttributionSource } from "@/lib/metrics";
+import {
+  isMissingFunctionError,
+  parseClosingChannels,
+  summarizeClosingChannels,
+  type ClosingChannelResult,
+} from "@/lib/closing-channel";
+import { comparablePrev, planWindows, type WindowPlan } from "@/lib/sales-coverage";
+import {
+  parseOriginRows,
+  parseSourceConversion,
+  summarizeSourceConversion,
+  type OriginSalesResult,
+  type SourceConversionResult,
+} from "@/lib/consolidado-origen";
 import type { WaNumber } from "@/lib/wa-numbers";
 
 export interface DateRange {
@@ -136,6 +151,12 @@ async function getUserRoleSummaryUncached(): Promise<{
 
 export const getUserRoleSummary = cache(getUserRoleSummaryUncached);
 
+/**
+ * Los cierres diarios: SOLO los pedidos del bot (`tag:kapso`), sus
+ * conversaciones y la primera respuesta. Desde la 0268 no son la cabecera
+ * (MOM §17.4): dan el denominador de «Conversión del bot» y la vista anterior
+ * cuando las ventas por origen no responden.
+ */
 export async function getRollups(
   storeIds: string[],
   range: DateRange,
@@ -230,7 +251,9 @@ export async function getOrders(
         .in("store_id", storeIds)
         // Kapso orders only (tag:kapso). The webhook path can transiently write a
         // non-Kapso order before it's tagged; keep the funnel/integrity/export
-        // reads in parity with the headline rollups regardless.
+        // reads in parity with the bot rollups regardless. Desde la 0268 la
+        // cabecera ya no sale de aquí: cuenta todas las ventas con
+        // `getOriginSales` (MOM §17.4); esto alimenta los módulos del bot.
         .contains("tags", ["kapso"])
         .gte("created_at", startIso)
         .lte("created_at", endIso)
@@ -622,6 +645,169 @@ export async function getAttributionInputs(
   for (const arr of winbackByPhone.values()) arr.sort();
 
   return { sourceByPhone, advisorTouchesByPhone, winbackByPhone };
+}
+
+// ── Todas las ventas, por origen (MOM §17.3 y §17.4) ─────────────────────────
+//
+// Tres lecturas comparten UN plan de cobertura por carga de página: desde cuándo
+// cada tienda tiene todas sus ventas (lib/sales-coverage.ts). Cada tienda se
+// pide en su propia ventana; Postgres clasifica con la sesión de quien mira, así
+// que cada persona ve solo sus tiendas. Si la migración todavía no se aplicó,
+// `sin_migracion`: la pantalla vuelve a la vista anterior con un aviso.
+// Cualquier otro error se dice tal cual, nunca se convierte en ceros: un «0 %
+// lo cerró una asesora» falso es lo que este cambio vino a corregir.
+
+type ServerClient = Awaited<ReturnType<typeof createServerSupabase>>;
+
+/** El inicio en Kapta de cada tienda, leído una sola vez por render. */
+const kaptaStartsByKey = cache(async (key: string): Promise<{ starts: Map<string, string | null> } | { error: string }> => {
+  const ids = key ? key.split(",") : [];
+  const sb = await createServerSupabase();
+  const res = await kaptaStartDays(sb, ids);
+  if ("error" in res) return res;
+  return { starts: new Map(ids.map((id, i) => [id, res.days[i] ?? null])) };
+});
+
+/** El plan de ventanas de estas tiendas para un periodo, o el error de leer sus inicios. */
+async function windowPlanFor(storeIds: string[], range: DateRange): Promise<{ plan: WindowPlan } | { error: string }> {
+  const starts = await kaptaStartsByKey([...storeIds].sort().join(","));
+  if ("error" in starts) return starts;
+  return { plan: planWindows(env.ordersSyncFrom(), storeIds.map((id) => ({ id, start: starts.starts.get(id) ?? null })), range) };
+}
+
+/** Llama a una función de lectura por cada ventana de tienda, en paralelo. */
+async function rpcPerWindow(
+  sb: ServerClient,
+  fn: "canal_de_cierre" | "ventas_por_origen" | "conversion_por_fuente",
+  windows: { storeId: string; from: string; to: string }[],
+): Promise<{ data: unknown[] } | { missing: true } | { error: string }> {
+  const results = await Promise.all(
+    windows.map((w) => sb.rpc(fn, { p_store_ids: [w.storeId], p_from: w.from, p_to: w.to })),
+  );
+  const failed = results.find((r) => r.error);
+  if (failed?.error) {
+    if (isMissingFunctionError(failed.error)) return { missing: true };
+    console.error(`[consolidado] ${fn}`, failed.error.code, failed.error.message);
+    return { error: failed.error.message };
+  }
+  return { data: results.map((r) => r.data) };
+}
+
+const emptyPlan = (): WindowPlan => ({ windows: [], later: [], excluded: [], multiStore: false });
+
+/**
+ * Canal de cierre de TODAS las ventas de las tiendas en el rango (MOM §17.3),
+ * en el día local de cada tienda y desde que cada una usa Kapta.
+ */
+export async function getClosingChannels(storeIds: string[], range: DateRange): Promise<ClosingChannelResult> {
+  if (!storeIds.length) return { status: "ok", summary: summarizeClosingChannels([]), plan: emptyPlan() };
+  const planned = await windowPlanFor(storeIds, range);
+  if ("error" in planned) return { status: "error", message: planned.error };
+  const { plan } = planned;
+  if (!plan.windows.length) return { status: "sin_cobertura", plan };
+  const res = await rpcPerWindow(await createServerSupabase(), "canal_de_cierre", plan.windows);
+  if ("missing" in res) return { status: "sin_migracion" };
+  if ("error" in res) return { status: "error", message: res.error };
+  return { status: "ok", summary: summarizeClosingChannels(res.data.flatMap(parseClosingChannels)), plan };
+}
+
+/**
+ * Todas las ventas por tienda, día local y canal (MOM §17.4), y las del periodo
+ * anterior SOLO si cada tienda que cuenta ahora lo contaba entero: si no, el
+ * cambio contra el anterior sería falso y no se muestra. Una sola llamada por
+ * tienda cubre los dos periodos cuando se puede comparar.
+ */
+export async function getOriginSales(storeIds: string[], range: DateRange): Promise<OriginSalesResult> {
+  if (!storeIds.length) return { status: "ok", rows: [], prevRows: null, plan: emptyPlan() };
+  const prevR = previousRange(range);
+  const [planned, prevPlanned] = await Promise.all([windowPlanFor(storeIds, range), windowPlanFor(storeIds, prevR)]);
+  if ("error" in planned) return { status: "error", message: planned.error };
+  if ("error" in prevPlanned) return { status: "error", message: prevPlanned.error };
+  const { plan } = planned;
+  if (!plan.windows.length) return { status: "sin_cobertura", plan };
+  const compare = comparablePrev(plan, prevPlanned.plan);
+  const res = await rpcPerWindow(
+    await createServerSupabase(),
+    "ventas_por_origen",
+    plan.windows.map((w) => ({ storeId: w.storeId, from: compare ? prevR.from : w.from, to: w.to })),
+  );
+  if ("missing" in res) return { status: "sin_migracion" };
+  if ("error" in res) return { status: "error", message: res.error };
+  const all = res.data.flatMap(parseOriginRows);
+  return {
+    status: "ok",
+    rows: all.filter((r) => r.date >= range.from),
+    prevRows: compare ? all.filter((r) => r.date < range.from) : null,
+    plan,
+  };
+}
+
+/**
+ * Conversión de cada fuente de leads (MOM §17.4): cohorte de los leads nacidos
+ * en el periodo, con 7 días de vida, que compraron en sus primeros 7 días por
+ * cualquier canal; y el % de cierre de las asesoras como en Productividad. Es
+ * una cohorte: no se compara contra el periodo anterior (MOM §17.1).
+ */
+export async function getSourceConversion(storeIds: string[], range: DateRange): Promise<SourceConversionResult> {
+  if (!storeIds.length) {
+    return { status: "ok", summary: summarizeSourceConversion({ sources: [], closes: [], advisors: [] }), plan: emptyPlan() };
+  }
+  const planned = await windowPlanFor(storeIds, range);
+  if ("error" in planned) return { status: "error", message: planned.error };
+  const { plan } = planned;
+  if (!plan.windows.length) return { status: "sin_cobertura", plan };
+  const res = await rpcPerWindow(await createServerSupabase(), "conversion_por_fuente", plan.windows);
+  if ("missing" in res) return { status: "sin_migracion" };
+  if ("error" in res) return { status: "error", message: res.error };
+  const parsed = res.data.map(parseSourceConversion);
+  return {
+    status: "ok",
+    summary: summarizeSourceConversion({
+      sources: parsed.flatMap((p) => p.sources),
+      closes: parsed.flatMap((p) => p.closes),
+      advisors: parsed.flatMap((p) => p.advisors),
+    }),
+    plan,
+  };
+}
+
+/**
+ * El día local en que cada tienda empezó a usar Kapta: su primera fila de
+ * `order_sales` o, si todavía no tiene ninguna, su primer lead; null si no tiene
+ * ninguno de los dos. La de `order_sales` va por su índice (store_id,
+ * occurred_at) con `limit 1`; la de leads no tiene índice por `created_at`
+ * (los de la 0268 son por `first_seen_at` y por `created_at` solo sin él) y
+ * recorre los leads de la tienda, pero solo corre mientras la tienda no
+ * registró ninguna venta.
+ * Cualquier lectura que falle es un error, no un «no tiene».
+ */
+async function kaptaStartDays(
+  sb: ServerClient,
+  storeIds: string[],
+): Promise<{ days: (string | null)[] } | { error: string }> {
+  const first = async (table: "order_sales" | "leads", column: "occurred_at" | "created_at", storeId: string) => {
+    const { data, error } = await sb.from(table).select(column).eq("store_id", storeId).order(column, { ascending: true }).limit(1).maybeSingle();
+    if (error) throw new Error(`${table}: ${error.message}`);
+    return ((data as Record<string, string> | null)?.[column] ?? null) as string | null;
+  };
+  try {
+    const [stores, firsts] = await Promise.all([
+      sb.from("stores").select("id, timezone").in("id", storeIds),
+      Promise.all(storeIds.map(async (id) => (await first("order_sales", "occurred_at", id)) ?? (await first("leads", "created_at", id)))),
+    ]);
+    if (stores.error) throw new Error(`stores: ${stores.error.message}`);
+    const tz = new Map(((stores.data ?? []) as { id: string; timezone: string | null }[]).map((s) => [s.id, s.timezone || "UTC"]));
+    return {
+      days: storeIds.map((id, i) => {
+        const iso = firsts[i];
+        return iso ? tzParts(iso, tz.get(id) ?? "UTC").date : null;
+      }),
+    };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error("[consolidado] inicio de la tienda en Kapta", message);
+    return { error: `no se pudo leer desde cuándo usa Kapta cada tienda (${message})` };
+  }
 }
 
 /**

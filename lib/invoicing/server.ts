@@ -297,12 +297,26 @@ export const INVOICE_CLAIM_MODE_MIGRATION = "0261";
 const CLAIM_0261_PARAMS = ["p_mode", "p_created_by"] as const;
 
 /**
- * El «no existe» del turno. Si se pidió con `p_mode` o `p_created_by`, lo que
- * falta es la 0261: la 0257 y la 0260 crean el turno sin esos parámetros, y
- * PostgREST no encuentra esa firma (PGRST202). Quien llega al turno ya leyó las
- * tablas de la 0257, así que no son ellas. Sin esos parámetros, como siempre.
+ * La migración que le deja al turno dar una fila real de un pedido pagado antes
+ * de «Emitir desde» (`p_backfill`, owner 15-10-2026): la 0269. Como la 0261, no
+ * crea nada con nombre nuevo, así que se reconoce por el parámetro. Solo lo
+ * manda «Emitir esta boleta» con un pedido de antes (`beforeStart`): sin la
+ * 0269, lo demás se sigue emitiendo con el turno de once argumentos.
+ */
+export const INVOICE_CLAIM_BACKFILL_MIGRATION = "0269";
+
+/**
+ * El «no existe» del turno. Si se pidió con `p_backfill`, lo que falta es la
+ * 0269: la 0261 ya corrió en producción. Si se pidió con `p_mode` o
+ * `p_created_by`, lo que falta es la 0261: la 0257 y la 0260 crean el turno sin
+ * esos parámetros, y PostgREST no encuentra esa firma (PGRST202). Quien llega
+ * al turno ya leyó las tablas de la 0257, así que no son ellas. Sin esos
+ * parámetros, como siempre.
  */
 function claimMissingError(args: Record<string, unknown>): InvoiceMigrationMissingError {
+  if ("p_backfill" in args) {
+    return new InvoiceMigrationMissingError("invoice_claim con p_backfill", "invoice_claim", INVOICE_CLAIM_BACKFILL_MIGRATION);
+  }
   const sent = CLAIM_0261_PARAMS.filter((p) => p in args);
   return sent.length
     ? new InvoiceMigrationMissingError(`invoice_claim con ${sent.join(" y ")}`, "invoice_claim", INVOICE_CLAIM_MODE_MIGRATION)
@@ -448,6 +462,7 @@ interface PaymentRow {
   validation_status: string;
   validated_at: string | null;
   registered_at: string | null;
+  paid_at: string | null;
   vision: unknown;
 }
 
@@ -510,7 +525,7 @@ async function loadOrders(admin: SupabaseClient, orderIds: string[]): Promise<Ma
     selectIn<PaymentRow>(
       admin,
       "order_payments",
-      "id,order_id,kind,amount,validation_status,validated_at,registered_at,vision",
+      "id,order_id,kind,amount,validation_status,validated_at,registered_at,paid_at,vision",
       "order_id",
       found,
     ),
@@ -575,6 +590,9 @@ async function loadOrders(admin: SupabaseClient, orderIds: string[]): Promise<Ma
       // Cuándo quedó pagado el pedido sale del último pago REGISTRADO (§35.3,
       // condición 8): es la fecha que mira `invoice_candidates`.
       registeredAt: p.registered_at,
+      // La fecha del comprobante: solo para el piso de lo pagado antes de
+      // «Emitir desde» (el primer dinero, `firstPaidAt`), no para la condición 8.
+      paidAt: p.paid_at ?? null,
       vision: p.vision,
       flowLinked: flowLinked.has(p.id),
       statementDestination: destinationByPayment.get(p.id) ?? null,
@@ -1597,6 +1615,11 @@ async function prepareSale(
  * Los parámetros del turno (`invoice_claim`). `mode` (`p_mode`) y `createdBy`
  * (`p_created_by`) son de la 0261 y solo van si se dan: sin ellos el turno es
  * el de siempre, con el modo del RUC y sin quién.
+ *
+ * `p_backfill` (0269) va SOLO con un pedido pagado antes de «Emitir desde»
+ * (`beforeStart`, que solo da `emitNow`) y con quien lo pidió: el barrido
+ * nunca lo manda. Nunca va en false: así lo demás se sigue pidiendo con el
+ * turno de once argumentos aunque la 0269 no esté.
  */
 function claimArgs(
   facts: InvoiceOrderFacts,
@@ -1616,6 +1639,7 @@ function claimArgs(
     p_request: prepared.payload,
     ...(extra.mode ? { p_mode: extra.mode } : {}),
     ...(extra.createdBy ? { p_created_by: extra.createdBy } : {}),
+    ...(elig.beforeStart && extra.createdBy ? { p_backfill: true } : {}),
   };
 }
 
@@ -1843,6 +1867,13 @@ function blocked(reason: InvoiceReason, detail?: string | null): InvoiceEmitNowR
  * Antes lo comparaba la acción con una lectura propia, y entre esa lectura y
  * esta el pedido podía cambiar: salía una boleta que nadie confirmó.
  *
+ * PAGADO ANTES DE «EMITIR DESDE» (owner, 15-10-2026). Con el RUC en «Manual»,
+ * las reglas dejan pasar lo pagado desde el 01/10/2026 (`beforeStart`). Antes
+ * de Kapta las boletas se emitían a mano en SimpleFact, así que, justo después
+ * de comparar lo que vio, hace falta que la persona haya marcado que lo revisó
+ * ahí (`expected.simplefactChecked`); si no, `sin_revision_simplefact` y no se
+ * llama a nada. El turno va con `p_backfill` y la base exige lo mismo (0269).
+ *
  * SOLO EN PRODUCCIÓN (`invoiceEmitAllowedHere`). La acción ya lo pide antes de
  * leer nada; aquí se vuelve a pedir, primero que todo, por si alguien la llama
  * desde otro lado. Se lee del entorno y no de `deps`: `deps` son los dobles de
@@ -1866,8 +1897,12 @@ export interface InvoiceEmitNowInput {
   /**
    * Lo que la persona confirmó: el RUC y el total en céntimos. Si las reglas,
    * con la lectura de aquí, dicen otro, no se emite (`pedido_cambio`).
+   *
+   * `simplefactChecked`: marcó «Revisé en SimpleFact y este pedido no tiene
+   * boleta». Hace falta, y solo cuenta un `true`, cuando el pedido quedó pagado
+   * antes de «Emitir desde» (`beforeStart`); si no, `sin_revision_simplefact`.
    */
-  expected?: { issuerId: string; totalCents: number };
+  expected?: { issuerId: string; totalCents: number; simplefactChecked?: boolean };
   /** Solo con el RUC en «Manual»: en «Real» emite el barrido (`modo_distinto`). */
   manualOnly?: boolean;
 }
@@ -1957,6 +1992,12 @@ async function emitNow(
   if (input.manualOnly && !input.expected) return blocked("pedido_cambio");
   if (input.expected && !sameAsExpected(elig, input.expected)) return blocked("pedido_cambio");
 
+  // 2d. Pagado antes de «Emitir desde» (owner, 15-10-2026): antes de Kapta las
+  // boletas se emitían a mano en SimpleFact, y Kapta no sabe si este pedido ya
+  // tiene una. Dos boletas son dos veces el impuesto: sin que la persona diga
+  // que lo buscó ahí y no está, no sale. Antes del token, de Shopify y del turno.
+  if (elig.beforeStart && input.expected?.simplefactChecked !== true) return blocked("sin_revision_simplefact");
+
   // 3. El token antes del turno, como el barrido: un turno sin token dejaría una
   // fila `emitiendo` que nunca se envió.
   const conn = await loadIssuerConn(admin, deps, issuer.id);
@@ -1975,11 +2016,14 @@ async function emitNow(
   if (!prepared.ok) return blocked(prepared.reason, prepared.detail);
 
   // 5. El turno: una fila REAL, con quién la pidió. La base vuelve a revisar
-  // todo, con el candado del RUC y el tope del día de lo real.
+  // todo, con el candado del RUC y el tope del día de lo real. Un pedido de
+  // antes de «Emitir desde» va con `p_backfill` (0269): la base vuelve a exigir
+  // la excepción entera.
   const args = claimArgs(facts, elig, prepared, { mode: "real", createdBy: input.userId });
   const claim = await admin.rpc("invoice_claim", args);
   if (claim.error) {
-    // Sin la firma con `p_mode` y `p_created_by`: falta la 0261.
+    // Sin la firma con `p_mode` y `p_created_by`: falta la 0261. Sin la de
+    // `p_backfill`: falta la 0269, y solo un pedido de antes lo nota.
     if (isInvoiceMigrationMissing(claim.error)) return blocked("sin_migracion", claimMissingError(args).message);
     return blocked("turno_fallido", `El turno falló (${sinTelefonos(claim.error.message)}).`);
   }
@@ -2054,12 +2098,29 @@ export interface InvoiceEmitNowRow {
  * Lo que sale si se pulsa: el RUC y el total de las reglas evaluadas como una
  * emisión real. Es lo que dice la confirmación y lo que `emitInvoiceAction`
  * vuelve a comparar antes de emitir.
+ *
+ * `beforeStart`: quedó pagado antes de «Emitir desde» (la excepción de
+ * `INVOICE_BACKFILL_FROM`). La confirmación lo dice, con cuándo quedó pagado
+ * (`paidAt`), cuándo se movió el primer dinero (`firstPaidAt`, la fecha más
+ * temprana entre el comprobante y el registro de sus pagos: desde ahí se busca
+ * en SimpleFact) y desde cuándo emite el RUC (`emitFrom`), y pide marcar que
+ * se revisó en SimpleFact. Las fechas en ISO, o null si no se entienden.
  */
 export interface InvoiceEmitNowOffer {
   issuerId: string;
   ruc: string;
   legalName: string;
   total: number;
+  beforeStart: boolean;
+  paidAt: string | null;
+  firstPaidAt: string | null;
+  emitFrom: string | null;
+}
+
+/** Una fecha como ISO («2026-10-14T15:00:00.000Z»), o null si no se entiende. */
+function isoOrNull(value: string | null | undefined): string | null {
+  const t = time(value);
+  return t === null ? null : new Date(t).toISOString();
 }
 
 /**
@@ -2150,6 +2211,11 @@ function emitNowShopifyBlock(checks: readonly InvoiceCheckRow[], invoices: reado
  *    a mano» o de «Espera a Shopify» se contradice, y el servidor relee Shopify
  *    igual antes de emitir.
  *
+ * Un pedido pagado antes de «Emitir desde», pero desde el 01/10/2026
+ * (`INVOICE_BACKFILL_FROM`), también lleva botón: las reglas como emisión real
+ * con el RUC en «Manual» lo dejan pasar. La oferta lo dice (`beforeStart`), y
+ * la confirmación pide marcar que se revisó en SimpleFact.
+ *
  * Quién mira (`invoices.manage`) lo pone quien llama. Esto solo decide si se
  * enseña el botón: lo que se envía lo decide el servidor al pulsar, con todo
  * leído de nuevo (`emitInvoiceAction`).
@@ -2183,6 +2249,10 @@ export function invoiceEmitNowReadiness(input: {
       ruc: elig.issuer.ruc,
       legalName: elig.issuer.legalName,
       total: elig.totalCents / 100,
+      beforeStart: elig.beforeStart,
+      paidAt: isoOrNull(elig.paidAt),
+      firstPaidAt: isoOrNull(elig.firstPaidAt),
+      emitFrom: isoOrNull(elig.issuer.emitFrom),
     },
   };
 }
