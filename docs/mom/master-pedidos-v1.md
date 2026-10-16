@@ -564,10 +564,15 @@ en su trabajo el lunes, o pidió que se despache el sábado—. Hasta esta fecha
 equipo lo anotaba en su Excel de provincia («enviar lunes 26-10») y en Kapta el
 pedido aparecía como confirmado sin guía, igual que uno olvidado (#KP140347).
 
-- **Dónde.** En la ficha, pestaña Operar, dentro de «Elegir ruta y generar el
-  rótulo»: **«Programar envío»**, con la fecha y una nota opcional. Solo en
-  Preparación · Por generar rótulo, con permiso para editar el Master.
-  Programar otra vez cambia la fecha; **«Quitar»** pide motivo.
+- **Dónde.** En vivo, al confirmar: en la gestión de confirmación, con
+  «Confirmó el pedido», el campo **«Sale el (opcional)»** guarda la fecha
+  acordada en la llamada junto con el intento (vacío = sale apenas se genere la
+  guía). Y después, en la ficha, pestaña Operar, dentro de «Elegir ruta y
+  generar el rótulo»: **«Programar envío»**, con la fecha y una nota opcional,
+  solo en Preparación · Por generar rótulo. Las dos exigen permiso para editar
+  el Master. Programar otra vez cambia la fecha; **«Quitar»** pide motivo. En
+  Agencia, confirmar de palabra no basta para pasar a Preparación (§6.1): la
+  fecha se guarda igual y aparece cuando el pago exigido se valida.
 - **Qué queda.** Un hecho del historial con actor: `dispatch_date_set` (fecha
   y nota) o `dispatch_date_cleared` (motivo). Manda el último. Se programa hoy
   o hasta 45 días adelante.

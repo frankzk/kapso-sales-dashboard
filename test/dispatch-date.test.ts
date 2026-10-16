@@ -70,9 +70,20 @@ describe("Programar envío (MOM §6.2, 15-10-2026)", () => {
     expect(master).toContain("? currentDispatchDate(orderEvents, guides.map((g) => g.created_at))?.date ?? null");
     expect(read("db/migrations/0267_order_master_dispatch_scheduled_on.sql")).toContain("add column if not exists dispatch_scheduled_on date");
   });
+  it("en vivo: «Confirmó el pedido» acepta «Sale el», validado antes de registrar el intento", () => {
+    const actions = read("app/dashboard/pedidos/actions.ts");
+    expect(actions).toContain('const dispatchOn = result.confirms ? input.dispatchOn?.trim() ?? "" : "";');
+    expect(actions).toContain("if (dateError) return { error: `Fecha de envío: ${dateError}` };");
+    expect(actions).toContain("if (dispatchOn && !response.duplicate) {");
+    expect(actions).toContain("payload: { date: dispatchOn, at_confirmation: true },");
+    const drawer = read("components/order-drawer.tsx");
+    expect(drawer).toContain("Sale el (opcional)");
+    expect(drawer).toContain('dispatchOn: selected?.confirms ? dispatchOn : "",');
+  });
   it("el MOM lo documenta", () => {
     const mom = read("docs/mom/master-pedidos-v1.md").replace(/\s+/g, " ");
     expect(mom).toContain("#### Programar envío (15-10-2026)");
     expect(mom).toContain("Programado para el lun 19/10 y no salió");
+    expect(mom).toContain("el campo **«Sale el (opcional)»** guarda la fecha acordada en la llamada");
   });
 });

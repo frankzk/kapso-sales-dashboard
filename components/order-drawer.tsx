@@ -100,7 +100,7 @@ import { BrowserCallButton } from "@/components/browser-call";
 import { UrpiAttemptsSection } from "@/components/urpi-attempts-section";
 import { limaTodayKey } from "@/lib/shipments";
 import { DispatchDatePanel } from "@/components/dispatch-date-panel";
-import { DISPATCH_DATE_SET, dispatchDateBadge } from "@/lib/dispatch-date";
+import { DISPATCH_DATE_SET, dispatchDateBadge, dispatchDateMax } from "@/lib/dispatch-date";
 
 const DISPATCH_BADGE_TONE: Record<"info" | "warn" | "danger", BadgeTone> = { info: "info", warn: "warn", danger: "crit" };
 import { downloadPdf } from "@/lib/download-pdf";
@@ -2833,12 +2833,15 @@ function ConfirmationDesk({
     channel: string;
     note?: string;
     nextContactOn?: string;
+    dispatchOn?: string;
     operationId?: string;
   }) => void;
 }) {
   const [result, setResult] = useState(CONFIRMATION_RESULTS[0]!.code);
   const [channel, setChannel] = useState<string>(CONFIRMATION_CHANNELS[0].code);
   const [nextContactOn, setNextContactOn] = useState("");
+  // «Programar envío» en vivo (MOM §6.2): la fecha se acuerda en la llamada.
+  const [dispatchOn, setDispatchOn] = useState("");
   const [note, setNote] = useState("");
 
   const events = useMemo(
@@ -3016,6 +3019,25 @@ function ConfirmationDesk({
           </label>
         )}
 
+        {selected?.confirms && (
+          <div className="space-y-1">
+            <label className={cn(LABEL, "sm:w-56")}>
+              Sale el (opcional)
+              <input
+                type="date"
+                value={dispatchOn}
+                min={today}
+                max={dispatchDateMax(today)}
+                onChange={(e) => setDispatchOn(e.target.value)}
+                className={cn(FIELD, "font-normal tabular-nums pointer-coarse:h-11")}
+              />
+            </label>
+            <p className="text-[13px] leading-5 text-ink-500">
+              Solo si acordaron otro día para el envío. Vacío: sale apenas se genere la guía.
+            </p>
+          </div>
+        )}
+
         <label className={LABEL}>
           Qué dijo el cliente
           <textarea
@@ -3037,10 +3059,12 @@ function ConfirmationDesk({
                 channel,
                 note,
                 nextContactOn,
+                dispatchOn: selected?.confirms ? dispatchOn : "",
                 operationId: crypto.randomUUID(),
               });
               setNote("");
               setNextContactOn("");
+              setDispatchOn("");
             }}
             className="pointer-coarse:h-11"
           >

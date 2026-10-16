@@ -68,6 +68,11 @@ function addDays(day: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** El último día que se puede programar desde hoy. */
+export function dispatchDateMax(todayLima: string): string {
+  return addDays(todayLima, DISPATCH_DATE_MAX_DAYS);
+}
+
 /** Por qué no se puede programar esa fecha, o null si se puede. */
 export function dispatchDateError(date: string, todayLima: string): string | null {
   if (!ISO_DAY.test(date) || Number.isNaN(Date.parse(`${date}T12:00:00Z`))) return "Elige una fecha válida.";
