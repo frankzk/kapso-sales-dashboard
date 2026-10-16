@@ -1682,6 +1682,8 @@ export async function registerConfirmationAttempt(
     channel: string;
     note?: string;
     nextContactOn?: string;
+    /** «Programar envío» en vivo (MOM §6.2): solo con «Confirmó el pedido». */
+    dispatchOn?: string;
     operationId?: string;
   },
 ): Promise<MasterActionState> {
@@ -1708,6 +1710,14 @@ export async function registerConfirmationAttempt(
 
   const note = input.note?.trim() ?? "";
   if (note.length > 2000) return { error: "La nota es demasiado larga (máx. 2000)." };
+
+  // La fecha de envío acordada en la llamada. Se valida antes de registrar el
+  // intento: un error después dejaría la confirmación sin su fecha.
+  const dispatchOn = result.confirms ? input.dispatchOn?.trim() ?? "" : "";
+  if (dispatchOn) {
+    const dateError = dispatchDateError(dispatchOn, limaTodayKey());
+    if (dateError) return { error: `Fecha de envío: ${dateError}` };
+  }
 
   const ctx = await authorizeOrder(orderId);
   if (!ctx) return { error: "Sin acceso a este pedido." };
@@ -1736,14 +1746,30 @@ export async function registerConfirmationAttempt(
   });
   if (error) return { error: `No se pudo registrar el intento: ${error.message}` };
 
-  await recomputeOrderMasterSafe(admin, [orderId]);
-  revalidatePath(MASTER_PATH);
-
   const response = (data ?? {}) as {
     duplicate?: boolean;
     day_count?: number;
     last_attempt?: boolean;
   };
+
+  // Programado en vivo: el mismo actor, justo después de la confirmación. Un
+  // reintento de la misma operación (`duplicate`) no lo repite.
+  let scheduledNotice = "";
+  if (dispatchOn && !response.duplicate) {
+    const scheduleError = await recordEvent(admin, ctx, {
+      kind: DISPATCH_DATE_SET,
+      occurredAt: new Date(Date.parse(occurredAt) + 1).toISOString(),
+      // La nota del intento es lo que dijo el cliente, no una nota del envío.
+      reason: `Envío programado para el ${dispatchDateLabel(dispatchOn)}, acordado al confirmar.`,
+      payload: { date: dispatchOn, at_confirmation: true },
+    });
+    scheduledNotice = scheduleError
+      ? ` No se pudo guardar la fecha de envío (${scheduleError}): prográmala desde la ficha.`
+      : ` Envío programado para el ${dispatchDateLabel(dispatchOn)}.`;
+  }
+
+  await recomputeOrderMasterSafe(admin, [orderId]);
+  revalidatePath(MASTER_PATH);
   const days = Number(response.day_count ?? 0);
   if (result.confirms) {
     // Agencia no queda confirmada por la palabra del cliente: el pedido sigue en
@@ -1754,9 +1780,10 @@ export async function registerConfirmationAttempt(
       ctx.row.payment_state,
     );
     return {
-      notice: paymentReady
-        ? "Pedido confirmado; pasa a Preparación."
-        : "Confirmado de palabra. Sigue en confirmación hasta validar el pago exigido.",
+      notice:
+        (paymentReady
+          ? "Pedido confirmado; pasa a Preparación."
+          : "Confirmado de palabra. Sigue en confirmación hasta validar el pago exigido.") + scheduledNotice,
     };
   }
   if (days >= CONFIRMATION_MAX_DAYS) {
