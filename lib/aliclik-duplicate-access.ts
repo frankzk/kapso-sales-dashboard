@@ -1,5 +1,6 @@
 import "server-only";
 import { createHash } from "node:crypto";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServerSupabase } from "@/lib/db";
 import { permissionsFor } from "@/lib/permissions";
 import { classifyOperation } from "@/lib/order-macro-stage";
@@ -24,9 +25,19 @@ async function duplicatePermissions(sb: Awaited<ReturnType<typeof createServerSu
   return permissionsFor(membership.data ? [membership.data.role] : [], grants.data, functionalRoles);
 }
 
-/** RLS throughout. Never limit customer history to the 50 rows shown in the brief. */
-export async function loadAliclikDuplicateHold(orderId: string): Promise<DuplicateHold> {
-  const sb = await createServerSupabase();
+/**
+ * RLS throughout. Never limit customer history to the 50 rows shown in the brief.
+ *
+ * `scope` es la guía automática del día programado (MOM §6.2): sin sesión, lee
+ * con el service role. La búsqueda ya se acota a las tiendas de la organización
+ * del pedido; lo que cambia es que nadie puede resolver ni exceptuar desde ahí
+ * (`canResolve`/`canOverride` en false), y la retención decide igual.
+ */
+export async function loadAliclikDuplicateHold(
+  orderId: string,
+  scope?: { client: SupabaseClient },
+): Promise<DuplicateHold> {
+  const sb = scope?.client ?? (await createServerSupabase());
   const { data: row, error } = await sb.from("order_master")
     .select("order_id,store_id,customer_phone,shipping_mode,coverage,region,province,district")
     .eq("order_id", orderId).single();
@@ -121,7 +132,7 @@ export async function loadAliclikDuplicateHold(orderId: string): Promise<Duplica
       .eq("kind", "aliclik_duplicate_resolution").order("occurred_at", { ascending: false }).order("id", { ascending: false }).limit(1),
     sb.from("order_payments").select("kind,amount,validation_status").eq("order_id", orderId)
       .eq("store_id", row.store_id).eq("validation_status", "validado").in("kind", ["adelanto", "diferencia", "total"]),
-    duplicatePermissions(sb, store.org_id),
+    scope ? Promise.resolve(null) : duplicatePermissions(sb, store.org_id),
   ]);
   if (events.error || payments.error || !events.data || !payments.data) throw new Error(DUPLICATE_READ_ERROR);
   const event = events.data[0];
@@ -134,5 +145,5 @@ export async function loadAliclikDuplicateHold(orderId: string): Promise<Duplica
     return sum + (Number.isFinite(amount) && amount > 0 ? Math.round(amount * 100) : 0);
   }, 0) / 100;
   return { ...duplicateGate(conflicts, fingerprint, resolution, validatedAmount), conflicts, fingerprint,
-    validatedAmount, canResolve: permissions.has("master.edit"), canOverride: permissions.has("master.override_status") };
+    validatedAmount, canResolve: permissions?.has("master.edit") ?? false, canOverride: permissions?.has("master.override_status") ?? false };
 }

@@ -658,6 +658,8 @@ export const TIMELINE_LABEL: Record<string, string> = {
   payment: "Pago",
   payment_recipient_exception: "Pago validado con cuenta receptora no verificada",
   aliclik_risk_exception: "Excepción al riesgo de Aliclik",
+  // La guía automática del día programado (MOM §6.2) que no se pudo crear.
+  aliclik_auto_guide_failed: "Guía automática no creada",
   additional_output_reason: "Motivo de la salida adicional",
   recovery_discarded: "Recuperación de provincia descartada",
   confirmation_cancellation_task_created: "Tarea de anulación creada",

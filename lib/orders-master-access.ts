@@ -7,6 +7,7 @@
 // TypeScript — son tres consultas pequeñas de un solo pedido, no hacen falta
 // joins (que PostgREST tampoco daría).
 
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { unstable_cache } from "next/cache";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { chunk } from "@/lib/access";
@@ -862,8 +863,12 @@ function withRuntimeCoverage(row: OrderMasterRow): OrderMasterRow {
  * Master) con `shipment_calls` (las gestiones de Repro Provincia) — por eso el
  * Master no necesita duplicar las gestiones en una tabla propia.
  */
-export async function getOrderMasterDetail(orderId: string): Promise<OrderMasterDetail | null> {
-  const sb = await createServerSupabase();
+export async function getOrderMasterDetail(
+  orderId: string,
+  /** Sin sesión (la guía automática, MOM §6.2): el service role. */
+  client?: SupabaseClient,
+): Promise<OrderMasterDetail | null> {
+  const sb = client ?? (await createServerSupabase());
 
   const { data: rowData, error: rowError } = await sb
     .from("order_master")
@@ -1790,11 +1795,16 @@ export interface OrderConfirmationBrief {
  * Se lee con el cliente de sesión, así que la RLS decide qué pedidos anteriores
  * son visibles: el historial de un teléfono nunca cruza a una tienda que quien
  * mira no puede ver.
+ *
+ * La guía automática del día programado (MOM §6.2) no tiene sesión: pasa el
+ * service role con las tiendas de la organización del pedido, y el historial se
+ * acota a ellas a mano — el service role lo ve todo.
  */
 export async function getOrderConfirmationBrief(
   orderId: string,
+  scope?: { client: SupabaseClient; storeIds: readonly string[] },
 ): Promise<OrderConfirmationBrief | null> {
-  const sb = await createServerSupabase();
+  const sb = scope?.client ?? (await createServerSupabase());
   const { data: rowData } = await sb
     .from("order_master")
     .select("order_id,store_id,customer_phone,region,province,district,coverage,order_created_at")
@@ -1817,16 +1827,16 @@ export async function getOrderConfirmationBrief(
   const phone = (row.customer_phone ?? "").trim();
   let priors: PriorOrderSnapshot[] = [];
   if (phone) {
-    const { data } = await sb
+    let query = sb
       .from("order_master")
       .select(
         "order_id,order_name,order_created_at,general_status,operational_status,macro_stage,order_total," +
           "guide_code,current_courier,last_courier,delivered_courier,attempt_count",
       )
       .eq("customer_phone", phone)
-      .neq("order_id", orderId)
-      .order("order_created_at", { ascending: false })
-      .limit(50);
+      .neq("order_id", orderId);
+    if (scope) query = query.in("store_id", [...scope.storeIds]);
+    const { data } = await query.order("order_created_at", { ascending: false }).limit(50);
     priors = ((data ?? []) as unknown as PriorOrderSnapshot[]) ?? [];
   }
 

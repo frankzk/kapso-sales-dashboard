@@ -161,6 +161,13 @@ roles and the `auth` schema, so it just works.
      `maxDuration`. Si vuelven a fallar, el informe dice por dónde: `orphansHeld`
      explica cada candado que no se soltó y `sweepAgeMinutes` delata un barrido
      que dejó de completarse.
+   - `/api/cron/aliclik-scheduled` — cada hora de 8:00 a 13:00 de Lima
+     (`7 13-18 * * *` UTC). Crea la guía Aliclik de los pedidos de Provincia COD
+     programados para hoy (MOM §6.2), por el mismo camino que el botón y sin
+     levantar excepciones. Lo que falla avisa por Telegram, un mensaje por
+     pedido, al grupo urgente de la tienda o, si no tiene, al del resumen diario.
+     Solo en producción y con `ALICLIK_WRITE_ENABLED=true`; `?dry=1` cotiza y
+     dice qué haría sin crear ni avisar. **Sin migración.**
    - `/api/cron/backup` — daily 08:00 UTC (~03:00 Lima). Snapshots the
      dashboard-native tables (`leads`, `lead_calls`, `shipment_calls`) to CSV in
      the private Supabase Storage bucket `db-backups` (auto-created, keeps the
