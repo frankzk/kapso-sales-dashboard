@@ -83,13 +83,21 @@ function adminFalso(candidatas: unknown[]) {
   };
   function consulta() {
     const q: Record<string, unknown> = {};
-    for (const m of ["select", "eq", "in", "or", "limit", "contains"]) q[m] = () => q;
+    // La consulta de las ya validadas sin ficha (`delivery_status = entregado`)
+    // va aparte y vuelve vacía: se prueba en
+    // tanders-sweep-missing-collection.test.ts. Acá se prueba la cola viva.
+    let validadas = false;
+    for (const m of ["select", "in", "or", "limit", "contains", "not"]) q[m] = () => q;
+    q.eq = (col: string, v: unknown) => {
+      if (col === "delivery_status" && v === "entregado") validadas = true;
+      return q;
+    };
     q.order = (col: string, opts: unknown) => {
-      visto.orden.push({ col, opts });
+      if (!validadas) visto.orden.push({ col, opts });
       return q;
     };
     q.then = (ok: (v: unknown) => unknown) =>
-      Promise.resolve({ data: candidatas, error: null }).then(ok);
+      Promise.resolve({ data: validadas ? [] : candidatas, error: null }).then(ok);
     return q;
   }
   const admin = {
@@ -119,7 +127,7 @@ function adminFalso(candidatas: unknown[]) {
           // acá es el barrido, no la cola.
           select: () => {
             const q: Record<string, unknown> = {};
-            for (const m of ["eq", "neq", "or", "limit"]) q[m] = () => q;
+            for (const m of ["eq", "neq", "or", "limit", "in"]) q[m] = () => q;
             q.then = (ok: (v: unknown) => unknown) =>
               Promise.resolve({ data: h.enLaCola, error: null }).then(ok);
             return q;
@@ -136,7 +144,7 @@ function adminFalso(candidatas: unknown[]) {
           // prueba en este archivo es la cola, no el duplicado.
           select: () => {
             const q: Record<string, unknown> = {};
-            for (const m of ["eq", "neq", "limit"]) q[m] = () => q;
+            for (const m of ["eq", "neq", "limit", "order"]) q[m] = () => q;
             q.then = (ok: (v: unknown) => unknown) =>
               Promise.resolve({ data: [], error: null }).then(ok);
             return q;

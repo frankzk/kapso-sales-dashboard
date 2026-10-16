@@ -541,6 +541,12 @@ export interface OrderMasterDetail {
    * paquete y en qué quedó. Vacío si el pedido no pasó por una caja ni ruta.
    */
   gfDeliveries: GfDelivery[];
+  /**
+   * `orders.cancelled_at`: anulado en Shopify. Lo que lee la puerta a
+   * «entregado» (lib/master-door.ts); la Mesa de cierre lo usa para no
+   * prometer que cerrar la ruta lo marca entregado (MOM §11.4, §29.13).
+   */
+  shopifyCancelledAt: string | null;
   /** Pedido acompañante (MOM §32): en qué caja viaja y qué lleva en las suyas. */
   companion: OrderCompanionInfo;
   /**
@@ -774,6 +780,7 @@ async function loadGfDeliveries(orderId: string, guides: readonly ShipmentRow[])
       pickupConfirmed: st.pickup_confirmed,
       routeDate: route?.route_date ?? null,
       routeStatus: route?.status ?? null,
+      routeId: st.route_id,
       riderName: route?.rider_id ? riderNames.get(route.rider_id) ?? null : null,
       seq: st.seq,
     };
@@ -886,7 +893,7 @@ export async function getOrderMasterDetail(
   const row = withRuntimeCoverage(rowData as unknown as OrderMasterRow);
 
   const [orderRes, guidesRes, eventsRes, tasksRes] = await Promise.all([
-    sb.from("orders").select("line_items,raw").eq("id", orderId).maybeSingle(),
+    sb.from("orders").select("line_items,raw,cancelled_at").eq("id", orderId).maybeSingle(),
     sb.from("shipments").select(GUIDE_COLUMNS).eq("order_id", orderId).order("created_at"),
     sb
       .from("order_events")
@@ -1014,7 +1021,7 @@ export async function getOrderMasterDetail(
     payload: task.payload ?? {},
   }));
 
-  const orderRow = orderRes.data as { line_items?: OrderLineItem[]; raw?: unknown } | null;
+  const orderRow = orderRes.data as { line_items?: OrderLineItem[]; raw?: unknown; cancelled_at?: string | null } | null;
   const rawItems = orderRow?.line_items ?? [];
   // La foto no viene en el line item de Shopify: se adjunta desde el espejo
   // (migración 0164). Sin espejo, la miniatura degrada a la inicial y el pedido
@@ -1051,6 +1058,7 @@ export async function getOrderMasterDetail(
     aliclikOutlook,
     tasks,
     gfDeliveries,
+    shopifyCancelledAt: orderRow?.cancelled_at ?? null,
     companion,
     address: shopifyShippingAddress(orderRow?.raw),
     departamentoElegido: shopifyDepartamentoElegido(orderRow?.raw),

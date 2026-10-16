@@ -101,7 +101,7 @@ export function UrpiResultsBoard({ nav, orgId, canImport, canApply, days, lastIm
     <header className="flex flex-wrap items-start justify-between gap-4">
       <div><p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Couriers externos</p>
         <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">Urpi · Resultados de entrega</h1>
-        <p className="mt-2 max-w-3xl text-sm text-slate-600">En Urpi, abre «Reporte del mes – detallado», pulsa <strong>Exportar</strong> y carga aquí el .csv. Kapta vincula cada envío por teléfono y te dice qué falta hacer. Se muestran los intentos de los últimos {days} días.</p>
+        <p className="mt-2 max-w-3xl text-sm text-slate-600">En Urpi, abre «Reporte del mes – detallado», pulsa <strong>Exportar</strong> y carga aquí el .csv. Kapta vincula cada envío por teléfono y te dice qué falta hacer. Se muestran los intentos de los últimos {days} días, y los entregados más antiguos cuya salida «Por definir» falta pasar a Urpi.</p>
       </div>
       {canImport && <div className="flex flex-col items-end gap-1">
         <button disabled={busy} className={primary} onClick={() => fileInput.current?.click()}>{uploading ? "Leyendo reporte…" : "Cargar reporte de Urpi"}</button>

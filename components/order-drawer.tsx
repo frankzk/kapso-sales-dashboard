@@ -661,6 +661,7 @@ export function OrderDrawer({
     canFinalize: boolean;
     canRefund: boolean;
     canReopen: boolean;
+    canManageCosts: boolean;
   };
   storeName: (id: string) => string;
   storeDomain: (id: string) => string | null;
@@ -1847,6 +1848,9 @@ export function OrderDrawer({
                     reasons={(detail.row.macro_reasons ?? []) as MacroSubstage[]}
                     generalStatus={detail.row.general_status}
                     guides={detail.guides}
+                    row={detail.row}
+                    gfDeliveries={detail.gfDeliveries}
+                    cancelledInShopify={Boolean(detail.shopifyCancelledAt)}
                     permissions={closurePermissions}
                     pending={pending}
                     onAction={(input) => run(() => registerClosureAction(orderId, input))}

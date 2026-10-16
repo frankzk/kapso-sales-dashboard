@@ -17,7 +17,19 @@ import { randomUUID } from "node:crypto";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getMasterPermissions, hasOrgPermission } from "@/lib/permissions-access";
 import { getCurrentUser } from "@/lib/access";
-import { applyConfirmationCycleToStore, recomputeOrderMasterSafe } from "@/lib/order-master";
+import { applyConfirmationCycleToStore, freshLogisticsCost, recomputeOrderMasterSafe } from "@/lib/order-master";
+import {
+  ACTIVE_OUTPUTS_ERROR,
+  activeOutputs,
+  gfOpenRouteBlock,
+  gfOpenRouteError,
+  liquidationCostBlock,
+  logisticsCostFactsFromRow,
+  type ClosureGfDelivery,
+} from "@/lib/closure-blocks";
+import { pickLatestStop, type GfStop } from "@/lib/gf-delivery";
+import { bulkAllSkippedError, bulkDeliveredSkips, bulkStatusNotice } from "@/lib/bulk-status-guard";
+import { courierKey } from "@/lib/dispatch";
 import { coverageLabel, recordCoverageChanges } from "@/lib/coverage-change";
 import {
   VOICE_STORE_COLUMNS,
@@ -1337,8 +1349,10 @@ export async function createManualRouteOutputsBulk(
 export interface BulkStatusResult extends MasterActionState {
   /** Pedidos que quedaron en el estado pedido. */
   applied: string[];
-  /** Los que no, con el motivo exacto de cada uno. */
+  /** Los que no, con el motivo exacto de cada uno (incluye los saltados). */
   failed: BulkRouteOutputFailure[];
+  /** Los que ni se intentaron: tienen una observación de cuadre abierta (§30.8). */
+  skipped?: string[];
 }
 
 /**
@@ -1356,6 +1370,13 @@ export interface BulkStatusResult extends MasterActionState {
  *
  * Si el estado falla, el comentario NO se escribe: un «PAGADO» sobre un pedido
  * que no cambió de estado es peor que no haber hecho nada, porque parece que sí.
+ *
+ * A ENTREGADO NO PASA UN PEDIDO CON OBSERVACIÓN DE CUADRE ABIERTA (MOM §30.8),
+ * la misma guarda que «Aplicar al Master» desde la hoja: el motorizado cobró
+ * distinto o la hoja contradice a Kapta, y quien liquida acepta el motivo
+ * antes. Esos pedidos se saltan, se cuentan en el aviso y salen en la lista de
+ * «con problemas» con el motivo; los demás de la tanda siguen. Si no se pueden
+ * leer las observaciones no se aplica nada: «no lo sé» no es «no hay».
  */
 export async function applyOrderStatusBulk(
   orderIds: string[],
@@ -1389,10 +1410,44 @@ export async function applyOrderStatusBulk(
     };
   }
 
+  let skipped: BulkRouteOutputFailure[] = [];
+  if (input.general === "entregado") {
+    // Solo los pedidos que quien pide puede ver (RLS): de los demás no se dice
+    // nada, y `setOrderStatus` responderá «Sin acceso» como siempre.
+    const sb = await createServerSupabase();
+    const { data: visible, error: visibleError } = await sb
+      .from("order_master")
+      .select("order_id")
+      .in("order_id", unique);
+    if (visibleError) {
+      return { error: `No se pudieron leer los pedidos (${visibleError.message}). Vuelve a intentarlo.`, applied: [], failed: [] };
+    }
+    const visibleIds = ((visible ?? []) as { order_id: string }[]).map((row) => row.order_id);
+    const withOpen = new Set<string>();
+    if (visibleIds.length) {
+      const { data: open, error: openError } = await createAdminSupabase()
+        .from("sheet_observations")
+        .select("order_id")
+        .eq("status", "abierta")
+        .in("order_id", visibleIds);
+      if (openError) {
+        return {
+          error: `No se pudieron leer las observaciones de cuadre (${openError.message}). No se aplicó nada; vuelve a intentarlo.`,
+          applied: [],
+          failed: [],
+        };
+      }
+      for (const row of (open ?? []) as { order_id: string | null }[]) if (row.order_id) withOpen.add(row.order_id);
+    }
+    skipped = bulkDeliveredSkips(input.general, unique, withOpen);
+  }
+  const skippedIds = new Set(skipped.map((skip) => skip.orderId));
+
   const applied: string[] = [];
   const failed: BulkRouteOutputFailure[] = [];
 
   for (const orderId of unique) {
+    if (skippedIds.has(orderId)) continue;
     try {
       const status = await setOrderStatus(orderId, {
         general: input.general,
@@ -1419,11 +1474,17 @@ export async function applyOrderStatusBulk(
   revalidatePath(MASTER_PATH);
   return {
     applied,
-    failed,
+    // Los saltados primero: es lo que hay que ir a resolver a Liquidaciones 2.
+    failed: [...skipped, ...failed],
+    skipped: skipped.map((skip) => skip.orderId),
     notice: applied.length
-      ? `${applied.length} pedido${applied.length === 1 ? "" : "s"} actualizado${applied.length === 1 ? "" : "s"}.${failed.length ? ` ${failed.length} con problemas.` : ""}`
+      ? bulkStatusNotice({ applied: applied.length, skipped: skipped.length, failed: failed.length })
       : undefined,
-    error: applied.length ? undefined : "Ningún pedido pudo actualizarse.",
+    error: applied.length
+      ? undefined
+      : skipped.length && !failed.length
+        ? bulkAllSkippedError(skipped.length)
+        : "Ningún pedido pudo actualizarse.",
   };
 }
 
@@ -2029,6 +2090,91 @@ function workflowIsOpen(
 }
 
 /**
+ * La parada vigente de cada salida propia, con el estado de su ruta: lo que
+ * necesita `gfOpenRouteBlock`. Elige la parada con la misma regla que la ficha
+ * (`loadGfDeliveries`, lib/orders-master-access.ts): las del cuaderno sin
+ * `shipment_id` se cuelgan de la salida propia más reciente y gana la última
+ * reportada (`pickLatestStop`). Si no se puede leer devuelve vacío: el cierre
+ * sigue bloqueado y solo se pierde la explicación precisa.
+ */
+async function loadClosureGfDeliveries(
+  admin: ReturnType<typeof createAdminSupabase>,
+  orderId: string,
+  shipments: readonly { id: string; courier: string | null }[],
+): Promise<ClosureGfDelivery[]> {
+  const own = shipments.filter((shipment) => courierKey(shipment.courier) === "propio");
+  if (!own.length) return [];
+  const { data, error } = await admin
+    .from("delivery_stops")
+    .select("id,route_id,shipment_id,status,reported_at,delivery_routes(route_date,status)")
+    .eq("order_id", orderId);
+  if (error) {
+    console.error("[closure] paradas de Grupo GF", orderId, error.message);
+    return [];
+  }
+  type Row = {
+    id: string;
+    route_id: string | null;
+    shipment_id: string | null;
+    status: string;
+    reported_at: string | null;
+    delivery_routes: { route_date: string | null; status: string | null } | { route_date: string | null; status: string | null }[] | null;
+  };
+  const toStop = (row: Row): GfStop & { routeId: string | null } => {
+    const route = Array.isArray(row.delivery_routes) ? row.delivery_routes[0] ?? null : row.delivery_routes;
+    return {
+      id: row.id,
+      status: row.status as GfStop["status"],
+      outcomeReason: null,
+      note: null,
+      reportedAt: row.reported_at,
+      paymentMethod: null,
+      collectedAmount: null,
+      photoPath: null,
+      voucherPath: null,
+      pickupConfirmed: null,
+      routeDate: route?.route_date ?? null,
+      routeStatus: route?.status ?? null,
+      riderName: null,
+      seq: null,
+      routeId: row.route_id,
+    };
+  };
+  const rows = (data ?? []) as unknown as Row[];
+  const ownIds = new Set(own.map((shipment) => shipment.id));
+  const orphans = rows.filter((row) => !row.shipment_id || !ownIds.has(row.shipment_id)).map(toStop);
+  const latestId = own[own.length - 1]!.id;
+  return own.map((shipment) => {
+    const mine = rows.filter((row) => row.shipment_id === shipment.id).map(toStop);
+    const stop = pickLatestStop(shipment.id === latestId ? [...mine, ...orphans] : mine) as (GfStop & { routeId: string | null }) | null;
+    return {
+      shipmentId: shipment.id,
+      stop: stop ? { status: stop.status, routeStatus: stop.routeStatus, routeId: stop.routeId } : null,
+    };
+  });
+}
+
+/**
+ * ¿Está anulado en Shopify? Lo mismo que lee la puerta a «entregado»
+ * (`orders.cancelled_at`, lib/master-door.ts), que es lo que decide si cerrar
+ * la ruta lo marca entregado. Solo elige el texto del bloqueo: Finalizar se
+ * niega igual. Si no se puede leer, el estado del Master como respaldo
+ * (`anulado`), sabiendo que también cubre anulados solo en Kapta.
+ */
+async function loadShopifyCancelled(
+  admin: ReturnType<typeof createAdminSupabase>,
+  orderId: string,
+  generalStatus: string | null,
+): Promise<boolean> {
+  const { data, error } = await admin.from("orders").select("cancelled_at").eq("id", orderId).maybeSingle();
+  if (error) {
+    console.error("[closure] anulación en Shopify", orderId, error.message);
+    return generalStatus === "anulado";
+  }
+  return Boolean((data as { cancelled_at: string | null } | null)?.cancelled_at);
+}
+
+/**
  * Registra un hecho de cierre sin sobrescribir el pasado. Las acciones sensibles
  * se autorizan por dimensión y las precondiciones se vuelven a validar en el
  * servidor; ocultar un botón en el navegador nunca es la única protección.
@@ -2077,7 +2223,10 @@ export async function registerClosureAction(
     admin
       .from("shipments")
       .select("id,courier,guide_code,delivery_status,custody_state,returned_at")
-      .eq("order_id", orderId),
+      .eq("order_id", orderId)
+      // La más reciente al final: a ella se cuelgan las paradas del cuaderno
+      // sin salida, como en la ficha (`loadClosureGfDeliveries`).
+      .order("created_at", { ascending: true }),
     admin
       .from("order_events")
       .select("kind,occurred_at,shipment_id")
@@ -2169,8 +2318,28 @@ export async function registerClosureAction(
   if (["liquidation_observe", "liquidation_close"].includes(action) && ctx.row.general_status !== "entregado") {
     return { error: "Solo se puede conciliar una liquidación cuando la entrega ya está confirmada." };
   }
-  if (action === "liquidation_close" && ctx.row.logistics_cost == null) {
-    return { error: "Falta el costo logístico. Regístralo en Costos antes de cerrar la liquidación." };
+  // FALTA NO ES CERO (MOM §14, §29.8). Se decide sobre el costo recalculado
+  // AHORA: el de la fila pudo escribirse antes de cargar la tarifa (subir una
+  // tarifa no recalcula pedidos) o cuando el Master aún guardaba S/ 0 por una
+  // tarifa ausente. Así quien acaba de cargarla concilia sin esperar a nadie, y
+  // nadie concilia con un flete cero que nadie configuró.
+  if (action === "liquidation_close") {
+    let fresh: Awaited<ReturnType<typeof freshLogisticsCost>>;
+    try {
+      fresh = await freshLogisticsCost(admin, orderId);
+    } catch (cause) {
+      return {
+        error: `No se pudo recalcular el costo logístico (${cause instanceof Error ? cause.message : String(cause)}). Vuelve a intentarlo.`,
+      };
+    }
+    // Sin recálculo, la fila guardada con la misma regla del courier y del día
+    // que la Mesa. Quien no administra Costos no puede cargar la tarifa: se le
+    // dice a quién pedírsela.
+    const costBlock = liquidationCostBlock({
+      ...(fresh ?? logisticsCostFactsFromRow(ctx.row)),
+      canManageCosts: perms.can("costs.manage"),
+    });
+    if (costBlock) return { error: costBlock };
   }
   if (action === "indemnity_request") {
     if (selectedShipment?.courier?.toLowerCase() !== "aliclik") {
@@ -2215,12 +2384,19 @@ export async function registerClosureAction(
     return { error: "Solo se reabre un pedido que ya está Finalizado." };
   }
   if (action === "finalize") {
-    const active = shipmentRows.filter(
-      (shipment) =>
-        shipment.custody_state !== "devuelto" &&
-        ["pendiente", "en_ruta", "por_preparar"].includes(shipment.delivery_status),
-    );
-    if (active.length) return { error: "Todavía existen salidas activas. Cancélalas o recibe su retorno antes de finalizar." };
+    if (activeOutputs(shipmentRows).length) {
+      // La salida de Grupo GF entregada en una ruta abierta no se finaliza: la
+      // cierra la ruta, que escribe la entrega y manda el pedido a liquidación
+      // (MOM §29.13). Decirlo evita buscar una salida que «cancelar». Si está
+      // anulado en Shopify, cerrar la ruta no lo marca entregado (§11.4): el
+      // texto lo dice en vez de prometerlo.
+      const [deliveries, cancelledInShopify] = await Promise.all([
+        loadClosureGfDeliveries(admin, orderId, shipmentRows),
+        loadShopifyCancelled(admin, orderId, ctx.row.general_status),
+      ]);
+      const gfBlock = gfOpenRouteBlock(shipmentRows, deliveries, { cancelledInShopify });
+      return { error: gfBlock ? gfOpenRouteError(gfBlock) : ACTIVE_OUTPUTS_ERROR };
+    }
     const blockers = (ctx.row.macro_reasons ?? []).filter(
       (reason) => reason !== "validacion_cierre_pendiente",
     );

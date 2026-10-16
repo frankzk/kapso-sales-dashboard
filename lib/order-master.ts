@@ -20,7 +20,13 @@ import { chunk } from "@/lib/access";
 import { normalizeDistrict } from "@/lib/shipments";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
 import { keyState, paymentState, type PaymentSnapshot } from "@/lib/pickup-key";
-import { computeLogisticsCost, costDay, type CostTariff } from "@/lib/costs";
+import {
+  computeLogisticsCost,
+  costDay,
+  type CostConcept,
+  type CostTariff,
+  type LogisticsCostInput,
+} from "@/lib/costs";
 import {
   CONFIRMATION_CONTACT_KINDS,
   CONFIRMATION_FOLLOWUP_KINDS,
@@ -55,6 +61,7 @@ import {
 } from "@/lib/order-status";
 import { salesChannel } from "@/lib/sales-channel";
 import { dispatchedWith, type RiderStop } from "@/lib/dispatched-with";
+import { costCourier } from "@/lib/delivery-courier";
 import { currentDispatchDate } from "@/lib/dispatch-date";
 import {
   activeCompanionLinks,
@@ -707,6 +714,81 @@ export function clearTariffCache(): void {
   tariffCache.clear();
 }
 
+/** El costo logístico de una fila del Master y los conceptos que no tienen tarifa. */
+export interface MasterLogisticsCost {
+  /** S/ del envío, o null si falta alguna tarifa: nunca un cero inventado. */
+  cost: number | null;
+  missing: CostConcept[];
+}
+
+export interface LogisticsCostSnapshot extends MasterLogisticsCost {
+  /**
+   * El courier con el que se buscó la tarifa (`costCourier`): el vigente, o en
+   * una entrega sin courier o «por definir», el de la entrega. Vacío o «por
+   * definir» si no se sabe quién la llevó.
+   */
+  courier: string | null;
+  district: string | null;
+  /** Día (YYYY-MM-DD) al que se imputa el costo (`costDay`): la tarifa tiene que regir ese día. */
+  day: string;
+}
+
+/**
+ * El costo que se guarda en `order_master.logistics_cost`. Puro, probado en
+ * test/pedidos-logistics-cost.test.ts.
+ *
+ * FALTA NO ES CERO (MOM §14, §29.8). Hasta la auditoría del 14-10-2026 se
+ * guardaba el total de `computeLogisticsCost` aunque viniera con conceptos en
+ * `missing`, así que un pedido sin tarifa —todo Grupo GF y Urpi, que no tienen
+ * ninguna en `cost_tariffs`— quedaba con S/ 0, y la conciliación de la Mesa de
+ * cierre, que solo miraba `null`, lo habría cerrado con flete cero: 4.586 de
+ * los 4.629 pedidos de Lima en «Pendiente de liquidación». Ahora, si a algún
+ * concepto le falta tarifa, el costo es null: la pantalla enseña «—» y la
+ * conciliación se bloquea diciendo qué tarifa falta.
+ *
+ * Un cero LEGÍTIMO sigue siendo cero: una tarifa configurada en S/ 0 (las hay:
+ * devoluciones de Aliclik), el precio real del courier en cero, o el pedido
+ * acompañante que viaja en la caja del principal (el flete ya está en el
+ * principal, MOM §32).
+ */
+export function masterLogisticsCost(
+  tariffs: readonly CostTariff[],
+  input: LogisticsCostInput & { ridesInHostBox?: boolean },
+): MasterLogisticsCost {
+  if (input.ridesInHostBox) return { cost: 0, missing: [] };
+  const breakdown = computeLogisticsCost(tariffs, input);
+  return breakdown.missing.length
+    ? { cost: null, missing: breakdown.missing }
+    : { cost: breakdown.total, missing: [] };
+}
+
+/**
+ * Recalcula el pedido y devuelve el costo logístico que quedó escrito, con lo
+ * que le falta. Lo usa «Conciliar liquidación» (MOM §14): decide sobre el costo
+ * de AHORA y no sobre el último recálculo, que pudo ser de antes de cargar la
+ * tarifa —subir una tarifa no recalcula los pedidos— o de antes de que el
+ * Master dejara de guardar S/ 0 por una tarifa ausente.
+ *
+ * Olvida las tarifas recordadas de esta instancia antes de recalcular: quien
+ * acaba de cargar la que faltaba no tiene que esperar cinco minutos. Es una
+ * acción manual y rara; la lectura de más no se nota.
+ *
+ * null si el pedido no se pudo recalcular (no existe o no se escribió).
+ */
+export async function freshLogisticsCost(
+  admin: SupabaseClient,
+  orderId: string,
+): Promise<LogisticsCostSnapshot | null> {
+  clearTariffCache();
+  let snapshot: LogisticsCostSnapshot | null = null;
+  const result = await recomputeOrderMaster(admin, [orderId], {
+    onLogisticsCost: (id, cost) => {
+      if (id === orderId) snapshot = cost;
+    },
+  });
+  return result.written > 0 ? snapshot : null;
+}
+
 function confirmationRollup(
   events: readonly EventRecord[],
   cycleDays: number = DEFAULT_CONFIRMATION_CYCLE_DAYS,
@@ -861,7 +943,11 @@ export interface RecomputeResult {
 export async function recomputeOrderMaster(
   admin: SupabaseClient,
   orderIds: readonly string[],
-  opts: { now?: string } = {},
+  opts: {
+    now?: string;
+    /** Lo que quedó de costo logístico en cada fila, con lo que le falta. */
+    onLogisticsCost?: (orderId: string, cost: LogisticsCostSnapshot) => void;
+  } = {},
 ): Promise<RecomputeResult> {
   const requested = [...new Set(orderIds.filter(Boolean))];
   if (!requested.length) return { requested: 0, written: 0 };
@@ -1202,6 +1288,51 @@ export async function recomputeOrderMaster(
     // una y su costo ya está en el principal (MOM §32). Sin esto, la tarifa del
     // distrito se cobraba dos veces por un solo paquete.
     const ridesInHostBox = Boolean(ride?.guide_code) && state.guideCode === ride?.guide_code;
+    // Con quién salió: cada motorizado de Grupo GF y cada courier externo
+    // cuya guía llegó a salir (0266, lib/dispatched-with.ts). Se calcula una
+    // vez: la fila lo guarda y el costo de una entrega sin courier lo usa.
+    const dispatched = dispatchedWith({
+      guides,
+      stops: riderStopsByOrder.get(order.id) ?? [],
+      events: orderEvents,
+      urpiAttempts: urpiAttemptsByOrder.get(order.id) ?? 0,
+    });
+    // La tarifa se busca con el courier vigente; en una entrega sin courier o
+    // «por definir», con el de la entrega (MOM §14, lib/delivery-courier.ts).
+    const courierForCost = costCourier({
+      generalStatus: state.general,
+      currentCourier: state.currentCourier,
+      lastCourier: state.lastCourier,
+      deliveredCourier: state.deliveredCourier,
+      dispatchedWith: dispatched,
+    });
+    // El día al que se imputa el costo: la tarifa tiene que regir ESE día, no
+    // hoy (MOM §14). Va también al aviso de la conciliación.
+    const logisticsDay = costDay({
+      last_movement_at: state.lastMovementAt,
+      order_created_at: order.created_at,
+    }, now);
+    const logistics = masterLogisticsCost(tariffs, {
+      ridesInHostBox,
+      ctx: {
+        storeId: order.store_id,
+        courier: courierForCost,
+        region,
+        province,
+        district,
+      },
+      attempts: state.attemptCount,
+      generalStatus: state.general,
+      agency: Boolean(state.pickupState) || order.shipping_mode === "agency",
+      day: logisticsDay,
+      actual: actualCost ?? undefined,
+    });
+    opts.onLogisticsCost?.(order.id, {
+      ...logistics,
+      courier: courierForCost,
+      district,
+      day: logisticsDay,
+    });
 
     return {
       store_id: order.store_id,
@@ -1274,14 +1405,7 @@ export async function recomputeOrderMaster(
         ) +
         ownRiderAttempts(stateEvents, riderStopsByOrder.get(order.id) ?? []) +
         (urpiAttemptsByOrder.get(order.id) ?? 0),
-      // Con quién salió: cada motorizado de Grupo GF y cada courier externo
-      // cuya guía llegó a salir (0266, lib/dispatched-with.ts).
-      dispatched_with: dispatchedWith({
-        guides,
-        stops: riderStopsByOrder.get(order.id) ?? [],
-        events: orderEvents,
-        urpiAttempts: urpiAttemptsByOrder.get(order.id) ?? 0,
-      }),
+      dispatched_with: dispatched,
       guide_code: state.guideCode,
       // De la guía VIGENTE, igual que el costo real de arriba: si un pedido
       // salió dos veces, lo que importa es el cobro de la que está entregando.
@@ -1291,27 +1415,7 @@ export async function recomputeOrderMaster(
       delivered_courier: state.deliveredCourier,
       returned_at: state.returnedAt,
       last_movement_at: state.lastMovementAt,
-      logistics_cost: ridesInHostBox
-        ? 0
-        : tariffs.length || actualCost
-        ? computeLogisticsCost(tariffs, {
-            ctx: {
-              storeId: order.store_id,
-              courier: state.currentCourier,
-              region,
-              province,
-              district,
-            },
-            attempts: state.attemptCount,
-            generalStatus: state.general,
-            agency: Boolean(state.pickupState) || order.shipping_mode === "agency",
-            day: costDay({
-              last_movement_at: state.lastMovementAt,
-              order_created_at: order.created_at,
-            }, now),
-            actual: actualCost ?? undefined,
-          }).total
-        : null,
+      logistics_cost: logistics.cost,
       comment_count: orderEvents.filter((e) => e.kind === "comment").length,
       payment_state: resolvedPaymentState,
       key_state: paymentSignals
