@@ -164,6 +164,7 @@ async function PedidosContent({
         canFinalize: perms.can("closure.finalize"),
         canRefund: perms.can("closure.refund"),
         canReopen: perms.can("master.override_status") && perms.can("closure.finalize"),
+        canManageCosts: perms.can("costs.manage"),
       }}
     />
   );

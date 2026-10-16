@@ -1986,6 +1986,73 @@ sin tope de antigüedad. Reglas:
       quien puede.
     - **Un duplicado NO entra a la cola**: no es un cobro por confirmar, es una
       incidencia. Queda bloqueado y avisa — una sola vez, no en cada pasada.
+    - **La guía validada que se quedó sin ficha la recibe ahora (15-10-2026).**
+      La auditoría del atraso de Lima (14-10-2026) encontró **203 guías**
+      `entregado` con el cobro `validado` por el lector y sin ficha
+      `cobro_courier`: 202 se validaron del 10 al 12-09-2026, antes de que
+      existiera la cola, y una el 15-10 sin que su ficha llegara a crearse. El
+      barrido solo relee las guías vivas, así que no volvían nunca: nadie podía
+      firmar su cobro y **201 pedidos** se quedaban en «Por cerrar · Pendiente
+      de liquidación» para siempre.
+      - Al final de cada pasada el barrido mira también las guías `entregado`
+        + `validado` cuyo pedido no tiene ficha, y se la prepara **con la
+        lectura que quedó guardada** (`tanders_payment_checks`): no vuelve a
+        pasar la imagen por el modelo ni le pregunta a Tanders. Baja la
+        imagen, la guarda en nuestro bucket y la ficha entra
+        **`pendiente_revision`**, como cualquier cobro que el lector dio por
+        bueno. **Nada se cierra solo**: la guía no se toca y la firma la pone
+        una persona.
+      - Esa lectura no transcribía la hora del pago, así que el estado de
+        cuenta de Yape (§16.2) no la cruza al minuto: la confirma alguien. El
+        medio que queda en lo leído es el que Tanders reporta de esa imagen.
+      - **No se duplica**: se salta el pedido que ya tiene ficha viva o
+        decidida por una persona, y el alta lo vuelve a comprobar antes de
+        escribir.
+      - **Acotado**: hasta 60 guías miradas y 20 fichas creadas por pasada, por
+        la misma cola ordenada por `payment_checked_at`; cada guía mirada deja
+        sello y la que no cupo va primero en la siguiente.
+      - **La que el barrido validó y cuya ficha falló va primera
+        (16-10-2026).** Si el barrido deja una guía `entregado` + `validado` y
+        su ficha no se puede crear (error al subir la imagen o al escribirla),
+        se le **borra** el sello (`payment_checked_at` = null) en vez de
+        ponerle el de ahora, y la recuperación no la reintenta en esa misma
+        pasada. La cola ordena con los nulos primero, así que la mira en la
+        pasada siguiente. Con el sello de ahora esperaba detrás de todas las
+        validadas que ya tienen ficha —575 el 16-10-2026, unas 80 más por
+        semana—: una vuelta entera, unas 20 horas hoy y más cada mes.
+        **Pendiente:** la recuperación sigue releyendo las guías que ya tienen
+        ficha (60 lecturas por pasada). Excluirlas en la consulta pide un
+        anti-join anidado de PostgREST que hay que comprobar contra la base real
+        antes de confiar en él, o una vista o RPC (migración); no se hizo aquí.
+      - **Un pedido anulado en Shopify no recibe ficha (16-10-2026).** Entre
+        las 203 había cuatro anulados en Shopify (#KP131617, anulado el 08-09
+        antes de la entrega del 11-09; #AUR174710; #KP130888; #KP129592).
+        «Validar pagos» no enseña la anulación, y firmar el cobro escribe
+        `liquidation_closed`: el pedido se cerraría como venta cobrada, en contra
+        de §30.3 regla 3 (entregado y anulado en Shopify queda como observación
+        abierta) y de la puerta a «entregado» (§11.4). La recuperación lee
+        `orders.cancelled_at` del lote y a esos no les crea ficha: los sella, no
+        los cuenta como error y los cuenta aparte (`fichasAnuladas`, con sus
+        nombres). Decide una persona desde la ficha del pedido. Si la anulación
+        no se puede leer, no crea ninguna: «no lo sé» no es «no está anulado».
+        El barrido de las guías vivas tampoco mira la anulación, desde antes de
+        este cambio; queda fuera de él.
+      - **Un comprobante que ya se sabe repetido no entra**: si ya está en otro
+        pedido, o tiene alerta de comprobante repetido —abierta o cerrada, por
+        la huella del archivo o por el nº de operación—, es una incidencia y no
+        un cobro por confirmar. Es el caso del Lemon de S/ 89 de #KP124940,
+        #KP126075, #KP126468 y #KP126871: los cuatro están entre las 203, sin
+        ningún pago con el que chocar, y el primero habría entrado a la cola
+        como un cobro de rutina. Lo que choca con otro pedido avisa una sola
+        vez. Decidir cuál de los cuatro está pagado sigue siendo de una
+        persona.
+      - «Cobros Tanders · revisión en seco» (/dashboard/pedidos/cobros-tanders)
+        dice cuántas validadas sin ficha encontró **en esta pasada**
+        (`sinFicha`, hasta 20: es la muestra que esa pasada prepararía, no el
+        total; al llegar al tope avisa que puede haber más), cuántas no entran
+        por comprobante repetido (`fichasBloqueadas`) y cuáles son de pedidos
+        anulados en Shopify (`fichasAnuladas`). En seco no se sella nada, así
+        que cada revisión enseña las mismas hasta que corre la pasada real.
     - Al entrar aquí se hereda lo que la vía paralela de Tanders no tenía: nº de
       operación único en todo el sistema, huella `sha256` que atrapa la misma
       imagen renombrada (es lo que habría cazado el «198yape.png» sin depender
@@ -2131,6 +2198,19 @@ sin tope de antigüedad. Reglas:
       acusar en falso como tapar el duplicado bueno.
     - Al implantarlo (10-09-2026) el histórico de 78 comprobaciones no tenía
       **ninguna** colisión.
+    - **Releer y llegar a lo mismo no deja otra fila (15-10-2026).** La guía
+      con el comprobante repetido no entra a la cola, así que se relee en cada
+      pasada, y cada relectura escribía una comprobación nueva: cuatro guías
+      tenían entre 175 y 189 filas idénticas, y 44 tenían más de una (las
+      demás, de los primeros días). Ahora una comprobación se escribe solo si
+      cambia el **veredicto** (estado y motivos) o el **comprobante leído**
+      (imagen, nº de operación o monto). Si no cambia, la fila que ya está lo
+      cuenta y la última mirada queda en el sello de la guía
+      (`payment_checked_at`). La fila vieja no se reescribe —sigue diciendo
+      cuándo se llegó a ese veredicto— y las repetidas que ya existen no se
+      borran. El bloqueo y el aviso único no cambian, y la guía se sigue
+      releyendo en cada pasada (una llamada al modelo cada vez: cortar ese
+      gasto es otro cambio).
   - **Medios de cobro aceptados: Yape, Plin, transferencia BCP y cualquier app
     que pague a un Yape** (ver abajo). Plin entró
     el 10-09-2026: el motorizado remite con la billetera que tenga, y Plin y
@@ -5103,6 +5183,37 @@ puerta a «entregado»: «Confirma fecha» guarda un acuerdo, no un resultado. Y
 «Ya no lo quiere» no anula nada: cierra el caso para desarmar la caja, y la
 venta sigue hasta que Shopify la anule.
 
+**La puerta a «entregado» no escribe sobre una anulación de Shopify
+(15-10-2026).** La puerta única de las fuentes de reparto
+(`lib/master-door.ts`: cierre de ruta, Liquidaciones 1, Liquidaciones 2, el
+reporte de Urpi y la carga histórica del cuaderno) lee ella misma
+`orders.cancelled_at`. Si el pedido está anulado en Shopify, no escribe el
+`status_override` «entregado» y lo devuelve rechazado con el código
+`anulado_en_shopify`. Hasta ahora cada fuente lo comprobaba por su cuenta, y el
+cierre de ruta y Liquidaciones 1 no lo hacían. Como el override nuevo es
+posterior a la anulación, la tapaba (regla 0 del resolver). La auditoría del
+atraso de Lima (14-10-2026) encontró #KP137541: anulado en Shopify el 05/10 y
+entregado con foto en la ruta de Yhoni del 01/10, que seguía abierta.
+Terminarla lo habría pasado a entregado. Lo mismo vale para un pedido
+acompañante (§32 regla 12) anulado después de vincularlo: no sigue a su
+principal. Si la puerta no puede leer la anulación, no escribe nada: «no lo sé»
+no es «no está anulado».
+
+Nada se decide solo. El pedido sigue donde estaba (anulado; con la parada
+entregada, en «Por cerrar · Validación de cierre pendiente»), la parada y la
+línea de la liquidación se conservan, y quien cerró la ruta o aplicó la
+liquidación del courier (Liquidaciones 1) recibe un aviso que nombra cada
+pedido saltado; Liquidaciones 2 y Urpi ya los saltaban antes de la puerta y los
+cuentan con los anulados. Si la entrega vale, la cambia desde la ficha, con
+motivo, una persona con el permiso «Corregir pedidos cerrados»
+(`master.override_status`).
+El reporte de parada (/reparto) no pasa por esta puerta: escribe solo en la
+parada y no toca el estado del pedido.
+`MOM_RESOLUTION_VERSION` no cambia (`mom-v1.30`): el resolver es el mismo, lo
+que cambia es que la puerta no escribe. La Mesa de cierre no promete lo
+contrario: con la ruta abierta, a un pedido así le dice que terminarla no lo
+marca entregado (§29.13).
+
 ### 11.5 Lo que cierra una venta se confirma, y se avisa antes
 
 Tres salidas del cajón de Envíos terminan una venta. Las tres piden la misma
@@ -7834,6 +7945,85 @@ Couriers que cobran y luego liquidan: Aliclik, Swayp, Axel y Urpi.
   cobro, Kapta aún no registra entrega» indica que primero debe aplicarse o
   validar el resultado operativo; no implica automáticamente fraude ni cierre.
 - El costo faltante bloquea el cierre.
+- **Falta no es cero (15-10-2026).** La auditoría del atraso de Lima
+  (14-10-2026) encontró que el Master guardaba S/ 0 cuando a un concepto del
+  envío le faltaba tarifa, y «Conciliar liquidación» solo bloqueaba un costo
+  vacío: 4.586 de los 4.629 pedidos de Lima en «Pendiente de liquidación»
+  tenían el flete en S/ 0, casi todos sin courier registrado o de Grupo GF,
+  «por definir» o Urpi, que no tienen ninguna tarifa en Costos › Costos
+  logísticos (`cost_tariffs`). Conciliarlos los habría cerrado con flete cero.
+  Desde entonces:
+  - Si a algún concepto (primer intento, intento adicional, envío por agencia,
+    devolución) le falta tarifa, `order_master.logistics_cost` queda **vacío**,
+    no en S/ 0 (`masterLogisticsCost`, `lib/order-master.ts`), y la ficha
+    enseña «—».
+  - Un cero legítimo sigue siendo cero: una tarifa configurada en S/ 0, el
+    precio real que cotizó el courier, o el pedido acompañante que viaja en la
+    caja del principal (§32).
+  - «Conciliar liquidación» recalcula el pedido al guardar, con las tarifas
+    leídas en ese momento. Si falta alguna, se niega y dice qué concepto falta,
+    de qué courier y distrito, y que se carga en Costos › Costos logísticos con
+    el código de ese courier («propio» para Grupo GF).
+  - **Con qué courier se busca la tarifa (16-10-2026).** Con el courier
+    vigente. Si el pedido está **entregado** y el vigente está vacío o es «por
+    definir», con el de la entrega, en el mismo orden que el plazo de
+    «Liquidación vencida» (§17.1; `costCourier` y `deliveryCourier`,
+    `lib/delivery-courier.ts`): el courier de la entrega; el vigente o el
+    último, saltando «por definir»; y «Salió con» (§9.3): solo motorizados de
+    Grupo GF es «propio», un único courier es ese, varios distintos no dicen
+    quién entregó. El courier guardado en la fila no cambia, y un pedido que no
+    se entregó no infiere nada: un anulado con una salida cancelada no tuvo
+    primer intento de nadie. Antes la entrega del cuaderno de Grupo GF, que no
+    tiene salida, se calculaba con courier vacío, y ni una tarifa de «propio»
+    le habría llegado. Medido el 16-10-2026 sobre los 4.247 pedidos en
+    «Pendiente de liquidación» con el courier vacío (3.486) o «por definir»
+    (761): 1.868 son entregas de Grupo GF del cuaderno, 323 de Urpi y 2.056 sin
+    courier conocido. Hoy siguen todos bloqueados, porque ni «propio» ni Urpi
+    tienen tarifa: cargarlas es del owner (§29.8). Lo que cambia es que el aviso
+    se puede seguir y que la tarifa, cuando exista, les llega.
+  - **«Por definir» no es un courier.** El aviso nunca pide una tarifa para
+    «por_definir» ni lo nombra como courier: una tarifa así se aplicaría a todas
+    las cajas sin courier decidido. Dice que la salida sigue «Por definir» y que
+    no se sabe quién la entregó; si fue Urpi, que se pase en Urpi › Resultados
+    («Pasar a salida de Urpi entregada», §30.11). Para el resto —la mayoría,
+    entregas de Grupo GF cargadas desde las hojas de liquidación— Kapta no tiene
+    ese paso, y el aviso lo dice.
+  - **Sin courier conocido**, el aviso lo dice y no pide tarifa: una tarifa sin
+    courier se aplicaría a todos los couriers sin tarifa propia (Grupo GF,
+    Urpi, los distritos de Aliclik sin tarifa), con ese flete y sin avisar.
+    **Pendiente del owner:** cómo se registra quién entregó un pedido sin salida
+    ni «Salió con», y con qué courier se liquida una caja «por definir» que no
+    entregó Urpi.
+  - **La tarifa tiene que regir el día del pedido (16-10-2026).** El costo se
+    calcula con la tarifa vigente el día al que se imputa (`costDay`: el último
+    movimiento del pedido, o su creación si no lo hay), no con la de hoy. Costos
+    › Costos logísticos propone «desde» = hoy, y una tarifa cargada así no le
+    llega a un pedido entregado antes: quien seguía el aviso volvía a conciliar y
+    recibía el mismo rechazo sin saber por qué. Ningún pedido de Lima en
+    «Pendiente de liquidación» se había movido desde el día anterior (mediana
+    del último movimiento: 11-07-2026 sin courier, 02-10-2026 de Grupo GF). El
+    aviso nombra el día («vigente desde el DD-MM-AAAA o antes») y advierte que
+    una tarifa que empiece después de ese día no le llega. Ojo: registrar una tarifa con una fecha
+    anterior a otra abierta del mismo ámbito y concepto la **reemplaza**
+    (`upsertTariff` borra la que empezaría después); antes de cargarla se mira
+    qué rige ya para ese courier y distrito.
+  - Cargar una tarifa exige `costs.manage` (administración); conciliar,
+    `closure.finance` (liquidaciones). A quien concilia sin `costs.manage` el
+    aviso le dice que se la pida a quien administra Costos, y la Mesa no le
+    enseña el enlace a Costos, que lo dejaría en «Sección de administradores».
+  - La Mesa de cierre lo avisa antes del clic y deja guardar igual: cargar una
+    tarifa no recalcula los pedidos, y quien acaba de cargarla tiene que poder
+    conciliar sin esperar.
+  - `MOM_RESOLUTION_VERSION` no cambia (`mom-v1.30`): una fila guardada antes
+    con S/ 0 cambia en su próximo recálculo. Hasta entonces la Mesa no avisa
+    antes del clic, pero la conciliación igual se niega, porque decide con el
+    costo recalculado.
+  - El Tarifario de Grupo GF (`logistics_district_tariffs`, Grupo GF Courier ›
+    Tarifario, §29.8) no alimenta este costo. Si debe hacerlo, lo decide el
+    owner.
+  - **Pendiente del owner:** Validar pagos y el estado de cuenta de Yape
+    (§16.1, §16.2) cierran la liquidación al validar el cobro sin mirar el
+    costo logístico; esta regla todavía no les aplica.
 - **Sin courier no hay liquidación (v1.25, §6.5).** Un pedido entregado (no
   Agencia) sin ninguna salida ni parada de motorizado, pagado completo a la tienda y sin
   reembolso, no espera `liquidation_closed`: no hay cobro que rendir ni costo
@@ -8279,10 +8469,45 @@ cerrado.
 Alertas del primer tablero:
 
 - `Recogido sin pago completo`: razón crítica abierta en el Master.
+
+  **La cifra y su lista no siempre cuadran (16-10-2026).** La cifra cuenta por
+  motivo y su enlace abre la subetapa Recogido sin pago completo: un pedido con
+  el motivo y otra subetapa delante (Salida adicional activa) cuenta y no sale
+  en esa lista. En la auditoría del atraso de Lima (14-10-2026) eran 6 contra 5
+  en Lima y 156 contra 152 en total; el 16-10-2026, 155 contra 152 (3 entregados
+  con «Salida adicional activa», S/ 475,10). No se cambió: contar por subetapa
+  escondería dinero recogido sin cobrar, el mismo criterio que «Liquidación
+  vencida». **Pendiente del owner:** si la cifra pasa a contar por subetapa, o
+  si el enlace pasa a listar por motivo.
 - `Liquidación vencida`: obligación pendiente u observada que superó el SLA
   desde la entrega. Aliclik y motorizado propio vencen al día siguiente; Axel y
   Urpi a los 3 días; Swayp (antes Fénix) a los 4 días. Tanders no genera esta
   alerta porque el dinero entra directamente a la empresa.
+
+  **Entregas registradas a mano (15-10-2026).** La entrega que se registra con
+  `status_override` (el cuaderno, los lotes, la ruta de Grupo GF, el reporte de
+  Urpi) no deja `delivered_at` ni `delivered_courier`, y la alerta las
+  descartaba: en Lima contaba 59 con 5.123 pedidos así delante. Desde entonces
+  (`settlementDeliveredAt` y `settlementCourier`, `lib/mom-owner-summary.ts`):
+
+  - **Fecha de la entrega:** `delivered_at`; si no la hay y el pedido está
+    entregado, desde cuándo lo está (`status_since`: el cambio manual que lo
+    marcó). Fuera de «entregado» no hay entrega que medir.
+  - **Courier, para el plazo:** el de la entrega; si no lo hay, el courier
+    vigente y si no el último («por definir» no cuenta); si tampoco, «Salió
+    con» (§9.3): solo motorizados de Grupo GF es motorizado propio, un único
+    courier es ese, y varios distintos no dicen quién entregó.
+  - Sin courier conocido no hay plazo y el pedido no entra, como antes. Al
+    implantarlo el total pasa de 5.592 a 8.795 (Lima, de 59 a 3.261); 1.921
+    pedidos de Lima y 135 de Provincia siguen fuera por no tener ni salida ni
+    «Salió con». Darles un plazo por defecto lo decide el owner.
+  - La cifra cuenta por motivo y su enlace abre la subetapa Pendiente de
+    liquidación: los pedidos con el motivo y otra subetapa delante (Salida
+    adicional activa, Devolución física pendiente) cuentan y no salen en esa
+    lista. No se cambió: contar por subetapa escondería liquidaciones
+    vencidas.
+
+  Solo cambia la cifra del tablero: desde aquí nada se liquida ni se cierra.
 - `Manifiesto incompleto`: ruta que ya inició el cotejo de oficina o de recojo y
   todavía no alcanzó el 100 %.
 - `Sin movimiento por 60 días`: pedido no finalizado cuya última señal quedó
@@ -9128,7 +9353,8 @@ viven en `scripts/sql/master_liviano_smoke.sql`.
   Excepción (v1.25, §6.5): entregado sin ninguna salida ni parada de
   motorizado y pagado completo a la tienda, sin reembolso, finaliza sin
   liquidación, porque no hubo courier que cobrara.
-- Falta de costo logístico bloquea la conciliación financiera.
+- Falta de costo logístico bloquea la conciliación financiera; una tarifa
+  ausente no cuenta como S/ 0 (§14, 15-10-2026).
 - Una liquidación observada conserva el lote abierto hasta su conciliación.
 - La indemnización formal solo se abre sobre una salida Aliclik.
 - Un administrador puede solicitar un reembolso, pero solo el owner puede
@@ -9136,6 +9362,12 @@ viven en `scripts/sql/master_liviano_smoke.sql`.
 - Reabrir un pedido finalizado crea una obligación de validación; las señales
   históricas no lo vuelven a cerrar automáticamente.
 - Finalizar se bloquea mientras existan salidas activas u otras obligaciones.
+  Si la única salida viva es de Grupo GF y su parada está entregada en una ruta
+  abierta, la Mesa no ofrece «Finalizar expediente» y el servidor lo niega con
+  «Termina la ruta en Grupo GF Courier › Rutas › «Reparto y liquidación»»
+  (§29.13, 15-10-2026). Si además está anulado en Shopify, no promete que
+  cerrar la ruta lo pase a entregado: lo cambia una persona desde la ficha
+  (§11.4, §29.13, 16-10-2026).
 - Todas las acciones se guardan como eventos append-only y recalculan el Master.
 
 ### 24.1 Criterios de aceptación de Por confirmar
@@ -10530,7 +10762,10 @@ Reparto propio es una vista con vocabulario y cuadre encima de ella:
   (`reported_by` presente) y se exige, como en las cargas de Grupo GF; y sin
   observación abierta en la fila. Las paradas de backfill histórico
   (`reported_by` null, ruta con nota «Completada desde el cuaderno histórico»)
-  no pueden tener foto y no se les exige.
+  no pueden tener foto y no se les exige. Antes que esas guardas, y para toda
+  fuente, la puerta no escribe la entrega de un pedido anulado en Shopify: lo
+  devuelve como `anulado_en_shopify` y quien llama lo nombra (§11.4,
+  15-10-2026).
 - **Una sola pantalla del motorizado**, /reparto: escribe como en el cuaderno
   (texto libre con sugerencias de su hoja), el detalle del pago, y el motivo
   obligatorio cuando cobra distinto al total. Un pedido que lleva sin haber
@@ -10918,6 +11153,41 @@ nuevo, más reciente, y el pedido vuelve a «En reparto». La versión del
 resolver sube a `mom-v1.14` para que el cron reconcilie el histórico. Pruebas
 en `test/order-macro-stage.test.ts` («motorizado propio: lo que reporta mueve
 la etapa»).
+
+**La Mesa de cierre no finaliza lo que cierra la ruta (15-10-2026).** Con la
+parada entregada y la ruta abierta, el pedido está en «Por cerrar · Validación
+de cierre pendiente». La Mesa ofrecía «Finalizar expediente» y el servidor lo
+negaba («Todavía existen salidas activas»): 667 pedidos según la auditoría del
+atraso de Lima (14-10-2026). Finalizar no es el paso, porque el pedido no está
+entregado en el Master ni liquidado; el paso es cerrar la ruta. Cuando la única
+salida viva es propia y su parada vigente (la misma que enseña la ficha) está
+entregada en una ruta planificada o en curso, la Mesa no ofrece «Finalizar
+expediente» y dice «Termina la ruta en Grupo GF Courier › Rutas › «Reparto y
+liquidación»», con enlace al reparto de esa ruta cuando se conoce. Si alguien
+lo intenta igual, el servidor da la misma explicación (`gfOpenRouteBlock`,
+`lib/closure-blocks.ts`). Con otra salida viva de otro courier, o con la ruta
+cerrada, el mensaje es el de siempre. **Pendiente:** cerrada la ruta, la salida
+propia conserva `delivery_status = pendiente`; si un pedido así vuelve a
+necesitar «Finalizar» (por ejemplo, tras reabrirse), el servidor todavía lo
+niega por «salidas activas», en contra de la regla de arriba («cuenta como
+entregada»).
+
+**Si está anulado en Shopify, cerrar la ruta no lo marca entregado
+(16-10-2026).** Es el caso de #KP137541: anulado en Shopify el 05/10, su única
+salida propia pendiente y su parada entregada en la ruta del 01/10, en curso.
+La puerta a «entregado» lo rechaza como `anulado_en_shopify` al cerrar la ruta
+(§11.4), así que prometer «al cerrarla, el pedido pasa a entregado» mandaba a un
+bucle: cerrar la ruta, volver, «Finalizar» y «salidas activas». Ahora, con el
+pedido anulado en Shopify (`orders.cancelled_at`, lo mismo que lee la puerta),
+la Mesa sigue sin ofrecer «Finalizar expediente» y dice que terminar la ruta no
+lo marca entregado y que, si la entrega vale, la cambia desde la ficha
+(«Gestión manual»), con motivo, quien tenga «Corregir pedidos cerrados»; el
+servidor responde lo mismo. Un pedido «anulado» solo en Kapta, sin
+`cancelled_at` (#KP130784, #KP139661), sí pasa a entregado al cerrar la ruta y
+conserva el texto de siempre. Cerrada la ruta, a un pedido como #KP137541 le
+pasa lo del pendiente de arriba: la Mesa vuelve a ofrecer «Finalizar» y el
+servidor lo niega por «salidas activas», porque su salida propia sigue
+pendiente. Resolverlo es otra decisión.
 
 **No entregado → recibir en oficina → reprogramar (v1.15, 22-09-2026).** Todo
 «No entregado» es reprogramable salvo «Rechazó el pedido» (§9: un no
@@ -11892,6 +12162,17 @@ lado:
 - El panel ya no carga la muestra de pedidos asignables ni la cola de
   reintentos, que se pedían en cada apertura y no se enseñaban.
 
+**Un pedido anulado en Shopify no impide terminar la ruta, pero no cruza al
+Master (15-10-2026).** Si una parada entregada es de un pedido anulado en
+Shopify, «Terminar ruta operativa» cierra la ruta y crea su liquidación con
+esa línea, como siempre. La entrega no se escribe en el Master (§11.4), y el
+mensaje del cierre lo dice en «Ojo:» con el código del pedido: «#KP137541 está
+anulado en Shopify: no se marcó entregado en el Master y sigue donde estaba.
+Decide en su ficha qué pasó con la entrega.» Con varios, los nombra a todos,
+acompañantes incluidos. Los demás pedidos que no cruzan (parada sin entrega o
+sin evidencia) siguen con su propio aviso. El panel «Para terminar la ruta»
+todavía no lo avisa antes del clic: llega en el mensaje del cierre.
+
 **Cerrar una ruta no vacía la caja: los «No entregado» se reciben o se dejan a
 conciencia (29-09-2026).** La ruta de Yhoni del 26/09 se cerró el 28/09 con
 #KP136779 y #KP136896 reportados «No entregado» dentro de la caja, y nadie los
@@ -12110,7 +12391,10 @@ Desde el 19-09-2026 la puerta es `lib/master-door.ts`, compartida con el
 cierre de ruta y Liquidaciones 1 (§29.12): para una fila atada a su parada se
 exige parada entregada, con evidencia si el reporte es real, y sin
 observación abierta; una fila del Excel sin parada conserva solo la guarda de
-observaciones. Lo demás de esta sección sigue vigente.
+observaciones. Desde el 15-10-2026 la puerta también comprueba ella misma la
+anulación en Shopify, para toda fuente (§11.4); la hoja ya la saltaba antes de
+llegar a la puerta («Qué nunca aplica», abajo). Lo demás de esta sección sigue
+vigente.
 
 **Qué aplica.** Desde una hoja cuaderno, una fila vinculada a un pedido de
 Kapta cuyo estado tiene efecto *entrega* puede marcar ese pedido como
@@ -12131,6 +12415,26 @@ hasta que exista una puerta propia. **Una fila con observación abierta no
 cruza al Master: alguien lee el motivo del motorizado y lo acepta primero.**
 El motivo lo escribe quien repartió; aceptarlo es de quien liquida
 (`sheets.edit`); aplicar al Master exige `master.edit`.
+
+**El lote del Master respeta la misma guarda (15-10-2026).** El cambio de
+estado en lote del Master (`applyOrderStatusBulk`) a «entregado» salta los
+pedidos que tienen alguna observación de cuadre abierta
+(`sheet_observations.status = 'abierta'`, de monto o de estado, de cualquier
+hoja). El aviso dice cuántos se saltaron y por qué, cada uno aparece con su
+motivo en la lista de «con problemas», y el resto del lote sigue. Como
+Liquidaciones 2 está fuera del menú desde el 22-09-2026 (a pedido de
+operación) y ninguna otra pantalla la enlaza, el aviso trae el enlace «Abrir
+Liquidaciones 2» y los textos dan su dirección (/dashboard/liquidaciones-2;
+`OBSERVATIONS_SCREEN_LABEL`, `lib/bulk-status-guard.ts`). **Pendiente del
+owner:** dónde se aceptan las observaciones con la pantalla oculta. Desde el
+17-09-2026 nadie ha aceptado una a mano, y el 16-10-2026 había 300 abiertas, 90
+de ellas en pedidos todavía no entregados. Si las
+observaciones no se pueden leer, no se aplica nada. Hacia otros estados no se
+salta ninguno. El cambio de un solo pedido desde «Gestión manual» no cambia
+(**pendiente:** decidir si la guarda va también ahí). La auditoría del atraso
+de Lima (14-10-2026) encontró 68 pedidos con observación de monto abierta
+marcados entregados después de abrirse; se escribieron con scripts directos a
+la base, no con el lote de la app, y siguen así: nada se deshace solo.
 
 **Observaciones automáticas.** Al importar un cuaderno y al editar a mano el
 estado, el monto o el pedido de una fila, cada fila que declara entrega se
@@ -12348,6 +12652,21 @@ Así funciona desde entonces (`lib/urpi-report-apply.ts`):
   (su salida se revisa a mano) y salidas que no se pudieron actualizar. Lo que
   ya estaba al día no se repite en cada carga.
 
+**Entregados de antes de la ventana (15-10-2026).** La pantalla lee los
+intentos de los últimos 60 días, y el botón «Pasar a salida de Urpi entregada»
+solo alcanza lo que la pantalla enseña. Por eso un pedido que Urpi entregó hace
+más de 60 días y cuya caja seguía «por definir» desaparecía del aviso y se
+quedaba en «Por cerrar · Salida adicional activa» sin forma de completarse (15
+al implantarlo, entregados del 10 al 15 de agosto). Desde entonces esos pedidos
+se muestran aunque sean viejos (en «Al día», y contados en el aviso): los que
+tienen su último intento «Entregado» y ningún intento dentro de la ventana,
+están entregados en Kapta y tienen la salida que se puede rellenar
+(`lib/urpi-results-window.ts`, con la misma regla del botón). La cabecera lo
+dice. De lo anterior a la ventana no se carga nada más: ni lo que ya está al
+día, ni los cancelados o reprogramados, ni los entregados que Kapta tiene
+abiertos o sin vincular. El marcado automático sigue rellenando solo lo de los
+60 días; lo de antes se completa con el botón.
+
 **Por qué cancelado y reprogramado no mueven el Master.** «Por reprogramar
 Lima» (§9) exige una salida que conste fuera. Los despachos a Urpi salen del
 Google Sheet de programación, no de la ruta de Urpi de Kapta (6 salidas de Urpi
@@ -12506,7 +12825,10 @@ más de lo esperado» y deja el lote observado (§14).
     entregado al principal, el acompañante vigente se marca entregado con él,
     con la misma fuente y un motivo que nombra al principal y la guía. Las
     fuentes de esa puerta no escriben en la salida, así que sin esto el
-    acompañante se quedaría «En curso».
+    acompañante se quedaría «En curso». Un acompañante anulado en Shopify
+    después de vincularlo no se marca (§11.4, 15-10-2026): la puerta lo deja
+    en `companionsCancelled` y el cierre de ruta y Liquidaciones 1 lo nombran
+    en su aviso.
 13. **El agente de voz no llama dos veces** a la clienta: comprueba la
     recuperación con las salidas propias del pedido (§11.8), y el acompañante
     no tiene ninguna. Llama solo al principal.

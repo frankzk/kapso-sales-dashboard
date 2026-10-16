@@ -15,6 +15,7 @@
 //
 // SERVER-ONLY: descifra la contraseña de la tienda y la clave del modelo.
 
+import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { decrypt } from "@/lib/crypto";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
@@ -25,12 +26,18 @@ import {
   registerCourierCollection,
 } from "@/lib/tanders/collection-payment";
 import { alertDuplicatePayments } from "@/lib/tanders/duplicate-alert";
-import { raiseRepeatedVoucherAlert } from "@/lib/repeated-voucher-alert";
+import { raiseRepeatedVoucherAlert, repeatedVoucherKey } from "@/lib/repeated-voucher-alert";
 import {
   checkTandersPayment,
   normalizeOperationNumber,
   REASON_LABEL,
 } from "@/lib/tanders/payment-check";
+import {
+  fichaDesdeComprobacion,
+  mismaComprobacion,
+  type ComprobacionGuardada,
+  type HuellaComprobacion,
+} from "@/lib/tanders/payment-sweep-rules";
 import { readTandersPayment } from "@/lib/tanders/payment-vision";
 import {
   isNotYetDelivered,
@@ -48,6 +55,14 @@ export const LOOKBACK_DAYS = 8;
 export const MAX_PER_RUN = 60;
 /** Respuestas crudas que se conservan en seco. Tres bastan para ver la forma. */
 const MAX_MUESTRAS = 3;
+/**
+ * Guías ya validadas que se miran por pasada buscando la ficha que les falte.
+ * Mirar una que ya la tiene es una consulta, no una llamada a Tanders ni al
+ * modelo: por eso caben más que fichas se crean.
+ */
+export const MAX_VALIDADAS_POR_PASADA = 60;
+/** Fichas que se crean como mucho por pasada: cada una baja la imagen y la sube al bucket. */
+export const MAX_FICHAS_POR_PASADA = 20;
 
 interface Candidate {
   id: string;
@@ -122,6 +137,45 @@ async function guiasConLaMismaOperacion(
 }
 
 /**
+ * Escribe la comprobación SOLO si es un hecho nuevo.
+ *
+ * Una guía cuyo cobro no tiene ficha se relee en cada pasada —un comprobante
+ * repetido no la tiene nunca, porque no es un cobro por confirmar sino una
+ * incidencia—, y antes cada relectura dejaba una fila más aunque dijera lo
+ * mismo: el 16-10-2026 había cuatro guías con 175-189 filas idénticas cada
+ * una. Ahora se compara con la última fila de la guía: si el veredicto y el
+ * comprobante leído son los mismos (ver `mismaComprobacion`) no se escribe
+ * nada; la fila que ya está lo cuenta, y cuándo se miró por última vez lo
+ * dice el sello de la guía. No se actualiza la fila vieja: seguiría diciendo
+ * cuándo se llegó a ese veredicto, y eso es historial.
+ *
+ * Si no se puede leer la última fila, se escribe: una fila de más es ruido; un
+ * veredicto que no quedó en ningún sitio es un hecho perdido.
+ */
+async function registrarComprobacion(
+  admin: SupabaseClient,
+  fila: { shipment_id: string; state: string; reasons: string[] } & Record<string, unknown>,
+): Promise<"insertada" | "repetida"> {
+  const nueva: HuellaComprobacion = {
+    state: fila.state,
+    reasons: fila.reasons,
+    image_url: (fila.image_url as string | null | undefined) ?? null,
+    operation_number: (fila.operation_number as string | null | undefined) ?? null,
+    amount: (fila.amount as number | null | undefined) ?? null,
+  };
+  const { data, error } = await admin
+    .from("tanders_payment_checks")
+    .select("state,reasons,image_url,operation_number,amount")
+    .eq("shipment_id", fila.shipment_id)
+    .order("checked_at", { ascending: false })
+    .limit(1);
+  const previa = error ? null : (((data as HuellaComprobacion[] | null) ?? [])[0] ?? null);
+  if (mismaComprobacion(previa, nueva)) return "repetida";
+  await admin.from("tanders_payment_checks").insert(fila);
+  return "insertada";
+}
+
+/**
  * Desanda la guía que YA se había dado por cobrada con el comprobante que
  * ahora resulta compartido.
  *
@@ -149,7 +203,7 @@ async function desandarCobroDuplicado(
   const desandadas: string[] = [];
   for (const otra of chocadas) {
     if (otra.paymentCheckState !== "validado") continue;
-    await admin.from("tanders_payment_checks").insert({
+    await registrarComprobacion(admin, {
       shipment_id: otra.id,
       store_id: otra.storeId,
       state: "rechazado",
@@ -269,6 +323,33 @@ export interface SweepReport {
   enCola: number;
   /** Cobros encolados en esta pasada para que los confirme una persona. */
   aRevision: number;
+  /**
+   * Guías que el lector ya había dado por cobradas y cuyo cobro no tenía ficha
+   * en «Validar pagos» —las validadas antes de que existiera (10 al
+   * 12-09-2026) o aquellas cuya ficha no llegó a crearse— que se miraron en
+   * esta pasada (hasta `MAX_FICHAS_POR_PASADA`).
+   */
+  sinFicha: number;
+  /** De `aRevision`, las fichas creadas en esta pasada para esas guías. */
+  fichasRecuperadas: number;
+  /**
+   * De `sinFicha`, las que no entran a la cola porque su comprobante ya está
+   * en otro pedido o tiene alerta de comprobante repetido: son una incidencia,
+   * no un cobro por confirmar.
+   */
+  fichasBloqueadas: number;
+  /**
+   * Guías validadas sin ficha cuyo pedido está anulado en Shopify
+   * (`orders.cancelled_at`): no entran a «Validar pagos» como un cobro de
+   * rutina, porque firmarlo lo cerraría como venta cobrada. Decide una persona
+   * desde su ficha (MOM §9.4, §30.3 regla 3). No cuentan en `sinFicha` ni en
+   * `errores`: no son un fallo, y se vuelven a mirar en cada vuelta de la cola.
+   */
+  fichasAnuladas: number;
+  /** Los pedidos de `fichasAnuladas`, para nombrarlos. */
+  anuladas: string[];
+  /** Cuántas fichas prepara como mucho una pasada (`MAX_FICHAS_POR_PASADA`). */
+  topeFichas: number;
   entregado: number;
   validado: number;
   rechazado: number;
@@ -303,7 +384,9 @@ export async function sweepTandersPayments(
   const since = new Date(Date.now() - LOOKBACK_DAYS * DAY_MS).toISOString();
 
   // Guías vivas: las que todavía no llegaron a un final. Una `rechazado` tampoco
-  // se reanaliza — ya está esperando a un humano.
+  // se reanaliza — ya está esperando a un humano. Las ya `entregado` con el
+  // cobro validado no vuelven aquí: si se quedaron sin ficha, las recoge
+  // `recuperarFichasSinCola`, al final, sin volver a leerlas.
   //
   // La ventana mira la creación O el último reporte de su API. Solo por creación,
   // una guía que Tanders da por entregada más tarde de lo normal caía fuera del
@@ -343,6 +426,12 @@ export async function sweepTandersPayments(
     enCurso: 0,
     enCola: 0,
     aRevision: 0,
+    sinFicha: 0,
+    fichasRecuperadas: 0,
+    fichasBloqueadas: 0,
+    fichasAnuladas: 0,
+    anuladas: [],
+    topeFichas: MAX_FICHAS_POR_PASADA,
     entregado: 0,
     validado: 0,
     rechazado: 0,
@@ -368,8 +457,18 @@ export async function sweepTandersPayments(
   // cola—. NO entra la que se topó con el 429: a esa no se la llegó a
   // preguntar, así que le toca ir primero la próxima vez.
   const mirados: string[] = [];
+  // Las que esta pasada dejó `entregado` + `validado` y cuya ficha NO se pudo
+  // crear (error al encolar, o una excepción después de marcarla). Sin sello
+  // nuevo iban al final de la cola de `recuperarFichasSinCola`, detrás de
+  // todas las validadas que ya tienen ficha —575 el 16-10-2026, unas 80 más
+  // por semana—: una vuelta entera de espera, que crecía con el historial. Se
+  // les BORRA el sello (`payment_checked_at` = null) para que la recuperación,
+  // que ordena con los nulos primero, las mire en la pasada siguiente.
+  const fichaFallida: string[] = [];
 
   for (const row of candidates) {
+    // ¿Esta guía ya quedó entregada y validada sin que su ficha exista todavía?
+    let validadaSinFicha = false;
     try {
       if (!clients.has(row.store_id)) {
         const { data: store } = await admin
@@ -548,7 +647,9 @@ export async function sweepTandersPayments(
       mirados.push(row.id);
       if (dry) continue;
 
-      await admin.from("tanders_payment_checks").insert({
+      // Solo si es un hecho nuevo: releer y llegar a lo mismo no deja otra fila
+      // (ver registrarComprobacion).
+      await registrarComprobacion(admin, {
         shipment_id: row.id,
         store_id: row.store_id,
         image_url: evidence.imageUrl,
@@ -572,6 +673,7 @@ export async function sweepTandersPayments(
         patch.status_category = "delivered";
       }
       await admin.from("shipments").update(patch).eq("id", row.id);
+      validadaSinFicha = verdict.state === "validado" && !duplicateOf.length && Boolean(row.order_id);
 
       // 4) Y el cobro va a la cola donde lo confirma una PERSONA. El modelo
       //    valida una imagen, no un depósito: mientras no haya conexión con el
@@ -609,10 +711,15 @@ export async function sweepTandersPayments(
           report.errores += 1;
           recordSweepFailure(report.fallos, new Error(`No se pudo encolar el cobro: ${alta.detail}`));
         }
+        if (alta.registered || alta.reason !== "error") validadaSinFicha = false;
       }
+      if (validadaSinFicha) fichaFallida.push(row.id);
 
       if (row.order_id) await recomputeOrderMasterSafe(admin, [row.order_id]);
     } catch (err) {
+      // Ya quedó entregada y validada, y la ficha no llegó: va primero en la
+      // recuperación de la pasada siguiente (ver `fichaFallida`).
+      if (validadaSinFicha && !fichaFallida.includes(row.id)) fichaFallida.push(row.id);
       // «Todavía no entregada» es la respuesta normal de una guía en ruta, no
       // un fallo: se cuenta como en curso y no ensucia el reporte.
       if (isNotYetDelivered(err)) {
@@ -638,16 +745,311 @@ export async function sweepTandersPayments(
   // a las que no dieron ninguno —en ruta, sin credenciales, imagen caída—, que
   // son justo las que sin él se quedarían atascadas al frente de la cola para
   // siempre. En seco no se escribe nada, como el resto del barrido.
-  if (!dry && mirados.length) {
+  const sinSello = new Set(fichaFallida);
+  const sellar = mirados.filter((id) => !sinSello.has(id));
+  if (!dry && sellar.length) {
     await admin
       .from("shipments")
       .update({ payment_checked_at: new Date().toISOString() })
-      .in("id", mirados);
+      .in("id", sellar);
+  }
+  if (!dry && sinSello.size) {
+    await admin
+      .from("shipments")
+      .update({ payment_checked_at: null })
+      .in("id", [...sinSello]);
   }
 
   // El aviso, al final y solo de verdad. Va después de escribir para que un
   // Telegram lento no retrase el bloqueo, que es lo que de verdad protege.
   if (!dry) await alertDuplicatePayments(admin, report.duplicados);
 
+  // Las ya validadas que se quedaron sin ficha. Va lo último: no le pregunta
+  // nada a Tanders ni al modelo, así que no compite con el lote de arriba por
+  // el límite de ritmo, y si se alarga no retrasa ni el sello ni el aviso.
+  // Las que acaban de fallar no se reintentan en esta misma pasada: el fallo
+  // (el bucket, la base) suele seguir ahí, y fallar otra vez les pondría el
+  // sello de ahora y las mandaría al final de la cola.
+  await recuperarFichasSinCola(admin, report, dry, sinSello);
+
   return report;
+}
+
+// ---------------------------------------------------------------------------
+// Las validadas que se quedaron sin ficha
+// ---------------------------------------------------------------------------
+//
+// EL FALLO (auditoría del 14-10-2026). 203 guías Tanders estaban `entregado` y
+// con el cobro `validado` por el lector, y su pedido no tenía ficha
+// `cobro_courier` en «Validar pagos»: 202 se validaron entre el 10 y el
+// 12-09-2026, antes de que existiera la cola (0158), y una el 15-10 sin que
+// su ficha llegara a crearse. El barrido de arriba solo relee las guías vivas
+// (`pendiente`/`en_ruta`), así que esas no volvían a entrar nunca: nadie podía
+// firmar su cobro, la liquidación no se cerraba y el pedido se quedaba en
+// «Por cerrar · Pendiente de liquidación» para siempre (201 de ellas).
+//
+// LO QUE SE HACE. Se les prepara la ficha con la lectura que ya está guardada,
+// sin volver a pasar la imagen por el modelo: el veredicto ya se dio, lo que
+// faltaba era el sitio donde lo confirma una persona. La ficha entra
+// `pendiente_revision`, como cualquier cobro que el lector dio por bueno, y
+// ahí espera: nada se cierra solo. La guía no se toca —ya está donde la dejó
+// su veredicto—. Un comprobante que ya está en otro pedido, o que ya tiene
+// alerta de comprobante repetido, no entra: es una incidencia (ver
+// `comprobanteConAlerta`).
+//
+// ACOTADO. Una consulta por pasada, con tope, por la misma cola ordenada por
+// `payment_checked_at` que usa el barrido (0152): la que hace más tiempo que no
+// se mira, primero, y cada guía mirada deja sello. Las que ya tienen ficha se
+// saltan con una sola consulta para todo el lote. La ficha no se duplica: se
+// comprueba antes, igual que `yaEnLaCola`, y `registerCourierCollection` lo
+// vuelve a comprobar antes de escribir. La que el barrido de arriba dejó
+// validada sin poder crearle la ficha llega sin sello y va primero en la pasada
+// siguiente (ver `fichaFallida`).
+//
+// ANULADAS EN SHOPIFY (auditoría del 14-10-2026). Entre las 203 había cuatro
+// pedidos anulados en Shopify (#KP131617, #AUR174710, #KP130888, #KP129592).
+// La bandeja de «Validar pagos» no enseña la anulación, y firmar el cobro
+// escribe `liquidation_closed`: el pedido se cerraría como venta cobrada. Es lo
+// contrario de §30.3 regla 3 (entregado y anulado en Shopify queda como
+// observación abierta, nunca se resuelve solo) y de la puerta a «entregado»
+// (§11.4). No se les crea ficha: se cuentan aparte (`fichasAnuladas`) y decide
+// una persona desde su ficha. Si la anulación no se puede leer, no se crea
+// ninguna: «no lo sé» no es «no está anulado».
+
+interface GuiaValidada {
+  id: string;
+  store_id: string;
+  guide_code: string;
+  order_id: string;
+  order_name: string | null;
+}
+
+/**
+ * De estos pedidos, los que ya tienen ficha del cobro del courier. Mismo
+ * criterio que `yaEnLaCola`: viva en la cola, o ya decidida por una persona.
+ * null si no se pudo saber: entonces no se crea ninguna, por si acaso.
+ */
+async function pedidosConFicha(
+  admin: SupabaseClient,
+  orderIds: string[],
+): Promise<Set<string> | null> {
+  const { data, error } = await admin
+    .from("order_payments")
+    .select("order_id")
+    .in("order_id", orderIds)
+    .eq("kind", COURIER_COLLECTION_KIND)
+    .or("validation_status.neq.rechazado,validated_by.not.is.null");
+  if (error) return null;
+  return new Set(((data as { order_id: string }[] | null) ?? []).map((r) => r.order_id));
+}
+
+/**
+ * ¿Este comprobante ya tiene, o tuvo, alerta de comprobante repetido (0226)?
+ * Abierta o cerrada, por la huella del archivo o por el nº de operación.
+ *
+ * Es lo que impide encolar como «cobro por confirmar» lo que ya se sabe que es
+ * una incidencia. El caso: el Lemon de S/ 89 que era el comprobante de cuatro
+ * pedidos (#KP124940, #KP126075, #KP126468, #KP126871) está entre las guías
+ * validadas sin ficha, y ninguno de los cuatro tiene un pago registrado con
+ * el que choque. Sin esto, la primera de las cuatro entraría a «Validar
+ * pagos» como un cobro de rutina, con la alerta cerrada con «estamos
+ * consultando». También impide avisar dos veces: la guía se sigue mirando en
+ * cada vuelta de la cola, y una alerta cerrada no frena otra igual.
+ *
+ * Si no se puede saber, se responde que sí: ni se encola ni se avisa, y se
+ * vuelve a mirar en la próxima vuelta.
+ */
+async function comprobanteConAlerta(
+  admin: SupabaseClient,
+  sha256: string,
+  operacion: string | null,
+): Promise<boolean> {
+  const claves = [
+    repeatedVoucherKey({ fileSha256: sha256, operation: null, orderId: null, alsoIn: [] }),
+    ...(operacion
+      ? [repeatedVoucherKey({ fileSha256: null, operation: operacion, orderId: null, alsoIn: [] })]
+      : []),
+  ];
+  const { data, error } = await admin
+    .from("collection_alerts")
+    .select("id")
+    .eq("kind", "comprobante_repetido")
+    .in("dedupe_key", claves)
+    .limit(1);
+  if (error) return true;
+  return Boolean((data as { id: string }[] | null)?.length);
+}
+
+/**
+ * De estos pedidos, los anulados en Shopify (`orders.cancelled_at`), con su
+ * nombre. null si no se pudo saber: entonces no se crea ninguna ficha.
+ */
+async function pedidosAnulados(
+  admin: SupabaseClient,
+  orderIds: string[],
+): Promise<Set<string> | null> {
+  const { data, error } = await admin
+    .from("orders")
+    .select("id,cancelled_at")
+    .in("id", orderIds)
+    .not("cancelled_at", "is", null);
+  if (error) return null;
+  return new Set(((data as { id: string }[] | null) ?? []).map((r) => r.id));
+}
+
+async function recuperarFichasSinCola(
+  admin: SupabaseClient,
+  report: SweepReport,
+  dry: boolean,
+  recienFallidas: ReadonlySet<string> = new Set(),
+): Promise<void> {
+  const { data, error } = await admin
+    .from("shipments")
+    .select("id,store_id,guide_code,order_id,order_name")
+    .eq("courier", "tanders")
+    .eq("delivery_status", "entregado")
+    .eq("payment_check_state", "validado")
+    .not("order_id", "is", null)
+    .order("payment_checked_at", { ascending: true, nullsFirst: true })
+    .limit(MAX_VALIDADAS_POR_PASADA);
+  if (error) {
+    report.errores += 1;
+    recordSweepFailure(report.fallos, new Error(`No se pudieron leer las guías validadas: ${error.message}`));
+    return;
+  }
+  const guias = (data as GuiaValidada[] | null) ?? [];
+  if (!guias.length) return;
+
+  const pedidos = [...new Set(guias.map((g) => g.order_id))];
+  const [conFicha, anulados] = await Promise.all([pedidosConFicha(admin, pedidos), pedidosAnulados(admin, pedidos)]);
+  if (!conFicha) {
+    report.errores += 1;
+    recordSweepFailure(report.fallos, new Error("No se pudo comprobar qué guías validadas ya tienen ficha."));
+    return;
+  }
+  if (!anulados) {
+    report.errores += 1;
+    recordSweepFailure(
+      report.fallos,
+      new Error("No se pudo comprobar qué guías validadas tienen el pedido anulado en Shopify: no se creó ninguna ficha."),
+    );
+    return;
+  }
+
+  // Mismo sello que el barrido de arriba: TODA guía mirada lo lleva, tenga
+  // ficha o no y salga bien o mal, para que la siguiente pasada empiece por
+  // las otras. La que no se llegó a mirar por el tope no lo lleva: va primero.
+  const mirados: string[] = [];
+  let intentadas = 0;
+
+  for (const g of guias) {
+    // La acaba de dejar sin ficha el barrido de arriba: sin sello, va primero
+    // la próxima vez.
+    if (recienFallidas.has(g.id)) continue;
+    if (conFicha.has(g.order_id)) {
+      mirados.push(g.id);
+      continue;
+    }
+    if (anulados.has(g.order_id)) {
+      // Su cobro no entra a «Validar pagos»: firmarlo cerraría como venta
+      // cobrada un pedido anulado. Se mira igual (sello) y se nombra.
+      report.fichasAnuladas += 1;
+      report.anuladas.push(g.order_name ?? g.guide_code);
+      mirados.push(g.id);
+      continue;
+    }
+    if (intentadas >= MAX_FICHAS_POR_PASADA) continue;
+    intentadas += 1;
+    report.sinFicha += 1;
+    mirados.push(g.id);
+
+    try {
+      const { data: ultima } = await admin
+        .from("tanders_payment_checks")
+        .select(
+          "state,reasons,image_url,operation_number,amount,expected_amount,recipient_name,model,checked_at,raw",
+        )
+        .eq("shipment_id", g.id)
+        .order("checked_at", { ascending: false })
+        .limit(1);
+      const ficha = fichaDesdeComprobacion(((ultima as ComprobacionGuardada[] | null) ?? [])[0]);
+      if (!ficha.ok) {
+        report.errores += 1;
+        recordSweepFailure(report.fallos, new Error(ficha.motivo));
+        continue;
+      }
+      // La imagen, de donde se leyó entonces. Hace falta igual que en el
+      // camino normal: la ficha la guarda en NUESTRO bucket, y su huella sha256
+      // es la que caza el mismo archivo en otro pedido. Bajarla no escribe
+      // nada, así que también se hace en seco.
+      const img = await fetch(ficha.imageUrl);
+      if (!img.ok) {
+        report.errores += 1;
+        recordSweepFailure(report.fallos, new Error("No se pudo bajar la constancia guardada de una guía validada."));
+        continue;
+      }
+      const bytes = await img.arrayBuffer();
+      const mediaType = normalizeMediaType(img.headers.get("content-type"));
+
+      // Un comprobante que ya se sabe repetido no es un cobro por confirmar:
+      // no entra a la cola. Ver comprobanteConAlerta.
+      const sha256 = createHash("sha256").update(Buffer.from(bytes)).digest("hex");
+      if (await comprobanteConAlerta(admin, sha256, normalizeOperationNumber(ficha.reading.operationNumber))) {
+        report.fichasBloqueadas += 1;
+        continue;
+      }
+      if (dry) continue;
+
+      const alta = await registerCourierCollection(admin, {
+        storeId: g.store_id,
+        orderId: g.order_id,
+        guideCode: g.guide_code,
+        imageUrl: ficha.imageUrl,
+        imageBytes: bytes,
+        mediaType,
+        reading: ficha.reading,
+        verdict: ficha.verdict,
+        expectedAmount: ficha.expectedAmount,
+      });
+      if (alta.registered) {
+        report.aRevision += 1;
+        report.fichasRecuperadas += 1;
+        await recomputeOrderMasterSafe(admin, [g.order_id]);
+      } else if (alta.reason === "ya_registrado") {
+        report.enCola += 1;
+      } else if (alta.reason === "duplicado") {
+        report.fichasBloqueadas += 1;
+        // El mismo comprobante ya está en otro pedido: es la incidencia de 0226
+        // y se avisa igual que en el camino normal. Una sola vez: en la vuelta
+        // siguiente de la cola, comprobanteConAlerta ya la encuentra. El mismo
+        // pedido dos veces es un reintento, no se avisa.
+        if (!alta.repeated.sameOrder) {
+          await raiseRepeatedVoucherAlert(admin, {
+            storeId: g.store_id,
+            orderId: g.order_id,
+            orderName: g.order_name ?? g.guide_code,
+            alsoIn: [alta.repeated.orderName ?? "otro pedido"],
+            operation: alta.repeated.operation,
+            fileSha256: alta.repeated.sha256,
+            amount: alta.repeated.amount,
+            source: "cobro_courier",
+            actions: ["La guía figura como cobrada por el lector, pero su cobro no entró a «Validar pagos»."],
+          });
+        }
+      } else if (alta.reason === "error") {
+        report.errores += 1;
+        recordSweepFailure(report.fallos, new Error(`No se pudo encolar el cobro: ${alta.detail}`));
+      }
+    } catch (err) {
+      report.errores += 1;
+      recordSweepFailure(report.fallos, err);
+    }
+  }
+
+  if (!dry && mirados.length) {
+    await admin
+      .from("shipments")
+      .update({ payment_checked_at: new Date().toISOString() })
+      .in("id", mirados);
+  }
 }

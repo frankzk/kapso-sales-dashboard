@@ -2871,3 +2871,25 @@ etapas ni costos.
 - `MOM_RESOLUTION_VERSION` sube a `mom-v1.30`: el cron rellena «Salió con» y
   suma a los intentos de Grupo GF las paradas del cuaderno histórico. No cambia
   etapas ni costos.
+
+### 15-10-2026 · Arreglos de la auditoría del atraso de Lima (sin migración)
+
+Sin migraciones, variables de entorno, RPC ni crons nuevos.
+`MOM_RESOLUTION_VERSION` **no** sube (`mom-v1.30`): el resolver no cambia.
+
+- **Costo logístico** (MOM §14): cuando falta una tarifa, el recálculo guarda
+  `order_master.logistics_cost` vacío y no S/ 0. Como la versión no sube, las
+  filas ya guardadas en S/ 0 cambian en su próximo recálculo; «Conciliar
+  liquidación» no espera a eso, porque recalcula el pedido al guardar.
+- **Puerta a «entregado»** (MOM §11.4): lee `orders.cancelled_at` en cada
+  llamada (lotes de 200). Si esa lectura falla no escribe nada, y el cierre de
+  la ruta dice «No se pudo actualizar el Master: …».
+- **Barrido de cobros Tanders** (MOM §9.4): al final de cada pasada de
+  `/api/cron/tanders-payments` crea, como mucho, 20 fichas `pendiente_revision`
+  para las guías validadas que se quedaron sin ficha. Unas 200 entran en las
+  primeras ~11 pasadas, y cada una necesita la firma de una persona en Validar
+  pagos.
+
+**Qué mirar después.** La próxima pasada del barrido trae `sinFicha` y
+`fichasRecuperadas` en su informe. Terminar la ruta de Yhoni del 01/10
+(`00bd7063`) nombra a #KP137541 en «Ojo:» y lo deja anulado.

@@ -44,6 +44,8 @@ export interface GfStop {
   routeDate: string | null;
   /** planificada · en_curso · cerrada */
   routeStatus: string | null;
+  /** La ruta de la parada: la Mesa de cierre enlaza a su reparto (MOM §29.13). */
+  routeId?: string | null;
   riderName: string | null;
   seq: number | null;
 }

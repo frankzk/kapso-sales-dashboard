@@ -63,11 +63,20 @@ interface RawOrder {
   delivered_at: string | null;
   delivered_courier: string | null;
   last_movement_at: string | null;
+  general_status: string | null;
+  status_since: string | null;
+  current_courier: string | null;
+  last_courier: string | null;
+  dispatched_with: string[] | null;
 }
 
+// Las cinco últimas sirven a «Liquidación vencida» cuando la entrega se
+// registró a mano y no dejó `delivered_at` ni `delivered_courier`
+// (`settlementDeliveredAt` y `settlementCourier`, lib/mom-owner-summary.ts).
 const ORDER_COLUMNS =
   "order_id,order_created_at,coverage,order_total,macro_stage,macro_substage," +
-  "macro_reasons,payment_state,delivered_at,delivered_courier,last_movement_at";
+  "macro_reasons,payment_state,delivered_at,delivered_courier,last_movement_at," +
+  "general_status,status_since,current_courier,last_courier,dispatched_with";
 
 interface RawShipment {
   id: string;
@@ -117,6 +126,11 @@ function orderFact(row: RawOrder): MomOwnerOrderFact {
     deliveredAt: row.delivered_at,
     deliveredCourier: row.delivered_courier,
     lastMovementAt: row.last_movement_at,
+    generalStatus: row.general_status,
+    statusSince: row.status_since,
+    currentCourier: row.current_courier,
+    lastCourier: row.last_courier,
+    dispatchedWith: row.dispatched_with,
   };
 }
 

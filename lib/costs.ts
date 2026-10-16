@@ -37,6 +37,11 @@ export const COST_CONCEPTS: { code: CostConcept; label: string }[] = [
   { code: "motorizado_devolucion", label: "Motorizado · devolución" },
 ];
 
+/** Cómo se nombra un concepto en pantalla («Primer intento»); el código si no está en la lista. */
+export function costConceptLabel(code: string): string {
+  return COST_CONCEPTS.find((c) => c.code === code)?.label ?? code;
+}
+
 export interface CostTariff {
   id: string;
   /** Se usa al resolver coberturas entre varias organizaciones. */

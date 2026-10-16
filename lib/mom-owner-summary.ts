@@ -1,5 +1,6 @@
 import { CONFIRMATION_SIGNAL_KINDS } from "@/lib/order-confirmation";
 import { ADELANTO_MINIMO } from "@/lib/adelanto-minimo";
+import { deliveryCourier } from "@/lib/delivery-courier";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -35,6 +36,18 @@ export interface MomOwnerOrderFact {
   deliveredAt: string | null;
   deliveredCourier: string | null;
   lastMovementAt: string | null;
+  /**
+   * Estado general (`order_master.general_status`) y desde cuándo rige
+   * (`status_since`). Con «entregado» es la fecha de la entrega aunque no haya
+   * `delivered_at`: ver `settlementDeliveredAt`.
+   */
+  generalStatus?: string | null;
+  statusSince?: string | null;
+  /** Courier vigente y último (`current_courier`, `last_courier`). */
+  currentCourier?: string | null;
+  lastCourier?: string | null;
+  /** «Salió con» (`dispatched_with`, 0266): `gf:<Motorizado>`, `gf`, `urpi`… */
+  dispatchedWith?: string[] | null;
 }
 
 export interface MomOwnerShipmentFact {
@@ -280,6 +293,52 @@ function settlementSlaDays(courier: string | null): number | null {
   return null;
 }
 
+/**
+ * Cuándo se entregó, para el plazo de liquidación.
+ *
+ * `delivered_at` solo lo llenan una guía entregada o un evento `delivered`. Las
+ * entregas que se registran con `status_override` —el cuaderno, los lotes, la
+ * ruta de Grupo GF, el reporte de Urpi— lo dejan nulo, y la alerta los
+ * descartaba todos: el 16-10-2026, 5.259 de los 11.275 pedidos con liquidación
+ * pendiente, casi todos de Lima. En un pedido entregado, `status_since` ES la
+ * entrega: la de la guía o el evento si los hay, y si no la del cambio manual
+ * que lo marcó (order-status, regla 0). Fuera de «entregado» no es una entrega
+ * y no se usa.
+ */
+export function settlementDeliveredAt(order: MomOwnerOrderFact): string | null {
+  if (order.deliveredAt) return order.deliveredAt;
+  return order.generalStatus === "entregado" ? order.statusSince ?? null : null;
+}
+
+/**
+ * Quién entregó, para el plazo de liquidación.
+ *
+ * `delivered_courier` sale de la misma guía o evento que `delivered_at`, así que
+ * en las entregas por `status_override` también es nulo, y sin courier no hay
+ * plazo: arreglar solo la fecha no contaba ni un pedido más. Se busca, en este
+ * orden:
+ *
+ *   1. El courier de la entrega, si se registró.
+ *   2. El courier vigente, y si no el último: la salida que estaba entregando,
+ *      el mismo criterio que el control de cobro de la fila del Master
+ *      (`payment_check_state`, lib/order-master.ts). «Por definir» no es un
+ *      courier y se salta.
+ *   3. «Salió con»: solo motorizados de Grupo GF es motorizado propio —también
+ *      la entrega del cuaderno, que no tiene salida en Kapta—; un único
+ *      courier, ese. Varios couriers distintos no dicen cuál entregó.
+ *
+ * Sin courier conocido el plazo sigue sin existir y el pedido no entra en la
+ * alerta, como hasta ahora. Medido el 16-10-2026: Lima pasa de 59 a 3.261
+ * liquidaciones vencidas (el total, de 5.592 a 8.795); 1.921 de Lima y 135 de
+ * Provincia siguen fuera por no tener ni salida ni «Salió con».
+ */
+export function settlementCourier(order: MomOwnerOrderFact): string | null {
+  // La misma regla que la tarifa del costo logístico de una entrega sin
+  // courier (lib/delivery-courier.ts, MOM §14): una sola, para que el plazo y
+  // el costo no nombren a dos couriers distintos.
+  return deliveryCourier(order);
+}
+
 function daysSince(value: string, today: string): number {
   return Math.max(0, Math.floor((dayMs(today) - Date.parse(value)) / DAY_MS));
 }
@@ -375,6 +434,11 @@ export function buildMomOwnerSummary(input: BuildMomOwnerSummaryInput): MomOwner
     };
   });
 
+  // Por MOTIVO (razón crítica abierta, MOM §17.1); el enlace abre la subetapa.
+  // Un pedido con el motivo y otra subetapa delante —«Salida adicional
+  // activa»— cuenta aquí y no sale en esa lista (Lima, 6 contra 5 el
+  // 14-10-2026). No se cuenta por subetapa: escondería dinero recogido sin
+  // cobrar, igual que en «Liquidación vencida». Cambiarlo lo decide el owner.
   const pickedWithoutPayment = input.orders.filter((order) =>
     order.reasons.includes("recogido_sin_pago_completo"),
   ).length;
@@ -385,9 +449,10 @@ export function buildMomOwnerSummary(input: BuildMomOwnerSummaryInput): MomOwner
     ) {
       return false;
     }
-    if (!order.deliveredAt) return false;
-    const sla = settlementSlaDays(order.deliveredCourier);
-    return sla != null && daysSince(order.deliveredAt, input.today) >= sla;
+    const deliveredAt = settlementDeliveredAt(order);
+    if (!deliveredAt) return false;
+    const sla = settlementSlaDays(settlementCourier(order));
+    return sla != null && daysSince(deliveredAt, input.today) >= sla;
   }).length;
   const incompleteManifest = input.manifests.filter((manifest) =>
     ["office_check", "pickup_check"].includes(manifest.state),

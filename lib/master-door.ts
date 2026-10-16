@@ -5,7 +5,16 @@
 // una función y las guardas se unen aquí.
 //
 // Qué escribe: un `order_events` `status_override` con la fuente que lo pidió
-// y recalcula el Master. Qué comprueba, según lo que reciba:
+// y recalcula el Master. Qué comprueba SIEMPRE, venga de donde venga:
+//   * que el pedido no esté anulado en Shopify (`orders.cancelled_at`). Solo
+//     Shopify anula (v1.23), y un override posterior a la anulación la tapa
+//     (lib/order-status.ts, regla 0): terminar la ruta de Yhoni del 01/10,
+//     abierta todavía el 14/10, habría escrito «entregado» sobre #KP137541,
+//     anulado el 05/10. No se escribe y se devuelve como rechazado
+//     `anulado_en_shopify`, para que quien llama lo nombre y una persona decida
+//     desde la ficha (MOM §11.4). Lo lee la puerta y no quien llama: así
+//     ninguna fuente puede olvidarlo.
+// Y según lo que reciba:
 //   * `guard.stop`: la parada debe estar `entregado` para un target entregado
 //     (la parada es la verdad, MOM §29.12); con `requireEvidence`, además foto
 //     o captura, igual que exige Rutas para las cargas de Grupo GF.
@@ -44,10 +53,24 @@ export interface MasterDoorItem {
   guard?: MasterDoorGuard;
 }
 
-export type MasterDoorVerdict = { ok: true } | { ok: false; code: "sin_entrega_en_parada" | "sin_evidencia" | "observacion_abierta"; reason: string };
+export type MasterDoorRejection = "anulado_en_shopify" | "sin_entrega_en_parada" | "sin_evidencia" | "observacion_abierta";
+export type MasterDoorVerdict = { ok: true } | { ok: false; code: MasterDoorRejection; reason: string };
+
+/** Lo que la puerta sabe del pedido por sí misma, sin que se lo diga quien llama. */
+export interface MasterDoorFacts {
+  /** `orders.cancelled_at`: anulado en Shopify. */
+  cancelledAt?: string | null;
+}
+
+export const SHOPIFY_CANCELLED_REASON = "El pedido está anulado en Shopify: la entrega no se escribe encima. Decide una persona desde su ficha.";
 
 /** La decisión, pura y testeada (test/master-door.test.ts). */
-export function masterDoorVerdict(item: Pick<MasterDoorItem, "target" | "guard">): MasterDoorVerdict {
+export function masterDoorVerdict(item: Pick<MasterDoorItem, "target" | "guard">, facts: MasterDoorFacts = {}): MasterDoorVerdict {
+  // Primero, y sin guarda que lo exima: la anulación en Shopify la decidió una
+  // persona y ninguna fuente de reparto la pisa (v1.23, MOM §11.4).
+  if (facts.cancelledAt) {
+    return { ok: false, code: "anulado_en_shopify", reason: SHOPIFY_CANCELLED_REASON };
+  }
   const g = item.guard;
   if (!g) return { ok: true };
   if ((g.openObservations ?? 0) > 0) {
@@ -67,23 +90,55 @@ export function masterDoorVerdict(item: Pick<MasterDoorItem, "target" | "guard">
 
 export interface MasterDoorResult {
   applied: string[];
-  rejected: { orderId: string; code: string; reason: string }[];
+  rejected: { orderId: string; code: MasterDoorRejection; reason: string }[];
+  /** Acompañantes (§32 regla 12) que no siguieron a su principal porque están
+   *  anulados en Shopify. No son pedidos de quien llama: van aparte de
+   *  `rejected` para no contarse como sus rechazos. */
+  companionsCancelled?: { orderId: string; orderName: string | null; hostOrderId: string }[];
   error?: string;
 }
 
 /**
+ * Pedido → `orders.cancelled_at`, solo de los anulados en Shopify. Si no se
+ * puede leer, lanza: «no lo sé» no es «no está anulado».
+ */
+async function loadShopifyCancellations(admin: SupabaseClient, orderIds: readonly string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const ids = [...new Set(orderIds.filter(Boolean))];
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data, error } = await admin
+      .from("orders")
+      .select("id,cancelled_at")
+      .in("id", ids.slice(i, i + 200))
+      .not("cancelled_at", "is", null);
+    if (error) throw new Error(`no se pudo comprobar si los pedidos están anulados en Shopify (${error.message})`);
+    for (const row of (data ?? []) as { id: string; cancelled_at: string | null }[]) {
+      if (row.cancelled_at) out.set(row.id, row.cancelled_at);
+    }
+  }
+  return out;
+}
+
+/**
  * Escribe los eventos aceptados y recalcula. Un pedido repetido en la lista
- * se aplica una sola vez. No mira el estado actual del pedido: eso lo decide
- * quien llama (ya entregado, anulado en Shopify…), porque cada fuente lo sabe
- * de forma distinta.
+ * se aplica una sola vez. Del estado actual del pedido solo mira la anulación
+ * en Shopify, que no depende de la fuente; lo demás (ya entregado, devuelto…)
+ * lo decide quien llama, porque cada fuente lo sabe de forma distinta.
  */
 export async function applyDeliveriesToMaster(admin: SupabaseClient, items: readonly MasterDoorItem[]): Promise<MasterDoorResult> {
   const result: MasterDoorResult = { applied: [], rejected: [] };
+  let cancelled: Map<string, string>;
+  try {
+    cancelled = await loadShopifyCancellations(admin, items.map((item) => item.orderId));
+  } catch (cause) {
+    result.error = cause instanceof Error ? cause.message : String(cause);
+    return result;
+  }
   const seen = new Set<string>();
   const events: Record<string, unknown>[] = [];
   for (const item of items) {
     if (seen.has(item.orderId)) continue;
-    const verdict = masterDoorVerdict(item);
+    const verdict = masterDoorVerdict(item, { cancelledAt: cancelled.get(item.orderId) ?? null });
     if (!verdict.ok) {
       result.rejected.push({ orderId: item.orderId, code: verdict.code, reason: verdict.reason });
       continue;
@@ -122,6 +177,9 @@ export async function applyDeliveriesToMaster(admin: SupabaseClient, items: read
  * fuente, y un motivo que nombra al principal y la guía. Best-effort: si falla,
  * el principal ya quedó bien y el acompañante se arregla a mano desde su ficha;
  * no se deshace una entrega por no poder escribir la de su acompañante.
+ *
+ * La misma regla que al principal: un acompañante anulado en Shopify después
+ * de vincularlo no se marca entregado; queda en `companionsCancelled`.
  */
 async function followCompanions(
   admin: SupabaseClient,
@@ -133,11 +191,17 @@ async function followCompanions(
     const followers = companionDoorFollowers(result.applied, rides, result.applied);
     if (!followers.length) return;
     const byOrder = new Map(items.map((item) => [item.orderId, item]));
-    const stores = await loadOrderTotals(admin, followers.map((ride) => ride.link.companionOrderId));
+    const companionIds = followers.map((ride) => ride.link.companionOrderId);
+    const [stores, cancelled] = await Promise.all([loadOrderTotals(admin, companionIds), loadShopifyCancellations(admin, companionIds)]);
+    const skipped: NonNullable<MasterDoorResult["companionsCancelled"]> = [];
     const events = followers.flatMap((ride) => {
       const host = byOrder.get(ride.link.hostOrderId);
       const storeId = stores.get(ride.link.companionOrderId)?.storeId ?? null;
       if (!host || !storeId) return [];
+      if (cancelled.has(ride.link.companionOrderId)) {
+        skipped.push({ orderId: ride.link.companionOrderId, orderName: stores.get(ride.link.companionOrderId)?.name ?? null, hostOrderId: ride.link.hostOrderId });
+        return [];
+      }
       return [
         {
           store_id: storeId,
@@ -165,6 +229,7 @@ async function followCompanions(
         },
       ];
     });
+    if (skipped.length) result.companionsCancelled = skipped;
     if (!events.length) return;
     const { error } = await admin.from("order_events").insert(events);
     if (error) {
@@ -175,4 +240,22 @@ async function followCompanions(
   } catch (cause) {
     console.error("[master-door] acompañantes", cause);
   }
+}
+
+/**
+ * El aviso que nombra lo que la puerta saltó por estar anulado en Shopify,
+ * para que quien cerró la ruta o aplicó la liquidación sepa qué revisar. Las
+ * repeticiones de un mismo pedido se cuentan una vez. `null` si no hay
+ * ninguno. PURA.
+ */
+export function shopifyCancelledNotice(orders: readonly { orderId: string; name: string | null | undefined }[]): string | null {
+  const byId = new Map<string, string>();
+  for (const order of orders) if (!byId.has(order.orderId)) byId.set(order.orderId, order.name?.trim() || "un pedido sin código");
+  const names = [...byId.values()];
+  if (!names.length) return null;
+  if (names.length === 1) {
+    const name = names[0]!;
+    return `${name.charAt(0).toUpperCase()}${name.slice(1)} está anulado en Shopify: no se marcó entregado en el Master y sigue donde estaba. Decide en su ficha qué pasó con la entrega.`;
+  }
+  return `${names.length} pedidos están anulados en Shopify (${names.join(", ")}): no se marcaron entregados en el Master y siguen donde estaban. Decide en la ficha de cada uno qué pasó con la entrega.`;
 }
