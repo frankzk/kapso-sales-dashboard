@@ -10,6 +10,8 @@ import { applyShalomTracking, type ShalomLiveGuide } from "@/lib/shalom/reconcil
 import { enqueueTransitNotification, processTransitNotifications } from "@/lib/shalom/transit-notify";
 import { enqueueDueReminders } from "@/lib/shalom/pickup-reminder";
 import { backfillManualOseIds } from "@/lib/shalom/ose-backfill";
+import { SHALOM_ORIGIN } from "@/lib/shalom/origin";
+import { shalomTrackItem, TrackQuota, trackRetryAfterMs, type TrackItem } from "@/lib/shalom/track-pace";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,6 +49,14 @@ const BATCH_SIZE = 50;
  * siga funcionando mientras el cron corre.
  */
 const MAX_PER_RUN = BATCH_SIZE * 20;
+/**
+ * Tiempo para preguntar, contado desde que empieza el rastreo. Al ritmo del
+ * cupo (120 guías por minuto, lib/shalom/track-pace.ts) son ~250 guías; el
+ * resto de los 300 s es para el OSE ID manual y para drenar los avisos.
+ */
+const TRACK_BUDGET_MS = 90_000;
+/** 429 seguidos con los que la pasada deja de preguntar. */
+const MAX_RATE_LIMITED_IN_A_ROW = 3;
 
 function secretEquals(provided: string | null, expected: string): boolean {
   if (!provided) return false;
@@ -64,9 +74,10 @@ function authorized(req: NextRequest): boolean {
 }
 
 interface LiveGuide extends ShalomLiveGuide {
-  /** Alfanumérico de 4. El rastreo NO resuelve sin él (ver más abajo). */
+  /** Alfanumérico de 4. El rastreo por número NO resuelve sin él (track-pace.ts). */
   shalom_codigo: string | null;
   shalom_ose_id: number | null;
+  created_via: string | null;
 }
 
 export async function GET(req: NextRequest) {
@@ -93,7 +104,7 @@ export async function GET(req: NextRequest) {
   // contestó va primero, y después la que lleva más tiempo sin hacerlo.
   const { data, error } = await admin
     .from("shipments")
-    .select("id,store_id,order_id,guide_code,shalom_codigo,shalom_ose_id,delivery_status,pickup_state")
+    .select("id,store_id,order_id,guide_code,shalom_codigo,shalom_ose_id,created_via,delivery_status,pickup_state")
     .eq("courier", "shalom")
     .not("guide_code", "is", null)
     .not("delivery_status", "in", "(entregado,anulado,transferido)")
@@ -119,91 +130,97 @@ export async function GET(req: NextRequest) {
   /** Motivo de rechazo → cuántas y una guía de muestra para ir a comprobarla. */
   const rejected = new Map<string, { count: number; ejemplo: string | null }>();
   /**
-   * Qué pasó con cada lote (15-10-2026). Cada pasada consigue respuesta para
-   * ~75-120 de ~460 guías y termina en ~20 s, así que los lotes que faltan
-   * fallan rápido, no por tiempo. Sin esto no hay cómo saber si es el cupo de
-   * 60 llamadas por minuto, un error del lote entero o Shalom rechazando guía
-   * a guía: la respuesta del cron no se guarda en ningún sitio.
+   * Qué pasó con cada lote (15-10-2026). La respuesta del cron no se guarda en
+   * ningún sitio, así que la línea `[shalom-reconcile]` de la bitácora es lo
+   * único que dice por qué una guía no se preguntó. Así se encontró el cupo
+   * del rastreo (lib/shalom/track-pace.ts).
    */
   const lotes: {
     guias: number;
     ok: number;
     rechazadas: number;
+    /** Lo que se esperó al cupo antes de pedirlo. */
+    esperaMs: number;
     ms: number;
     error?: string;
     cupo: ShalomRateLimit;
   }[] = [];
-  /** Por qué no se preguntó por todas: se acabó el cupo de la API key. */
-  let cortadoPor: "cupo" | null = null;
+  /** Por qué no se preguntó por todas: el tiempo de la pasada, o Shalom sin cupo. */
+  let cortadoPor: "tiempo" | "cupo" | null = null;
   let preguntadas = 0;
 
-  for (let i = 0; i < live.length; i += BATCH_SIZE) {
-    const slice = live.slice(i, i + BATCH_SIZE);
+  // Sin código ni OSE ID no hay cómo preguntar: no se gasta cupo en ella.
+  const trackable: TrackItem[] = [];
+  let sinIdentificador = 0;
+  for (const g of live) {
+    const item = shalomTrackItem(g, SHALOM_ORIGIN.manual);
+    if (item) trackable.push(item);
+    else sinIdentificador += 1;
+  }
+
+  // AL RITMO DEL CUPO (16-10-2026). Shalom rastrea 120 guías por minuto,
+  // contadas guía a guía. Los lotes salían seguidos, el tercero chocaba con un
+  // 429 y la pasada terminaba en 4 s habiendo preguntado por 100 de 459. Ahora
+  // cada lote espera lo que le falta al cupo, y un 429 espera lo que Shalom
+  // dice y repite el MISMO lote. Hasta `TRACK_BUDGET_MS`: lo que queda del
+  // tiempo de la función es para los avisos. Lo que no entra va primero en la
+  // pasada siguiente, porque la fila va por quién contestó hace más tiempo.
+  const quota = new TrackQuota();
+  const trackDeadline = startedAt + TRACK_BUDGET_MS;
+  let seguidos429 = 0;
+  let i = 0;
+  while (i < trackable.length) {
+    const slice = trackable.slice(i, i + BATCH_SIZE);
+    const espera = quota.waitFor(slice.length);
+    if (Date.now() + espera > trackDeadline) {
+      cortadoPor = "tiempo";
+      break;
+    }
+    if (espera > 0) await new Promise((resolve) => setTimeout(resolve, espera));
     const loteStart = Date.now();
-    preguntadas += slice.length;
+    quota.spend(slice.length);
     let results;
     try {
-      results = await client.trackBatch(
-        // `numero` + `codigo`, Y NADA MÁS.
-        //
-        // `numero` solo no basta: el upstream contesta «Ingrese un código de
-        // orden» —y con solo el código, «Ingrese un número de orden»—. Se
-        // reclaman el uno al otro, y por separado los dos mensajes parecen decir
-        // "esa guía no existe". Eso tuvo las 93 guías sin rastrear desde el
-        // primer día.
-        //
-        // `ose_id` sirve de reserva para la guía que no tenga código —una
-        // vinculada a mano, por ejemplo—, pero VA COMO STRING. Mandarlo como el
-        // bigint que es en la base devuelve `400 body JSON inválido`, y ese 400
-        // tumba el LOTE ENTERO, no el item: 50 guías sin rastrear por un tipo.
-        //
-        // Por lo mismo los campos se omiten cuando no hay valor en vez de ir
-        // como null: un item incompleto falla solo, sin llevarse a los demás.
-        slice.map((g) => {
-          const item: {
-            custom_id: string;
-            numero?: string;
-            codigo?: string;
-            ose_id?: string;
-          } = { custom_id: g.id };
-          if (g.shalom_codigo) {
-            item.numero = String(g.guide_code);
-            item.codigo = g.shalom_codigo;
-          } else if (g.shalom_ose_id) {
-            item.ose_id = String(g.shalom_ose_id);
-          } else {
-            item.numero = String(g.guide_code);
-          }
-          return item;
-        }),
-      );
+      results = await client.trackBatch(slice);
     } catch (err) {
-      // Un batch caído no debe tumbar la pasada entera: se anota y se sigue con
-      // el siguiente, que puede ser de otra tienda.
       const message = describeShalomError(err);
-      errors.push(message);
       lotes.push({
         guias: slice.length,
         ok: 0,
         rechazadas: 0,
+        esperaMs: espera,
         ms: Date.now() - loteStart,
         error: message,
         cupo: { ...client.rateLimit },
       });
-      // Salvo que se haya acabado el cupo: entonces los lotes que siguen van a
-      // fallar igual y solo le quitan al panel las llamadas que necesita para
-      // crear guías. Las que quedan van primero en la pasada siguiente, porque
-      // la fila va por quién contestó hace más tiempo.
       if (isShalomRateLimited(err)) {
-        cortadoPor = "cupo";
-        break;
+        // Sin cupo: se espera lo que Shalom pide y se repite este mismo lote.
+        // Tres seguidos es que algo más está gastando el cupo: se deja.
+        seguidos429 += 1;
+        quota.exhausted(trackRetryAfterMs(err instanceof Error ? err.message : null), slice.length);
+        if (seguidos429 >= MAX_RATE_LIMITED_IN_A_ROW) {
+          errors.push(message);
+          cortadoPor = "cupo";
+          break;
+        }
+        continue;
       }
+      // Un batch caído no debe tumbar la pasada entera: se anota y se sigue con
+      // el siguiente, que puede ser de otra tienda.
+      errors.push(message);
+      seguidos429 = 0;
+      i += slice.length;
+      preguntadas += slice.length;
       continue;
     }
+    seguidos429 = 0;
+    i += slice.length;
+    preguntadas += slice.length;
     const lote = {
       guias: slice.length,
       ok: 0,
       rechazadas: 0,
+      esperaMs: espera,
       ms: Date.now() - loteStart,
       cupo: { ...client.rateLimit },
     };
@@ -337,6 +354,7 @@ export async function GET(req: NextRequest) {
     "[shalom-reconcile]",
     JSON.stringify({
       vivas: live.length,
+      sinIdentificador,
       preguntadas,
       reported,
       applied,
@@ -353,8 +371,10 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     ok: true,
     scanned: live.length,
+    // Sin código ni OSE ID: no hay cómo preguntar por ellas.
+    sinIdentificador,
     preguntadas,
-    // Si se cortó antes de preguntar por todas, por qué («cupo»).
+    // Si se cortó antes de preguntar por todas, por qué («tiempo» o «cupo»).
     cortadoPor,
     lotes,
     // Avisos de tránsito: cuántos entraron a la cola en esta pasada y cómo
