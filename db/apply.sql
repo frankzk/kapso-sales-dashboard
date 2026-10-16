@@ -533,4 +533,6 @@
 \ir migrations/0265_order_master_stale_urpi.sql
 \echo 'Applying 0266_order_master_dispatched_with.sql'
 \ir migrations/0266_order_master_dispatched_with.sql
+\echo 'Applying 0267_order_master_dispatch_scheduled_on.sql'
+\ir migrations/0267_order_master_dispatch_scheduled_on.sql
 \echo 'Done.'

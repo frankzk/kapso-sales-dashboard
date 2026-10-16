@@ -7,7 +7,7 @@
 // un conjunto VACÍO significa "todas", nunca "ninguna".
 
 import type { OrderMasterRow } from "@/lib/types";
-import { confirmationQueueBucket } from "@/lib/order-confirmation";
+import { confirmationQueueBucket, limaDayKey } from "@/lib/order-confirmation";
 
 export interface MasterFilters {
   stores: Set<string>;
@@ -40,6 +40,8 @@ export interface MasterFilters {
   salesChannels: Set<string>;
   /** «Salió con» (lib/dispatched-with.ts): basta con uno. Vacío = no filtra. */
   dispatchedWith: Set<string>;
+  /** «Programar envío» (lib/dispatch-date.ts): «» = no filtra. */
+  dispatchDate: DispatchDateFilter;
   /** YYYY-MM-DD; extremos inclusive, vacío = sin límite. */
   createdFrom: string;
   createdTo: string;
@@ -131,6 +133,7 @@ export function emptyFilters(): MasterFilters {
     swaypAvailability: new Set(),
     salesChannels: new Set(),
     dispatchedWith: new Set(),
+    dispatchDate: "",
     createdFrom: "",
     createdTo: "",
     dispatchedFrom: "",
@@ -149,6 +152,20 @@ export function emptyFilters(): MasterFilters {
     confirmationDue: "",
     managementDays: new Set(),
   };
+}
+
+/** El filtro de «Programar envío»: con fecha a futuro, sale hoy, su día pasó, o sin fecha. */
+export type DispatchDateFilter = "" | "programado" | "hoy" | "vencido" | "sin";
+export const DISPATCH_DATE_FILTERS: readonly Exclude<DispatchDateFilter, "">[] = ["programado", "hoy", "vencido", "sin"];
+
+/** ¿Cumple el filtro de envío programado? `today` es hoy en Lima (YYYY-MM-DD). Pura. */
+export function matchesDispatchDate(date: string | null, filter: DispatchDateFilter, today: string): boolean {
+  if (!filter) return true;
+  if (filter === "sin") return !date;
+  if (!date) return false;
+  if (filter === "programado") return date > today;
+  if (filter === "hoy") return date === today;
+  return date < today;
 }
 
 /** El último valor del filtro de intentos: «4 a más». */
@@ -176,6 +193,7 @@ export function hasActiveFilters(f: MasterFilters): boolean {
     f.swaypAvailability.size > 0 ||
     f.salesChannels.size > 0 ||
     f.dispatchedWith.size > 0 ||
+    Boolean(f.dispatchDate) ||
     Boolean(f.createdFrom || f.createdTo) ||
     Boolean(f.dispatchedFrom || f.dispatchedTo) ||
     Boolean(f.movementFrom || f.movementTo) ||
@@ -278,6 +296,7 @@ export function matchesFilters(
   if (!inSet(f.swaypAvailability, row.swayp_availability)) return false;
   if (!inSet(f.salesChannels, row.sales_channel)) return false;
   if (f.dispatchedWith.size && !(row.dispatched_with ?? []).some((code) => f.dispatchedWith.has(code))) return false;
+  if (!matchesDispatchDate(row.dispatch_scheduled_on ?? null, f.dispatchDate, limaDayKey(now))) return false;
 
   // El filtro de courier mira el actual Y el último: buscar "los pedidos que
   // tocó Fenix" no debe perder los que ya pasaron a otra guía.

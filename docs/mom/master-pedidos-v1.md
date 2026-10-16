@@ -557,6 +557,34 @@ Subetapas:
 - `por_armar`.
 - `incidencia_preparacion`.
 
+#### Programar envío (15-10-2026)
+
+Un pedido confirmado puede tener un día acordado para salir —la clienta recibe
+en su trabajo el lunes, o pidió que se despache el sábado—. Hasta esta fecha el
+equipo lo anotaba en su Excel de provincia («enviar lunes 26-10») y en Kapta el
+pedido aparecía como confirmado sin guía, igual que uno olvidado (#KP140347).
+
+- **Dónde.** En la ficha, pestaña Operar, dentro de «Elegir ruta y generar el
+  rótulo»: **«Programar envío»**, con la fecha y una nota opcional. Solo en
+  Preparación · Por generar rótulo, con permiso para editar el Master.
+  Programar otra vez cambia la fecha; **«Quitar»** pide motivo.
+- **Qué queda.** Un hecho del historial con actor: `dispatch_date_set` (fecha
+  y nota) o `dispatch_date_cleared` (motivo). Manda el último. Se programa hoy
+  o hasta 45 días adelante.
+- **Qué se ve.** La fila del Master y el encabezado de la ficha llevan una
+  chapa: «Programado · sale lun 26/10», «Programado · sale hoy» o, si el día
+  pasó sin guía, «Programado para el lun 19/10 y no salió» en rojo. El filtro
+  «Envío programado» de Más filtros (parámetro `ep`) separa programados a
+  futuro, los que salen hoy, los que no salieron y los que no tienen fecha.
+- **Cuándo deja de valer.** Al crear la guía o la salida el pedido sale de Por
+  generar rótulo y la fecha deja de mostrarse (`order_master.dispatch_scheduled_on`,
+  0267, solo se llena en esa subetapa). Si esa guía después se anula, el pedido
+  no hereda la fecha vieja: una salida creada después de programar la deja sin
+  efecto.
+- **No cambia la etapa** ni es la «salida programada» de Grupo GF en Lima
+  (`dispatch_programmed`, §29.13), que ya tiene caja y motorizado: esta es
+  anterior a la guía.
+
 Flujo físico:
 
 ```text

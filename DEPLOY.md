@@ -2871,3 +2871,10 @@ etapas ni costos.
 - `MOM_RESOLUTION_VERSION` sube a `mom-v1.30`: el cron rellena «Salió con» y
   suma a los intentos de Grupo GF las paradas del cuaderno histórico. No cambia
   etapas ni costos.
+
+### 16-10-2026 · Programar envío (0267)
+
+- **0267 antes del código**: `order_master.dispatch_scheduled_on` (date) e
+  índice parcial. El recálculo la escribe; sin la columna el upsert fallaría.
+- Sin cambio de versión: nadie había programado un envío, así que no hay nada
+  que rellenar. Los pedidos la toman cuando alguien programa.
