@@ -629,8 +629,8 @@ pedido sin fecha programada sigue esperando a que una persona cree su guía.
   pin que el pedido no respalda), no la levanta. Falla y avisa.
 - **Qué queda.** La guía creada lleva su hecho `guide_registered` sin actor
   (lo creó el sistema), con el motivo «Guía automática: envío programado para
-  el lun 26/10.» y `payload.auto` con el día. La nota del lead dice
-  «automática, envío programado».
+  el lun 26/10.» y `payload.auto` con el día. La nota del lead dice «Guía de
+  Aliclik creada automáticamente (envío programado) · …».
 - **Si falla: una alerta por ese pedido.** Telegram al grupo de alertas urgentes
   de la tienda (o, si no tiene, al del resumen diario) con el pedido, la
   clienta, el motivo y el enlace a la ficha; y el hecho
@@ -9720,6 +9720,15 @@ de ella (con 10 minutos de margen para la nota «Venta cerrada»); y lo posterio
 a la última venta, a esa última. Con una sola compra no cambia nada. Pasó con
 #KP141951: el lead pasó a apuntarle y su Actividad mostraba la guía de
 septiembre de #KP134581, que a su vez se había quedado sin su historial.
+
+**La nota de la guía dice quién la creó (16-10-2026, decisión del owner).** «Guía
+de Aliclik creada por millonestania5@gmail.com · AUR5X… · pedido #KP… · cobrar
+S/ …» (y «Guía Aliclik existente vinculada por …»). La nota sigue **sin
+vendedora**: firmarla le daría la venta a quien creó la guía y no a la asesora
+que la cerró; por eso el nombre va en el texto. Sin él, la Actividad la
+enseñaba como «Automático (Leads)» y una guía creada a mano parecía salida de la
+nada (#KP134581). Las notas anteriores quedan como se escribieron —el historial
+no se reescribe—; quién creó esas guías consta en su hecho «Guía registrada».
 
 Dentro de `Operar`, el orden de decisión es:
 

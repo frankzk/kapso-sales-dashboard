@@ -37,6 +37,8 @@ import { normalizeDistrictKey } from "@/lib/district-coverage";
 import { saveDistrictCoverageRow } from "@/lib/district-coverage-access";
 import { recordCoverageChanges, type CoverageSnapshot } from "@/lib/coverage-change";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { resolveEmails } from "@/lib/productivity";
+import { guideCreatorPhrase } from "@/lib/guide-note";
 import { normalizePhone } from "@/lib/phone";
 import { categoryOf, reconcileDeliveryStatus } from "@/lib/shipments";
 import {
@@ -793,6 +795,9 @@ export async function linkExistingAliclikGuide(
       .maybeSingle();
     const leadId = (lead as { id: string } | null)?.id;
     if (leadId) {
+      // Sin vendedora (no atribuye la venta), con el nombre en el texto: ver
+      // lib/guide-note.ts.
+      const linker = ctx.userId ? (await resolveEmails([ctx.userId])).get(ctx.userId) ?? null : null;
       await admin.from("lead_calls").insert({
         lead_id: leadId,
         store_id: ctx.storeId,
@@ -800,7 +805,7 @@ export async function linkExistingAliclikGuide(
         kind: "system",
         new_status: null,
         note:
-          `Guía Aliclik existente vinculada · ${orderNumber} · ` +
+          `Guía Aliclik existente vinculada ${guideCreatorPhrase(linker)} · ${orderNumber} · ` +
           `pedido ${ctx.row.order_name ?? "—"} · estado ${aliclikStatusLabel(order)}`,
       });
     }
