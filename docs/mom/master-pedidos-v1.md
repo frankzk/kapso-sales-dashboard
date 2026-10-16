@@ -7371,13 +7371,36 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   `last_report_at` —cuándo contestó Shalom por última vez—: la que nunca
   contestó primero, después la que hace más que no lo hace.
 - **El rastreo deja su línea en la bitácora** (`[shalom-reconcile]`): cuántas
-  guías vivas, cuántas preguntadas, contestadas, cambiadas y rechazadas, y por
-  cada lote de 50 cuántas contestaron, cuántas rechazó, cuánto tardó, el error
-  si cayó entero y el cupo que quedaba (`x-ratelimit-*`). Si un lote cae por
-  **cupo agotado** (429 o `rate_limited`), la pasada **no pide más lotes**
-  (`cortadoPor: "cupo"`): fallarían igual y gastarían las llamadas que el
-  panel necesita para crear guías. Las que quedaron van primero en la pasada
-  siguiente.
+  guías vivas, cuántas sin cómo preguntar (`sinIdentificador`), cuántas
+  preguntadas, contestadas, cambiadas y rechazadas, y por cada lote de 50
+  cuántas contestaron, cuántas rechazó, cuánto esperó al cupo, cuánto tardó y
+  el error si cayó entero.
+- **El cupo del rastreo, medido** (16-10-2026, 04:00 de Lima, la primera
+  pasada con bitácora). Es propio del rastreo y se cuenta **guía a guía**: dos
+  lotes de 50 pasaron y el tercero volvió con 429 «pediste 50 guías y superás
+  tu cupo de rastreo por minuto; reintentá en 12s». Cuadra con **120 guías de
+  una vez que se reponen a 2 por segundo**. Las cabeceras `x-ratelimit-*` no
+  lo dicen (son de las llamadas). Los lotes salían seguidos: la pasada
+  terminaba en 4 s habiendo preguntado por **100 de 459**, y una guía
+  esperaba 2-3 h entre respuesta y respuesta.
+  - Desde entonces cada lote **espera lo que le falta al cupo**
+    (`lib/shalom/track-pace.ts`), y un 429 espera lo que Shalom dice y
+    **repite el mismo lote**. Tres 429 seguidos es que algo más está gastando
+    el cupo y la pasada deja de preguntar (`cortadoPor: "cupo"`).
+  - El rastreo tiene **90 s** por pasada, unas **250 guías**; lo demás de la
+    función es para el OSE ID manual y los avisos. Lo que no entra
+    (`cortadoPor: "tiempo"`) va primero en la pasada siguiente: con ~460 vivas,
+    cada guía se pregunta al menos cada hora.
+- **Con qué se pregunta por cada guía** (16-10-2026):
+  - la **hecha a mano** que tiene **OSE ID**, por el OSE ID, que resuelve
+    solo. Su código lo tecleó una persona: #KP137651 tenía su OSE ID desde el
+    principio y Shalom la rechazó dos semanas por el código. El OSE ID sale del
+    listado comprobado (arriba);
+  - la de la **API**, por número y código, que dio la propia API;
+  - sin código, por el OSE ID si lo tiene;
+  - sin código ni OSE ID **no se pregunta**: el número solo siempre vuelve
+    rechazado («falta codigo»). Era la salida de mentira de un estado
+    atestiguado (`MOM-KP123525-SHALOM-…`), que gastaba cupo en cada pasada.
 
 ### Olva
 

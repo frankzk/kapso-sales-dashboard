@@ -731,11 +731,14 @@ describe("una sola puerta para registrar una guía existente", () => {
     expect(cotejo).toContain('update.is("shalom_codigo", null) : update.eq("shalom_codigo", m.codigo)');
   });
 
-  it("el rastreo pregunta primero por la que hace más que no contesta, y se para sin cupo", () => {
+  it("el rastreo pregunta primero por la que hace más que no contesta, al ritmo del cupo", () => {
     const rastreo = read("app/api/cron/shalom-reconcile/route.ts");
     expect(rastreo).toContain('.order("last_report_at", { ascending: true, nullsFirst: true })');
     expect(rastreo).not.toContain('.order("updated_at", { ascending: true })');
     expect(rastreo).toContain("if (isShalomRateLimited(err)) {");
+    expect(rastreo).toContain("const espera = quota.waitFor(slice.length);");
+    expect(rastreo).toContain("shalomTrackItem(g, SHALOM_ORIGIN.manual)");
+    expect(rastreo).toContain("const TRACK_BUDGET_MS = 90_000;");
     expect(rastreo).toContain('"[shalom-reconcile]"');
   });
 
@@ -773,6 +776,8 @@ describe("el MOM dice lo mismo que el código (§12, Cotejar Shalom)", () => {
     expect(mom).toContain("`guide_check`");
     expect(mom).toContain("`codigosCorregidos`");
     expect(mom).toContain("`[shalom-reconcile]`");
+    expect(mom).toContain("**120 guías de\n  una vez que se reponen a 2 por segundo**");
+    expect(mom).toContain("El rastreo tiene **90 s** por pasada");
   });
 
   it("y la clave de recojo del listado (12-10-2026)", () => {
