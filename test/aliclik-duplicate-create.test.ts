@@ -10,7 +10,12 @@ vi.mock("@/lib/env", () => ({ env: { aliclikWriteEnabled: () => true } }));
 vi.mock("@/lib/permissions-access", () => ({ getMasterPermissions: async () => ({ can: () => true }) }));
 vi.mock("@/lib/ingest", () => ({ getStoreCreds: async () => ({ org_id: "org", aliclik_enabled: true, aliclik_api_token: "test" }) }));
 vi.mock("@/lib/orders-master-access", () => ({ getOrderConfirmationBrief: async () => ({ doorRejections: 0, risk: { requirement: "ninguno" } }) }));
-vi.mock("@/app/dashboard/pedidos/aliclik-duplicate-actions", () => ({ getAliclikDuplicateHold: state.check }));
+// La creación vive en lib/aliclik-guide.ts desde el 16-10-2026 y lee la
+// retención directamente (la misma para el botón y para la guía automática).
+vi.mock("@/lib/aliclik-duplicate-access", () => ({
+  DUPLICATE_READ_ERROR: "No se pudo verificar",
+  loadAliclikDuplicateHold: state.check,
+}));
 vi.mock("@/lib/aliclik", () => ({ createOrder: state.createOrder }));
 vi.mock("@/lib/db", () => {
   const client = {
@@ -33,14 +38,14 @@ import { createAliclikGuide } from "@/app/dashboard/pedidos/aliclik-actions";
 beforeEach(() => { vi.clearAllMocks(); });
 describe("llamada directa a createAliclikGuide", () => {
   it("no emite ni registra intención aunque el navegador mande una excepción de riesgo", async () => {
-    state.check.mockResolvedValue({ hold: { allowed: false, message: "Otro envío sigue despachado" } });
+    state.check.mockResolvedValue({ allowed: false, message: "Otro envío sigue despachado" });
     const result = await createAliclikGuide("new", { transportId: 1, riskExceptionReason: "Cliente confirmó que quiere ambos pedidos" });
     expect(result).toEqual({ error: "Otro envío sigue despachado" });
     expect(state.createOrder).not.toHaveBeenCalled();
     expect(state.writes).not.toHaveBeenCalled();
   });
   it("un fallo de lectura impide la escritura externa", async () => {
-    state.check.mockResolvedValue({ error: "No se pudo verificar el duplicado" });
+    state.check.mockRejectedValue(new Error("No se pudo verificar el duplicado"));
     expect(await createAliclikGuide("new", { transportId: 1 })).toEqual({ error: "No se pudo verificar el duplicado" });
     expect(state.createOrder).not.toHaveBeenCalled();
     expect(state.writes).not.toHaveBeenCalled();

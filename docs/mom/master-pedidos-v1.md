@@ -601,6 +601,55 @@ pedido aparecía como confirmado sin guía, igual que uno olvidado (#KP140347).
   (`dispatch_programmed`, §29.13), que ya tiene caja y motorizado: esta es
   anterior a la guía.
 
+#### Guía Aliclik automática el día programado (16-10-2026)
+
+Decisión del owner: en **Provincia COD**, el día programado la guía Aliclik se
+crea sola. Solo esos pedidos: «el automático solo lo programamos en fecha». Un
+pedido sin fecha programada sigue esperando a que una persona cree su guía.
+
+- **Cuándo.** Cada hora de 8:00 a. m. a 1:00 p. m. de Lima
+  (`/api/cron/aliclik-scheduled`, 13–18 UTC), antes del corte de Aliclik
+  (~14:00), para que lo recojan ese mismo día. Varias pasadas y no una: un
+  pedido programado para hoy a media mañana también entra.
+- **Qué pedidos.** Provincia COD, en Preparación · Por generar rótulo, con
+  `dispatch_scheduled_on` = hoy, de una tienda con Aliclik habilitado. Ni Lima
+  ni Agencia, ni una fecha futura, ni una que ya pasó: si su día pasó sin guía,
+  la chapa roja «no salió» es para una persona. Un pedido de Provincia COD
+  programado que vaya a salir con otro courier (Swayp, Shalom) necesita su guía
+  antes de ese día; si no, sale por Aliclik.
+- **Por dónde.** El mismo camino que el botón «Crear guía» (§10.2):
+  `lib/aliclik-guide.ts`, con todas sus compuertas —prepago, rechazos en la
+  puerta, posible duplicado, riesgo del historial, guía viva, pin respaldado,
+  monto recalculado— y el mismo candado. Transportadora: la más barata de las
+  que se pueden agendar, que es la que el panel preselecciona. Sin sesión, el
+  historial del cliente se lee con el service role **acotado a las tiendas de
+  la organización** del pedido.
+- **Sin excepciones.** El automático no escribe motivos por nadie: si una
+  compuerta pide una excepción justificada (el pago que exige el historial, un
+  pin que el pedido no respalda), no la levanta. Falla y avisa.
+- **Qué queda.** La guía creada lleva su hecho `guide_registered` sin actor
+  (lo creó el sistema), con el motivo «Guía automática: envío programado para
+  el lun 26/10.» y `payload.auto` con el día. La nota del lead dice
+  «automática, envío programado».
+- **Si falla: una alerta por ese pedido.** Telegram al grupo de alertas urgentes
+  de la tienda (o, si no tiene, al del resumen diario) con el pedido, la
+  clienta, el motivo y el enlace a la ficha; y el hecho
+  `aliclik_auto_guide_failed` en el historial («Guía automática no creada»), con
+  el motivo y la fecha. **Un intento por pedido y fecha**: lo que falló lo toma
+  una persona —crea la guía a mano o reprograma—; reprogramado a otro día,
+  vuelve a intentarse ese día.
+- **No es un fallo y no avisa:** que otra creación del mismo pedido tenga el
+  candado (una persona creándola en ese momento, o un timeout que el barrido
+  todavía resuelve), ni que el pedido ya tenga guía y el Master no lo haya
+  recalculado. Con Aliclik en rojo —la sonda de cotización falla o las últimas
+  creaciones fallaron (§10.2)— la pasada espera a la hora siguiente sin avisar,
+  salvo en la de la 1:00 p. m.: ahí se intenta igual y lo que falle avisa.
+- **Interruptores.** Los mismos de toda escritura hacia Aliclik:
+  `ALICLIK_WRITE_ENABLED` y `stores.aliclik_enabled`. `?dry=1` cotiza y dice qué
+  haría, sin crear ni avisar.
+- **Se dice al programar.** En un pedido de Provincia COD, «Programar envío» y
+  «Sale el (opcional)» avisan que ese día la guía se crea sola.
+
 Flujo físico:
 
 ```text
@@ -3528,6 +3577,11 @@ candado.
 - **Un timeout no es un rechazo.** Aliclik pudo haber creado el pedido y
   habérsenos perdido la respuesta. La intención queda a la espera y **sigue
   bloqueando** el reintento: reintentar a ciegas es lo que crea el duplicado.
+- **El botón y la guía automática pasan por la misma puerta.** Desde el
+  16-10-2026 cotizar y crear viven en `lib/aliclik-guide.ts`; la acción del
+  Master solo añade el permiso y la sesión de quien pulsa. La guía automática
+  del día programado (§6.2) usa ese mismo núcleo, con el mismo candado, y no
+  levanta ninguna excepción por nadie.
 
 El barrido periódico resuelve esa espera, y tiene que cerrar **las dos** ramas
 posibles:

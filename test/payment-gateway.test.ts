@@ -122,7 +122,7 @@ describe("el dato viaja de Shopify al Master y a quien decide", () => {
   it("todos los que arman los hechos de pago pasan la pasarela", () => {
     for (const f of [
       "app/dashboard/pedidos/payment-actions.ts",
-      "app/dashboard/pedidos/aliclik-actions.ts",
+      "lib/aliclik-guide.ts",
       "components/order-drawer.tsx",
       "lib/collect-alert.ts",
       "app/api/pedidos/rotulos/route.ts",

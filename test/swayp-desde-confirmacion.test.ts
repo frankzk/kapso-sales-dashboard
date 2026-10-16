@@ -234,9 +234,9 @@ describe("la guía Swayp en Devolución no frena la guía Aliclik", () => {
   });
 
   it("las dos puertas de Aliclik la usan", () => {
-    const src = read("app/dashboard/pedidos/aliclik-actions.ts");
-    expect(src).toContain("!swaypGuiaDeVuelta(guide) &&");
-    expect(src).toContain(".find((g) => !isFillableRouteOutput(g) && !swaypGuiaDeVuelta(g));");
+    // Vincular vive en la acción; crear, en el núcleo compartido (16-10-2026).
+    expect(read("app/dashboard/pedidos/aliclik-actions.ts")).toContain("!swaypGuiaDeVuelta(guide) &&");
+    expect(read("lib/aliclik-guide.ts")).toContain(".find((g) => !isFillableRouteOutput(g) && !swaypGuiaDeVuelta(g));");
   });
 });
 

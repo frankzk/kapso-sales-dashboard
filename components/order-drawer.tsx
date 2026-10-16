@@ -100,6 +100,7 @@ import { BrowserCallButton } from "@/components/browser-call";
 import { UrpiAttemptsSection } from "@/components/urpi-attempts-section";
 import { limaTodayKey } from "@/lib/shipments";
 import { DispatchDatePanel } from "@/components/dispatch-date-panel";
+import { AUTO_GUIDE_HINT } from "@/lib/aliclik-scheduled";
 import { DISPATCH_DATE_SET, dispatchDateBadge, dispatchDateMax } from "@/lib/dispatch-date";
 
 const DISPATCH_BADGE_TONE: Record<"info" | "warn" | "danger", BadgeTone> = { info: "info", warn: "warn", danger: "crit" };
@@ -147,6 +148,7 @@ import {
 } from "@/lib/order-status";
 import {
   MACRO_SUBSTAGES_BY_STAGE,
+  classifyOperation,
   macroStageLabel,
   macroSubstageLabel,
   type OrderMacroStage,
@@ -1459,6 +1461,7 @@ export function OrderDrawer({
                           note={dispatchDateEvent?.note ?? null}
                           scheduledBy={dispatchDateEvent?.by ?? null}
                           today={limaTodayKey()}
+                          autoAliclik={classifyOperation(detail.row) === "provincia_cod"}
                           onSaved={() => {
                             void reload();
                             onSaved();
@@ -3039,6 +3042,7 @@ function ConfirmationDesk({
             </label>
             <p className="text-[13px] leading-5 text-ink-500">
               Solo si acordaron otro día para el envío. Vacío: sale apenas se genere la guía.
+              {classifyOperation(row) === "provincia_cod" && ` ${AUTO_GUIDE_HINT}`}
             </p>
           </div>
         )}

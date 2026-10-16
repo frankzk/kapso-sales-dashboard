@@ -10,6 +10,7 @@ import { Badge, FIELD_BOX, OpsButton, type BadgeTone } from "@/components/ops-ui
 import { cn } from "@/components/ui";
 import { clearOrderDispatchDate, scheduleOrderDispatch } from "@/app/dashboard/pedidos/actions";
 import { DISPATCH_DATE_MAX_DAYS, dispatchDateBadge } from "@/lib/dispatch-date";
+import { AUTO_GUIDE_HINT } from "@/lib/aliclik-scheduled";
 
 const TONE: Record<"info" | "warn" | "danger", BadgeTone> = { info: "info", warn: "warn", danger: "crit" };
 
@@ -25,6 +26,7 @@ export function DispatchDatePanel({
   note,
   scheduledBy,
   today,
+  autoAliclik = false,
   onSaved,
 }: {
   orderId: string;
@@ -33,6 +35,8 @@ export function DispatchDatePanel({
   scheduledBy: string | null;
   /** Hoy en Lima, YYYY-MM-DD. */
   today: string;
+  /** Provincia COD: ese día la guía Aliclik se crea sola (MOM §6.2). */
+  autoAliclik?: boolean;
   onSaved: () => void;
 }) {
   const [mode, setMode] = useState<"idle" | "edit" | "clear">("idle");
@@ -85,6 +89,9 @@ export function DispatchDatePanel({
           {note && scheduledBy ? " · " : ""}
           {scheduledBy ? `programó ${scheduledBy}` : ""}
         </p>
+      )}
+      {autoAliclik && (scheduledOn || mode === "edit") && mode !== "clear" && (
+        <p className="text-[13px] text-ink-500">{AUTO_GUIDE_HINT}</p>
       )}
       {mode === "edit" && (
         <form
