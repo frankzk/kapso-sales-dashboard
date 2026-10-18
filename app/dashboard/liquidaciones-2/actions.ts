@@ -854,7 +854,12 @@ export async function applyCuadernoRowsToMaster(sheetId: string, rowKeys: string
     const door = await applyDeliveriesToMaster(g.admin, items);
     if (door.error) return { ok: false, error: `No se pudo registrar la entrega: ${door.error}` };
     summary.aplicados = door.applied.length;
-    summary.paradaNoEntregada = door.rejected.length;
+    // Por código: un pedido que Shopify anuló entre la lectura de arriba y la
+    // puerta lo salta la puerta (MOM §11.4) y cuenta con los anulados, no como
+    // «parada no entregada».
+    const cancelledAtDoor = door.rejected.filter((r) => r.code === "anulado_en_shopify").length;
+    summary.saltadosAnulado += cancelledAtDoor;
+    summary.paradaNoEntregada = door.rejected.length - cancelledAtDoor;
   }
   revalidatePath(PATH);
   revalidatePath("/dashboard/pedidos");

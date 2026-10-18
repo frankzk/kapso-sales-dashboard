@@ -89,6 +89,7 @@ import {
   AGENCY_COURIER_OPTIONS,
   needsAttestedAgencyShipment,
 } from "@/lib/agency-attested-shipment";
+import { OBSERVATIONS_SCREEN_HREF } from "@/lib/bulk-status-guard";
 import {
   agencyHasActivity,
   ATTEMPTS_OR_MORE,
@@ -265,6 +266,7 @@ export function OrdersMasterBoard({
     canFinalize: boolean;
     canRefund: boolean;
     canReopen: boolean;
+    canManageCosts: boolean;
   };
 }) {
   const router = useRouter();
@@ -1383,6 +1385,9 @@ export function BulkBar({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [failures, setFailures] = useState<BulkRouteOutputFailure[]>([]);
+  // Pedidos que el lote a entregado saltó por una observación de cuadre
+  // abierta (MOM §30.8): se aceptan en Liquidaciones 2, que no está en el menú.
+  const [observationSkips, setObservationSkips] = useState(0);
   const [showCreate, setShowCreate] = useState(false);
   const [courier, setCourier] = useState<ManualRouteCourier>(COURIER_TBD);
   const [dispatchDate, setDispatchDate] = useState(limaTodayKey());
@@ -1419,6 +1424,7 @@ export function BulkBar({
     setError(null);
     setNotice(null);
     setFailures([]);
+    setObservationSkips(0);
   };
 
   // Pedir el rótulo ES el gesto: si el pedido todavía no tiene salida, se crea
@@ -1544,6 +1550,7 @@ export function BulkBar({
         comment: bulkComment.trim() || undefined,
       });
       setFailures(result.failed);
+      setObservationSkips(result.skipped?.length ?? 0);
       if (result.error && !result.applied.length) {
         setError(result.error);
         return;
@@ -1773,6 +1780,15 @@ export function BulkBar({
 
       {error && <p role="alert" className="max-w-2xl text-[13px] leading-5 text-crit-fg">{error}</p>}
       {notice && <p role="status" className="max-w-2xl text-[13px] leading-5 text-ok-fg">{notice}</p>}
+      {observationSkips > 0 && (
+        <p className="max-w-2xl text-[13px] leading-5 text-ink-700">
+          <a href={OBSERVATIONS_SCREEN_HREF} className="font-medium text-brand-700 hover:underline">
+            Abrir Liquidaciones 2
+          </a>{" "}
+          para aceptar el motivo de {observationSkips === 1 ? "ese pedido" : `esos ${observationSkips} pedidos`}: no está
+          en el menú.
+        </p>
+      )}
       {failures.length > 0 && (
         <details className="max-w-2xl text-[13px] leading-5 text-ink-700">
           <summary className="cursor-pointer font-medium text-warn-fg">

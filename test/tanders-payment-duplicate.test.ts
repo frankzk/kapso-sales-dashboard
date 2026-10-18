@@ -85,9 +85,13 @@ function adminFalso() {
     updates: [] as Record<string, unknown>[],
     encolados: [] as Record<string, unknown>[],
   };
-  function cadena(filas: unknown[]) {
+  function cadena(filas: unknown[], siEntregado?: unknown[]) {
     const q: Record<string, unknown> = {};
-    for (const m of ["select", "eq", "in", "or", "limit", "contains"]) q[m] = () => q;
+    for (const m of ["select", "in", "or", "limit", "contains", "not"]) q[m] = () => q;
+    q.eq = (col: string, v: unknown) => {
+      if (siEntregado && col === "delivery_status" && v === "entregado") filas = siEntregado;
+      return q;
+    };
     q.order = () => q;
     q.neq = (...a: unknown[]) => {
       visto.neq.push(a);
@@ -124,7 +128,7 @@ function adminFalso() {
           // acá es el barrido, no la cola.
           select: () => {
             const q: Record<string, unknown> = {};
-            for (const m of ["eq", "neq", "or", "limit"]) q[m] = () => q;
+            for (const m of ["eq", "neq", "or", "limit", "in"]) q[m] = () => q;
             q.then = (ok: (v: unknown) => unknown) =>
               Promise.resolve({ data: h.enLaCola, error: null }).then(ok);
             return q;
@@ -156,7 +160,9 @@ function adminFalso() {
         select: (cols?: string) =>
           cols?.includes("payment_check_state,delivery_status")
             ? cadena([{ id: "id-9", order_name: "#KP131846", guide_code: "TANDER9", store_id: "tienda", order_id: "ped-9", ...h.chocada }])
-            : cadena([CANDIDATA]),
+            : // Las ya validadas sin ficha vuelven vacías: se prueban en
+              // tanders-sweep-missing-collection.test.ts.
+              cadena([CANDIDATA], []),
         update: (patch: Record<string, unknown>) => ({
           eq: async (_c: string, id: string) => {
             visto.updates.push({ ...patch, __id: id });

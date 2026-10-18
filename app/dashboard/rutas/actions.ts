@@ -29,7 +29,7 @@ import {
 } from "@/lib/routes";
 import { returnUndeliveredOutputs } from "@/app/dashboard/courier/actions";
 import { loadRouteCloseContext } from "@/lib/route-close";
-import { applyDeliveriesToMaster } from "@/lib/master-door";
+import { applyDeliveriesToMaster, shopifyCancelledNotice } from "@/lib/master-door";
 import { syncStopsToSheet } from "@/lib/sheets/stop-sync";
 import { ordersWithReplacedOutputOut, replacedOutputStopError } from "@/lib/stop-report";
 
@@ -405,6 +405,12 @@ export async function closeRoute(
   // El Master, por el camino de siempre: un evento por pedido y recálculo. Es
   // el único momento en que el Master se entera de lo que hizo un motorizado
   // propio, porque detrás no viene el reporte de ningún courier.
+  //
+  // Un pedido anulado en Shopify no se marca entregado aunque su parada lo
+  // esté: la puerta lo salta (MOM §11.4) y aquí se nombra, para que una persona
+  // decida desde su ficha. La ruta se cierra igual y su línea queda en la
+  // liquidación. Es #KP137541: anulado el 05/10, entregado en la ruta de Yhoni
+  // del 01/10 que seguía abierta; cerrarla habría tapado la anulación.
   const effects = masterEffects(stops);
   let applied = 0;
   if (effects.length) {
@@ -431,7 +437,15 @@ export async function closeRoute(
     );
     if (door.error) problems.push(`No se pudo actualizar el Master: ${door.error}`);
     applied = door.applied.length;
-    if (door.rejected.length) problems.push(`${door.rejected.length} pedido(s) no cruzaron al Master: ${door.rejected[0]!.reason}`);
+    const cancelledNotice = shopifyCancelledNotice([
+      ...door.rejected
+        .filter((r) => r.code === "anulado_en_shopify")
+        .map((r) => ({ orderId: r.orderId, name: stopOf.get(r.orderId)?.order?.name })),
+      ...(door.companionsCancelled ?? []).map((c) => ({ orderId: c.orderId, name: c.orderName })),
+    ]);
+    if (cancelledNotice) problems.push(cancelledNotice);
+    const otherRejected = door.rejected.filter((r) => r.code !== "anulado_en_shopify");
+    if (otherRejected.length) problems.push(`${otherRejected.length} pedido(s) no cruzaron al Master: ${otherRejected[0]!.reason}`);
   }
 
   await g.admin

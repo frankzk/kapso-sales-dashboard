@@ -88,12 +88,18 @@ export async function applyUrpiDeliveriesFor(admin: SupabaseClient, input: {
     });
   }
   let applied: string[] = [];
+  const cancelledAtDoor = new Set<string>();
   if (items.length) {
     const door = await applyDeliveriesToMaster(admin, items);
     if (door.error) throw new Error(`No se pudo registrar la entrega: ${door.error}`);
     applied = door.applied;
+    // Anulado en Shopify entre la lectura de arriba y la puerta: la puerta lo
+    // salta (MOM §11.4), se cuenta con los anulados que no se tocaron y su
+    // salida tampoco se rellena.
+    for (const r of door.rejected) if (r.code === "anulado_en_shopify") cancelledAtDoor.add(r.orderId);
+    observed += cancelledAtDoor.size;
   }
-  const salidas = await fillUrpiSalidas(admin, delivered.map((id) => ({ orderId: id, orderName: facts.get(id)!.order_name, dispatchedOn: firstDate.get(id) ?? null })));
+  const salidas = await fillUrpiSalidas(admin, delivered.filter((id) => !cancelledAtDoor.has(id)).map((id) => ({ orderId: id, orderName: facts.get(id)!.order_name, dispatchedOn: firstDate.get(id) ?? null })));
   if (salidas.filled.length) await recomputeOrderMasterSafe(admin, salidas.filled);
   return { applied, already, observed, notDelivered, salidas };
 }

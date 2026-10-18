@@ -352,7 +352,11 @@ describe("alertas críticas del MOM", () => {
   it("aplica el SLA por courier, excluye Tanders y respeta reprogramaciones explícitas", () => {
     const summary = build({
       orders: [
-        order("picked", { reasons: ["recogido_sin_pago_completo"], stage: "por_cerrar" }),
+        order("picked", {
+          reasons: ["recogido_sin_pago_completo"],
+          stage: "por_cerrar",
+          substage: "recogido_sin_pago_completo",
+        }),
         order("aliclik-late", {
           reasons: ["pendiente_liquidacion"],
           stage: "por_cerrar",

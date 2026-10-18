@@ -164,6 +164,32 @@ export function TandersCobros() {
               </a>
               . En seco no se encola nada.
             </p>
+            {report.sinFicha > 0 && (
+              <p className="mt-2 text-xs text-slate-600">
+                Esta pasada encontró {report.sinFicha} guía{report.sinFicha === 1 ? "" : "s"} con el cobro ya validado y
+                sin ficha en Validar pagos (se preparan hasta {report.topeFichas} por pasada). La pasada real les prepara la
+                ficha con la lectura guardada, sin volver a leer la constancia
+                {report.fichasBloqueadas
+                  ? ` (${report.fichasBloqueadas} no, porque su comprobante ya tiene alerta de comprobante repetido)`
+                  : ""}
+                ; las que no se puedan preparar salen en Errores.
+                {report.sinFicha >= report.topeFichas && (
+                  <>
+                    <br />
+                    Llegó al tope: puede haber más, que entran en las pasadas siguientes.
+                  </>
+                )}
+              </p>
+            )}
+            {report.fichasAnuladas > 0 && (
+              <p className="mt-2 text-xs text-slate-600">
+                {report.fichasAnuladas === 1
+                  ? "1 guía validada sin ficha es de un pedido anulado en Shopify"
+                  : `${report.fichasAnuladas} guías validadas sin ficha son de pedidos anulados en Shopify`}{" "}
+                ({report.anuladas.join(", ")}): su cobro no entra a Validar pagos, porque firmarlo lo cerraría como venta
+                cobrada. Decide una persona desde la ficha del pedido.
+              </p>
+            )}
           </Card>
           <Failures fallos={report.fallos} detenido={report.detenido} />
 
