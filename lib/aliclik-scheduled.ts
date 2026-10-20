@@ -23,12 +23,13 @@
 
 import { classifyOperation } from "@/lib/order-macro-stage";
 import { dispatchDateLabel } from "@/lib/dispatch-date";
+import { limaDayKey } from "@/lib/order-confirmation";
 import { escapeHtml } from "@/lib/telegram";
 import type { OrderMasterRow } from "@/lib/types";
 
 /** Lo que se le dice a quien programa un pedido de Provincia COD. */
 export const AUTO_GUIDE_HINT =
-  "Ese día Kapta crea sola la guía Aliclik, entre las 8:00 a. m. y la 1:00 p. m. Si no puede, avisa por Telegram.";
+  "Si sale otro día, ese día Kapta crea sola la guía Aliclik (8:00 a. m. a 1:00 p. m.), salvo que vaya por Shalom o tenga un pago registrado. Si no puede, avisa por Telegram.";
 
 /** El hecho que deja un intento fallido. Es también lo que impide repetirlo. */
 export const ALICLIK_AUTO_FAILED = "aliclik_auto_guide_failed";
@@ -62,6 +63,43 @@ export function scheduledSkip(row: ScheduledRow, todayLima: string): ScheduledSk
   if (!row.dispatch_scheduled_on || row.dispatch_scheduled_on !== todayLima) return "otro_dia";
   if (row.macro_stage !== "preparacion" || row.macro_substage !== "por_generar_rotulo") return "otra_etapa";
   if (classifyOperation(row) !== "provincia_cod") return "no_provincia_cod";
+  return null;
+}
+
+export type ScheduledHold = "shalom" | "con_pago" | "programado_hoy";
+
+/** Los estados de cobro que no dicen nada de la ruta: sin pagos registrados. */
+const NO_PAYMENT = new Set(["", "sin_pago"]);
+
+/**
+ * Por qué este pedido es de una persona y no del automático, o null.
+ *
+ * INCIDENTE DEL 18 Y 19-10-2026. El automático creó guías Aliclik a cinco
+ * pedidos que el equipo estaba mandando por Shalom (#KP142443, #KP140883,
+ * #KP142598, #KP142667, #KP142743). Ninguno era Agencia para el Master —el
+ * desplegable del checkout decía contraentrega—, pero las tres señales estaban:
+ *   - «DNI y agencia Shalom» guardado (`shalom_order_drafts`): la asesora ya
+ *     eligió Shalom. Cuatro de los cinco.
+ *   - un pago registrado (adelanto cargado o validado, o pagado): en Provincia
+ *     COD el adelanto es de Agencia o de un cliente con historial, y en los dos
+ *     casos decide una persona — Aliclik además cobraría el total en la puerta
+ *     aunque ya se adelantó. Cuatro de los cinco.
+ *   - la fecha se acordó HOY, al confirmar: la asesora está con el pedido en
+ *     la mano y lo va a despachar ella. #KP142443 se confirmó a la 1:05 p. m.
+ *     con «Sale el» hoy; la pasada de la 1:07 le creó la guía y el Shalom se
+ *     guardó a la 1:20.
+ * El automático es para lo que se acordó OTRO día y quedó esperando su fecha.
+ */
+export function scheduledHold(input: {
+  hasShalomDraft: boolean;
+  paymentState: string | null | undefined;
+  /** Cuándo se programó la fecha vigente (el `dispatch_date_set` que manda). */
+  scheduledAt: string | null | undefined;
+  todayLima: string;
+}): ScheduledHold | null {
+  if (input.hasShalomDraft) return "shalom";
+  if (!NO_PAYMENT.has((input.paymentState ?? "").trim())) return "con_pago";
+  if (!input.scheduledAt || limaDayKey(input.scheduledAt) >= input.todayLima) return "programado_hoy";
   return null;
 }
 

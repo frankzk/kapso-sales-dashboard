@@ -9,6 +9,7 @@ import {
   autoGuideReason,
   autoTransport,
   scheduledFailureTelegram,
+  scheduledHold,
   scheduledSkip,
   triedOn,
   waitForAliclik,
@@ -51,6 +52,49 @@ describe("qué pedido entra a la pasada", () => {
     expect(scheduledSkip(row({ coverage: "lima", region: "Lima", province: "Lima" }), TODAY)).toBe("no_provincia_cod");
     expect(scheduledSkip(row({ shipping_mode: "agency" }), TODAY)).toBe("no_provincia_cod");
     expect(scheduledSkip(row({ coverage: "agencia" }), TODAY)).toBe("no_provincia_cod");
+  });
+});
+
+describe("lo que es de una persona: el incidente del 18 y 19-10-2026", () => {
+  const AYER = "2026-10-25T20:00:00Z"; // dom 25/10, 3:00 p. m. de Lima
+  const base = { hasShalomDraft: false, paymentState: null, scheduledAt: AYER, todayLima: TODAY };
+
+  it("programado otro día, sin Shalom ni pago: es del automático", () => {
+    expect(scheduledHold(base)).toBeNull();
+    expect(scheduledHold({ ...base, paymentState: "sin_pago" })).toBeNull();
+  });
+
+  it("con «DNI y agencia Shalom» guardado no se toca (#KP140883, #KP142598, #KP142667, #KP142743)", () => {
+    expect(scheduledHold({ ...base, hasShalomDraft: true })).toBe("shalom");
+  });
+
+  it("con un pago registrado no se toca: Aliclik cobraría el total aunque ya se adelantó", () => {
+    for (const state of ["adelanto_cargado", "adelanto_validado", "diferencia_cargada", "pago_completo"]) {
+      expect(scheduledHold({ ...base, paymentState: state })).toBe("con_pago");
+    }
+  });
+
+  it("con la fecha acordada hoy no se toca: #KP142443 se confirmó a la 1:05 y la pasada de la 1:07 le creó la guía", () => {
+    // 26/10 a la 1:05 p. m. de Lima = 18:05 UTC, el mismo día que sale.
+    expect(scheduledHold({ ...base, scheduledAt: "2026-10-26T18:05:00Z" })).toBe("programado_hoy");
+    // Sin saber cuándo se programó, tampoco.
+    expect(scheduledHold({ ...base, scheduledAt: null })).toBe("programado_hoy");
+  });
+
+  it("la pasada lo comprueba antes de cotizar o crear, y sin poder leerlo no crea nada", () => {
+    const runner = read("lib/aliclik-scheduled-server.ts");
+    expect(runner).toContain('admin.from("shalom_order_drafts").select("order_id").in("order_id", candidateIds)');
+    expect(runner).toContain("No se pudo verificar si los pedidos van por Shalom o se programaron hoy");
+    const hold = runner.indexOf("const hold = scheduledHold({");
+    expect(hold).toBeGreaterThan(-1);
+    expect(hold).toBeLessThan(runner.indexOf("previewAliclikGuideFor(ctx"));
+    expect(hold).toBeLessThan(runner.indexOf("createAliclikGuideFor("));
+  });
+
+  it("el MOM lo dice", () => {
+    const mom = read("docs/mom/master-pedidos-v1.md").replace(/\s+/g, " ");
+    expect(mom).toContain("**Lo que es de una persona y el automático no toca (20-10-2026).**");
+    expect(mom).toContain("**Ocurrió el 18 y 19-10-2026.**");
   });
 });
 
@@ -215,6 +259,7 @@ describe("se ve", () => {
 
   it("quien programa un pedido de provincia sabe que la guía sale sola", () => {
     expect(AUTO_GUIDE_HINT).toContain("crea sola la guía Aliclik");
+    expect(AUTO_GUIDE_HINT).toContain("salvo que vaya por Shalom o tenga un pago registrado");
     expect(read("components/dispatch-date-panel.tsx")).toContain("{AUTO_GUIDE_HINT}");
     expect(read("components/order-drawer.tsx")).toContain('classifyOperation(row) === "provincia_cod" && ` ${AUTO_GUIDE_HINT}`');
   });
