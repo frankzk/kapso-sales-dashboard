@@ -617,6 +617,25 @@ pedido sin fecha programada sigue esperando a que una persona cree su guía.
   la chapa roja «no salió» es para una persona. Un pedido de Provincia COD
   programado que vaya a salir con otro courier (Swayp, Shalom) necesita su guía
   antes de ese día; si no, sale por Aliclik.
+- **Lo que es de una persona y el automático no toca (20-10-2026).** Sin
+  aviso ni hecho, el pedido sigue esperando a quien lo trabaja si:
+  - tiene **«DNI y agencia Shalom»** guardado (`shalom_order_drafts`): ya se
+    eligió Shalom;
+  - tiene **un pago registrado** (adelanto cargado o validado, diferencia o
+    pago completo): en Provincia COD el adelanto es de Agencia o de un cliente
+    con historial, y además Aliclik cobraría el total en la puerta aunque ya se
+    adelantó;
+  - la fecha se **acordó hoy**: la asesora que confirma con «Sale el» hoy está
+    con el pedido en la mano. El automático es para lo que se acordó otro día.
+
+  > ⚠️ **Ocurrió el 18 y 19-10-2026.** El automático creó guías Aliclik a cinco
+  > pedidos que iban por Shalom: #KP142443, #KP140883, #KP142598, #KP142667 y
+  > #KP142743. Para el Master eran Provincia COD (el checkout decía
+  > contraentrega), pero cuatro tenían el Shalom guardado, cuatro un adelanto
+  > de S/ 20–30 que Aliclik no descuenta, y #KP142443 se confirmó con «Sale el»
+  > hoy a la 1:05 p. m. y la pasada de la 1:07 le creó la guía antes de que se
+  > guardara su Shalom (1:20). Las cinco guías ya estaban en manos de Aliclik
+  > cuando se vio.
 - **Por dónde.** El mismo camino que el botón «Crear guía» (§10.2):
   `lib/aliclik-guide.ts`, con todas sus compuertas —prepago, rechazos en la
   puerta, posible duplicado, riesgo del historial, guía viva, pin respaldado,

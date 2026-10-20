@@ -25,6 +25,7 @@ import {
   ALICLIK_AUTO_FAILED,
   ALICLIK_AUTO_POLICY,
   autoGuideReason,
+  scheduledHold,
   autoTransport,
   scheduledFailureTelegram,
   scheduledSkip,
@@ -32,6 +33,7 @@ import {
   waitForAliclik,
 } from "@/lib/aliclik-scheduled";
 import type { OrderMasterRow } from "@/lib/types";
+import { DISPATCH_DATE_CLEARED, DISPATCH_DATE_SET, currentDispatchDate } from "@/lib/dispatch-date";
 
 /** El tiempo de una pasada. Lo que no entra se intenta en la siguiente hora. */
 const TIME_BUDGET_MS = 240_000;
@@ -42,6 +44,7 @@ export type ScheduledOutcome =
   | "ya_tiene_guia"
   | "ya_intentado"
   | "en_curso"
+  | "para_persona"
   | "esperando_aliclik"
   | "simulada"
   | "fuera";
@@ -197,6 +200,29 @@ export async function runScheduledAliclikGuides(
     triedByOrder.set(event.order_id, [...(triedByOrder.get(event.order_id) ?? []), event]);
   }
 
+  // Las señales de que el pedido es de una persona (`scheduledHold`): Shalom
+  // elegido, un pago registrado o la fecha acordada hoy. Sin poder leerlas no se
+  // crea nada: es la diferencia entre esperar una hora y mandar un paquete por
+  // el courier equivocado.
+  const candidateIds = candidates.map((row) => row.order_id);
+  const [drafts, dateEvents] = await Promise.all([
+    admin.from("shalom_order_drafts").select("order_id").in("order_id", candidateIds),
+    admin
+      .from("order_events")
+      .select("order_id,kind,occurred_at,reason,payload")
+      .in("kind", [DISPATCH_DATE_SET, DISPATCH_DATE_CLEARED])
+      .in("order_id", candidateIds),
+  ]);
+  if (drafts.error || dateEvents.error) {
+    report.error = `No se pudo verificar si los pedidos van por Shalom o se programaron hoy: ${(drafts.error ?? dateEvents.error)!.message}`;
+    return report;
+  }
+  const withShalom = new Set(((drafts.data ?? []) as { order_id: string }[]).map((d) => d.order_id));
+  const dateEventsByOrder = new Map<string, { kind: string; occurred_at: string; reason: string | null; payload: unknown }[]>();
+  for (const event of (dateEvents.data ?? []) as { order_id: string; kind: string; occurred_at: string; reason: string | null; payload: unknown }[]) {
+    dateEventsByOrder.set(event.order_id, [...(dateEventsByOrder.get(event.order_id) ?? []), event]);
+  }
+
   const scopes = new Map<string, AliclikReadScope | string>();
   const waiting = new Map<string, boolean>();
   const limaHour = Number(limaTimeHHMM(opts.now ?? new Date()).slice(0, 2));
@@ -211,6 +237,19 @@ export async function runScheduledAliclikGuides(
 
     if (triedOn(triedByOrder.get(row.order_id) ?? [], today)) {
       item.outcome = "ya_intentado";
+      continue;
+    }
+
+    const hold = scheduledHold({
+      hasShalomDraft: withShalom.has(row.order_id),
+      paymentState: row.payment_state,
+      scheduledAt: currentDispatchDate(dateEventsByOrder.get(row.order_id) ?? [])?.at ?? null,
+      todayLima: today,
+    });
+    if (hold) {
+      // No es un fallo ni avisa: es de la persona que lo está trabajando.
+      item.outcome = "para_persona";
+      item.detail = hold;
       continue;
     }
 
