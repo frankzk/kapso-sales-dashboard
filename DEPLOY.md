@@ -3239,7 +3239,9 @@ Dos decisiones del owner del 19-10-2026 (MOM §14, §29.8, §30.8). Sin variable
 de entorno, RPC ni crons nuevos.
 
 1. **Migración `0270_cuaderno_s01_fill.sql`, a mano y ANTES del código.**
-   **Pendiente de aplicar en producción.** Es un relleno de datos, no de
+   **Ya aplicada en producción el 22-10-2026** (conteo previo 575, `NOTICE` y
+   comprobación: 575 salidas y 575 eventos, los 575 pedidos en «Pendiente de
+   liquidación», ninguno en Finalizado). Es un relleno de datos, no de
    esquema: la caja S01 «por definir» de los pedidos que el cuaderno de Alexis
    o de Reparto propio da por entregados pasa a salida entregada de Grupo GF
    Courier (courier `propio`, `created_via` y `delivered_source`
