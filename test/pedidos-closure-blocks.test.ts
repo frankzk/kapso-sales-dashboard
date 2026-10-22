@@ -32,12 +32,12 @@ describe("liquidationCostBlock — conciliar exige un costo que exista", () => {
     const text = liquidationCostBlock({
       cost: null,
       missing: ["primer_intento"],
-      courier: "propio",
+      courier: "aliclik",
       district: "San Juan de Lurigancho",
     });
     expect(text).toBe(
-      "Falta la tarifa de «Primer intento» de Grupo GF para San Juan de Lurigancho. Sin ella el flete quedaría en S/ 0" +
-        " y la liquidación no cuadra. Cárgala en Costos › Costos logísticos (courier «propio») y vuelve a conciliar.",
+      "Falta la tarifa de «Primer intento» de Aliclik para San Juan de Lurigancho. Sin ella el flete quedaría en S/ 0" +
+        " y la liquidación no cuadra. Cárgala en Costos › Costos logísticos (courier «aliclik») y vuelve a conciliar.",
     );
   });
 
@@ -100,13 +100,13 @@ describe("liquidationCostBlock — conciliar exige un costo que exista", () => {
     const text = liquidationCostBlock({
       cost: null,
       missing: ["primer_intento"],
-      courier: "propio",
+      courier: "urpi",
       district: "Ate",
       day: "2026-07-24",
       canManageCosts: false,
     })!;
     expect(text).toContain(
-      "Pídele a quien administra Costos que la cargue en Costos › Costos logísticos (courier «propio»), vigente desde el" +
+      "Pídele a quien administra Costos que la cargue en Costos › Costos logísticos (courier «urpi»), vigente desde el" +
         " 24-07-2026 o antes, y luego vuelve a conciliar.",
     );
     expect(text).not.toContain("Cárgala");
@@ -114,6 +114,7 @@ describe("liquidationCostBlock — conciliar exige un costo que exista", () => {
 
   it("solo una tarifa con courier conocido arregla el bloqueo", () => {
     expect(costBlockNeedsTariff({ cost: null, courier: "propio" })).toBe(true);
+    expect(costBlockNeedsTariff({ cost: null, courier: "urpi" })).toBe(true);
     expect(costBlockNeedsTariff({ cost: null, courier: "por_definir" })).toBe(false);
     expect(costBlockNeedsTariff({ cost: null, courier: null })).toBe(false);
     expect(costBlockNeedsTariff({ cost: 0, courier: "propio" })).toBe(false);
@@ -135,6 +136,12 @@ describe("logisticsCostFactsFromRow — la Mesa avisa con el courier y el día d
 
   it("entrega del cuaderno con la caja «por definir»: Grupo GF, al día de su último movimiento", () => {
     expect(logisticsCostFactsFromRow(row)).toEqual({ cost: null, courier: "propio", district: "Ate", day: "2026-07-24" });
+  });
+
+  it("Grupo GF, como cualquier courier, al día del último movimiento (MOM §14, mom-v1.31)", () => {
+    const later = { ...row, last_movement_at: "2026-10-21T11:00:00Z" };
+    expect(logisticsCostFactsFromRow(later)).toMatchObject({ courier: "propio", day: "2026-10-21" });
+    expect(logisticsCostFactsFromRow({ ...later, dispatched_with: ["urpi"] })).toMatchObject({ courier: "urpi", day: "2026-10-21" });
   });
 
   it("un pedido no entregado no infiere el courier", () => {

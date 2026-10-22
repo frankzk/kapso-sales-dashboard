@@ -23,10 +23,18 @@ import { keyState, paymentState, type PaymentSnapshot } from "@/lib/pickup-key";
 import {
   computeLogisticsCost,
   costDay,
+  isOwnCourier,
   type CostConcept,
   type CostTariff,
   type LogisticsCostInput,
 } from "@/lib/costs";
+import {
+  EMPTY_GF_TARIFF_BOOK,
+  loadGfTariffBook,
+  resolveGfCostTariff,
+  type GfTariffBook,
+  type GfTariffGap,
+} from "@/lib/gf-tariff";
 import {
   CONFIRMATION_CONTACT_KINDS,
   CONFIRMATION_FOLLOWUP_KINDS,
@@ -625,12 +633,18 @@ async function fetchPaymentSignals(
  * fila del Master durante el recálculo en vez de resolverse en cada render: son
  * datos con vigencia, y recalcularlos al leer haría que un cambio de tarifa
  * moviera cifras históricas.
+ *
+ * Dos fuentes: `cost_tariffs` (Costos › Costos logísticos) para los couriers
+ * externos y el Tarifario de Grupo GF (`logistics_district_tariffs`,
+ * lib/gf-tariff.ts) para «propio» (MOM §14, §29.8).
  */
 async function fetchTariffs(
   admin: SupabaseClient,
   storeIds: string[],
 ): Promise<{
   tariffs: CostTariff[];
+  /** El Tarifario de Grupo GF de esas organizaciones: proveedor, contratos y tarifas. */
+  gfTariffs: GfTariffBook;
   orgByStore: Map<string, string>;
   confirmationActivationByStore: Map<string, string>;
   confirmationCycleByStore: Map<string, number>;
@@ -640,6 +654,7 @@ async function fetchTariffs(
 }> {
   const out = {
     tariffs: [] as CostTariff[],
+    gfTariffs: EMPTY_GF_TARIFF_BOOK,
     orgByStore: new Map<string, string>(),
     confirmationActivationByStore: new Map<string, string>(),
     confirmationCycleByStore: new Map<string, number>(),
@@ -693,7 +708,8 @@ async function fetchTariffs(
   // partida más grande del egress de Supabase (333 GB sobre 250). Las tarifas
   // cambian cuando alguien las edita; recordarlas unos minutos por instancia
   // se lleva casi todas esas lecturas. Ver `lib/ttl-cache.ts`.
-  const tariffs = await tariffCache.get([...orgIds].sort().join(","), Date.now(), async () => {
+  const cacheKey = [...orgIds].sort().join(",");
+  const tariffs = await tariffCache.get(cacheKey, Date.now(), async () => {
     const { data, error } = await admin
       .from("cost_tariffs")
       .select("id,org_id,store_id,courier,region,province,district,concept,amount,effective_from,effective_to")
@@ -703,15 +719,23 @@ async function fetchTariffs(
     return (data ?? []) as unknown as CostTariff[];
   });
   out.tariffs.push(...tariffs);
+  // El Tarifario de Grupo GF, con la misma memoria: tres lecturas por instancia
+  // cada cinco minutos, no tres por recálculo ni una por pedido. Una lectura
+  // que falló no se recuerda: el siguiente recálculo vuelve a intentarlo, en
+  // vez de dejar cinco minutos de pedidos sin tarifa.
+  out.gfTariffs = await gfTariffCache.get(cacheKey, Date.now(), () => loadGfTariffBook(admin, orgIds));
+  if (out.gfTariffs.unreadable) gfTariffCache.clear();
   return out;
 }
 
 /** Cuánto se recuerdan las tarifas dentro de una instancia. */
 export const TARIFF_CACHE_MS = 5 * 60_000;
 const tariffCache = ttlCache<CostTariff[]>(TARIFF_CACHE_MS);
-/** Para pruebas y para quien edite tarifas en la misma instancia. */
+const gfTariffCache = ttlCache<GfTariffBook>(TARIFF_CACHE_MS);
+/** Para pruebas y para quien edite tarifas en la misma instancia (las dos fuentes). */
 export function clearTariffCache(): void {
   tariffCache.clear();
+  gfTariffCache.clear();
 }
 
 /** El costo logístico de una fila del Master y los conceptos que no tienen tarifa. */
@@ -731,6 +755,12 @@ export interface LogisticsCostSnapshot extends MasterLogisticsCost {
   district: string | null;
   /** Día (YYYY-MM-DD) al que se imputa el costo (`costDay`): la tarifa tiene que regir ese día. */
   day: string;
+  /**
+   * Solo con «propio» y sin tarifa: por qué el Tarifario de Grupo GF no se la
+   * dio y, si la de ese distrito empieza después del día, desde cuándo rige
+   * (`resolveGfCostTariff`, lib/gf-tariff.ts). Lo cita el aviso de la conciliación.
+   */
+  tarifario?: GfTariffGap;
 }
 
 /**
@@ -750,6 +780,9 @@ export interface LogisticsCostSnapshot extends MasterLogisticsCost {
  * devoluciones de Aliclik), el precio real del courier en cero, o el pedido
  * acompañante que viaja en la caja del principal (el flete ya está en el
  * principal, MOM §32).
+ *
+ * Grupo GF («propio») se calcula con la tarifa de su Tarifario que llega en
+ * `ownDistrictRate` (lib/gf-tariff.ts, mom-v1.31); sin ella, también null.
  */
 export function masterLogisticsCost(
   tariffs: readonly CostTariff[],
@@ -981,6 +1014,7 @@ export async function recomputeOrderMaster(
   const riderStopsByOrder = await fetchRiderStops(admin, ids);
   const {
     tariffs,
+    gfTariffs,
     orgByStore,
     confirmationActivationByStore,
     confirmationCycleByStore,
@@ -1307,11 +1341,24 @@ export async function recomputeOrderMaster(
       dispatchedWith: dispatched,
     });
     // El día al que se imputa el costo: la tarifa tiene que regir ESE día, no
-    // hoy (MOM §14). Va también al aviso de la conciliación.
+    // hoy (MOM §14). Va también al aviso de la conciliación. El último
+    // movimiento, con cualquier courier: también con Grupo GF.
     const logisticsDay = costDay({
       last_movement_at: state.lastMovementAt,
       order_created_at: order.created_at,
     }, now);
+    const own = isOwnCourier(courierForCost);
+    // Grupo GF cobra lo de su Tarifario, no lo de `cost_tariffs` (MOM §14,
+    // §29.8; decisión del dueño del 19-10-2026): la tarifa del distrito que
+    // regía ese día, la del contrato de la tienda si la hay.
+    const ownTariff = own
+      ? resolveGfCostTariff(gfTariffs, {
+          orgId: orgByStore.get(order.store_id) ?? null,
+          storeId: order.store_id,
+          district,
+          day: logisticsDay,
+        })
+      : null;
     const logistics = masterLogisticsCost(tariffs, {
       ridesInHostBox,
       ctx: {
@@ -1321,17 +1368,29 @@ export async function recomputeOrderMaster(
         province,
         district,
       },
-      attempts: state.attemptCount,
+      // Grupo GF cobra solo los intentos de sus propias salidas: los de una
+      // guía de Aliclik o Swayp anterior no son visitas suyas, y cobrarlos a la
+      // tarifa de su Tarifario inventaría un flete (MOM §14). Hoy esas salidas
+      // no reportan intentos —sus visitas viven en las paradas—: el primero.
+      attempts: own
+        ? stateShipments
+            .filter((s) => isOwnCourier(s.courier))
+            .reduce((sum, s) => sum + Math.max(0, s.aliclik_attempts ?? s.reroute_attempts ?? 0), 0)
+        : state.attemptCount,
       generalStatus: state.general,
       agency: Boolean(state.pickupState) || order.shipping_mode === "agency",
       day: logisticsDay,
       actual: actualCost ?? undefined,
+      ownDistrictRate: ownTariff?.kind === "found" ? ownTariff.amount : null,
     });
     opts.onLogisticsCost?.(order.id, {
       ...logistics,
       courier: courierForCost,
       district,
       day: logisticsDay,
+      ...(ownTariff?.kind === "missing" && logistics.cost === null
+        ? { tarifario: { reason: ownTariff.reason, since: ownTariff.since } }
+        : {}),
     });
 
     return {
@@ -1391,9 +1450,10 @@ export async function recomputeOrderMaster(
       last_courier: state.lastCourier,
       courier_count: state.courierCount,
       // Lo que reportan los couriers, más las paradas de nuestros motorizados
-      // y los intentos del reporte de Urpi. El costo logístico sigue con
-      // `state.attemptCount`: ni Grupo GF ni Urpi cobran por intento adicional
-      // en `cost_tariffs`, y sumar sus visitas a la tarifa de otro courier (un
+      // y los intentos del reporte de Urpi. El costo logístico no usa esta
+      // columna: sigue con `state.attemptCount`, y Grupo GF solo con los de sus
+      // propias salidas (mom-v1.31; si un «no estaba» también cobra, lo
+      // confirma el dueño). Sumar estas visitas a la tarifa de otro courier (un
       // pedido que luego salió con Aliclik) inventaría un costo.
       attempt_count:
         state.attemptCount +

@@ -153,20 +153,46 @@ describe("(a) registerClosureAction(«liquidation_close») decide con el costo d
     om.fresh.mockResolvedValue(missing);
     const result = await registerClosureAction("o-1", input);
     expect(om.fresh).toHaveBeenCalledWith(expect.anything(), "o-1");
-    // Sin `costs.manage`: le dice a quién pedírsela, con el día del pedido.
-    expect(result.error).toBe(liquidationCostBlock({ ...missing, canManageCosts: false }));
-    expect(result.error).toContain("Pídele a quien administra Costos");
-    expect(result.error).toContain("vigente desde el 02-10-2026 o antes");
+    // Grupo GF (mom-v1.31): la tarifa es de su Tarifario. Sin `logistics.manage`,
+    // le dice a quién pedírsela, con el día del pedido.
+    expect(result.error).toBe(liquidationCostBlock({ ...missing, canManageCosts: false, canManageLogistics: false }));
+    expect(result.error).toContain("Pídele a quien administra Grupo GF («Administrar Grupo GF»)");
+    expect(result.error).toContain("Grupo GF Courier › Tarifario, vigente desde el 02-10-2026 o antes");
+    expect(result.error).not.toContain("Costos › Costos logísticos");
     expect(events()).toEqual([]);
     expect(om.recompute).not.toHaveBeenCalled();
   });
 
-  it("quien administra Costos recibe «Cárgala»", async () => {
+  it("quien administra Grupo GF recibe «Cárgala» en el Tarifario; Costos no le basta", async () => {
     perms.granted.add("costs.manage");
     om.fresh.mockResolvedValue(missing);
+    const costsOnly = await registerClosureAction("o-1", input);
+    expect(costsOnly.error).toContain("Pídele a quien administra Grupo GF");
+    perms.granted.add("logistics.manage");
     const result = await registerClosureAction("o-1", input);
-    expect(result.error).toBe(liquidationCostBlock({ ...missing, canManageCosts: true }));
-    expect(result.error).toContain("Cárgala en Costos › Costos logísticos (courier «propio»)");
+    expect(result.error).toBe(liquidationCostBlock({ ...missing, canManageCosts: true, canManageLogistics: true }));
+    expect(result.error).toContain("Cárgala en Grupo GF Courier › Tarifario");
+  });
+
+  it("antes de la vigencia del Tarifario lo dice con la fecha que traen los datos", async () => {
+    perms.granted.add("logistics.manage");
+    om.fresh.mockResolvedValue({
+      ...missing,
+      day: "2026-08-20",
+      tarifario: { reason: "antes_de_vigencia", since: "2026-08-31" },
+    } satisfies LogisticsCostSnapshot);
+    const result = await registerClosureAction("o-1", input);
+    expect(result.error).toContain("la de ese distrito rige desde el 31-08-2026");
+    expect(result.error).toContain("del 20-08-2026");
+    expect(result.error).not.toContain("Cárgala");
+    expect(events()).toEqual([]);
+  });
+
+  it("otro courier sigue mandando a Costos › Costos logísticos", async () => {
+    perms.granted.add("costs.manage");
+    om.fresh.mockResolvedValue({ ...missing, courier: "urpi" });
+    const result = await registerClosureAction("o-1", input);
+    expect(result.error).toContain("Cárgala en Costos › Costos logísticos (courier «urpi»)");
   });
 
   it("con la tarifa ya cargada, concilia aunque la fila todavía no la tenga", async () => {
@@ -310,6 +336,7 @@ describe("(c) la Mesa de cierre, pintada", () => {
     canRefund: true,
     canReopen: true,
     canManageCosts: true,
+    canManageLogistics: true,
   };
   const guide = (over: Record<string, unknown> = {}) =>
     ({ id: "s1", courier: "propio", guide_code: "KP1-S01", output_code: "KP1-S01", delivery_status: "pendiente", custody_state: "courier", returned_at: null, ...over }) as unknown as ShipmentRow;
@@ -390,13 +417,52 @@ describe("(c) la Mesa de cierre, pintada", () => {
     expect(html).not.toContain("courier «por_definir»");
   });
 
-  it("con la caja «por definir» y «Salió con» Grupo GF, la tarifa que falta es la de Grupo GF", () => {
+  it("con la caja «por definir» y «Salió con» Grupo GF, la tarifa que falta es la de su Tarifario", () => {
     const html = paint({
       reasons: ["pendiente_liquidacion"] as MacroSubstage[],
       generalStatus: "entregado",
       row: { ...urpi, current_courier: "por_definir", dispatched_with: ["gf:Roy"] },
     });
-    expect(html).toContain("de Grupo GF para Ate");
-    expect(html).toContain("(courier «propio»)");
+    expect(html).toContain("Falta la tarifa de Grupo GF para Ate");
+    expect(html).toContain("Grupo GF Courier › Tarifario, vigente desde el 03-10-2026 o antes");
+    expect(html).toContain('href="/dashboard/courier?tab=tariffs"');
+    expect(html).toContain("Abrir Tarifario");
+    expect(html).not.toContain("Abrir Costos logísticos");
+    expect(html).not.toContain("(courier «propio»)");
+  });
+
+  it("Grupo GF sin `logistics.manage`: dice a quién pedírsela y no enseña el Tarifario", () => {
+    const html = paint({
+      reasons: ["pendiente_liquidacion"] as MacroSubstage[],
+      generalStatus: "entregado",
+      row: { ...urpi, current_courier: "propio" },
+      permissions: { ...ALL, canManageLogistics: false },
+    });
+    expect(html).toContain("Pídele a quien administra Grupo GF («Administrar Grupo GF»)");
+    expect(html).not.toContain("Abrir Tarifario");
+  });
+
+  it("Grupo GF antes de la vigencia: la Mesa lo dice antes del clic, con la fecha, y no manda a cargarla", () => {
+    const html = paint({
+      reasons: ["pendiente_liquidacion"] as MacroSubstage[],
+      generalStatus: "entregado",
+      row: { ...urpi, current_courier: "propio", last_movement_at: "2026-08-20T15:00:00Z" },
+      costTariffGap: { reason: "antes_de_vigencia", since: "2026-08-31" },
+    });
+    expect(html).toContain("rige desde el 31-08-2026");
+    expect(html).not.toContain("Abrir Tarifario");
+    expect(html).not.toContain("Cárgala");
+  });
+
+  it("Grupo GF con la tarifa ya en el Tarifario y la fila vieja: lo dice y no manda a cargar otra", () => {
+    const html = paint({
+      reasons: ["pendiente_liquidacion"] as MacroSubstage[],
+      generalStatus: "entregado",
+      row: { ...urpi, current_courier: "propio" },
+      costTariffGap: { reason: "vigente", since: null },
+    });
+    expect(html).toContain("Grupo GF Courier › Tarifario ya tiene la tarifa de Grupo GF para Ate");
+    expect(html).not.toContain("Abrir Tarifario");
+    expect(html).not.toContain("Cárgala");
   });
 });

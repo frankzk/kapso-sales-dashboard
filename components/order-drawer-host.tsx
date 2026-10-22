@@ -46,6 +46,7 @@ export interface OrderDrawerHostProps {
     canRefund: boolean;
     canReopen: boolean;
     canManageCosts: boolean;
+    canManageLogistics: boolean;
   };
 }
 

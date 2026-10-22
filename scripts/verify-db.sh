@@ -250,5 +250,11 @@ echo "▶ Ventas por origen y conversión por fuente (0268): día local, cancela
 $PSQL -f "$ROOT/scripts/sql/ventas_por_origen_smoke.sql"
 echo "  ✅ todas las ventas por día y canal, la regla del canal en una sola vista, conversión por nacimiento con 7 días, asesoras como en Productividad, cada quien sus tiendas"
 
+# Es un relleno de datos sobre producción (decisión del dueño, 19-10-2026): lo
+# que hay que fijar es qué caja toca y qué no, porque un error no se ve hasta
+# que alguien liquida.
+echo "▶ Caja «por definir» del cuaderno de Grupo GF (0270): pasa a salida entregada del motorizado propio solo en el objetivo"
+$PSQL -f "$ROOT/scripts/sql/cuaderno_s01_fill_smoke.sql"
+
 echo ""
 echo "✅ DB verification passed."

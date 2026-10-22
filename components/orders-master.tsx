@@ -267,6 +267,7 @@ export function OrdersMasterBoard({
     canRefund: boolean;
     canReopen: boolean;
     canManageCosts: boolean;
+    canManageLogistics: boolean;
   };
 }) {
   const router = useRouter();

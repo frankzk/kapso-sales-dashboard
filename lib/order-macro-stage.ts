@@ -29,6 +29,15 @@ import {
   swaypNoEntregoMotivo,
 } from "@/lib/swayp-desde-confirmacion";
 
+// v1.31 (21-10-2026): el costo logístico de Grupo GF («propio») sale de su
+// Tarifario (`logistics_district_tariffs`, lib/gf-tariff.ts, MOM §14, §29.8;
+// decisión del dueño del 19-10-2026), no de Costos › Costos logísticos: la
+// tarifa del distrito que regía el día del costo (el último movimiento, como
+// con cualquier courier), la del contrato de la tienda si la hay, por el primer
+// intento y por cada intento adicional de sus propias salidas; sin devolución
+// aparte. Sin tarifa, o con un día anterior a su vigencia, queda vacío. No
+// cambia etapas. La versión sube para que el cron recalcule `logistics_cost`.
+//
 // v1.30 (15-10-2026): «Salió con» (`dispatched_with`, 0266, MOM §9.3): con quién
 // salió cada pedido, motorizado de Grupo GF incluido. Y los intentos de Grupo
 // GF cuentan también las paradas del cuaderno histórico (`delivery_stops` sin
@@ -191,7 +200,7 @@ import {
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.30" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.31" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"

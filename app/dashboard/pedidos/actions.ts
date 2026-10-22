@@ -2333,11 +2333,12 @@ export async function registerClosureAction(
       };
     }
     // Sin recálculo, la fila guardada con la misma regla del courier y del día
-    // que la Mesa. Quien no administra Costos no puede cargar la tarifa: se le
-    // dice a quién pedírsela.
+    // que la Mesa. Quien no administra Costos —o, para Grupo GF, su Tarifario—
+    // no puede cargar la tarifa: se le dice a quién pedírsela.
     const costBlock = liquidationCostBlock({
       ...(fresh ?? logisticsCostFactsFromRow(ctx.row)),
       canManageCosts: perms.can("costs.manage"),
+      canManageLogistics: perms.can("logistics.manage"),
     });
     if (costBlock) return { error: costBlock };
   }

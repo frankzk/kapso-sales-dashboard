@@ -40,21 +40,26 @@ describe("(A) conciliar liquidación con la tarifa que falta", () => {
     expect(master).not.toMatch(/computeLogisticsCost\(tariffs, \{[\s\S]{0,600}\}\)\.total/);
   });
 
-  it("el respaldo sin recálculo usa la misma regla de la fila que la Mesa, con el permiso de Costos", () => {
+  it("el respaldo sin recálculo usa la misma regla de la fila que la Mesa, con el permiso de Costos y el del Tarifario", () => {
     expect(flat(closure)).toContain(
-      'liquidationCostBlock({ ...(fresh ?? logisticsCostFactsFromRow(ctx.row)), canManageCosts: perms.can("costs.manage"), })',
+      'liquidationCostBlock({ ...(fresh ?? logisticsCostFactsFromRow(ctx.row)), canManageCosts: perms.can("costs.manage"), canManageLogistics: perms.can("logistics.manage"), })',
     );
   });
 
   it("la Mesa avisa antes del clic y deja guardar para que el servidor recalcule", () => {
     // El courier y el día, con la regla del recálculo (logisticsCostFactsFromRow).
-    expect(desk).toContain("logisticsCostFactsFromRow(row)");
-    expect(desk).toContain("liquidationCostBlock({ ...costFacts, canManageCosts: permissions.canManageCosts })");
+    expect(desk).toContain("{ ...logisticsCostFactsFromRow(row), tarifario: costTariffGap ?? null }");
+    expect(flat(desk)).toContain(
+      "liquidationCostBlock({ ...costFacts, canManageCosts: permissions.canManageCosts, canManageLogistics: permissions.canManageLogistics, })",
+    );
     expect(desk).toContain('data-closure-block="tarifa-faltante"');
-    expect(desk).toContain("href={COSTS_SCREEN_HREF}");
-    // El enlace a Costos solo cuando una tarifa lo arregla y quien mira puede cargarla.
+    // Costos, o el Tarifario para Grupo GF (mom-v1.31): `costTariffScreen`.
+    expect(desk).toContain("href={costScreen.href}");
+    // El enlace solo cuando una tarifa lo arregla y quien mira puede cargarla.
     expect(desk).toContain("const costNeedsTariff = Boolean(costFacts && costBlockNeedsTariff(costFacts));");
-    expect(desk).toContain("const costLink = costNeedsTariff && permissions.canManageCosts;");
+    expect(flat(desk)).toContain(
+      'const costLink = costNeedsTariff && (costScreen.permission === "logistics.manage" ? permissions.canManageLogistics : permissions.canManageCosts);',
+    );
     expect(flat(desk)).toContain(
       "Al guardar se vuelve a calcular el costo: si la tarifa ya está cargada y rige el día del pedido, se concilia.",
     );

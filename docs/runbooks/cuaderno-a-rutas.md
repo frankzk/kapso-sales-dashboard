@@ -87,6 +87,14 @@ aceptar las observaciones de monto, o en bloque con
 `scripts/apply-cuaderno-history-to-master.ts` (deja `master_backfill_log`,
 reversible con `scripts/rollback-master-backfill.ts`).
 
+Desde el 21-10-2026 los dos caminos, con una entrega de Alexis o de Reparto
+propio que trae su fecha, rellenan además la caja «por definir» del pedido
+como salida entregada de Grupo GF (`lib/own-salida.ts`, MOM §30.8); lo
+aplicado antes lo rellena la migración 0270. Ese relleno no queda en
+`master_backfill_log` y el rollback no lo deshace: revertir un lote deja esos
+pedidos entregados por su salida, y el script los lista como distintos para
+revisar a mano.
+
 ## Un motorizado sin app, con la ruta ya en Kapta (foto de su hoja)
 
 Es el caso de Alexis desde el 01/10/2026: Despacho armó su caja, oficina la

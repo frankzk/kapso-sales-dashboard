@@ -68,9 +68,14 @@ describe("§14 Falta no es cero", () => {
   });
 
   it("la conciliación se niega con el costo vacío y dice dónde se carga la tarifa", () => {
-    const block = liquidationCostBlock({ cost: null, missing: ["primer_intento"], courier: "propio", district: "Surco" });
-    expect(block).toContain("Costos › Costos logísticos (courier «propio»)");
-    expect(s14).toContain("Costos › Costos logísticos con el código de ese courier («propio» para Grupo GF)");
+    const block = liquidationCostBlock({ cost: null, missing: ["primer_intento"], courier: "urpi", district: "Surco" });
+    expect(block).toContain("Costos › Costos logísticos (courier «urpi»)");
+    // Grupo GF, desde v1.31, en su Tarifario (test/gf-tariff-mom.test.ts).
+    const own = liquidationCostBlock({ cost: null, missing: ["primer_intento"], courier: "propio", district: "Surco" });
+    expect(own).toContain("Grupo GF Courier › Tarifario");
+    expect(s14).toContain(
+      "y dónde se carga: en Costos › Costos logísticos con el código de ese courier o, para Grupo GF, en Grupo GF Courier › Tarifario",
+    );
     expect(liquidationCostBlock({ cost: 0, courier: "propio", district: "Surco" })).toBeNull();
   });
 
@@ -97,7 +102,7 @@ describe("§14 Falta no es cero", () => {
     expect(s14).toContain("(«vigente desde el DD-MM-AAAA o antes»)");
     expect(s14).toContain("(`upsertTariff` borra la que empezaría después)");
     expect(s14).toContain("Cargar una tarifa exige `costs.manage` (administración)");
-    const block = liquidationCostBlock({ cost: null, courier: "propio", district: "Surco", day: "2026-07-24", canManageCosts: false });
+    const block = liquidationCostBlock({ cost: null, courier: "urpi", district: "Surco", day: "2026-07-24", canManageCosts: false });
     expect(block).toContain("vigente desde el 24-07-2026 o antes");
     expect(block).toContain("Pídele a quien administra Costos");
   });

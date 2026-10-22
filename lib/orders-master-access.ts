@@ -25,6 +25,9 @@ import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
 import type { AliclikOutlook } from "@/lib/aliclik-outlook";
 import { loadAliclikOutlook } from "@/lib/aliclik-outlook-access";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
+import { logisticsCostFactsFromRow } from "@/lib/closure-blocks";
+import { isOwnCourier } from "@/lib/costs";
+import { loadGfCostTariffGap, type GfTariffCheck } from "@/lib/gf-tariff";
 import { courierKey } from "@/lib/dispatch";
 import { pickLatestBox, pickLatestStop, type GfBoxItem, type GfDelivery, type GfStop } from "@/lib/gf-delivery";
 import { codCouriersFor, isNonMetroLimaLocation } from "@/lib/order-coverage";
@@ -543,6 +546,13 @@ export interface OrderMasterDetail {
    */
   gfDeliveries: GfDelivery[];
   /**
+   * Grupo GF sin tarifa en su Tarifario (MOM §14, mom-v1.31): por qué y, si la
+   * del distrito empieza después del día del costo, desde cuándo rige; o
+   * `vigente`, si el Tarifario ya la tiene y la fila es vieja. Solo cuando la
+   * Mesa de cierre va a avisar de una tarifa que falta; si no, null.
+   */
+  gfCostTariffGap: GfTariffCheck | null;
+  /**
    * `orders.cancelled_at`: anulado en Shopify. Lo que lee la puerta a
    * «entregado» (lib/master-door.ts); la Mesa de cierre lo usa para no
    * prometer que cerrar la ruta lo marca entregado (MOM §11.4, §29.13).
@@ -841,6 +851,20 @@ async function swaypRouteCheck(
 }
 
 
+/**
+ * Grupo GF en la Mesa de cierre: por qué su Tarifario no le da tarifa, solo si
+ * la Mesa va a avisar de una que falta (Por cerrar con la liquidación abierta,
+ * sin costo y con «propio» como courier del costo). Cuatro lecturas pequeñas.
+ */
+async function loadGfCostTariffGapFor(sb: SupabaseClient, row: OrderMasterRow): Promise<GfTariffCheck | null> {
+  const reasons = row.macro_reasons ?? [];
+  if (row.macro_stage !== "por_cerrar" || row.logistics_cost !== null) return null;
+  if (!reasons.includes("pendiente_liquidacion") && !reasons.includes("liquidacion_observada")) return null;
+  const facts = logisticsCostFactsFromRow(row);
+  if (!isOwnCourier(facts.courier) || !facts.day) return null;
+  return loadGfCostTariffGap(sb, { storeId: row.store_id, district: row.district, day: facts.day });
+}
+
 function operationOf(row: OrderMasterRow, guides: ShipmentRow[]): OperationKind {
   // Cobertura y courier son señales vivas. Ganan sobre `macro_operation`, que
   // puede conservar una clasificación anterior hasta el siguiente recálculo.
@@ -1062,7 +1086,7 @@ export async function getOrderMasterDetail(
     ...item,
     image_url: item.product_id ? images.get(item.product_id) ?? null : null,
   }));
-  const [swayp, aliclikHealth, aliclikOutlook, grupoGfCourier, gfDeliveries, companion] = await Promise.all([
+  const [swayp, aliclikHealth, aliclikOutlook, grupoGfCourier, gfDeliveries, companion, gfCostTariffGap] = await Promise.all([
     swaypRouteCheck(sb, row, lineItems),
     loadAliclikHealthState(sb, row.store_id),
     // Un aviso, no un dato del pedido: si falla, la ficha sale sin él.
@@ -1078,6 +1102,12 @@ export async function getOrderMasterDetail(
       return [] as GfDelivery[];
     }),
     loadOrderCompanionInfo(sb, row),
+    // Un aviso más preciso, no un dato del pedido: si falla, la Mesa dice el
+    // de siempre y el servidor el preciso.
+    loadGfCostTariffGapFor(sb, row).catch((cause) => {
+      console.error("[order-detail] loadGfCostTariffGap", orderId, cause);
+      return null;
+    }),
   ]);
   return {
     row,
@@ -1089,6 +1119,7 @@ export async function getOrderMasterDetail(
     aliclikOutlook,
     tasks,
     gfDeliveries,
+    gfCostTariffGap,
     shopifyCancelledAt: orderRow?.cancelled_at ?? null,
     companion,
     address: shopifyShippingAddress(orderRow?.raw),

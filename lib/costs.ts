@@ -190,6 +190,13 @@ export interface LogisticsCostInput {
    * la cotización es del envío, no de cuántas veces se tocó la puerta.
    */
   actual?: { delivery?: number | null; return?: number | null };
+  /**
+   * Grupo GF, el courier «propio» (MOM §14, §29.8): los S/ del distrito en su
+   * Tarifario el día del costo, ya resueltos (`resolveGfCostTariff`,
+   * lib/gf-tariff.ts). Con «propio» es la ÚNICA fuente del reparto —no se mira
+   * `cost_tariffs`— y null o ausente es una tarifa que falta, nunca S/ 0.
+   */
+  ownDistrictRate?: number | null;
 }
 
 export interface LogisticsCostBreakdown {
@@ -198,12 +205,27 @@ export interface LogisticsCostBreakdown {
     concept: CostConcept;
     amount: number;
     quantity: number;
-    /** De dónde salió el importe: la tarifa configurada o el courier. */
-    source?: "tarifa" | "courier";
+    /** De dónde salió el importe: la tarifa configurada, el courier o el Tarifario de Grupo GF. */
+    source?: "tarifa" | "courier" | "tarifario";
   }[];
   /** Conceptos que no tienen tarifa configurada para este pedido. */
   missing: CostConcept[];
 }
+
+/** El código de Grupo GF como courier (MOM §29). */
+export const OWN_COURIER = "propio";
+
+/** ¿Es Grupo GF, cuyo costo sale de su Tarifario y no de `cost_tariffs`? */
+export function isOwnCourier(courier: string | null | undefined): boolean {
+  return sameLabel(courier ?? null, OWN_COURIER);
+}
+
+/**
+ * Lo que cobra Grupo GF sale de su Tarifario: una tarifa por distrito para la
+ * entrega o el rechazo (MOM §29.8). El envío por agencia no es reparto por
+ * distrito y sigue en `cost_tariffs`.
+ */
+const OWN_TARIFF_CONCEPTS: ReadonlySet<CostConcept> = new Set(["primer_intento", "intento_adicional"]);
 
 /**
  * Costo logístico de un pedido. Suma el primer intento, los adicionales, el
@@ -211,6 +233,13 @@ export interface LogisticsCostBreakdown {
  *
  * Un pedido ANULADO en Lima no genera costo de devolución (§9: allí no hay
  * retorno físico); uno DEVUELTO sí, y por eso el estado importa aquí.
+ *
+ * GRUPO GF («propio», decisión del dueño del 19-10-2026): el primer intento y
+ * cada intento adicional cobran la tarifa de su Tarifario (`ownDistrictRate`),
+ * y no hay devolución aparte: el rechazo ya paga la tarifa del distrito
+ * (§29.8). Sus `attempts` son solo los de sus propias salidas —quien llama no
+ * le pasa los de Aliclik o Swayp—, y hoy esas no reportan intentos: cobra el
+ * primero.
  *
  * Los conceptos sin tarifa configurada se devuelven en `missing` en vez de
  * contarse como cero: un costo ausente y un costo de cero no son lo mismo, y el
@@ -222,6 +251,7 @@ export function computeLogisticsCost(
 ): LogisticsCostBreakdown {
   const lines: LogisticsCostBreakdown["lines"] = [];
   const missing: CostConcept[] = [];
+  const own = isOwnCourier(input.ctx.courier);
 
   const real = (v: number | null | undefined): number | null =>
     v != null && Number.isFinite(v) && v >= 0 ? v : null;
@@ -233,6 +263,15 @@ export function computeLogisticsCost(
     const exact = real(actual);
     if (exact !== null) {
       lines.push({ concept, amount: round2(exact * quantity), quantity, source: "courier" });
+      return;
+    }
+    if (own && OWN_TARIFF_CONCEPTS.has(concept)) {
+      const rate = real(input.ownDistrictRate);
+      if (rate === null) {
+        missing.push(concept);
+        return;
+      }
+      lines.push({ concept, amount: round2(rate * quantity), quantity, source: "tarifario" });
       return;
     }
     const tariff = resolveTariff(tariffs, concept, input.ctx, input.day);
@@ -252,7 +291,8 @@ export function computeLogisticsCost(
     add("intento_adicional", attempts - 1);
   }
 
-  if (input.generalStatus === "devuelto") add("devolucion", 1, input.actual?.return);
+  // Grupo GF no cobra la devolución aparte: el rechazo ya pagó el distrito.
+  if (input.generalStatus === "devuelto" && !own) add("devolucion", 1, input.actual?.return);
 
   const total = lines.reduce((sum, l) => sum + l.amount, 0);
   return { total: round2(total), lines, missing };
