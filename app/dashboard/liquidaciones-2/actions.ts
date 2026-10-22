@@ -20,6 +20,8 @@ import { statusLookupForSheet } from "@/lib/sheets/reparto-import-db";
 import { applyWrittenPayment, applyWrittenStatus } from "@/lib/sheets/written-status";
 import { effectsForDomain, reconcileSheetRows, type SheetRef } from "@/lib/sheets/reparto-import-db";
 import { applyDeliveriesToMaster, type MasterDoorItem } from "@/lib/master-door";
+import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { fillOwnSalidas, hasNotebookDate, isGfNotebookCourier, ownSalidaNotice, type OwnSalidaOrder, type OwnSalidaResult } from "@/lib/own-salida";
 import { writeStopReport } from "@/lib/stop-report";
 import { domainStatusToStop, sheetPaymentToStop } from "@/lib/sheets/stop-bridge";
 import type { CellValue, ColumnDataType, StatusEffect } from "@/lib/sheets/types";
@@ -710,6 +712,8 @@ export interface ApplyMasterSummary {
   conObservacionAbierta: number;
   /** Filas atadas a una parada que Rutas no tiene como entregada con evidencia (MOM §29.12). */
   paradaNoEntregada: number;
+  /** La caja «por definir» de lo que entregó Grupo GF, rellenada como su salida (lib/own-salida.ts). */
+  salidas?: OwnSalidaResult;
 }
 
 /**
@@ -726,6 +730,10 @@ export interface ApplyMasterSummary {
  * Una fila con observación ABIERTA tampoco cruza: el motivo lo escribe quien
  * repartió, lo acepta quien liquida (resuelve la observación) y solo entonces
  * la fila puede ir al Master (§30.8).
+ *
+ * Si la hoja es de Grupo GF (Reparto propio o la de Alexis), lo que la puerta
+ * entregó con fecha rellena además su caja «por definir» como salida entregada
+ * del motorizado propio (lib/own-salida.ts, decisión del dueño, 19-10-2026).
  */
 export async function applyCuadernoRowsToMaster(sheetId: string, rowKeys: string[]): Promise<SheetActionResult & { summary?: ApplyMasterSummary }> {
   const g = await guard("master.edit");
@@ -797,15 +805,15 @@ export async function applyCuadernoRowsToMaster(sheetId: string, rowKeys: string
   }
 
   const orderIds = [...new Set(candidates.map((r) => r.order_id!))];
-  const master = new Map<string, { store_id: string; general_status: string; cancelled_at: string | null }>();
+  const master = new Map<string, { store_id: string; order_name: string | null; general_status: string; cancelled_at: string | null }>();
   for (let i = 0; i < orderIds.length; i += 200) {
     const { data, error } = await g.admin
       .from("order_master")
-      .select("order_id,store_id,general_status,orders(cancelled_at)")
+      .select("order_id,store_id,order_name,general_status,orders(cancelled_at)")
       .in("order_id", orderIds.slice(i, i + 200));
     if (error) return { ok: false, error: error.message };
-    for (const m of (data ?? []) as unknown as { order_id: string; store_id: string; general_status: string; orders: { cancelled_at: string | null } | null }[]) {
-      master.set(m.order_id, { store_id: m.store_id, general_status: m.general_status, cancelled_at: m.orders?.cancelled_at ?? null });
+    for (const m of (data ?? []) as unknown as { order_id: string; store_id: string; order_name: string | null; general_status: string; orders: { cancelled_at: string | null } | null }[]) {
+      master.set(m.order_id, { store_id: m.store_id, order_name: m.order_name, general_status: m.general_status, cancelled_at: m.orders?.cancelled_at ?? null });
     }
   }
 
@@ -815,6 +823,11 @@ export async function applyCuadernoRowsToMaster(sheetId: string, rowKeys: string
   const now = new Date().toISOString();
   const seen = new Set<string>();
   const items: MasterDoorItem[] = [];
+  // Lo que se rellena si la puerta lo entrega: solo con el día del cuaderno.
+  const boxes: OwnSalidaOrder[] = [];
+  // Entregas de Grupo GF sin día en la fila: no se sabe qué caja salió, así que
+  // la caja queda para revisar a mano y el aviso la cuenta (MOM §30.8).
+  const undated: string[] = [];
   for (const row of candidates) {
     const orderId = row.order_id!;
     if (seen.has(orderId)) continue;
@@ -835,14 +848,20 @@ export async function applyCuadernoRowsToMaster(sheetId: string, rowKeys: string
     const fecha = typeof row.values.fecha === "string" ? row.values.fecha : null;
     const written = typeof row.values.estado_reportado === "string" && row.values.estado_reportado ? row.values.estado_reportado : "entregado";
     const stop = row.stop_id ? stops.get(row.stop_id) ?? null : null;
+    // Mediodía de Lima del día de la ruta: la hora exacta no se anotó en el cuaderno.
+    const at = fecha ? `${fecha}T17:00:00.000Z` : now;
+    // Una fecha futura es un error de tecleo del cuaderno: no se entrega mañana
+    // (lo mismo que la carga histórica), ni en el evento ni en la caja.
+    const occurredAt = at > now ? now : at;
+    if (hasNotebookDate(fecha)) boxes.push({ orderId, orderName: m.order_name, courier, deliveredAt: occurredAt });
+    else if (isGfNotebookCourier(courier)) undated.push(orderId);
     items.push({
       orderId,
       storeId: m.store_id,
       target: "entregado",
       source: "liquidacion",
       courier,
-      // Mediodía de Lima del día de la ruta: la hora exacta no se anotó en el cuaderno.
-      occurredAt: fecha ? `${fecha}T17:00:00.000Z` : now,
+      occurredAt,
       actor: g.user.id,
       reason: `Entregado según el cuaderno de ${who} (${written}).`,
       payload: { sheet_id: sheetId, sheet_key: full.ref.key, row_key: row.row_key, row_id: row.id, stop_id: row.stop_id },
@@ -860,6 +879,24 @@ export async function applyCuadernoRowsToMaster(sheetId: string, rowKeys: string
     const cancelledAtDoor = door.rejected.filter((r) => r.code === "anulado_en_shopify").length;
     summary.saltadosAnulado += cancelledAtDoor;
     summary.paradaNoEntregada = door.rejected.length - cancelledAtDoor;
+    // Solo lo que la puerta entregó: ni lo rechazado ni los acompañantes, que
+    // viajan en la caja de su principal. `fillOwnSalidas` ignora lo que no es de
+    // Grupo GF.
+    // Si no se pueden leer las salidas, la entrega ya quedó escrita: se avisa y
+    // las cajas se quedan como estaban. Volver a aplicar no lo reintenta: el
+    // pedido ya está entregado y cae en «ya estaban», así que su caja «por
+    // definir» sigue en «Salida adicional activa» hasta que alguien la revise a mano.
+    const done = new Set(door.applied);
+    const ownBoxes = boxes.filter((box) => done.has(box.orderId));
+    try {
+      const salidas = await fillOwnSalidas(g.admin, ownBoxes);
+      if (salidas.filled.length) await recomputeOrderMasterSafe(g.admin, salidas.filled);
+      summary.salidas = salidas;
+    } catch {
+      summary.salidas = { filled: [], sinSalida: [], otraSalidaViva: [], porRevisar: [], errors: ownBoxes.map((box) => box.orderId) };
+    }
+    const undatedDone = undated.filter((orderId) => done.has(orderId));
+    if (undatedDone.length) summary.salidas.porRevisar.push(...undatedDone);
   }
   revalidatePath(PATH);
   revalidatePath("/dashboard/pedidos");
@@ -872,6 +909,7 @@ export async function applyCuadernoRowsToMaster(sheetId: string, rowKeys: string
     summary.devolucionesSinCamino ? `${summary.devolucionesSinCamino} devoluciones sin camino al Master` : null,
     summary.conObservacionAbierta ? `${summary.conObservacionAbierta} con observación pendiente de aceptar` : null,
     summary.paradaNoEntregada ? `${summary.paradaNoEntregada} cuya parada en Rutas no está entregada con evidencia` : null,
+    ...(summary.salidas ? ownSalidaNotice(summary.salidas) : []),
   ].filter(Boolean);
   return { ok: true, message: `Master: ${parts.join(" · ")}.`, summary };
 }

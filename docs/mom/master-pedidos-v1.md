@@ -163,6 +163,11 @@ Reglas:
   puesto, escribir encima escondería un cambio de courier. Al rellenarla, la vía
   pasa a ser la del courier, así que deja de ofrecerse «Anular salida»: esa guía
   ya existe del otro lado y se anula desde su propio botón.
+- **El reporte de Urpi y el cuaderno de Grupo GF también la rellenan, ya entregada**
+  (§30.11, §30.8): la caja de Urpi y la del motorizado propio se armaron «por
+  definir» y nadie les puso el courier. Mismas condiciones, y solo si es la
+  única caja viva del pedido: con otra salida viva no se sabe qué caja se llevó
+  y no se toca; sin «por definir», no se crea una salida.
 - **Por lo mismo, una salida `por definir` no cuenta como «guía activa»** para el
   freno que impide emitir dos guías. No es otro paquete en la calle: es esta caja
   esperando courier. Contarla obligaba a anular la salida para poder emitir la
@@ -1898,11 +1903,12 @@ Master solo sumaba lo externo: los 487 pedidos con un «No entregado» de Grupo 
 decían «0 intentos» (#KP140941: salió el 13/10 y el 14/10 con Roy, «No
 contesta» las dos veces, y la fila decía 0).
 
-- **No cambia el costo.** El costo logístico sigue con los intentos del
-  courier: ni Grupo GF, ni Urpi, ni Swayp ni Tanders cobran por intento
-  adicional en las tarifas, y sumar sus visitas a la
-  tarifa de otro courier (un pedido que luego salió con Aliclik) inventaría un
-  costo.
+- **No cambia el costo.** El costo logístico sigue con los intentos que
+  reportan las guías: ni Urpi, ni Swayp ni Tanders cobran por intento
+  adicional en las tarifas, y sumar sus visitas a la tarifa de otro courier (un
+  pedido que luego salió con Aliclik) inventaría un costo. Grupo GF cobra desde
+  v1.31 con su Tarifario (§14) solo los intentos que reportan sus propias
+  salidas: ni los de otro courier ni estas visitas.
 - **No cambia la etapa.** Es un dato de la fila; la macroetapa se decide como
   antes. `MOM_RESOLUTION_VERSION` sube a `mom-v1.27` para que el cron recalcule
   la columna.
@@ -8163,8 +8169,9 @@ Couriers que cobran y luego liquidan: Aliclik, Swayp, Axel y Urpi.
     caja del principal (§32).
   - «Conciliar liquidación» recalcula el pedido al guardar, con las tarifas
     leídas en ese momento. Si falta alguna, se niega y dice qué concepto falta,
-    de qué courier y distrito, y que se carga en Costos › Costos logísticos con
-    el código de ese courier («propio» para Grupo GF).
+    de qué courier y distrito, y dónde se carga: en Costos › Costos logísticos
+    con el código de ese courier o, para Grupo GF, en Grupo GF Courier ›
+    Tarifario (desde v1.31, abajo).
   - **Con qué courier se busca la tarifa (16-10-2026).** Con el courier
     vigente. Si el pedido está **entregado** y el vigente está vacío o es «por
     definir», con el de la entrega, en el mismo orden que el plazo de
@@ -8179,8 +8186,9 @@ Couriers que cobran y luego liquidan: Aliclik, Swayp, Axel y Urpi.
     le habría llegado. Medido el 16-10-2026 sobre los 4.247 pedidos en
     «Pendiente de liquidación» con el courier vacío (3.486) o «por definir»
     (761): 1.868 son entregas de Grupo GF del cuaderno, 323 de Urpi y 2.056 sin
-    courier conocido. Hoy siguen todos bloqueados, porque ni «propio» ni Urpi
-    tienen tarifa: cargarlas es del owner (§29.8). Lo que cambia es que el aviso
+    courier conocido. Ese día seguían todos bloqueados, porque ni «propio» ni
+    Urpi tenían tarifa; la de «propio» sale desde v1.31 del Tarifario de Grupo
+    GF (abajo). Lo que cambia es que el aviso
     se puede seguir y que la tarifa, cuando exista, les llega.
   - **«Por definir» no es un courier.** El aviso nunca pide una tarifa para
     «por_definir» ni lo nombra como courier: una tarifa así se aplicaría a todas
@@ -8207,11 +8215,13 @@ Couriers que cobran y luego liquidan: Aliclik, Swayp, Axel y Urpi.
     una tarifa que empiece después de ese día no le llega. Ojo: registrar una tarifa con una fecha
     anterior a otra abierta del mismo ámbito y concepto la **reemplaza**
     (`upsertTariff` borra la que empezaría después); antes de cargarla se mira
-    qué rige ya para ese courier y distrito.
+    qué rige ya para ese courier y distrito. Grupo GF también, desde v1.31,
+    con su Tarifario (abajo).
   - Cargar una tarifa exige `costs.manage` (administración); conciliar,
     `closure.finance` (liquidaciones). A quien concilia sin `costs.manage` el
     aviso le dice que se la pida a quien administra Costos, y la Mesa no le
     enseña el enlace a Costos, que lo dejaría en «Sección de administradores».
+    Con Grupo GF es lo mismo con su Tarifario y `logistics.manage` (v1.31).
   - La Mesa de cierre lo avisa antes del clic y deja guardar igual: cargar una
     tarifa no recalcula los pedidos, y quien acaba de cargarla tiene que poder
     conciliar sin esperar.
@@ -8219,9 +8229,99 @@ Couriers que cobran y luego liquidan: Aliclik, Swayp, Axel y Urpi.
     con S/ 0 cambia en su próximo recálculo. Hasta entonces la Mesa no avisa
     antes del clic, pero la conciliación igual se niega, porque decide con el
     costo recalculado.
-  - El Tarifario de Grupo GF (`logistics_district_tariffs`, Grupo GF Courier ›
-    Tarifario, §29.8) no alimenta este costo. Si debe hacerlo, lo decide el
-    owner.
+  - **Grupo GF cobra lo de su Tarifario (v1.31, decisión del owner del
+    19-10-2026).** Desde el 21-10-2026 el costo logístico de un pedido cuyo
+    courier del costo es «propio» (`costCourier`: todos los motorizados de
+    Grupo GF, Alexis, Roy, Yhoni, Duglas y Yukio) sale del Tarifario de Grupo
+    GF (`logistics_district_tariffs`, Grupo GF Courier › Tarifario, §29.8), no
+    de Costos › Costos logísticos, que para «propio» ya no se mira: el mismo
+    precio en dos tablas acabaría distinto en una (`resolveGfCostTariff`,
+    `lib/gf-tariff.ts`).
+    - **Qué tarifa.** La del distrito del pedido, resuelto con el catálogo
+      canónico y sus alias, igual que la Mesa de ruta y el pago de motorizados
+      (`riderPayDistrictKey`: Surco → Santiago de Surco; Chosica y Lurigancho
+      Chosica → Lurigancho), activa y vigente el día del costo (abajo).
+      Gana la del contrato de la tienda (`logistics_service_agreements` activo
+      ese día) y, si no hay, la general, con la regla de la Mesa de ruta
+      (`resolveDistrictTariff`). A diferencia de la Mesa de ruta no exige
+      contrato ni mira pausas: el envío ya se hizo.
+    - **El día es el del último movimiento, como con cualquier courier.** El
+      día del costo de Grupo GF es el de los demás (`costDay`, arriba: la
+      regla del 16-10-2026, sin cambio), y la tarifa tiene que regir ese día.
+      La Mesa (`logisticsCostFactsFromRow`) y el servidor usan el mismo día.
+      El relleno de la caja «por definir» de la 0270 (§30.8) —su `UPDATE` y su
+      evento— mueve el último movimiento de esos pedidos al día en que se
+      aplica, así que toman la tarifa del Tarifario vigente ese día.
+    - **Primer intento:** el importe del distrito. **Intento adicional:** el
+      mismo importe por cada intento adicional de sus propias salidas: solo
+      cuentan los que reportan las salidas de «propio», no los de una guía
+      anterior de Aliclik, Swayp u otro courier, que no son visitas de Grupo GF
+      y cobrarlos a su tarifa inventaría un flete. Hoy esas salidas no reportan
+      intentos —las visitas de Grupo GF viven en las paradas del motorizado, la
+      columna de intentos de §9.3, que no entra al costo—, así que el costo de
+      Grupo GF es el del primer intento. **Pendiente del owner:** si cada
+      visita adicional «no entregada» (no estaba, no contesta) también se
+      cobra, o solo la entrega y el rechazo, que es lo único que se le paga al
+      motorizado (§29.10).
+    - **Sin devolución aparte.** Grupo GF no cobra la devolución: el rechazo ya
+      paga la tarifa del distrito (§29.8), así que un pedido devuelto de
+      «propio» no suma la línea «Devolución». El envío por agencia no es
+      reparto por distrito y sigue en Costos › Costos logísticos.
+    - **Sin tarifa, vacío.** Un distrito que no se reconoce, uno sin tarifa
+      vigente o un día del costo anterior a su vigencia dejan el costo vacío y
+      bloquean la conciliación; nunca S/ 0. El aviso manda a Grupo GF Courier ›
+      Tarifario y nombra el permiso que lo edita («Administrar Grupo GF»,
+      `logistics.manage`); a quien no lo tiene le dice a quién pedírsela, y la
+      Mesa solo le enseña «Abrir Tarifario» a quien lo tiene. Un distrito que no
+      se reconoce se corrige en el pedido: el Tarifario no crea distritos.
+    - **Un último movimiento anterior al 31-08-2026 sigue «falta tarifa».** El
+      Tarifario rige desde el 31-08-2026: sus 44 tarifas son generales y
+      empiezan ese día (medido el 20-10-2026). Si el día del costo —el último
+      movimiento del pedido— es anterior a la tarifa del distrito, el aviso
+      nombra ese día y la fecha que tiene el Tarifario («la de ese distrito
+      rige desde el DD-MM-AAAA») y no manda a cargarla: el Tarifario solo abre
+      vigencias después de la que rige (`saveDistrictTariff`), así que una
+      tarifa para días anteriores no se carga desde la pantalla. Kapta no
+      extiende la vigencia en código: lo decide el owner. Esos pedidos siguen
+      «falta tarifa» y no se concilian mientras su último movimiento siga
+      antes del 31-08-2026. Pero cualquier movimiento posterior del pedido
+      —«Observar liquidación», un comentario, el relleno de la 0270— es su
+      nuevo último movimiento y lleva el día del costo a ese día: el pedido
+      toma la tarifa vigente entonces y el siguiente «Conciliar liquidación»
+      pasa. Lo que cuenta es el último movimiento, no el día de la entrega: un
+      pedido entregado en agosto que se movió después toma la tarifa del día
+      de ese movimiento, como los ~575 que rellena la 0270 (§30.8). Medido el
+      22-10-2026 en Lima, «Pendiente de liquidación»: de los 2.833 pedidos de
+      Grupo GF, 1.044 se movieron por última vez del 31-08-2026 en adelante y
+      toman la tarifa de su distrito; 1.789 son anteriores y siguen «falta
+      tarifa» mientras no se muevan. Ninguno se podía conciliar antes de este
+      cambio: Costos › Costos logísticos no tiene ninguna tarifa de «propio» y
+      los 2.833 mostraban S/ 0. **Pendiente del owner:** qué vigencia toca a
+      los pedidos de Grupo GF cuyo último movimiento es anterior al
+      31-08-2026. Y si está bien que un movimiento posterior (observar la
+      liquidación, un comentario) les dé la tarifa vigente ese día, o el
+      bloqueo tiene que aguantar hasta que lo decida.
+    - **Si el Tarifario no se pudo leer** (un error de la base al recalcular),
+      el costo queda vacío y el aviso dice eso («No se pudo leer Grupo GF
+      Courier › Tarifario…», y que se vuelva a conciliar en un momento): ni
+      manda a activar Grupo GF ni a cargar una tarifa que quizá ya existe
+      (`sin_lectura`).
+    - La Mesa de cierre lo dice antes del clic con lo mismo que lee el servidor:
+      la ficha resuelve la tarifa de ese pedido (`gfCostTariffGap`) solo cuando
+      la Mesa va a avisar de una que falta. Si la encuentra, es la fila la que
+      está vieja (todavía no se recalculó, o la tarifa se cargó después): la
+      Mesa dice que el Tarifario ya la tiene y que «Conciliar liquidación» la
+      calcula al guardar, sin enseñar «Abrir Tarifario» (`vigente`); cargar
+      otra abriría una versión nueva sin necesidad.
+    - El Master lee el Tarifario una vez por recálculo y lo recuerda cinco
+      minutos por instancia, como `cost_tariffs` (`fetchTariffs`); una lectura
+      que falló no se recuerda, y el siguiente recálculo vuelve a leerlo.
+      «Conciliar liquidación» lo vuelve a leer.
+    - `MOM_RESOLUTION_VERSION` sube a `mom-v1.31` para que el cron recalcule
+      `logistics_cost` con la nueva fuente: los S/ 0 que quedaran de antes de
+      «Falta no es cero» pasan a la tarifa o a vacío. Pruebas:
+      `test/gf-tariff-resolve.test.ts`, `test/gf-tariff-master.test.ts` y
+      `test/gf-tariff-mom.test.ts`.
   - **Pendiente del owner:** Validar pagos y el estado de cuenta de Yape
     (§16.1, §16.2) cierran la liquidación al validar el cobro sin mirar el
     costo logístico; esta regla todavía no les aplica.
@@ -11107,6 +11207,19 @@ Grupo GF Courier. Sin coincidencia se muestra `Sin tarifa configurada`, no S/0,
 y se bloquea el cierre financiero. Daysi y Frankz pueden administrar tarifas;
 la pantalla permite edición por zona e importar/exportar Excel.
 
+**El costo logístico de Grupo GF sale de esta tabla (v1.31, 19-10-2026).** El
+Master calcula el flete de cada pedido de «propio» con la tarifa del distrito
+vigente el día del costo —su último movimiento, §14; la del contrato de la
+tienda si la hay, si no la general—, por el primer intento y por cada intento
+adicional de sus propias salidas, sin devolución aparte: el rechazo ya paga el
+distrito. Sin tarifa, o con un día del costo anterior a su vigencia, el costo
+queda vacío y la conciliación se bloquea (§14). Como una edición solo abre
+vigencia después de la que rige, esta pantalla no carga una tarifa para días
+anteriores a la vigente: hoy todas rigen desde el 31-08-2026, y un pedido cuyo
+último movimiento es anterior sigue «falta tarifa» mientras su último
+movimiento siga antes del 31-08-2026 (cualquier movimiento posterior, también
+observar la liquidación o un comentario, le da la tarifa vigente ese día; §14).
+
 La comisión general por pagos recibidos en el Yape de Grupo GF es **3.5 %**:
 
 - se calcula solo sobre el importe efectivamente pagado por Yape;
@@ -11709,9 +11822,10 @@ y, cerrada, el pedido entregado pasa a «Pendiente de liquidación» y con la
 liquidación a «Finalizado · Entregado cerrado», como cualquier Lima. Para que
 eso ocurra, una salida propia cuya parada se reportó entregada **cuenta como
 entregada** en las obligaciones de cierre: nadie escribe
-`delivery_status = entregado` en esas salidas, y sin esta regla todo pedido de
-Grupo GF caía en «Devolución física pendiente» o «Salida adicional activa» al
-cerrar la ruta. Reasignar un paquete postergado deja un `pickup_checked`
+`delivery_status = entregado` en esas salidas —salvo la caja «por definir» que
+rellena el cuaderno de Grupo GF (§30.8), que no tiene parada—, y sin esta regla
+todo pedido de Grupo GF caía en «Devolución física pendiente» o «Salida
+adicional activa» al cerrar la ruta. Reasignar un paquete postergado deja un `pickup_checked`
 nuevo, más reciente, y el pedido vuelve a «En reparto». La versión del
 resolver sube a `mom-v1.14` para que el cron reconcilie el histórico. Pruebas
 en `test/order-macro-stage.test.ts` («motorizado propio: lo que reporta mueve
@@ -12978,6 +13092,68 @@ hasta que exista una puerta propia. **Una fila con observación abierta no
 cruza al Master: alguien lee el motivo del motorizado y lo acepta primero.**
 El motivo lo escribe quien repartió; aceptarlo es de quien liquida
 (`sheets.edit`); aplicar al Master exige `master.edit`.
+
+**La caja de Grupo GF se rellena (decisión del owner, 19-10-2026).** Aplicar
+la entrega escribe el `status_override` y nada más: la caja se había armado y
+rotulado como salida «por definir» y nadie le puso el courier, así que el
+pedido quedaba entregado con su salida pendiente y la Mesa de cierre pedía
+«Salida adicional activa» (581 pedidos medidos el 20-10-2026, 437 de Kenku,
+casi todos con la entrega en la hoja de Alexis). Desde el 21-10-2026, cuando la
+entrega es de un motorizado de Grupo GF —la hoja de Reparto propio o la de
+Alexis (`config.courier = alexis`), que es motorizado de Grupo GF (decisión
+11, §9)— y la fila trae su fecha, Kapta **rellena** esa salida como entregada
+por el motorizado propio (`lib/own-salida.ts`), igual que el reporte de Urpi
+rellena la suya (§30.11) y las guías de courier la suya (§4): se conservan
+consecutivo, `output_code`, QR, preparación y custodia; pasa a courier
+`propio`, `created_via` y `delivered_source` `cuaderno_gf`, entregada, con la
+guía interna `MOM-<pedido>-PROPIO-<id>` y `dispatched_at` = `closed_at` = el
+día del cuaderno a mediodía de Lima (17:00Z, el instante del evento de la
+entrega). Una fecha futura del cuaderno es un error de tecleo: se acota a hoy,
+en la carga histórica y en «Aplicar al Master», para la entrega y para la
+caja. `closed_at` es de donde el Master saca el día de la entrega: sin él, la
+entrega quedaría con el día en que se rellenó. La vigencia de la tarifa de
+Grupo GF no sale de ahí sino del último movimiento (§14). Queda el evento
+`route_output_filled`. Lo hacen la carga histórica
+(`scripts/apply-cuaderno-history-to-master.ts`) y «Aplicar al Master» de esta
+hoja, solo con lo que la puerta entregó —ni lo rechazado ni los acompañantes
+(§32), que viajan en la caja de su principal—, y recalculan el Master de lo
+rellenado. **Solo si** es la única caja viva del pedido, es «por definir» de
+ruta manual pendiente en la empresa y sin transferir, está escaneada «listo
+despacho» y no quedó lista más de un día después del día del cuaderno (si no,
+es otra caja: la de un reenvío armado después). No se toca si el pedido tiene
+otra salida viva, una salida ya entregada (de cualquier courier) o filas del
+reporte de Urpi, porque no se sabe qué caja se llevó el motorizado; tampoco si
+una fila de cualquier hoja de un día posterior al del cuaderno lo da por
+devuelto, anulado o sin salida (un estado con efecto `devolucion`, `anulacion`
+o `sin_salida`), porque el paquete pudo volver al almacén: es la misma guarda
+`cuaderno_contradicho` de la 0270, y el pedido queda para revisar a mano. Si la
+caja ya salió con él en su ruta, su verdad es la parada (§29.13) y no hay nada
+que rellenar. Sin fecha en la fila, la entrega se marca igual y la caja queda para
+revisar a mano. Una entrega de otro courier (Urpi incluido) no rellena nada. El
+aviso de «Aplicar al Master» dice cuántas cajas pasaron a Grupo GF entregada y
+cuántas quedaron por revisar, también las que no se pudieron actualizar por un
+error al leerlas o escribirlas: volver a aplicar no las reintenta, porque el
+pedido ya quedó entregado, así que también se revisan a mano. El pedido sale de «Salida adicional activa» hacia
+«Pendiente de liquidación»; **no se cierra ninguna liquidación** (decisión 3
+del owner: el cierre histórico de la liquidación del cuaderno no se decidió), y
+su costo sale del Tarifario con el día de su último movimiento (§14), que el
+relleno lleva al día en que se hace: toma la tarifa vigente ese día si su
+distrito la tiene. Lo aplicado antes de esta regla lo rellena la migración 0270
+con los mismos valores (se aplica antes que el código, `DEPLOY.md`), solo en la
+clase `cuaderno_caja_sin_registrar` de la auditoría del atraso de Lima con
+salida «por definir», override de Alexis o de Reparto propio y fecha: 575
+pedidos medidos el 21-10-2026 (432 de Kenku Peru y 143 de Aurela), con días del
+cuaderno del 10-08 al 15-09-2026 (308 anteriores al 31-08-2026). Su último
+movimiento pasa a ser el día en que se aplica la 0270, así que toman la tarifa
+del Tarifario vigente ese día si su distrito la tiene, aunque el día del
+cuaderno sea anterior a la vigencia. Quedan fuera Urpi, el override sin
+courier, sin fecha, contradicho por una fila posterior, la fecha imposible y la
+caja dudosa, que se revisan a mano. La carga histórica
+no guarda el relleno en su bitácora y `scripts/rollback-master-backfill.ts` no
+lo deshace: si se revierte un lote, esos pedidos siguen entregados por su
+salida y el script los lista para revisar. Pruebas:
+`test/own-salida-plan.test.ts`, `test/own-salida-source.test.ts`,
+`test/own-salida-mom.test.ts` y `scripts/sql/cuaderno_s01_fill_smoke.sql`.
 
 **El lote del Master respeta la misma guarda (15-10-2026).** El cambio de
 estado en lote del Master (`applyOrderStatusBulk`) a «entregado» salta los

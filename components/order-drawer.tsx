@@ -662,6 +662,7 @@ export function OrderDrawer({
     canRefund: boolean;
     canReopen: boolean;
     canManageCosts: boolean;
+    canManageLogistics: boolean;
   };
   storeName: (id: string) => string;
   storeDomain: (id: string) => string | null;
@@ -1849,6 +1850,7 @@ export function OrderDrawer({
                     generalStatus={detail.row.general_status}
                     guides={detail.guides}
                     row={detail.row}
+                    costTariffGap={detail.gfCostTariffGap}
                     gfDeliveries={detail.gfDeliveries}
                     cancelledInShopify={Boolean(detail.shopifyCancelledAt)}
                     permissions={closurePermissions}

@@ -87,6 +87,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
           canRefund: permissions.can("closure.refund"),
           canReopen: permissions.can("master.override_status") && permissions.can("closure.finalize"),
           canManageCosts: permissions.can("costs.manage"),
+          canManageLogistics: permissions.can("logistics.manage"),
         }}
       />
     </DashboardShell>

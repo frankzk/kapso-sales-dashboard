@@ -541,4 +541,6 @@
 \ir migrations/0268_ventas_por_origen.sql
 \echo 'Applying 0269_invoices_backfill.sql'
 \ir migrations/0269_invoices_backfill.sql
+\echo 'Applying 0270_cuaderno_s01_fill.sql'
+\ir migrations/0270_cuaderno_s01_fill.sql
 \echo 'Done.'

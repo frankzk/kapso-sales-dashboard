@@ -130,7 +130,11 @@ describe("las tarifas se recuerdan", () => {
   it("el Master las lee por la memoria, con cinco minutos de vida", () => {
     const src = read("lib/order-master.ts");
     expect(src).toContain("export const TARIFF_CACHE_MS = 5 * 60_000;");
-    expect(src).toContain("const tariffs = await tariffCache.get([...orgIds].sort().join(\",\"), Date.now(), async () => {");
+    expect(src).toContain('const cacheKey = [...orgIds].sort().join(",");');
+    expect(src).toContain("const tariffs = await tariffCache.get(cacheKey, Date.now(), async () => {");
     expect(src).toContain('.from("cost_tariffs")');
+    // El Tarifario de Grupo GF (mom-v1.31), con la misma memoria y la misma clave.
+    expect(src).toContain("const gfTariffCache = ttlCache<GfTariffBook>(TARIFF_CACHE_MS);");
+    expect(src).toContain("out.gfTariffs = await gfTariffCache.get(cacheKey, Date.now(), () => loadGfTariffBook(admin, orgIds));");
   });
 });

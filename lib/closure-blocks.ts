@@ -5,10 +5,13 @@
 // si la pantalla y el servidor decidieran con dos reglas, la pantalla volvería a
 // ofrecer un botón que el servidor rechaza, que es justo lo que se corrige.
 
-import { costConceptLabel, costDay } from "@/lib/costs";
+import { costConceptLabel, costDay, isOwnCourier } from "@/lib/costs";
 import { costCourier, isKnownCourier } from "@/lib/delivery-courier";
 import { courierKey } from "@/lib/dispatch";
 import { courierDisplayName } from "@/lib/dispatched-with";
+import type { GfTariffCheck } from "@/lib/gf-tariff";
+import { PERMISSION_LABEL } from "@/lib/permissions";
+import { riderPayDistrictKey } from "@/lib/rider-pay";
 import { COURIER_TBD } from "@/lib/shipment-output";
 
 // ---------------------------------------------------------------------------
@@ -18,6 +21,14 @@ import { COURIER_TBD } from "@/lib/shipment-output";
 /** Dónde se cargan las tarifas que lee el costo logístico del Master. */
 export const COSTS_SCREEN_LABEL = "Costos › Costos logísticos";
 export const COSTS_SCREEN_HREF = "/dashboard/costos";
+
+/**
+ * Dónde se cargan las de Grupo GF («propio»): su Tarifario, no Costos (MOM §14,
+ * §29.8; mom-v1.31). La pestaña solo la ve quien tiene `logistics.manage`.
+ */
+export const GF_TARIFF_SCREEN_LABEL = "Grupo GF Courier › Tarifario";
+export const GF_TARIFF_SCREEN_HREF = "/dashboard/courier?tab=tariffs";
+export const GF_TARIFF_PERMISSION_LABEL = PERMISSION_LABEL["logistics.manage"];
 
 /** Dónde se rellena una caja «por definir» que entregó Urpi (MOM §30.11). */
 export const URPI_FILL_PATH_LABEL = "Urpi › Resultados («Pasar a salida de Urpi entregada»)";
@@ -42,8 +53,9 @@ export interface LogisticsCostFacts {
   district: string | null;
   /**
    * Día (YYYY-MM-DD) al que se imputa el costo (`costDay`): el del último
-   * movimiento del pedido. La tarifa tiene que regir ESE día; una cargada
-   * «desde hoy» no le llega a un pedido entregado antes. Sin dato, no se nombra.
+   * movimiento del pedido, también con Grupo GF. La tarifa tiene que regir ESE
+   * día; una cargada «desde hoy» no le llega a un pedido entregado antes. Sin
+   * dato, no se nombra.
    */
   day?: string | null;
   /**
@@ -51,6 +63,20 @@ export interface LogisticsCostFacts {
    * se la pida a quien administra Costos. Sin dato, como si pudiera.
    */
   canManageCosts?: boolean;
+  /**
+   * Grupo GF: por qué su Tarifario no le dio tarifa y, si la del distrito
+   * empieza después del día, desde cuándo rige (`resolveGfCostTariff`,
+   * lib/gf-tariff.ts). Lo sabe el servidor al recalcular, y la ficha cuando
+   * lo lee —que además puede saber que ya está `vigente` y la fila es vieja—;
+   * sin dato, el aviso no lo afirma.
+   */
+  tarifario?: GfTariffCheck | null;
+  /**
+   * ¿Quien lee puede editar el Tarifario de Grupo GF (`logistics.manage`)? Con
+   * false se le dice que se la pida a quien administra Grupo GF. Sin dato, como
+   * si pudiera.
+   */
+  canManageLogistics?: boolean;
 }
 
 /** Lo que la fila del Master sabe del costo: lo usan la Mesa y el respaldo del servidor. */
@@ -92,12 +118,53 @@ export function logisticsCostFactsFromRow(row: LogisticsCostRow): LogisticsCostF
 }
 
 /**
+ * ¿La tarifa que falta es del Tarifario de Grupo GF? Con «propio», salvo el
+ * envío por agencia, que no es reparto por distrito y sigue en Costos.
+ */
+function ownTariffApplies(facts: Pick<LogisticsCostFacts, "courier" | "missing">): boolean {
+  return isOwnCourier(facts.courier) && !(facts.missing ?? []).includes("envio_agencia");
+}
+
+/**
+ * Por qué el Tarifario no le da tarifa, si se sabe (o, en la ficha, que ya la
+ * tiene). Sin el dato del servidor, un distrito que no se reconoce ya lo dice
+ * el propio pedido (el mismo `riderPayDistrictKey` que usa el Tarifario); si el
+ * distrito no se pasó, no se afirma nada.
+ */
+function ownTariffGap(facts: Pick<LogisticsCostFacts, "tarifario"> & { district?: string | null }): GfTariffCheck["reason"] | null {
+  if (facts.tarifario) return facts.tarifario.reason;
+  if (facts.district !== undefined && !riderPayDistrictKey(facts.district)) return "sin_distrito";
+  return null;
+}
+
+/**
  * ¿El bloqueo se arregla cargando una tarifa? Solo si se sabe el courier: sin
  * él (vacío o «por definir») ninguna tarifa con courier le aplica, y una sin
- * courier se aplicaría a todos los couriers sin tarifa propia.
+ * courier se aplicaría a todos los couriers sin tarifa propia. Con Grupo GF,
+ * tampoco si el distrito no se reconoce (se corrige en el pedido), si su
+ * tarifa empieza después del día (la pantalla no abre una vigencia anterior),
+ * si el Tarifario no se pudo leer ni si ya la tiene (la fila es vieja).
  */
-export function costBlockNeedsTariff(facts: Pick<LogisticsCostFacts, "cost" | "courier">): boolean {
-  return facts.cost === null && isKnownCourier(facts.courier);
+export function costBlockNeedsTariff(
+  facts: Pick<LogisticsCostFacts, "cost" | "courier"> &
+    Partial<Pick<LogisticsCostFacts, "district" | "missing" | "tarifario">>,
+): boolean {
+  if (facts.cost !== null || !isKnownCourier(facts.courier)) return false;
+  if (!ownTariffApplies(facts)) return true;
+  const gap = ownTariffGap(facts);
+  return gap === null || gap === "sin_tarifa";
+}
+
+/** La pantalla donde se carga la tarifa que falta y el permiso que la abre. */
+export function costTariffScreen(facts: Pick<LogisticsCostFacts, "courier" | "missing">): {
+  href: string;
+  /** El texto del enlace. */
+  link: string;
+  permission: "costs.manage" | "logistics.manage";
+} {
+  return ownTariffApplies(facts)
+    ? { href: GF_TARIFF_SCREEN_HREF, link: "Abrir Tarifario", permission: "logistics.manage" }
+    : { href: COSTS_SCREEN_HREF, link: "Abrir Costos logísticos", permission: "costs.manage" };
 }
 
 /**
@@ -130,6 +197,7 @@ export function liquidationCostBlock(facts: LogisticsCostFacts): string | null {
       " courier no es la salida: se aplicaría a todos los couriers sin tarifa propia."
     );
   }
+  if (ownTariffApplies(facts)) return ownTariffBlock(facts, zero);
   const scope = `${COSTS_SCREEN_LABEL} (courier «${token}»)${facts.day ? `, vigente desde el ${dayEs(facts.day)} o antes,` : ""}`;
   const load =
     facts.canManageCosts === false
@@ -139,6 +207,69 @@ export function liquidationCostBlock(facts: LogisticsCostFacts): string | null {
     ? " Una que empiece después de ese día no le llega: el costo se calcula con la del día de su último movimiento."
     : "";
   return `Falta ${what} de ${courierDisplayName(token)}${where}. ${zero} ${load}${why}`;
+}
+
+/**
+ * El aviso de Grupo GF: su tarifa sale del Tarifario (mom-v1.31), un solo
+ * importe por distrito, así que no se nombran conceptos. Manda a Grupo GF
+ * Courier › Tarifario y nombra el permiso que lo edita.
+ */
+function ownTariffBlock(facts: LogisticsCostFacts, zero: string): string {
+  const district = facts.district?.trim() || null;
+  const where = district ? ` para ${district}` : "";
+  const day = facts.day ? dayEs(facts.day) : null;
+  const gap = ownTariffGap(facts);
+  const permission = `«${GF_TARIFF_PERMISSION_LABEL}»`;
+  // La ficha la encontró: es la fila la que todavía no la tiene. No se pide
+  // cargar otra —abriría una versión nueva sin necesidad—; el servidor, que no
+  // sabe de filas viejas, recalcula y dice lo que falte.
+  if (gap === "vigente") {
+    return (
+      `${GF_TARIFF_SCREEN_LABEL} ya tiene la tarifa de Grupo GF${where}${day ? ` del ${day}` : ""}, pero este pedido` +
+      " todavía no la tiene en su costo. «Conciliar liquidación» lo vuelve a calcular al guardar; si falta otra" +
+      " cosa, lo dirá."
+    );
+  }
+  // Sin leer el Tarifario no se sabe qué falta: ni se manda a activar Grupo GF
+  // ni a cargar una tarifa que quizá ya existe.
+  if (gap === "sin_lectura") {
+    return (
+      `No se pudo leer ${GF_TARIFF_SCREEN_LABEL}, así que falta la tarifa de Grupo GF${where}. ${zero}` +
+      " Vuelve a conciliar en un momento: es un error de lectura, no una tarifa que cargar."
+    );
+  }
+  if (gap === "sin_distrito") {
+    return (
+      `Falta la tarifa de Grupo GF: ${district ? `el distrito «${district}» no se reconoce en el catálogo de Lima` : "el pedido no tiene distrito"},` +
+      ` así que ninguna tarifa de ${GF_TARIFF_SCREEN_LABEL} le aplica. ${zero} Corrige el distrito en el pedido y vuelve` +
+      " a conciliar: el Tarifario no crea distritos."
+    );
+  }
+  if (gap === "sin_proveedor") {
+    return (
+      `Falta la tarifa de Grupo GF${where}: Grupo GF Courier no está activado en esta organización, así que no tiene` +
+      ` Tarifario. ${zero} Lo activa y carga su Tarifario quien tenga ${permission}.`
+    );
+  }
+  const since = gap === "antes_de_vigencia" ? facts.tarifario?.since ?? null : null;
+  if (since) {
+    return (
+      `Falta la tarifa de Grupo GF${where}${day ? ` del ${day}` : ""}: en ${GF_TARIFF_SCREEN_LABEL} la de ese distrito` +
+      ` rige desde el ${dayEs(since)}, y el costo se calcula con la del día de su último movimiento. ${zero}` +
+      ` El Tarifario solo abre vigencias después de la que rige, así que una tarifa para antes del ${dayEs(since)}` +
+      " no se carga desde la pantalla: lo decide el dueño."
+    );
+  }
+  const scope = `${GF_TARIFF_SCREEN_LABEL}${day ? `, vigente desde el ${day} o antes,` : ""}`;
+  const load =
+    facts.canManageLogistics === false
+      ? `Pídele a quien administra Grupo GF (${permission}) que la cargue en ${scope} y luego vuelve a conciliar.`
+      : `Cárgala en ${scope} y vuelve a conciliar.`;
+  const why = day
+    ? " Una que empiece después de ese día no le llega: el costo se calcula con la del día de su último movimiento."
+    : "";
+  const which = gap === "sin_tarifa" ? ": su Tarifario no tiene ninguna vigente para ese distrito" : " en su Tarifario";
+  return `Falta la tarifa de Grupo GF${where}${which}. ${zero} ${load}${why}`;
 }
 
 /** YYYY-MM-DD → DD-MM-YYYY, como lo escribe la app. */

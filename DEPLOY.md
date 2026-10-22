@@ -3232,3 +3232,221 @@ Sin migraciones, variables de entorno, RPC ni crons nuevos.
 **Qué mirar después.** La próxima pasada del barrido trae `sinFicha` y
 `fichasRecuperadas` en su informe. Terminar la ruta de Yhoni del 01/10
 (`00bd7063`) nombra a #KP137541 en «Ojo:» y lo deja anulado.
+
+### 21-10-2026 · Grupo GF cobra lo de su Tarifario (`mom-v1.31`) y la caja S01 del cuaderno (0270)
+
+Dos decisiones del owner del 19-10-2026 (MOM §14, §29.8, §30.8). Sin variables
+de entorno, RPC ni crons nuevos.
+
+1. **Migración `0270_cuaderno_s01_fill.sql`, a mano y ANTES del código.**
+   **Pendiente de aplicar en producción.** Es un relleno de datos, no de
+   esquema: la caja S01 «por definir» de los pedidos que el cuaderno de Alexis
+   o de Reparto propio da por entregados pasa a salida entregada de Grupo GF
+   Courier (courier `propio`, `created_via` y `delivered_source`
+   `cuaderno_gf`, `dispatched_at` = `closed_at` = el día del cuaderno a las
+   17:00Z), con un evento `route_output_filled` por salida. Conserva
+   consecutivo, `output_code`, QR, preparación y custodia, y **no cierra
+   ninguna liquidación**: los pedidos dejan «Salida adicional activa» y pasan a
+   «Pendiente de liquidación». Sin `drop` ni `begin`/`commit`; correrla otra
+   vez escribe 0 filas. Quien la aplica pone la transacción y el freno:
+
+   ```bash
+   psql "$DATABASE_URL" <<'SQL'
+   begin;
+   set local lock_timeout = '15s';
+   \i db/migrations/0270_cuaderno_s01_fill.sql
+   commit;
+   SQL
+   ```
+
+   El `NOTICE` «0270: N caja(s) «por definir» pasaron a salida entregada de
+   Grupo GF» tiene que dar lo mismo que el conteo previo. Va antes del código
+   porque el recálculo no depende de él: el `UPDATE` mueve
+   `shipments.updated_at`, `order_master_stale` da esos pedidos por desfasados
+   y el barrido los recalcula con el código que haya; al salir `mom-v1.31` se
+   recalculan otra vez. El día de su costo es el de su último movimiento, y el
+   relleno (el `UPDATE` y su evento) lo lleva al día en que se aplica: con
+   `mom-v1.31` toman la tarifa del Tarifario vigente ese día si su distrito la
+   tiene, también los 308 con día del cuaderno anterior al 31-08-2026 (punto 4).
+
+   **Conteo previo** (solo lectura; el 21-10-2026, 575: 432 de Kenku Peru y 143
+   de Aurela, días del cuaderno del 10-08 al 15-09-2026). Es el mismo filtro de
+   la migración, el mismo con el que se midieron las 575; si sale distinto, son
+   cambios de datos desde el 21-10 (cajas resueltas o anuladas a mano, filas de
+   hoja posteriores que lo contradicen, pedidos que el barrido sacó o metió en
+   «Salida adicional activa»): revisar la diferencia antes de aplicar:
+
+   ```sql
+   with pop as (
+     select om.order_id, om.store_id, om.order_name
+       from order_master om
+       join orders o on o.id = om.order_id
+      where om.coverage = 'lima'
+        and om.macro_stage = 'por_cerrar'
+        and om.macro_substage = 'salida_adicional_activa'
+        and om.status_source = 'manual'
+        and o.cancelled_at is null
+   ),
+   -- Las salidas vivas, como en la auditoría y en `planOwnSalida`.
+   live as (
+     select x.id, x.order_id, x.output_code, x.courier, x.created_via, x.delivery_status, x.custody_state,
+            x.custody_transferred_at, x.preparation_state, x.ready_at, x.created_at
+       from shipments x
+       join pop p on p.order_id = x.order_id
+      where x.delivery_status in ('pendiente', 'en_ruta')
+        and x.returned_at is null
+        and coalesce(x.custody_state, '') <> 'devuelto'
+   ),
+   a as (
+     select distinct on (l.order_id) l.*, count(*) over (partition by l.order_id) as n_live
+       from live l
+      order by l.order_id, l.created_at desc
+   ),
+   ov as (
+     select distinct on (e.order_id) e.order_id, lower(btrim(e.courier)) as rider, e.new_status,
+            e.payload->>'fecha' as fecha, e.occurred_at
+       from order_events e
+       join pop p on p.order_id = e.order_id
+      where e.kind = 'status_override'
+      order by e.order_id, e.occurred_at desc, e.created_at desc
+   ),
+   target as (
+     select p.order_id, p.store_id, a.id as shipment_id, ov.rider, ov.fecha,
+            -- `manualRouteGuideCode(order_name, id, 'propio')` (lib/shipment-output.ts).
+            'MOM-' || coalesce(
+              nullif(regexp_replace(regexp_replace(upper(regexp_replace(btrim(coalesce(p.order_name, '')), '^#+', '')),
+                                                   '[^A-Z0-9_-]+', '', 'g'), '_+', '-', 'g'), ''),
+              upper(left(a.id::text, 8))
+            ) || '-PROPIO-' || upper(left(a.id::text, 8)) as guide_code
+       from pop p
+       join a on a.order_id = p.order_id
+       join ov on ov.order_id = p.order_id
+      where a.n_live = 1
+        and a.courier = 'por_definir'
+        and a.created_via = 'mom_manual_route'
+        and a.delivery_status = 'pendiente'
+        and coalesce(a.custody_state, 'empresa') = 'empresa'
+        and a.custody_transferred_at is null
+        and a.preparation_state = 'listo_despacho'
+        and ov.new_status = 'entregado'
+        and ov.rider in ('alexis', 'propio')
+        and ov.fecha ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
+        and ov.fecha <= '2026-10-21'
+        and not exists (select 1 from shipments y where y.order_id = p.order_id and y.delivery_status = 'entregado')
+        and not exists (select 1 from urpi_report_rows r where r.order_id = p.order_id)
+        and (ov.occurred_at at time zone 'America/Lima')::date >= (a.created_at at time zone 'America/Lima')::date - 30
+        and ov.occurred_at >= coalesce(a.ready_at, a.created_at) - interval '1 day'
+        and not exists (
+          select 1
+            from sheet_rows r
+            join sheets sh on sh.id = r.sheet_id
+            join sheet_domain_statuses st on st.domain_id = sh.domain_id and st.code = r.values->>'estado'
+           where r.order_id = p.order_id
+             and r.values->>'fecha' > ov.fecha
+             and st.effect in ('devolucion', 'anulacion', 'sin_salida')
+        )
+   )
+   select coalesce(st.name, 'TOTAL') as tienda, count(*) as cajas,
+          count(*) filter (where t.rider = 'alexis') as alexis,
+          count(*) filter (where t.rider = 'propio') as propio,
+          min(t.fecha) as desde, max(t.fecha) as hasta
+     from target t
+     join stores st on st.id = t.store_id
+    group by rollup (st.name)
+    order by st.name nulls last;
+   ```
+
+   **Comprobación después** (solo lectura): `eventos_0270` = `salidas_0270` =
+   el `NOTICE`, `con_fecha_rara` = 0 y el conteo previo, otra vez, en 0.
+   Cuando el barrido o `mom-v1.31` los recalculen, los pedidos están en «Por
+   cerrar · Pendiente de liquidación» y `desfasados` baja a 0:
+
+   ```sql
+   -- 1) Lo que escribió: tantas salidas como eventos, y el conteo previo en 0.
+   select (select count(*) from order_events e
+            where e.kind = 'route_output_filled' and e.payload->>'backfill' = 'true'
+              and e.payload ? 'rider' and e.courier = 'propio') as eventos_0270,
+          (select count(*) from shipments s
+            where s.created_via = 'cuaderno_gf' and s.courier = 'propio' and s.delivery_status = 'entregado'
+              and exists (select 1 from order_events e where e.shipment_id = s.id and e.kind = 'route_output_filled'
+                           and e.payload->>'backfill' = 'true')) as salidas_0270,
+          (select count(*) from shipments s
+            where s.created_via = 'cuaderno_gf'
+              and (s.closed_at is null or s.dispatched_at is distinct from s.closed_at
+                   or to_char(s.closed_at at time zone 'UTC', 'HH24:MI') <> '17:00')) as con_fecha_rara;
+   -- 2) Dónde quedaron los pedidos, cuando el barrido (o mom-v1.31) los recalcule:
+   --    Por cerrar · Pendiente de liquidación; «desfasados» baja a 0.
+   select om.macro_stage, om.macro_substage, count(*) as pedidos,
+          count(*) filter (where s.updated_at > om.recomputed_at) as desfasados
+     from shipments s
+     join order_master om on om.order_id = s.order_id
+    where s.created_via = 'cuaderno_gf'
+      and exists (select 1 from order_events e where e.shipment_id = s.id and e.kind = 'route_output_filled'
+                   and e.payload->>'backfill' = 'true')
+    group by 1, 2
+    order by 3 desc;
+   ```
+
+2. **El código.** Desde aquí, «Aplicar al Master» de Liquidaciones 2 y la carga
+   histórica (`scripts/apply-cuaderno-history-to-master.ts`) rellenan la caja
+   al aplicar la entrega (`lib/own-salida.ts`), con las mismas condiciones
+   (también la de `cuaderno_contradicho`: una fila posterior de cualquier hoja
+   que lo da por devuelto, anulado o sin salida lo deja para revisar). Las dos
+   acotan a hoy una fecha futura del cuaderno.
+   `scripts/rollback-master-backfill.ts` no deshace ese relleno.
+3. **Grupo GF cobra lo de su Tarifario.** El costo logístico de «propio» sale
+   de `logistics_district_tariffs` (Grupo GF Courier › Tarifario), no de
+   `cost_tariffs`: la tarifa del distrito vigente el día del costo (el último
+   movimiento, como con cualquier courier), la del contrato de la tienda si la
+   hay, por el primer intento y cada intento adicional de sus propias salidas
+   (no los de Aliclik o Swayp; hoy solo el primero), sin devolución aparte. El
+   Master lee con la clave de servicio `logistics_providers` (código
+   `grupo-gf-courier`),
+   `logistics_service_agreements` y `logistics_district_tariffs` (0134 y 0136,
+   ya en producción) y las recuerda cinco minutos por instancia, como
+   `cost_tariffs`; una lectura que falla no se recuerda y el aviso dice «No se
+   pudo leer…». Los demás couriers no cambian.
+4. **`MOM_RESOLUTION_VERSION` sube a `mom-v1.31`**: el cron recalcula poco a
+   poco todo el Master. Para «propio», `logistics_cost` pasa a la tarifa del
+   distrito si su último movimiento es del 31-08-2026 en adelante (las 44
+   tarifas rigen desde ese día) y queda vacío si es anterior, si el distrito no
+   se reconoce o si no tiene tarifa. Los S/ 0 viejos de «propio» desaparecen.
+   Un pedido de Grupo GF cuyo último movimiento es anterior al 31-08-2026 sigue
+   «falta tarifa» (el aviso nombra ese día y desde cuándo rige la del
+   distrito) y no se concilia mientras su último movimiento siga antes de esa
+   fecha: la pantalla del Tarifario no abre vigencias anteriores a la que rige
+   (`saveDistrictTariff`), y cubrir esos días es una decisión del owner que
+   pediría un cambio de datos. Pero cualquier movimiento posterior del pedido
+   («Observar liquidación», un comentario, el relleno de la 0270) lleva el día
+   del costo a ese día: toma la tarifa vigente entonces y el siguiente
+   «Conciliar liquidación» pasa. Si eso vale o el bloqueo tiene que aguantar
+   hasta que el owner decida, es punto suyo (MOM §14).
+
+   **Qué mirar después** (solo lectura, cuando termine el barrido):
+
+   ```sql
+   select macro_version, (logistics_cost is not null) as con_costo, count(*)
+     from order_master
+    where coverage = 'lima' and macro_stage = 'por_cerrar'
+      and 'pendiente_liquidacion' = any(macro_reasons)
+      and (current_courier = 'propio' or delivered_courier = 'propio' or last_courier = 'propio'
+           or exists (select 1 from unnest(dispatched_with) c where c = 'gf' or c like 'gf:%'))
+    group by 1, 2
+    order by 1, 2;
+   ```
+
+   Con `mom-v1.31`, para «propio» quedan con costo los que se movieron por
+   última vez del 31-08-2026 en adelante y tienen distrito con tarifa, y sin él
+   los demás. Medido el 22-10-2026 por último movimiento: de los 2.833 pedidos
+   de Grupo GF en «Pendiente de liquidación», 1.044 son del 31-08-2026 en
+   adelante (esperado: con costo, salvo distrito sin tarifa) y 1.789 anteriores
+   (esperado: sin costo). Hoy los 2.833 muestran S/ 0 y ninguno se concilia
+   (Costos no tiene tarifas de «propio»). Los ~575 de la 0270 se suman a los
+   que tienen costo si su distrito tiene tarifa: su último movimiento es el día
+   en que se aplicó.
+
+**Marcha atrás.** Para la tarifa basta revertir el código: las filas en
+`mom-v1.31` no coinciden con la versión anterior y el cron las vuelve a
+calcular con `cost_tariffs`. La 0270 no se deshace sola: las salidas
+rellenadas se reconocen por su `route_output_filled` con
+`payload.backfill = true`.

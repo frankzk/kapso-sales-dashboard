@@ -83,9 +83,10 @@ describe("masterLogisticsCost", () => {
 });
 
 describe("costCourier — con qué courier se busca la tarifa de una entrega sin courier", () => {
-  const propio = tariff({ courier: "propio", amount: 7 });
+  // Grupo GF cobra lo de su Tarifario (mom-v1.31): la tarifa del distrito llega
+  // ya resuelta en `ownDistrictRate` (test/gf-tariff-resolve.test.ts).
   const costOf = (courier: string | null) =>
-    masterLogisticsCost([propio], { ...base, ctx: { ...base.ctx, courier } });
+    masterLogisticsCost([], { ...base, ctx: { ...base.ctx, courier }, ownDistrictRate: 7 });
 
   it("entregado con la caja «por definir» y «Salió con» Grupo GF: la tarifa de «propio»", () => {
     const courier = costCourier({ generalStatus: "entregado", currentCourier: "por_definir", dispatchedWith: ["gf:Roy"] });
@@ -197,11 +198,31 @@ describe("recomputeOrderMaster escribe null cuando falta la tarifa", () => {
 
   it("la entrega del cuaderno de Grupo GF, sin salida, se calcula con la tarifa de «propio»", async () => {
     // 1.868 entregas así esperaban liquidación el 16-10-2026: con el courier
-    // vacío, ni una tarifa de «propio» les llegaba.
+    // vacío, ni una tarifa de «propio» les llegaba. Desde mom-v1.31 la tarifa
+    // es la del distrito en el Tarifario de Grupo GF; una de «propio» en
+    // `cost_tariffs` ya no se mira.
     const tables = {
       orders: [ORDER],
       stores: STORES,
-      cost_tariffs: [{ ...tariff({ courier: "propio", amount: 7 }), org_id: "org-1" }],
+      cost_tariffs: [{ ...tariff({ courier: "propio", amount: 99 }), org_id: "org-1" }],
+      logistics_providers: [{ id: "gf", org_id: "org-1" }],
+      logistics_service_agreements: [],
+      logistics_district_tariffs: [
+        {
+          id: "gt-ate",
+          provider_id: "gf",
+          agreement_id: null,
+          district_key: "ate",
+          zone: null,
+          delivery_amount: "7.00",
+          rejection_amount: "7.00",
+          includes_igv: true,
+          currency: "PEN",
+          effective_from: "2026-08-31",
+          effective_to: null,
+          status: "active",
+        },
+      ],
       order_events: [
         { order_id: "order-1", kind: "status_override", occurred_at: "2026-10-05T15:00:00.000Z", courier: null, new_status: "entregado", new_operational: null },
       ],

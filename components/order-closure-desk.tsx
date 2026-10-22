@@ -8,10 +8,10 @@ import type {
 import { cn } from "@/components/ui";
 import { Badge, Banner, CARD_ZONE, FIELD, OpsButton, SectionHead } from "@/components/ops-ui";
 import {
-  COSTS_SCREEN_HREF,
   GF_ROUTE_PATH_LABEL,
   OVERRIDE_PERMISSION_LABEL,
   costBlockNeedsTariff,
+  costTariffScreen,
   gfOpenRouteBlock,
   gfRouteReportHref,
   liquidationCostBlock,
@@ -19,6 +19,7 @@ import {
   type ClosureGfDelivery,
   type LogisticsCostRow,
 } from "@/lib/closure-blocks";
+import type { GfTariffCheck } from "@/lib/gf-tariff";
 import { macroSubstageLabel, type MacroSubstage } from "@/lib/order-macro-stage";
 import { outputDisplayCode } from "@/lib/shipment-output";
 import type { ShipmentRow } from "@/lib/types";
@@ -32,6 +33,8 @@ interface ClosurePermissions {
   canReopen: boolean;
   /** `costs.manage`: puede cargar la tarifa que falta en Costos › Costos logísticos. */
   canManageCosts: boolean;
+  /** `logistics.manage`: puede cargar la de Grupo GF en Grupo GF Courier › Tarifario. */
+  canManageLogistics: boolean;
 }
 
 interface ActionMeta {
@@ -138,6 +141,7 @@ export function OrderClosureDesk({
   generalStatus,
   guides,
   row,
+  costTariffGap,
   gfDeliveries,
   cancelledInShopify,
   permissions,
@@ -153,6 +157,12 @@ export function OrderClosureDesk({
    * clic, con el courier y el día que usa el recálculo.
    */
   row?: LogisticsCostRow;
+  /**
+   * Grupo GF (`detail.gfCostTariffGap`): por qué su Tarifario no le da tarifa y
+   * desde cuándo rige la del distrito, lo mismo que dirá el servidor; o que ya
+   * la tiene y la fila es vieja (`vigente`).
+   */
+  costTariffGap?: GfTariffCheck | null;
   /** Grupo GF (`detail.gfDeliveries`): con ellas la Mesa sabe si la ruta sigue abierta. */
   gfDeliveries?: readonly ClosureGfDelivery[];
   /** `orders.cancelled_at` existe: cerrar la ruta no lo marca entregado (MOM §11.4). */
@@ -177,14 +187,24 @@ export function OrderClosureDesk({
     stage === "por_cerrar" ? gfOpenRouteBlock(guides, gfDeliveries ?? [], { cancelledInShopify }) : null;
   const gfRouteOpen = Boolean(gfRouteBlock);
   const liquidationOpen = reasons.includes("pendiente_liquidacion") || reasons.includes("liquidacion_observada");
-  const costFacts = stage === "por_cerrar" && liquidationOpen && row ? logisticsCostFactsFromRow(row) : null;
+  const costFacts =
+    stage === "por_cerrar" && liquidationOpen && row
+      ? { ...logisticsCostFactsFromRow(row), tarifario: costTariffGap ?? null }
+      : null;
   const costBlock = costFacts
-    ? liquidationCostBlock({ ...costFacts, canManageCosts: permissions.canManageCosts })
+    ? liquidationCostBlock({
+        ...costFacts,
+        canManageCosts: permissions.canManageCosts,
+        canManageLogistics: permissions.canManageLogistics,
+      })
     : null;
-  // Una tarifa lo arregla solo si se sabe el courier; el enlace a Costos, además,
-  // solo a quien puede cargarla.
+  // Una tarifa lo arregla solo si se sabe el courier; el enlace a la pantalla
+  // —Costos, o el Tarifario para Grupo GF—, además, solo a quien puede cargarla.
   const costNeedsTariff = Boolean(costFacts && costBlockNeedsTariff(costFacts));
-  const costLink = costNeedsTariff && permissions.canManageCosts;
+  const costScreen = costTariffScreen(costFacts ?? { courier: null });
+  const costLink =
+    costNeedsTariff &&
+    (costScreen.permission === "logistics.manage" ? permissions.canManageLogistics : permissions.canManageCosts);
   const actions = useMemo(() => {
     const next: ClosureActionKey[] = [];
     if (stage === "finalizado" && permissions.canReopen) next.push("reopen");
@@ -362,8 +382,8 @@ export function OrderClosureDesk({
           {costLink && (
             <>
               {" "}
-              <a href={COSTS_SCREEN_HREF} className={DESK_LINK}>
-                Abrir Costos logísticos
+              <a href={costScreen.href} className={DESK_LINK}>
+                {costScreen.link}
               </a>
             </>
           )}

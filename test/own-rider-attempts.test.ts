@@ -53,7 +53,10 @@ describe("intentos del motorizado propio (MOM §14, 15-10-2026)", () => {
     expect(master).toContain("(sum, g) => sum + Math.max(0, courierVisitAttempts(g, orderEvents) - (g.aliclik_attempts ?? g.reroute_attempts ?? 0)),");
     expect(master).toContain("ownRiderAttempts(stateEvents, riderStopsByOrder.get(order.id) ?? []) +");
     expect(master).toContain("(urpiAttemptsByOrder.get(order.id) ?? 0),");
-    expect(master).toContain("attempts: state.attemptCount,");
+    // El costo, con los intentos del courier; Grupo GF, solo los de sus propias
+    // salidas (mom-v1.31), nunca estas visitas ni las de otro courier.
+    expect(master).toContain("        : state.attemptCount,");
+    expect(master).toContain(".filter((s) => isOwnCourier(s.courier))");
   });
   it("el MOM lo documenta", () => {
     const mom = read("docs/mom/master-pedidos-v1.md").replace(/\s+/g, " ");
