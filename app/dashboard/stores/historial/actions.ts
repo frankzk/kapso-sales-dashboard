@@ -9,7 +9,17 @@ import { revalidatePath } from "next/cache";
 import { createAdminSupabase } from "@/lib/db";
 import { getAccessibleStores, getCurrentUser } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
-import type { HistoryCustomer, HistoryFileKind, HistoryOrder } from "@/lib/shopify-history";
+import { getStoreCreds } from "@/lib/ingest";
+import { shopifyGraphQL } from "@/lib/shopify";
+import type { HistoryCustomer, HistoryFileKind, HistoryLineItem, HistoryOrder } from "@/lib/shopify-history";
+import { mergeLineItems, type BulkKind } from "@/lib/shopify-history-bulk";
+import {
+  IMPORT_COLUMNS,
+  advanceHistoryImport as advanceImport,
+  startHistoryImport as startImport,
+  type HistoryImportRow,
+  type RowWriter,
+} from "@/lib/shopify-history-import";
 
 const BUCKET = "shopify-history";
 const PATH = "/dashboard/stores/historial";
@@ -93,6 +103,78 @@ const rawOf = (v: unknown): Record<string, string> => {
   return out;
 };
 
+/** Un pedido del historial, saneado, como fila de `shopify_history_orders`. */
+function orderRow(storeId: string, o: HistoryOrder, link: { file_id: string } | { import_id: string }) {
+  return {
+    store_id: storeId,
+    order_name: str(o?.order_name, 60),
+    shopify_order_id: str(o.shopify_order_id, 40),
+    created_at: iso(o.created_at),
+    paid_at: iso(o.paid_at),
+    fulfilled_at: iso(o.fulfilled_at),
+    cancelled_at: iso(o.cancelled_at),
+    financial_status: str(o.financial_status, 60),
+    fulfillment_status: str(o.fulfillment_status, 60),
+    currency: str(o.currency, 10),
+    subtotal: num(o.subtotal),
+    shipping: num(o.shipping),
+    taxes: num(o.taxes),
+    total: num(o.total),
+    discount_code: str(o.discount_code, 200),
+    discount_amount: num(o.discount_amount),
+    refunded_amount: num(o.refunded_amount),
+    payment_method: str(o.payment_method, 200),
+    email: str(o.email, 320),
+    phone: str(o.phone, 40),
+    phone_norm: str(o.phone_norm, 20),
+    customer_name: str(o.customer_name, 200),
+    shipping_name: str(o.shipping_name, 200),
+    shipping_address1: str(o.shipping_address1, 500),
+    shipping_address2: str(o.shipping_address2, 500),
+    shipping_city: str(o.shipping_city, 200),
+    shipping_province: str(o.shipping_province, 200),
+    shipping_zip: str(o.shipping_zip, 20),
+    shipping_country: str(o.shipping_country, 60),
+    shipping_phone: str(o.shipping_phone, 40),
+    notes: str(o.notes, 4000),
+    tags: str(o.tags, 2000),
+    source: str(o.source, 100),
+    line_items: Array.isArray(o.line_items) ? o.line_items.slice(0, 200) : [],
+    raw: rawOf(o.raw),
+    ...link,
+    imported_at: new Date().toISOString(),
+  };
+}
+
+/** Un cliente del historial, saneado, como fila de `shopify_history_customers`. */
+function customerRow(storeId: string, c: HistoryCustomer, link: { file_id: string } | { import_id: string }) {
+  return {
+    store_id: storeId,
+    customer_key: str(c?.customer_key, 320),
+    shopify_customer_id: str(c.shopify_customer_id, 40),
+    first_name: str(c.first_name, 200),
+    last_name: str(c.last_name, 200),
+    email: str(c.email, 320),
+    phone: str(c.phone, 40),
+    phone_norm: str(c.phone_norm, 20),
+    company: str(c.company, 200),
+    address1: str(c.address1, 500),
+    address2: str(c.address2, 500),
+    city: str(c.city, 200),
+    province: str(c.province, 200),
+    country: str(c.country, 60),
+    zip: str(c.zip, 20),
+    total_spent: num(c.total_spent),
+    total_orders: num(c.total_orders),
+    accepts_marketing: str(c.accepts_marketing, 40),
+    tags: str(c.tags, 2000),
+    note: str(c.note, 4000),
+    raw: rawOf(c.raw),
+    ...link,
+    imported_at: new Date().toISOString(),
+  };
+}
+
 /** Una tanda de pedidos. Volver a mandarla no duplica: (tienda, número) es la clave. */
 export async function importHistoryOrders(fileId: string, orders: HistoryOrder[]): Promise<{ saved: number } | { error: string }> {
   const g = await guard();
@@ -101,45 +183,7 @@ export async function importHistoryOrders(fileId: string, orders: HistoryOrder[]
   if (!found) return { error: "Archivo inexistente o sin acceso." };
   if (!Array.isArray(orders) || orders.length > 2000) return { error: "Tanda inválida." };
   const rows = orders
-    .map((o) => ({
-      store_id: found.file.store_id,
-      order_name: str(o?.order_name, 60),
-      shopify_order_id: str(o.shopify_order_id, 40),
-      created_at: iso(o.created_at),
-      paid_at: iso(o.paid_at),
-      fulfilled_at: iso(o.fulfilled_at),
-      cancelled_at: iso(o.cancelled_at),
-      financial_status: str(o.financial_status, 60),
-      fulfillment_status: str(o.fulfillment_status, 60),
-      currency: str(o.currency, 10),
-      subtotal: num(o.subtotal),
-      shipping: num(o.shipping),
-      taxes: num(o.taxes),
-      total: num(o.total),
-      discount_code: str(o.discount_code, 200),
-      discount_amount: num(o.discount_amount),
-      refunded_amount: num(o.refunded_amount),
-      payment_method: str(o.payment_method, 200),
-      email: str(o.email, 320),
-      phone: str(o.phone, 40),
-      phone_norm: str(o.phone_norm, 20),
-      customer_name: str(o.customer_name, 200),
-      shipping_name: str(o.shipping_name, 200),
-      shipping_address1: str(o.shipping_address1, 500),
-      shipping_address2: str(o.shipping_address2, 500),
-      shipping_city: str(o.shipping_city, 200),
-      shipping_province: str(o.shipping_province, 200),
-      shipping_zip: str(o.shipping_zip, 20),
-      shipping_country: str(o.shipping_country, 60),
-      shipping_phone: str(o.shipping_phone, 40),
-      notes: str(o.notes, 4000),
-      tags: str(o.tags, 2000),
-      source: str(o.source, 100),
-      line_items: Array.isArray(o.line_items) ? o.line_items.slice(0, 200) : [],
-      raw: rawOf(o.raw),
-      file_id: found.file.id,
-      imported_at: new Date().toISOString(),
-    }))
+    .map((o) => orderRow(found.file.store_id, o, { file_id: found.file.id }))
     .filter((r) => r.order_name);
   if (!rows.length) return { saved: 0 };
   const { error } = await found.admin.from("shopify_history_orders").upsert(rows, { onConflict: "store_id,order_name" });
@@ -162,31 +206,7 @@ export async function importHistoryCustomers(
   if (!found) return { error: "Archivo inexistente o sin acceso." };
   if (!Array.isArray(customers) || customers.length > 5000) return { error: "Tanda inválida." };
   const rows = customers
-    .map((c) => ({
-      store_id: found.file.store_id,
-      customer_key: str(c?.customer_key, 320),
-      shopify_customer_id: str(c.shopify_customer_id, 40),
-      first_name: str(c.first_name, 200),
-      last_name: str(c.last_name, 200),
-      email: str(c.email, 320),
-      phone: str(c.phone, 40),
-      phone_norm: str(c.phone_norm, 20),
-      company: str(c.company, 200),
-      address1: str(c.address1, 500),
-      address2: str(c.address2, 500),
-      city: str(c.city, 200),
-      province: str(c.province, 200),
-      country: str(c.country, 60),
-      zip: str(c.zip, 20),
-      total_spent: num(c.total_spent),
-      total_orders: num(c.total_orders),
-      accepts_marketing: str(c.accepts_marketing, 40),
-      tags: str(c.tags, 2000),
-      note: str(c.note, 4000),
-      raw: rawOf(c.raw),
-      file_id: found.file.id,
-      imported_at: new Date().toISOString(),
-    }))
+    .map((c) => customerRow(found.file.store_id, c, { file_id: found.file.id }))
     .filter((r) => r.customer_key);
   if (!rows.length) return { saved: 0 };
   const { error } = await found.admin.from("shopify_history_customers").upsert(rows, { onConflict: "store_id,customer_key" });
@@ -223,4 +243,139 @@ export async function finishHistoryFile(
   if (error) return { error: error.message };
   revalidatePath(PATH);
   return { ok: true };
+}
+
+export interface HistoryAccessProbe {
+  /** Pedidos anteriores a 2022 que el token de la tienda alcanza a ver. */
+  before2022: number;
+  /** Si Shopify dice que son «al menos» (pasa de 10.000). */
+  before2022AtLeast: boolean;
+  /** El pedido más antiguo que ve el token. */
+  oldest: { name: string; createdAt: string } | null;
+  scopes: string[];
+}
+
+/**
+ * ¿El token de la tienda ve los pedidos de más de 60 días? Una consulta de solo
+ * lectura a Shopify: no guarda nada. Sin `read_all_orders`, Shopify solo deja
+ * ver los últimos 60 días y aquí sale 0 antes de 2022.
+ */
+export async function probeShopifyHistoryAccess(storeId: string): Promise<HistoryAccessProbe | { error: string }> {
+  const g = await guard();
+  if ("error" in g) return g;
+  if (!g.storeIds.has(storeId)) return { error: "Tienda inválida o sin acceso." };
+  const creds = await getStoreCreds(storeId);
+  if (!creds?.shopify_domain || !creds.shopify_token) return { error: "La tienda no tiene conexión con Shopify en Kapta." };
+  try {
+    const data = await shopifyGraphQL<{
+      currentAppInstallation: { accessScopes: { handle: string }[] } | null;
+      antiguos: { count: number; precision: string } | null;
+      primero: { nodes: { name: string; createdAt: string }[] };
+    }>({
+      domain: creds.shopify_domain,
+      token: creds.shopify_token,
+      query: `query {
+        currentAppInstallation { accessScopes { handle } }
+        antiguos: ordersCount(query: "created_at:<2022-01-01") { count precision }
+        primero: orders(first: 1, sortKey: CREATED_AT) { nodes { name createdAt } }
+      }`,
+    });
+    return {
+      before2022: data.antiguos?.count ?? 0,
+      before2022AtLeast: data.antiguos?.precision === "AT_LEAST",
+      oldest: data.primero?.nodes?.[0] ?? null,
+      scopes: (data.currentAppInstallation?.accessScopes ?? []).map((s) => s.handle).sort(),
+    };
+  } catch (cause) {
+    return { error: `Shopify no respondió: ${(cause as Error).message.slice(0, 300)}` };
+  }
+}
+
+/** Lo que la pantalla necesita de una traída por API. */
+export type HistoryImportView = Pick<
+  HistoryImportRow,
+  "id" | "kind" | "status" | "file_size" | "object_count" | "bytes_done" | "records" | "first_at" | "last_at" | "error" | "created_at" | "finished_at"
+> & { busy?: boolean };
+
+const view = (r: HistoryImportRow & { busy?: boolean }): HistoryImportView => ({
+  id: r.id,
+  kind: r.kind,
+  status: r.status,
+  file_size: r.file_size,
+  object_count: r.object_count,
+  bytes_done: r.bytes_done,
+  records: r.records,
+  first_at: r.first_at,
+  last_at: r.last_at,
+  error: r.error,
+  created_at: r.created_at,
+  finished_at: r.finished_at,
+  ...(r.busy ? { busy: true } : {}),
+});
+
+/** Escribe en las tablas del historial, nunca en `orders` (§37.1). */
+function historyWriter(admin: ReturnType<typeof createAdminSupabase>, storeId: string): RowWriter {
+  return {
+    async orders(orders, importId) {
+      const rows = orders.map((o) => orderRow(storeId, o, { import_id: importId })).filter((r) => r.order_name);
+      if (!rows.length) return 0;
+      const { error } = await admin.from("shopify_history_orders").upsert(rows, { onConflict: "store_id,order_name" });
+      if (error) throw new Error(`No se pudo guardar la tanda: ${error.message}`);
+      return rows.length;
+    },
+    async customers(customers, importId) {
+      const rows = customers.map((c) => customerRow(storeId, c, { import_id: importId })).filter((r) => r.customer_key);
+      if (!rows.length) return 0;
+      const { error } = await admin.from("shopify_history_customers").upsert(rows, { onConflict: "store_id,customer_key" });
+      if (error) throw new Error(`No se pudo guardar la tanda: ${error.message}`);
+      return rows.length;
+    },
+    async orphans(orphans) {
+      const ids = [...orphans.keys()];
+      const { data } = await admin
+        .from("shopify_history_orders")
+        .select("order_name,shopify_order_id,line_items")
+        .eq("store_id", storeId)
+        .in("shopify_order_id", ids);
+      for (const row of (data ?? []) as { order_name: string; shopify_order_id: string; line_items: HistoryLineItem[] | null }[]) {
+        const extra = orphans.get(row.shopify_order_id);
+        if (!extra?.length) continue;
+        await admin
+          .from("shopify_history_orders")
+          .update({ line_items: mergeLineItems(row.line_items ?? [], extra).slice(0, 200) })
+          .eq("store_id", storeId)
+          .eq("order_name", row.order_name);
+      }
+    },
+  };
+}
+
+/** Empieza a traer pedidos o clientes por API, o retoma la traída en curso. */
+export async function startHistoryImport(storeId: string, kind: BulkKind): Promise<HistoryImportView | { error: string }> {
+  const g = await guard();
+  if ("error" in g) return g;
+  if (!g.storeIds.has(storeId)) return { error: "Tienda inválida o sin acceso." };
+  if (kind !== "pedidos" && kind !== "clientes") return { error: "Tipo inválido." };
+  try {
+    return view(await startImport(createAdminSupabase(), storeId, kind, g.userId));
+  } catch (cause) {
+    return { error: (cause as Error).message.slice(0, 500) };
+  }
+}
+
+/** Un paso de la traída: preguntar a Shopify si el archivo está, o leer una tanda (~100 s). */
+export async function advanceHistoryImport(importId: string): Promise<HistoryImportView | { error: string }> {
+  const g = await guard();
+  if ("error" in g) return g;
+  const admin = createAdminSupabase();
+  const { data } = await admin.from("shopify_history_imports").select(IMPORT_COLUMNS).eq("id", importId).maybeSingle();
+  const row = data as HistoryImportRow | null;
+  if (!row || !g.storeIds.has(row.store_id)) return { error: "Traída inexistente o sin acceso." };
+  try {
+    const next = await advanceImport(admin, row, historyWriter(admin, row.store_id));
+    if (next.status === "listo") revalidatePath(PATH);
+    return view(next);
+  } catch (cause) {
+    return { error: (cause as Error).message.slice(0, 500) };
+  }
 }

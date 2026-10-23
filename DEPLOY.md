@@ -4508,3 +4508,22 @@ mientras la tienda siga en `platform = 'shopify'`, vaciar sus claves de la API
 `platform = 'woocommerce'` la base no lo deja, `stores_woo_platform_check`):
 sin ellas la pasada no corre. Los pedidos que ya entraron se quedan: son
 pedidos reales.
+
+### 23-10-2026 · Historial de Shopify por API (0276, MOM §37.5)
+
+«Traer pedidos y clientes» en Historial Shopify: Kapta pide a Shopify el
+archivo completo (bulk operation) y lo guarda por tandas en las tablas del
+historial. No toca `orders`, el Master ni `MOM_RESOLUTION_VERSION`. Sin
+variables de entorno nuevas. La página pasa a `maxDuration = 300` (cada tanda
+lee ~100 s).
+
+**En producción ya está aplicada (23-10-2026, SQL directo).** Crea
+`shopify_history_imports` (RLS de lectura por tienda, una traída en curso por
+tienda y tipo) y la columna `import_id` en `shopify_history_orders` y
+`shopify_history_customers`. Se corrió sin el `drop policy if exists`, porque
+la política aún no existía. No figura en el historial de migraciones de
+Supabase. No hace falta volver a correrla.
+
+Comprobar: `select kind, status, records, bytes_done, file_size, error from
+shopify_history_imports order by created_at desc limit 5;`.
+

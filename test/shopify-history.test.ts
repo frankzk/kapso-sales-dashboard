@@ -237,4 +237,13 @@ describe("el historial es un archivo, no pedidos del Master (MOM §37)", () => {
     expect(actions).toContain('onConflict: "store_id,customer_key"');
     expect(actions).not.toMatch(/from\("orders"\)|from\("order_master"\)|from\("order_events"\)/);
   });
+
+  it("la prueba de acceso por API solo lee de Shopify y no guarda nada (§37.5)", () => {
+    const from = actions.indexOf("export async function probeShopifyHistoryAccess");
+    const to = actions.indexOf("\nexport ", from + 1);
+    const probe = actions.slice(from, to === -1 ? undefined : to);
+    expect(probe).toContain("await guard()");
+    expect(probe).toContain('ordersCount(query: "created_at:<2022-01-01")');
+    expect(probe).not.toMatch(/mutation|\.insert\(|\.upsert\(|\.update\(|\.delete\(/);
+  });
 });

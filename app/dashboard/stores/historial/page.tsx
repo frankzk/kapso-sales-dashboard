@@ -11,8 +11,12 @@ import { normalizePhone } from "@/lib/phone";
 import { Card, Section } from "@/components/ui";
 import { Badge } from "@/components/ops-ui";
 import { ShopifyHistoryUpload } from "@/components/shopify-history-upload";
+import { ShopifyHistoryApiProbe } from "@/components/shopify-history-api";
+import type { HistoryImportView } from "@/app/dashboard/stores/historial/actions";
 
 export const dynamic = "force-dynamic";
+// Una tanda de la traída por API lee ~100 s (lib/shopify-history-import.ts).
+export const maxDuration = 300;
 
 type HistoryOrderRow = {
   order_name: string;
@@ -77,7 +81,7 @@ export default async function ShopifyHistoryPage({
   const sb = await createServerSupabase();
   const thisYear = new Date().getFullYear();
   const years = Array.from({ length: thisYear - 2019 + 1 }, (_, i) => 2019 + i);
-  const [yearCounts, customersCount, filesRes] = await Promise.all([
+  const [yearCounts, customersCount, filesRes, importsRes] = await Promise.all([
     Promise.all(
       years.map(async (y) => {
         const { count } = await sb
@@ -96,7 +100,14 @@ export default async function ShopifyHistoryPage({
       .eq("store_id", store.id)
       .order("created_at", { ascending: false })
       .limit(50),
+    sb
+      .from("shopify_history_imports")
+      .select("id,kind,status,file_size,object_count,bytes_done,records,first_at,last_at,error,created_at,finished_at")
+      .eq("store_id", store.id)
+      .order("created_at", { ascending: false })
+      .limit(10),
   ]);
+  const imports = (importsRes.data ?? []) as HistoryImportView[];
   const totalOrders = yearCounts.reduce((s, y) => s + y.count, 0);
   const files = (filesRes.data ?? []) as FileRow[];
 
@@ -169,6 +180,15 @@ export default async function ShopifyHistoryPage({
       <Card>
         <Section title={`Cargar archivos · ${store.name}`}>
           <ShopifyHistoryUpload key={store.id} storeId={store.id} storeName={store.name} />
+        </Section>
+      </Card>
+
+      <Card>
+        <Section
+          title={`Traer desde Shopify por API · ${store.name}`}
+          subtitle="Si Kapta ve los pedidos antiguos, el historial se trae completo sin exportar a mano. Va solo al historial, nunca al Master."
+        >
+          <ShopifyHistoryApiProbe key={store.id} storeId={store.id} storeName={store.name} imports={imports} />
         </Section>
       </Card>
 
