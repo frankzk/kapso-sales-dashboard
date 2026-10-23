@@ -12,7 +12,7 @@ import { getMasterPermissions } from "@/lib/permissions-access";
 import { getStoreCreds } from "@/lib/ingest";
 import { shopifyGraphQL } from "@/lib/shopify";
 import { uniqueOrderNames, type HistoryCustomer, type HistoryFileKind, type HistoryLineItem, type HistoryOrder } from "@/lib/shopify-history";
-import { mergeLineItems, type BulkKind } from "@/lib/shopify-history-bulk";
+import { hasFullOrderAccess, mergeLineItems, type BulkKind } from "@/lib/shopify-history-bulk";
 import {
   IMPORT_COLUMNS,
   advanceHistoryImport as advanceImport,
@@ -281,12 +281,13 @@ export interface HistoryAccessProbe {
   /** El pedido más antiguo que ve el token. */
   oldest: { name: string; createdAt: string } | null;
   scopes: string[];
+  /** Ve todos los pedidos de la tienda (`hasFullOrderAccess`): se puede traer por API. */
+  fullAccess: boolean;
 }
 
 /**
- * ¿El token de la tienda ve los pedidos de más de 60 días? Una consulta de solo
- * lectura a Shopify: no guarda nada. Sin `read_all_orders`, Shopify solo deja
- * ver los últimos 60 días y aquí sale 0 antes de 2022.
+ * ¿El token de la tienda ve todos sus pedidos, no solo los últimos 60 días?
+ * Una consulta de solo lectura a Shopify: no guarda nada.
  */
 export async function probeShopifyHistoryAccess(storeId: string): Promise<HistoryAccessProbe | { error: string }> {
   const g = await guard();
@@ -308,11 +309,14 @@ export async function probeShopifyHistoryAccess(storeId: string): Promise<Histor
         primero: orders(first: 1, sortKey: CREATED_AT) { nodes { name createdAt } }
       }`,
     });
+    const oldest = data.primero?.nodes?.[0] ?? null;
+    const scopes = (data.currentAppInstallation?.accessScopes ?? []).map((s) => s.handle).sort();
     return {
       before2022: data.antiguos?.count ?? 0,
       before2022AtLeast: data.antiguos?.precision === "AT_LEAST",
-      oldest: data.primero?.nodes?.[0] ?? null,
-      scopes: (data.currentAppInstallation?.accessScopes ?? []).map((s) => s.handle).sort(),
+      oldest,
+      scopes,
+      fullAccess: hasFullOrderAccess({ scopes, oldestCreatedAt: oldest?.createdAt ?? null, now: new Date() }),
     };
   } catch (cause) {
     return { error: `Shopify no respondió: ${(cause as Error).message.slice(0, 300)}` };

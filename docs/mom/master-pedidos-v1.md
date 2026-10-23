@@ -15687,6 +15687,12 @@ mes. Por eso la pantalla tiene **«Probar acceso a pedidos antiguos»**: una
 consulta de solo lectura que cuenta los pedidos anteriores a 2022 que ve el
 token, el más antiguo y los permisos del token. No guarda nada.
 
+Se puede traer por API si el token **ve todos los pedidos de la tienda**:
+tiene `read_all_orders`, o el más antiguo que alcanza es de antes de la
+ventana de 60 días. No se mira «antes de 2022»: Kenku Peru abrió en 2023 (su
+#1001 es del 14-04-2023) y la prueba la bloqueaba aunque su token ve todo
+(corregido el 23-10-2026).
+
 Resultado en Aurela (23-10-2026): el token tiene `read_all_orders` y ve
 8.959 pedidos anteriores a 2022, el más antiguo el #1001 del 13-04-2021.
 
