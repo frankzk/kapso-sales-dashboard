@@ -10,6 +10,9 @@ import {
   detectKind,
   money,
   uniqueOrderNames,
+  cleanText,
+  clip,
+  cleanDeep,
   parseShopifyExport,
   shopifyDate,
 } from "@/lib/shopify-history";
@@ -269,5 +272,28 @@ describe("números de pedido repetidos en Shopify (§37.3)", () => {
     // Volver a traer el apartado no lo duplica.
     const again = uniqueOrderNames([row("#1234", "555")], new Map([["#1234", "111"], ["#1234 · 555", "555"]]));
     expect(again.map((r) => r.order_name)).toEqual(["#1234 · 555"]);
+  });
+});
+
+describe("textos que Postgres acepta (§37.3)", () => {
+  const emoji = "😀"; // 😀
+
+  it("quita las mitades sueltas de un emoji y los nulos, y deja los emojis enteros", () => {
+    expect(cleanText(`hola ${emoji}`)).toBe(`hola ${emoji}`);
+    expect(cleanText("roto \uD83D fin")).toBe("roto  fin");
+    expect(cleanText("roto \uDE00 fin")).toBe("roto  fin");
+    expect(cleanText("a\u0000b")).toBe("ab");
+  });
+
+  it("recortar no parte un emoji", () => {
+    const s = `abc${emoji}`;
+    // Cortar en 4 dejaría la mitad alta sola.
+    expect(clip(s, 4)).toBe("abc");
+    expect(clip(s, 5)).toBe(s);
+    expect(() => JSON.parse(JSON.stringify(clip(s, 4)))).not.toThrow();
+  });
+
+  it("limpia los productos de un pedido, también las claves", () => {
+    expect(cleanDeep([{ name: "Gorro \uD83D", sku: null, quantity: 1 }])).toEqual([{ name: "Gorro ", sku: null, quantity: 1 }]);
   });
 });
