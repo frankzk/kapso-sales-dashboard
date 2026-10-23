@@ -17,7 +17,8 @@
 //
 // NADA DE SHOPIFY. Estas acciones solo escriben columnas `woo_*`. No cambian
 // `stores.platform` (dónde crea Kapta los pedidos nuevos): ese cambio es del día
-// del corte y lo decide el owner (MOM §38.1).
+// del corte, lo decide el owner y tiene su propia acción con confirmación
+// (woo-platform-actions.ts, MOM §38.1 y §38.12).
 
 import { randomBytes } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";

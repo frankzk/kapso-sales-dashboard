@@ -1882,24 +1882,40 @@ export type PriceMismatchCleanup = "deleted" | "kept_cart" | "delete_failed";
  * carrito del cliente se deja sin completar, y si el borrado falla se pide
  * borrarlo a mano.
  */
-export function priceMismatchRejection(input: {
-  desajustes: readonly PriceMismatch[];
-  currency: string;
-  draftName: string | null;
-  cleanup: PriceMismatchCleanup;
-}): { error: string; note: string } {
+export function priceMismatchRejection(
+  input: {
+    desajustes: readonly PriceMismatch[];
+    currency: string;
+    draftName: string | null;
+  } & (
+    | { tienda?: "Shopify"; cleanup: PriceMismatchCleanup }
+    | {
+        /**
+         * WooCommerce (MOM §38.12): no hay borrador ni carrito. El pedido
+         * rechazado se borra (seguía `pending`) o se anula (un plugin ya lo
+         * había dejado vivo), y qué pasó lo dice quien llama
+         * (`wooCleanupText`, lib/woocommerce-orders.ts).
+         */
+        tienda: "WooCommerce";
+        limpieza: string;
+      }
+  ),
+): { error: string; note: string } {
+  const tienda = input.tienda ?? "Shopify";
   const money = (n: number | null) => (n == null ? "sin precio" : `${input.currency} ${n.toFixed(2)}`);
   const detalle = input.desajustes
-    .map((d) => `«${d.title}» (pediste ${money(d.pedido)}, Shopify guardó ${money(d.aplicado)})`)
+    .map((d) => `«${d.title}» (pediste ${money(d.pedido)}, ${tienda} guardó ${money(d.aplicado)})`)
     .join("; ");
-  const draft = input.draftName ?? "de Shopify";
+  const draft = input.draftName ?? `de ${tienda}`;
   const borrador =
-    input.cleanup === "deleted"
-      ? `El borrador ${draft} se eliminó.`
-      : input.cleanup === "kept_cart"
-        ? `El carrito ${draft} quedó sin completar.`
-        : `No se pudo eliminar el borrador ${draft}: bórralo en Shopify.`;
-  const causa = `Shopify no respetó el precio pactado en ${detalle}.`;
+    input.tienda === "WooCommerce"
+      ? input.limpieza
+      : input.cleanup === "deleted"
+        ? `El borrador ${draft} se eliminó.`
+        : input.cleanup === "kept_cart"
+          ? `El carrito ${draft} quedó sin completar.`
+          : `No se pudo eliminar el borrador ${draft}: bórralo en Shopify.`;
+  const causa = `${tienda} no respetó el precio pactado en ${detalle}.`;
   return {
     error:
       `Pedido NO generado: ${causa} ${borrador} Elige el producto desde el catálogo o revisa el ` +

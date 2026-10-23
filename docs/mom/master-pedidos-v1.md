@@ -8420,7 +8420,7 @@ registra en cada evento.
 
   | Rol | Qué trae |
   | --- | --- |
-  | Asesora | Gestionar pedidos, subir comprobantes, ver la clave de recojo (con el cobro completo, o con la excepción por descuento, §12), crear guías de Aliclik, Tanders y Shalom, crear pedidos en Shopify, responder novedades de Swayp, escribir a clientas con devolución, reprogramar entregas en Lima (§9.5), recibir devoluciones |
+  | Asesora | Gestionar pedidos, subir comprobantes, ver la clave de recojo (con el cobro completo, o con la excepción por descuento, §12), crear guías de Aliclik, Tanders y Shalom, crear pedidos en la tienda (Shopify o WooCommerce según `stores.platform`, §38.12), responder novedades de Swayp, escribir a clientas con devolución, reprogramar entregas en Lima (§9.5), recibir devoluciones |
   | Almacén | Gestionar pedidos, preparar paquetes, recibir devoluciones, reingresar al inventario |
   | Despacho y Grupo GF | Gestionar pedidos, despachar, entregar la caja al motorizado, reprogramar entregas en Lima (§9.5), armar rutas, reportar entregas por un motorizado, subir reportes de couriers, manejar stock de Swayp y Fénix, preparar paquetes, crear guías, recibir devoluciones |
   | Liquidaciones | Gestionar pedidos, subir y cerrar liquidaciones de motorizados, cuadrar hojas de couriers, conciliar el dinero del pedido |
@@ -9028,7 +9028,11 @@ en Shopify, y lo que escribe solo en su copia lo borra la siguiente
 sincronización. Por eso, desde este cambio, «Generar pedido», la captura del
 carrito recuperado sin asesora y la recompra automática registran la fila local
 **solo si el webhook no la trajo ya, y tal como viene de Shopify**: sin `kapso`,
-sin `cod_recuperado`, sin pisar la fecha ni los productos reales.
+sin `cod_recuperado`, sin pisar la fecha ni los productos reales. «Generar
+pedido» crea el pedido en la tienda (Shopify o WooCommerce según
+`stores.platform`, §38.12); en WooCommerce la fila es la que escribiría la
+entrada, con `kapta_channel = venta_manual` y sin la conversación de Kapso, y la
+venta de la asesora queda en `order_sales` igual.
 
 Si al completar el borrador Shopify contesta que ya estaba completado, Kapta
 le pregunta a Shopify cuál es el pedido real de ese borrador y registra la venta
@@ -15754,7 +15758,14 @@ WooCommerce viven en esa fila de `stores` y cada pedido lleva su plataforma.
 
 - **`stores.platform`** dice dónde se crean los pedidos **nuevos** que Kapta
   crea para esa tienda: `shopify` (todas hoy) o `woocommerce`. No dice de dónde
-  viene cada pedido.
+  viene cada pedido. **Quién lo lee (23-10-2026, 38.12):** «Generar pedido»
+  (y «Venta telefónica», que abre el mismo formulario), su prellenado y los tres
+  buscadores de productos (el de Leads, el del producto de un anuncio y el del
+  stock de Swayp), siempre en el servidor; y, desde el cierre de Shopify, las
+  fotos de producto de WhatsApp (`shopifyGoneForStore`, §39.5, que también
+  mira `woo_site_url`). La entrada de pedidos no lo mira (38.11). **Quién lo cambia:** el owner, en Ajustes → WooCommerce → «Crear los
+  pedidos nuevos en», con «Administrar tiendas» y una confirmación explícita;
+  y de la misma forma se vuelve a Shopify (38.12).
 - **`orders.platform`** (y `draft_orders.platform`) dice de qué plataforma vino
   cada pedido: `shopify` o `woocommerce`. No hay otro valor. Entre la salida a
   producción de WooCommerce y el cierre de Shopify llegan a la vez cambios de
@@ -15767,7 +15778,8 @@ WooCommerce viven en esa fila de `stores` y cada pedido lleva su plataforma.
   secret de la API REST (`woo_consumer_key_enc`, `woo_consumer_secret_enc`) y el
   secreto de los webhooks (`woo_webhook_secret_enc`), cifrados como los demás
   secretos de `stores`. `woo_last_error` guarda el último fallo, sin secretos;
-  `platform_switched_at`, cuándo la tienda pasó a WooCommerce; y
+  `platform_switched_at`, cuándo la tienda pasó a WooCommerce por primera vez
+  (no se mueve después, 38.12); y
   `woo_intake_from`, desde cuándo entran los pedidos de su sitio (38.11).
 - **La base lo sostiene.** Una tienda solo pasa a `woocommerce` con la
   dirección, la clave del sitio y las dos claves de la API guardadas
@@ -15927,7 +15939,8 @@ funcionando la dirección del Master, la nota, los totales del cajón,
 ### 38.9 Lo que no cambia
 
 - **Kenku Perú y Aurela siguen en Shopify** hasta el cierre: sus webhooks, su
-  sincronización, «Generar pedido» y sus comprobantes. La 0274 no actualiza
+  sincronización, «Generar pedido» (hasta que el owner cambie
+  `stores.platform`, 38.12) y sus comprobantes. La 0274 no actualiza
   ninguna fila: todas las tiendas nacen `shopify`, sin nada de WooCommerce, y
   todos los pedidos y borradores, `shopify`. Los mapeadores de Shopify no
   escriben la plataforma.
@@ -16116,7 +16129,9 @@ demás credenciales):
   Webhooks (`<Kapta>/api/webhooks/woocommerce/<storeId>`), los cuatro temas,
   la versión «WP REST API Integration v3», el último fallo y la última pasada.
 - **No cambia `stores.platform`** (dónde crea Kapta los pedidos nuevos): eso es
-  del día del corte y lo decide el owner (38.1).
+  del día del corte y lo decide el owner (38.1). Lo cambia otro control de la
+  misma sección, «Crear los pedidos nuevos en», con su propia acción y su
+  confirmación (38.12); guardar o probar las claves nunca lo toca.
 
 **Lo que no cambia:** el webhook, la sincronización y «Generar pedido» de
 Shopify, y `getStoreCreds`. La pasada y el webhook de WooCommerce leen la tienda
@@ -16148,7 +16163,8 @@ Implementación:
 **Por qué.** La base de WooCommerce (38.1-38.10), su entrada (38.11) y los
 respaldos de Shopify con la foto de las boletas (§35.10) se hicieron a la vez.
 Juntos, un pedido de Shopify y uno de WooCommerce conviven en la misma tienda y
-en el mismo `orders`; esto fija dónde se mira `orders.platform` hoy y qué falta.
+en el mismo `orders`; esto fija dónde se mira `orders.platform` hoy, dónde
+manda `stores.platform` («Generar pedido» y los buscadores, abajo) y qué falta.
 
 **Dónde manda `orders.platform` hoy** (nunca la forma del id, 38.1):
 
@@ -16170,6 +16186,216 @@ con el historial de pedidos, el auto-vínculo que deja sin revisar lo que no se
 pudo buscar y Envíos con la fila de Kapta solo entran cuando una llamada a
 Shopify falla o la tienda no tiene token.
 
+#### «Generar pedido» y los buscadores en WooCommerce (23-10-2026)
+
+**Dónde manda `stores.platform`.** Con `woocommerce`, «Generar pedido» (y «Venta
+telefónica», que abre el mismo formulario) crea el pedido en WooCommerce, y los
+tres buscadores de productos —el del formulario, el del producto de un anuncio
+y el del stock de Swayp— buscan en su catálogo. Con `shopify` todo sigue
+exactamente como antes: ni una llamada a WooCommerce. La plataforma y las
+claves se leen solo en el servidor (`loadStoreOrderPlatform`); si la tienda no
+se pudo leer, o sus claves no se pueden descifrar, la venta no se crea y el
+formulario no se abre (no se adivina «Shopify»): nunca cae a Shopify en
+silencio. Sin la 0274, toda tienda es `shopify`.
+
+**El pedido** (`POST /wp-json/wc/v3/orders`, `buildWooSaleOrder`):
+
+- `status: pending`, `payment_method: cod` con el título por defecto de
+  WooCommerce («Cash on delivery»; Kapta lee el slug, no el título, 38.4),
+  `set_paid: false` y `created_via: kapta` (la API lo declara de solo lectura y
+  guarda `rest-api`: Kapta no depende de él);
+- facturación y envío completos e iguales: nombre y apellido (la primera
+  palabra y el resto, como en Shopify), el celular en E.164 en `phone`, la
+  calle, la referencia en `address_2`, el distrito en `city`, el departamento
+  con el código de WooCommerce (`toWooPeruState`: «Lima» → `LMA`, «Lima
+  (departamento)» → `LIM`, «Callao» → `CAL`; uno que no se reconoce va tal
+  cual, como en Shopify) y `PE`. Lo que falta va vacío, nunca null (la API lo
+  rechaza);
+- cada línea **por SKU** (WooCommerce busca el producto o la variación por
+  `sku`), con `quantity`, `subtotal` (precio pactado × cantidad) y `total` (con
+  su parte del descuento). El descuento del formulario es uno para todo el
+  pedido: se reparte entre las líneas con precio, en proporción a su subtotal y
+  al céntimo, y la suma de los `total` es el total pactado. Un regalo a S/ 0 va
+  a S/ 0. **Toda línea lleva su precio fijado**: una sin precio no se manda
+  (abajo);
+- el envío como método de envío a S/ 0 (`free_shipping`), nunca como cargo:
+  «Generar pedido» no cobra envío, como en Shopify;
+- `customer_note` con la nota del formulario, y los metadatos
+  `kapta_channel = venta_manual` (la etiqueta que el pedido lleva hoy en
+  Shopify, 38.5), `kapta_lead_id`, `kapta_request_id` y `kapta_request_hash`
+  (el intento y su huella, abajo). **No lleva `kapso_conversation_id`**: el
+  borrador de Shopify tampoco, y con ella la venta de la asesora entraría como
+  del bot (§17.3). Tampoco `shipping_mode` ni `stock_por_validar`: el borrador
+  de Shopify no los escribe.
+
+**Lo que se frena antes de llamar a la tienda** (`wooSaleLinesProblem`), cada
+cosa con su mensaje:
+
+- **Ítems manuales.** WooCommerce no crea una línea sin producto (con un SKU
+  que no existe la guarda vacía). Por eso cada línea necesita SKU, y una sin él
+  —el «Ítem manual» del formulario, o una línea de un carrito de Shopify sin
+  SKU— se frena: «… es un ítem manual: WooCommerce no crea productos sin SKU.
+  Quítalos y agrégalos desde «Producto del catálogo».». En una tienda en
+  WooCommerce (o mientras no se sabe dónde se crea) el formulario no ofrece
+  «Ítem manual».
+- **Una variación sin SKU propio** (WooCommerce le muestra el del padre, y por
+  ese SKU crearía el producto con variaciones): «no tiene SKU propio en
+  WooCommerce … Pide al administrador que le ponga su SKU». No es un ítem
+  manual ni se arregla volviendo a elegirla.
+- **Un producto sin precio.** WooCommerce permite productos sin precio
+  (Shopify no): el formulario lo muestra a 0.00, pero sin `subtotal` ni `total`
+  WooCommerce cobraría el de su catálogo y Kapta no tendría con qué
+  compararlo. Se frena: «no tiene precio … Pide al administrador que le ponga
+  precio en WooCommerce». Un regalo es un precio de 0, no la falta de precio.
+- **Un precio negativo** (o que no es un número), que WooCommerce aceptaría
+  sin decir nada.
+
+**La secuencia** (`createWooSaleOrder`), con las garantías de Shopify:
+
+1. busca el intento anterior (abajo) y, si lo hay, lo resuelve sin crear otro;
+2. crea el pedido `pending`, que la entrada no toma (38.3): un pedido a medio
+   hacer nunca entra al Master;
+3. compara lo que guardó WooCommerce con lo pactado (`wooSaleMismatches`), con
+   las reglas de `priceMismatches` (las líneas por posición, un céntimo de
+   tolerancia), y además: que cada línea quedó con un producto, con el SKU
+   pedido, con la cantidad pedida y, si vino del buscador, con ese mismo
+   producto (un SKU repetido, o el del padre de una variación sin SKU propio,
+   crearían otro); que una línea que llegó sin la elección del buscador (un
+   carrito, un producto elegido antes del cambio) no quedó en un producto con
+   variaciones sin variación (`wooLinesToVerify`: un
+   `GET /products?include=…&_fields=id,type` solo para esas líneas); que el
+   envío, los cargos y los impuestos son 0; y que el total es el pactado;
+4. si no cuadra: `DELETE /orders/<id>?force=true`, y la venta se rechaza con el
+   texto de Shopify (`priceMismatchRejection` con `tienda: "WooCommerce"`, o el
+   del producto o la cantidad, `wooLineRejection`) y la misma constancia en el
+   lead (`system`). Si el borrado falla se dice «bórralo en WooCommerce»;
+   mientras siga `pending`, Kapta no lo toma. **Si un plugin ya dejó el pedido
+   vivo al crearlo** (por ejemplo en «Por confirmar»), no se borra: se anula
+   (`PUT {status: "cancelled"}`), que devuelve el stock y deja el Anulado en el
+   Master si ya había entrado; borrar un pedido vivo no devuelve el stock;
+5. si cuadra: `PUT {status: "processing"}`. Si el PUT falla, se relee el
+   pedido: si quedó vivo, es la venta. **Solo se borra lo que se VIO
+   `pending` después de que WooCommerce contestara que no** (un 4xx, o un 500
+   de PHP). Si el PUT no contestó (tiempo, red, o un 502/503/504 de un proxy,
+   detrás del cual WordPress puede seguir trabajando) y el pedido se ve
+   `pending`, se deja así: «quedó Pendiente de pago … No cierres este
+   formulario: vuelve a pulsar «Generar pedido» y Kapta retoma ese mismo
+   pedido». Y si ni siquiera se pudo releer, no se toca nada: «No se pudo ver
+   cómo quedó … vuelve a pulsar «Generar pedido» en unos segundos». Borrar a
+   ciegas podía llevarse un pedido ya vivo (stock descontado, aviso de pedido
+   nuevo enviado, quizá ya en el Master) y empujar a la asesora a crear otro.
+
+**`processing`, no «Por confirmar».** Es el estado estándar que el brief pide
+para un pedido cargado a mano, existe en toda tienda, y para Kapta los dos son
+lo mismo (vivo, contraentrega, sin cobrar: 38.3 y 38.4); la confirmación es la
+de Kapta. El slug exacto de «Por confirmar» todavía no está confirmado, y un
+estado que la tienda no tiene registrado haría fallar el PUT.
+
+**La fila local** es la de la entrada: `mapWooOrder` sobre la respuesta de
+WooCommerce (`wc-<clave>-<id>`, `platform = woocommerce`, `venta_manual`),
+insertada solo si falta (`insertOrderIfAbsent`). El webhook y la pasada que
+lleguen después traen el mismo id con una fecha de modificación igual o más
+nueva: actualizan, no duplican ni se toman por viejos. Después, lo mismo que
+en Shopify y por el mismo código (`registrarVentaGenerada`): la fila del
+Master, el lead ganado (con el celular tecleado si el lead no tenía), la venta
+de la asesora (`lead_calls` y `order_sales`), los rollups del día y la
+confirmación por WhatsApp con el número del pedido (`#KP2…`). El carrito de
+Shopify del lead no se completa (no hay dónde): prellena el formulario desde
+la copia local (`draft_orders`) con sus SKU y sin preguntarle a Shopify. Si esa
+copia dice que el carrito estaba abierto (`open` o `invoice_sent`) y la venta
+no es un «pedido nuevo», es un **carrito recuperado**, como en Shopify: la nota
+de la venta lo dice y el lead queda con `draft_order_status = completed` (deja
+de verse «Carrito abandonado» y la secuencia de carritos no lo toca). La copia
+del borrador no se toca, porque refleja lo que dice Shopify, y el borrador de
+Shopify tampoco: no es de Kapta, y después del cierre no hay a quién pedírselo.
+**Una diferencia con Shopify, a decidir por el owner:** allí el carrito
+completado conservaba las etiquetas de su borrador (EasySell: canal «Web ·
+carrito completado», `lib/sales-channel.ts`); en WooCommerce el pedido es nuevo
+y lleva `venta_manual` (canal «Asesora»). La venta de la asesora queda en
+`order_sales` igual; solo cambia el canal del pedido.
+
+**Un doble clic o un reintento no crea dos pedidos.** El formulario manda un id
+por intento (`requestId`, el mismo en cada reintento hasta que sale bien), que
+viaja como `kapta_request_id`, y Kapta le suma la huella de lo pedido
+(`kapta_request_hash`: el sha256 de los productos, cantidades, precios, envío,
+dirección, nota y lead, `wooSaleFingerprint`). Antes de crear, Kapta lista los
+pedidos creados en las últimas 2 horas (`after`, `status=any`, solo `id`,
+`status`, `number` y `meta_data`: la API no filtra por metadatos), busca ese id
+y lee entero el que encuentre:
+
+- **vivo, con la misma huella y los precios en regla**: es esta venta; se usa
+  ese (y si su venta ya está registrada, no se registra otra vez);
+- **vivo, pero el formulario cambió** (otra cantidad, otro producto, otro
+  descuento, otra dirección u otra nota), o WooCommerce guarda otros precios:
+  **no se registra con lo de ahora ni se crea otro**. «Pedido NO registrado:
+  Este formulario ya creó el pedido #KP… en WooCommerce, y está vivo, pero con
+  otros datos que los de ahora…», con las diferencias que se puedan nombrar, y
+  la constancia en el lead (`⛔ Venta NO registrada`). Sale de ahí dejando el
+  formulario como estaba (se adopta) o anulando ese pedido en WooCommerce (el
+  siguiente intento crea uno nuevo). Antes se adoptaba sin mirar: la asesora
+  veía «Pedido generado ✓» con lo de antes y la clienta recibía otra cosa;
+- **`pending` con la misma huella y los precios en regla**: un intento que no
+  llegó a `processing`; se **retoma** (paso 5), sin borrar, así que no hay
+  carrera con un PUT anterior que tarde;
+- **`pending` con otra huella**: se borra y se crea el nuevo; si no se puede
+  borrar, no se crea otro (quedarían dos pedidos con el mismo intento);
+- **anulado o reembolsado**: como si no estuviera; se crea uno nuevo.
+
+Si el POST no contesta (pudo crearse igual), se busca: uno `pending` se borra;
+uno que ya está vivo se deja para el reintento, que lo adopta o avisa. En
+Shopify el candado es el borrador; aquí, este id y su huella. Un formulario
+nuevo (otra pestaña, una recarga) es otro intento: ahí sigue mandando el aviso
+de duplicado. **Dos llamadas a la vez con el mismo id** sí crearían dos
+pedidos (la búsqueda de las dos llega antes que cualquier POST): la pantalla
+no puede hacerlo (el botón se bloquea mientras genera y Next.js corre de a una
+las acciones de un mismo formulario), pero el endpoint del bot sí, y necesita
+su candado en la base (abajo).
+
+**Tiempos.** Cada llamada tiene su tope —buscar el intento 6 s, crear 15 s,
+comprobar un producto 5 s, pasar a `processing` 10 s, releer, borrar o anular
+5 s— y además toda la venta tiene un reloj de 45 s (`WOO_SALE_BUDGET_MS`):
+cada llamada espera como mucho lo que le queda, el POST solo sale con su tope
+entero (un POST cortado es el que deja pedidos sin respuesta) y lo que no
+alcanza queda para el reintento, que lo resuelve sin crear otro. La página de
+Leads da 300 s a su función (`maxDuration`, como Pedidos y Ajustes): el botón
+nunca se queda en «Generando…» ni la venta se corta a mitad. Si WooCommerce no
+contesta al buscar el intento anterior, no se crea nada.
+
+**El buscador** (`searchWooCatalog`) devuelve la misma forma que el de Shopify:
+`GET /products?search=…&status=publish&per_page=12` (y, si lo escrito no tiene
+espacios, también `?sku=…` exacto, primero) y, para cada producto variable, sus
+variaciones publicadas (`GET /products/<id>/variations`, de a 4). Con `sku`
+WooCommerce busca también entre las variaciones (y `search` solo mira nombre y
+descripción): pegar el SKU de una talla la encuentra, como en Shopify, con el
+nombre y la foto de su producto (`GET /products?include=…`); si su producto
+también salió, va con él. Un producto simple es una variante; los agrupados y
+externos no se venden por aquí. Los ids son `woo:<id>` y nada los manda a
+Shopify: si la tienda vuelve a Shopify con un formulario abierto, «Generar
+pedido» pide volver a elegir esos productos. Una variación sin SKU propio va
+sin SKU y se frena al generar con su mensaje. Acotado: 12 productos, 50
+variaciones cada uno y 10 s en total; si WooCommerce no contesta, «Sin
+resultados».
+
+**El cambio de plataforma** (Ajustes → WooCommerce → «Crear los pedidos nuevos
+en: Shopify / WooCommerce», `switchStorePlatform`): con «Administrar tiendas»,
+marcando la confirmación y aceptando el diálogo. A WooCommerce, solo con el
+sitio, la clave del sitio y las dos claves de la API guardadas (lo que exige
+`stores_woo_platform_check`; si la base lo rechaza igual, el mensaje es el
+mismo) y después de probar con lo guardado que WooCommerce **lee y deja
+escribir**: `GET /orders?per_page=1` y un lote vacío
+(`POST /orders/batch` con `{}`, que no crea, cambia ni borra nada). Una clave de
+solo «Lectura» le basta a la entrada de pedidos, pero cada venta fallaría en el
+POST: el cambio se niega con «las claves guardadas leen pero no pueden crear
+pedidos … La clave de la API de WooCommerce es de solo lectura», y ese mismo
+401 se dice así en cualquier llamada (`wooErrorFromResponse`), no como una
+clave mal copiada. `platform_switched_at` se fija la primera vez y no se
+mueve: sin `woo_intake_from` es el piso de la entrada (38.11). Volver a
+Shopify solo cambia `platform` y no prueba nada: es la marcha atrás. Nunca toca
+`woo_intake_from`, las claves de WooCommerce ni el token de Shopify. Cada
+cambio deja una línea `[woo-platform]` en el registro (tienda, de qué a qué,
+quién y cuándo), y solo se guarda si nadie la cambió entre la lectura y el
+guardado.
+
 **Pendiente** (no está en este cambio):
 
 - **La boleta de un pedido de WooCommerce** espera su lector (30-31/10), con
@@ -16184,8 +16410,19 @@ Shopify falla o la tienda no tiene token.
   sin dirección, la nota de la guía de Tanders, «Ver en Shopify»): con token,
   una llamada que Shopify rechaza y que cae a lo guardado; sin token, nada.
   Pasarlos a `orders.platform`.
-- **«Generar pedido», el buscador de productos y el endpoint del bot** en
-  WooCommerce (26-10). `stores.platform` todavía no lo lee nadie.
+- **El endpoint del bot** (`POST /api/internal/orders/[storeId]`), con el mismo
+  núcleo (`wooSaleLinesProblem`, `buildWooSaleOrder`, `createWooSaleOrder`).
+  Hasta entonces, en una tienda en WooCommerce el bot deriva la conversación a
+  una asesora. Un bot reintenta solo y en paralelo: antes de reutilizar
+  `createWooSaleOrder` necesita un candado en la base por (tienda, id del
+  intento) —una migración, con su entrada en DEPLOY—, porque la búsqueda por
+  `kapta_request_id` no frena dos llamadas simultáneas.
+- **Los carritos.** Los formularios abandonados de WooCommerce todavía no
+  entran a `draft_orders`; un carrito de Shopify en la cola solo prellena el
+  pedido (arriba). La recompra automática (`auto_order_trials`) y la captura del
+  carrito recuperado completan o leen borradores de Shopify y no miran
+  `stores.platform`; `closeSale` y `recoverCart` (sin uso en la pantalla)
+  tampoco.
 - **Los principios de §2 y `AGENTS.md`** («Shopify como única fuente de
   pedidos») esperan al owner (38.9).
 
@@ -16193,6 +16430,25 @@ Implementación: `lib/shipment-order-capture.ts` (`orderPlatformOf`,
 `pushShippingAddressToShopify` con `platform`) y
 `updateShipmentDeliveryAddress` en `app/dashboard/envios/actions.ts`. Pruebas:
 `test/shipment-order-capture.test.ts` y `test/woocommerce-integration-mom.test.ts`.
+
+Implementación de «Generar pedido» y los buscadores en WooCommerce:
+`lib/woocommerce-orders.ts` (`loadStoreOrderPlatform`, `buildWooSaleOrder`,
+`wooSaleFingerprint`, `wooLineCents`, `wooSaleLinesProblem`,
+`wooSaleMismatches`, `wooLinesToVerify`, `createWooSaleOrder`,
+`findWooOrderByRequestId`, `wooCleanupText`, `wooLineRejection`,
+`wooConflictRejection`, `searchWooCatalog`, `flattenCatalog`),
+`wooErrorFromResponse` con la clave de solo lectura (lib/woocommerce.ts),
+`priceMismatchRejection` con `tienda` y `limpieza` (lib/shopify.ts),
+`maxDuration` de `app/dashboard/leads/page.tsx`, `generateOrder`, `generateWooOrder`,
+`registrarVentaGenerada`, `loadOrderDraft` y `searchStoreProducts` en
+`app/dashboard/leads/actions.ts`, `searchPromotedProducts`
+(`app/dashboard/actions.ts`), `searchStockProducts`
+(`app/dashboard/envios/actions.ts`) y el formulario de `components/leads-drawer.tsx`.
+El cambio de plataforma: `lib/woocommerce-platform.ts`,
+`app/dashboard/[storeId]/settings/woo-platform-actions.ts` y
+`components/woocommerce-settings-section.tsx`. Pruebas:
+`test/woocommerce-orders.test.ts`, `test/woocommerce-generate-order.test.ts`,
+`test/woocommerce-platform-switch.test.ts` y `test/woocommerce-sale-mom.test.ts`.
 
 ## 39. Fotos de producto de WhatsApp para cuando Shopify ya no responde (23-10-2026)
 

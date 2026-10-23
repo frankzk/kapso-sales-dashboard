@@ -364,6 +364,18 @@ export const WOO_META = {
   kapso: "kapso",
   conversationId: NOTE_ATTR.conversationId,
   leadId: "kapta_lead_id",
+  /**
+   * El intento de «Generar pedido» que creó el pedido (MOM §38.12). Con él un
+   * reintento encuentra el pedido del intento anterior en vez de crear otro
+   * (lib/woocommerce-orders.ts).
+   */
+  requestId: "kapta_request_id",
+  /**
+   * La huella de lo que pidió ese intento (productos, precios, dirección, nota
+   * y lead; `wooSaleFingerprint`). Un reintento solo retoma o adopta el pedido
+   * del intento anterior si el formulario sigue diciendo lo mismo (MOM §38.12).
+   */
+  requestHash: "kapta_request_hash",
 } as const;
 
 function parseTagList(value: string): string[] {
@@ -906,6 +918,19 @@ export function wooErrorFromResponse(
   const code = typeof body?.code === "string" ? body.code.trim() : null;
   const said = plainMessage(body?.message);
   const detail = said ? ` WooCommerce dice: «${said}».` : "";
+  // La clave existe pero no tiene el permiso del método: una de «Lectura»
+  // contra un POST/PUT/DELETE, o una de «Escritura» contra un GET
+  // (WC_REST_Authentication::check_permissions). No es la clave mal copiada.
+  const sinPermiso = status === 401 && code === "woocommerce_rest_authentication_error" ? /\b(read|write) permissions?\b/i.exec(said) : null;
+  if (sinPermiso) {
+    const falta = sinPermiso[1]!.toLowerCase() === "write" ? "de solo lectura" : "de solo escritura";
+    return new WooError(
+      "permisos",
+      `La clave de la API de WooCommerce es ${falta} (HTTP 401).${detail} Crea una con permisos de «Lectura/Escritura» en WooCommerce → Ajustes → Avanzado → API REST y guárdala en Ajustes → WooCommerce.`,
+      status,
+      code,
+    );
+  }
   if (status === 401 && code === "woocommerce_rest_authentication_error") {
     return new WooError(
       "credenciales",

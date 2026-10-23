@@ -48,6 +48,7 @@ import {
   type RerouteDisposition,
 } from "@/lib/shipments";
 import { getStoreCreds } from "@/lib/ingest";
+import { flattenCatalog, loadStoreOrderPlatform, searchWooCatalog, wooSaleClient } from "@/lib/woocommerce-orders";
 import { getAccessibleStores } from "@/lib/access";
 import { ElegibilidadError, recalcularElegibilidadFenix } from "@/lib/fenix-eligibility";
 import {
@@ -1911,6 +1912,17 @@ export async function searchStockProducts(
   // RLS check: can the caller see this store?
   const { data: store } = await sb.from("stores").select("id").eq("id", storeId).maybeSingle();
   if (!store) return [];
+  // La tienda que ya crea sus pedidos en WooCommerce busca en su catálogo
+  // (MOM §38.12). Este selector solo usa el título y el SKU.
+  const plataforma = await loadStoreOrderPlatform(createAdminSupabase(), storeId);
+  if (!plataforma.ok) return [];
+  if (plataforma.platform === "woocommerce") {
+    try {
+      return flattenCatalog(await searchWooCatalog(wooSaleClient(plataforma.creds), { query, first: 12 }));
+    } catch {
+      return [];
+    }
+  }
   const creds = await getStoreCreds(storeId);
   if (!creds?.shopify_token) return [];
   try {

@@ -4527,3 +4527,112 @@ Supabase. No hace falta volver a correrla.
 Comprobar: `select kind, status, records, bytes_done, file_size, error from
 shopify_history_imports order by created_at desc limit 5;`.
 
+### 23-10-2026 · «Generar pedido» y los buscadores en WooCommerce, y el cambio de plataforma (sin migración, MOM §38.12)
+
+Hace que `stores.platform` mande: con `woocommerce`, «Generar pedido» (y «Venta
+telefónica», que abre el mismo formulario) crea el pedido en WooCommerce
+(`pending` → comparación con lo pactado → `processing`, o `DELETE` si no
+cuadra) y los tres buscadores de productos (Leads, el producto de un anuncio y
+el stock de Swayp) buscan en su catálogo. Trae el control **Ajustes →
+WooCommerce → «Crear los pedidos nuevos en: Shopify / WooCommerce»**. **Sin
+migración** (usa `stores.platform` y `platform_switched_at` de la 0274), sin
+crons y sin variables de entorno nuevas. La página de Leads pasa a
+`maxDuration = 300` (como Pedidos y Ajustes), para que una venta en WooCommerce
+(hasta 45 s con su propio reloj) nunca se corte a mitad.
+
+**Kenku y Aurela no cambian mientras sigan en `platform = 'shopify'`**: el
+camino de Shopify se llama igual que antes y no hay ninguna llamada a
+WooCommerce. Lo único nuevo para ellas es una lectura de su fila de `stores`
+antes de generar o buscar.
+
+1. **Requiere la 0274** (entrada del 23-10-2026) y la entrada de pedidos de
+   WooCommerce (entrada del 25-10-2026). **El código**, por el camino de siempre
+   (rama de integración → `main` por fast-forward). Nada que aplicar en la base.
+
+2. **El 26-10, en el sitio de staging** (una tienda de prueba de Kapta, nunca
+   Kenku ni Aurela): pasar el control a WooCommerce y volverlo a Shopify, para
+   confirmar que la prueba de escritura (`POST /wp-json/wc/v3/orders/batch` con
+   `{}`, que no crea ni cambia nada) contesta 200 con una clave de
+   Lectura/Escritura y 401 con una de Lectura; y una venta de prueba desde un
+   lead de esa tienda, con un producto con variaciones elegido pegando el SKU
+   de la variación en el buscador. Si la prueba de escritura contestara otra
+   cosa con una clave buena, no cambiar Kenku ni Aurela y avisar: el cambio se
+   negaría también en producción.
+
+3. **El día del corte (27-10), en este orden y no antes:**
+   1. el sitio de producción conectado en Ajustes → WooCommerce (sitio, clave
+      del sitio, Consumer key y secret, webhooks), con la sincronización en
+      `ok` (consulta (a) de la entrada del 25-10). **La clave de la API tiene
+      que ser de «Lectura/Escritura»**: a la entrada le basta «Lectura», pero
+      con ella cada venta fallaría, y el cambio del paso 3 se niega («las
+      claves guardadas leen pero no pueden crear pedidos … de solo lectura»);
+   2. en ese sitio, **los productos con los mismos SKU que en Shopify**: buscar
+      dos o tres en el formulario de un lead de prueba **después** del cambio
+      (paso 3) y ver que salen con su precio. Mientras la tienda siga en
+      Shopify, el buscador sigue mirando Shopify;
+   3. Ajustes → WooCommerce → «Crear los pedidos nuevos en» → **WooCommerce** →
+      marcar la confirmación → «Cambiar a WooCommerce» → aceptar el diálogo.
+      Kapta prueba con las claves guardadas que WooCommerce lee y deja
+      escribir antes de cambiar; si no, no cambia. Sin las claves completas no deja (es lo mismo que
+      exige `stores_woo_platform_check`). Hacerlo con Shopify todavía vivo y
+      antes de las 19:00 de Lima: desde ese instante las ventas de Leads de esa
+      tienda se crean en WooCommerce, aunque Shopify siga abierto;
+   4. **la primera venta real de Leads** de esa tienda, mirada de cerca (no
+      hacer pedidos de prueba en producción: entrarían al Master, §38.11):
+      tiene que decir «Pedido generado ✓», aparecer como `#KP2…`/`#AUR9…` en
+      WooCommerce en «Procesando» con `kapta_channel = venta_manual`, y en el
+      Master con la misma cifra (consulta (b)).
+
+   No se toca `woo_intake_from`, las claves ni el token de Shopify: la entrada
+   de pedidos de las dos plataformas sigue igual.
+
+4. **Verificar** (solo lectura, sin datos de clientas):
+
+   ```sql
+   -- a) Dónde crea cada tienda sus pedidos nuevos, y desde cuándo.
+   select name, platform, platform_switched_at, woo_intake_from
+     from stores where status = 'active' order by name;
+   -- b) Las ventas de Leads en WooCommerce: id wc-<clave>-<id>, venta_manual y
+   --    su venta registrada (order_sales), una por pedido.
+   select s.name, o.name, o.shopify_order_id, o.tags, o.financial_status,
+          (select count(*) from order_sales x where x.order_id = o.id) as ventas
+     from orders o join stores s on s.id = o.store_id
+    where o.platform = 'woocommerce' and 'venta_manual' = any(o.tags)
+      and o.created_at > now() - interval '1 day'
+    order by o.created_at desc limit 20;
+   -- c) Ventas rechazadas hoy (precio, SKU o cantidad) y reintentos con el
+   --    pedido anterior vivo y otros datos: la constancia en el lead.
+   select created_at, left(note, 160) from lead_calls
+    where kind = 'system'
+      and (note like '⛔ Venta NO generada · WooCommerce%' or note like '⛔ Venta NO registrada · %')
+      and created_at > now() - interval '1 day' order by created_at desc;
+   ```
+
+   En los logs de Vercel: `[woo-platform]` es cada cambio de plataforma
+   (tienda, de qué a qué, quién). `[woo-sale]`, por pedido de WooCommerce (su
+   id, nunca datos de la clienta):
+   - `woo.sale.deleted` / `woo.sale.delete_failed`: un pedido pendiente que
+     Kapta borró o no pudo borrar (buscarlo en WooCommerce por su id y
+     mandarlo a la papelera; mientras siga «Pendiente de pago» Kapta no lo
+     toma);
+   - `woo.sale.cancelled` / `woo.sale.cancel_failed`: uno que un plugin dejó
+     vivo al crearlo y no cuadraba, anulado (o por anular a mano);
+   - `woo.sale.adopted` / `woo.sale.resumed`: un reintento que usó o retomó el
+     pedido de su intento anterior;
+   - `woo.sale.conflict`: un reintento que encontró vivo el pedido de su
+     intento anterior con otros datos; la asesora ve «Pedido NO registrado» y
+     el lead lo dice. Ese pedido es real: o se anula en WooCommerce, o se
+     registra la venta reintentando con el formulario como estaba;
+   - `woo.sale.kept_pending` / `woo.sale.unknown`: el paso a «Procesando» no
+     contestó; el pedido no se tocó y el reintento desde el mismo formulario
+     lo resuelve. Si la asesora cerró el formulario, mirar el pedido en
+     WooCommerce: si quedó «Pendiente de pago», borrarlo.
+
+**Marcha atrás.** Volver una tienda a Shopify no necesita despliegue: Ajustes →
+WooCommerce → «Crear los pedidos nuevos en» → **Shopify** (no prueba nada; solo
+cambia `platform`). Si la pantalla no carga, en la base:
+`update stores set platform = 'shopify' where id = '<store_id>';`. Sirve
+**mientras Shopify viva**; después del cierre una tienda en Shopify no puede
+vender desde Kapta. Revertir el código también devuelve todo a Shopify sin
+importar `platform`. Los pedidos ya creados en WooCommerce se quedan: son
+pedidos reales.

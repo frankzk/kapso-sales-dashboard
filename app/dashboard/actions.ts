@@ -12,6 +12,7 @@ import {
   searchCatalogProducts,
 } from "@/lib/shopify";
 import { getStoreCreds, runStoreSync } from "@/lib/ingest";
+import { loadStoreOrderPlatform, searchWooCatalog, wooSaleClient } from "@/lib/woocommerce-orders";
 import { filtroCampanaEnUtm } from "@/lib/cod-cart-attribution";
 import { env } from "@/lib/env";
 
@@ -173,7 +174,7 @@ export interface PromotedProductSuggestion {
   stores: string[];
 }
 
-/** Search the authorized Shopify catalog(s) attached to an attributed ad. */
+/** Search the authorized store catalog(s) attached to an attributed ad (Shopify, or WooCommerce per `stores.platform`). */
 export async function searchPromotedProducts(
   storeIds: string[],
   query: string,
@@ -198,8 +199,20 @@ export async function searchPromotedProducts(
     return { products: [], error: "No tienes acceso al catálogo de este anuncio." };
   }
 
+  const admin = createAdminSupabase();
   const searches = await Promise.all(
     [...allowed.entries()].map(async ([storeId, storeName]) => {
+      // La tienda que ya crea sus pedidos en WooCommerce busca en su catálogo
+      // (MOM §38.12): los SKU son los mismos que en Shopify.
+      const plataforma = await loadStoreOrderPlatform(admin, storeId);
+      if (!plataforma.ok) return { storeName, products: [] };
+      if (plataforma.platform === "woocommerce") {
+        try {
+          return { storeName, products: await searchWooCatalog(wooSaleClient(plataforma.creds), { query: q, first: 12 }) };
+        } catch {
+          return { storeName, products: [] };
+        }
+      }
       const creds = await getStoreCreds(storeId);
       if (!creds?.shopify_token) return { storeName, products: [] };
       try {

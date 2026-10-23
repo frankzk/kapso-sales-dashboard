@@ -131,6 +131,14 @@ vi.mock("@/lib/voice-leads-server", () => ({
     return st.placed;
   },
 }));
+// Dónde crea la tienda sus pedidos (`stores.platform`, MOM §38.12) no es lo que
+// prueba este archivo: la tienda falsa («store-1») es de Shopify. Sin esto,
+// `loadOrderDraft` no la encontraría (no es un uuid) y, desde el 23-10-2026, no
+// abre el formulario de una tienda que no pudo leer.
+vi.mock("@/lib/woocommerce-orders", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/woocommerce-orders")>()),
+  loadStoreOrderPlatform: async () => ({ ok: true, platform: "shopify" }),
+}));
 vi.mock("@/lib/db", () => {
   const builder = (table: string) => {
     const call: Call = { table, op: "select", filters: [] };

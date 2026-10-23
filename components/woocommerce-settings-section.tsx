@@ -3,6 +3,8 @@
 // Ajustes → «WooCommerce» (MOM §38.11): el sitio, la clave del sitio, las claves
 // de la API REST y el secreto de los webhooks de la tienda; «Probar conexión»;
 // y la dirección que se pega en WooCommerce → Ajustes → Avanzado → Webhooks.
+// Arriba, «Crear los pedidos nuevos en: Shopify / WooCommerce» (MOM §38.12),
+// que cambia `stores.platform` con su propia acción y su confirmación.
 //
 // Va en su propio archivo, fuera de store-settings.tsx, porque no guarda con
 // `updateStore`: las claves se prueban antes de guardarse (woo-actions.ts).
@@ -12,7 +14,7 @@
 // acción, para copiarlo. Este archivo no importa nada que arrastre
 // `node:crypto`: solo las acciones de servidor y piezas de la interfaz.
 
-import { useEffect, useRef, useTransition, useActionState, type FormEvent } from "react";
+import { useEffect, useRef, useState, useTransition, useActionState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/components/ui";
 import { Badge, Banner, FIELD, OpsButton } from "@/components/ops-ui";
@@ -25,6 +27,8 @@ import {
   testWooConnection,
   type WooSettingsState,
 } from "@/app/dashboard/[storeId]/settings/woo-actions";
+import { switchStorePlatform } from "@/app/dashboard/[storeId]/settings/woo-platform-actions";
+import { PLATFORM_LABEL, WOO_PLATFORM_FIELDS, type StorePlatform } from "@/lib/woocommerce-platform";
 
 /** Lo que manda la página. Sin secretos: solo si hay uno. */
 export interface WooSettingsView {
@@ -32,7 +36,11 @@ export interface WooSettingsView {
   siteKey: string | null;
   /** El prefijo de los pedidos en minúsculas (`KP` → `kp`), como sugerencia. */
   suggestedSiteKey: string | null;
-  /** `stores.platform`: dónde crea Kapta los pedidos nuevos (no se cambia aquí). */
+  /**
+   * `stores.platform`: dónde crea Kapta los pedidos nuevos. Lo cambia solo
+   * «Crear los pedidos nuevos en» (`PlatformSwitch`, woo-platform-actions.ts),
+   * nunca el formulario de las claves.
+   */
   platform: string;
   platformSwitchedAt: string | null;
   hasConsumerKey: boolean;
@@ -165,13 +173,14 @@ export function WooCommerceSettingsSection({ storeId, data }: { storeId: string;
       }
     >
       <div className={cn(CARD, "divide-y divide-line")}>
+        <PlatformSwitch
+          storeId={storeId}
+          platform={data.platform}
+          platformSwitchedAt={data.platformSwitchedAt}
+          apiReady={apiReady}
+        />
         <div className={ROW}>
-          <p className="text-sm font-semibold leading-5 text-ink-900">
-            {data.platform === "woocommerce"
-              ? `Kapta crea los pedidos nuevos en WooCommerce${data.platformSwitchedAt ? ` (desde el ${when(data.platformSwitchedAt)})` : ""}.`
-              : "Kapta crea los pedidos nuevos en Shopify."}
-          </p>
-          <p className={cn(HELP, "mt-0.5")}>
+          <p className={HELP}>
             Última sincronización de WooCommerce:{" "}
             {data.sync?.last_run_at
               ? `${when(data.sync.last_run_at)} · ${
@@ -307,5 +316,103 @@ export function WooCommerceSettingsSection({ storeId, data }: { storeId: string;
         </div>
       </div>
     </SettingsSection>
+  );
+}
+
+/**
+ * «Crear los pedidos nuevos en: Shopify / WooCommerce» (`stores.platform`, MOM
+ * §38.1 y §38.12). Decide dónde crean sus pedidos «Generar pedido», «Venta
+ * telefónica» y los buscadores de productos de la tienda; la entrada de pedidos
+ * de las dos plataformas no cambia.
+ *
+ * Pide marcar la confirmación y aceptar el diálogo. A WooCommerce solo con las
+ * claves de la API guardadas (la acción, además, prueba que lean y que dejen
+ * escribir); volver a Shopify se puede siempre: es la vuelta atrás.
+ */
+function PlatformSwitch({
+  storeId,
+  platform,
+  platformSwitchedAt,
+  apiReady,
+}: {
+  storeId: string;
+  platform: string;
+  platformSwitchedAt: string | null;
+  apiReady: boolean;
+}) {
+  const router = useRouter();
+  const current: StorePlatform = platform === "woocommerce" ? "woocommerce" : "shopify";
+  const [state, action, pending] = useActionState(switchStorePlatform, {});
+  const [target, setTarget] = useState<StorePlatform>(current);
+  const changes = target !== current;
+
+  // Lo guardado manda: tras un cambio (o el de otra persona) se vuelve a leer.
+  useEffect(() => setTarget(current), [current]);
+  useEffect(() => {
+    if (state.notice && !state.error) router.refresh();
+  }, [state, router]);
+
+  return (
+    <form
+      action={action}
+      onSubmit={(e) => {
+        const texto =
+          target === "woocommerce"
+            ? "Desde ahora las ventas de Leads de esta tienda se crean en WooCommerce (y el buscador de productos usa su catálogo). ¿Cambiar?"
+            : "Las ventas de Leads de esta tienda vuelven a crearse en Shopify. Si Shopify ya cerró, no se podrá vender desde Kapta. ¿Cambiar?";
+        if (!changes || !window.confirm(texto)) e.preventDefault();
+      }}
+      className={cn(ROW, "space-y-3")}
+    >
+      <input type="hidden" name="store_id" value={storeId} />
+      <fieldset>
+        <legend className="text-sm font-semibold leading-5 text-ink-900">Crear los pedidos nuevos en</legend>
+        <div className="mt-2 flex flex-wrap gap-x-5 gap-y-2">
+          {(["shopify", "woocommerce"] as const).map((p) => (
+            <label key={p} className="flex items-center gap-2 text-sm text-ink-900 pointer-coarse:min-h-11">
+              <input
+                type="radio"
+                name={WOO_PLATFORM_FIELDS.target}
+                value={p}
+                checked={target === p}
+                onChange={() => setTarget(p)}
+                disabled={pending || (p === "woocommerce" && current !== "woocommerce" && !apiReady)}
+              />
+              {PLATFORM_LABEL[p]}
+              {p === current ? <Badge tone="ok">Actual</Badge> : null}
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      <p className={HELP}>
+        {current === "woocommerce"
+          ? `«Generar pedido», «Venta telefónica» y los buscadores de productos usan WooCommerce${
+              platformSwitchedAt ? ` (pasó por primera vez el ${when(platformSwitchedAt)})` : ""
+            }.`
+          : "«Generar pedido», «Venta telefónica» y los buscadores de productos usan Shopify."}{" "}
+        Los pedidos de las dos plataformas siguen entrando al Master igual.
+        {current !== "woocommerce"
+          ? apiReady
+            ? " Para elegir WooCommerce, la clave de la API tiene que ser de «Lectura/Escritura»: Kapta lo prueba antes de cambiar."
+            : " Para elegir WooCommerce, guarda antes el sitio y las claves de la API (de «Lectura/Escritura»)."
+          : ""}
+      </p>
+      {changes ? (
+        <label className="flex items-start gap-2 text-sm text-ink-700">
+          <input type="checkbox" name={WOO_PLATFORM_FIELDS.confirm} value="1" required className="mt-1" />
+          <span>
+            Entiendo que desde ahora las ventas de Leads de esta tienda se crean en {PLATFORM_LABEL[target]}.
+          </span>
+        </label>
+      ) : null}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <div className="mr-auto min-w-0">
+          <Result state={state} />
+        </div>
+        <OpsButton type="submit" variant={changes ? "primary" : undefined} disabled={!changes || pending}>
+          {pending ? "Cambiando…" : `Cambiar a ${PLATFORM_LABEL[target]}`}
+        </OpsButton>
+      </div>
+    </form>
   );
 }

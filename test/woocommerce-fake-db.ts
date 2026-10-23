@@ -2,7 +2,8 @@
 // (test/woocommerce-*.test.ts). Aplica de verdad los filtros de cada lectura y
 // escritura (`eq`, `in`, `is`, `match`, `limit`) y las claves únicas que usan
 // estas rutas: `orders (store_id, shopify_order_id)`, `webhook_events
-// (store_id, webhook_id)` y `sync_state (store_id, source)`. Lo demás (orden,
+// (store_id, webhook_id)` y `sync_state (store_id, source)`, con el
+// `ignoreDuplicates` de un upsert (ON CONFLICT DO NOTHING). Lo demás (orden,
 // rangos, `not`, `or`) se acepta y no filtra: las pruebas no dependen de ello.
 //
 // No es un archivo de pruebas (no termina en .test.ts): lo importan.
@@ -59,9 +60,11 @@ class FakeQuery {
     this.payload = p;
     return this;
   }
-  upsert(p: any) {
+  ignoreDuplicates = false;
+  upsert(p: any, opts?: { ignoreDuplicates?: boolean }) {
     this.op = "upsert";
     this.payload = p;
+    this.ignoreDuplicates = Boolean(opts?.ignoreDuplicates);
     return this;
   }
   update(p: any) {
@@ -151,7 +154,8 @@ class FakeQuery {
         const hit = keys ? rows.find((r) => keys.every((k) => String(r[k]) === String(p[k]))) : undefined;
         if (hit) {
           if (this.op === "insert") return { data: null, error: { code: "23505", message: `duplicate key on ${this.table}` } };
-          Object.assign(hit, p);
+          // ON CONFLICT DO NOTHING (`insertOrderIfAbsent`): la fila que ya estaba no se toca.
+          if (!this.ignoreDuplicates) Object.assign(hit, p);
         } else {
           rows.push({ id: p.id ?? `${this.table}-${++seq}`, ...p });
         }

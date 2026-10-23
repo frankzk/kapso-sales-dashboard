@@ -2438,6 +2438,9 @@ function MediaAttach({
 // the cart's draft (or blank for a new sale), products from the real catalog
 // (or a custom item), required address, then generates a REAL Shopify order
 // (contraentrega / COD: pago pendiente, lead Ganado, crédito a la asesora).
+//
+// En una tienda que ya crea sus pedidos en WooCommerce (MOM §38.12) el pedido
+// se crea allí, cada línea por su SKU: no hay ítem manual.
 // ---------------------------------------------------------------------------
 
 type OrderItem = {
@@ -2446,12 +2449,20 @@ type OrderItem = {
   title: string;
   quantity: number;
   unitPrice: number | null;
+  /** El SKU del catálogo. WooCommerce crea la línea por él; Shopify no lo usa. */
+  sku: string | null;
 };
 type ProductResult = Awaited<ReturnType<typeof searchStoreProducts>>[number]; // producto + variantes
 // A single variant flattened for the line-item add (what ProductPicker returns).
-type PickedVariant = { variantId: string; title: string; price: number | null; inventory: number | null };
+type PickedVariant = { variantId: string; title: string; price: number | null; inventory: number | null; sku: string | null };
 
 const rid = () => Math.random().toString(36).slice(2);
+/**
+ * El id de un intento de «Generar pedido»: el mismo en cada reintento hasta que
+ * sale bien. En WooCommerce es lo que evita dos pedidos por un doble clic o un
+ * reintento (`kapta_request_id`, MOM §38.12).
+ */
+const newRequestId = () => globalThis.crypto?.randomUUID?.() ?? `${rid()}${rid()}${rid()}`;
 
 const PERU_REGIONS = [
   "Amazonas", "Áncash", "Apurímac", "Arequipa", "Ayacucho", "Cajamarca", "Callao", "Cusco",
@@ -2489,7 +2500,12 @@ function OrderFormPanel({
   const [district, setDistrict] = useState("");
   const [province, setProvince] = useState("");
   const [referencia, setReferencia] = useState("");
-  const [orderNote, setOrderNote] = useState(""); // → Notas del pedido en Shopify
+  const [orderNote, setOrderNote] = useState(""); // → Notas del pedido en la tienda
+  // Dónde se creará el pedido (`stores.platform`). Null hasta que carga, o si
+  // no se pudo leer: sin saberlo no se ofrece «Ítem manual», que WooCommerce
+  // no puede crear (el servidor decide y frena igual).
+  const [platform, setPlatform] = useState<"shopify" | "woocommerce" | null>(null);
+  const requestIdRef = useRef(newRequestId());
   const [windowOpen, setWindowOpen] = useState(false);
   const [sendConfirm, setSendConfirm] = useState(false);
   const [confirmText, setConfirmText] = useState("");
@@ -2515,12 +2531,15 @@ function OrderFormPanel({
     let alive = true;
     setGeneratedOrder(null);
     resetCopiedOrder();
+    requestIdRef.current = newRequestId();
+    setPlatform(null);
     loadOrderDraft(leadId).then((res) => {
       if (!alive) return;
       if ("error" in res) {
         setMsg(res.error);
       } else {
-        setItems(res.lineItems.map((li) => ({ ...li, key: rid() })));
+        setPlatform(res.platform === "woocommerce" ? "woocommerce" : "shopify");
+        setItems(res.lineItems.map((li) => ({ ...li, sku: li.sku ?? null, key: rid() })));
         setName(res.customerName ?? "");
         // Solo la parte nacional: el campo pinta el `+51` fijo al lado, y el
         // teléfono del lead viene de WhatsApp CON el 51 delante. Sin quitarlo se
@@ -2587,6 +2606,7 @@ function OrderFormPanel({
           title: it.title,
           quantity: it.quantity,
           unitPrice: it.unitPrice,
+          sku: it.sku,
         })),
         customerName: name.trim(),
         phone: phone.trim(),
@@ -2603,6 +2623,7 @@ function OrderFormPanel({
             : { kind: discountKind, value: discountValue },
         noReutilizarBorrador,
         confirmarDuplicado,
+        requestId: requestIdRef.current,
       });
       if (res.requiereConfirmacion && res.error) {
         setDuplicateWarning(res.error);
@@ -2613,6 +2634,8 @@ function OrderFormPanel({
         return;
       }
       setMsg(res.notice ?? "Pedido generado.");
+      // Salió bien: la próxima venta desde este formulario es otro intento.
+      requestIdRef.current = newRequestId();
       setGeneratedOrder(
         res.generatedOrder ?? {
           id: "",
@@ -2658,14 +2681,16 @@ function OrderFormPanel({
           <div className="space-y-3 pt-4 sm:pt-5">
             <p className={LABEL}>Productos</p>
             {items.length === 0 && (
-              <p className="text-[13px] text-ink-500">Sin productos. Agrega del catálogo o un ítem manual.</p>
+              <p className="text-[13px] text-ink-500">
+                {platform === "shopify" ? "Sin productos. Agrega del catálogo o un ítem manual." : "Sin productos. Agrega del catálogo."}
+              </p>
             )}
             {items.length > 0 && (
               <ul className="-mx-4 divide-y divide-line border-y border-line sm:-mx-5">
                 {items.map((it) => (
                   <li key={it.key} className="px-4 py-2.5 sm:px-5">
                     <div className="flex items-start gap-2">
-                      {it.variantId ? (
+                      {it.variantId || it.sku ? (
                         <span className="min-w-0 flex-1 pt-1.5 text-sm text-ink-900">{it.title}</span>
                       ) : (
                         <input
@@ -2700,7 +2725,7 @@ function OrderFormPanel({
                           disabled={pending}
                         />
                       </label>
-                      {it.variantId ? (
+                      {it.variantId || it.sku ? (
                         // Catalog product: unit price is fixed to the catalog (read-only).
                         // Any reduction is handled via the order-level "Descuento" field.
                         <span className="tabular-nums">
@@ -2739,15 +2764,21 @@ function OrderFormPanel({
                 <IconPlus aria-hidden className="text-ink-500" />
                 Producto del catálogo
               </OpsButton>
-              <OpsButton
-                variant="ghost"
-                size="sm"
-                onClick={() => setItems((x) => [...x, { key: rid(), variantId: null, title: "", quantity: 1, unitPrice: null }])}
-                disabled={pending}
-              >
-                <IconPlus aria-hidden />
-                Ítem manual
-              </OpsButton>
+              {/* WooCommerce crea cada línea por SKU: un ítem manual no se puede
+                  crear allí (el servidor lo frena igual, MOM §38.12). */}
+              {platform === "woocommerce" ? (
+                <span className="text-xs text-ink-500">WooCommerce: solo productos del catálogo (con SKU).</span>
+              ) : platform !== "shopify" ? null : (
+                <OpsButton
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setItems((x) => [...x, { key: rid(), variantId: null, title: "", quantity: 1, unitPrice: null, sku: null }])}
+                  disabled={pending}
+                >
+                  <IconPlus aria-hidden />
+                  Ítem manual
+                </OpsButton>
+              )}
             </div>
             {showPicker && (
               <ProductPicker
@@ -2756,7 +2787,7 @@ function OrderFormPanel({
                 onPick={(p) => {
                   setItems((x) => [
                     ...x,
-                    { key: rid(), variantId: p.variantId, title: p.title, quantity: 1, unitPrice: p.price },
+                    { key: rid(), variantId: p.variantId, title: p.title, quantity: 1, unitPrice: p.price, sku: p.sku },
                   ]);
                   setShowPicker(false);
                 }}
@@ -2870,7 +2901,8 @@ function OrderFormPanel({
                 disabled={pending}
               />
               <p className="mt-1 text-xs text-ink-500">
-                Se guarda en las Notas del pedido en Shopify (no se envía al cliente).
+                Se guarda en las Notas del pedido en{" "}
+                {platform === "woocommerce" ? "WooCommerce" : platform === "shopify" ? "Shopify" : "la tienda"} (no se envía al cliente).
               </p>
             </div>
           </div>
@@ -2910,7 +2942,7 @@ function OrderFormPanel({
             {!generatedOrder && (
               <p className="text-xs leading-5 text-ink-500">
                 Pago contraentrega: queda como <span className="font-medium text-ink-700">pago pendiente</span> y sube
-                como pedido real a Shopify. Marca el lead <span className="font-medium text-ink-700">Ganado</span> y suma
+                como pedido real a {platform === "woocommerce" ? "WooCommerce" : platform === "shopify" ? "Shopify" : "la tienda"}. Marca el lead <span className="font-medium text-ink-700">Ganado</span> y suma
                 a tu productividad.
               </p>
             )}
@@ -2936,7 +2968,7 @@ function OrderFormPanel({
                       rel="noreferrer"
                       className={opsButtonClass("secondary", "sm", "pointer-coarse:h-11")}
                     >
-                      Ver en Shopify
+                      {generatedOrder.platform === "woocommerce" ? "Ver en WooCommerce" : "Ver en Shopify"}
                       <IconArrowUpRight aria-hidden className="text-ink-500" />
                     </a>
                   )}
@@ -3096,6 +3128,7 @@ function ProductPicker({
       title: v.variantTitle ? `${p.title} · ${v.variantTitle}` : p.title,
       price: v.price,
       inventory: v.inventory,
+      sku: v.sku ?? null,
     });
   useEffect(() => {
     const term = q.trim();

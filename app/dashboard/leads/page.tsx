@@ -31,6 +31,15 @@ import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Las server actions de esta ruta (leads/actions.ts) corren en su función, y
+ * «Generar pedido» habla con la tienda en varias llamadas seguidas: en
+ * WooCommerce, hasta 45 s con su propio reloj (`WOO_SALE_BUDGET_MS`, MOM
+ * §38.12). Con el límite por defecto podría cortarse a mitad; con 300 s, como
+ * Pedidos y Ajustes, la venta siempre termina y contesta.
+ */
+export const maxDuration = 300;
+
 function isLeadView(v: string | undefined): v is LeadView {
   return !!v && LEAD_VIEWS.some((view) => view.key === v);
 }
