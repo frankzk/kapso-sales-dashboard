@@ -278,7 +278,7 @@ describe("la traída solo lee de Shopify y solo escribe en el historial (§37.1)
     for (const src of [lib, actions]) {
       expect(src).not.toMatch(/from\("orders"\)|from\("order_master"\)|from\("order_events"\)/);
     }
-    expect(actions).toContain('from("shopify_history_orders").upsert(rows, { onConflict: "store_id,order_name" })');
+    expect(actions).toContain('from("shopify_history_orders").upsert(unique, { onConflict: "store_id,order_name" })');
   });
 
   it("la migración 0276 deja una sola traída en curso por tienda y tipo, con RLS", () => {
