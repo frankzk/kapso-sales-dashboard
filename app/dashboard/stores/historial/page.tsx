@@ -168,7 +168,7 @@ export default async function ShopifyHistoryPage({
 
       <Card>
         <Section title={`Cargar archivos · ${store.name}`}>
-          <ShopifyHistoryUpload stores={stores.map((s) => ({ id: s.id, name: s.name }))} defaultStoreId={store.id} />
+          <ShopifyHistoryUpload key={store.id} storeId={store.id} storeName={store.name} />
         </Section>
       </Card>
 

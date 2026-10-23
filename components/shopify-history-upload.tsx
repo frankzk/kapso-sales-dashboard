@@ -4,10 +4,14 @@
 // un año de Aurela pesa decenas de MB y no cabe por una acción del servidor. Se
 // guarda el original comprimido en Storage (respaldo tal cual) y se cargan los
 // pedidos o clientes por tandas, con el avance a la vista.
+//
+// La tienda es la de la pestaña de arriba y no se elige aquí: con un segundo
+// selector, cambiar de pestaña dejaba el título en una tienda y la subida en
+// otra (23-10-2026).
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Badge, Banner, FIELD_BOX, OpsButton } from "@/components/ops-ui";
+import { Badge, Banner, OpsButton } from "@/components/ops-ui";
 import { cn } from "@/components/ui";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 import {
@@ -47,9 +51,8 @@ async function gzip(file: File): Promise<Blob> {
   return new Response(stream).blob();
 }
 
-export function ShopifyHistoryUpload({ stores, defaultStoreId }: { stores: { id: string; name: string }[]; defaultStoreId: string }) {
+export function ShopifyHistoryUpload({ storeId, storeName }: { storeId: string; storeName: string }) {
   const router = useRouter();
-  const [storeId, setStoreId] = useState(defaultStoreId);
   const [files, setFiles] = useState<File[]>([]);
   const [progress, setProgress] = useState<Progress[]>([]);
   const [running, setRunning] = useState(false);
@@ -127,23 +130,8 @@ export function ShopifyHistoryUpload({ stores, defaultStoreId }: { stores: { id:
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end gap-3">
-        <label className="grid gap-1 text-[13px] font-medium text-ink-700">
-          Tienda
-          <select
-            value={storeId}
-            disabled={running}
-            onChange={(e) => setStoreId(e.target.value)}
-            className={cn(FIELD_BOX, "h-9 px-3")}
-          >
-            {stores.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </label>
         <label className="grid min-w-64 flex-1 gap-1 text-[13px] font-medium text-ink-700">
-          Archivos de Shopify (CSV de pedidos, clientes o productos)
+          Archivos de Shopify de {storeName} (CSV de pedidos, clientes o productos)
           <input
             type="file"
             multiple
@@ -154,12 +142,12 @@ export function ShopifyHistoryUpload({ stores, defaultStoreId }: { stores: { id:
           />
         </label>
         <OpsButton variant="primary" disabled={running || !files.length} onClick={run}>
-          {running ? "Cargando…" : `Cargar ${files.length || ""} archivo${files.length === 1 ? "" : "s"}`}
+          {running ? "Cargando…" : `Cargar ${files.length || ""} archivo${files.length === 1 ? "" : "s"} en ${storeName}`}
         </OpsButton>
       </div>
       <p className="text-[13px] text-ink-500">
-        Puedes subir varios a la vez (un CSV por año y el de clientes). Volver a subir uno no duplica nada. No cierres
-        esta pestaña mientras carga.
+        Para la otra marca, elige su pestaña arriba. Puedes subir varios a la vez (un CSV por año y el de clientes).
+        Volver a subir uno no duplica nada. No cierres esta pestaña ni cambies de marca mientras carga.
       </p>
 
       {progress.length > 0 && (

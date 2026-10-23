@@ -15620,7 +15620,11 @@ que Kapta guarda como **archivo de consulta**.
 celulares y direcciones de clientas, lo mismo que la descarga del Master. Muestra
 solo las tiendas que la persona ve.
 
-1. **Cargar archivos.** Se eligen la tienda y uno o varios CSV. El navegador
+1. **Cargar archivos.** La tienda es la de la pestaña de arriba (Aurela,
+   Kenku Peru): la carga no tiene otro selector, y el botón dice en qué tienda
+   carga («Cargar 2 archivos en Aurela»). Con un segundo selector, cambiar de
+   pestaña dejaba el título en una tienda y la carga en otra (23-10-2026). Se
+   eligen uno o varios CSV. El navegador
    lee cada archivo (UTF-8, o el UTF-16 del «CSV para Excel»; separado por coma,
    punto y coma o tabulación), reconoce el tipo por sus cabeceras —pedidos,
    clientes, productos u otro— y:
