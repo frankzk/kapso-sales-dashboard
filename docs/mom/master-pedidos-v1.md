@@ -15673,9 +15673,40 @@ mes. Por eso la pantalla tiene **«Probar acceso a pedidos antiguos»**: una
 consulta de solo lectura que cuenta los pedidos anteriores a 2022 que ve el
 token, el más antiguo y los permisos del token. No guarda nada.
 
-Si los ve, el historial se trae completo por API y va a las mismas tablas de
-§37: **nunca** a `orders` ni al Master (37.1). Si no, la vía son los CSV. Con
-la tienda suspendida por Shopify, la API deja de responder: los CSV siguen
+Resultado en Aurela (23-10-2026): el token tiene `read_all_orders` y ve
+8.959 pedidos anteriores a 2022, el más antiguo el #1001 del 13-04-2021.
+
+**«Traer pedidos y clientes».** Con el acceso probado, la pantalla trae todo
+por API, primero los pedidos y después los clientes:
+
+1. Kapta le pide a Shopify el archivo completo (`bulkOperationRunQuery`):
+   todos los pedidos con sus productos, o todos los clientes. Es la única
+   escritura que se le hace a Shopify, y no cambia ningún dato de la tienda.
+2. Mientras Shopify lo arma, la traída está `preparando`. La pantalla pregunta
+   cada 5 segundos.
+3. Con el archivo listo (`importando`), Kapta lo lee por tandas de ~100
+   segundos desde el byte donde quedó la anterior, y guarda cada 500 pedidos o
+   clientes. Corta siempre justo antes de un pedido nuevo: ningún pedido queda
+   partido. Un producto cuyo pedido quedó en otra tanda se suma al pedido ya
+   guardado, sin repetir los que ya tenía.
+4. Al llegar al final, `listo`, con cuántos guardó y de qué fecha a qué fecha.
+   Si Shopify falla o el archivo vence (dura 7 días), `error`, y se vuelve a
+   traer.
+
+Reglas:
+
+- **Solo al historial.** Va a las mismas tablas y con la misma clave que el
+  CSV: (tienda, número de pedido) y (tienda, id de cliente de Shopify). Si un
+  pedido ya estaba por CSV, se reemplaza con lo de la API, sin duplicarse.
+  **Nunca** a `orders`, al Master ni a sus eventos (37.1).
+- **Una a la vez.** Solo una traída en curso por tienda y tipo. Cada tanda la
+  toma una sola pestaña (`lease_until`); otra pestaña espera.
+- **Se puede cerrar la pestaña.** Lo leído queda guardado y anotado.
+  «Continuar la traída» sigue desde ahí.
+- **Mismo permiso** que la pantalla (`data.export`) y solo en las tiendas de
+  la persona.
+
+Con la tienda suspendida por Shopify, la API deja de responder: los CSV siguen
 siendo el respaldo.
 
 Implementación:
@@ -15687,10 +15718,17 @@ Implementación:
   agrupación por pedido, clientes, montos y fechas).
 - `app/dashboard/stores/historial/actions.ts`: registrar el archivo y su URL
   firmada de subida, cargar tandas y cerrar el archivo.
+- `db/migrations/0276_shopify_history_imports.sql`: `shopify_history_imports`
+  (cada traída por API) e `import_id` en pedidos y clientes del historial.
+- `lib/shopify-history-bulk.ts`: las consultas a Shopify y la lectura pura del
+  archivo (líneas, pedidos con sus productos, clientes).
+- `lib/shopify-history-import.ts`: pedir el archivo, preguntar por él y leerlo
+  por tandas.
 - `components/shopify-history-upload.tsx`, `components/shopify-history-api.tsx`
-  (la prueba de 37.5) y `app/dashboard/stores/historial/page.tsx`: la
-  pantalla.
-- Pruebas: `test/shopify-history.test.ts`.
+  (la prueba y la traída de 37.5) y `app/dashboard/stores/historial/page.tsx`:
+  la pantalla.
+- Pruebas: `test/shopify-history.test.ts`, `test/shopify-history-ui.test.ts` y
+  `test/shopify-history-bulk.test.ts`.
 
 ## 38. WooCommerce (23-10-2026)
 
