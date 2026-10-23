@@ -3,7 +3,7 @@
 import type { RecoveryKind } from "@/lib/reproprovincia";
 import type { PaymentGateway } from "@/lib/payment-gateway";
 
-export type Role = "owner" | "admin" | "viewer" | "vendedora";
+export type Role = "owner" | "admin" | "viewer" | "vendedora" | "motorizado";
 export type ShippingMode = "cod" | "agency" | null;
 export type SyncSource = "shopify" | "kapso" | "ops";
 

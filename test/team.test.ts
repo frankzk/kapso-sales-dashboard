@@ -93,8 +93,9 @@ describe("team guards", () => {
       expect(canAddMember("admin", "admin")).toEqual({ ok: false, reason: "Solo el dueño puede invitar a alguien como admin." });
     });
     it("el desplegable de invitar muestra solo lo que se puede elegir", () => {
-      expect(invitableRoles("owner")).toEqual(["owner", "admin", "viewer", "vendedora"]);
-      expect(invitableRoles("admin")).toEqual(["viewer", "vendedora"]);
+      expect(invitableRoles("owner")).toEqual(["owner", "admin", "viewer", "vendedora", "motorizado"]);
+      // El motorizado solo da su ruta (MOM §27, 23-10-2026): no reparte poder.
+      expect(invitableRoles("admin")).toEqual(["viewer", "vendedora", "motorizado"]);
     });
   });
 

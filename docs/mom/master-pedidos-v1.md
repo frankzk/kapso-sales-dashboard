@@ -10271,6 +10271,15 @@ separada del usuario de acceso.
 - Gestionar motorizados en Equipo: owner/admin (`riders.manage`). El alta rápida
   por nombre desde Liquidaciones sigue disponible bajo `settlements.manage`.
 
+**El acceso «Motorizado» en Equipo (23-10-2026).** Para darle `/reparto` a un
+motorizado: se le invita en Equipo con el acceso **Motorizado** (su correo; él
+crea su contraseña desde la invitación) y después se vincula ese usuario a su
+ficha en Equipo → Motorizados. El acceso solo da `routes.deliver` y ninguna
+tienda («Solo su ruta»); lo pueden invitar el dueño y los admins, igual que una
+vendedora. El rol existía en la base desde 0066 pero no en la lista de Equipo:
+no se podía elegir y el selector pintaba a Roy y Yhoni —motorizados— como
+«Dueño», la primera opción. Nunca tuvieron permisos de dueño.
+
 ### En la Mesa de despacho
 
 - El courier de la ruta se elige de una lista (Aliclik, Swayp, Shalom, Tanders,

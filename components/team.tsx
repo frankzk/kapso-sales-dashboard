@@ -319,7 +319,7 @@ function AddMemberForm({ orgId, myRole }: { orgId: string; myRole: Role }) {
             defaultValue="viewer"
             className="mt-1 rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500"
           >
-            {/* Un admin solo invita vendedoras y solo lectura (MOM §16). */}
+            {/* Un admin solo invita vendedoras, solo lectura y motorizados (MOM §16, §27). */}
             {invitableRoles(myRole).map((r) => (
               <option key={r} value={r}>
                 {ACCESS_LABEL[r] ?? r}
@@ -536,6 +536,10 @@ function StoreAccessCell({
   stores: Store[];
 }) {
   if (!stores.length) return <span className="text-xs text-slate-400">Sin tiendas</span>;
+  // El motorizado no tiene tiendas: ve solo las paradas de su ruta (MOM §27).
+  if (member.role === "motorizado") {
+    return <span className="text-xs text-slate-400">Solo su ruta</span>;
+  }
   // Owners/admins already see every store in the org via their role; viewers and
   // vendedoras need explicit per-store grants.
   if (member.role !== "viewer" && member.role !== "vendedora") {
