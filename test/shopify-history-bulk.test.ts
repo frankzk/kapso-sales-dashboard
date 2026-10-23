@@ -7,6 +7,7 @@ import {
   bulkOutcome,
   gidNumber,
   groupBulkOrders,
+  hasFullOrderAccess,
   mapBulkCustomer,
   mapBulkOrder,
   mergeLineItems,
@@ -278,7 +279,7 @@ describe("la traída solo lee de Shopify y solo escribe en el historial (§37.1)
     for (const src of [lib, actions]) {
       expect(src).not.toMatch(/from\("orders"\)|from\("order_master"\)|from\("order_events"\)/);
     }
-    expect(actions).toContain('from("shopify_history_orders").upsert(rows, { onConflict: "store_id,order_name" })');
+    expect(actions).toContain('from("shopify_history_orders").upsert(unique, { onConflict: "store_id,order_name" })');
   });
 
   it("la migración 0276 deja una sola traída en curso por tienda y tipo, con RLS", () => {
@@ -286,5 +287,19 @@ describe("la traída solo lee de Shopify y solo escribe en el historial (§37.1)
     expect(sql).toContain("alter table shopify_history_imports enable row level security");
     expect(sql).toMatch(/create unique index if not exists shopify_history_imports_active_uidx[\s\S]*where status in \('preparando', 'importando'\)/);
     expect(sql).not.toMatch(/for (insert|update|delete|all) to authenticated/);
+  });
+});
+
+describe("¿el token ve todos los pedidos? (§37.5)", () => {
+  const now = new Date("2026-10-23T22:00:00Z");
+
+  it("con read_all_orders, sí, aunque la tienda no tenga nada antes de 2022 (Kenku abrió en 2023)", () => {
+    expect(hasFullOrderAccess({ scopes: ["read_all_orders", "read_orders"], oldestCreatedAt: "2023-04-14T15:00:00Z", now })).toBe(true);
+  });
+
+  it("sin el permiso, sí solo si alcanza un pedido de antes de la ventana de 60 días", () => {
+    expect(hasFullOrderAccess({ scopes: ["read_orders"], oldestCreatedAt: "2023-04-14T15:00:00Z", now })).toBe(true);
+    expect(hasFullOrderAccess({ scopes: ["read_orders"], oldestCreatedAt: "2026-08-25T00:00:00Z", now })).toBe(false);
+    expect(hasFullOrderAccess({ scopes: ["read_orders"], oldestCreatedAt: null, now })).toBe(false);
   });
 });

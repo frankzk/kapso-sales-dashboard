@@ -296,3 +296,21 @@ export function bulkOutcome(status: string | null | undefined): "esperar" | "lis
   if (status === "FAILED" || status === "CANCELED" || status === "CANCELING" || status === "EXPIRED") return "fallo";
   return "esperar";
 }
+
+/** Shopify deja leer por API solo los últimos 60 días sin `read_all_orders`. */
+export const SHOPIFY_DEFAULT_ORDERS_WINDOW_DAYS = 60;
+
+/**
+ * ¿El token ve TODOS los pedidos de la tienda? (§37.5) Sí si tiene
+ * `read_all_orders`, o si el pedido más antiguo que alcanza es de antes de la
+ * ventana de 60 días. No se mira «antes de 2022»: Kenku Peru abrió en 2023 y
+ * su #1001 es del 14-04-2023, así que no tiene nada antes de 2022 aunque el
+ * token vea todo.
+ */
+export function hasFullOrderAccess(input: { scopes: readonly string[]; oldestCreatedAt: string | null; now: Date }): boolean {
+  if (input.scopes.includes("read_all_orders")) return true;
+  if (!input.oldestCreatedAt) return false;
+  const oldest = Date.parse(input.oldestCreatedAt);
+  const windowStart = input.now.getTime() - (SHOPIFY_DEFAULT_ORDERS_WINDOW_DAYS + 1) * 86_400_000;
+  return Number.isFinite(oldest) && oldest < windowStart;
+}

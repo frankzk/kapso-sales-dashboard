@@ -9,6 +9,7 @@ import {
   detectDelimiter,
   detectKind,
   money,
+  uniqueOrderNames,
   parseShopifyExport,
   shopifyDate,
 } from "@/lib/shopify-history";
@@ -245,5 +246,28 @@ describe("el historial es un archivo, no pedidos del Master (MOM §37)", () => {
     expect(probe).toContain("await guard()");
     expect(probe).toContain('ordersCount(query: "created_at:<2022-01-01")');
     expect(probe).not.toMatch(/mutation|\.insert\(|\.upsert\(|\.update\(|\.delete\(/);
+  });
+});
+
+describe("números de pedido repetidos en Shopify (§37.3)", () => {
+  const row = (name: string, id: string | null, extra = "") => ({ order_name: name, shopify_order_id: id, extra });
+
+  it("dos pedidos distintos con el mismo número se guardan los dos", () => {
+    const out = uniqueOrderNames([row("#1234", "111"), row("#1234", "555")], new Map());
+    expect(out.map((r) => r.order_name)).toEqual(["#1234", "#1234 · 555"]);
+  });
+
+  it("el mismo pedido repetido queda una vez, con lo último", () => {
+    const out = uniqueOrderNames([row("#1234", "111", "viejo"), row("#1234", "111", "nuevo")], new Map());
+    expect(out).toEqual([row("#1234", "111", "nuevo")]);
+  });
+
+  it("frente a lo ya guardado: otro id se aparta, el mismo id lo reemplaza", () => {
+    const existing = new Map<string, string | null>([["#1234", "111"], ["#77", null]]);
+    const out = uniqueOrderNames([row("#1234", "555"), row("#1234", "111"), row("#77", "9")], existing);
+    expect(out.map((r) => r.order_name)).toEqual(["#1234 · 555", "#1234", "#77"]);
+    // Volver a traer el apartado no lo duplica.
+    const again = uniqueOrderNames([row("#1234", "555")], new Map([["#1234", "111"], ["#1234 · 555", "555"]]));
+    expect(again.map((r) => r.order_name)).toEqual(["#1234 · 555"]);
   });
 });

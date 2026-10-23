@@ -11,8 +11,8 @@ import { getAccessibleStores, getCurrentUser } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { getStoreCreds } from "@/lib/ingest";
 import { shopifyGraphQL } from "@/lib/shopify";
-import type { HistoryCustomer, HistoryFileKind, HistoryLineItem, HistoryOrder } from "@/lib/shopify-history";
-import { mergeLineItems, type BulkKind } from "@/lib/shopify-history-bulk";
+import { uniqueOrderNames, type HistoryCustomer, type HistoryFileKind, type HistoryLineItem, type HistoryOrder } from "@/lib/shopify-history";
+import { hasFullOrderAccess, mergeLineItems, type BulkKind } from "@/lib/shopify-history-bulk";
 import {
   IMPORT_COLUMNS,
   advanceHistoryImport as advanceImport,
@@ -175,6 +175,30 @@ function customerRow(storeId: string, c: HistoryCustomer, link: { file_id: strin
   };
 }
 
+/**
+ * Guarda pedidos del historial sin que un número repetido en Shopify detenga
+ * la tanda ni pise a otro pedido (`uniqueOrderNames`, MOM §37.3).
+ */
+async function upsertHistoryOrders(
+  admin: ReturnType<typeof createAdminSupabase>,
+  storeId: string,
+  rows: ReturnType<typeof orderRow>[],
+): Promise<number> {
+  const names = [...new Set(rows.map((r) => r.order_name).filter((n): n is string => !!n))];
+  if (!names.length) return 0;
+  const { data: existing, error: readError } = await admin
+    .from("shopify_history_orders")
+    .select("order_name,shopify_order_id")
+    .eq("store_id", storeId)
+    .in("order_name", names);
+  if (readError) throw new Error(`No se pudo revisar la tanda: ${readError.message}`);
+  const owners = new Map(((existing ?? []) as { order_name: string; shopify_order_id: string | null }[]).map((e) => [e.order_name, e.shopify_order_id]));
+  const unique = uniqueOrderNames(rows, owners);
+  const { error } = await admin.from("shopify_history_orders").upsert(unique, { onConflict: "store_id,order_name" });
+  if (error) throw new Error(`No se pudo guardar la tanda: ${error.message}`);
+  return unique.length;
+}
+
 /** Una tanda de pedidos. Volver a mandarla no duplica: (tienda, número) es la clave. */
 export async function importHistoryOrders(fileId: string, orders: HistoryOrder[]): Promise<{ saved: number } | { error: string }> {
   const g = await guard();
@@ -186,13 +210,17 @@ export async function importHistoryOrders(fileId: string, orders: HistoryOrder[]
     .map((o) => orderRow(found.file.store_id, o, { file_id: found.file.id }))
     .filter((r) => r.order_name);
   if (!rows.length) return { saved: 0 };
-  const { error } = await found.admin.from("shopify_history_orders").upsert(rows, { onConflict: "store_id,order_name" });
-  if (error) return { error: `No se pudo guardar la tanda: ${error.message}` };
+  let saved: number;
+  try {
+    saved = await upsertHistoryOrders(found.admin, found.file.store_id, rows);
+  } catch (cause) {
+    return { error: (cause as Error).message };
+  }
   if (found.file.status === "subiendo") {
     await found.admin.from("shopify_history_files").update({ status: "cargando" }).eq("id", fileId);
     found.file.status = "cargando";
   }
-  return { saved: rows.length };
+  return { saved };
 }
 
 /** Una tanda de clientes. Clave: (tienda, cliente). */
@@ -253,12 +281,13 @@ export interface HistoryAccessProbe {
   /** El pedido más antiguo que ve el token. */
   oldest: { name: string; createdAt: string } | null;
   scopes: string[];
+  /** Ve todos los pedidos de la tienda (`hasFullOrderAccess`): se puede traer por API. */
+  fullAccess: boolean;
 }
 
 /**
- * ¿El token de la tienda ve los pedidos de más de 60 días? Una consulta de solo
- * lectura a Shopify: no guarda nada. Sin `read_all_orders`, Shopify solo deja
- * ver los últimos 60 días y aquí sale 0 antes de 2022.
+ * ¿El token de la tienda ve todos sus pedidos, no solo los últimos 60 días?
+ * Una consulta de solo lectura a Shopify: no guarda nada.
  */
 export async function probeShopifyHistoryAccess(storeId: string): Promise<HistoryAccessProbe | { error: string }> {
   const g = await guard();
@@ -280,11 +309,14 @@ export async function probeShopifyHistoryAccess(storeId: string): Promise<Histor
         primero: orders(first: 1, sortKey: CREATED_AT) { nodes { name createdAt } }
       }`,
     });
+    const oldest = data.primero?.nodes?.[0] ?? null;
+    const scopes = (data.currentAppInstallation?.accessScopes ?? []).map((s) => s.handle).sort();
     return {
       before2022: data.antiguos?.count ?? 0,
       before2022AtLeast: data.antiguos?.precision === "AT_LEAST",
-      oldest: data.primero?.nodes?.[0] ?? null,
-      scopes: (data.currentAppInstallation?.accessScopes ?? []).map((s) => s.handle).sort(),
+      oldest,
+      scopes,
+      fullAccess: hasFullOrderAccess({ scopes, oldestCreatedAt: oldest?.createdAt ?? null, now: new Date() }),
     };
   } catch (cause) {
     return { error: `Shopify no respondió: ${(cause as Error).message.slice(0, 300)}` };
@@ -319,9 +351,7 @@ function historyWriter(admin: ReturnType<typeof createAdminSupabase>, storeId: s
     async orders(orders, importId) {
       const rows = orders.map((o) => orderRow(storeId, o, { import_id: importId })).filter((r) => r.order_name);
       if (!rows.length) return 0;
-      const { error } = await admin.from("shopify_history_orders").upsert(rows, { onConflict: "store_id,order_name" });
-      if (error) throw new Error(`No se pudo guardar la tanda: ${error.message}`);
-      return rows.length;
+      return upsertHistoryOrders(admin, storeId, rows);
     },
     async customers(customers, importId) {
       const rows = customers.map((c) => customerRow(storeId, c, { import_id: importId })).filter((r) => r.customer_key);

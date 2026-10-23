@@ -15661,6 +15661,11 @@ solo las tiendas que la persona ve.
 - **Volver a subir no duplica.** La clave es (tienda, número de pedido) y
   (tienda, cliente); lo repetido se reemplaza con lo último subido. Si un
   archivo se corta a mitad, se vuelve a subir entero.
+- **Números repetidos.** En Shopify dos pedidos distintos pueden tener el mismo
+  número (en Aurela la traída por API se detuvo así el 23-10-2026, a los
+  106.000 pedidos). El primero conserva su número y el otro se guarda como
+  «#1234 · ‹id de Shopify›»: no se pierde ninguno. El mismo pedido repetido
+  (mismo id) queda una sola vez.
 - La clienta se identifica por el «Customer ID» de Shopify; sin él, por el
   correo; sin correo, por el celular. Una fila sin nada de eso no se guarda.
 - El celular se normaliza igual que en Kapta (`normalizePhone`, 51 + nueve
@@ -15685,6 +15690,12 @@ token ve pedidos más antiguos: la primera sincronización solo pidió el últim
 mes. Por eso la pantalla tiene **«Probar acceso a pedidos antiguos»**: una
 consulta de solo lectura que cuenta los pedidos anteriores a 2022 que ve el
 token, el más antiguo y los permisos del token. No guarda nada.
+
+Se puede traer por API si el token **ve todos los pedidos de la tienda**:
+tiene `read_all_orders`, o el más antiguo que alcanza es de antes de la
+ventana de 60 días. No se mira «antes de 2022»: Kenku Peru abrió en 2023 (su
+#1001 es del 14-04-2023) y la prueba la bloqueaba aunque su token ve todo
+(corregido el 23-10-2026).
 
 Resultado en Aurela (23-10-2026): el token tiene `read_all_orders` y ve
 8.959 pedidos anteriores a 2022, el más antiguo el #1001 del 13-04-2021.
