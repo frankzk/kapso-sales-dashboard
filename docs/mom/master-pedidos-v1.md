@@ -27,10 +27,15 @@ heredados continúan disponibles como evidencia y compatibilidad.
 
 ## 2. Principios no negociables
 
-1. Shopify es la única fuente de pedidos.
-2. Todo pedido de Shopify aparece en el Master: ni más ni menos.
+1. La tienda es la única fuente de pedidos: Shopify hasta su cierre
+   (28-10-2026) y WooCommerce después (§38, decisión del owner del 23-10-2026).
+   Cada pedido lleva su plataforma (`orders.platform`).
+2. Todo pedido de la tienda aparece en el Master: ni más ni menos (lo que
+   WooCommerce no considera pedido, §38.3, tampoco entra).
 3. Kapta no crea pedidos comerciales. Las correcciones comerciales se realizan
-   anulando el pedido incorrecto en Shopify y creando otro.
+   anulando el pedido incorrecto en la tienda de la que vino y creando otro.
+   Un pedido de la era Shopify después del cierre: §6.4, pendiente del owner
+   (§38.9).
 4. Kapta es la fuente de verdad operativa, logística, financiera y de auditoría.
 5. El historial se conserva indefinidamente. Excepción: los datos personales
    del comprador de una tienda cliente de otra organización se anonimizan
@@ -40,8 +45,8 @@ heredados continúan disponibles como evidencia y compatibilidad.
 7. Un pedido puede tener varias salidas físicas simultáneas o sucesivas.
 8. El estado del pedido no reemplaza el estado de cada salida.
 9. `Entregado` en logística y `cerrado financieramente` son hechos distintos.
-10. Ningún resultado de courier cancela por sí solo el pedido en Shopify.
-11. Nunca se automatizan sin intervención humana: cancelación en Shopify,
+10. Ningún resultado de courier cancela por sí solo el pedido en la tienda.
+11. Nunca se automatizan sin intervención humana: cancelación en la tienda,
     reembolsos, excepción de adelanto, merma y cierre de una liquidación
     observada.
 
@@ -12715,7 +12720,7 @@ del comprador se anonimizan.** Aurela y Kenku no cambian.
 
 #### 29.15.10 Lo que no cambia
 
-- Shopify sigue siendo la única fuente de pedidos (§2). Kapta no crea pedidos
+- La tienda sigue siendo la única fuente de pedidos (§2). Kapta no crea pedidos
   para la tienda, y cancelar una solicitud no cancela el pedido en Shopify.
 - Aurela y Kenku siguen con la cola automática de «Pedidos disponibles», la
   tabla interna, el 3.5 % y el reintento gestionado por Grupo GF.
@@ -15605,7 +15610,7 @@ que Kapta guarda como **archivo de consulta**.
   liquidaciones ni comprobantes, y no cuentan en el Consolidado. Los estados
   que se ven son los de Shopify, tal como vinieron (`financial_status`,
   `fulfillment_status`, `cancelled_at`): no se traducen a estados del Master.
-- Shopify sigue siendo la única fuente de pedidos (AGENTS.md, regla 4): esto es
+- La tienda sigue siendo la única fuente de pedidos (AGENTS.md, regla 4): esto es
   una copia de lo que Shopify ya tenía, no un canal de entrada.
 
 ### 37.2 La pantalla
@@ -15675,10 +15680,12 @@ La migración 0274 se aplica a mano y antes del código (DEPLOY.md, entrada del
 planifica para el peor caso, el lunes 27-10 a las 19:00 de Lima. Las dos
 tiendas pasan a WooCommerce. Hasta entonces siguen en Shopify exactamente igual.
 
-Pendiente del owner: si WooCommerce va en la **misma fila** de la tienda de
-Kapta (recomendado: una tienda por marca, alimentada por dos fuentes) o en una
-fila nueva. Esta sección sirve para las dos: las credenciales de WooCommerce
-viven en una fila de `stores` y cada pedido lleva su plataforma.
+**Decisión del owner (23-10-2026): WooCommerce va en la misma fila** de la
+tienda de Kapta. Kenku Peru y Aurela siguen siendo una tienda cada una,
+alimentada por dos fuentes (Shopify hasta el cierre, WooCommerce después), con
+la misma configuración de Kapso, WhatsApp, couriers, Flow, Meta y cuentas de
+cobro, y el mismo historial. No se crean tiendas nuevas. Las credenciales de
+WooCommerce viven en esa fila de `stores` y cada pedido lleva su plataforma.
 
 ### 38.1 La plataforma de la tienda y la del pedido
 
@@ -15719,6 +15726,13 @@ viven en una fila de `stores` y cada pedido lleva su plataforma.
 - **Nombre:** `"#" + number`, el número que pone el plugin de numeración de la
   tienda (`#KP200001`). Sin el plugin, WooCommerce manda su id interno, sin
   prefijo: por eso el plugin va instalado antes del primer pedido real.
+- **Numeración (decisión del owner, 23-10-2026):** Kenku Peru desde
+  **`KP200001`** y Aurela desde **`AUR900001`**: el prefijo de siempre y seis
+  dígitos, como en Shopify. Los dos rangos no se cruzan entre sí ni con los de
+  Shopify (el 23-10-2026 Kenku iba por el 143.572 y Aurela por el 178.540): el
+  cruce por código de guía busca el número sin prefijo en las dos tiendas. Los
+  pedidos de prueba se borran y el contador se fija después, antes del primer
+  pedido real.
 - **Fechas:** las `*_gmt` de WooCommerce, que llegan sin zona, más «Z».
   `created_at` y `processed_at` son la fecha del pedido, `updated_at` la de su
   último cambio. Nunca la hora local de la tienda ni la del pago.
@@ -15845,11 +15859,11 @@ funcionando la dirección del Master, la nota, los totales del cajón,
   ninguna fila: todas las tiendas nacen `shopify`, sin nada de WooCommerce, y
   todos los pedidos y borradores, `shopify`. Los mapeadores de Shopify no
   escriben la plataforma.
-- **Pendiente del owner.** Los principios 1-3, 10 y 11 de §2 todavía dicen
-  Shopify. Pasarlos a «la tienda (Shopify hasta el cierre, WooCommerce
-  después)», las anulaciones de los pedidos de la era Shopify después del
-  cierre (§6.4) y los canales de WooCommerce en §17.3 son cambios de regla que
-  esperan su decisión.
+- **Los principios 1-3, 10 y 11 de §2 dicen «la tienda»** (Shopify hasta el
+  cierre, WooCommerce después) desde la decisión del owner del 23-10-2026.
+- **Pendiente del owner.** Las anulaciones de los pedidos de la era Shopify
+  después del cierre (§6.4) y los canales de WooCommerce en §17.3 son cambios de
+  regla que esperan su decisión.
 
 ### 38.10 Implementación
 

@@ -62,11 +62,32 @@ describe("§3 Pedido: orden comercial creada en la tienda (Shopify o WooCommerce
 describe("§38 WooCommerce (23-10-2026)", () => {
   const s38 = section("## 38. WooCommerce (23-10-2026)");
 
-  it("fecha, migración a mano antes del código, el corte y la decisión pendiente del owner", () => {
+  it("fecha, migración a mano antes del código, el corte y la decisión del owner (misma fila)", () => {
     expect(s38).toContain("La migración 0274 se aplica a mano y antes del código (DEPLOY.md, entrada del 23-10-2026).");
     expect(s38).toContain("Shopify cierra Kenku Perú y Aurela el 28-10-2026 (UTC)");
     expect(s38).toContain("el lunes 27-10 a las 19:00 de Lima");
-    expect(s38).toContain("Pendiente del owner: si WooCommerce va en la **misma fila** de la tienda");
+    expect(s38).toContain("**Decisión del owner (23-10-2026): WooCommerce va en la misma fila**");
+    expect(s38).toContain("No se crean tiendas nuevas.");
+    expect(s38).not.toContain("Pendiente del owner: si WooCommerce va en la **misma fila**");
+  });
+
+  it("38.2 la numeración del owner: KP200001 y AUR900001, seis dígitos y rangos que no se cruzan", () => {
+    expect(s38).toContain("Kenku Peru desde **`KP200001`** y Aurela desde **`AUR900001`**");
+    expect(s38).toContain("Los dos rangos no se cruzan entre sí ni con los de Shopify");
+    expect(s38).toContain("el cruce por código de guía busca el número sin prefijo en las dos tiendas");
+  });
+
+  it("§2 y AGENTS.md: la tienda es la única fuente (Shopify hasta el cierre, WooCommerce después)", () => {
+    const s2 = section("## 2. Principios no negociables");
+    expect(s2).toContain("1. La tienda es la única fuente de pedidos: Shopify hasta su cierre (28-10-2026) y WooCommerce después (§38");
+    expect(s2).toContain("2. Todo pedido de la tienda aparece en el Master: ni más ni menos");
+    expect(s2).toContain("anulando el pedido incorrecto en la tienda de la que vino y creando otro.");
+    expect(s2).toContain("10. Ningún resultado de courier cancela por sí solo el pedido en la tienda.");
+    expect(s2).toContain("cancelación en la tienda,");
+    expect(s2).not.toContain("Shopify es la única fuente de pedidos");
+    expect(flat(read("AGENTS.md"))).toContain(
+      "4. Mantén la tienda como única fuente de pedidos (Shopify hasta su cierre, WooCommerce después: MOM §2 y §38)",
+    );
   });
 
   it("38.1 dos plataformas y ninguna otra, en las tres tablas, como en la 0274", () => {
@@ -246,7 +267,8 @@ describe("§38 WooCommerce (23-10-2026)", () => {
     expect(s38).toContain("**Kenku Perú y Aurela siguen en Shopify** hasta el cierre");
     expect(s38).toContain("La 0274 no actualiza ninguna fila");
     expect(s38).toContain("Los mapeadores de Shopify no escriben la plataforma.");
-    expect(s38).toContain("Los principios 1-3, 10 y 11 de §2 todavía dicen Shopify.");
+    expect(s38).toContain("**Los principios 1-3, 10 y 11 de §2 dicen «la tienda»**");
+    expect(s38).toContain("Las anulaciones de los pedidos de la era Shopify después del cierre (§6.4) y los canales de WooCommerce en §17.3");
   });
 
   it("DEPLOY.md tiene la entrada, a mano y antes del código; verify-db corre la prueba", () => {
