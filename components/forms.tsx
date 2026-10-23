@@ -1,11 +1,13 @@
 "use client";
 
 import { useActionState } from "react";
+import Link from "next/link";
 import {
   createOrganization,
   createStore,
   type ActionState,
 } from "@/app/dashboard/actions";
+import { connectOwnAppStore, type OwnAppConnectState } from "@/app/dashboard/stores/new/actions";
 
 const initial: ActionState = {};
 
@@ -147,6 +149,116 @@ export function CreateStoreForm({ orgs }: { orgs: { id: string; name: string }[]
         className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-60"
       >
         {pending ? "Conectando…" : "Conectar tienda"}
+      </button>
+    </form>
+  );
+}
+
+const initialOwnApp: OwnAppConnectState = {};
+
+/**
+ * «Conectar con app propia de Shopify» (owner, 23-10-2026; MOM §36.2): la
+ * tienda cuya organización de Shopify creó su propia app en el Dev Dashboard.
+ * Los permisos llegan del servidor (`OWN_APP_REQUIRED_SCOPES`): este módulo va
+ * al navegador y no puede importar lib/shopify-own-app.
+ */
+export function ConnectOwnAppStoreForm({
+  orgs,
+  scopes,
+}: {
+  orgs: { id: string; name: string }[];
+  scopes: readonly string[];
+}) {
+  const [state, action, pending] = useActionState(connectOwnAppStore, initialOwnApp);
+  return (
+    <form action={action} className="max-w-2xl space-y-5">
+      <div className="space-y-1 text-sm text-slate-600">
+        <p>
+          Para tiendas cuya organización de Shopify creó su propia app en el Dev Dashboard. Kapta renueva el
+          acceso cada día.
+        </p>
+        <p className="text-xs text-slate-500">
+          Permisos que la app debe tener: <code className="font-mono">{scopes.join(", ")}</code>. Instálala en la
+          tienda y copia el Client ID y el Client secret desde su Configuración.
+        </p>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="sm:col-span-2">
+          <label className={labelCls} htmlFor="own_org_id">
+            Organización
+          </label>
+          <select id="own_org_id" name="org_id" required className={inputCls}>
+            {orgs.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className={labelCls} htmlFor="own_shopify_domain">
+            Dominio Shopify
+          </label>
+          <input
+            id="own_shopify_domain"
+            name="shopify_domain"
+            required
+            placeholder="tu-tienda.myshopify.com"
+            autoComplete="off"
+            className={inputCls}
+          />
+        </div>
+        <div>
+          <label className={labelCls} htmlFor="own_name">
+            Nombre de la tienda
+          </label>
+          <input id="own_name" name="name" placeholder="El de Shopify si lo dejas vacío" className={inputCls} />
+        </div>
+        <div>
+          <label className={labelCls} htmlFor="own_client_id">
+            Client ID
+          </label>
+          <input id="own_client_id" name="client_id" required autoComplete="off" className={inputCls} />
+        </div>
+        <div>
+          <label className={labelCls} htmlFor="own_client_secret">
+            Client secret
+          </label>
+          <input
+            id="own_client_secret"
+            name="client_secret"
+            type="password"
+            required
+            autoComplete="off"
+            className={inputCls}
+          />
+          <p className={hintCls}>Se cifra en la base y no se vuelve a mostrar.</p>
+        </div>
+      </div>
+
+      {state.error && <p className="text-sm text-red-600">{state.error}</p>}
+      {state.warnings?.length ? (
+        <div className="space-y-1">
+          <p className="text-sm font-medium text-slate-700">Tienda conectada, con avisos:</p>
+          {state.warnings.map((w, i) => (
+            <p key={i} className="text-sm text-amber-600">
+              ⚠ {w}
+            </p>
+          ))}
+          {state.storeId && (
+            <Link href={`/dashboard/${state.storeId}`} className="text-sm text-brand-700 hover:underline">
+              Ir a la tienda →
+            </Link>
+          )}
+        </div>
+      ) : null}
+
+      <button
+        type="submit"
+        disabled={pending || Boolean(state.storeId)}
+        className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-60"
+      >
+        {pending ? "Conectando…" : "Conectar con app propia"}
       </button>
     </form>
   );

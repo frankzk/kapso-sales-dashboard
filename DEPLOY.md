@@ -3452,3 +3452,140 @@ de entorno, RPC ni crons nuevos.
 calcular con `cost_tariffs`. La 0270 no se deshace sola: las salidas
 rellenadas se reconocen por su `route_output_filled` con
 `payload.backfill = true`.
+
+### 23-10-2026 · Tiendas con su app propia de Shopify (0271, MOM §36)
+
+Conectar «Súper Human Perú» con la app que su propia organización de Shopify
+creó en el Dev Dashboard («app propia»): Shopify ya no deja crear apps
+personalizadas en el admin, y la app pública «Kapta» no está revisada. La app
+propia pide su token con su Client ID y su Client secret (*client credentials
+grant*) y cada token dura ~24 h; Kapta lo renueva cada hora (cron) y antes de
+usarlo.
+
+**Kenku y Aurela no cambian.** Siguen con la app interna, su token y sus
+webhooks; las tiendas `clientes`, igual. Nada de esto las desconecta, les
+registra webhooks ni les cambia el token, y la 0271 no actualiza ninguna fila.
+Sin variables de entorno nuevas: el Client ID y el Client secret son de cada
+tienda, se escriben en Kapta y nunca van a Vercel, al chat ni al repositorio.
+
+1. **Migración `0271_shopify_app_propia.sql`, a mano y ANTES del código.**
+   Amplía `stores_shopify_app_check` a `('interna', 'clientes', 'propia')`;
+   añade `stores.shopify_client_id`, `shopify_client_secret_enc` (cifrado como
+   los demás `*_enc`), `shopify_token_expires_at`, `shopify_token_renewed_at` y
+   `shopify_token_error`; y pone `stores_own_app_columns_check` (esas cinco
+   columnas solo tienen valor en una tienda `propia`) y
+   `stores_own_app_shop_uniq` (un dominio, una sola tienda con app propia).
+   Sin grants nuevos: la fila la protege la RLS de siempre. Sin ella, la
+   conexión con app propia responde «falta la migración 0271» y el cron
+   contesta `sin_migracion`; las tiendas de hoy siguen igual.
+
+   **Antes** (solo lectura; anotar la huella):
+
+   ```sql
+   -- a) Un solo CHECK de la lista de apps, el de la 0249: 'interna' y 'clientes'.
+   select conname, pg_get_constraintdef(oid)
+     from pg_constraint
+    where conrelid = 'stores'::regclass and contype = 'c'
+      and pg_get_constraintdef(oid) like '%shopify_app%';
+   -- b) Tiendas por app y estado (Kenku Peru y Aurela: interna, active).
+   select shopify_app, status, count(*) from stores group by 1, 2 order by 1, 2;
+   -- c) La huella de lo que la 0271 promete no tocar (sin mostrar secretos).
+   select md5(string_agg(concat_ws('|', id, name, shopify_domain, shopify_app, status,
+                                   md5(coalesce(shopify_token_enc, '')),
+                                   md5(coalesce(shopify_webhook_secret_enc, '')),
+                                   shopify_uninstalled_at), ',' order by id)) as huella
+     from stores;
+   ```
+
+   **Aplicar.** Toma un momento el candado de `stores` (cambia dos CHECK y crea
+   un índice); el `lock_timeout` la detiene si una consulta larga lo tiene, y
+   se reintenta:
+
+   ```bash
+   psql "$DATABASE_URL" <<'SQL'
+   begin;
+   set local lock_timeout = '15s';
+   \i db/migrations/0271_shopify_app_propia.sql
+   commit;
+   SQL
+   ```
+
+   **Después** (solo lectura):
+
+   ```sql
+   -- 1) Las piezas nuevas: el CHECK con 'interna', 'clientes' y 'propia',
+   --    stores_own_app_columns_check y el índice parcial.
+   select conname, pg_get_constraintdef(oid)
+     from pg_constraint
+    where conrelid = 'stores'::regclass
+      and conname in ('stores_shopify_app_check', 'stores_own_app_columns_check');
+   select indexdef from pg_indexes where tablename = 'stores' and indexname = 'stores_own_app_shop_uniq';
+   -- 2) Ninguna tienda cambió: la huella (c) tiene que dar lo mismo que antes.
+   --    Si no, comparar fila por fila: una desinstalación o una reconexión en
+   --    medio también la mueve.
+   -- 3) Las columnas nuevas, vacías en todas (0 hasta conectar la primera propia).
+   select count(*) from stores
+    where shopify_client_id is not null or shopify_client_secret_enc is not null
+       or shopify_token_expires_at is not null or shopify_token_renewed_at is not null
+       or shopify_token_error is not null;
+   ```
+
+   Correrla otra vez no hace nada: no vuelve a validar la tabla ni toca filas.
+
+2. **El código**, por el camino de siempre (rama de integración → `main` por
+   fast-forward). Trae el cron `/api/cron/shopify-own-app-tokens` en
+   `vercel.json`, cada hora, protegido con `CRON_SECRET` como los demás.
+   Mientras no haya una tienda propia no renueva nada. Comprobar en Vercel →
+   Crons que aparece, y que una llamada sin el secreto responde 401.
+
+3. **Conectar «Súper Human Perú».**
+   - En la organización de Shopify de la tienda → Dev Dashboard: crear la app,
+     darle los alcances `read_orders`, `read_draft_orders`,
+     `write_draft_orders`, `read_products`, `read_customers` y `write_orders`
+     (los de `SHOPIFY_CLIENT_APP_SCOPES`), publicar la versión e instalarla en
+     la tienda. Revisar que tenga acceso a los datos protegidos de clientes
+     (nombre, teléfono, dirección y correo): si los pedidos llegan sin datos
+     del comprador, es eso.
+   - En Kapta: «Conectar con app propia de Shopify», con el dominio
+     `*.myshopify.com`, el Client ID, el Client secret y la organización.
+     Copiar el secreto directo del Dev Dashboard al campo; nunca por chat.
+   - Si Kapta dice que faltan alcances, añadirlos en una versión nueva de la
+     app, instalarla otra vez y volver a conectar.
+
+   **Qué mirar después:**
+
+   ```sql
+   select name, shopify_app, status, shopify_client_id is not null as con_client_id,
+          shopify_token_expires_at, shopify_token_renewed_at, shopify_token_error
+     from stores
+    where shopify_app = 'propia';
+   ```
+
+   Recién conectada: `active`, vencimiento a ~24 h y sin error. Unas 12 h
+   después el cron la renueva: `shopify_token_renewed_at` avanza y el
+   vencimiento vuelve a quedar a ~24 h. Un `shopify_token_error` que no se
+   borra en la hora siguiente es un problema de la app (secreto rotado, app
+   desinstalada, alcances quitados): el texto dice cuál. Y otra vez la huella
+   (c) y el conteo (b) de las tiendas `interna` y `clientes`: no cambian.
+
+**Marcha atrás.** Revertir el código basta: las tiendas propias dejan de
+renovar y su token vence en menos de 24 h; Kenku, Aurela y las tiendas
+`clientes` no lo notan. La 0271 puede quedarse: con las columnas vacías y el
+CHECK más amplio no cambia nada para ellas. Si hubiera que quitarla, primero
+el código, y solo con `select count(*) from stores where shopify_app = 'propia'`
+en 0:
+
+```sql
+begin;
+alter table stores drop constraint if exists stores_own_app_columns_check;
+drop index if exists stores_own_app_shop_uniq;
+alter table stores drop constraint stores_shopify_app_check;
+alter table stores add constraint stores_shopify_app_check check (shopify_app in ('interna', 'clientes'));
+alter table stores
+  drop column shopify_client_id,
+  drop column shopify_client_secret_enc,
+  drop column shopify_token_expires_at,
+  drop column shopify_token_renewed_at,
+  drop column shopify_token_error;
+commit;
+```

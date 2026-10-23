@@ -2,7 +2,8 @@ import { redirect } from "next/navigation";
 import { createServerSupabase } from "@/lib/db";
 import { orgsWithPermission } from "@/lib/permissions-access";
 import { getUserRoleSummary } from "@/lib/access";
-import { CreateOrgForm, CreateStoreForm } from "@/components/forms";
+import { ConnectOwnAppStoreForm, CreateOrgForm, CreateStoreForm } from "@/components/forms";
+import { OWN_APP_REQUIRED_SCOPES } from "@/lib/shopify-own-app";
 
 export const dynamic = "force-dynamic";
 
@@ -36,7 +37,13 @@ export default async function NewStorePage() {
       </div>
 
       {orgs.length ? (
-        <CreateStoreForm orgs={orgs} />
+        <>
+          <CreateStoreForm orgs={orgs} />
+          <section className="space-y-4 border-t border-slate-200 pt-6">
+            <h2 className="text-base font-semibold text-slate-900">Conectar con app propia de Shopify</h2>
+            <ConnectOwnAppStoreForm orgs={orgs} scopes={OWN_APP_REQUIRED_SCOPES} />
+          </section>
+        </>
       ) : (
         <div className="space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-5">
           <div>

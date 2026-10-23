@@ -7,6 +7,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
 import { decryptOrNull } from "@/lib/crypto";
+import { OWN_APP, ownAppTokenForUse } from "@/lib/shopify-own-app";
 import { chunk } from "@/lib/access";
 import { recomputeOrderMasterSafe, reconcileOrderMaster } from "@/lib/order-master";
 import { fetchMetaAdMeta, normalizeMetaAdAccounts, type StoreMetaAdAccount } from "@/lib/meta-marketing";
@@ -78,6 +79,8 @@ export interface StoreCreds {
   org_id: string;
   name: string;
   shopify_domain: string;
+  /** Con qué app se conectó (0249, 0271): 'interna', 'clientes' o 'propia'. */
+  shopify_app?: string;
   shopify_token: string | null;
   shopify_webhook_secret: string | null;
   kapso_project_id: string | null;
@@ -248,12 +251,18 @@ export async function getStoreCreds(
     .eq("id", storeId)
     .single();
   if (error || !data) return null;
+  let shopifyToken = decryptOrNull(data.shopify_token_enc);
+  // App propia (0271, owner 23-10-2026): su token dura ~24 h. Si vence en menos
+  // de 15 minutos se renueva antes de usarlo. Solo para 'propia': Kenku, Aurela
+  // y las tiendas de la app de clientes no pasan por aquí (ni consulta ni red).
+  if (data.shopify_app === OWN_APP) shopifyToken = await ownAppTokenForUse(admin, data, shopifyToken);
   return {
     id: data.id,
     org_id: data.org_id,
     name: data.name,
     shopify_domain: data.shopify_domain,
-    shopify_token: decryptOrNull(data.shopify_token_enc),
+    shopify_app: data.shopify_app ?? "interna",
+    shopify_token: shopifyToken,
     shopify_webhook_secret: decryptOrNull(data.shopify_webhook_secret_enc),
     kapso_project_id: data.kapso_project_id ?? null,
     kapso_api_key: decryptOrNull(data.kapso_api_key_enc),

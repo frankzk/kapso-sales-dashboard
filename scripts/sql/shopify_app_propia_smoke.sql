@@ -1,0 +1,230 @@
+-- App propia de Shopify (0271, MOM §36). Sobre el clúster desechable, después
+-- de todas las migraciones y con los fixtures de rls_smoke.sql. Lo que fija es
+-- la promesa del owner del 23-10-2026: Kenku Peru, Aurela y las tiendas
+-- 'clientes' no cambian.
+--   a) Aplicada sobre el esquema que hay en producción (el de la 0249, con
+--      tiendas 'interna' y 'clientes' conectadas), no cambia ninguna fila.
+--   b) Admite 'propia' y ningún otro valor nuevo.
+--   c) Las cinco columnas nuevas solo se llenan en una tienda 'propia'.
+--   d) Un dominio, una sola tienda con la app propia.
+--   e) Los secretos nuevos tienen los privilegios de shopify_token_enc, y la
+--      fila la sigue tapando la RLS.
+--   f) Dos veces es una, sin volver a validar la tabla.
+-- Todo dentro de una transacción que se deshace al final.
+
+begin;
+
+-- ── El esquema de antes de la 0271, como está en producción ─────────────────
+alter table stores drop constraint if exists stores_own_app_columns_check;
+drop index if exists stores_own_app_shop_uniq;
+alter table stores
+  drop column if exists shopify_client_id,
+  drop column if exists shopify_client_secret_enc,
+  drop column if exists shopify_token_expires_at,
+  drop column if exists shopify_token_renewed_at,
+  drop column if exists shopify_token_error;
+alter table stores drop constraint if exists stores_shopify_app_check;
+alter table stores
+  add constraint stores_shopify_app_check
+  check (shopify_app in ('interna', 'clientes'));
+
+-- Kenku Peru y Aurela con la app interna, una tienda cliente conectada y otra
+-- que desinstaló, cada una con lo que guarda hoy.
+insert into organizations (id, name) values
+  ('27100000-0000-0000-0000-0000000000a1', 'Grupo GF (0271)'),
+  ('27100000-0000-0000-0000-0000000000a2', 'Cliente (0271)');
+insert into stores (id, org_id, name, shopify_domain, shopify_token_enc, shopify_webhook_secret_enc,
+                    status, shopify_app, shopify_uninstalled_at) values
+  ('27100000-0000-0000-0000-0000000000b1', '27100000-0000-0000-0000-0000000000a1', 'Kenku Peru',
+   'kenku-peru-0271.myshopify.com', 'enc:token-kenku', 'enc:secreto-kenku', 'active', 'interna', null),
+  ('27100000-0000-0000-0000-0000000000b2', '27100000-0000-0000-0000-0000000000a1', 'Aurela',
+   'aurela-0271.myshopify.com', 'enc:token-aurela', 'enc:secreto-aurela', 'active', 'interna', null),
+  ('27100000-0000-0000-0000-0000000000b3', '27100000-0000-0000-0000-0000000000a2', 'Cliente conectada',
+   'cliente-0271.myshopify.com', 'enc:token-cliente', 'enc:secreto-app-clientes', 'active', 'clientes', null),
+  ('27100000-0000-0000-0000-0000000000b4', '27100000-0000-0000-0000-0000000000a2', 'Cliente que desinstaló',
+   'cliente-baja-0271.myshopify.com', null, 'enc:secreto-app-clientes', 'disabled', 'clientes',
+   '2026-10-20T15:00:00Z');
+
+create temp table s0271_before on commit drop as
+select s.id, to_jsonb(s) as fila from stores s;
+
+\echo '  primera pasada, sobre el esquema de la 0249'
+\ir ../../db/migrations/0271_shopify_app_propia.sql
+
+-- ── a) Ninguna fila cambia ─────────────────────────────────────────────────
+do $$
+declare
+  v_nuevas text[] := array['shopify_client_id', 'shopify_client_secret_enc', 'shopify_token_expires_at',
+                           'shopify_token_renewed_at', 'shopify_token_error'];
+  v_bad    text;
+begin
+  if (select count(*) from stores) <> (select count(*) from s0271_before) then
+    raise exception 'la 0271 cambió cuántas tiendas hay';
+  end if;
+  select string_agg(s.name, ', ') into v_bad
+    from stores s
+    join s0271_before b on b.id = s.id
+   where (to_jsonb(s) - v_nuevas) is distinct from b.fila;
+  if v_bad is not null then
+    raise exception 'la 0271 cambió estas tiendas: %', v_bad;
+  end if;
+  select string_agg(s.name, ', ') into v_bad
+    from stores s
+   where s.shopify_client_id is not null or s.shopify_client_secret_enc is not null
+      or s.shopify_token_expires_at is not null or s.shopify_token_renewed_at is not null
+      or s.shopify_token_error is not null;
+  if v_bad is not null then
+    raise exception 'las columnas nuevas tienen que nacer null: %', v_bad;
+  end if;
+  if (select (shopify_app, shopify_token_enc, status) from stores where id = '27100000-0000-0000-0000-0000000000b1')
+     is distinct from ('interna'::text, 'enc:token-kenku'::text, 'active'::text) then
+    raise exception 'Kenku Peru tiene que seguir interna, activa y con su token';
+  end if;
+end $$;
+
+-- ── b) 'propia' entra; un valor inventado, no ───────────────────────────────
+do $$
+begin
+  if (select count(*) from pg_constraint
+       where conrelid = 'stores'::regclass and contype = 'c'
+         and pg_get_constraintdef(oid) like '%shopify_app = ANY%') <> 1 then
+    raise exception 'tiene que quedar un solo CHECK de la lista de apps';
+  end if;
+  if (select pg_get_constraintdef(oid) from pg_constraint
+       where conrelid = 'stores'::regclass and conname = 'stores_shopify_app_check')
+     not like '%''interna''%''clientes''%''propia''%' then
+    raise exception 'stores_shopify_app_check tiene que admitir interna, clientes y propia';
+  end if;
+
+  begin
+    insert into stores (org_id, name, shopify_domain, shopify_app)
+    values ('27100000-0000-0000-0000-0000000000a1', 'Inventada', 'inventada-0271.myshopify.com', 'personalizada');
+    raise exception 'un valor que no es interna, clientes ni propia no debería guardarse';
+  exception when check_violation then null;
+  end;
+
+  -- Súper Human Perú, conectada con la app propia.
+  insert into stores (id, org_id, name, shopify_domain, shopify_app, shopify_token_enc, shopify_webhook_secret_enc,
+                      shopify_client_id, shopify_client_secret_enc, shopify_token_expires_at, shopify_token_renewed_at)
+  values ('27100000-0000-0000-0000-0000000000c1', '27100000-0000-0000-0000-0000000000a1', 'Súper Human Perú',
+          'super-human-peru-0271.myshopify.com', 'propia', 'enc:token-24h', 'enc:secreto-app-propia',
+          'client-id-de-prueba', 'enc:secreto-app-propia', now() + interval '24 hours', now());
+  -- La renovación que falla deja su motivo y conserva el token.
+  update stores set shopify_token_error = 'Shopify rechazó las credenciales de la app.'
+   where id = '27100000-0000-0000-0000-0000000000c1';
+end $$;
+
+-- ── c) Las columnas nuevas no se llenan fuera de la app propia ──────────────
+do $$
+declare
+  v_store uuid;
+  v_col   text;
+begin
+  foreach v_store in array array['27100000-0000-0000-0000-0000000000b1', '27100000-0000-0000-0000-0000000000b2',
+                                 '27100000-0000-0000-0000-0000000000b3', '27100000-0000-0000-0000-0000000000b4']::uuid[] loop
+    foreach v_col in array array['shopify_client_id', 'shopify_client_secret_enc', 'shopify_token_expires_at',
+                                 'shopify_token_renewed_at', 'shopify_token_error'] loop
+      begin
+        execute format('update stores set %I = %s where id = %L', v_col,
+                       case when v_col like '%\_at' then 'now()' else quote_literal('x') end, v_store);
+        raise exception 'la tienda % no es de la app propia y aceptó %', v_store, v_col;
+      exception when check_violation then null;
+      end;
+    end loop;
+  end loop;
+
+  -- Volver una tienda propia a otra app exige vaciar lo suyo primero.
+  begin
+    update stores set shopify_app = 'interna' where id = '27100000-0000-0000-0000-0000000000c1';
+    raise exception 'una tienda propia con credenciales no debería pasar a interna sin vaciarlas';
+  exception when check_violation then null;
+  end;
+
+  -- Lo de siempre se sigue escribiendo en Kenku y en la cliente: la
+  -- desinstalación (0249) borra el token y deshabilita.
+  update stores set shopify_token_enc = null, status = 'disabled', shopify_uninstalled_at = now()
+   where id = '27100000-0000-0000-0000-0000000000b3';
+  update stores set name = 'Kenku Peru' where id = '27100000-0000-0000-0000-0000000000b1';
+  -- Y en la propia también.
+  update stores set shopify_token_enc = null, status = 'disabled', shopify_uninstalled_at = now()
+   where id = '27100000-0000-0000-0000-0000000000c1';
+end $$;
+
+-- ── d) Un dominio, una sola tienda con la app propia ────────────────────────
+do $$
+begin
+  begin
+    insert into stores (org_id, name, shopify_domain, shopify_app, shopify_client_id)
+    values ('27100000-0000-0000-0000-0000000000a2', 'Otra con el mismo dominio',
+            'Super-Human-Peru-0271.myshopify.com', 'propia', 'otro-client-id');
+    raise exception 'el mismo dominio no debería estar en dos tiendas con la app propia';
+  exception when unique_violation then null;
+  end;
+  -- La unicidad nueva no alcanza a las otras apps: es solo de 'propia'.
+  if (select count(*) from pg_indexes
+       where tablename = 'stores' and indexname = 'stores_own_app_shop_uniq'
+         and indexdef like '%WHERE (shopify_app = ''propia''::text)%') <> 1 then
+    raise exception 'stores_own_app_shop_uniq tiene que ser parcial, solo de la app propia';
+  end if;
+end $$;
+
+-- ── e) Los secretos nuevos se protegen como shopify_token_enc ───────────────
+do $$
+declare
+  v_role text;
+  v_priv text;
+  v_col  text;
+begin
+  foreach v_role in array array['anon', 'authenticated', 'service_role'] loop
+    foreach v_priv in array array['SELECT', 'INSERT', 'UPDATE'] loop
+      foreach v_col in array array['shopify_client_id', 'shopify_client_secret_enc', 'shopify_token_expires_at',
+                                   'shopify_token_renewed_at', 'shopify_token_error'] loop
+        if has_column_privilege(v_role, 'stores', v_col, v_priv)
+           is distinct from has_column_privilege(v_role, 'stores', 'shopify_token_enc', v_priv) then
+          raise exception '% sobre stores.% para % no es el de shopify_token_enc', v_priv, v_col, v_role;
+        end if;
+      end loop;
+    end loop;
+  end loop;
+end $$;
+
+-- Un viewer de la tienda A (rls_smoke.sql) no ve la fila de la tienda propia.
+set request.test_uid = '00000000-0000-0000-0000-00000000000a';
+set role authenticated;
+do $$
+begin
+  if exists (select 1 from stores where id = '27100000-0000-0000-0000-0000000000c1') then
+    raise exception 'un usuario de otra organización ve la tienda con la app propia';
+  end if;
+end $$;
+reset role;
+reset request.test_uid;
+
+-- ── f) Dos veces es una ─────────────────────────────────────────────────────
+create temp table s0271_after on commit drop as
+select s.id, to_jsonb(s) as fila from stores s;
+create temp table s0271_constraints on commit drop as
+select oid, conname from pg_constraint
+ where conrelid = 'stores'::regclass and conname in ('stores_shopify_app_check', 'stores_own_app_columns_check');
+
+\echo '  segunda pasada'
+\ir ../../db/migrations/0271_shopify_app_propia.sql
+
+do $$
+begin
+  if exists (
+    select 1 from stores s full join s0271_after a on a.id = s.id
+     where to_jsonb(s) is distinct from a.fila
+  ) then
+    raise exception 'correrla otra vez no puede cambiar ninguna tienda';
+  end if;
+  if (select count(*) from pg_constraint c join s0271_constraints k on k.oid = c.oid) <> 2 then
+    raise exception 'correrla otra vez no debería rehacer los CHECK (ni validar la tabla de nuevo)';
+  end if;
+  if (select count(*) from pg_indexes where tablename = 'stores' and indexname = 'stores_own_app_shop_uniq') <> 1 then
+    raise exception 'correrla otra vez no debería duplicar el índice';
+  end if;
+end $$;
+
+\echo '  ✅ Kenku, Aurela y las tiendas clientes sin una fila cambiada; propia admitida y nada inventado; las cinco columnas solo en la propia; un dominio por app propia; los secretos con los privilegios de shopify_token_enc y tapados por la RLS; dos veces es una'
+rollback;

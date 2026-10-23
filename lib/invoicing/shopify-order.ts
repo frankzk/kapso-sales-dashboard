@@ -20,6 +20,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase } from "@/lib/db";
 import { decryptOrNull } from "@/lib/crypto";
 import { shopifyGraphQL } from "@/lib/shopify";
+import { OWN_APP, ownAppTokenForUseById } from "@/lib/shopify-own-app";
 import { extractNumericId } from "@/lib/shopify-urls";
 import { CHECKOUT_GATEWAYS } from "@/lib/payment-gateway";
 import type { InvoiceItem, InvoiceReason } from "@/lib/invoicing/rules";
@@ -495,7 +496,8 @@ export function webPrepaidConfirmed(read: InvoiceOrderOk): boolean {
  * El dominio y el token de Shopify de la tienda, o null si no tiene conexión.
  * Lanza si la tienda no se pudo leer o el token no se pudo descifrar.
  *
- * Solo esas dos columnas: `getStoreCreds` (lib/ingest.ts) descifra todos los
+ * Solo esas dos columnas, más `shopify_app` para saber si es una app propia
+ * (0271): `getStoreCreds` (lib/ingest.ts) descifra todos los
  * secretos de la tienda —un secreto ajeno roto bloquearía la boleta— y arrastra
  * el módulo de ingesta entero. Además confunde «no se pudo leer» con «no hay
  * tienda», y aquí son motivos distintos: uno se reintenta y el otro no.
@@ -503,16 +505,24 @@ export function webPrepaidConfirmed(read: InvoiceOrderOk): boolean {
 async function shopifyConnOf(
   admin: SupabaseClient,
   storeId: string,
+  fetchImpl?: typeof fetch,
 ): Promise<{ domain: string; token: string } | null> {
   const { data, error } = await admin
     .from("stores")
-    .select("shopify_domain,shopify_token_enc")
+    .select("shopify_domain,shopify_token_enc,shopify_app")
     .eq("id", storeId)
     .maybeSingle();
   if (error) throw new Error("stores");
-  const row = data as { shopify_domain?: string | null; shopify_token_enc?: string | null } | null;
+  const row = data as {
+    shopify_domain?: string | null;
+    shopify_token_enc?: string | null;
+    shopify_app?: string | null;
+  } | null;
   const domain = (row?.shopify_domain ?? "").trim();
-  const token = decryptOrNull(row?.shopify_token_enc ?? null);
+  let token = decryptOrNull(row?.shopify_token_enc ?? null);
+  // App propia (0271): token de ~24 h, se renueva antes de usarlo si le queda
+  // poco. Las tiendas 'interna' y 'clientes' no pasan por aquí.
+  if (domain && row?.shopify_app === OWN_APP) token = await ownAppTokenForUseById(admin, storeId, token, { fetchImpl });
   return domain && token ? { domain, token } : null;
 }
 
@@ -550,7 +560,7 @@ export async function fetchOrderForInvoice(
 
   let conn: { domain: string; token: string } | null;
   try {
-    conn = await shopifyConnOf(deps.admin ?? createAdminSupabase(), input.storeId);
+    conn = await shopifyConnOf(deps.admin ?? createAdminSupabase(), input.storeId, deps.fetchImpl);
   } catch {
     return fail("lectura_fallida", "No se pudo leer la conexión de la tienda con Shopify.");
   }

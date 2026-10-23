@@ -13,6 +13,7 @@ import { leadVoiceOwnNumber, loadLeadVoiceCampaigns } from "@/lib/store-settings
 import { leadVoiceSettingsFrom } from "@/lib/voice-leads";
 import { leadVoiceConfigured, loadLeadVoicePilotReport } from "@/lib/voice-leads-server";
 import { RESTOCK_CATALOG_DAYS, RESTOCK_RESULTS_DAYS } from "@/lib/restock-view";
+import { OWN_APP, ownAppStatusLine } from "@/lib/shopify-own-app";
 import { limaDateTimeInputValue } from "@/lib/repro-lima";
 import { limaDayStartIso } from "@/lib/auto-order-ab";
 import type { InvoiceMode, InvoiceStatus, InvoiceWriteMode } from "@/lib/invoicing/rules";
@@ -572,6 +573,23 @@ export default async function StoreSettingsPage({
       olvaPortalPassword: Boolean(full.olva_portal_password_enc),
     },
     oauthAvailable: env.shopifyOAuthConfigured(),
+    // App propia de Shopify (0271): la línea de estado y el Client ID. Nunca el
+    // Client secret ni el token, solo si hay uno. Pre-0271 ninguna tienda es
+    // 'propia' y esto queda en null.
+    ownApp:
+      full.shopify_app === OWN_APP
+        ? {
+            clientId: full.shopify_client_id ?? null,
+            hasSecret: Boolean(full.shopify_client_secret_enc),
+            statusLine: ownAppStatusLine({
+              renewedAt: full.shopify_token_renewed_at ?? null,
+              expiresAt: full.shopify_token_expires_at ?? null,
+              now,
+              timeZone: full.timezone ?? "America/Lima",
+            }),
+            error: full.shopify_token_error ?? null,
+          }
+        : null,
     // Solo sí/no, nunca los valores: la página llega al navegador.
     leadVoice: {
       configured: leadVoiceConfigured(),

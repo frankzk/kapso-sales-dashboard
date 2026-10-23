@@ -256,5 +256,11 @@ echo "  ✅ todas las ventas por día y canal, la regla del canal en una sola vi
 echo "▶ Caja «por definir» del cuaderno de Grupo GF (0270): pasa a salida entregada del motorizado propio solo en el objetivo"
 $PSQL -f "$ROOT/scripts/sql/cuaderno_s01_fill_smoke.sql"
 
+# La promesa del owner (23-10-2026) es que conectar una tienda con su app
+# propia no toca a Kenku, Aurela ni las tiendas cliente. La base la sostiene:
+# se prueba aplicando la 0271 sobre el esquema de la 0249 con esas tiendas.
+echo "▶ App propia de Shopify (0271): Kenku, Aurela y las tiendas clientes no cambian"
+$PSQL -f "$ROOT/scripts/sql/shopify_app_propia_smoke.sql"
+
 echo ""
 echo "✅ DB verification passed."
