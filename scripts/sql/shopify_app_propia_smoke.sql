@@ -5,11 +5,13 @@
 --   a) Aplicada sobre el esquema que hay en producción (el de la 0249, con
 --      tiendas 'interna' y 'clientes' conectadas), no cambia ninguna fila.
 --   b) Admite 'propia' y ningún otro valor nuevo.
---   c) Las cinco columnas nuevas solo se llenan en una tienda 'propia'.
+--   c) Las ocho columnas nuevas solo se llenan en una tienda 'propia'.
 --   d) Un dominio, una sola tienda con la app propia.
 --   e) Los secretos nuevos tienen los privilegios de shopify_token_enc, y la
 --      fila la sigue tapando la RLS.
 --   f) Dos veces es una, sin volver a validar la tabla.
+--   g) Una base con una versión anterior de la 0271 (el CHECK con cinco
+--      columnas) se pone al día sin cambiar ninguna fila.
 -- Todo dentro de una transacción que se deshace al final.
 
 begin;
@@ -22,7 +24,10 @@ alter table stores
   drop column if exists shopify_client_secret_enc,
   drop column if exists shopify_token_expires_at,
   drop column if exists shopify_token_renewed_at,
-  drop column if exists shopify_token_error;
+  drop column if exists shopify_token_error,
+  drop column if exists shopify_token_retry_at,
+  drop column if exists shopify_webhook_secret_prev_enc,
+  drop column if exists shopify_webhook_secret_prev_set_at;
 alter table stores drop constraint if exists stores_shopify_app_check;
 alter table stores
   add constraint stores_shopify_app_check
@@ -55,7 +60,8 @@ select s.id, to_jsonb(s) as fila from stores s;
 do $$
 declare
   v_nuevas text[] := array['shopify_client_id', 'shopify_client_secret_enc', 'shopify_token_expires_at',
-                           'shopify_token_renewed_at', 'shopify_token_error'];
+                           'shopify_token_renewed_at', 'shopify_token_error', 'shopify_token_retry_at',
+                           'shopify_webhook_secret_prev_enc', 'shopify_webhook_secret_prev_set_at'];
   v_bad    text;
 begin
   if (select count(*) from stores) <> (select count(*) from s0271_before) then
@@ -72,7 +78,8 @@ begin
     from stores s
    where s.shopify_client_id is not null or s.shopify_client_secret_enc is not null
       or s.shopify_token_expires_at is not null or s.shopify_token_renewed_at is not null
-      or s.shopify_token_error is not null;
+      or s.shopify_token_error is not null or s.shopify_token_retry_at is not null
+      or s.shopify_webhook_secret_prev_enc is not null or s.shopify_webhook_secret_prev_set_at is not null;
   if v_bad is not null then
     raise exception 'las columnas nuevas tienen que nacer null: %', v_bad;
   end if;
@@ -109,9 +116,16 @@ begin
   values ('27100000-0000-0000-0000-0000000000c1', '27100000-0000-0000-0000-0000000000a1', 'Súper Human Perú',
           'super-human-peru-0271.myshopify.com', 'propia', 'enc:token-24h', 'enc:secreto-app-propia',
           'client-id-de-prueba', 'enc:secreto-app-propia', now() + interval '24 hours', now());
-  -- La renovación que falla deja su motivo y conserva el token.
-  update stores set shopify_token_error = 'Shopify rechazó las credenciales de la app.'
+  -- La renovación que falla deja su motivo y conserva el token, y frena la
+  -- renovación al usar; tras rotar el secreto, el anterior queda aparte.
+  update stores set shopify_token_error = 'Shopify rechazó las credenciales de la app.',
+                    shopify_token_retry_at = now() + interval '15 minutes',
+                    shopify_webhook_secret_prev_enc = 'enc:secreto-anterior',
+                    shopify_webhook_secret_prev_set_at = now()
    where id = '27100000-0000-0000-0000-0000000000c1';
+  -- Una propia en pausa sigue siendo propia, con sus columnas.
+  update stores set status = 'paused' where id = '27100000-0000-0000-0000-0000000000c1';
+  update stores set status = 'active' where id = '27100000-0000-0000-0000-0000000000c1';
 end $$;
 
 -- ── c) Las columnas nuevas no se llenan fuera de la app propia ──────────────
@@ -123,7 +137,8 @@ begin
   foreach v_store in array array['27100000-0000-0000-0000-0000000000b1', '27100000-0000-0000-0000-0000000000b2',
                                  '27100000-0000-0000-0000-0000000000b3', '27100000-0000-0000-0000-0000000000b4']::uuid[] loop
     foreach v_col in array array['shopify_client_id', 'shopify_client_secret_enc', 'shopify_token_expires_at',
-                                 'shopify_token_renewed_at', 'shopify_token_error'] loop
+                                 'shopify_token_renewed_at', 'shopify_token_error', 'shopify_token_retry_at',
+                                 'shopify_webhook_secret_prev_enc', 'shopify_webhook_secret_prev_set_at'] loop
       begin
         execute format('update stores set %I = %s where id = %L', v_col,
                        case when v_col like '%\_at' then 'now()' else quote_literal('x') end, v_store);
@@ -178,7 +193,8 @@ begin
   foreach v_role in array array['anon', 'authenticated', 'service_role'] loop
     foreach v_priv in array array['SELECT', 'INSERT', 'UPDATE'] loop
       foreach v_col in array array['shopify_client_id', 'shopify_client_secret_enc', 'shopify_token_expires_at',
-                                   'shopify_token_renewed_at', 'shopify_token_error'] loop
+                                   'shopify_token_renewed_at', 'shopify_token_error', 'shopify_token_retry_at',
+                                   'shopify_webhook_secret_prev_enc', 'shopify_webhook_secret_prev_set_at'] loop
         if has_column_privilege(v_role, 'stores', v_col, v_priv)
            is distinct from has_column_privilege(v_role, 'stores', 'shopify_token_enc', v_priv) then
           raise exception '% sobre stores.% para % no es el de shopify_token_enc', v_priv, v_col, v_role;
@@ -226,5 +242,41 @@ begin
   end if;
 end $$;
 
-\echo '  ✅ Kenku, Aurela y las tiendas clientes sin una fila cambiada; propia admitida y nada inventado; las cinco columnas solo en la propia; un dominio por app propia; los secretos con los privilegios de shopify_token_enc y tapados por la RLS; dos veces es una'
+-- ── g) Una versión anterior de la 0271 se pone al día ───────────────────────
+-- Solo pasa en bases de prueba (en producción la 0271 no se aplicó antes de
+-- sumar las tres columnas): el CHECK de cinco columnas se rehace con ocho, sin
+-- tocar filas.
+alter table stores drop constraint stores_own_app_columns_check;
+alter table stores
+  add constraint stores_own_app_columns_check
+  check (
+    shopify_app = 'propia'
+    or (shopify_client_id is null and shopify_client_secret_enc is null and shopify_token_expires_at is null
+        and shopify_token_renewed_at is null and shopify_token_error is null)
+  );
+
+\echo '  tercera pasada, sobre una versión anterior de la 0271'
+\ir ../../db/migrations/0271_shopify_app_propia.sql
+
+do $$
+begin
+  if exists (
+    select 1 from stores s full join s0271_after a on a.id = s.id
+     where to_jsonb(s) is distinct from a.fila
+  ) then
+    raise exception 'ponerse al día no puede cambiar ninguna tienda';
+  end if;
+  if (select pg_get_constraintdef(oid) from pg_constraint
+       where conrelid = 'stores'::regclass and conname = 'stores_own_app_columns_check')
+     not like '%shopify_webhook_secret_prev_set_at%' then
+    raise exception 'el CHECK de una versión anterior tiene que quedar con las ocho columnas';
+  end if;
+  begin
+    update stores set shopify_token_retry_at = now() where id = '27100000-0000-0000-0000-0000000000b1';
+    raise exception 'Kenku no debería aceptar shopify_token_retry_at';
+  exception when check_violation then null;
+  end;
+end $$;
+
+\echo '  ✅ Kenku, Aurela y las tiendas clientes sin una fila cambiada; propia admitida y nada inventado; las ocho columnas solo en la propia; un dominio por app propia; los secretos con los privilegios de shopify_token_enc y tapados por la RLS; dos veces es una; una versión anterior se pone al día'
 rollback;

@@ -29,6 +29,13 @@ export interface OwnAppConnectState {
 /** Lo que mide un Client ID o un Client secret, con holgura. Sin espacios. */
 const CREDENTIAL_RE = /^\S{8,256}$/;
 
+/** Lo que se lee de una tienda que ya tiene el dominio. El token no sale de aquí. */
+interface ExistingStore {
+  id: string;
+  org_id: string;
+  shopify_token_enc: string | null;
+}
+
 /**
  * «Conectar con app propia de Shopify» (owner, 23-10-2026; MOM §36.2).
  *
@@ -41,6 +48,12 @@ const CREDENTIAL_RE = /^\S{8,256}$/;
  * NUNCA TOCA OTRA TIENDA. Si ya hay en Kapta una tienda con ese dominio —sea de
  * la app interna (Kenku, Aurela), de la de clientes o de otra app propia— se
  * rechaza sin escribir nada. Solo inserta; no actualiza ninguna fila.
+ *
+ * PRIMERO LAS CREDENCIALES. Si Kapta ya tiene esa tienda se mira DESPUÉS de que
+ * Shopify dé un token con el Client ID y el Client secret: así solo se entera
+ * quien tiene una app instalada en esa tienda, y nadie usa este formulario para
+ * averiguar qué tiendas de Shopify son de Kapta. Pedir ese token no le cambia
+ * nada a otra tienda: es de la app de quien conecta.
  *
  * El permiso es el de crear tiendas hoy: «Administrar tiendas» en la
  * organización (MOM §16).
@@ -72,21 +85,39 @@ export async function connectOwnAppStore(
 
   const admin = createAdminSupabase();
 
-  // ¿Ya está en Kapta? En cualquier organización y con cualquier app: no se toca.
-  const { data: existing, error: existingError } = await admin
-    .from("stores")
-    .select("id")
-    .ilike("shopify_domain", shop)
-    .limit(1);
-  if (existingError) return { error: "No se pudo comprobar si la tienda ya está en Kapta. No se creó nada." };
-  if ((existing ?? []).length > 0) {
-    return { error: "Esa tienda de Shopify ya está conectada a Kapta. No se cambió nada en ella." };
-  }
-
-  const got = await requestClientCredentialsToken({ shop, clientId, clientSecret });
+  // Primero, que Shopify dé un token con estas credenciales: prueba que quien
+  // conecta tiene una app instalada en esa tienda. `now` es el del pedido: el
+  // vencimiento y la renovación salen del mismo reloj.
+  const now = new Date();
+  const got = await requestClientCredentialsToken({ shop, clientId, clientSecret, now });
   if (!got.ok) return { error: got.message };
   const missing = missingScopes(got.scopes);
   if (missing.length) return { error: missingScopesMessage(missing) };
+
+  // ¿Ya está en Kapta? En cualquier organización y con cualquier app: no se
+  // toca, ni siquiera una fila de otra organización sin conexión.
+  const { data: existing, error: existingError } = await admin
+    .from("stores")
+    .select("id,org_id,shopify_token_enc")
+    .ilike("shopify_domain", shop)
+    .limit(20);
+  if (existingError) return { error: "No se pudo comprobar si la tienda ya está en Kapta. No se creó nada." };
+  const taken = (existing ?? []) as ExistingStore[];
+  if (taken.length > 0) {
+    // Filas solo de OTRAS organizaciones y sin token son un dominio registrado
+    // sin conexión (alguien lo dio de alta con «Crear tienda» sin token, o la
+    // desinstaló): se avisa distinto, y queda en el log para soporte, en vez de
+    // un «ya está conectada» que nadie puede resolver. Tampoco se tocan.
+    const placeholder = taken.every((t) => t.org_id !== orgId && !t.shopify_token_enc);
+    console.warn(
+      `[shopify-own-app] ${JSON.stringify({ conectar: "dominio_ocupado", storeIds: taken.map((t) => t.id), sinConexion: placeholder })}`,
+    );
+    return {
+      error: placeholder
+        ? "Esa tienda de Shopify está registrada en Kapta en otra organización, sin conexión. No se cambió nada: escríbele a soporte de Kapta para liberarla."
+        : "Esa tienda de Shopify ya está conectada a Kapta. No se cambió nada en ella.",
+    };
+  }
 
   const warnings: string[] = [];
   let currency = "PEN";
@@ -102,7 +133,6 @@ export async function connectOwnAppStore(
   }
   const name = String(formData.get("name") ?? "").trim() || shopName || storeNameFromShop(shop);
 
-  const now = new Date();
   const { data: store, error } = await admin
     .from("stores")
     .insert({

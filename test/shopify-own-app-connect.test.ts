@@ -3,14 +3,19 @@
 // «Conectar con app propia de Shopify» (app/dashboard/stores/new/actions.ts):
 // mismo permiso que crear una tienda; un dominio malo, uno que ya está en Kapta
 // (con cualquier app) o una app sin todos los permisos se rechazan SIN escribir
-// nada y sin tocar ninguna otra tienda; si Shopify niega el token, el mensaje
-// lo dice sin repetir el secreto; y una conexión buena crea la tienda 'propia'
-// con todo cifrado, registra los webhooks con `app/uninstalled` y sincroniza.
+// nada y sin tocar ninguna otra tienda; si Kapta ya tiene la tienda solo se
+// dice DESPUÉS de que Shopify dé un token (nadie averigua qué tiendas son de
+// Kapta con credenciales inventadas); si Shopify niega el token, el mensaje lo
+// dice sin repetir el secreto; y una conexión buena crea la tienda 'propia' con
+// todo cifrado, registra los webhooks con `app/uninstalled` y sincroniza.
 //
 // Ajustes (app/dashboard/[storeId]/settings/actions.ts): el Client secret se
-// prueba antes de guardarlo y solo en tiendas 'propia'; «Re-registrar
-// webhooks» suma `app/uninstalled` SOLO en una 'propia' (Kenku y Aurela se
-// registran exactamente como antes). Sin red: `fetch` es falso.
+// prueba antes de guardarlo y solo en tiendas 'propia'; al rotarlo, el anterior
+// sigue firmando webhooks un tiempo; con otra app (Client ID nuevo) se registran
+// sus webhooks; «Re-registrar webhooks» suma `app/uninstalled` SOLO en una
+// 'propia' (Kenku y Aurela se registran exactamente como antes); y ni Ajustes a
+// mano ni el OAuth de la app interna pisan el token o el secreto de una
+// 'propia'. Sin red: `fetch` es falso.
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -41,7 +46,10 @@ const st = vi.hoisted(() => ({
   finishWarnings: [] as string[],
   finishArgs: [] as unknown[][],
   registerArgs: [] as unknown[],
+  registerResult: [{ topic: "ORDERS_CREATE", id: "gid://1" }] as Array<{ topic: string; id: string | null; error?: string }>,
   revalidated: [] as unknown[],
+  /** El orden de lo que pasa: pedidos de token y consultas de `stores`. */
+  seq: [] as string[],
 }));
 
 vi.mock("server-only", () => ({}));
@@ -69,7 +77,7 @@ vi.mock("@/lib/shopify", async (importOriginal) => {
     ...actual,
     registerOrderWebhooks: vi.fn(async (opts: unknown) => {
       st.registerArgs.push(opts);
-      return [{ topic: "ORDERS_CREATE", id: "gid://1" }];
+      return st.registerResult;
     }),
   };
 });
@@ -82,7 +90,10 @@ function reply(c: Call): Reply {
   if (c.table === "stores") {
     if (c.op === "insert") return st.insertError ? { data: null, error: st.insertError } : { data: { id: "new-store" }, error: null };
     if (c.op === "update") return { data: st.updated, error: null };
-    if (c.filters.some((f) => f[0] === "ilike")) return { data: st.existingError ? null : st.existing, error: st.existingError };
+    if (c.filters.some((f) => f[0] === "ilike")) {
+      st.seq.push("lookup");
+      return { data: st.existingError ? null : st.existing, error: st.existingError };
+    }
     if (c.cols === "id, org_id") return { data: st.row ? { id: st.row.id, org_id: "org-sh" } : null, error: null };
     return { data: st.row, error: null };
   }
@@ -131,15 +142,21 @@ vi.mock("@/lib/db", () => {
   };
 });
 
+import { createHmac } from "node:crypto";
+import { NextRequest } from "next/server";
 import { decrypt, encrypt, generateEncryptionKey } from "@/lib/crypto";
 import { CLIENT_APP_WEBHOOK_TOPICS } from "@/lib/shopify";
-import { OWN_APP_MIGRATION_MISSING_MESSAGE } from "@/lib/shopify-own-app";
+import { OWN_APP_MIGRATION_MISSING_MESSAGE, OWN_APP_PREV_WEBHOOK_SECRET_GRACE_MS } from "@/lib/shopify-own-app";
 import { connectOwnAppStore } from "@/app/dashboard/stores/new/actions";
 import {
+  clearOwnAppPreviousSecret,
   reRegisterWebhooks,
   renewOwnAppTokenNow,
   saveOwnAppCredentials,
+  updateStore,
 } from "@/app/dashboard/[storeId]/settings/actions";
+import { GET as internalInstall } from "@/app/api/shopify/install/route";
+import { GET as internalCallback } from "@/app/api/shopify/callback/route";
 
 process.env.ENCRYPTION_KEY = generateEncryptionKey();
 
@@ -176,7 +193,9 @@ beforeEach(() => {
   st.finishWarnings = [];
   st.finishArgs = [];
   st.registerArgs = [];
+  st.registerResult = [{ topic: "ORDERS_CREATE", id: "gid://1" }];
   st.revalidated = [];
+  st.seq = [];
   net = {
     token: { status: 200, payload: { access_token: NEW_TOKEN, scope: ALL_SCOPES, expires_in: 86399 } },
     shop: {
@@ -184,9 +203,11 @@ beforeEach(() => {
       payload: { data: { shop: { name: "Súper Human Perú", currencyCode: "PEN", ianaTimezone: "America/Lima", myshopifyDomain: SHOP } } },
     },
   };
-  fetchSpy = vi.fn(async (url: unknown) =>
-    respond(String(url).endsWith("/admin/oauth/access_token") ? net.token : net.shop),
-  );
+  fetchSpy = vi.fn(async (url: unknown) => {
+    const isToken = String(url).endsWith("/admin/oauth/access_token");
+    if (isToken) st.seq.push("token");
+    return respond(isToken ? net.token : net.shop);
+  });
   vi.stubGlobal("fetch", fetchSpy);
   vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://kapta.test");
   logs.length = 0;
@@ -225,11 +246,13 @@ describe("connectOwnAppStore", () => {
     await expect(connectOwnAppStore({}, good())).rejects.toThrow("REDIRECT:/dashboard/new-store");
 
     expect(st.permArgs).toEqual([["org-sh", "stores.manage"]]);
-    // Primero pregunta si el dominio ya está, en cualquier organización.
+    // Primero el token (prueba que quien conecta tiene la app instalada en la
+    // tienda); después, si el dominio ya está, en cualquier organización.
+    expect(st.seq).toEqual(["token", "lookup"]);
     const lookup = st.calls.find((c) => c.table === "stores" && c.filters.some((f) => f[0] === "ilike"))!;
     expect(lookup.filters).toEqual([
       ["ilike", "shopify_domain", SHOP],
-      ["limit", 1],
+      ["limit", 20],
     ]);
     expect(lookup.filters.some((f) => f[1] === "org_id")).toBe(false);
 
@@ -252,6 +275,7 @@ describe("connectOwnAppStore", () => {
     expect(decrypt(String(p.shopify_client_secret_enc))).toBe(SECRET);
     // Shopify firma los webhooks de la app con su Client secret.
     expect(decrypt(String(p.shopify_webhook_secret_enc))).toBe(SECRET);
+    // El vencimiento y la renovación salen del mismo reloj: exacto, siempre.
     expect(Date.parse(String(p.shopify_token_expires_at)) - Date.parse(String(p.shopify_token_renewed_at))).toBe(86399 * 1000);
     // Nada en claro.
     expectNoSecrets(JSON.stringify(p));
@@ -312,20 +336,54 @@ describe("connectOwnAppStore", () => {
   });
 
   it("un dominio que ya está en Kapta (Kenku, Aurela, clientes u otra propia): no la toca", async () => {
-    st.existing = [{ id: "store-kenku" }];
+    st.existing = [{ id: "store-kenku", org_id: "org-kenku", shopify_token_enc: "enc:token-kenku" }];
     expect(await connectOwnAppStore({}, good({ shopify_domain: "kenku-peru.myshopify.com" }))).toEqual({
       error: "Esa tienda de Shopify ya está conectada a Kapta. No se cambió nada en ella.",
     });
-    // Ni pide token (que acuñaría uno para una tienda ajena) ni escribe.
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // Se enteró después de que Shopify diera un token a la app de quien conecta
+    // (que no le cambia nada a Kenku); no escribe ni registra nada.
+    expect(st.seq).toEqual(["token", "lookup"]);
     expect(st.calls.filter((c) => c.op !== "select")).toEqual([]);
     expect(st.finishArgs).toEqual([]);
+    expect(st.registerArgs).toEqual([]);
+  });
+
+  it("con credenciales inventadas no se averigua si una tienda es de Kapta", async () => {
+    st.existing = [{ id: "store-kenku", org_id: "org-kenku", shopify_token_enc: "enc:token-kenku" }];
+    net.token = { status: 401, payload: { error: "invalid_client" } };
+    const r = await connectOwnAppStore({}, good({ shopify_domain: "kenku-peru.myshopify.com", client_id: "inventado1", client_secret: "inventado2" }));
+    // El mismo rechazo de Shopify que con una tienda que no está en Kapta.
+    expect(r.error).toContain("Shopify rechazó el Client ID o el Client secret");
+    expect(r.error).not.toContain("Kapta");
+    expect(st.seq).toEqual(["token"]);
+    expect(st.calls.some((c) => c.filters.some((f) => f[0] === "ilike"))).toBe(false);
+    expect(st.calls.filter((c) => c.op !== "select")).toEqual([]);
+  });
+
+  it("un dominio registrado en otra organización sin conexión: lo dice distinto y tampoco lo toca", async () => {
+    st.existing = [{ id: "store-apartada", org_id: "org-otra", shopify_token_enc: null }];
+    const r = await connectOwnAppStore({}, good());
+    expect(r.error).toBe(
+      "Esa tienda de Shopify está registrada en Kapta en otra organización, sin conexión. No se cambió nada: escríbele a soporte de Kapta para liberarla.",
+    );
+    expect(st.calls.filter((c) => c.op !== "select")).toEqual([]);
+    expect(logs.join("\n")).toContain('"conectar":"dominio_ocupado"');
+    expectNoSecrets(logs.join("\n"));
+    // En la misma organización, o con token, es «ya está conectada».
+    for (const row of [
+      { id: "s1", org_id: "org-sh", shopify_token_enc: null },
+      { id: "s2", org_id: "org-otra", shopify_token_enc: "enc:x" },
+    ]) {
+      st.existing = [row];
+      expect((await connectOwnAppStore({}, good())).error).toBe("Esa tienda de Shopify ya está conectada a Kapta. No se cambió nada en ella.");
+    }
   });
 
   it("si no se pudo comprobar el dominio, no sigue", async () => {
     st.existingError = { message: "timeout" };
     expect((await connectOwnAppStore({}, good())).error).toContain("No se creó nada");
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(storeWrites()).toEqual([]);
+    expect(st.finishArgs).toEqual([]);
   });
 
   it("app sin todos los permisos: no conecta y nombra los que faltan", async () => {
@@ -347,6 +405,8 @@ describe("connectOwnAppStore", () => {
     expect(r.error).toContain(text);
     expectNoSecrets(JSON.stringify(r) + logs.join("\n"));
     expect(storeWrites()).toEqual([]);
+    // Ni siquiera pregunta si la tienda ya está en Kapta.
+    expect(st.seq).toEqual(["token"]);
   });
 
   it("sin la 0271 (el CHECK viejo no acepta 'propia'): lo dice y no queda nada", async () => {
@@ -387,7 +447,7 @@ describe("saveOwnAppCredentials", () => {
     form({ store_id: "store-propia", own_client_id: CLIENT_ID, own_client_secret: SECRET, ...over });
 
   it("prueba el secreto y, si sirve, lo guarda cifrado (también como secreto de webhooks) con el token nuevo", async () => {
-    st.row = propiaRow();
+    st.row = propiaRow({ shopify_webhook_secret_enc: encrypt(SECRET) });
     expect(await saveOwnAppCredentials({}, fd())).toEqual({ notice: "Credenciales probadas y guardadas. Acceso renovado." });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const writes = storeWrites();
@@ -398,7 +458,13 @@ describe("saveOwnAppCredentials", () => {
     expect(decrypt(String(p.shopify_token_enc))).toBe(NEW_TOKEN);
     expect(p.shopify_client_id).toBe(CLIENT_ID);
     expect(p.shopify_token_error).toBeNull();
+    expect(p.shopify_token_retry_at).toBeNull();
     expect(p).not.toHaveProperty("status");
+    // El mismo secreto otra vez: no hay «anterior» que guardar ni borrar.
+    expect(p).not.toHaveProperty("shopify_webhook_secret_prev_enc");
+    expect(p).not.toHaveProperty("shopify_webhook_secret_prev_set_at");
+    // La misma app: no vuelve a registrar webhooks.
+    expect(st.registerArgs).toEqual([]);
     expect(writes[0]!.filters).toEqual([
       ["eq", "id", "store-propia"],
       ["eq", "shopify_app", "propia"],
@@ -443,6 +509,144 @@ describe("saveOwnAppCredentials", () => {
     st.row = propiaRow({ status: "disabled" });
     expect((await saveOwnAppCredentials({}, fd())).notice).toContain("sigue sin estar activa");
     expect(storeWrites()[0]!.payload).not.toHaveProperty("status");
+  });
+
+  it("en pausa: guarda y renueva como una activa", async () => {
+    st.row = propiaRow({ status: "paused", shopify_webhook_secret_enc: encrypt(SECRET) });
+    expect(await saveOwnAppCredentials({}, fd())).toEqual({ notice: "Credenciales probadas y guardadas. Acceso renovado." });
+  });
+
+  it("rotar el secreto (mismo Client ID): el anterior queda aparte, 48 h, y el aviso dice qué hacer", async () => {
+    const OLD = "shpss_secreto-anterior-9876543210";
+    const oldEnc = encrypt(OLD);
+    st.row = propiaRow({ shopify_webhook_secret_enc: oldEnc, timezone: "America/Lima" });
+    const before = Date.now();
+    const r = await saveOwnAppCredentials({}, fd());
+    expect(r.notice).toContain("Kapta acepta también el secreto anterior en los webhooks hasta el");
+    expect(r.notice).toContain("revócalo ahora en el Dev Dashboard");
+    expect(r.notice).toContain("«Ya revoqué el secreto anterior»");
+    const p = storeWrites()[0]!.payload!;
+    // El anterior, tal cual estaba cifrado; el nuevo, en los dos campos.
+    expect(p.shopify_webhook_secret_prev_enc).toBe(oldEnc);
+    expect(decrypt(String(p.shopify_webhook_secret_enc))).toBe(SECRET);
+    const setAt = Date.parse(String(p.shopify_webhook_secret_prev_set_at));
+    expect(setAt).toBeGreaterThanOrEqual(before);
+    expect(setAt).toBeLessThanOrEqual(Date.now());
+    expect(st.registerArgs).toEqual([]);
+    expectNoSecrets(JSON.stringify(r));
+    expect(JSON.stringify(r)).not.toContain(OLD);
+    expect(OWN_APP_PREV_WEBHOOK_SECRET_GRACE_MS).toBe(48 * 60 * 60 * 1000);
+  });
+
+  it("otra app (Client ID nuevo): no acepta el secreto de la anterior y registra los webhooks de la nueva", async () => {
+    st.row = propiaRow({ shopify_client_id: "client-id-de-la-app-anterior", shopify_webhook_secret_enc: encrypt("shpss_de-la-anterior") });
+    const r = await saveOwnAppCredentials({}, fd());
+    expect(r.notice).toContain("sus webhooks registrados");
+    expect(r.notice).toContain("Desinstala la app anterior");
+    const p = storeWrites()[0]!.payload!;
+    expect(p.shopify_client_id).toBe(CLIENT_ID);
+    expect(p.shopify_webhook_secret_prev_enc).toBeNull();
+    expect(p.shopify_webhook_secret_prev_set_at).toBeNull();
+    expect(st.registerArgs).toEqual([
+      {
+        domain: SHOP,
+        token: NEW_TOKEN,
+        callbackUrl: "https://kapta.test/api/webhooks/shopify/store-propia",
+        extraTopics: CLIENT_APP_WEBHOOK_TOPICS,
+      },
+    ]);
+  });
+
+  it("otra app con webhooks que fallan: guardó, y dice que los re-registre", async () => {
+    st.row = propiaRow({ shopify_client_id: "client-id-de-la-app-anterior" });
+    st.registerResult = [{ topic: "APP_UNINSTALLED", id: null, error: "boom" }];
+    const r = await saveOwnAppCredentials({}, fd());
+    expect(r.error).toContain("probadas y guardadas");
+    expect(r.error).toContain("APP_UNINSTALLED: boom");
+    expect(r.error).toContain("«Re-registrar webhooks»");
+    expect(storeWrites()).toHaveLength(1);
+  });
+
+  it("otra app en una tienda deshabilitada: guarda, sin registrar webhooks", async () => {
+    st.row = propiaRow({ status: "disabled", shopify_client_id: "client-id-de-la-app-anterior" });
+    expect((await saveOwnAppCredentials({}, fd())).notice).toContain("sigue sin estar activa");
+    expect(st.registerArgs).toEqual([]);
+  });
+});
+
+describe("clearOwnAppPreviousSecret («Ya revoqué el secreto anterior»)", () => {
+  it("en una 'propia' borra el anterior; en Kenku no hace nada", async () => {
+    st.row = propiaRow();
+    expect(await clearOwnAppPreviousSecret({}, form({ store_id: "store-propia" }))).toEqual({
+      notice: "Listo: Kapta ya solo acepta webhooks firmados con el Client secret actual.",
+    });
+    const w = storeWrites();
+    expect(w).toHaveLength(1);
+    expect(w[0]!.payload).toEqual({ shopify_webhook_secret_prev_enc: null, shopify_webhook_secret_prev_set_at: null });
+    expect(w[0]!.filters).toEqual([
+      ["eq", "id", "store-propia"],
+      ["eq", "shopify_app", "propia"],
+    ]);
+
+    st.calls = [];
+    st.row = propiaRow({ shopify_app: "interna" });
+    expect((await clearOwnAppPreviousSecret({}, form({ store_id: "store-propia" }))).error).toContain("no está conectada con una app propia");
+    expect(storeWrites()).toEqual([]);
+  });
+});
+
+describe("una tienda 'propia' no recibe el token ni el secreto de webhooks a mano", () => {
+  it.each(["shopify_token", "shopify_webhook_secret"])("Ajustes → %s en una propia: no guarda nada", async (field) => {
+    st.row = propiaRow();
+    const r = await updateStore({}, form({ store_id: "store-propia", [field]: "pegado-a-mano-123" }));
+    expect(r.error).toContain("usa su app propia de Shopify");
+    expect(storeWrites()).toEqual([]);
+  });
+
+  it("Kenku (interna): el secreto HMAC a mano se guarda como siempre", async () => {
+    st.row = propiaRow({ shopify_app: "interna", shopify_client_id: null });
+    expect(await updateStore({}, form({ store_id: "store-propia", shopify_webhook_secret: "secreto-nuevo-kenku" }))).toEqual({
+      notice: "Tienda actualizada.",
+    });
+    const w = storeWrites();
+    expect(w).toHaveLength(1);
+    expect(decrypt(String(w[0]!.payload!.shopify_webhook_secret_enc))).toBe("secreto-nuevo-kenku");
+  });
+
+  const API_SECRET = "secreto-de-la-app-interna";
+  function callbackReq(storeId: string) {
+    const params = new URLSearchParams({ code: "codigo", shop: SHOP, state: `${storeId}.abc`, timestamp: "1" });
+    const sorted = [...params.entries()].map(([k, v]) => `${k}=${v}`).sort().join("&");
+    params.set("hmac", createHmac("sha256", API_SECRET).update(sorted).digest("hex"));
+    return new NextRequest(`https://kapta.test/api/shopify/callback?${params}`, {
+      headers: { cookie: `shopify_oauth_state=${storeId}.abc` },
+    });
+  }
+
+  it("el OAuth de la app interna no instala ni reconecta una 'propia'", async () => {
+    vi.stubEnv("SHOPIFY_APP_API_KEY", "clave-app-interna");
+    vi.stubEnv("SHOPIFY_APP_API_SECRET", API_SECRET);
+    st.row = propiaRow();
+    const install = await internalInstall(new NextRequest("https://kapta.test/api/shopify/install?storeId=store-propia"));
+    expect(install.status).toBe(409);
+    const cb = await internalCallback(callbackReq("store-propia"));
+    expect(cb.headers.get("location")).toContain("shopify_error=app-propia");
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(storeWrites()).toEqual([]);
+  });
+
+  it("Kenku (interna): el OAuth de la app interna sigue igual", async () => {
+    vi.stubEnv("SHOPIFY_APP_API_KEY", "clave-app-interna");
+    vi.stubEnv("SHOPIFY_APP_API_SECRET", API_SECRET);
+    st.row = propiaRow({ shopify_app: "interna", shopify_client_id: null });
+    const install = await internalInstall(new NextRequest("https://kapta.test/api/shopify/install?storeId=store-propia"));
+    expect(install.headers.get("location")).toContain(`https://${SHOP}/admin/oauth/authorize`);
+    const cb = await internalCallback(callbackReq("store-propia"));
+    expect(cb.headers.get("location")).toContain("installed=1");
+    const w = storeWrites();
+    expect(w).toHaveLength(1);
+    expect(decrypt(String(w[0]!.payload!.shopify_webhook_secret_enc))).toBe(API_SECRET);
+    expect(w[0]!.payload!.status).toBe("active");
   });
 });
 
@@ -504,6 +708,19 @@ describe("las pantallas", () => {
   it("«Conectar con app propia de Shopify» está al lado de crear una tienda, con el texto del MOM", () => {
     expect(NEW_PAGE).toContain("Conectar con app propia de Shopify");
     expect(NEW_PAGE).toContain("<ConnectOwnAppStoreForm orgs={orgs} scopes={OWN_APP_REQUIRED_SCOPES} />");
+    // Primero la app propia; cada camino con su título, y el del token de
+    // Admin API dice a quién NO le sirve.
+    const own = NEW_PAGE.indexOf("<ConnectOwnAppStoreForm");
+    const legacy = NEW_PAGE.indexOf("<CreateStoreForm");
+    expect(own).toBeGreaterThan(-1);
+    expect(legacy).toBeGreaterThan(own);
+    const flatPage = NEW_PAGE.replace(/\s+/g, " ");
+    expect(flatPage).toContain("Dev Dashboard: Client ID + Client secret.");
+    expect(flatPage).toContain("Crear tienda con token de Admin API");
+    expect(flatPage).toContain(
+      "Si tienes Client ID y Client secret del Dev Dashboard, usa «Conectar con app propia de Shopify», arriba.",
+    );
+    expect(NEW_PAGE.slice(legacy - 600, legacy)).toContain("<h2");
     expect(FORMS.replace(/\s+/g, " ")).toContain(
       "Para tiendas cuya organización de Shopify creó su propia app en el Dev Dashboard. Kapta renueva el acceso cada día.",
     );
@@ -525,6 +742,27 @@ describe("las pantallas", () => {
     expect(section).not.toContain('name="shopify_token"');
     expect(section).not.toContain('name="shopify_webhook_secret"');
     expect(section).toContain("{ownApp.statusLine}");
+    expect(section).toContain("{ownApp.hint}");
     expect(section).toContain("{ownApp.error}");
+    // El título sale del contenido: permisos que faltan no es «falló».
+    expect(section).toContain("title={ownApp.errorTitle}");
+    expect(section).not.toContain('title="La última renovación falló"');
+    // A una deshabilitada no se le ofrece «Renovar ahora».
+    expect(section).toMatch(/\{ownApp\.disabled \? null : \(\s*<ActionRow\s+action=\{renewOwnAppTokenNow\}/);
+    // Mientras vale el secreto anterior, el botón para confirmar que se revocó.
+    expect(section).toMatch(/\{ownApp\.prevSecretUntil \? \(\s*<ActionRow\s+action=\{clearOwnAppPreviousSecret\}/);
+  });
+
+  it("Ajustes manda una tienda 'propia' a su sección: nunca a la de la app interna", () => {
+    // La primera línea de ShopifySection despacha a OwnAppShopifySection; sin
+    // ella, una propia vería «Reconectar con Shopify» y el secreto HMAC a mano.
+    expect(SETTINGS).toMatch(
+      /function ShopifySection\(\{ data \}: \{ data: StoreSettingsData \}\) \{\s*if \(data\.ownApp\) return <OwnAppShopifySection data=\{data\} ownApp=\{data\.ownApp\} \/>;/,
+    );
+    // Y la página llena `ownApp` justo para las tiendas 'propia' (null en las demás).
+    expect(PAGE.replace(/\s+/g, " ")).toMatch(/ownApp: full\.shopify_app === OWN_APP \? \{/);
+    const ownApp = PAGE.slice(PAGE.indexOf("ownApp:"), PAGE.indexOf("leadVoice: {", PAGE.indexOf("ownApp:")));
+    expect(ownApp.replace(/\s+/g, " ")).toMatch(/\} : null, (\/\/[^\n]*)?/);
+    for (const key of ["statusLine:", "hint:", "disabled:", "errorTitle:", "prevSecretUntil:"]) expect(ownApp).toContain(key);
   });
 });

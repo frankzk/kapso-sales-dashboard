@@ -15156,6 +15156,13 @@ No hay otro valor, y una tienda no cambia de app sola.
   (`stores.manage`: owner, admin o Administración), y la organización se elige
   igual. La pantalla dice: «Para tiendas cuya organización de Shopify creó su
   propia app en el Dev Dashboard. Kapta renueva el acceso cada día.»
+- **Va primero, y cada camino con su título.** «Conectar tienda» muestra arriba
+  «Conectar con app propia de Shopify» («Dev Dashboard: Client ID + Client
+  secret») y debajo «Crear tienda con token de Admin API», que aclara que es
+  para un token `shpat_` o para instalar después con la app interna, y que con
+  Client ID y Client secret se usa la app propia. Pegar las credenciales de la
+  app propia en el formulario del token creaba una tienda `interna` que después
+  bloqueaba este camino.
 - **Qué se escribe:** el dominio `*.myshopify.com` (también sirve la dirección
   del admin, `admin.shopify.com/store/<tienda>`), el Client ID y el Client
   secret. El Client secret va en un campo de contraseña y Kapta nunca lo
@@ -15166,13 +15173,19 @@ No hay otro valor, y una tienda no cambia de app sola.
   `write_X` cuenta también como `read_X`.
 - **Qué hace Kapta, en orden:**
   1. Valida el dominio. Si no es `*.myshopify.com`, no conecta.
-  2. Si ya hay una tienda con ese dominio en Kapta, con cualquier app, no
-     conecta y **no la toca**.
-  3. Pide un token. Si Shopify lo niega, dice por qué sin repetir el secreto:
+  2. Pide un token. Si Shopify lo niega, dice por qué sin repetir el secreto:
      las credenciales no son válidas, la app no está instalada en esa tienda,
      o la tienda no es de la organización que creó la app.
-  4. Compara los alcances que dio Shopify con los de arriba. Si falta alguno,
+  3. Compara los alcances que dio Shopify con los de arriba. Si falta alguno,
      no conecta y nombra los que faltan.
+  4. Si ya hay una tienda con ese dominio en Kapta, con cualquier app, no
+     conecta y **no la toca**. Se mira recién después del token: así solo se
+     entera quien tiene una app instalada en esa tienda, y nadie usa el
+     formulario para averiguar qué tiendas de Shopify son de Kapta. Pedir ese
+     token no le cambia nada a la otra tienda. Si las filas con ese dominio son
+     todas de otra organización y sin token (un dominio registrado sin
+     conexión), lo dice así y pide escribirle a soporte, que es quien lo
+     libera; tampoco las toca.
   5. Lee la moneda y la zona horaria de la tienda.
   6. Crea la tienda con app `propia`: el token y el Client secret cifrados, el
      Client ID y el vencimiento del token. El secreto de sus webhooks es el
@@ -15184,12 +15197,29 @@ No hay otro valor, y una tienda no cambia de app sola.
 ### 36.3 El token se renueva solo
 
 - **Cada hora.** Un cron (`/api/cron/shopify-own-app-tokens`) renueva el token
-  de cada tienda `active` con app `propia` al que le quedan menos de **12
+  de cada tienda `active` o `paused` con app `propia` al que le quedan menos de **12
   horas** (`OWN_APP_RENEW_BEFORE_MS`), o que no tiene token.
+- **En pausa también.** Pausar una tienda solo detiene los barridos: sus
+  webhooks, «Sincronizar ahora» y las demás acciones siguen usando Shopify, así
+  que una tienda `paused` renueva igual que una `active`. Solo una `disabled`
+  (por ejemplo, desinstalada) no renueva.
 - **Al usarlo.** Antes de llamar a Shopify por una tienda propia, si al token
   le quedan menos de **15 minutos** (`OWN_APP_RENEW_ON_USE_MS`) o no hay
   token, Kapta lo renueva primero. Si esa renovación falla y el token todavía
   vale, usa el que tiene.
+- **Con freno.** La renovación al usar no pide otro token en los **5 minutos**
+  siguientes a un intento (`OWN_APP_ON_USE_RETRY_MS`), ni en los **15
+  minutos** siguientes a un fallo de red o a un 429/5xx de Shopify
+  (`OWN_APP_ON_USE_RETRY_AFTER_RED_MS`). El intento se reserva en la base
+  (`shopify_token_retry_at`): si dos usos llegan juntos, solo uno sale a
+  Shopify. Con Shopify caído o el secreto revocado, cada webhook, cada
+  sincronización y cada boleta ya no le mandan el Client secret a Shopify otra
+  vez. El cron y «Renovar ahora» no miran el freno.
+- **Primero se autentica.** Un webhook de Shopify, de Shopify Flow, de Kapso,
+  de Aliclik o de Flow.cl lee la tienda **sin** renovar: primero comprueba su
+  firma o su secreto. Solo después, y solo donde se usa el token de Shopify
+  (los borradores), se renueva. Una petición falsa no hace salir el Client
+  secret.
 - **Nunca hacia atrás.** Si dos renovaciones se cruzan, gana la que vence más
   tarde. Una renovación nunca reemplaza un token por otro que vence antes.
 - **Si falla.** Kapta guarda el motivo en `shopify_token_error`, sin secretos,
@@ -15197,34 +15227,64 @@ No hay otro valor, y una tienda no cambia de app sola.
   el cron lo vuelve a intentar a la hora siguiente. La primera renovación que
   sale bien borra el motivo. Si a la app le faltan permisos, guarda el token
   igual y deja como motivo los permisos que faltan.
+- **Un fallo viejo no pisa un éxito nuevo.** El motivo solo se guarda si nadie
+  renovó después de que empezó ese intento: si mientras Shopify tardaba otro
+  proceso (o «Probar y guardar») guardó un token, el fallo no se anota.
 
 ### 36.4 Ajustes de la tienda
 
 - Una tienda propia muestra «App propia · acceso renovado hace X · vence a las
-  HH:MM» y, si lo hay, el motivo del último fallo.
-- **Cambiar el Client ID o el Client secret** (cuando se rota en el Dev
-  Dashboard): Kapta pide un token con lo nuevo y revisa los permisos antes de
-  guardar. Si Shopify lo niega o falta un permiso, no guarda nada. Si sirve,
-  guarda el secreto nuevo, que también es el de sus webhooks, y el token
-  nuevo. El secreto nunca se muestra.
+  HH:MM» y, si lo hay, el aviso de `shopify_token_error`. Su título es «La
+  última renovación falló» o, si lo que dice son permisos que faltan tras una
+  renovación que salió bien, «Faltan permisos en la app».
+- Las horas van en la zona de la tienda. Una zona que no se entiende («Lima»,
+  «GMT-5») no rompe Ajustes: se muestran en la de Lima.
+- **Sin acceso que valga, no dice «vence».** Una tienda propia desinstalada
+  muestra «App propia · app desinstalada el DD/MM a las HH:MM» y los pasos para
+  volver (36.5), sin «Renovar ahora». Una deshabilitada a mano, «tienda
+  deshabilitada: Kapta no renueva su acceso». Una activa o en pausa sin token,
+  «sin token vigente».
+- **Rotar el Client secret** (mismo Client ID): Kapta pide un token con el
+  nuevo y revisa los permisos antes de guardar. Si Shopify lo niega o falta
+  un permiso, no guarda nada. Si sirve, guarda el secreto nuevo, que también
+  es el de sus webhooks, y el token nuevo. El secreto nunca se muestra.
+  Shopify sigue firmando los webhooks con el secreto **más viejo que no se
+  revocó**: Kapta guarda el anterior (`shopify_webhook_secret_prev_enc`) y
+  acepta también los webhooks firmados con él durante **48 horas**
+  (`OWN_APP_PREV_WEBHOOK_SECRET_GRACE_MS`), o hasta que alguien pulsa «Ya
+  revoqué el secreto anterior». Los pasos, en orden: rotar en el Dev Dashboard,
+  pegar el nuevo en Ajustes, revocar el anterior en el Dev Dashboard y
+  confirmar en Ajustes. Si el anterior no se revoca en 48 h, Shopify sigue
+  firmando con él y Kapta deja de aceptar esos webhooks.
+- **Cambiar el Client ID** (otra app): se prueba igual. Las suscripciones de
+  webhooks son de la app anterior y llegan firmadas con su secreto: Kapta ya
+  no las acepta (su desinstalación no deshabilita la tienda). Si la tienda
+  está activa o en pausa, Kapta registra los webhooks de la app nueva (pedidos,
+  borradores y `app/uninstalled`) y avisa que se desinstale la anterior; si
+  fallan, lo dice y pide «Re-registrar webhooks».
 - **«Renovar ahora»** hace lo mismo que el cron, solo para esa tienda.
-- Las dos piden «Administrar tiendas» y solo actúan sobre una tienda propia.
-  Ninguna cambia el estado de la tienda.
+- Las tres acciones (guardar las credenciales, «Renovar ahora» y «Ya revoqué
+  el secreto anterior») piden «Administrar tiendas» y solo actúan sobre una
+  tienda propia. Ninguna cambia el estado de la tienda.
 - Una tienda propia no muestra «Reconectar con Shopify» (eso es la app
   interna) ni los campos del token y del secreto HMAC a mano: el token lo
-  renueva Kapta y el secreto de los webhooks es el Client secret.
+  renueva Kapta y el secreto de los webhooks es el Client secret. Y aunque
+  alguien los mande igual, el servidor los rechaza sin guardar nada, y el
+  OAuth de la app interna (instalar y su vuelta) no toca una tienda propia.
+  Kenku, Aurela y las tiendas `clientes` siguen igual que siempre.
 
 ### 36.5 Desinstalar
 
 - `app/uninstalled` hace lo mismo que con la app de clientes (§29.15.9): borra
   el token, la tienda pasa a `disabled` y se anota la fecha de desinstalación.
   Pedidos, historial y liquidaciones no se tocan.
-- El cron y la renovación al usar solo toman tiendas `active` con app
-  `propia`. Una tienda desinstalada no vuelve a tener token sola: volver a
+- El cron y la renovación al usar solo toman tiendas `active` o `paused` con
+  app `propia`. Una tienda desinstalada no vuelve a tener token sola: volver a
   conectarla es un paso de una persona con «Administrar tiendas», nunca del
   cron. Se reinstala la app en Shopify, se guardan otra vez las credenciales
   en Ajustes (36.4), se pasa la tienda a «Activa» y se registran otra vez los
-  webhooks.
+  webhooks. Ajustes lo dice así, con la fecha de la desinstalación, en vez de
+  un vencimiento que ya no vale.
 
 ### 36.6 Lo que no cambia
 
@@ -15232,12 +15292,17 @@ No hay otro valor, y una tienda no cambia de app sola.
   exactamente igual:** su token, sus webhooks, su estado y su forma de leer
   Shopify. Nada de esta sección las desconecta, les registra webhooks, les
   cambia el token ni les escribe una columna.
-- **La base lo sostiene.** La 0271 no actualiza ninguna fila. Las cinco
+- **La base lo sostiene.** La 0271 no actualiza ninguna fila. Las ocho
   columnas de la app propia (`shopify_client_id`, `shopify_client_secret_enc`,
-  `shopify_token_expires_at`, `shopify_token_renewed_at` y
-  `shopify_token_error`) solo pueden tener valor en una tienda `propia`
+  `shopify_token_expires_at`, `shopify_token_renewed_at`,
+  `shopify_token_error`, `shopify_token_retry_at`,
+  `shopify_webhook_secret_prev_enc` y `shopify_webhook_secret_prev_set_at`)
+  solo pueden tener valor en una tienda `propia`
   (`stores_own_app_columns_check`). Un código que intente llenarlas en otra
   tienda falla en vez de cambiarla.
+- **El secreto anterior solo cuenta en una propia.** La firma de los webhooks
+  de Kenku, Aurela y las tiendas `clientes` se comprueba exactamente como
+  antes, con su único secreto.
 - **Sin migración de datos.** Ninguna tienda existente pasa a app propia. Pasar
   Kenku o Aurela a una app propia sería otra decisión del owner.
 - **Un dominio, una tienda.** Un dominio está en una sola tienda con app propia
@@ -15247,25 +15312,35 @@ No hay otro valor, y una tienda no cambia de app sola.
 ### 36.7 Implementación
 
 - `db/migrations/0271_shopify_app_propia.sql`: el tercer valor de
-  `stores_shopify_app_check`, las cinco columnas, `stores_own_app_columns_check`
+  `stores_shopify_app_check`, las ocho columnas, `stores_own_app_columns_check`
   y `stores_own_app_shop_uniq`. Los secretos se guardan como los demás de
   `stores`: cifrados con AES-256-GCM (`lib/crypto.ts`), descifrados solo en el
   servidor, y la fila la protege la misma RLS. No toca filas.
 - `lib/shopify-own-app.ts`: el pedido del token (`requestClientCredentialsToken`),
   los alcances (`OWN_APP_REQUIRED_SCOPES`, `missingScopes`), cuándo renovar
-  (`shouldRenew`, `OWN_APP_RENEW_BEFORE_MS`, `OWN_APP_RENEW_ON_USE_MS`) y la
-  renovación (`renewOwnAppToken`).
+  (`shouldRenew`, `OWN_APP_RENEW_BEFORE_MS`, `OWN_APP_RENEW_ON_USE_MS`), el
+  freno (`OWN_APP_ON_USE_RETRY_MS`, `OWN_APP_ON_USE_RETRY_AFTER_RED_MS`), la
+  renovación (`renewOwnAppToken`, `ownAppTokenForUse`), la gracia del secreto
+  anterior (`OWN_APP_PREV_WEBHOOK_SECRET_GRACE_MS`) y lo que muestra Ajustes
+  (`ownAppStatusLine`, `ownAppAccessHint`, `ownAppErrorTitle`).
 - `getStoreCreds` (`lib/ingest.ts`) y la lectura del pedido para comprobantes
   (`lib/invoicing/shopify-order.ts`) renuevan antes de usar, solo en tiendas
-  `propia`.
+  `propia`. Los webhooks leen con `renewOwnApp: false` y, ya autenticados,
+  renuevan con `ownAppCredsForUse`; la firma de Shopify se comprueba con
+  `verifyStoreShopifyHmac` (el secreto anterior, solo en una propia).
 - `app/api/cron/shopify-own-app-tokens/route.ts`: el cron de cada hora.
 - `app/dashboard/stores/new/actions.ts` (`connectOwnAppStore`) y
   `ConnectOwnAppStoreForm` en `components/forms.tsx`: la conexión (36.2).
 - `app/dashboard/[storeId]/settings/actions.ts` (`saveOwnAppCredentials`,
-  `renewOwnAppTokenNow`) y `components/store-settings.tsx`: Ajustes (36.4).
+  `renewOwnAppTokenNow`, `clearOwnAppPreviousSecret`) y
+  `components/store-settings.tsx`: Ajustes (36.4).
   «Re-registrar webhooks» suma `app/uninstalled` solo en una tienda propia; en
-  las demás registra lo mismo que antes.
+  las demás registra lo mismo que antes. `updateStore` y el OAuth de la app
+  interna (`app/api/shopify/install/route.ts`,
+  `app/api/shopify/callback/route.ts`) rechazan pisar el token o el secreto de
+  una tienda propia.
 - Pruebas: `test/shopify-own-app.test.ts`, `test/shopify-own-app-cron.test.ts`,
-  `test/shopify-own-app-connect.test.ts`, `test/shopify-app-propia-mom.test.ts`
-  y `scripts/sql/shopify_app_propia_smoke.sql` (la 0271 aplicada sobre el
+  `test/shopify-own-app-connect.test.ts`, `test/shopify-own-app-webhooks.test.ts`,
+  `test/shopify-app-propia-mom.test.ts` y
+  `scripts/sql/shopify_app_propia_smoke.sql` (la 0271 aplicada sobre el
   esquema de la 0249 con tiendas `interna` y `clientes`: ninguna fila cambia).

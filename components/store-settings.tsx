@@ -74,6 +74,7 @@ import {
   setReplyTemplateActive,
   listStoreMetaAdAccounts,
   reRegisterWebhooks,
+  clearOwnAppPreviousSecret,
   renewOwnAppTokenNow,
   saveMetaAdAccounts,
   saveOwnAppCredentials,
@@ -271,10 +272,18 @@ export interface StoreSettingsData {
   ownApp?: {
     clientId: string | null;
     hasSecret: boolean;
-    /** «App propia · acceso renovado hace X · vence a las HH:MM». */
+    /** «App propia · acceso renovado hace X · vence a las HH:MM», o «app desinstalada el …». */
     statusLine: string;
-    /** Por qué falló la última renovación (`shopify_token_error`). */
+    /** Qué hacer según el estado (`ownAppAccessHint`): a una deshabilitada no se le dice «renueva». */
+    hint: string;
+    /** La tienda está deshabilitada: «Renovar ahora» no aplica. */
+    disabled: boolean;
+    /** El último fallo al renovar, o los permisos que faltan (`shopify_token_error`). */
     error: string | null;
+    /** «La última renovación falló» o «Faltan permisos en la app» (`ownAppErrorTitle`). */
+    errorTitle: string;
+    /** «hasta el 25/10 a las 14:20» mientras se acepta el Client secret anterior; null si no. */
+    prevSecretUntil: string | null;
   } | null;
   /** Lo del agente de leads (MOM §33) que no es una columna de la tienda. */
   leadVoice: {
@@ -978,23 +987,33 @@ function OwnAppShopifySection({
       <div className={cn(CARD, "divide-y divide-line")}>
         <div className={ROW}>
           <p className="text-sm font-semibold leading-5 text-ink-900">{ownApp.statusLine}</p>
-          <p className={cn(HELP, "mt-0.5")}>
-            {has.shopifyToken ? "Token configurado (cifrado)." : "Aún sin token — renueva o vuelve a guardar las credenciales."}
-          </p>
+          <p className={cn(HELP, "mt-0.5")}>{ownApp.hint}</p>
         </div>
         {ownApp.error ? (
-          <BannerRow tone="warn" title="La última renovación falló">
+          <BannerRow tone="warn" title={ownApp.errorTitle}>
             {ownApp.error}
           </BannerRow>
         ) : null}
-        <ActionRow
-          action={renewOwnAppTokenNow}
-          storeId={s.id}
-          title="Acceso a Shopify"
-          label="Renovar ahora"
-          pendingLabel="Renovando…"
-          help="Pide un token nuevo con el Client ID y el Client secret guardados. El cron lo hace cada hora."
-        />
+        {ownApp.prevSecretUntil ? (
+          <ActionRow
+            action={clearOwnAppPreviousSecret}
+            storeId={s.id}
+            title="Client secret anterior"
+            label="Ya revoqué el secreto anterior"
+            pendingLabel="Guardando…"
+            help={`Kapta acepta también webhooks firmados con el secreto anterior ${ownApp.prevSecretUntil}: Shopify firma con él hasta que lo revocas en el Dev Dashboard. Revócalo allí y confirma aquí.`}
+          />
+        ) : null}
+        {ownApp.disabled ? null : (
+          <ActionRow
+            action={renewOwnAppTokenNow}
+            storeId={s.id}
+            title="Acceso a Shopify"
+            label="Renovar ahora"
+            pendingLabel="Renovando…"
+            help="Pide un token nuevo con el Client ID y el Client secret guardados. El cron lo hace cada hora."
+          />
+        )}
         <ActionRow
           action={reRegisterWebhooks}
           storeId={s.id}
@@ -1024,7 +1043,7 @@ function OwnAppShopifySection({
             label="Client secret"
             htmlFor="own_client_secret"
             mark={<Badge tone={ownApp.hasSecret ? "ok" : "neutral"}>{ownApp.hasSecret ? "Configurado" : "Sin configurar"}</Badge>}
-            hint="No se vuelve a mostrar. Pega el nuevo si lo rotaste en el Dev Dashboard."
+            hint="No se vuelve a mostrar. Si lo rotaste en el Dev Dashboard: pega el nuevo aquí, después revoca el anterior allí y confirma con «Ya revoqué el secreto anterior». Si cambias el Client ID (otra app), Kapta registra los webhooks de la nueva: desinstala la anterior."
           >
             <input
               id="own_client_secret"

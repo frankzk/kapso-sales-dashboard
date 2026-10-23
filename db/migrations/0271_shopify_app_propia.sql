@@ -18,10 +18,24 @@
 --                                      como los demás *_enc de `stores`.
 --   stores.shopify_token_expires_at    cuándo vence el token vigente.
 --   stores.shopify_token_renewed_at    cuándo se renovó por última vez.
---   stores.shopify_token_error         el último fallo al renovar, en texto que
---                                      se puede mostrar (sin secretos); null si
---                                      la última renovación salió bien.
---   stores_own_app_columns_check       las cinco columnas son solo de la app
+--   stores.shopify_token_error         el último fallo al renovar, o los permisos
+--                                      que le faltan a la app, en texto que se
+--                                      puede mostrar (sin secretos); null si la
+--                                      última renovación salió bien y completa.
+--   stores.shopify_token_retry_at      freno de la renovación al usar el token:
+--                                      antes de esta hora no se vuelve a pedir
+--                                      uno a Shopify (5 min tras cada intento,
+--                                      15 si Shopify no respondió bien).
+--   stores.shopify_webhook_secret_prev_enc
+--                                      el Client secret anterior, cifrado, tras
+--                                      rotarlo en Ajustes: Shopify firma los
+--                                      webhooks con el secreto más viejo que no
+--                                      se revocó, y Kapta lo acepta un tiempo.
+--   stores.shopify_webhook_secret_prev_set_at
+--                                      desde cuándo es el anterior (48 h de
+--                                      gracia, o hasta que alguien confirma que
+--                                      lo revocó).
+--   stores_own_app_columns_check       las ocho columnas son solo de la app
 --                                      propia: en una tienda 'interna' o
 --                                      'clientes' quedan null, y una escritura
 --                                      que intente llenarlas falla.
@@ -47,7 +61,10 @@ alter table stores
   add column if not exists shopify_client_secret_enc text,
   add column if not exists shopify_token_expires_at  timestamptz,
   add column if not exists shopify_token_renewed_at  timestamptz,
-  add column if not exists shopify_token_error       text;
+  add column if not exists shopify_token_error       text,
+  add column if not exists shopify_token_retry_at    timestamptz,
+  add column if not exists shopify_webhook_secret_prev_enc    text,
+  add column if not exists shopify_webhook_secret_prev_set_at timestamptz;
 
 -- La 0249 creó el CHECK con dos valores. Se reemplaza solo si todavía no admite
 -- 'propia': correrla otra vez no vuelve a validar la tabla.
@@ -68,14 +85,18 @@ end $$;
 
 -- La garantía del owner, puesta en la base: nada de la renovación puede
 -- escribir en Kenku, Aurela ni una tienda 'clientes'. Un código que lo intente
--- falla con 23514 en vez de cambiarles algo.
+-- falla con 23514 en vez de cambiarles algo. Si una versión anterior de esta
+-- misma migración ya lo creó con menos columnas (solo en bases de prueba: en
+-- producción no se aplicó), se rehace; si ya las nombra todas, no se toca.
 do $$
 begin
   if not exists (
     select 1 from pg_constraint
      where conrelid = 'stores'::regclass
        and conname = 'stores_own_app_columns_check'
+       and pg_get_constraintdef(oid) like '%shopify_webhook_secret_prev_set_at%'
   ) then
+    alter table stores drop constraint if exists stores_own_app_columns_check;
     alter table stores
       add constraint stores_own_app_columns_check
       check (
@@ -84,7 +105,10 @@ begin
             and shopify_client_secret_enc is null
             and shopify_token_expires_at is null
             and shopify_token_renewed_at is null
-            and shopify_token_error is null)
+            and shopify_token_error is null
+            and shopify_token_retry_at is null
+            and shopify_webhook_secret_prev_enc is null
+            and shopify_webhook_secret_prev_set_at is null)
       );
   end if;
 end $$;
@@ -108,4 +132,10 @@ comment on column stores.shopify_token_expires_at is
 comment on column stores.shopify_token_renewed_at is
   'Solo app propia (MOM §36): cuándo se renovó el token por última vez.';
 comment on column stores.shopify_token_error is
-  'Solo app propia (MOM §36): el último fallo al renovar el token, en texto que se puede mostrar (sin secretos). Null si la última renovación salió bien.';
+  'Solo app propia (MOM §36): el último fallo al renovar el token, o los permisos que le faltan a la app, en texto que se puede mostrar (sin secretos). Null si la última renovación salió bien y con todos los permisos.';
+comment on column stores.shopify_token_retry_at is
+  'Solo app propia (MOM §36.3): antes de esta hora la renovación al usar el token no vuelve a pedir uno a Shopify. Cada intento al usar la pone 5 min adelante; un fallo de red o un 429/5xx, 15 min. El cron y «Renovar ahora» no la miran.';
+comment on column stores.shopify_webhook_secret_prev_enc is
+  'enc: solo app propia (MOM §36.4). El Client secret anterior tras rotarlo en Ajustes, cifrado AES-256-GCM. Los webhooks se aceptan también firmados con él durante 48 h desde shopify_webhook_secret_prev_set_at, o hasta que alguien confirma que lo revocó. Nunca viaja al cliente.';
+comment on column stores.shopify_webhook_secret_prev_set_at is
+  'Solo app propia (MOM §36.4): cuándo el Client secret anterior pasó a serlo. Pasadas 48 h ya no firma nada que Kapta acepte.';

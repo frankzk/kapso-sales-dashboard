@@ -3,12 +3,14 @@
 //
 // El token del client credentials grant dura ~24 h. Cada hora (en el minuto
 // 23, que no comparte con ningún otro barrido) este cron renueva el de cada
-// tienda ACTIVA con `shopify_app = 'propia'` cuyo token vence en las próximas
-// 12 horas o no lo tiene. Así cada token se renueva cuando le quedan unas 12
+// tienda ACTIVA o EN PAUSA con `shopify_app = 'propia'` cuyo token vence en las
+// próximas 12 horas o no lo tiene (una pausada sigue recibiendo webhooks y
+// sincronizando a mano, así que también necesita acceso). Así cada token se renueva cuando le quedan unas 12
 // horas (en la práctica, uno nuevo cada ~12 h), y si Shopify falla quedan unas
 // 12 pasadas más antes de que venza: una caída de unas horas no deja a nadie
 // sin acceso. Al usarlo, `getStoreCreds` lo renueva igual si le quedan menos
-// de 15 minutos.
+// de 15 minutos (con freno: un intento cada 5 minutos como mucho). El cron no
+// mira ese freno: corre una vez por hora.
 //
 // A QUIÉN NO TOCA. La consulta filtra `shopify_app = 'propia'` y la renovación
 // vuelve a comprobarlo antes de escribir: Kenku y Aurela ('interna') y las
@@ -28,6 +30,7 @@ import {
   isOwnAppMigrationMissing,
   OWN_APP,
   OWN_APP_RENEW_BEFORE_MS,
+  OWN_APP_RENEWABLE_STATUSES,
   renewOwnAppToken,
 } from "@/lib/shopify-own-app";
 import { internalAuthorized } from "@/lib/voice-recovery-server";
@@ -38,7 +41,7 @@ export const maxDuration = 60;
 
 export interface OwnAppTokensReport {
   at: string;
-  /** Tiendas activas con app propia cuyo token vence en menos de 12 horas o no lo tienen. */
+  /** Tiendas activas o en pausa con app propia cuyo token vence en menos de 12 horas o no lo tienen. */
   due: number;
   renewed: number;
   /** Otro proceso ya la había renovado: el token guardado aún servía. */
@@ -61,7 +64,7 @@ async function run(req: NextRequest) {
     .from("stores")
     .select("id,shopify_token_expires_at")
     .eq("shopify_app", OWN_APP)
-    .eq("status", "active")
+    .in("status", [...OWN_APP_RENEWABLE_STATUSES])
     .or(`shopify_token_enc.is.null,shopify_token_expires_at.is.null,shopify_token_expires_at.lte.${cutoff}`);
   if (error) {
     if (isOwnAppMigrationMissing(error)) {

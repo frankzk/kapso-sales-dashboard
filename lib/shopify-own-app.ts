@@ -47,12 +47,41 @@ export const OWN_APP_RENEW_ON_USE_MS = 15 * 60 * 1000;
 export const OWN_APP_TOKEN_TTL_FALLBACK_SECONDS = 24 * 60 * 60;
 /** Tope de la llamada a Shopify: una tienda colgada no se come el cron. */
 export const OWN_APP_TOKEN_TIMEOUT_MS = 15_000;
+/**
+ * Freno de la renovación AL USAR el token: tras un intento no se vuelve a pedir
+ * otro a Shopify en 5 minutos, y si Shopify no respondió bien (red, 429, 5xx),
+ * en 15. Sin él, con el secreto revocado o Shopify caído, cada webhook, cada
+ * sincronización y cada boleta mandaban el Client secret a Shopify otra vez.
+ * El cron (una vez por hora) y «Renovar ahora» no lo miran.
+ */
+export const OWN_APP_ON_USE_RETRY_MS = 5 * 60 * 1000;
+export const OWN_APP_ON_USE_RETRY_AFTER_RED_MS = 15 * 60 * 1000;
+/**
+ * Cuánto se aceptan los webhooks firmados con el Client secret ANTERIOR tras
+ * rotarlo en Ajustes. Shopify firma con el secreto más viejo que no se revocó:
+ * hasta que se revoca el anterior, firma con él (y unos minutos después
+ * también). Pasado este plazo, o cuando alguien confirma que lo revocó, el
+ * anterior ya no vale.
+ */
+export const OWN_APP_PREV_WEBHOOK_SECRET_GRACE_MS = 48 * 60 * 60 * 1000;
+/**
+ * Los estados en que una tienda propia renueva su token. «Pausada» renueva:
+ * pausar solo detiene los barridos, y los webhooks, «Sincronizar ahora» y las
+ * demás acciones siguen usando Shopify. Solo una deshabilitada (por ejemplo,
+ * desinstalada) no se renueva ni se resucita.
+ */
+export const OWN_APP_RENEWABLE_STATUSES: readonly string[] = ["active", "paused"];
 
 /** Lo que se le dice a quien conecta si la base no tiene la 0271. */
 export const OWN_APP_MIGRATION_MISSING_MESSAGE =
   "Falta aplicar la migración 0271 (app propia de Shopify) en la base. No se cambió nada.";
 
 export type OwnAppTokenFailure = "credenciales" | "no_instalada" | "otra_organizacion" | "red" | "respuesta_invalida";
+
+/** ¿La tienda propia en este estado renueva su token? Solo 'active' y 'paused'. */
+export function isOwnAppRenewableStatus(status: unknown): boolean {
+  return typeof status === "string" && OWN_APP_RENEWABLE_STATUSES.includes(status);
+}
 
 export type OwnAppTokenResult =
   | { ok: true; token: string; scopes: string[]; expiresAt: Date }
@@ -256,13 +285,23 @@ export async function requestClientCredentialsToken(input: {
   };
 }
 
+const MISSING_SCOPES_PREFIX = "A la app le faltan permisos que Kapta necesita: ";
+
 /** El aviso de permisos que faltan, en castellano. */
 export function missingScopesMessage(missing: readonly string[]): string {
-  return `A la app le faltan permisos que Kapta necesita: ${missing.join(", ")}. Agrégalos en el Dev Dashboard (nueva versión de la app), vuelve a instalarla en la tienda y prueba de nuevo.`;
+  return `${MISSING_SCOPES_PREFIX}${missing.join(", ")}. Agrégalos en el Dev Dashboard (nueva versión de la app), vuelve a instalarla en la tienda y prueba de nuevo.`;
+}
+
+/**
+ * El título del aviso de Ajustes para `shopify_token_error`. Una renovación que
+ * salió bien con permisos de menos guarda el aviso de permisos: no es «falló».
+ */
+export function ownAppErrorTitle(error: string | null | undefined): string {
+  return (error ?? "").startsWith(MISSING_SCOPES_PREFIX) ? "Faltan permisos en la app" : "La última renovación falló";
 }
 
 const OWN_APP_COLUMNS_RE =
-  /shopify_client_id|shopify_client_secret_enc|shopify_token_expires_at|shopify_token_error|shopify_token_renewed_at|stores_shopify_app_check/;
+  /shopify_client_id|shopify_client_secret_enc|shopify_token_expires_at|shopify_token_error|shopify_token_renewed_at|shopify_token_retry_at|shopify_webhook_secret_prev_enc|shopify_webhook_secret_prev_set_at|stores_shopify_app_check/;
 
 /**
  * ¿El error dice que falta la 0271? Una columna nueva que no existe (42703 de
@@ -278,7 +317,7 @@ export function isOwnAppMigrationMissing(error: unknown): boolean {
 
 /** Las columnas que lee la renovación. Nunca se mandan al navegador. */
 const RENEW_COLUMNS =
-  "id,shopify_domain,shopify_app,status,shopify_client_id,shopify_client_secret_enc,shopify_token_enc,shopify_token_expires_at";
+  "id,shopify_domain,shopify_app,status,shopify_client_id,shopify_client_secret_enc,shopify_token_enc,shopify_token_expires_at,shopify_token_retry_at";
 
 interface OwnAppStoreRow {
   id: string;
@@ -289,6 +328,7 @@ interface OwnAppStoreRow {
   shopify_client_secret_enc: string | null;
   shopify_token_enc: string | null;
   shopify_token_expires_at: string | null;
+  shopify_token_retry_at?: string | null;
 }
 
 export type OwnAppRenewFailure =
@@ -299,7 +339,9 @@ export type OwnAppRenewFailure =
   | "no_propia"
   | "inactiva"
   | "sin_credenciales"
-  | "guardado";
+  | "guardado"
+  /** Renovación al usar: otro intento reciente; se espera al freno (`shopify_token_retry_at`). */
+  | "en_espera";
 
 export type OwnAppRenewResult =
   | {
@@ -315,34 +357,81 @@ export type OwnAppRenewResult =
     }
   | { ok: false; reason: OwnAppRenewFailure; message: string };
 
-/** Anota por qué no se renovó, sin tocar el token actual. Nunca lanza. */
-async function writeTokenError(admin: SupabaseClient, storeId: string, message: string): Promise<void> {
+/**
+ * Anota por qué no se renovó, sin tocar el token actual. Nunca lanza.
+ *
+ * `attemptStart` es cuándo empezó ESTE intento: si mientras tanto otro proceso
+ * guardó un token (su `shopify_token_renewed_at` es posterior), el fallo es
+ * viejo y no se escribe: no pisa el «salió bien» de una renovación más nueva.
+ * Con `retryAt` además frena la renovación al usar hasta esa hora.
+ */
+async function writeTokenError(
+  admin: SupabaseClient,
+  storeId: string,
+  message: string,
+  attemptStart: Date,
+  retryAt?: Date,
+): Promise<void> {
   try {
     await admin
       .from("stores")
-      .update({ shopify_token_error: message.slice(0, 500) })
+      .update({
+        shopify_token_error: message.slice(0, 500),
+        ...(retryAt ? { shopify_token_retry_at: retryAt.toISOString() } : {}),
+      })
       .eq("id", storeId)
-      .eq("shopify_app", OWN_APP);
+      .eq("shopify_app", OWN_APP)
+      .or(`shopify_token_renewed_at.is.null,shopify_token_renewed_at.lt.${attemptStart.toISOString()}`);
   } catch {
     /* best-effort: el motivo también sale en el resultado */
   }
 }
 
 /**
+ * Renovación al usar: reserva el intento de forma atómica. Solo una llamada
+ * gana la ventana de `OWN_APP_ON_USE_RETRY_MS`; las demás no salen a Shopify.
+ * Devuelve false si otra ya la tiene (o no se pudo reservar).
+ */
+async function claimOnUseAttempt(admin: SupabaseClient, storeId: string, now: Date): Promise<boolean> {
+  try {
+    const nowIso = now.toISOString();
+    const { data, error } = await admin
+      .from("stores")
+      .update({ shopify_token_retry_at: new Date(now.getTime() + OWN_APP_ON_USE_RETRY_MS).toISOString() })
+      .eq("id", storeId)
+      .eq("shopify_app", OWN_APP)
+      .in("status", [...OWN_APP_RENEWABLE_STATUSES])
+      .or(`shopify_token_retry_at.is.null,shopify_token_retry_at.lte.${nowIso}`)
+      .select("id");
+    if (error) return false;
+    return Array.isArray(data) ? data.length > 0 : Boolean(data);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Renueva el token de una tienda con app propia. Solo actúa si la tienda es
- * 'propia' y está activa; si no, no escribe nada. Con `skipIfValidForMs`, si
- * el token guardado aún sirve ese tiempo no pide otro (dos procesos a la vez
- * no acuñan dos).
+ * 'propia' y está activa o en pausa; si no, no escribe nada. Con
+ * `skipIfValidForMs`, si el token guardado aún sirve ese tiempo no pide otro
+ * (dos procesos a la vez no acuñan dos).
  *
- * Al guardar, la condición es que la tienda siga 'propia' y activa (el cron no
- * resucita una tienda desinstalada) y que no haya uno que venza DESPUÉS (no se
- * pisa un token más nuevo con uno más viejo). Si falla, deja el motivo en
- * `shopify_token_error` y el token actual sigue como estaba.
+ * Con `onUse` (la renovación al usar el token) respeta el freno de
+ * `shopify_token_retry_at` y reserva el intento antes de salir a Shopify: con
+ * Shopify caído o el secreto revocado, como mucho un pedido cada 5 minutos (15
+ * tras un fallo de red), no uno por cada uso. El cron y «Renovar ahora» no
+ * pasan `onUse`.
+ *
+ * Al guardar, la condición es que la tienda siga 'propia' y no deshabilitada
+ * (el cron no resucita una tienda desinstalada) y que no haya uno que venza
+ * DESPUÉS (no se pisa un token más nuevo con uno más viejo). Si falla, deja el
+ * motivo en `shopify_token_error` (salvo que otro proceso haya renovado
+ * mientras tanto) y el token actual sigue como estaba.
  */
 export async function renewOwnAppToken(
   admin: SupabaseClient,
   storeId: string,
-  opts: { fetchImpl?: typeof fetch; now?: Date; skipIfValidForMs?: number } = {},
+  opts: { fetchImpl?: typeof fetch; now?: Date; skipIfValidForMs?: number; onUse?: boolean } = {},
 ): Promise<OwnAppRenewResult> {
   const now = opts.now ?? new Date();
   const { data, error } = await admin.from("stores").select(RENEW_COLUMNS).eq("id", storeId).maybeSingle();
@@ -356,8 +445,8 @@ export async function renewOwnAppToken(
   if (row.shopify_app !== OWN_APP) {
     return { ok: false, reason: "no_propia", message: "Esta tienda no usa app propia: no se toca." };
   }
-  if (row.status !== "active") {
-    return { ok: false, reason: "inactiva", message: "La tienda no está activa: no se renueva su acceso." };
+  if (!isOwnAppRenewableStatus(row.status)) {
+    return { ok: false, reason: "inactiva", message: "La tienda está deshabilitada: no se renueva su acceso." };
   }
 
   if (opts.skipIfValidForMs != null && row.shopify_token_enc && !shouldRenew(row.shopify_token_expires_at, now, opts.skipIfValidForMs)) {
@@ -375,10 +464,19 @@ export async function renewOwnAppToken(
     }
   }
 
+  if (opts.onUse) {
+    // El freno: otro intento reciente (o un fallo de red hace poco). Ni base
+    // ni red; quien llama sigue con el token que tiene mientras valga.
+    const retryAt = toDate(row.shopify_token_retry_at);
+    const waiting = { ok: false as const, reason: "en_espera" as const, message: "Hubo un intento hace poco: se espera antes de pedir otro token." };
+    if (retryAt && retryAt.getTime() > now.getTime()) return waiting;
+    if (!(await claimOnUseAttempt(admin, storeId, now))) return waiting;
+  }
+
   const clientId = (row.shopify_client_id ?? "").trim();
   if (!clientId || !row.shopify_client_secret_enc) {
     const message = "Faltan el Client ID o el Client secret de la app propia: guárdalos en Ajustes → Shopify.";
-    await writeTokenError(admin, storeId, message);
+    await writeTokenError(admin, storeId, message, now);
     return { ok: false, reason: "sin_credenciales", message };
   }
   let clientSecret: string;
@@ -386,7 +484,7 @@ export async function renewOwnAppToken(
     clientSecret = decrypt(row.shopify_client_secret_enc);
   } catch {
     const message = "No se pudo leer el Client secret guardado: vuelve a guardarlo en Ajustes → Shopify.";
-    await writeTokenError(admin, storeId, message);
+    await writeTokenError(admin, storeId, message, now);
     return { ok: false, reason: "sin_credenciales", message };
   }
 
@@ -398,7 +496,10 @@ export async function renewOwnAppToken(
     now,
   });
   if (!got.ok) {
-    await writeTokenError(admin, storeId, got.message);
+    // Shopify no respondió bien (red, 429, 5xx): la renovación al usar espera
+    // más antes de volver a intentar. El cron sigue a su hora.
+    const retryAt = got.reason === "red" ? new Date(now.getTime() + OWN_APP_ON_USE_RETRY_AFTER_RED_MS) : undefined;
+    await writeTokenError(admin, storeId, got.message, now, retryAt);
     return got;
   }
 
@@ -411,10 +512,11 @@ export async function renewOwnAppToken(
       shopify_token_expires_at: expiresIso,
       shopify_token_renewed_at: now.toISOString(),
       shopify_token_error: missing.length ? missingScopesMessage(missing) : null,
+      shopify_token_retry_at: null,
     })
     .eq("id", storeId)
     .eq("shopify_app", OWN_APP)
-    .eq("status", "active")
+    .in("status", [...OWN_APP_RENEWABLE_STATUSES])
     .or(`shopify_token_expires_at.is.null,shopify_token_expires_at.lt.${expiresIso}`)
     .select("id");
   if (saveError) {
@@ -426,9 +528,13 @@ export async function renewOwnAppToken(
 
 /**
  * El token para usar AHORA en una tienda. Para lo que no es 'propia' devuelve
- * `current` sin más (ni consulta ni red). Para una 'propia' activa cuyo token
- * vence en menos de `OWN_APP_RENEW_ON_USE_MS` (o no hay), lo renueva antes; si
- * la renovación falla, sirve el actual mientras no haya vencido.
+ * `current` sin más (ni consulta ni red). Para una 'propia' activa o en pausa
+ * cuyo token vence en menos de `OWN_APP_RENEW_ON_USE_MS` (o no hay), lo renueva
+ * antes, con el freno de `onUse`; si la renovación falla o está frenada, sirve
+ * el actual mientras no haya vencido.
+ *
+ * Quien recibe un webhook o un aviso de afuera lo llama DESPUÉS de comprobar la
+ * firma o el secreto: una petición falsa no hace salir el Client secret.
  */
 export async function ownAppTokenForUse(
   admin: SupabaseClient,
@@ -436,7 +542,7 @@ export async function ownAppTokenForUse(
   current: string | null,
   opts: { now?: Date; fetchImpl?: typeof fetch } = {},
 ): Promise<string | null> {
-  if (row.shopify_app !== OWN_APP || row.status !== "active") return current;
+  if (row.shopify_app !== OWN_APP || !isOwnAppRenewableStatus(row.status)) return current;
   const now = opts.now ?? new Date();
   const expires = typeof row.shopify_token_expires_at === "string" ? row.shopify_token_expires_at : null;
   if (current && !shouldRenew(expires, now, OWN_APP_RENEW_ON_USE_MS)) return current;
@@ -447,14 +553,18 @@ export async function ownAppTokenForUse(
       now,
       fetchImpl: opts.fetchImpl,
       skipIfValidForMs: OWN_APP_RENEW_ON_USE_MS,
+      onUse: true,
     });
   } catch {
     renewed = null;
   }
   if (renewed?.ok) return renewed.token;
-  console.warn(
-    `[shopify-own-app] ${JSON.stringify({ storeId: row.id, renovado: false, motivo: renewed?.reason ?? "excepcion" })}`,
-  );
+  // Frenada: el intento que la frenó ya dejó su línea (o su motivo en la base).
+  if (renewed?.reason !== "en_espera") {
+    console.warn(
+      `[shopify-own-app] ${JSON.stringify({ storeId: row.id, renovado: false, motivo: renewed?.reason ?? "excepcion" })}`,
+    );
+  }
   if (!current) return null;
   const exp = toDate(expires);
   // Se sabe que venció: no sirve. Si no se sabe, se usa (mejor esfuerzo).
@@ -500,19 +610,62 @@ function ago(ms: number): string {
 }
 
 /**
+ * La zona de la tienda si Intl la entiende; si no, America/Lima. `timezone` es
+ * texto libre en Ajustes: una zona mala («Lima», «GMT-5») no tumba la página.
+ */
+function safeTimeZone(timeZone: string | null | undefined): string {
+  const tz = (timeZone ?? "").trim();
+  if (!tz) return "America/Lima";
+  try {
+    new Intl.DateTimeFormat("en-CA", { timeZone: tz });
+    return tz;
+  } catch {
+    return "America/Lima";
+  }
+}
+
+/** «el 23/10 a las 14:20», en la zona de la tienda. */
+function dayAndTime(d: Date, tz: string): string {
+  const day = ymd(d, tz);
+  return `el ${day.slice(8, 10)}/${day.slice(5, 7)} a las ${hhmm(d, tz)}`;
+}
+
+/**
  * La línea de estado de Ajustes: «App propia · acceso renovado hace 35 min ·
  * vence a las 14:20». Las horas, en la zona de la tienda.
+ *
+ * Una tienda deshabilitada (desinstalada) o sin token no muestra «vence …»: el
+ * vencimiento que quedó guardado ya no es de un acceso que valga.
  */
 export function ownAppStatusLine(input: {
   renewedAt: string | null | undefined;
   expiresAt: string | null | undefined;
   now: Date;
   timeZone?: string;
+  /** `stores.status`. Sin dato, como activa. */
+  status?: string | null;
+  /** ¿Hay token guardado? Sin dato, como si lo hubiera. */
+  hasToken?: boolean;
+  /** `stores.shopify_uninstalled_at`. */
+  uninstalledAt?: string | null;
 }): string {
-  const tz = input.timeZone || "America/Lima";
+  const tz = safeTimeZone(input.timeZone);
   const parts = ["App propia"];
+  if (input.status === "disabled") {
+    const uninstalled = toDate(input.uninstalledAt);
+    parts.push(
+      uninstalled
+        ? `app desinstalada ${dayAndTime(uninstalled, tz)}`
+        : "tienda deshabilitada: Kapta no renueva su acceso",
+    );
+    return parts.join(" · ");
+  }
   const renewed = toDate(input.renewedAt);
   parts.push(renewed ? `acceso renovado ${ago(Math.max(0, input.now.getTime() - renewed.getTime()))}` : "acceso aún sin renovar");
+  if (input.hasToken === false) {
+    parts.push("sin token vigente");
+    return parts.join(" · ");
+  }
   const expires = toDate(input.expiresAt);
   if (expires) {
     const past = expires.getTime() <= input.now.getTime();
@@ -524,8 +677,43 @@ export function ownAppStatusLine(input: {
         ? `a las ${hhmm(expires, tz)}`
         : day === tomorrow && !past
           ? `mañana a las ${hhmm(expires, tz)}`
-          : `el ${day.slice(8, 10)}/${day.slice(5, 7)} a las ${hhmm(expires, tz)}`;
+          : dayAndTime(expires, tz);
     parts.push(`${past ? "venció" : "vence"} ${when}`);
   }
   return parts.join(" · ");
+}
+
+/**
+ * La ayuda bajo la línea de estado: qué hacer según cómo está la tienda. A una
+ * deshabilitada no se le sugiere «renueva» («Renovar ahora» la rechaza).
+ */
+export function ownAppAccessHint(input: {
+  status?: string | null;
+  hasToken: boolean;
+  uninstalledAt?: string | null;
+}): string {
+  if (input.status === "disabled") {
+    return toDate(input.uninstalledAt)
+      ? "Reinstala la app en la tienda desde el Dev Dashboard, guarda otra vez las credenciales aquí, pasa la tienda a «Activa» en Tienda y re-registra los webhooks."
+      : "La tienda está deshabilitada: Kapta no le pide token a Shopify. Pásala a «Activa» en Tienda para que vuelva a hacerlo.";
+  }
+  return input.hasToken
+    ? "Token configurado (cifrado)."
+    : "Aún sin token: pulsa «Renovar ahora» o vuelve a guardar las credenciales.";
+}
+
+/**
+ * Hasta cuándo se aceptan los webhooks firmados con el Client secret anterior,
+ * o null si ya no se acepta (no hay, o pasó el plazo).
+ */
+export function ownAppPrevSecretValidUntil(prevSetAt: string | null | undefined, now: Date): Date | null {
+  const set = toDate(prevSetAt);
+  if (!set) return null;
+  const until = new Date(set.getTime() + OWN_APP_PREV_WEBHOOK_SECRET_GRACE_MS);
+  return until.getTime() > now.getTime() ? until : null;
+}
+
+/** «hasta el 25/10 a las 14:20», en la zona de la tienda. */
+export function ownAppPrevSecretLine(until: Date, timeZone?: string | null): string {
+  return `hasta ${dayAndTime(until, safeTimeZone(timeZone))}`;
 }

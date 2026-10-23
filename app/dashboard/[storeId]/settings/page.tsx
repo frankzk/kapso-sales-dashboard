@@ -13,7 +13,14 @@ import { leadVoiceOwnNumber, loadLeadVoiceCampaigns } from "@/lib/store-settings
 import { leadVoiceSettingsFrom } from "@/lib/voice-leads";
 import { leadVoiceConfigured, loadLeadVoicePilotReport } from "@/lib/voice-leads-server";
 import { RESTOCK_CATALOG_DAYS, RESTOCK_RESULTS_DAYS } from "@/lib/restock-view";
-import { OWN_APP, ownAppStatusLine } from "@/lib/shopify-own-app";
+import {
+  OWN_APP,
+  ownAppAccessHint,
+  ownAppErrorTitle,
+  ownAppPrevSecretLine,
+  ownAppPrevSecretValidUntil,
+  ownAppStatusLine,
+} from "@/lib/shopify-own-app";
 import { limaDateTimeInputValue } from "@/lib/repro-lima";
 import { limaDayStartIso } from "@/lib/auto-order-ab";
 import type { InvoiceMode, InvoiceStatus, InvoiceWriteMode } from "@/lib/invoicing/rules";
@@ -47,6 +54,7 @@ const SHOPIFY_ERRORS: Record<string, string> = {
   "sin-permiso": "No tienes permiso sobre esta tienda.",
   "intercambio-fallo": "Shopify rechazó el intercambio del código por token.",
   "guardado-fallo": "No se pudo guardar el token.",
+  "app-propia": "Esta tienda usa su app propia de Shopify: no se reconecta con la app interna. Cambia sus credenciales en Shopify → Credenciales de la app.",
 };
 
 /**
@@ -353,6 +361,12 @@ export default async function StoreSettingsPage({
   // la página pinta es lo mismo que lee el agente al llamar.
   const leadVoice = leadVoiceSettingsFrom(full);
   const now = new Date();
+  // App propia de Shopify (0271): si hay token (sí/no) y hasta cuándo vale el
+  // Client secret anterior para los webhooks. Nada de esto lleva un secreto.
+  const ownAppHasToken = Boolean(full?.shopify_token_enc);
+  const ownAppPrevUntil = full?.shopify_webhook_secret_prev_enc
+    ? ownAppPrevSecretValidUntil(full.shopify_webhook_secret_prev_set_at ?? null, now)
+    : null;
 
   // La escalera de cobranza y quién puede entrar en ella (0172). Van aparte
   // del Promise.all porque pasan por `requireStoreAdmin`, que ya comprueba
@@ -586,8 +600,19 @@ export default async function StoreSettingsPage({
               expiresAt: full.shopify_token_expires_at ?? null,
               now,
               timeZone: full.timezone ?? "America/Lima",
+              status: full.status ?? null,
+              hasToken: ownAppHasToken,
+              uninstalledAt: full.shopify_uninstalled_at ?? null,
             }),
+            hint: ownAppAccessHint({
+              status: full.status ?? null,
+              hasToken: ownAppHasToken,
+              uninstalledAt: full.shopify_uninstalled_at ?? null,
+            }),
+            disabled: full.status === "disabled",
             error: full.shopify_token_error ?? null,
+            errorTitle: ownAppErrorTitle(full.shopify_token_error),
+            prevSecretUntil: ownAppPrevUntil ? ownAppPrevSecretLine(ownAppPrevUntil, full.timezone) : null,
           }
         : null,
     // Solo sí/no, nunca los valores: la página llega al navegador.

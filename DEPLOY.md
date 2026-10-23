@@ -3471,10 +3471,13 @@ tienda, se escriben en Kapta y nunca van a Vercel, al chat ni al repositorio.
 1. **Migración `0271_shopify_app_propia.sql`, a mano y ANTES del código.**
    Amplía `stores_shopify_app_check` a `('interna', 'clientes', 'propia')`;
    añade `stores.shopify_client_id`, `shopify_client_secret_enc` (cifrado como
-   los demás `*_enc`), `shopify_token_expires_at`, `shopify_token_renewed_at` y
-   `shopify_token_error`; y pone `stores_own_app_columns_check` (esas cinco
-   columnas solo tienen valor en una tienda `propia`) y
-   `stores_own_app_shop_uniq` (un dominio, una sola tienda con app propia).
+   los demás `*_enc`), `shopify_token_expires_at`, `shopify_token_renewed_at`,
+   `shopify_token_error`, `shopify_token_retry_at` (el freno de la renovación
+   al usar), `shopify_webhook_secret_prev_enc` (el Client secret anterior tras
+   rotarlo, cifrado) y `shopify_webhook_secret_prev_set_at`; y pone
+   `stores_own_app_columns_check` (esas ocho columnas solo tienen valor en una
+   tienda `propia`) y `stores_own_app_shop_uniq` (un dominio, una sola tienda
+   con app propia).
    Sin grants nuevos: la fila la protege la RLS de siempre. Sin ella, la
    conexión con app propia responde «falta la migración 0271» y el cron
    contesta `sin_migracion`; las tiendas de hoy siguen igual.
@@ -3527,7 +3530,8 @@ tienda, se escriben en Kapta y nunca van a Vercel, al chat ni al repositorio.
    select count(*) from stores
     where shopify_client_id is not null or shopify_client_secret_enc is not null
        or shopify_token_expires_at is not null or shopify_token_renewed_at is not null
-       or shopify_token_error is not null;
+       or shopify_token_error is not null or shopify_token_retry_at is not null
+       or shopify_webhook_secret_prev_enc is not null or shopify_webhook_secret_prev_set_at is not null;
    ```
 
    Correrla otra vez no hace nada: no vuelve a validar la tabla ni toca filas.
@@ -3546,9 +3550,12 @@ tienda, se escriben en Kapta y nunca van a Vercel, al chat ni al repositorio.
      la tienda. Revisar que tenga acceso a los datos protegidos de clientes
      (nombre, teléfono, dirección y correo): si los pedidos llegan sin datos
      del comprador, es eso.
-   - En Kapta: «Conectar con app propia de Shopify», con el dominio
-     `*.myshopify.com`, el Client ID, el Client secret y la organización.
-     Copiar el secreto directo del Dev Dashboard al campo; nunca por chat.
+   - En Kapta: «Conectar con app propia de Shopify» (el primer formulario de
+     «Conectar tienda»; **no** el de «Crear tienda con token de Admin API»),
+     con el dominio `*.myshopify.com`, el Client ID, el Client secret y la
+     organización. Copiar el secreto directo del Dev Dashboard al campo; nunca
+     por chat. Si dice que la tienda ya está en Kapta, no se tocó nada: mirar
+     con la consulta de abajo (sin filtrar por app) qué fila tiene ese dominio.
    - Si Kapta dice que faltan alcances, añadirlos en una versión nueva de la
      app, instalarla otra vez y volver a conectar.
 
@@ -3565,8 +3572,18 @@ tienda, se escriben en Kapta y nunca van a Vercel, al chat ni al repositorio.
    después el cron la renueva: `shopify_token_renewed_at` avanza y el
    vencimiento vuelve a quedar a ~24 h. Un `shopify_token_error` que no se
    borra en la hora siguiente es un problema de la app (secreto rotado, app
-   desinstalada, alcances quitados): el texto dice cuál. Y otra vez la huella
-   (c) y el conteo (b) de las tiendas `interna` y `clientes`: no cambian.
+   desinstalada, alcances quitados): el texto dice cuál. Si el texto son
+   permisos que faltan, el token se renovó igual (Ajustes lo titula «Faltan
+   permisos en la app»). Y otra vez la huella (c) y el conteo (b) de las
+   tiendas `interna` y `clientes`: no cambian.
+
+4. **Rotar el Client secret de una tienda propia** (cuando haga falta, MOM
+   §36.4), en este orden: rotarlo en el Dev Dashboard; pegar el nuevo en
+   Ajustes → Shopify → «Credenciales de la app» → «Probar y guardar»; revocar
+   el anterior en el Dev Dashboard; y pulsar «Ya revoqué el secreto anterior».
+   Mientras tanto Kapta acepta los webhooks firmados con el anterior, hasta 48
+   h. Si se cambia el Client ID (otra app), Kapta registra los webhooks de la
+   nueva: después, desinstalar la anterior de la tienda.
 
 **Marcha atrás.** Revertir el código basta: las tiendas propias dejan de
 renovar y su token vence en menos de 24 h; Kenku, Aurela y las tiendas
@@ -3586,6 +3603,9 @@ alter table stores
   drop column shopify_client_secret_enc,
   drop column shopify_token_expires_at,
   drop column shopify_token_renewed_at,
-  drop column shopify_token_error;
+  drop column shopify_token_error,
+  drop column shopify_token_retry_at,
+  drop column shopify_webhook_secret_prev_enc,
+  drop column shopify_webhook_secret_prev_set_at;
 commit;
 ```

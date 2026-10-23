@@ -2,9 +2,10 @@
 // (app/api/cron/shopify-own-app-tokens/route.ts, MOM §36.3).
 //
 // Lo que se fija aquí: que solo lo llame quien tiene CRON_SECRET; que la
-// consulta tome SOLO tiendas 'propia' y activas (Kenku, Aurela y las de la app
-// de clientes ni se leen) y, de esas, las que vencen en menos de 12 horas o no
-// tienen token; que una tienda deshabilitada no se resucite; que sin la 0271
+// consulta tome SOLO tiendas 'propia' activas o en pausa (Kenku, Aurela y las
+// de la app de clientes ni se leen) y, de esas, las que vencen en menos de 12
+// horas o no tienen token; que una tienda deshabilitada no se resucite; que el
+// cron no mire el freno de la renovación al usar; que sin la 0271
 // responda 200 con `sin_migracion`; que un fallo ponga el cron rojo; que la
 // línea de log no lleve el token ni el secreto; y que vercel.json lo corra cada
 // hora en un minuto que no comparte con otro barrido. Sin red: `fetch` es falso.
@@ -140,14 +141,16 @@ describe("/api/cron/shopify-own-app-tokens", () => {
     expect((await GET(req(null, { "x-internal-secret": "cron" }))).status).toBe(200);
   });
 
-  it("solo pide tiendas 'propia' activas que vencen en 12 horas o no tienen token", async () => {
+  it("solo pide tiendas 'propia' activas o en pausa que vencen en 12 horas o no tienen token", async () => {
     const before = Date.now();
     await GET(req());
     const query = st.calls[0]!;
     expect(query).toMatchObject({ table: "stores", op: "select", cols: "id,shopify_token_expires_at" });
     expect(query.filters.slice(0, 2)).toEqual([
       ["eq", "shopify_app", "propia"],
-      ["eq", "status", "active"],
+      // Una pausada sigue recibiendo webhooks y sincronizando a mano; una
+      // deshabilitada (desinstalada) no se toca.
+      ["in", "status", ["active", "paused"]],
     ]);
     const or = query.filters[2]!;
     expect(or[0]).toBe("or");
@@ -177,7 +180,7 @@ describe("/api/cron/shopify-own-app-tokens", () => {
     for (const s of saves) {
       expect(decrypt(String(s.payload!.shopify_token_enc))).toBe(NEW_TOKEN);
       expect(s.filters).toContainEqual(["eq", "shopify_app", "propia"]);
-      expect(s.filters).toContainEqual(["eq", "status", "active"]);
+      expect(s.filters).toContainEqual(["in", "status", ["active", "paused"]]);
     }
     const line = logs.find((l) => l.startsWith("[shopify-own-app]"));
     expect(line).toBeDefined();
@@ -187,6 +190,26 @@ describe("/api/cron/shopify-own-app-tokens", () => {
       expect(text).not.toContain(OLD_TOKEN);
       expect(text).not.toContain("myshopify.com");
     }
+  });
+
+  it("una en pausa también se renueva, y sigue en pausa", async () => {
+    st.due = [{ id: "sh-p", shopify_token_expires_at: null }];
+    st.rows = { "sh-p": propia("sh-p", { status: "paused" }) };
+    const body = await (await GET(req())).json();
+    expect(body).toMatchObject({ ok: true, due: 1, renewed: 1, failed: [] });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const save = st.calls.find((c) => c.op === "update")!;
+    expect(save.payload).not.toHaveProperty("status");
+  });
+
+  it("no mira el freno de la renovación al usar: corre a su hora", async () => {
+    st.due = [{ id: "sh-1", shopify_token_expires_at: null }];
+    st.rows = { "sh-1": propia("sh-1", { shopify_token_retry_at: new Date(Date.now() + 10 * 60 * 1000).toISOString() }) };
+    const body = await (await GET(req())).json();
+    expect(body).toMatchObject({ ok: true, renewed: 1 });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    // Ni reserva el intento: el único update es el guardado del token.
+    expect(st.calls.filter((c) => c.op === "update").map((c) => "shopify_token_enc" in c.payload!)).toEqual([true]);
   });
 
   it("una tienda que ya renovó otro proceso cuenta como vigente, sin pedir token", async () => {

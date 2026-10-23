@@ -18,10 +18,16 @@ import {
   missingScopes,
   missingScopesMessage,
   normalizeShopDomain,
+  OWN_APP_ON_USE_RETRY_AFTER_RED_MS,
+  OWN_APP_ON_USE_RETRY_MS,
   OWN_APP_RENEW_BEFORE_MS,
   OWN_APP_RENEW_ON_USE_MS,
   OWN_APP_REQUIRED_SCOPES,
   OWN_APP_TOKEN_TTL_FALLBACK_SECONDS,
+  ownAppAccessHint,
+  ownAppErrorTitle,
+  ownAppPrevSecretValidUntil,
+  OWN_APP_PREV_WEBHOOK_SECRET_GRACE_MS,
   ownAppStatusLine,
   ownAppTokenForUse,
   parseScopes,
@@ -344,6 +350,83 @@ describe("ownAppStatusLine", () => {
       ownAppStatusLine({ renewedAt: "2026-10-22T10:00:00.000Z", expiresAt: "2026-10-23T14:00:00.000Z", now: NOW }),
     ).toBe("App propia · acceso renovado hace 29 h · venció a las 09:00");
   });
+
+  it.each(["Lima", "GMT-5", "UTC-5", "  ", "America/Nowhere"])(
+    "una zona horaria que Intl no entiende (%j) no tumba Ajustes: usa la de Lima",
+    (timeZone) => {
+      const line = () =>
+        ownAppStatusLine({
+          renewedAt: new Date(NOW.getTime() - 35 * 60 * 1000).toISOString(),
+          expiresAt: "2026-10-23T19:20:00.000Z",
+          now: NOW,
+          timeZone,
+        });
+      expect(line).not.toThrow();
+      expect(line()).toBe("App propia · acceso renovado hace 35 min · vence a las 14:20");
+    },
+  );
+
+  it("desinstalada: dice cuándo, sin «vence …» (el vencimiento guardado ya no vale)", () => {
+    const line = ownAppStatusLine({
+      renewedAt: new Date(NOW.getTime() - HOUR).toISOString(),
+      expiresAt: new Date(NOW.getTime() + 20 * HOUR).toISOString(),
+      now: NOW,
+      status: "disabled",
+      hasToken: false,
+      uninstalledAt: "2026-10-23T14:30:00.000Z",
+    });
+    expect(line).toBe("App propia · app desinstalada el 23/10 a las 09:30");
+    expect(line).not.toMatch(/vence|renovado/);
+  });
+
+  it("deshabilitada sin desinstalar, o activa sin token: tampoco «vence …»", () => {
+    const base = { renewedAt: new Date(NOW.getTime() - HOUR).toISOString(), expiresAt: new Date(NOW.getTime() + 20 * HOUR).toISOString(), now: NOW };
+    expect(ownAppStatusLine({ ...base, status: "disabled", hasToken: true })).toBe(
+      "App propia · tienda deshabilitada: Kapta no renueva su acceso",
+    );
+    expect(ownAppStatusLine({ ...base, status: "active", hasToken: false })).toBe("App propia · acceso renovado hace 1 h · sin token vigente");
+    // En pausa y con token: como activa.
+    expect(ownAppStatusLine({ ...base, status: "paused", hasToken: true })).toMatch(/· vence mañana a las /);
+  });
+});
+
+describe("ownAppAccessHint", () => {
+  it("a una deshabilitada no le dice «renueva»: le dice cómo volver (MOM §36.5)", () => {
+    const uninstalled = ownAppAccessHint({ status: "disabled", hasToken: false, uninstalledAt: "2026-10-23T14:30:00.000Z" });
+    expect(uninstalled).toContain("Reinstala la app");
+    expect(uninstalled).toContain("«Activa»");
+    expect(uninstalled).toContain("re-registra los webhooks");
+    const disabled = ownAppAccessHint({ status: "disabled", hasToken: true });
+    for (const hint of [uninstalled, disabled]) expect(hint).not.toMatch(/renueva|Renovar ahora/i);
+  });
+
+  it("activa o en pausa: con token, sin él", () => {
+    expect(ownAppAccessHint({ status: "active", hasToken: true })).toBe("Token configurado (cifrado).");
+    expect(ownAppAccessHint({ status: "paused", hasToken: false })).toContain("«Renovar ahora»");
+  });
+});
+
+describe("ownAppErrorTitle", () => {
+  it("permisos que faltan tras una renovación que salió bien: no dice «falló»", () => {
+    expect(ownAppErrorTitle(missingScopesMessage(["read_customers"]))).toBe("Faltan permisos en la app");
+  });
+
+  it("un fallo de verdad sí", () => {
+    expect(ownAppErrorTitle("Shopify rechazó el Client ID o el Client secret (HTTP 401).")).toBe("La última renovación falló");
+    expect(ownAppErrorTitle(null)).toBe("La última renovación falló");
+  });
+});
+
+describe("ownAppPrevSecretValidUntil", () => {
+  it("48 h desde que pasó a anterior; después, null", () => {
+    const set = new Date(NOW.getTime() - HOUR).toISOString();
+    expect(ownAppPrevSecretValidUntil(set, NOW)?.toISOString()).toBe(
+      new Date(NOW.getTime() - HOUR + OWN_APP_PREV_WEBHOOK_SECRET_GRACE_MS).toISOString(),
+    );
+    expect(OWN_APP_PREV_WEBHOOK_SECRET_GRACE_MS).toBe(48 * HOUR);
+    expect(ownAppPrevSecretValidUntil(new Date(NOW.getTime() - 48 * HOUR).toISOString(), NOW)).toBeNull();
+    expect(ownAppPrevSecretValidUntil(null, NOW)).toBeNull();
+  });
 });
 
 // ── El pedido del token ──────────────────────────────────────────────────────
@@ -470,7 +553,7 @@ describe("renewOwnAppToken", () => {
   }
   const writes = (calls: Call[]) => calls.filter((c) => c.op !== "select");
 
-  it("renueva y guarda cifrado, con condición: propia, activa y sin uno que venza después", async () => {
+  it("renueva y guarda cifrado, con condición: propia, activa o en pausa, y sin uno que venza después", async () => {
     const { admin, calls } = db(storeRow());
     const { fetchImpl, calls: net } = fakeFetch();
     const r = await renewOwnAppToken(admin, "store-propia", { fetchImpl, now: NOW });
@@ -484,8 +567,10 @@ describe("renewOwnAppToken", () => {
     expect(rest).toEqual([]);
     expect(save!.op).toBe("update");
     expect(Object.keys(save!.payload!).sort()).toEqual(
-      ["shopify_token_enc", "shopify_token_error", "shopify_token_expires_at", "shopify_token_renewed_at"].sort(),
+      ["shopify_token_enc", "shopify_token_error", "shopify_token_expires_at", "shopify_token_renewed_at", "shopify_token_retry_at"].sort(),
     );
+    // Al salir bien se borra el freno de la renovación al usar.
+    expect(save!.payload!.shopify_token_retry_at).toBeNull();
     expect(decrypt(String(save!.payload!.shopify_token_enc))).toBe(NEW_TOKEN);
     expect(save!.payload!.shopify_token_expires_at).toBe(expiresAt.toISOString());
     expect(save!.payload!.shopify_token_renewed_at).toBe(NOW.toISOString());
@@ -493,7 +578,8 @@ describe("renewOwnAppToken", () => {
     expect(save!.filters).toEqual([
       ["eq", "id", "store-propia"],
       ["eq", "shopify_app", "propia"],
-      ["eq", "status", "active"],
+      // Una deshabilitada (desinstalada) nunca se resucita.
+      ["in", "status", ["active", "paused"]],
       ["or", `shopify_token_expires_at.is.null,shopify_token_expires_at.lt.${expiresAt.toISOString()}`],
     ]);
     expectNoSecrets(logs.join("\n"));
@@ -516,11 +602,35 @@ describe("renewOwnAppToken", () => {
     expect(Object.keys(w[0]!.payload!)).toEqual(["shopify_token_error"]);
     expect(String(w[0]!.payload!.shopify_token_error)).toContain("Client secret");
     expectNoSecrets(String(w[0]!.payload!.shopify_token_error));
+    // Y solo si nadie renovó después de que empezó este intento.
     expect(w[0]!.filters).toEqual([
       ["eq", "id", "store-propia"],
       ["eq", "shopify_app", "propia"],
+      ["or", `shopify_token_renewed_at.is.null,shopify_token_renewed_at.lt.${NOW.toISOString()}`],
     ]);
     expectNoSecrets(JSON.stringify(r) + logs.join("\n"));
+  });
+
+  it("si Shopify no responde bien (503), anota el motivo y frena la renovación al usar 15 minutos", async () => {
+    const { admin, calls } = db(storeRow());
+    const { fetchImpl } = fakeFetch(() => jsonResponse(503, "down"));
+    expect(await renewOwnAppToken(admin, "store-propia", { fetchImpl, now: NOW })).toMatchObject({ ok: false, reason: "red" });
+    const w = writes(calls);
+    expect(w).toHaveLength(1);
+    expect(w[0]!.payload).toEqual({
+      shopify_token_error: expect.stringContaining("HTTP 503"),
+      shopify_token_retry_at: new Date(NOW.getTime() + OWN_APP_ON_USE_RETRY_AFTER_RED_MS).toISOString(),
+    });
+  });
+
+  it("en pausa: renueva igual (pausar solo detiene los barridos)", async () => {
+    const { admin, calls } = db(storeRow({ status: "paused" }));
+    const { fetchImpl, calls: net } = fakeFetch();
+    expect(await renewOwnAppToken(admin, "store-propia", { fetchImpl, now: NOW })).toMatchObject({ ok: true, token: NEW_TOKEN, stored: true });
+    expect(net).toHaveLength(1);
+    const save = writes(calls)[0]!;
+    expect(save.payload).not.toHaveProperty("status");
+    expect(save.filters).toContainEqual(["in", "status", ["active", "paused"]]);
   });
 
   it("con permisos de menos guarda el token igual y deja el aviso", async () => {
@@ -548,7 +658,7 @@ describe("renewOwnAppToken", () => {
     ["interna (Kenku)", kenkuRow(), "no_propia"],
     ["clientes", kenkuRow({ shopify_app: "clientes" }), "no_propia"],
     ["propia deshabilitada (desinstalada)", storeRow({ status: "disabled", shopify_token_enc: null }), "inactiva"],
-    ["propia en pausa", storeRow({ status: "paused" }), "inactiva"],
+    ["propia deshabilitada a mano", storeRow({ status: "disabled" }), "inactiva"],
   ])("%s: no pide token ni escribe nada", async (_l, row, reason) => {
     const { admin, calls } = db(row);
     const { fetchImpl, calls: net } = fakeFetch();
@@ -584,38 +694,76 @@ describe("renewOwnAppToken", () => {
 });
 
 describe("ownAppTokenForUse", () => {
-  /** Un cliente que falla la prueba si alguien lo usa. */
-  const untouchable = {
-    from: () => {
+  /**
+   * Un cliente espía: si alguien lo usa, `from` lo anota y la prueba falla al
+   * mirarlo. (Uno que lanza no sirve: `ownAppTokenForUse` atrapa la excepción
+   * y devuelve `current`, así que la prueba pasaría igual.)
+   */
+  function spyAdmin() {
+    const from = vi.fn(() => {
       throw new Error("no debía consultar la base");
-    },
-  } as unknown as SupabaseClient;
+    });
+    return { spy: { from } as unknown as SupabaseClient, from };
+  }
+  const warned = () => (console.warn as unknown as ReturnType<typeof vi.fn>).mock.calls.length;
 
-  it("interna y clientes: devuelve el token tal cual, sin base ni red", async () => {
+  it("interna, clientes y sin app: devuelve el token tal cual, sin base, red ni aviso", async () => {
+    const { spy, from } = spyAdmin();
     const { fetchImpl, calls } = fakeFetch();
     const row = (over: Record<string, unknown> = {}) => kenkuRow(over) as { id: string };
-    expect(await ownAppTokenForUse(untouchable, row(), OLD_TOKEN, { fetchImpl, now: NOW })).toBe(OLD_TOKEN);
-    expect(await ownAppTokenForUse(untouchable, row({ shopify_app: "clientes" }), OLD_TOKEN, { fetchImpl, now: NOW })).toBe(OLD_TOKEN);
-    expect(await ownAppTokenForUse(untouchable, row({ shopify_app: undefined }), null, { fetchImpl, now: NOW })).toBeNull();
+    // Hasta vencido y sin fecha: no es 'propia', no se mira.
+    const stale = { shopify_token_expires_at: new Date(NOW.getTime() - HOUR).toISOString() };
+    expect(await ownAppTokenForUse(spy, row(stale), OLD_TOKEN, { fetchImpl, now: NOW })).toBe(OLD_TOKEN);
+    expect(await ownAppTokenForUse(spy, row({ ...stale, shopify_app: "clientes" }), OLD_TOKEN, { fetchImpl, now: NOW })).toBe(OLD_TOKEN);
+    expect(await ownAppTokenForUse(spy, row({ shopify_app: undefined }), null, { fetchImpl, now: NOW })).toBeNull();
+    expect(await ownAppTokenForUse(spy, row({ shopify_app: undefined, status: "paused" }), OLD_TOKEN, { fetchImpl, now: NOW })).toBe(OLD_TOKEN);
+    expect(from).not.toHaveBeenCalled();
     expect(calls).toHaveLength(0);
+    expect(warned()).toBe(0);
   });
 
   it("propia con más de 15 minutos por delante: el actual, sin base ni red", async () => {
+    const { spy, from } = spyAdmin();
     const { fetchImpl, calls } = fakeFetch();
     const row = storeRow({ shopify_token_expires_at: new Date(NOW.getTime() + 16 * 60 * 1000).toISOString() });
-    expect(await ownAppTokenForUse(untouchable, row as { id: string }, OLD_TOKEN, { fetchImpl, now: NOW })).toBe(OLD_TOKEN);
+    expect(await ownAppTokenForUse(spy, row as { id: string }, OLD_TOKEN, { fetchImpl, now: NOW })).toBe(OLD_TOKEN);
+    expect(from).not.toHaveBeenCalled();
     expect(calls).toHaveLength(0);
+    expect(warned()).toBe(0);
   });
 
-  it("propia deshabilitada: no renueva", async () => {
+  it("propia deshabilitada: no renueva, ni consulta la base", async () => {
+    const { spy, from } = spyAdmin();
     const { fetchImpl, calls } = fakeFetch();
     const row = storeRow({ status: "disabled", shopify_token_enc: null, shopify_token_expires_at: null });
-    expect(await ownAppTokenForUse(untouchable, row as { id: string }, null, { fetchImpl, now: NOW })).toBeNull();
+    expect(await ownAppTokenForUse(spy, row as { id: string }, null, { fetchImpl, now: NOW })).toBeNull();
+    const expired = storeRow({ status: "disabled", shopify_token_expires_at: new Date(NOW.getTime() - HOUR).toISOString() });
+    expect(await ownAppTokenForUse(spy, expired as { id: string }, OLD_TOKEN, { fetchImpl, now: NOW })).toBe(OLD_TOKEN);
+    expect(from).not.toHaveBeenCalled();
     expect(calls).toHaveLength(0);
+    expect(warned()).toBe(0);
   });
 
-  it("propia a 5 minutos de vencer: renueva y usa el nuevo", async () => {
+  it("propia a 5 minutos de vencer: reserva el intento, renueva y usa el nuevo", async () => {
     const row = storeRow();
+    const { admin, calls: dbCalls } = fakeAdmin((c) => (c.op === "select" ? { data: row, error: null } : { data: [{ id: row.id }], error: null }));
+    const { fetchImpl, calls } = fakeFetch();
+    expect(await ownAppTokenForUse(admin, row as { id: string }, OLD_TOKEN, { fetchImpl, now: NOW })).toBe(NEW_TOKEN);
+    expect(calls).toHaveLength(1);
+    // Primero la reserva (el freno), después el guardado del token.
+    const [claim, save] = dbCalls.filter((c) => c.op === "update");
+    expect(claim!.payload).toEqual({ shopify_token_retry_at: new Date(NOW.getTime() + OWN_APP_ON_USE_RETRY_MS).toISOString() });
+    expect(claim!.filters).toEqual([
+      ["eq", "id", "store-propia"],
+      ["eq", "shopify_app", "propia"],
+      ["in", "status", ["active", "paused"]],
+      ["or", `shopify_token_retry_at.is.null,shopify_token_retry_at.lte.${NOW.toISOString()}`],
+    ]);
+    expect(decrypt(String(save!.payload!.shopify_token_enc))).toBe(NEW_TOKEN);
+  });
+
+  it("propia en pausa a punto de vencer: también renueva", async () => {
+    const row = storeRow({ status: "paused" });
     const { admin } = fakeAdmin((c) => (c.op === "select" ? { data: row, error: null } : { data: [{ id: row.id }], error: null }));
     const { fetchImpl, calls } = fakeFetch();
     expect(await ownAppTokenForUse(admin, row as { id: string }, OLD_TOKEN, { fetchImpl, now: NOW })).toBe(NEW_TOKEN);
@@ -632,11 +780,13 @@ describe("ownAppTokenForUse", () => {
   it("si la renovación falla y el actual aún vale, usa el actual; si ya venció, ninguno", async () => {
     const failing = () => jsonResponse(503, "down");
     const live = storeRow();
-    const { admin: a1 } = fakeAdmin((c) => (c.op === "select" ? { data: live, error: null } : { data: null, error: null }));
+    // La reserva del intento la gana esta llamada; el guardado del motivo, igual.
+    const claimed = (c: Call) => (c.op === "select" ? { data: live, error: null } : { data: [{ id: "store-propia" }], error: null });
+    const { admin: a1 } = fakeAdmin(claimed);
     expect(await ownAppTokenForUse(a1, live as { id: string }, OLD_TOKEN, { fetchImpl: fakeFetch(failing).fetchImpl, now: NOW })).toBe(OLD_TOKEN);
 
     const dead = storeRow({ shopify_token_expires_at: new Date(NOW.getTime() - 60_000).toISOString() });
-    const { admin: a2 } = fakeAdmin((c) => (c.op === "select" ? { data: dead, error: null } : { data: null, error: null }));
+    const { admin: a2 } = fakeAdmin((c) => (c.op === "select" ? { data: dead, error: null } : { data: [{ id: "store-propia" }], error: null }));
     expect(await ownAppTokenForUse(a2, dead as { id: string }, OLD_TOKEN, { fetchImpl: fakeFetch(failing).fetchImpl, now: NOW })).toBeNull();
     // El aviso del log lleva la tienda y el motivo, nunca el token.
     expect(logs.join("\n")).toContain('"motivo":"red"');
@@ -683,7 +833,8 @@ describe("getStoreCreds (lib/ingest.ts)", () => {
     expect(creds?.shopify_app).toBe("propia");
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(String((fetchSpy.mock.calls[0] as unknown[])[0])).toBe(`https://${SHOP}/admin/oauth/access_token`);
-    expect(calls.filter((c) => c.op === "update")).toHaveLength(1);
+    // La reserva del intento (freno) y el guardado del token.
+    expect(calls.filter((c) => c.op === "update").map((c) => Object.keys(c.payload!).includes("shopify_token_enc"))).toEqual([false, true]);
     // El Client secret no se suma a las credenciales: solo viaja, como siempre,
     // el secreto de los webhooks (que en una app propia es el mismo).
     expect(Object.keys(creds!).filter((k) => k.includes("client"))).toEqual([]);
@@ -719,7 +870,8 @@ describe("fetchOrderForInvoice (lib/invoicing/shopify-order.ts)", () => {
       `https://${SHOP}/admin/api/2025-01/graphql.json`,
     ]);
     expect(net[1]!.init.headers["X-Shopify-Access-Token"]).toBe(NEW_TOKEN);
-    expect(calls.filter((c) => c.op === "update")).toHaveLength(1);
+    // La reserva del intento (freno) y el guardado del token.
+    expect(calls.filter((c) => c.op === "update")).toHaveLength(2);
   });
 
   it("interna: una sola lectura y ningún pedido de token", async () => {

@@ -7,7 +7,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
 import { decryptOrNull } from "@/lib/crypto";
-import { OWN_APP, ownAppTokenForUse } from "@/lib/shopify-own-app";
+import { OWN_APP, ownAppPrevSecretValidUntil, ownAppTokenForUse } from "@/lib/shopify-own-app";
 import { chunk } from "@/lib/access";
 import { recomputeOrderMasterSafe, reconcileOrderMaster } from "@/lib/order-master";
 import { fetchMetaAdMeta, normalizeMetaAdAccounts, type StoreMetaAdAccount } from "@/lib/meta-marketing";
@@ -83,6 +83,17 @@ export interface StoreCreds {
   shopify_app?: string;
   shopify_token: string | null;
   shopify_webhook_secret: string | null;
+  /**
+   * Solo app propia (0271): cuándo vence `shopify_token`, para renovarlo al
+   * usarlo después de autenticar un webhook (`ownAppCredsForUse`).
+   */
+  shopify_token_expires_at?: string | null;
+  /**
+   * Solo app propia (0271, MOM §36.4): el Client secret anterior tras rotarlo,
+   * mientras dura la gracia. Firma los webhooks hasta que se revoca en Shopify.
+   * En Kenku, Aurela y las tiendas 'clientes' no existe.
+   */
+  shopify_webhook_secret_prev?: string | null;
   kapso_project_id: string | null;
   kapso_api_key: string | null;
   flow_webhook_secret: string | null;
@@ -240,10 +251,28 @@ export async function getStoreOrderPrefix(
   return ((data as { order_prefix?: string | null }).order_prefix ?? null) || null;
 }
 
-/** Load a store row and decrypt its credentials (service-role only). */
+/** El secreto anterior de una app propia; uno que no se descifra no tumba la tienda. */
+function prevSecretOrNull(value: unknown): string | null {
+  try {
+    return typeof value === "string" ? decryptOrNull(value) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Load a store row and decrypt its credentials (service-role only).
+ *
+ * `renewOwnApp: false` (0271): no renueva el token de una tienda con app propia.
+ * Lo pasan quienes reciben un webhook o un aviso de afuera y todavía no
+ * comprobaron su firma o su secreto: una petición falsa no puede hacer que
+ * Kapta le mande el Client secret a Shopify. Después de autenticar, si usan
+ * Shopify, llaman a `ownAppCredsForUse`.
+ */
 export async function getStoreCreds(
   storeId: string,
   admin: SupabaseClient = createAdminSupabase(),
+  opts: { renewOwnApp?: boolean } = {},
 ): Promise<StoreCreds | null> {
   const { data, error } = await admin
     .from("stores")
@@ -251,11 +280,12 @@ export async function getStoreCreds(
     .eq("id", storeId)
     .single();
   if (error || !data) return null;
+  const ownApp = data.shopify_app === OWN_APP;
   let shopifyToken = decryptOrNull(data.shopify_token_enc);
   // App propia (0271, owner 23-10-2026): su token dura ~24 h. Si vence en menos
   // de 15 minutos se renueva antes de usarlo. Solo para 'propia': Kenku, Aurela
   // y las tiendas de la app de clientes no pasan por aquí (ni consulta ni red).
-  if (data.shopify_app === OWN_APP) shopifyToken = await ownAppTokenForUse(admin, data, shopifyToken);
+  if (ownApp && opts.renewOwnApp !== false) shopifyToken = await ownAppTokenForUse(admin, data, shopifyToken);
   return {
     id: data.id,
     org_id: data.org_id,
@@ -264,6 +294,15 @@ export async function getStoreCreds(
     shopify_app: data.shopify_app ?? "interna",
     shopify_token: shopifyToken,
     shopify_webhook_secret: decryptOrNull(data.shopify_webhook_secret_enc),
+    // Solo en tiendas con app propia: las demás no llevan estas claves.
+    ...(ownApp
+      ? {
+          shopify_token_expires_at: data.shopify_token_expires_at ?? null,
+          shopify_webhook_secret_prev: ownAppPrevSecretValidUntil(data.shopify_webhook_secret_prev_set_at, new Date())
+            ? prevSecretOrNull(data.shopify_webhook_secret_prev_enc)
+            : null,
+        }
+      : {}),
     kapso_project_id: data.kapso_project_id ?? null,
     kapso_api_key: decryptOrNull(data.kapso_api_key_enc),
     flow_webhook_secret: decryptOrNull(data.flow_webhook_secret_enc),
@@ -395,6 +434,40 @@ export async function getStoreCreds(
     olva_reminder_params: data.olva_reminder_params ?? "nombre,agencia,guia,saldo,vence",
     shalom_reminder_fallback_image_url: data.shalom_reminder_fallback_image_url ?? null,
   };
+}
+
+/**
+ * App propia (0271): las mismas credenciales con el token renovado si le queda
+ * poco (`ownAppTokenForUse`, con su freno). Para quien leyó con
+ * `renewOwnApp: false` y ya autenticó la petición. Kenku, Aurela y las tiendas
+ * 'clientes' vuelven tal cual, sin consulta ni red.
+ */
+export async function ownAppCredsForUse(admin: SupabaseClient, creds: StoreCreds): Promise<StoreCreds> {
+  if (creds.shopify_app !== OWN_APP) return creds;
+  const token = await ownAppTokenForUse(
+    admin,
+    {
+      id: creds.id,
+      shopify_app: creds.shopify_app,
+      status: creds.status,
+      shopify_token_expires_at: creds.shopify_token_expires_at ?? null,
+    },
+    creds.shopify_token,
+  );
+  return token === creds.shopify_token ? creds : { ...creds, shopify_token: token };
+}
+
+/**
+ * La firma de un webhook de Shopify. Con el secreto de la tienda, como
+ * siempre; y SOLO en una tienda con app propia, también con el Client secret
+ * anterior mientras dura su gracia (MOM §36.4: tras rotarlo, Shopify firma con
+ * el más viejo que no se revocó). Kenku, Aurela y las tiendas 'clientes' se
+ * comprueban exactamente como antes.
+ */
+export function verifyStoreShopifyHmac(rawBody: string, hmacHeader: string | null, creds: StoreCreds): boolean {
+  if (verifyShopifyHmac(rawBody, hmacHeader, creds.shopify_webhook_secret)) return true;
+  if (creds.shopify_app !== OWN_APP || !creds.shopify_webhook_secret_prev) return false;
+  return verifyShopifyHmac(rawBody, hmacHeader, creds.shopify_webhook_secret_prev);
 }
 
 /** Map a Kapso phone-number record → a `whatsapp_numbers` label row. `kind` is
@@ -625,10 +698,12 @@ export async function processShopifyWebhook(
   params: ProcessWebhookParams,
   admin: SupabaseClient = createAdminSupabase(),
 ): Promise<WebhookResult> {
-  const creds = await getStoreCreds(params.storeId, admin);
+  // Sin renovar el token de una app propia: la firma todavía no se comprobó
+  // (0271). El único camino que usa Shopify (borradores) lo renueva después.
+  const creds = await getStoreCreds(params.storeId, admin, { renewOwnApp: false });
   if (!creds) return { status: "error", message: "unknown store" };
 
-  if (!verifyShopifyHmac(params.rawBody, params.hmacHeader, creds.shopify_webhook_secret)) {
+  if (!verifyStoreShopifyHmac(params.rawBody, params.hmacHeader, creds)) {
     return { status: "unauthorized" };
   }
 
@@ -740,7 +815,8 @@ export async function processFlowWebhook(
   params: FlowWebhookParams,
   admin: SupabaseClient = createAdminSupabase(),
 ): Promise<WebhookResult> {
-  const creds = await getStoreCreds(params.storeId, admin);
+  // Shopify Flow no usa el token de Shopify: nunca renueva el de una app propia.
+  const creds = await getStoreCreds(params.storeId, admin, { renewOwnApp: false });
   if (!creds) return { status: "error", message: "unknown store" };
   if (!verifyFlowSecret(params.secretHeader, creds.flow_webhook_secret)) {
     await recordFlowRejection(
@@ -833,7 +909,9 @@ export async function authorizeKapsoRequest(
   providedSecret: string | null,
   admin: SupabaseClient = createAdminSupabase(),
 ): Promise<StoreCreds | null> {
-  const creds = await getStoreCreds(storeId, admin);
+  // Los webhooks de Kapso no usan el token de Shopify, y aquí el secreto aún no
+  // se comprobó: nunca renueva el de una app propia (0271).
+  const creds = await getStoreCreds(storeId, admin, { renewOwnApp: false });
   if (!creds) return null;
   // Only need the shared CRON_SECRET as a fallback when this store has no secret
   // of its own; read it lazily so a per-store-secured store works even without
@@ -1027,7 +1105,10 @@ async function processDraftOrderWebhook(
   } else {
     const row = mapRestDraftOrder(payload, params.storeId);
     await upsertDraftOrders(admin, [row]);
-    const shopify = creds.shopify_token ? { domain: creds.shopify_domain, token: creds.shopify_token } : undefined;
+    // App propia (0271): la firma ya se comprobó; ahora sí, el token renovado
+    // si le queda poco. Las demás tiendas, tal cual.
+    const live = await ownAppCredsForUse(admin, creds);
+    const shopify = live.shopify_token ? { domain: live.shopify_domain, token: live.shopify_token } : undefined;
     const recovered = await linkDraftOrdersToLeads(admin, params.storeId, [row], shopify);
     if (recovered.length) {
       try {

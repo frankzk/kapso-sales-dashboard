@@ -37,6 +37,9 @@ const NEW_COLUMNS = [
   "shopify_token_expires_at",
   "shopify_token_renewed_at",
   "shopify_token_error",
+  "shopify_token_retry_at",
+  "shopify_webhook_secret_prev_enc",
+  "shopify_webhook_secret_prev_set_at",
 ] as const;
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -84,7 +87,10 @@ describe("§36 Tiendas conectadas con su app propia de Shopify (owner 23-10-2026
   });
 
   it("el cron de cada hora existe, en vercel.json, sin caer en el minuto 0", () => {
-    expect(s36).toContain("Un cron (`/api/cron/shopify-own-app-tokens`) renueva el token de cada tienda `active` con app `propia`");
+    expect(s36).toContain(
+      "Un cron (`/api/cron/shopify-own-app-tokens`) renueva el token de cada tienda `active` o `paused` con app `propia`",
+    );
+    expect(read("app/api/cron/shopify-own-app-tokens/route.ts")).toContain('.in("status", [...OWN_APP_RENEWABLE_STATUSES])');
     expect(existsSync(resolve(process.cwd(), "app/api/cron/shopify-own-app-tokens/route.ts"))).toBe(true);
     const crons = (JSON.parse(read("vercel.json")).crons ?? []) as { path: string; schedule: string }[];
     const cron = crons.filter((c) => c.path === "/api/cron/shopify-own-app-tokens");
@@ -93,6 +99,58 @@ describe("§36 Tiendas conectadas con su app propia de Shopify (owner 23-10-2026
     expect(rest).toEqual(["*", "*", "*", "*"]);
     expect(Number(minute)).toBeGreaterThan(0);
     expect(Number(minute)).toBeLessThan(60);
+  });
+
+  it("en pausa renueva, deshabilitada no: lo mismo en el MOM y en el código", () => {
+    expect(s36).toContain("una tienda `paused` renueva igual que una `active`. Solo una `disabled` (por ejemplo, desinstalada) no renueva.");
+    expect([...ownApp.OWN_APP_RENEWABLE_STATUSES]).toEqual(["active", "paused"]);
+    expect(ownApp.isOwnAppRenewableStatus("paused")).toBe(true);
+    expect(ownApp.isOwnAppRenewableStatus("disabled")).toBe(false);
+  });
+
+  it("el freno de la renovación al usar: 5 minutos, 15 tras un fallo de red; el cron no lo mira", () => {
+    expect(s36).toContain("no pide otro token en los **5 minutos** siguientes a un intento (`OWN_APP_ON_USE_RETRY_MS`)");
+    expect(ownApp.OWN_APP_ON_USE_RETRY_MS).toBe(5 * 60 * 1000);
+    expect(s36).toContain("ni en los **15 minutos** siguientes a un fallo de red o a un 429/5xx de Shopify (`OWN_APP_ON_USE_RETRY_AFTER_RED_MS`)");
+    expect(ownApp.OWN_APP_ON_USE_RETRY_AFTER_RED_MS).toBe(15 * 60 * 1000);
+    expect(s36).toContain("(`shopify_token_retry_at`): si dos usos llegan juntos, solo uno sale a Shopify.");
+    expect(s36).toContain("El cron y «Renovar ahora» no miran el freno.");
+  });
+
+  it("primero se autentica: los webhooks leen sin renovar y renuevan después, solo donde usan el token", () => {
+    expect(s36).toContain("lee la tienda **sin** renovar: primero comprueba su firma o su secreto.");
+    expect(s36).toContain("Una petición falsa no hace salir el Client secret.");
+    const ingest = read("lib/ingest.ts");
+    expect(ingest.match(/getStoreCreds\(params\.storeId, admin, \{ renewOwnApp: false \}\)/g)).toHaveLength(2);
+    expect(ingest).toContain("const creds = await getStoreCreds(storeId, admin, { renewOwnApp: false });");
+    for (const route of ["app/api/webhooks/aliclik/[storeId]/route.ts", "app/api/webhooks/flowcl/[storeId]/route.ts"]) {
+      const src = read(route);
+      expect(src.match(/getStoreCreds\(/g)?.length, route).toBe(src.match(/getStoreCreds\(storeId, undefined, \{ renewOwnApp: false \}\)/g)?.length);
+    }
+  });
+
+  it("un fallo viejo no pisa un éxito nuevo", () => {
+    expect(s36).toContain("El motivo solo se guarda si nadie renovó después de que empezó ese intento");
+  });
+
+  it("rotar el secreto: el anterior firma webhooks 48 h o hasta confirmar; otra app registra sus webhooks", () => {
+    expect(s36).toContain("Shopify sigue firmando los webhooks con el secreto **más viejo que no se revocó**");
+    expect(s36).toContain("durante **48 horas** (`OWN_APP_PREV_WEBHOOK_SECRET_GRACE_MS`)");
+    expect(ownApp.OWN_APP_PREV_WEBHOOK_SECRET_GRACE_MS).toBe(48 * HOUR_MS);
+    expect(s36).toContain(
+      "Los pasos, en orden: rotar en el Dev Dashboard, pegar el nuevo en Ajustes, revocar el anterior en el Dev Dashboard y confirmar en Ajustes.",
+    );
+    expect(s36).toContain("«Ya revoqué el secreto anterior»");
+    expect(s36).toContain("Kapta registra los webhooks de la app nueva (pedidos, borradores y `app/uninstalled`)");
+    expect(s36).toContain("La firma de los webhooks de Kenku, Aurela y las tiendas `clientes` se comprueba exactamente como antes");
+  });
+
+  it("Ajustes: el título del aviso sale del contenido, y sin acceso que valga no dice «vence»", () => {
+    expect(s36).toContain("«Faltan permisos en la app»");
+    expect(ownApp.ownAppErrorTitle(ownApp.missingScopesMessage(["write_orders"]))).toBe("Faltan permisos en la app");
+    expect(s36).toContain("«App propia · app desinstalada el DD/MM a las HH:MM»");
+    expect(s36).toContain("Una zona que no se entiende («Lima», «GMT-5») no rompe Ajustes");
+    expect(s36).toContain("el servidor los rechaza sin guardar nada, y el OAuth de la app interna (instalar y su vuelta) no toca una tienda propia.");
   });
 
   it("los alcances del MOM son los de la app de clientes, y un write_X cuenta como read_X", () => {
@@ -117,6 +175,11 @@ describe("§36 Tiendas conectadas con su app propia de Shopify (owner 23-10-2026
       "«Para tiendas cuya organización de Shopify creó su propia app en el Dev Dashboard. Kapta renueva el acceso cada día.»",
     );
     expect(s36).toContain("Si ya hay una tienda con ese dominio en Kapta, con cualquier app, no conecta y **no la toca**.");
+    // Se mira después del token: nadie averigua qué tiendas son de Kapta.
+    expect(s36).toContain("Se mira recién después del token");
+    expect(s36.indexOf("2. Pide un token.")).toBeGreaterThan(-1);
+    expect(s36.indexOf("4. Si ya hay una tienda con ese dominio en Kapta")).toBeGreaterThan(s36.indexOf("2. Pide un token."));
+    expect(s36).toContain("«Conectar tienda» muestra arriba «Conectar con app propia de Shopify»");
     expect(s36).toContain("las credenciales no son válidas, la app no está instalada en esa tienda, o la tienda no es de la organización que creó la app");
     expect(s36).toContain("El secreto de sus webhooks es el Client secret, porque Shopify firma con él los webhooks de la app.");
     expect(s36).toContain("Registra los webhooks de pedidos y `app/uninstalled`.");
@@ -177,13 +240,23 @@ describe("§36 Tiendas conectadas con su app propia de Shopify (owner 23-10-2026
       "test/shopify-own-app.test.ts",
       "test/shopify-own-app-cron.test.ts",
       "test/shopify-own-app-connect.test.ts",
+      "test/shopify-own-app-webhooks.test.ts",
       "test/shopify-app-propia-mom.test.ts",
       "scripts/sql/shopify_app_propia_smoke.sql",
     ]) {
       expect(s367).toContain(`\`${path}\``);
       expect(existsSync(resolve(process.cwd(), path)), path).toBe(true);
     }
-    for (const name of ["requestClientCredentialsToken", "missingScopes", "shouldRenew", "renewOwnAppToken"] as const) {
+    for (const name of [
+      "requestClientCredentialsToken",
+      "missingScopes",
+      "shouldRenew",
+      "renewOwnAppToken",
+      "ownAppTokenForUse",
+      "ownAppStatusLine",
+      "ownAppAccessHint",
+      "ownAppErrorTitle",
+    ] as const) {
       expect(s367).toContain(`\`${name}\``);
       expect(typeof ownApp[name], name).toBe("function");
     }
@@ -193,9 +266,16 @@ describe("§36 Tiendas conectadas con su app propia de Shopify (owner 23-10-2026
       ["ConnectOwnAppStoreForm", "components/forms.tsx"],
       ["saveOwnAppCredentials", "app/dashboard/[storeId]/settings/actions.ts"],
       ["renewOwnAppTokenNow", "app/dashboard/[storeId]/settings/actions.ts"],
+      ["clearOwnAppPreviousSecret", "app/dashboard/[storeId]/settings/actions.ts"],
+      ["ownAppCredsForUse", "lib/ingest.ts"],
+      ["verifyStoreShopifyHmac", "lib/ingest.ts"],
     ] as const) {
       expect(s367).toContain(`\`${name}\``);
       expect(read(path), name).toMatch(new RegExp(`export (async )?function ${name}\\b`));
+    }
+    for (const path of ["app/api/shopify/install/route.ts", "app/api/shopify/callback/route.ts"]) {
+      expect(s367).toContain(`\`${path}\``);
+      expect(read(path), path).toContain('shopify_app === "propia"');
     }
     expect(s367).toContain("`getStoreCreds` (`lib/ingest.ts`)");
     expect(read("lib/ingest.ts")).toContain("getStoreCreds");
@@ -214,6 +294,12 @@ describe("DEPLOY.md, entrada del 23-10-2026 (0271)", () => {
     expect(entry).toContain("**Migración `0271_shopify_app_propia.sql`, a mano y ANTES del código.**");
     expect(entry).toContain("\\i db/migrations/0271_shopify_app_propia.sql");
     expect(entry).toContain("set local lock_timeout = '15s';");
+  });
+
+  it("dice cómo rotar el secreto y qué formulario usar", () => {
+    expect(entry).toContain("**no** el de «Crear tienda con token de Admin API»");
+    expect(entry).toContain("**Rotar el Client secret de una tienda propia**");
+    expect(entry).toContain("pulsar «Ya revoqué el secreto anterior»");
   });
 
   it("trae la huella de antes y después, el cron y la marcha atrás", () => {
