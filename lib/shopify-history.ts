@@ -321,3 +321,29 @@ export function batches<T>(items: readonly T[], size: number): T[][] {
 /** Pedidos por tanda: con su `raw` cada pedido pesa ~2–4 KB. */
 export const ORDERS_PER_BATCH = 400;
 export const CUSTOMERS_PER_BATCH = 1000;
+
+/**
+ * Números de pedido únicos para guardar (MOM §37.3). En Shopify dos pedidos
+ * distintos pueden tener el mismo número (Aurela, 23-10-2026: la traída por
+ * API se detuvo en una tanda con un número repetido). La clave del historial
+ * es (tienda, número), así que el segundo se guarda como «#1234 · 5551234567»
+ * (su id de Shopify): no se pierde ninguno. El mismo pedido repetido (mismo
+ * id) queda una sola vez, con lo último. `existing` es lo ya guardado con esos
+ * números: número → id de Shopify.
+ */
+export function uniqueOrderNames<T extends { order_name: string | null; shopify_order_id: string | null }>(
+  rows: readonly T[],
+  existing: ReadonlyMap<string, string | null>,
+): T[] {
+  const byName = new Map<string, T>();
+  for (const row of rows) {
+    const base = row.order_name;
+    if (!base) continue;
+    const owner = byName.get(base)?.shopify_order_id ?? existing.get(base) ?? null;
+    const taken = byName.has(base) || existing.has(base);
+    const other = taken && owner !== null && row.shopify_order_id !== null && owner !== row.shopify_order_id;
+    const name = other ? `${base} · ${row.shopify_order_id}` : base;
+    byName.set(name, name === base ? row : { ...row, order_name: name });
+  }
+  return [...byName.values()];
+}

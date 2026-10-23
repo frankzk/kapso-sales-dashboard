@@ -11,7 +11,7 @@ import { getAccessibleStores, getCurrentUser } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { getStoreCreds } from "@/lib/ingest";
 import { shopifyGraphQL } from "@/lib/shopify";
-import type { HistoryCustomer, HistoryFileKind, HistoryLineItem, HistoryOrder } from "@/lib/shopify-history";
+import { uniqueOrderNames, type HistoryCustomer, type HistoryFileKind, type HistoryLineItem, type HistoryOrder } from "@/lib/shopify-history";
 import { mergeLineItems, type BulkKind } from "@/lib/shopify-history-bulk";
 import {
   IMPORT_COLUMNS,
@@ -175,6 +175,30 @@ function customerRow(storeId: string, c: HistoryCustomer, link: { file_id: strin
   };
 }
 
+/**
+ * Guarda pedidos del historial sin que un número repetido en Shopify detenga
+ * la tanda ni pise a otro pedido (`uniqueOrderNames`, MOM §37.3).
+ */
+async function upsertHistoryOrders(
+  admin: ReturnType<typeof createAdminSupabase>,
+  storeId: string,
+  rows: ReturnType<typeof orderRow>[],
+): Promise<number> {
+  const names = [...new Set(rows.map((r) => r.order_name).filter((n): n is string => !!n))];
+  if (!names.length) return 0;
+  const { data: existing, error: readError } = await admin
+    .from("shopify_history_orders")
+    .select("order_name,shopify_order_id")
+    .eq("store_id", storeId)
+    .in("order_name", names);
+  if (readError) throw new Error(`No se pudo revisar la tanda: ${readError.message}`);
+  const owners = new Map(((existing ?? []) as { order_name: string; shopify_order_id: string | null }[]).map((e) => [e.order_name, e.shopify_order_id]));
+  const unique = uniqueOrderNames(rows, owners);
+  const { error } = await admin.from("shopify_history_orders").upsert(unique, { onConflict: "store_id,order_name" });
+  if (error) throw new Error(`No se pudo guardar la tanda: ${error.message}`);
+  return unique.length;
+}
+
 /** Una tanda de pedidos. Volver a mandarla no duplica: (tienda, número) es la clave. */
 export async function importHistoryOrders(fileId: string, orders: HistoryOrder[]): Promise<{ saved: number } | { error: string }> {
   const g = await guard();
@@ -186,13 +210,17 @@ export async function importHistoryOrders(fileId: string, orders: HistoryOrder[]
     .map((o) => orderRow(found.file.store_id, o, { file_id: found.file.id }))
     .filter((r) => r.order_name);
   if (!rows.length) return { saved: 0 };
-  const { error } = await found.admin.from("shopify_history_orders").upsert(rows, { onConflict: "store_id,order_name" });
-  if (error) return { error: `No se pudo guardar la tanda: ${error.message}` };
+  let saved: number;
+  try {
+    saved = await upsertHistoryOrders(found.admin, found.file.store_id, rows);
+  } catch (cause) {
+    return { error: (cause as Error).message };
+  }
   if (found.file.status === "subiendo") {
     await found.admin.from("shopify_history_files").update({ status: "cargando" }).eq("id", fileId);
     found.file.status = "cargando";
   }
-  return { saved: rows.length };
+  return { saved };
 }
 
 /** Una tanda de clientes. Clave: (tienda, cliente). */
@@ -319,9 +347,7 @@ function historyWriter(admin: ReturnType<typeof createAdminSupabase>, storeId: s
     async orders(orders, importId) {
       const rows = orders.map((o) => orderRow(storeId, o, { import_id: importId })).filter((r) => r.order_name);
       if (!rows.length) return 0;
-      const { error } = await admin.from("shopify_history_orders").upsert(rows, { onConflict: "store_id,order_name" });
-      if (error) throw new Error(`No se pudo guardar la tanda: ${error.message}`);
-      return rows.length;
+      return upsertHistoryOrders(admin, storeId, rows);
     },
     async customers(customers, importId) {
       const rows = customers.map((c) => customerRow(storeId, c, { import_id: importId })).filter((r) => r.customer_key);

@@ -15657,6 +15657,11 @@ solo las tiendas que la persona ve.
 - **Volver a subir no duplica.** La clave es (tienda, número de pedido) y
   (tienda, cliente); lo repetido se reemplaza con lo último subido. Si un
   archivo se corta a mitad, se vuelve a subir entero.
+- **Números repetidos.** En Shopify dos pedidos distintos pueden tener el mismo
+  número (en Aurela la traída por API se detuvo así el 23-10-2026, a los
+  106.000 pedidos). El primero conserva su número y el otro se guarda como
+  «#1234 · ‹id de Shopify›»: no se pierde ninguno. El mismo pedido repetido
+  (mismo id) queda una sola vez.
 - La clienta se identifica por el «Customer ID» de Shopify; sin él, por el
   correo; sin correo, por el celular. Una fila sin nada de eso no se guarda.
 - El celular se normaliza igual que en Kapta (`normalizePhone`, 51 + nueve
