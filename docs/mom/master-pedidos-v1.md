@@ -167,7 +167,9 @@ Reglas:
   (§30.11, §30.8): la caja de Urpi y la del motorizado propio se armaron «por
   definir» y nadie les puso el courier. Mismas condiciones, y solo si es la
   única caja viva del pedido: con otra salida viva no se sabe qué caja se llevó
-  y no se toca; sin «por definir», no se crea una salida.
+  y no se toca; sin «por definir», no se crea una salida. Las dos le escriben
+  `closed_at` = el día de la entrega que dice el reporte o el cuaderno, que es
+  de donde el Master saca el suyo.
 - **Por lo mismo, una salida `por definir` no cuenta como «guía activa»** para el
   freno que impide emitir dos guías. No es otro paquete en la calle: es esta caja
   esperando courier. Contarla obligaba a anular la salida para poder emitir la
@@ -13362,12 +13364,19 @@ entregado, Kapta **rellena** la salida «por definir» como salida de Urpi, igua
 que la rellenan Tanders, Aliclik, Shalom y Swayp al emitir su guía (§4,
 `lib/route-output-fill.ts`): se conservan consecutivo, QR, preparación y
 custodia; pasa a courier `urpi`, `created_via = urpi_report`, entregada
-(`delivered_source = urpi_report`) y con `dispatched_at` el mediodía de Lima del
-primer intento de Urpi; queda el evento `route_output_filled`. Solo si es la
+(`delivered_source = urpi_report`), con `dispatched_at` el mediodía de Lima del
+primer intento de Urpi y `closed_at` el mediodía de Lima de la fila más
+reciente, la «Entregado» (desde el 23-10-2026, abajo): cuando Kapta marca la
+entrega en ese mismo paso, es el mismo instante que su evento; en un pedido que
+ya estaba entregado (p. ej. por la carga histórica del cuaderno), es el día que
+dice Urpi, aunque el evento de su entrega sea de otro día. Queda el evento
+`route_output_filled`. Solo si es la
 **única** caja viva del pedido: con otra salida viva —otro courier u otra «por
 definir»— no se sabe qué caja se llevó Urpi y no se toca; sin «por definir», no
-se crea una salida. La pantalla ofrece completar las ya marcadas antes de esta
-regla con el mismo botón.
+se crea una salida. La pantalla ofrece rellenar con el mismo botón las cajas
+«por definir» de los pedidos marcados antes de esta regla (05-10-2026); no
+completa el `closed_at` de las salidas ya rellenadas (eso lo hizo la 0272,
+abajo).
 
 **Marcado automático (decisión del owner, 15-10-2026).** Hasta esta fecha
 una persona revisaba «Entregados por marcar» y pulsaba «Marcar entregados».
@@ -13416,6 +13425,30 @@ dice. De lo anterior a la ventana no se carga nada más: ni lo que ya está al
 día, ni los cancelados o reprogramados, ni los entregados que Kapta tiene
 abiertos o sin vincular. El marcado automático sigue rellenando solo lo de los
 60 días; lo de antes se completa con el botón.
+
+**El día de la entrega en la salida y las cajas viejas (23-10-2026).** Hasta
+este día la salida rellenada no llevaba `closed_at`, y el Master saca el día de
+la entrega de `closed_at` de la salida entregada y, sin él, de su último
+movimiento (`lib/order-status.ts`): el `delivered_at` de esos pedidos era el día
+en que se rellenó la caja, no el que dice Urpi. Medido el 23-10-2026: 107
+salidas rellenadas, ninguna con `closed_at`, y en 106 el día del relleno no era
+el del reporte (entregas del 24-08 al 21-10-2026). Desde entonces el relleno
+escribe `closed_at` = el día de la fila más reciente de Urpi a mediodía de Lima
+(`urpiSalidaRow`, `lib/urpi-salida.ts`); si esa fila no trae fecha, la salida
+se rellena sin `closed_at`, como antes. La migración 0272 lo completa en las
+107 ya rellenadas (sin evento nuevo: `closed_at` estaba vacío, no se sobrescribe
+ningún hecho, §2) y rellena, con la misma regla del botón, las cajas «por
+definir» que el marcado automático no alcanzó por ser de antes de la ventana y
+que nadie pasó con el botón: 32 pedidos entregados en Kapta y no anulados, con
+reportes del 10-08 al 22-08-2026, cada uno con su `route_output_filled`
+(`payload.backfill = true`). Otros 13 con la misma caja no están entregados en
+Kapta (12 anulados en Shopify) y quedan fuera, como en el flujo de Urpi. El
+`delivered_at` de esos pedidos pasa al día del reporte y los 32 dejan «Salida
+adicional activa»: pasan a «Pendiente de liquidación», o a donde los lleve su
+liquidación si ya está cerrada; no se cierra ninguna liquidación. Como con la
+0270, la 0272 —el `closed_at` de las 107 y el relleno de las 32— mueve el último
+movimiento de esos pedidos al día en que se aplica: es el día al que se imputa
+el costo (§14) y el que mira «Sin movimiento por 60 días» (§17.1).
 
 **Por qué cancelado y reprogramado no mueven el Master.** «Por reprogramar
 Lima» (§9) exige una salida que conste fuera. Los despachos a Urpi salen del

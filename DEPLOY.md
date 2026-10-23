@@ -3647,3 +3647,207 @@ alter table stores
   drop column shopify_webhook_secret_prev_set_at;
 commit;
 ```
+
+### 23-10-2026 · La salida de Urpi lleva el día de la entrega, y las cajas viejas de Urpi (0272)
+
+MOM §30.11 y §4. Sin variables de entorno, RPC ni crons nuevos.
+`MOM_RESOLUTION_VERSION` **no** sube (`mom-v1.31`): el resolver no cambia, y los
+pedidos que toca la 0272 se recalculan por el desfase.
+
+1. **El código.** Al rellenar la caja «por definir» como salida de Urpi
+   (`urpiSalidaRow`, `lib/urpi-salida.ts`) escribe también `closed_at` = el día
+   de la fila más reciente de Urpi del pedido —la «Entregado» de la que sale la
+   entrega del Master— a las 17:00Z. Hasta aquí no lo escribía y el Master
+   tomaba como día de la entrega el del relleno. Si esa fila no trae fecha, la
+   salida se rellena sin `closed_at`, como antes.
+2. **Migración `0272_urpi_salida_fecha.sql`, a mano y DESPUÉS del código.**
+   **Pendiente de aplicar en producción.** Después, para que ninguna salida
+   nueva de Urpi quede sin `closed_at` entre una cosa y otra (si se aplica
+   antes, correrla otra vez tras el despliegue completa las que se rellenaron en
+   medio). Es un relleno de datos, no de esquema, en dos pasos:
+   1. a las salidas `created_via = urpi_report` entregadas y sin `closed_at`,
+      `closed_at` = el día de la fila más reciente de Urpi del pedido a las
+      17:00Z, si esa fila es «Entregado» y tiene fecha. Sin evento: no
+      sobrescribe ningún hecho (estaba vacío) y la salida ya tiene el
+      `route_output_filled` de su relleno;
+   2. la caja «por definir» de los pedidos que Urpi entregó y el marcado
+      automático no alcanzó (antes de la ventana de 60 días) pasa a salida de
+      Urpi entregada, con la regla del botón (`planUrpiSalida`: última fila
+      «Entregado» con fecha, ninguna salida de Urpi entregada, la «por definir»
+      de ruta manual como única salida viva, pendiente, en la empresa y nunca
+      transferida) y solo si el pedido está entregado en Kapta y no anulado en
+      Shopify. Escribe lo mismo que el código (courier `urpi`, `created_via` y
+      `delivered_source` `urpi_report`, la guía `MOM-<pedido>-URPI-<id>`,
+      `dispatched_at` = el primer intento y `closed_at` = la entrega, a las
+      17:00Z), con las guardas del UPDATE de `writeCourierGuide`, y un
+      `route_output_filled` por salida con `payload` {outputCode,
+      previousCourier, backfill, urpi_row, fecha}. Conserva consecutivo,
+      `output_code`, QR, preparación y custodia, y **no cierra ninguna
+      liquidación**.
+
+   Sin `drop` ni `begin`/`commit`; correrla otra vez escribe 0 filas. Quien la
+   aplica pone la transacción y el freno:
+
+   ```bash
+   psql "$DATABASE_URL" <<'SQL'
+   begin;
+   set local lock_timeout = '15s';
+   \i db/migrations/0272_urpi_salida_fecha.sql
+   commit;
+   SQL
+   ```
+
+   Da dos `NOTICE`: «0272: N salida(s) de Urpi con el día de la entrega» tiene
+   que dar el conteo previo 1, y «0272: N caja(s) «por definir» pasaron a
+   salida de Urpi entregada», el `se_rellenan` del conteo previo 2.
+
+   **Conteo previo 1** (solo lectura; el 23-10-2026, **107**, con días del
+   reporte del 24-08 al 21-10-2026). Es el mismo filtro del paso 1. Si sale
+   más, son salidas que el código viejo rellenó desde el 23-10; si sale menos,
+   salidas cuya última fila de Urpi ya no es «Entregado» con fecha (un intento
+   posterior) o que alguien cerró a mano: revisar la diferencia antes de
+   aplicar:
+
+   ```sql
+   with latest as (
+     select distinct on (r.order_id) r.order_id, r.result_code, r.report_date
+       from urpi_report_rows r
+      where r.order_id is not null
+      order by r.order_id, r.urpi_row desc
+   )
+   select count(*) as salidas, min(l.report_date) as desde, max(l.report_date) as hasta
+     from shipments s
+     join latest l on l.order_id = s.order_id
+    where s.created_via = 'urpi_report'
+      and s.delivery_status = 'entregado'
+      and s.closed_at is null
+      and l.result_code = 'entregado'
+      and l.report_date is not null;
+   ```
+
+   **Conteo previo 2** (solo lectura; el 23-10-2026, **32**, reportes del
+   10-08 al 22-08-2026; `cajas` = `se_rellenan`). Es el mismo filtro del paso 2.
+   El `NOTICE` tiene que dar `se_rellenan`; si es menor que `cajas`, la
+   diferencia son cajas con el courier escrito distinto o cuya guía ya existe,
+   que tampoco rellena el código y se miran a mano. Si sale distinto de 32, son
+   cambios de datos desde el 23-10 (cajas pasadas con el botón, anuladas o
+   despachadas a mano, intentos nuevos de Urpi): revisar la diferencia antes de
+   aplicar:
+
+   ```sql
+   with latest as (
+     select distinct on (r.order_id) r.order_id, r.urpi_row, r.result_code, r.report_date
+       from urpi_report_rows r
+      where r.order_id is not null
+      order by r.order_id, r.urpi_row desc
+   ),
+   first_try as (
+     select r.order_id, min(r.report_date) as first_on
+       from urpi_report_rows r
+      where r.order_id is not null
+        and r.report_date is not null
+      group by r.order_id
+   ),
+   pop as (
+     select om.order_id, om.store_id, om.order_name, l.urpi_row, l.report_date as delivered_on, f.first_on
+       from latest l
+       join first_try f on f.order_id = l.order_id
+       join order_master om on om.order_id = l.order_id
+       join orders o on o.id = om.order_id
+      where l.result_code = 'entregado'
+        and l.report_date is not null
+        and om.general_status = 'entregado'
+        and o.cancelled_at is null
+        and not exists (select 1 from shipments y where y.order_id = om.order_id and y.courier = 'urpi' and y.delivery_status = 'entregado')
+   ),
+   live as (
+     select x.id, x.order_id, x.courier, x.created_via, x.delivery_status, x.custody_state, x.custody_transferred_at,
+            count(*) over (partition by x.order_id) as n_live
+       from shipments x
+       join pop p on p.order_id = x.order_id
+      where x.delivery_status in ('pendiente', 'en_ruta')
+        and x.returned_at is null
+        and coalesce(x.custody_state, '') <> 'devuelto'
+   ),
+   target as (
+     select p.*, l.id as shipment_id, l.courier,
+            -- `manualRouteGuideCode(order_name, id, 'urpi')` (lib/shipment-output.ts).
+            'MOM-' || coalesce(
+              nullif(regexp_replace(regexp_replace(upper(regexp_replace(btrim(coalesce(p.order_name, '')), '^#+', '')),
+                                                   '[^A-Z0-9_-]+', '', 'g'), '_+', '-', 'g'), ''),
+              upper(left(l.id::text, 8))
+            ) || '-URPI-' || upper(left(l.id::text, 8)) as guide_code
+       from pop p
+       join live l on l.order_id = p.order_id
+      where l.n_live = 1
+        and lower(btrim(l.courier)) = 'por_definir'
+        and l.created_via = 'mom_manual_route'
+        and l.delivery_status = 'pendiente'
+        and coalesce(l.custody_state, 'empresa') = 'empresa'
+        and l.custody_transferred_at is null
+   )
+   -- `cajas`: la regla de `planUrpiSalida`; `se_rellenan`: además las guardas
+   -- del UPDATE (courier escrito tal cual y guía sin usar), lo que da el NOTICE.
+   select coalesce(st.name, 'TOTAL') as tienda, count(*) as cajas,
+          count(*) filter (where t.courier = 'por_definir'
+                             and not exists (select 1 from shipments z where z.courier = 'urpi' and z.guide_code = t.guide_code)) as se_rellenan,
+          min(t.delivered_on) as desde, max(t.delivered_on) as hasta
+     from target t
+     join stores st on st.id = t.store_id
+    group by rollup (st.name)
+    order by st.name nulls last;
+   ```
+
+   **Comprobación después** (solo lectura): `eventos_0272` = `cajas_0272` = el
+   segundo `NOTICE`, `sin_dia_o_raras` = 0 (si no, son salidas de Urpi cuya
+   última fila no es «Entregado» con fecha, que el paso 1 no toca) y los dos
+   conteos previos, otra vez, en 0 (el segundo, en `se_rellenan`). Cuando el barrido los recalcule, `desfasados` baja a 0, el día de la
+   entrega del Master es el del reporte y las 32 cajas están en «Por cerrar ·
+   Pendiente de liquidación» (o donde las lleve su liquidación), ninguna en
+   «Salida adicional activa»:
+
+   ```sql
+   -- 1) Lo que escribió.
+   select (select count(*) from order_events e
+            where e.kind = 'route_output_filled' and e.courier = 'urpi'
+              and e.payload->>'backfill' = 'true' and e.payload ? 'urpi_row') as eventos_0272,
+          (select count(*) from shipments s
+            where s.created_via = 'urpi_report' and s.courier = 'urpi' and s.delivery_status = 'entregado'
+              and exists (select 1 from order_events e where e.shipment_id = s.id and e.kind = 'route_output_filled'
+                           and e.payload->>'backfill' = 'true' and e.payload ? 'urpi_row')) as cajas_0272,
+          (select count(*) from shipments s
+            where s.created_via = 'urpi_report' and s.delivery_status = 'entregado'
+              and (s.closed_at is null or to_char(s.closed_at at time zone 'UTC', 'HH24:MI') <> '17:00'
+                   or s.dispatched_at > s.closed_at)) as sin_dia_o_raras;
+   -- 2) Dónde quedaron, cuando el barrido los recalcule: «desfasados» baja a 0
+   --    y «dia_del_reporte» = «pedidos».
+   select (exists (select 1 from order_events e where e.shipment_id = s.id and e.kind = 'route_output_filled'
+                    and e.payload->>'backfill' = 'true' and e.payload ? 'urpi_row')) as caja_0272,
+          om.macro_stage, om.macro_substage, count(*) as pedidos,
+          count(*) filter (where s.updated_at > om.recomputed_at) as desfasados,
+          count(*) filter (where om.delivered_at = s.closed_at) as dia_del_reporte
+     from shipments s
+     join order_master om on om.order_id = s.order_id
+    where s.created_via = 'urpi_report' and s.delivery_status = 'entregado'
+    group by 1, 2, 3
+    order by 1, 4 desc;
+   ```
+
+**Qué cambia en el Master.** El `delivered_at` de esos pedidos pasa del día del
+relleno al del reporte de Urpi, y «Liquidación vencida» (Urpi, a los 3 días,
+§17.1) se mide desde ese día: una entrega sin liquidar puede pasar a vencida
+antes de lo que mostraba. Las 32 cajas dejan «Salida adicional activa». El
+`UPDATE` (y en el paso 2, su evento) mueve el último movimiento —el día al que
+se imputa el costo, §14— al día en que se aplica, como en la 0270: si Urpi
+tiene tarifa en Costos › Costos logísticos, se toma la vigente ese día (el
+16-10-2026 no tenía ninguna). Por lo mismo, los pedidos cuya última señal era de
+antes del corte salen de «Sin movimiento por 60 días» (§17.1) sin que nadie los
+haya trabajado. Quedan fuera, como en el flujo de Urpi, los 13
+pedidos con la misma caja que no están entregados en Kapta (12 anulados en
+Shopify).
+
+**Marcha atrás.** Revertir el código solo hace que los rellenos nuevos vuelvan a
+salir sin `closed_at`. La 0272 no se deshace sola: las cajas del paso 2 se
+reconocen por su `route_output_filled` con `payload.backfill = true` y
+`payload.urpi_row`; las fechas del paso 1 no llevan rastro propio (estaban
+vacías y el código las escribe igual desde este cambio).
