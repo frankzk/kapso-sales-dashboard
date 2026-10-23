@@ -54,6 +54,7 @@ import { replyFirstName } from "@/lib/wa-reply-templates";
 import { shalomVoucherPdf, signedDocUrl } from "@/lib/shalom/label-cache";
 import { loadStoreShalom } from "@/lib/shalom/session";
 import { firstProductWithImage, waImageUrl, type CatalogImage } from "@/lib/cart-image-test";
+import { isShopifyCdnUrl, productPhotosThatLoad } from "@/lib/product-photos";
 import { AGENCY_AVAILABLE_STATES } from "@/lib/order-master-filters";
 import { env } from "@/lib/env";
 
@@ -813,9 +814,9 @@ export async function processTransitNotifications(
   const loadCreds = opts.loadCreds ?? ((id: string) => getStoreCreds(id, admin));
   // El espejo de catálogo de cada tienda, leído UNA vez por pasada y solo si
   // sale algún recordatorio: son unos cientos de filas y casi no cambian.
-  const catalogs = new Map<string, Promise<CatalogImage[]>>();
-  const loadCatalog = (storeId: string): Promise<CatalogImage[]> => {
-    if (!catalogs.has(storeId)) catalogs.set(storeId, loadStoreCatalog(admin, storeId));
+  const catalogs = new Map<string, Promise<CatalogImage[] | null>>();
+  const loadCatalog = (storeId: string): Promise<CatalogImage[] | null> => {
+    if (!catalogs.has(storeId)) catalogs.set(storeId, loadStoreCatalog(admin, storeId, Date.parse(nowIso)));
     return catalogs.get(storeId)!;
   };
   const siteUrl = opts.siteUrl ?? env.siteUrl();
@@ -987,8 +988,9 @@ async function sendOne(
     nowIso: string;
     send: SendTemplate;
     kind?: NoticeKind;
-    /** El espejo de catálogo de la tienda, para la foto del recordatorio. */
-    loadCatalog?: (storeId: string) => Promise<CatalogImage[]>;
+    /** El espejo de catálogo de la tienda, para la foto del recordatorio.
+     *  `null`: no se pudo leer. */
+    loadCatalog?: (storeId: string) => Promise<CatalogImage[] | null>;
     siteUrl?: string;
   },
 ): Promise<"sent" | "failed" | "retry" | "skipped"> {
@@ -1099,18 +1101,26 @@ async function sendOne(
 
   // La foto del producto en la cabecera del recordatorio (0242). Sin foto ni
   // imagen de respaldo NO se manda: Meta rechaza una plantilla de cabecera de
-  // imagen que llega sin ella, y reintentarlo no la hace aparecer.
+  // imagen que llega sin ella, y reintentarlo no la hace aparecer. Pero un
+  // catálogo que no se pudo leer (la base, o Storage desde el cierre: MOM §39)
+  // no es «sin foto»: sin respaldo, se reintenta.
   let headerImage: { link: string } | undefined;
   let imageSource: "producto" | "respaldo" | null = null;
   if (cfg.headerImage) {
     const catalog = ctx.loadCatalog ? await ctx.loadCatalog(row.store_id) : [];
     const img = reminderHeaderImage({
       lineItems: facts.lineItems,
-      catalog,
+      catalog: catalog ?? [],
       siteUrl: ctx.siteUrl ?? env.siteUrl(),
       storeId: row.store_id,
       fallbackUrl: cfg.fallbackImageUrl,
     });
+    if (!img.ok && catalog === null) {
+      return fail("no se pudo leer el catálogo de fotos del producto y la tienda no tiene imagen de respaldo", {
+        retryable: true,
+        patch: { phone, phone_number_id: phoneNumberId },
+      });
+    }
     if (!img.ok) return skip(img.reason, { phone, phone_number_id: phoneNumberId });
     headerImage = { link: img.link };
     imageSource = img.source;
@@ -1306,23 +1316,38 @@ export async function sendTransitTicket(
 /**
  * Los productos CON foto del espejo de catálogo de una tienda (0164), para la
  * cabecera del recordatorio. La misma lectura que la prueba de carritos
- * (lib/cart-sequence.ts). Si falla, lista vacía: el recordatorio cae a la
- * imagen de respaldo o no sale, nunca sale sin imagen.
+ * (lib/cart-sequence.ts).
+ *
+ * Si Shopify ya no sirve las fotos de la tienda (MOM §39: sin token, o desde
+ * el cierre la que pasa a WooCommerce), solo las fotos con su copia guardada:
+ * una sin copia daría a Meta un 502 en la cabecera, y el recordatorio cae a la
+ * imagen de respaldo como cuando el producto no tiene foto. Vale también para
+ * los pedidos de WooCommerce, que casan con este catálogo por el título.
+ *
+ * `null` si no se pudo leer (la base, o Storage): no es «sin foto». Con imagen
+ * de respaldo el recordatorio sale con ella, como siempre; sin ella se
+ * reintenta en vez de quedar omitido (`sendOne`).
  */
-async function loadStoreCatalog(admin: SupabaseClient, storeId: string): Promise<CatalogImage[]> {
+async function loadStoreCatalog(admin: SupabaseClient, storeId: string, nowMs: number): Promise<CatalogImage[] | null> {
   try {
     const { data, error } = await admin
       .from("shopify_product_images")
       .select("product_id,catalog_title,image_url")
       .eq("store_id", storeId);
-    if (error) return [];
-    return ((data ?? []) as (CatalogImage & { image_url: string | null })[])
+    if (error) return null;
+    const rows = ((data ?? []) as (CatalogImage & { image_url: string | null })[])
       // Solo lo que /api/wa-image acepta servir (el CDN de Shopify): otra foto
       // daría a Meta un 404 en la cabecera y el envío fallaría.
-      .filter((r) => /^https:\/\/cdn\.shopify\.com\//.test(r.image_url ?? ""))
-      .map((r) => ({ product_id: String(r.product_id), catalog_title: r.catalog_title ?? null }));
+      .filter((r) => isShopifyCdnUrl(r.image_url));
+    const usable = await productPhotosThatLoad(admin, storeId, rows, nowMs);
+    return (
+      usable?.map((r) => ({
+        product_id: String(r.product_id),
+        catalog_title: r.catalog_title ?? null,
+      })) ?? null
+    );
   } catch {
-    return [];
+    return null;
   }
 }
 

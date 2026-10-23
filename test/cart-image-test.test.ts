@@ -9,6 +9,7 @@ import {
   IMAGE_TEST_MIN_PER_ARM,
 } from "@/lib/cart-image-test";
 import { runCartSequence } from "@/lib/cart-sequence";
+import { productPhotoName } from "@/lib/product-photos";
 import type { StoreCreds } from "@/lib/ingest";
 
 describe("el sorteo", () => {
@@ -85,11 +86,28 @@ function gidFor(variant: "imagen" | "control", start: number): string {
   }
 }
 
-function harness(opts: { imageSendFails?: boolean } = {}) {
+const SERUM_URL = "https://cdn.shopify.com/s/files/1/x/files/serum.webp?v=1";
+/** La fila de `stores` de Kenku o Aurela: token de Shopify y WooCommerce conectado. */
+const PASA_A_WOO = { shopify_token_enc: "enc:token", platform: "shopify", woo_site_url: "https://kenku.pe" };
+
+function harness(
+  opts: {
+    imageSendFails?: boolean;
+    /** El día de la corrida (`AAAA-MM-DD`); el carrito se armó ese día a las 10:00 UTC. */
+    day?: string;
+    /** Los archivos guardados en el bucket de fotos de producto (MOM §39). */
+    stored?: string[];
+    /** Storage no contesta el listado. */
+    storageDown?: boolean;
+    /** La fila de la tienda (`shopifyGoneForStore`). Por defecto, Kenku. */
+    store?: Record<string, unknown>;
+  } = {},
+) {
   const imagenGid = gidFor("imagen", 1000);
   const controlGid = gidFor("control", 2000);
   const sinFotoGid = gidFor("imagen", 3000);
-  const created = "2026-10-07T10:00:00Z";
+  const day = opts.day ?? "2026-10-07";
+  const created = `${day}T10:00:00Z`;
   const lead = (id: string, gid: string) => ({
     id, phone: `5190000000${id.slice(-1)}`, name: "Ana", category: "open", has_order: false,
     draft_order_gid: gid, draft_order_status: "open", last_inbound_at: null, cart_seq_touches: 0,
@@ -103,14 +121,25 @@ function harness(opts: { imageSendFails?: boolean } = {}) {
     { draft_order_gid: sinFotoGid, created_at: created, line_items: [{ title: "Producto sin foto", quantity: 1 }], total_amount: 89, currency: "PEN" },
   ];
   const inserts: { table: string; row: Record<string, unknown> }[] = [];
+  const listed: string[] = [];
   const admin = {
+    storage: {
+      from: () => ({
+        list: async (prefix: string, o: { offset: number }) => {
+          listed.push(prefix);
+          if (opts.storageDown) return { data: null, error: { message: "storage caído" } };
+          return { data: o.offset ? [] : (opts.stored ?? []).map((name) => ({ name, id: name })), error: null };
+        },
+      }),
+    },
     from(table: string) {
       const q: Record<string, unknown> = {};
       for (const m of ["select", "eq", "in", "not", "order", "limit", "update"]) q[m] = () => q;
       q.insert = (row: Record<string, unknown>) => { inserts.push({ table, row }); return q; };
+      q.maybeSingle = async () => ({ data: table === "stores" ? (opts.store ?? PASA_A_WOO) : null, error: null });
       const data = table === "leads" ? leads
         : table === "draft_orders" ? drafts
-        : table === "shopify_product_images" ? [{ product_id: "111", catalog_title: "Sérum Uñas" }]
+        : table === "shopify_product_images" ? [{ product_id: "111", catalog_title: "Sérum Uñas", image_url: SERUM_URL }]
         : null;
       q.then = (resolve: (r: unknown) => unknown) => Promise.resolve({ data, error: null }).then(resolve);
       return q;
@@ -129,8 +158,8 @@ function harness(opts: { imageSendFails?: boolean } = {}) {
     cart_seq_template_2_name: "carrito_abandonado_2", cart_seq_template_2_language: "es",
     cart_seq_image_test_enabled: true, cart_seq_image_template_1_name: "carrito_abandonado_1_img", cart_seq_image_template_1_language: "es",
   } as unknown as StoreCreds;
-  const run = () => runCartSequence(admin as never, "store-1", creds, sendTemplate as never, "2026-10-07T15:00:00Z", "https://kapso.example");
-  return { run, sends, inserts, imagenGid, controlGid, sinFotoGid };
+  const run = () => runCartSequence(admin as never, "store-1", creds, sendTemplate as never, `${day}T15:00:00Z`, "https://kapso.example");
+  return { run, sends, inserts, listed, imagenGid, controlGid, sinFotoGid };
 }
 
 describe("runCartSequence con la prueba de imagen", () => {
@@ -170,5 +199,58 @@ describe("runCartSequence con la prueba de imagen", () => {
       ["carrito_abandonado_1_img", "imagen", false],
       ["carrito_abandonado_1", null, true],
     ]);
+  });
+});
+
+describe("runCartSequence desde el cierre de Shopify (MOM §39)", () => {
+  // Shopify cierra Kenku y Aurela el 28-10-2026 00:00 UTC y su CDN deja de
+  // servir las fotos: desde entonces solo cuenta la que tiene copia guardada.
+  const conCopia = () => [productPhotoName("111", SERUM_URL)];
+
+  it("antes del cierre, la foto del espejo entra como siempre, sin mirar Storage", async () => {
+    const h = harness({ day: "2026-10-27" });
+    expect(await h.run()).toMatchObject({ withImage: 1 });
+    expect(h.listed).toEqual([]);
+  });
+
+  it("una tienda cliente sigue en Shopify: desde el cierre, la foto entra como siempre, sin mirar Storage", async () => {
+    const h = harness({ day: "2026-10-29", stored: [], store: { ...PASA_A_WOO, woo_site_url: null } });
+    expect(await h.run()).toMatchObject({ withImage: 1 });
+    expect(h.listed).toEqual([]);
+  });
+
+  it("sin token de Shopify (cerró antes y se vació), solo con copia aunque no sea el 28-10", async () => {
+    const h = harness({ day: "2026-10-27", stored: [], store: { ...PASA_A_WOO, shopify_token_enc: null } });
+    expect((await h.run()).withImage ?? 0).toBe(0);
+    expect(h.listed).toEqual(["store-1"]);
+  });
+
+  it("si Storage no contesta, ninguna foto: el carrito queda fuera de la prueba y sale el de siempre", async () => {
+    const h = harness({ day: "2026-10-29", storageDown: true });
+    const report = await h.run();
+    expect(report).toMatchObject({ sent: 3, failed: 0 });
+    expect(report.withImage ?? 0).toBe(0);
+    expect(h.sends.every((s) => s.templateName === "carrito_abandonado_1")).toBe(true);
+  });
+
+  it("con su copia guardada, el carrito sigue en la prueba con su foto", async () => {
+    const h = harness({ day: "2026-10-29", stored: conCopia() });
+    expect(await h.run()).toMatchObject({ sent: 3, withImage: 1 });
+    // La página con los nombres y la vacía.
+    expect(h.listed).toEqual(["store-1", "store-1"]);
+    expect(h.sends.find((s) => s.to === "51900000001")).toMatchObject({
+      templateName: "carrito_abandonado_1_img",
+      headerImage: { link: "https://kapso.example/api/wa-image/store-1/111.jpg" },
+    });
+  });
+
+  it("sin copia, el carrito queda fuera de la prueba ANTES del sorteo: la de siempre, sin foto", async () => {
+    const h = harness({ day: "2026-10-29", stored: [] });
+    const report = await h.run();
+    expect(report).toMatchObject({ sent: 3, failed: 0 });
+    expect(report.withImage ?? 0).toBe(0);
+    expect(h.sends.every((s) => s.templateName === "carrito_abandonado_1" && !("headerImage" in s))).toBe(true);
+    const variants = h.inserts.filter((i) => i.table === "cart_seq_sends").map((i) => i.row.variant);
+    expect(variants).toEqual([null, null, null]);
   });
 });

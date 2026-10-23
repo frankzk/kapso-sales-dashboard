@@ -113,7 +113,11 @@ sube el cierre: hay que probarlo.
 - Meta solo acepta **JPG o PNG** en la cabecera y el 45 % de las fotos de
   Shopify son WebP: la foto va por `/api/wa-image/<tienda>/<producto>.jpg`, que
   la convierte a JPG de 800 px. La ruta recibe tienda y producto, no una URL:
-  solo entrega fotos del catálogo de `cdn.shopify.com`.
+  solo entrega fotos del catálogo de `cdn.shopify.com`. Desde el 23-10-2026 la
+  sirve primero de su copia guardada en Kapta (cron `/api/cron/product-photos`).
+  En una tienda que Shopify ya no sirve (sin token, o desde el cierre del
+  28-10-2026 la que pasa a WooCommerce: Kenku y Aurela), un carrito cuya foto no
+  tiene copia queda fuera de la prueba, antes del sorteo (MOM §39).
 - Si la plantilla con imagen falla (nombre mal escrito, no aprobada), el cliente
   recibe la de siempre en la misma corrida y ese carrito queda fuera de la
   prueba; el intento fallido queda en `cart_seq_sends`.

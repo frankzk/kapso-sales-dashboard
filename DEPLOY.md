@@ -179,6 +179,11 @@ roles and the `auth` schema, so it just works.
    - `/api/cron/invoices` — cada 10 min (a los :06, :16, …). Emite o simula las
      boletas por RUC (MOM §35). No hace nada mientras todos los RUC estén
      «Apagado»; ver la sección «Comprobantes SimpleFact por RUC».
+   - `/api/cron/product-photos` — cada hora, en el minuto 48. Copia al bucket
+     privado `product-photos` (se crea solo) las fotos de producto que
+     `/api/wa-image` pone en la cabecera de las plantillas de WhatsApp, para
+     cuando el CDN de Shopify ya no las sirva (MOM §39). `?dry=1` solo cuenta.
+     **Sin migración.** Ver la entrada del 23-10-2026.
 
 ### Pases a mano (bajo `/api/cron`, pero SIN horario)
 
@@ -4283,6 +4288,130 @@ drop table if exists invoice_snapshot_attempts;
 drop table if exists order_invoice_snapshots;
 commit;
 ```
+
+### 23-10-2026 · Las fotos de producto de WhatsApp, copiadas antes del cierre de Shopify (sin migración, MOM §39)
+
+La prueba de carritos (0233), el recordatorio de recojo (0242) y el de
+reposición (MOM §34) ponen la foto del producto en la cabecera de la plantilla
+por `/api/wa-image`, que la bajaba **en vivo** del CDN de Shopify en cada envío.
+Shopify cierra Kenku Perú y Aurela el 28-10-2026 00:00 UTC: cuando su CDN deje
+de servir esas fotos, la ruta daría 502 y Meta rechazaría la plantilla en vez
+de caer a la imagen de respaldo. Este cambio:
+
+- trae el cron `/api/cron/product-photos` (`48 * * * *`, 30 en `vercel.json`),
+  que copia cada foto del espejo `shopify_product_images` al bucket **privado**
+  `product-photos`, ya convertida al mismo JPG que sirve la ruta, en
+  `<tienda>/<producto>-<huella de la URL>.jpg`. Lo ya copiado no se vuelve a
+  bajar; si la foto cambia en Shopify (otra URL) se copia de nuevo en otra
+  ruta. Nunca pisa ni borra una copia. Hasta 90 s por pasada;
+- hace que `/api/wa-image` sirva primero la copia, y solo sin ella la baje en
+  vivo, como hasta hoy (mismas cabeceras);
+- en una tienda que **Shopify ya no sirve** —sin token de Shopify, a cualquier
+  hora; o, **desde el cierre** (28-10 00:00 UTC), la que tiene WooCommerce
+  conectado (`platform = 'woocommerce'` o `woo_site_url`): Kenku y Aurela—, una
+  foto sin copia guardada cuenta como «sin foto»: el recordatorio de recojo
+  sale con la imagen de respaldo, el de reposición no sale, el carrito queda
+  fuera de la prueba de imagen y la tarjeta del siguiente lead va sin foto — lo
+  mismo que ya pasaba con un producto sin foto. Las **tiendas cliente siguen en
+  Shopify** y no cambian. Si Storage no contesta, el recordatorio de recojo sin
+  respaldo se reintenta en vez de quedar omitido;
+- y hace que el espejo diario (`/api/cron/shopify-product-images`), en Kenku y
+  Aurela desde el cierre, no cambie una foto que ya estaba aunque Shopify
+  conteste sin ella o con otra URL (`conservados` en su reporte). Un error de
+  Shopify o una tienda sin token ya no escribían nada; ahora hay pruebas que lo
+  fijan.
+
+**Kenku y Aurela no cambian mientras Shopify viva**: antes del cierre los envíos
+eligen foto como siempre y no miran Storage (solo leen la fila de la tienda);
+la ruta sirve la copia (los mismos bytes, con 3 s de tope para leerla) o la foto
+en vivo. **Sin migración y sin variables de entorno nuevas.**
+El bucket lo crea la primera pasada; con unas 330-390 fotos de ~100 KB, ocupa
+unos 30-40 MB.
+
+1. **El código**, por el camino de siempre (rama de integración → `main` por
+   fast-forward). Nada que aplicar en la base. El cron solo copia en
+   producción; en un preview, solo `?dry=1`.
+
+2. **Antes de la primera pasada (opcional), lo que hay que copiar** (solo
+   lectura, sin datos de clientas):
+
+   ```bash
+   curl -sS -H "Authorization: Bearer $CRON_SECRET" "https://<dominio>/api/cron/product-photos?dry=1"
+   ```
+
+   Antes de la primera pasada dice `"sinBucket": true` y `pendientes` igual a
+   `filas` (unas 330-390 entre las tiendas). No baja, no sube ni crea nada.
+
+3. **Cómo va.** Cada pasada deja una línea `[product-photos] {…}` en los logs de
+   Vercel con `filas`, `guardadas`, `copiadas`, `fallidas`, `pendientes` y
+   `motivos` por tienda. Y en la base (solo lectura):
+
+   ```sql
+   -- a) Fotos que faltan copiar, por tienda: tiene que dar 0 filas antes del
+   --    27-10 a las 19:00 de Lima. La ruta de la copia es la de
+   --    lib/product-photos.ts (`productPhotoPath`).
+   select s.name, count(*) as faltan
+     from shopify_product_images p
+     join stores s on s.id = p.store_id
+    where p.image_url like 'https://cdn.shopify.com/%'
+      and p.product_id ~ '^[0-9]{1,20}$'
+      and not exists (
+        select 1 from storage.objects o
+         where o.bucket_id = 'product-photos'
+           and o.name = p.store_id::text || '/' || p.product_id || '-'
+                        || left(encode(sha256(convert_to(p.image_url, 'UTF8')), 'hex'), 16) || '.jpg')
+    group by 1 order by 1;
+   -- b) Copias guardadas por tienda (incluye versiones viejas de fotos cambiadas).
+   select s.name, count(*) as copias, max(o.created_at) as ultima
+     from storage.objects o
+     join stores s on s.id::text = split_part(o.name, '/', 1)
+    where o.bucket_id = 'product-photos'
+    group by 1 order by 1;
+   ```
+
+   Si (a) no baja a 0: `motivos` dice por qué. `http_404` es una foto que el CDN
+   ya no tiene — casi siempre una foto reemplazada en Shopify que el espejo
+   diario todavía no vio: correr el espejo con `?force=1`
+   (`/api/cron/shopify-product-images?force=1`) y luego esta pasada a mano
+   (`/api/cron/product-photos`, mismo `Authorization`). Un `502` del cron es de
+   Kapta (la base, el listado del bucket o una subida que Storage rechazó), no
+   de Shopify.
+
+4. **El corte del 27-10.** Para que la regla vea cerradas a Kenku y Aurela desde
+   las 00:00 UTC del 28-10, cada una tiene que tener **WooCommerce conectado**
+   (`woo_site_url` guardado o `platform = 'woocommerce'`) **o el token de
+   Shopify vaciado**; cualquiera de las dos basta, y sin token la regla aplica
+   a cualquier hora (si Shopify cerrara antes, vaciar el token es la llave).
+   Comprobarlo (solo lectura; dice si hay token, no lo muestra):
+
+   ```sql
+   select name, platform, woo_site_url is not null as woo_conectado,
+          coalesce(shopify_token_enc, '') <> '' as con_token
+     from stores
+    where status = 'active'
+    order by name;
+   ```
+
+   Una tienda con `con_token = true` y `woo_conectado = false` sigue «en
+   Shopify» para las fotos: así deben quedar las tiendas cliente, no Kenku ni
+   Aurela.
+
+5. **Desde el 28-10.** Nada que hacer: desde las 00:00 UTC los envíos de Kenku
+   y Aurela solo usan fotos con copia. Para ver que los recordatorios de recojo
+   siguen saliendo con la foto del producto (solo lectura):
+
+   ```sql
+   select count(*) filter (where header_image_url like '%/api/wa-image/%') as con_foto_del_producto,
+          count(*) filter (where header_image_url not like '%/api/wa-image/%') as con_respaldo
+     from shalom_transit_notifications
+    where status = 'sent' and kind like 'recordatorio%' and sent_at >= '2026-10-28';
+   ```
+
+**Marcha atrás.** Revertir el código **antes del cierre** basta: `/api/wa-image`
+vuelve a bajar todo en vivo, los envíos dejan de mirar Storage y la fila de la
+tienda, y el cron desaparece. Después del cierre, revertir devuelve el problema (la ruta daría 502
+por cada foto de Kenku y Aurela). El bucket puede quedarse; **no borrarlo
+después del 28-10**: lo que guarda ya no se puede volver a bajar de Shopify.
 
 ### 25-10-2026 · Entrada de pedidos de WooCommerce: webhook, sincronización y Ajustes (MOM §38.11)
 

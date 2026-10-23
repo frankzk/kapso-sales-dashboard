@@ -87,7 +87,9 @@ describe("vercel.json", () => {
     //     (0271, MOM §36.3, 23-10-2026).
     // 29: la foto de los pedidos de Shopify para sus boletas, antes del cierre
     //     de Shopify de Kenku y Aurela (0275, MOM §35.10, 23-10-2026).
-    expect(crons).toHaveLength(29);
+    // 30: la copia de las fotos de producto de WhatsApp a Storage, antes del
+    //     mismo cierre (MOM §39, 23-10-2026).
+    expect(crons).toHaveLength(30);
     for (const c of crons) {
       expect(c.path.startsWith("/api/cron/")).toBe(true);
       expect(c.schedule.trim().split(/\s+/)).toHaveLength(5);

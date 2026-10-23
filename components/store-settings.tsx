@@ -348,7 +348,8 @@ export interface StoreSettingsData {
     catalog: RestockCatalogRow[];
     products: RestockProductRow[];
     results: RestockResultRow[];
-    /** Productos con foto en Shopify (`shopify_product_images`). */
+    /** Productos con foto en Shopify (`shopify_product_images`); si Shopify
+     *  ya no sirve las fotos de la tienda, con su copia guardada (MOM §39). */
     withImage: string[];
   };
   replyTemplates: Array<{

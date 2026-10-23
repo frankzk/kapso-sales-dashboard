@@ -22,6 +22,7 @@ import {
   type RestockHistory,
 } from "@/lib/restock-reminder";
 import { handoffStatus } from "@/lib/leads";
+import { productPhotoName } from "@/lib/product-photos";
 import {
   RESTOCK_DEFAULT_DAYS,
   restockProductList,
@@ -138,12 +139,27 @@ function fakeAdmin(opts: {
   tables?: Record<string, any[]>;
   maybe?: Record<string, any>;
   insertError?: Record<string, any>;
+  /** Los archivos del bucket de fotos de producto (MOM §39). */
+  stored?: string[];
+  /** Storage no contesta el listado. */
+  storageDown?: boolean;
 } = {}) {
   const writes: { table: string; op: string; row: any; filters?: any[] }[] = [];
   const rpcCalls: { fn: string; args: any }[] = [];
+  const listed: string[] = [];
   const admin: any = {
     writes,
     rpcCalls,
+    listed,
+    storage: {
+      from: () => ({
+        list: async (prefix: string, o: { offset: number }) => {
+          listed.push(prefix);
+          if (opts.storageDown) return { data: null, error: { message: "storage caído" } };
+          return { data: o.offset ? [] : (opts.stored ?? []).map((name) => ({ name, id: name })), error: null };
+        },
+      }),
+    },
     rpc: async (fn: string, args: any) => {
       rpcCalls.push({ fn, args });
       return { data: fn === "restock_candidates" ? (opts.candidates ?? []) : null, error: null };
@@ -230,6 +246,77 @@ describe("runRestockReminders", () => {
     const rep = await runRestockReminders(admin, "store", CREDS, send, NOW);
     expect(rep).toEqual({ sent: 0, control: 0, failed: 0, skipped: 2 });
     expect(send).not.toHaveBeenCalled();
+  });
+
+  describe("desde el cierre de Shopify (MOM §39)", () => {
+    // 15:00 UTC = 10:00 en Lima, el día siguiente al cierre del 28-10-2026.
+    const DESPUES = "2026-10-29T15:00:00Z";
+    const URL_111 = "https://cdn.shopify.com/s/files/1/x/files/aceite.webp?v=3";
+    const espejo = { shopify_product_images: [{ product_id: "111", image_url: URL_111 }] };
+    // Kenku: token de Shopify y WooCommerce conectado (MOM §38). Y una cliente.
+    const KENKU = { stores: { shopify_token_enc: "enc:token", platform: "shopify", woo_site_url: "https://kenku.pe" } };
+    const CLIENTE = { stores: { shopify_token_enc: "enc:token", platform: "shopify", woo_site_url: null } };
+
+    it("con la copia guardada de la foto, sale como siempre", async () => {
+      const admin = fakeAdmin({
+        candidates: [cand({ order_id: "o1" })],
+        tables: espejo,
+        maybe: KENKU,
+        stored: [productPhotoName("111", URL_111)],
+      });
+      const send = vi.fn().mockResolvedValue({ ok: true, id: "w" });
+      const rep = await runRestockReminders(admin, "store", CREDS, send, DESPUES, "https://kapta.app");
+      expect(rep).toMatchObject({ sent: 1, skipped: 0 });
+      expect(send.mock.calls[0]![1].headerImage).toEqual({ link: "https://kapta.app/api/wa-image/store/111.jpg" });
+      expect(admin.listed[0]).toBe("store");
+    });
+
+    it("sin copia guardada, el producto cuenta como sin foto: no sale, ni al control", async () => {
+      const admin = fakeAdmin({
+        candidates: [cand({ order_id: "o1" }), cand({ order_id: "o2", customer_phone: CONTROL })],
+        tables: espejo,
+        maybe: KENKU,
+        stored: [],
+      });
+      const send = vi.fn();
+      const rep = await runRestockReminders(admin, "store", CREDS, send, DESPUES);
+      expect(rep).toEqual({ sent: 0, control: 0, failed: 0, skipped: 2 });
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it("la copia de una foto vieja no cuenta: la URL cambió y la nueva no está copiada", async () => {
+      const admin = fakeAdmin({
+        candidates: [cand({ order_id: "o1" })],
+        tables: espejo,
+        maybe: KENKU,
+        stored: [productPhotoName("111", URL_111.replace("v=3", "v=2"))],
+      });
+      const send = vi.fn();
+      expect((await runRestockReminders(admin, "store", CREDS, send, DESPUES)).skipped).toBe(1);
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it("antes del cierre no mira Storage", async () => {
+      const admin = fakeAdmin({ candidates: [cand({ order_id: "o1" })], tables: espejo, maybe: KENKU, stored: [] });
+      const send = vi.fn().mockResolvedValue({ ok: true, id: "w" });
+      expect((await runRestockReminders(admin, "store", CREDS, send, "2026-10-27T15:00:00Z")).sent).toBe(1);
+      expect(admin.listed).toEqual([]);
+    });
+
+    it("una tienda cliente sigue en Shopify: desde el cierre sale con su foto, sin mirar Storage", async () => {
+      const admin = fakeAdmin({ candidates: [cand({ order_id: "o1" })], tables: espejo, maybe: CLIENTE, stored: [] });
+      const send = vi.fn().mockResolvedValue({ ok: true, id: "w" });
+      expect((await runRestockReminders(admin, "store", CREDS, send, DESPUES)).sent).toBe(1);
+      expect(admin.listed).toEqual([]);
+    });
+
+    it("si Storage no contesta, no es «sin foto»: la pasada de la tienda se corta, como con la base", async () => {
+      const admin = fakeAdmin({ candidates: [cand({ order_id: "o1" })], tables: espejo, maybe: KENKU, storageDown: true });
+      const send = vi.fn();
+      await expect(runRestockReminders(admin, "store", CREDS, send, DESPUES)).rejects.toThrow(/restock images/);
+      expect(send).not.toHaveBeenCalled();
+      expect(admin.writes).toEqual([]);
+    });
   });
 
   it("dos pedidos de la misma clienta: un solo recordatorio", async () => {

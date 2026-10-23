@@ -45,6 +45,7 @@ import {
 import { firstName, recoveryWithinHours } from "@/lib/return-recovery";
 import { THANKS_BATCH_CAP, thanksPaceBudget } from "@/lib/delivered-thanks";
 import { waImageUrl } from "@/lib/cart-image-test";
+import { productPhotosThatLoad } from "@/lib/product-photos";
 import { env } from "@/lib/env";
 
 /** Hasta cuántos días después de vencer todavía se manda. Pasado eso, un
@@ -91,7 +92,9 @@ export interface RestockHistory {
   recentPhones: Set<string>;
   /** Teléfonos que pidieron no ser contactados. */
   optedOut: Set<string>;
-  /** Productos con foto en el espejo del catálogo (`shopify_product_images`). */
+  /** Productos con foto en el espejo del catálogo (`shopify_product_images`);
+   *  si Shopify ya no sirve las fotos de la tienda, con su copia guardada
+   *  (MOM §39). */
   productsWithImage: Set<string>;
 }
 
@@ -259,12 +262,23 @@ async function loadHistory(
   if (productKeys.length) {
     const { data, error } = await admin
       .from("shopify_product_images")
-      .select("product_id")
+      .select("product_id,image_url")
       .eq("store_id", storeId)
       .in("product_id", productKeys)
       .not("image_url", "is", null);
     if (error) throw new Error(`restock images: ${error.message}`);
-    for (const r of (data ?? []) as { product_id: string }[]) history.productsWithImage.add(String(r.product_id));
+    // Si Shopify ya no sirve las fotos de la tienda, solo cuenta la foto con su
+    // copia guardada (MOM §39): sin ella, /api/wa-image no tendría qué darle a
+    // Meta. Storage sin contestar no es «sin foto»: la pasada de la tienda se
+    // corta, como con la base, y la próxima vuelve a mirar.
+    const usable = await productPhotosThatLoad(
+      admin,
+      storeId,
+      (data ?? []) as { product_id: string; image_url?: string | null }[],
+      nowMs,
+    );
+    if (!usable) throw new Error("restock images: no se pudo leer el bucket de fotos de producto");
+    for (const r of usable) history.productsWithImage.add(String(r.product_id));
   }
   return history;
 }

@@ -116,6 +116,10 @@
     {
       "path": "/api/cron/invoice-snapshots",
       "schedule": "1-59/2 * * * *"
+    },
+    {
+      "path": "/api/cron/product-photos",
+      "schedule": "48 * * * *"
     }
   ]
 }

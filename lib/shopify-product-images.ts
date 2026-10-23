@@ -1,4 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { isAfterShopifyShutdown } from "./invoicing/shopify-cutoff";
+import { shopifyGoneForStore } from "./product-photos";
 import { shopifyGraphQL, type ShopifyClientOpts } from "./shopify";
 
 /**
@@ -20,6 +22,18 @@ import { shopifyGraphQL, type ShopifyClientOpts } from "./shopify";
  * de esos no hay ningún pedido que mostrar. La lista sale de
  * `orders.line_items`, que es exactamente el conjunto que la pantalla puede
  * llegar a pedir.
+ *
+ * NUNCA BORRA NI VACÍA UNA FILA PORQUE SHOPIFY FALLE (MOM §39). Las fotos de
+ * este espejo son las que /api/wa-image pone en la cabecera de las plantillas
+ * de WhatsApp, y su copia en Storage cuelga de `image_url`: vaciarla dejaría
+ * sin foto a un producto que la tiene guardada. Un lote que Shopify no contesta
+ * (error HTTP, como el 402/404 de una tienda cerrada, o de GraphQL) no escribe
+ * nada; un producto que no vuelve no se toca; una tienda sin token ni se
+ * pregunta (la ruta la salta). Y en una tienda que Shopify cierra, desde el
+ * cierre (28-10-2026; `shopifyGoneForStore`: la que pasa a WooCommerce), una
+ * fila con foto no cambia de foto: ni a «sin foto» ni a otra URL, porque la
+ * copia guardada es la de la URL que estaba y una nueva ya no se puede copiar.
+ * Las tiendas cliente, que siguen en Shopify, se espejan como siempre.
  */
 
 /** Ventana de pedidos de la que se saca la lista de productos a espejar. */
@@ -48,6 +62,12 @@ export interface ProductImageSyncReport {
   guardados: number;
   /** Los que Shopify no devolvió: producto borrado del catálogo. */
   no_encontrados: number;
+  /**
+   * Tienda que Shopify cierra, desde el cierre: los que volvieron sin foto o
+   * con otra y conservan la que tenían (o que no se escribieron porque no se
+   * pudo comprobar qué había).
+   */
+  conservados: number;
   error?: string;
 }
 
@@ -131,13 +151,17 @@ export async function syncShopifyProductImages(
   storeId: string,
   shopify: ShopifyClientOpts,
   admin: SupabaseClient,
-  opts: { ttlDays?: number; windowDays?: number } = {},
+  opts: { ttlDays?: number; windowDays?: number; nowMs?: number } = {},
 ): Promise<ProductImageSyncReport> {
   const ttlDays = opts.ttlDays ?? IMAGE_TTL_DAYS;
+  const nowMs = opts.nowMs ?? Date.now();
   const citados = await citedProductIds(storeId, admin, opts.windowDays);
   if (!citados.length) {
-    return { ok: true, citados: 0, pedidos_a_shopify: 0, guardados: 0, no_encontrados: 0 };
+    return { ok: true, citados: 0, pedidos_a_shopify: 0, guardados: 0, no_encontrados: 0, conservados: 0 };
   }
+  // ¿Shopify ya cerró ESTA tienda? Antes del cierre, no: la ruta solo llama con
+  // token, y con token la tienda está viva (ni se pregunta a la base).
+  const frozen = isAfterShopifyShutdown(nowMs) && (await shopifyGoneForStore(admin, storeId, nowMs));
 
   // Lo ya espejado y todavía fresco no se vuelve a preguntar.
   const cutoff = new Date(Date.now() - ttlDays * 24 * 60 * 60 * 1000).toISOString();
@@ -155,6 +179,7 @@ export async function syncShopifyProductImages(
   const pendientes = citados.filter((id) => !frescos.has(id));
   let guardados = 0;
   let noEncontrados = 0;
+  let conservados = 0;
 
   for (const part of chunk(pendientes, BATCH)) {
     let nodes: unknown[] = [];
@@ -206,11 +231,40 @@ export async function syncShopifyProductImages(
       });
     }
 
-    if (filas.length) {
+    // Una tienda que Shopify cierra, desde el cierre (MOM §39): una fila con
+    // foto conserva la que tenía. Una tienda que se apaga puede contestar sin
+    // imágenes, o con otra URL (otro `?v=`), y la copia guardada en Storage es
+    // la de la URL que ya estaba: la nueva ya no se puede copiar, y el producto
+    // quedaría «sin foto» para siempre. Si no se puede comprobar qué había, no
+    // se escribe nada del lote. Antes del cierre, o en una tienda que sigue en
+    // Shopify, como siempre: quitar o cambiar la foto en Shopify la cambia aquí.
+    let aGuardar = filas;
+    if (frozen && filas.length) {
+      const { data, error } = await admin
+        .from("shopify_product_images")
+        .select("product_id,image_url")
+        .eq("store_id", storeId)
+        .in("product_id", filas.map((f) => f.product_id))
+        .not("image_url", "is", null);
+      if (error) {
+        aGuardar = [];
+      } else {
+        const antes = new Map(
+          ((data ?? []) as { product_id: unknown; image_url: string | null }[]).map((r) => [String(r.product_id), r.image_url]),
+        );
+        aGuardar = filas.filter((f) => {
+          const tenia = antes.get(f.product_id);
+          return !tenia || tenia === f.image_url;
+        });
+      }
+      conservados += filas.length - aGuardar.length;
+    }
+
+    if (aGuardar.length) {
       const { error } = await admin
         .from("shopify_product_images")
-        .upsert(filas, { onConflict: "store_id,product_id" });
-      if (!error) guardados += filas.length;
+        .upsert(aGuardar, { onConflict: "store_id,product_id" });
+      if (!error) guardados += aGuardar.length;
     }
   }
 
@@ -220,6 +274,7 @@ export async function syncShopifyProductImages(
     pedidos_a_shopify: pendientes.length,
     guardados,
     no_encontrados: noEncontrados,
+    conservados,
   };
 }
 

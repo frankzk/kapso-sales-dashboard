@@ -6987,11 +6987,14 @@ sin entrega). La simulación muestra qué saldría hoy sin enviar nada.
       que la prueba de carritos (0233): el espejo `shopify_product_images`,
       por `product_id` y, si no, por título contra `catalog_title`; en un
       pedido de varios productos, **el primero que tenga foto**. Va servida en
-      JPG por `/api/wa-image`, porque Meta no acepta WebP. Sin foto, la
+      JPG por `/api/wa-image`, porque Meta no acepta WebP; desde el cierre de
+      Shopify, solo la foto con su copia guardada en Kapta (§39). Sin foto, la
       **imagen de respaldo** de la tienda (Ajustes, una para los dos
       couriers, `https://`). **Sin ninguna de las dos no se manda** y la fila
       queda `skipped` con el motivo: Meta rechaza una plantilla de cabecera de
-      imagen sin imagen. La URL que viajó queda en la fila
+      imagen sin imagen. Un catálogo que **no se pudo leer** (la base, o
+      Storage: §39.5) no es «sin foto»: con respaldo sale con él; sin
+      respaldo la fila **se reintenta** (revisión del 23-10-2026). La URL que viajó queda en la fila
       (`header_image_url`). No lleva el ticket de Shalom en la cabecera —es
       una sola—, pero el ticket **sí sale al pulsar cualquier botón**, como
       con los otros avisos.
@@ -14185,7 +14188,9 @@ canal es WhatsApp: solo ~1 % de los pedidos trae correo.
   - La plantilla lleva **cabecera de imagen**, y cada envío pone la foto del
     producto en Shopify (`shopify_product_images`).
   - La foto se convierte a JPG en `/api/wa-image`, porque Meta no acepta el
-    WebP de Shopify.
+    WebP de Shopify. Desde el 23-10-2026 la ruta la sirve de la copia guardada
+    en Kapta, y desde el cierre de Shopify (28-10-2026), en Kenku y Aurela,
+    **una foto sin copia cuenta como «sin foto»** (§39).
   - **Un producto sin foto no recibe recordatorio**, ni la clienta ni el grupo
     de control. Ajustes lo avisa en la fila del producto.
 - **El número.** Kenku lo envía desde el **451** (`restock_phone_number_id`),
@@ -16134,3 +16139,213 @@ Implementación: `lib/shipment-order-capture.ts` (`orderPlatformOf`,
 `pushShippingAddressToShopify` con `platform`) y
 `updateShipmentDeliveryAddress` en `app/dashboard/envios/actions.ts`. Pruebas:
 `test/shipment-order-capture.test.ts` y `test/woocommerce-integration-mom.test.ts`.
+
+## 39. Fotos de producto de WhatsApp para cuando Shopify ya no responde (23-10-2026)
+
+Estado: implementado el 23-10-2026, **sin migración**, con su revisión del
+mismo día (la regla por tienda de 39.5, los topes de Storage, el espejo diario
+que no cambia de foto, 39.6). La copia la hace el cron
+`/api/cron/product-photos` (DEPLOY.md, entrada del 23-10-2026).
+
+### 39.1 Por qué
+
+Tres plantillas de WhatsApp llevan la foto del producto en la cabecera: la
+prueba de carritos (0233, `docs/carritos-secuencia-whatsapp.md`), el
+recordatorio de recojo (§12) y el recordatorio de reposición (§34). La tarjeta
+del siguiente lead la muestra también. Todas apuntan a
+`/api/wa-image/<tienda>/<producto>.jpg`, que bajaba la foto del CDN de Shopify
+**en cada envío** y la convertía a JPG.
+
+Shopify cierra Kenku Perú y Aurela el 28-10-2026 00:00 UTC
+(`SHOPIFY_SHUTDOWN_AT`, §35.10). Cuando su CDN deje de servir esos archivos, la
+ruta contestaría 502 y Meta rechazaría la plantilla, en vez de caer a la imagen
+de respaldo de la tienda. Los pedidos de WooCommerce (§38) casan con el mismo
+catálogo por el título, así que también dependen de esas fotos.
+
+### 39.2 La copia
+
+- **Dónde.** Bucket **privado** `product-photos`, como todos los del
+  repositorio salvo el de los adjuntos de WhatsApp. Nadie lo lee directo: la
+  foto sale por `/api/wa-image`, que sigue siendo la única puerta.
+- **Qué.** El **mismo JPG** que la ruta sirve en vivo (`toWhatsappJpeg`:
+  girada según su EXIF, 800 px de ancho como mucho sin agrandar, fondo blanco
+  para los PNG transparentes, JPG calidad 82 con mozjpeg). Solo fotos del CDN
+  de Shopify (`https://cdn.shopify.com/`) de un id de producto numérico: lo
+  mismo que la ruta acepta servir.
+- **La ruta lleva la huella de la URL:** `<tienda>/<producto>-<huella>.jpg`,
+  con la huella = 16 caracteres del sha256 de `image_url`.
+  - Si la foto cambia en Shopify, cambia la URL, cambia la ruta y **la copia
+    nueva se hace sola**. La vieja nunca se sirve por la nueva: la ruta pide la
+    copia de la URL **actual**.
+  - Lo que hay en una ruta es siempre la copia de esa URL: no hay un momento en
+    que el archivo sea uno y sus metadatos digan otro.
+  - Saber qué está copiado es **un listado** de la carpeta de la tienda, sin
+    leer metadatos objeto por objeto.
+- **Nada se pisa ni se borra.** La subida va sin `upsert`: una copia buena no
+  se reemplaza nunca (después del cierre no habría con qué reponerla). Una
+  versión vieja queda en el bucket (unos KB; pasa poco).
+
+### 39.3 El cron
+
+- **Cada hora, en el minuto 48** (`48 * * * *`), con `CRON_SECRET`. Lee las
+  filas del espejo `shopify_product_images` (0164) con foto, lista la carpeta
+  de cada tienda y copia **solo lo que falta**: una pasada sobre lo ya copiado
+  es la lectura del espejo, asegurar el bucket (crearlo, que falla si ya está,
+  y forzarlo privado, como `backup` y `label-cache`) y el listado de cada
+  tienda, sin ninguna descarga ni subida.
+- **El listado lee hasta una página vacía**, no hasta la primera corta: si
+  Storage devolviera menos por página de lo pedido, cortar ahí daría por
+  faltantes copias que están. Una carpeta de más de 50 páginas cuenta como
+  «no se pudo leer».
+- **Acotado.** No empieza una copia pasados **90 s**
+  (`PRODUCT_PHOTO_COPY_BUDGET_MS`), cuatro a la vez, cada descarga con 10 s
+  de tope y cada subida con 10 s (`PRODUCT_PHOTO_UPLOAD_TIMEOUT_MS`: storage-js
+  no deja cortarla, así que se deja de esperar y cuenta como `subida`); la ruta
+  tiene 120 s, más que 90 + 10 + 10, así que la línea de log siempre sale. Cada
+  página del listado tiene 5 s de tope, crear o forzar el bucket otros 5. Una
+  foto que el CDN declara de más de 8 MB ni se baja. Lo que no cupo sigue la
+  hora siguiente. Con
+  unas 330-390 fotos, la primera pasada en producción copia todo o casi; las
+  siguientes solo copian las fotos nuevas que trae el espejo diario (09:30
+  UTC).
+- **Todas las tiendas, también después del cierre**: a las que siguen en
+  Shopify la copia no les hace falta para elegir foto (39.5), pero la ruta la
+  sirve primero y queda lista si la tienda deja Shopify o se vacía su token; y
+  si el CDN de Kenku o Aurela todavía responde un rato, lo que faltaba se copia.
+- **Rojo (502) solo por Kapta:** si no se puede leer el espejo, la carpeta de
+  una tienda, o Storage rechaza una subida. Una foto que el CDN no da (`http_404`,
+  `red`, …) se cuenta en `fallidas` y `motivos` por tienda y se reintenta a la
+  hora siguiente, sin rojo.
+- **El log** es una línea `[product-photos] {…}` con conteos por tienda
+  (`filas`, `guardadas`, `copiadas`, `fallidas`, `pendientes`, `motivos`) y si
+  se acabó el tiempo (`agotado`): ni URLs ni títulos de producto.
+- **`?dry=1`** solo cuenta (`filas`, `guardadas`, `pendientes`), sin crear el
+  bucket, sin bajar ni subir nada; antes de la primera pasada dice
+  `sinBucket: true`. **`?storeId=<uuid>`**, solo esa tienda. Fuera de
+  producción solo corre con `?dry=1`.
+
+### 39.4 `/api/wa-image`
+
+Primero la copia guardada de la URL actual de la fila, con **3 s de tope**
+(`PRODUCT_PHOTO_DOWNLOAD_TIMEOUT_MS`): antes de la copia la ruta no tocaba
+Storage, y un Storage lento no puede comerse el tiempo en que Meta espera la
+foto. Sin copia (o con Storage sin responder a tiempo), la baja en vivo del CDN,
+como siempre. El id de la tienda se lee en minúsculas, como lo escribe la base:
+la carpeta distingue mayúsculas. Las mismas
+cabeceras en los dos casos (`image/jpeg`, su largo, `public, max-age=86400,
+s-maxage=604800`). Sigue sin ser un proxy abierto: recibe tienda y producto,
+y solo sirve filas del espejo con foto del CDN de Shopify.
+
+### 39.5 Quién elige foto, antes y después del cierre
+
+**Se decide por tienda** (`shopifyGoneForStore`, revisión del 23-10-2026), no
+por la fecha sola: las tiendas cliente siguen en Shopify (§35.10) y su CDN
+sigue sirviendo. Shopify **ya no sirve** las fotos de una tienda:
+
+- **sin token de Shopify, a cualquier hora**. Es la llave de la operación de
+  §35.10: si Shopify cerrara antes del 28-10, se vacía el token de la tienda y
+  desde ese momento solo valen las copias;
+- **desde el cierre** (28-10-2026 00:00 UTC, `isAfterShopifyShutdown`, sin
+  margen), **la tienda que pasa a WooCommerce** (§38: `platform =
+  'woocommerce'`, o su sitio ya guardado en `woo_site_url`): Kenku Perú y
+  Aurela;
+- si la fila de la tienda no se puede leer: antes del cierre, sí sirve (lo de
+  siempre); desde el cierre, no (solo copias, que el cron hace para todas).
+  Antes de la 0274 no hay columnas de WooCommerce y cuenta solo el token.
+
+Lo que pasa en cada caso:
+
+- **Mientras Shopify sirve a la tienda, nada cambia**, y ni se mira Storage:
+  los envíos eligen foto como siempre y la ruta baja en vivo lo que todavía no
+  está copiado. Eso vale para Kenku y Aurela antes del cierre y para las
+  tiendas cliente siempre: quitar o cambiar una foto en su Shopify se ve como
+  siempre.
+- **Cuando ya no**, una foto **sin copia guardada para su URL actual cuenta
+  como «sin foto»** (`productPhotosThatLoad`), y cada uso hace exactamente lo
+  que ya hacía con un producto sin foto:
+  - el recordatorio de recojo (§12) sale con la **imagen de respaldo** de la
+    tienda; sin respaldo, no sale;
+  - el recordatorio de reposición (§34) **no sale**, ni a la clienta ni al
+    grupo de control; Ajustes muestra el producto sin foto;
+  - la prueba de carritos (0233) deja ese carrito **fuera de la prueba, antes
+    del sorteo**, y sale el mensaje 1 de siempre;
+  - la tarjeta del siguiente lead se queda **sin foto**.
+- **Si Storage no contesta** (o se pasa de su tope), no se sabe qué fotos
+  cargan: nunca se manda una cabecera que no va a cargar, pero tampoco se da
+  por «sin foto» lo que puede estar copiado:
+  - el recordatorio de recojo sale con el respaldo si la tienda lo tiene; sin
+    respaldo, **se reintenta** (como cualquier falla pasajera, hasta
+    `TRANSIT_MAX_ATTEMPTS`) en vez de quedar omitido. Lo mismo si la base no
+    deja leer el espejo;
+  - la pasada del recordatorio de reposición de esa tienda **se corta** con el
+    error en el reporte, como cuando la base no contesta; la próxima vuelve a
+    mirar;
+  - el carrito queda fuera de la prueba (mensaje 1 de siempre), la tarjeta y
+    Ajustes, sin foto.
+- Antes del cierre, el envío lee la fila de la tienda (una lectura por tienda
+  y pasada) y nada de Storage.
+
+### 39.6 El espejo diario no borra ni vacía
+
+`/api/cron/shopify-product-images` (lib/shopify-product-images.ts) **nunca
+borra una fila**:
+
+- un lote que Shopify no contesta —un error HTTP, como el 402, 404 o 423 de una
+  tienda cerrada, un 401 o un 5xx, o un error de GraphQL aunque traiga datos a
+  medias— no escribe nada;
+- un producto que no vuelve (borrado del catálogo) no se toca;
+- una tienda sin token ni se pregunta. El token de Kenku y Aurela se vacía en
+  cuanto Shopify deje de contestar (§35.10, DEPLOY.md): desde entonces el
+  espejo de esas tiendas queda como estaba.
+- **En Kenku y Aurela, desde el cierre** (la misma regla de 39.5), **una fila
+  con foto conserva la que tenía**: una respuesta sin foto no la vacía y **otra
+  URL tampoco la reemplaza** (una tienda que se apaga puede contestar con otro
+  `?v=`; la copia guardada es la de la URL que estaba y la nueva ya no se puede
+  bajar). La misma URL se vuelve a escribir. Lo que no se escribe se cuenta en
+  `conservados`; si no se puede comprobar qué había, no se escribe nada de ese
+  lote. Antes del cierre, y siempre en una tienda cliente, quitar o cambiar la
+  foto de un producto en Shopify la cambia en el espejo, como siempre.
+
+### 39.7 Lo que no cubre
+
+- Una foto que no llegó a copiarse antes de que el CDN se apague: ese producto
+  queda «sin foto» (39.5). Por eso se revisa antes del 27-10 que `pendientes`
+  sea 0 (DEPLOY.md).
+- Kenku o Aurela, desde el cierre, con el token puesto y **sin** WooCommerce
+  conectado: para la regla siguen en Shopify y una foto sin copia se sigue
+  eligiendo. El corte del 27-10 conecta WooCommerce o vacía el token
+  (DEPLOY.md); cualquiera de los dos basta.
+- Un producto que el espejo no tiene (ningún pedido de los últimos 180 días lo
+  cita): no tenía foto antes y no la tiene ahora.
+- Un producto de WooCommerce sin igual en el catálogo de Shopify (título
+  distinto, o nuevo): no hay espejo de WooCommerce todavía.
+- Las miniaturas del desglose de productos del Master y de Envíos
+  (`productImagesFor`) siguen apuntando a la URL del CDN: no pasan por
+  `/api/wa-image` ni por esta copia.
+
+### 39.8 Implementación
+
+- `lib/product-photos.ts`: el bucket (`PRODUCT_PHOTO_BUCKET`), la ruta
+  (`productPhotoPath`, `photoSourceTag`), qué se puede copiar
+  (`isCopyableProductPhoto`), la lectura (`storedPhotoNames`,
+  `readStoredPhoto`, con `PRODUCT_PHOTO_LIST_TIMEOUT_MS` y
+  `PRODUCT_PHOTO_DOWNLOAD_TIMEOUT_MS`) y la regla de 39.5
+  (`shopifyGoneForStore`, `productPhotosThatLoad`, con
+  `isAfterShopifyShutdown` de `lib/invoicing/shopify-cutoff.ts`).
+- `lib/product-photos-copy.ts`: la conversión (`toWhatsappJpeg`), la descarga
+  (`fetchProductPhotoJpeg`) y la pasada (`copyProductPhotos`, con
+  `PRODUCT_PHOTO_COPY_BUDGET_MS`, `PRODUCT_PHOTO_UPLOAD_TIMEOUT_MS` y
+  `PRODUCT_PHOTO_COPY_MAX_DURATION_S`).
+- `app/api/cron/product-photos/route.ts` (`maxDuration` 120, `CRON_SECRET`); en
+  `vercel.json`, `48 * * * *`.
+- `app/api/wa-image/[storeId]/[file]/route.ts`: primero la copia.
+- Los usos: `lib/cart-sequence.ts`, `lib/restock-reminder.ts`,
+  `lib/shalom/transit-notify.ts` (`loadStoreCatalog`), `loadNextLeadCart` en
+  `app/dashboard/leads/actions.ts` y Ajustes
+  (`app/dashboard/[storeId]/settings/page.tsx`).
+- `lib/shopify-product-images.ts`: la guarda de 39.6 (`conservados`), con
+  `shopifyGoneForStore`.
+- Pruebas: `test/product-photos.test.ts`, `test/product-photos-cron.test.ts`,
+  `test/wa-image-route.test.ts`, `test/shopify-product-images.test.ts`,
+  `test/cart-image-test.test.ts`, `test/restock-reminder.test.ts`,
+  `test/pickup-reminder.test.ts` y `test/lead-next-cart-photo.test.ts`.

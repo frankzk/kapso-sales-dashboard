@@ -35,6 +35,7 @@ import { StoreSettings, type StoreSettingsData } from "@/components/store-settin
 import type { InvoiceSettingsData } from "@/components/invoice-settings-section";
 import { listEscalation } from "./actions";
 import { listEscalationCandidates } from "@/app/dashboard/cobranza/actions";
+import { productPhotosThatLoad } from "@/lib/product-photos";
 
 export const dynamic = "force-dynamic";
 
@@ -408,8 +409,19 @@ export default async function StoreSettingsPage({
       p_since: new Date(now.getTime() - RESTOCK_RESULTS_DAYS * 86_400_000).toISOString(),
     }),
     // Qué productos tienen foto: sin foto no se envía (la plantilla la lleva).
-    admin.from("shopify_product_images").select("product_id").eq("store_id", storeId).not("image_url", "is", null),
+    admin.from("shopify_product_images").select("product_id,image_url").eq("store_id", storeId).not("image_url", "is", null),
   ]);
+  // Si Shopify ya no sirve las fotos de la tienda, la foto que cuenta es la de
+  // la copia guardada (MOM §39): la misma regla con la que el recordatorio
+  // decide si sale. Con Storage sin contestar, ninguna (el recordatorio
+  // tampoco sale en esa pasada).
+  const restockWithImage =
+    (await productPhotosThatLoad(
+      admin,
+      storeId,
+      (restockImages.data as { product_id: string; image_url?: string | null }[] | null) ?? [],
+      now.getTime(),
+    )) ?? [];
 
   const data: StoreSettingsData = {
     store: {
@@ -665,7 +677,7 @@ export default async function StoreSettingsPage({
       catalog: (restockCatalog.data as StoreSettingsData["restock"]["catalog"] | null) ?? [],
       products: (restockProducts.data as StoreSettingsData["restock"]["products"] | null) ?? [],
       results: (restockResults.data as StoreSettingsData["restock"]["results"] | null) ?? [],
-      withImage: ((restockImages.data as { product_id: string }[] | null) ?? []).map((r) => String(r.product_id)),
+      withImage: restockWithImage.map((r) => String(r.product_id)),
     },
   };
 

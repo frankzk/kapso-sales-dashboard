@@ -41,6 +41,7 @@ import type { OrderCoverage } from "@/lib/order-coverage";
 import { limaTodayKey, normalizeDistrict } from "@/lib/shipments";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
 import { firstProductWithImage, type CatalogImage } from "@/lib/cart-image-test";
+import { productPhotosThatLoad } from "@/lib/product-photos";
 import { OFFER_TTL_MS, planYapeOffers, type RoutingLead } from "@/lib/yape-routing";
 import { onlineVendedorasForStore } from "@/lib/presence";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -261,7 +262,9 @@ export interface NextLeadCart {
  * borrador de Shopify (`draft_orders.line_items`) y del espejo de catálogo
  * (`shopify_product_images`), con la regla de casado de la prueba de imagen
  * (lib/cart-image-test): por `product_id`, y si no viene, por el título. Sin
- * carrito o sin foto, la tarjeta se queda con `cart_summary` y sin foto.
+ * carrito o sin foto, la tarjeta se queda con `cart_summary` y sin foto. Si
+ * Shopify ya no sirve las fotos de la tienda, solo la foto con su copia
+ * guardada (MOM §39): la otra ya no carga. Si Storage no contesta, sin foto.
  */
 export async function loadNextLeadCart(leadId: string): Promise<NextLeadCart | { error: string }> {
   const ctx = await authorizeLead(leadId);
@@ -279,12 +282,20 @@ export async function loadNextLeadCart(leadId: string): Promise<NextLeadCart | {
       .maybeSingle(),
     admin
       .from("shopify_product_images")
-      .select("product_id, catalog_title")
+      .select("product_id, catalog_title, image_url")
       .eq("store_id", ctx.storeId)
       .not("image_url", "is", null),
   ]);
   const draft = draftRes.data as { line_items: unknown; created_at: string | null } | null;
-  const productId = draft ? firstProductWithImage(draft.line_items, (catalogRes.data as CatalogImage[] | null) ?? []) : null;
+  const catalog = draft
+    ? ((await productPhotosThatLoad(
+        admin,
+        ctx.storeId,
+        (catalogRes.data as (CatalogImage & { image_url?: string | null })[] | null) ?? [],
+        Date.now(),
+      )) ?? [])
+    : [];
+  const productId = draft ? firstProductWithImage(draft.line_items, catalog) : null;
   return {
     lines: cartLinesOf(draft?.line_items),
     createdAt: draft?.created_at ?? null,

@@ -90,7 +90,9 @@ export function firstProductWithImage(
 
 /**
  * La foto que se manda a Meta: pasa por /api/wa-image, que la entrega en JPG
- * (Meta no acepta WebP y el 45 % de las fotos de catálogo lo son).
+ * (Meta no acepta WebP y el 45 % de las fotos de catálogo lo son), de la copia
+ * guardada en Kapta si la hay (MOM §39). Quien arma el catálogo decide qué
+ * productos cuentan «con foto» (`productPhotosThatLoad`, lib/product-photos).
  */
 export function waImageUrl(siteUrl: string, storeId: string, productId: string): string {
   return `${siteUrl.replace(/\/$/, "")}/api/wa-image/${storeId}/${productId}.jpg`;
