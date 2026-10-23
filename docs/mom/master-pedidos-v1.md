@@ -15747,6 +15747,15 @@ WooCommerce viven en esa fila de `stores` y cada pedido lleva su plataforma.
 | --- | --- |
 | `pending`, `failed`, `checkout-draft` (y los borradores internos `draft`, `auto-draft`) | No es un pedido: no entra a `orders` ni al Master. |
 | `processing`, `on-hold`, `completed` y estados de plugins | Pedido vivo. `completed` no significa entregado ni cobrado: eso lo dicen las salidas y los cobros de Kapta (§2 punto 9). |
+
+- **«Por confirmar» (23-10-2026).** El formulario contraentrega de Kenku y
+  Aurela crea sus pedidos en un estado propio, «Por confirmar» (por ejemplo
+  `por-confirmar`, o `wc-por-confirmar`: Kapta quita el `wc-`). Es un estado de
+  plugin: el pedido entra vivo, con `cod` y `pending`, y la confirmación sigue
+  siendo la de Kapta. Nadie tiene que moverlo a «processing» para que entre.
+  Solo no sirve si «Por confirmar» es `pending` con otra etiqueta: eso no entra
+  (por eso el equipo de WordPress manda el `status` exacto que devuelve la
+  API).
 | `cancelled`, `trash` | Anulado: `financial_status = voided` y `cancelled_at`. |
 | `refunded` | `financial_status = refunded`. No anula el pedido. |
 

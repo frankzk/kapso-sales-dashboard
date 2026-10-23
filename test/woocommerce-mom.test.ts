@@ -263,6 +263,12 @@ describe("§38 WooCommerce (23-10-2026)", () => {
     expect(WOO_TIMEOUT_MS).toBe(15_000);
   });
 
+  it("38.3 «Por confirmar» del formulario contraentrega es un estado de plugin: entra vivo", () => {
+    expect(s38).toContain("**«Por confirmar» (23-10-2026).** El formulario contraentrega de Kenku y Aurela crea sus pedidos en un estado propio");
+    expect(s38).toContain("Solo no sirve si «Por confirmar» es `pending` con otra etiqueta: eso no entra");
+    expect(WOO_SKIPPED_STATUSES).not.toContain("por-confirmar");
+  });
+
   it("38.9 Kenku y Aurela no cambian, y lo que sigue pendiente se dice", () => {
     expect(s38).toContain("**Kenku Perú y Aurela siguen en Shopify** hasta el cierre");
     expect(s38).toContain("La 0274 no actualiza ninguna fila");
