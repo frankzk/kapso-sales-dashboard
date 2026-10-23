@@ -8,6 +8,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  WOO_CART_SALE_CHANNEL,
   WOO_COD_TITLE,
   WOO_FREE_SHIPPING,
   WOO_SALE_BUDGET_MS,
@@ -79,6 +80,11 @@ describe("MOM §38.12 · el pedido en WooCommerce", () => {
     expect(VENTA).toContain("**No lleva `kapso_conversation_id`**");
     // `venta_manual` es la etiqueta de la asesora (38.5), la misma de Shopify.
     expect(WOO_CHANNEL_TAGS[WOO_SALE_CHANNEL]).toEqual(["venta_manual"]);
+    // El carrito completado: «Web · carrito completado», como en Shopify (owner, 23-10-2026).
+    expect(WOO_CHANNEL_TAGS[WOO_CART_SALE_CHANNEL]).toEqual(["easysell-abandoned-checkout"]);
+    expect(VENTA).toContain("**El canal del carrito completado, como en Shopify (decisión del owner, 23-10-2026):**");
+    expect(VENTA).toContain(`\`kapta_channel = ${WOO_CART_SALE_CHANNEL}\` en vez de \`venta_manual\``);
+    expect(VENTA).not.toContain("a decidir por el owner:** allí el carrito");
   });
 
   it("lo que se frena antes de llamar: ítems manuales (el formulario no los ofrece), variaciones sin SKU, sin precio, negativos", () => {
@@ -108,9 +114,9 @@ describe("MOM §38.12 · el pedido en WooCommerce", () => {
     expect(VENTA).toContain("**Dos llamadas a la vez con el mismo id**");
   });
 
-  it("el carrito abierto del lead queda recuperado, y la diferencia de canal queda para el owner", () => {
+  it("el carrito abierto del lead queda recuperado, con el canal de Shopify (owner, 23-10-2026)", () => {
     expect(VENTA).toContain("es un **carrito recuperado**, como en Shopify");
-    expect(VENTA).toContain("**Una diferencia con Shopify, a decidir por el owner:**");
+    expect(VENTA).not.toContain("**Una diferencia con Shopify, a decidir por el owner:**");
   });
 
   it("el reintento: el id del intento y la ventana de 2 horas del código", () => {

@@ -387,6 +387,12 @@ describe("stores.platform = 'woocommerce'", () => {
     expect(h.db.rows("draft_orders")[0]).toMatchObject({ status: "open" });
     expect(h.db.rows("lead_calls").find((c) => c.kind === "sale")!.note).toMatch(/^Carrito recuperado · pedido generado en WooCommerce/);
     for (const fn of Object.values(h.shopify)) expect(fn).not.toHaveBeenCalled();
+    // Canal «Web · carrito completado», como el borrador reusado de Shopify
+    // (owner, 23-10-2026); la venta de la asesora queda en order_sales igual.
+    const post = shop.calls.find((c) => c.method === "POST" && c.path === "/orders")!.body as { meta_data: { key: string; value: string }[] };
+    expect(post.meta_data).toContainEqual({ key: "kapta_channel", value: "web_carrito" });
+    expect(h.db.rows("orders")[0]!.tags).toEqual(["easysell-abandoned-checkout"]);
+    expect(h.db.rows("order_sales")).toHaveLength(1);
   });
 
   it("un carrito ya cerrado, o «pedido nuevo», no se cuenta como recuperado", async () => {
@@ -404,6 +410,8 @@ describe("stores.platform = 'woocommerce'", () => {
       expect(res.error).toBeUndefined();
       expect(h.db.rows("leads")[0]!.draft_order_status).toBe(estado);
       expect(h.db.rows("lead_calls").find((c) => c.kind === "sale")!.note).toMatch(/^Venta nueva · /);
+      const post = shop.calls.find((c) => c.method === "POST" && c.path === "/orders")!.body as { meta_data: { key: string; value: string }[] };
+      expect(post.meta_data).toContainEqual({ key: "kapta_channel", value: "venta_manual" });
     }
   });
 

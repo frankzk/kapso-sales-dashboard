@@ -69,6 +69,8 @@ import { mapWooOrder } from "@/lib/woocommerce";
 import {
   buildWooSaleOrder,
   createWooSaleOrder,
+  WOO_CART_SALE_CHANNEL,
+  WOO_SALE_CHANNEL,
   isWooVariantRef,
   loadStoreOrderPlatform,
   normalizeWooRequestId,
@@ -3219,9 +3221,26 @@ async function generateWooOrder(args: {
   // Sin id del formulario (un cliente viejo) cada llamada es un intento nuevo,
   // como en Shopify: el aviso de duplicado sigue siendo la red.
   const requestId = normalizeWooRequestId(input.requestId) ?? randomUUID();
+  // El carrito del lead, como en Shopify: «Carrito recuperado» solo si estaba
+  // abierto (la copia local de su borrador) y la venta no es un pedido nuevo.
+  // Se decide ANTES de crear el pedido: su canal sale de aquí (owner,
+  // 23-10-2026: el carrito completado es «Web · carrito completado», como el
+  // borrador reusado de Shopify).
+  let carritoAbierto = false;
+  if (l.draft_order_gid && !input.noReutilizarBorrador) {
+    const { data: carrito } = await admin
+      .from("draft_orders")
+      .select("status")
+      .eq("store_id", ctx.storeId)
+      .eq("draft_order_gid", l.draft_order_gid)
+      .maybeSingle();
+    const estado = String((carrito as { status?: string | null } | null)?.status ?? "").toLowerCase();
+    carritoAbierto = estado === "open" || estado === "invoice_sent";
+  }
   const { body, expected } = buildWooSaleOrder({
     leadId,
     requestId,
+    channel: carritoAbierto ? WOO_CART_SALE_CHANNEL : WOO_SALE_CHANNEL,
     lines: lineItemsInput,
     discountAmount,
     address: {
@@ -3319,19 +3338,6 @@ async function generateWooOrder(args: {
     }
   }
 
-  // El carrito del lead, como en Shopify: «Carrito recuperado» solo si estaba
-  // abierto (la copia local de su borrador) y la venta no es un pedido nuevo.
-  let carritoAbierto = false;
-  if (l.draft_order_gid && !input.noReutilizarBorrador) {
-    const { data: carrito } = await admin
-      .from("draft_orders")
-      .select("status")
-      .eq("store_id", ctx.storeId)
-      .eq("draft_order_gid", l.draft_order_gid)
-      .maybeSingle();
-    const estado = String((carrito as { status?: string | null } | null)?.status ?? "").toLowerCase();
-    carritoAbierto = estado === "open" || estado === "invoice_sent";
-  }
   // Adoptado o creado, el pedido es exactamente lo que dice el formulario
   // (misma huella, mismos precios): la nota y la confirmación salen de él.
   const products = lineItemsInput.map((li) => ({ title: li.title || "Producto", quantity: li.quantity, price: li.unitPrice }));

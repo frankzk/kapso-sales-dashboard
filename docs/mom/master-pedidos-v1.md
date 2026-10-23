@@ -9031,8 +9031,9 @@ carrito recuperado sin asesora y la recompra automática registran la fila local
 sin `cod_recuperado`, sin pisar la fecha ni los productos reales. «Generar
 pedido» crea el pedido en la tienda (Shopify o WooCommerce según
 `stores.platform`, §38.12); en WooCommerce la fila es la que escribiría la
-entrada, con `kapta_channel = venta_manual` y sin la conversación de Kapso, y la
-venta de la asesora queda en `order_sales` igual.
+entrada, con `kapta_channel = venta_manual` (o `web_carrito` si cierra el
+carrito abierto del lead, §38.12) y sin la conversación de Kapso, y la venta de
+la asesora queda en `order_sales` igual.
 
 Si al completar el borrador Shopify contesta que ya estaba completado, Kapta
 le pregunta a Shopify cuál es el pedido real de ese borrador y registra la venta
@@ -16222,7 +16223,8 @@ silencio. Sin la 0274, toda tienda es `shopify`.
   «Generar pedido» no cobra envío, como en Shopify;
 - `customer_note` con la nota del formulario, y los metadatos
   `kapta_channel = venta_manual` (la etiqueta que el pedido lleva hoy en
-  Shopify, 38.5), `kapta_lead_id`, `kapta_request_id` y `kapta_request_hash`
+  Shopify, 38.5; `web_carrito` si la venta cierra el carrito abierto del lead,
+  ver «La fila local»), `kapta_lead_id`, `kapta_request_id` y `kapta_request_hash`
   (el intento y su huella, abajo). **No lleva `kapso_conversation_id`**: el
   borrador de Shopify tampoco, y con ella la venta de la asesora entraría como
   del bot (§17.3). Tampoco `shipping_mode` ni `stock_por_validar`: el borrador
@@ -16308,11 +16310,15 @@ de la venta lo dice y el lead queda con `draft_order_status = completed` (deja
 de verse «Carrito abandonado» y la secuencia de carritos no lo toca). La copia
 del borrador no se toca, porque refleja lo que dice Shopify, y el borrador de
 Shopify tampoco: no es de Kapta, y después del cierre no hay a quién pedírselo.
-**Una diferencia con Shopify, a decidir por el owner:** allí el carrito
-completado conservaba las etiquetas de su borrador (EasySell: canal «Web ·
-carrito completado», `lib/sales-channel.ts`); en WooCommerce el pedido es nuevo
-y lleva `venta_manual` (canal «Asesora»). La venta de la asesora queda en
-`order_sales` igual; solo cambia el canal del pedido.
+**El canal del carrito completado, como en Shopify (decisión del owner,
+23-10-2026):** allí el carrito completado conservaba las etiquetas de su
+borrador (EasySell: canal «Web · carrito completado», `lib/sales-channel.ts`).
+En WooCommerce el pedido es nuevo, así que Kapta decide si el carrito estaba
+abierto **antes** de crearlo y, si lo estaba, lo manda con
+`kapta_channel = web_carrito` en vez de `venta_manual`: la entrada le pone
+`easysell-abandoned-checkout` (38.5) y el canal queda «Web · carrito
+completado». La venta de la asesora queda en `order_sales` igual (§3, «Canal
+de venta» vs «Canal de cierre», §17.3).
 
 **Un doble clic o un reintento no crea dos pedidos.** El formulario manda un id
 por intento (`requestId`, el mismo en cada reintento hasta que sale bien), que

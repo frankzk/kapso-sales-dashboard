@@ -157,6 +157,14 @@ export const WOO_KAPTA_CREATED_VIA = "kapta";
  */
 export const WOO_SALE_CHANNEL = "venta_manual";
 /**
+ * El canal de la venta que cierra el carrito abierto del lead («Carrito
+ * recuperado»): `web_carrito`, «Web · carrito completado». En Shopify el
+ * borrador reusado conservaba las etiquetas de EasySell y caía en ese canal;
+ * el owner pidió lo mismo en WooCommerce (23-10-2026). La venta de la asesora
+ * queda en `order_sales` igual.
+ */
+export const WOO_CART_SALE_CHANNEL = "web_carrito";
+/**
  * El envío: Kapta no cobra envío en «Generar pedido» (el total es productos
  * menos descuento, como en Shopify). Va como método de envío a S/ 0, nunca
  * como cargo (`fee_lines`), que es lo que pide el brief a la tienda.
@@ -317,6 +325,11 @@ export interface WooSaleExpectation {
 export interface WooSaleInput {
   leadId: string;
   requestId: string;
+  /**
+   * `web_carrito` si la venta cierra el carrito abierto del lead; si no (o sin
+   * decir), `venta_manual`.
+   */
+  channel?: typeof WOO_SALE_CHANNEL | typeof WOO_CART_SALE_CHANNEL;
   lines: readonly WooSaleLine[];
   /** El descuento del pedido ya resuelto (`resolveOrderDiscount`), en soles. */
   discountAmount: number;
@@ -409,7 +422,7 @@ export function buildWooSaleOrder(input: WooSaleInput): { body: Record<string, u
   if (note) body.customer_note = note;
   const fingerprint = wooSaleFingerprint(body, input.leadId);
   body.meta_data = [
-    { key: WOO_META.channel, value: WOO_SALE_CHANNEL },
+    { key: WOO_META.channel, value: input.channel ?? WOO_SALE_CHANNEL },
     { key: WOO_META.leadId, value: input.leadId },
     { key: WOO_META.requestId, value: input.requestId },
     { key: WOO_META.requestHash, value: fingerprint },
