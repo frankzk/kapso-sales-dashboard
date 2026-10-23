@@ -674,6 +674,11 @@ export async function saveOwnAppCredentials(
   // y falla después no pisa este «salió bien» (`shopify_token_renewed_at`).
   const now = new Date();
   const otherApp = clientId !== (row.shopify_client_id ?? "").trim();
+  // Sin Client ID guardado no hubo app antes: la tienda que soporte pasó a
+  // mano de 'interna' sin token a 'propia' (MOM §36.2). Se registran sus
+  // webhooks igual, pero el aviso no pide desinstalar una «app anterior» que
+  // no existe (sería desinstalar la única).
+  const firstCredentials = !(row.shopify_client_id ?? "").trim();
   let currentWebhookSecret: string | null = null;
   try {
     currentWebhookSecret = decryptOrNull(row.shopify_webhook_secret_enc ?? null);
@@ -732,8 +737,13 @@ export async function saveOwnAppCredentials(
     }
     if (failures.length) {
       return {
-        error: `Credenciales de la app nueva probadas y guardadas, pero sus webhooks tuvieron problemas: ${failures.join("; ")}. Pulsa «Re-registrar webhooks» y, cuando estén, desinstala la app anterior de la tienda.`,
+        error: firstCredentials
+          ? `Credenciales probadas y guardadas, pero los webhooks tuvieron problemas: ${failures.join("; ")}. Pulsa «Re-registrar webhooks».`
+          : `Credenciales de la app nueva probadas y guardadas, pero sus webhooks tuvieron problemas: ${failures.join("; ")}. Pulsa «Re-registrar webhooks» y, cuando estén, desinstala la app anterior de la tienda.`,
       };
+    }
+    if (firstCredentials) {
+      return { notice: "Credenciales probadas y guardadas, y los webhooks registrados. Acceso renovado." };
     }
     return {
       notice:

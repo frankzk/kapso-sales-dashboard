@@ -15185,7 +15185,19 @@ No hay otro valor, y una tienda no cambia de app sola.
      token no le cambia nada a la otra tienda. Si las filas con ese dominio son
      todas de otra organización y sin token (un dominio registrado sin
      conexión), lo dice así y pide escribirle a soporte, que es quien lo
-     libera; tampoco las toca.
+     libera; tampoco las toca. Si ninguna tiene token y una es de **esta**
+     organización y `interna` (se creó con «Crear tienda con token de Admin
+     API»), dice que la tienda ya está en esta organización sin acceso a
+     Shopify y pide a soporte que la pase a app propia; tampoco la toca.
+     Soporte la convierte a mano (DEPLOY.md, entrada del 23-10-2026):
+     `update stores set shopify_app='propia' where id='<id>' and shopify_app='interna' and shopify_token_enc is null;`
+     y después alguien con «Administrar tiendas» pega el Client ID y el Client
+     secret en sus Ajustes → Shopify → «Credenciales de la app» → «Probar y
+     guardar» (36.4), que pide el token y, si la tienda está activa o en
+     pausa, registra sus webhooks. Como no tenía Client ID guardado, no hay
+     app anterior: el aviso no pide desinstalar ninguna. Con token en alguna
+     fila, o una `propia` o `clientes` sin token en esta organización, es «ya
+     está conectada».
   5. Lee la moneda y la zona horaria de la tienda.
   6. Crea la tienda con app `propia`: el token y el Client secret cifrados, el
      Client ID y el vencimiento del token. El secreto de sus webhooks es el
@@ -15256,6 +15268,16 @@ No hay otro valor, y una tienda no cambia de app sola.
   pegar el nuevo en Ajustes, revocar el anterior en el Dev Dashboard y
   confirmar en Ajustes. Si el anterior no se revoca en 48 h, Shopify sigue
   firmando con él y Kapta deja de aceptar esos webhooks.
+- **El anterior no desinstala.** La gracia vale para pedidos y borradores (y
+  los temas que se ignoran), **nunca para `app/uninstalled`**: una
+  desinstalación firmada solo con el secreto anterior se rechaza con 401,
+  como una firma mal, y la tienda sigue igual. Deshabilita la tienda y le
+  borra el token, y quien tuviera el secreto anterior filtrado podría
+  falsificarla. Si la tienda desinstala la app de verdad antes de que se
+  revoque el anterior, Shopify reintenta la desinstalación: cuando llega
+  firmada con el vigente (ya revocado el anterior), entra como siempre (36.5).
+  Mientras no entre, la renovación falla («La app no está instalada…») y
+  Ajustes lo muestra; si no llega, la tienda se deshabilita a mano.
 - **Cambiar el Client ID** (otra app): se prueba igual. Las suscripciones de
   webhooks son de la app anterior y llegan firmadas con su secreto: Kapta ya
   no las acepta (su desinstalación no deshabilita la tienda). Si la tienda
@@ -15277,7 +15299,8 @@ No hay otro valor, y una tienda no cambia de app sola.
 
 - `app/uninstalled` hace lo mismo que con la app de clientes (§29.15.9): borra
   el token, la tienda pasa a `disabled` y se anota la fecha de desinstalación.
-  Pedidos, historial y liquidaciones no se tocan.
+  Pedidos, historial y liquidaciones no se tocan. Solo entra firmada con el
+  Client secret vigente, nunca solo con el anterior (36.4).
 - El cron y la renovación al usar solo toman tiendas `active` o `paused` con
   app `propia`. Una tienda desinstalada no vuelve a tener token sola: volver a
   conectarla es un paso de una persona con «Administrar tiendas», nunca del
@@ -15304,7 +15327,11 @@ No hay otro valor, y una tienda no cambia de app sola.
   de Kenku, Aurela y las tiendas `clientes` se comprueba exactamente como
   antes, con su único secreto.
 - **Sin migración de datos.** Ninguna tienda existente pasa a app propia. Pasar
-  Kenku o Aurela a una app propia sería otra decisión del owner.
+  Kenku o Aurela a una app propia sería otra decisión del owner. La única
+  excepción es a mano, la hace soporte y es para una tienda `interna`
+  **sin token** que alguien creó con el formulario del token (36.2): el
+  `where ... and shopify_token_enc is null` deja fuera a Kenku y Aurela, que
+  tienen token. Ni la 0271 ni el código convierten una fila.
 - **Un dominio, una tienda.** Un dominio está en una sola tienda con app propia
   (`stores_own_app_shop_uniq`). Además, la conexión rechaza un dominio que ya
   está en Kapta con cualquier app (36.2).
@@ -15327,7 +15354,8 @@ No hay otro valor, y una tienda no cambia de app sola.
   (`lib/invoicing/shopify-order.ts`) renuevan antes de usar, solo en tiendas
   `propia`. Los webhooks leen con `renewOwnApp: false` y, ya autenticados,
   renuevan con `ownAppCredsForUse`; la firma de Shopify se comprueba con
-  `verifyStoreShopifyHmac` (el secreto anterior, solo en una propia).
+  `verifyStoreShopifyHmac` (el secreto anterior, solo en una propia y solo en
+  las ramas de `PREV_SECRET_ROUTES`: pedidos, borradores y temas ignorados).
 - `app/api/cron/shopify-own-app-tokens/route.ts`: el cron de cada hora.
 - `app/dashboard/stores/new/actions.ts` (`connectOwnAppStore`) y
   `ConnectOwnAppStoreForm` en `components/forms.tsx`: la conexión (36.2).
@@ -15343,4 +15371,5 @@ No hay otro valor, y una tienda no cambia de app sola.
   `test/shopify-own-app-connect.test.ts`, `test/shopify-own-app-webhooks.test.ts`,
   `test/shopify-app-propia-mom.test.ts` y
   `scripts/sql/shopify_app_propia_smoke.sql` (la 0271 aplicada sobre el
-  esquema de la 0249 con tiendas `interna` y `clientes`: ninguna fila cambia).
+  esquema de la 0249 con tiendas `interna` y `clientes`: ninguna fila cambia;
+  y la conversión de soporte de 36.2 solo toma una `interna` sin token).

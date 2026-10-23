@@ -12,6 +12,8 @@
 --   f) Dos veces es una, sin volver a validar la tabla.
 --   g) Una base con una versión anterior de la 0271 (el CHECK con cinco
 --      columnas) se pone al día sin cambiar ninguna fila.
+--   h) La conversión a mano de soporte (MOM §36.2, DEPLOY.md del 23-10-2026)
+--      toma solo una tienda 'interna' sin token: nunca a Kenku ni a Aurela.
 -- Todo dentro de una transacción que se deshace al final.
 
 begin;
@@ -278,5 +280,61 @@ begin
   end;
 end $$;
 
-\echo '  ✅ Kenku, Aurela y las tiendas clientes sin una fila cambiada; propia admitida y nada inventado; las ocho columnas solo en la propia; un dominio por app propia; los secretos con los privilegios de shopify_token_enc y tapados por la RLS; dos veces es una; una versión anterior se pone al día'
+-- ── h) La conversión de soporte solo toma una interna sin token ────────────
+-- Una tienda creada con «Crear tienda con token de Admin API» y sin token; la
+-- sentencia es la de DEPLOY.md, tal cual, con su id.
+insert into stores (id, org_id, name, shopify_domain, shopify_token_enc, shopify_webhook_secret_enc, status, shopify_app)
+values ('27100000-0000-0000-0000-0000000000d1', '27100000-0000-0000-0000-0000000000a1', 'Creada con el formulario del token',
+        'formulario-token-0271.myshopify.com', null, null, 'active', 'interna'),
+       ('27100000-0000-0000-0000-0000000000d2', '27100000-0000-0000-0000-0000000000a2', 'Otra sin token, dominio de una propia',
+        'super-human-peru-0271.myshopify.com', null, null, 'active', 'interna');
+
+create temp table s0271_before_conversion on commit drop as
+select s.id, to_jsonb(s) as fila from stores s;
+
+do $$
+declare
+  v_id   uuid;
+  v_rows int;
+begin
+  -- Kenku, Aurela (con token) y la cliente que desinstaló (sin token, pero
+  -- 'clientes'): la sentencia no toma ninguna.
+  foreach v_id in array array['27100000-0000-0000-0000-0000000000b1', '27100000-0000-0000-0000-0000000000b2',
+                              '27100000-0000-0000-0000-0000000000b3', '27100000-0000-0000-0000-0000000000b4']::uuid[] loop
+    execute format($f$update stores set shopify_app='propia' where id='%s' and shopify_app='interna' and shopify_token_enc is null;$f$, v_id);
+    get diagnostics v_rows = row_count;
+    if v_rows <> 0 then
+      raise exception 'la conversión de soporte tomó la tienda %', v_id;
+    end if;
+  end loop;
+
+  -- La creada con el formulario del token: una fila, y después recibe las
+  -- credenciales como «Probar y guardar».
+  update stores set shopify_app='propia' where id='27100000-0000-0000-0000-0000000000d1' and shopify_app='interna' and shopify_token_enc is null;
+  get diagnostics v_rows = row_count;
+  if v_rows <> 1 then
+    raise exception 'la conversión de soporte tiene que tomar la interna sin token (tomó %)', v_rows;
+  end if;
+  update stores set shopify_client_id = 'client-id-convertida', shopify_client_secret_enc = 'enc:secreto',
+                    shopify_webhook_secret_enc = 'enc:secreto', shopify_token_enc = 'enc:token-24h',
+                    shopify_token_expires_at = now() + interval '24 hours', shopify_token_renewed_at = now()
+   where id = '27100000-0000-0000-0000-0000000000d1' and shopify_app = 'propia';
+
+  -- Con el dominio de otra tienda propia, el índice la frena: DEPLOY dice no seguir.
+  begin
+    update stores set shopify_app='propia' where id='27100000-0000-0000-0000-0000000000d2' and shopify_app='interna' and shopify_token_enc is null;
+    raise exception 'un dominio que ya tiene una tienda propia no debería admitir otra';
+  exception when unique_violation then null;
+  end;
+
+  -- Ninguna otra fila cambió.
+  if exists (
+    select 1 from stores s join s0271_before_conversion b on b.id = s.id
+     where s.id <> '27100000-0000-0000-0000-0000000000d1' and to_jsonb(s) is distinct from b.fila
+  ) then
+    raise exception 'la conversión de soporte cambió otra tienda';
+  end if;
+end $$;
+
+\echo '  ✅ Kenku, Aurela y las tiendas clientes sin una fila cambiada; propia admitida y nada inventado; las ocho columnas solo en la propia; un dominio por app propia; los secretos con los privilegios de shopify_token_enc y tapados por la RLS; dos veces es una; una versión anterior se pone al día; la conversión de soporte solo toma una interna sin token'
 rollback;

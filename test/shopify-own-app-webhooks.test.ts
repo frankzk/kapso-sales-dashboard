@@ -12,8 +12,9 @@
 //   - Un fallo viejo no pisa el «salió bien» de una renovación más nueva.
 //   - Una tienda en pausa renueva; una deshabilitada, no.
 //   - Tras rotar el Client secret, los webhooks firmados con el anterior se
-//     aceptan 48 h SOLO en una tienda propia; Kenku, Aurela y las 'clientes'
-//     se comprueban exactamente como antes.
+//     aceptan 48 h SOLO en una tienda propia, y nunca para `app/uninstalled`:
+//     un secreto anterior filtrado no deshabilita la tienda. Kenku, Aurela y
+//     las 'clientes' se comprueban exactamente como antes.
 // Sin red: `fetch` es falso.
 
 import { createHmac } from "node:crypto";
@@ -132,7 +133,7 @@ import {
   ownAppTokenForUse,
   renewOwnAppToken,
 } from "@/lib/shopify-own-app";
-import { getStoreCreds, ownAppCredsForUse, processShopifyWebhook } from "@/lib/ingest";
+import { getStoreCreds, ownAppCredsForUse, processShopifyWebhook, verifyStoreShopifyHmac } from "@/lib/ingest";
 import { POST as shopifyWebhook } from "@/app/api/webhooks/shopify/[storeId]/route";
 import { POST as flowWebhook } from "@/app/api/webhooks/flow/[storeId]/route";
 import { POST as kapsoWebhook } from "@/app/api/webhooks/kapso/[storeId]/route";
@@ -483,6 +484,72 @@ describe("tras rotar el Client secret, el anterior firma webhooks 48 h (solo app
       expect(res.status, secret).toBe(200);
     }
     expect((await shopifyWebhook(shopifyReq("store-propia", body, { topic: "shop/update", secret: "otro" }), ctx("store-propia"))).status).toBe(401);
+  });
+
+  it("app/uninstalled firmada SOLO con el anterior: 401 y la tienda sigue activa; con el vigente, se deshabilita", async () => {
+    // Quien tenga el secreto anterior filtrado no puede deshabilitar la tienda.
+    db.stores = {
+      "store-propia": propia({
+        shopify_webhook_secret_prev_enc: encrypt(OLD_SECRET),
+        shopify_webhook_secret_prev_set_at: new Date(Date.now() - HOUR).toISOString(),
+      }),
+    };
+    const row = db.stores["store-propia"]!;
+    const tokenBefore = row.shopify_token_enc;
+    const uninstall = JSON.stringify({ id: 1, domain: SHOP });
+    const forged = await shopifyWebhook(
+      shopifyReq("store-propia", uninstall, { topic: "app/uninstalled", secret: OLD_SECRET }),
+      ctx("store-propia"),
+    );
+    expect(forged.status).toBe(401);
+    expect(row.status).toBe("active");
+    expect(row.shopify_token_enc).toBe(tokenBefore);
+    expect(row.shopify_uninstalled_at).toBeUndefined();
+    // Ni `webhook_events` ni `stores`: como una firma mal.
+    expect(db.writes).toEqual([]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(logs.join("\n")).toContain('"rechazado":"firmado_con_secreto_anterior"');
+    expect(logs.join("\n")).not.toContain(OLD_SECRET);
+
+    // La de verdad, firmada con el vigente, la deshabilita como siempre (§36.5).
+    const real = await shopifyWebhook(
+      shopifyReq("store-propia", uninstall, { topic: "app/uninstalled", secret: SECRET }),
+      ctx("store-propia"),
+    );
+    expect(real.status).toBe(200);
+    expect(row.status).toBe("disabled");
+    expect(row.shopify_token_enc).toBeNull();
+    expect(typeof row.shopify_uninstalled_at).toBe("string");
+    expect(db.writes.filter((w) => w.table === "webhook_events")).toHaveLength(1);
+  });
+
+  it("la gracia del anterior sigue para pedidos y borradores (y temas ignorados), no para desinstalar", async () => {
+    db.stores = {
+      "store-propia": propia({
+        shopify_webhook_secret_prev_enc: encrypt(OLD_SECRET),
+        shopify_webhook_secret_prev_set_at: new Date(Date.now() - HOUR).toISOString(),
+      }),
+    };
+    const creds = (await getStoreCreds("store-propia", admin, { renewOwnApp: false }))!;
+    const old = hmac(body, OLD_SECRET);
+    const current = hmac(body, SECRET);
+    for (const route of ["order", "draft", "ignore"] as const) {
+      expect(verifyStoreShopifyHmac(body, old, creds, route), route).toBe(true);
+    }
+    expect(verifyStoreShopifyHmac(body, old, creds, "uninstalled")).toBe(false);
+    for (const route of ["order", "draft", "ignore", "uninstalled"] as const) {
+      expect(verifyStoreShopifyHmac(body, current, creds, route), route).toBe(true);
+    }
+    // Un borrador firmado con el anterior entra entero, como antes.
+    const draft = JSON.stringify({ id: 78, name: "#D78", line_items: [], created_at: "2026-10-23T10:00:00Z", updated_at: "2026-10-23T10:00:00Z" });
+    const res = await shopifyWebhook(shopifyReq("store-propia", draft, { topic: "draft_orders/update", secret: OLD_SECRET }), ctx("store-propia"));
+    expect(res.status).toBe(200);
+
+    // Kenku (interna): su desinstalación con su secreto, exactamente como antes.
+    db.stores = { "store-kenku": kenku() };
+    const kenkuCreds = (await getStoreCreds("store-kenku", admin, { renewOwnApp: false }))!;
+    expect(verifyStoreShopifyHmac(body, hmac(body, "secreto-interna"), kenkuCreds, "uninstalled")).toBe(true);
+    expect(verifyStoreShopifyHmac(body, old, kenkuCreds, "order")).toBe(false);
   });
 
   it("pasadas las 48 h, el anterior ya no vale (y ni se descifra)", async () => {

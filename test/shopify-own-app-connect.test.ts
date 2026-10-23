@@ -3,7 +3,9 @@
 // «Conectar con app propia de Shopify» (app/dashboard/stores/new/actions.ts):
 // mismo permiso que crear una tienda; un dominio malo, uno que ya está en Kapta
 // (con cualquier app) o una app sin todos los permisos se rechazan SIN escribir
-// nada y sin tocar ninguna otra tienda; si Kapta ya tiene la tienda solo se
+// nada y sin tocar ninguna otra tienda (una interna sin token de la misma
+// organización tiene su propio mensaje: soporte la pasa a app propia, nunca
+// esta acción); si Kapta ya tiene la tienda solo se
 // dice DESPUÉS de que Shopify dé un token (nadie averigua qué tiendas son de
 // Kapta con credenciales inventadas); si Shopify niega el token, el mensaje lo
 // dice sin repetir el secreto; y una conexión buena crea la tienda 'propia' con
@@ -231,6 +233,10 @@ function form(fields: Record<string, string>): FormData {
 const good = (over: Record<string, string> = {}) =>
   form({ org_id: "org-sh", shopify_domain: SHOP, client_id: CLIENT_ID, client_secret: SECRET, name: "", ...over });
 
+const ALREADY_CONNECTED = "Esa tienda de Shopify ya está conectada a Kapta. No se cambió nada en ella.";
+const SAME_ORG_TOKEN_FORM =
+  "Esa tienda de Shopify ya está en esta organización, sin acceso a Shopify: se creó con «Crear tienda con token de Admin API». No se cambió nada: pídele a soporte de Kapta que la pase a app propia y después guarda el Client ID y el Client secret en sus Ajustes → Shopify → «Credenciales de la app» → «Probar y guardar».";
+
 /** Ninguna escritura en `stores` salvo, si se dice, el insert de la tienda nueva. */
 function storeWrites() {
   return st.calls.filter((c) => c.table === "stores" && c.op !== "select");
@@ -336,10 +342,8 @@ describe("connectOwnAppStore", () => {
   });
 
   it("un dominio que ya está en Kapta (Kenku, Aurela, clientes u otra propia): no la toca", async () => {
-    st.existing = [{ id: "store-kenku", org_id: "org-kenku", shopify_token_enc: "enc:token-kenku" }];
-    expect(await connectOwnAppStore({}, good({ shopify_domain: "kenku-peru.myshopify.com" }))).toEqual({
-      error: "Esa tienda de Shopify ya está conectada a Kapta. No se cambió nada en ella.",
-    });
+    st.existing = [{ id: "store-kenku", org_id: "org-kenku", shopify_app: "interna", shopify_token_enc: "enc:token-kenku" }];
+    expect(await connectOwnAppStore({}, good({ shopify_domain: "kenku-peru.myshopify.com" }))).toEqual({ error: ALREADY_CONNECTED });
     // Se enteró después de que Shopify diera un token a la app de quien conecta
     // (que no le cambia nada a Kenku); no escribe ni registra nada.
     expect(st.seq).toEqual(["token", "lookup"]);
@@ -349,7 +353,7 @@ describe("connectOwnAppStore", () => {
   });
 
   it("con credenciales inventadas no se averigua si una tienda es de Kapta", async () => {
-    st.existing = [{ id: "store-kenku", org_id: "org-kenku", shopify_token_enc: "enc:token-kenku" }];
+    st.existing = [{ id: "store-kenku", org_id: "org-kenku", shopify_app: "interna", shopify_token_enc: "enc:token-kenku" }];
     net.token = { status: 401, payload: { error: "invalid_client" } };
     const r = await connectOwnAppStore({}, good({ shopify_domain: "kenku-peru.myshopify.com", client_id: "inventado1", client_secret: "inventado2" }));
     // El mismo rechazo de Shopify que con una tienda que no está en Kapta.
@@ -361,7 +365,7 @@ describe("connectOwnAppStore", () => {
   });
 
   it("un dominio registrado en otra organización sin conexión: lo dice distinto y tampoco lo toca", async () => {
-    st.existing = [{ id: "store-apartada", org_id: "org-otra", shopify_token_enc: null }];
+    st.existing = [{ id: "store-apartada", org_id: "org-otra", shopify_app: "interna", shopify_token_enc: null }];
     const r = await connectOwnAppStore({}, good());
     expect(r.error).toBe(
       "Esa tienda de Shopify está registrada en Kapta en otra organización, sin conexión. No se cambió nada: escríbele a soporte de Kapta para liberarla.",
@@ -369,14 +373,43 @@ describe("connectOwnAppStore", () => {
     expect(st.calls.filter((c) => c.op !== "select")).toEqual([]);
     expect(logs.join("\n")).toContain('"conectar":"dominio_ocupado"');
     expectNoSecrets(logs.join("\n"));
-    // En la misma organización, o con token, es «ya está conectada».
+    // Con token, en esta organización o en otra, es «ya está conectada».
     for (const row of [
-      { id: "s1", org_id: "org-sh", shopify_token_enc: null },
-      { id: "s2", org_id: "org-otra", shopify_token_enc: "enc:x" },
+      { id: "s1", org_id: "org-sh", shopify_app: "interna", shopify_token_enc: "enc:x" },
+      { id: "s2", org_id: "org-otra", shopify_app: "interna", shopify_token_enc: "enc:x" },
     ]) {
       st.existing = [row];
-      expect((await connectOwnAppStore({}, good())).error).toBe("Esa tienda de Shopify ya está conectada a Kapta. No se cambió nada en ella.");
+      expect((await connectOwnAppStore({}, good())).error).toBe(ALREADY_CONNECTED);
     }
+  });
+
+  it("en ESTA organización, interna y sin token (el formulario del token): pide a soporte pasarla a app propia y no la toca", async () => {
+    st.existing = [{ id: "store-sin-token", org_id: "org-sh", shopify_app: "interna", shopify_token_enc: null }];
+    const r = await connectOwnAppStore({}, good());
+    expect(r).toEqual({ error: SAME_ORG_TOKEN_FORM });
+    // Se enteró después del token, y no escribe, no registra ni sincroniza nada.
+    expect(st.seq).toEqual(["token", "lookup"]);
+    expect(st.calls.filter((c) => c.op !== "select")).toEqual([]);
+    expect(st.finishArgs).toEqual([]);
+    expect(st.registerArgs).toEqual([]);
+    // Soporte la encuentra en el log, sin secretos.
+    expect(logs.join("\n")).toContain('"mismaOrgSinToken":true');
+    expect(logs.join("\n")).toContain("store-sin-token");
+    expectNoSecrets(JSON.stringify(r) + logs.join("\n"));
+
+    // Si otra fila del dominio tiene token, es «ya está conectada», como antes.
+    st.existing = [
+      { id: "store-sin-token", org_id: "org-sh", shopify_app: "interna", shopify_token_enc: null },
+      { id: "store-otra", org_id: "org-otra", shopify_app: "clientes", shopify_token_enc: "enc:x" },
+    ];
+    expect((await connectOwnAppStore({}, good())).error).toBe(ALREADY_CONNECTED);
+    // Una propia o de clientes sin token en esta organización (desinstalada) no
+    // salió del formulario del token: tampoco cambia.
+    for (const app of ["propia", "clientes"]) {
+      st.existing = [{ id: `store-${app}`, org_id: "org-sh", shopify_app: app, shopify_token_enc: null }];
+      expect((await connectOwnAppStore({}, good())).error, app).toBe(ALREADY_CONNECTED);
+    }
+    expect(st.calls.filter((c) => c.op !== "select")).toEqual([]);
   });
 
   it("si no se pudo comprobar el dominio, no sigue", async () => {
@@ -418,9 +451,7 @@ describe("connectOwnAppStore", () => {
 
   it("si otro la conectó a la vez (índice único): ya está conectada", async () => {
     st.insertError = { code: "23505", message: "duplicate key value violates unique constraint \"stores_own_app_shop_uniq\"" };
-    expect((await connectOwnAppStore({}, good())).error).toBe(
-      "Esa tienda de Shopify ya está conectada a Kapta. No se cambió nada en ella.",
-    );
+    expect((await connectOwnAppStore({}, good())).error).toBe(ALREADY_CONNECTED);
   });
 
   it("solo inserta: nunca actualiza ni borra una tienda", () => {
@@ -571,6 +602,36 @@ describe("saveOwnAppCredentials", () => {
     st.row = propiaRow({ status: "disabled", shopify_client_id: "client-id-de-la-app-anterior" });
     expect((await saveOwnAppCredentials({}, fd())).notice).toContain("sigue sin estar activa");
     expect(st.registerArgs).toEqual([]);
+  });
+
+  it("la que soporte pasó a app propia (sin Client ID guardado): registra webhooks y no pide desinstalar ninguna «anterior»", async () => {
+    // MOM §36.2: era 'interna' sin token; la única app instalada es la propia.
+    st.row = propiaRow({ shopify_client_id: null, shopify_webhook_secret_enc: null });
+    expect(await saveOwnAppCredentials({}, fd())).toEqual({
+      notice: "Credenciales probadas y guardadas, y los webhooks registrados. Acceso renovado.",
+    });
+    const p = storeWrites()[0]!.payload!;
+    expect(p.shopify_client_id).toBe(CLIENT_ID);
+    expect(decrypt(String(p.shopify_webhook_secret_enc))).toBe(SECRET);
+    expect(p.shopify_webhook_secret_prev_enc).toBeNull();
+    expect(st.registerArgs).toEqual([
+      {
+        domain: SHOP,
+        token: NEW_TOKEN,
+        callbackUrl: "https://kapta.test/api/webhooks/shopify/store-propia",
+        extraTopics: CLIENT_APP_WEBHOOK_TOPICS,
+      },
+    ]);
+    // Con webhooks que fallan: que los re-registre, sin «desinstala la app anterior».
+    st.calls = [];
+    st.registerArgs = [];
+    st.registerResult = [{ topic: "APP_UNINSTALLED", id: null, error: "boom" }];
+    const r = await saveOwnAppCredentials({}, fd());
+    expect(r.error).toBe(
+      "Credenciales probadas y guardadas, pero los webhooks tuvieron problemas: APP_UNINSTALLED: boom. Pulsa «Re-registrar webhooks».",
+    );
+    expect(JSON.stringify(r)).not.toContain("anterior");
+    expectNoSecrets(JSON.stringify(r) + logs.join("\n"));
   });
 });
 

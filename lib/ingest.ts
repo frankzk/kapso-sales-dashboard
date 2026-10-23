@@ -23,6 +23,7 @@ import {
   mapRestOrder,
   verifyShopifyHmac,
   routeShopifyTopic,
+  type ShopifyWebhookRoute,
 } from "@/lib/shopify";
 import {
   classifyKapsoEvent,
@@ -458,16 +459,38 @@ export async function ownAppCredsForUse(admin: SupabaseClient, creds: StoreCreds
 }
 
 /**
+ * Las ramas del handler que aceptan un webhook firmado SOLO con el Client
+ * secret anterior de una app propia. Pedidos y borradores (y un tema que se
+ * ignora, que no cambia nada) siguen durante la gracia. `app/uninstalled` no:
+ * deshabilita la tienda y le borra el token, y quien tuviera un secreto
+ * anterior filtrado podría falsificarla (MOM §36.4). Una rama nueva queda
+ * fuera hasta que alguien decida que es segura.
+ */
+const PREV_SECRET_ROUTES: ReadonlySet<ShopifyWebhookRoute> = new Set(["order", "draft", "ignore"]);
+
+/**
  * La firma de un webhook de Shopify. Con el secreto de la tienda, como
  * siempre; y SOLO en una tienda con app propia, también con el Client secret
  * anterior mientras dura su gracia (MOM §36.4: tras rotarlo, Shopify firma con
- * el más viejo que no se revocó). Kenku, Aurela y las tiendas 'clientes' se
- * comprueban exactamente como antes.
+ * el más viejo que no se revocó), y solo en las ramas de `PREV_SECRET_ROUTES`:
+ * una desinstalación firmada solo con el anterior se rechaza (401) y Shopify
+ * la reintenta. Kenku, Aurela y las tiendas 'clientes' se comprueban
+ * exactamente como antes.
  */
-export function verifyStoreShopifyHmac(rawBody: string, hmacHeader: string | null, creds: StoreCreds): boolean {
+export function verifyStoreShopifyHmac(
+  rawBody: string,
+  hmacHeader: string | null,
+  creds: StoreCreds,
+  route: ShopifyWebhookRoute,
+): boolean {
   if (verifyShopifyHmac(rawBody, hmacHeader, creds.shopify_webhook_secret)) return true;
   if (creds.shopify_app !== OWN_APP || !creds.shopify_webhook_secret_prev) return false;
-  return verifyShopifyHmac(rawBody, hmacHeader, creds.shopify_webhook_secret_prev);
+  if (!verifyShopifyHmac(rawBody, hmacHeader, creds.shopify_webhook_secret_prev)) return false;
+  if (PREV_SECRET_ROUTES.has(route)) return true;
+  // Sin secretos en el log: solo la tienda y la rama, para que soporte vea
+  // por qué una desinstalación no la deshabilitó.
+  console.warn(`[shopify-own-app] ${JSON.stringify({ webhook: route, rechazado: "firmado_con_secreto_anterior", storeId: creds.id })}`);
+  return false;
 }
 
 /** Map a Kapso phone-number record → a `whatsapp_numbers` label row. `kind` is
@@ -703,7 +726,10 @@ export async function processShopifyWebhook(
   const creds = await getStoreCreds(params.storeId, admin, { renewOwnApp: false });
   if (!creds) return { status: "error", message: "unknown store" };
 
-  if (!verifyStoreShopifyHmac(params.rawBody, params.hmacHeader, creds)) {
+  // La rama se sabe antes de la firma: el secreto anterior de una app propia
+  // no vale para todas (MOM §36.4).
+  const route = routeShopifyTopic(params.topic);
+  if (!verifyStoreShopifyHmac(params.rawBody, params.hmacHeader, creds, route)) {
     return { status: "unauthorized" };
   }
 
@@ -721,7 +747,7 @@ export async function processShopifyWebhook(
   // Route by topic. Order topics (orders/*) and draft topics (draft_orders/*)
   // share the HMAC/idempotency/JSON prefix above, then diverge. La
   // desinstalación tiene su rama; un tema desconocido ya no entra como pedido.
-  switch (routeShopifyTopic(params.topic)) {
+  switch (route) {
     case "draft":
       return processDraftOrderWebhook(admin, creds, params, payload, webhookId);
     case "order":
@@ -738,6 +764,8 @@ export async function processShopifyWebhook(
  * deshabilitada (los crons solo corren sobre tiendas activas) y sin token, que
  * Shopify ya revocó. No se borra nada: pedidos e historial siguen. Los datos
  * personales de sus compradores se anonimizan cuando llega el `shop/redact`.
+ * En una app propia solo llega aquí firmada con el Client secret vigente,
+ * nunca solo con el anterior (`verifyStoreShopifyHmac`, MOM §36.4).
  */
 async function processAppUninstalled(
   admin: SupabaseClient,

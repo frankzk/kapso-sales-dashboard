@@ -44,6 +44,10 @@ const NEW_COLUMNS = [
 
 const HOUR_MS = 60 * 60 * 1000;
 
+/** La conversión a mano de una tienda `interna` sin token (§36.2), la misma en el MOM y en DEPLOY.md. */
+const TOKEN_FORM_CONVERSION =
+  "update stores set shopify_app='propia' where id='<id>' and shopify_app='interna' and shopify_token_enc is null;";
+
 describe("§36 Tiendas conectadas con su app propia de Shopify (owner 23-10-2026)", () => {
   const s36 = section("## 36. Tiendas conectadas con su app propia de Shopify (23-10-2026)");
 
@@ -145,6 +149,14 @@ describe("§36 Tiendas conectadas con su app propia de Shopify (owner 23-10-2026
     expect(s36).toContain("La firma de los webhooks de Kenku, Aurela y las tiendas `clientes` se comprueba exactamente como antes");
   });
 
+  it("el secreto anterior no desinstala: la gracia es para pedidos, borradores y temas ignorados", () => {
+    expect(s36).toContain("**nunca para `app/uninstalled`**");
+    expect(s36).toContain("una desinstalación firmada solo con el secreto anterior se rechaza con 401");
+    expect(s36).toContain("Solo entra firmada con el Client secret vigente, nunca solo con el anterior (36.4).");
+    expect(s36).toContain("las ramas de `PREV_SECRET_ROUTES`: pedidos, borradores y temas ignorados");
+    expect(read("lib/ingest.ts")).toContain('const PREV_SECRET_ROUTES: ReadonlySet<ShopifyWebhookRoute> = new Set(["order", "draft", "ignore"]);');
+  });
+
   it("Ajustes: el título del aviso sale del contenido, y sin acceso que valga no dice «vence»", () => {
     expect(s36).toContain("«Faltan permisos en la app»");
     expect(ownApp.ownAppErrorTitle(ownApp.missingScopesMessage(["write_orders"]))).toBe("Faltan permisos en la app");
@@ -184,6 +196,21 @@ describe("§36 Tiendas conectadas con su app propia de Shopify (owner 23-10-2026
     expect(s36).toContain("El secreto de sus webhooks es el Client secret, porque Shopify firma con él los webhooks de la app.");
     expect(s36).toContain("Registra los webhooks de pedidos y `app/uninstalled`.");
     expect(CLIENT_APP_WEBHOOK_TOPICS).toContain("APP_UNINSTALLED");
+  });
+
+  it("una interna sin token de esta organización: su mensaje, y la conversión la hace soporte, nunca la acción", () => {
+    expect(s36).toContain("Si ninguna tiene token y una es de **esta** organización y `interna` (se creó con «Crear tienda con token de Admin API»)");
+    expect(s36).toContain(TOKEN_FORM_CONVERSION);
+    expect(s36).toContain("Ajustes → Shopify → «Credenciales de la app» → «Probar y guardar» (36.4)");
+    expect(s36).toContain("La única excepción es a mano, la hace soporte y es para una tienda `interna` **sin token**");
+    const action = read("app/dashboard/stores/new/actions.ts");
+    expect(action).toContain("ya está en esta organización, sin acceso a Shopify: se creó con «Crear tienda con token de Admin API»");
+    expect(action).not.toContain("shopify_app='propia'");
+    // Al guardar sus credenciales no hay «app anterior» que desinstalar.
+    expect(s36).toContain("el aviso no pide desinstalar ninguna");
+    expect(read("app/dashboard/[storeId]/settings/actions.ts")).toContain(
+      "Credenciales probadas y guardadas, y los webhooks registrados. Acceso renovado.",
+    );
   });
 
   it("desinstalar deshabilita y el cron no la resucita", () => {
@@ -293,7 +320,19 @@ describe("DEPLOY.md, entrada del 23-10-2026 (0271)", () => {
     expect(entry).toContain("**Kenku y Aurela no cambian.**");
     expect(entry).toContain("**Migración `0271_shopify_app_propia.sql`, a mano y ANTES del código.**");
     expect(entry).toContain("\\i db/migrations/0271_shopify_app_propia.sql");
-    expect(entry).toContain("set local lock_timeout = '15s';");
+    // Corto: mientras espera el candado de `stores`, el dashboard y los
+    // webhooks de Kenku y Aurela hacen cola detrás. Si se corta, se repite.
+    expect(entry).toContain("set local lock_timeout = '3s';");
+    expect(entry).not.toContain("'15s'");
+    expect(entry).toContain("se vuelve a correr el mismo bloque");
+  });
+
+  it("dice cómo convierte soporte una tienda creada con el formulario del token", () => {
+    expect(entry).toContain("«ya está en esta organización, sin acceso a Shopify»");
+    expect(entry).toContain(TOKEN_FORM_CONVERSION);
+    expect(entry).toContain("Tiene que decir `UPDATE 1`.");
+    expect(entry).toContain("«Credenciales de la app» → el Client ID y el Client secret → «Probar y guardar»");
+    expect(entry).toContain("anterior, no se desinstala nada");
   });
 
   it("dice cómo rotar el secreto y qué formulario usar", () => {

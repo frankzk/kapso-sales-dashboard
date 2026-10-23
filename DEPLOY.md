@@ -3500,14 +3500,18 @@ tienda, se escriben en Kapta y nunca van a Vercel, al chat ni al repositorio.
      from stores;
    ```
 
-   **Aplicar.** Toma un momento el candado de `stores` (cambia dos CHECK y crea
-   un índice); el `lock_timeout` la detiene si una consulta larga lo tiene, y
-   se reintenta:
+   **Aplicar.** Toma un momento el candado exclusivo de `stores` (cambia dos
+   CHECK y crea un índice). Mientras lo espera, todo lo que lee `stores` hace
+   cola detrás: cada consulta del dashboard y cada webhook de Kenku y Aurela.
+   Por eso el `lock_timeout` es corto, **3 s**: si una consulta larga tiene la
+   tabla, la migración se corta sola (`canceling statement due to lock
+   timeout`), no cambia nada, y se vuelve a correr el mismo bloque unos
+   segundos después, las veces que haga falta:
 
    ```bash
    psql "$DATABASE_URL" <<'SQL'
    begin;
-   set local lock_timeout = '15s';
+   set local lock_timeout = '3s';
    \i db/migrations/0271_shopify_app_propia.sql
    commit;
    SQL
@@ -3556,6 +3560,8 @@ tienda, se escriben en Kapta y nunca van a Vercel, al chat ni al repositorio.
      organización. Copiar el secreto directo del Dev Dashboard al campo; nunca
      por chat. Si dice que la tienda ya está en Kapta, no se tocó nada: mirar
      con la consulta de abajo (sin filtrar por app) qué fila tiene ese dominio.
+     Si dice que «ya está en esta organización, sin acceso a Shopify», es el
+     paso 5.
    - Si Kapta dice que faltan alcances, añadirlos en una versión nueva de la
      app, instalarla otra vez y volver a conectar.
 
@@ -3581,9 +3587,41 @@ tienda, se escriben en Kapta y nunca van a Vercel, al chat ni al repositorio.
    §36.4), en este orden: rotarlo en el Dev Dashboard; pegar el nuevo en
    Ajustes → Shopify → «Credenciales de la app» → «Probar y guardar»; revocar
    el anterior en el Dev Dashboard; y pulsar «Ya revoqué el secreto anterior».
-   Mientras tanto Kapta acepta los webhooks firmados con el anterior, hasta 48
-   h. Si se cambia el Client ID (otra app), Kapta registra los webhooks de la
-   nueva: después, desinstalar la anterior de la tienda.
+   Mientras tanto Kapta acepta los webhooks de pedidos y borradores firmados
+   con el anterior, hasta 48 h; un `app/uninstalled` firmado solo con el
+   anterior se rechaza con 401 y la tienda sigue activa (MOM §36.4). Si se
+   cambia el Client ID (otra app), Kapta registra los webhooks de la nueva:
+   después, desinstalar la anterior de la tienda.
+
+5. **Si al conectar Kapta dice que la tienda «ya está en esta organización,
+   sin acceso a Shopify»** (MOM §36.2): alguien la creó con «Crear tienda con
+   token de Admin API» y quedó `interna` sin token. «Conectar con app propia»
+   no la toca; la convierte soporte, a mano, y solo esa fila:
+
+   ```sql
+   -- a) La fila (solo lectura): de esa organización, interna y sin token.
+   select id, org_id, name, shopify_app, status, shopify_token_enc is null as sin_token
+     from stores
+    where lower(shopify_domain) = lower('<tienda>.myshopify.com');
+   -- b) Pasarla a app propia (el id de a).
+   update stores set shopify_app='propia' where id='<id>' and shopify_app='interna' and shopify_token_enc is null;
+   ```
+
+   Tiene que decir `UPDATE 1`. `UPDATE 0` es que la fila tiene token o ya no
+   es `interna`: no seguir (Kenku y Aurela tienen token, así que el `where`
+   nunca las toma). Si falla por `stores_own_app_shop_uniq`, ya hay otra
+   tienda propia con ese dominio: no seguir. Después, en Kapta, alguien con
+   «Administrar tiendas»: Ajustes de esa tienda → Shopify → «Credenciales de
+   la app» → el Client ID y el Client secret → «Probar y guardar». Pide el
+   token, guarda las credenciales y, si la tienda está activa o en pausa,
+   registra sus webhooks (pedidos, borradores y `app/uninstalled`) y dice
+   «Credenciales probadas y guardadas, y los webhooks registrados»: no hay app
+   anterior, no se desinstala nada; si está deshabilitada, el aviso dice que
+   se active y se re-registren. Luego
+   «Sincronizar ahora». Entre el `update` y «Probar y guardar», el cron puede
+   anotar «Faltan el Client ID o el Client secret…» en `shopify_token_error`:
+   se borra al guardar. Comprobar con la consulta de «Qué mirar después» del
+   paso 3.
 
 **Marcha atrás.** Revertir el código basta: las tiendas propias dejan de
 renovar y su token vence en menos de 24 h; Kenku, Aurela y las tiendas

@@ -136,6 +136,6 @@ comment on column stores.shopify_token_error is
 comment on column stores.shopify_token_retry_at is
   'Solo app propia (MOM §36.3): antes de esta hora la renovación al usar el token no vuelve a pedir uno a Shopify. Cada intento al usar la pone 5 min adelante; un fallo de red o un 429/5xx, 15 min. El cron y «Renovar ahora» no la miran.';
 comment on column stores.shopify_webhook_secret_prev_enc is
-  'enc: solo app propia (MOM §36.4). El Client secret anterior tras rotarlo en Ajustes, cifrado AES-256-GCM. Los webhooks se aceptan también firmados con él durante 48 h desde shopify_webhook_secret_prev_set_at, o hasta que alguien confirma que lo revocó. Nunca viaja al cliente.';
+  'enc: solo app propia (MOM §36.4). El Client secret anterior tras rotarlo en Ajustes, cifrado AES-256-GCM. Los webhooks de pedidos y borradores se aceptan también firmados con él durante 48 h desde shopify_webhook_secret_prev_set_at, o hasta que alguien confirma que lo revocó; un app/uninstalled firmado solo con él, nunca. Nunca viaja al cliente.';
 comment on column stores.shopify_webhook_secret_prev_set_at is
   'Solo app propia (MOM §36.4): cuándo el Client secret anterior pasó a serlo. Pasadas 48 h ya no firma nada que Kapta acepte.';
