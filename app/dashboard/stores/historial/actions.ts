@@ -9,6 +9,8 @@ import { revalidatePath } from "next/cache";
 import { createAdminSupabase } from "@/lib/db";
 import { getAccessibleStores, getCurrentUser } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
+import { getStoreCreds } from "@/lib/ingest";
+import { shopifyGraphQL } from "@/lib/shopify";
 import type { HistoryCustomer, HistoryFileKind, HistoryOrder } from "@/lib/shopify-history";
 
 const BUCKET = "shopify-history";
@@ -223,4 +225,50 @@ export async function finishHistoryFile(
   if (error) return { error: error.message };
   revalidatePath(PATH);
   return { ok: true };
+}
+
+export interface HistoryAccessProbe {
+  /** Pedidos anteriores a 2022 que el token de la tienda alcanza a ver. */
+  before2022: number;
+  /** Si Shopify dice que son «al menos» (pasa de 10.000). */
+  before2022AtLeast: boolean;
+  /** El pedido más antiguo que ve el token. */
+  oldest: { name: string; createdAt: string } | null;
+  scopes: string[];
+}
+
+/**
+ * ¿El token de la tienda ve los pedidos de más de 60 días? Una consulta de solo
+ * lectura a Shopify: no guarda nada. Sin `read_all_orders`, Shopify solo deja
+ * ver los últimos 60 días y aquí sale 0 antes de 2022.
+ */
+export async function probeShopifyHistoryAccess(storeId: string): Promise<HistoryAccessProbe | { error: string }> {
+  const g = await guard();
+  if ("error" in g) return g;
+  if (!g.storeIds.has(storeId)) return { error: "Tienda inválida o sin acceso." };
+  const creds = await getStoreCreds(storeId);
+  if (!creds?.shopify_domain || !creds.shopify_token) return { error: "La tienda no tiene conexión con Shopify en Kapta." };
+  try {
+    const data = await shopifyGraphQL<{
+      currentAppInstallation: { accessScopes: { handle: string }[] } | null;
+      antiguos: { count: number; precision: string } | null;
+      primero: { nodes: { name: string; createdAt: string }[] };
+    }>({
+      domain: creds.shopify_domain,
+      token: creds.shopify_token,
+      query: `query {
+        currentAppInstallation { accessScopes { handle } }
+        antiguos: ordersCount(query: "created_at:<2022-01-01") { count precision }
+        primero: orders(first: 1, sortKey: CREATED_AT) { nodes { name createdAt } }
+      }`,
+    });
+    return {
+      before2022: data.antiguos?.count ?? 0,
+      before2022AtLeast: data.antiguos?.precision === "AT_LEAST",
+      oldest: data.primero?.nodes?.[0] ?? null,
+      scopes: (data.currentAppInstallation?.accessScopes ?? []).map((s) => s.handle).sort(),
+    };
+  } catch (cause) {
+    return { error: `Shopify no respondió: ${(cause as Error).message.slice(0, 300)}` };
+  }
 }

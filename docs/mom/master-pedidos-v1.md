@@ -15663,6 +15663,21 @@ solo las tiendas que la persona ve.
   después de comprobar `data.export` y que la tienda es de la persona. Nadie
   edita ni borra desde el panel.
 
+### 37.5 Traer el historial por la API de Shopify
+
+Shopify solo deja leer por API los pedidos de los últimos 60 días, salvo que
+el token tenga `read_all_orders`. Aurela y Kenku se conectan con un token fijo
+de una app creada en su propio admin (`interna`, §36), y nunca se probó si ese
+token ve pedidos más antiguos: la primera sincronización solo pidió el último
+mes. Por eso la pantalla tiene **«Probar acceso a pedidos antiguos»**: una
+consulta de solo lectura que cuenta los pedidos anteriores a 2022 que ve el
+token, el más antiguo y los permisos del token. No guarda nada.
+
+Si los ve, el historial se trae completo por API y va a las mismas tablas de
+§37: **nunca** a `orders` ni al Master (37.1). Si no, la vía son los CSV. Con
+la tienda suspendida por Shopify, la API deja de responder: los CSV siguen
+siendo el respaldo.
+
 Implementación:
 
 - `db/migrations/0273_shopify_history.sql`: `shopify_history_files`,
@@ -15672,8 +15687,9 @@ Implementación:
   agrupación por pedido, clientes, montos y fechas).
 - `app/dashboard/stores/historial/actions.ts`: registrar el archivo y su URL
   firmada de subida, cargar tandas y cerrar el archivo.
-- `components/shopify-history-upload.tsx` y
-  `app/dashboard/stores/historial/page.tsx`: la pantalla.
+- `components/shopify-history-upload.tsx`, `components/shopify-history-api.tsx`
+  (la prueba de 37.5) y `app/dashboard/stores/historial/page.tsx`: la
+  pantalla.
 - Pruebas: `test/shopify-history.test.ts`.
 
 ## 38. WooCommerce (23-10-2026)

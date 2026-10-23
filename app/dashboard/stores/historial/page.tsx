@@ -11,6 +11,7 @@ import { normalizePhone } from "@/lib/phone";
 import { Card, Section } from "@/components/ui";
 import { Badge } from "@/components/ops-ui";
 import { ShopifyHistoryUpload } from "@/components/shopify-history-upload";
+import { ShopifyHistoryApiProbe } from "@/components/shopify-history-api";
 
 export const dynamic = "force-dynamic";
 
@@ -169,6 +170,15 @@ export default async function ShopifyHistoryPage({
       <Card>
         <Section title={`Cargar archivos · ${store.name}`}>
           <ShopifyHistoryUpload key={store.id} storeId={store.id} storeName={store.name} />
+        </Section>
+      </Card>
+
+      <Card>
+        <Section
+          title="Traer desde Shopify por API"
+          subtitle="Si Kapta ve los pedidos antiguos, el historial se puede traer completo sin exportar a mano."
+        >
+          <ShopifyHistoryApiProbe storeId={store.id} />
         </Section>
       </Card>
 
