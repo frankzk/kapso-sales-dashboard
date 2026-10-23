@@ -262,7 +262,7 @@ describe("estados", () => {
   it("«Por confirmar», el estado propio del formulario contraentrega (23-10-2026): entra vivo, cod y pending", () => {
     for (const status of ["por-confirmar", "wc-por-confirmar", "Por-Confirmar"]) {
       expect(isWooOrderIngestible({ status })).toBe(true);
-      const row = mapWooOrder({ ...codLimaOrder(), status, date_paid: null, date_paid_gmt: null }, KENKU)!;
+      const row = mapWooOrder({ ...codLimaOrder(), status, date_paid_gmt: null }, KENKU)!;
       expect(row).not.toBeNull();
       expect(row.payment_gateway).toBe("cod");
       expect(row.financial_status).toBe("pending");
