@@ -16627,6 +16627,7 @@ llevan `retry_after_seconds` (10 s, o lo del candado).
 | `unauthorized` | 401 | no |
 | `body_too_large` | 413 | no |
 | `invalid_body` | 400 | no |
+| `agency_needs_advisor` | 422 | no |
 | `wrong_platform` | 409 | no |
 | `store_inactive` | 409 | no |
 | `rate_limited` | 429 | sí |
@@ -16657,11 +16658,14 @@ ellas sus pedidos contarían todos como contraentrega sin promo (rollups
 `cod_orders`, `agency_orders`, `promo_orders`, `stock_validar_orders`; el
 filtro de agencia del Master; «Provincia Sin COD» de la hoja). Por eso
 `shipping_mode` y `tags` viajan como `shipping_mode` y `kapta_tags` (38.5) y
-entran a la huella. El pago sigue siendo contraentrega en WooCommerce (`cod`):
-Kapta todavía no registra el adelanto de agencia; el contrato pide decirlo en
-`note` y deja la decisión al owner.
+entran a la huella. **Agencia: el bot no crea el pedido (decisión del owner,
+23-10-2026).** Con `shipping_mode` de agencia Kapta contesta
+`agency_needs_advisor` (422) antes de leer la tienda o tomar el candado, sin
+crear nada, y el bot deriva a una asesora, que genera el pedido con el adelanto
+desde Leads. Desde el bot solo entran pedidos contraentrega.
 
-**Los precios los decide el bot (riesgo aceptado, pendiente del owner).** El
+**Los precios los decide el bot, como hoy en Shopify (decisión del owner,
+23-10-2026: sin piso por ahora).** El
 control de precios de 38.12 comprueba que WooCommerce guarde **lo que mandó el
 bot**, no lo compara con el catálogo: cualquier `unit_price` de 0 o más pasa
 (0 en cualquier SKU como regalo, un descuento de hasta el 100 % menos un
@@ -16669,10 +16673,10 @@ céntimo), y con `cart_draft_gid` no se exige el precio del borrador (en
 Shopify `draftOrderComplete` cobraba el guardado). Es la regla que pidió el
 owner para el cuerpo («0 para regalos, nunca negativo») y la del formulario de
 la asesora, pero aquí quien llama es un agente que conversa con la clienta.
-Mientras el owner no fije un piso (precio de catálogo menos un descuento
-máximo por tienda, lista de regalos, el precio de la copia del carrito), el
-contrato pide fijar los precios en las instrucciones del agente y derivar lo
-que diga la clienta; la decisión daría un código nuevo (`price_not_allowed`).
+Sin piso, el contrato pide fijar los precios en las instrucciones del agente y
+derivar lo que diga la clienta. Un piso (precio de catálogo menos un descuento
+máximo por tienda, lista de regalos, el precio de la copia del carrito) queda
+para después del corte, con un código nuevo (`price_not_allowed`).
 
 **El registro.** Una línea `[bot-orders]` por llamada: la tienda, los 12
 primeros caracteres del sha256 del request_id, el resultado, el código HTTP,

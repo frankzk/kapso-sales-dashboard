@@ -183,6 +183,7 @@ export const BOT_ORDER_CODES = [
   "unauthorized",
   "body_too_large",
   "invalid_body",
+  "agency_needs_advisor",
   "wrong_platform",
   "store_inactive",
   "rate_limited",
@@ -204,6 +205,7 @@ export const BOT_ORDER_HTTP: Readonly<Record<BotOrderCode, number>> = Object.fre
   unauthorized: 401,
   body_too_large: 413,
   invalid_body: 400,
+  agency_needs_advisor: 422,
   wrong_platform: 409,
   store_inactive: 409,
   rate_limited: 429,
@@ -833,6 +835,17 @@ export async function handleBotOrder(req: BotOrderRequest, deps: BotOrderDeps): 
     }
     const input = parsed.input;
     line.req = requestIdLogKey(input.requestId);
+    // Agencia: el bot no la crea (owner, 23-10-2026). El adelanto no se
+    // registra desde el bot; la asesora genera el pedido con el adelanto.
+    // Antes de la tienda y del candado: no se toca nada.
+    if (input.shippingMode === "agency") {
+      return finish(
+        fail(
+          "agency_needs_advisor",
+          "El bot no crea pedidos para recoger en agencia: deriva la conversación a una asesora, que lo genera con el adelanto.",
+        ),
+      );
+    }
 
     // 3) La tienda: activa y en WooCommerce. Nunca Shopify desde aquí.
     const plataforma = await step("store", loadStoreOrderPlatform(admin, storeId));

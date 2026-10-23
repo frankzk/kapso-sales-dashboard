@@ -84,7 +84,7 @@ describe("MOM §38.13", () => {
   });
 
   it("cada código, con su HTTP y si se reintenta, en el MOM y en el contrato", () => {
-    expect(BOT_ORDER_CODES).toHaveLength(16);
+    expect(BOT_ORDER_CODES).toHaveLength(17);
     for (const code of BOT_ORDER_CODES) {
       const http = BOT_ORDER_HTTP[code];
       const retry = BOT_ORDER_RETRYABLE.has(code);
@@ -143,13 +143,16 @@ describe("MOM §38.13", () => {
     expect(CONTRATO).toContain("`order_left_open` (solo a veces)");
   });
 
-  it("el modo de entrega y las etiquetas, como hoy en Shopify; y el precio, un riesgo aceptado pendiente del owner", () => {
+  it("el modo de entrega y las etiquetas, como hoy en Shopify; agencia a una asesora y precios sin piso (owner, 23-10-2026)", () => {
     expect(Object.values(BOT_ORDER_SHIPPING_MODES).sort()).toEqual(["agency", "agency", "cod", "cod"]);
     expect([...BOT_ORDER_TAGS]).toEqual(["promo-whatsapp", "stock-por-validar"]);
     expect(S38_13).toContain("**El modo de entrega y las etiquetas, como hoy.**");
     expect(S38_5).toContain("el meta visible `shipping_mode` (`cod` o `agency`");
-    expect(S38_13).toContain("**Los precios los decide el bot (riesgo aceptado, pendiente del owner).**");
-    expect(CONTRATO).toContain("## 8. Los precios los decide el bot (riesgo aceptado, pendiente del owner)");
+    expect(S38_13).toContain("**Los precios los decide el bot, como hoy en Shopify (decisión del owner, 23-10-2026: sin piso por ahora).**");
+    expect(S38_13).toContain("**Agencia: el bot no crea el pedido (decisión del owner, 23-10-2026).**");
+    expect(S38_13).toContain("`agency_needs_advisor` (422) antes de leer la tienda o tomar el candado");
+    expect(CONTRATO).toContain("## 8. Los precios los decide el bot (como hoy en Shopify; decisión del owner)");
+    expect(CONTRATO).toContain("**Agencia (Shalom, Olva): el bot no crea el pedido (decisión del owner, 23-10-2026).**");
     expect(CONTRATO).toContain("## 9. Pendiente del owner");
   });
 

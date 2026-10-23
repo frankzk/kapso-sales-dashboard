@@ -74,14 +74,12 @@ Reglas del pedido: el pago es contraentrega en WooCommerce (se cobra al
 entregar o al recoger), sin cobro de envío, y el total (productos − descuento)
 tiene que ser mayor que 0: un pedido solo de regalos no se crea.
 
-**Agencia (Shalom, Olva).** Kapta todavía no registra el adelanto: el pedido
-entra con su total entero. `check-coverage` pide el voucher antes de confirmar
-(`requiresVoucherBeforeConfirmation`) y contesta `shouldCreateOrder: false`.
-Hasta que el owner decida (sección 9): si el bot crea un pedido de agencia, lo
-hace **solo con el voucher recibido**, con `shipping_mode: "agencia"`, y dice
-el pago en `note` («Adelanto S/30 Yape, voucher recibido; saldo al recoger en
-la agencia»; Olva: «Pago completo Yape, voucher recibido»). Si no, deriva como
-hoy.
+**Agencia (Shalom, Olva): el bot no crea el pedido (decisión del owner,
+23-10-2026).** Cuando `check-coverage` contesta agencia, el bot **deriva a una
+asesora** (handoff de la sección 4, con el voucher si la clienta ya lo mandó) y
+la asesora genera el pedido desde Leads con el adelanto. Si igual llega
+`shipping_mode: "agencia"`, Kapta contesta `agency_needs_advisor` sin crear
+nada.
 
 Ejemplo (datos inventados):
 
@@ -165,6 +163,7 @@ Cuerpo de un error:
 | `unauthorized` | 401 | no | Falta el secreto, o no es el de esa tienda (o se cambió en Ajustes). | Derivar a una asesora y avisar al equipo: es configuración. |
 | `body_too_large` | 413 | no | El cuerpo pasa de 16 KB. | Derivar y avisar al equipo: es un error del workflow. |
 | `invalid_body` | 400 | no | Faltan datos o no sirven (`errors`). | Si falta un dato de la clienta (celular, dirección, distrito), pedírselo y volver a llamar con un `request_id` **nuevo**. Si es un error del workflow, derivar. |
+| `agency_needs_advisor` | 422 | no | El pedido es para recoger en agencia: el bot no lo crea (owner, 23-10-2026). Kapta no creó nada. | Derivar a una asesora (con el voucher si ya llegó). |
 | `wrong_platform` | 409 | no | La tienda todavía crea sus pedidos en Shopify. Kapta no creó nada. | Antes del corte: seguir con la acción de Shopify de hoy. Después del corte no debería pasar: derivar y avisar. |
 | `store_inactive` | 409 | no | La tienda está pausada en Kapta. | Derivar a una asesora. |
 | `rate_limited` | 429 | sí | Más de 20 pedidos nuevos del bot en un minuto en la tienda (un bucle). | Reintentar (regla de abajo); si no sale, derivar y avisar. |
@@ -286,7 +285,7 @@ prellenado desde la copia de Kapta.
    (y la tienda a Shopify en Ajustes). Para cortar al bot en seco: «Desactivar»
    en Ajustes (contesta 401 y el bot deriva).
 
-## 8. Los precios los decide el bot (riesgo aceptado, pendiente del owner)
+## 8. Los precios los decide el bot (como hoy en Shopify; decisión del owner)
 
 Kapta comprueba que WooCommerce guarde **exactamente** el precio que manda el
 bot (si no, `price_mismatch` y el pedido se borra), pero **no** lo compara con
@@ -294,18 +293,16 @@ el catálogo: cualquier `unit_price` de 0 o más se acepta, un regalo puede ser
 cualquier producto a S/ 0 y un descuento puede llegar al 100 % menos un
 céntimo. Es la regla del formulario de «Generar pedido», pensada para una
 asesora con sesión; aquí el que llama es un agente que conversa con la
-clienta. Hasta que el owner decida un piso (sección 9), las instrucciones del
-agente tienen que fijar los precios del catálogo y de las promociones vigentes
-y **no** aceptar precios que diga la clienta («la asesora me lo dejó en…»):
-eso se deriva.
+clienta. **El owner decidió (23-10-2026) dejarlo como hoy en Shopify: sin
+piso de precios en Kapta.** Por eso las instrucciones del agente tienen que
+fijar los precios del catálogo y de las promociones vigentes y **no** aceptar
+precios que diga la clienta («la asesora me lo dejó en…»): eso se deriva. Un
+piso (código `price_not_allowed`) queda para después del corte.
 
 ## 9. Pendiente del owner
 
-- **Piso de precios** (sección 8): ¿se rechaza un precio por debajo del catálogo
-  menos un descuento máximo por tienda, y un precio 0 fuera de una lista de
-  regalos? Con un `cart_draft_gid`, ¿se exige que los precios sean los de la
-  copia del carrito en Kapta? Con la decisión, Kapta contestaría un código nuevo
-  (`price_not_allowed`) y el bot derivaría.
-- **Los pedidos de agencia** (sección 2): ¿los crea el bot (con el voucher ya
-  recibido y el adelanto en la nota), o se derivan siempre a una asesora? ¿Se
-  registra el adelanto en Kapta?
+- **Decidido el 23-10-2026:** sin piso de precios por ahora (sección 8), y los
+  pedidos de agencia se derivan siempre a una asesora (sección 2).
+- **Después del corte:** un piso de precios (precio de catálogo menos un
+  descuento máximo por tienda, lista de regalos, el precio de la copia del
+  carrito con `cart_draft_gid`), con el código `price_not_allowed`.

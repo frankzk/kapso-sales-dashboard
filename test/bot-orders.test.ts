@@ -1112,20 +1112,32 @@ describe("el mismo pedido pedido dos veces con otro request_id", () => {
 });
 
 describe("el modo de entrega y las etiquetas del bot, como hoy en Shopify", () => {
-  it("agencia, promo y stock por validar: viajan en los meta y la fila los lleva", async () => {
+  it("agencia: el bot no la crea (owner, 23-10-2026): 422 agency_needs_advisor, sin tienda ni candado", async () => {
     setup();
-    const res = await call(pedido({ shipping_mode: "agencia", tags: ["promo-whatsapp", "stock-por-validar"] }));
+    for (const mode of ["agencia", "agency", "Agencia"]) {
+      const res = await call(pedido({ shipping_mode: mode }));
+      expect(res.status).toBe(422);
+      expect(res.body).toMatchObject({ ok: false, code: "agency_needs_advisor", retryable: false });
+    }
+    expect(shop.calls).toHaveLength(0);
+    expect(h.db.rows("bot_order_requests")).toHaveLength(0);
+    expect(h.db.rows("orders")).toHaveLength(0);
+  });
+
+  it("contraentrega con promo y stock por validar: viajan en los meta y la fila los lleva", async () => {
+    setup();
+    const res = await call(pedido({ shipping_mode: "contraentrega", tags: ["promo-whatsapp", "stock-por-validar"] }));
     expect(res.status).toBe(200);
     const meta = shop.calls[1]!.body.meta_data as { key: string; value: string }[];
     expect(meta).toEqual(
       expect.arrayContaining([
-        { key: "shipping_mode", value: "agency" },
+        { key: "shipping_mode", value: "cod" },
         { key: "kapta_tags", value: "promo-whatsapp,stock-por-validar" },
         { key: "kapta_channel", value: "kapso" },
       ]),
     );
     expect(h.db.rows("orders")[0]).toMatchObject({
-      shipping_mode: "agency",
+      shipping_mode: "cod",
       promo_applied: true,
       stock_por_validar: true,
       tags: expect.arrayContaining(["kapso", "whatsapp", "promo-whatsapp", "stock-por-validar"]),
@@ -1148,10 +1160,10 @@ describe("el modo de entrega y las etiquetas del bot, como hoy en Shopify", () =
     );
   });
 
-  it("el mismo request_id con otro modo de entrega es otro pedido: conflict", async () => {
+  it("el mismo request_id con otras etiquetas es otro pedido: conflict", async () => {
     setup();
     await call();
-    const res = await call(pedido({ shipping_mode: "agencia" }));
+    const res = await call(pedido({ tags: ["promo-whatsapp"] }));
     expect(res.body).toMatchObject({ code: "conflict" });
     expect(shop.calls.filter((c) => c.method === "POST")).toHaveLength(1);
   });
