@@ -11,7 +11,7 @@ import { getAccessibleStores, getCurrentUser } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { getStoreCreds } from "@/lib/ingest";
 import { shopifyGraphQL } from "@/lib/shopify";
-import { uniqueOrderNames, type HistoryCustomer, type HistoryFileKind, type HistoryLineItem, type HistoryOrder } from "@/lib/shopify-history";
+import { cleanDeep, clip, uniqueOrderNames, type HistoryCustomer, type HistoryFileKind, type HistoryLineItem, type HistoryOrder } from "@/lib/shopify-history";
 import { hasFullOrderAccess, mergeLineItems, type BulkKind } from "@/lib/shopify-history-bulk";
 import {
   IMPORT_COLUMNS,
@@ -89,8 +89,8 @@ export async function prepareHistoryUpload(input: {
 
 const str = (v: unknown, max = 2000): string | null => {
   if (typeof v !== "string") return null;
-  const t = v.trim();
-  return t ? t.slice(0, max) : null;
+  const t = clip(v.trim(), max).trim();
+  return t ? t : null;
 };
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 const iso = (v: unknown): string | null => (typeof v === "string" && Number.isFinite(Date.parse(v)) ? v : null);
@@ -98,7 +98,7 @@ const rawOf = (v: unknown): Record<string, string> => {
   if (!v || typeof v !== "object" || Array.isArray(v)) return {};
   const out: Record<string, string> = {};
   for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-    if (typeof val === "string") out[k.slice(0, 120)] = val.slice(0, 4000);
+    if (typeof val === "string") out[clip(k, 120)] = clip(val, 4000);
   }
   return out;
 };
@@ -139,7 +139,7 @@ function orderRow(storeId: string, o: HistoryOrder, link: { file_id: string } | 
     notes: str(o.notes, 4000),
     tags: str(o.tags, 2000),
     source: str(o.source, 100),
-    line_items: Array.isArray(o.line_items) ? o.line_items.slice(0, 200) : [],
+    line_items: Array.isArray(o.line_items) ? cleanDeep(o.line_items.slice(0, 200)) : [],
     raw: rawOf(o.raw),
     ...link,
     imported_at: new Date().toISOString(),
@@ -372,7 +372,7 @@ function historyWriter(admin: ReturnType<typeof createAdminSupabase>, storeId: s
         if (!extra?.length) continue;
         await admin
           .from("shopify_history_orders")
-          .update({ line_items: mergeLineItems(row.line_items ?? [], extra).slice(0, 200) })
+          .update({ line_items: cleanDeep(mergeLineItems(row.line_items ?? [], extra).slice(0, 200)) })
           .eq("store_id", storeId)
           .eq("order_name", row.order_name);
       }

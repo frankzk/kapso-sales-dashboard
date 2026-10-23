@@ -347,3 +347,31 @@ export function uniqueOrderNames<T extends { order_name: string | null; shopify_
   }
   return [...byName.values()];
 }
+
+/**
+ * Texto que Postgres acepta (MOM §37.3). Quita los caracteres nulos y las
+ * mitades sueltas de un emoji. Una mitad suelta queda cuando se recorta un
+ * texto justo en medio de un emoji, o viene así de Shopify. Postgres rechaza
+ * la tanda entera con «invalid input syntax for type json»: así se detuvo la
+ * traída de Kenku Peru el 23-10-2026, a los 44.000 pedidos.
+ */
+export function cleanText(s: string): string {
+  return s.replace(/\u0000/g, "").replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
+}
+
+/** Recorta sin partir un emoji, y limpia (`cleanText`). */
+export function clip(s: string, max: number): string {
+  return cleanText(cleanText(s).slice(0, max));
+}
+
+/** `cleanText` en todos los textos de un valor (los productos de un pedido). */
+export function cleanDeep<T>(value: T): T {
+  if (typeof value === "string") return cleanText(value) as T;
+  if (Array.isArray(value)) return value.map((v) => cleanDeep(v)) as T;
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[cleanText(k)] = cleanDeep(v);
+    return out as T;
+  }
+  return value;
+}
