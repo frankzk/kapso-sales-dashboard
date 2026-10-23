@@ -4042,14 +4042,17 @@ en vivo como siempre.
 **Kenku y Aurela no cambian mientras Shopify viva.** El cron solo lee pedidos
 (los campos de la consulta de la boleta, sin datos de clientas), por lotes con
 `nodes(ids: …)` (hasta 25 pedidos por llamada; con los campos de la boleta
-caben unos 7 en el tope de 1.000 puntos de una consulta, 5 con un balde de
+caben unos 7 en el tope de 1.000 puntos de una consulta, 1 con un balde de
 1.000), cada 2 minutos (en los minutos impares, `1-59/2`, para no arrancar
 nunca con el barrido de boletas de los minutos 6, 16, …), hasta 95 s por
 pasada y las dos tiendas a la vez. Antes de cada llamada espera a que la
-tienda tenga en Shopify el costo del lote **más un 25 % del balde de
-reserva**, y en promedio gasta **a lo más el 75 % de lo que el balde se
-repone**: el sync, los webhooks y «Generar pedido» siempre tienen un cuarto
-del balde y un cuarto de la reposición. (La única excepción: con un balde de
+tienda tenga en Shopify el costo del lote **más una reserva: un cuarto del
+balde y nunca menos que una boleta (850 puntos)**, y en promedio gasta **a lo
+más el 75 % de lo que el balde se repone**: una boleta que se lee mientras
+corre la foto (el barrido o «Emitir esta boleta»), el sync, los webhooks y
+«Generar pedido» siempre tienen esa reserva y un cuarto de la reposición. Con
+un balde de 1.000 eso deja lotes de un pedido; el ritmo casi no cambia (lo pone
+la reposición). (La única excepción: con un balde de
 1.000, la consulta de un pedido solo —uno con más de 10 líneas, o que el lote
 no trajo— pide unos 810 puntos y espera el balde lleno; mientras corre deja
 menos de un cuarto.) THROTTLED para la tienda hasta la próxima pasada. Una
@@ -4158,6 +4161,8 @@ una organización con RUC dado de alta). Sin variables de entorno nuevas.
    | 4.000 / 200 por s (Advanced) | ~10.700 · **0,9 h** · 0,2 h | ~4.400 · **2,1 h** · 0,4 h |
    | 20.000 / 1.000 por s (Plus) | ~15.800 (lo limita la latencia) · **0,6 h** · 0,1 h | igual |
 
+   Con un balde de 1.000 la foto va de a un pedido por llamada (la reserva es
+   una boleta) y las horas son las mismas: las pone la reposición, no el lote.
    Las dos tiendas avanzan a la vez, así que el total es el de Kenku. **El peor
    caso razonable (balde de 1.000 y pedidos de 100 puntos) termina en ~9 h**:
    con el código en producción el 24-10, mucho antes del 27-10 a las 18:00 de

@@ -26,12 +26,14 @@
 //
 // EL CUPO DE LA TIENDA. Shopify cobra por adelantado lo que pide la consulta y
 // devuelve lo que no usó. Antes de cada llamada se espera a que la tienda tenga
-// ese costo más una reserva del 25 % del balde (`INVOICE_SNAPSHOT_RESERVE`), y
-// el lote se arma para que eso quepa; y la foto gasta, en promedio, a lo más el
-// 75 % de lo que el balde se repone por segundo. El sync, los webhooks y
-// «Generar pedido» tienen siempre al menos un cuarto del balde y un cuarto de la
-// reposición. Si Shopify contesta THROTTLED, la tienda para hasta la próxima
-// pasada.
+// ese costo más una reserva (`snapshotReservePoints`): un cuarto del balde
+// (`INVOICE_SNAPSHOT_RESERVE`) y nunca menos que lo que pide la lectura de una
+// boleta (`INVOICE_READ_POINTS`), y el lote se arma para que eso quepa; y la
+// foto gasta, en promedio, a lo más el 75 % de lo que el balde se repone por
+// segundo. Una boleta que se lee mientras corre la foto (el barrido o «Emitir
+// esta boleta»), el sync, los webhooks y «Generar pedido» tienen siempre esa
+// reserva y un cuarto de la reposición. Si Shopify contesta THROTTLED, la
+// tienda para hasta la próxima pasada.
 //
 // UNA FALLA NO TAPA LA COLA. Lo que es de la tienda (THROTTLED, la tienda que ya
 // no está, un 5xx, la red, un tiempo agotado sin nada bueno antes) la para. Lo
@@ -113,6 +115,23 @@ export const INVOICE_SNAPSHOT_PARALLEL_STORES = 2;
  */
 export const INVOICE_SNAPSHOT_RESERVE = 0.25;
 
+/**
+ * Lo que pide la lectura de UNA boleta (`ORDER_FOR_INVOICE_QUERY`: 100 líneas,
+ * 20 cobros, 10 envíos), unos 810 puntos, con margen. Con un balde de 1000 un
+ * cuarto (250) no la deja entrar mientras la foto tiene su lote cobrado: la
+ * boleta quedaba en `lectura_fallida` hasta la próxima pasada.
+ */
+export const INVOICE_READ_POINTS = 850;
+
+/**
+ * Los puntos del balde que la foto nunca usa: un cuarto, y nunca menos que una
+ * boleta (sin pasar del balde). Balde de 1000: 850 (lotes de un pedido; el ritmo
+ * lo sigue poniendo la reposición); de 2000: 850; de 4000 o más: un cuarto.
+ */
+export function snapshotReservePoints(max: number): number {
+  return Math.min(max, Math.max(max * INVOICE_SNAPSHOT_RESERVE, INVOICE_READ_POINTS));
+}
+
 /** El tope de costo de UNA consulta en la Admin API de Shopify. */
 export const SHOPIFY_MAX_QUERY_COST = 1000;
 
@@ -122,7 +141,7 @@ export const INVOICE_SNAPSHOT_MAX_BATCH = 25;
 /**
  * Lo que se supone que pide cada pedido del lote si Shopify no dice lo que de
  * verdad pide (`requestedQueryCost` / pedidos). Por lo alto: con un balde de
- * 1000 da lotes de 4. La primera llamada de cada pasada lleva un solo pedido
+ * 2000 da lotes de 6. La primera llamada de cada pasada lleva un solo pedido
  * para saberlo.
  */
 export const INVOICE_SNAPSHOT_ORDER_COST_GUESS = 160;
@@ -389,7 +408,7 @@ function bucketOf(cost: ShopifyQueryCost, at: number, previous: ShopifyQuotaBuck
  */
 export function snapshotWaitMs(bucket: ShopifyQuotaBucket | null, now: number, requested: number): number {
   if (!bucket) return 0;
-  const need = Math.min(requested + bucket.max * INVOICE_SNAPSHOT_RESERVE, bucket.max);
+  const need = Math.min(requested + snapshotReservePoints(bucket.max), bucket.max);
   const elapsed = Math.max(0, now - bucket.at) / 1000;
   const availableNow = Math.min(bucket.max, bucket.available + bucket.restore * elapsed);
   if (availableNow >= need) return 0;
@@ -409,8 +428,11 @@ export function snapshotBatchSize(
   remaining: number,
   maxQueryCost: number = SHOPIFY_MAX_QUERY_COST,
 ): number {
+  // Si Shopify no informó el balde no se espera nada (`snapshotWaitMs`) y el
+  // lote se arma como para uno de 1000 con un cuarto de reserva.
   const max = bucket?.max ?? SHOPIFY_MAX_QUERY_COST;
-  const limit = Math.min(maxQueryCost, max * (1 - INVOICE_SNAPSHOT_RESERVE));
+  const reserve = bucket ? snapshotReservePoints(max) : max * INVOICE_SNAPSHOT_RESERVE;
+  const limit = Math.min(maxQueryCost, max - reserve);
   const fits = Math.floor(limit / Math.max(1, perOrder));
   return Math.max(1, Math.min(fits, cap, remaining));
 }

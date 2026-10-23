@@ -28,6 +28,7 @@ import {
   INVOICE_SNAPSHOT_MAX_CONSECUTIVE_FAILS,
   INVOICE_SNAPSHOT_MAX_DURATION_S,
   INVOICE_SNAPSHOT_MAX_PER_STORE,
+  INVOICE_READ_POINTS,
   INVOICE_SNAPSHOT_RESERVE,
   INVOICE_SNAPSHOT_SINCE,
   InvoiceSnapshotMigrationMissingError,
@@ -40,6 +41,7 @@ import {
   orderForInvoiceSelection,
   runInvoiceSnapshotSweep,
   snapshotBatchSize,
+  snapshotReservePoints,
   snapshotWaitMs,
   type InvoiceSnapshotDeps,
   type InvoiceSnapshotReport,
@@ -430,16 +432,26 @@ describe("runInvoiceSnapshotSweep: el tamaño del lote y el tope de costo", () =
   it("snapshotBatchSize: lo que cabe en el tope de la consulta y en el balde menos la reserva", () => {
     expect(SHOPIFY_MAX_QUERY_COST).toBe(1000);
     expect(INVOICE_SNAPSHOT_RESERVE).toBe(0.25);
-    // Sin saber nada del balde: 750 / 160 = 4.
+    expect(INVOICE_READ_POINTS).toBe(850);
+    // Sin saber nada del balde (Shopify no lo informó): 750 / 160 = 4.
     expect(snapshotBatchSize(null, 160, INVOICE_SNAPSHOT_MAX_BATCH, 100)).toBe(4);
-    // Balde de 1000: 750 de cupo para la consulta.
-    expect(snapshotBatchSize({ max: 1000 }, 120, 25, 100)).toBe(6);
-    // Balde de 2000: el tope es el de UNA consulta (1000), no el balde.
+    // Balde de 1000: la reserva es una boleta (850) y quedan 150: de a un pedido.
+    expect(snapshotBatchSize({ max: 1000 }, 120, 25, 100)).toBe(1);
+    // Balde de 2000: quedan 1150, pero el tope es el de UNA consulta (1000).
     expect(snapshotBatchSize({ max: 2000 }, 120, 25, 100)).toBe(8);
     // Nunca más que el máximo, ni que los que quedan, ni menos de uno.
     expect(snapshotBatchSize({ max: 20_000 }, 10, 25, 100)).toBe(25);
     expect(snapshotBatchSize({ max: 2000 }, 40, 25, 3)).toBe(3);
     expect(snapshotBatchSize({ max: 1000 }, 5000, 25, 100)).toBe(1);
+  });
+
+  it("la reserva: un cuarto del balde y nunca menos que la lectura de una boleta (sin pasar del balde)", () => {
+    expect(snapshotReservePoints(1000)).toBe(850);
+    expect(snapshotReservePoints(2000)).toBe(850);
+    expect(snapshotReservePoints(3400)).toBe(850);
+    expect(snapshotReservePoints(4000)).toBe(1000);
+    expect(snapshotReservePoints(20_000)).toBe(5000);
+    expect(snapshotReservePoints(600)).toBe(600);
   });
 
   it("aprende de Shopify cuánto pide cada pedido y arma lotes más grandes", async () => {
@@ -500,19 +512,22 @@ describe("runInvoiceSnapshotSweep: el tamaño del lote y el tope de costo", () =
   });
 });
 
-describe("runInvoiceSnapshotSweep: el cupo de la tienda (un cuarto del balde y de la reposición)", () => {
+describe("runInvoiceSnapshotSweep: el cupo de la tienda (la reserva del balde y un cuarto de la reposición)", () => {
   it("espera a que la tienda tenga el costo de la llamada más la reserva", () => {
-    const bucket = { available: 500, max: 1000, restore: 50, at: 0 };
-    // Necesita 400 + 25 % de 1000 = 650; tiene 500: faltan 150 a 50 por segundo.
-    expect(snapshotWaitMs(bucket, 0, 400)).toBe(3_000);
-    expect(snapshotWaitMs(bucket, 3_000, 400)).toBe(0);
+    const bucket = { available: 500, max: 2000, restore: 100, at: 0 };
+    // Necesita 400 + 850 (una boleta) = 1250; tiene 500: faltan 750 a 100 por segundo.
+    expect(snapshotWaitMs(bucket, 0, 400)).toBe(7_500);
+    expect(snapshotWaitMs(bucket, 7_500, 400)).toBe(0);
+    // Balde de 1000: 400 + 850 pasa del balde, así que espera el balde lleno.
+    const small = { available: 500, max: 1000, restore: 50, at: 0 };
+    expect(snapshotWaitMs(small, 0, 400)).toBe(10_000);
     // Una consulta que pide casi todo el cupo espera al cupo lleno, no para siempre.
-    expect(snapshotWaitMs({ ...bucket, available: 900 }, 0, 950)).toBe(2_000);
+    expect(snapshotWaitMs({ ...small, available: 900 }, 0, 950)).toBe(2_000);
     expect(snapshotWaitMs(null, 0, 400)).toBe(0);
-    expect(snapshotWaitMs({ ...bucket, restore: 0 }, 0, 400)).toBe(Number.POSITIVE_INFINITY);
+    expect(snapshotWaitMs({ ...small, restore: 0 }, 0, 400)).toBe(Number.POSITIVE_INFINITY);
   });
 
-  it("después de cobrar el lote por adelantado, a la tienda le queda al menos el 25 % del balde", async () => {
+  it("después de cobrar el lote por adelantado, a la tienda le queda al menos lo que pide una boleta (balde de 1000)", async () => {
     const w = world({ candidates: { [KENKU]: cands(1, 40) } });
     // Un balde de verdad: 1000 puntos que se reponen a 50 por segundo, con el
     // reloj de la prueba. Shopify cobra por adelantado lo que pide el lote
@@ -536,20 +551,22 @@ describe("runInvoiceSnapshotSweep: el cupo de la tienda (un cuarto del balde y d
     const report = await runInvoiceSnapshotSweep(adminOf(w), { storeId: KENKU }, d);
     expect(report.stores[0]!.saved).toBe(40);
     expect(left.length).toBeGreaterThan(5);
-    for (const l of left) expect(l).toBeGreaterThanOrEqual(1000 * INVOICE_SNAPSHOT_RESERVE);
+    // Una boleta pide unos 810: el barrido o «Emitir esta boleta» entran
+    // mientras corre la foto.
+    for (const l of left) expect(l).toBeGreaterThanOrEqual(INVOICE_READ_POINTS);
   });
 
   it("gasta a lo más el 75 % de lo que se repone por segundo: entre llamadas espera lo gastado / (0,75 × reposición)", async () => {
     const w = world({ candidates: { [KENKU]: cands(1, 12) } });
-    // Uno para saber, y lotes de 4 (cada pedido pide 160: 750 / 160 = 4). Cada
-    // llamada gasta 150 de verdad; la tienda repone 50 por segundo: 150 / 37,5
-    // = 4 s entre el inicio de una llamada y el de la siguiente.
-    const { fetchImpl, sent } = shopify((ask) => batchOf(ask.ids!, COST(1000, ask.ids!.length * 160, 150, 1000, 50)));
+    // Balde de 2000 que se repone a 100 por segundo. Uno para saber, y lotes de
+    // 6 (cada pedido pide 160: 1000 / 160 = 6). Cada llamada gasta 150 de
+    // verdad: 150 / 75 = 2 s entre el inicio de una llamada y el de la siguiente.
+    const { fetchImpl, sent } = shopify((ask) => batchOf(ask.ids!, COST(2000, ask.ids!.length * 160, 150, 2000, 100)));
     const { d, sleeps } = deps(fetchImpl);
     const report = await runInvoiceSnapshotSweep(adminOf(w), { storeId: KENKU }, d);
-    expect(sizes(sent)).toEqual([1, 4, 4, 3]);
-    expect(sleeps).toEqual([4_000, 4_000, 4_000]);
-    expect(report.stores[0]).toMatchObject({ saved: 12, quota: { max: 1000, restore: 50, available: 1000 } });
+    expect(sizes(sent)).toEqual([1, 6, 5]);
+    expect(sleeps).toEqual([2_000, 2_000]);
+    expect(report.stores[0]).toMatchObject({ saved: 12, quota: { max: 2000, restore: 100, available: 2000 } });
   });
 
   it("si esperar el cupo se pasa del tiempo de la pasada, para por cupo", async () => {
@@ -791,12 +808,13 @@ describe("runInvoiceSnapshotSweep: el turno, el tiempo y las dos tiendas", () =>
     expect(report.ms).toBeGreaterThan(0);
     expect(report.perMinute).toBe(Math.round((10 / report.ms) * 60_000));
     const kenku = report.stores.find((s) => s.storeId === KENKU) as InvoiceSnapshotStoreReport;
-    // 1 + 4 + 3 pedidos a 160 puntos cada uno; 120 gastados por llamada.
+    // Balde de 1000: la reserva es una boleta, así que va de a un pedido; 160
+    // puntos pedidos y 120 gastados por llamada.
     expect(kenku).toMatchObject({
       saved: 8,
-      calls: 3,
-      batch: 3,
-      points: { requested: 8 * 160, actual: 3 * 120 },
+      calls: 8,
+      batch: 1,
+      points: { requested: 8 * 160, actual: 8 * 120 },
       quota: { max: 1000, restore: 50, available: 1000 },
     });
   });

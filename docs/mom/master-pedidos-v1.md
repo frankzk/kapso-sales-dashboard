@@ -15192,8 +15192,8 @@ con la consulta y la llamada exactas de la boleta** (`requestOrderForInvoice`).
 Así lo guardado es siempre, campo por campo, lo que la boleta habría leído. El
 tamaño del lote sale de lo que Shopify dice que pide cada pedido
 (`requestedQueryCost`, unos 135 puntos), entre 1 y 25 (unos 7 en el tope de
-1000; 5 con un balde de 1000); si Shopify contesta que el lote pasa el tope
-(`MAX_COST_EXCEEDED`), se achica sin perder pedidos.
+1000; 1 con un balde de 1000, por la reserva); si Shopify contesta que el lote
+pasa el tope (`MAX_COST_EXCEEDED`), se achica sin perder pedidos.
 
 **Qué pedidos.** El cron `/api/cron/invoice-snapshots`, **cada 2 minutos, en
 los minutos impares** (`1-59/2`: nunca arranca con el barrido de boletas de
@@ -15220,14 +15220,19 @@ nuevo al más viejo.
 propio cupo en Shopify), un lote a la vez por tienda, y ninguna llamada nueva
 pasados **95 s** (la ruta tiene 120 s y el cron vuelve a los 2 minutos). Antes
 de cada llamada espera a que la tienda tenga en Shopify el costo que pide el
-lote **más una reserva del 25 % del balde**, y el lote se arma para que eso
-quepa: después de cobrar la llamada por adelantado, a la tienda le queda
-siempre al menos un cuarto del balde. (La única excepción: con un balde de
-1000, la consulta de un pedido solo, unos 810 puntos, espera el balde lleno y
-mientras corre deja menos.) Y la foto gasta, en promedio, **a lo más
-el 75 % de lo que el balde se repone por segundo** (entre llamada y llamada
-espera lo gastado ÷ 0,75 × reposición). El sync, los webhooks y «Generar
-pedido» tienen siempre un cuarto del balde y un cuarto de la reposición. Si
+lote **más una reserva**: un cuarto del balde y **nunca menos que lo que pide
+la lectura de una boleta** (850 puntos; la consulta de la boleta pide unos
+810), sin pasar del balde. El lote se arma para que eso quepa: después de
+cobrar la llamada por adelantado, a la tienda le queda siempre esa reserva, y
+una boleta que se lee mientras corre la foto (el barrido o «Emitir esta
+boleta») entra en vez de quedar en `lectura_fallida`. Con un balde de 1000 la
+reserva es 850 y la foto va de a un pedido por llamada; el ritmo casi no cambia
+porque lo pone la reposición. (La única excepción: con un balde de 1000, la
+consulta de un pedido solo, unos 810 puntos, espera el balde lleno y mientras
+corre deja menos.) Y la foto gasta, en promedio, **a lo más el 75 % de lo que
+el balde se repone por segundo** (entre llamada y llamada espera lo gastado ÷
+0,75 × reposición). El sync, los webhooks y «Generar pedido» tienen siempre esa
+reserva y un cuarto de la reposición. Si
 Shopify contesta THROTTLED, la tienda para hasta la próxima pasada. Un **turno
 por tienda** en la base (`invoice_snapshot_lease`, 125 s, se suelta al
 terminar) impide dos pasadas a la vez sobre la misma tienda (un cron repetido,
