@@ -32,10 +32,13 @@ const S35_10 = section("### 35.10 La foto del pedido");
 describe("las migraciones: 0274 es la base de WooCommerce y 0275 la foto, en ese orden", () => {
   const files = readdirSync(resolve(process.cwd(), "db/migrations")).filter((f) => /^\d{4}_/.test(f));
 
-  it("un archivo por número, y 0275 es la última", () => {
+  it("un archivo por número, y 0275 justo después de 0274", () => {
     expect(files.filter((f) => f.startsWith("0274_"))).toEqual(["0274_woocommerce_base.sql"]);
     expect(files.filter((f) => f.startsWith("0275_"))).toEqual(["0275_invoice_snapshots.sql"]);
-    expect([...files].sort().at(-1)).toBe("0275_invoice_snapshots.sql");
+    // Era «0275 es la última» hasta que llegó la 0276 (historial de Shopify por
+    // API, MOM §37.5): lo que importa es el orden entre las dos.
+    const sorted = [...files].sort();
+    expect(sorted.indexOf("0275_invoice_snapshots.sql")).toBe(sorted.indexOf("0274_woocommerce_base.sql") + 1);
   });
 
   it("db/apply.sql las aplica en orden: 0274 antes que 0275", () => {

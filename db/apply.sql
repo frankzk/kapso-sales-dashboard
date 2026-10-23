@@ -553,4 +553,6 @@
 \ir migrations/0274_woocommerce_base.sql
 \echo 'Applying 0275_invoice_snapshots.sql'
 \ir migrations/0275_invoice_snapshots.sql
+\echo 'Applying 0276_shopify_history_imports.sql'
+\ir migrations/0276_shopify_history_imports.sql
 \echo 'Done.'

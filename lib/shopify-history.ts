@@ -22,6 +22,8 @@ import { normalizePhone } from "@/lib/phone";
 export type HistoryFileKind = "pedidos" | "clientes" | "productos" | "otro";
 
 export interface HistoryLineItem {
+  /** El id de Shopify del producto del pedido; solo lo trae la API (§37.5). */
+  id?: string | null;
   name: string;
   sku: string | null;
   quantity: number;
