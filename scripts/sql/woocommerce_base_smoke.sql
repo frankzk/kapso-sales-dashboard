@@ -1,8 +1,8 @@
--- Base de WooCommerce (0273, MOM §37). Sobre el clúster desechable, después de
+-- Base de WooCommerce (0274, MOM §38). Sobre el clúster desechable, después de
 -- todas las migraciones y con los fixtures de rls_smoke.sql. Lo que fija es la
 -- promesa de la migración: Kenku Peru y Aurela siguen en Shopify exactamente
 -- igual hasta que Shopify cierre.
---   a) Aplicada sobre el esquema que hay en producción (el de la 0272, con
+--   a) Aplicada sobre el esquema que hay en producción (el de la 0273, con
 --      Kenku, Aurela y una tienda cliente con pedidos y borradores), no cambia
 --      ninguna fila: todo nace 'shopify' y las columnas woo_* en null.
 --   b) La plataforma solo admite 'shopify' y 'woocommerce', en las tres tablas.
@@ -19,7 +19,7 @@
 
 begin;
 
--- ── El esquema de antes de la 0273, como está en producción ─────────────────
+-- ── El esquema de antes de la 0274, como está en producción ─────────────────
 drop index if exists stores_woo_site_key_uniq;
 drop index if exists stores_woo_site_url_uniq;
 alter table stores drop constraint if exists stores_woo_platform_check;
@@ -33,23 +33,24 @@ alter table stores
   drop column if exists woo_consumer_secret_enc,
   drop column if exists woo_webhook_secret_enc,
   drop column if exists woo_last_error,
-  drop column if exists platform_switched_at;
+  drop column if exists platform_switched_at,
+  drop column if exists woo_intake_from;
 alter table orders drop column if exists platform;
 alter table draft_orders drop column if exists platform;
 
 -- Kenku Peru y Aurela con la app interna, y una tienda cliente; cada una con lo
 -- que guarda hoy, sus pedidos y sus borradores.
 insert into organizations (id, name) values
-  ('27300000-0000-0000-0000-0000000000a1', 'Grupo GF (0273)'),
-  ('27300000-0000-0000-0000-0000000000a2', 'Cliente (0273)');
+  ('27300000-0000-0000-0000-0000000000a1', 'Grupo GF (0274)'),
+  ('27300000-0000-0000-0000-0000000000a2', 'Cliente (0274)');
 insert into stores (id, org_id, name, shopify_domain, shopify_token_enc, shopify_webhook_secret_enc,
                     status, shopify_app, order_prefix) values
   ('27300000-0000-0000-0000-0000000000b1', '27300000-0000-0000-0000-0000000000a1', 'Kenku Peru',
-   'kenkuperu-0273.myshopify.com', 'enc:token-kenku', 'enc:secreto-kenku', 'active', 'interna', 'KP'),
+   'kenkuperu-0274.myshopify.com', 'enc:token-kenku', 'enc:secreto-kenku', 'active', 'interna', 'KP'),
   ('27300000-0000-0000-0000-0000000000b2', '27300000-0000-0000-0000-0000000000a1', 'Aurela',
-   'aurela-peru-0273.myshopify.com', 'enc:token-aurela', 'enc:secreto-aurela', 'active', 'interna', 'AUR'),
+   'aurela-peru-0274.myshopify.com', 'enc:token-aurela', 'enc:secreto-aurela', 'active', 'interna', 'AUR'),
   ('27300000-0000-0000-0000-0000000000b3', '27300000-0000-0000-0000-0000000000a2', 'Cliente conectada',
-   'cliente-0273.myshopify.com', 'enc:token-cliente', 'enc:secreto-app-clientes', 'active', 'clientes', null);
+   'cliente-0274.myshopify.com', 'enc:token-cliente', 'enc:secreto-app-clientes', 'active', 'clientes', null);
 insert into orders (id, store_id, shopify_order_id, name, created_at, total_amount, currency, financial_status, tags) values
   ('27300000-0000-0000-0000-0000000000c1', '27300000-0000-0000-0000-0000000000b1', '7549608558887', '#KP143506',
    '2026-10-23T05:00:00Z', 149, 'PEN', 'pending', '{easysell_cod_form}'),
@@ -59,41 +60,41 @@ insert into draft_orders (id, store_id, shopify_draft_order_id, name, status, cr
   ('27300000-0000-0000-0000-0000000000d1', '27300000-0000-0000-0000-0000000000b1', '1234567890123', '#D9001',
    'open', '2026-10-23T04:00:00Z');
 
-create temp table s0273_stores_before on commit drop as select s.id, to_jsonb(s) as fila from stores s;
-create temp table s0273_orders_before on commit drop as select o.id, to_jsonb(o) as fila from orders o;
-create temp table s0273_drafts_before on commit drop as select d.id, to_jsonb(d) as fila from draft_orders d;
+create temp table s0274_stores_before on commit drop as select s.id, to_jsonb(s) as fila from stores s;
+create temp table s0274_orders_before on commit drop as select o.id, to_jsonb(o) as fila from orders o;
+create temp table s0274_drafts_before on commit drop as select d.id, to_jsonb(d) as fila from draft_orders d;
 
-\echo '  primera pasada, sobre el esquema de la 0272'
-\ir ../../db/migrations/0273_woocommerce_base.sql
+\echo '  primera pasada, sobre el esquema de la 0273'
+\ir ../../db/migrations/0274_woocommerce_base.sql
 
 -- ── a) Ninguna fila cambia ─────────────────────────────────────────────────
 do $$
 declare
   v_nuevas text[] := array['platform', 'woo_site_url', 'woo_site_key', 'woo_consumer_key_enc',
                            'woo_consumer_secret_enc', 'woo_webhook_secret_enc', 'woo_last_error',
-                           'platform_switched_at'];
+                           'platform_switched_at', 'woo_intake_from'];
   v_bad    text;
 begin
-  if (select count(*) from stores) <> (select count(*) from s0273_stores_before)
-     or (select count(*) from orders) <> (select count(*) from s0273_orders_before)
-     or (select count(*) from draft_orders) <> (select count(*) from s0273_drafts_before) then
-    raise exception 'la 0273 cambió cuántas tiendas, pedidos o borradores hay';
+  if (select count(*) from stores) <> (select count(*) from s0274_stores_before)
+     or (select count(*) from orders) <> (select count(*) from s0274_orders_before)
+     or (select count(*) from draft_orders) <> (select count(*) from s0274_drafts_before) then
+    raise exception 'la 0274 cambió cuántas tiendas, pedidos o borradores hay';
   end if;
   select string_agg(s.name, ', ') into v_bad
-    from stores s join s0273_stores_before b on b.id = s.id
+    from stores s join s0274_stores_before b on b.id = s.id
    where (to_jsonb(s) - v_nuevas) is distinct from b.fila;
   if v_bad is not null then
-    raise exception 'la 0273 cambió estas tiendas: %', v_bad;
+    raise exception 'la 0274 cambió estas tiendas: %', v_bad;
   end if;
   select string_agg(o.name, ', ') into v_bad
-    from orders o join s0273_orders_before b on b.id = o.id
+    from orders o join s0274_orders_before b on b.id = o.id
    where (to_jsonb(o) - 'platform') is distinct from b.fila;
   if v_bad is not null then
-    raise exception 'la 0273 cambió estos pedidos: %', v_bad;
+    raise exception 'la 0274 cambió estos pedidos: %', v_bad;
   end if;
-  if exists (select 1 from draft_orders d join s0273_drafts_before b on b.id = d.id
+  if exists (select 1 from draft_orders d join s0274_drafts_before b on b.id = d.id
               where (to_jsonb(d) - 'platform') is distinct from b.fila) then
-    raise exception 'la 0273 cambió un borrador';
+    raise exception 'la 0274 cambió un borrador';
   end if;
 
   select string_agg(s.name, ', ') into v_bad
@@ -101,7 +102,7 @@ begin
    where s.platform <> 'shopify' or s.woo_site_url is not null or s.woo_site_key is not null
       or s.woo_consumer_key_enc is not null or s.woo_consumer_secret_enc is not null
       or s.woo_webhook_secret_enc is not null or s.woo_last_error is not null
-      or s.platform_switched_at is not null;
+      or s.platform_switched_at is not null or s.woo_intake_from is not null;
   if v_bad is not null then
     raise exception 'las tiendas tienen que nacer shopify y sin nada de WooCommerce: %', v_bad;
   end if;
@@ -111,7 +112,7 @@ begin
   end if;
   if (select (shopify_app, shopify_token_enc, status, shopify_domain) from stores
        where id = '27300000-0000-0000-0000-0000000000b1')
-     is distinct from ('interna'::text, 'enc:token-kenku'::text, 'active'::text, 'kenkuperu-0273.myshopify.com'::text) then
+     is distinct from ('interna'::text, 'enc:token-kenku'::text, 'active'::text, 'kenkuperu-0274.myshopify.com'::text) then
     raise exception 'Kenku Peru tiene que seguir interna, activa, con su token y su dominio';
   end if;
 
@@ -128,6 +129,23 @@ begin
   insert into draft_orders (store_id, shopify_draft_order_id) values ('27300000-0000-0000-0000-0000000000b2', '99887766');
   if (select platform from draft_orders where shopify_draft_order_id = '99887766') <> 'shopify' then
     raise exception 'un borrador de Shopify que no dice su plataforma tiene que quedar shopify';
+  end if;
+end $$;
+
+-- ── a2) Los CHECK de orders y draft_orders quedan validados ─────────────────
+-- Entran `not valid` (sin recorrer la tabla bajo el candado exclusivo) y se
+-- validan aparte; al final tienen que estar validados, como uno en línea.
+do $$
+begin
+  if (select count(*) from pg_constraint
+       where conname in ('orders_platform_check', 'draft_orders_platform_check', 'stores_platform_check')
+         and convalidated) <> 3 then
+    raise exception 'los CHECK de la plataforma tienen que quedar validados';
+  end if;
+  -- La columna nueva no reescribió la tabla: el valor por defecto vive en el
+  -- catálogo (atthasmissing) para las filas de antes.
+  if not (select atthasmissing from pg_attribute where attrelid = 'orders'::regclass and attname = 'platform') then
+    raise exception 'orders.platform tenía que añadirse sin reescribir la tabla';
   end if;
 end $$;
 
@@ -263,7 +281,7 @@ begin
     foreach v_priv in array array['SELECT', 'INSERT', 'UPDATE'] loop
       foreach v_col in array array['platform', 'woo_site_url', 'woo_site_key', 'woo_consumer_key_enc',
                                    'woo_consumer_secret_enc', 'woo_webhook_secret_enc', 'woo_last_error',
-                                   'platform_switched_at'] loop
+                                   'platform_switched_at', 'woo_intake_from'] loop
         if has_column_privilege(v_role, 'stores', v_col, v_priv)
            is distinct from has_column_privilege(v_role, 'stores', 'shopify_token_enc', v_priv) then
           raise exception '% sobre stores.% para % no es el de shopify_token_enc', v_priv, v_col, v_role;
@@ -314,34 +332,34 @@ begin
 end $$;
 
 -- ── g) Dos veces es una ─────────────────────────────────────────────────────
-create temp table s0273_after on commit drop as
+create temp table s0274_after on commit drop as
 select 's' as t, s.id, to_jsonb(s) as fila from stores s
 union all select 'o', o.id, to_jsonb(o) from orders o
 union all select 'd', d.id, to_jsonb(d) from draft_orders d;
-create temp table s0273_constraints on commit drop as
+create temp table s0274_constraints on commit drop as
 select oid, conname from pg_constraint
  where conname in ('stores_platform_check', 'stores_woo_site_key_check', 'stores_woo_site_url_check',
                    'stores_woo_platform_check', 'orders_platform_check', 'draft_orders_platform_check');
 
 \echo '  segunda pasada'
-\ir ../../db/migrations/0273_woocommerce_base.sql
+\ir ../../db/migrations/0274_woocommerce_base.sql
 
 do $$
 begin
-  if (select count(*) from s0273_constraints) <> 6 then
-    raise exception 'la 0273 tiene que dejar seis CHECK con nombre (hay %)', (select count(*) from s0273_constraints);
+  if (select count(*) from s0274_constraints) <> 6 then
+    raise exception 'la 0274 tiene que dejar seis CHECK con nombre (hay %)', (select count(*) from s0274_constraints);
   end if;
   if exists (
     select 1
       from (select 's' as t, s.id, to_jsonb(s) as fila from stores s
             union all select 'o', o.id, to_jsonb(o) from orders o
             union all select 'd', d.id, to_jsonb(d) from draft_orders d) now_
-      full join s0273_after a on a.t = now_.t and a.id = now_.id
+      full join s0274_after a on a.t = now_.t and a.id = now_.id
      where now_.fila is distinct from a.fila
   ) then
     raise exception 'correrla otra vez no puede cambiar ninguna fila';
   end if;
-  if (select count(*) from pg_constraint c join s0273_constraints k on k.oid = c.oid) <> 6 then
+  if (select count(*) from pg_constraint c join s0274_constraints k on k.oid = c.oid) <> 6 then
     raise exception 'correrla otra vez no debería rehacer los CHECK (ni validar las tablas de nuevo)';
   end if;
   if (select count(*) from pg_indexes

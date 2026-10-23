@@ -17,9 +17,10 @@
 // `mapOrderForInvoice` y `fetchOrderForInvoice` no lanzan: devuelven el motivo.
 //
 // LA FOTO (MOM §35.10, owner 23-10-2026). Shopify cierra Kenku Perú y Aurela el
-// 28-10-2026. Si la tienda ya no tiene token, o Shopify contesta por ella que ya
-// no está, la boleta sale de la foto que se guardó mientras Shopify respondía
-// (`order_invoice_snapshots`, 0274), con el mismo mapeo, y la lectura lo dice.
+// 28-10-2026. Si la tienda ya no tiene token, o —desde el cierre— Shopify
+// contesta por ella que ya no está, la boleta sale de la foto que se guardó
+// mientras Shopify respondía (`order_invoice_snapshots`, 0275), con el mismo
+// mapeo, y la lectura lo dice.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase } from "@/lib/db";
@@ -31,6 +32,7 @@ import {
   type ShopifyQueryCost,
 } from "@/lib/shopify";
 import { OWN_APP, ownAppTokenForUseById } from "@/lib/shopify-own-app";
+import { isAfterShopifyShutdown } from "@/lib/invoicing/shopify-cutoff";
 import { extractNumericId } from "@/lib/shopify-urls";
 import { CHECKOUT_GATEWAYS } from "@/lib/payment-gateway";
 import type { InvoiceItem, InvoiceReason } from "@/lib/invoicing/rules";
@@ -131,7 +133,7 @@ export type InvoiceOrderRead =
 type InvoiceOrderOk = Extract<InvoiceOrderRead, { ok: true }>;
 
 /** Tope de la lectura: el barrido corre con presupuesto y un Shopify colgado no puede comérselo. */
-const SHOPIFY_READ_TIMEOUT_MS = 15_000;
+export const SHOPIFY_READ_TIMEOUT_MS = 15_000;
 
 /** El largo del nombre de un ítem en SimpleFact (lo corta igual `buildSalePayload`). */
 const ITEM_NAME_MAX = 250;
@@ -580,12 +582,12 @@ export function shopifyOrderGidOf(numericId: string): string {
 // Shopify cierra Kenku Perú y Aurela el 28-10-2026, y los pedidos que ya se
 // vendieron ahí se siguen cobrando —y facturando— después. Mientras Shopify
 // responde, el cron `invoice-snapshots` guarda lo que esta lectura devolvería
-// (`order_invoice_snapshots`, 0274). Cuando la tienda ya no tiene token, o
-// Shopify contesta por ella que ya no está (401, 402, 403, 404, 423), la boleta
-// sale de esa foto, con el mismo mapeo, y lo dice. Con Shopify funcionando
-// nunca se mira la foto: se lee en vivo, como siempre.
+// (`order_invoice_snapshots`, 0275). Cuando la tienda ya no tiene token, o
+// desde el cierre Shopify contesta por ella que ya no está (401, 402, 403, 404,
+// 423), la boleta sale de esa foto, con el mismo mapeo, y lo dice. Con Shopify
+// funcionando nunca se mira la foto: se lee en vivo, como siempre.
 
-/** La tabla de las fotos (0274). */
+/** La tabla de las fotos (0275). */
 export const INVOICE_SNAPSHOT_TABLE = "order_invoice_snapshots";
 
 /**
@@ -635,13 +637,13 @@ async function readFromSnapshot(
     .eq("store_id", storeId)
     .eq("shopify_order_gid", shopifyOrderGidOf(numericId))
     .maybeSingle();
-  // Sin la 0274 no hay fotos: es lo mismo que no tener la de este pedido.
+  // Sin la 0275 no hay fotos: es lo mismo que no tener la de este pedido.
   if (snap.error) {
     return isSnapshotTableMissing(snap.error) ? failure : fail("lectura_fallida", "No se pudo leer la foto del pedido.");
   }
   const row = snap.data as { order_id?: unknown; payload?: unknown; fetched_at?: unknown } | null;
   if (!row) return failure;
-  // `payload` es el `data` de la respuesta: `{ order: … }` (0274).
+  // `payload` es el `data` de la respuesta: `{ order: … }` (0275).
   const payload = row.payload;
   if (
     typeof row.order_id !== "string" ||
@@ -680,14 +682,16 @@ async function readFromSnapshot(
  * `sin_token_shopify`; un pedido que Shopify no devuelve —por ejemplo, uno de
  * más de 60 días sin `read_all_orders`—, `no_encontrado`.
  *
- * Si la tienda ya no tiene token, o Shopify contesta por ella que ya no está
- * (401, 402, 403, 404, 423), la boleta sale de la foto del pedido, si la hay
- * (MOM §35.10), y la lectura lo dice (`snapshot`). Sin foto, el motivo es el
- * mismo de siempre.
+ * Si la tienda ya no tiene token (la llave de la operación), o desde el cierre
+ * (`SNAPSHOT_FALLBACK_FROM`, 28-10-2026 00:00 UTC) Shopify contesta por ella
+ * que ya no está (401, 402, 403, 404, 423), la boleta sale de la foto del
+ * pedido, si la hay (MOM §35.10), y la lectura lo dice (`snapshot`). Antes del
+ * cierre esas respuestas son `lectura_fallida`, como siempre: con Shopify vivo,
+ * la boleta no cambia. Sin foto, el motivo es el mismo de siempre.
  */
 export async function fetchOrderForInvoice(
   input: { storeId: string; shopifyOrderId: string },
-  deps: { admin?: SupabaseClient; fetchImpl?: typeof fetch } = {},
+  deps: { admin?: SupabaseClient; fetchImpl?: typeof fetch; now?: () => number } = {},
 ): Promise<InvoiceOrderRead> {
   const numericId = numericIdOf(input.shopifyOrderId);
   if (!numericId) return fail("no_encontrado", "El pedido no tiene id de Shopify.");
@@ -706,7 +710,10 @@ export async function fetchOrderForInvoice(
     data = await requestOrderForInvoice(conn, numericId, { fetchImpl: deps.fetchImpl });
   } catch (e) {
     const failure = fail("lectura_fallida", shopifyFailureDetail(e));
-    return isShopifyShopGone(e) ? readFromSnapshot(admin, input.storeId, input.shopifyOrderId, failure) : failure;
+    const afterShutdown = isAfterShopifyShutdown((deps.now ?? Date.now)());
+    return isShopifyShopGone(e) && afterShutdown
+      ? readFromSnapshot(admin, input.storeId, input.shopifyOrderId, failure)
+      : failure;
   }
 
   // Sin `order` en la respuesta no es «no existe»: es una respuesta que no

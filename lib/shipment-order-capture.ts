@@ -122,9 +122,9 @@ export async function captureShopifyOrderForLink(
 // ── La plataforma del pedido ─────────────────────────────────────────────────
 
 /**
- * De qué plataforma es un pedido de Kapta (`orders.platform`, 0273, MOM §37.1).
+ * De qué plataforma es un pedido de Kapta (`orders.platform`, 0274, MOM §38.1).
  * Lo que depende de la plataforma se decide con esto, nunca por la forma del
- * id: `wc-kp-1532` también tiene un número. Antes de la 0273 todos los pedidos
+ * id: `wc-kp-1532` también tiene un número. Antes de la 0274 todos los pedidos
  * son de Shopify, y si la columna no se puede leer se responde `shopify`: es lo
  * que se hacía siempre.
  */
@@ -142,7 +142,7 @@ export type ShopifyAddressPush =
   /**
    * No se escribió en Shopify y se sigue con el envío: la tienda no tiene token
    * (`sin_shopify`), Shopify contestó por ella que ya no está (`tienda_caida`,
-   * con su HTTP) o el pedido es de WooCommerce (`woocommerce`, MOM §37.12), que
+   * con su HTTP) o el pedido es de WooCommerce (`woocommerce`, MOM §38.12), que
    * nunca se manda a Shopify.
    */
   | { ok: true; wrote: false; why: "sin_shopify" }

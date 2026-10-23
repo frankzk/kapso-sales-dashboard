@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { processWooWebhook, type WooWebhookResult } from "@/lib/ingest";
 import { wooWebhookHttpStatus } from "@/lib/woocommerce-intake";
 
-// Webhooks de pedidos de WooCommerce (MOM §37.11). Apartada de la de Shopify a
+// Webhooks de pedidos de WooCommerce (MOM §38.11). Apartada de la de Shopify a
 // propósito: otra firma, otro secreto, otra regla para los fallos.
 //
 // WooCommerce NO reintenta un aviso fallido y desactiva el webhook después de 5

@@ -1,6 +1,6 @@
 "use server";
 
-// Ajustes → WooCommerce (MOM §37.11): guardar el sitio y las claves de
+// Ajustes → WooCommerce (MOM §38.11): guardar el sitio y las claves de
 // WooCommerce de una tienda, probar la conexión y generar el secreto de los
 // webhooks. Con el mismo permiso que las demás credenciales de la tienda
 // («Administrar tiendas», `stores.manage`).
@@ -11,11 +11,13 @@
 //
 // LOS SECRETOS NO SALEN. Se cifran aquí y se descifran aquí, solo para probar
 // la conexión. Ninguna respuesta los lleva, salvo el secreto de webhooks recién
-// generado, UNA vez, para pegarlo en WooCommerce (como el de Kapso).
+// generado, UNA vez, para pegarlo en WooCommerce (como el de Kapso). Y las
+// claves de la API guardadas solo se mandan al sitio guardado: para probar o
+// guardar otra dirección hay que escribirlas de nuevo (`WOO_NEW_SITE_NEEDS_KEYS`).
 //
 // NADA DE SHOPIFY. Estas acciones solo escriben columnas `woo_*`. No cambian
 // `stores.platform` (dónde crea Kapta los pedidos nuevos): ese cambio es del día
-// del corte y lo decide el owner (MOM §37.1).
+// del corte y lo decide el owner (MOM §38.1).
 
 import { randomBytes } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -27,6 +29,7 @@ import { encrypt } from "@/lib/crypto";
 import { WooError, normalizeWooSiteUrl, wooGetPage, wooRequest, type WooClientOpts } from "@/lib/woocommerce";
 import { WOO_STORE_COLUMNS, recordWooLastError, withWooAuthFallback, wooCredsFromRow, wooHostOf } from "@/lib/woocommerce-intake";
 import {
+  WOO_NEW_SITE_NEEDS_KEYS,
   WOO_SETTINGS_FIELDS,
   buildWooSettingsPatch,
   isWooMigrationMissing,
@@ -41,7 +44,7 @@ export interface WooSettingsState extends SettingsState {
   wooSecret?: string;
 }
 
-const MIGRATION_MISSING = "Falta aplicar la migración 0273 (WooCommerce) en la base: no se guardó nada.";
+const MIGRATION_MISSING = "Falta aplicar la migración 0274 (WooCommerce) en la base: no se guardó nada.";
 
 /** La puerta: la tienda existe, hay sesión y quien pide tiene «Administrar tiendas» en su organización. */
 async function requireWooAdmin(storeId: string): Promise<{ admin: SupabaseClient } | null> {
@@ -153,10 +156,16 @@ export async function saveWooSettings(_prev: WooSettingsState, formData: FormDat
 
   let probeNotice: string | null = null;
   if (validation.apiChanged && validation.apiComplete) {
+    // Con una dirección nueva, solo las claves escritas ahora (la validación ya
+    // lo exige): las guardadas no viajan a otro sitio.
+    const newSite = Boolean(values.siteUrl);
+    const consumerKey = newSite ? values.consumerKey : (values.consumerKey ?? stored.consumerKey);
+    const consumerSecret = newSite ? values.consumerSecret : (values.consumerSecret ?? stored.consumerSecret);
+    if (!consumerKey || !consumerSecret) return { error: WOO_NEW_SITE_NEEDS_KEYS };
     const probe = await probeWoo({
       siteUrl: values.siteUrl ?? stored.siteUrl ?? "",
-      consumerKey: values.consumerKey ?? stored.consumerKey ?? "",
-      consumerSecret: values.consumerSecret ?? stored.consumerSecret ?? "",
+      consumerKey,
+      consumerSecret,
     });
     if (!probe.ok) return { error: `No se guardó: ${probe.error}` };
     probeNotice = probe.notice;
@@ -164,6 +173,15 @@ export async function saveWooSettings(_prev: WooSettingsState, formData: FormDat
 
   const patch: Record<string, unknown> = buildWooSettingsPatch(values);
   if (probeNotice) patch.woo_last_error = null;
+  // La primera vez que la tienda queda con las claves de la API, desde ahora
+  // entran sus pedidos de WooCommerce: lo creado antes (la historia de Shopify
+  // importada al WordPress) no entra como pedido nuevo (MOM §38.11). No se
+  // mueve después.
+  let intakeFromNow = false;
+  if (validation.apiComplete && values.consumerKey && values.consumerSecret && !loaded.row.woo_intake_from) {
+    patch.woo_intake_from = new Date().toISOString();
+    intakeFromNow = true;
+  }
   const { error } = await ctx.admin.from("stores").update(patch).eq("id", storeId);
   if (error) {
     return {
@@ -177,6 +195,9 @@ export async function saveWooSettings(_prev: WooSettingsState, formData: FormDat
   if (probeNotice) lines.push(probeNotice);
   if (validation.apiComplete) {
     lines.push("Desde ahora la sincronización trae cada 5 minutos los pedidos de este sitio al Master.");
+    if (intakeFromNow) {
+      lines.push("Solo entran los pedidos creados desde este momento: los anteriores del sitio (por ejemplo, la historia importada de Shopify) no.");
+    }
   } else {
     lines.push("Faltan la Consumer key y el Consumer secret para traer pedidos por la API.");
   }
@@ -200,8 +221,16 @@ export async function testWooConnection(_prev: WooSettingsState, formData: FormD
   const typedUrl = (typed.siteUrl ?? "").trim();
   const siteUrl = typedUrl ? normalizeWooSiteUrl(typedUrl) : stored.siteUrl;
   if (typedUrl && !siteUrl) return { error: "La dirección del sitio tiene que ser https://… de un dominio público." };
-  const consumerKey = (typed.consumerKey ?? "").trim() || stored.consumerKey;
-  const consumerSecret = (typed.consumerSecret ?? "").trim() || stored.consumerSecret;
+  const typedKey = (typed.consumerKey ?? "").trim();
+  const typedSecret = (typed.consumerSecret ?? "").trim();
+  // Las claves guardadas solo viajan al sitio guardado: con otra dirección, las
+  // dos tienen que venir escritas.
+  if (siteUrl && siteUrl !== stored.siteUrl && (stored.consumerKey || stored.consumerSecret) && !(typedKey && typedSecret)) {
+    return { error: WOO_NEW_SITE_NEEDS_KEYS };
+  }
+  const sameSite = siteUrl === stored.siteUrl;
+  const consumerKey = typedKey || (sameSite ? stored.consumerKey : null);
+  const consumerSecret = typedSecret || (sameSite ? stored.consumerSecret : null);
   if (!siteUrl || !consumerKey || !consumerSecret) {
     return { error: "Para probar hacen falta la dirección del sitio, la Consumer key y el Consumer secret (escritos o guardados)." };
   }

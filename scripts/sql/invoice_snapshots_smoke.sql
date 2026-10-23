@@ -1,7 +1,7 @@
--- La foto del pedido para su boleta (0274, MOM §35.10, owner 23-10-2026). Sobre
--- el clúster desechable, después de todas las migraciones (con la 0273) y con
+-- La foto del pedido para su boleta (0275, MOM §35.10, owner 23-10-2026). Sobre
+-- el clúster desechable, después de todas las migraciones (con la 0274) y con
 -- los fixtures de rls_smoke.sql. Lo que fija:
---   a) Aplicada sobre el esquema de la 0273 —Kenku, Aurela, sus pedidos, su
+--   a) Aplicada sobre el esquema de la 0274 —Kenku, Aurela, sus pedidos, su
 --      Master y sus comprobantes—, no cambia ninguna fila de ninguna tabla.
 --   b) `invoice_snapshot_candidates` elige lo de la regla: de esa tienda, de
 --      Shopify (`orders.platform`) con su id numérico, desde el piso, sin
@@ -10,33 +10,43 @@
 --      nuevo al más viejo. Sin piso o sin límite, nada.
 --   c) `invoice_snapshot_put` guarda solo un pedido de Shopify de esa tienda, con
 --      su gid y la respuesta tal cual (`{"order": …}` de ese pedido o null);
---      nunca una foto más vieja sobre una más nueva; y la que guarda sale de la
+--      nunca una foto más vieja sobre una más nueva; nunca `{"order": null}`
+--      sobre una foto con el pedido (sí al revés); y la que guarda sale de la
 --      lista hasta que el pedido vuelva a cambiar.
 --   d) Solo el servidor: RLS encendida, sin privilegios para anon ni
 --      authenticated en la tabla ni en las funciones.
 --   e) Dos veces es una.
---   f) Sin la 0273 delante, se detiene en su guarda.
+--   f) Sin la 0274 delante, se detiene en su guarda.
+--   g) Un pedido que falla no tapa la cola: va detrás de los que nunca
+--      fallaron, espera antes de volver, sus fallas se borran al guardar su
+--      foto, y solo se anotan pedidos de esa tienda.
+--   h) El turno de una tienda: una sola pasada a la vez; vence solo.
 -- Todo dentro de una transacción que se deshace al final.
 
 begin;
 set local client_min_messages = warning;
 
--- ── El esquema de antes de la 0274 ──────────────────────────────────────────
+-- ── El esquema de antes de la 0275 ──────────────────────────────────────────
+drop function if exists invoice_snapshot_release(uuid, uuid);
+drop function if exists invoice_snapshot_lease(uuid, uuid, integer);
+drop function if exists invoice_snapshot_failed(uuid, uuid[], text, integer);
 drop function if exists invoice_snapshot_put(uuid, uuid, text, jsonb, timestamptz);
 drop function if exists invoice_snapshot_candidates(uuid, timestamptz, integer);
+drop table if exists invoice_snapshot_leases;
+drop table if exists invoice_snapshot_attempts;
 drop table if exists order_invoice_snapshots;
 
 -- Grupo GF con su RUC, Kenku Peru y Aurela. Los pedidos de Kenku cubren cada
 -- condición de la regla; Aurela tiene uno que nunca entra en la lista de Kenku.
-insert into organizations (id, name) values ('27400000-0000-0000-0000-0000000000a1', 'Grupo GF (0274)');
+insert into organizations (id, name) values ('27400000-0000-0000-0000-0000000000a1', 'Grupo GF (0275)');
 insert into stores (id, org_id, name, shopify_domain, status, shopify_app) values
   ('27400000-0000-0000-0000-0000000000b1', '27400000-0000-0000-0000-0000000000a1', 'Kenku Peru',
-   'kenku-peru-0274.myshopify.com', 'active', 'interna'),
+   'kenku-peru-0275.myshopify.com', 'active', 'interna'),
   ('27400000-0000-0000-0000-0000000000b2', '27400000-0000-0000-0000-0000000000a1', 'Aurela',
-   'aurela-0274.myshopify.com', 'active', 'interna');
+   'aurela-0275.myshopify.com', 'active', 'interna');
 insert into invoice_issuers (id, org_id, ruc, legal_name, simplefact_subdomain) values
   ('27400000-0000-0000-0000-0000000000e1', '27400000-0000-0000-0000-0000000000a1', '20000000274',
-   'GF 0274 S.A.C.', 'gf0274');
+   'GF 0275 S.A.C.', 'gf0275');
 
 -- Los pedidos: 27400000-…-0000000000NN (c01 a c13).
 create function pg_temp.p(n integer) returns uuid language sql immutable as $$
@@ -70,7 +80,7 @@ insert into orders (id, store_id, shopify_order_id, name, created_at, updated_at
   (pg_temp.p(8),  '27400000-0000-0000-0000-0000000000b1', 'wc-kp-1532', '#KP200908',
    '2026-10-22T16:00:00Z', '2026-10-22T16:00:00Z', null, 100, 'PEN', 'woocommerce'),
   -- 9: un pedido manual (sin id de Shopify) → no.
-  (pg_temp.p(9),  '27400000-0000-0000-0000-0000000000b1', 'manual-0274', '#KP200909',
+  (pg_temp.p(9),  '27400000-0000-0000-0000-0000000000b1', 'manual-0275', '#KP200909',
    '2026-10-22T17:00:00Z', '2026-10-22T17:00:00Z', null, 100, 'PEN', 'shopify'),
   -- 10: de Aurela → no en la lista de Kenku.
   (pg_temp.p(10), '27400000-0000-0000-0000-0000000000b2', '7400000000010', '#AUR900010',
@@ -98,8 +108,8 @@ insert into order_invoices (id, org_id, store_id, order_id, issuer_id, ruc, mode
   (gen_random_uuid(), '27400000-0000-0000-0000-0000000000a1', '27400000-0000-0000-0000-0000000000b1', pg_temp.p(7),
    '27400000-0000-0000-0000-0000000000e1', '20000000274', 'simulacion', 'simulada', 100, now(), '{"invoice_type": "03"}');
 
--- La huella de todo lo que la 0274 promete no tocar.
-create temp table s0274_antes on commit drop as
+-- La huella de todo lo que la 0275 promete no tocar.
+create temp table s0275_antes on commit drop as
 select 'orders' as tabla, md5(string_agg(to_jsonb(o)::text, ',' order by o.id)) as huella from orders o
 union all
 select 'stores', md5(string_agg(to_jsonb(s)::text, ',' order by s.id)) from stores s
@@ -108,8 +118,8 @@ select 'order_master', md5(string_agg(to_jsonb(m)::text, ',' order by m.order_id
 union all
 select 'order_invoices', md5(string_agg(to_jsonb(i)::text, ',' order by i.id)) from order_invoices i;
 
-\echo '  primera pasada, sobre el esquema de la 0273'
-\ir ../../db/migrations/0274_invoice_snapshots.sql
+\echo '  primera pasada, sobre el esquema de la 0274'
+\ir ../../db/migrations/0275_invoice_snapshots.sql
 
 -- ── a) Ninguna fila cambia ─────────────────────────────────────────────────
 do $$
@@ -117,7 +127,7 @@ declare
   v_bad text;
 begin
   select string_agg(a.tabla, ', ') into v_bad
-    from s0274_antes a
+    from s0275_antes a
     join (
       select 'orders' as tabla, md5(string_agg(to_jsonb(o)::text, ',' order by o.id)) as huella from orders o
       union all
@@ -129,10 +139,11 @@ begin
     ) d on d.tabla = a.tabla
    where d.huella is distinct from a.huella;
   if v_bad is not null then
-    raise exception 'la 0274 cambió filas de: %', v_bad;
+    raise exception 'la 0275 cambió filas de: %', v_bad;
   end if;
-  if exists (select 1 from order_invoice_snapshots) then
-    raise exception 'la 0274 tiene que nacer vacía';
+  if exists (select 1 from order_invoice_snapshots) or exists (select 1 from invoice_snapshot_attempts)
+     or exists (select 1 from invoice_snapshot_leases) then
+    raise exception 'la 0275 tiene que nacer vacía';
   end if;
 end $$;
 
@@ -188,12 +199,13 @@ declare
   a constant uuid := '27400000-0000-0000-0000-0000000000b2';
   g1 constant text := 'gid://shopify/Order/7400000000001';
   bueno constant jsonb := '{"order": {"id": "gid://shopify/Order/7400000000001", "name": "#KP200901"}}';
+  nuevo constant jsonb := '{"order": {"id": "gid://shopify/Order/7400000000001", "name": "#KP200901", "edited": true}}';
 begin
   -- Lo que no es una foto de un pedido de Shopify de esa tienda, no entra.
   if invoice_snapshot_put(pg_temp.p(8), k, 'gid://shopify/Order/1532', '{"order": null}', now()) then
     raise exception 'guardó la foto de un pedido de WooCommerce';
   end if;
-  if invoice_snapshot_put(pg_temp.p(9), k, 'gid://shopify/Order/0274', '{"order": null}', now()) then
+  if invoice_snapshot_put(pg_temp.p(9), k, 'gid://shopify/Order/0275', '{"order": null}', now()) then
     raise exception 'guardó la foto de un pedido sin id de Shopify';
   end if;
   if invoice_snapshot_put(pg_temp.p(1), a, g1, bueno, now()) then
@@ -209,7 +221,7 @@ begin
      or invoice_snapshot_put(pg_temp.p(1), k, g1, '[]', now())
      or invoice_snapshot_put(pg_temp.p(1), k, g1, '{"order": [1]}', now())
      or invoice_snapshot_put(pg_temp.p(1), k, g1, null, now()) then
-    raise exception 'guardó una respuesta sin la forma de la 0274';
+    raise exception 'guardó una respuesta sin la forma de la 0275';
   end if;
   if invoice_snapshot_put(pg_temp.p(1), k, g1, bueno, now() + interval '1 hour')
      or invoice_snapshot_put(pg_temp.p(1), k, g1, bueno, null) then
@@ -219,10 +231,16 @@ begin
     raise exception 'quedó una foto que no debía';
   end if;
 
-  -- La buena entra, y sale de la lista. (Las horas van contra `now()`: una
+  -- Shopify no lo devolvió: esa respuesta también es una foto (`order` null),
+  -- y una más nueva igual la reemplaza. (Las horas van contra `now()`: una
   -- foto «del futuro» no se acepta.)
+  if not invoice_snapshot_put(pg_temp.p(1), k, g1, '{"order": null}', now() - interval '5 hours')
+     or not invoice_snapshot_put(pg_temp.p(1), k, g1, '{"order": null}', now() - interval '4 hours') then
+    raise exception 'no guardó la foto sin el pedido, o no la reemplazó por una más nueva';
+  end if;
+  -- La buena entra sobre la que no trae el pedido, y sale de la lista.
   if not invoice_snapshot_put(pg_temp.p(1), k, g1, bueno, now() - interval '3 hours') then
-    raise exception 'no guardó la foto buena';
+    raise exception 'no guardó la foto buena sobre una sin el pedido';
   end if;
   if (select payload from order_invoice_snapshots where order_id = pg_temp.p(1)) is distinct from bueno then
     raise exception 'la foto no es la respuesta tal cual';
@@ -238,17 +256,29 @@ begin
   if (select payload from order_invoice_snapshots where order_id = pg_temp.p(1)) is distinct from bueno then
     raise exception 'la foto cambió con una más vieja';
   end if;
-  -- El pedido cambia en Shopify después de la foto: vuelve a la lista, y la
-  -- más nueva la reemplaza.
+  -- El pedido cambia en Shopify después de la foto: vuelve a la lista.
   update orders set updated_at = now() - interval '2 hours' where id = pg_temp.p(1);
   if pg_temp.lista(k, '2026-08-29T00:00:00Z', 100) not like '%#KP200901*%' then
     raise exception 'un pedido que cambió después de su foto no volvió a la lista';
   end if;
-  if not invoice_snapshot_put(pg_temp.p(1), k, g1, '{"order": null}', now() - interval '1 hour') then
+  -- Una lectura más nueva que dice que Shopify no lo devolvió NO pisa la foto
+  -- con el pedido: la buena queda, con su hora, y el pedido sigue en la lista.
+  if invoice_snapshot_put(pg_temp.p(1), k, g1, '{"order": null}', now() - interval '1 hour') then
+    raise exception 'una foto sin el pedido pisó a una con el pedido';
+  end if;
+  if (select (payload, fetched_at) from order_invoice_snapshots where order_id = pg_temp.p(1))
+     is distinct from (bueno, now() - interval '3 hours') then
+    raise exception 'la foto buena cambió con una sin el pedido';
+  end if;
+  if pg_temp.lista(k, '2026-08-29T00:00:00Z', 100) not like '%#KP200901*%' then
+    raise exception 'el pedido con la foto buena conservada tiene que seguir en la lista';
+  end if;
+  -- Una más nueva con el pedido, sí la reemplaza.
+  if not invoice_snapshot_put(pg_temp.p(1), k, g1, nuevo, now() - interval '1 hour') then
     raise exception 'no reemplazó la foto vieja';
   end if;
   if (select (payload, fetched_at) from order_invoice_snapshots where order_id = pg_temp.p(1))
-     is distinct from ('{"order": null}'::jsonb, now() - interval '1 hour') then
+     is distinct from (nuevo, now() - interval '1 hour') then
     raise exception 'la foto nueva no quedó';
   end if;
 
@@ -270,28 +300,40 @@ end $$;
 -- ── d) Solo el servidor ─────────────────────────────────────────────────────
 do $$
 declare
-  v_rol  text;
-  v_priv text;
+  v_rol   text;
+  v_priv  text;
+  v_tabla text;
+  v_fn    text;
 begin
-  if not (select relrowsecurity from pg_class where oid = 'public.order_invoice_snapshots'::regclass) then
-    raise exception 'order_invoice_snapshots sin RLS';
-  end if;
-  foreach v_rol in array array['anon', 'authenticated'] loop
-    foreach v_priv in array array['select', 'insert', 'update', 'delete'] loop
-      if has_table_privilege(v_rol, 'public.order_invoice_snapshots', v_priv) then
-        raise exception '% puede % en order_invoice_snapshots', v_rol, v_priv;
-      end if;
+  foreach v_tabla in array array['order_invoice_snapshots', 'invoice_snapshot_attempts', 'invoice_snapshot_leases'] loop
+    if not (select relrowsecurity from pg_class where oid = ('public.' || v_tabla)::regclass) then
+      raise exception '% sin RLS', v_tabla;
+    end if;
+    foreach v_rol in array array['anon', 'authenticated'] loop
+      foreach v_priv in array array['select', 'insert', 'update', 'delete'] loop
+        if has_table_privilege(v_rol, 'public.' || v_tabla, v_priv) then
+          raise exception '% puede % en %', v_rol, v_priv, v_tabla;
+        end if;
+      end loop;
     end loop;
-    if has_function_privilege(v_rol, 'invoice_snapshot_candidates(uuid, timestamptz, integer)', 'execute')
-       or has_function_privilege(v_rol, 'invoice_snapshot_put(uuid, uuid, text, jsonb, timestamptz)', 'execute') then
-      raise exception '% puede ejecutar las funciones de la 0274', v_rol;
+    if not has_table_privilege('service_role', 'public.' || v_tabla, 'insert') then
+      raise exception 'service_role tiene que poder escribir en %', v_tabla;
     end if;
   end loop;
-  if not has_table_privilege('service_role', 'public.order_invoice_snapshots', 'insert')
-     or not has_function_privilege('service_role', 'invoice_snapshot_candidates(uuid, timestamptz, integer)', 'execute')
-     or not has_function_privilege('service_role', 'invoice_snapshot_put(uuid, uuid, text, jsonb, timestamptz)', 'execute') then
-    raise exception 'service_role tiene que poder leer y escribir las fotos';
-  end if;
+  foreach v_fn in array array['invoice_snapshot_candidates(uuid, timestamptz, integer)',
+                              'invoice_snapshot_put(uuid, uuid, text, jsonb, timestamptz)',
+                              'invoice_snapshot_failed(uuid, uuid[], text, integer)',
+                              'invoice_snapshot_lease(uuid, uuid, integer)',
+                              'invoice_snapshot_release(uuid, uuid)'] loop
+    foreach v_rol in array array['anon', 'authenticated'] loop
+      if has_function_privilege(v_rol, v_fn, 'execute') then
+        raise exception '% puede ejecutar %', v_rol, v_fn;
+      end if;
+    end loop;
+    if not has_function_privilege('service_role', v_fn, 'execute') then
+      raise exception 'service_role tiene que poder ejecutar %', v_fn;
+    end if;
+  end loop;
 end $$;
 
 -- Y un usuario con sesión no ve ninguna foto, aunque sea de su tienda.
@@ -305,51 +347,147 @@ end $$;
 reset role;
 
 -- ── e) Dos veces es una ─────────────────────────────────────────────────────
-create temp table s0274_fotos on commit drop as
+create temp table s0275_fotos on commit drop as
 select order_id, to_jsonb(x) as fila from order_invoice_snapshots x;
 \echo '  segunda pasada'
-\ir ../../db/migrations/0274_invoice_snapshots.sql
+\ir ../../db/migrations/0275_invoice_snapshots.sql
 do $$
 begin
-  if (select count(*) from order_invoice_snapshots) <> (select count(*) from s0274_fotos)
-     or exists (select 1 from order_invoice_snapshots x join s0274_fotos f on f.order_id = x.order_id
+  if (select count(*) from order_invoice_snapshots) <> (select count(*) from s0275_fotos)
+     or exists (select 1 from order_invoice_snapshots x join s0275_fotos f on f.order_id = x.order_id
                  where to_jsonb(x) is distinct from f.fila) then
-    raise exception 'correr la 0274 otra vez cambió las fotos';
+    raise exception 'correr la 0275 otra vez cambió las fotos';
   end if;
-  if (select count(*) from pg_proc where proname in ('invoice_snapshot_candidates', 'invoice_snapshot_put')) <> 2 then
-    raise exception 'correr la 0274 otra vez dejó funciones de más';
+  if (select count(*) from pg_proc
+       where proname in ('invoice_snapshot_candidates', 'invoice_snapshot_put', 'invoice_snapshot_failed',
+                         'invoice_snapshot_lease', 'invoice_snapshot_release')) <> 5 then
+    raise exception 'correr la 0275 otra vez dejó funciones de más';
   end if;
 end $$;
 
--- ── f) Sin la 0273, se detiene en su guarda ─────────────────────────────────
+-- ── g) Un pedido que falla no tapa la cola ──────────────────────────────────
+do $$
+declare
+  k constant uuid := '27400000-0000-0000-0000-0000000000b1';
+  a constant uuid := '27400000-0000-0000-0000-0000000000b2';
+  piso constant timestamptz := '2026-08-29T00:00:00Z';
+  v text;
+  n integer;
+begin
+  -- Antes: 3, 7, 2 sin foto (el 1 ya tiene la suya, de c); 11 y 13 para rehacer.
+  v := pg_temp.lista(k, piso, 100);
+  if v <> '#KP200903 #KP200907 #KP200902 #KP200911* #KP200913*' then
+    raise exception 'la lista antes de las fallas: %', v;
+  end if;
+  -- El 3 (el primero) falla: se anota, y mientras espera no está en la lista.
+  n := invoice_snapshot_failed(k, array[pg_temp.p(3)], 'Shopify no respondió a tiempo.', 3);
+  if n <> 0 then raise exception 'una falla no es alerta todavía (dio %)', n; end if;
+  if (select (fail_count, last_error) from invoice_snapshot_attempts where order_id = pg_temp.p(3))
+     is distinct from (1, 'Shopify no respondió a tiempo.'::text) then
+    raise exception 'la falla del 3 no quedó anotada';
+  end if;
+  if pg_temp.lista(k, piso, 100) like '%#KP200903%' then
+    raise exception 'un pedido que acaba de fallar tiene que esperar';
+  end if;
+  -- Pasada la espera vuelve, pero DETRÁS de los que nunca fallaron (aunque
+  -- sea el más nuevo y siga en curso), y antes de las fotos por rehacer.
+  update invoice_snapshot_attempts set last_attempt_at = now() - interval '3 minutes' where order_id = pg_temp.p(3);
+  v := pg_temp.lista(k, piso, 100);
+  if v <> '#KP200907 #KP200902 #KP200903 #KP200911* #KP200913*' then
+    raise exception 'un pedido que falló tiene que ir detrás de los que nunca fallaron: %', v;
+  end if;
+  -- Dos fallas seguidas esperan 4 minutos; 3 ya no alcanzan.
+  perform invoice_snapshot_failed(k, array[pg_temp.p(3)], 'x', 3);
+  update invoice_snapshot_attempts set last_attempt_at = now() - interval '3 minutes' where order_id = pg_temp.p(3);
+  if pg_temp.lista(k, piso, 100) like '%#KP200903%' then
+    raise exception 'con dos fallas seguidas espera 4 minutos';
+  end if;
+  -- La tercera seguida es alerta; la espera nunca pasa de 30 minutos.
+  n := invoice_snapshot_failed(k, array[pg_temp.p(3), pg_temp.p(7)], 'x', 3);
+  if n <> 1 then raise exception 'la tercera falla seguida es una alerta (dio %)', n; end if;
+  update invoice_snapshot_attempts set fail_count = 500, last_attempt_at = now() - interval '31 minutes'
+   where order_id = pg_temp.p(3);
+  if pg_temp.lista(k, piso, 100) not like '%#KP200903%' then
+    raise exception 'la espera no pasa de 30 minutos';
+  end if;
+  -- Solo se anotan pedidos de esa tienda: uno de Aurela con la tienda de Kenku, no.
+  perform invoice_snapshot_failed(k, array[pg_temp.p(10)], 'x', 3);
+  if exists (select 1 from invoice_snapshot_attempts where order_id = pg_temp.p(10)) then
+    raise exception 'se anotó un pedido de otra tienda';
+  end if;
+  -- Al guardar su foto, las fallas del pedido se borran.
+  if not invoice_snapshot_put(pg_temp.p(3), k, 'gid://shopify/Order/7400000000003',
+                              '{"order": {"id": "gid://shopify/Order/7400000000003"}}', now()) then
+    raise exception 'no guardó la foto del 3';
+  end if;
+  if exists (select 1 from invoice_snapshot_attempts where order_id = pg_temp.p(3)) then
+    raise exception 'guardar la foto tiene que borrar las fallas del pedido';
+  end if;
+  -- Nada de esto toca otra tabla que las de la 0275.
+  if (select fail_count from invoice_snapshot_attempts where order_id = pg_temp.p(7)) <> 1 then
+    raise exception 'la falla del 7 tiene que seguir anotada';
+  end if;
+end $$;
+
+-- ── h) El turno de una tienda ───────────────────────────────────────────────
+do $$
+declare
+  k constant uuid := '27400000-0000-0000-0000-0000000000b1';
+  a constant uuid := '27400000-0000-0000-0000-0000000000b2';
+  uno constant uuid := '27400000-0000-0000-0000-0000000000f1';
+  otro constant uuid := '27400000-0000-0000-0000-0000000000f2';
+begin
+  if not invoice_snapshot_lease(k, uno, 125) then raise exception 'el turno libre se toma'; end if;
+  if invoice_snapshot_lease(k, otro, 125) then raise exception 'dos pasadas con el turno de la misma tienda'; end if;
+  if not invoice_snapshot_lease(a, otro, 125) then raise exception 'cada tienda tiene su turno'; end if;
+  if not invoice_snapshot_lease(k, uno, 125) then raise exception 'quien tiene el turno lo renueva'; end if;
+  -- Soltarlo solo lo suelta quien lo tiene.
+  perform invoice_snapshot_release(k, otro);
+  if invoice_snapshot_lease(k, otro, 125) then raise exception 'otro soltó un turno ajeno'; end if;
+  perform invoice_snapshot_release(k, uno);
+  if not invoice_snapshot_lease(k, otro, 125) then raise exception 'el turno suelto se toma'; end if;
+  -- Vence solo si la pasada muere sin soltarlo.
+  update invoice_snapshot_leases set until = now() - interval '1 second' where store_id = k;
+  if not invoice_snapshot_lease(k, uno, 125) then raise exception 'un turno vencido se toma'; end if;
+  if invoice_snapshot_lease(k, null, 125) or invoice_snapshot_lease(k, uno, 0) then
+    raise exception 'un turno sin dueño o sin duración no se da';
+  end if;
+end $$;
+
+-- ── f) Sin la 0274, se detiene en su guarda ─────────────────────────────────
 -- Como la prueba de la 0262 (invoices_smoke.sql): psql corre cada sentencia con
 -- su propio punto de guardado (`ON_ERROR_ROLLBACK`), así que el resto de la
--- 0274 corre igual y se deshace con el punto de guardado de afuera; sin
+-- 0275 corre igual y se deshace con el punto de guardado de afuera; sin
 -- validar los cuerpos de las funciones, el único ERROR es el de la guarda. En
 -- el SQL Editor (una transacción) y con `psql -1 -v ON_ERROR_STOP=1`, la guarda
 -- deshace la migración entera.
-savepoint sin_0273;
+savepoint sin_0274;
+drop function invoice_snapshot_release(uuid, uuid);
+drop function invoice_snapshot_lease(uuid, uuid, integer);
+drop function invoice_snapshot_failed(uuid, uuid[], text, integer);
 drop function invoice_snapshot_put(uuid, uuid, text, jsonb, timestamptz);
 drop function invoice_snapshot_candidates(uuid, timestamptz, integer);
+drop table invoice_snapshot_leases;
+drop table invoice_snapshot_attempts;
 drop table order_invoice_snapshots;
 alter table orders drop column platform;
 set local check_function_bodies = off;
-\echo '  (el ERROR que sigue es la guarda de la 0274, y se espera)'
+\echo '  (el ERROR que sigue es la guarda de la 0275, y se espera)'
 \set VERBOSITY terse
 \set ON_ERROR_STOP off
 \set ON_ERROR_ROLLBACK on
 \set LAST_ERROR_MESSAGE ''
 \set LAST_ERROR_SQLSTATE ''
-\ir ../../db/migrations/0274_invoice_snapshots.sql
-select :'LAST_ERROR_SQLSTATE' = 'P0001' and :'LAST_ERROR_MESSAGE' like '0274: falta la 0273%' as guarda_0273 \gset
+\ir ../../db/migrations/0275_invoice_snapshots.sql
+select :'LAST_ERROR_SQLSTATE' = 'P0001' and :'LAST_ERROR_MESSAGE' like '0275: falta la 0274%' as guarda_0274 \gset
 \set ON_ERROR_ROLLBACK off
 \set ON_ERROR_STOP on
 \set VERBOSITY default
-rollback to savepoint sin_0273;
-release savepoint sin_0273;
-\if :guarda_0273
+rollback to savepoint sin_0274;
+release savepoint sin_0274;
+\if :guarda_0274
 \else
-do $$ begin raise exception 'la 0274 corrió sin la 0273 (orders.platform)'; end $$;
+do $$ begin raise exception 'la 0275 corrió sin la 0274 (orders.platform)'; end $$;
 \endif
 
 rollback;

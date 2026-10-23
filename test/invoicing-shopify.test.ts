@@ -24,6 +24,7 @@ import {
   type InvoiceOrderRead,
 } from "@/lib/invoicing/shopify-order";
 import { buildSalePayload } from "@/lib/invoicing/rules";
+import { SHOPIFY_SHUTDOWN_AT, SNAPSHOT_FALLBACK_FROM, isAfterShopifyShutdown } from "@/lib/invoicing/shopify-cutoff";
 
 const FAKE_TOKEN = h.token;
 
@@ -968,14 +969,42 @@ describe("fetchOrderForInvoice: la foto del pedido", () => {
     ]);
   });
 
-  it.each([401, 402, 403, 404, 423])("Shopify contesta HTTP %i por la tienda: sale de la foto", async (status) => {
+  it.each([401, 402, 403, 404, 423])("desde el cierre, Shopify contesta HTTP %i por la tienda: sale de la foto", async (status) => {
     const { admin } = fakeAdmin(connected(), snapshotOf(orderNode()));
     const { fetchImpl, calls } = fakeFetch(() => ({ ok: false, status, payload: { errors: "Unavailable Shop" } }));
 
-    const read = await fetchOrderForInvoice({ storeId: "store-kenku", shopifyOrderId: ID }, { admin, fetchImpl });
+    const read = await fetchOrderForInvoice(
+      { storeId: "store-kenku", shopifyOrderId: ID },
+      { admin, fetchImpl, now: () => Date.parse(SHOPIFY_SHUTDOWN_AT) },
+    );
 
     expect(calls).toHaveLength(1);
     expect(ok(read).snapshot).toEqual({ fetchedAt: FETCHED_AT });
+  });
+
+  // Con Shopify vivo (antes del 28-10-2026 00:00 UTC), un 401 por un token
+  // revocado al reinstalar, un 403 o un 423 son un problema que se arregla: la
+  // boleta se queda en `lectura_fallida` como siempre y la foto no se mira,
+  // aunque exista. Solo vaciar el token la abre antes del cierre.
+  it.each([401, 402, 403, 404, 423])("antes del cierre, un HTTP %i no usa la foto: lectura_fallida como siempre", async (status) => {
+    const { admin, reads } = fakeAdmin(connected(), snapshotOf(orderNode()));
+    const { fetchImpl } = fakeFetch(() => ({ ok: false, status, payload: { errors: "Unavailable Shop" } }));
+    const justBefore = Date.parse(SHOPIFY_SHUTDOWN_AT) - 1;
+
+    const read = await fetchOrderForInvoice(
+      { storeId: "store-kenku", shopifyOrderId: ID },
+      { admin, fetchImpl, now: () => justBefore },
+    );
+
+    expect(read).toEqual({ ok: false, reason: "lectura_fallida", detail: `Shopify contestó HTTP ${status}.` });
+    expect(reads.map((r) => r.table)).toEqual(["stores"]);
+  });
+
+  it("el cierre de la foto es el de Shopify, sin margen", () => {
+    expect(SNAPSHOT_FALLBACK_FROM).toBe(SHOPIFY_SHUTDOWN_AT);
+    expect(SHOPIFY_SHUTDOWN_AT).toBe("2026-10-28T00:00:00.000Z");
+    expect(isAfterShopifyShutdown(Date.parse("2026-10-27T23:59:59.999Z"))).toBe(false);
+    expect(isAfterShopifyShutdown(Date.parse("2026-10-28T00:00:00.000Z"))).toBe(true);
   });
 
   it.each<[string, () => { fetchImpl: typeof fetch }]>([
@@ -1027,7 +1056,7 @@ describe("fetchOrderForInvoice: la foto del pedido", () => {
     });
   });
 
-  it("sin la 0274 (la tabla no existe), igual que sin foto", async () => {
+  it("sin la 0275 (la tabla no existe), igual que sin foto", async () => {
     const { admin } = fakeAdmin(sinToken(), {
       order_invoice_snapshots: {
         data: null,
@@ -1113,7 +1142,7 @@ describe("fetchOrderForInvoice: la foto del pedido", () => {
       "No se pudo leer la foto del pedido.",
     ],
     [
-      "la foto no tiene la forma de la 0274",
+      "la foto no tiene la forma de la 0275",
       { order_invoice_snapshots: { data: { order_id: "ord-1", payload: [1], fetched_at: FETCHED_AT }, error: null } },
       "La foto del pedido no se entiende.",
     ],

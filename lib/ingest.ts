@@ -84,6 +84,7 @@ import {
   WOO_SYNC_PER_PAGE,
   WOO_SYNC_SOURCE,
   hasWooApiCredentials,
+  isWooCreatedBeforeFloor,
   isWooIntakeTopic,
   laterIso,
   loadWooStoreCreds,
@@ -93,8 +94,11 @@ import {
   withWooAuthFallback,
   wooClientOpts,
   wooHostOf,
+  wooIntakeFloor,
   wooSourceMatchesSite,
-  wooSyncStart,
+  formatWooSyncCursor,
+  parseWooSyncCursor,
+  wooSyncFirstRequest,
   wooWebhookEventKey,
   wooWebhookTopic,
   type WooStoreCreds,
@@ -1192,7 +1196,7 @@ async function processDraftOrderWebhook(
 }
 
 // ---------------------------------------------------------------------------
-// WooCommerce: webhooks de pedidos (MOM §37.11)
+// WooCommerce: webhooks de pedidos (MOM §38.11)
 // ---------------------------------------------------------------------------
 //
 // Todo lo de aquí es APARTE del camino de Shopify: otra ruta, otra lectura de
@@ -1264,7 +1268,7 @@ interface ExistingWooOrder {
 
 /**
  * Lo que ya tienen en `orders` estos pedidos de WooCommerce: `cancelled_at`
- * (para no moverlo, MOM §37.3) y `updated_at` (para no pisar un estado más
+ * (para no moverlo, MOM §38.3) y `updated_at` (para no pisar un estado más
  * nuevo con uno más viejo, `isStaleWooRow`).
  */
 async function existingWooOrders(
@@ -1308,7 +1312,7 @@ export function isStaleWooRow(
 /**
  * ¿Es un anulado que nunca fue pedido? WooCommerce anula solo los pedidos que
  * quedaron `pending` sin pagar (el checkout abandonado, al vencer la reserva de
- * stock), y esos nunca entraron a Kapta (MOM §37.3). Si llega uno anulado que
+ * stock), y esos nunca entraron a Kapta (MOM §38.3). Si llega uno anulado que
  * Kapta no tiene y que nunca llegó a «processing» (`date_paid` vacío: WooCommerce
  * lo llena al pasar a «processing», también en contraentrega), no se crea: sería
  * un Anulado en el Master de algo que no fue un pedido. Uno que Kapta ya tiene
@@ -1342,7 +1346,7 @@ async function applyWooOrderPayload(
     { previousCancelledAt: existing?.cancelled_at ?? null },
   );
   if (!row) {
-    // pending, failed, checkout-draft…: todavía no es un pedido (MOM §37.3).
+    // pending, failed, checkout-draft…: todavía no es un pedido (MOM §38.3).
     return { applied: false, message: `estado que no entra al Master: ${wooStatusOf(payload) || "(sin estado)"}` };
   }
   if (isStaleWooRow(row, existing)) {
@@ -1350,6 +1354,11 @@ async function applyWooOrderPayload(
   }
   if (isNeverLiveCancelledWoo(row, payload, existing)) {
     return { applied: false, message: "anulado sin haber llegado a ser pedido (pago no completado): no entra al Master" };
+  }
+  // Creado antes de que la tienda empezara a recibir pedidos de WooCommerce
+  // (la historia de Shopify importada al WordPress): no es un pedido nuevo.
+  if (!existing && isWooCreatedBeforeFloor(payload, wooIntakeFloor(creds, env.ordersSyncFrom()))) {
+    return { applied: false, message: "creado antes de que la tienda recibiera pedidos de WooCommerce en Kapta (woo_intake_from): no entra al Master" };
   }
   await upsertOrders(admin, [row]);
   await applyWooOrderEffects(admin, creds.id, creds.timezone, row);
@@ -1415,7 +1424,7 @@ async function applyWooOrderEffects(
 
 /**
  * `order.deleted`: WooCommerce lo manda al mandar el pedido a la papelera, y su
- * cuerpo es solo `{id}`. Kapta NUNCA borra el pedido (MOM §2 punto 6, §37.3).
+ * cuerpo es solo `{id}`. Kapta NUNCA borra el pedido (MOM §2 punto 6, §38.3).
  *
  * Primero vuelve a leer el pedido por la API (`GET /orders/{id}`, que también
  * devuelve los de la papelera): así entra con su estado y su fecha de
@@ -1524,15 +1533,21 @@ export async function processWooWebhook(
   }
   if (!creds) return { status: "ignored", message: "tienda desconocida" };
 
-  // 2) Sin secreto no hay cómo saber quién lo manda: no se procesa, y Ajustes
-  //    lo dice. La pasada trae igual el pedido.
+  // 2) Sin secreto no hay cómo saber quién lo manda: no se procesa. Este paso
+  //    va ANTES de la firma, así que cualquiera que sepa el id de una tienda
+  //    llega aquí: solo una tienda que ya tiene su sitio WooCommerce guardado
+  //    (en plena puesta en marcha) deja el aviso en Ajustes. En una tienda solo
+  //    de Shopify, como Kenku o Aurela hoy, nada se escribe. La pasada trae
+  //    igual el pedido.
   if (!creds.webhookSecret) {
-    await recordWooLastError(
-      admin,
-      creds.id,
-      `${WOO_WEBHOOK_ERROR_PREFIX}llegó un aviso de WooCommerce, pero la tienda no tiene guardado el secreto de los webhooks${creds.undecryptable.includes("woo_webhook_secret_enc") ? " (el guardado no se pudo descifrar)" : ""}. Guárdalo en Ajustes → WooCommerce.`,
-      creds.lastError,
-    );
+    if (creds.siteUrl) {
+      await recordWooLastError(
+        admin,
+        creds.id,
+        `${WOO_WEBHOOK_ERROR_PREFIX}llegó un aviso de WooCommerce, pero la tienda no tiene guardado el secreto de los webhooks${creds.undecryptable.includes("woo_webhook_secret_enc") ? " (el guardado no se pudo descifrar)" : ""}. Guárdalo en Ajustes → WooCommerce.`,
+        creds.lastError,
+      );
+    }
     return { status: "ignored", message: "la tienda no tiene el secreto de los webhooks" };
   }
 
@@ -1634,7 +1649,7 @@ export async function processWooWebhook(
 }
 
 // ---------------------------------------------------------------------------
-// WooCommerce: la pasada `woo_orders` de la sincronización (MOM §37.11)
+// WooCommerce: la pasada `woo_orders` de la sincronización (MOM §38.11)
 // ---------------------------------------------------------------------------
 
 export interface WooSyncResult {
@@ -1661,22 +1676,30 @@ export interface WooSyncOptions {
   budgetMs?: number;
   maxPages?: number;
   perPage?: number;
-  /** Piso de la primera pasada; por defecto `ORDERS_SYNC_FROM`. */
+  /**
+   * Desde dónde pide la primera pasada (`modified_after`); por defecto el piso
+   * de la tienda (`wooIntakeFloor`: `woo_intake_from`, `platform_switched_at` o
+   * `ORDERS_SYNC_FROM`).
+   */
   floor?: string;
 }
 
-/** `sync_state` de la pasada, sin escribir nunca un cursor nulo (ver `recordSyncError`). */
+/**
+ * `sync_state` de la pasada, sin escribir nunca un cursor nulo (ver
+ * `recordSyncError`). `warning`: corrió sin fallar pero no avanzó.
+ */
 async function recordWooSyncState(
   admin: SupabaseClient,
   storeId: string,
   cursor: string | null,
   error: string | null,
+  status: "ok" | "error" | "warning" = error ? "error" : "ok",
 ): Promise<void> {
   const row: Record<string, unknown> = {
     store_id: storeId,
     source: WOO_SYNC_SOURCE,
     last_run_at: new Date().toISOString(),
-    status: error ? "error" : "ok",
+    status,
     error,
   };
   if (cursor) row.cursor = cursor;
@@ -1700,6 +1723,7 @@ async function applyWooOrdersPage(
     }
   }
   const existing = ids.length ? await existingWooOrders(admin, storeId, ids) : new Map<string, ExistingWooOrder>();
+  const floor = wooIntakeFloor(creds, env.ordersSyncFrom());
 
   const byId = new Map<string, OrderRow>();
   let skipped = 0;
@@ -1714,8 +1738,14 @@ async function applyWooOrdersPage(
       row = null;
     }
     // Lo que no entra, lo que un webhook ya dejó más nuevo entre la lectura y
-    // ahora, y el anulado que nunca fue pedido, no se escribe.
-    if (!row || isStaleWooRow(row, before) || isNeverLiveCancelledWoo(row, o, before)) {
+    // ahora, el anulado que nunca fue pedido y lo creado antes del piso de la
+    // tienda que Kapta no tiene (la historia importada), no se escribe.
+    if (
+      !row ||
+      isStaleWooRow(row, before) ||
+      isNeverLiveCancelledWoo(row, o, before) ||
+      (!before && isWooCreatedBeforeFloor(o, floor))
+    ) {
       skipped++;
       continue;
     }
@@ -1798,17 +1828,22 @@ export async function syncWooOrders(
   const deadline = now() + (opts.budgetMs ?? WOO_SYNC_BUDGET_MS);
   const maxPages = opts.maxPages ?? WOO_SYNC_MAX_PAGES;
   const perPage = opts.perPage ?? WOO_SYNC_PER_PAGE;
+  const floor = opts.floor ?? wooIntakeFloor(creds, env.ordersSyncFrom());
   let previousCursor: string | null = null;
   let high: string | null = null;
+  // La página que toca pedir. Si la pasada no llega al final, es donde sigue
+  // la próxima (sin solape): ver `WooSyncCursor`.
+  let req: { modifiedAfter: string; page: number } | null = null;
   try {
     previousCursor = await getSyncCursor(admin, storeId, WOO_SYNC_SOURCE);
-    high = previousCursor;
-    let req = { modifiedAfter: wooSyncStart(previousCursor, opts.floor ?? env.ordersSyncFrom()), page: 1 };
+    high = parseWooSyncCursor(previousCursor).high;
+    req = wooSyncFirstRequest(previousCursor, floor);
+    const startReq = req;
     let client = wooClientOpts(creds, opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {});
     const dates = new Set<string>();
     for (let n = 0; n < maxPages; n++) {
       if (n > 0 && now() >= deadline) break;
-      const current = req;
+      const current: { modifiedAfter: string; page: number } = req;
       const { value: page, auth } = await withWooAuthFallback(client, (o) =>
         fetchWooOrdersPage(o, { modifiedAfter: current.modifiedAfter, page: current.page, perPage }),
       );
@@ -1828,17 +1863,29 @@ export async function syncWooOrders(
     }
     result.kapsoDates = [...dates].sort();
     result.cursor = high;
-    await recordWooSyncState(admin, storeId, high, null);
-    if (creds.lastError?.startsWith(WOO_SYNC_ERROR_PREFIX)) {
-      await recordWooLastError(admin, storeId, null, creds.lastError);
+    const cursorText = formatWooSyncCursor({ high, resume: result.done ? null : req });
+    // Sin llegar al final y sin moverse de donde empezó: la pasada no avanza.
+    // Que no se vea «bien».
+    const stuck = !result.done && req.modifiedAfter === startReq.modifiedAfter && req.page === startReq.page;
+    if (stuck) {
+      const msg = `la pasada no avanzó (sigue pidiendo modified_after=${req.modifiedAfter}, página ${req.page}).`;
+      result.error = msg;
+      await recordWooSyncState(admin, storeId, cursorText, msg, "warning");
+      await recordWooLastError(admin, storeId, `${WOO_SYNC_ERROR_PREFIX}${msg}`, creds.lastError);
+    } else {
+      await recordWooSyncState(admin, storeId, cursorText, null);
+      if (creds.lastError?.startsWith(WOO_SYNC_ERROR_PREFIX)) {
+        await recordWooLastError(admin, storeId, null, creds.lastError);
+      }
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     result.error = msg;
     result.cursor = high;
-    // Lo que se procesó antes del fallo no se vuelve a pedir; el cursor nunca
-    // retrocede ni queda en blanco.
-    const progressed = high && high !== previousCursor ? high : null;
+    // Lo que se procesó antes del fallo no se vuelve a pedir: la próxima sigue
+    // en la página que falló. Sin nada procesado, el cursor no se toca (nunca
+    // retrocede ni queda en blanco).
+    const progressed = result.pages > 0 && req ? formatWooSyncCursor({ high, resume: req }) : null;
     try {
       await recordWooSyncState(admin, storeId, progressed, msg);
     } catch {
@@ -1882,7 +1929,7 @@ export interface SyncReport {
   /** Leads sin ubicación buscados en Shopify por celular, y cuántos tenían
    *  dirección (0228). Es la medida de si esta pista sirve. */
   shopifyLocations: { checked: number; found: number };
-  /** Pedidos de WooCommerce que entraron o cambiaron por la pasada `woo_orders` (MOM §37.11). */
+  /** Pedidos de WooCommerce que entraron o cambiaron por la pasada `woo_orders` (MOM §38.11). */
   wooOrders: number;
   errors: string[];
 }
@@ -2114,7 +2161,7 @@ export async function runStoreSync(
     }
   }
 
-  // 1b-bis) WooCommerce (MOM §37.11): los pedidos modificados desde el cursor
+  // 1b-bis) WooCommerce (MOM §38.11): los pedidos modificados desde el cursor
   //     `woo_orders`, la red de seguridad de sus webhooks. Solo en una tienda
   //     con sitio, clave del sitio y claves de la API guardadas; las demás (y
   //     Kenku y Aurela mientras sigan solo en Shopify) no hacen ni una llamada.

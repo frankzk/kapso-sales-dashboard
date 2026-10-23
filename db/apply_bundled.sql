@@ -25222,8 +25222,166 @@ begin
 end $$;
 
 -- ---- 0273 ----
--- 0273_woocommerce_base.sql — la base para que una tienda reciba pedidos de
--- WooCommerce (MOM §37, 23-10-2026).
+-- ============================================================================
+-- 0273_shopify_history.sql — el historial de Shopify de antes de Kapta, como
+-- archivo de consulta (MOM §37, 23-10-2026, pedido de Frankz).
+--
+-- POR QUÉ. Aurela tiene 177.515 pedidos en Shopify desde 2021 y Kapta solo
+-- trae los de junio de 2026 en adelante: la conexión no tiene `read_all_orders`
+-- y no ve nada de más de 60 días. Shopify estaba por suspender la tienda, y
+-- con ella se iba el historial de pedidos y de cada cliente. La salida fue la
+-- exportación del propio Shopify (CSV por año, más el de clientes), que aquí se
+-- guarda tal cual y además leíble.
+--
+-- QUÉ NO ES. No son pedidos de Kapta. No entran a `orders` ni a `order_master`,
+-- no tienen etapa, no disparan recálculos, alertas ni tareas. Es un archivo:
+-- quién compró, qué, cuándo, a dónde y cómo terminó, para consultarlo.
+--
+-- TRES TABLAS:
+--   shopify_history_files      cada archivo subido: tipo, nombre, dónde quedó
+--                              el original (bucket privado `shopify-history`),
+--                              cuántos registros dejó y quién lo subió.
+--   shopify_history_orders     un pedido por fila (el CSV de Shopify trae una
+--                              fila por producto: aquí van juntos en
+--                              `line_items`). `raw` guarda los campos de la
+--                              primera fila del pedido tal como venían.
+--   shopify_history_customers  un cliente por fila, del CSV de clientes.
+--
+-- Volver a subir el mismo archivo, o dos años que se pisan, no duplica nada:
+-- la clave es (tienda, número de pedido) y (tienda, cliente).
+--
+-- Escritura solo con el service role (la acción de subida). Lectura: quien ve
+-- la tienda (`auth_store_ids()`), y la pantalla además exige «Descargar la base
+-- de pedidos».
+-- ============================================================================
+
+create table if not exists shopify_history_files (
+  id           uuid primary key default gen_random_uuid(),
+  store_id     uuid not null references stores(id) on delete cascade,
+  kind         text not null check (kind in ('pedidos', 'clientes', 'productos', 'otro')),
+  filename     text not null,
+  -- El original, comprimido, en el bucket privado `shopify-history`.
+  storage_path text,
+  size_bytes   bigint,
+  rows_read    integer not null default 0,
+  records      integer not null default 0,
+  first_at     timestamptz,
+  last_at      timestamptz,
+  status       text not null default 'subiendo'
+    check (status in ('subiendo', 'cargando', 'listo', 'error')),
+  error        text,
+  uploaded_by  uuid references auth.users(id) on delete set null,
+  created_at   timestamptz not null default now(),
+  finished_at  timestamptz
+);
+
+create index if not exists shopify_history_files_store_idx
+  on shopify_history_files (store_id, created_at desc);
+
+create table if not exists shopify_history_orders (
+  store_id            uuid not null references stores(id) on delete cascade,
+  order_name          text not null,
+  shopify_order_id    text,
+  created_at          timestamptz,
+  paid_at             timestamptz,
+  fulfilled_at        timestamptz,
+  cancelled_at        timestamptz,
+  financial_status    text,
+  fulfillment_status  text,
+  currency            text,
+  subtotal            numeric(12, 2),
+  shipping            numeric(12, 2),
+  taxes               numeric(12, 2),
+  total               numeric(12, 2),
+  discount_code       text,
+  discount_amount     numeric(12, 2),
+  refunded_amount     numeric(12, 2),
+  payment_method      text,
+  email               text,
+  phone               text,
+  -- `normalizePhone` (lib/phone.ts): 51 + nueve dígitos, como `orders`.
+  phone_norm          text,
+  customer_name       text,
+  shipping_name       text,
+  shipping_address1   text,
+  shipping_address2   text,
+  shipping_city       text,
+  shipping_province   text,
+  shipping_zip        text,
+  shipping_country    text,
+  shipping_phone      text,
+  notes               text,
+  tags                text,
+  source              text,
+  line_items          jsonb not null default '[]'::jsonb,
+  raw                 jsonb not null default '{}'::jsonb,
+  file_id             uuid references shopify_history_files(id) on delete set null,
+  imported_at         timestamptz not null default now(),
+  primary key (store_id, order_name)
+);
+
+create index if not exists shopify_history_orders_phone_idx
+  on shopify_history_orders (store_id, phone_norm);
+create index if not exists shopify_history_orders_email_idx
+  on shopify_history_orders (store_id, lower(email));
+create index if not exists shopify_history_orders_created_idx
+  on shopify_history_orders (store_id, created_at);
+
+create table if not exists shopify_history_customers (
+  store_id            uuid not null references stores(id) on delete cascade,
+  -- El «Customer ID» de Shopify; si el archivo no lo trae, el correo o el
+  -- celular. Nunca vacío: una fila sin nada que la identifique no se guarda.
+  customer_key        text not null,
+  shopify_customer_id text,
+  first_name          text,
+  last_name           text,
+  email               text,
+  phone               text,
+  phone_norm          text,
+  company             text,
+  address1            text,
+  address2            text,
+  city                text,
+  province            text,
+  country             text,
+  zip                 text,
+  total_spent         numeric(12, 2),
+  total_orders        integer,
+  accepts_marketing   text,
+  tags                text,
+  note                text,
+  raw                 jsonb not null default '{}'::jsonb,
+  file_id             uuid references shopify_history_files(id) on delete set null,
+  imported_at         timestamptz not null default now(),
+  primary key (store_id, customer_key)
+);
+
+create index if not exists shopify_history_customers_phone_idx
+  on shopify_history_customers (store_id, phone_norm);
+create index if not exists shopify_history_customers_email_idx
+  on shopify_history_customers (store_id, lower(email));
+
+alter table shopify_history_files enable row level security;
+alter table shopify_history_orders enable row level security;
+alter table shopify_history_customers enable row level security;
+
+drop policy if exists shopify_history_files_select on shopify_history_files;
+create policy shopify_history_files_select on shopify_history_files for select to authenticated
+  using (store_id in (select auth_store_ids()));
+
+drop policy if exists shopify_history_orders_select on shopify_history_orders;
+create policy shopify_history_orders_select on shopify_history_orders for select to authenticated
+  using (store_id in (select auth_store_ids()));
+
+drop policy if exists shopify_history_customers_select on shopify_history_customers;
+create policy shopify_history_customers_select on shopify_history_customers for select to authenticated
+  using (store_id in (select auth_store_ids()));
+
+grant select on shopify_history_files, shopify_history_orders, shopify_history_customers to authenticated;
+
+-- ---- 0274 ----
+-- 0274_woocommerce_base.sql — la base para que una tienda reciba pedidos de
+-- WooCommerce (MOM §38, 23-10-2026).
 --
 -- QUÉ PASA. Shopify cierra Kenku Perú y Aurela el 28-10-2026 (UTC; se planifica
 -- para el 27-10 a las 19:00 de Lima) y las dos pasan a WooCommerce. Kapta tiene
@@ -25256,6 +25414,12 @@ end $$;
 --                                   texto que se puede mostrar (sin secretos).
 --   stores.platform_switched_at     cuándo la tienda pasó a crear sus pedidos en
 --                                   WooCommerce.
+--   stores.woo_intake_from          desde cuándo entran los pedidos de su sitio
+--                                   WooCommerce: lo fija Ajustes la primera vez
+--                                   que se guardan las claves de la API. Un pedido
+--                                   creado antes (la historia de Shopify importada
+--                                   al WordPress) no entra como pedido nuevo
+--                                   (MOM §38.11).
 --   orders.platform                 de qué plataforma vino el pedido: 'shopify'
 --   draft_orders.platform           o 'woocommerce'. Lo mismo para los borradores.
 --   stores_woo_platform_check       una tienda solo pasa a 'woocommerce' con la
@@ -25279,32 +25443,99 @@ end $$;
 -- nuevos ni vistas: la fila la protege la RLS de supabase/policies.sql, igual
 -- que a shopify_token_enc.
 --
--- EL CANDADO. Añadir una columna con valor por defecto y su CHECK toma un momento
--- el candado exclusivo de `orders` y `draft_orders` (Postgres comprueba el CHECK
--- recorriendo la tabla, sin reescribirla). Mientras lo espera, los webhooks de
--- Kenku y Aurela hacen cola: por eso DEPLOY.md la corre con lock_timeout de 3 s.
+-- EL CANDADO. Kenku y Aurela escriben en `orders` todo el tiempo (webhooks), y
+-- la RLS lee `stores` en cada consulta del panel (`auth_store_ids()`). Por eso
+-- cada paso es una sentencia aparte, pensada para correr con psql en modo
+-- autocommit (cada sentencia en su propia transacción, DEPLOY.md) y
+-- `lock_timeout` de 3 s, que corta CADA espera, no el total:
+--   1. `orders.platform` y `draft_orders.platform` nacen sin CHECK: añadir una
+--      columna con un valor por defecto constante solo cambia el catálogo
+--      (Postgres 11+, sin recorrer ni reescribir la tabla). Toma un instante el
+--      candado exclusivo de esa tabla y lo suelta al terminar la sentencia.
+--   2. Su CHECK entra `not valid` (otro instante, sin recorrer la tabla) y se
+--      valida aparte: VALIDATE recorre la tabla con un candado que no frena
+--      lecturas ni escrituras.
+--   3. Lo de `stores` (tabla chica) va al final.
+-- Cada paso mira antes si ya está hecho, así que volver a correrla no toma
+-- ningún candado exclusivo ni vuelve a validar nada. Si un paso se corta
+-- (`canceling statement due to lock timeout`), los anteriores quedan y volver
+-- a correr el archivo entero termina el trabajo.
 --
 -- Idempotente y sin tocar datos. A mano y ANTES del código (DEPLOY.md, entrada
--- del 23-10-2026).
+-- del 23-10-2026), en modo autocommit.
 
-alter table stores
-  add column if not exists platform text not null default 'shopify'
-    constraint stores_platform_check check (platform in ('shopify', 'woocommerce')),
-  add column if not exists woo_site_url            text,
-  add column if not exists woo_site_key            text,
-  add column if not exists woo_consumer_key_enc    text,
-  add column if not exists woo_consumer_secret_enc text,
-  add column if not exists woo_webhook_secret_enc  text,
-  add column if not exists woo_last_error          text,
-  add column if not exists platform_switched_at    timestamptz;
+-- ── 1. La plataforma del pedido y del borrador, sin recorrer las tablas ─────
+do $$
+begin
+  if not exists (select 1 from pg_attribute
+                  where attrelid = 'public.orders'::regclass and attname = 'platform' and not attisdropped) then
+    alter table orders add column platform text not null default 'shopify';
+  end if;
+end $$;
 
-alter table orders
-  add column if not exists platform text not null default 'shopify'
-    constraint orders_platform_check check (platform in ('shopify', 'woocommerce'));
+do $$
+begin
+  if not exists (select 1 from pg_attribute
+                  where attrelid = 'public.draft_orders'::regclass and attname = 'platform' and not attisdropped) then
+    alter table draft_orders add column platform text not null default 'shopify';
+  end if;
+end $$;
 
-alter table draft_orders
-  add column if not exists platform text not null default 'shopify'
-    constraint draft_orders_platform_check check (platform in ('shopify', 'woocommerce'));
+-- ── 2. Su CHECK: primero sin recorrer, después validado aparte ──────────────
+do $$
+begin
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.orders'::regclass and conname = 'orders_platform_check') then
+    alter table orders
+      add constraint orders_platform_check check (platform in ('shopify', 'woocommerce')) not valid;
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.draft_orders'::regclass and conname = 'draft_orders_platform_check') then
+    alter table draft_orders
+      add constraint draft_orders_platform_check check (platform in ('shopify', 'woocommerce')) not valid;
+  end if;
+end $$;
+
+do $$
+begin
+  if exists (select 1 from pg_constraint
+              where conrelid = 'public.orders'::regclass and conname = 'orders_platform_check'
+                and not convalidated) then
+    alter table orders validate constraint orders_platform_check;
+  end if;
+end $$;
+
+do $$
+begin
+  if exists (select 1 from pg_constraint
+              where conrelid = 'public.draft_orders'::regclass and conname = 'draft_orders_platform_check'
+                and not convalidated) then
+    alter table draft_orders validate constraint draft_orders_platform_check;
+  end if;
+end $$;
+
+-- ── 3. La tienda (al final: es chica, pero la RLS la lee en cada consulta) ──
+do $$
+begin
+  if not exists (select 1 from pg_attribute
+                  where attrelid = 'public.stores'::regclass and attname = 'woo_intake_from' and not attisdropped) then
+    alter table stores
+      add column if not exists platform text not null default 'shopify'
+        constraint stores_platform_check check (platform in ('shopify', 'woocommerce')),
+      add column if not exists woo_site_url            text,
+      add column if not exists woo_site_key            text,
+      add column if not exists woo_consumer_key_enc    text,
+      add column if not exists woo_consumer_secret_enc text,
+      add column if not exists woo_webhook_secret_enc  text,
+      add column if not exists woo_last_error          text,
+      add column if not exists platform_switched_at    timestamptz,
+      add column if not exists woo_intake_from         timestamptz;
+  end if;
+end $$;
 
 -- La forma de la clave del sitio y de la dirección. La clave va dentro del id
 -- del pedido (`wc-<clave>-<id>`): un guion en ella haría ambiguo el id. La
@@ -25342,38 +25573,46 @@ end $$;
 
 -- Únicas en toda la base, no por organización: los ids de pedido `wc-<clave>-…`
 -- se buscan a veces sin filtrar por tienda.
-create unique index if not exists stores_woo_site_key_uniq
-  on stores (woo_site_key)
-  where woo_site_key is not null;
-
-create unique index if not exists stores_woo_site_url_uniq
-  on stores (lower(woo_site_url))
-  where woo_site_url is not null;
+do $$
+begin
+  if to_regclass('public.stores_woo_site_key_uniq') is null then
+    create unique index stores_woo_site_key_uniq
+      on stores (woo_site_key)
+      where woo_site_key is not null;
+  end if;
+  if to_regclass('public.stores_woo_site_url_uniq') is null then
+    create unique index stores_woo_site_url_uniq
+      on stores (lower(woo_site_url))
+      where woo_site_url is not null;
+  end if;
+end $$;
 
 comment on column stores.platform is
-  'Dónde se crean los pedidos NUEVOS que Kapta crea para esta tienda: shopify (por defecto) o woocommerce (MOM §37). No dice de dónde viene cada pedido: eso es orders.platform. Pasa a woocommerce solo con woo_site_url, woo_site_key y las dos claves de la API guardadas.';
+  'Dónde se crean los pedidos NUEVOS que Kapta crea para esta tienda: shopify (por defecto) o woocommerce (MOM §38). No dice de dónde viene cada pedido: eso es orders.platform. Pasa a woocommerce solo con woo_site_url, woo_site_key y las dos claves de la API guardadas.';
 comment on column stores.woo_site_url is
-  'MOM §37: dirección https del sitio WordPress con WooCommerce, sin barra final ni credenciales. Null si la tienda no tiene WooCommerce.';
+  'MOM §38: dirección https del sitio WordPress con WooCommerce, sin barra final ni credenciales. Null si la tienda no tiene WooCommerce.';
 comment on column stores.woo_site_key is
-  'MOM §37: clave corta del sitio (kp, aur) que va en el id de cada pedido de WooCommerce (orders.shopify_order_id = wc-<clave>-<id>). Única en toda la base. No se cambia después del primer pedido: los ids guardados la llevan.';
+  'MOM §38: clave corta del sitio (kp, aur) que va en el id de cada pedido de WooCommerce (orders.shopify_order_id = wc-<clave>-<id>). Única en toda la base. No se cambia después del primer pedido: los ids guardados la llevan.';
 comment on column stores.woo_consumer_key_enc is
-  'enc: MOM §37. Consumer key de la API REST de WooCommerce, cifrada AES-256-GCM (lib/crypto.ts). Nunca viaja al cliente.';
+  'enc: MOM §38. Consumer key de la API REST de WooCommerce, cifrada AES-256-GCM (lib/crypto.ts). Nunca viaja al cliente.';
 comment on column stores.woo_consumer_secret_enc is
-  'enc: MOM §37. Consumer secret de la API REST de WooCommerce, cifrado AES-256-GCM (lib/crypto.ts). Nunca viaja al cliente.';
+  'enc: MOM §38. Consumer secret de la API REST de WooCommerce, cifrado AES-256-GCM (lib/crypto.ts). Nunca viaja al cliente.';
 comment on column stores.woo_webhook_secret_enc is
-  'enc: MOM §37. Secreto con el que WooCommerce firma los webhooks (X-WC-Webhook-Signature, HMAC-SHA256 en base64 del cuerpo), cifrado AES-256-GCM. Nunca viaja al cliente.';
+  'enc: MOM §38. Secreto con el que WooCommerce firma los webhooks (X-WC-Webhook-Signature, HMAC-SHA256 en base64 del cuerpo), cifrado AES-256-GCM. Nunca viaja al cliente.';
 comment on column stores.woo_last_error is
-  'MOM §37: el último fallo al hablar con WooCommerce, en texto que se puede mostrar (sin secretos). Null si la última llamada salió bien.';
+  'MOM §38: el último fallo al hablar con WooCommerce, en texto que se puede mostrar (sin secretos). Null si la última llamada salió bien.';
 comment on column stores.platform_switched_at is
-  'MOM §37: cuándo la tienda pasó a crear sus pedidos en WooCommerce (platform = woocommerce).';
+  'MOM §38: cuándo la tienda pasó a crear sus pedidos en WooCommerce (platform = woocommerce).';
+comment on column stores.woo_intake_from is
+  'MOM §38.11: desde cuándo entran los pedidos del sitio WooCommerce de esta tienda (date_created_gmt). Lo fija Ajustes la primera vez que se guardan las claves de la API; un pedido creado antes, que Kapta no tenga, no se crea (la historia de Shopify importada al WordPress queda fuera).';
 comment on column orders.platform is
-  'De qué plataforma vino el pedido: shopify (todos los anteriores a la 0273) o woocommerce (MOM §37). Las decisiones por plataforma se toman con esta columna, nunca por la forma de shopify_order_id.';
+  'De qué plataforma vino el pedido: shopify (todos los anteriores a la 0274) o woocommerce (MOM §38). Las decisiones por plataforma se toman con esta columna, nunca por la forma de shopify_order_id.';
 comment on column draft_orders.platform is
-  'De qué plataforma vino el borrador o carrito: shopify o woocommerce (MOM §37).';
+  'De qué plataforma vino el borrador o carrito: shopify o woocommerce (MOM §38).';
 
--- ---- 0274 ----
+-- ---- 0275 ----
 -- ============================================================================
--- 0274_invoice_snapshots.sql — la foto del pedido para su boleta, por si Shopify
+-- 0275_invoice_snapshots.sql — la foto del pedido para su boleta, por si Shopify
 -- deja de responder (MOM §35.10, owner 23-10-2026).
 --
 -- QUÉ PASA. Shopify cierra Kenku Perú y Aurela el 28-10-2026 (UTC; se planifica
@@ -25397,15 +25636,28 @@ comment on column draft_orders.platform is
 --     escribe el cron `/api/cron/invoice-snapshots`; la lee la boleta solo si
 --     la tienda ya no tiene token o Shopify contesta por ella que ya no está.
 --   · `invoice_snapshot_candidates(p_store, p_since, p_limit)`: qué pedidos le
---     faltan. Uno de Shopify (`orders.platform`, 0273) de esa tienda, creado
+--     faltan. Uno de Shopify (`orders.platform`, 0274) de esa tienda, creado
 --     desde `p_since` y sin comprobante real vivo, que no tiene foto y no está
 --     anulado, o que tiene una foto anterior a su último cambio en Shopify
---     (`orders.updated_at`). Primero los que no tienen foto; entre ellos,
---     primero los que siguen en curso (su macroetapa no es «Finalizado»); y
---     del más nuevo al más viejo.
+--     (`orders.updated_at`). Primero los que no tienen foto; entre ellos, los
+--     que nunca fallaron antes que los que fallaron (`invoice_snapshot_attempts`);
+--     después, primero los que siguen en curso (su macroetapa no es
+--     «Finalizado»); y del más nuevo al más viejo. Un pedido que falló espera
+--     2 minutos por cada falla seguida (30 como mucho) antes de volver.
 --   · `invoice_snapshot_put(...)`: guarda una foto solo si el pedido es de
 --     Shopify, de esa tienda y con ese gid, y nunca pisa una foto más nueva con
---     una más vieja. Dos pasadas que se cruzan dejan la más reciente.
+--     una más vieja. Dos pasadas que se cruzan dejan la más reciente. Tampoco
+--     pisa una foto CON pedido con una que dice que Shopify no lo devolvió
+--     (`{"order": null}`): la buena es la que sirve para la boleta. Al
+--     guardar, borra las fallas anotadas del pedido.
+--   · `invoice_snapshot_attempts` + `invoice_snapshot_failed(...)`: las fallas
+--     seguidas de cada pedido (cuántas, cuándo la última y por qué, en corto y
+--     sin nada de la respuesta). Un pedido que Shopify no puede leer no tapa la
+--     cola de su tienda: va detrás. La función dice cuántos llegaron a
+--     `p_alert` fallas seguidas (el cron se pone rojo).
+--   · `invoice_snapshot_leases` + `invoice_snapshot_lease(...)` /
+--     `invoice_snapshot_release(...)`: el turno de cada tienda. Dos pasadas a la
+--     vez sobre la misma tienda gastarían dos veces su cupo de Shopify.
 --
 -- A QUIÉN NO. No toca ninguna fila de otra tabla ni cambia nada de lo que hoy
 -- hace Kapta con Shopify: con Shopify funcionando, la boleta se sigue leyendo en
@@ -25413,23 +25665,30 @@ comment on column draft_orders.platform is
 -- no la guarda y la boleta no la usa. Todo lo lee y lo escribe solo el
 -- servidor (service_role), como `order_invoices`.
 --
--- REQUIERE la 0257 (comprobantes) y la 0273 (`orders.platform`): se detiene
+-- REQUIERE la 0257 (comprobantes) y la 0274 (`orders.platform`): se detiene
 -- sin ellas, antes de crear nada.
 --
--- Se aplica a mano ANTES del código (DEPLOY.md, entrada del 23-10-2026). Es
--- idempotente: correrla otra vez no cambia nada.
+-- Se aplica a mano ANTES del código (DEPLOY.md, entrada del 23-10-2026), con
+-- psql en modo autocommit (cada sentencia en su propia transacción) y
+-- `lock_timeout` de 3 s: crear las llaves foráneas de la tabla de fotos toma un
+-- momento un candado de `orders` y `stores` que frena las escrituras (los
+-- webhooks hacen cola), y así se suelta al terminar esa sentencia, no al final
+-- del archivo. Las tablas nuevas de fallas y turnos no tienen llaves foráneas:
+-- no tocan ningún candado de otra tabla. Es idempotente: correrla otra vez no
+-- cambia nada, y si una sentencia se corta, volver a correrla entera termina
+-- el trabajo.
 -- ============================================================================
 
 do $$
 begin
   if to_regclass('public.order_invoices') is null then
-    raise exception '0274: falta la 0257 (order_invoices). Aplicar las migraciones de comprobantes primero.';
+    raise exception '0275: falta la 0257 (order_invoices). Aplicar las migraciones de comprobantes primero.';
   end if;
   if not exists (
     select 1 from information_schema.columns
      where table_schema = 'public' and table_name = 'orders' and column_name = 'platform'
   ) then
-    raise exception '0274: falta la 0273 (orders.platform). Aplicar la 0273 primero.';
+    raise exception '0275: falta la 0274 (orders.platform). Aplicar la 0274 primero.';
   end if;
 end $$;
 
@@ -25457,24 +25716,57 @@ comment on column order_invoice_snapshots.payload is
 comment on column order_invoice_snapshots.fetched_at is
   'Cuándo se pidió a Shopify (el inicio de la llamada). Una foto anterior a orders.updated_at se vuelve a tomar.';
 
--- ── 2. Solo el servidor ──────────────────────────────────────────────────────
+-- ── 2. Las fallas de cada pedido y el turno de cada tienda ──────────────────
+-- Sin llaves foráneas a propósito: crearlas tomaría otra vez el candado de
+-- `orders` y `stores`. Una fila de un pedido borrado no estorba: solo se lee
+-- unida a `orders`.
+create table if not exists invoice_snapshot_attempts (
+  order_id        uuid primary key,
+  store_id        uuid not null,
+  fail_count      integer not null check (fail_count > 0),
+  last_attempt_at timestamptz not null,
+  -- Por qué, en corto y sin nada de la respuesta («Shopify contestó HTTP 503.»).
+  last_error      text check (last_error is null or length(last_error) <= 200)
+);
+
+create table if not exists invoice_snapshot_leases (
+  store_id uuid primary key,
+  holder   uuid not null,
+  until    timestamptz not null
+);
+
+comment on table invoice_snapshot_attempts is
+  'MOM §35.10: fallas seguidas de la foto de un pedido (lo que Shopify no pudo contestar de ESE pedido, o lo que estaba en vuelo cuando la tienda falló). Ordena la lista de invoice_snapshot_candidates para que un pedido que falla no tape la cola. Se borra al guardar su foto. Solo service_role.';
+comment on table invoice_snapshot_leases is
+  'MOM §35.10: el turno de cada tienda en el cron invoice-snapshots; vence solo (until) si la pasada muere sin soltarlo. Solo service_role.';
+
+-- ── 3. Solo el servidor ──────────────────────────────────────────────────────
 alter table order_invoice_snapshots enable row level security;
 revoke all on order_invoice_snapshots from anon, authenticated;
 grant all privileges on order_invoice_snapshots to service_role;
+alter table invoice_snapshot_attempts enable row level security;
+revoke all on invoice_snapshot_attempts from anon, authenticated;
+grant all privileges on invoice_snapshot_attempts to service_role;
+alter table invoice_snapshot_leases enable row level security;
+revoke all on invoice_snapshot_leases from anon, authenticated;
+grant all privileges on invoice_snapshot_leases to service_role;
 
--- ── 3. Qué pedidos les falta su foto ─────────────────────────────────────────
+-- ── 4. Qué pedidos les falta su foto ─────────────────────────────────────────
 -- Entra un pedido de la tienda `p_store` que:
---   · es de Shopify según `orders.platform` (0273), con su id numérico de
+--   · es de Shopify según `orders.platform` (0274), con su id numérico de
 --     Shopify (no `manual-…` ni `wc-…`);
 --   · se creó desde `p_since` (el cron manda el 29-08-2026 00:00 UTC: el cierre
 --     menos los 60 días que mira el barrido de boletas, `invoice_candidates`,
 --     0260). Sin `p_since`, nada;
 --   · no tiene comprobante real vivo (emitiendo, emitida, en duda o externa);
 --   · no tiene foto y no está anulado, o tiene una foto anterior a su último
---     cambio en Shopify: así la foto queda con lo último que dijo Shopify.
--- Primero los que no tienen foto; después, primero los que siguen en curso
--- (sin macroetapa o con una que no es «Finalizado»); y del más nuevo al más
--- viejo, a lo más `p_limit`.
+--     cambio en Shopify: así la foto queda con lo último que dijo Shopify;
+--   · si falló antes, ya esperó 2 minutos por cada falla seguida (30 como
+--     mucho) desde la última.
+-- Primero los que no tienen foto; después, los que fallaron menos veces
+-- seguidas (los que nunca fallaron, primero: uno que siempre falla no tapa la
+-- cola); después, primero los que siguen en curso (sin macroetapa o con una que
+-- no es «Finalizado»); y del más nuevo al más viejo, a lo más `p_limit`.
 create or replace function invoice_snapshot_candidates(
   p_store uuid,
   p_since timestamptz,
@@ -25485,6 +25777,7 @@ language sql stable security invoker set search_path = public as $$
   from orders o
   left join order_invoice_snapshots s on s.order_id = o.id
   left join order_master m on m.order_id = o.id
+  left join invoice_snapshot_attempts a on a.order_id = o.id
   where o.store_id = p_store
     and o.platform = 'shopify'
     and o.shopify_order_id ~ '^[0-9]+$'
@@ -25498,7 +25791,12 @@ language sql stable security invoker set search_path = public as $$
       (s.order_id is null and o.cancelled_at is null)
       or (s.order_id is not null and o.updated_at > s.fetched_at)
     )
+    and (
+      a.order_id is null
+      or a.last_attempt_at <= now() - least(a.fail_count * interval '2 minutes', interval '30 minutes')
+    )
   order by (s.order_id is not null),
+           coalesce(a.fail_count, 0),
            (m.macro_stage is not distinct from 'finalizado'),
            o.created_at desc,
            o.id
@@ -25509,11 +25807,14 @@ revoke all on function invoice_snapshot_candidates(uuid, timestamptz, integer)
 grant execute on function invoice_snapshot_candidates(uuid, timestamptz, integer)
   to service_role;
 
--- ── 4. Guardar una foto ──────────────────────────────────────────────────────
+-- ── 5. Guardar una foto ──────────────────────────────────────────────────────
 -- true si la guardó. false, sin escribir nada, si el pedido no es de Shopify
 -- (`orders.platform`), no es de esa tienda, el gid no es el suyo, la respuesta
--- no tiene la forma de arriba o trae otro pedido, la hora no se entiende, o ya
--- hay una foto igual de nueva o más.
+-- no tiene la forma de arriba o trae otro pedido, la hora no se entiende, ya
+-- hay una foto igual de nueva o más, o la que hay trae el pedido y la nueva
+-- dice que Shopify no lo devolvió (`{"order": null}`): una foto buena nunca se
+-- pierde por una lectura que no lo trajo. Si la guardó, borra las fallas
+-- anotadas del pedido.
 create or replace function invoice_snapshot_put(
   p_order uuid,
   p_store uuid,
@@ -25552,10 +25853,91 @@ begin
          shopify_order_gid = excluded.shopify_order_gid,
          payload           = excluded.payload,
          fetched_at        = excluded.fetched_at
-   where s.fetched_at < excluded.fetched_at;
-  return found;
+   where s.fetched_at < excluded.fetched_at
+     and not (jsonb_typeof(s.payload->'order') = 'object'
+              and jsonb_typeof(excluded.payload->'order') = 'null');
+  if not found then
+    return false;
+  end if;
+  -- Ya tiene foto: sus fallas anteriores no cuentan más.
+  delete from invoice_snapshot_attempts where order_id = p_order;
+  return true;
 end $$;
 revoke all on function invoice_snapshot_put(uuid, uuid, text, jsonb, timestamptz)
   from public, anon, authenticated;
 grant execute on function invoice_snapshot_put(uuid, uuid, text, jsonb, timestamptz)
+  to service_role;
+
+-- ── 6. Anotar las fallas de unos pedidos ────────────────────────────────────
+-- Suma una falla seguida a cada pedido de `p_orders` que sea de la tienda
+-- `p_store` (los de otra tienda no se tocan), con la hora y el motivo en corto.
+-- Devuelve cuántos de ellos llegaron a `p_alert` fallas seguidas o más.
+create or replace function invoice_snapshot_failed(
+  p_store uuid,
+  p_orders uuid[],
+  p_detail text,
+  p_alert integer
+) returns integer
+language plpgsql security invoker set search_path = public as $$
+declare
+  v_alert integer;
+begin
+  with mine as (
+    select o.id from orders o
+     where o.store_id = p_store and o.id = any(coalesce(p_orders, '{}'::uuid[]))
+  ), up as (
+    insert into invoice_snapshot_attempts as a (order_id, store_id, fail_count, last_attempt_at, last_error)
+    select m.id, p_store, 1, now(), left(p_detail, 200) from mine m
+    on conflict (order_id) do update
+       set store_id        = excluded.store_id,
+           fail_count      = a.fail_count + 1,
+           last_attempt_at = excluded.last_attempt_at,
+           last_error      = excluded.last_error
+    returning a.fail_count
+  )
+  select count(*) filter (where fail_count >= greatest(coalesce(p_alert, 1), 1)) into v_alert from up;
+  return coalesce(v_alert, 0);
+end $$;
+revoke all on function invoice_snapshot_failed(uuid, uuid[], text, integer)
+  from public, anon, authenticated;
+grant execute on function invoice_snapshot_failed(uuid, uuid[], text, integer)
+  to service_role;
+
+-- ── 7. El turno de una tienda ───────────────────────────────────────────────
+-- true si `p_holder` se quedó con el turno de `p_store` por `p_seconds`
+-- segundos (estaba libre, vencido o ya era suyo); false si otra pasada lo tiene.
+create or replace function invoice_snapshot_lease(
+  p_store uuid,
+  p_holder uuid,
+  p_seconds integer
+) returns boolean
+language plpgsql security invoker set search_path = public as $$
+begin
+  if p_store is null or p_holder is null or coalesce(p_seconds, 0) <= 0 then
+    return false;
+  end if;
+  insert into invoice_snapshot_leases as l (store_id, holder, until)
+  values (p_store, p_holder, now() + make_interval(secs => p_seconds))
+  on conflict (store_id) do update
+     set holder = excluded.holder,
+         until  = excluded.until
+   where l.until < now() or l.holder = excluded.holder;
+  return found;
+end $$;
+revoke all on function invoice_snapshot_lease(uuid, uuid, integer)
+  from public, anon, authenticated;
+grant execute on function invoice_snapshot_lease(uuid, uuid, integer)
+  to service_role;
+
+-- Suelta el turno, solo si es de `p_holder`.
+create or replace function invoice_snapshot_release(
+  p_store uuid,
+  p_holder uuid
+) returns void
+language sql security invoker set search_path = public as $$
+  delete from invoice_snapshot_leases where store_id = p_store and holder = p_holder
+$$;
+revoke all on function invoice_snapshot_release(uuid, uuid)
+  from public, anon, authenticated;
+grant execute on function invoice_snapshot_release(uuid, uuid)
   to service_role;

@@ -1,4 +1,4 @@
-// MOM §37.11 (la entrada de pedidos de WooCommerce) atado a lo que de verdad
+// MOM §38.11 (la entrada de pedidos de WooCommerce) atado a lo que de verdad
 // corre: los nombres, los topes y los códigos HTTP que el MOM promete son los
 // del código. Las reglas, a fondo, en test/woocommerce-webhook.test.ts,
 // test/woocommerce-sync.test.ts y test/woocommerce-settings.test.ts.
@@ -30,10 +30,10 @@ function section(title: string): string {
   return flat(next === -1 ? rest : rest.slice(0, next));
 }
 
-const S = section("### 37.11 La entrada de pedidos de WooCommerce");
+const S = section("### 38.11 La entrada de pedidos de WooCommerce");
 
-describe("MOM §37.11 · el webhook", () => {
-  it("los temas son los del código y los de la base técnica (37.8)", () => {
+describe("MOM §38.11 · el webhook", () => {
+  it("los temas son los del código y los de la base técnica (38.8)", () => {
     expect([...WOO_INTAKE_TOPICS].sort()).toEqual([...WOO_ORDER_TOPICS].sort());
     for (const t of WOO_INTAKE_TOPICS) expect(S).toContain(`\`${t}\``);
   });
@@ -63,7 +63,7 @@ describe("MOM §37.11 · el webhook", () => {
   });
 });
 
-describe("MOM §37.11 · la sincronización", () => {
+describe("MOM §38.11 · la sincronización", () => {
   it("la fuente, la petición y los topes son los del código", () => {
     expect(S).toContain(`fuente \`${WOO_SYNC_SOURCE}\``);
     expect(S).toContain(
@@ -84,7 +84,7 @@ describe("MOM §37.11 · la sincronización", () => {
   });
 });
 
-describe("MOM §37.11 · Ajustes", () => {
+describe("MOM §38.11 · Ajustes", () => {
   it("con «Administrar tiendas», sin mostrar secretos, sin tocar la plataforma", () => {
     expect(S).toContain("«Administrar tiendas», `stores.manage`");
     expect(S).toContain("**Los secretos se guardan cifrados y nunca vuelven a la pantalla:**");

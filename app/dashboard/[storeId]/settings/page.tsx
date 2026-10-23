@@ -616,8 +616,8 @@ export default async function StoreSettingsPage({
             prevSecretUntil: ownAppPrevUntil ? ownAppPrevSecretLine(ownAppPrevUntil, full.timezone) : null,
           }
         : null,
-    // WooCommerce (0273, MOM §37.11): el sitio y la clave del sitio, y de cada
-    // secreto solo si hay uno. Pre-0273 la fila no trae `platform` y la sección
+    // WooCommerce (0274, MOM §38.11): el sitio y la clave del sitio, y de cada
+    // secreto solo si hay uno. Pre-0274 la fila no trae `platform` y la sección
     // lo dice en vez de ofrecer guardar.
     woo: {
       siteUrl: full.woo_site_url ?? null,

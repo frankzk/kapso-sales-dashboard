@@ -1,4 +1,4 @@
-// WooCommerce (MOM §37, 23-10-2026): el cliente de su API REST v3, la firma de
+// WooCommerce (MOM §38, 23-10-2026): el cliente de su API REST v3, la firma de
 // sus webhooks y el mapeador de un pedido de WooCommerce a la MISMA fila de
 // `orders` que hoy sale de Shopify (`OrderRow`, lib/types.ts).
 //
@@ -9,7 +9,7 @@
 // Shopify REST), el resto del sistema no se entera del cambio. Por eso este
 // módulo no inventa campos nuevos: traduce.
 //
-// LO QUE FIJA (y está en el MOM §37):
+// LO QUE FIJA (y está en el MOM §38):
 //   · id:      `shopify_order_id = "wc-<clave del sitio>-<id>"` (`wc-kp-1532`).
 //              La clave va porque los dos WordPress numeran desde 1 y hay
 //              consultas que buscan por id sin filtrar por tienda.
@@ -169,7 +169,7 @@ export const WOO_PLATFORM: OrderPlatform = "woocommerce";
 // Identidad del pedido
 // ---------------------------------------------------------------------------
 
-/** La misma regla que `stores_woo_site_key_check` (0273). */
+/** La misma regla que `stores_woo_site_key_check` (0274). */
 export const WOO_SITE_KEY_RE = /^[a-z][a-z0-9]{1,11}$/;
 
 export function isValidWooSiteKey(key: unknown): key is string {
@@ -420,7 +420,7 @@ const CHECKOUT_TITLES = new Set(CHECKOUT_GATEWAYS.map((n) => n.trim().toLowerCas
  *   · `cod` (contraentrega de WooCommerce) → `cod`;
  *   · una pasarela cuyo título es uno de `CHECKOUT_GATEWAYS` → `checkout`. La
  *     de Flow para WooCommerce entra cuando la operación confirme su nombre
- *     exacto y se agregue ahí (MOM §37);
+ *     exacto y se agregue ahí (MOM §38);
  *   · cualquier otra (transferencia `bacs`, Yape, una nueva) → null: no se sabe
  *     y sigue el conducto regular de las constancias. No se adivina.
  */
@@ -433,27 +433,47 @@ export function wooPaymentGateway(order: Pick<WooOrder, "payment_method" | "paym
 }
 
 /**
+ * Las pasarelas (`payment_method`) en las que «processing» o «completed» quiere
+ * decir que el dinero ya entró (MOM §38.4):
+ *   · `bacs` (transferencia bancaria directa): WooCommerce la deja «on-hold»
+ *     y solo pasa a «processing» cuando alguien confirma a mano que llegó, como
+ *     el «manual» de Shopify. La operación puede sacarla de aquí.
+ * La pasarela de Flow entra por su TÍTULO confirmado en `CHECKOUT_GATEWAYS`
+ * (`wooPaymentGateway` → `checkout`), no por su slug, que nadie confirmó.
+ * Cualquier otra —vacía (el «Añadir pedido» de wp-admin con «N/D»), un plugin de
+ * contraentrega con su propio slug, una nueva— NO es pagado: en wp-admin
+ * «processing» quiere decir «en preparación», no «cobrado».
+ */
+export const WOO_PREPAID_METHODS: readonly string[] = ["bacs"];
+
+/**
  * `financial_status` con el vocabulario de Shopify:
  *   · `cancelled`/`trash` → `voided`;
  *   · `refunded` → `refunded`;
  *   · contraentrega → `pending` en cualquier otro estado: el dinero lo cobra el
  *     courier, y `date_paid` (que WooCommerce llena al pasar a «processing») no
  *     dice nada;
- *   · otra pasarela en `processing` o `completed` → `paid` (WooCommerce solo
- *     llega ahí cuando la pasarela confirmó el cobro o alguien lo marcó a mano,
- *     como el «manual» de Shopify), o `partially_refunded` si ya tiene un
- *     reembolso;
+ *   · una pasarela de prepago confirmada (`WOO_PREPAID_METHODS`, o el título de
+ *     Flow en `CHECKOUT_GATEWAYS`) en `processing` o `completed` → `paid`, o
+ *     `partially_refunded` si ya tiene un reembolso;
+ *   · cualquier otra pasarela, también vacía o desconocida, → `pending`: sigue
+ *     el camino seguro de la confirmación y las constancias (lo mismo que
+ *     `wooPaymentGateway` hace con la pasarela);
  *   · lo demás (`on-hold`, estados de plugins) → `pending`.
  */
 export function wooFinancialStatus(
-  order: Pick<WooOrder, "status" | "payment_method">,
+  order: Pick<WooOrder, "status" | "payment_method" | "payment_method_title">,
   totalRefunded: number,
 ): string {
   const status = statusOf(order);
   if (WOO_CANCELLED_STATUSES.includes(status)) return "voided";
   if (status === "refunded") return "refunded";
-  if ((order.payment_method ?? "").trim().toLowerCase() === "cod") return "pending";
-  if (status === "processing" || status === "completed") return totalRefunded > 0 ? "partially_refunded" : "paid";
+  const method = (order.payment_method ?? "").trim().toLowerCase();
+  if (method === "cod") return "pending";
+  const prepaid = WOO_PREPAID_METHODS.includes(method) || wooPaymentGateway(order) === "checkout";
+  if (prepaid && (status === "processing" || status === "completed")) {
+    return totalRefunded > 0 ? "partially_refunded" : "paid";
+  }
   return "pending";
 }
 

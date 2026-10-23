@@ -1060,7 +1060,7 @@ export async function updateShipmentDeliveryAddress(
   // Primero en Shopify, como siempre. Si la tienda ya no tiene Shopify, o
   // Shopify contesta que la tienda ya no está, el cambio sigue solo en el envío
   // (lib/shipment-order-capture.ts); un rechazo de Shopify lo sigue cortando.
-  // Un pedido de WooCommerce (`orders.platform`, MOM §37.12) nunca va a
+  // Un pedido de WooCommerce (`orders.platform`, MOM §38.12) nunca va a
   // Shopify: su id (`wc-kp-1532`) no es de Shopify aunque tenga un número.
   let shopifyPush: ShopifyAddressPush | null = null;
   if (isRealShopifyOrder) {

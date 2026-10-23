@@ -287,7 +287,7 @@ export interface StoreSettingsData {
     prevSecretUntil: string | null;
   } | null;
   /**
-   * WooCommerce (0273, MOM §37.11): el sitio, la clave del sitio y si hay cada
+   * WooCommerce (0274, MOM §38.11): el sitio, la clave del sitio y si hay cada
    * secreto (nunca el valor), la dirección de los webhooks y la última pasada.
    */
   woo: WooSettingsView;
@@ -381,7 +381,7 @@ function webhookTopicLabel(topic: string): string {
   if (topic === "flow/bad_request") return "Payload inválido";
   if (topic.startsWith("draft_orders/")) return "Borrador (carrito)";
   if (topic.startsWith("orders/")) return "Orden";
-  // WooCommerce (MOM §37.11): «order.created», «order.updated»…
+  // WooCommerce (MOM §38.11): «order.created», «order.updated»…
   if (topic === "order.deleted") return "Pedido WooCommerce (papelera)";
   if (topic.startsWith("order.")) return "Pedido WooCommerce";
   return topic;

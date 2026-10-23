@@ -547,8 +547,10 @@
 \ir migrations/0271_shopify_app_propia.sql
 \echo 'Applying 0272_urpi_salida_fecha.sql'
 \ir migrations/0272_urpi_salida_fecha.sql
-\echo 'Applying 0273_woocommerce_base.sql'
-\ir migrations/0273_woocommerce_base.sql
-\echo 'Applying 0274_invoice_snapshots.sql'
-\ir migrations/0274_invoice_snapshots.sql
+\echo 'Applying 0273_shopify_history.sql'
+\ir migrations/0273_shopify_history.sql
+\echo 'Applying 0274_woocommerce_base.sql'
+\ir migrations/0274_woocommerce_base.sql
+\echo 'Applying 0275_invoice_snapshots.sql'
+\ir migrations/0275_invoice_snapshots.sql
 \echo 'Done.'

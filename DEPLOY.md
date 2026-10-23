@@ -3661,7 +3661,11 @@ pedidos que toca la 0272 se recalculan por el desfase.
    tomaba como día de la entrega el del relleno. Si esa fila no trae fecha, la
    salida se rellena sin `closed_at`, como antes.
 2. **Migración `0272_urpi_salida_fecha.sql`, a mano y DESPUÉS del código.**
-   **Pendiente de aplicar en producción.** Después, para que ninguna salida
+   **Ya aplicada en producción el 23-10-2026**, con el código ya desplegado
+   (conteos previos 107 y 32; después, las 139 salidas de Urpi con el día del
+   reporte en el Master, 32 eventos `route_output_filled` y los 32 pedidos
+   fuera de «Salida adicional activa»: 31 en «Pendiente de liquidación» y 1 en
+   «Recogido sin pago completo»). Después, para que ninguna salida
    nueva de Urpi quede sin `closed_at` entre una cosa y otra (si se aplica
    antes, correrla otra vez tras el despliegue completa las que se rellenaron en
    medio). Es un relleno de datos, no de esquema, en dos pasos:
@@ -3852,7 +3856,31 @@ reconocen por su `route_output_filled` con `payload.backfill = true` y
 `payload.urpi_row`; las fechas del paso 1 no llevan rastro propio (estaban
 vacías y el código las escribe igual desde este cambio).
 
-### 23-10-2026 · Base de WooCommerce (0273, MOM §37)
+### 23-10-2026 · Historial de Shopify (0273, MOM §37)
+
+Archivo de consulta con los pedidos y clientes de Shopify de antes de Kapta,
+subidos desde las exportaciones CSV de Shopify. No toca `orders`, el Master ni
+`MOM_RESOLUTION_VERSION`. Sin variables de entorno nuevas.
+
+**En producción ya está aplicada (23-10-2026, SQL por partes).** Se corrió en
+cuatro tandas (tablas, RLS, políticas y `grant`) y sin los `drop policy if
+exists`, que no hacían nada porque las políticas aún no existían. No figura en
+el historial de migraciones de Supabase. Comprobada el mismo día: las tres
+tablas con RLS, sus índices y una política de lectura cada una. No hace falta
+volver a correrla.
+
+1. **Migración `0273_shopify_history.sql`** antes del código: crea
+   `shopify_history_files`, `shopify_history_orders` y
+   `shopify_history_customers`, con RLS de lectura por tienda. Solo crea; es
+   idempotente. Si el código llega antes, la pantalla falla al leer y la subida
+   contesta «No se pudo registrar el archivo»; no se pierde nada.
+2. **Bucket** `shopify-history` (privado): lo crea la primera subida con el
+   service role. No hace falta crearlo a mano.
+3. **Comprobar:** `select count(*) from shopify_history_orders;` responde (0 al
+   principio) y, después de subir un CSV, `select kind, status, records from
+   shopify_history_files order by created_at desc limit 5;`.
+
+### 23-10-2026 · Base de WooCommerce (0274, MOM §38)
 
 Shopify cierra Kenku Perú y Aurela el 28-10-2026 (UTC; se planifica para el
 27-10 a las 19:00 de Lima) y las dos pasan a WooCommerce. Esto solo prepara la
@@ -3861,26 +3889,27 @@ de un pedido de WooCommerce a la misma fila de `orders`). **Nada lo llama
 todavía**: el webhook, la sincronización y «Generar pedido» en WooCommerce
 llegan en sus propias entradas.
 
-**Si sale en un mismo despliegue con las dos entradas siguientes** (la 0274 y
-la entrada de pedidos del 25-10-2026): aplicar la 0273, después la 0274 y
+**Si sale en un mismo despliegue con las dos entradas siguientes** (la 0275 y
+la entrada de pedidos del 25-10-2026): aplicar la 0274, después la 0275 y
 recién entonces el código, cada migración con su «Antes» y su «Después». En ese
 caso sí llegan un cron (`/api/cron/invoice-snapshots`, 29 en `vercel.json`) y
 la ruta `/api/webhooks/woocommerce/<storeId>`: «nada lo llama todavía» y «sin
 crons ni rutas nuevas» valen solo si esta entrada sale sola.
 
 **Kenku y Aurela no cambian.** Siguen en Shopify con su token, sus webhooks, su
-sincronización, «Generar pedido» y sus comprobantes, exactamente igual. La 0273
+sincronización, «Generar pedido» y sus comprobantes, exactamente igual. La 0274
 no actualiza ninguna fila: todas las tiendas nacen `platform = 'shopify'` sin
 nada de WooCommerce, y todos los pedidos y borradores, `'shopify'`. El código de
 Shopify no escribe la plataforma. Sin variables de entorno nuevas: las claves de
 WooCommerce son de cada tienda, se guardan cifradas en `stores` y nunca van a
 Vercel, al chat ni al repositorio.
 
-1. **Migración `0273_woocommerce_base.sql`, a mano y ANTES del código.**
+1. **Migración `0274_woocommerce_base.sql`, a mano y ANTES del código.**
    Añade `stores.platform` (`'shopify'` | `'woocommerce'`, por defecto
    `'shopify'`), `woo_site_url`, `woo_site_key`, `woo_consumer_key_enc`,
    `woo_consumer_secret_enc`, `woo_webhook_secret_enc` (cifrados como los demás
-   `*_enc`), `woo_last_error` y `platform_switched_at`; `orders.platform` y
+   `*_enc`), `woo_last_error`, `platform_switched_at` y `woo_intake_from` (el
+   piso de la entrada de pedidos, MOM §38.11); `orders.platform` y
    `draft_orders.platform` (por defecto `'shopify'`); los CHECK
    `stores_woo_platform_check` (pasar a WooCommerce exige la dirección, la clave
    del sitio y las dos claves de la API), `stores_woo_site_key_check` y
@@ -3893,7 +3922,7 @@ Vercel, al chat ni al repositorio.
    ```sql
    -- a) Tiendas por app y estado (Kenku Peru y Aurela: interna, active).
    select shopify_app, status, count(*) from stores group by 1, 2 order by 1, 2;
-   -- b) La huella de lo que la 0273 promete no tocar (sin mostrar secretos).
+   -- b) La huella de lo que la 0274 promete no tocar (sin mostrar secretos).
    select md5(string_agg(concat_ws('|', id, name, shopify_domain, shopify_app, status,
                                    md5(coalesce(shopify_token_enc, '')),
                                    md5(coalesce(shopify_webhook_secret_enc, ''))), ',' order by id)) as huella
@@ -3902,22 +3931,30 @@ Vercel, al chat ni al repositorio.
    select (select count(*) from orders) as pedidos, (select count(*) from draft_orders) as borradores;
    ```
 
-   **Aplicar.** Toma un momento el candado exclusivo de `stores`, `orders` y
-   `draft_orders`: Postgres comprueba los CHECK nuevos recorriendo `orders` y
-   `draft_orders` (sin reescribirlas; decenas de miles de filas, menos de un
-   segundo). Mientras lo espera, todo lo que lee esas tablas hace cola detrás,
-   también cada webhook de Kenku y Aurela. Por eso el `lock_timeout` es corto,
-   **3 s**: si una consulta larga tiene la tabla, la migración se corta sola
-   (`canceling statement due to lock timeout`), no cambia nada, y se vuelve a
-   correr el mismo bloque unos segundos después. Mejor fuera de las horas de
-   más pedidos:
+   **Aplicar.** Kenku y Aurela escriben en `orders` todo el tiempo y la RLS
+   lee `stores` en cada consulta del panel, así que la 0274 está hecha de pasos
+   cortos que se corren **cada uno en su propia transacción** (psql en modo
+   autocommit: **sin `begin`/`commit`**). `orders.platform` y
+   `draft_orders.platform` nacen sin CHECK (solo cambia el catálogo: no se
+   recorre ni se reescribe la tabla); su CHECK entra `not valid` y se valida
+   aparte, con un candado (`SHARE UPDATE EXCLUSIVE`) que no frena lecturas ni
+   escrituras; lo de `stores` va al final. Cada paso toma el candado exclusivo
+   de UNA tabla por un instante y lo suelta al terminar ese paso.
+
+   El `lock_timeout` de **3 s corta cada espera, no el total**: si una consulta
+   larga tiene la tabla, ese paso espera a lo más 3 s (y mientras espera, lo que
+   llega a esa tabla hace cola detrás, también los webhooks de Kenku y Aurela),
+   se corta solo (`canceling statement due to lock timeout`) y psql para ahí
+   (`ON_ERROR_STOP`). Los pasos anteriores quedan hechos; volver a correr el
+   mismo bloque unos segundos después termina el trabajo. Cada paso mira antes
+   si ya está hecho, así que **volver a correrla no toma ningún candado
+   exclusivo** ni vuelve a validar las tablas. Mejor fuera de las horas de más
+   pedidos:
 
    ```bash
-   psql "$DATABASE_URL" <<'SQL'
-   begin;
-   set local lock_timeout = '3s';
-   \i db/migrations/0273_woocommerce_base.sql
-   commit;
+   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+   set lock_timeout = '3s';
+   \i db/migrations/0274_woocommerce_base.sql
    SQL
    ```
 
@@ -3936,12 +3973,18 @@ Vercel, al chat ni al repositorio.
    select count(*) from stores
     where platform <> 'shopify' or woo_site_url is not null or woo_site_key is not null
        or woo_consumer_key_enc is not null or woo_consumer_secret_enc is not null
-       or woo_webhook_secret_enc is not null or woo_last_error is not null or platform_switched_at is not null;
+       or woo_webhook_secret_enc is not null or woo_last_error is not null or platform_switched_at is not null
+       or woo_intake_from is not null;
    select count(*) from orders where platform <> 'shopify';
    select count(*) from draft_orders where platform <> 'shopify';
+   -- 4) Los tres CHECK de la plataforma, validados (convalidated = true).
+   select conname, convalidated from pg_constraint
+    where conname in ('stores_platform_check', 'orders_platform_check', 'draft_orders_platform_check');
    ```
 
-   Correrla otra vez no hace nada: no vuelve a validar las tablas ni toca filas.
+   Si el paso de VALIDATE se cortó, el (4) dice `false`: volver a correr el
+   bloque de arriba. Correrla otra vez no hace nada: no toma candados
+   exclusivos, no vuelve a validar las tablas ni toca filas.
 
 2. **El código**, por el camino de siempre (rama de integración → `main` por
    fast-forward). Sin crons ni rutas nuevas. Kenku y Aurela no lo notan.
@@ -3956,7 +3999,7 @@ Vercel, al chat ni al repositorio.
    (WooCommerce le aplica `wp_specialchars_decode` antes de firmar). Nunca se
    apaga Shopify con `status = 'disabled'`.
 
-**Marcha atrás.** Revertir el código basta: nada lo llama. La 0273 puede
+**Marcha atrás.** Revertir el código basta: nada lo llama. La 0274 puede
 quedarse: con todo en `'shopify'` y las columnas vacías no cambia nada. Si
 hubiera que quitarla, primero el código, y solo con
 `select count(*) from orders where platform <> 'shopify'` en 0 y ninguna
@@ -3978,13 +4021,14 @@ alter table stores
   drop column woo_consumer_secret_enc,
   drop column woo_webhook_secret_enc,
   drop column woo_last_error,
-  drop column platform_switched_at;
+  drop column platform_switched_at,
+  drop column woo_intake_from;
 alter table orders drop column platform;
 alter table draft_orders drop column platform;
 commit;
 ```
 
-### 23-10-2026 · La foto de los pedidos de Shopify para sus boletas (0274, MOM §35.10)
+### 23-10-2026 · La foto de los pedidos de Shopify para sus boletas (0275, MOM §35.10)
 
 Shopify cierra Kenku Perú y Aurela el 28-10-2026 (se planifica para el 27-10 a
 las 19:00 de Lima). Cada boleta vuelve a leer su pedido en Shopify antes de
@@ -3996,29 +4040,47 @@ boleta lo usa **solo** cuando la tienda ya no tiene token o Shopify contesta
 en vivo como siempre.
 
 **Kenku y Aurela no cambian mientras Shopify viva.** El cron solo lee pedidos
-(la misma consulta de la boleta, sin datos de clientas), un pedido a la vez por
-tienda, a lo más 100 por tienda cada 10 minutos, y antes de cada uno espera a
-que la tienda tenga en Shopify el cupo de la consulta más un 25 % de reserva:
-el sync, los webhooks y «Generar pedido» no se quedan sin cupo. Las tiendas
-cliente no se tocan (solo tiendas de una organización con RUC dado de alta).
-Sin variables de entorno nuevas.
+(los campos de la consulta de la boleta, sin datos de clientas), por lotes con
+`nodes(ids: …)` (hasta 25 pedidos por llamada; con los campos de la boleta
+caben unos 7 en el tope de 1.000 puntos de una consulta, 5 con un balde de
+1.000), cada 2 minutos (en los minutos impares, `1-59/2`, para no arrancar
+nunca con el barrido de boletas de los minutos 6, 16, …), hasta 95 s por
+pasada y las dos tiendas a la vez. Antes de cada llamada espera a que la
+tienda tenga en Shopify el costo del lote **más un 25 % del balde de
+reserva**, y en promedio gasta **a lo más el 75 % de lo que el balde se
+repone**: el sync, los webhooks y «Generar pedido» siempre tienen un cuarto
+del balde y un cuarto de la reposición. (La única excepción: con un balde de
+1.000, la consulta de un pedido solo —uno con más de 10 líneas, o que el lote
+no trajo— pide unos 810 puntos y espera el balde lleno; mientras corre deja
+menos de un cuarto.) THROTTLED para la tienda hasta la próxima pasada. Una
+foto con el pedido **nunca** se pisa con una lectura que no lo trajo
+(`{"order": null}`). Antes del cierre (28-10 00:00 UTC) la boleta nunca usa la
+foto mientras la tienda tenga token: un 401/403/423 de Shopify sigue siendo
+`lectura_fallida`, como hoy. Las tiendas cliente no se tocan (solo tiendas de
+una organización con RUC dado de alta). Sin variables de entorno nuevas.
 
-1. **Requiere la 0273** (`orders.platform`). La 0274 se detiene sin ella
-   (`0274: falta la 0273`), antes de crear nada.
+1. **Requiere la 0274** (`orders.platform`). La 0275 se detiene sin ella
+   (`0275: falta la 0274`), antes de crear nada.
 
-2. **Migración `0274_invoice_snapshots.sql`, a mano y ANTES del código.** Crea
-   `order_invoice_snapshots` (RLS encendida, sin acceso para `anon` ni
-   `authenticated`) y las funciones `invoice_snapshot_candidates` e
-   `invoice_snapshot_put`, solo para `service_role`. No toca ninguna fila.
-   Crear las llaves foráneas a `orders` y `stores` toma un momento un candado
-   que frena las escrituras en esas tablas (los webhooks de Kenku y Aurela
-   hacen cola): por eso el `lock_timeout` de 3 s. Si se corta (`canceling
-   statement due to lock timeout`), no cambió nada y se vuelve a correr.
+2. **Migración `0275_invoice_snapshots.sql`, a mano y ANTES del código.** Crea
+   `order_invoice_snapshots`, `invoice_snapshot_attempts` (las fallas de cada
+   pedido) e `invoice_snapshot_leases` (el turno de cada tienda), con RLS
+   encendida y sin acceso para `anon` ni `authenticated`, y las funciones
+   `invoice_snapshot_candidates`, `invoice_snapshot_put`,
+   `invoice_snapshot_failed`, `invoice_snapshot_lease` e
+   `invoice_snapshot_release`, solo para `service_role`. No toca ninguna fila.
+   Crear las llaves foráneas de la tabla de fotos a `orders` y `stores` toma un
+   momento un candado que frena las escrituras en esas tablas (los webhooks de
+   Kenku y Aurela hacen cola): por eso corre en modo autocommit (ese candado se
+   suelta al terminar esa sentencia, no al final del archivo) y con
+   `lock_timeout` de 3 s, que corta cada espera. Si se corta (`canceling
+   statement due to lock timeout`), se vuelve a correr el bloque entero: lo
+   hecho queda y el resto se completa.
 
    **Antes** (solo lectura; conteos, sin datos de clientas):
 
    ```sql
-   -- a) La 0273 está: tiene que dar 1.
+   -- a) La 0274 está: tiene que dar 1.
    select count(*) from information_schema.columns
     where table_schema = 'public' and table_name = 'orders' and column_name = 'platform';
    -- b) Cuántos pedidos necesitan foto, por tienda (el cron los irá tomando).
@@ -4035,70 +4097,162 @@ Sin variables de entorno nuevas.
     group by 1 order by 1;
    ```
 
-   **Aplicar:**
+   **Aplicar** (sin `begin`/`commit`):
 
    ```bash
-   psql "$DATABASE_URL" <<'SQL'
-   begin;
-   set local lock_timeout = '3s';
-   \i db/migrations/0274_invoice_snapshots.sql
-   commit;
+   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+   set lock_timeout = '3s';
+   \i db/migrations/0275_invoice_snapshots.sql
    SQL
    ```
 
    **Después** (solo lectura):
 
    ```sql
-   -- 1) La tabla con RLS y sin grants para anon ni authenticated (0 filas).
-   select relrowsecurity from pg_class where oid = 'public.order_invoice_snapshots'::regclass;
-   select grantee, privilege_type from information_schema.role_table_grants
-    where table_name = 'order_invoice_snapshots' and grantee in ('anon', 'authenticated');
-   -- 2) Las dos funciones, sin execute para anon ni authenticated.
+   -- 1) Las tres tablas con RLS y sin grants para anon ni authenticated (0 filas).
+   select relname, relrowsecurity from pg_class
+    where oid in ('public.order_invoice_snapshots'::regclass, 'public.invoice_snapshot_attempts'::regclass,
+                  'public.invoice_snapshot_leases'::regclass);
+   select table_name, grantee, privilege_type from information_schema.role_table_grants
+    where table_name in ('order_invoice_snapshots', 'invoice_snapshot_attempts', 'invoice_snapshot_leases')
+      and grantee in ('anon', 'authenticated');
+   -- 2) Las cinco funciones, sin execute para anon ni authenticated.
    select p.proname, has_function_privilege('anon', p.oid, 'execute') as anon,
           has_function_privilege('authenticated', p.oid, 'execute') as authenticated
      from pg_proc p
-    where p.proname in ('invoice_snapshot_candidates', 'invoice_snapshot_put');
-   -- 3) Vacía hasta que corra el cron.
-   select count(*) from order_invoice_snapshots;
+    where p.proname in ('invoice_snapshot_candidates', 'invoice_snapshot_put', 'invoice_snapshot_failed',
+                        'invoice_snapshot_lease', 'invoice_snapshot_release');
+   -- 3) Vacías hasta que corra el cron.
+   select (select count(*) from order_invoice_snapshots) as fotos,
+          (select count(*) from invoice_snapshot_attempts) as fallas,
+          (select count(*) from invoice_snapshot_leases) as turnos;
    ```
 
    Correrla otra vez no hace nada.
 
 3. **El código**, por el camino de siempre (rama de integración → `main` por
-   fast-forward). Trae el cron en `vercel.json`, en los minutos 4, 14, 24, 34,
-   44 y 54, con `CRON_SECRET` como los demás. Comprobar en Vercel → Crons que
-   aparece y que una llamada sin el secreto responde 401. Fuera de producción
-   no llama a Shopify. Para ver cuánto falta sin llamar a Shopify:
-   `GET /api/cron/invoice-snapshots?dry=1` con `Authorization: Bearer
-   $CRON_SECRET` (cuenta hasta 100 por tienda).
+   fast-forward). Trae el cron en `vercel.json`, **cada 2 minutos en los
+   minutos impares** (`1-59/2 * * * *`), con `maxDuration` 120 (la pasada no
+   empieza llamadas nuevas pasados 95 s y termina antes de ~113 s, antes de la
+   siguiente) y `CRON_SECRET` como los demás.
+   Comprobar en Vercel → Crons que aparece y que una llamada sin el secreto
+   responde 401. Fuera de producción no llama a Shopify. Para ver cuánto falta
+   sin llamar a Shopify: `GET /api/cron/invoice-snapshots?dry=1` con
+   `Authorization: Bearer $CRON_SECRET` (cuenta hasta 600 por tienda). No hace
+   falta llamarla a mano: una llamada mientras corre el cron encuentra el turno
+   tomado (`ocupada`) y no hace nada.
 
-4. **Seguimiento, hasta el 27-10.** La línea de log `[invoice-snapshots]` dice
-   por tienda cuántas fotos guardó (`saved`, `refreshed`), cuántas quedaron
-   (`pending`) y por qué paró (`presupuesto` y `cuota` son normales; `shopify`
-   o `tienda_caida` con su `detail`, no). Y en la base:
+4. **Cuánto tarda, y seguimiento hasta el 27-10.** El ritmo lo pone el cupo de
+   cada tienda en Shopify (cada una tiene el suyo, y las dos corren a la vez):
+   la foto gasta a lo más el 75 % de lo que se repone por segundo
+   (`restoreRate`), y cada pedido gasta lo que de verdad se leyó (unos 40
+   puntos uno de 1 a 3 líneas; Shopify devuelve el resto de los ~135 que cobra
+   por adelantado por pedido). Con 95 s de trabajo cada 120 s (30 pasadas por
+   hora), simulado con el código real (llamada de 0,7 s + 40 ms por pedido,
+   40 ms por escritura en la base):
+
+   | Balde de la tienda (`quota.max` / `quota.restore`) | 40 pts/pedido: por hora · Kenku (9.171) · Aurela (1.865) | 100 pts/pedido: por hora · Kenku · Aurela |
+   |---|---|---|
+   | 1.000 / 50 por s (plan básico antiguo) | ~2.700 · **3,4 h** · 0,7 h | ~1.100 · **8,5 h** · 1,7 h |
+   | 2.000 / 100 por s (plan básico) | ~5.500 · **1,7 h** · 0,3 h | ~2.300 · **3,9 h** · 0,8 h |
+   | 4.000 / 200 por s (Advanced) | ~10.700 · **0,9 h** · 0,2 h | ~4.400 · **2,1 h** · 0,4 h |
+   | 20.000 / 1.000 por s (Plus) | ~15.800 (lo limita la latencia) · **0,6 h** · 0,1 h | igual |
+
+   Las dos tiendas avanzan a la vez, así que el total es el de Kenku. **El peor
+   caso razonable (balde de 1.000 y pedidos de 100 puntos) termina en ~9 h**:
+   con el código en producción el 24-10, mucho antes del 27-10 a las 18:00 de
+   Lima. Después, el cron solo toma los pedidos nuevos y los que cambian (unos
+   300 por día en Kenku y 70 en Aurela), en segundos por pasada.
+
+   **La primera hora**, en Vercel → Logs, la línea `[invoice-snapshots]`: por
+   pasada, `orders` (fotos de la pasada), `perMinute` y `ms`; por tienda
+   `saved`, `refreshed`, `skipped`, `kept` (fotos con el pedido que se
+   conservaron porque Shopify ya no lo devolvió), `failed`, `pending`, `calls`,
+   `batch` (pedidos por llamada: la primera de cada pasada lleva uno, y desde
+   ahí crece con lo que Shopify dice que pide cada pedido, hasta 25), `points`
+   (`requested`: lo que cobró Shopify por adelantado; `actual`: lo que de
+   verdad gastó), `quota` (`max`, `restore` y `available` que informó Shopify)
+   y por qué paró (`presupuesto`, `cuota` y `ocupada` son normales; `shopify` o
+   `tienda_caida`, con su `detail`, ponen el cron en rojo). `orders` por
+   pasada × 30 es el ritmo por hora; `points.actual` ÷ (`saved` +
+   `refreshed`) son los puntos por pedido. Con eso y `quota`, la fila de la
+   tabla que toca. Si el ritmo es menor, mirar `quota.restore`.
+
+   **El avance, en la base** (solo lectura, solo conteos):
 
    ```sql
+   -- a) Por tienda: cuántos faltan (sin foto), cuántas fotos hay que rehacer
+   --    (el pedido cambió después), cuántas están al día, cuántos fallaron y
+   --    la última foto.
+   select s.name,
+          count(*) filter (where x.order_id is null and o.cancelled_at is null) as sin_foto,
+          count(*) filter (where x.order_id is not null and o.updated_at > x.fetched_at) as foto_vieja,
+          count(*) filter (where x.order_id is not null and o.updated_at <= x.fetched_at) as foto_al_dia,
+          count(a.order_id) as con_fallas,
+          max(x.fetched_at) as ultima_foto
+     from orders o
+     join stores s on s.id = o.store_id
+     left join order_invoice_snapshots x on x.order_id = o.id
+     left join invoice_snapshot_attempts a on a.order_id = o.id
+    where s.status = 'active'
+      and s.org_id in (select org_id from invoice_issuers)
+      and o.platform = 'shopify' and o.shopify_order_id ~ '^[0-9]+$'
+      and o.created_at >= '2026-08-29T00:00:00Z'
+      and not exists (select 1 from order_invoices i
+                       where i.order_id = o.id and i.mode = 'real'
+                         and i.status in ('emitiendo', 'emitida', 'en_duda', 'externa'))
+    group by 1 order by 1;
+   -- b) El ritmo de la última hora y las horas que faltan a ese ritmo.
+   with ritmo as (
+     select store_id, count(*) as por_hora from order_invoice_snapshots
+      where fetched_at > now() - interval '1 hour' group by 1
+   ), falta as (
+     select o.store_id, count(*) as sin_foto
+       from orders o
+      where o.platform = 'shopify' and o.shopify_order_id ~ '^[0-9]+$'
+        and o.created_at >= '2026-08-29T00:00:00Z' and o.cancelled_at is null
+        and not exists (select 1 from order_invoice_snapshots x where x.order_id = o.id)
+        and not exists (select 1 from order_invoices i
+                         where i.order_id = o.id and i.mode = 'real'
+                           and i.status in ('emitiendo', 'emitida', 'en_duda', 'externa'))
+      group by 1
+   )
+   select s.name, f.sin_foto, r.por_hora, round(f.sin_foto::numeric / nullif(r.por_hora, 0), 1) as horas_que_faltan
+     from falta f join stores s on s.id = f.store_id
+     left join ritmo r on r.store_id = f.store_id
+    where s.org_id in (select org_id from invoice_issuers)
+    order by 1;
+   -- c) Los pedidos que fallan solos (motivo en corto, sin datos del pedido).
+   select s.name, a.fail_count, a.last_error, count(*)
+     from invoice_snapshot_attempts a join stores s on s.id = a.store_id
+    group by 1, 2, 3 order by 1, 2 desc;
+   -- d) Lo que dijo Shopify en las fotos.
    select s.name,
           count(*) filter (where jsonb_typeof(x.payload->'order') = 'object') as con_pedido,
-          count(*) filter (where jsonb_typeof(x.payload->'order') = 'null') as shopify_no_lo_devolvio,
-          max(x.fetched_at) as ultima_foto
+          count(*) filter (where jsonb_typeof(x.payload->'order') = 'null') as shopify_no_lo_devolvio
      from order_invoice_snapshots x join stores s on s.id = x.store_id
     group by 1 order by 1;
    ```
 
-   El ritmo depende del cupo del plan de Shopify de cada tienda (se mide en la
-   primera hora). Si no alcanza para terminar antes del 27-10 a las 18:00 de
-   Lima, se puede llamar la ruta a mano entre pasadas, una tienda a la vez
-   (`?storeId=<id>`): respeta el cupo igual. **El 27-10, después de la última
-   sincronización completa**, la consulta (b) del paso 2, agregando `and not
-   exists (select 1 from order_invoice_snapshots x where x.order_id = o.id)`,
-   tiene que dar 0 por tienda. Una prueba: pasar 10 fotos al azar por
-   `mapOrderForInvoice` (o por «Emitir esta boleta» en Manual) y ver que dan la
-   misma boleta que la lectura en vivo.
+   Un pedido con 3 o más fallas seguidas pone el cron en rojo: su motivo está
+   en (c). Se reintenta solo, cada vez más espaciado (30 minutos como mucho);
+   si no sale, se emite a mano en SimpleFact y se registra como `externa`. En
+   (c), «Shopify no devolvió el pedido; se conserva su foto anterior.» no es
+   una falla: la foto con el pedido quedó (nunca se pisa con `{"order":
+   null}`), el pedido se vuelve a mirar más espaciado y no pone el cron en
+   rojo; ese pedido cuenta en `foto_vieja` de (a).
+   **El 27-10, después de la última sincronización completa**, `sin_foto` de
+   (a) tiene que dar 0 por tienda, y `foto_vieja` también, salvo los pedidos
+   de (c) con «se conserva su foto anterior». Una prueba: pasar 10 fotos
+   al azar por `mapOrderForInvoice` (o por «Emitir esta boleta» en Manual) y
+   ver que dan la misma boleta que la lectura en vivo.
 
-5. **Desde el 28-10.** Con el token de Shopify vaciado, el cron contesta
-   `sin_shopify` por tienda y no hace nada. Las boletas de esos pedidos salen
-   de la foto; su base lo dice:
+5. **Desde el 28-10.** Desde las 00:00 UTC, una boleta cuya lectura en vivo
+   recibe 401/402/403/404/423 sale de la foto. **Vaciar el token de Shopify de
+   Kenku y Aurela** en cuanto Shopify deje de contestar: hasta entonces el cron
+   ve `tienda_caida` y se pone rojo cada 2 minutos; con el token vaciado
+   contesta `sin_shopify` por tienda, no hace nada y no se pone rojo. Las
+   boletas de esos pedidos salen de la foto; su base lo dice:
 
    ```sql
    select count(*) from order_invoices where basis ? 'foto_shopify';
@@ -4108,19 +4262,24 @@ Sin variables de entorno nuevas.
    tiene foto: se emite a mano en SimpleFact y se registra como `externa`.
 
 **Marcha atrás.** Revertir el código basta: la boleta vuelve a leer solo en
-vivo y el cron desaparece. La 0274 puede quedarse. **No borrar la tabla
+vivo y el cron desaparece. La 0275 puede quedarse. **No borrar la tabla
 después del 28-10**: lo que guarda ya no se puede volver a pedir a Shopify. Si
 hubiera que quitarla antes, primero el código:
 
 ```sql
 begin;
+drop function if exists invoice_snapshot_release(uuid, uuid);
+drop function if exists invoice_snapshot_lease(uuid, uuid, integer);
+drop function if exists invoice_snapshot_failed(uuid, uuid[], text, integer);
 drop function if exists invoice_snapshot_put(uuid, uuid, text, jsonb, timestamptz);
 drop function if exists invoice_snapshot_candidates(uuid, timestamptz, integer);
+drop table if exists invoice_snapshot_leases;
+drop table if exists invoice_snapshot_attempts;
 drop table if exists order_invoice_snapshots;
 commit;
 ```
 
-### 25-10-2026 · Entrada de pedidos de WooCommerce: webhook, sincronización y Ajustes (MOM §37.11)
+### 25-10-2026 · Entrada de pedidos de WooCommerce: webhook, sincronización y Ajustes (MOM §38.11)
 
 Trae la ruta `/api/webhooks/woocommerce/<storeId>`, la pasada `woo_orders`
 dentro de la sincronización de siempre (`/api/cron/sync`, cada 5 minutos) y la
@@ -4134,8 +4293,8 @@ Shopify, su sincronización, «Generar pedido» y sus boletas siguen igual
 (`getStoreCreds` y el camino de Shopify no se tocaron). Ajustes no cambia
 `stores.platform`.
 
-1. **Requiere la 0273** aplicada (entrada del 23-10-2026). Sin ella la sección
-   de Ajustes dice «Falta aplicar la migración 0273» y la pasada deja el error
+1. **Requiere la 0274** aplicada (entrada del 23-10-2026). Sin ella la sección
+   de Ajustes dice «Falta aplicar la migración 0274» y la pasada deja el error
    en el reporte del sync, sin tocar las pasadas de Shopify.
 
 2. **El código**, por el camino de siempre. Nada que hacer en Vercel.
@@ -4147,7 +4306,11 @@ Shopify, su sincronización, «Generar pedido» y sus boletas siguen igual
      después del primer pedido), Consumer key y Consumer secret de una clave de
      la API REST de lectura/escritura de un usuario «shop manager» →
      **Guardar** (las prueba antes; si no sirven, no guarda nada). «Probar
-     conexión» prueba lo escrito sin guardarlo;
+     conexión» prueba lo escrito sin guardarlo. Para cambiar la dirección hay
+     que volver a pegar las dos claves: las guardadas nunca se mandan a otra
+     dirección. La primera vez que se guardan las claves queda fijado
+     `woo_intake_from` (ahora): solo entran los pedidos del sitio **creados**
+     desde ese momento;
    - **Generar secreto** (se muestra una sola vez) y, en WooCommerce → Ajustes
      → Avanzado → Webhooks, un webhook por tema (`order.created`,
      `order.updated`, `order.deleted`, `order.restored`) con la dirección que
@@ -4157,8 +4320,22 @@ Shopify, su sincronización, «Generar pedido» y sus boletas siguen igual
 
 4. **El día del corte (27-10, mañana), en producción:** lo mismo del paso 3
    con el sitio y las claves de producción, **después** de borrar los pedidos
-   de prueba en WooCommerce y fijar la numeración. Verificar (solo lectura, sin
-   datos de clientas):
+   de prueba en WooCommerce y fijar la numeración, y **antes** de que el sitio
+   tome su primer pedido real: al guardar las claves por primera vez queda
+   fijado `woo_intake_from`, y un pedido creado antes de ese momento que Kapta
+   no tenga no entra (MOM §38.11). **La historia de Shopify se queda fuera de
+   Kapta**: si se importa al WordPress (Cart2Cart, LitExtension, un import por
+   la API), esos pedidos tienen su fecha de creación vieja y no entran; sus
+   pedidos ya están en Kapta con su id de Shopify. Si el sitio ya vendía antes
+   de guardar las claves, mover el piso al primer pedido real, una sola vez y
+   antes de la primera pasada:
+
+   ```sql
+   -- Solo si hace falta: el instante (UTC) del primer pedido REAL del sitio.
+   update stores set woo_intake_from = '<2026-10-27T13:00:00Z>' where id = '<store_id>';
+   ```
+
+   Verificar (solo lectura, sin datos de clientas):
 
    ```sql
    -- a) La pasada corre bien en cada tienda con WooCommerce.
@@ -4176,7 +4353,14 @@ Shopify, su sincronización, «Generar pedido» y sus boletas siguen igual
     group by 1, 2 order by 1, 2;
    -- d) El último fallo con WooCommerce, si lo hay (sin secretos).
    select name, woo_last_error from stores where woo_last_error is not null;
+   -- e) Desde cuándo entran los pedidos de cada sitio.
+   select name, woo_intake_from, platform_switched_at from stores where woo_site_url is not null;
    ```
+
+   `sync_state.status = 'warning'` en (a) es una pasada que no avanza (el
+   motivo está en `error` y en `woo_last_error`); `cursor` en JSON
+   (`{"high": …, "resume": …}`) es una pasada que no llegó al final y sigue en
+   la próxima desde esa página, lo normal tras una ráfaga de cambios.
 
    Un webhook que recibe 401 tiene otro secreto: WooCommerce lo desactiva tras
    5 fallos. Pegar el de Kapta (o generar otro) y volver a activarlo; mientras

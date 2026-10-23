@@ -194,7 +194,7 @@ describe("pushShippingAddressToShopify", () => {
     expect(await pushShippingAddressToShopify(input, d)).toEqual({ ok: true, wrote: false, why: "tienda_caida", status });
   });
 
-  // Integración con WooCommerce (MOM §37.12): la plataforma la dice el pedido.
+  // Integración con WooCommerce (MOM §38.12): la plataforma la dice el pedido.
   it("un pedido de WooCommerce no va a Shopify, ni con token: sigue solo en Kapta", async () => {
     const getCreds = vi.fn(async () => ({ shopify_domain: "kenku.myshopify.com", shopify_token: "t" }));
     const d = deps({ getCreds });
@@ -231,7 +231,7 @@ describe("pushShippingAddressToShopify", () => {
   });
 });
 
-describe("orderPlatformOf (orders.platform, 0273)", () => {
+describe("orderPlatformOf (orders.platform, 0274)", () => {
   function platformAdmin(result: { data: unknown; error: unknown }) {
     const filters: [string, unknown][] = [];
     let selected = "";
@@ -256,7 +256,7 @@ describe("orderPlatformOf (orders.platform, 0273)", () => {
     expect(f.filters).toEqual([["id", "ord-1"]]);
   });
 
-  it("shopify, o sin la 0273 (la columna no existe), o sin fila: shopify, lo de siempre", async () => {
+  it("shopify, o sin la 0274 (la columna no existe), o sin fila: shopify, lo de siempre", async () => {
     expect(await orderPlatformOf(platformAdmin({ data: { platform: "shopify" }, error: null }).admin, "x")).toBe("shopify");
     expect(
       await orderPlatformOf(
@@ -296,7 +296,7 @@ describe("las tres acciones de Envíos usan el respaldo", () => {
     const notice = src.slice(src.indexOf("function addressUpdateNotice"), src.indexOf("function addressUpdateNotice") + 1500);
     expect(notice).toContain("el pedido de Shopify no cambió");
     expect(notice).toContain("El pedido es de WooCommerce: allí no se cambió.");
-    // La plataforma la dice el pedido (MOM §37.12), nunca la forma de su id.
+    // La plataforma la dice el pedido (MOM §38.12), nunca la forma de su id.
     expect(b).toContain("platform: current.order_id ? await orderPlatformOf(admin, current.order_id)");
     // El rechazo de Shopify sigue cortando antes de tocar el envío.
     expect(b.indexOf("if (!shopifyPush.ok) return { error: shopifyPush.error };")).toBeLessThan(

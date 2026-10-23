@@ -1,6 +1,6 @@
 "use client";
 
-// Ajustes → «WooCommerce» (MOM §37.11): el sitio, la clave del sitio, las claves
+// Ajustes → «WooCommerce» (MOM §38.11): el sitio, la clave del sitio, las claves
 // de la API REST y el secreto de los webhooks de la tienda; «Probar conexión»;
 // y la dirección que se pega en WooCommerce → Ajustes → Avanzado → Webhooks.
 //
@@ -44,7 +44,7 @@ export interface WooSettingsView {
   topics: readonly string[];
   /** La fila `woo_orders` de `sync_state`, si ya corrió. */
   sync: { status: string | null; last_run_at: string | null; error: string | null } | null;
-  /** Pre-0273: las columnas no existen y la sección solo lo dice. */
+  /** Pre-0274: las columnas no existen y la sección solo lo dice. */
   migrationMissing: boolean;
 }
 
@@ -119,7 +119,7 @@ export function WooCommerceSettingsSection({ storeId, data }: { storeId: string;
     return (
       <SettingsSection id="woocommerce" title="WooCommerce" badge={<Badge tone="neutral">Sin migración</Badge>}>
         <p className={cn(CARD, ROW, HELP)}>
-          Falta aplicar la migración 0273 en la base. Hasta entonces la tienda no puede guardar nada de WooCommerce.
+          Falta aplicar la migración 0274 en la base. Hasta entonces la tienda no puede guardar nada de WooCommerce.
         </p>
       </SettingsSection>
     );
@@ -174,7 +174,9 @@ export function WooCommerceSettingsSection({ storeId, data }: { storeId: string;
           <p className={cn(HELP, "mt-0.5")}>
             Última sincronización de WooCommerce:{" "}
             {data.sync?.last_run_at
-              ? `${when(data.sync.last_run_at)} · ${data.sync.status === "error" ? "con error" : "bien"}`
+              ? `${when(data.sync.last_run_at)} · ${
+                  data.sync.status === "error" ? "con error" : data.sync.status === "warning" ? "no avanza" : "bien"
+                }`
               : "todavía no corrió"}
             .
           </p>

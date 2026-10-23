@@ -1,4 +1,4 @@
-// WooCommerce (MOM §37): el mapeador de un pedido de WooCommerce REST v3 a la
+// WooCommerce (MOM §38): el mapeador de un pedido de WooCommerce REST v3 a la
 // misma fila de `orders` que hoy sale de Shopify, la firma de sus webhooks y su
 // cliente REST. Los pedidos de prueba tienen la forma real de la API v3
 // (`GET /wp-json/wc/v3/orders/{id}`, que es también el cuerpo de los webhooks
@@ -11,6 +11,7 @@ import {
   WOO_CANCELLED_STATUSES,
   WOO_CHANNEL_TAGS,
   WOO_MAX_PER_PAGE,
+  WOO_PREPAID_METHODS,
   WOO_SKIPPED_STATUSES,
   WooError,
   fetchWooOrder,
@@ -193,7 +194,7 @@ function bankTransferOrder(status = "on-hold"): WooOrder {
   });
 }
 
-describe("id, nombre y fechas (MOM §37)", () => {
+describe("id, nombre y fechas (MOM §38)", () => {
   it("el id lleva la clave del sitio: wc-<clave>-<id>", () => {
     expect(wooOrderId("kp", 1532)).toBe("wc-kp-1532");
     expect(wooOrderId("aur", "1532")).toBe("wc-aur-1532");
@@ -296,17 +297,37 @@ describe("estados", () => {
 });
 
 describe("cobro: Flow, transferencia y reembolsos", () => {
-  it("Flow con tarjeta: paid, pero checkout solo con el nombre CONFIRMADO de la pasarela", () => {
+  it("Flow con tarjeta: paid y checkout solo con el nombre CONFIRMADO de la pasarela", () => {
     const unconfirmed = mapWooOrder(flowCardOrder(), KENKU)!;
-    expect(unconfirmed.financial_status).toBe("paid");
-    // Hasta que la operación confirme el nombre, sigue el camino de las constancias.
+    // Hasta que la operación confirme el nombre, sigue el camino de las
+    // constancias: ni pagado ni prepago web.
+    expect(unconfirmed.financial_status).toBe("pending");
     expect(unconfirmed.payment_gateway).toBeNull();
-    expect(isWebPrepaid({ financialStatus: "paid", paymentGateway: unconfirmed.payment_gateway })).toBe(false);
+    expect(isWebPrepaid({ financialStatus: unconfirmed.financial_status, paymentGateway: unconfirmed.payment_gateway })).toBe(false);
     expect(paymentGatewayOf(unconfirmed.raw)).toBeNull();
 
     const confirmed = mapWooOrder(flowCardOrder(CHECKOUT_GATEWAYS[0]!), KENKU)!;
+    expect(confirmed.financial_status).toBe("paid");
     expect(confirmed.payment_gateway).toBe("checkout");
     expect(isWebPrepaid({ financialStatus: confirmed.financial_status, paymentGateway: confirmed.payment_gateway })).toBe(true);
+  });
+
+  it("una pasarela vacía (el «Añadir pedido» de wp-admin) o desconocida en processing NO es pagado", () => {
+    // En wp-admin «processing» es «en preparación»: un pedido de contraentrega
+    // cargado a mano no se salta la confirmación ni cuenta como cobrado.
+    for (const [payment_method, payment_method_title] of [
+      ["", ""],
+      [null, null],
+      ["cod_form_plugin", "Pago al recibir"],
+      ["yape_qr", "Yape"],
+    ] as const) {
+      for (const status of ["processing", "completed"]) {
+        const row = mapWooOrder(withOverrides(codLimaOrder(), { status, payment_method, payment_method_title } as Partial<WooOrder>), KENKU)!;
+        expect(row.financial_status, `${String(payment_method)} ${status}`).toBe("pending");
+        expect(row.payment_gateway).toBeNull();
+      }
+    }
+    expect(WOO_PREPAID_METHODS).toEqual(["bacs"]);
   });
 
   it("transferencia: pending mientras está on-hold, paid cuando alguien la pasa a processing; nunca checkout", () => {
@@ -323,7 +344,7 @@ describe("cobro: Flow, transferencia y reembolsos", () => {
       { id: 801, reason: "Talla cambiada", total: "-30.00", total_tax: "0.00" },
       { id: 802, reason: "", total: "-9.50", total_tax: "0.00" },
     ];
-    const paid = mapWooOrder({ ...flowCardOrder(), refunds }, KENKU)!;
+    const paid = mapWooOrder({ ...flowCardOrder(CHECKOUT_GATEWAYS[0]!), refunds }, KENKU)!;
     expect(paid.total_refunded).toBe(39.5);
     expect(paid.financial_status).toBe("partially_refunded");
     // El total del pedido no baja: el reembolso va aparte, como en Shopify.

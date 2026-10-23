@@ -1,4 +1,4 @@
-// La pasada `woo_orders` de la sincronización (MOM §37.11): la red de seguridad
+// La pasada `woo_orders` de la sincronización (MOM §38.11): la red de seguridad
 // de los webhooks de WooCommerce.
 //
 //   GET /wp-json/wc/v3/orders?modified_after=<cursor>&dates_are_gmt=true
@@ -46,7 +46,18 @@ vi.mock("@/lib/leads-ingest", async (orig) => ({
 
 import { encrypt } from "@/lib/crypto";
 import { runStoreSync, syncWooOrders } from "@/lib/ingest";
-import { WOO_SYNC_OVERLAP_MS, WOO_SYNC_SOURCE, nextWooPage, wooSyncStart } from "@/lib/woocommerce-intake";
+import {
+  WOO_SYNC_OVERLAP_MS,
+  WOO_SYNC_SOURCE,
+  formatWooSyncCursor,
+  isWooCreatedBeforeFloor,
+  nextWooPage,
+  parseWooSyncCursor,
+  wooCredsFromRow,
+  wooIntakeFloor,
+  wooSyncFirstRequest,
+  wooSyncStart,
+} from "@/lib/woocommerce-intake";
 
 const STORE_ID = "11111111-1111-4111-8111-111111111111";
 const CK = "ck_0123456789abcdef0123456789abcdef01234567";
@@ -219,6 +230,20 @@ describe("el cursor", () => {
     expect(syncRow()).toMatchObject({ cursor: "2026-10-27T16:30:05.000Z", status: "ok" });
   });
 
+  it("el cursor: el instante a secas al llegar al final; con la página exacta si no", () => {
+    expect(parseWooSyncCursor("2026-10-27T16:30:05.000Z")).toEqual({ high: "2026-10-27T16:30:05.000Z", resume: null });
+    expect(parseWooSyncCursor(null)).toEqual({ high: null, resume: null });
+    expect(parseWooSyncCursor("{roto")).toEqual({ high: null, resume: null });
+    const resume = { modifiedAfter: "2026-10-27T10:01:59.000Z", page: 2 };
+    const text = formatWooSyncCursor({ high: "2026-10-27T10:02:00.000Z", resume })!;
+    expect(parseWooSyncCursor(text)).toEqual({ high: "2026-10-27T10:02:00.000Z", resume });
+    expect(formatWooSyncCursor({ high: "2026-10-27T10:02:00.000Z", resume: null })).toBe("2026-10-27T10:02:00.000Z");
+    // Sin `resume`, solape de 2 minutos; con él, exactamente donde quedó.
+    expect(wooSyncFirstRequest("2026-10-27T16:30:05.000Z", "2026-06-01")).toEqual({ modifiedAfter: "2026-10-27T16:28:05.000Z", page: 1 });
+    expect(wooSyncFirstRequest(text, "2026-06-01")).toEqual(resume);
+    expect(wooSyncStart(text, "2026-06-01")).toBe("2026-10-27T10:00:00.000Z");
+  });
+
   it("wooSyncStart y nextWooPage, puros", () => {
     expect(wooSyncStart(null, "2026-06-01")).toBe("2026-06-01T00:00:00.000Z");
     expect(wooSyncStart("2026-10-27T16:30:05.000Z", "2026-06-01")).toBe(
@@ -268,14 +293,63 @@ describe("paginación, reloj y tope", () => {
     );
   });
 
-  it("para con el tope de páginas y la próxima pasada sigue desde donde quedó", async () => {
+  it("para con el tope de páginas y la próxima pasada sigue EXACTAMENTE desde donde quedó, sin solape", async () => {
     const woo = fakeWoo(many);
     const first = await syncWooOrders(db.client(), STORE_ID, { fetchImpl: woo.fetchImpl, perPage: 3, maxPages: 1, floor: "2026-10-01" });
     expect(first).toMatchObject({ done: false, orders: 3, cursor: "2026-10-27T10:02:00.000Z" });
-    expect(syncRow()!.cursor).toBe("2026-10-27T10:02:00.000Z");
+    expect(parseWooSyncCursor(syncRow()!.cursor as string)).toEqual({
+      high: "2026-10-27T10:02:00.000Z",
+      resume: { modifiedAfter: "2026-10-27T10:01:59.000Z", page: 1 },
+    });
+    expect(syncRow()).toMatchObject({ status: "ok", error: null });
     const second = await syncWooOrders(db.client(), STORE_ID, { fetchImpl: woo.fetchImpl, perPage: 3, floor: "2026-10-01" });
+    // La primera página de la segunda pasada es la que la primera iba a pedir.
+    expect(woo.calls[1]!.url.searchParams.get("modified_after")).toBe("2026-10-27T10:01:59");
     expect(second.done).toBe(true);
     expect(db.rows("orders")).toHaveLength(7);
+    // Al llegar al final, el cursor vuelve a ser el instante a secas (con solape la próxima vez).
+    expect(syncRow()!.cursor).toBe("2026-10-27T10:06:00.000Z");
+  });
+
+  it("una ráfaga de cambios (más de los que entran en una pasada dentro del solape) no deja el cursor clavado", async () => {
+    // 1.500 pedidos modificados en 100 s (15 por segundo): con el solape de
+    // 2 minutos cada pasada releía las mismas 10 páginas. Ahora cada pasada
+    // sigue donde quedó la anterior, y un pedido modificado una hora después
+    // termina entrando.
+    const burst = Array.from({ length: 1500 }, (_, i) => {
+      const t = new Date(Date.parse("2026-10-27T15:00:00Z") + Math.floor(i / 15) * 1000).toISOString().slice(0, 19);
+      return wooOrder(i + 1, t);
+    });
+    const later = wooOrder(5000, "2026-10-27T16:00:00");
+    const woo = fakeWoo([...burst, later]);
+    const passes: { done: boolean; cursor: string | null }[] = [];
+    for (let k = 0; k < 4; k++) {
+      const r = await syncWooOrders(db.client(), STORE_ID, { fetchImpl: woo.fetchImpl, floor: "2026-10-01" });
+      passes.push({ done: r.done, cursor: r.cursor });
+      expect(r.error).toBeNull();
+      if (r.done) break;
+    }
+    expect(passes.at(-1)!.done).toBe(true);
+    expect(passes.length).toBeLessThanOrEqual(3);
+    expect(db.rows("orders").some((o) => o.shopify_order_id === "wc-kp-5000")).toBe(true);
+    expect(db.rows("orders")).toHaveLength(1501);
+  });
+
+  it("una pasada que no se mueve de donde empezó no se ve «bien»: aviso en sync_state y en Ajustes", async () => {
+    // Un cursor que ya pide la página donde quedó, y una pasada sin tiempo
+    // para nada: no hay cómo avanzar sin leer, así que se fuerza con 0 páginas.
+    db.rows("sync_state").push({
+      store_id: STORE_ID,
+      source: WOO_SYNC_SOURCE,
+      cursor: JSON.stringify({ high: "2026-10-27T10:02:00.000Z", resume: { modifiedAfter: "2026-10-27T10:01:59.000Z", page: 1 } }),
+      status: "ok",
+    });
+    const woo = fakeWoo(many);
+    const r = await syncWooOrders(db.client(), STORE_ID, { fetchImpl: woo.fetchImpl, perPage: 3, maxPages: 0, floor: "2026-10-01" });
+    expect(r.done).toBe(false);
+    expect(r.error).toContain("no avanzó");
+    expect(syncRow()).toMatchObject({ status: "warning" });
+    expect(db.rows("stores")[0]!.woo_last_error).toMatch(/^Sincronización: la pasada no avanzó/);
   });
 
   it("para con el reloj (nunca antes de la primera página)", async () => {
@@ -335,6 +409,35 @@ describe("paginación, reloj y tope", () => {
     });
   });
 
+  it("la historia importada al WordPress (creada antes del piso de la tienda) no entra como pedido nuevo", async () => {
+    // Las claves se guardaron el 27-10 a las 14:00 UTC (woo_intake_from). Un
+    // import de Cart2Cart trae pedidos de septiembre con date_modified de hoy.
+    db = new FakeDb({ stores: [storeRow({ woo_intake_from: "2026-10-27T14:00:00+00:00" })] });
+    db.rows("orders").push({ id: "o-41", store_id: STORE_ID, shopify_order_id: "wc-kp-41", cancelled_at: null });
+    const woo = fakeWoo([
+      wooOrder(40, "2026-10-27T15:00:00", { date_created_gmt: "2026-09-12T18:00:00" }), // importado
+      wooOrder(41, "2026-10-27T15:01:00", { date_created_gmt: "2026-09-13T18:00:00" }), // viejo, pero ya en Kapta
+      wooOrder(42, "2026-10-27T15:02:00", { date_created_gmt: "2026-10-27T14:30:00" }), // nuevo de verdad
+    ]);
+    const r = await syncWooOrders(db.client(), STORE_ID, { fetchImpl: woo.fetchImpl });
+    // La primera pasada pide desde el piso de la tienda, no desde ORDERS_SYNC_FROM.
+    expect(woo.calls[0]!.url.searchParams.get("modified_after")).toBe("2026-10-27T14:00:00");
+    expect(r).toMatchObject({ orders: 2, skipped: 1 });
+    expect(db.rows("orders").map((o) => o.shopify_order_id).sort()).toEqual(["wc-kp-41", "wc-kp-42"]);
+  });
+
+  it("sin woo_intake_from vale platform_switched_at, y sin ninguno ORDERS_SYNC_FROM", () => {
+    expect(wooIntakeFloor({ intakeFrom: null }, "2026-06-01")).toBe("2026-06-01T00:00:00.000Z");
+    expect(wooIntakeFloor({ intakeFrom: "2026-10-27T14:00:00.000Z" }, "2026-06-01")).toBe("2026-10-27T14:00:00.000Z");
+    expect(wooCredsFromRow({ id: STORE_ID, platform_switched_at: "2026-10-27T23:00:00+00:00" }).intakeFrom).toBe("2026-10-27T23:00:00.000Z");
+    expect(
+      wooCredsFromRow({ id: STORE_ID, woo_intake_from: "2026-10-27T14:00:00Z", platform_switched_at: "2026-10-27T23:00:00Z" }).intakeFrom,
+    ).toBe("2026-10-27T14:00:00.000Z");
+    expect(isWooCreatedBeforeFloor({ date_created_gmt: "2026-09-12T18:00:00" }, "2026-10-27T14:00:00.000Z")).toBe(true);
+    expect(isWooCreatedBeforeFloor({ date_created_gmt: "2026-10-27T14:00:00" }, "2026-10-27T14:00:00.000Z")).toBe(false);
+    expect(isWooCreatedBeforeFloor({ date_created_gmt: null }, "2026-10-27T14:00:00.000Z")).toBe(false);
+  });
+
   it("los pedidos del bot ganan su lead y dan los días para los rollups", async () => {
     const woo = fakeWoo([wooOrder(5, "2026-10-27T15:00:00", { meta_data: [{ key: "kapso_conversation_id", value: "c1" }] })]);
     const r = await syncWooOrders(db.client(), STORE_ID, { fetchImpl: woo.fetchImpl, floor: "2026-10-01" });
@@ -366,7 +469,12 @@ describe("los fallos", () => {
     }) as typeof fetch;
     const r = await syncWooOrders(db.client(), STORE_ID, { fetchImpl, perPage: 2, floor: "2026-10-01" });
     expect(r.error).toBeTruthy();
-    expect(syncRow()).toMatchObject({ cursor: "2026-10-27T10:01:00.000Z", status: "error" });
+    expect(syncRow()).toMatchObject({ status: "error" });
+    // La próxima sigue en la página que falló.
+    expect(parseWooSyncCursor(syncRow()!.cursor as string)).toEqual({
+      high: "2026-10-27T10:01:00.000Z",
+      resume: { modifiedAfter: "2026-10-27T10:00:59.000Z", page: 1 },
+    });
   });
 
   it("al volver a salir bien limpia el error que dejó la pasada (no el de un webhook)", async () => {

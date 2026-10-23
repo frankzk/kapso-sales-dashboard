@@ -1,4 +1,4 @@
-// Webhooks de pedidos de WooCommerce (MOM §37.11): la ruta
+// Webhooks de pedidos de WooCommerce (MOM §38.11): la ruta
 // `/api/webhooks/woocommerce/[storeId]` y `processWooWebhook` (lib/ingest.ts).
 //
 // Lo que se fija, con una base falsa que aplica los filtros y las claves únicas:
@@ -182,6 +182,40 @@ describe("la firma", () => {
     const r = await processWooWebhook(params(body, { signature: null }), h.db.client());
     expect(r.status).toBe("unauthorized");
     expect(wooWebhookHttpStatus(r)).toBe(401);
+  });
+
+  it("un pedido importado (creado antes del piso de la tienda) que llega por order.created no entra", async () => {
+    h.db = new FakeDb({ stores: [storeRow({ woo_intake_from: "2026-10-27T14:00:00+00:00" })] });
+    const old = JSON.stringify(wooOrder({ id: 77, date_created_gmt: "2026-09-12T18:00:00", date_modified_gmt: "2026-10-27T15:00:00" }));
+    const r = await processWooWebhook(params(old), h.db.client());
+    expect(r.status).toBe("ok");
+    expect(r.message).toContain("woo_intake_from");
+    expect(h.db.rows("orders")).toEqual([]);
+    // Uno nuevo de verdad, sí.
+    const fresh = JSON.stringify(wooOrder({ id: 78, date_created_gmt: "2026-10-27T15:00:00", date_modified_gmt: "2026-10-27T15:00:05" }));
+    expect((await processWooWebhook(params(fresh), h.db.client())).status).toBe("ok");
+    expect(h.db.rows("orders").map((o) => o.shopify_order_id)).toEqual(["wc-kp-78"]);
+  });
+
+  it("una tienda solo de Shopify (sin sitio WooCommerce): un POST sin firma no escribe nada en la tienda", async () => {
+    // Kenku y Aurela hoy: ningún woo_*. Antes de la firma no hay a quién creerle.
+    h.db = new FakeDb({
+      stores: [
+        storeRow({
+          woo_site_url: null,
+          woo_site_key: null,
+          woo_consumer_key_enc: null,
+          woo_consumer_secret_enc: null,
+          woo_webhook_secret_enc: null,
+        }),
+      ],
+    });
+    const body = JSON.stringify(wooOrder());
+    const r = await processWooWebhook(params(body, { signature: null }), h.db.client());
+    expect(r.status).toBe("ignored");
+    expect(wooWebhookHttpStatus(r)).toBe(200);
+    expect(h.db.ops.filter((o) => o.op !== "select")).toEqual([]);
+    expect(h.db.rows("stores")[0]!.woo_last_error).toBeNull();
   });
 
   it("una tienda sin secreto no procesa (200) y Ajustes lo dice en woo_last_error", async () => {

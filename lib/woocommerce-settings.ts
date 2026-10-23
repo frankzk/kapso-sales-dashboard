@@ -1,5 +1,5 @@
-// Ajustes → WooCommerce (MOM §37.11): qué se acepta al guardar las credenciales
-// de WooCommerce de una tienda, y el parche cifrado para `stores` (0273).
+// Ajustes → WooCommerce (MOM §38.11): qué se acepta al guardar las credenciales
+// de WooCommerce de una tienda, y el parche cifrado para `stores` (0274).
 //
 // Puro salvo `encrypt` (lib/crypto). Lo usa la acción de servidor
 // (`app/dashboard/[storeId]/settings/woo-actions.ts`); el navegador no lo
@@ -16,6 +16,11 @@
 //     `wp_specialchars_decode` antes de firmar, y con esos caracteres firmaría
 //     con otro secreto que el guardado.
 //   · Un campo en blanco conserva lo guardado. Nada se borra desde aquí.
+//   · Las claves guardadas solo viajan al sitio guardado. Para cambiar la
+//     dirección hay que volver a pegar la Consumer key y el Consumer secret en
+//     el mismo envío: si no, «Guardar» (que prueba antes) mandaría las claves
+//     de la tienda a la dirección nueva, que puede ser de otro (un dominio mal
+//     escrito, o alguien con «Administrar tiendas»).
 
 import { encrypt } from "@/lib/crypto";
 import { isValidWooSiteKey, normalizeWooSiteUrl } from "@/lib/woocommerce";
@@ -67,6 +72,10 @@ export type WooSettingsValidation =
       apiComplete: boolean;
     }
   | { ok: false; error: string };
+
+/** Lo que se contesta si cambia la dirección sin las claves escritas de nuevo. */
+export const WOO_NEW_SITE_NEEDS_KEYS =
+  "Al cambiar la dirección del sitio, vuelve a pegar la Consumer key y el Consumer secret: las claves guardadas no se mandan a otra dirección. No se guardó nada.";
 
 const CONSUMER_KEY_RE = /^ck_[A-Za-z0-9]{8,128}$/;
 const CONSUMER_SECRET_RE = /^cs_[A-Za-z0-9]{8,128}$/;
@@ -148,6 +157,11 @@ export function validateWooSettings(input: WooSettingsInput, current: WooSetting
     values.webhookSecret = webhookSecret;
   }
 
+  // Las claves guardadas no viajan a otra dirección (ver arriba).
+  if (values.siteUrl && (current.hasConsumerKey || current.hasConsumerSecret) && !(values.consumerKey && values.consumerSecret)) {
+    return { ok: false, error: WOO_NEW_SITE_NEEDS_KEYS };
+  }
+
   if (!Object.keys(values).length) return { ok: false, error: "No hay cambios que guardar." };
 
   const siteUrl = values.siteUrl ?? current.siteUrl;
@@ -165,7 +179,7 @@ export function validateWooSettings(input: WooSettingsInput, current: WooSetting
   };
 }
 
-/** El parche de `stores` (0273): las claves cifradas, la dirección y la clave del sitio tal cual. */
+/** El parche de `stores` (0274): las claves cifradas, la dirección y la clave del sitio tal cual. */
 export function buildWooSettingsPatch(values: WooSettingsValues, keyOverride?: string): Record<string, string> {
   const patch: Record<string, string> = {};
   if (values.siteUrl) patch.woo_site_url = values.siteUrl;
@@ -185,7 +199,7 @@ export function wooUniqueViolationMessage(error: { code?: string | null; message
   return "Ese valor ya lo usa otra tienda de Kapta. No se guardó nada.";
 }
 
-/** El aviso de que la 0273 no está aplicada (columna `woo_*` o `platform` inexistente). */
+/** El aviso de que la 0274 no está aplicada (columna `woo_*` o `platform` inexistente). */
 export function isWooMigrationMissing(error: { code?: string | null; message?: string | null } | null): boolean {
   if (!error) return false;
   return error.code === "42703" || /column .*(woo_|platform)/i.test(String(error.message ?? ""));

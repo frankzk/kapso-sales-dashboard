@@ -115,7 +115,7 @@
     },
     {
       "path": "/api/cron/invoice-snapshots",
-      "schedule": "4,14,24,34,44,54 * * * *"
+      "schedule": "1-59/2 * * * *"
     }
   ]
 }

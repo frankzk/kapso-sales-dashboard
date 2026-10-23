@@ -1,4 +1,4 @@
-// La entrada de pedidos de WooCommerce (MOM §37.11, plan del sábado 25-10-2026):
+// La entrada de pedidos de WooCommerce (MOM §38.11, plan del sábado 25-10-2026):
 // las piezas que comparten el webhook (`processWooWebhook`) y la pasada
 // `woo_orders` de la sincronización (`syncWooOrders`), las dos en lib/ingest.ts.
 //
@@ -7,7 +7,7 @@
 //
 // LA REGLA DE AISLAMIENTO. Kenku Perú y Aurela siguen en Shopify hasta el
 // cierre (28-10-2026). Nada de este archivo lee ni escribe lo de Shopify:
-// `loadWooStoreCreds` pide solo las columnas `woo_*` (0273) y descifra cada
+// `loadWooStoreCreds` pide solo las columnas `woo_*` (0274) y descifra cada
 // secreto por su cuenta, de modo que un secreto de WooCommerce que no se pueda
 // descifrar no tumba ni la tienda ni su sincronización de Shopify.
 
@@ -39,7 +39,7 @@ export type WooIntakeTopic = (typeof WOO_INTAKE_TOPICS)[number];
  * horaria (rollups) y el estado. Ninguna columna de Shopify.
  */
 export const WOO_STORE_COLUMNS =
-  "id,status,timezone,platform,woo_site_url,woo_site_key,woo_consumer_key_enc,woo_consumer_secret_enc,woo_webhook_secret_enc,woo_last_error";
+  "id,status,timezone,platform,platform_switched_at,woo_intake_from,woo_site_url,woo_site_key,woo_consumer_key_enc,woo_consumer_secret_enc,woo_webhook_secret_enc,woo_last_error";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -48,7 +48,7 @@ export interface WooStoreCreds {
   id: string;
   status: string;
   timezone: string;
-  /** `stores.platform` (0273): dónde crea Kapta los pedidos nuevos. No decide la entrada. */
+  /** `stores.platform` (0274): dónde crea Kapta los pedidos nuevos. No decide la entrada. */
   platform: string;
   /** `woo_site_url` limpia (`normalizeWooSiteUrl`), o null. */
   siteUrl: string | null;
@@ -57,6 +57,13 @@ export interface WooStoreCreds {
   consumerSecret: string | null;
   webhookSecret: string | null;
   lastError: string | null;
+  /**
+   * Desde cuándo entran sus pedidos de WooCommerce (MOM §38.11): `woo_intake_from`
+   * (lo fija Ajustes al guardar las claves de la API por primera vez) o, si no
+   * hay, `platform_switched_at`. Null si ninguna: entonces vale
+   * `ORDERS_SYNC_FROM` (`wooIntakeFloor`).
+   */
+  intakeFrom: string | null;
   /** Columnas `*_enc` que no se pudieron descifrar (solo el nombre). */
   undecryptable: string[];
 }
@@ -87,14 +94,46 @@ export function wooCredsFromRow(row: Record<string, unknown>): WooStoreCreds {
     consumerSecret: decryptColumn(row, "woo_consumer_secret_enc", undecryptable),
     webhookSecret: decryptColumn(row, "woo_webhook_secret_enc", undecryptable),
     lastError: typeof row.woo_last_error === "string" ? row.woo_last_error : null,
+    intakeFrom: isoOrNull(row.woo_intake_from) ?? isoOrNull(row.platform_switched_at),
     undecryptable,
   };
+}
+
+function isoOrNull(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+
+/**
+ * El piso de la entrada de pedidos de WooCommerce de una tienda (MOM §38.11):
+ * un pedido CREADO antes que Kapta todavía no tenga no entra, ni por el webhook
+ * ni por la pasada. Es lo que impide que la historia de Shopify importada al
+ * WordPress (Cart2Cart, LitExtension, un import por la API) entre como pedidos
+ * nuevos y duplique los de Shopify en el Master, la atribución y el cierre.
+ * `ORDERS_SYNC_FROM` solo si la tienda no tiene ni `woo_intake_from` ni
+ * `platform_switched_at`.
+ */
+export function wooIntakeFloor(creds: Pick<WooStoreCreds, "intakeFrom">, fallback: string): string {
+  if (creds.intakeFrom) return creds.intakeFrom;
+  const f = Date.parse(fallback);
+  return Number.isFinite(f) ? new Date(f).toISOString() : new Date(0).toISOString();
+}
+
+/** ¿Se creó antes del piso? Sin fecha de creación legible, no se decide aquí (false). */
+export function isWooCreatedBeforeFloor(
+  order: Pick<WooOrder, "date_created_gmt"> | null | undefined,
+  floorIso: string,
+): boolean {
+  const created = Date.parse(wooGmt(order?.date_created_gmt) ?? "");
+  const floor = Date.parse(floorIso);
+  return Number.isFinite(created) && Number.isFinite(floor) && created < floor;
 }
 
 /**
  * Lee y descifra lo de WooCommerce de una tienda. `creds: null` sin `error` es
  * «la tienda no existe». Un `error` es que la lectura falló (por ejemplo, el
- * código llegó antes que la 0273): quien llama decide qué hacer con él.
+ * código llegó antes que la 0274): quien llama decide qué hacer con él.
  */
 export async function loadWooStoreCreds(
   admin: SupabaseClient,
@@ -316,22 +355,88 @@ export const WOO_SYNC_MAX_PAGES = 10;
  */
 export const WOO_SYNC_BUDGET_MS = 40_000;
 /**
- * Cada pasada vuelve a leer los últimos 2 minutos antes del cursor. WooCommerce
- * fija `date_modified` al empezar a guardar, no al terminar: un pedido que se
- * guardaba mientras corría la pasada anterior puede tener una fecha anterior al
- * cursor. Releerlo es inocuo (upsert).
+ * Una pasada que llegó al final hace que la siguiente vuelva a leer los últimos
+ * 2 minutos antes del cursor. WooCommerce fija `date_modified` al empezar a
+ * guardar, no al terminar: un pedido que se guardaba mientras corría la pasada
+ * anterior puede tener una fecha anterior al cursor. Releerlo es inocuo
+ * (upsert). Una pasada que NO llegó al final no lleva solape: la siguiente
+ * sigue exactamente donde quedó (`WooSyncCursor.resume`).
  */
 export const WOO_SYNC_OVERLAP_MS = 2 * 60_000;
 
+/** La página que pide la pasada: `modified_after` y el número de página. */
+export interface WooSyncRequest {
+  modifiedAfter: string;
+  page: number;
+}
+
 /**
- * Desde cuándo pedir (`modified_after`): el cursor menos el solape, o el piso
- * (`ORDERS_SYNC_FROM`, como `shopify_all`) la primera vez.
+ * Lo que la pasada guarda en `sync_state.cursor`:
+ *   · `high`: el `date_modified_gmt` más nuevo leído;
+ *   · `resume`: si la pasada no llegó al final (tope de páginas, reloj o un
+ *     fallo a mitad), la página exacta que iba a pedir. La siguiente sigue de
+ *     ahí, SIN solape: con solape, una ráfaga de más de ~1.000 pedidos
+ *     modificados en 2 minutos (una importación, un cambio de estado masivo en
+ *     wp-admin) hacía que cada pasada releyera las mismas 10 páginas y el cursor
+ *     no avanzara nunca.
+ * Se guarda como el instante ISO a secas cuando no hay `resume` (lo de siempre)
+ * y como JSON (`{"high":…,"resume":{"modifiedAfter":…,"page":…}}`) cuando lo hay.
+ */
+export interface WooSyncCursor {
+  high: string | null;
+  resume: WooSyncRequest | null;
+}
+
+function isoOf(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+
+/** El texto de `sync_state.cursor` → `WooSyncCursor`. Lo que no se entiende es «sin cursor». */
+export function parseWooSyncCursor(text: string | null | undefined): WooSyncCursor {
+  const raw = (text ?? "").trim();
+  if (!raw) return { high: null, resume: null };
+  if (raw.startsWith("{")) {
+    try {
+      const j = JSON.parse(raw) as { high?: unknown; resume?: { modifiedAfter?: unknown; page?: unknown } | null };
+      const after = isoOf(j.resume?.modifiedAfter);
+      const page = j.resume?.page;
+      const resume =
+        after && typeof page === "number" && Number.isInteger(page) && page >= 1 ? { modifiedAfter: after, page } : null;
+      return { high: isoOf(j.high), resume };
+    } catch {
+      return { high: null, resume: null };
+    }
+  }
+  return { high: isoOf(raw), resume: null };
+}
+
+/** `WooSyncCursor` → el texto de `sync_state.cursor`, o null si no hay nada que guardar. */
+export function formatWooSyncCursor(cursor: WooSyncCursor): string | null {
+  if (cursor.resume) return JSON.stringify({ high: cursor.high, resume: cursor.resume });
+  return cursor.high;
+}
+
+/**
+ * Desde cuándo pedir (`modified_after`) después de una pasada que llegó al
+ * final: el cursor menos el solape, o el piso de la tienda (`wooIntakeFloor`)
+ * la primera vez. Acepta el texto de `sync_state.cursor` tal cual.
  */
 export function wooSyncStart(cursor: string | null | undefined, floor: string): string {
-  const c = Date.parse(cursor ?? "");
+  const c = Date.parse(parseWooSyncCursor(cursor).high ?? "");
   if (Number.isFinite(c)) return new Date(c - WOO_SYNC_OVERLAP_MS).toISOString();
   const f = Date.parse(floor);
   return Number.isFinite(f) ? new Date(f).toISOString() : new Date(0).toISOString();
+}
+
+/**
+ * La primera página de una pasada: donde quedó la anterior si no llegó al
+ * final (sin solape), o `wooSyncStart` si llegó.
+ */
+export function wooSyncFirstRequest(cursor: string | null | undefined, floor: string): WooSyncRequest {
+  const parsed = parseWooSyncCursor(cursor);
+  return parsed.resume ?? { modifiedAfter: wooSyncStart(cursor, floor), page: 1 };
 }
 
 /** El `date_modified_gmt` más nuevo de una página, en ISO con «Z», o null. */

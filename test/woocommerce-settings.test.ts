@@ -1,4 +1,4 @@
-// Ajustes → WooCommerce (MOM §37.11): qué se acepta al guardar el sitio y las
+// Ajustes → WooCommerce (MOM §38.11): qué se acepta al guardar el sitio y las
 // claves de WooCommerce, que los secretos se guarden cifrados y nunca vuelvan
 // al navegador, que «Probar conexión» pruebe sin guardar, y que todo pida
 // «Administrar tiendas» como las demás credenciales. Sin red: `fetch` es falso.
@@ -33,6 +33,7 @@ vi.mock("next/navigation", () => ({
 
 import { decrypt, encrypt } from "@/lib/crypto";
 import {
+  WOO_NEW_SITE_NEEDS_KEYS,
   WOO_SETTINGS_FIELDS,
   buildWooSettingsPatch,
   validateWooSettings,
@@ -108,6 +109,16 @@ describe("validateWooSettings", () => {
     for (const webhookSecret of ["corto", "a&b".repeat(8), "a<b>".repeat(5), `x"${"y".repeat(20)}`, "con espacio en medio 1234"]) {
       expect(validateWooSettings({ ...base, webhookSecret }, EMPTY).ok, webhookSecret).toBe(false);
     }
+  });
+
+  it("cambiar la dirección exige las dos claves escritas otra vez", () => {
+    const stored: WooSettingsCurrent = { ...EMPTY, siteUrl: "https://kenku.pe", siteKey: "kp", hasConsumerKey: true, hasConsumerSecret: true };
+    expect(validateWooSettings({ siteUrl: "https://kenku-pe.com" }, stored)).toEqual({ ok: false, error: WOO_NEW_SITE_NEEDS_KEYS });
+    expect(validateWooSettings({ siteUrl: "https://kenku-pe.com", consumerKey: CK, consumerSecret: CS }, stored).ok).toBe(true);
+    // La misma dirección, escrita otra vez, no es un cambio.
+    expect(validateWooSettings({ siteUrl: "https://kenku.pe/", webhookSecret: "a".repeat(32) }, stored).ok).toBe(true);
+    // Sin claves guardadas no hay nada que pueda viajar.
+    expect(validateWooSettings({ siteUrl: "https://kenku-pe.com" }, { ...stored, hasConsumerKey: false, hasConsumerSecret: false }).ok).toBe(true);
   });
 
   it("en blanco conserva; nada que cambiar es un error; sin sitio o sin clave, también", () => {
@@ -235,6 +246,20 @@ describe("saveWooSettings", () => {
     expect(h.revalidated).toEqual([`/dashboard/${STORE_ID}/settings`]);
   });
 
+  it("la primera vez que guarda las claves fija desde cuándo entran los pedidos del sitio; después no lo mueve", async () => {
+    const before = Date.now();
+    const r = await saveWooSettings({}, form(full));
+    expect(r.notice).toContain("Solo entran los pedidos creados desde este momento");
+    const fixed = h.db.rows("stores")[0]!.woo_intake_from as string;
+    expect(Date.parse(fixed)).toBeGreaterThanOrEqual(before);
+    expect(Date.parse(fixed)).toBeLessThanOrEqual(Date.now());
+
+    // Claves nuevas para el mismo sitio: el piso queda donde estaba.
+    const again = await saveWooSettings({}, form({ [WOO_SETTINGS_FIELDS.consumerKey]: CK2, [WOO_SETTINGS_FIELDS.consumerSecret]: CS2 }));
+    expect(again.error).toBeUndefined();
+    expect(h.db.rows("stores")[0]!.woo_intake_from).toBe(fixed);
+  });
+
   it("si WooCommerce rechaza las claves, no guarda nada", async () => {
     stubWoo(401, { code: "woocommerce_rest_authentication_error", message: "Clave de consumidor no válida." });
     const r = await saveWooSettings({}, form(full));
@@ -269,6 +294,32 @@ describe("saveWooSettings", () => {
     expect(r.error).toMatch(/Sin permiso/);
     expect(calls).toEqual([]);
     expect(h.db.opsOn("stores", "update")).toEqual([]);
+  });
+
+  it("una dirección nueva con las claves en blanco no prueba ni guarda: las claves guardadas no viajan a otro sitio", async () => {
+    h.db = new FakeDb({
+      stores: [storeRow({ woo_site_url: "https://kenku.pe", woo_site_key: "kp", woo_consumer_key_enc: encrypt(CK), woo_consumer_secret_enc: encrypt(CS) })],
+    });
+    const tries: Record<string, string>[] = [
+      { [WOO_SETTINGS_FIELDS.siteUrl]: "https://kenku-pe.com" },
+      { [WOO_SETTINGS_FIELDS.siteUrl]: "https://kenku-pe.com", [WOO_SETTINGS_FIELDS.webhookSecret]: "e".repeat(40) },
+    ];
+    for (const fields of tries) {
+      const r = await saveWooSettings({}, form(fields));
+      expect(r.error).toBe(WOO_NEW_SITE_NEEDS_KEYS);
+    }
+    expect(calls).toEqual([]);
+    expect(h.db.opsOn("stores", "update")).toEqual([]);
+    expect(h.db.rows("stores")[0]!.woo_site_url).toBe("https://kenku.pe");
+
+    // Con las dos claves escritas de nuevo, sí: se prueban en la dirección nueva.
+    const ok = await saveWooSettings(
+      {},
+      form({ [WOO_SETTINGS_FIELDS.siteUrl]: "https://kenku-pe.com", [WOO_SETTINGS_FIELDS.consumerKey]: CK2, [WOO_SETTINGS_FIELDS.consumerSecret]: CS2 }),
+    );
+    expect(ok.error).toBeUndefined();
+    expect(calls[0]!.url.host).toBe("kenku-pe.com");
+    expect(calls[0]!.auth).toBe(`Basic ${Buffer.from(`${CK2}:${CS2}`).toString("base64")}`);
   });
 
   it("la clave o el sitio ya usados por otra tienda", async () => {
@@ -313,6 +364,25 @@ describe("testWooConnection", () => {
     const bad = await testWooConnection({}, form({}));
     expect(bad.error).toContain("HTTP 500");
     expect(h.db.rows("stores")[0]!.woo_last_error).toMatch(/^Conexión: .*HTTP 500/);
+  });
+
+  it("otra dirección con las claves en blanco no manda las guardadas", async () => {
+    h.db = new FakeDb({
+      stores: [storeRow({ woo_site_url: "https://kenku.pe", woo_site_key: "kp", woo_consumer_key_enc: encrypt(CK), woo_consumer_secret_enc: encrypt(CS) })],
+    });
+    const tries: Record<string, string>[] = [
+      { [WOO_SETTINGS_FIELDS.siteUrl]: "https://otro-sitio.pe" },
+      { [WOO_SETTINGS_FIELDS.siteUrl]: "https://otro-sitio.pe", [WOO_SETTINGS_FIELDS.consumerKey]: CK2 },
+    ];
+    for (const fields of tries) {
+      const r = await testWooConnection({}, form(fields));
+      expect(r.error).toBe(WOO_NEW_SITE_NEEDS_KEYS);
+    }
+    expect(calls).toEqual([]);
+    // La misma dirección (aunque la escriban) sí prueba con lo guardado.
+    const same = await testWooConnection({}, form({ [WOO_SETTINGS_FIELDS.siteUrl]: "https://kenku.pe/" }));
+    expect(same.notice).toContain("Conexión correcta");
+    expect(calls[0]!.url.host).toBe("kenku.pe");
   });
 
   it("sin dirección ni claves no llama a nadie", async () => {
