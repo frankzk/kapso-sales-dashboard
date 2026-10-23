@@ -142,8 +142,8 @@ describe("DEPLOY.md dice cómo aplicarla y qué esperar", () => {
   const deploy = read("DEPLOY.md");
   const entry = flat(deploy.slice(deploy.indexOf("### 23-10-2026 · La salida de Urpi lleva el día de la entrega")));
 
-  it("pendiente, después del código, con su transacción y los dos conteos previos", () => {
-    expect(entry).toContain("**Migración `0272_urpi_salida_fecha.sql`, a mano y DESPUÉS del código.** **Pendiente de aplicar en producción.**");
+  it("aplicada después del código, con su transacción y los dos conteos previos", () => {
+    expect(entry).toContain("**Migración `0272_urpi_salida_fecha.sql`, a mano y DESPUÉS del código.** **Ya aplicada en producción el 23-10-2026**, con el código ya desplegado");
     expect(entry).toContain("\\i db/migrations/0272_urpi_salida_fecha.sql");
     expect(entry).toContain("**Conteo previo 1** (solo lectura; el 23-10-2026, **107**,");
     expect(entry).toContain("**Conteo previo 2** (solo lectura; el 23-10-2026, **32**,");
