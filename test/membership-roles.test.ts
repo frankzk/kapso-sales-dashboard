@@ -144,6 +144,7 @@ describe("el menú", () => {
       "/dashboard/leads/anuncios",
       "/dashboard/productividad",
       "/dashboard/stores",
+      "/dashboard/stores/historial",
       "/dashboard/costos",
       "/dashboard/courier",
       "/dashboard/urpi",
@@ -154,7 +155,7 @@ describe("el menú", () => {
   });
 
   it("Supervisión entra al panel completo y ve solo lo suyo", () => {
-    const items = navItems(false, false, false, { reports: true, catalog: false, mapAds: false, stores: false, costs: false, team: false });
+    const items = navItems(false, false, false, { reports: true, catalog: false, mapAds: false, stores: false, costs: false, team: false, history: false });
     expect(hrefs(items)).toEqual([
       "/dashboard",
       "/dashboard/leads",

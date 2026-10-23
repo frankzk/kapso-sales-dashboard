@@ -547,4 +547,6 @@
 \ir migrations/0271_shopify_app_propia.sql
 \echo 'Applying 0272_urpi_salida_fecha.sql'
 \ir migrations/0272_urpi_salida_fecha.sql
+\echo 'Applying 0273_shopify_history.sql'
+\ir migrations/0273_shopify_history.sql
 \echo 'Done.'

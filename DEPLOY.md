@@ -3855,3 +3855,27 @@ salir sin `closed_at`. La 0272 no se deshace sola: las cajas del paso 2 se
 reconocen por su `route_output_filled` con `payload.backfill = true` y
 `payload.urpi_row`; las fechas del paso 1 no llevan rastro propio (estaban
 vacías y el código las escribe igual desde este cambio).
+
+### 23-10-2026 · Historial de Shopify (0273, MOM §37)
+
+Archivo de consulta con los pedidos y clientes de Shopify de antes de Kapta,
+subidos desde las exportaciones CSV de Shopify. No toca `orders`, el Master ni
+`MOM_RESOLUTION_VERSION`. Sin variables de entorno nuevas.
+
+**En producción ya está aplicada (23-10-2026, SQL por partes).** Se corrió en
+cuatro tandas (tablas, RLS, políticas y `grant`) y sin los `drop policy if
+exists`, que no hacían nada porque las políticas aún no existían. No figura en
+el historial de migraciones de Supabase. Comprobada el mismo día: las tres
+tablas con RLS, sus índices y una política de lectura cada una. No hace falta
+volver a correrla.
+
+1. **Migración `0273_shopify_history.sql`** antes del código: crea
+   `shopify_history_files`, `shopify_history_orders` y
+   `shopify_history_customers`, con RLS de lectura por tienda. Solo crea; es
+   idempotente. Si el código llega antes, la pantalla falla al leer y la subida
+   contesta «No se pudo registrar el archivo»; no se pierde nada.
+2. **Bucket** `shopify-history` (privado): lo crea la primera subida con el
+   service role. No hace falta crearlo a mano.
+3. **Comprobar:** `select count(*) from shopify_history_orders;` responde (0 al
+   principio) y, después de subir un CSV, `select kind, status, records from
+   shopify_history_files order by created_at desc limit 5;`.
