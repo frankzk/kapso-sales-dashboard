@@ -59,6 +59,7 @@ import {
 } from "@/lib/restock-view";
 import type { MetaAdAccount, MetaConnectionProbe, StoreMetaAdAccount } from "@/lib/meta-marketing";
 import { InvoiceSettingsSection, type InvoiceSettingsData } from "@/components/invoice-settings-section";
+import { WooCommerceSettingsSection, type WooSettingsView } from "@/components/woocommerce-settings-section";
 import {
   addPaymentMethod,
   addReplyTemplate,
@@ -285,6 +286,11 @@ export interface StoreSettingsData {
     /** «hasta el 25/10 a las 14:20» mientras se acepta el Client secret anterior; null si no. */
     prevSecretUntil: string | null;
   } | null;
+  /**
+   * WooCommerce (0273, MOM §37.11): el sitio, la clave del sitio y si hay cada
+   * secreto (nunca el valor), la dirección de los webhooks y la última pasada.
+   */
+  woo: WooSettingsView;
   /** Lo del agente de leads (MOM §33) que no es una columna de la tienda. */
   leadVoice: {
     /** Telnyx, la puerta SIP y el secreto propio del agente de leads están en Vercel. */
@@ -375,6 +381,9 @@ function webhookTopicLabel(topic: string): string {
   if (topic === "flow/bad_request") return "Payload inválido";
   if (topic.startsWith("draft_orders/")) return "Borrador (carrito)";
   if (topic.startsWith("orders/")) return "Orden";
+  // WooCommerce (MOM §37.11): «order.created», «order.updated»…
+  if (topic === "order.deleted") return "Pedido WooCommerce (papelera)";
+  if (topic.startsWith("order.")) return "Pedido WooCommerce";
   return topic;
 }
 
@@ -392,6 +401,7 @@ const INDEX: IndexGroup[] = [
     title: "Conexiones",
     items: [
       { id: "shopify", label: "Shopify" },
+      { id: "woocommerce", label: "WooCommerce" },
       { id: "kapso", label: "Kapso" },
       { id: "aliclik", label: "Aliclik" },
       { id: "shalom", label: "Shalom" },
@@ -583,6 +593,7 @@ export function StoreSettings({
             description="Cuentas y credenciales con las que Kapta habla con cada servicio. Los secretos se guardan cifrados y no se vuelven a mostrar: déjalos en blanco para conservar el actual."
           >
             <ShopifySection data={data} />
+            <WooCommerceSettingsSection storeId={s.id} data={data.woo} />
             <KapsoSection data={data} />
             <AliclikSection
               siteUrl={data.siteUrl}

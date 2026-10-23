@@ -247,12 +247,13 @@ describe("MOM §35: la sección existe y dice su estado", () => {
     expect(sqlList(semilla?.[1])).toEqual(["org_id", "ruc", "legal_name", "simplefact_subdomain"]);
   });
 
-  it("subsecciones 35.1 a 35.9, en orden y ninguna más", () => {
+  it("subsecciones 35.1 a 35.10, en orden y ninguna más", () => {
+    // 35.10: la foto del pedido para cuando Shopify ya no responde (owner, 23-10-2026).
     enOrden(
       S35,
-      Array.from({ length: 9 }, (_, i) => `\n### 35.${i + 1} `),
+      Array.from({ length: 10 }, (_, i) => `\n### 35.${i + 1} `),
     );
-    expect(S35.match(/^### 35\.\d+ /gm)).toHaveLength(9);
+    expect(S35.match(/^### 35\.\d+ /gm)).toHaveLength(10);
   });
 
   describe("«Implementación:»", () => {
@@ -1251,7 +1252,11 @@ describe("MOM §35.3: cuándo quedó pagado y qué cobró Flow", () => {
     // saldría nunca) y los pagos no se revisarían: la base no lo diría.
     const fn = funcion("invoice_claim");
     for (const lee of ["p_basis->>'prepaid'", "p_basis->'payments'", "b.pago->>'id'"]) expect(fn, lee).toContain(lee);
-    expect(read("lib/invoicing/server.ts")).toContain("p_basis: elig.basis,");
+    // La base del comprobante es la de las reglas; leída de la foto del pedido
+    // (MOM §35.10) lleva además `foto_shopify`, sin tocar `prepaid` ni `payments`.
+    expect(read("lib/invoicing/server.ts")).toContain(
+      "p_basis: prepared.snapshotFetchedAt ? { ...elig.basis, foto_shopify: prepared.snapshotFetchedAt } : elig.basis,",
+    );
     // Como lo manda supabase-js: JSON, con las llaves por su nombre.
     const json = (r: ReturnType<typeof invoiceEligibility>) => {
       if (!r.ok) throw new Error(`se esperaba un pedido que sale, vino ${r.reason}`);

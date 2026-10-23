@@ -83,7 +83,7 @@ export function ImportReview({
           setMsg(
             r.error
               ? `${base} (auto-vínculo: ${r.error})`
-              : `${base} Auto-vinculadas ${r.linked} guías; el resto queda para revisión.`,
+              : `${base} Auto-vinculadas ${r.linked} guías; el resto queda para revisión.${r.retry ? ` ${retryNote(r.retry)}` : ""}`,
           );
         } else {
           setMsg(base);
@@ -200,18 +200,31 @@ export function ImportReview({
  */
 async function runAutoLinkLoop(
   onProgress?: (totals: { processed: number; linked: number }) => void,
-): Promise<{ processed: number; linked: number; error?: string }> {
+): Promise<{ processed: number; linked: number; retry: number; error?: string }> {
   let processed = 0;
   let linked = 0;
+  // Los que no se pudieron buscar porque Shopify falló: quedan sin revisar y
+  // entran en la próxima pasada. Cuentan los de la última vuelta, que son los
+  // que siguen pendientes.
+  let retry = 0;
   for (;;) {
     const r = await processSuggestionBatch();
-    if ("error" in r) return { processed, linked, error: r.error };
+    if ("error" in r) return { processed, linked, retry, error: r.error };
     processed += r.processed;
     linked += r.linked;
+    retry = r.retry ?? 0;
     onProgress?.({ processed, linked });
     if (r.done) break;
   }
-  return { processed, linked };
+  return { processed, linked, retry };
+}
+
+/** «3 guías no se pudieron buscar en Shopify…», o nada. */
+function retryNote(retry: number): string {
+  if (retry <= 0) return "";
+  return retry === 1
+    ? "1 guía no se pudo buscar en Shopify; se vuelve a buscar la próxima vez."
+    : `${retry} guías no se pudieron buscar en Shopify; se vuelven a buscar la próxima vez.`;
 }
 
 /**
@@ -223,13 +236,16 @@ function SuggestionBatchRunner({ onDone }: { onDone: () => void }) {
   const [running, setRunning] = useState(false);
   const [stats, setStats] = useState({ processed: 0, linked: 0 });
   const [err, setErr] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
 
   async function run() {
     setRunning(true);
     setErr(null);
+    setNote(null);
     setStats({ processed: 0, linked: 0 });
     const r = await runAutoLinkLoop(setStats);
     if (r.error) setErr(r.error);
+    else if (r.retry) setNote(retryNote(r.retry));
     setRunning(false);
     onDone();
   }
@@ -247,6 +263,11 @@ function SuggestionBatchRunner({ onDone }: { onDone: () => void }) {
           : "Vincular coincidencias automáticas"}
       </button>
       {err && <span className="text-xs text-rose-600">{err}</span>}
+      {note && (
+        <span role="status" className="text-xs text-slate-500">
+          {note}
+        </span>
+      )}
     </div>
   );
 }

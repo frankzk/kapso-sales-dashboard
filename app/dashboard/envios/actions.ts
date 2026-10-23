@@ -55,10 +55,16 @@ import {
   pickStoresForOrderQuery,
   searchOrdersLive,
   searchProductVariants,
-  updateOrderShippingAddress,
   type ProductVariantResult,
 } from "@/lib/shopify";
 import { runSuggestionBatch, SUGGESTION_BATCH_SIZE, type BatchResult } from "@/lib/shipment-auto-match";
+import {
+  captureShopifyOrderForLink,
+  orderPlatformOf,
+  pushShippingAddressToShopify,
+  type OrderCapture,
+  type ShopifyAddressPush,
+} from "@/lib/shipment-order-capture";
 import {
   coverageCityOf,
   coverageInputOf,
@@ -193,6 +199,42 @@ function errorDeBase(
     return `No se pudo ${accion}: la conexión falló. Inténtalo de nuevo.`;
   }
   return `No se pudo ${accion}. Inténtalo de nuevo; si vuelve a pasar, avisa a soporte.`;
+}
+
+/**
+ * El mensaje de un pedido de Shopify que no se pudo capturar para vincular
+ * (`captureShopifyOrderForLink`): los mismos textos de antes, salvo el de la
+ * tienda sin Shopify, que ahora solo sale si el pedido tampoco está en Kapta.
+ */
+function orderCaptureError(captured: Exclude<OrderCapture, { ok: true }>, accion: string, sinFila: string): string {
+  switch (captured.why) {
+    case "sin_shopify":
+      return "La tienda no tiene Shopify conectado y el pedido no está en Kapta.";
+    case "shopify_fallo":
+      return "No se pudo obtener el pedido de Shopify.";
+    case "no_encontrado":
+      return "Pedido no encontrado en Shopify.";
+    case "base":
+      return errorDeBase(captured.error, accion);
+    case "sin_fila":
+      return sinFila;
+  }
+}
+
+/** El aviso de `updateShipmentDeliveryAddress`: dónde quedó la dirección nueva. */
+function addressUpdateNotice(isRealShopifyOrder: boolean, push: ShopifyAddressPush | null): string {
+  if (!isRealShopifyOrder) {
+    return "Dirección y coordenadas actualizadas en el envío; no había un pedido Shopify vinculado.";
+  }
+  if (!push?.ok || push.wrote) return "Dirección y coordenadas actualizadas en Shopify y en el envío.";
+  switch (push.why) {
+    case "sin_shopify":
+      return "Dirección y coordenadas actualizadas en el envío. La tienda ya no tiene Shopify conectado: el pedido de Shopify no cambió.";
+    case "tienda_caida":
+      return `Dirección y coordenadas actualizadas en el envío. Shopify no atendió a la tienda (HTTP ${push.status}): el pedido de Shopify no cambió.`;
+    case "woocommerce":
+      return "Dirección y coordenadas actualizadas en el envío. El pedido es de WooCommerce: allí no se cambió.";
+  }
 }
 
 /** Filas crudas de reprogramaciones (guías Swayp hijas) + nombres de asesor,
@@ -1015,32 +1057,28 @@ export async function updateShipmentDeliveryAddress(
 
   const shopifyOrderId = order?.shopify_order_id;
   const isRealShopifyOrder = !!shopifyOrderId && !shopifyOrderId.startsWith("manual-");
+  // Primero en Shopify, como siempre. Si la tienda ya no tiene Shopify, o
+  // Shopify contesta que la tienda ya no está, el cambio sigue solo en el envío
+  // (lib/shipment-order-capture.ts); un rechazo de Shopify lo sigue cortando.
+  // Un pedido de WooCommerce (`orders.platform`, MOM §37.12) nunca va a
+  // Shopify: su id (`wc-kp-1532`) no es de Shopify aunque tenga un número.
+  let shopifyPush: ShopifyAddressPush | null = null;
   if (isRealShopifyOrder) {
-    const creds = await getStoreCreds(current.store_id);
-    if (!creds?.shopify_token) return { error: "La tienda no tiene Shopify conectado." };
-    try {
-      await updateOrderShippingAddress({
-        domain: creds.shopify_domain,
-        token: creds.shopify_token,
-        orderGid: `gid://shopify/Order/${shopifyOrderId}`,
-        address: {
-          name: current.customer_name,
-          phone: current.customer_phone,
-          address1: address,
-          address2: reference,
-          city: district,
-          province: region,
-          country: "Peru",
-        },
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return {
-        error: message.includes("Access denied") || message.includes("write_orders")
-          ? "Shopify no autorizó el cambio. La tienda necesita el permiso write_orders."
-          : `Shopify rechazó la dirección: ${message}`,
-      };
-    }
+    shopifyPush = await pushShippingAddressToShopify({
+      storeId: current.store_id,
+      shopifyOrderId,
+      platform: current.order_id ? await orderPlatformOf(admin, current.order_id) : "shopify",
+      address: {
+        name: current.customer_name,
+        phone: current.customer_phone,
+        address1: address,
+        address2: reference,
+        city: district,
+        province: region,
+        country: "Peru",
+      },
+    });
+    if (!shopifyPush.ok) return { error: shopifyPush.error };
   }
 
   const combinedCity = normalizeCity([district, cityLabel, region].join(" "));
@@ -1102,9 +1140,7 @@ export async function updateShipmentDeliveryAddress(
   await syncMasterForShipment(admin, shipmentId);
   revalidatePath("/dashboard/envios");
   return {
-    notice: isRealShopifyOrder
-      ? "Dirección y coordenadas actualizadas en Shopify y en el envío."
-      : "Dirección y coordenadas actualizadas en el envío; no había un pedido Shopify vinculado.",
+    notice: addressUpdateNotice(isRealShopifyOrder, shopifyPush),
   };
 }
 
@@ -1466,32 +1502,15 @@ export async function previewDirectFenixGuide(input: {
     // RLS: can the caller see this store?
     const { data: store } = await sb.from("stores").select("id").eq("id", input.storeId).maybeSingle();
     if (!store) return { error: "Tienda inválida o sin acceso." };
-    const creds = await getStoreCreds(input.storeId);
-    if (!creds?.shopify_token) return { error: "La tienda no tiene Shopify conectado." };
-    let order;
-    try {
-      order = await fetchOrderById({
-        domain: creds.shopify_domain,
-        token: creds.shopify_token,
-        storeId: input.storeId,
-        orderGid: input.orderGid,
-      });
-    } catch {
-      return { error: "No se pudo obtener el pedido de Shopify." };
+    // Con Shopify, como siempre; sin él, o si falla, la fila que ya está en
+    // Kapta (lib/shipment-order-capture.ts).
+    const captured = await captureShopifyOrderForLink(admin, { storeId: input.storeId, orderGid: input.orderGid });
+    if (!captured.ok) {
+      return {
+        error: orderCaptureError(captured, "preparar la guía Swayp directa", "No se pudo registrar el pedido."),
+      };
     }
-    if (!order) return { error: "Pedido no encontrado en Shopify." };
-    const { error: upsertErr } = await admin
-      .from("orders")
-      .upsert([order], { onConflict: "store_id,shopify_order_id" });
-    if (upsertErr) return { error: errorDeBase(upsertErr, "preparar la guía Swayp directa") };
-    const { data: row } = await admin
-      .from("orders")
-      .select("id")
-      .eq("store_id", input.storeId)
-      .eq("shopify_order_id", order.shopify_order_id)
-      .maybeSingle();
-    orderId = (row as { id: string } | null)?.id ?? null;
-    if (!orderId) return { error: "No se pudo registrar el pedido." };
+    orderId = captured.orderId;
   }
 
   // RLS-scoped read: resolves only if the caller can access the order's store.
@@ -1815,38 +1834,16 @@ export async function linkShipmentToShopifyOrder(
   const sb = await createServerSupabase();
   const { data: store } = await sb.from("stores").select("id").eq("id", storeId).maybeSingle();
   if (!store) return { error: "Tienda inválida o sin acceso." };
-  const creds = await getStoreCreds(storeId);
-  if (!creds?.shopify_token) return { error: "La tienda no tiene Shopify conectado." };
 
-  let order;
-  try {
-    order = await fetchOrderById({
-      domain: creds.shopify_domain,
-      token: creds.shopify_token,
-      storeId,
-      orderGid,
-    });
-  } catch {
-    return { error: "No se pudo obtener el pedido de Shopify." };
+  // Con Shopify, como siempre; sin él, o si falla, la fila que ya está en
+  // Kapta (lib/shipment-order-capture.ts). Una sugerencia guardada se puede
+  // confirmar aunque la tienda ya no tenga Shopify.
+  const captured = await captureShopifyOrderForLink(createAdminSupabase(), { storeId, orderGid });
+  if (!captured.ok) {
+    return { error: orderCaptureError(captured, "vincular el pedido de Shopify", "No se pudo vincular el pedido.") };
   }
-  if (!order) return { error: "Pedido no encontrado en Shopify." };
 
-  const admin = createAdminSupabase();
-  const { error: upsertErr } = await admin
-    .from("orders")
-    .upsert([order], { onConflict: "store_id,shopify_order_id" });
-  if (upsertErr) return { error: errorDeBase(upsertErr, "vincular el pedido de Shopify") };
-
-  const { data: row } = await admin
-    .from("orders")
-    .select("id")
-    .eq("store_id", storeId)
-    .eq("shopify_order_id", order.shopify_order_id)
-    .maybeSingle();
-  const orderId = (row as { id: string } | null)?.id ?? null;
-  if (!orderId) return { error: "No se pudo vincular el pedido." };
-
-  return resolveShipmentMatch(shipmentId, { orderId });
+  return resolveShipmentMatch(shipmentId, { orderId: captured.orderId });
 }
 
 /**

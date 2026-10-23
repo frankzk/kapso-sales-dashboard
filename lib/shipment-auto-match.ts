@@ -55,6 +55,12 @@ export interface BatchResult {
   processed: number;
   linked: number; // confidently auto-linked to a Shopify order this round
   done: boolean; // true when fewer than `limit` unchecked rows remained
+  /**
+   * Envíos que se quedaron sin revisar porque la búsqueda en Shopify falló en
+   * alguna de sus tiendas: se vuelven a buscar en la próxima pasada. Solo
+   * aparece si hubo alguno.
+   */
+  retry?: number;
 }
 
 interface CandidateRow {
@@ -219,8 +225,14 @@ export async function runSuggestionBatch(
 
   const searchable = rows.filter((r) => r.order_name);
   let linked = 0;
+  let retry = 0;
   for (const row of searchable) {
     const targets = pickStoresForOrderQuery(row.order_name!, stores);
+    // Una tienda cuya búsqueda falló no dijo «no hay»: no se sabe. Antes caía
+    // como una lista vacía, el envío quedaba revisado y no se volvía a buscar
+    // nunca. Ahora se queda sin marcar y entra en la próxima pasada. Tampoco se
+    // decide con las demás tiendas: el candidato único podía no serlo.
+    let searchFailed = false;
     const perStore = await Promise.all(
       targets.map(async (store) => {
         const creds = credsByStore.get(store.id);
@@ -240,10 +252,15 @@ export async function runSuggestionBatch(
             customer_phone: o.customer_phone ?? null,
           }));
         } catch {
-          return [] as SuggestCandidate[]; // missing scope / API error on this store — skip it
+          searchFailed = true; // missing scope / API error / store gone — not «no match»
+          return [] as SuggestCandidate[];
         }
       }),
     );
+    if (searchFailed) {
+      retry++;
+      continue;
+    }
     const decision = decideSuggestion(
       { orderName: row.order_name, customerPhone: row.customer_phone },
       perStore.flat(),
@@ -269,5 +286,14 @@ export async function runSuggestionBatch(
     }
   }
 
-  return { processed: rows.length, linked, done: rows.length < limit };
+  // `done` también si nada avanzó: los que quedan son todos de una búsqueda que
+  // falló, y pedirlos otra vez en el mismo bucle del cliente (import-review)
+  // daría la misma respuesta para siempre. Se reintentan en la próxima pasada.
+  const reviewed = rows.length - retry;
+  return {
+    processed: reviewed,
+    linked,
+    done: rows.length < limit || reviewed === 0,
+    ...(retry ? { retry } : {}),
+  };
 }

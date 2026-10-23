@@ -80,6 +80,15 @@ export interface ShipmentOrderDetail {
   shipping_address: OrderShippingAddress | null;
 }
 
+/**
+ * De qué plataforma vino un pedido o un borrador (`orders.platform`,
+ * `draft_orders.platform`, migración 0273, MOM §37). Las decisiones por
+ * plataforma se toman con esto, nunca por la forma del id: `extractNumericId`
+ * convierte `wc-kp-1532` en `1532`, que parece un id de Shopify.
+ */
+export type OrderPlatform = "shopify" | "woocommerce";
+export const ORDER_PLATFORMS: readonly OrderPlatform[] = ["shopify", "woocommerce"];
+
 /** A row ready to be upserted into the `orders` table. */
 export interface OrderRow {
   /** Internal Supabase UUID. Leads.order_id and shipments.order_id point here. */
@@ -110,6 +119,13 @@ export interface OrderRow {
   kapso_conversation_id: string | null;
   line_items: OrderLineItem[];
   raw?: unknown;
+  /**
+   * De qué plataforma vino (0273). Los mapeadores de Shopify NO lo ponen a
+   * propósito: la columna nace en 'shopify' y sus escrituras quedan idénticas a
+   * las de antes de la 0273. Solo `mapWooOrder` (lib/woocommerce.ts) lo llena,
+   * con 'woocommerce'.
+   */
+  platform?: OrderPlatform;
 }
 
 export type DraftOrderStatus = "open" | "invoice_sent" | "completed" | null;

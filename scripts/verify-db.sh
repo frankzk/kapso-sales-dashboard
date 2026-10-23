@@ -268,5 +268,21 @@ $PSQL -f "$ROOT/scripts/sql/shopify_app_propia_smoke.sql"
 echo "▶ Salida de Urpi (0272): closed_at del día de la entrega y las cajas «por definir» de entregas viejas de Urpi, solo en el objetivo"
 $PSQL -f "$ROOT/scripts/sql/urpi_salida_fecha_smoke.sql"
 
+# Shopify cierra Kenku y Aurela el 28-10-2026 y pasan a WooCommerce (MOM §37).
+# La 0273 solo prepara la base: hasta el cambio, las dos siguen en Shopify
+# exactamente igual. Se prueba aplicándola sobre el esquema de la 0272 con esas
+# tiendas, sus pedidos y sus borradores.
+echo "▶ Base de WooCommerce (0273): Kenku, Aurela y sus pedidos no cambian; el cambio de plataforma exige credenciales"
+$PSQL -f "$ROOT/scripts/sql/woocommerce_base_smoke.sql"
+
+# Shopify cierra Kenku y Aurela el 28-10-2026 y sus pedidos se siguen
+# facturando después (owner, 23-10-2026): la boleta sale de la foto que se tomó
+# mientras Shopify respondía. Se fija qué pedidos la necesitan, que solo se
+# guarda la de un pedido de Shopify (nunca de WooCommerce) y que solo el
+# servidor la ve.
+echo "▶ Foto del pedido para su boleta (0274): la lista de la regla, solo pedidos de Shopify, nunca una foto vieja sobre una nueva, solo service_role"
+$PSQL -f "$ROOT/scripts/sql/invoice_snapshots_smoke.sql"
+echo "  ✅ ninguna fila cambiada; la lista: de esa tienda, de Shopify con su id, desde el 29-08, sin boleta viva, sin foto y no anulado o con foto vieja, en curso primero; guarda solo un pedido de Shopify de esa tienda con su gid y su respuesta, nunca una foto vieja sobre una nueva; ni anon ni authenticated; dos veces es una; sin la 0273 se detiene"
+
 echo ""
 echo "✅ DB verification passed."

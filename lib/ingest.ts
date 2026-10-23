@@ -68,6 +68,37 @@ import { runReturnRecovery } from "@/lib/return-recovery";
 import { runDeliveredThanks } from "@/lib/delivered-thanks";
 import { runRestockReminders, sweepRestockReplies } from "@/lib/restock-reminder";
 import { enrichLeadLocationsFromShopify } from "@/lib/lead-shopify-location";
+import {
+  WOO_CANCELLED_STATUSES,
+  fetchWooOrder,
+  fetchWooOrdersPage,
+  mapWooOrder,
+  parseWooWebhookPing,
+  verifyWooSignature,
+  wooOrderId,
+  type WooOrder,
+} from "@/lib/woocommerce";
+import {
+  WOO_SYNC_BUDGET_MS,
+  WOO_SYNC_MAX_PAGES,
+  WOO_SYNC_PER_PAGE,
+  WOO_SYNC_SOURCE,
+  hasWooApiCredentials,
+  isWooIntakeTopic,
+  laterIso,
+  loadWooStoreCreds,
+  maxWooModified,
+  nextWooPage,
+  recordWooLastError,
+  withWooAuthFallback,
+  wooClientOpts,
+  wooHostOf,
+  wooSourceMatchesSite,
+  wooSyncStart,
+  wooWebhookEventKey,
+  wooWebhookTopic,
+  type WooStoreCreds,
+} from "@/lib/woocommerce-intake";
 import type { ConversationRow, DraftOrderRow, OrderRow } from "@/lib/types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -1161,6 +1192,664 @@ async function processDraftOrderWebhook(
 }
 
 // ---------------------------------------------------------------------------
+// WooCommerce: webhooks de pedidos (MOM §37.11)
+// ---------------------------------------------------------------------------
+//
+// Todo lo de aquí es APARTE del camino de Shopify: otra ruta, otra lectura de
+// la tienda (solo las columnas `woo_*`), otro secreto. `processShopifyWebhook`
+// y `processOrderWebhook` no se tocaron; los pasos que siguen al upsert son los
+// mismos (rollups y lead si es del bot, carrito si no, fila del Master), con
+// los mismos helpers.
+//
+// POR QUÉ CASI TODO CONTESTA 200. WooCommerce no reintenta un aviso que falló,
+// y desactiva el webhook después de 5 fallos seguidos. Un 4xx/5xx no trae el
+// aviso de vuelta: solo acerca la desactivación. Lo que no se pudo procesar lo
+// recoge la pasada `woo_orders` (cada 5 minutos, por `modified_after`). Por eso:
+//   · 200 al ping de alta, ANTES de la firma (no la trae);
+//   · 401 solo a una firma que no cuadra: es lo que debe verse en WooCommerce
+//     si el secreto está mal;
+//   · 200 a todo lo demás, con `{ok:false}` y el motivo en el cuerpo (WooCommerce
+//     lo guarda en su registro de entregas) y en `webhook_events.error`.
+
+export type WooWebhookStatus =
+  | "ok"
+  | "duplicate"
+  | "ping"
+  | "ignored"
+  | "unauthorized"
+  | "unknown_store"
+  | "error";
+
+export interface WooWebhookResult {
+  status: WooWebhookStatus;
+  message?: string;
+  /** Era el ping de alta (`webhook_id=N`). */
+  ping?: boolean;
+}
+
+export interface WooWebhookParams {
+  storeId: string;
+  /** El cuerpo CRUDO: la firma es sobre estos bytes. */
+  rawBody: string;
+  /** `X-WC-Webhook-Topic`. */
+  topic: string | null;
+  /** `X-WC-Webhook-Resource` y `X-WC-Webhook-Event`, por si falta el tema. */
+  resource?: string | null;
+  event?: string | null;
+  /** `X-WC-Webhook-Signature`. */
+  signature: string | null;
+  /** `X-WC-Webhook-Delivery-ID`: solo para `order.deleted` (ver `wooWebhookEventKey`). */
+  deliveryId?: string | null;
+  /** `X-WC-Webhook-Source`: el sitio que lo mandó. */
+  source?: string | null;
+}
+
+/** Prefijo de lo que el webhook deja en `stores.woo_last_error`. */
+const WOO_WEBHOOK_ERROR_PREFIX = "Webhook: ";
+/** Prefijo de lo que la pasada deja en `stores.woo_last_error`. */
+const WOO_SYNC_ERROR_PREFIX = "Sincronización: ";
+
+/** Estado de un pedido de WooCommerce, como lo normaliza el mapeador. */
+function wooStatusOf(order: { status?: unknown } | null | undefined): string {
+  return String(order?.status ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/^wc-/, "");
+}
+
+interface ExistingWooOrder {
+  cancelled_at: string | null;
+  updated_at: string | null;
+}
+
+/**
+ * Lo que ya tienen en `orders` estos pedidos de WooCommerce: `cancelled_at`
+ * (para no moverlo, MOM §37.3) y `updated_at` (para no pisar un estado más
+ * nuevo con uno más viejo, `isStaleWooRow`).
+ */
+async function existingWooOrders(
+  admin: SupabaseClient,
+  storeId: string,
+  orderIds: string[],
+): Promise<Map<string, ExistingWooOrder>> {
+  const out = new Map<string, ExistingWooOrder>();
+  for (const batch of chunk([...new Set(orderIds)], 200)) {
+    if (!batch.length) continue;
+    const { data, error } = await admin
+      .from("orders")
+      .select("shopify_order_id, cancelled_at, updated_at")
+      .eq("store_id", storeId)
+      .in("shopify_order_id", batch);
+    if (error) throw new Error(`orders (WooCommerce): ${error.message}`);
+    for (const r of (data as ({ shopify_order_id: string } & ExistingWooOrder)[] | null) ?? []) {
+      out.set(String(r.shopify_order_id), { cancelled_at: r.cancelled_at ?? null, updated_at: r.updated_at ?? null });
+    }
+  }
+  return out;
+}
+
+/**
+ * ¿Lo que llegó es MÁS VIEJO que lo guardado? WooCommerce entrega los webhooks
+ * en segundo plano (Action Scheduler): uno puede llegar después de que la
+ * sincronización ya leyó un cambio posterior, o después de otro aviso más
+ * nuevo. Se compara la fecha de modificación de WooCommerce de los dos lados
+ * (`updated_at` = `date_modified_gmt`); igual no es más viejo (se aplica: es
+ * idempotente). Solo para WooCommerce: Shopify sigue como siempre.
+ */
+export function isStaleWooRow(
+  row: Pick<OrderRow, "updated_at">,
+  existing: Pick<ExistingWooOrder, "updated_at"> | null | undefined,
+): boolean {
+  const incoming = Date.parse(row.updated_at ?? "");
+  const stored = Date.parse(existing?.updated_at ?? "");
+  return Number.isFinite(incoming) && Number.isFinite(stored) && incoming < stored;
+}
+
+/**
+ * ¿Es un anulado que nunca fue pedido? WooCommerce anula solo los pedidos que
+ * quedaron `pending` sin pagar (el checkout abandonado, al vencer la reserva de
+ * stock), y esos nunca entraron a Kapta (MOM §37.3). Si llega uno anulado que
+ * Kapta no tiene y que nunca llegó a «processing» (`date_paid` vacío: WooCommerce
+ * lo llena al pasar a «processing», también en contraentrega), no se crea: sería
+ * un Anulado en el Master de algo que no fue un pedido. Uno que Kapta ya tiene
+ * se anula como siempre.
+ */
+export function isNeverLiveCancelledWoo(
+  row: Pick<OrderRow, "cancelled_at">,
+  payload: Pick<WooOrder, "date_paid_gmt">,
+  existing: unknown,
+): boolean {
+  return Boolean(row.cancelled_at) && !existing && !String(payload?.date_paid_gmt ?? "").trim();
+}
+
+type WooApplyOutcome = { applied: true; row: OrderRow } | { applied: false; message: string };
+
+/**
+ * Un pedido de WooCommerce (del webhook o releído por la API) → `orders`, con
+ * el `cancelled_at` que ya tenía y sin pisar un estado más nuevo; y los mismos
+ * efectos que un pedido de Shopify (`applyWooOrderEffects`).
+ */
+async function applyWooOrderPayload(
+  admin: SupabaseClient,
+  creds: WooStoreCreds & { siteKey: string },
+  payload: WooOrder,
+): Promise<WooApplyOutcome> {
+  const id = wooOrderId(creds.siteKey, payload.id);
+  const existing = (await existingWooOrders(admin, creds.id, [id])).get(id) ?? null;
+  const row = mapWooOrder(
+    payload,
+    { id: creds.id, woo_site_key: creds.siteKey },
+    { previousCancelledAt: existing?.cancelled_at ?? null },
+  );
+  if (!row) {
+    // pending, failed, checkout-draft…: todavía no es un pedido (MOM §37.3).
+    return { applied: false, message: `estado que no entra al Master: ${wooStatusOf(payload) || "(sin estado)"}` };
+  }
+  if (isStaleWooRow(row, existing)) {
+    return { applied: false, message: "llegó un estado más viejo que el guardado: no se aplicó" };
+  }
+  if (isNeverLiveCancelledWoo(row, payload, existing)) {
+    return { applied: false, message: "anulado sin haber llegado a ser pedido (pago no completado): no entra al Master" };
+  }
+  await upsertOrders(admin, [row]);
+  await applyWooOrderEffects(admin, creds.id, creds.timezone, row);
+  return { applied: true, row };
+}
+
+/**
+ * Lo que sigue al upsert de UN pedido, igual que en `processOrderWebhook`:
+ * rollups del día y lead ganado si es del bot (`kapso`); si no, saca de la cola
+ * el carrito del mismo teléfono; y la fila del Master.
+ */
+async function applyWooOrderEffects(
+  admin: SupabaseClient,
+  storeId: string,
+  timezone: string,
+  row: OrderRow,
+): Promise<void> {
+  const isKapsoOrder = hasKapsoTag(row.tags);
+  if (isKapsoOrder && row.created_at) {
+    const { date } = tzParts(row.created_at, timezone);
+    await recomputeRollups(admin, storeId, date, date);
+  }
+
+  const { data: ord } = await admin
+    .from("orders")
+    .select("id")
+    .eq("store_id", storeId)
+    .eq("shopify_order_id", row.shopify_order_id)
+    .maybeSingle();
+  const orderUuid = (ord as { id?: string } | null)?.id ?? null;
+
+  if (isKapsoOrder && row.customer_phone) {
+    try {
+      const dispAt = await lastDispositionAtByPhone(admin, storeId, [row.customer_phone]);
+      await linkOrderToLead(admin, {
+        storeId,
+        phone: row.customer_phone,
+        orderId: orderUuid,
+        win: eventOverridesDisposition(row.created_at, dispAt.get(row.customer_phone)),
+        orderCreatedAt: row.created_at,
+      });
+    } catch {
+      /* best-effort, como en Shopify */
+    }
+  }
+
+  if (!isKapsoOrder && row.customer_phone && !row.cancelled_at) {
+    try {
+      await closeCartLeadsWithOrders(admin, storeId, { phones: [row.customer_phone] });
+    } catch {
+      /* best-effort: el barrido del cron lo repite */
+    }
+  }
+
+  if (orderUuid) {
+    try {
+      await recomputeOrderMasterSafe(admin, [orderUuid]);
+    } catch {
+      /* best-effort: el barrido del cron lo pondrá al día */
+    }
+  }
+}
+
+/**
+ * `order.deleted`: WooCommerce lo manda al mandar el pedido a la papelera, y su
+ * cuerpo es solo `{id}`. Kapta NUNCA borra el pedido (MOM §2 punto 6, §37.3).
+ *
+ * Primero vuelve a leer el pedido por la API (`GET /orders/{id}`, que también
+ * devuelve los de la papelera): así entra con su estado y su fecha de
+ * WooCommerce, y un aviso que llegó tarde (el pedido ya volvió de la papelera)
+ * no lo anula. Si la tienda no tiene claves de la API, o WooCommerce no
+ * contesta, o el pedido ya no existe, lo marca anulado como un `trash`
+ * (`markWooOrderDeleted`). Si sale de la papelera llega `order.restored` con el
+ * pedido entero, y el mapeador lo deja vivo otra vez.
+ */
+async function processWooOrderDeleted(
+  admin: SupabaseClient,
+  creds: WooStoreCreds & { siteKey: string },
+  wooId: unknown,
+  orderId: string,
+  fetchImpl?: typeof fetch,
+): Promise<string | undefined> {
+  // Un pedido que Kapta no tiene no se crea desde la papelera: o nunca fue
+  // pedido (un pendiente sin pagar) o ya se perdió su historia. Nada que marcar.
+  const known = (await existingWooOrders(admin, creds.id, [orderId])).get(orderId);
+  if (!known) return "el pedido no estaba en Kapta";
+  if (hasWooApiCredentials(creds)) {
+    try {
+      const { value: live } = await withWooAuthFallback(
+        wooClientOpts(creds, fetchImpl ? { fetchImpl } : {}),
+        (o) => fetchWooOrder(o, wooId as number),
+      );
+      if (String(live?.id ?? "") !== String(wooId)) throw new Error("WooCommerce devolvió otro pedido");
+      if (WOO_CANCELLED_STATUSES.includes(wooStatusOf(live))) {
+        const out = await applyWooOrderPayload(admin, creds, live);
+        if (out.applied) return undefined;
+        // Un estado más viejo o que no entra: se marca igual, como en la papelera.
+      } else {
+        // Ya volvió de la papelera (o nunca fue): manda lo que dice WooCommerce.
+        const out = await applyWooOrderPayload(admin, creds, live);
+        return out.applied ? "el pedido ya no está en la papelera: se aplicó su estado actual" : out.message;
+      }
+    } catch {
+      /* sin API (o borrado del todo): se marca con lo que se sabe */
+    }
+  }
+  const outcome = await markWooOrderDeleted(admin, creds.id, orderId);
+  return outcome === "absent" ? "el pedido no estaba en Kapta" : undefined;
+}
+
+/** Marca anulado un pedido que fue a la papelera, sin borrarlo. */
+async function markWooOrderDeleted(
+  admin: SupabaseClient,
+  storeId: string,
+  orderId: string,
+): Promise<"marked" | "already" | "absent"> {
+  const { data, error } = await admin
+    .from("orders")
+    .select("id, cancelled_at")
+    .eq("store_id", storeId)
+    .eq("shopify_order_id", orderId)
+    .maybeSingle();
+  if (error) throw new Error(`orders (papelera): ${error.message}`);
+  const row = data as { id: string; cancelled_at: string | null } | null;
+  if (!row) return "absent";
+  let outcome: "marked" | "already" = "already";
+  if (!row.cancelled_at) {
+    const { error: upErr } = await admin
+      .from("orders")
+      .update({ cancelled_at: new Date().toISOString(), financial_status: "voided" })
+      .eq("id", row.id)
+      .is("cancelled_at", null);
+    if (upErr) throw new Error(`orders (papelera): ${upErr.message}`);
+    outcome = "marked";
+  }
+  try {
+    await recomputeOrderMasterSafe(admin, [row.id]);
+  } catch {
+    /* best-effort */
+  }
+  return outcome;
+}
+
+/**
+ * Un webhook de WooCommerce (`/api/webhooks/woocommerce/[storeId]`), en este
+ * orden: el ping de alta; la tienda y su secreto; la firma
+ * (`X-WC-Webhook-Signature`); que venga del sitio guardado; el tema; y el aviso
+ * repetido (sha256 del cuerpo en `webhook_events`, `wooWebhookEventKey`).
+ * `order.created`, `order.updated` y `order.restored` pasan por `mapWooOrder` y
+ * `upsertOrders`; `order.deleted` marca, no borra.
+ */
+export async function processWooWebhook(
+  params: WooWebhookParams,
+  admin: SupabaseClient = createAdminSupabase(),
+  opts: { fetchImpl?: typeof fetch } = {},
+): Promise<WooWebhookResult> {
+  // 1) El ping de alta (`webhook_id=N`, en formulario, SIN firma). Si no recibe
+  //    un 200, WooCommerce no activa el webhook. Solo se mira que la tienda
+  //    exista: un 404 en la pantalla de WooCommerce delata una dirección mal
+  //    pegada en el momento de crearlo, no días después.
+  if (parseWooWebhookPing(params.rawBody) != null) {
+    const { creds, error } = await loadWooStoreCreds(admin, params.storeId);
+    if (error) return { status: "error", message: "No se pudo leer la tienda.", ping: true };
+    if (!creds) return { status: "unknown_store", ping: true };
+    return { status: "ping", ping: true };
+  }
+
+  const { creds, error } = await loadWooStoreCreds(admin, params.storeId);
+  if (error) {
+    console.error(`[woo-webhook] ${JSON.stringify({ storeId: params.storeId, paso: "tienda", error })}`);
+    return { status: "error", message: "No se pudo leer la tienda." };
+  }
+  if (!creds) return { status: "ignored", message: "tienda desconocida" };
+
+  // 2) Sin secreto no hay cómo saber quién lo manda: no se procesa, y Ajustes
+  //    lo dice. La pasada trae igual el pedido.
+  if (!creds.webhookSecret) {
+    await recordWooLastError(
+      admin,
+      creds.id,
+      `${WOO_WEBHOOK_ERROR_PREFIX}llegó un aviso de WooCommerce, pero la tienda no tiene guardado el secreto de los webhooks${creds.undecryptable.includes("woo_webhook_secret_enc") ? " (el guardado no se pudo descifrar)" : ""}. Guárdalo en Ajustes → WooCommerce.`,
+      creds.lastError,
+    );
+    return { status: "ignored", message: "la tienda no tiene el secreto de los webhooks" };
+  }
+
+  // 3) La firma: HMAC-SHA256 del cuerpo crudo, en base64.
+  if (!verifyWooSignature(params.rawBody, params.signature, creds.webhookSecret)) {
+    return { status: "unauthorized" };
+  }
+
+  // 4) Firmado, pero de otro sitio (un sitio de prueba con el mismo secreto):
+  //    sus pedidos no van al Master.
+  if (!wooSourceMatchesSite(params.source, creds.siteUrl)) {
+    await recordWooLastError(
+      admin,
+      creds.id,
+      `${WOO_WEBHOOK_ERROR_PREFIX}llegó un aviso firmado desde ${wooHostOf(params.source)}, que no es el sitio guardado (${wooHostOf(creds.siteUrl)}). No se procesó.`,
+      creds.lastError,
+    );
+    return { status: "ignored", message: "el aviso viene de otro sitio" };
+  }
+
+  // 5) Solo los temas de pedidos.
+  const topic = wooWebhookTopic(params.topic, params.resource, params.event);
+  if (!isWooIntakeTopic(topic)) return { status: "ignored", message: `tema ignorado: ${topic || "(sin tema)"}` };
+
+  if (!creds.siteKey) {
+    await recordWooLastError(
+      admin,
+      creds.id,
+      `${WOO_WEBHOOK_ERROR_PREFIX}la tienda no tiene la clave del sitio (woo_site_key): sin ella los pedidos no tienen id. Guárdala en Ajustes → WooCommerce.`,
+      creds.lastError,
+    );
+    return { status: "ignored", message: "la tienda no tiene la clave del sitio" };
+  }
+
+  let payload: WooOrder;
+  try {
+    payload = JSON.parse(params.rawBody) as WooOrder;
+  } catch {
+    return { status: "ignored", message: "el cuerpo no es JSON" };
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return { status: "ignored", message: "el cuerpo no es un pedido" };
+  }
+  let orderId: string;
+  try {
+    orderId = wooOrderId(creds.siteKey, payload.id);
+  } catch {
+    return { status: "ignored", message: "el pedido no trae un id válido" };
+  }
+
+  // 6) El aviso repetido: la clave única (store_id, webhook_id).
+  const webhookId = wooWebhookEventKey(topic, params.rawBody, params.deliveryId);
+  const { error: insErr } = await admin.from("webhook_events").insert({
+    store_id: creds.id,
+    topic,
+    shopify_id: orderId,
+    webhook_id: webhookId,
+    processed: false,
+  });
+  if (insErr) {
+    if ((insErr as any).code === "23505") return { status: "duplicate" };
+    console.error(`[woo-webhook] ${JSON.stringify({ storeId: creds.id, topic, paso: "webhook_events", error: insErr.message })}`);
+    return { status: "error", message: "No se pudo registrar el aviso." };
+  }
+
+  let message: string | undefined;
+  const store = { ...creds, siteKey: creds.siteKey };
+  try {
+    if (topic === "order.deleted") {
+      message = await processWooOrderDeleted(admin, store, payload.id, orderId, opts.fetchImpl);
+    } else {
+      const out = await applyWooOrderPayload(admin, store, payload);
+      if (!out.applied) message = out.message;
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`[woo-webhook] ${JSON.stringify({ storeId: creds.id, topic, orderId, error: msg })}`);
+    try {
+      await admin
+        .from("webhook_events")
+        .update({ error: msg.slice(0, 500) })
+        .match({ store_id: creds.id, webhook_id: webhookId });
+    } catch {
+      /* best-effort */
+    }
+    return { status: "error", message: msg };
+  }
+
+  await admin
+    .from("webhook_events")
+    .update({ processed: true })
+    .match({ store_id: creds.id, webhook_id: webhookId });
+  // Un aviso que entró bien borra el aviso que dejó un webhook anterior (no el
+  // de la sincronización: ese lo limpia la pasada).
+  if (creds.lastError?.startsWith(WOO_WEBHOOK_ERROR_PREFIX)) {
+    await recordWooLastError(admin, creds.id, null, creds.lastError);
+  }
+  return message ? { status: "ok", message } : { status: "ok" };
+}
+
+// ---------------------------------------------------------------------------
+// WooCommerce: la pasada `woo_orders` de la sincronización (MOM §37.11)
+// ---------------------------------------------------------------------------
+
+export interface WooSyncResult {
+  /** Corrió: la tienda tiene sitio, clave y las dos claves de la API. */
+  ran: boolean;
+  /** Pedidos que entraron o se actualizaron en `orders`. */
+  orders: number;
+  /** Pedidos leídos que no entran (`pending`, `failed`, `checkout-draft`…) o sin id válido. */
+  skipped: number;
+  pages: number;
+  /** Hasta dónde llegó (el `date_modified` más nuevo leído), o el de antes. */
+  cursor: string | null;
+  /** Llegó al final (si no, paró por el tope de páginas o el reloj y sigue en la próxima). */
+  done: boolean;
+  error: string | null;
+  /** Días (en la zona de la tienda) con pedidos del bot: para los rollups. */
+  kapsoDates: string[];
+}
+
+export interface WooSyncOptions {
+  fetchImpl?: typeof fetch;
+  /** Reloj, para las pruebas. */
+  now?: () => number;
+  budgetMs?: number;
+  maxPages?: number;
+  perPage?: number;
+  /** Piso de la primera pasada; por defecto `ORDERS_SYNC_FROM`. */
+  floor?: string;
+}
+
+/** `sync_state` de la pasada, sin escribir nunca un cursor nulo (ver `recordSyncError`). */
+async function recordWooSyncState(
+  admin: SupabaseClient,
+  storeId: string,
+  cursor: string | null,
+  error: string | null,
+): Promise<void> {
+  const row: Record<string, unknown> = {
+    store_id: storeId,
+    source: WOO_SYNC_SOURCE,
+    last_run_at: new Date().toISOString(),
+    status: error ? "error" : "ok",
+    error,
+  };
+  if (cursor) row.cursor = cursor;
+  await admin.from("sync_state").upsert(row, { onConflict: "store_id,source" });
+}
+
+/** Una página de pedidos de WooCommerce → `orders`, con los efectos del lote. */
+async function applyWooOrdersPage(
+  admin: SupabaseClient,
+  creds: WooStoreCreds & { siteKey: string },
+  items: WooOrder[],
+): Promise<{ upserted: number; skipped: number; kapsoDates: string[] }> {
+  const storeId = creds.id;
+  const store = { id: storeId, woo_site_key: creds.siteKey };
+  const ids: string[] = [];
+  for (const o of items) {
+    try {
+      ids.push(wooOrderId(creds.siteKey, o?.id));
+    } catch {
+      /* sin id válido: se cuenta abajo */
+    }
+  }
+  const existing = ids.length ? await existingWooOrders(admin, storeId, ids) : new Map<string, ExistingWooOrder>();
+
+  const byId = new Map<string, OrderRow>();
+  let skipped = 0;
+  for (const o of items) {
+    let row: OrderRow | null;
+    let before: ExistingWooOrder | null = null;
+    try {
+      const id = wooOrderId(creds.siteKey, o?.id);
+      before = existing.get(id) ?? null;
+      row = mapWooOrder(o, store, { previousCancelledAt: before?.cancelled_at ?? null });
+    } catch {
+      row = null;
+    }
+    // Lo que no entra, lo que un webhook ya dejó más nuevo entre la lectura y
+    // ahora, y el anulado que nunca fue pedido, no se escribe.
+    if (!row || isStaleWooRow(row, before) || isNeverLiveCancelledWoo(row, o, before)) {
+      skipped++;
+      continue;
+    }
+    // Con la llave por fecha una página puede repetir un pedido de la anterior,
+    // nunca dentro de la misma; aun así, uno por id (un upsert con dos filas de
+    // la misma clave falla entero).
+    byId.set(row.shopify_order_id, row);
+  }
+  const rows = [...byId.values()];
+  if (!rows.length) return { upserted: 0, skipped, kapsoDates: [] };
+
+  await upsertOrders(admin, rows);
+
+  // Pedidos del bot → lead ganado (como la pasada tag:kapso de Shopify).
+  const kapso = rows.filter((r) => hasKapsoTag(r.tags));
+  if (kapso.length) await linkOrdersToLeads(admin, storeId, kapso);
+  const kapsoDates = kapso
+    .filter((r) => r.created_at)
+    .map((r) => tzParts(r.created_at!, creds.timezone).date);
+
+  // La fila del Master de cada pedido tocado. Los carritos del mismo teléfono
+  // los saca de la cola el paso 1c de `runStoreSync`, que corre después.
+  for (const batch of chunk(rows.map((r) => r.shopify_order_id), 200)) {
+    const { data } = await admin.from("orders").select("id").eq("store_id", storeId).in("shopify_order_id", batch);
+    await recomputeOrderMasterSafe(
+      admin,
+      ((data ?? []) as { id: string }[]).map((r) => r.id),
+    );
+  }
+  return { upserted: rows.length, skipped, kapsoDates };
+}
+
+/**
+ * La red de seguridad de los webhooks de WooCommerce: los pedidos modificados
+ * desde el cursor (`sync_state`, fuente `woo_orders`), del más viejo al más
+ * nuevo:
+ * `GET /wp-json/wc/v3/orders?modified_after=<cursor>&dates_are_gmt=true&orderby=modified&order=asc&per_page=100&page=N`.
+ *
+ * Solo corre en una tienda con sitio, clave del sitio y las dos claves de la
+ * API. Nunca lanza: un fallo queda en `sync_state` y en `stores.woo_last_error`
+ * y se devuelve en `error`, y las pasadas de Shopify, de Kapso y de los leads
+ * siguen igual. Lo que avanzó antes del fallo se guarda.
+ */
+export async function syncWooOrders(
+  admin: SupabaseClient,
+  storeId: string,
+  opts: WooSyncOptions = {},
+): Promise<WooSyncResult> {
+  const result: WooSyncResult = {
+    ran: false,
+    orders: 0,
+    skipped: 0,
+    pages: 0,
+    cursor: null,
+    done: false,
+    error: null,
+    kapsoDates: [],
+  };
+  const loaded = await loadWooStoreCreds(admin, storeId);
+  if (loaded.error) {
+    result.error = `no se pudo leer la tienda: ${loaded.error}`;
+    return result;
+  }
+  const creds = loaded.creds;
+  if (!creds) return result;
+  const brokenApiSecret = creds.undecryptable.filter(
+    (c) => c === "woo_consumer_key_enc" || c === "woo_consumer_secret_enc",
+  );
+  if (brokenApiSecret.length && creds.siteUrl && creds.siteKey) {
+    result.ran = true;
+    result.error = "las claves de la API de WooCommerce guardadas no se pueden descifrar: vuelve a guardarlas en Ajustes.";
+    await recordWooSyncState(admin, storeId, null, result.error);
+    await recordWooLastError(admin, storeId, `${WOO_SYNC_ERROR_PREFIX}${result.error}`, creds.lastError);
+    return result;
+  }
+  if (!hasWooApiCredentials(creds)) return result;
+  result.ran = true;
+
+  const now = opts.now ?? Date.now;
+  const deadline = now() + (opts.budgetMs ?? WOO_SYNC_BUDGET_MS);
+  const maxPages = opts.maxPages ?? WOO_SYNC_MAX_PAGES;
+  const perPage = opts.perPage ?? WOO_SYNC_PER_PAGE;
+  let previousCursor: string | null = null;
+  let high: string | null = null;
+  try {
+    previousCursor = await getSyncCursor(admin, storeId, WOO_SYNC_SOURCE);
+    high = previousCursor;
+    let req = { modifiedAfter: wooSyncStart(previousCursor, opts.floor ?? env.ordersSyncFrom()), page: 1 };
+    let client = wooClientOpts(creds, opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {});
+    const dates = new Set<string>();
+    for (let n = 0; n < maxPages; n++) {
+      if (n > 0 && now() >= deadline) break;
+      const current = req;
+      const { value: page, auth } = await withWooAuthFallback(client, (o) =>
+        fetchWooOrdersPage(o, { modifiedAfter: current.modifiedAfter, page: current.page, perPage }),
+      );
+      client = { ...client, auth };
+      result.pages++;
+      const applied = await applyWooOrdersPage(admin, creds, page.items);
+      result.orders += applied.upserted;
+      result.skipped += applied.skipped;
+      for (const d of applied.kapsoDates) dates.add(d);
+      const pageMax = maxWooModified(page.items);
+      high = laterIso(high, pageMax);
+      if (page.items.length < perPage || (page.totalPages != null && current.page >= page.totalPages)) {
+        result.done = true;
+        break;
+      }
+      req = nextWooPage(current, pageMax);
+    }
+    result.kapsoDates = [...dates].sort();
+    result.cursor = high;
+    await recordWooSyncState(admin, storeId, high, null);
+    if (creds.lastError?.startsWith(WOO_SYNC_ERROR_PREFIX)) {
+      await recordWooLastError(admin, storeId, null, creds.lastError);
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    result.error = msg;
+    result.cursor = high;
+    // Lo que se procesó antes del fallo no se vuelve a pedir; el cursor nunca
+    // retrocede ni queda en blanco.
+    const progressed = high && high !== previousCursor ? high : null;
+    try {
+      await recordWooSyncState(admin, storeId, progressed, msg);
+    } catch {
+      /* best-effort */
+    }
+    await recordWooLastError(admin, storeId, `${WOO_SYNC_ERROR_PREFIX}${msg}`, creds.lastError);
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Full store sync (cron): Shopify reconciliation + Kapso pull + ops snapshot
 // ---------------------------------------------------------------------------
 
@@ -1193,6 +1882,8 @@ export interface SyncReport {
   /** Leads sin ubicación buscados en Shopify por celular, y cuántos tenían
    *  dirección (0228). Es la medida de si esta pista sirve. */
   shopifyLocations: { checked: number; found: number };
+  /** Pedidos de WooCommerce que entraron o cambiaron por la pasada `woo_orders` (MOM §37.11). */
+  wooOrders: number;
   errors: string[];
 }
 
@@ -1277,6 +1968,7 @@ export async function runStoreSync(
     abEnrolled: 0,
     orderMaster: 0,
     shopifyLocations: { checked: 0, found: 0 },
+    wooOrders: 0,
     errors: [],
   };
   const creds = await getStoreCreds(storeId, admin);
@@ -1420,6 +2112,24 @@ export async function runStoreSync(
       report.errors.push(`shopify_drafts: ${e.message}`);
       await recordSyncError(admin, storeId, "shopify_drafts", e.message);
     }
+  }
+
+  // 1b-bis) WooCommerce (MOM §37.11): los pedidos modificados desde el cursor
+  //     `woo_orders`, la red de seguridad de sus webhooks. Solo en una tienda
+  //     con sitio, clave del sitio y claves de la API guardadas; las demás (y
+  //     Kenku y Aurela mientras sigan solo en Shopify) no hacen ni una llamada.
+  //     No mira el token de Shopify ni lo toca: una tienda con las dos fuentes
+  //     recibe las dos. Nunca lanza, tiene su propio reloj y su fallo queda en
+  //     sync_state y en `stores.woo_last_error`. Va antes de 1c para que el
+  //     carrito de una clienta que compró en WooCommerce salga de la cola en
+  //     esta misma corrida.
+  try {
+    const woo = await syncWooOrders(admin, storeId);
+    report.wooOrders = woo.orders;
+    for (const d of woo.kapsoDates) affectedDates.add(d);
+    if (woo.error) report.errors.push(`woo_orders: ${woo.error}`);
+  } catch (e: any) {
+    report.errors.push(`woo_orders: ${e.message}`);
   }
 
   // 1c) Carritos que ya son pedido. Va DESPUÉS de 1a-bis (todos los pedidos) y

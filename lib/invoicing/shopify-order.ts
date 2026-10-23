@@ -15,11 +15,21 @@
 // motivo, nunca un ítem inventado ni un cero supuesto: una boleta enviada a
 // SUNAT no se borra. Emitir de menos se arregla a mano; emitir de más, no.
 // `mapOrderForInvoice` y `fetchOrderForInvoice` no lanzan: devuelven el motivo.
+//
+// LA FOTO (MOM §35.10, owner 23-10-2026). Shopify cierra Kenku Perú y Aurela el
+// 28-10-2026. Si la tienda ya no tiene token, o Shopify contesta por ella que ya
+// no está, la boleta sale de la foto que se guardó mientras Shopify respondía
+// (`order_invoice_snapshots`, 0274), con el mismo mapeo, y la lectura lo dice.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase } from "@/lib/db";
 import { decryptOrNull } from "@/lib/crypto";
-import { shopifyGraphQL } from "@/lib/shopify";
+import {
+  isShopifyShopGone,
+  shopifyFailureDetail,
+  shopifyGraphQL,
+  type ShopifyQueryCost,
+} from "@/lib/shopify";
 import { OWN_APP, ownAppTokenForUseById } from "@/lib/shopify-own-app";
 import { extractNumericId } from "@/lib/shopify-urls";
 import { CHECKOUT_GATEWAYS } from "@/lib/payment-gateway";
@@ -110,6 +120,11 @@ export type InvoiceOrderRead =
         netPaymentCents: number;
         outstandingCents: number;
       };
+      /**
+       * Solo si la lectura salió de la foto del pedido (MOM §35.10) y no de
+       * Shopify en vivo: cuándo se tomó. La boleta lo guarda en su base.
+       */
+      snapshot?: { fetchedAt: string };
     }
   | { ok: false; reason: InvoiceReason; detail?: string };
 
@@ -492,6 +507,12 @@ export function webPrepaidConfirmed(read: InvoiceOrderOk): boolean {
 
 // ── La lectura en Shopify ────────────────────────────────────────────────────
 
+/** Con qué se entra a la tienda en Shopify para leer un pedido. */
+export interface ShopifyConn {
+  domain: string;
+  token: string;
+}
+
 /**
  * El dominio y el token de Shopify de la tienda, o null si no tiene conexión.
  * Lanza si la tienda no se pudo leer o el token no se pudo descifrar.
@@ -500,13 +521,14 @@ export function webPrepaidConfirmed(read: InvoiceOrderOk): boolean {
  * (0271): `getStoreCreds` (lib/ingest.ts) descifra todos los
  * secretos de la tienda —un secreto ajeno roto bloquearía la boleta— y arrastra
  * el módulo de ingesta entero. Además confunde «no se pudo leer» con «no hay
- * tienda», y aquí son motivos distintos: uno se reintenta y el otro no.
+ * tienda», y aquí son motivos distintos: uno se reintenta y el otro no. La usa
+ * también la foto del pedido (lib/invoicing/snapshots.ts).
  */
-async function shopifyConnOf(
+export async function shopifyConnOf(
   admin: SupabaseClient,
   storeId: string,
   fetchImpl?: typeof fetch,
-): Promise<{ domain: string; token: string } | null> {
+): Promise<ShopifyConn | null> {
   const { data, error } = await admin
     .from("stores")
     .select("shopify_domain,shopify_token_enc,shopify_app")
@@ -527,21 +549,128 @@ async function shopifyConnOf(
 }
 
 /**
- * Por qué falló la llamada, en corto y sin nada de la respuesta: el cuerpo de un
- * error puede traer cualquier cosa, y el motivo se guarda y se muestra.
+ * Pide ORDER_FOR_INVOICE_QUERY para un pedido, con su tope de tiempo, y
+ * devuelve lo que contestó Shopify (`data`) sin mirarlo. Lanza si la llamada
+ * falla. Es la misma llamada para la boleta y para su foto: la foto guarda
+ * exactamente lo que la boleta leería.
  */
-function readFailureDetail(e: unknown): string {
-  const name = e instanceof Error ? e.name : "";
-  const message = e instanceof Error ? e.message : String(e);
-  if (name === "TimeoutError" || name === "AbortError") return "Shopify no respondió a tiempo.";
-  if (name === "SyntaxError") return "Shopify contestó algo que no se entiende.";
-  const http = /^Shopify GraphQL HTTP (\d{3})/.exec(message);
-  if (http) return `Shopify contestó HTTP ${http[1]}.`;
-  if (message.startsWith("Shopify GraphQL errors")) {
-    const code = /"code"\s*:\s*"([A-Z_]{2,40})"/.exec(message);
-    return code ? `Shopify devolvió un error (${code[1]}).` : "Shopify devolvió un error de GraphQL.";
+export async function requestOrderForInvoice(
+  conn: ShopifyConn,
+  numericId: string,
+  deps: { fetchImpl?: typeof fetch; onCost?: (cost: ShopifyQueryCost) => void } = {},
+): Promise<unknown> {
+  const baseFetch = deps.fetchImpl ?? fetch;
+  return shopifyGraphQL<unknown>({
+    domain: conn.domain,
+    token: conn.token,
+    fetchImpl: (url, init) => baseFetch(url, { ...init, signal: AbortSignal.timeout(SHOPIFY_READ_TIMEOUT_MS) }),
+    query: ORDER_FOR_INVOICE_QUERY,
+    variables: { id: shopifyOrderGidOf(numericId) },
+    ...(deps.onCost ? { onCost: deps.onCost } : {}),
+  });
+}
+
+/** El gid de un pedido de Shopify. */
+export function shopifyOrderGidOf(numericId: string): string {
+  return `gid://shopify/Order/${numericId}`;
+}
+
+// ── La foto del pedido (MOM §35.10, owner 23-10-2026) ────────────────────────
+//
+// Shopify cierra Kenku Perú y Aurela el 28-10-2026, y los pedidos que ya se
+// vendieron ahí se siguen cobrando —y facturando— después. Mientras Shopify
+// responde, el cron `invoice-snapshots` guarda lo que esta lectura devolvería
+// (`order_invoice_snapshots`, 0274). Cuando la tienda ya no tiene token, o
+// Shopify contesta por ella que ya no está (401, 402, 403, 404, 423), la boleta
+// sale de esa foto, con el mismo mapeo, y lo dice. Con Shopify funcionando
+// nunca se mira la foto: se lee en vivo, como siempre.
+
+/** La tabla de las fotos (0274). */
+export const INVOICE_SNAPSHOT_TABLE = "order_invoice_snapshots";
+
+/**
+ * Un id de pedido de Shopify tal cual: el número, o su gid. Un id de
+ * WooCommerce (`wc-kp-1532`) no lo es, aunque `extractNumericId` le saque un
+ * número.
+ */
+const SHOPIFY_ORDER_ID_RE = /^(?:gid:\/\/shopify\/Order\/)?(\d+)$/;
+
+/** «La tabla no existe» (Postgres 42P01, PostgREST PGRST205) y nombra la de las fotos. */
+function isSnapshotTableMissing(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const e = error as { code?: unknown; message?: unknown; details?: unknown; hint?: unknown };
+  if (e.code !== "42P01" && e.code !== "PGRST205") return false;
+  return [e.message, e.details, e.hint].some((t) => typeof t === "string" && t.includes(INVOICE_SNAPSHOT_TABLE));
+}
+
+/** «24/10/2026 15:04» en hora de Lima (UTC−5 todo el año). */
+function limaStamp(iso: string): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return iso;
+  const d = new Date(t - 5 * 3_600_000);
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `${two(d.getUTCDate())}/${two(d.getUTCMonth() + 1)}/${d.getUTCFullYear()} ${two(d.getUTCHours())}:${two(d.getUTCMinutes())}`;
+}
+
+/**
+ * La boleta desde la foto del pedido, cuando Shopify ya no contesta por la
+ * tienda. `failure` es lo que dijo la lectura en vivo, y es lo que vuelve si no
+ * hay foto: sin foto, nada cambia. Solo para un pedido que es de Shopify según
+ * `orders.platform` y con su id de Shopify tal cual; un pedido de WooCommerce
+ * nunca sale de una foto.
+ */
+async function readFromSnapshot(
+  admin: SupabaseClient,
+  storeId: string,
+  shopifyOrderId: string,
+  failure: InvoiceOrderRead,
+): Promise<InvoiceOrderRead> {
+  const match = SHOPIFY_ORDER_ID_RE.exec(shopifyOrderId.trim());
+  if (!match) return failure;
+  const numericId = match[1]!;
+
+  const snap = await admin
+    .from(INVOICE_SNAPSHOT_TABLE)
+    .select("order_id,payload,fetched_at")
+    .eq("store_id", storeId)
+    .eq("shopify_order_gid", shopifyOrderGidOf(numericId))
+    .maybeSingle();
+  // Sin la 0274 no hay fotos: es lo mismo que no tener la de este pedido.
+  if (snap.error) {
+    return isSnapshotTableMissing(snap.error) ? failure : fail("lectura_fallida", "No se pudo leer la foto del pedido.");
   }
-  return "No se pudo conectar con Shopify.";
+  const row = snap.data as { order_id?: unknown; payload?: unknown; fetched_at?: unknown } | null;
+  if (!row) return failure;
+  // `payload` es el `data` de la respuesta: `{ order: … }` (0274).
+  const payload = row.payload;
+  if (
+    typeof row.order_id !== "string" ||
+    typeof row.fetched_at !== "string" ||
+    !payload ||
+    typeof payload !== "object" ||
+    Array.isArray(payload) ||
+    !("order" in payload)
+  ) {
+    return fail("lectura_fallida", "La foto del pedido no se entiende.");
+  }
+  const fetchedAt = row.fetched_at;
+
+  // La plataforma la dice el pedido, nunca la forma de su id.
+  const ord = await admin
+    .from("orders")
+    .select("platform,shopify_order_id")
+    .eq("id", row.order_id)
+    .eq("store_id", storeId)
+    .maybeSingle();
+  if (ord.error) return fail("lectura_fallida", "No se pudo leer el pedido de la foto.");
+  const order = ord.data as { platform?: unknown; shopify_order_id?: unknown } | null;
+  if (!order || order.platform !== "shopify" || order.shopify_order_id !== numericId) return failure;
+
+  const label = `Foto del pedido del ${limaStamp(fetchedAt)}`;
+  const read = mapOrderForInvoice((payload as { order: unknown }).order);
+  if (!read.ok) return { ...read, detail: read.detail ? `${label}: ${read.detail}` : `${label}.` };
+  if (numericIdOf(read.orderGid) !== numericId) return fail("lectura_fallida", `${label}: es de otro pedido.`);
+  return { ...read, snapshot: { fetchedAt } };
 }
 
 /**
@@ -550,6 +679,11 @@ function readFailureDetail(e: unknown): string {
  * vuelve a intentar en la próxima pasada); una tienda sin token,
  * `sin_token_shopify`; un pedido que Shopify no devuelve —por ejemplo, uno de
  * más de 60 días sin `read_all_orders`—, `no_encontrado`.
+ *
+ * Si la tienda ya no tiene token, o Shopify contesta por ella que ya no está
+ * (401, 402, 403, 404, 423), la boleta sale de la foto del pedido, si la hay
+ * (MOM §35.10), y la lectura lo dice (`snapshot`). Sin foto, el motivo es el
+ * mismo de siempre.
  */
 export async function fetchOrderForInvoice(
   input: { storeId: string; shopifyOrderId: string },
@@ -557,27 +691,22 @@ export async function fetchOrderForInvoice(
 ): Promise<InvoiceOrderRead> {
   const numericId = numericIdOf(input.shopifyOrderId);
   if (!numericId) return fail("no_encontrado", "El pedido no tiene id de Shopify.");
+  const admin = deps.admin ?? createAdminSupabase();
 
-  let conn: { domain: string; token: string } | null;
+  let conn: ShopifyConn | null;
   try {
-    conn = await shopifyConnOf(deps.admin ?? createAdminSupabase(), input.storeId, deps.fetchImpl);
+    conn = await shopifyConnOf(admin, input.storeId, deps.fetchImpl);
   } catch {
     return fail("lectura_fallida", "No se pudo leer la conexión de la tienda con Shopify.");
   }
-  if (!conn) return fail("sin_token_shopify");
+  if (!conn) return readFromSnapshot(admin, input.storeId, input.shopifyOrderId, fail("sin_token_shopify"));
 
-  const baseFetch = deps.fetchImpl ?? fetch;
   let data: unknown;
   try {
-    data = await shopifyGraphQL<unknown>({
-      domain: conn.domain,
-      token: conn.token,
-      fetchImpl: (url, init) => baseFetch(url, { ...init, signal: AbortSignal.timeout(SHOPIFY_READ_TIMEOUT_MS) }),
-      query: ORDER_FOR_INVOICE_QUERY,
-      variables: { id: `gid://shopify/Order/${numericId}` },
-    });
+    data = await requestOrderForInvoice(conn, numericId, { fetchImpl: deps.fetchImpl });
   } catch (e) {
-    return fail("lectura_fallida", readFailureDetail(e));
+    const failure = fail("lectura_fallida", shopifyFailureDetail(e));
+    return isShopifyShopGone(e) ? readFromSnapshot(admin, input.storeId, input.shopifyOrderId, failure) : failure;
   }
 
   // Sin `order` en la respuesta no es «no existe»: es una respuesta que no

@@ -25,6 +25,7 @@ import {
 } from "@/lib/aliclik";
 import {
   listActiveShopifyCatalogVariants,
+  shopifyFailureDetail,
   type ActiveShopifyCatalogVariant,
   type ShopifyClientOpts,
 } from "@/lib/shopify";
@@ -659,7 +660,10 @@ export async function syncAliclikCatalog(
 
   // Para asociar por nombre se usa primero el catálogo activo de Shopify. Los
   // productos observados en pedidos quedan como respaldo histórico.
-  const shopifyProducts = await loadShopifySkuNames(storeId, admin, 365, shopifyOpts);
+  const shopifyProducts = await loadShopifySkuNames(storeId, admin, 365, shopifyOpts, {
+    onShopifyError: (detail) =>
+      out.errors.push(`Catálogo activo de Shopify: ${detail} Se asoció con el historial de pedidos.`),
+  });
   out.shopifySkus = shopifyProducts.size;
   if (shopifyProducts.size) {
     // Un nombre que apunta a DOS EAN distintos es ambiguo: no se siembra ninguno
@@ -853,6 +857,15 @@ export function collectShopifySkuDetails(
   return out;
 }
 
+/** Opciones de la carga de SKU de la tienda. */
+export interface SkuLoadOpts {
+  /**
+   * El catálogo activo de Shopify no se pudo leer y se siguió solo con el
+   * historial de pedidos. Recibe por qué, en corto y sin nada de la respuesta.
+   */
+  onShopifyError?: (detail: string) => void;
+}
+
 /**
  * SKU → producto y variante de Shopify.
  *
@@ -864,6 +877,7 @@ export async function loadShopifySkuDetails(
   admin: SupabaseClient = createAdminSupabase(),
   sinceDays = 365,
   shopifyOpts?: ShopifyClientOpts,
+  opts: SkuLoadOpts = {},
 ): Promise<Map<string, ShopifySkuDetails>> {
   const since = new Date(Date.now() - sinceDays * 86_400_000).toISOString();
   const out = new Map<string, ShopifySkuDetails>();
@@ -871,9 +885,21 @@ export async function loadShopifySkuDetails(
   // Fuente primaria: catálogo activo real. Antes esta pantalla se armaba solo
   // con productos que ya habían aparecido en `orders.line_items`; por eso un
   // producto nuevo como Astaxantina era invisible hasta conseguir una venta.
+  //
+  // Si Shopify falla —caído, sin permiso o con la tienda dada de baja (Kenku y
+  // Aurela salen de Shopify el 28-10-2026)— no se corta nada: se sigue con el
+  // historial de pedidos de abajo, que es como funcionaba antes. Lo único que se
+  // pierde es el producto que todavía no se vendió nunca. Antes el error subía:
+  // el sync del catálogo de Aliclik se cortaba después de guardar los SKU y sin
+  // mapeo automático, agencias ni tamaños, y la pantalla de mapeo no cargaba.
   if (shopifyOpts) {
-    const variants = await listActiveShopifyCatalogVariants(shopifyOpts);
-    collectActiveShopifyCatalogDetails(variants, out);
+    let variants: ActiveShopifyCatalogVariant[] | null = null;
+    try {
+      variants = await listActiveShopifyCatalogVariants(shopifyOpts);
+    } catch (e) {
+      opts.onShopifyError?.(shopifyFailureDetail(e));
+    }
+    if (variants) collectActiveShopifyCatalogDetails(variants, out);
   }
 
   // Paginado: PostgREST corta en 1000 filas por respuesta.
@@ -918,8 +944,9 @@ export async function loadShopifySkuNames(
   admin: SupabaseClient = createAdminSupabase(),
   sinceDays = 365,
   shopifyOpts?: ShopifyClientOpts,
+  opts: SkuLoadOpts = {},
 ): Promise<Map<string, string>> {
-  const details = await loadShopifySkuDetails(storeId, admin, sinceDays, shopifyOpts);
+  const details = await loadShopifySkuDetails(storeId, admin, sinceDays, shopifyOpts, opts);
   return new Map(
     [...details.values()]
       .filter((item): item is ShopifySkuDetails & { shopifySku: string } => Boolean(item.shopifySku))

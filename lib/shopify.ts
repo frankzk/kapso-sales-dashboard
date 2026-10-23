@@ -427,10 +427,40 @@ export interface ShopifyClientOpts {
   fetchImpl?: typeof fetch;
 }
 
+/**
+ * Tope de cada llamada a Shopify (23-10-2026, salida de Kenku y Aurela de
+ * Shopify). Antes no había ninguno: un Shopify que acepta la conexión y no
+ * contesta —lo esperable mientras una tienda se da de baja— dejaba «Generar
+ * pedido» en «Generando…» y se comía el tiempo del sync. 30 s es mucho más de
+ * lo que tarda cualquier página del sync, así que una llamada que hoy sale bien
+ * sigue saliendo igual. Quien necesita otro tope lo pide (`timeoutMs`), o pone
+ * su propia señal en `fetchImpl`, que gana (la boleta usa 15 s).
+ */
+export const SHOPIFY_GRAPHQL_TIMEOUT_MS = 30_000;
+
+/** El costo de una consulta y el cupo de la tienda (`extensions.cost` de la Admin API). */
+export interface ShopifyQueryCost {
+  requestedQueryCost?: number;
+  actualQueryCost?: number | null;
+  throttleStatus?: {
+    maximumAvailable?: number;
+    currentlyAvailable?: number;
+    restoreRate?: number;
+  };
+}
+
 export async function shopifyGraphQL<T = any>(
   opts: ShopifyClientOpts & {
     query: string;
     variables?: Record<string, unknown>;
+    /** Tope de esta llamada; por defecto `SHOPIFY_GRAPHQL_TIMEOUT_MS`. */
+    timeoutMs?: number;
+    /**
+     * Recibe el costo y el cupo que Shopify informa, también cuando contesta
+     * THROTTLED. Lo usa quien reparte el cupo de la tienda (las fotos de
+     * boletas, lib/invoicing/snapshots.ts). Si lanza, se ignora.
+     */
+    onCost?: (cost: ShopifyQueryCost) => void;
   },
 ): Promise<T> {
   const apiVersion = opts.apiVersion ?? SHOPIFY_DEFAULT_API_VERSION;
@@ -445,6 +475,7 @@ export async function shopifyGraphQL<T = any>(
       "X-Shopify-Access-Token": opts.token,
     },
     body: JSON.stringify({ query: opts.query, variables: opts.variables ?? {} }),
+    signal: AbortSignal.timeout(opts.timeoutMs ?? SHOPIFY_GRAPHQL_TIMEOUT_MS),
   });
 
   if (!res.ok) {
@@ -452,12 +483,63 @@ export async function shopifyGraphQL<T = any>(
     throw new Error(`Shopify GraphQL HTTP ${res.status}: ${text.slice(0, 500)}`);
   }
   const json: any = await res.json();
+  if (opts.onCost) {
+    const cost = json?.extensions?.cost;
+    if (cost && typeof cost === "object") {
+      try {
+        opts.onCost(cost as ShopifyQueryCost);
+      } catch {
+        // Quien mide no puede tumbar la llamada.
+      }
+    }
+  }
   if (json?.errors) {
     throw new Error(
       `Shopify GraphQL errors: ${JSON.stringify(json.errors).slice(0, 500)}`,
     );
   }
   return json.data as T;
+}
+
+/** El código HTTP de un error de `shopifyGraphQL` («Shopify GraphQL HTTP 402: …»), o null. */
+export function shopifyHttpStatusOf(e: unknown): number | null {
+  const message = e instanceof Error ? e.message : typeof e === "string" ? e : "";
+  const m = /^Shopify GraphQL HTTP (\d{3})\b/.exec(message);
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * Lo que Shopify contesta por una tienda que ya no está, o a la que ya no se
+ * puede entrar: token revocado o app desinstalada (401), tienda sin pagar o
+ * congelada (402), prohibida (403), que no existe (404) o bloqueada (423). No
+ * entra un 5xx ni un tiempo agotado: eso es Shopify con un mal momento, y se
+ * reintenta.
+ */
+export const SHOPIFY_SHOP_GONE_STATUSES: ReadonlySet<number> = new Set([401, 402, 403, 404, 423]);
+
+/** ¿El error dice que la tienda ya no responde por sí misma (cerrada, sin pagar, sin acceso)? */
+export function isShopifyShopGone(e: unknown): boolean {
+  const status = shopifyHttpStatusOf(e);
+  return status !== null && SHOPIFY_SHOP_GONE_STATUSES.has(status);
+}
+
+/**
+ * Por qué falló una llamada a Shopify, en corto y sin nada de la respuesta: el
+ * cuerpo de un error puede traer cualquier cosa, y el motivo se guarda y se
+ * muestra.
+ */
+export function shopifyFailureDetail(e: unknown): string {
+  const name = e instanceof Error ? e.name : "";
+  const message = e instanceof Error ? e.message : String(e);
+  if (name === "TimeoutError" || name === "AbortError") return "Shopify no respondió a tiempo.";
+  if (name === "SyntaxError") return "Shopify contestó algo que no se entiende.";
+  const status = shopifyHttpStatusOf(e);
+  if (status !== null) return `Shopify contestó HTTP ${status}.`;
+  if (message.startsWith("Shopify GraphQL errors")) {
+    const code = /"code"\s*:\s*"([A-Z_]{2,40})"/.exec(message);
+    return code ? `Shopify devolvió un error (${code[1]}).` : "Shopify devolvió un error de GraphQL.";
+  }
+  return "No se pudo conectar con Shopify.";
 }
 
 /**

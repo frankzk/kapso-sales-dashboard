@@ -3643,3 +3643,31 @@ describe("emitInvoiceNow: lo pagado antes de «Emitir desde» sale con el botón
     });
   });
 });
+
+describe("runInvoiceSweep: una boleta leída de la foto del pedido (MOM §35.10)", () => {
+  // Shopify cierra Kenku y Aurela el 28-10-2026; `fetchOrderForInvoice` lee la
+  // foto que se tomó mientras Shopify respondía. La boleta sale igual, y su base
+  // (`order_invoices.basis`) deja dicho de qué foto salió.
+  it("pide el turno con la hora de la foto en la base; lo demás, igual", async () => {
+    const db = world({ mode: "simulacion" });
+    addOrder(db, 1);
+    const deps = makeDeps();
+    const live = okRead("shp-1") as Extract<InvoiceOrderRead, { ok: true }>;
+    deps.fetchOrder.mockResolvedValue({ ...live, snapshot: { fetchedAt: "2026-10-26T20:04:31.000Z" } });
+    await sweep(db, deps);
+    expect(claims(db)).toHaveLength(1);
+    expect(claims(db)[0]!.args.p_basis).toEqual({
+      prepaid: false,
+      payments: [{ id: "pay-1", amount: 150, source: "flow", accountIds: ["acc-flow"], validatedAt: PAGADO }],
+      foto_shopify: "2026-10-26T20:04:31.000Z",
+    });
+    expect(invoice(db, "ord-1")).toMatchObject({ status: "simulada" });
+  });
+
+  it("leída en vivo, la base no lleva la marca", async () => {
+    const db = world({ mode: "simulacion" });
+    addOrder(db, 1);
+    await sweep(db, makeDeps());
+    expect(claims(db)[0]!.args.p_basis).not.toHaveProperty("foto_shopify");
+  });
+});

@@ -1579,7 +1579,14 @@ function redactSecrets(text: string, secrets: ReadonlySet<string>): string {
 
 /** La boleta lista para pedir el turno, o por qué no. */
 type PreparedSale =
-  | { ok: true; invoiceId: string; orderName: string | null; payload: SimplefactSalePayload }
+  | {
+      ok: true;
+      invoiceId: string;
+      orderName: string | null;
+      payload: SimplefactSalePayload;
+      /** Si el pedido se leyó de su foto (MOM §35.10): cuándo se tomó. Va en la base del comprobante. */
+      snapshotFetchedAt: string | null;
+    }
   | { ok: false; reason: InvoiceReason; detail: string | null };
 
 /**
@@ -1608,7 +1615,7 @@ async function prepareSale(
   const orderName = facts.orderName ?? read.name;
   const payload = buildSalePayload({ invoiceId, orderName, items: read.items, totalCents: elig.totalCents });
   if (!payload) return { ok: false, reason: "no_cuadra", detail: null };
-  return { ok: true, invoiceId, orderName, payload };
+  return { ok: true, invoiceId, orderName, payload, snapshotFetchedAt: read.snapshot?.fetchedAt ?? null };
 }
 
 /**
@@ -1635,7 +1642,9 @@ function claimArgs(
     p_total: elig.totalCents / 100,
     p_paid_at: elig.paidAt,
     p_order_name: prepared.orderName,
-    p_basis: elig.basis,
+    // Una boleta armada con la foto del pedido (MOM §35.10) lo deja dicho en su
+    // base, con la hora de la foto. Leída en vivo, la base es la de siempre.
+    p_basis: prepared.snapshotFetchedAt ? { ...elig.basis, foto_shopify: prepared.snapshotFetchedAt } : elig.basis,
     p_request: prepared.payload,
     ...(extra.mode ? { p_mode: extra.mode } : {}),
     ...(extra.createdBy ? { p_created_by: extra.createdBy } : {}),

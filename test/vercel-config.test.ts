@@ -85,7 +85,9 @@ describe("vercel.json", () => {
     // 27: guía Aliclik automática el día programado (MOM §6.2, 16-10-2026).
     // 28: renovación del acceso de las tiendas con app propia de Shopify
     //     (0271, MOM §36.3, 23-10-2026).
-    expect(crons).toHaveLength(28);
+    // 29: la foto de los pedidos de Shopify para sus boletas, antes del cierre
+    //     de Shopify de Kenku y Aurela (0274, MOM §35.10, 23-10-2026).
+    expect(crons).toHaveLength(29);
     for (const c of crons) {
       expect(c.path.startsWith("/api/cron/")).toBe(true);
       expect(c.schedule.trim().split(/\s+/)).toHaveLength(5);

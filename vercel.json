@@ -112,6 +112,10 @@
     {
       "path": "/api/cron/shopify-own-app-tokens",
       "schedule": "23 * * * *"
+    },
+    {
+      "path": "/api/cron/invoice-snapshots",
+      "schedule": "4,14,24,34,44,54 * * * *"
     }
   ]
 }

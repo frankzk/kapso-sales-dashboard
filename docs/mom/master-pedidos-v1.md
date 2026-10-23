@@ -49,8 +49,11 @@ heredados continúan disponibles como evidencia y compatibilidad.
 
 ### Pedido
 
-Orden comercial creada en Shopify. Tiene una identidad única y puede sobrevivir
-a múltiples intentos logísticos.
+Orden comercial creada en la tienda (Shopify o WooCommerce). Tiene una
+identidad única y puede sobrevivir a múltiples intentos logísticos. De qué
+plataforma vino cada pedido lo guarda `orders.platform` (§37, 23-10-2026): hasta
+el cierre de Shopify (28-10-2026) todos son de Shopify, y un pedido de
+WooCommerce entra a la misma tabla y al mismo Master, con la misma forma.
 
 **No todos nacen de una conversación.** Desde agosto de 2026 las dos tiendas
 venden también por un formulario COD en la web (EasySell, etiqueta
@@ -63,8 +66,10 @@ trajo viaja en `orders.utm_meta`, y las reglas para leerlo están en
 clienta sola en la web— se decide por hechos que la sincronización no borra,
 no por etiquetas locales (§17.3).
 
-**Canal de venta (15-10-2026).** Todos los pedidos nacen en Shopify, pero no
-por el mismo camino, y lo dicen las etiquetas que cada camino le pone. El
+**Canal de venta (15-10-2026).** Todos los pedidos nacen en la tienda, pero no
+por el mismo camino, y lo dicen las etiquetas que cada camino le pone. Un
+pedido de WooCommerce no trae etiquetas: Kapta le escribe las mismas palabras
+de esta tabla desde sus metadatos (§37.5), así que la regla no cambia. El
 Master lo guarda en `order_master.sales_channel` (0264) y lo filtra con la
 píldora «Canal» (parámetro `cn` de la URL). Un pedido tiene un solo canal; si
 lleva marcas de dos, gana el primero de esta lista —quien cerró la venta antes
@@ -14278,7 +14283,9 @@ qué fila pide y quién la pidió, 15-10-2026), y la 0262 (el turno que vuelve a
 revisar que la empresa recibió el pago, 15-10-2026), que se aplican a mano, en
 ese orden, antes de su código (35.8). La 0269 (el turno que deja a «Emitir esta
 boleta» emitir lo pagado antes de «Emitir desde», 15-10-2026) va después de la
-0262, también a mano y antes de su código. Están también las reglas puras, el
+0262, también a mano y antes de su código. La 0274 (la foto del pedido para
+cuando Shopify ya no responde, 23-10-2026, 35.10) va después de la 0273, igual.
+Están también las reglas puras, el
 cliente de SimpleFact, el barrido (`/api/cron/invoices`), la sección «Boletas
 y facturas» de Ajustes y el panel «Comprobante» del drawer, con su «Emitir esta
 boleta» (35.7), que solo emite en producción.
@@ -14439,7 +14446,9 @@ pagado antes de «Emitir desde» no se simula ni se emite.
 
 **Justo antes de emitir, Kapta vuelve a leer el pedido en Shopify**
 (`fetchOrderForInvoice`), porque lo guardado no alcanza para armar la boleta
-(35.5). Esa lectura bloquea un pedido de prueba (`prueba`), anulado,
+(35.5). Si la tienda ya no tiene Shopify —Kenku y Aurela desde el
+28-10-2026—, lee la foto del pedido que se tomó mientras Shopify respondía
+(35.10), con las mismas reglas. Esa lectura bloquea un pedido de prueba (`prueba`), anulado,
 reembolsado o en otra moneda, uno editado (`editado`, `cantidad_editada`,
 `envio_editado`), con propina, con tarjeta de regalo (`gift_card`), con una
 línea gratis (`linea_gratuita`), con impuesto sumado encima
@@ -15146,6 +15155,100 @@ Implementación:
   el permiso, en `lib/permissions.ts`.
 - Pruebas: `test/invoicing-*.test.ts` y `scripts/sql/invoices_smoke.sql`.
 
+### 35.10 La foto del pedido para cuando Shopify ya no responde (owner, 23-10-2026)
+
+**Por qué.** Shopify cierra Kenku Perú y Aurela el 28-10-2026 (UTC; se
+planifica para el 27-10 a las 19:00 de Lima). La boleta vuelve a leer el pedido
+en Shopify justo antes de emitir (35.3), y los pedidos vendidos en Shopify se
+siguen cobrando después del cierre: al 23-10-2026, 11.036 pedidos no anulados
+creados desde el 29-08 no tenían boleta (Kenku 9.171, Aurela 1.865). Sin una
+copia de esa lectura, ninguno la tendría.
+
+**La decisión del owner (23-10-2026):** guardar ahora, mientras Shopify
+responde, lo que esa lectura devuelve. Los pedidos de WooCommerce se leerán con
+su propio lector, más adelante (§37).
+
+**La foto** (`order_invoice_snapshots`, 0274). Por pedido de Shopify,
+exactamente lo que contesta `ORDER_FOR_INVOICE_QUERY` (el `data` de la
+respuesta, `{order: …}`; `order: null` si Shopify no lo devolvió) y cuándo se
+pidió (`fetched_at`). Nada de la clienta: la consulta no lo pide. Solo el
+servidor la lee y la escribe.
+
+**Qué pedidos.** El cron `/api/cron/invoice-snapshots`, cada 10 minutos (en los
+minutos 4, 14, 24, 34, 44 y 54, lejos del sync y del barrido de boletas), toma
+por tienda lo que la base dice que falta (`invoice_snapshot_candidates`). Entra
+un pedido:
+
+- de una tienda activa de una organización que factura en Kapta (con un RUC
+  dado de alta, 35.2). Las tiendas cliente facturan fuera (§29.15) y su
+  Shopify no se toca;
+- de Shopify según `orders.platform` (0273, §37), con su id de Shopify;
+- creado desde el **29-08-2026 00:00 UTC**: el cierre menos los 60 días que
+  mira el barrido de boletas (`invoice_candidates`, 0260). Un pedido más viejo
+  no vuelve a entrar al barrido después del cierre;
+- sin comprobante real vivo (emitiendo, emitida, en duda o externa);
+- sin foto y no anulado, o con una foto anterior a su último cambio en Shopify
+  (`orders.updated_at`): así la foto queda con lo último que dijo Shopify.
+
+Primero los que no tienen foto, y entre ellos primero los que siguen en curso
+(sin macroetapa o con una que no es «Finalizado»), del más nuevo al más viejo.
+
+**Sin quitarle Shopify a nadie.** Un pedido a la vez por tienda, a lo más 100
+por pasada, y ninguno nuevo pasados 20 s. Antes de cada pedido espera a que la
+tienda tenga en Shopify el cupo que pide la consulta más una reserva del 25 %,
+para que el sync, los webhooks y «Generar pedido» nunca se queden sin él. Si
+Shopify contesta THROTTLED, o falla, la tienda para hasta la próxima pasada y
+no se marca nada. La base guarda solo un pedido de Shopify de esa tienda y con
+su gid, y nunca una foto más vieja sobre una más nueva
+(`invoice_snapshot_put`). La línea de log lleva conteos por tienda: ni pedidos,
+ni clientas, ni el token. Con `?dry=1` solo cuenta lo que falta.
+
+**Cuándo se usa.** Solo si la tienda ya no tiene token de Shopify, o si Shopify
+contesta por ella HTTP 401, 402, 403, 404 o 423 (la tienda ya no está, o ya no
+se puede entrar). Ahí `fetchOrderForInvoice` arma la boleta con la foto, con el
+mismo mapeo (`mapOrderForInvoice`), y todo lo de 35.3 vale igual: los
+bloqueos, el total contra el de Kapta, el prepago web por Flow y el turno.
+**Con Shopify funcionando se lee en vivo, como siempre**, aunque haya foto. Un
+5xx, un tiempo agotado o un error de GraphQL no usan la foto: se reintentan en
+la próxima pasada. Sin foto, el motivo es el de siempre (`sin_token_shopify`,
+`lectura_fallida`).
+
+**Lo dice.** Una boleta armada con la foto lleva en su base
+(`order_invoices.basis`) `foto_shopify`, con la hora de la foto. Un bloqueo que
+sale de la foto lo dice en su detalle: «Foto del pedido del 26/10/2026 15:04:
+…».
+
+**Nunca un pedido de WooCommerce.** Se decide por `orders.platform`, nunca por
+la forma del id: la foto solo se busca con un id de Shopify tal cual (un
+`wc-kp-1532` no lo es, aunque se le pueda sacar un número), su pedido tiene que
+ser de Shopify y de esa tienda, y la base no guarda la foto de otro pedido.
+
+**Lo que no cubre.**
+
+- Lo que cambie en Shopify después de la última foto. Hasta el cierre, un
+  pedido que cambia se vuelve a tomar; después ya no se puede ver.
+- Un pedido creado antes del 29-08 que alguien quiera emitir con «Emitir esta
+  boleta» después del cierre: queda en `sin_token_shopify`. Si no puede
+  esperar, se emite a mano en SimpleFact y se registra como `externa` (35.4).
+- Los pedidos de WooCommerce: esperan su lector (§37).
+
+Implementación:
+
+- `db/migrations/0274_invoice_snapshots.sql`: la tabla, sin acceso para `anon`
+  ni `authenticated`; `invoice_snapshot_candidates` e `invoice_snapshot_put`,
+  solo para `service_role`. Se detiene sin la 0257 o la 0273.
+- `lib/invoicing/snapshots.ts`: el barrido (`runInvoiceSnapshotSweep`), con
+  `INVOICE_SNAPSHOT_SINCE`, el tope por pasada, el tiempo y la reserva del cupo.
+- `app/api/cron/invoice-snapshots/route.ts`: la ruta, con `CRON_SECRET`;
+  fuera de producción no llama a Shopify, y sin la 0274 contesta
+  `sin_migracion`.
+- `lib/invoicing/shopify-order.ts`: `requestOrderForInvoice` (la misma llamada
+  para la boleta y para la foto) y la lectura de la foto en
+  `fetchOrderForInvoice`; `lib/invoicing/server.ts` pone `foto_shopify` en la
+  base del comprobante.
+- Pruebas: `test/invoicing-snapshots.test.ts`, `test/invoicing-shopify.test.ts`,
+  `test/invoicing-server.test.ts` y `scripts/sql/invoice_snapshots_smoke.sql`.
+
 ## 36. Tiendas conectadas con su app propia de Shopify (23-10-2026)
 
 Estado: decisión del owner del 23-10-2026. La migración 0271 se aplica a mano
@@ -15406,3 +15509,392 @@ No hay otro valor, y una tienda no cambia de app sola.
   `scripts/sql/shopify_app_propia_smoke.sql` (la 0271 aplicada sobre el
   esquema de la 0249 con tiendas `interna` y `clientes`: ninguna fila cambia;
   y la conversión de soporte de 36.2 solo toma una `interna` sin token).
+
+## 37. WooCommerce (23-10-2026)
+
+Estado: base técnica del 23-10-2026, sin ningún pedido de WooCommerce todavía.
+La migración 0273 se aplica a mano y antes del código (DEPLOY.md, entrada del
+23-10-2026). Shopify cierra Kenku Perú y Aurela el 28-10-2026 (UTC); se
+planifica para el peor caso, el lunes 27-10 a las 19:00 de Lima. Las dos
+tiendas pasan a WooCommerce. Hasta entonces siguen en Shopify exactamente igual.
+
+Pendiente del owner: si WooCommerce va en la **misma fila** de la tienda de
+Kapta (recomendado: una tienda por marca, alimentada por dos fuentes) o en una
+fila nueva. Esta sección sirve para las dos: las credenciales de WooCommerce
+viven en una fila de `stores` y cada pedido lleva su plataforma.
+
+### 37.1 La plataforma de la tienda y la del pedido
+
+- **`stores.platform`** dice dónde se crean los pedidos **nuevos** que Kapta
+  crea para esa tienda: `shopify` (todas hoy) o `woocommerce`. No dice de dónde
+  viene cada pedido.
+- **`orders.platform`** (y `draft_orders.platform`) dice de qué plataforma vino
+  cada pedido: `shopify` o `woocommerce`. No hay otro valor. Entre la salida a
+  producción de WooCommerce y el cierre de Shopify llegan a la vez cambios de
+  pedidos viejos de Shopify y pedidos nuevos de WooCommerce, así que **todo lo
+  que dependa de la plataforma se decide con `orders.platform`, nunca por la
+  forma del id**: `extractNumericId("wc-kp-1532")` devuelve `1532`, que parece
+  un id de Shopify.
+- **Credenciales en la fila de la tienda.** `woo_site_url` (solo https),
+  `woo_site_key` (la clave corta del sitio, 37.2), la Consumer key y el Consumer
+  secret de la API REST (`woo_consumer_key_enc`, `woo_consumer_secret_enc`) y el
+  secreto de los webhooks (`woo_webhook_secret_enc`), cifrados como los demás
+  secretos de `stores`. `woo_last_error` guarda el último fallo, sin secretos;
+  `platform_switched_at`, cuándo la tienda pasó a WooCommerce.
+- **La base lo sostiene.** Una tienda solo pasa a `woocommerce` con la
+  dirección, la clave del sitio y las dos claves de la API guardadas
+  (`stores_woo_platform_check`); las credenciales sí pueden guardarse antes, para
+  el ensayo. Una clave de sitio y un sitio están en una sola tienda de toda la
+  base (`stores_woo_site_key_uniq`, `stores_woo_site_url_uniq`).
+- **El token de Shopify no se borra al cambiar.** Mientras Shopify viva siguen
+  llegando cambios y anulaciones de los pedidos viejos. Nunca se apaga Shopify
+  con `status = 'disabled'`: los crons solo procesan tiendas activas y se
+  perderían también Kapso, los couriers y los leads.
+
+### 37.2 Identidad del pedido
+
+- **Id:** `orders.shopify_order_id = "wc-<clave del sitio>-<id de WooCommerce>"`,
+  por ejemplo `wc-kp-1532` o `wc-aur-1532`. La clave va porque los dos
+  WordPress numeran desde 1 y hay consultas que buscan por id sin filtrar por
+  tienda. La clave son minúsculas y dígitos, de 2 a 12, empezando por letra
+  (`stores_woo_site_key_check`), y no se cambia después del primer pedido.
+- **Nombre:** `"#" + number`, el número que pone el plugin de numeración de la
+  tienda (`#KP200001`). Sin el plugin, WooCommerce manda su id interno, sin
+  prefijo: por eso el plugin va instalado antes del primer pedido real.
+- **Fechas:** las `*_gmt` de WooCommerce, que llegan sin zona, más «Z».
+  `created_at` y `processed_at` son la fecha del pedido, `updated_at` la de su
+  último cambio. Nunca la hora local de la tienda ni la del pago.
+
+### 37.3 Estados
+
+| Estado en WooCommerce | Qué hace Kapta |
+| --- | --- |
+| `pending`, `failed`, `checkout-draft` (y los borradores internos `draft`, `auto-draft`) | No es un pedido: no entra a `orders` ni al Master. |
+| `processing`, `on-hold`, `completed` y estados de plugins | Pedido vivo. `completed` no significa entregado ni cobrado: eso lo dicen las salidas y los cobros de Kapta (§2 punto 9). |
+| `cancelled`, `trash` | Anulado: `financial_status = voided` y `cancelled_at`. |
+| `refunded` | `financial_status = refunded`. No anula el pedido. |
+
+- **Cuándo se anuló.** WooCommerce no guarda la fecha de la anulación. Kapta
+  pone la del cambio en que la vio anulada (`date_modified_gmt`) la **primera
+  vez**, y la conserva en los cambios siguientes.
+- **Si vuelve a un estado vivo** en WooCommerce (sale de la papelera o alguien
+  lo reactiva), el pedido deja de estar anulado en Kapta, como en la tienda. El
+  historial operativo no se toca.
+- **Un pedido borrado** (`order.deleted`) nunca se borra en Kapta (§2 punto 6).
+
+### 37.4 Cobro
+
+- **Contraentrega** (`payment_method = cod`): pasarela `cod` y
+  `financial_status = pending` **siempre**. WooCommerce llena `date_paid` en
+  cuanto el pedido pasa a «processing», así que `date_paid` nunca cuenta como
+  pagado.
+- **Pago en la web** (Flow con tarjeta): `paid` cuando WooCommerce lo deja en
+  «processing» o «completed». Solo cuenta como prepago del checkout si el
+  título exacto de la pasarela está en `CHECKOUT_GATEWAYS`
+  (`lib/payment-gateway.ts`): el de Flow para WooCommerce entra cuando la
+  operación lo confirme. Hasta entonces sigue el camino de las constancias, que
+  es el seguro.
+- **Transferencia** (`bacs`) **u otra pasarela**: pasarela desconocida (null),
+  conducto regular de constancias. `pending` mientras está «on-hold»; `paid`
+  cuando alguien la pasa a «processing», como el «manual» de Shopify.
+- **Reembolsos:** `total_refunded` es la suma de los reembolsos del pedido. Un
+  pedido pagado con un reembolso parcial queda `partially_refunded`; uno
+  contraentrega sigue `pending`. El total del pedido no baja.
+
+### 37.5 Etiquetas y canal de venta
+
+Un pedido de WooCommerce no tiene etiquetas. Kapta escribe en `orders.tags` las
+**mismas palabras de hoy** a partir de los metadatos del pedido, para que el
+canal de venta (§3), el canal de cierre (§17.3), los rollups y el «lead ganado»
+no cambien:
+
+| `kapta_channel` | Etiquetas | Canal de venta |
+| --- | --- | --- |
+| `venta_manual` o `asesora` | `venta_manual` | Asesora (Leads) |
+| `kapso` o `chatbot` | `kapso`, `whatsapp` | Chatbot WhatsApp |
+| `bot_carritos` | `BOT`, `CARRITO RECUPERADO` | Bot de carritos |
+| `catalogo` o `catalogo-wsp` | `catalogo-wsp` | Catálogo WhatsApp |
+| `web_carrito` | `easysell-abandoned-checkout` | Web · carrito completado |
+| `web_formulario` | `easysell_cod_form` | Web · formulario |
+
+- Un valor que no está en la tabla, o ningún `kapta_channel`, no pone etiqueta:
+  «Sin marca». No se adivina.
+- `kapta_tags` (lista JSON o separada por comas) se copia tal cual, delante:
+  así el bot puede mandar `promo-whatsapp`, `stock-por-validar`,
+  `contraentrega`…
+- El pedido con `kapso_conversation_id`, o con el meta `kapso` verdadero, lleva
+  la etiqueta `kapso`: es la que gana el lead y cuenta en los rollups del bot.
+- Los meta de Kapta y de Kapso (`kapta_*`, `kapso_*`, `kapso`) se leen también
+  ocultos (con «_» delante) y sin importar mayúsculas.
+
+### 37.6 Dirección y departamento
+
+- **Dos Limas.** WooCommerce distingue `LMA` (Municipalidad Metropolitana de
+  Lima) de `LIM` (el resto del departamento: Huaral, Cañete, Barranca…). Kapta
+  las guarda como Shopify: «Lima (provincia)» y «Lima (departamento)», que es
+  lo que separa Lima de Provincia en la cobertura (§19.0.1). Los demás códigos
+  son los del ISO 3166-2:PE. Al revés, para crear un pedido en WooCommerce,
+  «Lima (departamento)» es `LIM` y «Lima» a secas es `LMA`, como hoy en
+  Shopify.
+- **Departamento elegido.** El código del departamento se guarda también como
+  el atributo «Provincia:» (`PE-LMA`, `PE-LIM`…), igual que el formulario COD de
+  hoy: es una elección de una lista cerrada.
+- **Sin coordenada.** WooCommerce no geocodifica la dirección. Una guía de
+  Aliclik pide pegar la ubicación a mano (§10) hasta que el formulario de la
+  tienda la mande.
+- **Teléfono:** el de facturación y, si falta, el de envío. Sin dirección de
+  envío, se usa la de facturación.
+
+### 37.7 Lo que se guarda en `raw`
+
+`orders.raw` lleva el pedido de WooCommerce entero en `raw.woo` y, al lado, una
+copia con la forma de Shopify REST que leen los lectores de hoy sin cambios:
+`shipping_address`, `billing_address`, `note` (la nota de la clienta),
+`note_attributes` (los metadatos visibles y los de Kapta, más los `utm_*` de la
+atribución de WooCommerce), `payment_gateway_names`, `subtotal_price`,
+`total_discounts`, `total_shipping_price_set` y `total_price`. Así siguen
+funcionando la dirección del Master, la nota, los totales del cajón,
+`orders.utm_meta` y Swayp automático.
+
+### 37.8 Webhooks y API
+
+- **Firma:** `X-WC-Webhook-Signature` es el HMAC-SHA256 del cuerpo crudo con el
+  secreto del webhook, en base64: el mismo algoritmo que Shopify.
+- **Ping de alta:** al crear un webhook WooCommerce manda `webhook_id=<n>`, sin
+  firma, y no lo activa si no recibe un 200.
+- **Duplicados:** por el sha256 del cuerpo, nunca por
+  `X-WC-Webhook-Delivery-ID`, que se repite dentro del mismo segundo.
+- **Temas:** `order.created`, `order.updated`, `order.deleted` y
+  `order.restored`.
+- **API REST v3:** solo por https y a un dominio público (nunca una IP ni un
+  nombre interno), con la Consumer key y el Consumer secret por cabecera
+  `Authorization: Basic`; por query string solo si el hosting borra esa
+  cabecera. Cada llamada corta a los **15 segundos** y no sigue redirecciones.
+  Ningún mensaje de error lleva las claves ni la dirección de la llamada.
+
+### 37.9 Lo que no cambia
+
+- **Kenku Perú y Aurela siguen en Shopify** hasta el cierre: sus webhooks, su
+  sincronización, «Generar pedido» y sus comprobantes. La 0273 no actualiza
+  ninguna fila: todas las tiendas nacen `shopify`, sin nada de WooCommerce, y
+  todos los pedidos y borradores, `shopify`. Los mapeadores de Shopify no
+  escriben la plataforma.
+- **Pendiente del owner.** Los principios 1-3, 10 y 11 de §2 todavía dicen
+  Shopify. Pasarlos a «la tienda (Shopify hasta el cierre, WooCommerce
+  después)», las anulaciones de los pedidos de la era Shopify después del
+  cierre (§6.4) y los canales de WooCommerce en §17.3 son cambios de regla que
+  esperan su decisión.
+
+### 37.10 Implementación
+
+- `db/migrations/0273_woocommerce_base.sql`: `stores.platform`, las columnas
+  `woo_*` y `platform_switched_at`, `orders.platform`, `draft_orders.platform`,
+  `stores_woo_platform_check`, `stores_woo_site_key_check`,
+  `stores_woo_site_url_check`, `stores_woo_site_key_uniq` y
+  `stores_woo_site_url_uniq`. No toca filas ni `shopify_domain`.
+- `lib/woocommerce.ts`: el mapeador (`mapWooOrder`), el id (`wooOrderId`,
+  `parseWooOrderId`), los estados (`WOO_SKIPPED_STATUSES`,
+  `WOO_CANCELLED_STATUSES`), el cobro (`wooFinancialStatus`,
+  `wooPaymentGateway`), las etiquetas (`WOO_CHANNEL_TAGS`, `wooTags`), los
+  departamentos (`WOO_PE_STATE_NAMES`, `toWooPeruState`), la firma
+  (`verifyWooSignature`, `parseWooWebhookPing`) y el cliente REST
+  (`wooRequest`, `wooPaginate`, `fetchWooOrdersPage`, `fetchWooOrder`,
+  `WOO_TIMEOUT_MS`).
+- Pruebas: `test/woocommerce.test.ts`, `test/woocommerce-mom.test.ts` y
+  `scripts/sql/woocommerce_base_smoke.sql` (la 0273 aplicada sobre el esquema de
+  la 0272 con Kenku, Aurela y una tienda cliente: ninguna fila cambia).
+
+### 37.11 La entrada de pedidos de WooCommerce: webhook, sincronización y Ajustes (25-10-2026)
+
+**Por qué.** Desde que la tienda WooCommerce sale a producción, los pedidos
+nuevos llegan por ahí. Entran al mismo `orders` y al mismo Master por dos
+caminos, como los de Shopify: el webhook, al instante, y la sincronización cada
+5 minutos, que es la red de seguridad. WooCommerce **no reintenta** un aviso
+que falló y **desactiva el webhook después de 5 fallos seguidos**: por eso la
+sincronización no es opcional.
+
+**El webhook** (`/api/webhooks/woocommerce/<storeId>`). En este orden:
+
+1. **El ping de alta** (`webhook_id=<n>`, sin firma) recibe **200 antes de
+   mirar la firma**; si la tienda no existe, **404**, para que una dirección
+   mal pegada se vea en WooCommerce al crear el webhook. Si no se pudo leer la
+   tienda, 503 (se vuelve a guardar el webhook).
+2. **Sin secreto de webhooks guardado** no hay cómo saber quién lo manda: no se
+   procesa (200) y Ajustes lo dice.
+3. **La firma** (`X-WC-Webhook-Signature`) que no cuadra recibe **401**. Es lo
+   único que contesta un error: un secreto mal puesto tiene que verse en
+   WooCommerce.
+4. **Otro sitio.** Un aviso bien firmado cuyo `X-WC-Webhook-Source` no es el
+   sitio guardado (con o sin `www.` y barra final es el mismo) no se procesa:
+   un sitio de prueba que comparte secreto no mete pedidos de prueba al Master.
+5. **El tema.** Solo `order.created`, `order.updated`, `order.restored` y
+   `order.deleted`; los demás reciben 200 y se ignoran.
+6. **Repetidos:** `webhook_events.webhook_id = "wc:" + sha256 del cuerpo`. Nunca
+   el `X-WC-Webhook-Delivery-ID` solo, que se repite dentro del mismo segundo.
+   En `order.deleted`, cuyo cuerpo es solo `{id}`, la clave lleva además el
+   Delivery-ID: el mismo pedido puede ir a la papelera, volver y volver a ir.
+
+- **Creado, actualizado o restaurado:** el pedido pasa por el mapeador (37.2 a
+  37.7) y `upsertOrders`, con los mismos pasos que un pedido de Shopify: si es
+  del bot (`kapso`), rollups del día y lead ganado; si no, sale de la cola el
+  carrito del mismo teléfono; y siempre se recalcula su fila del Master. Un
+  pedido anulado conserva la fecha en que Kapta lo vio anulado la primera vez.
+  `pending`, `failed` y `checkout-draft` no entran (37.3).
+- **Un estado más viejo no pisa uno más nuevo.** WooCommerce entrega los
+  webhooks en segundo plano y uno puede llegar después de que la sincronización
+  ya leyó un cambio posterior. Si la fecha de modificación de WooCommerce de lo
+  que llega es anterior a la guardada (`orders.updated_at`), no se aplica (el
+  aviso queda procesado). Vale también para la sincronización. Solo WooCommerce:
+  Shopify sigue como siempre.
+- **Un anulado que nunca fue pedido no entra.** WooCommerce anula solos los
+  pedidos que quedaron `pending` sin pagar (el checkout abandonado). Uno anulado
+  que Kapta no tiene y que nunca llegó a «processing» (`date_paid` vacío;
+  WooCommerce lo llena al pasar a «processing», también en contraentrega) no se
+  crea: sería un Anulado en el Master de algo que no fue un pedido (37.3). Uno
+  que Kapta ya tiene se anula como siempre, y uno que llegó a «processing» entra
+  aunque Kapta no lo hubiera visto vivo.
+- **Borrado** (`order.deleted`, que WooCommerce manda al mandar el pedido a la
+  papelera): **Kapta nunca lo borra**, y un pedido que no tiene no lo crea desde
+  la papelera. Primero lo vuelve a leer por la API
+  (`GET /wp-json/wc/v3/orders/<id>`, que devuelve también los de la papelera):
+  entra anulado con su fecha de WooCommerce, y si ya volvió de la papelera
+  (el aviso llegó tarde) queda con su estado actual. Sin claves de la API, si
+  WooCommerce no contesta o si el pedido ya no existe, lo marca anulado como un
+  `trash` (`cancelled_at` la primera vez, `financial_status = voided`). En los
+  dos casos recalcula su fila del Master. Si vuelve de la papelera llega
+  `order.restored` y queda vivo.
+- **Todo lo demás contesta 200**, también lo que no se pudo procesar (cuerpo
+  que no es JSON, pedido sin id, tienda sin clave del sitio, una base caída): un
+  error no trae el aviso de vuelta, solo acerca la desactivación. El motivo va
+  en el cuerpo de la respuesta (WooCommerce lo guarda en su registro de
+  entregas), en `webhook_events.error` y, si es de configuración, en
+  `stores.woo_last_error` («Webhook: …»).
+
+**La sincronización** (`sync_state`, fuente `woo_orders`, dentro de
+`runStoreSync`, cada 5 minutos):
+
+- **Quién:** solo una tienda con la dirección del sitio, la clave del sitio, la
+  Consumer key y el Consumer secret guardados. No mira el token de Shopify ni
+  `stores.platform`: **guardar las claves completas es activarla.** Una tienda
+  sin eso no hace ni una llamada.
+- **Qué pide:** `GET /wp-json/wc/v3/orders?modified_after=<cursor>&dates_are_gmt=true&orderby=modified&order=asc&per_page=100&page=N`
+  (`status=any`). La primera vez desde `ORDERS_SYNC_FROM`, como `shopify_all`;
+  después desde el cursor **menos 2 minutos** (WooCommerce fija la fecha de
+  modificación al empezar a guardar: un pedido que se guardaba durante la
+  pasada anterior puede tener una fecha anterior al cursor). Releer es inocuo.
+- **Por fecha, no por número de página:** cada página siguiente se pide desde un
+  segundo antes del último pedido leído. Con `page=N` sobre una lista que se
+  mueve (un pedido modificado salta al final), otro quedaría sin leer para
+  siempre. Solo si una página entera es del mismo segundo se pasa a la página
+  siguiente.
+- **Topes:** a lo más **10 páginas de 100** y **40 segundos** por tienda (cada
+  llamada corta a los 15 s); lo que quede sigue en la próxima pasada. Corre
+  después de los pedidos y carritos de Shopify y antes de sacar de la cola los
+  carritos que ya son pedido, para que eso valga también para WooCommerce.
+- **El cursor** es el `date_modified` más nuevo leído. Nunca queda en blanco ni
+  retrocede, y lo que avanzó antes de un fallo se guarda.
+- **Un fallo** queda en `sync_state` (`error`) y en `stores.woo_last_error`
+  («Sincronización: …»), va a los errores del reporte y **no corta** las pasadas
+  de Shopify, Kapso ni leads. La pasada que vuelve a salir bien borra su aviso
+  (no el de un webhook).
+- **El hosting que borra la cabecera `Authorization`:** si WooCommerce contesta
+  `woocommerce_rest_cannot_*` con claves buenas, se reintenta una vez con las
+  claves en la dirección (solo por https; esa dirección nunca se registra).
+- **La papelera no se ve** en esta lista (`status=any` no la incluye): un pedido
+  mandado a la papelera solo llega por `order.deleted`.
+
+**Ajustes → WooCommerce** (con «Administrar tiendas», `stores.manage`, como las
+demás credenciales):
+
+- La dirección del sitio (solo https, de un dominio público), la clave del
+  sitio, la Consumer key (`ck_…`) y el Consumer secret (`cs_…`), que van de a
+  dos, y el secreto de los webhooks. Un campo en blanco conserva lo guardado.
+- **Los secretos se guardan cifrados y nunca vuelven a la pantalla:** la página
+  solo sabe si hay uno. El secreto de webhooks se genera en Kapta
+  (hexadecimal, sin `& < > " '`, que WooCommerce transforma antes de firmar) y
+  se muestra **una sola vez** para pegarlo en los cuatro webhooks.
+- **La clave del sitio no se cambia** cuando ya hay pedidos de WooCommerce con
+  ella, y una clave o un sitio están en una sola tienda.
+- **Si cambian el sitio o las claves de la API, se prueban antes de guardar**
+  (`GET /wp-json/wc/v3/orders?per_page=1`, y la moneda si se puede): si no
+  sirven, no se guarda nada. «Probar conexión» prueba lo escrito sin guardarlo,
+  o lo guardado si no se escribió nada.
+- La sección muestra la dirección para WooCommerce → Ajustes → Avanzado →
+  Webhooks (`<Kapta>/api/webhooks/woocommerce/<storeId>`), los cuatro temas,
+  la versión «WP REST API Integration v3», el último fallo y la última pasada.
+- **No cambia `stores.platform`** (dónde crea Kapta los pedidos nuevos): eso es
+  del día del corte y lo decide el owner (37.1).
+
+**Lo que no cambia:** el webhook, la sincronización y «Generar pedido» de
+Shopify, y `getStoreCreds`. La pasada y el webhook de WooCommerce leen la tienda
+aparte (solo sus columnas `woo_*`) y descifran cada secreto por su cuenta: uno
+que no se pueda descifrar no tumba la tienda ni su Shopify.
+
+Implementación:
+
+- `app/api/webhooks/woocommerce/[storeId]/route.ts`: la ruta.
+- `lib/ingest.ts`: `processWooWebhook` y `syncWooOrders` (la pasada
+  `woo_orders` de `runStoreSync`, que suma `wooOrders` al reporte).
+- `lib/woocommerce-intake.ts`: la lectura de las credenciales
+  (`loadWooStoreCreds`), la clave de los repetidos (`wooWebhookEventKey`), el
+  sitio de origen (`wooSourceMatchesSite`), los códigos HTTP
+  (`wooWebhookHttpStatus`), el cursor (`wooSyncStart`, `nextWooPage`) y los topes
+  (`WOO_SYNC_PER_PAGE`, `WOO_SYNC_MAX_PAGES`, `WOO_SYNC_BUDGET_MS`,
+  `WOO_SYNC_OVERLAP_MS`).
+- `lib/woocommerce-settings.ts` (`validateWooSettings`, `buildWooSettingsPatch`),
+  `app/dashboard/[storeId]/settings/woo-actions.ts` (`saveWooSettings`,
+  `testWooConnection`, `generateWooWebhookSecret`) y
+  `components/woocommerce-settings-section.tsx`.
+- Pruebas: `test/woocommerce-webhook.test.ts`, `test/woocommerce-sync.test.ts`,
+  `test/woocommerce-settings.test.ts` y `test/woocommerce-intake-mom.test.ts`.
+
+### 37.12 Lo que decide la plataforma del pedido, y lo que falta (integración, 23-10-2026)
+
+**Por qué.** La base de WooCommerce (37.1-37.10), su entrada (37.11) y los
+respaldos de Shopify con la foto de las boletas (§35.10) se hicieron a la vez.
+Juntos, un pedido de Shopify y uno de WooCommerce conviven en la misma tienda y
+en el mismo `orders`; esto fija dónde se mira `orders.platform` hoy y qué falta.
+
+**Dónde manda `orders.platform` hoy** (nunca la forma del id, 37.1):
+
+- **La entrada.** Lo que escriben el webhook y la pasada `woo_orders` lleva
+  `woocommerce`. Los mapeadores de Shopify no escriben la plataforma y sus
+  pedidos quedan en `shopify`. Nunca se mezclan los dos en un mismo upsert.
+- **La foto de la boleta** (§35.10). Solo pedidos `shopify`: qué falta
+  (`invoice_snapshot_candidates`), qué se guarda (`invoice_snapshot_put`) y qué
+  se lee (`fetchOrderForInvoice`). Un pedido de WooCommerce nunca tiene foto.
+- **Envíos → corregir la dirección.** Un pedido `woocommerce` **nunca se
+  escribe en Shopify**, ni con el token puesto: el cambio queda en el envío y el
+  aviso dice «El pedido es de WooCommerce: allí no se cambió». Sin la 0273, o si
+  la columna no se puede leer, el pedido es `shopify`, como siempre
+  (`orderPlatformOf`).
+
+**Los respaldos de Shopify no cambian a Kenku ni a Aurela mientras Shopify
+responda.** El tope de 30 s de cada llamada a Shopify, el catálogo de Aliclik
+con el historial de pedidos, el auto-vínculo que deja sin revisar lo que no se
+pudo buscar y Envíos con la fila de Kapta solo entran cuando una llamada a
+Shopify falla o la tienda no tiene token.
+
+**Pendiente** (no está en este cambio):
+
+- **La boleta de un pedido de WooCommerce** espera su lector (30-31/10), con
+  su rama por `orders.platform` en `fetchOrderForInvoice`. Hasta entonces la
+  lectura en vivo no mira la plataforma: con el token de Shopify puesto
+  pregunta a Shopify por el número del id (`wc-kp-1532` → 1532), que no
+  existe, y queda `no_encontrado`; sin token, `sin_token_shopify`. Ninguna de
+  las dos emite.
+- **Auto-vínculo y búsqueda de Envíos** buscan en Shopify: un pedido de
+  WooCommerce no aparece. Pasarlos a la base local.
+- **Otros gid de Shopify armados con `shopify_order_id`** (el cajón de un envío
+  sin dirección, la nota de la guía de Tanders, «Ver en Shopify»): con token,
+  una llamada que Shopify rechaza y que cae a lo guardado; sin token, nada.
+  Pasarlos a `orders.platform`.
+- **«Generar pedido», el buscador de productos y el endpoint del bot** en
+  WooCommerce (26-10). `stores.platform` todavía no lo lee nadie.
+- **Los principios de §2 y `AGENTS.md`** («Shopify como única fuente de
+  pedidos») esperan al owner (37.9).
+
+Implementación: `lib/shipment-order-capture.ts` (`orderPlatformOf`,
+`pushShippingAddressToShopify` con `platform`) y
+`updateShipmentDeliveryAddress` en `app/dashboard/envios/actions.ts`. Pruebas:
+`test/shipment-order-capture.test.ts` y `test/woocommerce-integration-mom.test.ts`.

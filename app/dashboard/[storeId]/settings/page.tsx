@@ -22,6 +22,7 @@ import {
   ownAppStatusLine,
 } from "@/lib/shopify-own-app";
 import { limaDateTimeInputValue } from "@/lib/repro-lima";
+import { WOO_INTAKE_TOPICS, WOO_SYNC_SOURCE, wooWebhookDeliveryUrl } from "@/lib/woocommerce-intake";
 import { limaDayStartIso } from "@/lib/auto-order-ab";
 import type { InvoiceMode, InvoiceStatus, InvoiceWriteMode } from "@/lib/invoicing/rules";
 import {
@@ -615,6 +616,29 @@ export default async function StoreSettingsPage({
             prevSecretUntil: ownAppPrevUntil ? ownAppPrevSecretLine(ownAppPrevUntil, full.timezone) : null,
           }
         : null,
+    // WooCommerce (0273, MOM §37.11): el sitio y la clave del sitio, y de cada
+    // secreto solo si hay uno. Pre-0273 la fila no trae `platform` y la sección
+    // lo dice en vez de ofrecer guardar.
+    woo: {
+      siteUrl: full.woo_site_url ?? null,
+      siteKey: full.woo_site_key ?? null,
+      suggestedSiteKey: typeof full.order_prefix === "string" && /^[A-Za-z][A-Za-z0-9]{1,11}$/.test(full.order_prefix)
+        ? full.order_prefix.toLowerCase()
+        : null,
+      platform: full.platform ?? "shopify",
+      platformSwitchedAt: full.platform_switched_at ?? null,
+      hasConsumerKey: Boolean(full.woo_consumer_key_enc),
+      hasConsumerSecret: Boolean(full.woo_consumer_secret_enc),
+      hasWebhookSecret: Boolean(full.woo_webhook_secret_enc),
+      lastError: full.woo_last_error ?? null,
+      webhookUrl: wooWebhookDeliveryUrl(siteUrl || env.siteUrl(), storeId),
+      topics: WOO_INTAKE_TOPICS,
+      sync:
+        ((sync ?? []) as { source: string; status: string | null; last_run_at: string | null; error: string | null }[])
+          .filter((r) => r.source === WOO_SYNC_SOURCE)
+          .map((r) => ({ status: r.status, last_run_at: r.last_run_at, error: r.error }))[0] ?? null,
+      migrationMissing: !("platform" in (full ?? {})),
+    },
     // Solo sí/no, nunca los valores: la página llega al navegador.
     leadVoice: {
       configured: leadVoiceConfigured(),
