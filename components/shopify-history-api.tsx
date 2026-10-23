@@ -106,7 +106,7 @@ export function ShopifyHistoryApiProbe({
     setRunning(false);
   }
 
-  const canBring = probe && !("error" in probe) && probe.before2022 > 0;
+  const canBring = probe && !("error" in probe) && probe.fullAccess;
 
   return (
     <div className="space-y-4">
@@ -114,21 +114,23 @@ export function ShopifyHistoryApiProbe({
         <OpsButton variant="secondary" disabled={probing || running} onClick={runProbe}>
           {probing ? "Consultando a Shopify…" : "Probar acceso a pedidos antiguos"}
         </OpsButton>
-        <span className="text-[13px] text-ink-500">Solo lee: cuenta los pedidos anteriores a 2022 que Kapta alcanza a ver.</span>
+        <span className="text-[13px] text-ink-500">Solo lee: revisa si Kapta ve todos los pedidos de la tienda.</span>
       </div>
       {probe && "error" in probe && <Banner tone="crit">{probe.error}</Banner>}
       {probe && !("error" in probe) && (
-        <Banner tone={probe.before2022 > 0 ? "ok" : "warn"}>
-          {probe.before2022 > 0 ? (
+        <Banner tone={probe.fullAccess ? "ok" : "warn"}>
+          {probe.fullAccess ? (
             <>
-              Kapta ve {probe.before2022AtLeast ? "al menos " : ""}
-              {probe.before2022.toLocaleString("es-PE")} pedidos anteriores a 2022
-              {probe.oldest ? ` (el más antiguo, ${probe.oldest.name}, del ${fmtDate(probe.oldest.createdAt)})` : ""}. Se
-              puede traer el historial por API.
+              Kapta ve todos los pedidos de la tienda
+              {probe.oldest ? `, desde el primero: ${probe.oldest.name}, del ${fmtDate(probe.oldest.createdAt)}` : ""}
+              {probe.before2022 > 0
+                ? ` (${probe.before2022AtLeast ? "al menos " : ""}${probe.before2022.toLocaleString("es-PE")} anteriores a 2022)`
+                : ""}
+              . Se puede traer el historial por API.
             </>
           ) : (
             <>
-              Kapta no ve pedidos anteriores a 2022
+              Kapta solo ve los últimos 60 días
               {probe.oldest ? `: el más antiguo que alcanza es ${probe.oldest.name}, del ${fmtDate(probe.oldest.createdAt)}` : ""}. Por
               API no se puede; sigue con los CSV.
             </>
