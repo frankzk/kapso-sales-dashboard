@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0271_urpi_salida_fecha.sql — la salida de Urpi rellenada lleva el día de la
+-- 0272_urpi_salida_fecha.sql — la salida de Urpi rellenada lleva el día de la
 -- entrega, y las cajas «por definir» de entregas viejas de Urpi pasan a su
 -- salida entregada (MOM §30.11, §4; 23-10-2026).
 --
@@ -91,7 +91,7 @@ begin
      and l.result_code = 'entregado'
      and l.report_date is not null;
   get diagnostics v_dated = row_count;
-  raise notice '0271: % salida(s) de Urpi con el día de la entrega', v_dated;
+  raise notice '0272: % salida(s) de Urpi con el día de la entrega', v_dated;
 
   -- 2) Las cajas «por definir» de entregas de Urpi que nunca se rellenaron.
   with latest as (
@@ -171,10 +171,10 @@ begin
   select f.store_id, f.order_id, 'route_output_filled', now(), 'manual', 'urpi', f.guide_code, f.id,
          coalesce(f.output_code, 'La salida') || ' tenía courier por definir; el reporte de Urpi la da por entregada el '
            || to_char(f.delivered_on, 'DD/MM/YYYY') || ' (fila ' || f.urpi_row
-           || '): pasó a salida de Urpi entregada (relleno 0271).',
+           || '): pasó a salida de Urpi entregada (relleno 0272).',
          jsonb_build_object('outputCode', f.output_code, 'previousCourier', 'por_definir', 'backfill', true,
                             'urpi_row', f.urpi_row, 'fecha', to_char(f.delivered_on, 'YYYY-MM-DD'))
     from filled f;
   get diagnostics v_filled = row_count;
-  raise notice '0271: % caja(s) «por definir» pasaron a salida de Urpi entregada', v_filled;
+  raise notice '0272: % caja(s) «por definir» pasaron a salida de Urpi entregada', v_filled;
 end $$;

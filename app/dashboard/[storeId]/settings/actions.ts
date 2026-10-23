@@ -8,7 +8,20 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { buildStoreUpdate } from "@/lib/store-settings";
 import { getStoreCreds, runStoreSync } from "@/lib/ingest";
-import { registerOrderWebhooks } from "@/lib/shopify";
+import { CLIENT_APP_WEBHOOK_TOPICS, registerOrderWebhooks } from "@/lib/shopify";
+import { decryptOrNull, encrypt } from "@/lib/crypto";
+import {
+  isOwnAppMigrationMissing,
+  isOwnAppRenewableStatus,
+  missingScopes,
+  missingScopesMessage,
+  OWN_APP,
+  OWN_APP_MIGRATION_MISSING_MESSAGE,
+  OWN_APP_PREV_WEBHOOK_SECRET_GRACE_MS,
+  ownAppPrevSecretLine,
+  renewOwnAppToken,
+  requestClientCredentialsToken,
+} from "@/lib/shopify-own-app";
 import { buildStoreDailySummary, formatDailySummary, limaDayBounds } from "@/lib/daily-summary";
 import { sendTelegramToAll } from "@/lib/telegram";
 import { repeatedVoucherTelegram } from "@/lib/repeated-voucher-alert";
@@ -104,9 +117,11 @@ export async function updateStore(
   // El email de Shalom llega rellenado en cada guardado: hace falta el valor
   // actual para saber si lo cambiaron de verdad y solo entonces tirar el token
   // de sesión (ver buildStoreUpdate).
+  // `shopify_app` (0249): una tienda con app propia (0271) no recibe el token
+  // ni el secreto de webhooks a mano (abajo).
   const { data: currentStore } = await ctx.admin
     .from("stores")
-    .select("shalom_pro_email")
+    .select("shalom_pro_email, shopify_app")
     .eq("id", storeId)
     .maybeSingle();
 
@@ -271,6 +286,20 @@ export async function updateStore(
   }, undefined, {
     shalom_pro_email: (currentStore as { shalom_pro_email?: string | null } | null)?.shalom_pro_email ?? null,
   });
+
+  // App propia (0271, MOM §36.4): el token lo renueva Kapta y el secreto de los
+  // webhooks es el Client secret de la app. Pegar uno a mano los pisaría: se
+  // rechaza sin guardar nada. Kenku, Aurela y las tiendas 'clientes' siguen
+  // igual que siempre.
+  if (
+    (currentStore as { shopify_app?: string | null } | null)?.shopify_app === OWN_APP &&
+    ("shopify_token_enc" in patch || "shopify_webhook_secret_enc" in patch)
+  ) {
+    return {
+      error:
+        "Esta tienda usa su app propia de Shopify: el token y el secreto de los webhooks no se escriben a mano. Usa «Credenciales de la app» en Shopify. No se guardó nada.",
+    };
+  }
 
   // El porcentaje del grupo de control del agente de leads queda fijo con el
   // piloto en marcha (MOM §33.3): el tablero junta todos los sorteos en una
@@ -561,6 +590,9 @@ export async function reRegisterWebhooks(
       domain: creds.shopify_domain,
       token: creds.shopify_token,
       callbackUrl,
+      // Una tienda con app propia también escucha la desinstalación (0271).
+      // Las demás se registran como siempre.
+      ...(creds.shopify_app === OWN_APP ? { extraTopics: CLIENT_APP_WEBHOOK_TOPICS } : {}),
     });
     const failed = results.filter((r) => r.error);
     if (failed.length) {
@@ -570,6 +602,201 @@ export async function reRegisterWebhooks(
   } catch (e) {
     return { error: errMsg(e) };
   }
+}
+
+/** Lo que trae la fila de una tienda con app propia para estas acciones. Nunca va al navegador. */
+interface OwnAppSettingsRow {
+  id: string;
+  shopify_domain: string | null;
+  shopify_app: string | null;
+  status: string | null;
+  shopify_client_id: string | null;
+  shopify_webhook_secret_enc?: string | null;
+  timezone?: string | null;
+}
+
+async function loadOwnAppStore(
+  admin: SupabaseClient,
+  storeId: string,
+): Promise<{ row: OwnAppSettingsRow } | { error: string }> {
+  const { data, error } = await admin
+    .from("stores")
+    .select("id,shopify_domain,shopify_app,status,shopify_client_id,shopify_webhook_secret_enc,timezone")
+    .eq("id", storeId)
+    .maybeSingle();
+  if (error) return { error: isOwnAppMigrationMissing(error) ? OWN_APP_MIGRATION_MISSING_MESSAGE : "No se pudo leer la tienda." };
+  const row = data as OwnAppSettingsRow | null;
+  // Solo tiendas con app propia: Kenku, Aurela y las de la app de clientes
+  // no se tocan desde aquí.
+  if (!row || row.shopify_app !== OWN_APP) return { error: "Esta tienda no está conectada con una app propia." };
+  return { row };
+}
+
+/**
+ * «App propia» → guardar el Client ID y el Client secret (0271, owner
+ * 23-10-2026). Antes de guardar se prueban: se pide un token con ellos y se
+ * revisan los permisos. Si algo falla no se guarda nada y la tienda sigue con
+ * lo que tenía. Si sirven, se guardan cifrados junto con el token nuevo; el
+ * secreto de los webhooks pasa a ser el mismo Client secret (Shopify firma con
+ * él). No cambia el estado de la tienda: una deshabilitada sigue así.
+ *
+ * ROTAR EL SECRETO (mismo Client ID, MOM §36.4). Shopify sigue firmando los
+ * webhooks con el secreto más viejo que no se revocó: el anterior se guarda
+ * aparte y los webhooks firmados con él se aceptan 48 h, o hasta que alguien
+ * pulsa «Ya revoqué el secreto anterior».
+ *
+ * OTRA APP (Client ID nuevo). Las suscripciones de webhooks son de la app
+ * anterior y llegan firmadas con su secreto: no se acepta (su desinstalación
+ * no debe deshabilitar la tienda) y se registran los webhooks de la app nueva.
+ */
+export async function saveOwnAppCredentials(
+  _prev: SettingsState,
+  formData: FormData,
+): Promise<SettingsState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso para editar esta tienda." };
+  const loaded = await loadOwnAppStore(ctx.admin, storeId);
+  if ("error" in loaded) return { error: loaded.error };
+  const { row } = loaded;
+
+  const clientId = String(formData.get("own_client_id") ?? "").trim() || (row.shopify_client_id ?? "").trim();
+  const clientSecret = String(formData.get("own_client_secret") ?? "").trim();
+  if (!clientId) return { error: "Falta el Client ID de la app." };
+  if (!clientSecret) return { error: "Pega el Client secret de la app para probarlo y guardarlo." };
+
+  const got = await requestClientCredentialsToken({ shop: row.shopify_domain ?? "", clientId, clientSecret });
+  if (!got.ok) return { error: `No se guardó: ${got.message}` };
+  const missing = missingScopes(got.scopes);
+  if (missing.length) return { error: `No se guardó: ${missingScopesMessage(missing)}` };
+
+  // Después de la llamada a Shopify: una renovación del cron que empezó antes
+  // y falla después no pisa este «salió bien» (`shopify_token_renewed_at`).
+  const now = new Date();
+  const otherApp = clientId !== (row.shopify_client_id ?? "").trim();
+  // Sin Client ID guardado no hubo app antes: la tienda que soporte pasó a
+  // mano de 'interna' sin token a 'propia' (MOM §36.2). Se registran sus
+  // webhooks igual, pero el aviso no pide desinstalar una «app anterior» que
+  // no existe (sería desinstalar la única).
+  const firstCredentials = !(row.shopify_client_id ?? "").trim();
+  let currentWebhookSecret: string | null = null;
+  try {
+    currentWebhookSecret = decryptOrNull(row.shopify_webhook_secret_enc ?? null);
+  } catch {
+    currentWebhookSecret = null;
+  }
+  const rotated = !otherApp && currentWebhookSecret !== null && currentWebhookSecret !== clientSecret;
+  const prevUntil = new Date(now.getTime() + OWN_APP_PREV_WEBHOOK_SECRET_GRACE_MS);
+  const { data: saved, error } = await ctx.admin
+    .from("stores")
+    .update({
+      shopify_client_id: clientId,
+      shopify_client_secret_enc: encrypt(clientSecret),
+      shopify_webhook_secret_enc: encrypt(clientSecret),
+      shopify_token_enc: encrypt(got.token),
+      shopify_token_expires_at: got.expiresAt.toISOString(),
+      shopify_token_renewed_at: now.toISOString(),
+      shopify_token_error: null,
+      shopify_token_retry_at: null,
+      // Rotación: el secreto de webhooks de hasta ahora queda como anterior,
+      // tal cual está cifrado. Otra app: no se acepta el de la anterior. El
+      // mismo secreto otra vez: lo anterior sigue como estaba.
+      ...(rotated
+        ? { shopify_webhook_secret_prev_enc: row.shopify_webhook_secret_enc, shopify_webhook_secret_prev_set_at: now.toISOString() }
+        : otherApp
+          ? { shopify_webhook_secret_prev_enc: null, shopify_webhook_secret_prev_set_at: null }
+          : {}),
+    })
+    .eq("id", storeId)
+    .eq("shopify_app", OWN_APP)
+    .select("id");
+  if (error) return { error: isOwnAppMigrationMissing(error) ? OWN_APP_MIGRATION_MISSING_MESSAGE : "No se pudo guardar." };
+  if (!Array.isArray(saved) || saved.length === 0) return { error: "No se guardó: la tienda ya no usa app propia." };
+
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  if (!isOwnAppRenewableStatus(row.status)) {
+    return {
+      notice:
+        "Credenciales probadas y guardadas. La tienda sigue sin estar activa: cámbiala a «Activa» en Tienda y re-registra los webhooks.",
+    };
+  }
+  if (otherApp) {
+    // Los webhooks de la app anterior ya no se aceptan: se registran los de la
+    // nueva (pedidos, borradores y su desinstalación). Mejor esfuerzo.
+    let failures: string[] = [];
+    try {
+      const results = await registerOrderWebhooks({
+        domain: row.shopify_domain ?? "",
+        token: got.token,
+        callbackUrl: `${env.siteUrl()}/api/webhooks/shopify/${storeId}`,
+        extraTopics: CLIENT_APP_WEBHOOK_TOPICS,
+      });
+      failures = results.filter((r) => r.error).map((r) => `${r.topic}: ${r.error}`);
+    } catch (e) {
+      failures = [errMsg(e)];
+    }
+    if (failures.length) {
+      return {
+        error: firstCredentials
+          ? `Credenciales probadas y guardadas, pero los webhooks tuvieron problemas: ${failures.join("; ")}. Pulsa «Re-registrar webhooks».`
+          : `Credenciales de la app nueva probadas y guardadas, pero sus webhooks tuvieron problemas: ${failures.join("; ")}. Pulsa «Re-registrar webhooks» y, cuando estén, desinstala la app anterior de la tienda.`,
+      };
+    }
+    if (firstCredentials) {
+      return { notice: "Credenciales probadas y guardadas, y los webhooks registrados. Acceso renovado." };
+    }
+    return {
+      notice:
+        "Credenciales de la app nueva probadas y guardadas, y sus webhooks registrados. Desinstala la app anterior de la tienda: Kapta ya no acepta sus webhooks.",
+    };
+  }
+  if (rotated) {
+    return {
+      notice: `Credenciales probadas y guardadas. Acceso renovado. Kapta acepta también el secreto anterior en los webhooks ${ownAppPrevSecretLine(prevUntil, row.timezone)}: revócalo ahora en el Dev Dashboard y pulsa «Ya revoqué el secreto anterior».`,
+    };
+  }
+  return { notice: "Credenciales probadas y guardadas. Acceso renovado." };
+}
+
+/**
+ * «App propia» → «Ya revoqué el secreto anterior» (MOM §36.4): Kapta deja de
+ * aceptar los webhooks firmados con el Client secret anterior. Solo tiendas
+ * 'propia'.
+ */
+export async function clearOwnAppPreviousSecret(
+  _prev: SettingsState,
+  formData: FormData,
+): Promise<SettingsState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+  const loaded = await loadOwnAppStore(ctx.admin, storeId);
+  if ("error" in loaded) return { error: loaded.error };
+  const { error } = await ctx.admin
+    .from("stores")
+    .update({ shopify_webhook_secret_prev_enc: null, shopify_webhook_secret_prev_set_at: null })
+    .eq("id", storeId)
+    .eq("shopify_app", OWN_APP);
+  if (error) return { error: isOwnAppMigrationMissing(error) ? OWN_APP_MIGRATION_MISSING_MESSAGE : "No se pudo guardar." };
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  return { notice: "Listo: Kapta ya solo acepta webhooks firmados con el Client secret actual." };
+}
+
+/** «App propia» → «Renovar ahora»: lo mismo que hace el cron, para esta tienda. */
+export async function renewOwnAppTokenNow(
+  _prev: SettingsState,
+  formData: FormData,
+): Promise<SettingsState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+  const loaded = await loadOwnAppStore(ctx.admin, storeId);
+  if ("error" in loaded) return { error: loaded.error };
+  const r = await renewOwnAppToken(ctx.admin, storeId);
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  if (!r.ok) return { error: r.message };
+  if (r.missingScopes.length) return { error: `Acceso renovado, pero ${missingScopesMessage(r.missingScopes)}` };
+  return { notice: "Acceso renovado." };
 }
 
 export async function syncNow(

@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
--- 0271: la salida de Urpi rellenada lleva el día de la entrega, y las cajas «por
+-- 0272: la salida de Urpi rellenada lleva el día de la entrega, y las cajas «por
 -- definir» de entregas viejas de Urpi pasan a su salida entregada (MOM §30.11,
 -- §4; 23-10-2026). Corre en el clúster desechable de verify-db, después de todas
 -- las migraciones, dentro de una transacción que se deshace. Reutiliza la tienda
@@ -165,9 +165,9 @@ insert into shipments (store_id, order_id, order_name, courier, guide_code, deli
                        custody_state, returned_at, preparation_state, created_at, updated_at) values
   ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '27100000-0000-0000-0000-000000000011', '#CU11', 'por_definir', 'MOM-CU11-OLD', 'pendiente', 'pending',
    'mom_manual_route', 'devuelto', null, 'listo_despacho', '2026-07-31 10:00-05', '2026-09-01 10:00-05'),
-  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '27100000-0000-0000-0000-000000000012', '#CU12', 'tanders', 'TND-0271-12', 'anulado', 'closed',
+  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '27100000-0000-0000-0000-000000000012', '#CU12', 'tanders', 'TND-0272-12', 'anulado', 'closed',
    'tanders', 'empresa', null, 'listo_despacho', '2026-07-31 10:00-05', '2026-09-01 10:00-05'),
-  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '27100000-0000-0000-0000-000000000013', '#CU13', 'aliclik', 'AL-0271-13', 'en_ruta', 'pending',
+  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '27100000-0000-0000-0000-000000000013', '#CU13', 'aliclik', 'AL-0272-13', 'en_ruta', 'pending',
    'aliclik_api', 'empresa', '2026-07-31 18:00-05', 'listo_despacho', '2026-07-31 10:00-05', '2026-09-01 10:00-05');
 -- 23: Urpi ya tiene su salida entregada (de su ruta), y sobra una «por definir».
 -- 24: una segunda caja «por definir» viva.
@@ -201,7 +201,7 @@ begin
 end $$;
 
 \echo '  primera pasada'
-\ir ../../db/migrations/0271_urpi_salida_fecha.sql
+\ir ../../db/migrations/0272_urpi_salida_fecha.sql
 
 -- ── a) (1) El día de la entrega en la salida ya rellenada ───────────────────
 do $$
@@ -299,7 +299,7 @@ begin
        and e.source = 'manual' and e.courier = 'urpi' and e.guide_code = 'MOM-CU10-URPI-C2710010'
        and e.payload = jsonb_build_object('outputCode', s.output_code, 'previousCourier', 'por_definir', 'backfill', true,
                                           'urpi_row', 27111, 'fecha', '2026-08-12')
-       and e.note = s.output_code || ' tenía courier por definir; el reporte de Urpi la da por entregada el 12/08/2026 (fila 27111): pasó a salida de Urpi entregada (relleno 0271).'
+       and e.note = s.output_code || ' tenía courier por definir; el reporte de Urpi la da por entregada el 12/08/2026 (fila 27111): pasó a salida de Urpi entregada (relleno 0272).'
   ) then
     raise exception 'el evento de #CU10 no dice lo que tiene que decir';
   end if;
@@ -341,7 +341,7 @@ create temp table s0271_after on commit drop as
 select id, courier, guide_code, delivery_status, dispatched_at, closed_at, updated_at from shipments where order_id::text like '27100000-%';
 
 \echo '  segunda pasada'
-\ir ../../db/migrations/0271_urpi_salida_fecha.sql
+\ir ../../db/migrations/0272_urpi_salida_fecha.sql
 
 do $$
 begin

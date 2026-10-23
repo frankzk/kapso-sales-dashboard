@@ -74,7 +74,10 @@ import {
   setReplyTemplateActive,
   listStoreMetaAdAccounts,
   reRegisterWebhooks,
+  clearOwnAppPreviousSecret,
+  renewOwnAppTokenNow,
   saveMetaAdAccounts,
+  saveOwnAppCredentials,
   sendTelegramTest,
   sendUrgentTelegramTest,
   findTelegramGroups,
@@ -262,6 +265,26 @@ export interface StoreSettingsData {
     olvaPortalPassword: boolean;
   };
   oauthAvailable: boolean;
+  /**
+   * App propia de Shopify (0271, owner 23-10-2026): solo en tiendas conectadas
+   * así; null en las demás. Nunca trae el Client secret ni el token.
+   */
+  ownApp?: {
+    clientId: string | null;
+    hasSecret: boolean;
+    /** «App propia · acceso renovado hace X · vence a las HH:MM», o «app desinstalada el …». */
+    statusLine: string;
+    /** Qué hacer según el estado (`ownAppAccessHint`): a una deshabilitada no se le dice «renueva». */
+    hint: string;
+    /** La tienda está deshabilitada: «Renovar ahora» no aplica. */
+    disabled: boolean;
+    /** El último fallo al renovar, o los permisos que faltan (`shopify_token_error`). */
+    error: string | null;
+    /** «La última renovación falló» o «Faltan permisos en la app» (`ownAppErrorTitle`). */
+    errorTitle: string;
+    /** «hasta el 25/10 a las 14:20» mientras se acepta el Client secret anterior; null si no. */
+    prevSecretUntil: string | null;
+  } | null;
   /** Lo del agente de leads (MOM §33) que no es una columna de la tienda. */
   leadVoice: {
     /** Telnyx, la puerta SIP y el secreto propio del agente de leads están en Vercel. */
@@ -873,6 +896,7 @@ function BannerRow({ tone = "warn", title, children }: { tone?: "warn" | "info" 
 /* ── Conexiones ──────────────────────────────────────────────────────────── */
 
 function ShopifySection({ data }: { data: StoreSettingsData }) {
+  if (data.ownApp) return <OwnAppShopifySection data={data} ownApp={data.ownApp} />;
   const s = data.store;
   const has = data.has;
   return (
@@ -919,6 +943,129 @@ function ShopifySection({ data }: { data: StoreSettingsData }) {
         <FieldGrid>
           <SecretField name="shopify_token" label="Shopify Admin API token" set={has.shopifyToken} />
           <SecretField name="shopify_webhook_secret" label="Shopify API secret (HMAC)" set={has.webhookSecret} />
+          <SecretField
+            name="flow_webhook_secret"
+            label="Secreto webhook de Shopify Flow (búsquedas)"
+            set={has.flowSecret}
+            className="sm:col-span-2"
+          />
+        </FieldGrid>
+      </StoreForm>
+    </SettingsSection>
+  );
+}
+
+/**
+ * Shopify de una tienda conectada con su app propia (0271, owner 23-10-2026).
+ * Sin «Reconectar con Shopify» (eso es la app interna) ni los campos del token
+ * y del secreto HMAC a mano: el token lo renueva Kapta y el secreto de los
+ * webhooks es el Client secret de la app.
+ */
+function OwnAppShopifySection({
+  data,
+  ownApp,
+}: {
+  data: StoreSettingsData;
+  ownApp: NonNullable<StoreSettingsData["ownApp"]>;
+}) {
+  const s = data.store;
+  const has = data.has;
+  const [state, action, pending] = useActionState(saveOwnAppCredentials, initial);
+  const ok = has.shopifyToken && !ownApp.error;
+  return (
+    <SettingsSection
+      id="shopify"
+      title="Shopify"
+      badge={<Badge tone={ok ? "ok" : "warn"}>{has.shopifyToken ? "App propia" : "Sin token"}</Badge>}
+      description={
+        <p>
+          Conectada con la app que la organización de Shopify de la tienda creó en el Dev Dashboard. Kapta renueva
+          el acceso cada día.
+        </p>
+      }
+    >
+      <div className={cn(CARD, "divide-y divide-line")}>
+        <div className={ROW}>
+          <p className="text-sm font-semibold leading-5 text-ink-900">{ownApp.statusLine}</p>
+          <p className={cn(HELP, "mt-0.5")}>{ownApp.hint}</p>
+        </div>
+        {ownApp.error ? (
+          <BannerRow tone="warn" title={ownApp.errorTitle}>
+            {ownApp.error}
+          </BannerRow>
+        ) : null}
+        {ownApp.prevSecretUntil ? (
+          <ActionRow
+            action={clearOwnAppPreviousSecret}
+            storeId={s.id}
+            title="Client secret anterior"
+            label="Ya revoqué el secreto anterior"
+            pendingLabel="Guardando…"
+            help={`Kapta acepta también webhooks firmados con el secreto anterior ${ownApp.prevSecretUntil}: Shopify firma con él hasta que lo revocas en el Dev Dashboard. Revócalo allí y confirma aquí.`}
+          />
+        ) : null}
+        {ownApp.disabled ? null : (
+          <ActionRow
+            action={renewOwnAppTokenNow}
+            storeId={s.id}
+            title="Acceso a Shopify"
+            label="Renovar ahora"
+            pendingLabel="Renovando…"
+            help="Pide un token nuevo con el Client ID y el Client secret guardados. El cron lo hace cada hora."
+          />
+        )}
+        <ActionRow
+          action={reRegisterWebhooks}
+          storeId={s.id}
+          title="Webhooks de pedidos"
+          label="Re-registrar webhooks"
+          help="Vuelve a registrar pedidos, borradores y la desinstalación de la app apuntando a este panel."
+        />
+      </div>
+
+      <form action={action} className={cn(CARD, "divide-y divide-line")}>
+        <input type="hidden" name="store_id" value={s.id} />
+        <CardHeader
+          title="Credenciales de la app"
+          description="Se prueban pidiendo un token antes de guardarlas. Si no sirven, no se cambia nada."
+        />
+        <FieldGrid>
+          <Field label="Client ID" htmlFor="own_client_id">
+            <input
+              id="own_client_id"
+              name="own_client_id"
+              defaultValue={ownApp.clientId ?? ""}
+              autoComplete="off"
+              className={FIELD}
+            />
+          </Field>
+          <Field
+            label="Client secret"
+            htmlFor="own_client_secret"
+            mark={<Badge tone={ownApp.hasSecret ? "ok" : "neutral"}>{ownApp.hasSecret ? "Configurado" : "Sin configurar"}</Badge>}
+            hint="No se vuelve a mostrar. Si lo rotaste en el Dev Dashboard: pega el nuevo aquí, después revoca el anterior allí y confirma con «Ya revoqué el secreto anterior». Si cambias el Client ID (otra app), Kapta registra los webhooks de la nueva: desinstala la anterior."
+          >
+            <input
+              id="own_client_secret"
+              name="own_client_secret"
+              type="password"
+              autoComplete="off"
+              required
+              placeholder="Pega el Client secret"
+              className={FIELD}
+            />
+          </Field>
+        </FieldGrid>
+        <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2 px-4 py-3 sm:px-5">
+          <ActionResult state={state} className="mr-auto min-w-0" />
+          <OpsButton type="submit" variant="primary" disabled={pending}>
+            {pending ? "Probando…" : "Probar y guardar"}
+          </OpsButton>
+        </div>
+      </form>
+
+      <StoreForm storeId={s.id} title="Shopify Flow" persisted={[has.flowSecret]}>
+        <FieldGrid>
           <SecretField
             name="flow_webhook_secret"
             label="Secreto webhook de Shopify Flow (búsquedas)"

@@ -7,6 +7,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
 import { decryptOrNull } from "@/lib/crypto";
+import { OWN_APP, ownAppPrevSecretValidUntil, ownAppTokenForUse } from "@/lib/shopify-own-app";
 import { chunk } from "@/lib/access";
 import { recomputeOrderMasterSafe, reconcileOrderMaster } from "@/lib/order-master";
 import { fetchMetaAdMeta, normalizeMetaAdAccounts, type StoreMetaAdAccount } from "@/lib/meta-marketing";
@@ -22,6 +23,7 @@ import {
   mapRestOrder,
   verifyShopifyHmac,
   routeShopifyTopic,
+  type ShopifyWebhookRoute,
 } from "@/lib/shopify";
 import {
   classifyKapsoEvent,
@@ -78,8 +80,21 @@ export interface StoreCreds {
   org_id: string;
   name: string;
   shopify_domain: string;
+  /** Con qué app se conectó (0249, 0271): 'interna', 'clientes' o 'propia'. */
+  shopify_app?: string;
   shopify_token: string | null;
   shopify_webhook_secret: string | null;
+  /**
+   * Solo app propia (0271): cuándo vence `shopify_token`, para renovarlo al
+   * usarlo después de autenticar un webhook (`ownAppCredsForUse`).
+   */
+  shopify_token_expires_at?: string | null;
+  /**
+   * Solo app propia (0271, MOM §36.4): el Client secret anterior tras rotarlo,
+   * mientras dura la gracia. Firma los webhooks hasta que se revoca en Shopify.
+   * En Kenku, Aurela y las tiendas 'clientes' no existe.
+   */
+  shopify_webhook_secret_prev?: string | null;
   kapso_project_id: string | null;
   kapso_api_key: string | null;
   flow_webhook_secret: string | null;
@@ -237,10 +252,28 @@ export async function getStoreOrderPrefix(
   return ((data as { order_prefix?: string | null }).order_prefix ?? null) || null;
 }
 
-/** Load a store row and decrypt its credentials (service-role only). */
+/** El secreto anterior de una app propia; uno que no se descifra no tumba la tienda. */
+function prevSecretOrNull(value: unknown): string | null {
+  try {
+    return typeof value === "string" ? decryptOrNull(value) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Load a store row and decrypt its credentials (service-role only).
+ *
+ * `renewOwnApp: false` (0271): no renueva el token de una tienda con app propia.
+ * Lo pasan quienes reciben un webhook o un aviso de afuera y todavía no
+ * comprobaron su firma o su secreto: una petición falsa no puede hacer que
+ * Kapta le mande el Client secret a Shopify. Después de autenticar, si usan
+ * Shopify, llaman a `ownAppCredsForUse`.
+ */
 export async function getStoreCreds(
   storeId: string,
   admin: SupabaseClient = createAdminSupabase(),
+  opts: { renewOwnApp?: boolean } = {},
 ): Promise<StoreCreds | null> {
   const { data, error } = await admin
     .from("stores")
@@ -248,13 +281,29 @@ export async function getStoreCreds(
     .eq("id", storeId)
     .single();
   if (error || !data) return null;
+  const ownApp = data.shopify_app === OWN_APP;
+  let shopifyToken = decryptOrNull(data.shopify_token_enc);
+  // App propia (0271, owner 23-10-2026): su token dura ~24 h. Si vence en menos
+  // de 15 minutos se renueva antes de usarlo. Solo para 'propia': Kenku, Aurela
+  // y las tiendas de la app de clientes no pasan por aquí (ni consulta ni red).
+  if (ownApp && opts.renewOwnApp !== false) shopifyToken = await ownAppTokenForUse(admin, data, shopifyToken);
   return {
     id: data.id,
     org_id: data.org_id,
     name: data.name,
     shopify_domain: data.shopify_domain,
-    shopify_token: decryptOrNull(data.shopify_token_enc),
+    shopify_app: data.shopify_app ?? "interna",
+    shopify_token: shopifyToken,
     shopify_webhook_secret: decryptOrNull(data.shopify_webhook_secret_enc),
+    // Solo en tiendas con app propia: las demás no llevan estas claves.
+    ...(ownApp
+      ? {
+          shopify_token_expires_at: data.shopify_token_expires_at ?? null,
+          shopify_webhook_secret_prev: ownAppPrevSecretValidUntil(data.shopify_webhook_secret_prev_set_at, new Date())
+            ? prevSecretOrNull(data.shopify_webhook_secret_prev_enc)
+            : null,
+        }
+      : {}),
     kapso_project_id: data.kapso_project_id ?? null,
     kapso_api_key: decryptOrNull(data.kapso_api_key_enc),
     flow_webhook_secret: decryptOrNull(data.flow_webhook_secret_enc),
@@ -386,6 +435,62 @@ export async function getStoreCreds(
     olva_reminder_params: data.olva_reminder_params ?? "nombre,agencia,guia,saldo,vence",
     shalom_reminder_fallback_image_url: data.shalom_reminder_fallback_image_url ?? null,
   };
+}
+
+/**
+ * App propia (0271): las mismas credenciales con el token renovado si le queda
+ * poco (`ownAppTokenForUse`, con su freno). Para quien leyó con
+ * `renewOwnApp: false` y ya autenticó la petición. Kenku, Aurela y las tiendas
+ * 'clientes' vuelven tal cual, sin consulta ni red.
+ */
+export async function ownAppCredsForUse(admin: SupabaseClient, creds: StoreCreds): Promise<StoreCreds> {
+  if (creds.shopify_app !== OWN_APP) return creds;
+  const token = await ownAppTokenForUse(
+    admin,
+    {
+      id: creds.id,
+      shopify_app: creds.shopify_app,
+      status: creds.status,
+      shopify_token_expires_at: creds.shopify_token_expires_at ?? null,
+    },
+    creds.shopify_token,
+  );
+  return token === creds.shopify_token ? creds : { ...creds, shopify_token: token };
+}
+
+/**
+ * Las ramas del handler que aceptan un webhook firmado SOLO con el Client
+ * secret anterior de una app propia. Pedidos y borradores (y un tema que se
+ * ignora, que no cambia nada) siguen durante la gracia. `app/uninstalled` no:
+ * deshabilita la tienda y le borra el token, y quien tuviera un secreto
+ * anterior filtrado podría falsificarla (MOM §36.4). Una rama nueva queda
+ * fuera hasta que alguien decida que es segura.
+ */
+const PREV_SECRET_ROUTES: ReadonlySet<ShopifyWebhookRoute> = new Set(["order", "draft", "ignore"]);
+
+/**
+ * La firma de un webhook de Shopify. Con el secreto de la tienda, como
+ * siempre; y SOLO en una tienda con app propia, también con el Client secret
+ * anterior mientras dura su gracia (MOM §36.4: tras rotarlo, Shopify firma con
+ * el más viejo que no se revocó), y solo en las ramas de `PREV_SECRET_ROUTES`:
+ * una desinstalación firmada solo con el anterior se rechaza (401) y Shopify
+ * la reintenta. Kenku, Aurela y las tiendas 'clientes' se comprueban
+ * exactamente como antes.
+ */
+export function verifyStoreShopifyHmac(
+  rawBody: string,
+  hmacHeader: string | null,
+  creds: StoreCreds,
+  route: ShopifyWebhookRoute,
+): boolean {
+  if (verifyShopifyHmac(rawBody, hmacHeader, creds.shopify_webhook_secret)) return true;
+  if (creds.shopify_app !== OWN_APP || !creds.shopify_webhook_secret_prev) return false;
+  if (!verifyShopifyHmac(rawBody, hmacHeader, creds.shopify_webhook_secret_prev)) return false;
+  if (PREV_SECRET_ROUTES.has(route)) return true;
+  // Sin secretos en el log: solo la tienda y la rama, para que soporte vea
+  // por qué una desinstalación no la deshabilitó.
+  console.warn(`[shopify-own-app] ${JSON.stringify({ webhook: route, rechazado: "firmado_con_secreto_anterior", storeId: creds.id })}`);
+  return false;
 }
 
 /** Map a Kapso phone-number record → a `whatsapp_numbers` label row. `kind` is
@@ -616,10 +721,15 @@ export async function processShopifyWebhook(
   params: ProcessWebhookParams,
   admin: SupabaseClient = createAdminSupabase(),
 ): Promise<WebhookResult> {
-  const creds = await getStoreCreds(params.storeId, admin);
+  // Sin renovar el token de una app propia: la firma todavía no se comprobó
+  // (0271). El único camino que usa Shopify (borradores) lo renueva después.
+  const creds = await getStoreCreds(params.storeId, admin, { renewOwnApp: false });
   if (!creds) return { status: "error", message: "unknown store" };
 
-  if (!verifyShopifyHmac(params.rawBody, params.hmacHeader, creds.shopify_webhook_secret)) {
+  // La rama se sabe antes de la firma: el secreto anterior de una app propia
+  // no vale para todas (MOM §36.4).
+  const route = routeShopifyTopic(params.topic);
+  if (!verifyStoreShopifyHmac(params.rawBody, params.hmacHeader, creds, route)) {
     return { status: "unauthorized" };
   }
 
@@ -637,7 +747,7 @@ export async function processShopifyWebhook(
   // Route by topic. Order topics (orders/*) and draft topics (draft_orders/*)
   // share the HMAC/idempotency/JSON prefix above, then diverge. La
   // desinstalación tiene su rama; un tema desconocido ya no entra como pedido.
-  switch (routeShopifyTopic(params.topic)) {
+  switch (route) {
     case "draft":
       return processDraftOrderWebhook(admin, creds, params, payload, webhookId);
     case "order":
@@ -654,6 +764,8 @@ export async function processShopifyWebhook(
  * deshabilitada (los crons solo corren sobre tiendas activas) y sin token, que
  * Shopify ya revocó. No se borra nada: pedidos e historial siguen. Los datos
  * personales de sus compradores se anonimizan cuando llega el `shop/redact`.
+ * En una app propia solo llega aquí firmada con el Client secret vigente,
+ * nunca solo con el anterior (`verifyStoreShopifyHmac`, MOM §36.4).
  */
 async function processAppUninstalled(
   admin: SupabaseClient,
@@ -731,7 +843,8 @@ export async function processFlowWebhook(
   params: FlowWebhookParams,
   admin: SupabaseClient = createAdminSupabase(),
 ): Promise<WebhookResult> {
-  const creds = await getStoreCreds(params.storeId, admin);
+  // Shopify Flow no usa el token de Shopify: nunca renueva el de una app propia.
+  const creds = await getStoreCreds(params.storeId, admin, { renewOwnApp: false });
   if (!creds) return { status: "error", message: "unknown store" };
   if (!verifyFlowSecret(params.secretHeader, creds.flow_webhook_secret)) {
     await recordFlowRejection(
@@ -824,7 +937,9 @@ export async function authorizeKapsoRequest(
   providedSecret: string | null,
   admin: SupabaseClient = createAdminSupabase(),
 ): Promise<StoreCreds | null> {
-  const creds = await getStoreCreds(storeId, admin);
+  // Los webhooks de Kapso no usan el token de Shopify, y aquí el secreto aún no
+  // se comprobó: nunca renueva el de una app propia (0271).
+  const creds = await getStoreCreds(storeId, admin, { renewOwnApp: false });
   if (!creds) return null;
   // Only need the shared CRON_SECRET as a fallback when this store has no secret
   // of its own; read it lazily so a per-store-secured store works even without
@@ -1018,7 +1133,10 @@ async function processDraftOrderWebhook(
   } else {
     const row = mapRestDraftOrder(payload, params.storeId);
     await upsertDraftOrders(admin, [row]);
-    const shopify = creds.shopify_token ? { domain: creds.shopify_domain, token: creds.shopify_token } : undefined;
+    // App propia (0271): la firma ya se comprobó; ahora sí, el token renovado
+    // si le queda poco. Las demás tiendas, tal cual.
+    const live = await ownAppCredsForUse(admin, creds);
+    const shopify = live.shopify_token ? { domain: live.shopify_domain, token: live.shopify_token } : undefined;
     const recovered = await linkDraftOrdersToLeads(admin, params.storeId, [row], shopify);
     if (recovered.length) {
       try {

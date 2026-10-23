@@ -543,6 +543,8 @@
 \ir migrations/0269_invoices_backfill.sql
 \echo 'Applying 0270_cuaderno_s01_fill.sql'
 \ir migrations/0270_cuaderno_s01_fill.sql
-\echo 'Applying 0271_urpi_salida_fecha.sql'
-\ir migrations/0271_urpi_salida_fecha.sql
+\echo 'Applying 0271_shopify_app_propia.sql'
+\ir migrations/0271_shopify_app_propia.sql
+\echo 'Applying 0272_urpi_salida_fecha.sql'
+\ir migrations/0272_urpi_salida_fecha.sql
 \echo 'Done.'

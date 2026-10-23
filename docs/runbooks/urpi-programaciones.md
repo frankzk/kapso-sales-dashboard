@@ -113,7 +113,7 @@ en reportes de entrega ni cambia fechas por sí sola.
    de Urpi entregada (`lib/urpi-report-apply.ts`). El aviso de la carga dice
    cuántos marcó y qué hay que mirar a mano. Desde el 23-10-2026 esa salida
    queda cerrada (`closed_at`) el día del reporte que la dio por entregada, que
-   es el día de entrega que muestra el Master (MOM §30.11, migración 0271).
+   es el día de entrega que muestra el Master (MOM §30.11, migración 0272).
 4. Revisar las listas:
    - **Entregados por marcar**: lo que la carga no pudo marcar (quien cargó no
      tenía `master.edit`, o algo falló). Seleccionar y «Marcar entregados».

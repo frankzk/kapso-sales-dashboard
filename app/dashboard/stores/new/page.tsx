@@ -2,7 +2,8 @@ import { redirect } from "next/navigation";
 import { createServerSupabase } from "@/lib/db";
 import { orgsWithPermission } from "@/lib/permissions-access";
 import { getUserRoleSummary } from "@/lib/access";
-import { CreateOrgForm, CreateStoreForm } from "@/components/forms";
+import { ConnectOwnAppStoreForm, CreateOrgForm, CreateStoreForm } from "@/components/forms";
+import { OWN_APP_REQUIRED_SCOPES } from "@/lib/shopify-own-app";
 
 export const dynamic = "force-dynamic";
 
@@ -36,7 +37,31 @@ export default async function NewStorePage() {
       </div>
 
       {orgs.length ? (
-        <CreateStoreForm orgs={orgs} />
+        <>
+          {/* Primero la app propia (MOM §36.2): con Client ID y Client secret del
+              Dev Dashboard. Pegarlos en el formulario del token de Admin API
+              crearía una tienda de la app interna que después bloquea este
+              camino. Cada camino lleva su título. */}
+          <section className="space-y-4">
+            <div>
+              <h2 className="text-base font-semibold text-slate-900">Conectar con app propia de Shopify</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Dev Dashboard: Client ID + Client secret. Es el camino para una tienda nueva.
+              </p>
+            </div>
+            <ConnectOwnAppStoreForm orgs={orgs} scopes={OWN_APP_REQUIRED_SCOPES} />
+          </section>
+          <section className="space-y-4 border-t border-slate-200 pt-6">
+            <div>
+              <h2 className="text-base font-semibold text-slate-900">Crear tienda con token de Admin API</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Con un token de Admin API (shpat_…) o para instalar después con la app interna. Si tienes Client ID y
+                Client secret del Dev Dashboard, usa «Conectar con app propia de Shopify», arriba.
+              </p>
+            </div>
+            <CreateStoreForm orgs={orgs} />
+          </section>
+        </>
       ) : (
         <div className="space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-5">
           <div>

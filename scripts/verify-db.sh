@@ -256,10 +256,16 @@ echo "  ✅ todas las ventas por día y canal, la regla del canal en una sola vi
 echo "▶ Caja «por definir» del cuaderno de Grupo GF (0270): pasa a salida entregada del motorizado propio solo en el objetivo"
 $PSQL -f "$ROOT/scripts/sql/cuaderno_s01_fill_smoke.sql"
 
+# La promesa del owner (23-10-2026) es que conectar una tienda con su app
+# propia no toca a Kenku, Aurela ni las tiendas cliente. La base la sostiene:
+# se prueba aplicando la 0271 sobre el esquema de la 0249 con esas tiendas.
+echo "▶ App propia de Shopify (0271): Kenku, Aurela y las tiendas clientes no cambian"
+$PSQL -f "$ROOT/scripts/sql/shopify_app_propia_smoke.sql"
+
 # También un relleno de datos sobre producción (23-10-2026): el día de la
 # entrega en las salidas de Urpi ya rellenadas y las cajas «por definir» de
 # entregas viejas de Urpi. Se fija qué salida toca, qué le escribe y qué no.
-echo "▶ Salida de Urpi (0271): closed_at del día de la entrega y las cajas «por definir» de entregas viejas de Urpi, solo en el objetivo"
+echo "▶ Salida de Urpi (0272): closed_at del día de la entrega y las cajas «por definir» de entregas viejas de Urpi, solo en el objetivo"
 $PSQL -f "$ROOT/scripts/sql/urpi_salida_fecha_smoke.sql"
 
 echo ""

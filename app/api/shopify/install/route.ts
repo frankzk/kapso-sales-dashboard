@@ -31,10 +31,18 @@ export async function GET(req: NextRequest) {
   const admin = createAdminSupabase();
   const { data: store } = await admin
     .from("stores")
-    .select("id, org_id, shopify_domain")
+    .select("id, org_id, shopify_domain, shopify_app")
     .eq("id", storeId)
     .maybeSingle();
   if (!store) return new NextResponse("tienda no encontrada", { status: 404 });
+  // Una tienda con su app propia (0271, MOM §36.4) no se instala con la app
+  // interna: el callback pisaría su token y el secreto de sus webhooks.
+  if ((store as { shopify_app?: string | null }).shopify_app === "propia") {
+    return new NextResponse(
+      "Esta tienda usa su app propia de Shopify: sus credenciales se cambian en Ajustes → Shopify.",
+      { status: 409 },
+    );
+  }
 
   // «Administrar tiendas» (MOM §16): owner/admin, o el rol Administración.
   if (!(await hasOrgPermission(store.org_id, "stores.manage"))) {

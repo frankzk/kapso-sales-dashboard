@@ -3453,11 +3453,206 @@ calcular con `cost_tariffs`. La 0270 no se deshace sola: las salidas
 rellenadas se reconocen por su `route_output_filled` con
 `payload.backfill = true`.
 
-### 23-10-2026 · La salida de Urpi lleva el día de la entrega, y las cajas viejas de Urpi (0271)
+### 23-10-2026 · Tiendas con su app propia de Shopify (0271, MOM §36)
+
+Conectar «Súper Human Perú» con la app que su propia organización de Shopify
+creó en el Dev Dashboard («app propia»): Shopify ya no deja crear apps
+personalizadas en el admin, y la app pública «Kapta» no está revisada. La app
+propia pide su token con su Client ID y su Client secret (*client credentials
+grant*) y cada token dura ~24 h; Kapta lo renueva cada hora (cron) y antes de
+usarlo.
+
+**Kenku y Aurela no cambian.** Siguen con la app interna, su token y sus
+webhooks; las tiendas `clientes`, igual. Nada de esto las desconecta, les
+registra webhooks ni les cambia el token, y la 0271 no actualiza ninguna fila.
+Sin variables de entorno nuevas: el Client ID y el Client secret son de cada
+tienda, se escriben en Kapta y nunca van a Vercel, al chat ni al repositorio.
+
+1. **Migración `0271_shopify_app_propia.sql`, a mano y ANTES del código.**
+   Amplía `stores_shopify_app_check` a `('interna', 'clientes', 'propia')`;
+   añade `stores.shopify_client_id`, `shopify_client_secret_enc` (cifrado como
+   los demás `*_enc`), `shopify_token_expires_at`, `shopify_token_renewed_at`,
+   `shopify_token_error`, `shopify_token_retry_at` (el freno de la renovación
+   al usar), `shopify_webhook_secret_prev_enc` (el Client secret anterior tras
+   rotarlo, cifrado) y `shopify_webhook_secret_prev_set_at`; y pone
+   `stores_own_app_columns_check` (esas ocho columnas solo tienen valor en una
+   tienda `propia`) y `stores_own_app_shop_uniq` (un dominio, una sola tienda
+   con app propia).
+   Sin grants nuevos: la fila la protege la RLS de siempre. Sin ella, la
+   conexión con app propia responde «falta la migración 0271» y el cron
+   contesta `sin_migracion`; las tiendas de hoy siguen igual.
+
+   **Antes** (solo lectura; anotar la huella):
+
+   ```sql
+   -- a) Un solo CHECK de la lista de apps, el de la 0249: 'interna' y 'clientes'.
+   select conname, pg_get_constraintdef(oid)
+     from pg_constraint
+    where conrelid = 'stores'::regclass and contype = 'c'
+      and pg_get_constraintdef(oid) like '%shopify_app%';
+   -- b) Tiendas por app y estado (Kenku Peru y Aurela: interna, active).
+   select shopify_app, status, count(*) from stores group by 1, 2 order by 1, 2;
+   -- c) La huella de lo que la 0271 promete no tocar (sin mostrar secretos).
+   select md5(string_agg(concat_ws('|', id, name, shopify_domain, shopify_app, status,
+                                   md5(coalesce(shopify_token_enc, '')),
+                                   md5(coalesce(shopify_webhook_secret_enc, '')),
+                                   shopify_uninstalled_at), ',' order by id)) as huella
+     from stores;
+   ```
+
+   **Aplicar.** Toma un momento el candado exclusivo de `stores` (cambia dos
+   CHECK y crea un índice). Mientras lo espera, todo lo que lee `stores` hace
+   cola detrás: cada consulta del dashboard y cada webhook de Kenku y Aurela.
+   Por eso el `lock_timeout` es corto, **3 s**: si una consulta larga tiene la
+   tabla, la migración se corta sola (`canceling statement due to lock
+   timeout`), no cambia nada, y se vuelve a correr el mismo bloque unos
+   segundos después, las veces que haga falta:
+
+   ```bash
+   psql "$DATABASE_URL" <<'SQL'
+   begin;
+   set local lock_timeout = '3s';
+   \i db/migrations/0271_shopify_app_propia.sql
+   commit;
+   SQL
+   ```
+
+   **Después** (solo lectura):
+
+   ```sql
+   -- 1) Las piezas nuevas: el CHECK con 'interna', 'clientes' y 'propia',
+   --    stores_own_app_columns_check y el índice parcial.
+   select conname, pg_get_constraintdef(oid)
+     from pg_constraint
+    where conrelid = 'stores'::regclass
+      and conname in ('stores_shopify_app_check', 'stores_own_app_columns_check');
+   select indexdef from pg_indexes where tablename = 'stores' and indexname = 'stores_own_app_shop_uniq';
+   -- 2) Ninguna tienda cambió: la huella (c) tiene que dar lo mismo que antes.
+   --    Si no, comparar fila por fila: una desinstalación o una reconexión en
+   --    medio también la mueve.
+   -- 3) Las columnas nuevas, vacías en todas (0 hasta conectar la primera propia).
+   select count(*) from stores
+    where shopify_client_id is not null or shopify_client_secret_enc is not null
+       or shopify_token_expires_at is not null or shopify_token_renewed_at is not null
+       or shopify_token_error is not null or shopify_token_retry_at is not null
+       or shopify_webhook_secret_prev_enc is not null or shopify_webhook_secret_prev_set_at is not null;
+   ```
+
+   Correrla otra vez no hace nada: no vuelve a validar la tabla ni toca filas.
+
+2. **El código**, por el camino de siempre (rama de integración → `main` por
+   fast-forward). Trae el cron `/api/cron/shopify-own-app-tokens` en
+   `vercel.json`, cada hora, protegido con `CRON_SECRET` como los demás.
+   Mientras no haya una tienda propia no renueva nada. Comprobar en Vercel →
+   Crons que aparece, y que una llamada sin el secreto responde 401.
+
+3. **Conectar «Súper Human Perú».**
+   - En la organización de Shopify de la tienda → Dev Dashboard: crear la app,
+     darle los alcances `read_orders`, `read_draft_orders`,
+     `write_draft_orders`, `read_products`, `read_customers` y `write_orders`
+     (los de `SHOPIFY_CLIENT_APP_SCOPES`), publicar la versión e instalarla en
+     la tienda. Revisar que tenga acceso a los datos protegidos de clientes
+     (nombre, teléfono, dirección y correo): si los pedidos llegan sin datos
+     del comprador, es eso.
+   - En Kapta: «Conectar con app propia de Shopify» (el primer formulario de
+     «Conectar tienda»; **no** el de «Crear tienda con token de Admin API»),
+     con el dominio `*.myshopify.com`, el Client ID, el Client secret y la
+     organización. Copiar el secreto directo del Dev Dashboard al campo; nunca
+     por chat. Si dice que la tienda ya está en Kapta, no se tocó nada: mirar
+     con la consulta de abajo (sin filtrar por app) qué fila tiene ese dominio.
+     Si dice que «ya está en esta organización, sin acceso a Shopify», es el
+     paso 5.
+   - Si Kapta dice que faltan alcances, añadirlos en una versión nueva de la
+     app, instalarla otra vez y volver a conectar.
+
+   **Qué mirar después:**
+
+   ```sql
+   select name, shopify_app, status, shopify_client_id is not null as con_client_id,
+          shopify_token_expires_at, shopify_token_renewed_at, shopify_token_error
+     from stores
+    where shopify_app = 'propia';
+   ```
+
+   Recién conectada: `active`, vencimiento a ~24 h y sin error. Unas 12 h
+   después el cron la renueva: `shopify_token_renewed_at` avanza y el
+   vencimiento vuelve a quedar a ~24 h. Un `shopify_token_error` que no se
+   borra en la hora siguiente es un problema de la app (secreto rotado, app
+   desinstalada, alcances quitados): el texto dice cuál. Si el texto son
+   permisos que faltan, el token se renovó igual (Ajustes lo titula «Faltan
+   permisos en la app»). Y otra vez la huella (c) y el conteo (b) de las
+   tiendas `interna` y `clientes`: no cambian.
+
+4. **Rotar el Client secret de una tienda propia** (cuando haga falta, MOM
+   §36.4), en este orden: rotarlo en el Dev Dashboard; pegar el nuevo en
+   Ajustes → Shopify → «Credenciales de la app» → «Probar y guardar»; revocar
+   el anterior en el Dev Dashboard; y pulsar «Ya revoqué el secreto anterior».
+   Mientras tanto Kapta acepta los webhooks de pedidos y borradores firmados
+   con el anterior, hasta 48 h; un `app/uninstalled` firmado solo con el
+   anterior se rechaza con 401 y la tienda sigue activa (MOM §36.4). Si se
+   cambia el Client ID (otra app), Kapta registra los webhooks de la nueva:
+   después, desinstalar la anterior de la tienda.
+
+5. **Si al conectar Kapta dice que la tienda «ya está en esta organización,
+   sin acceso a Shopify»** (MOM §36.2): alguien la creó con «Crear tienda con
+   token de Admin API» y quedó `interna` sin token. «Conectar con app propia»
+   no la toca; la convierte soporte, a mano, y solo esa fila:
+
+   ```sql
+   -- a) La fila (solo lectura): de esa organización, interna y sin token.
+   select id, org_id, name, shopify_app, status, shopify_token_enc is null as sin_token
+     from stores
+    where lower(shopify_domain) = lower('<tienda>.myshopify.com');
+   -- b) Pasarla a app propia (el id de a).
+   update stores set shopify_app='propia' where id='<id>' and shopify_app='interna' and shopify_token_enc is null;
+   ```
+
+   Tiene que decir `UPDATE 1`. `UPDATE 0` es que la fila tiene token o ya no
+   es `interna`: no seguir (Kenku y Aurela tienen token, así que el `where`
+   nunca las toma). Si falla por `stores_own_app_shop_uniq`, ya hay otra
+   tienda propia con ese dominio: no seguir. Después, en Kapta, alguien con
+   «Administrar tiendas»: Ajustes de esa tienda → Shopify → «Credenciales de
+   la app» → el Client ID y el Client secret → «Probar y guardar». Pide el
+   token, guarda las credenciales y, si la tienda está activa o en pausa,
+   registra sus webhooks (pedidos, borradores y `app/uninstalled`) y dice
+   «Credenciales probadas y guardadas, y los webhooks registrados»: no hay app
+   anterior, no se desinstala nada; si está deshabilitada, el aviso dice que
+   se active y se re-registren. Luego
+   «Sincronizar ahora». Entre el `update` y «Probar y guardar», el cron puede
+   anotar «Faltan el Client ID o el Client secret…» en `shopify_token_error`:
+   se borra al guardar. Comprobar con la consulta de «Qué mirar después» del
+   paso 3.
+
+**Marcha atrás.** Revertir el código basta: las tiendas propias dejan de
+renovar y su token vence en menos de 24 h; Kenku, Aurela y las tiendas
+`clientes` no lo notan. La 0271 puede quedarse: con las columnas vacías y el
+CHECK más amplio no cambia nada para ellas. Si hubiera que quitarla, primero
+el código, y solo con `select count(*) from stores where shopify_app = 'propia'`
+en 0:
+
+```sql
+begin;
+alter table stores drop constraint if exists stores_own_app_columns_check;
+drop index if exists stores_own_app_shop_uniq;
+alter table stores drop constraint stores_shopify_app_check;
+alter table stores add constraint stores_shopify_app_check check (shopify_app in ('interna', 'clientes'));
+alter table stores
+  drop column shopify_client_id,
+  drop column shopify_client_secret_enc,
+  drop column shopify_token_expires_at,
+  drop column shopify_token_renewed_at,
+  drop column shopify_token_error,
+  drop column shopify_token_retry_at,
+  drop column shopify_webhook_secret_prev_enc,
+  drop column shopify_webhook_secret_prev_set_at;
+commit;
+```
+
+### 23-10-2026 · La salida de Urpi lleva el día de la entrega, y las cajas viejas de Urpi (0272)
 
 MOM §30.11 y §4. Sin variables de entorno, RPC ni crons nuevos.
 `MOM_RESOLUTION_VERSION` **no** sube (`mom-v1.31`): el resolver no cambia, y los
-pedidos que toca la 0271 se recalculan por el desfase.
+pedidos que toca la 0272 se recalculan por el desfase.
 
 1. **El código.** Al rellenar la caja «por definir» como salida de Urpi
    (`urpiSalidaRow`, `lib/urpi-salida.ts`) escribe también `closed_at` = el día
@@ -3465,7 +3660,7 @@ pedidos que toca la 0271 se recalculan por el desfase.
    entrega del Master— a las 17:00Z. Hasta aquí no lo escribía y el Master
    tomaba como día de la entrega el del relleno. Si esa fila no trae fecha, la
    salida se rellena sin `closed_at`, como antes.
-2. **Migración `0271_urpi_salida_fecha.sql`, a mano y DESPUÉS del código.**
+2. **Migración `0272_urpi_salida_fecha.sql`, a mano y DESPUÉS del código.**
    **Pendiente de aplicar en producción.** Después, para que ninguna salida
    nueva de Urpi quede sin `closed_at` entre una cosa y otra (si se aplica
    antes, correrla otra vez tras el despliegue completa las que se rellenaron en
@@ -3497,13 +3692,13 @@ pedidos que toca la 0271 se recalculan por el desfase.
    psql "$DATABASE_URL" <<'SQL'
    begin;
    set local lock_timeout = '15s';
-   \i db/migrations/0271_urpi_salida_fecha.sql
+   \i db/migrations/0272_urpi_salida_fecha.sql
    commit;
    SQL
    ```
 
-   Da dos `NOTICE`: «0271: N salida(s) de Urpi con el día de la entrega» tiene
-   que dar el conteo previo 1, y «0271: N caja(s) «por definir» pasaron a
+   Da dos `NOTICE`: «0272: N salida(s) de Urpi con el día de la entrega» tiene
+   que dar el conteo previo 1, y «0272: N caja(s) «por definir» pasaron a
    salida de Urpi entregada», el `se_rellenan` del conteo previo 2.
 
    **Conteo previo 1** (solo lectura; el 23-10-2026, **107**, con días del
@@ -3603,7 +3798,7 @@ pedidos que toca la 0271 se recalculan por el desfase.
     order by st.name nulls last;
    ```
 
-   **Comprobación después** (solo lectura): `eventos_0271` = `cajas_0271` = el
+   **Comprobación después** (solo lectura): `eventos_0272` = `cajas_0272` = el
    segundo `NOTICE`, `sin_dia_o_raras` = 0 (si no, son salidas de Urpi cuya
    última fila no es «Entregado» con fecha, que el paso 1 no toca) y los dos
    conteos previos, otra vez, en 0 (el segundo, en `se_rellenan`). Cuando el barrido los recalcule, `desfasados` baja a 0, el día de la
@@ -3615,11 +3810,11 @@ pedidos que toca la 0271 se recalculan por el desfase.
    -- 1) Lo que escribió.
    select (select count(*) from order_events e
             where e.kind = 'route_output_filled' and e.courier = 'urpi'
-              and e.payload->>'backfill' = 'true' and e.payload ? 'urpi_row') as eventos_0271,
+              and e.payload->>'backfill' = 'true' and e.payload ? 'urpi_row') as eventos_0272,
           (select count(*) from shipments s
             where s.created_via = 'urpi_report' and s.courier = 'urpi' and s.delivery_status = 'entregado'
               and exists (select 1 from order_events e where e.shipment_id = s.id and e.kind = 'route_output_filled'
-                           and e.payload->>'backfill' = 'true' and e.payload ? 'urpi_row')) as cajas_0271,
+                           and e.payload->>'backfill' = 'true' and e.payload ? 'urpi_row')) as cajas_0272,
           (select count(*) from shipments s
             where s.created_via = 'urpi_report' and s.delivery_status = 'entregado'
               and (s.closed_at is null or to_char(s.closed_at at time zone 'UTC', 'HH24:MI') <> '17:00'
@@ -3627,7 +3822,7 @@ pedidos que toca la 0271 se recalculan por el desfase.
    -- 2) Dónde quedaron, cuando el barrido los recalcule: «desfasados» baja a 0
    --    y «dia_del_reporte» = «pedidos».
    select (exists (select 1 from order_events e where e.shipment_id = s.id and e.kind = 'route_output_filled'
-                    and e.payload->>'backfill' = 'true' and e.payload ? 'urpi_row')) as caja_0271,
+                    and e.payload->>'backfill' = 'true' and e.payload ? 'urpi_row')) as caja_0272,
           om.macro_stage, om.macro_substage, count(*) as pedidos,
           count(*) filter (where s.updated_at > om.recomputed_at) as desfasados,
           count(*) filter (where om.delivered_at = s.closed_at) as dia_del_reporte
@@ -3652,7 +3847,7 @@ pedidos con la misma caja que no están entregados en Kapta (12 anulados en
 Shopify).
 
 **Marcha atrás.** Revertir el código solo hace que los rellenos nuevos vuelvan a
-salir sin `closed_at`. La 0271 no se deshace sola: las cajas del paso 2 se
+salir sin `closed_at`. La 0272 no se deshace sola: las cajas del paso 2 se
 reconocen por su `route_output_filled` con `payload.backfill = true` y
 `payload.urpi_row`; las fechas del paso 1 no llevan rastro propio (estaban
 vacías y el código las escribe igual desde este cambio).

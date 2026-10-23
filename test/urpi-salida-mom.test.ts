@@ -1,4 +1,4 @@
-// La salida de Urpi rellenada lleva el día de la entrega, y la 0271 completa lo
+// La salida de Urpi rellenada lleva el día de la entrega, y la 0272 completa lo
 // que ya estaba (23-10-2026): que lo que el MOM cita en §30.11 y §4 —los
 // valores, la migración— sea lo que hacen el código y la migración. Las reglas,
 // probadas en test/urpi-salida.test.ts y en scripts/sql/urpi_salida_fecha_smoke.sql.
@@ -35,7 +35,7 @@ describe("§30.11 la salida de Urpi se cierra el día de la entrega", () => {
     );
     // El botón rellena cajas; no completa el `closed_at` de las ya rellenadas.
     expect(s3011).toContain(
-      "La pantalla ofrece rellenar con el mismo botón las cajas «por definir» de los pedidos marcados antes de esta regla (05-10-2026); no completa el `closed_at` de las salidas ya rellenadas (eso lo hizo la 0271, abajo).",
+      "La pantalla ofrece rellenar con el mismo botón las cajas «por definir» de los pedidos marcados antes de esta regla (05-10-2026); no completa el `closed_at` de las salidas ya rellenadas (eso lo hizo la 0272, abajo).",
     );
     // Sin fecha en esa fila, no se inventa una.
     expect(urpiSalidaRow("#KP1", "aaaaaaaa-0000-4000-8000-000000000001", "2026-08-10", null)).not.toHaveProperty("closed_at");
@@ -44,7 +44,7 @@ describe("§30.11 la salida de Urpi se cierra el día de la entrega", () => {
   it("registra el porqué, lo medido y la migración", () => {
     expect(s3011).toContain("**El día de la entrega en la salida y las cajas viejas (23-10-2026).**");
     expect(s3011).toContain("el `delivered_at` de esos pedidos era el día en que se rellenó la caja, no el que dice Urpi.");
-    expect(s3011).toContain("La migración 0271 lo completa en las 107 ya rellenadas (sin evento nuevo:");
+    expect(s3011).toContain("La migración 0272 lo completa en las 107 ya rellenadas (sin evento nuevo:");
     expect(s3011).toContain("32 pedidos entregados en Kapta y no anulados, con reportes del 10-08 al 22-08-2026");
     expect(s3011).toContain("Otros 13 con la misma caja no están entregados en Kapta (12 anulados en Shopify) y quedan fuera");
     expect(s3011).toContain("no se cierra ninguna liquidación");
@@ -52,7 +52,7 @@ describe("§30.11 la salida de Urpi se cierra el día de la entrega", () => {
       "los 32 dejan «Salida adicional activa»: pasan a «Pendiente de liquidación», o a donde los lleve su liquidación si ya está cerrada;",
     );
     expect(s3011).toContain(
-      "la 0271 —el `closed_at` de las 107 y el relleno de las 32— mueve el último movimiento de esos pedidos al día en que se aplica: es el día al que se imputa el costo (§14) y el que mira «Sin movimiento por 60 días» (§17.1).",
+      "la 0272 —el `closed_at` de las 107 y el relleno de las 32— mueve el último movimiento de esos pedidos al día en que se aplica: es el día al que se imputa el costo (§14) y el que mira «Sin movimiento por 60 días» (§17.1).",
     );
   });
 });
@@ -73,8 +73,8 @@ describe("el llamador pasa el día de la fila más reciente", () => {
   });
 });
 
-describe("0271: lo que escribe es lo que escribe el código", () => {
-  const sql = read("db/migrations/0271_urpi_salida_fecha.sql");
+describe("0272: lo que escribe es lo que escribe el código", () => {
+  const sql = read("db/migrations/0272_urpi_salida_fecha.sql");
   const code = sql.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
 
   it("(1) closed_at de la fila más reciente «Entregado» con fecha, solo donde falta y sin evento", () => {
@@ -143,8 +143,8 @@ describe("DEPLOY.md dice cómo aplicarla y qué esperar", () => {
   const entry = flat(deploy.slice(deploy.indexOf("### 23-10-2026 · La salida de Urpi lleva el día de la entrega")));
 
   it("pendiente, después del código, con su transacción y los dos conteos previos", () => {
-    expect(entry).toContain("**Migración `0271_urpi_salida_fecha.sql`, a mano y DESPUÉS del código.** **Pendiente de aplicar en producción.**");
-    expect(entry).toContain("\\i db/migrations/0271_urpi_salida_fecha.sql");
+    expect(entry).toContain("**Migración `0272_urpi_salida_fecha.sql`, a mano y DESPUÉS del código.** **Pendiente de aplicar en producción.**");
+    expect(entry).toContain("\\i db/migrations/0272_urpi_salida_fecha.sql");
     expect(entry).toContain("**Conteo previo 1** (solo lectura; el 23-10-2026, **107**,");
     expect(entry).toContain("**Conteo previo 2** (solo lectura; el 23-10-2026, **32**,");
     expect(entry).toContain("**Comprobación después** (solo lectura)");

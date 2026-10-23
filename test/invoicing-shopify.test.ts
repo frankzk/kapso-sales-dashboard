@@ -784,9 +784,11 @@ describe("fetchOrderForInvoice (fetch y base inyectados)", () => {
     expect(calls[0]?.body.variables).toEqual({ id: "gid://shopify/Order/6123456789012" });
     // Con tope de tiempo: un Shopify colgado no se come el barrido.
     expect(calls[0]?.signal).toBeInstanceOf(AbortSignal);
-    // Solo el dominio y el token: no descifra los demás secretos de la tienda.
+    // Solo el dominio y el token (y con qué app se conectó): no descifra los
+    // demás secretos de la tienda. Kenku es 'interna': una sola lectura, sin
+    // nada de la app propia (0271).
     expect(reads).toEqual([
-      { table: "stores", columns: "shopify_domain,shopify_token_enc", filters: [["id", "store-kenku"]] },
+      { table: "stores", columns: "shopify_domain,shopify_token_enc,shopify_app", filters: [["id", "store-kenku"]] },
     ]);
   });
 
