@@ -175,7 +175,7 @@ describe("ruta de carga del reporte", () => {
       reason: "Entregado según el reporte de Urpi del 03/10/2026 (fila 11), marcado al cargar el reporte.",
       payload: { urpi_report: true, urpi_row: 11, auto: "carga" },
     });
-    expect(db.fills).toEqual([{ orderId: "00000000-0000-4000-8000-000000000001", orderName: "#KP1001", dispatchedOn: "2026-10-02" }]);
+    expect(db.fills).toEqual([{ orderId: "00000000-0000-4000-8000-000000000001", orderName: "#KP1001", dispatchedOn: "2026-10-02", deliveredOn: "2026-10-03" }]);
     expect((await res.json()).message).toContain("\nEntregados según Urpi: 1 pedido(s) marcados entregados en el Master; 1 salida(s) «Por definir» pasaron a Urpi entregada.");
   });
   it("no marca lo que tiene un intento posterior, ni lo de hace más de 60 días", async () => {
@@ -233,17 +233,20 @@ describe("marcar entregados desde el reporte de Urpi", () => {
     expect(db.doors[0]).toMatchObject({ target: "entregado", source: "liquidacion", courier: "urpi", storeId: "kenku", occurredAt: "2026-10-03T17:00:00.000Z", payload: { urpi_report: true, urpi_row: 11 } });
     expect(result.message).toBe("1 pedido(s) marcados como entregados; 1 ya estaban entregados; 1 salida(s) «Por definir» pasaron a Urpi entregada; 1 sin salida «Por definir» que pasar a Urpi; 1 anulados en Shopify o devueltos no se tocaron; 1 sin entrega de Urpi como último intento.");
   });
-  it("rellena la salida de los entregados (también los ya marcados) desde el primer intento, y recalcula", async () => {
+  it("rellena la salida de los entregados (también los ya marcados) desde el primer intento hasta el día de la fila más reciente, y recalcula", async () => {
     seed([
       { urpi_row: 10, order_id: "00000000-0000-4000-8000-000000000001", result_code: "reprogramado", report_date: "2026-10-01" },
       { urpi_row: 11, order_id: "00000000-0000-4000-8000-000000000001", result_code: "entregado", report_date: "2026-10-02" },
       { urpi_row: 30, order_id: "00000000-0000-4000-8000-000000000004", result_code: "entregado" },
     ]);
     await applyUrpiDeliveries("org", ["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000004"]);
+    // `deliveredOn` es el día de la fila «Entregado» más reciente: el mismo del
+    // evento de la entrega (`occurredAt`), que pasa a `closed_at` de la salida.
     expect(db.fills).toEqual([
-      { orderId: "00000000-0000-4000-8000-000000000001", orderName: "#KP1001", dispatchedOn: "2026-10-01" },
-      { orderId: "00000000-0000-4000-8000-000000000004", orderName: "#KP1004", dispatchedOn: "2026-10-03" },
+      { orderId: "00000000-0000-4000-8000-000000000001", orderName: "#KP1001", dispatchedOn: "2026-10-01", deliveredOn: "2026-10-02" },
+      { orderId: "00000000-0000-4000-8000-000000000004", orderName: "#KP1004", dispatchedOn: "2026-10-03", deliveredOn: "2026-10-03" },
     ]);
+    expect(db.doors.find((d) => d.orderId === "00000000-0000-4000-8000-000000000001")?.occurredAt).toBe("2026-10-02T17:00:00.000Z");
     expect(db.recomputed).toEqual(["00000000-0000-4000-8000-000000000001"]);
   });
   it("un pedido anulado solo en Kapta (Shopify vivo) se marca: solo Shopify termina una venta", async () => {

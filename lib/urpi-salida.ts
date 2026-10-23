@@ -9,7 +9,8 @@
 // QUÉ HACE. Lo mismo que hacen Tanders, Aliclik, Shalom y Swayp al emitir su
 // guía: RELLENA la salida «por definir» (lib/route-output-fill.ts) en vez de
 // abrir otra. Consecutivo, QR, preparación y custodia se conservan; el courier
-// pasa a Urpi y la salida queda entregada, porque eso es lo que reportó Urpi.
+// pasa a Urpi y la salida queda entregada el día que Urpi la dio por entregada,
+// porque eso es lo que reportó Urpi.
 //
 // QUÉ NO HACE. No crea salidas: sin una «por definir» no hay caja en Kapta que
 // sea la de Urpi. Y no toca nada si el pedido tiene otra salida viva —otro
@@ -55,8 +56,13 @@ export function planUrpiSalida(salidas: readonly UrpiSalidaCandidate[]): UrpiSal
 }
 
 /** La fila que se escribe encima. PURA. `dispatchedOn` es el día del primer
- *  intento de Urpi: el reporte lo dice; la hora no, y se usa mediodía de Lima. */
-export function urpiSalidaRow(orderName: string | null, shipmentId: string, dispatchedOn: string | null) {
+ *  intento de Urpi y `deliveredOn` el de la fila más reciente, la «Entregado»
+ *  de la que sale también la entrega del Master: el reporte dice el día; la
+ *  hora no, y se usa mediodía de Lima, como en el evento de la entrega.
+ *  `deliveredOn` va a `closed_at`, que es de donde el Master saca el día de la
+ *  entrega: sin él tomaba el día del relleno (MOM §30.11). El día que el
+ *  reporte no trae no se escribe: no se inventa una fecha. */
+export function urpiSalidaRow(orderName: string | null, shipmentId: string, dispatchedOn: string | null, deliveredOn: string | null) {
   return {
     courier: "urpi",
     created_via: URPI_REPORT_CREATED_VIA,
@@ -65,6 +71,7 @@ export function urpiSalidaRow(orderName: string | null, shipmentId: string, disp
     status_category: "delivered",
     delivered_source: URPI_REPORT_DELIVERED_SOURCE,
     ...(dispatchedOn ? { dispatched_at: `${dispatchedOn}T17:00:00.000Z` } : {}),
+    ...(deliveredOn ? { closed_at: `${deliveredOn}T17:00:00.000Z` } : {}),
   };
 }
 
@@ -79,7 +86,7 @@ export interface UrpiSalidaResult {
  *  cuenta y queda para revisar a mano. */
 export async function fillUrpiSalidas(
   admin: SupabaseClient,
-  orders: readonly { orderId: string; orderName: string | null; dispatchedOn: string | null }[],
+  orders: readonly { orderId: string; orderName: string | null; dispatchedOn: string | null; deliveredOn: string | null }[],
 ): Promise<UrpiSalidaResult> {
   const result: UrpiSalidaResult = { filled: [], sinSalida: [], otraSalidaViva: [], errors: [] };
   const ids = orders.map((order) => order.orderId);
@@ -98,7 +105,7 @@ export async function fillUrpiSalidas(
     if (plan.kind === "ya_es_urpi") continue;
     if (plan.kind === "sin_salida") { result.sinSalida.push(order.orderId); continue; }
     if (plan.kind === "otra_salida_viva") { result.otraSalidaViva.push(order.orderId); continue; }
-    const written = await writeCourierGuide(admin, order.orderId, urpiSalidaRow(order.orderName, plan.salida.id, order.dispatchedOn), { createIfMissing: false });
+    const written = await writeCourierGuide(admin, order.orderId, urpiSalidaRow(order.orderName, plan.salida.id, order.dispatchedOn, order.deliveredOn), { createIfMissing: false });
     if ("error" in written) result.errors.push(order.orderId);
     else result.filled.push(order.orderId);
   }

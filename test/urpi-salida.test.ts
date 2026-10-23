@@ -25,12 +25,24 @@ describe("qué salida se lleva la entrega de Urpi", () => {
     expect(planUrpiSalida([]).kind).toBe("sin_salida");
     expect(planUrpiSalida([tbd({ courier: "urpi", delivery_status: "entregado" })]).kind).toBe("ya_es_urpi");
   });
-  it("la fila: courier Urpi, entregada, con su origen y el día del primer intento", () => {
-    expect(urpiSalidaRow("#KP136785", "5f7bd799-0000-4000-8000-000000000000", "2026-09-26")).toEqual({
+  it("la fila: courier Urpi, entregada, con su origen, el día del primer intento y el de la entrega", () => {
+    expect(urpiSalidaRow("#KP136785", "5f7bd799-0000-4000-8000-000000000000", "2026-09-26", "2026-09-29")).toEqual({
       courier: "urpi", created_via: "urpi_report", guide_code: "MOM-KP136785-URPI-5F7BD799", delivery_status: "entregado",
       status_category: "delivered", delivered_source: "urpi_report", dispatched_at: "2026-09-26T17:00:00.000Z",
+      closed_at: "2026-09-29T17:00:00.000Z",
     });
-    expect(urpiSalidaRow(null, "5f7bd799-0000-4000-8000-000000000000", null)).not.toHaveProperty("dispatched_at");
+    const sinFechas = urpiSalidaRow(null, "5f7bd799-0000-4000-8000-000000000000", null, null);
+    expect(sinFechas).not.toHaveProperty("dispatched_at");
+    expect(sinFechas).not.toHaveProperty("closed_at");
+  });
+  it("closed_at es el día de la entrega, a la misma hora que el evento del Master; sin ese día no se escribe", () => {
+    // Antes no se escribía y el Master tomaba el día del relleno (MOM §30.11).
+    expect(urpiSalidaRow("#KP1", "aaaaaaaa-0000-4000-8000-000000000001", "2026-08-10", "2026-08-10")).toMatchObject({
+      dispatched_at: "2026-08-10T17:00:00.000Z", closed_at: "2026-08-10T17:00:00.000Z",
+    });
+    const sinEntrega = urpiSalidaRow("#KP1", "aaaaaaaa-0000-4000-8000-000000000001", "2026-08-10", null);
+    expect(sinEntrega).toMatchObject({ dispatched_at: "2026-08-10T17:00:00.000Z", delivery_status: "entregado" });
+    expect(sinEntrega).not.toHaveProperty("closed_at");
   });
 });
 
@@ -68,12 +80,15 @@ describe("rellenar la salida en la base", () => {
     ];
     const { admin, events } = fakeAdmin(shipments);
     const result = await fillUrpiSalidas(admin, [
-      { orderId: "o1", orderName: "#KP1", dispatchedOn: "2026-10-01" },
-      { orderId: "o2", orderName: "#KP2", dispatchedOn: "2026-10-01" },
-      { orderId: "o3", orderName: "#KP3", dispatchedOn: "2026-10-01" },
+      { orderId: "o1", orderName: "#KP1", dispatchedOn: "2026-10-01", deliveredOn: "2026-10-03" },
+      { orderId: "o2", orderName: "#KP2", dispatchedOn: "2026-10-01", deliveredOn: "2026-10-01" },
+      { orderId: "o3", orderName: "#KP3", dispatchedOn: "2026-10-01", deliveredOn: "2026-10-01" },
     ]);
     expect(result).toEqual({ filled: ["o1"], sinSalida: ["o3"], otraSalidaViva: ["o2"], errors: [] });
-    expect(shipments[0]).toMatchObject({ courier: "urpi", created_via: "urpi_report", delivery_status: "entregado", delivered_source: "urpi_report", output_code: "KP1-S01", custody_state: "empresa", output_number: 1 });
+    expect(shipments[0]).toMatchObject({
+      courier: "urpi", created_via: "urpi_report", delivery_status: "entregado", delivered_source: "urpi_report", output_code: "KP1-S01", custody_state: "empresa", output_number: 1,
+      dispatched_at: "2026-10-01T17:00:00.000Z", closed_at: "2026-10-03T17:00:00.000Z",
+    });
     expect(shipments[1]).toMatchObject({ courier: "tanders", delivery_status: "en_ruta" });
     expect(events).toEqual([expect.objectContaining({ kind: "route_output_filled", order_id: "o1", courier: "urpi", shipment_id: "aaaaaaaa-0000-4000-8000-000000000001" })]);
   });
@@ -84,7 +99,7 @@ describe("rellenar la salida en la base", () => {
     const original = admin.from;
     let reads = 0;
     admin.from = (table: string) => { const q = original(table); if (table === "shipments" && ++reads === 2) shipments[0]!.courier = "tanders"; return q; };
-    const result = await fillUrpiSalidas(admin, [{ orderId: "o1", orderName: "#KP1", dispatchedOn: null }]);
+    const result = await fillUrpiSalidas(admin, [{ orderId: "o1", orderName: "#KP1", dispatchedOn: null, deliveredOn: null }]);
     expect(result.filled).toEqual([]);
     expect(result.errors).toEqual(["o1"]);
     expect(shipments).toHaveLength(1);

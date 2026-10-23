@@ -99,7 +99,11 @@ export async function applyUrpiDeliveriesFor(admin: SupabaseClient, input: {
     for (const r of door.rejected) if (r.code === "anulado_en_shopify") cancelledAtDoor.add(r.orderId);
     observed += cancelledAtDoor.size;
   }
-  const salidas = await fillUrpiSalidas(admin, delivered.filter((id) => !cancelledAtDoor.has(id)).map((id) => ({ orderId: id, orderName: facts.get(id)!.order_name, dispatchedOn: firstDate.get(id) ?? null })));
+  // La salida se cierra el mismo día que la entrega del Master: el de la fila
+  // más reciente (`latest`), la «Entregado» de arriba (MOM §30.11).
+  const salidas = await fillUrpiSalidas(admin, delivered.filter((id) => !cancelledAtDoor.has(id)).map((id) => ({
+    orderId: id, orderName: facts.get(id)!.order_name, dispatchedOn: firstDate.get(id) ?? null, deliveredOn: latest.get(id)!.report_date,
+  })));
   if (salidas.filled.length) await recomputeOrderMasterSafe(admin, salidas.filled);
   return { applied, already, observed, notDelivered, salidas };
 }
