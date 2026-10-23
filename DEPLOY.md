@@ -3661,7 +3661,11 @@ pedidos que toca la 0272 se recalculan por el desfase.
    tomaba como día de la entrega el del relleno. Si esa fila no trae fecha, la
    salida se rellena sin `closed_at`, como antes.
 2. **Migración `0272_urpi_salida_fecha.sql`, a mano y DESPUÉS del código.**
-   **Pendiente de aplicar en producción.** Después, para que ninguna salida
+   **Ya aplicada en producción el 23-10-2026**, con el código ya desplegado
+   (conteos previos 107 y 32; después, las 139 salidas de Urpi con el día del
+   reporte en el Master, 32 eventos `route_output_filled` y los 32 pedidos
+   fuera de «Salida adicional activa»: 31 en «Pendiente de liquidación» y 1 en
+   «Recogido sin pago completo»). Después, para que ninguna salida
    nueva de Urpi quede sin `closed_at` entre una cosa y otra (si se aplica
    antes, correrla otra vez tras el despliegue completa las que se rellenaron en
    medio). Es un relleno de datos, no de esquema, en dos pasos:
