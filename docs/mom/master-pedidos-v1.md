@@ -15657,6 +15657,11 @@ solo las tiendas que la persona ve.
 - **Volver a subir no duplica.** La clave es (tienda, número de pedido) y
   (tienda, cliente); lo repetido se reemplaza con lo último subido. Si un
   archivo se corta a mitad, se vuelve a subir entero.
+- **Textos limpios.** Antes de guardar se quitan los caracteres nulos y las
+  mitades sueltas de un emoji (las deja un recorte que cae en medio de un emoji,
+  o vienen así de Shopify): Postgres rechazaba la tanda entera con «invalid
+  input syntax for type json». Así se detuvo la traída de Kenku Peru el
+  23-10-2026, a los 44.000 pedidos. Los emojis enteros se guardan igual.
 - **Números repetidos.** En Shopify dos pedidos distintos pueden tener el mismo
   número (en Aurela la traída por API se detuvo así el 23-10-2026, a los
   106.000 pedidos). El primero conserva su número y el otro se guarda como
