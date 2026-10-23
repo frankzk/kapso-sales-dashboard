@@ -9001,7 +9001,7 @@ suman el total de la tienda:
 | --- | --- | --- | --- |
 | 1 | Asesora | Tiene fila en `order_sales`: la venta que la asesora registró al generar el pedido | Asesora |
 | 2 | Recompra automática | Es el pedido de una prueba de recompra (`auto_order_trials` en `generado`; §11, «Prueba: pedido de recompra sin llamada») | Bot o automatización |
-| 3 | Bot de Kapso | Etiqueta `kapso` puesta en Shopify (sin distinguir mayúsculas) | Bot o automatización |
+| 3 | Bot de Kapso | Etiqueta `kapso` puesta en Shopify (sin distinguir mayúsculas); en WooCommerce, la que pone la entrada por `kapta_channel = kapso` o `kapso_conversation_id` (§38.5, §38.13) | Bot o automatización |
 | 4 | Bot de carritos externo | Etiquetas `BOT`, `CARRITO RECUPERADO` o `BOT (whatsapp_cloud)` | Bot o automatización |
 | 5 | Web, la clienta sola | Etiquetas de EasySell (`easysell_cod_form` y las que empiezan con `easysell`) | La clienta sola en la web |
 | 6 | Otros | Todo lo demás: catálogo de WhatsApp, pedidos hechos a mano en Shopify… | Otros |
@@ -9049,7 +9049,10 @@ cuenta como **Web**: Shopify no le pone ninguna marca que lo separe del carrito
 que la clienta terminó sola, y Kapta no puede etiquetarlo. Para contarlo como
 del bot, el workflow del bot tendría que ponerle una etiqueta al borrador (por
 ejemplo `kapso`) antes de completarlo; eso es un cambio del bot, no de esta
-tarjeta.
+tarjeta. **Desde el cierre de Shopify sí se distingue** en una tienda en
+WooCommerce: el bot ya no completa el borrador, le pide el pedido a Kapta
+(§38.13), que lo crea con `kapta_channel = kapso`, y el carrito que cierra el
+bot cuenta como **Bot de Kapso**.
 
 **Productividad y el canal no cuadran exacto, y no tienen por qué.**
 Productividad cuenta ventas registradas por la fecha en que la asesora apretó
@@ -15762,7 +15765,8 @@ WooCommerce viven en esa fila de `stores` y cada pedido lleva su plataforma.
   viene cada pedido. **Quién lo lee (23-10-2026, 38.12):** «Generar pedido»
   (y «Venta telefónica», que abre el mismo formulario), su prellenado y los tres
   buscadores de productos (el de Leads, el del producto de un anuncio y el del
-  stock de Swayp), siempre en el servidor; y, desde el cierre de Shopify, las
+  stock de Swayp), siempre en el servidor; el endpoint del bot de Kapso, que
+  solo crea con `woocommerce` (38.13); y, desde el cierre de Shopify, las
   fotos de producto de WhatsApp (`shopifyGoneForStore`, §39.5, que también
   mira `woo_site_url`). La entrada de pedidos no lo mira (38.11). **Quién lo cambia:** el owner, en Ajustes → WooCommerce → «Crear los
   pedidos nuevos en», con «Administrar tiendas» y una confirmación explícita;
@@ -15889,6 +15893,12 @@ no cambien:
   `contraentrega`…
 - El pedido con `kapso_conversation_id`, o con el meta `kapso` verdadero, lleva
   la etiqueta `kapso`: es la que gana el lead y cuenta en los rollups del bot.
+- El pedido que Kapta crea a pedido del bot (38.13) lleva `kapta_channel =
+  kapso` y su `kapso_conversation_id`, también cuando cierra un carrito, más
+  el meta visible `shipping_mode` (`cod` o `agency`, el mismo atributo que hoy
+  escribe en Shopify y que lee `deriveOrderFlags`) y, si el bot las manda,
+  `kapta_tags` con `promo-whatsapp` y/o `stock-por-validar`: así sus pedidos
+  siguen contando como contraentrega o agencia, promo y stock por validar.
 - Los meta de Kapta y de Kapso (`kapta_*`, `kapso_*`, `kapso`) se leen también
   ocultos (con «_» delante) y sin importar mayúsculas.
 
@@ -16348,14 +16358,23 @@ y lee entero el que encuentre:
 - **anulado o reembolsado**: como si no estuviera; se crea uno nuevo.
 
 Si el POST no contesta (pudo crearse igual), se busca: uno `pending` se borra;
-uno que ya está vivo se deja para el reintento, que lo adopta o avisa. En
+uno que ya está vivo se deja para el reintento, que lo adopta o avisa. Si no
+aparece (o no se pudo buscar), WordPress puede guardarlo DESPUÉS de esa
+búsqueda: `createWooSaleOrder` lo dice (`postUnanswered`) y el bot no suelta
+su candado hasta su plazo (38.13); la asesora puede reintentar antes, y
+entonces ese pedido tardío queda `pending` (Kapta no lo toma) o, con un plugin
+que lo deja vivo al crearlo, vivo junto al del reintento (pendiente, abajo).
+Quien ya conoce el pedido de su intento (el bot, `woo_order_id`) lo lee por su
+id a cualquier edad (`knownOrderId`; si ya no está o está anulado, busca como
+siempre), y `onCreated` le avisa el id apenas el pedido existe o la búsqueda
+lo encuentra. En
 Shopify el candado es el borrador; aquí, este id y su huella. Un formulario
 nuevo (otra pestaña, una recarga) es otro intento: ahí sigue mandando el aviso
 de duplicado. **Dos llamadas a la vez con el mismo id** sí crearían dos
 pedidos (la búsqueda de las dos llega antes que cualquier POST): la pantalla
 no puede hacerlo (el botón se bloquea mientras genera y Next.js corre de a una
-las acciones de un mismo formulario), pero el endpoint del bot sí, y necesita
-su candado en la base (abajo).
+las acciones de un mismo formulario), pero el bot sí: su endpoint tiene el
+candado en la base, por (tienda, id del intento) (38.13).
 
 **Tiempos.** Cada llamada tiene su tope —buscar el intento 6 s, crear 15 s,
 comprobar un producto 5 s, pasar a `processing` 10 s, releer, borrar o anular
@@ -16416,13 +16435,13 @@ guardado.
   sin dirección, la nota de la guía de Tanders, «Ver en Shopify»): con token,
   una llamada que Shopify rechaza y que cae a lo guardado; sin token, nada.
   Pasarlos a `orders.platform`.
-- **El endpoint del bot** (`POST /api/internal/orders/[storeId]`), con el mismo
-  núcleo (`wooSaleLinesProblem`, `buildWooSaleOrder`, `createWooSaleOrder`).
-  Hasta entonces, en una tienda en WooCommerce el bot deriva la conversación a
-  una asesora. Un bot reintenta solo y en paralelo: antes de reutilizar
-  `createWooSaleOrder` necesita un candado en la base por (tienda, id del
-  intento) —una migración, con su entrada en DEPLOY—, porque la búsqueda por
-  `kapta_request_id` no frena dos llamadas simultáneas.
+- **El endpoint del bot** (`POST /api/internal/orders/[storeId]`): **hecho
+  (23-10-2026, 38.13)**, con el mismo núcleo (`wooSaleLinesProblem`,
+  `buildWooSaleOrder`, `createWooSaleOrder`) y el candado en la base por
+  (tienda, id del intento) que pedía esta lista (0277, con su entrada en
+  DEPLOY): la búsqueda por `kapta_request_id` no frena dos llamadas
+  simultáneas. Hasta que la acción de Kapso apunte a Kapta, en una tienda en
+  WooCommerce el bot deriva la conversación a una asesora.
 - **Los carritos.** Los formularios abandonados de WooCommerce todavía no
   entran a `draft_orders`; un carrito de Shopify en la cola solo prellena el
   pedido (arriba). La recompra automática (`auto_order_trials`) y la captura del
@@ -16431,6 +16450,11 @@ guardado.
   tampoco.
 - **Los principios de §2 y `AGENTS.md`** («Shopify como única fuente de
   pedidos») esperan al owner (38.9).
+- **Un POST sin respuesta en «Generar pedido».** Si WordPress guarda el pedido
+  después de que la asesora reintentó, queda un pedido `pending` de más en
+  WooCommerce (no entra al Master; hay que borrarlo a mano) o, con un plugin
+  que lo deja vivo al crearlo, dos vivos. El bot ya espera (38.13); el
+  formulario todavía no.
 
 Implementación: `lib/shipment-order-capture.ts` (`orderPlatformOf`,
 `pushShippingAddressToShopify` con `platform`) y
@@ -16455,6 +16479,232 @@ El cambio de plataforma: `lib/woocommerce-platform.ts`,
 `components/woocommerce-settings-section.tsx`. Pruebas:
 `test/woocommerce-orders.test.ts`, `test/woocommerce-generate-order.test.ts`,
 `test/woocommerce-platform-switch.test.ts` y `test/woocommerce-sale-mom.test.ts`.
+
+### 38.13 Pedidos del bot de Kapso por Kapta (23-10-2026)
+
+**Por qué.** Hoy el bot de Kapso crea unos 31 pedidos al día directamente en
+Shopify (Admin API). Desde el cierre (27-10-2026, 19:00 de Lima en el peor
+caso) los pedidos nuevos de Kenku y Aurela van a WooCommerce. **Decisión del
+owner (plan D5, 23-10-2026):** el bot no habla con WooCommerce; le pide el
+pedido a Kapta, y Kapta lo crea con el mismo núcleo que «Generar pedido»
+(38.12). Un solo camino: el mismo control de precios, las mismas marcas que la
+entrada reconoce (38.5) y ninguna clave de WooCommerce en Kapso. El contrato
+para quien edita el workflow está en `docs/kapso-pedidos-kapta.md`.
+
+**La llamada** (`POST /api/internal/orders/<storeId>`,
+`Authorization: Bearer <secreto>`), en este orden:
+
+1. **El tamaño y el secreto.** Un `Content-Length` de más de 16 KB
+   (`BOT_ORDER_MAX_BODY_BYTES`) es 413 `body_too_large` sin leer nada ni
+   consultar la base. El secreto: uno por tienda, generado en Ajustes → «Bot
+   de Kapso → pedidos por Kapta» (con «Administrar tiendas», `stores.manage`)
+   y mostrado **una sola vez**. Kapta guarda solo su sha256
+   (`bot_order_secrets.secret_hash`, 0277) y compara el sha256 de lo que llega
+   en tiempo constante. Sin secreto, con otro o con una tienda que no existe:
+   401 «No autorizado.», sin decir cuál. `CRON_SECRET` y el secreto de los
+   webhooks de Kapso no sirven. Cambiarlo invalida el anterior en el acto;
+   «Desactivar» lo borra. **Recién con el secreto bueno se lee el cuerpo**, con
+   tope (`readBodyCapped`: la lectura se corta al pasar los 16 KB).
+2. **El cuerpo**, estricto, con los nombres en inglés (un campo desconocido es
+   un error): `request_id`, `conversation_id`, `phone` (con `normalizePhone` y
+   `peruMobileProblem`, la regla del formulario), `customer_name`, `address1`,
+   `reference`, `district`, `department` (como lo dice el bot, con
+   `toWooPeruState`: «Lima» → `LMA`, «Callao» → `CAL`; uno que no se reconoce
+   es un error), `items` (`sku`, `quantity` y `unit_price`, obligatorio: 0 es un
+   regalo, nunca negativo), `discount` (`fixed` o `percent`, como el
+   formulario), `shipping_mode` (`contraentrega`/`cod` o `agencia`/`agency`;
+   sin decir, contraentrega), `tags` (solo `promo-whatsapp` y
+   `stock-por-validar`), `note` y `cart_draft_gid`. Si falta algo: 400
+   `invalid_body` con cada problema en castellano. Va antes que la plataforma:
+   con la tienda todavía en Shopify, un 409 `wrong_platform` quiere decir que
+   el cuerpo está bien (el ensayo del equipo de Kapso).
+3. **La tienda**: activa y con `stores.platform = 'woocommerce'`
+   (`loadStoreOrderPlatform`). Si no, 409 (`wrong_platform`, `store_inactive`)
+   **sin ninguna llamada a WooCommerce ni a Shopify**: este endpoint nunca crea
+   un pedido en Shopify. Sin la 0274, toda tienda es de Shopify. El total
+   (productos − descuento) tiene que ser mayor que 0, como en «Generar pedido».
+4. **El candado** (abajo).
+5. **El pedido**, con `buildWooSaleOrder` y `createWooSaleOrder` (38.12):
+   `pending` → comparación con lo pactado → `processing`, o borrado si no cuadra.
+   Lo único distinto: `kapta_channel = kapso`, `kapso_conversation_id` (la
+   conversación), `shipping_mode` y `kapta_tags` (38.5),
+   `kapta_request_id = kapso-<request_id>` (el prefijo lo separa de los ids del
+   formulario), sin `kapta_lead_id`, y la huella (`kapta_request_hash`) con la
+   conversación en lugar del lead (y el modo de entrega y las etiquetas). Como
+   el bot manda solo SKU, cada línea pasa por la comprobación de productos con
+   variaciones (`wooLinesToVerify`): el SKU del producto «padre» se rechaza.
+   **Apenas el pedido existe** (el POST contestó), su id queda en el candado
+   (`woo_order_id`, `onCreated`), antes de comprobarlo.
+6. **El candado cerrado con el pedido** (`done`, con el número, el total y la
+   moneda) **apenas está vivo**, y recién después **la fila local**, la de la
+   entrada (`mapWooOrder` + `insertOrderIfAbsent`: `wc-<clave>-<id>`,
+   etiquetas `kapso` y `whatsapp`, con su `kapso_conversation_id`). Lo que
+   impide un segundo pedido es el candado; la fila puede faltar: si no se
+   puede guardar o no contesta, el pedido existe igual, el bot lo confirma y el
+   webhook o la pasada lo traen. **Sin `order_sales`** ni nota de venta en el
+   lead: no hay asesora que lo haya vendido.
+7. **Después de responder** (`after`), los pasos que la entrada da a un pedido
+   del bot, por el mismo código (`applyWooOrderEffects`, lib/ingest.ts):
+   rollups del día, lead ganado por teléfono (`linkOrderToLead`, con su regla
+   de recompra) y la fila del Master. Antes, si el único lead de esa
+   conversación no tiene celular (escribe con nombre de usuario de WhatsApp),
+   se le rellena el del pedido con la regla de «Generar pedido»
+   (`debeGuardarTelefono`: solo el hueco, nunca pisar), para que gane ese lead
+   y no uno nuevo. Con `cart_draft_gid`, el lead **de esa clienta** con ese
+   carrito (su celular o su conversación) queda con `draft_order_status =
+   completed` (deja de verse «Carrito abandonado» y la secuencia no le
+   escribe); un gid que no es de ella no cierra nada (queda en el registro); la
+   copia del borrador no se toca. Y el último uso y el último fallo, para
+   Ajustes.
+
+**Todo tiene tope.** Cada lectura o escritura de la base espera como mucho 5 s
+(`BOT_ORDER_DB_TIMEOUT_MS`): antes del candado, una base que no contesta es
+503 `store_unavailable` (reintentable). La venta en WooCommerce termina a los
+**42 s de empezada la llamada** (`BOT_ORDER_SALE_DEADLINE_MS`: lo que tardó la
+base antes se le descuenta, y nunca más que `WOO_SALE_BUDGET_MS`); si no le
+alcanza para un POST entero, no lo manda. Después quedan cerrar el candado y
+la fila local, con su tope: la respuesta sale antes de los 60 s de la función
+(`maxDuration`).
+
+**El candado** (`bot_order_requests`, 0277, `unique (store_id, request_id)`).
+El bot reintenta solo y en paralelo, y la búsqueda por `kapta_request_id` en
+WooCommerce no frena dos llamadas a la vez (38.12). La primera llamada inserta
+su fila (`processing`, con un `claim_token`) **antes** de llamar a WooCommerce;
+otra con el mismo id choca con ella y no llama:
+
+| Lo que encuentra | Qué contesta |
+| --- | --- |
+| Otra huella (`body_hash`: el sha256 de lo pedido, normalizado, sin el request_id ni los nombres de los productos) | 409 `conflict`, con el pedido que ya creó si lo hay. No crea nada. |
+| `done`, con la misma huella | 200, el mismo pedido, con `replay: true`. Ninguna llamada a WooCommerce. |
+| `processing` de hace menos de 120 s (`BOT_ORDER_CLAIM_TTL_MS`) | 409 `duplicate_in_progress`, con `retry_after_seconds` = lo que le falta al candado, entre 5 y 15 s (`botOrderRetryAfter`). |
+| `failed`, o `processing` vencido, sin `woo_order_id` y de hace más de 90 min (`BOT_ORDER_RETAKE_MAX_AGE_MS`) | 409 `expired`, no reintentable. No crea nada: la búsqueda de 2 horas ya podría no ver el pedido de ese intento. |
+| `failed`, o `processing` vencido (lo demás) | Lo retoma, solo si el `claim_token` sigue siendo el que leyó: de dos que lo intentan, uno gana y el otro recibe `duplicate_in_progress`. `createWooSaleOrder` lee el pedido de ese intento por su `woo_order_id` (a cualquier edad) o lo encuentra por su `kapta_request_id`, y lo adopta o lo retoma: no crea otro. |
+| Ninguna fila, pero otro request_id con **la misma huella** en los últimos 10 min (`BOT_ORDER_SAME_BODY_WINDOW_MS`) | El mismo pedido pedido dos veces (la herramienta llamada dos veces): `done`, 200 con ese pedido y `replay: true`; `processing` vigente, `duplicate_in_progress`; `processing` vencido, `conflict`. No crea otro. Dos llamadas **simultáneas** con ids distintos no se frenan así (el contrato pide generar el id una vez). |
+
+120 s es más que la función entera (`maxDuration` 60 s, con la venta
+terminada a los 42 s, `BOT_ORDER_SALE_DEADLINE_MS`): un candado vivo nunca se
+toma por vencido. **Un POST sin respuesta no suelta el candado**: si
+`createWooSaleOrder` dice `postUnanswered` (WordPress pudo guardarlo después
+de la búsqueda), el candado sigue `processing` y se vuelve a armar desde ese
+momento (`claimed_at`), y la respuesta es 503 `woocommerce_unavailable`
+reintentable: los reintentos reciben `duplicate_in_progress` hasta el plazo, y
+el que llega después encuentra el pedido tardío y lo retoma o adopta en vez de
+crear otro. El contrato pide reintentar con el mismo id **durante 3 minutos**
+(`BOT_ORDER_RETRY_WINDOW_S`) sin derivar mientras la respuesta sea
+`duplicate_in_progress`. Antes de una fila nueva hay un tope de **20 pedidos
+nuevos por tienda y minuto** (`BOT_ORDER_RATE_PER_MINUTE`, 429
+`rate_limited`): hoy son unos 31 al día, y el tope solo frena un bot en bucle
+que manda ids nuevos. Un reintento no cuenta.
+
+**Un pedido que quedó en WooCommerce sin confirmar** (no se pudo anular uno
+vivo con otro precio, no se pudo borrar uno pendiente, quedó a medias, o el de
+un intento anterior está vivo con otros datos: `botOrderLeftOpen`) va en la
+respuesta como `order_left_open` (su número, para el motivo del handoff) y deja
+una constancia `system` en el lead de esa clienta (su conversación o su
+celular), que sube a «Atender ahora» sin tocar su estado: es donde la asesora
+generaría otro pedido. Sin un único lead, queda en el registro y en el último
+fallo de Ajustes.
+
+**Los códigos.** Estables: el workflow decide por ellos, y el contrato dice qué
+hace el bot con cada uno. `message` va en castellano y sin datos de la clienta;
+no se le lee a la clienta. `retryable` dice si reintentar **con el mismo
+request_id** puede salir bien (nunca crea un segundo pedido); los reintentables
+llevan `retry_after_seconds` (10 s, o lo del candado).
+
+| Código | HTTP | Reintentable |
+| --- | --- | --- |
+| `unauthorized` | 401 | no |
+| `body_too_large` | 413 | no |
+| `invalid_body` | 400 | no |
+| `wrong_platform` | 409 | no |
+| `store_inactive` | 409 | no |
+| `rate_limited` | 429 | sí |
+| `duplicate_in_progress` | 409 | sí |
+| `conflict` | 409 | no |
+| `expired` | 409 | no |
+| `sku_not_found` | 422 | no |
+| `price_mismatch` | 422 | no |
+| `order_mismatch` | 422 | no |
+| `woocommerce_unavailable` | 503 | sí |
+| `store_unavailable` | 503 | sí |
+| `migration_missing` | 503 | no |
+| `internal_error` | 500 | sí |
+
+Lo que sale bien: 200 `{ok: true, order: {name: "#KP200123", id: "wc-kp-123",
+total, currency}}`, para que el bot confirme a la clienta con el número.
+
+**El canal (decisión, 23-10-2026): siempre `kapso`**, también cuando el bot
+cierra un carrito: etiquetas `kapso` y `whatsapp`, «Chatbot WhatsApp» en el
+canal de venta (§3) y «Bot de Kapso» en el de cierre (§17.3). `bot_carritos`
+(«BOT + CARRITO RECUPERADO») es el bot de carritos **externo**, otro sistema:
+ponérselo al bot de Kapso mezclaría los dos. Quien cerró la venta manda sobre
+la herramienta donde quedó escrita, como en `lib/sales-channel.ts`.
+
+**El modo de entrega y las etiquetas, como hoy.** En Shopify el bot escribe
+`shipping_mode` y las etiquetas `promo-whatsapp` y `stock-por-validar`; sin
+ellas sus pedidos contarían todos como contraentrega sin promo (rollups
+`cod_orders`, `agency_orders`, `promo_orders`, `stock_validar_orders`; el
+filtro de agencia del Master; «Provincia Sin COD» de la hoja). Por eso
+`shipping_mode` y `tags` viajan como `shipping_mode` y `kapta_tags` (38.5) y
+entran a la huella. El pago sigue siendo contraentrega en WooCommerce (`cod`):
+Kapta todavía no registra el adelanto de agencia; el contrato pide decirlo en
+`note` y deja la decisión al owner.
+
+**Los precios los decide el bot (riesgo aceptado, pendiente del owner).** El
+control de precios de 38.12 comprueba que WooCommerce guarde **lo que mandó el
+bot**, no lo compara con el catálogo: cualquier `unit_price` de 0 o más pasa
+(0 en cualquier SKU como regalo, un descuento de hasta el 100 % menos un
+céntimo), y con `cart_draft_gid` no se exige el precio del borrador (en
+Shopify `draftOrderComplete` cobraba el guardado). Es la regla que pidió el
+owner para el cuerpo («0 para regalos, nunca negativo») y la del formulario de
+la asesora, pero aquí quien llama es un agente que conversa con la clienta.
+Mientras el owner no fije un piso (precio de catálogo menos un descuento
+máximo por tienda, lista de regalos, el precio de la copia del carrito), el
+contrato pide fijar los precios en las instrucciones del agente y derivar lo
+que diga la clienta; la decisión daría un código nuevo (`price_not_allowed`).
+
+**El registro.** Una línea `[bot-orders]` por llamada: la tienda, los 12
+primeros caracteres del sha256 del request_id, el resultado, el código HTTP,
+los milisegundos, el id de WooCommerce, los pasos de `createWooSaleOrder`
+(`woo.sale.adopted`, `woo.sale.deleted`, `woo.sale.post_unanswered`…) y las
+marcas `replay`, `twin`, `left_open`, `local` y `guard` cuando aplican. Nunca el
+teléfono, el nombre, la dirección, el request_id entero ni el secreto. Si un
+paso de después de responder falla, otra línea con el paso y el error.
+
+**Sin la 0277** (el código puede salir antes que la base): 503
+`migration_missing` («Falta aplicar la migración 0277…») sin crear nada, y
+Ajustes lo dice en vez de ofrecer el secreto (`isBotOrdersMigrationMissing`, que
+solo reconoce las dos tablas de la 0277).
+
+**El corte.** Hasta que la tienda pase a WooCommerce, el bot sigue con su
+acción de Shopify. El 27-10, después del cambio de plataforma, se genera el
+secreto en Ajustes y la acción de Kapso pasa a apuntar a Kapta
+(`docs/kapso-pedidos-kapta.md`, sección 7; DEPLOY.md). Marcha atrás: la acción
+vuelve a Shopify mientras Shopify viva, o «Desactivar» en Ajustes (401, y el
+bot deriva a una asesora).
+
+**Lo que no cubre.** Después del cierre el bot no puede leer un borrador en
+Shopify: para cerrar un carrito necesita sus SKU y precios, y si no los tiene
+deriva a una asesora (que lo genera desde Leads con la copia de Kapta). Los
+carritos de WooCommerce todavía no entran a Kapta (38.12, «Los carritos»). El
+piso de precios y los pedidos de agencia esperan al owner (arriba).
+
+Implementación: `db/migrations/0277_bot_orders.sql` (`bot_order_secrets`,
+`bot_order_requests` con `woo_order_id`); `lib/bot-orders.ts` (`handleBotOrder`,
+`parseBotOrderBody`, `botOrderBodyHash`, `botSecretMatches`, `hashBotSecret`,
+`generateBotSecret`, `readBodyCapped`, `botOrderRetryAfter`,
+`botOrderLeftOpen`, `botOrderLeftOpenNote`, `isBotOrdersMigrationMissing`,
+`BOT_ORDER_CODES`, `BOT_ORDER_HTTP`, `BOT_ORDER_CLAIM_TTL_MS`,
+`BOT_ORDER_SALE_DEADLINE_MS`, `BOT_ORDER_RETAKE_MAX_AGE_MS`,
+`BOT_ORDER_SAME_BODY_WINDOW_MS`, `BOT_ORDER_RATE_PER_MINUTE`);
+`app/api/internal/orders/[storeId]/route.ts`; `buildWooSaleOrder` con
+`conversationId`, `shippingMode`, `tags` y `WOO_BOT_SALE_CHANNEL`, y
+`createWooSaleOrder` con `knownOrderId`, `onCreated` y `postUnanswered`
+(`lib/woocommerce-orders.ts`); `applyWooOrderEffects` (`lib/ingest.ts`);
+Ajustes: `app/dashboard/[storeId]/settings/bot-orders-actions.ts` y
+`components/bot-orders-settings-section.tsx`. Pruebas: `test/bot-orders.test.ts`,
+`test/bot-orders-settings.test.ts`, `test/bot-orders-mom.test.ts` y
+`scripts/sql/bot_orders_smoke.sql`. Contrato: `docs/kapso-pedidos-kapta.md`.
 
 ## 39. Fotos de producto de WhatsApp para cuando Shopify ya no responde (23-10-2026)
 

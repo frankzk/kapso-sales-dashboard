@@ -284,5 +284,12 @@ echo "▶ Foto del pedido para su boleta (0275): la lista de la regla, solo pedi
 $PSQL -f "$ROOT/scripts/sql/invoice_snapshots_smoke.sql"
 echo "  ✅ ninguna fila cambiada; la lista: de esa tienda, de Shopify con su id, desde el 29-08, sin boleta viva, sin foto y no anulado o con foto vieja, en curso primero; guarda solo un pedido de Shopify de esa tienda con su gid y su respuesta, nunca una foto vieja sobre una nueva ni una sin el pedido sobre una con él; un pedido que falla va detrás, espera y se borra al guardar; un turno por tienda; ni anon ni authenticated; dos veces es una; sin la 0274 se detiene"
 
+# Desde el corte el bot de Kapso le pide el pedido a Kapta, que lo crea en
+# WooCommerce (MOM §38.13, plan D5). El bot reintenta solo y en paralelo: lo que
+# impide que dos llamadas con el mismo id creen dos pedidos es la clave única de
+# la base, así que se prueba aquí y no solo en el código.
+echo "▶ Pedidos del bot por Kapta (0277): un candado por (tienda, request_id), el secreto solo en sha256, solo service_role"
+$PSQL -f "$ROOT/scripts/sql/bot_orders_smoke.sql"
+
 echo ""
 echo "✅ DB verification passed."

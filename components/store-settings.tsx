@@ -60,6 +60,7 @@ import {
 import type { MetaAdAccount, MetaConnectionProbe, StoreMetaAdAccount } from "@/lib/meta-marketing";
 import { InvoiceSettingsSection, type InvoiceSettingsData } from "@/components/invoice-settings-section";
 import { WooCommerceSettingsSection, type WooSettingsView } from "@/components/woocommerce-settings-section";
+import { BotOrdersSettingsSection, type BotOrdersSettingsView } from "@/components/bot-orders-settings-section";
 import {
   addPaymentMethod,
   addReplyTemplate,
@@ -291,6 +292,11 @@ export interface StoreSettingsData {
    * secreto (nunca el valor), la dirección de los webhooks y la última pasada.
    */
   woo: WooSettingsView;
+  /**
+   * El bot de Kapso pide sus pedidos a Kapta (0277, MOM §38.13): la dirección,
+   * si hay secreto (nunca el valor ni su hash), y el último uso y fallo.
+   */
+  botOrders: BotOrdersSettingsView;
   /** Lo del agente de leads (MOM §33) que no es una columna de la tienda. */
   leadVoice: {
     /** Telnyx, la puerta SIP y el secreto propio del agente de leads están en Vercel. */
@@ -403,6 +409,7 @@ const INDEX: IndexGroup[] = [
     items: [
       { id: "shopify", label: "Shopify" },
       { id: "woocommerce", label: "WooCommerce" },
+      { id: "bot-pedidos", label: "Bot de Kapso → pedidos" },
       { id: "kapso", label: "Kapso" },
       { id: "aliclik", label: "Aliclik" },
       { id: "shalom", label: "Shalom" },
@@ -595,6 +602,7 @@ export function StoreSettings({
           >
             <ShopifySection data={data} />
             <WooCommerceSettingsSection storeId={s.id} data={data.woo} />
+            <BotOrdersSettingsSection storeId={s.id} data={data.botOrders} />
             <KapsoSection data={data} />
             <AliclikSection
               siteUrl={data.siteUrl}

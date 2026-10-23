@@ -56,6 +56,7 @@ import {
 } from "@/lib/woocommerce-intake";
 import { isWooMigrationMissing } from "@/lib/woocommerce-settings";
 import type { CatalogVariant, PriceMismatch, ProductSearchResult, ProductVariantResult } from "@/lib/shopify";
+import { NOTE_ATTR } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
 // La plataforma de la tienda (`stores.platform`, §38.1)
@@ -164,6 +165,14 @@ export const WOO_SALE_CHANNEL = "venta_manual";
  * queda en `order_sales` igual.
  */
 export const WOO_CART_SALE_CHANNEL = "web_carrito";
+/**
+ * El canal del pedido que pide el bot de Kapso (`POST /api/internal/orders`,
+ * MOM §38.13): `kapso`, las etiquetas `kapso` y `whatsapp` de hoy (§38.5),
+ * también cuando el bot cierra un carrito. `bot_carritos` es el bot de
+ * carritos EXTERNO («BOT + CARRITO RECUPERADO», §17.3), otro sistema: el
+ * pedido que cierra el bot de Kapso es del bot de Kapso.
+ */
+export const WOO_BOT_SALE_CHANNEL = "kapso";
 /**
  * El envío: Kapta no cobra envío en «Generar pedido» (el total es productos
  * menos descuento, como en Shopify). Va como método de envío a S/ 0, nunca
@@ -312,8 +321,8 @@ export interface WooSaleExpectation {
   shipping: number;
   /** El total del pedido; null si alguna línea va sin precio. */
   total: number | null;
-  /** El lead de la venta (`kapta_lead_id`). */
-  leadId: string;
+  /** El lead de la venta (`kapta_lead_id`); null en un pedido del bot. */
+  leadId: string | null;
   /**
    * La huella de lo pedido (`kapta_request_hash`, `wooSaleFingerprint`): con
    * ella un reintento sabe si el pedido de un intento anterior se hizo con lo
@@ -323,13 +332,35 @@ export interface WooSaleExpectation {
 }
 
 export interface WooSaleInput {
-  leadId: string;
+  /**
+   * El lead de la venta de la asesora (`kapta_lead_id`). El pedido del bot no
+   * tiene lead que lo pida (null): lo identifica su conversación.
+   */
+  leadId: string | null;
+  /**
+   * Solo el bot (MOM §38.13): la conversación de Kapso, que viaja como
+   * `kapso_conversation_id` (la entrada le pone `kapso` y gana el lead,
+   * §38.5). La venta de la asesora NUNCA la lleva (§38.12).
+   */
+  conversationId?: string | null;
   requestId: string;
   /**
-   * `web_carrito` si la venta cierra el carrito abierto del lead; si no (o sin
-   * decir), `venta_manual`.
+   * `web_carrito` si la venta cierra el carrito abierto del lead; `kapso` si
+   * lo pide el bot; si no (o sin decir), `venta_manual`.
    */
-  channel?: typeof WOO_SALE_CHANNEL | typeof WOO_CART_SALE_CHANNEL;
+  channel?: typeof WOO_SALE_CHANNEL | typeof WOO_CART_SALE_CHANNEL | typeof WOO_BOT_SALE_CHANNEL;
+  /**
+   * Solo el bot (MOM §38.13): cómo se entrega, como lo escribe hoy en Shopify
+   * (`shipping_mode`: contraentrega o agencia). Viaja como el meta visible
+   * `shipping_mode`, que la entrada lee igual que la nota de Shopify
+   * (`deriveOrderFlags`). Sin decir, no va.
+   */
+  shippingMode?: "cod" | "agency" | null;
+  /**
+   * Solo el bot: las etiquetas que hoy pone en Shopify además del canal
+   * (`promo-whatsapp`, `stock-por-validar`), en `kapta_tags` (§38.5).
+   */
+  tags?: readonly string[] | null;
   lines: readonly WooSaleLine[];
   /** El descuento del pedido ya resuelto (`resolveOrderDiscount`), en soles. */
   discountAmount: number;
@@ -353,11 +384,14 @@ export interface WooSaleInput {
  * cantidades, precios fijados, envío, facturación y envío, nota) más el lead,
  * sin los metadatos. PURA y determinista: el mismo formulario da la misma
  * huella en cada reintento; cualquier cambio (una unidad más, otro descuento,
- * otra dirección u otra nota) da otra.
+ * otra dirección u otra nota) da otra. `extra`: lo que viaja en metadatos y
+ * también decide el pedido (el modo de entrega y las etiquetas del bot); sin
+ * nada, la huella es la de siempre.
  */
-export function wooSaleFingerprint(body: Record<string, unknown>, leadId: string): string {
+export function wooSaleFingerprint(body: Record<string, unknown>, leadId: string, extra?: Record<string, unknown>): string {
   const { meta_data: _meta, ...rest } = body;
-  return createHash("sha256").update(JSON.stringify({ lead: leadId, ...rest })).digest("hex");
+  const more = extra && Object.keys(extra).length ? { extra } : {};
+  return createHash("sha256").update(JSON.stringify({ lead: leadId, ...rest, ...more })).digest("hex");
 }
 
 function splitName(name: string | null): { first: string; last: string } {
@@ -420,10 +454,21 @@ export function buildWooSaleOrder(input: WooSaleInput): { body: Record<string, u
   };
   const note = (input.note ?? "").trim();
   if (note) body.customer_note = note;
-  const fingerprint = wooSaleFingerprint(body, input.leadId);
+  const conversationId = (input.conversationId ?? "").trim();
+  const shippingMode = input.shippingMode ?? null;
+  const tags = [...new Set((input.tags ?? []).map((t) => t.trim()).filter(Boolean))];
+  const extra: Record<string, unknown> = {};
+  if (shippingMode) extra.shipping_mode = shippingMode;
+  if (tags.length) extra.tags = tags;
+  // Quién pide: el lead de la asesora o, en el pedido del bot, su conversación.
+  // La de la asesora queda igual que antes (solo el lead, sin `extra`).
+  const fingerprint = wooSaleFingerprint(body, input.leadId ?? `kapso:${conversationId}`, extra);
   body.meta_data = [
     { key: WOO_META.channel, value: input.channel ?? WOO_SALE_CHANNEL },
-    { key: WOO_META.leadId, value: input.leadId },
+    ...(input.leadId ? [{ key: WOO_META.leadId, value: input.leadId }] : []),
+    ...(conversationId ? [{ key: WOO_META.conversationId, value: conversationId }] : []),
+    ...(shippingMode ? [{ key: NOTE_ATTR.shippingMode, value: shippingMode }] : []),
+    ...(tags.length ? [{ key: WOO_META.tags, value: tags.join(",") }] : []),
     { key: WOO_META.requestId, value: input.requestId },
     { key: WOO_META.requestHash, value: fingerprint },
   ];
@@ -810,7 +855,19 @@ export type WooSaleOutcome =
   | { kind: "conflict"; order: WooOrder; orderLabel: string | null; lineas: WooLineProblem[]; desajustes: PriceMismatch[] }
   | { kind: "price"; desajustes: PriceMismatch[]; cleanup: WooSaleCleanup; orderLabel: string | null }
   | { kind: "lines"; problemas: WooLineProblem[]; cleanup: WooSaleCleanup; orderLabel: string | null }
-  | { kind: "error"; message: string; cleanup: WooSaleErrorCleanup | null; orderLabel: string | null };
+  | {
+      kind: "error";
+      message: string;
+      cleanup: WooSaleErrorCleanup | null;
+      orderLabel: string | null;
+      /**
+       * El POST salió y no hubo respuesta clara (se cortó, un 5xx), y después
+       * no se encontró el pedido (o no se pudo buscar): WordPress puede seguir
+       * creándolo y guardarlo DESPUÉS. Un reintento inmediato no lo vería y
+       * crearía otro; quien reintenta solo (el bot, §38.13) tiene que esperar.
+       */
+      postUnanswered?: true;
+    };
 
 export interface WooSaleLog {
   (event: string, data: Record<string, unknown>): void;
@@ -893,6 +950,20 @@ export async function createWooSaleOrder(input: {
   budgetMs?: number;
   timeouts?: Partial<WooSaleTimeouts>;
   log?: WooSaleLog;
+  /**
+   * El pedido que ya creó un intento anterior de este mismo id, si quien llama
+   * lo anotó (`onCreated`; el bot, §38.13). Se lee directo por su id, a
+   * cualquier edad, antes que la búsqueda de las últimas 2 horas; si ya no
+   * está (borrado) o es de otro intento, se busca como siempre.
+   */
+  knownOrderId?: number | null;
+  /**
+   * Se llama con el id de WooCommerce apenas existe un pedido de este intento
+   * (el POST contestó, o el pedido apareció después de un POST sin
+   * respuesta), antes de comprobarlo. Para anotarlo fuera de WooCommerce. Lo
+   * que lance se ignora: la búsqueda por `kapta_request_id` sigue siendo la red.
+   */
+  onCreated?: (wooId: number) => Promise<void> | void;
 }): Promise<WooSaleOutcome> {
   const t: WooSaleTimeouts = { ...WOO_SALE_TIMEOUTS, ...(input.timeouts ?? {}) };
   const log = input.log ?? defaultLog;
@@ -963,12 +1034,38 @@ export async function createWooSaleOrder(input: {
     return wooSaleMismatches(expected, order, variable);
   };
 
-  // 1) El intento anterior.
-  let previous: Pick<WooOrder, "id" | "status" | "number" | "meta_data"> | null;
+  const noteCreated = async (wooId: number) => {
+    if (!input.onCreated || !Number.isInteger(wooId) || wooId <= 0) return;
+    try {
+      await input.onCreated(wooId);
+    } catch {
+      /* la búsqueda por `kapta_request_id` sigue siendo la red */
+    }
+  };
+
+  // 1) El intento anterior: el que ya se conoce por su id, si lo hay (a
+  // cualquier edad); si no, o si ya no está, la búsqueda de las últimas 2 horas.
+  let previous: Pick<WooOrder, "id" | "status" | "number" | "meta_data"> | null = null;
   try {
-    const found = await withWooAuthFallback(opts(t.lookup), (o) => findWooOrderByRequestId(o, input.requestId, now()));
-    auth = found.auth;
-    previous = found.value;
+    const known = Number(input.knownOrderId ?? 0);
+    if (Number.isInteger(known) && known > 0) {
+      try {
+        const got = await withWooAuthFallback(opts(t.lookup), (o) => fetchWooOrder(o, known));
+        auth = got.auth;
+        // Anulado o reembolsado: también se busca, por si otro intento dejó otro.
+        if (metaValue(got.value, WOO_META.requestId) === input.requestId && !isClosedWooOrder(got.value)) previous = got.value;
+      } catch (e) {
+        // Borrado (`force`): como si no estuviera. Otro fallo: no se sabe, no se crea.
+        if (!(e instanceof WooError && e.kind === "no_encontrado")) throw e;
+      }
+    }
+    if (!previous) {
+      const found = await withWooAuthFallback(opts(t.lookup), (o) => findWooOrderByRequestId(o, input.requestId, now()));
+      auth = found.auth;
+      previous = found.value;
+      // Encontrado por la búsqueda: se anota, para que el próximo intento lo lea por su id.
+      if (previous && !isClosedWooOrder(previous)) await noteCreated(Number(previous.id));
+    }
   } catch (e) {
     return {
       kind: "error",
@@ -1053,23 +1150,38 @@ export async function createWooSaleOrder(input: {
       created = data;
     } catch (e) {
       let cleanup: WooSaleCleanup | null = null;
+      let unanswered = false;
       if (mayHaveCreated(e)) {
         // Pudo haberse creado sin que llegara la respuesta: si está y Kapta no
         // lo toma (`pending`), se borra. Si no aparece, o ya está vivo, el
-        // siguiente intento lo encuentra y lo resuelve.
+        // siguiente intento lo encuentra y lo resuelve. Si no aparece (o no se
+        // pudo buscar), WordPress puede guardarlo todavía: `postUnanswered`.
+        unanswered = true;
         try {
           const orphan = await findWooOrderByRequestId(opts(t.cleanup), input.requestId, now());
-          if (orphan && !isWooOrderIngestible(orphan)) cleanup = await discard(orphan, "creacion_sin_respuesta");
+          if (orphan) {
+            unanswered = false;
+            await noteCreated(Number(orphan.id));
+            if (!isWooOrderIngestible(orphan)) cleanup = await discard(orphan, "creacion_sin_respuesta");
+          }
         } catch {
           /* el siguiente intento lo busca otra vez */
         }
       }
-      return { kind: "error", message: `No se pudo crear el pedido en WooCommerce: ${errorText(e)}`, cleanup, orderLabel: null };
+      if (unanswered) log("woo.sale.post_unanswered", { error: e instanceof WooError ? e.kind : "desconocido" });
+      return {
+        kind: "error",
+        message: `No se pudo crear el pedido en WooCommerce: ${errorText(e)}`,
+        cleanup,
+        orderLabel: null,
+        ...(unanswered ? { postUnanswered: true as const } : {}),
+      };
     }
     const wooId = Number(created?.id);
     if (!Number.isInteger(wooId) || wooId <= 0) {
       return { kind: "error", message: "WooCommerce no devolvió el pedido creado.", cleanup: null, orderLabel: null };
     }
+    await noteCreated(wooId);
     const label = orderLabelOf(created);
 
     // 3) Lo guardado contra lo pedido, ANTES de que sea un pedido vivo. Si un

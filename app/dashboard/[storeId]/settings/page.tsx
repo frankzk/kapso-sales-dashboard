@@ -23,6 +23,7 @@ import {
 } from "@/lib/shopify-own-app";
 import { limaDateTimeInputValue } from "@/lib/repro-lima";
 import { WOO_INTAKE_TOPICS, WOO_SYNC_SOURCE, wooWebhookDeliveryUrl } from "@/lib/woocommerce-intake";
+import { botOrdersEndpointUrl, isBotOrdersMigrationMissing } from "@/lib/bot-orders";
 import { limaDayStartIso } from "@/lib/auto-order-ab";
 import type { InvoiceMode, InvoiceStatus, InvoiceWriteMode } from "@/lib/invoicing/rules";
 import {
@@ -359,6 +360,23 @@ export default async function StoreSettingsPage({
       : Promise.resolve(NO_INVOICES),
   ]);
 
+  // El bot de Kapso pide sus pedidos a Kapta (0277, MOM §38.13): si hay
+  // secreto y su último uso. Nunca el hash. Pre-0277 la tabla no existe y la
+  // sección lo dice; otro fallo de lectura la deja como «sin secreto».
+  const botSecretRead = await admin
+    .from("bot_order_secrets")
+    .select("created_at, rotated_at, last_used_at, last_outcome, last_error, last_error_at")
+    .eq("store_id", storeId)
+    .maybeSingle();
+  const botSecret = (botSecretRead.data ?? null) as {
+    created_at: string | null;
+    rotated_at: string | null;
+    last_used_at: string | null;
+    last_outcome: string | null;
+    last_error: string | null;
+    last_error_at: string | null;
+  } | null;
+
   // Los ajustes del agente de leads (MOM §33) con los defectos de 0247: lo que
   // la página pinta es lo mismo que lee el agente al llamar.
   const leadVoice = leadVoiceSettingsFrom(full);
@@ -650,6 +668,18 @@ export default async function StoreSettingsPage({
           .filter((r) => r.source === WOO_SYNC_SOURCE)
           .map((r) => ({ status: r.status, last_run_at: r.last_run_at, error: r.error }))[0] ?? null,
       migrationMissing: !("platform" in (full ?? {})),
+    },
+    botOrders: {
+      endpointUrl: botOrdersEndpointUrl(siteUrl || env.siteUrl(), storeId),
+      configured: Boolean(botSecret),
+      createdAt: botSecret?.created_at ?? null,
+      rotatedAt: botSecret?.rotated_at ?? null,
+      lastUsedAt: botSecret?.last_used_at ?? null,
+      lastOutcome: botSecret?.last_outcome ?? null,
+      lastError: botSecret?.last_error ?? null,
+      lastErrorAt: botSecret?.last_error_at ?? null,
+      platform: full.platform ?? "shopify",
+      migrationMissing: isBotOrdersMigrationMissing(botSecretRead.error),
     },
     // Solo sí/no, nunca los valores: la página llega al navegador.
     leadVoice: {

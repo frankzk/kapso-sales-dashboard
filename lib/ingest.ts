@@ -1369,8 +1369,12 @@ async function applyWooOrderPayload(
  * Lo que sigue al upsert de UN pedido, igual que en `processOrderWebhook`:
  * rollups del día y lead ganado si es del bot (`kapso`); si no, saca de la cola
  * el carrito del mismo teléfono; y la fila del Master.
+ *
+ * Exportada para el pedido que crea Kapta a pedido del bot de Kapso
+ * (lib/bot-orders.ts, MOM §38.13): los mismos pasos que la entrada, por el
+ * mismo código, sin esperar al webhook.
  */
-async function applyWooOrderEffects(
+export async function applyWooOrderEffects(
   admin: SupabaseClient,
   storeId: string,
   timezone: string,

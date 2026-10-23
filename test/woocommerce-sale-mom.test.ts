@@ -158,9 +158,10 @@ describe("MOM §38.12 · el pedido en WooCommerce", () => {
     expect(VENTA).toContain("Nunca toca `woo_intake_from`, las claves de WooCommerce ni el token de Shopify.");
   });
 
-  it("lo que falta: el bot, los carritos y la boleta; ya no dice que nadie lee stores.platform", () => {
-    expect(S38_12).toContain("**El endpoint del bot**");
-    expect(S38_12).toContain("necesita un candado en la base por (tienda, id del intento)");
+  it("lo que falta: los carritos y la boleta; el bot ya está (38.13); ya no dice que nadie lee stores.platform", () => {
+    expect(S38_12).toContain("**El endpoint del bot** (`POST /api/internal/orders/[storeId]`): **hecho (23-10-2026, 38.13)**");
+    expect(S38_12).toContain("el candado en la base por (tienda, id del intento)");
+    expect(S38_12).not.toContain("necesita un candado en la base por (tienda, id del intento)");
     expect(S38_12).toContain("**Los carritos.**");
     expect(S38_12).toContain("**La boleta de un pedido de WooCommerce** espera su lector");
     expect(S38_12).not.toContain("`stores.platform` todavía no lo lee nadie");
@@ -203,8 +204,9 @@ describe("DEPLOY.md", () => {
     }
   });
 
-  it("y de verdad no hay migración nueva: la última sigue siendo la 0276", () => {
+  it("y de verdad no trajo migración: la siguiente a la 0276 es la del bot (0277, MOM §38.13), con su propia entrada", () => {
     const files = readdirSync(resolve(process.cwd(), "db/migrations")).filter((f) => /^\d{4}_/.test(f)).sort();
-    expect(files.at(-1)).toBe("0276_shopify_history_imports.sql");
+    expect(files.filter((f) => f > "0276_shopify_history_imports.sql")).toEqual(["0277_bot_orders.sql"]);
+    expect(DEPLOY).toContain("### 23-10-2026 · Pedidos del bot de Kapso por Kapta (0277, MOM §38.13)");
   });
 });

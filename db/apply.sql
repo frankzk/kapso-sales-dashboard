@@ -555,4 +555,6 @@
 \ir migrations/0275_invoice_snapshots.sql
 \echo 'Applying 0276_shopify_history_imports.sql'
 \ir migrations/0276_shopify_history_imports.sql
+\echo 'Applying 0277_bot_orders.sql'
+\ir migrations/0277_bot_orders.sql
 \echo 'Done.'

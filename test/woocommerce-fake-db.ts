@@ -1,10 +1,11 @@
 // Una base falsa en memoria para las pruebas de la entrada de WooCommerce
 // (test/woocommerce-*.test.ts). Aplica de verdad los filtros de cada lectura y
-// escritura (`eq`, `in`, `is`, `match`, `limit`) y las claves únicas que usan
-// estas rutas: `orders (store_id, shopify_order_id)`, `webhook_events
-// (store_id, webhook_id)` y `sync_state (store_id, source)`, con el
-// `ignoreDuplicates` de un upsert (ON CONFLICT DO NOTHING). Lo demás (orden,
-// rangos, `not`, `or`) se acepta y no filtra: las pruebas no dependen de ello.
+// escritura (`eq`, `in`, `is`, `match`, `gte`/`gt`/`lte`/`lt`, `limit`) y las
+// claves únicas que usan estas rutas: `orders (store_id, shopify_order_id)`,
+// `webhook_events (store_id, webhook_id)` y `sync_state (store_id, source)`,
+// con el `ignoreDuplicates` de un upsert (ON CONFLICT DO NOTHING). Lo demás
+// (orden, `range`, `not`, `or`) se acepta y no filtra: las pruebas no dependen
+// de ello. `hangOn` deja una consulta sin contestar (una base que no responde).
 //
 // No es un archivo de pruebas (no termina en .test.ts): lo importan.
 
@@ -24,9 +25,24 @@ const UNIQUE: Record<string, string[]> = {
   orders: ["store_id", "shopify_order_id"],
   webhook_events: ["store_id", "webhook_id"],
   sync_state: ["store_id", "source"],
+  // Los pedidos del bot (0277, MOM §38.13): el candado y el secreto de cada tienda.
+  bot_order_requests: ["store_id", "request_id"],
+  bot_order_secrets: ["store_id"],
 };
 
 let seq = 0;
+
+/** Compara como Postgres lo haría con estos datos: números, fechas ISO o texto. Null si alguno falta. */
+function compare(a: any, b: any): number | null {
+  if (a == null || b == null) return null;
+  const na = typeof a === "number" ? a : typeof a === "string" && a.trim() !== "" ? Number(a) : NaN;
+  const nb = typeof b === "number" ? b : typeof b === "string" && b.trim() !== "" ? Number(b) : NaN;
+  if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+  const da = Date.parse(String(a));
+  const db = Date.parse(String(b));
+  if (Number.isFinite(da) && Number.isFinite(db)) return da - db;
+  return String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0;
+}
 
 function matches(row: Row, filters: [string, string, any][]): boolean {
   return filters.every(([m, col, val]) => {
@@ -34,6 +50,11 @@ function matches(row: Row, filters: [string, string, any][]): boolean {
     if (m === "neq") return String(row[col]) !== String(val);
     if (m === "in") return (val as unknown[]).map(String).includes(String(row[col]));
     if (m === "is") return val === null ? row[col] == null : row[col] === val;
+    if (m === "gte" || m === "gt" || m === "lte" || m === "lt") {
+      const c = compare(row[col], val);
+      if (c == null) return false;
+      return m === "gte" ? c >= 0 : m === "gt" ? c > 0 : m === "lte" ? c <= 0 : c < 0;
+    }
     return true;
   });
 }
@@ -50,9 +71,13 @@ class FakeQuery {
     private db: FakeDb,
     private table: string,
   ) {}
-  select(cols?: string) {
-    if (this.op === "select") this.cols = cols;
-    else this.returning = true;
+  countOnly = false;
+  select(cols?: string, opts?: { count?: string; head?: boolean }) {
+    if (this.op === "select") {
+      this.cols = cols;
+      // `{count: "exact", head: true}`: solo cuántas filas (los filtros `eq`/`in`/`is`).
+      this.countOnly = Boolean(opts?.count && opts?.head);
+    } else this.returning = true;
     return this;
   }
   insert(p: any) {
@@ -112,16 +137,20 @@ class FakeQuery {
   or() {
     return this;
   }
-  gte() {
+  gte(c: string, v: any) {
+    this.filters.push(["gte", c, v]);
     return this;
   }
-  lte() {
+  lte(c: string, v: any) {
+    this.filters.push(["lte", c, v]);
     return this;
   }
-  gt() {
+  gt(c: string, v: any) {
+    this.filters.push(["gt", c, v]);
     return this;
   }
-  lt() {
+  lt(c: string, v: any) {
+    this.filters.push(["lt", c, v]);
     return this;
   }
   maybeSingle() {
@@ -133,6 +162,11 @@ class FakeQuery {
     return this;
   }
   then(resolve: (v: any) => any, reject?: (e: any) => any) {
+    if (this.db.hangOn?.(this.table, this.op, this.payload, this.filters)) {
+      // Una base que no contesta: la consulta queda registrada y nunca resuelve.
+      this.db.ops.push({ table: this.table, op: this.op, payload: this.payload, filters: this.filters, cols: this.cols });
+      return new Promise(() => {});
+    }
     return Promise.resolve()
       .then(() => this.exec())
       .then(resolve, reject);
@@ -144,6 +178,7 @@ class FakeQuery {
     const rows = this.db.rows(this.table);
     if (this.op === "select") {
       let found = rows.filter((r) => matches(r, this.filters)).map((r) => ({ ...r }));
+      if (this.countOnly) return { data: null, error: null, count: found.length } as { data: any; error: DbError | null };
       if (this.limitN != null) found = found.slice(0, this.limitN);
       return { data: this.isSingle ? (found[0] ?? null) : found, error: null };
     }
@@ -181,6 +216,8 @@ export class FakeDb {
   ops: DbOp[] = [];
   rpcCalls: { name: string; args: any }[] = [];
   failOn: ((table: string, op: string, payload: any, filters: [string, string, any][]) => DbError | null) | null = null;
+  /** true: esa consulta no contesta nunca. */
+  hangOn: ((table: string, op: string, payload: any, filters: [string, string, any][]) => boolean) | null = null;
   constructor(seed: Record<string, Row[]> = {}) {
     for (const [t, rows] of Object.entries(seed)) this.tables[t] = rows.map((r) => ({ ...r }));
   }

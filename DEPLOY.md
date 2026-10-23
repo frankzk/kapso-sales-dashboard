@@ -4636,3 +4636,152 @@ cambia `platform`). Si la pantalla no carga, en la base:
 vender desde Kapta. Revertir el código también devuelve todo a Shopify sin
 importar `platform`. Los pedidos ya creados en WooCommerce se quedan: son
 pedidos reales.
+
+### 23-10-2026 · Pedidos del bot de Kapso por Kapta (0277, MOM §38.13)
+
+Desde el cierre de Shopify, el bot de Kapso le pide sus pedidos a Kapta
+(`POST /api/internal/orders/<storeId>`, contrato en
+`docs/kapso-pedidos-kapta.md`) y Kapta los crea en WooCommerce con el mismo
+núcleo que «Generar pedido» (`pending` → comparación con lo pactado →
+`processing`), con `kapta_channel = kapso` y la conversación. Trae la sección
+**Ajustes → «Bot de Kapso → pedidos por Kapta»** (la dirección, el secreto, el
+último uso y el último fallo). Sin variables de entorno nuevas y sin crons. La
+ruta tiene `maxDuration = 60` (la venta termina a los 42 s de empezada la
+llamada, y cada paso de la base tiene 5 s de tope).
+
+**Kenku y Aurela no cambian con este despliegue.** Sin un secreto generado en
+Ajustes la ruta contesta 401 a todo, y con la tienda en `platform = 'shopify'`
+contesta 409 `wrong_platform` sin llamar a WooCommerce ni a Shopify. El bot
+sigue creando sus pedidos en Shopify hasta que, el 27-10, su acción pase a
+apuntar a Kapta (paso 4).
+
+1. **Migración `0277_bot_orders.sql`, a mano y ANTES del código.** Crea
+   `bot_order_secrets` (el sha256 del secreto de cada tienda, nunca el
+   secreto, con cuándo se creó y se cambió, y el último uso y fallo) y
+   `bot_order_requests` (el candado de cada pedido del bot: `unique (store_id,
+   request_id)`, con `woo_order_id`, el pedido de WooCommerce de ese intento),
+   con RLS encendida y sin privilegios para `anon` ni `authenticated`. **No toca ninguna fila ni ninguna otra tabla**: sin llaves
+   foráneas a propósito (crearlas tomaría un candado de `stores`, que Kenku y
+   Aurela leen en cada consulta del panel). Se puede pegar entera en el SQL
+   Editor o correr con psql. Sin ella, el código contesta 503
+   `migration_missing` sin crear nada y Ajustes dice «Falta aplicar la
+   migración 0277».
+
+   **Antes** (solo lectura):
+
+   ```sql
+   -- a) Que no estén todavía: 0 filas (2 si ya se aplicó; correrla otra vez no hace nada).
+   select relname from pg_class
+    where relname in ('bot_order_secrets', 'bot_order_requests') and relkind = 'r';
+   -- b) gen_random_uuid() existe (el id de cada candado): tiene que dar 1 o más.
+   select count(*) from pg_proc where proname = 'gen_random_uuid';
+   -- c) Dónde crea hoy cada tienda sus pedidos nuevos (todas 'shopify' antes del corte).
+   select name, status, platform from stores order by name;
+   ```
+
+   **Aplicar** (SQL Editor: pegar `db/migrations/0277_bot_orders.sql` entera; o):
+
+   ```bash
+   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/0277_bot_orders.sql
+   ```
+
+   **Después** (solo lectura):
+
+   ```sql
+   -- 1) Las dos tablas con RLS: relrowsecurity = true en las dos.
+   select relname, relrowsecurity from pg_class
+    where oid in ('public.bot_order_secrets'::regclass, 'public.bot_order_requests'::regclass);
+   -- 2) Sin privilegios para anon ni authenticated: 0 filas.
+   select table_name, grantee, privilege_type from information_schema.role_table_grants
+    where table_name in ('bot_order_secrets', 'bot_order_requests')
+      and grantee in ('anon', 'authenticated');
+   -- 3) El candado: 1 fila. Y la columna del pedido de cada intento: 1 fila (bigint).
+   select conname from pg_constraint where conname = 'bot_order_requests_store_request_uniq';
+   select data_type from information_schema.columns
+    where table_name = 'bot_order_requests' and column_name = 'woo_order_id';
+   -- 4) Vacías, y las tiendas como estaban (la misma salida que la consulta c de antes).
+   select (select count(*) from bot_order_secrets) as secretos,
+          (select count(*) from bot_order_requests) as pedidos;
+   select name, status, platform from stores order by name;
+   ```
+
+2. **El código**, por el camino de siempre (rama de integración → `main` por
+   fast-forward), **después** de la 0277.
+
+3. **Ensayo, opcional, antes del 27-10** (con la tienda todavía en Shopify):
+   Ajustes de Kenku → «Bot de Kapso → pedidos por Kapta» → «Generar secreto»,
+   y una llamada con un pedido inventado (el ejemplo del contrato):
+
+   ```bash
+   curl -sS -X POST "https://<Kapta>/api/internal/orders/<storeId de Kenku>" \
+     -H "Authorization: Bearer $KAPTA_ORDERS_SECRET" -H "Content-Type: application/json" \
+     -d @pedido-de-prueba.json
+   # 409 {"ok":false,"code":"wrong_platform",…}: la dirección, el secreto y el cuerpo están bien; no se creó nada.
+   # 401: el secreto. 400: el cuerpo («errors» dice qué).
+   ```
+
+   **Nunca** ensayar contra una tienda que ya está en WooCommerce: crearía un
+   pedido real que entra al Master (§38.11).
+
+4. **El 27-10, después de pasar la tienda a WooCommerce** (entrada «Generar
+   pedido» de esta misma fecha, paso 3.3):
+   1. Ajustes → «Bot de Kapso → pedidos por Kapta» → **«Generar secreto»** (o
+      «Cambiar secreto», si el del ensayo pasó por un canal que no
+      corresponde). Copiarlo junto con la dirección a los secrets de la
+      función de Kapso que llama: se muestra una sola vez;
+   2. en el workflow de Kapso, la acción que crea el pedido (y la que cierra
+      carritos) pasa de Shopify a Kapta (`docs/kapso-pedidos-kapta.md`,
+      sección 7), con la regla de reintentos del contrato (sección 4: el mismo
+      `request_id` durante 3 minutos, sin derivar mientras la respuesta sea
+      `duplicate_in_progress`; el `request_id` y `order_left_open` en el
+      motivo del handoff);
+   3. el primer pedido del bot, mirado de cerca: `#KP2…`/`#AUR9…` en
+      WooCommerce en «Procesando» con `kapta_channel = kapso`, y en el Master
+      con `kapso`, `whatsapp` (consultas b y c).
+
+5. **Verificar** (solo lectura, sin datos de clientas):
+
+   ```sql
+   -- a) El secreto de cada tienda: cuándo, el último uso y el último fallo (nunca el hash).
+   select s.name, b.created_at, b.rotated_at, b.last_used_at, b.last_outcome,
+          b.last_error_at, left(b.last_error, 120) as ultimo_fallo
+     from bot_order_secrets b join stores s on s.id = b.store_id order by s.name;
+   -- b) Los pedidos del bot de hoy: estado del candado, intentos y su pedido.
+   select s.name, r.status, r.attempts, r.woo_order_id, r.order_name, r.order_total, r.error_code, r.created_at
+     from bot_order_requests r join stores s on s.id = r.store_id
+    where r.created_at > now() - interval '1 day' order by r.created_at desc limit 50;
+   -- c) En el Master: con kapso y su conversación, y sin venta de asesora (0 en ventas).
+   select s.name, o.name, o.tags, (o.kapso_conversation_id is not null) as con_conversacion,
+          (select count(*) from order_sales x where x.order_id = o.id) as ventas
+     from orders o join stores s on s.id = o.store_id
+    where o.platform = 'woocommerce' and 'kapso' = any(o.tags)
+      and o.created_at > now() - interval '1 day'
+    order by o.created_at desc limit 20;
+   -- d) Candados a medias (processing de hace más de 2 minutos): el reintento del bot
+   --    con el mismo request_id los retoma; si el bot no reintentó, mirar el pedido en
+   --    WooCommerce (woo_order_id, o kapta_request_id = 'kapso-' || request_id).
+   select s.name, r.request_id, r.woo_order_id, r.attempts, r.claimed_at
+     from bot_order_requests r join stores s on s.id = r.store_id
+    where r.status = 'processing' and r.claimed_at < now() - interval '2 minutes';
+   ```
+
+   En los logs de Vercel, `[bot-orders]` es una línea por llamada (tienda, el
+   comienzo del sha256 del request_id, `outcome`, `status`, `ms`, el id de
+   WooCommerce y los pasos `woo.sale.*` de 38.12), sin teléfono, nombre ni
+   dirección. `outcome` distinto de `ok` repetido en una tienda: mirar el
+   contrato (`unauthorized` = el secreto de Kapso no es el de Ajustes;
+   `sku_not_found` = un SKU del bot que no está en WooCommerce;
+   `price_mismatch` = un precio del bot que WooCommerce no respeta). Una línea
+   con `"left_open":true` es un pedido que quedó en WooCommerce sin confirmar:
+   la constancia está en el lead (⚠️ Pedido del bot de Kapso NO confirmado) y
+   hay que revisarlo en WooCommerce. `expired` = un `request_id` reusado más de
+   90 minutos después sin terminar: revisar WooCommerce antes de generar.
+
+**Marcha atrás.** Sin despliegue: en el workflow de Kapso, la acción vuelve a
+Shopify (solo mientras Shopify viva, y con la tienda vuelta a Shopify en
+Ajustes); o, para cortar al bot en seco, **«Desactivar»** en Ajustes: la ruta
+contesta 401 y el bot deriva a una asesora. Revertir el código también corta
+la ruta (404). La 0277 puede quedarse: nadie más la lee. Si se quisiera quitar,
+**solo después** de revertir el código: `drop table bot_order_requests; drop
+table bot_order_secrets;`. Los pedidos ya creados en WooCommerce se quedan: son
+pedidos reales.

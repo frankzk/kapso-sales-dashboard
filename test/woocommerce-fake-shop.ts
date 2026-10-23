@@ -56,6 +56,12 @@ export interface FakeShopOptions {
   putAppliesThenTimesOut?: boolean;
   /** El POST se crea pero la respuesta no llega. */
   postCreatesThenTimesOut?: boolean;
+  /**
+   * El primer POST no contesta (se corta) y WordPress lo guarda DESPUÉS, cuando
+   * la prueba llama a `commitLate()`: el pedido no aparece en la búsqueda que
+   * sigue al corte.
+   */
+  postCommitsLate?: boolean;
   /** Un plugin que deja el pedido en otro estado al crearlo (`processing`, `por-confirmar`…). */
   createdStatus?: string;
   /** Se llama antes de contestar cada llamada (para mover un reloj falso). */
@@ -96,6 +102,8 @@ export function fakeWooShop(opts: FakeShopOptions = {}) {
   let nextId = opts.firstId ?? 501;
   const failedOnce = new Set<string>();
   const now = opts.now ?? (() => new Date());
+  const late: any[] = [];
+  let lateUsed = false;
 
   const bySku = (sku: string) => products.find((p) => p.sku === sku && p.type !== "variable" && p.type !== "grouped") ?? products.find((p) => p.sku === sku) ?? null;
 
@@ -202,6 +210,11 @@ export function fakeWooShop(opts: FakeShopOptions = {}) {
       return json([]);
     }
     if (method === "POST" && path === "/orders") {
+      if (opts.postCommitsLate && !lateUsed) {
+        lateUsed = true;
+        late.push(body);
+        throw timeoutError();
+      }
       const o = createOrder(body);
       if (opts.postCreatesThenTimesOut) throw timeoutError();
       return json(o, 201);
@@ -284,7 +297,10 @@ export function fakeWooShop(opts: FakeShopOptions = {}) {
     return json({ code: "rest_no_route", message: "No route" }, 404);
   };
 
-  return { fetchImpl: fetchImpl as unknown as typeof fetch, calls, orders };
+  /** Guarda ahora los POST que se cortaron (`postCommitsLate`): los pedidos aparecen recién aquí. */
+  const commitLate = () => late.splice(0).map((b) => createOrder(b));
+
+  return { fetchImpl: fetchImpl as unknown as typeof fetch, calls, orders, commitLate };
 }
 
 /** El catálogo de prueba: un simple, un regalo y un variable con dos tallas (una sin SKU propio). */

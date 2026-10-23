@@ -130,7 +130,8 @@ describe("MOM §38.12", () => {
   it("las secciones de WooCommerce siguen en orden y sin repetirse", () => {
     const heads = [...MOM.matchAll(/^### 38\.(\d+) /gm)].map((m) => Number(m[1]));
     expect(heads).toEqual(Array.from({ length: heads.length }, (_, i) => i + 1));
-    expect(heads.at(-1)).toBe(12);
+    // 38.13: los pedidos del bot de Kapso por Kapta (test/bot-orders-mom.test.ts).
+    expect(heads.at(-1)).toBe(13);
   });
 });
 
