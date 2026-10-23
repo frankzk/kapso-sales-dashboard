@@ -15406,3 +15406,84 @@ No hay otro valor, y una tienda no cambia de app sola.
   `scripts/sql/shopify_app_propia_smoke.sql` (la 0271 aplicada sobre el
   esquema de la 0249 con tiendas `interna` y `clientes`: ninguna fila cambia;
   y la conversión de soporte de 36.2 solo toma una `interna` sin token).
+
+## 37. Historial de Shopify (23-10-2026)
+
+Pedido de Frankz (23-10-2026): Shopify estaba por suspender la tienda de Aurela
+y con ella se iba el historial de pedidos y de cada clienta desde 2021. Kapta
+solo tiene los pedidos de junio de 2026 en adelante: la conexión con Shopify no
+tiene `read_all_orders` y no ve nada de más de 60 días. La salida es la
+exportación del propio Shopify (un CSV de pedidos por año y uno de clientes),
+que Kapta guarda como **archivo de consulta**.
+
+### 37.1 Qué es y qué no es
+
+- **Es un archivo.** Quién compró, qué, cuándo, a dónde, por cuánto y cómo
+  terminó en Shopify (pagado, enviado, cancelado), y la ficha de cada clienta
+  si se sube el CSV de clientes.
+- **No son pedidos de Kapta.** No entran a `orders` ni a `order_master`, no
+  tienen macroetapa ni estado del MOM, no generan eventos, alertas, tareas,
+  liquidaciones ni comprobantes, y no cuentan en el Consolidado. Los estados
+  que se ven son los de Shopify, tal como vinieron (`financial_status`,
+  `fulfillment_status`, `cancelled_at`): no se traducen a estados del Master.
+- Shopify sigue siendo la única fuente de pedidos (AGENTS.md, regla 4): esto es
+  una copia de lo que Shopify ya tenía, no un canal de entrada.
+
+### 37.2 La pantalla
+
+`/dashboard/stores/historial` («Historial Shopify» en el menú). Pide el permiso
+«Descargar la base de pedidos» (`data.export`): lo que se ve son nombres,
+celulares y direcciones de clientas, lo mismo que la descarga del Master. Muestra
+solo las tiendas que la persona ve.
+
+1. **Cargar archivos.** Se eligen la tienda y uno o varios CSV. El navegador
+   lee cada archivo (UTF-8, o el UTF-16 del «CSV para Excel»; separado por coma,
+   punto y coma o tabulación), reconoce el tipo por sus cabeceras —pedidos,
+   clientes, productos u otro— y:
+   - guarda el **original comprimido** en el bucket privado `shopify-history`
+     (`<tienda>/<archivo>/<nombre>.gz`), sea del tipo que sea;
+   - de pedidos y clientes, carga los registros por tandas, con el avance a la
+     vista. Productos y lo que no se reconoce quedan solo como respaldo.
+2. **Lo que hay guardado.** Pedidos por año, clientes, y cada archivo subido con
+   su estado (`subiendo`, `cargando`, `listo`, `error`), cuántos registros dejó
+   y de qué fecha a qué fecha.
+3. **Buscar.** Por celular (todas las compras de esa clienta, su total comprado
+   sin los cancelados y su ficha del CSV de clientes), correo, nombre o número
+   de pedido. Hasta 200 resultados.
+
+### 37.3 Reglas de la carga
+
+- El CSV de pedidos de Shopify trae **una fila por producto**: la primera fila
+  del pedido lleva todo y las siguientes solo el número y su producto. Se
+  juntan en un pedido con su lista de productos (`line_items`). La primera fila
+  se guarda además tal cual vino (`raw`), para no perder ninguna columna.
+- **Volver a subir no duplica.** La clave es (tienda, número de pedido) y
+  (tienda, cliente); lo repetido se reemplaza con lo último subido. Si un
+  archivo se corta a mitad, se vuelve a subir entero.
+- La clienta se identifica por el «Customer ID» de Shopify; sin él, por el
+  correo; sin correo, por el celular. Una fila sin nada de eso no se guarda.
+- El celular se normaliza igual que en Kapta (`normalizePhone`, 51 + nueve
+  dígitos) y se quita el apóstrofo que Shopify antepone para Excel a ids,
+  celulares y códigos postales.
+- Las fechas conservan su zona (`2021-12-31 21:55:31 -0500`); los años de la
+  pantalla se cuentan en hora de Lima.
+
+### 37.4 Permisos y datos
+
+- Leer: quien ve la tienda (`auth_store_ids()`), y la pantalla además pide
+  `data.export`. Escribir: solo las acciones del servidor, con el service role,
+  después de comprobar `data.export` y que la tienda es de la persona. Nadie
+  edita ni borra desde el panel.
+
+Implementación:
+
+- `db/migrations/0273_shopify_history.sql`: `shopify_history_files`,
+  `shopify_history_orders` y `shopify_history_customers`, con RLS de lectura
+  por tienda.
+- `lib/shopify-history.ts`: el lector puro (tipo, separador, codificación,
+  agrupación por pedido, clientes, montos y fechas).
+- `app/dashboard/stores/historial/actions.ts`: registrar el archivo y su URL
+  firmada de subida, cargar tandas y cerrar el archivo.
+- `components/shopify-history-upload.tsx` y
+  `app/dashboard/stores/historial/page.tsx`: la pantalla.
+- Pruebas: `test/shopify-history.test.ts`.
