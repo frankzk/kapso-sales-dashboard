@@ -43,6 +43,7 @@ import {
   IconCamera,
   IconCheck,
   IconChevronDown,
+  IconCopy,
   IconChevronRight,
   IconList,
   IconLock,
@@ -55,7 +56,7 @@ import {
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
 import { OrderCompanionPanel } from "@/components/order-companion-panel";
 import { AliclikDuplicatePanel } from "@/components/aliclik-duplicate-panel";
-import { CopyButton } from "@/components/copy-button";
+import { CopyButton, copyLabel, useCopyToClipboard } from "@/components/copy-button";
 import { AliclikCoverageProbe } from "@/components/aliclik-coverage-probe";
 import { DirectFenixGuideModal } from "@/components/direct-fenix-guide-modal";
 import { ManualRouteOutputModal } from "@/components/manual-route-output-modal";
@@ -197,6 +198,7 @@ import { outputDisplayCode } from "@/lib/shipment-output";
 import { formatOlvaTracking, OLVA_TRACKING_URL } from "@/lib/olva/tracking";
 import { gfDeliverySentence, gfDeliverySummary, type GfDelivery } from "@/lib/gf-delivery";
 import { shopifyOrderAdminUrl } from "@/lib/shopify-urls";
+import { orderPuntoText } from "@/lib/order-punto";
 import type { RouteCandidate } from "@/lib/order-route-plan";
 import type { OrderMasterRow, ShipmentRow, StoreSummary } from "@/lib/types";
 
@@ -270,7 +272,7 @@ export const DRAWER_SECTION_IDS: readonly DrawerSectionId[] = [
   "historial",
 ];
 
-export type DrawerWorkspaceView = "operar" | "informacion" | "actividad";
+export type DrawerWorkspaceView = "operar" | "informacion" | "actividad" | "punto";
 
 interface DrawerNextAction {
   eyebrow: string;
@@ -1107,6 +1109,7 @@ export function OrderDrawer({
     { id: "operar", label: "Operar" },
     { id: "informacion", label: "Información" },
     { id: "actividad", label: "Actividad", count: detail?.timeline.length },
+    { id: "punto", label: "Punto" },
   ];
   // Pestañas con flechas, Inicio y Fin (patrón ARIA): el foco se mueve y la
   // pestaña se abre en el mismo gesto.
@@ -1302,7 +1305,8 @@ export function OrderDrawer({
 
           {/* Tres espacios estables, como en Shopify: hacer el trabajo, consultar
               el pedido y auditar lo ocurrido. El equipo deja de navegar una
-              lista accidental de formularios. */}
+              lista accidental de formularios. La cuarta, Punto, es el texto
+              que se le pasa al punto de entrega (MOM §25). */}
           {detail ? (
             <div className="mt-2 flex gap-6 px-4 sm:px-6" role="tablist" aria-label="Espacios del pedido">
               {tabs.map((tab) => {
@@ -2160,6 +2164,24 @@ export function OrderDrawer({
                 )}
               </section>
             </div>
+            <div
+              id="pedido-panel-punto"
+              role="tabpanel"
+              aria-labelledby="pedido-tab-punto"
+              hidden={workspace !== "punto"}
+              className="flex flex-col gap-4 sm:gap-6"
+            >
+              <PuntoSection
+                text={orderPuntoText({
+                  source: detail.punto,
+                  storeName: storeName(detail.row.store_id),
+                  orderName: detail.row.order_name ?? "",
+                  items: detail.lineItems,
+                  fallbackPhone: detail.row.customer_phone,
+                })}
+                hasAddress={detail.punto.address !== null}
+              />
+            </div>
           </div>
         )}
       </aside>
@@ -2233,6 +2255,37 @@ const TEXTAREA = cn(FIELD, "h-auto py-2 leading-5");
  * (`RETURN_SCAN_COURIERS` de app/dashboard/pedidos/despacho/actions.ts).
  */
 const RETURN_SCAN_COURIERS: ReadonlySet<string> = new Set(["tanders", "shalom"]);
+
+/**
+ * El Punto del pedido: el mismo texto que Shopify guardaba en el metacampo
+ * «Pedido» (`lib/order-punto.ts`), listo para copiar y pegar. Se ve tal cual
+ * se copia —saltos y espacios incluidos— para que nadie pegue una sorpresa.
+ */
+function PuntoSection({ text, hasAddress }: { text: string; hasAddress: boolean }) {
+  const { state, copy } = useCopyToClipboard();
+  return (
+    <section aria-labelledby="pedido-punto-title" className={cn("space-y-4", SECTION)}>
+      <SectionHead
+        id="pedido-punto-title"
+        title="Punto"
+        badge={<Badge>Para copiar</Badge>}
+        help="El texto del pedido para el punto de entrega, con la misma forma que el metacampo «Pedido» de Shopify."
+        aside={
+          <OpsButton onClick={() => copy(text)} className="pointer-coarse:h-11">
+            {state === "ok" ? <IconCheck aria-hidden /> : <IconCopy aria-hidden />}
+            <span aria-live="polite">{copyLabel(state, "Copiar Punto")}</span>
+          </OpsButton>
+        }
+      />
+      {!hasAddress && (
+        <Banner tone="warn">El pedido no trae dirección de envío: el Punto sale sin nombre ni dirección.</Banner>
+      )}
+      <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-wash p-4 font-sans text-sm leading-6 text-ink-900">
+        {text}
+      </pre>
+    </section>
+  );
+}
 
 /** La reprogramación de la ficha, con si una persona ya recibió la caja que falló. */
 type DrawerReprogram = ReprogramLabelState & { received: boolean };

@@ -10072,7 +10072,8 @@ que aparecer en el drawer en el mismo cambio.
 
 El drawer no es un formulario largo ni un resumen de tablas. Es la mesa de
 trabajo de un pedido concreto. La experiencia principal se diseña primero para
-el equipo que opera desde una computadora y se divide en tres espacios estables:
+el equipo que opera desde una computadora y se divide en cuatro espacios
+estables:
 
 1. **Operar:** muestra macroetapa, subetapa, antigüedad, avance del MOM y una sola
    próxima acción. Aquí viven pagos requeridos, elección de ruta, rótulos,
@@ -10083,6 +10084,19 @@ el equipo que opera desde una computadora y se divide en tres espacios estables:
 3. **Actividad:** conserva cronológicamente eventos, actores, fuentes, guías,
    motivos y correcciones. Es evidencia de solo lectura; no compite con el
    trabajo pendiente.
+4. **Punto (24-10-2026, pedido del owner):** el texto con el que se le pasa el
+   pedido al punto de entrega, listo para copiar. Es el mismo que Shopify
+   guardaba en el metacampo «Pedido» con su plantilla Liquid, carácter por
+   carácter (`lib/order-punto.ts`, probado contra el metacampo real de
+   #KP143817): `PUNTO`, nombre, dirección, referencia ` - ` código postal,
+   distrito ` - `, teléfono, `Pedido de <marca> <pedido>`, `COBRAR <total>
+   SOLES`, la nota y los productos. La dirección es la de envío y, si no hay,
+   la de facturación (`displayAddress`); el total es el **vigente** de Shopify
+   con su forma («89.1», «89.0»), y sin él el de Kapta; la marca es la tienda
+   sin el país («Kenku Peru» → «Kenku»). Si la dirección no trae teléfono va el
+   del cliente. Kapta lo arma porque Shopify cierra el 28-10-2026 (§37) y los
+   pedidos de WooCommerce nunca lo tuvieron. Es un texto para copiar: no
+   escribe nada ni cambia el monto a cobrar del pedido.
 
 **El historial del lead se reparte entre los pedidos del cliente (16-10-2026).**
 La Actividad trae también las gestiones de Leads (llamadas, mensajes, la venta
@@ -10127,8 +10141,9 @@ Reglas de interfaz:
 
 - El encabezado conserva siempre pedido, estado comercial, monto, tienda,
   cliente y accesos de llamada/WhatsApp.
-- La navegación usa las pestañas `Operar`, `Información` y `Actividad`. No se
-  reemplaza por una lista horizontal de enlaces a formularios.
+- La navegación usa las pestañas `Operar`, `Información`, `Actividad` y
+  `Punto` (`?seccion=punto` la abre). No se reemplaza por una lista
+  horizontal de enlaces a formularios.
 - La próxima acción nunca se deduce por color ni queda enterrada entre
   formularios; tiene título, explicación y acceso directo a su herramienta.
 - El color refuerza significado sin ser la única señal: ámbar para confirmación
