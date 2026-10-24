@@ -260,7 +260,8 @@ describe("estados", () => {
   });
 
   it("«Por confirmar», el estado propio del formulario contraentrega (23-10-2026): entra vivo, cod y pending", () => {
-    for (const status of ["por-confirmar", "wc-por-confirmar", "Por-Confirmar"]) {
+    // `cod-pending` es el slug real de «Por confirmar» en Aurela (COD Core, 24-10-2026).
+    for (const status of ["cod-pending", "wc-cod-pending", "por-confirmar", "wc-por-confirmar", "Por-Confirmar"]) {
       expect(isWooOrderIngestible({ status })).toBe(true);
       const row = mapWooOrder({ ...codLimaOrder(), status, date_paid_gmt: null }, KENKU)!;
       expect(row).not.toBeNull();
@@ -323,6 +324,25 @@ describe("cobro: Flow, transferencia y reembolsos", () => {
     expect(confirmed.financial_status).toBe("paid");
     expect(confirmed.payment_gateway).toBe("checkout");
     expect(isWebPrepaid({ financialStatus: confirmed.financial_status, paymentGateway: confirmed.payment_gateway })).toBe(true);
+  });
+
+  it("Flow Payment de WooCommerce (Aurela, 24-10-2026): `flowpayment` «Tarjeta o Yape» pagado solo en processing/completed", () => {
+    const flow = (status: string) =>
+      mapWooOrder({ ...flowCardOrder("Tarjeta o Yape"), payment_method: "flowpayment", status }, KENKU);
+    for (const status of ["processing", "completed"]) {
+      const row = flow(status)!;
+      expect(row.financial_status).toBe("paid");
+      expect(row.payment_gateway).toBe("checkout");
+    }
+    // Esperando el pago: `pending`/`failed` no entran; si un plugin lo dejara
+    // en `on-hold`, entra pero NO pagado.
+    expect(flow("pending")).toBeNull();
+    expect(flow("failed")).toBeNull();
+    expect(flow("on-hold")!.financial_status).toBe("pending");
+    // Otro título (si lo cambian en WooCommerce): camino de las constancias.
+    const renamed = mapWooOrder({ ...flowCardOrder("Pago con tarjeta"), payment_method: "flowpayment" }, KENKU)!;
+    expect(renamed.financial_status).toBe("pending");
+    expect(renamed.payment_gateway).toBeNull();
   });
 
   it("una pasarela vacía (el «Añadir pedido» de wp-admin) o desconocida en processing NO es pagado", () => {

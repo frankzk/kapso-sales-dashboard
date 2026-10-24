@@ -32,7 +32,9 @@ describe("clasificar la pasarela", () => {
     expect(classifyPaymentGateway([CHECKOUT])).toBe("checkout");
     expect(classifyPaymentGateway([CHECKOUT.toUpperCase()])).toBe("checkout");
     expect(classifyPaymentGateway(["Cash on Delivery (COD)", CHECKOUT])).toBe("checkout");
-    expect(CHECKOUT_GATEWAYS).toEqual([CHECKOUT]);
+    // Flow en Shopify y el «Flow Payment» de WooCommerce (Aurela, 24-10-2026).
+    expect(CHECKOUT_GATEWAYS).toEqual([CHECKOUT, "Tarjeta o Yape"]);
+    expect(classifyPaymentGateway(["Tarjeta o Yape"])).toBe("checkout");
   });
 
   it("una pasarela que nadie confirmó todavía NO se salta nada: desconocida", () => {

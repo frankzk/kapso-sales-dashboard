@@ -15841,8 +15841,9 @@ WooCommerce viven en esa fila de `stores` y cada pedido lleva su plataforma.
 | `processing`, `on-hold`, `completed` y estados de plugins | Pedido vivo. `completed` no significa entregado ni cobrado: eso lo dicen las salidas y los cobros de Kapta (§2 punto 9). |
 
 - **«Por confirmar» (23-10-2026).** El formulario contraentrega de Kenku y
-  Aurela crea sus pedidos en un estado propio, «Por confirmar» (por ejemplo
-  `por-confirmar`, o `wc-por-confirmar`: Kapta quita el `wc-`). Es un estado de
+  Aurela crea sus pedidos en un estado propio, «Por confirmar». En Aurela
+  (plugin COD Core, 24-10-2026) su slug es **`cod-pending`** (o
+  `wc-cod-pending`: Kapta quita el `wc-`); no es `pending`, así que entra. Es un estado de
   plugin: el pedido entra vivo, con `cod` y `pending`, y la confirmación sigue
   siendo la de Kapta. Nadie tiene que moverlo a «processing» para que entre.
   Solo no sirve si «Por confirmar» es `pending` con otra etiqueta: eso no entra
@@ -15868,9 +15869,12 @@ WooCommerce viven en esa fila de `stores` y cada pedido lleva su plataforma.
 - **Pago en la web** (Flow con tarjeta): `paid` cuando WooCommerce lo deja en
   «processing» o «completed», **solo si el título exacto de la pasarela está en
   `CHECKOUT_GATEWAYS`** (`lib/payment-gateway.ts`); entonces cuenta también
-  como prepago del checkout. El de Flow para WooCommerce entra cuando la
-  operación lo confirme. Hasta entonces es `pending` y sigue el camino de la
-  confirmación y las constancias, que es el seguro (23-10-2026, revisión).
+  como prepago del checkout. **Aurela (24-10-2026):** el plugin «Flow Payment»
+  (slug `flowpayment`) con el título **«Tarjeta o Yape»**, confirmado por el
+  equipo de WordPress y agregado a `CHECKOUT_GATEWAYS`. Kenku entra cuando su
+  equipo confirme su título. Un pedido de Flow con otro título (también si lo
+  cambian después) es `pending` y sigue el camino de la confirmación y las
+  constancias, que es el seguro (23-10-2026, revisión).
 - **Transferencia** (`bacs`): pasarela desconocida (null), conducto regular de
   constancias. `pending` mientras está «on-hold»; `paid` cuando alguien la pasa
   a «processing», como el «manual» de Shopify. Es la única pasarela por slug en
