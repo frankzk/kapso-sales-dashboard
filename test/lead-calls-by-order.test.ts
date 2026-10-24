@@ -1,7 +1,13 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { leadCallOrderId, leadCallsForOrder, type CustomerOrderRef } from "@/lib/lead-calls-by-order";
+import {
+  LEAD_CALL_MAX_BEFORE_MS,
+  LEAD_CALL_NO_ORDER,
+  leadCallOrderId,
+  leadCallsForOrder,
+  type CustomerOrderRef,
+} from "@/lib/lead-calls-by-order";
 
 const read = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8");
 
@@ -56,6 +62,25 @@ describe("cada gestión del lead es de un solo pedido", () => {
     expect(leadCallsForOrder(HISTORY, [SEPT], "sept")).toHaveLength(HISTORY.length);
   });
 
+  it("una gestión de más de 14 días antes del pedido no es suya (#AUR900004, 24-10-2026)", () => {
+    expect(LEAD_CALL_MAX_BEFORE_MS).toBe(14 * 24 * 60 * 60_000);
+    // El caso: dos «Handoff resuelto» de septiembre en el número del owner, y su
+    // primer pedido de Aurela el 24-10.
+    const AUR: CustomerOrderRef = { order_id: "aur", order_name: "#AUR900004", order_created_at: "2026-10-24T17:35:49Z" };
+    const viejos = [
+      call("2026-09-06T01:06:00Z", "✅ Handoff resuelto (sacado de Atender ahora)"),
+      call("2026-09-28T15:22:00Z", "✅ Handoff resuelto (sacado de Atender ahora)"),
+    ];
+    for (const c of viejos) expect(leadCallOrderId(c, [AUR])).toBe(LEAD_CALL_NO_ORDER);
+    expect(leadCallsForOrder(viejos, [AUR], "aur")).toEqual([]);
+    // Dentro de los 14 días sigue siendo el trabajo de esa venta.
+    expect(leadCallOrderId(call("2026-10-11T18:00:00Z"), [AUR])).toBe("aur");
+    // Y la nota que nombra el pedido manda aunque sea vieja.
+    expect(leadCallOrderId(call("2026-09-01T10:00:00Z", "reservado para pedido #AUR900004"), [AUR])).toBe("aur");
+    // Lo posterior al pedido sigue siendo suyo, sin tope.
+    expect(leadCallOrderId(call("2026-12-24T10:00:00Z"), [AUR])).toBe("aur");
+  });
+
   it("sin fechas de pedido no se esconde nada", () => {
     const sinFecha = [{ ...SEPT, order_created_at: null }];
     expect(leadCallsForOrder(HISTORY, sinFecha, "sept")).toHaveLength(HISTORY.length);
@@ -73,5 +98,6 @@ describe("el detalle del pedido lo usa", () => {
   it("el MOM lo dice", () => {
     const mom = read("docs/mom/master-pedidos-v1.md").replace(/\s+/g, " ");
     expect(mom).toContain("**El historial del lead se reparte entre los pedidos del cliente (16-10-2026).**");
+    expect(mom).toContain("**Una gestión de más de 14 días antes de esa venta no es de ningún pedido (24-10-2026)**");
   });
 });

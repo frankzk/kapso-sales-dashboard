@@ -10094,6 +10094,12 @@ de ella (con 10 minutos de margen para la nota «Venta cerrada»); y lo posterio
 a la última venta, a esa última. Con una sola compra no cambia nada. Pasó con
 #KP141951: el lead pasó a apuntarle y su Actividad mostraba la guía de
 septiembre de #KP134581, que a su vez se había quedado sin su historial.
+**Una gestión de más de 14 días antes de esa venta no es de ningún pedido
+(24-10-2026)**: es un interés anterior que no compró y se queda solo en Leads
+(`LEAD_CALL_MAX_BEFORE_MS`). La nota que nombra un pedido manda igual, y lo
+posterior a la última venta sigue siendo suyo. Pasó con #AUR900004: el número
+tenía dos «Handoff resuelto» de septiembre y, sin otro pedido anterior, salían
+en la Actividad del pedido de octubre.
 
 **La nota de la guía dice quién la creó (16-10-2026, decisión del owner).** «Guía
 de Aliclik creada por millonestania5@gmail.com · AUR5X… · pedido #KP… · cobrar
