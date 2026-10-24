@@ -15738,6 +15738,43 @@ Reglas:
 Con la tienda suspendida por Shopify, la API deja de responder: los CSV siguen
 siendo el respaldo.
 
+### 37.6 Todo lo demás que se puede traer por API
+
+Pedido de Frankz (24-10-2026): «dale con todo lo que puedas por API», antes del
+cierre del 28-10-2026 00:00 UTC (§35.10). «Traer todo» va paso por paso:
+
+1. **Productos**: el catálogo completo (descripción en HTML, variantes con SKU,
+   código de barras, precio, precio tachado y stock, opciones, colecciones,
+   metacampos y SEO) en `shopify_history_products`.
+2. **Fotos de productos**: cada foto en su tamaño original, copiada al bucket
+   privado `shopify-history` (`<tienda>/productos/<producto>/<foto>.<ext>`).
+   Va por tandas de ~60 s; una foto que falla tres veces queda marcada y deja
+   de intentarse. Es un respaldo: no es la foto de las plantillas de WhatsApp
+   (§39).
+3. **Carritos abandonados** de la web y 4. **borradores** (el formulario contra
+   entrega deja uno por envío), en `shopify_history_carts`: quién dejó sus
+   datos, qué quería, el enlace para retomar o la factura, sus UTM y el pedido
+   en que terminó, si terminó.
+5. **Clientes**, ahora con permiso de SMS y de WhatsApp, todas sus
+   direcciones, desde cuándo son clientes y su estado de cuenta.
+6. **Pedidos**, ahora con método de envío, despachos con guía y courier,
+   devoluciones y de qué visita o campaña vino la compra.
+
+Reglas:
+
+- Los pasos 5 y 6 vuelven a traer clientes y pedidos con la misma clave: se
+  completan las filas que ya estaban, sin duplicarlas. Un CSV posterior no
+  borra lo que solo trae la API.
+- Si un paso falla, se anota y se sigue con el siguiente.
+- Los archivos se piden con la API **2026-10** (`HISTORY_API_VERSION`),
+  probada contra Shopify el 24-10-2026: desde ella el correo y el celular del
+  cliente van en `defaultEmailAddress` y `defaultPhoneNumber`.
+- En «Buscar», por celular o correo se ven también los carritos y borradores
+  que esa persona dejó sin comprar.
+- Lo que el token no puede leer queda fuera: códigos de descuento, páginas,
+  blog, redirecciones, tema y tarjetas de regalo. Se bajan a mano desde el
+  admin de Shopify.
+
 Implementación:
 
 - `db/migrations/0273_shopify_history.sql`: `shopify_history_files`,
@@ -15753,11 +15790,14 @@ Implementación:
   archivo (líneas, pedidos con sus productos, clientes).
 - `lib/shopify-history-import.ts`: pedir el archivo, preguntar por él y leerlo
   por tandas.
+- `db/migrations/0278_shopify_history_more.sql`: productos, fotos, carritos y
+  borradores; más columnas en pedidos y clientes; los cinco tipos de traída.
+- `lib/shopify-history-images.ts`: la copia de las fotos a Storage.
 - `components/shopify-history-upload.tsx`, `components/shopify-history-api.tsx`
-  (la prueba y la traída de 37.5) y `app/dashboard/stores/historial/page.tsx`:
+  (la prueba y la traída de 37.5 y 37.6) y `app/dashboard/stores/historial/page.tsx`:
   la pantalla.
-- Pruebas: `test/shopify-history.test.ts`, `test/shopify-history-ui.test.ts` y
-  `test/shopify-history-bulk.test.ts`.
+- Pruebas: `test/shopify-history.test.ts`, `test/shopify-history-ui.test.ts`,
+  `test/shopify-history-bulk.test.ts` y `test/shopify-history-more.test.ts`.
 
 ## 38. WooCommerce (23-10-2026)
 

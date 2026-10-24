@@ -232,6 +232,8 @@ describe("la traída por tandas (§37.5)", () => {
       async orphans(o) {
         throw new Error(`no debería haber productos sueltos: ${[...o.keys()].join(",")}`);
       },
+      products: async () => 0,
+      carts: async () => 0,
     };
     // Un reloj que avanza 1 ms por consulta: con 6 ms de margen, la primera tanda corta a mitad.
     let tick = 0;
@@ -258,7 +260,13 @@ describe("la traída por tandas (§37.5)", () => {
   it("un archivo vencido se dice así", async () => {
     const { admin } = fakeAdmin(ROW);
     const gone = (async () => new Response("expired", { status: 403 })) as unknown as typeof fetch;
-    const noop: RowWriter = { orders: async () => 0, customers: async () => 0, orphans: async () => undefined };
+    const noop: RowWriter = {
+      orders: async () => 0,
+      customers: async () => 0,
+      orphans: async () => undefined,
+      products: async () => 0,
+      carts: async () => 0,
+    };
     await expect(readImportChunk(admin, ROW, noop, { fetchImpl: gone })).rejects.toThrow(/venció/);
   });
 });
