@@ -71,6 +71,7 @@ describe("workspaceForDrawerSection", () => {
     expect(workspaceForDrawerSection("historial")).toBe("actividad");
     expect(workspaceForDrawerSection("informacion")).toBe("informacion");
     expect(workspaceForDrawerSection("operar")).toBe("operar");
+    expect(workspaceForDrawerSection("punto")).toBe("punto");
     expect(workspaceForDrawerSection(null)).toBe("operar");
   });
 });

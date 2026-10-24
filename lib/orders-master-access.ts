@@ -19,6 +19,7 @@ import {
   shopifyShippingAddress,
 } from "@/lib/shopify-address";
 import { orderTotals, type OrderTotals } from "@/lib/order-totals";
+import { orderPuntoSource, type OrderPuntoSource } from "@/lib/order-punto";
 import { productImagesFor } from "@/lib/shopify-product-images";
 import type { AliclikHealthState } from "@/lib/aliclik-health";
 import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
@@ -507,6 +508,12 @@ export interface OrderMasterDetail {
    *  llevar lo que Shopify no tiene dónde guardar —el DNI del destinatario, la
    *  agencia— y hasta ahora solo se veía entrando al admin de Shopify. */
   shopifyNote: string | null;
+  /**
+   * Lo que la pestaña Punto necesita de `orders.raw` (`lib/order-punto.ts`):
+   * la dirección con código postal, el total vigente y la nota tal cual. El
+   * texto se arma en la ficha, que es la que sabe el nombre de la tienda.
+   */
+  punto: OrderPuntoSource;
   /**
    * Salidas que nacieron «por definir» y a las que se les escribió encima la
    * guía de un courier (evento `route_output_filled`).
@@ -1154,6 +1161,7 @@ export async function getOrderMasterDetail(
     address: shopifyShippingAddress(orderRow?.raw),
     departamentoElegido: shopifyDepartamentoElegido(orderRow?.raw),
     shopifyNote: shopifyOrderNote(orderRow?.raw),
+    punto: orderPuntoSource(orderRow?.raw, row.order_total),
     filledOutputIds: [...filledShipmentIds(events)],
     receivedReturnIds: [...new Set(events.filter((e) => e.kind === "return_received" && e.shipment_id).map((e) => e.shipment_id as string))],
     // MISMA pregunta que hace `createManualRouteOutput` antes de dejar crear la
