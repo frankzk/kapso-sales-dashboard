@@ -48,6 +48,18 @@ type HistoryCustomerRow = {
   note: string | null;
 };
 
+type HistoryCartRow = {
+  cart_key: string;
+  kind: "carrito" | "borrador";
+  name: string | null;
+  status: string | null;
+  created_at: string | null;
+  customer_name: string | null;
+  total: number | null;
+  line_items: { name: string; quantity: number }[] | null;
+  order_name: string | null;
+};
+
 type FileRow = {
   id: string;
   kind: string;
@@ -81,7 +93,12 @@ export default async function ShopifyHistoryPage({
   const sb = await createServerSupabase();
   const thisYear = new Date().getFullYear();
   const years = Array.from({ length: thisYear - 2019 + 1 }, (_, i) => 2019 + i);
-  const [yearCounts, customersCount, filesRes, importsRes] = await Promise.all([
+  const headCount = (table: string, col: string, extra?: (q: any) => any) => {
+    let q = sb.from(table).select(col, { count: "exact", head: true }).eq("store_id", store.id);
+    if (extra) q = extra(q);
+    return q.then((r: { count: number | null }) => r.count ?? 0);
+  };
+  const [yearCounts, customersCount, filesRes, importsRes, more] = await Promise.all([
     Promise.all(
       years.map(async (y) => {
         const { count } = await sb
@@ -105,9 +122,18 @@ export default async function ShopifyHistoryPage({
       .select("id,kind,status,file_size,object_count,bytes_done,records,first_at,last_at,error,created_at,finished_at")
       .eq("store_id", store.id)
       .order("created_at", { ascending: false })
-      .limit(10),
+      .limit(20),
+    Promise.all([
+      headCount("shopify_history_products", "product_id"),
+      headCount("shopify_history_product_images", "image_id"),
+      headCount("shopify_history_product_images", "image_id", (q) => q.not("storage_path", "is", null)),
+      headCount("shopify_history_product_images", "image_id", (q) => q.is("storage_path", null).gte("attempts", 3)),
+      headCount("shopify_history_carts", "cart_key", (q) => q.eq("kind", "carrito")),
+      headCount("shopify_history_carts", "cart_key", (q) => q.eq("kind", "borrador")),
+    ]),
   ]);
   const imports = (importsRes.data ?? []) as HistoryImportView[];
+  const [productsCount, imagesTotal, imagesCopied, imagesFailed, checkoutsCount, draftsCount] = more;
   const totalOrders = yearCounts.reduce((s, y) => s + y.count, 0);
   const files = (filesRes.data ?? []) as FileRow[];
 
@@ -118,6 +144,7 @@ export default async function ShopifyHistoryPage({
   const byEmail = Boolean(q && !byPhone && q.includes("@"));
   let results: HistoryOrderRow[] = [];
   let customers: HistoryCustomerRow[] = [];
+  let carts: HistoryCartRow[] = [];
   if (q) {
     let query = sb
       .from("shopify_history_orders")
@@ -144,12 +171,25 @@ export default async function ShopifyHistoryPage({
             .filter(byPhone ? "phone_norm" : "email", byPhone ? "eq" : "ilike", byPhone ? phone! : q)
             .limit(5)
         : null;
-    const [{ data }, customerRes] = await Promise.all([
+    // Lo que dejó sin comprar (carritos y borradores, §37.6), por el mismo celular o correo.
+    const cartQuery =
+      byPhone || byEmail
+        ? sb
+            .from("shopify_history_carts")
+            .select("cart_key,kind,name,status,created_at,customer_name,total,line_items,order_name")
+            .eq("store_id", store.id)
+            .filter(byPhone ? "phone_norm" : "email", byPhone ? "eq" : "ilike", byPhone ? phone! : q)
+            .order("created_at", { ascending: false })
+            .limit(50)
+        : null;
+    const [{ data }, customerRes, cartRes] = await Promise.all([
       query.order("created_at", { ascending: false }).limit(200),
       customerQuery ?? Promise.resolve({ data: [] }),
+      cartQuery ?? Promise.resolve({ data: [] }),
     ]);
     results = (data ?? []) as HistoryOrderRow[];
     customers = (customerRes.data ?? []) as HistoryCustomerRow[];
+    carts = (cartRes.data ?? []) as HistoryCartRow[];
   }
   const boughtTotal = results.filter((r) => !r.cancelled_at).reduce((s, r) => s + Number(r.total ?? 0), 0);
 
@@ -188,14 +228,26 @@ export default async function ShopifyHistoryPage({
           title={`Traer desde Shopify por API · ${store.name}`}
           subtitle="Si Kapta ve los pedidos antiguos, el historial se trae completo sin exportar a mano. Va solo al historial, nunca al Master."
         >
-          <ShopifyHistoryApiProbe key={store.id} storeId={store.id} storeName={store.name} imports={imports} />
+          <ShopifyHistoryApiProbe
+            key={store.id}
+            storeId={store.id}
+            storeName={store.name}
+            imports={imports}
+            images={{ total: imagesTotal, copied: imagesCopied, failed: imagesFailed }}
+          />
         </Section>
       </Card>
 
       <Card>
         <Section
           title="Lo que hay guardado"
-          subtitle={`${totalOrders.toLocaleString("es-PE")} pedidos · ${(customersCount.count ?? 0).toLocaleString("es-PE")} clientes`}
+          subtitle={[
+            `${totalOrders.toLocaleString("es-PE")} pedidos`,
+            `${(customersCount.count ?? 0).toLocaleString("es-PE")} clientes`,
+            `${productsCount.toLocaleString("es-PE")} productos (${imagesCopied.toLocaleString("es-PE")} de ${imagesTotal.toLocaleString("es-PE")} fotos copiadas)`,
+            `${checkoutsCount.toLocaleString("es-PE")} carritos abandonados`,
+            `${draftsCount.toLocaleString("es-PE")} borradores`,
+          ].join(" · ")}
         >
           <div className="flex flex-wrap gap-2">
             {yearCounts
@@ -277,6 +329,22 @@ export default async function ShopifyHistoryPage({
                   {c.note && <p className="mt-1 text-ink-600">Nota: {c.note}</p>}
                 </div>
               ))}
+              {carts.length > 0 && (
+                <div className="mb-3 rounded-lg border border-line px-3 py-2 text-[13px] text-ink-700">
+                  <p className="mb-1 font-medium text-ink-900">
+                    Dejó sin comprar: {carts.length} {carts.length === 1 ? "carrito o borrador" : "carritos o borradores"}
+                  </p>
+                  <ul className="space-y-0.5">
+                    {carts.map((c) => (
+                      <li key={c.cart_key}>
+                        {fmtDate(c.created_at)} · {c.kind === "carrito" ? "carrito web" : "formulario"} ·{" "}
+                        {(c.line_items ?? []).map((li) => `${li.quantity}× ${li.name}`).join(" · ") || "—"} · {fmtMoney(c.total)}
+                        {c.order_name ? ` · terminó en ${c.order_name}` : c.status === "recuperado" ? " · recuperado" : ""}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               <table className="w-full text-[13px]">
                 <thead className="text-left text-ink-500">
                   <tr>

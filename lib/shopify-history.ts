@@ -67,6 +67,124 @@ export interface HistoryOrder {
   source: string | null;
   line_items: HistoryLineItem[];
   raw: Record<string, string>;
+  // Solo la API los trae (§37.6); el CSV no los toca.
+  shipping_method?: string | null;
+  fulfillments?: HistoryFulfillment[] | null;
+  refunds?: HistoryRefund[] | null;
+  attribution?: HistoryAttribution | null;
+}
+
+/** Un despacho del pedido, con su guía (§37.6). */
+export interface HistoryFulfillment {
+  created_at: string | null;
+  delivered_at: string | null;
+  status: string | null;
+  tracking: { company: string | null; number: string | null; url: string | null }[];
+}
+
+/** Una devolución de dinero del pedido. */
+export interface HistoryRefund {
+  created_at: string | null;
+  amount: number | null;
+  note: string | null;
+}
+
+/** Una visita a la tienda: de dónde llegó la persona. */
+export interface HistoryVisit {
+  at: string | null;
+  source: string | null;
+  source_type: string | null;
+  referrer: string | null;
+  landing_page: string | null;
+  utm: { campaign: string | null; content: string | null; medium: string | null; source: string | null; term: string | null } | null;
+}
+
+/** De qué visita o campaña vino la compra. */
+export interface HistoryAttribution {
+  customer_order_index: number | null;
+  days_to_conversion: number | null;
+  first_visit: HistoryVisit | null;
+  last_visit: HistoryVisit | null;
+}
+
+export interface HistoryAddress {
+  name: string | null;
+  company: string | null;
+  address1: string | null;
+  address2: string | null;
+  city: string | null;
+  province: string | null;
+  country: string | null;
+  zip: string | null;
+  phone: string | null;
+}
+
+/** Un producto del catálogo (§37.6). */
+export interface HistoryProduct {
+  product_id: string;
+  handle: string | null;
+  title: string | null;
+  status: string | null;
+  vendor: string | null;
+  product_type: string | null;
+  tags: string | null;
+  description_html: string | null;
+  seo_title: string | null;
+  seo_description: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  published_at: string | null;
+  options: { name: string; values: string[] }[];
+  variants: {
+    id: string | null;
+    title: string | null;
+    sku: string | null;
+    barcode: string | null;
+    price: number | null;
+    compare_at_price: number | null;
+    inventory_quantity: number | null;
+    position: number | null;
+    options: { name: string; value: string }[];
+  }[];
+  collections: { id: string | null; handle: string | null; title: string | null }[];
+  metafields: { namespace: string | null; key: string | null; type: string | null; value: string | null }[];
+}
+
+/** Una foto de un producto, en su tamaño original. */
+export interface HistoryProductImage {
+  image_id: string;
+  product_id: string;
+  position: number;
+  src_url: string;
+  alt: string | null;
+  width: number | null;
+  height: number | null;
+}
+
+/** Un carrito abandonado o un pedido borrador (§37.6). */
+export interface HistoryCart {
+  cart_key: string;
+  kind: "carrito" | "borrador";
+  name: string | null;
+  status: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  completed_at: string | null;
+  email: string | null;
+  phone: string | null;
+  phone_norm: string | null;
+  customer_name: string | null;
+  address1: string | null;
+  address2: string | null;
+  city: string | null;
+  province: string | null;
+  total: number | null;
+  currency: string | null;
+  url: string | null;
+  order_name: string | null;
+  tags: string | null;
+  line_items: HistoryLineItem[];
+  raw: Record<string, string>;
 }
 
 export interface HistoryCustomer {
@@ -90,6 +208,12 @@ export interface HistoryCustomer {
   tags: string | null;
   note: string | null;
   raw: Record<string, string>;
+  // Solo la API los trae (§37.6); el CSV no los toca.
+  sms_marketing?: string | null;
+  whatsapp_marketing?: string | null;
+  addresses?: HistoryAddress[] | null;
+  customer_since?: string | null;
+  account_state?: string | null;
 }
 
 /** Cabecera comparable: minúsculas, sin tildes ni espacios de más. */

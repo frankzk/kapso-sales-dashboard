@@ -206,7 +206,9 @@ describe("DEPLOY.md", () => {
 
   it("y de verdad no trajo migración: la siguiente a la 0276 es la del bot (0277, MOM §38.13), con su propia entrada", () => {
     const files = readdirSync(resolve(process.cwd(), "db/migrations")).filter((f) => /^\d{4}_/.test(f)).sort();
-    expect(files.filter((f) => f > "0276_shopify_history_imports.sql")).toEqual(["0277_bot_orders.sql"]);
+    // La que sigue a la 0276 es la del bot; las posteriores (0278, historial de
+    // Shopify, MOM §37.6) no son de esta venta.
+    expect(files.filter((f) => f > "0276_shopify_history_imports.sql")[0]).toBe("0277_bot_orders.sql");
     expect(DEPLOY).toContain("### 23-10-2026 · Pedidos del bot de Kapso por Kapta (0277, MOM §38.13)");
   });
 });
