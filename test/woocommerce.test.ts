@@ -407,6 +407,20 @@ describe("cobro: Flow, transferencia y reembolsos", () => {
     expect(full.total_refunded).toBe(149);
     expect(full.cancelled_at).toBeNull();
   });
+
+  it("un pedido ya anulado en Kapta que WooCommerce pasa a «Reembolsado» sigue anulado (owner, 24-10-2026)", () => {
+    const antes = "2026-10-24T18:00:00Z";
+    const row = mapWooOrder(
+      { ...flowCardOrder(), status: "refunded", date_modified_gmt: "2026-10-25T10:00:00", refunds: [{ id: 804, total: "-149.00" }] },
+      KENKU,
+      { previousCancelledAt: antes },
+    )!;
+    expect(row.cancelled_at).toBe(antes);
+    expect(row.financial_status).toBe("refunded");
+    expect(row.total_refunded).toBe(149);
+    // Un reembolsado que nunca se anuló sigue vivo, como antes.
+    expect(mapWooOrder({ ...flowCardOrder(), status: "refunded" }, KENKU, { previousCancelledAt: null })!.cancelled_at).toBeNull();
+  });
 });
 
 describe("dirección y departamento", () => {

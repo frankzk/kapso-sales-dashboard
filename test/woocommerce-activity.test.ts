@@ -544,9 +544,9 @@ describe("la reactivación en WooCommerce", () => {
         const sync = await syncWooOrders(h.db.client(), STORE_ID, { fetchImpl: site.fetchImpl, floor: "2026-10-01" });
         expect(sync.error, via).toBeNull();
       }
-      // `refunded` no anula (la tabla de §38.3): hoy Kapta le quita la anulación
-      // (pendiente del owner)…
-      expect(order(), via).toMatchObject({ cancelled_at: null, financial_status: "refunded" });
+      // Sigue anulado (owner, 24-10-2026): conserva su `cancelled_at`…
+      expect(order(), via).toMatchObject({ financial_status: "refunded" });
+      expect(order().cancelled_at, via).not.toBeNull();
       // …pero WooCommerce no lo reactivó: ningún «Reactivado en WooCommerce».
       expect(events().map((e) => e.kind), via).toEqual(["cancelled_woocommerce"]);
       expect(site.notesCalls(), via).toEqual([]);

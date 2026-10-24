@@ -15929,7 +15929,7 @@ WooCommerce viven en esa fila de `stores` y cada pedido lleva su plataforma.
   (por eso el equipo de WordPress manda el `status` exacto que devuelve la
   API).
 | `cancelled`, `trash` | Anulado: `financial_status = voided` y `cancelled_at`. |
-| `refunded` | `financial_status = refunded`. No anula el pedido. |
+| `refunded` | `financial_status = refunded`. No anula el pedido; pero un pedido que ya estaba anulado en Kapta **sigue anulado** (conserva su `cancelled_at`, decisión del owner del 24-10-2026). |
 
 - **Cuándo se anuló.** WooCommerce no guarda la fecha de la anulación. Kapta
   pone la del cambio en que la vio anulada (`date_modified_gmt`) la **primera
@@ -16002,10 +16002,10 @@ WooCommerce viven en esa fila de `stores` y cada pedido lleva su plataforma.
   - **El reembolso no reactiva.** Un anulado que WooCommerce pasa a
     «Reembolsado» (`refunded`: el reembolso completo de un pedido pagado y
     anulado) no vuelve a un estado vivo: no deja «Reactivado en WooCommerce».
-    **Pendiente (owner):** hoy `mapWooOrder` le quita `cancelled_at` (la tabla
-    de arriba: `refunded` no anula), así que el Master deja de darlo por anulado
-    sin un hecho en la Actividad. Si debe seguir «Anulado» se decide aparte, con
-    su cambio aquí.
+    **Y sigue anulado (decisión del owner, 24-10-2026):** `mapWooOrder`
+    conserva su `cancelled_at` cuando llega `refunded` sobre un pedido que Kapta
+    ya tenía anulado; el Master lo sigue mostrando «Anulado» y el equipo no
+    tiene que volver a ponerlo en «Cancelado» a mano.
   - **No cambia el estado.** El hecho no lleva `new_status`: la macroetapa la
     sigue decidiendo `cancelled_at`. Los pedidos de Shopify no cambian: su
     anulación sigue sin hecho propio (el tipo viejo `cancelled_shopify`

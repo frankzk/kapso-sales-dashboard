@@ -692,7 +692,13 @@ export function mapWooOrder(order: WooOrder, store: WooStoreRef, opts: MapWooOrd
   const updatedAt = wooGmt(order.date_modified_gmt) ?? createdAt;
 
   const cancelled = WOO_CANCELLED_STATUSES.includes(status);
-  const cancelledAt = cancelled ? (text(opts.previousCancelledAt) ?? updatedAt ?? createdAt) : null;
+  // Un anulado que WooCommerce pasa solo a «Reembolsado» (el reembolso completo
+  // de un pedido pagado y anulado) sigue anulado (owner, 24-10-2026): conserva
+  // la fecha en que Kapta lo vio anulado. Un reembolsado que nunca se anuló
+  // sigue vivo, como antes (38.3).
+  const refundedAfterCancel = status === "refunded" && Boolean(text(opts.previousCancelledAt));
+  const cancelledAt =
+    cancelled || refundedAfterCancel ? (text(opts.previousCancelledAt) ?? updatedAt ?? createdAt) : null;
 
   const gatewayName = text(order.payment_method_title) ?? text(order.payment_method);
   const email = text(order.billing?.email);
