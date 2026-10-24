@@ -15906,6 +15906,12 @@ no cambien:
 | `web_carrito` | `easysell-abandoned-checkout` | Web · carrito completado |
 | `web_formulario` | `easysell_cod_form` | Web · formulario |
 
+- **Qué manda cada fuente (Aurela, decisión del owner del 24-10-2026):** el
+  formulario contra entrega de la ficha **y el checkout de la web (Flow)**
+  mandan `web_formulario` («Web · formulario»: lo que la clienta compra sola en
+  la web va en un solo canal); un formulario abandonado que termina en pedido,
+  `web_carrito`; un pedido cargado a mano en wp-admin, `venta_manual`. Las
+  ventas de las asesoras y del bot las crea Kapta (38.12 y 38.13).
 - Un valor que no está en la tabla, o ningún `kapta_channel`, no pone etiqueta:
   «Sin marca». No se adivina.
 - `kapta_tags` (lista JSON o separada por comas) se copia tal cual, delante:
@@ -15978,8 +15984,8 @@ funcionando la dirección del Master, la nota, los totales del cajón,
 - **Los principios 1-3, 10 y 11 de §2 dicen «la tienda»** (Shopify hasta el
   cierre, WooCommerce después) desde la decisión del owner del 23-10-2026.
 - **Pendiente del owner.** Las anulaciones de los pedidos de la era Shopify
-  después del cierre (§6.4) y los canales de WooCommerce en §17.3 son cambios de
-  regla que esperan su decisión.
+  después del cierre (§6.4) esperan su decisión. Los canales de WooCommerce
+  quedaron decididos (38.5, 24-10-2026).
 
 ### 38.10 Implementación
 

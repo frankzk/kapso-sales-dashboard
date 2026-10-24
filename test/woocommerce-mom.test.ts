@@ -274,7 +274,10 @@ describe("§38 WooCommerce (23-10-2026)", () => {
     expect(s38).toContain("La 0274 no actualiza ninguna fila");
     expect(s38).toContain("Los mapeadores de Shopify no escriben la plataforma.");
     expect(s38).toContain("**Los principios 1-3, 10 y 11 de §2 dicen «la tienda»**");
-    expect(s38).toContain("Las anulaciones de los pedidos de la era Shopify después del cierre (§6.4) y los canales de WooCommerce en §17.3");
+    expect(s38).toContain("Las anulaciones de los pedidos de la era Shopify después del cierre (§6.4) esperan su decisión.");
+    // Los canales: el checkout de la web también es «Web · formulario» (owner, 24-10-2026).
+    expect(s38).toContain("**y el checkout de la web (Flow)** mandan `web_formulario`");
+    expect(s38).toContain("Los canales de WooCommerce quedaron decididos (38.5, 24-10-2026).");
   });
 
   it("DEPLOY.md tiene la entrada, a mano y antes del código; verify-db corre la prueba", () => {
