@@ -196,7 +196,14 @@ import { aliclikDoorBan, ROUTES_STILL_ALLOWED_LABEL } from "@/lib/door-rejection
 import { outputDisplayCode } from "@/lib/shipment-output";
 import { formatOlvaTracking, OLVA_TRACKING_URL } from "@/lib/olva/tracking";
 import { gfDeliverySentence, gfDeliverySummary, type GfDelivery } from "@/lib/gf-delivery";
-import { shopifyOrderAdminUrl } from "@/lib/shopify-urls";
+import {
+  eventNoteLabel,
+  orderAdminLink,
+  orderPlatformName,
+  statusSourceLabel,
+  type OrderAdminLink,
+  type OrderPlatformName,
+} from "@/lib/order-admin-url";
 import type { RouteCandidate } from "@/lib/order-route-plan";
 import type { OrderMasterRow, ShipmentRow, StoreSummary } from "@/lib/types";
 
@@ -322,6 +329,8 @@ function drawerNextAction(
   showPayments: boolean,
   gfSentence: string | null = null,
   reprogram: DrawerReprogram | null = null,
+  /** La tienda del pedido (`orders.platform`, MOM §38.12): ahí se anula. */
+  storePlatform: OrderPlatformName = "Shopify",
 ): DrawerNextAction {
   const stage = row.macro_stage as OrderMacroStage | null | undefined;
   const substage = row.macro_substage as MacroSubstage | null | undefined;
@@ -345,7 +354,7 @@ function drawerNextAction(
         eyebrow: "Confirmación · último intento",
         title: "Se agotaron los siete días de gestión",
         description:
-          "Resuelve el pedido: si no hay confirmación, la anulación se crea a mano en Shopify. Kapta nunca anula por su cuenta.",
+          `Resuelve el pedido: si no hay confirmación, la anulación se crea a mano en ${storePlatform}. Kapta nunca anula por su cuenta.`,
         cta: "Ver la gestión",
         target: "confirmacion",
         tone: "amber",
@@ -640,6 +649,7 @@ export function OrderDrawer({
   closurePermissions,
   storeName,
   storeDomain,
+  storeWooSite,
   focusSection,
   onClose,
   onSaved,
@@ -666,6 +676,11 @@ export function OrderDrawer({
   };
   storeName: (id: string) => string;
   storeDomain: (id: string) => string | null;
+  /**
+   * `stores.woo_site_url` de la tienda (MOM §38.12): con él se arma el enlace a
+   * un pedido de WooCommerce. Sin él, ese pedido no tiene flechita.
+   */
+  storeWooSite?: (id: string) => string | null;
   /** Sección a la que saltar en cuanto el pedido cargue (llega por la URL). */
   focusSection?: DrawerSectionId;
   onClose: () => void;
@@ -950,9 +965,21 @@ export function OrderDrawer({
   }
 
   const row = detail?.row;
-  const shopifyUrl = row
-    ? shopifyOrderAdminUrl(storeDomain(row.store_id), row.shopify_order_id)
-    : null;
+  // El enlace al pedido en SU tienda: lo decide `orders.platform`, nunca la
+  // forma del id (MOM §38.12). El #AUR900004 (`wc-aur-11076`) abría el pedido
+  // 11076 del admin de Shopify. Un pedido de WooCommerce sin el sitio guardado
+  // se queda sin enlace: ninguno antes que uno equivocado.
+  const adminLink: OrderAdminLink | null =
+    detail && row
+      ? orderAdminLink({
+          platform: detail.platform,
+          shopifyOrderId: row.shopify_order_id,
+          shopDomain: storeDomain(row.store_id),
+          wooSiteUrl: storeWooSite?.(row.store_id) ?? null,
+        })
+      : null;
+  // Cómo se llama la tienda de este pedido en los textos de la ficha.
+  const storePlatform = orderPlatformName(detail?.platform);
 
   // El plan de rutas es quien sabe si Aliclik atiende a este pedido. Se lee de
   // ahí, no se vuelve a decidir: una segunda regla equivalente es una regla que
@@ -1038,7 +1065,9 @@ export function OrderDrawer({
   const reprogram: DrawerReprogram | null = reprogramState
     ? { ...reprogramState, received: (detail?.receivedReturnIds ?? []).includes(reprogramState.failed.shipmentId) }
     : null;
-  const nextAction = detail ? drawerNextAction(detail.row, showPaymentPanel, gfDeliverySentence(gfActive), reprogram) : null;
+  const nextAction = detail
+    ? drawerNextAction(detail.row, showPaymentPanel, gfDeliverySentence(gfActive), reprogram, storePlatform)
+    : null;
   // La última programación de envío (MOM §6.2): su nota y quién la puso.
   const dispatchDateEvent = useMemo(() => {
     if (!detail?.row.dispatch_scheduled_on) return null;
@@ -1154,13 +1183,13 @@ export function OrderDrawer({
                 <h2 className="text-lg font-semibold leading-7 tabular-nums text-ink-900">
                   {row?.order_name ?? "Pedido"}
                 </h2>
-                {shopifyUrl && (
+                {adminLink && (
                   <a
-                    href={shopifyUrl}
+                    href={adminLink.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    title="Abrir en Shopify"
-                    aria-label={`Abrir ${row?.order_name ?? "pedido"} en Shopify (nueva pestaña)`}
+                    title={adminLink.label}
+                    aria-label={`Abrir ${row?.order_name ?? "pedido"} en ${adminLink.platformName} (nueva pestaña)`}
                     className="-ml-1 grid size-7 shrink-0 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:size-11"
                   >
                     <IconArrowUpRight aria-hidden className="size-4" />
@@ -1440,7 +1469,7 @@ export function OrderDrawer({
                   help={
                     <>
                       <span className="tabular-nums">{fmtAge(detail.row.macro_since ?? detail.row.status_since)}</span> en esta
-                      macroetapa · fuente: {detail.row.status_source ?? "—"}
+                      macroetapa · fuente: {statusSourceLabel(detail.row.status_source, detail.platform)}
                     </>
                   }
                 />
@@ -1509,7 +1538,7 @@ export function OrderDrawer({
                     onDuplicateChanged={() => { void reload(); onSaved(); }}
                     row={detail.row}
                     tasks={detail.tasks}
-                    shopifyUrl={shopifyUrl}
+                    adminLink={adminLink}
                     timeline={detail.timeline}
                     pending={pending}
                     onAttempt={(payload) =>
@@ -1853,6 +1882,7 @@ export function OrderDrawer({
                     costTariffGap={detail.gfCostTariffGap}
                     gfDeliveries={detail.gfDeliveries}
                     cancelledInShopify={Boolean(detail.shopifyCancelledAt)}
+                    storePlatform={storePlatform}
                     permissions={closurePermissions}
                     pending={pending}
                     onAction={(input) => run(() => registerClosureAction(orderId, input))}
@@ -1996,7 +2026,7 @@ export function OrderDrawer({
                     el sujeto de la sección y lo que se corrige. */}
                 <SectionHead
                   title="Pedido y cliente"
-                  help="Datos comerciales sincronizados desde Shopify y contexto operativo de Kapta."
+                  help={`Datos comerciales sincronizados desde ${storePlatform} y contexto operativo de Kapta.`}
                 />
                 <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
                   <Field label="Cliente" value={detail.row.customer_name} />
@@ -2067,6 +2097,7 @@ export function OrderDrawer({
                 <GeoSection
                   orderId={orderId}
                   row={detail.row}
+                  storePlatform={storePlatform}
                   canEdit={canEdit}
                   onSaved={() => {
                     void reload();
@@ -2136,7 +2167,9 @@ export function OrderDrawer({
                           )}
                         </p>
                         {(t.note || t.reason) && (
-                          <p className="mt-0.5 max-w-[68ch] text-sm leading-5 text-ink-700">{t.note ?? t.reason}</p>
+                          <p className="mt-0.5 max-w-[68ch] text-sm leading-5 text-ink-700">
+                            {eventNoteLabel(t.kind, t.note ?? t.reason, detail.platform)}
+                          </p>
                         )}
                         <p className="mt-0.5 text-[13px] leading-5 text-ink-500">
                           <span className="tabular-nums">{fmtDateTime(t.occurredAt)}</span>
@@ -2282,14 +2315,20 @@ function mapUrl(row: OrderMasterRow): string | null {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(parts.join(", "))}`;
 }
 
+// `shopify` no está: es «la dirección del pedido en su tienda» y se dice con la
+// plataforma del pedido (`geoSourceLabel`), no siempre Shopify (MOM §38.12).
 const GEO_SOURCE_LABEL: Record<string, string> = {
   manual: "corregida por el equipo",
   courier: "según el reporte del courier",
   ubigeo: "provincia inferida del distrito",
-  shopify: "según Shopify",
   draft: "según el formulario COD",
   history: "historial confiable del cliente",
 };
+
+function geoSourceLabel(source: string, storePlatform: OrderPlatformName): string {
+  if (source === "shopify") return `según ${storePlatform}`;
+  return GEO_SOURCE_LABEL[source] ?? source;
+}
 
 /**
  * Ubicación del pedido, editable. La dirección de Shopify sale del formulario que
@@ -2300,11 +2339,14 @@ const GEO_SOURCE_LABEL: Record<string, string> = {
 function GeoSection({
   orderId,
   row,
+  storePlatform = "Shopify",
   canEdit,
   onSaved,
 }: {
   orderId: string;
   row: OrderMasterRow;
+  /** La tienda del pedido (`orders.platform`), para decir de dónde salió la dirección. */
+  storePlatform?: OrderPlatformName;
   canEdit: boolean;
   onSaved: () => void;
 }) {
@@ -2364,7 +2406,7 @@ function GeoSection({
         badge={
           <>
             <CoverageBadge coverage={row.coverage} />
-            {row.geo_source && <Badge>{GEO_SOURCE_LABEL[row.geo_source] ?? row.geo_source}</Badge>}
+            {row.geo_source && <Badge>{geoSourceLabel(row.geo_source, storePlatform)}</Badge>}
           </>
         }
         aside={
@@ -2429,7 +2471,7 @@ function GeoSection({
           }}
         >
           <p className="max-w-[68ch] text-[13px] leading-5 text-ink-500">
-            Deja en blanco lo que no quieras cambiar. Esta corrección gana sobre Shopify, sobre los
+            Deja en blanco lo que no quieras cambiar. Esta corrección gana sobre {storePlatform}, sobre los
             reportes de los couriers y sobre el ubigeo, y no se pierde al sincronizar.
           </p>
           <div className="grid gap-3 sm:grid-cols-3">
@@ -2830,7 +2872,7 @@ function ConfirmationDesk({
   onDuplicateChanged,
   row,
   tasks,
-  shopifyUrl,
+  adminLink,
   timeline,
   pending,
   onAttempt,
@@ -2839,7 +2881,8 @@ function ConfirmationDesk({
   onDuplicateChanged: () => void;
   row: OrderMasterRow;
   tasks: OrderMasterDetail["tasks"];
-  shopifyUrl: string | null;
+  /** El pedido en el admin de SU tienda (`orderAdminLink`, MOM §38.12), o null. */
+  adminLink: OrderAdminLink | null;
   timeline: TimelineEntry[];
   pending: boolean;
   onAttempt: (input: {
@@ -2917,14 +2960,14 @@ function ConfirmationDesk({
               <span>
                 Tarea asignada a {cancellationTask.assignedName ?? "la última persona que gestionó"}.
               </span>
-              {shopifyUrl && (
+              {adminLink && (
                 <a
-                  href={shopifyUrl}
+                  href={adminLink.url}
                   target="_blank"
                   rel="noreferrer"
                   className={opsButtonClass("secondary", "sm", "pointer-coarse:h-11")}
                 >
-                  Revisar en Shopify
+                  Revisar en {adminLink.platformName}
                   <IconArrowUpRight aria-hidden className="text-ink-500" />
                 </a>
               )}

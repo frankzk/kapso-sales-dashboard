@@ -45,6 +45,7 @@ import { chunk } from "@/lib/access";
 import { COURIER_TBD } from "@/lib/shipment-output";
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
+import { orderPlatform } from "@/lib/order-admin-url";
 import {
   aggregateVoiceScore,
   voiceScoreBounds,
@@ -1128,18 +1129,24 @@ export async function getShipmentWithCalls(
   let order: ShipmentOrderDetail | null = null;
   let linkedFenixShipment: LinkedShipmentSummary | null = null;
   if (shipmentRow.order_id) {
-    const { data } = await sb
-      .from("orders")
-      .select("name,shopify_order_id,line_items,raw")
-      .eq("id", shipmentRow.order_id)
-      .maybeSingle();
-    const orderRow = data as (Omit<ShipmentOrderDetail, "shipping_address"> & { raw?: unknown }) | null;
+    const readOrder = (columns: string) =>
+      sb.from("orders").select(columns).eq("id", shipmentRow.order_id!).maybeSingle();
+    // Con `platform` (0274, MOM §38.12); sin la columna, se repite sin ella y el
+    // pedido es de Shopify, como siempre.
+    let orderRes = await readOrder("name,shopify_order_id,line_items,raw,platform");
+    if (orderRes.error) orderRes = await readOrder("name,shopify_order_id,line_items,raw");
+    const orderRow = orderRes.data as unknown as
+      | (Omit<ShipmentOrderDetail, "shipping_address" | "platform"> & { raw?: unknown; platform?: unknown })
+      | null;
     if (orderRow) {
+      const platform = orderPlatform(orderRow.platform);
       let shippingAddress = shopifyShippingAddress(orderRow.raw);
       // COD apps often create a DraftOrder first. Older order syncs could omit
       // shippingAddress when Shopify rejected protected phone fields, while the
       // completed draft still retained the full destination locally.
-      if (!shippingAddress && orderRow.shopify_order_id) {
+      // Un pedido de WooCommerce no viene de un borrador de Shopify: su gid no
+      // existe (MOM §38.12).
+      if (!shippingAddress && orderRow.shopify_order_id && platform === "shopify") {
         const { data: draft } = await sb
           .from("draft_orders")
           .select("address1,referencia,district,province,customer_name,customer_phone")
@@ -1184,6 +1191,7 @@ export async function getShipmentWithCalls(
           image_url: item.product_id ? images.get(item.product_id) ?? null : null,
         })),
         shipping_address: shippingAddress,
+        platform,
       };
     }
   }

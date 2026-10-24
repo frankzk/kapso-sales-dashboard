@@ -78,6 +78,12 @@ export interface ShipmentOrderDetail {
   shopify_order_id: string | null;
   line_items: OrderLineItem[];
   shipping_address: OrderShippingAddress | null;
+  /**
+   * `orders.platform` (0274, MOM §38.12): de qué tienda vino. Sin dato, Shopify.
+   * El cajón de Envíos no le pide a Shopify un pedido de WooCommerce y nombra
+   * su tienda.
+   */
+  platform?: OrderPlatform;
 }
 
 /**
@@ -202,6 +208,12 @@ export interface StoreSummary {
   org_id: string;
   name: string;
   shopify_domain: string;
+  /**
+   * `stores.woo_site_url` (0274, MOM §38.1): el sitio WordPress de la tienda.
+   * No es secreto. Con él la ficha arma el enlace a un pedido de WooCommerce
+   * (`orderAdminLink`, §38.12). Null sin sitio guardado o antes de la 0274.
+   */
+  woo_site_url?: string | null;
   currency: string;
   timezone: string;
   status: string;

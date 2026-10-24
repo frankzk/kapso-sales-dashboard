@@ -95,13 +95,17 @@ async function getCurrentUserUncached(): Promise<{ id: string; email: string | n
  * from repeating the same auth/store reads during one RSC navigation. */
 export const getCurrentUser = cache(getCurrentUserUncached);
 
+const STORE_SUMMARY_COLUMNS = "id,org_id,name,shopify_domain,currency,timezone,status";
+
 async function getAccessibleStoresUncached(): Promise<StoreSummary[]> {
   const sb = await createServerSupabase();
-  const { data } = await sb
-    .from("stores")
-    .select("id,org_id,name,shopify_domain,currency,timezone,status")
-    .order("name");
-  return (data as StoreSummary[]) ?? [];
+  const read = (columns: string) => sb.from("stores").select(columns).order("name");
+  // `woo_site_url` (0274) para el enlace a un pedido de WooCommerce (MOM §38.12).
+  // Antes de la 0274 la columna no existe y la lectura falla: se repite sin
+  // ella, porque sin tiendas el panel entero se queda vacío.
+  let res = await read(`${STORE_SUMMARY_COLUMNS},woo_site_url`);
+  if (res.error) res = await read(STORE_SUMMARY_COLUMNS);
+  return (res.data as unknown as StoreSummary[]) ?? [];
 }
 
 export const getAccessibleStores = cache(getAccessibleStoresUncached);

@@ -169,7 +169,6 @@ import {
   type PriorOutcome,
 } from "@/lib/order-confirmation-brief";
 import { outputDisplayCode } from "@/lib/shipment-output";
-import { shopifyOrderAdminUrl } from "@/lib/shopify-urls";
 import type { RouteCandidate } from "@/lib/order-route-plan";
 import type { OrderMasterRow, StoreSummary } from "@/lib/types";
 

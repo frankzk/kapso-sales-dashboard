@@ -171,7 +171,6 @@ import {
   type PriorOutcome,
 } from "@/lib/order-confirmation-brief";
 import { outputDisplayCode } from "@/lib/shipment-output";
-import { shopifyOrderAdminUrl } from "@/lib/shopify-urls";
 import type { RouteCandidate } from "@/lib/order-route-plan";
 import type { OrderMasterRow, StoreSummary } from "@/lib/types";
 
@@ -462,6 +461,12 @@ export function OrdersMasterBoard({
   }, [stores]);
   const storeDomain = useMemo(() => {
     const map = new Map(stores.map((s) => [s.id, s.shopify_domain]));
+    return (id: string) => map.get(id) ?? null;
+  }, [stores]);
+  // El sitio WooCommerce de cada tienda: el enlace de un pedido de WooCommerce
+  // va a su admin, no al de Shopify (MOM §38.12).
+  const storeWooSite = useMemo(() => {
+    const map = new Map(stores.map((s) => [s.id, s.woo_site_url ?? null]));
     return (id: string) => map.get(id) ?? null;
   }, [stores]);
   const stageSubstages = view === "todos" ? [] : MACRO_SUBSTAGES_BY_STAGE[view];
@@ -937,6 +942,7 @@ export function OrdersMasterBoard({
           closurePermissions={closurePermissions}
           storeName={storeName}
           storeDomain={storeDomain}
+          storeWooSite={storeWooSite}
           focusSection={openId === abrir ? focusSection : undefined}
           onClose={() => {
             setOpenId(null);

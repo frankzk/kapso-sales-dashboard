@@ -376,6 +376,20 @@ describe("(c) la Mesa de cierre, pintada", () => {
     expect(html).not.toContain("pasa a entregado");
     expect(html).toContain("no lo marca entregado");
     expect(html).toContain(`href="${gfRouteReportHref("r-1")}"`);
+    // Sin decir la plataforma, la de siempre.
+    expect(html).toContain("pero el pedido está anulado en Shopify:");
+  });
+
+  it("un pedido de WooCommerce anulado se dice anulado en WooCommerce, no en Shopify (MOM §38.12)", () => {
+    const html = paint({
+      gfDeliveries: stop("en_curso"),
+      generalStatus: "anulado",
+      cancelledInShopify: true,
+      storePlatform: "WooCommerce",
+    });
+    expect(html).toContain('data-closure-block="ruta-gf-anulado-shopify"');
+    expect(html).toContain("pero el pedido está anulado en WooCommerce:");
+    expect(html).not.toContain("anulado en Shopify");
   });
 
   const urpi = {

@@ -18,6 +18,7 @@ import {
   getStoreLeads,
   type CustomerHistory,
   type LeadView,
+  type PriorOrder,
   type StoreScope,
 } from "@/lib/leads-access";
 import {
@@ -118,6 +119,7 @@ import {
   type WhatsappOutboxRow,
 } from "@/lib/whatsapp-outbox";
 import { shopifyOrderAdminUrl } from "@/lib/shopify-urls";
+import { mergePriorOrders } from "@/lib/order-admin-url";
 import { normalizePhone, peruMobileProblem } from "@/lib/phone";
 import {
   LEAD_VOICE_KIND,
@@ -379,6 +381,24 @@ export async function loadLeadDeliveryCoverage(
   return { coverage: error ? null : asOrderCoverage(coverage) };
 }
 
+/**
+ * `stores.woo_site_url` (0274): el sitio con el que «Pedidos anteriores» enlaza
+ * un pedido de WooCommerce (MOM §38.12). No es secreto. Se lee aparte porque
+ * `getStoreCreds` no lee nada de WooCommerce (38.11). Sin la columna, sin fila
+ * o si la lectura falla, null: ese pedido queda sin enlace, nunca con el de
+ * Shopify.
+ */
+async function storeWooSiteUrl(admin: SupabaseClient, storeId: string): Promise<string | null> {
+  try {
+    const { data, error } = await admin.from("stores").select("woo_site_url").eq("id", storeId).maybeSingle();
+    if (error) return null;
+    const url = (data as { woo_site_url?: unknown } | null)?.woo_site_url;
+    return typeof url === "string" && url.trim() ? url.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Non-critical customer context loaded progressively after the drawer is
  * usable. Shopify and legacy Kapso recovery can take seconds and must not block
  * the forms, call history, or lead metadata. */
@@ -394,13 +414,15 @@ async function loadLeadCustomerHistoryTimed(leadId: string, timing: LeadReadTimi
   const ctx = await timing.time("authorize", () => authorizeLead(leadId));
   if (!ctx) return { error: "Sin acceso a este lead." };
   const admin = createAdminSupabase();
-  const [leadRes, creds] = await Promise.all([
+  const [leadRes, creds, wooSiteUrl] = await Promise.all([
     timing.time("db.lead", () => admin
       .from("leads")
       .select("phone,order_id,source,cart_summary,kapso_conversation_id")
       .eq("id", leadId)
       .maybeSingle()),
     timing.time("db.credentials", () => getStoreCreds(ctx.storeId, admin)),
+    // Una lectura chica de `stores`, junto a las credenciales: no es una etapa aparte.
+    storeWooSiteUrl(admin, ctx.storeId),
   ]);
   const lead = leadRes.data as {
     phone: string | null;
@@ -416,6 +438,7 @@ async function loadLeadCustomerHistoryTimed(leadId: string, timing: LeadReadTimi
     lead.phone,
     lead.order_id,
     creds?.shopify_domain ?? null,
+    wooSiteUrl,
   ));
   if (customerHistory && lead.phone && creds?.shopify_token) {
     try {
@@ -424,7 +447,11 @@ async function loadLeadCustomerHistoryTimed(leadId: string, timing: LeadReadTimi
         lead.phone,
         { excludeName: customerHistory.currentOrderName, limit: 3 },
       ));
-      if (shopOrders.length) customerHistory.recentOrders = shopOrders;
+      // La lista de Shopify manda, pero no conoce los pedidos de WooCommerce de
+      // la misma tienda: esos se conservan de la lista local (MOM §38.12).
+      if (shopOrders.length) {
+        customerHistory.recentOrders = mergePriorOrders<PriorOrder>(shopOrders, customerHistory.recentOrders);
+      }
     } catch {
       /* keep the local fallback list */
     }

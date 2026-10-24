@@ -28,6 +28,7 @@ import {
   tandersCoverageEligible,
 } from "@/lib/tanders/draft";
 import { getStoreCreds } from "@/lib/ingest";
+import { orderPlatformOf } from "@/lib/shipment-order-capture";
 import { writeCourierGuide } from "@/lib/route-output-fill";
 import { puertaDeSalidaAdicional, type SalidaExistente } from "@/lib/shipment-output";
 import { fetchOrderById } from "@/lib/shopify";
@@ -165,6 +166,10 @@ async function liveOrderNote(
   try {
     const creds = await getStoreCreds(order.store_id, admin);
     if (!creds?.shopify_token || !order.shopify_order_id) return stored;
+    // Un pedido de WooCommerce no se le pide a Shopify: no lo tiene, y con su
+    // `wc-…` solo devolvería un error (MOM §38.12). Va la nota guardada, que la
+    // entrada de WooCommerce copia en `raw.note` (§38.7).
+    if ((await orderPlatformOf(admin, orderId)) === "woocommerce") return stored;
     const live = await fetchOrderById({
       domain: creds.shopify_domain,
       token: creds.shopify_token,

@@ -17,6 +17,8 @@ import { randomUUID } from "node:crypto";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getMasterPermissions, hasOrgPermission } from "@/lib/permissions-access";
 import { getCurrentUser } from "@/lib/access";
+import { orderPlatformOf } from "@/lib/shipment-order-capture";
+import { orderPlatformName } from "@/lib/order-admin-url";
 import { applyConfirmationCycleToStore, freshLogisticsCost, recomputeOrderMasterSafe } from "@/lib/order-master";
 import {
   ACTIVE_OUTPUTS_ERROR,
@@ -1848,8 +1850,11 @@ export async function registerConfirmationAttempt(
     };
   }
   if (days >= CONFIRMATION_MAX_DAYS) {
+    // La anulación se hace a mano en la tienda del pedido (MOM §38.12): junto
+    // al botón «Revisar en WooCommerce» no puede decir «en Shopify».
+    const platform = await orderPlatformOf(admin, orderId);
     return {
-      notice: `Día ${days} de ${CONFIRMATION_MAX_DAYS}: se creó la tarea para revisar y anular manualmente en Shopify.`,
+      notice: `Día ${days} de ${CONFIRMATION_MAX_DAYS}: se creó la tarea para revisar y anular manualmente en ${orderPlatformName(platform)}.`,
     };
   }
   return {

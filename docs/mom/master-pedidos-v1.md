@@ -16498,6 +16498,74 @@ cambio deja una línea `[woo-platform]` en el registro (tienda, de qué a qué,
 quién y cuándo), y solo se guarda si nadie la cambió entre la lectura y el
 guardado.
 
+#### El enlace al pedido y el nombre de su tienda (24-10-2026)
+
+**Por qué.** El 24-10-2026, ya con Aurela recibiendo pedidos de WooCommerce, la
+flechita junto al nombre del pedido en la ficha del Master («Abrir en
+Shopify») abrió `admin.shopify.com/store/aurela-peru/orders/11076` para el
+#AUR900004, que es de WooCommerce (`wc-aur-11076`): el enlace se armaba siempre
+con Shopify y el número del id.
+
+**La regla.** Todo enlace al admin de un pedido lo arma `orderAdminLink`
+(`lib/order-admin-url.ts`, puro y sin Node, para el navegador) y lo decide
+**solo `orders.platform`**; sin dato, Shopify, como `orderPlatformOf`:
+
+- `woocommerce`: `<woo_site_url>/wp-admin/admin.php?page=wc-orders&action=edit&id=<id>`
+  con el id de `wc-<clave>-<id>`, y la etiqueta «Abrir en WooCommerce». **Sin
+  el sitio guardado** (o con un id que no es `wc-…`) **no hay enlace**: ninguno
+  antes que uno equivocado;
+- `shopify`: el de siempre (`admin.shopify.com/store/<tienda>/orders/<id>`),
+  «Abrir en Shopify», pero solo con un id de Shopify (los dígitos o su gid). La
+  forma del id no elige la plataforma: solo impide armar un enlace de Shopify
+  con lo que no es suyo (`wc-aur-11076` leído sin la columna, o el
+  `draft-<id>` de un borrador, que antes abría el pedido con el número del
+  borrador).
+
+`woo_site_url` no es secreto: viaja con la lista de tiendas que el panel ya
+recibe (`getAccessibleStores`; sin la 0274 se lee sin ella), y Leads lo lee
+aparte (`storeWooSiteUrl`): `getStoreCreds` sigue sin leer nada de
+WooCommerce (38.11). El carrito de Shopify («Ver borrador en Shopify») sigue igual:
+es un borrador de Shopify.
+
+**Dónde:**
+
+- **La ficha del Master** (`components/order-drawer.tsx`, desde el Master y
+  desde `?ficha=`): la flechita de la cabecera, «Revisar en …» del último
+  intento de confirmación y los textos que nombran la tienda del pedido —«la
+  anulación se crea a mano en …», «Datos comerciales sincronizados desde …»,
+  la dirección «según …», «Esta corrección gana sobre …» de la Ubicación y, en
+  la Mesa de cierre, «anulado en …»—. La plataforma llega en el detalle
+  (`OrderMasterDetail.platform`, que lee `orders.platform`; sin la columna,
+  `shopify`).
+- **El séptimo día de confirmación:** el aviso «se creó la tarea para revisar
+  y anular manualmente en …» (`registerConfirmationAttempt`) nombra la tienda
+  del pedido (`orderPlatformOf`). La nota del hecho
+  `confirmation_cancellation_task_created` la escribe la base
+  (`register_confirmation_attempt_v1`) con «Shopify» para todo pedido y **así
+  se sigue guardando**; la Actividad de la ficha la lee «… en WooCommerce …» en
+  un pedido de WooCommerce (`eventNoteLabel`, solo esa nota exacta: una nota
+  escrita por una persona sale tal cual).
+- **«fuente:» de la Situación.** `order_master.status_source = 'shopify'`
+  quiere decir «el estado del pedido en su tienda» (pendiente o anulado,
+  `lib/order-status.ts`) y **así se sigue guardando**: solo se lee distinto.
+  En un pedido de WooCommerce dice «tienda (WooCommerce)»
+  (`statusSourceLabel`); en uno de Shopify, `shopify`, como siempre.
+- **Leads, «Pedidos anteriores»** (`getCustomerHistory`): cada pedido local
+  enlaza a su tienda y la flechita la nombra. Cuando Shopify contesta con los
+  pedidos del cliente, esa lista sigue mandando, pero se le suman los locales
+  de WooCommerce (`mergePriorOrders`): antes los tapaba.
+- **Envíos, el cajón:** un pedido de WooCommerce no se le pide a Shopify (ni
+  la dirección en vivo ni el borrador por gid); «Obtenido de …», «Productos de
+  …», «Revisa el destino… la dirección de … es …» y el aviso de corregir la
+  dirección («el pedido es de WooCommerce: allí no se cambia») nombran su
+  tienda.
+- **La guía Swayp directa (el modal):** la insignia del «Destino» (cuando la
+  dirección sale del pedido), «cancelado/reembolsado por completo en …» y el
+  aviso de reembolso parcial nombran la tienda del pedido
+  (`DirectFenixGuidePreview.platform`, de `orderPlatformOf`).
+- **La nota de la guía de Tanders:** de un pedido de WooCommerce va la nota
+  guardada (`raw.note`, 38.7), sin llamar a Shopify.
+
 **Pendiente** (no está en este cambio):
 
 - **La boleta de un pedido de WooCommerce** espera su lector (30-31/10), con
@@ -16509,9 +16577,43 @@ guardado.
 - **Auto-vínculo y búsqueda de Envíos** buscan en Shopify: un pedido de
   WooCommerce no aparece. Pasarlos a la base local.
 - **Otros gid de Shopify armados con `shopify_order_id`** (el cajón de un envío
-  sin dirección, la nota de la guía de Tanders, «Ver en Shopify»): con token,
-  una llamada que Shopify rechaza y que cae a lo guardado; sin token, nada.
-  Pasarlos a `orders.platform`.
+  sin dirección, la nota de la guía de Tanders, «Ver en Shopify»): **hecho
+  (24-10-2026)**, con `orders.platform` («El enlace al pedido y el nombre de su
+  tienda», arriba). Quedan, sin daño para un pedido de WooCommerce: la
+  dirección en vivo del export de Programación de Swayp, que se salta (el id
+  `wc-…` no es de Shopify: `app/api/export/fenix-programacion/route.ts` solo
+  pregunta por ids de dígitos) y sale con lo guardado, y los cruces con
+  `draft_orders` por gid (`lib/order-master.ts`, el export), que no encuentran
+  nada.
+- **Textos que todavía dicen «Shopify» sobre un pedido** sin saber su
+  plataforma. Un pedido de WooCommerce anulado también tiene
+  `orders.cancelled_at` (`mapWooOrder`), así que los «anulado en Shopify» le
+  salen igual. Arreglo: «anulado en la tienda», o la plataforma del pedido
+  donde la fila está a mano. Son:
+  - los mensajes del servidor al cerrar una ruta, en la Mesa de cierre y en el
+    barrido de Tanders, y la puerta a «entregado» (`lib/master-door.ts`:
+    `SHOPIFY_CANCELLED_REASON` y «… está anulado en Shopify: no se marcó
+    entregado …»);
+  - los acompañantes de la ficha («Este pedido está anulado en Shopify: no
+    viaja en ninguna caja», `lib/order-companion.ts`) y «si lo anuló Shopify o
+    el courier» (`lib/order-status.ts`);
+  - el escaneo («… está ANULADO en Shopify …», `lib/scan-cancelled.ts`) y el
+    cuaderno del motorizado («Anulado en Shopify: no se carga…»,
+    `lib/notebook-import.ts`);
+  - Urpi («anulados en Shopify o devueltos no se tocaron»,
+    `lib/urpi-report-apply.ts`; la ayuda de «Observaciones» y «Anulado en
+    Shopify el …», `components/urpi-results-board.tsx`);
+  - Tanders cobros («… de un pedido anulado en Shopify»,
+    `components/tanders-cobros.tsx`);
+  - Swayp desde Por confirmar («Anulado en Shopify»,
+    `lib/swayp-desde-confirmacion.ts` y su página; la clave
+    `anulado_shopify` se queda);
+  - el error del servidor al emitir la guía Swayp directa
+    («cancelado/reembolsado por completo en Shopify», `lib/swayp-directa.ts`;
+    el modal ya lo ataja antes con la tienda del pedido);
+  - la boleta («Espera a Shopify», con su lector pendiente), el panel de
+    Aliclik («En Shopify el pedido son S/ …») y la etiqueta del evento viejo
+    `cancelled_shopify`.
 - **El endpoint del bot** (`POST /api/internal/orders/[storeId]`): **hecho
   (23-10-2026, 38.13)**, con el mismo núcleo (`wooSaleLinesProblem`,
   `buildWooSaleOrder`, `createWooSaleOrder`) y el candado en la base por
@@ -16532,6 +16634,23 @@ guardado.
   WooCommerce (no entra al Master; hay que borrarlo a mano) o, con un plugin
   que lo deja vivo al crearlo, dos vivos. El bot ya espera (38.13); el
   formulario todavía no.
+
+Implementación del enlace y del nombre de la tienda: `lib/order-admin-url.ts`
+(`orderAdminLink`, `orderPlatform`, `orderPlatformName`, `parseWooOrderId` y
+`wooOrderAdminUrl`, que lib/woocommerce.ts y lib/woocommerce-orders.ts
+reexportan, `statusSourceLabel`, `eventNoteLabel`, `mergePriorOrders`),
+`getAccessibleStores` (lib/access.ts), `storeWooSiteUrl` y
+`loadLeadCustomerHistory` (app/dashboard/leads/actions.ts),
+`registerConfirmationAttempt` (app/dashboard/pedidos/actions.ts),
+`getOrderMasterDetail` (lib/orders-master-access.ts), `getCustomerHistory`
+(lib/leads-access.ts), `getShipmentWithCalls` (lib/shipments-access.ts),
+`loadShipmentDetail` y `previewDirectFenixGuide`
+(app/dashboard/envios/actions.ts), `liveOrderNote`
+(app/dashboard/pedidos/tanders-actions.ts) y los componentes
+`order-drawer.tsx`, `order-drawer-host.tsx`, `orders-master.tsx`,
+`order-closure-desk.tsx`, `leads-drawer.tsx`, `leads-next.tsx`,
+`shipments.tsx` y `direct-fenix-guide-modal.tsx`. Pruebas:
+`test/order-admin-url.test.ts`.
 
 Implementación: `lib/shipment-order-capture.ts` (`orderPlatformOf`,
 `pushShippingAddressToShopify` con `platform`) y

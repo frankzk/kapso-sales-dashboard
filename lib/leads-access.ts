@@ -1,10 +1,10 @@
 // RLS-scoped reads for the leads module (queue views, lead detail, counts).
 
 import { createServerSupabase } from "@/lib/db";
-import { shopifyOrderAdminUrl } from "@/lib/shopify";
+import { orderAdminLink, orderPlatform } from "@/lib/order-admin-url";
 import type { AliclikHealthState } from "@/lib/aliclik-health";
 import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
-import type { LeadCallRow, LeadRow } from "@/lib/types";
+import type { LeadCallRow, LeadRow, OrderPlatform } from "@/lib/types";
 import type { DistrictCoverageRule } from "@/lib/district-coverage";
 import type { PedidoPrevio } from "@/lib/pedido-duplicado";
 import {
@@ -368,12 +368,18 @@ export async function getLeadWithCalls(
   return { lead: lead as LeadRow, calls: (calls as LeadCallRow[]) ?? [] };
 }
 
-/** One prior Shopify order, for the drawer's "Pedidos anteriores" list. */
+/** One prior order, for the drawer's "Pedidos anteriores" list. */
 export interface PriorOrder {
-  name: string | null; // Shopify order name, e.g. "#AUR1234"
+  name: string | null; // order name, e.g. "#AUR1234" o "#AUR900004"
   createdAt: string | null;
   amount: number; // net (total_amount − refunds); un anulado de Shopify trae su total original
-  adminUrl: string | null; // deep-link to the order in Shopify admin (new tab)
+  /** El pedido en el admin de SU tienda (`orderAdminLink`, MOM §38.12), en pestaña nueva. */
+  adminUrl: string | null;
+  /**
+   * `orders.platform` (MOM §38): de qué tienda vino. Sin dato, Shopify (la lista
+   * que se lee en vivo de Shopify no lo trae: todos sus pedidos son de Shopify).
+   */
+  platform?: OrderPlatform;
   /** Anulado en Shopify (solo la lista de Shopify lo sabe; la local ya los excluye). */
   cancelled?: boolean;
 }
@@ -399,6 +405,8 @@ export interface CustomerHistory {
   recentOrders: PriorOrder[]; // last 3 prior orders (excl. own), newest first
 }
 
+const PRIOR_ORDER_COLUMNS = "id, shopify_order_id, name, created_at, total_amount, total_refunded, line_items";
+
 /**
  * Prior purchase history for a phone — powers the "cliente recurrente" pill, the
  * "Pedidos anteriores" list, and the current order's Shopify name in the drawer.
@@ -410,6 +418,8 @@ export async function getCustomerHistory(
   phone: string | null,
   excludeOrderId?: string | null,
   shopDomain?: string | null,
+  /** `stores.woo_site_url`: el enlace de un pedido de WooCommerce (MOM §38.12). */
+  wooSiteUrl?: string | null,
 ): Promise<CustomerHistory | null> {
   const sb = await createServerSupabase();
 
@@ -453,16 +463,21 @@ export async function getCustomerHistory(
   // que el lead tenía un pedido sin guía.
   if (!phone) return { ...emptyPrior, ...own, recentOrders: [] };
 
-  const { data } = await sb
-    .from("orders")
-    .select("id, shopify_order_id, name, created_at, total_amount, total_refunded, line_items")
-    .eq("store_id", storeId)
-    .eq("customer_phone", phone)
-    .is("cancelled_at", null)
-    .order("created_at", { ascending: false })
-    .limit(10);
+  const readOrders = (columns: string) =>
+    sb
+      .from("orders")
+      .select(columns)
+      .eq("store_id", storeId)
+      .eq("customer_phone", phone)
+      .is("cancelled_at", null)
+      .order("created_at", { ascending: false })
+      .limit(10);
+  // Con `platform` (0274): el enlace de cada pedido va al admin de su tienda
+  // (MOM §38.12). Sin la columna, se repite sin ella y todos son de Shopify.
+  let ordersRes = await readOrders(`${PRIOR_ORDER_COLUMNS}, platform`);
+  if (ordersRes.error) ordersRes = await readOrders(PRIOR_ORDER_COLUMNS);
   let rows =
-    (data as {
+    (ordersRes.data as unknown as {
       id: string;
       shopify_order_id: string | null;
       name: string | null;
@@ -470,18 +485,23 @@ export async function getCustomerHistory(
       total_amount: number | null;
       total_refunded: number | null;
       line_items: unknown;
+      platform?: unknown;
     }[]) ?? [];
   if (excludeOrderId) rows = rows.filter((r) => r.id !== excludeOrderId);
   if (!rows.length) return { ...emptyPrior, ...own, recentOrders: [] };
   const last = rows[0]!;
   const items = Array.isArray(last.line_items) ? (last.line_items as { title?: string }[]) : [];
   const lastProduct = items.length ? String(items[0]?.title ?? "").trim() || null : null;
-  const recentOrders: PriorOrder[] = rows.slice(0, 3).map((r) => ({
-    name: r.name,
-    createdAt: r.created_at,
-    amount: Math.round(((r.total_amount ?? 0) - (r.total_refunded ?? 0)) * 100) / 100,
-    adminUrl: shopifyOrderAdminUrl(shopDomain, r.shopify_order_id),
-  }));
+  const recentOrders: PriorOrder[] = rows.slice(0, 3).map((r) => {
+    const platform = orderPlatform(r.platform);
+    return {
+      name: r.name,
+      createdAt: r.created_at,
+      amount: Math.round(((r.total_amount ?? 0) - (r.total_refunded ?? 0)) * 100) / 100,
+      adminUrl: orderAdminLink({ platform, shopifyOrderId: r.shopify_order_id, shopDomain, wooSiteUrl })?.url ?? null,
+      platform,
+    };
+  });
   return {
     orderCount: rows.length,
     lastOrderName: last.name,

@@ -1255,12 +1255,11 @@ export async function createWooSaleOrder(input: {
 }
 
 /**
- * El pedido en el admin de WooCommerce (HPOS, que el brief pide). Solo para el
- * enlace del formulario.
+ * El pedido en el admin de WooCommerce (HPOS, que el brief pide). Vive en
+ * lib/order-admin-url.ts, sin imports de Node, porque la ficha del pedido lo
+ * arma en el navegador (`orderAdminLink`, MOM §38.12).
  */
-export function wooOrderAdminUrl(siteUrl: string, wooId: number | string): string {
-  return `${siteUrl.replace(/\/+$/, "")}/wp-admin/admin.php?page=wc-orders&action=edit&id=${encodeURIComponent(String(wooId))}`;
-}
+export { wooOrderAdminUrl } from "@/lib/order-admin-url";
 
 // ---------------------------------------------------------------------------
 // El buscador de productos

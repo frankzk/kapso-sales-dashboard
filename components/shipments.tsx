@@ -91,6 +91,7 @@ import type {
   StoreSummary,
 } from "@/lib/types";
 import { SHIPMENT_VIEWS, type ShipmentView } from "@/lib/shipments-access";
+import { orderPlatformName } from "@/lib/order-admin-url";
 import { teamConversion, teamCostPerReprogramada, type TeamScore, type TeamScoreRow } from "@/lib/team-score";
 import {
   RECOVERY_CALL_DISPOSITIONS,
@@ -2642,6 +2643,10 @@ function ShipmentDrawer({
     shipment?.swayp_guide && (shipment.swayp_state === 6 || shipment.swayp_state === 8),
   );
   const shopifyAddress = detail && !("error" in detail) ? detail.order?.shipping_address ?? null : null;
+  // La tienda del pedido (`orders.platform`, MOM §38.12): de dónde salió la
+  // dirección, y si corregirla aquí la escribe allá (solo Shopify).
+  const orderPlatformValue = detail && !("error" in detail) ? detail.order?.platform : undefined;
+  const orderStoreName = orderPlatformName(orderPlatformValue);
   const deliveryAddress = shipment?.delivery_address ?? shopifyAddress?.address1 ?? null;
   const deliveryReference = shipment?.delivery_reference ?? shopifyAddress?.address2 ?? null;
   const deliveryLocality = !shipment?.delivery_address
@@ -2661,7 +2666,7 @@ function ShipmentDrawer({
     : shipment?.delivery_address
       ? "Importado desde Aliclik"
       : shopifyAddress?.address1
-        ? "Obtenido de Shopify"
+        ? `Obtenido de ${orderStoreName}`
         : "Sin dirección disponible";
   const aliclikDecision = shipment
     ? evaluateAliclikReschedule({
@@ -3151,7 +3156,7 @@ function ShipmentDrawer({
                 {localityConflict && (
                   <Banner tone="warn" title="Revisa el destino antes de despachar.">
                     El courier dice <b className="font-semibold text-ink-900">{detail.shipment.city}</b>, pero la
-                    dirección de Shopify es{" "}
+                    dirección de {orderStoreName} es{" "}
                     <b className="font-semibold text-ink-900">
                       {[shopifyAddress?.city, shopifyAddress?.province].filter(Boolean).join(" · ")}
                     </b>
@@ -4123,7 +4128,9 @@ function ShipmentDrawer({
                     </label>
                   </div>
                   <p className={DRAWER_NOTE}>
-                    Al guardar se actualizará el pedido de Shopify y esta dirección no será reemplazada por futuros Excel.
+                    {orderPlatformValue === "woocommerce"
+                      ? "Al guardar, la dirección queda en el envío (el pedido es de WooCommerce: allí no se cambia) y no será reemplazada por futuros Excel."
+                      : "Al guardar se actualizará el pedido de Shopify y esta dirección no será reemplazada por futuros Excel."}
                   </p>
                   <div className="flex flex-wrap justify-end gap-2">
                     <OpsButton onClick={() => setShowAddressEditor(false)} className="pointer-coarse:h-11">
@@ -4728,7 +4735,7 @@ function ShipmentOrderItems({ order }: { order: ShipmentOrderDetail }) {
   return (
     <div>
       <div className="flex items-center justify-between gap-3">
-        <p className="text-[13px] font-medium leading-5 text-ink-700">Productos de Shopify</p>
+        <p className="text-[13px] font-medium leading-5 text-ink-700">Productos de {orderPlatformName(order.platform)}</p>
         {order.line_items.length > 0 && (
           <p className="shrink-0 text-[13px] leading-5 tabular-nums text-ink-500">
             {order.line_items.length} {order.line_items.length === 1 ? "producto" : "productos"}

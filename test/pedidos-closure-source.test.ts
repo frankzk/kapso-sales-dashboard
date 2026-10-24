@@ -95,7 +95,8 @@ describe("(C) finalizar con la ruta de Grupo GF abierta", () => {
 
   it("anulado en Shopify, la Mesa no promete que cerrar la ruta lo pase a entregado", () => {
     expect(desk).toContain('data-closure-block="ruta-gf-anulado-shopify"');
-    expect(flat(desk)).toContain("pero el pedido está anulado en Shopify: terminar la ruta en");
+    // La tienda del pedido (MOM §38.12): «Shopify» por defecto, «WooCommerce» si vino de ahí.
+    expect(flat(desk)).toContain("pero el pedido está anulado en {storePlatform}: terminar la ruta en");
     expect(flat(desk)).toContain("no lo marca entregado. Si la entrega vale, la cambia desde esta ficha («Gestión manual»)");
   });
 });
@@ -138,7 +139,10 @@ describe("la ficha le pasa a la Mesa lo que necesita para avisar antes del clic"
     expect(tag).toContain("row={detail.row}");
     expect(tag).toContain("gfDeliveries={detail.gfDeliveries}");
     expect(tag).toContain("cancelledInShopify={Boolean(detail.shopifyCancelledAt)}");
-    expect(read("lib/orders-master-access.ts")).toContain('sb.from("orders").select("line_items,raw,cancelled_at")');
+    // `cancelled_at` sale de la fila de `orders` del detalle (con `platform` si
+    // la 0274 está, MOM §38.12).
+    expect(read("lib/orders-master-access.ts")).toContain('const ORDER_DETAIL_COLUMNS = "line_items,raw,cancelled_at";');
+    expect(read("lib/orders-master-access.ts")).toContain("readOrderForDetail(sb, orderId),");
     // Sin la ruta, «Reparto y liquidación» sale sin enlace.
     expect(read("lib/orders-master-access.ts")).toContain("routeId: st.route_id,");
   });

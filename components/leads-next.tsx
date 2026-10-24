@@ -487,7 +487,8 @@ function ContactIcons({ lead }: { lead: LeadRow }) {
 }
 
 function PriorOrders({ history }: { history: Loaded<CustomerHistory | null> }) {
-  if (history === "loading") return <span className="text-ink-500">Buscando en Shopify…</span>;
+  // Busca en la base y en Shopify; los pedidos de WooCommerce salen de la base (MOM §38.12).
+  if (history === "loading") return <span className="text-ink-500">Buscando pedidos…</span>;
   if (history === "error") return <span className="text-ink-500">No se pudo consultar ahora.</span>;
   const count = Math.max(history?.orderCount ?? 0, history?.recentOrders.length ?? 0);
   if (!history || count === 0) return <span className="text-ink-700">Ninguno: es cliente nuevo</span>;

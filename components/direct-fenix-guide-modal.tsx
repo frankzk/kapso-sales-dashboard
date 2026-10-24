@@ -17,6 +17,7 @@ import { limaTodayKey } from "@/lib/shipments";
 import { firstSwaypDispatchDay, isSwaypDispatchDay } from "@/lib/swayp-dispatch-days";
 import { SwaypDispatchDateSelect } from "@/components/swayp-dispatch-date-select";
 import { esNumeroDeGuiaSwayp } from "@/lib/swayp-guide";
+import { orderPlatformName } from "@/lib/order-admin-url";
 
 /** El despacho más pronto es mañana (Lima): el Excel del día ya suele estar
  *  enviado, así que una guía de hoy nunca llegaría a Fenix. */
@@ -402,8 +403,9 @@ export function DirectFenixGuideModal({
                   Destino
                   {preview.address.source && (
                     <Badge>
+                      {/* «shopify» es «del pedido» (`raw`): se nombra su tienda (MOM §38.12). */}
                       {preview.address.source === "shopify"
-                        ? "Shopify"
+                        ? orderPlatformName(preview.platform)
                         : preview.address.source === "carrito"
                           ? "Carrito COD"
                           : "Lead"}
@@ -527,8 +529,8 @@ export function DirectFenixGuideModal({
             {blockedByOrder && (
               <Banner tone="crit">
                 {preview.cancelled
-                  ? "El pedido está cancelado en Shopify; no se puede crear la guía."
-                  : "El pedido fue reembolsado por completo en Shopify; no se puede crear la guía."}
+                  ? `El pedido está cancelado en ${orderPlatformName(preview.platform)}; no se puede crear la guía.`
+                  : `El pedido fue reembolsado por completo en ${orderPlatformName(preview.platform)}; no se puede crear la guía.`}
               </Banner>
             )}
             {/* El texto lo escribe el servidor y nombra al courier de verdad.

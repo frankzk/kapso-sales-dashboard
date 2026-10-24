@@ -176,8 +176,6 @@ export function isValidWooSiteKey(key: unknown): key is string {
   return typeof key === "string" && WOO_SITE_KEY_RE.test(key);
 }
 
-const WOO_ORDER_ID_RE = /^wc-([a-z][a-z0-9]{1,11})-([1-9]\d*)$/;
-
 /**
  * El id con el que un pedido de WooCommerce se guarda en
  * `orders.shopify_order_id`: `wc-<clave>-<id>`. Lanza si la clave o el id no
@@ -192,12 +190,12 @@ export function wooOrderId(siteKey: string, wooId: number | string): string {
   return `wc-${siteKey}-${id}`;
 }
 
-/** Lo contrario de `wooOrderId`, o null si el valor no es un id de WooCommerce. */
-export function parseWooOrderId(value: unknown): { siteKey: string; wooId: string } | null {
-  if (typeof value !== "string") return null;
-  const m = value.match(WOO_ORDER_ID_RE);
-  return m ? { siteKey: m[1]!, wooId: m[2]! } : null;
-}
+/**
+ * Lo contrario de `wooOrderId`, o null si el valor no es un id de WooCommerce.
+ * Vive en lib/order-admin-url.ts, sin imports de Node, porque el enlace al
+ * pedido se arma también en el navegador (MOM §38.12).
+ */
+export { parseWooOrderId } from "@/lib/order-admin-url";
 
 // ---------------------------------------------------------------------------
 // Estados

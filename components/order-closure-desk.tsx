@@ -144,6 +144,7 @@ export function OrderClosureDesk({
   costTariffGap,
   gfDeliveries,
   cancelledInShopify,
+  storePlatform = "Shopify",
   permissions,
   pending,
   onAction,
@@ -167,6 +168,11 @@ export function OrderClosureDesk({
   gfDeliveries?: readonly ClosureGfDelivery[];
   /** `orders.cancelled_at` existe: cerrar la ruta no lo marca entregado (MOM §11.4). */
   cancelledInShopify?: boolean;
+  /**
+   * La tienda del pedido (`orders.platform`, MOM §38.12), para decir dónde está
+   * anulado: un pedido de WooCommerce no está «anulado en Shopify».
+   */
+  storePlatform?: "Shopify" | "WooCommerce";
   permissions: ClosurePermissions;
   pending: boolean;
   onAction: (input: ClosureActionInput) => Promise<boolean>;
@@ -370,7 +376,7 @@ export function OrderClosureDesk({
           lo marca entregado. No se promete; decide una persona. */}
       {gfRouteBlock?.kind === "anulado_shopify" && (
         <p className="text-[13px] leading-5 text-ink-600" data-closure-block="ruta-gf-anulado-shopify">
-          El motorizado de Grupo GF reportó la entrega y su ruta sigue abierta, pero el pedido está anulado en Shopify:
+          El motorizado de Grupo GF reportó la entrega y su ruta sigue abierta, pero el pedido está anulado en {storePlatform}:
           terminar la ruta en <GfRoutePath routeId={gfRouteBlock.routeIds[0]} /> no lo marca entregado. Si la entrega
           vale, la cambia desde esta ficha («Gestión manual»), con motivo, quien tenga «{OVERRIDE_PERMISSION_LABEL}».
         </p>

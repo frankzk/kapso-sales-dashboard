@@ -157,11 +157,13 @@ import {
 } from "@/lib/swayp-reenvio";
 import type {
   LinkedShipmentSummary,
+  OrderPlatform,
   ShipmentCallRow,
   ShipmentHistoryGuide,
   ShipmentOrderDetail,
   ShipmentRow,
 } from "@/lib/types";
+import { orderPlatformName } from "@/lib/order-admin-url";
 
 export interface ShipmentActionState {
   error?: string;
@@ -375,7 +377,9 @@ export async function loadShipmentDetail(
   // If the local order came from an older no-phone Shopify fallback, its raw
   // payload can have products but no shippingAddress. Refresh that one order
   // live, cache the repaired payload, and keep the drawer fast on later opens.
-  if (order && !order.shipping_address && order.shopify_order_id) {
+  // Solo un pedido de Shopify: el de WooCommerce no se le pide a Shopify, que
+  // no lo tiene y con `wc-…` solo devuelve un error (MOM §38.12).
+  if (order && !order.shipping_address && order.shopify_order_id && order.platform !== "woocommerce") {
     const creds = await getStoreCreds(ctx.storeId, admin);
     if (creds?.shopify_token) {
       try {
@@ -392,6 +396,7 @@ export async function loadShipmentDetail(
             shopify_order_id: liveOrder.shopify_order_id,
             line_items: liveOrder.line_items,
             shipping_address: liveAddress,
+            platform: "shopify",
           };
           if (detail.shipment.order_id) {
             await admin
@@ -1382,6 +1387,11 @@ export interface DirectFenixGuidePreview {
   orderId: string;
   storeId: string;
   orderName: string | null;
+  /**
+   * La tienda del pedido (`orders.platform`, MOM §38.12): con ella se nombra de
+   * dónde salió la dirección y dónde está anulado o reembolsado.
+   */
+  platform: OrderPlatform;
   totalAmount: number | null;
   currency: string | null;
   customerName: string | null;
@@ -1524,6 +1534,10 @@ export async function previewDirectFenixGuide(input: {
   if (!order) return { error: "Pedido inválido o sin acceso." };
 
   const { address, source } = await resolveDirectGuideAddress(admin, order);
+  // De qué tienda es (sin la columna, Shopify): `source: "shopify"` solo dice
+  // que la dirección salió del pedido (`raw`), que un pedido de WooCommerce
+  // también trae.
+  const platform = await orderPlatformOf(admin, order.id);
   const district = address?.city ?? null;
   const region = address?.province ?? null;
   const city = deriveFenixCoverageCity(district, region);
@@ -1590,7 +1604,7 @@ export async function previewDirectFenixGuide(input: {
     );
   }
   if (!refundedTotal && totalRefunded > 0) {
-    warnings.push("El pedido tiene un reembolso parcial en Shopify; verifica el monto a cobrar.");
+    warnings.push(`El pedido tiene un reembolso parcial en ${orderPlatformName(platform)}; verifica el monto a cobrar.`);
   }
   if (closedGuidesCount > 0) {
     warnings.push(
@@ -1605,6 +1619,7 @@ export async function previewDirectFenixGuide(input: {
     orderId: order.id,
     storeId: order.store_id,
     orderName: order.name,
+    platform,
     totalAmount: order.total_amount,
     currency: order.currency,
     customerName: address?.name ?? null,

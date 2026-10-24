@@ -73,9 +73,11 @@ import type {
   OrderEventRow,
   OrderLineItem,
   OrderMasterRow,
+  OrderPlatform,
   ShipmentCallRow,
   ShipmentRow,
 } from "@/lib/types";
+import { orderPlatform } from "@/lib/order-admin-url";
 import {
   AGENCY_AVAILABLE_STATES,
   ATTEMPTS_OR_MORE,
@@ -558,6 +560,12 @@ export interface OrderMasterDetail {
    * prometer que cerrar la ruta lo marca entregado (MOM §11.4, §29.13).
    */
   shopifyCancelledAt: string | null;
+  /**
+   * `orders.platform` (0274, MOM §38): de qué tienda vino el pedido. Con esto,
+   * y nunca con la forma del id, la ficha arma el enlace al admin y nombra la
+   * tienda (`orderAdminLink`, §38.12). Sin la columna, `shopify`.
+   */
+  platform: OrderPlatform;
   /** Pedido acompañante (MOM §32): en qué caja viaja y qué lleva en las suyas. */
   companion: OrderCompanionInfo;
   /**
@@ -889,6 +897,21 @@ function withRuntimeCoverage(row: OrderMasterRow): OrderMasterRow {
   return isNonMetroLimaLocation(row) ? { ...row, coverage: "agencia" } : row;
 }
 
+/** Las columnas de `orders` que lee la ficha (sin `platform`, que va aparte). */
+const ORDER_DETAIL_COLUMNS = "line_items,raw,cancelled_at";
+
+/**
+ * La fila de `orders` que la ficha necesita, con su `platform` (0274, MOM
+ * §38.12). Sin la 0274 la columna no existe y la lectura falla: se repite sin
+ * ella y el pedido es de Shopify, como siempre. Perder las líneas y los totales
+ * por una columna nueva sería peor que no saber la plataforma.
+ */
+async function readOrderForDetail(sb: SupabaseClient, orderId: string) {
+  const read = (columns: string) => sb.from("orders").select(columns).eq("id", orderId).maybeSingle();
+  const res = await read(`${ORDER_DETAIL_COLUMNS},platform`);
+  return res.error ? read(ORDER_DETAIL_COLUMNS) : res;
+}
+
 /**
  * Detalle de un pedido: su fila del Master, sus guías, la línea de tiempo
  * cronológica y los productos. La línea de tiempo MEZCLA `order_events` (lo del
@@ -918,7 +941,7 @@ export async function getOrderMasterDetail(
   const row = withRuntimeCoverage(rowData as unknown as OrderMasterRow);
 
   const [orderRes, guidesRes, eventsRes, tasksRes] = await Promise.all([
-    sb.from("orders").select("line_items,raw,cancelled_at").eq("id", orderId).maybeSingle(),
+    readOrderForDetail(sb, orderId),
     sb.from("shipments").select(GUIDE_COLUMNS).eq("order_id", orderId).order("created_at"),
     sb
       .from("order_events")
@@ -1076,7 +1099,12 @@ export async function getOrderMasterDetail(
     payload: task.payload ?? {},
   }));
 
-  const orderRow = orderRes.data as { line_items?: OrderLineItem[]; raw?: unknown; cancelled_at?: string | null } | null;
+  const orderRow = orderRes.data as {
+    line_items?: OrderLineItem[];
+    raw?: unknown;
+    cancelled_at?: string | null;
+    platform?: unknown;
+  } | null;
   const rawItems = orderRow?.line_items ?? [];
   // La foto no viene en el line item de Shopify: se adjunta desde el espejo
   // (migración 0164). Sin espejo, la miniatura degrada a la inicial y el pedido
@@ -1121,6 +1149,7 @@ export async function getOrderMasterDetail(
     gfDeliveries,
     gfCostTariffGap,
     shopifyCancelledAt: orderRow?.cancelled_at ?? null,
+    platform: orderPlatform(orderRow?.platform),
     companion,
     address: shopifyShippingAddress(orderRow?.raw),
     departamentoElegido: shopifyDepartamentoElegido(orderRow?.raw),

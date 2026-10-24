@@ -128,6 +128,7 @@ import {
 } from "@/lib/leads-read-client";
 import { REPLY_TOKEN_LABEL, renderReplyPreview, validateReplyParams } from "@/lib/wa-reply-templates";
 import { shopifyDraftOrderAdminUrl } from "@/lib/shopify-urls";
+import { orderPlatformName } from "@/lib/order-admin-url";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 import { cn } from "@/components/ui";
 import { formatPeruMobile, peruMobileDigits, peruMobileProblem } from "@/lib/phone";
@@ -828,7 +829,7 @@ export function LeadDrawer({
               </section>
             )}
 
-            {/* Pedidos anteriores: los 3 últimos de Shopify, justo bajo «Lo que pidió»:
+            {/* Pedidos anteriores: los 3 últimos (de Shopify y de WooCommerce), justo bajo «Lo que pidió»:
                 es lo primero que se mira al abrir la ficha (Frankz, 14-10-2026). */}
             {history && history.recentOrders.length > 0 && (
               <section aria-label="Pedidos anteriores" className={SECTION_CARD}>
@@ -863,13 +864,15 @@ export function LeadDrawer({
                         >
                           {currency} {o.amount.toFixed(2)}
                         </span>
+                        {/* El enlace va al admin de la tienda del pedido
+                            (`orders.platform`, MOM §38.12): se nombra la suya. */}
                         {o.adminUrl && (
                           <a
                             href={o.adminUrl}
                             target="_blank"
                             rel="noopener noreferrer"
-                            title="Abrir en Shopify"
-                            aria-label={`Abrir ${o.name ?? "pedido"} en Shopify (nueva pestaña)`}
+                            title={`Abrir en ${orderPlatformName(o.platform)}`}
+                            aria-label={`Abrir ${o.name ?? "pedido"} en ${orderPlatformName(o.platform)} (nueva pestaña)`}
                             className="-mr-1.5 grid size-7 shrink-0 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:size-11"
                           >
                             <IconArrowUpRight aria-hidden className="size-4" />

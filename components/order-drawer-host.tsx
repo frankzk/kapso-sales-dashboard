@@ -27,6 +27,8 @@ export interface OrderDrawerHostStore {
   id: string;
   name: string;
   shopify_domain: string | null;
+  /** `stores.woo_site_url`: el enlace de un pedido de WooCommerce (MOM §38.12). */
+  woo_site_url?: string | null;
 }
 
 export interface OrderDrawerHostProps {
@@ -85,6 +87,7 @@ function OrderDrawerHostInner({ stores, ...permissions }: OrderDrawerHostProps) 
 
   const storeName = (id: string) => stores.find((s) => s.id === id)?.name ?? "Tienda";
   const storeDomain = (id: string) => stores.find((s) => s.id === id)?.shopify_domain ?? null;
+  const storeWooSite = (id: string) => stores.find((s) => s.id === id)?.woo_site_url ?? null;
 
   return (
     <OrderDrawer
@@ -99,6 +102,7 @@ function OrderDrawerHostInner({ stores, ...permissions }: OrderDrawerHostProps) 
       closurePermissions={permissions.closurePermissions}
       storeName={storeName}
       storeDomain={storeDomain}
+      storeWooSite={storeWooSite}
       onClose={close}
       onSaved={() => setRefreshTick((n) => n + 1)}
       initialWorkspace={workspaceForDrawerSection(request.section)}

@@ -73,7 +73,12 @@ export default async function DashboardLayout({ children }: { children: React.Re
           Liquidaciones 2, con los MISMOS permisos que en el Master
           (app/dashboard/pedidos/page.tsx). En el Master no actúa. */}
       <OrderDrawerHost
-        stores={stores.map((s) => ({ id: s.id, name: s.name, shopify_domain: s.shopify_domain ?? null }))}
+        stores={stores.map((s) => ({
+          id: s.id,
+          name: s.name,
+          shopify_domain: s.shopify_domain ?? null,
+          woo_site_url: s.woo_site_url ?? null,
+        }))}
         canEdit={!permissions.readOnly}
         canOverride={permissions.can("master.override_status")}
         canSetStatus={permissions.can("master.set_status")}
