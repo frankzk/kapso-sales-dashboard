@@ -206,6 +206,7 @@ import {
   type OrderPlatformName,
 } from "@/lib/order-admin-url";
 import { orderPuntoText } from "@/lib/order-punto";
+import { timelineOriginLabel } from "@/lib/order-timeline-fact";
 import type { RouteCandidate } from "@/lib/order-route-plan";
 import type { OrderMasterRow, ShipmentRow, StoreSummary } from "@/lib/types";
 
@@ -1886,7 +1887,6 @@ export function OrderDrawer({
                     costTariffGap={detail.gfCostTariffGap}
                     gfDeliveries={detail.gfDeliveries}
                     cancelledInShopify={Boolean(detail.shopifyCancelledAt)}
-                    storePlatform={storePlatform}
                     permissions={closurePermissions}
                     pending={pending}
                     onAction={(input) => run(() => registerClosureAction(orderId, input))}
@@ -2183,13 +2183,7 @@ export function OrderDrawer({
                             : ""}
                           {t.courier ? ` · ${t.courier}` : ""}
                           {t.guideCode ? ` · ${t.guideCode}` : ""}
-                          {` · ${
-                            t.origin === "gestion"
-                              ? "Repro Provincia"
-                              : t.origin === "leads"
-                                ? "Leads"
-                                : t.source
-                          }`}
+                          {` · ${timelineOriginLabel(t)}`}
                         </p>
                       </li>
                     ))}

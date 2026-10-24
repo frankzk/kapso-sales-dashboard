@@ -351,7 +351,8 @@ describe("la hoja decide con las reglas del servidor (§11.6, E14-E19)", () => {
 
   it("«Ya no lo quiere» pide un segundo clic que nombra el pedido y no anula la venta (§11.5)", () => {
     expect(sheet).toContain("Sí, desarmar y cerrar {current.orderName}");
-    expect(sheet).toContain("No anula la venta: solo Shopify la anula.");
+    expect(sheet).toContain("No anula la venta: solo la tienda la anula.");
+    expect(sheet).not.toContain("solo Shopify la anula");
     expect(sheet).toContain('if (outcome === "no_quiere") input.confirmOrderName = current.orderName;');
   });
 });

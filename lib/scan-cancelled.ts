@@ -52,7 +52,7 @@ export function cancelledScanMessage(facts: CancelledOrderFacts): string | null 
     const day = limaShortDate(facts.cancelledAt);
     const reason = facts.cancelReason ? CANCEL_REASON[facts.cancelReason] ?? null : null;
     const detail = [day ? `el ${day}` : null, reason].filter(Boolean).join(", ");
-    return `${name} está ANULADO en Shopify${detail ? ` (${detail})` : ""}: no sale. Sepáralo para devolverlo al stock.`;
+    return `${name} está ANULADO en la tienda${detail ? ` (${detail})` : ""}: no sale. Sepáralo para devolverlo al stock.`;
   }
   if (facts.generalStatus === "anulado") {
     return `${name} está ANULADO: no sale. Sepáralo para devolverlo al stock.`;

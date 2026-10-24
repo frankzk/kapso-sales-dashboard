@@ -298,7 +298,7 @@ export function companionLinkProblem(check: CompanionLinkCheck): string | null {
     return `${hostName} viaja a su vez en la caja de otro pedido. Vincula al pedido que lleva la guía.`;
   }
   if (companion.cancelledAt) {
-    return "Este pedido está anulado en Shopify: no viaja en ninguna caja.";
+    return "Este pedido está anulado en la tienda: no viaja en ninguna caja.";
   }
   if (companion.macroStage === "finalizado") {
     return "El expediente de este pedido está finalizado. Reábrelo en la Mesa de cierre antes de vincularlo.";

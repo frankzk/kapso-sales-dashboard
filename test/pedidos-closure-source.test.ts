@@ -95,8 +95,9 @@ describe("(C) finalizar con la ruta de Grupo GF abierta", () => {
 
   it("anulado en Shopify, la Mesa no promete que cerrar la ruta lo pase a entregado", () => {
     expect(desk).toContain('data-closure-block="ruta-gf-anulado-shopify"');
-    // La tienda del pedido (MOM §38.12): «Shopify» por defecto, «WooCommerce» si vino de ahí.
-    expect(flat(desk)).toContain("pero el pedido está anulado en {storePlatform}: terminar la ruta en");
+    // Un solo texto para las dos plataformas (MOM §38.12, owner 24-10-2026).
+    expect(flat(desk)).toContain("pero el pedido está anulado en la tienda: terminar la ruta en");
+    expect(desk).not.toContain("storePlatform");
     expect(flat(desk)).toContain("no lo marca entregado. Si la entrega vale, la cambia desde esta ficha («Gestión manual»)");
   });
 });

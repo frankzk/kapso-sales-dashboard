@@ -76,6 +76,7 @@ import {
   parseWooWebhookPing,
   verifyWooSignature,
   wooOrderId,
+  type WooClientOpts,
   type WooOrder,
 } from "@/lib/woocommerce";
 import {
@@ -103,6 +104,11 @@ import {
   wooWebhookTopic,
   type WooStoreCreds,
 } from "@/lib/woocommerce-intake";
+import {
+  recordWooStatusTransitions,
+  wooStatusTransition,
+  type WooTransitionItem,
+} from "@/lib/woocommerce-activity";
 import type { ConversationRow, DraftOrderRow, OrderRow } from "@/lib/types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -1330,13 +1336,15 @@ type WooApplyOutcome = { applied: true; row: OrderRow } | { applied: false; mess
 
 /**
  * Un pedido de WooCommerce (del webhook o releído por la API) → `orders`, con
- * el `cancelled_at` que ya tenía y sin pisar un estado más nuevo; y los mismos
- * efectos que un pedido de Shopify (`applyWooOrderEffects`).
+ * el `cancelled_at` que ya tenía y sin pisar un estado más nuevo; si lo anula o
+ * lo reactiva, el hecho en la Actividad (`recordWooStatusTransitions`, MOM
+ * §38.3); y los mismos efectos que un pedido de Shopify (`applyWooOrderEffects`).
  */
 async function applyWooOrderPayload(
   admin: SupabaseClient,
   creds: WooStoreCreds & { siteKey: string },
   payload: WooOrder,
+  fetchImpl?: typeof fetch,
 ): Promise<WooApplyOutcome> {
   const id = wooOrderId(creds.siteKey, payload.id);
   const existing = (await existingWooOrders(admin, creds.id, [id])).get(id) ?? null;
@@ -1361,8 +1369,37 @@ async function applyWooOrderPayload(
     return { applied: false, message: "creado antes de que la tienda recibiera pedidos de WooCommerce en Kapta (woo_intake_from): no entra al Master" };
   }
   await upsertOrders(admin, [row]);
+  // Antes de la fila del Master: el hecho también es un movimiento del pedido.
+  const transition = wooStatusTransition(existing, row, wooStatusOf(payload));
+  if (transition) {
+    await recordWooStatusTransitions(
+      admin,
+      creds.id,
+      [wooTransitionItem(row, payload, existing, transition)],
+      hasWooApiCredentials(creds) ? wooClientOpts(creds, fetchImpl ? { fetchImpl } : {}) : null,
+    );
+  }
   await applyWooOrderEffects(admin, creds.id, creds.timezone, row);
   return { applied: true, row };
+}
+
+/** El cambio de estado de un pedido recién guardado, para la Actividad. */
+function wooTransitionItem(
+  row: OrderRow,
+  payload: Pick<WooOrder, "id" | "status">,
+  before: ExistingWooOrder | null,
+  transition: NonNullable<ReturnType<typeof wooStatusTransition>>,
+): WooTransitionItem {
+  return {
+    shopifyOrderId: row.shopify_order_id,
+    wooId: payload?.id ?? null,
+    transition,
+    before,
+    // La anulación, con el `cancelled_at` que queda (la fecha de modificación
+    // de WooCommerce); la reactivación, con la fecha de modificación.
+    changedAt: transition === "cancelled" ? row.cancelled_at : row.updated_at,
+    status: wooStatusOf(payload) || null,
+  };
 }
 
 /**
@@ -1457,46 +1494,70 @@ async function processWooOrderDeleted(
       );
       if (String(live?.id ?? "") !== String(wooId)) throw new Error("WooCommerce devolvió otro pedido");
       if (WOO_CANCELLED_STATUSES.includes(wooStatusOf(live))) {
-        const out = await applyWooOrderPayload(admin, creds, live);
+        const out = await applyWooOrderPayload(admin, creds, live, fetchImpl);
         if (out.applied) return undefined;
         // Un estado más viejo o que no entra: se marca igual, como en la papelera.
       } else {
         // Ya volvió de la papelera (o nunca fue): manda lo que dice WooCommerce.
-        const out = await applyWooOrderPayload(admin, creds, live);
+        const out = await applyWooOrderPayload(admin, creds, live, fetchImpl);
         return out.applied ? "el pedido ya no está en la papelera: se aplicó su estado actual" : out.message;
       }
     } catch {
       /* sin API (o borrado del todo): se marca con lo que se sabe */
     }
   }
-  const outcome = await markWooOrderDeleted(admin, creds.id, orderId);
+  const outcome = await markWooOrderDeleted(admin, creds.id, orderId, wooId);
   return outcome === "absent" ? "el pedido no estaba en Kapta" : undefined;
 }
 
-/** Marca anulado un pedido que fue a la papelera, sin borrarlo. */
+/**
+ * Marca anulado un pedido que fue a la papelera, sin borrarlo. Si es esta
+ * escritura la que lo anula (la condición `cancelled_at is null`), deja el
+ * hecho en la Actividad, sin autor: aquí WooCommerce no contestó.
+ */
 async function markWooOrderDeleted(
   admin: SupabaseClient,
   storeId: string,
   orderId: string,
+  wooId: unknown,
 ): Promise<"marked" | "already" | "absent"> {
   const { data, error } = await admin
     .from("orders")
-    .select("id, cancelled_at")
+    .select("id, cancelled_at, updated_at")
     .eq("store_id", storeId)
     .eq("shopify_order_id", orderId)
     .maybeSingle();
   if (error) throw new Error(`orders (papelera): ${error.message}`);
-  const row = data as { id: string; cancelled_at: string | null } | null;
+  const row = data as { id: string; cancelled_at: string | null; updated_at?: string | null } | null;
   if (!row) return "absent";
   let outcome: "marked" | "already" = "already";
   if (!row.cancelled_at) {
-    const { error: upErr } = await admin
+    const cancelledAt = new Date().toISOString();
+    const { data: flipped, error: upErr } = await admin
       .from("orders")
-      .update({ cancelled_at: new Date().toISOString(), financial_status: "voided" })
+      .update({ cancelled_at: cancelledAt, financial_status: "voided" })
       .eq("id", row.id)
-      .is("cancelled_at", null);
+      .is("cancelled_at", null)
+      .select("id");
     if (upErr) throw new Error(`orders (papelera): ${upErr.message}`);
     outcome = "marked";
+    if (((flipped ?? []) as unknown[]).length) {
+      await recordWooStatusTransitions(
+        admin,
+        storeId,
+        [
+          {
+            shopifyOrderId: orderId,
+            wooId: typeof wooId === "number" || typeof wooId === "string" ? wooId : null,
+            transition: "cancelled",
+            before: { cancelled_at: null, updated_at: row.updated_at ?? null },
+            changedAt: cancelledAt,
+            status: "trash",
+          },
+        ],
+        null,
+      );
+    }
   }
   try {
     await recomputeOrderMasterSafe(admin, [row.id]);
@@ -1623,7 +1684,7 @@ export async function processWooWebhook(
     if (topic === "order.deleted") {
       message = await processWooOrderDeleted(admin, store, payload.id, orderId, opts.fetchImpl);
     } else {
-      const out = await applyWooOrderPayload(admin, store, payload);
+      const out = await applyWooOrderPayload(admin, store, payload, opts.fetchImpl);
       if (!out.applied) message = out.message;
     }
   } catch (e) {
@@ -1710,11 +1771,16 @@ async function recordWooSyncState(
   await admin.from("sync_state").upsert(row, { onConflict: "store_id,source" });
 }
 
-/** Una página de pedidos de WooCommerce → `orders`, con los efectos del lote. */
+/**
+ * Una página de pedidos de WooCommerce → `orders`, con los efectos del lote y
+ * los hechos de la Actividad de los que se anularon o reactivaron (`client`
+ * lee quién lo hizo, MOM §38.3).
+ */
 async function applyWooOrdersPage(
   admin: SupabaseClient,
   creds: WooStoreCreds & { siteKey: string },
   items: WooOrder[],
+  client: WooClientOpts | null = null,
 ): Promise<{ upserted: number; skipped: number; kapsoDates: string[] }> {
   const storeId = creds.id;
   const store = { id: storeId, woo_site_key: creds.siteKey };
@@ -1730,6 +1796,7 @@ async function applyWooOrdersPage(
   const floor = wooIntakeFloor(creds, env.ordersSyncFrom());
 
   const byId = new Map<string, OrderRow>();
+  const changes = new Map<string, WooTransitionItem>();
   let skipped = 0;
   for (const o of items) {
     let row: OrderRow | null;
@@ -1757,11 +1824,16 @@ async function applyWooOrdersPage(
     // nunca dentro de la misma; aun así, uno por id (un upsert con dos filas de
     // la misma clave falla entero).
     byId.set(row.shopify_order_id, row);
+    const transition = wooStatusTransition(before, row, wooStatusOf(o));
+    if (transition) changes.set(row.shopify_order_id, wooTransitionItem(row, o, before, transition));
+    else changes.delete(row.shopify_order_id);
   }
   const rows = [...byId.values()];
   if (!rows.length) return { upserted: 0, skipped, kapsoDates: [] };
 
   await upsertOrders(admin, rows);
+  // Anulados y reactivados de esta página → la Actividad (antes de la fila del Master).
+  if (changes.size) await recordWooStatusTransitions(admin, storeId, [...changes.values()], client);
 
   // Pedidos del bot → lead ganado (como la pasada tag:kapso de Shopify).
   const kapso = rows.filter((r) => hasKapsoTag(r.tags));
@@ -1853,7 +1925,7 @@ export async function syncWooOrders(
       );
       client = { ...client, auth };
       result.pages++;
-      const applied = await applyWooOrdersPage(admin, creds, page.items);
+      const applied = await applyWooOrdersPage(admin, creds, page.items, client);
       result.orders += applied.upserted;
       result.skipped += applied.skipped;
       for (const d of applied.kapsoDates) dates.add(d);

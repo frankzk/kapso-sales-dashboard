@@ -947,7 +947,7 @@ async function persistCall(formData: FormData): Promise<LeadActionState> {
       const hasActiveOrder = !!o && !o.cancelled_at;
       if (!canDispositionLead({ currentCategory: lead.category, newStatus: status, hasActiveOrder })) {
         return {
-          error: `Este lead ya tiene un pedido activo${o?.name ? ` (${o.name})` : ""}. Si el cliente canceló, cancela el pedido en Shopify primero.`,
+          error: `Este lead ya tiene un pedido activo${o?.name ? ` (${o.name})` : ""}. Si el cliente canceló, anula el pedido en la tienda primero.`,
         };
       }
     }

@@ -237,7 +237,9 @@ describe("gfOpenRouteBlock — anulado en Shopify, cerrar la ruta no lo marca en
     expect(error).toBe(GF_OPEN_ROUTE_CANCELLED_ERROR);
     expect(error).not.toBe(GF_OPEN_ROUTE_ERROR);
     expect(error).not.toContain("pasa a entregado");
-    expect(error).toContain("está anulado en Shopify");
+    // Un solo texto para Shopify y WooCommerce (MOM §38.12, owner 24-10-2026).
+    expect(error).toContain("está anulado en la tienda");
+    expect(error).not.toContain("Shopify");
     expect(error).toContain(`terminar la ruta en ${GF_ROUTE_PATH_LABEL} no lo marca entregado`);
     expect(error).toContain("quien tenga «Corregir pedidos cerrados»");
   });

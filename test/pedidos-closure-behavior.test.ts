@@ -258,7 +258,8 @@ describe("registerClosureAction(«finalize») con la ruta de Grupo GF abierta", 
   it("anulado en Shopify: no promete que cerrar la ruta lo pase a entregado", async () => {
     db.tables = tables("2026-10-05T17:45:00Z");
     const result = await registerClosureAction("o-2", input);
-    expect(result.error).toContain("está anulado en Shopify");
+    expect(result.error).toContain("está anulado en la tienda");
+    expect(result.error).not.toContain("Shopify");
     expect(result.error).toContain("no lo marca entregado");
     expect(result.error).not.toContain("pasa a entregado");
     expect(events()).toEqual([]);
@@ -376,20 +377,11 @@ describe("(c) la Mesa de cierre, pintada", () => {
     expect(html).not.toContain("pasa a entregado");
     expect(html).toContain("no lo marca entregado");
     expect(html).toContain(`href="${gfRouteReportHref("r-1")}"`);
-    // Sin decir la plataforma, la de siempre.
-    expect(html).toContain("pero el pedido está anulado en Shopify:");
-  });
-
-  it("un pedido de WooCommerce anulado se dice anulado en WooCommerce, no en Shopify (MOM §38.12)", () => {
-    const html = paint({
-      gfDeliveries: stop("en_curso"),
-      generalStatus: "anulado",
-      cancelledInShopify: true,
-      storePlatform: "WooCommerce",
-    });
-    expect(html).toContain('data-closure-block="ruta-gf-anulado-shopify"');
-    expect(html).toContain("pero el pedido está anulado en WooCommerce:");
+    // Un solo texto para Shopify y WooCommerce (MOM §38.12, owner 24-10-2026),
+    // el mismo que responde el servidor.
+    expect(html).toContain("pero el pedido está anulado en la tienda:");
     expect(html).not.toContain("anulado en Shopify");
+    expect(html).not.toContain("anulado en WooCommerce");
   });
 
   const urpi = {

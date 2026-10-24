@@ -529,7 +529,7 @@ export function DirectFenixGuideModal({
             {blockedByOrder && (
               <Banner tone="crit">
                 {preview.cancelled
-                  ? `El pedido está cancelado en ${orderPlatformName(preview.platform)}; no se puede crear la guía.`
+                  ? "El pedido está anulado en la tienda; no se puede crear la guía."
                   : `El pedido fue reembolsado por completo en ${orderPlatformName(preview.platform)}; no se puede crear la guía.`}
               </Banner>
             )}

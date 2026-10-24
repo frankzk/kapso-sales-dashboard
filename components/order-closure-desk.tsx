@@ -144,7 +144,6 @@ export function OrderClosureDesk({
   costTariffGap,
   gfDeliveries,
   cancelledInShopify,
-  storePlatform = "Shopify",
   permissions,
   pending,
   onAction,
@@ -166,13 +165,12 @@ export function OrderClosureDesk({
   costTariffGap?: GfTariffCheck | null;
   /** Grupo GF (`detail.gfDeliveries`): con ellas la Mesa sabe si la ruta sigue abierta. */
   gfDeliveries?: readonly ClosureGfDelivery[];
-  /** `orders.cancelled_at` existe: cerrar la ruta no lo marca entregado (MOM §11.4). */
-  cancelledInShopify?: boolean;
   /**
-   * La tienda del pedido (`orders.platform`, MOM §38.12), para decir dónde está
-   * anulado: un pedido de WooCommerce no está «anulado en Shopify».
+   * `orders.cancelled_at` existe (Shopify o WooCommerce): cerrar la ruta no lo
+   * marca entregado (MOM §11.4). Se dice «anulado en la tienda», el mismo texto
+   * para las dos plataformas (MOM §38.12).
    */
-  storePlatform?: "Shopify" | "WooCommerce";
+  cancelledInShopify?: boolean;
   permissions: ClosurePermissions;
   pending: boolean;
   onAction: (input: ClosureActionInput) => Promise<boolean>;
@@ -371,12 +369,12 @@ export function OrderClosureDesk({
           liquidación.
         </p>
       )}
-      {/* El mismo caso anulado en Shopify (#KP137541): la puerta a «entregado»
+      {/* El mismo caso anulado en la tienda (#KP137541): la puerta a «entregado»
           no escribe sobre la anulación (MOM §11.4), así que cerrar la ruta no
           lo marca entregado. No se promete; decide una persona. */}
       {gfRouteBlock?.kind === "anulado_shopify" && (
         <p className="text-[13px] leading-5 text-ink-600" data-closure-block="ruta-gf-anulado-shopify">
-          El motorizado de Grupo GF reportó la entrega y su ruta sigue abierta, pero el pedido está anulado en {storePlatform}:
+          El motorizado de Grupo GF reportó la entrega y su ruta sigue abierta, pero el pedido está anulado en la tienda:
           terminar la ruta en <GfRoutePath routeId={gfRouteBlock.routeIds[0]} /> no lo marca entregado. Si la entrega
           vale, la cambia desde esta ficha («Gestión manual»), con motivo, quien tenga «{OVERRIDE_PERMISSION_LABEL}».
         </p>

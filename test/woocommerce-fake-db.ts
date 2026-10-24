@@ -2,7 +2,8 @@
 // (test/woocommerce-*.test.ts). Aplica de verdad los filtros de cada lectura y
 // escritura (`eq`, `in`, `is`, `match`, `gte`/`gt`/`lte`/`lt`, `limit`) y las
 // claves únicas que usan estas rutas: `orders (store_id, shopify_order_id)`,
-// `webhook_events (store_id, webhook_id)` y `sync_state (store_id, source)`,
+// `webhook_events (store_id, webhook_id)`, `sync_state (store_id, source)` y
+// `order_events (order_id, operation_id, kind)` cuando hay `operation_id`,
 // con el `ignoreDuplicates` de un upsert (ON CONFLICT DO NOTHING). Lo demás
 // (orden, `range`, `not`, `or`) se acepta y no filtra: las pruebas no dependen
 // de ello. `hangOn` deja una consulta sin contestar (una base que no responde).
@@ -28,6 +29,9 @@ const UNIQUE: Record<string, string[]> = {
   // Los pedidos del bot (0277, MOM §38.13): el candado y el secreto de cada tienda.
   bot_order_requests: ["store_id", "request_id"],
   bot_order_secrets: ["store_id"],
+  // Los hechos con clave (0122, `order_events_operation_kind_uniq`): índice
+  // parcial, solo cuando `operation_id` no es null (ver abajo).
+  order_events: ["order_id", "operation_id", "kind"],
 };
 
 let seq = 0;
@@ -186,7 +190,11 @@ class FakeQuery {
       const list = Array.isArray(this.payload) ? this.payload : [this.payload];
       const keys = UNIQUE[this.table];
       for (const p of list) {
-        const hit = keys ? rows.find((r) => keys.every((k) => String(r[k]) === String(p[k]))) : undefined;
+        // Una clave con algún valor null no choca (índice parcial `where … is not null`).
+        const hit =
+          keys && keys.every((k) => p[k] != null)
+            ? rows.find((r) => keys.every((k) => String(r[k]) === String(p[k])))
+            : undefined;
         if (hit) {
           if (this.op === "insert") return { data: null, error: { code: "23505", message: `duplicate key on ${this.table}` } };
           // ON CONFLICT DO NOTHING (`insertOrderIfAbsent`): la fila que ya estaba no se toca.

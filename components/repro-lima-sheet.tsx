@@ -209,7 +209,7 @@ export function ReproRowChips({ row, today }: { row: ReproRow; today: string }) 
   if (row.list === "cerrados" && row.closed) {
     const day = limaStamp(row.closed.at, today);
     chips.push({ key: "cerrado", tone: "neutral", text: `Desarmar y cerrar${row.closed.byName ? ` · ${row.closed.byName}` : ""}${day ? ` · ${day}` : ""}` });
-    chips.push({ key: "anula", tone: "neutral", text: "Espera que Shopify anule la venta" });
+    chips.push({ key: "anula", tone: "neutral", text: "Espera que la tienda anule la venta" });
   }
   if (row.agreement && row.state.kind !== "sin_acuerdo") {
     chips.push({ key: "estado", tone: stateTone(row.state.kind), text: row.stateLabel });
@@ -1082,7 +1082,7 @@ export function ReproLimaSheet({
             </p>
             {current.closed.note && <p className="text-[13px] text-ink-700">«{current.closed.note}»</p>}
             <p className="text-[13px] text-ink-500">
-              Almacén la desarma cuando esté en oficina (cuaderno «DESARMAR»). No anula la venta: solo Shopify la anula.
+              Almacén la desarma cuando esté en oficina (cuaderno «DESARMAR»). No anula la venta: solo la tienda la anula.
             </p>
           </Section>
         )}
@@ -1327,7 +1327,7 @@ export function ReproLimaSheet({
           )}
           {mine && confirmClose && destructive && !blocker && (
             <Banner tone="warn" role="alert" title="Almacén desarma la caja cuando esté en oficina">
-              <p>No anula la venta: solo Shopify la anula.</p>
+              <p>No anula la venta: solo la tienda la anula.</p>
               <div className="mt-2 flex flex-wrap gap-2">
                 <OpsButton size="sm" variant="danger" disabled={pending} className="whitespace-normal pointer-coarse:h-11" onClick={() => save(hasNext)}>
                   Sí, desarmar y cerrar {current.orderName}

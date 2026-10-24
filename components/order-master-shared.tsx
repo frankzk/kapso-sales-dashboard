@@ -627,6 +627,10 @@ export const TIMELINE_LABEL: Record<string, string> = {
   created: "Pedido creado",
   confirmed: "Pedido confirmado",
   cancelled_shopify: "Anulado en Shopify",
+  // MOM §38.3: la tienda WooCommerce anuló o reactivó el pedido. La nota dice
+  // quién («por <usuario de WordPress>» o «WooCommerce (automático)»).
+  cancelled_woocommerce: "Anulado en WooCommerce",
+  reactivated_woocommerce: "Reactivado en WooCommerce",
   courier_assigned: "Courier asignado",
   guide_registered: "Guía registrada",
   guide_created: "Guía creada",

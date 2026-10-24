@@ -148,11 +148,11 @@ export async function emitirGuiaSwaypDirecta(
 ): Promise<EmitirGuiaSwaypDirectaResult> {
   const order = input.order;
   if (order.cancelled_at) {
-    return { error: "El pedido está cancelado en Shopify; no se puede crear la guía." };
+    return { error: "El pedido está anulado en la tienda; no se puede crear la guía." };
   }
   const totalRefunded = order.total_refunded ?? 0;
   if ((order.total_amount ?? 0) > 0 && totalRefunded >= (order.total_amount ?? 0)) {
-    return { error: "El pedido fue reembolsado por completo en Shopify; no se puede crear la guía." };
+    return { error: "El pedido fue reembolsado por completo en la tienda; no se puede crear la guía." };
   }
 
 

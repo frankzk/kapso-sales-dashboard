@@ -97,7 +97,7 @@ export default async function SwaypDesdeConfirmarPage({
             <StatCard label="Enviados" value={String(rows.length)} sub={`${count("en_camino")} todavía en camino`} />
             <StatCard label="Entregados por Swayp" value={String(delivered)} sub={`${pct(delivered, resolved)} de los ya resueltos`} />
             <StatCard label="Swayp no entregó" value={String(failed)} sub={`${count("volvio_a_confirmar")} en Por confirmar · ${count("nueva_salida")} salieron por otra vía`} />
-            <StatCard label="Anulados en Shopify" value={String(count("anulado_shopify"))} />
+            <StatCard label="Anulados en la tienda" value={String(count("anulado_shopify"))} />
           </div>
 
           <nav aria-label="Filtrar por resultado" className="flex flex-wrap gap-2">

@@ -35,7 +35,7 @@ const TABS: { key: UrpiBucket; label: string; help: string }[] = [
   { key: "reprogramado", label: "Reprogramados", help: "Urpi los reintenta el siguiente día de lunes a sábado desde la fecha del reporte." },
   { key: "por_vincular_entregado", label: "Por vincular – entregados", help: "Urpi los entregó, pero el teléfono no lleva a un único pedido. Elige el pedido o escribe su código: se vincula todo el envío y queda marcado entregado en el Master." },
   { key: "por_vincular_otro", label: "Por vincular – otros", help: "Cancelados, reprogramados o en curso cuyo teléfono no lleva a un único pedido. Elige el pedido o escribe su código: se vincula todo el envío." },
-  { key: "observacion", label: "Observaciones", help: "Urpi entregó y cobró, pero el pedido está anulado en Shopify o devuelto. No se marca entregado: solo Shopify termina una venta. Si se rehízo el pedido en Shopify, vincúlalo al nuevo; si no, ciérrala con el motivo (queda en la actividad del pedido)." },
+  { key: "observacion", label: "Observaciones", help: "Urpi entregó y cobró, pero el pedido está anulado en la tienda o devuelto. No se marca entregado: solo la tienda termina una venta. Si se rehízo el pedido en la tienda, vincúlalo al nuevo; si no, ciérrala con el motivo (queda en la actividad del pedido)." },
   { key: "no_reconocido", label: "Estado no reconocido", help: "Urpi escribió un estado que Kapta no conoce. Se guarda tal cual y no se interpreta." },
   { key: "en_curso", label: "En curso", help: "Programados o en coordinación con Urpi." },
   { key: "al_dia", label: "Al día", help: "Kapta ya los tiene entregados, anulados o devueltos, o la observación se cerró con motivo." },
@@ -173,8 +173,8 @@ export function UrpiResultsBoard({ nav, orgId, canImport, canApply, days, lastIm
                 : <><p className="line-clamp-3 whitespace-pre-wrap text-slate-600">{data.detail ?? "Sin detalle"}</p><Evidence urls={data.evidence} /></>}</td>
               <td className="max-w-72 px-4 py-3 text-xs">{order ? <>
                 <div className="font-medium text-slate-800">{GENERAL_LABEL[order.general_status] ?? order.general_status}</div><div className="text-slate-500">{order.stage_label}</div>
-                {shipment.annulledOnlyInKapta && <div className="mt-1 text-amber-800">Anulado solo en Kapta; en Shopify sigue vivo, así que se puede marcar.</div>}
-                {shipment.bucket === "observacion" && <div className="mt-1 text-amber-800">{order.cancelled_at ? `Anulado en Shopify el ${timeLabel(order.cancelled_at).split(",")[0]}` : "Devuelto en Kapta"}{latest.report_date ? `; Urpi lo entregó el ${dateLabel(latest.report_date)}` : ""}.</div>}
+                {shipment.annulledOnlyInKapta && <div className="mt-1 text-amber-800">Anulado solo en Kapta; en la tienda sigue vivo, así que se puede marcar.</div>}
+                {shipment.bucket === "observacion" && <div className="mt-1 text-amber-800">{order.cancelled_at ? `Anulado en la tienda el ${timeLabel(order.cancelled_at).split(",")[0]}` : "Devuelto en Kapta"}{latest.report_date ? `; Urpi lo entregó el ${dateLabel(latest.report_date)}` : ""}.</div>}
                 {shipment.bucket === "al_dia" && order.observation_resolved && <div className="mt-1 text-slate-600">Observación cerrada: {order.observation_resolved.note}</div>}
                 {shipment.bucket === "observacion" && canImport && <ObservationActions busy={busy} note={notes[shipment.key] ?? ""} code={codes[shipment.key] ?? ""}
                   onNote={(value) => setNotes((prev) => ({ ...prev, [shipment.key]: value }))}

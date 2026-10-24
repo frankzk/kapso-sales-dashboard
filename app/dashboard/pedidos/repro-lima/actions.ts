@@ -508,7 +508,7 @@ async function afterCall(admin: Admin, input: {
   if (input.outcome === "no_quiere") {
     const cleared = await clearPrograms(admin, [f?.program], actor, SUFFIX_NO_LO_QUIERE);
     return {
-      notice: `Caso cerrado: Almacén la desarma cuando esté en oficina (cuaderno «DESARMAR»). No anula la venta: solo Shopify la anula.${cleared ? CLEARED_NOTE : ""}`,
+      notice: `Caso cerrado: Almacén la desarma cuando esté en oficina (cuaderno «DESARMAR»). No anula la venta: solo la tienda la anula.${cleared ? CLEARED_NOTE : ""}`,
       programChanged: cleared,
     };
   }

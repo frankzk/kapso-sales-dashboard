@@ -62,7 +62,7 @@ export interface MasterDoorFacts {
   cancelledAt?: string | null;
 }
 
-export const SHOPIFY_CANCELLED_REASON = "El pedido está anulado en Shopify: la entrega no se escribe encima. Decide una persona desde su ficha.";
+export const SHOPIFY_CANCELLED_REASON = "El pedido está anulado en la tienda: la entrega no se escribe encima. Decide una persona desde su ficha.";
 
 /** La decisión, pura y testeada (test/master-door.test.ts). */
 export function masterDoorVerdict(item: Pick<MasterDoorItem, "target" | "guard">, facts: MasterDoorFacts = {}): MasterDoorVerdict {
@@ -111,7 +111,7 @@ async function loadShopifyCancellations(admin: SupabaseClient, orderIds: readonl
       .select("id,cancelled_at")
       .in("id", ids.slice(i, i + 200))
       .not("cancelled_at", "is", null);
-    if (error) throw new Error(`no se pudo comprobar si los pedidos están anulados en Shopify (${error.message})`);
+    if (error) throw new Error(`no se pudo comprobar si los pedidos están anulados en la tienda (${error.message})`);
     for (const row of (data ?? []) as { id: string; cancelled_at: string | null }[]) {
       if (row.cancelled_at) out.set(row.id, row.cancelled_at);
     }
@@ -255,7 +255,7 @@ export function shopifyCancelledNotice(orders: readonly { orderId: string; name:
   if (!names.length) return null;
   if (names.length === 1) {
     const name = names[0]!;
-    return `${name.charAt(0).toUpperCase()}${name.slice(1)} está anulado en Shopify: no se marcó entregado en el Master y sigue donde estaba. Decide en su ficha qué pasó con la entrega.`;
+    return `${name.charAt(0).toUpperCase()}${name.slice(1)} está anulado en la tienda: no se marcó entregado en el Master y sigue donde estaba. Decide en su ficha qué pasó con la entrega.`;
   }
-  return `${names.length} pedidos están anulados en Shopify (${names.join(", ")}): no se marcaron entregados en el Master y siguen donde estaban. Decide en la ficha de cada uno qué pasó con la entrega.`;
+  return `${names.length} pedidos están anulados en la tienda (${names.join(", ")}): no se marcaron entregados en el Master y siguen donde estaban. Decide en la ficha de cada uno qué pasó con la entrega.`;
 }

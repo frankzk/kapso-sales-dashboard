@@ -65,7 +65,7 @@ const LIST_CARD: Record<ReproList, { label: string; hint: string; empty: string 
   },
   cerrados: {
     label: "Cerrados · esperan anulación",
-    hint: "«Desarmar y cerrar» del intento vigente: el pedido sigue en la etapa hasta que Shopify anule la venta.",
+    hint: "«Desarmar y cerrar» del intento vigente: el pedido sigue en la etapa hasta que la tienda anule la venta.",
     empty: "Ningún caso cerrado espera la anulación.",
   },
 };

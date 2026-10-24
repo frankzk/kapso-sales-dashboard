@@ -931,7 +931,7 @@ async function recuperarFichasSinCola(
     report.errores += 1;
     recordSweepFailure(
       report.fallos,
-      new Error("No se pudo comprobar qué guías validadas tienen el pedido anulado en Shopify: no se creó ninguna ficha."),
+      new Error("No se pudo comprobar qué guías validadas tienen el pedido anulado en la tienda: no se creó ninguna ficha."),
     );
     return;
   }

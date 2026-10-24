@@ -362,7 +362,7 @@ export function buildNotebookPlan(
           kind: other.cancelled ? "anulado" : "otra_caja", via: "codigo", orderId: other.orderId, orderName: other.orderName,
           stopId: null, shipmentId: null, fromDate: null,
           detail: other.cancelled
-            ? `Anulado en Shopify: no se carga; si ${ctx.riderName} tiene el paquete, vuelve a la oficina (${other.where}).`
+            ? `Anulado en la tienda: no se carga; si ${ctx.riderName} tiene el paquete, vuelve a la oficina (${other.where}).`
             : `No está en esta ruta: ${other.where}.`,
         } as PlanRow["match"];
       }

@@ -249,7 +249,7 @@ export function terminalOrderBlocker(general: string): string | null {
     // un estado que se arregla solo en cuanto exista otra salida viva.
     return (
       "El pedido está anulado. Si acabas de anular su salida para cambiar de courier, el estado se " +
-      `recalcula solo y vuelve a Preparación; si lo anuló Shopify o el courier, ${lowerFirst(REOPEN_HINT)}`
+      `recalcula solo y vuelve a Preparación; si lo anuló la tienda o el courier, ${lowerFirst(REOPEN_HINT)}`
     );
   }
   return `El pedido está ${generalLabel(general).toLowerCase()}. ${REOPEN_HINT}`;

@@ -184,8 +184,8 @@ export function TandersCobros() {
             {report.fichasAnuladas > 0 && (
               <p className="mt-2 text-xs text-slate-600">
                 {report.fichasAnuladas === 1
-                  ? "1 guía validada sin ficha es de un pedido anulado en Shopify"
-                  : `${report.fichasAnuladas} guías validadas sin ficha son de pedidos anulados en Shopify`}{" "}
+                  ? "1 guía validada sin ficha es de un pedido anulado en la tienda"
+                  : `${report.fichasAnuladas} guías validadas sin ficha son de pedidos anulados en la tienda`}{" "}
                 ({report.anuladas.join(", ")}): su cobro no entra a Validar pagos, porque firmarlo lo cerraría como venta
                 cobrada. Decide una persona desde la ficha del pedido.
               </p>

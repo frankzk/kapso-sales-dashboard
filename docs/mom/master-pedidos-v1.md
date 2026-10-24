@@ -2593,7 +2593,7 @@ Cada lista es una tarjeta de estado que filtra y dice su número. La primera
 regla que aplica gana:
 
 1. **Cerrados**: sin caso abierto, y el último caso del episodio vigente se
-   cerró con «Desarmar y cerrar». Espera que Shopify anule la venta. No tiene
+   cerró con «Desarmar y cerrar». Espera que la tienda anule la venta. No tiene
    plazo: sale cuando el pedido deja la etapa o un fallo nuevo abre otro
    episodio.
 2. **Programados**: un acuerdo vigente (su día no pasó), programado o no.
@@ -5379,7 +5379,8 @@ la asesora acaba de oír por teléfono.
 «Desarmar y cerrar sin llamada» (§9.5) cierran el caso y mandan a desarmar la
 caja. Piden lo mismo que el descarte: un motivo de `DISCARD_REASON_MIN`
 caracteres como mínimo y un segundo clic que nombra el pedido («Sí, desarmar y
-cerrar #KP138029»), con «No anula la venta: solo Shopify la anula.» al lado. El
+cerrar #KP138029»), con «No anula la venta: solo la tienda la anula.» al lado
+(«la tienda» desde el 24-10-2026, §38.12). El
 servidor vuelve a comparar el nombre del pedido. La hoja también avisa antes de
 cerrarse con una nota a medio escribir.
 
@@ -6604,7 +6605,7 @@ implica confirmación» (§6.1), como la del §11.9.
 - **Registro**: Master de Pedidos → Por confirmar → «Swayp desde Por confirmar»
   (`/dashboard/pedidos/swayp-desde-confirmar`). Cada envío con su guía, el
   estado y la novedad de Swayp, el resultado (en camino, entregado, volvió a Por
-  confirmar, salió por otra vía, anulado en Shopify), el motivo y la salida que
+  confirmar, salió por otra vía, anulado en la tienda), el motivo y la salida que
   vino después. Arriba, enviados, entregados y la tasa de entrega sobre los ya
   resueltos.
 
@@ -10124,6 +10125,21 @@ enseñaba como «Automático (Leads)» y una guía creada a mano parecía salida
 nada (#KP134581). Las notas anteriores quedan como se escribieron —el historial
 no se reescribe—; quién creó esas guías consta en su hecho «Guía registrada».
 
+**La anulación en WooCommerce está en la Actividad (24-10-2026, §38.3).** Un
+pedido de WooCommerce que se anula en la tienda tiene su hecho **«Anulado en
+WooCommerce»**, a la hora en que WooCommerce lo cambió, con el detalle **«por
+<usuario de WordPress>»** o **«WooCommerce (automático)»** (sin detalle si no se
+supo quién) y el origen **«WooCommerce»** en la línea de la fecha; si vuelve a
+estar vivo, **«Reactivado en WooCommerce»**. Es un hito de cierre (naranja, como
+«Anulado en Shopify»); la reactivación va en gris de consulta, porque la
+macroetapa a la que vuelve la decide el Master. Quien lo hizo no es un usuario
+de Kapta: va en el detalle, no como actor. Antes el Master decía «Anulado y
+cerrado» (#AUR900004, prueba del owner) y la Actividad no explicaba por qué. La
+anulación de un pedido de Shopify sigue sin hecho propio. Implementación:
+`orderEventsToTimeline` (lib/orders-master-access.ts), `timelineOriginLabel` y
+`timelineFact` (lib/order-timeline-fact.ts) y `TIMELINE_LABEL`
+(components/order-master-shared.tsx).
+
 Dentro de `Operar`, el orden de decisión es:
 
 1. **Dónde está:** macroetapa, subetapa, antigüedad y avance dentro de las seis
@@ -12358,9 +12374,10 @@ La caja va al anaquel de ese día, no al estante de reprogramados.
 
 **Un pedido anulado se dice primero, en cualquier escaneo (05-10-2026).** Al
 escanear un paquete —armado en almacén, agregar a una ruta, cotejo de la caja o
-caja del motorizado de Grupo GF—, si su pedido está anulado (en Shopify o en
-Kapta) la respuesta es esa y nada más: «#AUR177767 está ANULADO en Shopify (el
-04/10, lo canceló el cliente): no sale. Sepáralo para devolverlo al stock.».
+caja del motorizado de Grupo GF—, si su pedido está anulado (en la tienda o en
+Kapta) la respuesta es esa y nada más: «#AUR177767 está ANULADO en la tienda (el
+04/10, lo canceló el cliente): no sale. Sepáralo para devolverlo al stock.»
+(«en la tienda» desde el 24-10-2026, §38.12).
 Antes cada pantalla respondía con su propio motivo —«Ese paquete no pertenece a
 esta ruta», «El pedido ya avanzó…»— y quien tenía la caja en la mano no sabía que
 la decisión era simplemente no despacharla.
@@ -12899,8 +12916,9 @@ Master (15-10-2026).** Si una parada entregada es de un pedido anulado en
 Shopify, «Terminar ruta operativa» cierra la ruta y crea su liquidación con
 esa línea, como siempre. La entrega no se escribe en el Master (§11.4), y el
 mensaje del cierre lo dice en «Ojo:» con el código del pedido: «#KP137541 está
-anulado en Shopify: no se marcó entregado en el Master y sigue donde estaba.
-Decide en su ficha qué pasó con la entrega.» Con varios, los nombra a todos,
+anulado en la tienda: no se marcó entregado en el Master y sigue donde estaba.
+Decide en su ficha qué pasó con la entrega.» («en la tienda» desde el
+24-10-2026, §38.12). Con varios, los nombra a todos,
 acompañantes incluidos. Los demás pedidos que no cruzan (parada sin entrega o
 sin evidencia) siguen con su propio aviso. El panel «Para terminar la ruta»
 todavía no lo avisa antes del clic: llega en el mensaje del cierre.
@@ -15919,6 +15937,89 @@ WooCommerce viven en esa fila de `stores` y cada pedido lleva su plataforma.
 - **Si vuelve a un estado vivo** en WooCommerce (sale de la papelera o alguien
   lo reactiva), el pedido deja de estar anulado en Kapta, como en la tienda. El
   historial operativo no se toca.
+- **La Actividad lo dice, y quién fue (24-10-2026).** En la prueba del owner,
+  #AUR900004 se anuló en wp-admin: el Master lo dio por «Anulado y cerrado» y
+  la Actividad de la ficha no decía nada. Desde ahora, la **primera** vez que la
+  entrada (el webhook o la pasada `woo_orders`, la que lo aplique antes) ve un
+  pedido pasar de vivo a anulado —el `cancelled_at` vacío que queda puesto, el
+  mismo momento del punto «Cuándo se anuló»— escribe un hecho en
+  `order_events`: **«Anulado en WooCommerce»**, a la hora en que WooCommerce lo
+  cambió (`date_modified_gmt`), con origen «WooCommerce». Cuando un anulado
+  vuelve a estar vivo, **«Reactivado en WooCommerce»**, igual. Un pedido que
+  Kapta no tenía y que entra ya anulado (llegó a «processing», 38.11) también
+  lo registra.
+  - **Quién.** Kapta lee las notas internas del pedido
+    (`GET /wp-json/wc/v3/orders/<id>/notes?type=internal`) y toma la más nueva
+    que diga el cambio —«Estado del pedido cambiado de … a Cancelado.» (o «El
+    estado del pedido cambió…», o en inglés), también detrás de un prefijo como
+    el del pedido sin pagar que venció; «de Cancelado a …» para la
+    reactivación— escrita entre 10 minutos antes y 2 después del cambio. En la
+    anulación, si ninguna lo dice así, la más nueva que la nombre sin ser otro
+    cambio de estado y que haya escrito WooCommerce solo (un plugin con su
+    propio texto). La nota de una persona que no es un cambio de estado (un
+    comentario del equipo, «la clienta pidió cancelar») no dice quién anuló:
+    nunca cuenta (revisión del 24-10-2026). Nunca una nota para la clienta, y
+    una reactivación nunca toma la nota de una anulación ni al revés.
+    Si la escribió una persona (`added_by_user`; si la versión no lo manda, un
+    autor que no es `system` ni `WooCommerce`), el detalle dice **«por
+    <nombre>»**, el nombre visible de su usuario de WordPress; si la escribió
+    WooCommerce solo (un pedido sin pagar que venció, un plugin), **«WooCommerce
+    (automático)»**. Sin una nota que cuadre, sin detalle: no se adivina.
+  - **No es un usuario de Kapta.** El nombre va como texto en la nota del hecho
+    y en `payload` (`woo_author`, `woo_by`, `woo_note_id`, `woo_note_at`),
+    nunca en `order_events.actor`. **El texto de la nota no se guarda**, solo
+    cuál fue (`woo_note_id`) y su hora: puede llevar datos de la clienta
+    (nombre, DNI, teléfono, dirección) y `order_events` no se edita ni se borra
+    (`order_events_append_only`, 0045).
+  - **Nunca frena la entrada.** La lectura de notas corta a los 4 segundos
+    (`WOO_NOTES_TIMEOUT_MS`) y se hacen como mucho 10 por llamada, en paralelo
+    (`WOO_NOTES_MAX_LOOKUPS`: un cambio masivo en wp-admin no se come la
+    pasada). Si la lectura falla, el hecho queda sin autor y
+    `payload.woo_notes_error` dice por qué. Si la tienda no tiene las claves de
+    la API, o pasado el tope, las notas no se leen: el hecho queda sin autor,
+    sin ese campo. En todos los casos el pedido entra igual. El hecho se
+    escribe antes de recalcular la fila del Master.
+  - **Una vez por cambio.** Solo cuenta el paso de lo guardado a lo nuevo: el
+    webhook repetido, un cambio posterior de un pedido ya anulado y la pasada
+    que lo ve después no agregan otro. Si el webhook y la pasada leen a la vez
+    el mismo pedido vivo, los dos calculan la misma clave
+    (`order_events.operation_id`, un uuid derivado del estado guardado del que
+    se sale, `wooTransitionOperationId`), aunque cada uno haya visto otra
+    versión del pedido, y el índice único de la 0122
+    (`order_events_operation_kind_uniq`) deja entrar solo un hecho. Y si el
+    último hecho de WooCommerce del pedido ya es del mismo tipo, no se escribe
+    otro: la pasada que pisó la anulación con una versión anterior del pedido
+    (la carrera entre la pasada y el webhook) la vuelve a ver desde otro estado
+    guardado, con otra clave, y no es otra anulación. Anular, reactivar y volver
+    a anular son tres hechos.
+  - **La papelera.** Releída por la API es una anulación más, con «enviado a la
+    papelera» en el detalle. WooCommerce no escribe nota al mandar un pedido a
+    la papelera: el autor sale solo de una nota que diga que fue a la papelera
+    («… a Papelera»), nunca de otra. Si WooCommerce no contesta y Kapta la
+    marca anulada por su cuenta (38.11), el hecho lleva la hora en que Kapta la
+    marcó y el detalle «Enviado a la papelera», y solo lo escribe la escritura
+    que la anuló (`cancelled_at is null`).
+  - **El reembolso no reactiva.** Un anulado que WooCommerce pasa a
+    «Reembolsado» (`refunded`: el reembolso completo de un pedido pagado y
+    anulado) no vuelve a un estado vivo: no deja «Reactivado en WooCommerce».
+    **Pendiente (owner):** hoy `mapWooOrder` le quita `cancelled_at` (la tabla
+    de arriba: `refunded` no anula), así que el Master deja de darlo por anulado
+    sin un hecho en la Actividad. Si debe seguir «Anulado» se decide aparte, con
+    su cambio aquí.
+  - **No cambia el estado.** El hecho no lleva `new_status`: la macroetapa la
+    sigue decidiendo `cancelled_at`. Los pedidos de Shopify no cambian: su
+    anulación sigue sin hecho propio (el tipo viejo `cancelled_shopify`
+    conserva su título).
+  - **Sin migración.** `order_events.kind` y `source` son texto libre (0045, sin
+    CHECK) y `operation_id` con su índice único parcial ya están (0122). Los
+    tipos nuevos son `cancelled_woocommerce` y `reactivated_woocommerce`, con
+    `source = 'woocommerce'`.
+  - Implementación: `lib/woocommerce-activity.ts` (`wooStatusTransition`,
+    `wooTransitionOperationId`, `wooNoteTransition`, `pickWooStatusNote`,
+    `wooNoteActor`, `wooTransitionDetail`, `wooTransitionEvent`,
+    `latestWooTransitionKinds`, `recordWooStatusTransitions`), `fetchWooOrderNotes` (lib/woocommerce.ts) y,
+    en lib/ingest.ts, `applyWooOrderPayload`, `applyWooOrdersPage` y
+    `markWooOrderDeleted`. Pruebas: `test/woocommerce-activity.test.ts`.
 - **Un pedido borrado** (`order.deleted`) nunca se borra en Kapta (§2 punto 6).
 
 ### 38.4 Cobro
@@ -16074,7 +16175,8 @@ funcionando la dirección del Master, la nota, los totales del cajón,
   departamentos (`WOO_PE_STATE_NAMES`, `toWooPeruState`), la firma
   (`verifyWooSignature`, `parseWooWebhookPing`) y el cliente REST
   (`wooRequest`, `wooPaginate`, `fetchWooOrdersPage`, `fetchWooOrder`,
-  `WOO_TIMEOUT_MS`).
+  `WOO_TIMEOUT_MS`; las notas del pedido, `fetchWooOrderNotes` con
+  `WOO_NOTES_TIMEOUT_MS`, para la Actividad de 38.3).
 - Pruebas: `test/woocommerce.test.ts`, `test/woocommerce-mom.test.ts` y
   `scripts/sql/woocommerce_base_smoke.sql` (la 0274 aplicada sobre el esquema de
   la 0273 con Kenku, Aurela y una tienda cliente: ninguna fila cambia).
@@ -16116,7 +16218,8 @@ sincronización no es opcional.
   38.7) y `upsertOrders`, con los mismos pasos que un pedido de Shopify: si es
   del bot (`kapso`), rollups del día y lead ganado; si no, sale de la cola el
   carrito del mismo teléfono; y siempre se recalcula su fila del Master. Un
-  pedido anulado conserva la fecha en que Kapta lo vio anulado la primera vez.
+  pedido anulado conserva la fecha en que Kapta lo vio anulado la primera vez,
+  y ese cambio (o la reactivación) deja su hecho en la Actividad (38.3).
   `pending`, `failed` y `checkout-draft` no entran (38.3).
 - **La historia importada no entra como pedido nuevo** (revisión del
   23-10-2026). Si Kenku o Aurela pasan su historia de Shopify al WordPress
@@ -16260,6 +16363,10 @@ Implementación:
   `components/woocommerce-settings-section.tsx`.
 - Pruebas: `test/woocommerce-webhook.test.ts`, `test/woocommerce-sync.test.ts`,
   `test/woocommerce-settings.test.ts` y `test/woocommerce-intake-mom.test.ts`.
+- La anulación y la reactivación en la Actividad (38.3):
+  `lib/woocommerce-activity.ts`, llamado desde `applyWooOrderPayload` (webhook
+  y papelera releída), `applyWooOrdersPage` (la pasada) y `markWooOrderDeleted`.
+  Pruebas: `test/woocommerce-activity.test.ts`.
 
 ### 38.12 Lo que decide la plataforma del pedido, y lo que falta (integración, 23-10-2026)
 
@@ -16548,10 +16655,11 @@ es un borrador de Shopify.
   desde `?ficha=`): la flechita de la cabecera, «Revisar en …» del último
   intento de confirmación y los textos que nombran la tienda del pedido —«la
   anulación se crea a mano en …», «Datos comerciales sincronizados desde …»,
-  la dirección «según …», «Esta corrección gana sobre …» de la Ubicación y, en
-  la Mesa de cierre, «anulado en …»—. La plataforma llega en el detalle
-  (`OrderMasterDetail.platform`, que lee `orders.platform`; sin la columna,
-  `shopify`).
+  la dirección «según …» y «Esta corrección gana sobre …» de la Ubicación—. La
+  plataforma llega en el detalle (`OrderMasterDetail.platform`, que lee
+  `orders.platform`; sin la columna, `shopify`). La Mesa de cierre decía
+  «anulado en …» con la tienda del pedido; desde el 24-10-2026 dice «anulado en
+  la tienda», como el servidor (la regla de «anulado en la tienda», abajo).
 - **El séptimo día de confirmación:** el aviso «se creó la tarea para revisar
   y anular manualmente en …» (`registerConfirmationAttempt`) nombra la tienda
   del pedido (`orderPlatformOf`). La nota del hecho
@@ -16575,11 +16683,91 @@ es un borrador de Shopify.
   dirección («el pedido es de WooCommerce: allí no se cambia») nombran su
   tienda.
 - **La guía Swayp directa (el modal):** la insignia del «Destino» (cuando la
-  dirección sale del pedido), «cancelado/reembolsado por completo en …» y el
-  aviso de reembolso parcial nombran la tienda del pedido
-  (`DirectFenixGuidePreview.platform`, de `orderPlatformOf`).
+  dirección sale del pedido), «reembolsado por completo en …» y el aviso de
+  reembolso parcial nombran la tienda del pedido
+  (`DirectFenixGuidePreview.platform`, de `orderPlatformOf`). El pedido anulado
+  dice «anulado en la tienda», como el servidor (abajo).
 - **La nota de la guía de Tanders:** de un pedido de WooCommerce va la nota
   guardada (`raw.note`, 38.7), sin llamar a Shopify.
+
+#### El pedido anulado se dice «anulado en la tienda» (24-10-2026)
+
+**Por qué.** Un pedido de WooCommerce anulado también tiene `orders.cancelled_at`
+(`mapWooOrder`, 38.3), y los textos que lo leen decían «anulado en Shopify» de
+cualquier pedido. **Decisión del owner (24-10-2026):** un solo texto para las
+dos plataformas, «anulado en la tienda», también donde la ficha sabía la
+plataforma (la Mesa de cierre, el modal de la guía Swayp directa), para que la
+pantalla y el servidor digan lo mismo.
+
+**Solo cambia el texto.** La anulación sigue siendo `orders.cancelled_at`, con
+las mismas reglas, y las claves y los nombres internos se quedan:
+`anulado_en_shopify` (la puerta a «entregado»), `anulado_shopify` (Swayp desde
+Por confirmar y el bloqueo de la Mesa), `data-closure-block="ruta-gf-anulado-shopify"`,
+`cancelledInShopify`, `SHOPIFY_CANCELLED_REASON` y `shopifyCancelledNotice`.
+Sin migración: lo ya guardado no se reescribe.
+
+**Dónde** (lo que dice ahora):
+
+- **La puerta a «entregado»** (`lib/master-door.ts`): «El pedido está anulado
+  en la tienda: la entrega no se escribe encima. Decide una persona desde su
+  ficha.»; el aviso al cerrar una ruta y en Liquidaciones, «#KP137541 está
+  anulado en la tienda: no se marcó entregado en el Master y sigue donde
+  estaba. …» (con varios, «N pedidos están anulados en la tienda (…)»), y si
+  no se puede leer, «no se pudo comprobar si los pedidos están anulados en la
+  tienda (…)».
+- **La Mesa de cierre y su servidor** (`lib/closure-blocks.ts`,
+  `components/order-closure-desk.tsx`): «El motorizado de Grupo GF reportó la
+  entrega y su ruta sigue abierta, pero el pedido está anulado en la tienda:
+  terminar la ruta en … no lo marca entregado. …». La Mesa ya no recibe la
+  plataforma del pedido.
+- **Tanders:** el barrido (`lib/tanders/payment-sweep.ts`), «No se pudo
+  comprobar qué guías validadas tienen el pedido anulado en la tienda: no se
+  creó ninguna ficha.», y Tanders cobros (`components/tanders-cobros.tsx`), «1
+  guía validada sin ficha es de un pedido anulado en la tienda» (o «N guías
+  validadas sin ficha son de pedidos anulados en la tienda»).
+- **La ficha:** los acompañantes (`lib/order-companion.ts`), «Este pedido está
+  anulado en la tienda: no viaja en ninguna caja.», y el estado cerrado
+  (`lib/order-status.ts`), «… si lo anuló la tienda o el courier, lo vuelve a
+  abrir un admin …».
+- **El escaneo** (`lib/scan-cancelled.ts`): «#AUR177767 está ANULADO en la
+  tienda (el 04/10, lo canceló el cliente): no sale. …»; **el cuaderno del
+  motorizado** (`lib/notebook-import.ts`): «Anulado en la tienda: no se carga;
+  …».
+- **Urpi:** la carga (`lib/urpi-report-apply.ts`), «N anulados en la tienda o
+  devueltos no se tocaron»; el tablero (`components/urpi-results-board.tsx`),
+  la ayuda de «Observaciones» («… el pedido está anulado en la tienda o
+  devuelto. No se marca entregado: solo la tienda termina una venta. Si se
+  rehízo el pedido en la tienda, vincúlalo al nuevo; …»), «Anulado en la tienda
+  el …» y «Anulado solo en Kapta; en la tienda sigue vivo, así que se puede
+  marcar.».
+- **Swayp desde Por confirmar** (`lib/swayp-desde-confirmacion.ts` y su
+  página): el resultado «Anulado en la tienda» y la tarjeta «Anulados en la
+  tienda».
+- **La guía Swayp directa:** el servidor (`lib/swayp-directa.ts`) y el modal
+  dicen «El pedido está anulado en la tienda; no se puede crear la guía.»; el
+  servidor, «El pedido fue reembolsado por completo en la tienda; …» (el modal
+  nombra la tienda del pedido, arriba).
+- **Repro Lima** (`app/dashboard/pedidos/repro-lima/actions.ts`,
+  `components/repro-lima-sheet.tsx`, `components/repro-lima-board.tsx`): «No
+  anula la venta: solo la tienda la anula.», «Espera que la tienda anule la
+  venta» y «… hasta que la tienda anule la venta.».
+- **Leads** (`app/dashboard/leads/actions.ts`): «Si el cliente canceló, anula
+  el pedido en la tienda primero.»; **las hojas**
+  (`components/sheets-board.tsx`): «… una cancelación del courier nunca anula
+  el pedido en la tienda.».
+
+**Lo que sigue diciendo «Shopify», a propósito:** el título del hecho viejo
+`cancelled_shopify` («Anulado en Shopify»: es de un pedido de Shopify, 38.3),
+la nota guardada de la tarea del séptimo día (`CANCELLATION_TASK_STORED_NOTE`,
+que la Actividad ya lee con la tienda del pedido) y la nota interna «Shopify
+reportó el pedido anulado.» de `order_tasks.resolution_note`, que ninguna
+pantalla muestra.
+
+Pruebas: `test/anulado-en-la-tienda.test.ts`, y las de cada pantalla
+(`test/rutas-anulado-shopify.test.ts`, `test/pedidos-closure-blocks.test.ts`,
+`test/pedidos-closure-behavior.test.ts`, `test/pedidos-closure-source.test.ts`,
+`test/scan-cancelled.test.ts`, `test/order-companion.test.ts`,
+`test/order-admin-url.test.ts`, entre otras).
 
 **Pendiente** (no está en este cambio):
 
@@ -16600,35 +16788,12 @@ es un borrador de Shopify.
   pregunta por ids de dígitos) y sale con lo guardado, y los cruces con
   `draft_orders` por gid (`lib/order-master.ts`, el export), que no encuentran
   nada.
-- **Textos que todavía dicen «Shopify» sobre un pedido** sin saber su
-  plataforma. Un pedido de WooCommerce anulado también tiene
-  `orders.cancelled_at` (`mapWooOrder`), así que los «anulado en Shopify» le
-  salen igual. Arreglo: «anulado en la tienda», o la plataforma del pedido
-  donde la fila está a mano. Son:
-  - los mensajes del servidor al cerrar una ruta, en la Mesa de cierre y en el
-    barrido de Tanders, y la puerta a «entregado» (`lib/master-door.ts`:
-    `SHOPIFY_CANCELLED_REASON` y «… está anulado en Shopify: no se marcó
-    entregado …»);
-  - los acompañantes de la ficha («Este pedido está anulado en Shopify: no
-    viaja en ninguna caja», `lib/order-companion.ts`) y «si lo anuló Shopify o
-    el courier» (`lib/order-status.ts`);
-  - el escaneo («… está ANULADO en Shopify …», `lib/scan-cancelled.ts`) y el
-    cuaderno del motorizado («Anulado en Shopify: no se carga…»,
-    `lib/notebook-import.ts`);
-  - Urpi («anulados en Shopify o devueltos no se tocaron»,
-    `lib/urpi-report-apply.ts`; la ayuda de «Observaciones» y «Anulado en
-    Shopify el …», `components/urpi-results-board.tsx`);
-  - Tanders cobros («… de un pedido anulado en Shopify»,
-    `components/tanders-cobros.tsx`);
-  - Swayp desde Por confirmar («Anulado en Shopify»,
-    `lib/swayp-desde-confirmacion.ts` y su página; la clave
-    `anulado_shopify` se queda);
-  - el error del servidor al emitir la guía Swayp directa
-    («cancelado/reembolsado por completo en Shopify», `lib/swayp-directa.ts`;
-    el modal ya lo ataja antes con la tienda del pedido);
-  - la boleta («Espera a Shopify», con su lector pendiente), el panel de
-    Aliclik («En Shopify el pedido son S/ …») y la etiqueta del evento viejo
-    `cancelled_shopify`.
+- **Textos que decían «anulado en Shopify» de cualquier pedido:** **hecho
+  (24-10-2026)**, con un solo texto, «anulado en la tienda» (la regla de
+  «anulado en la tienda», arriba). Quedan, porque no hablan de una anulación:
+  la boleta («Espera a Shopify», con su lector pendiente) y el panel de Aliclik
+  («En Shopify el pedido son S/ …»). El hecho viejo `cancelled_shopify`
+  conserva su título: es de un pedido de Shopify.
 - **El endpoint del bot** (`POST /api/internal/orders/[storeId]`): **hecho
   (23-10-2026, 38.13)**, con el mismo núcleo (`wooSaleLinesProblem`,
   `buildWooSaleOrder`, `createWooSaleOrder`) y el candado en la base por
@@ -16663,8 +16828,8 @@ reexportan, `statusSourceLabel`, `eventNoteLabel`, `mergePriorOrders`),
 (app/dashboard/envios/actions.ts), `liveOrderNote`
 (app/dashboard/pedidos/tanders-actions.ts) y los componentes
 `order-drawer.tsx`, `order-drawer-host.tsx`, `orders-master.tsx`,
-`order-closure-desk.tsx`, `leads-drawer.tsx`, `leads-next.tsx`,
-`shipments.tsx` y `direct-fenix-guide-modal.tsx`. Pruebas:
+`leads-drawer.tsx`, `leads-next.tsx`, `shipments.tsx` y
+`direct-fenix-guide-modal.tsx`. Pruebas:
 `test/order-admin-url.test.ts`.
 
 Implementación: `lib/shipment-order-capture.ts` (`orderPlatformOf`,

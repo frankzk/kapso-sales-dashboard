@@ -135,7 +135,7 @@ export function urpiApplyMessage(result: UrpiApplyResult): string {
   if (salidas.sinSalida.length) parts.push(`${salidas.sinSalida.length} sin salida «Por definir» que pasar a Urpi`);
   if (salidas.otraSalidaViva.length) parts.push(`${salidas.otraSalidaViva.length} con otra salida viva: revisa su salida a mano`);
   if (salidas.errors.length) parts.push(`${salidas.errors.length} salida(s) no se pudieron actualizar`);
-  if (result.observed) parts.push(`${result.observed} anulados en Shopify o devueltos no se tocaron`);
+  if (result.observed) parts.push(`${result.observed} anulados en la tienda o devueltos no se tocaron`);
   if (result.notDelivered) parts.push(`${result.notDelivered} sin entrega de Urpi como último intento`);
   return `${parts.join("; ")}.`;
 }

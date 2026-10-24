@@ -96,7 +96,7 @@ describe("la puerta no escribe la entrega sobre una anulación de Shopify", () =
     const res = await applyDeliveriesToMaster(fakeAdmin(), [item("kp137541"), item("kp1")]);
     expect(res.error).toBeUndefined();
     expect(res.applied).toEqual(["kp1"]);
-    expect(res.rejected).toEqual([{ orderId: "kp137541", code: "anulado_en_shopify", reason: expect.stringContaining("anulado en Shopify") }]);
+    expect(res.rejected).toEqual([{ orderId: "kp137541", code: "anulado_en_shopify", reason: expect.stringContaining("anulado en la tienda") }]);
     expect(db.inserted).toHaveLength(1);
     expect(db.inserted[0]!.map((e) => e.order_id)).toEqual(["kp1"]);
     expect(db.inserted[0]![0]).toMatchObject({ kind: "status_override", new_status: "entregado", source: "ruta" });
@@ -115,7 +115,7 @@ describe("la puerta no escribe la entrega sobre una anulación de Shopify", () =
     db.ordersError = "timeout";
     const res = await applyDeliveriesToMaster(fakeAdmin(), [item("kp1")]);
     expect(res.applied).toEqual([]);
-    expect(res.error).toContain("anulados en Shopify");
+    expect(res.error).toContain("anulados en la tienda");
     expect(db.inserted).toEqual([]);
   });
 
@@ -143,17 +143,17 @@ describe("el aviso nombra los pedidos saltados", () => {
   it("uno, varios, repetidos y ninguno", () => {
     expect(shopifyCancelledNotice([])).toBeNull();
     expect(shopifyCancelledNotice([{ orderId: "kp137541", name: "#KP137541" }])).toBe(
-      "#KP137541 está anulado en Shopify: no se marcó entregado en el Master y sigue donde estaba. Decide en su ficha qué pasó con la entrega.",
+      "#KP137541 está anulado en la tienda: no se marcó entregado en el Master y sigue donde estaba. Decide en su ficha qué pasó con la entrega.",
     );
     expect(shopifyCancelledNotice([
       { orderId: "a", name: "#KP1" },
       { orderId: "b", name: "#KP2" },
       { orderId: "a", name: "#KP1" },
     ])).toBe(
-      "2 pedidos están anulados en Shopify (#KP1, #KP2): no se marcaron entregados en el Master y siguen donde estaban. Decide en la ficha de cada uno qué pasó con la entrega.",
+      "2 pedidos están anulados en la tienda (#KP1, #KP2): no se marcaron entregados en el Master y siguen donde estaban. Decide en la ficha de cada uno qué pasó con la entrega.",
     );
     expect(shopifyCancelledNotice([{ orderId: "x", name: null }])).toBe(
-      "Un pedido sin código está anulado en Shopify: no se marcó entregado en el Master y sigue donde estaba. Decide en su ficha qué pasó con la entrega.",
+      "Un pedido sin código está anulado en la tienda: no se marcó entregado en el Master y sigue donde estaba. Decide en su ficha qué pasó con la entrega.",
     );
   });
 });

@@ -484,6 +484,34 @@ export function leadCallsToTimeline(
   }));
 }
 
+/**
+ * Los hechos de `order_events`, como entradas de la línea de tiempo. Puro y
+ * exportado para probarlo. `actor` es siempre un usuario de Kapta: quien anuló
+ * un pedido en WooCommerce (MOM §38.3) no lo es, y va en la nota del hecho
+ * («por María Torres»), no aquí.
+ */
+export function orderEventsToTimeline(
+  events: readonly OrderEventRow[],
+  names: Map<string, string>,
+): TimelineEntry[] {
+  return events.map((e) => ({
+    id: `event:${e.id}`,
+    occurredAt: e.occurred_at,
+    kind: e.kind,
+    source: e.source,
+    courier: e.courier,
+    guideCode: e.guide_code,
+    previousStatus: e.previous_status,
+    newStatus: e.new_status,
+    note: e.note,
+    reason: e.reason,
+    actorName: e.actor ? (names.get(e.actor) ?? null) : null,
+    origin: "master",
+    statusLabel: null,
+    confirmation: confirmationAttemptDetail(e.payload),
+  }));
+}
+
 export interface OrderMasterDetail {
   row: OrderMasterRow;
   guides: ShipmentRow[];
@@ -1053,22 +1081,7 @@ export async function getOrderMasterDetail(
   const names = await resolveEmails(actorIds);
   const guideById = new Map(guides.map((g) => [g.id, g]));
 
-  const fromEvents: TimelineEntry[] = events.map((e) => ({
-    id: `event:${e.id}`,
-    occurredAt: e.occurred_at,
-    kind: e.kind,
-    source: e.source,
-    courier: e.courier,
-    guideCode: e.guide_code,
-    previousStatus: e.previous_status,
-    newStatus: e.new_status,
-    note: e.note,
-    reason: e.reason,
-    actorName: e.actor ? (names.get(e.actor) ?? null) : null,
-    origin: "master",
-    statusLabel: null,
-    confirmation: confirmationAttemptDetail(e.payload),
-  }));
+  const fromEvents = orderEventsToTimeline(events, names);
 
   const fromLeads = leadCallsToTimeline(leadCalls, names);
 

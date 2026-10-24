@@ -231,7 +231,7 @@ describe("marcar entregados desde el reporte de Urpi", () => {
     expect(result.ok).toBe(true);
     expect(db.doors.map((d) => d.orderId)).toEqual(["00000000-0000-4000-8000-000000000001"]);
     expect(db.doors[0]).toMatchObject({ target: "entregado", source: "liquidacion", courier: "urpi", storeId: "kenku", occurredAt: "2026-10-03T17:00:00.000Z", payload: { urpi_report: true, urpi_row: 11 } });
-    expect(result.message).toBe("1 pedido(s) marcados como entregados; 1 ya estaban entregados; 1 salida(s) «Por definir» pasaron a Urpi entregada; 1 sin salida «Por definir» que pasar a Urpi; 1 anulados en Shopify o devueltos no se tocaron; 1 sin entrega de Urpi como último intento.");
+    expect(result.message).toBe("1 pedido(s) marcados como entregados; 1 ya estaban entregados; 1 salida(s) «Por definir» pasaron a Urpi entregada; 1 sin salida «Por definir» que pasar a Urpi; 1 anulados en la tienda o devueltos no se tocaron; 1 sin entrega de Urpi como último intento.");
   });
   it("rellena la salida de los entregados (también los ya marcados) desde el primer intento hasta el día de la fila más reciente, y recalcula", async () => {
     seed([

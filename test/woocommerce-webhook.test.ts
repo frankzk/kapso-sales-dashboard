@@ -134,6 +134,14 @@ function request(body: string, headers: Record<string, string> = {}, storeId = S
 
 beforeEach(() => {
   h.db = new FakeDb({ stores: [storeRow()] });
+  // Sin red: lo que no pasa un `fetchImpl` (las notas de una anulación, MOM
+  // §38.3) falla al instante y queda sin autor, como con WooCommerce caído.
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => {
+      throw new TypeError("sin red en las pruebas");
+    }),
+  );
   spies.recompute.mockClear();
   spies.linkOrderToLead.mockClear();
   spies.linkOrdersToLeads.mockClear();

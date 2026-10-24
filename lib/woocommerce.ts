@@ -1165,6 +1165,41 @@ export async function fetchWooOrdersPage(
   });
 }
 
+/**
+ * Una nota de pedido (REST v3, `GET /orders/<id>/notes`). WooCommerce escribe
+ * una en cada cambio de estado («Estado del pedido cambiado de Procesando a
+ * Cancelado.»): `author` es el nombre visible del usuario de WordPress que lo
+ * hizo, o `system`/`WooCommerce` si lo hizo WooCommerce solo (un pedido sin pagar
+ * que venció, un plugin). `added_by_user` no lo devuelven todas las versiones.
+ */
+export interface WooOrderNote {
+  id?: number;
+  author?: string;
+  date_created?: string;
+  date_created_gmt?: string;
+  note?: string;
+  customer_note?: boolean;
+  added_by_user?: boolean;
+}
+
+/**
+ * Tiempo límite de la lectura de notas (quién anuló, MOM §38.3). Corto: es un
+ * dato de la Actividad, nunca frena ni tumba la entrada del pedido.
+ */
+export const WOO_NOTES_TIMEOUT_MS = 4_000;
+
+/** Las notas internas de un pedido (sin las de la clienta), con el tiempo límite corto. */
+export async function fetchWooOrderNotes(opts: WooClientOpts, wooId: number | string): Promise<WooOrderNote[]> {
+  const id = String(wooId ?? "").trim();
+  if (!/^[1-9]\d*$/.test(id)) throw new WooError("config", "Id de pedido de WooCommerce inválido.");
+  const timeoutMs = Math.min(opts.timeoutMs ?? WOO_NOTES_TIMEOUT_MS, WOO_NOTES_TIMEOUT_MS);
+  const { data } = await wooRequest<unknown>({ ...opts, timeoutMs }, { path: `/orders/${id}/notes`, query: { type: "internal" } });
+  if (!Array.isArray(data)) {
+    throw new WooError("respuesta_invalida", "WooCommerce no devolvió una lista de notas.");
+  }
+  return data.filter((n): n is WooOrderNote => Boolean(n) && typeof n === "object" && !Array.isArray(n));
+}
+
 /** Un pedido por su id de WooCommerce (no el `wc-…` de Kapta: usar `parseWooOrderId`). */
 export async function fetchWooOrder(opts: WooClientOpts, wooId: number | string): Promise<WooOrder> {
   const id = String(wooId ?? "").trim();

@@ -138,6 +138,7 @@ const POR_KIND: Record<string, TimelineFact> = {
 
   // Cierre (naranja): vuelve, se anula o queda una cuenta abierta.
   cancelled_shopify: hito("anulado", "por_cerrar"),
+  cancelled_woocommerce: hito("anulado", "por_cerrar"),
   return_started: hito("devuelto", "por_cerrar"),
   return_requested: hito("devuelto", "por_cerrar"),
   return_received: hito("devuelto", "por_cerrar"),
@@ -161,6 +162,9 @@ const POR_KIND: Record<string, TimelineFact> = {
 
   // Consulta (gris).
   order_reopened: consulta("expediente"),
+  // El pedido vuelve a estar vivo en WooCommerce (MOM §38.3): su macroetapa la
+  // decide el Master, no este hecho.
+  reactivated_woocommerce: consulta("estado"),
   route_reopened: consulta("expediente"),
   key_registered: consulta("clave"),
   key_view: consulta("clave"),
@@ -180,6 +184,18 @@ const POR_KIND: Record<string, TimelineFact> = {
   lead_system: consulta("automatico"),
   lead_voice_agent: consulta("agente"),
 };
+
+/**
+ * De dónde salió un movimiento, para la línea de la fecha: «Repro Provincia»,
+ * «Leads», «WooCommerce» (los hechos que escribe la entrada de WooCommerce,
+ * MOM §38.3) o la fuente guardada tal cual (`shopify`, `aliclik`, `manual`…).
+ */
+export function timelineOriginLabel(t: Pick<TimelineEntry, "origin" | "source">): string {
+  if (t.origin === "gestion") return "Repro Provincia";
+  if (t.origin === "leads") return "Leads";
+  if (t.source === "woocommerce") return "WooCommerce";
+  return t.source;
+}
 
 export function timelineFact(t: TimelineFactInput): TimelineFact {
   // De Leads: el lead pasó a «Pedido generado». Es el nacimiento del pedido

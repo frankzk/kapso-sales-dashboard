@@ -337,7 +337,7 @@ export const OVERRIDE_PERMISSION_LABEL = "Corregir pedidos cerrados";
  * un bucle (cerrar la ruta → la Mesa ofrece Finalizar → «salidas activas»).
  */
 export const GF_OPEN_ROUTE_CANCELLED_ERROR =
-  "El motorizado de Grupo GF reportó la entrega y su ruta sigue abierta, pero el pedido está anulado en Shopify:" +
+  "El motorizado de Grupo GF reportó la entrega y su ruta sigue abierta, pero el pedido está anulado en la tienda:" +
   ` terminar la ruta en ${GF_ROUTE_PATH_LABEL} no lo marca entregado. Si la entrega vale, la cambia desde esta ficha` +
   ` («Gestión manual»), con motivo, quien tenga «${OVERRIDE_PERMISSION_LABEL}».`;
 

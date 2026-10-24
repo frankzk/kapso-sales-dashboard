@@ -553,7 +553,7 @@ describe("barrido: las validadas que se quedaron sin ficha", () => {
     const r = await sweepTandersPayments(admin);
     expect(fichas(visto)).toEqual([]);
     expect(r.errores).toBe(1);
-    expect(r.fallos[0]?.mensaje).toContain("anulado en Shopify");
+    expect(r.fallos[0]?.mensaje).toContain("anulado en la tienda");
   });
 
   it("la guía que el barrido validó y cuya ficha falló va primera en la pasada siguiente", async () => {

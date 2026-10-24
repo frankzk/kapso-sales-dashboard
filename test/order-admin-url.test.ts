@@ -331,7 +331,8 @@ describe("cada enlace a un pedido pasa por orderAdminLink (fuente)", () => {
     expect(flat(drawer)).toContain("Esta corrección gana sobre {storePlatform}, sobre los");
     expect(drawer).not.toContain("gana sobre Shopify");
     expect(drawer).toContain("{eventNoteLabel(t.kind, t.note ?? t.reason, detail.platform)}");
-    expect(flat(read("components/order-closure-desk.tsx"))).toContain("pero el pedido está anulado en {storePlatform}:");
+    // La Mesa de cierre ya no nombra la plataforma: «anulado en la tienda» (owner, 24-10-2026).
+    expect(flat(read("components/order-closure-desk.tsx"))).toContain("pero el pedido está anulado en la tienda:");
   });
 
   it("el detalle trae orders.platform, con la lectura de antes si falta la columna", () => {
@@ -409,17 +410,17 @@ describe("cada enlace a un pedido pasa por orderAdminLink (fuente)", () => {
     expect(pedidos).not.toContain("anular manualmente en Shopify");
   });
 
-  it("la guía Swayp directa nombra la tienda del pedido (destino, anulado, reembolsado)", () => {
+  it("la guía Swayp directa nombra la tienda del pedido (destino, reembolsado); anulado, «en la tienda»", () => {
     const envios = flat(read("app/dashboard/envios/actions.ts"));
     expect(envios).toContain("const platform = await orderPlatformOf(admin, order.id);");
     expect(envios).toContain("orderName: order.name, platform,");
     expect(envios).toContain("reembolso parcial en ${orderPlatformName(platform)}");
     const modal = read("components/direct-fenix-guide-modal.tsx");
     expect(modal).toContain("? orderPlatformName(preview.platform)");
-    expect(modal).toContain("cancelado en ${orderPlatformName(preview.platform)}");
+    expect(modal).toContain('"El pedido está anulado en la tienda; no se puede crear la guía."');
     expect(modal).toContain("reembolsado por completo en ${orderPlatformName(preview.platform)}");
     expect(modal).not.toContain('? "Shopify"');
-    expect(modal).not.toContain("cancelado en Shopify");
+    expect(modal).not.toContain("cancelado en");
   });
 });
 
@@ -440,7 +441,8 @@ describe("MOM §38.12", () => {
   it("el pendiente de los gid de Shopify dice qué se hizo y qué queda", () => {
     expect(s38_12).toContain("«Ver en Shopify»): **hecho (24-10-2026)**, con `orders.platform`");
     expect(s38_12).not.toContain("Pasarlos a `orders.platform`.");
-    expect(s38_12).toContain("**Textos que todavía dicen «Shopify» sobre un pedido**");
+    // «Anulado en la tienda» (owner, 24-10-2026): el pendiente de los textos ya está hecho.
+    expect(s38_12).toContain("**Textos que decían «anulado en Shopify» de cualquier pedido:** **hecho (24-10-2026)**");
     // El export de Swayp ni llama: solo pregunta por ids de dígitos.
     expect(s38_12).toContain("que se salta (el id `wc-…` no es de Shopify");
     expect(s38_12).not.toContain("una llamada que Shopify rechaza y cae a lo guardado");

@@ -117,7 +117,7 @@ describe("los avisos que mandan a «Registrar estado» dicen quién lo hace", ()
       "Lo vuelve a abrir un admin en «Gestión manual → Registrar estado», al final de la pestaña Operar del pedido.",
     );
     expect(terminalOrderBlocker("entregado")).toBe(`El pedido está entregado. ${REOPEN_HINT}`);
-    expect(terminalOrderBlocker("anulado")).toContain("si lo anuló Shopify o el courier, lo vuelve a abrir un admin en «Gestión manual");
+    expect(terminalOrderBlocker("anulado")).toContain("si lo anuló la tienda o el courier, lo vuelve a abrir un admin en «Gestión manual");
   });
 
   it("la entrega declarada de la Mesa de cierre también", () => {

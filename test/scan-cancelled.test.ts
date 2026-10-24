@@ -16,7 +16,7 @@ describe("cancelledScanMessage", () => {
         cancelReason: "customer",
         generalStatus: "anulado",
       }),
-    ).toBe("#AUR177767 está ANULADO en Shopify (el 04/10, lo canceló el cliente): no sale. Sepáralo para devolverlo al stock.");
+    ).toBe("#AUR177767 está ANULADO en la tienda (el 04/10, lo canceló el cliente): no sale. Sepáralo para devolverlo al stock.");
   });
 
   it("anulado en Kapta aunque Shopify no lo marque", () => {
@@ -30,7 +30,7 @@ describe("cancelledScanMessage", () => {
 
   it("un motivo desconocido no inventa texto", () => {
     expect(cancelledScanMessage({ orderName: "#X", cancelledAt: "2026-10-05T01:31:07Z", cancelReason: "algo_nuevo", generalStatus: null }))
-      .toBe("#X está ANULADO en Shopify (el 04/10): no sale. Sepáralo para devolverlo al stock.");
+      .toBe("#X está ANULADO en la tienda (el 04/10): no sale. Sepáralo para devolverlo al stock.");
   });
 });
 
