@@ -350,6 +350,9 @@ export const WOO_CHANNEL_TAGS: Readonly<Record<string, readonly string[]>> = Obj
   venta_manual: ["venta_manual"],
   chatbot: [TAGS.kapso, TAGS.whatsapp],
   kapso: [TAGS.kapso, TAGS.whatsapp],
+  // El bot de WhatsApp de Aurela crea sus pedidos directo en WooCommerce con
+  // `whatsapp_bot` (decisión del owner, 24-10-2026): es el mismo canal.
+  whatsapp_bot: [TAGS.kapso, TAGS.whatsapp],
   bot_carritos: ["BOT", "CARRITO RECUPERADO"],
   catalogo: ["catalogo-wsp"],
   "catalogo-wsp": ["catalogo-wsp"],

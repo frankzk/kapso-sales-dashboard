@@ -310,6 +310,19 @@ describe("estados", () => {
   });
 });
 
+describe("el bot de WhatsApp de Aurela crea directo en WooCommerce (owner, 24-10-2026)", () => {
+  it("`kapta_channel = whatsapp_bot` es Chatbot WhatsApp: etiquetas kapso y whatsapp, como `kapso`", () => {
+    expect(WOO_CHANNEL_TAGS.whatsapp_bot).toEqual(WOO_CHANNEL_TAGS.kapso);
+    const row = mapWooOrder(
+      { ...codLimaOrder(), status: "cod-pending", meta_data: [{ id: 1, key: "kapta_channel", value: "whatsapp_bot" }, { id: 2, key: "source", value: "whatsapp-bot" }] },
+      KENKU,
+    )!;
+    expect(row.tags).toEqual(expect.arrayContaining(["kapso", "whatsapp"]));
+    expect(row.financial_status).toBe("pending");
+    expect(row.payment_gateway).toBe("cod");
+  });
+});
+
 describe("cobro: Flow, transferencia y reembolsos", () => {
   it("Flow con tarjeta: paid y checkout solo con el nombre CONFIRMADO de la pasarela", () => {
     const unconfirmed = mapWooOrder(flowCardOrder(), KENKU)!;
@@ -601,6 +614,7 @@ describe("etiquetas desde los meta: las mismas palabras de hoy (lib/sales-channe
       asesora: "asesora",
       kapso: "chatbot",
       chatbot: "chatbot",
+      whatsapp_bot: "chatbot",
       bot_carritos: "bot_carritos",
       catalogo: "catalogo",
       "catalogo-wsp": "catalogo",

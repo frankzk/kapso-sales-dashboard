@@ -194,7 +194,7 @@ describe("§38 WooCommerce (23-10-2026)", () => {
     const labels = new Map(SALES_CHANNEL_OPTIONS.map((o) => [o.value, o.label]));
     const rows: [string[], string[], string][] = [
       [["venta_manual", "asesora"], ["venta_manual"], "asesora"],
-      [["kapso", "chatbot"], ["kapso", "whatsapp"], "chatbot"],
+      [["kapso", "chatbot", "whatsapp_bot"], ["kapso", "whatsapp"], "chatbot"],
       [["bot_carritos"], ["BOT", "CARRITO RECUPERADO"], "bot_carritos"],
       [["catalogo", "catalogo-wsp"], ["catalogo-wsp"], "catalogo"],
       [["web_carrito"], ["easysell-abandoned-checkout"], "web_carrito"],

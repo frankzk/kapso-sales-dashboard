@@ -15940,7 +15940,7 @@ no cambien:
 | `kapta_channel` | Etiquetas | Canal de venta |
 | --- | --- | --- |
 | `venta_manual` o `asesora` | `venta_manual` | Asesora (Leads) |
-| `kapso` o `chatbot` | `kapso`, `whatsapp` | Chatbot WhatsApp |
+| `kapso` o `chatbot` o `whatsapp_bot` | `kapso`, `whatsapp` | Chatbot WhatsApp |
 | `bot_carritos` | `BOT`, `CARRITO RECUPERADO` | Bot de carritos |
 | `catalogo` o `catalogo-wsp` | `catalogo-wsp` | Catálogo WhatsApp |
 | `web_carrito` | `easysell-abandoned-checkout` | Web · carrito completado |
@@ -15951,7 +15951,12 @@ no cambien:
   mandan `web_formulario` («Web · formulario»: lo que la clienta compra sola en
   la web va en un solo canal); un formulario abandonado que termina en pedido,
   `web_carrito`; un pedido cargado a mano en wp-admin, `venta_manual`. Las
-  ventas de las asesoras y del bot las crea Kapta (38.12 y 38.13).
+  ventas de las asesoras las crea Kapta (38.12). **El bot de WhatsApp de Aurela
+  crea sus pedidos directo en WooCommerce** por la API, con su propio usuario
+  (decisión del owner del 24-10-2026, en vez del endpoint de 38.13): llegan por
+  los mismos webhooks, en `cod-pending` y `cod`, con `kapta_channel =
+  whatsapp_bot` (= `kapso`: Chatbot WhatsApp). Sin `kapso_conversation_id`, el
+  lead se gana por el celular. Kapta no revisa sus precios (como con Shopify).
 - Un valor que no está en la tabla, o ningún `kapta_channel`, no pone etiqueta:
   «Sin marca». No se adivina.
 - `kapta_tags` (lista JSON o separada por comas) se copia tal cual, delante:
