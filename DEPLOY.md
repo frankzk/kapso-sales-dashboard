@@ -4785,3 +4785,25 @@ la ruta (404). La 0277 puede quedarse: nadie más la lee. Si se quisiera quitar,
 **solo después** de revertir el código: `drop table bot_order_requests; drop
 table bot_order_secrets;`. Los pedidos ya creados en WooCommerce se quedan: son
 pedidos reales.
+
+### 24-10-2026 · Historial de Shopify: productos, fotos, carritos, borradores y más detalle (0278, MOM §37.6)
+
+«Traer todo» en Historial Shopify: productos con sus fotos en tamaño original
+(bucket privado `shopify-history`), carritos abandonados, borradores, y vuelve a
+traer clientes y pedidos con más detalle. No toca `orders`, el Master ni
+`MOM_RESOLUTION_VERSION`. Sin variables de entorno nuevas.
+
+**En producción ya está aplicada (24-10-2026, SQL directo).** Crea
+`shopify_history_products`, `shopify_history_product_images` y
+`shopify_history_carts` con RLS de lectura por tienda. Agrega columnas a
+`shopify_history_orders` (`shipping_method`, `fulfillments`, `refunds`,
+`attribution`) y a `shopify_history_customers` (`sms_marketing`,
+`whatsapp_marketing`, `addresses`, `customer_since`, `account_state`). Amplía
+`shopify_history_imports_kind_check` a los cinco tipos. Las políticas se crearon
+sin el `drop policy if exists`, porque aún no existían. No figura en el
+historial de migraciones de Supabase. No hace falta volver a correrla.
+
+Comprobar: `select kind, status, records, error from shopify_history_imports
+order by created_at desc limit 10;` y `select count(*) filter (where
+storage_path is not null), count(*) from shopify_history_product_images;`.
+

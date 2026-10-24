@@ -12,7 +12,8 @@ import { getMasterPermissions } from "@/lib/permissions-access";
 import { getStoreCreds } from "@/lib/ingest";
 import { shopifyGraphQL } from "@/lib/shopify";
 import { cleanDeep, clip, uniqueOrderNames, type HistoryCustomer, type HistoryFileKind, type HistoryLineItem, type HistoryOrder } from "@/lib/shopify-history";
-import { hasFullOrderAccess, mergeLineItems, type BulkKind } from "@/lib/shopify-history-bulk";
+import { BULK_KINDS, hasFullOrderAccess, mergeLineItems, type BulkKind } from "@/lib/shopify-history-bulk";
+import { copyPendingProductImages } from "@/lib/shopify-history-images";
 import {
   IMPORT_COLUMNS,
   advanceHistoryImport as advanceImport,
@@ -141,6 +142,15 @@ function orderRow(storeId: string, o: HistoryOrder, link: { file_id: string } | 
     source: str(o.source, 100),
     line_items: Array.isArray(o.line_items) ? cleanDeep(o.line_items.slice(0, 200)) : [],
     raw: rawOf(o.raw),
+    // Lo que solo trae la API (§37.6): un CSV no lo pisa con vacío.
+    ...(o.fulfillments !== undefined
+      ? {
+          shipping_method: str(o.shipping_method, 200),
+          fulfillments: cleanDeep(o.fulfillments ?? []),
+          refunds: cleanDeep(o.refunds ?? []),
+          attribution: o.attribution ? cleanDeep(o.attribution) : null,
+        }
+      : {}),
     ...link,
     imported_at: new Date().toISOString(),
   };
@@ -170,6 +180,15 @@ function customerRow(storeId: string, c: HistoryCustomer, link: { file_id: strin
     tags: str(c.tags, 2000),
     note: str(c.note, 4000),
     raw: rawOf(c.raw),
+    ...(c.addresses !== undefined
+      ? {
+          sms_marketing: str(c.sms_marketing, 40),
+          whatsapp_marketing: str(c.whatsapp_marketing, 40),
+          addresses: cleanDeep((c.addresses ?? []).slice(0, 50)),
+          customer_since: iso(c.customer_since),
+          account_state: str(c.account_state, 40),
+        }
+      : {}),
     ...link,
     imported_at: new Date().toISOString(),
   };
@@ -360,6 +379,89 @@ function historyWriter(admin: ReturnType<typeof createAdminSupabase>, storeId: s
       if (error) throw new Error(`No se pudo guardar la tanda: ${error.message}`);
       return rows.length;
     },
+    async products(products, images, importId) {
+      const now = new Date().toISOString();
+      const rows = products.map((p) => ({
+        store_id: storeId,
+        product_id: str(p.product_id, 40),
+        handle: str(p.handle, 300),
+        title: str(p.title, 500),
+        status: str(p.status, 40),
+        vendor: str(p.vendor, 200),
+        product_type: str(p.product_type, 200),
+        tags: str(p.tags, 2000),
+        description_html: typeof p.description_html === "string" ? clip(p.description_html, 200_000) : null,
+        seo_title: str(p.seo_title, 500),
+        seo_description: str(p.seo_description, 2000),
+        created_at: iso(p.created_at),
+        updated_at: iso(p.updated_at),
+        published_at: iso(p.published_at),
+        options: cleanDeep(p.options),
+        variants: cleanDeep(p.variants.slice(0, 500)),
+        collections: cleanDeep(p.collections.slice(0, 200)),
+        metafields: cleanDeep(p.metafields.slice(0, 200).map((m) => ({ ...m, value: m.value ? clip(m.value, 20_000) : null }))),
+        import_id: importId,
+        imported_at: now,
+      })).filter((r) => r.product_id);
+      if (rows.length) {
+        const { error } = await admin.from("shopify_history_products").upsert(rows, { onConflict: "store_id,product_id" });
+        if (error) throw new Error(`No se pudo guardar la tanda: ${error.message}`);
+      }
+      // Sin `storage_path`: una foto ya copiada conserva su copia.
+      const imageRows = images.map((i) => ({
+        store_id: storeId,
+        image_id: str(i.image_id, 40),
+        product_id: str(i.product_id, 40),
+        position: i.position,
+        src_url: str(i.src_url, 2000),
+        alt: str(i.alt, 500),
+        width: i.width,
+        height: i.height,
+        import_id: importId,
+        imported_at: now,
+      })).filter((r) => r.image_id && r.product_id && r.src_url);
+      for (let k = 0; k < imageRows.length; k += 1000) {
+        const { error } = await admin
+          .from("shopify_history_product_images")
+          .upsert(imageRows.slice(k, k + 1000), { onConflict: "store_id,image_id" });
+        if (error) throw new Error(`No se pudieron guardar las fotos: ${error.message}`);
+      }
+      return rows.length;
+    },
+    async carts(carts, importId) {
+      const now = new Date().toISOString();
+      const rows = carts.map((c) => ({
+        store_id: storeId,
+        cart_key: str(c.cart_key, 80),
+        kind: c.kind,
+        name: str(c.name, 100),
+        status: str(c.status, 40),
+        created_at: iso(c.created_at),
+        updated_at: iso(c.updated_at),
+        completed_at: iso(c.completed_at),
+        email: str(c.email, 320),
+        phone: str(c.phone, 40),
+        phone_norm: str(c.phone_norm, 20),
+        customer_name: str(c.customer_name, 200),
+        address1: str(c.address1, 500),
+        address2: str(c.address2, 500),
+        city: str(c.city, 200),
+        province: str(c.province, 200),
+        total: num(c.total),
+        currency: str(c.currency, 10),
+        url: str(c.url, 2000),
+        order_name: str(c.order_name, 60),
+        tags: str(c.tags, 2000),
+        line_items: cleanDeep(c.line_items.slice(0, 200)),
+        raw: rawOf(c.raw),
+        import_id: importId,
+        imported_at: now,
+      })).filter((r) => r.cart_key);
+      if (!rows.length) return 0;
+      const { error } = await admin.from("shopify_history_carts").upsert(rows, { onConflict: "store_id,cart_key" });
+      if (error) throw new Error(`No se pudo guardar la tanda: ${error.message}`);
+      return rows.length;
+    },
     async orphans(orphans) {
       const ids = [...orphans.keys()];
       const { data } = await admin
@@ -385,7 +487,7 @@ export async function startHistoryImport(storeId: string, kind: BulkKind): Promi
   const g = await guard();
   if ("error" in g) return g;
   if (!g.storeIds.has(storeId)) return { error: "Tienda inválida o sin acceso." };
-  if (kind !== "pedidos" && kind !== "clientes") return { error: "Tipo inválido." };
+  if (!BULK_KINDS.includes(kind)) return { error: "Tipo inválido." };
   try {
     return view(await startImport(createAdminSupabase(), storeId, kind, g.userId));
   } catch (cause) {
@@ -405,6 +507,21 @@ export async function advanceHistoryImport(importId: string): Promise<HistoryImp
     const next = await advanceImport(admin, row, historyWriter(admin, row.store_id));
     if (next.status === "listo") revalidatePath(PATH);
     return view(next);
+  } catch (cause) {
+    return { error: (cause as Error).message.slice(0, 500) };
+  }
+}
+
+/**
+ * Copia a Storage las fotos de productos que faltan (§37.6), ~60 s por
+ * llamada. La pantalla la llama hasta que no quede ninguna.
+ */
+export async function copyHistoryImages(storeId: string): Promise<{ copied: number; failed: number; remaining: number; total: number } | { error: string }> {
+  const g = await guard();
+  if ("error" in g) return g;
+  if (!g.storeIds.has(storeId)) return { error: "Tienda inválida o sin acceso." };
+  try {
+    return await copyPendingProductImages(createAdminSupabase(), storeId);
   } catch (cause) {
     return { error: (cause as Error).message.slice(0, 500) };
   }

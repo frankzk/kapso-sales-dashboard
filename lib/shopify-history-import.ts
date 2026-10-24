@@ -15,17 +15,27 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getStoreCreds } from "@/lib/ingest";
 import { shopifyGraphQL } from "@/lib/shopify";
 import {
+  HISTORY_API_VERSION,
   bulkOutcome,
   bulkQueryFor,
+  groupBulkCarts,
+  groupBulkCustomers,
   groupBulkOrders,
+  groupBulkProducts,
   isTopLevel,
-  mapBulkCustomer,
   mergeLineItems,
   splitJsonl,
   type BulkKind,
   type JsonlLine,
 } from "@/lib/shopify-history-bulk";
-import type { HistoryCustomer, HistoryLineItem, HistoryOrder } from "@/lib/shopify-history";
+import type {
+  HistoryCart,
+  HistoryCustomer,
+  HistoryLineItem,
+  HistoryOrder,
+  HistoryProduct,
+  HistoryProductImage,
+} from "@/lib/shopify-history";
 
 export interface HistoryImportRow {
   id: string;
@@ -59,6 +69,9 @@ export const IMPORT_WRITE_BATCH = 500;
 export type RowWriter = {
   orders: (rows: HistoryOrder[], importId: string) => Promise<number>;
   customers: (rows: HistoryCustomer[], importId: string) => Promise<number>;
+  /** Productos y sus fotos; devuelve cuántos productos guardó. */
+  products: (rows: HistoryProduct[], images: HistoryProductImage[], importId: string) => Promise<number>;
+  carts: (rows: HistoryCart[], importId: string) => Promise<number>;
   /** Suma productos a pedidos ya guardados (por id de pedido de Shopify). */
   orphans: (orphans: Map<string, HistoryLineItem[]>) => Promise<void>;
 };
@@ -66,7 +79,7 @@ export type RowWriter = {
 async function creds(storeId: string) {
   const c = await getStoreCreds(storeId);
   if (!c?.shopify_domain || !c.shopify_token) throw new Error("La tienda no tiene conexión con Shopify en Kapta.");
-  return { domain: c.shopify_domain, token: c.shopify_token };
+  return { domain: c.shopify_domain, token: c.shopify_token, apiVersion: HISTORY_API_VERSION };
 }
 
 /** Empieza una traída, o devuelve la que ya está en curso para esa tienda y tipo. */
@@ -217,9 +230,19 @@ export async function readImportChunk(
         if (!firstAt || o.created_at < firstAt) firstAt = o.created_at;
         if (!lastAt || o.created_at > lastAt) lastAt = o.created_at;
       }
+    } else if (row.kind === "clientes") {
+      records += await write.customers(groupBulkCustomers(pending), row.id);
+    } else if (row.kind === "productos") {
+      const { products, images } = groupBulkProducts(pending);
+      records += await write.products(products, images, row.id);
     } else {
-      const customers = pending.filter(isTopLevel).map((l) => mapBulkCustomer(l.value)).filter((c): c is HistoryCustomer => !!c);
-      records += await write.customers(customers, row.id);
+      const carts = groupBulkCarts(pending, row.kind === "carritos" ? "carrito" : "borrador");
+      records += await write.carts(carts, row.id);
+      for (const c of carts) {
+        if (!c.created_at) continue;
+        if (!firstAt || c.created_at < firstAt) firstAt = c.created_at;
+        if (!lastAt || c.created_at > lastAt) lastAt = c.created_at;
+      }
     }
     pending = [];
     pendingTop = 0;

@@ -13,13 +13,33 @@
 // duplican.
 
 import { normalizePhone } from "@/lib/phone";
-import type { HistoryCustomer, HistoryLineItem, HistoryOrder } from "@/lib/shopify-history";
+import type {
+  HistoryAddress,
+  HistoryAttribution,
+  HistoryCart,
+  HistoryCustomer,
+  HistoryLineItem,
+  HistoryOrder,
+  HistoryProduct,
+  HistoryProductImage,
+  HistoryVisit,
+} from "@/lib/shopify-history";
 
-export type BulkKind = "pedidos" | "clientes";
+export type BulkKind = "pedidos" | "clientes" | "productos" | "carritos" | "borradores";
+export const BULK_KINDS: readonly BulkKind[] = ["pedidos", "clientes", "productos", "carritos", "borradores"];
+
+/**
+ * La versión de la API con que se piden los archivos (§37.6). Fija y probada
+ * contra Shopify el 24-10-2026: desde ella el correo y el celular del cliente
+ * van en `defaultEmailAddress` y `defaultPhoneNumber`.
+ */
+export const HISTORY_API_VERSION = "2026-10";
 
 const money = `shopMoney { amount }`;
+const visit = `occurredAt source sourceType referrerUrl landingPage utmParameters { campaign content medium source term }`;
+const contact = `defaultEmailAddress { emailAddress } defaultPhoneNumber { phoneNumber }`;
 
-/** Todos los pedidos de la tienda, con sus productos. */
+/** Todos los pedidos de la tienda, con sus productos, despachos, devoluciones y de dónde vinieron. */
 export const ORDERS_BULK_QUERY = `{
   orders {
     edges {
@@ -34,12 +54,15 @@ export const ORDERS_BULK_QUERY = `{
         totalRefundedSet { ${money} }
         discountCodes paymentGatewayNames
         email phone note tags sourceName
-        customer { id firstName lastName email phone }
+        customer { id firstName lastName ${contact} }
         billingAddress { name phone }
         shippingAddress { name address1 address2 city province zip country phone }
+        shippingLine { title code source }
         customAttributes { key value }
-        fulfillments { createdAt }
+        fulfillments { createdAt deliveredAt displayStatus status trackingInfo { company number url } }
+        refunds { createdAt note totalRefundedSet { ${money} } }
         transactions { kind status processedAt }
+        customerJourneySummary { customerOrderIndex daysToConversion firstVisit { ${visit} } lastVisit { ${visit} } }
         lineItems {
           edges {
             node {
@@ -54,21 +77,94 @@ export const ORDERS_BULK_QUERY = `{
   }
 }`;
 
-/** Todos los clientes de la tienda. */
+/** Todos los clientes de la tienda, con sus permisos de marketing y sus direcciones. */
 export const CUSTOMERS_BULK_QUERY = `{
   customers {
     edges {
       node {
-        id firstName lastName email phone note tags numberOfOrders
+        id firstName lastName note tags numberOfOrders createdAt state
         amountSpent { amount }
-        emailMarketingConsent { marketingState }
+        defaultEmailAddress { emailAddress marketingState }
+        defaultPhoneNumber { phoneNumber smsMarketingConsent { state } whatsAppMarketingConsent { state } }
         defaultAddress { company address1 address2 city province country zip phone }
+        addressesV2 {
+          edges { node { id name company address1 address2 city province country zip phone } }
+        }
       }
     }
   }
 }`;
 
-export const bulkQueryFor = (kind: BulkKind) => (kind === "pedidos" ? ORDERS_BULK_QUERY : CUSTOMERS_BULK_QUERY);
+/** El catálogo completo: variantes, fotos en tamaño original, colecciones y metacampos. */
+export const PRODUCTS_BULK_QUERY = `{
+  products {
+    edges {
+      node {
+        id handle title status vendor productType tags descriptionHtml createdAt updatedAt publishedAt
+        seo { title description }
+        options { name values }
+        variants {
+          edges { node { id title sku barcode price compareAtPrice inventoryQuantity position selectedOptions { name value } } }
+        }
+        media {
+          edges { node { ... on MediaImage { id alt image { url width height } } } }
+        }
+        collections {
+          edges { node { id handle title } }
+        }
+        metafields {
+          edges { node { id namespace key type value } }
+        }
+      }
+    }
+  }
+}`;
+
+const cartLineItem = `id title variantTitle sku quantity originalUnitPriceSet { ${money} }`;
+
+/** Los carritos abandonados de la web (y los recuperados). */
+export const CHECKOUTS_BULK_QUERY = `{
+  abandonedCheckouts {
+    edges {
+      node {
+        id name createdAt updatedAt completedAt abandonedCheckoutUrl note discountCodes
+        customer { id firstName lastName ${contact} }
+        shippingAddress { name phone address1 address2 city province zip country }
+        billingAddress { name phone }
+        totalPriceSet { shopMoney { amount currencyCode } }
+        customAttributes { key value }
+        lineItems { edges { node { ${cartLineItem} } } }
+      }
+    }
+  }
+}`;
+
+/** Los pedidos borradores: el formulario contra entrega deja uno por cada envío. */
+export const DRAFTS_BULK_QUERY = `{
+  draftOrders {
+    edges {
+      node {
+        id name status createdAt updatedAt completedAt invoiceUrl tags email phone
+        customer { id firstName lastName ${contact} }
+        shippingAddress { name phone address1 address2 city province zip country }
+        totalPriceSet { shopMoney { amount currencyCode } }
+        customAttributes { key value }
+        order { name }
+        lineItems { edges { node { ${cartLineItem} } } }
+      }
+    }
+  }
+}`;
+
+const QUERIES: Record<BulkKind, string> = {
+  pedidos: ORDERS_BULK_QUERY,
+  clientes: CUSTOMERS_BULK_QUERY,
+  productos: PRODUCTS_BULK_QUERY,
+  carritos: CHECKOUTS_BULK_QUERY,
+  borradores: DRAFTS_BULK_QUERY,
+};
+
+export const bulkQueryFor = (kind: BulkKind) => QUERIES[kind];
 
 /** «gid://shopify/Order/123» → «123». */
 export function gidNumber(gid: unknown): string | null {
@@ -107,7 +203,8 @@ export function mapBulkOrder(node: AnyNode): HistoryOrder {
   const ship = (node.shippingAddress ?? {}) as AnyNode;
   const bill = (node.billingAddress ?? {}) as AnyNode;
   const customer = (node.customer ?? {}) as AnyNode;
-  const phone = str(node.phone) ?? str(ship.phone) ?? str(bill.phone) ?? str(customer.phone);
+  const phone =
+    str(node.phone) ?? str(ship.phone) ?? str(bill.phone) ?? str(customer.defaultPhoneNumber?.phoneNumber) ?? str(customer.phone);
   const customerName = str(bill.name) ?? str(ship.name) ?? str([customer.firstName, customer.lastName].filter(Boolean).join(" "));
   const fulfilledAt = ((node.fulfillments ?? []) as AnyNode[])
     .map((f) => iso(f.createdAt))
@@ -151,7 +248,7 @@ export function mapBulkOrder(node: AnyNode): HistoryOrder {
     discount_amount: amount(node.totalDiscountsSet),
     refunded_amount: amount(node.totalRefundedSet),
     payment_method: join(node.paymentGatewayNames, " + "),
-    email: str(node.email) ?? str(customer.email),
+    email: str(node.email) ?? str(customer.defaultEmailAddress?.emailAddress) ?? str(customer.email),
     phone,
     phone_norm: normalizePhone(phone),
     customer_name: customerName,
@@ -168,7 +265,46 @@ export function mapBulkOrder(node: AnyNode): HistoryOrder {
     source: str(node.sourceName),
     line_items: [],
     raw,
+    shipping_method: str(node.shippingLine?.title),
+    fulfillments: ((node.fulfillments ?? []) as AnyNode[]).map((f) => ({
+      created_at: iso(f.createdAt),
+      delivered_at: iso(f.deliveredAt),
+      status: str(f.displayStatus ?? f.status)?.toLowerCase() ?? null,
+      tracking: ((f.trackingInfo ?? []) as AnyNode[]).map((t) => ({ company: str(t.company), number: str(t.number), url: str(t.url) })),
+    })),
+    refunds: ((node.refunds ?? []) as AnyNode[]).map((r) => ({
+      created_at: iso(r.createdAt),
+      amount: amount(r.totalRefundedSet),
+      note: str(r.note),
+    })),
+    attribution: mapAttribution(node.customerJourneySummary),
   };
+}
+
+function mapVisit(v: AnyNode | null | undefined): HistoryVisit | null {
+  if (!v) return null;
+  const u = (v.utmParameters ?? null) as AnyNode | null;
+  return {
+    at: iso(v.occurredAt),
+    source: str(v.source),
+    source_type: str(v.sourceType)?.toLowerCase() ?? null,
+    referrer: str(v.referrerUrl),
+    landing_page: str(v.landingPage),
+    utm: u
+      ? { campaign: str(u.campaign), content: str(u.content), medium: str(u.medium), source: str(u.source), term: str(u.term) }
+      : null,
+  };
+}
+
+/** De qué visita o campaña vino la compra; null si Shopify no la registró. */
+export function mapAttribution(j: AnyNode | null | undefined): HistoryAttribution | null {
+  if (!j) return null;
+  const first = mapVisit(j.firstVisit);
+  const last = mapVisit(j.lastVisit);
+  const index = Number.isFinite(Number(j.customerOrderIndex)) && j.customerOrderIndex != null ? Number(j.customerOrderIndex) : null;
+  const days = Number.isFinite(Number(j.daysToConversion)) && j.daysToConversion != null ? Number(j.daysToConversion) : null;
+  if (!first && !last && index === null && days === null) return null;
+  return { customer_order_index: index, days_to_conversion: days, first_visit: first, last_visit: last };
 }
 
 /** Un producto del archivo → un producto del pedido. */
@@ -189,14 +325,15 @@ export function mapBulkCustomer(node: AnyNode): HistoryCustomer | null {
   const id = gidNumber(node.id);
   if (!id) return null;
   const addr = (node.defaultAddress ?? {}) as AnyNode;
-  const phone = str(node.phone) ?? str(addr.phone);
+  const phoneNumber = (node.defaultPhoneNumber ?? null) as AnyNode | null;
+  const phone = str(phoneNumber?.phoneNumber) ?? str(node.phone) ?? str(addr.phone);
   const orders = Number(node.numberOfOrders);
   return {
     customer_key: id,
     shopify_customer_id: id,
     first_name: str(node.firstName),
     last_name: str(node.lastName),
-    email: str(node.email),
+    email: str(node.defaultEmailAddress?.emailAddress) ?? str(node.email),
     phone,
     phone_norm: normalizePhone(phone),
     company: str(addr.company),
@@ -208,11 +345,216 @@ export function mapBulkCustomer(node: AnyNode): HistoryCustomer | null {
     zip: str(addr.zip),
     total_spent: amount(node.amountSpent),
     total_orders: Number.isFinite(orders) ? orders : null,
-    accepts_marketing: str(node.emailMarketingConsent?.marketingState)?.toLowerCase() ?? null,
+    accepts_marketing:
+      str(node.defaultEmailAddress?.marketingState ?? node.emailMarketingConsent?.marketingState)?.toLowerCase() ?? null,
     tags: join(node.tags),
     note: str(node.note),
     raw: { fuente: "api" },
+    sms_marketing: str(phoneNumber?.smsMarketingConsent?.state)?.toLowerCase() ?? null,
+    whatsapp_marketing: str(phoneNumber?.whatsAppMarketingConsent?.state)?.toLowerCase() ?? null,
+    addresses: [],
+    customer_since: iso(node.createdAt),
+    account_state: str(node.state)?.toLowerCase() ?? null,
   };
+}
+
+function mapAddress(a: AnyNode): HistoryAddress {
+  return {
+    name: str(a.name),
+    company: str(a.company),
+    address1: str(a.address1),
+    address2: str(a.address2),
+    city: str(a.city),
+    province: str(a.province),
+    country: str(a.country),
+    zip: str(a.zip),
+    phone: str(a.phone),
+  };
+}
+
+const gidType = (gid: unknown): string | null => (typeof gid === "string" ? (gid.match(/^gid:\/\/shopify\/([A-Za-z]+)\//)?.[1] ?? null) : null);
+
+/** Clientes de una tanda, con todas sus direcciones (líneas hijas «MailingAddress»). */
+export function groupBulkCustomers(lines: readonly JsonlLine[]): HistoryCustomer[] {
+  const byGid = new Map<string, HistoryCustomer>();
+  for (const { value: v } of lines) {
+    const parent = typeof v.__parentId === "string" ? v.__parentId : null;
+    if (!parent) {
+      const c = gidType(v.id) === "Customer" ? mapBulkCustomer(v) : null;
+      if (c) byGid.set(v.id, c);
+      continue;
+    }
+    const c = byGid.get(parent);
+    if (c && gidType(v.id) === "MailingAddress") (c.addresses ??= []).push(mapAddress(v));
+  }
+  return [...byGid.values()];
+}
+
+/** Un producto del archivo, sin sus hijos (variantes, fotos, colecciones y metacampos van aparte). */
+export function mapBulkProduct(node: AnyNode): HistoryProduct | null {
+  const id = gidNumber(node.id);
+  if (!id) return null;
+  return {
+    product_id: id,
+    handle: str(node.handle),
+    title: str(node.title),
+    status: str(node.status)?.toLowerCase() ?? null,
+    vendor: str(node.vendor),
+    product_type: str(node.productType),
+    tags: join(node.tags),
+    description_html: typeof node.descriptionHtml === "string" ? node.descriptionHtml : null,
+    seo_title: str(node.seo?.title),
+    seo_description: str(node.seo?.description),
+    created_at: iso(node.createdAt),
+    updated_at: iso(node.updatedAt),
+    published_at: iso(node.publishedAt),
+    options: ((node.options ?? []) as AnyNode[]).map((o) => ({
+      name: String(o.name ?? ""),
+      values: Array.isArray(o.values) ? o.values.map(String) : [],
+    })),
+    variants: [],
+    collections: [],
+    metafields: [],
+  };
+}
+
+/**
+ * Productos de una tanda con sus hijos: variantes, fotos (en su tamaño
+ * original), colecciones y metacampos. Las fotos van aparte porque cada una se
+ * copia a Storage por su cuenta.
+ */
+export function groupBulkProducts(lines: readonly JsonlLine[]): { products: HistoryProduct[]; images: HistoryProductImage[] } {
+  const byGid = new Map<string, HistoryProduct>();
+  const images: HistoryProductImage[] = [];
+  const positions = new Map<string, number>();
+  for (const { value: v } of lines) {
+    const parent = typeof v.__parentId === "string" ? v.__parentId : null;
+    if (!parent) {
+      const p = gidType(v.id) === "Product" ? mapBulkProduct(v) : null;
+      if (p) byGid.set(v.id, p);
+      continue;
+    }
+    const p = byGid.get(parent);
+    if (!p) continue;
+    switch (gidType(v.id)) {
+      case "ProductVariant":
+        p.variants.push({
+          id: gidNumber(v.id),
+          title: str(v.title),
+          sku: str(v.sku),
+          barcode: str(v.barcode),
+          price: amount({ amount: v.price }),
+          compare_at_price: amount({ amount: v.compareAtPrice }),
+          inventory_quantity: Number.isFinite(Number(v.inventoryQuantity)) && v.inventoryQuantity != null ? Number(v.inventoryQuantity) : null,
+          position: Number.isFinite(Number(v.position)) && v.position != null ? Number(v.position) : null,
+          options: ((v.selectedOptions ?? []) as AnyNode[]).map((o) => ({ name: String(o.name ?? ""), value: String(o.value ?? "") })),
+        });
+        break;
+      case "MediaImage": {
+        const url = str(v.image?.url);
+        const imageId = gidNumber(v.id);
+        if (!url || !imageId) break;
+        const position = (positions.get(p.product_id) ?? 0) + 1;
+        positions.set(p.product_id, position);
+        images.push({
+          image_id: imageId,
+          product_id: p.product_id,
+          position,
+          src_url: url,
+          alt: str(v.alt),
+          width: Number(v.image?.width) || null,
+          height: Number(v.image?.height) || null,
+        });
+        break;
+      }
+      case "Collection":
+        p.collections.push({ id: gidNumber(v.id), handle: str(v.handle), title: str(v.title) });
+        break;
+      case "Metafield":
+        p.metafields.push({ namespace: str(v.namespace), key: str(v.key), type: str(v.type), value: typeof v.value === "string" ? v.value : null });
+        break;
+    }
+  }
+  return { products: [...byGid.values()], images };
+}
+
+/** Un carrito abandonado o un borrador del archivo, sin sus productos. */
+export function mapBulkCart(node: AnyNode, kind: "carrito" | "borrador"): HistoryCart | null {
+  const id = gidNumber(node.id);
+  if (!id) return null;
+  const ship = (node.shippingAddress ?? {}) as AnyNode;
+  const bill = (node.billingAddress ?? {}) as AnyNode;
+  const customer = (node.customer ?? {}) as AnyNode;
+  const phone = str(node.phone) ?? str(ship.phone) ?? str(bill.phone) ?? str(customer.defaultPhoneNumber?.phoneNumber);
+  const raw: Record<string, string> = { fuente: "api" };
+  for (const attr of (node.customAttributes ?? []) as AnyNode[]) {
+    const k = str(attr.key);
+    const v = str(attr.value);
+    if (k && v) raw[k.slice(0, 120)] = v.slice(0, 4000);
+  }
+  const note = str(node.note);
+  if (note) raw.note = note.slice(0, 4000);
+  const codes = join(node.discountCodes);
+  if (codes) raw.discountCodes = codes;
+  const customerId = gidNumber(customer.id);
+  if (customerId) raw.customerId = customerId;
+  const completedAt = iso(node.completedAt);
+  return {
+    cart_key: `${kind}:${id}`,
+    kind,
+    name: str(node.name),
+    status:
+      kind === "carrito"
+        ? completedAt
+          ? "recuperado"
+          : "abandonado"
+        : (str(node.status)?.toLowerCase() ?? null),
+    created_at: iso(node.createdAt),
+    updated_at: iso(node.updatedAt),
+    completed_at: completedAt,
+    email: str(node.email) ?? str(customer.defaultEmailAddress?.emailAddress),
+    phone,
+    phone_norm: normalizePhone(phone),
+    customer_name: str(ship.name) ?? str(bill.name) ?? str([customer.firstName, customer.lastName].filter(Boolean).join(" ")),
+    address1: str(ship.address1),
+    address2: str(ship.address2),
+    city: str(ship.city),
+    province: str(ship.province),
+    total: amount(node.totalPriceSet),
+    currency: str(node.totalPriceSet?.shopMoney?.currencyCode),
+    url: str(node.abandonedCheckoutUrl ?? node.invoiceUrl),
+    order_name: str(node.order?.name),
+    tags: join(node.tags),
+    line_items: [],
+    raw,
+  };
+}
+
+/** Carritos o borradores de una tanda, con sus productos. */
+export function groupBulkCarts(lines: readonly JsonlLine[], kind: "carrito" | "borrador"): HistoryCart[] {
+  const byGid = new Map<string, HistoryCart>();
+  for (const { value: v } of lines) {
+    const parent = typeof v.__parentId === "string" ? v.__parentId : null;
+    if (!parent) {
+      const c = mapBulkCart(v, kind);
+      if (c) byGid.set(v.id, c);
+      continue;
+    }
+    const c = byGid.get(parent);
+    if (!c) continue;
+    const title = str(v.title) ?? "(sin nombre)";
+    const variant = str(v.variantTitle);
+    c.line_items.push({
+      id: typeof v.id === "string" ? v.id.slice(0, 200) : null,
+      name: variant && variant !== "Default Title" ? `${title} - ${variant}` : title,
+      sku: str(v.sku),
+      quantity: Number(v.quantity) || 1,
+      price: amount(v.originalUnitPriceSet),
+      discount: null,
+      vendor: null,
+    });
+  }
+  return [...byGid.values()];
 }
 
 /** Una línea del archivo, con el byte donde empieza. */
