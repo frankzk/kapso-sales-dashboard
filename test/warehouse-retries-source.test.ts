@@ -317,7 +317,7 @@ describe("el MOM lo documenta (§6.2, §9.3, §9.5)", () => {
     expect(RETRY_LABELS_MAX).toBe(200);
     expect(s1c).toContain("(`closeStale: false`)");
     expect(s1c).toContain("`MOM_RESOLUTION_VERSION` sigue en `mom-v1.26`");
-    expect(read("lib/order-macro-stage.ts")).toContain('export const MOM_RESOLUTION_VERSION = "mom-v1.31" as const;');
+    expect(read("lib/order-macro-stage.ts")).toContain('export const MOM_RESOLUTION_VERSION = "mom-v1.32" as const;');
   });
 
   it("y lo que hace la pantalla", () => {

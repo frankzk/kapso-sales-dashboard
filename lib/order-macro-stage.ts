@@ -29,6 +29,15 @@ import {
   swaypNoEntregoMotivo,
 } from "@/lib/swayp-desde-confirmacion";
 
+// v1.32 (25-10-2026): la provincia de un pedido de Lima Metropolitana o el
+// Callao ya no sale de lo aprendido por nombre de distrito cuando contradice su
+// departamento, ni de una guía que la copió (lib/district-learning.ts, MOM
+// §19.0). «miraflores → arequipa», aprendido de un pedido de Arequipa, dejó los
+// de Miraflores de Lima con provincia «arequipa»; medidos ~700 pedidos de Lima
+// con una provincia imposible («arequipa», «HUARAZ», «lince», «san roman»…). No
+// cambia coberturas: con el departamento del pedido conocido, la provincia no
+// entra a `order_coverage_for`. La versión sube para que el cron los recalcule.
+//
 // v1.31 (21-10-2026): el costo logístico de Grupo GF («propio») sale de su
 // Tarifario (`logistics_district_tariffs`, lib/gf-tariff.ts, MOM §14, §29.8;
 // decisión del dueño del 19-10-2026), no de Costos › Costos logísticos: la
@@ -200,7 +209,7 @@ import {
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.31" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.32" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"

@@ -71,6 +71,7 @@ import {
 } from "@/lib/order-status";
 import { etiquetaDiceTerminoSinEntregar } from "@/lib/aliclik-status";
 import { limaTodayKey, normalizeDistrict } from "@/lib/shipments";
+import { districtLearnVerdict, type LearnedDistrict } from "@/lib/district-learning";
 import { DISPATCH_DATE_CLEARED, DISPATCH_DATE_SET, dispatchDateError, dispatchDateLabel } from "@/lib/dispatch-date";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
 import { agencyPaymentReady, classifyOperation, type OperationKind } from "@/lib/order-macro-stage";
@@ -2600,10 +2601,26 @@ export async function updateOrderGeo(
   // Si el equipo arregló la provincia de un distrito, se aprende para los
   // siguientes pedidos de ese distrito: el ubigeo del INEI no siempre está
   // cargado y esta es la forma barata de irlo completando con datos reales.
+  //
+  // CON GUARDA (25-10-2026): la tabla va por nombre y los nombres se repiten.
+  // Recordar «Miraflores → Arequipa» de un pedido de Arequipa dejó cuatro días
+  // los de Miraflores de Lima con provincia «arequipa». Nunca se recuerda un
+  // departamento que no se reconoce, una provincia que no es de él ni un
+  // distrito que ya está en OTRO departamento (`districtLearnVerdict`); la
+  // corrección de ESTE pedido vale igual.
   let learned = false;
+  let notLearned: string | null = null;
   if (input.rememberDistrict && patch.district && patch.province) {
     const key = normalizeDistrict(patch.district);
-    if (key) {
+    const { data: existing } = key
+      ? await admin.from("peru_districts").select("province,department").eq("district_key", key).maybeSingle()
+      : { data: null };
+    const verdict = districtLearnVerdict(
+      { district: patch.district, province: patch.province, department: patch.region },
+      (existing as LearnedDistrict | null) ?? null,
+    );
+    if (!verdict.ok) notLearned = verdict.reason;
+    if (key && verdict.ok) {
       const { error: geoError } = await admin.from("peru_districts").upsert(
         {
           district_key: key,
@@ -2652,6 +2669,7 @@ export async function updateOrderGeo(
       learned
         ? "Ubicación corregida. La provincia queda recordada para los próximos pedidos de ese distrito."
         : "Ubicación corregida.",
+      notLearned,
       moved ? `Cobertura: ${coverageLabel(moved.from)} → ${coverageLabel(moved.to)}.` : null,
       coverage.error,
     ]

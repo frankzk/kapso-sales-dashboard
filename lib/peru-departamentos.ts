@@ -126,3 +126,71 @@ export function isKnownDepartment(raw: string | null | undefined): boolean {
   if (!n) return false;
   return n.startsWith("Lima") || n === "Callao" || POR_CLAVE.has(clave(n));
 }
+
+/**
+ * El departamento como CLAVE para comparar: las tres Limas y el Callao son la
+ * misma (el área metropolitana, que es lo que separa una Miraflores de otra);
+ * los demás, su nombre sin tildes. Lo que no se reconoce como departamento da
+ * null: no se puede usar para descartar nada.
+ */
+export function departmentKey(raw: string | null | undefined): string | null {
+  if (!isKnownDepartment(raw)) return null;
+  const n = normalizeDepartment(raw)!;
+  return n.startsWith("Lima") || n === "Callao" ? "lima" : clave(n);
+}
+
+/** ¿Dos departamentos se contradicen? Solo si los dos se conocen y son distintos. */
+export function departmentsConflict(a: string | null | undefined, b: string | null | undefined): boolean {
+  const x = departmentKey(a);
+  const y = departmentKey(b);
+  return Boolean(x && y && x !== y);
+}
+
+/**
+ * Las provincias del departamento de Lima (INEI) y el Callao, como claves: la
+ * provincia de un pedido de Lima solo puede ser una de estas. «HUARAZ» o «LA
+ * MOLINA» (un distrito) no lo son.
+ */
+const PROVINCIAS_DE_LIMA = new Set([
+  "lima",
+  "lima provincia",
+  "lima metropolitana",
+  // Shopify llama `province` al departamento y esa etiqueta se cuela como
+  // provincia: es Lima, no otro sitio.
+  "lima departamento",
+  "callao",
+  "provincia constitucional del callao",
+  "barranca",
+  "cajatambo",
+  "canta",
+  "canete",
+  "huaral",
+  "huarochiri",
+  "huaura",
+  "oyon",
+  "yauyos",
+]);
+
+/** Provincias que se llaman como OTRO departamento: Ucayali es una provincia de Loreto. */
+const PROVINCIA_EN_OTRO_DEPARTAMENTO: Record<string, string> = { ucayali: "loreto" };
+
+/**
+ * ¿La provincia cabe en el departamento? (25-10-2026, caso Miraflores.)
+ *
+ * Sin departamento conocido no se sabe, y se acepta. En Lima, solo sus diez
+ * provincias y el Callao. En otro departamento se descarta una provincia que se
+ * llama como un departamento distinto —«arequipa» para un pedido de Lima,
+ * «lima» para uno de Arequipa—: las capitales llevan el nombre de su
+ * departamento, así que esa provincia es de allá. El resto no se puede juzgar
+ * sin el catálogo completo del INEI, y se acepta.
+ */
+export function provinceFitsDepartment(province: string | null | undefined, department: string | null | undefined): boolean {
+  const dep = departmentKey(department);
+  if (!dep) return true;
+  const p = clave(province ?? "");
+  if (!p) return true;
+  if (dep === "lima") return PROVINCIAS_DE_LIMA.has(p);
+  if (PROVINCIA_EN_OTRO_DEPARTAMENTO[p]) return PROVINCIA_EN_OTRO_DEPARTAMENTO[p] === dep || p === dep;
+  const asDep = departmentKey(province);
+  return !asDep || asDep === dep;
+}

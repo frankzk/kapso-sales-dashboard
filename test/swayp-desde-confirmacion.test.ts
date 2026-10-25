@@ -275,7 +275,7 @@ describe("el botón", () => {
   });
 
   it("la versión sube y el MOM lo documenta", () => {
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.31");
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.32");
     expect(read("docs/mom/master-pedidos-v1.md")).toContain("### 11.11 Swayp desde Por confirmar (v1.24, 09-10-2026)");
   });
 });

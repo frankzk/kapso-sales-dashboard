@@ -2434,7 +2434,10 @@ function GeoSection({
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState<OrderGeoInput>({});
   const [hasOverride, setHasOverride] = useState(row.geo_source === "manual");
-  const [remember, setRemember] = useState(true);
+  // Apagado por defecto (25-10-2026): recordar cambia la provincia de TODOS los
+  // pedidos siguientes de ese distrito, y los nombres se repiten (Miraflores de
+  // Lima y de Arequipa). Se marca a propósito, no por inercia.
+  const [remember, setRemember] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -2608,7 +2611,7 @@ function GeoSection({
               onChange={(e) => setRemember(e.target.checked)}
               className={CHECKBOX}
             />
-            Recordar esta provincia para los próximos pedidos del mismo distrito
+            Recordar esta provincia para los próximos pedidos del mismo distrito (de todos los pedidos, no solo este)
           </label>
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <OpsButton type="submit" variant="primary" disabled={pending} className="pointer-coarse:h-11">
