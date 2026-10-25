@@ -52,6 +52,11 @@ export interface WooSettingsView {
   topics: readonly string[];
   /** La fila `woo_orders` de `sync_state`, si ya corrió. */
   sync: { status: string | null; last_run_at: string | null; error: string | null } | null;
+  /**
+   * La fila `woo_webhooks` de `sync_state` (MOM §38.14): la revisión de los
+   * webhooks en WooCommerce, si ya corrió. `warning` es que algo falta.
+   */
+  webhooks: { status: string | null; last_run_at: string | null; error: string | null } | null;
   /** Pre-0274: las columnas no existen y la sección solo lo dice. */
   migrationMissing: boolean;
 }
@@ -134,7 +139,18 @@ export function WooCommerceSettingsSection({ storeId, data }: { storeId: string;
   }
 
   const apiReady = Boolean(data.siteUrl && data.siteKey && data.hasConsumerKey && data.hasConsumerSecret);
-  const badge = data.lastError ? (
+  // La revisión de los webhooks (MOM §38.14): lo que falta va aparte solo si
+  // `woo_last_error` no lo dice ya (otro fallo lo pudo pisar después). Que no
+  // se pudo revisar lo dice la línea, con el motivo si el último fallo no lo
+  // dice ya (WooCommerce caído o lento no llega a `woo_last_error`).
+  const hooks = data.webhooks;
+  const hooksSaid = (text: string | null) => Boolean(text) && (data.lastError ?? "").includes(text!);
+  const hooksDetail = hooks?.status === "warning" && hooks.error && !hooksSaid(hooks.error) ? hooks.error : null;
+  const hooksReason =
+    hooks?.status === "error" && hooks.error && !hooksSaid(hooks.error)
+      ? hooks.error.replace(/^no se pudieron revisar:\s*/, "").replace(/\.\s*$/, "")
+      : null;
+  const badge = data.lastError || hooks?.status === "warning" ? (
     <Badge tone="warn">Con error</Badge>
   ) : apiReady && data.hasWebhookSecret ? (
     <Badge tone="ok">Conectada</Badge>
@@ -179,7 +195,7 @@ export function WooCommerceSettingsSection({ storeId, data }: { storeId: string;
           platformSwitchedAt={data.platformSwitchedAt}
           apiReady={apiReady}
         />
-        <div className={ROW}>
+        <div className={cn(ROW, "space-y-1")}>
           <p className={HELP}>
             Última sincronización de WooCommerce:{" "}
             {data.sync?.last_run_at
@@ -189,7 +205,29 @@ export function WooCommerceSettingsSection({ storeId, data }: { storeId: string;
               : "todavía no corrió"}
             .
           </p>
+          {apiReady || hooks ? (
+            <p className={HELP}>
+              Revisión de los webhooks en WooCommerce (cada hora):{" "}
+              {hooks?.last_run_at
+                ? `${when(hooks.last_run_at)} · ${
+                    hooks.status === "ok"
+                      ? "los cuatro activos y con la dirección de esta tienda"
+                      : hooks.status === "warning"
+                        ? "falta algo"
+                        : `no se pudo revisar${hooksReason ? `: ${hooksReason}` : ""}`
+                  }`
+                : "todavía no corrió"}
+              .
+            </p>
+          ) : null}
         </div>
+        {hooksDetail ? (
+          <div className={ROW}>
+            <Banner tone="warn" title="Webhooks en WooCommerce">
+              <p className="break-words">{hooksDetail}</p>
+            </Banner>
+          </div>
+        ) : null}
         {data.lastError ? (
           <div className={ROW}>
             <Banner tone="warn" title="Último fallo con WooCommerce">
@@ -311,7 +349,10 @@ export function WooCommerceSettingsSection({ storeId, data }: { storeId: string;
           <p className={HELP}>
             Al crearlo, WooCommerce manda una prueba: si la dirección es la de esta tienda, contesta 200 y el webhook
             queda activo. Si el secreto no coincide, cada aviso recibe 401 y WooCommerce desactiva el webhook después de
-            5 fallos; los pedidos igual llegan por la sincronización.
+            5 fallos; los pedidos igual llegan por la sincronización. Kapta revisa cada hora (y al guardar o probar la
+            conexión) que los cuatro temas tengan uno activo con esta dirección, y lo avisa arriba. Nunca los cambia: se
+            arreglan en WooCommerce. La versión de la API y el secreto no los muestra WooCommerce: esos se revisan a mano
+            en cada webhook.
           </p>
         </div>
       </div>

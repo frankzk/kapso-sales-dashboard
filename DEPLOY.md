@@ -184,6 +184,11 @@ roles and the `auth` schema, so it just works.
      `/api/wa-image` pone en la cabecera de las plantillas de WhatsApp, para
      cuando el CDN de Shopify ya no las sirva (MOM §39). `?dry=1` solo cuenta.
      **Sin migración.** Ver la entrada del 23-10-2026.
+   - `/api/cron/woo-webhooks` — cada hora, en el minuto 34. Lee (solo `GET`)
+     los webhooks de cada tienda con WooCommerce conectado y avisa en Ajustes →
+     WooCommerce si un tema de pedido no tiene uno activo que entregue a esa
+     tienda (MOM §38.14). Nunca los cambia. `?dry=1` revisa sin escribir.
+     **Sin migración.** Ver la entrada del 25-10-2026.
 
 ### Pases a mano (bajo `/api/cron`, pero SIN horario)
 
@@ -4817,3 +4822,57 @@ Comprobar: `select kind, status, records, error from shopify_history_imports
 order by created_at desc limit 10;` y `select count(*) filter (where
 storage_path is not null), count(*) from shopify_history_product_images;`.
 
+### 25-10-2026 · Revisión de los webhooks de WooCommerce (sin migración, MOM §38.14)
+
+WooCommerce desactiva un webhook después de 5 fallos seguidos y no avisa: los
+pedidos siguen entrando por la pasada `woo_orders`, con retraso, y nadie se
+entera. Trae el cron **`/api/cron/woo-webhooks`** (`34 * * * *` en
+`vercel.json`, con `CRON_SECRET` como los demás), que cada hora lee
+`GET /wp-json/wc/v3/webhooks` de cada tienda activa con el sitio y las claves de
+la API guardados, y comprueba que `order.created`, `order.updated`,
+`order.deleted` y `order.restored` tengan uno «Activo» que entregue a
+`/api/webhooks/woocommerce/<storeId>` de esa tienda. Ajustes → WooCommerce hace
+lo mismo al «Guardar» con claves nuevas y al «Probar conexión».
+
+1. **Sin migración y sin variables de entorno.** Usa `sync_state` (fuente
+   `woo_webhooks`) y `stores.woo_last_error` (0274, ya aplicada). El código
+   sale por el camino de siempre; el cron lo toma Vercel de `vercel.json`.
+2. **Solo lectura contra WooCommerce.** No crea, reactiva ni cambia webhooks.
+   Hoy revisa dos tiendas, Aurela y Kenku (las dos conectadas desde el 24-10 en
+   su dirección temporal): un `GET` por hora a cada sitio, con sus claves. Una
+   tienda sin el sitio y las claves de la API guardados no recibe ni una
+   llamada.
+3. **Qué mirar después del primer :34** (solo lectura, sin datos de clientas):
+
+   ```sql
+   select s.name, x.status, x.last_run_at, x.error
+     from sync_state x join stores s on s.id = x.store_id
+    where x.source = 'woo_webhooks' order by 1;
+   select name, woo_last_error from stores where woo_last_error like 'Webhooks en WooCommerce:%';
+   ```
+
+   `ok` es que los cuatro están bien. `warning` dice qué falta (por ejemplo,
+   «order.deleted está desactivado»): se arregla en WooCommerce → Ajustes →
+   Avanzado → Webhooks (la dirección y el secreto de la tienda, estado
+   «Activo»). `error` es que no se pudo revisar: si es por permisos, la clave
+   de la API tiene que ser de un usuario «shop manager». En Vercel, el log
+   `[woo-webhooks]` lleva ids de tienda y estados por tema, sin direcciones.
+4. **Apenas sale, Kenku.** De Kenku solo llegaron avisos `order.updated` y no
+   se sabe si creó los cuatro webhooks. Para no esperar al :34: Ajustes →
+   WooCommerce de Kenku → «Probar conexión» con los campos en blanco (prueba lo
+   guardado; solo lee). El aviso suma «Webhooks: …» y la sección queda «Con
+   error» si falta alguno. Lo mismo sirve para Aurela.
+5. **El día del corte de cada tienda** (Aurela a `https://aurela.pe`, Kenku a
+   su dominio final): después de «Guardar» con la dirección nueva y las dos
+   claves, el aviso de Ajustes dice ya si los cuatro webhooks siguen activos y
+   entregando a Kapta.
+6. **Lo que no ve.** La versión de la API de cada webhook («WP REST API
+   Integration v3») y el secreto no vienen en la lista de WooCommerce: se miran
+   a mano. Un secreto mal puesto se ve cuando WooCommerce desactiva el webhook
+   (al quinto fallo seguido), no antes.
+
+**Marcha atrás.** Revertir el código basta: el cron desaparece y nada más lo
+lee. Si queda un aviso «Webhooks en WooCommerce: …» en `woo_last_error`, lo
+borra la próxima prueba buena de «Probar conexión»; la fila `woo_webhooks` de
+`sync_state` puede quedarse (`delete from sync_state where source =
+'woo_webhooks';` si se quiere quitar).

@@ -89,7 +89,9 @@ describe("vercel.json", () => {
     //     de Shopify de Kenku y Aurela (0275, MOM §35.10, 23-10-2026).
     // 30: la copia de las fotos de producto de WhatsApp a Storage, antes del
     //     mismo cierre (MOM §39, 23-10-2026).
-    expect(crons).toHaveLength(30);
+    // 31: la revisión de los webhooks de WooCommerce, que WooCommerce
+    //     desactiva solo tras 5 fallos (MOM §38.14, 25-10-2026).
+    expect(crons).toHaveLength(31);
     for (const c of crons) {
       expect(c.path.startsWith("/api/cron/")).toBe(true);
       expect(c.schedule.trim().split(/\s+/)).toHaveLength(5);

@@ -23,6 +23,7 @@ import {
 } from "@/lib/shopify-own-app";
 import { limaDateTimeInputValue } from "@/lib/repro-lima";
 import { WOO_INTAKE_TOPICS, WOO_SYNC_SOURCE, wooWebhookDeliveryUrl } from "@/lib/woocommerce-intake";
+import { WOO_WEBHOOKS_SOURCE } from "@/lib/woocommerce-webhooks-health";
 import { botOrdersEndpointUrl, isBotOrdersMigrationMissing } from "@/lib/bot-orders";
 import { limaDayStartIso } from "@/lib/auto-order-ab";
 import type { InvoiceMode, InvoiceStatus, InvoiceWriteMode } from "@/lib/invoicing/rules";
@@ -666,6 +667,12 @@ export default async function StoreSettingsPage({
       sync:
         ((sync ?? []) as { source: string; status: string | null; last_run_at: string | null; error: string | null }[])
           .filter((r) => r.source === WOO_SYNC_SOURCE)
+          .map((r) => ({ status: r.status, last_run_at: r.last_run_at, error: r.error }))[0] ?? null,
+      // La revisión de los webhooks en WooCommerce (MOM §38.14): cada hora, y
+      // al guardar o probar la conexión.
+      webhooks:
+        ((sync ?? []) as { source: string; status: string | null; last_run_at: string | null; error: string | null }[])
+          .filter((r) => r.source === WOO_WEBHOOKS_SOURCE)
           .map((r) => ({ status: r.status, last_run_at: r.last_run_at, error: r.error }))[0] ?? null,
       migrationMissing: !("platform" in (full ?? {})),
     },

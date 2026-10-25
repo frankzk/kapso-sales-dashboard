@@ -190,16 +190,33 @@ function form(fields: Record<string, string>): FormData {
   return fd;
 }
 
-const calls: { url: URL; auth: string | null }[] = [];
+const calls: { url: URL; auth: string | null; method: string }[] = [];
+
+/** Los webhooks del sitio (MOM §38.14): por defecto, los cuatro temas activos hacia esta tienda. */
+const webhook = (id: number, topic: string, status = "active", storeId = STORE_ID) => ({
+  id,
+  status,
+  topic,
+  delivery_url: `https://kapta.example/api/webhooks/woocommerce/${storeId}`,
+});
+const HEALTHY_WEBHOOKS = ["order.created", "order.updated", "order.deleted", "order.restored"].map((t, i) => webhook(i + 1, t));
+let siteWebhooks: unknown[] = HEALTHY_WEBHOOKS;
+
 function stubWoo(status = 200, body: unknown = [{ id: 1 }], headers: Record<string, string> = { "X-WP-Total": "42", "X-WP-TotalPages": "42" }) {
   calls.length = 0;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input));
-      calls.push({ url, auth: new Headers(init?.headers).get("authorization") });
+      calls.push({ url, auth: new Headers(init?.headers).get("authorization"), method: init?.method ?? "GET" });
       if (url.pathname.endsWith("/settings/general/woocommerce_currency")) {
         return new Response(JSON.stringify({ id: "woocommerce_currency", value: "PEN" }), { status: 200 });
+      }
+      if (url.pathname.endsWith("/wp-json/wc/v3/webhooks")) {
+        return new Response(JSON.stringify(siteWebhooks), {
+          status: 200,
+          headers: { "X-WP-Total": String(siteWebhooks.length), "X-WP-TotalPages": "1" },
+        });
       }
       return new Response(JSON.stringify(body), { status, headers });
     }),
@@ -210,6 +227,7 @@ beforeEach(() => {
   h.db = new FakeDb({ stores: [storeRow()] });
   h.allowed = true;
   h.revalidated.length = 0;
+  siteWebhooks = HEALTHY_WEBHOOKS;
   stubWoo();
 });
 afterEach(() => {
@@ -330,6 +348,41 @@ describe("saveWooSettings", () => {
     const r = await saveWooSettings({}, form(full));
     expect(r.error).toContain("ya está en otra tienda");
   });
+
+  it("guardado lo probado, revisa los webhooks del sitio con esas claves, solo con GET (MOM §38.14)", async () => {
+    const r = await saveWooSettings({}, form(full));
+    expect(r.notice).toContain("Webhooks: los cuatro temas tienen uno activo que entrega a esta tienda.");
+    const hooks = calls.filter((c) => c.url.pathname === "/wp-json/wc/v3/webhooks");
+    expect(hooks).toHaveLength(1);
+    expect(hooks[0]!.url.host).toBe("kenku.pe");
+    expect(hooks[0]!.auth).toBe(`Basic ${Buffer.from(`${CK}:${CS}`).toString("base64")}`);
+    expect(calls.every((c) => c.method === "GET")).toBe(true);
+    expect(h.db.rows("sync_state")).toEqual([
+      expect.objectContaining({ store_id: STORE_ID, source: "woo_webhooks", status: "ok", error: null }),
+    ]);
+    expect(h.db.rows("stores")[0]!.woo_last_error).toBeNull();
+  });
+
+  it("un webhook desactivado no frena el guardado: lo dice el aviso y queda en el último fallo", async () => {
+    siteWebhooks = HEALTHY_WEBHOOKS.map((w) => (w.topic === "order.deleted" ? { ...w, status: "disabled" } : w));
+    const r = await saveWooSettings({}, form(full));
+    expect(r.error).toBeUndefined();
+    expect(r.notice).toMatch(/^Guardado\. /);
+    expect(r.notice).toContain("Webhooks: order.deleted está desactivado.");
+    const row = h.db.rows("stores")[0]!;
+    expect(row.woo_site_url).toBe("https://kenku.pe");
+    expect(row.woo_last_error).toMatch(/^Webhooks en WooCommerce: order\.deleted está desactivado\. /);
+    expect(h.db.rows("sync_state")[0]).toMatchObject({ source: "woo_webhooks", status: "warning" });
+    // Nada de la respuesta (la dirección de entrega) llega a la base.
+    expect(JSON.stringify(h.db.rows("sync_state"))).not.toContain("kapta.example");
+  });
+
+  it("si la conexión no sirve, no guarda ni revisa los webhooks", async () => {
+    stubWoo(401, { code: "woocommerce_rest_authentication_error", message: "Clave de consumidor no válida." });
+    await saveWooSettings({}, form(full));
+    expect(calls.some((c) => c.url.pathname.endsWith("/webhooks"))).toBe(false);
+    expect(h.db.rows("sync_state")).toEqual([]);
+  });
 });
 
 describe("testWooConnection", () => {
@@ -389,6 +442,37 @@ describe("testWooConnection", () => {
     const r = await testWooConnection({}, form({}));
     expect(r.error).toContain("hacen falta");
     expect(calls).toEqual([]);
+  });
+
+  it("con la conexión buena revisa también los webhooks; con lo escrito, sin registrar nada (MOM §38.14)", async () => {
+    siteWebhooks = HEALTHY_WEBHOOKS.filter((w) => w.topic !== "order.restored");
+    const r = await testWooConnection(
+      {},
+      form({ [WOO_SETTINGS_FIELDS.siteUrl]: "https://aurela.pe", [WOO_SETTINGS_FIELDS.consumerKey]: CK2, [WOO_SETTINGS_FIELDS.consumerSecret]: CS2 }),
+    );
+    expect(r.notice).toContain("Webhooks: falta order.restored.");
+    expect(r.notice).toMatch(/\(Probado con lo escrito; todavía no se guardó\.\)$/);
+    expect(calls.filter((c) => c.url.pathname.endsWith("/webhooks")).map((c) => c.url.host)).toEqual(["aurela.pe"]);
+    expect(h.db.opsOn("stores", "update")).toEqual([]);
+    expect(h.db.opsOn("sync_state")).toEqual([]);
+  });
+
+  it("con lo guardado, la revisión queda en sync_state y en el último fallo, y una buena lo borra", async () => {
+    h.db = new FakeDb({
+      stores: [storeRow({ woo_site_url: "https://kenku.pe", woo_site_key: "kp", woo_consumer_key_enc: encrypt(CK), woo_consumer_secret_enc: encrypt(CS) })],
+    });
+    siteWebhooks = HEALTHY_WEBHOOKS.map((w) => (w.topic === "order.created" ? { ...w, status: "paused" } : w));
+    const bad = await testWooConnection({}, form({}));
+    expect(bad.notice).toContain("Conexión correcta");
+    expect(bad.notice).toContain("Webhooks: order.created está en pausa.");
+    expect(h.db.rows("stores")[0]!.woo_last_error).toMatch(/^Webhooks en WooCommerce: order\.created está en pausa\. /);
+    expect(h.db.rows("sync_state")[0]).toMatchObject({ source: "woo_webhooks", status: "warning" });
+
+    siteWebhooks = HEALTHY_WEBHOOKS;
+    const ok = await testWooConnection({}, form({}));
+    expect(ok.notice).toContain("Webhooks: los cuatro temas");
+    expect(h.db.rows("stores")[0]!.woo_last_error).toBeNull();
+    expect(h.db.rows("sync_state")[0]).toMatchObject({ source: "woo_webhooks", status: "ok", error: null });
   });
 });
 
