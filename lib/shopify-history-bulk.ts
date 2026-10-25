@@ -475,7 +475,19 @@ export function groupBulkProducts(lines: readonly JsonlLine[]): { products: Hist
         break;
     }
   }
-  return { products: [...byGid.values()], images };
+  // Una foto de la biblioteca de Shopify puede estar en dos productos: la
+  // misma MediaImage bajo dos padres. La tabla guarda una fila por foto
+  // (`store_id, image_id`), y dos filas iguales en una misma tanda tumbaban el
+  // upsert entero («ON CONFLICT DO UPDATE command cannot affect row a second
+  // time»): pasó con Kenku el 25-10-2026, 3 fotos compartidas de 3.773. Queda
+  // la última, igual que cuando aparecen en tandas distintas (el upsert la
+  // reescribe); la foto es la misma y se copia una vez.
+  const byImage = new Map<string, HistoryProductImage>();
+  for (const image of images) {
+    byImage.delete(image.image_id);
+    byImage.set(image.image_id, image);
+  }
+  return { products: [...byGid.values()], images: [...byImage.values()] };
 }
 
 /** Un carrito abandonado o un borrador del archivo, sin sus productos. */

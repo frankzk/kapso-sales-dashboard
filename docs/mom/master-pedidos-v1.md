@@ -15802,7 +15802,11 @@ cierre del 28-10-2026 00:00 UTC (§35.10). «Traer todo» va paso por paso:
    privado `shopify-history` (`<tienda>/productos/<producto>/<foto>.<ext>`).
    Va por tandas de ~60 s; una foto que falla tres veces queda marcada y deja
    de intentarse. Es un respaldo: no es la foto de las plantillas de WhatsApp
-   (§39).
+   (§39). **Una foto que está en dos productos se guarda una vez
+   (25-10-2026)**, con el último producto en que aparece: la tabla tiene una
+   fila por foto, y dos iguales en la misma tanda tumbaban el guardado entero.
+   Pasó con Kenku: 3 fotos compartidas de 3.773 dejaron «Productos» trabado en
+   «No se pudieron guardar las fotos: ON CONFLICT DO UPDATE…».
 3. **Carritos abandonados** de la web y 4. **borradores** (el formulario contra
    entrega deja uno por envío), en `shopify_history_carts`: quién dejó sus
    datos, qué quería, el enlace para retomar o la factura, sus UTM y el pedido
