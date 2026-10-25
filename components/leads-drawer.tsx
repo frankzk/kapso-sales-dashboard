@@ -67,6 +67,7 @@ import {
 } from "@/components/ops-ui";
 import {
   IconAlert,
+  IconArrowRight,
   IconArrowUpRight,
   IconCamera,
   IconChat,
@@ -146,6 +147,12 @@ export type LeadDrawerProps = {
   onClose: () => void;
   onRegistered: (update?: LeadDrawerUpdate) => void;
   onReady?: () => void;
+  /**
+   * «Siguiente lead»: el de debajo en la lista que está mirando (`leadAfter`).
+   * Sin `lead`, es el último de la lista y el botón queda apagado. Sin la prop
+   * entera (otra pantalla abre la ficha), no hay botón.
+   */
+  next?: { lead: LeadRow | null; opening: boolean; onOpen: () => void };
 };
 
 export type LeadDrawerUpdate = {
@@ -414,6 +421,7 @@ export function LeadDrawer({
   onClose,
   onRegistered,
   onReady,
+  next,
 }: LeadDrawerProps) {
   const [orderOpen, setOrderOpen] = useState(false);
   const { state: copied, copy } = useCopyToClipboard();
@@ -678,13 +686,36 @@ export function LeadDrawer({
         </span>
       }
       actions={
-        // QR tel: arriba a la derecha y solo, como siempre estuvo (Frankz,
-        // 14-10-2026): la asesora lo escanea con su celular y el marcador abre
-        // listo. Solo en escritorio; en el teléfono ya está «Llamar».
-        canCall ? (
-          <div className="hidden lg:block">
-            <CallQr phone={lead.phone as string} size={64} />
-          </div>
+        // QR tel: arriba a la derecha (Frankz, 14-10-2026): la asesora lo
+        // escanea con su celular y el marcador abre listo. Solo en escritorio;
+        // en el teléfono ya está «Llamar». A su derecha, antes de «Cerrar»,
+        // «Siguiente lead» (25-10-2026): pasar al de debajo en la lista sin
+        // cerrar la ficha y buscar otro.
+        canCall || next ? (
+          <>
+            {canCall && (
+              <div className="hidden lg:block">
+                <CallQr phone={lead.phone as string} size={64} />
+              </div>
+            )}
+            {next && (
+              <OpsButton
+                size="sm"
+                onClick={next.onOpen}
+                disabled={!next.lead || next.opening}
+                title={
+                  next.lead
+                    ? `Abrir ${next.lead.name?.trim() || leadPhoneLabel(next.lead)}, el que sigue en la lista`
+                    : "Es el último de la lista"
+                }
+                className="pointer-coarse:h-11"
+              >
+                <span className="sm:hidden">Siguiente</span>
+                <span className="hidden sm:inline">Siguiente lead</span>
+                <IconArrowRight aria-hidden className="size-4 text-ink-500" />
+              </OpsButton>
+            )}
+          </>
         ) : null
       }
       width="max-w-[1040px]"

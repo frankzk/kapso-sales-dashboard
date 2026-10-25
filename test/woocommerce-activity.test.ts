@@ -546,7 +546,7 @@ describe("la reactivación en WooCommerce", () => {
       }
       // Sigue anulado (owner, 24-10-2026): conserva su `cancelled_at`…
       expect(order(), via).toMatchObject({ financial_status: "refunded" });
-      expect(order().cancelled_at, via).not.toBeNull();
+      expect(order()?.cancelled_at, via).not.toBeNull();
       // …pero WooCommerce no lo reactivó: ningún «Reactivado en WooCommerce».
       expect(events().map((e) => e.kind), via).toEqual(["cancelled_woocommerce"]);
       expect(site.notesCalls(), via).toEqual([]);
