@@ -71,6 +71,10 @@ function fakeAdmin(rows: Row[], pend: Row[] = []) {
       },
       not: () => q,
       is: () => q,
+      // La búsqueda en la base local (pedidos de WooCommerce, MOM §38.12): aquí
+      // no encuentra nada, como antes de que existiera.
+      ilike: () => q,
+      or: () => q,
       order: () => q,
       limit: () => q,
       maybeSingle: async () => ({ data: table === "orders" ? { id: "ord-1" } : null, error: null }),
@@ -124,7 +128,9 @@ beforeEach(() => {
 
 describe("runSuggestionBatch: Shopify falló en la búsqueda", () => {
   it("el envío no queda revisado y la tanda termina si nada avanzó", async () => {
-    h.search.mockRejectedValue(new Error("Shopify GraphQL HTTP 402: Unavailable Shop"));
+    // Un mal momento de Shopify (5xx). Un 402 de tienda que ya no está se busca
+    // en la base local (test/shipment-auto-match-local.test.ts).
+    h.search.mockRejectedValue(new Error("Shopify GraphQL HTTP 503: Service Unavailable"));
     const { admin, updates } = fakeAdmin([
       { id: "g1", order_name: "#KP140001", customer_phone: "51930295803" },
       { id: "g2", order_name: "#KP140002", customer_phone: "51930295804" },

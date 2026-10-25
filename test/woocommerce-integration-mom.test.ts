@@ -122,9 +122,11 @@ describe("MOM §38.12", () => {
     expect(capture).toContain('if (input.platform === "woocommerce") return { ok: true, wrote: false, why: "woocommerce" };');
   });
 
-  it("deja escrito lo que falta: el lector de boletas de WooCommerce y la búsqueda de Envíos", () => {
+  it("deja escrito lo que falta (el lector de boletas de WooCommerce) y lo hecho (la búsqueda de Envíos)", () => {
     expect(S38_12).toContain("**La boleta de un pedido de WooCommerce** espera su lector");
-    expect(S38_12).toContain("**Auto-vínculo y búsqueda de Envíos** buscan en Shopify");
+    // Hecho el 25-10-2026: test/shipment-auto-match-local.test.ts.
+    expect(S38_12).toContain("**Auto-vínculo y búsqueda de Envíos** con pedidos de WooCommerce: **hecho (25-10-2026)**");
+    expect(S38_12).toContain("#### Envíos: el auto-vínculo y la búsqueda con pedidos de WooCommerce (25-10-2026)");
   });
 
   it("las secciones de WooCommerce siguen en orden y sin repetirse", () => {

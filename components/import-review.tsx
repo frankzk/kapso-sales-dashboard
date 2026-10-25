@@ -203,9 +203,9 @@ async function runAutoLinkLoop(
 ): Promise<{ processed: number; linked: number; retry: number; error?: string }> {
   let processed = 0;
   let linked = 0;
-  // Los que no se pudieron buscar porque Shopify falló: quedan sin revisar y
-  // entran en la próxima pasada. Cuentan los de la última vuelta, que son los
-  // que siguen pendientes.
+  // Los que no se pudieron buscar porque Shopify (o la base) falló: quedan sin
+  // revisar y entran en la próxima pasada. Cuentan los de la última vuelta, que
+  // son los que siguen pendientes.
   let retry = 0;
   for (;;) {
     const r = await processSuggestionBatch();
@@ -219,12 +219,13 @@ async function runAutoLinkLoop(
   return { processed, linked, retry };
 }
 
-/** «3 guías no se pudieron buscar en Shopify…», o nada. */
+/** «3 guías no se pudieron buscar…», o nada. Casi siempre es Shopify con un mal
+ *  momento; también puede ser la base (MOM §38.12, el auto-vínculo). */
 function retryNote(retry: number): string {
   if (retry <= 0) return "";
   return retry === 1
-    ? "1 guía no se pudo buscar en Shopify; se vuelve a buscar la próxima vez."
-    : `${retry} guías no se pudieron buscar en Shopify; se vuelven a buscar la próxima vez.`;
+    ? "1 guía no se pudo buscar; se vuelve a buscar la próxima vez."
+    : `${retry} guías no se pudieron buscar; se vuelven a buscar la próxima vez.`;
 }
 
 /**
