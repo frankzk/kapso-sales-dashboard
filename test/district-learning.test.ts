@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { districtLearnVerdict, guideProvinceFits, learnedDistrictFits } from "@/lib/district-learning";
+import { districtLearnVerdict, guideProvinceFits, learnedDistrictFits, printedProvince } from "@/lib/district-learning";
 import { departmentKey, departmentsConflict, provinceFitsDepartment } from "@/lib/peru-departamentos";
 import { leadDeliveryProbe } from "@/lib/lead-delivery-coverage";
 import { MOM_RESOLUTION_VERSION } from "@/lib/order-macro-stage";
@@ -107,6 +107,26 @@ describe("guideProvinceFits: la provincia que una salida copió del Master", () 
     expect(guideProvinceFits("LIMA", "Lima (provincia)", "Miraflores")).toBe(true);
     expect(guideProvinceFits("huaraz", "Lima", "Huaraz")).toBe(true);
     expect(guideProvinceFits(null, "Lima", "Miraflores")).toBe(false);
+  });
+});
+
+describe("printedProvince: lo que sale en el rótulo de una caja ya creada", () => {
+  it("la caja KP143872-S01 (Miraflores de Lima con «arequipa») se rotula «Lima»", () => {
+    expect(printedProvince("arequipa", "Lima (provincia)", "Miraflores")).toBe("Lima");
+    expect(printedProvince("HUARAZ", "Lima", "Independencia")).toBe("Lima");
+    expect(printedProvince("bellavista", "Callao", "Bellavista")).toBe("Callao");
+  });
+
+  it("lo que cabe sale tal cual, y fuera de Lima Metropolitana no se toca", () => {
+    expect(printedProvince("LIMA", "Lima (provincia)", "Miraflores")).toBe("LIMA");
+    expect(printedProvince("arequipa", "Arequipa", "Miraflores")).toBe("arequipa");
+    expect(printedProvince("huaraz", "Lima", "Huaraz")).toBe("huaraz");
+    expect(printedProvince(null, "Lima", "Miraflores")).toBeNull();
+  });
+
+  it("el rótulo la usa", () => {
+    const route = readFileSync(resolve(__dirname, "../app/api/pedidos/rotulos/route.ts"), "utf8");
+    expect(route).toContain("printedProvince(row.province, row.region, row.district)");
   });
 });
 

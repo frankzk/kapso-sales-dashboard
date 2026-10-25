@@ -101,3 +101,21 @@ export function guideProvinceFits(
   if (!province) return false;
   return !judgeable(district) || provinceFitsDepartment(province, orderRegion);
 }
+
+/**
+ * La provincia que se IMPRIME de una caja (el rótulo, 25-10-2026). La caja
+ * guarda la provincia que copió del Master al crearse, y una caja de Miraflores
+ * de Lima creada con «miraflores → arequipa» aprendido salía rotulada
+ * «Miraflores / arequipa» aunque el pedido ya estuviera corregido (#KP143872).
+ * Si no cabe en su departamento, se imprime el de Lima o el Callao; fuera de
+ * Lima Metropolitana, lo que tenga la caja.
+ */
+export function printedProvince(
+  province: string | null | undefined,
+  region: string | null | undefined,
+  district: string | null | undefined,
+): string | null {
+  const p = province?.trim() || null;
+  if (!p || guideProvinceFits(p, region, district)) return p;
+  return normalizeDepartment(region) === "Callao" ? "Callao" : "Lima";
+}
