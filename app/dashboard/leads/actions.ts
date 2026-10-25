@@ -68,6 +68,14 @@ import {
 } from "@/lib/shopify";
 import { mapWooOrder } from "@/lib/woocommerce";
 import {
+  claimWooFormSale,
+  finishWooFormClaim,
+  noteWooFormOrder,
+  rearmWooFormClaim,
+  releaseWooFormClaim,
+  wooFormPostUnansweredText,
+} from "@/lib/woo-sale-guard";
+import {
   buildWooSaleOrder,
   createWooSaleOrder,
   WOO_CART_SALE_CHANNEL,
@@ -3196,6 +3204,12 @@ async function registrarVentaGenerada(v: {
  *     woocommerce`), insertada solo si falta: el webhook y la pasada que
  *     lleguen después la actualizan, no la duplican.
  *
+ * Antes de llamar a WooCommerce toma el candado del intento, el mismo del bot
+ * (`claimWooFormSale`, `bot_order_requests` con la llave `form-<requestId>`,
+ * MOM §38.12 «El candado del formulario»): un doble clic no llega dos veces a
+ * WooCommerce, y un POST sin respuesta deja el candado puesto hasta que
+ * WordPress haya podido guardar el pedido, para que el reintento lo encuentre.
+ *
  * No hay borrador que completar: el carrito de Shopify del lead solo prellenó
  * el formulario (por SKU). Si estaba abierto (según la copia local) y la venta
  * no es un «pedido nuevo», el lead queda con el carrito recuperado, como en
@@ -3280,7 +3294,41 @@ async function generateWooOrder(args: {
     },
     note: input.note ?? null,
   });
-  const outcome = await createWooSaleOrder({ client: wooSaleClient(woo), body, expected, requestId });
+  // EL CANDADO DEL INTENTO (MOM §38.12, 25-10-2026), el mismo del bot
+  // (`bot_order_requests`, 0277, con la llave `form-<requestId>`): dos llamadas
+  // a la vez con este id no llegan las dos a WooCommerce, y un POST sin
+  // respuesta deja el candado puesto hasta que WordPress haya podido guardar el
+  // pedido, para que el reintento lo encuentre en vez de crear otro.
+  const guard = await claimWooFormSale({ admin, storeId: ctx.storeId, requestId, bodyHash: expected.fingerprint });
+  if (guard.kind === "busy" || guard.kind === "expired" || guard.kind === "error") return { error: guard.message };
+  const claim = guard.kind === "claim" ? guard.claim : null;
+
+  const outcome = await createWooSaleOrder({
+    client: wooSaleClient(woo),
+    body,
+    expected,
+    requestId,
+    // El pedido que ya creó un intento anterior de este formulario: se lee por
+    // su id a cualquier edad, antes que la búsqueda de las últimas 2 horas.
+    knownOrderId: claim?.wooOrderId ?? null,
+    onCreated: claim ? (wooId) => noteWooFormOrder(admin, claim, wooId) : undefined,
+  });
+
+  // El candado: un POST sin respuesta lo deja puesto (re-armado desde ahora);
+  // un pedido vivo lo cierra con el pedido; lo demás lo suelta (`failed`) y el
+  // reintento lo retoma enseguida. Si la base no contesta, el candado vence
+  // solo (`BOT_ORDER_CLAIM_TTL_MS`) y el reintento lee el pedido por su id.
+  const guardLog = (paso: string) => (e: unknown) =>
+    console.error(`[woo-form-guard] ${JSON.stringify({ event: `${paso}_failed`, store: ctx.storeId, error: e instanceof Error ? e.message.slice(0, 120) : "error" })}`);
+  if (claim && outcome.kind !== "created" && outcome.kind !== "adopted") {
+    if (outcome.kind === "error" && outcome.postUnanswered) {
+      await rearmWooFormClaim(admin, claim).catch(guardLog("rearm"));
+    } else {
+      const code =
+        outcome.kind === "price" ? "price_mismatch" : outcome.kind === "lines" ? "order_mismatch" : outcome.kind === "conflict" ? "conflict" : "woocommerce_unavailable";
+      await releaseWooFormClaim(admin, claim, code).catch(guardLog("release"));
+    }
+  }
 
   /** La constancia en el lead, donde la asesora y el admin miran. */
   const constancia = (note: string) =>
@@ -3322,6 +3370,10 @@ async function generateWooOrder(args: {
     return { error: rechazo.error };
   }
   if (outcome.kind === "error") {
+    // Un POST sin respuesta (y el pedido sin aparecer): con el candado, la
+    // asesora espera a que WordPress termine; sin él (sin la 0277), el texto
+    // de siempre.
+    if (outcome.postUnanswered && claim) return { error: wooFormPostUnansweredText(outcome.message) };
     const limpieza = outcome.cleanup ? ` ${wooCleanupText(outcome.cleanup, outcome.orderLabel)}` : "";
     return { error: `${outcome.message}${limpieza}` };
   }
@@ -3329,6 +3381,18 @@ async function generateWooOrder(args: {
   const order = outcome.order;
   const adoptado = outcome.kind === "adopted";
   const row = mapWooOrder(order, { id: ctx.storeId, woo_site_key: woo.siteKey });
+  // Vivo: el candado se cierra con el pedido ANTES de la fila local, como en el
+  // bot. Lo que impide un segundo pedido es el candado; la fila puede faltar.
+  if (claim) {
+    const numero = String(order.number ?? "").trim().replace(/^#/, "") || String(order.id);
+    await finishWooFormClaim(admin, claim, {
+      wooOrderId: Number.isInteger(Number(order.id)) && Number(order.id) > 0 ? Number(order.id) : null,
+      orderId: row?.shopify_order_id ?? `wc-${woo.siteKey}-${order.id}`,
+      orderName: row?.name ?? `#${numero}`,
+      total: row?.total_amount ?? null,
+      currency: row?.currency ?? currency,
+    }).catch(guardLog("done"));
+  }
   if (!row) {
     return { error: "WooCommerce devolvió el pedido en un estado que no entra al Master. Revísalo en WooCommerce." };
   }

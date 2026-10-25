@@ -1188,3 +1188,24 @@ describe("el tope por minuto cuenta solo el último minuto", () => {
     expect((await call()).status).toBe(200);
   });
 });
+
+describe("las filas de «Generar pedido» (`form-`) comparten la tabla y no cuentan en el tope del bot", () => {
+  it("más de 20 candados recientes del formulario no frenan un pedido del bot", async () => {
+    setup();
+    for (let i = 0; i < BOT_ORDER_RATE_PER_MINUTE + 5; i++) {
+      h.db.rows("bot_order_requests").push({
+        id: `f-${i}`,
+        store_id: STORE,
+        request_id: `form-0000000${String(i).padStart(2, "0")}-aaaa-4bbb-8ccc-0123456789ab`,
+        body_hash: "1".repeat(64),
+        status: "done",
+        claim_token: `tok-f-${i}`,
+        claimed_at: new Date(t).toISOString(),
+        created_at: new Date(t).toISOString(),
+      });
+    }
+    const res = await call();
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, order: { name: "#KP200501" } });
+  });
+});

@@ -192,7 +192,9 @@ describe("MOM §38.13", () => {
 
   it("38.12 ya no dice que el endpoint falta, y apunta al candado de 38.13", () => {
     expect(S38_12).toContain("**hecho (23-10-2026, 38.13)**");
-    expect(S38_12).toContain("pero el bot sí: su endpoint tiene el candado en la base, por (tienda, id del intento) (38.13)");
+    // Desde el 25-10-2026 el formulario usa el mismo candado (38.12, «El candado del formulario»).
+    expect(S38_12).toContain("Por eso el formulario y el bot tienen el candado en la base, por (tienda, id del intento).");
+    expect(S38_12).not.toContain("la pantalla no puede hacerlo");
   });
 
   it("los archivos que nombra existen", () => {

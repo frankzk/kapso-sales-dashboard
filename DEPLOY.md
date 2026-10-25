@@ -4807,3 +4807,39 @@ Comprobar: `select kind, status, records, error from shopify_history_imports
 order by created_at desc limit 10;` y `select count(*) filter (where
 storage_path is not null), count(*) from shopify_history_product_images;`.
 
+### 25-10-2026 · «Generar pedido» en WooCommerce con el candado del bot (sin migración, MOM §38.12)
+
+«Generar pedido» (y «Venta telefónica») en una tienda con `platform =
+'woocommerce'` toma, antes de llamar a WooCommerce, el **mismo candado que el
+bot** (`bot_order_requests`, de la 0277, **ya aplicada**), con la llave
+`form-<id del intento>`. Un POST sin respuesta deja el candado puesto 2 minutos
+(la asesora lee «espera 2 minutos y vuelve a pulsar «Generar pedido»») y el
+reintento retoma o adopta el pedido que WordPress guardó tarde; un doble clic
+o un reintento mientras la primera llamada sigue corriendo recibe «este mismo
+pedido ya se está generando» sin llamar a WooCommerce. El tope por minuto del
+bot no cuenta las filas `form-`.
+
+1. **Sin migración, sin crons, sin variables nuevas.** Requiere la 0277
+   (aplicada); sin ella el formulario sigue como antes (solo la búsqueda por
+   `kapta_request_id`) y lo deja en el registro (`[woo-form-guard]`
+   `unguarded`). **El código**, por el camino de siempre. Shopify no cambia:
+   una tienda en `shopify` nunca toca el candado.
+2. **Qué vigilar** en el registro de Vercel: `[woo-form-guard]` con
+   `claim_failed` (la base no dejó tomar el candado: la venta no se creó y la
+   asesora reintenta), `busy` (doble clic o espera de un POST sin respuesta) y
+   `[woo-sale]` `woo.sale.post_unanswered`. Ninguna línea lleva datos de la
+   clienta.
+3. **Verificar** (solo lectura):
+
+   ```sql
+   -- Los candados del formulario por tienda y estado, de las últimas 24 h.
+   select store_id, status, error_code, count(*), max(attempts)
+     from bot_order_requests
+    where request_id like 'form-%' and created_at > now() - interval '24 hours'
+    group by 1, 2, 3 order by 1, 2;
+   ```
+
+   Un `processing` de hace más de unos minutos es un POST que no contestó y que
+   nadie reintentó: revisar en WooCommerce si quedó el pedido (pendiente de
+   pago) antes de generar otro desde un formulario nuevo.
+
