@@ -37,6 +37,15 @@
 // vez cada uno, y comparten número, horario, tope y botones con los otros dos.
 // Lo encola `lib/shalom/pickup-reminder.ts`; aquí solo se envía. Su plantilla
 // lleva la FOTO del producto en la cabecera.
+//
+// Y EL DE LLEGADA PARA QUIEN YA PAGÓ, SOLO OLVA (0281). El aviso de llegada es
+// de cobro y no sale a quien ya no debe nada; en Shalom vale porque tiene su
+// clave, pero Olva no tiene clave y la clienta que pagó entero nunca se enteraba
+// de que su paquete llegó (#KP141593, #KP142910, #KP140003). Así que, en la
+// MISMA fila `disponible`, si la clienta de Olva ya no debe nada se manda otra
+// plantilla —«ya llegó, recógelo con tu DNI», sin importes ni botones— en vez
+// de omitir. Misma fila ⇒ un solo aviso de llegada por guía: quien recibió el
+// de cobro y pagó después no recibe otro.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { OLVA_PICKUP_WINDOW_DAYS, formatOlvaTracking } from "@/lib/olva/tracking";
@@ -110,6 +119,13 @@ export const REMINDER_DEFAULT_TEMPLATE: Record<NoticeCourier, string> = {
   shalom: "guias_shalom_recordatorio",
   olva: "guias_olva_recordatorio",
 };
+
+/** El aviso de llegada para pagados de Olva (0281): nombre, producto, oficina,
+ *  tracking y fecha límite. Ningún importe: no hay nada que cobrar. */
+export const PAID_ARRIVAL_DEFAULT_PARAMS = "nombre,producto,agencia,guia,vence";
+export const PAID_ARRIVAL_DEFAULT_TEMPLATE = "guias_olva_llegada_pagado";
+/** Los tokens de dinero, que el aviso para pagados no admite. */
+export const MONEY_TOKENS: readonly TransitToken[] = ["total", "adelanto", "saldo", "yape"];
 
 /** Días que Shalom guarda el paquete antes de devolverlo (MOM §12). */
 export const PICKUP_WINDOW_DAYS = 28;
@@ -334,11 +350,17 @@ export interface TransitConfig {
   timezone: string;
 }
 
+export type ResolvedTransitConfig = { cfg: TransitConfig } | { cfg: null; reason: string };
+
 export function transitConfig(
   creds: StoreCreds,
   kind: NoticeKind = "transito",
   courier: NoticeCourier = "shalom",
-): { cfg: TransitConfig } | { cfg: null; reason: string } {
+  /** `paid`: la plantilla de llegada para quien ya no debe nada (0281). Solo
+   *  existe para Olva y para el aviso de llegada. */
+  opts: { paid?: boolean } = {},
+): ResolvedTransitConfig {
+  if (opts.paid) return paidArrivalConfig(creds, kind, courier);
   // Lo que cambia por tipo de aviso —y por courier— es el TEXTO: plantilla,
   // variables, ticket y su propio interruptor. El número, el idioma, el horario
   // y las cuentas son de la tienda y se comparten — encender el de llegada, o
@@ -384,6 +406,48 @@ export function transitConfig(
       attachTicket: Boolean(attach),
       headerImage: recordatorio,
       fallbackImageUrl: recordatorio ? creds.shalom_reminder_fallback_image_url?.trim() || null : null,
+      phoneNumberId: creds.shalom_transit_phone_number_id?.trim() || null,
+      storePhoneNumberId: creds.whatsapp_phone_number_id,
+      apiKey: creds.kapso_api_key,
+      hourStart: creds.shalom_transit_hour_start ?? 8,
+      hourEnd: creds.shalom_transit_hour_end ?? 21,
+      timezone: creds.timezone || "America/Lima",
+    },
+  };
+}
+
+/**
+ * La config del aviso «ya llegó, recógelo con tu DNI» para la clienta de Olva
+ * que ya no debe nada (0281). Comparte con los demás el número, el idioma, el
+ * horario y las cuentas; la plantilla, sus variables y su interruptor son
+ * propios, como todos. Nunca lleva ticket ni imagen, y NO admite variables de
+ * dinero: una plantilla que dijera «saldo S/ 0.00» a quien pagó es justo lo que
+ * este aviso existe para no hacer.
+ */
+function paidArrivalConfig(creds: StoreCreds, kind: NoticeKind, courier: NoticeCourier): ResolvedTransitConfig {
+  const que = "aviso de llegada para pagados de Olva";
+  if (courier !== "olva" || kind !== "disponible") {
+    return { cfg: null, reason: `el ${que} solo existe para la llegada de Olva` };
+  }
+  if (!creds.olva_paid_arrival_template_enabled) return { cfg: null, reason: `${que} apagado en la tienda` };
+  const templateName = creds.olva_paid_arrival_template_name?.trim();
+  if (!templateName) return { cfg: null, reason: `la tienda no tiene plantilla de ${que} configurada` };
+  if (!creds.kapso_api_key) return { cfg: null, reason: "la tienda no tiene API key de Kapso" };
+  const tokens = parseTransitParams(creds.olva_paid_arrival_params);
+  if (!tokens.length) return { cfg: null, reason: `el ${que} no tiene el orden de variables configurado` };
+  const dinero = tokens.filter((t) => MONEY_TOKENS.includes(t));
+  if (dinero.length) {
+    return { cfg: null, reason: `el ${que} no lleva importes: quita ${dinero.join(", ")} del orden de variables` };
+  }
+  return {
+    cfg: {
+      courier,
+      templateName,
+      language: creds.shalom_transit_template_language ?? "es",
+      tokens,
+      attachTicket: false,
+      headerImage: false,
+      fallbackImageUrl: null,
       phoneNumberId: creds.shalom_transit_phone_number_id?.trim() || null,
       storePhoneNumberId: creds.whatsapp_phone_number_id,
       apiKey: creds.kapso_api_key,
@@ -781,6 +845,28 @@ export function noticeSkipReason(input: {
   return null;
 }
 
+/**
+ * ¿Toca el aviso de llegada PARA PAGADOS en vez de omitir? Pura (0281).
+ *
+ * Solo el de llegada de OLVA, solo a un pedido abierto, y solo cuando la razón
+ * para no mandar el de cobro es que ya no debe nada (pagado en el checkout o
+ * todo validado). Shalom no cambia: tiene su clave, y el mensaje de la clave ya
+ * le dijo que la presente con su DNI cuando llegue.
+ */
+export function olvaPaidArrivalApplies(input: {
+  kind: NoticeKind | null | undefined;
+  courier: NoticeCourier;
+  generalStatus: string | null | undefined;
+  orderTotal: number | null | undefined;
+  validatedAmount: number | null | undefined;
+  webPrepaid?: boolean;
+}): boolean {
+  if (input.kind !== "disponible" || input.courier !== "olva") return false;
+  if (input.generalStatus && CLOSED_ORDER_STATUSES.includes(input.generalStatus)) return false;
+  if (input.webPrepaid) return true;
+  return pendingBalance(input.orderTotal, input.validatedAmount) === 0;
+}
+
 type SendTemplate = typeof sendWhatsappTemplate;
 
 /**
@@ -932,8 +1018,22 @@ export async function processTransitNotifications(
       );
     }
     const resolved = configByStore.get(claveCfg)!;
+    // La llegada de Olva tiene una segunda plantilla, para quien ya pagó (0281).
+    // Cuál de las dos sale se sabe al enviar, con el saldo delante.
+    let paid: ResolvedTransitConfig | null = null;
+    if (kind === "disponible" && courier === "olva") {
+      const clavePagado = `${claveCfg}:pagado`;
+      if (!configByStore.has(clavePagado)) {
+        const creds = credsByStore.get(row.store_id) ?? null;
+        configByStore.set(
+          clavePagado,
+          creds ? transitConfig(creds, kind, courier, { paid: true }) : { cfg: null, reason: "tienda no encontrada" },
+        );
+      }
+      paid = configByStore.get(clavePagado)!;
+    }
 
-    if (!resolved.cfg) {
+    if (!resolved.cfg && !paid?.cfg) {
       // Apagado o sin configurar NO es un fallo: es la tienda decidiendo. Se
       // cierra la fila para que encender el aviso después no dispare avisos de
       // guías que salieron hace semanas.
@@ -944,7 +1044,8 @@ export async function processTransitNotifications(
       report.skipped += 1;
       continue;
     }
-    const cfg = resolved.cfg;
+    // El horario es de la tienda: el mismo en las dos plantillas.
+    const cfg = (resolved.cfg ?? paid?.cfg)!;
 
     if (!transitWithinHours(nowIso, cfg.timezone, cfg.hourStart, cfg.hourEnd)) {
       report.deferred += 1;
@@ -959,7 +1060,7 @@ export async function processTransitNotifications(
       continue;
     }
 
-    const outcome = await sendOne(admin, row, cfg, { nowIso, send, kind, loadCatalog, siteUrl });
+    const outcome = await sendOne(admin, row, resolved, { nowIso, send, kind, loadCatalog, siteUrl, paid });
     const cuenta = enviados.get(row.store_id);
     if (outcome === "sent" && cuenta) {
       cuenta.day += 1;
@@ -983,8 +1084,10 @@ function nextAttemptIso(nowIso: string, attempts: number): string {
 async function sendOne(
   admin: SupabaseClient,
   row: TransitQueueRow,
-  cfg: TransitConfig,
+  charge: ResolvedTransitConfig,
   ctx: {
+    /** La plantilla de llegada para pagados de Olva (0281); null fuera de ella. */
+    paid?: ResolvedTransitConfig | null;
     nowIso: string;
     send: SendTemplate;
     kind?: NoticeKind;
@@ -995,7 +1098,7 @@ async function sendOne(
   },
 ): Promise<"sent" | "failed" | "retry" | "skipped"> {
   const attempts = (row.attempts ?? 0) + 1;
-  const courier = cfg.courier ?? "shalom";
+  const courier: NoticeCourier = (charge.cfg ?? ctx.paid?.cfg)?.courier ?? (row.courier === "olva" ? "olva" : "shalom");
   const recordatorio = isReminderKind(ctx.kind);
 
   /** Cerrar la fila sin mandar: no es un fallo, es que ya no toca. */
@@ -1053,7 +1156,35 @@ async function sendOne(
     validatedAmount: facts.validatedAmount,
     webPrepaid,
   });
-  if (noAvisar) return skip(noAvisar);
+  // QUÉ PLANTILLA. La de cobro, salvo que la clienta de Olva ya no deba nada:
+  // entonces la de pagados (0281) en vez de omitir. Sin esa plantilla
+  // configurada, se omite como siempre, con el motivo diciendo qué falta.
+  let cfg: TransitConfig;
+  let pagado = false;
+  if (
+    noAvisar &&
+    ctx.paid &&
+    olvaPaidArrivalApplies({
+      kind: ctx.kind,
+      courier,
+      generalStatus,
+      orderTotal: facts.orderTotal,
+      validatedAmount: facts.validatedAmount,
+      webPrepaid,
+    })
+  ) {
+    if (!ctx.paid.cfg) {
+      return skip(`${noAvisar} · no salió «ya llegó» para pagados: ${ctx.paid.reason} (Ajustes → Avisos de guía Olva)`);
+    }
+    cfg = ctx.paid.cfg;
+    pagado = true;
+  } else if (noAvisar) {
+    return skip(noAvisar);
+  } else if (!charge.cfg) {
+    return skip(charge.reason);
+  } else {
+    cfg = charge.cfg;
+  }
 
   // El recordatorio (0242) además tiene que seguir siendo verdad AL ENVIAR: el
   // paquete sigue en la agencia y el plazo no ha pasado. Su llegada se lee por
@@ -1080,6 +1211,10 @@ async function sendOne(
   // calcula siempre porque cuesta nada y así `transitBodyParams` decide con el
   // dato delante. Con los días de CADA courier: Olva devuelve a los 6, Shalom
   // a los 28.
+  // El de pagados cuenta desde la llegada que fijó el rastreo de Olva, la misma
+  // de la que sale `agency_expires_at` en el Master: la fecha del mensaje y la
+  // del Master tienen que ser la misma.
+  if (pagado) llegada = shipment.agency_arrived_at || llegada;
   facts.pickupDeadline = pickupDeadlineLabel(llegada, cfg.timezone, pickupWindowDays(courier));
 
   if (!phone || !isSendablePhone(phone)) {
@@ -1215,7 +1350,9 @@ async function sendOne(
     const que = recordatorio
       ? `Recordatorio de recojo (día ${ctx.kind === "recordatorio_d7" ? 7 : 3})`
       : ctx.kind === "disponible"
-        ? "Aviso de llegada a la agencia"
+        ? pagado
+          ? "Aviso de llegada a la agencia (pedido pagado, sin cobro)"
+          : "Aviso de llegada a la agencia"
         : "Aviso de guía en tránsito";
     const conImagen =
       imageSource === "producto" ? " con la foto del producto" : imageSource === "respaldo" ? " con la imagen de respaldo" : "";

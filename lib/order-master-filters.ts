@@ -74,6 +74,15 @@ export interface MasterFilters {
    * lectura caída) el filtro no trae ningún pedido, nunca todos.
    */
   pendingVoucherOrderIds?: readonly string[] | null;
+  /**
+   * «Pagado sin aviso» (MOM §12): en la agencia, con el plazo por vencer o
+   * vencido, ya pagado y sin ningún aviso de llegada enviado. Viaja por la URL
+   * como `pa=1`.
+   */
+  paidUnnotified: boolean;
+  /** Los pedidos que trae, resueltos en el servidor como los de `pendingVoucher`
+   *  (lib/agency-pickup-alert-access.ts). Sin resolver, ninguno. */
+  paidUnnotifiedOrderIds?: readonly string[] | null;
   /** Búsqueda libre sobre código, cliente, teléfono y guía. */
   search: string;
   /** Cola de Volver a contactar: vencido | hoy | proximo. */
@@ -161,6 +170,7 @@ export function emptyFilters(): MasterFilters {
     pickupStates: new Set(),
     expiringSoon: false,
     pendingVoucher: false,
+    paidUnnotified: false,
     search: "",
     confirmationDue: "",
     managementDays: new Set(),
@@ -218,6 +228,7 @@ export function hasActiveFilters(f: MasterFilters): boolean {
     f.pickupStates.size > 0 ||
     f.expiringSoon ||
     f.pendingVoucher ||
+    f.paidUnnotified ||
     f.search.trim().length > 0
     || Boolean(f.confirmationDue)
     || f.managementDays.size > 0
@@ -350,6 +361,8 @@ export function matchesFilters(
 
   // Lo trae la fila ya decorada (lib/pending-voucher.ts, `withPendingVouchers`).
   if (f.pendingVoucher && !row.pending_voucher) return false;
+  // Igual: lo trae la fila decorada (lib/agency-pickup-alert.ts).
+  if (f.paidUnnotified && !row.paid_unnotified) return false;
 
   if (f.staleDays > 0) {
     // "Sin movimientos recientes": un pedido que nunca se movió también cuenta —

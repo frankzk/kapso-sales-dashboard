@@ -93,6 +93,8 @@ import {
 import { compareDispatchCodes } from "@/lib/dispatched-with";
 import { pendingVoucherFilterIds, type PendingVoucherSummary } from "@/lib/pending-voucher";
 import { loadPendingVouchers } from "@/lib/pending-voucher-access";
+import { AGENCY_DEADLINE_ALERT_MS, paidUnnotifiedFilterIds } from "@/lib/agency-pickup-alert";
+import { loadPaidUnnotified } from "@/lib/agency-pickup-alert-access";
 import {
   MACRO_SUBSTAGES_BY_STAGE,
   ORDER_MACRO_STAGES,
@@ -1280,6 +1282,23 @@ export function withPendingVoucherFilter(
   return { ...filters, pendingVoucherOrderIds: index ? [...index.keys()] : null };
 }
 
+/**
+ * «Pagado sin aviso» de las tiendas del Master (MOM §12): pagados, en la
+ * agencia con el plazo por vencer o vencido y sin aviso de llegada enviado.
+ * Dos consultas por carga, con la sesión de quien mira (la RLS decide).
+ * `null` = la lectura falló.
+ */
+export async function getPaidUnnotifiedIds(storeIds: string[]): Promise<Set<string> | null> {
+  if (!storeIds.length) return new Set();
+  return loadPaidUnnotified(await createServerSupabase(), storeIds);
+}
+
+/** Como `withPendingVoucherFilter`: los pedidos del filtro ya resueltos. */
+export function withPaidUnnotifiedFilter(filters: MasterFilters, ids: ReadonlySet<string> | null): MasterFilters {
+  if (!filters.paidUnnotified) return filters;
+  return { ...filters, paidUnnotifiedOrderIds: ids ? [...ids] : null };
+}
+
 export const MASTER_PAGE_SIZE = 100;
 
 export interface MasterPage {
@@ -1423,10 +1442,13 @@ export function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T 
   // ninguno: un filtro sin efecto listaría TODOS bajo un título que dice otra cosa.
   if (f.pendingVoucher) q = q.in("order_id", pendingVoucherFilterIds(f.pendingVoucherOrderIds));
 
+  // «Pagado sin aviso» (MOM §12): resuelto antes, como el de arriba.
+  if (f.paidUnnotified) q = q.in("order_id", paidUnnotifiedFilterIds(f.paidUnnotifiedOrderIds));
+
   if (f.expiringSoon) {
     // Incluye lo ya vencido: es justamente lo que hay que trabajar hoy para que
     // el paquete no se devuelva.
-    const limit = new Date(now.getTime() + 2 * 86_400_000).toISOString();
+    const limit = new Date(now.getTime() + AGENCY_DEADLINE_ALERT_MS).toISOString();
     q = q.not("agency_expires_at", "is", null).lte("agency_expires_at", limit);
   }
 
@@ -1841,7 +1863,7 @@ async function loadAgencySummary(storeIds: string[]): Promise<AgencySummary> {
   // de este resumen —cliente, esta, y una `getAgencySummary` que ya no llamaba
   // nadie—, y arreglar la que no se ejecutaba no cambió nada en pantalla.
   const inAgency = (q: any) => q.or("pickup_state.not.is.null,shipping_mode.eq.agency");
-  const soon = new Date(now.getTime() + 2 * 86_400_000).toISOString();
+  const soon = new Date(now.getTime() + AGENCY_DEADLINE_ALERT_MS).toISOString();
   const [disponibles, proximosAVencer, retornoIniciado, pendienteDeEnvio, enTransito] =
     await Promise.all([
     count((q) => q.in("pickup_state", [...AGENCY_AVAILABLE_STATES])),

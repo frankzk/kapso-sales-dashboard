@@ -52,6 +52,8 @@ const FLAG_KEYS: { param: string; field: keyof MasterFilters }[] = [
   { param: "ex", field: "expiringSoon" },
   // «Comprobante por validar» (MOM §16.1).
   { param: "pv", field: "pendingVoucher" },
+  // «Pagado sin aviso» (MOM §12).
+  { param: "pa", field: "paidUnnotified" },
 ];
 
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;

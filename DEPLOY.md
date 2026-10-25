@@ -5077,3 +5077,54 @@ base** y no hay crons ni variables de entorno nuevas.
 
 **Marcha atrás.** Revertir el commit. El índice puede quedarse (no lo lee nada
 más); si se quiere quitar: `drop index concurrently if exists public.leads_order_id_idx;`.
+
+### 25-10-2026 · «Ya llegó» para pagados de Olva y «Pagado sin aviso» en el Master (0281, MOM §12)
+
+Decisión del owner (#KP141593, #KP142910, #KP140003). La clienta de Olva que ya
+no debe nada recibe, en vez de nada, «ya llegó, recógelo con tu DNI» con su
+propia plantilla (sin importes ni botones), en la misma fila del aviso de
+llegada. El Master enseña la chapa del plazo de la agencia en la fila y la
+píldora «Pagado sin aviso» con su cifra. Sin crons ni variables de entorno
+nuevas; Shalom no cambia.
+
+1. **La 0281, cuando convenga** (antes o después del código). Solo añade tres
+   columnas a `stores` con valores por omisión; no reescribe filas:
+
+   ```sql
+   \i db/migrations/0281_olva_paid_arrival_notice.sql
+   ```
+
+   **El código no la necesita para arrancar**: sin ella el aviso para pagados
+   cuenta como apagado (las llegadas pagadas se siguen omitiendo como hoy) y
+   Ajustes enseña «Falta aplicar la migración 0281» en lugar del bloque. El
+   Master no depende de ella. **Comprobar:**
+
+   ```sql
+   select olva_paid_arrival_template_enabled, olva_paid_arrival_template_name, olva_paid_arrival_params
+     from stores limit 1;
+   ```
+
+2. **El código**, por el camino de siempre (rama de integración → `main` por
+   fast-forward).
+3. **Encenderlo, tienda por tienda, cuando Meta apruebe la plantilla.** Crear
+   en Kapso/Meta `guias_olva_llegada_pagado` con el cuerpo sugerido del MOM
+   §12 («El aviso de llegada para pagados de Olva»), y después Ajustes →
+   «Avisos de guía Olva» → «Aviso de llegada · pedido ya pagado». Nace apagado.
+   Las llegadas pagadas ya omitidas antes de encenderlo **no se reenvían**.
+4. **Comprobar en pantalla.** La píldora «Pagado sin aviso» del Master (todas
+   las tiendas a la vista) tiene que dar lo mismo que:
+
+   ```sql
+   select count(*) from order_master m
+    where m.pickup_state in ('disponible_para_recojo', 'pendiente_de_recojo', 'proximo_a_vencer')
+      and m.payment_state = 'pago_completo'
+      and m.agency_expires_at <= now() + interval '2 days'
+      and not exists (
+        select 1 from shalom_transit_notifications n
+         where n.order_id = m.order_id and n.status = 'sent'
+           and n.kind in ('disponible', 'recordatorio_d3', 'recordatorio_d7'));
+   ```
+
+**Marcha atrás.** Revertir el commit. Las columnas pueden quedarse (nadie más
+las lee); si se quieren quitar, **después** de revertir:
+`alter table stores drop column olva_paid_arrival_template_enabled, drop column olva_paid_arrival_template_name, drop column olva_paid_arrival_params;`.
