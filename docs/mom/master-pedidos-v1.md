@@ -9715,6 +9715,12 @@ pedidos de Lima con una provincia imposible («arequipa», «HUARAZ», «lince»
   solo entra a `order_coverage_for` por Cañete, que es provincia de Lima. La
   versión sube a `mom-v1.32` para que el cron recalcule los pedidos ya
   guardados.
+- **El rótulo de una caja ya creada** (25-10-2026): la caja guarda la provincia
+  que copió del Master al crearse, y KP143872-S01 salía «Miraflores /
+  arequipa» con el pedido ya corregido. El rótulo imprime la provincia solo si
+  cabe en su departamento (`printedProvince`); si no, «Lima» o «Callao». La
+  ruta del motorizado (y su Google Maps sin coordenadas) lee la del Master, que
+  recalcula el cron.
 
 ### 19.0.1 La ortografía del departamento se unifica; el matiz de Lima no
 
