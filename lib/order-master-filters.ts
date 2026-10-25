@@ -62,6 +62,18 @@ export interface MasterFilters {
   pickupStates: Set<string>;
   /** Solo pedidos en agencia con el plazo de recojo a punto de vencer. */
   expiringSoon: boolean;
+  /**
+   * «Comprobante por validar» (MOM §16.1): la clienta ya mandó su pago y espera
+   * a que alguien lo valide o lo rechace. Viaja por la URL como `pv=1`.
+   */
+  pendingVoucher: boolean;
+  /**
+   * Los pedidos que ese filtro trae, RESUELTOS EN EL SERVIDOR antes de consultar
+   * (lib/pending-voucher-access.ts). No viaja por la URL: es una lectura en vivo
+   * de `order_payments`, no una columna del Master. Sin resolver (o con la
+   * lectura caída) el filtro no trae ningún pedido, nunca todos.
+   */
+  pendingVoucherOrderIds?: readonly string[] | null;
   /** Búsqueda libre sobre código, cliente, teléfono y guía. */
   search: string;
   /** Cola de Volver a contactar: vencido | hoy | proximo. */
@@ -148,6 +160,7 @@ export function emptyFilters(): MasterFilters {
     attempts: null,
     pickupStates: new Set(),
     expiringSoon: false,
+    pendingVoucher: false,
     search: "",
     confirmationDue: "",
     managementDays: new Set(),
@@ -204,6 +217,7 @@ export function hasActiveFilters(f: MasterFilters): boolean {
     f.attempts !== null ||
     f.pickupStates.size > 0 ||
     f.expiringSoon ||
+    f.pendingVoucher ||
     f.search.trim().length > 0
     || Boolean(f.confirmationDue)
     || f.managementDays.size > 0
@@ -333,6 +347,9 @@ export function matchesFilters(
     const left = Date.parse(row.agency_expires_at!) - Date.parse(now);
     if (!Number.isFinite(left) || left > EXPIRING_WINDOW_MS) return false;
   }
+
+  // Lo trae la fila ya decorada (lib/pending-voucher.ts, `withPendingVouchers`).
+  if (f.pendingVoucher && !row.pending_voucher) return false;
 
   if (f.staleDays > 0) {
     // "Sin movimientos recientes": un pedido que nunca se movió también cuenta —

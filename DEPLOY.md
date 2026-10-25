@@ -4801,6 +4801,20 @@ la ruta (404). La 0277 puede quedarse: nadie más la lee. Si se quisiera quitar,
 table bot_order_secrets;`. Los pedidos ya creados en WooCommerce se quedan: son
 pedidos reales.
 
+### 25-10-2026 · La provincia de las cajas de Lima (0279, MOM §19.0)
+
+Corrige `shipments.province` en las cajas de Lima Metropolitana y el Callao que
+copiaron una provincia imposible de `peru_districts` («arequipa» en Miraflores,
+«HUARAZ» en Independencia, «san roman» en San Miguel, el propio distrito…): 253
+cajas medidas el 25-10-2026, todas de cobertura Lima. Pasan a «Lima» o
+«Callao». Solo esa columna; correrla dos veces no cambia nada. El código del
+mismo día (`mom-v1.32`, `printedProvince`) ya no las deja pasar ni las imprime
+en el rótulo; esto limpia lo guardado para las exportaciones y los filtros.
+
+**En producción ya está aplicada (25-10-2026, con autorización del owner).**
+
+Comprobar: la misma condición de la migración como `select count(*)` da 0.
+
 ### 25-10-2026 · El bot de Kapso consulta un pedido que ya existe (sin migración, MOM §38.13)
 
 El caso del 24-10-2026: la clienta llega al bot desde la página de gracias de
@@ -5013,6 +5027,56 @@ generaron antes en esa corrida).
 **Marcha atrás.** Revertir el commit. No escribe nada en la base que haya que
 deshacer: las filas `omitido` quedan como constancia.
 
+
+### 25-10-2026 · «Comprobante por validar» en el Master y en Leads (0280 opcional, MOM §16.1)
+
+Decisión del owner tras #KP143616. El Master enseña la chapa «Comprobante por
+validar» en la fila (que abre la ficha en Cobro) y la píldora del mismo nombre
+con su cifra; «Atender ahora» de Leads sube el lead de ese pedido con «Comprobante
+por validar · espera su clave». Todo se lee en vivo de `order_payments`
+(`pendiente_revision` / `info_incompleta`, los estados que mantienen abierta la
+alerta de cobranza) y se apaga al validar o rechazar. **No escribe nada en la
+base** y no hay crons ni variables de entorno nuevas.
+
+1. **El código**, por el camino de siempre (rama de integración → `main` por
+   fast-forward). **No necesita la 0280 para funcionar**: sin el índice, buscar
+   los leads de esos pedidos recorre `leads` entera (~38 ms medido el
+   25-10-2026), en cada carga de Leads y en cada pasada del refresco de sus
+   contadores.
+2. **La 0280, a mano y cuando convenga** (antes o después del código). En
+   producción, **`concurrently` y fuera de una transacción**, para no bloquear
+   las escrituras en `leads` mientras se construye:
+
+   ```sql
+   create index concurrently if not exists leads_order_id_idx
+     on public.leads (order_id)
+     where order_id is not null;
+   comment on index public.leads_order_id_idx is
+     'El lead de un pedido: «Atender ahora» sube a quien tiene un comprobante por validar (MOM §16.1, 0280).';
+   ```
+
+   El fichero `db/migrations/0280_leads_order_id_idx.sql` crea el mismo índice
+   sin `concurrently` (para CI y bases nuevas); en producción, después del
+   comando de arriba, aplicarlo entero solo registra que ya existe.
+   **Comprobar:**
+
+   ```sql
+   select indexname from pg_indexes where tablename = 'leads' and indexname = 'leads_order_id_idx';
+   ```
+
+3. **Comprobar en pantalla.** La píldora «Comprobante por validar» del Master
+   (con todas las tiendas a la vista) tiene que dar lo mismo que:
+
+   ```sql
+   select count(distinct order_id) from order_payments
+    where validation_status in ('pendiente_revision', 'info_incompleta')
+      and kind in ('adelanto', 'diferencia', 'total');
+   ```
+
+   Al validar uno desde su ficha, la chapa y la cifra bajan al recargar.
+
+**Marcha atrás.** Revertir el commit. El índice puede quedarse (no lo lee nada
+más); si se quiere quitar: `drop index concurrently if exists public.leads_order_id_idx;`.
 
 ### 25-10-2026 · «Hoy» arriba del Consolidado: las ventas del día contra ayer a esta hora (sin migración, MOM §17.5)
 

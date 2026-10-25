@@ -1,12 +1,27 @@
 // RLS-scoped reads for the leads module (queue views, lead detail, counts).
 
 import { createServerSupabase } from "@/lib/db";
+import { normalizePhone } from "@/lib/phone";
+import {
+  combinePriorOrders,
+  firstProductTitle,
+  historyNetAmount,
+  HISTORY_PRIOR_LIMIT,
+  type HistoryPriorRow,
+  type LocalPriorRow,
+} from "@/lib/customer-history-merge";
 import { orderAdminLink, orderPlatform } from "@/lib/order-admin-url";
 import type { AliclikHealthState } from "@/lib/aliclik-health";
 import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
 import type { LeadCallRow, LeadRow, OrderPlatform } from "@/lib/types";
 import type { DistrictCoverageRule } from "@/lib/district-coverage";
 import type { PedidoPrevio } from "@/lib/pedido-duplicado";
+import { sortHandoffWithPendingVouchers } from "@/lib/pending-voucher";
+import {
+  countExtraPendingVoucherLeads,
+  loadPendingVoucherLeads,
+  loadPendingVouchers,
+} from "@/lib/pending-voucher-access";
 import {
   buildAnomalyReport,
   EMPTY_REPORT,
@@ -198,13 +213,52 @@ export async function getStoreLeads(
   };
 
   if (limit !== null) {
+    // «Atender ahora»: los pagos por validar se leen a la par de la vista.
+    const pendingIndex = view === "handoff" ? loadPendingVouchers(sb, storeIds) : null;
     let res = await buildQuery().limit(limit);
-    if (res.error) res = await buildQuery(LEAD_BOARD_SELECT_LEGACY).limit(limit);
+    let select = LEAD_BOARD_SELECT;
+    if (res.error) {
+      select = LEAD_BOARD_SELECT_LEGACY;
+      res = await buildQuery(select).limit(limit);
+    }
     const limited = (res.data as unknown as LeadRow[]) ?? [];
+    if (pendingIndex) return withPendingVoucherLeads(sb, storeIds, limited, select, await pendingIndex);
     return view === "por_llamar" ? sortPorLlamar(limited) : limited;
   }
   const all = await drainLeads(buildQuery);
   return view === "por_llamar" ? sortPorLlamar(all) : all;
+}
+
+/**
+ * «Atender ahora» con los comprobantes por validar delante (MOM §16.1).
+ *
+ * La clienta que ya pagó y espera —su clave, en agencia— sube aquí aunque el
+ * bot no la haya derivado o su handoff haya caducado: se busca por
+ * `leads.order_id` el lead de cada pedido con un comprobante en
+ * `pendiente_revision` / `info_incompleta`, se le pone el motivo y va arriba.
+ * No se escribe nada en `leads`: lo decide el pago, así que sale solo cuando
+ * alguien lo valida o lo rechaza, igual que el pop-up de cobranza, y nadie
+ * tiene que pulsar «Resuelto».
+ *
+ * Los handoffs de siempre siguen debajo, en su orden. Si la lectura de pagos
+ * falla, la vista queda como era (no se inventa ni se quita a nadie).
+ */
+async function withPendingVoucherLeads(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  storeIds: StoreScope,
+  handoffs: LeadRow[],
+  select: string,
+  index: Awaited<ReturnType<typeof loadPendingVouchers>>,
+): Promise<LeadRow[]> {
+  if (!index || !index.size) return handoffs;
+  const voucherLeads = await loadPendingVoucherLeads<LeadRow>(sb, storeIds, index, select);
+  if (!voucherLeads.length) return handoffs;
+  const byId = new Map(voucherLeads.map((l) => [l.id, l]));
+  // Un lead que ya estaba por un handoff conserva su fila; solo gana el motivo.
+  const merged: LeadRow[] = handoffs.map((l) => (byId.has(l.id) ? { ...l, pending_voucher: byId.get(l.id)!.pending_voucher } : l));
+  const present = new Set(handoffs.map((l) => l.id));
+  for (const l of voucherLeads) if (!present.has(l.id)) merged.push(l);
+  return sortHandoffWithPendingVouchers(merged);
 }
 
 /**
@@ -382,10 +436,13 @@ export interface PriorOrder {
   platform?: OrderPlatform;
   /** Anulado en Shopify (solo la lista de Shopify lo sabe; la local ya los excluye). */
   cancelled?: boolean;
+  /** Viene del historial de Shopify importado (MOM §37.7), no de `orders`. */
+  fromHistory?: boolean;
 }
 
 export interface CustomerHistory {
-  orderCount: number; // prior non-cancelled orders for this phone (excl. the lead's own)
+  /** Pedidos antes, no anulados, sin el propio: los de `orders` más los del historial de Shopify (§37.7). */
+  orderCount: number;
   lastOrderName: string | null;
   lastOrderAt: string | null;
   lastProduct: string | null;
@@ -412,6 +469,12 @@ const PRIOR_ORDER_COLUMNS = "id, shopify_order_id, name, created_at, total_amoun
  * "Pedidos anteriores" list, and the current order's Shopify name in the drawer.
  * RLS-scoped (only stores the caller may access). Excludes the lead's own order
  * from the prior list, but resolves its name separately for the footer.
+ *
+ * Desde el 25-10-2026 (MOM §37.7) también lee el historial de Shopify
+ * importado (`shopify_history_orders`, mismo celular normalizado y tienda), en
+ * paralelo con `orders`: así la clienta que compró antes de que Kapta existiera
+ * no sale como «cliente nuevo». Un pedido que ya está en `orders` (mismo
+ * número) cuenta una vez. Solo lee: el historial nunca se copia a `orders`.
  */
 export async function getCustomerHistory(
   storeId: string,
@@ -463,36 +526,50 @@ export async function getCustomerHistory(
   // que el lead tenía un pedido sin guía.
   if (!phone) return { ...emptyPrior, ...own, recentOrders: [] };
 
+  // Los de Kapta, anulados incluidos: el anulado no cuenta, pero su número
+  // descarta la copia del historial de Shopify que aún lo tenía vivo.
   const readOrders = (columns: string) =>
     sb
       .from("orders")
       .select(columns)
       .eq("store_id", storeId)
       .eq("customer_phone", phone)
-      .is("cancelled_at", null)
       .order("created_at", { ascending: false })
-      .limit(10);
+      .limit(HISTORY_PRIOR_LIMIT);
   // Con `platform` (0274): el enlace de cada pedido va al admin de su tienda
   // (MOM §38.12). Sin la columna, se repite sin ella y todos son de Shopify.
-  let ordersRes = await readOrders(`${PRIOR_ORDER_COLUMNS}, platform`);
-  if (ordersRes.error) ordersRes = await readOrders(PRIOR_ORDER_COLUMNS);
-  let rows =
-    (ordersRes.data as unknown as {
-      id: string;
+  const readLocal = async () => {
+    const res = await readOrders(`${PRIOR_ORDER_COLUMNS}, cancelled_at, platform`);
+    return res.error ? readOrders(`${PRIOR_ORDER_COLUMNS}, cancelled_at`) : res;
+  };
+  const [ordersRes, history] = await Promise.all([readLocal(), readShopifyHistory(sb, storeId, phone)]);
+  const rows =
+    (ordersRes.data as unknown as (LocalPriorRow & {
       shopify_order_id: string | null;
-      name: string | null;
-      created_at: string | null;
       total_amount: number | null;
       total_refunded: number | null;
-      line_items: unknown;
       platform?: unknown;
-    }[]) ?? [];
-  if (excludeOrderId) rows = rows.filter((r) => r.id !== excludeOrderId);
-  if (!rows.length) return { ...emptyPrior, ...own, recentOrders: [] };
-  const last = rows[0]!;
-  const items = Array.isArray(last.line_items) ? (last.line_items as { title?: string }[]) : [];
-  const lastProduct = items.length ? String(items[0]?.title ?? "").trim() || null : null;
-  const recentOrders: PriorOrder[] = rows.slice(0, 3).map((r) => {
+    })[]) ?? [];
+  const { entries, count } = combinePriorOrders(rows, history.rows, {
+    excludeOrderId,
+    currentOrderName,
+    historyTotal: history.total,
+  });
+  if (!entries.length) return { ...emptyPrior, ...own, recentOrders: [] };
+  const last = entries[0]!;
+  const recentOrders: PriorOrder[] = entries.slice(0, 3).map((e) => {
+    if (e.kind === "history") {
+      // Del archivo (§37): sin enlace, la tienda puede ya no existir.
+      return {
+        name: e.row.order_name,
+        createdAt: e.row.created_at,
+        amount: historyNetAmount(e.row),
+        adminUrl: null,
+        platform: "shopify",
+        fromHistory: true,
+      };
+    }
+    const r = e.row;
     const platform = orderPlatform(r.platform);
     return {
       name: r.name,
@@ -503,13 +580,42 @@ export async function getCustomerHistory(
     };
   });
   return {
-    orderCount: rows.length,
-    lastOrderName: last.name,
-    lastOrderAt: last.created_at,
-    lastProduct,
+    orderCount: count,
+    lastOrderName: last.kind === "history" ? last.row.order_name : last.row.name,
+    lastOrderAt: last.createdAt,
+    lastProduct: firstProductTitle(last.row.line_items),
     ...own,
     recentOrders,
   };
+}
+
+/**
+ * Los pedidos del historial de Shopify (§37) del mismo celular y tienda, para
+ * «Pedidos antes» (§37.7). Una consulta por el índice (store_id, phone_norm) de
+ * la 0273, con límite y el conteo exacto. Si falla (sin la tabla, sin permiso),
+ * nada: la ficha queda como antes, solo con `orders`. Nunca escribe.
+ */
+async function readShopifyHistory(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  storeId: string,
+  phone: string,
+): Promise<{ rows: HistoryPriorRow[]; total: number | null }> {
+  const phoneNorm = normalizePhone(phone);
+  if (!phoneNorm) return { rows: [], total: null };
+  try {
+    const { data, error, count } = await sb
+      .from("shopify_history_orders")
+      .select("order_name, created_at, total, refunded_amount, line_items", { count: "exact" })
+      .eq("store_id", storeId)
+      .eq("phone_norm", phoneNorm)
+      .is("cancelled_at", null)
+      .order("created_at", { ascending: false })
+      .limit(HISTORY_PRIOR_LIMIT);
+    if (error || !data) return { rows: [], total: null };
+    return { rows: data as HistoryPriorRow[], total: typeof count === "number" ? count : null };
+  } catch {
+    return { rows: [], total: null };
+  }
 }
 
 /** Valores neutros del bloque "cliente recurrente" cuando no hay compras previas. */
@@ -565,6 +671,8 @@ export async function getLeadQueueSnapshot(storeIds: StoreScope): Promise<LeadQu
   const sb = await createServerSupabase();
   const nowIso = new Date().toISOString();
 
+  // A la par de los conteos por tienda: ver `pendingVoucherHandoffExtra` abajo.
+  const vouchersPromise = pendingVoucherHandoffExtra(sb, storeIds);
   const perStore = await Promise.all(
     // Orden fijo: la firma es una comparación de cadenas, y con las tiendas en
     // otro orden parecería que cambió algo en cada recarga.
@@ -610,7 +718,29 @@ export async function getLeadQueueSnapshot(storeIds: StoreScope): Promise<LeadQu
       counts[key] += part.counts[key];
     }
   }
-  return { counts, signature: perStore.map((p) => p.signature).join("|") };
+  // «Atender ahora» también lista a quien espera la validación de su
+  // comprobante (MOM §16.1, `withPendingVoucherLeads`). El contador suma los
+  // que NO estaban ya por un handoff, para decir lo mismo que la lista; y la
+  // firma lleva quiénes son, para que el refresco en vivo se entere cuando
+  // alguien valida y el lead sale.
+  const vouchers = await vouchersPromise;
+  counts.handoff += vouchers.extra;
+  return {
+    counts,
+    signature: perStore.map((p) => p.signature).join("|") + (vouchers.signature ? `|cv:${vouchers.signature}` : ""),
+  };
+}
+
+/** Nunca tumba los contadores: si falla, se cuentan como antes. */
+async function pendingVoucherHandoffExtra(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  storeIds: StoreScope,
+): Promise<{ extra: number; signature: string }> {
+  try {
+    return await countExtraPendingVoucherLeads(sb, storeIds, handoffFreshCutoffIso());
+  } catch {
+    return { extra: 0, signature: "" };
+  }
 }
 
 export async function getLeadCounts(storeIds: StoreScope): Promise<LeadCounts> {

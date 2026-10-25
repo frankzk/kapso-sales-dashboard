@@ -74,9 +74,10 @@ describe("§38 WooCommerce (23-10-2026)", () => {
     expect(s38).not.toContain("Pendiente del owner: si WooCommerce va en la **misma fila**");
   });
 
-  it("el estado al 25-10-2026: las dos tiendas conectadas, aún en Shopify, y solo las tres pruebas de Aurela", () => {
+  it("el estado al 25-10-2026: las dos tiendas conectadas, ya creando en WooCommerce, y solo las tres pruebas de Aurela", () => {
     expect(s38).not.toContain("sin ningún pedido de WooCommerce todavía");
     expect(s38).toContain("**Al 25-10-2026** las dos tiendas tienen su sitio WooCommerce conectado en Ajustes");
+    expect(s38).toContain("las dos tienen `stores.platform = woocommerce`");
     expect(s38).toContain("Los únicos pedidos de WooCommerce en Kapta son #AUR900004, #AUR900005 y #AUR900006, tres pruebas del formulario de Aurela, anuladas");
     expect(s38).toContain("el primer pedido real de Aurela será el #AUR900007 o uno mayor");
     expect(s38).toContain("En un sitio conectado ya no se hacen pruebas");

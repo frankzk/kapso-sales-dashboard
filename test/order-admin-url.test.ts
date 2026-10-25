@@ -213,7 +213,14 @@ describe("«Pedidos anteriores» de Leads", () => {
     function mockOrders(rows: Row[], { platformColumn = true } = {}) {
       selects = [];
       createServerSupabaseMock.mockResolvedValue({
-        from: () => {
+        from: (table: string) => {
+          // El historial de Shopify (§37.7) no tiene nada de esta clienta.
+          if (table === "shopify_history_orders") {
+            const h: Record<string, unknown> = {};
+            for (const m of ["select", "eq", "is", "order", "limit"]) h[m] = () => h;
+            h.then = (resolve: (v: unknown) => void) => resolve({ data: [], error: null, count: 0 });
+            return h;
+          }
           let columns = "";
           const q: Record<string, unknown> = {};
           q.select = (cols: string) => {

@@ -860,7 +860,7 @@ export function LeadDrawer({
               </section>
             )}
 
-            {/* Pedidos anteriores: los 3 últimos (de Shopify y de WooCommerce), justo bajo «Lo que pidió»:
+            {/* Pedidos anteriores: los 3 últimos (de Shopify, de WooCommerce y del historial de Shopify, §37.7), justo bajo «Lo que pidió»:
                 es lo primero que se mira al abrir la ficha (Frankz, 14-10-2026). */}
             {history && history.recentOrders.length > 0 && (
               <section aria-label="Pedidos anteriores" className={SECTION_CARD}>
@@ -884,6 +884,8 @@ export function LeadDrawer({
                       <span className="flex min-w-0 items-center gap-2">
                         <span className="truncate text-sm font-medium text-ink-900">Pedido {o.name ?? "—"}</span>
                         {o.cancelled && <Badge tone="crit">Anulado</Badge>}
+                        {/* Del archivo importado de Shopify (MOM §37.7): no es un pedido de Kapta. */}
+                        {o.fromHistory && <span className="shrink-0 text-xs text-ink-500">del historial de Shopify</span>}
                       </span>
                       <span className="flex shrink-0 items-center gap-3">
                         <span className="text-xs tabular-nums text-ink-500">{orderDateShort(o.createdAt)}</span>

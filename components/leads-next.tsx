@@ -487,7 +487,8 @@ function ContactIcons({ lead }: { lead: LeadRow }) {
 }
 
 function PriorOrders({ history }: { history: Loaded<CustomerHistory | null> }) {
-  // Busca en la base y en Shopify; los pedidos de WooCommerce salen de la base (MOM §38.12).
+  // Busca en la base, en el historial de Shopify importado (MOM §37.7) y en Shopify;
+  // los pedidos de WooCommerce salen de la base (MOM §38.12).
   if (history === "loading") return <span className="text-ink-500">Buscando pedidos…</span>;
   if (history === "error") return <span className="text-ink-500">No se pudo consultar ahora.</span>;
   const count = Math.max(history?.orderCount ?? 0, history?.recentOrders.length ?? 0);
@@ -514,6 +515,7 @@ function PriorOrders({ history }: { history: Loaded<CustomerHistory | null> }) {
               <span className="w-12 shrink-0">{shortDate(o.createdAt) ?? "—"}</span>
               <span className={o.cancelled ? "text-ink-500 line-through decoration-ink-300" : undefined}>{soles(o.amount)}</span>
               {o.cancelled && <Badge tone="crit">Anulado</Badge>}
+              {o.fromHistory && <span className="text-ink-500">del historial de Shopify</span>}
             </li>
           ))}
         </ul>

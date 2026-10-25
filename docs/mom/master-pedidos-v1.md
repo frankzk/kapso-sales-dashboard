@@ -8640,6 +8640,69 @@ para continuar y registra actor y fecha, pero **no cambia por sí solo la
 macroetapa ni marca el pedido como pagado en Shopify**. Esas automatizaciones se
 activan cuando la migración operativa al sistema sea completa.
 
+#### Un comprobante por validar se ve en el Master y en Leads (owner, 25-10-2026)
+
+**Lo que pasó.** #KP143616: la clienta depositó la diferencia, el comprobante
+entró por WhatsApp a la cobranza de Shalom, se atribuyó por monto y quedó
+«Pendiente de revisión». La alerta escaló tres veces y ella seguía esperando su
+clave. El único aviso era el pop-up flotante de la cola de cobranza y esta
+bandeja; en el Master y en Leads, donde trabaja casi todo el equipo, ese pedido
+no se distinguía de ningún otro.
+
+**La decisión.** Un pedido con un comprobante por validar se ve como prioritario
+en las dos pantallas. No es un estado nuevo del pedido ni de la macroetapa: es
+una señal que se lee del pago.
+
+- **Qué cuenta.** Un pago de la clienta (`adelanto`, `diferencia` o `total`; no
+  `cobro_courier`, que es el efectivo del motorizado y lo revisa finanzas) en
+  `pendiente_revision` o `info_incompleta`. Son **los mismos estados que
+  mantienen abierta la alerta** «Comprobante por validar» de la cobranza
+  (`sweepResolvedAlerts`), y la lista vive una sola vez
+  (`VOUCHER_AWAITING_STATUSES`, `lib/pending-voucher.ts`).
+- **Se apaga solo, con el hecho.** Validar o rechazar el pago (o pasarlo a
+  `revision_admin`, que ya es una decisión de alguien) lo quita del Master, de
+  Leads y del pop-up a la vez. Nadie lo desmarca a mano ni pulsa «Resuelto».
+- **Se lee en vivo de `order_payments`, no del Master.** La cobranza de WhatsApp
+  registra el pago sin recalcular `order_master`; una columna materializada
+  habría llegado tarde justo en este caso. Es una sola lectura por carga, por
+  el índice `(store_id, validation_status)`: unas decenas de filas.
+- **Master de Pedidos.**
+  - En la fila, bajo la subetapa, la chapa `warn` **«Comprobante por
+    validar»**. Su título dice cuántos, por cuánto y dónde se resuelve
+    («Validar y enviar la clave, en Cobro» en agencia; «Validar en Cobro»
+    fuera de ella).
+  - La fila con la chapa abre la ficha **en Cobro**, donde está «Validar y
+    enviar la clave», igual que «Ir a validar» del pop-up
+    (`?abrir=<pedido>&ir=pagos`).
+  - Filtro rápido **«Comprobante por validar»** con su cifra, delante de las
+    píldoras de agencia en la línea de excepciones (se ve aunque no haya nada
+    por agencia). Cuenta los pedidos de todas las tiendas que se ven, como las
+    de agencia; se combina con la pestaña y los demás filtros, y las pestañas
+    cuentan lo que trae. En la URL es `pv=1`.
+  - Si la lectura de pagos falla, la píldora no enseña un cero: dice que no se
+    pudo leer, y el filtro no trae ningún pedido (nunca todos).
+- **Leads, «Atender ahora».**
+  - Sube el lead de ese pedido aunque el bot no lo haya derivado o su handoff
+    haya caducado, con el motivo **«Comprobante por validar · espera su
+    clave»** en agencia mientras la clave no se haya enviado, y **«Comprobante
+    por validar»** fuera de ese flujo (no hay clave que prometer).
+  - Va **arriba**, el que más espera primero; los handoffs de siempre siguen
+    debajo en su orden. Es una llave aparte: el puntaje de «Por llamar»
+    (`lib/lead-priority.ts`) es una probabilidad de cierre medida y no se toca.
+  - En vez de «Resuelto», la fila ofrece **«Ir a validar»** (la ficha del
+    pedido en Cobro). El contador de la pestaña suma a quien sube por esto y no
+    estaba ya por un handoff.
+  - No se escribe nada en `leads` (`needs_attention`, `handoff_*` quedan como
+    estaban): lo decide el pago.
+- **El límite: el lead tiene que estar atado al pedido** (`leads.order_id`, lo
+  deja la venta). Si no lo está, el pedido se ve en el Master y en el pop-up,
+  pero en Leads no sube. **No se adivina por teléfono**: el mismo celular puede
+  tener otro lead en otra tienda o de otra compra, y subirlo con un «espera su
+  clave» ajeno sería peor que no subirlo. Medido el 25-10-2026: 16 de los 20
+  pedidos con comprobante por validar tenían su lead atado.
+- **Índice (0280).** `leads(order_id)` parcial, para encontrar esos leads sin
+  recorrer la tabla (~70.000 filas). El código funciona sin él, solo más lento.
+
 ### 16.2 Validación por el estado de cuenta de Yape
 
 **Lo que una persona hacía mirando la app de Yape lo hace ahora el estado de
@@ -15994,6 +16057,8 @@ que Kapta guarda como **archivo de consulta**.
   liquidaciones ni comprobantes, y no cuentan en el Consolidado. Los estados
   que se ven son los de Shopify, tal como vinieron (`financial_status`,
   `fulfillment_status`, `cancelled_at`): no se traducen a estados del Master.
+  Lo único que lee del archivo fuera de su pantalla es «Pedidos antes» de la
+  ficha del lead (§37.7), solo para contar y listar.
 - La tienda sigue siendo la única fuente de pedidos (AGENTS.md, regla 4): esto es
   una copia de lo que Shopify ya tenía, no un canal de entrada.
 
@@ -16174,13 +16239,70 @@ Implementación:
 - Pruebas: `test/shopify-history.test.ts`, `test/shopify-history-ui.test.ts`,
   `test/shopify-history-bulk.test.ts` y `test/shopify-history-more.test.ts`.
 
+### 37.7 «Pedidos antes» en Leads (25-10-2026)
+
+**Por qué.** La ficha del lead (el cajón de Leads y la ficha de la cola nueva)
+decía «Pedidos antes: Ninguno: es cliente nuevo» a clientas que habían
+comprado muchas veces: solo leía `orders`, que en Kenku empieza en julio de
+2024 y en Aurela en mayo de 2024, mientras el historial importado (§37) va
+desde 2023 y 2021. **Decisión del owner (25-10-2026):** «Pedidos antes» también
+cuenta el historial de Shopify.
+
+Reglas:
+
+- **Misma clienta, misma tienda.** Se buscan en `shopify_history_orders` los
+  pedidos de la tienda del lead con el mismo celular normalizado
+  (`phone_norm` = `normalizePhone` del celular del lead). No se cruza por
+  correo ni por nombre, ni entre tiendas.
+- **Sin anulados.** Como en `orders`, el anulado en Shopify
+  (`cancelled_at`) no cuenta.
+- **Un pedido cuenta una vez.** Si el número (`order_name`) ya está en `orders`
+  de esa clienta, manda el de Kapta, también si Kapta lo tiene anulado: la copia
+  del historial puede ser de antes de la anulación. El pedido propio del lead
+  tampoco cuenta, ni por su id ni por su copia en el historial.
+- **Conteo y lista.** El número («3 pedidos», «3 pedidos antes») suma los de
+  Kapta y los del historial. La lista sigue mostrando los tres más recientes,
+  de cualquiera de los dos lados, y el «último producto» es el del más reciente.
+  El pedido que viene del historial lleva al lado, en tinta tenue, «del
+  historial de Shopify» y **no tiene enlace**: es un archivo y la tienda puede
+  ya no existir en Shopify; se consulta en «Historial Shopify» (§37.2).
+- **Con Shopify en vivo.** Cuando Shopify contesta con los pedidos de la clienta,
+  esa lista sigue mandando (§38.12), y se le suman los del historial que no trajo
+  (con otro número), además de los de WooCommerce.
+- **Rendimiento.** Una sola consulta por el índice `(store_id, phone_norm)` de
+  la 0273, en paralelo con la de `orders`, con límite de 25 (el celular con más
+  pedidos en el historial tiene 73) y el conteo exacto. Los que el límite deja
+  fuera se suman al conteo sin compararlos con `orders`: son los más viejos, y
+  `orders` empieza en 2024. No hizo falta migración: el índice ya estaba.
+- **Si falla** (sin la tabla, sin permiso, error de la base), la ficha queda
+  como antes, solo con `orders`. No se registra nada con datos de la clienta.
+- **Sigue siendo un archivo (§37.1).** Solo se lee, con la sesión de quien
+  mira (RLS por tienda, `auth_store_ids()`): nada pasa a `orders` ni a
+  `order_master`. No hace falta «Descargar la base de pedidos»: la ficha
+  muestra número, fecha y monto de la misma clienta que el lead ya enseña, no
+  la base.
+- **Qué no cambia.** «Cliente nuevo» en otros lugares sigue igual: el aviso de
+  pedido duplicado o recompra (`lib/pedido-duplicado.ts`) mira pedidos vivos de
+  Kapta en las últimas 48 h y lo entregado por Kapta, y el historial no sabe si
+  Kapta entregó; el segmento y los conteos de la cola tampoco lo leen. El único
+  lector de `getCustomerHistory` es la ficha del lead.
+
+Implementación: `lib/customer-history-merge.ts` (la unión pura, sin repetidos,
+y el conteo), `getCustomerHistory` en `lib/leads-access.ts` (las dos
+consultas), `mergePriorOrders` en `lib/order-admin-url.ts` (con Shopify en
+vivo), `components/leads-drawer.tsx` y `components/leads-next.tsx` (la marca).
+Pruebas: `test/leads-prior-orders-history.test.ts`.
+
 ## 38. WooCommerce (23-10-2026)
 
 Estado: base técnica del 23-10-2026. **Al 25-10-2026** las dos tiendas tienen
 su sitio WooCommerce conectado en Ajustes (la entrada de 38.11), cada una con
-una dirección temporal, y las dos siguen con `stores.platform = shopify`:
-Aurela desde el 24-10-2026 (clave del sitio `aur`) y Kenku Peru desde esa
-noche (`kp`, 19:13 de Lima). Los únicos pedidos de WooCommerce en Kapta son
+una dirección temporal: Aurela desde el 24-10-2026 (clave del sitio `aur`) y
+Kenku Peru desde esa noche (`kp`, 19:13 de Lima). Desde el 25-10-2026 a las
+16:11 (Kenku) y 16:12 (Aurela) de Lima las dos tienen `stores.platform =
+woocommerce`: «Generar pedido» y «Venta telefónica» crean en WooCommerce
+(primeros: #AUR900007 y #KP200005), mientras la web y el bot siguen en
+Shopify hasta su corte. Los únicos pedidos de WooCommerce en Kapta son
 #AUR900004, #AUR900005 y #AUR900006, tres pruebas del formulario de Aurela,
 anuladas (la última del 25-10 a las 12:54 de Lima); el primer pedido real de
 Aurela será el #AUR900007 o uno mayor. En un sitio conectado ya no se hacen
@@ -16209,7 +16331,10 @@ WooCommerce viven en esa fila de `stores` y cada pedido lleva su plataforma.
   solo crea con `woocommerce` (38.13); la prueba de recompra sin llamada
   (`auto_order_trials`) y las acciones viejas de Leads `recoverCart` y
   `closeSale`, que solo crean con `shopify` (25-10-2026, 38.12, «Los carritos
-  de Shopify en una tienda que ya crea en WooCommerce»); y, desde el cierre de
+  de Shopify en una tienda que ya crea en WooCommerce»); la lista de Envíos →
+  «Catálogo de productos» y la siembra del mapeo de Aliclik, que con
+  `woocommerce` salen del catálogo de WooCommerce (25-10-2026, 38.12, «Envíos →
+  Catálogo de productos en WooCommerce»); y, desde el cierre de
   Shopify, las fotos de producto de WhatsApp (`shopifyGoneForStore`, §39.5,
   que también mira `woo_site_url`). La entrada de pedidos no lo mira (38.11). **Quién lo cambia:** el owner, en Ajustes → WooCommerce → «Crear los
   pedidos nuevos en», con «Administrar tiendas» y una confirmación explícita;
@@ -16774,7 +16899,10 @@ manda `stores.platform` («Generar pedido» y los buscadores, abajo) y qué falt
 **Los respaldos de Shopify no cambian a Kenku ni a Aurela mientras Shopify
 responda.** El tope de 30 s de cada llamada a Shopify, el catálogo de Aliclik
 con el historial de pedidos y Envíos con la fila de Kapta solo entran cuando
-una llamada a Shopify falla o la tienda no tiene token. **El auto-vínculo de
+una llamada a Shopify falla o la tienda no tiene token. El catálogo de Aliclik
+de una tienda con `stores.platform = woocommerce` ya no le pregunta a Shopify:
+lee el de WooCommerce, con el mismo historial de respaldo (25-10-2026, «Envíos →
+Catálogo de productos en WooCommerce», abajo). **El auto-vínculo de
 Envíos es la excepción** (abajo): desde el 25-10-2026, por decisión del owner,
 ya no le pregunta a Shopify ni con Shopify funcionando; busca siempre en la
 base de Kapta.
@@ -17152,6 +17280,76 @@ cambio deja una línea `[woo-platform]` en el registro (tienda, de qué a qué,
 quién y cuándo), y solo se guarda si nadie la cambió entre la lectura y el
 guardado.
 
+#### Envíos → Catálogo de productos en WooCommerce (25-10-2026)
+
+**Por qué.** La pantalla «Catálogo de productos» (Envíos → Aliclik) lista los
+productos de la tienda para asociarlos a un EAN de Aliclik (`aliclik_sku_map`)
+y a un código de barras de Swayp (`swayp_sku_map`), y la sincronización del
+catálogo de Aliclik (el botón, Ajustes y el cron de cada hora) siembra el
+mapeo por nombre con la misma lista. Salía del catálogo activo de Shopify, con
+el historial de pedidos del último año de respaldo. Con Shopify cerrado el
+28-10-2026 (UTC) y las dos tiendas creando en WooCommerce (decisión del owner,
+25-10-2026), un producto que nunca se vendió desaparecía de la lista y los
+avisos decían «sin SKU en Shopify».
+
+**La regla.** La fuente la decide `stores.platform` (38.1,
+`loadSkuCatalogSource`):
+
+- **`woocommerce` con la dirección, la clave del sitio y las dos claves de la
+  API**: el catálogo **publicado** de WooCommerce (`listWooCatalogVariants`,
+  solo `GET`): `GET /products?status=publish&per_page=100&orderby=id&order=asc`
+  página a página, y para cada producto variable sus variaciones publicadas
+  (`GET /products/<id>/variations`), con el cliente de `lib/woocommerce.ts` y
+  su respaldo de autenticación por query string, como el buscador
+  (`searchWooCatalog`). Un producto simple es una fila; uno variable, una fila
+  por variación («M / Negro»); agrupados y externos no se venden y no salen.
+  Una variación sin SKU propio (WooCommerce le muestra el del padre) sale **sin
+  SKU**, como en el buscador. **Shopify no se consulta**, ni con su token.
+- **`woocommerce` sin claves usables**: solo el historial, y la pantalla lo
+  dice («Catálogo de WooCommerce: Sus claves de la API no se pueden usar …»).
+- **`shopify`** (o la base sin la 0274): **nada cambia**, el catálogo activo de
+  Shopify con su token, sus avisos y su respaldo de siempre.
+- **No se pudo leer la tienda**: solo el historial, con el aviso «Catálogo de
+  la tienda: No se pudo leer la plataforma de la tienda …».
+
+**El respaldo no cambia.** Encima del catálogo se suman los productos vistos
+en `orders` del último año (de las dos plataformas): si WooCommerce falla, la
+lista sale entera del historial; si se lee a medias, el historial completa.
+Un producto que nunca se vendió y que WooCommerce no llegó a entregar es lo
+único que falta.
+
+**Las asociaciones no se tocan.** `aliclik_sku_map` y `swayp_sku_map` van por
+SKU (normalizado, `normalizeSku`) y WooCommerce usa los mismos SKU que Shopify:
+un mapeo hecho con la lista de Shopify sigue valiendo, sin migrar nada. La
+siembra automática solo agrega (`ignoreDuplicates`), por SKU igual o por
+nombre normalizado, ahora con los nombres de WooCommerce.
+
+**Tiempos.** La lectura tiene un reloj de 20 s (`WOO_CATALOG_BUDGET_MS`),
+10 s por llamada, 30 páginas de 100 productos como mucho
+(`WOO_CATALOG_MAX_PAGES`), 3 páginas de variaciones por producto y 6
+productos variables a la vez (`WOO_CATALOG_CONCURRENCY`). Lo que no llega (el
+reloj, el tope o una llamada que falla después de la primera página) deja la
+lectura «en parte» y lo completa el historial; si falla la primera página, no
+hay catálogo y queda solo el historial. El resultado se guarda **5 minutos en
+memoria** por tienda (`WOO_CATALOG_CACHE_MS`): asociar o vincular vuelve a
+pintar la pantalla y no relee WooCommerce cada vez. «Sincronizar catálogo» y el
+cron siempre lo releen (quien acaba de poner un SKU en WooCommerce y sincroniza
+tiene que verlo). Una lectura que falló no se guarda.
+
+**Lo que dice la pantalla** (`lib/catalog-source.ts`): la etiqueta de cada fila
+nombra la fuente («Variante WooCommerce», «SKU WooCommerce», «Falta SKU en
+WooCommerce», «Abre este producto en WooCommerce, asigna un SKU a la variante
+y vuelve a sincronizar»), el aviso general dice «N producto(s) publicado(s) no
+tienen SKU en WooCommerce» y, si WooCommerce falló o se leyó a medias, un aviso
+ámbar arriba: «Catálogo de WooCommerce: <por qué> La lista se completó con el
+historial de pedidos del último año …». Con Shopify no hay ese aviso, como
+antes. La sincronización cuenta «N SKUs de WooCommerce» y su aviso de fallo
+dice «Catálogo de WooCommerce: <por qué> Se asoció con el historial de
+pedidos.» (con Shopify, «Catálogo activo de Shopify: …», como siempre). El
+detalle es el mensaje del `WooError`, sin secretos ni la dirección.
+
+Pruebas: `test/aliclik-catalog-woo.test.ts`.
+
 #### El enlace al pedido y el nombre de su tienda (24-10-2026)
 
 **Por qué.** El 24-10-2026, ya con Aurela recibiendo pedidos de WooCommerce, la
@@ -17208,7 +17406,8 @@ es un borrador de Shopify.
 - **Leads, «Pedidos anteriores»** (`getCustomerHistory`): cada pedido local
   enlaza a su tienda y la flechita la nombra. Cuando Shopify contesta con los
   pedidos del cliente, esa lista sigue mandando, pero se le suman los locales
-  de WooCommerce (`mergePriorOrders`): antes los tapaba.
+  de WooCommerce (`mergePriorOrders`): antes los tapaba. Desde el 25-10-2026 se suman
+  también los del historial de Shopify que no trajo (§37.7).
 - **Envíos, el cajón:** un pedido de WooCommerce no se le pide a Shopify (ni
   la dirección en vivo ni el borrador por gid); «Obtenido de …», «Productos de
   …», «Revisa el destino… la dirección de … es …» y el aviso de corregir la

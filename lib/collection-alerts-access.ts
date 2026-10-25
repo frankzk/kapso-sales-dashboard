@@ -5,6 +5,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { nextOffer, type AlertRouting, type EscalationStep } from "@/lib/collection-escalation";
+import { VOUCHER_AWAITING_STATUSES } from "@/lib/pending-voucher";
 
 export type CollectionAlertKind = "registrado" | "sin_atribuir" | "comprobante_repetido";
 
@@ -176,10 +177,12 @@ export async function sweepResolvedAlerts(
   );
   // Pendiente de revisión o de completar datos = sigue esperando a una persona.
   // Cualquier otra cosa —validado, rechazado, observado— es una decisión ya
-  // tomada, y la alerta no tiene nada más que pedir.
+  // tomada, y la alerta no tiene nada más que pedir. La lista es la MISMA que
+  // enciende «Comprobante por validar» en el Master y en Leads
+  // (lib/pending-voucher.ts): el pop-up y el indicador se apagan juntos.
   const resueltas = rows.filter((r) => {
     const s = estado.get(r.payment_id);
-    return Boolean(s) && s !== "pendiente_revision" && s !== "info_incompleta";
+    return Boolean(s) && !(VOUCHER_AWAITING_STATUSES as readonly string[]).includes(s!);
   });
   if (!resueltas.length) return 0;
 
