@@ -10105,12 +10105,24 @@ estables:
    #KP143817): `PUNTO`, nombre, dirección, referencia ` - ` código postal,
    distrito ` - `, teléfono, `Pedido de <marca> <pedido>`, `COBRAR <total>
    SOLES`, la nota y los productos. La dirección es la de envío y, si no hay,
-   la de facturación (`displayAddress`); el total es el **vigente** de Shopify
-   con su forma («89.1», «89.0»), y sin él el de Kapta; la marca es la tienda
-   sin el país («Kenku Peru» → «Kenku»). Si la dirección no trae teléfono va el
-   del cliente. Kapta lo arma porque Shopify cierra el 28-10-2026 (§37) y los
+   la de facturación (`displayAddress`); la marca es la tienda sin el país
+   («Kenku Peru» → «Kenku»). Si la dirección no trae teléfono va el del
+   cliente. Kapta lo arma porque Shopify cierra el 28-10-2026 (§37) y los
    pedidos de WooCommerce nunca lo tuvieron. Es un texto para copiar: no
    escribe nada ni cambia el monto a cobrar del pedido.
+   **Dos diferencias con la plantilla (decisión del owner, 25-10-2026):**
+   - **«COBRAR» es el saldo, no el total** (`puntoCollect`): el total vigente
+     de Shopify (sin él, el de Kapta) menos lo que la clienta ya pagó y está
+     validado (adelanto, diferencia), con la misma regla de la ruta del
+     motorizado (`collectionBalance`: la rendición de un courier y lo rechazado
+     no cuentan; pagado en el checkout, 0). Con la forma de Shopify («89.1»,
+     «218.5»). Lo que está por validar no se resta: la pestaña lo avisa, porque
+     si se valida antes de la entrega hay que volver a copiar. Si los pagos no
+     se pueden leer, el Punto sale sin monto y la pestaña lo dice; nunca se
+     adivina el total. Antes la plantilla ponía el total aunque hubiera
+     adelanto, y el punto cobraba de más.
+   - **Cada producto lleva su cantidad**: «  2 x Producto - Variante». Una línea
+     quitada del pedido (cantidad 0) no va.
 
 **El historial del lead se reparte entre los pedidos del cliente (16-10-2026).**
 La Actividad trae también las gestiones de Leads (llamadas, mensajes, la venta
