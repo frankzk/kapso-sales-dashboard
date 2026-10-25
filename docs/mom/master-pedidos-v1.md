@@ -4413,9 +4413,11 @@ cron inscribe como mucho cada 20 minutos por tienda.
 en una tienda que ya crea en WooCommerce»).** El pedido de las dos pruebas es el
 borrador de Shopify completado, así que solo se genera en una tienda con
 `stores.platform = 'shopify'`. En una que ya crea en WooCommerce la fila queda
-`omitido` con el motivo `tienda_en_woocommerce`, sin tocar Shopify, y el
-carrito sigue en la cola como uno de `control`. La inscripción no cambia: al
-medir, esas filas se separan por `reason`.
+`omitido` con el motivo `tienda_en_woocommerce`, sin crear nada en Shopify, y
+el carrito sigue en la cola como uno de `control`. La inscripción no cambia. En
+`auto_order_ab_results` esas filas salen `sin_pedido`; cómo se mide lo
+inscrito después del cambio de plataforma lo decide el owner (pendiente,
+§38.12).
 
 **Qué couriers ve la cola.** `shipments` es el libro de TODAS las salidas, así
 que la cola tiene que recortar: quedan fuera **Shalom, Olva, Tanders, Urpi y el
@@ -16870,7 +16872,7 @@ Pruebas: `test/anulado-en-la-tienda.test.ts`, y las de cada pantalla
   La captura del carrito recuperado no crea nada y sigue igual. **Pendiente,
   decisión del owner:** qué hace la prueba A/B `ab-recompra-prov-1` en una
   tienda que ya crea en WooCommerce (seguir inscribiendo o cerrarla antes del
-  30-10).
+  30-10) y cómo se mide lo inscrito después del cambio de plataforma.
 - **Los principios de §2 y `AGENTS.md`** («Shopify como única fuente de
   pedidos»): **hecho (23-10-2026)**, con la decisión del owner: dicen «la
   tienda», Shopify hasta el cierre y WooCommerce después (38.9).
@@ -16942,13 +16944,21 @@ aplica 38.1.
   de tomar cada fila (`readTrialStorePlatform`: solo esa columna, sin claves;
   un cambio a mitad de corrida también cuenta). Con `woocommerce` la fila queda
   `omitido` con el motivo **`tienda_en_woocommerce`**
-  (`AUTO_TRIAL_PLATFORM_REASON`), sin ninguna llamada a Shopify. El carrito
-  sigue en la cola y lo trabaja una asesora, como uno de `control`; «Generar
-  pedido» lo crea en WooCommerce con lo del carrito (arriba). La sincronización
-  lo cuenta en su reporte (`autoOrdersBlockedByPlatform`). Si la plataforma no
-  se puede leer, la fila no se toma: sigue `pendiente`, no se genera nada y el
-  reporte dice «pedidos_auto: no se pudo leer en qué plataforma crea sus
-  pedidos la tienda …». Sin la 0274, toda tienda es `shopify`.
+  (`AUTO_TRIAL_PLATFORM_REASON`), sin ninguna llamada a Shopify. **La vuelve a
+  leer justo antes de completar el borrador:** entre una lectura y otra van la
+  base y hasta dos llamadas a Shopify (el estado del borrador y la dirección,
+  cada una con tope de 30 s), y completar es lo único que no se deshace. Si
+  para entonces la tienda ya crea en WooCommerce, la fila queda `omitido` con
+  el mismo motivo: pudo consultar el borrador en Shopify y ponerle la
+  dirección, pero no crea el pedido. El carrito sigue en la cola y lo trabaja
+  una asesora, como uno de `control`; «Generar pedido» lo crea en WooCommerce
+  con lo del carrito (arriba). La sincronización lo cuenta en su reporte
+  (`autoOrdersBlockedByPlatform`). Si la plataforma no se puede leer, no se
+  adivina: la fila no se toma (o, si ya estaba tomada, vuelve a `pendiente`),
+  las que faltaban también siguen `pendiente`, la corrida no genera nada más y
+  el reporte dice «pedidos_auto: no se pudo leer en qué plataforma crea sus
+  pedidos la tienda …», con cuántos pedidos se generaron antes en esa misma
+  corrida (`platformUnreadableError`). Sin la 0274, toda tienda es `shopify`.
 - **`recoverCart`** (completar el borrador de Shopify del lead) y **`closeSale`**
   (una venta solo en Kapta, `manual-…`, que quedaba `shopify` por defecto) leen
   la plataforma con `loadStoreOrderPlatform`. Con `woocommerce` no crean nada:
@@ -16964,9 +16974,13 @@ aplica 38.1.
   la plataforma. En una tienda en WooCommerce sigue sorteando los carritos de
   Shopify que queden (de 3 a 48 horas): las filas `control` siguen como siempre
   y las `auto` quedan `omitido` con `tienda_en_woocommerce`. En
-  `auto_order_ab_results` esas filas salen `sin_pedido`: **al medir se separan
-  por `reason`**. Si se deja de inscribir en esas tiendas o se cierra la cohorte
-  antes del 30-10 lo decide el owner (pendiente, arriba).
+  `auto_order_ab_results` esas filas salen `sin_pedido`, porque nunca se
+  generaron. **Cómo se mide lo inscrito después del cambio lo decide el
+  owner**, igual que si se deja de inscribir en esas tiendas o se cierra la
+  cohorte antes del 30-10 (pendiente, arriba). Separar solo por `reason` no es
+  un corte parejo: quita de la mitad `auto` lo inscrito después del cambio y
+  deja lo de `control`. Un corte por `platform_switched_at` en las dos mitades
+  sí lo es; es un ejemplo, no una decisión.
 - **La captura del carrito recuperado** (`linkCompletedDraftToLead`, paso 1b)
   no crea: registra en `orders` el pedido de Shopify de un borrador que ya se
   completó en Shopify, un pedido que existe, y gana el lead. Sigue igual con
@@ -16977,7 +16991,8 @@ aplica 38.1.
   `omitido`, `carrito_cerrado_en_shopify`) y no se crea nada.
 
 Implementación: `lib/auto-order-trials.ts` (`AUTO_TRIAL_PLATFORM_REASON`,
-`readTrialStorePlatform`, `processAutoOrderTrials`, `autoTrialDeps`), el paso
+`readTrialStorePlatform`, `processAutoOrderTrials`, `platformUnreadableError`,
+`autoTrialDeps`), el paso
 1d de `runStoreSync` (`lib/ingest.ts`), `SHOPIFY_CART_IN_WOO_STORE` y
 `LOCAL_SALE_IN_WOO_STORE` (`lib/woocommerce-orders.ts`), y `recoverCart` y
 `closeSale` (`app/dashboard/leads/actions.ts`). Pruebas:

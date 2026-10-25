@@ -4823,29 +4823,49 @@ La prueba de recompra sin llamada (`auto_order_trials`, cohorte
 `ab-recompra-prov-1` encendida hasta el 30-10) y las acciones viejas de Leads
 `recoverCart` y `closeSale` pasan a mirar `stores.platform`: solo crean con
 `shopify`. Con `woocommerce` la fila de la prueba queda `omitido` con el motivo
-`tienda_en_woocommerce`, sin ninguna llamada a Shopify, y las dos acciones
+`tienda_en_woocommerce` sin crear nada en Shopify (si la tienda ya estaba en
+WooCommerce al tomar la fila, sin ninguna llamada), y las dos acciones
 devuelven un aviso sin crear nada. **Sin migración**, sin crons y sin variables
 de entorno nuevas. **Requiere el OK del owner antes de publicar.**
 
 **Kenku y Aurela no cambian mientras sigan en `platform = 'shopify'`** (las dos,
-al 25-10-2026): lo único nuevo es una lectura de `stores.platform` antes de
-tomar cada fila de la prueba. Si esa lectura falla, la fila sigue `pendiente`
-y el reporte de la sincronización lo dice («pedidos_auto: no se pudo leer en
-qué plataforma crea sus pedidos la tienda …»).
+al 25-10-2026): lo único nuevo son dos lecturas de `stores.platform` por fila
+de la prueba, una antes de tomarla y otra justo antes de completar el
+borrador. Si una falla, la fila sigue (o vuelve a) `pendiente`, la corrida se
+detiene y el reporte de la sincronización lo dice («pedidos_auto: no se pudo
+leer en qué plataforma crea sus pedidos la tienda …», con cuántos pedidos se
+generaron antes en esa corrida).
 
 1. **El código**, por el camino de siempre (rama de integración → `main` por
    fast-forward), **antes** de que el owner pase la primera tienda a
    WooCommerce en Ajustes. Nada que aplicar en la base.
 2. **Después del cambio de cada tienda**, comprobar que la prueba no generó
-   nada en Shopify: `select store_id, arm, status, reason, count(*) from
-   auto_order_trials where cohort = 'ab-recompra-prov-1' and created_at >
-   now() - interval '2 days' group by 1, 2, 3, 4;`. En esa tienda, las filas
-   `auto` nuevas salen `omitido` con `tienda_en_woocommerce` y ninguna
-   `generado`.
-3. **Al medir la cohorte**, las filas `tienda_en_woocommerce` se separan por
-   `reason`: en `auto_order_ab_results` salen `sin_pedido` porque nunca se
-   generaron. Si la cohorte sigue inscribiendo en esas tiendas o se cierra
-   antes del 30-10 lo decide el owner (MOM §38.12, «Los carritos»).
+   nada en Shopify desde el cambio. Se filtra por la hora del cambio, no por
+   las últimas 48 h, para no traer las `generado` legítimas de antes (Kenku
+   generó la última el 24-10 a las 12:10 UTC):
+
+   ```sql
+   select t.store_id, t.arm, t.status, t.reason, count(*)
+     from auto_order_trials t
+     join stores s on s.id = t.store_id
+    where t.cohort = 'ab-recompra-prov-1'
+      and s.platform = 'woocommerce'
+      and t.processed_at > s.platform_switched_at
+    group by 1, 2, 3, 4;
+   ```
+
+   Las filas `auto` procesadas después del cambio salen `omitido` con
+   `tienda_en_woocommerce`, y ninguna `generado` (las `control` y las
+   `pendiente` no tienen `processed_at` y no salen). Si sale una `generado`,
+   es un pedido creado en Shopify en el momento justo del cambio: mirar su
+   `order_name` y su `processed_at`. `platform_switched_at` es la primera vez
+   que la tienda pasó a WooCommerce (al 25-10-2026, `null` en las dos).
+3. **Al medir la cohorte**: en `auto_order_ab_results` las filas
+   `tienda_en_woocommerce` salen `sin_pedido`, porque nunca se generaron. Cómo
+   se mide lo inscrito después del cambio lo decide el owner, igual que si la
+   cohorte sigue inscribiendo en esas tiendas o se cierra antes del 30-10 (MOM
+   §38.12, «Los carritos»). Separar solo por `reason` no es un corte parejo:
+   quita las filas `auto` de después del cambio y deja las de `control`.
 
 **Marcha atrás.** Revertir el commit. No escribe nada en la base que haya que
 deshacer: las filas `omitido` quedan como constancia.

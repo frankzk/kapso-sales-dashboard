@@ -234,20 +234,34 @@ describe("MOM §38.12 · Los carritos de Shopify en una tienda que ya crea en Wo
     expect(SEC).toContain("Solo crea en Shopify lo que corre en una tienda con `stores.platform = 'shopify'`");
     expect(SEC).toContain(`\`omitido\` con el motivo **\`${AUTO_TRIAL_PLATFORM_REASON}\`**`);
     expect(SEC).toContain("sin ninguna llamada a Shopify");
-    expect(SEC).toContain("la fila no se toma: sigue `pendiente`, no se genera nada");
+    expect(SEC).toContain(
+      "la fila no se toma (o, si ya estaba tomada, vuelve a `pendiente`), las que faltaban también siguen `pendiente`, la corrida no genera nada más",
+    );
     expect(SEC).toContain("«pedidos_auto: no se pudo leer en qué plataforma crea sus pedidos la tienda …»");
+    expect(SEC).toContain("con cuántos pedidos se generaron antes en esa misma corrida (`platformUnreadableError`)");
     expect(SEC).toContain("**Con `shopify` no cambia nada:**");
+  });
+
+  it("se vuelve a leer justo antes de completar el borrador", () => {
+    expect(SEC).toContain("**La vuelve a leer justo antes de completar el borrador:**");
+    expect(SEC).toContain("completar es lo único que no se deshace");
+    expect(SEC).toContain(
+      "Si para entonces la tienda ya crea en WooCommerce, la fila queda `omitido` con el mismo motivo: pudo consultar el borrador en Shopify y ponerle la dirección, pero no crea el pedido.",
+    );
   });
 
   it("lo que no se tocó: la inscripción (decisión del owner), la captura y la fecha del cierre", () => {
     expect(SEC).toContain("**La inscripción de la prueba A/B** (`enrollAbCohorts`, paso 1d-0) no mira la plataforma");
-    expect(SEC).toContain("**al medir se separan por `reason`**");
-    expect(SEC).toContain("lo decide el owner (pendiente, arriba)");
+    expect(SEC).toContain("**Cómo se mide lo inscrito después del cambio lo decide el owner**");
+    expect(SEC).toContain("cohorte antes del 30-10 (pendiente, arriba)");
+    expect(SEC).toContain("Separar solo por `reason` no es un corte parejo");
+    expect(SEC).toContain("es un ejemplo, no una decisión");
     expect(SEC).toContain("**La captura del carrito recuperado** (`linkCompletedDraftToLead`, paso 1b) no crea");
     expect(SEC).toContain("**El cierre de Shopify no se adivina por la fecha** ni por `woo_site_url`");
   });
 
   it("los archivos que nombra existen", () => {
+    expect(SEC).toContain("`platformUnreadableError`");
     for (const f of [
       "lib/auto-order-trials.ts",
       "lib/ingest.ts",
@@ -265,6 +279,16 @@ describe("MOM §38.12 · Los carritos de Shopify en una tienda que ya crea en Wo
     const S38_12 = section("### 38.12 Lo que decide la plataforma del pedido");
     expect(S38_12).not.toContain("completan o leen borradores de Shopify y no miran `stores.platform`");
     expect(S38_12).toContain("**Pendiente, decisión del owner:** qué hace la prueba A/B `ab-recompra-prov-1`");
+    expect(S38_12).toContain("y cómo se mide lo inscrito después del cambio de plataforma.");
+  });
+
+  it("el MOM no da por tomada una forma de medir la cohorte (la decide el owner)", () => {
+    // Separar por `reason` solo quita filas de la mitad `auto`: un corte que el
+    // owner no decidió y que sesga la comparación (revisión del 25-10-2026).
+    expect(flat(MOM)).not.toMatch(/se separan? por `reason`/);
+    expect(flat(MOM)).toContain(
+      "En `auto_order_ab_results` esas filas salen `sin_pedido`; cómo se mide lo inscrito después del cambio de plataforma lo decide el owner (pendiente, §38.12).",
+    );
   });
 
   it("§38.1 nombra a la prueba y a las dos acciones entre quienes leen stores.platform", () => {
@@ -278,5 +302,41 @@ describe("MOM §38.12 · Los carritos de Shopify en una tienda que ya crea en Wo
     expect(flat(MOM)).toContain(
       "solo se genera en una tienda con `stores.platform = 'shopify'`. En una que ya crea en WooCommerce la fila queda `omitido` con el motivo `tienda_en_woocommerce`",
     );
+  });
+});
+
+// --- DEPLOY.md: la comprobación y la medición ----------------------------------
+
+describe("DEPLOY.md · Los carritos de Shopify en una tienda que ya crea en WooCommerce", () => {
+  const DEPLOY = readFileSync(resolve(process.cwd(), "DEPLOY.md"), "utf8");
+  const title = "### 25-10-2026 · Los carritos de Shopify en una tienda que ya crea en WooCommerce";
+  const start = DEPLOY.indexOf(title);
+  const rest = DEPLOY.slice(start + title.length);
+  const next = rest.search(/\n#{1,3} /);
+  const ENTRY = flat(next === -1 ? rest : rest.slice(0, next));
+
+  it("existe y pide el OK del owner", () => {
+    expect(start).toBeGreaterThan(-1);
+    expect(ENTRY).toContain("**Requiere el OK del owner antes de publicar.**");
+  });
+
+  it("la comprobación filtra por la hora del cambio, no por las últimas 48 h", () => {
+    // Con «las últimas 48 h» salían las `generado` legítimas de antes del cambio
+    // como si fueran pedidos creados en Shopify después (revisión del 25-10-2026).
+    expect(ENTRY).not.toContain("interval '2 days'");
+    expect(ENTRY).toContain("join stores s on s.id = t.store_id");
+    expect(ENTRY).toContain("and s.platform = 'woocommerce'");
+    expect(ENTRY).toContain("and t.processed_at > s.platform_switched_at");
+  });
+
+  it("no manda a medir separando por `reason`: cómo se mide lo decide el owner", () => {
+    expect(ENTRY).not.toMatch(/se separan? por `reason`/);
+    expect(ENTRY).toContain("Cómo se mide lo inscrito después del cambio lo decide el owner");
+    expect(ENTRY).toContain("Separar solo por `reason` no es un corte parejo");
+  });
+
+  it("dice las dos lecturas de la plataforma y el error con lo generado antes", () => {
+    expect(ENTRY).toContain("una antes de tomarla y otra justo antes de completar el borrador");
+    expect(ENTRY).toContain("con cuántos pedidos se generaron antes en esa corrida");
   });
 });

@@ -21,9 +21,12 @@
 // completado, y `stores.platform` dice dónde crea Kapta los pedidos nuevos de la
 // tienda (§38.1). Con `woocommerce` la fila no toca Shopify: queda `omitido`
 // con el motivo `tienda_en_woocommerce` y el carrito sigue en la cola, como uno
-// de `control`. Si la plataforma no se puede leer no se adivina: la fila se
-// queda `pendiente` para la corrida siguiente. Qué hace la prueba en una tienda
-// de WooCommerce (seguir inscribiendo o cerrarla) lo decide el owner.
+// de `control`. Se vuelve a leer justo antes de completar el borrador, porque
+// lo de en medio (la base y hasta dos llamadas a Shopify) puede tardar más de
+// 30 s. Si la plataforma no se puede leer no se adivina: la fila se queda (o
+// vuelve a) `pendiente` para la corrida siguiente. Qué hace la prueba en una
+// tienda de WooCommerce (seguir inscribiendo o cerrarla) y cómo se mide lo
+// inscrito después del cambio lo decide el owner.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
@@ -49,8 +52,9 @@ export const AUTO_TRIAL_MAX_CART_AGE_DAYS = 12;
 /**
  * Motivo de la fila que no se generó porque la tienda crea sus pedidos nuevos
  * en WooCommerce (`stores.platform`, MOM §38.1): completar el borrador sería un
- * pedido en Shopify, la plataforma equivocada. Se guarda en `reason`; al medir
- * (`auto_order_ab_results`, donde la fila sale `sin_pedido`) se separa por él.
+ * pedido en Shopify, la plataforma equivocada. Se guarda en `reason`. En
+ * `auto_order_ab_results` la fila sale `sin_pedido`; cómo se mide lo inscrito
+ * después del cambio lo decide el owner (MOM §38.12, «Los carritos»).
  */
 export const AUTO_TRIAL_PLATFORM_REASON = "tienda_en_woocommerce";
 
@@ -219,7 +223,7 @@ export interface AutoTrialReport {
   failed: number;
   /** De las omitidas, las que no se generaron porque la tienda crea en WooCommerce. */
   blockedByPlatform: number;
-  /** Por qué la corrida se detuvo antes de terminar (las filas siguen `pendiente`), o null. */
+  /** Por qué la corrida se detuvo antes de terminar (las filas que faltaban siguen `pendiente`), o null. */
   error: string | null;
   /** created_at de los pedidos generados, para recalcular los rollups de esos días. */
   orderDates: string[];
@@ -227,7 +231,8 @@ export interface AutoTrialReport {
 
 /**
  * Procesa las filas pendientes de una tienda. Nunca lanza por una fila: cada
- * una termina `generado`, `omitido` (con motivo) o `error` (con el mensaje).
+ * una termina `generado`, `omitido` (con motivo) o `error` (con el mensaje), o
+ * vuelve a `pendiente` si no se pudo leer la plataforma (abajo).
  *
  * Antes de tomar cada fila mira dónde crea la tienda sus pedidos nuevos
  * (`storePlatform`, una lectura por fila, así que un cambio de plataforma a
@@ -235,6 +240,13 @@ export interface AutoTrialReport {
  * con `AUTO_TRIAL_PLATFORM_REASON` sin ninguna llamada a Shopify. Si no se pudo
  * leer, la corrida se detiene SIN tomar la fila (sigue `pendiente`) y lo dice
  * en `error`.
+ *
+ * Y lo vuelve a mirar justo antes de completar el borrador: entre una lectura
+ * y otra van la base y hasta dos llamadas a Shopify, cada una con su tope de
+ * 30 s, y completar es lo único que no se deshace. Si para entonces la tienda
+ * ya crea en WooCommerce, la fila queda `omitido` con el mismo motivo (ya se
+ * consultó el borrador en Shopify, pero no se creó nada); si no se puede leer,
+ * la fila vuelve a `pendiente` y la corrida se detiene igual.
  *
  * Todo lo que el pedido necesita para despacharse —la dirección incluida— se
  * deja en el borrador ANTES de completarlo. Una vez completado, el pedido
@@ -254,20 +266,21 @@ export async function processAutoOrderTrials(
     error: null,
     orderDates: [],
   };
+  // `stores.platform` en el momento; una excepción es «no se sabe», nunca «Shopify».
+  const readPlatform = async (): Promise<TrialStorePlatform | null> => {
+    try {
+      return await deps.storePlatform();
+    } catch {
+      return null;
+    }
+  };
   const rows = await deps.listPending(limit);
   for (const row of rows) {
     // Dónde crea la tienda sus pedidos nuevos, ANTES de tomar la fila: si no se
     // sabe, la fila no se toca y la corrida siguiente lo vuelve a intentar.
-    let platform: TrialStorePlatform | null;
-    try {
-      platform = await deps.storePlatform();
-    } catch {
-      platform = null;
-    }
+    const platform = await readPlatform();
     if (platform === null) {
-      report.error =
-        "no se pudo leer en qué plataforma crea sus pedidos la tienda (stores.platform): " +
-        "no se generó nada y las filas siguen pendientes";
+      report.error = platformUnreadableError(report.generated);
       break;
     }
     if (!(await deps.claim(row.id))) continue;
@@ -314,6 +327,24 @@ export async function processAutoOrderTrials(
           await skip(`direccion_no_aplicada: ${String(e?.message ?? e).slice(0, 300)}`);
           continue;
         }
+      }
+
+      // Otra vez la plataforma, ahora sí justo antes de completar: desde la
+      // primera lectura pasaron la base, `hasLaterOrder` y hasta dos llamadas a
+      // Shopify (más de 30 s si Shopify va lento), y el owner pudo cambiar la
+      // tienda a WooCommerce en ese rato. Completar no se deshace.
+      const platformNow = await readPlatform();
+      if (platformNow === null) {
+        // Sin saberlo no se completa: la fila vuelve a la cola de la prueba
+        // para la corrida siguiente, que lo valida todo de nuevo.
+        await deps.finish(row.id, { status: "pendiente", claimed_at: null });
+        report.error = platformUnreadableError(report.generated);
+        break;
+      }
+      if (platformNow !== "shopify") {
+        report.blockedByPlatform += 1;
+        await skip(AUTO_TRIAL_PLATFORM_REASON);
+        continue;
       }
 
       let completed: { orderGid: string | null; orderName: string | null };
@@ -374,6 +405,25 @@ export async function processAutoOrderTrials(
     }
   }
   return report;
+}
+
+/**
+ * El error de la corrida cuando `stores.platform` no se pudo leer. Dice lo que
+ * pasó de verdad: lo que faltaba sigue `pendiente`, y cuántos pedidos se
+ * generaron antes en la misma corrida (pueden ser varios: no es «no se generó
+ * nada»).
+ */
+export function platformUnreadableError(generated: number): string {
+  const before =
+    generated === 0
+      ? "en esta corrida no se generó ningún pedido"
+      : generated === 1
+        ? "antes, en esta corrida, se generó 1 pedido"
+        : `antes, en esta corrida, se generaron ${generated} pedidos`;
+  return (
+    "no se pudo leer en qué plataforma crea sus pedidos la tienda (stores.platform): " +
+    `las filas que faltaban siguen pendientes; ${before}`
+  );
 }
 
 function money(currency: string | null, amount: number | null): string {

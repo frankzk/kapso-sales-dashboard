@@ -2276,7 +2276,8 @@ export async function runStoreSync(
   //     Completa borradores de Shopify, así que solo genera en una tienda con
   //     `stores.platform = 'shopify'` (MOM §38.12, «Los carritos»): en una que
   //     ya crea en WooCommerce cada fila queda `omitido` con
-  //     `tienda_en_woocommerce`, sin llamar a Shopify. La inscripción (1d-0) no
+  //     `tienda_en_woocommerce`, sin crear nada en Shopify (se mira al tomar la
+  //     fila y otra vez justo antes de completar). La inscripción (1d-0) no
   //     mira la plataforma: si sigue o no en esas tiendas lo decide el owner.
   if (creds.shopify_token) {
     // 1d-0) Prueba A/B (0238): inscribe carritos nuevos y los sortea entre
