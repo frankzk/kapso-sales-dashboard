@@ -36,7 +36,7 @@ describe("§14 Grupo GF cobra lo de su Tarifario (v1.31)", () => {
     expect(s14).toContain("**Grupo GF cobra lo de su Tarifario (v1.31, decisión del owner del 19-10-2026).**");
     expect(s14).toContain("(`resolveGfCostTariff`, `lib/gf-tariff.ts`)");
     expect(s14).toContain("`MOM_RESOLUTION_VERSION` sube a `mom-v1.31`");
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.31");
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.32");
     // La regla vieja ya no está.
     expect(s14).not.toContain("no alimenta este costo");
   });

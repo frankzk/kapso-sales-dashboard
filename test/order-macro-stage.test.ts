@@ -768,7 +768,7 @@ describe("pagado completo a la tienda y sin courier: no espera liquidación (v1.
   });
 
   it("la versión sube y el MOM lo documenta", () => {
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.31");
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.32");
     const mom = readFileSync(join(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8");
     expect(mom).toContain("#### Pagado a la tienda y sin courier: no espera liquidación (v1.25, 10-10-2026)");
     expect(mom).toContain("`MOM_RESOLUTION_VERSION` sube a `mom-v1.25`");

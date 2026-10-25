@@ -9685,6 +9685,37 @@ el guardarraíl de ambigüedad, la que busca dentro del texto y la que rompe la
 rama sin región— y los caza los cuatro. Una prueba que no falla ante ninguno de
 esos no habría estado protegiendo nada.
 
+**Recordar la provincia de un distrito, con guarda (25-10-2026, `mom-v1.32`).**
+Corregir a mano la ubicación de un pedido ofrecía «Recordar esta provincia para
+los próximos pedidos del mismo distrito», **marcado por defecto**, y lo
+recordado va a `peru_districts` por **nombre** de distrito. Los nombres se
+repiten: el 21-10-2026 la corrección —correcta— de un pedido de Miraflores de
+Arequipa (#KP143187) dejó «miraflores → arequipa» para todos, y durante cuatro
+días los pedidos de Miraflores de **Lima** salieron con provincia «arequipa»
+(#KP143872, #AUR178625, #AUR178621 y #KP143948, entre otros; la cobertura
+siguió en Lima porque su departamento era Lima). El 19-10-2026 otra dejó
+«independencia → HUARAZ (Lima)», que no existe. Medido el 25-10-2026: ~700
+pedidos de Lima con una provincia imposible («arequipa», «HUARAZ», «lince»,
+«comas», «san roman»…). Desde ahora (`lib/district-learning.ts`):
+
+- **Recordar va desmarcado** y dice que vale para todos los pedidos, no solo
+  ese. Y no se recuerda (`districtLearnVerdict`, el aviso dice por qué) un
+  departamento que no se reconoce, una provincia que no es de ese departamento
+  (en Lima, solo sus diez provincias y el Callao) ni un distrito que ya está
+  guardado en **otro** departamento. La corrección del pedido vale igual.
+- **Lo aprendido no manda sobre el departamento del pedido**
+  (`learnedDistrictFits`): para un distrito de Lima Metropolitana o el Callao,
+  una fila de otro departamento no se usa, y una provincia que no es de Lima se
+  deja vacía. Lo mismo con la provincia de una guía (`guideProvinceFits`): una
+  salida «por definir» la copia de la fila del Master. Fuera de esos distritos
+  no se juzga nada: «Huaraz» con el departamento «Lima» —la clienta eligió mal
+  el desplegable— sigue tomando la provincia de Huaraz, que es la que acierta.
+  La cobertura de Leads usa la misma guarda (`leadDeliveryProbe`).
+- No cambia coberturas: con el departamento del pedido conocido, la provincia
+  solo entra a `order_coverage_for` por Cañete, que es provincia de Lima. La
+  versión sube a `mom-v1.32` para que el cron recalcule los pedidos ya
+  guardados.
+
 ### 19.0.1 La ortografía del departamento se unifica; el matiz de Lima no
 
 Medido el 14-09-2026: `shipments.region` tenía **77 valores distintos para 25

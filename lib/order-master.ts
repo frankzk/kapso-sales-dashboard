@@ -68,6 +68,7 @@ import {
   type StatusOverride,
 } from "@/lib/order-status";
 import { salesChannel } from "@/lib/sales-channel";
+import { guideProvinceFits, learnedDistrictFits } from "@/lib/district-learning";
 import { dispatchedWith, type RiderStop } from "@/lib/dispatched-with";
 import { costCourier } from "@/lib/delivery-courier";
 import { currentDispatchDate } from "@/lib/dispatch-date";
@@ -1069,7 +1070,16 @@ export async function recomputeOrderMaster(
 
     const geoOverride = geoOverrides.get(order.id) ?? null;
     const district = districtByOrder.get(order.id) ?? null;
-    const geoHit = geo.get(normalizeDistrict(district));
+    // EL DEPARTAMENTO DEL PROPIO PEDIDO manda sobre lo aprendido por nombre de
+    // distrito (25-10-2026). `peru_districts` va por nombre y los nombres se
+    // repiten: con «miraflores → arequipa» aprendido de un pedido de Arequipa,
+    // los de Miraflores de Lima salieron cuatro días con provincia «arequipa»
+    // (#KP143872, #AUR178625, #AUR178621, #KP143948). Lo aprendido, y la
+    // provincia de una guía —que la copió de esta misma fila—, solo valen si
+    // caben en el departamento del pedido (lib/district-learning.ts).
+    const ownRegion =
+      geoOverride?.region ?? text(address?.province) ?? guides.find((g) => g.region)?.region ?? draft?.region ?? null;
+    const geoHit = learnedDistrictFits(geo.get(normalizeDistrict(district)), ownRegion, district);
 
     // Prioridad de la ubicación, de mayor a menor:
     //   1. corrección manual del equipo (0051),
@@ -1077,7 +1087,7 @@ export async function recomputeOrderMaster(
     //   3. Shopify / el ubigeo / el draft order.
     const province =
       geoOverride?.province ??
-      guides.find((g) => g.province)?.province ??
+      guides.find((g) => guideProvinceFits(g.province, ownRegion, district))?.province ??
       geoHit?.province ??
       draft?.province ??
       historical?.province ??
