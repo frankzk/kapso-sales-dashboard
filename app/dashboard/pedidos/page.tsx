@@ -12,8 +12,10 @@ import {
   getOrderMasterFilteredMomCounts,
   getOrderMasterMomCounts,
   getOrderMasterPage,
+  getPaidUnnotifiedIds,
   getPendingVoucherIndex,
   isMasterView,
+  withPaidUnnotifiedFilter,
   withPendingVoucherFilter,
   type MasterMomCounts,
   type MasterView,
@@ -21,6 +23,7 @@ import {
 import { hasActiveFilters, masterSearchTerm } from "@/lib/order-master-filters";
 import { parseMasterQuery } from "@/lib/master-query";
 import { withPendingVouchers } from "@/lib/pending-voucher";
+import { withPaidUnnotified } from "@/lib/agency-pickup-alert";
 import { MACRO_SUBSTAGES_BY_STAGE, type MacroSubstage } from "@/lib/order-macro-stage";
 import { EmptyState } from "@/components/ui";
 import { OrdersMasterBoard } from "@/components/orders-master";
@@ -90,9 +93,15 @@ async function PedidosContent({
   // píldora y resuelve el filtro. Solo cuando el filtro está puesto hay que
   // esperarla antes de consultar el Master; si no, corre a la par.
   const pendingPromise = getPendingVoucherIndex(storeIds);
-  const filters = urlFilters.pendingVoucher
+  // «Pagado sin aviso» (MOM §12), con el mismo patrón: dos lecturas por carga
+  // (candidatos del Master y sus avisos), a la par salvo que el filtro esté puesto.
+  const paidUnnotifiedPromise = getPaidUnnotifiedIds(storeIds);
+  const withVoucher = urlFilters.pendingVoucher
     ? withPendingVoucherFilter(urlFilters, await pendingPromise)
     : urlFilters;
+  const filters = withVoucher.paidUnnotified
+    ? withPaidUnnotifiedFilter(withVoucher, await paidUnnotifiedPromise)
+    : withVoucher;
   // Mientras hay búsqueda la pantalla oculta las pestañas, los chips y los
   // filtros, y enseña solo «Resultados de búsqueda». Contarlos sería pagar
   // consultas que nadie ve: se cuentan al volver a la pestaña.
@@ -102,7 +111,7 @@ async function PedidosContent({
   // El ciclo de recontacto se muestra junto a los chips de «Fecha pactada», y el
   // filtro de Gestión solo se ofrece en esta vista.
   const showConfirmation = !searching && view === "por_confirmar";
-  const [momCounts, pageData, facets, agency, confirmationCounts, cycleDays, pendingVouchers] = await Promise.all([
+  const [momCounts, pageData, facets, agency, confirmationCounts, cycleDays, pendingVouchers, paidUnnotified] = await Promise.all([
     // Con filtros, las pestañas cuentan lo mismo que la lista (MOM §6).
     searching
       ? Promise.resolve(EMPTY_MOM_COUNTS)
@@ -122,6 +131,7 @@ async function PedidosContent({
       ? getConfirmationCycleDays(storeIds)
       : Promise.resolve({} as Record<string, number>),
     pendingPromise,
+    paidUnnotifiedPromise,
   ]);
   const confirmationDueCounts = showConfirmationDue
     ? confirmationCounts.due
@@ -153,10 +163,12 @@ async function PedidosContent({
       confirmationDueCounts={confirmationDueCounts}
       managementDayCounts={managementDayCounts}
       confirmationCycles={confirmationCycles}
-      rows={withPendingVouchers(pageData.rows, pendingVouchers)}
+      rows={withPaidUnnotified(withPendingVouchers(pageData.rows, pendingVouchers), paidUnnotified)}
       // Pedidos con comprobante por validar en las tiendas que ve; null si no
       // se pudo leer (la píldora lo dice en vez de enseñar un cero).
       pendingVoucherCount={pendingVouchers ? pendingVouchers.size : null}
+      // «Pagado sin aviso»: null si no se pudo leer (la píldora no enseña un cero).
+      paidUnnotifiedCount={paidUnnotified ? paidUnnotified.size : null}
       total={pageData.total}
       page={pageData.page}
       pageSize={pageData.pageSize || MASTER_PAGE_SIZE}

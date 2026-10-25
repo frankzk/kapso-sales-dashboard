@@ -36,6 +36,7 @@ import {
 import { Sheet } from "@/components/filter-sheet";
 import { FacetPill } from "@/components/facet-pill";
 import {
+  IconChat,
   IconClock,
   IconDownload,
   IconMoney,
@@ -110,6 +111,7 @@ import { SALES_CHANNEL_OPTIONS } from "@/lib/sales-channel";
 import { courierDisplayName, dispatchedWithLabel, dispatchedWithShort } from "@/lib/dispatched-with";
 import { dispatchDateBadge } from "@/lib/dispatch-date";
 import { PENDING_VOUCHER_LABEL, awaitsPickupKey, pendingVoucherHint } from "@/lib/pending-voucher";
+import { PAID_UNNOTIFIED_LABEL, agencyDeadlineBadge } from "@/lib/agency-pickup-alert";
 import { buildMasterQuery } from "@/lib/master-query";
 import { receiveSearchValue, shouldSendSearch } from "@/lib/search-input-echo";
 import { OrderLineItems } from "@/components/order-line-items";
@@ -204,6 +206,7 @@ export function OrdersMasterBoard({
   facets,
   agency,
   pendingVoucherCount = null,
+  paidUnnotifiedCount = null,
   canEdit,
   canExport = false,
   canOverride,
@@ -256,6 +259,12 @@ export function OrdersMasterBoard({
    * dice en vez de enseñar un cero que nadie contó.
    */
   pendingVoucherCount?: number | null;
+  /**
+   * «Pagado sin aviso» (MOM §12): pagados, en la agencia con el plazo por
+   * vencer o vencido y sin aviso de llegada enviado. `null` = no se pudo leer:
+   * la píldora no se pinta (un cero sería afirmar algo que nadie contó).
+   */
+  paidUnnotifiedCount?: number | null;
   canEdit: boolean;
   /** Descargar el Excel (`data.export`, 08-10-2026): owner, admin o concedido en Equipo. */
   canExport?: boolean;
@@ -652,6 +661,7 @@ export function OrdersMasterBoard({
             summary={agency}
             showAgency={agencyHasActivity(agency)}
             pendingVoucherCount={pendingVoucherCount}
+            paidUnnotifiedCount={paidUnnotifiedCount}
             filters={filters}
             onFilter={(next) => patch(next)}
           />
@@ -1107,6 +1117,7 @@ function AttentionLine({
   summary,
   showAgency,
   pendingVoucherCount,
+  paidUnnotifiedCount,
   filters,
   onFilter,
 }: {
@@ -1114,6 +1125,7 @@ function AttentionLine({
   /** Solo si hay algo en curso por agencia; si no, la línea lleva solo la píldora de cobro. */
   showAgency: boolean;
   pendingVoucherCount: number | null;
+  paidUnnotifiedCount: number | null;
   filters: MasterFilters;
   onFilter: (next: Partial<MasterFilters>) => void;
 }) {
@@ -1169,6 +1181,7 @@ function AttentionLine({
                       ? new Set()
                       : new Set(["disponible_para_recojo", "pendiente_de_recojo"]),
                     expiringSoon: false,
+                    paidUnnotified: false,
                   })
                 }
               />
@@ -1178,8 +1191,25 @@ function AttentionLine({
                 count={summary.proximosAVencer}
                 active={filters.expiringSoon}
                 hint="El plazo de recojo está por vencer: si nadie recoge, la agencia lo devuelve."
-                onClick={() => onFilter({ expiringSoon: !filters.expiringSoon, pickupStates: new Set() })}
+                onClick={() =>
+                  onFilter({ expiringSoon: !filters.expiringSoon, pickupStates: new Set(), paidUnnotified: false })
+                }
               />
+              {/* Dentro de «Próximos a vencer»: los que ya pagaron y no tienen
+                  ningún aviso de llegada enviado (MOM §12). Sin lectura, no se
+                  pinta: un cero sería afirmar algo que nadie contó. */}
+              {paidUnnotifiedCount !== null && (
+                <AttentionPill
+                  icon={IconChat}
+                  label={PAID_UNNOTIFIED_LABEL}
+                  count={paidUnnotifiedCount}
+                  active={filters.paidUnnotified}
+                  hint="Ya pagaron, el plazo de la agencia vence pronto o ya venció, y no tienen ningún aviso de llegada enviado: puede que no sepan que su paquete llegó. Toca para listarlos y avisarles."
+                  onClick={() =>
+                    onFilter({ paidUnnotified: !filters.paidUnnotified, pickupStates: new Set(), expiringSoon: false })
+                  }
+                />
+              )}
               <AttentionPill
                 icon={IconUndo}
                 label="Retorno iniciado"
@@ -1190,6 +1220,7 @@ function AttentionLine({
                   onFilter({
                     pickupStates: retornoActive ? new Set() : new Set(["retorno_iniciado"]),
                     expiringSoon: false,
+                    paidUnnotified: false,
                   })
                 }
               />
@@ -2096,6 +2127,8 @@ function MasterTable({
   busy: boolean;
 }) {
   const pageIds = rows.map((r) => r.order_id);
+  // Para la chapa del plazo de la agencia: una sola hora para toda la página.
+  const nowIso = new Date().toISOString();
   const allChecked = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
   const someChecked = !allChecked && pageIds.some((id) => selected.has(id));
   const headCheck = useRef<HTMLInputElement>(null);
@@ -2310,6 +2343,19 @@ function MasterTable({
                       return (
                         <Badge tone={badge.tone === "danger" ? "crit" : badge.tone} className="xl:mt-0.5">
                           {badge.text}
+                        </Badge>
+                      );
+                    })()}
+                    {/* El plazo de la agencia (MOM §12): solo si vence pronto o
+                        ya venció y el paquete sigue esperando. Se apaga solo al
+                        recogerse, entregarse o devolverse. */}
+                    {(() => {
+                      const plazo = agencyDeadlineBadge(r, nowIso);
+                      if (!plazo) return null;
+                      return (
+                        <Badge tone={plazo.tone} wrap className="xl:mt-0.5" title={plazo.title}>
+                          <IconClock aria-hidden className="size-3 shrink-0" />
+                          {plazo.text}
                         </Badge>
                       );
                     })()}

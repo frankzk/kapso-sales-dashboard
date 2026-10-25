@@ -581,6 +581,12 @@ export default async function StoreSettingsPage({
       olva_arrival_template_enabled: full.olva_arrival_template_enabled ?? false,
       olva_arrival_template_name: full.olva_arrival_template_name ?? null,
       olva_arrival_params: full.olva_arrival_params ?? null,
+      // Pre-0281 las columnas no existen: Ajustes no enseña el bloque (y así
+      // no manda campos que la base rechazaría al guardar).
+      olva_paid_arrival_available: full.olva_paid_arrival_template_enabled !== undefined,
+      olva_paid_arrival_template_enabled: full.olva_paid_arrival_template_enabled ?? false,
+      olva_paid_arrival_template_name: full.olva_paid_arrival_template_name ?? "guias_olva_llegada_pagado",
+      olva_paid_arrival_params: full.olva_paid_arrival_params ?? "nombre,producto,agencia,guia,vence",
       // Pre-0242 las columnas no existen ⇒ recordatorio apagado, defaults de la
       // migración.
       shalom_reminder_template_enabled: full.shalom_reminder_template_enabled ?? false,

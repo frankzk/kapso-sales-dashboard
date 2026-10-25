@@ -6917,6 +6917,12 @@ sin entrega). La simulación muestra qué saldría hoy sin enviar nada.
         no recibe el aviso de llegada. Ya tiene su clave, y el mensaje de la
         clave le dijo «cuando llegue, preséntala con tu DNI». Un «ya llegó» para
         pagados necesitaría su propia plantilla, sin saldo ni botones de cobro.
+      - **En Olva esa consecuencia no se asume** (0281, 25-10-2026): Olva no
+        tiene clave, así que la clienta que pagó entero no se enteraba de que su
+        paquete llegó. Ahí la llegada de quien ya no debe nada sale con su
+        propia plantilla en vez de omitirse (ver «El aviso de llegada para
+        pagados» en Olva, abajo). **Shalom no cambia**: a quien ya pagó no le
+        sale el aviso de llegada, porque tiene su clave.
       - **Pagado en el checkout es «ya no debe nada»** (09-10-2026, decisión
         del owner), tenga o no comprobantes. El saldo se calculaba solo con los
         Yape validados y un pedido cobrado por la pasarela no tiene ninguno:
@@ -7736,6 +7742,110 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   nacimiento y `vence` a 6 días. La llegada sale de `agency_arrived_at`, que el
   rastreo de Olva sí escribe, si no hay antes un `courier_status` de esa guía.
   Lo encola `olva-reconcile` antes de drenar la cola.
+
+#### El aviso de llegada para pagados de Olva (migración 0281, decidido el 25-10-2026)
+
+- **El hueco.** El aviso de llegada es de cobro y no sale a quien ya no debe
+  nada («ya pagó todo» / «pagado en el checkout», arriba en Shalom). En Shalom
+  se sostiene porque la clienta tiene su clave; **Olva no tiene clave**
+  (`lib/pickup-key.ts`), así que la clienta de Olva que pagó completo nunca se
+  enteraba de que su paquete llegó, y Olva lo devuelve a los 6 días. Casos:
+  #KP141593, #KP142910, #KP140003. Del 17-09 al 25-10-2026, 8 llegadas de Olva
+  quedaron omitidas por eso.
+- **La decisión (owner).** Cuando el rastreo pone la guía de Olva en
+  `disponible_para_recojo` y la clienta **no debe saldo**, en vez de omitir se
+  manda «ya llegó, recógelo con tu DNI», **sin importes, sin botones y sin
+  texto de cobro**, con su **propia plantilla**.
+- **Es la misma fila, no otro aviso.** Viaja en la fila `disponible` de esa
+  guía: al enviar, con el saldo delante, se elige la plantilla de cobro o la
+  de pagados. La unique `(shipment_id, kind)` sigue dando **un solo aviso de
+  llegada por guía**. Consecuencia buscada: si la clienta recibió el de cobro y
+  **paga después**, no se le manda nada más.
+- **Cuándo toca** (`olvaPaidArrivalApplies`): aviso de llegada, courier Olva,
+  pedido abierto (no anulado, entregado ni devuelto) y sin nada que cobrar
+  (`isWebPrepaid`, o el saldo validado en 0). Quien debe algo recibe el de
+  cobro como siempre. El de tránsito y el recordatorio no cambian.
+- **Configuración.** Ajustes → «Avisos de guía Olva» → «Aviso de llegada ·
+  pedido ya pagado»: interruptor, nombre de plantilla (por omisión
+  `guias_olva_llegada_pagado`) y orden de variables (por omisión
+  `nombre,producto,agencia,guia,vence`). **Nace apagado.** Es independiente del
+  de cobro: puede estar encendido con el de cobro apagado. Comparte número,
+  idioma, horario, tope (0194) y cuentas con los demás. **No admite variables
+  de dinero** (`total`, `adelanto`, `saldo`, `yape`): la config se rechaza con
+  el motivo, porque un «saldo S/ 0.00» a quien pagó es justo lo que no hay que
+  hacer. Sin la 0281 aplicada, Ajustes no enseña el bloque.
+- **Apagado o sin configurar, se omite como antes**, con el motivo completo en
+  la fila: «ya pagó todo: no hay saldo que cobrar · no salió «ya llegó» para
+  pagados: aviso de llegada para pagados de Olva apagado en la tienda (Ajustes →
+  Avisos de guía Olva)».
+- **Las variables** son las de las plantillas que ya existen, sin las de cobro:
+  `nombre` (el primer nombre), `producto` («1× Zapatilla Runner (39-40)»),
+  `agencia` (la oficina de Olva que apuntó el rastreo), `guia` (el tracking
+  «2552504-26», lo que dice en el mostrador) y `vence`. **Aquí sí va la fecha
+  límite**, a diferencia del de llegada con cobro: allí se quitó porque 28 días
+  de Shalom invitan a dejarlo para después; en Olva son 6, y sin la fecha la
+  clienta que ya pagó no tiene ninguna razón para ir pronto. Se calcula desde
+  `agency_arrived_at` de la guía —la misma de la que sale `agency_expires_at`—
+  para que el mensaje y el Master digan la misma fecha.
+- **Cuerpo sugerido** para crear en Kapso / Meta (categoría utilidad, español,
+  sin cabecera ni botones; cinco variables en este orden):
+
+  ```
+  Hola {{1}} 👋 Tu pedido ya llegó a la oficina de Olva y está listo para recoger 📦
+
+  🛍️ Pedido: {{2}}
+  📍 Oficina: {{3}}
+  🔢 Tracking Olva: {{4}}
+
+  ✅ Tu pedido ya está pagado: no tienes nada que pagar. Acércate con tu DNI y da el número de tracking.
+  ⏰ Olva lo guarda hasta el {{5}}; después lo devuelve.
+  ```
+
+  Si Meta lo aprueba con otro orden, se cambia el «Orden de las variables» en
+  Ajustes; no hace falta tocar código.
+- **Línea de tiempo.** Al salir queda «📤 Aviso de llegada a la agencia (pedido
+  pagado, sin cobro): plantilla «…» enviada», junto al `courier_status` que lo
+  disparó.
+
+#### El plazo de la agencia en el Master: «Pagado sin aviso» (decidido el 25-10-2026)
+
+- **Para qué.** Aunque salga el aviso de pagados, mientras su plantilla no esté
+  aprobada —o si el envío falla— alguien tiene que ver a tiempo al pedido que
+  ya pagó, está en la agencia con el plazo corriendo y no recibió ningún aviso
+  de llegada. Vale para Olva y para Shalom cuando el rastreo dejó la fecha de
+  vencimiento (`agency_expires_at`).
+- **No es un estado nuevo.** Lee lo que el Master ya tiene: el sub-estado de
+  recojo, `agency_expires_at` y `payment_state = pago_completo` (que ya cuenta
+  lo pagado en el checkout).
+- **La chapa en la fila**, bajo la subetapa y antes de «Comprobante por
+  validar», cuando el paquete **sigue esperando en la agencia** y el plazo vence
+  en **2 días o menos** (el mismo margen que la píldora «Próximos a vencer») o
+  ya venció: «Vence hoy» / «Vence mañana» / «Vence pronto» en `warn`, «Plazo
+  vencido» en `crit`; y, si además es «Pagado sin aviso», **«Pagado sin aviso ·
+  vence …»** en `crit`. El título dice la fecha límite y, para pagados, «avísale
+  que lo recoja con su DNI». Se apaga sola al recogerse, entregarse o
+  devolverse.
+- **«Pagado sin aviso»**, filtro rápido con su cifra en la línea de
+  excepciones, junto a «Próximos a vencer» (es un subconjunto). Cuenta los
+  pedidos que: están en `disponible_para_recojo`, `pendiente_de_recojo` o
+  `proximo_a_vencer` (no `cliente_notificado`: ahí el courier ya dice que avisó);
+  vencen en 2 días o menos, o ya vencieron; están pagados; y **no tienen
+  enviado** ningún aviso de llegada de la cola (`disponible`, sea el de cobro o
+  el de pagados, ni recordatorio de recojo). Un aviso omitido o fallido no
+  cuenta como aviso; el de tránsito tampoco (dice que va en camino). En la URL
+  es `pa=1`; se combina con la pestaña y los demás filtros, las pestañas cuentan
+  lo que trae, y el Excel lo respeta.
+- **Sin N+1.** Como «Comprobante por validar»: **dos lecturas por carga** —los
+  candidatos de `order_master` (unas pocas filas: medido el 25-10-2026, 4) y,
+  solo de ésos, sus avisos enviados—, a la par de los conteos. Con el resultado
+  se decoran las 100 filas de la página, se cuenta la píldora y se resuelve el
+  filtro. Si la lectura falla, la píldora no se pinta (no se afirma un cero) y
+  el filtro no trae ningún pedido, nunca todos.
+- **Lo que no cubre.** Un aviso dado a mano por WhatsApp fuera de la cola no
+  se ve: el pedido seguirá saliendo hasta que se recoja o el courier diga
+  «notificado». Y la mayoría de las guías de Shalom no tienen
+  `agency_expires_at` (Shalom no escribe la llegada): sin esa fecha no hay
+  plazo que vigilar.
 
 #### Cotejar Olva: el tracking sale del portal de clientes (migración 0218, decidido el 02-10-2026)
 

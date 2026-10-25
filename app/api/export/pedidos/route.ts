@@ -18,8 +18,10 @@ import { getAccessibleStores } from "@/lib/access";
 import {
   getOrderMasterPage,
   getOrderMasterRowsByIds,
+  getPaidUnnotifiedIds,
   getPendingVoucherIndex,
   isMasterView,
+  withPaidUnnotifiedFilter,
   withPendingVoucherFilter,
   type MasterView,
 } from "@/lib/orders-master-access";
@@ -68,9 +70,13 @@ export async function GET(req: NextRequest) {
   const parsed = parseMasterQuery(sp).filters;
   // «Comprobante por validar» se resuelve igual que en la página: los pedidos
   // salen de `order_payments`, no de una columna (MOM §16.1).
-  const filters = parsed.pendingVoucher
+  const withVoucher = parsed.pendingVoucher
     ? withPendingVoucherFilter(parsed, await getPendingVoucherIndex(storeIds))
     : parsed;
+  // «Pagado sin aviso» (MOM §12), igual que en la página.
+  const filters = withVoucher.paidUnnotified
+    ? withPaidUnnotifiedFilter(withVoucher, await getPaidUnnotifiedIds(storeIds))
+    : withVoucher;
   const rawView = sp.get("view") ?? undefined;
   const view: MasterView = isMasterView(rawView) ? rawView : "todos";
   const rawSubstage = sp.get("substage") ?? "";

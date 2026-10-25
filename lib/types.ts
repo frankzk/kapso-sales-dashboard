@@ -629,6 +629,12 @@ export interface OrderMasterRow {
    * justo en el caso que lo motivó (#KP143616). Ausente o null = no hay.
    */
   pending_voucher?: import("@/lib/pending-voucher").PendingVoucherSummary | null;
+  /**
+   * «Pagado sin aviso» (MOM §12): tampoco es una columna. Pagado, en la agencia
+   * con el plazo por vencer o vencido, y sin aviso de llegada enviado — esto
+   * último se lee de la cola de avisos (lib/agency-pickup-alert-access.ts).
+   */
+  paid_unnotified?: boolean | null;
 }
 
 /** Un movimiento de la línea de tiempo (`order_events`, append-only). */

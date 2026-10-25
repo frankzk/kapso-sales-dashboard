@@ -563,4 +563,6 @@
 \ir migrations/0279_shipments_lima_province_fix.sql
 \echo 'Applying 0280_leads_order_id_idx.sql'
 \ir migrations/0280_leads_order_id_idx.sql
+\echo 'Applying 0281_olva_paid_arrival_notice.sql'
+\ir migrations/0281_olva_paid_arrival_notice.sql
 \echo 'Done.'
