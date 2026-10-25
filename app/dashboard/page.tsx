@@ -39,6 +39,9 @@ import { LtvCpaPanel, LtvCpaSkeleton } from "@/components/ltv-cpa";
 import { getLtvInputs } from "@/lib/ltv-access";
 import { buildCohorts } from "@/lib/ltv";
 import { PENDING_INSTALL_COOKIE } from "@/lib/shopify-client-app";
+import { TodayPulse, TodayPulseSkeleton } from "@/components/today-pulse";
+import { getTodaySales } from "@/lib/today-sales-access";
+import type { TodaySales } from "@/lib/today-sales";
 
 export const dynamic = "force-dynamic";
 
@@ -85,6 +88,12 @@ async function ConsolidatedContent({
   }
 
   const storeIds = stores.map((s) => s.id);
+  // «Hoy» no sigue al periodo: se pide ya, en paralelo con todo lo demás, y un
+  // fallo queda en su bloque (MOM §17.5).
+  const todayPromise: Promise<TodaySales | null> = getTodaySales(stores).catch((error) => {
+    console.error("No se pudieron leer las ventas de hoy", error);
+    return null;
+  });
   const prev = previousRange(range);
   const leadsPromise = getLeadsForDashboard(storeIds, range);
   const campaignLeadsPromise = Promise.all(
@@ -177,6 +186,11 @@ async function ConsolidatedContent({
 
   return (
     <ExecutiveDashboard
+      today={
+        <Suspense fallback={<TodayPulseSkeleton />}>
+          <TodayPulseLoader promise={todayPromise} currency={currency} />
+        </Suspense>
+      }
       operations={
         // La operación del MOM y LTV : CPA (MOM §17.2, «debajo del resumen
         // operativo») no siguen al periodo: llegan cada una por su lado y no
@@ -218,6 +232,19 @@ async function ConsolidatedContent({
       metaAdCatalog={metaAdCatalog}
     />
   );
+}
+
+/** «Hoy» (MOM §17.5): las ventas del día contra ayer a esta hora. Un fallo no tumba el resto. */
+async function TodayPulseLoader({ promise, currency }: { promise: Promise<TodaySales | null>; currency: string }) {
+  const data = await promise;
+  if (!data) {
+    return (
+      <Banner tone="warn" role="status" title="Las ventas de hoy no pudieron leerse">
+        El resto del Consolidado sigue disponible. Recarga la página en un momento.
+      </Banner>
+    );
+  }
+  return <TodayPulse initial={data} currency={currency} />;
 }
 
 async function MomOwnerSummaryLoader({

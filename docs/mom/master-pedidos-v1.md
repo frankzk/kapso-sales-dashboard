@@ -9259,6 +9259,63 @@ que en producción se crean a mano con `create index concurrently` antes de la
 migración (DEPLOY.md): bajo RLS, Postgres no lleva al índice un rango sobre
 `coalesce(...)`.
 
+### 17.5 Hoy: las ventas del día contra ayer a esta hora (25-10-2026)
+
+Arriba de todo el Consolidado, antes de «Operación», el bloque «Hoy» dice cómo
+van las ventas del día de las tiendas que mira la persona, como el inicio de
+Shopify: pedido de Frankz del 25-10-2026, opción «Pulso con curva» y comparación
+«Ayer a esta hora». No sigue al selector de periodo: siempre es hoy.
+
+**Qué cuenta.** La venta de la cabecera del Consolidado (§17.4): todos los
+pedidos de la tienda, los cierre quien los cierre. Cuentan los activos
+(`cancelled_at` vacío) y el ingreso es total − reembolsado. Los pedidos de hoy
+que ya están cancelados van aparte, en una línea bajo las cifras, y no suman.
+Medido el 25-10-2026 a las 4:52 p. m.: Kenku llevaba 98 pedidos activos, los
+mismos 98 que mostraba Shopify, y el −26 % de Shopify era contra ayer a esa
+hora (132), igual que aquí.
+
+**Contra qué compara.** «Ayer a esta hora»: los pedidos que ayer ya se habían
+creado a la misma hora local, con el estado que tienen hoy (uno de ayer que se
+canceló esta mañana ya no cuenta). El cambio va en porcentaje, con flecha y la
+palabra «vs ayer»; si ayer a esta hora no había nada, no hay porcentaje: dice
+«ayer a esta hora no había» o «sin ventas todavía», nunca un porcentaje sobre
+cero.
+
+**El día.** Cada tienda se mide en su día local (`stores.timezone`): hoy empieza
+a su medianoche y «ayer a esta hora» corta a su hora local. El reloj del corte
+y el eje de la curva usan la zona de la primera tienda; hoy las dos están en
+Lima.
+
+**Lo que muestra.**
+
+- **Ventas** (S/ neto) y **Pedidos** (activos), cada una con su cambio contra
+  ayer a esta hora y lo que ayer llevaba a esa hora. Las dos cifras son
+  botones: la elegida (de entrada, Ventas) decide lo que dibuja la curva.
+- **La curva acumulada del día**, por cuarto de hora: hoy en azul hasta la hora
+  del corte y ayer completo, punteado, para ver qué le faltaba a ayer a estas
+  alturas. Al pasar el cursor, tocar o recorrer con las flechas del teclado,
+  las dos cifras de esa hora. Una tabla hora por hora la acompaña para quien
+  no ve el gráfico.
+- **Una línea por tienda** (con dos tiendas o más): ventas y pedidos, cada uno
+  con su cambio contra ayer a esta hora.
+
+**Frescura.** Lee los pedidos que ya están en Kapta (webhook y sincronización,
+unos minutos de retraso). El bloque se relee solo cada minuto mientras la
+pestaña está a la vista, y al volver a ella si ya pasó el minuto. Si un
+refresco falla, quedan las últimas cifras y la cabecera dice a qué hora falló;
+si la primera lectura falla, un aviso `warn` en su lugar y el resto del
+Consolidado sigue.
+
+**Lo que no tiene.** Visitantes en vivo, sesiones y tasa de conversión de la
+tienda: son de la analítica de Shopify, que Kapta no recibe. No se simulan.
+
+Cómo se calcula: los pedidos de ayer y hoy de `orders`, con la sesión de quien
+mira (`getTodaySales` en `lib/today-sales-access.ts`, sin migración ni RPC
+nuevas), armados en `lib/today-sales.ts` (puro) y dibujados en
+`components/today-pulse.tsx`. El refresco es `GET /api/dashboard/hoy`, con las
+mismas puertas que la página: sin tiendas, o solo vendedora o solo
+motorizado, no hay ventas que ver.
+
 ## 18. Implementación incremental
 
 ### Fase 1 — Fundaciones
