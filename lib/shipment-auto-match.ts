@@ -1,34 +1,26 @@
 // Batch auto-match for the "Revisión" queue: search the order (routed to the
-// right store) for each unmatched shipment's parsed order reference, and —
+// right store, in Kapta's `orders`) for each unmatched shipment's parsed order
+// reference, and —
 // only when exactly one candidate's phone cross-validates the shipment's own
 // phone (the 2-variable gate: NOTA reference + same phone) — LINK it directly,
-// no human click needed. If the link's Shopify fetch/upsert fails, we fall back
-// to persisting a *suggestion* so a human can still confirm it manually.
+// no human click needed.
 // Mirrors lib/shipment-match.ts's split: decideSuggestion is pure/testable,
 // runSuggestionBatch is the I/O orchestration (like aliclik-ingest.ts).
 //
-// DÓNDE SE BUSCA (25-10-2026, MOM §38.12 «Envíos: el auto-vínculo y la
-// búsqueda con pedidos de WooCommerce»). Un pedido de WooCommerce no está en
-// Shopify: se busca en `orders` de Kapta, siempre. Los de Shopify se siguen
-// buscando en Shopify mientras la tienda tenga token y Shopify conteste; si no
-// tiene token o Shopify dice que la tienda ya no está (401, 402, 403, 404, 423,
-// `isShopifyShopGone`), también se buscan en `orders`. Un fallo pasajero (5xx,
-// tiempo agotado, red) sigue dejando el envío sin revisar, como antes.
+// DÓNDE SE BUSCA (25-10-2026, decisión del owner, MOM §38.12 «Envíos: el
+// auto-vínculo y la búsqueda con pedidos de WooCommerce»). Siempre en `orders`
+// de Kapta, que ya tiene los pedidos de Shopify y los de WooCommerce de la
+// tienda: no se le pregunta nada a Shopify (ni a WooCommerce). Un fallo de la
+// base deja el envío sin revisar y se vuelve a buscar en la próxima pasada. Un
+// pedido que la sincronización todavía no trajo no aparece: el envío queda
+// revisado sin vínculo, para una persona (MOM §38.12).
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getStoreCreds, type StoreCreds } from "@/lib/ingest";
-import {
-  fetchOrderById,
-  isShopifyShopGone,
-  pickStoresForOrderQuery,
-  searchOrdersLive,
-  updateOrderShippingAddress,
-} from "@/lib/shopify";
-import { captureShopifyOrderForLink, type ShipmentShopifyDeps } from "@/lib/shipment-order-capture";
+import { pickStoresForOrderQuery } from "@/lib/shopify";
 import type { StoreSummary } from "@/lib/types";
 
-/** Shopify order-search round-trips run ~200–500ms; 25 shipments (each 1–2
- *  calls) comfortably finishes well under any serverless timeout, so a
+/** Each shipment costs one or two `orders` queries per store it routes to; 25
+ *  shipments comfortably finish well under any serverless timeout, so a
  *  client-side loop of chunks never risks a request timing out. */
 export const SUGGESTION_BATCH_SIZE = 25;
 
@@ -43,9 +35,10 @@ export interface SuggestCandidate {
   name: string | null;
   customer_phone: string | null;
   /**
-   * El id del pedido en Kapta cuando el candidato salió de la base local
-   * (`orders`): se vincula con esa fila, sin preguntarle nada a Shopify. Sin
-   * él, el candidato es de la búsqueda en vivo de Shopify y `gid` es su gid.
+   * El id del pedido en Kapta (`orders.id`): se vincula con esa fila. Todo
+   * candidato de la búsqueda lo trae; solo falta en una sugerencia guardada
+   * antes del 25-10-2026, que trae el gid de Shopify en `gid` y se busca en
+   * `orders` por él (`autoLinkShipment`).
    */
   orderId?: string;
 }
@@ -77,9 +70,9 @@ export interface BatchResult {
   linked: number; // confidently auto-linked to an order this round
   done: boolean; // true when fewer than `limit` unchecked rows remained
   /**
-   * Envíos que se quedaron sin revisar porque la búsqueda falló en alguna de
-   * sus tiendas (un mal momento de Shopify o de la base): se vuelven a buscar
-   * en la próxima pasada. Solo aparece si hubo alguno.
+   * Envíos que se quedaron como estaban porque la base falló (al buscar en
+   * alguna de sus tiendas o al vincular): se vuelven a intentar en la próxima
+   * pasada. Solo aparece si hubo alguno.
    */
   retry?: number;
 }
@@ -98,48 +91,49 @@ interface PendingSuggestionRow {
 }
 
 /**
- * Lo que la captura del pedido (lib/shipment-order-capture.ts) usa de afuera,
- * con las credenciales ya descifradas de la tanda.
+ * El `orders.shopify_order_id` de un gid de Shopify guardado en una sugerencia:
+ * «gid://shopify/Order/123» (o «123») → «123»; null si no es de Shopify. Los
+ * pedidos de WooCommerce (`wc-…`) nunca se guardaron como sugerencia.
  */
-function captureDeps(credsByStore: Map<string, StoreCreds>): ShipmentShopifyDeps {
-  return {
-    getCreds: async (storeId) => credsByStore.get(storeId) ?? null,
-    fetchOrder: fetchOrderById,
-    updateAddress: updateOrderShippingAddress,
-  };
+export function shopifyOrderIdFromGid(gid: string): string | null {
+  const m = /^(?:gid:\/\/shopify\/Order\/)?(\d+)$/.exec(gid.trim());
+  return m ? m[1]! : null;
 }
+
+/** «linked»: vinculado. «not_found»: el pedido no está en Kapta. «failed»: la base falló. */
+type LinkOutcome = "linked" | "not_found" | "failed";
 
 /**
  * Vincula el envío con el candidato, con el cliente admin (la tanda no tiene
- * sesión). Uno de la base local (`orderId`) se vincula con esa fila tal cual.
- * Uno de Shopify se captura igual que en linkShipmentToShopifyOrder
- * (`captureShopifyOrderForLink`): con Shopify se lee y se guarda, como
- * siempre; sin token, o si Shopify falla, se usa la fila que ya está en Kapta.
- * Devuelve false si no se pudo, para que quien llama guarde una sugerencia o
- * lo deje sin revisar. Mueve el envío a la tienda del candidato (una guía
- * `#KP…` importada con la tienda de Aurela va a Kenku), igual que un vínculo a
- * mano.
+ * sesión), siempre con la fila que ya está en Kapta: la del candidato
+ * (`orderId`) o, para una sugerencia guardada antes con un gid de Shopify, la
+ * fila de ese pedido en `orders` (por `store_id` y `shopify_order_id`). Nunca
+ * le pregunta a Shopify. Distingue «no está en Kapta» de «la base falló», que
+ * no es lo mismo: lo primero no se arregla reintentando. Mueve el envío a la tienda
+ * del candidato (una guía `#KP…` importada con la tienda de Aurela va a Kenku),
+ * igual que un vínculo a mano.
  */
 async function autoLinkShipment(
   admin: SupabaseClient,
   shipmentId: string,
   candidate: SuggestCandidate,
-  credsByStore: Map<string, StoreCreds>,
   now: string,
-): Promise<boolean> {
+): Promise<LinkOutcome> {
   let orderId = candidate.orderId ?? null;
   let orderName = candidate.name;
   if (!orderId) {
-    const captured = await captureShopifyOrderForLink(
-      admin,
-      { storeId: candidate.storeId, orderGid: candidate.gid },
-      captureDeps(credsByStore),
-    );
-    if (!captured.ok) return false;
-    orderId = captured.orderId;
-    // El nombre que quedó en Kapta (el que dijo Shopify al capturarlo).
-    const { data: row } = await admin.from("orders").select("name").eq("id", orderId).maybeSingle();
-    const saved = (row as { name?: unknown } | null)?.name;
+    const shopifyOrderId = shopifyOrderIdFromGid(candidate.gid);
+    if (!shopifyOrderId) return "not_found";
+    const { data: row, error: readErr } = await admin
+      .from("orders")
+      .select("id,name")
+      .eq("store_id", candidate.storeId)
+      .eq("shopify_order_id", shopifyOrderId)
+      .maybeSingle();
+    if (readErr) return "failed";
+    if (!row) return "not_found";
+    orderId = (row as { id: string }).id;
+    const saved = (row as { name?: unknown }).name;
     if (typeof saved === "string" && saved) orderName = saved;
   }
   const { error } = await admin
@@ -156,10 +150,10 @@ async function autoLinkShipment(
       suggestion_checked_at: now,
     })
     .eq("id", shipmentId);
-  return !error;
+  return error ? "failed" : "linked";
 }
 
-/** Cuántos candidatos se piden por tienda, en Shopify y en la base local. */
+/** Cuántos candidatos se piden por tienda a `orders`. */
 const CANDIDATES_PER_STORE = 5;
 
 /**
@@ -171,10 +165,6 @@ export function localOrderReference(reference: string): string {
   return reference.trim().replace(/^#/, "").replace(/[^A-Za-z0-9-]/g, "");
 }
 
-/** Qué pedidos de la base local se buscan: solo los de WooCommerce (Shopify
- *  contestó por los suyos) o todos (la tienda no tiene Shopify, o ya no está). */
-export type LocalOrderScope = "woocommerce" | "todas";
-
 interface LocalOrderRow {
   id: string;
   shopify_order_id: string;
@@ -183,10 +173,10 @@ interface LocalOrderRow {
 }
 
 /**
- * Busca la referencia en los pedidos de la tienda guardados en Kapta, en el
- * mismo orden que la búsqueda en vivo de Shopify (`searchOrdersLive`): primero
- * el nombre exacto (`#KP200001`, sin distinguir mayúsculas) y, solo si no hay,
- * el nombre que contiene la referencia o sus dígitos. No busca por celular: el
+ * Busca la referencia en los pedidos de la tienda guardados en Kapta, de las
+ * dos plataformas (Shopify y WooCommerce): primero el nombre exacto
+ * (`#KP200001`, sin distinguir mayúsculas) y, solo si no hay, el nombre que
+ * contiene la referencia o sus dígitos. No busca por celular: el
  * celular es la segunda señal y la pone `decideSuggestion`. Devuelve null si la
  * base falló (no es «no hay»).
  */
@@ -194,7 +184,6 @@ export async function searchLocalOrderCandidates(
   admin: SupabaseClient,
   storeId: string,
   reference: string,
-  scope: LocalOrderScope,
   first: number = CANDIDATES_PER_STORE,
 ): Promise<SuggestCandidate[] | null> {
   const ref = localOrderReference(reference);
@@ -202,7 +191,6 @@ export async function searchLocalOrderCandidates(
   const digits = ref.replace(/\D/g, "");
   const run = async (byName: { exact: string } | { loose: string }): Promise<LocalOrderRow[] | null> => {
     let q = admin.from("orders").select("id,shopify_order_id,name,customer_phone").eq("store_id", storeId);
-    if (scope === "woocommerce") q = q.eq("platform", "woocommerce");
     q = "exact" in byName ? q.ilike("name", byName.exact) : q.or(byName.loose);
     const { data, error } = await q.order("created_at", { ascending: false }).limit(first);
     if (error) return null;
@@ -227,53 +215,9 @@ export async function searchLocalOrderCandidates(
 
 type StoreSearch = { failed: true } | { failed: false; candidates: SuggestCandidate[] };
 
-/**
- * Los candidatos de una tienda para la referencia, o `failed` si no se pudo
- * saber (no es «no hay»):
- * - con token de Shopify y Shopify contestando: los de Shopify en vivo, como
- *   siempre, más los de WooCommerce de la base local;
- * - sin token, o con Shopify diciendo que la tienda ya no está
- *   (`isShopifyShopGone`): todos los de la base local, de las dos plataformas.
- *   La tienda se anota en `goneStores` para no volver a preguntarle en la tanda;
- * - un fallo pasajero de Shopify (5xx, tiempo agotado, red, permiso) o de la
- *   base: `failed`, y el envío se vuelve a buscar en la próxima pasada.
- */
-async function storeCandidates(
-  admin: SupabaseClient,
-  store: StoreSummary,
-  reference: string,
-  credsByStore: Map<string, StoreCreds>,
-  goneStores: Set<string>,
-): Promise<StoreSearch> {
-  const creds = credsByStore.get(store.id);
-  if (creds?.shopify_token && !goneStores.has(store.id)) {
-    let live: SuggestCandidate[] | null = null;
-    try {
-      const orders = await searchOrdersLive({
-        domain: creds.shopify_domain,
-        token: creds.shopify_token,
-        storeId: store.id,
-        query: reference,
-        first: CANDIDATES_PER_STORE,
-      });
-      live = orders.map((o) => ({
-        gid: (o.raw as { id?: string } | undefined)?.id ?? `gid://shopify/Order/${o.shopify_order_id}`,
-        storeId: store.id,
-        name: o.name,
-        customer_phone: o.customer_phone ?? null,
-      }));
-    } catch (e) {
-      // Un mal momento de Shopify (o un permiso que falta) no es «no hay».
-      if (!isShopifyShopGone(e)) return { failed: true };
-      goneStores.add(store.id);
-    }
-    if (live) {
-      const woo = await searchLocalOrderCandidates(admin, store.id, reference, "woocommerce");
-      if (woo === null) return { failed: true };
-      return { failed: false, candidates: [...live, ...woo] };
-    }
-  }
-  const local = await searchLocalOrderCandidates(admin, store.id, reference, "todas");
+/** Los candidatos de una tienda en la base de Kapta, o `failed` si la base falló (no es «no hay»). */
+async function storeCandidates(admin: SupabaseClient, store: StoreSummary, reference: string): Promise<StoreSearch> {
+  const local = await searchLocalOrderCandidates(admin, store.id, reference);
   if (local === null) return { failed: true };
   return { failed: false, candidates: local };
 }
@@ -281,13 +225,14 @@ async function storeCandidates(
 /**
  * Process one chunk of the "Revisión" queue in two passes: first LINK any row
  * that already carries a saved suggestion (from a prior suggest-only run) —
- * straight from the stored gid, no search — then, once those are drained,
- * search each never-checked shipment's order_name (Shopify and the local base,
- * `storeCandidates`) and LINK it when the phone cross-validates a single
- * candidate. `suggestion_checked_at is null` is the resumability cursor for the
- * search pass; `suggested_order_gid is not null` for the drain pass. A stored
- * suggestion whose link fails has its suggestion cleared (drops to plain
- * manual review) so it can't loop forever.
+ * from the stored Shopify gid's row in `orders`, no search — then, once those
+ * are drained, search each never-checked shipment's order_name in Kapta's
+ * `orders` (`storeCandidates`) and LINK it when the phone cross-validates a
+ * single candidate. `suggestion_checked_at is null` is the resumability cursor
+ * for the search pass; `suggested_order_gid is not null` for the drain pass. A
+ * stored suggestion whose order isn't in `orders` has its suggestion cleared
+ * (drops to plain manual review) so it can't loop forever; if the base failed,
+ * it is left as it was for the next pass. Nunca llama a Shopify.
  */
 export async function runSuggestionBatch(
   admin: SupabaseClient,
@@ -297,19 +242,10 @@ export async function runSuggestionBatch(
 ): Promise<BatchResult> {
   const now = new Date().toISOString();
 
-  // Decrypt each store's Shopify creds once — reused by both passes.
-  const credsByStore = new Map<string, StoreCreds>();
-  await Promise.all(
-    stores.map(async (s) => {
-      const c = await getStoreCreds(s.id, admin);
-      if (c?.shopify_token) credsByStore.set(s.id, c);
-    }),
-  );
-
-  // Pass 1: drain rows that already have a saved suggestion — link them from
-  // the stored gid (no search; without Shopify, from the row already in Kapta).
-  // Returns early so the caller keeps looping until this backlog is empty
-  // before moving on to the search pass.
+  // Pass 1: drain rows that already have a saved suggestion — link them with
+  // the stored gid's row in `orders` (no search, no Shopify). Returns early so
+  // the caller keeps looping until this backlog is empty before moving on to
+  // the search pass.
   const { data: pend } = await admin
     .from("shipments")
     .select("id,suggested_order_gid,suggested_store_id,suggested_order_name")
@@ -320,29 +256,35 @@ export async function runSuggestionBatch(
   const pendRows = (pend as PendingSuggestionRow[]) ?? [];
   if (pendRows.length) {
     let linked = 0;
+    let pendRetry = 0;
     for (const r of pendRows) {
-      const ok =
-        r.suggested_store_id != null &&
-        (await autoLinkShipment(
-          admin,
-          r.id,
-          {
-            gid: r.suggested_order_gid!,
-            storeId: r.suggested_store_id,
-            name: r.suggested_order_name,
-            customer_phone: null,
-          },
-          credsByStore,
-          now,
-        ));
-      if (ok) linked++;
+      const outcome: LinkOutcome =
+        r.suggested_store_id == null
+          ? "not_found"
+          : await autoLinkShipment(
+              admin,
+              r.id,
+              {
+                gid: r.suggested_order_gid!,
+                storeId: r.suggested_store_id,
+                name: r.suggested_order_name,
+                customer_phone: null,
+              },
+              now,
+            );
+      if (outcome === "linked") linked++;
+      else if (outcome === "failed") pendRetry++;
       else
         await admin
           .from("shipments")
           .update({ suggested_order_gid: null, suggested_store_id: null, suggested_order_name: null })
           .eq("id", r.id);
     }
-    return { processed: pendRows.length, linked, done: false };
+    // Una sugerencia cuya base falló se queda tal cual: si en esta vuelta nada
+    // avanzó, se termina (pedirla otra vez daría lo mismo) y se reintenta en la
+    // próxima pasada.
+    const drained = pendRows.length - pendRetry;
+    return { processed: drained, linked, done: drained === 0, ...(pendRetry ? { retry: pendRetry } : {}) };
   }
 
   // Pass 2: never-checked rows — search then link.
@@ -370,9 +312,6 @@ export async function runSuggestionBatch(
   }
 
   const searchable = rows.filter((r) => r.order_name);
-  // Tiendas cuya Shopify ya contestó en esta tanda que no está: no se le vuelve
-  // a preguntar por cada envío.
-  const goneStores = new Set<string>();
   let linked = 0;
   let retry = 0;
   for (const row of searchable) {
@@ -382,7 +321,7 @@ export async function runSuggestionBatch(
     // nunca. Ahora se queda sin marcar y entra en la próxima pasada. Tampoco se
     // decide con las demás tiendas: el candidato único podía no serlo.
     const perStore = await Promise.all(
-      targets.map((store) => storeCandidates(admin, store, row.order_name!, credsByStore, goneStores)),
+      targets.map((store) => storeCandidates(admin, store, row.order_name!)),
     );
     if (perStore.some((r) => r.failed)) {
       retry++;
@@ -394,27 +333,10 @@ export async function runSuggestionBatch(
       candidates,
     );
     if (decision.suggest && decision.candidate) {
-      const ok = await autoLinkShipment(admin, row.id, decision.candidate, credsByStore, now);
-      if (ok) {
-        linked++;
-        continue;
-      }
-      // Uno de la base local que no se pudo vincular (falló la base): sin
-      // sugerencia, que solo sabe de gid de Shopify; se vuelve a buscar.
-      if (decision.candidate.orderId) {
-        retry++;
-        continue;
-      }
-      // link failed (Shopify fetch/upsert error) → leave a suggestion to confirm by hand
-      await admin
-        .from("shipments")
-        .update({
-          suggested_order_gid: decision.candidate.gid,
-          suggested_store_id: decision.candidate.storeId,
-          suggested_order_name: decision.candidate.name,
-          suggestion_checked_at: now,
-        })
-        .eq("id", row.id);
+      // El candidato trae su `orderId`: solo puede fallar la base al escribir.
+      // Sin sugerencia ni marca de revisado: se vuelve a buscar en la próxima pasada.
+      if ((await autoLinkShipment(admin, row.id, decision.candidate, now)) === "linked") linked++;
+      else retry++;
     } else {
       await admin.from("shipments").update({ suggestion_checked_at: now }).eq("id", row.id);
     }

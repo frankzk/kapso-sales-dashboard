@@ -16522,79 +16522,82 @@ manda `stores.platform` («Generar pedido» y los buscadores, abajo) y qué falt
   aviso dice «El pedido es de WooCommerce: allí no se cambió». Sin la 0274, o si
   la columna no se puede leer, el pedido es `shopify`, como siempre
   (`orderPlatformOf`).
-- **Envíos → el auto-vínculo** (25-10-2026, abajo). Con Shopify contestando, la
-  base local aporta solo los pedidos `woocommerce`; los `shopify` se buscan en
-  Shopify, como siempre.
+- **Envíos → el auto-vínculo** (25-10-2026, abajo). No mira la plataforma:
+  busca en `orders` los pedidos de las dos, por decisión del owner, y nunca le
+  pregunta a Shopify.
 
 **Los respaldos de Shopify no cambian a Kenku ni a Aurela mientras Shopify
 responda.** El tope de 30 s de cada llamada a Shopify, el catálogo de Aliclik
-con el historial de pedidos, el auto-vínculo que deja sin revisar lo que no se
-pudo buscar y Envíos con la fila de Kapta solo entran cuando una llamada a
-Shopify falla o la tienda no tiene token. Lo único que el auto-vínculo suma
-con Shopify funcionando son los pedidos de WooCommerce, que no están en
-Shopify (abajo).
+con el historial de pedidos y Envíos con la fila de Kapta solo entran cuando
+una llamada a Shopify falla o la tienda no tiene token. **El auto-vínculo de
+Envíos es la excepción** (abajo): desde el 25-10-2026, por decisión del owner,
+ya no le pregunta a Shopify ni con Shopify funcionando; busca siempre en la
+base de Kapta.
 
 #### Envíos: el auto-vínculo y la búsqueda con pedidos de WooCommerce (25-10-2026)
 
 **Por qué.** El auto-vínculo de la cola «Revisión» («Vincular coincidencias
-automáticas» y la pasada que corre después de importar) buscaba la referencia
-de la NOTA solo en Shopify. Un pedido de WooCommerce no está en Shopify: su
-guía nunca se vinculaba sola. Y desde el cierre toda búsqueda en Shopify falla
-(402 y compañía): el respaldo que deja «sin revisar» lo que no se pudo buscar
-dejaba cada guía esperando para siempre, también las de WooCommerce de la
-misma tienda (con una tienda que falló no se decide).
+automáticas» y la pasada que corre después de importar un reporte de Aliclik)
+buscaba la referencia de la NOTA solo en Shopify. Un pedido de WooCommerce no
+está en Shopify: su guía nunca se vinculaba sola. Y desde el cierre toda
+búsqueda en Shopify falla (402 y compañía): el respaldo que deja «sin revisar»
+lo que no se pudo buscar dejaba cada guía esperando para siempre, también las
+de WooCommerce de la misma tienda (con una tienda que falló no se decide).
+
+**Decisión del owner (25-10-2026): el auto-vínculo busca siempre en la base de
+Kapta** (`orders`), que ya tiene los pedidos de Shopify (la pasada
+`shopify_all` y el historial, §37) y los de WooCommerce (el webhook y la pasada
+`woo_orders`, 38.11). **No le pregunta nada a Shopify**, ni con la tienda con
+token y Shopify contestando: no lee credenciales, no busca en vivo
+(`searchOrdersLive`) y no lee ni guarda el pedido al vincular
+(`fetchOrderById`, `captureShopifyOrderForLink`). Tampoco le pregunta a
+WooCommerce. Reemplaza la regla del mismo día (commit 9857c60c) que seguía
+buscando los de Shopify en Shopify mientras contestara: una sola fuente, la
+misma para las dos plataformas, y nada que cambiar el día del cierre.
 
 **Dónde se busca**, en cada tienda que toca la referencia (la misma elección
 por prefijo de siempre, `pickStoresForOrderQuery`; `storeCandidates` en
-`lib/shipment-auto-match.ts`):
+`lib/shipment-auto-match.ts`): en `orders` de esa tienda, **las dos
+plataformas**, sin filtrar por `platform`.
 
-- **Los pedidos de WooCommerce, en la base local, siempre** (`orders` con
-  `platform = woocommerce`). Es donde viven: los traen el webhook y la pasada
-  `woo_orders` (38.11). Kapta no le pregunta a WooCommerce.
-- **Los de Shopify, en Shopify mientras la tienda tenga token y Shopify
-  conteste**, como siempre (`searchOrdersLive`).
-- **Sin token, o con Shopify contestando que la tienda ya no está** (401, 402,
-  403, 404, 423: `isShopifyShopGone`, la misma regla que la dirección del
-  envío): en la base local, las dos plataformas. En esa tanda no se le vuelve a
-  preguntar a esa Shopify. Antes, una tienda sin token se daba por revisada sin
-  buscar nada.
-- **Un mal momento** (5xx, tiempo agotado, red, un permiso que falta) **o una
-  falla de la base**: el envío queda sin revisar y se vuelve a buscar en la
-  próxima pasada, como antes.
+**Lo que cuesta: un pedido que la sincronización todavía no trajo no se
+encuentra.** La búsqueda en vivo veía el pedido que la pasada aún no había
+traído (una guía puede importarse minutos después de crearse el pedido); la
+base, no. Lo que pasa exactamente, según el código:
 
-**Decisión: los pedidos de Shopify se siguen buscando en Shopify mientras la
-tienda tenga token y Shopify conteste**; no pasan ya a la base local. Por qué:
-es la regla de los respaldos de Shopify (arriba: con Shopify funcionando, nada
-cambia); la búsqueda en vivo encuentra el pedido que la pasada `shopify_all`
-todavía no trajo (una guía puede importarse minutos después de crearse el
-pedido) y la base no; y el día del cierre no hay que tocar nada: cuando Shopify
-empieza a contestar que la tienda ya no está, la base toma la posta sola. Para
-entonces la base ya tiene los pedidos de Shopify (la pasada y el historial,
-§37) y Shopify no crea ninguno nuevo. Lo que cuesta: una llamada por tienda y
-por tanda para enterarse de que Shopify ya no está.
+- **La búsqueda no encontró ningún candidato con el mismo celular** (tampoco
+  el pedido que falta): el envío queda **revisado sin vínculo**
+  (`suggestion_checked_at`) y queda en «Por revisar» para una persona. **La
+  próxima pasada no lo vuelve a intentar**: solo busca los que no quedaron
+  revisados. Se vincula a mano desde «Por revisar» (el buscador del cajón mira
+  la base apenas se abre, abajo).
+- **La base falló** al buscar en alguna de sus tiendas, o al escribir el
+  vínculo: el envío **queda sin revisar**, sin sugerencia, y la próxima pasada
+  lo vuelve a buscar. Con una tienda que falló no se decide con lo que dijo la
+  otra. Si en una tanda nada avanzó, la tanda termina (`done`) en vez de
+  pedirse otra vez.
 
-**La búsqueda en la base** (`searchLocalOrderCandidates`) sigue el orden de la
-de Shopify: primero el nombre exacto (`#AUR900006`, sin distinguir
-mayúsculas) y, solo si no hay, el nombre que contiene la referencia o sus
-dígitos (`900006`). Cinco por tienda, como en Shopify. No busca por celular: el
-celular es la segunda señal. La referencia pierde el «#» y todo lo que no sea
-letra, dígito o guion (`localOrderReference`), para que no haga de comodín ni
-rompa el filtro.
+**La búsqueda en la base** (`searchLocalOrderCandidates`): primero el nombre
+exacto (`#AUR900006`, sin distinguir mayúsculas) y, solo si no hay, el nombre
+que contiene la referencia o sus dígitos (`900006`). Cinco por tienda. No busca
+por celular: el celular es la segunda señal. La referencia pierde el «#» y todo
+lo que no sea letra, dígito o guion (`localOrderReference`), para que no haga de
+comodín ni rompa el filtro.
 
 **La regla para vincular no cambia** (§19.0, `decideSuggestion`): un solo
-candidato con el mismo celular de la guía, sumando los de Shopify y los de la
-base. Si uno de Shopify y uno de WooCommerce tienen el mismo celular, no hay
-uno solo y la guía se queda para una persona.
+candidato con el mismo celular de la guía, sumando los de todas las tiendas que
+toca la referencia. Si uno de Shopify y uno de WooCommerce tienen el mismo
+celular, no hay uno solo y la guía se queda para una persona.
 
-**El vínculo.** Un candidato de la base se vincula con esa fila, sin llamar a
-Shopify. Uno de Shopify se captura igual que al confirmarlo a mano
-(`captureShopifyOrderForLink`): con Shopify se lee y se guarda; sin token o si
-Shopify falla, se usa la fila que ya está en Kapta. Así una sugerencia guardada
-también se vincula después del cierre, en vez de borrarse. Si el vínculo con
-una fila de la base no se pudo escribir, no se guarda sugerencia (la
-sugerencia solo sabe de gid de Shopify): el envío se vuelve a buscar. El aviso
-del botón dice «N guías no se pudieron buscar; se vuelven a buscar la próxima
-vez.», ya sin «en Shopify»: también puede ser la base.
+**El vínculo.** Siempre con la fila que ya está en Kapta (`autoLinkShipment`):
+la del candidato. Una **sugerencia guardada antes** (con el gid de Shopify del
+pedido) se vincula con la fila de ese pedido en `orders` (misma tienda,
+`shopify_order_id` = el número del gid); si el pedido no está en `orders`, la
+sugerencia se limpia y el envío queda en «Por revisar», sin volver a buscarse
+solo; si la base falló al leerlo, la sugerencia se queda como estaba y se
+reintenta en la próxima pasada. El auto-vínculo ya no guarda sugerencias
+nuevas. El aviso del botón dice «N guías no se pudieron buscar; se vuelven a
+buscar la próxima vez.»: es la base que falló.
 
 **La búsqueda a mano ya miraba la base.** El buscador del cajón y de «Por
 revisar» (`OrderLinkPicker`) y el de la guía directa
@@ -16603,13 +16606,15 @@ revisar» (`OrderLinkPicker`) y el de la guía directa
 abren, con la referencia de la guía: un pedido de WooCommerce aparece ahí, con
 «Mismo teléfono». «Buscar en Shopify» sigue siendo solo para los pedidos de
 Shopify que la base aún no trajo; desde el cierre contesta «Sin coincidencias en
-Shopify», sin daño.
+Shopify», sin daño. El auto-vínculo no usa ese botón.
 
 Implementación: `lib/shipment-auto-match.ts` (`storeCandidates`,
-`searchLocalOrderCandidates`, `localOrderReference` y `autoLinkShipment` con
-`captureShopifyOrderForLink`) y `components/import-review.tsx` (`retryNote`).
+`searchLocalOrderCandidates`, `localOrderReference`, `shopifyOrderIdFromGid` y
+`autoLinkShipment`), `app/dashboard/envios/actions.ts`
+(`processSuggestionBatch`) y `components/import-review.tsx` (`retryNote`).
 Pruebas: `test/shipment-auto-match-local.test.ts` y
-`test/shipment-auto-match-retry.test.ts`.
+`test/shipment-auto-match-retry.test.ts` (las dos fallan si algo llama a
+Shopify).
 
 #### «Generar pedido» y los buscadores en WooCommerce (23-10-2026)
 
@@ -17061,9 +17066,9 @@ Pruebas: `test/anulado-en-la-tienda.test.ts`, y las de cada pantalla
   las dos emite.
 - **Auto-vínculo y búsqueda de Envíos** con pedidos de WooCommerce: **hecho
   (25-10-2026)** («Envíos: el auto-vínculo y la búsqueda con pedidos de
-  WooCommerce», arriba). El auto-vínculo los busca en la base local; la
-  búsqueda a mano ya lo hacía. Los de Shopify siguen en Shopify mientras
-  conteste.
+  WooCommerce», arriba). El auto-vínculo busca todos los pedidos, de Shopify y
+  de WooCommerce, en la base de Kapta (decisión del owner, 25-10-2026); la
+  búsqueda a mano ya miraba la base.
 - **Otros gid de Shopify armados con `shopify_order_id`** (el cajón de un envío
   sin dirección, la nota de la guía de Tanders, «Ver en Shopify»): **hecho
   (24-10-2026)**, con `orders.platform` («El enlace al pedido y el nombre de su
