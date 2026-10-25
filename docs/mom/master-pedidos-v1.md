@@ -282,6 +282,18 @@ Reglas iniciales:
   partir de ella y la ruta reaparece sola.
 - Tanders es exclusivo de cobertura Lima. No se muestra ni se acepta desde el
   servidor para Provincia COD o Agencia.
+- **La nota de la guía Tanders llega precargada (25-10-2026).** Al abrir «Crear
+  guía Tanders» la nota trae, en este orden: la referencia de la dirección, la
+  nota del pedido escrita por el equipo, el número de pedido, una línea
+  `X<cantidad> <producto> (<variante>)` por producto y, separado por una línea en
+  blanco, «Datos de cobro:» con el Yape principal y la primera cuenta bancaria
+  activa de Ajustes → Cuentas de cobro, en dígitos corridos. Es el formato que
+  se tecleaba a mano en cada guía; el operador puede editarla antes de crear.
+  - Si la guía no cobra (pedido ya pagado, monto 0) no lleva datos de cobro.
+  - La nota automática de Kapso («Pedido WhatsApp/Kapso…», «Pedido creado desde
+    WhatsApp/Kapso.») no entra: repite productos, contacto y dirección que la
+    guía ya lleva.
+  - Sin cuentas configuradas no se inventa ninguna: el bloque se omite.
 - Cañete siempre se clasifica como Agencia, aunque Shopify lo etiquete como
   `Lima (provincia)` o exista una tarifa COD histórica que coincida.
 - La cobertura tiene UNA sola definición, `order_coverage_for` en la base. Decide
