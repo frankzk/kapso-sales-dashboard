@@ -15937,6 +15937,8 @@ que Kapta guarda como **archivo de consulta**.
   liquidaciones ni comprobantes, y no cuentan en el Consolidado. Los estados
   que se ven son los de Shopify, tal como vinieron (`financial_status`,
   `fulfillment_status`, `cancelled_at`): no se traducen a estados del Master.
+  Lo único que lee del archivo fuera de su pantalla es «Pedidos antes» de la
+  ficha del lead (§37.7), solo para contar y listar.
 - La tienda sigue siendo la única fuente de pedidos (AGENTS.md, regla 4): esto es
   una copia de lo que Shopify ya tenía, no un canal de entrada.
 
@@ -16116,6 +16118,60 @@ Implementación:
   la pantalla.
 - Pruebas: `test/shopify-history.test.ts`, `test/shopify-history-ui.test.ts`,
   `test/shopify-history-bulk.test.ts` y `test/shopify-history-more.test.ts`.
+
+### 37.7 «Pedidos antes» en Leads (25-10-2026)
+
+**Por qué.** La ficha del lead (el cajón de Leads y la ficha de la cola nueva)
+decía «Pedidos antes: Ninguno: es cliente nuevo» a clientas que habían
+comprado muchas veces: solo leía `orders`, que en Kenku empieza en julio de
+2024 y en Aurela en mayo de 2024, mientras el historial importado (§37) va
+desde 2023 y 2021. **Decisión del owner (25-10-2026):** «Pedidos antes» también
+cuenta el historial de Shopify.
+
+Reglas:
+
+- **Misma clienta, misma tienda.** Se buscan en `shopify_history_orders` los
+  pedidos de la tienda del lead con el mismo celular normalizado
+  (`phone_norm` = `normalizePhone` del celular del lead). No se cruza por
+  correo ni por nombre, ni entre tiendas.
+- **Sin anulados.** Como en `orders`, el anulado en Shopify
+  (`cancelled_at`) no cuenta.
+- **Un pedido cuenta una vez.** Si el número (`order_name`) ya está en `orders`
+  de esa clienta, manda el de Kapta, también si Kapta lo tiene anulado: la copia
+  del historial puede ser de antes de la anulación. El pedido propio del lead
+  tampoco cuenta, ni por su id ni por su copia en el historial.
+- **Conteo y lista.** El número («3 pedidos», «3 pedidos antes») suma los de
+  Kapta y los del historial. La lista sigue mostrando los tres más recientes,
+  de cualquiera de los dos lados, y el «último producto» es el del más reciente.
+  El pedido que viene del historial lleva al lado, en tinta tenue, «del
+  historial de Shopify» y **no tiene enlace**: es un archivo y la tienda puede
+  ya no existir en Shopify; se consulta en «Historial Shopify» (§37.2).
+- **Con Shopify en vivo.** Cuando Shopify contesta con los pedidos de la clienta,
+  esa lista sigue mandando (§38.12), y se le suman los del historial que no trajo
+  (con otro número), además de los de WooCommerce.
+- **Rendimiento.** Una sola consulta por el índice `(store_id, phone_norm)` de
+  la 0273, en paralelo con la de `orders`, con límite de 25 (el celular con más
+  pedidos en el historial tiene 73) y el conteo exacto. Los que el límite deja
+  fuera se suman al conteo sin compararlos con `orders`: son los más viejos, y
+  `orders` empieza en 2024. No hizo falta migración: el índice ya estaba.
+- **Si falla** (sin la tabla, sin permiso, error de la base), la ficha queda
+  como antes, solo con `orders`. No se registra nada con datos de la clienta.
+- **Sigue siendo un archivo (§37.1).** Solo se lee, con la sesión de quien
+  mira (RLS por tienda, `auth_store_ids()`): nada pasa a `orders` ni a
+  `order_master`. No hace falta «Descargar la base de pedidos»: la ficha
+  muestra número, fecha y monto de la misma clienta que el lead ya enseña, no
+  la base.
+- **Qué no cambia.** «Cliente nuevo» en otros lugares sigue igual: el aviso de
+  pedido duplicado o recompra (`lib/pedido-duplicado.ts`) mira pedidos vivos de
+  Kapta en las últimas 48 h y lo entregado por Kapta, y el historial no sabe si
+  Kapta entregó; el segmento y los conteos de la cola tampoco lo leen. El único
+  lector de `getCustomerHistory` es la ficha del lead.
+
+Implementación: `lib/customer-history-merge.ts` (la unión pura, sin repetidos,
+y el conteo), `getCustomerHistory` en `lib/leads-access.ts` (las dos
+consultas), `mergePriorOrders` en `lib/order-admin-url.ts` (con Shopify en
+vivo), `components/leads-drawer.tsx` y `components/leads-next.tsx` (la marca).
+Pruebas: `test/leads-prior-orders-history.test.ts`.
 
 ## 38. WooCommerce (23-10-2026)
 
@@ -17151,7 +17207,8 @@ es un borrador de Shopify.
 - **Leads, «Pedidos anteriores»** (`getCustomerHistory`): cada pedido local
   enlaza a su tienda y la flechita la nombra. Cuando Shopify contesta con los
   pedidos del cliente, esa lista sigue mandando, pero se le suman los locales
-  de WooCommerce (`mergePriorOrders`): antes los tapaba.
+  de WooCommerce (`mergePriorOrders`): antes los tapaba. Desde el 25-10-2026 se suman
+  también los del historial de Shopify que no trajo (§37.7).
 - **Envíos, el cajón:** un pedido de WooCommerce no se le pide a Shopify (ni
   la dirección en vivo ni el borrador por gid); «Obtenido de …», «Productos de
   …», «Revisa el destino… la dirección de … es …» y el aviso de corregir la

@@ -175,16 +175,18 @@ export function eventNoteLabel(kind: string, note: string | null | undefined, pl
  * «Pedidos anteriores» cuando Shopify contestó con los del cliente: esa lista
  * manda (trae también los anulados y los que no pasaron por Kapta), pero no
  * conoce los pedidos de WooCommerce de la misma tienda. Se le suman los locales
- * de WooCommerce (MOM §38.12) y quedan los `limit` más nuevos. Sin ninguno de
- * WooCommerce, la de Shopify tal cual.
+ * de WooCommerce (MOM §38.12) y los del historial de Shopify importado que no
+ * trajo (MOM §37.7: la consulta en vivo no ve los antiguos), sin repetir número,
+ * y quedan los `limit` más nuevos. Sin ninguno de esos, la de Shopify tal cual.
  */
-export function mergePriorOrders<T extends { createdAt: string | null; platform?: OrderPlatform }>(
-  shopify: T[],
-  local: T[],
-  limit = 3,
-): T[] {
-  const woo = local.filter((o) => o.platform === "woocommerce");
-  if (!woo.length) return shopify;
+export function mergePriorOrders<
+  T extends { name?: string | null; createdAt: string | null; platform?: OrderPlatform; fromHistory?: boolean },
+>(shopify: T[], local: T[], limit = 3): T[] {
+  const names = new Set(shopify.map((o) => o.name).filter(Boolean));
+  const extra = local.filter(
+    (o) => o.platform === "woocommerce" || (o.fromHistory === true && !(o.name && names.has(o.name))),
+  );
+  if (!extra.length) return shopify;
   const at = (o: T) => (o.createdAt ? Date.parse(o.createdAt) || 0 : 0);
-  return [...shopify, ...woo].sort((a, b) => at(b) - at(a)).slice(0, limit);
+  return [...shopify, ...extra].sort((a, b) => at(b) - at(a)).slice(0, limit);
 }
