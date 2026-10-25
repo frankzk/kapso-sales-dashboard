@@ -12395,6 +12395,32 @@ Antes cada pantalla respondía con su propio motivo —«Ese paquete no pertenec
 esta ruta», «El pedido ya avanzó…»— y quien tenía la caja en la mano no sabía que
 la decisión era simplemente no despacharla.
 
+**Una salida anulada se dice con quién, cuándo y qué hacer (24-10-2026).**
+AUR178551-S01 la anuló una compañera a las 10:28 de Lima con «Anular salida»
+de la ficha (`route_output_cancelled`, §4: la caja nunca salió). Más tarde
+alguien escaneó su rótulo impreso en «Asignar por QR» y la línea respondió «La
+caja existente ya no está disponible para asignarla.»: cierto, pero no decía
+que esa salida estaba anulada. Ahora, cuando el escaneo de asignación **ya
+falló** y el QR es de una salida con `delivery_status = anulado`, la línea lo
+dice así: «AUR178551-S01 está ANULADA (la anuló {quien} el 24/10 a las 10:28).
+Crea una salida nueva desde la ficha del pedido (Operar → Crear salida) e
+imprime su rótulo; este rótulo ya no sirve.» Quién y cuándo salen del hecho
+más reciente que anuló esa salida (`route_output_cancelled` o
+`guide_cancelled` con su `shipment_id`); quien la anuló se nombra como en Leads
+y Repro Lima (la parte local de su correo) y, sin actor, «se anuló el …». Si el
+pedido tiene **otra salida viva** (`isActiveOutput` en Lima), no se manda a
+crear otra: «…: este rótulo ya no sirve; el pedido sigue con AUR178551-S02.»
+seguido del motivo de siempre. Solo cambia el mensaje: no se reactiva nada,
+tomar y asignar siguen con sus reglas, y si el escaneo asigna (por ejemplo,
+porque al tomarlo nació la salida nueva) responde como siempre, con el aviso de
+pegar su rótulo encima. El pedido anulado se sigue diciendo antes que esto; el
+límite de efectivo y un rótulo vivo responden lo de antes. Las lecturas se
+pagan solo en el escaneo que falla (`lib/scan-annulled-output.ts`, en
+`scanAssignToRider`), probado en `test/scan-salida-anulada.test.ts`.
+**Pendiente:** una salida anulada que siguiera dentro de una caja activa
+responde «Ya está en la caja…» o «Está en la caja de…» como cualquier otra; no
+se ha visto el caso.
+
 **Verificar una caja dice cuál es, y dónde está lo que no es suyo
 (07-10-2026).** KP136825-S01 ya estaba en la caja de Alexis —la única que le
 faltaba verificar— y se escaneó en la verificación de Roy, también de 16

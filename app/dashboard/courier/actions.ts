@@ -1,6 +1,7 @@
 "use server";
 
 import { cancelledScanNotice } from "@/lib/scan-cancelled";
+import { annulledOutputScanNotice } from "@/lib/scan-annulled-output";
 import { alreadyInBoxMessage, alreadyInBoxStage, type AlreadyInBoxStage } from "@/lib/gf-scan-already-in-box";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
@@ -3725,20 +3726,31 @@ export async function scanAssignToRider(
   // 4) Tomar (idempotente) y asignar.
   // Un solo control de permisos (arriba) y efectos diferidos: ver `SideEffects`.
   const fx = deferredEffects();
+  // El QR era de una salida ANULADA (24-10-2026, AUR178551-S01): el fallo lo
+  // dice con quién y cuándo la anuló y qué hacer, en vez de «La caja existente
+  // ya no está disponible…» (lib/scan-annulled-output.ts). Solo el mensaje: lo
+  // que se toma o asigna no cambia, y un rótulo vivo responde lo de siempre.
+  const ineligible = async (why: string): Promise<ScanAssignLine> => ({
+    ...line,
+    status: "no_elegible",
+    message: receivedNote + ((await annulledOutputScanNotice(admin, found.shipment, why)) ?? why),
+  });
   try {
   // Recibido de una caja vieja: el Master se entera al final, con lo demás.
   if (receivedFrom) await fx.recompute([orderId]);
   const taken = await takeOrdersCore(auth, orgId, [orderId], { dispatchDay: opts.scheduledFor ?? limaClock().day }, fx, { gfProvider });
-  if (taken.failed.length) return { ...line, status: "no_elegible", message: receivedNote + taken.failed[0]!.error };
-  if (!taken.accepted.length && !taken.alreadyAccepted.length) return { ...line, status: "no_elegible", message: receivedNote + (taken.error ?? "No se pudo tomar el pedido.") };
+  if (taken.failed.length) return await ineligible(taken.failed[0]!.error);
+  if (!taken.accepted.length && !taken.alreadyAccepted.length) return await ineligible(taken.error ?? "No se pudo tomar el pedido.");
   const { data: requests } = await admin.from("logistics_requests").select("id,shipment_id").eq("order_id", orderId).eq("provider_id", gfProvider?.id ?? "").in("status", ["accepted", "scheduled"]);
   const requestIds = ((requests ?? []) as { id: string }[]).map((r) => r.id);
-  if (!requestIds.length) return { ...line, status: "no_elegible", message: receivedNote + "El pedido se tomó pero no se pudo asignar. Continúa desde la lista." };
+  if (!requestIds.length) return await ineligible("El pedido se tomó pero no se pudo asignar. Continúa desde la lista.");
   // La programación ya se miró arriba (o se confirmó): no se vuelve a leer.
   const assigned = await assignRouteCore(auth, orgId, rider.id, requestIds, { overrideCash: opts.overrideCash, day: opts.scheduledFor ?? null, confirmProgrammed: true }, fx);
   if (!assigned.assigned) {
     const why = assigned.failed[0]?.error ?? assigned.error ?? "No se pudo asignar.";
-    return { ...line, status: /efectivo|límite/i.test(why) ? "bloqueado_efectivo" : "no_elegible", message: receivedNote + why };
+    // El límite de efectivo no es cosa del rótulo: se autoriza y se vuelve a escanear.
+    if (/efectivo|límite/i.test(why)) return { ...line, status: "bloqueado_efectivo", message: receivedNote + why };
+    return await ineligible(why);
   }
   const manifestId = assigned.manifestIds[0] ?? null;
   // Se leyó el rótulo de OTRA salida del pedido —el de Tanders que no entregó,
