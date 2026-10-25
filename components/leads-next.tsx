@@ -39,6 +39,7 @@ import { SEGMENT_TONE } from "@/components/lead-segment-tone";
 import { CoverageBadge } from "@/components/coverage-badge";
 import type { OrderCoverage } from "@/lib/order-coverage";
 import { IconCheck, IconCopy, IconMapPin, IconPhone, IconWhatsApp } from "@/components/icons";
+import { cartsTone, cartsVerdict } from "@/lib/customer-carts";
 
 // El chat y el resultado son los de la ficha, cargados aparte: la cola no paga
 // su peso en el primer pintado (test/leads-bundle.test.ts).
@@ -486,6 +487,34 @@ function ContactIcons({ lead }: { lead: LeadRow }) {
   );
 }
 
+const CART_VERDICT_TONE: Record<ReturnType<typeof cartsTone>, string> = {
+  warn: "text-warn-fg",
+  ok: "text-ok-fg",
+  neutral: "text-ink-700",
+};
+
+/**
+ * ¿Termina la compra o solo deja carritos? (25-10-2026, lib/customer-carts.ts):
+ * cuántos carritos dejó antes en esta tienda y cuántos terminaron en pedido.
+ * La lista entera está en la ficha.
+ */
+function PriorCarts({ history }: { history: Loaded<CustomerHistory | null> }) {
+  if (history === "loading") return <span className="text-ink-500">Buscando carritos…</span>;
+  if (history === "error" || !history || history.carts === null) {
+    return <span className="text-ink-500">No se pudo consultar ahora.</span>;
+  }
+  const summary = history.carts?.summary;
+  if (!summary?.total) return <span className="text-ink-700">Ninguno: es su primer carrito</span>;
+  return (
+    <p>
+      <span className="font-medium tabular-nums">
+        {summary.total} {summary.total === 1 ? "carrito" : "carritos"}
+      </span>
+      <span className={`font-medium ${CART_VERDICT_TONE[cartsTone(summary)]}`}> · {cartsVerdict(summary)}</span>
+    </p>
+  );
+}
+
 function PriorOrders({ history }: { history: Loaded<CustomerHistory | null> }) {
   // Busca en la base, en el historial de Shopify importado (MOM §37.7) y en Shopify;
   // los pedidos de WooCommerce salen de la base (MOM §38.12).
@@ -665,6 +694,9 @@ function ClientColumn({
       <dl className="grid grid-cols-[112px_minmax(0,1fr)] gap-x-3 gap-y-2.5 border-t border-line pt-4">
         <Row label="Pedidos antes">
           <PriorOrders history={history} />
+        </Row>
+        <Row label="Carritos antes">
+          <PriorCarts history={history} />
         </Row>
         <Row label="Llamadas">
           <CallsLine calls={context.calls} now={now} />

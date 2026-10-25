@@ -11,6 +11,7 @@ import { after } from "next/server";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { resolveAgentName, resolveAgentNames } from "@/lib/agent-names";
 import {
+  getCustomerCarts,
   getCustomerHistory,
   getLeadQueueSnapshot,
   type LeadCounts,
@@ -427,7 +428,7 @@ async function loadLeadCustomerHistoryTimed(leadId: string, timing: LeadReadTimi
   const [leadRes, creds, wooSiteUrl] = await Promise.all([
     timing.time("db.lead", () => admin
       .from("leads")
-      .select("phone,order_id,source,cart_summary,kapso_conversation_id")
+      .select("phone,order_id,source,cart_summary,kapso_conversation_id,draft_order_gid")
       .eq("id", leadId)
       .maybeSingle()),
     timing.time("db.credentials", () => getStoreCreds(ctx.storeId, admin)),
@@ -440,16 +441,23 @@ async function loadLeadCustomerHistoryTimed(leadId: string, timing: LeadReadTimi
     source: string | null;
     cart_summary: string | null;
     kapso_conversation_id: string | null;
+    draft_order_gid: string | null;
   } | null;
   if (!lead) return { error: "No encontrado." };
 
-  const customerHistory = await timing.time("db.history", () => getCustomerHistory(
-    ctx.storeId,
-    lead.phone,
-    lead.order_id,
-    creds?.shopify_domain ?? null,
-    wooSiteUrl,
-  ));
+  const [customerHistory, carts] = await Promise.all([
+    timing.time("db.history", () => getCustomerHistory(
+      ctx.storeId,
+      lead.phone,
+      lead.order_id,
+      creds?.shopify_domain ?? null,
+      wooSiteUrl,
+    )),
+    // Sus carritos anteriores (MOM §11, 25-10-2026): un aviso, no un dato del
+    // lead. Si falla, la ficha sale sin el bloque.
+    timing.time("db.carts", () => getCustomerCarts(ctx.storeId, lead.phone, lead.draft_order_gid)).catch(() => null),
+  ]);
+  if (customerHistory) customerHistory.carts = carts;
   if (customerHistory && lead.phone && creds?.shopify_token) {
     try {
       const shopOrders = await timing.time("shopify.history", () => getCustomerRecentOrders(

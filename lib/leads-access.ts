@@ -11,6 +11,14 @@ import {
   type LocalPriorRow,
 } from "@/lib/customer-history-merge";
 import { orderAdminLink, orderPlatform } from "@/lib/order-admin-url";
+import {
+  cartPhoneVariants,
+  mergeCustomerCarts,
+  summarizeCarts,
+  type ArchiveCartRow,
+  type CustomerCarts,
+  type MirrorDraftRow,
+} from "@/lib/customer-carts";
 import type { AliclikHealthState } from "@/lib/aliclik-health";
 import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
 import type { LeadCallRow, LeadRow, OrderPlatform } from "@/lib/types";
@@ -460,6 +468,12 @@ export interface CustomerHistory {
   /** Foco de salud de la API de Aliclik, para el panel de crear guía. */
   currentOrderAliclikHealth: AliclikHealthState;
   recentOrders: PriorOrder[]; // last 3 prior orders (excl. own), newest first
+  /**
+   * Sus carritos anteriores: ¿termina la compra o solo deja carritos? (MOM §11,
+   * 25-10-2026, `getCustomerCarts`). Lo rellena quien carga la ficha; null si no
+   * se pudo leer o no hay celular.
+   */
+  carts?: CustomerCarts | null;
 }
 
 const PRIOR_ORDER_COLUMNS = "id, shopify_order_id, name, created_at, total_amount, total_refunded, line_items";
@@ -616,6 +630,60 @@ async function readShopifyHistory(
   } catch {
     return { rows: [], total: null };
   }
+}
+
+/** Cuántos carritos de una clienta se leen de cada fuente: de sobra para contar y listar. */
+const CUSTOMER_CARTS_LIMIT = 200;
+
+/**
+ * Los carritos anteriores de la clienta en ESTA tienda (lib/customer-carts.ts):
+ * el espejo `draft_orders` y el archivo de Shopify `shopify_history_carts`
+ * (MOM §37.6), por su celular en cualquiera de sus formas. Sin el carrito del
+ * propio lead. Con RLS: solo tiendas que quien mira puede ver. Null si una
+ * lectura falla —la ficha sale sin el bloque, nunca con un conteo a medias—.
+ */
+export async function getCustomerCarts(
+  storeId: string,
+  phone: string | null,
+  excludeDraftGid?: string | null,
+): Promise<CustomerCarts | null> {
+  const phones = cartPhoneVariants(phone);
+  // Sin celular no hay por dónde buscar: como «Pedidos anteriores», sin carritos.
+  if (!phones.length) return { summary: summarizeCarts([]), carts: [] };
+  const sb = await createServerSupabase();
+  const [mirrorRes, archiveRes] = await Promise.all([
+    sb
+      .from("draft_orders")
+      .select("shopify_draft_order_id,draft_order_gid,name,status,created_at,total_amount,line_items,order_gid")
+      .eq("store_id", storeId)
+      .in("customer_phone", phones)
+      .order("created_at", { ascending: false })
+      .limit(CUSTOMER_CARTS_LIMIT),
+    sb
+      .from("shopify_history_carts")
+      .select("cart_key,kind,name,status,created_at,total,order_name,line_items")
+      .eq("store_id", storeId)
+      .in("phone_norm", phones)
+      .order("created_at", { ascending: false })
+      .limit(CUSTOMER_CARTS_LIMIT),
+  ]);
+  if (mirrorRes.error || archiveRes.error) return null;
+  const mirror = (mirrorRes.data ?? []) as (MirrorDraftRow & { order_gid: string | null })[];
+
+  // El pedido en que terminó un borrador del espejo: su `order_gid` es el id de
+  // Shopify del pedido, que en `orders` vive sin el prefijo.
+  const orderIds = [...new Set(mirror.map((row) => row.order_gid?.match(/(\d+)$/)?.[1]).filter((v): v is string => Boolean(v)))];
+  if (orderIds.length) {
+    const { data } = await sb.from("orders").select("shopify_order_id,name").eq("store_id", storeId).in("shopify_order_id", orderIds);
+    const names = new Map(((data ?? []) as { shopify_order_id: string; name: string | null }[]).map((o) => [o.shopify_order_id, o.name]));
+    for (const row of mirror) {
+      const id = row.order_gid?.match(/(\d+)$/)?.[1];
+      row.order_name = id ? (names.get(id) ?? null) : null;
+    }
+  }
+
+  const carts = mergeCustomerCarts(mirror, (archiveRes.data ?? []) as ArchiveCartRow[], excludeDraftGid);
+  return { summary: summarizeCarts(carts), carts };
 }
 
 /** Valores neutros del bloque "cliente recurrente" cuando no hay compras previas. */
