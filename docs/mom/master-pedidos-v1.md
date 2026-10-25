@@ -15942,10 +15942,12 @@ Estado: base técnica del 23-10-2026. **Al 25-10-2026** las dos tiendas tienen
 su sitio WooCommerce conectado en Ajustes (la entrada de 38.11), cada una con
 una dirección temporal, y las dos siguen con `stores.platform = shopify`:
 Aurela desde el 24-10-2026 (clave del sitio `aur`) y Kenku Peru desde esa
-noche (`kp`, 19:13 de Lima). Los únicos pedidos de WooCommerce en Kapta son #AUR900004 y
-#AUR900005, dos pruebas, anuladas; el primer pedido real de Aurela será el
-#AUR900006 o uno mayor. En un sitio conectado ya no se hacen pruebas: entran al
-Master como cualquier pedido (38.11, «El piso no frena una prueba»).
+noche (`kp`, 19:13 de Lima). Los únicos pedidos de WooCommerce en Kapta son
+#AUR900004, #AUR900005 y #AUR900006, tres pruebas del formulario de Aurela,
+anuladas (la última del 25-10 a las 12:54 de Lima); el primer pedido real de
+Aurela será el #AUR900007 o uno mayor. En un sitio conectado ya no se hacen
+pruebas: entran al Master como cualquier pedido (38.11, «El piso no frena una
+prueba»).
 La migración 0274 se aplica a mano y antes del código (DEPLOY.md, entrada del
 23-10-2026). Shopify cierra Kenku Perú y Aurela el 28-10-2026 (UTC); se
 planifica para el peor caso, el martes 27-10 a las 19:00 de Lima. Las dos
@@ -16343,9 +16345,9 @@ sincronización no es opcional.
   antes de él: un pedido de prueba hecho después en el sitio conectado entra
   como cualquier otro, y uno que ya entró se queda (Kapta nunca borra un
   pedido, 38.3) y sigue recibiendo sus cambios. Mover `woo_intake_from`
-  después no lo saca del Master. Así entraron las dos pruebas de Aurela,
-  #AUR900004 y #AUR900005: siguen en el Master, anuladas. Contra las pruebas
-  lo único que sirve es no hacerlas en el sitio conectado.
+  después no lo saca del Master. Así entraron las tres pruebas de Aurela,
+  #AUR900004, #AUR900005 y #AUR900006: siguen en el Master, anuladas. Contra
+  las pruebas lo único que sirve es no hacerlas en el sitio conectado.
 - **Un estado más viejo no pisa uno más nuevo.** WooCommerce entrega los
   webhooks en segundo plano y uno puede llegar después de que la sincronización
   ya leyó un cambio posterior. Si la fecha de modificación de WooCommerce de lo
