@@ -29,6 +29,11 @@ import {
   type ActiveShopifyCatalogVariant,
   type ShopifyClientOpts,
 } from "@/lib/shopify";
+import { WooError, type WooClientOpts } from "@/lib/woocommerce";
+import { hasWooApiCredentials, loadWooStoreCreds, wooClientOpts } from "@/lib/woocommerce-intake";
+import { listWooCatalogVariants, type WooCatalogListing } from "@/lib/woocommerce-orders";
+import { isWooMigrationMissing } from "@/lib/woocommerce-settings";
+import { catalogSourceName, type CatalogPlatform } from "@/lib/catalog-source";
 
 // ---------------------------------------------------------------------------
 // Tipos
@@ -576,7 +581,10 @@ export function buildCatalogRows(
 export interface CatalogSyncResult {
   ok: boolean;
   skus: number;
+  /** SKU de la tienda (su catálogo y el historial de pedidos), de Shopify o de WooCommerce. */
   shopifySkus: number;
+  /** De dónde salió la lista de productos de la tienda (MOM §38.12). */
+  sourcePlatform: CatalogPlatform;
   agencySkus: number;
   agencies: number;
   packageSizes: number;
@@ -598,12 +606,14 @@ export async function syncAliclikCatalog(
   storeId: string,
   opts: AliclikClientOpts,
   admin: SupabaseClient = createAdminSupabase(),
-  shopifyOpts?: ShopifyClientOpts,
+  source?: ShopifyClientOpts | SkuCatalogSource,
 ): Promise<CatalogSyncResult> {
+  const skuSource = toSkuSource(source);
   const out: CatalogSyncResult = {
     ok: true,
     skus: 0,
     shopifySkus: 0,
+    sourcePlatform: skuSource.platform,
     agencySkus: 0,
     agencies: 0,
     packageSizes: 0,
@@ -658,11 +668,14 @@ export async function syncAliclikCatalog(
     if (s) seeds.set(s, { shopify_sku: s, ean: String(r.ean) });
   }
 
-  // Para asociar por nombre se usa primero el catálogo activo de Shopify. Los
-  // productos observados en pedidos quedan como respaldo histórico.
-  const shopifyProducts = await loadShopifySkuNames(storeId, admin, 365, shopifyOpts, {
-    onShopifyError: (detail) =>
-      out.errors.push(`Catálogo activo de Shopify: ${detail} Se asoció con el historial de pedidos.`),
+  // Para asociar por nombre se usa primero el catálogo de la tienda: el activo
+  // de Shopify o, en una tienda que ya crea en WooCommerce, el publicado de
+  // WooCommerce (MOM §38.12). Los productos observados en pedidos quedan como
+  // respaldo histórico. La sincronización lee WooCommerce de nuevo (`fresh`):
+  // quien acaba de poner un SKU allí y sincroniza tiene que verlo.
+  const shopifyProducts = await loadShopifySkuNames(storeId, admin, 365, skuSource, {
+    fresh: true,
+    onSourceError: (detail) => out.errors.push(skuSourceErrorText(skuSource.platform, detail)),
   });
   out.shopifySkus = shopifyProducts.size;
   if (shopifyProducts.size) {
@@ -864,6 +877,117 @@ export interface SkuLoadOpts {
    * historial de pedidos. Recibe por qué, en corto y sin nada de la respuesta.
    */
   onShopifyError?: (detail: string) => void;
+  /**
+   * El catálogo de la tienda (Shopify o WooCommerce) no se pudo leer, o se leyó
+   * a medias, y se siguió (o se completó) con el historial de pedidos. Recibe
+   * por qué, en corto y sin nada de la respuesta.
+   */
+  onSourceError?: (detail: string) => void;
+  /** WooCommerce: leer el catálogo de nuevo aunque haya uno reciente en memoria. */
+  fresh?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// La fuente de la lista: Shopify o WooCommerce (MOM §38.12)
+// ---------------------------------------------------------------------------
+
+/**
+ * De dónde sale la lista de productos de la tienda:
+ *
+ *   · `shopify`: el catálogo activo de Shopify, con su token (sin token, solo el
+ *     historial de pedidos, como siempre);
+ *   · `woocommerce`: el catálogo publicado de WooCommerce, con las claves de la
+ *     tienda. `woo: null` es una tienda en WooCommerce cuyas claves no se pueden
+ *     usar: solo el historial, y `problem` dice por qué;
+ *   · `platform: null`: no se pudo leer la tienda; solo el historial.
+ */
+export type SkuCatalogSource =
+  | { platform: "shopify"; shopify?: ShopifyClientOpts }
+  | { platform: "woocommerce"; woo: WooClientOpts | null; problem?: string }
+  | { platform: null; problem: string };
+
+/** Las llamadas viejas pasan las opciones de Shopify a secas: siguen igual. */
+function toSkuSource(source: ShopifyClientOpts | SkuCatalogSource | undefined): SkuCatalogSource {
+  if (!source) return { platform: "shopify" };
+  if ("platform" in source) return source;
+  return { platform: "shopify", shopify: source };
+}
+
+/**
+ * La fuente de una tienda, por `stores.platform` (MOM §38.1): con `woocommerce`
+ * y sus claves de la API, WooCommerce; con `shopify` (o sin la 0274), Shopify
+ * con su token, exactamente como antes. Solo lee la base; no llama a ninguna API.
+ */
+export async function loadSkuCatalogSource(
+  admin: SupabaseClient,
+  storeId: string,
+  shopifyCreds: { shopify_domain: string; shopify_token: string | null } | null | undefined,
+): Promise<SkuCatalogSource> {
+  const shopify: SkuCatalogSource = {
+    platform: "shopify",
+    shopify: shopifyCreds?.shopify_token
+      ? { domain: shopifyCreds.shopify_domain, token: shopifyCreds.shopify_token }
+      : undefined,
+  };
+  const { creds, error } = await loadWooStoreCreds(admin, storeId);
+  if (error) {
+    if (isWooMigrationMissing({ message: error })) return shopify;
+    return { platform: null, problem: "No se pudo leer la plataforma de la tienda." };
+  }
+  if (!creds || creds.platform !== "woocommerce") return shopify;
+  if (!hasWooApiCredentials(creds)) {
+    return {
+      platform: "woocommerce",
+      woo: null,
+      problem: "Sus claves de la API no se pueden usar: revísalas en Ajustes → WooCommerce.",
+    };
+  }
+  return { platform: "woocommerce", woo: wooClientOpts(creds) };
+}
+
+/** El aviso de la sincronización cuando el catálogo de la tienda falló o quedó a medias. */
+export function skuSourceErrorText(platform: CatalogPlatform, detail: string): string {
+  if (platform === "shopify") {
+    return `Catálogo activo de Shopify: ${detail} Se asoció con el historial de pedidos.`;
+  }
+  const name = catalogSourceName(platform);
+  return `${name ? `Catálogo de ${name}` : "Catálogo de la tienda"}: ${detail} Se asoció con el historial de pedidos.`;
+}
+
+/** Por qué falló WooCommerce, en corto: el `WooError` ya viene sin secretos ni URL. */
+function wooFailureDetail(e: unknown): string {
+  return e instanceof WooError ? e.message : "No se pudo leer el catálogo de WooCommerce.";
+}
+
+/**
+ * El catálogo de WooCommerce de cada tienda, unos minutos en memoria. Cada
+ * acción de la pantalla (asociar, vincular Swayp) la vuelve a pintar, y leer
+ * WooCommerce entero cada vez son decenas de llamadas: la lista se reusa y
+ * «Sincronizar catálogo» la lee de nuevo (`fresh`). Una lectura en curso se
+ * comparte; una que falló no se guarda.
+ */
+export const WOO_CATALOG_CACHE_MS = 5 * 60_000;
+const wooCatalogCache = new Map<string, { at: number; listing: Promise<WooCatalogListing> }>();
+
+/** Solo pruebas. */
+export function clearWooCatalogCache(): void {
+  wooCatalogCache.clear();
+}
+
+function loadWooCatalogCached(
+  key: string,
+  client: WooClientOpts,
+  fresh: boolean,
+): Promise<WooCatalogListing> {
+  const hit = wooCatalogCache.get(key);
+  if (!fresh && hit && Date.now() - hit.at < WOO_CATALOG_CACHE_MS) return hit.listing;
+  const listing = listWooCatalogVariants(client);
+  const entry = { at: Date.now(), listing };
+  wooCatalogCache.set(key, entry);
+  listing.catch(() => {
+    if (wooCatalogCache.get(key) === entry) wooCatalogCache.delete(key);
+  });
+  return listing;
 }
 
 /**
@@ -876,11 +1000,38 @@ export async function loadShopifySkuDetails(
   storeId: string,
   admin: SupabaseClient = createAdminSupabase(),
   sinceDays = 365,
-  shopifyOpts?: ShopifyClientOpts,
+  source?: ShopifyClientOpts | SkuCatalogSource,
   opts: SkuLoadOpts = {},
 ): Promise<Map<string, ShopifySkuDetails>> {
   const since = new Date(Date.now() - sinceDays * 86_400_000).toISOString();
   const out = new Map<string, ShopifySkuDetails>();
+  const skuSource = toSkuSource(source);
+  const shopifyOpts = skuSource.platform === "shopify" ? skuSource.shopify : undefined;
+
+  // Una tienda que ya crea en WooCommerce (MOM §38.12): su catálogo publicado,
+  // por la API de WooCommerce y solo leyendo. Shopify no se consulta. Si
+  // WooCommerce falla o no alcanza el tiempo, sigue (o se completa) con el
+  // historial de pedidos de abajo, como con Shopify caído.
+  if (skuSource.platform === "woocommerce") {
+    if (!skuSource.woo) {
+      opts.onSourceError?.(skuSource.problem ?? "Sus claves de la API no se pueden usar.");
+    } else {
+      try {
+        const key = `${storeId}|${skuSource.woo.siteUrl}`;
+        const listing = await loadWooCatalogCached(key, skuSource.woo, Boolean(opts.fresh));
+        collectActiveShopifyCatalogDetails(listing.variants, out);
+        if (!listing.complete) {
+          opts.onSourceError?.(
+            `Se leyó en parte (${listing.incompleteReason ?? "incompleto"}).`,
+          );
+        }
+      } catch (e) {
+        opts.onSourceError?.(wooFailureDetail(e));
+      }
+    }
+  } else if (skuSource.platform === null) {
+    opts.onSourceError?.(skuSource.problem);
+  }
 
   // Fuente primaria: catálogo activo real. Antes esta pantalla se armaba solo
   // con productos que ya habían aparecido en `orders.line_items`; por eso un
@@ -897,7 +1048,9 @@ export async function loadShopifySkuDetails(
     try {
       variants = await listActiveShopifyCatalogVariants(shopifyOpts);
     } catch (e) {
-      opts.onShopifyError?.(shopifyFailureDetail(e));
+      const detail = shopifyFailureDetail(e);
+      opts.onShopifyError?.(detail);
+      opts.onSourceError?.(detail);
     }
     if (variants) collectActiveShopifyCatalogDetails(variants, out);
   }
@@ -943,10 +1096,10 @@ export async function loadShopifySkuNames(
   storeId: string,
   admin: SupabaseClient = createAdminSupabase(),
   sinceDays = 365,
-  shopifyOpts?: ShopifyClientOpts,
+  source?: ShopifyClientOpts | SkuCatalogSource,
   opts: SkuLoadOpts = {},
 ): Promise<Map<string, string>> {
-  const details = await loadShopifySkuDetails(storeId, admin, sinceDays, shopifyOpts, opts);
+  const details = await loadShopifySkuDetails(storeId, admin, sinceDays, source, opts);
   return new Map(
     [...details.values()]
       .filter((item): item is ShopifySkuDetails & { shopifySku: string } => Boolean(item.shopifySku))
