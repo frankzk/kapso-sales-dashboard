@@ -16693,21 +16693,87 @@ y lee entero el que encuentre:
 Si el POST no contesta (pudo crearse igual), se busca: uno `pending` se borra;
 uno que ya está vivo se deja para el reintento, que lo adopta o avisa. Si no
 aparece (o no se pudo buscar), WordPress puede guardarlo DESPUÉS de esa
-búsqueda: `createWooSaleOrder` lo dice (`postUnanswered`) y el bot no suelta
-su candado hasta su plazo (38.13); la asesora puede reintentar antes, y
-entonces ese pedido tardío queda `pending` (Kapta no lo toma) o, con un plugin
-que lo deja vivo al crearlo, vivo junto al del reintento (pendiente, abajo).
-Quien ya conoce el pedido de su intento (el bot, `woo_order_id`) lo lee por su
-id a cualquier edad (`knownOrderId`; si ya no está o está anulado, busca como
+búsqueda: `createWooSaleOrder` lo dice (`postUnanswered`), y ni el bot (38.13)
+ni el formulario (abajo) sueltan su candado hasta su plazo: un reintento
+inmediato no lo vería y crearía otro. Quien ya conoce el pedido de su intento
+(el bot y el formulario, `woo_order_id` del candado) lo lee por su id a
+cualquier edad (`knownOrderId`; si ya no está o está anulado, busca como
 siempre), y `onCreated` le avisa el id apenas el pedido existe o la búsqueda
-lo encuentra. En
-Shopify el candado es el borrador; aquí, este id y su huella. Un formulario
-nuevo (otra pestaña, una recarga) es otro intento: ahí sigue mandando el aviso
-de duplicado. **Dos llamadas a la vez con el mismo id** sí crearían dos
-pedidos (la búsqueda de las dos llega antes que cualquier POST): la pantalla
-no puede hacerlo (el botón se bloquea mientras genera y Next.js corre de a una
-las acciones de un mismo formulario), pero el bot sí: su endpoint tiene el
-candado en la base, por (tienda, id del intento) (38.13).
+lo encuentra. En Shopify el candado es el borrador; aquí, este id, su huella y
+el candado en la base. Un formulario nuevo (otra pestaña, una recarga, cerrar
+y volver a abrir el formulario) es otro intento: ahí sigue mandando el aviso
+de duplicado. **Dos llamadas a la vez con el mismo id** crearían dos pedidos
+solo con la búsqueda (la de las dos llega antes que cualquier POST): el botón
+se bloquea mientras genera, pero una acción sigue corriendo en el servidor
+cuando la pantalla ya mostró un error de red y la asesora vuelve a pulsar. Por
+eso el formulario y el bot tienen el candado en la base, por (tienda, id del
+intento).
+
+**El candado del formulario (25-10-2026).** Cuando una tienda pasa a crear
+sus pedidos en WooCommerce («Crear los pedidos nuevos en», Aurela y Kenku en
+el corte del 27-10), «Generar pedido» (y «Venta telefónica») usa **el mismo
+candado que el bot**
+(`bot_order_requests`, 0277, ya aplicada: sin migración nueva), con la llave
+`form-<id del intento>` (`wooFormGuardKey`; si no cabe en los 64 caracteres de
+la 0277, `form-` y el comienzo de su sha256), los mismos plazos
+(`BOT_ORDER_CLAIM_TTL_MS`, `BOT_ORDER_RETAKE_MAX_AGE_MS`) y el mismo
+`claim_token` para retomar (`claimWooFormSale`, lib/woo-sale-guard.ts). Se
+toma después de todas las validaciones y antes de la primera llamada a
+WooCommerce; ningún paso de Shopify lo toca:
+
+- **No hay fila:** se inserta (`processing`) y se crea el pedido. Si otra
+  llamada con el mismo intento la insertó en el mismo instante, manda la suya.
+- **`processing` dentro de su plazo** (otro clic, o un POST sin respuesta que
+  espera a WordPress): no se llama a WooCommerce. «Pedido NO generado todavía:
+  este mismo pedido ya se está generando … No cierres este formulario: espera
+  … y vuelve a pulsar «Generar pedido». Kapta retoma ese mismo intento y no
+  crea otro pedido.» (`wooFormBusyText`).
+- **`failed`, `done` o `processing` vencido:** se retoma, solo si el
+  `claim_token` sigue siendo el que se leyó (de dos, uno gana; el otro recibe
+  el aviso de arriba). `createWooSaleOrder` lee el pedido del intento por su
+  `woo_order_id` o lo encuentra por `kapta_request_id`, y lo adopta, lo retoma
+  o avisa del conflicto como siempre (arriba): un intento terminado (`done`)
+  no se devuelve desde la base, para que la venta se registre si faltaba.
+- **Sin `woo_order_id` y empezado hace más de 90 min:** no se crea nada
+  (`WOO_FORM_EXPIRED_TEXT`): la búsqueda de 2 horas ya podría no ver su pedido.
+  La asesora revisa WooCommerce y, si no está, cierra y vuelve a abrir el
+  formulario (otro intento).
+
+**A diferencia del bot**, el mismo intento con otra huella no es un conflicto
+en el candado: la asesora puede corregir el formulario después de un rechazo, y
+lo decide `createWooSaleOrder` (un pedido anterior vivo con otros datos es
+`conflict`; uno pendiente se borra). Tampoco hay «el mismo pedido con otro
+id» ni tope por minuto. La huella de cada intento queda en `body_hash`.
+
+**Cómo termina.** Apenas existe el pedido, su id queda en el candado
+(`noteWooFormOrder`). Vivo, el candado se cierra con él (`done`, con el
+número, el total y la moneda: `finishWooFormClaim`) **recién cuando la venta
+quedó registrada** (la fila local, `order_sales` y la nota «sale»;
+`onSaleRecorded`, antes de la confirmación por WhatsApp), o cuando la llamada
+termina por otro camino (sin fila local, por ejemplo). A diferencia del bot,
+no antes de la fila local: un `done` se retoma enseguida, y un segundo clic
+que llegara entre el cierre y `order_sales` adoptaría el pedido sin ver la
+venta de la llamada que sigue corriendo y la registraría otra vez (dos notas
+de venta y dos WhatsApp de confirmación); con el candado todavía
+`processing`, recibe «ya se está generando».
+
+**Un POST sin respuesta no suelta el candado** (`rearmWooFormClaim`): se vuelve
+a armar desde ese momento y la asesora lee «… WooCommerce pudo haber
+creado el pedido igual … espera 2 minutos y vuelve a pulsar «Generar pedido».
+Kapta lo busca y, si se creó, lo retoma en vez de crear otro.»
+(`wooFormPostUnansweredText`); el reintento después del plazo encuentra el
+pedido tardío y lo retoma (`pending`) o lo adopta (vivo). Lo demás (rechazo de
+precio o de productos, conflicto, un error con respuesta) lo suelta
+(`failed`, `releaseWooFormClaim`) y el reintento lo retoma enseguida. Si la base
+no deja tomar el candado (falla o no contesta en 5 s), no se llama a
+WooCommerce: «no se pudo reservar este pedido en Kapta …»
+(`WOO_FORM_DB_ERROR_TEXT`). Sin la 0277 (una base de pruebas) sigue como antes,
+solo con la búsqueda, y lo deja en el registro (`[woo-form-guard]`
+`unguarded`). Si cerrar o soltar el candado falla, vence solo: el reintento lee
+el pedido por su id. Del candado a su cierre pasan los 45 s de la venta como
+mucho, los topes de la base y las escrituras de la fila local y de la venta
+(sin la confirmación por WhatsApp, que va después): menos que su plazo de
+120 s.
 
 **Tiempos.** Cada llamada tiene su tope —buscar el intento 6 s, crear 15 s,
 comprobar un producto 5 s, pasar a `processing` 10 s, releer, borrar o anular
@@ -16948,11 +17014,15 @@ Pruebas: `test/anulado-en-la-tienda.test.ts`, y las de cada pantalla
 - **Los principios de §2 y `AGENTS.md`** («Shopify como única fuente de
   pedidos»): **hecho (23-10-2026)**, con la decisión del owner: dicen «la
   tienda», Shopify hasta el cierre y WooCommerce después (38.9).
-- **Un POST sin respuesta en «Generar pedido».** Si WordPress guarda el pedido
-  después de que la asesora reintentó, queda un pedido `pending` de más en
-  WooCommerce (no entra al Master; hay que borrarlo a mano) o, con un plugin
-  que lo deja vivo al crearlo, dos vivos. El bot ya espera (38.13); el
-  formulario todavía no.
+- **Un POST sin respuesta en «Generar pedido»:** **hecho (25-10-2026)**, con
+  el candado del bot (`bot_order_requests`, 0277, sin migración nueva; «El
+  candado del formulario», arriba): el reintento espera a que WordPress haya
+  podido guardar el pedido y lo retoma o lo adopta, y dos llamadas a la vez con
+  el mismo intento no llegan las dos a WooCommerce. Queda lo que ninguna
+  búsqueda ve: un WordPress que guarde un pedido más de 2 minutos después de
+  que su POST se cortó (el plazo del candado), y dos formularios distintos
+  (otra pestaña, una recarga) para la misma venta, que sigue frenando el aviso
+  de duplicado.
 
 Implementación del enlace y del nombre de la tienda: `lib/order-admin-url.ts`
 (`orderAdminLink`, `orderPlatform`, `orderPlatformName`, `parseWooOrderId` y
@@ -16994,6 +17064,17 @@ El cambio de plataforma: `lib/woocommerce-platform.ts`,
 `components/woocommerce-settings-section.tsx`. Pruebas:
 `test/woocommerce-orders.test.ts`, `test/woocommerce-generate-order.test.ts`,
 `test/woocommerce-platform-switch.test.ts` y `test/woocommerce-sale-mom.test.ts`.
+
+Implementación del candado del formulario (25-10-2026): `lib/woo-sale-guard.ts`
+(`claimWooFormSale`, `wooFormGuardKey`, `noteWooFormOrder`,
+`rearmWooFormClaim`, `finishWooFormClaim`, `releaseWooFormClaim`,
+`wooFormBusyText`, `wooFormPostUnansweredText`, `WOO_FORM_EXPIRED_TEXT`,
+`WOO_FORM_DB_ERROR_TEXT`), `WOO_FORM_GUARD_PREFIX` y el tope por minuto sin
+las filas `form-` (lib/bot-orders.ts) y `generateWooOrder`
+(app/dashboard/leads/actions.ts). Pruebas:
+`test/woocommerce-generate-order.test.ts` (timeout del POST y reintento,
+WordPress que guarda tarde, doble clic simultáneo),
+`test/woo-sale-guard.test.ts` y `test/bot-orders.test.ts`.
 
 ### 38.13 Pedidos del bot de Kapso por Kapta (23-10-2026)
 
@@ -17110,6 +17191,14 @@ crear otro. El contrato pide reintentar con el mismo id **durante 3 minutos**
 nuevos por tienda y minuto** (`BOT_ORDER_RATE_PER_MINUTE`, 429
 `rate_limited`): hoy son unos 31 al día, y el tope solo frena un bot en bucle
 que manda ids nuevos. Un reintento no cuenta.
+
+**La tabla la comparte «Generar pedido» (25-10-2026).** El formulario de la
+asesora usa este mismo candado para sus pedidos en WooCommerce (38.12, «El
+candado del formulario»), con la llave `form-<id del intento>`
+(`WOO_FORM_GUARD_PREFIX`): sus filas no se cruzan con las del bot y el tope por
+minuto del bot no las cuenta. La huella del bot (`botOrderBodyHash`) y la del
+formulario (`kapta_request_hash`) no coinciden nunca, así que «la misma huella»
+de la tabla de arriba solo encuentra filas del bot.
 
 **Un pedido que quedó en WooCommerce sin confirmar** (no se pudo anular uno
 vivo con otro precio, no se pudo borrar uno pendiente, quedó a medias, o el de

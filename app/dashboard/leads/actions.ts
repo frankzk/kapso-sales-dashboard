@@ -68,6 +68,14 @@ import {
 } from "@/lib/shopify";
 import { mapWooOrder } from "@/lib/woocommerce";
 import {
+  claimWooFormSale,
+  finishWooFormClaim,
+  noteWooFormOrder,
+  rearmWooFormClaim,
+  releaseWooFormClaim,
+  wooFormPostUnansweredText,
+} from "@/lib/woo-sale-guard";
+import {
   buildWooSaleOrder,
   createWooSaleOrder,
   WOO_CART_SALE_CHANNEL,
@@ -3020,6 +3028,12 @@ async function registrarVentaGenerada(v: {
   /** Un aviso que va al final del mensaje (el celular rechazado por Shopify). */
   phoneNote: string;
   generatedOrder: { id: string; name: string; adminUrl: string | null; platform?: "shopify" | "woocommerce" };
+  /**
+   * WooCommerce: se llama apenas la venta queda registrada (`order_sales` y la
+   * nota «sale»), antes de la confirmación por WhatsApp. Cierra el candado del
+   * intento (MOM §38.12). Shopify no lo pasa.
+   */
+  onSaleRecorded?: () => Promise<void>;
 }): Promise<LeadActionState> {
   const { admin, ctx, leadId, l, input, creds, tienda, internalOrderId, nowIso, phone, amount, discountAmount } = v;
   const { currency, products, district, address1, address, origen, borradorCompletado, orderCode, phoneNote } = v;
@@ -3120,6 +3134,7 @@ async function registrarVentaGenerada(v: {
     occurredAt: nowIso,
   });
   await Promise.all([leadUpdate, draftMirror, saleLog, saleAttribution].filter(Boolean));
+  if (v.onSaleRecorded) await v.onSaleRecorded();
 
   // 5) Recompute today's rollups so revenue/COD reflect it now — DESPUÉS de
   // responder. Es el paso más caro de toda la acción (recorre el día entero de
@@ -3195,6 +3210,12 @@ async function registrarVentaGenerada(v: {
  *     respuesta de WooCommerce, id `wc-<clave>-<id>`, `platform =
  *     woocommerce`), insertada solo si falta: el webhook y la pasada que
  *     lleguen después la actualizan, no la duplican.
+ *
+ * Antes de llamar a WooCommerce toma el candado del intento, el mismo del bot
+ * (`claimWooFormSale`, `bot_order_requests` con la llave `form-<requestId>`,
+ * MOM §38.12 «El candado del formulario»): un doble clic no llega dos veces a
+ * WooCommerce, y un POST sin respuesta deja el candado puesto hasta que
+ * WordPress haya podido guardar el pedido, para que el reintento lo encuentre.
  *
  * No hay borrador que completar: el carrito de Shopify del lead solo prellenó
  * el formulario (por SKU). Si estaba abierto (según la copia local) y la venta
@@ -3280,7 +3301,41 @@ async function generateWooOrder(args: {
     },
     note: input.note ?? null,
   });
-  const outcome = await createWooSaleOrder({ client: wooSaleClient(woo), body, expected, requestId });
+  // EL CANDADO DEL INTENTO (MOM §38.12, 25-10-2026), el mismo del bot
+  // (`bot_order_requests`, 0277, con la llave `form-<requestId>`): dos llamadas
+  // a la vez con este id no llegan las dos a WooCommerce, y un POST sin
+  // respuesta deja el candado puesto hasta que WordPress haya podido guardar el
+  // pedido, para que el reintento lo encuentre en vez de crear otro.
+  const guard = await claimWooFormSale({ admin, storeId: ctx.storeId, requestId, bodyHash: expected.fingerprint });
+  if (guard.kind === "busy" || guard.kind === "expired" || guard.kind === "error") return { error: guard.message };
+  const claim = guard.kind === "claim" ? guard.claim : null;
+
+  const outcome = await createWooSaleOrder({
+    client: wooSaleClient(woo),
+    body,
+    expected,
+    requestId,
+    // El pedido que ya creó un intento anterior de este formulario: se lee por
+    // su id a cualquier edad, antes que la búsqueda de las últimas 2 horas.
+    knownOrderId: claim?.wooOrderId ?? null,
+    onCreated: claim ? (wooId) => noteWooFormOrder(admin, claim, wooId) : undefined,
+  });
+
+  // El candado: un POST sin respuesta lo deja puesto (re-armado desde ahora);
+  // un pedido vivo lo cierra con el pedido; lo demás lo suelta (`failed`) y el
+  // reintento lo retoma enseguida. Si la base no contesta, el candado vence
+  // solo (`BOT_ORDER_CLAIM_TTL_MS`) y el reintento lee el pedido por su id.
+  const guardLog = (paso: string) => (e: unknown) =>
+    console.error(`[woo-form-guard] ${JSON.stringify({ event: `${paso}_failed`, store: ctx.storeId, error: e instanceof Error ? e.message.slice(0, 120) : "error" })}`);
+  if (claim && outcome.kind !== "created" && outcome.kind !== "adopted") {
+    if (outcome.kind === "error" && outcome.postUnanswered) {
+      await rearmWooFormClaim(admin, claim).catch(guardLog("rearm"));
+    } else {
+      const code =
+        outcome.kind === "price" ? "price_mismatch" : outcome.kind === "lines" ? "order_mismatch" : outcome.kind === "conflict" ? "conflict" : "woocommerce_unavailable";
+      await releaseWooFormClaim(admin, claim, code).catch(guardLog("release"));
+    }
+  }
 
   /** La constancia en el lead, donde la asesora y el admin miran. */
   const constancia = (note: string) =>
@@ -3322,6 +3377,10 @@ async function generateWooOrder(args: {
     return { error: rechazo.error };
   }
   if (outcome.kind === "error") {
+    // Un POST sin respuesta (y el pedido sin aparecer): con el candado, la
+    // asesora espera a que WordPress termine; sin él (sin la 0277), el texto
+    // de siempre.
+    if (outcome.postUnanswered && claim) return { error: wooFormPostUnansweredText(outcome.message) };
     const limpieza = outcome.cleanup ? ` ${wooCleanupText(outcome.cleanup, outcome.orderLabel)}` : "";
     return { error: `${outcome.message}${limpieza}` };
   }
@@ -3329,71 +3388,96 @@ async function generateWooOrder(args: {
   const order = outcome.order;
   const adoptado = outcome.kind === "adopted";
   const row = mapWooOrder(order, { id: ctx.storeId, woo_site_key: woo.siteKey });
-  if (!row) {
-    return { error: "WooCommerce devolvió el pedido en un estado que no entra al Master. Revísalo en WooCommerce." };
-  }
-  const adminUrl = wooOrderAdminUrl(woo.siteUrl, order.id);
-  const total = row.total_amount ?? amount;
-  // La fila que escribiría la entrada, solo si el webhook no la trajo ya.
-  const { id: internalOrderId, error: orderErr } = await insertOrderIfAbsent(admin, { ...row });
-  if (orderErr || !internalOrderId) {
-    return {
-      error: `Pedido ${row.name} generado en WooCommerce, pero no se pudo registrar localmente: ${orderErr ?? "error"}. Entra al Master con la sincronización.`,
-    };
-  }
-
-  // Un reintento que encontró el pedido de su intento anterior (con lo mismo
-  // que pide el formulario ahora): si ese intento ya dejó la venta
-  // registrada, no se registra dos veces.
-  if (adoptado) {
-    const { data: venta } = await admin.from("order_sales").select("order_id").eq("order_id", internalOrderId).maybeSingle();
-    if (venta) {
-      revalidatePath("/dashboard/leads");
+  // Vivo: el candado se cierra con el pedido (`done`) recién cuando la venta
+  // quedó registrada (`onSaleRecorded`), o al salir por cualquier otro camino
+  // (`finally`). Mientras tanto sigue `processing` y otro clic con este intento
+  // recibe «ya se está generando»: si lo retomara antes de `order_sales`,
+  // adoptaría el pedido sin ver la venta y la registraría otra vez (dos notas
+  // «sale» y dos WhatsApp de confirmación). Si la función se corta, el candado
+  // vence solo y el reintento lee el pedido por su id.
+  let candadoCerrado = false;
+  const cerrarCandado = async () => {
+    if (!claim || candadoCerrado) return;
+    candadoCerrado = true;
+    const numero = String(order.number ?? "").trim().replace(/^#/, "") || String(order.id);
+    await finishWooFormClaim(admin, claim, {
+      wooOrderId: Number.isInteger(Number(order.id)) && Number(order.id) > 0 ? Number(order.id) : null,
+      orderId: row?.shopify_order_id ?? `wc-${woo.siteKey}-${order.id}`,
+      orderName: row?.name ?? `#${numero}`,
+      total: row?.total_amount ?? null,
+      currency: row?.currency ?? currency,
+    }).catch(guardLog("done"));
+  };
+  try {
+    if (!row) {
+      return { error: "WooCommerce devolvió el pedido en un estado que no entra al Master. Revísalo en WooCommerce." };
+    }
+    const adminUrl = wooOrderAdminUrl(woo.siteUrl, order.id);
+    const total = row.total_amount ?? amount;
+    // La fila que escribiría la entrada, solo si el webhook no la trajo ya.
+    const { id: internalOrderId, error: orderErr } = await insertOrderIfAbsent(admin, { ...row });
+    if (orderErr || !internalOrderId) {
       return {
-        notice: `Pedido ya generado ✓ · ${row.name}: este intento ya lo había creado en WooCommerce, no se creó otro.`,
-        generatedOrder: {
-          id: row.shopify_order_id,
-          platform: "woocommerce",
-          orderId: internalOrderId,
-          name: row.name ?? row.shopify_order_id,
-          total,
-          currency,
-          adminUrl,
-          confirmationSent: false,
-        },
+        error: `Pedido ${row.name} generado en WooCommerce, pero no se pudo registrar localmente: ${orderErr ?? "error"}. Entra al Master con la sincronización.`,
       };
     }
-  }
 
-  // Adoptado o creado, el pedido es exactamente lo que dice el formulario
-  // (misma huella, mismos precios): la nota y la confirmación salen de él.
-  const products = lineItemsInput.map((li) => ({ title: li.title || "Producto", quantity: li.quantity, price: li.unitPrice }));
-  const origen = carritoAbierto ? "Carrito recuperado" : "Venta nueva";
-  return registrarVentaGenerada({
-    admin,
-    ctx,
-    leadId,
-    l,
-    input,
-    creds,
-    tienda: "WooCommerce",
-    internalOrderId,
-    nowIso: new Date().toISOString(),
-    phone,
-    amount: total,
-    discountAmount,
-    currency,
-    products,
-    district,
-    address1,
-    address,
-    origen: adoptado ? `${origen} (de un intento anterior)` : origen,
-    borradorCompletado: null,
-    carritoRecuperado: carritoAbierto,
-    orderCode: row.name,
-    phoneNote: "",
-    generatedOrder: { id: row.shopify_order_id, name: row.name ?? row.shopify_order_id, adminUrl, platform: "woocommerce" },
-  });
+    // Un reintento que encontró el pedido de su intento anterior (con lo mismo
+    // que pide el formulario ahora): si ese intento ya dejó la venta
+    // registrada, no se registra dos veces.
+    if (adoptado) {
+      const { data: venta } = await admin.from("order_sales").select("order_id").eq("order_id", internalOrderId).maybeSingle();
+      if (venta) {
+        revalidatePath("/dashboard/leads");
+        return {
+          notice: `Pedido ya generado ✓ · ${row.name}: este intento ya lo había creado en WooCommerce, no se creó otro.`,
+          generatedOrder: {
+            id: row.shopify_order_id,
+            platform: "woocommerce",
+            orderId: internalOrderId,
+            name: row.name ?? row.shopify_order_id,
+            total,
+            currency,
+            adminUrl,
+            confirmationSent: false,
+          },
+        };
+      }
+    }
+
+    // Adoptado o creado, el pedido es exactamente lo que dice el formulario
+    // (misma huella, mismos precios): la nota y la confirmación salen de él.
+    const products = lineItemsInput.map((li) => ({ title: li.title || "Producto", quantity: li.quantity, price: li.unitPrice }));
+    const origen = carritoAbierto ? "Carrito recuperado" : "Venta nueva";
+    return await registrarVentaGenerada({
+      admin,
+      ctx,
+      leadId,
+      l,
+      input,
+      creds,
+      tienda: "WooCommerce",
+      internalOrderId,
+      nowIso: new Date().toISOString(),
+      phone,
+      amount: total,
+      discountAmount,
+      currency,
+      products,
+      district,
+      address1,
+      address,
+      origen: adoptado ? `${origen} (de un intento anterior)` : origen,
+      borradorCompletado: null,
+      carritoRecuperado: carritoAbierto,
+      orderCode: row.name,
+      phoneNote: "",
+      generatedOrder: { id: row.shopify_order_id, name: row.name ?? row.shopify_order_id, adminUrl, platform: "woocommerce" },
+      onSaleRecorded: cerrarCandado,
+    });
+  } finally {
+    await cerrarCandado();
+  }
 }
 
 // ===========================================================================

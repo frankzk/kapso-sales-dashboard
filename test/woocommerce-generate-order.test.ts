@@ -71,6 +71,8 @@ import { generateOrder, loadOrderDraft, searchStoreProducts, type GenerateOrderI
 import { shopifyOrderAdminUrl } from "@/lib/shopify-urls";
 import { FakeDb, type Row } from "./woocommerce-fake-db";
 import { CATALOG, fakeWooShop } from "./woocommerce-fake-shop";
+import { BOT_ORDER_CLAIM_TTL_MS, BOT_ORDER_RETAKE_MAX_AGE_MS } from "@/lib/bot-orders";
+import { WOO_FORM_DB_ERROR_TEXT, WOO_FORM_EXPIRED_TEXT } from "@/lib/woo-sale-guard";
 
 const STORE = "11111111-1111-4111-8111-111111111111";
 const LEAD = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa";
@@ -503,5 +505,274 @@ describe("stores.platform = 'woocommerce'", () => {
     h.db.failOn = (table, op) => (table === "stores" && op === "select" ? { message: "canceling statement due to statement timeout" } : null);
     const res = await loadOrderDraft(LEAD);
     expect(res).toEqual({ error: "No se pudo leer la tienda. Intenta de nuevo en unos segundos." });
+  });
+});
+
+// El candado del intento (MOM §38.12, 25-10-2026): el mismo del bot
+// (`bot_order_requests`, 0277), con la llave `form-<requestId>`.
+describe("«Generar pedido» en WooCommerce: un POST sin respuesta o un doble clic no crean dos pedidos", () => {
+  const KEY = `form-${REQ}`;
+  const guardRow = () => h.db.rows("bot_order_requests").find((r) => r.request_id === KEY)!;
+  /** El candado vence: lo que pasaría después de `BOT_ORDER_CLAIM_TTL_MS`. */
+  const vencer = () => {
+    guardRow().claimed_at = new Date(Date.now() - BOT_ORDER_CLAIM_TTL_MS - 1_000).toISOString();
+  };
+  const timeout = () => {
+    const e = new Error("The operation was aborted due to timeout");
+    e.name = "TimeoutError";
+    return e;
+  };
+
+  it("timeout del POST, WordPress lo guarda tarde y la asesora reintenta: espera al candado y después retoma ese pedido (uno solo)", async () => {
+    setup("woocommerce");
+    const shop = fakeWooShop({ products: CATALOG, postCommitsLate: true });
+    vi.stubGlobal("fetch", shop.fetchImpl);
+
+    const first = await generateOrder(LEAD, venta());
+    expect(first.error).toContain("No se pudo crear el pedido en WooCommerce");
+    expect(first.error).toContain("WooCommerce pudo haber creado el pedido igual");
+    expect(first.error).toContain("espera 2 minutos y vuelve a pulsar «Generar pedido»");
+    expect(guardRow()).toMatchObject({ status: "processing", error_code: "woocommerce_unavailable" });
+    expect(guardRow().woo_order_id ?? null).toBeNull();
+
+    // Reintento inmediato: el candado sigue puesto, ni una llamada a WooCommerce.
+    const calls = shop.calls.length;
+    const busy = await generateOrder(LEAD, venta());
+    expect(busy.error).toMatch(/^Pedido NO generado todavía: este mismo pedido ya se está generando/);
+    expect(busy.error).toContain("No cierres este formulario");
+    expect(shop.calls.length).toBe(calls);
+
+    // WordPress termina de guardar el pedido del primer POST, y vence el candado.
+    shop.commitLate();
+    vencer();
+    const res = await generateOrder(LEAD, venta());
+    expect(res.error).toBeUndefined();
+    expect(res.generatedOrder).toMatchObject({ id: "wc-kp-501", name: "#KP200501" });
+    // Se encontró por `kapta_request_id` (la búsqueda): no se creó otro.
+    expect(shop.calls.filter((c) => c.method === "POST" && c.path === "/orders")).toHaveLength(1);
+    expect(shop.calls.slice(calls).map((c) => `${c.method} ${c.path}`)).toEqual(["GET /orders", "GET /orders/501", "PUT /orders/501"]);
+    expect(shop.orders.size).toBe(1);
+    expect(shop.orders.get(501)!.status).toBe("processing");
+    expect(h.db.rows("orders")).toHaveLength(1);
+    expect(h.db.rows("order_sales")).toHaveLength(1);
+    expect(guardRow()).toMatchObject({ status: "done", woo_order_id: 501, order_id: "wc-kp-501", order_name: "#KP200501", attempts: 2 });
+  });
+
+  it("con un plugin que lo deja vivo al crearlo, el pedido tardío se adopta y la venta se registra una vez", async () => {
+    setup("woocommerce");
+    const shop = fakeWooShop({ products: CATALOG, postCommitsLate: true, createdStatus: "processing" });
+    vi.stubGlobal("fetch", shop.fetchImpl);
+    await generateOrder(LEAD, venta());
+    shop.commitLate();
+    vencer();
+    const res = await generateOrder(LEAD, venta());
+    expect(res.error).toBeUndefined();
+    expect(res.generatedOrder?.id).toBe("wc-kp-501");
+    expect(shop.orders.size).toBe(1);
+    expect(shop.calls.filter((c) => c.method === "POST")).toHaveLength(1);
+    expect(h.db.rows("order_sales")).toHaveLength(1);
+    expect(h.db.rows("lead_calls").find((c) => c.kind === "sale")!.note).toContain("(de un intento anterior)");
+  });
+
+  it("el POST creó pero no contestó y el pedido aparece enseguida: se borra el pendiente, el candado se suelta y el reintento crea uno solo", async () => {
+    setup("woocommerce");
+    const shop = fakeWooShop({ products: CATALOG });
+    let cortar = true;
+    vi.stubGlobal("fetch", (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const res = await shop.fetchImpl(input, init);
+      if (cortar && (init?.method ?? "GET").toUpperCase() === "POST") {
+        cortar = false;
+        throw timeout();
+      }
+      return res;
+    }) as typeof fetch);
+    const first = await generateOrder(LEAD, venta());
+    expect(first.error).toContain("No se pudo crear el pedido en WooCommerce");
+    expect(first.error).not.toContain("espera 2 minutos");
+    expect(shop.orders.size).toBe(0);
+    expect(guardRow()).toMatchObject({ status: "failed", woo_order_id: 501 });
+    const again = await generateOrder(LEAD, venta());
+    expect(again.error).toBeUndefined();
+    expect(shop.orders.size).toBe(1);
+    expect(h.db.rows("order_sales")).toHaveLength(1);
+  });
+
+  it("doble clic simultáneo con el mismo intento: una sola llamada llega a WooCommerce", async () => {
+    setup("woocommerce");
+    const shop = fakeWooShop({ products: CATALOG });
+    let abrir!: () => void;
+    const compuerta = new Promise<void>((r) => (abrir = r));
+    // WooCommerce no contesta hasta que la otra llamada ya decidió.
+    vi.stubGlobal("fetch", (async (input: RequestInfo | URL, init?: RequestInit) => {
+      await compuerta;
+      return shop.fetchImpl(input, init);
+    }) as typeof fetch);
+    const a = generateOrder(LEAD, venta());
+    const b = generateOrder(LEAD, venta());
+    const primera = await Promise.race([a, b]);
+    expect(primera.error).toMatch(/este mismo pedido ya se está generando/);
+    abrir();
+    const res = await Promise.all([a, b]);
+    const ok = res.filter((r) => !r.error);
+    expect(ok).toHaveLength(1);
+    expect(ok[0]!.generatedOrder?.id).toBe("wc-kp-501");
+    expect(shop.calls.filter((c) => c.method === "POST")).toHaveLength(1);
+    expect(shop.orders.size).toBe(1);
+    expect(h.db.rows("order_sales")).toHaveLength(1);
+    expect(h.db.rows("bot_order_requests")).toHaveLength(1);
+  });
+
+  it("otro clic mientras la primera llamada registra la venta: no la registra dos veces (el candado se cierra con la venta)", async () => {
+    setup("woocommerce");
+    const shop = fakeWooShop({ products: CATALOG });
+    vi.stubGlobal("fetch", shop.fetchImpl);
+    // La pantalla ya mostró un error de red y la asesora pulsa otra vez justo
+    // cuando la primera llamada, con el pedido ya creado, va a escribir la fila
+    // local: esa escritura espera a que la segunda llamada termine.
+    let abrir!: () => void;
+    const compuerta = new Promise<void>((r) => (abrir = r));
+    let segunda: ReturnType<typeof generateOrder> | null = null;
+    const from = h.db.from.bind(h.db);
+    h.db.from = ((table: string) => {
+      const q = from(table);
+      if (table !== "orders" || segunda) return q;
+      const then = q.then.bind(q);
+      q.then = ((res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) => {
+        if (q.op !== "upsert" || segunda) return then(res, rej);
+        segunda = generateOrder(LEAD, venta({ sendConfirmation: true }));
+        return compuerta.then(() => then(res, rej));
+      }) as typeof q.then;
+      return q;
+    }) as typeof h.db.from;
+    const primera = generateOrder(LEAD, venta({ sendConfirmation: true }));
+    await vi.waitFor(() => expect(segunda).not.toBeNull());
+    const b = await segunda!;
+    abrir();
+    const a = await primera;
+    expect(a.error).toBeUndefined();
+    expect(a.generatedOrder?.id).toBe("wc-kp-501");
+    expect(b.error).toMatch(/^Pedido NO generado todavía: este mismo pedido ya se está generando/);
+    expect(shop.calls.filter((c) => c.method === "POST" && c.path === "/orders")).toHaveLength(1);
+    expect(h.db.rows("order_sales")).toHaveLength(1);
+    expect(h.db.rows("lead_calls").filter((c) => c.kind === "sale")).toHaveLength(1);
+    expect(guardRow()).toMatchObject({ status: "done", attempts: 1, woo_order_id: 501, order_name: "#KP200501" });
+    // Ya cerrado con la venta: un clic más lo retoma enseguida y lo da por generado, sin registrarla otra vez.
+    const otra = await generateOrder(LEAD, venta());
+    expect(otra.notice).toContain("Pedido ya generado ✓ · #KP200501");
+    expect(h.db.rows("lead_calls").filter((c) => c.kind === "sale")).toHaveLength(1);
+  });
+
+  it("si la llamada termina sin registrar la venta (la fila local falló), el candado igual se cierra y el reintento la registra", async () => {
+    setup("woocommerce");
+    const shop = fakeWooShop({ products: CATALOG });
+    vi.stubGlobal("fetch", shop.fetchImpl);
+    let fallar = true;
+    h.db.failOn = (table, op) => (fallar && table === "orders" && op === "upsert" ? { message: "canceling statement due to statement timeout" } : null);
+    const first = await generateOrder(LEAD, venta());
+    expect(first.error).toContain("generado en WooCommerce, pero no se pudo registrar localmente");
+    expect(guardRow()).toMatchObject({ status: "done", woo_order_id: 501 });
+    fallar = false;
+    const again = await generateOrder(LEAD, venta());
+    expect(again.error).toBeUndefined();
+    expect(again.generatedOrder?.id).toBe("wc-kp-501");
+    expect(shop.calls.filter((c) => c.method === "POST" && c.path === "/orders")).toHaveLength(1);
+    expect(h.db.rows("order_sales")).toHaveLength(1);
+  });
+
+  it("el pedido de un intento se lee por su woo_order_id aunque tenga más de 2 horas (fuera de la búsqueda): se adopta, sin POST", async () => {
+    setup("woocommerce");
+    const hace3h = new Date(Date.now() - 3 * 3_600_000);
+    const shop = fakeWooShop({ products: CATALOG, now: () => hace3h });
+    vi.stubGlobal("fetch", shop.fetchImpl);
+    const first = await generateOrder(LEAD, venta());
+    expect(first.generatedOrder?.id).toBe("wc-kp-501");
+    // El intento terminó hace 3 horas (con su pedido anotado) y la asesora vuelve a pulsar.
+    Object.assign(guardRow(), { claimed_at: hace3h.toISOString(), created_at: hace3h.toISOString(), finished_at: hace3h.toISOString() });
+    const calls = shop.calls.length;
+    const res = await generateOrder(LEAD, venta());
+    expect(res.error).toBeUndefined();
+    expect(res.notice).toContain("Pedido ya generado ✓ · #KP200501");
+    expect(shop.calls.slice(calls).map((c) => `${c.method} ${c.path}`)).toContain("GET /orders/501");
+    expect(shop.calls.filter((c) => c.method === "POST" && c.path === "/orders")).toHaveLength(1);
+    expect(shop.orders.size).toBe(1);
+    expect(h.db.rows("order_sales")).toHaveLength(1);
+    expect(guardRow()).toMatchObject({ status: "done", attempts: 2, woo_order_id: 501 });
+  });
+
+  it("dos clics retoman a la vez un candado vencido: uno solo llega a WooCommerce, el otro pierde por el claim_token", async () => {
+    const hace = new Date(Date.now() - BOT_ORDER_CLAIM_TTL_MS - 5_000).toISOString();
+    setup("woocommerce", leadRow(), {
+      bot_order_requests: [
+        { id: "g-1", store_id: STORE, request_id: KEY, body_hash: "0".repeat(64), status: "processing", claim_token: "t-1", claimed_at: hace, created_at: hace, attempts: 1, woo_order_id: null },
+      ],
+    });
+    const shop = fakeWooShop({ products: CATALOG });
+    let abrir!: () => void;
+    const compuerta = new Promise<void>((r) => (abrir = r));
+    vi.stubGlobal("fetch", (async (input: RequestInfo | URL, init?: RequestInit) => {
+      await compuerta;
+      return shop.fetchImpl(input, init);
+    }) as typeof fetch);
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const a = generateOrder(LEAD, venta());
+    const b = generateOrder(LEAD, venta());
+    const primera = await Promise.race([a, b]);
+    expect(primera.error).toMatch(/este mismo pedido ya se está generando/);
+    abrir();
+    const res = await Promise.all([a, b]);
+    expect(res.filter((r) => !r.error)).toHaveLength(1);
+    expect(shop.calls.filter((c) => c.method === "POST")).toHaveLength(1);
+    expect(shop.orders.size).toBe(1);
+    expect(h.db.rows("order_sales")).toHaveLength(1);
+    const lineas = info.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith("[woo-form-guard]"));
+    expect(lineas.filter((l) => l.includes('"event":"retaken"'))).toHaveLength(1);
+    expect(lineas.some((l) => l.includes('"lost_retake":true'))).toBe(true);
+  });
+
+  it("un intento viejo que no terminó y no sabe qué pedido creó: no se crea otro", async () => {
+    const hace = new Date(Date.now() - BOT_ORDER_RETAKE_MAX_AGE_MS - 60_000).toISOString();
+    setup("woocommerce", leadRow(), {
+      bot_order_requests: [
+        { id: "g-1", store_id: STORE, request_id: KEY, body_hash: "0".repeat(64), status: "processing", claim_token: "t-1", claimed_at: hace, created_at: hace, attempts: 1, woo_order_id: null },
+      ],
+    });
+    const shop = fakeWooShop({ products: CATALOG });
+    vi.stubGlobal("fetch", shop.fetchImpl);
+    const res = await generateOrder(LEAD, venta());
+    expect(res.error).toBe(WOO_FORM_EXPIRED_TEXT);
+    expect(shop.calls).toHaveLength(0);
+  });
+
+  it("si la base no deja tomar el candado, no se llama a WooCommerce", async () => {
+    setup("woocommerce");
+    const shop = fakeWooShop({ products: CATALOG });
+    vi.stubGlobal("fetch", shop.fetchImpl);
+    h.db.failOn = (table) => (table === "bot_order_requests" ? { message: "canceling statement due to statement timeout" } : null);
+    const res = await generateOrder(LEAD, venta());
+    expect(res.error).toBe(WOO_FORM_DB_ERROR_TEXT);
+    expect(shop.calls).toHaveLength(0);
+  });
+
+  it("sin la 0277 (una base de pruebas) sigue como antes, con la búsqueda por kapta_request_id", async () => {
+    setup("woocommerce");
+    const shop = fakeWooShop({ products: CATALOG });
+    vi.stubGlobal("fetch", shop.fetchImpl);
+    h.db.failOn = (table) =>
+      table === "bot_order_requests" ? { code: "PGRST205", message: "Could not find the table 'public.bot_order_requests' in the schema cache" } : null;
+    const res = await generateOrder(LEAD, venta());
+    expect(res.error).toBeUndefined();
+    expect(shop.calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /orders", "POST /orders", "PUT /orders/501"]);
+  });
+
+  it("el camino de Shopify no toca el candado", async () => {
+    setup("shopify");
+    h.shopify.createDraftOrder.mockResolvedValue({ gid: "gid://shopify/DraftOrder/5", name: "#D5", priceMismatches: [] });
+    h.shopify.completeDraftOrder.mockResolvedValue({ orderGid: "gid://shopify/Order/777", orderName: "#KP143999", status: "completed" });
+    const res = await generateOrder(
+      LEAD,
+      venta({ lineItems: [{ variantId: "gid://shopify/ProductVariant/1", title: "EggMixer", quantity: 1, unitPrice: 89, sku: "EGG-1" }] }),
+    );
+    expect(res.error).toBeUndefined();
+    expect(h.db.opsOn("bot_order_requests")).toHaveLength(0);
   });
 });

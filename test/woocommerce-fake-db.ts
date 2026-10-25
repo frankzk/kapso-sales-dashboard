@@ -4,9 +4,9 @@
 // claves únicas que usan estas rutas: `orders (store_id, shopify_order_id)`,
 // `webhook_events (store_id, webhook_id)`, `sync_state (store_id, source)` y
 // `order_events (order_id, operation_id, kind)` cuando hay `operation_id`,
-// con el `ignoreDuplicates` de un upsert (ON CONFLICT DO NOTHING). Lo demás
-// (orden, `range`, `not`, `or`) se acepta y no filtra: las pruebas no dependen
-// de ello. `hangOn` deja una consulta sin contestar (una base que no responde).
+// con el `ignoreDuplicates` de un upsert (ON CONFLICT DO NOTHING), y
+// `not(col, "like", "prefijo%")`. Lo demás (orden, `range`, otros `not`, `or`)
+// se acepta y no filtra: las pruebas no dependen de ello. `hangOn` deja una consulta sin contestar (una base que no responde).
 //
 // No es un archivo de pruebas (no termina en .test.ts): lo importan.
 
@@ -54,6 +54,11 @@ function matches(row: Row, filters: [string, string, any][]): boolean {
     if (m === "neq") return String(row[col]) !== String(val);
     if (m === "in") return (val as unknown[]).map(String).includes(String(row[col]));
     if (m === "is") return val === null ? row[col] == null : row[col] === val;
+    if (m === "not_like") {
+      // Solo el comodín final (`prefijo%`), lo único que se usa.
+      const prefix = String(val).replace(/%$/, "");
+      return row[col] == null ? false : !String(row[col]).startsWith(prefix);
+    }
     if (m === "gte" || m === "gt" || m === "lte" || m === "lt") {
       const c = compare(row[col], val);
       if (c == null) return false;
@@ -135,7 +140,8 @@ class FakeQuery {
   range() {
     return this;
   }
-  not() {
+  not(c?: string, op?: string, v?: any) {
+    if (op === "like" && typeof c === "string") this.filters.push(["not_like", c, v]);
     return this;
   }
   or() {

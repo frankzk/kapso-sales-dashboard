@@ -864,7 +864,8 @@ export type WooSaleOutcome =
        * El POST salió y no hubo respuesta clara (se cortó, un 5xx), y después
        * no se encontró el pedido (o no se pudo buscar): WordPress puede seguir
        * creándolo y guardarlo DESPUÉS. Un reintento inmediato no lo vería y
-       * crearía otro; quien reintenta solo (el bot, §38.13) tiene que esperar.
+       * crearía otro; el bot (§38.13) y «Generar pedido» (§38.12,
+       * lib/woo-sale-guard.ts) dejan su candado puesto hasta su plazo.
        */
       postUnanswered?: true;
     };

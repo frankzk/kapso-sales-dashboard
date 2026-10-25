@@ -105,6 +105,14 @@ export const BOT_ORDER_CHANNEL = WOO_BOT_SALE_CHANNEL;
 export const BOT_ORDER_REQUEST_PREFIX = "kapso-";
 
 /**
+ * Las filas de `bot_order_requests` que NO son del bot: el candado de
+ * «Generar pedido» en WooCommerce (lib/woo-sale-guard.ts, MOM §38.12) usa la
+ * misma tabla con la llave `form-<id del formulario>`. El tope por minuto del
+ * bot no las cuenta.
+ */
+export const WOO_FORM_GUARD_PREFIX = "form-";
+
+/**
  * Cuánto vale un candado que no terminó. Más que la función entera
  * (`maxDuration` 60 s; la venta termina a los `BOT_ORDER_SALE_DEADLINE_MS`): un
  * candado vivo nunca se retoma. Y deja que un POST sin respuesta termine en
@@ -1251,13 +1259,15 @@ async function claimBotOrder(args: {
     };
   }
 
-  // El tope por minuto: solo antes de una fila NUEVA (un reintento no cuenta).
+  // El tope por minuto: solo antes de una fila NUEVA (un reintento no cuenta),
+  // y solo las del bot (las de «Generar pedido» van con `form-`).
   const recent = await step(
     "guard_rate",
     admin
       .from("bot_order_requests")
       .select("id", { count: "exact", head: true })
       .eq("store_id", storeId)
+      .not("request_id", "like", `${WOO_FORM_GUARD_PREFIX}%`)
       .gte("created_at", since(60_000)),
   );
   if (recent.error && isBotOrdersMigrationMissing(recent.error)) throw new MigrationMissing();
