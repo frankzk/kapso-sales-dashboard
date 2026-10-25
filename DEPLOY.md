@@ -5128,3 +5128,20 @@ nuevas; Shalom no cambia.
 **Marcha atrás.** Revertir el commit. Las columnas pueden quedarse (nadie más
 las lee); si se quieren quitar, **después** de revertir:
 `alter table stores drop column olva_paid_arrival_template_enabled, drop column olva_paid_arrival_template_name, drop column olva_paid_arrival_params;`.
+
+### 25-10-2026 · «Hoy» arriba del Consolidado: las ventas del día contra ayer a esta hora (sin migración, MOM §17.5)
+
+Un bloque nuevo arriba de «Operación» en `/dashboard`: ventas y pedidos del día
+de las tiendas, su cambio contra ayer a esta misma hora, la curva acumulada de
+hoy contra ayer y una línea por tienda. **Sin migración**, sin RPC, sin crons ni
+variables de entorno nuevas: lee `orders` con la sesión de quien mira. Ruta
+nueva `GET /api/dashboard/hoy`, que el bloque llama cada minuto con la pestaña a
+la vista (dos días de pedidos de las tiendas: 385 filas el 25-10-2026, en 5 ms
+como el owner bajo RLS, por `orders_store_created_idx`).
+
+**Qué mirar después.** En el teléfono, el bloque es lo primero bajo
+«Consolidado». A mitad del día, Pedidos de cada tienda debe dar lo mismo que
+Shopify (el 25-10 a las 4:52 p. m., Kenku 98 en los dos) y el porcentaje, el de
+Shopify contra ayer. Con la pestaña abierta, «al corte» avanza solo cada minuto.
+
+**Marcha atrás.** Revertir el commit. No escribe nada en la base.

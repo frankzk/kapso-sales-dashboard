@@ -34,6 +34,7 @@ import {
   type SourceConversionResult,
 } from "@/lib/consolidado-origen";
 import type { WaNumber } from "@/lib/wa-numbers";
+import { addDays, localMidnightUtc } from "@/lib/local-day";
 
 export interface DateRange {
   from: string; // YYYY-MM-DD inclusive
@@ -181,42 +182,6 @@ function rangeBounds(range: DateRange): { startIso: string; endIso: string } {
   return { startIso: `${range.from}T00:00:00Z`, endIso: `${range.to}T23:59:59Z` };
 }
 
-function localMidnightUtc(date: string, timeZone: string): string {
-  const [year, month, day] = date.split("-").map(Number);
-  const target = Date.UTC(year!, month! - 1, day!, 0, 0, 0);
-  let guess = target;
-  const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  });
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const parts = Object.fromEntries(
-      formatter.formatToParts(new Date(guess)).map((part) => [part.type, part.value]),
-    );
-    const rendered = Date.UTC(
-      Number(parts.year),
-      Number(parts.month) - 1,
-      Number(parts.day),
-      Number(parts.hour),
-      Number(parts.minute),
-      Number(parts.second),
-    );
-    guess += target - rendered;
-  }
-  return new Date(guess).toISOString();
-}
-
-function nextDate(date: string): string {
-  const [year, month, day] = date.split("-").map(Number);
-  return new Date(Date.UTC(year!, month! - 1, day! + 1)).toISOString().slice(0, 10);
-}
-
 /** Exact local-calendar bounds for acquisition cohorts. Unlike the legacy
  * operational widgets, campaign acquisition must not move a lead between days
  * merely because UTC is five hours ahead of Lima. */
@@ -226,7 +191,7 @@ export function acquisitionRangeBounds(
 ): { startIso: string; endExclusiveIso: string } {
   return {
     startIso: localMidnightUtc(range.from, timeZone),
-    endExclusiveIso: localMidnightUtc(nextDate(range.to), timeZone),
+    endExclusiveIso: localMidnightUtc(addDays(range.to, 1), timeZone),
   };
 }
 
