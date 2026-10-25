@@ -1020,6 +1020,37 @@ export function pickNextLead<T extends NextLeadCandidate>(
   return queue.find(usable) ?? null;
 }
 
+/**
+ * «Siguiente lead» de la ficha (25-10-2026, pedido del owner): el lead que
+ * sigue al de la ficha en la lista que la asesora está mirando —con sus chips,
+ * su búsqueda y su orden—, para pasar al siguiente sin cerrar la ficha y volver
+ * a abrir otra. Es el primero DEBAJO del abierto que nadie más tiene reservado:
+ * abrir uno «Tomado» solo serviría para que el servidor diga quién lo tiene.
+ *
+ * La ficha puede ya no estar en la lista: guardar la gestión la saca de «Sin
+ * llamar». Entonces vale el que venía detrás cuando se la vio por última vez
+ * (`rememberedNextId`), o el primero libre después de él; y si ese también se
+ * fue, o nunca hubo uno, el primero libre de la lista. Al final de la lista,
+ * null.
+ */
+export function leadAfter<T extends Pick<NextLeadCandidate, "id" | "claimed_by" | "claimed_at">>(
+  queue: readonly T[],
+  opts: {
+    openId: string;
+    userId: string;
+    rememberedNextId?: string | null;
+    now?: Date;
+  },
+): T | null {
+  const now = opts.now ?? new Date();
+  const free = (l: T) =>
+    l.id !== opts.openId && !(l.claimed_by && l.claimed_by !== opts.userId && isClaimActive(l.claimed_at, now));
+  const index = queue.findIndex((l) => l.id === opts.openId);
+  if (index !== -1) return queue.slice(index + 1).find(free) ?? null;
+  const from = opts.rememberedNextId ? queue.findIndex((l) => l.id === opts.rememberedNextId) : -1;
+  return queue.slice(Math.max(from, 0)).find(free) ?? null;
+}
+
 /** ¿El aviso del servidor es el del tope (y no «X está atendiendo este lead»)? */
 export function isClaimCapError(message: string | null | undefined): boolean {
   return !!message && message.startsWith("Ya tienes ") && message.includes("leads abiertos");

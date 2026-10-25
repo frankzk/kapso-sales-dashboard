@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { CLAIM_TTL_MINUTES, MAX_OPEN_LEADS, cartLinesOf, dayTimeLabel, isClaimCapError, pickNextLead, usableAddress } from "@/lib/leads";
+import { CLAIM_TTL_MINUTES, MAX_OPEN_LEADS, cartLinesOf, dayTimeLabel, isClaimCapError, leadAfter, pickNextLead, usableAddress } from "@/lib/leads";
 
 /**
  * El siguiente lead de cada vendedora (14-10-2026, MOM §11).
@@ -156,5 +156,47 @@ describe("lo que la tarjeta del siguiente lead pone primero", () => {
     expect(dayTimeLabel("2026-10-12T21:40:00.000Z", NOW)).toBe("12 oct 16:40");
     expect(dayTimeLabel(null, NOW)).toBeNull();
     expect(dayTimeLabel("no es fecha", NOW)).toBeNull();
+  });
+});
+
+/**
+ * «Siguiente lead» de la ficha (25-10-2026): el de debajo en la lista que se
+ * está mirando, sin cerrar la ficha.
+ */
+describe("leadAfter", () => {
+  const cola = [lead("a"), lead("b"), lead("c"), lead("d")];
+  const ids = (l: { id: string } | null) => l?.id ?? null;
+
+  it("es el de debajo del abierto", () => {
+    expect(ids(leadAfter(cola, { openId: "b", userId: YO, now: NOW }))).toBe("c");
+  });
+
+  it("salta los que otra tiene reservados, no los míos ni los vencidos", () => {
+    const tomada = [lead("a"), lead("b", { claimed_by: "rosa", claimed_at: hace(2) }), lead("c")];
+    expect(ids(leadAfter(tomada, { openId: "a", userId: YO, now: NOW }))).toBe("c");
+    const mia = [lead("a"), lead("b", { claimed_by: YO, claimed_at: hace(2) })];
+    expect(ids(leadAfter(mia, { openId: "a", userId: YO, now: NOW }))).toBe("b");
+    const vencida = [lead("a"), lead("b", { claimed_by: "rosa", claimed_at: hace(CLAIM_TTL_MINUTES + 1) })];
+    expect(ids(leadAfter(vencida, { openId: "a", userId: YO, now: NOW }))).toBe("b");
+  });
+
+  it("al final de la lista no hay siguiente", () => {
+    expect(leadAfter(cola, { openId: "d", userId: YO, now: NOW })).toBeNull();
+  });
+
+  it("si guardar la gestión lo sacó de la lista, sigue el que venía detrás", () => {
+    const sinB = [lead("a"), lead("c"), lead("d")];
+    expect(ids(leadAfter(sinB, { openId: "b", userId: YO, rememberedNextId: "c", now: NOW }))).toBe("c");
+  });
+
+  it("si el que venía detrás ahora lo tiene otra, el libre después de él", () => {
+    const sinB = [lead("a"), lead("c", { claimed_by: "rosa", claimed_at: hace(1) }), lead("d")];
+    expect(ids(leadAfter(sinB, { openId: "b", userId: YO, rememberedNextId: "c", now: NOW }))).toBe("d");
+  });
+
+  it("si tampoco está el que venía detrás, o no se sabe, el primero libre", () => {
+    const quedan = [lead("a", { claimed_by: "rosa", claimed_at: hace(1) }), lead("d")];
+    expect(ids(leadAfter(quedan, { openId: "b", userId: YO, rememberedNextId: "c", now: NOW }))).toBe("d");
+    expect(ids(leadAfter(quedan, { openId: "x", userId: YO, now: NOW }))).toBe("d");
   });
 });
