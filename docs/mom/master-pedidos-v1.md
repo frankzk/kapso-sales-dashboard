@@ -4213,6 +4213,19 @@ saltó.
 - Solo la ve quien tiene el rol `vendedora`, y solo en «Sin llamar» sin
   búsqueda: quien solo supervisa no retiene leads por mirar la cola.
 
+**«Siguiente lead» en la ficha (25-10-2026, pedido del owner).** Arriba a la
+derecha de la ficha del lead, entre el QR y «Cerrar», abre el siguiente sin
+cerrar la ficha (`leadAfter`, `lib/leads.ts`). Es el de **debajo** del abierto
+en la lista que la asesora está mirando, con sus chips, su búsqueda y su orden,
+saltando los que otra persona tiene reservados. Si guardar la gestión sacó el
+lead de la lista, como pasa en «Sin llamar», abre el que venía detrás; si ese
+tampoco está, el primero libre. En el último de la lista el botón queda
+apagado. Al pasar, **primero suelta** la reserva del lead que deja, igual que
+«Cerrar» (con el tope de dos abiertos, tomar primero podía dejarla sin cupo), y
+después toma el otro. Si otra persona lo tomó en ese instante, la ficha se
+cierra y avisa quién lo tiene, como al abrirlo desde la lista. Lo que se
+escribió y no se guardó se pierde igual que al cerrar.
+
 La cola de abajo sigue siendo **una sola lista** en el orden medido, con la
 edad en cada fila. Se descartó agruparla por edad (hora dorada, 1–6 h, …):
 dejaba un carrito de dos días, que cierra 9 a 12 veces más, debajo de un frío

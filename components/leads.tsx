@@ -56,6 +56,7 @@ import {
   gestionOf,
   CLAIM_HEARTBEAT_MS,
   isClaimActive,
+  leadAfter,
   shouldRenewClaim,
   isQueueBucket,
   labelOf,
@@ -1026,7 +1027,11 @@ export function LeadsBoard({
     return () => clearInterval(timer);
   }, [openLeadId]);
 
+  /** El lead al que se está pasando con «Siguiente lead»; cerrar lo cancela. */
+  const jumpingToRef = useRef<string | null>(null);
+
   function closeDrawer() {
+    jumpingToRef.current = null;
     const leadId = selected?.id;
     activeLeadIdRef.current = null;
     setSelected(null);
@@ -1468,6 +1473,53 @@ export function LeadsBoard({
     drawerLeadId: selected?.id ?? null,
   });
   const nextHandle = nextLead.lead ? handleOf(nextLead.lead) : null;
+
+  // «SIGUIENTE LEAD» DE LA FICHA (25-10-2026): el de debajo en la lista que
+  // está mirando, sin cerrar la ficha. El que venía detrás se anota MIENTRAS
+  // la ficha sigue en la lista: guardar la gestión la saca de «Sin llamar», y
+  // es justo entonces cuando se pide el siguiente (`leadAfter`).
+  const openIndex = selected ? displayLeads.findIndex((l) => l.id === selected.id) : -1;
+  const successorRef = useRef<{ openId: string; nextId: string | null } | null>(null);
+  useEffect(() => {
+    if (!selected || openIndex === -1) return;
+    successorRef.current = { openId: selected.id, nextId: displayLeads[openIndex + 1]?.id ?? null };
+  }, [selected, openIndex, displayLeads]);
+  const followingLead = selected
+    ? leadAfter(displayLeads, {
+        openId: selected.id,
+        userId: currentUserId,
+        rememberedNextId: successorRef.current?.openId === selected.id ? successorRef.current.nextId : null,
+      })
+    : null;
+
+  /**
+   * Pasar de la ficha abierta a `next` sin cerrarla. La reserva de la que se
+   * deja se suelta ANTES de tomar la otra, como al cerrar: con el tope de dos
+   * leads abiertos, tomar primero podía dejarla sin cupo. Si la que se deja es
+   * su siguiente reservado, lo suelta `nextLead.release`.
+   */
+  function openFollowingLead(next: LeadRow) {
+    const leaving = selected?.id ?? null;
+    // Apagado desde el clic (un doble clic no abre dos), y la ficha que se
+    // deja ya no es «la abierta»: su latido no la vuelve a reservar mientras
+    // se suelta.
+    setOpeningId(next.id);
+    activeLeadIdRef.current = null;
+    jumpingToRef.current = next.id;
+    void (async () => {
+      if (nextLead.heldId && nextLead.heldId !== next.id) await nextLead.release();
+      if (leaving && leaving !== next.id && leaving !== nextLead.heldId) {
+        await releaseLead(leaving).catch(() => undefined);
+      }
+      // Cerró la ficha mientras se soltaba la otra: no se le vuelve a abrir.
+      if (jumpingToRef.current !== next.id) {
+        setOpeningId((current) => (current === next.id ? null : current));
+        return;
+      }
+      jumpingToRef.current = null;
+      await abrirLeadPorId(next.id, next);
+    })();
+  }
 
   // «Más filtros»: lo que no entra en las dos filas de chips.
   const filtersPillRef = useRef<HTMLButtonElement>(null);
@@ -2267,6 +2319,13 @@ export function LeadsBoard({
           onClose={closeDrawer}
           onRegistered={(update) => refreshDetail(selected.id, update)}
           onReady={measureLeadDrawerReady}
+          next={{
+            lead: followingLead,
+            opening: openingId !== null,
+            onOpen: () => {
+              if (followingLead) openFollowingLead(followingLead);
+            },
+          }}
         />
       )}
     </div>
