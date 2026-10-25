@@ -16,6 +16,7 @@ import {
   wooWebhookHttpStatus,
 } from "@/lib/woocommerce-intake";
 import { WOO_ORDER_TOPICS, WOO_TIMEOUT_MS } from "@/lib/woocommerce";
+import { WOO_NEW_SITE_NEEDS_KEYS, validateWooSettings } from "@/lib/woocommerce-settings";
 
 const read = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8");
 const flat = (text: string) => text.replace(/\s+/g, " ");
@@ -89,6 +90,38 @@ describe("MOM §38.11 · Ajustes", () => {
     expect(S).toContain("«Administrar tiendas», `stores.manage`");
     expect(S).toContain("**Los secretos se guardan cifrados y nunca vuelven a la pantalla:**");
     expect(S).toContain("**No cambia `stores.platform`**");
+  });
+
+  it("cambiar la dirección: «Guardar» con las dos claves pegadas; «Probar conexión» no guarda; el piso no se mueve", () => {
+    expect(S).toContain("se vuelven a pegar la Consumer key y el Consumer secret y se pulsa **«Guardar»**");
+    expect(S).toContain("**«Probar conexión» no guarda nada** de lo escrito (su aviso dice «todavía no se guardó»)");
+    expect(S).toContain("Guardar la dirección no mueve `woo_intake_from` ni cambia `stores.platform`");
+    expect(S).toContain("Volver a pegarlas después (al cambiar la dirección) no lo mueve.");
+    // Sin las dos claves, la dirección nueva no se guarda.
+    const current = {
+      siteUrl: "https://aurela-temporal.example.com",
+      siteKey: "aur",
+      hasConsumerKey: true,
+      hasConsumerSecret: true,
+      hasWebhookSecret: true,
+      hasWooOrders: true,
+    };
+    expect(validateWooSettings({ siteUrl: "https://aurela.pe" }, current)).toEqual({ ok: false, error: WOO_NEW_SITE_NEEDS_KEYS });
+    const ok = validateWooSettings(
+      { siteUrl: "https://aurela.pe", consumerKey: "ck_abcdef123456", consumerSecret: "cs_abcdef123456" },
+      current,
+    );
+    expect(ok.ok && ok.apiChanged).toBe(true);
+    // Lo que lo cumple en la acción: probar no guarda lo escrito, y el piso solo se fija si no había.
+    const actions = read("app/dashboard/[storeId]/settings/woo-actions.ts");
+    expect(actions).toContain("(Probado con lo escrito; todavía no se guardó.)");
+    expect(actions).toContain("!loaded.row.woo_intake_from");
+  });
+
+  it("el piso no frena una prueba: lo que ya entró se queda", () => {
+    expect(S).toContain("**El piso no frena una prueba (25-10-2026).** Solo deja fuera lo creado antes de él");
+    expect(S).toContain("Mover `woo_intake_from` después no lo saca del Master.");
+    expect(S).toContain("Contra las pruebas lo único que sirve es no hacerlas en el sitio conectado.");
   });
 
   it("los archivos que nombra existen", () => {

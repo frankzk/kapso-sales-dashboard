@@ -10849,9 +10849,10 @@ altas y ediciones nuevas. Un `courier` nulo, vacío, `propio` o
 compatibilidad permite conservar `riders.id`, usuarios vinculados, rutas y
 liquidaciones; la normalización del texto no crea una segunda ficha.
 
-Shopify continúa siendo la única fuente de **pedidos comerciales administrados
-por Kapta** (§2). Una solicitud recibida directamente por API o Excel es una
-solicitud logística, no un pedido Shopify inventado. Debe conservar el código
+La tienda (Shopify hasta su cierre, WooCommerce después) continúa siendo la
+única fuente de **pedidos comerciales administrados por Kapta** (§2). Una
+solicitud recibida directamente por API o Excel es una solicitud logística, no
+un pedido de la tienda inventado. Debe conservar el código
 externo de la tienda y una clave de idempotencia para impedir duplicados.
 
 ### 29.3 Inventario preparado, pero no obligatorio
@@ -15857,10 +15858,17 @@ Implementación:
 
 ## 38. WooCommerce (23-10-2026)
 
-Estado: base técnica del 23-10-2026, sin ningún pedido de WooCommerce todavía.
+Estado: base técnica del 23-10-2026. **Al 25-10-2026** las dos tiendas tienen
+su sitio WooCommerce conectado en Ajustes (la entrada de 38.11), cada una con
+una dirección temporal, y las dos siguen con `stores.platform = shopify`:
+Aurela desde el 24-10-2026 (clave del sitio `aur`) y Kenku Peru desde esa
+noche (`kp`, 19:13 de Lima). Los únicos pedidos de WooCommerce en Kapta son #AUR900004 y
+#AUR900005, dos pruebas, anuladas; el primer pedido real de Aurela será el
+#AUR900006 o uno mayor. En un sitio conectado ya no se hacen pruebas: entran al
+Master como cualquier pedido (38.11, «El piso no frena una prueba»).
 La migración 0274 se aplica a mano y antes del código (DEPLOY.md, entrada del
 23-10-2026). Shopify cierra Kenku Perú y Aurela el 28-10-2026 (UTC); se
-planifica para el peor caso, el lunes 27-10 a las 19:00 de Lima. Las dos
+planifica para el peor caso, el martes 27-10 a las 19:00 de Lima. Las dos
 tiendas pasan a WooCommerce. Hasta entonces siguen en Shopify exactamente igual.
 
 **Decisión del owner (23-10-2026): WooCommerce va en la misma fila** de la
@@ -16216,8 +16224,8 @@ sincronización no es opcional.
 2. **Sin secreto de webhooks guardado** no hay cómo saber quién lo manda: no se
    procesa (200). Ajustes lo dice solo si la tienda ya tiene su sitio
    WooCommerce guardado: este paso va antes de la firma, y un POST de
-   cualquiera a una tienda solo de Shopify (Kenku y Aurela hoy) no escribe nada
-   en ella.
+   cualquiera a una tienda solo de Shopify (Kenku y Aurela hasta que
+   conectaron su sitio) no escribe nada en ella.
 3. **La firma** (`X-WC-Webhook-Signature`) que no cuadra recibe **401**. Es lo
    único que contesta un error: un secreto mal puesto tiene que verse en
    WooCommerce.
@@ -16251,6 +16259,13 @@ sincronización no es opcional.
   se crea (el webhook lo dice en su mensaje; la pasada lo cuenta en `skipped`);
   uno que Kapta ya tiene se actualiza como siempre. **La historia de Shopify se
   queda fuera de Kapta**: sus pedidos ya están, con su id de Shopify.
+  **El piso no frena una prueba (25-10-2026).** Solo deja fuera lo creado
+  antes de él: un pedido de prueba hecho después en el sitio conectado entra
+  como cualquier otro, y uno que ya entró se queda (Kapta nunca borra un
+  pedido, 38.3) y sigue recibiendo sus cambios. Mover `woo_intake_from`
+  después no lo saca del Master. Así entraron las dos pruebas de Aurela,
+  #AUR900004 y #AUR900005: siguen en el Master, anuladas. Contra las pruebas
+  lo único que sirve es no hacerlas en el sitio conectado.
 - **Un estado más viejo no pisa uno más nuevo.** WooCommerce entrega los
   webhooks en segundo plano y uno puede llegar después de que la sincronización
   ya leyó un cambio posterior. Si la fecha de modificación de WooCommerce de lo
@@ -16346,8 +16361,20 @@ demás credenciales):
   la Consumer key y el Consumer secret en el mismo envío: si no, Kapta
   mandaría las claves de la tienda a una dirección que puede ser de otro (un
   dominio mal escrito, o alguien con «Administrar tiendas»).
+- **Cambiar la dirección del sitio (25-10-2026: de la dirección temporal a la
+  definitiva, como Aurela a `https://aurela.pe`).** Se escribe la dirección
+  nueva, se vuelven a pegar la Consumer key y el Consumer secret y se pulsa
+  **«Guardar»**: Kapta prueba las claves en la dirección nueva y, solo si
+  sirven, guarda todo junto. **«Probar conexión» no guarda nada** de lo
+  escrito (su aviso dice «todavía no se guardó»). Mientras no se guarde, Kapta
+  sigue con la dirección vieja: la pasada le pide a ella (sin seguir
+  redirecciones, 38.8) y los avisos firmados que llegan con la dirección nueva
+  no se procesan («Otro sitio», arriba; el último fallo lo dice). Guardar la
+  dirección no mueve `woo_intake_from` ni cambia `stores.platform`, y la clave
+  del sitio sigue siendo la misma.
 - **La primera vez que se guardan las claves de la API** se fija
   `woo_intake_from` (el piso de la entrada, ver arriba), y el aviso lo dice.
+  Volver a pegarlas después (al cambiar la dirección) no lo mueve.
 - La sección muestra la dirección para WooCommerce → Ajustes → Avanzado →
   Webhooks (`<Kapta>/api/webhooks/woocommerce/<storeId>`), los cuatro temas,
   la versión «WP REST API Integration v3», el último fallo y la última pasada.
@@ -16516,8 +16543,9 @@ cosa con su mensaje:
 **`processing`, no «Por confirmar».** Es el estado estándar que el brief pide
 para un pedido cargado a mano, existe en toda tienda, y para Kapta los dos son
 lo mismo (vivo, contraentrega, sin cobrar: 38.3 y 38.4); la confirmación es la
-de Kapta. El slug exacto de «Por confirmar» todavía no está confirmado, y un
-estado que la tienda no tiene registrado haría fallar el PUT.
+de Kapta. El slug de «Por confirmar» es de cada tienda: en Aurela es
+`cod-pending` (38.3) y en Kenku todavía no está confirmado, y un estado que la
+tienda no tiene registrado haría fallar el PUT.
 
 **La fila local** es la de la entrada: `mapWooOrder` sobre la respuesta de
 WooCommerce (`wc-<clave>-<id>`, `platform = woocommerce`, `venta_manual`),
@@ -16870,8 +16898,12 @@ Pruebas: `test/anulado-en-la-tienda.test.ts`, y las de cada pantalla
   `buildWooSaleOrder`, `createWooSaleOrder`) y el candado en la base por
   (tienda, id del intento) que pedía esta lista (0277, con su entrada en
   DEPLOY): la búsqueda por `kapta_request_id` no frena dos llamadas
-  simultáneas. Hasta que la acción de Kapso apunte a Kapta, en una tienda en
-  WooCommerce el bot deriva la conversación a una asesora.
+  simultáneas. Hasta que alguien cambie el flujo en Kapso (Kenku: que su
+  acción apunte a Kapta; Aurela: que cree directo en WooCommerce, 38.5), el
+  bot sigue creando sus pedidos en Shopify (al 25-10-2026, en las dos
+  tiendas), también con la tienda ya en WooCommerce. Desde el cierre esa
+  acción falla y, con el flujo de Kenku de hoy, **nada deriva la conversación
+  a una asesora**.
 - **Los carritos.** Los formularios abandonados de WooCommerce todavía no
   entran a `draft_orders`; un carrito de Shopify en la cola solo prellena el
   pedido (arriba). La recompra automática (`auto_order_trials`) y la captura del
@@ -16879,7 +16911,8 @@ Pruebas: `test/anulado-en-la-tienda.test.ts`, y las de cada pantalla
   `stores.platform`; `closeSale` y `recoverCart` (sin uso en la pantalla)
   tampoco.
 - **Los principios de §2 y `AGENTS.md`** («Shopify como única fuente de
-  pedidos») esperan al owner (38.9).
+  pedidos»): **hecho (23-10-2026)**, con la decisión del owner: dicen «la
+  tienda», Shopify hasta el cierre y WooCommerce después (38.9).
 - **Un POST sin respuesta en «Generar pedido»:** **hecho (25-10-2026)**, con
   el candado del bot (`bot_order_requests`, 0277, sin migración nueva; «El
   candado del formulario», arriba): el reintento espera a que WordPress haya
@@ -17155,7 +17188,8 @@ acción de Shopify. El 27-10, después del cambio de plataforma, se genera el
 secreto en Ajustes y la acción de Kapso pasa a apuntar a Kapta
 (`docs/kapso-pedidos-kapta.md`, sección 7; DEPLOY.md). Marcha atrás: la acción
 vuelve a Shopify mientras Shopify viva, o «Desactivar» en Ajustes (401, y el
-bot deriva a una asesora).
+bot deriva a una asesora). **Aurela no pasa por este endpoint:** su bot crea
+sus pedidos directo en WooCommerce (decisión del owner del 24-10-2026, 38.5).
 
 **Lo que no cubre.** Después del cierre el bot no puede leer un borrador en
 Shopify: para cerrar un carrito necesita sus SKU y precios, y si no los tiene

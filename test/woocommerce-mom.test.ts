@@ -65,10 +65,21 @@ describe("§38 WooCommerce (23-10-2026)", () => {
   it("fecha, migración a mano antes del código, el corte y la decisión del owner (misma fila)", () => {
     expect(s38).toContain("La migración 0274 se aplica a mano y antes del código (DEPLOY.md, entrada del 23-10-2026).");
     expect(s38).toContain("Shopify cierra Kenku Perú y Aurela el 28-10-2026 (UTC)");
-    expect(s38).toContain("el lunes 27-10 a las 19:00 de Lima");
+    // El 27-10-2026 es martes (hasta el 25-10-2026 el MOM decía «lunes»).
+    expect(s38).toContain("el martes 27-10 a las 19:00 de Lima");
+    expect(flat(MOM)).not.toContain("lunes 27-10");
+    expect(flat(read("docs/kapso-pedidos-kapta.md"))).toContain("el **martes 27-10-2026 a las 19:00 de Lima**");
     expect(s38).toContain("**Decisión del owner (23-10-2026): WooCommerce va en la misma fila**");
     expect(s38).toContain("No se crean tiendas nuevas.");
     expect(s38).not.toContain("Pendiente del owner: si WooCommerce va en la **misma fila**");
+  });
+
+  it("el estado al 25-10-2026: las dos tiendas conectadas, aún en Shopify, y solo las dos pruebas de Aurela", () => {
+    expect(s38).not.toContain("sin ningún pedido de WooCommerce todavía");
+    expect(s38).toContain("**Al 25-10-2026** las dos tiendas tienen su sitio WooCommerce conectado en Ajustes");
+    expect(s38).toContain("Los únicos pedidos de WooCommerce en Kapta son #AUR900004 y #AUR900005, dos pruebas, anuladas");
+    expect(s38).toContain("el primer pedido real de Aurela será el #AUR900006 o uno mayor");
+    expect(s38).toContain("En un sitio conectado ya no se hacen pruebas");
   });
 
   it("38.2 la numeración del owner: KP200001 y AUR900001, seis dígitos y rangos que no se cruzan", () => {
@@ -88,6 +99,10 @@ describe("§38 WooCommerce (23-10-2026)", () => {
     expect(flat(read("AGENTS.md"))).toContain(
       "4. Mantén la tienda como única fuente de pedidos (Shopify hasta su cierre, WooCommerce después: MOM §2 y §38)",
     );
+    // Ni §29.2 ni la lista de pendientes de 38.12 siguen diciendo otra cosa.
+    expect(flat(MOM)).not.toContain("Shopify continúa siendo la única fuente");
+    expect(flat(MOM)).toContain("La tienda (Shopify hasta su cierre, WooCommerce después) continúa siendo la única fuente");
+    expect(flat(MOM)).not.toContain("pedidos») esperan al owner (38.9)");
   });
 
   it("38.1 dos plataformas y ninguna otra, en las tres tablas, como en la 0274", () => {
@@ -267,6 +282,10 @@ describe("§38 WooCommerce (23-10-2026)", () => {
     expect(s38).toContain("**«Por confirmar» (23-10-2026).** El formulario contraentrega de Kenku y Aurela crea sus pedidos en un estado propio");
     expect(s38).toContain("Solo no sirve si «Por confirmar» es `pending` con otra etiqueta: eso no entra");
     expect(WOO_SKIPPED_STATUSES).not.toContain("por-confirmar");
+    // El slug es de cada tienda: Aurela ya lo dio (38.3); 38.12 no lo da por desconocido.
+    expect(s38).toContain("su slug es **`cod-pending`**");
+    expect(s38).toContain("en Aurela es `cod-pending` (38.3) y en Kenku todavía no está confirmado");
+    expect(s38).not.toContain("El slug exacto de «Por confirmar» todavía no está confirmado");
   });
 
   it("38.9 Kenku y Aurela no cambian, y lo que sigue pendiente se dice", () => {

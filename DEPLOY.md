@@ -3910,6 +3910,10 @@ WooCommerce son de cada tienda, se guardan cifradas en `stores` y nunca van a
 Vercel, al chat ni al repositorio.
 
 1. **Migración `0274_woocommerce_base.sql`, a mano y ANTES del código.**
+   **Ya aplicada en producción** (comprobado el 25-10-2026 con consultas de
+   solo lectura: las nueve columnas de `stores`, `orders.platform` y
+   `draft_orders.platform` en `information_schema.columns`, los seis CHECK
+   validados y los dos índices únicos). No hace falta volver a correrla.
    Añade `stores.platform` (`'shopify'` | `'woocommerce'`, por defecto
    `'shopify'`), `woo_site_url`, `woo_site_key`, `woo_consumer_key_enc`,
    `woo_consumer_secret_enc`, `woo_webhook_secret_enc` (cifrados como los demás
@@ -4070,7 +4074,10 @@ una organización con RUC dado de alta). Sin variables de entorno nuevas.
 1. **Requiere la 0274** (`orders.platform`). La 0275 se detiene sin ella
    (`0275: falta la 0274`), antes de crear nada.
 
-2. **Migración `0275_invoice_snapshots.sql`, a mano y ANTES del código.** Crea
+2. **Migración `0275_invoice_snapshots.sql`, a mano y ANTES del código.**
+   **Ya aplicada en producción** (comprobado el 25-10-2026 con consultas de
+   solo lectura: las tres tablas con RLS encendida y las cinco funciones en
+   `pg_proc`). No hace falta volver a correrla. Crea
    `order_invoice_snapshots`, `invoice_snapshot_attempts` (las fallas de cada
    pedido) e `invoice_snapshot_leases` (el turno de cada tienda), con RLS
    encendida y sin acceso para `anon` ni `authenticated`, y las funciones
@@ -4655,7 +4662,10 @@ contesta 409 `wrong_platform` sin llamar a WooCommerce ni a Shopify. El bot
 sigue creando sus pedidos en Shopify hasta que, el 27-10, su acción pase a
 apuntar a Kapta (paso 4).
 
-1. **Migración `0277_bot_orders.sql`, a mano y ANTES del código.** Crea
+1. **Migración `0277_bot_orders.sql`, a mano y ANTES del código.**
+   **Ya aplicada en producción** (comprobado el 25-10-2026 con consultas de
+   solo lectura: las dos tablas con RLS encendida y `woo_order_id` en
+   `bot_order_requests`). No hace falta volver a correrla. Crea
    `bot_order_secrets` (el sha256 del secreto de cada tienda, nunca el
    secreto, con cuándo se creó y se cambió, y el último uso y fallo) y
    `bot_order_requests` (el candado de cada pedido del bot: `unique (store_id,

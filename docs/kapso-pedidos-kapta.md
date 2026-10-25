@@ -1,10 +1,12 @@
 # Pedidos del bot de Kapso por Kapta — contrato HTTP
 
 Para quien edita el workflow de Kapso de **Kenku Perú** y **Aurela**. Regla de
-negocio: MOM §38.13 (`docs/mom/master-pedidos-v1.md`).
+negocio: MOM §38.13 (`docs/mom/master-pedidos-v1.md`). **Aurela no usa este
+contrato** (decisión del owner del 24-10-2026, MOM §38.5): su bot crea sus
+pedidos directo en WooCommerce por la API, con `kapta_channel = whatsapp_bot`.
 
 **Qué cambia.** Hoy el bot crea sus pedidos directamente en Shopify (Admin API).
-Shopify cierra las dos tiendas el **lunes 27-10-2026 a las 19:00 de Lima** (peor
+Shopify cierra las dos tiendas el **martes 27-10-2026 a las 19:00 de Lima** (peor
 caso) y los pedidos nuevos pasan a WooCommerce. Decisión del owner (plan D5): el
 bot **no** habla con WooCommerce; le pide el pedido a Kapta, y Kapta lo crea con
 el mismo camino que «Generar pedido» de las asesoras: WooCommerce tiene que
