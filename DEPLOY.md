@@ -4801,6 +4801,20 @@ la ruta (404). La 0277 puede quedarse: nadie más la lee. Si se quisiera quitar,
 table bot_order_secrets;`. Los pedidos ya creados en WooCommerce se quedan: son
 pedidos reales.
 
+### 25-10-2026 · La provincia de las cajas de Lima (0279, MOM §19.0)
+
+Corrige `shipments.province` en las cajas de Lima Metropolitana y el Callao que
+copiaron una provincia imposible de `peru_districts` («arequipa» en Miraflores,
+«HUARAZ» en Independencia, «san roman» en San Miguel, el propio distrito…): 253
+cajas medidas el 25-10-2026, todas de cobertura Lima. Pasan a «Lima» o
+«Callao». Solo esa columna; correrla dos veces no cambia nada. El código del
+mismo día (`mom-v1.32`, `printedProvince`) ya no las deja pasar ni las imprime
+en el rótulo; esto limpia lo guardado para las exportaciones y los filtros.
+
+**En producción ya está aplicada (25-10-2026, con autorización del owner).**
+
+Comprobar: la misma condición de la migración como `select count(*)` da 0.
+
 ### 25-10-2026 · El bot de Kapso consulta un pedido que ya existe (sin migración, MOM §38.13)
 
 El caso del 24-10-2026: la clienta llega al bot desde la página de gracias de
