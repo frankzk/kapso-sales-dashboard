@@ -561,4 +561,6 @@
 \ir migrations/0278_shopify_history_more.sql
 \echo 'Applying 0279_shipments_lima_province_fix.sql'
 \ir migrations/0279_shipments_lima_province_fix.sql
+\echo 'Applying 0280_leads_order_id_idx.sql'
+\ir migrations/0280_leads_order_id_idx.sql
 \echo 'Done.'

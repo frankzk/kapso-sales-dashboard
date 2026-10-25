@@ -7,7 +7,13 @@ export function leadMembership(lead: LeadRow, now = Date.now()): LeadCounts {
   const callable = lead.category === "open" || lead.category === "hot";
   return {
     por_llamar: Number(callable && lead.status != null && lead.status !== "yape_por_verificar"),
-    handoff: Number(!!lead.needs_attention && !!lead.handoff_at && Date.parse(lead.handoff_at) >= now - 24 * 3_600_000),
+    // «Atender ahora» también lista a quien espera la validación de su
+    // comprobante (MOM §16.1): una gestión sobre su lead no lo saca de ahí,
+    // solo validar o rechazar el pago, y eso lo trae la próxima lectura.
+    handoff: Number(
+      (!!lead.needs_attention && !!lead.handoff_at && Date.parse(lead.handoff_at) >= now - 24 * 3_600_000) ||
+        !!lead.pending_voucher,
+    ),
     yape: Number(lead.status === "yape_por_verificar"),
     seguimientos: Number(!!lead.next_followup_at && Date.parse(lead.next_followup_at) <= now),
     ganados: Number(lead.category === "won"),

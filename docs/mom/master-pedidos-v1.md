@@ -8640,6 +8640,69 @@ para continuar y registra actor y fecha, pero **no cambia por sí solo la
 macroetapa ni marca el pedido como pagado en Shopify**. Esas automatizaciones se
 activan cuando la migración operativa al sistema sea completa.
 
+#### Un comprobante por validar se ve en el Master y en Leads (owner, 25-10-2026)
+
+**Lo que pasó.** #KP143616: la clienta depositó la diferencia, el comprobante
+entró por WhatsApp a la cobranza de Shalom, se atribuyó por monto y quedó
+«Pendiente de revisión». La alerta escaló tres veces y ella seguía esperando su
+clave. El único aviso era el pop-up flotante de la cola de cobranza y esta
+bandeja; en el Master y en Leads, donde trabaja casi todo el equipo, ese pedido
+no se distinguía de ningún otro.
+
+**La decisión.** Un pedido con un comprobante por validar se ve como prioritario
+en las dos pantallas. No es un estado nuevo del pedido ni de la macroetapa: es
+una señal que se lee del pago.
+
+- **Qué cuenta.** Un pago de la clienta (`adelanto`, `diferencia` o `total`; no
+  `cobro_courier`, que es el efectivo del motorizado y lo revisa finanzas) en
+  `pendiente_revision` o `info_incompleta`. Son **los mismos estados que
+  mantienen abierta la alerta** «Comprobante por validar» de la cobranza
+  (`sweepResolvedAlerts`), y la lista vive una sola vez
+  (`VOUCHER_AWAITING_STATUSES`, `lib/pending-voucher.ts`).
+- **Se apaga solo, con el hecho.** Validar o rechazar el pago (o pasarlo a
+  `revision_admin`, que ya es una decisión de alguien) lo quita del Master, de
+  Leads y del pop-up a la vez. Nadie lo desmarca a mano ni pulsa «Resuelto».
+- **Se lee en vivo de `order_payments`, no del Master.** La cobranza de WhatsApp
+  registra el pago sin recalcular `order_master`; una columna materializada
+  habría llegado tarde justo en este caso. Es una sola lectura por carga, por
+  el índice `(store_id, validation_status)`: unas decenas de filas.
+- **Master de Pedidos.**
+  - En la fila, bajo la subetapa, la chapa `warn` **«Comprobante por
+    validar»**. Su título dice cuántos, por cuánto y dónde se resuelve
+    («Validar y enviar la clave, en Cobro» en agencia; «Validar en Cobro»
+    fuera de ella).
+  - La fila con la chapa abre la ficha **en Cobro**, donde está «Validar y
+    enviar la clave», igual que «Ir a validar» del pop-up
+    (`?abrir=<pedido>&ir=pagos`).
+  - Filtro rápido **«Comprobante por validar»** con su cifra, delante de las
+    píldoras de agencia en la línea de excepciones (se ve aunque no haya nada
+    por agencia). Cuenta los pedidos de todas las tiendas que se ven, como las
+    de agencia; se combina con la pestaña y los demás filtros, y las pestañas
+    cuentan lo que trae. En la URL es `pv=1`.
+  - Si la lectura de pagos falla, la píldora no enseña un cero: dice que no se
+    pudo leer, y el filtro no trae ningún pedido (nunca todos).
+- **Leads, «Atender ahora».**
+  - Sube el lead de ese pedido aunque el bot no lo haya derivado o su handoff
+    haya caducado, con el motivo **«Comprobante por validar · espera su
+    clave»** en agencia mientras la clave no se haya enviado, y **«Comprobante
+    por validar»** fuera de ese flujo (no hay clave que prometer).
+  - Va **arriba**, el que más espera primero; los handoffs de siempre siguen
+    debajo en su orden. Es una llave aparte: el puntaje de «Por llamar»
+    (`lib/lead-priority.ts`) es una probabilidad de cierre medida y no se toca.
+  - En vez de «Resuelto», la fila ofrece **«Ir a validar»** (la ficha del
+    pedido en Cobro). El contador de la pestaña suma a quien sube por esto y no
+    estaba ya por un handoff.
+  - No se escribe nada en `leads` (`needs_attention`, `handoff_*` quedan como
+    estaban): lo decide el pago.
+- **El límite: el lead tiene que estar atado al pedido** (`leads.order_id`, lo
+  deja la venta). Si no lo está, el pedido se ve en el Master y en el pop-up,
+  pero en Leads no sube. **No se adivina por teléfono**: el mismo celular puede
+  tener otro lead en otra tienda o de otra compra, y subirlo con un «espera su
+  clave» ajeno sería peor que no subirlo. Medido el 25-10-2026: 16 de los 20
+  pedidos con comprobante por validar tenían su lead atado.
+- **Índice (0280).** `leads(order_id)` parcial, para encontrar esos leads sin
+  recorrer la tabla (~70.000 filas). El código funciona sin él, solo más lento.
+
 ### 16.2 Validación por el estado de cuenta de Yape
 
 **Lo que una persona hacía mirando la app de Yape lo hace ahora el estado de
@@ -16177,9 +16240,12 @@ Pruebas: `test/leads-prior-orders-history.test.ts`.
 
 Estado: base técnica del 23-10-2026. **Al 25-10-2026** las dos tiendas tienen
 su sitio WooCommerce conectado en Ajustes (la entrada de 38.11), cada una con
-una dirección temporal, y las dos siguen con `stores.platform = shopify`:
-Aurela desde el 24-10-2026 (clave del sitio `aur`) y Kenku Peru desde esa
-noche (`kp`, 19:13 de Lima). Los únicos pedidos de WooCommerce en Kapta son
+una dirección temporal: Aurela desde el 24-10-2026 (clave del sitio `aur`) y
+Kenku Peru desde esa noche (`kp`, 19:13 de Lima). Desde el 25-10-2026 a las
+16:11 (Kenku) y 16:12 (Aurela) de Lima las dos tienen `stores.platform =
+woocommerce`: «Generar pedido» y «Venta telefónica» crean en WooCommerce
+(primeros: #AUR900007 y #KP200005), mientras la web y el bot siguen en
+Shopify hasta su corte. Los únicos pedidos de WooCommerce en Kapta son
 #AUR900004, #AUR900005 y #AUR900006, tres pruebas del formulario de Aurela,
 anuladas (la última del 25-10 a las 12:54 de Lima); el primer pedido real de
 Aurela será el #AUR900007 o uno mayor. En un sitio conectado ya no se hacen

@@ -91,6 +91,8 @@ import {
   type MasterSortKey,
 } from "@/lib/order-master-filters";
 import { compareDispatchCodes } from "@/lib/dispatched-with";
+import { pendingVoucherFilterIds, type PendingVoucherSummary } from "@/lib/pending-voucher";
+import { loadPendingVouchers } from "@/lib/pending-voucher-access";
 import {
   MACRO_SUBSTAGES_BY_STAGE,
   ORDER_MACRO_STAGES,
@@ -1251,6 +1253,33 @@ export async function getOrderMasterDetail(
 
 /** Filas por página. 100 llena la pantalla y pesa ~100 KB, frente a los 9,5 MB
  *  que costaba bajar la tabla entera. */
+/**
+ * «Comprobante por validar» de las tiendas del Master (MOM §16.1), leído en
+ * vivo de `order_payments` con la sesión de quien mira (la RLS decide). UNA
+ * consulta por carga: con el índice se decoran las 100 filas de la página, se
+ * cuenta la píldora y se resuelve el filtro. `null` = la lectura falló.
+ */
+export async function getPendingVoucherIndex(
+  storeIds: string[],
+): Promise<Map<string, PendingVoucherSummary> | null> {
+  if (!storeIds.length) return new Map();
+  return loadPendingVouchers(await createServerSupabase(), storeIds);
+}
+
+/**
+ * Los filtros con los pedidos de «Comprobante por validar» ya resueltos, para
+ * que `applyServerFilters` —que es síncrona y la comparten la página, los
+ * conteos y el Excel— no tenga que consultar nada. Sin el filtro puesto,
+ * devuelve los mismos filtros.
+ */
+export function withPendingVoucherFilter(
+  filters: MasterFilters,
+  index: ReadonlyMap<string, PendingVoucherSummary> | null,
+): MasterFilters {
+  if (!filters.pendingVoucher) return filters;
+  return { ...filters, pendingVoucherOrderIds: index ? [...index.keys()] : null };
+}
+
 export const MASTER_PAGE_SIZE = 100;
 
 export interface MasterPage {
@@ -1387,6 +1416,12 @@ export function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T 
   if (f.attempts !== null) {
     q = f.attempts >= ATTEMPTS_OR_MORE ? q.gte("attempt_count", ATTEMPTS_OR_MORE) : q.eq("attempt_count", f.attempts);
   }
+
+  // «Comprobante por validar» (MOM §16.1). No es una columna del Master: los
+  // pedidos los resolvió antes el servidor leyendo `order_payments` en vivo
+  // (`withPendingVoucherFilter`). Sin resolver, o con la lectura caída, no trae
+  // ninguno: un filtro sin efecto listaría TODOS bajo un título que dice otra cosa.
+  if (f.pendingVoucher) q = q.in("order_id", pendingVoucherFilterIds(f.pendingVoucherOrderIds));
 
   if (f.expiringSoon) {
     // Incluye lo ya vencido: es justamente lo que hay que trabajar hoy para que

@@ -29,6 +29,7 @@ import { facetItems } from "@/lib/leads-facets";
 import { LEAD_COVERAGES, countLeadCoverage, leadCoverage, type LeadCoverage } from "@/lib/lead-coverage";
 import type { DistrictCoverageRule } from "@/lib/district-coverage";
 import { scoringProfileFor, sortLeadsByPriorityScoped } from "@/lib/lead-priority";
+import { PENDING_VOUCHER_LABEL, pendingVoucherHref } from "@/lib/pending-voucher";
 import {
   countLeadUrgency,
   goldenBreakdown,
@@ -107,6 +108,7 @@ import {
   OpsButton,
   Skeleton,
   choiceChipClass,
+  opsButtonClass,
   type BadgeTone,
 } from "@/components/ops-ui";
 import { ChoicePill } from "@/components/facet-pill";
@@ -366,6 +368,24 @@ function LeadHookLine({ lead }: { lead: LeadRow }) {
   return (
     <p title={`${d.title}: ${hook.text}`} className="mt-0.5 truncate text-[13px] leading-5 text-ink-600">
       <span className="text-ink-500">{d.prefix}:</span> {hook.kind === "mensaje" ? `«${hook.text}»` : hook.text}
+    </p>
+  );
+}
+
+/**
+ * El motivo de la fila cuando espera la validación de su comprobante (MOM
+ * §16.1): ocupa el renglón del anzuelo, porque lo que la asesora necesita
+ * saber ya no es qué pidió sino que pagó y espera.
+ */
+function PendingVoucherLine({ voucher }: { voucher: NonNullable<LeadRow["pending_voucher"]> }) {
+  const detalle = [
+    voucher.orderName,
+    voucher.amount > 0 ? `S/ ${voucher.amount.toFixed(2)}` : null,
+  ].filter(Boolean).join(" · ");
+  return (
+    <p title={`${voucher.reason}${detalle ? ` · ${detalle}` : ""}`} className="mt-0.5 truncate text-[13px] leading-5 text-ink-600">
+      <span className="text-ink-500">Motivo:</span> <span className="font-medium text-warn-fg">{voucher.reason}</span>
+      {detalle && <span className="tabular-nums text-ink-500"> · {detalle}</span>}
     </p>
   );
 }
@@ -1683,7 +1703,7 @@ export function LeadsBoard({
               count={counts.handoff}
               active={view === "handoff"}
               onClick={() => navigateToView(view === "handoff" ? "por_llamar" : "handoff")}
-              hint="Clientes que pidieron hablar con una persona"
+              hint="Clientes que pidieron hablar con una persona, y los que ya pagaron y esperan que se valide su comprobante"
             />
             <AttentionPill
               icon={IconMoney}
@@ -2148,9 +2168,17 @@ export function LeadsBoard({
                   )}
                   <SegmentBadge lead={lead} />
                   <YapeKindBadge lead={lead} />
+                  {/* Ya pagó y espera (MOM §16.1): es el motivo de la fila, así
+                      que la marca genérica «Atención» sobra. */}
+                  {lead.pending_voucher && (
+                    <Badge tone="warn" title={`${lead.pending_voucher.reason}. Se valida en la ficha del pedido, en Cobro.`}>
+                      <IconMoney aria-hidden className="size-3 shrink-0" />
+                      {PENDING_VOUCHER_LABEL}
+                    </Badge>
+                  )}
                   {/* Un reencolado, una respuesta nueva o un seguimiento vencido:
                       sin la marca solo cambiaban el orden. */}
-                  {lead.needs_attention && !isYape && (
+                  {lead.needs_attention && !isYape && !lead.pending_voucher && (
                     <Badge tone="warn" title="Requiere atención: reencolado por carrito sin contacto, respuesta nueva o seguimiento vencido">
                       Atención
                     </Badge>
@@ -2180,7 +2208,7 @@ export function LeadsBoard({
                     </Badge>
                   )}
                 </div>
-                <LeadHookLine lead={lead} />
+                {lead.pending_voucher ? <PendingVoucherLine voucher={lead.pending_voucher} /> : <LeadHookLine lead={lead} />}
               </div>
 
               <div className="min-w-0">
@@ -2235,7 +2263,19 @@ export function LeadsBoard({
                   <span className="whitespace-nowrap text-xs text-ink-500">en curso</span>
                 ) : (
                   <div className="flex items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
-                    {view === "handoff" && (
+                    {/* Quien espera la validación no sale con «Resuelto»: sale
+                        sola cuando se valida o se rechaza el pago. Lo que sí
+                        hace falta es llegar a donde se valida. */}
+                    {view === "handoff" && lead.pending_voucher && (
+                      <a
+                        href={pendingVoucherHref(lead.pending_voucher.orderId)}
+                        onClick={(e) => e.stopPropagation()}
+                        className={opsButtonClass("primary", "sm")}
+                      >
+                        Ir a validar
+                      </a>
+                    )}
+                    {view === "handoff" && !lead.pending_voucher && (
                       <OpsButton
                         size="sm"
                         title="Sacar de Atender ahora (handoff resuelto)"

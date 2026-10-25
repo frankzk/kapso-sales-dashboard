@@ -38,6 +38,7 @@ import { FacetPill } from "@/components/facet-pill";
 import {
   IconClock,
   IconDownload,
+  IconMoney,
   IconPackage,
   IconSearch,
   IconTruck,
@@ -108,6 +109,7 @@ import {
 import { SALES_CHANNEL_OPTIONS } from "@/lib/sales-channel";
 import { courierDisplayName, dispatchedWithLabel, dispatchedWithShort } from "@/lib/dispatched-with";
 import { dispatchDateBadge } from "@/lib/dispatch-date";
+import { PENDING_VOUCHER_LABEL, awaitsPickupKey, pendingVoucherHint } from "@/lib/pending-voucher";
 import { buildMasterQuery } from "@/lib/master-query";
 import { receiveSearchValue, shouldSendSearch } from "@/lib/search-input-echo";
 import { OrderLineItems } from "@/components/order-line-items";
@@ -201,6 +203,7 @@ export function OrdersMasterBoard({
   sortKey,
   facets,
   agency,
+  pendingVoucherCount = null,
   canEdit,
   canExport = false,
   canOverride,
@@ -247,6 +250,12 @@ export function OrdersMasterBoard({
   };
   /** Contado en la base: sobre una página daría números falsos sin avisar. */
   agency: AgencySummary;
+  /**
+   * Pedidos con «Comprobante por validar» en las tiendas que se ven (MOM §16.1),
+   * leídos en vivo de `order_payments`. `null` = no se pudo leer: la píldora lo
+   * dice en vez de enseñar un cero que nadie contó.
+   */
+  pendingVoucherCount?: number | null;
   canEdit: boolean;
   /** Descargar el Excel (`data.export`, 08-10-2026): owner, admin o concedido en Equipo. */
   canExport?: boolean;
@@ -290,6 +299,14 @@ export function OrdersMasterBoard({
   useEffect(() => {
     if (abrir) setOpenId(abrir);
   }, [abrir]);
+  // La sección con la que se abre un pedido desde la TABLA: el que tiene un
+  // comprobante por validar entra directo en Cobro, donde está «Validar y
+  // enviar la clave» (MOM §16.1). Los demás, como siempre, por Operar.
+  const [rowFocus, setRowFocus] = useState<DrawerSectionId | undefined>(undefined);
+  const openOrder = useCallback((orderId: string, focus?: DrawerSectionId) => {
+    setRowFocus(focus);
+    setOpenId(orderId);
+  }, []);
   const [openWorkspace, setOpenWorkspace] = useState<DrawerWorkspaceView>("operar");
   const changeToken = useRef<string | null>(null);
   // `?abrir=<pedido>&seccion=historial` abre el drawer en la pestaña Actividad
@@ -606,7 +623,7 @@ export function OrdersMasterBoard({
                 storeName={storeName}
                 multiStore={multiStore}
                 showConfirmation={view === "por_confirmar"}
-                onOpen={setOpenId}
+                onOpen={openOrder}
                 openId={openId}
                 selected={selectedIds}
                 onToggleRow={toggleRow}
@@ -631,9 +648,13 @@ export function OrdersMasterBoard({
         </section>
       ) : (
         <>
-          {agencyHasActivity(agency) && (
-            <AgencyLine summary={agency} filters={filters} onFilter={(next) => patch(next)} />
-          )}
+          <AttentionLine
+            summary={agency}
+            showAgency={agencyHasActivity(agency)}
+            pendingVoucherCount={pendingVoucherCount}
+            filters={filters}
+            onFilter={(next) => patch(next)}
+          />
 
           {/* Las macroetapas son la navegación: siete cifras que filtran, con
               el tono del MOM (§25) en un cuadro que sirve de leyenda de las
@@ -892,7 +913,7 @@ export function OrdersMasterBoard({
                   storeName={storeName}
                   multiStore={multiStore}
                   showConfirmation={view === "por_confirmar"}
-                  onOpen={setOpenId}
+                  onOpen={openOrder}
                   openId={openId}
                   selected={selectedIds}
                   onToggleRow={toggleRow}
@@ -943,9 +964,10 @@ export function OrdersMasterBoard({
           storeName={storeName}
           storeDomain={storeDomain}
           storeWooSite={storeWooSite}
-          focusSection={openId === abrir ? focusSection : undefined}
+          focusSection={openId === abrir ? focusSection : rowFocus}
           onClose={() => {
             setOpenId(null);
+            setRowFocus(undefined);
             setOpenWorkspace("operar");
             // Se limpia la URL al cerrar: si no, recargar reabriría un pedido
             // que ya se atendió, y el enlace de la alerta quedaría pegado.
@@ -1064,21 +1086,34 @@ const CLEARED_PILL_FILTERS: Partial<MasterFilters> = {
 };
 
 /**
- * Seguimiento de agencia (§10). Es lo que evita la devolución: entre el 5 % y
- * el 6 % de estos pedidos termina devuelto por no recogerse a tiempo, así que
- * lo accionable es ver cuántos están disponibles y cuántos van a vencer.
+ * La línea de excepciones del Master: lo que está esperando a alguien.
  *
- * EL RECORRIDO EN CURSO, EN ORDEN FÍSICO, EN UNA SOLA LÍNEA: sale, viaja,
- * llega, se acerca a vencer, se devuelve. Sin total ni estados terminales
- * («Entregados», «Devueltos» ya no piden nada). Las dos primeras cifras se
- * leen; las tres últimas son filtros de un toque.
+ * Primero «Comprobante por validar» (MOM §16.1): la clienta ya pagó y espera a
+ * que una persona valide su comprobante —y, en agencia, su clave—. Va delante
+ * porque es lo único de la línea que se resuelve ya, sin esperar a un courier,
+ * y se ve aunque no haya nada por agencia. Se cuenta en todas las tiendas que
+ * se ven, como las de agencia; tocarla lista esos pedidos y cada fila abre su
+ * ficha en Cobro.
+ *
+ * Después, el seguimiento de agencia (§10). Es lo que evita la devolución:
+ * entre el 5 % y el 6 % de estos pedidos termina devuelto por no recogerse a
+ * tiempo, así que lo accionable es ver cuántos están disponibles y cuántos van
+ * a vencer. EL RECORRIDO EN CURSO, EN ORDEN FÍSICO, EN UNA SOLA LÍNEA: sale,
+ * viaja, llega, se acerca a vencer, se devuelve. Sin total ni estados
+ * terminales («Entregados», «Devueltos» ya no piden nada). Las dos primeras
+ * cifras se leen; las tres últimas son filtros de un toque.
  */
-function AgencyLine({
+function AttentionLine({
   summary,
+  showAgency,
+  pendingVoucherCount,
   filters,
   onFilter,
 }: {
   summary: AgencySummary;
+  /** Solo si hay algo en curso por agencia; si no, la línea lleva solo la píldora de cobro. */
+  showAgency: boolean;
+  pendingVoucherCount: number | null;
   filters: MasterFilters;
   onFilter: (next: Partial<MasterFilters>) => void;
 }) {
@@ -1092,48 +1127,75 @@ function AgencyLine({
     // `justify-between`: en una línea, cifras a la izquierda y píldoras a la
     // derecha; si no caben, cada parte empieza a la izquierda en su renglón.
     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-      <p className="min-w-0 text-[13px] leading-5 text-ink-500">
-        <span className="font-semibold text-ink-700">Envíos por agencia</span> · Shalom y Olva ·{" "}
-        {num(summary.pendienteDeEnvio)} {summary.pendienteDeEnvio === 1 ? "pendiente" : "pendientes"} de envío ·{" "}
-        {num(summary.enTransito)} en tránsito
-      </p>
-      <div role="group" aria-label="Recojo en agencia" className="flex flex-wrap items-center gap-2">
-        <AttentionPill
-          icon={IconPackage}
-          label="Disponibles para recojo"
-          count={summary.disponibles}
-          active={disponiblesActive}
-          hint="Ya llegaron a la agencia y esperan al cliente. Toca para listarlos."
-          onClick={() =>
-            onFilter({
-              pickupStates: disponiblesActive
-                ? new Set()
-                : new Set(["disponible_para_recojo", "pendiente_de_recojo"]),
-              expiringSoon: false,
-            })
-          }
-        />
-        <AttentionPill
-          icon={IconClock}
-          label="Próximos a vencer"
-          count={summary.proximosAVencer}
-          active={filters.expiringSoon}
-          hint="El plazo de recojo está por vencer: si nadie recoge, la agencia lo devuelve."
-          onClick={() => onFilter({ expiringSoon: !filters.expiringSoon, pickupStates: new Set() })}
-        />
-        <AttentionPill
-          icon={IconUndo}
-          label="Retorno iniciado"
-          count={summary.retornoIniciado}
-          active={retornoActive}
-          hint="La agencia ya inició la devolución."
-          onClick={() =>
-            onFilter({
-              pickupStates: retornoActive ? new Set() : new Set(["retorno_iniciado"]),
-              expiringSoon: false,
-            })
-          }
-        />
+      {showAgency && (
+        <p className="min-w-0 text-[13px] leading-5 text-ink-500">
+          <span className="font-semibold text-ink-700">Envíos por agencia</span> · Shalom y Olva ·{" "}
+          {num(summary.pendienteDeEnvio)} {summary.pendienteDeEnvio === 1 ? "pendiente" : "pendientes"} de envío ·{" "}
+          {num(summary.enTransito)} en tránsito
+        </p>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        <div role="group" aria-label="Cobro" className="flex items-center">
+          {pendingVoucherCount === null ? (
+            // Una lectura fallida no es un cero (MOM §12): se dice, y la
+            // píldora no se pinta para no afirmar que nadie espera.
+            <span className="text-[13px] font-medium text-warn-fg">
+              No se pudieron leer los comprobantes por validar. Recarga para reintentar.
+            </span>
+          ) : (
+            <AttentionPill
+              icon={IconMoney}
+              label={PENDING_VOUCHER_LABEL}
+              count={pendingVoucherCount}
+              active={filters.pendingVoucher}
+              hint="La clienta ya mandó su pago y espera que alguien lo valide. Toca para listarlos: cada uno se abre en Cobro."
+              onClick={() => onFilter({ pendingVoucher: !filters.pendingVoucher })}
+            />
+          )}
+        </div>
+        {showAgency && (
+          <>
+            <span aria-hidden className="mx-0.5 h-5 w-px shrink-0 bg-line-strong" />
+            <div role="group" aria-label="Recojo en agencia" className="flex flex-wrap items-center gap-2">
+              <AttentionPill
+                icon={IconPackage}
+                label="Disponibles para recojo"
+                count={summary.disponibles}
+                active={disponiblesActive}
+                hint="Ya llegaron a la agencia y esperan al cliente. Toca para listarlos."
+                onClick={() =>
+                  onFilter({
+                    pickupStates: disponiblesActive
+                      ? new Set()
+                      : new Set(["disponible_para_recojo", "pendiente_de_recojo"]),
+                    expiringSoon: false,
+                  })
+                }
+              />
+              <AttentionPill
+                icon={IconClock}
+                label="Próximos a vencer"
+                count={summary.proximosAVencer}
+                active={filters.expiringSoon}
+                hint="El plazo de recojo está por vencer: si nadie recoge, la agencia lo devuelve."
+                onClick={() => onFilter({ expiringSoon: !filters.expiringSoon, pickupStates: new Set() })}
+              />
+              <AttentionPill
+                icon={IconUndo}
+                label="Retorno iniciado"
+                count={summary.retornoIniciado}
+                active={retornoActive}
+                hint="La agencia ya inició la devolución."
+                onClick={() =>
+                  onFilter({
+                    pickupStates: retornoActive ? new Set() : new Set(["retorno_iniciado"]),
+                    expiringSoon: false,
+                  })
+                }
+              />
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -2023,7 +2085,8 @@ function MasterTable({
   storeName: (id: string) => string;
   multiStore: boolean;
   showConfirmation: boolean;
-  onOpen: (orderId: string) => void;
+  /** `focus`: la sección con la que se abre la ficha (Cobro, si espera un comprobante). */
+  onOpen: (orderId: string, focus?: DrawerSectionId) => void;
   /** El pedido cuyo drawer está abierto: su fila se resalta detrás del panel. */
   openId: string | null;
   selected: Set<string>;
@@ -2099,10 +2162,13 @@ function MasterTable({
             const since = r.macro_since ?? r.status_since;
             const salioCon = r.dispatched_with ?? [];
             const showCourierCounts = Boolean(r.last_courier) || r.attempt_count > 0 || r.courier_count > 1 || salioCon.length > 0;
+            // Con un comprobante por validar, la ficha se abre en Cobro: es
+            // donde está «Validar y enviar la clave» (MOM §16.1).
+            const focus: DrawerSectionId | undefined = r.pending_voucher ? "pagos" : undefined;
             return (
               <tr
                 key={r.id}
-                onClick={() => onOpen(r.order_id)}
+                onClick={() => onOpen(r.order_id, focus)}
                 aria-current={isOpen ? "true" : undefined}
                 className={cn(
                   "cursor-pointer transition-colors duration-100 max-xl:grid max-xl:grid-cols-[1.75rem_minmax(0,1fr)_auto] max-xl:gap-x-2 max-xl:gap-y-1 max-xl:px-4 max-xl:py-3",
@@ -2135,9 +2201,9 @@ function MasterTable({
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      onOpen(r.order_id);
+                      onOpen(r.order_id, focus);
                     }}
-                    title="Abrir la ficha del pedido"
+                    title={focus ? "Abrir la ficha del pedido en Cobro" : "Abrir la ficha del pedido"}
                     className={cn(
                       "block max-w-full truncate text-left leading-5 underline-offset-2 hover:underline",
                       isOpen ? "font-semibold text-brand-700" : "font-medium text-ink-900",
@@ -2247,6 +2313,19 @@ function MasterTable({
                         </Badge>
                       );
                     })()}
+                    {/* Se apaga solo al validar o rechazar el pago: no hay
+                        nada que desmarcar a mano (MOM §16.1). */}
+                    {r.pending_voucher && (
+                      <Badge
+                        tone="warn"
+                        wrap
+                        className="xl:mt-0.5"
+                        title={pendingVoucherHint(r.pending_voucher, awaitsPickupKey(r))}
+                      >
+                        <IconMoney aria-hidden className="size-3 shrink-0" />
+                        {PENDING_VOUCHER_LABEL}
+                      </Badge>
+                    )}
                   </div>
                 </td>
                 {showConfirmation && (
