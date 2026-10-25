@@ -240,8 +240,15 @@ export interface CourierBlockedOrder {
   orderName: string;
   storeName: string;
   customerName: string;
+  /** Para que la búsqueda de «Desde la lista» lo encuentre por teléfono (24-10-2026). */
+  customerPhone: string | null;
   district: string;
   reason: BlockedReason;
+  /**
+   * Con `tarifa_faltante`, el servicio también está pausado en el distrito: al
+   * ponerle tarifa seguiría sin salir (#KP141876, Ancón, 24-10-2026).
+   */
+  paused?: boolean;
 }
 
 export interface CourierOperationsSnapshot {
@@ -757,15 +764,17 @@ async function loadCourierOperations(
   const blocked: CourierBlockedOrder[] = [];
   const available: CourierAvailableOrder[] = [];
   const returnable: CourierReturnableOrder[] = [];
-  const block = (order: QueueOrderRow, reason: BlockedReason) => {
+  const block = (order: QueueOrderRow, reason: BlockedReason, extra: { paused?: boolean } = {}) => {
     blockedCount += 1;
     blocked.push({
       orderId: order.order_id,
       orderName: order.order_name ?? "Pedido sin código",
       storeName: storeName.get(order.store_id) ?? agreementByStore.get(order.store_id)?.client_label ?? "Tienda",
       customerName: order.customer_name ?? "Cliente sin nombre",
+      customerPhone: order.customer_phone ?? null,
       district: order.district ?? "Sin distrito",
       reason,
+      ...(extra.paused ? { paused: true } : {}),
     });
   };
 
@@ -823,7 +832,9 @@ async function loadCourierOperations(
       day,
     });
     if (tariff.kind === "missing" || availability.status === "paused") {
-      block(order, tariff.kind === "missing" ? "tarifa_faltante" : "servicio_pausado");
+      // El motivo sigue siendo uno; con los dos, la búsqueda de la lista dice
+      // también la pausa, para que ponerle tarifa no sea el único paso.
+      block(order, tariff.kind === "missing" ? "tarifa_faltante" : "servicio_pausado", { paused: tariff.kind === "missing" && availability.status === "paused" });
       continue;
     }
     const program = programByOrder.get(order.order_id) ?? null;

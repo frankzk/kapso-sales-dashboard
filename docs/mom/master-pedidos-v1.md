@@ -12410,6 +12410,48 @@ palabras:
   ninguna: «No está en la caja de Roy ni en otra. Agrégalo primero a una
   caja.» El anulado sigue diciéndose antes que esto.
 
+**Buscar en «Desde la lista» dice dónde está lo que no está por asignar
+(24-10-2026).** El owner buscó #KP141876 para reprogramarlo y la lista respondió
+«Nada por asignar con ese filtro.». Estaba en «Sin condiciones» (76 ese día):
+Ancón no tiene tarifa y está pausado para Grupo GF. Ahora, si la búsqueda no
+encuentra nada en la lista pero el texto nombra un pedido que el tablero ya
+tiene en otro sitio, el vacío lo dice debajo, un aviso por pedido con su botón:
+
+- **Cómo se reconoce.** Por número de pedido sin «#» ni mayúsculas, también una
+  parte («141876»), o por teléfono como la búsqueda de la lista (cuatro dígitos
+  o más). Con menos de cuatro caracteres no se busca fuera. Hasta tres avisos,
+  el número entero primero; los demás se cuentan («Y 2 pedidos más fuera de la
+  lista con ese texto…»).
+- **«Sin condiciones»**, en ámbar, con el motivo y el distrito: «#KP141876 está
+  en «Sin condiciones»: tarifa faltante para Ancón. Ponle tarifa en Tarifario.»
+  y «Abrir Tarifario». Si además el servicio está pausado ahí, lo dice («…, y el
+  servicio está pausado ahí. Ponle tarifa y reanuda el servicio en Tarifario.»):
+  el motivo sigue siendo uno (`tarifa_faltante`), y la foto lleva aparte
+  `paused`. Sin el Tarifario (§29.10), dice que lo corrige quien administra
+  Grupo GF y abre la hoja «Sin condiciones» con ese pedido primero y resaltado.
+  Distrito inválido abre la ficha en Información; sin salida armable, ya en una
+  caja de despacho y los motivos de un «Por reprogramar» que no sale, la
+  ficha en Operar.
+- **Escondido por un apartado o un filtro**: «#KP300001 está por asignar en
+  «Programados después» (programado mar 27/10).» (o «…, pero lo esconden los
+  filtros de la lista»), con «Ver en «…»», que abre ese apartado sin los demás
+  filtros y deja el texto. Un «No entregado» que sigue en una caja lleva «Quitar
+  filtros».
+- **Ya no está por asignar**: «#KP500001 ya no está por asignar: está en la caja
+  de Roy del sáb 24/10 (carga 2), lo lleva (En curso · En reparto).», o, si se
+  está cerrando, «… ya no se asigna: está en «Por cerrar · …»». «Ver en
+  seguimiento» abre su etapa (la lista de seguimiento de arriba).
+- **«En devolución»** («… vuelve con Alexis (caja del …) y el pedido sale con
+  …») abre esa hoja, y **«Devoluciones»** su escáner.
+
+Sin lecturas nuevas: es la foto que ya trae Despacho del día (cola, seguimiento,
+«Sin condiciones», «En devolución», «Devoluciones»), y la fila de «Sin
+condiciones» suma el teléfono y `paused`, que ya se leían. Un pedido que el
+tablero no tiene (otra cobertura, otra etapa) sigue con «Nada por asignar con
+ese filtro.». Nada de esto cambia la cola ni las acciones. Lógica pura en
+`lib/dispatch-day.ts` (`locateOutsideList`, `matchesOrderSearch`), probada en
+`test/despacho-busqueda-donde-esta.test.ts`.
+
 ### 29.14 Rutas: una sola lista y la caja al lado (19-09-2026)
 
 **Antes** la pestaña «Rutas» tenía dos subpestañas —«Cajas y cotejos» (solo
