@@ -69,15 +69,16 @@ export function ImportReview({
             : "") +
           master;
         if (fileRef.current) fileRef.current.value = "";
-        // El auto-vínculo contra Shopify en vivo es específico de Aliclik (usa la
-        // referencia del campo NOTA); el resto de couriers traen el nº de pedido
-        // en su propia columna y ya quedan vinculados en la ingesta.
+        // El auto-vínculo (busca en `orders` de Kapta, MOM §38.12) es específico
+        // de Aliclik (usa la referencia del campo NOTA); el resto de couriers
+        // traen el nº de pedido en su propia columna y ya quedan vinculados en
+        // la ingesta.
         if (json.courier === "aliclik" && json.unmatchedCount > 0) {
           setMsg(`${base} Buscando coincidencias…`);
           const r = await runAutoLinkLoop(({ linked }) =>
             setMsg(`${base} Vinculando… (${linked} vinculados)`),
           );
-          // Now that guides carry their Shopify order, re-evaluate Fenix
+          // Now that guides carry their order, re-evaluate Fenix
           // eligibility off the order's products (best-effort; admins only).
           await recomputeFenixEligibility().catch(() => {});
           setMsg(
@@ -203,9 +204,9 @@ async function runAutoLinkLoop(
 ): Promise<{ processed: number; linked: number; retry: number; error?: string }> {
   let processed = 0;
   let linked = 0;
-  // Los que no se pudieron buscar porque Shopify falló: quedan sin revisar y
-  // entran en la próxima pasada. Cuentan los de la última vuelta, que son los
-  // que siguen pendientes.
+  // Los que no se pudieron buscar o vincular porque la base falló: quedan sin
+  // revisar y entran en la próxima pasada. Cuentan los de la última vuelta, que
+  // son los que siguen pendientes.
   let retry = 0;
   for (;;) {
     const r = await processSuggestionBatch();
@@ -219,12 +220,13 @@ async function runAutoLinkLoop(
   return { processed, linked, retry };
 }
 
-/** «3 guías no se pudieron buscar en Shopify…», o nada. */
+/** «3 guías no se pudieron buscar…», o nada. Es la base de Kapta que falló: el
+ *  auto-vínculo ya no le pregunta a Shopify (MOM §38.12, 25-10-2026). */
 function retryNote(retry: number): string {
   if (retry <= 0) return "";
   return retry === 1
-    ? "1 guía no se pudo buscar en Shopify; se vuelve a buscar la próxima vez."
-    : `${retry} guías no se pudieron buscar en Shopify; se vuelven a buscar la próxima vez.`;
+    ? "1 guía no se pudo buscar; se vuelve a buscar la próxima vez."
+    : `${retry} guías no se pudieron buscar; se vuelven a buscar la próxima vez.`;
 }
 
 /**

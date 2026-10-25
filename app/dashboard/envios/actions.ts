@@ -1863,14 +1863,14 @@ export async function linkShipmentToShopifyOrder(
 }
 
 /**
- * Process one chunk of the "Revisión" queue against live Shopify: for each
- * unchecked unmatched shipment, search (routed by store like the live picker)
- * and — only when exactly one candidate's phone cross-validates the shipment's
- * own phone (NOTA reference + same phone) — LINK it directly to that Shopify
- * order (falling back to a saved suggestion only if the link's fetch/upsert
- * fails). Admin-gated: it fans out many live Shopify calls and writes across
- * potentially hundreds of shipments in one org, same category as
- * upsertFenixStock's bulk-maintenance gate.
+ * Process one chunk of the "Revisión" queue against Kapta's `orders` (Shopify
+ * and WooCommerce orders alike; never live Shopify — owner's decision of
+ * 25-10-2026, MOM §38.12): for each unchecked unmatched shipment, search
+ * (routed by store like the live picker) and — only when exactly one
+ * candidate's phone cross-validates the shipment's own phone (NOTA reference +
+ * same phone) — LINK it directly to that order. Admin-gated: it fans out many
+ * queries and writes across potentially hundreds of shipments in one org,
+ * same category as upsertFenixStock's bulk-maintenance gate.
  */
 export async function processSuggestionBatch(): Promise<
   { error: string } | BatchResult
