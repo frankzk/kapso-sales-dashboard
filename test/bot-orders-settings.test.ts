@@ -112,8 +112,11 @@ describe("la página y la sección", () => {
     const read = /\.from\("bot_order_secrets"\)\s*\.select\("([^"]+)"\)/.exec(page);
     expect(read?.[1]).toBe("created_at, rotated_at, last_used_at, last_outcome, last_error, last_error_at");
     expect(page).toContain("endpointUrl: botOrdersEndpointUrl(siteUrl || env.siteUrl(), storeId)");
+    // La consulta de un pedido que ya existe (contrato, sección 10): la misma dirección + /lookup.
+    expect(page).toContain("lookupUrl: botOrderLookupUrl(siteUrl || env.siteUrl(), storeId)");
     const section = readFileSync(resolve(process.cwd(), "components/bot-orders-settings-section.tsx"), "utf8");
-    expect(section).not.toMatch(/^import[^;]*(?:from "@\/lib\/bot-orders"|"node:crypto")/m);
+    expect(section).not.toMatch(/^import[^;]*(?:from "@\/lib\/bot-orders?(?:-lookup)?"|from "@\/lib\/bot-order-lookup"|"node:crypto")/m);
+    expect(section).toContain("<CodeLine>{data.lookupUrl}</CodeLine>");
     expect(section).toContain('from "@/app/dashboard/[storeId]/settings/bot-orders-actions"');
     const settings = readFileSync(resolve(process.cwd(), "components/store-settings.tsx"), "utf8");
     expect(settings).toContain('{ id: "bot-pedidos", label: "Bot de Kapso → pedidos" }');
