@@ -622,6 +622,113 @@ describe("«Generar pedido» en WooCommerce: un POST sin respuesta o un doble cl
     expect(h.db.rows("bot_order_requests")).toHaveLength(1);
   });
 
+  it("otro clic mientras la primera llamada registra la venta: no la registra dos veces (el candado se cierra con la venta)", async () => {
+    setup("woocommerce");
+    const shop = fakeWooShop({ products: CATALOG });
+    vi.stubGlobal("fetch", shop.fetchImpl);
+    // La pantalla ya mostró un error de red y la asesora pulsa otra vez justo
+    // cuando la primera llamada, con el pedido ya creado, va a escribir la fila
+    // local: esa escritura espera a que la segunda llamada termine.
+    let abrir!: () => void;
+    const compuerta = new Promise<void>((r) => (abrir = r));
+    let segunda: ReturnType<typeof generateOrder> | null = null;
+    const from = h.db.from.bind(h.db);
+    h.db.from = ((table: string) => {
+      const q = from(table);
+      if (table !== "orders" || segunda) return q;
+      const then = q.then.bind(q);
+      q.then = ((res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) => {
+        if (q.op !== "upsert" || segunda) return then(res, rej);
+        segunda = generateOrder(LEAD, venta({ sendConfirmation: true }));
+        return compuerta.then(() => then(res, rej));
+      }) as typeof q.then;
+      return q;
+    }) as typeof h.db.from;
+    const primera = generateOrder(LEAD, venta({ sendConfirmation: true }));
+    await vi.waitFor(() => expect(segunda).not.toBeNull());
+    const b = await segunda!;
+    abrir();
+    const a = await primera;
+    expect(a.error).toBeUndefined();
+    expect(a.generatedOrder?.id).toBe("wc-kp-501");
+    expect(b.error).toMatch(/^Pedido NO generado todavía: este mismo pedido ya se está generando/);
+    expect(shop.calls.filter((c) => c.method === "POST" && c.path === "/orders")).toHaveLength(1);
+    expect(h.db.rows("order_sales")).toHaveLength(1);
+    expect(h.db.rows("lead_calls").filter((c) => c.kind === "sale")).toHaveLength(1);
+    expect(guardRow()).toMatchObject({ status: "done", attempts: 1, woo_order_id: 501, order_name: "#KP200501" });
+    // Ya cerrado con la venta: un clic más lo retoma enseguida y lo da por generado, sin registrarla otra vez.
+    const otra = await generateOrder(LEAD, venta());
+    expect(otra.notice).toContain("Pedido ya generado ✓ · #KP200501");
+    expect(h.db.rows("lead_calls").filter((c) => c.kind === "sale")).toHaveLength(1);
+  });
+
+  it("si la llamada termina sin registrar la venta (la fila local falló), el candado igual se cierra y el reintento la registra", async () => {
+    setup("woocommerce");
+    const shop = fakeWooShop({ products: CATALOG });
+    vi.stubGlobal("fetch", shop.fetchImpl);
+    let fallar = true;
+    h.db.failOn = (table, op) => (fallar && table === "orders" && op === "upsert" ? { message: "canceling statement due to statement timeout" } : null);
+    const first = await generateOrder(LEAD, venta());
+    expect(first.error).toContain("generado en WooCommerce, pero no se pudo registrar localmente");
+    expect(guardRow()).toMatchObject({ status: "done", woo_order_id: 501 });
+    fallar = false;
+    const again = await generateOrder(LEAD, venta());
+    expect(again.error).toBeUndefined();
+    expect(again.generatedOrder?.id).toBe("wc-kp-501");
+    expect(shop.calls.filter((c) => c.method === "POST" && c.path === "/orders")).toHaveLength(1);
+    expect(h.db.rows("order_sales")).toHaveLength(1);
+  });
+
+  it("el pedido de un intento se lee por su woo_order_id aunque tenga más de 2 horas (fuera de la búsqueda): se adopta, sin POST", async () => {
+    setup("woocommerce");
+    const hace3h = new Date(Date.now() - 3 * 3_600_000);
+    const shop = fakeWooShop({ products: CATALOG, now: () => hace3h });
+    vi.stubGlobal("fetch", shop.fetchImpl);
+    const first = await generateOrder(LEAD, venta());
+    expect(first.generatedOrder?.id).toBe("wc-kp-501");
+    // El intento terminó hace 3 horas (con su pedido anotado) y la asesora vuelve a pulsar.
+    Object.assign(guardRow(), { claimed_at: hace3h.toISOString(), created_at: hace3h.toISOString(), finished_at: hace3h.toISOString() });
+    const calls = shop.calls.length;
+    const res = await generateOrder(LEAD, venta());
+    expect(res.error).toBeUndefined();
+    expect(res.notice).toContain("Pedido ya generado ✓ · #KP200501");
+    expect(shop.calls.slice(calls).map((c) => `${c.method} ${c.path}`)).toContain("GET /orders/501");
+    expect(shop.calls.filter((c) => c.method === "POST" && c.path === "/orders")).toHaveLength(1);
+    expect(shop.orders.size).toBe(1);
+    expect(h.db.rows("order_sales")).toHaveLength(1);
+    expect(guardRow()).toMatchObject({ status: "done", attempts: 2, woo_order_id: 501 });
+  });
+
+  it("dos clics retoman a la vez un candado vencido: uno solo llega a WooCommerce, el otro pierde por el claim_token", async () => {
+    const hace = new Date(Date.now() - BOT_ORDER_CLAIM_TTL_MS - 5_000).toISOString();
+    setup("woocommerce", leadRow(), {
+      bot_order_requests: [
+        { id: "g-1", store_id: STORE, request_id: KEY, body_hash: "0".repeat(64), status: "processing", claim_token: "t-1", claimed_at: hace, created_at: hace, attempts: 1, woo_order_id: null },
+      ],
+    });
+    const shop = fakeWooShop({ products: CATALOG });
+    let abrir!: () => void;
+    const compuerta = new Promise<void>((r) => (abrir = r));
+    vi.stubGlobal("fetch", (async (input: RequestInfo | URL, init?: RequestInit) => {
+      await compuerta;
+      return shop.fetchImpl(input, init);
+    }) as typeof fetch);
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const a = generateOrder(LEAD, venta());
+    const b = generateOrder(LEAD, venta());
+    const primera = await Promise.race([a, b]);
+    expect(primera.error).toMatch(/este mismo pedido ya se está generando/);
+    abrir();
+    const res = await Promise.all([a, b]);
+    expect(res.filter((r) => !r.error)).toHaveLength(1);
+    expect(shop.calls.filter((c) => c.method === "POST")).toHaveLength(1);
+    expect(shop.orders.size).toBe(1);
+    expect(h.db.rows("order_sales")).toHaveLength(1);
+    const lineas = info.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith("[woo-form-guard]"));
+    expect(lineas.filter((l) => l.includes('"event":"retaken"'))).toHaveLength(1);
+    expect(lineas.some((l) => l.includes('"lost_retake":true'))).toBe(true);
+  });
+
   it("un intento viejo que no terminó y no sabe qué pedido creó: no se crea otro", async () => {
     const hace = new Date(Date.now() - BOT_ORDER_RETAKE_MAX_AGE_MS - 60_000).toISOString();
     setup("woocommerce", leadRow(), {

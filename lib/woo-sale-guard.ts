@@ -31,7 +31,10 @@
 // formulario nuevo es otro intento y ahí manda el aviso de duplicado. Y un
 // intento ya terminado (`done`) no se devuelve desde la base: se retoma y
 // `createWooSaleOrder` lee su pedido por `woo_order_id` y lo adopta, para que
-// `generateWooOrder` registre la venta si faltaba.
+// `generateWooOrder` registre la venta si faltaba. Por eso el candado se
+// cierra recién con la venta registrada (`order_sales` y la nota «sale»): hasta
+// ahí sigue `processing` y otro clic recibe `busy` en vez de registrarla dos
+// veces.
 //
 // Nunca datos de la clienta en el registro: la tienda, el comienzo del sha256 de
 // la llave y lo que pasó.
@@ -306,7 +309,12 @@ export function rearmWooFormClaim(admin: SupabaseClient, claim: WooFormClaim, no
   return writeClaim(admin, claim, { claimed_at: new Date(now()).toISOString(), error_code: "woocommerce_unavailable" }, "guard_rearm", ms);
 }
 
-/** El pedido está vivo: el candado se cierra con él (`done`), ANTES de la fila local. */
+/**
+ * El pedido está vivo y su venta ya quedó registrada (o la llamada termina por
+ * otro camino): el candado se cierra con él (`done`). No antes: un `done` se
+ * retoma enseguida, y un clic que lo retomara antes de `order_sales` adoptaría
+ * el pedido sin ver la venta y la registraría otra vez.
+ */
 export function finishWooFormClaim(
   admin: SupabaseClient,
   claim: WooFormClaim,

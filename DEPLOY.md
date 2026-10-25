@@ -4851,5 +4851,8 @@ bot no cuenta las filas `form-`.
 
    Un `processing` de hace más de unos minutos es un POST que no contestó y que
    nadie reintentó: revisar en WooCommerce si quedó el pedido (pendiente de
-   pago) antes de generar otro desde un formulario nuevo.
+   pago) antes de generar otro desde un formulario nuevo. Con `woo_order_id`,
+   el pedido existe y la llamada se cortó antes de registrar la venta (el
+   candado se cierra recién con `order_sales`): volver a pulsar «Generar
+   pedido» en ese formulario lo adopta y registra la venta.
 

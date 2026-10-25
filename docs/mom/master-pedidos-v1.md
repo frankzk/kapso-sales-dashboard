@@ -16620,9 +16620,10 @@ cuando la pantalla ya mostró un error de red y la asesora vuelve a pulsar. Por
 eso el formulario y el bot tienen el candado en la base, por (tienda, id del
 intento).
 
-**El candado del formulario (25-10-2026).** Desde el domingo 25-10 las
-asesoras de Aurela crean sus pedidos en WooCommerce, en un servidor nuevo. «Generar
-pedido» (y «Venta telefónica») usa **el mismo candado que el bot**
+**El candado del formulario (25-10-2026).** Cuando una tienda pasa a crear
+sus pedidos en WooCommerce («Crear los pedidos nuevos en», Aurela y Kenku en
+el corte del 27-10), «Generar pedido» (y «Venta telefónica») usa **el mismo
+candado que el bot**
 (`bot_order_requests`, 0277, ya aplicada: sin migración nueva), con la llave
 `form-<id del intento>` (`wooFormGuardKey`; si no cabe en los 64 caracteres de
 la 0277, `form-` y el comienzo de su sha256), los mismos plazos
@@ -16657,9 +16658,18 @@ id» ni tope por minuto. La huella de cada intento queda en `body_hash`.
 
 **Cómo termina.** Apenas existe el pedido, su id queda en el candado
 (`noteWooFormOrder`). Vivo, el candado se cierra con él (`done`, con el
-número, el total y la moneda: `finishWooFormClaim`) **antes** de la fila
-local. **Un POST sin respuesta no suelta el candado** (`rearmWooFormClaim`): se
-vuelve a armar desde ese momento y la asesora lee «… WooCommerce pudo haber
+número, el total y la moneda: `finishWooFormClaim`) **recién cuando la venta
+quedó registrada** (la fila local, `order_sales` y la nota «sale»;
+`onSaleRecorded`, antes de la confirmación por WhatsApp), o cuando la llamada
+termina por otro camino (sin fila local, por ejemplo). A diferencia del bot,
+no antes de la fila local: un `done` se retoma enseguida, y un segundo clic
+que llegara entre el cierre y `order_sales` adoptaría el pedido sin ver la
+venta de la llamada que sigue corriendo y la registraría otra vez (dos notas
+de venta y dos WhatsApp de confirmación); con el candado todavía
+`processing`, recibe «ya se está generando».
+
+**Un POST sin respuesta no suelta el candado** (`rearmWooFormClaim`): se vuelve
+a armar desde ese momento y la asesora lee «… WooCommerce pudo haber
 creado el pedido igual … espera 2 minutos y vuelve a pulsar «Generar pedido».
 Kapta lo busca y, si se creó, lo retoma en vez de crear otro.»
 (`wooFormPostUnansweredText`); el reintento después del plazo encuentra el
@@ -16671,8 +16681,10 @@ WooCommerce: «no se pudo reservar este pedido en Kapta …»
 (`WOO_FORM_DB_ERROR_TEXT`). Sin la 0277 (una base de pruebas) sigue como antes,
 solo con la búsqueda, y lo deja en el registro (`[woo-form-guard]`
 `unguarded`). Si cerrar o soltar el candado falla, vence solo: el reintento lee
-el pedido por su id. Del candado a su cierre pasan como mucho los 45 s de la
-venta más los topes de la base: menos que su plazo de 120 s.
+el pedido por su id. Del candado a su cierre pasan los 45 s de la venta como
+mucho, los topes de la base y las escrituras de la fila local y de la venta
+(sin la confirmación por WhatsApp, que va después): menos que su plazo de
+120 s.
 
 **Tiempos.** Cada llamada tiene su tope —buscar el intento 6 s, crear 15 s,
 comprobar un producto 5 s, pasar a `processing` 10 s, releer, borrar o anular

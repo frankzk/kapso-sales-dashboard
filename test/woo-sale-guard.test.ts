@@ -127,6 +127,21 @@ describe("tomar el candado", () => {
     expect(r.kind === "claim" && r.claim.wooOrderId).toBe(777);
   });
 
+  it("dos retoman a la vez un processing vencido: solo gana quien todavía ve el token que leyó, el otro queda busy", async () => {
+    const first = await claim();
+    if (first.kind !== "claim") throw new Error(first.kind);
+    await noteWooFormOrder(db.client(), first.claim, 501);
+    t += BOT_ORDER_CLAIM_TTL_MS + 1;
+    const events: { event: string; data: Record<string, unknown> }[] = [];
+    const log = (event: string, data: Record<string, unknown>) => events.push({ event, data });
+    const one = () => claimWooFormSale({ admin: db.client(), storeId: STORE, requestId: REQ, bodyHash: HASH_A, now, log });
+    const [a, b] = await Promise.all([one(), one()]);
+    expect([a.kind, b.kind].sort()).toEqual(["busy", "claim"]);
+    expect(row().attempts).toBe(2);
+    expect(events.filter((e) => e.event === "retaken")).toHaveLength(1);
+    expect(events.find((e) => e.event === "busy")?.data).toMatchObject({ lost_retake: true });
+  });
+
   it("dos a la vez: uno toma el candado, el otro choca con su fila (23505) y queda busy", async () => {
     const [a, b] = await Promise.all([claim(), claim()]);
     expect([a.kind, b.kind].sort()).toEqual(["busy", "claim"]);
@@ -167,7 +182,12 @@ describe("los textos y los plazos", () => {
 
   it("el MOM lo cuenta con los nombres del código", () => {
     const flat = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8").replace(/\s+/g, " ");
-    expect(flat).toContain("**El candado del formulario (25-10-2026).**");
+    expect(flat).toContain("**El candado del formulario (25-10-2026).** Cuando una tienda pasa a crear sus pedidos en WooCommerce");
+    // El estado de las tiendas no se afirma aquí: Aurela y Kenku pasan en el corte del 27-10.
+    expect(flat).not.toContain("Desde el domingo 25-10 las asesoras de Aurela crean sus pedidos en WooCommerce");
+    // El candado se cierra con la venta registrada, no antes de la fila local.
+    expect(flat).toContain("(`done`, con el número, el total y la moneda: `finishWooFormClaim`) **recién cuando la venta quedó registrada**");
+    expect(flat).toContain("`onSaleRecorded`, antes de la confirmación por WhatsApp");
     expect(flat).toContain("`form-<id del intento>` (`wooFormGuardKey`");
     expect(flat).toContain("**Un POST sin respuesta en «Generar pedido»:** **hecho (25-10-2026)**");
     expect(flat).not.toContain("El bot ya espera (38.13); el formulario todavía no.");
