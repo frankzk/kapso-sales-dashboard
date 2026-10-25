@@ -298,6 +298,12 @@ export interface InvoiceOrderFacts {
   /** Las empresas emisoras de la organización. */
   issuers: InvoiceIssuer[];
   existing: InvoiceExisting;
+  /**
+   * Solo en un pedido de WooCommerce (`orders.platform`, MOM §35.11): de dónde
+   * se relee antes de emitir y cómo se dicen sus motivos. Las reglas no lo
+   * miran. Sin él, el pedido es de Shopify, como siempre.
+   */
+  platform?: "woocommerce";
 }
 
 // ── Motivos ──────────────────────────────────────────────────────────────────
@@ -322,9 +328,13 @@ export const INVOICE_REASONS = [
   "ya_simulado",
   "error_previo",
   "sin_conexion",
-  // La lectura de Shopify (lib/invoicing/shopify-order.ts).
+  // La lectura de Shopify (lib/invoicing/shopify-order.ts) y la de WooCommerce
+  // (lib/invoicing/woocommerce-order.ts, MOM §35.11), que usa los mismos.
   "no_encontrado",
   "sin_token_shopify",
+  // La tienda no tiene las claves de la API de WooCommerce (§35.11): el
+  // `sin_token_shopify` de un pedido de WooCommerce.
+  "sin_claves_woo",
   "prueba",
   "editado",
   "cantidad_editada",
@@ -388,6 +398,7 @@ export const INVOICE_REASON_LABEL: Record<InvoiceReason, string> = {
   sin_conexion: "El RUC no tiene token o su prueba de conexión no confirmó el RUC.",
   no_encontrado: "Shopify no devolvió el pedido.",
   sin_token_shopify: "La tienda no tiene conexión con Shopify.",
+  sin_claves_woo: "La tienda no tiene las claves de la API de WooCommerce.",
   prueba: "Es un pedido de prueba en Shopify.",
   editado: "El pedido fue editado en Shopify.",
   cantidad_editada: "Se cambió la cantidad de una línea en Shopify.",
@@ -415,6 +426,32 @@ export const INVOICE_REASON_LABEL: Record<InvoiceReason, string> = {
     "Quedó pagado antes de «Emitir desde»: falta confirmar que en SimpleFact no tiene boleta.",
   no_produccion: "Emitir solo funciona en producción: este despliegue es una vista previa.",
 };
+
+/**
+ * Los motivos cuya frase nombra a Shopify, dichos de un pedido de WooCommerce
+ * (MOM §35.11). El código es el mismo —el barrido, la base y el panel los
+ * tratan igual—; solo cambia de quién se habla. Los demás motivos no nombran
+ * una plataforma, o la lectura de WooCommerce no los da (`prueba`, `editado`…).
+ */
+export const WOO_INVOICE_REASON_LABEL: Readonly<Partial<Record<InvoiceReason, string>>> = {
+  no_encontrado: "WooCommerce no lo devolvió como un pedido vivo.",
+  impuesto_encima: "WooCommerce sumó el impuesto aparte del precio.",
+  no_cuadra: "El detalle de WooCommerce no suma el total.",
+  total_distinto: "El total de WooCommerce no es el de Kapta.",
+  pago_web_no_confirmado: "WooCommerce no confirma el cobro de la pasarela por el total.",
+};
+
+/**
+ * La frase de un motivo, según de qué plataforma es el pedido
+ * (`orders.platform`). Sin plataforma, o en Shopify, la de siempre.
+ */
+export function invoiceReasonLabel(reason: InvoiceReason, platform?: string | null): string {
+  if (platform === "woocommerce") {
+    const woo = WOO_INVOICE_REASON_LABEL[reason];
+    if (woo) return woo;
+  }
+  return INVOICE_REASON_LABEL[reason];
+}
 
 // ── A qué cuenta entró cada pago (MOM §35.2) ─────────────────────────────────
 

@@ -14355,6 +14355,7 @@ ese orden, antes de su código (35.8). La 0269 (el turno que deja a «Emitir est
 boleta» emitir lo pagado antes de «Emitir desde», 15-10-2026) va después de la
 0262, también a mano y antes de su código. La 0275 (la foto del pedido para
 cuando Shopify ya no responde, 23-10-2026, 35.10) va después de la 0274, igual.
+La boleta de un pedido de WooCommerce (25-10-2026, 35.11) no tiene migración.
 Están también las reglas puras, el
 cliente de SimpleFact, el barrido (`/api/cron/invoices`), la sección «Boletas
 y facturas» de Ajustes y el panel «Comprobante» del drawer, con su «Emitir esta
@@ -14518,7 +14519,9 @@ pagado antes de «Emitir desde» no se simula ni se emite.
 (`fetchOrderForInvoice`), porque lo guardado no alcanza para armar la boleta
 (35.5). Si la tienda ya no tiene Shopify —Kenku y Aurela desde el
 28-10-2026—, lee la foto del pedido que se tomó mientras Shopify respondía
-(35.10), con las mismas reglas. Esa lectura bloquea un pedido de prueba (`prueba`), anulado,
+(35.10), con las mismas reglas. Un pedido de WooCommerce (por `orders.platform`,
+nunca por la forma del id) se relee en WooCommerce, nunca en Shopify ni en una
+foto, con lo que WooCommerce dice de esto mismo (35.11). Esa lectura bloquea un pedido de prueba (`prueba`), anulado,
 reembolsado o en otra moneda, uno editado (`editado`, `cantidad_editada`,
 `envio_editado`), con propina, con tarjeta de regalo (`gift_card`), con una
 línea gratis (`linea_gratuita`), con impuesto sumado encima
@@ -14753,7 +14756,8 @@ comprobante armado con datos a medias puede ir al RUC equivocado.
 - **Shopify no se relee en cada pasada.** Un pedido bloqueado por lo que dijo
   Shopify —incluida una tienda sin conexión con Shopify (`sin_token_shopify`)—
   no se vuelve a leer en Shopify antes de 6 horas, bajo ninguno de los dos
-  modos. Un corte de Shopify (`lectura_fallida`) se reintenta en la pasada
+  modos. Lo mismo un pedido de WooCommerce bloqueado por lo que dijo
+  WooCommerce, también sin las claves de su API (`sin_claves_woo`, 35.11). Un corte de Shopify (`lectura_fallida`) se reintenta en la pasada
   siguiente. «Emitir esta boleta» sí relee Shopify al pulsar, aunque la última
   lectura sea de hace menos de 6 horas: es una persona y un pedido.
 - **Presupuesto de la pasada.** No empieza un pedido nuevo pasados 20 segundos
@@ -14859,7 +14863,9 @@ Reglas de esa tabla:
     porque ese pedido no se relee antes de 6 horas. Si no —un pedido de
     prueba, editado, con propina, con tarjeta de regalo, un prepago web que
     Flow no cobró entero—, dice «Se emite a mano»: no se emite sola, se emite a
-    mano en SimpleFact y se registra con «Ya tiene comprobante».
+    mano en SimpleFact y se registra con «Ya tiene comprobante». De un pedido
+    de WooCommerce dice «Espera a WooCommerce», y sus motivos nombran a
+    WooCommerce (35.11).
   - Con el RUC en Manual, el panel tampoco dice «Lista para emitirse», porque
     el barrido no la emite: dice «Lista para simularse en la próxima pasada
     (RUC ‹ruc›, modo Manual)» y «En Manual el barrido solo simula: la boleta
@@ -15161,6 +15167,13 @@ comprobantes sino una base rota, y el cron se pone rojo (502).
   ingreso sin pago completo. **Decisión pendiente del owner.**
 - **Los otros tres RUC.** El owner los da de alta con su subdominio y su token,
   y les asigna cuentas.
+- **Lo que la boleta de WooCommerce no emite sola (35.11). Decisiones
+  pendientes del owner y del contador:** el prepago web por Flow de
+  WooCommerce («Tarjeta o Yape»), porque WooCommerce no dice cuánto cobró Flow;
+  el regalo a S/ 0 de los packs del formulario (`linea_gratuita`), que en
+  Aurela es lo común; y un cargo suelto (`fee_lines`). Hasta que decidan, esos
+  pedidos se emiten a mano en SimpleFact y se registran con «Ya tiene
+  comprobante».
 
 Implementación:
 
@@ -15235,8 +15248,8 @@ creados desde el 29-08 no tenían boleta (Kenku 9.171, Aurela 1.865). Sin una
 copia de esa lectura, ninguno la tendría.
 
 **La decisión del owner (23-10-2026):** guardar ahora, mientras Shopify
-responde, lo que esa lectura devuelve. Los pedidos de WooCommerce se leerán con
-su propio lector, más adelante (§38).
+responde, lo que esa lectura devuelve. Los pedidos de WooCommerce se leen con
+su propio lector (35.11, 25-10-2026).
 
 **La foto** (`order_invoice_snapshots`, 0275). Por pedido de Shopify,
 exactamente lo que contesta `ORDER_FOR_INVOICE_QUERY` (el `data` de la
@@ -15366,7 +15379,7 @@ ser de Shopify y de esa tienda, y la base no guarda la foto de otro pedido.
 - Un pedido creado antes del 29-08 que alguien quiera emitir con «Emitir esta
   boleta» después del cierre: queda en `sin_token_shopify`. Si no puede
   esperar, se emite a mano en SimpleFact y se registra como `externa` (35.4).
-- Los pedidos de WooCommerce: esperan su lector (§38).
+- Los pedidos de WooCommerce: tienen su propio lector (35.11) y nunca una foto.
 
 Implementación:
 
@@ -15394,6 +15407,127 @@ Implementación:
   base del comprobante.
 - Pruebas: `test/invoicing-snapshots.test.ts`, `test/invoicing-shopify.test.ts`,
   `test/invoicing-server.test.ts` y `scripts/sql/invoice_snapshots_smoke.sql`.
+
+### 35.11 La boleta de un pedido de WooCommerce (25-10-2026)
+
+**Por qué.** Aurela vende por WooCommerce desde el 24-10-2026 y Kenku lo hará
+desde el cierre de Shopify (martes 27-10-2026, 19:00 de Lima). La relectura de
+35.3 le preguntaba a Shopify por el número del id de un pedido de WooCommerce
+(`wc-aur-11075` → 11075), que no existe: quedaba en `no_encontrado` (o, sin
+token, `sin_token_shopify`) y nunca salía. Las reglas de Kapta (35.2, 35.3), el
+turno (35.4), la boleta (35.5), los modos y los candados no cambian: cambia
+solo de dónde se relee el pedido justo antes de emitir.
+
+**Quién decide.** `orders.platform` (§38.1), nunca la forma del id. El barrido
+y «Emitir esta boleta» leen la plataforma junto con el pedido. Con
+`woocommerce`, la relectura va a WooCommerce (`fetchWooOrderForInvoice`); con
+`shopify`, exactamente como antes: la misma llamada, sin plataforma, y la foto
+de 35.10 cuando Shopify ya no responde. Sin la columna (antes de la 0274, cuando
+no puede haber pedidos de WooCommerce) se leen sin ella y todos son de Shopify;
+cualquier otro error al leer los pedidos frena la pasada, como siempre. Un
+pedido de WooCommerce nunca se le pregunta a Shopify ni sale de una foto.
+
+**De dónde (decisión de implementación, 25-10-2026).** De la API de
+WooCommerce, `GET /wp-json/wc/v3/orders/<id>`, con las claves guardadas de la
+tienda y el mismo cliente que la entrada de pedidos (§38.8, §38.11: 15 s por
+llamada, sin seguir redirecciones, autenticación Basic y, si el hosting borra
+la cabecera, las claves en la dirección), justo antes de emitir, como en
+Shopify. **No de `orders.raw.woo`:** eso es lo que trajo el último webhook o la
+última pasada; WooCommerce no reintenta un webhook que falló, y un reembolso o
+una anulación de hace un minuto pueden no estar ahí todavía. WooCommerce no se
+apaga como Shopify: si no contesta, el pedido espera a la próxima pasada
+(`lectura_fallida`) y nunca sale de una copia. La lectura no mira ni guarda nada
+de la clienta: la boleta va a «CLIENTES VARIOS» (35.5).
+
+**La boleta, al céntimo.** Cada línea es un ítem con su SKU —sin SKU, la
+variación (`V…`), el producto (`P…`) o la línea (`L…`)— y su nombre en
+WooCommerce. Su neta es el `total` de la línea, que en WooCommerce ya trae su
+parte de los cupones (`subtotal` es antes de ellos). Si la neta no se divide
+exacto entre la cantidad, la línea se parte en dos ítems que difieren en un
+céntimo, como en Shopify. El envío cobrado va como «Servicio de envío -
+‹método›»; el gratis no va. La suma tiene que dar exactamente el `total` de
+WooCommerce, y ese total tiene que ser el de Kapta (35.3, con «WooCommerce dice
+S/ …; Kapta, S/ …»). Los montos llegan como texto decimal: uno que no se
+entiende, o con fracción de céntimo, no se redondea y la lectura falla. El
+estado de WooCommerce (`processing`, `completed`, `on-hold`, «Por confirmar»)
+no dice si se cobró: el pago lo prueban los comprobantes validados en Kapta,
+como en Shopify (§38.4).
+
+**Lo que bloquea**, con los motivos de siempre:
+
+| En WooCommerce | Motivo |
+| --- | --- |
+| `cancelled` o `trash` | `anulado` |
+| `refunded`, o cualquier reembolso en `refunds` | `reembolsado` |
+| `pending`, `failed` o un borrador: no es un pedido vivo (§38.3) | `no_encontrado` |
+| Otra moneda que soles | `moneda` |
+| Un impuesto distinto de cero —del pedido, de una línea, del envío o de un cargo— o una línea de impuesto | `impuesto_encima` |
+| Una línea a S/ 0, o con menos de un céntimo por unidad (el regalo del pack «3 + 2 gratis» de COD Core) | `linea_gratuita` |
+| Un cargo suelto distinto de cero (`fee_lines`: un recargo, o un descuento armado como cargo negativo) | `no_cuadra` |
+| Ninguna línea, una línea que cuesta más que su precio antes de descuentos, o un detalle que no suma el total | `no_cuadra` |
+| Más de 100 líneas | `demasiadas_lineas` |
+| Una línea sin nombre | `sin_boleta` |
+| Un dato que falta o no se entiende, una respuesta de otro pedido, la base, la red, un tiempo agotado, un 5xx, un 401 o 403 | `lectura_fallida` |
+| WooCommerce no lo tiene (404), o el id es de otro sitio que el de la tienda | `no_encontrado` |
+| La tienda sin la dirección del sitio, la clave del sitio o las dos claves de la API, o con claves que no se descifran | `sin_claves_woo` |
+
+`sin_claves_woo` es el `sin_token_shopify` de WooCommerce: entra en la lista de
+6 horas del barrido (35.4) y se vuelve a intentar solo. Los demás que dicen
+«se emite a mano» en Shopify lo dicen igual aquí.
+
+**Lo que WooCommerce no dice, y por eso no se emite solo:**
+
+- **El prepago web.** WooCommerce no guarda cuánto cobró la pasarela, solo que
+  el plugin la marcó pagada. La regla de 35.3 pide que lo cobrado por Flow sume
+  el total, así que un prepago web de WooCommerce (el «Tarjeta o Yape» de
+  Aurela, §38.4) queda en `pago_web_no_confirmado`, con el porqué, y se emite a
+  mano. Decisión pendiente del owner (35.9).
+- **El pedido editado.** WooCommerce no marca un pedido editado ni guarda la
+  cantidad original: `editado`, `cantidad_editada` y `envio_editado` son de
+  Shopify. Lo cubren el cuadre de arriba, que el total sea el de Kapta y que lo
+  validado cubra ese total (35.3, condición 3, y el turno, 0262): un pedido que
+  alguien edita en wp-admin cambia su total en Kapta con el webhook o la pasada
+  siguiente, y si lo validado ya no lo cubre no sale.
+- **Pedido de prueba, propina, tarjeta de regalo.** WooCommerce no tiene pedidos
+  de prueba ni propina; los pedidos de prueba del sitio conectado se anulan
+  (`anulado`). Las tiendas no tienen un plugin de tarjetas de regalo: uno que
+  canjee con un cargo negativo queda en `no_cuadra`.
+
+**Lo dice.** La base del comprobante (`order_invoices.basis`) lleva
+`plataforma: "woocommerce"` y la hora de la lectura (`lectura_woocommerce`); la
+de un pedido de Shopify no cambia. El panel dice los motivos de un pedido de
+WooCommerce con la frase de WooCommerce (`invoiceReasonLabel`, con
+`WOO_INVOICE_REASON_LABEL`: «El total de WooCommerce no es el de Kapta.»),
+«Espera a WooCommerce» en vez de «Espera a Shopify», «Se vuelve a revisar en
+unas horas, cuando la tienda tenga guardadas sus claves de la API de
+WooCommerce.» y «Antes de emitir, el barrido vuelve a leer el pedido en
+WooCommerce.»; «Emitir esta boleta» contesta igual. Un pedido de Shopify se ve
+exactamente como antes.
+
+**Sin migración.** Los motivos y la base del comprobante son texto y JSON
+libres; el turno (`invoice_claim`) solo lee de la base `prepaid` y `payments`,
+que no cambian, y la lista de 6 horas le llega como parámetro (`p_blocked`).
+
+Implementación:
+
+- `lib/invoicing/woocommerce-order.ts`: `mapWooOrderForInvoice` (puro: los
+  ítems al céntimo y los bloqueos), `fetchWooOrderForInvoice` (las claves de la
+  tienda, `loadWooStoreCreds`, y `fetchWooOrder` con `withWooAuthFallback`),
+  `WOO_INVOICE_MAX_LINES` y `WOO_PREPAID_UNCONFIRMED_DETAIL`.
+- `lib/invoicing/shopify-order.ts`: la rama por `platform` en
+  `fetchOrderForInvoice`, y `webPrepaidConfirmed`, que nunca confirma una
+  lectura de WooCommerce.
+- `lib/invoicing/rules.ts`: `sin_claves_woo`, `WOO_INVOICE_REASON_LABEL` e
+  `invoiceReasonLabel`.
+- `lib/invoicing/server.ts`: la plataforma con los pedidos (`selectOrderRows`,
+  sin la columna antes de la 0274), `prepareSale` y `invoiceBasis`;
+  `sin_claves_woo` en `SHOPIFY_LEVEL_REASONS`.
+- `app/dashboard/pedidos/invoice-actions.ts` y
+  `components/order-invoice-panel.tsx`: las frases de WooCommerce
+  (`WOO_NO_KEYS_TEXT`).
+- Pruebas: `test/invoicing-woocommerce.test.ts`, y las de un pedido de
+  WooCommerce en `test/invoicing-server.test.ts` y
+  `test/invoicing-drawer.test.ts`.
 
 ## 36. Tiendas conectadas con su app propia de Shopify (23-10-2026)
 
@@ -16401,6 +16535,10 @@ manda `stores.platform` («Generar pedido» y los buscadores, abajo) y qué falt
 - **La foto de la boleta** (§35.10). Solo pedidos `shopify`: qué falta
   (`invoice_snapshot_candidates`), qué se guarda (`invoice_snapshot_put`) y qué
   se lee (`fetchOrderForInvoice`). Un pedido de WooCommerce nunca tiene foto.
+- **La boleta** (§35.11, 25-10-2026). Antes de emitir, un pedido
+  `woocommerce` se relee en la API de WooCommerce con las claves de la tienda
+  (`fetchWooOrderForInvoice`); uno `shopify`, en Shopify o en su foto, como
+  siempre. Sin la columna, todos son `shopify`.
 - **Envíos → corregir la dirección.** Un pedido `woocommerce` **nunca se
   escribe en Shopify**, ni con el token puesto: el cambio queda en el envío y el
   aviso dice «El pedido es de WooCommerce: allí no se cambió». Sin la 0274, o si
@@ -16788,12 +16926,13 @@ Pruebas: `test/anulado-en-la-tienda.test.ts`, y las de cada pantalla
 
 **Pendiente** (no está en este cambio):
 
-- **La boleta de un pedido de WooCommerce** espera su lector (30-31/10), con
-  su rama por `orders.platform` en `fetchOrderForInvoice`. Hasta entonces la
-  lectura en vivo no mira la plataforma: con el token de Shopify puesto
-  pregunta a Shopify por el número del id (`wc-kp-1532` → 1532), que no
-  existe, y queda `no_encontrado`; sin token, `sin_token_shopify`. Ninguna de
-  las dos emite.
+- **La boleta de un pedido de WooCommerce:** **hecho (25-10-2026, §35.11)**,
+  con su rama por `orders.platform` en `fetchOrderForInvoice`. Antes la lectura
+  en vivo no miraba la plataforma: con el token de Shopify puesto preguntaba a
+  Shopify por el número del id (`wc-kp-1532` → 1532), que no existe, y quedaba
+  `no_encontrado`; sin token, `sin_token_shopify`. Quedan sin boleta automática,
+  a la espera del owner y del contador, el prepago web por Flow, el regalo a
+  S/ 0 de los packs y los cargos sueltos (§35.9).
 - **Auto-vínculo y búsqueda de Envíos** buscan en Shopify: un pedido de
   WooCommerce no aparece. Pasarlos a la base local.
 - **Otros gid de Shopify armados con `shopify_order_id`** (el cajón de un envío
@@ -16808,7 +16947,8 @@ Pruebas: `test/anulado-en-la-tienda.test.ts`, y las de cada pantalla
 - **Textos que decían «anulado en Shopify» de cualquier pedido:** **hecho
   (24-10-2026)**, con un solo texto, «anulado en la tienda» (la regla de
   «anulado en la tienda», arriba). Quedan, porque no hablan de una anulación:
-  la boleta («Espera a Shopify», con su lector pendiente) y el panel de Aliclik
+  la boleta («Espera a Shopify», que en un pedido de WooCommerce dice «Espera a
+  WooCommerce» desde el 25-10-2026, §35.11) y el panel de Aliclik
   («En Shopify el pedido son S/ …»). El hecho viejo `cancelled_shopify`
   conserva su título: es de un pedido de Shopify.
 - **El endpoint del bot** (`POST /api/internal/orders/[storeId]`): **hecho

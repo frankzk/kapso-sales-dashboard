@@ -247,13 +247,14 @@ describe("MOM §35: la sección existe y dice su estado", () => {
     expect(sqlList(semilla?.[1])).toEqual(["org_id", "ruc", "legal_name", "simplefact_subdomain"]);
   });
 
-  it("subsecciones 35.1 a 35.10, en orden y ninguna más", () => {
+  it("subsecciones 35.1 a 35.11, en orden y ninguna más", () => {
     // 35.10: la foto del pedido para cuando Shopify ya no responde (owner, 23-10-2026).
+    // 35.11: la boleta de un pedido de WooCommerce (25-10-2026).
     enOrden(
       S35,
-      Array.from({ length: 10 }, (_, i) => `\n### 35.${i + 1} `),
+      Array.from({ length: 11 }, (_, i) => `\n### 35.${i + 1} `),
     );
-    expect(S35.match(/^### 35\.\d+ /gm)).toHaveLength(10);
+    expect(S35.match(/^### 35\.\d+ /gm)).toHaveLength(11);
   });
 
   describe("«Implementación:»", () => {
@@ -1253,9 +1254,15 @@ describe("MOM §35.3: cuándo quedó pagado y qué cobró Flow", () => {
     const fn = funcion("invoice_claim");
     for (const lee of ["p_basis->>'prepaid'", "p_basis->'payments'", "b.pago->>'id'"]) expect(fn, lee).toContain(lee);
     // La base del comprobante es la de las reglas; leída de la foto del pedido
-    // (MOM §35.10) lleva además `foto_shopify`, sin tocar `prepaid` ni `payments`.
-    expect(read("lib/invoicing/server.ts")).toContain(
-      "p_basis: prepared.snapshotFetchedAt ? { ...elig.basis, foto_shopify: prepared.snapshotFetchedAt } : elig.basis,",
+    // (MOM §35.10) lleva además `foto_shopify`, y leída en WooCommerce (§35.11),
+    // `plataforma` y `lectura_woocommerce`, sin tocar `prepaid` ni `payments`.
+    const server = read("lib/invoicing/server.ts");
+    expect(server).toContain("p_basis: invoiceBasis(elig, prepared),");
+    expect(server).toContain(
+      "if (prepared.snapshotFetchedAt) return { ...elig.basis, foto_shopify: prepared.snapshotFetchedAt };",
+    );
+    expect(server).toContain(
+      'if (prepared.wooReadAt) return { ...elig.basis, plataforma: "woocommerce", lectura_woocommerce: prepared.wooReadAt };',
     );
     // Como lo manda supabase-js: JSON, con las llaves por su nombre.
     const json = (r: ReturnType<typeof invoiceEligibility>) => {
@@ -1725,7 +1732,9 @@ describe("MOM §35.6 y §35.7: lo que no se edita y lo que el panel dice", () =>
     const PANEL = read("components/order-invoice-panel.tsx");
     expect(s7).toContain("el panel no dice «Lista para emitirse»");
     expect(PANEL).toContain("Lista para emitirse");
-    expect(PANEL).toContain('label: data.review.retry ? "Espera a Shopify" : "Se emite a mano"');
+    // «Espera a WooCommerce» en un pedido de WooCommerce (§35.11).
+    expect(PANEL).toContain('const tienda = data.platform === "woocommerce" ? "WooCommerce" : "Shopify";');
+    expect(PANEL).toContain('label: data.review.retry ? `Espera a ${tienda}` : "Se emite a mano"');
     expect(s7).toContain("dice «Espera a Shopify»");
     expect(s7).toContain(
       "dice «Se emite a mano»: no se emite sola, se emite a mano en SimpleFact y se registra con «Ya tiene comprobante».",
@@ -1742,14 +1751,19 @@ describe("MOM §35.6 y §35.7: lo que no se edita y lo que el panel dice", () =>
       `dice «Espera a Shopify» y cuándo, como lo hace el barrido (35.4): un corte de Shopify, en la próxima pasada; una tienda sin conexión, «${sinConexion}», porque ese pedido no se relee antes de ${INVOICE_SHOPIFY_RECHECK_MS / 3_600_000} horas.`,
     );
     // Los motivos de Shopify que se reintentan solos son exactamente los dos que
-    // nombra el MOM: el resto de la lista del barrido se emite a mano.
+    // nombra el MOM, más el `sin_token_shopify` de un pedido de WooCommerce
+    // (`sin_claves_woo`, §35.11): el resto de la lista del barrido se emite a mano.
     const manual = /const SHOPIFY_MANUAL_REASONS: ReadonlySet<InvoiceReason> = new Set<InvoiceReason>\(\[([^\]]*)\]\);/.exec(
       ACTIONS,
     );
     expect(manual).not.toBeNull();
     const aMano = new Set([...manual![1]!.matchAll(/"([a-z_0-9]+)"/g)].map((m) => m[1]!));
     const deShopify = [...SHOPIFY_LEVEL_REASONS, "lectura_fallida" as const];
-    expect(deShopify.filter((r) => !aMano.has(r)).sort()).toEqual(["lectura_fallida", "sin_token_shopify"]);
+    expect(deShopify.filter((r) => !aMano.has(r)).sort()).toEqual([
+      "lectura_fallida",
+      "sin_claves_woo",
+      "sin_token_shopify",
+    ]);
     for (const r of aMano) expect(SHOPIFY_LEVEL_REASONS.has(r as never), r).toBe(true);
     // Cuándo: la tienda sin conexión está en la lista de 6 horas del barrido;
     // el corte no, y su propio texto ya dice «la próxima pasada».
@@ -1757,9 +1771,9 @@ describe("MOM §35.6 y §35.7: lo que no se edita y lo que el panel dice", () =>
     expect(SHOPIFY_LEVEL_REASONS.has("lectura_fallida")).toBe(false);
     expect(INVOICE_REASON_LABEL.lectura_fallida).toContain("se vuelve a intentar en la próxima pasada");
     expect(PANEL).toContain(`"${sinConexion}"`);
-    expect(PANEL).toContain(
-      'if (review.waitsHours) return review.reason === "sin_token_shopify" ? SHOPIFY_NO_TOKEN_TEXT : SHOPIFY_LATER_TEXT;',
-    );
+    expect(PANEL).toContain('if (review.reason === "sin_token_shopify") return SHOPIFY_NO_TOKEN_TEXT;');
+    expect(PANEL).toContain('if (review.reason === "sin_claves_woo") return WOO_NO_KEYS_TEXT;');
+    expect(SHOPIFY_LEVEL_REASONS.has("sin_claves_woo")).toBe(true);
     expect(ACTIONS).toContain("waitsHours: SHOPIFY_LEVEL_REASONS.has(blocked.reason),");
   });
 

@@ -66,6 +66,8 @@ import {
   type SimplefactSalePayload,
 } from "@/lib/invoicing/rules";
 import { fetchOrderForInvoice, webPrepaidConfirmed, type InvoiceOrderRead } from "@/lib/invoicing/shopify-order";
+import { WOO_PREPAID_UNCONFIRMED_DETAIL } from "@/lib/invoicing/woocommerce-order";
+import type { OrderPlatform } from "@/lib/types";
 import {
   simplefactCreateSale,
   simplefactListSales,
@@ -139,6 +141,9 @@ export const SHOPIFY_LEVEL_REASONS: ReadonlySet<InvoiceReason> = new Set<Invoice
   "total_distinto",
   "pago_web_no_confirmado",
   "sin_token_shopify",
+  // El de WooCommerce (§35.11): sin las claves de la API no hay a quién
+  // preguntarle, y en 6 horas se vuelve a mirar, como sin token de Shopify.
+  "sin_claves_woo",
 ]);
 
 /**
@@ -438,6 +443,8 @@ export async function loadInvoiceIssuers(admin: SupabaseClient, orgId: string): 
 
 const ORDER_COLUMNS =
   "id,store_id,shopify_order_id,name,total_amount,currency,cancelled_at,total_refunded,financial_status,payment_gateway,processed_at,created_at";
+/** Con la plataforma del pedido (0274, MOM §38.1): de dónde se relee antes de emitir. */
+const ORDER_COLUMNS_WITH_PLATFORM = `${ORDER_COLUMNS},platform`;
 
 interface OrderRow {
   id: string;
@@ -452,6 +459,8 @@ interface OrderRow {
   payment_gateway: string | null;
   processed_at: string | null;
   created_at: string | null;
+  /** `orders.platform` (0274). Sin la columna no viene, y el pedido es de Shopify. */
+  platform?: string | null;
 }
 
 interface PaymentRow {
@@ -499,6 +508,33 @@ export function invoiceExistingFrom(rows: InvoiceRow[]): InvoiceExisting {
 interface LoadedOrder {
   facts: InvoiceOrderFacts;
   shopifyOrderId: string | null;
+  /** `orders.platform`: decide de dónde se relee el pedido (§35.11), nunca la forma del id. */
+  platform: OrderPlatform;
+}
+
+/** «La columna no existe» (Postgres 42703) y es `platform`: el código llegó antes que la 0274. */
+function isPlatformColumnMissing(error: { code?: string; message?: string } | null): boolean {
+  return !!error && error.code === "42703" && /\bplatform\b/.test(error.message ?? "");
+}
+
+/**
+ * Los pedidos, con su plataforma. Sin la 0274 no hay columna —y entonces no
+ * puede haber pedidos de WooCommerce—: se leen sin ella y todos son de Shopify,
+ * como en el resto de Kapta (MOM §38.1). Cualquier otro error LANZA.
+ */
+async function selectOrderRows(admin: SupabaseClient, ids: string[]): Promise<OrderRow[]> {
+  const out: OrderRow[] = [];
+  let cols = ORDER_COLUMNS_WITH_PLATFORM;
+  for (const part of chunk(unique(ids), ID_BATCH)) {
+    let res = await admin.from("orders").select(cols).in("id", part);
+    if (res.error && cols !== ORDER_COLUMNS && isPlatformColumnMissing(res.error)) {
+      cols = ORDER_COLUMNS;
+      res = await admin.from("orders").select(cols).in("id", part);
+    }
+    if (res.error) throw dbError("No se pudo leer orders", res.error);
+    out.push(...((res.data ?? []) as unknown as OrderRow[]));
+  }
+  return out;
 }
 
 async function loadOrders(admin: SupabaseClient, orderIds: string[]): Promise<Map<string, LoadedOrder>> {
@@ -506,7 +542,7 @@ async function loadOrders(admin: SupabaseClient, orderIds: string[]): Promise<Ma
   const ids = unique(orderIds.filter(Boolean));
   if (!ids.length) return out;
 
-  const orders = await selectIn<OrderRow>(admin, "orders", ORDER_COLUMNS, "id", ids);
+  const orders = await selectOrderRows(admin, ids);
   if (!orders.length) return out;
   const found = orders.map((o) => o.id);
   const storeIds = unique(orders.map((o) => o.store_id));
@@ -622,8 +658,10 @@ async function loadOrders(admin: SupabaseClient, orderIds: string[]): Promise<Ma
 
   for (const o of orders) {
     const orgId = orgByStore.get(o.store_id) ?? null;
+    const platform: OrderPlatform = o.platform === "woocommerce" ? "woocommerce" : "shopify";
     out.set(o.id, {
       shopifyOrderId: o.shopify_order_id,
+      platform,
       facts: {
         orderId: o.id,
         storeId: o.store_id,
@@ -641,6 +679,8 @@ async function loadOrders(admin: SupabaseClient, orderIds: string[]): Promise<Ma
         // Una tienda sin organización no tiene RUC: el pedido sale `cuenta_sin_ruc`.
         issuers: orgId ? issuers.filter((i) => i.orgId === orgId) : [],
         existing: invoiceExistingFrom(invoicesByOrder.get(o.id) ?? []),
+        // Solo en un pedido de WooCommerce: los de Shopify quedan como siempre.
+        ...(platform === "woocommerce" ? { platform } : {}),
       },
     });
   }
@@ -664,7 +704,11 @@ export async function loadInvoiceOrderFacts(
 
 /** Lo que el barrido toca fuera de la base. Las pruebas lo cambian por dobles. */
 export interface InvoiceSweepDeps {
-  fetchOrder: (input: { storeId: string; shopifyOrderId: string }) => Promise<InvoiceOrderRead>;
+  /**
+   * Relee el pedido antes de emitir. `platform` va solo en un pedido de
+   * WooCommerce (§35.11); uno de Shopify se pide como siempre, sin él.
+   */
+  fetchOrder: (input: { storeId: string; shopifyOrderId: string; platform?: OrderPlatform }) => Promise<InvoiceOrderRead>;
   createSale: (conn: SimplefactConn, payload: SimplefactSalePayload) => Promise<SimplefactHttp>;
   listSales: (conn: SimplefactConn, query: SimplefactListQuery) => Promise<SimplefactHttp>;
   decryptToken: (tokenEnc: string) => string;
@@ -1306,7 +1350,7 @@ async function sweepOrg(ctx: OrgContext): Promise<void> {
     }
 
     // Justo antes de emitir, Shopify (§35.3): los ítems al céntimo.
-    const prepared = await prepareSale(deps, facts, elig, entry.shopifyOrderId);
+    const prepared = await prepareSale(deps, facts, elig, entry);
     if (!prepared.ok) {
       note(facts, prepared.reason, prepared.detail, issuer.id);
       continue;
@@ -1586,6 +1630,8 @@ type PreparedSale =
       payload: SimplefactSalePayload;
       /** Si el pedido se leyó de su foto (MOM §35.10): cuándo se tomó. Va en la base del comprobante. */
       snapshotFetchedAt: string | null;
+      /** Si el pedido es de WooCommerce y se leyó en su API (MOM §35.11): cuándo. Va en la base. */
+      wooReadAt: string | null;
     }
   | { ok: false; reason: InvoiceReason; detail: string | null };
 
@@ -1599,23 +1645,50 @@ async function prepareSale(
   deps: InvoiceSweepDeps,
   facts: InvoiceOrderFacts,
   elig: EligibleOrder,
-  shopifyOrderId: string | null,
+  order: Pick<LoadedOrder, "shopifyOrderId" | "platform">,
 ): Promise<PreparedSale> {
-  const read = await deps.fetchOrder({ storeId: facts.storeId, shopifyOrderId: shopifyOrderId ?? "" });
+  // Un pedido de WooCommerce se relee en WooCommerce (§35.11). El de Shopify se
+  // pide exactamente como siempre: sin `platform`.
+  const woo = order.platform === "woocommerce";
+  const read = await deps.fetchOrder({
+    storeId: facts.storeId,
+    shopifyOrderId: order.shopifyOrderId ?? "",
+    ...(woo ? { platform: "woocommerce" as const } : {}),
+  });
   if (!read.ok) return { ok: false, reason: read.reason, detail: read.detail ?? null };
   if (read.totalCents !== elig.totalCents) {
     return {
       ok: false,
       reason: "total_distinto",
-      detail: `Shopify dice S/ ${soles(read.totalCents)}; Kapta, S/ ${soles(elig.totalCents)}.`,
+      detail: `${woo ? "WooCommerce" : "Shopify"} dice S/ ${soles(read.totalCents)}; Kapta, S/ ${soles(elig.totalCents)}.`,
     };
   }
-  if (elig.basis.prepaid && !webPrepaidConfirmed(read)) return { ok: false, reason: "pago_web_no_confirmado", detail: null };
+  if (elig.basis.prepaid && !webPrepaidConfirmed(read)) {
+    return { ok: false, reason: "pago_web_no_confirmado", detail: woo ? WOO_PREPAID_UNCONFIRMED_DETAIL : null };
+  }
   const invoiceId = deps.randomUUID();
   const orderName = facts.orderName ?? read.name;
   const payload = buildSalePayload({ invoiceId, orderName, items: read.items, totalCents: elig.totalCents });
   if (!payload) return { ok: false, reason: "no_cuadra", detail: null };
-  return { ok: true, invoiceId, orderName, payload, snapshotFetchedAt: read.snapshot?.fetchedAt ?? null };
+  return {
+    ok: true,
+    invoiceId,
+    orderName,
+    payload,
+    snapshotFetchedAt: read.snapshot?.fetchedAt ?? null,
+    wooReadAt: woo ? (read.woocommerce?.readAt ?? null) : null,
+  };
+}
+
+/**
+ * La base del comprobante: la de las reglas y, si la boleta salió de la foto
+ * del pedido (§35.10), la hora de la foto; si salió de WooCommerce (§35.11),
+ * la plataforma y la hora de la lectura. Leído en vivo en Shopify, la de siempre.
+ */
+function invoiceBasis(elig: EligibleOrder, prepared: Extract<PreparedSale, { ok: true }>): unknown {
+  if (prepared.snapshotFetchedAt) return { ...elig.basis, foto_shopify: prepared.snapshotFetchedAt };
+  if (prepared.wooReadAt) return { ...elig.basis, plataforma: "woocommerce", lectura_woocommerce: prepared.wooReadAt };
+  return elig.basis;
 }
 
 /**
@@ -1642,9 +1715,10 @@ function claimArgs(
     p_total: elig.totalCents / 100,
     p_paid_at: elig.paidAt,
     p_order_name: prepared.orderName,
-    // Una boleta armada con la foto del pedido (MOM §35.10) lo deja dicho en su
-    // base, con la hora de la foto. Leída en vivo, la base es la de siempre.
-    p_basis: prepared.snapshotFetchedAt ? { ...elig.basis, foto_shopify: prepared.snapshotFetchedAt } : elig.basis,
+    // Una boleta armada con la foto del pedido (MOM §35.10), o leída en
+    // WooCommerce (§35.11), lo deja dicho en su base. Leída en vivo en Shopify,
+    // la base es la de siempre.
+    p_basis: invoiceBasis(elig, prepared),
     p_request: prepared.payload,
     ...(extra.mode ? { p_mode: extra.mode } : {}),
     ...(extra.createdBy ? { p_created_by: extra.createdBy } : {}),
@@ -1836,7 +1910,11 @@ export type InvoiceEmitNowResult =
       error: string | null;
       rucMismatch: boolean;
     }
-  | { ok: false; reason: InvoiceReason; detail?: string };
+  /**
+   * `platform` solo cuando el pedido es de WooCommerce y lo frenó su lectura
+   * (§35.11): quien lo dice usa la frase de WooCommerce (`invoiceReasonLabel`).
+   */
+  | { ok: false; reason: InvoiceReason; detail?: string; platform?: "woocommerce" };
 
 interface EmitNowState {
   /** El token descifrado, para limpiarlo de todo texto que sale. */
@@ -1977,7 +2055,7 @@ async function emitNow(
   // 1. Los hechos. Lanza si algo no se pudo leer, y no se emite (falla cerrada).
   const loaded = (await loadOrders(admin, [input.orderId])).get(input.orderId);
   if (!loaded) return blocked("pedido", "No se encontró el pedido.");
-  const { facts, shopifyOrderId } = loaded;
+  const { facts } = loaded;
 
   // 2. Las reglas de §35.3, como una emisión real: un RUC en «Manual» o «Real».
   const elig = invoiceEligibility(facts, { emitNow: true });
@@ -2021,8 +2099,11 @@ async function emitNow(
   state.secrets.add(conn.conn.token.trim());
 
   // 4. Justo antes de emitir, Shopify (§35.3): los ítems al céntimo.
-  const prepared = await prepareSale(deps, facts, elig, shopifyOrderId);
-  if (!prepared.ok) return blocked(prepared.reason, prepared.detail);
+  const prepared = await prepareSale(deps, facts, elig, loaded);
+  if (!prepared.ok) {
+    const out = blocked(prepared.reason, prepared.detail);
+    return loaded.platform === "woocommerce" && !out.ok ? { ...out, platform: "woocommerce" } : out;
+  }
 
   // 5. El turno: una fila REAL, con quién la pidió. La base vuelve a revisar
   // todo, con el candado del RUC y el tope del día de lo real. Un pedido de

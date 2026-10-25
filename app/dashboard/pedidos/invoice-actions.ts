@@ -56,6 +56,7 @@ import {
 import {
   INVOICE_REASON_LABEL,
   LIVE_REAL_STATUSES,
+  invoiceReasonLabel,
   creditNoteWarning,
   invoiceEligibility,
   invoiceNoteRef,
@@ -385,6 +386,12 @@ export interface InvoicePanelData {
    * gestiona.
    */
   emitNowBlocked: { reason: InvoiceReason; detail: string | null } | null;
+  /**
+   * Solo en un pedido de WooCommerce (`orders.platform`, MOM §35.11): el panel
+   * dice sus motivos con la frase de WooCommerce y «Espera a WooCommerce».
+   * Sin él, el pedido es de Shopify, como siempre.
+   */
+  platform?: "woocommerce";
 }
 
 const INVOICE_PANEL_COLUMNS =
@@ -616,6 +623,7 @@ export async function loadInvoicePanel(orderId: string): Promise<{ data: Invoice
       canManage,
       canEmitNow,
       ...emit,
+      ...(facts?.platform === "woocommerce" ? { platform: "woocommerce" as const } : {}),
     },
   };
 }
@@ -1024,9 +1032,12 @@ const EMIT_CAMBIO = INVOICE_REASON_LABEL.pedido_cambio;
 const EMIT_SIN_SABER =
   "No se supo qué pasó con la emisión. Vuelve a abrir el pedido antes de intentar de nuevo: si quedó «Emitiendo» o «En duda», búscala en SimpleFact por su nota.";
 
-/** Un motivo con la frase del panel y del barrido, y su detalle. */
-function reasonText(reason: InvoiceReason, detail?: string | null): string {
-  const label = INVOICE_REASON_LABEL[reason] ?? reason;
+/**
+ * Un motivo con la frase del panel y del barrido, y su detalle. De un pedido de
+ * WooCommerce, con la frase que nombra a WooCommerce (§35.11).
+ */
+function reasonText(reason: InvoiceReason, detail?: string | null, platform?: string | null): string {
+  const label = INVOICE_REASON_LABEL[reason] !== undefined ? invoiceReasonLabel(reason, platform) : reason;
   return detail ? `${label} ${detail}` : label;
 }
 
@@ -1044,9 +1055,9 @@ const EMIT_NOW_REASON_LABEL: Partial<Record<InvoiceReason, string>> = {
 };
 
 /** Un motivo de «Emitir esta boleta», con la frase del panel salvo las que prometen al barrido. */
-function emitReasonText(reason: InvoiceReason, detail?: string | null): string {
+function emitReasonText(reason: InvoiceReason, detail?: string | null, platform?: string | null): string {
   const label = EMIT_NOW_REASON_LABEL[reason];
-  if (!label) return reasonText(reason, detail);
+  if (!label) return reasonText(reason, detail, platform);
   return detail ? `${label} ${detail}` : label;
 }
 
@@ -1058,7 +1069,7 @@ function emitReasonText(reason: InvoiceReason, detail?: string | null): string {
  * bloqueo no emitieron nada.
  */
 function emitResultState(result: InvoiceEmitNowResult): EmitInvoiceState {
-  if (!result.ok) return { error: emitReasonText(result.reason, result.detail) };
+  if (!result.ok) return { error: emitReasonText(result.reason, result.detail, result.platform) };
   const extra = result.error?.trim() ? result.error.trim() : null;
   if (result.status === "emitida") {
     const serie = result.serie ? (result.correlative ? `${result.serie}-${result.correlative}` : result.serie) : null;

@@ -158,12 +158,13 @@ describe("MOM §38.12 · el pedido en WooCommerce", () => {
     expect(VENTA).toContain("Nunca toca `woo_intake_from`, las claves de WooCommerce ni el token de Shopify.");
   });
 
-  it("lo que falta: los carritos y la boleta; el bot ya está (38.13); ya no dice que nadie lee stores.platform", () => {
+  it("lo que falta: los carritos; el bot (38.13) y la boleta (§35.11) ya están; ya no dice que nadie lee stores.platform", () => {
     expect(S38_12).toContain("**El endpoint del bot** (`POST /api/internal/orders/[storeId]`): **hecho (23-10-2026, 38.13)**");
     expect(S38_12).toContain("el candado en la base por (tienda, id del intento)");
     expect(S38_12).not.toContain("necesita un candado en la base por (tienda, id del intento)");
     expect(S38_12).toContain("**Los carritos.**");
-    expect(S38_12).toContain("**La boleta de un pedido de WooCommerce** espera su lector");
+    expect(S38_12).toContain("**La boleta de un pedido de WooCommerce:** **hecho (25-10-2026, §35.11)**");
+    expect(S38_12).not.toContain("espera su lector");
     expect(S38_12).not.toContain("`stores.platform` todavía no lo lee nadie");
   });
 

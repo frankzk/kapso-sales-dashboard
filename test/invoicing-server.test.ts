@@ -25,6 +25,7 @@ import {
   type InvoiceItem,
 } from "@/lib/invoicing/rules";
 import type { InvoiceOrderRead } from "@/lib/invoicing/shopify-order";
+import { WOO_PREPAID_UNCONFIRMED_DETAIL } from "@/lib/invoicing/woocommerce-order";
 import { CHECKOUT_GATEWAYS } from "@/lib/payment-gateway";
 import type { SimplefactHttp } from "@/lib/invoicing/simplefact";
 import {
@@ -178,6 +179,8 @@ function fakeDb(initialNow: Date) {
   const log: Q[] = [];
   const rpcLog: { fn: string; args: Record<string, unknown> }[] = [];
   const failWhen: Array<(q: Q) => boolean> = [];
+  /** Como `failWhen`, con el error exacto de la base (su `code`): una columna que no existe. */
+  const errorWhen: Array<(q: Q) => { code: string; message: string } | null> = [];
   /** Tablas y funciones que «no existen» todavía, con el código que contesta la base. */
   const missing = new Map<string, MissingCode>();
   const state = {
@@ -201,6 +204,10 @@ function fakeDb(initialNow: Date) {
     log.push(q);
     if (missing.has(q.table)) return missingError(q.table);
     if (failWhen.some((f) => f(q))) return { data: null, error: { message: `falla simulada en ${q.table}` } };
+    for (const f of errorWhen) {
+      const error = f(q);
+      if (error) return { data: null, error };
+    }
     const rows = t(q.table);
     if (q.op === "select") {
       let out = rows.filter((r) => matches(r, q.filters));
@@ -466,7 +473,7 @@ function fakeDb(initialNow: Date) {
     },
   } as unknown as SupabaseClient;
 
-  return { admin, tables, t, log, rpcLog, failWhen, state, missing, clock };
+  return { admin, tables, t, log, rpcLog, failWhen, errorWhen, state, missing, clock };
 }
 
 type Db = ReturnType<typeof fakeDb>;
@@ -3669,5 +3676,186 @@ describe("runInvoiceSweep: una boleta leída de la foto del pedido (MOM §35.10)
     addOrder(db, 1);
     await sweep(db, makeDeps());
     expect(claims(db)[0]!.args.p_basis).not.toHaveProperty("foto_shopify");
+  });
+});
+
+describe("runInvoiceSweep y emitInvoiceNow: un pedido de WooCommerce (MOM §35.11)", () => {
+  // La plataforma la dice `orders.platform`, nunca la forma del id: un pedido de
+  // WooCommerce se relee en WooCommerce y su base lo deja dicho; uno de Shopify
+  // se pide exactamente como antes, sin `platform`.
+  const OWNER = "7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+  const LEIDO = "2026-10-14T19:59:00.000Z";
+  const VIO = { issuerId: ISS, totalCents: 15_000 };
+
+  function addWooOrder(db: Db, n: number, o: OrderOpts = {}): string {
+    const id = addOrder(db, n, o);
+    const row = db.t("orders").find((r) => r.id === id)!;
+    row.platform = "woocommerce";
+    row.shopify_order_id = `wc-aur-${11000 + n}`;
+    row.name = `#AUR90000${n}`;
+    return id;
+  }
+
+  function wooRead(input: { shopifyOrderId: string }, totalCents = 15_000): InvoiceOrderRead {
+    return {
+      ok: true,
+      orderGid: input.shopifyOrderId,
+      name: "#AUR900001",
+      totalCents,
+      items: [{ code: "36710849", name: "Bividi Camiseta de Alta Compresión", qty: 1, priceCents: totalCents }],
+      payment: {
+        financialStatus: "processing",
+        gatewayNames: ["Pago contra entrega"],
+        paidCents: 0,
+        otherPaidCents: 0,
+        netPaymentCents: 0,
+        outstandingCents: totalCents,
+      },
+      woocommerce: { readAt: LEIDO },
+    };
+  }
+
+  it("el barrido lo pide con `platform: \"woocommerce\"` y la base del comprobante dice de dónde salió", async () => {
+    const db = world({ mode: "simulacion" });
+    addWooOrder(db, 1);
+    addOrder(db, 2);
+    const deps = makeDeps();
+    deps.fetchOrder.mockImplementation(async (input) =>
+      input.platform === "woocommerce" ? wooRead(input) : okRead(input.shopifyOrderId),
+    );
+    await sweep(db, deps);
+    expect(deps.fetchOrder).toHaveBeenCalledWith({ storeId: STORE, shopifyOrderId: "wc-aur-11001", platform: "woocommerce" });
+    // El de Shopify, exactamente como siempre: sin `platform`.
+    expect(deps.fetchOrder).toHaveBeenCalledWith({ storeId: STORE, shopifyOrderId: "shp-2" });
+    const byOrder = new Map(claims(db).map((c) => [c.args.p_order, c.args]));
+    expect(byOrder.get("ord-1")!.p_basis).toEqual({
+      prepaid: false,
+      payments: [{ id: "pay-1", amount: 150, source: "flow", accountIds: ["acc-flow"], validatedAt: PAGADO }],
+      plataforma: "woocommerce",
+      lectura_woocommerce: LEIDO,
+    });
+    expect(byOrder.get("ord-2")!.p_basis).not.toHaveProperty("plataforma");
+    expect(byOrder.get("ord-2")!.p_basis).not.toHaveProperty("lectura_woocommerce");
+    expect(invoice(db, "ord-1")).toMatchObject({ status: "simulada" });
+    // La boleta lleva el nombre del pedido de Kapta y los ítems de WooCommerce.
+    expect(JSON.stringify(byOrder.get("ord-1")!.p_request)).toContain("#AUR900001");
+    expect(JSON.stringify(byOrder.get("ord-1")!.p_request)).toContain("Bividi Camiseta de Alta Compresión");
+  });
+
+  it("el total de WooCommerce distinto del de Kapta no sale, y el detalle nombra a WooCommerce", async () => {
+    const db = world({ mode: "simulacion" });
+    addWooOrder(db, 1);
+    const deps = makeDeps();
+    deps.fetchOrder.mockImplementation(async (input) => wooRead(input, 14_000));
+    await sweep(db, deps);
+    expect(claims(db)).toEqual([]);
+    expect(check(db, "ord-1", "simulacion")).toMatchObject({
+      reason: "total_distinto",
+      detail: "WooCommerce dice S/ 140.00; Kapta, S/ 150.00.",
+    });
+  });
+
+  it("un prepago web de WooCommerce no sale solo: `pago_web_no_confirmado`, con el porqué", async () => {
+    const db = world({ mode: "simulacion" });
+    addWooOrder(db, 1, { prepaid: true });
+    const deps = makeDeps();
+    deps.fetchOrder.mockImplementation(async (input) => wooRead(input));
+    await sweep(db, deps);
+    expect(deps.fetchOrder).toHaveBeenCalledTimes(1);
+    expect(claims(db)).toEqual([]);
+    expect(check(db, "ord-1", "simulacion")).toMatchObject({
+      reason: "pago_web_no_confirmado",
+      detail: WOO_PREPAID_UNCONFIRMED_DETAIL,
+    });
+  });
+
+  it("sin las claves de WooCommerce, `sin_claves_woo`: no se relee en 6 horas, como `sin_token_shopify`", async () => {
+    const db = world({ mode: "simulacion" });
+    addWooOrder(db, 1);
+    const deps = makeDeps();
+    deps.fetchOrder.mockResolvedValue({ ok: false, reason: "sin_claves_woo" });
+    await sweep(db, deps);
+    expect(check(db, "ord-1", "simulacion")).toMatchObject({ reason: "sin_claves_woo" });
+    expect(SHOPIFY_LEVEL_REASONS.has("sin_claves_woo")).toBe(true);
+    expect(shopifyBlockedReasons()).toContain("sin_claves_woo");
+  });
+
+  describe("«Emitir esta boleta»", () => {
+    beforeEach(() => {
+      vi.stubEnv("VERCEL_ENV", "production");
+    });
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+    const emit = (db: Db, deps: ReturnType<typeof makeDeps>) => {
+      db.clock.now = deps.now();
+      return emitInvoiceNow(db.admin, { orderId: "ord-1", userId: OWNER, manualOnly: true, expected: VIO }, deps);
+    };
+
+    it("la misma emisión real, con la lectura de WooCommerce en la base", async () => {
+      const db = world({ mode: "manual" });
+      addWooOrder(db, 1);
+      const deps = makeDeps();
+      deps.fetchOrder.mockImplementation(async (input) => wooRead(input));
+      expect(await emit(db, deps)).toMatchObject({ ok: true, status: "emitida" });
+      expect(deps.fetchOrder).toHaveBeenCalledWith({ storeId: STORE, shopifyOrderId: "wc-aur-11001", platform: "woocommerce" });
+      expect(claims(db)[0]!.args.p_basis).toMatchObject({ plataforma: "woocommerce", lectura_woocommerce: LEIDO });
+      expect(deps.createSale).toHaveBeenCalledTimes(1);
+    });
+
+    it("si la lectura de WooCommerce lo frena, el motivo lleva la plataforma y no sale nada", async () => {
+      const db = world({ mode: "manual" });
+      addWooOrder(db, 1);
+      const deps = makeDeps();
+      const detail = "El detalle suma S/ 1.00; WooCommerce dice S/ 2.00.";
+      deps.fetchOrder.mockResolvedValue({ ok: false, reason: "no_cuadra", detail });
+      expect(await emit(db, deps)).toEqual({ ok: false, reason: "no_cuadra", detail, platform: "woocommerce" });
+      expect(claims(db)).toEqual([]);
+      expect(deps.createSale).not.toHaveBeenCalled();
+    });
+
+    it("uno de Shopify frenado igual no lleva plataforma: lo de siempre", async () => {
+      const db = world({ mode: "manual" });
+      addOrder(db, 1);
+      const deps = makeDeps();
+      deps.fetchOrder.mockResolvedValue({ ok: false, reason: "editado" });
+      expect(await emit(db, deps)).toEqual({ ok: false, reason: "editado" });
+      expect(deps.fetchOrder).toHaveBeenCalledWith({ storeId: STORE, shopifyOrderId: "shp-1" });
+    });
+  });
+
+  it("los hechos de un pedido de Shopify no cambian: sin `platform`", async () => {
+    const db = world({ mode: "simulacion" });
+    addOrder(db, 1);
+    addWooOrder(db, 2);
+    const facts = await loadInvoiceOrderFacts(db.admin, ["ord-1", "ord-2"]);
+    expect(facts.get("ord-1")).not.toHaveProperty("platform");
+    expect(facts.get("ord-2")).toMatchObject({ platform: "woocommerce" });
+    expect(db.log.some((q) => q.table === "orders" && (q.cols ?? "").split(",").includes("platform"))).toBe(true);
+  });
+
+  it("sin la 0274 (no hay `orders.platform`), se leen sin ella y todos son de Shopify", async () => {
+    const db = world({ mode: "simulacion" });
+    addOrder(db, 1);
+    db.errorWhen.push((q) =>
+      q.table === "orders" && (q.cols ?? "").split(",").includes("platform")
+        ? { code: "42703", message: "column orders.platform does not exist" }
+        : null,
+    );
+    const deps = makeDeps();
+    await sweep(db, deps);
+    expect(deps.fetchOrder).toHaveBeenCalledWith({ storeId: STORE, shopifyOrderId: "shp-1" });
+    expect(claims(db)).toHaveLength(1);
+  });
+
+  it("cualquier otro error al leer los pedidos frena: no se relee ni se emite nada", async () => {
+    const db = world({ mode: "simulacion" });
+    addOrder(db, 1);
+    db.errorWhen.push((q) => (q.table === "orders" ? { code: "XX000", message: "platform: se cayó" } : null));
+    const deps = makeDeps();
+    const report = await sweep(db, deps);
+    expect(deps.fetchOrder).not.toHaveBeenCalled();
+    expect(claims(db)).toEqual([]);
+    expect(report.errors.length).toBeGreaterThan(0);
   });
 });
