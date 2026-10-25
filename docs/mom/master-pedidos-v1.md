@@ -12395,6 +12395,32 @@ Antes cada pantalla respondía con su propio motivo —«Ese paquete no pertenec
 esta ruta», «El pedido ya avanzó…»— y quien tenía la caja en la mano no sabía que
 la decisión era simplemente no despacharla.
 
+**Una salida anulada se dice con quién, cuándo y qué hacer (24-10-2026).**
+AUR178551-S01 la anuló una compañera a las 10:28 de Lima con «Anular salida»
+de la ficha (`route_output_cancelled`, §4: la caja nunca salió). Más tarde
+alguien escaneó su rótulo impreso en «Asignar por QR» y la línea respondió «La
+caja existente ya no está disponible para asignarla.»: cierto, pero no decía
+que esa salida estaba anulada. Ahora, cuando el escaneo de asignación **ya
+falló** y el QR es de una salida con `delivery_status = anulado`, la línea lo
+dice así: «AUR178551-S01 está ANULADA (la anuló {quien} el 24/10 a las 10:28).
+Crea una salida nueva desde la ficha del pedido (Operar → Crear salida) e
+imprime su rótulo; este rótulo ya no sirve.» Quién y cuándo salen del hecho
+más reciente que anuló esa salida (`route_output_cancelled` o
+`guide_cancelled` con su `shipment_id`); quien la anuló se nombra como en Leads
+y Repro Lima (la parte local de su correo) y, sin actor, «se anuló el …». Si el
+pedido tiene **otra salida viva** (`isActiveOutput` en Lima), no se manda a
+crear otra: «…: este rótulo ya no sirve; el pedido sigue con AUR178551-S02.»
+seguido del motivo de siempre. Solo cambia el mensaje: no se reactiva nada,
+tomar y asignar siguen con sus reglas, y si el escaneo asigna (por ejemplo,
+porque al tomarlo nació la salida nueva) responde como siempre, con el aviso de
+pegar su rótulo encima. El pedido anulado se sigue diciendo antes que esto; el
+límite de efectivo y un rótulo vivo responden lo de antes. Las lecturas se
+pagan solo en el escaneo que falla (`lib/scan-annulled-output.ts`, en
+`scanAssignToRider`), probado en `test/scan-salida-anulada.test.ts`.
+**Pendiente:** una salida anulada que siguiera dentro de una caja activa
+responde «Ya está en la caja…» o «Está en la caja de…» como cualquier otra; no
+se ha visto el caso.
+
 **Verificar una caja dice cuál es, y dónde está lo que no es suyo
 (07-10-2026).** KP136825-S01 ya estaba en la caja de Alexis —la única que le
 faltaba verificar— y se escaneó en la verificación de Roy, también de 16
@@ -12409,6 +12435,48 @@ palabras:
   Alexis (07/10), no en la de Roy. Verifícalo en esa caja.» Si no está en
   ninguna: «No está en la caja de Roy ni en otra. Agrégalo primero a una
   caja.» El anulado sigue diciéndose antes que esto.
+
+**Buscar en «Desde la lista» dice dónde está lo que no está por asignar
+(24-10-2026).** El owner buscó #KP141876 para reprogramarlo y la lista respondió
+«Nada por asignar con ese filtro.». Estaba en «Sin condiciones» (76 ese día):
+Ancón no tiene tarifa y está pausado para Grupo GF. Ahora, si la búsqueda no
+encuentra nada en la lista pero el texto nombra un pedido que el tablero ya
+tiene en otro sitio, el vacío lo dice debajo, un aviso por pedido con su botón:
+
+- **Cómo se reconoce.** Por número de pedido sin «#» ni mayúsculas, también una
+  parte («141876»), o por teléfono como la búsqueda de la lista (cuatro dígitos
+  o más). Con menos de cuatro caracteres no se busca fuera. Hasta tres avisos,
+  el número entero primero; los demás se cuentan («Y 2 pedidos más fuera de la
+  lista con ese texto…»).
+- **«Sin condiciones»**, en ámbar, con el motivo y el distrito: «#KP141876 está
+  en «Sin condiciones»: tarifa faltante para Ancón. Ponle tarifa en Tarifario.»
+  y «Abrir Tarifario». Si además el servicio está pausado ahí, lo dice («…, y el
+  servicio está pausado ahí. Ponle tarifa y reanuda el servicio en Tarifario.»):
+  el motivo sigue siendo uno (`tarifa_faltante`), y la foto lleva aparte
+  `paused`. Sin el Tarifario (§29.10), dice que lo corrige quien administra
+  Grupo GF y abre la hoja «Sin condiciones» con ese pedido primero y resaltado.
+  Distrito inválido abre la ficha en Información; sin salida armable, ya en una
+  caja de despacho y los motivos de un «Por reprogramar» que no sale, la
+  ficha en Operar.
+- **Escondido por un apartado o un filtro**: «#KP300001 está por asignar en
+  «Programados después» (programado mar 27/10).» (o «…, pero lo esconden los
+  filtros de la lista»), con «Ver en «…»», que abre ese apartado sin los demás
+  filtros y deja el texto. Un «No entregado» que sigue en una caja lleva «Quitar
+  filtros».
+- **Ya no está por asignar**: «#KP500001 ya no está por asignar: está en la caja
+  de Roy del sáb 24/10 (carga 2), lo lleva (En curso · En reparto).», o, si se
+  está cerrando, «… ya no se asigna: está en «Por cerrar · …»». «Ver en
+  seguimiento» abre su etapa (la lista de seguimiento de arriba).
+- **«En devolución»** («… vuelve con Alexis (caja del …) y el pedido sale con
+  …») abre esa hoja, y **«Devoluciones»** su escáner.
+
+Sin lecturas nuevas: es la foto que ya trae Despacho del día (cola, seguimiento,
+«Sin condiciones», «En devolución», «Devoluciones»), y la fila de «Sin
+condiciones» suma el teléfono y `paused`, que ya se leían. Un pedido que el
+tablero no tiene (otra cobertura, otra etapa) sigue con «Nada por asignar con
+ese filtro.». Nada de esto cambia la cola ni las acciones. Lógica pura en
+`lib/dispatch-day.ts` (`locateOutsideList`, `matchesOrderSearch`), probada en
+`test/despacho-busqueda-donde-esta.test.ts`.
 
 ### 29.14 Rutas: una sola lista y la caja al lado (19-09-2026)
 
