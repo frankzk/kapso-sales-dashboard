@@ -18,7 +18,9 @@ import { getAccessibleStores } from "@/lib/access";
 import {
   getOrderMasterPage,
   getOrderMasterRowsByIds,
+  getPendingVoucherIndex,
   isMasterView,
+  withPendingVoucherFilter,
   type MasterView,
 } from "@/lib/orders-master-access";
 import { parseMasterQuery } from "@/lib/master-query";
@@ -63,7 +65,12 @@ export async function GET(req: NextRequest) {
 
   // Mismo parseo que la página: la URL es el contrato entre la tabla y esto.
   const sp = req.nextUrl.searchParams;
-  const { filters } = parseMasterQuery(sp);
+  const parsed = parseMasterQuery(sp).filters;
+  // «Comprobante por validar» se resuelve igual que en la página: los pedidos
+  // salen de `order_payments`, no de una columna (MOM §16.1).
+  const filters = parsed.pendingVoucher
+    ? withPendingVoucherFilter(parsed, await getPendingVoucherIndex(storeIds))
+    : parsed;
   const rawView = sp.get("view") ?? undefined;
   const view: MasterView = isMasterView(rawView) ? rawView : "todos";
   const rawSubstage = sp.get("substage") ?? "";

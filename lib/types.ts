@@ -248,6 +248,12 @@ export interface LeadRow {
   needs_attention: boolean;
   order_id: string | null;
   has_order: boolean;
+  /**
+   * El pedido de este lead tiene un comprobante por validar (MOM §16.1). Solo
+   * lo trae la vista «Atender ahora», que lo calcula en vivo; no es columna de
+   * `leads`. Ausente o null = no hay.
+   */
+  pending_voucher?: LeadPendingVoucher | null;
   // Enrichment signals for sub-segmenting "Por llamar" (0007). Informational —
   // do not affect category/status. Cart + district come from an open Shopify
   // draft order (COD form); inbound_count from the Kapso conversation. Optional:
@@ -615,6 +621,14 @@ export interface OrderMasterRow {
   agency_expires_at: string | null;
   recomputed_at?: string;
   updated_at?: string;
+  /**
+   * «Comprobante por validar» (MOM §16.1): NO es una columna de `order_master`.
+   * Se lee en vivo de `order_payments` al pintar la página
+   * (lib/pending-voucher-access.ts) porque la cobranza de WhatsApp registra el
+   * pago sin recalcular el Master, y un indicador materializado llegaría tarde
+   * justo en el caso que lo motivó (#KP143616). Ausente o null = no hay.
+   */
+  pending_voucher?: import("@/lib/pending-voucher").PendingVoucherSummary | null;
 }
 
 /** Un movimiento de la línea de tiempo (`order_events`, append-only). */
@@ -669,4 +683,15 @@ export interface ImportRowRow {
   shipment_id: string | null;
   error: string | null;
   created_at?: string;
+}
+
+/** El comprobante por validar del pedido de un lead, tal como lo lee «Atender ahora». */
+export interface LeadPendingVoucher {
+  orderId: string;
+  orderName: string | null;
+  /** «Comprobante por validar · espera su clave», o sin la clave fuera del flujo de agencia. */
+  reason: string;
+  amount: number;
+  /** Desde cuándo espera (el comprobante más antiguo). */
+  since: string | null;
 }

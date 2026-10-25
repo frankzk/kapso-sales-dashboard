@@ -12,12 +12,15 @@ import {
   getOrderMasterFilteredMomCounts,
   getOrderMasterMomCounts,
   getOrderMasterPage,
+  getPendingVoucherIndex,
   isMasterView,
+  withPendingVoucherFilter,
   type MasterMomCounts,
   type MasterView,
 } from "@/lib/orders-master-access";
 import { hasActiveFilters, masterSearchTerm } from "@/lib/order-master-filters";
 import { parseMasterQuery } from "@/lib/master-query";
+import { withPendingVouchers } from "@/lib/pending-voucher";
 import { MACRO_SUBSTAGES_BY_STAGE, type MacroSubstage } from "@/lib/order-macro-stage";
 import { EmptyState } from "@/components/ui";
 import { OrdersMasterBoard } from "@/components/orders-master";
@@ -69,7 +72,7 @@ async function PedidosContent({
   // y unos diez segundos mirando el esqueleto antes de ver nada.
   const flat: Record<string, string | undefined> = {};
   for (const [k, v] of Object.entries(sp)) flat[k] = Array.isArray(v) ? v[0] : v;
-  const { filters, page } = parseMasterQuery(flat);
+  const { filters: urlFilters, page } = parseMasterQuery(flat);
 
   const view: MasterView = isMasterView(flat.view) ? flat.view : "todos";
   const substage: MacroSubstage | null =
@@ -82,6 +85,14 @@ async function PedidosContent({
   // El Master es consolidado: se consultan TODAS las tiendas accesibles, y el
   // filtro por tienda es uno más, aplicado también en la base.
   const storeIds = stores.map((s) => s.id);
+  // «Comprobante por validar» (MOM §16.1): UNA lectura en vivo de
+  // `order_payments` por carga. Decora las filas de la página, cuenta la
+  // píldora y resuelve el filtro. Solo cuando el filtro está puesto hay que
+  // esperarla antes de consultar el Master; si no, corre a la par.
+  const pendingPromise = getPendingVoucherIndex(storeIds);
+  const filters = urlFilters.pendingVoucher
+    ? withPendingVoucherFilter(urlFilters, await pendingPromise)
+    : urlFilters;
   // Mientras hay búsqueda la pantalla oculta las pestañas, los chips y los
   // filtros, y enseña solo «Resultados de búsqueda». Contarlos sería pagar
   // consultas que nadie ve: se cuentan al volver a la pestaña.
@@ -91,7 +102,7 @@ async function PedidosContent({
   // El ciclo de recontacto se muestra junto a los chips de «Fecha pactada», y el
   // filtro de Gestión solo se ofrece en esta vista.
   const showConfirmation = !searching && view === "por_confirmar";
-  const [momCounts, pageData, facets, agency, confirmationCounts, cycleDays] = await Promise.all([
+  const [momCounts, pageData, facets, agency, confirmationCounts, cycleDays, pendingVouchers] = await Promise.all([
     // Con filtros, las pestañas cuentan lo mismo que la lista (MOM §6).
     searching
       ? Promise.resolve(EMPTY_MOM_COUNTS)
@@ -110,6 +121,7 @@ async function PedidosContent({
     showConfirmation
       ? getConfirmationCycleDays(storeIds)
       : Promise.resolve({} as Record<string, number>),
+    pendingPromise,
   ]);
   const confirmationDueCounts = showConfirmationDue
     ? confirmationCounts.due
@@ -141,11 +153,14 @@ async function PedidosContent({
       confirmationDueCounts={confirmationDueCounts}
       managementDayCounts={managementDayCounts}
       confirmationCycles={confirmationCycles}
-      rows={pageData.rows}
+      rows={withPendingVouchers(pageData.rows, pendingVouchers)}
+      // Pedidos con comprobante por validar en las tiendas que ve; null si no
+      // se pudo leer (la píldora lo dice en vez de enseñar un cero).
+      pendingVoucherCount={pendingVouchers ? pendingVouchers.size : null}
       total={pageData.total}
       page={pageData.page}
       pageSize={pageData.pageSize || MASTER_PAGE_SIZE}
-      filters={filters}
+      filters={urlFilters}
       sortKey="created"
       facets={facets}
       agency={agency}

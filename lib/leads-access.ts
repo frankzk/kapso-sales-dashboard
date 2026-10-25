@@ -7,6 +7,12 @@ import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
 import type { LeadCallRow, LeadRow, OrderPlatform } from "@/lib/types";
 import type { DistrictCoverageRule } from "@/lib/district-coverage";
 import type { PedidoPrevio } from "@/lib/pedido-duplicado";
+import { sortHandoffWithPendingVouchers } from "@/lib/pending-voucher";
+import {
+  countExtraPendingVoucherLeads,
+  loadPendingVoucherLeads,
+  loadPendingVouchers,
+} from "@/lib/pending-voucher-access";
 import {
   buildAnomalyReport,
   EMPTY_REPORT,
@@ -198,13 +204,52 @@ export async function getStoreLeads(
   };
 
   if (limit !== null) {
+    // «Atender ahora»: los pagos por validar se leen a la par de la vista.
+    const pendingIndex = view === "handoff" ? loadPendingVouchers(sb, storeIds) : null;
     let res = await buildQuery().limit(limit);
-    if (res.error) res = await buildQuery(LEAD_BOARD_SELECT_LEGACY).limit(limit);
+    let select = LEAD_BOARD_SELECT;
+    if (res.error) {
+      select = LEAD_BOARD_SELECT_LEGACY;
+      res = await buildQuery(select).limit(limit);
+    }
     const limited = (res.data as unknown as LeadRow[]) ?? [];
+    if (pendingIndex) return withPendingVoucherLeads(sb, storeIds, limited, select, await pendingIndex);
     return view === "por_llamar" ? sortPorLlamar(limited) : limited;
   }
   const all = await drainLeads(buildQuery);
   return view === "por_llamar" ? sortPorLlamar(all) : all;
+}
+
+/**
+ * «Atender ahora» con los comprobantes por validar delante (MOM §16.1).
+ *
+ * La clienta que ya pagó y espera —su clave, en agencia— sube aquí aunque el
+ * bot no la haya derivado o su handoff haya caducado: se busca por
+ * `leads.order_id` el lead de cada pedido con un comprobante en
+ * `pendiente_revision` / `info_incompleta`, se le pone el motivo y va arriba.
+ * No se escribe nada en `leads`: lo decide el pago, así que sale solo cuando
+ * alguien lo valida o lo rechaza, igual que el pop-up de cobranza, y nadie
+ * tiene que pulsar «Resuelto».
+ *
+ * Los handoffs de siempre siguen debajo, en su orden. Si la lectura de pagos
+ * falla, la vista queda como era (no se inventa ni se quita a nadie).
+ */
+async function withPendingVoucherLeads(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  storeIds: StoreScope,
+  handoffs: LeadRow[],
+  select: string,
+  index: Awaited<ReturnType<typeof loadPendingVouchers>>,
+): Promise<LeadRow[]> {
+  if (!index || !index.size) return handoffs;
+  const voucherLeads = await loadPendingVoucherLeads<LeadRow>(sb, storeIds, index, select);
+  if (!voucherLeads.length) return handoffs;
+  const byId = new Map(voucherLeads.map((l) => [l.id, l]));
+  // Un lead que ya estaba por un handoff conserva su fila; solo gana el motivo.
+  const merged: LeadRow[] = handoffs.map((l) => (byId.has(l.id) ? { ...l, pending_voucher: byId.get(l.id)!.pending_voucher } : l));
+  const present = new Set(handoffs.map((l) => l.id));
+  for (const l of voucherLeads) if (!present.has(l.id)) merged.push(l);
+  return sortHandoffWithPendingVouchers(merged);
 }
 
 /**
@@ -565,6 +610,8 @@ export async function getLeadQueueSnapshot(storeIds: StoreScope): Promise<LeadQu
   const sb = await createServerSupabase();
   const nowIso = new Date().toISOString();
 
+  // A la par de los conteos por tienda: ver `pendingVoucherHandoffExtra` abajo.
+  const vouchersPromise = pendingVoucherHandoffExtra(sb, storeIds);
   const perStore = await Promise.all(
     // Orden fijo: la firma es una comparación de cadenas, y con las tiendas en
     // otro orden parecería que cambió algo en cada recarga.
@@ -610,7 +657,29 @@ export async function getLeadQueueSnapshot(storeIds: StoreScope): Promise<LeadQu
       counts[key] += part.counts[key];
     }
   }
-  return { counts, signature: perStore.map((p) => p.signature).join("|") };
+  // «Atender ahora» también lista a quien espera la validación de su
+  // comprobante (MOM §16.1, `withPendingVoucherLeads`). El contador suma los
+  // que NO estaban ya por un handoff, para decir lo mismo que la lista; y la
+  // firma lleva quiénes son, para que el refresco en vivo se entere cuando
+  // alguien valida y el lead sale.
+  const vouchers = await vouchersPromise;
+  counts.handoff += vouchers.extra;
+  return {
+    counts,
+    signature: perStore.map((p) => p.signature).join("|") + (vouchers.signature ? `|cv:${vouchers.signature}` : ""),
+  };
+}
+
+/** Nunca tumba los contadores: si falla, se cuentan como antes. */
+async function pendingVoucherHandoffExtra(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  storeIds: StoreScope,
+): Promise<{ extra: number; signature: string }> {
+  try {
+    return await countExtraPendingVoucherLeads(sb, storeIds, handoffFreshCutoffIso());
+  } catch {
+    return { extra: 0, signature: "" };
+  }
 }
 
 export async function getLeadCounts(storeIds: StoreScope): Promise<LeadCounts> {
