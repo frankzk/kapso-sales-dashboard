@@ -73,7 +73,9 @@ import {
   WOO_CART_SALE_CHANNEL,
   WOO_SALE_CHANNEL,
   isWooVariantRef,
+  LOCAL_SALE_IN_WOO_STORE,
   loadStoreOrderPlatform,
+  SHOPIFY_CART_IN_WOO_STORE,
   normalizeWooRequestId,
   searchWooCatalog,
   wooCleanupText,
@@ -1140,6 +1142,13 @@ export async function closeSale(
   const l = lead as { phone: string | null; kapso_conversation_id: string | null; has_order: boolean };
   if (l.has_order) return { error: "Este lead ya tiene un pedido registrado." };
 
+  // Solo en una tienda que crea sus pedidos en Shopify (MOM §38.12, «Los
+  // carritos»): en una que ya los crea en WooCommerce, esta venta solo de Kapta
+  // no sería un pedido de la tienda. Si la tienda no se pudo leer, no se adivina.
+  const plataforma = await loadStoreOrderPlatform(admin, ctx.storeId);
+  if (!plataforma.ok) return { error: plataforma.error };
+  if (plataforma.platform !== "shopify") return { error: LOCAL_SALE_IN_WOO_STORE };
+
   const { data: store } = await admin
     .from("stores")
     .select("currency")
@@ -1258,6 +1267,14 @@ export async function recoverCart(leadId: string): Promise<LeadActionState> {
   };
   if (l.has_order) return { error: "Este lead ya tiene un pedido registrado." };
   if (!l.draft_order_gid) return { error: "Este lead no tiene un carrito (borrador) de Shopify." };
+
+  // Completar el borrador crea el pedido en Shopify: solo en una tienda que crea
+  // sus pedidos allí (MOM §38.12, «Los carritos»). En una que ya los crea en
+  // WooCommerce, el carrito se vende con «Generar pedido». Si la tienda no se
+  // pudo leer, no se adivina.
+  const plataforma = await loadStoreOrderPlatform(admin, ctx.storeId);
+  if (!plataforma.ok) return { error: plataforma.error };
+  if (plataforma.platform !== "shopify") return { error: SHOPIFY_CART_IN_WOO_STORE };
 
   const creds = await getStoreCreds(ctx.storeId);
   if (!creds?.shopify_token) return { error: "La tienda no tiene Shopify configurado." };

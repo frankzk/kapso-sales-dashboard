@@ -15,6 +15,15 @@
 // asesora pudo llamar y marcarlo perdido, el cliente pudo comprar por otra vía o
 // armar otro carrito. Generar encima de cualquiera de esas cosas es un pedido
 // que nadie quería.
+//
+// SOLO EN UNA TIENDA QUE CREA SUS PEDIDOS EN SHOPIFY (MOM §38.12, «Los
+// carritos», 25-10-2026). El pedido de la prueba es el borrador de Shopify
+// completado, y `stores.platform` dice dónde crea Kapta los pedidos nuevos de la
+// tienda (§38.1). Con `woocommerce` la fila no toca Shopify: queda `omitido`
+// con el motivo `tienda_en_woocommerce` y el carrito sigue en la cola, como uno
+// de `control`. Si la plataforma no se puede leer no se adivina: la fila se
+// queda `pendiente` para la corrida siguiente. Qué hace la prueba en una tienda
+// de WooCommerce (seguir inscribiendo o cerrarla) lo decide el owner.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
@@ -29,6 +38,7 @@ import { extractNumericId } from "@/lib/shopify-urls";
 import { peruMobileDigits } from "@/lib/phone";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { insertOrderIfAbsent } from "@/lib/order-sale";
+import { isWooMigrationMissing } from "@/lib/woocommerce-settings";
 
 /** Etiqueta común a todas las pruebas; la del grupo (`cohort`) va además. */
 export const AUTO_TRIAL_TAG = "auto_recompra";
@@ -36,6 +46,16 @@ export const AUTO_TRIAL_TAG = "auto_recompra";
 export const AUTO_TRIAL_BATCH = 10;
 /** Un carrito más viejo que esto ya no se genera: la intención del cliente se enfría. */
 export const AUTO_TRIAL_MAX_CART_AGE_DAYS = 12;
+/**
+ * Motivo de la fila que no se generó porque la tienda crea sus pedidos nuevos
+ * en WooCommerce (`stores.platform`, MOM §38.1): completar el borrador sería un
+ * pedido en Shopify, la plataforma equivocada. Se guarda en `reason`; al medir
+ * (`auto_order_ab_results`, donde la fila sale `sin_pedido`) se separa por él.
+ */
+export const AUTO_TRIAL_PLATFORM_REASON = "tienda_en_woocommerce";
+
+/** Dónde crea la tienda sus pedidos nuevos (`stores.platform`). */
+export type TrialStorePlatform = "shopify" | "woocommerce";
 
 export type TrialGroup = "A" | "B" | "C";
 
@@ -166,6 +186,11 @@ export function isLaterOrderOf(
 /** Todo lo que el procesador necesita de afuera. Inyectable para las pruebas. */
 export interface AutoTrialDeps {
   listPending(limit: number): Promise<AutoOrderTrialRow[]>;
+  /**
+   * `stores.platform` de la tienda, leída en el momento (§38.1). `null` = no se
+   * pudo saber: no se adivina «Shopify».
+   */
+  storePlatform(): Promise<TrialStorePlatform | null>;
   /** pendiente → procesando, solo si nadie la tomó antes. */
   claim(id: string): Promise<boolean>;
   loadLead(leadId: string): Promise<TrialLead | null>;
@@ -192,6 +217,10 @@ export interface AutoTrialReport {
   generated: number;
   skipped: number;
   failed: number;
+  /** De las omitidas, las que no se generaron porque la tienda crea en WooCommerce. */
+  blockedByPlatform: number;
+  /** Por qué la corrida se detuvo antes de terminar (las filas siguen `pendiente`), o null. */
+  error: string | null;
   /** created_at de los pedidos generados, para recalcular los rollups de esos días. */
   orderDates: string[];
 }
@@ -199,6 +228,13 @@ export interface AutoTrialReport {
 /**
  * Procesa las filas pendientes de una tienda. Nunca lanza por una fila: cada
  * una termina `generado`, `omitido` (con motivo) o `error` (con el mensaje).
+ *
+ * Antes de tomar cada fila mira dónde crea la tienda sus pedidos nuevos
+ * (`storePlatform`, una lectura por fila, así que un cambio de plataforma a
+ * mitad de corrida también cuenta). Con `woocommerce` la fila queda `omitido`
+ * con `AUTO_TRIAL_PLATFORM_REASON` sin ninguna llamada a Shopify. Si no se pudo
+ * leer, la corrida se detiene SIN tomar la fila (sigue `pendiente`) y lo dice
+ * en `error`.
  *
  * Todo lo que el pedido necesita para despacharse —la dirección incluida— se
  * deja en el borrador ANTES de completarlo. Una vez completado, el pedido
@@ -210,15 +246,44 @@ export async function processAutoOrderTrials(
   deps: AutoTrialDeps,
   limit = AUTO_TRIAL_BATCH,
 ): Promise<AutoTrialReport> {
-  const report: AutoTrialReport = { generated: 0, skipped: 0, failed: 0, orderDates: [] };
+  const report: AutoTrialReport = {
+    generated: 0,
+    skipped: 0,
+    failed: 0,
+    blockedByPlatform: 0,
+    error: null,
+    orderDates: [],
+  };
   const rows = await deps.listPending(limit);
   for (const row of rows) {
+    // Dónde crea la tienda sus pedidos nuevos, ANTES de tomar la fila: si no se
+    // sabe, la fila no se toca y la corrida siguiente lo vuelve a intentar.
+    let platform: TrialStorePlatform | null;
+    try {
+      platform = await deps.storePlatform();
+    } catch {
+      platform = null;
+    }
+    if (platform === null) {
+      report.error =
+        "no se pudo leer en qué plataforma crea sus pedidos la tienda (stores.platform): " +
+        "no se generó nada y las filas siguen pendientes";
+      break;
+    }
     if (!(await deps.claim(row.id))) continue;
     const stamp = () => new Date(deps.now()).toISOString();
     const skip = async (reason: string) => {
       report.skipped += 1;
       await deps.finish(row.id, { status: "omitido", reason, processed_at: stamp() });
     };
+    if (platform !== "shopify") {
+      // La tienda ya crea sus pedidos en WooCommerce: completar el borrador de
+      // Shopify sería un pedido en la plataforma equivocada (§38.1). El carrito
+      // sigue en la cola y lo trabaja una asesora, como uno de `control`.
+      report.blockedByPlatform += 1;
+      await skip(AUTO_TRIAL_PLATFORM_REASON);
+      continue;
+    }
     try {
       const lead = row.lead_id ? await deps.loadLead(row.lead_id) : null;
       const draft = await deps.loadDraft(row.draft_order_gid);
@@ -315,6 +380,22 @@ function money(currency: string | null, amount: number | null): string {
   return `${currency ?? "PEN"} ${Number(amount ?? 0).toFixed(2)}`;
 }
 
+/**
+ * `stores.platform` de una tienda con service role (§38.1). Sin la 0274 (la
+ * columna no existe) toda tienda es de Shopify, como en
+ * `loadStoreOrderPlatform`. Si la fila no se puede leer, no existe o trae otro
+ * valor: `null`, nunca «Shopify» por defecto. No lee ni descifra claves.
+ */
+export async function readTrialStorePlatform(
+  admin: SupabaseClient,
+  storeId: string,
+): Promise<TrialStorePlatform | null> {
+  const { data, error } = await admin.from("stores").select("platform").eq("id", storeId).maybeSingle();
+  if (error) return isWooMigrationMissing(error) ? "shopify" : null;
+  const platform = (data as { platform?: unknown } | null)?.platform;
+  return platform === "shopify" || platform === "woocommerce" ? platform : null;
+}
+
 /** Las dependencias reales: Supabase con service role + Shopify de la tienda. */
 export function autoTrialDeps(
   admin: SupabaseClient,
@@ -322,6 +403,7 @@ export function autoTrialDeps(
   shopify: { domain: string; token: string },
 ): AutoTrialDeps {
   return {
+    storePlatform: () => readTrialStorePlatform(admin, storeId),
     async listPending(limit) {
       const { data, error } = await admin
         .from("auto_order_trials")

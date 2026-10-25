@@ -4817,3 +4817,36 @@ Comprobar: `select kind, status, records, error from shopify_history_imports
 order by created_at desc limit 10;` y `select count(*) filter (where
 storage_path is not null), count(*) from shopify_history_product_images;`.
 
+### 25-10-2026 · Los carritos de Shopify en una tienda que ya crea en WooCommerce (sin migración, MOM §38.12)
+
+La prueba de recompra sin llamada (`auto_order_trials`, cohorte
+`ab-recompra-prov-1` encendida hasta el 30-10) y las acciones viejas de Leads
+`recoverCart` y `closeSale` pasan a mirar `stores.platform`: solo crean con
+`shopify`. Con `woocommerce` la fila de la prueba queda `omitido` con el motivo
+`tienda_en_woocommerce`, sin ninguna llamada a Shopify, y las dos acciones
+devuelven un aviso sin crear nada. **Sin migración**, sin crons y sin variables
+de entorno nuevas. **Requiere el OK del owner antes de publicar.**
+
+**Kenku y Aurela no cambian mientras sigan en `platform = 'shopify'`** (las dos,
+al 25-10-2026): lo único nuevo es una lectura de `stores.platform` antes de
+tomar cada fila de la prueba. Si esa lectura falla, la fila sigue `pendiente`
+y el reporte de la sincronización lo dice («pedidos_auto: no se pudo leer en
+qué plataforma crea sus pedidos la tienda …»).
+
+1. **El código**, por el camino de siempre (rama de integración → `main` por
+   fast-forward), **antes** de que el owner pase la primera tienda a
+   WooCommerce en Ajustes. Nada que aplicar en la base.
+2. **Después del cambio de cada tienda**, comprobar que la prueba no generó
+   nada en Shopify: `select store_id, arm, status, reason, count(*) from
+   auto_order_trials where cohort = 'ab-recompra-prov-1' and created_at >
+   now() - interval '2 days' group by 1, 2, 3, 4;`. En esa tienda, las filas
+   `auto` nuevas salen `omitido` con `tienda_en_woocommerce` y ninguna
+   `generado`.
+3. **Al medir la cohorte**, las filas `tienda_en_woocommerce` se separan por
+   `reason`: en `auto_order_ab_results` salen `sin_pedido` porque nunca se
+   generaron. Si la cohorte sigue inscribiendo en esas tiendas o se cierra
+   antes del 30-10 lo decide el owner (MOM §38.12, «Los carritos»).
+
+**Marcha atrás.** Revertir el commit. No escribe nada en la base que haya que
+deshacer: las filas `omitido` quedan como constancia.
+

@@ -4409,6 +4409,14 @@ inicio y fin obligatorios, tope diario por tienda). Sin ventana no inscribe:
 una cohorte sin fin sería una automatización completa que nadie decidió. El
 cron inscribe como mucho cada 20 minutos por tienda.
 
+**Con la tienda en WooCommerce (25-10-2026, §38.12, «Los carritos de Shopify
+en una tienda que ya crea en WooCommerce»).** El pedido de las dos pruebas es el
+borrador de Shopify completado, así que solo se genera en una tienda con
+`stores.platform = 'shopify'`. En una que ya crea en WooCommerce la fila queda
+`omitido` con el motivo `tienda_en_woocommerce`, sin tocar Shopify, y el
+carrito sigue en la cola como uno de `control`. La inscripción no cambia: al
+medir, esas filas se separan por `reason`.
+
 **Qué couriers ve la cola.** `shipments` es el libro de TODAS las salidas, así
 que la cola tiene que recortar: quedan fuera **Shalom, Olva, Tanders, Urpi y el
 reparto propio**. Shalom y Olva son agencia —la clienta recoge en el terminal,
@@ -15886,9 +15894,12 @@ WooCommerce viven en esa fila de `stores` y cada pedido lleva su plataforma.
   (y «Venta telefónica», que abre el mismo formulario), su prellenado y los tres
   buscadores de productos (el de Leads, el del producto de un anuncio y el del
   stock de Swayp), siempre en el servidor; el endpoint del bot de Kapso, que
-  solo crea con `woocommerce` (38.13); y, desde el cierre de Shopify, las
-  fotos de producto de WhatsApp (`shopifyGoneForStore`, §39.5, que también
-  mira `woo_site_url`). La entrada de pedidos no lo mira (38.11). **Quién lo cambia:** el owner, en Ajustes → WooCommerce → «Crear los
+  solo crea con `woocommerce` (38.13); la prueba de recompra sin llamada
+  (`auto_order_trials`) y las acciones viejas de Leads `recoverCart` y
+  `closeSale`, que solo crean con `shopify` (25-10-2026, 38.12, «Los carritos
+  de Shopify en una tienda que ya crea en WooCommerce»); y, desde el cierre de
+  Shopify, las fotos de producto de WhatsApp (`shopifyGoneForStore`, §39.5,
+  que también mira `woo_site_url`). La entrada de pedidos no lo mira (38.11). **Quién lo cambia:** el owner, en Ajustes → WooCommerce → «Crear los
   pedidos nuevos en», con «Administrar tiendas» y una confirmación explícita;
   y de la misma forma se vuelve a Shopify (38.12).
 - **`orders.platform`** (y `draft_orders.platform`) dice de qué plataforma vino
@@ -16852,10 +16863,14 @@ Pruebas: `test/anulado-en-la-tienda.test.ts`, y las de cada pantalla
   a una asesora**.
 - **Los carritos.** Los formularios abandonados de WooCommerce todavía no
   entran a `draft_orders`; un carrito de Shopify en la cola solo prellena el
-  pedido (arriba). La recompra automática (`auto_order_trials`) y la captura del
-  carrito recuperado completan o leen borradores de Shopify y no miran
-  `stores.platform`; `closeSale` y `recoverCart` (sin uso en la pantalla)
-  tampoco.
+  pedido (arriba). **Lo que completaba un borrador de Shopify sin mirar
+  `stores.platform` ya lo mira (25-10-2026)**: la recompra automática
+  (`auto_order_trials`), `recoverCart` y `closeSale` solo crean con `shopify`
+  («Los carritos de Shopify en una tienda que ya crea en WooCommerce», abajo).
+  La captura del carrito recuperado no crea nada y sigue igual. **Pendiente,
+  decisión del owner:** qué hace la prueba A/B `ab-recompra-prov-1` en una
+  tienda que ya crea en WooCommerce (seguir inscribiendo o cerrarla antes del
+  30-10).
 - **Los principios de §2 y `AGENTS.md`** («Shopify como única fuente de
   pedidos»): **hecho (23-10-2026)**, con la decisión del owner: dicen «la
   tienda», Shopify hasta el cierre y WooCommerce después (38.9).
@@ -16905,6 +16920,68 @@ El cambio de plataforma: `lib/woocommerce-platform.ts`,
 `components/woocommerce-settings-section.tsx`. Pruebas:
 `test/woocommerce-orders.test.ts`, `test/woocommerce-generate-order.test.ts`,
 `test/woocommerce-platform-switch.test.ts` y `test/woocommerce-sale-mom.test.ts`.
+
+#### Los carritos de Shopify en una tienda que ya crea en WooCommerce (25-10-2026)
+
+**Por qué.** `stores.platform` dice dónde crea Kapta los pedidos nuevos de la
+tienda (38.1). Tres caminos completaban un borrador de Shopify, o registraban
+una venta, sin mirarlo: la prueba de recompra sin llamada (§11,
+`auto_order_trials`; la cohorte `ab-recompra-prov-1` está encendida hasta el
+30-10-2026 y sus únicas tiendas son Kenku Peru y Aurela) y dos acciones viejas
+de Leads sin uso en la pantalla (`recoverCart` y `closeSale`). Con la tienda en
+`woocommerce` y Shopify todavía vivo (hasta el martes 27-10 a las 19:00 de
+Lima), la prueba completaba el borrador y dejaba un pedido nuevo en Shopify:
+con la numeración vieja, con el stock descontado en Shopify y no en
+WooCommerce, y desde el cierre sin dónde anularlo. Esto no es una regla nueva:
+aplica 38.1.
+
+**La regla.** Solo crea en Shopify lo que corre en una tienda con
+`stores.platform = 'shopify'`:
+
+- **La prueba de recompra** (`processAutoOrderTrials`) lee la plataforma antes
+  de tomar cada fila (`readTrialStorePlatform`: solo esa columna, sin claves;
+  un cambio a mitad de corrida también cuenta). Con `woocommerce` la fila queda
+  `omitido` con el motivo **`tienda_en_woocommerce`**
+  (`AUTO_TRIAL_PLATFORM_REASON`), sin ninguna llamada a Shopify. El carrito
+  sigue en la cola y lo trabaja una asesora, como uno de `control`; «Generar
+  pedido» lo crea en WooCommerce con lo del carrito (arriba). La sincronización
+  lo cuenta en su reporte (`autoOrdersBlockedByPlatform`). Si la plataforma no
+  se puede leer, la fila no se toma: sigue `pendiente`, no se genera nada y el
+  reporte dice «pedidos_auto: no se pudo leer en qué plataforma crea sus
+  pedidos la tienda …». Sin la 0274, toda tienda es `shopify`.
+- **`recoverCart`** (completar el borrador de Shopify del lead) y **`closeSale`**
+  (una venta solo en Kapta, `manual-…`, que quedaba `shopify` por defecto) leen
+  la plataforma con `loadStoreOrderPlatform`. Con `woocommerce` no crean nada:
+  «La tienda crea sus pedidos nuevos en WooCommerce: …», y mandan a «Generar
+  pedido» (`SHOPIFY_CART_IN_WOO_STORE`, `LOCAL_SALE_IN_WOO_STORE`). Si la
+  tienda no se pudo leer, tampoco.
+- **Con `shopify` no cambia nada:** la prueba y las dos acciones hacen lo de
+  siempre.
+
+**Lo que no se tocó, a propósito:**
+
+- **La inscripción de la prueba A/B** (`enrollAbCohorts`, paso 1d-0) no mira
+  la plataforma. En una tienda en WooCommerce sigue sorteando los carritos de
+  Shopify que queden (de 3 a 48 horas): las filas `control` siguen como siempre
+  y las `auto` quedan `omitido` con `tienda_en_woocommerce`. En
+  `auto_order_ab_results` esas filas salen `sin_pedido`: **al medir se separan
+  por `reason`**. Si se deja de inscribir en esas tiendas o se cierra la cohorte
+  antes del 30-10 lo decide el owner (pendiente, arriba).
+- **La captura del carrito recuperado** (`linkCompletedDraftToLead`, paso 1b)
+  no crea: registra en `orders` el pedido de Shopify de un borrador que ya se
+  completó en Shopify, un pedido que existe, y gana el lead. Sigue igual con
+  cualquier plataforma; desde el cierre la pasada de borradores no trae nada.
+- **El cierre de Shopify no se adivina por la fecha** ni por `woo_site_url`.
+  Una tienda que siga en `shopify` después del 28-10-2026 (UTC) sigue con la
+  prueba como siempre: si Shopify ya no contesta, la fila termina `error` (o
+  `omitido`, `carrito_cerrado_en_shopify`) y no se crea nada.
+
+Implementación: `lib/auto-order-trials.ts` (`AUTO_TRIAL_PLATFORM_REASON`,
+`readTrialStorePlatform`, `processAutoOrderTrials`, `autoTrialDeps`), el paso
+1d de `runStoreSync` (`lib/ingest.ts`), `SHOPIFY_CART_IN_WOO_STORE` y
+`LOCAL_SALE_IN_WOO_STORE` (`lib/woocommerce-orders.ts`), y `recoverCart` y
+`closeSale` (`app/dashboard/leads/actions.ts`). Pruebas:
+`test/auto-order-trials.test.ts` y `test/carritos-plataforma.test.ts`.
 
 ### 38.13 Pedidos del bot de Kapso por Kapta (23-10-2026)
 
