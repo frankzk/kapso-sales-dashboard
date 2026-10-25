@@ -36,6 +36,8 @@ import { isAfterShopifyShutdown } from "@/lib/invoicing/shopify-cutoff";
 import { extractNumericId } from "@/lib/shopify-urls";
 import { CHECKOUT_GATEWAYS } from "@/lib/payment-gateway";
 import type { InvoiceItem, InvoiceReason } from "@/lib/invoicing/rules";
+import { fetchWooOrderForInvoice } from "@/lib/invoicing/woocommerce-order";
+import type { OrderPlatform } from "@/lib/types";
 
 /**
  * El pedido para su boleta (Admin API 2025-01). Las líneas son 100 como mucho:
@@ -127,6 +129,11 @@ export type InvoiceOrderRead =
        * Shopify en vivo: cuándo se tomó. La boleta lo guarda en su base.
        */
       snapshot?: { fetchedAt: string };
+      /**
+       * Solo si el pedido es de WooCommerce y se leyó en su API (MOM §35.11):
+       * cuándo. La boleta lo guarda en su base. Un pedido de Shopify nunca lo trae.
+       */
+      woocommerce?: { readAt: string };
     }
   | { ok: false; reason: InvoiceReason; detail?: string };
 
@@ -494,6 +501,8 @@ export function mapOrderForInvoice(order: unknown): InvoiceOrderRead {
 export function webPrepaidConfirmed(read: InvoiceOrderOk): boolean {
   const { payment, totalCents } = read;
   const names: unknown = payment.gatewayNames;
+  // WooCommerce no guarda lo que cobró la pasarela (MOM §35.11): no se adivina.
+  if (read.woocommerce) return false;
   return (
     totalCents > 0 &&
     payment.financialStatus.trim().toUpperCase() === "PAID" &&
@@ -688,11 +697,19 @@ async function readFromSnapshot(
  * pedido, si la hay (MOM §35.10), y la lectura lo dice (`snapshot`). Antes del
  * cierre esas respuestas son `lectura_fallida`, como siempre: con Shopify vivo,
  * la boleta no cambia. Sin foto, el motivo es el mismo de siempre.
+ *
+ * Un pedido de WooCommerce (`platform`, que es `orders.platform`; nunca la
+ * forma del id) se lee en WooCommerce (`fetchWooOrderForInvoice`, MOM §35.11):
+ * nunca se le pregunta a Shopify ni sale de una foto. Sin `platform`, o con
+ * `shopify`, todo es exactamente lo de siempre.
  */
 export async function fetchOrderForInvoice(
-  input: { storeId: string; shopifyOrderId: string },
+  input: { storeId: string; shopifyOrderId: string; platform?: OrderPlatform },
   deps: { admin?: SupabaseClient; fetchImpl?: typeof fetch; now?: () => number } = {},
 ): Promise<InvoiceOrderRead> {
+  if (input.platform === "woocommerce") {
+    return fetchWooOrderForInvoice({ storeId: input.storeId, shopifyOrderId: input.shopifyOrderId }, deps);
+  }
   const numericId = numericIdOf(input.shopifyOrderId);
   if (!numericId) return fail("no_encontrado", "El pedido no tiene id de Shopify.");
   const admin = deps.admin ?? createAdminSupabase();

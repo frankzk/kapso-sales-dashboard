@@ -181,6 +181,7 @@ import {
   SHOPIFY_NO_TOKEN_TEXT,
   SHOPIFY_RETRY_TEXT,
   SIMPLEFACT_CHECK_LABEL,
+  WOO_NO_KEYS_TEXT,
   doubtConfirmation,
   emitBeforeStartText,
   emitConfirmShown,
@@ -697,6 +698,8 @@ const SHOPIFY_RETRY_EXPECTED: Record<string, boolean> = {
   no_encontrado: false,
   lectura_fallida: true,
   sin_token_shopify: true,
+  // El `sin_token_shopify` de un pedido de WooCommerce (§35.11).
+  sin_claves_woo: true,
 };
 
 describe("loadInvoicePanel: lo que frena Shopify no es «lista» (FIX G)", () => {
@@ -3042,5 +3045,66 @@ describe("«Emitir esta boleta» de un pedido pagado antes de «Emitir desde»: 
       [ORDER, manualFacts({ issuers: [MANUAL_DESDE], payments: [{ ...factsFor().payments[0]!, registeredAt: ANTES, paidAt: "2026-10-02T23:05:00.000Z" }] })],
     ]);
     expect((await load()).emitNow).toMatchObject({ beforeStart: true, paidAt: ANTES, firstPaidAt: "2026-10-02T23:05:00.000Z" });
+  });
+});
+
+describe("el panel de un pedido de WooCommerce (MOM §35.11)", () => {
+  it("sin las claves de la API: «Espera a WooCommerce», con lo que falta para que salga", async () => {
+    st.facts = new Map([[ORDER, factsFor({ platform: "woocommerce" })]]);
+    st.db.checks = [checkRow("sin_claves_woo")];
+    const res = await loadInvoicePanel(ORDER);
+    if (!("data" in res)) throw new Error(res.error);
+    expect(res.data.platform).toBe("woocommerce");
+    expect(res.data.review).toMatchObject({ state: "shopify", reason: "sin_claves_woo", retry: true, waitsHours: true });
+    expect(invoicePanelView(res.data).badge).toEqual({ tone: "warn", label: "Espera a WooCommerce" });
+    const t = texto(pinta(res.data));
+    expect(t).toContain(INVOICE_REASON_LABEL.sin_claves_woo);
+    expect(t).toContain(WOO_NO_KEYS_TEXT);
+    expect(t).not.toContain("Shopify");
+  });
+
+  it("un motivo cuya frase nombra a Shopify se dice con WooCommerce", async () => {
+    st.facts = new Map([[ORDER, factsFor({ platform: "woocommerce" })]]);
+    st.db.checks = [checkRow("no_cuadra", { detail: "El detalle suma S/ 80.00; WooCommerce dice S/ 85.00." })];
+    const res = await loadInvoicePanel(ORDER);
+    if (!("data" in res)) throw new Error(res.error);
+    const t = texto(pinta(res.data));
+    expect(t).toContain("El detalle de WooCommerce no suma el total. El detalle suma S/ 80.00; WooCommerce dice S/ 85.00.");
+    expect(t).toContain(SHOPIFY_MANUAL_TEXT);
+    expect(t).not.toContain("Shopify");
+    expect(invoicePanelView(res.data).badge).toEqual({ tone: "warn", label: "Se emite a mano" });
+  });
+
+  it("lista: «el barrido vuelve a leer el pedido en WooCommerce»", async () => {
+    st.issuers = [{ ...ISSUER, mode: "real" }];
+    st.facts = new Map([[ORDER, factsFor({ platform: "woocommerce", issuers: [{ ...ISSUER, mode: "real" }] })]]);
+    st.db.checks = [];
+    const res = await loadInvoicePanel(ORDER);
+    if (!("data" in res)) throw new Error(res.error);
+    expect(res.data.review.state).toBe("lista");
+    expect(texto(pinta(res.data))).toContain("Antes de emitir, el barrido vuelve a leer el pedido en WooCommerce.");
+  });
+
+  it("un pedido de Shopify no lleva `platform`: el panel dice lo de siempre", async () => {
+    st.db.checks = [checkRow("sin_token_shopify")];
+    const res = await loadInvoicePanel(ORDER);
+    if (!("data" in res)) throw new Error(res.error);
+    expect(res.data).not.toHaveProperty("platform");
+    expect(invoicePanelView(res.data).badge).toEqual({ tone: "warn", label: "Espera a Shopify" });
+    expect(texto(pinta(res.data))).toContain(SHOPIFY_NO_TOKEN_TEXT);
+  });
+
+  it("«Emitir esta boleta» frenado por la lectura de WooCommerce: la frase de WooCommerce", async () => {
+    st.issuers = [MANUAL];
+    st.facts = new Map([[ORDER, manualFacts({ platform: "woocommerce" })]]);
+    st.emitResult = { ok: false, reason: "total_distinto", detail: "WooCommerce dice S/ 80.00; Kapta, S/ 85.00.", platform: "woocommerce" };
+    expect(await emitInvoiceAction(ORDER, SHOWN)).toEqual({
+      error: "El total de WooCommerce no es el de Kapta. WooCommerce dice S/ 80.00; Kapta, S/ 85.00.",
+    });
+    // Sin plataforma, la de siempre.
+    st.emitResult = { ok: false, reason: "total_distinto", detail: "Shopify dice S/ 80.00; Kapta, S/ 85.00." };
+    expect(await emitInvoiceAction(ORDER, SHOWN)).toEqual({
+      error: `${INVOICE_REASON_LABEL.total_distinto} Shopify dice S/ 80.00; Kapta, S/ 85.00.`,
+    });
   });
 });

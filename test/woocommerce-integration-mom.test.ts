@@ -122,8 +122,10 @@ describe("MOM §38.12", () => {
     expect(capture).toContain('if (input.platform === "woocommerce") return { ok: true, wrote: false, why: "woocommerce" };');
   });
 
-  it("deja escrito lo que falta (el lector de boletas de WooCommerce) y lo hecho (la búsqueda de Envíos)", () => {
-    expect(S38_12).toContain("**La boleta de un pedido de WooCommerce** espera su lector");
+  it("deja escrito lo hecho: el lector de boletas de WooCommerce (§35.11) y la búsqueda de Envíos", () => {
+    expect(S38_12).toContain("**La boleta de un pedido de WooCommerce:** **hecho (25-10-2026, §35.11)**");
+    expect(S38_12).toContain("**La boleta** (§35.11, 25-10-2026).");
+    expect(S38_12).toContain("(`fetchWooOrderForInvoice`)");
     // Hecho el 25-10-2026: test/shipment-auto-match-local.test.ts.
     expect(S38_12).toContain("**Auto-vínculo y búsqueda de Envíos** con pedidos de WooCommerce: **hecho (25-10-2026)**");
     expect(S38_12).toContain("#### Envíos: el auto-vínculo y la búsqueda con pedidos de WooCommerce (25-10-2026)");

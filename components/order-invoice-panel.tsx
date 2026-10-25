@@ -50,6 +50,7 @@ import {
   INVOICE_STATUS_LABEL,
   LIVE_REAL_STATUSES,
   invoiceNoteRef,
+  invoiceReasonLabel,
   type InvoiceMode,
   type InvoiceReason,
 } from "@/lib/invoicing/rules";
@@ -81,9 +82,15 @@ function serieDe(row: InvoicePanelRow): string | null {
   return row.correlative ? `${row.serie}-${row.correlative}` : row.serie;
 }
 
-/** El motivo con la frase del barrido; uno que no se conoce se enseña tal cual. */
-function motivo(reason: string, detail: string | null): string {
-  const label = INVOICE_REASON_LABEL[reason as InvoiceReason] ?? reason;
+/**
+ * El motivo con la frase del barrido; uno que no se conoce se enseña tal cual.
+ * De un pedido de WooCommerce, con la frase que nombra a WooCommerce (§35.11).
+ */
+function motivo(reason: string, detail: string | null, platform?: string | null): string {
+  const label =
+    INVOICE_REASON_LABEL[reason as InvoiceReason] !== undefined
+      ? invoiceReasonLabel(reason as InvoiceReason, platform)
+      : reason;
   return detail ? `${label} ${detail}` : label;
 }
 
@@ -101,6 +108,9 @@ export const SHOPIFY_LATER_TEXT = "Se vuelve a revisar en unas horas.";
 /** `sin_token_shopify`: lo mismo, con lo que falta para que salga. */
 export const SHOPIFY_NO_TOKEN_TEXT =
   "Se vuelve a revisar en unas horas, cuando la tienda tenga conexión con Shopify.";
+/** `sin_claves_woo` (§35.11): lo mismo, para un pedido de WooCommerce. */
+export const WOO_NO_KEYS_TEXT =
+  "Se vuelve a revisar en unas horas, cuando la tienda tenga guardadas sus claves de la API de WooCommerce.";
 
 /**
  * Qué pasa ahora con un pedido que frenó Shopify, según lo que de verdad hace
@@ -110,7 +120,11 @@ export const SHOPIFY_NO_TOKEN_TEXT =
  */
 export function shopifyNextText(review: Extract<InvoicePanelReview, { state: "shopify" }>): string | null {
   if (!review.retry) return SHOPIFY_MANUAL_TEXT;
-  if (review.waitsHours) return review.reason === "sin_token_shopify" ? SHOPIFY_NO_TOKEN_TEXT : SHOPIFY_LATER_TEXT;
+  if (review.waitsHours) {
+    if (review.reason === "sin_token_shopify") return SHOPIFY_NO_TOKEN_TEXT;
+    if (review.reason === "sin_claves_woo") return WOO_NO_KEYS_TEXT;
+    return SHOPIFY_LATER_TEXT;
+  }
   // `lectura_fallida` ya dice que se reintenta en la próxima pasada: no se repite.
   return /próxima pasada/i.test(motivo(review.reason, review.detail)) ? null : SHOPIFY_RETRY_TEXT;
 }
@@ -328,7 +342,9 @@ export function invoicePanelView(data: InvoicePanelData): InvoicePanelView {
     badge = { tone: "crit", label: INVOICE_STATUS_LABEL.error };
   } else if (data.review.state === "shopify") {
     // El barrido lo sigue saltando por lo que dijo Shopify: no está «por emitir».
-    badge = { tone: "warn", label: data.review.retry ? "Espera a Shopify" : "Se emite a mano" };
+    // De un pedido de WooCommerce, lo que se espera es a WooCommerce (§35.11).
+    const tienda = data.platform === "woocommerce" ? "WooCommerce" : "Shopify";
+    badge = { tone: "warn", label: data.review.retry ? `Espera a ${tienda}` : "Se emite a mano" };
   } else if (canEmitNow) {
     // En «Manual» lo que falta es que una persona pulse: el barrido no la emite.
     badge = { tone: "info", label: "Lista para emitir" };
@@ -603,7 +619,7 @@ export function OrderInvoicePanelView({
       {view.check && (
         <p className="text-[13px] leading-5 text-ink-500">
           Última pasada ({INVOICE_MODE_LABEL[view.check.mode as "simulacion" | "real"] ?? view.check.mode},{" "}
-          {cuando(view.check.checkedAt)}): {motivo(view.check.reason, view.check.detail)}
+          {cuando(view.check.checkedAt)}): {motivo(view.check.reason, view.check.detail, data.platform)}
         </p>
       )}
 
@@ -630,7 +646,7 @@ export function OrderInvoicePanelView({
 
       {!live && view.manualRuc && data.emitNowBlocked && (
         <p className="text-[13px] leading-5 text-ink-600">
-          «Emitir esta boleta» no está disponible: {motivo(data.emitNowBlocked.reason, data.emitNowBlocked.detail)}
+          «Emitir esta boleta» no está disponible: {motivo(data.emitNowBlocked.reason, data.emitNowBlocked.detail, data.platform)}
         </p>
       )}
 
@@ -767,7 +783,7 @@ function Review({
   if (review.state === "shopify") {
     // Kapta dice que sí, pero el barrido lo frenó al leer Shopify y lo sigue
     // saltando. «Lista para emitirse» aquí sería prometer una boleta que no sale.
-    const reason = motivo(review.reason, review.detail);
+    const reason = motivo(review.reason, review.detail, data.platform);
     const next = shopifyNextText(review);
     return (
       <div className="space-y-0.5 text-[13px] leading-5">
@@ -800,7 +816,7 @@ function Review({
         </p>
         <p className="text-ink-500">
           {review.mode === "real"
-            ? "Antes de emitir, el barrido vuelve a leer el pedido en Shopify."
+            ? `Antes de emitir, el barrido vuelve a leer el pedido en ${data.platform === "woocommerce" ? "WooCommerce" : "Shopify"}.`
             : "En simulación se arma la boleta y se guarda sin enviarla a SimpleFact."}
         </p>
       </div>
@@ -813,7 +829,7 @@ function Review({
   const extra = backfill && review.reason === "antes_de_inicio" ? ` ${BACKFILL_REVIEW_TEXT}` : "";
   return (
     <p className="text-[13px] leading-5 text-ink-600">
-      {motivo(review.reason, review.detail)}
+      {motivo(review.reason, review.detail, data.platform)}
       {extra}
     </p>
   );
