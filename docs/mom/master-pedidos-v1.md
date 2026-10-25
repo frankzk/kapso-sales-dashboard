@@ -4213,6 +4213,31 @@ saltó.
 - Solo la ve quien tiene el rol `vendedora`, y solo en «Sin llamar» sin
   búsqueda: quien solo supervisa no retiene leads por mirar la cola.
 
+**Carritos anteriores de la clienta (25-10-2026, pedido del owner).** Las
+asesoras entraban a Shopify → Pedidos → Borradores para ver, cliente por
+cliente, si deja puro carrito o sí compra: cada envío del formulario contra
+entrega deja un borrador, «Completado» si terminó en pedido y «Abierto» si lo
+abandonó. Ahora lo dice Kapta (`getCustomerCarts`, `lib/customer-carts.ts`), con
+los dos lados que ya viven aquí: el espejo `draft_orders` y el archivo de
+Shopify `shopify_history_carts` (§37.6: 106 mil borradores de Aurela desde 2021
+y 105 mil de Kenku desde 2023, más los checkouts abandonados de la web). Un
+borrador que está en los dos cuenta una vez y manda el espejo. Se busca por el
+celular en sus formas (el archivo lo guarda como venía) y en la misma tienda;
+el carrito del propio lead no cuenta (ya está en «Lo que pidió»).
+
+- **En la ficha**, bajo «Pedidos anteriores», la tarjeta «Carritos anteriores»:
+  el hecho primero —«Ninguno terminó en pedido.» en ámbar, «Todos terminaron en
+  pedido.» en verde, «3 de 12 terminaron en pedido.»— y los últimos cuatro con su
+  producto, monto y en qué quedaron («Pedido #KP…» o «Abandonado»); «Ver los N»
+  abre hasta 40. Sin carritos anteriores no sale.
+- **En la tarjeta del siguiente lead**, la fila «Carritos antes»: cuántos y el
+  mismo hecho, o «Ninguno: es su primer carrito».
+- Si la lectura falla, no se adivina: la ficha sale sin el bloque y la tarjeta
+  dice «No se pudo consultar ahora».
+- **WooCommerce todavía no entra**: sus formularios abandonados no llegan a
+  `draft_orders` (§38.12, pendiente). Cuando lleguen, con su plataforma, salen
+  aquí sin tocar nada.
+
 **«Siguiente lead» en la ficha (25-10-2026, pedido del owner).** Arriba a la
 derecha de la ficha del lead, entre el QR y «Cerrar», abre el siguiente sin
 cerrar la ficha (`leadAfter`, `lib/leads.ts`). Es el de **debajo** del abierto
