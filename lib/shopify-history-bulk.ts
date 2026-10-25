@@ -422,10 +422,15 @@ export function mapBulkProduct(node: AnyNode): HistoryProduct | null {
  * Productos de una tanda con sus hijos: variantes, fotos (en su tamaño
  * original), colecciones y metacampos. Las fotos van aparte porque cada una se
  * copia a Storage por su cuenta.
+ *
+ * Una foto va una sola vez por tanda: Shopify deja que varios productos usen el
+ * mismo archivo y la tabla guarda una fila por foto. La foto queda con el
+ * primer producto que la trae; repetirla rompía la tanda entera (§37.6).
  */
 export function groupBulkProducts(lines: readonly JsonlLine[]): { products: HistoryProduct[]; images: HistoryProductImage[] } {
   const byGid = new Map<string, HistoryProduct>();
   const images: HistoryProductImage[] = [];
+  const seenImages = new Set<string>();
   const positions = new Map<string, number>();
   for (const { value: v } of lines) {
     const parent = typeof v.__parentId === "string" ? v.__parentId : null;
@@ -453,7 +458,8 @@ export function groupBulkProducts(lines: readonly JsonlLine[]): { products: Hist
       case "MediaImage": {
         const url = str(v.image?.url);
         const imageId = gidNumber(v.id);
-        if (!url || !imageId) break;
+        if (!url || !imageId || seenImages.has(imageId)) break;
+        seenImages.add(imageId);
         const position = (positions.get(p.product_id) ?? 0) + 1;
         positions.set(p.product_id, position);
         images.push({

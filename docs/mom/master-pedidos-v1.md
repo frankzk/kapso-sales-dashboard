@@ -15802,7 +15802,11 @@ cierre del 28-10-2026 00:00 UTC (§35.10). «Traer todo» va paso por paso:
    privado `shopify-history` (`<tienda>/productos/<producto>/<foto>.<ext>`).
    Va por tandas de ~60 s; una foto que falla tres veces queda marcada y deja
    de intentarse. Es un respaldo: no es la foto de las plantillas de WhatsApp
-   (§39).
+   (§39). Shopify deja que varios productos usen la misma foto, y la tabla
+   guarda una fila por foto: en cada tanda la foto queda con el primer
+   producto que la trae. Antes del 25-10-2026 una foto repetida rompía la
+   tanda y la traída de productos de Kenku quedó trabada en «importando»; con
+   el arreglo sigue sola desde donde quedó.
 3. **Carritos abandonados** de la web y 4. **borradores** (el formulario contra
    entrega deja uno por envío), en `shopify_history_carts`: quién dejó sus
    datos, qué quería, el enlace para retomar o la factura, sus UTM y el pedido
