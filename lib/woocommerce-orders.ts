@@ -44,6 +44,7 @@ import {
   isWooOrderIngestible,
   toWooGmtParam,
   toWooPeruState,
+  wooGetPage,
   wooRequest,
   type WooClientOpts,
   type WooOrder,
@@ -1547,6 +1548,204 @@ export function flattenCatalog(products: readonly ProductSearchResult[]): Produc
     }
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// El catálogo completo (Envíos → Catálogo de productos, MOM §38.12)
+// ---------------------------------------------------------------------------
+
+/**
+ * Una variante del catálogo publicado de WooCommerce, con la misma forma que
+ * `ActiveShopifyCatalogVariant` de Shopify: la pantalla «Catálogo de productos»
+ * y la siembra del mapeo de Aliclik la leen igual venga de donde venga.
+ */
+export interface WooCatalogVariant {
+  /** `woo:<id del producto>`. */
+  productId: string;
+  productTitle: string;
+  /** `woo:<id de la variación>`, o el del producto si es simple. */
+  variantId: string;
+  /** Las opciones de la variación («M / Negro»); null en un producto simple. */
+  variantTitle: string | null;
+  /** Null si no tiene SKU propio (una variación sin SKU muestra el del padre). */
+  sku: string | null;
+  inventory: number | null;
+}
+
+export interface WooCatalogListing {
+  variants: WooCatalogVariant[];
+  /** False si el reloj, el tope de páginas o una llamada dejaron algo sin leer. */
+  complete: boolean;
+  /** Por qué quedó a medias, en corto y sin nada de la respuesta; null si completo. */
+  incompleteReason: string | null;
+}
+
+/** Productos por página: el máximo de WooCommerce. */
+export const WOO_CATALOG_PER_PAGE = 100;
+/** Páginas de productos, como mucho (3.000 productos; Aurela tiene ~1.000 variantes). */
+export const WOO_CATALOG_MAX_PAGES = 30;
+/** Páginas de variaciones de un mismo producto, como mucho (300 variaciones). */
+export const WOO_CATALOG_MAX_VARIATION_PAGES = 3;
+/** Reloj de toda la lectura: lo que no llegó a tiempo sale del historial de pedidos. */
+export const WOO_CATALOG_BUDGET_MS = 20_000;
+/** Tope de cada llamada. */
+export const WOO_CATALOG_CALL_MS = 10_000;
+/** Productos variables cuyas variaciones se piden a la vez. */
+export const WOO_CATALOG_CONCURRENCY = 6;
+
+const CATALOG_PRODUCT_FIELDS = "id,name,type,status,sku,stock_quantity";
+const CATALOG_VARIATION_FIELDS = "id,sku,status,stock_quantity,attributes";
+
+/**
+ * Todo el catálogo publicado de WooCommerce, variante por variante. Solo lee
+ * (`GET`), con el cliente de `lib/woocommerce.ts` y los mismos criterios que
+ * `searchWooCatalog`:
+ *
+ *   · `GET /products?status=publish&per_page=100&orderby=id&order=asc`,
+ *     página a página (`X-WP-TotalPages`), hasta `WOO_CATALOG_MAX_PAGES`;
+ *   · un producto simple es una variante; uno variable trae sus variaciones
+ *     publicadas (`GET /products/<id>/variations`), de a
+ *     `WOO_CATALOG_CONCURRENCY`; agrupados y externos no se venden;
+ *   · una variación sin SKU propio (WooCommerce le muestra el del padre) va
+ *     con `sku: null`: la pantalla la muestra «sin SKU en WooCommerce»;
+ *   · acotado por `WOO_CATALOG_BUDGET_MS`: lo que no se leyó a tiempo, o una
+ *     llamada que falló después de la primera página, deja `complete: false` y
+ *     quien llama completa con el historial de pedidos.
+ *
+ * Si la PRIMERA página falla, lanza (`WooError`): no hay catálogo que mostrar.
+ */
+export async function listWooCatalogVariants(
+  client: WooClientOpts,
+  input: { now?: () => number; budgetMs?: number; maxPages?: number } = {},
+): Promise<WooCatalogListing> {
+  const now = input.now ?? Date.now;
+  const deadline = now() + (input.budgetMs ?? WOO_CATALOG_BUDGET_MS);
+  const maxPages = Math.max(1, input.maxPages ?? WOO_CATALOG_MAX_PAGES);
+  const timeout = () => Math.max(1_000, Math.min(WOO_CATALOG_CALL_MS, deadline - now()));
+  const reasons: string[] = [];
+  const productQuery = {
+    status: "publish",
+    per_page: WOO_CATALOG_PER_PAGE,
+    orderby: "id",
+    order: "asc",
+    _fields: CATALOG_PRODUCT_FIELDS,
+  };
+
+  const first = await withWooAuthFallback({ ...client, timeoutMs: timeout() }, (o) =>
+    wooGetPage<WooProduct>(o, "/products", { ...productQuery, page: 1 }),
+  );
+  const auth = first.auth;
+  const products: WooProduct[] = [...first.value.items];
+  let last = first.value;
+  for (let page = 2; ; page++) {
+    const more =
+      last.items.length >= WOO_CATALOG_PER_PAGE && (last.totalPages == null || page <= last.totalPages);
+    if (!more) break;
+    if (page > maxPages) {
+      reasons.push(`más de ${maxPages * WOO_CATALOG_PER_PAGE} productos`);
+      break;
+    }
+    if (now() >= deadline) {
+      reasons.push("se acabó el tiempo");
+      break;
+    }
+    try {
+      last = await wooGetPage<WooProduct>({ ...client, auth, timeoutMs: timeout() }, "/products", {
+        ...productQuery,
+        page,
+      });
+    } catch (e) {
+      reasons.push(e instanceof WooError ? e.message : "una página de productos no se pudo leer");
+      break;
+    }
+    products.push(...last.items);
+  }
+
+  const seen = new Set<number>();
+  const listed: WooProduct[] = [];
+  for (const p of products) {
+    const id = Number(p?.id);
+    if (!Number.isInteger(id) || id <= 0 || seen.has(id)) continue;
+    if (p.type !== "simple" && p.type !== "variable") continue;
+    if (p.status && p.status !== "publish") continue;
+    seen.add(id);
+    listed.push(p);
+  }
+
+  const variationsOf = new Map<number, WooVariation[]>();
+  const queue = listed.filter((p) => p.type === "variable");
+  let timedOut = false;
+  let failed = 0;
+  const worker = async () => {
+    for (let p = queue.shift(); p; p = queue.shift()) {
+      if (now() >= deadline) {
+        timedOut = true;
+        return;
+      }
+      const id = Number(p.id);
+      const got: WooVariation[] = [];
+      try {
+        for (let page = 1; page <= WOO_CATALOG_MAX_VARIATION_PAGES; page++) {
+          const res = await wooGetPage<WooVariation>({ ...client, auth, timeoutMs: timeout() }, `/products/${id}/variations`, {
+            status: "publish",
+            per_page: WOO_CATALOG_PER_PAGE,
+            _fields: CATALOG_VARIATION_FIELDS,
+            page,
+          });
+          got.push(...res.items);
+          if (res.items.length < WOO_CATALOG_PER_PAGE) break;
+          if (res.totalPages != null && page >= res.totalPages) break;
+          if (now() >= deadline) break;
+        }
+        variationsOf.set(id, got);
+      } catch {
+        failed++;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(WOO_CATALOG_CONCURRENCY, queue.length) }, worker));
+  if (timedOut && !reasons.includes("se acabó el tiempo")) reasons.push("se acabó el tiempo");
+  if (failed) reasons.push(`no se pudieron leer las variaciones de ${failed} producto(s)`);
+
+  const optionsOf = (attrs: WooVariation["attributes"]) =>
+    (attrs ?? [])
+      .map((a) => textOf(a?.option))
+      .filter(Boolean)
+      .join(" / ");
+  const variants: WooCatalogVariant[] = [];
+  for (const p of listed) {
+    const id = Number(p.id);
+    const title = textOf(p.name);
+    if (!title) continue;
+    const parentSku = textOf(p.sku);
+    if (p.type === "simple") {
+      variants.push({
+        productId: wooVariantRef(id),
+        productTitle: title,
+        variantId: wooVariantRef(id),
+        variantTitle: null,
+        sku: parentSku || null,
+        inventory: stockOf(p.stock_quantity),
+      });
+      continue;
+    }
+    for (const v of variationsOf.get(id) ?? []) {
+      const vid = Number(v?.id);
+      if (!Number.isInteger(vid) || vid <= 0) continue;
+      if (v.status && v.status !== "publish") continue;
+      const sku = textOf(v.sku);
+      variants.push({
+        productId: wooVariantRef(id),
+        productTitle: title,
+        variantId: wooVariantRef(vid),
+        variantTitle: optionsOf(v.attributes) || null,
+        sku: sku && sku !== parentSku ? sku : null,
+        inventory: stockOf(v.stock_quantity),
+      });
+    }
+  }
+
+  return { variants, complete: reasons.length === 0, incompleteReason: reasons.length ? reasons.join("; ") : null };
 }
 
 /** Las opciones del cliente REST de una tienda con sus claves completas. */

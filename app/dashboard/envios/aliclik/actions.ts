@@ -18,10 +18,12 @@ import {
   latestSyncedAt,
   loadAllAliclikSkus,
   loadShopifySkuDetails,
+  loadSkuCatalogSource,
   normalizeProductName,
   normalizeSku,
   syncAliclikCatalog,
 } from "@/lib/aliclik-catalog";
+import { catalogSkusPhrase, catalogSourceNotice, type CatalogPlatform } from "@/lib/catalog-source";
 import { cargarMapaSwayp, tiendasDeLaOrg } from "@/lib/swayp-sku-map";
 
 const PATH = "/dashboard/envios/aliclik";
@@ -63,20 +65,20 @@ export async function syncCatalog(
   const creds = await getStoreCreds(storeId, ctx.admin);
   if (!creds?.aliclik_api_token) return { error: "Esta tienda no tiene token de Aliclik." };
 
+  // La lista de productos sale del catálogo de la plataforma de la tienda:
+  // Shopify, o WooCommerce si ya crea allí sus pedidos (MOM §38.12).
   const report = await syncAliclikCatalog(
     storeId,
     { apiToken: creds.aliclik_api_token },
     ctx.admin,
-    creds.shopify_token
-      ? { domain: creds.shopify_domain, token: creds.shopify_token }
-      : undefined,
+    await loadSkuCatalogSource(ctx.admin, storeId, creds),
   );
   revalidatePath(PATH);
   if (!report.ok) return { error: report.errors.join("; ") || "No se pudo sincronizar." };
   // Los avisos se muestran, igual que en Ajustes: una pasada de agencia fallida
   // deja la elegibilidad de la sincronización anterior, y quien sincroniza a
   // mano tiene que saberlo en vez de leer «actualizado» a secas.
-  const notice = `Catálogo actualizado: ${report.shopifySkus} SKUs activos de Shopify, ${report.skus} SKUs de Aliclik, ${report.agencies} agencias. ${report.autoMapped} mapeos nuevos automáticos.`;
+  const notice = `Catálogo actualizado: ${catalogSkusPhrase(report.shopifySkus, report.sourcePlatform)}, ${report.skus} SKUs de Aliclik, ${report.agencies} agencias. ${report.autoMapped} mapeos nuevos automáticos.`;
   return {
     notice: report.errors.length ? `${notice} Avisos: ${report.errors.join("; ")}` : notice,
   };
@@ -169,6 +171,18 @@ export interface CatalogView {
   missingSku: number;
   catalogSize: number;
   syncedAt: string | null;
+  /**
+   * De dónde sale la lista: el catálogo de Shopify o el de WooCommerce
+   * (`stores.platform`, MOM §38.12); null si no se pudo leer la tienda. Los
+   * textos de la pantalla nombran esa fuente («sin SKU en WooCommerce»).
+   */
+  source: CatalogPlatform;
+  /**
+   * El catálogo de WooCommerce (o la tienda) no se pudo leer, o se leyó a
+   * medias, y la lista se completó con el historial de pedidos. Null si todo
+   * bien. Con Shopify siempre null, como antes.
+   */
+  sourceNotice: string | null;
 }
 
 /** Una opción del buscador de productos de Aliclik. */
@@ -189,19 +203,21 @@ export interface AliclikSkuOption {
 export async function loadCatalogView(storeId: string): Promise<CatalogView> {
   const admin = createAdminSupabase();
   const creds = await getStoreCreds(storeId, admin);
+  // Con `stores.platform = woocommerce` y sus claves, la lista sale del
+  // catálogo de WooCommerce; con `shopify`, del de Shopify, como siempre.
+  const source = await loadSkuCatalogSource(admin, storeId, creds);
+  const sourceProblems: string[] = [];
 
   // `loadAllAliclikSkus` PAGINA. Sin eso se leían solo los primeros 1000 de los
   // ~3.700 del catálogo (PostgREST corta ahí), y dos tercios de los productos
   // aparecían "sin candidato automático" cuando su candidato sí existía.
   const [shopify, skus, mapRes, swaypRes] = await Promise.all([
-    loadShopifySkuDetails(
-      storeId,
-      admin,
-      365,
-      creds?.shopify_token
-        ? { domain: creds.shopify_domain, token: creds.shopify_token }
-        : undefined,
-    ),
+    loadShopifySkuDetails(storeId, admin, 365, source, {
+      // Shopify no avisaba en esta pantalla y sigue sin avisar (nada cambia
+      // con `shopify`); WooCommerce sí, porque la lista puede quedar corta.
+      onSourceError:
+        source.platform === "shopify" ? undefined : (detail) => sourceProblems.push(detail),
+    }),
     loadAllAliclikSkus(storeId, admin),
     admin.from("aliclik_sku_map").select("shopify_sku,ean,source").eq("store_id", storeId),
     // POR ORGANIZACIÓN, igual que la creación de la guía. La pantalla decía
@@ -281,6 +297,8 @@ export async function loadCatalogView(storeId: string): Promise<CatalogView> {
     missingSku: rows.filter((r) => !r.shopifySku).length,
     catalogSize: skus.length,
     syncedAt: latestSyncedAt(skus),
+    source: source.platform,
+    sourceNotice: catalogSourceNotice(source.platform, sourceProblems),
   };
 }
 

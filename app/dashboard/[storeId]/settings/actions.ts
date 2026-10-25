@@ -34,7 +34,8 @@ import {
 } from "@/lib/meta-marketing";
 import { metaInsightsRange, syncMetaInsightsHistory } from "@/lib/meta-insights-sync";
 import { listProducts } from "@/lib/aliclik";
-import { syncAliclikCatalog } from "@/lib/aliclik-catalog";
+import { loadSkuCatalogSource, syncAliclikCatalog } from "@/lib/aliclik-catalog";
+import { catalogSkusPhrase } from "@/lib/catalog-source";
 import { env } from "@/lib/env";
 import { REPLY_TOKENS } from "@/lib/wa-reply-templates";
 import { PAYMENT_METHOD_KINDS } from "@/lib/payment-methods";
@@ -556,17 +557,16 @@ export async function syncAliclikCatalogNow(
   const creds = await getStoreCreds(storeId, ctx.admin);
   if (!creds?.aliclik_api_token) return { error: "Esta tienda no tiene token de Aliclik." };
 
+  // Shopify o WooCommerce, según dónde crea sus pedidos la tienda (MOM §38.12).
   const report = await syncAliclikCatalog(
     storeId,
     { apiToken: creds.aliclik_api_token },
     ctx.admin,
-    creds.shopify_token
-      ? { domain: creds.shopify_domain, token: creds.shopify_token }
-      : undefined,
+    await loadSkuCatalogSource(ctx.admin, storeId, creds),
   );
   revalidatePath(`/dashboard/${storeId}/settings`);
   if (!report.ok) return { error: report.errors.join("; ") || "No se pudo sincronizar." };
-  const detail = `${report.shopifySkus} SKUs activos de Shopify, ${report.skus} SKUs de Aliclik, ${report.agencies} agencias, ${report.autoMapped} mapeos automáticos`;
+  const detail = `${catalogSkusPhrase(report.shopifySkus, report.sourcePlatform)}, ${report.skus} SKUs de Aliclik, ${report.agencies} agencias, ${report.autoMapped} mapeos automáticos`;
   return {
     notice: report.errors.length
       ? `Catálogo sincronizado (${detail}), con avisos: ${report.errors.join("; ")}`

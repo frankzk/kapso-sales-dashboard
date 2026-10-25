@@ -16152,7 +16152,10 @@ WooCommerce viven en esa fila de `stores` y cada pedido lleva su plataforma.
   solo crea con `woocommerce` (38.13); la prueba de recompra sin llamada
   (`auto_order_trials`) y las acciones viejas de Leads `recoverCart` y
   `closeSale`, que solo crean con `shopify` (25-10-2026, 38.12, «Los carritos
-  de Shopify en una tienda que ya crea en WooCommerce»); y, desde el cierre de
+  de Shopify en una tienda que ya crea en WooCommerce»); la lista de Envíos →
+  «Catálogo de productos» y la siembra del mapeo de Aliclik, que con
+  `woocommerce` salen del catálogo de WooCommerce (25-10-2026, 38.12, «Envíos →
+  Catálogo de productos en WooCommerce»); y, desde el cierre de
   Shopify, las fotos de producto de WhatsApp (`shopifyGoneForStore`, §39.5,
   que también mira `woo_site_url`). La entrada de pedidos no lo mira (38.11). **Quién lo cambia:** el owner, en Ajustes → WooCommerce → «Crear los
   pedidos nuevos en», con «Administrar tiendas» y una confirmación explícita;
@@ -16717,7 +16720,10 @@ manda `stores.platform` («Generar pedido» y los buscadores, abajo) y qué falt
 **Los respaldos de Shopify no cambian a Kenku ni a Aurela mientras Shopify
 responda.** El tope de 30 s de cada llamada a Shopify, el catálogo de Aliclik
 con el historial de pedidos y Envíos con la fila de Kapta solo entran cuando
-una llamada a Shopify falla o la tienda no tiene token. **El auto-vínculo de
+una llamada a Shopify falla o la tienda no tiene token. El catálogo de Aliclik
+de una tienda con `stores.platform = woocommerce` ya no le pregunta a Shopify:
+lee el de WooCommerce, con el mismo historial de respaldo (25-10-2026, «Envíos →
+Catálogo de productos en WooCommerce», abajo). **El auto-vínculo de
 Envíos es la excepción** (abajo): desde el 25-10-2026, por decisión del owner,
 ya no le pregunta a Shopify ni con Shopify funcionando; busca siempre en la
 base de Kapta.
@@ -17094,6 +17100,76 @@ Shopify solo cambia `platform` y no prueba nada: es la marcha atrás. Nunca toca
 cambio deja una línea `[woo-platform]` en el registro (tienda, de qué a qué,
 quién y cuándo), y solo se guarda si nadie la cambió entre la lectura y el
 guardado.
+
+#### Envíos → Catálogo de productos en WooCommerce (25-10-2026)
+
+**Por qué.** La pantalla «Catálogo de productos» (Envíos → Aliclik) lista los
+productos de la tienda para asociarlos a un EAN de Aliclik (`aliclik_sku_map`)
+y a un código de barras de Swayp (`swayp_sku_map`), y la sincronización del
+catálogo de Aliclik (el botón, Ajustes y el cron de cada hora) siembra el
+mapeo por nombre con la misma lista. Salía del catálogo activo de Shopify, con
+el historial de pedidos del último año de respaldo. Con Shopify cerrado el
+28-10-2026 (UTC) y las dos tiendas creando en WooCommerce (decisión del owner,
+25-10-2026), un producto que nunca se vendió desaparecía de la lista y los
+avisos decían «sin SKU en Shopify».
+
+**La regla.** La fuente la decide `stores.platform` (38.1,
+`loadSkuCatalogSource`):
+
+- **`woocommerce` con la dirección, la clave del sitio y las dos claves de la
+  API**: el catálogo **publicado** de WooCommerce (`listWooCatalogVariants`,
+  solo `GET`): `GET /products?status=publish&per_page=100&orderby=id&order=asc`
+  página a página, y para cada producto variable sus variaciones publicadas
+  (`GET /products/<id>/variations`), con el cliente de `lib/woocommerce.ts` y
+  su respaldo de autenticación por query string, como el buscador
+  (`searchWooCatalog`). Un producto simple es una fila; uno variable, una fila
+  por variación («M / Negro»); agrupados y externos no se venden y no salen.
+  Una variación sin SKU propio (WooCommerce le muestra el del padre) sale **sin
+  SKU**, como en el buscador. **Shopify no se consulta**, ni con su token.
+- **`woocommerce` sin claves usables**: solo el historial, y la pantalla lo
+  dice («Catálogo de WooCommerce: Sus claves de la API no se pueden usar …»).
+- **`shopify`** (o la base sin la 0274): **nada cambia**, el catálogo activo de
+  Shopify con su token, sus avisos y su respaldo de siempre.
+- **No se pudo leer la tienda**: solo el historial, con el aviso «Catálogo de
+  la tienda: No se pudo leer la plataforma de la tienda …».
+
+**El respaldo no cambia.** Encima del catálogo se suman los productos vistos
+en `orders` del último año (de las dos plataformas): si WooCommerce falla, la
+lista sale entera del historial; si se lee a medias, el historial completa.
+Un producto que nunca se vendió y que WooCommerce no llegó a entregar es lo
+único que falta.
+
+**Las asociaciones no se tocan.** `aliclik_sku_map` y `swayp_sku_map` van por
+SKU (normalizado, `normalizeSku`) y WooCommerce usa los mismos SKU que Shopify:
+un mapeo hecho con la lista de Shopify sigue valiendo, sin migrar nada. La
+siembra automática solo agrega (`ignoreDuplicates`), por SKU igual o por
+nombre normalizado, ahora con los nombres de WooCommerce.
+
+**Tiempos.** La lectura tiene un reloj de 20 s (`WOO_CATALOG_BUDGET_MS`),
+10 s por llamada, 30 páginas de 100 productos como mucho
+(`WOO_CATALOG_MAX_PAGES`), 3 páginas de variaciones por producto y 6
+productos variables a la vez (`WOO_CATALOG_CONCURRENCY`). Lo que no llega (el
+reloj, el tope o una llamada que falla después de la primera página) deja la
+lectura «en parte» y lo completa el historial; si falla la primera página, no
+hay catálogo y queda solo el historial. El resultado se guarda **5 minutos en
+memoria** por tienda (`WOO_CATALOG_CACHE_MS`): asociar o vincular vuelve a
+pintar la pantalla y no relee WooCommerce cada vez. «Sincronizar catálogo» y el
+cron siempre lo releen (quien acaba de poner un SKU en WooCommerce y sincroniza
+tiene que verlo). Una lectura que falló no se guarda.
+
+**Lo que dice la pantalla** (`lib/catalog-source.ts`): la etiqueta de cada fila
+nombra la fuente («Variante WooCommerce», «SKU WooCommerce», «Falta SKU en
+WooCommerce», «Abre este producto en WooCommerce, asigna un SKU a la variante
+y vuelve a sincronizar»), el aviso general dice «N producto(s) publicado(s) no
+tienen SKU en WooCommerce» y, si WooCommerce falló o se leyó a medias, un aviso
+ámbar arriba: «Catálogo de WooCommerce: <por qué> La lista se completó con el
+historial de pedidos del último año …». Con Shopify no hay ese aviso, como
+antes. La sincronización cuenta «N SKUs de WooCommerce» y su aviso de fallo
+dice «Catálogo de WooCommerce: <por qué> Se asoció con el historial de
+pedidos.» (con Shopify, «Catálogo activo de Shopify: …», como siempre). El
+detalle es el mensaje del `WooError`, sin secretos ni la dirección.
+
+Pruebas: `test/aliclik-catalog-woo.test.ts`.
 
 #### El enlace al pedido y el nombre de su tienda (24-10-2026)
 
