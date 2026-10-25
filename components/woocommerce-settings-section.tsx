@@ -14,7 +14,7 @@
 // acción, para copiarlo. Este archivo no importa nada que arrastre
 // `node:crypto`: solo las acciones de servidor y piezas de la interfaz.
 
-import { useEffect, useRef, useState, useTransition, useActionState, type FormEvent } from "react";
+import { useEffect, useRef, useState, useTransition, useActionState, type FormEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/components/ui";
 import { Badge, Banner, FIELD, OpsButton } from "@/components/ops-ui";
@@ -29,6 +29,12 @@ import {
 } from "@/app/dashboard/[storeId]/settings/woo-actions";
 import { switchStorePlatform } from "@/app/dashboard/[storeId]/settings/woo-platform-actions";
 import { PLATFORM_LABEL, WOO_PLATFORM_FIELDS, type StorePlatform } from "@/lib/woocommerce-platform";
+import {
+  wooSectionBadge,
+  wooWebhooksView,
+  type WooSectionBadge,
+  type WooSyncStateView,
+} from "@/lib/woocommerce-webhooks-view";
 
 /** Lo que manda la página. Sin secretos: solo si hay uno. */
 export interface WooSettingsView {
@@ -51,12 +57,25 @@ export interface WooSettingsView {
   webhookUrl: string;
   topics: readonly string[];
   /** La fila `woo_orders` de `sync_state`, si ya corrió. */
-  sync: { status: string | null; last_run_at: string | null; error: string | null } | null;
+  sync: WooSyncStateView | null;
+  /**
+   * La fila `woo_webhooks` de `sync_state` (MOM §38.14): la revisión de los
+   * webhooks en WooCommerce, si ya corrió. `warning` es que algo falta.
+   */
+  webhooks: WooSyncStateView | null;
   /** Pre-0274: las columnas no existen y la sección solo lo dice. */
   migrationMissing: boolean;
 }
 
 const initial: WooSettingsState = {};
+
+/** La chapa de la sección según `wooSectionBadge`. */
+const SECTION_BADGE: Record<WooSectionBadge, ReactNode> = {
+  con_error: <Badge tone="warn">Con error</Badge>,
+  conectada: <Badge tone="ok">Conectada</Badge>,
+  incompleta: <Badge tone="warn">Incompleta</Badge>,
+  sin_configurar: <Badge tone="neutral">Sin configurar</Badge>,
+};
 
 const WHEN = new Intl.DateTimeFormat("es-PE", {
   timeZone: "America/Lima",
@@ -134,15 +153,20 @@ export function WooCommerceSettingsSection({ storeId, data }: { storeId: string;
   }
 
   const apiReady = Boolean(data.siteUrl && data.siteKey && data.hasConsumerKey && data.hasConsumerSecret);
-  const badge = data.lastError ? (
-    <Badge tone="warn">Con error</Badge>
-  ) : apiReady && data.hasWebhookSecret ? (
-    <Badge tone="ok">Conectada</Badge>
-  ) : apiReady || data.siteUrl ? (
-    <Badge tone="warn">Incompleta</Badge>
-  ) : (
-    <Badge tone="neutral">Sin configurar</Badge>
-  );
+  // La revisión de los webhooks (MOM §38.14): la línea, lo que falta en su
+  // propio aviso si `woo_last_error` no lo dice ya, y la chapa
+  // (lib/woocommerce-webhooks-view.ts, probado en
+  // test/woocommerce-webhooks-view.test.ts).
+  const hooks = wooWebhooksView({ webhooks: data.webhooks, lastError: data.lastError, apiReady });
+  const badge = SECTION_BADGE[
+    wooSectionBadge({
+      lastError: data.lastError,
+      webhooksFlagError: hooks.flagsError,
+      apiReady,
+      hasWebhookSecret: data.hasWebhookSecret,
+      siteUrl: data.siteUrl,
+    })
+  ];
 
   function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -179,7 +203,7 @@ export function WooCommerceSettingsSection({ storeId, data }: { storeId: string;
           platformSwitchedAt={data.platformSwitchedAt}
           apiReady={apiReady}
         />
-        <div className={ROW}>
+        <div className={cn(ROW, "space-y-1")}>
           <p className={HELP}>
             Última sincronización de WooCommerce:{" "}
             {data.sync?.last_run_at
@@ -189,7 +213,21 @@ export function WooCommerceSettingsSection({ storeId, data }: { storeId: string;
               : "todavía no corrió"}
             .
           </p>
+          {hooks.showLine ? (
+            <p className={HELP}>
+              Revisión de los webhooks en WooCommerce (cada hora):{" "}
+              {hooks.summary ? `${when(data.webhooks?.last_run_at ?? null)} · ${hooks.summary}` : "todavía no corrió"}
+              .
+            </p>
+          ) : null}
         </div>
+        {hooks.detail ? (
+          <div className={ROW}>
+            <Banner tone="warn" title="Webhooks en WooCommerce">
+              <p className="break-words">{hooks.detail}</p>
+            </Banner>
+          </div>
+        ) : null}
         {data.lastError ? (
           <div className={ROW}>
             <Banner tone="warn" title="Último fallo con WooCommerce">
@@ -311,7 +349,11 @@ export function WooCommerceSettingsSection({ storeId, data }: { storeId: string;
           <p className={HELP}>
             Al crearlo, WooCommerce manda una prueba: si la dirección es la de esta tienda, contesta 200 y el webhook
             queda activo. Si el secreto no coincide, cada aviso recibe 401 y WooCommerce desactiva el webhook después de
-            5 fallos; los pedidos igual llegan por la sincronización.
+            5 fallos; los pedidos nuevos y sus cambios igual llegan por la sincronización, pero lo que se manda a la
+            papelera solo llega por <code>order.deleted</code>. Kapta revisa cada hora (y al guardar o probar la
+            conexión) que los cuatro temas tengan uno activo con esta dirección, y lo avisa arriba. Nunca los cambia: se
+            arreglan en WooCommerce. La versión de la API y el secreto no los muestra WooCommerce: esos se revisan a mano
+            en cada webhook.
           </p>
         </div>
       </div>

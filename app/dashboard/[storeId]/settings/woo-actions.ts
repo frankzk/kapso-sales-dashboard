@@ -15,6 +15,12 @@
 // claves de la API guardadas solo se mandan al sitio guardado: para probar o
 // guardar otra dirección hay que escribirlas de nuevo (`WOO_NEW_SITE_NEEDS_KEYS`).
 //
+// LOS WEBHOOKS (MOM §38.14). Con la conexión probada, «Guardar» y «Probar
+// conexión» leen además la lista de webhooks del sitio con las mismas claves
+// (solo `GET`) y dicen si los cuatro temas tienen uno activo que entrega a esta
+// tienda; con lo guardado, el resultado queda en `sync_state` y en
+// `woo_last_error`, como el de la revisión de cada hora.
+//
 // NADA DE SHOPIFY. Estas acciones solo escriben columnas `woo_*`. No cambian
 // `stores.platform` (dónde crea Kapta los pedidos nuevos): ese cambio es del día
 // del corte, lo decide el owner y tiene su propia acción con confirmación
@@ -29,6 +35,7 @@ import { hasOrgPermission } from "@/lib/permissions-access";
 import { encrypt } from "@/lib/crypto";
 import { WooError, normalizeWooSiteUrl, wooGetPage, wooRequest, type WooClientOpts } from "@/lib/woocommerce";
 import { WOO_STORE_COLUMNS, recordWooLastError, withWooAuthFallback, wooCredsFromRow, wooHostOf } from "@/lib/woocommerce-intake";
+import { checkWooWebhooks, recordWooWebhooksCheck, wooWebhooksNotice } from "@/lib/woocommerce-webhooks-health";
 import {
   WOO_NEW_SITE_NEEDS_KEYS,
   WOO_SETTINGS_FIELDS,
@@ -134,7 +141,8 @@ async function probeWoo(opts: WooClientOpts): Promise<{ ok: true; notice: string
 /**
  * «Guardar»: el sitio, la clave del sitio, las claves de la API y el secreto de
  * los webhooks. Si cambian el sitio o las claves de la API, se prueban antes:
- * si no sirven, no se guarda nada. Un campo en blanco conserva lo guardado.
+ * si no sirven, no se guarda nada; si sirven, después de guardar se revisan
+ * los webhooks del sitio con ellas. Un campo en blanco conserva lo guardado.
  */
 export async function saveWooSettings(_prev: WooSettingsState, formData: FormData): Promise<WooSettingsState> {
   const storeId = String(formData.get("store_id") ?? "");
@@ -156,6 +164,8 @@ export async function saveWooSettings(_prev: WooSettingsState, formData: FormDat
   const { values } = validation;
 
   let probeNotice: string | null = null;
+  // Lo que se probó y salió bien: con eso mismo se revisan después los webhooks.
+  let probed: WooClientOpts | null = null;
   if (validation.apiChanged && validation.apiComplete) {
     // Con una dirección nueva, solo las claves escritas ahora (la validación ya
     // lo exige): las guardadas no viajan a otro sitio.
@@ -163,13 +173,15 @@ export async function saveWooSettings(_prev: WooSettingsState, formData: FormDat
     const consumerKey = newSite ? values.consumerKey : (values.consumerKey ?? stored.consumerKey);
     const consumerSecret = newSite ? values.consumerSecret : (values.consumerSecret ?? stored.consumerSecret);
     if (!consumerKey || !consumerSecret) return { error: WOO_NEW_SITE_NEEDS_KEYS };
-    const probe = await probeWoo({
+    const target: WooClientOpts = {
       siteUrl: values.siteUrl ?? stored.siteUrl ?? "",
       consumerKey,
       consumerSecret,
-    });
+    };
+    const probe = await probeWoo(target);
     if (!probe.ok) return { error: `No se guardó: ${probe.error}` };
     probeNotice = probe.notice;
+    probed = target;
   }
 
   const patch: Record<string, unknown> = buildWooSettingsPatch(values);
@@ -190,6 +202,16 @@ export async function saveWooSettings(_prev: WooSettingsState, formData: FormDat
         wooUniqueViolationMessage(error) ?? (isWooMigrationMissing(error) ? MIGRATION_MISSING : "No se pudo guardar."),
     };
   }
+
+  // Guardado lo que se probó, los webhooks del sitio con esas mismas claves
+  // (MOM §38.14): el parche dejó `woo_last_error` en null, así que lo que
+  // encuentre es lo único que queda. Solo lectura; nunca frena el guardado.
+  let webhooksLine: string | null = null;
+  if (probed) {
+    const check = await checkWooWebhooks(probed, storeId);
+    await recordWooWebhooksCheck(ctx.admin, storeId, check, null);
+    webhooksLine = wooWebhooksNotice(check);
+  }
   revalidatePath(`/dashboard/${storeId}/settings`);
 
   const lines = ["Guardado."];
@@ -202,13 +224,15 @@ export async function saveWooSettings(_prev: WooSettingsState, formData: FormDat
   } else {
     lines.push("Faltan la Consumer key y el Consumer secret para traer pedidos por la API.");
   }
+  if (webhooksLine) lines.push(webhooksLine);
   return { notice: lines.join(" ") };
 }
 
 /**
  * «Probar conexión»: con lo escrito en el formulario si se escribió algo, si no
- * con lo guardado. No guarda nada de lo escrito. Si prueba lo guardado, deja el
- * resultado en `woo_last_error` (lo limpia si salió bien).
+ * con lo guardado. No guarda nada de lo escrito. Si la conexión sirve, revisa
+ * también los webhooks del sitio. Si prueba lo guardado, deja el resultado en
+ * `woo_last_error` (lo limpia si salió bien) y la revisión en `sync_state`.
  */
 export async function testWooConnection(_prev: WooSettingsState, formData: FormData): Promise<WooSettingsState> {
   const storeId = String(formData.get("store_id") ?? "");
@@ -239,12 +263,18 @@ export async function testWooConnection(_prev: WooSettingsState, formData: FormD
     siteUrl === stored.siteUrl && consumerKey === stored.consumerKey && consumerSecret === stored.consumerSecret;
 
   const probe = await probeWoo({ siteUrl, consumerKey, consumerSecret });
+  // Con la conexión buena, también los webhooks del sitio (MOM §38.14), con las
+  // mismas claves y solo lectura.
+  const webhooks = probe.ok ? await checkWooWebhooks({ siteUrl, consumerKey, consumerSecret }, storeId) : null;
   if (usingStored) {
     await recordWooLastError(ctx.admin, storeId, probe.ok ? null : `Conexión: ${probe.error}`, stored.lastError);
+    // La prueba buena acaba de dejar `woo_last_error` en null.
+    if (webhooks) await recordWooWebhooksCheck(ctx.admin, storeId, webhooks, null);
     revalidatePath(`/dashboard/${storeId}/settings`);
   }
   if (!probe.ok) return { error: probe.error };
-  return { notice: usingStored ? probe.notice : `${probe.notice} (Probado con lo escrito; todavía no se guardó.)` };
+  const notice = webhooks ? `${probe.notice} ${wooWebhooksNotice(webhooks)}` : probe.notice;
+  return { notice: usingStored ? notice : `${notice} (Probado con lo escrito; todavía no se guardó.)` };
 }
 
 /**

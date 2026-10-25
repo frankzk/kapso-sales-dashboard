@@ -16241,6 +16241,9 @@ funcionando la dirección del Master, la nota, los totales del cajón,
   `X-WC-Webhook-Delivery-ID`, que se repite dentro del mismo segundo.
 - **Temas:** `order.created`, `order.updated`, `order.deleted` y
   `order.restored`.
+- **Desactivación:** WooCommerce desactiva un webhook después de 5 fallos
+  seguidos y no avisa. Kapta lo revisa cada hora leyendo la lista de webhooks
+  del sitio, sin cambiarla nunca (38.14).
 - **API REST v3:** solo por https y a un dominio público (nunca una IP ni un
   nombre interno), con la Consumer key y el Consumer secret por cabecera
   `Authorization: Basic`; por query string solo si el hosting borra esa
@@ -16453,13 +16456,17 @@ demás credenciales):
   redirecciones, 38.8) y los avisos firmados que llegan con la dirección nueva
   no se procesan («Otro sitio», arriba; el último fallo lo dice). Guardar la
   dirección no mueve `woo_intake_from` ni cambia `stores.platform`, y la clave
-  del sitio sigue siendo la misma.
+  del sitio sigue siendo la misma. El aviso de «Guardar» suma la revisión de
+  los webhooks del sitio nuevo («Webhooks: …», 38.14).
 - **La primera vez que se guardan las claves de la API** se fija
   `woo_intake_from` (el piso de la entrada, ver arriba), y el aviso lo dice.
   Volver a pegarlas después (al cambiar la dirección) no lo mueve.
 - La sección muestra la dirección para WooCommerce → Ajustes → Avanzado →
-  Webhooks (`<Kapta>/api/webhooks/woocommerce/<storeId>`), los cuatro temas,
-  la versión «WP REST API Integration v3», el último fallo y la última pasada.
+  Webhooks (`<Kapta>/api/webhooks/woocommerce/<storeId>`, con `<Kapta>` la
+  dirección de `NEXT_PUBLIC_SITE_URL` o la de producción de Vercel: la que
+  acepta la revisión de 38.14; sin ninguna, la del navegador), los cuatro temas,
+  la versión «WP REST API Integration v3», el último fallo, la última pasada
+  y la última revisión de los webhooks (38.14).
 - **No cambia `stores.platform`** (dónde crea Kapta los pedidos nuevos): eso es
   del día del corte y lo decide el owner (38.1). Lo cambia otro control de la
   misma sección, «Crear los pedidos nuevos en», con su propia acción y su
@@ -17259,6 +17266,163 @@ Ajustes: `app/dashboard/[storeId]/settings/bot-orders-actions.ts` y
 `components/bot-orders-settings-section.tsx`. Pruebas: `test/bot-orders.test.ts`,
 `test/bot-orders-settings.test.ts`, `test/bot-orders-mom.test.ts` y
 `scripts/sql/bot_orders_smoke.sql`. Contrato: `docs/kapso-pedidos-kapta.md`.
+
+### 38.14 La revisión de los webhooks de WooCommerce (25-10-2026)
+
+**Por qué.** WooCommerce no reintenta un aviso que falló y **desactiva el
+webhook después de 5 fallos seguidos** (38.8, 38.11). Desactivado no vuelve
+solo ni avisa a nadie. Los pedidos nuevos y sus cambios siguen entrando por la
+pasada `woo_orders`, con hasta 5 minutos de retraso; **lo que se manda a la
+papelera, no:** la pasada pide `status=any`, que no incluye la papelera, y lo
+único que anula en Kapta un pedido mandado a la papelera es `order.deleted`
+(38.11). Sin ese webhook, ese pedido sigue vivo en el Master para siempre: se
+despacha, cuenta en los totales y entra al cierre. Hasta el 25-10-2026 nadie se
+enteraba. Desde entonces Kapta lo revisa y lo dice en Ajustes → WooCommerce,
+donde el owner ya mira el último fallo.
+
+**Qué revisa.** Lee la lista de webhooks del sitio **solo con
+`GET /wp-json/wc/v3/webhooks`** (de a **100**, como mucho **2 páginas** y
+**30 segundos** por tienda; cada llamada corta a los 15 s, como todas las de
+38.8), con las claves de la API de la tienda y el mismo respaldo por la
+dirección si el hosting borra la cabecera `Authorization` (38.11). Cada uno de
+los cuatro temas (`order.created`, `order.updated`, `order.deleted` y
+`order.restored`) tiene que tener **al menos un webhook en «Activo» que
+entregue a esta tienda en una dirección de Kapta**:
+`<Kapta>/api/webhooks/woocommerce/<storeId>`, la dirección que muestra Ajustes.
+
+| Lo que encuentra en un tema | Qué dice |
+| --- | --- |
+| Uno activo que entrega a esta tienda en una dirección de Kapta (aunque haya otros viejos desactivados o a otra parte) | Bien |
+| Los activos de esta tienda, en otra dirección (otro entorno, http, una que redirige) | «order.created va a otra dirección» |
+| Los que entregan a esta tienda, desactivados | «order.created está desactivado» (y que WooCommerce lo hace tras 5 fallos seguidos) |
+| Los que entregan a esta tienda, en pausa | «… está en pausa» |
+| Los que entregan a esta tienda, en otro estado | «… no está activo» |
+| Ninguno a esta tienda, alguno a otra tienda de Kapta | «… va a otra tienda de Kapta» |
+| Ninguno a Kapta | «falta …» |
+
+Después de la lista de temas, el aviso dice qué pasa mientras tanto y dónde se
+arregla:
+
+- Si `order.deleted` está bien, falte lo que falte: «Mientras tanto los pedidos
+  llegan por la sincronización, cada 5 minutos.»
+- Si lo único mal es `order.deleted`: «Sin order.deleted, un pedido mandado a
+  la papelera sigue vivo en Kapta: la sincronización no ve la papelera.»
+- Si están mal `order.deleted` y otros: «La sincronización trae lo demás cada 5
+  minutos, pero no ve la papelera: sin order.deleted, un pedido mandado a la
+  papelera sigue vivo en Kapta.» (Es el caso de Kenku si de verdad solo tiene
+  `order.updated`.)
+- Y al final dónde se arregla: «Se arregla en WooCommerce → Ajustes → Avanzado
+  → Webhooks: uno «Activo» por tema, con la dirección y el secreto de esta
+  tienda.», o, con alguno desactivado, «Se arregla en WooCommerce → Ajustes →
+  Avanzado → Webhooks. WooCommerce desactiva uno tras 5 fallos seguidos:
+  revisa la dirección y el secreto antes de reactivarlo.»
+
+Con el prefijo de `woo_last_error`, cualquier combinación de estados cabe
+entera en sus 500 caracteres (la peor, uno desactivado y tres a otra tienda de
+Kapta, en 488): el aviso nunca queda cortado.
+
+- **La dirección se compara entera.** La tienda va en la ruta
+  (`/api/webhooks/woocommerce/<storeId>`, con o sin barra final) y el origen
+  (esquema y host) tiene que ser uno de Kapta: el de `NEXT_PUBLIC_SITE_URL` o
+  el de producción de Vercel (`VERCEL_PROJECT_PRODUCTION_URL`, https). Una
+  dirección que no llega a Kapta **no** siempre termina desactivada: WooCommerce
+  entrega sin seguir redirecciones y cuenta como éxito un 2xx, un 301 o un 302,
+  y la ruta de Kapta contesta 200 a una tienda que no conoce (salvo el ping de
+  alta, 38.11). Un webhook a otra dirección puede quedar «Activo» para siempre
+  sin que Kapta reciba nada; y en `order.deleted` u `order.restored`, que se
+  disparan poco, cinco fallos pueden tardar semanas. Ajustes muestra la
+  dirección de los webhooks con el primero de esos orígenes (sin ninguno, con
+  la del navegador), así que lo que se copia de ahí es lo que la revisión
+  acepta. Sin ninguna de las dos variables (desarrollo, pruebas) el origen no
+  se compara.
+- **Los webhooks de otros servicios** (un CRM, Make) y los de otros temas no
+  cuentan ni molestan.
+- **Solo lectura.** Kapta nunca crea, reactiva, cambia ni borra un webhook. Se
+  arreglan en WooCommerce → Ajustes → Avanzado → Webhooks: la dirección y el
+  secreto de esta tienda, estado «Activo». Reactivar a ciegas uno que se
+  desactivó por un secreto mal puesto solo lo vuelve a desactivar.
+- **De la respuesta no se guarda nada** salvo el estado de cada tema: ni las
+  direcciones de entrega (ni la que no es de Kapta), ni los nombres, ni nada
+  más llega a la base, al reporte o al log. El secreto de un webhook es de solo
+  escritura en la API.
+- **Lo que la lista no dice, y por eso no se revisa.** `GET /webhooks` devuelve
+  id, nombre, estado, tema, recurso, evento, hooks, dirección de entrega y
+  fechas; **no la versión de la API** de cada webhook, ni el secreto, ni
+  cuántas veces falló. La versión («WP REST API Integration v3», 38.11) y el
+  secreto se miran a mano en cada webhook. Un webhook con el secreto mal puesto
+  recibe 401 en cada aviso pero sigue «Activo» hasta el quinto fallo seguido:
+  la revisión lo ve cuando WooCommerce lo desactiva, no antes (en
+  `order.deleted`, que se dispara poco, eso puede tardar semanas: por eso el
+  secreto se revisa a mano en los cuatro).
+- **Si una página siguiente falla** y lo ya leído tiene los cuatro temas bien,
+  es «bien»: lo que falte no puede estar en lo que no se leyó. Al revés no: sin
+  la lista entera no se dice «falta», se dice que no se pudo revisar.
+
+**Cuándo corre.**
+
+- **Cada hora, en el minuto 34** (`/api/cron/woo-webhooks`, `34 * * * *`,
+  autenticado con `CRON_SECRET` como los demás), en cada tienda **activa** con
+  el sitio, la clave del sitio y las dos claves de la API guardadas (lo mismo
+  que activa la pasada, 38.11), en paralelo. Una tienda sin eso no hace ni una
+  llamada. `?dry=1` revisa sin escribir nada; `?storeId=<uuid>`, solo esa
+  tienda. Si una tienda tiene algo mal o no se pudo revisar, el cron contesta
+  502 (se ve rojo, como el de comprobantes).
+- **En Ajustes → WooCommerce**, con las claves que se acaban de probar: después
+  de **«Guardar»** con el sitio o las claves de la API nuevos, y con **«Probar
+  conexión»** cuando la conexión sirve. El aviso suma una línea («Webhooks: …»).
+  Con lo escrito y sin guardar, solo esa línea: no se registra nada. «Guardar»
+  solo el secreto de los webhooks sigue sin llamar a WooCommerce.
+
+**Dónde se ve.**
+
+- **`sync_state`, fuente `woo_webhooks`:** `ok` (los cuatro bien), `warning`
+  (falta algo; el texto en `error`) o `error` (no se pudo revisar), con
+  `last_run_at`. No usa el cursor. Ajustes → WooCommerce lo muestra debajo de
+  la última sincronización: «Revisión de los webhooks en WooCommerce (cada
+  hora): <cuándo> · los cuatro activos y con la dirección de esta tienda / falta
+  algo / no se pudo revisar», esta última con el motivo cuando el último fallo
+  no lo dice ya. Con `warning` la sección queda «Con error». El último fallo
+  «lo dice ya» cuando es exactamente el texto que la revisión escribió (con su
+  prefijo y cortado a 500, como lo corta `recordWooLastError`).
+- **`stores.woo_last_error`, con el prefijo «Webhooks en WooCommerce: »**,
+  cuando falta algo, o cuando no se pudo revisar por otra cosa que WooCommerce
+  caído, lento o pidiendo esperar (`red`, `tiempo`, `servidor`, `limite`: eso
+  ya lo dice la pasada cada 5 minutos). Es el «Último fallo con WooCommerce» de
+  Ajustes. **Solo lo borra una revisión que encuentra todo bien**: un aviso que
+  entra bien borra solo lo suyo («Webhook: »), y la pasada, lo suyo
+  («Sincronización: »). Si otro fallo lo pisa, Ajustes muestra aparte el
+  detalle de la revisión, y la siguiente lo vuelve a escribir.
+
+**Sin migración.** `sync_state.source` es texto libre (0001) y
+`woo_last_error` ya está (0274).
+
+**Hoy (25-10-2026).** Las tiendas que revisa son Aurela y Kenku, las dos con
+su WooCommerce conectado desde el 24-10 en la dirección temporal. De Kenku solo
+llegaron avisos `order.updated`, y ni Kenku ni Aurela mandaron nunca un
+`order.deleted`, así que no se sabe si tienen los cuatro: la primera revisión
+(o «Probar conexión» con lo guardado) lo dice en Ajustes. Si falta
+`order.deleted`, el aviso lo dice aparte, porque es el único que la
+sincronización no cubre; conviene tenerlo antes del corte (38). Al pasar cada
+una a su dominio final con «Guardar» y las dos claves (38.11), el aviso de
+«Guardar» ya trae la línea de los webhooks.
+
+Implementación: `lib/woocommerce-webhooks-health.ts` (`checkWooWebhooks`,
+`kaptaWebhookOrigins`, `summarizeWooWebhooks`, `wooWebhookKaptaStore`,
+`evaluateWooWebhooks`, `wooWebhooksLastError`, `recordWooWebhooksCheck`,
+`wooWebhooksNotice`, `runWooWebhooksChecks`, `WOO_WEBHOOKS_PER_PAGE`,
+`WOO_WEBHOOKS_MAX_PAGES`, `WOO_WEBHOOKS_BUDGET_MS`,
+`WOO_WEBHOOKS_TRANSIENT_ERRORS`, `WOO_WEBHOOKS_SYNC_COVERS`,
+`WOO_WEBHOOKS_NO_TRASH`, `WOO_WEBHOOKS_SYNC_COVERS_BUT_TRASH`,
+`WOO_WEBHOOKS_FIX`, `WOO_WEBHOOKS_FIX_DISABLED`);
+`lib/woocommerce-webhooks-view.ts`, pura, para Ajustes (`WOO_WEBHOOKS_SOURCE`,
+`WOO_WEBHOOKS_ERROR_PREFIX`, `WOO_LAST_ERROR_MAX`, `wooSyncStateRow`,
+`wooWebhooksLastErrorText`, `wooWebhooksView`, `wooSectionBadge`);
+`app/api/cron/woo-webhooks/route.ts`; `saveWooSettings` y `testWooConnection`
+(`app/dashboard/[storeId]/settings/woo-actions.ts`);
+`components/woocommerce-settings-section.tsx` y la página de Ajustes. Pruebas:
+`test/woocommerce-webhooks-health.test.ts`,
+`test/woocommerce-webhooks-view.test.ts` (la sección renderizada) y
+`test/woocommerce-settings.test.ts`.
 
 ## 39. Fotos de producto de WhatsApp para cuando Shopify ya no responde (23-10-2026)
 
