@@ -11,6 +11,11 @@
 // después los mismos pasos que la entrada da a un pedido del bot
 // (`applyWooOrderEffects`: rollups, lead ganado, fila del Master).
 //
+// Consultar un pedido que YA existe, sin crear nada (la página de gracias de la
+// web, 24-10-2026): `POST /api/internal/orders/<storeId>/lookup`, en
+// lib/bot-order-lookup.ts, con la misma puerta (`authenticateBotCall`) y el
+// mismo tope de la base (`withTimeout`, `BOT_ORDER_DB_TIMEOUT_MS`).
+//
 // EL ORDEN DE UNA LLAMADA (`handleBotOrder`):
 //   0. el tamaño declarado (`Content-Length`): de más, 413 sin leer nada;
 //   1. el secreto: `Authorization: Bearer <secreto>`, comparado en tiempo
@@ -98,6 +103,14 @@ export const BOT_ORDER_CHANNEL = WOO_BOT_SALE_CHANNEL;
  * nunca se confunde con el id de un formulario de «Generar pedido».
  */
 export const BOT_ORDER_REQUEST_PREFIX = "kapso-";
+
+/**
+ * Las filas de `bot_order_requests` que NO son del bot: el candado de
+ * «Generar pedido» en WooCommerce (lib/woo-sale-guard.ts, MOM §38.12) usa la
+ * misma tabla con la llave `form-<id del formulario>`. El tope por minuto del
+ * bot no las cuenta.
+ */
+export const WOO_FORM_GUARD_PREFIX = "form-";
 
 /**
  * Cuánto vale un candado que no terminó. Más que la función entera
@@ -639,11 +652,15 @@ interface Claim {
 }
 
 class MigrationMissing extends Error {}
-/** Un paso de la base que no contestó a tiempo (`BOT_ORDER_DB_TIMEOUT_MS`). */
-class StepTimeout extends Error {}
+/**
+ * Un paso de la base que no contestó a tiempo (`BOT_ORDER_DB_TIMEOUT_MS`).
+ * Exportado para la consulta del bot (lib/bot-order-lookup.ts), que usa el
+ * mismo tope.
+ */
+export class StepTimeout extends Error {}
 
 /** Espera `work` como mucho `ms`; si no, lanza `StepTimeout`. Lo que siga corriendo se deja (lecturas, o escrituras idempotentes). */
-function withTimeout<T>(work: PromiseLike<T>, ms: number, step: string): Promise<T> {
+export function withTimeout<T>(work: PromiseLike<T>, ms: number, step: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
     Promise.resolve(work),
@@ -651,6 +668,60 @@ function withTimeout<T>(work: PromiseLike<T>, ms: number, step: string): Promise
       timer = setTimeout(() => reject(new StepTimeout(`${step}: sin respuesta en ${ms} ms`)), ms);
     }),
   ]).finally(() => clearTimeout(timer));
+}
+
+/** Lo que dice el secreto de una llamada del bot (`authenticateBotCall`). */
+export type BotAuthOutcome =
+  | { ok: true }
+  | { ok: false; code: "unauthorized" | "migration_missing" | "store_unavailable"; message: string };
+
+/**
+ * El secreto de una llamada del bot, el MISMO para sus dos endpoints: crear
+ * (`handleBotOrder`) y consultar un pedido que ya existe
+ * (`handleBotOrderLookup`, lib/bot-order-lookup.ts, 25-10-2026). Una sola
+ * puerta: lo que se arregle aquí vale para los dos.
+ *   · la tienda tiene que ser un uuid y venir `Authorization: Bearer <token>`;
+ *   · el sha256 de lo que llegó se compara en tiempo constante con el guardado
+ *     (`botSecretMatches`). Sin secreto, con otro o con una tienda que no
+ *     existe: `unauthorized`, «No autorizado.», sin decir cuál;
+ *   · sin la 0277, `migration_missing`; otra falla de lectura,
+ *     `store_unavailable`.
+ * Un paso que no contesta a tiempo lanza `StepTimeout` (lo decide quien llama).
+ */
+export async function authenticateBotCall(args: {
+  admin: SupabaseClient;
+  storeId: string;
+  authorization: string | null | undefined;
+  step: <T>(label: string, work: PromiseLike<T>) => Promise<T>;
+}): Promise<BotAuthOutcome> {
+  const { admin, storeId, step } = args;
+  const denied: BotAuthOutcome = { ok: false, code: "unauthorized", message: "No autorizado." };
+  if (!UUID_RE.test(storeId)) return denied;
+  const token = bearerToken(args.authorization);
+  if (!token) return denied;
+  const secret = await step(
+    "secret",
+    admin.from("bot_order_secrets").select("secret_hash").eq("store_id", storeId).maybeSingle(),
+  );
+  if (secret.error) {
+    if (isBotOrdersMigrationMissing(secret.error)) return { ok: false, code: "migration_missing", message: BOT_ORDERS_MIGRATION_MISSING };
+    return { ok: false, code: "store_unavailable", message: "No se pudo leer la tienda. Reintenta en unos segundos." };
+  }
+  const storedHash = (secret.data as { secret_hash?: string } | null)?.secret_hash ?? null;
+  return botSecretMatches(token, storedHash) ? { ok: true } : denied;
+}
+
+/**
+ * Las cabeceras de una respuesta del bot, para las dos rutas: sin caché,
+ * `WWW-Authenticate` en un 401 y `Retry-After` cuando el cuerpo dice cuánto
+ * esperar.
+ */
+export function botResponseHeaders(status: number, body: { ok: boolean; retry_after_seconds?: number }): Record<string, string> {
+  return {
+    "cache-control": "no-store",
+    ...(status === 401 ? { "www-authenticate": 'Bearer realm="kapta"' } : {}),
+    ...(!body.ok && body.retry_after_seconds ? { "retry-after": String(body.retry_after_seconds) } : {}),
+  };
 }
 
 function fail(code: BotOrderCode, message: string, extra: Partial<BotOrderFailureBody> = {}): BotOrderResult {
@@ -802,20 +873,9 @@ export async function handleBotOrder(req: BotOrderRequest, deps: BotOrderDeps): 
       return finish(fail("body_too_large", `El cuerpo pasa de ${BOT_ORDER_MAX_BODY_BYTES} bytes.`));
     }
 
-    // 1) El secreto.
-    if (!UUID_RE.test(storeId)) return finish(fail("unauthorized", "No autorizado."));
-    const token = bearerToken(req.authorization);
-    if (!token) return finish(fail("unauthorized", "No autorizado."));
-    const secret = await step(
-      "secret",
-      admin.from("bot_order_secrets").select("secret_hash").eq("store_id", storeId).maybeSingle(),
-    );
-    if (secret.error) {
-      if (isBotOrdersMigrationMissing(secret.error)) return finish(fail("migration_missing", BOT_ORDERS_MIGRATION_MISSING));
-      return finish(fail("store_unavailable", "No se pudo leer la tienda. Reintenta en unos segundos."));
-    }
-    const storedHash = (secret.data as { secret_hash?: string } | null)?.secret_hash ?? null;
-    if (!botSecretMatches(token, storedHash)) return finish(fail("unauthorized", "No autorizado."));
+    // 1) El secreto (`authenticateBotCall`: la misma puerta que la consulta).
+    const auth = await authenticateBotCall({ admin, storeId, authorization: req.authorization, step });
+    if (!auth.ok) return finish(fail(auth.code, auth.message));
     authenticated = true;
 
     // 2) El cuerpo: recién ahora se lee, con tope.
@@ -1199,13 +1259,15 @@ async function claimBotOrder(args: {
     };
   }
 
-  // El tope por minuto: solo antes de una fila NUEVA (un reintento no cuenta).
+  // El tope por minuto: solo antes de una fila NUEVA (un reintento no cuenta),
+  // y solo las del bot (las de «Generar pedido» van con `form-`).
   const recent = await step(
     "guard_rate",
     admin
       .from("bot_order_requests")
       .select("id", { count: "exact", head: true })
       .eq("store_id", storeId)
+      .not("request_id", "like", `${WOO_FORM_GUARD_PREFIX}%`)
       .gte("created_at", since(60_000)),
   );
   if (recent.error && isBotOrdersMigrationMissing(recent.error)) throw new MigrationMissing();

@@ -23,7 +23,10 @@ import {
 } from "@/lib/shopify-own-app";
 import { limaDateTimeInputValue } from "@/lib/repro-lima";
 import { WOO_INTAKE_TOPICS, WOO_SYNC_SOURCE, wooWebhookDeliveryUrl } from "@/lib/woocommerce-intake";
+import { kaptaWebhookOrigins } from "@/lib/woocommerce-webhooks-health";
+import { WOO_WEBHOOKS_SOURCE, wooSyncStateRow, type WooSyncStateRow } from "@/lib/woocommerce-webhooks-view";
 import { botOrdersEndpointUrl, isBotOrdersMigrationMissing } from "@/lib/bot-orders";
+import { botOrderLookupUrl } from "@/lib/bot-order-lookup";
 import { limaDayStartIso } from "@/lib/auto-order-ab";
 import type { InvoiceMode, InvoiceStatus, InvoiceWriteMode } from "@/lib/invoicing/rules";
 import {
@@ -661,16 +664,20 @@ export default async function StoreSettingsPage({
       hasConsumerSecret: Boolean(full.woo_consumer_secret_enc),
       hasWebhookSecret: Boolean(full.woo_webhook_secret_enc),
       lastError: full.woo_last_error ?? null,
-      webhookUrl: wooWebhookDeliveryUrl(siteUrl || env.siteUrl(), storeId),
+      // Con la dirección de Kapta que acepta la revisión de los webhooks (MOM
+      // §38.14: `NEXT_PUBLIC_SITE_URL` o la de producción de Vercel); sin
+      // ninguna, la del navegador, como las demás direcciones de Ajustes.
+      webhookUrl: wooWebhookDeliveryUrl(kaptaWebhookOrigins()[0] ?? (siteUrl || env.siteUrl()), storeId),
       topics: WOO_INTAKE_TOPICS,
-      sync:
-        ((sync ?? []) as { source: string; status: string | null; last_run_at: string | null; error: string | null }[])
-          .filter((r) => r.source === WOO_SYNC_SOURCE)
-          .map((r) => ({ status: r.status, last_run_at: r.last_run_at, error: r.error }))[0] ?? null,
+      sync: wooSyncStateRow(sync as WooSyncStateRow[] | null, WOO_SYNC_SOURCE),
+      // La revisión de los webhooks en WooCommerce (MOM §38.14): cada hora, y
+      // al guardar o probar la conexión.
+      webhooks: wooSyncStateRow(sync as WooSyncStateRow[] | null, WOO_WEBHOOKS_SOURCE),
       migrationMissing: !("platform" in (full ?? {})),
     },
     botOrders: {
       endpointUrl: botOrdersEndpointUrl(siteUrl || env.siteUrl(), storeId),
+      lookupUrl: botOrderLookupUrl(siteUrl || env.siteUrl(), storeId),
       configured: Boolean(botSecret),
       createdAt: botSecret?.created_at ?? null,
       rotatedAt: botSecret?.rotated_at ?? null,

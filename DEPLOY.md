@@ -184,6 +184,11 @@ roles and the `auth` schema, so it just works.
      `/api/wa-image` pone en la cabecera de las plantillas de WhatsApp, para
      cuando el CDN de Shopify ya no las sirva (MOM §39). `?dry=1` solo cuenta.
      **Sin migración.** Ver la entrada del 23-10-2026.
+   - `/api/cron/woo-webhooks` — cada hora, en el minuto 34. Lee (solo `GET`)
+     los webhooks de cada tienda con WooCommerce conectado y avisa en Ajustes →
+     WooCommerce si un tema de pedido no tiene uno activo que entregue a esa
+     tienda (MOM §38.14). Nunca los cambia. `?dry=1` revisa sin escribir.
+     **Sin migración.** Ver la entrada del 25-10-2026.
 
 ### Pases a mano (bajo `/api/cron`, pero SIN horario)
 
@@ -4796,6 +4801,34 @@ la ruta (404). La 0277 puede quedarse: nadie más la lee. Si se quisiera quitar,
 table bot_order_secrets;`. Los pedidos ya creados en WooCommerce se quedan: son
 pedidos reales.
 
+### 25-10-2026 · El bot de Kapso consulta un pedido que ya existe (sin migración, MOM §38.13)
+
+El caso del 24-10-2026: la clienta llega al bot desde la página de gracias de
+la web («deseo confirmar mi pedido KP200001…») y el bot, que no sabía que ese
+pedido existía, lo volvía a cotizar y ofrecía crear otro. Este cambio trae
+`POST /api/internal/orders/<storeId>/lookup` (contrato en
+`docs/kapso-pedidos-kapta.md`, sección 10): **solo lectura**, con el mismo
+secreto del bot, que devuelve el pedido solo si es del celular de la
+conversación (con otro celular, el mismo 404 `not_found` que un número que no
+existe). Ajustes → «Bot de Kapso → pedidos por Kapta» muestra la dirección.
+`maxDuration = 20`.
+
+**Sin migración y sin variables de entorno nuevas.** Usa la 0277 (el secreto),
+que ya está, y `orders.platform` de la 0274. No escribe nada, no llama a
+WooCommerce ni a Shopify y **nada cambia para el bot hasta que el owner edite
+su workflow en Kapso** (la regla de la sección 10.1: no cotizar ni crear;
+consultar, confirmar ese pedido con el total de Kapta, o derivar a una asesora).
+
+**Verificar** (después de desplegar, sin datos de clientas en los registros):
+con el secreto de la tienda, consultar un pedido real con **su** celular (200) y
+con otro (404, el mismo cuerpo que un número inventado). En los logs de Vercel,
+`[bot-orders-lookup]` es una línea por consulta (tienda, número consultado,
+`outcome`, `status`, `ms`), sin el celular.
+
+**Marcha atrás.** Revertir el código (la ruta da 404 y el bot deriva); o, sin
+despliegue, quitar la consulta del workflow de Kapso. «Desactivar» en Ajustes
+corta las dos rutas del bot a la vez (401).
+
 ### 24-10-2026 · Historial de Shopify: productos, fotos, carritos, borradores y más detalle (0278, MOM §37.6)
 
 «Traer todo» en Historial Shopify: productos con sus fotos en tamaño original
@@ -4816,4 +4849,114 @@ historial de migraciones de Supabase. No hace falta volver a correrla.
 Comprobar: `select kind, status, records, error from shopify_history_imports
 order by created_at desc limit 10;` y `select count(*) filter (where
 storage_path is not null), count(*) from shopify_history_product_images;`.
+
+### 25-10-2026 · Revisión de los webhooks de WooCommerce (sin migración, MOM §38.14)
+
+WooCommerce desactiva un webhook después de 5 fallos seguidos y no avisa. Los
+pedidos nuevos y sus cambios siguen entrando por la pasada `woo_orders`, con
+retraso; lo que se manda a la papelera, no: la pasada no ve la papelera y solo
+`order.deleted` anula ese pedido en Kapta (MOM §38.11). Trae el cron **`/api/cron/woo-webhooks`** (`34 * * * *` en
+`vercel.json`, con `CRON_SECRET` como los demás), que cada hora lee
+`GET /wp-json/wc/v3/webhooks` de cada tienda activa con el sitio y las claves de
+la API guardados, y comprueba que `order.created`, `order.updated`,
+`order.deleted` y `order.restored` tengan uno «Activo» que entregue a
+`/api/webhooks/woocommerce/<storeId>` de esa tienda en una dirección de Kapta.
+Ajustes → WooCommerce hace lo mismo al «Guardar» con claves nuevas y al
+«Probar conexión».
+
+1. **Sin migración y sin variables de entorno nuevas.** Usa `sync_state`
+   (fuente `woo_webhooks`) y `stores.woo_last_error` (0274, ya aplicada). El
+   código sale por el camino de siempre; el cron lo toma Vercel de
+   `vercel.json`. Las direcciones de Kapta que acepta son la de
+   `NEXT_PUBLIC_SITE_URL` (la que ya usan Shopify y los demás webhooks) y la de
+   producción de Vercel (`VERCEL_PROJECT_PRODUCTION_URL`, la pone Vercel):
+   un webhook a otra dirección (otro entorno, http, una que redirige) es
+   «va a otra dirección», porque WooCommerce da por buena una entrega con 2xx,
+   301 o 302 y ese webhook nunca se desactiva aunque Kapta no reciba nada.
+   Ajustes → WooCommerce muestra desde ahora la dirección de los webhooks con
+   la primera de esas dos (antes, con la del navegador). Si la primera
+   revisión dice «va a otra dirección» en Aurela o Kenku, se corrige la
+   dirección del webhook en WooCommerce con la de Ajustes; el secreto no
+   cambia.
+2. **Solo lectura contra WooCommerce.** No crea, reactiva ni cambia webhooks.
+   Hoy revisa dos tiendas, Aurela y Kenku (las dos conectadas desde el 24-10 en
+   su dirección temporal): un `GET` por hora a cada sitio, con sus claves. Una
+   tienda sin el sitio y las claves de la API guardados no recibe ni una
+   llamada.
+3. **Qué mirar después del primer :34** (solo lectura, sin datos de clientas):
+
+   ```sql
+   select s.name, x.status, x.last_run_at, x.error
+     from sync_state x join stores s on s.id = x.store_id
+    where x.source = 'woo_webhooks' order by 1;
+   select name, woo_last_error from stores where woo_last_error like 'Webhooks en WooCommerce:%';
+   ```
+
+   `ok` es que los cuatro están bien. `warning` dice qué falta (por ejemplo,
+   «order.deleted está desactivado»): se arregla en WooCommerce → Ajustes →
+   Avanzado → Webhooks (la dirección y el secreto de la tienda, estado
+   «Activo»). **Lo urgente es `order.deleted`:** sin él, un pedido mandado a
+   la papelera sigue vivo en el Master (se despacha y entra al cierre), y el
+   aviso lo dice aparte. Ni Kenku ni Aurela mandaron nunca un `order.deleted`. `error` es que no se pudo revisar: si es por permisos, la clave
+   de la API tiene que ser de un usuario «shop manager». En Vercel, el log
+   `[woo-webhooks]` lleva ids de tienda y estados por tema, sin direcciones.
+4. **Apenas sale, Kenku.** De Kenku solo llegaron avisos `order.updated` y no
+   se sabe si creó los cuatro webhooks. Para no esperar al :34: Ajustes →
+   WooCommerce de Kenku → «Probar conexión» con los campos en blanco (prueba lo
+   guardado; solo lee). El aviso suma «Webhooks: …» y la sección queda «Con
+   error» si falta alguno. Lo mismo sirve para Aurela.
+5. **El día del corte de cada tienda** (Aurela a `https://aurela.pe`, Kenku a
+   su dominio final): después de «Guardar» con la dirección nueva y las dos
+   claves, el aviso de Ajustes dice ya si los cuatro webhooks siguen activos y
+   entregando a Kapta.
+6. **Lo que no ve.** La versión de la API de cada webhook («WP REST API
+   Integration v3») y el secreto no vienen en la lista de WooCommerce: se miran
+   a mano. Un secreto mal puesto se ve cuando WooCommerce desactiva el webhook
+   (al quinto fallo seguido), no antes; en `order.deleted`, que se dispara
+   poco, eso puede tardar semanas.
+
+**Marcha atrás.** Revertir el código basta: el cron desaparece y nada más lo
+lee. Si queda un aviso «Webhooks en WooCommerce: …» en `woo_last_error`, lo
+borra la próxima prueba buena de «Probar conexión»; la fila `woo_webhooks` de
+`sync_state` puede quedarse (`delete from sync_state where source =
+'woo_webhooks';` si se quiere quitar).
+
+### 25-10-2026 · «Generar pedido» en WooCommerce con el candado del bot (sin migración, MOM §38.12)
+
+«Generar pedido» (y «Venta telefónica») en una tienda con `platform =
+'woocommerce'` toma, antes de llamar a WooCommerce, el **mismo candado que el
+bot** (`bot_order_requests`, de la 0277, **ya aplicada**), con la llave
+`form-<id del intento>`. Un POST sin respuesta deja el candado puesto 2 minutos
+(la asesora lee «espera 2 minutos y vuelve a pulsar «Generar pedido»») y el
+reintento retoma o adopta el pedido que WordPress guardó tarde; un doble clic
+o un reintento mientras la primera llamada sigue corriendo recibe «este mismo
+pedido ya se está generando» sin llamar a WooCommerce. El tope por minuto del
+bot no cuenta las filas `form-`.
+
+1. **Sin migración, sin crons, sin variables nuevas.** Requiere la 0277
+   (aplicada); sin ella el formulario sigue como antes (solo la búsqueda por
+   `kapta_request_id`) y lo deja en el registro (`[woo-form-guard]`
+   `unguarded`). **El código**, por el camino de siempre. Shopify no cambia:
+   una tienda en `shopify` nunca toca el candado.
+2. **Qué vigilar** en el registro de Vercel: `[woo-form-guard]` con
+   `claim_failed` (la base no dejó tomar el candado: la venta no se creó y la
+   asesora reintenta), `busy` (doble clic o espera de un POST sin respuesta) y
+   `[woo-sale]` `woo.sale.post_unanswered`. Ninguna línea lleva datos de la
+   clienta.
+3. **Verificar** (solo lectura):
+
+   ```sql
+   -- Los candados del formulario por tienda y estado, de las últimas 24 h.
+   select store_id, status, error_code, count(*), max(attempts)
+     from bot_order_requests
+    where request_id like 'form-%' and created_at > now() - interval '24 hours'
+    group by 1, 2, 3 order by 1, 2;
+   ```
+
+   Un `processing` de hace más de unos minutos es un POST que no contestó y que
+   nadie reintentó: revisar en WooCommerce si quedó el pedido (pendiente de
+   pago) antes de generar otro desde un formulario nuevo. Con `woo_order_id`,
+   el pedido existe y la llamada se cortó antes de registrar la venta (el
+   candado se cierra recién con `order_sales`): volver a pulsar «Generar
+   pedido» en ese formulario lo adopta y registra la venta.
 

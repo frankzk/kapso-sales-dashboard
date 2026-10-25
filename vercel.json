@@ -120,6 +120,10 @@
     {
       "path": "/api/cron/product-photos",
       "schedule": "48 * * * *"
+    },
+    {
+      "path": "/api/cron/woo-webhooks",
+      "schedule": "34 * * * *"
     }
   ]
 }

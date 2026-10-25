@@ -10105,12 +10105,24 @@ estables:
    #KP143817): `PUNTO`, nombre, dirección, referencia ` - ` código postal,
    distrito ` - `, teléfono, `Pedido de <marca> <pedido>`, `COBRAR <total>
    SOLES`, la nota y los productos. La dirección es la de envío y, si no hay,
-   la de facturación (`displayAddress`); el total es el **vigente** de Shopify
-   con su forma («89.1», «89.0»), y sin él el de Kapta; la marca es la tienda
-   sin el país («Kenku Peru» → «Kenku»). Si la dirección no trae teléfono va el
-   del cliente. Kapta lo arma porque Shopify cierra el 28-10-2026 (§37) y los
+   la de facturación (`displayAddress`); la marca es la tienda sin el país
+   («Kenku Peru» → «Kenku»). Si la dirección no trae teléfono va el del
+   cliente. Kapta lo arma porque Shopify cierra el 28-10-2026 (§37) y los
    pedidos de WooCommerce nunca lo tuvieron. Es un texto para copiar: no
    escribe nada ni cambia el monto a cobrar del pedido.
+   **Dos diferencias con la plantilla (decisión del owner, 25-10-2026):**
+   - **«COBRAR» es el saldo, no el total** (`puntoCollect`): el total vigente
+     de Shopify (sin él, el de Kapta) menos lo que la clienta ya pagó y está
+     validado (adelanto, diferencia), con la misma regla de la ruta del
+     motorizado (`collectionBalance`: la rendición de un courier y lo rechazado
+     no cuentan; pagado en el checkout, 0). Con la forma de Shopify («89.1»,
+     «218.5»). Lo que está por validar no se resta: la pestaña lo avisa, porque
+     si se valida antes de la entrega hay que volver a copiar. Si los pagos no
+     se pueden leer, el Punto sale sin monto y la pestaña lo dice; nunca se
+     adivina el total. Antes la plantilla ponía el total aunque hubiera
+     adelanto, y el punto cobraba de más.
+   - **Cada producto lleva su cantidad**: «  2 x Producto - Variante». Una línea
+     quitada del pedido (cantidad 0) no va.
 
 **El historial del lead se reparte entre los pedidos del cliente (16-10-2026).**
 La Actividad trae también las gestiones de Leads (llamadas, mensajes, la venta
@@ -12396,6 +12408,32 @@ Antes cada pantalla respondía con su propio motivo —«Ese paquete no pertenec
 esta ruta», «El pedido ya avanzó…»— y quien tenía la caja en la mano no sabía que
 la decisión era simplemente no despacharla.
 
+**Una salida anulada se dice con quién, cuándo y qué hacer (24-10-2026).**
+AUR178551-S01 la anuló una compañera a las 10:28 de Lima con «Anular salida»
+de la ficha (`route_output_cancelled`, §4: la caja nunca salió). Más tarde
+alguien escaneó su rótulo impreso en «Asignar por QR» y la línea respondió «La
+caja existente ya no está disponible para asignarla.»: cierto, pero no decía
+que esa salida estaba anulada. Ahora, cuando el escaneo de asignación **ya
+falló** y el QR es de una salida con `delivery_status = anulado`, la línea lo
+dice así: «AUR178551-S01 está ANULADA (la anuló {quien} el 24/10 a las 10:28).
+Crea una salida nueva desde la ficha del pedido (Operar → Crear salida) e
+imprime su rótulo; este rótulo ya no sirve.» Quién y cuándo salen del hecho
+más reciente que anuló esa salida (`route_output_cancelled` o
+`guide_cancelled` con su `shipment_id`); quien la anuló se nombra como en Leads
+y Repro Lima (la parte local de su correo) y, sin actor, «se anuló el …». Si el
+pedido tiene **otra salida viva** (`isActiveOutput` en Lima), no se manda a
+crear otra: «…: este rótulo ya no sirve; el pedido sigue con AUR178551-S02.»
+seguido del motivo de siempre. Solo cambia el mensaje: no se reactiva nada,
+tomar y asignar siguen con sus reglas, y si el escaneo asigna (por ejemplo,
+porque al tomarlo nació la salida nueva) responde como siempre, con el aviso de
+pegar su rótulo encima. El pedido anulado se sigue diciendo antes que esto; el
+límite de efectivo y un rótulo vivo responden lo de antes. Las lecturas se
+pagan solo en el escaneo que falla (`lib/scan-annulled-output.ts`, en
+`scanAssignToRider`), probado en `test/scan-salida-anulada.test.ts`.
+**Pendiente:** una salida anulada que siguiera dentro de una caja activa
+responde «Ya está en la caja…» o «Está en la caja de…» como cualquier otra; no
+se ha visto el caso.
+
 **Verificar una caja dice cuál es, y dónde está lo que no es suyo
 (07-10-2026).** KP136825-S01 ya estaba en la caja de Alexis —la única que le
 faltaba verificar— y se escaneó en la verificación de Roy, también de 16
@@ -12410,6 +12448,48 @@ palabras:
   Alexis (07/10), no en la de Roy. Verifícalo en esa caja.» Si no está en
   ninguna: «No está en la caja de Roy ni en otra. Agrégalo primero a una
   caja.» El anulado sigue diciéndose antes que esto.
+
+**Buscar en «Desde la lista» dice dónde está lo que no está por asignar
+(24-10-2026).** El owner buscó #KP141876 para reprogramarlo y la lista respondió
+«Nada por asignar con ese filtro.». Estaba en «Sin condiciones» (76 ese día):
+Ancón no tiene tarifa y está pausado para Grupo GF. Ahora, si la búsqueda no
+encuentra nada en la lista pero el texto nombra un pedido que el tablero ya
+tiene en otro sitio, el vacío lo dice debajo, un aviso por pedido con su botón:
+
+- **Cómo se reconoce.** Por número de pedido sin «#» ni mayúsculas, también una
+  parte («141876»), o por teléfono como la búsqueda de la lista (cuatro dígitos
+  o más). Con menos de cuatro caracteres no se busca fuera. Hasta tres avisos,
+  el número entero primero; los demás se cuentan («Y 2 pedidos más fuera de la
+  lista con ese texto…»).
+- **«Sin condiciones»**, en ámbar, con el motivo y el distrito: «#KP141876 está
+  en «Sin condiciones»: tarifa faltante para Ancón. Ponle tarifa en Tarifario.»
+  y «Abrir Tarifario». Si además el servicio está pausado ahí, lo dice («…, y el
+  servicio está pausado ahí. Ponle tarifa y reanuda el servicio en Tarifario.»):
+  el motivo sigue siendo uno (`tarifa_faltante`), y la foto lleva aparte
+  `paused`. Sin el Tarifario (§29.10), dice que lo corrige quien administra
+  Grupo GF y abre la hoja «Sin condiciones» con ese pedido primero y resaltado.
+  Distrito inválido abre la ficha en Información; sin salida armable, ya en una
+  caja de despacho y los motivos de un «Por reprogramar» que no sale, la
+  ficha en Operar.
+- **Escondido por un apartado o un filtro**: «#KP300001 está por asignar en
+  «Programados después» (programado mar 27/10).» (o «…, pero lo esconden los
+  filtros de la lista»), con «Ver en «…»», que abre ese apartado sin los demás
+  filtros y deja el texto. Un «No entregado» que sigue en una caja lleva «Quitar
+  filtros».
+- **Ya no está por asignar**: «#KP500001 ya no está por asignar: está en la caja
+  de Roy del sáb 24/10 (carga 2), lo lleva (En curso · En reparto).», o, si se
+  está cerrando, «… ya no se asigna: está en «Por cerrar · …»». «Ver en
+  seguimiento» abre su etapa (la lista de seguimiento de arriba).
+- **«En devolución»** («… vuelve con Alexis (caja del …) y el pedido sale con
+  …») abre esa hoja, y **«Devoluciones»** su escáner.
+
+Sin lecturas nuevas: es la foto que ya trae Despacho del día (cola, seguimiento,
+«Sin condiciones», «En devolución», «Devoluciones»), y la fila de «Sin
+condiciones» suma el teléfono y `paused`, que ya se leían. Un pedido que el
+tablero no tiene (otra cobertura, otra etapa) sigue con «Nada por asignar con
+ese filtro.». Nada de esto cambia la cola ni las acciones. Lógica pura en
+`lib/dispatch-day.ts` (`locateOutsideList`, `matchesOrderSearch`), probada en
+`test/despacho-busqueda-donde-esta.test.ts`.
 
 ### 29.14 Rutas: una sola lista y la caja al lado (19-09-2026)
 
@@ -15803,11 +15883,11 @@ cierre del 28-10-2026 00:00 UTC (§35.10). «Traer todo» va paso por paso:
    privado `shopify-history` (`<tienda>/productos/<producto>/<foto>.<ext>`).
    Va por tandas de ~60 s; una foto que falla tres veces queda marcada y deja
    de intentarse. Es un respaldo: no es la foto de las plantillas de WhatsApp
-   (§39). Shopify deja que varios productos usen la misma foto, y la tabla
-   guarda una fila por foto: en cada tanda la foto queda con el primer
-   producto que la trae. Antes del 25-10-2026 una foto repetida rompía la
-   tanda y la traída de productos de Kenku quedó trabada en «importando»; con
-   el arreglo sigue sola desde donde quedó.
+   (§39). **Una foto que está en dos productos se guarda una vez
+   (25-10-2026)**, con el último producto en que aparece: la tabla tiene una
+   fila por foto, y dos iguales en la misma tanda tumbaban el guardado entero.
+   Pasó con Kenku: 3 fotos compartidas de 3.773 dejaron «Productos» trabado en
+   «No se pudieron guardar las fotos: ON CONFLICT DO UPDATE…».
 3. **Carritos abandonados** de la web y 4. **borradores** (el formulario contra
    entrega deja uno por envío), en `shopify_history_carts`: quién dejó sus
    datos, qué quería, el enlace para retomar o la factura, sus UTM y el pedido
@@ -15862,10 +15942,12 @@ Estado: base técnica del 23-10-2026. **Al 25-10-2026** las dos tiendas tienen
 su sitio WooCommerce conectado en Ajustes (la entrada de 38.11), cada una con
 una dirección temporal, y las dos siguen con `stores.platform = shopify`:
 Aurela desde el 24-10-2026 (clave del sitio `aur`) y Kenku Peru desde esa
-noche (`kp`, 19:13 de Lima). Los únicos pedidos de WooCommerce en Kapta son #AUR900004 y
-#AUR900005, dos pruebas, anuladas; el primer pedido real de Aurela será el
-#AUR900006 o uno mayor. En un sitio conectado ya no se hacen pruebas: entran al
-Master como cualquier pedido (38.11, «El piso no frena una prueba»).
+noche (`kp`, 19:13 de Lima). Los únicos pedidos de WooCommerce en Kapta son
+#AUR900004, #AUR900005 y #AUR900006, tres pruebas del formulario de Aurela,
+anuladas (la última del 25-10 a las 12:54 de Lima); el primer pedido real de
+Aurela será el #AUR900007 o uno mayor. En un sitio conectado ya no se hacen
+pruebas: entran al Master como cualquier pedido (38.11, «El piso no frena una
+prueba»).
 La migración 0274 se aplica a mano y antes del código (DEPLOY.md, entrada del
 23-10-2026). Shopify cierra Kenku Perú y Aurela el 28-10-2026 (UTC); se
 planifica para el peor caso, el martes 27-10 a las 19:00 de Lima. Las dos
@@ -16159,6 +16241,9 @@ funcionando la dirección del Master, la nota, los totales del cajón,
   `X-WC-Webhook-Delivery-ID`, que se repite dentro del mismo segundo.
 - **Temas:** `order.created`, `order.updated`, `order.deleted` y
   `order.restored`.
+- **Desactivación:** WooCommerce desactiva un webhook después de 5 fallos
+  seguidos y no avisa. Kapta lo revisa cada hora leyendo la lista de webhooks
+  del sitio, sin cambiarla nunca (38.14).
 - **API REST v3:** solo por https y a un dominio público (nunca una IP ni un
   nombre interno), con la Consumer key y el Consumer secret por cabecera
   `Authorization: Basic`; por query string solo si el hosting borra esa
@@ -16263,9 +16348,9 @@ sincronización no es opcional.
   antes de él: un pedido de prueba hecho después en el sitio conectado entra
   como cualquier otro, y uno que ya entró se queda (Kapta nunca borra un
   pedido, 38.3) y sigue recibiendo sus cambios. Mover `woo_intake_from`
-  después no lo saca del Master. Así entraron las dos pruebas de Aurela,
-  #AUR900004 y #AUR900005: siguen en el Master, anuladas. Contra las pruebas
-  lo único que sirve es no hacerlas en el sitio conectado.
+  después no lo saca del Master. Así entraron las tres pruebas de Aurela,
+  #AUR900004, #AUR900005 y #AUR900006: siguen en el Master, anuladas. Contra
+  las pruebas lo único que sirve es no hacerlas en el sitio conectado.
 - **Un estado más viejo no pisa uno más nuevo.** WooCommerce entrega los
   webhooks en segundo plano y uno puede llegar después de que la sincronización
   ya leyó un cambio posterior. Si la fecha de modificación de WooCommerce de lo
@@ -16371,13 +16456,17 @@ demás credenciales):
   redirecciones, 38.8) y los avisos firmados que llegan con la dirección nueva
   no se procesan («Otro sitio», arriba; el último fallo lo dice). Guardar la
   dirección no mueve `woo_intake_from` ni cambia `stores.platform`, y la clave
-  del sitio sigue siendo la misma.
+  del sitio sigue siendo la misma. El aviso de «Guardar» suma la revisión de
+  los webhooks del sitio nuevo («Webhooks: …», 38.14).
 - **La primera vez que se guardan las claves de la API** se fija
   `woo_intake_from` (el piso de la entrada, ver arriba), y el aviso lo dice.
   Volver a pegarlas después (al cambiar la dirección) no lo mueve.
 - La sección muestra la dirección para WooCommerce → Ajustes → Avanzado →
-  Webhooks (`<Kapta>/api/webhooks/woocommerce/<storeId>`), los cuatro temas,
-  la versión «WP REST API Integration v3», el último fallo y la última pasada.
+  Webhooks (`<Kapta>/api/webhooks/woocommerce/<storeId>`, con `<Kapta>` la
+  dirección de `NEXT_PUBLIC_SITE_URL` o la de producción de Vercel: la que
+  acepta la revisión de 38.14; sin ninguna, la del navegador), los cuatro temas,
+  la versión «WP REST API Integration v3», el último fallo, la última pasada
+  y la última revisión de los webhooks (38.14).
 - **No cambia `stores.platform`** (dónde crea Kapta los pedidos nuevos): eso es
   del día del corte y lo decide el owner (38.1). Lo cambia otro control de la
   misma sección, «Crear los pedidos nuevos en», con su propia acción y su
@@ -16686,21 +16775,87 @@ y lee entero el que encuentre:
 Si el POST no contesta (pudo crearse igual), se busca: uno `pending` se borra;
 uno que ya está vivo se deja para el reintento, que lo adopta o avisa. Si no
 aparece (o no se pudo buscar), WordPress puede guardarlo DESPUÉS de esa
-búsqueda: `createWooSaleOrder` lo dice (`postUnanswered`) y el bot no suelta
-su candado hasta su plazo (38.13); la asesora puede reintentar antes, y
-entonces ese pedido tardío queda `pending` (Kapta no lo toma) o, con un plugin
-que lo deja vivo al crearlo, vivo junto al del reintento (pendiente, abajo).
-Quien ya conoce el pedido de su intento (el bot, `woo_order_id`) lo lee por su
-id a cualquier edad (`knownOrderId`; si ya no está o está anulado, busca como
+búsqueda: `createWooSaleOrder` lo dice (`postUnanswered`), y ni el bot (38.13)
+ni el formulario (abajo) sueltan su candado hasta su plazo: un reintento
+inmediato no lo vería y crearía otro. Quien ya conoce el pedido de su intento
+(el bot y el formulario, `woo_order_id` del candado) lo lee por su id a
+cualquier edad (`knownOrderId`; si ya no está o está anulado, busca como
 siempre), y `onCreated` le avisa el id apenas el pedido existe o la búsqueda
-lo encuentra. En
-Shopify el candado es el borrador; aquí, este id y su huella. Un formulario
-nuevo (otra pestaña, una recarga) es otro intento: ahí sigue mandando el aviso
-de duplicado. **Dos llamadas a la vez con el mismo id** sí crearían dos
-pedidos (la búsqueda de las dos llega antes que cualquier POST): la pantalla
-no puede hacerlo (el botón se bloquea mientras genera y Next.js corre de a una
-las acciones de un mismo formulario), pero el bot sí: su endpoint tiene el
-candado en la base, por (tienda, id del intento) (38.13).
+lo encuentra. En Shopify el candado es el borrador; aquí, este id, su huella y
+el candado en la base. Un formulario nuevo (otra pestaña, una recarga, cerrar
+y volver a abrir el formulario) es otro intento: ahí sigue mandando el aviso
+de duplicado. **Dos llamadas a la vez con el mismo id** crearían dos pedidos
+solo con la búsqueda (la de las dos llega antes que cualquier POST): el botón
+se bloquea mientras genera, pero una acción sigue corriendo en el servidor
+cuando la pantalla ya mostró un error de red y la asesora vuelve a pulsar. Por
+eso el formulario y el bot tienen el candado en la base, por (tienda, id del
+intento).
+
+**El candado del formulario (25-10-2026).** Cuando una tienda pasa a crear
+sus pedidos en WooCommerce («Crear los pedidos nuevos en», Aurela y Kenku en
+el corte del 27-10), «Generar pedido» (y «Venta telefónica») usa **el mismo
+candado que el bot**
+(`bot_order_requests`, 0277, ya aplicada: sin migración nueva), con la llave
+`form-<id del intento>` (`wooFormGuardKey`; si no cabe en los 64 caracteres de
+la 0277, `form-` y el comienzo de su sha256), los mismos plazos
+(`BOT_ORDER_CLAIM_TTL_MS`, `BOT_ORDER_RETAKE_MAX_AGE_MS`) y el mismo
+`claim_token` para retomar (`claimWooFormSale`, lib/woo-sale-guard.ts). Se
+toma después de todas las validaciones y antes de la primera llamada a
+WooCommerce; ningún paso de Shopify lo toca:
+
+- **No hay fila:** se inserta (`processing`) y se crea el pedido. Si otra
+  llamada con el mismo intento la insertó en el mismo instante, manda la suya.
+- **`processing` dentro de su plazo** (otro clic, o un POST sin respuesta que
+  espera a WordPress): no se llama a WooCommerce. «Pedido NO generado todavía:
+  este mismo pedido ya se está generando … No cierres este formulario: espera
+  … y vuelve a pulsar «Generar pedido». Kapta retoma ese mismo intento y no
+  crea otro pedido.» (`wooFormBusyText`).
+- **`failed`, `done` o `processing` vencido:** se retoma, solo si el
+  `claim_token` sigue siendo el que se leyó (de dos, uno gana; el otro recibe
+  el aviso de arriba). `createWooSaleOrder` lee el pedido del intento por su
+  `woo_order_id` o lo encuentra por `kapta_request_id`, y lo adopta, lo retoma
+  o avisa del conflicto como siempre (arriba): un intento terminado (`done`)
+  no se devuelve desde la base, para que la venta se registre si faltaba.
+- **Sin `woo_order_id` y empezado hace más de 90 min:** no se crea nada
+  (`WOO_FORM_EXPIRED_TEXT`): la búsqueda de 2 horas ya podría no ver su pedido.
+  La asesora revisa WooCommerce y, si no está, cierra y vuelve a abrir el
+  formulario (otro intento).
+
+**A diferencia del bot**, el mismo intento con otra huella no es un conflicto
+en el candado: la asesora puede corregir el formulario después de un rechazo, y
+lo decide `createWooSaleOrder` (un pedido anterior vivo con otros datos es
+`conflict`; uno pendiente se borra). Tampoco hay «el mismo pedido con otro
+id» ni tope por minuto. La huella de cada intento queda en `body_hash`.
+
+**Cómo termina.** Apenas existe el pedido, su id queda en el candado
+(`noteWooFormOrder`). Vivo, el candado se cierra con él (`done`, con el
+número, el total y la moneda: `finishWooFormClaim`) **recién cuando la venta
+quedó registrada** (la fila local, `order_sales` y la nota «sale»;
+`onSaleRecorded`, antes de la confirmación por WhatsApp), o cuando la llamada
+termina por otro camino (sin fila local, por ejemplo). A diferencia del bot,
+no antes de la fila local: un `done` se retoma enseguida, y un segundo clic
+que llegara entre el cierre y `order_sales` adoptaría el pedido sin ver la
+venta de la llamada que sigue corriendo y la registraría otra vez (dos notas
+de venta y dos WhatsApp de confirmación); con el candado todavía
+`processing`, recibe «ya se está generando».
+
+**Un POST sin respuesta no suelta el candado** (`rearmWooFormClaim`): se vuelve
+a armar desde ese momento y la asesora lee «… WooCommerce pudo haber
+creado el pedido igual … espera 2 minutos y vuelve a pulsar «Generar pedido».
+Kapta lo busca y, si se creó, lo retoma en vez de crear otro.»
+(`wooFormPostUnansweredText`); el reintento después del plazo encuentra el
+pedido tardío y lo retoma (`pending`) o lo adopta (vivo). Lo demás (rechazo de
+precio o de productos, conflicto, un error con respuesta) lo suelta
+(`failed`, `releaseWooFormClaim`) y el reintento lo retoma enseguida. Si la base
+no deja tomar el candado (falla o no contesta en 5 s), no se llama a
+WooCommerce: «no se pudo reservar este pedido en Kapta …»
+(`WOO_FORM_DB_ERROR_TEXT`). Sin la 0277 (una base de pruebas) sigue como antes,
+solo con la búsqueda, y lo deja en el registro (`[woo-form-guard]`
+`unguarded`). Si cerrar o soltar el candado falla, vence solo: el reintento lee
+el pedido por su id. Del candado a su cierre pasan los 45 s de la venta como
+mucho, los topes de la base y las escrituras de la fila local y de la venta
+(sin la confirmación por WhatsApp, que va después): menos que su plazo de
+120 s.
 
 **Tiempos.** Cada llamada tiene su tope —buscar el intento 6 s, crear 15 s,
 comprobar un producto 5 s, pasar a `processing` 10 s, releer, borrar o anular
@@ -16944,11 +17099,15 @@ Pruebas: `test/anulado-en-la-tienda.test.ts`, y las de cada pantalla
 - **Los principios de §2 y `AGENTS.md`** («Shopify como única fuente de
   pedidos»): **hecho (23-10-2026)**, con la decisión del owner: dicen «la
   tienda», Shopify hasta el cierre y WooCommerce después (38.9).
-- **Un POST sin respuesta en «Generar pedido».** Si WordPress guarda el pedido
-  después de que la asesora reintentó, queda un pedido `pending` de más en
-  WooCommerce (no entra al Master; hay que borrarlo a mano) o, con un plugin
-  que lo deja vivo al crearlo, dos vivos. El bot ya espera (38.13); el
-  formulario todavía no.
+- **Un POST sin respuesta en «Generar pedido»:** **hecho (25-10-2026)**, con
+  el candado del bot (`bot_order_requests`, 0277, sin migración nueva; «El
+  candado del formulario», arriba): el reintento espera a que WordPress haya
+  podido guardar el pedido y lo retoma o lo adopta, y dos llamadas a la vez con
+  el mismo intento no llegan las dos a WooCommerce. Queda lo que ninguna
+  búsqueda ve: un WordPress que guarde un pedido más de 2 minutos después de
+  que su POST se cortó (el plazo del candado), y dos formularios distintos
+  (otra pestaña, una recarga) para la misma venta, que sigue frenando el aviso
+  de duplicado.
 
 Implementación del enlace y del nombre de la tienda: `lib/order-admin-url.ts`
 (`orderAdminLink`, `orderPlatform`, `orderPlatformName`, `parseWooOrderId` y
@@ -16990,6 +17149,17 @@ El cambio de plataforma: `lib/woocommerce-platform.ts`,
 `components/woocommerce-settings-section.tsx`. Pruebas:
 `test/woocommerce-orders.test.ts`, `test/woocommerce-generate-order.test.ts`,
 `test/woocommerce-platform-switch.test.ts` y `test/woocommerce-sale-mom.test.ts`.
+
+Implementación del candado del formulario (25-10-2026): `lib/woo-sale-guard.ts`
+(`claimWooFormSale`, `wooFormGuardKey`, `noteWooFormOrder`,
+`rearmWooFormClaim`, `finishWooFormClaim`, `releaseWooFormClaim`,
+`wooFormBusyText`, `wooFormPostUnansweredText`, `WOO_FORM_EXPIRED_TEXT`,
+`WOO_FORM_DB_ERROR_TEXT`), `WOO_FORM_GUARD_PREFIX` y el tope por minuto sin
+las filas `form-` (lib/bot-orders.ts) y `generateWooOrder`
+(app/dashboard/leads/actions.ts). Pruebas:
+`test/woocommerce-generate-order.test.ts` (timeout del POST y reintento,
+WordPress que guarda tarde, doble clic simultáneo),
+`test/woo-sale-guard.test.ts` y `test/bot-orders.test.ts`.
 
 ### 38.13 Pedidos del bot de Kapso por Kapta (23-10-2026)
 
@@ -17107,6 +17277,14 @@ nuevos por tienda y minuto** (`BOT_ORDER_RATE_PER_MINUTE`, 429
 `rate_limited`): hoy son unos 31 al día, y el tope solo frena un bot en bucle
 que manda ids nuevos. Un reintento no cuenta.
 
+**La tabla la comparte «Generar pedido» (25-10-2026).** El formulario de la
+asesora usa este mismo candado para sus pedidos en WooCommerce (38.12, «El
+candado del formulario»), con la llave `form-<id del intento>`
+(`WOO_FORM_GUARD_PREFIX`): sus filas no se cruzan con las del bot y el tope por
+minuto del bot no las cuenta. La huella del bot (`botOrderBodyHash`) y la del
+formulario (`kapta_request_hash`) no coinciden nunca, así que «la misma huella»
+de la tabla de arriba solo encuentra filas del bot.
+
 **Un pedido que quedó en WooCommerce sin confirmar** (no se pudo anular uno
 vivo con otro precio, no se pudo borrar uno pendiente, quedó a medias, o el de
 un intento anterior está vivo con otros datos: `botOrderLeftOpen`) va en la
@@ -17199,6 +17377,42 @@ vuelve a Shopify mientras Shopify viva, o «Desactivar» en Ajustes (401, y el
 bot deriva a una asesora). **Aurela no pasa por este endpoint:** su bot crea
 sus pedidos directo en WooCommerce (decisión del owner del 24-10-2026, 38.5).
 
+**Consultar un pedido que ya existe (25-10-2026).** El caso (24-10-2026): la
+página de gracias del checkout de la web (plugin «COD Core») abre el chat del
+bot con «… deseo confirmar mi pedido KP200001 y pagaré S/ 599.60 en casa»; el
+bot no sabía que ese pedido existía, lo volvió a cotizar con sus precios
+(S/ 665) y ofreció «Confirmar pedido»: habría sido un **segundo pedido**. Desde
+ahora el bot tiene `POST /api/internal/orders/<storeId>/lookup`
+(`handleBotOrderLookup`), con **el mismo secreto y la misma puerta** que para
+crear (`authenticateBotCall`, 401 «No autorizado.» sin detalles) y el mismo
+tope de la base (`withTimeout`, `BOT_ORDER_DB_TIMEOUT_MS`). Cuerpo estricto:
+`order_name` (con o sin `#`, en cualquier caja: `normalizeBotOrderName`) y
+`phone` (el `phone_number` de la conversación). **Solo lectura**: no crea, no
+escribe nada (tampoco el último uso de Ajustes), no llama a WooCommerce ni a
+Shopify y no mira la plataforma de la tienda. Devuelve el número, la
+plataforma, la fecha, el total que Kapta tiene **hoy** (`orders.total_amount`),
+cómo se paga (`contraentrega`, `pagado` o null, derivado de `payment_gateway`,
+`financial_status` y las constancias con `orderFullyPaid`: `botLookupPayment`),
+si está anulado, la entrega vigente (el distrito y la dirección del Master, o
+los del pedido), los productos sin precios y la macroetapa y subetapa del
+Master con sus nombres de pantalla. **La privacidad (decisión de diseño,
+25-10-2026):** cualquiera puede escribir ese número en WhatsApp, así que el
+pedido se busca por su número **y** el celular de la conversación en la misma
+consulta (el índice `(store_id, customer_phone)` de `orders`) y se vuelve a
+comparar en memoria (`sameLookupPhone`); con otro celular la respuesta es
+**exactamente** la de un número que no existe, 404 `not_found` (reintentable
+una vez a los 10 s, `BOT_ORDER_LOOKUP_RETRY_AFTER_S`): Kapta nunca lee el pedido
+de otro celular, y un código aparte confirmaría que el número existe sin
+servirle al workflow. Cuenta solo el celular del pedido, nunca el de la guía
+(es el de quien recibe). **La regla del workflow** (la edita el owner en Kapso):
+un mensaje como «deseo confirmar mi pedido KP…/AUR…» no se cotiza ni se crea;
+se consulta, y si Kapta lo tiene se confirma **ese** pedido con su total y su
+dirección (nunca el monto escrito en el mensaje), «pagas al recibir» si es
+contraentrega, y la conversación queda como «pedido ya creado»; si después de
+una consulta más sigue `not_found`, o está anulado o finalizado, se deriva a una
+asesora. Contrato, respuesta campo por campo y regla completa:
+`docs/kapso-pedidos-kapta.md`, sección 10.
+
 **Lo que no cubre.** Después del cierre el bot no puede leer un borrador en
 Shopify: para cerrar un carrito necesita sus SKU y precios, y si no los tiene
 deriva a una asesora (que lo genera desde Leads con la copia de Kapta). Los
@@ -17213,7 +17427,12 @@ Implementación: `db/migrations/0277_bot_orders.sql` (`bot_order_secrets`,
 `BOT_ORDER_CODES`, `BOT_ORDER_HTTP`, `BOT_ORDER_CLAIM_TTL_MS`,
 `BOT_ORDER_SALE_DEADLINE_MS`, `BOT_ORDER_RETAKE_MAX_AGE_MS`,
 `BOT_ORDER_SAME_BODY_WINDOW_MS`, `BOT_ORDER_RATE_PER_MINUTE`);
-`app/api/internal/orders/[storeId]/route.ts`; `buildWooSaleOrder` con
+`app/api/internal/orders/[storeId]/route.ts`; la consulta,
+`lib/bot-order-lookup.ts` (`handleBotOrderLookup`, `parseBotOrderLookupBody`,
+`normalizeBotOrderName`, `botLookupPayment`, `BOT_ORDER_LOOKUP_CODES`) y
+`app/api/internal/orders/[storeId]/lookup/route.ts`, con sus pruebas
+`test/bot-order-lookup.test.ts` y `test/bot-order-lookup-mom.test.ts`;
+`buildWooSaleOrder` con
 `conversationId`, `shippingMode`, `tags` y `WOO_BOT_SALE_CHANNEL`, y
 `createWooSaleOrder` con `knownOrderId`, `onCreated` y `postUnanswered`
 (`lib/woocommerce-orders.ts`); `applyWooOrderEffects` (`lib/ingest.ts`);
@@ -17221,6 +17440,163 @@ Ajustes: `app/dashboard/[storeId]/settings/bot-orders-actions.ts` y
 `components/bot-orders-settings-section.tsx`. Pruebas: `test/bot-orders.test.ts`,
 `test/bot-orders-settings.test.ts`, `test/bot-orders-mom.test.ts` y
 `scripts/sql/bot_orders_smoke.sql`. Contrato: `docs/kapso-pedidos-kapta.md`.
+
+### 38.14 La revisión de los webhooks de WooCommerce (25-10-2026)
+
+**Por qué.** WooCommerce no reintenta un aviso que falló y **desactiva el
+webhook después de 5 fallos seguidos** (38.8, 38.11). Desactivado no vuelve
+solo ni avisa a nadie. Los pedidos nuevos y sus cambios siguen entrando por la
+pasada `woo_orders`, con hasta 5 minutos de retraso; **lo que se manda a la
+papelera, no:** la pasada pide `status=any`, que no incluye la papelera, y lo
+único que anula en Kapta un pedido mandado a la papelera es `order.deleted`
+(38.11). Sin ese webhook, ese pedido sigue vivo en el Master para siempre: se
+despacha, cuenta en los totales y entra al cierre. Hasta el 25-10-2026 nadie se
+enteraba. Desde entonces Kapta lo revisa y lo dice en Ajustes → WooCommerce,
+donde el owner ya mira el último fallo.
+
+**Qué revisa.** Lee la lista de webhooks del sitio **solo con
+`GET /wp-json/wc/v3/webhooks`** (de a **100**, como mucho **2 páginas** y
+**30 segundos** por tienda; cada llamada corta a los 15 s, como todas las de
+38.8), con las claves de la API de la tienda y el mismo respaldo por la
+dirección si el hosting borra la cabecera `Authorization` (38.11). Cada uno de
+los cuatro temas (`order.created`, `order.updated`, `order.deleted` y
+`order.restored`) tiene que tener **al menos un webhook en «Activo» que
+entregue a esta tienda en una dirección de Kapta**:
+`<Kapta>/api/webhooks/woocommerce/<storeId>`, la dirección que muestra Ajustes.
+
+| Lo que encuentra en un tema | Qué dice |
+| --- | --- |
+| Uno activo que entrega a esta tienda en una dirección de Kapta (aunque haya otros viejos desactivados o a otra parte) | Bien |
+| Los activos de esta tienda, en otra dirección (otro entorno, http, una que redirige) | «order.created va a otra dirección» |
+| Los que entregan a esta tienda, desactivados | «order.created está desactivado» (y que WooCommerce lo hace tras 5 fallos seguidos) |
+| Los que entregan a esta tienda, en pausa | «… está en pausa» |
+| Los que entregan a esta tienda, en otro estado | «… no está activo» |
+| Ninguno a esta tienda, alguno a otra tienda de Kapta | «… va a otra tienda de Kapta» |
+| Ninguno a Kapta | «falta …» |
+
+Después de la lista de temas, el aviso dice qué pasa mientras tanto y dónde se
+arregla:
+
+- Si `order.deleted` está bien, falte lo que falte: «Mientras tanto los pedidos
+  llegan por la sincronización, cada 5 minutos.»
+- Si lo único mal es `order.deleted`: «Sin order.deleted, un pedido mandado a
+  la papelera sigue vivo en Kapta: la sincronización no ve la papelera.»
+- Si están mal `order.deleted` y otros: «La sincronización trae lo demás cada 5
+  minutos, pero no ve la papelera: sin order.deleted, un pedido mandado a la
+  papelera sigue vivo en Kapta.» (Es el caso de Kenku si de verdad solo tiene
+  `order.updated`.)
+- Y al final dónde se arregla: «Se arregla en WooCommerce → Ajustes → Avanzado
+  → Webhooks: uno «Activo» por tema, con la dirección y el secreto de esta
+  tienda.», o, con alguno desactivado, «Se arregla en WooCommerce → Ajustes →
+  Avanzado → Webhooks. WooCommerce desactiva uno tras 5 fallos seguidos:
+  revisa la dirección y el secreto antes de reactivarlo.»
+
+Con el prefijo de `woo_last_error`, cualquier combinación de estados cabe
+entera en sus 500 caracteres (la peor, uno desactivado y tres a otra tienda de
+Kapta, en 488): el aviso nunca queda cortado.
+
+- **La dirección se compara entera.** La tienda va en la ruta
+  (`/api/webhooks/woocommerce/<storeId>`, con o sin barra final) y el origen
+  (esquema y host) tiene que ser uno de Kapta: el de `NEXT_PUBLIC_SITE_URL` o
+  el de producción de Vercel (`VERCEL_PROJECT_PRODUCTION_URL`, https). Una
+  dirección que no llega a Kapta **no** siempre termina desactivada: WooCommerce
+  entrega sin seguir redirecciones y cuenta como éxito un 2xx, un 301 o un 302,
+  y la ruta de Kapta contesta 200 a una tienda que no conoce (salvo el ping de
+  alta, 38.11). Un webhook a otra dirección puede quedar «Activo» para siempre
+  sin que Kapta reciba nada; y en `order.deleted` u `order.restored`, que se
+  disparan poco, cinco fallos pueden tardar semanas. Ajustes muestra la
+  dirección de los webhooks con el primero de esos orígenes (sin ninguno, con
+  la del navegador), así que lo que se copia de ahí es lo que la revisión
+  acepta. Sin ninguna de las dos variables (desarrollo, pruebas) el origen no
+  se compara.
+- **Los webhooks de otros servicios** (un CRM, Make) y los de otros temas no
+  cuentan ni molestan.
+- **Solo lectura.** Kapta nunca crea, reactiva, cambia ni borra un webhook. Se
+  arreglan en WooCommerce → Ajustes → Avanzado → Webhooks: la dirección y el
+  secreto de esta tienda, estado «Activo». Reactivar a ciegas uno que se
+  desactivó por un secreto mal puesto solo lo vuelve a desactivar.
+- **De la respuesta no se guarda nada** salvo el estado de cada tema: ni las
+  direcciones de entrega (ni la que no es de Kapta), ni los nombres, ni nada
+  más llega a la base, al reporte o al log. El secreto de un webhook es de solo
+  escritura en la API.
+- **Lo que la lista no dice, y por eso no se revisa.** `GET /webhooks` devuelve
+  id, nombre, estado, tema, recurso, evento, hooks, dirección de entrega y
+  fechas; **no la versión de la API** de cada webhook, ni el secreto, ni
+  cuántas veces falló. La versión («WP REST API Integration v3», 38.11) y el
+  secreto se miran a mano en cada webhook. Un webhook con el secreto mal puesto
+  recibe 401 en cada aviso pero sigue «Activo» hasta el quinto fallo seguido:
+  la revisión lo ve cuando WooCommerce lo desactiva, no antes (en
+  `order.deleted`, que se dispara poco, eso puede tardar semanas: por eso el
+  secreto se revisa a mano en los cuatro).
+- **Si una página siguiente falla** y lo ya leído tiene los cuatro temas bien,
+  es «bien»: lo que falte no puede estar en lo que no se leyó. Al revés no: sin
+  la lista entera no se dice «falta», se dice que no se pudo revisar.
+
+**Cuándo corre.**
+
+- **Cada hora, en el minuto 34** (`/api/cron/woo-webhooks`, `34 * * * *`,
+  autenticado con `CRON_SECRET` como los demás), en cada tienda **activa** con
+  el sitio, la clave del sitio y las dos claves de la API guardadas (lo mismo
+  que activa la pasada, 38.11), en paralelo. Una tienda sin eso no hace ni una
+  llamada. `?dry=1` revisa sin escribir nada; `?storeId=<uuid>`, solo esa
+  tienda. Si una tienda tiene algo mal o no se pudo revisar, el cron contesta
+  502 (se ve rojo, como el de comprobantes).
+- **En Ajustes → WooCommerce**, con las claves que se acaban de probar: después
+  de **«Guardar»** con el sitio o las claves de la API nuevos, y con **«Probar
+  conexión»** cuando la conexión sirve. El aviso suma una línea («Webhooks: …»).
+  Con lo escrito y sin guardar, solo esa línea: no se registra nada. «Guardar»
+  solo el secreto de los webhooks sigue sin llamar a WooCommerce.
+
+**Dónde se ve.**
+
+- **`sync_state`, fuente `woo_webhooks`:** `ok` (los cuatro bien), `warning`
+  (falta algo; el texto en `error`) o `error` (no se pudo revisar), con
+  `last_run_at`. No usa el cursor. Ajustes → WooCommerce lo muestra debajo de
+  la última sincronización: «Revisión de los webhooks en WooCommerce (cada
+  hora): <cuándo> · los cuatro activos y con la dirección de esta tienda / falta
+  algo / no se pudo revisar», esta última con el motivo cuando el último fallo
+  no lo dice ya. Con `warning` la sección queda «Con error». El último fallo
+  «lo dice ya» cuando es exactamente el texto que la revisión escribió (con su
+  prefijo y cortado a 500, como lo corta `recordWooLastError`).
+- **`stores.woo_last_error`, con el prefijo «Webhooks en WooCommerce: »**,
+  cuando falta algo, o cuando no se pudo revisar por otra cosa que WooCommerce
+  caído, lento o pidiendo esperar (`red`, `tiempo`, `servidor`, `limite`: eso
+  ya lo dice la pasada cada 5 minutos). Es el «Último fallo con WooCommerce» de
+  Ajustes. **Solo lo borra una revisión que encuentra todo bien**: un aviso que
+  entra bien borra solo lo suyo («Webhook: »), y la pasada, lo suyo
+  («Sincronización: »). Si otro fallo lo pisa, Ajustes muestra aparte el
+  detalle de la revisión, y la siguiente lo vuelve a escribir.
+
+**Sin migración.** `sync_state.source` es texto libre (0001) y
+`woo_last_error` ya está (0274).
+
+**Hoy (25-10-2026).** Las tiendas que revisa son Aurela y Kenku, las dos con
+su WooCommerce conectado desde el 24-10 en la dirección temporal. De Kenku solo
+llegaron avisos `order.updated`, y ni Kenku ni Aurela mandaron nunca un
+`order.deleted`, así que no se sabe si tienen los cuatro: la primera revisión
+(o «Probar conexión» con lo guardado) lo dice en Ajustes. Si falta
+`order.deleted`, el aviso lo dice aparte, porque es el único que la
+sincronización no cubre; conviene tenerlo antes del corte (38). Al pasar cada
+una a su dominio final con «Guardar» y las dos claves (38.11), el aviso de
+«Guardar» ya trae la línea de los webhooks.
+
+Implementación: `lib/woocommerce-webhooks-health.ts` (`checkWooWebhooks`,
+`kaptaWebhookOrigins`, `summarizeWooWebhooks`, `wooWebhookKaptaStore`,
+`evaluateWooWebhooks`, `wooWebhooksLastError`, `recordWooWebhooksCheck`,
+`wooWebhooksNotice`, `runWooWebhooksChecks`, `WOO_WEBHOOKS_PER_PAGE`,
+`WOO_WEBHOOKS_MAX_PAGES`, `WOO_WEBHOOKS_BUDGET_MS`,
+`WOO_WEBHOOKS_TRANSIENT_ERRORS`, `WOO_WEBHOOKS_SYNC_COVERS`,
+`WOO_WEBHOOKS_NO_TRASH`, `WOO_WEBHOOKS_SYNC_COVERS_BUT_TRASH`,
+`WOO_WEBHOOKS_FIX`, `WOO_WEBHOOKS_FIX_DISABLED`);
+`lib/woocommerce-webhooks-view.ts`, pura, para Ajustes (`WOO_WEBHOOKS_SOURCE`,
+`WOO_WEBHOOKS_ERROR_PREFIX`, `WOO_LAST_ERROR_MAX`, `wooSyncStateRow`,
+`wooWebhooksLastErrorText`, `wooWebhooksView`, `wooSectionBadge`);
+`app/api/cron/woo-webhooks/route.ts`; `saveWooSettings` y `testWooConnection`
+(`app/dashboard/[storeId]/settings/woo-actions.ts`);
+`components/woocommerce-settings-section.tsx` y la página de Ajustes. Pruebas:
+`test/woocommerce-webhooks-health.test.ts`,
+`test/woocommerce-webhooks-view.test.ts` (la sección renderizada) y
+`test/woocommerce-settings.test.ts`.
 
 ## 39. Fotos de producto de WhatsApp para cuando Shopify ya no responde (23-10-2026)
 

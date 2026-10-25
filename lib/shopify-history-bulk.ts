@@ -422,15 +422,10 @@ export function mapBulkProduct(node: AnyNode): HistoryProduct | null {
  * Productos de una tanda con sus hijos: variantes, fotos (en su tamaño
  * original), colecciones y metacampos. Las fotos van aparte porque cada una se
  * copia a Storage por su cuenta.
- *
- * Una foto va una sola vez por tanda: Shopify deja que varios productos usen el
- * mismo archivo y la tabla guarda una fila por foto. La foto queda con el
- * primer producto que la trae; repetirla rompía la tanda entera (§37.6).
  */
 export function groupBulkProducts(lines: readonly JsonlLine[]): { products: HistoryProduct[]; images: HistoryProductImage[] } {
   const byGid = new Map<string, HistoryProduct>();
   const images: HistoryProductImage[] = [];
-  const seenImages = new Set<string>();
   const positions = new Map<string, number>();
   for (const { value: v } of lines) {
     const parent = typeof v.__parentId === "string" ? v.__parentId : null;
@@ -458,8 +453,7 @@ export function groupBulkProducts(lines: readonly JsonlLine[]): { products: Hist
       case "MediaImage": {
         const url = str(v.image?.url);
         const imageId = gidNumber(v.id);
-        if (!url || !imageId || seenImages.has(imageId)) break;
-        seenImages.add(imageId);
+        if (!url || !imageId) break;
         const position = (positions.get(p.product_id) ?? 0) + 1;
         positions.set(p.product_id, position);
         images.push({
@@ -481,7 +475,19 @@ export function groupBulkProducts(lines: readonly JsonlLine[]): { products: Hist
         break;
     }
   }
-  return { products: [...byGid.values()], images };
+  // Una foto de la biblioteca de Shopify puede estar en dos productos: la
+  // misma MediaImage bajo dos padres. La tabla guarda una fila por foto
+  // (`store_id, image_id`), y dos filas iguales en una misma tanda tumbaban el
+  // upsert entero («ON CONFLICT DO UPDATE command cannot affect row a second
+  // time»): pasó con Kenku el 25-10-2026, 3 fotos compartidas de 3.773. Queda
+  // la última, igual que cuando aparecen en tandas distintas (el upsert la
+  // reescribe); la foto es la misma y se copia una vez.
+  const byImage = new Map<string, HistoryProductImage>();
+  for (const image of images) {
+    byImage.delete(image.image_id);
+    byImage.set(image.image_id, image);
+  }
+  return { products: [...byGid.values()], images: [...byImage.values()] };
 }
 
 /** Un carrito abandonado o un borrador del archivo, sin sus productos. */

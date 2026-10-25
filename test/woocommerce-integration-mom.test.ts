@@ -133,7 +133,9 @@ describe("MOM §38.12", () => {
     const heads = [...MOM.matchAll(/^### 38\.(\d+) /gm)].map((m) => Number(m[1]));
     expect(heads).toEqual(Array.from({ length: heads.length }, (_, i) => i + 1));
     // 38.13: los pedidos del bot de Kapso por Kapta (test/bot-orders-mom.test.ts).
-    expect(heads.at(-1)).toBe(13);
+    // 38.14: la revisión de los webhooks de WooCommerce
+    // (test/woocommerce-webhooks-health.test.ts).
+    expect(heads.at(-1)).toBe(14);
   });
 });
 
@@ -151,12 +153,14 @@ describe("DEPLOY.md y los crons", () => {
     expect(flat(DEPLOY)).toContain("aplicar la 0274, después la 0275 y recién entonces el código");
   });
 
-  it("la foto tiene su cron y la entrada de WooCommerce no agrega ninguno (va dentro del sync)", () => {
+  it("la foto tiene su cron y la entrada de WooCommerce no agrega ninguno (va dentro del sync); el único de WooCommerce es la revisión de los webhooks", () => {
     const vercel = JSON.parse(read("vercel.json")) as { crons: { path: string; schedule: string }[] };
     expect(vercel.crons.filter((c) => c.path === "/api/cron/invoice-snapshots")).toEqual([
       { path: "/api/cron/invoice-snapshots", schedule: "1-59/2 * * * *" },
     ]);
-    expect(vercel.crons.some((c) => /woo/i.test(c.path))).toBe(false);
+    // La entrada de pedidos va dentro de /api/cron/sync. El único cron de
+    // WooCommerce es el que solo LEE la lista de webhooks (MOM §38.14).
+    expect(vercel.crons.filter((c) => /woo/i.test(c.path)).map((c) => c.path)).toEqual(["/api/cron/woo-webhooks"]);
     expect(read("lib/ingest.ts")).toContain("const woo = await syncWooOrders(admin, storeId);");
   });
 });
