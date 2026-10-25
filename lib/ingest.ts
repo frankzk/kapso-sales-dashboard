@@ -2000,6 +2000,9 @@ export interface SyncReport {
   requeued: number; // carritos reencolados con atención (olas, máx 2 por lead)
   cartsClosedByOrder: number; // carritos que salieron de la cola porque ya son pedido
   autoOrdersGenerated: number; // pedidos de la prueba de recompra automática (0214)
+  /** Filas de esa prueba que no se generaron porque la tienda crea sus pedidos
+   *  en WooCommerce (`tienda_en_woocommerce`, MOM §38.12 «Los carritos»). */
+  autoOrdersBlockedByPlatform: number;
   abEnrolled: number; // carritos inscritos en la prueba A/B de recompra (0238), las dos mitades
   orderMaster: number; // filas del Master reconciliadas en esta corrida
   /** Leads sin ubicación buscados en Shopify por celular, y cuántos tenían
@@ -2088,6 +2091,7 @@ export async function runStoreSync(
     requeued: 0,
     cartsClosedByOrder: 0,
     autoOrdersGenerated: 0,
+    autoOrdersBlockedByPlatform: 0,
     abEnrolled: 0,
     orderMaster: 0,
     shopifyLocations: { checked: 0, found: 0 },
@@ -2269,6 +2273,12 @@ export async function runStoreSync(
   //     carritos que una persona autorizó en `auto_order_trials`; sin filas
   //     pendientes es una sola lectura. Va después de 1c para que un carrito
   //     que ya es pedido salga de la cola antes y la prueba lo omita.
+  //     Completa borradores de Shopify, así que solo genera en una tienda con
+  //     `stores.platform = 'shopify'` (MOM §38.12, «Los carritos»): en una que
+  //     ya crea en WooCommerce cada fila queda `omitido` con
+  //     `tienda_en_woocommerce`, sin crear nada en Shopify (se mira al tomar la
+  //     fila y otra vez justo antes de completar). La inscripción (1d-0) no
+  //     mira la plataforma: si sigue o no en esas tiendas lo decide el owner.
   if (creds.shopify_token) {
     // 1d-0) Prueba A/B (0238): inscribe carritos nuevos y los sortea entre
     //     `auto` (el generador de abajo los convierte en pedido en esta misma
@@ -2290,6 +2300,8 @@ export async function runStoreSync(
         autoTrialDeps(admin, storeId, { domain: creds.shopify_domain, token: creds.shopify_token }),
       );
       report.autoOrdersGenerated = trials.generated;
+      report.autoOrdersBlockedByPlatform = trials.blockedByPlatform;
+      if (trials.error) report.errors.push(`pedidos_auto: ${trials.error}`);
       for (const iso of trials.orderDates) affectedDates.add(tzParts(iso, creds.timezone).date);
     } catch (e: any) {
       report.errors.push(`pedidos_auto: ${e.message}`);

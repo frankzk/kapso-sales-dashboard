@@ -1,16 +1,21 @@
 import { describe, it, expect } from "vitest";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   AUTO_TRIAL_MAX_CART_AGE_DAYS,
+  AUTO_TRIAL_PLATFORM_REASON,
   AUTO_TRIAL_TAG,
   isLaterOrderOf,
   isUsableAddress,
+  platformUnreadableError,
   processAutoOrderTrials,
+  readTrialStorePlatform,
   trialAddress,
   trialSkipReason,
   type AutoOrderTrialRow,
   type AutoTrialDeps,
   type TrialDraft,
   type TrialLead,
+  type TrialStorePlatform,
 } from "@/lib/auto-order-trials";
 
 // Prueba de pedidos automáticos de recompra (MOM, 02-10-2026): un carrito
@@ -170,6 +175,7 @@ function fakeDeps(over: Partial<AutoTrialDeps> & { rows?: AutoOrderTrialRow[] } 
   const finished: Record<string, Record<string, unknown>> = {};
   const deps: AutoTrialDeps = {
     listPending: async () => over.rows ?? [row()],
+    storePlatform: async () => "shopify",
     claim: async () => true,
     loadLead: async () => lead(),
     loadDraft: async () => draft(),
@@ -202,7 +208,14 @@ describe("processAutoOrderTrials", () => {
   it("completa el carrito, lo etiqueta y lo registra; la fila queda generada", async () => {
     const { deps, calls, finished } = fakeDeps();
     const r = await processAutoOrderTrials(deps);
-    expect(r).toMatchObject({ generated: 1, skipped: 0, failed: 0, orderDates: ["2026-10-02T15:00:05Z"] });
+    expect(r).toMatchObject({
+      generated: 1,
+      skipped: 0,
+      failed: 0,
+      blockedByPlatform: 0,
+      error: null,
+      orderDates: ["2026-10-02T15:00:05Z"],
+    });
     expect(calls).toEqual([
       `complete:${GID}`,
       `tags:gid://shopify/Order/5550001:${AUTO_TRIAL_TAG},exp-recompra-1`,
@@ -306,5 +319,259 @@ describe("processAutoOrderTrials", () => {
     expect(r.generated).toBe(1);
     expect(finished.t1).toMatchObject({ status: "generado" });
     expect(finished.t1!.reason).toBe("etiqueta no aplicada: falta permiso write_orders");
+  });
+});
+
+// --- La plataforma de la tienda (MOM §38.12, «Los carritos», 25-10-2026) --------
+//
+// El pedido de la prueba es el borrador de Shopify completado. `stores.platform`
+// dice dónde crea Kapta los pedidos nuevos de la tienda (§38.1): con
+// `woocommerce`, completar el borrador sería un pedido en la plataforma
+// equivocada. La prueba no lo hace y deja el motivo en la fila.
+
+describe("processAutoOrderTrials · la plataforma de la tienda", () => {
+  /** Las dependencias que tocan Shopify o el lead: ninguna debe llamarse. */
+  function noShopify(calls: string[]): Partial<AutoTrialDeps> {
+    return {
+      loadLead: async () => {
+        calls.push("loadLead");
+        return lead();
+      },
+      loadDraft: async () => {
+        calls.push("loadDraft");
+        return draft();
+      },
+      hasLaterOrder: async () => {
+        calls.push("hasLaterOrder");
+        return false;
+      },
+      liveDraftStatus: async () => {
+        calls.push("liveDraftStatus");
+        return "open";
+      },
+    };
+  }
+
+  it("en una tienda que crea en WooCommerce no toca Shopify: omitido con su motivo", async () => {
+    const calls: string[] = [];
+    const { deps, calls: shopify, finished } = fakeDeps({
+      storePlatform: async () => "woocommerce",
+      ...noShopify(calls),
+    });
+    const r = await processAutoOrderTrials(deps);
+    expect(r).toMatchObject({ generated: 0, skipped: 1, failed: 0, blockedByPlatform: 1, error: null, orderDates: [] });
+    expect(calls).toEqual([]);
+    expect(shopify).toEqual([]);
+    expect(finished.t1).toMatchObject({ status: "omitido", reason: AUTO_TRIAL_PLATFORM_REASON });
+    expect(AUTO_TRIAL_PLATFORM_REASON).toBe("tienda_en_woocommerce");
+  });
+
+  it("cada fila de la corrida queda omitida y cuenta", async () => {
+    const { deps, calls, finished } = fakeDeps({
+      rows: [row({ id: "t1" }), row({ id: "t2" })],
+      storePlatform: async () => "woocommerce",
+    });
+    const r = await processAutoOrderTrials(deps);
+    expect(r).toMatchObject({ skipped: 2, blockedByPlatform: 2 });
+    expect(calls).toEqual([]);
+    expect(finished.t1).toMatchObject({ status: "omitido", reason: "tienda_en_woocommerce" });
+    expect(finished.t2).toMatchObject({ status: "omitido", reason: "tienda_en_woocommerce" });
+  });
+
+  it("si la plataforma no se puede leer, no toma la fila: sigue pendiente y la corrida lo dice", async () => {
+    const claimed: string[] = [];
+    for (const storePlatform of [async () => null, async () => Promise.reject(new Error("timeout"))]) {
+      const { deps, calls, finished } = fakeDeps({
+        rows: [row({ id: "t1" }), row({ id: "t2" })],
+        storePlatform: storePlatform as () => Promise<TrialStorePlatform | null>,
+        claim: async (id) => {
+          claimed.push(id);
+          return true;
+        },
+      });
+      const r = await processAutoOrderTrials(deps);
+      expect(r).toMatchObject({ generated: 0, skipped: 0, failed: 0, blockedByPlatform: 0 });
+      expect(r.error).toMatch(/^no se pudo leer en qué plataforma crea sus pedidos la tienda/);
+      expect(r.error).toContain("siguen pendientes");
+      expect(calls).toEqual([]);
+      expect(finished).toEqual({});
+    }
+    expect(claimed).toEqual([]);
+  });
+
+  it("se mira en cada fila: un cambio a WooCommerce a mitad de corrida frena las siguientes", async () => {
+    // t1: al tomarla y antes de completar; t2: al tomarla.
+    const platforms: TrialStorePlatform[] = ["shopify", "shopify", "woocommerce"];
+    const { deps, calls, finished } = fakeDeps({
+      rows: [row({ id: "t1" }), row({ id: "t2" })],
+      storePlatform: async () => platforms.shift() ?? "woocommerce",
+    });
+    const r = await processAutoOrderTrials(deps);
+    expect(r).toMatchObject({ generated: 1, skipped: 1, blockedByPlatform: 1 });
+    expect(calls.filter((c) => c.startsWith("complete:"))).toHaveLength(1);
+    expect(finished.t1).toMatchObject({ status: "generado" });
+    expect(finished.t2).toMatchObject({ status: "omitido", reason: "tienda_en_woocommerce" });
+  });
+
+  it("si la lectura falla después de generar una fila, lo generado se informa igual y el error no lo niega", async () => {
+    const platforms: (TrialStorePlatform | null)[] = ["shopify", "shopify", null];
+    const { deps, finished } = fakeDeps({
+      rows: [row({ id: "t1" }), row({ id: "t2" })],
+      storePlatform: async () => platforms.shift() ?? null,
+    });
+    const r = await processAutoOrderTrials(deps);
+    expect(r).toMatchObject({ generated: 1, orderDates: ["2026-10-02T15:00:05Z"] });
+    expect(r.error).toBe(platformUnreadableError(1));
+    expect(r.error).toContain("las filas que faltaban siguen pendientes");
+    expect(r.error).toContain("antes, en esta corrida, se generó 1 pedido");
+    expect(r.error).not.toMatch(/no se generó (nada|ningún)/);
+    expect(finished.t1).toMatchObject({ status: "generado" });
+    expect(finished.t2).toBeUndefined();
+  });
+
+  it("el error dice cuántos pedidos se generaron antes en la corrida, o que ninguno", () => {
+    const prefix = "no se pudo leer en qué plataforma crea sus pedidos la tienda (stores.platform): ";
+    expect(platformUnreadableError(0)).toBe(
+      `${prefix}las filas que faltaban siguen pendientes; en esta corrida no se generó ningún pedido`,
+    );
+    expect(platformUnreadableError(1)).toBe(
+      `${prefix}las filas que faltaban siguen pendientes; antes, en esta corrida, se generó 1 pedido`,
+    );
+    expect(platformUnreadableError(3)).toBe(
+      `${prefix}las filas que faltaban siguen pendientes; antes, en esta corrida, se generaron 3 pedidos`,
+    );
+  });
+});
+
+// --- Otra vez, justo antes de completar (revisión del 25-10-2026) ---------------
+//
+// Entre la primera lectura y `completeDraft` van la base (`hasLaterOrder` lee
+// hasta 5000 pedidos) y hasta dos llamadas a Shopify con tope de 30 s. Si el
+// owner cambia la tienda a WooCommerce en ese rato, completar el borrador
+// dejaría el pedido en Shopify: se vuelve a leer justo antes.
+
+describe("processAutoOrderTrials · la plataforma, otra vez antes de completar", () => {
+  /** Todo lo que pasa, en orden, con la lectura de la plataforma incluida. */
+  function traced(platforms: (TrialStorePlatform | null | Error)[], over: Partial<AutoTrialDeps> & { rows?: AutoOrderTrialRow[] } = {}) {
+    const order: string[] = [];
+    const claimed: string[] = [];
+    const base = fakeDeps({
+      rows: [row({ grupo: "B", address1: "Av. Canevaro 1275", district: "Lince" })],
+      loadDraft: async () => draft({ address1: "-" }),
+      ...over,
+      storePlatform: async () => {
+        const next = platforms.shift();
+        order.push(`platform:${next instanceof Error ? "throw" : String(next)}`);
+        if (next instanceof Error) throw next;
+        return next ?? null;
+      },
+      claim: async (id) => {
+        claimed.push(id);
+        return true;
+      },
+      liveDraftStatus: async () => {
+        order.push("live");
+        return "open";
+      },
+    });
+    const setDraftAddress = base.deps.setDraftAddress;
+    base.deps.setDraftAddress = async (gid, a) => {
+      order.push("address");
+      await setDraftAddress(gid, a);
+    };
+    const completeDraft = base.deps.completeDraft;
+    base.deps.completeDraft = async (gid) => {
+      order.push("complete");
+      return completeDraft(gid);
+    };
+    return { ...base, order, claimed };
+  }
+
+  it("con Shopify las dos veces, la segunda va justo antes de completar", async () => {
+    const { deps, order, finished } = traced(["shopify", "shopify"]);
+    const r = await processAutoOrderTrials(deps);
+    expect(r).toMatchObject({ generated: 1, blockedByPlatform: 0, error: null });
+    expect(order).toEqual(["platform:shopify", "live", "address", "platform:shopify", "complete"]);
+    expect(finished.t1).toMatchObject({ status: "generado" });
+  });
+
+  it("si la tienda pasó a WooCommerce mientras tanto, no completa: omitido con su motivo", async () => {
+    const { deps, order, calls, finished } = traced(["shopify", "woocommerce"]);
+    const r = await processAutoOrderTrials(deps);
+    expect(r).toMatchObject({ generated: 0, skipped: 1, failed: 0, blockedByPlatform: 1, error: null, orderDates: [] });
+    expect(order).toEqual(["platform:shopify", "live", "address", "platform:woocommerce"]);
+    expect(calls.filter((c) => c.startsWith("complete:"))).toEqual([]);
+    expect(calls.some((c) => c.startsWith("tags:") || c.startsWith("record:"))).toBe(false);
+    expect(finished.t1).toMatchObject({ status: "omitido", reason: AUTO_TRIAL_PLATFORM_REASON });
+  });
+
+  it("si la segunda lectura falla, no completa: la fila vuelve a pendiente y la corrida se detiene", async () => {
+    for (const second of [null, new Error("canceling statement due to statement timeout")]) {
+      // Si la corrida siguiera, t2 leería «shopify» y se generaría.
+      const { deps, order, calls, finished, claimed } = traced(["shopify", second, "shopify", "shopify"], {
+        rows: [
+          row({ id: "t1", grupo: "B", address1: "Av. Canevaro 1275", district: "Lince" }),
+          row({ id: "t2", grupo: "B", address1: "Av. Canevaro 1275", district: "Lince" }),
+        ],
+      });
+      const r = await processAutoOrderTrials(deps);
+      expect(r).toMatchObject({ generated: 0, skipped: 0, failed: 0, blockedByPlatform: 0, orderDates: [] });
+      expect(r.error).toBe(platformUnreadableError(0));
+      expect(order).not.toContain("complete");
+      expect(calls.filter((c) => c.startsWith("complete:"))).toEqual([]);
+      expect(finished.t1).toEqual({ status: "pendiente", claimed_at: null });
+      expect(finished.t2).toBeUndefined();
+      expect(claimed).toEqual(["t1"]);
+    }
+  });
+});
+
+describe("readTrialStorePlatform (stores.platform, sin claves)", () => {
+  function fakeAdmin(result: { data: unknown; error: { code?: string; message: string } | null }) {
+    const seen: { table?: string; columns?: string; id?: unknown } = {};
+    const admin = {
+      from(table: string) {
+        seen.table = table;
+        return {
+          select(columns: string) {
+            seen.columns = columns;
+            return {
+              eq(_col: string, id: unknown) {
+                seen.id = id;
+                return { maybeSingle: async () => result };
+              },
+            };
+          },
+        };
+      },
+    } as unknown as SupabaseClient;
+    return { admin, seen };
+  }
+
+  it("lee solo la columna platform de esa tienda", async () => {
+    const { admin, seen } = fakeAdmin({ data: { platform: "woocommerce" }, error: null });
+    expect(await readTrialStorePlatform(admin, "s1")).toBe("woocommerce");
+    expect(seen).toEqual({ table: "stores", columns: "platform", id: "s1" });
+  });
+
+  it("shopify es shopify; sin la 0274 (la columna no existe) toda tienda es de Shopify", async () => {
+    expect(await readTrialStorePlatform(fakeAdmin({ data: { platform: "shopify" }, error: null }).admin, "s1")).toBe(
+      "shopify",
+    );
+    expect(
+      await readTrialStorePlatform(
+        fakeAdmin({ data: null, error: { code: "42703", message: "column stores.platform does not exist" } }).admin,
+        "s1",
+      ),
+    ).toBe("shopify");
+  });
+
+  it("un error, una tienda que no está o un valor raro: null, nunca «Shopify» por defecto", async () => {
+    expect(
+      await readTrialStorePlatform(fakeAdmin({ data: null, error: { message: "canceling statement due to statement timeout" } }).admin, "s1"),
+    ).toBeNull();
+    expect(await readTrialStorePlatform(fakeAdmin({ data: null, error: null }).admin, "s1")).toBeNull();
+    expect(await readTrialStorePlatform(fakeAdmin({ data: { platform: "magento" }, error: null }).admin, "s1")).toBeNull();
+    expect(await readTrialStorePlatform(fakeAdmin({ data: { platform: null }, error: null }).admin, "s1")).toBeNull();
   });
 });

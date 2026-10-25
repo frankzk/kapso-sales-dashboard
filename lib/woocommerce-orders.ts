@@ -105,6 +105,24 @@ export async function loadStoreOrderPlatform(admin: SupabaseClient, storeId: str
   return { ok: true, platform: "woocommerce", creds };
 }
 
+/**
+ * Lo que dicen las dos acciones viejas de Leads que crean un pedido sin pasar
+ * por «Generar pedido» (sin uso en la pantalla, MOM §38.12 «Los carritos») en
+ * una tienda que ya crea sus pedidos en WooCommerce: no crean nada y mandan a
+ * «Generar pedido», que sí sabe crear en WooCommerce.
+ *
+ *   · `recoverCart` completaba el borrador de Shopify del lead: un pedido en
+ *     Shopify, la plataforma equivocada (§38.1).
+ *   · `closeSale` registraba una venta solo en Kapta (`manual-…`), que no es un
+ *     pedido de ninguna tienda y quedaba marcada `shopify` por defecto.
+ */
+export const SHOPIFY_CART_IN_WOO_STORE =
+  "La tienda crea sus pedidos nuevos en WooCommerce: este carrito de Shopify no se completa. " +
+  "Usa «Generar pedido», que crea el pedido en WooCommerce con los productos del carrito.";
+export const LOCAL_SALE_IN_WOO_STORE =
+  "La tienda crea sus pedidos nuevos en WooCommerce: una venta registrada solo en Kapta no sería un pedido de la tienda. " +
+  "Usa «Generar pedido».";
+
 // ---------------------------------------------------------------------------
 // Productos: la identidad de una variante de WooCommerce en el formulario
 // ---------------------------------------------------------------------------
