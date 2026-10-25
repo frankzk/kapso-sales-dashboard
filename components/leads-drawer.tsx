@@ -135,6 +135,7 @@ import { cn } from "@/components/ui";
 import { formatPeruMobile, peruMobileDigits, peruMobileProblem } from "@/lib/phone";
 import { YapeAssign } from "@/components/yape-alerts";
 import { reportClientPerformanceMetric } from "@/lib/client-performance";
+import { cartsTone, cartsVerdict, type CustomerCarts } from "@/lib/customer-carts";
 
 export type LeadDrawerProps = {
   lead: LeadRow;
@@ -225,6 +226,90 @@ function fmtDate(value: string | null | undefined): string {
 function orderDateShort(value: string | null | undefined): string {
   if (!value) return "—";
   return new Date(value).toLocaleDateString("es-PE", { day: "numeric", month: "short" });
+}
+
+/** Cuántos carritos se ven antes de «Ver todos»: los últimos, que son los que cuentan. */
+const CARTS_PREVIEW = 4;
+/** Tope de la lista abierta; el conteo de arriba es siempre el completo. */
+const CARTS_LIST_MAX = 40;
+
+const CARTS_VERDICT_TONE: Record<ReturnType<typeof cartsTone>, string> = {
+  warn: "text-warn-fg",
+  ok: "text-ok-fg",
+  neutral: "text-ink-700",
+};
+
+/**
+ * Carritos anteriores de la clienta en esta tienda. Arriba, el hecho que cambia
+ * cómo se la llama —cuántos terminaron en pedido—; debajo, los últimos con su
+ * producto, monto y en qué quedó. Misma anatomía que «Pedidos anteriores».
+ */
+function CustomerCartsCard({ carts, currency }: { carts: CustomerCarts; currency: string }) {
+  const [open, setOpen] = useState(false);
+  const { summary } = carts;
+  const verdict = cartsVerdict(summary);
+  const shown = open ? carts.carts.slice(0, CARTS_LIST_MAX) : carts.carts.slice(0, CARTS_PREVIEW);
+  const hidden = carts.carts.length - shown.length;
+  return (
+    <section aria-label="Carritos anteriores" className={SECTION_CARD}>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <h3 className="text-sm font-semibold text-ink-900">
+          Carritos anteriores <span className="font-normal tabular-nums text-ink-500">· {summary.total}</span>
+        </h3>
+        {summary.completed > 0 && summary.abandoned > 0 && (
+          <span className="text-[13px] tabular-nums text-ink-600">
+            {summary.abandoned} {summary.abandoned === 1 ? "abandonado" : "abandonados"}
+          </span>
+        )}
+      </div>
+      {verdict && <p className={cn("mt-0.5 text-[13px] font-medium leading-5", CARTS_VERDICT_TONE[cartsTone(summary)])}>{verdict}</p>}
+      <ul className="-mx-4 -mb-4 mt-3 divide-y divide-line border-t border-line sm:-mx-5 sm:-mb-5">
+        {shown.map((cart) => (
+          <li key={cart.key} className="flex items-start justify-between gap-3 px-4 py-2.5 sm:px-5">
+            <div className="min-w-0">
+              <p className="flex items-baseline gap-2">
+                <span className="truncate text-sm font-medium text-ink-900">
+                  {cart.kind === "carrito" ? "Checkout web" : cart.name ?? "Borrador"}
+                </span>
+                <span className="shrink-0 text-xs tabular-nums text-ink-500">{orderDateShort(cart.createdAt)}</span>
+              </p>
+              {cart.products && <p className="mt-0.5 truncate text-[13px] leading-5 text-ink-600">{cart.products}</p>}
+            </div>
+            <div className="flex shrink-0 flex-col items-end gap-1">
+              {cart.total != null && (
+                <span className="text-sm font-semibold tabular-nums text-ink-900">
+                  {currency} {cart.total.toFixed(2)}
+                </span>
+              )}
+              {cart.completed ? (
+                <Badge tone="ok">{cart.orderName ? `Pedido ${cart.orderName}` : "Terminó en pedido"}</Badge>
+              ) : (
+                <Badge>Abandonado</Badge>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
+      {(hidden > 0 || open) && carts.carts.length > CARTS_PREVIEW && (
+        <div className="-mx-4 -mb-4 mt-4 border-t border-line px-4 py-2 sm:-mx-5 sm:-mb-5 sm:px-5">
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            className="inline-flex min-h-8 items-center gap-1 text-[13px] font-medium text-brand-700 hover:underline pointer-coarse:min-h-11"
+          >
+            {open ? "Ver menos" : `Ver los ${Math.min(carts.carts.length, CARTS_LIST_MAX)}`}
+            <IconChevronDown aria-hidden className={cn("size-4 transition-transform", open && "rotate-180")} />
+          </button>
+          {open && carts.carts.length > CARTS_LIST_MAX && (
+            <span className="ml-2 text-[13px] tabular-nums text-ink-500">
+              y {carts.carts.length - CARTS_LIST_MAX} más antiguos
+            </span>
+          )}
+        </div>
+      )}
+    </section>
+  );
 }
 
 /** Monto corto para una chapa: «129» o «129.9», con el formato es-PE. */
@@ -916,6 +1001,14 @@ export function LeadDrawer({
                   ))}
                 </ul>
               </section>
+            )}
+
+            {/* Carritos anteriores (25-10-2026): ¿termina la compra o solo deja
+                carritos? Las asesoras lo iban a buscar a Shopify → Borradores,
+                cliente por cliente; ahora sale del espejo y del archivo de
+                Shopify en Kapta (lib/customer-carts.ts). */}
+            {history?.carts && history.carts.summary.total > 0 && (
+              <CustomerCartsCard carts={history.carts} currency={currency} />
             )}
 
             {/* Resumen del bot */}

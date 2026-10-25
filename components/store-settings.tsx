@@ -231,6 +231,12 @@ export interface StoreSettingsData {
     olva_arrival_template_enabled: boolean;
     olva_arrival_template_name: string | null;
     olva_arrival_params: string | null;
+    /** «Ya llegó» para quien ya no debe saldo, solo Olva (0281). `available`:
+     *  la 0281 está aplicada; sin ella el bloque no se enseña. */
+    olva_paid_arrival_available: boolean;
+    olva_paid_arrival_template_enabled: boolean;
+    olva_paid_arrival_template_name: string | null;
+    olva_paid_arrival_params: string | null;
     /** Recordatorio de recojo, día 3 y día 7 en la agencia (0242). */
     shalom_reminder_template_enabled: boolean;
     shalom_reminder_template_name: string | null;
@@ -3131,6 +3137,9 @@ function AutomationSections({ data }: { data: StoreSettingsData }) {
             s.olva_arrival_template_enabled,
             s.olva_arrival_template_name,
             s.olva_arrival_params,
+            s.olva_paid_arrival_template_enabled,
+            s.olva_paid_arrival_template_name,
+            s.olva_paid_arrival_params,
             s.olva_reminder_template_enabled,
             s.olva_reminder_template_name,
             s.olva_reminder_params,
@@ -3198,6 +3207,58 @@ function AutomationSections({ data }: { data: StoreSettingsData }) {
               />
             </Field>
           </FieldGrid>
+          {s.olva_paid_arrival_available ? (
+            <>
+              <ToggleRow
+                name="olva_paid_arrival_template_enabled"
+                label="Aviso de llegada · pedido ya pagado"
+                defaultChecked={s.olva_paid_arrival_template_enabled}
+                description={
+                  <p>
+                    El de llegada es de cobro y no sale a quien ya no debe nada. Olva no tiene clave, así que sin este
+                    aviso la clienta que pagó completo <strong>no se entera de que su paquete llegó</strong>. Con él
+                    encendido, en vez de omitirse sale «ya llegó, recógelo con tu DNI», sin importes ni botones. Uno por
+                    guía: a quien ya recibió el de cobro y pagó después no se le manda otro.
+                  </p>
+                }
+              />
+              <FieldGrid cols={3}>
+                <Field label="Plantilla · nombre" htmlFor="olva_paid_arrival_template_name">
+                  <input
+                    id="olva_paid_arrival_template_name"
+                    name="olva_paid_arrival_template_name"
+                    defaultValue={s.olva_paid_arrival_template_name ?? ""}
+                    placeholder="guias_olva_llegada_pagado"
+                    className={FIELD}
+                  />
+                </Field>
+                <Field
+                  label="Orden de las variables"
+                  htmlFor="olva_paid_arrival_params"
+                  className="lg:col-span-2"
+                  hint={
+                    <p>
+                      Sin importes: <code>total</code>, <code>adelanto</code>, <code>saldo</code> y <code>yape</code>{" "}
+                      no se admiten. <code>vence</code> es la fecha límite, a 6 días de la llegada.
+                    </p>
+                  }
+                >
+                  <input
+                    id="olva_paid_arrival_params"
+                    name="olva_paid_arrival_params"
+                    defaultValue={s.olva_paid_arrival_params ?? ""}
+                    placeholder="nombre,producto,agencia,guia,vence"
+                    className={FIELD}
+                  />
+                </Field>
+              </FieldGrid>
+            </>
+          ) : (
+            <BannerRow tone="info" title="Aviso de llegada · pedido ya pagado">
+              Falta aplicar la migración 0281 en la base. Hasta entonces, a la clienta de Olva que ya pagó no le sale
+              el aviso de llegada.
+            </BannerRow>
+          )}
           <ToggleRow
             name="olva_reminder_template_enabled"
             label="Recordatorio de recojo"

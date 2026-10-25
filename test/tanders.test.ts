@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildTandersPayload,
   composeTandersNote,
+  isKapsoAutoNote,
+  tandersPaymentBlock,
   tandersCoverageEligible,
   defaultCollectionAmount,
   suggestedDestination,
@@ -231,6 +233,61 @@ describe("composeTandersNote", () => {
     expect(
       composeTandersNote({ reference: "Llamar antes", shopifyNote: "  llamar  antes " }),
     ).toBe("Llamar antes");
+  });
+
+  // Lo que el equipo tecleaba a mano en cada guía (rótulos del 25-10-2026).
+  const cuentas = [
+    { id: "b", kind: "banco", label: "BCP", holder: "Grupo GF SAC", account: "191-2434540-0-12", detail: null, primaryYape: false, active: true, sort: 10 },
+    { id: "v", kind: "banco", label: "BBVA", holder: "F", account: "0011-0179-0200429111", detail: null, primaryYape: false, active: true, sort: 20 },
+    { id: "y", kind: "yape", label: "YAPE 1", holder: "Grupo GF SAC", account: "930555309", detail: null, primaryYape: true, active: true, sort: 50 },
+    { id: "y2", kind: "yape", label: "YAPE 2", holder: "G", account: "987754147", detail: null, primaryYape: false, active: true, sort: 70 },
+  ] as const;
+
+  it("precarga referencia, pedido, productos y datos de cobro como el rótulo de #KP143912", () => {
+    expect(
+      composeTandersNote({
+        reference: "Entre  av  el parral y  Av  carabayllo",
+        shopifyNote: null,
+        orderName: "#KP143912",
+        items: [{ quantity: 3, name: "Magnesio 12 en 1 Complex – Cápsulas (120 Cápsulas) – SuperHuman™", variant: null }],
+        paymentMethods: [...cuentas],
+      }),
+    ).toBe(
+      "Entre  av  el parral y  Av  carabayllo\n" +
+        "#KP143912\n" +
+        "X3 Magnesio 12 en 1 Complex – Cápsulas (120 Cápsulas) – SuperHuman™\n" +
+        "\n" +
+        "Datos de cobro:\n" +
+        "• Yape: 930555309\n" +
+        "• BCP Cta: 1912434540012",
+    );
+  });
+
+  it("la nota automática de Kapso no va: repite lo que la guía ya lleva (#KP143995)", () => {
+    const note = composeTandersNote({
+      reference: "Pasando el hospital",
+      shopifyNote: "Pedido creado desde WhatsApp/Kapso.\nProducto(s): 1 x Nails Repairing\nDistrito: VMT",
+      orderName: "#KP143995",
+      items: [{ quantity: 1, name: "Nails Repairing – Sérum Tea Tree Ginger para Uñas (30ml)", variant: null }],
+    });
+    expect(note).toBe("Pasando el hospital\n#KP143995\nX1 Nails Repairing – Sérum Tea Tree Ginger para Uñas (30ml)");
+    expect(isKapsoAutoNote("Pedido WhatsApp/Kapso · Contraentrega (efectivo o Yape)")).toBe(true);
+    expect(isKapsoAutoNote("CNF - ALEXIS")).toBe(false);
+  });
+
+  it("la nota que escribió el equipo sí va, y la variante del producto también", () => {
+    const note = composeTandersNote({
+      reference: null,
+      shopifyNote: "Llamar antes de llegar",
+      orderName: "#KP1",
+      items: [{ quantity: 2, name: "Medias", variant: "39-40" }],
+    });
+    expect(note).toBe("Llamar antes de llegar\n#KP1\nX2 Medias (39-40)");
+  });
+
+  it("sin cuentas configuradas no inventa datos de cobro; una inactiva no cuenta", () => {
+    expect(tandersPaymentBlock([])).toBe("");
+    expect(tandersPaymentBlock([{ ...cuentas[0], active: false }, cuentas[2]])).toBe("Datos de cobro:\n• Yape: 930555309");
   });
 
   it("omite la parte que ya está contenida en la otra", () => {

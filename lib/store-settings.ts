@@ -183,6 +183,10 @@ export interface StoreSettingsInput {
   olva_arrival_template_enabled?: string | boolean;
   olva_arrival_template_name?: string;
   olva_arrival_params?: string;
+  /** «Ya llegó» para quien ya no debe saldo, solo Olva (0281). */
+  olva_paid_arrival_template_enabled?: string | boolean;
+  olva_paid_arrival_template_name?: string;
+  olva_paid_arrival_params?: string;
   /** Recordatorio de recojo, día 3 y día 7 en la agencia (0242). */
   shalom_reminder_template_enabled?: string | boolean;
   shalom_reminder_template_name?: string;
@@ -647,6 +651,17 @@ export function buildStoreUpdate(
     "olva_arrival_template_name",
     "olva_arrival_params",
   ] as const) {
+    const v = clean(input[k]);
+    if (v !== null) patch[k] = v;
+  }
+
+  // «Ya llegó» para pagados de Olva (0281): mismas reglas. Solo viajan si
+  // Ajustes los enseñó, y Ajustes solo los enseña con la 0281 aplicada.
+  if (input.olva_paid_arrival_template_enabled !== undefined) {
+    patch.olva_paid_arrival_template_enabled =
+      input.olva_paid_arrival_template_enabled === true || input.olva_paid_arrival_template_enabled === "true";
+  }
+  for (const k of ["olva_paid_arrival_template_name", "olva_paid_arrival_params"] as const) {
     const v = clean(input[k]);
     if (v !== null) patch[k] = v;
   }

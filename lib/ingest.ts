@@ -261,6 +261,11 @@ export interface StoreCreds {
   olva_arrival_template_enabled: boolean;
   olva_arrival_template_name: string | null;
   olva_arrival_params: string | null;
+  /** «Ya llegó, recógelo con tu DNI» para quien ya no debe saldo, solo Olva
+   *  (0281): sustituye a la omisión del aviso de llegada. Nace apagado. */
+  olva_paid_arrival_template_enabled: boolean;
+  olva_paid_arrival_template_name: string | null;
+  olva_paid_arrival_params: string | null;
   /** Recordatorio de recojo, día 3 y día 7 en la agencia (0242). Interruptor
    *  y plantilla por courier; la imagen de respaldo es de la tienda. */
   shalom_reminder_template_enabled: boolean;
@@ -466,6 +471,10 @@ export async function getStoreCreds(
     olva_arrival_template_enabled: data.olva_arrival_template_enabled ?? false,
     olva_arrival_template_name: data.olva_arrival_template_name ?? null,
     olva_arrival_params: data.olva_arrival_params ?? null,
+    // Pre-0281 las columnas no existen ⇒ aviso para pagados apagado.
+    olva_paid_arrival_template_enabled: data.olva_paid_arrival_template_enabled ?? false,
+    olva_paid_arrival_template_name: data.olva_paid_arrival_template_name ?? "guias_olva_llegada_pagado",
+    olva_paid_arrival_params: data.olva_paid_arrival_params ?? "nombre,producto,agencia,guia,vence",
     // Pre-0242 las columnas no existen ⇒ recordatorio apagado; nombres y orden
     // de variables, espejo de los defaults de la migración.
     shalom_reminder_template_enabled: data.shalom_reminder_template_enabled ?? false,

@@ -28,6 +28,8 @@ import {
   tandersCoverageEligible,
 } from "@/lib/tanders/draft";
 import { getStoreCreds } from "@/lib/ingest";
+import { parseLabelLineItems, type LabelLineItem } from "@/lib/labels/line-items";
+import { loadStorePaymentMethods } from "@/lib/payment-methods";
 import { orderPlatformOf } from "@/lib/shipment-order-capture";
 import { writeCourierGuide } from "@/lib/route-output-fill";
 import { puertaDeSalidaAdicional, type SalidaExistente } from "@/lib/shipment-output";
@@ -188,6 +190,15 @@ async function liveOrderNote(
   }
 }
 
+/** Los productos del pedido, como los imprime el rótulo interno. */
+async function orderItems(
+  admin: ReturnType<typeof createAdminSupabase>,
+  orderId: string,
+): Promise<LabelLineItem[]> {
+  const { data } = await admin.from("orders").select("line_items").eq("id", orderId).maybeSingle();
+  return parseLabelLineItems((data as { line_items: unknown } | null)?.line_items);
+}
+
 /**
  * Todo lo que necesita el modal, ya resuelto en el servidor: qué se va a
  * despachar, a dónde, por cuánto, y qué debería frenar al operador.
@@ -267,6 +278,11 @@ export async function loadTandersDraft(
     warnings.push("El pedido ya está pagado: el monto a cobrar va en 0.");
   }
 
+  const collectionAmount = defaultCollectionAmount({
+    paymentState: row.payment_state,
+    orderTotal: row.order_total,
+  });
+
   return {
     draft: {
       orderId,
@@ -279,14 +295,15 @@ export async function loadTandersDraft(
       geoSource: row.geo_source ?? null,
       recipientName: row.customer_name,
       recipientPhone: row.customer_phone,
-      collectionAmount: defaultCollectionAmount({
-        paymentState: row.payment_state,
-        orderTotal: row.order_total,
-      }),
+      collectionAmount,
       salidaAdicional,
       note: composeTandersNote({
         reference: row.reference,
         shopifyNote: await liveOrderNote(admin, orderId),
+        orderName: row.order_name,
+        items: await orderItems(admin, orderId),
+        // Un pedido que no cobra no le pide al cliente que pague.
+        paymentMethods: collectionAmount > 0 ? await loadStorePaymentMethods(admin, row.store_id) : null,
       }),
       blockers,
       warnings,

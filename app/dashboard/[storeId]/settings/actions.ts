@@ -257,6 +257,10 @@ export async function updateStore(
     olva_arrival_template_enabled: get("olva_arrival_template_enabled"),
     olva_arrival_template_name: get("olva_arrival_template_name"),
     olva_arrival_params: get("olva_arrival_params"),
+    // «Ya llegó» para pagados de Olva (0281).
+    olva_paid_arrival_template_enabled: get("olva_paid_arrival_template_enabled"),
+    olva_paid_arrival_template_name: get("olva_paid_arrival_template_name"),
+    olva_paid_arrival_params: get("olva_paid_arrival_params"),
     // El recordatorio de recojo (0242).
     shalom_reminder_template_enabled: get("shalom_reminder_template_enabled"),
     shalom_reminder_template_name: get("shalom_reminder_template_name"),
