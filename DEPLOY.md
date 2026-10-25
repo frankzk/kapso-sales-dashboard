@@ -4796,6 +4796,34 @@ la ruta (404). La 0277 puede quedarse: nadie más la lee. Si se quisiera quitar,
 table bot_order_secrets;`. Los pedidos ya creados en WooCommerce se quedan: son
 pedidos reales.
 
+### 25-10-2026 · El bot de Kapso consulta un pedido que ya existe (sin migración, MOM §38.13)
+
+El caso del 24-10-2026: la clienta llega al bot desde la página de gracias de
+la web («deseo confirmar mi pedido KP200001…») y el bot, que no sabía que ese
+pedido existía, lo volvía a cotizar y ofrecía crear otro. Este cambio trae
+`POST /api/internal/orders/<storeId>/lookup` (contrato en
+`docs/kapso-pedidos-kapta.md`, sección 10): **solo lectura**, con el mismo
+secreto del bot, que devuelve el pedido solo si es del celular de la
+conversación (con otro celular, el mismo 404 `not_found` que un número que no
+existe). Ajustes → «Bot de Kapso → pedidos por Kapta» muestra la dirección.
+`maxDuration = 20`.
+
+**Sin migración y sin variables de entorno nuevas.** Usa la 0277 (el secreto),
+que ya está, y `orders.platform` de la 0274. No escribe nada, no llama a
+WooCommerce ni a Shopify y **nada cambia para el bot hasta que el owner edite
+su workflow en Kapso** (la regla de la sección 10.1: no cotizar ni crear;
+consultar, confirmar ese pedido con el total de Kapta, o derivar a una asesora).
+
+**Verificar** (después de desplegar, sin datos de clientas en los registros):
+con el secreto de la tienda, consultar un pedido real con **su** celular (200) y
+con otro (404, el mismo cuerpo que un número inventado). En los logs de Vercel,
+`[bot-orders-lookup]` es una línea por consulta (tienda, número consultado,
+`outcome`, `status`, `ms`), sin el celular.
+
+**Marcha atrás.** Revertir el código (la ruta da 404 y el bot deriva); o, sin
+despliegue, quitar la consulta del workflow de Kapso. «Desactivar» en Ajustes
+corta las dos rutas del bot a la vez (401).
+
 ### 24-10-2026 · Historial de Shopify: productos, fotos, carritos, borradores y más detalle (0278, MOM §37.6)
 
 «Traer todo» en Historial Shopify: productos con sus fotos en tamaño original

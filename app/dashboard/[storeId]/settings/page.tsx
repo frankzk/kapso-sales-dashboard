@@ -24,6 +24,7 @@ import {
 import { limaDateTimeInputValue } from "@/lib/repro-lima";
 import { WOO_INTAKE_TOPICS, WOO_SYNC_SOURCE, wooWebhookDeliveryUrl } from "@/lib/woocommerce-intake";
 import { botOrdersEndpointUrl, isBotOrdersMigrationMissing } from "@/lib/bot-orders";
+import { botOrderLookupUrl } from "@/lib/bot-order-lookup";
 import { limaDayStartIso } from "@/lib/auto-order-ab";
 import type { InvoiceMode, InvoiceStatus, InvoiceWriteMode } from "@/lib/invoicing/rules";
 import {
@@ -671,6 +672,7 @@ export default async function StoreSettingsPage({
     },
     botOrders: {
       endpointUrl: botOrdersEndpointUrl(siteUrl || env.siteUrl(), storeId),
+      lookupUrl: botOrderLookupUrl(siteUrl || env.siteUrl(), storeId),
       configured: Boolean(botSecret),
       createdAt: botSecret?.created_at ?? null,
       rotatedAt: botSecret?.rotated_at ?? null,

@@ -10105,12 +10105,24 @@ estables:
    #KP143817): `PUNTO`, nombre, dirección, referencia ` - ` código postal,
    distrito ` - `, teléfono, `Pedido de <marca> <pedido>`, `COBRAR <total>
    SOLES`, la nota y los productos. La dirección es la de envío y, si no hay,
-   la de facturación (`displayAddress`); el total es el **vigente** de Shopify
-   con su forma («89.1», «89.0»), y sin él el de Kapta; la marca es la tienda
-   sin el país («Kenku Peru» → «Kenku»). Si la dirección no trae teléfono va el
-   del cliente. Kapta lo arma porque Shopify cierra el 28-10-2026 (§37) y los
+   la de facturación (`displayAddress`); la marca es la tienda sin el país
+   («Kenku Peru» → «Kenku»). Si la dirección no trae teléfono va el del
+   cliente. Kapta lo arma porque Shopify cierra el 28-10-2026 (§37) y los
    pedidos de WooCommerce nunca lo tuvieron. Es un texto para copiar: no
    escribe nada ni cambia el monto a cobrar del pedido.
+   **Dos diferencias con la plantilla (decisión del owner, 25-10-2026):**
+   - **«COBRAR» es el saldo, no el total** (`puntoCollect`): el total vigente
+     de Shopify (sin él, el de Kapta) menos lo que la clienta ya pagó y está
+     validado (adelanto, diferencia), con la misma regla de la ruta del
+     motorizado (`collectionBalance`: la rendición de un courier y lo rechazado
+     no cuentan; pagado en el checkout, 0). Con la forma de Shopify («89.1»,
+     «218.5»). Lo que está por validar no se resta: la pestaña lo avisa, porque
+     si se valida antes de la entrega hay que volver a copiar. Si los pagos no
+     se pueden leer, el Punto sale sin monto y la pestaña lo dice; nunca se
+     adivina el total. Antes la plantilla ponía el total aunque hubiera
+     adelanto, y el punto cobraba de más.
+   - **Cada producto lleva su cantidad**: «  2 x Producto - Variante». Una línea
+     quitada del pedido (cantidad 0) no va.
 
 **El historial del lead se reparte entre los pedidos del cliente (16-10-2026).**
 La Actividad trae también las gestiones de Leads (llamadas, mensajes, la venta
@@ -12396,6 +12408,32 @@ Antes cada pantalla respondía con su propio motivo —«Ese paquete no pertenec
 esta ruta», «El pedido ya avanzó…»— y quien tenía la caja en la mano no sabía que
 la decisión era simplemente no despacharla.
 
+**Una salida anulada se dice con quién, cuándo y qué hacer (24-10-2026).**
+AUR178551-S01 la anuló una compañera a las 10:28 de Lima con «Anular salida»
+de la ficha (`route_output_cancelled`, §4: la caja nunca salió). Más tarde
+alguien escaneó su rótulo impreso en «Asignar por QR» y la línea respondió «La
+caja existente ya no está disponible para asignarla.»: cierto, pero no decía
+que esa salida estaba anulada. Ahora, cuando el escaneo de asignación **ya
+falló** y el QR es de una salida con `delivery_status = anulado`, la línea lo
+dice así: «AUR178551-S01 está ANULADA (la anuló {quien} el 24/10 a las 10:28).
+Crea una salida nueva desde la ficha del pedido (Operar → Crear salida) e
+imprime su rótulo; este rótulo ya no sirve.» Quién y cuándo salen del hecho
+más reciente que anuló esa salida (`route_output_cancelled` o
+`guide_cancelled` con su `shipment_id`); quien la anuló se nombra como en Leads
+y Repro Lima (la parte local de su correo) y, sin actor, «se anuló el …». Si el
+pedido tiene **otra salida viva** (`isActiveOutput` en Lima), no se manda a
+crear otra: «…: este rótulo ya no sirve; el pedido sigue con AUR178551-S02.»
+seguido del motivo de siempre. Solo cambia el mensaje: no se reactiva nada,
+tomar y asignar siguen con sus reglas, y si el escaneo asigna (por ejemplo,
+porque al tomarlo nació la salida nueva) responde como siempre, con el aviso de
+pegar su rótulo encima. El pedido anulado se sigue diciendo antes que esto; el
+límite de efectivo y un rótulo vivo responden lo de antes. Las lecturas se
+pagan solo en el escaneo que falla (`lib/scan-annulled-output.ts`, en
+`scanAssignToRider`), probado en `test/scan-salida-anulada.test.ts`.
+**Pendiente:** una salida anulada que siguiera dentro de una caja activa
+responde «Ya está en la caja…» o «Está en la caja de…» como cualquier otra; no
+se ha visto el caso.
+
 **Verificar una caja dice cuál es, y dónde está lo que no es suyo
 (07-10-2026).** KP136825-S01 ya estaba en la caja de Alexis —la única que le
 faltaba verificar— y se escaneó en la verificación de Roy, también de 16
@@ -12410,6 +12448,48 @@ palabras:
   Alexis (07/10), no en la de Roy. Verifícalo en esa caja.» Si no está en
   ninguna: «No está en la caja de Roy ni en otra. Agrégalo primero a una
   caja.» El anulado sigue diciéndose antes que esto.
+
+**Buscar en «Desde la lista» dice dónde está lo que no está por asignar
+(24-10-2026).** El owner buscó #KP141876 para reprogramarlo y la lista respondió
+«Nada por asignar con ese filtro.». Estaba en «Sin condiciones» (76 ese día):
+Ancón no tiene tarifa y está pausado para Grupo GF. Ahora, si la búsqueda no
+encuentra nada en la lista pero el texto nombra un pedido que el tablero ya
+tiene en otro sitio, el vacío lo dice debajo, un aviso por pedido con su botón:
+
+- **Cómo se reconoce.** Por número de pedido sin «#» ni mayúsculas, también una
+  parte («141876»), o por teléfono como la búsqueda de la lista (cuatro dígitos
+  o más). Con menos de cuatro caracteres no se busca fuera. Hasta tres avisos,
+  el número entero primero; los demás se cuentan («Y 2 pedidos más fuera de la
+  lista con ese texto…»).
+- **«Sin condiciones»**, en ámbar, con el motivo y el distrito: «#KP141876 está
+  en «Sin condiciones»: tarifa faltante para Ancón. Ponle tarifa en Tarifario.»
+  y «Abrir Tarifario». Si además el servicio está pausado ahí, lo dice («…, y el
+  servicio está pausado ahí. Ponle tarifa y reanuda el servicio en Tarifario.»):
+  el motivo sigue siendo uno (`tarifa_faltante`), y la foto lleva aparte
+  `paused`. Sin el Tarifario (§29.10), dice que lo corrige quien administra
+  Grupo GF y abre la hoja «Sin condiciones» con ese pedido primero y resaltado.
+  Distrito inválido abre la ficha en Información; sin salida armable, ya en una
+  caja de despacho y los motivos de un «Por reprogramar» que no sale, la
+  ficha en Operar.
+- **Escondido por un apartado o un filtro**: «#KP300001 está por asignar en
+  «Programados después» (programado mar 27/10).» (o «…, pero lo esconden los
+  filtros de la lista»), con «Ver en «…»», que abre ese apartado sin los demás
+  filtros y deja el texto. Un «No entregado» que sigue en una caja lleva «Quitar
+  filtros».
+- **Ya no está por asignar**: «#KP500001 ya no está por asignar: está en la caja
+  de Roy del sáb 24/10 (carga 2), lo lleva (En curso · En reparto).», o, si se
+  está cerrando, «… ya no se asigna: está en «Por cerrar · …»». «Ver en
+  seguimiento» abre su etapa (la lista de seguimiento de arriba).
+- **«En devolución»** («… vuelve con Alexis (caja del …) y el pedido sale con
+  …») abre esa hoja, y **«Devoluciones»** su escáner.
+
+Sin lecturas nuevas: es la foto que ya trae Despacho del día (cola, seguimiento,
+«Sin condiciones», «En devolución», «Devoluciones»), y la fila de «Sin
+condiciones» suma el teléfono y `paused`, que ya se leían. Un pedido que el
+tablero no tiene (otra cobertura, otra etapa) sigue con «Nada por asignar con
+ese filtro.». Nada de esto cambia la cola ni las acciones. Lógica pura en
+`lib/dispatch-day.ts` (`locateOutsideList`, `matchesOrderSearch`), probada en
+`test/despacho-busqueda-donde-esta.test.ts`.
 
 ### 29.14 Rutas: una sola lista y la caja al lado (19-09-2026)
 
@@ -15803,11 +15883,11 @@ cierre del 28-10-2026 00:00 UTC (§35.10). «Traer todo» va paso por paso:
    privado `shopify-history` (`<tienda>/productos/<producto>/<foto>.<ext>`).
    Va por tandas de ~60 s; una foto que falla tres veces queda marcada y deja
    de intentarse. Es un respaldo: no es la foto de las plantillas de WhatsApp
-   (§39). Shopify deja que varios productos usen la misma foto, y la tabla
-   guarda una fila por foto: en cada tanda la foto queda con el primer
-   producto que la trae. Antes del 25-10-2026 una foto repetida rompía la
-   tanda y la traída de productos de Kenku quedó trabada en «importando»; con
-   el arreglo sigue sola desde donde quedó.
+   (§39). **Una foto que está en dos productos se guarda una vez
+   (25-10-2026)**, con el último producto en que aparece: la tabla tiene una
+   fila por foto, y dos iguales en la misma tanda tumbaban el guardado entero.
+   Pasó con Kenku: 3 fotos compartidas de 3.773 dejaron «Productos» trabado en
+   «No se pudieron guardar las fotos: ON CONFLICT DO UPDATE…».
 3. **Carritos abandonados** de la web y 4. **borradores** (el formulario contra
    entrega deja uno por envío), en `shopify_history_carts`: quién dejó sus
    datos, qué quería, el enlace para retomar o la factura, sus UTM y el pedido
@@ -17114,6 +17194,42 @@ vuelve a Shopify mientras Shopify viva, o «Desactivar» en Ajustes (401, y el
 bot deriva a una asesora). **Aurela no pasa por este endpoint:** su bot crea
 sus pedidos directo en WooCommerce (decisión del owner del 24-10-2026, 38.5).
 
+**Consultar un pedido que ya existe (25-10-2026).** El caso (24-10-2026): la
+página de gracias del checkout de la web (plugin «COD Core») abre el chat del
+bot con «… deseo confirmar mi pedido KP200001 y pagaré S/ 599.60 en casa»; el
+bot no sabía que ese pedido existía, lo volvió a cotizar con sus precios
+(S/ 665) y ofreció «Confirmar pedido»: habría sido un **segundo pedido**. Desde
+ahora el bot tiene `POST /api/internal/orders/<storeId>/lookup`
+(`handleBotOrderLookup`), con **el mismo secreto y la misma puerta** que para
+crear (`authenticateBotCall`, 401 «No autorizado.» sin detalles) y el mismo
+tope de la base (`withTimeout`, `BOT_ORDER_DB_TIMEOUT_MS`). Cuerpo estricto:
+`order_name` (con o sin `#`, en cualquier caja: `normalizeBotOrderName`) y
+`phone` (el `phone_number` de la conversación). **Solo lectura**: no crea, no
+escribe nada (tampoco el último uso de Ajustes), no llama a WooCommerce ni a
+Shopify y no mira la plataforma de la tienda. Devuelve el número, la
+plataforma, la fecha, el total que Kapta tiene **hoy** (`orders.total_amount`),
+cómo se paga (`contraentrega`, `pagado` o null, derivado de `payment_gateway`,
+`financial_status` y las constancias con `orderFullyPaid`: `botLookupPayment`),
+si está anulado, la entrega vigente (el distrito y la dirección del Master, o
+los del pedido), los productos sin precios y la macroetapa y subetapa del
+Master con sus nombres de pantalla. **La privacidad (decisión de diseño,
+25-10-2026):** cualquiera puede escribir ese número en WhatsApp, así que el
+pedido se busca por su número **y** el celular de la conversación en la misma
+consulta (el índice `(store_id, customer_phone)` de `orders`) y se vuelve a
+comparar en memoria (`sameLookupPhone`); con otro celular la respuesta es
+**exactamente** la de un número que no existe, 404 `not_found` (reintentable
+una vez a los 10 s, `BOT_ORDER_LOOKUP_RETRY_AFTER_S`): Kapta nunca lee el pedido
+de otro celular, y un código aparte confirmaría que el número existe sin
+servirle al workflow. Cuenta solo el celular del pedido, nunca el de la guía
+(es el de quien recibe). **La regla del workflow** (la edita el owner en Kapso):
+un mensaje como «deseo confirmar mi pedido KP…/AUR…» no se cotiza ni se crea;
+se consulta, y si Kapta lo tiene se confirma **ese** pedido con su total y su
+dirección (nunca el monto escrito en el mensaje), «pagas al recibir» si es
+contraentrega, y la conversación queda como «pedido ya creado»; si después de
+una consulta más sigue `not_found`, o está anulado o finalizado, se deriva a una
+asesora. Contrato, respuesta campo por campo y regla completa:
+`docs/kapso-pedidos-kapta.md`, sección 10.
+
 **Lo que no cubre.** Después del cierre el bot no puede leer un borrador en
 Shopify: para cerrar un carrito necesita sus SKU y precios, y si no los tiene
 deriva a una asesora (que lo genera desde Leads con la copia de Kapta). Los
@@ -17128,7 +17244,12 @@ Implementación: `db/migrations/0277_bot_orders.sql` (`bot_order_secrets`,
 `BOT_ORDER_CODES`, `BOT_ORDER_HTTP`, `BOT_ORDER_CLAIM_TTL_MS`,
 `BOT_ORDER_SALE_DEADLINE_MS`, `BOT_ORDER_RETAKE_MAX_AGE_MS`,
 `BOT_ORDER_SAME_BODY_WINDOW_MS`, `BOT_ORDER_RATE_PER_MINUTE`);
-`app/api/internal/orders/[storeId]/route.ts`; `buildWooSaleOrder` con
+`app/api/internal/orders/[storeId]/route.ts`; la consulta,
+`lib/bot-order-lookup.ts` (`handleBotOrderLookup`, `parseBotOrderLookupBody`,
+`normalizeBotOrderName`, `botLookupPayment`, `BOT_ORDER_LOOKUP_CODES`) y
+`app/api/internal/orders/[storeId]/lookup/route.ts`, con sus pruebas
+`test/bot-order-lookup.test.ts` y `test/bot-order-lookup-mom.test.ts`;
+`buildWooSaleOrder` con
 `conversationId`, `shippingMode`, `tags` y `WOO_BOT_SALE_CHANNEL`, y
 `createWooSaleOrder` con `knownOrderId`, `onCreated` y `postUnanswered`
 (`lib/woocommerce-orders.ts`); `applyWooOrderEffects` (`lib/ingest.ts`);

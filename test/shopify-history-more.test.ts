@@ -121,26 +121,6 @@ describe("clientes con permisos y direcciones", () => {
 });
 
 describe("el catálogo", () => {
-  it("una foto que usan dos productos va una sola vez en la tanda (si no, el upsert de la tanda falla)", () => {
-    const { products, images } = groupBulkProducts(
-      lines([
-        { id: "gid://shopify/Product/10", title: "Brasier", options: [] },
-        { id: "gid://shopify/MediaImage/200", image: { url: "https://cdn.shopify.com/a.png" }, __parentId: "gid://shopify/Product/10" },
-        { id: "gid://shopify/MediaImage/201", image: { url: "https://cdn.shopify.com/b.png" }, __parentId: "gid://shopify/Product/10" },
-        { id: "gid://shopify/Product/11", title: "Brasier pack", options: [] },
-        { id: "gid://shopify/MediaImage/200", image: { url: "https://cdn.shopify.com/a.png" }, __parentId: "gid://shopify/Product/11" },
-        { id: "gid://shopify/MediaImage/202", image: { url: "https://cdn.shopify.com/c.png" }, __parentId: "gid://shopify/Product/11" },
-      ]),
-    );
-    expect(products.map((p) => p.product_id)).toEqual(["10", "11"]);
-    expect(images.map((i: HistoryProductImage) => [i.image_id, i.product_id, i.position])).toEqual([
-      ["200", "10", 1],
-      ["201", "10", 2],
-      ["202", "11", 1],
-    ]);
-    expect(new Set(images.map((i) => i.image_id)).size).toBe(images.length);
-  });
-
   it("cada producto con sus variantes, fotos en orden, colecciones y metacampos", () => {
     const { products, images } = groupBulkProducts(
       lines([
@@ -175,6 +155,24 @@ describe("el catálogo", () => {
     expect(images.map((i: HistoryProductImage) => [i.image_id, i.position, i.src_url])).toEqual([
       ["200", 1, "https://cdn.shopify.com/a.png?v=1"],
       ["201", 2, "https://cdn.shopify.com/b.jpg"],
+    ]);
+  });
+
+  it("una foto compartida por dos productos sale una vez en la tanda (Kenku, 25-10-2026)", () => {
+    const { products, images } = groupBulkProducts(
+      lines([
+        { id: "gid://shopify/Product/10", title: "Pack" },
+        { id: "gid://shopify/MediaImage/200", image: { url: "https://cdn.shopify.com/a.png" }, __parentId: "gid://shopify/Product/10" },
+        { id: "gid://shopify/Product/11", title: "Unidad" },
+        { id: "gid://shopify/MediaImage/200", image: { url: "https://cdn.shopify.com/a.png" }, __parentId: "gid://shopify/Product/11" },
+        { id: "gid://shopify/MediaImage/201", image: { url: "https://cdn.shopify.com/b.png" }, __parentId: "gid://shopify/Product/11" },
+      ]),
+    );
+    expect(products.map((p) => p.product_id)).toEqual(["10", "11"]);
+    // Sin dos filas con el mismo id: el upsert las rechazaba todas.
+    expect(images.map((i: HistoryProductImage) => [i.image_id, i.product_id])).toEqual([
+      ["200", "11"],
+      ["201", "11"],
     ]);
   });
 

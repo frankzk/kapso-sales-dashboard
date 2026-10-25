@@ -19,7 +19,7 @@ import {
   shopifyShippingAddress,
 } from "@/lib/shopify-address";
 import { orderTotals, type OrderTotals } from "@/lib/order-totals";
-import { orderPuntoSource, type OrderPuntoSource } from "@/lib/order-punto";
+import { orderPuntoSource, puntoCollect, type OrderPuntoSource, type PuntoCollect } from "@/lib/order-punto";
 import { productImagesFor } from "@/lib/shopify-product-images";
 import type { AliclikHealthState } from "@/lib/aliclik-health";
 import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
@@ -537,11 +537,12 @@ export interface OrderMasterDetail {
    *  agencia— y hasta ahora solo se veía entrando al admin de Shopify. */
   shopifyNote: string | null;
   /**
-   * Lo que la pestaña Punto necesita de `orders.raw` (`lib/order-punto.ts`):
-   * la dirección con código postal, el total vigente y la nota tal cual. El
-   * texto se arma en la ficha, que es la que sabe el nombre de la tienda.
+   * Lo que la pestaña Punto necesita (`lib/order-punto.ts`): de `orders.raw`, la
+   * dirección con código postal, el total vigente y la nota tal cual; y lo que
+   * se cobra, el saldo (`puntoCollect`, 25-10-2026). El texto se arma en la
+   * ficha, que es la que sabe el nombre de la tienda.
    */
-  punto: OrderPuntoSource;
+  punto: OrderPuntoSource & { collect: PuntoCollect };
   /**
    * Salidas que nacieron «por definir» y a las que se les escribió encima la
    * guía de un courier (evento `route_output_filled`).
@@ -1134,7 +1135,7 @@ export async function getOrderMasterDetail(
     ...item,
     image_url: item.product_id ? images.get(item.product_id) ?? null : null,
   }));
-  const [swayp, aliclikHealth, aliclikOutlook, grupoGfCourier, gfDeliveries, companion, gfCostTariffGap] = await Promise.all([
+  const [swayp, aliclikHealth, aliclikOutlook, grupoGfCourier, gfDeliveries, companion, gfCostTariffGap, puntoPayments] = await Promise.all([
     swaypRouteCheck(sb, row, lineItems),
     loadAliclikHealthState(sb, row.store_id),
     // Un aviso, no un dato del pedido: si falla, la ficha sale sin él.
@@ -1156,7 +1157,20 @@ export async function getOrderMasterDetail(
       console.error("[order-detail] loadGfCostTariffGap", orderId, cause);
       return null;
     }),
+    // Los pagos de la clienta, para el saldo del Punto. Si no se leen, el
+    // Punto no adivina el monto (null) y la ficha lo avisa.
+    Promise.resolve(sb.from("order_payments").select("kind,amount,validation_status").eq("order_id", orderId)).then(
+      ({ data, error }) => {
+        if (error) {
+          console.error("[order-detail] order_payments", orderId, error.message);
+          return null;
+        }
+        return (data ?? []) as { kind: string; amount: number | null; validation_status: string }[];
+      },
+      () => null,
+    ),
   ]);
+  const puntoSource = orderPuntoSource(orderRow?.raw, row.order_total);
   return {
     row,
     guides,
@@ -1174,7 +1188,18 @@ export async function getOrderMasterDetail(
     address: shopifyShippingAddress(orderRow?.raw),
     departamentoElegido: shopifyDepartamentoElegido(orderRow?.raw),
     shopifyNote: shopifyOrderNote(orderRow?.raw),
-    punto: orderPuntoSource(orderRow?.raw, row.order_total),
+    punto: {
+      ...puntoSource,
+      collect: puntoCollect(
+        puntoSource.total,
+        {
+          financialStatus: row.financial_status,
+          totalRefunded: row.total_refunded,
+          paymentGateway: row.payment_gateway,
+        },
+        puntoPayments,
+      ),
+    },
     filledOutputIds: [...filledShipmentIds(events)],
     receivedReturnIds: [...new Set(events.filter((e) => e.kind === "return_received" && e.shipment_id).map((e) => e.shipment_id as string))],
     // MISMA pregunta que hace `createManualRouteOutput` antes de dejar crear la
