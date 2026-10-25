@@ -205,7 +205,7 @@ import {
   type OrderAdminLink,
   type OrderPlatformName,
 } from "@/lib/order-admin-url";
-import { orderPuntoText } from "@/lib/order-punto";
+import { orderPuntoText, type PuntoCollect } from "@/lib/order-punto";
 import { timelineOriginLabel } from "@/lib/order-timeline-fact";
 import type { RouteCandidate } from "@/lib/order-route-plan";
 import type { OrderMasterRow, ShipmentRow, StoreSummary } from "@/lib/types";
@@ -2201,12 +2201,15 @@ export function OrderDrawer({
               <PuntoSection
                 text={orderPuntoText({
                   source: detail.punto,
+                  collect: detail.punto.collect,
                   storeName: storeName(detail.row.store_id),
                   orderName: detail.row.order_name ?? "",
                   items: detail.lineItems,
                   fallbackPhone: detail.row.customer_phone,
                 })}
                 hasAddress={detail.punto.address !== null}
+                total={detail.punto.total}
+                collect={detail.punto.collect}
               />
             </div>
           </div>
@@ -2288,15 +2291,28 @@ const RETURN_SCAN_COURIERS: ReadonlySet<string> = new Set(["tanders", "shalom"])
  * «Pedido» (`lib/order-punto.ts`), listo para copiar y pegar. Se ve tal cual
  * se copia —saltos y espacios incluidos— para que nadie pegue una sorpresa.
  */
-function PuntoSection({ text, hasAddress }: { text: string; hasAddress: boolean }) {
+function PuntoSection({
+  text,
+  hasAddress,
+  total,
+  collect,
+}: {
+  text: string;
+  hasAddress: boolean;
+  total: number | null;
+  collect: PuntoCollect;
+}) {
   const { state, copy } = useCopyToClipboard();
+  // «COBRAR» es el saldo (25-10-2026): cuando no es el total, se dice de dónde
+  // sale, para que nadie lo «corrija» a mano con el total del pedido.
+  const discounted = collect.amount !== null && total !== null && collect.paid > 0;
   return (
     <section aria-labelledby="pedido-punto-title" className={cn("space-y-4", SECTION)}>
       <SectionHead
         id="pedido-punto-title"
         title="Punto"
         badge={<Badge>Para copiar</Badge>}
-        help="El texto del pedido para el punto de entrega, con la misma forma que el metacampo «Pedido» de Shopify."
+        help="El texto del pedido para el punto de entrega, con la forma del metacampo «Pedido» de Shopify: «COBRAR» es el saldo y cada producto lleva su cantidad."
         aside={
           <OpsButton onClick={() => copy(text)} className="pointer-coarse:h-11">
             {state === "ok" ? <IconCheck aria-hidden /> : <IconCopy aria-hidden />}
@@ -2304,6 +2320,24 @@ function PuntoSection({ text, hasAddress }: { text: string; hasAddress: boolean 
           </OpsButton>
         }
       />
+      {discounted && (
+        <p className="text-[13px] leading-5 text-ink-600">
+          Cobra el saldo: total <span className="tabular-nums">{fmtMoney(total)}</span> menos{" "}
+          <span className="tabular-nums">{fmtMoney(collect.paid)}</span> ya pagado y validado ={" "}
+          <span className="font-semibold tabular-nums text-ink-900">{fmtMoney(collect.amount)}</span>.
+        </p>
+      )}
+      {collect.amount === null && (
+        <Banner tone="warn">
+          No se pudieron leer los pagos del pedido: el Punto sale sin el monto a cobrar. Vuelve a abrir la ficha.
+        </Banner>
+      )}
+      {collect.pending > 0 && collect.amount !== null && (
+        <Banner tone="warn">
+          Hay <span className="tabular-nums">{fmtMoney(collect.pending)}</span> por validar que no se restan. Si se
+          validan antes de la entrega, el saldo baja: vuelve a copiar el Punto.
+        </Banner>
+      )}
       {!hasAddress && (
         <Banner tone="warn">El pedido no trae dirección de envío: el Punto sale sin nombre ni dirección.</Banner>
       )}
