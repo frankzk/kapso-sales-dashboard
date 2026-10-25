@@ -2,14 +2,18 @@
 //
 // WooCommerce no reintenta un aviso que falló y DESACTIVA el webhook después de
 // 5 fallos seguidos (MOM §38.8 y §38.11). Desactivado, no vuelve solo, y nadie
-// se entera: los pedidos siguen llegando por la pasada `woo_orders` con hasta
-// 5 minutos de retraso y el Master no muestra nada raro. Esta revisión lee la
-// lista de webhooks del sitio (`GET /wp-json/wc/v3/webhooks`) y comprueba que
-// cada uno de los cuatro temas de pedido (`WOO_INTAKE_TOPICS`) tenga al menos un
-// webhook «Activo» que entregue a esta tienda de Kapta
-// (`/api/webhooks/woocommerce/<storeId>`). Lo que encuentra queda en
-// `sync_state` (fuente `woo_webhooks`) y, si algo falla, en
-// `stores.woo_last_error`, que es lo que Ajustes → WooCommerce ya muestra.
+// se entera. Los pedidos nuevos y sus cambios siguen llegando por la pasada
+// `woo_orders`, con hasta 5 minutos de retraso; lo que se manda a la papelera,
+// NO: la pasada pide `status=any`, que no incluye la papelera, y lo único que
+// anula en Kapta un pedido mandado a la papelera es `order.deleted` (MOM
+// §38.11). Sin ese webhook, ese pedido sigue vivo en el Master para siempre.
+// Esta revisión lee la lista de webhooks del sitio
+// (`GET /wp-json/wc/v3/webhooks`) y comprueba que cada uno de los cuatro temas
+// de pedido (`WOO_INTAKE_TOPICS`) tenga al menos un webhook «Activo» que
+// entregue a esta tienda de Kapta (`<Kapta>/api/webhooks/woocommerce/<storeId>`).
+// Lo que encuentra queda en `sync_state` (fuente `woo_webhooks`) y, si algo
+// falla, en `stores.woo_last_error`, que es lo que Ajustes → WooCommerce ya
+// muestra.
 //
 // La corre el cron `/api/cron/woo-webhooks` cada hora, y Ajustes → WooCommerce
 // al «Guardar» o «Probar conexión» con las claves que acaba de probar.
@@ -18,17 +22,23 @@
 // webhook. Arreglarlo es de quien administra el WordPress; Kapta solo avisa.
 //
 // LO QUE NO SALE DE AQUÍ. De cada webhook se queda solo su id, su estado, su
-// tema y a qué tienda de Kapta entrega: ni la dirección de entrega, ni el
-// nombre, ni nada más de la respuesta llega a la base, al reporte o al log. (El
-// secreto de un webhook es de solo escritura en la API: no viene, y si viniera
-// tampoco se leería.)
+// tema, a qué tienda de Kapta entrega y si la dirección es de Kapta: ni la
+// dirección de entrega, ni el nombre, ni nada más de la respuesta llega a la
+// base, al reporte o al log. (El secreto de un webhook es de solo escritura en
+// la API: no viene, y si viniera tampoco se leería.)
 //
-// EL HOST DE LA DIRECCIÓN NO SE COMPARA. Kapta contesta en más de una dirección
-// (la de `NEXT_PUBLIC_SITE_URL` y la que tenía el navegador cuando el owner
-// copió la de Ajustes), así que exigir una sola daría por malos webhooks que
-// funcionan. La tienda va en la ruta (`/api/webhooks/woocommerce/<storeId>`) y
-// eso es lo que se compara. Una dirección que no llega a Kapta falla en cada
-// aviso y WooCommerce la desactiva tras 5 fallos: eso sí se ve aquí.
+// LA DIRECCIÓN SE COMPARA ENTERA: la ruta y el origen. La tienda va en la ruta
+// (`/api/webhooks/woocommerce/<storeId>`). El origen (esquema y host) tiene que
+// ser uno de Kapta (`kaptaWebhookOrigins`: el de `NEXT_PUBLIC_SITE_URL` y el de
+// producción de Vercel), porque una dirección que no llega a Kapta NO siempre
+// termina desactivada: WooCommerce entrega sin seguir redirecciones y cuenta
+// como éxito un 2xx, un 301 o un 302, y la ruta de Kapta contesta 200 a una
+// tienda que no conoce (salvo el ping de alta). Un webhook a otra dirección
+// puede quedar «Activo» para siempre sin que Kapta reciba nada; y en
+// `order.deleted` u `order.restored`, que se disparan poco, cinco fallos
+// pueden tardar semanas. Sin ninguna de esas dos variables (desarrollo,
+// pruebas) el origen no se compara. Ajustes muestra la dirección con el
+// primero de esos orígenes, así que lo que se copia de ahí es lo que se acepta.
 //
 // LO QUE LA LISTA NO DICE (y por eso no se revisa). `GET /webhooks` devuelve
 // id, nombre, estado, tema, recurso, evento, hooks, dirección de entrega y
@@ -51,16 +61,17 @@ import {
   type WooIntakeTopic,
 } from "@/lib/woocommerce-intake";
 import { isWooMigrationMissing } from "@/lib/woocommerce-settings";
+import {
+  WOO_WEBHOOKS_ERROR_PREFIX,
+  WOO_WEBHOOKS_SOURCE,
+  WOO_WEBHOOKS_UNCHECKED_PREFIX,
+  wooWebhooksLastErrorText,
+} from "@/lib/woocommerce-webhooks-view";
 
-/** La fuente de `sync_state` de la revisión. */
-export const WOO_WEBHOOKS_SOURCE = "woo_webhooks";
-/**
- * Prefijo de lo que la revisión deja en `stores.woo_last_error`. Distinto del
- * «Webhook: » del aviso que entra (que lo limpia un aviso bueno) y del
- * «Sincronización: » de la pasada (que lo limpia una pasada buena): este solo
- * lo limpia una revisión que encuentra todo bien.
- */
-export const WOO_WEBHOOKS_ERROR_PREFIX = "Webhooks en WooCommerce: ";
+// La fuente de `sync_state` y el prefijo de `woo_last_error` viven en el módulo
+// puro de la vista (Ajustes los necesita sin arrastrar `node:crypto`).
+export { WOO_WEBHOOKS_ERROR_PREFIX, WOO_WEBHOOKS_SOURCE } from "@/lib/woocommerce-webhooks-view";
+
 /** La ruta de la API REST v3 que se lee (solo `GET`). */
 export const WOO_WEBHOOKS_PATH = "/webhooks";
 /** Webhooks por página: el máximo de WooCommerce. */
@@ -85,6 +96,33 @@ const UUID_RE = new RegExp(`^${UUID}$`, "i");
 /** La ruta del webhook de Kapta (`app/api/webhooks/woocommerce/[storeId]`), con o sin barra final. */
 const KAPTA_WEBHOOK_PATH_RE = new RegExp(`^/api/webhooks/woocommerce/(${UUID})/?$`, "i");
 
+/**
+ * Los orígenes de Kapta a los que un webhook puede entregar: el de
+ * `NEXT_PUBLIC_SITE_URL` y el de producción de Vercel
+ * (`VERCEL_PROJECT_PRODUCTION_URL`, que viene sin esquema: es https), sin
+ * repetir. Vacío si no hay ninguno (desarrollo, pruebas): entonces el origen
+ * no se compara. Ajustes muestra la dirección de los webhooks con el primero.
+ */
+export function kaptaWebhookOrigins(
+  siteUrl: string | undefined = process.env.NEXT_PUBLIC_SITE_URL,
+  productionHost: string | undefined = process.env.VERCEL_PROJECT_PRODUCTION_URL,
+): string[] {
+  const out: string[] = [];
+  const add = (raw: string | undefined, assumeHttps: boolean) => {
+    const text = (raw ?? "").trim();
+    if (!text) return;
+    try {
+      const url = new URL(assumeHttps && !/^https?:\/\//i.test(text) ? `https://${text}` : text);
+      if ((url.protocol === "https:" || url.protocol === "http:") && !out.includes(url.origin)) out.push(url.origin);
+    } catch {
+      /* no es una dirección: no cuenta */
+    }
+  };
+  add(siteUrl, false);
+  add(productionHost, true);
+  return out;
+}
+
 /** Lo único que se toma de cada webhook de la lista. */
 export interface WooWebhookSummary {
   id: number | null;
@@ -94,19 +132,27 @@ export interface WooWebhookSummary {
   topic: string;
   /** La tienda de Kapta a la que entrega (`/api/webhooks/woocommerce/<id>`), o null si entrega a otra parte. */
   kaptaStoreId: string | null;
+  /**
+   * Si el origen de la dirección (esquema y host) es uno de Kapta
+   * (`kaptaWebhookOrigins`). Siempre true si no se conoce ninguno.
+   */
+  kaptaOrigin: boolean;
+}
+
+function parseDeliveryUrl(deliveryUrl: unknown): URL | null {
+  const raw = typeof deliveryUrl === "string" ? deliveryUrl.trim() : "";
+  if (!raw) return null;
+  try {
+    return new URL(raw);
+  } catch {
+    return null;
+  }
 }
 
 /** La tienda de Kapta de una dirección de entrega, o null si no es la ruta del webhook de Kapta. */
 export function wooWebhookKaptaStore(deliveryUrl: unknown): string | null {
-  const raw = typeof deliveryUrl === "string" ? deliveryUrl.trim() : "";
-  if (!raw) return null;
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return null;
-  }
-  const m = KAPTA_WEBHOOK_PATH_RE.exec(url.pathname);
+  const url = parseDeliveryUrl(deliveryUrl);
+  const m = url ? KAPTA_WEBHOOK_PATH_RE.exec(url.pathname) : null;
   return m ? m[1]!.toLowerCase() : null;
 }
 
@@ -116,24 +162,31 @@ function lowerText(value: unknown): string {
 
 /**
  * La respuesta de `GET /webhooks` → lo único que la revisión necesita. La
- * dirección de entrega se reduce aquí mismo a «a qué tienda de Kapta va»: el
- * resto no sigue. Lo que no es un objeto se descarta.
+ * dirección de entrega se reduce aquí mismo a «a qué tienda de Kapta va» y
+ * «si es una dirección de Kapta» (contra `kaptaOrigins`; sin ninguno, no se
+ * compara): el resto no sigue. Lo que no es un objeto se descarta.
  */
-export function summarizeWooWebhooks(items: readonly unknown[]): WooWebhookSummary[] {
+export function summarizeWooWebhooks(items: readonly unknown[], kaptaOrigins: readonly string[] = []): WooWebhookSummary[] {
   const out: WooWebhookSummary[] = [];
   for (const item of items) {
     if (!item || typeof item !== "object" || Array.isArray(item)) continue;
     const w = item as Record<string, unknown>;
     const id = typeof w.id === "number" && Number.isInteger(w.id) ? w.id : null;
-    out.push({ id, status: lowerText(w.status), topic: lowerText(w.topic), kaptaStoreId: wooWebhookKaptaStore(w.delivery_url) });
+    const url = parseDeliveryUrl(w.delivery_url);
+    const kaptaOrigin = !kaptaOrigins.length || (url !== null && kaptaOrigins.includes(url.origin));
+    out.push({ id, status: lowerText(w.status), topic: lowerText(w.topic), kaptaStoreId: wooWebhookKaptaStore(w.delivery_url), kaptaOrigin });
   }
   return out;
 }
 
 /**
  * Cómo está cada tema:
- *   · `ok`: hay al menos uno «Activo» que entrega a esta tienda (si además hay
- *     otros viejos desactivados, no importa: el tema está cubierto);
+ *   · `ok`: hay al menos uno «Activo» que entrega a esta tienda en una
+ *     dirección de Kapta (si además hay otros viejos desactivados, no importa:
+ *     el tema está cubierto);
+ *   · `otra_direccion`: los activos de esta tienda entregan a un origen que no
+ *     es de Kapta (otro entorno, una dirección que redirige): WooCommerce los
+ *     puede dar por buenos para siempre sin que Kapta reciba nada;
  *   · `desactivado`: los de esta tienda están desactivados (WooCommerce lo
  *     hace solo tras 5 fallos seguidos);
  *   · `en_pausa`: los de esta tienda están en pausa (lo hizo alguien);
@@ -142,7 +195,14 @@ export function summarizeWooWebhooks(items: readonly unknown[]): WooWebhookSumma
  *     tienda de Kapta (la dirección de otra tienda pegada por error);
  *   · `falta`: no hay ninguno de ese tema que entregue a Kapta.
  */
-export type WooWebhookTopicState = "ok" | "falta" | "desactivado" | "en_pausa" | "inactivo" | "otra_tienda";
+export type WooWebhookTopicState =
+  | "ok"
+  | "falta"
+  | "desactivado"
+  | "en_pausa"
+  | "inactivo"
+  | "otra_direccion"
+  | "otra_tienda";
 
 export interface WooWebhooksVerdict {
   ok: boolean;
@@ -161,10 +221,28 @@ function topicProblem(topic: WooIntakeTopic, state: Exclude<WooWebhookTopicState
       return `${topic} está en pausa`;
     case "inactivo":
       return `${topic} no está activo`;
+    case "otra_direccion":
+      return `${topic} va a otra dirección`;
     case "otra_tienda":
-      return `${topic} entrega a otra tienda de Kapta`;
+      return `${topic} va a otra tienda de Kapta`;
   }
 }
+
+/**
+ * Lo que pasa mientras tanto. Los pedidos nuevos y sus cambios llegan igual
+ * por la pasada `woo_orders`; lo que se manda a la papelera, no (MOM §38.11):
+ * sin `order.deleted`, ese pedido sigue vivo en Kapta.
+ */
+export const WOO_WEBHOOKS_SYNC_COVERS = "Mientras tanto los pedidos llegan por la sincronización, cada 5 minutos.";
+export const WOO_WEBHOOKS_NO_TRASH =
+  "Sin order.deleted, un pedido mandado a la papelera sigue vivo en Kapta: la sincronización no ve la papelera.";
+export const WOO_WEBHOOKS_SYNC_COVERS_BUT_TRASH =
+  "La sincronización trae lo demás cada 5 minutos, pero no ve la papelera: sin order.deleted, un pedido mandado a la papelera sigue vivo en Kapta.";
+/** Dónde se arregla. Con uno desactivado, además, qué revisar antes de reactivarlo. */
+export const WOO_WEBHOOKS_FIX =
+  "Se arregla en WooCommerce → Ajustes → Avanzado → Webhooks: uno «Activo» por tema, con la dirección y el secreto de esta tienda.";
+export const WOO_WEBHOOKS_FIX_DISABLED =
+  "Se arregla en WooCommerce → Ajustes → Avanzado → Webhooks. WooCommerce desactiva uno tras 5 fallos seguidos: revisa la dirección y el secreto antes de reactivarlo.";
 
 /** Revisa la lista contra los cuatro temas de esta tienda. Pura. */
 export function evaluateWooWebhooks(webhooks: readonly WooWebhookSummary[], storeId: string): WooWebhooksVerdict {
@@ -175,7 +253,8 @@ export function evaluateWooWebhooks(webhooks: readonly WooWebhookSummary[], stor
     const toKapta = webhooks.filter((w) => w.topic === topic && w.kaptaStoreId);
     const mine = toKapta.filter((w) => w.kaptaStoreId === me);
     let state: WooWebhookTopicState;
-    if (mine.some((w) => w.status === "active")) state = "ok";
+    if (mine.some((w) => w.status === "active" && w.kaptaOrigin)) state = "ok";
+    else if (mine.some((w) => w.status === "active")) state = "otra_direccion";
     else if (mine.some((w) => w.status === "disabled")) state = "desactivado";
     else if (mine.some((w) => w.status === "paused")) state = "en_pausa";
     else if (mine.length) state = "inactivo";
@@ -186,16 +265,18 @@ export function evaluateWooWebhooks(webhooks: readonly WooWebhookSummary[], stor
   }
   if (!parts.length) return { ok: true, topics, problem: null };
 
-  const states = new Set(Object.values(topics));
+  const deletedMissing = topics["order.deleted"] !== "ok";
+  const othersMissing = WOO_INTAKE_TOPICS.some((t) => t !== "order.deleted" && topics[t] !== "ok");
   // Sin mayúscula: empieza por el nombre del tema («order.created está…»).
   const lines = [
     `${parts.join(", ")}.`,
-    "En WooCommerce → Ajustes → Avanzado → Webhooks cada tema necesita uno «Activo», con la dirección y el secreto de esta tienda.",
+    deletedMissing
+      ? othersMissing
+        ? WOO_WEBHOOKS_SYNC_COVERS_BUT_TRASH
+        : WOO_WEBHOOKS_NO_TRASH
+      : WOO_WEBHOOKS_SYNC_COVERS,
+    Object.values(topics).includes("desactivado") ? WOO_WEBHOOKS_FIX_DISABLED : WOO_WEBHOOKS_FIX,
   ];
-  if (states.has("desactivado")) {
-    lines.push("WooCommerce desactiva uno tras 5 fallos seguidos: revisa el secreto y la dirección antes de volver a activarlo.");
-  }
-  lines.push("Mientras tanto los pedidos llegan por la sincronización, cada 5 minutos.");
   return { ok: false, topics, problem: lines.join(" ") };
 }
 
@@ -222,6 +303,8 @@ export interface WooWebhooksCheckOptions {
   now?: () => number;
   budgetMs?: number;
   maxPages?: number;
+  /** Los orígenes de Kapta; por defecto, `kaptaWebhookOrigins()`. */
+  kaptaOrigins?: readonly string[];
 }
 
 /**
@@ -237,6 +320,7 @@ export async function checkWooWebhooks(
   const now = opts.now ?? Date.now;
   const deadline = now() + (opts.budgetMs ?? WOO_WEBHOOKS_BUDGET_MS);
   const maxPages = Math.max(1, opts.maxPages ?? WOO_WEBHOOKS_MAX_PAGES);
+  const origins = opts.kaptaOrigins ?? kaptaWebhookOrigins();
   const items: WooWebhookSummary[] = [];
   let auth: WooAuthMode | undefined = client.auth;
   let pages = 0;
@@ -249,7 +333,7 @@ export async function checkWooWebhooks(
       );
       auth = used;
       pages++;
-      items.push(...summarizeWooWebhooks(value.items));
+      items.push(...summarizeWooWebhooks(value.items, origins));
       if (value.items.length < WOO_WEBHOOKS_PER_PAGE || (value.totalPages != null && page >= value.totalPages)) {
         complete = true;
         break;
@@ -268,7 +352,7 @@ export async function checkWooWebhooks(
     return {
       status: "error",
       topics: null,
-      message: `no se pudieron revisar: ${err ? err.message : "no se pudo conectar con WooCommerce."}`,
+      message: `${WOO_WEBHOOKS_UNCHECKED_PREFIX}${err ? err.message : "no se pudo conectar con WooCommerce."}`,
       errorKind: err?.kind ?? null,
       webhooks: items.length,
       pages,
@@ -283,7 +367,7 @@ export async function checkWooWebhooks(
   if (!complete) {
     return {
       status: "error",
-      message: `no se pudieron revisar: el sitio tiene más de ${items.length} webhooks y Kapta no alcanzó a leerlos todos.`,
+      message: `${WOO_WEBHOOKS_UNCHECKED_PREFIX}el sitio tiene más de ${items.length} webhooks y Kapta no alcanzó a leerlos todos.`,
       ...base,
     };
   }
@@ -294,7 +378,9 @@ export async function checkWooWebhooks(
  * Qué escribir en `stores.woo_last_error` después de una revisión: el texto,
  * null (limpiar el aviso de una revisión anterior) o undefined (no tocarlo).
  * Solo limpia lo que empieza con `WOO_WEBHOOKS_ERROR_PREFIX`: el aviso de la
- * pasada o de un webhook lo limpian ellos. Pura.
+ * pasada o de un webhook lo limpian ellos. El texto va ya cortado como lo corta
+ * `recordWooLastError` (`wooWebhooksLastErrorText`): así Ajustes sabe si el
+ * último fallo es el de la revisión. Pura.
  */
 export function wooWebhooksLastError(
   check: Pick<WooWebhooksCheck, "status" | "message" | "errorKind">,
@@ -304,7 +390,7 @@ export function wooWebhooksLastError(
   if (check.status === "error" && check.errorKind && WOO_WEBHOOKS_TRANSIENT_ERRORS.includes(check.errorKind)) {
     return undefined;
   }
-  return `${WOO_WEBHOOKS_ERROR_PREFIX}${check.message ?? "algo no está bien."}`;
+  return wooWebhooksLastErrorText(check.message);
 }
 
 /**

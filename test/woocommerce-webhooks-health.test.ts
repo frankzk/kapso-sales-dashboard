@@ -2,12 +2,14 @@
 //
 // WooCommerce desactiva un webhook tras 5 fallos seguidos y no avisa. Lo que se
 // fija: cada tema de pedido necesita uno «Activo» que entregue a ESTA tienda
-// (la ruta, no el host); la lectura es solo `GET /wp-json/wc/v3/webhooks` con
-// los topes de siempre; de la respuesta solo sale el estado de cada tema (ni
-// direcciones ni secretos); el resultado queda en `sync_state` (`woo_webhooks`)
-// y en `woo_last_error` con su prefijo, que solo borra una revisión buena; el
-// cron corre cada hora en el minuto 34 con CRON_SECRET; y el MOM dice lo mismo
-// que el código. Sin red: `fetch` es falso.
+// en una dirección de Kapta (la ruta y el origen); sin `order.deleted` el
+// aviso dice que la papelera no llega por la sincronización; cualquier texto
+// cabe entero en `woo_last_error`; la lectura es solo
+// `GET /wp-json/wc/v3/webhooks` con los topes de siempre; de la respuesta solo
+// sale el estado de cada tema (ni direcciones ni secretos); el resultado queda
+// en `sync_state` (`woo_webhooks`) y en `woo_last_error` con su prefijo, que
+// solo borra una revisión buena; el cron corre cada hora en el minuto 34 con
+// CRON_SECRET; y el MOM dice lo mismo que el código. Sin red: `fetch` es falso.
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -28,21 +30,29 @@ import { WOO_INTAKE_TOPICS, WOO_SYNC_SOURCE } from "@/lib/woocommerce-intake";
 import {
   WOO_WEBHOOKS_BUDGET_MS,
   WOO_WEBHOOKS_ERROR_PREFIX,
+  WOO_WEBHOOKS_FIX,
+  WOO_WEBHOOKS_FIX_DISABLED,
   WOO_WEBHOOKS_MAX_PAGES,
+  WOO_WEBHOOKS_NO_TRASH,
   WOO_WEBHOOKS_PATH,
   WOO_WEBHOOKS_PER_PAGE,
   WOO_WEBHOOKS_SOURCE,
+  WOO_WEBHOOKS_SYNC_COVERS,
+  WOO_WEBHOOKS_SYNC_COVERS_BUT_TRASH,
   WOO_WEBHOOKS_TRANSIENT_ERRORS,
   checkWooWebhooks,
   evaluateWooWebhooks,
+  kaptaWebhookOrigins,
   recordWooWebhooksCheck,
   runWooWebhooksChecks,
   summarizeWooWebhooks,
   wooWebhookKaptaStore,
   wooWebhooksLastError,
   wooWebhooksNotice,
+  type WooWebhookTopicState,
   type WooWebhooksCheck,
 } from "@/lib/woocommerce-webhooks-health";
+import { WOO_LAST_ERROR_MAX, wooSyncStateRow, wooWebhooksLastErrorText, wooWebhooksView } from "@/lib/woocommerce-webhooks-view";
 
 const route = await import("@/app/api/cron/woo-webhooks/route");
 
@@ -52,7 +62,19 @@ const SHOPIFY_ONLY = "33333333-3333-4333-8333-333333333333";
 const CK = "ck_0123456789abcdef0123456789abcdef01234567";
 const CS = "cs_0123456789abcdef0123456789abcdef01234567";
 const KAPTA = "https://kapta.example";
+/** La dirección de producción de Vercel (`VERCEL_PROJECT_PRODUCTION_URL` viene sin esquema). */
+const VERCEL_PROD = "kapso-sales-dashboard.vercel.app";
 const SITE = "https://aurela.pe";
+
+// Las dos direcciones de Kapta que la revisión acepta (MOM §38.14). Las tiene
+// cada prueba; las del cron, además, el CRON_SECRET.
+beforeEach(() => {
+  vi.stubEnv("NEXT_PUBLIC_SITE_URL", KAPTA);
+  vi.stubEnv("VERCEL_PROJECT_PRODUCTION_URL", VERCEL_PROD);
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 const deliveryUrl = (storeId = STORE_ID, host = KAPTA) => `${host}/api/webhooks/woocommerce/${storeId}`;
 
@@ -154,11 +176,36 @@ describe("wooWebhookKaptaStore: la tienda va en la ruta", () => {
     }
   });
 
-  it("de cada webhook solo quedan id, estado, tema y la tienda: ni la dirección, ni el nombre, ni el secreto", () => {
-    const out = summarizeWooWebhooks([hook(7, "Order.Created", "Active"), null, "x", [1]]);
-    expect(out).toEqual([{ id: 7, status: "active", topic: "order.created", kaptaStoreId: STORE_ID }]);
+  it("de cada webhook solo quedan id, estado, tema, la tienda y si la dirección es de Kapta: ni la dirección, ni el nombre, ni el secreto", () => {
+    const elsewhere = hook(8, "order.updated", "active", deliveryUrl(STORE_ID, "https://otro-entorno.example"));
+    const out = summarizeWooWebhooks([hook(7, "Order.Created", "Active"), null, "x", [1], elsewhere], [KAPTA]);
+    expect(out).toEqual([
+      { id: 7, status: "active", topic: "order.created", kaptaStoreId: STORE_ID, kaptaOrigin: true },
+      { id: 8, status: "active", topic: "order.updated", kaptaStoreId: STORE_ID, kaptaOrigin: false },
+    ]);
     const text = JSON.stringify(out);
-    for (const leak of ["kapta.example", "secreto-del-webhook", "Ana", "987654321", "/api/webhooks"]) expect(text).not.toContain(leak);
+    for (const leak of ["kapta.example", "otro-entorno", "secreto-del-webhook", "Ana", "987654321", "/api/webhooks"]) {
+      expect(text).not.toContain(leak);
+    }
+    // Sin direcciones de Kapta conocidas, el origen no se compara.
+    expect(summarizeWooWebhooks([elsewhere])[0]!.kaptaOrigin).toBe(true);
+  });
+});
+
+describe("kaptaWebhookOrigins: las direcciones de Kapta", () => {
+  it("la de NEXT_PUBLIC_SITE_URL y la de producción de Vercel (https), sin repetir", () => {
+    expect(kaptaWebhookOrigins()).toEqual([KAPTA, `https://${VERCEL_PROD}`]);
+    expect(kaptaWebhookOrigins("https://Kapta.Example/", "kapta.example")).toEqual([KAPTA]);
+    expect(kaptaWebhookOrigins(" https://kapta.example/algo ", ` https://${VERCEL_PROD} `)).toEqual([KAPTA, `https://${VERCEL_PROD}`]);
+  });
+
+  it("sin ninguna (desarrollo, pruebas) no hay contra qué comparar, y lo que no es una dirección no cuenta", () => {
+    expect(kaptaWebhookOrigins("", "")).toEqual([]);
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "");
+    vi.stubEnv("VERCEL_PROJECT_PRODUCTION_URL", "  ");
+    expect(kaptaWebhookOrigins()).toEqual([]);
+    expect(kaptaWebhookOrigins("no es una dirección", "")).toEqual([]);
+    expect(kaptaWebhookOrigins("ftp://kapta.example", "")).toEqual([]);
   });
 });
 
@@ -183,8 +230,11 @@ describe("evaluateWooWebhooks: cada tema necesita uno activo que entregue a esta
     expect(v.topics["order.updated"]).toBe("ok");
     expect(v.problem).toMatch(/^order\.created está desactivado\. /);
     expect(v.problem).toContain("5 fallos seguidos");
-    expect(v.problem).toContain("la dirección y el secreto de esta tienda");
+    expect(v.problem).toContain("revisa la dirección y el secreto antes de reactivarlo");
+    expect(v.problem).toContain(WOO_WEBHOOKS_FIX_DISABLED);
+    // order.deleted está bien: lo de order.created llega por la sincronización.
     expect(v.problem).toContain("los pedidos llegan por la sincronización");
+    expect(v.problem).not.toContain("papelera");
   });
 
   it("en pausa, en otro estado, a otra tienda de Kapta, o que falta", () => {
@@ -202,10 +252,38 @@ describe("evaluateWooWebhooks: cada tema necesita uno activo que entregue a esta
       "order.restored": "falta",
     });
     expect(v.problem).toMatch(
-      /^order\.created está en pausa, order\.updated no está activo, order\.deleted entrega a otra tienda de Kapta, falta order\.restored\. /,
+      /^order\.created está en pausa, order\.updated no está activo, order\.deleted va a otra tienda de Kapta, falta order\.restored\. /,
     );
     // Sin desactivados, no habla de los 5 fallos.
     expect(v.problem).not.toContain("5 fallos");
+    expect(v.problem).toContain(WOO_WEBHOOKS_FIX);
+  });
+
+  it("sin order.deleted no dice que todo llega por la sincronización: la papelera no llega nunca (MOM §38.11)", () => {
+    // Solo falta order.deleted.
+    const onlyDeleted = evaluate(healthy().filter((w) => w.topic !== "order.deleted"));
+    expect(onlyDeleted.topics["order.deleted"]).toBe("falta");
+    expect(onlyDeleted.problem).toBe(`falta order.deleted. ${WOO_WEBHOOKS_NO_TRASH} ${WOO_WEBHOOKS_FIX}`);
+    expect(onlyDeleted.problem).toContain("un pedido mandado a la papelera sigue vivo en Kapta");
+    expect(onlyDeleted.problem).not.toContain("los pedidos llegan por la sincronización");
+
+    // Desactivado, igual.
+    const disabled = evaluate(healthy().map((w) => (w.topic === "order.deleted" ? { ...w, status: "disabled" } : w)));
+    expect(disabled.problem).toContain(WOO_WEBHOOKS_NO_TRASH);
+
+    // Como Kenku hoy (solo llegó order.updated): lo demás llega por la
+    // sincronización, la papelera no.
+    const kenku = evaluate(healthy().filter((w) => w.topic === "order.updated"));
+    expect(kenku.topics).toEqual({ "order.created": "falta", "order.updated": "ok", "order.deleted": "falta", "order.restored": "falta" });
+    expect(kenku.problem).toBe(
+      `falta order.created, falta order.deleted, falta order.restored. ${WOO_WEBHOOKS_SYNC_COVERS_BUT_TRASH} ${WOO_WEBHOOKS_FIX}`,
+    );
+    expect(kenku.problem).toContain("no ve la papelera");
+    expect(kenku.problem).not.toContain("Mientras tanto los pedidos llegan");
+
+    // Con order.deleted bien, la sincronización cubre lo que falta, sin hablar de la papelera.
+    const restored = evaluate(healthy().filter((w) => w.topic !== "order.restored"));
+    expect(restored.problem).toBe(`falta order.restored. ${WOO_WEBHOOKS_SYNC_COVERS} ${WOO_WEBHOOKS_FIX}`);
   });
 
   it("uno activo cubre el tema aunque haya otros viejos desactivados del mismo tema", () => {
@@ -213,9 +291,33 @@ describe("evaluateWooWebhooks: cada tema necesita uno activo que entregue a esta
     expect(evaluate(list).ok).toBe(true);
   });
 
-  it("el host no se compara: Kapta contesta en más de una dirección", () => {
-    const list = healthy().map((w, i) => ({ ...w, delivery_url: deliveryUrl(STORE_ID, i % 2 ? "https://kapso-sales-dashboard.vercel.app" : KAPTA) }));
-    expect(evaluate(list).ok).toBe(true);
+  it("la dirección se compara entera: la de NEXT_PUBLIC_SITE_URL o la de producción de Vercel, con o sin barra final", () => {
+    const origins = kaptaWebhookOrigins();
+    const at = (host: string) => (w: Row, i: number) => ({
+      ...w,
+      delivery_url: `${deliveryUrl(STORE_ID, i % 2 ? `https://${VERCEL_PROD}` : host)}${i === 3 ? "/" : ""}`,
+    });
+    expect(evaluateWooWebhooks(summarizeWooWebhooks(healthy().map(at(KAPTA)), origins), STORE_ID).ok).toBe(true);
+    expect(evaluateWooWebhooks(summarizeWooWebhooks(healthy().map(at("HTTPS://KAPTA.EXAMPLE")), origins), STORE_ID).ok).toBe(true);
+  });
+
+  it("otra dirección (otro entorno, http, una que redirige) no cuenta: WooCommerce la puede dar por buena para siempre", () => {
+    const origins = kaptaWebhookOrigins();
+    const others = ["https://otro-entorno.example", "http://kapta.example", "https://www.kapta.example", "https://kapso-sales-dashboard-equipo.vercel.app"];
+    for (const host of others) {
+      const list = healthy().map((w) => (w.topic === "order.deleted" ? { ...w, delivery_url: deliveryUrl(STORE_ID, host) } : w));
+      const v = evaluateWooWebhooks(summarizeWooWebhooks(list, origins), STORE_ID);
+      expect(v.topics["order.deleted"], host).toBe("otra_direccion");
+      expect(v.problem, host).toBe(`order.deleted va a otra dirección. ${WOO_WEBHOOKS_NO_TRASH} ${WOO_WEBHOOKS_FIX}`);
+      // La dirección misma no sale.
+      expect(v.problem, host).not.toContain(new URL(host).host);
+    }
+    // Uno activo en la dirección de Kapta cubre el tema aunque otro vaya a otra parte.
+    const both = [...healthy(), hook(9, "order.deleted", "active", deliveryUrl(STORE_ID, "https://otro-entorno.example"))];
+    expect(evaluateWooWebhooks(summarizeWooWebhooks(both, origins), STORE_ID).ok).toBe(true);
+    // Sin direcciones de Kapta conocidas no se compara el origen.
+    const elsewhere = healthy().map((w) => ({ ...w, delivery_url: deliveryUrl(STORE_ID, "https://otro-entorno.example") }));
+    expect(evaluateWooWebhooks(summarizeWooWebhooks(elsewhere, []), STORE_ID).ok).toBe(true);
   });
 
   it("los webhooks de otros servicios y de otros temas no cuentan", () => {
@@ -228,13 +330,44 @@ describe("evaluateWooWebhooks: cada tema necesita uno activo que entregue a esta
     expect(Object.values(v.topics)).toEqual(["falta", "falta", "falta", "falta"]);
   });
 
-  it("el peor texto cabe en woo_last_error (500 caracteres) con su prefijo", () => {
-    const worst = WOO_INTAKE_TOPICS.map((t, i) => hook(i + 1, t, "disabled", deliveryUrl(i % 2 ? STORE_ID : OTHER_STORE)));
-    worst[0] = hook(1, "order.created", "pending");
-    const v = evaluate(worst);
-    expect(`${WOO_WEBHOOKS_ERROR_PREFIX}${v.problem}`.length).toBeLessThanOrEqual(500);
-    const all = evaluate([]);
-    expect(`${WOO_WEBHOOKS_ERROR_PREFIX}${all.problem}`.length).toBeLessThanOrEqual(500);
+  it("cualquier combinación de estados cabe entera en woo_last_error (500 caracteres) con su prefijo", () => {
+    const origins = kaptaWebhookOrigins();
+    // Un webhook (o ninguno) por tema que da cada estado.
+    const byState: Record<WooWebhookTopicState, (topic: string, id: number) => Row[]> = {
+      ok: (t, id) => [hook(id, t)],
+      falta: () => [],
+      desactivado: (t, id) => [hook(id, t, "disabled")],
+      en_pausa: (t, id) => [hook(id, t, "paused")],
+      inactivo: (t, id) => [hook(id, t, "pending")],
+      otra_direccion: (t, id) => [hook(id, t, "active", deliveryUrl(STORE_ID, "https://otro-entorno.example"))],
+      otra_tienda: (t, id) => [hook(id, t, "active", deliveryUrl(OTHER_STORE))],
+    };
+    const states = Object.keys(byState) as WooWebhookTopicState[];
+    const total = states.length ** WOO_INTAKE_TOPICS.length;
+    let longest = "";
+    for (let n = 0; n < total; n++) {
+      const want = WOO_INTAKE_TOPICS.map((_, i) => states[Math.floor(n / states.length ** i) % states.length]!);
+      const list = WOO_INTAKE_TOPICS.flatMap((t, i) => byState[want[i]!](t, i + 1));
+      const v = evaluateWooWebhooks(summarizeWooWebhooks(list, origins), STORE_ID);
+      expect(Object.values(v.topics)).toEqual(want);
+      if (v.ok) continue;
+      const stored = `${WOO_WEBHOOKS_ERROR_PREFIX}${v.problem}`;
+      if (stored.length > longest.length) longest = stored;
+      expect(stored.length, want.join(",")).toBeLessThanOrEqual(WOO_LAST_ERROR_MAX);
+      // Entra sin cortar: Ajustes reconoce su propio texto en el último fallo.
+      expect(wooWebhooksLastErrorText(v.problem)).toBe(stored);
+    }
+    expect(total).toBe(7 ** 4);
+    // El peor: uno desactivado y tres a otra tienda de Kapta, con lo de la
+    // papelera, en 488 (el número que dice el MOM).
+    expect(longest.match(/ está desactivado/g)).toHaveLength(1);
+    expect(longest.match(/ va a otra tienda de Kapta/g)).toHaveLength(3);
+    expect(longest).toContain(WOO_WEBHOOKS_SYNC_COVERS_BUT_TRASH);
+    expect(longest).toContain(WOO_WEBHOOKS_FIX_DISABLED);
+    expect(longest).toHaveLength(488);
+    expect(read("docs/mom/master-pedidos-v1.md").replace(/\s+/g, " ")).toContain(
+      "la peor, uno desactivado y tres a otra tienda de Kapta, en 488",
+    );
   });
 });
 
@@ -353,6 +486,17 @@ describe("checkWooWebhooks: solo GET /webhooks, con los topes de siempre", () =>
     expect(r.topics!["order.restored"]).toBe("falta");
     expect(r.message).toMatch(/^falta order\.restored\. /);
   });
+
+  it("compara con las direcciones de Kapta del entorno: un webhook a otra dirección es warning", async () => {
+    const list = healthy().map((w) => (w.topic === "order.created" ? { ...w, delivery_url: deliveryUrl(STORE_ID, "https://otro-entorno.example") } : w));
+    const r = await checkWooWebhooks(client(fakeWoo(list).fetchImpl), STORE_ID);
+    expect(r.status).toBe("warning");
+    expect(r.topics!["order.created"]).toBe("otra_direccion");
+    expect(r.message).toMatch(/^order\.created va a otra dirección\. /);
+    // Con esa dirección entre las de Kapta, está bien.
+    const ok = await checkWooWebhooks(client(fakeWoo(list).fetchImpl), STORE_ID, { kaptaOrigins: [KAPTA, "https://otro-entorno.example"] });
+    expect(ok.status).toBe("ok");
+  });
 });
 
 // ── Dónde queda ─────────────────────────────────────────────────────────────
@@ -412,6 +556,33 @@ describe("woo_last_error: su propio prefijo, que solo borra una revisión buena"
     );
     expect(h.db.rows("stores")[0]!.woo_last_error).toBe("Sincronización: WooCommerce falló (HTTP 500).");
     expect(h.db.rows("sync_state").find((r) => r.source === WOO_WEBHOOKS_SOURCE)).toMatchObject({ status: "error" });
+  });
+
+  it("un texto largo queda cortado igual que lo corta recordWooLastError, y Ajustes lo reconoce como suyo", async () => {
+    // Un permiso negado con un detalle largo de WooCommerce: pasa de 500 con el prefijo.
+    const long: WooWebhooksCheck = {
+      ...ok,
+      status: "error",
+      topics: null,
+      errorKind: "permisos",
+      message: `no se pudieron revisar: WooCommerce no dio permiso (HTTP 403). ${"detalle ".repeat(70).trim()}.`,
+    };
+    expect(`${WOO_WEBHOOKS_ERROR_PREFIX}${long.message}`.length).toBeGreaterThan(WOO_LAST_ERROR_MAX);
+    h.db = new FakeDb({ stores: [storeRow()] });
+    await recordWooWebhooksCheck(h.db.client(), STORE_ID, long, null);
+    const lastError = h.db.rows("stores")[0]!.woo_last_error as string;
+    expect(lastError).toHaveLength(WOO_LAST_ERROR_MAX);
+    expect(lastError).toBe(wooWebhooksLastErrorText(long.message));
+    expect(wooWebhooksLastError(long, null)).toBe(lastError);
+    // Ajustes ve que el último fallo es el de la revisión: no repite el motivo
+    // en la línea (antes lo buscaba entero dentro del texto cortado).
+    const view = wooWebhooksView({ webhooks: wooSyncStateRow(h.db.rows("sync_state") as never, WOO_WEBHOOKS_SOURCE), lastError, apiReady: true });
+    expect(view.summary).toBe("no se pudo revisar");
+    expect(view.detail).toBeNull();
+    // Y con la misma escritura repetida no vuelve a escribir.
+    const updates = h.db.opsOn("stores", "update").length;
+    await recordWooWebhooksCheck(h.db.client(), STORE_ID, long, lastError);
+    expect(h.db.opsOn("stores", "update")).toHaveLength(updates);
   });
 
   it("la línea de Ajustes", () => {
@@ -626,7 +797,23 @@ describe("MOM §38.14 dice lo mismo que el código", () => {
     expect(S).toContain(`cada llamada corta a los ${WOO_TIMEOUT_MS / 1000} s`);
     for (const t of WOO_INTAKE_TOPICS) expect(S).toContain(`\`${t}\``);
     expect(S).toContain("**Solo lectura.** Kapta nunca crea, reactiva, cambia ni borra un webhook.");
-    expect(S).toContain("**El host de la dirección no se compara.**");
+    expect(S).toContain("**La dirección se compara entera.**");
+    expect(S).toContain("`NEXT_PUBLIC_SITE_URL`");
+    expect(S).toContain("`VERCEL_PROJECT_PRODUCTION_URL`");
+    // WooCommerce da por buena una entrega con 2xx, 301 o 302: por eso el origen se compara.
+    expect(S).toContain("cuenta como éxito un 2xx, un 301 o un 302");
+  });
+
+  it("sin order.deleted no dice que los pedidos llegan por la sincronización: la papelera no llega nunca", () => {
+    expect(S).toContain("**lo que se manda a la papelera, no:**");
+    expect(S).toContain(WOO_WEBHOOKS_NO_TRASH);
+    expect(S).toContain(WOO_WEBHOOKS_SYNC_COVERS_BUT_TRASH);
+    expect(S).toContain(WOO_WEBHOOKS_SYNC_COVERS);
+    expect(S).not.toContain("los pedidos siguen entrando por la pasada `woo_orders`, con hasta 5 minutos de retraso, y el Master no muestra nada raro");
+    // 38.11 dice lo mismo: la pasada no ve la papelera.
+    expect(section("### 38.11 La entrada de pedidos de WooCommerce")).toContain(
+      "un pedido mandado a la papelera solo llega por `order.deleted`",
+    );
   });
 
   it("cuándo corre y dónde queda", () => {
@@ -639,14 +826,14 @@ describe("MOM §38.14 dice lo mismo que el código", () => {
     expect(S).toContain("**Sin migración.**");
   });
 
-  it("los textos de Ajustes son los de la sección", () => {
-    const SECTION = read("components/woocommerce-settings-section.tsx");
+  it("los textos de Ajustes son los de la sección (la vista los prueba en test/woocommerce-webhooks-view.test.ts)", () => {
+    const VIEW = read("lib/woocommerce-webhooks-view.ts");
     for (const text of ["los cuatro activos y con la dirección de esta tienda", "falta algo", "no se pudo revisar"]) {
       expect(S, text).toContain(text);
-      expect(SECTION, text).toContain(text);
+      expect(VIEW, text).toContain(text);
     }
     expect(S).toContain("Revisión de los webhooks en WooCommerce (cada hora)");
-    expect(SECTION).toContain("Revisión de los webhooks en WooCommerce (cada hora)");
+    expect(read("components/woocommerce-settings-section.tsx")).toContain("Revisión de los webhooks en WooCommerce (cada hora)");
   });
 
   it("dice lo que la lista no trae y por eso no se revisa: la versión de la API y el secreto", () => {
@@ -662,8 +849,8 @@ describe("MOM §38.14 dice lo mismo que el código", () => {
   it("hoy revisa Aurela y Kenku, y Ajustes da el motivo cuando no se pudo revisar", () => {
     expect(S).toContain("**Hoy (25-10-2026).** Las tiendas que revisa son Aurela y Kenku");
     expect(S).toContain("esta última con el motivo cuando el último fallo no lo dice ya");
-    const SECTION = read("components/woocommerce-settings-section.tsx");
-    expect(SECTION).toContain("`no se pudo revisar${hooksReason ? `: ${hooksReason}` : \"\"}`");
+    // Lo hace la vista (y lo prueba renderizando la sección test/woocommerce-webhooks-view.test.ts).
+    expect(read("lib/woocommerce-webhooks-view.ts")).toContain("`no se pudo revisar${reason ? `: ${reason}` : \"\"}`");
   });
 
   it("38.8 y 38.11 apuntan a la revisión", () => {
@@ -680,7 +867,9 @@ describe("MOM §38.14 dice lo mismo que el código", () => {
       "app/api/cron/woo-webhooks/route.ts",
       "app/dashboard/[storeId]/settings/woo-actions.ts",
       "components/woocommerce-settings-section.tsx",
+      "lib/woocommerce-webhooks-view.ts",
       "test/woocommerce-webhooks-health.test.ts",
+      "test/woocommerce-webhooks-view.test.ts",
       "test/woocommerce-settings.test.ts",
     ]) {
       expect(S, f).toContain(`\`${f}\``);
@@ -689,9 +878,12 @@ describe("MOM §38.14 dice lo mismo que el código", () => {
   });
 
   it("cada función que nombra la exporta el código", async () => {
-    const lib = await import("@/lib/woocommerce-webhooks-health");
-    const names = [...S.matchAll(/`((?:check|summarize|evaluate|record|run)WooWebhooks\w*|wooWebhook\w+|WOO_WEBHOOKS_\w+)`/g)].map((m) => m[1]!);
-    expect(names.length).toBeGreaterThan(10);
+    const lib = { ...(await import("@/lib/woocommerce-webhooks-health")), ...(await import("@/lib/woocommerce-webhooks-view")) };
+    const names = [
+      ...S.matchAll(/`((?:check|summarize|evaluate|record|run)WooWebhooks\w*|wooWebhook\w+|wooSyncStateRow|wooSectionBadge|kaptaWebhookOrigins|WOO_WEBHOOKS_\w+|WOO_LAST_ERROR_MAX)`/g),
+    ].map((m) => m[1]!);
+    expect(names.length).toBeGreaterThan(15);
+    for (const n of ["kaptaWebhookOrigins", "wooWebhooksView", "wooSectionBadge", "wooSyncStateRow"]) expect(names).toContain(n);
     for (const n of names) expect(lib, n).toHaveProperty(n);
   });
 });

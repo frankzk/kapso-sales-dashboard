@@ -229,9 +229,13 @@ beforeEach(() => {
   h.revalidated.length = 0;
   siteWebhooks = HEALTHY_WEBHOOKS;
   stubWoo();
+  // La dirección de Kapta que acepta la revisión de los webhooks (MOM §38.14).
+  vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://kapta.example");
+  vi.stubEnv("VERCEL_PROJECT_PRODUCTION_URL", "");
 });
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe("saveWooSettings", () => {
@@ -375,6 +379,18 @@ describe("saveWooSettings", () => {
     expect(h.db.rows("sync_state")[0]).toMatchObject({ source: "woo_webhooks", status: "warning" });
     // Nada de la respuesta (la dirección de entrega) llega a la base.
     expect(JSON.stringify(h.db.rows("sync_state"))).not.toContain("kapta.example");
+  });
+
+  it("la revisión de Ajustes usa las mismas direcciones de Kapta que la de cada hora: otra dirección se dice", async () => {
+    siteWebhooks = HEALTHY_WEBHOOKS.map((w) =>
+      w.topic === "order.deleted" ? { ...w, delivery_url: `https://otro-entorno.example/api/webhooks/woocommerce/${STORE_ID}` } : w,
+    );
+    const r = await saveWooSettings({}, form(full));
+    expect(r.notice).toContain("Webhooks: order.deleted va a otra dirección.");
+    expect(r.notice).toContain("un pedido mandado a la papelera sigue vivo en Kapta");
+    expect(h.db.rows("sync_state")[0]).toMatchObject({ source: "woo_webhooks", status: "warning" });
+    expect(JSON.stringify(h.db.rows("sync_state"))).not.toContain("otro-entorno");
+    expect(String(h.db.rows("stores")[0]!.woo_last_error)).not.toContain("otro-entorno");
   });
 
   it("si la conexión no sirve, no guarda ni revisa los webhooks", async () => {

@@ -1,15 +1,17 @@
 // La revisión de los webhooks de WooCommerce (MOM §38.14, 25-10-2026).
 //
 // WooCommerce desactiva un webhook después de 5 fallos seguidos y no avisa a
-// nadie: los pedidos siguen llegando por la pasada `woo_orders`, con retraso, y
-// el Master no muestra nada raro. Cada hora, en el minuto 34 (`34 * * * *` en
-// vercel.json, que no comparte con ningún otro barrido), lee la lista de
-// webhooks de cada tienda ACTIVA con WooCommerce conectado
-// (`GET /wp-json/wc/v3/webhooks`) y comprueba que los cuatro temas de pedido
-// tengan uno «Activo» que entregue a esa tienda de Kapta
-// (lib/woocommerce-webhooks-health.ts). El resultado queda en `sync_state`
-// (fuente `woo_webhooks`) y, si algo falla, en `stores.woo_last_error`: lo
-// muestra Ajustes → WooCommerce.
+// nadie. Los pedidos nuevos y sus cambios siguen llegando por la pasada
+// `woo_orders`, con retraso; lo que se manda a la papelera solo llega por
+// `order.deleted` (la pasada no ve la papelera, MOM §38.11), así que sin ese
+// webhook un pedido mandado a la papelera sigue vivo en el Master. Cada hora,
+// en el minuto 34 (`34 * * * *` en vercel.json, que no comparte con ningún
+// otro barrido), lee la lista de webhooks de cada tienda ACTIVA con
+// WooCommerce conectado (`GET /wp-json/wc/v3/webhooks`) y comprueba que los
+// cuatro temas de pedido tengan uno «Activo» que entregue a esa tienda en una
+// dirección de Kapta (lib/woocommerce-webhooks-health.ts). El resultado queda
+// en `sync_state` (fuente `woo_webhooks`) y, si algo falla, en
+// `stores.woo_last_error`: lo muestra Ajustes → WooCommerce.
 //
 // SOLO LECTURA hacia WooCommerce: no crea, ni reactiva, ni cambia ningún
 // webhook. Una tienda sin el sitio, la clave del sitio y las dos claves de la
