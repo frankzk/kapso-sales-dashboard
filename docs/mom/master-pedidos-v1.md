@@ -17080,6 +17080,42 @@ secreto en Ajustes y la acción de Kapso pasa a apuntar a Kapta
 vuelve a Shopify mientras Shopify viva, o «Desactivar» en Ajustes (401, y el
 bot deriva a una asesora).
 
+**Consultar un pedido que ya existe (25-10-2026).** El caso (24-10-2026): la
+página de gracias del checkout de la web (plugin «COD Core») abre el chat del
+bot con «… deseo confirmar mi pedido KP200001 y pagaré S/ 599.60 en casa»; el
+bot no sabía que ese pedido existía, lo volvió a cotizar con sus precios
+(S/ 665) y ofreció «Confirmar pedido»: habría sido un **segundo pedido**. Desde
+ahora el bot tiene `POST /api/internal/orders/<storeId>/lookup`
+(`handleBotOrderLookup`), con **el mismo secreto y la misma puerta** que para
+crear (`authenticateBotCall`, 401 «No autorizado.» sin detalles) y el mismo
+tope de la base (`withTimeout`, `BOT_ORDER_DB_TIMEOUT_MS`). Cuerpo estricto:
+`order_name` (con o sin `#`, en cualquier caja: `normalizeBotOrderName`) y
+`phone` (el `phone_number` de la conversación). **Solo lectura**: no crea, no
+escribe nada (tampoco el último uso de Ajustes), no llama a WooCommerce ni a
+Shopify y no mira la plataforma de la tienda. Devuelve el número, la
+plataforma, la fecha, el total que Kapta tiene **hoy** (`orders.total_amount`),
+cómo se paga (`contraentrega`, `pagado` o null, derivado de `payment_gateway`,
+`financial_status` y las constancias con `orderFullyPaid`: `botLookupPayment`),
+si está anulado, la entrega vigente (el distrito y la dirección del Master, o
+los del pedido), los productos sin precios y la macroetapa y subetapa del
+Master con sus nombres de pantalla. **La privacidad (decisión de diseño,
+25-10-2026):** cualquiera puede escribir ese número en WhatsApp, así que el
+pedido se busca por su número **y** el celular de la conversación en la misma
+consulta (el índice `(store_id, customer_phone)` de `orders`) y se vuelve a
+comparar en memoria (`sameLookupPhone`); con otro celular la respuesta es
+**exactamente** la de un número que no existe, 404 `not_found` (reintentable
+una vez a los 10 s, `BOT_ORDER_LOOKUP_RETRY_AFTER_S`): Kapta nunca lee el pedido
+de otro celular, y un código aparte confirmaría que el número existe sin
+servirle al workflow. Cuenta solo el celular del pedido, nunca el de la guía
+(es el de quien recibe). **La regla del workflow** (la edita el owner en Kapso):
+un mensaje como «deseo confirmar mi pedido KP…/AUR…» no se cotiza ni se crea;
+se consulta, y si Kapta lo tiene se confirma **ese** pedido con su total y su
+dirección (nunca el monto escrito en el mensaje), «pagas al recibir» si es
+contraentrega, y la conversación queda como «pedido ya creado»; si después de
+una consulta más sigue `not_found`, o está anulado o finalizado, se deriva a una
+asesora. Contrato, respuesta campo por campo y regla completa:
+`docs/kapso-pedidos-kapta.md`, sección 10.
+
 **Lo que no cubre.** Después del cierre el bot no puede leer un borrador en
 Shopify: para cerrar un carrito necesita sus SKU y precios, y si no los tiene
 deriva a una asesora (que lo genera desde Leads con la copia de Kapta). Los
@@ -17094,7 +17130,12 @@ Implementación: `db/migrations/0277_bot_orders.sql` (`bot_order_secrets`,
 `BOT_ORDER_CODES`, `BOT_ORDER_HTTP`, `BOT_ORDER_CLAIM_TTL_MS`,
 `BOT_ORDER_SALE_DEADLINE_MS`, `BOT_ORDER_RETAKE_MAX_AGE_MS`,
 `BOT_ORDER_SAME_BODY_WINDOW_MS`, `BOT_ORDER_RATE_PER_MINUTE`);
-`app/api/internal/orders/[storeId]/route.ts`; `buildWooSaleOrder` con
+`app/api/internal/orders/[storeId]/route.ts`; la consulta,
+`lib/bot-order-lookup.ts` (`handleBotOrderLookup`, `parseBotOrderLookupBody`,
+`normalizeBotOrderName`, `botLookupPayment`, `BOT_ORDER_LOOKUP_CODES`) y
+`app/api/internal/orders/[storeId]/lookup/route.ts`, con sus pruebas
+`test/bot-order-lookup.test.ts` y `test/bot-order-lookup-mom.test.ts`;
+`buildWooSaleOrder` con
 `conversationId`, `shippingMode`, `tags` y `WOO_BOT_SALE_CHANNEL`, y
 `createWooSaleOrder` con `knownOrderId`, `onCreated` y `postUnanswered`
 (`lib/woocommerce-orders.ts`); `applyWooOrderEffects` (`lib/ingest.ts`);

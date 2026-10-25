@@ -17,6 +17,11 @@ cuenta en los rollups del bot como siempre.
 pedidos nuevos en»), el bot sigue con su acción de Shopify de hoy. Kapta contesta
 `409 wrong_platform` y **no crea nada** (sección 7).
 
+**Un pedido que ya existe no se vuelve a crear.** Cuando la clienta llega desde
+la página de gracias de la web («deseo confirmar mi pedido KP200001…»), el bot
+**consulta** ese pedido en Kapta en vez de cotizar y crear otro: sección 10
+(desde el 25-10-2026, con la tienda en Shopify o en WooCommerce).
+
 ---
 
 ## 1. La llamada
@@ -306,3 +311,227 @@ piso (código `price_not_allowed`) queda para después del corte.
 - **Después del corte:** un piso de precios (precio de catálogo menos un
   descuento máximo por tienda, lista de regalos, el precio de la copia del
   carrito con `cart_draft_gid`), con el código `price_not_allowed`.
+
+## 10. Consultar un pedido que ya existe (25-10-2026)
+
+**El caso (24-10-2026).** El checkout de la web (WooCommerce, plugin «COD Core»)
+termina en una página de gracias con un botón de WhatsApp que abre el chat con
+el bot con el texto ya escrito: «… deseo confirmar mi pedido KP200001 y pagaré
+S/ 599.60 en casa», más los productos y la dirección. **Ese pedido ya existe**:
+la clienta lo hizo en la web. El bot no lo sabía: lo volvió a cotizar con sus
+precios (S/ 665) y ofreció «Confirmar pedido», que habría creado un **segundo
+pedido** de la misma clienta, a otro precio. El arreglo es la regla de abajo
+(10.1), que se edita en Kapso; Kapta pone la consulta (10.2 a 10.6). Regla de
+negocio: MOM §38.13, «Consultar un pedido que ya existe».
+
+### 10.1 La regla del workflow
+
+Cuando el mensaje de la clienta coincide con
+
+```
+/deseo confirmar mi pedido\s*#?\s*((?:KP|AUR)\d+)/i
+```
+
+(el grupo 1 es el número: `KP200001`, `AUR900001`, `kp200001`), el bot:
+
+1. **No cotiza, no muestra un resumen con sus precios y no crea ningún pedido**
+   (ni «Crear pedido en Kapta» ni la acción de Shopify). El pedido ya está
+   hecho.
+2. **Consulta el pedido en Kapta** (10.2) con ese número y el `phone_number` de
+   **la conversación**, nunca un celular escrito en el mensaje. Si la
+   conversación no tiene `phone_number` (la clienta usa un nombre de usuario de
+   WhatsApp), no consulta: deriva (paso 5).
+3. **Si Kapta lo encuentra** (`200`) y no está anulado (`cancelled: false`) ni
+   cerrado (`master.stage` distinto de `finalizado`), le confirma **ese pedido**
+   con lo que dice Kapta: `order.name`, los productos (`items`), **el total de
+   Kapta** (`order.total`) y la dirección (`delivery`). **Nunca el monto, los
+   productos ni la dirección que vienen en el mensaje**: la clienta puede editar
+   el texto antes de mandarlo. El cobro, por `payment` (10.4): `contraentrega`
+   (y `delivery.mode` distinto de `agencia`) → «pagas al recibir»; `pagado` →
+   «ya está pagado»; `null` → no decir cómo se paga (si pregunta, derivar).
+   Y **marca la conversación como «pedido ya creado»** (por ejemplo, las
+   variables `pedido_ya_creado = true` y `pedido_numero = order.name`): ningún
+   paso posterior de esa conversación ofrece «Confirmar pedido» ni crea otro
+   pedido para lo mismo. Si la clienta quiere cambiar algo (dirección,
+   productos, cantidades) o dice otro monto, deriva: el bot no edita pedidos.
+4. **Si Kapta contesta `not_found`** (`404`): espera `retry_after_seconds`
+   (10 s) y consulta **una sola vez más**. El pedido puede no haber llegado
+   todavía: el webhook de WooCommerce tarda unos segundos, y el WooCommerce de
+   Kenku todavía no está conectado a Kapta. Mientras tanto, a la clienta: «Un
+   momento, estoy buscando tu pedido 🙏».
+5. **Si sigue `not_found`**, o el pedido está anulado o cerrado, o hubo
+   cualquier otro error (10.5): **deriva a una asesora** con el handoff de la
+   sección 4, sin cotizar ni crear nada. El `reason`: `pedido de la web por
+   revisar: <número> · <code>` (`not_found`, `cancelled`, `finalizado`, o el
+   código del error), y en `context_summary` el mensaje de la clienta tal cual
+   (lo que dice que pidió, el monto y la dirección que escribió): la asesora lo
+   busca en el Master o en WooCommerce antes de generar nada. A la clienta:
+
+   ```
+   Gracias 🙌 Una asesora va a revisar tu pedido {número} en unos minutos por aquí mismo.
+   ```
+
+   **Nunca** «ese pedido no existe» ni «ese pedido no es tuyo»: Kapta no dice
+   cuál de las dos es (10.3).
+
+Mensaje sugerido cuando lo encuentra (contraentrega a domicilio):
+
+```
+¡Listo! Tu pedido {order.name} ya está registrado ✅
+✅ {items[].title} {items[].variant} x {items[].quantity}
+💰 Total: S/ {order.total} — pagas al recibir
+📍 Entrega: {delivery.address1}, {delivery.district}
+Te avisaremos cuando salga a reparto. ¡Gracias por tu compra! 🙌
+```
+
+`order.total` con dos decimales (`599.6` → `S/ 599.60`). Con `pagado`: «💰
+Total: S/ {order.total} — ya está pagado». Con `payment: null`: «💰 Total: S/
+{order.total}», sin decir cómo se paga. Con `delivery.mode: "agencia"`: nunca
+«pagas al recibir»; confirma el número y los productos y deriva para el
+adelanto y la agencia.
+
+### 10.2 La llamada
+
+```
+POST https://<Kapta>/api/internal/orders/<storeId>/lookup
+Authorization: Bearer <secreto del bot de esa tienda>
+Content-Type: application/json
+```
+
+- **La dirección es la de crear más `/lookup`** y **el secreto es el mismo**
+  (sección 1; Ajustes → «Bot de Kapso → pedidos por Kapta» muestra las dos
+  direcciones). En Kapso, como secrets de la función que consulta (por ejemplo
+  `KAPTA_ORDERS_URL` y `KAPTA_ORDERS_SECRET`; la consulta va a
+  `KAPTA_ORDERS_URL + "/lookup"`). Sin secreto generado en Ajustes contesta 401:
+  en Aurela, cuyo bot crea sus pedidos directo en WooCommerce (MOM §38.5), hay
+  que generarlo igual para consultar.
+- **Funciona con la tienda en Shopify o en WooCommerce**: contesta con lo que
+  Kapta tiene, sin mirar la plataforma.
+- **Solo lectura.** No crea ni cambia nada, no llama a WooCommerce ni a Shopify
+  y no usa `request_id`: repetirla no tiene ningún efecto.
+- **POST y no GET**: el celular va en el cuerpo, nunca en la dirección (que
+  queda en los registros).
+- Tiempo de espera de la acción: **20 s**. Lo normal es menos de un segundo.
+- El cuerpo, como mucho 2 KB (`413 body_too_large` si pasa).
+
+El cuerpo, **estricto** como el de crear: un campo que no está en la tabla es un
+error (`invalid_body`). El monto que escribió la clienta no se manda: no sirve.
+
+| Campo | Tipo | Obligatorio | Regla |
+| --- | --- | --- | --- |
+| `order_name` | texto | sí | El número que escribió la clienta: `KP200001`, `#KP200001`, `kp200001`, `#kp 200001`… Con o sin `#`, en cualquier caja: letras (el prefijo de la tienda) y dígitos. |
+| `phone` | texto | sí | El `phone_number` de la conversación de Kapso (`51999000111`), con o sin `51`, `+51`, espacios o guiones. **Nunca uno escrito en el mensaje.** |
+
+Ejemplo (datos inventados):
+
+```json
+{ "order_name": "KP200001", "phone": "51999000111" }
+```
+
+### 10.3 La privacidad: solo el pedido de ese celular
+
+Cualquiera puede escribirle al bot «deseo confirmar mi pedido KP200001». Por
+eso Kapta busca el pedido **por su número y por el celular de la conversación a
+la vez, en la misma consulta**: solo lo devuelve si el celular del pedido
+(`orders.customer_phone`: el que la clienta dejó en el checkout, de facturación
+o de envío, normalizado) es el de la conversación, con o sin `51`.
+
+**Con otro celular la respuesta es exactamente la de un número que no existe**:
+`404 not_found`, con el mismo cuerpo. No es solo cortesía: Kapta nunca lee el
+pedido de otro celular, así que tampoco sabe cuál de las dos es. Un código
+aparte («existe, pero es de otro celular») le confirmaría a quien escribe que
+ese número de pedido existe, y al workflow no le sirve de nada: en los dos casos
+hace lo mismo (una consulta más y, si sigue igual, una asesora).
+
+- El celular de la **guía** del courier no cuenta: es el de quien recibe (lo
+  puede escribir el equipo para el courier), no prueba que la conversación sea
+  de la clienta. Un pedido sin celular propio no se devuelve.
+- Si la clienta dejó en la web otro celular que el de su WhatsApp (el de un
+  familiar, uno con un dígito de más), el bot no lo encuentra y la asesora lo
+  resuelve. Es el lado seguro.
+- La respuesta no trae el nombre, el celular, la referencia ni los precios por
+  línea: lo justo para confirmar el pedido.
+
+### 10.4 La respuesta cuando lo encuentra
+
+`200`:
+
+```json
+{
+  "ok": true,
+  "order": {
+    "name": "#KP200001",
+    "platform": "woocommerce",
+    "created_at": "2026-10-24T21:14:03Z",
+    "total": 599.6,
+    "currency": "PEN",
+    "payment": "contraentrega",
+    "cancelled": false,
+    "delivery": { "mode": null, "district": "Santiago de Surco", "address1": "Av. Ejemplo 123" },
+    "items": [
+      { "title": "Zapatilla Urbana", "variant": "38 / Negro", "quantity": 2 },
+      { "title": "Medias deportivas", "variant": null, "quantity": 1 }
+    ],
+    "master": { "stage": "por_confirmar", "stage_label": "Por confirmar", "substage": "sin_llamar", "substage_label": "Sin llamar" }
+  }
+}
+```
+
+Cada campo (estables: el workflow decide por ellos):
+
+| Campo | Tipo | Qué es |
+| --- | --- | --- |
+| `name` | texto | El número del pedido en Kapta, con `#` (`#KP200001`, `#AUR900001`). El que se le dice a la clienta. |
+| `platform` | texto | De dónde vino el pedido: `woocommerce` o `shopify`. |
+| `created_at` | texto o null | Cuándo se hizo (ISO 8601, UTC). |
+| `total` | número o null | El total que Kapta tiene **hoy** (`orders.total_amount`, que se actualiza con cada cambio del pedido en la tienda). **El único monto que el bot dice.** null: la tienda no lo mandó; derivar. |
+| `currency` | texto o null | `PEN`. |
+| `payment` | texto o null | Cómo se paga, derivado de lo que Kapta guarda (MOM §38.4): `contraentrega` = la pasarela es contraentrega (`payment_gateway = cod`) y no hay ningún pago cargado: paga el total al recibir. `pagado` = cobrado del todo (la pasarela confirmada del checkout, o constancias que cubren el total). `null` = no se sabe (otra pasarela, o ninguna) o hay un pago a medias (un adelanto): no decir cómo se paga. |
+| `cancelled` | sí/no | Anulado en la tienda o en Kapta. `true`: no confirmar; derivar. |
+| `delivery.mode` | texto o null | `contraentrega` (a domicilio), `agencia` (recoge en agencia) o null (el pedido no lo dice: los de la web suelen venir así). |
+| `delivery.district` | texto o null | El distrito vigente: el del Master (con la corrección del equipo, si la hubo) o, si el pedido acaba de llegar, el del pedido. |
+| `delivery.address1` | texto o null | La dirección vigente (calle y número), igual. |
+| `items[].title` | texto | El producto. |
+| `items[].variant` | texto o null | La variante (talla, color), si tiene. |
+| `items[].quantity` | entero | Las unidades. |
+| `master` | objeto o null | El estado del pedido en el Master de Kapta. null si el pedido acaba de llegar y su fila del Master todavía no está (confirmar igual). |
+| `master.stage` | texto | La macroetapa: `por_confirmar`, `preparacion`, `por_despachar`, `en_curso`, `por_cerrar` o `finalizado`. `finalizado`: no confirmar; derivar. |
+| `master.stage_label` | texto | Su nombre en pantalla («Por confirmar», «Preparación»…). |
+| `master.substage` | texto | La subetapa (`sin_llamar`, `por_confirmar`, `entregado_cerrado`…). |
+| `master.substage_label` | texto | Su nombre en pantalla («Sin llamar», «Entregado y cerrado»…). |
+
+**Sin precios por línea, a propósito**: el bot no tiene con qué volver a sumar
+ni cotizar. El monto es `total`.
+
+### 10.5 Los errores
+
+El mismo cuerpo que al crear (sección 4): `{ "ok": false, "code", "message",
+"retryable", "retry_after_seconds"?, "errors"? }`. `message` es para los
+registros de Kapso; **no se le lee a la clienta**.
+
+| `code` | HTTP | ¿Reintentar? | Qué pasó | Qué hace el bot |
+| --- | --- | --- | --- | --- |
+| `unauthorized` | 401 | no | Falta el secreto, o no es el de esa tienda (o se cambió o se desactivó en Ajustes). | Derivar y avisar al equipo: es configuración. |
+| `body_too_large` | 413 | no | El cuerpo pasa de 2 KB. | Derivar y avisar al equipo: es un error del workflow. |
+| `invalid_body` | 400 | no | Falta el número o el celular, no sirven, o va un campo de más (`errors`). | Derivar. Si es un error del workflow, avisar al equipo. |
+| `not_found` | 404 | sí | Kapta no tiene un pedido con ese número **para ese celular**: no llegó todavía, no existe, o es de otro celular (la misma respuesta, 10.3). | Esperar 10 s y consultar **una vez más**; si sigue, derivar (10.1, paso 5). Nunca cotizar ni crear otro. |
+| `store_unavailable` | 503 | sí | La base de Kapta no contestó o falló. | Consultar una vez más a los `retry_after_seconds`; si sigue, derivar. |
+| `migration_missing` | 503 | no | Falta preparar la base de Kapta (0277). | Derivar y avisar al equipo. |
+| `internal_error` | 500 | sí | Error de Kapta. | Consultar una vez más; si sigue, derivar. |
+| (sin respuesta) | — | sí | Se cortó la red o se acabó el tiempo de la acción. | Consultar una vez más; si sigue, derivar. |
+
+**La regla de los reintentos de la consulta** es distinta de la de crear
+(sección 4): con `retryable: true`, o sin respuesta, **una sola** consulta más,
+a los `retry_after_seconds` (10 s; también en la cabecera `Retry-After`). Si
+tampoco sale, derivar a una asesora. Consultar no crea nada, así que no hay
+`request_id` ni candado que cuidar; lo que se cuida es que la clienta no espere
+de más.
+
+### 10.6 Probarla
+
+Con el secreto ya generado (sección 7, paso 2), llamar a mano a la consulta con
+un pedido real de la tienda y **su** celular: `200` con el pedido. Con otro
+celular, o con un número que no existe: `404 not_found`, el mismo cuerpo en los
+dos. `401` es el secreto; `400`, el cuerpo (`errors` dice qué). En los registros
+de Vercel, `[bot-orders-lookup]` es una línea por consulta (la tienda, el
+número consultado, `outcome`, `status`, `ms`), sin el celular ni la dirección.

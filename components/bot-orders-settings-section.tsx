@@ -27,6 +27,11 @@ import {
 export interface BotOrdersSettingsView {
   /** `<Kapta>/api/internal/orders/<storeId>`. */
   endpointUrl: string;
+  /**
+   * `<Kapta>/api/internal/orders/<storeId>/lookup`: consultar un pedido que ya
+   * existe, sin crear nada, con el mismo secreto (contrato, sección 10).
+   */
+  lookupUrl: string;
   configured: boolean;
   createdAt: string | null;
   rotatedAt: string | null;
@@ -71,6 +76,7 @@ export function BotOrdersSettingsSection({ storeId, data }: { storeId: string; d
   const [secretState, secretAction, secretPending] = useActionState(generateBotOrdersSecret, initial);
   const [revokeState, revokeAction, revokePending] = useActionState(revokeBotOrdersSecret, initial);
   const { state: copied, copy } = useCopyToClipboard();
+  const { state: copiedLookup, copy: copyLookup } = useCopyToClipboard();
   const { state: copiedSecret, copy: copySecret } = useCopyToClipboard();
 
   useEffect(() => {
@@ -143,6 +149,20 @@ export function BotOrdersSettingsSection({ storeId, data }: { storeId: string; d
           <p className={HELP}>
             Tienda en {onWoo ? "WooCommerce: los pedidos del bot se crean allí." : "Shopify: la dirección todavía no crea pedidos."}
           </p>
+        </div>
+        <div className={cn(ROW, "space-y-3")}>
+          <p className={HELP}>
+            <strong>Consultar un pedido que ya existe</strong> (la clienta llega desde la página de gracias de la web), sin
+            crear nada y con el mismo secreto. Solo devuelve el pedido si es del celular de la conversación; funciona con la
+            tienda en Shopify o en WooCommerce.
+          </p>
+          <div className="flex flex-wrap items-stretch gap-2">
+            <CodeLine>{data.lookupUrl}</CodeLine>
+            <OpsButton onClick={() => copyLookup(data.lookupUrl)} className="h-auto min-h-9">
+              <IconCopy />
+              {copyLabel(copiedLookup)}
+            </OpsButton>
+          </div>
         </div>
       </div>
 
