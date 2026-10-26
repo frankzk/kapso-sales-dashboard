@@ -258,6 +258,15 @@ export function chatbyDayLabel(day: string, now: Date = new Date()): string {
 }
 
 /**
+ * Cuántos de los mensajes son de la clienta (texto, botón o archivo): la cifra
+ * de la pestaña «Chatby», que dice sin abrirla si la clienta respondió. Cuenta
+ * dentro de los últimos 20 que se traen.
+ */
+export function chatbyCustomerCount(messages: readonly Pick<ChatbyMessage, "kind">[]): number {
+  return messages.filter((m) => m.kind === "cliente").length;
+}
+
+/**
  * ¿El mensaje nombra este pedido? Las plantillas dicen el número («Hemos
  * recibido tu pedido #KP200123»); como Kenku y Aurela comparten el bot, en la
  * misma conversación puede haber pedidos de las dos marcas, y así se ve cuál es

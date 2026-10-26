@@ -10494,8 +10494,13 @@ estables:
      ficha lleva la chapa «Este pedido». Arriba, «Actualizar» y **«Abrir en
      Chatby»** (`https://app.chatby.io/inbox/<user_ns>`, pide la sesión de
      Chatby).
-   - **A pedido:** se lee al abrir la pestaña (no al abrir la ficha, ni en
-     segundo plano), con un tope de **5 segundos** para las dos llamadas y **un
+   - **La cifra de la pestaña (26-10-2026, pedido del owner):** cuántos de los
+     20 mensajes son de la clienta (texto, botón o archivo;
+     `chatbyCustomerCount`), en la misma chapa que la cifra de «Actividad».
+     Solo sale si respondió: sin respuesta, sin error o sin clave, no hay
+     chapa. Así se sabe sin abrir la pestaña si la clienta contestó al bot.
+   - **A pedido:** se lee al abrir la ficha del pedido (para la cifra; antes,
+     al abrir la pestaña), nunca en segundo plano para todos, con un tope de **5 segundos** para las dos llamadas y **un
      minuto** de caché por celular en la memoria del servidor. Si falla, la
      pestaña lo dice («No se pudo cargar la conversación de Chatby» y el
      motivo: la clave rechazada, el código de Chatby o que no respondió), con

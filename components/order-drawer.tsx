@@ -701,6 +701,8 @@ export function OrderDrawer({
   const [detail, setDetail] = useState<OrderMasterDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [workspace, setWorkspace] = useState<DrawerWorkspaceView>(initialWorkspace ?? "operar");
+  /** Mensajes de la clienta en Chatby (de los últimos 20): la cifra de la pestaña, solo si respondió. */
+  const [chatbyCustomerMessages, setChatbyCustomerMessages] = useState<number | null>(null);
   const scrollRef = useRef<HTMLElement>(null);
   const headerRef = useRef<HTMLElement>(null);
   const indexRef = useRef<HTMLDivElement>(null);
@@ -896,6 +898,7 @@ export function OrderDrawer({
   // «Ver actividad» abría la ficha… en Operar.
   useEffect(() => {
     setWorkspace(initialWorkspace ?? "operar");
+    setChatbyCustomerMessages(null);
     scrollRef.current?.scrollTo({ top: 0 });
   }, [orderId, initialWorkspace]);
 
@@ -1136,12 +1139,19 @@ export function OrderDrawer({
     }
   };
 
-  const tabs: { id: DrawerWorkspaceView; label: string; count?: number }[] = [
+  const tabs: { id: DrawerWorkspaceView; label: string; count?: number; countHint?: string }[] = [
     { id: "operar", label: "Operar" },
     { id: "informacion", label: "Información" },
     { id: "actividad", label: "Actividad", count: detail?.timeline.length },
     { id: "punto", label: "Punto" },
-    { id: "chatby", label: "Chatby" },
+    {
+      id: "chatby",
+      label: "Chatby",
+      count: chatbyCustomerMessages || undefined,
+      countHint: chatbyCustomerMessages
+        ? `${chatbyCustomerMessages === 1 ? "1 mensaje" : `${chatbyCustomerMessages} mensajes`} de la clienta en los últimos 20`
+        : undefined,
+    },
   ];
   // Pestañas con flechas, Inicio y Fin (patrón ARIA): el foco se mueve y la
   // pestaña se abre en el mismo gesto.
@@ -1364,8 +1374,9 @@ export function OrderDrawer({
                   >
                     {tab.label}
                     {tab.count != null && (
-                      <Badge tone={active ? "brand" : "neutral"} className="tabular-nums">
+                      <Badge tone={active ? "brand" : "neutral"} className="tabular-nums" title={tab.countHint}>
                         {tab.count.toLocaleString("es-PE")}
+                        {tab.countHint && <span className="sr-only"> {tab.countHint}</span>}
                       </Badge>
                     )}
                   </button>
@@ -2222,7 +2233,11 @@ export function OrderDrawer({
               hidden={workspace !== "chatby"}
               className="flex flex-col gap-4 sm:gap-6"
             >
-              <OrderChatbyPanel orderId={orderId} orderName={detail.row.order_name} active={workspace === "chatby"} />
+              <OrderChatbyPanel
+                orderId={orderId}
+                orderName={detail.row.order_name}
+                onCustomerMessages={setChatbyCustomerMessages}
+              />
             </div>
           </div>
         )}

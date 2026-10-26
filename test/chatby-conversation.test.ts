@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  chatbyCustomerCount,
   chatbyDayLabel,
   chatbyInboxUrl,
   chatbyLimaDay,
@@ -159,6 +160,14 @@ describe("mapChatbyMessages: lo que se muestra de cada mensaje", () => {
   });
 });
 
+describe("chatbyCustomerCount: la cifra de la pestaña", () => {
+  it("cuenta solo lo que mandó la clienta (texto, botón o archivo), no al bot, al equipo ni las notas", () => {
+    expect(chatbyCustomerCount(mapChatbyMessages(EXAMPLE))).toBe(1);
+    expect(chatbyCustomerCount([{ kind: "nota" }, { kind: "bot" }, { kind: "equipo" }])).toBe(0);
+    expect(chatbyCustomerCount([{ kind: "cliente" }, { kind: "cliente" }, { kind: "bot" }])).toBe(2);
+  });
+});
+
 describe("chatbyMentionsOrder: el mensaje que nombra este pedido", () => {
   it("con o sin #, sin confundir un número con otro más largo", () => {
     expect(chatbyMentionsOrder({ text: "Hemos recibido tu pedido #KP200123. Gracias" }, "#KP200123")).toBe(true);
@@ -286,6 +295,9 @@ describe("la ficha y el MOM", () => {
     expect(panel).not.toContain("chatby-api");
     expect(panel).not.toContain("process.env");
     expect(panel).toContain("loadOrderChatby");
+    const drawer = readFileSync(resolve(__dirname, "../components/order-drawer.tsx"), "utf8");
+    expect(drawer).toContain('label: "Chatby"');
+    expect(drawer).toContain("count: chatbyCustomerMessages || undefined");
   });
 
   it("el MOM lo cuenta", () => {
