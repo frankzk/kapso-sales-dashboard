@@ -1341,7 +1341,7 @@ export function isNeverLiveCancelledWoo(
   return Boolean(row.cancelled_at) && !existing && !String(payload?.date_paid_gmt ?? "").trim();
 }
 
-type WooApplyOutcome = { applied: true; row: OrderRow } | { applied: false; message: string };
+export type WooApplyOutcome = { applied: true; row: OrderRow } | { applied: false; message: string };
 
 /**
  * Un pedido de WooCommerce (del webhook o releído por la API) → `orders`, con
@@ -1390,6 +1390,23 @@ async function applyWooOrderPayload(
   }
   await applyWooOrderEffects(admin, creds.id, creds.timezone, row);
   return { applied: true, row };
+}
+
+/**
+ * Lo que WooCommerce contestó a un cambio que hizo Kapta («Anular pedido» desde
+ * la ficha, MOM §38.15) → `orders`, por el mismo camino que la entrada:
+ * `mapWooOrder` con el `cancelled_at` que ya tenía, sin pisar un estado más
+ * nuevo, el hecho de la Actividad si lo cambió (que no se repite si quien
+ * llama ya lo escribió) y la fila del Master. Así el Master lo muestra al
+ * instante, sin esperar el webhook.
+ */
+export async function applyWooOrderResponse(
+  admin: SupabaseClient,
+  creds: WooStoreCreds & { siteKey: string },
+  order: WooOrder,
+  fetchImpl?: typeof fetch,
+): Promise<WooApplyOutcome> {
+  return applyWooOrderPayload(admin, creds, order, fetchImpl);
 }
 
 /** El cambio de estado de un pedido recién guardado, para la Actividad. */

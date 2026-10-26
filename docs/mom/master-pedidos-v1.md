@@ -8563,6 +8563,9 @@ registra en cada evento.
   **Equipo** (a un admin también se le puede quitar ahí). Sin el permiso el
   botón no aparece y las rutas (`/api/export`, `/api/export/pedidos`)
   responden 403 sin leer la base.
+- Anular en WooCommerce un pedido de WooCommerce desde la ficha (26-10-2026,
+  §38.15): «Registrar estado a mano» (`master.set_status`, owner y admin), con
+  motivo obligatorio. Shopify se sigue anulando en Shopify.
 - Excepción COD por riesgo: justificación obligatoria.
 - Continuar con discrepancia geográfica: justificación obligatoria.
 - Retirar del manifiesto: motivo obligatorio.
@@ -16720,6 +16723,10 @@ WooCommerce viven en esa fila de `stores` y cada pedido lleva su plataforma.
     conserva su `cancelled_at` cuando llega `refunded` sobre un pedido que Kapta
     ya tenía anulado; el Master lo sigue mostrando «Anulado» y el equipo no
     tiene que volver a ponerlo en «Cancelado» a mano.
+  - **Anulado desde Kapta (26-10-2026).** Si lo anuló una persona con «Anular
+    pedido» de la ficha (38.15), el hecho lo escribe Kapta con su usuario en
+    `actor`, `source = 'kapta'` y el motivo en la nota, antes de guardar la
+    fila; la entrada ya no escribe otro.
   - **No cambia el estado.** El hecho no lleva `new_status`: la macroetapa la
     sigue decidiendo `cancelled_at`. Los pedidos de Shopify no cambian: su
     anulación sigue sin hecho propio (el tipo viejo `cancelled_shopify`
@@ -18368,6 +18375,110 @@ Implementación: `lib/woocommerce-webhooks-health.ts` (`checkWooWebhooks`,
 `test/woocommerce-webhooks-health.test.ts`,
 `test/woocommerce-webhooks-view.test.ts` (la sección renderizada) y
 `test/woocommerce-settings.test.ts`.
+
+### 38.15 Anular un pedido de WooCommerce desde Kapta (26-10-2026)
+
+**Pedido del owner (26-10-2026).** Hasta hoy un pedido de WooCommerce se anulaba
+solo en wp-admin, y la entrada (webhook o pasada) lo marcaba anulado y dejaba
+«Anulado en WooCommerce» en la Actividad (38.3). Para no dar wp-admin a cada
+persona del equipo, la ficha del Master tiene **«Anular pedido»**: pasa el pedido
+a «Cancelado» en WooCommerce con las claves guardadas de la tienda. No es una
+anulación automática (§2 punto 11): la decide y la firma una persona.
+
+- **Solo pedidos de WooCommerce** (`orders.platform = 'woocommerce'`, nunca por
+  la forma del id, 38.1) y vivos. **Shopify no cambia:** su ficha no muestra el
+  botón y el servidor lo rechaza sin llamar a nadie; un pedido de Shopify se
+  anula en Shopify, como siempre. No existía una acción de anular pedidos de
+  Shopify desde Kapta que copiar.
+- **Quién (decisión documentada):** el permiso de «Registrar estado a mano»
+  (`master.set_status`, owner y admin, §16), comprobado en la organización de la
+  tienda del pedido, que además tiene que verse por RLS. Anular la venta en la
+  tienda es el cambio de estado más fuerte que hay; ningún rol por función lo
+  trae, como el estado a mano. Sin el permiso, la zona no aparece.
+- **Nunca la papelera.** Solo `PUT /wp-json/wc/v3/orders/<id>
+  {"status": "cancelled"}`, que devuelve el stock. Ni `DELETE` ni `trash`.
+- **Motivo obligatorio:** uno de la lista corta —«La clienta ya no lo quiere»,
+  «Pedido duplicado», «Se rehace con otros datos» (§2 punto 3), «Sin stock»,
+  «Otro motivo»— y siempre una línea de texto (5 a 500 caracteres). Se confirma
+  con un segundo clic en peligro que nombra el pedido.
+
+**Lo que impide anular (decisión conservadora, 26-10-2026).** El MOM no tenía
+reglas para anular desde Kapta: wp-admin deja anular cualquier pedido, y una
+anulación con la caja en la calle lleva el pedido a «Por cerrar · Devolución
+física pendiente» (§7). Desde Kapta se elige el lado seguro; lo que no está aquí
+sigue siendo de wp-admin y de quien tenga acceso a él. **No se anula** (cada
+cosa con lo que hay que hacer antes, `wooCancelBlocks`):
+
+1. el pedido `entregado` o `devuelto` en el Master;
+2. una salida `entregado`;
+3. una caja fuera del almacén (`custody_state` `courier` o `retorno`), también
+   con su guía ya anulada: anular la venta no la trae de vuelta;
+4. una salida o guía viva (las de `activeOutputs`: `pendiente`, `en_ruta`,
+   `por_preparar`, sin devolver): se anula primero con su propio botón, que
+   avisa al courier;
+5. dinero en la mano: cobrado en la tienda (`financial_status` `paid`,
+   `partially_paid`, `partially_refunded` o `refunded`), un comprobante
+   `validado` (anularlo exige un reembolso, que solo confirma el owner, §16) o
+   un comprobante sin resolver (ni `validado` ni `rechazado`);
+6. compartir caja con otro pedido (§32), como acompañante o como principal.
+
+La ficha lo dice antes del clic con las mismas reglas; el servidor las vuelve a
+calcular con lo leído de la base y, si algo no se pudo leer, no anula («no lo
+sé» no es «no hay»).
+
+**La llamada.** Los topes de «Generar pedido» (38.12): el PUT 10 s
+(`WOO_SALE_TIMEOUTS.update`) y, si no tuvo respuesta clara (tiempo, red, una
+respuesta rota o un 502/503/504 de un proxy), releer el pedido 5 s
+(`WOO_SALE_TIMEOUTS.cleanup`) para saber cómo quedó; con el reintento de
+autenticación por query string si el hosting borra la cabecera (38.11). Un 4xx
+es un «no» y no se relee. **Si WooCommerce no contesta, o contesta pero el
+pedido no quedó anulado (un plugin), no se marca nada en Kapta** y el mensaje lo
+dice; si no se pudo saber, avisa que el Master lo mostrará solo si WooCommerce sí
+lo anuló.
+
+**Lo que queda en Kapta.**
+
+- **La fila, al instante:** `mapWooOrder` sobre la respuesta de WooCommerce y
+  `upsertOrders`, por el camino de la entrada (`applyWooOrderResponse`, con el
+  `cancelled_at` que tenía y sin pisar un estado más nuevo) y la fila del
+  Master. El webhook y la pasada que lleguen después traen lo mismo.
+- **Un solo «Anulado en WooCommerce» en la Actividad:** el hecho lo escribe
+  Kapta, `cancelled_woocommerce` con `source = 'kapta'`, el usuario de Kapta en
+  `actor` y la nota «Desde Kapta · Motivo: <motivo> — <texto>» (el código del
+  motivo, el id de WooCommerce y el intento en `payload`). Va **antes** de
+  guardar la fila: la entrada no escribe el suyo porque el último hecho de
+  WooCommerce del pedido ya es una anulación (38.3, «Una vez por cambio») y
+  porque ya encuentra el pedido anulado. Sin migración: el tipo es el de 38.3 y
+  `source` es texto libre (0045).
+- **Idempotente:** cada confirmación lleva su id de intento (`requestId`) y el
+  hecho su `operation_id` derivado de él (`wooKaptaCancelOperationId`): el doble
+  clic o el reintento del mismo intento no escriben otro (índice único de la
+  0122). Un pedido que Kapta ya tiene anulado no llama a WooCommerce: «ya está
+  anulado en la tienda».
+- **La carrera que queda:** si el webhook de esa anulación se procesara entre la
+  respuesta del PUT y la escritura de Kapta (milisegundos; WooCommerce entrega
+  sus webhooks en segundo plano), quedarían los dos hechos: el de la entrada,
+  sin motivo, y el de Kapta, con quién y el motivo. Se prefiere eso a perder el
+  motivo: `order_events` no se edita (0045).
+- Volver atrás es reactivar el pedido en WooCommerce: llega «Reactivado en
+  WooCommerce» como siempre (38.3).
+
+**Dónde.** En la ficha, «Gestión manual», debajo de «Registrar estado»: la zona
+«Anular pedido» con su explicación y «Anular pedido…»; si algo lo impide, un
+aviso con la lista en vez del botón. Al abrirla, en su sitio y sin modal: el
+motivo en chips, «Qué pasó», el aviso en crítico de que la venta queda anulada
+en la tienda y en el Master, «Sí, anular #KP… en WooCommerce» en peligro y «No
+anular».
+
+Implementación: `lib/woo-cancel.ts` (pura, la comparte la ficha:
+`WOO_CANCEL_REASONS`, `validateWooCancelReason`, `wooCancelEventNote`,
+`wooCancelBlocks`, `WOO_CANCEL_PERMISSION`, `WOO_CANCEL_DENIED`),
+`lib/woo-cancel-server.ts` (`cancelWooOrderInStore`, `WOO_CANCEL_TIMEOUTS`,
+`wooKaptaCancelOperationId`, `cancelWooOrderFromKapta`, `WOO_CANCEL_SOURCE`),
+`applyWooOrderResponse` en lib/ingest.ts, la acción
+`app/dashboard/pedidos/woo-cancel-actions.ts` (`cancelWooOrder`) y
+`components/woo-cancel-zone.tsx` en `OrderActions` (components/order-drawer.tsx).
+Pruebas: `test/woo-cancel.test.ts` y `test/woo-cancel-action.test.ts`.
 
 ## 39. Fotos de producto de WhatsApp para cuando Shopify ya no responde (23-10-2026)
 

@@ -137,7 +137,8 @@ describe("MOM §38.12", () => {
     // 38.13: los pedidos del bot de Kapso por Kapta (test/bot-orders-mom.test.ts).
     // 38.14: la revisión de los webhooks de WooCommerce
     // (test/woocommerce-webhooks-health.test.ts).
-    expect(heads.at(-1)).toBe(14);
+    // 38.15: anular un pedido de WooCommerce desde Kapta (test/woo-cancel.test.ts).
+    expect(heads.at(-1)).toBe(15);
   });
 });
 
