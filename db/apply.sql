@@ -567,4 +567,6 @@
 \ir migrations/0281_olva_paid_arrival_notice.sql
 \echo 'Applying 0282_swayp_unknown_guides.sql'
 \ir migrations/0282_swayp_unknown_guides.sql
+\echo 'Applying 0283_lima_repro_aliclik.sql'
+\ir migrations/0283_lima_repro_aliclik.sql
 \echo 'Done.'

@@ -864,7 +864,8 @@ describe("kinds del historial", () => {
 
 describe("couriers y cambios", () => {
   it("Urpi no se ofrece en 1a (E16)", () => {
-    expect(REPRO_COURIER_CHOICES).toEqual(["propio", "tanders", "fenix", "axel"]);
+    // Desde el 26-10-2026 Aliclik ocupa el lugar de Tanders (MOM §9, «Aliclik en Lima»).
+    expect(REPRO_COURIER_CHOICES).toEqual(["propio", "aliclik", "fenix", "axel"]);
     expect(reproCourierDisabledReason("urpi")).toBe("Urpi solo lleva primeros despachos (§9.1); un reprogramado no pasa a Urpi en esta fase.");
     expect(reproCourierDisabledReason("propio")).toBeNull();
   });

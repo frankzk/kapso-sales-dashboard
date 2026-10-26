@@ -1446,6 +1446,46 @@ la clienta ve el número de la empresa, no el de la asesora.
   no entregó hoy, el pedido puede salir mañana por Tanders o Swayp con la caja
   de Grupo GF todavía en la calle.
 
+#### Aliclik en Lima, solo con AUTOECOM, y Tanders sin guías nuevas (26-10-2026)
+
+**Decisión del owner (26-10-2026).** Aliclik entra a Lima y Tanders deja de
+crear guías. En Lima, Aliclik se usa **solo con su transporte AUTOECOM**.
+
+- **El plan de rutas de Lima** (`buildOrderRoutePlan`, `lib/order-route-plan.ts`)
+  ofrece Grupo GF, **Aliclik** (en el lugar de Tanders), Swayp y, plegados,
+  Axel y Urpi. Sugiere Grupo GF si es elegible y entra al corte; si no,
+  Aliclik. Con Aliclik en el plan, la ficha enseña el panel de crear la guía
+  de Aliclik (§11) igual que en Provincia COD. El envío programado automático
+  de Aliclik sigue sin tocar Lima.
+- **AUTOECOM** (`limaTransportPolicy`, `lib/aliclik-lima.ts`): en un pedido de
+  Lima, si la cotización de Aliclik trae AUTOECOM, **solo AUTOECOM se puede
+  elegir** («En Lima se envía solo con AUTOECOM.»). Si no lo trae, se puede
+  elegir el transporte que Aliclik ofrezca (mejor salir con otro que no salir)
+  y la cotización lo avisa. El nombre se compara sin espacios, guiones ni
+  mayúsculas: Kapta nunca había cotizado una dirección de Lima (sus 7.476
+  guías de Aliclik eran ALIDRIVER), así que la primera cotización de Lima
+  confirma cómo lo llama Aliclik. La creación vuelve a cotizar y exige que el
+  transporte se pueda elegir: la regla vale también en el servidor.
+- **Tanders no crea guías nuevas** (`TANDERS_NEW_GUIDES_ENABLED = false`,
+  `lib/tanders/new-guides.ts`): el plan de rutas no lo ofrece en ninguna
+  operación y `createTandersGuide` responde «Tanders ya no crea guías nuevas»
+  antes de llamar a Tanders. Las guías de Tanders que ya existen siguen igual:
+  su estado, sus cobros, sus devoluciones, su liquidación y el resto de esta
+  sección.
+- **Si Aliclik no entrega en Lima, el pedido va a «Por reprogramar Lima»**
+  (no a Gestión Reproprovincia): la falla sigue la regla de la operación,
+  como Tanders y Swayp en Lima (`resolveMacroStage`), y Repro Lima toma casos
+  de cualquier courier.
+- **Repro Lima acuerda con Aliclik en lugar de Tanders**
+  (`REPRO_COURIER_CHOICES`: Grupo GF, Aliclik, Swayp, Axel). Los acuerdos ya
+  guardados con Tanders se siguen leyendo. La fecha más temprana con Aliclik es
+  hoy, como Tanders y Axel: la guía trae su propio horario de recojo. La 0283
+  admite `aliclik` en `lima_repro_cases.agreed_courier` y
+  `lima_repro_calls.courier`.
+
+Pruebas: `test/aliclik-lima.test.ts`, `test/order-route-plan.test.ts` y
+`test/reproprovincia.test.ts` («Aliclik en Lima»).
+
 #### Lo que Tanders no entrega también es «Por reprogramar Lima» (v1.19, 29-09-2026)
 
 **Despachos de Tanders de días anteriores sin entrega (decisión del owner,

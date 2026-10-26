@@ -236,6 +236,23 @@ describe("y la macroetapa la aplica IGUAL", () => {
     expect(r.since).toBe(hace(5));
   });
 
+  it("Aliclik en Lima (26-10-2026): la guía que no entregó va a «Por reprogramar Lima», no a Reproprovincia", () => {
+    // Desde que Aliclik entra a Lima con AUTOECOM (MOM §9, «Aliclik en Lima»),
+    // su falla sigue la regla de la operación, como Tanders y Swayp en Lima.
+    const legacy = resolveOrderState({ order: pedido(), guides: [guia()], events: [], override: null, now: NOW, recoveryWindowDays: 30 });
+    const r = resolveMacroStage({
+      order: macroPedido({ coverage: "lima", region: "Lima", province: "Lima", district: "Independencia" }),
+      guides: [macroGuia()],
+      events: [],
+      legacy: { general: legacy.general, operational: legacy.operational, since: legacy.since },
+      paymentState: "sin_pago",
+      recoveryWindowDays: 30,
+      now: NOW,
+    });
+    expect(r.stage).toBe("en_curso");
+    expect(r.substage).toBe("por_reprogramar_lima");
+  });
+
   it("el «acepta reenvío» del agente de voz NO mueve la etapa: la cierra la salida Swayp (§11.8)", () => {
     // El agente escribe `confirmation_contact` y `confirmed` sobre el pedido.
     // Si eso lo mandara a Preparación, saldría de la cola de Reproprovincia
