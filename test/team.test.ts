@@ -140,6 +140,7 @@ describe("team guards", () => {
           "data.export",
           "invoices.manage",
           "logistics.manage",
+          "orders.cancel_woo",
           "payments.validate",
           "shalom.override_payment_validation",
         ].sort(),

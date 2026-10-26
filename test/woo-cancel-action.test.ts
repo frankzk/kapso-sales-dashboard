@@ -1,5 +1,5 @@
-// La acción «Anular pedido» de la ficha (MOM §38.15): solo quien registra
-// estados a mano en la organización de la tienda del pedido, y solo si ve el
+// La acción «Anular pedido» de la ficha (MOM §38.15): solo quien tiene «Anular
+// pedidos de WooCommerce» (`orders.cancel_woo`) en la organización de la tienda del pedido, y solo si ve el
 // pedido (RLS). Sin el permiso no se llama a WooCommerce ni se escribe nada.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -56,10 +56,11 @@ beforeEach(() => {
 });
 
 describe("cancelWooOrder (acción del servidor)", () => {
-  it("sin «Registrar estado a mano» no anula ni llama a WooCommerce", async () => {
+  it("sin «Anular pedidos de WooCommerce» no anula ni llama a WooCommerce", async () => {
     h.allowed = false;
     expect(await cancelWooOrder("o1", input)).toEqual({ error: WOO_CANCEL_DENIED });
-    expect(h.permissionAsked).toEqual(["master.set_status"]);
+    // El permiso propio (26-10-2026), no «Registrar estado a mano».
+    expect(h.permissionAsked).toEqual(["orders.cancel_woo"]);
     expect(h.cancel).not.toHaveBeenCalled();
   });
 

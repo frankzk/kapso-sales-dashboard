@@ -126,3 +126,63 @@ describe("los avisos que mandan a «Registrar estado» dicen quién lo hace", ()
     expect(desk).not.toContain("con el courier y fija el estado");
   });
 });
+
+// «Anular pedido» de WooCommerce (MOM §38.15) tiene permiso propio desde el
+// 26-10-2026 (`orders.cancel_woo`): el dueño se lo da a una asesora sin darle
+// «Registrar estado». La zona se pinta con ese permiso, no con `canSetStatus`.
+describe("«Anular pedido» en «Gestión manual» va con su propio permiso", () => {
+  const wooCancel = {
+    orderName: "#KP150001",
+    facts: {
+      platform: "woocommerce",
+      generalStatus: "pendiente",
+      financialStatus: "pending",
+      shipments: [],
+      payments: null,
+      companion: { travelsIn: null, carries: [] },
+    },
+    onCancel: async () => true,
+  };
+
+  function withWoo(canSetStatus: boolean, canCancelWoo: boolean): string {
+    return renderToStaticMarkup(
+      createElement(OrderActions, {
+        row,
+        canOverride: false,
+        canSetStatus,
+        canCancelWoo,
+        pending: false,
+        outputCount: 1,
+        onStatus: noop,
+        onComment: noop,
+        onReturn: noop,
+        onRelink: noop,
+        wooCancel,
+      }),
+    );
+  }
+
+  it("una asesora con el permiso y sin «Registrar estado» ve la zona, no la tarjeta", () => {
+    const html = withWoo(false, true);
+    expect(html).toContain("Anular pedido…");
+    expect(html).not.toContain(">Registrar estado</h4>");
+    expect(html).toContain(SET_STATUS_ADMIN_NOTE);
+  });
+
+  it("sin el permiso no la ve, aunque registre estados a mano", () => {
+    const html = withWoo(true, false);
+    expect(html).toContain(">Registrar estado</h4>");
+    expect(html).not.toContain("Anular pedido…");
+  });
+
+  it("el permiso llega por las dos páginas que montan la ficha", () => {
+    expect(read("app/dashboard/pedidos/page.tsx")).toContain('canCancelWoo={perms.can("orders.cancel_woo")}');
+    expect(read("app/dashboard/layout.tsx")).toContain('canCancelWoo={permissions.can("orders.cancel_woo")}');
+    expect(read("components/order-drawer-host.tsx")).toContain("canCancelWoo={permissions.canCancelWoo}");
+    expect(read("components/orders-master.tsx")).toContain("canCancelWoo={canCancelWoo}");
+    const drawer = read("components/order-drawer.tsx");
+    expect(drawer).toContain("canCancelWoo={canCancelWoo}");
+    expect(drawer).toContain("{canCancelWoo && wooCancel && (");
+    expect(drawer).not.toContain("{canSetStatus && wooCancel && (");
+  });
+});

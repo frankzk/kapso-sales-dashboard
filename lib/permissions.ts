@@ -25,6 +25,13 @@ export const PERMISSIONS = [
   // ni lo trae ningún rol: Supervisión corrige cierres (`override_status`) y
   // aun así no cambia estados a mano.
   "master.set_status",
+  // Anular un pedido de WooCommerce desde la ficha (MOM §38.15): Kapta lo pasa a
+  // «Cancelado» en la tienda, con motivo. Decisión del owner (26-10-2026): un
+  // permiso propio que él concede persona por persona en Equipo, para que una
+  // asesora anule sin recibir wp-admin ni «Registrar estado a mano». Owner y
+  // admin lo traen por su acceso (lo tenían con `master.set_status`); ningún
+  // rol por función lo trae. Las reglas que impiden anular no cambian.
+  "orders.cancel_woo",
   "master.override_status", // cambiar el estado de un pedido ya cerrado (entregado/anulado/devuelto)
   "master.import_report", // cargar reportes de couriers
   // Preparación y despacho físico (MOM Fase 2)
@@ -186,6 +193,7 @@ export function isPermission(value: string): value is Permission {
 export const PERMISSION_LABEL: Record<Permission, string> = {
   "master.edit": "Gestionar pedidos",
   "master.set_status": "Registrar estado a mano",
+  "orders.cancel_woo": "Anular pedidos de WooCommerce",
   "master.override_status": "Corregir pedidos cerrados",
   "master.import_report": "Subir reportes de couriers",
   "warehouse.prepare": "Preparar paquetes",
@@ -237,6 +245,7 @@ export const PERMISSION_HELP: Record<Permission, string> = {
   // Desde el 15-10-2026 «cambiar el estado» ya no es de aquí: es `master.set_status`.
   "master.edit": "Confirmar, comentar, crear salidas, registrar devoluciones y corregir vínculos, en el Master y en Repro Provincia.",
   "master.set_status": "Cambiar a mano el estado de un pedido desde «Gestión manual» o la lista del Master. Solo dueño y admin.",
+  "orders.cancel_woo": "Pasar a Cancelado en WooCommerce un pedido, con motivo. Las reglas que impiden anular siguen igual.",
   // Supervisión lo trae y no cambia estados a mano (15-10-2026): decirle
   // «cambiar un pedido cerrado» le prometía la tarjeta que ya no ve.
   "master.override_status": "Registrar la devolución de un pedido ya entregado o anulado, con motivo. Reabrirlo o cambiar su estado lo hace un admin.",
@@ -293,7 +302,15 @@ export const PERMISSION_AREAS = [
   {
     key: "pedidos",
     label: "Pedidos",
-    permissions: ["master.edit", "master.set_status", "master.override_status", "orders.create", "master.import_report", "data.export"],
+    permissions: [
+      "master.edit",
+      "master.set_status",
+      "orders.cancel_woo",
+      "master.override_status",
+      "orders.create",
+      "master.import_report",
+      "data.export",
+    ],
   },
   {
     key: "pagos",
@@ -483,6 +500,19 @@ export const GRANTED_ONE_BY_ONE = [
     // está para concedérselo a una vendedora concreta (08-10-2026).
     withAdminRole: true,
     // La base de clientes entera: la concede el dueño.
+    ownerOnly: true,
+  },
+  {
+    permission: "orders.cancel_woo",
+    label: PERMISSION_LABEL["orders.cancel_woo"],
+    description: `${PERMISSION_HELP["orders.cancel_woo"]} Viene con dueño y admin.`,
+    // Sin nadie con la casilla, owner y admin siguen anulando: no se queda nada parado.
+    lastOneMatters: false,
+    // Owner y admin ya anulaban (con «Registrar estado a mano»): nadie pierde
+    // la capacidad. La casilla es para dársela a una asesora concreta
+    // (decisión del owner, 26-10-2026, MOM §38.15).
+    withAdminRole: true,
+    // Anular la venta en la tienda: lo concede el dueño, no un admin.
     ownerOnly: true,
   },
 ] as const satisfies readonly {

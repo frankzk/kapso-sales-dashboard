@@ -211,6 +211,7 @@ export function OrdersMasterBoard({
   canExport = false,
   canOverride,
   canSetStatus,
+  canCancelWoo = false,
   canCreateGuide,
   canCreateTandersGuide,
   canCreateShalomGuide,
@@ -271,6 +272,8 @@ export function OrdersMasterBoard({
   canOverride: boolean;
   /** Cambiar el estado a mano (`master.set_status`): owner y admin (MOM §16, 15-10-2026). */
   canSetStatus: boolean;
+  /** «Anular pedido» de WooCommerce (`orders.cancel_woo`): owner, admin o concedido en Equipo. */
+  canCancelWoo?: boolean;
   canCreateGuide: boolean;
   canCreateTandersGuide: boolean;
   canCreateShalomGuide: boolean;
@@ -967,6 +970,7 @@ export function OrdersMasterBoard({
           canEdit={canEdit}
           canOverride={canOverride}
           canSetStatus={canSetStatus}
+          canCancelWoo={canCancelWoo}
           canCreateGuide={canCreateGuide}
           canCreateTandersGuide={canCreateTandersGuide}
           canCreateShalomGuide={canCreateShalomGuide}

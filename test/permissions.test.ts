@@ -86,10 +86,11 @@ describe("los permisos de concesión individual salen de UNA lista", () => {
       const withAdmin = "withAdminRole" in entry && entry.withAdminRole === true;
       expect(permissionsFor(["admin"]).has(entry.permission), entry.permission).toBe(withAdmin);
     }
-    // Hoy la única excepción es exportar: los financieros siguen fuera del rol.
+    // Hoy las excepciones son exportar y anular pedidos de WooCommerce (que
+    // owner y admin ya tenían): los financieros siguen fuera del rol.
     expect(
       GRANTED_ONE_BY_ONE.filter((e) => "withAdminRole" in e && e.withAdminRole).map((e) => e.permission),
-    ).toEqual(["data.export"]);
+    ).toEqual(["data.export", "orders.cancel_woo"]);
   });
 
   it("y el owner los conserva todos, por continuidad", () => {

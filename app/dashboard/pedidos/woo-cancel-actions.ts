@@ -4,10 +4,9 @@
 //
 // Autoriza como las demás acciones del Master: el pedido se lee con el cliente
 // del usuario (RLS: si no lo ve, no existe) y el permiso es el de la
-// organización de SU tienda. El permiso es «Registrar estado a mano»
-// (`master.set_status`, owner y admin, MOM §16): no hay una acción de anular
-// pedidos de Shopify desde Kapta que copiar, y anular la venta en la tienda es
-// el cambio de estado más fuerte que hay. Lo demás —reglas, WooCommerce, la
+// organización de SU tienda. El permiso es «Anular pedidos de WooCommerce»
+// (`orders.cancel_woo`, MOM §16): owner y admin por su acceso, y quien el dueño
+// marque en Equipo (26-10-2026). Lo demás —reglas, WooCommerce, la
 // Actividad y la fila— está en lib/woo-cancel-server.ts.
 
 import { revalidatePath } from "next/cache";

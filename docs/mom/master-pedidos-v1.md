@@ -8564,8 +8564,16 @@ registra en cada evento.
   botón no aparece y las rutas (`/api/export`, `/api/export/pedidos`)
   responden 403 sin leer la base.
 - Anular en WooCommerce un pedido de WooCommerce desde la ficha (26-10-2026,
-  §38.15): «Registrar estado a mano» (`master.set_status`, owner y admin), con
-  motivo obligatorio. Shopify se sigue anulando en Shopify.
+  §38.15): permiso propio **«Anular pedidos de WooCommerce»**
+  (`orders.cancel_woo`), con motivo obligatorio. Shopify se sigue anulando en
+  Shopify. Decisión del owner (26-10-2026): viene con **owner y admin** por su
+  acceso —ya anulaban con «Registrar estado a mano», nadie pierde la
+  capacidad— y el owner se lo concede a la asesora que quiera con su casilla en
+  **Equipo** (es de los que da solo él, `ownerOnly`; a un admin también se le
+  puede quitar ahí). Así anula sin recibir wp-admin ni «Registrar estado a
+  mano». Ningún rol por función lo trae (lo fija una prueba). Las reglas que
+  impiden anular (§38.15, `wooCancelBlocks`) son las mismas para todos. Sin
+  migración: `user_permissions.permission` es texto libre.
 - Excepción COD por riesgo: justificación obligatoria.
 - Continuar con discrepancia geográfica: justificación obligatoria.
 - Retirar del manifiesto: motivo obligatorio.
@@ -8575,8 +8583,8 @@ registra en cada evento.
   cambia roles, invita a alguien como admin y quita a un admin. Un admin invita
   y quita vendedoras y solo lectura, y nada más. Los permisos de dinero y de
   datos —«Validar pagos», «Corregir pagos», «Alerta de comprobante repetido»,
-  «Administrar Grupo GF» (tarifas y pago de motorizados), «Exportar datos» y
-  «Boletas y facturas» (§35.7)— solo los da o los quita el owner, también a sí
+  «Administrar Grupo GF» (tarifas y pago de motorizados), «Exportar datos»,
+  «Boletas y facturas» (§35.7) y «Anular pedidos de WooCommerce» (§38.15)— solo los da o los quita el owner, también a sí
   mismo; un admin sigue concediendo lo operativo («Reportar entregas de
   rutas»). Las casillas que no puede tocar le salen apagadas, con el motivo al
   pasar el ratón, y el servidor lo rechaza igual (`lib/team.ts`,
@@ -8608,7 +8616,8 @@ registra en cada evento.
     lo tienen todo: un rol no les suma nada.
   - Ningún rol trae los permisos de dinero o datos que da el dueño uno por uno
     (validar y corregir pagos, alerta de comprobante repetido, Administrar
-    Grupo GF, exportar datos, boletas y facturas), ni confirmar reembolsos. Lo
+    Grupo GF, exportar datos, boletas y facturas, anular pedidos de
+    WooCommerce), ni confirmar reembolsos. Lo
     fija una prueba.
   - Una revocación puntual sigue ganando sobre cualquier rol.
   - «Gestionar pedidos» ya **no** incluye cambiar el estado a mano
@@ -18390,11 +18399,18 @@ anulación automática (§2 punto 11): la decide y la firma una persona.
   botón y el servidor lo rechaza sin llamar a nadie; un pedido de Shopify se
   anula en Shopify, como siempre. No existía una acción de anular pedidos de
   Shopify desde Kapta que copiar.
-- **Quién (decisión documentada):** el permiso de «Registrar estado a mano»
-  (`master.set_status`, owner y admin, §16), comprobado en la organización de la
-  tienda del pedido, que además tiene que verse por RLS. Anular la venta en la
-  tienda es el cambio de estado más fuerte que hay; ningún rol por función lo
-  trae, como el estado a mano. Sin el permiso, la zona no aparece.
+- **Quién (decisión del owner, 26-10-2026):** el permiso propio **«Anular
+  pedidos de WooCommerce»** (`orders.cancel_woo`, §16), comprobado en la
+  organización de la tienda del pedido, que además tiene que verse por RLS. Lo
+  traen **owner y admin** por su acceso (el primer día era «Registrar estado a
+  mano», `master.set_status`, y nadie pierde lo que tenía) y el owner se lo
+  concede **persona por persona** con su casilla en **Equipo** a las asesoras
+  que quiera, sin darles wp-admin ni «Registrar estado a mano». Ningún rol por
+  función lo trae. Va aparte de `master.set_status`: en la ficha la zona se
+  pinta con este permiso (`canCancelWoo`), y una asesora que lo tiene la ve en
+  «Gestión manual» sin ver «Registrar estado»; quien lo tiene sin «Gestionar
+  pedidos» la ve bajo «Solo lectura». Sin el permiso, la zona no aparece y el
+  servidor responde `WOO_CANCEL_DENIED`.
 - **Nunca la papelera.** Solo `PUT /wp-json/wc/v3/orders/<id>
   {"status": "cancelled"}`, que devuelve el stock. Ni `DELETE` ni `trash`.
 - **Motivo obligatorio:** uno de la lista corta —«La clienta ya no lo quiere»,
@@ -18463,7 +18479,8 @@ lo anuló.
 - Volver atrás es reactivar el pedido en WooCommerce: llega «Reactivado en
   WooCommerce» como siempre (38.3).
 
-**Dónde.** En la ficha, «Gestión manual», debajo de «Registrar estado»: la zona
+**Dónde.** En la ficha, «Gestión manual», debajo de «Registrar estado» (si la
+persona lo ve; si no, en su lugar): la zona
 «Anular pedido» con su explicación y «Anular pedido…»; si algo lo impide, un
 aviso con la lista en vez del botón. Al abrirla, en su sitio y sin modal: el
 motivo en chips, «Qué pasó», el aviso en crítico de que la venta queda anulada

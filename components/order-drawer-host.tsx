@@ -37,6 +37,8 @@ export interface OrderDrawerHostProps {
   canOverride: boolean;
   /** «Registrar estado» a mano (`master.set_status`): owner y admin, MOM §16. */
   canSetStatus: boolean;
+  /** «Anular pedido» de WooCommerce (`orders.cancel_woo`, MOM §38.15). */
+  canCancelWoo: boolean;
   canCreateGuide: boolean;
   canCreateTandersGuide: boolean;
   canCreateShalomGuide: boolean;
@@ -96,6 +98,7 @@ function OrderDrawerHostInner({ stores, ...permissions }: OrderDrawerHostProps) 
       canEdit={permissions.canEdit}
       canOverride={permissions.canOverride}
       canSetStatus={permissions.canSetStatus}
+      canCancelWoo={permissions.canCancelWoo}
       canCreateGuide={permissions.canCreateGuide}
       canCreateTandersGuide={permissions.canCreateTandersGuide}
       canCreateShalomGuide={permissions.canCreateShalomGuide}

@@ -39,16 +39,17 @@ export const WOO_CANCEL_REASON_MIN = 5;
 export const WOO_CANCEL_REASON_MAX = 500;
 
 /**
- * Quién anula desde Kapta: «Registrar estado a mano» (`master.set_status`,
- * owner y admin, MOM §16). No había una acción de anular pedidos de Shopify
- * desde Kapta que copiar (Shopify se anula en Shopify); anular la venta en la
- * tienda es el cambio de estado más fuerte, y ese permiso es el de los cambios
- * de estado a mano.
+ * Quién anula desde Kapta: «Anular pedidos de WooCommerce»
+ * (`orders.cancel_woo`, MOM §16 y §38.15). Decisión del owner del 26-10-2026:
+ * un permiso propio que él concede persona por persona en Equipo, para que una
+ * asesora anule sin recibir wp-admin ni «Registrar estado a mano». Owner y admin
+ * lo traen por su acceso —ya anulaban con `master.set_status`—; ningún rol por
+ * función lo trae. Las reglas de `wooCancelBlocks` valen igual para todos.
  */
-export const WOO_CANCEL_PERMISSION = "master.set_status";
+export const WOO_CANCEL_PERMISSION = "orders.cancel_woo";
 
 export const WOO_CANCEL_DENIED =
-  "Anular un pedido en WooCommerce desde Kapta es de quien registra estados a mano (owner y admin). Pídeselo a un admin.";
+  "No tienes el permiso «Anular pedidos de WooCommerce». Lo tienen el dueño y los admin, y el dueño lo concede en Equipo.";
 
 export function wooCancelReasonLabel(code: string): string | null {
   return WOO_CANCEL_REASONS.find((r) => r.code === code)?.label ?? null;

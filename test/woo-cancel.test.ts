@@ -42,7 +42,7 @@ import {
   wooKaptaCancelOperationId,
 } from "@/lib/woo-cancel-server";
 import { WOO_SALE_TIMEOUTS } from "@/lib/woocommerce-orders";
-import { FUNCTIONAL_ROLES, permissionsFor } from "@/lib/permissions";
+import { FUNCTIONAL_ROLES, GRANTED_ONE_BY_ONE, PERMISSION_LABEL, isPermission, permissionsFor } from "@/lib/permissions";
 import { FakeDb, type Row } from "./woocommerce-fake-db";
 import { fakeWooShop } from "./woocommerce-fake-shop";
 
@@ -272,8 +272,12 @@ describe("el motivo es obligatorio: de la lista y con texto", () => {
     });
   });
 
-  it("quién puede: «Registrar estado a mano», solo owner y admin", () => {
-    expect(WOO_CANCEL_PERMISSION).toBe("master.set_status");
+  // Decisión del owner (26-10-2026): un permiso propio que él concede en Equipo.
+  it("quién puede: «Anular pedidos de WooCommerce», owner y admin por su acceso", () => {
+    expect(WOO_CANCEL_PERMISSION).toBe("orders.cancel_woo");
+    expect(isPermission(WOO_CANCEL_PERMISSION)).toBe(true);
+    expect(PERMISSION_LABEL[WOO_CANCEL_PERMISSION]).toBe("Anular pedidos de WooCommerce");
+    // Nadie pierde lo que tenía ayer con `master.set_status`.
     expect(permissionsFor(["owner"]).has(WOO_CANCEL_PERMISSION)).toBe(true);
     expect(permissionsFor(["admin"]).has(WOO_CANCEL_PERMISSION)).toBe(true);
     expect(permissionsFor(["vendedora"]).has(WOO_CANCEL_PERMISSION)).toBe(false);
@@ -281,6 +285,19 @@ describe("el motivo es obligatorio: de la lista y con texto", () => {
     // Ningún rol por función lo trae (tampoco Supervisión ni Administración).
     const allRoles = FUNCTIONAL_ROLES.map((r) => r.role);
     expect(permissionsFor(["vendedora"], [], allRoles).has(WOO_CANCEL_PERMISSION)).toBe(false);
+  });
+
+  it("el dueño se lo concede a una asesora en Equipo, sin darle «Registrar estado a mano»", () => {
+    const entry = GRANTED_ONE_BY_ONE.find((g) => g.permission === WOO_CANCEL_PERMISSION);
+    expect(entry).toBeDefined();
+    expect(entry!.ownerOnly).toBe(true);
+    expect("withAdminRole" in entry! && entry!.withAdminRole).toBe(true);
+    const grants = [{ permission: WOO_CANCEL_PERMISSION, granted: true }];
+    const asesora = permissionsFor(["vendedora"], grants, ["asesora"]);
+    expect(asesora.has(WOO_CANCEL_PERMISSION)).toBe(true);
+    expect(asesora.has("master.set_status")).toBe(false);
+    // Y a un admin se le puede quitar, como cualquier permiso.
+    expect(permissionsFor(["admin"], [{ permission: WOO_CANCEL_PERMISSION, granted: false }]).has(WOO_CANCEL_PERMISSION)).toBe(false);
   });
 });
 

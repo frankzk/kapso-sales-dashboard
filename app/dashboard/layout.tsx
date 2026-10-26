@@ -82,6 +82,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
         canEdit={!permissions.readOnly}
         canOverride={permissions.can("master.override_status")}
         canSetStatus={permissions.can("master.set_status")}
+        canCancelWoo={permissions.can("orders.cancel_woo")}
         canCreateGuide={permissions.can("aliclik.create_guide")}
         canCreateTandersGuide={permissions.can("tanders.create_guide")}
         canCreateShalomGuide={permissions.can("shalom.create_guide")}

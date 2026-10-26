@@ -182,6 +182,9 @@ async function PedidosContent({
       // «Registrar estado» a mano: owner y admin (MOM §16, 15-10-2026). Solo
       // decide qué se pinta; el servidor lo vuelve a preguntar por pedido.
       canSetStatus={perms.can("master.set_status")}
+      // «Anular pedido» de WooCommerce (MOM §38.15): owner, admin y quien el
+      // dueño marque en Equipo (26-10-2026). El servidor lo vuelve a preguntar.
+      canCancelWoo={perms.can("orders.cancel_woo")}
       canCreateGuide={perms.can("aliclik.create_guide")}
       canCreateTandersGuide={perms.can("tanders.create_guide")}
       canCreateShalomGuide={perms.can("shalom.create_guide")}
