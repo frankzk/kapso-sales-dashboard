@@ -2632,3 +2632,35 @@ export async function solveSwaypNovelty(input: {
   revalidatePath("/dashboard/pedidos");
   return { notice: `Novedad resuelta en Swayp: ${meta.label.toLowerCase()}.` };
 }
+
+/**
+ * Descarta un aviso de «Guías de Swayp que Kapta no tiene» (MOM §11.2, 0282): no
+ * es nuestra, o ya se resolvió por otro lado. Solo quien gestiona envíos y
+ * puede ver el aviso (RLS); queda quién y por qué. No toca ni la guía ni el
+ * pedido. Una guía que se registra en Kapta sale sola, sin descartarla.
+ */
+export async function dismissSwaypUnknownGuide(guideNumber: string, note: string): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+
+  const { data: row } = await sb
+    .from("swayp_unknown_guides")
+    .select("guide_number")
+    .eq("guide_number", guideNumber)
+    .maybeSingle();
+  if (!row) return { error: "No se encontró ese aviso de Swayp o no tienes acceso." };
+
+  const { error } = await createAdminSupabase()
+    .from("swayp_unknown_guides")
+    .update({ dismissed_at: new Date().toISOString(), dismissed_by: user.id, dismiss_note: note.trim().slice(0, 300) || null })
+    .eq("guide_number", guideNumber)
+    .is("dismissed_at", null);
+  if (error) return { error: errorDeBase(error, "descartar el aviso") };
+
+  revalidatePath("/dashboard/envios");
+  return { notice: `Guía ${guideNumber} descartada.` };
+}

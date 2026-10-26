@@ -16,7 +16,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
-import { mapSwaypState, SWAYP_STATES, swaypCustodyFor } from "@/lib/swayp";
+import { getGuide, mapSwaypState, SWAYP_STATES, swaypCustodyFor, swaypOptsFromEnv } from "@/lib/swayp";
+import { recordUnknownSwaypGuide } from "@/lib/swayp-unknown-guides";
 import { categoryOf, reconcileDeliveryStatus } from "@/lib/shipments";
 
 export interface SwaypWebhookBody {
@@ -280,8 +281,12 @@ export async function applySwaypState(
  * message:
  *   · An unknown state code is ignored rather than written, so a state Swayp
  *     adds later can't blank out a shipment's status.
- *   · A guide we don't know is ignored (guides created before the integration,
- *     or another integrator's traffic hitting the same URL).
+ *   · A guide we don't know is not applied to anything, but it is no longer
+ *     dropped in silence (26-10-2026, 0282): it goes to `swayp_unknown_guides`,
+ *     which Envíos shows until someone registers the guide in Kapta or
+ *     dismisses it. Usually it is a guide created straight in the Swayp panel
+ *     (#KP143754 was delivered that way while Kapta still had it «Por
+ *     despachar»).
  *   · Re-delivering the same state is a no-op, so Swayp's retries are safe.
  */
 export async function processSwaypWebhook(input: {
@@ -289,6 +294,8 @@ export async function processSwaypWebhook(input: {
   admin?: SupabaseClient;
   now?: Date;
   recompute?: ((admin: SupabaseClient, orderIds: string[]) => Promise<unknown>) | false;
+  /** Lo que se hace con el aviso de una guía que Kapta no tiene; `false` = nada (pruebas). */
+  recordUnknown?: typeof recordUnknownSwaypGuide | false;
 }): Promise<SwaypWebhookResult> {
   const expected = env.swaypWebhookToken();
   // También se recorta lo que llega: el token viaja copiado y pegado por dos
@@ -318,7 +325,19 @@ export async function processSwaypWebhook(input: {
     .select(SWAYP_SHIPMENT_COLUMNS)
     .eq("swayp_guide", guideNumber)
     .maybeSingle();
-  if (!shipment) return { status: "ignored", reason: "no_shipment" };
+  if (!shipment) {
+    const record = input.recordUnknown ?? recordUnknownSwaypGuide;
+    if (record) {
+      await record(admin, {
+        guideNumber,
+        state: stateId,
+        orgId: (process.env.SWAYP_INVENTORY_ORG_ID ?? "").trim() || null,
+        now: input.now,
+        fetchGuide: env.swaypEnabled() ? (n) => getGuide(swaypOptsFromEnv(), n) : null,
+      });
+    }
+    return { status: "ignored", reason: "no_shipment" };
+  }
 
   const row = shipment as unknown as SwaypShipmentRow;
   // El estado no cambia, pero SÍ se sella la hora: 0080 define

@@ -565,4 +565,6 @@
 \ir migrations/0280_leads_order_id_idx.sql
 \echo 'Applying 0281_olva_paid_arrival_notice.sql'
 \ir migrations/0281_olva_paid_arrival_notice.sql
+\echo 'Applying 0282_swayp_unknown_guides.sql'
+\ir migrations/0282_swayp_unknown_guides.sql
 \echo 'Done.'
