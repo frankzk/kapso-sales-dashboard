@@ -54,7 +54,7 @@ import type { RiderRateVersion } from "@/lib/rider-pay";
 import { isGroupGfRiderCourier } from "@/lib/couriers/catalog";
 import { custodyOnAssign, GF_SAME_DAY_CUTOFF_DEFAULT, isRiderPickupMode, limaClock, scheduledDay, type RiderPickupMode } from "@/lib/grupo-gf-courier";
 import { BLOCKED_REASON_LABEL, programDayLabel, programNeedsConfirm, takenIsAssignable, type BlockedReason } from "@/lib/dispatch-day";
-import { pastBoxDecision, pastBoxMessage, receivedFromLabel, replacedReceivedMessage } from "@/lib/gf-scan-return";
+import { pastBoxDecision, pastBoxMessage, receivedFromLabel, replacedReceivedMessage, REPORTED_STOP_MOVE_ERROR } from "@/lib/gf-scan-return";
 import { isReturningOwnOutput, officeReturnOutcome, replacedOutputIds, type ReturningOutputLike } from "@/lib/gf-replaced-output";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 import { riderPickupMode } from "@/lib/grupo-gf-courier-route-access";
@@ -3332,7 +3332,12 @@ export async function moveManifestItem(
         .update({ removed_at: now, removed_by: auth.userId, removal_reason: `Movido a ${rider.full_name}: ${cleanReason}` })
         .eq("id", item.id)
         .is("removed_at", null);
-  if (removeError) return { error: removeError.message };
+  if (removeError) {
+    // La parada se reportó después del escaneo (0230 la niega): un «No
+    // entregado» se recibe y se asigna escaneándolo otra vez (lib/gf-scan-return.ts).
+    if (/ya fue reportada/.test(removeError.message)) return { error: REPORTED_STOP_MOVE_ERROR };
+    return { error: removeError.message };
+  }
   // 3) meter en el destino (si ya salió y la verificación está apagada, entra en custodia con su parada)
   const { error: insertError } = targetInCustody
     ? await admin.rpc("gf_add_item_in_custody", { p_manifest_id: targetManifestId as string, p_shipment_id: shipmentId, p_store_id: item.store_id, p_actor: auth.userId })
@@ -3623,27 +3628,36 @@ export async function scanAssignToRider(
         message: replacedReceivedMessage(replacedScan.outputCode, fromName, box.dispatch_manifests.route_date, replacedScan.replacedBy),
       };
     }
-    // Una caja de un día ANTERIOR (lib/gf-scan-return.ts): escanearlo en
-    // oficina prueba que volvió. Un «No entregado» se recibe y se asigna en el
-    // mismo gesto; antes respondía «Ya estaba» y no entraba en la ruta de hoy.
-    if (box && box.dispatch_manifests.route_date < boxDay) {
+    // Una caja de un día ANTERIOR, o de HOY con la parada ya reportada
+    // (lib/gf-scan-return.ts): escanearlo en oficina prueba que volvió. Un «No
+    // entregado» se recibe y se asigna en el mismo gesto; antes respondía «Ya
+    // estaba» (día anterior) o «En la caja de otro» con un «Mover» que la base
+    // negaba (hoy, 26-10-2026: #KP142954). Hoy y con el mismo motorizado es el
+    // reintento del mismo día (§9.3): no se toca.
+    const pastDecision = box && box.dispatch_manifests.route_date <= boxDay
+      ? await (async () => {
+          const { data: stop } = await admin
+            .from("delivery_stops")
+            .select("status,outcome_reason")
+            .eq("shipment_id", shipmentId)
+            .eq("dispatch_manifest_id", box.manifest_id)
+            .order("reported_at", { ascending: false, nullsFirst: false })
+            .limit(1)
+            .maybeSingle();
+          return pastBoxDecision({
+            boxRouteDate: box.dispatch_manifests.route_date,
+            targetDay: boxDay,
+            stopStatus: (stop?.status as string | null) ?? null,
+            outcomeReason: (stop?.outcome_reason as string | null) ?? null,
+            sameRider: box.dispatch_manifests.rider_id === rider.id,
+          });
+        })()
+      : null;
+    if (box && pastDecision && pastDecision !== "misma_caja") {
       const fromName = box.dispatch_manifests.driver_name ?? "otro motorizado";
-      const { data: stop } = await admin
-        .from("delivery_stops")
-        .select("status,outcome_reason")
-        .eq("shipment_id", shipmentId)
-        .eq("dispatch_manifest_id", box.manifest_id)
-        .order("reported_at", { ascending: false, nullsFirst: false })
-        .limit(1)
-        .maybeSingle();
-      const decision = pastBoxDecision({
-        boxRouteDate: box.dispatch_manifests.route_date,
-        targetDay: boxDay,
-        stopStatus: (stop?.status as string | null) ?? null,
-        outcomeReason: (stop?.outcome_reason as string | null) ?? null,
-      });
-      if (decision === "entregado" || decision === "sin_reporte") {
-        return { ...line, status: "no_elegible", manifestId: box.manifest_id, message: pastBoxMessage(decision, fromName, box.dispatch_manifests.route_date) };
+      // Entregado, sin reporte o reintento del mismo día: se dice y no se toca.
+      if (pastDecision !== "recibir_y_asignar") {
+        return { ...line, status: "no_elegible", manifestId: box.manifest_id, message: pastBoxMessage(pastDecision, fromName, box.dispatch_manifests.route_date) };
       }
       const { error: returnError } = await admin.rpc("gf_return_to_office", { p_item_id: box.id, p_actor: auth.userId });
       if (returnError) return { ...line, status: "no_elegible", manifestId: box.manifest_id, message: returnError.message };

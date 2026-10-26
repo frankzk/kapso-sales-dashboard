@@ -10,7 +10,7 @@
 //   motorizado_entrega    → PhotoCapture → /api/reparto/foto → evidencia de la parada
 //   supervisor_retiro     → lookup + removeManifestItem(…)  → package_removed
 
-import { useEffect, useEffectEvent, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { DispatchScanner } from "@/components/dispatch-scanner";
 import { PhotoCapture } from "@/components/photo-capture";
 import { DispatchCamera } from "@/components/dispatch-camera";
@@ -61,6 +61,18 @@ interface Props {
   progress?: ScanProgress;
   /** «ops»: el mundo de operación de Despacho del día. */
   look?: "default" | "ops";
+  /**
+   * Solo en `supervisor_asignacion` con la cámara continua: el arreglo que la
+   * última línea ofrece dentro del aviso de la cámara, sin cerrarla («Mover a
+   * esta caja», 26-10-2026). Su error o su aviso se dicen en el mismo aviso.
+   */
+  lineAction?: (line: ScanAssignLine) => ScanLineAction | null;
+}
+
+export interface ScanLineAction {
+  label: string;
+  busyLabel?: string;
+  run: () => Promise<{ error?: string | null; notice?: string | null }>;
 }
 
 /**
@@ -71,7 +83,7 @@ function lineNeedsAttention(line: ScanAssignLine): boolean {
   return ["desconocido", "no_elegible", "bloqueado_efectivo", "programado_otro_dia"].includes(line.status);
 }
 
-export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "entrega", photoPath = null, label, disabled = false, onResult, assign, onQueue, onPending, onPendingCountChange, onCameraOpenChange, compact = false, continuous = false, progress, look = "default" }: Props) {
+export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "entrega", photoPath = null, label, disabled = false, onResult, assign, onQueue, onPending, onPendingCountChange, onCameraOpenChange, compact = false, continuous = false, progress, look = "default", lineAction }: Props) {
   const plan = scanActionPlan(context);
   const [pending, setPending] = useState(0);
   const reportPendingCount = useEffectEvent((count: number) => onPendingCountChange?.(count));
@@ -85,8 +97,11 @@ export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "e
   const [cameraOpen, setCameraOpen] = useState(false);
   const reportCameraOpen = useEffectEvent((open: boolean) => onCameraOpenChange?.(open));
   useEffect(() => { reportCameraOpen(cameraOpen); }, [cameraOpen]);
-  // Última lectura, para decirla dentro de la cámara sin cerrarla.
-  const [lastRead, setLastRead] = useState<{ scope: string; result: { ok: boolean; text: string } } | null>(null);
+  // Última lectura, para decirla dentro de la cámara sin cerrarla. `action`:
+  // su arreglo en el mismo aviso; `token` la distingue de la siguiente.
+  const [lastRead, setLastRead] = useState<{ scope: string; token: number; result: { ok: boolean; text: string; warn?: boolean }; action?: ScanLineAction | null } | null>(null);
+  const readToken = useRef(0);
+  const [actionBusy, setActionBusy] = useState(false);
   const reportResult = (r: ScanActionResult, code: string) => {
     setFailedReads((current) => {
       const next = { ...current };
@@ -95,9 +110,31 @@ export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "e
       else delete next[key];
       return next;
     });
-    if (continuous) setLastRead(r.error ? { scope: scanScope, result: { ok: false, text: r.error } } : r.notice ? { scope: scanScope, result: { ok: true, text: `✓ ${r.notice}` } } : null);
+    if (continuous) {
+      const token = ++readToken.current;
+      const action = !r.error && r.line && lineAction ? lineAction(r.line) : null;
+      setLastRead(r.error ? { scope: scanScope, token, result: { ok: false, text: r.error } }
+        : action && r.notice ? { scope: scanScope, token, result: { ok: true, warn: true, text: r.notice }, action }
+        : r.notice ? { scope: scanScope, token, result: { ok: true, text: `✓ ${r.notice}` } }
+        : null);
+    }
     onResult(r);
   };
+  /** El arreglo del aviso: su resultado reemplaza el aviso, salvo que ya haya otra lectura. */
+  async function runLastAction() {
+    const read = lastRead;
+    if (!read?.action || actionBusy) return;
+    setActionBusy(true);
+    try {
+      const r = await read.action.run();
+      const result = r.error ? { ok: false, text: r.error } : { ok: true, text: `✓ ${r.notice ?? "Listo."}` };
+      setLastRead((current) => (current && current.token === read.token ? { scope: current.scope, token: current.token, result, action: null } : current));
+    } catch {
+      setLastRead((current) => (current && current.token === read.token ? { scope: current.scope, token: current.token, result: { ok: false, text: "No se pudo completar. Vuelve a escanearlo." }, action: null } : current));
+    } finally {
+      setActionBusy(false);
+    }
+  }
   function execute(raw: string) {
     const code = raw.trim();
     if (!code || disabled) return;
@@ -177,6 +214,9 @@ export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "e
         continuous={continuous}
         progress={progress}
         status={lastRead?.scope === scanScope ? lastRead.result : null}
+        statusAction={lastRead?.scope === scanScope && lastRead.action
+          ? { label: lastRead.action.label, busyLabel: lastRead.action.busyLabel, busy: actionBusy, onClick: () => void runLastAction() }
+          : null}
         pending={pending}
         lastCaptured={lastCaptured?.scope === scanScope ? lastCaptured.code : null}
         issues={scanIssues}

@@ -18,6 +18,7 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { alreadyInBoxChip } from "@/lib/gf-scan-already-in-box";
+import { scanLineCanMove } from "@/lib/gf-scan-return";
 import Link from "next/link";
 import { OrderLink } from "@/components/order-link";
 import { useRouter } from "next/navigation";
@@ -265,8 +266,8 @@ export function DispatchDayBoard(props: Props) {
    * esté en poder del otro (0230). El resultado se dice EN LA FILA — el aviso de
    * arriba quedaba fuera de la pantalla y parecía que el botón no hacía nada.
    */
-  async function moveScanned(line: ScanAssignLine) {
-    if (!line.manifestId || !line.shipmentId || !riderId) return;
+  async function moveScanned(line: ScanAssignLine): Promise<{ error?: string; notice?: string }> {
+    if (!line.manifestId || !line.shipmentId || !riderId) return { error: "Elige el motorizado de la caja." };
     const from = line.riderName ?? "otro motorizado";
     setLines((cur) => cur.map((l) => (l === line ? { ...l, status: "procesando", message: "Moviendo…", moveError: null } : l)));
     const reason = `Escaneado en oficina para la caja de ${riderName}`;
@@ -282,7 +283,9 @@ export function DispatchDayBoard(props: Props) {
         ? { ...line, moveError: result.error }
         : { ...line, status: "asignado", riderName, receivedFrom: from, moveError: null, message: `Movido de la caja de ${from}.` };
     }));
-    if (!("error" in result && result.error)) scheduleRefresh();
+    if ("error" in result && result.error) return { error: result.error };
+    scheduleRefresh();
+    return { notice: `${line.orderName ?? line.code} pasó de la caja de ${from} a la de ${riderName}.` };
   }
 
   /** «Asignar igual» un QR programado para otro día: su línea vuelve a «asignando…». */
@@ -864,6 +867,7 @@ export function DispatchDayBoard(props: Props) {
                 onQueue={(code) => setTray((cur) => addToTray(cur, code))}
                 onPending={pendingLine}
                 onResult={(r) => { if (r.line) pushLine(r.line); }}
+                lineAction={(l) => (riderId && scanLineCanMove(l) ? { label: "Mover a esta caja", busyLabel: "Moviendo…", run: () => moveScanned(l) } : null)}
               />
             ) : (
               <Banner tone="warn">Tu rol no organiza rutas: puedes mirar, no asignar.</Banner>

@@ -18,6 +18,7 @@ export function DispatchCamera({
   continuous = false,
   progress,
   status,
+  statusAction = null,
   pending = 0,
   lastCaptured,
   issues = [],
@@ -36,8 +37,16 @@ export function DispatchCamera({
   continuous?: boolean;
   /** Avance bajo el visor: «Confirmados X de N · faltan Y». */
   progress?: ScanProgress;
-  /** Última lectura: qué pasó con el código anterior, sin cerrar la cámara. */
-  status?: { ok: boolean; text: string } | null;
+  /**
+   * Última lectura: qué pasó con el código anterior, sin cerrar la cámara.
+   * `warn`: se puede resolver aquí mismo con `statusAction` (ámbar).
+   */
+  status?: { ok: boolean; text: string; warn?: boolean } | null;
+  /**
+   * Arreglo de la última lectura dentro del aviso, sin cerrar la cámara:
+   * «Mover a esta caja» un paquete que está en la caja de otro (26-10-2026).
+   */
+  statusAction?: { label: string; busy?: boolean; busyLabel?: string; onClick: () => void } | null;
   /** Read locally, but not yet confirmed by the server. */
   pending?: number;
   lastCaptured?: string | null;
@@ -140,9 +149,19 @@ export function DispatchCamera({
         </div>
         <div role="status" aria-live="polite" aria-atomic="true" className={cn(
           "sticky top-0 z-10 border-b px-5 py-3 text-base font-semibold leading-snug break-words",
-          status ? (status.ok ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-red-200 bg-red-50 text-red-800") : "border-slate-200 bg-slate-50 text-slate-600",
+          status ? (status.warn ? "border-amber-200 bg-amber-50 text-amber-900" : status.ok ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-red-200 bg-red-50 text-red-800") : "border-slate-200 bg-slate-50 text-slate-600",
         )}>
           {status?.text ?? (pending > 0 ? "Lectura recibida" : "Apunta al QR del pedido para escanear.")}
+          {status && statusAction && (
+            <button
+              type="button"
+              disabled={statusAction.busy}
+              onClick={statusAction.onClick}
+              className="mt-2 flex min-h-11 w-full items-center justify-center rounded-lg border border-amber-300 bg-white px-4 text-sm font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-60 sm:w-auto"
+            >
+              {statusAction.busy ? (statusAction.busyLabel ?? "Un momento…") : statusAction.label}
+            </button>
+          )}
           {pending > 0 && <p className="mt-1 text-sm font-medium text-slate-700">
             {lastCaptured ? `Leído: ${lastCaptured}. ` : ""}{pending} por confirmar. Puedes seguir escaneando.
           </p>}

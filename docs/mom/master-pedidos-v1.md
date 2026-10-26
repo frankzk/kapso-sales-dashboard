@@ -12698,8 +12698,8 @@ Implementación: `lib/gf-replaced-output.ts`, `lib/gf-retry.ts`
 `0248_gf_replace_output.sql`. Pruebas en `test/gf-replace-output.test.ts` y
 `scripts/sql/gf_replace_output_smoke.sql`.
 
-**Escanear un «No entregado» de una caja anterior lo recibe y lo asigna
-(29-09-2026).** #KP136779 y #KP136896 salieron el 26/09 con Yhoni y volvieron
+**Escanear un «No entregado» de una caja anterior —o de hoy, desde el
+26-10-2026— lo recibe y lo asigna (29-09-2026).** #KP136779 y #KP136896 salieron el 26/09 con Yhoni y volvieron
 «No entregado · reprogramado». La ruta se cerró el 28/09, pero nadie los
 recibió en oficina, así que seguían dentro de esa caja: cerrar la ruta no vacía
 la caja. El 29/09, con los paquetes en la mano, el escaneo de «Por QR»
@@ -12720,8 +12720,46 @@ prueba que volvió, igual que en «Devoluciones».
 Si algo impide asignarlo después de recibirlo (programado para otro día,
 límite de efectivo), la línea lo dice y el paquete queda recibido, «por
 asignar». Si el cliente ya no lo quiere (Repro Lima, «Desarmar y cerrar»,
-§9.5), lo recibe y no lo asigna (abajo). Lo del **mismo día** no cambia: «Ya
-estaba» es solo la caja de ese día, y la de otro motorizado ofrece «Mover».
+§9.5), lo recibe y no lo asigna (abajo).
+
+**La caja de HOY con la parada reportada también (26-10-2026, decisión del
+owner).** #KP142954 salió el 26/10 en la caja de Yhoni, que lo reportó «No
+entregado», y volvió a la oficina ese mismo día. Al escanearlo para la caja de
+Alexis del 26/10 la línea decía «Está en la caja de Yhoni del 2026-10-26» y
+«Mover» fallaba («Esa parada ya fue reportada: se resuelve por su reporte»):
+`gf_office_reclaim` (0230) solo recupera una parada pendiente, y la regla de
+arriba solo miraba cajas de días anteriores. No había camino. Ahora la regla
+mira las cajas del día que se arma o anteriores (`pastBoxDecision`, mismo RPC
+`gf_return_to_office`, misma relectura de custodia y de `outputWasReplaced`,
+mismos avisos de Repro Lima y «no lo quiere», mismo programa y mismo límite de
+efectivo al asignar). Sin migración: el RPC no mira el día.
+
+| Caja de HOY donde está, reporte de su parada | Qué hace el escaneo |
+| --- | --- |
+| De otro motorizado, «No entregado» (rechazo incluido) | Lo recibe en oficina y lo asigna a la caja que se arma. La chapa dice «volvió de Yhoni del 26/10». |
+| Del MISMO motorizado, «No entregado» | No lo toca: es el reintento del mismo día con la misma salida (§9.3). Sigue en su caja y él lo reporta otra vez en su misma parada. La línea lo dice. |
+| «Entregado» | No hace nada: lo dice (antes ofrecía un «Mover» que la base negaba). |
+| Sin reporte (o la caja todavía no salió) | La regla de siempre: «Ya estaba» si es de ese motorizado; si es de otro, «En la caja de…» con «Mover» (0230, abajo). |
+
+- **La ruta de Yhoni no cambia.** Su parada queda «No entregado» con su motivo
+  y su foto: es su reporte y su liquidación, como cuando se recibe con
+  «Recibir en oficina». Su caja registra que el paquete salió («No entregado
+  por Yhoni (…): recibido en oficina», evento `returned_to_office`), así que
+  al cerrar su ruta no aparece como devolución física pendiente. No suma
+  efectivo a su cuadre.
+- **La ruta de Alexis suma una parada nueva** cuando su carga se entrega: la
+  unicidad es por ruta y pedido, y solo puede haber una parada abierta por
+  salida (0192); la de Yhoni ya no está abierta. En Repro Lima es el intento
+  siguiente (la parada que nació después, §9.5).
+- **La segunda vuelta con el mismo motorizado no se recibe.** Su ruta del día
+  ya tiene la parada de ese pedido y no admite otra: recibirlo y asignárselo
+  dejaría el paquete en su carga sin parada que reportar. El reintento del
+  mismo día (§9.3) es el camino; para otro motorizado, se escanea en su caja.
+- **«Mover» sobre una parada que se reportó después del escaneo** ya no dice el
+  mensaje de la base: pide volver a escanearlo, y el escaneo decide por esta
+  regla (`REPORTED_STOP_MOVE_ERROR`).
+
+Pruebas en `test/gf-scan-return.test.ts` y `test/gf-scan-same-day-return.test.ts`.
 
 **«Ya estaba» dice la carga y lo que falta (12-10-2026).** #KP139615 volvió de
 la ruta del 08/10 y el escaneo lo puso en la Carga 5 de Alexis, una carga nueva
@@ -12748,6 +12786,15 @@ custodia a la empresa y lo mete en la caja del segundo. Solo con la parada
 de la caja y del pedido. Si algo falla, el motivo se dice en la misma fila del
 escaneo; antes salía arriba de la página, fuera de la pantalla del celular, y
 parecía que el botón no hacía nada.
+
+**«Mover a esta caja» dentro de la cámara (26-10-2026).** Con la cámara
+continua abierta —«Agregar pedidos» de la caja y «Por QR» de Despacho del
+día—, una lectura «Está en la caja de…» que se puede mover trae el botón
+«Mover a esta caja» dentro del aviso de la cámara (en ámbar), sin cerrarla. El
+resultado se dice en el mismo aviso: verde si pasó, rojo con el motivo si
+falló. La fila de la lista conserva su «Mover». «Agregar pedidos» mueve también
+con el paquete en la mano (`inHand`, como «Por QR»). Pruebas en
+`test/scan-camera-move.test.ts`.
 
 **Devoluciones de Almacén también recibe lo que vuelve de Grupo GF
 (05-10-2026).** El escáner de Almacén → Devoluciones solo aceptaba Tanders y
@@ -12779,7 +12826,7 @@ La caja va al anaquel de ese día, no al estante de reprogramados.
 - **Por las tres puertas** que llaman a `gf_return_to_office`: «Recibir en
   oficina» de Despacho del día (lista, QR de «Devoluciones», número de pedido
   y cierre de una ruta: `returnUndeliveredShipments`), Devoluciones de Almacén
-  (`receiveGrupoGfReturn`) y el escaneo de una caja anterior en «Por QR»
+  (`receiveGrupoGfReturn`) y el escaneo de una caja anterior (o de hoy) en «Por QR»
   (`scanAssignToRider`, antes de comprobar el programa). Solo lo que vuelve a
   «por asignar»: la caja reemplazada, que va a stock, no programa nada.
 - **Qué acuerdos.** Con Grupo GF, «Mantener» o «Reimprimir el rótulo de la
