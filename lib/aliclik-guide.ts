@@ -49,6 +49,7 @@ import { aliclikDoorBan } from "@/lib/door-rejection";
 import { DUPLICATE_READ_ERROR, loadAliclikDuplicateHold } from "@/lib/aliclik-duplicate-access";
 import type { DuplicateHold } from "@/lib/aliclik-duplicate";
 import { classifyOperation } from "@/lib/order-macro-stage";
+import { limaTransportPolicy } from "@/lib/aliclik-lima";
 import { normalizePhone } from "@/lib/phone";
 import { pinSinCorroborar } from "@/lib/pin-corroborado";
 import { categoryOf } from "@/lib/shipments";
@@ -661,7 +662,7 @@ export async function previewAliclikGuideFor(
   // Los express fuera de su ventana se marcan no seleccionables aquí, para no
   // dejar que la operadora rellene todo y se coma el 400 al final.
   const nowHHMM = limaTimeHHMM();
-  const annotated = couriers.map((c) => {
+  const quoted = couriers.map((c) => {
     if (!c.flagDeliveryExpress) return { ...c, selectable: true };
     const open = canScheduleExpress(nowHHMM, c.scheduleExpressStart, c.scheduleExpressEnd);
     return {
@@ -672,10 +673,16 @@ export async function previewAliclikGuideFor(
         : `Express disponible solo entre ${c.scheduleExpressStart ?? "?"} y ${c.scheduleExpressEnd ?? "?"} (ahora ${nowHHMM} en Lima).`,
     };
   });
+  // En Lima solo AUTOECOM; si Aliclik no lo ofrece, el que ofrezca, con aviso
+  // (MOM §9, «Aliclik en Lima», 26-10-2026). La creación vuelve a cotizar y
+  // exige `selectable`, así que la regla vale también del lado del servidor.
+  const lima = classifyOperation(ctx.row) === "lima" ? limaTransportPolicy(quoted) : null;
+  const annotated = lima?.couriers ?? quoted;
+  const warnings = lima?.warning ? [...(resolved.warnings ?? []), lima.warning] : resolved.warnings;
 
   return {
     ok: true,
-    warnings: resolved.warnings,
+    warnings,
     warehouseId: quotedWarehouse.id,
     warehouseName: quotedWarehouse.name,
     items: priced.items,

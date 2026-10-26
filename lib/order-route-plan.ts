@@ -580,14 +580,17 @@ export function buildOrderRoutePlan(input: OrderRoutePlanInput): OrderRoutePlan 
     const groupCutoff = sameDayCutoffMinute(input.grupoGfCourier?.sameDayCutoff);
     // Axel ya no se sugiere (09-10-2026): casi no se usa, y sugerirlo antes
     // del mediodía lo ponía con el anillo azul por delante de Tanders.
-    const first = input.grupoGfCourier?.eligible && minute <= groupCutoff ? "propio" : "tanders";
+    // Tanders deja de crear guías y Aliclik entra a Lima, solo con AUTOECOM
+    // (26-10-2026, decisión del owner, MOM §9 «Aliclik en Lima»): ocupa el
+    // lugar de Tanders detrás de Grupo GF.
+    const first = input.grupoGfCourier?.eligible && minute <= groupCutoff ? "propio" : "aliclik";
     routes = [
       { ...groupGf, recommended: first === "propio" && groupGf.availability !== "blocked" },
       candidate(
-        "tanders",
-        minute <= 16 * 60 ? "Ruta del día siguiente" : "Siguiente programación",
-        "Integración directa con Tanders y rótulo del courier.",
-        { recommended: first === "tanders" },
+        "aliclik",
+        "Según la cotización de Aliclik",
+        "Aliclik con AUTOECOM: guía y rótulo de Aliclik.",
+        { recommended: first === "aliclik" },
       ),
       swaypCandidate(input, false),
       // Plegados en «Otros couriers»: siguen disponibles, no se sugieren.

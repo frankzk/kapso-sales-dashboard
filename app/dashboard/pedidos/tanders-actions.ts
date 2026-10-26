@@ -37,6 +37,7 @@ import { fetchOrderById } from "@/lib/shopify";
 import { sweepTandersPayments, type SweepReport } from "@/lib/tanders/payment-sweep";
 import { sweepTandersStatus, type TandersStatusReport } from "@/lib/tanders/status-sweep";
 import { TandersApiError } from "@/lib/tanders/types";
+import { TANDERS_NEW_GUIDES_ENABLED, TANDERS_NEW_GUIDES_OFF_MESSAGE } from "@/lib/tanders/new-guides";
 import type { OrderMasterRow } from "@/lib/types";
 
 const MASTER_PATH = "/dashboard/pedidos";
@@ -336,6 +337,10 @@ export async function createTandersGuide(
   if (!perms.can("tanders.create_guide")) {
     return { error: "Tu rol no permite crear guías de Tanders." };
   }
+  // Desde el 26-10-2026 Tanders no crea guías nuevas (MOM §9, «Aliclik en
+  // Lima»). El plan de rutas ya no lo ofrece; esto cierra la acción, que es
+  // invocable directamente.
+  if (!TANDERS_NEW_GUIDES_ENABLED) return { error: TANDERS_NEW_GUIDES_OFF_MESSAGE };
 
   const ctx = await authorize(orderId);
   if (!ctx) return { error: "Sin acceso a este pedido." };
