@@ -10540,6 +10540,12 @@ estables:
      busca cada vez por el celular.
    - **Grupo GF:** es una de las integraciones con credenciales únicas de Grupo
      GF; para una organización cliente queda apagada (§29.15.1).
+   - **El celular en grande (26-10-2026, owner):** arriba de la conversación,
+     «Celular de la clienta» en letra grande, agrupado de a tres
+     (`+51 973 972 968`), con el botón «Copiar celular», que copia el número
+     tal cual está guardado. Hay asesoras con miopía que lo copian para
+     buscarlo en Chatby; en la cabecera de la ficha va en letra chica
+     (`ChatbyPhone`).
    - Implementación: `lib/chatby-conversation.ts` (reglas puras),
      `lib/chatby-api.ts` (las dos llamadas, el tope y la caché),
      `loadOrderChatby` en `app/dashboard/pedidos/actions.ts` y

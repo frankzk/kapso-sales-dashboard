@@ -11,7 +11,8 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/components/ui";
 import { Badge, Banner, OpsButton, SECTION_CARD, SectionHead, Skeleton, opsButtonClass } from "@/components/ops-ui";
-import { IconAlert, IconArrowUpRight, IconImage, IconRepeat } from "@/components/icons";
+import { IconAlert, IconArrowUpRight, IconCheck, IconCopy, IconImage, IconRepeat } from "@/components/icons";
+import { copyLabel, useCopyToClipboard } from "@/components/copy-button";
 import { loadOrderChatby } from "@/app/dashboard/pedidos/actions";
 import {
   CHATBY_MESSAGES_LIMIT,
@@ -157,13 +158,45 @@ function Thread({ messages, orderName }: { messages: ChatbyMessage[]; orderName:
 
 type LoadState = { status: "cargando" } | { status: "listo"; result: ChatbyConversation };
 
+/**
+ * El celular de la clienta en grande, con su botón de copiar (owner,
+ * 26-10-2026): hay asesoras con miopía que lo copian para buscarlo en Chatby o
+ * en WhatsApp, y en la cabecera de la ficha va en letra chica. Se ve agrupado
+ * de a tres para leerlo sin perderse; se copia tal cual está guardado.
+ */
+export function ChatbyPhone({ phone }: { phone: string | null }) {
+  const { state, copy } = useCopyToClipboard();
+  if (!phone) return null;
+  const digits = phone.replace(/\D/g, "");
+  const shown = digits.length === 11 && digits.startsWith("51")
+    ? `+51 ${digits.slice(2, 5)} ${digits.slice(5, 8)} ${digits.slice(8)}`
+    : phone;
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-lg bg-wash px-4 py-3 ring-1 ring-line">
+      <div className="min-w-0">
+        <p className="text-[13px] font-medium leading-5 text-ink-600">Celular de la clienta</p>
+        <p className="text-2xl font-semibold leading-8 tracking-wide text-ink-900 tabular-nums sm:text-3xl sm:leading-10">
+          {shown}
+        </p>
+      </div>
+      <OpsButton onClick={() => copy(phone)} className="ml-auto h-11 px-4 text-[15px]" aria-label="Copiar el celular de la clienta">
+        {state === "ok" ? <IconCheck aria-hidden /> : <IconCopy aria-hidden />}
+        <span aria-live="polite">{copyLabel(state, "Copiar celular")}</span>
+      </OpsButton>
+    </div>
+  );
+}
+
 export function OrderChatbyPanel({
   orderId,
   orderName,
+  phone = null,
   onCustomerMessages,
 }: {
   orderId: string;
   orderName: string | null;
+  /** El celular de la clienta, en grande y con «Copiar celular» arriba de la conversación. */
+  phone?: string | null;
   /** Cuántos de los mensajes traídos son de la clienta, para la cifra de la pestaña; null mientras no se sabe. */
   onCustomerMessages?: (count: number | null) => void;
 }) {
@@ -219,6 +252,8 @@ export function OrderChatbyPanel({
           </>
         }
       />
+
+      <ChatbyPhone phone={phone} />
 
       <div aria-live="polite" aria-busy={loading}>
         {loading || !state ? (

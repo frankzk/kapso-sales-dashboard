@@ -2282,6 +2282,7 @@ export function OrderDrawer({
               <OrderChatbyPanel
                 orderId={orderId}
                 orderName={detail.row.order_name}
+                phone={detail.row.customer_phone ?? null}
                 onCustomerMessages={setChatbyCustomerMessages}
               />
             </div>
