@@ -56,7 +56,8 @@ describe("abrir la ficha no pasa por una recarga de toda la cola", () => {
     // lead cayera en la vista; si no caía, no se abría nada y en silencio.
     const leads = read("components/leads.tsx");
     expect(leads).toContain("async function abrirLeadPorId(");
-    expect(leads).toContain("previa?: LeadRow | null): Promise<boolean>");
+    expect(leads).toContain("previa?: LeadRow | null,");
+    expect(leads).toContain("): Promise<boolean> {");
     expect(leads).toContain("onAbrir={(leadId) => abrirLeadPorId(leadId)}");
   });
 });
