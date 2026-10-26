@@ -5140,6 +5140,47 @@ misma puerta que el webhook (`applySwaypState`, `lib/swayp-ingest.ts`). Reglas:
   sin datos de clientes— para fijar la lectura con lo que la API manda de
   verdad.
 
+#### Guías de Swayp que Kapta no tiene (26-10-2026, pedido del owner)
+
+**Qué pasaba.** El webhook de Swayp manda `{guide_number, state}` y Kapta busca
+esa guía en `shipments.swayp_guide`. Si no estaba, el aviso se **descartaba en
+silencio** (`no_shipment`). Pasa cuando alguien crea la guía directo en el panel
+de Swayp y no la registra en Kapta. Con #KP143754 (Independencia, Lima): la caja
+se armó el 24-10 «sin courier definido», salió por Swayp desde su panel, Swayp
+avisó la entrega y Kapta la seguía viendo **Por despachar · asignado a
+courier**.
+
+**Qué hace ahora.**
+
+- El aviso de una guía desconocida se guarda en `swayp_unknown_guides` (0282):
+  una fila por número, con el último estado, cuántas veces avisó y cuándo. La
+  primera vez Kapta le pregunta a Swayp por la guía (`GET /v2/guias/<n>`, tope
+  de 4 s) y guarda solo el destinatario, su celular y la referencia, buscados
+  por el nombre de los campos (`swaypGuideContact`); un número de pedido
+  escrito en la guía (#KP…, #AUR…) gana como referencia. El webhook responde
+  igual (`ignored · no_shipment`) y nunca crea una guía ni toca un pedido.
+- **Envíos** enseña, bajo la cabecera, la tarjeta **«Guías de Swayp que Kapta no
+  tiene»**: el número (para copiar), el estado de Swayp, cuándo avisó, el
+  destinatario y **el pedido sugerido** («la guía lo nombra», o «mismo
+  celular»: el pedido más reciente con ese celular creado hasta 45 días antes
+  del aviso), con el enlace a su ficha. Arriba dice cómo registrarla: en la
+  ficha, Operar → ruta Swayp → «N° de guía Swayp» con ese número (con el número
+  escrito no se pide otra guía a Swayp; el barrido de estados la lee y el
+  pedido avanza solo).
+- **Sale sola** cuando la guía ya está en `shipments` (se registró). Si no es
+  nuestra o ya se resolvió por otro lado, **«Descartar»** con el motivo
+  (`dismissSwaypUnknownGuide`: quién, cuándo y por qué; solo quien gestiona
+  envíos).
+- La ve la organización de la cuenta de Swayp (`SWAYP_INVENTORY_ORG_ID`, como
+  el stock); los pedidos sugeridos, solo de las tiendas que la persona ve.
+- Lo anterior a la 0282 no se recupera: el webhook no lo guardaba.
+
+Implementación: `lib/swayp-unknown-guides.ts` (`recordUnknownSwaypGuide`,
+`swaypGuideContact`), `processSwaypWebhook` en `lib/swayp-ingest.ts`,
+`lib/swayp-unknown-guides-access.ts` (`getSwaypUnknownGuides`),
+`components/swayp-unknown-guides.tsx` y `db/migrations/0282_swayp_unknown_guides.sql`.
+Pruebas: `test/swayp-unknown-guides.test.ts`.
+
 ### 11.3 Quién emite el número de guía al reprogramar
 
 Al reprogramar hacia Swayp desde Reproprovincia, el número de guía **lo emite

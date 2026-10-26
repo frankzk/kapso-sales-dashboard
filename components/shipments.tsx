@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { SWAYP_SUNDAY_ERROR, isSwaypDispatchDay } from "@/lib/swayp-dispatch-days";
 import { SwaypDispatchDateSelect } from "@/components/swayp-dispatch-date-select";
 import { cn } from "@/components/ui";
@@ -447,6 +447,7 @@ export function ShipmentsBoard({
   reprogram,
   teamScore,
   initialOpenId,
+  swaypUnknown,
 }: {
   stores: StoreSummary[];
   view: ShipmentView;
@@ -456,6 +457,8 @@ export function ShipmentsBoard({
   /** «Gestión por persona» de hoy; los otros rangos se piden al elegirlos. */
   teamScore?: TeamScore | null;
   initialOpenId?: string | null;
+  /** «Guías de Swayp que Kapta no tiene» (MOM §11.2, 0282), bajo la cabecera; null si no hay. */
+  swaypUnknown?: ReactNode;
 }) {
   const router = useRouter();
   const [openId, setOpenId] = useState<string | null>(initialOpenId ?? null);
@@ -1044,6 +1047,8 @@ export function ShipmentsBoard({
           </div>
         </div>
       </header>
+
+      {swaypUnknown}
 
       {/* LA COLA VA PRIMERO. Las métricas de 30 días y el marcador por asesora
           son lectura de dirección, no de quien marca el teléfono: cada apertura

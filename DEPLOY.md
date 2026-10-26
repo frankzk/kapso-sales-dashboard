@@ -5202,3 +5202,30 @@ pasada a esa altura) y el mes 5,453 pedidos y S/ 1,019,031 (+17 % y +32 %
 contra setiembre a esa altura); las dos coinciden con contar `orders` directo.
 
 **Marcha atrás.** Revertir el commit. No escribe nada en la base.
+
+### 26-10-2026 · Guías de Swayp que Kapta no tiene (0282, MOM §11.2)
+
+Pedido del owner (#KP143754: salió por Swayp desde su panel, Swayp avisó la
+entrega y el webhook la descartó porque la guía no estaba en Kapta). Ahora ese
+aviso se guarda y Envíos lo enseña con el pedido sugerido hasta que la guía se
+registra o se descarta. Sin crons ni variables nuevas (usa
+`SWAYP_INVENTORY_ORG_ID`, que ya está).
+
+1. **La 0282, cuando convenga** (antes o después del código). Solo crea la
+   tabla `swayp_unknown_guides` con su RLS; no toca filas:
+
+   ```sql
+   \i db/migrations/0282_swayp_unknown_guides.sql
+   ```
+
+   **El código no la necesita para arrancar**: sin ella el webhook descarta
+   como antes (registra el fallo y responde igual) y Envíos no enseña la
+   tarjeta. **Comprobar:** `select count(*) from swayp_unknown_guides;` (0 al
+   principio: lo anterior a la 0282 no se guardaba).
+2. **El código**, por el camino de siempre.
+3. **Comprobar** con el próximo aviso de Swayp de una guía que no está en
+   Kapta: aparece en Envíos, bajo la cabecera, con su número, su estado y el
+   pedido sugerido; al registrar la guía en la ficha (Operar → Swayp → «N° de
+   guía Swayp») sale de la lista sola.
+
+**Marcha atrás.** Revertir el commit; la tabla puede quedarse (nada más la lee).
