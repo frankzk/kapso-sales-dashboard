@@ -1,6 +1,3 @@
-import { readFileSync } from "node:fs";
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { addDays, localClock, localMidnightUtc } from "@/lib/local-day";
 import {
@@ -12,15 +9,12 @@ import {
   todayWindows,
   type TodayOrderRow,
 } from "@/lib/today-sales";
-import { TodayPulse } from "@/components/today-pulse";
 
 // «Hoy» del Consolidado (MOM §17.5): las ventas del día contra ayer a esta
 // misma hora. Lo que se fija: el día local de cada tienda, que los cancelados
 // de hoy vayan aparte y el ingreso sea total − reembolsado, que «ayer a esta
 // hora» corte a la misma hora local, que la curva acumule por cuarto de hora y
 // que un porcentaje sobre cero no exista.
-
-const read = (path: string) => readFileSync(path, "utf8");
 
 const LIMA = { id: "A", name: "Aurela", timezone: "America/Lima" };
 const KENKU = { id: "K", name: "Kenku Peru", timezone: "America/Lima" };
@@ -129,69 +123,5 @@ describe("changeRatio", () => {
     expect(changeRatio(98, 132)).toBeCloseTo(-0.2576, 3);
     expect(changeRatio(5, 0)).toBeNull();
     expect(changeRatio(0, 0)).toBeNull();
-  });
-});
-
-describe("TodayPulse", () => {
-  const data = buildTodaySales(
-    [LIMA, KENKU],
-    [
-      row("A", "2026-10-25T15:00:00Z", 100),
-      row("A", "2026-10-24T14:00:00Z", 80),
-      row("K", "2026-10-25T21:30:00Z", 300),
-      row("K", "2026-10-25T17:00:00Z", 40, { cancelled_at: "2026-10-25T18:00:00Z" }),
-    ],
-    NOW,
-  );
-  const html = renderToStaticMarkup(createElement(TodayPulse, { initial: data, currency: "PEN" }));
-
-  it("dice el corte y contra qué compara, en la hora de las tiendas", () => {
-    expect(html).toContain("Domingo 25 de octubre");
-    expect(html).toContain("al corte 4:52");
-    expect(html).toContain("contra ayer a esta hora");
-  });
-
-  it("las dos cifras eligen la curva; la elegida de entrada es Ventas", () => {
-    expect(html).toMatch(/aria-pressed="true"[^>]*>.*?Ventas/);
-    expect(html).toContain("Pedidos");
-    expect(html).toContain("Ventas acumuladas del día");
-    expect(html).toContain("ayer a esta hora");
-  });
-
-  it("una línea por tienda y los cancelados aparte, fuera de las cifras", () => {
-    expect(html).toContain("Aurela");
-    expect(html).toContain("Kenku Peru");
-    expect(html).toContain("1 pedido de hoy ya está cancelado");
-    expect(html).toContain("no cuentan en estas cifras");
-  });
-
-  it("Kenku sin pedidos ayer a esta hora no inventa un porcentaje", () => {
-    expect(html).toContain("ayer a esta hora no había");
-  });
-
-  it("los textos no salen de Intl: Node y el navegador no ponen los mismos espacios y React rechaza la hidratación", () => {
-    const src = read("components/today-pulse.tsx");
-    expect(src).not.toMatch(/new Intl\.|toLocale/);
-    expect(html).toContain("S/ 400");
-    expect(html).toContain("4:52 p. m.");
-  });
-});
-
-describe("el Consolidado", () => {
-  it("pone «Hoy» arriba de la operación, sin seguir al periodo, y un fallo queda en su bloque", () => {
-    const page = read("app/dashboard/page.tsx");
-    expect(page).toContain("getTodaySales(stores)");
-    expect(page.indexOf("today={")).toBeLessThan(page.indexOf("operations={"));
-    expect(page).toContain("Las ventas de hoy no pudieron leerse");
-    const dash = read("components/executive-dashboard.tsx");
-    expect(dash.indexOf("{today}")).toBeLessThan(dash.indexOf("{operations}"));
-  });
-
-  it("el refresco tiene las mismas puertas que la página", () => {
-    const route = read("app/api/dashboard/hoy/route.ts");
-    expect(route).toContain("isVendedoraOnly");
-    expect(route).toContain("isRiderOnly");
-    expect(route).toContain("getAccessibleStores");
-    expect(route).toContain('"Cache-Control": "no-store"');
   });
 });

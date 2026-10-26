@@ -39,9 +39,9 @@ import { LtvCpaPanel, LtvCpaSkeleton } from "@/components/ltv-cpa";
 import { getLtvInputs } from "@/lib/ltv-access";
 import { buildCohorts } from "@/lib/ltv";
 import { PENDING_INSTALL_COOKIE } from "@/lib/shopify-client-app";
-import { TodayPulse, TodayPulseSkeleton } from "@/components/today-pulse";
-import { getTodaySales } from "@/lib/today-sales-access";
-import type { TodaySales } from "@/lib/today-sales";
+import { SalesPulseCard, SalesPulseSkeleton } from "@/components/sales-pulse";
+import { getSalesPulse } from "@/lib/sales-pulse-access";
+import type { SalesPulse } from "@/lib/sales-pulse";
 
 export const dynamic = "force-dynamic";
 
@@ -88,9 +88,10 @@ async function ConsolidatedContent({
   }
 
   const storeIds = stores.map((s) => s.id);
-  // «Hoy» no sigue al periodo: se pide ya, en paralelo con todo lo demás, y un
-  // fallo queda en su bloque (MOM §17.5).
-  const todayPromise: Promise<TodaySales | null> = getTodaySales(stores).catch((error) => {
+  // «Cómo van las ventas» no sigue al periodo: entra en «Hoy», se pide ya, en
+  // paralelo con todo lo demás, y un fallo queda en su bloque (MOM §17.5). La
+  // semana y el mes los pide el bloque al elegir su pestaña.
+  const pulsePromise: Promise<SalesPulse | null> = getSalesPulse(stores, "hoy").catch((error) => {
     console.error("No se pudieron leer las ventas de hoy", error);
     return null;
   });
@@ -187,8 +188,8 @@ async function ConsolidatedContent({
   return (
     <ExecutiveDashboard
       today={
-        <Suspense fallback={<TodayPulseSkeleton />}>
-          <TodayPulseLoader promise={todayPromise} currency={currency} />
+        <Suspense fallback={<SalesPulseSkeleton />}>
+          <SalesPulseLoader promise={pulsePromise} currency={currency} />
         </Suspense>
       }
       operations={
@@ -234,8 +235,8 @@ async function ConsolidatedContent({
   );
 }
 
-/** «Hoy» (MOM §17.5): las ventas del día contra ayer a esta hora. Un fallo no tumba el resto. */
-async function TodayPulseLoader({ promise, currency }: { promise: Promise<TodaySales | null>; currency: string }) {
+/** «Cómo van las ventas» (MOM §17.5): hoy, la semana o el mes contra el anterior. Un fallo no tumba el resto. */
+async function SalesPulseLoader({ promise, currency }: { promise: Promise<SalesPulse | null>; currency: string }) {
   const data = await promise;
   if (!data) {
     return (
@@ -244,7 +245,7 @@ async function TodayPulseLoader({ promise, currency }: { promise: Promise<TodayS
       </Banner>
     );
   }
-  return <TodayPulse initial={data} currency={currency} />;
+  return <SalesPulseCard initial={data} currency={currency} />;
 }
 
 async function MomOwnerSummaryLoader({

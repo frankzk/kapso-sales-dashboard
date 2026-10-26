@@ -5145,3 +5145,29 @@ Shopify (el 25-10 a las 4:52 p. m., Kenku 98 en los dos) y el porcentaje, el de
 Shopify contra ayer. Con la pestaña abierta, «al corte» avanza solo cada minuto.
 
 **Marcha atrás.** Revertir el commit. No escribe nada en la base.
+
+### 25-10-2026 · «Cómo van las ventas»: pestañas Hoy, Esta semana y Este mes (sin migración, MOM §17.5)
+
+El bloque «Hoy» del Consolidado pasa a llamarse «Cómo van las ventas» y suma dos
+pestañas: **Esta semana** (de lunes a ahora contra la semana pasada hasta el
+mismo día y la misma hora) y **Este mes** (del 1 a ahora contra el mes anterior
+hasta el mismo día del mes y la misma hora; entero si no tiene ese día). La
+curva de la semana y del mes va por día. **Sin migración**, sin crons ni
+variables de entorno nuevas: la semana y el mes leen `ventas_por_origen` (0268,
+ya aplicada) y los pedidos del día del corte, con la sesión de quien mira; el
+mes con su anterior, 143 ms bajo RLS como dueña. La ruta `GET
+/api/dashboard/hoy` se reemplaza por `GET
+/api/dashboard/pulso?periodo=hoy|semana|mes`: una pestaña del navegador abierta
+desde antes del despliegue dirá «No se pudo actualizar…» hasta que se recargue.
+
+Una tienda solo se compara si Kapta tiene todas sus ventas desde el inicio del
+periodo anterior (`ORDERS_SYNC_FROM` o su primer pedido, el más tardío); si no,
+«sin comparación» y el porqué.
+
+**Qué mirar después.** En el teléfono, «Esta semana» y «Este mes» cambian al
+instante y sus cifras no parten en dos renglones. El 25-10-2026 a las 8:45 p.
+m. la semana daba 1,486 pedidos y S/ 277,818 (−9 % y −10 % contra la semana
+pasada a esa altura) y el mes 5,453 pedidos y S/ 1,019,031 (+17 % y +32 %
+contra setiembre a esa altura); las dos coinciden con contar `orders` directo.
+
+**Marcha atrás.** Revertir el commit. No escribe nada en la base.

@@ -9469,62 +9469,101 @@ que en producción se crean a mano con `create index concurrently` antes de la
 migración (DEPLOY.md): bajo RLS, Postgres no lleva al índice un rango sobre
 `coalesce(...)`.
 
-### 17.5 Hoy: las ventas del día contra ayer a esta hora (25-10-2026)
+### 17.5 Cómo van las ventas: hoy, esta semana y este mes contra el anterior a esta altura (25-10-2026)
 
-Arriba de todo el Consolidado, antes de «Operación», el bloque «Hoy» dice cómo
-van las ventas del día de las tiendas que mira la persona, como el inicio de
-Shopify: pedido de Frankz del 25-10-2026, opción «Pulso con curva» y comparación
-«Ayer a esta hora». No sigue al selector de periodo: siempre es hoy.
+Arriba de todo el Consolidado, antes de «Operación», el bloque «Cómo van las
+ventas» (antes «Hoy») dice cómo van las ventas de las tiendas que mira la
+persona, como el inicio de Shopify: pedido de Frankz del 25-10-2026, opción
+«Pulso con curva» y comparación «Ayer a esta hora»; el mismo día pidió tres
+pestañas para elegir el comparativo: **Hoy**, **Esta semana** y **Este mes**.
+Entra en «Hoy». No sigue al selector de periodo del Consolidado.
 
 **Qué cuenta.** La venta de la cabecera del Consolidado (§17.4): todos los
 pedidos de la tienda, los cierre quien los cierre. Cuentan los activos
-(`cancelled_at` vacío) y el ingreso es total − reembolsado. Los pedidos de hoy
-que ya están cancelados van aparte, en una línea bajo las cifras, y no suman.
-Medido el 25-10-2026 a las 4:52 p. m.: Kenku llevaba 98 pedidos activos, los
-mismos 98 que mostraba Shopify, y el −26 % de Shopify era contra ayer a esa
-hora (132), igual que aquí.
+(`cancelled_at` vacío) y el ingreso es total − reembolsado. Los pedidos del
+periodo que ya están cancelados van aparte, en una línea bajo las cifras, y no
+suman (en «Hoy» con su monto; en la semana y el mes solo cuántos, porque
+`ventas_por_origen` los cuenta pero no los suma). Medido el 25-10-2026 a las
+4:52 p. m.: Kenku llevaba 98 pedidos activos, los mismos 98 que mostraba
+Shopify, y el −26 % de Shopify era contra ayer a esa hora (132), igual que aquí.
 
-**Contra qué compara.** «Ayer a esta hora»: los pedidos que ayer ya se habían
-creado a la misma hora local, con el estado que tienen hoy (uno de ayer que se
-canceló esta mañana ya no cuenta). El cambio va en porcentaje, con flecha y la
-palabra «vs ayer»; si ayer a esta hora no había nada, no hay porcentaje: dice
-«ayer a esta hora no había» o «sin ventas todavía», nunca un porcentaje sobre
-cero.
+**Contra qué compara.** Siempre contra el periodo anterior **a esta misma
+altura**, con el estado que cada pedido tiene hoy (uno que se canceló después
+ya no cuenta):
 
-**El día.** Cada tienda se mide en su día local (`stores.timezone`): hoy empieza
-a su medianoche y «ayer a esta hora» corta a su hora local. El reloj del corte
-y el eje de la curva usan la zona de la primera tienda; hoy las dos están en
-Lima.
+| Pestaña | El periodo | Contra |
+| --- | --- | --- |
+| Hoy | de la medianoche a ahora | ayer, hasta la misma hora |
+| Esta semana | del lunes a ahora | la semana pasada, de su lunes hasta el mismo día de la semana y la misma hora |
+| Este mes | del día 1 a ahora | el mes anterior, de su día 1 hasta el mismo día del mes y la misma hora |
+
+Si el mes anterior no tiene ese día (el 30 de marzo contra febrero), se compara
+contra el mes anterior **entero** y lo dice («contra febrero completo»). El
+cambio va en porcentaje, con flecha y «vs ayer», «vs semana pasada» o «vs
+setiembre» (el mes anterior por su nombre); si el anterior a esta altura no
+tenía nada, no hay porcentaje: dice «ayer a esta hora no había» (o «la semana
+pasada a esta altura…», «setiembre a esta altura…») o «sin ventas todavía»,
+nunca un porcentaje sobre cero.
+
+**Solo compara con un anterior completo.** Una tienda se compara si Kapta tiene
+todas sus ventas desde el inicio del periodo anterior: desde el más tardío
+entre `ORDERS_SYNC_FROM` (antes, solo los pedidos del bot) y el día de su
+primer pedido en Kapta. Si alguna tienda no llega, no hay porcentaje ni curva
+anterior: la cabecera dice «sin comparación: Kapta tiene todas las ventas de
+Aurela desde el 13 de octubre» y su fila, «sin comparación». No usa el inicio
+en Kapta de §17.3: ese piso es para decir quién cerró cada venta, y este
+bloque no parte por canal.
+
+**El día.** Cada tienda se mide en su día local (`stores.timezone`): el día
+empieza a su medianoche, la semana a su lunes, y el corte del anterior es a su
+hora local. El reloj del corte y el eje de la curva usan la zona de la primera
+tienda; hoy las dos están en Lima.
 
 **Lo que muestra.**
 
 - **Ventas** (S/ neto) y **Pedidos** (activos), cada una con su cambio contra
-  ayer a esta hora y lo que ayer llevaba a esa hora. Las dos cifras son
-  botones: la elegida (de entrada, Ventas) decide lo que dibuja la curva.
-- **La curva acumulada del día**, por cuarto de hora: hoy en azul hasta la hora
-  del corte y ayer completo, punteado, para ver qué le faltaba a ayer a estas
-  alturas. Al pasar el cursor, tocar o recorrer con las flechas del teclado,
-  las dos cifras de esa hora. Una tabla hora por hora la acompaña para quien
-  no ve el gráfico.
+  el anterior a esta altura y lo que el anterior llevaba a esa altura. Las dos
+  cifras son botones: la elegida (de entrada, Ventas) decide lo que dibuja la
+  curva, y sigue elegida al cambiar de pestaña.
+- **La curva acumulada**: en «Hoy», por cuarto de hora; en la semana y el mes,
+  por día (lo acumulado al cerrar cada día y, en el de hoy, hasta ahora). Lo
+  de ahora en azul hasta el corte y el anterior entero, punteado, para ver qué
+  le faltaba a estas alturas, con el punto de «a esta altura» sobre su línea.
+  Al pasar el cursor, tocar o recorrer con las flechas del teclado, las dos
+  cifras de esa hora («A las 3:45 p. m.») o hasta ese día («Hasta el jueves»,
+  «Hasta el día 16», «Hasta hoy, 8:45 p. m.»). Una tabla hora por hora o día
+  por día la acompaña para quien no ve el gráfico.
 - **Una línea por tienda** (con dos tiendas o más): ventas y pedidos, cada uno
-  con su cambio contra ayer a esta hora.
+  con su cambio contra el anterior a esta altura.
+
+Medido el 25-10-2026 a las 8:45 p. m., las dos tiendas: la semana llevaba 1,486
+pedidos y S/ 277,818 contra 1,631 y S/ 309,100 de la semana pasada a esa
+altura (−9 % y −10 %); el mes, 5,453 pedidos y S/ 1,019,031 contra 4,672 y
+S/ 772,254 de setiembre a esa altura (+17 % y +32 %). Tienda por tienda, lo
+mismo que contar `orders` directamente.
 
 **Frescura.** Lee los pedidos que ya están en Kapta (webhook y sincronización,
-unos minutos de retraso). El bloque se relee solo cada minuto mientras la
-pestaña está a la vista, y al volver a ella si ya pasó el minuto. Si un
-refresco falla, quedan las últimas cifras y la cabecera dice a qué hora falló;
-si la primera lectura falla, un aviso `warn` en su lugar y el resto del
-Consolidado sigue.
+unos minutos de retraso). La pestaña elegida se relee sola cada minuto mientras
+la pestaña del navegador está a la vista, y al volver a ella si ya pasó el
+minuto; una pestaña se lee al elegirla (y al acercarse a ella, para que el
+cambio sea inmediato). Si un refresco falla, quedan las últimas cifras y la
+cabecera dice a qué hora falló; si falla la primera lectura de una pestaña, un
+aviso `warn` con «Reintentar» y las otras pestañas siguen; si falla la primera
+lectura de la página, un aviso `warn` en su lugar y el resto del Consolidado
+sigue.
 
 **Lo que no tiene.** Visitantes en vivo, sesiones y tasa de conversión de la
 tienda: son de la analítica de Shopify, que Kapta no recibe. No se simulan.
 
-Cómo se calcula: los pedidos de ayer y hoy de `orders`, con la sesión de quien
-mira (`getTodaySales` en `lib/today-sales-access.ts`, sin migración ni RPC
-nuevas), armados en `lib/today-sales.ts` (puro) y dibujados en
-`components/today-pulse.tsx`. El refresco es `GET /api/dashboard/hoy`, con las
-mismas puertas que la página: sin tiendas, o solo vendedora o solo
-motorizado, no hay ventas que ver.
+Cómo se calcula: con la sesión de quien mira (`getSalesPulse` en
+`lib/sales-pulse-access.ts`, sin migración). «Hoy» lee los pedidos de ayer y
+hoy de `orders`; la semana y el mes, el total por tienda y día local de
+`ventas_por_origen` (0268; el mes con el anterior, unos 143 ms bajo RLS como
+dueña) y los pedidos del día del corte, para cortar al minuto. Se arma en
+`lib/sales-pulse.ts` y `lib/today-sales.ts` (puros) y se dibuja en
+`components/sales-pulse.tsx`. El refresco es `GET
+/api/dashboard/pulso?periodo=hoy|semana|mes`, con las mismas puertas que la
+página: sin tiendas, o solo vendedora o solo motorizado, no hay ventas que ver.
 
 ## 18. Implementación incremental
 
