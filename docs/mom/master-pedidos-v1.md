@@ -10509,7 +10509,8 @@ estables:
      (sin `include_bot` no salen las plantillas). Solo esos dos GET: Chatby no
      tiene claves de solo lectura y Kapta nunca manda nada.
    - **Lo que no sale de la lectura:** la clave (`CHATBY_API_KEY`, la clave
-     «KAPTA» del bot con el permiso «Manage Flow», aparte de la de Make para
+     «KAPTA» del bot, creada en `app.chatby.io/settings#/api` → «Create API Token»
+     con solo el permiso «Manage Flow», aparte de la de Make para
      revocarla sola; solo en el servidor), los campos del contacto
      (`user_fields`, uno trae la clave de pedidos de una tienda: de la clienta
      solo se copian `user_ns` y el nombre) y la conversación (no se guarda en

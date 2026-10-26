@@ -114,7 +114,7 @@ roles and the `auth` schema, so it just works.
    | `SHALOM_API_BASE` | `https://api.shalom-api-peru.com` (optional). **El host a secas, sin `/v1`**: el cliente ya añade la ruta, y una base con `/v1` produce `/v1/v1/…` → 404. Si no existe la variable, el valor por defecto ya es el correcto |
    | `OLVA_TRACKING_APIKEY` | La `apikey` con la que la página pública de Olva (`tracking.olvaexpress.pe`) llama a `reports.olvaexpress.pe/webservice/rest/getTrackingInformation`. **Es de Olva, no nuestra**: se captura en DevTools → Red al consultar un tracking, y la pueden rotar sin aviso. Sin ella el cron `olva-reconcile` se salta y los estados de Olva se marcan a mano (ver §12 del MOM) |
    | `OLVA_TRACKING_API_BASE` | `https://reports.olvaexpress.pe` (optional) |
-   | `CHATBY_API_KEY` | La clave «KAPTA» de la API de Chatby, para la pestaña «WhatsApp» de la ficha del pedido. **La emite Chatby**: *Settings → API*, una clave nueva llamada «KAPTA» con el permiso «Manage Flow», aparte de la de Make para poder revocarla sola. Solo servidor (sin `NEXT_PUBLIC_`). Sin ella la pestaña dice que falta conectar Chatby (ver 5q.1) |
+   | `CHATBY_API_KEY` | La clave «KAPTA» de la API de Chatby, para la pestaña «WhatsApp» de la ficha del pedido. **La emite Chatby**: `app.chatby.io/settings#/api` → «Create API Token» (nombre «KAPTA», solo «Manage Flow», workspace AURELA KENKU, bot Aurela Kenku BOT), aparte de la de Make para poder revocarla sola. Solo servidor (sin `NEXT_PUBLIC_`). Sin ella la pestaña dice que falta conectar Chatby (ver 5q.1) |
    | `CHATBY_WEBHOOK_SECRET` | Secreto del «Live Chat Webhook» de Chatby. **Lo elegís vos** (`openssl rand -hex 32`), no lo emite Chatby. Va también en Chatby → Integrations → Live Chat Support → Webhook, campo *Custom Header*: `X-Webhook-Secret: <valor>`. Sin él el receptor rechaza todo (ver 5q) |
    | `META_APP_SECRET` | *App Secret* de la app de Meta — **lo emite Meta**, es el mismo que ya usa la Marketing API. Con él se verifica la firma `X-Hub-Signature-256` de cada entrega del webhook de página/Instagram. Sin él el receptor rechaza todo (ver 5s) |
    | `META_WEBHOOK_VERIFY_TOKEN` | Token del apretón de manos del webhook de Meta. **Lo elegís vos** (`openssl rand -hex 32`) y lo tecleás en el panel de Meta al dar de alta la URL. Sin él Meta **nunca activa la suscripción** y no llega nada, sin error visible (ver 5s) |
@@ -1631,8 +1631,14 @@ que dice si el dinero llegó, y hasta ahora nadie lo miraba uno por uno.
 
 - **Sin migración.** Solo la variable `CHATBY_API_KEY` en Vercel (Production),
   y volver a desplegar para que la tome.
-- La clave: en Chatby, **Settings → API**, una clave nueva llamada **«KAPTA»**
-  con el permiso **«Manage Flow»**. Chatby no tiene claves de solo lectura:
+- La clave: en Chatby **no** está en los ajustes del bot ni en «Workspace
+  Settings». Está en la configuración de la cuenta, sección API
+  (`app.chatby.io/settings#/api`), tarjeta **«Create API Token»**: Token Name
+  **«KAPTA»**; en «Token Can», **solo «Manage Flow»** (desmarcar «Manage
+  Team», que viene marcado); Workspace **AURELA KENKU**; Bot **Aurela Kenku
+  BOT**; «Create». La clave se ve una sola vez. Creada así el 26-10-2026 y
+  cargada en Vercel como `CHATBY_API_KEY` (Production, sensible). Chatby no
+  tiene claves de solo lectura:
   Kapta solo hace dos `GET` (buscar a la clienta por su celular y traer sus
   últimos 20 mensajes), y con una clave aparte de la de Make se puede revocar
   sin cortar Make. Se pega directamente en Vercel, nunca en un chat ni en un
