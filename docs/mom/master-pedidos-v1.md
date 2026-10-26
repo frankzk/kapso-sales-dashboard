@@ -8100,6 +8100,35 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   - El panel de cobro colapsa a una constancia: ni pide comprobante ni enseña
     saldo por cargar. Lo que sí sigue haciendo falta en Agencia —DNI y agencia de
     Shalom— no es cobro: son datos de entrega.
+  - **«DNI y agencia Shalom» también en el pedido pagado (owner, 26-10-2026,
+    #KP200104).** El DNI (o RUC/CE) y la agencia de destino se pueden
+    pre-guardar en **cualquier** pedido —pagado o no— **sin generar la guía ni
+    el rótulo**. En un pedido con saldo es el paso 1 de «Registrar un pago»
+    («Prepara el destino…»); en uno pagado por web ese formulario no existe, y
+    el bloque se perdía con él: la única forma de escribirlos era «Abrir
+    Shalom», que los pide y crea la guía en el mismo acto. Ahora la tarjeta
+    «Cobro» del pedido pagado lleva el mismo bloque, sin la parte de cobro:
+    - Es **el mismo borrador** (`shalom_order_drafts`, 0073), el mismo
+      componente y el mismo validador de documento que la guía
+      (`documentError`); se guarda solo al decidirse (salir del documento,
+      elegir o quitar la agencia) y su chapa dice en qué quedó (Opcional ·
+      Guardando… · Guardado · Sin guardar · Ya en la guía).
+    - Se ofrece donde Shalom puede ser el destino: salida Shalom o agencia,
+      operación Agencia, o el plan de rutas ofrece Shalom (Provincia COD
+      incluido, como #KP200104). En Lima no aparece
+      (`offersShalomDestination`, `lib/order-payment-panel.ts`).
+    - Permiso: el del borrador, `master.edit` (ver «Ver no es tocar»), no el de
+      registrar pagos: aquí no se registra ninguno.
+    - Con la guía Shalom viva el bloque es de solo lectura, igual que en el
+      paso 1: el destinatario y el destino ya viajan en el rótulo.
+    - «Abrir Shalom» / crear la guía trae puestos el documento y la agencia
+      guardados, como ya hacía con los apuntados al registrar un pago.
+    - El borrador no guarda el nombre del destinatario (no hay columna): el
+      modal de la guía lo sigue tomando del pedido, editable allí.
+    - En un pedido pagado por web, guardar el borrador no confirma el pedido
+      por sí solo: la confirmación expresa de Agencia exige un pago Yape que
+      comprometa, y no se cambió.
+    `test/shalom-destino-prepago.test.ts`.
   - **La clave de recojo se entrega sin comprobantes.** Exigirlos a quien pagó
     con tarjeta la bloqueaba para siempre: no existe un Yape que cargar, así que
     «falta el adelanto» era cierto de forma permanente y el paquete se quedaba en
@@ -8721,7 +8750,9 @@ registra en cada evento.
     «Tu rol no permite gestionar envíos.» y el panel queda bloqueado. Soltar
     la reserva no lleva puerta porque solo suelta la propia.
   - **Datos de Shalom** (DNI y agencia antes de la guía): `master.edit`.
-    Guardarlos puede confirmar el pedido, igual que una confirmación.
+    Guardarlos puede confirmar el pedido, igual que una confirmación. En un
+    pedido pagado por web el bloque solo se ofrece a quien tiene ese permiso
+    (`canEditShalomDraft`, 26-10-2026).
   - **Pedido cerrado**: «Registrar devolución» sobre un pedido entregado o
     anulado pide `master.override_status` y motivo, como «Cambiar estado»
     (`closedStatusChangeError`, lib/order-status.ts). Antes pasaba un

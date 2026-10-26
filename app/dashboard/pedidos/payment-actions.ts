@@ -173,6 +173,12 @@ export interface PickupKeyPanel {
   canManageKey: boolean;
   canOverride: boolean;
   /**
+   * Puede guardar «DNI y agencia Shalom» (`saveShalomOrderDraft`): `master.edit`,
+   * la misma puerta que el servidor. Lo usa el bloque de un pedido pagado por
+   * web, que no tiene «Registrar un pago» que lo traiga.
+   */
+  canEditShalomDraft: boolean;
+  /**
    * La excepción por descuento (MOM §12): si la clave está bloqueada solo
    * porque a lo validado le faltan hasta S/ 15, quien puede verla la muestra
    * dejando el motivo escrito. `eligible` se calcula aquí; el servidor lo
@@ -373,6 +379,7 @@ export async function loadPaymentPanel(
       canViewKey: perms.can("shalom.reveal_pickup_key"),
       canManageKey: perms.can("shalom.view_pickup_key"),
       canOverride: perms.can("shalom.override_payment_validation"),
+      canEditShalomDraft: perms.can("master.edit"),
       discountException: { ...discountException(keyCtx), max: DISCOUNT_EXCEPTION_MAX },
       shalomGuide,
       keyAutosend: {

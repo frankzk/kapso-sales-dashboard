@@ -247,10 +247,17 @@ export function PickupKeyPanel({
   onChanged,
   mode = "required",
   gatewayNote = null,
+  shalomDestination = false,
 }: {
   orderId: string;
   onChanged: () => void;
   mode?: OrderPaymentPanelMode;
+  /**
+   * Shalom puede ser el destino de este pedido (`offersShalomDestination`). Solo
+   * cuenta en `prepaid`: ahí no hay «Registrar un pago» que traiga el bloque
+   * «DNI y agencia Shalom», así que la tarjeta lo lleva sola.
+   */
+  shalomDestination?: boolean;
   /**
    * Cuando Shopify dice «pagado» pero NO lo cobró el checkout (lo marcó alguien
    * a mano): se dice, para que se entienda por qué el panel sigue pidiendo la
@@ -312,9 +319,12 @@ export function PickupKeyPanel({
 
   // PAGADO EN EL CHECKOUT: no hay cobro que gestionar. El panel colapsa a una
   // constancia en vez de pedir un comprobante de Yape y enseñar «saldo por
-  // cargar» sobre dinero que ya entró. Lo que SÍ sigue haciendo falta en Agencia
-  // —el DNI y la agencia de Shalom— no es cobro: son datos de entrega, y viven
-  // en el panel de la salida, no acá.
+  // cargar» sobre dinero que ya entró. Lo que SÍ sigue haciendo falta si sale
+  // por Shalom —el DNI y la agencia— no es cobro: son datos de entrega. Este
+  // comentario decía que vivían «en el panel de la salida», pero antes de la
+  // guía no hay salida: el único sitio era el modal que crea la guía, y crearla
+  // era la única forma de escribirlos (#KP200104). Ahora van aquí, en el mismo
+  // bloque que el paso 1 de «Registrar un pago», sin la parte de cobro.
   if (mode === "prepaid") {
     return (
       <section className="@container space-y-4">
@@ -326,6 +336,9 @@ export function PickupKeyPanel({
           ) : null}
           . No hay que cobrar en la entrega ni cargar comprobante.
         </Banner>
+        {shalomDestination && panel.canEditShalomDraft && (
+          <ShalomDestinationZone orderId={orderId} storeId={panel.storeId} shalomGuide={panel.shalomGuide} />
+        )}
         {error && (
           <Banner tone="crit" role="alert">
             {error}
@@ -1416,54 +1429,18 @@ function RecipientAccountCheck({
   );
 }
 
-function VoucherForm({
-  orderId,
-  storeId,
-  accounts,
-  orderTotal,
-  existing,
-  shalomGuide,
-  pending,
-  onRegistered,
-  onError,
-  onNotice,
-}: {
-  orderId: string;
-  storeId: string;
-  /** Las cuentas de cobro de la tienda, para juzgar el receptor leído. */
-  accounts: CollectionAccount[];
-  orderTotal: number | null;
-  existing: PaymentRow[];
-  shalomGuide: PanelData["shalomGuide"];
-  pending: boolean;
-  onRegistered: () => void;
-  onError: (msg: string | null) => void;
-  onNotice: (msg: string | null) => void;
-}) {
-  const availableKinds = useMemo(
-    () => nextPaymentKinds(existing, orderTotal),
-    [existing, orderTotal],
-  );
-  const progress = useMemo(
-    () => paymentProgress(existing, orderTotal),
-    [existing, orderTotal],
-  );
-  const [kind, setKind] = useState<PaymentKind>(availableKinds[0] ?? "diferencia");
-  const [amount, setAmount] = useState("");
-  const [operation, setOperation] = useState("");
-  const [paidAt, setPaidAt] = useState("");
-  const [payer, setPayer] = useState("");
-  const [file, setFile] = useState<File | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [reading, setReading] = useState(false);
-  const [readNotice, setReadNotice] = useState<string | null>(null);
-  const [readWarning, setReadWarning] = useState<string | null>(null);
-  const [recipientCheck, setRecipientCheck] = useState<YapeRecipientReading | null>(null);
-  const [uploadedVoucher, setUploadedVoucher] = useState<{
-    fileKey: string;
-    path: string;
-    sha256: string | null;
-  } | null>(null);
+/**
+ * «DNI y agencia Shalom»: el borrador del destino (`shalom_order_drafts`, 0073)
+ * que luego trae puesto el modal de la guía («Abrir Shalom»).
+ *
+ * Vive aparte del formulario de pago porque NO es cobro: es dato de entrega. Lo
+ * usan el paso 1 de «Registrar un pago» y, en un pedido pagado por web —que no
+ * tiene pago que registrar—, la tarjeta de Cobro sola (MOM §Pagos, 26-10-2026,
+ * #KP200104). Antes vivía dentro del formulario de pago y desaparecía con él: en
+ * un pedido pagado, el único camino para escribir el DNI y la agencia era crear
+ * la guía en el mismo acto.
+ */
+function useShalomDestinationDraft(orderId: string, storeId: string) {
   // Datos de Shalom que se pueden adelantar acá (0073). OPCIONALES: no
   // condicionan el pago — bloquear un cobro por falta de un DNI sería peor que
   // el problema que resuelve.
@@ -1533,13 +1510,6 @@ function VoucherForm({
       alive = false;
     };
   }, [orderId]);
-
-  useEffect(() => {
-    const nextKind = availableKinds[0];
-    if (nextKind && !availableKinds.includes(kind)) {
-      setKind(nextKind);
-    }
-  }, [availableKinds, kind]);
 
   const shalomDocumentProblem = shalomDoc.trim()
     ? documentError(shalomDocType, shalomDoc)
@@ -1648,6 +1618,402 @@ function VoucherForm({
       );
     });
   }
+
+  const step1Saved = Boolean(shalomSaved.document || shalomSaved.terminalId);
+
+  return {
+    shalomDoc,
+    setShalomDoc,
+    shalomDocType,
+    setShalomDocType,
+    documentChecking,
+    documentNotice,
+    setDocumentNotice,
+    shalomAgencyQuery,
+    setShalomAgencyQuery,
+    shalomAgency,
+    setShalomAgency,
+    shalomAgencies,
+    setShalomAgencies,
+    agencySearching,
+    agencyError,
+    shalomTouched,
+    shalomSaved,
+    setShalomSaved,
+    shalomSaving,
+    shalomSaveError,
+    shalomDocumentProblem,
+    persistShalomDraft,
+    changeDocument,
+    validateDocument,
+    step1Saved,
+  };
+}
+
+type ShalomDestinationDraft = ReturnType<typeof useShalomDestinationDraft>;
+
+/** La chapa del bloque: en qué quedó, según lo que el servidor confirmó. */
+function ShalomDestinationBadge({
+  draft,
+  shalomGuide,
+}: {
+  draft: ShalomDestinationDraft;
+  shalomGuide: PanelData["shalomGuide"];
+}) {
+  if (shalomGuide) return <Badge>Ya en la guía</Badge>;
+  if (draft.shalomSaving) return <Badge>Guardando…</Badge>;
+  if (draft.shalomSaveError) return <Badge tone="crit">Sin guardar</Badge>;
+  if (draft.step1Saved) return <Badge tone="ok">Guardado</Badge>;
+  return <Badge>Opcional</Badge>;
+}
+
+/**
+ * Los campos del bloque: documento con «Validar» y la agencia de destino. Se
+ * guardan solos al decidirse (salir del documento, elegir o quitar la agencia),
+ * con el mismo validador que la guía. Con la guía viva, solo lectura.
+ */
+function ShalomDestinationFields({
+  draft,
+  shalomGuide,
+}: {
+  draft: ShalomDestinationDraft;
+  shalomGuide: PanelData["shalomGuide"];
+}) {
+  const {
+    shalomDoc,
+    setShalomDoc,
+    shalomDocType,
+    setShalomDocType,
+    documentChecking,
+    documentNotice,
+    setDocumentNotice,
+    shalomAgencyQuery,
+    setShalomAgencyQuery,
+    shalomAgency,
+    setShalomAgency,
+    shalomAgencies,
+    setShalomAgencies,
+    agencySearching,
+    agencyError,
+    shalomTouched,
+    shalomSaved,
+    shalomSaving,
+    shalomSaveError,
+    shalomDocumentProblem,
+    persistShalomDraft,
+    changeDocument,
+    validateDocument,
+    step1Saved,
+  } = draft;
+  return (
+    <>
+      {/* Con la guía ya creada estos datos dejan de ser un borrador: Shalom los
+          tiene, los imprimió en su rótulo y el paquete viaja con ellos.
+          Editarlos acá no cambia nada allá — solo hace que Kapta y el rótulo
+          físico digan cosas distintas, que es peor que no poder tocarlos. La
+          salida real es anular la guía y crear otra, y eso se dice. */}
+      {shalomGuide ? (
+        <>
+          <dl className="grid gap-x-6 gap-y-3 @md:grid-cols-2">
+            <div className="min-w-0">
+              <dt className="text-[13px] leading-5 text-ink-500">Documento</dt>
+              <dd className="mt-0.5 text-sm font-medium tabular-nums text-ink-900">
+                {shalomDoc ? `${shalomDocType} ${shalomDoc}` : "—"}
+              </dd>
+            </div>
+            <div className="min-w-0">
+              <dt className="text-[13px] leading-5 text-ink-500">Agencia de destino</dt>
+              <dd className="mt-0.5 break-words text-sm font-medium text-ink-900">{shalomAgency?.nombre ?? "—"}</dd>
+            </div>
+          </dl>
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-ink-600">
+            <span>Guía</span>
+            {shalomGuide.guideCode && (
+              <span className="select-all font-mono font-semibold text-ink-900">N° {shalomGuide.guideCode}</span>
+            )}
+            {shalomGuide.codigo && (
+              <span className="rounded bg-wash px-1.5 py-0.5 font-mono text-xs font-medium text-ink-700 ring-1 ring-inset ring-line">
+                {shalomGuide.codigo}
+              </span>
+            )}
+            <span className="text-ink-500">
+              · {operationalLabel(shalomGuide.pickupState ?? shalomGuide.deliveryStatus)}
+            </span>
+          </p>
+          <p className="max-w-[68ch] text-[13px] leading-5 text-ink-500">
+            El destinatario y el destino ya viajan impresos en el rótulo de Shalom. Para cambiarlos
+            hay que anular esa guía —desde «Salidas y guías»— y crear otra.
+          </p>
+        </>
+      ) : (
+        <>
+          {/* El guardado ocurre solo, así que tiene que VERSE: una escritura
+              silenciosa que falla es indistinguible de una que funcionó, y eso es
+              justo lo que hacía perder el DNI sin que nadie se enterara. La chapa
+              del paso dice en qué quedó; esta línea lo anuncia al lector. */}
+          <p
+            className={cn(
+              "text-[13px] font-medium empty:hidden",
+              shalomSaveError ? "text-crit-fg" : shalomSaving ? "text-ink-500" : "text-ok-fg",
+            )}
+            aria-live="polite"
+          >
+            {shalomSaveError
+              ? `No se pudo guardar: ${shalomSaveError}`
+              : shalomSaving
+                ? "Guardando…"
+                : step1Saved
+                  ? `Guardado${shalomSaved.document ? ` · ${shalomSaved.document}` : ""}`
+                  : ""}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <select
+              value={shalomDocType}
+              onChange={(e) => {
+                shalomTouched.current = true;
+                setShalomDocType(e.target.value as ShalomDocumentType);
+                setShalomDoc("");
+                setDocumentNotice(null);
+              }}
+              aria-label="Tipo de documento"
+              className={cn(FIELD_BOX, "h-9 w-24 px-2.5 pointer-coarse:h-11")}
+            >
+              <option value="DNI">DNI</option>
+              <option value="RUC">RUC</option>
+              <option value="CE">CE</option>
+            </select>
+            <div className="min-w-[15rem] flex-1">
+              <div className="flex gap-2">
+                <input
+                  value={shalomDoc}
+                  onChange={(e) => changeDocument(e.target.value)}
+                  // Al salir del campo, no en cada tecla: un DNI a medio escribir
+                  // no es una decisión, y el servidor lo rechazaría igual.
+                  onBlur={() => void persistShalomDraft({})}
+                  inputMode={shalomDocType === "CE" ? "text" : "numeric"}
+                  maxLength={shalomDocType === "DNI" ? 8 : shalomDocType === "RUC" ? 11 : 20}
+                  placeholder={
+                    shalomDocType === "DNI"
+                      ? "DNI de 8 dígitos"
+                      : shalomDocType === "RUC"
+                        ? "RUC de 11 dígitos"
+                        : "Carné de extranjería"
+                  }
+                  aria-label="Número de documento"
+                  aria-invalid={Boolean(shalomDocumentProblem)}
+                  className={cn(FIELD_BOX, "h-9 min-w-0 flex-1 px-3 tabular-nums pointer-coarse:h-11")}
+                />
+                <OpsButton
+                  onClick={validateDocument}
+                  disabled={documentChecking || !shalomDoc.trim() || Boolean(shalomDocumentProblem)}
+                  className="pointer-coarse:h-11"
+                >
+                  {documentChecking ? "Validando…" : "Validar"}
+                </OpsButton>
+              </div>
+              {shalomDocumentProblem && (
+                <p className="mt-1.5 text-[13px] font-medium text-crit-fg">{shalomDocumentProblem}</p>
+              )}
+              {!shalomDocumentProblem && shalomDoc && !documentNotice && (
+                <p className="mt-1.5 flex items-center gap-1 text-[13px] font-medium text-ok-fg">
+                  <IconCheck aria-hidden className="size-3.5" />
+                  Formato válido
+                </p>
+              )}
+              {documentNotice && <p className="mt-1.5 text-[13px] leading-5 text-ink-600">{documentNotice}</p>}
+            </div>
+          </div>
+          <div className="relative">
+            {shalomAgency ? (
+              <div className="flex items-center justify-between gap-3 rounded-lg bg-ok-wash px-3 py-2">
+                <div className="min-w-0">
+                  <p className="flex items-center gap-1.5 text-sm font-semibold text-ink-900">
+                    <IconCheck aria-hidden className="size-4 shrink-0 text-ok-fg" />
+                    <span className="truncate">{shalomAgency.nombre}</span>
+                  </p>
+                  <p className="truncate pl-[22px] text-[13px] text-ink-600">
+                    {/* La agencia rescatada del borrador solo trae id y nombre: sin
+                        esto quedaría un "#612 · " con el separador colgando. */}
+                    {[
+                      `#${shalomAgency.id}`,
+                      shalomAgency.departamento,
+                      shalomAgency.provincia,
+                      shalomAgency.distrito,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </p>
+                </div>
+                <OpsButton
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    shalomTouched.current = true;
+                    setShalomAgency(null);
+                    setShalomAgencyQuery("");
+                    // Quitarla también se guarda: si no, recargar la resucitaría.
+                    void persistShalomDraft({ terminalId: null, terminalName: null });
+                  }}
+                  className="shrink-0 pointer-coarse:h-11"
+                >
+                  Cambiar
+                </OpsButton>
+              </div>
+            ) : (
+              <>
+                <input
+                  value={shalomAgencyQuery}
+                  onChange={(e) => setShalomAgencyQuery(e.target.value)}
+                  placeholder="Buscar agencia por ciudad, distrito o nombre"
+                  aria-label="Agencia Shalom de destino"
+                  autoComplete="off"
+                  role="combobox"
+                  aria-expanded={shalomAgencies.length > 0}
+                  className={cn(FIELD, "pointer-coarse:h-11")}
+                />
+                {agencySearching && <p className="mt-1.5 text-[13px] text-ink-500">Buscando agencias…</p>}
+                {agencyError && <p className="mt-1.5 text-[13px] font-medium text-crit-fg">{agencyError}</p>}
+                {!agencySearching && !agencyError && shalomAgencyQuery.trim().length >= 2 && shalomAgencies.length === 0 && (
+                  <p className="mt-1.5 text-[13px] text-ink-500">No encontramos agencias con ese texto.</p>
+                )}
+                {shalomAgencies.length > 0 && (
+                  <ul
+                    role="listbox"
+                    className="absolute z-30 mt-1 max-h-52 w-full overflow-y-auto rounded-lg bg-white p-1 shadow-pop"
+                  >
+                    {shalomAgencies.map((agency) => (
+                      <li key={agency.id} role="option" aria-selected="false">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            shalomTouched.current = true;
+                            setShalomAgency(agency);
+                            setShalomAgencyQuery(agency.nombre);
+                            setShalomAgencies([]);
+                            // Elegirla ES la decisión: se guarda aquí, no al pagar.
+                            void persistShalomDraft({
+                              terminalId: agency.id,
+                              terminalName: agency.nombre,
+                            });
+                          }}
+                          className="block w-full rounded-md px-3 py-2 text-left transition-colors hover:bg-wash"
+                        >
+                          <span className="text-sm font-semibold text-ink-900">{agency.nombre}</span>{" "}
+                          <span className="text-xs tabular-nums text-ink-500">#{agency.id}</span>
+                          <span className="block text-[13px] text-ink-600">
+                            {[agency.departamento, agency.provincia, agency.distrito].filter(Boolean).join(" · ")}
+                          </span>
+                          {agency.direccion && (
+                            <span className="block truncate text-xs text-ink-500">{agency.direccion}</span>
+                          )}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </>
+            )}
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+/**
+ * El bloque «DNI y agencia Shalom» de un pedido PAGADO POR WEB: el mismo paso 1
+ * de «Registrar un pago», sin la parte de cobro (MOM §Pagos, 26-10-2026).
+ * Guarda el borrador sin crear guía ni rótulo; «Abrir Shalom» lo trae puesto.
+ */
+function ShalomDestinationZone({
+  orderId,
+  storeId,
+  shalomGuide,
+}: {
+  orderId: string;
+  storeId: string;
+  shalomGuide: PanelData["shalomGuide"];
+}) {
+  const draft = useShalomDestinationDraft(orderId, storeId);
+  return (
+    <div className={cn(CARD_ZONE, "@container space-y-3")}>
+      <div>
+        <div className="flex min-h-6 flex-wrap items-center gap-x-2 gap-y-1">
+          <h4 className="text-sm font-semibold text-ink-900">DNI y agencia Shalom</h4>
+          <ShalomDestinationBadge draft={draft} shalomGuide={shalomGuide} />
+        </div>
+        {!shalomGuide && (
+          <p className="mt-0.5 max-w-[68ch] text-[13px] leading-5 text-ink-500">
+            Prepara el destino si el cliente recogerá por Shalom. Se guarda solo, sin crear la guía ni el
+            rótulo; «Abrir Shalom» lo trae puesto.
+          </p>
+        )}
+      </div>
+      <ShalomDestinationFields draft={draft} shalomGuide={shalomGuide} />
+    </div>
+  );
+}
+
+function VoucherForm({
+  orderId,
+  storeId,
+  accounts,
+  orderTotal,
+  existing,
+  shalomGuide,
+  pending,
+  onRegistered,
+  onError,
+  onNotice,
+}: {
+  orderId: string;
+  storeId: string;
+  /** Las cuentas de cobro de la tienda, para juzgar el receptor leído. */
+  accounts: CollectionAccount[];
+  orderTotal: number | null;
+  existing: PaymentRow[];
+  shalomGuide: PanelData["shalomGuide"];
+  pending: boolean;
+  onRegistered: () => void;
+  onError: (msg: string | null) => void;
+  onNotice: (msg: string | null) => void;
+}) {
+  const availableKinds = useMemo(
+    () => nextPaymentKinds(existing, orderTotal),
+    [existing, orderTotal],
+  );
+  const progress = useMemo(
+    () => paymentProgress(existing, orderTotal),
+    [existing, orderTotal],
+  );
+  const [kind, setKind] = useState<PaymentKind>(availableKinds[0] ?? "diferencia");
+  const [amount, setAmount] = useState("");
+  const [operation, setOperation] = useState("");
+  const [paidAt, setPaidAt] = useState("");
+  const [payer, setPayer] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [reading, setReading] = useState(false);
+  const [readNotice, setReadNotice] = useState<string | null>(null);
+  const [readWarning, setReadWarning] = useState<string | null>(null);
+  const [recipientCheck, setRecipientCheck] = useState<YapeRecipientReading | null>(null);
+  const [uploadedVoucher, setUploadedVoucher] = useState<{
+    fileKey: string;
+    path: string;
+    sha256: string | null;
+  } | null>(null);
+  // Datos de Shalom que se pueden adelantar acá (0073). OPCIONALES: no
+  // condicionan el pago — bloquear un cobro por falta de un DNI sería peor que
+  // el problema que resuelve.
+  const shalom = useShalomDestinationDraft(orderId, storeId);
+  const { shalomDoc, shalomDocType, shalomAgency, shalomSaved, setShalomSaved, setDocumentNotice, step1Saved } = shalom;
+
+  useEffect(() => {
+    const nextKind = availableKinds[0];
+    if (nextKind && !availableKinds.includes(kind)) {
+      setKind(nextKind);
+    }
+  }, [availableKinds, kind]);
 
   function pickVoucher(nextFile: File | null) {
     setFile(nextFile);
@@ -1815,7 +2181,6 @@ function VoucherForm({
   }
 
   const preview = useObjectUrl(file);
-  const step1Saved = Boolean(shalomSaved.document || shalomSaved.terminalId);
   const canRegisterNow = Boolean(file || operation.trim());
   const hasKinds = availableKinds.length > 0;
 
@@ -1849,19 +2214,7 @@ function VoucherForm({
             last={!hasKinds}
             done={Boolean(shalomGuide) || step1Saved}
             title="DNI y agencia Shalom"
-            badge={
-              shalomGuide ? (
-                <Badge>Ya en la guía</Badge>
-              ) : shalomSaving ? (
-                <Badge>Guardando…</Badge>
-              ) : shalomSaveError ? (
-                <Badge tone="crit">Sin guardar</Badge>
-              ) : step1Saved ? (
-                <Badge tone="ok">Guardado</Badge>
-              ) : (
-                <Badge>Opcional</Badge>
-              )
-            }
+            badge={<ShalomDestinationBadge draft={shalom} shalomGuide={shalomGuide} />}
             help={
               shalomGuide
                 ? undefined
@@ -1873,215 +2226,7 @@ function VoucherForm({
                 tiene el DNI a mano; quien crea la guía suele ser otra persona en otro
                 momento, y hoy tiene que volver a pedirlo. Nada de esto condiciona el
                 pago: un cobro no puede quedarse esperando a un DNI. */}
-            {/* Con la guía ya creada estos datos dejan de ser un borrador: Shalom los
-                tiene, los imprimió en su rótulo y el paquete viaja con ellos.
-                Editarlos acá no cambia nada allá — solo hace que Kapta y el rótulo
-                físico digan cosas distintas, que es peor que no poder tocarlos. La
-                salida real es anular la guía y crear otra, y eso se dice. */}
-            {shalomGuide ? (
-              <>
-                <dl className="grid gap-x-6 gap-y-3 @md:grid-cols-2">
-                  <div className="min-w-0">
-                    <dt className="text-[13px] leading-5 text-ink-500">Documento</dt>
-                    <dd className="mt-0.5 text-sm font-medium tabular-nums text-ink-900">
-                      {shalomDoc ? `${shalomDocType} ${shalomDoc}` : "—"}
-                    </dd>
-                  </div>
-                  <div className="min-w-0">
-                    <dt className="text-[13px] leading-5 text-ink-500">Agencia de destino</dt>
-                    <dd className="mt-0.5 break-words text-sm font-medium text-ink-900">{shalomAgency?.nombre ?? "—"}</dd>
-                  </div>
-                </dl>
-                <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-ink-600">
-                  <span>Guía</span>
-                  {shalomGuide.guideCode && (
-                    <span className="select-all font-mono font-semibold text-ink-900">N° {shalomGuide.guideCode}</span>
-                  )}
-                  {shalomGuide.codigo && (
-                    <span className="rounded bg-wash px-1.5 py-0.5 font-mono text-xs font-medium text-ink-700 ring-1 ring-inset ring-line">
-                      {shalomGuide.codigo}
-                    </span>
-                  )}
-                  <span className="text-ink-500">
-                    · {operationalLabel(shalomGuide.pickupState ?? shalomGuide.deliveryStatus)}
-                  </span>
-                </p>
-                <p className="max-w-[68ch] text-[13px] leading-5 text-ink-500">
-                  El destinatario y el destino ya viajan impresos en el rótulo de Shalom. Para cambiarlos
-                  hay que anular esa guía —desde «Salidas y guías»— y crear otra.
-                </p>
-              </>
-            ) : (
-              <>
-                {/* El guardado ocurre solo, así que tiene que VERSE: una escritura
-                    silenciosa que falla es indistinguible de una que funcionó, y eso es
-                    justo lo que hacía perder el DNI sin que nadie se enterara. La chapa
-                    del paso dice en qué quedó; esta línea lo anuncia al lector. */}
-                <p
-                  className={cn(
-                    "text-[13px] font-medium empty:hidden",
-                    shalomSaveError ? "text-crit-fg" : shalomSaving ? "text-ink-500" : "text-ok-fg",
-                  )}
-                  aria-live="polite"
-                >
-                  {shalomSaveError
-                    ? `No se pudo guardar: ${shalomSaveError}`
-                    : shalomSaving
-                      ? "Guardando…"
-                      : step1Saved
-                        ? `Guardado${shalomSaved.document ? ` · ${shalomSaved.document}` : ""}`
-                        : ""}
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  <select
-                    value={shalomDocType}
-                    onChange={(e) => {
-                      shalomTouched.current = true;
-                      setShalomDocType(e.target.value as ShalomDocumentType);
-                      setShalomDoc("");
-                      setDocumentNotice(null);
-                    }}
-                    aria-label="Tipo de documento"
-                    className={cn(FIELD_BOX, "h-9 w-24 px-2.5 pointer-coarse:h-11")}
-                  >
-                    <option value="DNI">DNI</option>
-                    <option value="RUC">RUC</option>
-                    <option value="CE">CE</option>
-                  </select>
-                  <div className="min-w-[15rem] flex-1">
-                    <div className="flex gap-2">
-                      <input
-                        value={shalomDoc}
-                        onChange={(e) => changeDocument(e.target.value)}
-                        // Al salir del campo, no en cada tecla: un DNI a medio escribir
-                        // no es una decisión, y el servidor lo rechazaría igual.
-                        onBlur={() => void persistShalomDraft({})}
-                        inputMode={shalomDocType === "CE" ? "text" : "numeric"}
-                        maxLength={shalomDocType === "DNI" ? 8 : shalomDocType === "RUC" ? 11 : 20}
-                        placeholder={
-                          shalomDocType === "DNI"
-                            ? "DNI de 8 dígitos"
-                            : shalomDocType === "RUC"
-                              ? "RUC de 11 dígitos"
-                              : "Carné de extranjería"
-                        }
-                        aria-label="Número de documento"
-                        aria-invalid={Boolean(shalomDocumentProblem)}
-                        className={cn(FIELD_BOX, "h-9 min-w-0 flex-1 px-3 tabular-nums pointer-coarse:h-11")}
-                      />
-                      <OpsButton
-                        onClick={validateDocument}
-                        disabled={documentChecking || !shalomDoc.trim() || Boolean(shalomDocumentProblem)}
-                        className="pointer-coarse:h-11"
-                      >
-                        {documentChecking ? "Validando…" : "Validar"}
-                      </OpsButton>
-                    </div>
-                    {shalomDocumentProblem && (
-                      <p className="mt-1.5 text-[13px] font-medium text-crit-fg">{shalomDocumentProblem}</p>
-                    )}
-                    {!shalomDocumentProblem && shalomDoc && !documentNotice && (
-                      <p className="mt-1.5 flex items-center gap-1 text-[13px] font-medium text-ok-fg">
-                        <IconCheck aria-hidden className="size-3.5" />
-                        Formato válido
-                      </p>
-                    )}
-                    {documentNotice && <p className="mt-1.5 text-[13px] leading-5 text-ink-600">{documentNotice}</p>}
-                  </div>
-                </div>
-                <div className="relative">
-                  {shalomAgency ? (
-                    <div className="flex items-center justify-between gap-3 rounded-lg bg-ok-wash px-3 py-2">
-                      <div className="min-w-0">
-                        <p className="flex items-center gap-1.5 text-sm font-semibold text-ink-900">
-                          <IconCheck aria-hidden className="size-4 shrink-0 text-ok-fg" />
-                          <span className="truncate">{shalomAgency.nombre}</span>
-                        </p>
-                        <p className="truncate pl-[22px] text-[13px] text-ink-600">
-                          {/* La agencia rescatada del borrador solo trae id y nombre: sin
-                              esto quedaría un "#612 · " con el separador colgando. */}
-                          {[
-                            `#${shalomAgency.id}`,
-                            shalomAgency.departamento,
-                            shalomAgency.provincia,
-                            shalomAgency.distrito,
-                          ]
-                            .filter(Boolean)
-                            .join(" · ")}
-                        </p>
-                      </div>
-                      <OpsButton
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => {
-                          shalomTouched.current = true;
-                          setShalomAgency(null);
-                          setShalomAgencyQuery("");
-                          // Quitarla también se guarda: si no, recargar la resucitaría.
-                          void persistShalomDraft({ terminalId: null, terminalName: null });
-                        }}
-                        className="shrink-0 pointer-coarse:h-11"
-                      >
-                        Cambiar
-                      </OpsButton>
-                    </div>
-                  ) : (
-                    <>
-                      <input
-                        value={shalomAgencyQuery}
-                        onChange={(e) => setShalomAgencyQuery(e.target.value)}
-                        placeholder="Buscar agencia por ciudad, distrito o nombre"
-                        aria-label="Agencia Shalom de destino"
-                        autoComplete="off"
-                        role="combobox"
-                        aria-expanded={shalomAgencies.length > 0}
-                        className={cn(FIELD, "pointer-coarse:h-11")}
-                      />
-                      {agencySearching && <p className="mt-1.5 text-[13px] text-ink-500">Buscando agencias…</p>}
-                      {agencyError && <p className="mt-1.5 text-[13px] font-medium text-crit-fg">{agencyError}</p>}
-                      {!agencySearching && !agencyError && shalomAgencyQuery.trim().length >= 2 && shalomAgencies.length === 0 && (
-                        <p className="mt-1.5 text-[13px] text-ink-500">No encontramos agencias con ese texto.</p>
-                      )}
-                      {shalomAgencies.length > 0 && (
-                        <ul
-                          role="listbox"
-                          className="absolute z-30 mt-1 max-h-52 w-full overflow-y-auto rounded-lg bg-white p-1 shadow-pop"
-                        >
-                          {shalomAgencies.map((agency) => (
-                            <li key={agency.id} role="option" aria-selected="false">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  shalomTouched.current = true;
-                                  setShalomAgency(agency);
-                                  setShalomAgencyQuery(agency.nombre);
-                                  setShalomAgencies([]);
-                                  // Elegirla ES la decisión: se guarda aquí, no al pagar.
-                                  void persistShalomDraft({
-                                    terminalId: agency.id,
-                                    terminalName: agency.nombre,
-                                  });
-                                }}
-                                className="block w-full rounded-md px-3 py-2 text-left transition-colors hover:bg-wash"
-                              >
-                                <span className="text-sm font-semibold text-ink-900">{agency.nombre}</span>{" "}
-                                <span className="text-xs tabular-nums text-ink-500">#{agency.id}</span>
-                                <span className="block text-[13px] text-ink-600">
-                                  {[agency.departamento, agency.provincia, agency.distrito].filter(Boolean).join(" · ")}
-                                </span>
-                                {agency.direccion && (
-                                  <span className="block truncate text-xs text-ink-500">{agency.direccion}</span>
-                                )}
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </>
-                  )}
-                </div>
-              </>
-            )}
+            <ShalomDestinationFields draft={shalom} shalomGuide={shalomGuide} />
           </Step>
 
           {hasKinds && (
