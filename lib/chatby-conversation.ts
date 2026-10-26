@@ -1,5 +1,5 @@
 // La conversación de WhatsApp de la clienta con el bot de confirmación, en la
-// ficha del pedido (MOM §25, «WhatsApp», 26-10-2026, pedido del owner).
+// ficha del pedido (MOM §25, «Chatby», 26-10-2026, pedido del owner).
 //
 // Chatby (`app.chatby.io`, white-label de uChat) es el bot que confirma los
 // pedidos contra entrega de la web: el mismo bot y el mismo número para Kenku y
@@ -255,6 +255,15 @@ export function chatbyDayLabel(day: string, now: Date = new Date()): string {
   if (day === yesterday) return "Ayer";
   const [y, m, d] = day.split("-");
   return `${d}-${m}-${y}`;
+}
+
+/**
+ * Cuántos de los mensajes son de la clienta (texto, botón o archivo): la cifra
+ * de la pestaña «Chatby», que dice sin abrirla si la clienta respondió. Cuenta
+ * dentro de los últimos 20 que se traen.
+ */
+export function chatbyCustomerCount(messages: readonly Pick<ChatbyMessage, "kind">[]): number {
+  return messages.filter((m) => m.kind === "cliente").length;
 }
 
 /**

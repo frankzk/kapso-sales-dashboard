@@ -1,9 +1,9 @@
 "use client";
 
-// La pestaña «WhatsApp» de la ficha del pedido (MOM §25, 26-10-2026): la
+// La pestaña «Chatby» de la ficha del pedido (MOM §25, 26-10-2026): la
 // conversación de la clienta con el bot de confirmación de Chatby, solo para
-// leer. Se pide al abrir la pestaña, no al abrir la ficha: así Chatby solo se
-// consulta cuando alguien la quiere ver. El hilo tiene la misma anatomía que el
+// leer. Se pide al abrir la ficha del pedido (la cifra de la pestaña dice
+// cuántos mensajes mandó la clienta), nunca en segundo plano para todos. El hilo tiene la misma anatomía que el
 // chat de Leads (la clienta a la izquierda en blanco, la tienda a la derecha
 // sobre `line`), con las notas internas aparte y los errores de WhatsApp en
 // rojo. Las horas, siempre en Lima.
@@ -18,6 +18,7 @@ import {
   chatbyDayLabel,
   chatbyLimaDay,
   chatbyLimaTime,
+  chatbyCustomerCount,
   chatbyMentionsOrder,
   type ChatbyConversation,
   type ChatbyMessage,
@@ -156,7 +157,16 @@ function Thread({ messages, orderName }: { messages: ChatbyMessage[]; orderName:
 
 type LoadState = { status: "cargando" } | { status: "listo"; result: ChatbyConversation };
 
-export function OrderChatbyPanel({ orderId, orderName, active }: { orderId: string; orderName: string | null; active: boolean }) {
+export function OrderChatbyPanel({
+  orderId,
+  orderName,
+  onCustomerMessages,
+}: {
+  orderId: string;
+  orderName: string | null;
+  /** Cuántos de los mensajes traídos son de la clienta, para la cifra de la pestaña; null mientras no se sabe. */
+  onCustomerMessages?: (count: number | null) => void;
+}) {
   const [state, setState] = useState<LoadState | null>(null);
   const loadedFor = useRef<string | null>(null);
 
@@ -174,20 +184,24 @@ export function OrderChatbyPanel({ orderId, orderName, active }: { orderId: stri
       });
   }, [orderId]);
 
-  // Se pide la primera vez que se abre la pestaña con este pedido.
+  // Se pide al abrir la ficha de este pedido (no en segundo plano para todos):
+  // la pestaña dice en su cifra si la clienta respondió sin tener que abrirla.
   useEffect(() => {
-    if (active && loadedFor.current !== orderId) load();
-  }, [active, orderId, load]);
+    if (loadedFor.current !== orderId) load();
+  }, [orderId, load]);
 
   const result = state?.status === "listo" ? state.result : null;
+  useEffect(() => {
+    onCustomerMessages?.(result?.status === "ok" ? chatbyCustomerCount(result.messages) : null);
+  }, [result, onCustomerMessages]);
   const inboxUrl = result?.status === "ok" ? result.inboxUrl : result?.status === "error" ? result.inboxUrl : null;
   const loading = state?.status === "cargando";
 
   return (
-    <section aria-labelledby="pedido-whatsapp-title" className={cn("space-y-4", SECTION_CARD)}>
+    <section aria-labelledby="pedido-chatby-title" className={cn("space-y-4", SECTION_CARD)}>
       <SectionHead
-        id="pedido-whatsapp-title"
-        title="WhatsApp (Chatby)"
+        id="pedido-chatby-title"
+        title="Conversación en Chatby"
         badge={<Badge>Solo lectura</Badge>}
         help={`Los últimos ${CHATBY_MESSAGES_LIMIT} mensajes de la clienta con el bot de confirmación, en hora de Lima. Kenku y Aurela comparten el bot: pueden salir mensajes de las dos marcas.`}
         aside={

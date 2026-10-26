@@ -10476,8 +10476,8 @@ estables:
      adelanto, y el punto cobraba de más.
    - **Cada producto lleva su cantidad**: «  2 x Producto - Variante». Una línea
      quitada del pedido (cantidad 0) no va.
-5. **WhatsApp (26-10-2026, pedido del owner):** la conversación de la clienta
-   con el bot de confirmación de Chatby, **solo para leer**, para no salir de
+5. **Chatby (26-10-2026, pedido del owner):** la conversación de WhatsApp de la
+   clienta con el bot de confirmación de Chatby, **solo para leer**, para no salir de
    Kapta a ver qué se le dijo. Kenku y Aurela comparten el bot y el número. El
    contrato es el documento del equipo de la tienda
    (`docs/kapta/chatby-conversaciones.md`), probado el 25-10-2026 contra la API
@@ -10494,8 +10494,13 @@ estables:
      ficha lleva la chapa «Este pedido». Arriba, «Actualizar» y **«Abrir en
      Chatby»** (`https://app.chatby.io/inbox/<user_ns>`, pide la sesión de
      Chatby).
-   - **A pedido:** se lee al abrir la pestaña (no al abrir la ficha, ni en
-     segundo plano), con un tope de **5 segundos** para las dos llamadas y **un
+   - **La cifra de la pestaña (26-10-2026, pedido del owner):** cuántos de los
+     20 mensajes son de la clienta (texto, botón o archivo;
+     `chatbyCustomerCount`), en la misma chapa que la cifra de «Actividad».
+     Solo sale si respondió: sin respuesta, sin error o sin clave, no hay
+     chapa. Así se sabe sin abrir la pestaña si la clienta contestó al bot.
+   - **A pedido:** se lee al abrir la ficha del pedido (para la cifra; antes,
+     al abrir la pestaña), nunca en segundo plano para todos, con un tope de **5 segundos** para las dos llamadas y **un
      minuto** de caché por celular en la memoria del servidor. Si falla, la
      pestaña lo dice («No se pudo cargar la conversación de Chatby» y el
      motivo: la clave rechazada, el código de Chatby o que no respondió), con
@@ -10509,7 +10514,8 @@ estables:
      (sin `include_bot` no salen las plantillas). Solo esos dos GET: Chatby no
      tiene claves de solo lectura y Kapta nunca manda nada.
    - **Lo que no sale de la lectura:** la clave (`CHATBY_API_KEY`, la clave
-     «KAPTA» del bot con el permiso «Manage Flow», aparte de la de Make para
+     «KAPTA» del bot, creada en `app.chatby.io/settings#/api` → «Create API Token»
+     con solo el permiso «Manage Flow», aparte de la de Make para
      revocarla sola; solo en el servidor), los campos del contacto
      (`user_fields`, uno trae la clave de pedidos de una tienda: de la clienta
      solo se copian `user_ns` y el nombre) y la conversación (no se guarda en
@@ -10521,7 +10527,9 @@ estables:
    - Implementación: `lib/chatby-conversation.ts` (reglas puras),
      `lib/chatby-api.ts` (las dos llamadas, el tope y la caché),
      `loadOrderChatby` en `app/dashboard/pedidos/actions.ts` y
-     `components/order-chatby-panel.tsx`; `?seccion=whatsapp` abre la pestaña.
+     `components/order-chatby-panel.tsx`; `?seccion=chatby` abre la pestaña.
+     Las primeras horas se llamó «WhatsApp»; el owner pidió «Chatby» el mismo
+     día, porque «WhatsApp» ya es el botón de la cabecera que abre el chat.
      Pruebas: `test/chatby-conversation.test.ts`.
 
 **El historial del lead se reparte entre los pedidos del cliente (16-10-2026).**
