@@ -114,6 +114,7 @@ roles and the `auth` schema, so it just works.
    | `SHALOM_API_BASE` | `https://api.shalom-api-peru.com` (optional). **El host a secas, sin `/v1`**: el cliente ya añade la ruta, y una base con `/v1` produce `/v1/v1/…` → 404. Si no existe la variable, el valor por defecto ya es el correcto |
    | `OLVA_TRACKING_APIKEY` | La `apikey` con la que la página pública de Olva (`tracking.olvaexpress.pe`) llama a `reports.olvaexpress.pe/webservice/rest/getTrackingInformation`. **Es de Olva, no nuestra**: se captura en DevTools → Red al consultar un tracking, y la pueden rotar sin aviso. Sin ella el cron `olva-reconcile` se salta y los estados de Olva se marcan a mano (ver §12 del MOM) |
    | `OLVA_TRACKING_API_BASE` | `https://reports.olvaexpress.pe` (optional) |
+   | `CHATBY_API_KEY` | La clave «KAPTA» de la API de Chatby, para la pestaña «WhatsApp» de la ficha del pedido. **La emite Chatby**: *Settings → API*, una clave nueva llamada «KAPTA» con el permiso «Manage Flow», aparte de la de Make para poder revocarla sola. Solo servidor (sin `NEXT_PUBLIC_`). Sin ella la pestaña dice que falta conectar Chatby (ver 5q.1) |
    | `CHATBY_WEBHOOK_SECRET` | Secreto del «Live Chat Webhook» de Chatby. **Lo elegís vos** (`openssl rand -hex 32`), no lo emite Chatby. Va también en Chatby → Integrations → Live Chat Support → Webhook, campo *Custom Header*: `X-Webhook-Secret: <valor>`. Sin él el receptor rechaza todo (ver 5q) |
    | `META_APP_SECRET` | *App Secret* de la app de Meta — **lo emite Meta**, es el mismo que ya usa la Marketing API. Con él se verifica la firma `X-Hub-Signature-256` de cada entrega del webhook de página/Instagram. Sin él el receptor rechaza todo (ver 5s) |
    | `META_WEBHOOK_VERIFY_TOKEN` | Token del apretón de manos del webhook de Meta. **Lo elegís vos** (`openssl rand -hex 32`) y lo tecleás en el panel de Meta al dar de alta la URL. Sin él Meta **nunca activa la suscripción** y no llega nada, sin error visible (ver 5s) |
@@ -1591,6 +1592,9 @@ que dice si el dinero llegó, y hasta ahora nadie lo miraba uno por uno.
   webhook, y **no hay forma de pedir el histórico**: lo que no se capture
   mientras está apagado se pierde para siempre. Por eso conviene activarlo
   aunque la interfaz que lo consuma todavía no exista.
+  **Corregido el 25-10-2026:** sí la expone. `GET /subscriber/chat-messages`
+  devuelve los mensajes de una clienta (con `include_bot=1`, también los del
+  bot), probado contra la API real; la ficha del pedido la lee así (5q.1).
 - Generá el secreto (`openssl rand -hex 32`), cargalo como `CHATBY_WEBHOOK_SECRET`
   y en Chatby → **Integrations → Live Chat Support → Webhook**:
 
@@ -1622,6 +1626,27 @@ que dice si el dinero llegó, y hasta ahora nadie lo miraba uno por uno.
   en la tienda equivocada.
 - Es una bitácora **append-only y sin pérdida**: guarda el JSON entero tal como
   llegó, incluso si no es JSON válido. La tabla definitiva se rellena desde acá.
+
+## 5q.1 Chatby — la conversación en la ficha del pedido (26-10-2026)
+
+- **Sin migración.** Solo la variable `CHATBY_API_KEY` en Vercel (Production),
+  y volver a desplegar para que la tome.
+- La clave: en Chatby, **Settings → API**, una clave nueva llamada **«KAPTA»**
+  con el permiso **«Manage Flow»**. Chatby no tiene claves de solo lectura:
+  Kapta solo hace dos `GET` (buscar a la clienta por su celular y traer sus
+  últimos 20 mensajes), y con una clave aparte de la de Make se puede revocar
+  sin cortar Make. Se pega directamente en Vercel, nunca en un chat ni en un
+  correo.
+- Comprobar: abrir un pedido de alguien del equipo que ya recibió una
+  plantilla de confirmación → pestaña **WhatsApp**. Deben salir sus mensajes en
+  hora de Lima y «Abrir en Chatby» debe abrir esa conversación. «Chatby rechazó
+  la clave de Kapta» = la clave está mal copiada o la revocaron.
+- Kapta no guarda la conversación ni los campos del contacto (uno trae la clave
+  de pedidos de una tienda), y sus registros solo llevan el paso y el código
+  HTTP (`[chatby] {"paso":…,"status":…}`). Contrato:
+  `docs/kapta/chatby-conversaciones.md`; regla: MOM §25 («WhatsApp»).
+- Marcha atrás: borrar `CHATBY_API_KEY` (la pestaña vuelve a decir que falta
+  conectar Chatby) o revocar la clave «KAPTA» en Chatby.
 
 ## 5r. Anomalías de ingesta — ver lo que se descarta
 

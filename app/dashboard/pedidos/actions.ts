@@ -101,6 +101,8 @@ import {
 import { reprogramOutputReason } from "@/lib/gf-retry";
 import { cancelGuides, swaypOptsFromEnv } from "@/lib/swayp";
 import { env } from "@/lib/env";
+import { fetchChatbyConversation } from "@/lib/chatby-api";
+import type { ChatbyConversation } from "@/lib/chatby-conversation";
 import {
   decideLabelAction,
   labelCreatesOutput,
@@ -245,6 +247,23 @@ export async function loadOrderDetail(
     // un error, va el error — es la diferencia entre borrar un pedido de la
     // cabeza del equipo y ver "column ... does not exist" y aplicar la migración.
     if (cause instanceof OrderMasterReadError) return { error: cause.message };
+    throw cause;
+  }
+}
+
+/**
+ * La conversación de WhatsApp de la clienta con el bot de Chatby (MOM §25,
+ * «WhatsApp», 26-10-2026): a pedido, al abrir esa pestaña de la ficha, y solo
+ * para leer. Solo quien ya puede leer el pedido (RLS, como la ficha); la clave
+ * de Chatby no sale del servidor y la conversación no se guarda en Kapta.
+ */
+export async function loadOrderChatby(orderId: string): Promise<ChatbyConversation> {
+  try {
+    const ctx = await authorizeOrder(orderId);
+    if (!ctx) return { status: "error", message: "Sin acceso a este pedido.", inboxUrl: null };
+    return await fetchChatbyConversation({ phone: ctx.row.customer_phone, apiKey: env.chatbyApiKey() });
+  } catch (cause) {
+    if (cause instanceof OrderMasterReadError) return { status: "error", message: cause.message, inboxUrl: null };
     throw cause;
   }
 }

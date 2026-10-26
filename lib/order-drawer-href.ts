@@ -20,10 +20,10 @@ export const DRAWER_PARAM = "ficha";
 export const MASTER_OPEN_PARAM = "abrir";
 export const SECTION_PARAM = "seccion";
 
-export type OrderDrawerSection = "operar" | "informacion" | "historial" | "punto";
-export type OrderDrawerWorkspace = "operar" | "informacion" | "actividad" | "punto";
+export type OrderDrawerSection = "operar" | "informacion" | "historial" | "punto" | "whatsapp";
+export type OrderDrawerWorkspace = "operar" | "informacion" | "actividad" | "punto" | "whatsapp";
 
-const SECTIONS: readonly OrderDrawerSection[] = ["operar", "informacion", "historial", "punto"];
+const SECTIONS: readonly OrderDrawerSection[] = ["operar", "informacion", "historial", "punto", "whatsapp"];
 
 export function isOrderDrawerSection(value: string | null | undefined): value is OrderDrawerSection {
   return SECTIONS.includes(value as OrderDrawerSection);
@@ -34,6 +34,7 @@ export function workspaceForDrawerSection(section: string | null | undefined): O
   if (section === "historial") return "actividad";
   if (section === "informacion") return "informacion";
   if (section === "punto") return "punto";
+  if (section === "whatsapp") return "whatsapp";
   return "operar";
 }
 
