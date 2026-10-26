@@ -200,3 +200,29 @@ describe("leadAfter", () => {
     expect(ids(leadAfter(quedan, { openId: "x", userId: YO, now: NOW }))).toBe("d");
   });
 });
+
+describe("«Siguiente lead» salta al siguiente libre si se lo ganaron (owner, 26-10-2026)", () => {
+  const board = readFileSync(resolve(process.cwd(), "components/leads.tsx"), "utf8");
+  const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8");
+
+  it("si el servidor dice que otra lo tiene, prueba con el siguiente libre de la misma lista", () => {
+    expect(board).toContain("const NEXT_LEAD_MAX_SKIPS = 5;");
+    expect(board).toMatch(/onTaken: \(message\) => \{\s*taken = true;/);
+    expect(board).toContain("candidate = leadAfter(queue, { openId: candidate.id, userId: currentUserId });");
+  });
+
+  it("el tope de dos abiertos no se salta: sigue saliendo su aviso", () => {
+    expect(board).toContain("if (opts?.onTaken && !isClaimCapError(d.error) && opts.onTaken(d.error))");
+  });
+
+  it("el MOM lo dice", () => {
+    expect(mom).toContain("**salta al siguiente libre** de la misma lista");
+  });
+
+  it("después de un tomado, el siguiente libre de la lista es el que sigue", () => {
+    const ids = (l: { id: string } | null) => l?.id ?? null;
+    const cola = [lead("a"), lead("b"), lead("c", { claimed_by: "rosa", claimed_at: hace(1) }), lead("d")];
+    // «b» resultó tomado al abrirlo: se busca desde «b», saltando «c» (reservado).
+    expect(ids(leadAfter(cola, { openId: "b", userId: YO, now: NOW }))).toBe("d");
+  });
+});

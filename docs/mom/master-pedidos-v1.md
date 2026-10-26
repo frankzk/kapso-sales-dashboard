@@ -4259,8 +4259,12 @@ lead de la lista, como pasa en «Sin llamar», abre el que venía detrás; si es
 tampoco está, el primero libre. En el último de la lista el botón queda
 apagado. Al pasar, **primero suelta** la reserva del lead que deja, igual que
 «Cerrar» (con el tope de dos abiertos, tomar primero podía dejarla sin cupo), y
-después toma el otro. Si otra persona lo tomó en ese instante, la ficha se
-cierra y avisa quién lo tiene, como al abrirlo desde la lista. Lo que se
+después toma el otro. **Si otra persona lo tomó en ese instante** (la lista
+todavía no lo sabía), **salta al siguiente libre** de la misma lista, sin
+cerrar la ficha ni avisar, hasta 5 seguidos (owner, 26-10-2026; antes la ficha
+se cerraba con «X está atendiendo este lead»). Si los 5 están tomados, o no
+queda ninguno libre debajo, la ficha se cierra con un aviso que lo dice. El
+tope de dos leads abiertos no se salta: ese aviso sale igual. Lo que se
 escribió y no se guardó se pierde igual que al cerrar.
 
 La cola de abajo sigue siendo **una sola lista** en el orden medido, con la

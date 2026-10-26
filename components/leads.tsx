@@ -58,6 +58,7 @@ import {
   CLAIM_HEARTBEAT_MS,
   isClaimActive,
   leadAfter,
+  isClaimCapError,
   shouldRenewClaim,
   isQueueBucket,
   labelOf,
@@ -874,7 +875,11 @@ export function LeadsBoard({
    * «abriendo». Un botón que no dice nada mientras trabaja se acaba pulsando
    * cuatro veces.
    */
-  async function abrirLeadPorId(leadId: string, previa?: LeadRow | null): Promise<boolean> {
+  async function abrirLeadPorId(
+    leadId: string,
+    previa?: LeadRow | null,
+    opts?: { onTaken?: (message: string) => boolean },
+  ): Promise<boolean> {
     markLeadDrawerOpen();
     activeLeadIdRef.current = leadId;
     setBanner(null);
@@ -887,6 +892,12 @@ export function LeadsBoard({
       const d = await openLeadDrawer(leadId);
       if (activeLeadIdRef.current !== leadId) return false;
       if ("error" in d) {
+        // «Siguiente lead»: otra persona lo tomó después de pintar la lista.
+        // Quien llama decide si salta al siguiente libre (sin aviso ni cierre).
+        if (opts?.onTaken && !isClaimCapError(d.error) && opts.onTaken(d.error)) {
+          activeLeadIdRef.current = null;
+          return false;
+        }
         setBanner(d.error);
         setSelected(null);
         activeLeadIdRef.current = null;
@@ -1512,6 +1523,9 @@ export function LeadsBoard({
       })
     : null;
 
+  /** Cuántos leads tomados se saltan, como mucho, al pulsar «Siguiente lead». */
+  const NEXT_LEAD_MAX_SKIPS = 5;
+
   /**
    * Pasar de la ficha abierta a `next` sin cerrarla. La reserva de la que se
    * deja se suelta ANTES de tomar la otra, como al cerrar: con el tope de dos
@@ -1520,6 +1534,7 @@ export function LeadsBoard({
    */
   function openFollowingLead(next: LeadRow) {
     const leaving = selected?.id ?? null;
+    const queue = displayLeads;
     // Apagado desde el clic (un doble clic no abre dos), y la ficha que se
     // deja ya no es «la abierta»: su latido no la vuelve a reservar mientras
     // se suelta.
@@ -1537,7 +1552,29 @@ export function LeadsBoard({
         return;
       }
       jumpingToRef.current = null;
-      await abrirLeadPorId(next.id, next);
+      // Si otra asesora lo tomó después de pintarse la lista, se salta al
+      // siguiente libre de la misma lista (hasta 5 intentos), sin cerrar la
+      // ficha ni mostrar el aviso de «X está atendiendo este lead».
+      let candidate: LeadRow | null = next;
+      let lastTaken: string | null = null;
+      for (let attempt = 0; candidate && attempt < NEXT_LEAD_MAX_SKIPS; attempt++) {
+        let taken = false;
+        const opened = await abrirLeadPorId(candidate.id, candidate, {
+          onTaken: (message) => {
+            taken = true;
+            lastTaken = message;
+            return true;
+          },
+        });
+        if (opened || !taken) return;
+        candidate = leadAfter(queue, { openId: candidate.id, userId: currentUserId });
+      }
+      setSelected(null);
+      setBanner(
+        candidate
+          ? "Los siguientes leads de la lista los están atendiendo otras personas. Vuelve a la lista para elegir otro."
+          : (lastTaken ?? "No quedan leads libres después de este en la lista."),
+      );
     })();
   }
 
