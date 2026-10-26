@@ -160,7 +160,7 @@ import {
   type MacroSubstage,
 } from "@/lib/order-macro-stage";
 import { KEY_STATE_LABEL, PAYMENT_STATE_LABEL, type KeyState, type PaymentState } from "@/lib/pickup-key";
-import { orderPaymentPanelPresentation } from "@/lib/order-payment-panel";
+import { offersShalomDestination, orderPaymentPanelPresentation } from "@/lib/order-payment-panel";
 import { PAYMENT_GATEWAY_LABEL } from "@/lib/payment-gateway";
 import {
   CONFIRMATION_CHANNELS,
@@ -1070,6 +1070,17 @@ export function OrderDrawer({
       ? `${PAYMENT_GATEWAY_LABEL[detail.row.payment_gateway]}: no lo cobró el checkout. Para darlo por pagado, sube la constancia.`
       : null;
   const showPaymentPanel = paymentPanel?.show ?? false;
+  // «DNI y agencia Shalom» en un pedido pagado por web (MOM §Pagos, #KP200104):
+  // se ofrece donde Shalom puede ser el destino, lo pueda crear o no este rol.
+  const shalomDestination = Boolean(
+    detail &&
+      offersShalomDestination({
+        operation: detail.routePlan.operation,
+        currentCourier: detail.row.current_courier,
+        shippingMode: detail.row.shipping_mode,
+        shalomCandidate: detail.routePlan.candidates.some((candidate) => candidate.key === "shalom"),
+      }),
+  );
   // La salida GF activa (o la última) para la tarjeta de acción.
   const gfActive = detail?.gfDeliveries.length ? detail.gfDeliveries[detail.gfDeliveries.length - 1]! : null;
   // La salida que su courier no entregó y con qué sale ahora la caja (§28).
@@ -1955,6 +1966,7 @@ export function OrderDrawer({
                     orderId={orderId}
                     mode={paymentPanel.mode}
                     gatewayNote={gatewayNote}
+                    shalomDestination={shalomDestination}
                     onChanged={onSaved}
                   />
                   {/* MOM §35: la boleta sale del dinero que ya entró, así que
