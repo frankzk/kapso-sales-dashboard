@@ -1,6 +1,6 @@
 "use client";
 
-// La pestaña «WhatsApp» de la ficha del pedido (MOM §25, 26-10-2026): la
+// La pestaña «Chatby» de la ficha del pedido (MOM §25, 26-10-2026): la
 // conversación de la clienta con el bot de confirmación de Chatby, solo para
 // leer. Se pide al abrir la pestaña, no al abrir la ficha: así Chatby solo se
 // consulta cuando alguien la quiere ver. El hilo tiene la misma anatomía que el
@@ -184,10 +184,10 @@ export function OrderChatbyPanel({ orderId, orderName, active }: { orderId: stri
   const loading = state?.status === "cargando";
 
   return (
-    <section aria-labelledby="pedido-whatsapp-title" className={cn("space-y-4", SECTION_CARD)}>
+    <section aria-labelledby="pedido-chatby-title" className={cn("space-y-4", SECTION_CARD)}>
       <SectionHead
-        id="pedido-whatsapp-title"
-        title="WhatsApp (Chatby)"
+        id="pedido-chatby-title"
+        title="Conversación en Chatby"
         badge={<Badge>Solo lectura</Badge>}
         help={`Los últimos ${CHATBY_MESSAGES_LIMIT} mensajes de la clienta con el bot de confirmación, en hora de Lima. Kenku y Aurela comparten el bot: pueden salir mensajes de las dos marcas.`}
         aside={

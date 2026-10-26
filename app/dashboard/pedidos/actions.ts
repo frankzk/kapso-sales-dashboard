@@ -253,7 +253,7 @@ export async function loadOrderDetail(
 
 /**
  * La conversación de WhatsApp de la clienta con el bot de Chatby (MOM §25,
- * «WhatsApp», 26-10-2026): a pedido, al abrir esa pestaña de la ficha, y solo
+ * «Chatby», 26-10-2026): a pedido, al abrir esa pestaña de la ficha, y solo
  * para leer. Solo quien ya puede leer el pedido (RLS, como la ficha); la clave
  * de Chatby no sale del servidor y la conversación no se guarda en Kapta.
  */

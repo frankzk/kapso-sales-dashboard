@@ -281,7 +281,7 @@ export const DRAWER_SECTION_IDS: readonly DrawerSectionId[] = [
   "historial",
 ];
 
-export type DrawerWorkspaceView = "operar" | "informacion" | "actividad" | "punto" | "whatsapp";
+export type DrawerWorkspaceView = "operar" | "informacion" | "actividad" | "punto" | "chatby";
 
 interface DrawerNextAction {
   eyebrow: string;
@@ -1141,7 +1141,7 @@ export function OrderDrawer({
     { id: "informacion", label: "Información" },
     { id: "actividad", label: "Actividad", count: detail?.timeline.length },
     { id: "punto", label: "Punto" },
-    { id: "whatsapp", label: "WhatsApp" },
+    { id: "chatby", label: "Chatby" },
   ];
   // Pestañas con flechas, Inicio y Fin (patrón ARIA): el foco se mueve y la
   // pestaña se abre en el mismo gesto.
@@ -1338,8 +1338,8 @@ export function OrderDrawer({
           {/* Tres espacios estables, como en Shopify: hacer el trabajo, consultar
               el pedido y auditar lo ocurrido. El equipo deja de navegar una
               lista accidental de formularios. La cuarta, Punto, es el texto
-              que se le pasa al punto de entrega, y la quinta, WhatsApp, la
-              conversación de la clienta en Chatby (MOM §25). */}
+              que se le pasa al punto de entrega, y la quinta, Chatby, la
+              conversación de WhatsApp de la clienta con el bot (MOM §25). */}
           {detail ? (
             <div className="mt-2 flex gap-6 px-4 sm:px-6" role="tablist" aria-label="Espacios del pedido">
               {tabs.map((tab) => {
@@ -2216,13 +2216,13 @@ export function OrderDrawer({
               />
             </div>
             <div
-              id="pedido-panel-whatsapp"
+              id="pedido-panel-chatby"
               role="tabpanel"
-              aria-labelledby="pedido-tab-whatsapp"
-              hidden={workspace !== "whatsapp"}
+              aria-labelledby="pedido-tab-chatby"
+              hidden={workspace !== "chatby"}
               className="flex flex-col gap-4 sm:gap-6"
             >
-              <OrderChatbyPanel orderId={orderId} orderName={detail.row.order_name} active={workspace === "whatsapp"} />
+              <OrderChatbyPanel orderId={orderId} orderName={detail.row.order_name} active={workspace === "chatby"} />
             </div>
           </div>
         )}

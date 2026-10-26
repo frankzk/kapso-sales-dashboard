@@ -10476,8 +10476,8 @@ estables:
      adelanto, y el punto cobraba de más.
    - **Cada producto lleva su cantidad**: «  2 x Producto - Variante». Una línea
      quitada del pedido (cantidad 0) no va.
-5. **WhatsApp (26-10-2026, pedido del owner):** la conversación de la clienta
-   con el bot de confirmación de Chatby, **solo para leer**, para no salir de
+5. **Chatby (26-10-2026, pedido del owner):** la conversación de WhatsApp de la
+   clienta con el bot de confirmación de Chatby, **solo para leer**, para no salir de
    Kapta a ver qué se le dijo. Kenku y Aurela comparten el bot y el número. El
    contrato es el documento del equipo de la tienda
    (`docs/kapta/chatby-conversaciones.md`), probado el 25-10-2026 contra la API
@@ -10522,7 +10522,9 @@ estables:
    - Implementación: `lib/chatby-conversation.ts` (reglas puras),
      `lib/chatby-api.ts` (las dos llamadas, el tope y la caché),
      `loadOrderChatby` en `app/dashboard/pedidos/actions.ts` y
-     `components/order-chatby-panel.tsx`; `?seccion=whatsapp` abre la pestaña.
+     `components/order-chatby-panel.tsx`; `?seccion=chatby` abre la pestaña.
+     Las primeras horas se llamó «WhatsApp»; el owner pidió «Chatby» el mismo
+     día, porque «WhatsApp» ya es el botón de la cabecera que abre el chat.
      Pruebas: `test/chatby-conversation.test.ts`.
 
 **El historial del lead se reparte entre los pedidos del cliente (16-10-2026).**

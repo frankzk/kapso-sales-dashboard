@@ -1,5 +1,5 @@
 // La conversación de WhatsApp de la clienta con el bot de confirmación, en la
-// ficha del pedido (MOM §25, «WhatsApp», 26-10-2026, pedido del owner).
+// ficha del pedido (MOM §25, «Chatby», 26-10-2026, pedido del owner).
 //
 // Chatby (`app.chatby.io`, white-label de uChat) es el bot que confirma los
 // pedidos contra entrega de la web: el mismo bot y el mismo número para Kenku y

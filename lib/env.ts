@@ -224,7 +224,7 @@ export const env = {
   //     en dos paneles distintos y un blanco invisible da 401 siempre.
   chatbyWebhookSecret: () => (process.env.CHATBY_WEBHOOK_SECRET ?? "").trim(),
   //     La clave de la API de Chatby para leer la conversación de la clienta en
-  //     la ficha del pedido (MOM §25, «WhatsApp», 26-10-2026). Es la clave
+  //     la ficha del pedido (MOM §25, «Chatby», 26-10-2026). Es la clave
   //     «KAPTA» del bot (app.chatby.io/settings#/api → «Create API Token», solo
   //     «Manage Flow»), aparte de la de Make para poder revocarla sola. Chatby
   //     no tiene claves de solo lectura:

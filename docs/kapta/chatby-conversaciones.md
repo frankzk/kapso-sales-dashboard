@@ -1,7 +1,7 @@
 # Conversaciones de WhatsApp (Chatby) dentro de Kapta
 
 > Copia del documento que el equipo de la tienda escribió para Kapta (26-10-2026).
-> Cómo quedó en Kapta: MOM §25, punto 5 («WhatsApp»), y DEPLOY.md 5q.1. Lo único
+> Cómo quedó en Kapta: MOM §25, punto 5 (la pestaña «Chatby»), y DEPLOY.md 5q.1. Lo único
 > que Kapta hizo distinto: el `user_ns` no se guarda (se busca por el celular cada
 > vez, con un minuto de caché), para no guardar nada que venga de Chatby.
 

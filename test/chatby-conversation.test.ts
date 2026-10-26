@@ -15,7 +15,7 @@ import { CHATBY_CACHE_MS, clearChatbyCache, fetchChatbyConversation } from "@/li
 import { workspaceForDrawerSection } from "@/lib/order-drawer-href";
 
 /**
- * La conversación de Chatby en la ficha del pedido (MOM §25, «WhatsApp»,
+ * La conversación de Chatby en la ficha del pedido (MOM §25, «Chatby»,
  * 26-10-2026). El contrato es docs/kapta/chatby-conversaciones.md; lo marcado
  * «verificado» ahí se probó el 25-10-2026 contra la API real.
  */
@@ -277,8 +277,8 @@ describe("fetchChatbyConversation: las dos lecturas, y nada más", () => {
 });
 
 describe("la ficha y el MOM", () => {
-  it("?seccion=whatsapp abre la pestaña", () => {
-    expect(workspaceForDrawerSection("whatsapp")).toBe("whatsapp");
+  it("?seccion=chatby abre la pestaña", () => {
+    expect(workspaceForDrawerSection("chatby")).toBe("chatby");
   });
 
   it("la clave solo en el servidor: la ficha llama a la acción, nunca a Chatby", () => {
@@ -290,7 +290,7 @@ describe("la ficha y el MOM", () => {
 
   it("el MOM lo cuenta", () => {
     const mom = readFileSync(resolve(__dirname, "../docs/mom/master-pedidos-v1.md"), "utf8");
-    expect(mom).toContain("5. **WhatsApp (26-10-2026, pedido del owner):**");
+    expect(mom).toContain("5. **Chatby (26-10-2026, pedido del owner):**");
     expect(mom).toContain("`CHATBY_API_KEY`");
   });
 });

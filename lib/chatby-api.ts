@@ -1,5 +1,5 @@
 // La lectura de la conversación en la API oficial de Chatby (MOM §25,
-// «WhatsApp», 26-10-2026). Las reglas puras están en lib/chatby-conversation.ts;
+// «Chatby», 26-10-2026). Las reglas puras están en lib/chatby-conversation.ts;
 // aquí van las dos llamadas, el tope y la caché.
 //
 //   1. `GET /subscribers?phone=%2B51…&limit=5`  → el `user_ns` de la clienta.
