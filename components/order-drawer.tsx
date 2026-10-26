@@ -55,6 +55,7 @@ import {
 } from "@/components/icons";
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
 import { OrderCompanionPanel } from "@/components/order-companion-panel";
+import { OrderChatbyPanel } from "@/components/order-chatby-panel";
 import { AliclikDuplicatePanel } from "@/components/aliclik-duplicate-panel";
 import { CopyButton, copyLabel, useCopyToClipboard } from "@/components/copy-button";
 import { AliclikCoverageProbe } from "@/components/aliclik-coverage-probe";
@@ -280,7 +281,7 @@ export const DRAWER_SECTION_IDS: readonly DrawerSectionId[] = [
   "historial",
 ];
 
-export type DrawerWorkspaceView = "operar" | "informacion" | "actividad" | "punto";
+export type DrawerWorkspaceView = "operar" | "informacion" | "actividad" | "punto" | "whatsapp";
 
 interface DrawerNextAction {
   eyebrow: string;
@@ -1140,6 +1141,7 @@ export function OrderDrawer({
     { id: "informacion", label: "Información" },
     { id: "actividad", label: "Actividad", count: detail?.timeline.length },
     { id: "punto", label: "Punto" },
+    { id: "whatsapp", label: "WhatsApp" },
   ];
   // Pestañas con flechas, Inicio y Fin (patrón ARIA): el foco se mueve y la
   // pestaña se abre en el mismo gesto.
@@ -1336,7 +1338,8 @@ export function OrderDrawer({
           {/* Tres espacios estables, como en Shopify: hacer el trabajo, consultar
               el pedido y auditar lo ocurrido. El equipo deja de navegar una
               lista accidental de formularios. La cuarta, Punto, es el texto
-              que se le pasa al punto de entrega (MOM §25). */}
+              que se le pasa al punto de entrega, y la quinta, WhatsApp, la
+              conversación de la clienta en Chatby (MOM §25). */}
           {detail ? (
             <div className="mt-2 flex gap-6 px-4 sm:px-6" role="tablist" aria-label="Espacios del pedido">
               {tabs.map((tab) => {
@@ -2211,6 +2214,15 @@ export function OrderDrawer({
                 total={detail.punto.total}
                 collect={detail.punto.collect}
               />
+            </div>
+            <div
+              id="pedido-panel-whatsapp"
+              role="tabpanel"
+              aria-labelledby="pedido-tab-whatsapp"
+              hidden={workspace !== "whatsapp"}
+              className="flex flex-col gap-4 sm:gap-6"
+            >
+              <OrderChatbyPanel orderId={orderId} orderName={detail.row.order_name} active={workspace === "whatsapp"} />
             </div>
           </div>
         )}

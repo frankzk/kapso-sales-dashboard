@@ -10439,7 +10439,7 @@ que aparecer en el drawer en el mismo cambio.
 
 El drawer no es un formulario largo ni un resumen de tablas. Es la mesa de
 trabajo de un pedido concreto. La experiencia principal se diseña primero para
-el equipo que opera desde una computadora y se divide en cuatro espacios
+el equipo que opera desde una computadora y se divide en cinco espacios
 estables:
 
 1. **Operar:** muestra macroetapa, subetapa, antigüedad, avance del MOM y una sola
@@ -10476,6 +10476,53 @@ estables:
      adelanto, y el punto cobraba de más.
    - **Cada producto lleva su cantidad**: «  2 x Producto - Variante». Una línea
      quitada del pedido (cantidad 0) no va.
+5. **WhatsApp (26-10-2026, pedido del owner):** la conversación de la clienta
+   con el bot de confirmación de Chatby, **solo para leer**, para no salir de
+   Kapta a ver qué se le dijo. Kenku y Aurela comparten el bot y el número. El
+   contrato es el documento del equipo de la tienda
+   (`docs/kapta/chatby-conversaciones.md`), probado el 25-10-2026 contra la API
+   real.
+   - **Qué muestra:** los últimos 20 mensajes, del más viejo (arriba) al más
+     nuevo (abajo), agrupados por día y con la hora **en Lima**. La clienta a la
+     izquierda; el bot (con el nombre de la plantilla) y las personas del equipo
+     (con su nombre si Chatby lo da) a la derecha; las **notas internas**
+     aparte, en ámbar, porque la clienta no las vio; el botón que tocó
+     («Tocó el botón «Confirmar Dirección»»); los archivos como enlace (solo
+     https); y los **errores de WhatsApp** («no entregado») en rojo. Los
+     eventos internos («Tag added…») no se piden. Como una misma clienta puede
+     tener mensajes de las dos marcas, el mensaje que nombra el pedido de la
+     ficha lleva la chapa «Este pedido». Arriba, «Actualizar» y **«Abrir en
+     Chatby»** (`https://app.chatby.io/inbox/<user_ns>`, pide la sesión de
+     Chatby).
+   - **A pedido:** se lee al abrir la pestaña (no al abrir la ficha, ni en
+     segundo plano), con un tope de **5 segundos** para las dos llamadas y **un
+     minuto** de caché por celular en la memoria del servidor. Si falla, la
+     pestaña lo dice («No se pudo cargar la conversación de Chatby» y el
+     motivo: la clave rechazada, el código de Chatby o que no respondió), con
+     «Abrir en Chatby» si ya se encontró a la clienta; el resto de la ficha no
+     cambia. Sin la clave, dice que falta conectar Chatby. Sin conversación:
+     «Esta clienta no tiene conversación en Chatby».
+   - **Cómo se lee:** `GET /subscribers?phone=%2B51…` (el celular del pedido
+     **con el `+`**: con «51…» o los 9 dígitos Chatby devuelve 0) da el
+     `user_ns`; con más de una clienta, la del mensaje más reciente. Luego
+     `GET /subscriber/chat-messages?user_ns=…&limit=20&include_bot=1&include_note=1`
+     (sin `include_bot` no salen las plantillas). Solo esos dos GET: Chatby no
+     tiene claves de solo lectura y Kapta nunca manda nada.
+   - **Lo que no sale de la lectura:** la clave (`CHATBY_API_KEY`, la clave
+     «KAPTA» del bot con el permiso «Manage Flow», aparte de la de Make para
+     revocarla sola; solo en el servidor), los campos del contacto
+     (`user_fields`, uno trae la clave de pedidos de una tienda: de la clienta
+     solo se copian `user_ns` y el nombre) y la conversación (no se guarda en
+     Kapta; los registros solo llevan el paso y el código HTTP). La ve quien ya
+     puede ver el pedido (RLS, como la ficha). El `user_ns` no se guarda: se
+     busca cada vez por el celular.
+   - **Grupo GF:** es una de las integraciones con credenciales únicas de Grupo
+     GF; para una organización cliente queda apagada (§29.15.1).
+   - Implementación: `lib/chatby-conversation.ts` (reglas puras),
+     `lib/chatby-api.ts` (las dos llamadas, el tope y la caché),
+     `loadOrderChatby` en `app/dashboard/pedidos/actions.ts` y
+     `components/order-chatby-panel.tsx`; `?seccion=whatsapp` abre la pestaña.
+     Pruebas: `test/chatby-conversation.test.ts`.
 
 **El historial del lead se reparte entre los pedidos del cliente (16-10-2026).**
 La Actividad trae también las gestiones de Leads (llamadas, mensajes, la venta
