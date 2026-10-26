@@ -96,6 +96,9 @@ import {
   type OrderGeoInput,
 } from "@/app/dashboard/pedidos/actions";
 import { VoiceAgentPanel } from "@/components/voice-agent-panel";
+import { WooCancelZone } from "@/components/woo-cancel-zone";
+import { cancelWooOrder } from "@/app/dashboard/pedidos/woo-cancel-actions";
+import type { WooCancelFacts } from "@/lib/woo-cancel";
 import { OrderInvoicePanel } from "@/components/order-invoice-panel";
 import { BrowserCallButton } from "@/components/browser-call";
 import { UrpiAttemptsSection } from "@/components/urpi-attempts-section";
@@ -1997,6 +2000,32 @@ export function OrderDrawer({
                     onComment={(text, type) => run(() => addOrderComment(orderId, { text, type }))}
                     onReturn={(reason, guideCode) => run(() => registerReturn(orderId, { reason, guideCode }))}
                     onRelink={(guideCode) => run(() => relinkGuide(guideCode, orderId))}
+                    wooCancel={
+                      // «Anular pedido» (MOM §38.15): solo pedidos de WooCommerce
+                      // vivos. Un pedido de Shopify no lo ve: se anula en Shopify.
+                      detail.platform === "woocommerce" && !detail.shopifyCancelledAt
+                        ? {
+                            orderName: detail.row.order_name,
+                            facts: {
+                              platform: detail.platform,
+                              generalStatus: detail.row.general_status,
+                              financialStatus: detail.row.financial_status ?? null,
+                              shipments: detail.guides,
+                              payments: null,
+                              companion: {
+                                travelsIn:
+                                  detail.companion.travelsIn?.lends
+                                    ? (detail.companion.travelsIn.hostOrderName ?? "otro pedido")
+                                    : null,
+                                carries: detail.companion.carries
+                                  .filter((c) => c.lends)
+                                  .map((c) => c.companionOrderName ?? "otro pedido"),
+                              },
+                            },
+                            onCancel: (input) => run(() => cancelWooOrder(orderId, input)),
+                          }
+                        : null
+                    }
                   />
                 </div>
               ) : (
@@ -3233,6 +3262,7 @@ export function OrderActions({
   onComment,
   onReturn,
   onRelink,
+  wooCancel = null,
 }: {
   row: OrderMasterRow;
   canOverride: boolean;
@@ -3252,6 +3282,15 @@ export function OrderActions({
   onComment: (text: string, type: string) => void;
   onReturn: (reason: string, guideCode: string) => void;
   onRelink: (guideCode: string) => void;
+  /**
+   * «Anular pedido» en WooCommerce (MOM §38.15), con el mismo permiso que
+   * «Registrar estado». null: el pedido no es de WooCommerce o ya está anulado.
+   */
+  wooCancel?: {
+    orderName: string | null;
+    facts: WooCancelFacts;
+    onCancel: (input: { reasonCode: string; reasonText: string; requestId: string }) => Promise<boolean>;
+  } | null;
 }) {
   const [general, setGeneral] = useState<GeneralStatus>(
     isGeneralStatus(row.general_status) ? row.general_status : "pendiente",
@@ -3398,6 +3437,14 @@ export function OrderActions({
             </OpsButton>
           </div>
         </div>
+      )}
+      {canSetStatus && wooCancel && (
+        <WooCancelZone
+          orderName={wooCancel.orderName}
+          facts={wooCancel.facts}
+          pending={pending}
+          onCancel={wooCancel.onCancel}
+        />
       )}
 
       <div className={cn(CARD_ZONE, "space-y-3")}>
