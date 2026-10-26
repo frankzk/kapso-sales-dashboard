@@ -17019,7 +17019,41 @@ no cambien:
   hoy: es una elección de una lista cerrada.
 - **Sin coordenada.** WooCommerce no geocodifica la dirección. Una guía de
   Aliclik pide pegar la ubicación a mano (§10) hasta que el formulario de la
-  tienda la mande.
+  tienda la mande. Desde el 26-10-2026 hay dos fuentes: la que la clienta
+  confirma en el formulario y la que manda por WhatsApp a Chatby.
+
+#### La coordenada de un pedido de WooCommerce (26-10-2026)
+
+**Qué pasaba.** Shopify geocodificaba la dirección y Kapta cotizaba Aliclik con
+esa coordenada. WooCommerce no lo hace y el formulario de COD Core no la
+guarda: #AUR900024 (Los Olivos, 26-10-2026) llegó con dirección, distrito y
+ubigeo (`_cod_territorio`), pero sin coordenada, y el panel de Aliclik la pidió
+a mano. Pasa con todos los pedidos de la web en WooCommerce. No se geocodifica
+la dirección escrita (decisión del owner): con «MZ B LT 22» el punto cae lejos,
+y en Aliclik el pin decide a dónde va el paquete.
+
+**De dónde sale ahora** (en este orden):
+
+1. **La que confirma la clienta en el formulario de COD Core** (pedido al
+   equipo de la tienda, `docs/kapta/cod-core-ubicacion.md`): `_cod_ubicacion` en
+   `meta_data`, con `{lat, lng, precision_m, fuente, confirmado}`. Kapta la
+   lee al recibir el pedido o su actualización (`wooConfirmedPin`,
+   `lib/woocommerce.ts`) y la pone en la latitud y la longitud de la dirección
+   de envío, donde Shopify ponía la suya: la ficha, el Master y Aliclik la usan
+   sin más cambios. Solo si cae en el Perú.
+2. **La que manda por WhatsApp al bot de Chatby.** El bot le pide la ubicación
+   («compártenos tu ubicación») y la clienta la comparte. Sin coordenada en el
+   pedido, el panel de Aliclik lee la conversación (§25, pestaña «Chatby», con
+   su minuto de caché) y propone la **última ubicación que mandó la clienta**:
+   «La clienta mandó su ubicación por WhatsApp (26-10 11:41): -12.04, -77.03 ·
+   Usar esta ubicación · Ver en el mapa» (`chatbyCustomerLocation`,
+   `coordinateInText`). Vale la ubicación compartida, un enlace de Maps con la
+   coordenada o la coordenada escrita; un enlace acortado no la trae. Solo
+   mensajes de la clienta, y solo dentro del Perú. **No se llena sola**: quien
+   cotiza la mira y la usa con un clic. Sin Chatby, el campo se llena a mano
+   como siempre.
+
+Pruebas: `test/order-pin-sources.test.ts`.
 - **Teléfono:** el de facturación y, si falta, el de envío. Sin dirección de
   envío, se usa la de facturación.
 
