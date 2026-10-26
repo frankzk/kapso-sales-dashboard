@@ -341,7 +341,7 @@ export function ExecutiveDashboard({
    *  Sin esto, el panel enseñaba en cero a 32 campañas que sí venden. */
   webAdOrders?: import("@/lib/cod-cart-attribution").WebAdOrder[];
   metaAdCatalog?: import("@/lib/cod-cart-attribution").AnuncioMeta[];
-  /** «Hoy» (MOM §17.5): las ventas del día contra ayer a esta hora, lo primero bajo la cabecera. */
+  /** «Cómo van las ventas» (MOM §17.5): hoy, la semana o el mes contra el anterior, lo primero bajo la cabecera. */
   today?: ReactNode;
   /** La operación del MOM (excepciones e indicadores), entre la cabecera y el periodo. */
   operations?: ReactNode;

@@ -1,10 +1,11 @@
-// «Hoy» del Consolidado (MOM §17.5): cómo van las ventas del día de las
-// tiendas, contra ayer a esta misma hora, y la curva acumulada de los dos días.
+// La pestaña «Hoy» de «Cómo van las ventas» (MOM §17.5): las ventas del día de
+// las tiendas, contra ayer a esta misma hora, y la curva acumulada de los dos
+// días por cuarto de hora. lib/sales-pulse.ts la pasa a la forma del bloque.
 //
 // Módulo PURO a propósito, como lib/leads-team-today.ts: sin base de datos ni
 // red, para probarlo y para que el componente del navegador importe sus tipos
 // sin arrastrar el cliente de servidor. La lectura vive en
-// lib/today-sales-access.ts y la ruta del refresco en app/api/dashboard/hoy.
+// lib/sales-pulse-access.ts y la ruta del refresco en app/api/dashboard/pulso.
 //
 // Una venta es la de la cabecera del Consolidado (MOM §17.4): todos los
 // pedidos de la tienda, por quien sea que los cerró; los activos cuentan y el
