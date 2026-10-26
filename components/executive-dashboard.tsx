@@ -279,6 +279,7 @@ export function ExecutiveDashboard({
   rollups,
   prevRollups,
   orders,
+  productOrders,
   conversations,
   ops,
   currency,
@@ -308,6 +309,8 @@ export function ExecutiveDashboard({
   rollups: DailyRollupRow[];
   prevRollups: DailyRollupRow[];
   orders: OrderRow[];
+  /** Las líneas de TODAS las ventas del periodo, para «Productos» (sin ellas, las del bot). */
+  productOrders?: OrderRow[];
   conversations: ConversationRow[];
   ops: Record<string, unknown>;
   currency: string;
@@ -440,7 +443,8 @@ export function ExecutiveDashboard({
 
   const fine = funnelFineLink(orders, conversations);
   const breakdown = businessBreakdown(orders);
-  const products = topProducts(orders, 10);
+  const products = topProducts(productOrders ?? orders, Number.POSITIVE_INFINITY);
+  const productsOfAll = productOrders != null;
   const pattern = singleStore ? dateHourPattern(orders, timezone) : null;
 
   // Leads-derived (Phase B)
@@ -787,16 +791,18 @@ export function ExecutiveDashboard({
     title: "Productos",
     figure: topProduct ? `${nf.format(topProduct.quantity)} u` : "—",
     tone: topProduct ? undefined : "muted",
-    sub: topProduct ? `${topProduct.title}, el más vendido por el bot` : "Sin líneas de producto del bot en el periodo",
+    sub: topProduct
+      ? `${topProduct.title}, el más vendido${productsOfAll ? "" : " por el bot"}`
+      : productsOfAll ? "Sin líneas de producto en el periodo" : "Sin líneas de producto del bot en el periodo",
     glyph: products.length ? (
       <BarsGlyph rows={products.slice(0, 3).map((p) => ({ label: p.title, value: p.quantity, display: `${nf.format(p.quantity)} u` }))} />
     ) : undefined,
     panel: products.length
       ? {
-          meta: `Pedidos del bot${SEP}${periodMeta}`,
+          meta: `${productsOfAll ? "Todas las ventas" : "Pedidos del bot"}${SEP}${periodMeta}`,
           width: "max-w-[720px]",
           body: (
-            <PanelSection title={`Los ${products.length} con más unidades`} help="Por SKU, o por título cuando no hay SKU. Las órdenes canceladas no cuentan.">
+            <PanelSection title={products.length === 1 ? "El producto vendido" : `Los ${products.length} productos, de más a menos unidades`} help="Por SKU, o por título cuando no hay SKU. Las órdenes canceladas no cuentan.">
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[520px] text-sm">
                   <thead>

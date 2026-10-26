@@ -9485,6 +9485,17 @@ que en producción se crean a mano con `create index concurrently` antes de la
 migración (DEPLOY.md): bajo RLS, Postgres no lleva al índice un rango sobre
 `coalesce(...)`.
 
+### 17.4.1 «Productos» del Consolidado: todas las ventas y la lista completa (26-10-2026)
+
+El panel «Productos» contaba solo los pedidos del bot (etiqueta `kapso`, los
+mismos de los módulos del bot) y mostraba los 10 con más unidades: con 99
+pedidos en el día y 10 del bot, subreportaba las unidades vendidas. Desde el
+26-10-2026 (owner) cuenta las líneas de **todas las ventas del periodo**, de
+cualquier canal y tienda, sin las anuladas (`getSalesProductOrders` en
+`lib/access.ts`, `topProducts` en `lib/metrics.ts`), y muestra **la lista
+completa**, de más a menos unidades, por SKU o por título sin SKU. El panel
+dice «Todas las ventas». Prueba: `test/executive-products-all.test.ts`.
+
 ### 17.5 Cómo van las ventas: hoy, esta semana y este mes contra el anterior a esta altura (25-10-2026)
 
 Arriba de todo el Consolidado, antes de «Operación», el bloque «Cómo van las

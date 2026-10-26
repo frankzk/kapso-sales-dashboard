@@ -242,6 +242,33 @@ export async function getOrders(
 }
 
 /**
+ * Las líneas de TODOS los pedidos del periodo, de cualquier canal (no solo los
+ * del bot), para el panel «Productos» del Consolidado (owner, 26-10-2026: con
+ * solo los del bot se subreportaban las unidades). Solo las columnas que usa
+ * `topProducts`; las anuladas se descartan allí.
+ */
+export async function getSalesProductOrders(storeIds: string[], range: DateRange): Promise<OrderRow[]> {
+  if (!storeIds.length) return [];
+  const sb = await createServerSupabase();
+  const { startIso, endIso } = rangeBounds(range);
+  const out: OrderRow[] = [];
+  for (let from = 0; from < MAX_ROWS; from += PAGE_SIZE) {
+    const { data, error } = await sb
+      .from("orders")
+      .select("id,store_id,created_at,cancelled_at,line_items")
+      .in("store_id", storeIds)
+      .gte("created_at", startIso)
+      .lte("created_at", endIso)
+      .order("created_at", { ascending: false })
+      .range(from, from + PAGE_SIZE - 1);
+    if (error || !data?.length) break;
+    out.push(...(data as unknown as OrderRow[]));
+    if (data.length < PAGE_SIZE) break;
+  }
+  return out;
+}
+
+/**
  * Conversations started in the range, RLS-scoped. Mismo drenado que
  * getLeadsForDashboard —una consulta por tienda y cada página desde la última
  * fila de la anterior—, y por las mismas razones.

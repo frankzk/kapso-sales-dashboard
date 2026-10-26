@@ -18,6 +18,7 @@ import {
   getMetaAdPerformance,
   getOrdersByIds,
   getOrders,
+  getSalesProductOrders,
   getWebAdOrders,
   getRollups,
   getUserRoleSummary,
@@ -150,6 +151,7 @@ async function ConsolidatedContent({
     closing,
     origin,
     sourceConversion,
+    productOrders,
   ] =
     await Promise.all([
       getRollups(storeIds, range),
@@ -171,6 +173,8 @@ async function ConsolidatedContent({
       // Todas las ventas por día y origen, y la conversión de cada fuente (MOM §17.4).
       getOriginSales(storeIds, range),
       getSourceConversion(storeIds, range),
+      // «Productos»: las líneas de todas las ventas, no solo las del bot (26-10-2026).
+      getSalesProductOrders(storeIds, range),
     ]);
 
   // Atribución de fuente y canal de cierre, igual que en la página de tienda.
@@ -214,6 +218,7 @@ async function ConsolidatedContent({
       rollups={rollups}
       prevRollups={prevRollups}
       orders={orders}
+      productOrders={productOrders}
       conversations={conversations}
       leads={leads}
       ops={ops}

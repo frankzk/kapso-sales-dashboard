@@ -508,7 +508,10 @@ describe("el tablero cuenta todas las ventas y lo dice", () => {
   });
 
   it("y donde la celda enseña pedidos o ingresos del bot, también en su línea", () => {
-    expect(bloque("productos")).toContain("el más vendido por el bot");
+    // «Productos» cuenta todas las ventas desde el 26-10-2026 (§17.4.1); «por el
+    // bot» queda solo para cuando no llegan las líneas de todas las ventas.
+    expect(bloque("productos")).toContain('productsOfAll ? "" : " por el bot"');
+    expect(bloque("productos")).toContain('"Todas las ventas"');
     expect(bloque("fuente")).toContain("de las ventas del bot vienen de");
     expect(bloque("embudo")).toContain('" por el bot"');
     expect(bloque("whatsapp")).toContain("vende más por el bot");
