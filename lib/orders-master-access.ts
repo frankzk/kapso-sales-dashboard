@@ -156,7 +156,8 @@ const MASTER_COLUMNS =
   "status_since,status_locked,current_courier,last_courier," +
   "courier_count,attempt_count,guide_code,dispatched_at,delivered_at,delivered_courier,returned_at," +
   "last_movement_at,comment_count,logistics_cost,pickup_state,payment_state," +
-  "payment_check_state," +
+  // La etiqueta «Pagado por web» usa los mismos hechos que Cobro, también al buscar.
+  "payment_check_state,financial_status,total_refunded,payment_gateway," +
   // El panel de Aliclik decide con estas dos si enseña "el pedido ya tiene
   // coordenada" o "obligatoria, el pedido no la tiene". Sin traerlas llegaban
   // como `undefined` y el panel decía SIEMPRE que faltaba, también en pedidos
@@ -175,12 +176,6 @@ export const MASTER_DETAIL_EXTRA_COLUMNS = [
   "reference",
   "geo_source",
   "status_source",
-  // Cómo se cobró (0128): el panel del drawer decide con esto si pide
-  // comprobante o solo enseña la constancia de que ya está pagado.
-  "financial_status",
-  "total_refunded",
-  // Por dónde entró el dinero (0153): solo el checkout se salta las constancias.
-  "payment_gateway",
 ] as const;
 const MASTER_DETAIL_COLUMNS =
   `${MASTER_COLUMNS},${MASTER_DETAIL_EXTRA_COLUMNS.join(",")}`;
