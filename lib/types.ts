@@ -165,6 +165,8 @@ export interface DraftOrderRow {
   line_items: OrderLineItem[];
   order_gid: string | null; // the resulting order GID once completed
   raw?: unknown;
+  /** `draft_orders.platform` (0274). Sin él, la base pone 'shopify'. */
+  platform?: "shopify" | "woocommerce";
 }
 
 export interface ConversationRow {

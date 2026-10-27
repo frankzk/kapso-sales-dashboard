@@ -32,6 +32,8 @@ const UNIQUE: Record<string, string[]> = {
   // Los hechos con clave (0122, `order_events_operation_kind_uniq`): índice
   // parcial, solo cuando `operation_id` no es null (ver abajo).
   order_events: ["order_id", "operation_id", "kind"],
+  // Los carritos (0013): los formularios de COD Core se guardan con upsert (MOM §38.12).
+  draft_orders: ["store_id", "shopify_draft_order_id"],
 };
 
 let seq = 0;

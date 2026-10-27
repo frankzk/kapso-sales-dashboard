@@ -23,6 +23,7 @@ import {
 } from "@/lib/shopify-own-app";
 import { limaDateTimeInputValue } from "@/lib/repro-lima";
 import { WOO_INTAKE_TOPICS, WOO_SYNC_SOURCE, wooWebhookDeliveryUrl } from "@/lib/woocommerce-intake";
+import { codCoreAbandonedUrl } from "@/lib/cod-core-abandoned";
 import { kaptaWebhookOrigins } from "@/lib/woocommerce-webhooks-health";
 import { WOO_WEBHOOKS_SOURCE, wooSyncStateRow, type WooSyncStateRow } from "@/lib/woocommerce-webhooks-view";
 import { botOrdersEndpointUrl, isBotOrdersMigrationMissing } from "@/lib/bot-orders";
@@ -674,6 +675,7 @@ export default async function StoreSettingsPage({
       // §38.14: `NEXT_PUBLIC_SITE_URL` o la de producción de Vercel); sin
       // ninguna, la del navegador, como las demás direcciones de Ajustes.
       webhookUrl: wooWebhookDeliveryUrl(kaptaWebhookOrigins()[0] ?? (siteUrl || env.siteUrl()), storeId),
+      abandonedUrl: codCoreAbandonedUrl(kaptaWebhookOrigins()[0] ?? (siteUrl || env.siteUrl()), storeId),
       topics: WOO_INTAKE_TOPICS,
       sync: wooSyncStateRow(sync as WooSyncStateRow[] | null, WOO_SYNC_SOURCE),
       // La revisión de los webhooks en WooCommerce (MOM §38.14): cada hora, y

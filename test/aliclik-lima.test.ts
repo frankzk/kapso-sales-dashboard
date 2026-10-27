@@ -16,7 +16,8 @@ type Quote = { transportName?: string | null; selectable: boolean; reason?: stri
 
 describe("isAutoecom: el nombre que dé Aliclik", () => {
   it("sin espacios, guiones ni mayúsculas", () => {
-    for (const name of ["AUTOECOM", "Auto Ecom", "AUTO-ECOM", "autoecom express"]) expect(isAutoecom(name), name).toBe(true);
+    // «AutoEcom Logistic»: el nombre que Aliclik le da (confirmado el 26-10-2026).
+    for (const name of ["AutoEcom Logistic", "AUTOECOM", "Auto Ecom", "AUTO-ECOM", "autoecom express"]) expect(isAutoecom(name), name).toBe(true);
     for (const name of ["ALIDRIVER", "ECOM", "", null, undefined]) expect(isAutoecom(name), String(name)).toBe(false);
   });
 });

@@ -1464,7 +1464,8 @@ crear guías. En Lima, Aliclik se usa **solo con su transporte AUTOECOM**.
   y la cotización lo avisa. El nombre se compara sin espacios, guiones ni
   mayúsculas: Kapta nunca había cotizado una dirección de Lima (sus 7.476
   guías de Aliclik eran ALIDRIVER), así que la primera cotización de Lima
-  confirma cómo lo llama Aliclik. La creación vuelve a cotizar y exige que el
+  confirma cómo lo llama Aliclik. **Confirmado el 26-10-2026: Aliclik lo llama
+  «AutoEcom Logistic»**, que la comparación reconoce. La creación vuelve a cotizar y exige que el
   transporte se pueda elegir: la regla vale también en el servidor.
 - **Tanders no crea guías nuevas** (`TANDERS_NEW_GUIDES_ENABLED = false`,
   `lib/tanders/new-guides.ts`): el plan de rutas no lo ofrece en ninguna
@@ -4286,9 +4287,9 @@ el carrito del propio lead no cuenta (ya está en «Lo que pidió»).
   mismo hecho, o «Ninguno: es su primer carrito».
 - Si la lectura falla, no se adivina: la ficha sale sin el bloque y la tarjeta
   dice «No se pudo consultar ahora».
-- **WooCommerce todavía no entra**: sus formularios abandonados no llegan a
-  `draft_orders` (§38.12, pendiente). Cuando lleguen, con su plataforma, salen
-  aquí sin tocar nada.
+- **WooCommerce**: sus formularios abandonados llegan a `draft_orders` desde
+  el 27-10-2026, cuando COD Core los mande (§38.12, «Los formularios
+  abandonados de WooCommerce»), y salen aquí sin tocar nada.
 
 **«Siguiente lead» en la ficha (25-10-2026, pedido del owner).** Arriba a la
 derecha de la ficha del lead, entre el QR y «Cerrar», abre el siguiente sin
@@ -18012,8 +18013,9 @@ Pruebas: `test/anulado-en-la-tienda.test.ts`, y las de cada pantalla
   tiendas), también con la tienda ya en WooCommerce. Desde el cierre esa
   acción falla y, con el flujo de Kenku de hoy, **nada deriva la conversación
   a una asesora**.
-- **Los carritos.** Los formularios abandonados de WooCommerce todavía no
-  entran a `draft_orders`; un carrito de Shopify en la cola solo prellena el
+- **Los carritos.** Los formularios abandonados de WooCommerce entran a
+  `draft_orders` y a la cola **desde el 27-10-2026**, cuando COD Core los
+  mande («Los formularios abandonados de WooCommerce», abajo); un carrito de Shopify en la cola solo prellena el
   pedido (arriba). **Lo que completaba un borrador de Shopify sin mirar
   `stores.platform` ya lo mira (25-10-2026)**: la recompra automática
   (`auto_order_trials`), `recoverCart` y `closeSale` solo crean con `shopify`
@@ -18161,6 +18163,89 @@ Implementación: `lib/auto-order-trials.ts` (`AUTO_TRIAL_PLATFORM_REASON`,
 `LOCAL_SALE_IN_WOO_STORE` (`lib/woocommerce-orders.ts`), y `recoverCart` y
 `closeSale` (`app/dashboard/leads/actions.ts`). Pruebas:
 `test/auto-order-trials.test.ts` y `test/carritos-plataforma.test.ts`.
+
+#### Los formularios abandonados de WooCommerce (27-10-2026)
+
+**Por qué (pedido del owner).** COD Core, el formulario contra entrega de
+WooCommerce, guarda en su pantalla «Formularios abandonados» a quien escribió
+su celular y no terminó el pedido en 30 minutos, y lo pasa a «Recuperados»
+cuando ese celular compra. Ninguno llegaba a Kapta: desde el cierre de Shopify
+la cola no recibía carritos nuevos y «Carritos anteriores» solo contaba los de
+Shopify. Un formulario abandonado es lo mismo que era un borrador de Releasit:
+un carrito. Esto no es una regla nueva de leads: entra por la de los
+carritos, sin cambiarla.
+
+**Cómo entra.** COD Core manda cada formulario por POST a
+`/api/webhooks/woocommerce/<storeId>/abandonados` (el contrato para el equipo
+de COD Core: `docs/kapta/cod-core-abandonados.md`). La dirección sale en
+Ajustes → WooCommerce, bajo la de los webhooks de pedidos.
+
+- **La firma:** el mismo secreto de los webhooks de pedidos de WooCommerce de
+  la tienda (no hay uno nuevo), HMAC-SHA256 del cuerpo crudo en base64, en
+  `X-Kapta-Signature`. Sin secreto guardado o con la firma mala, 401 y no se
+  escribe nada.
+- **Dos eventos:** `abandonado` (entra a «Formularios abandonados») y
+  `recuperado` (pasa a «Recuperados», con `pedido_id`). Cualquier otro, o un
+  formulario sin `id` o sin celular, es 422: reenviarlo no lo arregla. Si la
+  base no contesta, 503 y COD Core reintenta.
+- **La fila:** `draft_orders` con `platform = 'woocommerce'`, la llave
+  `cod-<clave del sitio>-<id>` (un reenvío actualiza la misma fila), el gid
+  `cod-core://<clave>/formulario/<id>` (no se confunde con uno de Shopify),
+  el nombre `#F<id>`, las etiquetas `cod_form` y `cod-core`, los productos con
+  su SKU y su id de WooCommerce, y el departamento como «región», igual que un
+  borrador de Shopify. La provincia queda en `raw`.
+
+**Qué hace.**
+
+- **`abandonado`:** `linkDraftOrdersToLeads`, el camino de los borradores de
+  Shopify, con todas sus reglas: crea el lead «Carrito» (`cod_cart`) si el
+  celular es nuevo, no pisa la gestión de uno que existe, reabre un ganado con
+  una recompra o un perdido con un carrito fresco, el periodo de gracia y
+  `cart_count_48h`. **Solo los de los últimos 2 días**
+  (`DRAFT_OPEN_WINDOW_DAYS`, la misma ventana de los borradores de Shopify):
+  uno más viejo, como lo que ya estaba en la pantalla al activar el envío,
+  queda solo como historia en «Carritos anteriores». Sin ese corte entraba a
+  la cola y el archivador de 7 días lo pasaba a Perdido sin que nadie lo
+  llamara.
+- **`recuperado`:** el carrito queda `completed` con el pedido
+  (`wc-<clave>-<pedido_id>`), y el lead de ese formulario sale de la cola
+  («ya tiene pedido», ganado, con una fila en el historial que lo dice) si
+  Kapta ya tiene ese pedido y no hay una gestión de la asesora posterior a él.
+  Después corre el barrido de siempre (`closeCartLeadsWithOrders`): un pedido
+  del mismo celular con un producto del carrito. Un `abandonado` que llega
+  después del `recuperado` del mismo formulario no lo reabre.
+- **La red de seguridad:** cada pasada de 5 minutos vuelve a enlazar los
+  formularios abiertos de los últimos 2 días (`relinkCodCoreForms`, paso
+  1b-ter de `runStoreSync`), como 1b con los borradores de Shopify: uno que
+  llegó dentro del periodo de gracia o cuyo enlace falló entra igual.
+- **En la ficha:** «Formulario abandonado #F…» (o «recuperado») en «Lo que
+  pidió», y «Ver en COD Core» si COD Core mandó el `enlace`; nunca un enlace
+  a Shopify. «Generar pedido» lo prellena con los productos por SKU y crea el
+  pedido en WooCommerce (arriba, «Los carritos»). Sale también en «Carritos
+  anteriores» y en la tarjeta del siguiente lead sin tocar nada de eso.
+
+**Lo que no cambia, a propósito.**
+
+- **La prueba A/B de recompra** no los inscribe: `auto_order_ab_candidates`
+  une el lead con su carrito por el id numérico del gid de Shopify, y el de un
+  formulario no calza. Sigue pendiente la decisión del owner sobre esa prueba
+  en una tienda en WooCommerce (arriba).
+- **El borrado de los 30 días de COD Core** no se manda: en Kapta el carrito
+  queda como historia.
+- **La secuencia de WhatsApp de carritos** los trata como a cualquier carrito
+  abierto, con su configuración de siempre. La foto del producto sale del
+  espejo de catálogo de Shopify por id: con el id de WooCommerce no la
+  encuentra y la plantilla sale sin foto.
+
+Implementación: `lib/cod-core-abandoned.ts` (el contrato, puro:
+`parseCodCoreForm`, `codCoreDate`, `codCoreFormGid`, `isCodCoreFormGid`,
+`codCoreAbandonedUrl`), `lib/cod-core-abandoned-ingest.ts`
+(`processCodCoreAbandoned`, `codCoreHttpStatus`, `isPastLeadWindow`,
+`relinkCodCoreForms`), `app/api/webhooks/woocommerce/[storeId]/abandonados/route.ts`,
+`DraftOrderRow.platform` (`lib/types.ts`), la ficha
+(`components/leads-drawer.tsx`) y Ajustes
+(`components/woocommerce-settings-section.tsx`). Sin migración: la 0274 ya
+puso `draft_orders.platform`. Pruebas: `test/cod-core-abandoned.test.ts`.
 
 ### 38.13 Pedidos del bot de Kapso por Kapta (23-10-2026)
 

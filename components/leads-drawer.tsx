@@ -129,6 +129,7 @@ import {
 } from "@/lib/leads-read-client";
 import { REPLY_TOKEN_LABEL, renderReplyPreview, validateReplyParams } from "@/lib/wa-reply-templates";
 import { shopifyDraftOrderAdminUrl } from "@/lib/shopify-urls";
+import { isCodCoreFormGid } from "@/lib/cod-core-abandoned";
 import { orderPlatformName } from "@/lib/order-admin-url";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 import { cn } from "@/components/ui";
@@ -609,8 +610,12 @@ export function LeadDrawer({
   const hasCart = !!lead.draft_order_gid && lead.draft_order_status !== "completed";
   // "Ver borrador" abre el draft en el ADMIN de Shopify, no el checkout del
   // cliente (invoiceUrl); ese queda solo como fallback si falta gid/dominio.
-  const draftOrderHref =
-    shopifyDraftOrderAdminUrl(shopifyDomain, lead.draft_order_gid) ?? lead.draft_order_url ?? null;
+  // Un formulario abandonado de COD Core (MOM §38.12) no es un borrador de
+  // Shopify: su enlace, si COD Core lo mandó, abre su pantalla en WordPress.
+  const codCoreForm = isCodCoreFormGid(lead.draft_order_gid);
+  const draftOrderHref = codCoreForm
+    ? (lead.draft_order_url ?? null)
+    : (shopifyDraftOrderAdminUrl(shopifyDomain, lead.draft_order_gid) ?? lead.draft_order_url ?? null);
   // Recurrent if there are prior purchases — either the local last-order signal or
   // the (authoritative) Shopify "Pedidos anteriores" list, which catches customers
   // whose past orders were placed outside the bot (not in the kapso-only table).
@@ -662,7 +667,13 @@ export function LeadDrawer({
     const recovered = lead.draft_order_status === "completed";
     askLine.push(
       <span key="draft" className={recovered ? "font-medium text-ok-fg" : undefined}>
-        {recovered ? "Carrito recuperado" : "Carrito abandonado"}
+        {codCoreForm
+          ? recovered
+            ? "Formulario recuperado"
+            : "Formulario abandonado"
+          : recovered
+            ? "Carrito recuperado"
+            : "Carrito abandonado"}
         {lead.draft_order_name ? ` ${lead.draft_order_name}` : ""}
       </span>,
     );
@@ -887,7 +898,7 @@ export function LeadDrawer({
                       rel="noreferrer"
                       className="inline-flex items-center gap-1 text-[13px] font-medium text-brand-700 hover:underline pointer-coarse:min-h-11"
                     >
-                      Ver borrador en Shopify
+                      {codCoreForm ? "Ver en COD Core" : "Ver borrador en Shopify"}
                       <IconArrowUpRight aria-hidden className="size-3.5" />
                     </a>
                   )}
