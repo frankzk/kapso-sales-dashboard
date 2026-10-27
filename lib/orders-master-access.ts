@@ -144,6 +144,12 @@ export class OrderMasterReadError extends Error {
 // —dirección, referencia, coordenadas, origen de la geo— lo trae el detalle al
 // abrir un pedido (`getOrderMasterDetail`, que sí lee la fila entera), que es
 // exactamente cuando hace falta y para UN pedido, no para diez mil.
+// Los hechos de Cobro también identifican el prepago junto al código en la tabla.
+const MASTER_PAYMENT_COLUMNS = [
+  "financial_status",
+  "total_refunded",
+  "payment_gateway",
+] as const;
 const MASTER_COLUMNS =
   "id,store_id,order_id,order_name,order_created_at,customer_name," +
   "customer_phone,region,province,district," +
@@ -156,8 +162,8 @@ const MASTER_COLUMNS =
   "status_since,status_locked,current_courier,last_courier," +
   "courier_count,attempt_count,guide_code,dispatched_at,delivered_at,delivered_courier,returned_at," +
   "last_movement_at,comment_count,logistics_cost,pickup_state,payment_state," +
-  // La etiqueta «Pagado por web» usa los mismos hechos que Cobro, también al buscar.
-  "payment_check_state,financial_status,total_refunded,payment_gateway," +
+  "payment_check_state," +
+  `${MASTER_PAYMENT_COLUMNS.join(",")},` +
   // El panel de Aliclik decide con estas dos si enseña "el pedido ya tiene
   // coordenada" o "obligatoria, el pedido no la tiene". Sin traerlas llegaban
   // como `undefined` y el panel decía SIEMPRE que faltaba, también en pedidos
