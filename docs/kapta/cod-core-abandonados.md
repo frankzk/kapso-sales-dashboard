@@ -59,7 +59,7 @@ Va con el **mismo secreto de los webhooks de pedidos de WooCommerce** que ya apu
 - `lugar`: lo que escribió. Lo que no haya, `null`.
 - `productos`: lo que dejó en el formulario. El `sku` es lo más importante: con él «Generar pedido» crea la línea en WooCommerce. `precio` es el unitario, después de la oferta que vio.
 - `total`: lo que iba a pagar. Sin él, Kapta suma los productos.
-- `enlace` (opcional): la pantalla del formulario en wp-admin. La ficha del lead lo abre con «Ver en COD Core».
+- `enlace` (opcional): la pantalla del formulario en wp-admin. Se conserva como referencia; «Ver en COD Core» está oculto en la ficha de las asesoras (27-10-2026).
 
 ## Las respuestas
 

@@ -173,7 +173,8 @@ describe("el contrato → la fila de draft_orders", () => {
     expect(isCodCoreFormGid("gid://shopify/DraftOrder/1234567890")).toBe(false);
     const drawer = read("components/leads-drawer.tsx");
     expect(drawer).toContain("const codCoreForm = isCodCoreFormGid(lead.draft_order_gid);");
-    expect(drawer).toContain('{codCoreForm ? "Ver en COD Core" : "Ver borrador en Shopify"}');
+    expect(drawer).toMatch(/const draftOrderHref = codCoreForm\s*\? null/);
+    expect(drawer).not.toContain("Ver en COD Core");
     // Lo que pasaría sin el desvío: un enlace a un borrador ajeno.
     expect(shopifyDraftOrderAdminUrl("kenku.myshopify.com", gid)).toContain("/draft_orders/812");
   });

@@ -1,6 +1,7 @@
 // RLS-scoped reads for the leads module (queue views, lead detail, counts).
 
 import { createServerSupabase } from "@/lib/db";
+import { leadCartDetailOf } from "@/lib/lead-cart-detail";
 import { normalizePhone } from "@/lib/phone";
 import {
   combinePriorOrders,
@@ -422,12 +423,19 @@ export async function getLeadWithCalls(
   const sb = await createServerSupabase();
   const { data: lead } = await sb.from("leads").select("*").eq("id", leadId).maybeSingle();
   if (!lead) return null;
-  const { data: calls } = await sb
-    .from("lead_calls")
-    .select("*")
-    .eq("lead_id", leadId)
-    .order("occurred_at", { ascending: false });
-  return { lead: lead as LeadRow, calls: (calls as LeadCallRow[]) ?? [] };
+  const row = lead as LeadRow;
+  const [callsRes, draftRes] = await Promise.all([
+    sb.from("lead_calls").select("*").eq("lead_id", leadId)
+      .order("occurred_at", { ascending: false }),
+    row.draft_order_gid
+      ? sb.from("draft_orders").select("created_at,line_items")
+        .eq("store_id", row.store_id).eq("draft_order_gid", row.draft_order_gid).maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+  ]);
+  return {
+    lead: { ...row, cart_detail: draftRes.error ? null : leadCartDetailOf(draftRes.data) },
+    calls: (callsRes.data as LeadCallRow[]) ?? [],
+  };
 }
 
 /** One prior order, for the drawer's "Pedidos anteriores" list. */
