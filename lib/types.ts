@@ -2,6 +2,7 @@
 
 import type { RecoveryKind } from "@/lib/reproprovincia";
 import type { PaymentGateway } from "@/lib/payment-gateway";
+import type { LeadCartDetail } from "@/lib/lead-cart-detail";
 
 export type Role = "owner" | "admin" | "viewer" | "vendedora" | "motorizado";
 export type ShippingMode = "cod" | "agency" | null;
@@ -264,6 +265,8 @@ export interface LeadRow {
   cart_value?: number | null;
   cart_item_count?: number | null;
   cart_summary?: string | null;
+  /** Solo al abrir la ficha: fecha y artículos del carrito original, no columna de leads. */
+  cart_detail?: LeadCartDetail | null;
   draft_order_gid?: string | null;
   // Draft-order denormalized fields (0013): the board reads these directly so it
   // never needs to join `draft_orders`. Extended address mirrors the COD form.

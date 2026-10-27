@@ -18219,8 +18219,14 @@ Ajustes → WooCommerce, bajo la de los webhooks de pedidos.
   1b-ter de `runStoreSync`), como 1b con los borradores de Shopify: uno que
   llegó dentro del periodo de gracia o cuyo enlace falló entra igual.
 - **En la ficha:** «Formulario abandonado #F…» (o «recuperado») en «Lo que
-  pidió», y «Ver en COD Core» si COD Core mandó el `enlace`; nunca un enlace
-  a Shopify. «Generar pedido» lo prellena con los productos por SKU y crea el
+  pidió». «Ver en COD Core» queda oculto por pedido del owner (27-10-2026);
+  el enlace se conserva en los datos y nunca se convierte en uno de Shopify.
+  La ficha lee del carrito original su fecha y hora de creación en Lima y los
+  artículos con cantidad y variante; no usa el nacimiento del lead como fecha
+  del carrito. Sin fecha válida dice «No registrado». Es una lectura acotada al
+  carrito de la misma tienda al abrir la ficha, sin ampliar la cola ni traer el
+  payload crudo. Aplica también a los carritos de Shopify, que conservan su
+  enlace al borrador. «Generar pedido» lo prellena con los productos por SKU y crea el
   pedido en WooCommerce (arriba, «Los carritos»). Sale también en «Carritos
   anteriores» y en la tarjeta del siguiente lead sin tocar nada de eso.
 

@@ -130,6 +130,7 @@ import {
 import { REPLY_TOKEN_LABEL, renderReplyPreview, validateReplyParams } from "@/lib/wa-reply-templates";
 import { shopifyDraftOrderAdminUrl } from "@/lib/shopify-urls";
 import { isCodCoreFormGid } from "@/lib/cod-core-abandoned";
+import { cartCreatedAtLabel } from "@/lib/lead-cart-detail";
 import { orderPlatformName } from "@/lib/order-admin-url";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 import { cn } from "@/components/ui";
@@ -610,12 +611,14 @@ export function LeadDrawer({
   const hasCart = !!lead.draft_order_gid && lead.draft_order_status !== "completed";
   // "Ver borrador" abre el draft en el ADMIN de Shopify, no el checkout del
   // cliente (invoiceUrl); ese queda solo como fallback si falta gid/dominio.
-  // Un formulario abandonado de COD Core (MOM §38.12) no es un borrador de
-  // Shopify: su enlace, si COD Core lo mandó, abre su pantalla en WordPress.
+  // COD Core conserva su enlace en los datos, pero no se ofrece a las asesoras.
   const codCoreForm = isCodCoreFormGid(lead.draft_order_gid);
   const draftOrderHref = codCoreForm
-    ? (lead.draft_order_url ?? null)
+    ? null
     : (shopifyDraftOrderAdminUrl(shopifyDomain, lead.draft_order_gid) ?? lead.draft_order_url ?? null);
+  const cartCreatedIso = lead.cart_detail?.createdAt;
+  const cartCreatedAt = cartCreatedAtLabel(cartCreatedIso);
+  const cartLines = lead.cart_detail?.lines ?? [];
   // Recurrent if there are prior purchases — either the local last-order signal or
   // the (authoritative) Shopify "Pedidos anteriores" list, which catches customers
   // whose past orders were placed outside the bot (not in the kapso-only table).
@@ -678,13 +681,15 @@ export function LeadDrawer({
       </span>,
     );
   }
-  if (showContext && lead.cart_item_count) {
-    askLine.push(
-      <span key="cart">
-        {lead.draft_order_gid ? "" : "Carrito: "}
-        {lead.cart_summary || `${lead.cart_item_count} producto(s)`}
-      </span>,
-    );
+  if (showContext && (lead.cart_item_count || cartLines.length > 0)) {
+    if (cartLines.length === 0) {
+      askLine.push(
+        <span key="cart">
+          {lead.draft_order_gid ? "" : "Carrito: "}
+          {lead.cart_summary || `${lead.cart_item_count} producto(s)`}
+        </span>,
+      );
+    }
     if (lead.cart_value != null) {
       askLine.push(
         <span key="value" className="font-semibold tabular-nums text-ink-900">
@@ -702,7 +707,7 @@ export function LeadDrawer({
   }
   const showRecibe = showContext && !!lead.ship_name && lead.ship_name !== lead.name;
   const showAddress = showContext && !!(lead.ship_name || lead.address1 || lead.district || lead.referencia);
-  const hasAskRows = (showAddress && !!(showRecibe || lead.address1 || lead.referencia || lead.district)) || !!firstText;
+  const hasAskRows = !!lead.draft_order_gid || (showAddress && !!(showRecibe || lead.address1 || lead.referencia || lead.district)) || !!firstText;
 
   return (
     <SidePanel
@@ -898,7 +903,7 @@ export function LeadDrawer({
                       rel="noreferrer"
                       className="inline-flex items-center gap-1 text-[13px] font-medium text-brand-700 hover:underline pointer-coarse:min-h-11"
                     >
-                      {codCoreForm ? "Ver en COD Core" : "Ver borrador en Shopify"}
+                      Ver borrador en Shopify
                       <IconArrowUpRight aria-hidden className="size-3.5" />
                     </a>
                   )}
@@ -913,8 +918,33 @@ export function LeadDrawer({
                     ))}
                   </p>
                 )}
+                {cartLines.length > 0 && (
+                  <ul aria-label="Productos del carrito" className="mt-2 space-y-1.5 text-[13px] leading-5 text-ink-900">
+                    {cartLines.map((line, index) => (
+                      <li key={index} className="flex items-start gap-2">
+                        <span className="shrink-0 font-semibold tabular-nums">{line.quantity} ×</span>
+                        <span className="min-w-0 break-words">
+                          {line.title}
+                          {line.variant && <span className="text-ink-500"> · {line.variant}</span>}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 {hasAskRows && (
                   <dl className="mt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-[13px] leading-5">
+                    {lead.draft_order_gid && (
+                      <>
+                        <dt className="text-ink-500">Carrito creado</dt>
+                        <dd className="min-w-0 text-ink-900">
+                          {cartCreatedAt && cartCreatedIso ? (
+                            <time dateTime={cartCreatedIso}>
+                              {cartCreatedAt} <span className="text-ink-500">(Lima)</span>
+                            </time>
+                          ) : lead.cart_detail === undefined ? "Cargando…" : "No registrado"}
+                        </dd>
+                      </>
+                    )}
                     {showRecibe && (
                       <>
                         <dt className="text-ink-500">Recibe</dt>
