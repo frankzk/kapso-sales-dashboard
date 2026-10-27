@@ -29,11 +29,15 @@ describe("motor de rutas MOM Fase 3", () => {
     expect(plan.candidates.some((route) => route.key === "tanders")).toBe(false);
   });
 
-  it("solo ofrece Tanders dentro de la operación Lima", () => {
+  it("Tanders ya no se ofrece en ninguna operación; Aliclik sí entra a Lima (26-10-2026)", () => {
+    for (const operation of ["lima", "provincia_cod", "agencia"] as const) {
+      expect(
+        buildOrderRoutePlan({ operation, outputs: [] }).candidates.some((route) => route.key === "tanders"),
+        operation,
+      ).toBe(false);
+    }
     expect(
-      buildOrderRoutePlan({ operation: "lima", outputs: [] }).candidates.some(
-        (route) => route.key === "tanders",
-      ),
+      buildOrderRoutePlan({ operation: "lima", outputs: [] }).candidates.some((route) => route.key === "aliclik"),
     ).toBe(true);
     expect(
       buildOrderRoutePlan({ operation: "agencia", outputs: [] }).candidates.some(
@@ -76,8 +80,9 @@ describe("motor de rutas MOM Fase 3", () => {
     expect(grupoGf?.availability).toBe("blocked");
     expect(grupoGf?.reason).toContain("Sin tarifa");
     // Antes sugería Axel antes del mediodía. Desde el 09-10-2026 Axel casi no
-    // se usa (1 salida en 60 días en Lima) y la sugerencia pasa a Tanders.
-    expect(plan.candidates.find((route) => route.recommended)?.key).toBe("tanders");
+    // se usa (1 salida en 60 días en Lima) y la sugerencia pasó a Tanders; desde
+    // el 26-10-2026 Tanders no crea guías y la sugerencia es Aliclik (AUTOECOM).
+    expect(plan.candidates.find((route) => route.recommended)?.key).toBe("aliclik");
   });
 
   it("Axel y Urpi casi no se usan: van al final, plegados, y nunca se sugieren (09-10-2026)", () => {

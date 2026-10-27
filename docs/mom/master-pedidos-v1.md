@@ -1446,6 +1446,47 @@ la clienta ve el número de la empresa, no el de la asesora.
   no entregó hoy, el pedido puede salir mañana por Tanders o Swayp con la caja
   de Grupo GF todavía en la calle.
 
+#### Aliclik en Lima, solo con AUTOECOM, y Tanders sin guías nuevas (26-10-2026)
+
+**Decisión del owner (26-10-2026).** Aliclik entra a Lima y Tanders deja de
+crear guías. En Lima, Aliclik se usa **solo con su transporte AUTOECOM**.
+
+- **El plan de rutas de Lima** (`buildOrderRoutePlan`, `lib/order-route-plan.ts`)
+  ofrece Grupo GF, **Aliclik** (en el lugar de Tanders), Swayp y, plegados,
+  Axel y Urpi. Sugiere Grupo GF si es elegible y entra al corte; si no,
+  Aliclik. Con Aliclik en el plan, la ficha enseña el panel de crear la guía
+  de Aliclik (§11) igual que en Provincia COD. El envío programado automático
+  de Aliclik sigue sin tocar Lima.
+- **AUTOECOM** (`limaTransportPolicy`, `lib/aliclik-lima.ts`): en un pedido de
+  Lima, si la cotización de Aliclik trae AUTOECOM, **solo AUTOECOM se puede
+  elegir** («En Lima se envía solo con AUTOECOM.»). Si no lo trae, se puede
+  elegir el transporte que Aliclik ofrezca (mejor salir con otro que no salir)
+  y la cotización lo avisa. El nombre se compara sin espacios, guiones ni
+  mayúsculas: Kapta nunca había cotizado una dirección de Lima (sus 7.476
+  guías de Aliclik eran ALIDRIVER), así que la primera cotización de Lima
+  confirma cómo lo llama Aliclik. **Confirmado el 26-10-2026: Aliclik lo llama
+  «AutoEcom Logistic»**, que la comparación reconoce. La creación vuelve a cotizar y exige que el
+  transporte se pueda elegir: la regla vale también en el servidor.
+- **Tanders no crea guías nuevas** (`TANDERS_NEW_GUIDES_ENABLED = false`,
+  `lib/tanders/new-guides.ts`): el plan de rutas no lo ofrece en ninguna
+  operación y `createTandersGuide` responde «Tanders ya no crea guías nuevas»
+  antes de llamar a Tanders. Las guías de Tanders que ya existen siguen igual:
+  su estado, sus cobros, sus devoluciones, su liquidación y el resto de esta
+  sección.
+- **Si Aliclik no entrega en Lima, el pedido va a «Por reprogramar Lima»**
+  (no a Gestión Reproprovincia): la falla sigue la regla de la operación,
+  como Tanders y Swayp en Lima (`resolveMacroStage`), y Repro Lima toma casos
+  de cualquier courier.
+- **Repro Lima acuerda con Aliclik en lugar de Tanders**
+  (`REPRO_COURIER_CHOICES`: Grupo GF, Aliclik, Swayp, Axel). Los acuerdos ya
+  guardados con Tanders se siguen leyendo. La fecha más temprana con Aliclik es
+  hoy, como Tanders y Axel: la guía trae su propio horario de recojo. La 0283
+  admite `aliclik` en `lima_repro_cases.agreed_courier` y
+  `lima_repro_calls.courier`.
+
+Pruebas: `test/aliclik-lima.test.ts`, `test/order-route-plan.test.ts` y
+`test/reproprovincia.test.ts` («Aliclik en Lima»).
+
 #### Lo que Tanders no entrega también es «Por reprogramar Lima» (v1.19, 29-09-2026)
 
 **Despachos de Tanders de días anteriores sin entrega (decisión del owner,
@@ -4246,9 +4287,9 @@ el carrito del propio lead no cuenta (ya está en «Lo que pidió»).
   mismo hecho, o «Ninguno: es su primer carrito».
 - Si la lectura falla, no se adivina: la ficha sale sin el bloque y la tarjeta
   dice «No se pudo consultar ahora».
-- **WooCommerce todavía no entra**: sus formularios abandonados no llegan a
-  `draft_orders` (§38.12, pendiente). Cuando lleguen, con su plataforma, salen
-  aquí sin tocar nada.
+- **WooCommerce**: sus formularios abandonados llegan a `draft_orders` desde
+  el 27-10-2026, cuando COD Core los mande (§38.12, «Los formularios
+  abandonados de WooCommerce»), y salen aquí sin tocar nada.
 
 **«Siguiente lead» en la ficha (25-10-2026, pedido del owner).** Arriba a la
 derecha de la ficha del lead, entre el QR y «Cerrar», abre el siguiente sin
@@ -16979,7 +17020,41 @@ no cambien:
   hoy: es una elección de una lista cerrada.
 - **Sin coordenada.** WooCommerce no geocodifica la dirección. Una guía de
   Aliclik pide pegar la ubicación a mano (§10) hasta que el formulario de la
-  tienda la mande.
+  tienda la mande. Desde el 26-10-2026 hay dos fuentes: la que la clienta
+  confirma en el formulario y la que manda por WhatsApp a Chatby.
+
+#### La coordenada de un pedido de WooCommerce (26-10-2026)
+
+**Qué pasaba.** Shopify geocodificaba la dirección y Kapta cotizaba Aliclik con
+esa coordenada. WooCommerce no lo hace y el formulario de COD Core no la
+guarda: #AUR900024 (Los Olivos, 26-10-2026) llegó con dirección, distrito y
+ubigeo (`_cod_territorio`), pero sin coordenada, y el panel de Aliclik la pidió
+a mano. Pasa con todos los pedidos de la web en WooCommerce. No se geocodifica
+la dirección escrita (decisión del owner): con «MZ B LT 22» el punto cae lejos,
+y en Aliclik el pin decide a dónde va el paquete.
+
+**De dónde sale ahora** (en este orden):
+
+1. **La que confirma la clienta en el formulario de COD Core** (pedido al
+   equipo de la tienda, `docs/kapta/cod-core-ubicacion.md`): `_cod_ubicacion` en
+   `meta_data`, con `{lat, lng, precision_m, fuente, confirmado}`. Kapta la
+   lee al recibir el pedido o su actualización (`wooConfirmedPin`,
+   `lib/woocommerce.ts`) y la pone en la latitud y la longitud de la dirección
+   de envío, donde Shopify ponía la suya: la ficha, el Master y Aliclik la usan
+   sin más cambios. Solo si cae en el Perú.
+2. **La que manda por WhatsApp al bot de Chatby.** El bot le pide la ubicación
+   («compártenos tu ubicación») y la clienta la comparte. Sin coordenada en el
+   pedido, el panel de Aliclik lee la conversación (§25, pestaña «Chatby», con
+   su minuto de caché) y propone la **última ubicación que mandó la clienta**:
+   «La clienta mandó su ubicación por WhatsApp (26-10 11:41): -12.04, -77.03 ·
+   Usar esta ubicación · Ver en el mapa» (`chatbyCustomerLocation`,
+   `coordinateInText`). Vale la ubicación compartida, un enlace de Maps con la
+   coordenada o la coordenada escrita; un enlace acortado no la trae. Solo
+   mensajes de la clienta, y solo dentro del Perú. **No se llena sola**: quien
+   cotiza la mira y la usa con un clic. Sin Chatby, el campo se llena a mano
+   como siempre.
+
+Pruebas: `test/order-pin-sources.test.ts`.
 - **Teléfono:** el de facturación y, si falta, el de envío. Sin dirección de
   envío, se usa la de facturación.
 
@@ -17938,8 +18013,9 @@ Pruebas: `test/anulado-en-la-tienda.test.ts`, y las de cada pantalla
   tiendas), también con la tienda ya en WooCommerce. Desde el cierre esa
   acción falla y, con el flujo de Kenku de hoy, **nada deriva la conversación
   a una asesora**.
-- **Los carritos.** Los formularios abandonados de WooCommerce todavía no
-  entran a `draft_orders`; un carrito de Shopify en la cola solo prellena el
+- **Los carritos.** Los formularios abandonados de WooCommerce entran a
+  `draft_orders` y a la cola **desde el 27-10-2026**, cuando COD Core los
+  mande («Los formularios abandonados de WooCommerce», abajo); un carrito de Shopify en la cola solo prellena el
   pedido (arriba). **Lo que completaba un borrador de Shopify sin mirar
   `stores.platform` ya lo mira (25-10-2026)**: la recompra automática
   (`auto_order_trials`), `recoverCart` y `closeSale` solo crean con `shopify`
@@ -18087,6 +18163,89 @@ Implementación: `lib/auto-order-trials.ts` (`AUTO_TRIAL_PLATFORM_REASON`,
 `LOCAL_SALE_IN_WOO_STORE` (`lib/woocommerce-orders.ts`), y `recoverCart` y
 `closeSale` (`app/dashboard/leads/actions.ts`). Pruebas:
 `test/auto-order-trials.test.ts` y `test/carritos-plataforma.test.ts`.
+
+#### Los formularios abandonados de WooCommerce (27-10-2026)
+
+**Por qué (pedido del owner).** COD Core, el formulario contra entrega de
+WooCommerce, guarda en su pantalla «Formularios abandonados» a quien escribió
+su celular y no terminó el pedido en 30 minutos, y lo pasa a «Recuperados»
+cuando ese celular compra. Ninguno llegaba a Kapta: desde el cierre de Shopify
+la cola no recibía carritos nuevos y «Carritos anteriores» solo contaba los de
+Shopify. Un formulario abandonado es lo mismo que era un borrador de Releasit:
+un carrito. Esto no es una regla nueva de leads: entra por la de los
+carritos, sin cambiarla.
+
+**Cómo entra.** COD Core manda cada formulario por POST a
+`/api/webhooks/woocommerce/<storeId>/abandonados` (el contrato para el equipo
+de COD Core: `docs/kapta/cod-core-abandonados.md`). La dirección sale en
+Ajustes → WooCommerce, bajo la de los webhooks de pedidos.
+
+- **La firma:** el mismo secreto de los webhooks de pedidos de WooCommerce de
+  la tienda (no hay uno nuevo), HMAC-SHA256 del cuerpo crudo en base64, en
+  `X-Kapta-Signature`. Sin secreto guardado o con la firma mala, 401 y no se
+  escribe nada.
+- **Dos eventos:** `abandonado` (entra a «Formularios abandonados») y
+  `recuperado` (pasa a «Recuperados», con `pedido_id`). Cualquier otro, o un
+  formulario sin `id` o sin celular, es 422: reenviarlo no lo arregla. Si la
+  base no contesta, 503 y COD Core reintenta.
+- **La fila:** `draft_orders` con `platform = 'woocommerce'`, la llave
+  `cod-<clave del sitio>-<id>` (un reenvío actualiza la misma fila), el gid
+  `cod-core://<clave>/formulario/<id>` (no se confunde con uno de Shopify),
+  el nombre `#F<id>`, las etiquetas `cod_form` y `cod-core`, los productos con
+  su SKU y su id de WooCommerce, y el departamento como «región», igual que un
+  borrador de Shopify. La provincia queda en `raw`.
+
+**Qué hace.**
+
+- **`abandonado`:** `linkDraftOrdersToLeads`, el camino de los borradores de
+  Shopify, con todas sus reglas: crea el lead «Carrito» (`cod_cart`) si el
+  celular es nuevo, no pisa la gestión de uno que existe, reabre un ganado con
+  una recompra o un perdido con un carrito fresco, el periodo de gracia y
+  `cart_count_48h`. **Solo los de los últimos 2 días**
+  (`DRAFT_OPEN_WINDOW_DAYS`, la misma ventana de los borradores de Shopify):
+  uno más viejo, como lo que ya estaba en la pantalla al activar el envío,
+  queda solo como historia en «Carritos anteriores». Sin ese corte entraba a
+  la cola y el archivador de 7 días lo pasaba a Perdido sin que nadie lo
+  llamara.
+- **`recuperado`:** el carrito queda `completed` con el pedido
+  (`wc-<clave>-<pedido_id>`), y el lead de ese formulario sale de la cola
+  («ya tiene pedido», ganado, con una fila en el historial que lo dice) si
+  Kapta ya tiene ese pedido y no hay una gestión de la asesora posterior a él.
+  Después corre el barrido de siempre (`closeCartLeadsWithOrders`): un pedido
+  del mismo celular con un producto del carrito. Un `abandonado` que llega
+  después del `recuperado` del mismo formulario no lo reabre.
+- **La red de seguridad:** cada pasada de 5 minutos vuelve a enlazar los
+  formularios abiertos de los últimos 2 días (`relinkCodCoreForms`, paso
+  1b-ter de `runStoreSync`), como 1b con los borradores de Shopify: uno que
+  llegó dentro del periodo de gracia o cuyo enlace falló entra igual.
+- **En la ficha:** «Formulario abandonado #F…» (o «recuperado») en «Lo que
+  pidió», y «Ver en COD Core» si COD Core mandó el `enlace`; nunca un enlace
+  a Shopify. «Generar pedido» lo prellena con los productos por SKU y crea el
+  pedido en WooCommerce (arriba, «Los carritos»). Sale también en «Carritos
+  anteriores» y en la tarjeta del siguiente lead sin tocar nada de eso.
+
+**Lo que no cambia, a propósito.**
+
+- **La prueba A/B de recompra** no los inscribe: `auto_order_ab_candidates`
+  une el lead con su carrito por el id numérico del gid de Shopify, y el de un
+  formulario no calza. Sigue pendiente la decisión del owner sobre esa prueba
+  en una tienda en WooCommerce (arriba).
+- **El borrado de los 30 días de COD Core** no se manda: en Kapta el carrito
+  queda como historia.
+- **La secuencia de WhatsApp de carritos** los trata como a cualquier carrito
+  abierto, con su configuración de siempre. La foto del producto sale del
+  espejo de catálogo de Shopify por id: con el id de WooCommerce no la
+  encuentra y la plantilla sale sin foto.
+
+Implementación: `lib/cod-core-abandoned.ts` (el contrato, puro:
+`parseCodCoreForm`, `codCoreDate`, `codCoreFormGid`, `isCodCoreFormGid`,
+`codCoreAbandonedUrl`), `lib/cod-core-abandoned-ingest.ts`
+(`processCodCoreAbandoned`, `codCoreHttpStatus`, `isPastLeadWindow`,
+`relinkCodCoreForms`), `app/api/webhooks/woocommerce/[storeId]/abandonados/route.ts`,
+`DraftOrderRow.platform` (`lib/types.ts`), la ficha
+(`components/leads-drawer.tsx`) y Ajustes
+(`components/woocommerce-settings-section.tsx`). Sin migración: la 0274 ya
+puso `draft_orders.platform`. Pruebas: `test/cod-core-abandoned.test.ts`.
 
 ### 38.13 Pedidos del bot de Kapso por Kapta (23-10-2026)
 

@@ -43,6 +43,8 @@ import {
   type AliclikPreview,
 } from "@/app/dashboard/pedidos/aliclik-actions";
 import { isShortenedMapsLink } from "@/lib/aliclik-geo";
+import { loadOrderChatby } from "@/app/dashboard/pedidos/actions";
+import { chatbyCustomerLocation, chatbyLimaDay, chatbyLimaTime } from "@/lib/chatby-conversation";
 import {
   describeAliclikHealth,
   type AliclikHealthState,
@@ -122,6 +124,28 @@ export function AliclikGuidePanel({
    * acción que el propio panel describe como irreversible. Susto gratis.
    */
   const [busy, setBusy] = useState<null | "quote" | "create">(null);
+
+  /**
+   * La ubicación que la clienta mandó por WhatsApp al bot de Chatby (MOM §11,
+   * 26-10-2026): sin coordenada en el pedido —WooCommerce no geocodifica—, se
+   * propone con un clic. No se llena sola: quien cotiza la mira y decide.
+   */
+  const [whatsappPin, setWhatsappPin] = useState<{ lat: number; lng: number; at: string | null } | null>(null);
+  useEffect(() => {
+    if (hasCoordinate) return;
+    let alive = true;
+    loadOrderChatby(orderId)
+      .then((res) => {
+        if (alive && res.status === "ok") setWhatsappPin(chatbyCustomerLocation(res.messages));
+      })
+      .catch(() => {
+        /* sin Chatby, el campo se llena a mano como siempre */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [orderId, hasCoordinate]);
+  const whatsappPinText = whatsappPin ? `${whatsappPin.lat}, ${whatsappPin.lng}` : "";
 
   const shortened = isShortenedMapsLink(coordinate);
   const waiting = Boolean(preview?.notReady);
@@ -355,6 +379,33 @@ export function AliclikGuidePanel({
                   Pega el enlace que mandó la clienta o la coordenada, por ejemplo -12.04318, -77.02824.
                 </span>
               </label>
+              {whatsappPin && coordinate.trim() !== whatsappPinText && (
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-wash px-3 py-2 text-[13px] leading-5 text-ink-700">
+                  <span className="min-w-0">
+                    La clienta mandó su ubicación por WhatsApp
+                    {whatsappPin.at ? (
+                      <span className="tabular-nums text-ink-500">
+                        {" "}
+                        ({chatbyLimaDay(whatsappPin.at)?.split("-").reverse().slice(0, 2).join("-")} {chatbyLimaTime(whatsappPin.at)})
+                      </span>
+                    ) : null}
+                    : <span className="font-mono tabular-nums text-ink-900">{whatsappPinText}</span>
+                  </span>
+                  <span className="flex items-center gap-3">
+                    <OpsButton size="sm" onClick={() => setCoordinate(whatsappPinText)} className="pointer-coarse:h-11">
+                      Usar esta ubicación
+                    </OpsButton>
+                    <a
+                      href={`https://www.google.com/maps?q=${whatsappPin.lat},${whatsappPin.lng}`}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="font-medium text-brand-700 hover:underline"
+                    >
+                      Ver en el mapa
+                    </a>
+                  </span>
+                </div>
+              )}
               {shortened && (
                 <p className="text-[13px] leading-5 text-warn-fg">
                   Ese enlace es acortado (maps.app.goo.gl) y no contiene las coordenadas. Ábrelo en el navegador y

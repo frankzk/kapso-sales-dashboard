@@ -5229,3 +5229,60 @@ registra o se descarta. Sin crons ni variables nuevas (usa
    guía Swayp») sale de la lista sola.
 
 **Marcha atrás.** Revertir el commit; la tabla puede quedarse (nada más la lee).
+
+### 26-10-2026 · Aliclik en Lima (solo AUTOECOM) y Tanders sin guías nuevas (0283, MOM §9)
+
+Decisión del owner. En Lima el plan de rutas ofrece Aliclik donde ofrecía
+Tanders; en un pedido de Lima la cotización de Aliclik deja elegir solo
+AUTOECOM si lo trae (si no, el transporte que ofrezca, con aviso). Tanders deja
+de crear guías (`createTandersGuide` responde con el motivo); sus guías vivas
+siguen igual. Repro Lima acuerda con Aliclik en lugar de Tanders. Sin crons ni
+variables nuevas.
+
+1. **La 0283, antes o con el código.** Solo cambia dos CHECK de Repro Lima
+   para admitir `aliclik`; no toca filas:
+
+   ```sql
+   \i db/migrations/0283_lima_repro_aliclik.sql
+   ```
+
+   Sin ella, elegir Aliclik en la hoja de Repro Lima falla con el error del
+   CHECK; lo demás funciona. **Comprobar:**
+
+   ```sql
+   select conname, pg_get_constraintdef(oid) from pg_constraint
+    where conname in ('lima_repro_cases_agreed_courier_check', 'lima_repro_calls_courier_check');
+   ```
+
+2. **El código**, por el camino de siempre.
+3. **Comprobar** con el primer pedido de Lima que salga por Aliclik: la
+   cotización enseña los transportes; si trae AUTOECOM, solo ese se puede
+   elegir. Anotar en el MOM el nombre exacto con que lo devuelve Aliclik.
+
+**Marcha atrás.** `TANDERS_NEW_GUIDES_ENABLED = true` (lib/tanders/new-guides.ts)
+y devolver Tanders al plan de Lima; o revertir el commit. La 0283 puede quedarse.
+
+### 27-10-2026 · Formularios abandonados de COD Core → Leads (sin migración, MOM §38.12)
+
+Pedido del owner. COD Core manda cada formulario que pasa a «Formularios
+abandonados» o a «Recuperados» a `/api/webhooks/woocommerce/<storeId>/abandonados`,
+firmado con el secreto de los webhooks de pedidos de WooCommerce de la tienda
+(`X-Kapta-Signature`). Entra como carrito (`draft_orders`, platform
+`woocommerce`) y, si es de los últimos 2 días, como lead «Carrito» en la cola.
+Sin migración (la 0274 ya trae `draft_orders.platform`), sin crons ni
+variables nuevas.
+
+1. **El código**, por el camino de siempre.
+2. **Pasar `docs/kapta/cod-core-abandonados.md` al equipo de COD Core.** Hasta
+   que COD Core lo mande, no entra nada (la ruta solo responde).
+3. **Comprobar** con el primer formulario que llegue:
+
+   ```sql
+   select shopify_draft_order_id, status, created_at, customer_phone, total_amount
+     from draft_orders where platform = 'woocommerce' order by ingested_at desc limit 10;
+   select phone, status, category, draft_order_name from leads
+    where draft_order_gid like 'cod-core://%' order by first_seen_at desc limit 10;
+   ```
+
+**Marcha atrás.** Que COD Core deje de mandarlos, o revertir el commit. Las
+filas `cod-…` de `draft_orders` y sus leads pueden quedarse.

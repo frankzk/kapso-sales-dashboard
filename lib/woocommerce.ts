@@ -562,9 +562,14 @@ function fullName(a: WooAddress | null | undefined): string | null {
  * que leen `shopifyShippingAddress` (14 lugares), `swayp_auto_snapshot` y la
  * cobertura. `province` es el nombre del departamento como lo manda Shopify
  * (`wooPeruStateName`); si el estado no es un código conocido, va tal cual.
- * WooCommerce no geocodifica: sin latitud ni longitud.
+ * WooCommerce no geocodifica: la latitud y la longitud solo llegan si la
+ * clienta confirmó su ubicación en el formulario (`wooConfirmedPin`).
  */
-function shopifyShapedAddress(a: WooAddress, fallbackPhone: string | null) {
+function shopifyShapedAddress(
+  a: WooAddress,
+  fallbackPhone: string | null,
+  pin: { lat: number; lng: number } | null = null,
+) {
   const state = text(a.state);
   const country = (text(a.country) ?? "").toUpperCase();
   const isPeru = !country || country === "PE";
@@ -583,9 +588,38 @@ function shopifyShapedAddress(a: WooAddress, fallbackPhone: string | null) {
     country_code: country || (isPeru ? "PE" : null),
     zip: text(a.postcode),
     phone: text(a.phone) ?? fallbackPhone,
-    latitude: null,
-    longitude: null,
+    latitude: pin?.lat ?? null,
+    longitude: pin?.lng ?? null,
   };
+}
+
+/** La clave de `meta_data` donde COD Core guarda la ubicación que confirmó la clienta. */
+export const WOO_PIN_META_KEY = "_cod_ubicacion";
+
+/**
+ * La ubicación que la clienta confirmó en el formulario de COD Core (MOM §11,
+ * «La ubicación que confirma la clienta», 26-10-2026): `_cod_ubicacion` con
+ * `{ lat, lng, precision_m?, fuente?, confirmado? }`. Hace lo que hacía Shopify
+ * al geocodificar, pero con el punto que marcó ella. Solo si cae en el Perú;
+ * lo demás no se adivina.
+ */
+export function wooConfirmedPin(meta: WooMeta[] | null | undefined): { lat: number; lng: number } | null {
+  const entry = (meta ?? []).find((m) => m?.key === WOO_PIN_META_KEY);
+  let value = entry?.value;
+  if (typeof value === "string" && value.trim().startsWith("{")) {
+    try {
+      value = JSON.parse(value) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  const lat = Number(v.lat ?? v.latitude);
+  const lng = Number(v.lng ?? v.longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (lat < -18.6 || lat > 0.1 || lng < -81.5 || lng > -68.5) return null;
+  return { lat, lng };
 }
 
 // ---------------------------------------------------------------------------
@@ -709,7 +743,9 @@ export function mapWooOrder(order: WooOrder, store: WooStoreRef, opts: MapWooOrd
     // La copia con la forma de Shopify REST, para los lectores de `raw` de hoy.
     note: text(order.customer_note),
     note_attributes: noteAttributes,
-    shipping_address: shippingSource ? shopifyShapedAddress(shippingSource, phoneText) : null,
+    shipping_address: shippingSource
+      ? shopifyShapedAddress(shippingSource, phoneText, wooConfirmedPin(order.meta_data))
+      : null,
     billing_address: hasAddress(order.billing) ? shopifyShapedAddress(order.billing, phoneText) : null,
     contact_email: email,
     customer: {

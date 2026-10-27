@@ -36,6 +36,11 @@ export interface ChatbyMessage {
   error: boolean;
   /** Quién del equipo escribió, si Chatby lo dice. */
   agent: string | null;
+  /**
+   * La coordenada que trae el mensaje (una ubicación compartida, un enlace de
+   * Maps con la coordenada, o la coordenada escrita), si cae en el Perú.
+   */
+  location: { lat: number; lng: number } | null;
 }
 
 export type ChatbyConversation =
@@ -176,6 +181,7 @@ function mapMessage(row: Record<string, unknown>, index: number): (ChatbyMessage
     mediaUrl: null,
     error: false,
     agent: kind === "equipo" ? text(row.username) : null,
+    location: null,
   };
   if (msgType === "text" || msgType === "") {
     base.text = content ?? text(payload.text) ?? "";
@@ -190,6 +196,9 @@ function mapMessage(row: Record<string, unknown>, index: number): (ChatbyMessage
     base.media = MEDIA_BY_TYPE[msgType];
     base.mediaUrl = httpsUrl(payload.url) ?? httpsUrl(payload.link) ?? httpsUrl(payload.file_url) ?? httpsUrl(content);
     base.text = content && content !== base.mediaUrl ? content : text(payload.caption) ?? "";
+  } else if (msgType === "location") {
+    const at = payloadLocation(payload);
+    base.text = content ?? (at ? `Ubicación: ${at.lat}, ${at.lng}` : "Ubicación");
   } else if (msgType === "error") {
     base.error = true;
     base.text = content ?? "WhatsApp no entregó el mensaje.";
@@ -197,7 +206,55 @@ function mapMessage(row: Record<string, unknown>, index: number): (ChatbyMessage
     base.text = content ?? `[${msgType}]`;
   }
   if (!base.text && !base.media) return null;
+  base.location = payloadLocation(payload) ?? coordinateInText(base.text);
   return { ...base, ms, order: index };
+}
+
+/** ¿Cae en el Perú? Lo demás es un error de tipeo o un punto de prueba. */
+function inPeru(lat: number, lng: number): boolean {
+  return Number.isFinite(lat) && Number.isFinite(lng) && lat >= -18.6 && lat <= 0.1 && lng >= -81.5 && lng <= -68.5;
+}
+
+function numberOf(value: unknown): number | null {
+  const n = typeof value === "number" ? value : typeof value === "string" ? Number(value.trim()) : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Una ubicación compartida por WhatsApp: `latitude`/`longitude` o `lat`/`lng`. */
+function payloadLocation(payload: Record<string, unknown>): { lat: number; lng: number } | null {
+  const lat = numberOf(payload.latitude ?? payload.lat);
+  const lng = numberOf(payload.longitude ?? payload.lng ?? payload.long);
+  return lat !== null && lng !== null && inPeru(lat, lng) ? { lat, lng } : null;
+}
+
+/**
+ * La coordenada escrita en un texto: «Location: -12.12, -77.03», un enlace de
+ * Google Maps con `?q=-12.12,-77.03` o `@-12.12,-77.03`. Un enlace acortado
+ * (maps.app.goo.gl) no la trae: ahí no hay nada que leer.
+ */
+export function coordinateInText(value: string | null | undefined): { lat: number; lng: number } | null {
+  const m = (value ?? "").match(/(-\d{1,2}\.\d{3,})\s*,\s*(-\d{2}\.\d{3,})/);
+  if (!m) return null;
+  const lat = Number(m[1]);
+  const lng = Number(m[2]);
+  return inPeru(lat, lng) ? { lat, lng } : null;
+}
+
+/**
+ * La última ubicación que mandó la clienta por WhatsApp (MOM §11, «La ubicación
+ * que mandó por WhatsApp», 26-10-2026): la que propone el panel de Aliclik
+ * cuando el pedido no trae coordenada (WooCommerce no geocodifica). Solo
+ * mensajes de la clienta: una coordenada que escribió el bot o el equipo no es
+ * la suya.
+ */
+export function chatbyCustomerLocation(
+  messages: readonly Pick<ChatbyMessage, "kind" | "location" | "at">[],
+): { lat: number; lng: number; at: string | null } | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (m.kind === "cliente" && m.location) return { ...m.location, at: m.at };
+  }
+  return null;
 }
 
 /**

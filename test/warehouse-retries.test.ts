@@ -143,7 +143,7 @@ function reproRow(over: Partial<ReproRow> = {}): ReproRow {
       otherLiveCourier: null,
       hadPropio: true,
       totalOutputs: 1,
-      priorByCourier: { propio: 1, tanders: 0, fenix: 0, urpi: 0, axel: 0 },
+      priorByCourier: { propio: 1, aliclik: 0, tanders: 0, fenix: 0, urpi: 0, axel: 0 },
       ownReplace: null,
     },
     cutoff: "12:00:00",
@@ -401,7 +401,7 @@ describe("sin acuerdo de Repro Lima: la acción por defecto (decisión 1)", () =
       ownOutput: null,
       receivedAt: null,
     });
-    r.boxInputs = { ...r.boxInputs, ownLiveCourier: null, lastFailedCourier: "tanders", hadPropio: false, priorByCourier: { propio: 0, tanders: 1, fenix: 0, urpi: 0, axel: 0 } };
+    r.boxInputs = { ...r.boxInputs, ownLiveCourier: null, lastFailedCourier: "tanders", hadPropio: false, priorByCourier: { propio: 0, aliclik: 0, tanders: 1, fenix: 0, urpi: 0, axel: 0 } };
     const row = one(r);
     expect(row).toMatchObject({ action: "salida_nueva_rearmar", actionSource: "por_defecto", nightBefore: true, group: "fuera", whereLine: null, inOffice: false });
     expect(row.actionLine).toBe("Salida nueva de Grupo GF: el rótulo nuevo va encima del anterior, tapando su QR (§9.3).");

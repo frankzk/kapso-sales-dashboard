@@ -138,6 +138,7 @@ import {
 } from "@/lib/order-macro-stage";
 import { KEY_STATE_LABEL, PAYMENT_STATE_LABEL, type KeyState, type PaymentState } from "@/lib/pickup-key";
 import { orderPaymentPanelPresentation } from "@/lib/order-payment-panel";
+import { isWebPrepaid } from "@/lib/order-paid";
 import { PAYMENT_GATEWAY_LABEL } from "@/lib/payment-gateway";
 import {
   CONFIRMATION_CHANNELS,
@@ -2234,20 +2235,27 @@ function MasterTable({
                   </label>
                 </td>
                 <td className={cn(TD, "max-xl:col-start-2 max-xl:row-start-1")}>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onOpen(r.order_id, focus);
-                    }}
-                    title={focus ? "Abrir la ficha del pedido en Cobro" : "Abrir la ficha del pedido"}
-                    className={cn(
-                      "block max-w-full truncate text-left leading-5 underline-offset-2 hover:underline",
-                      isOpen ? "font-semibold text-brand-700" : "font-medium text-ink-900",
-                    )}
-                  >
-                    {r.order_name ?? "—"}
-                  </button>
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpen(r.order_id, focus);
+                      }}
+                      title={focus ? "Abrir la ficha del pedido en Cobro" : "Abrir la ficha del pedido"}
+                      className={cn(
+                        "block max-w-full truncate text-left leading-5 underline-offset-2 hover:underline",
+                        isOpen ? "font-semibold text-brand-700" : "font-medium text-ink-900",
+                      )}
+                    >
+                      {r.order_name ?? "—"}
+                    </button>
+                    {isWebPrepaid({
+                      financialStatus: r.financial_status,
+                      totalRefunded: r.total_refunded,
+                      paymentGateway: r.payment_gateway,
+                    }) && <Badge tone="ok">Pagado por web</Badge>}
+                  </div>
                   <p
                     className="truncate text-[13px] leading-5 text-ink-500"
                     title={[

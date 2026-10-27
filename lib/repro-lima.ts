@@ -64,14 +64,19 @@ export function isReproChannel(value: unknown): value is ReproChannel {
  * El courier del acuerdo, con el token que se guarda (catálogo de la Mesa de
  * despacho): Grupo GF es `propio` y Swayp es `fenix`. Urpi queda en el CHECK
  * para fase 2, pero en 1a no se ofrece (E16).
+ *
+ * Desde el 26-10-2026 (decisión del owner, MOM §9 «Aliclik en Lima») Tanders
+ * no crea guías nuevas y la hoja ofrece Aliclik en su lugar (0283 lo admite en
+ * el CHECK). `tanders` se queda en el tipo por los acuerdos ya guardados.
  */
-export type ReproCourier = "propio" | "tanders" | "fenix" | "urpi" | "axel";
-export const REPRO_COURIERS: readonly ReproCourier[] = ["propio", "tanders", "fenix", "urpi", "axel"];
-/** Los que se ofrecen en la hoja, en este orden (Grupo GF por defecto). Sin Urpi en 1a (E16). */
-export const REPRO_COURIER_CHOICES: readonly ReproCourier[] = ["propio", "tanders", "fenix", "axel"];
+export type ReproCourier = "propio" | "aliclik" | "tanders" | "fenix" | "urpi" | "axel";
+export const REPRO_COURIERS: readonly ReproCourier[] = ["propio", "aliclik", "tanders", "fenix", "urpi", "axel"];
+/** Los que se ofrecen en la hoja, en este orden (Grupo GF por defecto). Sin Urpi en 1a (E16) ni Tanders (26-10-2026). */
+export const REPRO_COURIER_CHOICES: readonly ReproCourier[] = ["propio", "aliclik", "fenix", "axel"];
 
 export const REPRO_COURIER_LABEL: Record<ReproCourier, string> = {
   propio: "Grupo GF",
+  aliclik: "Aliclik",
   tanders: "Tanders",
   fenix: "Swayp",
   urpi: "Urpi",
@@ -349,7 +354,7 @@ export function nextCallProblem(iso: string | null | undefined, now: Date = new 
  * - Una acción que se prepara la noche anterior (reimprimir, salida nueva,
  *   desarmar y rearmar): desde mañana (E14).
  * - Grupo GF: hoy hasta el corte (`same_day_cutoff`), después mañana.
- * - Tanders y Axel: hoy.
+ * - Aliclik, Tanders y Axel: hoy (la guía de Aliclik trae su propio horario de recojo).
  */
 export function firstAllowedDay(
   courier: ReproCourier,
