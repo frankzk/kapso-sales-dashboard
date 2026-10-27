@@ -5261,3 +5261,28 @@ variables nuevas.
 
 **Marcha atrás.** `TANDERS_NEW_GUIDES_ENABLED = true` (lib/tanders/new-guides.ts)
 y devolver Tanders al plan de Lima; o revertir el commit. La 0283 puede quedarse.
+
+### 27-10-2026 · Formularios abandonados de COD Core → Leads (sin migración, MOM §38.12)
+
+Pedido del owner. COD Core manda cada formulario que pasa a «Formularios
+abandonados» o a «Recuperados» a `/api/webhooks/woocommerce/<storeId>/abandonados`,
+firmado con el secreto de los webhooks de pedidos de WooCommerce de la tienda
+(`X-Kapta-Signature`). Entra como carrito (`draft_orders`, platform
+`woocommerce`) y, si es de los últimos 2 días, como lead «Carrito» en la cola.
+Sin migración (la 0274 ya trae `draft_orders.platform`), sin crons ni
+variables nuevas.
+
+1. **El código**, por el camino de siempre.
+2. **Pasar `docs/kapta/cod-core-abandonados.md` al equipo de COD Core.** Hasta
+   que COD Core lo mande, no entra nada (la ruta solo responde).
+3. **Comprobar** con el primer formulario que llegue:
+
+   ```sql
+   select shopify_draft_order_id, status, created_at, customer_phone, total_amount
+     from draft_orders where platform = 'woocommerce' order by ingested_at desc limit 10;
+   select phone, status, category, draft_order_name from leads
+    where draft_order_gid like 'cod-core://%' order by first_seen_at desc limit 10;
+   ```
+
+**Marcha atrás.** Que COD Core deje de mandarlos, o revertir el commit. Las
+filas `cod-…` de `draft_orders` y sus leads pueden quedarse.

@@ -14,6 +14,7 @@
 // El nombre exacto no se conocía al escribir esto (Kapta nunca había cotizado
 // una dirección de Lima: sus 7.476 guías eran ALIDRIVER), así que se compara
 // sin espacios, guiones ni mayúsculas: «AUTOECOM», «Auto Ecom», «AUTO-ECOM».
+// Confirmado el 26-10-2026: Aliclik lo llama «AutoEcom Logistic».
 
 /** ¿El transporte de la cotización es AUTOECOM? */
 export function isAutoecom(transportName: string | null | undefined): boolean {

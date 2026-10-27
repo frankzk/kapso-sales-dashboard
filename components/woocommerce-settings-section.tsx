@@ -55,6 +55,8 @@ export interface WooSettingsView {
   lastError: string | null;
   /** La dirección de entrega de los webhooks de esta tienda. */
   webhookUrl: string;
+  /** Adonde COD Core manda sus formularios abandonados (MOM §38.12), con el mismo secreto. */
+  abandonedUrl: string;
   topics: readonly string[];
   /** La fila `woo_orders` de `sync_state`, si ya corrió. */
   sync: WooSyncStateView | null;
@@ -129,6 +131,7 @@ export function WooCommerceSettingsSection({ storeId, data }: { storeId: string;
   const [, startTransition] = useTransition();
   const { state: copied, copy } = useCopyToClipboard();
   const { state: copiedSecret, copy: copySecret } = useCopyToClipboard();
+  const { state: copiedAbandoned, copy: copyAbandoned } = useCopyToClipboard();
 
   // Guardado: se vacían los campos secretos y se trae lo nuevo de la base. Con
   // error, lo escrito se queda (el formulario se envía a mano por eso).
@@ -354,6 +357,18 @@ export function WooCommerceSettingsSection({ storeId, data }: { storeId: string;
             conexión) que los cuatro temas tengan uno activo con esta dirección, y lo avisa arriba. Nunca los cambia: se
             arreglan en WooCommerce. La versión de la API y el secreto no los muestra WooCommerce: esos se revisan a mano
             en cada webhook.
+          </p>
+          <p className={cn(HELP, "pt-1 font-medium text-ink-900")}>Formularios abandonados de COD Core</p>
+          <div className="flex flex-wrap items-stretch gap-2">
+            <CodeLine>{data.abandonedUrl}</CodeLine>
+            <OpsButton onClick={() => copyAbandoned(data.abandonedUrl)} className="h-auto min-h-9">
+              <IconCopy />
+              {copyLabel(copiedAbandoned)}
+            </OpsButton>
+          </div>
+          <p className={HELP}>
+            COD Core manda aquí cada formulario que pasa a «Formularios abandonados» o a «Recuperados», firmado con este
+            mismo secreto en <code>X-Kapta-Signature</code>. Cada uno entra a Leads como carrito.
           </p>
         </div>
       </div>

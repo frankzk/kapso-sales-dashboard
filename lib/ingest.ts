@@ -62,6 +62,7 @@ import {
   type LeadEnrichStats,
 } from "@/lib/leads-ingest";
 import { runCartSequence } from "@/lib/cart-sequence";
+import { relinkCodCoreForms } from "@/lib/cod-core-abandoned-ingest";
 import { autoTrialDeps, processAutoOrderTrials } from "@/lib/auto-order-trials";
 import { abDeps, enrollAbCohorts } from "@/lib/auto-order-ab";
 import { runReturnRecovery } from "@/lib/return-recovery";
@@ -2283,6 +2284,16 @@ export async function runStoreSync(
     if (woo.error) report.errors.push(`woo_orders: ${woo.error}`);
   } catch (e: any) {
     report.errors.push(`woo_orders: ${e.message}`);
+  }
+
+  // 1b-ter) Formularios abandonados de COD Core (MOM §38.12): vuelve a enlazar
+  //     los abiertos de los últimos días, como 1b con los borradores de
+  //     Shopify. Llegan por su webhook; esto cubre uno que entró dentro del
+  //     periodo de gracia o cuyo enlace falló. Sin formularios, una lectura.
+  try {
+    await relinkCodCoreForms(admin, storeId);
+  } catch (e: any) {
+    report.errors.push(`cod_core_formularios: ${e.message}`);
   }
 
   // 1c) Carritos que ya son pedido. Va DESPUÉS de 1a-bis (todos los pedidos) y

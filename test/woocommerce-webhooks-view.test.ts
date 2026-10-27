@@ -168,6 +168,7 @@ function data(over: Partial<WooSettingsView> = {}): WooSettingsView {
     hasWebhookSecret: true,
     lastError: null,
     webhookUrl: `https://kapta.example/api/webhooks/woocommerce/${STORE_ID}`,
+    abandonedUrl: `https://kapta.example/api/webhooks/woocommerce/${STORE_ID}/abandonados`,
     topics: WOO_INTAKE_TOPICS,
     sync: row(),
     webhooks: row(),
