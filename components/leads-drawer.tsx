@@ -2647,7 +2647,7 @@ function matchPeruRegion(v: string | null | undefined): string {
   return PERU_REGIONS.find((r) => nv.includes(norm(r))) ?? v;
 }
 
-function OrderFormPanel({
+export function OrderFormPanel({
   leadId,
   currency,
   hasCart,

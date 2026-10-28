@@ -17674,6 +17674,21 @@ cuando la pantalla ya mostró un error de red y la asesora vuelve a pulsar. Por
 eso el formulario y el bot tienen el candado en la base, por (tienda, id del
 intento).
 
+**Acceso desde Master de Pedidos (28-10-2026).** «Venta por teléfono» está
+también en la cabecera del Master, antes del buscador. En Información → Pedido
+y cliente, «Crearle pedido a este cliente» abre esa misma entrada con tienda,
+nombre y celular precargados. Sin celular válido se indica por qué no se ofrece
+ese acceso directo; la cabecera permite ingresarlo. Ambos accesos requieren
+orders.create, además del acceso a la tienda que comprueba el servidor.
+
+Se reutilizan VentaTelefonica, la búsqueda/alta de lead y OrderFormPanel de
+Leads: mismas validaciones, catálogo, avisos de duplicado, atribución a la asesora,
+confirmación e idempotencia. No hay otro formulario ni endpoint de creación. La
+ficha del pedido original queda en pausa y vuelve a su pestaña al cerrar, con
+los filtros del Master conservados. Desde un cliente de un pedido existente es
+siempre una venta nueva: no se copia el pedido ni se reutiliza su borrador anterior.
+La reserva de atención conserva renovación por actividad y liberación al cerrar.
+
 **El candado del formulario (25-10-2026).** Cuando una tienda pasa a crear
 sus pedidos en WooCommerce («Crear los pedidos nuevos en», Aurela y Kenku en
 el corte del 27-10), «Generar pedido» (y «Venta telefónica») usa **el mismo
