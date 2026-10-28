@@ -82,6 +82,7 @@ export function wooCancelEventNote(label: string, text: string): string {
 // ---------------------------------------------------------------------------
 
 export interface WooCancelShipment {
+  created_via?: string | null;
   courier: string | null;
   guide_code?: string | null;
   delivery_status: string;
@@ -182,7 +183,9 @@ export function wooCancelBlocks(f: WooCancelFacts): WooCancelBlock[] {
       // Las mismas salidas vivas que impiden finalizar (`activeOutputs`).
       out.push({
         code: "salida_activa",
-        message: `${capitalize(shipmentLabel(s))} sigue viva: anúlala primero con su propio botón (avisa al courier) y después anula el pedido.`,
+        message: s.created_via === "grupo_gf_courier" && s.custody_state === "empresa"
+          ? `${capitalize(shipmentLabel(s))} sigue activa: en «Salidas y guías», usa «Retirar y anular salida» si el paquete sigue en almacén y el motorizado no lo recibió. Después anula el pedido.`
+          : `${capitalize(shipmentLabel(s))} sigue viva: anúlala primero con su propio botón (avisa al courier) y después anula el pedido.`,
       });
     }
   }

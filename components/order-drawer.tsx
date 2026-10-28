@@ -98,6 +98,8 @@ import {
 } from "@/app/dashboard/pedidos/actions";
 import { VoiceAgentPanel } from "@/components/voice-agent-panel";
 import { WooCancelZone } from "@/components/woo-cancel-zone";
+import { GfOutputCancelButton } from "@/components/gf-output-cancel-button";
+import { gfOutputIsCancelableBeforeDispatch } from "@/lib/gf-output-cancel";
 import { cancelWooOrder } from "@/app/dashboard/pedidos/woo-cancel-actions";
 import { cancelLegacyShopifySale } from "@/app/dashboard/pedidos/legacy-sale-cancel-actions";
 import type { WooCancelFacts } from "@/lib/woo-cancel";
@@ -1874,6 +1876,15 @@ export function OrderDrawer({
                           {/* Las salidas de ruta manual no tienen API a la que
                               avisar: anularlas es corregir NUESTRO registro, así que
                               basta el permiso con el que se crearon. */}
+                          {canCancelWoo && gfOutputIsCancelableBeforeDispatch(g) && !gf?.stop &&
+                            !gf?.box?.pickupCheckedAt && !["in_custody", "cancelled"].includes(gf?.box?.boxState ?? "") && (
+                            <GfOutputCancelButton
+                              orderId={orderId}
+                              shipmentId={g.id}
+                              label={g.output_code ?? g.guide_code ?? "esta salida"}
+                              onDone={(msg) => { setNotice(msg); void reload(); onSaved(); }}
+                            />
+                          )}
                           {canEdit && manualOutputIsCancelable(g) && (
                             <ManualOutputCancelButton
                               shipmentId={g.id}

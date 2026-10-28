@@ -5286,3 +5286,12 @@ variables nuevas.
 
 **Marcha atrás.** Que COD Core deje de mandarlos, o revertir el commit. Las
 filas `cod-…` de `draft_orders` y sus leads pueden quedarse.
+
+## 0284: retiro de salida Grupo GF antes de despacho
+
+Aplicar db/migrations/0284_gf_cancel_pre_dispatch_output.sql antes de publicar
+el botón del Master. Instala el RPC de servicio y el guard de reasignación;
+no cancela ni modifica pedidos, solicitudes o salidas existentes al instalarse.
+El RPC exige autorización previa por sesión/RLS y orders.cancel_woo en el servidor.
+Verificación de transición y rollback: scripts/sql/gf_cancel_output_smoke.sql,
+ejecutado por verify-db.sh sobre Postgres desechable.
