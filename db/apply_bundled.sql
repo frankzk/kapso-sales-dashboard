@@ -26715,6 +26715,7 @@ declare
   v_rider text;
   v_replaced boolean;
   v_code text;
+  v_cancelled_request uuid;
 begin
   select * into v_item from dispatch_manifest_items where id = p_item_id for update;
   if not found or v_item.removed_at is not null then raise exception 'Ese paquete ya no está en la caja.'; end if;
@@ -26755,9 +26756,19 @@ begin
            returned_by = coalesce(returned_by, p_actor), returned_source = coalesce(returned_source, 'manual')
      where id = v_item.shipment_id;
     -- Defensivo: la solicitud ya pasó a la salida nueva al reemplazarla.
+    if exists(select 1 from woo_sale_returns where order_id=v_shipment.order_id) then
+      update logistics_requests set status='cancelled',observation='Venta terminada: retorno recibido en almacén'
+        where shipment_id=v_item.shipment_id and status<>'cancelled' returning id into v_cancelled_request;
+      if found then
+        insert into logistics_request_events(request_id,kind,status,actor,note,payload)
+          values(v_cancelled_request,'sale_ended_return_received','cancelled',p_actor,
+            'Venta terminada: retorno recibido en almacén',jsonb_build_object('shipment_id',v_item.shipment_id));
+      end if;
+    else
     update logistics_requests
        set status = 'cancelled', observation = 'Salida devuelta recibida en oficina'
      where shipment_id = v_item.shipment_id and status in ('accepted', 'scheduled');
+    end if;
 
     insert into dispatch_events(org_id, manifest_id, shipment_id, actor, kind, payload)
     values (v_manifest.org_id, v_item.manifest_id, v_item.shipment_id, p_actor, 'returned_to_office',

@@ -19156,7 +19156,7 @@ WooCommerce conserva su estado actual hasta el retorno: su transición nativa a
 cancelled restaura el stock reducido y no debe enviarse mientras la caja está
 fuera. Esta separación no modifica plugins o acciones manuales externas a Kapta.
 La recepción GF mantiene el despacho y la parada histórica, retira el ítem y
-registra return_received; no devuelve el paquete a por asignar. Las demás vías
+registra return_received; no devuelve el paquete a por asignar.
 La solicitud GF conserva su seguimiento hasta esa recepción; entonces queda
 cancelada con su propio evento, incluso si venía in_route, sin borrar el reporte.
 Las demás vías
