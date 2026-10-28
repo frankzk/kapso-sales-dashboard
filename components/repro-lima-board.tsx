@@ -216,7 +216,7 @@ export function ReproLimaBoard({ data, pending }: { data: ReproLimaData; pending
           {data.stores.length > 1 && <FilterPill ref={storePill} label="Tienda" value={storeName} expanded={storeSheet} onClick={() => setStoreSheet((v) => !v)} onClear={() => setStore("")} />}
           <div role="group" aria-label="Seguimiento de llamadas y cierres" className="flex flex-wrap items-center gap-1.5">
             {LIMA_FOLLOWUP_FILTERS.filter((f) => counts[f.key] > 0 || list === f.key).map((f) => (
-              <ChoiceChip key={f.key} label={f.label} count={counts[f.key]} active={list === f.key} onClick={() => chooseList(list === f.key ? "todos" : f.key)} />
+              <ChoiceChip key={f.key} label={f.label} count={counts[f.key]} title={f.hint} active={list === f.key} onClick={() => chooseList(list === f.key ? "todos" : f.key)} />
             ))}
           </div>
           <p className="w-full text-[13px] tabular-nums text-ink-500 lg:ml-auto lg:w-auto" aria-live="polite">

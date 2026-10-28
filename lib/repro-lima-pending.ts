@@ -23,8 +23,8 @@ export const LIMA_QUEUE_CARDS: readonly { key: Exclude<LimaAttentionFilter, "tod
 ];
 
 export const LIMA_FOLLOWUP_FILTERS = [
-  { key: "llamar_despues" as const, label: "Llamar después", empty: "Nadie pidió que lo llamen después." },
-  { key: "cerrados" as const, label: "Cerrados · esperan anulación", empty: "Ningún caso cerrado espera la anulación." },
+  { key: "llamar_despues" as const, label: "Llamar después", hint: "El cliente pidió que lo llamen a otra hora. Por la hora de la llamada.", empty: "Nadie pidió que lo llamen después." },
+  { key: "cerrados" as const, label: "Cerrados · esperan anulación", hint: "«Desarmar y cerrar» del intento vigente: el pedido sigue en la etapa hasta que la tienda anule la venta.", empty: "Ningún caso cerrado espera la anulación." },
 ];
 
 /** Las tarjetas filtran una sola cola. Los pedidos sin caso siguen en Todos;
