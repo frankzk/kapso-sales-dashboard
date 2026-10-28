@@ -40,6 +40,7 @@ const page = read("app/dashboard/pedidos/repro-lima/page.tsx");
 const loading = read("app/dashboard/pedidos/repro-lima/loading.tsx");
 const board = read("components/repro-lima-board.tsx");
 const todos = read("components/repro-lima-todos.tsx");
+const pendingUI = read("components/repro-lima-pending.tsx");
 const sheet = read("components/repro-lima-sheet.tsx");
 const sidebar = read("components/sidebar.tsx");
 const shell = read("components/dashboard-shell.tsx");
@@ -63,8 +64,9 @@ describe("quién entra (D11, E32, E36)", () => {
     expect(gate).toBeGreaterThan(-1);
     expect(load).toBeGreaterThan(gate);
     // «Todos» también se cuenta después del permiso, y llega al tablero.
-    expect(page.indexOf("loadLimaOpenCounts(createAdminSupabase(), scope)")).toBeGreaterThan(gate);
-    expect(page).toContain("openCounts={openCounts}");
+    expect(page.indexOf("loadLimaPending(createAdminSupabase(), scope)")).toBeGreaterThan(gate);
+    expect(page).toContain("pending={pending}");
+    expect(page).not.toContain("loadLimaOpenCounts");
   });
 
   it("sin permiso dice de quién es, sin tiendas lo dice, y el error de lectura no tumba el panel", () => {
@@ -132,8 +134,8 @@ describe("el candado de la hoja (D10)", () => {
   it("se toma al abrir, solo al atender: «Ver acuerdo» y «Cerrados» no toman nada (E29)", () => {
     const effect = between(sheet, "useEffect(() => {\n    if (mode !== \"edit\") return;", "}, [orderId, mode, claimAttempt, reload]);");
     expect(effect.indexOf('if (mode !== "edit") return;')).toBeLessThan(effect.indexOf("claimReproCase(orderId"));
-    expect(board).toContain('openRow(row, "read")}>Ver acuerdo</OpsButton>');
-    expect(board).toContain('openRow(row, "read")}>Ver</OpsButton>');
+    expect(board).toContain('openRow(row, "read")}>Atender</OpsButton>');
+    expect(board).toContain('openRow(row, "read")}>Atender</OpsButton>');
     expect(board).toContain('openRow(row, "edit")}>');
   });
 
@@ -359,7 +361,7 @@ describe("la hoja decide con las reglas del servidor (§11.6, E14-E19)", () => {
 
 describe("solo lectura y reabrir (E12, E29)", () => {
   it("«Volver a atender» pide el segundo clic en la hoja y reabre con `reopen`", () => {
-    expect(board).toContain('openRow(row, "read", true)}>Volver a atender</OpsButton>');
+    expect(sheet).toContain('onClick={() => setShowReopen(true)}>Volver a atender</OpsButton>');
     expect(sheet).toContain("Si Almacén ya la desarmó, elige «No esperar la caja».");
     expect(sheet).toContain('onClick={() => { setShowReopen(false); reopenRef.current = true; setMode("edit"); setClaimAttempt((n) => n + 1); }}');
     expect(sheet).toContain("claimReproCase(orderId, reopen ? { reopen: true } : {})");
@@ -380,7 +382,7 @@ describe("solo lectura y reabrir (E12, E29)", () => {
   });
 
   it("«Ya la encontré: programar» pide «La caja está en la oficina» antes de programar", () => {
-    for (const src of [board, sheet]) {
+    for (const src of [sheet]) {
       expect(src).toContain("Ya la encontré: programar");
       expect(src).toContain("La caja está en la oficina");
       expect(src).toContain("...(found ? { found: true } : {})");
@@ -396,49 +398,22 @@ describe("el tablero (E31, E33)", () => {
   });
 
   it("tabla desde 1280 px y filas con líneas finas más angosto", () => {
-    expect(board).toContain("hidden max-h-[70vh] overflow-auto border-t border-line xl:block");
-    expect(board).toContain('<ul className="divide-y divide-line border-t border-line xl:hidden">');
+    expect(pendingUI).toContain("hidden max-h-[70vh] overflow-auto border-t border-line xl:block");
+    expect(pendingUI).toContain('<ul className="divide-y divide-line border-t border-line xl:hidden">');
   });
 
-  it("cuatro listas y «Todos» que filtran y cuentan", () => {
-    expect(board).toContain("grid grid-cols-2 gap-2 sm:grid-cols-4");
-    expect(board).toContain("{REPRO_LISTS.map((l) => (\n          <StatusCard");
-    expect(board).toContain('label: "Cerrados · esperan anulación"');
-    expect(board).toContain("`Programados · ${toReview} a revisar`");
-    // «Todos»: la quinta columna desde 1024 px y una fila entera en el teléfono.
-    expect(board).toContain("lg:grid-cols-5");
-    expect(board).toContain("col-span-2 sm:col-span-4 lg:col-span-1");
-    expect(board).toContain('label="Todos · por entregar"');
-    expect(board).toContain("value={pending ? pendingStore.length : breakdown!.totals.porEntregar}");
-    // Va DESPUÉS de las cuatro listas y solo con el conteo leído.
-    expect(board.indexOf('label="Todos · por entregar"')).toBeGreaterThan(board.indexOf("{REPRO_LISTS.map((l) => (\n          <StatusCard"));
-    expect(board).toContain("{(pending || breakdown) && (");
-    // La vista va en la URL, sin volver a pedir la página.
-    expect(board).toContain('const requestedView = searchParams.get("vista");');
-    expect(board).toContain("window.history.replaceState(");
+  it("una sola tabla, Todos primero y las tarjetas como filtros de atención", () => {
+    expect(board.match(/<LimaPendingList /g)).toHaveLength(1);
+    expect(board).not.toContain("<ReproLimaTodos");
+    expect(board).not.toContain("<table");
+    expect(board).not.toContain("showView(");
+    expect(board.indexOf('label="Todos · por entregar"')).toBeLessThan(board.indexOf("{REPRO_LISTS.map((l) => ("));
+    expect(board).toContain('active={list === "todos"}');
+    expect(board).toContain('onClick={() => chooseList(l)}');
+    expect(board).toContain('params.delete("vista")');
+    expect(board).toContain('searchParams.get("atencion")');
     expect(board).not.toMatch(/router\.(push|replace)\(/);
-    // Entrar a «Todos» quita la búsqueda; una lista vuelve a las listas.
-    const todosCard = between(board, 'label="Todos · por entregar"', "/>");
-    expect(todosCard).toContain('onClick={() => showView("todos")}');
-    expect(todosCard).toContain('active={view === "todos"}');
-    expect(board).toContain('active={view === "listas" && list === l}');
-    expect(board).toContain('onClick={() => { setList(l); showView("listas"); }}');
-    // «Por reprogramar Lima» sale de las filas del tablero, por tienda y sin la búsqueda.
-    expect(board).toContain("reproAging(storeScoped)");
-    expect(board).toContain('!hidden.has(master ? pendingKey(master) : "en_curso:por_reprogramar_lima") && matches(row, query)');
-    // En «Todos», sin búsqueda, y la línea dice lo que falta entregar.
-    expect(board).toContain("todavía por entregar");
-    expect(board).toContain('view === "todos" ? "Todos los pendientes de Lima"');
-    expect(board).toContain("<ReproLimaTodos breakdown={todos} lists={lists} onOpenList={onOpenList} />");
-    // Las cuatro listas de «Todos» se cuentan sin la búsqueda, y la búsqueda se
-    // quita aunque se llegue a «Todos» por la URL.
-    expect(board).toContain("for (const row of storeScoped) out[row.list] += 1;");
-    expect(board).toContain("count: storeCounts[l]");
-    expect(board).toContain('useEffect(() => { if (view === "resumen") setQuery(""); }, [view]);');
-    // Sin conteo, `vista` sale de la URL; al abrir una lista desde «Todos» el foco va a la sección.
-    expect(board).toContain('requestedView === "resumen" && breakdown ? "resumen"');
-    expect(board).toContain("window.requestAnimationFrame(() => listSection.current?.focus());");
-    expect(board).toContain("<section ref={listSection} tabIndex={-1}");
+    expect(board).not.toContain("requestAnimationFrame");
   });
 
   it("«Todos» agrupa por etapa y subetapa del Master, con enlaces a sus colas (§9.5)", () => {
@@ -471,7 +446,7 @@ describe("el tablero (E31, E33)", () => {
 
   it("las listas vacías y la búsqueda sin resultado lo dicen", () => {
     for (const text of [
-      "Nada por decidir. Los «No entregado» nuevos aparecen aquí.",
+      "No hay pedidos pendientes de una decisión con estos filtros.",
       "Nadie pidió que lo llamen después.",
       "Todavía no hay acuerdos.",
       "Ningún caso cerrado espera la anulación.",
@@ -611,74 +586,5 @@ describe("«Todos» en pantalla (§9.5, 14-10-2026)", () => {
     expect(onlyClose).toContain('Todavía por entregar</span><span class="shrink-0 tabular-nums">0</span>');
     expect(onlyClose).toContain('data-dot="por_cerrar"');
     expect(onlyClose).not.toContain("No hay pedidos de Lima sin estado final.");
-  });
-});
-
-describe("el tablero con «Todos» (§9.5, 14-10-2026)", () => {
-  const A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-  const B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
-  // Solo lo que el tablero lee fuera de las filas dibujadas: la lista, la tienda y los días.
-  const caseRow = (orderId: string, storeId: string, list: ReproRow["list"], daysInStage: number | null) =>
-    ({ orderId, storeId, list, daysInStage, orderName: `#${orderId}`, customerName: "", customerPhone: null, state: { kind: "vigente" } }) as unknown as ReproRow;
-  const data = {
-    today: "2026-10-14",
-    nowIso: "2026-10-14T15:00:00.000Z",
-    cutoffLabel: "12:00",
-    cutoffPassed: false,
-    cutoffText: "",
-    stores: [{ id: A, name: "Tienda A" }, { id: B, name: "Tienda B" }],
-    // Todas en «Cerrados»: la lista por omisión («Por decidir») queda vacía y no dibuja filas.
-    rows: [caseRow("1", A, "cerrados", 3), caseRow("2", A, "cerrados", 8), caseRow("3", B, "cerrados", 31)],
-    me: "u",
-  } as unknown as ReproLimaData;
-  const openCounts = {
-    today: "2026-10-14",
-    rows: [
-      { storeId: A, stage: "preparacion" as const, substage: "por_generar_rotulo", total: 5, over7: 1, over30: 0 },
-      { storeId: B, stage: "por_cerrar" as const, substage: "pendiente_liquidacion", total: 7, over7: 7, over30: 2 },
-    ],
-  };
-  const render = (search: string, counts: typeof openCounts | null = openCounts) => {
-    nav.search = search;
-    return renderToStaticMarkup(createElement(ReproLimaBoard, { data, openCounts: counts }));
-  };
-  const card = (html: string) => {
-    const at = html.indexOf("Todos · por entregar");
-    return at < 0 ? "" : html.slice(html.lastIndexOf("<button", at), html.indexOf("</button>", at));
-  };
-
-  it("sin conteo, ni tarjeta ni quinta columna, y «?vista=todos» se queda en las listas", () => {
-    for (const search of ["", "vista=todos"]) {
-      const html = render(search, null);
-      expect(html).not.toContain("Todos · por entregar");
-      expect(html).not.toContain("lg:grid-cols-5");
-      expect(html).toContain('type="search"');
-      expect(html).not.toContain("Todavía por entregar");
-    }
-  });
-
-  it("en las listas, la tarjeta cuenta lo que falta entregar (con Repro Lima) y no está elegida", () => {
-    const html = render("");
-    expect(html).toContain("lg:grid-cols-5");
-    const todosCard = card(html);
-    // 5 en Preparación + los 3 casos del tablero; Por cerrar no suma.
-    expect(todosCard).toContain('aria-pressed="false"');
-    expect(todosCard).toContain(">8</span>");
-    expect(html).toContain('type="search"');
-    expect(html).toContain('aria-label="Por decidir"');
-  });
-
-  it("con «?vista=resumen», conserva el cuadre anterior sin búsqueda", () => {
-    const html = render("vista=resumen&ficha=x");
-    expect(card(html)).toContain('aria-pressed="false"');
-    // Ninguna lista elegida mientras se mira «Todos».
-    expect(html.match(/aria-pressed="true"/g)?.length ?? 0).toBe(0);
-    expect(html).toContain('<section tabindex="-1" aria-label="Resumen de Lima"');
-    expect(html).not.toContain('type="search"');
-    expect(html).toContain('<b class="font-semibold text-ink-900">8</b> todavía por entregar · 7 por cerrar');
-    expect(html).toContain("Todavía por entregar");
-    expect(html).toContain('aria-label="Por reprogramar Lima: 3 pedidos, 2 con más de 7 días y 1 con más de 30. Ver sus cuatro listas."');
-    // La píldora de tienda sigue ahí.
-    expect(html).toContain("Tienda");
   });
 });

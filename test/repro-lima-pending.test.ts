@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { loadLimaPending } from "@/lib/repro-lima-pending-access";
-import { pendingFilters, pendingGroup, pendingKey, pendingMatches, togglePendingKeys, type LimaPendingOrder } from "@/lib/repro-lima-pending";
+import { attentionCounts, attentionFilter, attentionRows, pendingFilters, pendingGroup, pendingKey, pendingMatches, togglePendingKeys, type LimaPendingOrder } from "@/lib/repro-lima-pending";
 import { LimaPendingFilters, LimaPendingList } from "@/components/repro-lima-pending";
 import { ReproLimaBoard } from "@/components/repro-lima-board";
 import type { ReproLimaData } from "@/lib/repro-lima-access";
@@ -126,13 +126,26 @@ describe("acceso a todos los pendientes", () => {
 
 describe("presentación inicial y gestión", () => {
   const data = { today: TODAY, nowIso: "2026-10-28T15:00:00Z", cutoffLabel: "12:00", stores: [{ id: "a", name: "Kenku" }], rows: [], me: "u" } as unknown as ReproLimaData;
-  it("entra en Todos con filas reales aunque no haya RPC del resumen", () => {
+  it("entra en Todos con Atender y una única tabla", () => {
     nav.search = "";
     const html = renderToStaticMarkup(createElement(ReproLimaBoard, { data, pending: [row()] }));
     expect(html).toContain('aria-label="Todos los pendientes de Lima"');
     expect(html).toContain("#KP1");
-    expect(html).toContain("Gestionar pedido");
+    expect(html).toContain(">Atender</a>");
+    expect(html).not.toContain("Gestionar pedido");
+    expect(html).not.toContain("Resumen y cierres pendientes");
+    expect(html.match(/<table /g)).toHaveLength(1);
     expect(html).toContain("Todos activos al entrar.");
+  });
+  it("los tres enlaces antiguos abren Todos y mantienen Atender", () => {
+    for (const legacy of ["listas", "todos", "resumen"]) {
+      nav.search = `vista=${legacy}`;
+      const html = renderToStaticMarkup(createElement(ReproLimaBoard, { data, pending: [row()] }));
+      expect(html).toContain('aria-label="Todos los pendientes de Lima"');
+      expect(html).toContain(">Atender</a>");
+      expect(html.indexOf("Todos · por entregar")).toBeLessThan(html.indexOf("Por decidir"));
+    }
+    nav.search = "";
   });
   it("respeta las exclusiones de la URL y una selección completamente vacía", () => {
     nav.search = "ocultar=preparacion%3Apor_armar";
@@ -155,5 +168,34 @@ describe("presentación inicial y gestión", () => {
     expect(html.match(/aria-pressed="true"/g)).toHaveLength(3);
     expect(html).toContain('aria-label="Macroestado"');
     expect(html).toContain('aria-label="Subetapa"');
+  });
+});
+
+describe("una cola de atención para los 2070 pendientes", () => {
+  const rows = Array.from({ length: 2070 }, (_, i) => row({ orderId: `o${i}` }));
+  const cases = Array.from({ length: 577 }, (_, i) => ({ orderId: `o${i}`, list: i < 10 ? "programados" as const : "por_decidir" as const }));
+  it("Todos contiene los 2070, incluyendo los 1493 sin caso de fallo", () => {
+    expect(attentionRows(rows, cases, "todos")).toHaveLength(2070);
+    expect(attentionRows(rows, cases, "todos").at(-1)?.orderId).toBe("o2069");
+    expect(cases).toHaveLength(577); // La lectura no crea casos artificiales.
+  });
+  it("las tarjetas solo filtran los mismos pedidos y conservan los acuerdos", () => {
+    expect(attentionCounts(rows, cases)).toEqual({ todos: 2070, por_decidir: 567, programados: 10, llamar_despues: 0, cerrados: 0 });
+    expect(attentionRows(rows, cases, "programados").map((r) => r.orderId)).toEqual(rows.slice(0, 10).map((r) => r.orderId));
+    expect(attentionRows(rows, cases, "por_decidir")).toHaveLength(567);
+    expect(attentionRows(rows, cases, "cerrados")).toEqual([]);
+  });
+  it("búsqueda, tiendas y exclusiones limitan las cifras de esa misma cola", () => {
+    const scoped = rows.slice(4, 20);
+    expect(attentionCounts(scoped, [...cases, { orderId: "fuera", list: "cerrados" }])).toEqual({ todos: 16, por_decidir: 10, programados: 6, llamar_despues: 0, cerrados: 0 });
+  });
+  it("conserva el orden de prioridad de los casos al filtrar", () => {
+    const priority = [{ orderId: "o2", list: "por_decidir" as const }, { orderId: "o0", list: "por_decidir" as const }];
+    expect(attentionRows(rows, priority, "por_decidir").map((r) => r.orderId)).toEqual(["o2", "o0"]);
+  });
+  it("el filtro de atención es explícito; listas y resumen antiguos no son filtros", () => {
+    for (const value of [null, "listas", "resumen", "todos", "desconocido"]) expect(attentionFilter(value)).toBe("todos");
+    expect(attentionFilter("programados")).toBe("programados");
+    expect(attentionFilter("por_decidir")).toBe("por_decidir");
   });
 });

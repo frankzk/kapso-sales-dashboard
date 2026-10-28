@@ -82,9 +82,10 @@ function PendingDate({ row }: { row: LimaPendingOrder }) {
 
 /** La lista amplia conserva la hoja del fallo; fuera de ella usa la ficha real
  * con sus permisos y guardas. No simula un episodio ni crea una segunda guía. */
-export function LimaPendingList({ rows, reproRows, today, renderActions }: {
+export function LimaPendingList({ rows, reproRows, today, renderActions, emptyText }: {
   rows: readonly LimaPendingOrder[]; reproRows: readonly ReproRow[]; today: string;
   renderActions: (row: ReproRow, compact: boolean) => ReactNode;
+  emptyText?: string;
 }) {
   const [limit, setLimit] = useState(100);
   const cases = new Map(reproRows.map((r) => [r.orderId, r]));
@@ -92,10 +93,10 @@ export function LimaPendingList({ rows, reproRows, today, renderActions }: {
   const action = (row: LimaPendingOrder, compact: boolean) => {
     const repro = cases.get(row.orderId);
     return repro ? renderActions(repro, compact) : (
-      <OrderLink orderId={row.orderId} section="operar" className={opsButtonClass("secondary", compact ? "sm" : "md", "justify-center pointer-coarse:min-h-11")} title={`Gestionar ${row.orderName} sin salir de Repro Lima`}>Gestionar pedido</OrderLink>
+      <OrderLink orderId={row.orderId} section="operar" className={opsButtonClass("secondary", compact ? "sm" : "md", "justify-center pointer-coarse:min-h-11")} title={`Atender ${row.orderName} sin salir de Repro Lima`}>Atender</OrderLink>
     );
   };
-  if (!rows.length) return <div className="border-t border-line px-4 py-12 text-center text-sm text-ink-500">No hay pedidos con estos filtros. Activa otros macroestados o quita la búsqueda.</div>;
+  if (!rows.length) return <div className="border-t border-line px-4 py-12 text-center text-sm text-ink-500">{emptyText ?? "No hay pedidos con estos filtros. Activa otros macroestados o quita la búsqueda."}</div>;
   return (
     <>
       <div className="hidden max-h-[70vh] overflow-auto border-t border-line xl:block">
