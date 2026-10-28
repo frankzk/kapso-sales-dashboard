@@ -70,14 +70,13 @@ begin
   end if;
   update dispatch_manifest_items set pickup_checked_at=null where shipment_id=v_shipment;
   -- Caja ya fuera incluso si falta un timestamp de la salida.
-  update dispatch_manifests set state='in_custody' where id=v_load;
   begin
+    update dispatch_manifests set state='in_custody' where id=v_load;
     perform gf_cancel_output_before_dispatch(v_order,v_shipment,v_actor,'La clienta desiste');
     raise exception 'FAIL: anuló caja fuera';
   exception when others then if sqlerrm like 'FAIL:%' then raise; end if; end;
-  update dispatch_manifests set state='ready_for_pickup' where id=v_load;
-  insert into delivery_stops(route_id,order_id,shipment_id,seq)
-    select delivery_route_id,v_order,v_shipment,1 from dispatch_manifests where id=v_load;
+  insert into delivery_stops(route_id,order_id,store_id,shipment_id,seq)
+    select delivery_route_id,v_order,v_store,v_shipment,1 from dispatch_manifests where id=v_load;
   begin
     perform gf_cancel_output_before_dispatch(v_order,v_shipment,v_actor,'La clienta desiste');
     raise exception 'FAIL: anuló con parada';
