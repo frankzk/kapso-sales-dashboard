@@ -178,7 +178,7 @@ async function loadBlocks(admin: SupabaseClient, order: OrderFacts): Promise<Woo
   if (masterErr) throw new Error(`el estado del pedido (${masterErr.message})`);
   const { data: shipments, error: shipErr } = await admin
     .from("shipments")
-    .select("courier,guide_code,delivery_status,custody_state")
+    .select("courier,guide_code,delivery_status,custody_state,created_via")
     .eq("order_id", order.id);
   if (shipErr) throw new Error(`las salidas (${shipErr.message})`);
   const { data: payments, error: payErr } = await admin

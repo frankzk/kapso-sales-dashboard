@@ -3252,10 +3252,9 @@ Decisiones del owner sobre el diseño de la entrega 1c (13-10-2026):
 
 **Lagunas conocidas de las entregas 1a y 1c.**
 
-- Kapta no puede anular una salida de Grupo GF (`manualOutputIsCancelable`).
-  Un cambio de producto con su salida viva queda «Falta la salida nueva», y
-  pasar de Grupo GF a otro courier deja viva la salida anterior de Grupo GF.
-  Se anota en la ficha y se avisa a Despacho GF. Lo resuelve la fase 2.
+- Grupo GF ya permite retirar y anular una salida interna que nunca salió de
+  almacén (§38.17). Si ya pasó al motorizado o tiene parada, sigue el circuito
+  de Despacho y retorno; no se usa esa anulación para fingir que volvió.
 - La recepción de Tanders o Swayp en Devoluciones no programa el acuerdo: al
   llegar la caja, la fila ofrece «Programar ahora».
 - «Reprogramar para» de Liquidaciones 2 sigue desconectado.
@@ -19099,3 +19098,29 @@ borra una fila**:
   `test/wa-image-route.test.ts`, `test/shopify-product-images.test.ts`,
   `test/cart-image-test.test.ts`, `test/restock-reminder.test.ts`,
   `test/pickup-reminder.test.ts` y `test/lead-next-cart-photo.test.ts`.
+
+### 38.17 Retirar una salida de Grupo GF que nunca salió (28-10-2026)
+
+El caso #AUR900064 mostraba «Anular pedido», pero la salida interna GF pendiente
+lo bloqueaba y no tenía botón de anulación. Se añade «Retirar y anular salida»
+en Salidas y guías para quien tiene orders.cancel_woo en la organización del pedido.
+No concede administración ni el permiso general de modificar estados.
+
+Solo grupo_gf_courier + propio + pendiente + custodia empresa, sin despacho,
+transferencia, retorno, reporte, «Lo llevo» (incluso histórico) ni parada. Una caja
+en custodia o cerrada bloquea. La comprobación final ocurre en un RPC de servicio
+(0284) que serializa con el cotejo y cierre de la caja. La UI exige motivo de
+5–500 caracteres y confirmar que el paquete sigue en almacén.
+
+En una transacción retira el ítem de la caja conservando sus cotejos y QR, cancela
+la solicitud logística y su programación vigente si no hay otra solicitud activa,
+y marca la salida anulada con route_output_cancelled y actor/motivo. La foto del
+programa queda en un evento; no se borra historial ni se reutiliza el consecutivo.
+No transfiere automáticamente los otros paquetes de la caja. Un fallo revierte
+todo; repetir una anulación completada no duplica eventos. La asignación de una
+salida GF anulada queda bloqueada en base, también ante un escaneo concurrente.
+
+Esto anula solo la salida: no cancela WooCommerce/Shopify, no devuelve stock, no
+registra retorno ni toca pagos o liquidaciones. Después la persona usa «Anular
+pedido» (WooCommerce) o «Anular venta de pedido histórico» (§38.16), sujeto a sus
+reglas. Las cajas que ya salieron siguen el circuito físico de Despacho y retorno.

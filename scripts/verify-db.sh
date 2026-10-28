@@ -292,4 +292,7 @@ echo "▶ Pedidos del bot por Kapta (0277): un candado por (tienda, request_id),
 $PSQL -f "$ROOT/scripts/sql/bot_orders_smoke.sql"
 
 echo ""
+echo "▶ Retiro de salida GF antes de despacho (0284): atómico, auditado y solo servicio"
+$PSQL -f "$ROOT/scripts/sql/gf_cancel_output_smoke.sql"
+
 echo "✅ DB verification passed."

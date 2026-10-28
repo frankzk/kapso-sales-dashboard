@@ -139,7 +139,8 @@ describe("MOM §38.12", () => {
     // (test/woocommerce-webhooks-health.test.ts).
     // 38.15: anular un pedido de WooCommerce desde Kapta (test/woo-cancel.test.ts).
     // 38.16: venta histórica terminada en Kapta, con logística independiente.
-    expect(heads.at(-1)).toBe(16);
+    // 38.17: retiro previo al despacho de una salida GF que bloqueaba la anulación.
+    expect(heads.at(-1)).toBe(17);
   });
 });
 
