@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { Badge, OpsButton, opsButtonClass } from "@/components/ops-ui";
+import { Badge, ChoiceChip, OpsButton, choiceChipClass, opsButtonClass } from "@/components/ops-ui";
 import { OrderLink } from "@/components/order-link";
 import { CallButton, ClaimBadge, FailureLine, ReproRowChips, phoneLabel } from "@/components/repro-lima-sheet";
 import type { ReproRow } from "@/lib/repro-lima-access";
@@ -15,35 +15,47 @@ export function LimaPendingFilters({ rows, hidden, onToggle, onReset }: {
   onToggle: (keys: string[]) => void; onReset: () => void;
 }) {
   const groups = pendingFilters(rows);
+  const allActive = groups.every((group) => group.children.every((child) => !hidden.has(child.key)));
   return (
-    <fieldset className="space-y-1 rounded-lg bg-white px-4 py-3 ring-1 ring-line">
-      <legend className="sr-only">Macroestados y subetapas que se muestran</legend>
-      <div className="flex flex-wrap items-center justify-between gap-2 pb-1">
-        <p className="text-xs text-ink-500">Todos activos al entrar. Desmarca lo que quieras ocultar.</p>
-        <OpsButton size="sm" variant="ghost" disabled={!hidden.size} onClick={onReset}>Mostrar todos</OpsButton>
+    <div role="group" aria-label="Macroestados y subetapas que se muestran" className="space-y-2">
+      <p className="sr-only">Todos activos al entrar. Desmarca lo que quieras ocultar.</p>
+      <div role="group" aria-label="Macroestado" className="flex flex-wrap items-center gap-1.5">
+        <span className="w-full text-[13px] font-medium text-ink-600 sm:mr-1 sm:w-20">Macroestado</span>
+        <ChoiceChip label="Todos" count={rows.length} active={allActive} onClick={onReset} title="Mostrar todos los macroestados y subetapas" />
+        {groups.map((group) => {
+          const keys = group.children.map((c) => c.key);
+          const checked = keys.every((key) => !hidden.has(key));
+          const mixed = !checked && keys.some((key) => !hidden.has(key));
+          return (
+            <button
+              key={group.stage}
+              type="button"
+              aria-pressed={mixed ? "mixed" : checked}
+              onClick={() => onToggle(keys)}
+              title={mixed ? `${group.label}: selección parcial. Mostrar todas sus subetapas.` : `${checked ? "Ocultar" : "Mostrar"} ${group.label}`}
+              className={choiceChipClass(checked || mixed)}
+            >
+              {mixed && <span aria-hidden="true">−</span>}
+              {group.label}
+              <span className="tabular-nums">{group.count.toLocaleString("es-PE")}</span>
+            </button>
+          );
+        })}
       </div>
-      {groups.map((group) => {
-        const keys = group.children.map((c) => c.key);
-        const checked = keys.every((key) => !hidden.has(key));
-        const mixed = !checked && keys.some((key) => !hidden.has(key));
-        return (
-          <div key={group.stage} className="flex flex-wrap items-center gap-x-3 border-t border-line py-1 first:border-t-0">
-            <label className="flex min-h-9 cursor-pointer items-center gap-2 text-sm font-semibold text-ink-900 pointer-coarse:min-h-11">
-              <input type="checkbox" checked={checked} ref={(el) => { if (el) el.indeterminate = mixed; }} onChange={() => onToggle(keys)} className="size-4 accent-brand-600" />
-              {group.label} <span className="font-normal tabular-nums text-ink-500">{group.count.toLocaleString("es-PE")}</span>
-            </label>
-            <div className="flex flex-wrap items-center gap-x-3" role="group" aria-label={`Subetapas de ${group.label}`}>
-              {group.children.map((child) => (
-                <label key={child.key} className="flex min-h-9 cursor-pointer items-center gap-1.5 text-xs text-ink-600 pointer-coarse:min-h-11">
-                  <input type="checkbox" checked={!hidden.has(child.key)} onChange={() => onToggle([child.key])} className="size-3.5 accent-brand-600" />
-                  {child.label} <span className="tabular-nums text-ink-500">{child.count.toLocaleString("es-PE")}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-        );
-      })}
-    </fieldset>
+      <div role="group" aria-label="Subetapa" className="flex flex-wrap items-center gap-1.5">
+        <span className="w-full text-[13px] font-medium text-ink-600 sm:mr-1 sm:w-20">Subetapa</span>
+        {groups.flatMap((group) => group.children.map((child) => (
+          <ChoiceChip
+            key={child.key}
+            label={child.label}
+            count={child.count}
+            active={!hidden.has(child.key)}
+            onClick={() => onToggle([child.key])}
+            title={`${group.label} · ${child.label}`}
+          />
+        )))}
+      </div>
+    </div>
   );
 }
 

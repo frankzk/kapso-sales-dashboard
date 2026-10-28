@@ -149,10 +149,11 @@ describe("presentación inicial y gestión", () => {
     expect(html).not.toContain("claimReproCase");
     nav.search = "";
   });
-  it("los filtros son casillas nativas, agrupadas y todas marcadas inicialmente", () => {
+  it("los filtros son chips del Master, agrupados y todos activos inicialmente", () => {
     const html = renderToStaticMarkup(createElement(LimaPendingFilters, { rows: [row()], hidden: new Set<string>(), onToggle: () => {}, onReset: () => {} }));
-    expect(html.match(/type="checkbox"/g)).toHaveLength(2);
-    expect(html.match(/checked=""/g)).toHaveLength(2);
-    expect(html).toContain('aria-label="Subetapas de Preparación"');
+    expect(html).not.toContain('type="checkbox"');
+    expect(html.match(/aria-pressed="true"/g)).toHaveLength(3);
+    expect(html).toContain('aria-label="Macroestado"');
+    expect(html).toContain('aria-label="Subetapa"');
   });
 });

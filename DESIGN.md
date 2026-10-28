@@ -428,12 +428,14 @@ La lista de Stripe aplicada al centro de la operación. Título de 28 px con su 
 
 Al entrar queda activa «Todos · por entregar», con la lista de pedidos de Lima
 todavía por entregar, incluidos primer despacho y antiguos por revisar. Debajo
-de las tarjetas, un marco de filtros con casillas nativas: cada macroestado en
-peso 600, su cantidad y sus subetapas en texto pequeño, separados por hairlines.
-Todos activos inicialmente; una macroetapa parcial usa la casilla mixta y
-«Mostrar todos» restaura la selección. En el teléfono las subetapas bajan a la
-línea siguiente y mantienen objetivos táctiles de 44 px, sin desplazamiento
-horizontal. La búsqueda y la tienda siguen en la barra de trabajo.
+de las tarjetas, dos filas compactas de chips como el Master: «Macroestado» y
+«Subetapa», con `ChoiceChip` y `choiceChipClass`, sin recuadro adicional ni
+casillas. Cada chip muestra su cantidad; todos activos inicialmente, con el
+fondo y borde azul del Master. Una macroetapa parcial lleva «−» y
+`aria-pressed="mixed"`; «Todos» restaura la selección. Los chips se acomodan
+en varias líneas en el teléfono, mantienen objetivos táctiles de 44 px y no
+provocan desplazamiento horizontal. La búsqueda y la tienda siguen en la barra
+de trabajo.
 
 La columna «Gestión pendiente» diferencia primer despacho, entrega fallida,
 antiguo por revisar y seguimiento, con el macroestado y la subetapa reales a su
