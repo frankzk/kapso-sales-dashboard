@@ -49,13 +49,15 @@ begin
   insert into dispatch_manifest_items(manifest_id,shipment_id,store_id) values(box,s,st) returning id into item;
   update dispatch_manifests set state='in_custody' where id=box;
   update shipments set custody_state='courier',dispatched_at=now(),custody_transferred_at=now() where id=s;
+  update logistics_requests set status='in_route' where shipment_id=s;
   update delivery_stops set status='no_entregado',outcome_reason='no_contesta',reported_at=now(),reported_by=a,pickup_confirmed=true where shipment_id=s;
   perform woo_end_sale_pending_return(o,a,'No se reintentará',gen_random_uuid());
   perform woo_end_sale_pending_return(o,a,'No se reintentará',gen_random_uuid());
   if (select count(*) from order_events where order_id=o and kind='woo_sale_ended_pending_return')<>1
     or (select cancelled_at from orders where id=o) is not null
     or (select financial_status from orders where id=o)<>'pending'
-    or (select custody_state from shipments where id=s)<>'courier' then raise exception 'FAIL: no preservó fuente, caja o idempotencia'; end if;
+    or (select custody_state from shipments where id=s)<>'courier'
+    or (select status from logistics_requests where shipment_id=s)<>'in_route' then raise exception 'FAIL: no preservó fuente, caja o idempotencia'; end if;
   select count(*) into n from woo_claim_sale_return(o); if n<>0 then raise exception 'FAIL: stock antes de retorno'; end if;
   -- El estado del courier no basta, aunque alguien haya inventariado antes.
   insert into order_events(store_id,order_id,shipment_id,kind,source,actor,occurred_at)
@@ -64,6 +66,8 @@ begin
   -- La recepción real GF conserva la salida y su parada; no la reprograma.
   perform gf_return_to_office(item,a);
   if (select custody_state from shipments where id=s)<>'devuelto'
+    or (select status from logistics_requests where shipment_id=s)<>'cancelled'
+    or not exists(select 1 from logistics_request_events where kind='sale_ended_return_received' and actor=a)
     or (select dispatched_at from shipments where id=s) is null
     or not exists(select 1 from delivery_stops where shipment_id=s and status='no_entregado')
     or not exists(select 1 from order_events where shipment_id=s and kind='return_received' and actor=a)
