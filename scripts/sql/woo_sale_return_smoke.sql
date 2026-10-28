@@ -49,7 +49,7 @@ begin
   insert into dispatch_manifest_items(manifest_id,shipment_id,store_id) values(box,s,st) returning id into item;
   update dispatch_manifests set state='in_custody' where id=box;
   update shipments set custody_state='courier',dispatched_at=now(),custody_transferred_at=now() where id=s;
-  update delivery_stops set status='no_entregado',outcome_reason='no_contesta' where shipment_id=s;
+  update delivery_stops set status='no_entregado',outcome_reason='no_contesta',reported_at=now(),reported_by=a,pickup_confirmed=true where shipment_id=s;
   perform woo_end_sale_pending_return(o,a,'No se reintentará',gen_random_uuid());
   perform woo_end_sale_pending_return(o,a,'No se reintentará',gen_random_uuid());
   if (select count(*) from order_events where order_id=o and kind='woo_sale_ended_pending_return')<>1
