@@ -19,7 +19,7 @@ import { macroStageLabel } from "@/lib/order-macro-stage";
 import { TODOS_POR_ENTREGAR, TODOS_SIN_SUBETAPA } from "@/lib/repro-lima-todos";
 
 const root = process.cwd();
-const read = (path: string) => readFileSync(resolve(root, path), "utf8");
+const read = (path: string) => readFileSync(resolve(root, path), "utf8").replace(/\r\n/g, "\n");
 /** El MOM en una línea: sus citas se parten al ajustar el párrafo. */
 const flat = (text: string) => text.replace(/\s+/g, " ");
 
@@ -29,7 +29,7 @@ function sourceFiles(dir: string): string[] {
     if (name === "node_modules" || name.startsWith(".")) continue;
     const full = join(resolve(root, dir), name);
     if (statSync(full).isDirectory()) out.push(...sourceFiles(relative(root, full)));
-    else if (/\.(ts|tsx)$/.test(name)) out.push(relative(root, full));
+    else if (/\.(ts|tsx)$/.test(name)) out.push(relative(root, full).replace(/\\/g, "/"));
   }
   return out;
 }
@@ -555,9 +555,8 @@ describe("la migración 0256 y «Todos» (§9.5, 14-10-2026)", () => {
       ["la crítica «N con más de 30»", todos, '<Badge tone="crit">{`${fmt(s.over30)} con más de 30`}</Badge>'],
       ["«6 d en la etapa» de la fila", read("components/repro-lima-sheet.tsx"), "`${days} d en la etapa`"],
       ["«repro-lima: conteo de Todos»", todosAccess, '"repro-lima: conteo de Todos"'],
-      ["(`?vista=todos`)", board, 'searchParams.get("vista") === "todos"'],
+      ["(`?vista=todos`)", board, 'const requestedView = searchParams.get("vista");'],
       ["la fila abre «Por decidir»", todos, 'onOpenList("por_decidir")'],
-      ["Al tocarla se quita la búsqueda", board, 'onClick={() => { setQuery(""); showView("todos"); }}'],
       ["con la tienda elegida y nunca con la búsqueda", board, "reproAging(storeScoped)"],
     ];
     for (const [quote, src, code] of pairs) {

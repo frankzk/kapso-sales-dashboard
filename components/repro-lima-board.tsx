@@ -2,16 +2,12 @@
 
 // «Repro Lima» · el tablero (fase 1, entrega 1a; MOM §9.5).
 //
-// Los clientes de Lima con entrega fallida, en cuatro listas que son ETIQUETAS
-// de esta pantalla, no subetapas del Master (D2): «Por decidir», «Llamar
-// después», «Programados» y «Cerrados»; y «Todos», un resumen del Master
-// (14-10-2026): los pedidos de Lima sin estado final por etapa y subetapa, cada
-// una con el enlace a su cola (components/repro-lima-todos.tsx). Las tarjetas
-// filtran y dicen cuántos hay (DESIGN.md, «Las cifras navegan»); la de «Todos»
-// cuenta lo que todavía no se entrega y no aparece si su conteo no se pudo
-// leer. La vista va en la URL (`?vista=todos`, con `replaceState`): «atrás»
-// desde el Master vuelve a «Todos». La lista viene ordenada del servidor
-// (`sortRepro`); aquí solo se filtra por tienda y búsqueda.
+// Al entrar muestra todos los pendientes de entrega de Lima (28-10-2026),
+// incluidos primer despacho y antiguos. Las exclusiones por macroestado y
+// subetapa viven en la URL y no cambian estados ni hechos. Las cuatro listas
+// de casos siguen siendo etiquetas de los fallos, no subetapas del Master:
+// «Por decidir», «Llamar después», «Programados» y «Cerrados». El resumen de
+// etapas y obligaciones por cerrar sigue disponible en `?vista=resumen`.
 //
 // Desde 1280 px la lista es una tabla; más angosta, filas con líneas finas
 // (sin tarjeta dentro de tarjeta, E33). Funciona a 360 px.
@@ -45,6 +41,8 @@ import {
   type ReproSaved,
 } from "@/components/repro-lima-sheet";
 import { ReproLimaTodos } from "@/components/repro-lima-todos";
+import { LimaPendingFilters, LimaPendingList } from "@/components/repro-lima-pending";
+import { pendingKey, pendingMatches, togglePendingKeys, type LimaPendingOrder } from "@/lib/repro-lima-pending";
 
 /** Las cuatro tarjetas: etiqueta y lo que dice su lista vacía (§6). */
 const LIST_CARD: Record<ReproList, { label: string; hint: string; empty: string }> = {
@@ -72,7 +70,7 @@ const LIST_CARD: Record<ReproList, { label: string; hint: string; empty: string 
 
 /** La quinta tarjeta: lo que todavía no se entrega (MOM §9.5, «Todos»). */
 const TODOS_CARD_HINT =
-  "Los pedidos de Lima sin estado final, por etapa y subetapa del Master. La cifra es lo que todavía no se entrega; lo que falta cerrar va aparte.";
+  "Todos los pendientes de entrega de Lima, incluidos los que nunca salieron y los antiguos por revisar. Desmarca macroestados o subetapas para ocultarlos.";
 
 const PAGE = 100;
 /** Al volver a la pestaña se relee, como mucho una vez cada 20 segundos. */
@@ -101,7 +99,7 @@ type OpenSheet = {
 };
 type Feedback = { kind: "notice" | "error"; text: string; orderId?: string; orderName?: string; mesa?: boolean; extra?: string | null };
 
-export function ReproLimaBoard({ data, openCounts = null }: { data: ReproLimaData; openCounts?: LimaOpenCounts | null }) {
+export function ReproLimaBoard({ data, openCounts = null, pending }: { data: ReproLimaData; openCounts?: LimaOpenCounts | null; pending?: LimaPendingOrder[] }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -116,6 +114,19 @@ export function ReproLimaBoard({ data, openCounts = null }: { data: ReproLimaDat
   const [open, setOpen] = useState<OpenSheet | null>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [confirmFound, setConfirmFound] = useState<string | null>(null);
+  const hiddenParam = searchParams.getAll("ocultar").join("|");
+  const hidden = useMemo(() => new Set(hiddenParam ? hiddenParam.split("|") : []), [hiddenParam]);
+  const pendingStore = useMemo(() => (pending ?? []).filter((row) => !store || row.storeId === store), [pending, store]);
+  const pendingById = useMemo(() => new Map((pending ?? []).map((row) => [row.orderId, row])), [pending]);
+  const pendingScoped = useMemo(() => pendingStore.filter((row) => !hidden.has(pendingKey(row)) && pendingMatches(row, query)), [pendingStore, hidden, query]);
+
+  function changeHidden(next: ReadonlySet<string>) {
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("ocultar");
+    for (const key of [...next].sort()) params.append("ocultar", key);
+    const qs = params.toString();
+    window.history.replaceState(null, "", qs ? `${pathname}?${qs}` : pathname);
+  }
   const lastRefresh = useRef(0);
 
   // El reloj del corte: empieza en la hora del servidor (sin desajuste al hidratar).
@@ -149,11 +160,14 @@ export function ReproLimaBoard({ data, openCounts = null }: { data: ReproLimaDat
     };
   }, [router]);
 
-  useEffect(() => { setLimit(PAGE); }, [list, query, store]);
+  useEffect(() => { setLimit(PAGE); }, [list, query, store, hiddenParam]);
 
   // La tienda sin la búsqueda: de aquí sale «Por reprogramar Lima» en «Todos».
   const storeScoped = useMemo(() => data.rows.filter((row) => !store || row.storeId === store), [data.rows, store]);
-  const scoped = useMemo(() => storeScoped.filter((row) => matches(row, query)), [storeScoped, query]);
+  const scoped = useMemo(() => storeScoped.filter((row) => {
+    const master = pendingById.get(row.orderId);
+    return !hidden.has(master ? pendingKey(master) : "en_curso:por_reprogramar_lima") && matches(row, query);
+  }), [storeScoped, query, hidden, pendingById]);
   const counts = useMemo(() => {
     const out: Record<ReproList, number> = { por_decidir: 0, llamar_despues: 0, programados: 0, cerrados: 0 };
     for (const row of scoped) out[row.list] += 1;
@@ -173,9 +187,11 @@ export function ReproLimaBoard({ data, openCounts = null }: { data: ReproLimaDat
     () => openCounts ? limaOpenBreakdown(openCounts.rows, { storeId: store || null, repro: reproAging(storeScoped) }) : null,
     [openCounts, store, storeScoped],
   );
-  // La vista vive en la URL; sin conteo, siempre las listas.
-  const view = openCounts && searchParams.get("vista") === "todos" ? "todos" : "listas";
-  const todos = view === "todos" ? breakdown : null;
+  // Todo está visible al entrar. La URL conserva la vista y las exclusiones al
+  // abrir/cerrar una ficha. «Resumen» conserva el cuadre por cerrar anterior.
+  const requestedView = searchParams.get("vista");
+  const view = requestedView === "listas" ? "listas" : requestedView === "resumen" && breakdown ? "resumen" : pending ? "todos" : "listas";
+  const todos = view === "resumen" ? breakdown : null;
   // Las cuatro listas de «Todos» se cuentan con la tienda y sin la búsqueda, como
   // «Por reprogramar Lima»: así siempre suman su cifra.
   const storeCounts = useMemo(() => {
@@ -184,20 +200,16 @@ export function ReproLimaBoard({ data, openCounts = null }: { data: ReproLimaDat
     return out;
   }, [storeScoped]);
   const lists = REPRO_LISTS.map((l) => ({ list: l, label: LIST_CARD[l].label.split(" · ")[0]!, count: storeCounts[l] }));
-  // En «Todos» no hay búsqueda a la vista: se quita también si se llega por la URL
-  // (al releer, o con «atrás»), para que al volver a las listas no quede oculta.
-  useEffect(() => { if (view === "todos") setQuery(""); }, [view]);
-  // Sin conteo no hay «Todos»: se quita `vista` para que una relectura no cambie la pantalla sola.
-  const staleTodos = !openCounts && searchParams.get("vista") === "todos";
-  useEffect(() => { if (staleTodos) showView("listas"); });
+  // Solo el resumen de cifras omite la búsqueda. La lista amplia sí la conserva.
+  useEffect(() => { if (view === "resumen") setQuery(""); }, [view]);
   // Al abrir una lista desde «Todos», el foco va a la sección (el control tocado ya no está).
   const listSection = useRef<HTMLElement>(null);
 
   /** Cambia de vista sin volver a pedir la página y sin tocar los demás parámetros (`ficha`, `seccion`). */
-  function showView(next: "listas" | "todos") {
+  function showView(next: "listas" | "todos" | "resumen") {
     const params = new URLSearchParams(searchParams.toString());
-    if (next === "todos") params.set("vista", "todos");
-    else params.delete("vista");
+    if (next === "todos") params.delete("vista");
+    else params.set("vista", next);
     if (params.toString() === searchParams.toString()) return;
     const qs = params.toString();
     window.history.replaceState(null, "", qs ? `${pathname}?${qs}` : pathname);
@@ -331,7 +343,7 @@ export function ReproLimaBoard({ data, openCounts = null }: { data: ReproLimaDat
       <header className="space-y-3">
         <div className="min-w-0">
           <h1 className="text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">Repro Lima</h1>
-          <p className="mt-1 text-sm text-ink-500">Clientes de Lima con entrega fallida: llama, confirma fecha y courier.</p>
+          <p className="mt-1 text-sm text-ink-500">Gestiona los pendientes de Lima: primer despacho, entregas fallidas y antiguos por revisar.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Badge tone={cutoff.passed ? "warn" : "info"} wrap>{cutoff.text}</Badge>
@@ -346,7 +358,7 @@ export function ReproLimaBoard({ data, openCounts = null }: { data: ReproLimaDat
         aria-label="Listas de Repro Lima"
         className={cn(
           "grid grid-cols-2 gap-2 sm:grid-cols-4 [&>button>span:first-child]:whitespace-normal [&>button>span:last-child]:mt-auto",
-          breakdown && "lg:grid-cols-5",
+          (pending || breakdown) && "lg:grid-cols-5",
         )}
       >
         {REPRO_LISTS.map((l) => (
@@ -359,20 +371,22 @@ export function ReproLimaBoard({ data, openCounts = null }: { data: ReproLimaDat
             onClick={() => { setList(l); showView("listas"); }}
           />
         ))}
-        {breakdown && (
+        {(pending || breakdown) && (
           // StatusCard no recibe clase: la envuelve una celda que ocupa la fila
           // y repite los ajustes que la grilla da a sus botones.
           <div className="col-span-2 sm:col-span-4 lg:col-span-1 flex [&>button]:flex-1 [&>button>span:first-child]:whitespace-normal [&>button>span:last-child]:mt-auto">
             <StatusCard
               label="Todos · por entregar"
-              value={breakdown.totals.porEntregar}
+              value={pending ? pendingStore.length : breakdown!.totals.porEntregar}
               hint={TODOS_CARD_HINT}
               active={view === "todos"}
-              onClick={() => { setQuery(""); showView("todos"); }}
+              onClick={() => showView("todos")}
             />
           </div>
         )}
       </div>
+
+      {pending && <LimaPendingFilters rows={pendingStore} hidden={hidden} onToggle={(keys) => changeHidden(togglePendingKeys(hidden, keys))} onReset={() => changeHidden(new Set())} />}
 
       {feedback && (
         <Banner tone={feedback.kind === "error" ? "crit" : "ok"} role={feedback.kind === "error" ? "alert" : "status"}>
@@ -394,9 +408,8 @@ export function ReproLimaBoard({ data, openCounts = null }: { data: ReproLimaDat
         </Banner>
       )}
 
-      <section ref={listSection} tabIndex={-1} aria-label={todos ? "Todos" : LIST_CARD[list].label} className="rounded-lg bg-white shadow-control ring-1 ring-line focus:outline-none">
-        {/* Búsqueda y tienda, como en Stripe: la píldora es discontinua hasta que filtra.
-            En «Todos» no hay búsqueda: se cuentan pedidos del Master, no casos. */}
+      <section ref={listSection} tabIndex={-1} aria-label={view === "todos" ? "Todos los pendientes de Lima" : todos ? "Resumen de Lima" : LIST_CARD[list].label} className="rounded-lg bg-white shadow-control ring-1 ring-line focus:outline-none">
+        {/* Búsqueda y tienda: en el resumen solo se cuentan etapas, sin buscador. */}
         <div className="flex flex-wrap items-center gap-2 px-4 py-3">
           {!todos && (
             <label className="relative w-full sm:w-72">
@@ -422,7 +435,9 @@ export function ReproLimaBoard({ data, openCounts = null }: { data: ReproLimaDat
             />
           )}
           <p className="w-full text-[13px] tabular-nums text-ink-500 lg:ml-auto lg:w-auto">
-            {todos ? (
+            {view === "todos" ? (
+              <><b className="font-semibold text-ink-900">{pendingScoped.length.toLocaleString("es-PE")}</b> de {pendingStore.length.toLocaleString("es-PE")} pendientes de entrega</>
+            ) : todos ? (
               <>
                 <b className="font-semibold text-ink-900">{todos.totals.porEntregar.toLocaleString("es-PE")}</b> todavía por entregar
                 {todos.totals.porCerrar > 0 && ` · ${todos.totals.porCerrar.toLocaleString("es-PE")} por cerrar`}
@@ -433,6 +448,7 @@ export function ReproLimaBoard({ data, openCounts = null }: { data: ReproLimaDat
               </>
             )}
           </p>
+          {breakdown && <OpsButton size="sm" variant="ghost" onClick={() => showView(view === "resumen" ? "todos" : "resumen")}>{view === "resumen" ? "Ver pedidos" : "Resumen y cierres pendientes"}</OpsButton>}
         </div>
         {storeSheet && (
           <Sheet look="ops" title="Tienda" onClose={() => setStoreSheet(false)} anchored anchorRef={storePill}>
@@ -453,7 +469,9 @@ export function ReproLimaBoard({ data, openCounts = null }: { data: ReproLimaDat
           </Sheet>
         )}
 
-        {todos ? (
+        {view === "todos" ? (
+          <LimaPendingList key={`${store}:${query}:${hiddenParam}`} rows={pendingScoped} reproRows={data.rows} today={data.today} renderActions={rowActions} />
+        ) : todos ? (
           <ReproLimaTodos breakdown={todos} lists={lists} onOpenList={onOpenList} />
         ) : !inList.length ? (
           <div className="border-t border-line px-4 py-12 text-center">
