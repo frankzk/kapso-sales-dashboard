@@ -2,6 +2,39 @@
 // ver un pendiente no crea un caso de entrega fallida ni autoriza otra salida.
 import { MACRO_SUBSTAGES_BY_STAGE, macroStageLabel, macroSubstageLabel, type OrderMacroStage } from "@/lib/order-macro-stage";
 import { tandersReleaseCutoff } from "@/lib/gf-tanders-review";
+import { REPRO_LISTS, type ReproList } from "@/lib/repro-lima";
+
+export type LimaAttentionFilter = "todos" | ReproList;
+type AttentionCase = { orderId: string; list: ReproList };
+
+/** Las tarjetas filtran una sola cola. Los pedidos sin caso siguen en Todos;
+ * no se les inventa un resultado de llamada ni se cambia su macroestado. */
+export function attentionFilter(value: string | null): LimaAttentionFilter {
+  return REPRO_LISTS.includes(value as ReproList) ? value as ReproList : "todos";
+}
+
+export function attentionRows(rows: readonly LimaPendingOrder[], cases: readonly AttentionCase[], filter: LimaAttentionFilter): LimaPendingOrder[] {
+  if (filter === "todos") return [...rows];
+  const byId = new Map(rows.map((row) => [row.orderId, row]));
+  // La carga de casos ya aplica sortRepro: al filtrar se conservan el orden de
+  // llamada y las prioridades de acuerdos, sin reconstruir otra tabla.
+  return cases.flatMap((c) => {
+    const row = byId.get(c.orderId);
+    if (!row || c.list !== filter) return [];
+    byId.delete(c.orderId);
+    return [row];
+  });
+}
+
+export function attentionCounts(rows: readonly LimaPendingOrder[], cases: readonly AttentionCase[]): Record<LimaAttentionFilter, number> {
+  const counts = { todos: rows.length, por_decidir: 0, llamar_despues: 0, programados: 0, cerrados: 0 };
+  const byId = new Map(cases.map((row) => [row.orderId, row.list]));
+  for (const row of rows) {
+    const list = byId.get(row.orderId);
+    if (list) counts[list] += 1;
+  }
+  return counts;
+}
 
 export const LIMA_PENDING_STAGES = ["por_confirmar", "preparacion", "por_despachar", "en_curso"] as const;
 export type LimaPendingStage = typeof LIMA_PENDING_STAGES[number];

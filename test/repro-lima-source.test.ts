@@ -509,7 +509,6 @@ describe("la migración 0256 y «Todos» (§9.5, 14-10-2026)", () => {
     const files = ["app", "lib", "components"].flatMap(sourceFiles);
     expect(files.filter((f) => read(f).includes('"order_master_lima_open_counts"'))).toEqual(["lib/repro-lima-todos-access.ts"]);
     expect(files.filter((f) => read(f).includes("loadLimaOpenCounts(")).sort()).toEqual([
-      "app/dashboard/pedidos/repro-lima/page.tsx",
       "lib/repro-lima-todos-access.ts",
     ]);
   });
@@ -548,16 +547,12 @@ describe("la migración 0256 y «Todos» (§9.5, 14-10-2026)", () => {
       ["«Ya entregado, anulado o devuelto: falta cerrar»", todos, 'title="Ya entregado, anulado o devuelto: falta cerrar"'],
       ["«En Lima, lo que no se entrega vuelve a «Por reprogramar Lima»; solo la entrega lo pasa a «Por cerrar».»", todos, 'note="En Lima, lo que no se entrega vuelve a «Por reprogramar Lima»; solo la entrega lo pasa a «Por cerrar»."'],
       ["«No hay pedidos de Lima sin estado final.»", todos, ">No hay pedidos de Lima sin estado final.</p>"],
-      ["«N todavía por entregar · M por cerrar», sin la segunda parte si es cero.", board, "</b> todavía por entregar"],
-      ["«N todavía por entregar · M por cerrar», sin la segunda parte si es cero.", board, '{todos.totals.porCerrar > 0 && ` · ${todos.totals.porCerrar.toLocaleString("es-PE")} por cerrar`}'],
       ["como «Sin subetapa»", pure, 'export const TODOS_SIN_SUBETAPA = "Sin subetapa";'],
       ["la ámbar «N con más de 7 días»", todos, '<Badge tone="warn">{`${fmt(s.over7)} con más de 7 días`}</Badge>'],
       ["la crítica «N con más de 30»", todos, '<Badge tone="crit">{`${fmt(s.over30)} con más de 30`}</Badge>'],
       ["«6 d en la etapa» de la fila", read("components/repro-lima-sheet.tsx"), "`${days} d en la etapa`"],
       ["«repro-lima: conteo de Todos»", todosAccess, '"repro-lima: conteo de Todos"'],
-      ["(`?vista=todos`)", board, 'const requestedView = searchParams.get("vista");'],
       ["la fila abre «Por decidir»", todos, 'onOpenList("por_decidir")'],
-      ["con la tienda elegida y nunca con la búsqueda", board, "reproAging(storeScoped)"],
     ];
     for (const [quote, src, code] of pairs) {
       expect(block, quote).toContain(quote);

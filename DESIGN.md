@@ -437,12 +437,15 @@ en varias líneas en el teléfono, mantienen objetivos táctiles de 44 px y no
 provocan desplazamiento horizontal. La búsqueda y la tienda siguen en la barra
 de trabajo.
 
+Una sola tabla para Todos y para los filtros de atención. «Todos · por entregar»
+es la primera tarjeta y queda activa al entrar, también desde enlaces guardados
+de las vistas antiguas. Todas las filas tienen «Atender» como acción principal;
+los casos conservan su hoja de atención y los demás abren la ficha compartida
+con las acciones de su etapa. Las tarjetas filtran la misma tabla y no cambian
+su estructura. Se retira la navegación entre lista y resumen de esta pantalla.
 La columna «Gestión pendiente» diferencia primer despacho, entrega fallida,
-antiguo por revisar y seguimiento, con el macroestado y la subetapa reales a su
-lado. Un fallo conserva «Atender» y su hoja; los demás tienen «Gestionar pedido»
-para abrir la ficha compartida sobre la lista. El cuadre anterior queda bajo
-«Resumen y cierres pendientes». No usa el color de error para un pedido que
-simplemente está pendiente de su primer despacho.
+antiguo por revisar y seguimiento, con los estados reales a su lado. Mantiene
+la búsqueda y los chips al filtrar, sin un cambio de contexto visual.
 
 ### Repro Provincia (tablero)
 La misma lista de Stripe que el Master, para la cola de reprogramación de provincia (`/dashboard/envios`). Título de 28 px «Repro Provincia» con su contexto debajo; debajo, en una fila, la búsqueda (256 px, global sobre las seis vistas, «/» la enfoca y Escape la borra) y las cuatro acciones: «Importar reporte» como principal, «Guía Swayp directa», «Stock Swayp» y «Automático Aliclik → Swayp» (la flecha dibujada) como secundarios con icono; al lado del título no caben. En el teléfono la búsqueda va a todo el ancho y las acciones en una rejilla de 2 × 2 («Automático» a secas). Debajo, el resumen plegable: una tarjeta cuya línea («Resumen» y lo que trae, con chevrón) abre tres paneles sobre hairlines —«Reprogramados en Kapta» en cinco cifras de 20 px (los varados en `warn-fg`) con «Ver detalle», «Hoy por asesora» y «Agentes de voz» como tablas de cifras a la derecha con hairlines de borde a borde y su leyenda a la vista, y los rangos como chips de elección—. Las seis vistas son tarjetas de estado en 2, 3 o 6 columnas; la elegida lleva el borde azul. Bajo ellas, en Pendiente, «Ruta» como chips con su cifra (Todas, Aliclik disponible, Swayp requerido): la primera pregunta de la cola; en En ruta y Entregado, «Reprogramado por». Los filtros son las píldoras del Master: Tienda, Cobertura (abre en «Todo menos Lima» y lo dice así), Departamento, Distrito, Programación (hoja con Hoy, Mañana y el día), Swayp (una opción, que cierra al elegir) y los interruptores Sin contactar hoy, Nunca contactadas, Por recuperar (su regla se lee al encenderlo) y Sin pedido vinculado, con `aria-pressed`; «Limpiar filtros» fantasma cuando algo se aparta de como abre la vista, y también en la lista vacía. Bajo 768 px esperan detrás de «Filtros», que cuenta las píldoras puestas, también las que la vista trae encendidas. La tarjeta de trabajo lleva el tamaño de la cola en una región viva, los atajos j / k / Enter / n en teclas y, en En ruta, «Descargar Excel Swayp».

@@ -2730,8 +2730,8 @@ presentación inicial de «Todos» como solo un resumen, descrita a continuació
   Se permite desmarcar todo y el chip «Todos» restaura la vista. Las exclusiones
   viven en `ocultar` en la URL y se
   conservan al abrir/cerrar la ficha; tienda y búsqueda se combinan con ellas.
-  Las cantidades de los filtros cuentan la tienda sin búsqueda ni exclusiones;
-  la tarjeta Todos cuenta la tienda y la línea de la lista dice el total visible.
+  Las cantidades de los chips cuentan la tienda sin búsqueda ni exclusiones;
+  las tarjetas y la tabla sí respetan las selecciones y la búsqueda.
 - **Contexto:** entrega fallida para la subetapa Por reprogramar Lima; antiguo
   por revisar si se creó hace más de 30 días o si Tanders sigue En tránsito
   con despacho anterior al corte del siguiente día hábil (§29.13); pendiente de primer despacho si
@@ -2739,16 +2739,26 @@ presentación inicial de «Todos» como solo un resumen, descrita a continuació
   de entrega. Son etiquetas de lectura, nunca nuevos estados ni prueba de que
   un paquete haya vuelto. Un antiguo de Tanders que siga En tránsito también
   queda visible, conservando ese estado real.
-- **Gestión:** los fallos conservan Atender, los casos, los acuerdos y sus
-  guardas actuales. Los demás tienen «Gestionar pedido», que abre la ficha
-  compartida sobre Repro Lima, con llamada y las acciones autorizadas de
-  confirmación, ubicación, ruta y seguimiento. Leerlos o abrirlos no crea un
-  episodio fallido, no programa ni genera otra salida y no cambia la custodia.
-  Las cuatro listas de casos siguen refiriéndose únicamente a entregas fallidas
-  y también respetan las exclusiones de macroestado/subetapa.
-- **Resumen:** «Resumen y cierres pendientes» conserva el cuadre anterior por
-  etapas, incluido Por cerrar, y sus enlaces al Master. No sustituye la lista
-  inicial. Esta ampliación no requiere migraciones ni recalcular macroestados.
+- **Presentación unificada (corrección del owner, 28-10-2026):** una sola tabla
+  con «Todos · por entregar» primero y activo al entrar. Todos los renglones
+  tienen «Atender» como acción principal. Las otras tarjetas filtran esa misma
+  tabla por la gestión de sus casos; conservan sus cantidades y prioridades.
+  Un pendiente sin caso aparece en Todos, sin inventarle una llamada o decisión.
+  Las cantidades de las tarjetas respetan tienda, búsqueda y exclusiones; la
+  línea de la tabla indica cuántos se muestran respecto del total de la tienda.
+- **Gestión:** Atender en una entrega fallida conserva la hoja de llamada,
+  casos, acuerdos y guardas actuales. En los demás abre la ficha compartida
+  sobre Repro Lima con las acciones autorizadas para su etapa: confirmación,
+  ubicación, ruta y seguimiento. Los casos programados o cerrados se abren en
+  lectura; reabrir un cierre conserva su segundo clic de confirmación. Leer o
+  abrir cualquier pedido no crea un episodio fallido, no programa ni genera
+  otra salida y no cambia la custodia.
+- **Sin doble vista:** se retiran el selector de vistas, la tabla exclusiva de
+  casos y «Resumen y cierres pendientes» de esta pantalla. Los enlaces antiguos
+  `vista=listas|todos|resumen` abren Todos y limpian ese parámetro sin perder la
+  ficha ni las exclusiones. El filtro nuevo `atencion` identifica únicamente la
+  tarjeta elegida; sin él, o con un valor desconocido, abre Todos. Los cierres
+  siguen disponibles en el Master. No requiere migraciones ni recalcular estados.
 
 **«Todos»: los pedidos de Lima sin estado final (14-10-2026, pedido del owner
 del 13-10-2026).** Además de las cuatro listas, Repro Lima tiene una quinta
