@@ -26623,6 +26623,7 @@ create table if not exists public.woo_sale_returns (
   actor uuid not null references auth.users(id) on delete restrict,
   reason text not null,
   shipment_ids uuid[] not null check(cardinality(shipment_ids)>0),
+  stock_items jsonb not null,
   created_at timestamptz not null default now(),
   state text not null default 'pending' check(state in ('pending','syncing','synced')),
   lease_token uuid, lease_until timestamptz,
@@ -26654,7 +26655,7 @@ begin
   select array_agg(id order by id) into v_ids from shipments where order_id=p_order_id and
     (dispatched_at is not null or custody_transferred_at is not null or custody_state in ('courier','retorno','devuelto'));
   if coalesce(cardinality(v_ids),0)=0 then raise exception 'La caja no salió: usa la anulación normal.'; end if;
-  insert into woo_sale_returns(order_id,store_id,actor,reason,shipment_ids) values(p_order_id,v_order.store_id,p_actor,p_reason,v_ids);
+  insert into woo_sale_returns(order_id,store_id,actor,reason,shipment_ids,stock_items) values(p_order_id,v_order.store_id,p_actor,p_reason,v_ids,coalesce(v_order.line_items,'[]'::jsonb));
   insert into order_events(store_id,order_id,kind,actor,source,new_status,new_operational,reason,note,operation_id,payload)
     values(v_order.store_id,p_order_id,'woo_sale_ended_pending_return',p_actor,'kapta','anulado','anulado',p_reason,
       'La venta terminó y no se reintentará. WooCommerce y el stock esperan la recepción e inventario en almacén; las salidas y liquidaciones siguen pendientes.',

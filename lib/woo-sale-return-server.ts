@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { commercialSaleCancelBlocks } from "@/lib/legacy-sale-cancel";
-import { wooReturnStockBlock, WOO_SALE_RETURN_SYNCED } from "@/lib/woo-sale-return";
+import { stockItemsFingerprint, wooReturnStockBlock, WOO_SALE_RETURN_SYNCED } from "@/lib/woo-sale-return";
 import { parseWooOrderId } from "@/lib/order-admin-url";
 import { hasWooApiCredentials, loadWooStoreCreds, withWooAuthFallback, wooClientOpts } from "@/lib/woocommerce-intake";
 import { fetchWooOrder, mapWooOrder, type WooClientOpts } from "@/lib/woocommerce";
@@ -11,7 +11,7 @@ import { recomputeOrderMasterSafe } from "@/lib/order-master";
 
 class WooReturnError extends Error {}
 
-type Queue = { order_id: string; store_id: string; actor: string; shipment_ids: string[]; lease_token: string; last_error: string | null };
+type Queue = { order_id: string; store_id: string; actor: string; shipment_ids: string[]; stock_items: unknown; lease_token: string; last_error: string | null };
 export function wooReturnSyncOperation(orderId: string): string {
   const h=createHash("sha256").update(`woo-return-stock|${orderId}`).digest("hex");
   return `${h.slice(0,8)}-${h.slice(8,12)}-5${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}`;
@@ -46,6 +46,9 @@ export async function processWooSaleReturn(admin: SupabaseClient, orderId?: stri
     const client=wooClientOpts(creds,{ ...(fetchImpl ? {fetchImpl}:{}),timeoutMs:5000 });
     const { value: remote }=await withWooAuthFallback(client,(opts)=>fetchWooOrder(opts,parsed.wooId));
     const mapped=mapWooOrder(remote,{id:q.store_id,woo_site_key:creds.siteKey});
+    const stockPhoto=stockItemsFingerprint(q.stock_items);
+    if (!stockPhoto || stockPhoto!==stockItemsFingerprint(mapped?.line_items))
+      throw new WooReturnError("Los productos o cantidades de WooCommerce no coinciden con la venta terminada. Revisa el retorno antes de reponer stock.");
     if (!mapped || remote.id!==Number(parsed.wooId) || ["completed","trash"].includes(remote.status ?? "") || ["paid","partially_paid","partially_refunded","refunded"].includes(mapped.financial_status ?? ""))
       throw new WooReturnError("WooCommerce registra una entrega, un pago o un estado incompatible. El dueño debe revisarlo antes de reponer stock.");
     let confirmed=remote;
