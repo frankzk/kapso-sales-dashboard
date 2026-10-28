@@ -11,6 +11,7 @@
 // SERVER-ONLY: escribe con la clave de servicio.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { hasPositivePaymentAmount, MISSING_PAYMENT_AMOUNT } from "@/lib/payment-amount";
 import { closeAlertsResolvedBy } from "@/lib/collection-alerts-access";
 import { registrarConfirmacionExpresaDeAgencia } from "@/lib/confirmacion-agencia-access";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
@@ -77,6 +78,7 @@ export interface ApplyValidationInput {
     order_id: string;
     kind: string;
     validation_status: string;
+    amount?: number | string | null;
     vision?: unknown;
   };
   who: ValidationActor;
@@ -106,6 +108,7 @@ export async function applyPaymentValidation(
   input: ApplyValidationInput,
 ): Promise<ApplyValidationResult> {
   const { payment, who } = input;
+  if(!hasPositivePaymentAmount(payment.amount))return {ok:false,error:MISSING_PAYMENT_AMOUNT};
   let update = admin
     .from("order_payments")
     .update({
@@ -113,7 +116,9 @@ export async function applyPaymentValidation(
       validated_by: who.actor,
       validated_at: new Date().toISOString(),
     })
-    .eq("id", payment.id);
+    .eq("id", payment.id)
+    .gt("amount", 0)
+    .eq("amount", Number(payment.amount));
   if (input.onlyIfStatus) update = update.eq("validation_status", input.onlyIfStatus);
   const { data, error } = await update.select("id");
   if (error) return { ok: false, error: error.message };

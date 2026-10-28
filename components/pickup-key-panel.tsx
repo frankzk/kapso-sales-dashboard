@@ -13,6 +13,7 @@
 // lo vuelve a comprobar antes de descifrar nada.
 
 import { useEffect, useId, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
+import { hasPositivePaymentAmount, MISSING_PAYMENT_AMOUNT } from "@/lib/payment-amount";
 import { cn } from "@/components/ui";
 import {
   Badge,
@@ -43,6 +44,7 @@ import {
   readVoucherFields,
   registerPayment,
   rejectPayment,
+  observePayment,
   revealPickupKey,
   setPickupKey,
   sharePickupKey,
@@ -357,6 +359,7 @@ export function PickupKeyPanel({
             pending={pending}
             onValidate={(id, sendKey) => run(() => validatePayment(id, { sendKey }))}
             onReject={(id, reason) => run(() => rejectPayment(id, reason))}
+            onObserve={(id) => run(() => observePayment(id,"Pago validado sin monto. Se requiere constancia con importe legible antes de volver a validar."))}
             onComplete={(id, data) => run(() => completePaymentData(id, data))}
             canOverride={panel.canOverride}
             onReassign={(id, targetOrderName, reason) =>
@@ -407,6 +410,7 @@ export function PickupKeyPanel({
         pending={pending}
         onValidate={(id, sendKey) => run(() => validatePayment(id, { sendKey }))}
         onReject={(id, reason) => run(() => rejectPayment(id, reason))}
+        onObserve={(id) => run(() => observePayment(id,"Pago validado sin monto. Se requiere constancia con importe legible antes de volver a validar."))}
         onComplete={(id, data) => run(() => completePaymentData(id, data))}
         canOverride={panel.canOverride}
         onReassign={(id, targetOrderName, reason) =>
@@ -589,7 +593,7 @@ function PaymentMoneySummary({
   );
 }
 
-function PaymentList({
+export function PaymentList({
   payments,
   accounts,
   customerName,
@@ -598,6 +602,7 @@ function PaymentList({
   pending,
   onValidate,
   onReject,
+  onObserve,
   onComplete,
   canOverride,
   onReassign,
@@ -613,7 +618,8 @@ function PaymentList({
   pending: boolean;
   onValidate: (id: string, sendKey: boolean) => void;
   onReject: (id: string, reason: string) => void;
-  onComplete: (id: string, data: { operationNumber: string; amount: number | null; paidAt: string | null }) => void;
+  onObserve: (id: string) => void;
+  onComplete: (id: string, data: { operationNumber?: string; amount?: number | null; paidAt?: string | null }) => void;
   /** Mover el pago al pedido correcto. Solo para quien puede corregir. */
   canOverride: boolean;
   onReassign: (paymentId: string, targetOrderName: string, reason: string) => void;
@@ -644,8 +650,8 @@ function PaymentList({
                 {p.amount !== null && (
                   <span className="text-sm tabular-nums text-ink-900">S/ {p.amount.toFixed(2)}</span>
                 )}
-                <Badge tone={STATUS_TONE[p.validation_status] ?? "neutral"}>
-                  {STATUS_LABEL[p.validation_status] ?? p.validation_status}
+                <Badge tone={p.validation_status === "validado" && !hasPositivePaymentAmount(p.amount) ? "warn" : STATUS_TONE[p.validation_status] ?? "neutral"}>
+                  {p.validation_status === "validado" && !hasPositivePaymentAmount(p.amount) ? "Validado sin monto" : STATUS_LABEL[p.validation_status] ?? p.validation_status}
                 </Badge>
               </div>
               {/* Sin operación, fecha ni pagador la línea decía solo «—». */}
@@ -667,7 +673,11 @@ function PaymentList({
                 customerName={customerName}
               />
               {p.notes && <p className="text-[13px] leading-5 text-ink-600">{p.notes}</p>}
-              {!p.operation_number && p.validation_status !== "rechazado" && (
+              {p.validation_status === "validado" && !hasPositivePaymentAmount(p.amount) && <div className="space-y-2">
+                <Banner tone="warn">{MISSING_PAYMENT_AMOUNT}</Banner>
+                {canValidate && <OpsButton size="sm" disabled={pending} onClick={()=>onObserve(p.id)} className="pointer-coarse:h-11">Enviar a Observados</OpsButton>}
+              </div>}
+              {(!p.operation_number || !hasPositivePaymentAmount(p.amount)) && p.validation_status !== "rechazado" && p.validation_status !== "validado" && (
                 <MissingOperation
                   payment={p}
                   canRegister={canRegister}
@@ -809,10 +819,12 @@ function ValidateActions({
         <OpsButton
           size="sm"
           variant="primary"
-          disabled={pending || mismatch}
+          disabled={pending || mismatch || !hasPositivePaymentAmount(payment.amount)}
           onClick={() => onValidate(payment.id, enviará)}
           title={
-            mismatch
+            !hasPositivePaymentAmount(payment.amount)
+              ? MISSING_PAYMENT_AMOUNT
+              : mismatch
               ? "El receptor leído no coincide con ninguna cuenta de cobro de la tienda"
               : enviará
                 ? "Validar y mandarle la clave de recojo por WhatsApp"
@@ -1179,9 +1191,9 @@ function MissingOperation({
   payment: PaymentRow;
   canRegister: boolean;
   pending: boolean;
-  onComplete: (id: string, data: { operationNumber: string; amount: number | null; paidAt: string | null }) => void;
+  onComplete: (id: string, data: { operationNumber?: string; amount?: number | null; paidAt?: string | null }) => void;
 }) {
-  const [operation, setOperation] = useState("");
+  const [operation, setOperation] = useState(payment.operation_number ?? "");
   const [amount, setAmount] = useState(payment.amount !== null ? String(payment.amount) : "");
   const [paidAt, setPaidAt] = useState("");
 
@@ -1194,22 +1206,22 @@ function MissingOperation({
       <p className="flex items-start gap-1.5 text-[13px] leading-5 text-ink-700">
         <IconAlert aria-hidden className="mt-0.5 size-4 shrink-0 text-warn-fg" />
         <span>
-          {canRegister
+          {!hasPositivePaymentAmount(payment.amount) ? (canRegister ? MISSING_PAYMENT_AMOUNT : "Falta un monto positivo para validar. Pide la constancia donde se vea el importe y avisa a quien pueda completar los pagos.") : canRegister
             ? "Sin nº de operación no se puede validar. Si la captura está recortada, pide al cliente el comprobante completo o escribe el número aquí."
             : "Sin nº de operación no se puede validar, y tu rol no permite completarlo. Pide al cliente el comprobante completo o avisa a quien registre pagos."}
         </span>
       </p>
       {canRegister && (
         <div className="flex flex-wrap gap-2">
-          <input
+          {!payment.operation_number && <input
             value={operation}
             onChange={(e) => setOperation(e.target.value)}
             placeholder="Nº de operación"
             aria-label="Nº de operación"
             autoComplete="off"
             className={cn(FIELD_BOX, "h-8 w-40 px-2.5 text-[13px] tabular-nums pointer-coarse:h-11")}
-          />
-          {payment.amount === null && (
+          />}
+          {!hasPositivePaymentAmount(payment.amount) && (
             <input
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
@@ -1231,12 +1243,12 @@ function MissingOperation({
           <OpsButton
             size="sm"
             variant="primary"
-            disabled={pending || operation.replace(/[^a-z0-9]/gi, "").length < 4}
+            disabled={pending || operation.replace(/[^a-z0-9]/gi, "").length < 4 || (!hasPositivePaymentAmount(payment.amount) && !hasPositivePaymentAmount(amount))}
             onClick={() =>
               onComplete(payment.id, {
-                operationNumber: operation,
-                amount: amount.trim() ? Number(amount) : null,
-                paidAt: paidAt ? new Date(paidAt).toISOString() : null,
+                ...(!payment.operation_number ? {operationNumber:operation} : {}),
+                ...(!hasPositivePaymentAmount(payment.amount) ? {amount:Number(amount)} : {}),
+                ...(!payment.paid_at && paidAt ? {paidAt:new Date(paidAt).toISOString()} : {}),
               })
             }
             className="pointer-coarse:h-11"
