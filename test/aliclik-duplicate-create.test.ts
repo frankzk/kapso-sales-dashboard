@@ -6,6 +6,7 @@ vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
 const state = vi.hoisted(() => ({
   check: vi.fn(), createOrder: vi.fn(), writes: vi.fn(),
   detail: vi.fn(), outputs: [] as Record<string, unknown>[],
+  events: [] as Record<string, unknown>[],
   shipmentError: null as { message: string } | null,
 }));
 vi.mock("@/lib/env", () => ({ env: { aliclikWriteEnabled: () => true } }));
@@ -27,11 +28,11 @@ vi.mock("@/lib/db", () => {
     auth: { getUser: async () => ({ data: { user: { id: "operator" } } }) },
     from: (table: string) => {
       const q: any = {
-        select: () => q, eq: () => q,
+        select: () => q, eq: () => q, in: () => q,
         maybeSingle: async () => ({ data: { order_id: "new", store_id: "store", macro_operation: "lima", coverage: "lima", region: "Lima", payment_state: "sin_pago" } }),
         insert: state.writes,
         then: (resolve: any) => Promise.resolve({
-          data: table === "stores" ? [{ id: "store" }] : table === "shipments" ? state.outputs : [],
+          data: table === "stores" ? [{ id: "store" }] : table === "shipments" ? state.outputs : table === "order_events" ? state.events : [],
           error: table === "shipments" ? state.shipmentError : null,
         }).then(resolve),
       };
@@ -46,10 +47,16 @@ import { createAliclikGuide } from "@/app/dashboard/pedidos/aliclik-actions";
 beforeEach(() => {
   vi.clearAllMocks();
   state.outputs = [];
+  state.events = [];
   state.shipmentError = null;
   state.detail.mockResolvedValue(null);
 });
 describe("llamada directa a createAliclikGuide", () => {
+  it("una venta histórica anulada bloquea antes de cotizar o emitir, aunque el Master esté atrasado", async () => {
+    state.events = [{ order_id: "new", kind: "legacy_shopify_sale_cancelled", occurred_at: "2026-10-28T16:00:00Z", source: "kapta", new_status: "anulado" }];
+    expect((await createAliclikGuide("new", { transportId: 1 })).error).toContain("No se permiten nuevos envíos");
+    expect(state.detail).not.toHaveBeenCalled(); expect(state.createOrder).not.toHaveBeenCalled(); expect(state.writes).not.toHaveBeenCalled();
+  });
   it("no emite ni registra intención aunque el navegador mande una excepción de riesgo", async () => {
     state.check.mockResolvedValue({ allowed: false, message: "Otro envío sigue despachado" });
     const result = await createAliclikGuide("new", { transportId: 1, riskExceptionReason: "Cliente confirmó que quiere ambos pedidos" });

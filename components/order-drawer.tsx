@@ -99,6 +99,7 @@ import {
 import { VoiceAgentPanel } from "@/components/voice-agent-panel";
 import { WooCancelZone } from "@/components/woo-cancel-zone";
 import { cancelWooOrder } from "@/app/dashboard/pedidos/woo-cancel-actions";
+import { cancelLegacyShopifySale } from "@/app/dashboard/pedidos/legacy-sale-cancel-actions";
 import type { WooCancelFacts } from "@/lib/woo-cancel";
 import { OrderInvoicePanel } from "@/components/order-invoice-panel";
 import { BrowserCallButton } from "@/components/browser-call";
@@ -1193,11 +1194,12 @@ export function OrderDrawer({
     document.getElementById(`pedido-tab-${target.id}`)?.focus();
   };
 
-  // «Anular pedido» (MOM §38.15): solo pedidos de WooCommerce vivos y solo con
-  // `orders.cancel_woo`. Un pedido de Shopify no lo ve: se anula en Shopify.
+  // Mismo permiso persona por persona (§38.15-16): WooCommerce se anula en la
+  // tienda; un histórico Shopify elegible termina su venta solo en Kapta.
   const wooCancel: WooCancelInput | null =
-    canCancelWoo && detail && detail.platform === "woocommerce" && !detail.shopifyCancelledAt
+    canCancelWoo && detail && (detail.platform === "woocommerce" || detail.legacySaleEligible) && !detail.shopifyCancelledAt && !detail.legacySaleCancelledAt
       ? {
+          mode: detail.platform === "shopify" ? "shopify_history" : "woocommerce",
           orderName: detail.row.order_name,
           facts: {
             platform: detail.platform,
@@ -1214,7 +1216,8 @@ export function OrderDrawer({
                 .map((c) => c.companionOrderName ?? "otro pedido"),
             },
           },
-          onCancel: (input) => run(() => cancelWooOrder(orderId, input)),
+          onCancel: (input) => run(() => detail.platform === "shopify"
+            ? cancelLegacyShopifySale(orderId, input) : cancelWooOrder(orderId, input)),
         }
       : null;
 
@@ -1946,6 +1949,7 @@ export function OrderDrawer({
                     costTariffGap={detail.gfCostTariffGap}
                     gfDeliveries={detail.gfDeliveries}
                     cancelledInShopify={Boolean(detail.shopifyCancelledAt)}
+                    cancelledInKapta={Boolean(detail.legacySaleCancelledAt)}
                     permissions={closurePermissions}
                     pending={pending}
                     onAction={(input) => run(() => registerClosureAction(orderId, input))}
@@ -2076,6 +2080,7 @@ export function OrderDrawer({
                       tiene sin «Gestionar pedidos» lo ve igual. */}
                   {wooCancel && (
                     <WooCancelZone
+                      mode={wooCancel.mode}
                       orderName={wooCancel.orderName}
                       facts={wooCancel.facts}
                       pending={pending}
@@ -3311,6 +3316,7 @@ function ConfirmationDesk({
 
 /** Lo que la zona «Anular pedido» necesita de la ficha (MOM §38.15). */
 interface WooCancelInput {
+  mode?: "woocommerce" | "shopify_history";
   orderName: string | null;
   facts: WooCancelFacts;
   onCancel: (input: { reasonCode: string; reasonText: string; requestId: string }) => Promise<boolean>;
@@ -3507,6 +3513,7 @@ export function OrderActions({
       )}
       {canCancelWoo && wooCancel && (
         <WooCancelZone
+          mode={wooCancel.mode}
           orderName={wooCancel.orderName}
           facts={wooCancel.facts}
           pending={pending}

@@ -92,6 +92,7 @@ import {
   type MasterSortKey,
 } from "@/lib/order-master-filters";
 import { compareDispatchCodes } from "@/lib/dispatched-with";
+import { isHistoricalShopifyOrder, legacySaleCancelledAt } from "@/lib/legacy-sale-cancel";
 import { pendingVoucherFilterIds, type PendingVoucherSummary } from "@/lib/pending-voucher";
 import { loadPendingVouchers } from "@/lib/pending-voucher-access";
 import { AGENCY_DEADLINE_ALERT_MS, paidUnnotifiedFilterIds } from "@/lib/agency-pickup-alert";
@@ -602,6 +603,9 @@ export interface OrderMasterDetail {
    * prometer que cerrar la ruta lo marca entregado (MOM §11.4, §29.13).
    */
   shopifyCancelledAt: string | null;
+  /** La venta histórica se anuló solo en Kapta (§38.16). */
+  legacySaleCancelledAt?: string | null;
+  legacySaleEligible?: boolean;
   /**
    * `orders.platform` (0274, MOM §38): de qué tienda vino el pedido. Con esto,
    * y nunca con la forma del id, la ficha arma el enlace al admin y nombra la
@@ -982,7 +986,7 @@ export async function getOrderMasterDetail(
   if (!rowData) return null;
   const row = withRuntimeCoverage(rowData as unknown as OrderMasterRow);
 
-  const [orderRes, guidesRes, eventsRes, tasksRes] = await Promise.all([
+  const [orderRes, guidesRes, eventsRes, tasksRes, migrationRes] = await Promise.all([
     readOrderForDetail(sb, orderId),
     sb.from("shipments").select(GUIDE_COLUMNS).eq("order_id", orderId).order("created_at"),
     sb
@@ -996,6 +1000,7 @@ export async function getOrderMasterDetail(
       .eq("order_id", orderId)
       .eq("status", "pending")
       .order("due_on", { ascending: true }),
+    sb.from("stores").select("platform,platform_switched_at").eq("id", row.store_id).maybeSingle(),
   ]);
 
   const guides = (guidesRes.data ?? []) as unknown as ShipmentRow[];
@@ -1189,6 +1194,11 @@ export async function getOrderMasterDetail(
     gfDeliveries,
     gfCostTariffGap,
     shopifyCancelledAt: orderRow?.cancelled_at ?? null,
+    legacySaleCancelledAt: legacySaleCancelledAt(events),
+    legacySaleEligible: !migrationRes.error && isHistoricalShopifyOrder({
+      orderPlatform: orderPlatform(orderRow?.platform), orderCreatedAt: row.order_created_at,
+      storePlatform: migrationRes.data?.platform ?? null, switchedAt: migrationRes.data?.platform_switched_at ?? null,
+    }),
     platform: orderPlatform(orderRow?.platform),
     companion,
     address: shopifyShippingAddress(orderRow?.raw),

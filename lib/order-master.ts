@@ -231,6 +231,7 @@ interface CallRecord {
 
 interface EventRecord {
   order_id: string;
+  source?: string | null;
   shipment_id: string | null;
   kind: string;
   occurred_at: string;
@@ -461,7 +462,7 @@ async function fetchEvents(admin: SupabaseClient, ids: string[]): Promise<EventR
   for (const batch of chunk(ids, ID_BATCH)) {
     const { data, error } = await admin
       .from("order_events")
-      .select("order_id,shipment_id,kind,occurred_at,actor,courier,new_status,new_operational,reason,note,payload")
+      .select("order_id,shipment_id,kind,occurred_at,actor,courier,new_status,new_operational,reason,note,payload,source")
       .in("order_id", batch);
     if (error) throw new Error(`order_master: no se pudieron leer los eventos — ${error.message}`);
     out.push(...((data ?? []) as unknown as EventRecord[]));
@@ -1212,6 +1213,7 @@ export async function recomputeOrderMaster(
 
     const eventSnapshots: OrderEventSnapshot[] = stateEvents.map((e) => ({
       kind: e.kind,
+      source: e.source,
       shipment_id: e.shipment_id,
       occurred_at: e.occurred_at,
       courier: e.courier,
@@ -1293,6 +1295,8 @@ export async function recomputeOrderMaster(
       ],
       events: stateEvents.map((event) => ({
         kind: event.kind,
+        source: event.source,
+        new_status: event.new_status,
         occurred_at: event.occurred_at,
         shipment_id: event.shipment_id,
         reason: event.reason ?? null,

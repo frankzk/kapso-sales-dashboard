@@ -15,6 +15,7 @@ import { terminalOrderBlocker } from "@/lib/order-status";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
+import { legacySaleSendBlock } from "@/lib/legacy-sale-cancel-access";
 import { decrypt } from "@/lib/crypto";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
@@ -360,6 +361,8 @@ export async function createTandersGuide(
 
   // Se revalida acá y no solo en el modal: entre que se abrió y se confirmó,
   // otro operador pudo haber creado una guía para el mismo pedido.
+  const saleBlock = await legacySaleSendBlock(admin, orderId);
+  if (saleBlock) return { error: saleBlock };
   const puerta = puertaDeSalidaAdicional({
     courier: "tanders",
     operation: "lima",
@@ -408,6 +411,8 @@ export async function createTandersGuide(
 
   const client = new TandersClient({ email: store.tanders_email, password });
 
+  const finalSaleBlock = await legacySaleSendBlock(admin, orderId);
+  if (finalSaleBlock) return { error: finalSaleBlock };
   let order;
   try {
     order = await client.createOrder(built.payload);

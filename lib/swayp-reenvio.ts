@@ -11,6 +11,7 @@
 // nulo para el agente de voz) y ya autorizó el acceso.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { legacySaleSendBlock } from "@/lib/legacy-sale-cancel-access";
 import { SWAYP_SUNDAY_ERROR, isSwaypDispatchDay } from "@/lib/swayp-dispatch-days";
 import { env } from "@/lib/env";
 import {
@@ -378,6 +379,9 @@ export async function createFenixGuideViaApi(args: {
 }): Promise<{ ok: true; guia: string; idEstado: number } | { ok: false; reason: string }> {
   if (!env.swaypEnabled()) return { ok: false, reason: "integración Swayp desactivada" };
 
+  const saleBlock = await legacySaleSendBlock(args.admin, args.orderId);
+  if (saleBlock) return { ok: false, reason: saleBlock };
+
   const built = buildSwaypGuideInput({
     ...args,
     senders: parseSenders(env.swaypSenders()),
@@ -630,6 +634,11 @@ export async function spinOffFenixGuide(
   }
 
   const p = parent as unknown as Record<string, unknown>;
+
+  if (typeof p.order_id === "string") {
+    const saleBlock = await legacySaleSendBlock(admin, p.order_id);
+    if (saleBlock) return { error: saleBlock };
+  }
 
   // LA REJA DEL CODBAR, en el único sitio por el que pasan las tres puertas que
   // paren una guía Swayp: la reprogramación confirmada, el reenvío de una guía

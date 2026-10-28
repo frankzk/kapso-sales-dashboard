@@ -8,6 +8,7 @@
 // El cron usa esta versión para recalcular gradualmente todo el histórico sin
 // necesitar un script con credenciales locales.
 import { isNonMetroLimaLocation } from "@/lib/order-coverage";
+import { legacySaleCancelledAt } from "@/lib/legacy-sale-cancel";
 import { isReplacedOwnOutput, replacedOutputIds } from "@/lib/gf-replaced-output";
 import {
   CONFIRMATION_CONTACT_KINDS,
@@ -500,6 +501,8 @@ export interface MacroGuideSnapshot {
 
 export interface MacroEventSnapshot {
   kind: string;
+  source?: string | null;
+  new_status?: string | null;
   occurred_at: string;
   /** Salida física concreta a la que pertenece el hecho, cuando aplica. */
   shipment_id?: string | null;
@@ -926,6 +929,8 @@ function closingReasons(input: ResolveMacroStageInput): MacroSubstage[] {
   const returnedGuides = guides.filter(hasReturned);
 
   if (legacy.general === "entregado" && active.length) reasons.push("salida_adicional_activa");
+  const commercialCancelled = Boolean(legacySaleCancelledAt(events));
+  if (commercialCancelled && active.length) reasons.push("salida_adicional_activa");
   if (
     legacy.general === "entregado" &&
     operation === "agencia" &&
@@ -1024,6 +1029,9 @@ function closingReasons(input: ResolveMacroStageInput): MacroSubstage[] {
   const sinLiquidacion =
     legacy.general === "entregado" && operation !== "agencia" && pagadoDirectoSinCourier(input);
   const liquidationClosed = latestEvent(events, ["liquidation_closed"]);
+  // Cancelar la venta no liquida los fletes de una caja que sí salió.
+  if (commercialCancelled && operation !== "agencia" && guides.some(hasExternalCustody) && !liquidationClosed &&
+      !reasons.includes("liquidacion_observada")) reasons.push("pendiente_liquidacion");
   if (
     legacy.general === "entregado" &&
     operation !== "agencia" &&
@@ -1326,6 +1334,13 @@ function currentGuide(guides: readonly MacroGuideSnapshot[], replaced: ReadonlyS
 
 /** Resuelve la macroetapa MOM v1 sin leer base de datos ni reloj. */
 export function resolveMacroStage(input: ResolveMacroStageInput): ResolvedMacroStage {
+  const commercialCancelledAt = legacySaleCancelledAt(input.events);
+  if (commercialCancelledAt) input = {
+    ...input,
+    // Solo hechos efectivos para el cálculo: NO se escribe orders.cancelled_at.
+    order: { ...input.order, cancelled_at: input.order.cancelled_at ?? commercialCancelledAt },
+    legacy: { general: "anulado", operational: "anulado", since: commercialCancelledAt },
+  };
   const operation = classifyOperation(input.order, input.guides);
   const active = input.guides.filter(isActiveGuide);
   const closeReasons = closingReasons(input);

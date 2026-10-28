@@ -24,6 +24,8 @@
 // parada, filas importadas del Excel histórico sin `stop_id`), documentado.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { loadLegacySaleCancellations } from "@/lib/legacy-sale-cancel-access";
+import { LEGACY_SALE_CANCEL_REASON } from "@/lib/legacy-sale-cancel";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { defaultOperationalFor } from "@/lib/order-status";
 import { companionDoorFollowers } from "@/lib/order-companion";
@@ -60,6 +62,7 @@ export type MasterDoorVerdict = { ok: true } | { ok: false; code: MasterDoorReje
 export interface MasterDoorFacts {
   /** `orders.cancelled_at`: anulado en Shopify. */
   cancelledAt?: string | null;
+  cancelledInKapta?: boolean;
 }
 
 export const SHOPIFY_CANCELLED_REASON = "El pedido está anulado en la tienda: la entrega no se escribe encima. Decide una persona desde su ficha.";
@@ -69,7 +72,7 @@ export function masterDoorVerdict(item: Pick<MasterDoorItem, "target" | "guard">
   // Primero, y sin guarda que lo exima: la anulación en Shopify la decidió una
   // persona y ninguna fuente de reparto la pisa (v1.23, MOM §11.4).
   if (facts.cancelledAt) {
-    return { ok: false, code: "anulado_en_shopify", reason: SHOPIFY_CANCELLED_REASON };
+    return { ok: false, code: "anulado_en_shopify", reason: facts.cancelledInKapta ? LEGACY_SALE_CANCEL_REASON : SHOPIFY_CANCELLED_REASON };
   }
   const g = item.guard;
   if (!g) return { ok: true };
@@ -102,7 +105,7 @@ export interface MasterDoorResult {
  * Pedido → `orders.cancelled_at`, solo de los anulados en Shopify. Si no se
  * puede leer, lanza: «no lo sé» no es «no está anulado».
  */
-async function loadShopifyCancellations(admin: SupabaseClient, orderIds: readonly string[]): Promise<Map<string, string>> {
+async function loadShopifyCancellations(admin: SupabaseClient, orderIds: readonly string[], includeKapta = true): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   const ids = [...new Set(orderIds.filter(Boolean))];
   for (let i = 0; i < ids.length; i += 200) {
@@ -116,6 +119,9 @@ async function loadShopifyCancellations(admin: SupabaseClient, orderIds: readonl
       if (row.cancelled_at) out.set(row.id, row.cancelled_at);
     }
   }
+  // Una ruta o una liquidación no puede reactivar una venta histórica que una
+  // persona terminó en Kapta. La corrección excepcional sigue en la ficha.
+  if (includeKapta) for (const [id, at] of await loadLegacySaleCancellations(admin, ids)) out.set(id, at);
   return out;
 }
 
@@ -128,8 +134,13 @@ async function loadShopifyCancellations(admin: SupabaseClient, orderIds: readonl
 export async function applyDeliveriesToMaster(admin: SupabaseClient, items: readonly MasterDoorItem[]): Promise<MasterDoorResult> {
   const result: MasterDoorResult = { applied: [], rejected: [] };
   let cancelled: Map<string, string>;
+  let localCancelled: Map<string, string>;
   try {
-    cancelled = await loadShopifyCancellations(admin, items.map((item) => item.orderId));
+    const ids = items.map((item) => item.orderId);
+    [cancelled, localCancelled] = await Promise.all([
+      loadShopifyCancellations(admin, ids, false), loadLegacySaleCancellations(admin, ids),
+    ]);
+    for (const [id, at] of localCancelled) cancelled.set(id, at);
   } catch (cause) {
     result.error = cause instanceof Error ? cause.message : String(cause);
     return result;
@@ -138,7 +149,7 @@ export async function applyDeliveriesToMaster(admin: SupabaseClient, items: read
   const events: Record<string, unknown>[] = [];
   for (const item of items) {
     if (seen.has(item.orderId)) continue;
-    const verdict = masterDoorVerdict(item, { cancelledAt: cancelled.get(item.orderId) ?? null });
+    const verdict = masterDoorVerdict(item, { cancelledAt: cancelled.get(item.orderId) ?? null, cancelledInKapta: localCancelled.has(item.orderId) });
     if (!verdict.ok) {
       result.rejected.push({ orderId: item.orderId, code: verdict.code, reason: verdict.reason });
       continue;

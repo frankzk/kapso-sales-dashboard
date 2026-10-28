@@ -49,7 +49,7 @@ export const WOO_CANCEL_REASON_MAX = 500;
 export const WOO_CANCEL_PERMISSION = "orders.cancel_woo";
 
 export const WOO_CANCEL_DENIED =
-  "No tienes el permiso «Anular pedidos de WooCommerce». Lo tienen el dueño y los admin, y el dueño lo concede en Equipo.";
+  "No tienes el permiso «Anular pedidos». Lo tienen el dueño y los admin, y el dueño lo concede en Equipo.";
 
 export function wooCancelReasonLabel(code: string): string | null {
   return WOO_CANCEL_REASONS.find((r) => r.code === code)?.label ?? null;
@@ -146,7 +146,7 @@ export function wooCancelBlocks(f: WooCancelFacts): WooCancelBlock[] {
       {
         code: "no_woocommerce",
         message:
-          "Solo los pedidos de WooCommerce se anulan desde Kapta. Este pedido es de Shopify: se anula en Shopify, como siempre.",
+          "Esta acción es solo para pedidos de WooCommerce. Para un histórico Shopify de una tienda migrada, usa «Anular venta de pedido histórico».",
       },
     ];
   }
