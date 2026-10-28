@@ -2278,6 +2278,22 @@ sin tope de antigüedad. Reglas:
     - No confundir con `payment_state`, que es el cobro del PEDIDO (adelantos
       de la clienta). Este dice si el dinero que cobró el motorizado llegó a la
       cuenta.
+  - **Filtro «Estado de pago» en el Master** (owner, 27-10-2026). Está junto
+    a «Cobro del courier» y consulta `order_master.payment_state`, con varias
+    opciones combinables:
+    - **Pago completo:** `pago_completo`, incluidos los prepagos web confirmados
+      que ya resuelve el Master. No basta con un `paid` sin pasarela confirmada.
+    - **Pago pendiente de validar:** `adelanto_cargado`, `diferencia_cargada`,
+      `pago_total_cargado` y `posible_duplicado`. El posible duplicado necesita
+      revisión; nunca se presenta como pago confirmado.
+    - **Pago parcial:** `adelanto_validado`, con diferencia pendiente.
+    - **Sin pago registrado:** `sin_pago` o sin señales de pago (`NULL`). Esto
+      describe lo registrado en Kapta, no afirma que el cliente deba dinero
+      ni sustituye la liquidación del courier.
+    El filtro viaja por `ps` en la URL y se aplica en servidor a los resultados,
+    conteos, paginación y Excel. Sigue las reglas del buscador: al buscar un
+    pedido, se ocultan y se ignoran los filtros de la lista. No cambia pagos,
+    validaciones, estados ni permisos; limpiar filtros también lo quita.
   - **Vocabulario de estados de Tanders, confirmado por la operación el
     10-09-2026** (hasta entonces 105 guías vivían en estados que el Master no
     traducía, entre ellas paquetes ya de vuelta que nadie sabía que habían

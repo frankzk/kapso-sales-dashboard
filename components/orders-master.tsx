@@ -102,6 +102,7 @@ import {
   MASTER_SEARCH_MIN_CHARS,
   masterSearchTerm,
   PAYMENT_CHECK_OPTIONS,
+  PAYMENT_STATUS_OPTIONS,
   SWAYP_AVAILABILITY_OPTIONS,
   type AgencySummary,
   type MasterFilters,
@@ -769,6 +770,13 @@ export function OrdersMasterBoard({
                 selected={filters.couriers}
                 onChange={(couriers) => patch({ couriers })}
               />
+              <FacetPill
+                label="Estado de pago"
+                allLabel="Todos los estados de pago"
+                options={PAYMENT_STATUS_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
+                selected={filters.paymentStates}
+                onChange={(paymentStates) => patch({ paymentStates })}
+              />
               {/* Las opciones son fijas, no una faceta: «rechazado» tiene que
                   poder pedirse aunque hoy no haya ninguno, que es justo cuando
                   interesa comprobar que no hay ninguno. */}
@@ -1053,6 +1061,7 @@ function pillFilterCount(f: MasterFilters, withManagement: boolean): number {
     f.operationalStatuses,
     f.couriers,
     f.paymentChecks,
+    f.paymentStates,
     f.regions,
     f.provinces,
     f.districts,
@@ -1088,6 +1097,7 @@ const CLEARED_PILL_FILTERS: Partial<MasterFilters> = {
   operationalStatuses: new Set(),
   couriers: new Set(),
   paymentChecks: new Set(),
+  paymentStates: new Set(),
   regions: new Set(),
   provinces: new Set(),
   districts: new Set(),
