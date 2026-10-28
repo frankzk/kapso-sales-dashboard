@@ -523,6 +523,8 @@ export interface OrderMasterDetail {
   row: OrderMasterRow;
   guides: ShipmentRow[];
   timeline: TimelineEntry[];
+  /** Evidencia GF para terminar una venta que volvió a oficina para reprogramar. */
+  wooSaleDispatchEvents?: Pick<OrderEventRow, "kind" | "shipment_id" | "source" | "actor">[];
   lineItems: OrderLineItem[];
   /**
    * Los importes del pedido tal como los manda Shopify (subtotal, descuento,
@@ -1195,6 +1197,8 @@ export async function getOrderMasterDetail(
     gfCostTariffGap,
     shopifyCancelledAt: orderRow?.cancelled_at ?? null,
     legacySaleCancelledAt: legacySaleCancelledAt(events),
+    wooSaleDispatchEvents: events.filter((e) => e.kind === "returned_to_office" && e.source === "dispatch" && e.actor)
+      .map(({kind,shipment_id,source,actor}) => ({kind,shipment_id,source,actor})),
     legacySaleEligible: !migrationRes.error && isHistoricalShopifyOrder({
       orderPlatform: orderPlatform(orderRow?.platform), orderCreatedAt: row.order_created_at,
       storePlatform: migrationRes.data?.platform ?? null, switchedAt: migrationRes.data?.platform_switched_at ?? null,

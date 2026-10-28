@@ -65,6 +65,7 @@ import { loadRouteCloseContext, type RouteCloseContext } from "@/lib/route-close
 import { otherCourierBlockMessage } from "@/lib/gf-admission-message";
 import { clearGfDispatchPrograms, writeGfDispatchProgram } from "@/lib/gf-dispatch-program";
 import { loadActiveBoxes, type CourierRouteAssignment } from "@/lib/gf-active-boxes";
+import { findOfficeReceipts } from "@/lib/gf-office-receipts";
 import {
   loadReproQueueFlags,
   materializeWaitingAgreementsSafe,
@@ -80,6 +81,8 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 export interface CourierActionResult {
   error?: string;
   notice?: string;
+  /** Salidas recibidas o cuya recepción ya estaba confirmada; solo del alcance autorizado. */
+  receivedShipmentIds?: string[];
 }
 
 export interface CourierProviderRow {
@@ -1772,18 +1775,29 @@ async function returnUndeliveredShipments(
   const changed: string[] = [];
   const received: string[] = [];
   const errors: string[] = [];
+  const receiptErrors = new Map<string, string>();
   // De qué pedido es cada caja recibida: los que vuelven a «por asignar» pasan
   // por Repro Lima (abajo).
   const orderOfShipment = new Map<string, string>();
   for (const item of undelivered) {
     const { data, error } = await admin.rpc("gf_return_to_office", { p_item_id: item.id, p_actor: auth.userId });
-    if (error) errors.push(error.message);
+    if (error) receiptErrors.set(item.shipment_id, error.message);
     else if (data) {
       changed.push(data as string);
       received.push(item.shipment_id);
       orderOfShipment.set(item.shipment_id, data as string);
     }
   }
+  // Otra lectura (o persona) pudo recibirla antes. Solo se confirma con
+  // evidencia de recepción, custodia en oficina y ninguna caja activa.
+  let alreadyReceived: string[] = [];
+  try {
+    alreadyReceived = await findOfficeReceipts(admin, shipmentIds.filter((id) => !received.includes(id)), opts.manifestIds);
+  } catch {
+    errors.push("No se pudo comprobar si el paquete ya estaba recibido. Actualiza antes de reintentar.");
+  }
+  for (const [id, message] of receiptErrors) if (!alreadyReceived.includes(id)) errors.push(message);
+  const receivedShipmentIds = [...new Set([...received, ...alreadyReceived])];
   // Lo que la 0248 mandó a stock en vez de a «por asignar» —la reemplazada y la
   // que ya constaba devuelta—, releído después de recibir: un reemplazo que
   // terminó mientras tanto cambia la rama. Una en `retorno` sin reemplazo
@@ -1814,16 +1828,17 @@ async function returnUndeliveredShipments(
   revalidatePath(COURIER_PATH);
   revalidatePath("/dashboard/pedidos");
   revalidatePath(REPRO_LIMA_PATH);
-  if (!changed.length) return { error: [ambiguousNote, ...new Set(errors)].filter(Boolean).join(" ") || "Ninguno de esos pedidos está «No entregado» dentro de una caja." };
+  if (!changed.length && !alreadyReceived.length) return { error: [ambiguousNote, ...new Set(errors)].filter(Boolean).join(" ") || "Ninguno de esos pedidos está «No entregado» dentro de una caja." };
   if (ambiguousNote) errors.push(ambiguousNote);
   const requeued = changed.length - toStock - alreadyReturned;
   const parts: string[] = [];
   if (requeued) parts.push(`${requeued} ${requeued === 1 ? "pedido recibido" : "pedidos recibidos"} en oficina. Vuelven a «por asignar» (Por reprogramar Lima), también los rechazados.`);
   if (toStock) parts.push(returnedToStockNotice(toStock));
   if (alreadyReturned) parts.push(`${alreadyReturned} ya ${alreadyReturned === 1 ? "constaba devuelta: salió" : "constaban devueltas: salieron"} de la caja sin volver a «por asignar».`);
+  if (alreadyReceived.length) parts.push(`${alreadyReceived.length} ${alreadyReceived.length === 1 ? "salida ya estaba recibida" : "salidas ya estaban recibidas"} en oficina. No se registra otra devolución.`);
   parts.push(...reproReceptionNotice(repro, { single: changed.length === 1 }));
   const done = parts.join(" ");
-  return errors.length ? { error: `${done} ${[...new Set(errors)].join(" ")}` } : { notice: done };
+  return errors.length ? { error: `${done} ${[...new Set(errors)].join(" ")}`, receivedShipmentIds } : { notice: done, receivedShipmentIds };
 }
 
 /**

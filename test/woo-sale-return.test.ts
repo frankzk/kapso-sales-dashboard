@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { wooReturnStockBlock, wooSaleEndBlocks, WOO_SALE_ENDED } from "@/lib/woo-sale-return";
+import { wooReturnStockBlock, wooSaleEndBlocks, wooSaleWasDispatched, WOO_SALE_ENDED } from "@/lib/woo-sale-return";
 import { legacySaleCancelledAt } from "@/lib/legacy-sale-cancel";
 import { WooCancelZone } from "@/components/woo-cancel-zone";
 import { resolveMacroStage, type ResolveMacroStageInput } from "@/lib/order-macro-stage";
@@ -11,6 +11,14 @@ const facts={platform:"woocommerce",generalStatus:"en_proceso",financialStatus:"
 const receipt={kind:"return_received",occurred_at:at,source:"dispatch",actor:"almacen",shipment_id:"s1"};
 const inventory={...receipt,kind:"inventory_reconciled",source:"manual"};
 describe("venta WooCommerce terminada con stock pendiente",()=>{
+  it("KP200152: recibir para reprogramar conserva el acceso a Terminar venta",()=>{
+    const returned={...s,custody_state:"empresa",dispatched_at:null,custody_transferred_at:null};
+    const events=[{...receipt,kind:"returned_to_office"}];
+    expect(wooSaleWasDispatched({shipments:[returned],events})).toBe(true);
+    expect(wooSaleEndBlocks({...facts,shipments:[returned],events})).toEqual([]);
+    for(const event of [{...events[0]!,shipment_id:"otra-salida"},{...events[0]!,actor:null},{...events[0]!,source:"courier_api"}])
+      expect(wooSaleWasDispatched({shipments:[returned],events:[event]})).toBe(false);
+  });
   it("termina la venta fuera de almacén sin aceptar entregas ni dinero pendiente",()=>{
     expect(wooSaleEndBlocks(facts)).toEqual([]);
     for(const change of [{platform:"shopify"},{financialStatus:"paid"},{generalStatus:"entregado"},{payments:[{validation_status:"pendiente"}]},{companion:{travelsIn:"otra",carries:[]}}])
