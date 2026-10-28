@@ -8,6 +8,7 @@
 // joins (que PostgREST tampoco daría).
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { customerNameFromRaw, type CustomerNameSnapshot } from "@/lib/order-customer-name";
 import { unstable_cache } from "next/cache";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { chunk } from "@/lib/access";
@@ -520,6 +521,7 @@ export function orderEventsToTimeline(
 }
 
 export interface OrderMasterDetail {
+  customerName?: CustomerNameSnapshot;
   row: OrderMasterRow;
   guides: ShipmentRow[];
   timeline: TimelineEntry[];
@@ -1204,6 +1206,7 @@ export async function getOrderMasterDetail(
       storePlatform: migrationRes.data?.platform ?? null, switchedAt: migrationRes.data?.platform_switched_at ?? null,
     }),
     platform: orderPlatform(orderRow?.platform),
+    customerName: customerNameFromRaw(orderRow?.raw,row.customer_name),
     companion,
     address: shopifyShippingAddress(orderRow?.raw),
     departamentoElegido: shopifyDepartamentoElegido(orderRow?.raw),

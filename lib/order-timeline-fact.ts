@@ -165,6 +165,8 @@ const POR_KIND: Record<string, TimelineFact> = {
   // El pedido vuelve a estar vivo en WooCommerce (MOM §38.3): su macroetapa la
   // decide el Master, no este hecho.
   reactivated_woocommerce: consulta("estado"),
+  customer_name_update_requested: consulta("expediente"),
+  customer_name_updated: consulta("expediente"),
   route_reopened: consulta("expediente"),
   key_registered: consulta("clave"),
   key_view: consulta("clave"),

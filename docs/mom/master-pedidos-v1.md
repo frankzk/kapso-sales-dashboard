@@ -35,7 +35,8 @@ heredados continúan disponibles como evidencia y compatibilidad.
 3. Kapta no crea pedidos comerciales. Las correcciones comerciales se realizan
    anulando el pedido incorrecto en la tienda de la que vino y creando otro.
    Un pedido de la era Shopify después del cierre: §6.4, pendiente del owner
-   (§38.9).
+   (§38.9). Excepción identificativa autorizada: corregir nombres y apellidos
+   de un pedido WooCommerce desde su ficha (§38.12), conservando el historial.
 4. Kapta es la fuente de verdad operativa, logística, financiera y de auditoría.
 5. El historial se conserva indefinidamente. Excepción: los datos personales
    del comprador de una tienda cliente de otra organización se anonimizan
@@ -17686,6 +17687,33 @@ se bloquea mientras genera, pero una acción sigue corriendo en el servidor
 cuando la pantalla ya mostró un error de red y la asesora vuelve a pulsar. Por
 eso el formulario y el bot tienen el candado en la base, por (tienda, id del
 intento).
+
+**Corregir nombres y apellidos (28-10-2026).** El dueño autorizó corregir el
+nombre del cliente en Información → Pedido y cliente. «Editar nombre» ofrece
+Nombres y Apellidos (opcional), sin inferir apellidos de una cadena completa ni
+recortar nombres compuestos. Usa orders.create de la organización del pedido,
+el mismo permiso que ya permite a la asesora registrar esos datos al crearlo;
+sesión y alcance se revalidan por RLS y organización en el servidor. No se
+conceden roles nuevos. Por ahora se aplica solo a pedidos WooCommerce; los
+históricos Shopify conservan su fuente.
+
+La corrección se guarda en el pedido de WooCommerce (first_name/last_name de
+billing y shipping), se verifica su respuesta y se ingiere por el flujo normal
+para que el Master y las siguientes sincronizaciones conserven el nombre.
+No cambia el perfil general del cliente, teléfono, dirección, productos,
+importes ni estado. Las guías emitidas conservan sus datos; las futuras leen
+el pedido corregido. Dos campos de hasta 100 caracteres, nombre obligatorio,
+apellidos vacíos permitidos y espacios normalizados. Una ficha antigua se
+rechaza si los nombres de la tienda cambiaron desde que se abrió.
+
+Antes de escribir en WooCommerce se registra customer_name_update_requested
+con actor, nombres anteriores y solicitados. Solo tras confirmar la respuesta
+se registra customer_name_updated con su antes/después. Los eventos son
+inmutables y comparten una clave de intento: un reintento no duplica hechos;
+una edición ya completada no puede sobrescribir una posterior al reintentarse.
+Si se pierde la respuesta se relee antes de continuar, sin repetir el PUT a
+ciegas. Si falla el historial o el espejo se indica que WooCommerce pudo haber
+guardado y se completa con el mismo intento. Los errores conservan lo escrito.
 
 **Acceso desde Master de Pedidos (28-10-2026).** «Venta por teléfono» está
 también en la cabecera del Master, antes del buscador. En Información → Pedido

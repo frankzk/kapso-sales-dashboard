@@ -25,6 +25,9 @@ import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { phoneSaleCustomer, type PhoneSaleCustomer } from "@/lib/master-phone-sale";
 import { CustomerOrderButton } from "@/components/customer-order-button";
+import { CustomerNameEditor } from "@/components/customer-name-editor";
+import { customerNameFromRaw } from "@/lib/order-customer-name";
+import { updateOrderCustomerName } from "@/app/dashboard/pedidos/customer-name-actions";
 import { cn } from "@/components/ui";
 import {
   Badge,
@@ -658,6 +661,7 @@ export function OrderDrawer({
   canOverride,
   canSetStatus,
   canCancelWoo = false,
+  canEditCustomerName = false,
   canCreateGuide,
   canCreateTandersGuide,
   canCreateShalomGuide,
@@ -682,6 +686,7 @@ export function OrderDrawer({
    * admin y quien el dueño marque en Equipo. Independiente de `canSetStatus`.
    */
   canCancelWoo?: boolean;
+  canEditCustomerName?: boolean;
   canCreateGuide: boolean;
   canCreateTandersGuide: boolean;
   canCreateShalomGuide: boolean;
@@ -2132,10 +2137,15 @@ export function OrderDrawer({
                     dedos y en la misma pantalla, sugería que eran dos datos
                     distintos. La de «Ubicación y cobertura» sí se queda: ahí es
                     el sujeto de la sección y lo que se corrige. */}
-                <SectionHead
-                  title="Pedido y cliente"
+                <CustomerNameEditor
+                  key={orderId}
                   help={`Datos comerciales sincronizados desde ${storePlatform} y contexto operativo de Kapta.`}
-                  aside={onNewOrderForCustomer && <CustomerOrderButton customer={phoneSaleCustomer(detail.row)}
+                  value={detail.customerName ?? customerNameFromRaw(null,detail.row.customer_name)}
+                  canEdit={canEditCustomerName && detail.platform === "woocommerce"}
+                  hasGuides={detail.guides.length>0}
+                  onSave={(input)=>updateOrderCustomerName(orderId,input)}
+                  onUpdated={async()=>{await reload();onSaved();}}
+                  actions={onNewOrderForCustomer && <CustomerOrderButton customer={phoneSaleCustomer(detail.row)}
                     onCreate={(customer)=>onNewOrderForCustomer(customer,workspace)}/>}
                 />
                 <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
