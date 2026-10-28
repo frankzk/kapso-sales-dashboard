@@ -25,6 +25,8 @@ export interface MasterFilters {
    * (rider_settlements) y esta columna nunca se les escribe.
    */
   paymentChecks: Set<string>;
+  /** Estado del pago del pedido, agrupado para la operación. Vacío = todos. */
+  paymentStates: Set<string>;
   shippingModes: Set<string>;
   regions: Set<string>;
   provinces: Set<string>;
@@ -146,6 +148,7 @@ export function emptyFilters(): MasterFilters {
     operationalStatuses: new Set(),
     couriers: new Set(),
     paymentChecks: new Set(),
+    paymentStates: new Set(),
     shippingModes: new Set(),
     regions: new Set(),
     provinces: new Set(),
@@ -208,6 +211,7 @@ export function hasActiveFilters(f: MasterFilters): boolean {
     f.operationalStatuses.size > 0 ||
     f.couriers.size > 0 ||
     f.paymentChecks.size > 0 ||
+    f.paymentStates.size > 0 ||
     f.shippingModes.size > 0 ||
     f.regions.size > 0 ||
     f.provinces.size > 0 ||
@@ -281,6 +285,31 @@ export const PAYMENT_CHECK_OPTIONS: { value: string; label: string }[] = [
   { value: PAYMENT_CHECK_NONE, label: "Courier sin constancia por guía" },
 ];
 
+export const PAYMENT_STATUS_OPTIONS = [
+  { value: "pago_completo", label: "Pago completo" },
+  { value: "pendiente_validacion", label: "Pago pendiente de validar" },
+  { value: "pago_parcial", label: "Pago parcial" },
+  { value: "sin_pago", label: "Sin pago registrado" },
+] as const;
+
+// `payment_state` ya incluye el prepago web confirmado. Un posible duplicado
+// sigue pendiente de revisión; nunca equivale a un pago confirmado.
+const PAYMENT_STATUS_GROUPS: Readonly<Record<string, readonly (string | null)[]>> = {
+  pago_completo: ["pago_completo"],
+  pendiente_validacion: ["adelanto_cargado", "diferencia_cargada", "pago_total_cargado", "posible_duplicado"],
+  pago_parcial: ["adelanto_validado"],
+  // NULL significa que el Master no tiene señales de pago registradas. No
+  // afirma que el cliente deba dinero ni que un courier no lo haya cobrado.
+  sin_pago: ["sin_pago", null],
+};
+
+/** El MISMO agrupamiento para el listado en memoria y la consulta del servidor. */
+export function paymentStatesForFilter(selected: ReadonlySet<string>): (string | null)[] {
+  return [...new Set([...selected].flatMap((value) =>
+    Object.hasOwn(PAYMENT_STATUS_GROUPS, value) ? (PAYMENT_STATUS_GROUPS[value] ?? []) : [],
+  ))];
+}
+
 /** Un conjunto vacío no filtra; si no, la fila debe pertenecer al conjunto. */
 function inSet(set: Set<string>, value: string | null | undefined): boolean {
   if (!set.size) return true;
@@ -314,6 +343,8 @@ export function matchesFilters(
   if (!inSet(f.generalStatuses, row.general_status)) return false;
   if (!inSet(f.operationalStatuses, row.operational_status)) return false;
   if (!inSet(f.shippingModes, row.shipping_mode)) return false;
+  const paymentStates = paymentStatesForFilter(f.paymentStates);
+  if (paymentStates.length && !paymentStates.includes(row.payment_state ?? null)) return false;
   if (!inSet(f.regions, row.region)) return false;
   if (!inSet(f.provinces, row.province)) return false;
   if (!inSet(f.districts, row.district)) return false;

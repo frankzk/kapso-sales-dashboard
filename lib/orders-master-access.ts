@@ -86,6 +86,7 @@ import {
   MANAGEMENT_DAY_STEPS,
   masterSearchTerm,
   PAYMENT_CHECK_NONE,
+  paymentStatesForFilter,
   type AgencySummary,
   type MasterFilters,
   type MasterSortKey,
@@ -1366,6 +1367,14 @@ export function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T 
   if (f.generalStatuses.size) q = q.in("general_status", [...f.generalStatuses]);
   if (f.operationalStatuses.size) q = q.in("operational_status", [...f.operationalStatuses]);
   if (f.shippingModes.size) q = q.in("shipping_mode", [...f.shippingModes]);
+  // Estado del pedido (incluye prepago web), independiente del cobro del courier.
+  const paymentStates = paymentStatesForFilter(f.paymentStates);
+  if (paymentStates.length) {
+    const states = paymentStates.filter((state): state is string => state !== null);
+    q = paymentStates.includes(null)
+      ? q.or(`payment_state.is.null,payment_state.in.(${states.join(",")})`)
+      : q.in("payment_state", states);
+  }
   if (f.regions.size) q = q.in("region", [...f.regions]);
   if (f.provinces.size) q = q.in("province", [...f.provinces]);
   if (f.districts.size) q = q.in("district", [...f.districts]);

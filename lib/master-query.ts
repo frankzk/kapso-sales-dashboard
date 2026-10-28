@@ -12,7 +12,7 @@
 // manipulada o de una versión vieja tiene que dar un listado sensato, no un
 // error — es la pantalla de trabajo diaria del equipo.
 
-import { ATTEMPTS_OR_MORE, DISPATCH_DATE_FILTERS, emptyFilters, type MasterFilters, type MasterSortKey } from "@/lib/order-master-filters";
+import { ATTEMPTS_OR_MORE, DISPATCH_DATE_FILTERS, emptyFilters, PAYMENT_STATUS_OPTIONS, type MasterFilters, type MasterSortKey } from "@/lib/order-master-filters";
 import { MASTER_PATH } from "@/lib/order-drawer-href";
 
 /** Claves cortas: la URL se lee y se comparte, y `?d=lince,ate` gana a
@@ -23,6 +23,7 @@ const SET_KEYS: { param: string; field: keyof MasterFilters }[] = [
   { param: "op", field: "operationalStatuses" },
   { param: "c", field: "couriers" },
   { param: "pc", field: "paymentChecks" },
+  { param: "ps", field: "paymentStates" },
   { param: "sm", field: "shippingModes" },
   { param: "r", field: "regions" },
   { param: "p", field: "provinces" },
@@ -91,6 +92,10 @@ export function parseMasterQuery(params: URLSearchParams | Record<string, string
       .filter(Boolean);
     (f[field] as Set<string>) = new Set(values);
   }
+  // Solo valores conocidos: una URL vieja o manipulada no agrega estados al
+  // filtro ni cambia el significado de «Pago completo».
+  const paymentOptions = new Set<string>(PAYMENT_STATUS_OPTIONS.map((option) => option.value));
+  f.paymentStates = new Set([...f.paymentStates].filter((value) => paymentOptions.has(value)));
 
   for (const { param, field } of DATE_KEYS) {
     const raw = get(param)?.trim() ?? "";
