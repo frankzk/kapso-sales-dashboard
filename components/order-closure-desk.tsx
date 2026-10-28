@@ -376,9 +376,9 @@ export function OrderClosureDesk({
           lo marca entregado. No se promete; decide una persona. */}
       {gfRouteBlock?.kind === "anulado_shopify" && cancelledInKapta && (
         <p className="text-[13px] leading-5 text-ink-600">
-          El motorizado reportó una entrega, pero la venta histórica está anulada en Kapta. Termina la ruta por su flujo;
-          eso no reactiva la venta ni la marca entregada. Si la entrega vale, un admin debe corregir la anulación
-          desde «Gestión manual», con motivo. La liquidación sigue pendiente de resolución.
+          El motorizado reportó una entrega, pero la venta está terminada en Kapta. Termina la ruta por su flujo;
+          eso no reactiva la venta ni la marca entregada. Si la entrega vale, el dueño debe revisar y resolver la anulación
+          antes de cerrar el expediente. La liquidación sigue pendiente de resolución.
         </p>
       )}
       {gfRouteBlock?.kind === "anulado_shopify" && !cancelledInKapta && (

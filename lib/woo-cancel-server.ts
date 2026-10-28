@@ -25,6 +25,7 @@ import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { applyWooOrderResponse } from "@/lib/ingest";
 import { loadCompanionRides } from "@/lib/order-companion-access";
+import { legacySaleSendBlock } from "@/lib/legacy-sale-cancel-access";
 import { parseWooOrderId } from "@/lib/order-admin-url";
 import { WOO_CANCELLED_STATUSES, WooError, fetchWooOrder, wooGmt, wooRequest, type WooClientOpts, type WooOrder } from "@/lib/woocommerce";
 import {
@@ -247,6 +248,8 @@ export async function cancelWooOrderFromKapta(input: {
   // Ya anulado (el doble clic, un reintento, o lo anularon en wp-admin): no se
   // vuelve a llamar a WooCommerce ni se escribe otro hecho.
   if (order.cancelled_at) return { ok: true, already: true, notice: `${label} ya está anulado en la tienda.` };
+  const ended = await legacySaleSendBlock(admin,orderId);
+  if (ended) return { ok:false,error:`${ended} La cancelación en WooCommerce se completa por la recepción y el inventario de sus retornos.` };
 
   let blocks: WooCancelBlock[];
   try {

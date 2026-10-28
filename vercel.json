@@ -4,6 +4,7 @@
     "gru1"
   ],
   "crons": [
+    { "path": "/api/cron/woo-sale-returns", "schedule": "* * * * *" },
     {
       "path": "/api/cron/urpi-programming",
       "schedule": "*/15 * * * *"

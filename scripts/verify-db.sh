@@ -296,3 +296,5 @@ echo "▶ Retiro de salida GF antes de despacho (0284): atómico, auditado y sol
 $PSQL -f "$ROOT/scripts/sql/gf_cancel_output_smoke.sql"
 
 echo "✅ DB verification passed."
+echo "▶ WooCommerce venta terminada con retorno pendiente (0285): fuente intacta, recepción e inventario, un turno, recuperación y recepción GF"
+$PSQL -f "$ROOT/scripts/sql/woo_sale_return_smoke.sql"

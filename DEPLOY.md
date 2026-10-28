@@ -5295,3 +5295,12 @@ no cancela ni modifica pedidos, solicitudes o salidas existentes al instalarse.
 El RPC exige autorización previa por sesión/RLS y orders.cancel_woo en el servidor.
 Verificación de transición y rollback: scripts/sql/gf_cancel_output_smoke.sql,
 ejecutado por verify-db.sh sobre Postgres desechable.
+
+## 0285: venta WooCommerce terminada, retorno y stock diferidos
+
+Aplicar db/migrations/0285_woo_sale_pending_return.sql antes de publicar el código.
+Instala la ficha de seguimiento solo de servicio y RPCs de fin de venta y turnos;
+actualiza la recepción GF para estas ventas y bloquea otro despacho. No modifica
+ventas ni repone stock al instalarse. Confirmar la tarea /api/cron/woo-sale-returns
+en Vercel (cada minuto). La tarea solo cancela en Woo tras recepción e inventario
+humanos de todas las salidas; probar la migración con el smoke en Postgres desechable.

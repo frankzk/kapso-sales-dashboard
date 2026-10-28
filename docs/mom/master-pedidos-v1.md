@@ -18725,6 +18725,10 @@ Implementación: `lib/woocommerce-webhooks-health.ts` (`checkWooWebhooks`,
 
 ### 38.15 Anular un pedido de WooCommerce desde Kapta (26-10-2026)
 
+Desde §38.18 hay una acción separada para terminar ventas cuyo paquete ya salió:
+se anulan comercialmente en Kapta y la cancelación en WooCommerce espera recepción
+e inventario. Las reglas de esta sección siguen rigiendo la anulación directa.
+
 **Pedido del owner (26-10-2026).** Hasta hoy un pedido de WooCommerce se anulaba
 solo en wp-admin, y la entrada (webhook o pasada) lo marcaba anulado y dejaba
 «Anulado en WooCommerce» en la Actividad (38.3). Para no dar wp-admin a cada
@@ -19124,3 +19128,63 @@ Esto anula solo la salida: no cancela WooCommerce/Shopify, no devuelve stock, no
 registra retorno ni toca pagos o liquidaciones. Después la persona usa «Anular
 pedido» (WooCommerce) o «Anular venta de pedido histórico» (§38.16), sujeto a sus
 reglas. Las cajas que ya salieron siguen el circuito físico de Despacho y retorno.
+
+### 38.18 WooCommerce: venta terminada con retorno y stock pendientes (28-10-2026)
+
+Decisión del dueño: la venta puede terminar antes del retorno, sin otro intento
+de entrega. Se conserva el seguimiento de cada paquete y el stock solo se repone
+después de la recepción física y el reingreso apto confirmado por almacén.
+
+En Gestión manual aparece «Terminar venta · retorno pendiente» para un pedido
+WooCommerce con prueba de salida (despacho, transferencia o custodia fuera/devuelta).
+Se reutiliza orders.cancel_woo de la organización objetivo y la autorización por
+sesión/RLS, sin ampliar roles. Motivo de la lista y texto de 5–500 caracteres,
+confirmación que nombra el pedido. Sin entrega, dinero, comprobantes pendientes
+ni caja compartida; las lecturas fallidas bloquean. La anulación directa de §38.15
+sigue para pedidos que nunca salieron.
+
+La transacción woo_end_sale_pending_return (0285) guarda el hecho inmutable
+woo_sale_ended_pending_return y una ficha única woo_sale_returns con las salidas
+despachadas, actor y motivo. Revalida entregas/pagos y bloquea las salidas mientras
+toma la foto. No cambia orders.cancelled_at, stock, dinero, guías, solicitudes ni
+liquidaciones. La venta queda Anulada en el Master y no admite nuevos envíos,
+escaneos de despacho ni arrastre GF a otro reparto. Un webhook, reporte o override
+logístico no reactiva esta venta. Corregir una venta terminada con stock pendiente
+exige revisión del dueño fuera de este flujo; no se ofrece reactivación automática.
+
+WooCommerce conserva su estado actual hasta el retorno: su transición nativa a
+cancelled restaura el stock reducido y no debe enviarse mientras la caja está
+fuera. Esta separación no modifica plugins o acciones manuales externas a Kapta.
+La recepción GF mantiene el despacho y la parada histórica, retira el ítem y
+registra return_received; no devuelve el paquete a por asignar. Las demás vías
+usan su recepción existente. Un returned_at o estado devuelto del courier no
+cuenta como recepción humana.
+
+Para reponer: todas las salidas de la foto deben seguir vinculadas al pedido y
+tener return_received con actor y source manual/dispatch, seguido por
+inventory_reconciled con actor de almacén. Falta de una caja, merma, otra salida
+despachada, pago/entrega posteriores, vínculo corregido o salida interna activa
+bloquean la reposición automática. No se repone parcialmente al llegar la primera
+caja ni se toma una merma por mercancía apta. Almacén confirma recepción e
+inventario con los permisos existentes. Las liquidaciones conservan su cierre
+independiente; reponer stock no liquida fletes.
+
+Confirmar «Reingreso a stock» intenta el cierre al momento. El cron
+/api/cron/woo-sale-returns (cada minuto, dos expedientes por ejecución) recupera
+pendientes. Un turno de cinco minutos con token y SKIP LOCKED evita dos trabajos
+simultáneos y se recupera si el proceso muere. Se vuelven a comprobar las pruebas
+físicas, pagos, entregas y el estado vivo en WooCommerce antes de enviar cancelled.
+La respuesta se ingiere por el camino habitual. Si la cancelación se aplicó pero
+falló la respuesta o escritura local, el reintento relee la fuente; nunca suma
+stock mediante un PUT de cantidades ni repite una reposición manual.
+
+woo_sale_return_synced conserva la constancia del cierre. Los fallos se ven en
+Actividad y en la ficha de seguimiento y se reintentan a los cinco minutos.
+Mientras falta ese hecho, stock_woo_pendiente mantiene el expediente Por cerrar,
+aunque ya tenga retorno, inventario o un cierre manual anterior. La mercancía
+puede estar recibida mientras la sincronización de Woo sigue pendiente; la UI
+no dice que la fuente confirmó el stock hasta recibir su cancelación.
+
+Instalar la 0285 no termina ventas ni repone stock. Pruebas: woo-sale-return*.test.ts
+y scripts/sql/woo_sale_return_smoke.sql (flujo GF, fuente intacta, permisos,
+idempotencia, prueba de recepción/inventario y turno recuperable).

@@ -9,7 +9,7 @@ export async function loadLegacySaleCancellations(admin: SupabaseClient, ids: re
     const { data, error } = await admin.from("order_events")
       .select("order_id,kind,occurred_at,source,new_status")
       .in("order_id", unique.slice(i, i + 200))
-      .in("kind", [LEGACY_SALE_CANCELLED, "status_override"]);
+      .in("kind", [LEGACY_SALE_CANCELLED, "woo_sale_ended_pending_return", "status_override"]);
     if (error) throw new Error(`No se pudo comprobar la anulación comercial (${error.message}).`);
     const grouped = new Map<string, LegacySaleEvent[]>();
     for (const event of (data ?? []) as (LegacySaleEvent & { order_id: string })[]) {
@@ -41,6 +41,6 @@ export async function legacySaleManifestBlock(admin: SupabaseClient, manifestId:
       .select("id,order_id").in("id", ids);
     if (shipmentError || shipments?.length !== new Set(ids).size) throw new Error("No se pudieron comprobar los pedidos de la ruta.");
     const cancelled = await loadLegacySaleCancellations(admin, shipments.map((shipment) => shipment.order_id).filter(Boolean));
-    return cancelled.size ? "La ruta contiene una venta histórica anulada en Kapta. Retira su paquete de esta ruta antes de despachar." : null;
+    return cancelled.size ? "La ruta contiene una venta terminada en Kapta. Retira su paquete de esta ruta antes de despachar." : null;
   } catch (cause) { return cause instanceof Error ? cause.message : "No se pudo comprobar la anulación comercial de la ruta."; }
 }
