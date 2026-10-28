@@ -83,4 +83,42 @@ begin
   select count(*) into n from woo_claim_sale_return(o); if n<>0 then raise exception 'FAIL: repitió cierre confirmado'; end if;
 end;
 $$;
+-- 0286 / KP200152: primero volvió a oficina para reprogramar; después terminó la venta.
+do $$
+declare
+  o uuid:='28500000-0000-0000-0000-000000000005';
+  s uuid:='28500000-0000-0000-0000-000000000007';
+  st uuid:='28500000-0000-0000-0000-000000000002';
+  a uuid:='28500000-0000-0000-0000-000000000009';
+  box uuid; item uuid; original_receipt uuid; received_at timestamptz; n integer;
+begin
+  update orders set platform='woocommerce',financial_status='pending' where id=o;
+  box:=gf_dispatch_load_open('28500000-0000-0000-0000-000000000001','28500000-0000-0000-0000-000000000003',current_date+1,a);
+  insert into dispatch_manifest_items(manifest_id,shipment_id,store_id) values(box,s,st) returning id into item;
+  update dispatch_manifests set state='in_custody' where id=box;
+  update shipments set custody_state='courier',dispatched_at=now()-interval '10 minutes',custody_transferred_at=now()-interval '10 minutes' where id=s;
+  update delivery_stops set status='no_entregado',outcome_reason='rechazado',reported_at=now(),reported_by=a,pickup_confirmed=true where shipment_id=s;
+  perform gf_return_to_office(item,a);
+  if (select custody_state from shipments where id=s)<>'empresa'
+    or (select dispatched_at from shipments where id=s) is not null then raise exception 'FAIL: no reprodujo recepción para reprogramar'; end if;
+  select id,occurred_at into original_receipt,received_at from order_events where shipment_id=s and kind='returned_to_office' order by occurred_at desc limit 1;
+  if original_receipt is null then raise exception 'FAIL: falta recepción original'; end if;
+  perform woo_end_sale_pending_return(o,a,'La venta terminó después de volver a oficina',gen_random_uuid());
+  perform woo_end_sale_pending_return(o,a,'La venta terminó después de volver a oficina',gen_random_uuid());
+  if (select shipment_ids from woo_sale_returns where order_id=o)<>array[s]
+    or (select custody_state from shipments where id=s)<>'devuelto'
+    or (select returned_at from shipments where id=s)<>received_at
+    or not exists(select 1 from order_events where id=original_receipt)
+    or (select count(*) from order_events where shipment_id=s and kind='return_received')<>1
+    or not exists(select 1 from order_events where shipment_id=s and kind='return_received' and actor=a and occurred_at=received_at and payload->>'office_receipt_event_id'=original_receipt::text)
+    or not exists(select 1 from delivery_stops where shipment_id=s and status='no_entregado')
+    or (select cancelled_at from orders where id=o) is not null then raise exception 'FAIL: recepción o venta terminada incorrectas'; end if;
+  select count(*) into n from woo_claim_sale_return(o);
+  if n<>0 then raise exception 'FAIL: devolvió stock sin inventario de almacén'; end if;
+  insert into order_events(store_id,order_id,shipment_id,kind,source,actor,occurred_at)
+    values(st,o,s,'inventory_reconciled','manual',a,now()+interval '1 second');
+  select count(*) into n from woo_claim_sale_return(o);
+  if n<>1 then raise exception 'FAIL: no habilitó cierre tras recepción anterior e inventario'; end if;
+end;
+$$;
 rollback;

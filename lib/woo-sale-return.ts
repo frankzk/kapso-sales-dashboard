@@ -7,9 +7,13 @@ export const WOO_SALE_RETURN_SYNCED = "woo_sale_return_synced";
 export function shipmentHasLeft(s: WooCancelShipment): boolean {
   return Boolean(s.dispatched_at || s.custody_transferred_at || ["courier", "retorno", "devuelto"].includes(s.custody_state ?? ""));
 }
+export function wooSaleWasDispatched(f: Pick<WooCancelFacts, "shipments" | "events">): boolean {
+  return f.shipments.some(shipmentHasLeft) || Boolean(f.events?.some((e) => e.kind === "returned_to_office"
+    && e.source === "dispatch" && e.actor && f.shipments.some((s) => s.id === e.shipment_id)));
+}
 export function wooSaleEndBlocks(f: WooCancelFacts): string[] {
   if (f.platform !== "woocommerce") return ["Esta opción es solo para WooCommerce."];
-  return [...commercialSaleCancelBlocks(f), ...(!f.shipments.some(shipmentHasLeft)
+  return [...commercialSaleCancelBlocks(f), ...(!wooSaleWasDispatched(f)
     ? ["La caja todavía no salió. Usa «Anular pedido» después de retirar sus salidas activas."] : [])];
 }
 export interface ReturnProof extends LegacySaleEvent { shipment_id?: string | null; actor?: string | null }

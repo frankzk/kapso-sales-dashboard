@@ -41,7 +41,7 @@ export async function cancelHistoricalShopifySale(input: {
       admin.from("order_master").select("general_status").eq("order_id", orderId).maybeSingle(),
       admin.from("shipments").select("id,courier,guide_code,delivery_status,custody_state,dispatched_at,custody_transferred_at").eq("order_id", orderId),
       admin.from("order_payments").select("validation_status").eq("order_id", orderId),
-      admin.from("order_events").select("kind,occurred_at,source,new_status").eq("order_id", orderId),
+      admin.from("order_events").select("kind,occurred_at,source,new_status,shipment_id,actor").eq("order_id", orderId),
     ]);
     if (master.error || !master.data || shipments.error || payments.error || events.error)
       return { error: "No se pudieron comprobar el estado, las salidas, los pagos o el historial. No se anuló la venta." };
@@ -50,6 +50,7 @@ export async function cancelHistoricalShopifySale(input: {
       const blocks = (input.wooReturn ? wooSaleEndBlocks : legacySaleCancelBlocks)({
         platform: order.platform, generalStatus: master.data.general_status,
         financialStatus: order.financial_status, shipments: shipments.data ?? [], payments: payments.data ?? [],
+        events: events.data ?? [],
         companion: {
           travelsIn: rides.some((ride) => ride.link.companionOrderId === orderId && ride.shipment) ? "otro pedido" : null,
           carries: rides.filter((ride) => ride.link.hostOrderId === orderId && ride.shipment).map(() => "otro pedido"),

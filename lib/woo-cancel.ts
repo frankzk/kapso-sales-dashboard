@@ -82,6 +82,7 @@ export function wooCancelEventNote(label: string, text: string): string {
 // ---------------------------------------------------------------------------
 
 export interface WooCancelShipment {
+  id?: string;
   dispatched_at?: string | null;
   custody_transferred_at?: string | null;
   created_via?: string | null;
@@ -100,6 +101,8 @@ export interface WooCancelFacts {
   financialStatus: string | null;
   /** Las salidas propias del pedido (`shipments`). */
   shipments: readonly WooCancelShipment[];
+  /** La recepción GF conserva el hecho de salida aunque la caja quede para reprogramar. */
+  events?: readonly { kind: string; shipment_id?: string | null; source?: string | null; actor?: string | null }[];
   /**
    * Los comprobantes del pedido (`order_payments.validation_status`). La ficha
    * no los tiene a mano: pasa null y el servidor los lee.

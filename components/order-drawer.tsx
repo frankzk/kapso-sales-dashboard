@@ -99,7 +99,7 @@ import {
   type OrderGeoInput,
 } from "@/app/dashboard/pedidos/actions";
 import { VoiceAgentPanel } from "@/components/voice-agent-panel";
-import { shipmentHasLeft } from "@/lib/woo-sale-return";
+import { wooSaleWasDispatched } from "@/lib/woo-sale-return";
 import { endWooSalePendingReturn } from "@/app/dashboard/pedidos/woo-sale-return-actions";
 import { WooCancelZone } from "@/components/woo-cancel-zone";
 import { GfOutputCancelButton } from "@/components/gf-output-cancel-button";
@@ -1207,13 +1207,14 @@ export function OrderDrawer({
   const wooCancel: WooCancelInput | null =
     canCancelWoo && detail && (detail.platform === "woocommerce" || detail.legacySaleEligible) && !detail.shopifyCancelledAt && !detail.legacySaleCancelledAt
       ? {
-          mode: detail.platform === "shopify" ? "shopify_history" : detail.guides.some(shipmentHasLeft) ? "woocommerce_return" : "woocommerce",
+          mode: detail.platform === "shopify" ? "shopify_history" : wooSaleWasDispatched({shipments:detail.guides,events:detail.wooSaleDispatchEvents}) ? "woocommerce_return" : "woocommerce",
           orderName: detail.row.order_name,
           facts: {
             platform: detail.platform,
             generalStatus: detail.row.general_status,
             financialStatus: detail.row.financial_status ?? null,
             shipments: detail.guides,
+            events: detail.wooSaleDispatchEvents,
             payments: null,
             companion: {
               travelsIn: detail.companion.travelsIn?.lends
@@ -1225,7 +1226,7 @@ export function OrderDrawer({
             },
           },
           onCancel: (input) => run(() => detail.platform === "shopify"
-            ? cancelLegacyShopifySale(orderId, input) : detail.guides.some(shipmentHasLeft) ? endWooSalePendingReturn(orderId, input) : cancelWooOrder(orderId, input)),
+            ? cancelLegacyShopifySale(orderId, input) : wooSaleWasDispatched({shipments:detail.guides,events:detail.wooSaleDispatchEvents}) ? endWooSalePendingReturn(orderId, input) : cancelWooOrder(orderId, input)),
         }
       : null;
 

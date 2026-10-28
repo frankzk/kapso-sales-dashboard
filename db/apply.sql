@@ -573,4 +573,6 @@
 \ir migrations/0284_gf_cancel_pre_dispatch_output.sql
 \echo 'Applying 0285_woo_sale_pending_return.sql'
 \ir migrations/0285_woo_sale_pending_return.sql
+\echo 'Applying 0286_woo_sale_after_gf_office_return.sql'
+\ir migrations/0286_woo_sale_after_gf_office_return.sql
 \echo 'Done.'

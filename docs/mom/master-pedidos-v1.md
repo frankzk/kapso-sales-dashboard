@@ -12573,8 +12573,21 @@ completo, rojo si falta alguno). En Despacho del día, la tarjeta
 devoluciones pendientes de cualquier fecha; al tocarla, el recuadro de
 asignar muestra solo «Escanear» y el campo de código para confirmar que cada
 paquete llegó a la oficina (cámara en serie, «Devueltos X de N»), y cada
-lectura hace «Recibir en oficina». Tocarla otra vez vuelve a asignar. En «Reparto y
-liquidación», cada no entregado dice **«Devuelto · fecha hora»** o **«Por
+lectura hace «Recibir en oficina». Tocarla otra vez vuelve a asignar.
+
+**Lectura repetida de una devolución (28-10-2026).** KP200152 ya había sido
+recibido en oficina, pero volver a leer su QR respondía «Ninguno de esos pedidos
+está No entregado dentro de una caja». Ahora se confirma «Ya recibido» solo
+si esa salida tiene evidencia de recepción de despacho con actor, está en
+custodia de la empresa o devuelta y no tiene caja activa ni despacho posterior.
+No se crea otro evento, ni se mueve inventario ni se anula la venta. La
+respuesta identifica las salidas confirmadas para actualizar el avance del
+escáner por salida, también si otra persona ya la recibió. La recepción de una
+ruta solo confirma sus propias cajas. Sin evidencia, o si volvió a salir,
+se conserva el bloqueo. Para terminar una venta WooCommerce después de esa
+recepción se usa §38.18; §38.17 se reserva a paquetes que nunca salieron.
+
+En «Reparto y liquidación», cada no entregado dice **«Devuelto · fecha hora»** o **«Por
 devolver»**. **Hasta la v1.23, «Rechazó el pedido» no se reprogramaba** (0189;
 desde la v1.23 se reprograma como los demás motivos, §9): mientras estaba en
 la caja va a «Por cerrar · Devolución física pendiente»; recibido en oficina,
@@ -19152,6 +19165,9 @@ después de la recepción física y el reingreso apto confirmado por almacén.
 
 En Gestión manual aparece «Terminar venta · retorno pendiente» para un pedido
 WooCommerce con prueba de salida (despacho, transferencia o custodia fuera/devuelta).
+También cuenta una recepción GF `returned_to_office` de esa salida con actor y
+fuente despacho: recibirla para reprogramar borra los sellos operativos actuales,
+pero no el hecho de haber salido.
 Se reutiliza orders.cancel_woo de la organización objetivo y la autorización por
 sesión/RLS, sin ampliar roles. Motivo de la lista y texto de 5–500 caracteres,
 confirmación que nombra el pedido. Sin entrega, dinero, comprobantes pendientes
@@ -19166,6 +19182,18 @@ liquidaciones. La venta queda Anulada en el Master y no admite nuevos envíos,
 escaneos de despacho ni arrastre GF a otro reparto. Un webhook, reporte o override
 logístico no reactiva esta venta. Corregir una venta terminada con stock pendiente
 exige revisión del dueño fuera de este flujo; no se ofrece reactivación automática.
+
+**Recepción anterior a terminar la venta (0286, 28-10-2026).** KP200152 ya había
+vuelto a oficina para reprogramar y quedaba bloqueado entre la anulación de venta
+y la de salida. La transacción incluye esa salida por su recepción histórica.
+Si sigue en custodia empresa, sin caja activa ni transferencia posterior a la
+recepción, la deja devuelta y cancela su solicitud GF con evento propio. Añade
+`return_received` enlazado al evento original, conservando su fecha y actor; el
+payload identifica a quien termina la venta. No sobrescribe la recepción ni el
+reporte del intento. Una repetición no duplica recepción ni venta terminada.
+Las salidas que siguen fuera mantienen su seguimiento. No se repone stock ni se
+cancela WooCommerce al terminar la venta: todavía se exige inventario apto de
+todas las salidas. Instalar 0286 no modifica pedidos existentes.
 
 WooCommerce conserva su estado actual hasta el retorno: su transición nativa a
 cancelled restaura el stock reducido y no debe enviarse mientras la caja está

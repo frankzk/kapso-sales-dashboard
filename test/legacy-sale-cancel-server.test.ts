@@ -43,6 +43,15 @@ beforeEach(() => {
 });
 
 describe("anulación comercial histórica del servidor", () => {
+  it("Woo ya recibido para reprogramar llega al RPC de terminar venta con la evidencia del historial",async()=>{
+    tables.orders![0]!.platform="woocommerce";
+    tables.shipments![0]!.custody_state="empresa";
+    tables.order_events!.push({order_id:"o1",kind:"returned_to_office",shipment_id:"s1",source:"dispatch",actor:"almacen",occurred_at:"2026-10-28T18:51:04Z"});
+    const rpc=vi.fn().mockResolvedValue({error:null}); Object.assign(admin,{rpc});
+    const result=await cancelHistoricalShopifySale({admin,orderId:"o1",userId:"diana",reasonCode:"entrega_no_lograda",reasonText:"No habrá otro intento",requestId:"request-123456",wooReturn:true});
+    expect(result.error).toBeUndefined();
+    expect(rpc).toHaveBeenCalledWith("woo_end_sale_pending_return",expect.objectContaining({p_order_id:"o1",p_actor:"diana"}));
+  });
   it("Woo termina localmente por RPC sin mutar fuente, salidas ni llamar a la tienda",async()=>{
     tables.orders![0]!.platform="woocommerce";
     const rpc=vi.fn().mockResolvedValue({error:null}); Object.assign(admin,{rpc});
