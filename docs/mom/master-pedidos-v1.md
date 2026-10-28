@@ -1708,7 +1708,9 @@ pedido ya tiene una guía activa, anúlala antes de crear otra» — y una salid
 la caja en la calle no se puede anular, así que el pedido quedaba sin ninguna
 acción posible. Pasó con #KP134960 (Tanders) y #KP134416 (Swayp) el 24-09-2026.
 
-Las dos pasan ahora por la misma regla, `puertaDeSalidaAdicional`:
+Tanders y Swayp directa pasan por la misma regla, `puertaDeSalidaAdicional`.
+Aliclik se suma para la creación manual en Lima (owner, 27-10-2026,
+**#KP200077**, con la S01 todavía con Alexis sin reporte):
 
 - **En Lima, otra salida viva pide motivo, no bloquea.** El motivo queda en su
   propio evento (`additional_output_reason`) con las salidas que seguían vivas.
@@ -1724,6 +1726,20 @@ Las dos pasan ahora por la misma regla, `puertaDeSalidaAdicional`:
   una salida de Grupo GF, mandando a buscarla al panel equivocado.
 - Si una de las salidas entrega, las demás siguen vivas y hay que cancelarlas:
   es la tarea urgente de §4.
+- **Aliclik manual en Lima:** una salida de otro courier aún pendiente o en
+  ruta permite preparar la siguiente guía sin esperar el reporte, con motivo
+  obligatorio en la cotización. La salida anterior conserva su estado, ruta y
+  custodia; no se inventa una devolución ni se anula. El motivo de la nueva
+  salida queda en `additional_output_reason`, con actor, guía nueva y las
+  salidas que seguían vivas. Además se guarda en la intención antes del POST,
+  para conservar la justificación aunque Aliclik responda con timeout.
+  Se releen antes de emitir: una entrega recién
+  reportada o una Aliclik activa bloquea; también se conserva el candado de
+  `aliclik_order_requests` y el límite de cinco salidas, incluidas las cerradas.
+  Una «por definir» que se rellena no gasta otra salida. El motivo es interno,
+  separado de la nota al courier. AUTOECOM, pagos, pin, duplicados y permisos
+  conservan sus reglas. El automático no decide ni justifica otra salida;
+  fuera de Lima sigue el bloqueo anterior.
 
 Responsable principal: Daysi. Diana apoya rutas y cotejo.
 

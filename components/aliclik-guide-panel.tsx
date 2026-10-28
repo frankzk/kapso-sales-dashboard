@@ -110,9 +110,11 @@ export function AliclikGuidePanel({
   const [note, setNote] = useState("");
   const [riskExceptionReason, setRiskExceptionReason] = useState("");
   const [pinExceptionReason, setPinExceptionReason] = useState("");
+  const [motivoSalidaAdicional, setMotivoSalidaAdicional] = useState("");
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string; at: "quote" | "create" } | null>(null);
   const [pending, startTransition] = useTransition();
   const uid = useId();
+  useEffect(() => { setMotivoSalidaAdicional(""); }, [orderId]);
   /** Cuántas veces se ha reintentado por "pedido todavía sin dirección". */
   const [retries, setRetries] = useState(0);
   /**
@@ -197,6 +199,7 @@ export function AliclikGuidePanel({
         // Se devuelve el monto que se acaba de ENSEÑAR: el servidor lo recalcula
         // y aborta si cambió entre cotizar y pulsar.
         expectedCollectTotal: preview?.collectTotal ?? null,
+        motivoSalidaAdicional: motivoSalidaAdicional || null,
         riskExceptionReason: riskExceptionReason || null,
         pinExceptionReason: pinExceptionReason || null,
       });
@@ -240,15 +243,19 @@ export function AliclikGuidePanel({
   // comprobar todas las llaves; esto es para no descubrirlo al pulsar.
   const createBlockReason = !preview?.ok
     ? null
-    : preview.writeBlocked
-      ? preview.writeBlocked
-      : !duplicateAllowed
-        ? "Resuelve primero la retención por posible duplicado, arriba."
-        : !riskGate.allowed
-          ? "Justifica la excepción de pago, arriba."
-          : transportId === null
-            ? "Elige una transportadora."
-            : null;
+    : preview.additionalOutput?.blocked
+      ? preview.additionalOutput.message
+      : preview.additionalOutput?.requiresReason && !motivoSalidaAdicional.trim()
+        ? "Escribe el motivo de la salida adicional."
+        : preview.writeBlocked
+          ? preview.writeBlocked
+          : !duplicateAllowed
+            ? "Resuelve primero la retención por posible duplicado, arriba."
+            : !riskGate.allowed
+              ? "Justifica la excepción de pago, arriba."
+              : transportId === null
+                ? "Elige una transportadora."
+                : null;
   const cheapestId = (preview?.couriers ?? [])
     .filter((c) => c.selectable)
     .sort((a, b) => a.deliveryCost - b.deliveryCost)[0]?.transportId;
@@ -626,6 +633,25 @@ export function AliclikGuidePanel({
                   </div>
                 </div>
 
+                {preview.additionalOutput && (
+                  <Banner tone="warn" title={preview.additionalOutput.requiresReason ? "Salida adicional en Lima" : "Revisa las salidas del pedido"}>
+                    <p>{preview.additionalOutput.message}</p>
+                    {preview.additionalOutput.requiresReason && (
+                      <>
+                        <p className="mt-2">La salida anterior sigue activa. Coordina ambas entregas y cancela la pendiente si una ya entrega.</p>
+                        <label className={cn(LABEL, "mt-3")} htmlFor={`${uid}-additional-reason`}>
+                          Motivo de la salida adicional (obligatorio)
+                          <textarea
+                            id={`${uid}-additional-reason`} value={motivoSalidaAdicional}
+                            onChange={(event) => setMotivoSalidaAdicional(event.target.value)}
+                            className={INPUT} rows={2} maxLength={2000}
+                            placeholder="Explica por qué se prepara otra salida mientras la anterior sigue activa."
+                          />
+                        </label>
+                      </>
+                    )}
+                  </Banner>
+                )}
                 <label className={LABEL} htmlFor={`${uid}-note`}>
                   Nota para el courier (opcional)
                   <input id={`${uid}-note`} value={note} onChange={(e) => setNote(e.target.value)} className={INPUT} />
