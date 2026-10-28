@@ -32,6 +32,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { swaypGuiaDeVuelta } from "@/lib/swayp-desde-confirmacion";
 import { writeCourierGuide } from "@/lib/route-output-fill";
 import { isFillableRouteOutput } from "@/lib/shipment-output";
+import { aliclikOutputPolicy, type AliclikExistingOutput } from "@/lib/aliclik-output-policy";
 import { createAdminSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
 import { dispatchFallsOnSunday, expectedDispatchDate } from "@/lib/aliclik-dispatch-date";
@@ -234,11 +235,10 @@ type LiveGuide = {
 };
 
 /**
- * La guía viva que impide crear otra, o null.
+ * La guía viva que impide una creación automática, o null.
  *
- * El pedido no puede tener ya una guía activa. Mismo criterio que
- * `createDirectFenixGuide`: dos guías vivas para un pedido es un paquete
- * duplicado saliendo del almacén.
+ * El automático no justifica salidas adicionales. La creación manual pasa por
+ * `readAliclikOutputPolicy`, que en Lima permite otro courier con motivo.
  * La salida «por definir» NO cuenta: es ESTA caja esperando courier, y la guía
  * se va a escribir encima de ella. Contarla obligaba a anularla para poder
  * emitir la guía — y anularla arrastraba al pedido (#KP127639).
@@ -262,12 +262,32 @@ export async function activeAliclikBlocker(
   return { guide: guide ?? null };
 }
 
+async function readAliclikOutputPolicy(
+  admin: SupabaseClient, ctx: AliclikContext, motivo?: string | null,
+) {
+  const { data, error } = await admin.from("shipments")
+    .select("id,guide_code,output_code,delivery_status,courier,created_via,custody_state,custody_transferred_at,swayp_state,returned_at")
+    .eq("order_id", ctx.row.order_id);
+  if (error) return {
+    ok: false as const, pideMotivo: false, estorban: [],
+    error: `No se pudieron leer las salidas del pedido: ${error.message}`,
+  };
+  const op = ctx.row.macro_operation;
+  const operation = op === "lima" || op === "provincia_cod" || op === "agencia" || op === "desconocida"
+    ? op : classifyOperation(ctx.row);
+  return aliclikOutputPolicy({
+    outputs: (data ?? []) as AliclikExistingOutput[], operation, motivo, manual: !!ctx.userId,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Preview / cotización — NO escribe nada hacia afuera
 // ---------------------------------------------------------------------------
 
 export interface AliclikPreview {
   ok: boolean;
+  /** La cotización sigue disponible, pero emitir otra salida exige esta decisión. */
+  additionalOutput?: { requiresReason: boolean; blocked: boolean; message: string };
   /** Motivo del bloqueo, ya redactado para enseñar. */
   error?: string;
   /** Avisos que no impiden crear. */
@@ -679,6 +699,7 @@ export async function previewAliclikGuideFor(
   const lima = classifyOperation(ctx.row) === "lima" ? limaTransportPolicy(quoted) : null;
   const annotated = lima?.couriers ?? quoted;
   const warnings = lima?.warning ? [...(resolved.warnings ?? []), lima.warning] : resolved.warnings;
+  const outputPolicy = await readAliclikOutputPolicy(admin, ctx);
 
   return {
     ok: true,
@@ -697,6 +718,11 @@ export async function previewAliclikGuideFor(
     coordinate: { lat, lng },
     dispatch: dispatchOutlook(annotated),
     writeBlocked: writeBlockedReason() ?? undefined,
+    additionalOutput: !outputPolicy.ok ? {
+      requiresReason: outputPolicy.pideMotivo,
+      blocked: !outputPolicy.pideMotivo,
+      message: outputPolicy.error,
+    } : undefined,
   };
 }
 
@@ -726,6 +752,8 @@ function dispatchOutlook(
 // ---------------------------------------------------------------------------
 
 export interface CreateGuideInput {
+  /** Justificación interna, auditada, para otra salida en Lima. */
+  motivoSalidaAdicional?: string | null;
   /** transportId del courier elegido en el preview. */
   transportId: number;
   /** Coordenada confirmada por la operadora (par o enlace de Maps). */
@@ -868,14 +896,10 @@ export async function createAliclikGuideFor(
     : null;
   const pinExceptionReason = input.pinExceptionReason?.trim() || null;
 
-  // El pedido no puede tener ya una guía activa: ver `activeAliclikBlocker`.
-  // «No se pudo leer» no autoriza, igual que con los rechazos en la puerta.
-  const live = await activeAliclikBlocker(admin, orderId);
-  if (live.error) return { error: live.error };
-  const activeGuide = live.guide;
-  if (activeGuide) {
-    return { error: `Este pedido ya tiene una guía activa (${activeGuide.guide_code}).` };
-  }
+  // En Lima, otra salida pide motivo. El automático y una Aliclik ya viva
+  // siguen bloqueados; «no se pudo leer» tampoco autoriza.
+  const outputPolicy = await readAliclikOutputPolicy(admin, ctx, input.motivoSalidaAdicional);
+  if (!outputPolicy.ok) return { error: outputPolicy.error + (outputPolicy.pideMotivo ? " Vuelve a cotizar para ver el campo del motivo." : "") };
 
   // Se REVALIDA todo en el servidor. Lo que mandó el navegador es una intención,
   // no un hecho: entre el preview y el clic pudo cambiar el stock, el catálogo o
@@ -953,6 +977,18 @@ export async function createAliclikGuideFor(
   if ("error" in finalDuplicateCheck) return { error: finalDuplicateCheck.error };
   if (!finalDuplicateCheck.hold.allowed) return { error: finalDuplicateCheck.hold.message ?? "El posible duplicado sigue retenido." };
 
+  // Cotizar tarda: se vuelven a leer las salidas antes del candado y del POST.
+  // La evidencia auditada describe las que seguían vivas en esta última lectura.
+  const finalOutputPolicy = await readAliclikOutputPolicy(admin, ctx, input.motivoSalidaAdicional);
+  if (!finalOutputPolicy.ok) return { error: finalOutputPolicy.error + (finalOutputPolicy.pideMotivo ? " Vuelve a cotizar para revisar las salidas." : "") };
+  const additionalOutputEvidence = finalOutputPolicy.motivo ? {
+    motivo: finalOutputPolicy.motivo,
+    salidas_vivas: finalOutputPolicy.estorban.map((output) => ({
+      codigo: output.output_code ?? output.guide_code ?? null,
+      courier: output.courier, estado: output.delivery_status,
+    })),
+  } : null;
+
   // EL CANDADO. Se escribe ANTES del POST: si dos peticiones llegan a la vez,
   // una choca aquí (23505) en lugar de crear dos pedidos reales en Aliclik.
   const { data: intent, error: intentErr } = await admin
@@ -962,7 +998,12 @@ export async function createAliclikGuideFor(
       order_id: orderId,
       modality: "cod",
       status: "pending",
-      request: body as unknown as Record<string, unknown>,
+      // El motivo queda durable ANTES del POST, incluso si Aliclik responde
+      // con timeout. Es metadata interna: `createOrder` recibe solo `body`.
+      request: {
+        ...body,
+        ...(additionalOutputEvidence ? { kapta_additional_output: additionalOutputEvidence } : {}),
+      } as unknown as Record<string, unknown>,
       created_by: ctx.userId,
     })
     .select("id")
@@ -1081,6 +1122,20 @@ export async function createAliclikGuideFor(
 
   const registeredAt = new Date().toISOString();
   await admin.from("order_events").insert([
+    ...(additionalOutputEvidence ? [{
+      store_id: ctx.storeId,
+      order_id: orderId,
+      shipment_id: written.shipmentId,
+      kind: "additional_output_reason",
+      occurred_at: registeredAt,
+      actor: ctx.userId,
+      source: "aliclik",
+      courier: "aliclik",
+      guide_code: orderNumber,
+      reason: additionalOutputEvidence.motivo,
+      note: `Salida adicional por Aliclik con ${finalOutputPolicy.estorban.length} salida(s) todavía viva(s).`,
+      payload: { salidas_vivas: additionalOutputEvidence.salidas_vivas },
+    }] : []),
     {
       store_id: ctx.storeId,
       order_id: orderId,
