@@ -8,6 +8,7 @@ import type { ReproRow } from "@/lib/repro-lima-access";
 import { pendingFilters, pendingGroup, type LimaPendingOrder } from "@/lib/repro-lima-pending";
 import { macroStageLabel, macroSubstageLabel } from "@/lib/order-macro-stage";
 import { reproCourierName } from "@/lib/repro-lima";
+import { programDayLabel } from "@/lib/dispatch-day";
 import { soles, telHref } from "@/lib/rider-contact";
 
 export function LimaPendingFilters({ rows, hidden, onToggle, onReset }: {
@@ -70,6 +71,7 @@ function PendingStage({ row, repro, today }: { row: LimaPendingOrder; repro?: Re
     <div className="space-y-1">
       <div className="flex flex-wrap gap-1"><Badge tone="brand">{macroStageLabel(row.stage)}</Badge><Badge wrap>{row.substage ? macroSubstageLabel(row.substage) : "Sin subetapa"}</Badge></div>
       {repro && <div className="flex flex-wrap gap-1"><ReproRowChips row={repro} today={today} /></div>}
+      {!repro && row.programmedFor && <Badge tone={row.programmedFor < today ? "warn" : "info"} wrap>{`Programado ${programDayLabel(row.programmedFor)}${row.programmedFor < today ? " · vencido" : ""}`}</Badge>}
     </div>
   );
 }

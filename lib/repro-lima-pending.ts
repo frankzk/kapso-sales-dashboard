@@ -2,36 +2,81 @@
 // ver un pendiente no crea un caso de entrega fallida ni autoriza otra salida.
 import { MACRO_SUBSTAGES_BY_STAGE, macroStageLabel, macroSubstageLabel, type OrderMacroStage } from "@/lib/order-macro-stage";
 import { tandersReleaseCutoff } from "@/lib/gf-tanders-review";
-import { REPRO_LISTS, type ReproList } from "@/lib/repro-lima";
+import type { ReproList } from "@/lib/repro-lima";
+import { QUEUE_SEGMENTS, QUEUE_SEGMENT_LABEL, queueSegment, type QueueSegment } from "@/lib/dispatch-day";
 
-export type LimaAttentionFilter = "todos" | ReproList;
-type AttentionCase = { orderId: string; list: ReproList };
+export type LimaAttentionFilter = "todos" | "reprogramados" | QueueSegment | "llamar_despues" | "cerrados";
+type AttentionCase = {
+  orderId: string; list: ReproList;
+  agreement?: { agreedOn: string } | null;
+  program?: { scheduledFor: string } | null;
+};
+
+export const LIMA_QUEUE_CARDS: readonly { key: Exclude<LimaAttentionFilter, "todos" | "llamar_despues" | "cerrados">; label: string; hint: string; empty: string }[] = [
+  { key: "reprogramados", label: "Reprogramados", hint: "Con una nueva fecha acordada y vigente en Repro Lima. También aparecen en Hoy, Mañana o Después según esa fecha.", empty: "No hay pedidos con una nueva fecha acordada con estos filtros." },
+  { key: "programados_hoy", label: "Programados para hoy", hint: QUEUE_SEGMENT_LABEL.programados_hoy.hint, empty: "No hay pedidos programados para hoy con estos filtros." },
+  { key: "programados_manana", label: "Programados para mañana", hint: QUEUE_SEGMENT_LABEL.programados_manana.hint, empty: "No hay pedidos programados para mañana con estos filtros." },
+  { key: "nunca_salieron", label: "Nunca salieron", hint: QUEUE_SEGMENT_LABEL.nunca_salieron.hint, empty: "No hay pedidos recientes sin salida registrada con estos filtros." },
+  { key: "ya_salieron", label: "Ya salieron", hint: "Con al menos una salida a reparto registrada y sin una nueva fecha pendiente. La situación indica si sigue con el courier o ya retornó.", empty: "No hay pedidos con una salida previa y sin nueva fecha con estos filtros." },
+  { key: "mas_de_30", label: "Más de 30 días", hint: QUEUE_SEGMENT_LABEL.mas_de_30.hint, empty: "No hay pedidos de más de 30 días sin salida registrada con estos filtros." },
+  { key: "programados_despues", label: "Programados para después", hint: QUEUE_SEGMENT_LABEL.programados_despues.hint, empty: "No hay pedidos programados para después de mañana con estos filtros." },
+];
+
+export const LIMA_FOLLOWUP_FILTERS = [
+  { key: "llamar_despues" as const, label: "Llamar después", empty: "Nadie pidió que lo llamen después." },
+  { key: "cerrados" as const, label: "Cerrados · esperan anulación", empty: "Ningún caso cerrado espera la anulación." },
+];
 
 /** Las tarjetas filtran una sola cola. Los pedidos sin caso siguen en Todos;
  * no se les inventa un resultado de llamada ni se cambia su macroestado. */
 export function attentionFilter(value: string | null): LimaAttentionFilter {
-  return REPRO_LISTS.includes(value as ReproList) ? value as ReproList : "todos";
+  if (value === "programados") return "reprogramados";
+  return [...LIMA_QUEUE_CARDS, ...LIMA_FOLLOWUP_FILTERS].some((c) => c.key === value) ? value as LimaAttentionFilter : "todos";
 }
 
-export function attentionRows(rows: readonly LimaPendingOrder[], cases: readonly AttentionCase[], filter: LimaAttentionFilter): LimaPendingOrder[] {
-  if (filter === "todos") return [...rows];
+/** La fecha acordada vigente manda sobre un programa anterior que aún no se
+ * actualizó. Sin acuerdo vigente, se usa solo una programación persistida. */
+export function limaScheduledFor(row: LimaPendingOrder, c?: AttentionCase): string | null {
+  return (c?.list === "programados" ? c.agreement?.agreedOn : null) ?? row.programmedFor ?? c?.program?.scheduledFor ?? null;
+}
+
+export function limaQueueSegment(row: LimaPendingOrder, today: string, c?: AttentionCase): QueueSegment {
+  return queueSegment({ programmedFor: limaScheduledFor(row, c), hasPriorDispatch: row.hasPriorDispatch, createdAt: row.createdAt }, today);
+}
+
+export function attentionRows(rows: readonly LimaPendingOrder[], cases: readonly AttentionCase[], filter: LimaAttentionFilter, today: string): LimaPendingOrder[] {
+  const caseById = new Map(cases.map((c) => [c.orderId, c]));
+  if (filter === "todos" || QUEUE_SEGMENTS.includes(filter as QueueSegment)) {
+    // Una clasificación por pedido: el comparador no reconstruye fechas de
+    // Lima miles de veces cuando la cola amplia tiene más de 2000 filas.
+    return rows.map((row) => {
+      const c = caseById.get(row.orderId);
+      const segment = limaQueueSegment(row, today, c);
+      return { row, segment, rank: QUEUE_SEGMENTS.indexOf(segment), day: limaScheduledFor(row, c) ?? "", created: Date.parse(row.createdAt ?? "") || 0 };
+    }).filter((r) => filter === "todos" || r.segment === filter)
+      .sort((a, b) => a.rank - b.rank || a.day.localeCompare(b.day) || b.created - a.created)
+      .map((r) => r.row);
+  }
   const byId = new Map(rows.map((row) => [row.orderId, row]));
   // La carga de casos ya aplica sortRepro: al filtrar se conservan el orden de
   // llamada y las prioridades de acuerdos, sin reconstruir otra tabla.
   return cases.flatMap((c) => {
     const row = byId.get(c.orderId);
-    if (!row || c.list !== filter) return [];
+    const matches = filter === "reprogramados" ? c.list === "programados" && Boolean(c.agreement?.agreedOn) : c.list === filter;
+    if (!row || !matches) return [];
     byId.delete(c.orderId);
     return [row];
   });
 }
 
-export function attentionCounts(rows: readonly LimaPendingOrder[], cases: readonly AttentionCase[]): Record<LimaAttentionFilter, number> {
-  const counts = { todos: rows.length, por_decidir: 0, llamar_despues: 0, programados: 0, cerrados: 0 };
-  const byId = new Map(cases.map((row) => [row.orderId, row.list]));
+export function attentionCounts(rows: readonly LimaPendingOrder[], cases: readonly AttentionCase[], today: string): Record<LimaAttentionFilter, number> {
+  const counts: Record<LimaAttentionFilter, number> = { todos: rows.length, reprogramados: 0, programados_hoy: 0, programados_manana: 0, nunca_salieron: 0, ya_salieron: 0, mas_de_30: 0, programados_despues: 0, llamar_despues: 0, cerrados: 0 };
+  const byId = new Map(cases.map((row) => [row.orderId, row]));
   for (const row of rows) {
-    const list = byId.get(row.orderId);
-    if (list) counts[list] += 1;
+    const c = byId.get(row.orderId);
+    counts[limaQueueSegment(row, today, c)] += 1;
+    if (c?.list === "programados" && c.agreement?.agreedOn) counts.reprogramados += 1;
+    if (c?.list === "llamar_despues" || c?.list === "cerrados") counts[c.list] += 1;
   }
   return counts;
 }
@@ -54,6 +99,9 @@ export interface LimaPendingOrder {
   courier: string | null;
   dispatchedAt: string | null;
   attempts: number;
+  hasPriorDispatch: boolean;
+  lastDepartureAt: string | null;
+  programmedFor: string | null;
 }
 export interface LimaPendingFilter {
   stage: LimaPendingStage;
@@ -116,7 +164,7 @@ export function pendingGroup(row: LimaPendingOrder, today: string): { label: str
     row.dispatchedAt && Number.isFinite(Date.parse(row.dispatchedAt)) &&
     Date.parse(row.dispatchedAt) < Date.parse(`${tandersReleaseCutoff(today)}T00:00:00-05:00`);
   if (tandersDue) return { label: "Antiguo por revisar", detail: "Tanders: despacho anterior sin cierre. Confirma su reporte y dónde está el paquete." };
-  if (!row.dispatchedAt && row.attempts === 0 && row.stage !== "en_curso") {
+  if (!row.hasPriorDispatch && row.stage !== "en_curso") {
     return { label: "Pendiente de primer despacho", detail: "Confirma los datos y la fecha antes de despachar." };
   }
   return { label: "Seguimiento de entrega", detail: "Revisa el estado del courier y la ubicación del paquete antes de otra salida." };

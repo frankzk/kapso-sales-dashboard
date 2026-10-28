@@ -6,41 +6,18 @@
 import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/components/ui";
-import { Badge, Banner, FIELD, FilterPill, OpsButton, StatusCard } from "@/components/ops-ui";
+import { Badge, Banner, FIELD, FilterPill, OpsButton, StatusCard, ChoiceChip } from "@/components/ops-ui";
 import { Sheet } from "@/components/filter-sheet";
 import { IconCheck, IconSearch, IconX } from "@/components/icons";
 import { OrderLink } from "@/components/order-link";
 import type { ReproLimaData, ReproRow } from "@/lib/repro-lima-access";
-import { cutoffNotice, isProblemState, REPRO_LISTS, type ReproList } from "@/lib/repro-lima";
+import { cutoffNotice } from "@/lib/repro-lima";
+import { limaClock } from "@/lib/grupo-gf-courier";
 import { ReproLimaSheet, type ReproSaved } from "@/components/repro-lima-sheet";
 import { LimaPendingFilters, LimaPendingList } from "@/components/repro-lima-pending";
-import { attentionCounts, attentionFilter, attentionRows, pendingKey, pendingMatches, togglePendingKeys, type LimaAttentionFilter, type LimaPendingOrder } from "@/lib/repro-lima-pending";
+import { LIMA_QUEUE_CARDS, LIMA_FOLLOWUP_FILTERS, attentionCounts, attentionFilter, attentionRows, pendingKey, pendingMatches, togglePendingKeys, type LimaAttentionFilter, type LimaPendingOrder } from "@/lib/repro-lima-pending";
 
 const FOCUS_REFRESH_MS = 20_000;
-
-/** Las cuatro tarjetas: etiqueta y lo que dice su lista vacía (§6). */
-const LIST_CARD: Record<ReproList, { label: string; hint: string; empty: string }> = {
-  por_decidir: {
-    label: "Por decidir",
-    hint: "Entregas fallidas sin una decisión vigente. Primero lo que necesita atención.",
-    empty: "No hay pedidos pendientes de una decisión con estos filtros.",
-  },
-  llamar_despues: {
-    label: "Llamar después",
-    hint: "El cliente pidió que lo llamen a otra hora. Por la hora de la llamada.",
-    empty: "Nadie pidió que lo llamen después.",
-  },
-  programados: {
-    label: "Programados",
-    hint: "Con acuerdo vigente o programados en Grupo GF. Primero los que hay que revisar.",
-    empty: "Todavía no hay acuerdos.",
-  },
-  cerrados: {
-    label: "Cerrados · esperan anulación",
-    hint: "«Desarmar y cerrar» del intento vigente: el pedido sigue en la etapa hasta que la tienda anule la venta.",
-    empty: "Ningún caso cerrado espera la anulación.",
-  },
-};
 
 type OpenSheet = {
   row: ReproRow;
@@ -65,18 +42,19 @@ export function ReproLimaBoard({ data, pending }: { data: ReproLimaData; pending
   const [open, setOpen] = useState<OpenSheet | null>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const lastRefresh = useRef(0);
+  const [now, setNow] = useState(() => new Date(data.nowIso));
+  const today = limaClock(now).day;
   const hiddenParam = searchParams.getAll("ocultar").join("|");
   const hidden = useMemo(() => new Set(hiddenParam ? hiddenParam.split("|") : []), [hiddenParam]);
   const pendingStore = useMemo(() => pending.filter((row) => !store || row.storeId === store), [pending, store]);
   const scoped = useMemo(() => pendingStore.filter((row) => !hidden.has(pendingKey(row)) && pendingMatches(row, query)), [pendingStore, hidden, query]);
-  const counts = useMemo(() => attentionCounts(scoped, data.rows), [scoped, data.rows]);
-  const inQueue = useMemo(() => attentionRows(scoped, data.rows, list), [scoped, data.rows, list]);
+  const counts = useMemo(() => attentionCounts(scoped, data.rows, today), [scoped, data.rows, today]);
+  const inQueue = useMemo(() => attentionRows(scoped, data.rows, list, today), [scoped, data.rows, list, today]);
   const caseById = useMemo(() => new Map(data.rows.map((row) => [row.orderId, row])), [data.rows]);
   const inList = useMemo(() => inQueue.flatMap((row) => {
     const c = caseById.get(row.orderId);
     return c ? [c] : [];
   }), [inQueue, caseById]);
-  const toReview = inList.filter((row) => row.list === "programados" && isProblemState(row.state.kind)).length;
   const storeName = data.stores.find((s) => s.id === store)?.name ?? null;
 
   function replaceParams(params: URLSearchParams) {
@@ -106,7 +84,6 @@ export function ReproLimaBoard({ data, pending }: { data: ReproLimaData; pending
   }, [searchParams]);
 
   // El reloj del corte: empieza en la hora del servidor (sin desajuste al hidratar).
-  const [now, setNow] = useState(() => new Date(data.nowIso));
   useEffect(() => {
     setNow(new Date());
     const timer = window.setInterval(() => setNow(new Date()), 30_000);
@@ -182,9 +159,10 @@ export function ReproLimaBoard({ data, pending }: { data: ReproLimaData; pending
     return <OpsButton size={size} className="pointer-coarse:h-11" onClick={() => openRow(row, "edit")}>Atender</OpsButton>;
   }
 
+  const selectedGroup = [...LIMA_QUEUE_CARDS, ...LIMA_FOLLOWUP_FILTERS].find((c) => c.key === list);
   const emptyText = query.trim()
     ? `Ningún pedido coincide con «${query.trim()}».`
-    : list === "todos" ? "No hay pedidos con estos filtros. Activa otros macroestados o quita la búsqueda." : LIST_CARD[list].empty;
+    : list === "todos" ? "No hay pedidos con estos filtros. Activa otros macroestados o quita la búsqueda." : selectedGroup?.empty ?? "No hay pedidos con estos filtros.";
 
   return (
     <div className="space-y-4">
@@ -199,19 +177,10 @@ export function ReproLimaBoard({ data, pending }: { data: ReproLimaData; pending
         </div>
       </header>
 
-      <div role="group" aria-label="Filtros de atención" className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5 [&_button>span:first-child]:whitespace-normal [&_button>span:last-child]:mt-auto">
-        <div className="col-span-2 flex sm:col-span-1 [&>button]:flex-1">
-          <StatusCard label="Todos · por entregar" value={counts.todos} hint="Todos los pendientes de entrega de Lima, con Atender en cada fila." active={list === "todos"} onClick={() => chooseList("todos")} />
-        </div>
-        {REPRO_LISTS.map((l) => (
-          <StatusCard
-            key={l}
-            label={l === "programados" && toReview > 0 ? `Programados · ${toReview} a revisar` : LIST_CARD[l].label}
-            value={counts[l]}
-            hint={LIST_CARD[l].hint}
-            active={list === l}
-            onClick={() => chooseList(l)}
-          />
+      <div role="group" aria-label="Filtros de atención" className="grid grid-cols-2 gap-2 sm:grid-cols-4 2xl:grid-cols-8 [&>button>span:first-child]:whitespace-normal [&>button>span:last-child]:mt-auto">
+        <StatusCard label="Todos · por entregar" value={counts.todos} hint="Todos los pendientes de entrega de Lima, con Atender en cada fila." active={list === "todos"} onClick={() => chooseList("todos")} />
+        {LIMA_QUEUE_CARDS.map((card) => (
+          <StatusCard key={card.key} label={card.label} value={counts[card.key]} hint={card.hint} active={list === card.key} onClick={() => chooseList(list === card.key ? "todos" : card.key)} />
         ))}
       </div>
 
@@ -237,7 +206,7 @@ export function ReproLimaBoard({ data, pending }: { data: ReproLimaData; pending
         </Banner>
       )}
 
-      <section aria-label={list === "todos" ? "Todos los pendientes de Lima" : LIST_CARD[list].label} className="rounded-lg bg-white shadow-control ring-1 ring-line">
+      <section aria-label={list === "todos" ? "Todos los pendientes de Lima" : selectedGroup?.label ?? "Todos los pendientes de Lima"} className="rounded-lg bg-white shadow-control ring-1 ring-line">
         <div className="flex flex-wrap items-center gap-2 px-4 py-3">
           <label className="relative w-full sm:w-72">
             <span className="sr-only">Buscar pedido, cliente o teléfono</span>
@@ -245,6 +214,11 @@ export function ReproLimaBoard({ data, pending }: { data: ReproLimaData; pending
             <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Pedido, cliente o teléfono" className={cn(FIELD, "h-8 pl-8 pointer-coarse:h-11")} />
           </label>
           {data.stores.length > 1 && <FilterPill ref={storePill} label="Tienda" value={storeName} expanded={storeSheet} onClick={() => setStoreSheet((v) => !v)} onClear={() => setStore("")} />}
+          <div role="group" aria-label="Seguimiento de llamadas y cierres" className="flex flex-wrap items-center gap-1.5">
+            {LIMA_FOLLOWUP_FILTERS.filter((f) => counts[f.key] > 0 || list === f.key).map((f) => (
+              <ChoiceChip key={f.key} label={f.label} count={counts[f.key]} active={list === f.key} onClick={() => chooseList(list === f.key ? "todos" : f.key)} />
+            ))}
+          </div>
           <p className="w-full text-[13px] tabular-nums text-ink-500 lg:ml-auto lg:w-auto" aria-live="polite">
             <b className="font-semibold text-ink-900">{inQueue.length.toLocaleString("es-PE")}</b> de {pendingStore.length.toLocaleString("es-PE")} pendientes de entrega
           </p>
@@ -261,7 +235,7 @@ export function ReproLimaBoard({ data, pending }: { data: ReproLimaData; pending
             </div>
           </Sheet>
         )}
-        <LimaPendingList key={`${list}:${store}:${query}:${hiddenParam}`} rows={inQueue} reproRows={data.rows} today={data.today} renderActions={rowActions} emptyText={emptyText} />
+        <LimaPendingList key={`${list}:${store}:${query}:${hiddenParam}`} rows={inQueue} reproRows={data.rows} today={today} renderActions={rowActions} emptyText={emptyText} />
       </section>
 
       {open && sheetRow && (

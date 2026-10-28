@@ -41,6 +41,7 @@ const loading = read("app/dashboard/pedidos/repro-lima/loading.tsx");
 const board = read("components/repro-lima-board.tsx");
 const todos = read("components/repro-lima-todos.tsx");
 const pendingUI = read("components/repro-lima-pending.tsx");
+const pendingRules = read("lib/repro-lima-pending.ts");
 const sheet = read("components/repro-lima-sheet.tsx");
 const sidebar = read("components/sidebar.tsx");
 const shell = read("components/dashboard-shell.tsx");
@@ -407,9 +408,9 @@ describe("el tablero (E31, E33)", () => {
     expect(board).not.toContain("<ReproLimaTodos");
     expect(board).not.toContain("<table");
     expect(board).not.toContain("showView(");
-    expect(board.indexOf('label="Todos · por entregar"')).toBeLessThan(board.indexOf("{REPRO_LISTS.map((l) => ("));
+    expect(board.indexOf('label="Todos · por entregar"')).toBeLessThan(board.indexOf("{LIMA_QUEUE_CARDS.map((card) => ("));
     expect(board).toContain('active={list === "todos"}');
-    expect(board).toContain('onClick={() => chooseList(l)}');
+    expect(board).toContain('onClick={() => chooseList(list === card.key ? "todos" : card.key)}');
     expect(board).toContain('params.delete("vista")');
     expect(board).toContain('searchParams.get("atencion")');
     expect(board).not.toMatch(/router\.(push|replace)\(/);
@@ -446,12 +447,12 @@ describe("el tablero (E31, E33)", () => {
 
   it("las listas vacías y la búsqueda sin resultado lo dicen", () => {
     for (const text of [
-      "No hay pedidos pendientes de una decisión con estos filtros.",
+      "No hay pedidos programados para hoy con estos filtros.",
       "Nadie pidió que lo llamen después.",
-      "Todavía no hay acuerdos.",
+      "No hay pedidos con una nueva fecha acordada con estos filtros.",
       "Ningún caso cerrado espera la anulación.",
       "`Ningún pedido coincide con «${query.trim()}».`",
-    ]) expect(board).toContain(text);
+    ]) expect(board + pendingRules).toContain(text);
   });
 
   it("se relee tras cada acción y al volver a la pestaña", () => {
