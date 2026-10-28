@@ -8408,6 +8408,25 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   aunque cubra** — un duplicado no es dinero nuevo. Lo mismo vale para el
   indicador de estado: si lo validado cubre el total, es `pago_completo`, y de
   ahí cuelgan la subetapa y el monto que se manda al courier.
+- **Monto obligatorio para validar (28-10-2026, KP200188).** Se había aprobado
+  manualmente un adelanto con operación pero sin importe: ni la foto ni su lectura
+  aportaban monto, y el Master sumaba S/ 0.00. Una validación exige un importe
+  finito mayor que cero; operación y cuenta receptora no sustituyen ese dato.
+  La misma guarda rige en validatePayment, su núcleo compartido con Flow/estado
+  de cuenta y los botones del Master y Validar pagos. El UPDATE condiciona el
+  monto leído para no firmar un pago cuyo importe cambió entretanto. Completar
+  una operación no saca de información incompleta si todavía falta el monto.
+  Completar solo el monto conserva la operación y fecha ya registradas.
+  La excepción administrativa de receptor tampoco dispensa del importe.
+- La migración 0287 protege cualquier INSERT/UPDATE validado con una restricción
+  NOT VALID: no inventa importes ni reescribe pagos históricos al instalarse.
+  Un registro antiguo validado sin monto se muestra «Validado sin monto»;
+  quien tiene payments.validate puede enviarlo a Observados con motivo y el
+  historial normal, después pedir la constancia legible y completar el dato.
+  Cambiar el importe de un pago ya validado exige enviarlo primero a Observados
+  y volver a validarlo; completar datos no firma un monto nuevo por sí solo.
+  Nunca se completa usando el total del pedido o el mínimo del adelanto.
+  Los historiales de validación previa se conservan; no hay reclasificación masiva.
 - Si el pago es menor al requerido, la clave permanece bloqueada y se alerta al
   asesor.
 - Solo Frankz ejecuta reembolsos.

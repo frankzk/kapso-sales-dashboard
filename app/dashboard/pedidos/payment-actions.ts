@@ -1,4 +1,5 @@
 "use server";
+import { hasPositivePaymentAmount, MISSING_PAYMENT_AMOUNT } from "@/lib/payment-amount";
 
 // Pagos Yape y clave de recojo de los envíos por Shalom.
 //
@@ -767,7 +768,7 @@ export async function registerPayment(
           vision.fields.recipientCheck === "mismatch" ||
           identityDiscrepancy || dateVerdict.tooEarly
         ? "revision_admin"
-        : !operation || (vision.ok && !vision.isVoucher)
+        : !operation || !hasPositivePaymentAmount(amount) || (vision.ok && !vision.isVoucher)
           ? "info_incompleta"
           : "pendiente_revision";
 
@@ -854,6 +855,7 @@ export async function registerPayment(
         order_id: orderId,
         kind: input.kind,
         validation_status: "pendiente_revision",
+        amount: amount ?? null,
         vision: row.vision,
       },
       who: { storeId: ctx.storeId, actor: null, source: "flow" },
@@ -946,7 +948,7 @@ async function loadPayment(paymentId: string) {
   const { data } = await admin
     .from("order_payments")
     .select(
-      "id,order_id,store_id,kind,validation_status,operation_number," +
+      "id,order_id,store_id,kind,amount,validation_status,operation_number," +
         "operation_completed_by,vision,notes,registered_at",
     )
     .eq("id", paymentId)
@@ -958,6 +960,7 @@ async function loadPayment(paymentId: string) {
         store_id: string;
         kind: string;
         validation_status: string;
+        amount: number | null;
         operation_number: string | null;
         /** Quién lo transcribió a mano; nulo si lo leyó la visión. */
         operation_completed_by: string | null;
@@ -1030,6 +1033,7 @@ export async function validatePayment(
         "con «Corregir pago».",
     };
   }
+  if(!hasPositivePaymentAmount(payment.amount))return {error:MISSING_PAYMENT_AMOUNT};
   // CUATRO OJOS SOBRE EL DATO QUE DETECTA DUPLICADOS. Un nº de operación
   // transcrito a mano puede llevar un dígito cambiado, y eso no falla el día
   // que se escribe: el índice único no choca con nada porque el número que se
@@ -1632,7 +1636,11 @@ export async function completePaymentData(
     // visión o no hay nada», y no deja a alguien atado a un dato que ya no está.
     patch.operation_completed_by = operation ? ctx.userId : null;
   }
-  if (input.amount !== undefined) patch.amount = input.amount;
+  if (input.amount !== undefined) {
+    if(input.amount!==null && !hasPositivePaymentAmount(input.amount))return {error:"El monto debe ser mayor que S/ 0.00."};
+    if(payment.validation_status==="validado" && (input.amount===null || Number(input.amount)!==Number(payment.amount)))return {error:"Envía el pago a Observados antes de cambiar el monto de un pago validado. Después deberá validarse nuevamente."};
+    patch.amount = input.amount;
+  }
   if (input.paidAt !== undefined) patch.paid_at = input.paidAt;
   if (input.payerName !== undefined) patch.payer_name = input.payerName?.trim() || null;
   if (input.payerPhone !== undefined) patch.payer_phone = normalizePhone(input.payerPhone);
@@ -1640,7 +1648,7 @@ export async function completePaymentData(
 
   // Completar el nº de operación desbloquea la validación: el pago vuelve a la
   // cola normal en vez de quedarse en "información incompleta".
-  if (operation && payment.validation_status === "info_incompleta") {
+  if ((operation || payment.operation_number) && hasPositivePaymentAmount(input.amount === undefined ? payment.amount : input.amount) && payment.validation_status === "info_incompleta") {
     patch.validation_status = "pendiente_revision";
   }
 

@@ -297,4 +297,6 @@ $PSQL -f "$ROOT/scripts/sql/gf_cancel_output_smoke.sql"
 
 echo "▶ WooCommerce venta terminada con retorno pendiente (0285): fuente intacta, recepción e inventario, un turno, recuperación y recepción GF"
 $PSQL -f "$ROOT/scripts/sql/woo_sale_return_smoke.sql"
+echo "▶ Pago validado: monto positivo obligatorio (0287), incompletos y retiro de validación"
+$PSQL -f "$ROOT/scripts/sql/payment_positive_amount_smoke.sql"
 echo "✅ DB verification passed."

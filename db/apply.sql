@@ -575,4 +575,6 @@
 \ir migrations/0285_woo_sale_pending_return.sql
 \echo 'Applying 0286_woo_sale_after_gf_office_return.sql'
 \ir migrations/0286_woo_sale_after_gf_office_return.sql
+\echo 'Applying 0287_validated_payment_positive_amount.sql'
+\ir migrations/0287_validated_payment_positive_amount.sql
 \echo 'Done.'
