@@ -90,6 +90,17 @@ describe("venta histórica de Shopify terminada en Kapta", () => {
     expect(macro([returned], events).reasons).toContain("pendiente_liquidacion");
     expect(macro([returned], [...events, { kind: "liquidation_closed", occurred_at: after }]).stage).toBe("finalizado");
   });
+  it("Agencia conserva su cierre por inventario, sin inventar una liquidación de reparto", () => {
+    const returned = { ...output, courier: "shalom", delivery_status: "anulado", custody_state: "devuelto", returned_at: after };
+    const result = resolveMacroStage({
+      order: { ...order, coverage: "agencia" } as unknown as MacroOrderSnapshot,
+      guides: [returned] as unknown as MacroGuideSnapshot[],
+      events: [cancel, { kind: "inventory_reconciled", occurred_at: after, shipment_id: "s1" }],
+      legacy: { general: "anulado", operational: "anulado", since: at }, paymentState: null,
+    });
+    expect(result.reasons).not.toContain("pendiente_liquidacion");
+    expect(result.stage).toBe("finalizado");
+  });
   it("la ficha explica que termina la venta sin prometer devolución ni tocar Shopify", () => {
     const html = renderToStaticMarkup(createElement(WooCancelZone, {
       mode: "shopify_history", orderName: "#AUR177555", facts, pending: false, onCancel: async () => true,

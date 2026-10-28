@@ -1030,7 +1030,7 @@ function closingReasons(input: ResolveMacroStageInput): MacroSubstage[] {
     legacy.general === "entregado" && operation !== "agencia" && pagadoDirectoSinCourier(input);
   const liquidationClosed = latestEvent(events, ["liquidation_closed"]);
   // Cancelar la venta no liquida los fletes de una caja que sí salió.
-  if (commercialCancelled && guides.some(hasExternalCustody) && !liquidationClosed &&
+  if (commercialCancelled && operation !== "agencia" && guides.some(hasExternalCustody) && !liquidationClosed &&
       !reasons.includes("liquidacion_observada")) reasons.push("pendiente_liquidacion");
   if (
     legacy.general === "entregado" &&

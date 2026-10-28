@@ -18871,7 +18871,8 @@ no se crea un pedido en WooCommerce ni se toca el original de Shopify.
   calle, en retorno o ya devuelta. Una salida viva conserva su estado y debe
   cancelarse por su flujo propio. El Master sigue **Por cerrar** mientras haya
   salida activa, devolución física, inventario, reembolso u otro pendiente.
-  Si la caja salió, su liquidación sigue pendiente hasta `liquidation_closed`;
+  En Lima y Provincia COD, si la caja salió, su liquidación sigue pendiente
+  hasta `liquidation_closed`; Agencia conserva su cierre propio de §12.
   recibir e inventariar la caja no liquida el flete. La anulación comercial no
   abre otra ventana de recuperación o reintentos.
 - **No se acepta una entrega ya registrada:** se comprueban el Master, las
