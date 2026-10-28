@@ -15,6 +15,7 @@ import { loadAliclikDuplicateHold } from "@/lib/aliclik-duplicate-access";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
+import { legacySaleSendBlock } from "@/lib/legacy-sale-cancel-access";
 import { getMasterPermissions, hasOrgPermission } from "@/lib/permissions-access";
 import { getCurrentUser } from "@/lib/access";
 import { orderPlatformOf } from "@/lib/shipment-order-capture";
@@ -442,6 +443,8 @@ export async function createManualRouteOutput(
   if (dispatchDate < limaTodayKey()) return { error: "La fecha de salida no puede estar en el pasado." };
 
   const admin = createAdminSupabase();
+  const saleBlock = await legacySaleSendBlock(admin, orderId);
+  if (saleBlock) return { error: saleBlock };
   // Las salidas se leen ANTES del cierre a propósito: para saber si un pedido
   // cerrado merece otro intento hay que preguntarle a su guía POR QUÉ se cerró.
   const { data: existing, error: existingError } = await admin
@@ -2420,6 +2423,8 @@ export async function registerClosureAction(
         loadClosureGfDeliveries(admin, orderId, shipmentRows),
         loadShopifyCancelled(admin, orderId, ctx.row.general_status),
       ]);
+      const commercialBlock = await legacySaleSendBlock(admin, orderId);
+      if (commercialBlock) return { error: `${commercialBlock} Resuelve las salidas, retornos y liquidaciones por sus flujos antes de finalizar.` };
       const gfBlock = gfOpenRouteBlock(shipmentRows, deliveries, { cancelledInShopify });
       return { error: gfBlock ? gfOpenRouteError(gfBlock) : ACTIVE_OUTPUTS_ERROR };
     }

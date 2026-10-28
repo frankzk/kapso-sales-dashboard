@@ -276,7 +276,7 @@ describe("el motivo es obligatorio: de la lista y con texto", () => {
   it("quién puede: «Anular pedidos de WooCommerce», owner y admin por su acceso", () => {
     expect(WOO_CANCEL_PERMISSION).toBe("orders.cancel_woo");
     expect(isPermission(WOO_CANCEL_PERMISSION)).toBe(true);
-    expect(PERMISSION_LABEL[WOO_CANCEL_PERMISSION]).toBe("Anular pedidos de WooCommerce");
+    expect(PERMISSION_LABEL[WOO_CANCEL_PERMISSION]).toBe("Anular pedidos");
     // Nadie pierde lo que tenía ayer con `master.set_status`.
     expect(permissionsFor(["owner"]).has(WOO_CANCEL_PERMISSION)).toBe(true);
     expect(permissionsFor(["admin"]).has(WOO_CANCEL_PERMISSION)).toBe(true);

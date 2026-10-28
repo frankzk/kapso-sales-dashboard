@@ -34,6 +34,7 @@ import { writeCourierGuide } from "@/lib/route-output-fill";
 import { isFillableRouteOutput } from "@/lib/shipment-output";
 import { aliclikOutputPolicy, type AliclikExistingOutput } from "@/lib/aliclik-output-policy";
 import { createAdminSupabase } from "@/lib/db";
+import { legacySaleSendBlock } from "@/lib/legacy-sale-cancel-access";
 import { env } from "@/lib/env";
 import { dispatchFallsOnSunday, expectedDispatchDate } from "@/lib/aliclik-dispatch-date";
 import { getStoreCreds } from "@/lib/ingest";
@@ -849,6 +850,8 @@ export async function createAliclikGuideFor(
   const orderId = ctx.row.order_id;
 
   const admin = createAdminSupabase();
+  const saleBlock = await legacySaleSendBlock(admin, orderId);
+  if (saleBlock) return { error: saleBlock };
   const confirmationBrief = await getOrderConfirmationBrief(orderId, scope);
   if (!confirmationBrief) {
     return { error: "No se pudo verificar el historial del cliente antes de crear la guía." };
@@ -979,6 +982,8 @@ export async function createAliclikGuideFor(
 
   // Cotizar tarda: se vuelven a leer las salidas antes del candado y del POST.
   // La evidencia auditada describe las que seguían vivas en esta última lectura.
+  const finalSaleBlock = await legacySaleSendBlock(admin, orderId);
+  if (finalSaleBlock) return { error: finalSaleBlock };
   const finalOutputPolicy = await readAliclikOutputPolicy(admin, ctx, input.motivoSalidaAdicional);
   if (!finalOutputPolicy.ok) return { error: finalOutputPolicy.error + (finalOutputPolicy.pideMotivo ? " Vuelve a cotizar para revisar las salidas." : "") };
   const additionalOutputEvidence = finalOutputPolicy.motivo ? {

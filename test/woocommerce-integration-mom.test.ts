@@ -138,7 +138,8 @@ describe("MOM §38.12", () => {
     // 38.14: la revisión de los webhooks de WooCommerce
     // (test/woocommerce-webhooks-health.test.ts).
     // 38.15: anular un pedido de WooCommerce desde Kapta (test/woo-cancel.test.ts).
-    expect(heads.at(-1)).toBe(15);
+    // 38.16: venta histórica terminada en Kapta, con logística independiente.
+    expect(heads.at(-1)).toBe(16);
   });
 });
 

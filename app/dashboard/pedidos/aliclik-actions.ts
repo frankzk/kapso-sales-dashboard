@@ -31,6 +31,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { swaypGuiaDeVuelta } from "@/lib/swayp-desde-confirmacion";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
+import { legacySaleSendBlock } from "@/lib/legacy-sale-cancel-access";
 import { env } from "@/lib/env";
 import { getMasterPermissions, hasOrgPermission } from "@/lib/permissions-access";
 import { normalizeDistrictKey } from "@/lib/district-coverage";
@@ -623,6 +624,8 @@ export async function linkExistingAliclikGuide(
     normalizePhone(order.customer?.phone) ?? normalizePhone(ctx.row.customer_phone);
 
   const admin = createAdminSupabase();
+  const saleBlock = await legacySaleSendBlock(admin, orderId);
+  if (saleBlock) return { error: saleBlock };
   const insert: Record<string, unknown> = {
     store_id: ctx.storeId,
     courier: "aliclik",

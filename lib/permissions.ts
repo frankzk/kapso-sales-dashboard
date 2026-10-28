@@ -193,7 +193,7 @@ export function isPermission(value: string): value is Permission {
 export const PERMISSION_LABEL: Record<Permission, string> = {
   "master.edit": "Gestionar pedidos",
   "master.set_status": "Registrar estado a mano",
-  "orders.cancel_woo": "Anular pedidos de WooCommerce",
+  "orders.cancel_woo": "Anular pedidos",
   "master.override_status": "Corregir pedidos cerrados",
   "master.import_report": "Subir reportes de couriers",
   "warehouse.prepare": "Preparar paquetes",
@@ -245,7 +245,7 @@ export const PERMISSION_HELP: Record<Permission, string> = {
   // Desde el 15-10-2026 «cambiar el estado» ya no es de aquí: es `master.set_status`.
   "master.edit": "Confirmar, comentar, crear salidas, registrar devoluciones y corregir vínculos, en el Master y en Repro Provincia.",
   "master.set_status": "Cambiar a mano el estado de un pedido desde «Gestión manual» o la lista del Master. Solo dueño y admin.",
-  "orders.cancel_woo": "Pasar a Cancelado en WooCommerce un pedido, con motivo. Las reglas que impiden anular siguen igual.",
+  "orders.cancel_woo": "Anular con motivo pedidos WooCommerce o ventas históricas Shopify en Kapta; no cierra retornos ni liquidaciones.",
   // Supervisión lo trae y no cambia estados a mano (15-10-2026): decirle
   // «cambiar un pedido cerrado» le prometía la tarjeta que ya no ve.
   "master.override_status": "Registrar la devolución de un pedido ya entregado o anulado, con motivo. Reabrirlo o cambiar su estado lo hace un admin.",

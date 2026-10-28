@@ -144,6 +144,7 @@ export function OrderClosureDesk({
   costTariffGap,
   gfDeliveries,
   cancelledInShopify,
+  cancelledInKapta = false,
   permissions,
   pending,
   onAction,
@@ -171,6 +172,7 @@ export function OrderClosureDesk({
    * para las dos plataformas (MOM §38.12).
    */
   cancelledInShopify?: boolean;
+  cancelledInKapta?: boolean;
   permissions: ClosurePermissions;
   pending: boolean;
   onAction: (input: ClosureActionInput) => Promise<boolean>;
@@ -188,7 +190,7 @@ export function OrderClosureDesk({
   // acaba de cargar la tarifa tiene que poder conciliar sin esperar a que el
   // Master se recalcule solo.
   const gfRouteBlock =
-    stage === "por_cerrar" ? gfOpenRouteBlock(guides, gfDeliveries ?? [], { cancelledInShopify }) : null;
+    stage === "por_cerrar" ? gfOpenRouteBlock(guides, gfDeliveries ?? [], { cancelledInShopify: cancelledInShopify || cancelledInKapta }) : null;
   const gfRouteOpen = Boolean(gfRouteBlock);
   const liquidationOpen = reasons.includes("pendiente_liquidacion") || reasons.includes("liquidacion_observada");
   const costFacts =
@@ -372,7 +374,14 @@ export function OrderClosureDesk({
       {/* El mismo caso anulado en la tienda (#KP137541): la puerta a «entregado»
           no escribe sobre la anulación (MOM §11.4), así que cerrar la ruta no
           lo marca entregado. No se promete; decide una persona. */}
-      {gfRouteBlock?.kind === "anulado_shopify" && (
+      {gfRouteBlock?.kind === "anulado_shopify" && cancelledInKapta && (
+        <p className="text-[13px] leading-5 text-ink-600">
+          El motorizado reportó una entrega, pero la venta histórica está anulada en Kapta. Termina la ruta por su flujo;
+          eso no reactiva la venta ni la marca entregada. Si la entrega vale, un admin debe corregir la anulación
+          desde «Gestión manual», con motivo. La liquidación sigue pendiente de resolución.
+        </p>
+      )}
+      {gfRouteBlock?.kind === "anulado_shopify" && !cancelledInKapta && (
         <p className="text-[13px] leading-5 text-ink-600" data-closure-block="ruta-gf-anulado-shopify">
           El motorizado de Grupo GF reportó la entrega y su ruta sigue abierta, pero el pedido está anulado en la tienda:
           terminar la ruta en <GfRoutePath routeId={gfRouteBlock.routeIds[0]} /> no lo marca entregado. Si la entrega

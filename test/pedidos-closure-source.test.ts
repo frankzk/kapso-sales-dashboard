@@ -83,7 +83,7 @@ describe("(C) finalizar con la ruta de Grupo GF abierta", () => {
   });
 
   it("la Mesa oculta «Finalizar expediente» y lleva a «Reparto y liquidación»", () => {
-    expect(desk).toContain("gfOpenRouteBlock(guides, gfDeliveries ?? [], { cancelledInShopify })");
+    expect(desk).toContain("gfOpenRouteBlock(guides, gfDeliveries ?? [], { cancelledInShopify: cancelledInShopify || cancelledInKapta })");
     expect(flat(desk)).toMatch(/permissions\.canFinalize && !gfRouteOpen \) \{ next\.push\("finalize"\);/);
     expect(desk).toContain('data-closure-block="ruta-gf-abierta"');
     expect(desk).toContain("gfRouteReportHref(routeId)");

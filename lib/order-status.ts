@@ -18,6 +18,7 @@
 //   5. Pendiente                 — todavía no arrancó bien el proceso logístico.
 
 import { PERMISSION_LABEL } from "@/lib/permissions";
+import { legacySaleCancelledAt } from "@/lib/legacy-sale-cancel";
 import { NO_REPLACED_OUTPUTS, replacedOutputIds } from "@/lib/gf-replaced-output";
 import { hasConfirmationSignal } from "@/lib/order-confirmation";
 import { COMPANION_LINKED } from "@/lib/order-companion";
@@ -312,6 +313,7 @@ export interface GuideSnapshot {
 /** Un evento de la línea de tiempo (order_events). */
 export interface OrderEventSnapshot {
   kind: string;
+  source?: string | null;
   /** La salida que nombra el evento, cuando la nombra. Es lo que permite saber
    *  QUÉ salida se anuló por el botón de corregir. */
   shipment_id?: string | null;
@@ -735,6 +737,14 @@ export function resolveOrderState(inputs: ResolveInputs): ResolvedOrderState {
     // Falso por defecto: solo la regla 0 lo pone en cierto, y solo cuando el
     // override es de verdad el que manda. Es lo que dibuja el candado.
     overrideApplied: false,
+  };
+
+  // La venta histórica terminó en Kapta. Conserva el rollup de cada salida;
+  // ni una guía posterior ni un reporte del courier reactivan la venta.
+  const commercialCancelledAt = legacySaleCancelledAt(events);
+  if (commercialCancelledAt) return {
+    ...rollup, general: "anulado", operational: "anulado",
+    since: commercialCancelledAt, source: "kapta", overrideApplied: false,
   };
 
   // ── 0. Override manual: un humano decidió, nada AUTOMÁTICO lo pisa.

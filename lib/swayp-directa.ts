@@ -13,6 +13,7 @@
 // un archivo `"use server"` es un endpoint que cualquiera puede llamar.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { legacySaleSendBlock } from "@/lib/legacy-sale-cancel-access";
 import { SWAYP_SUNDAY_ERROR, isSwaypDispatchDay } from "@/lib/swayp-dispatch-days";
 import { SWAYP_DESDE_CONFIRMACION_KIND } from "@/lib/swayp-desde-confirmacion";
 import { recomputeOrderMasterForShipmentsSafe } from "@/lib/order-master";
@@ -147,6 +148,8 @@ export async function emitirGuiaSwaypDirecta(
   input: EmitirGuiaSwaypDirectaInput,
 ): Promise<EmitirGuiaSwaypDirectaResult> {
   const order = input.order;
+  const saleBlock = await legacySaleSendBlock(admin, order.id);
+  if (saleBlock) return { error: saleBlock };
   if (order.cancelled_at) {
     return { error: "El pedido está anulado en la tienda; no se puede crear la guía." };
   }
@@ -257,6 +260,8 @@ export async function emitirGuiaSwaypDirecta(
   let swaypGuide: string | null = null;
   let swaypState: number | null = null;
   const swaypNotice = "";
+  const finalSaleBlock = await legacySaleSendBlock(admin, order.id);
+  if (finalSaleBlock) return { error: finalSaleBlock };
   if (!input.guideCode?.trim()) {
     const viaApi = await createFenixGuideViaApi({
       admin,

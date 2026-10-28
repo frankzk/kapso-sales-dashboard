@@ -1,8 +1,7 @@
 "use client";
 
-// «Anular pedido» en WooCommerce, dentro de «Gestión manual» de la ficha (MOM
-// §38.15). Solo para pedidos de WooCommerce y para quien registra estados a
-// mano; un pedido de Shopify no lo ve.
+// «Anular pedido» en Gestión manual (§38.15-16). Mismo permiso específico:
+// WooCommerce se anula en la tienda; una venta histórica Shopify, solo en Kapta.
 //
 // En su sitio y no en un modal: se abre en la misma zona, dice qué frena antes
 // del clic (las reglas de lib/woo-cancel.ts, las mismas del servidor), pide el
@@ -10,9 +9,10 @@
 // nombra el pedido. El servidor vuelve a comprobarlo todo (también los
 // comprobantes, que la ficha no tiene a mano).
 
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Banner, CARD_ZONE, FIELD, OpsButton, choiceChipClass } from "@/components/ops-ui";
 import { cn } from "@/components/ui";
+import { LEGACY_SALE_CANCEL_REASONS, legacySaleCancelBlocks, validateLegacySaleCancelReason } from "@/lib/legacy-sale-cancel";
 import {
   WOO_CANCEL_REASONS,
   WOO_CANCEL_REASON_MAX,
@@ -35,7 +35,9 @@ export function WooCancelZone({
   facts,
   pending,
   onCancel,
+  mode = "woocommerce",
 }: {
+  mode?: "woocommerce" | "shopify_history";
   orderName: string | null;
   /** Lo que la ficha sabe; los comprobantes van en null (los mira el servidor). */
   facts: WooCancelFacts;
@@ -50,8 +52,11 @@ export function WooCancelZone({
   // ni dejan dos hechos en la Actividad.
   const [requestId, setRequestId] = useState("");
   const helpId = useId();
-  const blocks = wooCancelBlocks(facts);
-  const reason = validateWooCancelReason(code, text);
+  useEffect(() => { setOpen(false); setCode(""); setText(""); setRequestId(""); }, [orderName, mode]);
+  const historical = mode === "shopify_history";
+  const blocks = historical ? legacySaleCancelBlocks(facts).map((message, index) => ({ code: String(index), message })) : wooCancelBlocks(facts);
+  const reason = historical ? validateLegacySaleCancelReason(code, text) : validateWooCancelReason(code, text);
+  const reasons = historical ? LEGACY_SALE_CANCEL_REASONS : WOO_CANCEL_REASONS;
   const label = orderName ?? "este pedido";
 
   function start() {
@@ -70,11 +75,13 @@ export function WooCancelZone({
   return (
     <div className={cn(CARD_ZONE, "space-y-3")} data-woo-cancel>
       <div>
-        <h4 className="text-sm font-semibold text-ink-900">Anular pedido</h4>
+        <h4 className="text-sm font-semibold text-ink-900">{historical ? "Anular venta de pedido histórico" : "Anular pedido"}</h4>
         <p id={helpId} className="mt-0.5 text-[13px] leading-5 text-ink-600">
-          Lo pasa a «Cancelado» en WooCommerce, que devuelve el stock, sin entrar a wp-admin. No lo manda a la
-          papelera. Queda en la Actividad con tu nombre y el motivo.
+          {historical
+            ? "La venta termina en Kapta y no se intentará entregar nuevamente. El original de Shopify y el historial de sus salidas se conservan. Queda en la Actividad con tu nombre y el motivo."
+            : "Lo pasa a «Cancelado» en WooCommerce, que devuelve el stock, sin entrar a wp-admin. No lo manda a la papelera. Queda en la Actividad con tu nombre y el motivo."}
         </p>
+        {historical && <p className="mt-2 text-[13px] leading-5 text-ink-600">Las guías no se cancelan solas. Si hay una caja con el courier, un retorno, inventario o liquidación pendiente, deben resolverse por su propio flujo antes de finalizar.</p>}
       </div>
 
       {blocks.length > 0 ? (
@@ -96,7 +103,7 @@ export function WooCancelZone({
           <fieldset>
             <legend className="text-[13px] font-medium text-ink-700">Motivo</legend>
             <div className="mt-1.5 flex flex-wrap gap-2">
-              {WOO_CANCEL_REASONS.map((r) => (
+              {reasons.map((r) => (
                 <button
                   key={r.code}
                   type="button"
@@ -123,10 +130,11 @@ export function WooCancelZone({
               Obligatorio, al menos {WOO_CANCEL_REASON_MIN} caracteres.
             </span>
           </label>
-          <Banner tone="crit" title={`Se anula ${label} en WooCommerce`}>
+          <Banner tone="crit" title={`Se anula ${label} ${historical ? "en Kapta" : "en WooCommerce"}`}>
             <p>
-              La venta queda anulada en la tienda y en el Master. Volver atrás se hace en WooCommerce, reactivando el
-              pedido.
+              {historical
+                ? "Confirmas que la venta terminó y no habrá más intentos de entrega. Esta acción no devuelve dinero ni stock y no confirma que una caja haya retornado. Si fue un error, un admin debe corregirlo desde la ficha, con motivo."
+                : "La venta queda anulada en la tienda y en el Master. Volver atrás se hace en WooCommerce, reactivando el pedido."}
             </p>
           </Banner>
           <div className="flex flex-wrap gap-2">
@@ -136,7 +144,7 @@ export function WooCancelZone({
               onClick={confirm}
               className="pointer-coarse:h-11"
             >
-              {pending ? "Anulando…" : `Sí, anular ${label} en WooCommerce`}
+              {pending ? "Anulando…" : `Sí, anular ${label} ${historical ? "en Kapta" : "en WooCommerce"}`}
             </OpsButton>
             <OpsButton variant="ghost" disabled={pending} onClick={() => setOpen(false)} className="pointer-coarse:h-11">
               No anular

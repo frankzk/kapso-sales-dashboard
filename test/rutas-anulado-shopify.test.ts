@@ -180,7 +180,7 @@ describe("closeRoute: la ruta se cierra igual y el aviso sale en el mensaje", ()
     const door = read("lib/master-door.ts");
     expect(door).toContain('.from("orders")');
     expect(door).toContain('.not("cancelled_at", "is", null)');
-    expect(door).toContain("masterDoorVerdict(item, { cancelledAt: cancelled.get(item.orderId) ?? null })");
+    expect(door).toContain("masterDoorVerdict(item, { cancelledAt: cancelled.get(item.orderId) ?? null, cancelledInKapta: localCancelled.has(item.orderId) })");
     // /reparto escribe solo en la parada: el Master no se toca al reportar.
     expect(read("app/reparto/actions.ts")).not.toContain("applyDeliveriesToMaster");
     expect(read("lib/stop-report.ts")).not.toContain("applyDeliveriesToMaster");

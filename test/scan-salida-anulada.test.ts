@@ -47,7 +47,11 @@ vi.mock("@/lib/db", () => {
       if (table === "shipments") return { data: single ? state.outputs[0] ?? null : state.outputs, error: null };
       if (table === "dispatch_manifest_items") return { data: single ? null : [], error: null };
       // Solo la lectura de la anulación (`.in("kind", […])`) encuentra el hecho.
-      if (table === "order_events") return { data: Array.isArray(filters.kind) ? state.event : single ? null : [], error: null };
+      if (table === "order_events") {
+        const kinds = filters.kind as string[] | undefined;
+        if (kinds?.includes("legacy_shopify_sale_cancelled")) return { data: [], error: null };
+        return { data: Array.isArray(kinds) ? state.event : single ? null : [], error: null };
+      }
       return { data: single ? null : [], error: null };
     };
     q.maybeSingle = q.single = async () => result(true);
@@ -164,6 +168,6 @@ describe("Despacho del día → Asignar por QR con el rótulo de AUR178551-S01",
     const line = await scan();
     expect(line.status).toBe("no_elegible");
     expect(line.message).toBe("AUR178551-S01 es de Tanders y sigue en almacén. Para llevarlo en Grupo GF, anula la de almacén en la ficha («Salidas y guías»).");
-    expect(state.reads.some((r) => r.table === "order_events" && Array.isArray(r.filters.kind))).toBe(false);
+    expect(state.reads.some((r) => r.table === "order_events" && Array.isArray(r.filters.kind) && r.filters.kind.includes("route_output_cancelled"))).toBe(false);
   });
 });

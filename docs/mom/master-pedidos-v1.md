@@ -17130,8 +17130,10 @@ funcionando la dirección del Master, la nota, los totales del cajón,
   escriben la plataforma.
 - **Los principios 1-3, 10 y 11 de §2 dicen «la tienda»** (Shopify hasta el
   cierre, WooCommerce después) desde la decisión del owner del 23-10-2026.
-- **Pendiente del owner.** Las anulaciones de los pedidos de la era Shopify
-  después del cierre (§6.4) esperan su decisión. Los canales de WooCommerce
+- **Decidido por el owner, 28-10-2026 (§38.16).** Los históricos de Shopify
+  pueden anular su venta en Kapta, con motivo e historial, después de migrar la
+  tienda a WooCommerce. La anulación comercial no cierra retornos ni dinero.
+  Los canales de WooCommerce
   quedaron decididos (38.5, 24-10-2026).
 
 ### 38.10 Implementación
@@ -18732,10 +18734,10 @@ a «Cancelado» en WooCommerce con las claves guardadas de la tienda. No es una
 anulación automática (§2 punto 11): la decide y la firma una persona.
 
 - **Solo pedidos de WooCommerce** (`orders.platform = 'woocommerce'`, nunca por
-  la forma del id, 38.1) y vivos. **Shopify no cambia:** su ficha no muestra el
-  botón y el servidor lo rechaza sin llamar a nadie; un pedido de Shopify se
-  anula en Shopify, como siempre. No existía una acción de anular pedidos de
-  Shopify desde Kapta que copiar.
+  la forma del id, 38.1) y vivos. Esta acción no anula Shopify: el servidor
+  rechaza un pedido Shopify sin llamar a nadie. Desde el 28-10-2026 los
+  históricos de una tienda migrada tienen su acción local separada (§38.16),
+  que termina la venta en Kapta sin modificar el original.
 - **Quién (decisión del owner, 26-10-2026):** el permiso propio **«Anular
   pedidos de WooCommerce»** (`orders.cancel_woo`, §16), comprobado en la
   organización de la tienda del pedido, que además tiene que verse por RLS. Lo
@@ -18833,6 +18835,59 @@ Implementación: `lib/woo-cancel.ts` (pura, la comparte la ficha:
 `app/dashboard/pedidos/woo-cancel-actions.ts` (`cancelWooOrder`) y
 `components/woo-cancel-zone.tsx` en `OrderActions` (components/order-drawer.tsx).
 Pruebas: `test/woo-cancel.test.ts` y `test/woo-cancel-action.test.ts`.
+
+### 38.16 Anular la venta de un histórico Shopify en Kapta (28-10-2026)
+
+**Decisión del owner.** «La venta terminó: no se intentará entregar nuevamente»
+también se puede registrar en los históricos de Shopify desde Kapta. Esta
+decisión reemplaza el pendiente de 38.9. El pedido sigue siendo de Shopify;
+no se crea un pedido en WooCommerce ni se toca el original de Shopify.
+
+- **Alcance comprobado en servidor:** `orders.platform = shopify`, tienda ya
+  migrada a WooCommerce, `platform_switched_at` válido y creación del pedido
+  anterior a ese cambio. No se usa este flujo para una tienda aún en Shopify.
+- **Permiso:** se conserva `orders.cancel_woo`, con el nombre visible
+  **«Anular pedidos»** y una explicación de ambos alcances. Owner y admin lo
+  traen y el owner lo concede persona por persona. Diana conserva el que ya
+  tiene; no se concede `master.set_status`, no cambian sus roles ni se
+  habilita a todas las asesoras. RLS y permiso de la organización de la tienda
+  se comprueban antes de usar el cliente de servicio.
+- **Dónde:** ficha → Gestión manual → **«Anular venta de pedido histórico»**.
+  Lista de motivos, incluido «No se logró entregar; no se reintentará», texto
+  obligatorio de 5 a 500 caracteres y segundo clic que nombra el pedido y
+  dice **«en Kapta»**. Un pedido ya anulado no ofrece repetir la acción.
+- **Hecho duradero:** `legacy_shopify_sale_cancelled`, `source=kapta`, actor,
+  motivo, estados anterior/nuevo y `payload.scope=kapta_only`. El id de operación
+  se deriva del pedido e intento; reintentar no duplica el hecho y vuelve a
+  intentar recalcular. Si falla el recálculo, el hecho permanece y se avisa.
+  No se cambia `orders.cancelled_at`, no se llama a Shopify o WooCommerce y no
+  se devuelve stock ni dinero. No se borran o actualizan salidas ni su historial.
+- **Resultado comercial:** el Master queda **Anulado**, aunque después llegue
+  una confirmación, guía, reporte o cierre de ruta/liquidación. Solo una
+  corrección explícita posterior de un admin (`status_override`,
+  `source=manual`, con los permisos y motivo de 16) permite reactivar la venta.
+  Reabrir el expediente de cierre por sí solo no reactiva la venta.
+- **La logística sigue abierta:** se permite terminar la venta con la caja en
+  calle, en retorno o ya devuelta. Una salida viva conserva su estado y debe
+  cancelarse por su flujo propio. El Master sigue **Por cerrar** mientras haya
+  salida activa, devolución física, inventario, reembolso u otro pendiente.
+  Si la caja salió, su liquidación sigue pendiente hasta `liquidation_closed`;
+  recibir e inventariar la caja no liquida el flete. La anulación comercial no
+  abre otra ventana de recuperación o reintentos.
+- **No se acepta una entrega ya registrada:** se comprueban el Master, las
+  guías, los hechos de entrega y las paradas de Rutas, incluso antes de cerrar
+  la ruta. Si hay dinero confirmado, comprobantes sin resolver o un pedido
+  acompañante activo, se pide resolverlos con su flujo/owner primero. Una
+  lectura fallida no autoriza la anulación.
+- **No más envíos:** las puertas de guías Aliclik, Tanders, Swayp y salidas
+  manuales vuelven a leer la anulación antes de escribir; un error de lectura
+  bloquea. El escaneo de almacén/despacho y el cierre de una caja ya cotejada
+  también la respetan. Los reportes logísticos se conservan, pero la puerta a
+  Entregado no escribe encima de la anulación comercial.
+
+Sin migración: hechos sobre `order_events` y la proyección existente del Master.
+La anulación de WooCommerce de 38.15 conserva sus guardas y su llamada a la
+tienda; este alcance nuevo es solo para los históricos de Shopify.
 
 ## 39. Fotos de producto de WhatsApp para cuando Shopify ya no responde (23-10-2026)
 
