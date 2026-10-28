@@ -82,6 +82,8 @@ export function wooCancelEventNote(label: string, text: string): string {
 // ---------------------------------------------------------------------------
 
 export interface WooCancelShipment {
+  dispatched_at?: string | null;
+  custody_transferred_at?: string | null;
   created_via?: string | null;
   courier: string | null;
   guide_code?: string | null;

@@ -21,6 +21,7 @@ import { getCurrentUser } from "@/lib/access";
 import { orderPlatformOf } from "@/lib/shipment-order-capture";
 import { orderPlatformName } from "@/lib/order-admin-url";
 import { applyConfirmationCycleToStore, freshLogisticsCost, recomputeOrderMasterSafe } from "@/lib/order-master";
+import { processWooSaleReturn } from "@/lib/woo-sale-return-server";
 import {
   ACTIVE_OUTPUTS_ERROR,
   activeOutputs,
@@ -2482,6 +2483,11 @@ export async function registerClosureAction(
 
   await recomputeOrderMasterSafe(admin, [orderId]);
   revalidatePath(MASTER_PATH);
+  if (action === "inventory_restock") {
+    const stock = await processWooSaleReturn(admin,orderId);
+    if (stock.state === "synced") return { notice: "Inventario registrado. WooCommerce confirmó la cancelación tras el retorno." };
+    if (stock.state === "pending") return { notice: "Inventario registrado. El stock sigue pendiente en WooCommerce; revisa Actividad. Se volverá a intentar." };
+  }
   return { notice: "Acción de cierre registrada. El expediente fue recalculado." };
 }
 

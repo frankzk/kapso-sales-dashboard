@@ -43,6 +43,14 @@ beforeEach(() => {
 });
 
 describe("anulación comercial histórica del servidor", () => {
+  it("Woo termina localmente por RPC sin mutar fuente, salidas ni llamar a la tienda",async()=>{
+    tables.orders![0]!.platform="woocommerce";
+    const rpc=vi.fn().mockResolvedValue({error:null}); Object.assign(admin,{rpc});
+    const before=JSON.stringify({orders:tables.orders,shipments:tables.shipments,payments:tables.order_payments});
+    const result=await cancelHistoricalShopifySale({admin,orderId:"o1",userId:"diana",reasonCode:"entrega_no_lograda",reasonText:"No habrá otro intento",requestId:"request-123456",wooReturn:true});
+    expect(result.notice).toContain("venta terminada");expect(rpc).toHaveBeenCalledWith("woo_end_sale_pending_return",expect.objectContaining({p_order_id:"o1",p_actor:"diana"}));
+    expect(JSON.stringify({orders:tables.orders,shipments:tables.shipments,payments:tables.order_payments})).toBe(before);
+  });
   it("anula la venta con actor y motivo, sin modificar Shopify, caja ni pagos", async () => {
     const original = JSON.stringify({ order: tables.orders, shipments: tables.shipments, payments: tables.order_payments });
     expect((await cancel()).notice).toContain("venta anulada en Kapta");

@@ -97,6 +97,8 @@ import {
   type OrderGeoInput,
 } from "@/app/dashboard/pedidos/actions";
 import { VoiceAgentPanel } from "@/components/voice-agent-panel";
+import { shipmentHasLeft } from "@/lib/woo-sale-return";
+import { endWooSalePendingReturn } from "@/app/dashboard/pedidos/woo-sale-return-actions";
 import { WooCancelZone } from "@/components/woo-cancel-zone";
 import { GfOutputCancelButton } from "@/components/gf-output-cancel-button";
 import { gfOutputIsCancelableBeforeDispatch } from "@/lib/gf-output-cancel";
@@ -1201,7 +1203,7 @@ export function OrderDrawer({
   const wooCancel: WooCancelInput | null =
     canCancelWoo && detail && (detail.platform === "woocommerce" || detail.legacySaleEligible) && !detail.shopifyCancelledAt && !detail.legacySaleCancelledAt
       ? {
-          mode: detail.platform === "shopify" ? "shopify_history" : "woocommerce",
+          mode: detail.platform === "shopify" ? "shopify_history" : detail.guides.some(shipmentHasLeft) ? "woocommerce_return" : "woocommerce",
           orderName: detail.row.order_name,
           facts: {
             platform: detail.platform,
@@ -1219,7 +1221,7 @@ export function OrderDrawer({
             },
           },
           onCancel: (input) => run(() => detail.platform === "shopify"
-            ? cancelLegacyShopifySale(orderId, input) : cancelWooOrder(orderId, input)),
+            ? cancelLegacyShopifySale(orderId, input) : detail.guides.some(shipmentHasLeft) ? endWooSalePendingReturn(orderId, input) : cancelWooOrder(orderId, input)),
         }
       : null;
 
@@ -2058,6 +2060,15 @@ export function OrderDrawer({
                   </div>
                 </div>
               )}
+              {detail.platform === "woocommerce" && detail.timeline.some((e) => e.kind === "woo_sale_ended_pending_return") &&
+                !detail.timeline.some((e) => e.kind === "woo_sale_return_synced") && (
+                  <div className={cn("order-8", SECTION)}>
+                    <Banner tone="warn" title="Venta terminada · retorno y stock pendientes">
+                      No habrá nuevos intentos de entrega. Recibe cada caja en almacén y confirma su reingreso a stock en la Mesa de cierre.
+                      WooCommerce se cancelará después de esas confirmaciones. Los errores de conexión quedan en Actividad y se reintentan.
+                    </Banner>
+                  </div>
+                )}
               {canEdit ? (
                 <div data-drawer-section="acciones" className={cn("order-8", SECTION)}>
                   <OrderActions
@@ -3327,7 +3338,7 @@ function ConfirmationDesk({
 
 /** Lo que la zona «Anular pedido» necesita de la ficha (MOM §38.15). */
 interface WooCancelInput {
-  mode?: "woocommerce" | "shopify_history";
+  mode?: "woocommerce" | "shopify_history" | "woocommerce_return";
   orderName: string | null;
   facts: WooCancelFacts;
   onCancel: (input: { reasonCode: string; reasonText: string; requestId: string }) => Promise<boolean>;

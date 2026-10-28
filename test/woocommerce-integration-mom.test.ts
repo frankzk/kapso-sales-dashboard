@@ -140,7 +140,8 @@ describe("MOM §38.12", () => {
     // 38.15: anular un pedido de WooCommerce desde Kapta (test/woo-cancel.test.ts).
     // 38.16: venta histórica terminada en Kapta, con logística independiente.
     // 38.17: retiro previo al despacho de una salida GF que bloqueaba la anulación.
-    expect(heads.at(-1)).toBe(17);
+    // 38.18: terminar una venta Woo con retorno y stock pendientes.
+    expect(heads.at(-1)).toBe(18);
   });
 });
 
@@ -163,9 +164,10 @@ describe("DEPLOY.md y los crons", () => {
     expect(vercel.crons.filter((c) => c.path === "/api/cron/invoice-snapshots")).toEqual([
       { path: "/api/cron/invoice-snapshots", schedule: "1-59/2 * * * *" },
     ]);
-    // La entrada de pedidos va dentro de /api/cron/sync. El único cron de
-    // WooCommerce es el que solo LEE la lista de webhooks (MOM §38.14).
-    expect(vercel.crons.filter((c) => /woo/i.test(c.path)).map((c) => c.path)).toEqual(["/api/cron/woo-webhooks"]);
+    // La entrada de pedidos va dentro de /api/cron/sync. §38.14 revisa webhooks;
+    // §38.18 recupera el cierre de stock tras retorno e inventario humanos.
+    // §38.18 añade el cierre de stock tras recepción, separado de la entrada.
+    expect(vercel.crons.filter((c) => /woo/i.test(c.path)).map((c) => c.path).sort()).toEqual(["/api/cron/woo-sale-returns", "/api/cron/woo-webhooks"]);
     expect(read("lib/ingest.ts")).toContain("const woo = await syncWooOrders(admin, storeId);");
   });
 });

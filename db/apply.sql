@@ -571,4 +571,6 @@
 \ir migrations/0283_lima_repro_aliclik.sql
 \echo 'Applying 0284_gf_cancel_pre_dispatch_output.sql'
 \ir migrations/0284_gf_cancel_pre_dispatch_output.sql
+\echo 'Applying 0285_woo_sale_pending_return.sql'
+\ir migrations/0285_woo_sale_pending_return.sql
 \echo 'Done.'

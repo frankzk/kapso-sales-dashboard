@@ -282,6 +282,7 @@ export type MacroSubstage =
   | "salida_adicional_activa"
   | "devolucion_fisica_pendiente"
   | "devolucion_pendiente_inventario"
+  | "stock_woo_pendiente"
   | "recogido_sin_pago_completo"
   | "recuperacion_vencida"
   | "rechazo_no_reenviado"
@@ -342,6 +343,7 @@ export const MACRO_SUBSTAGES_BY_STAGE: Record<
     "salida_adicional_activa",
     "devolucion_fisica_pendiente",
     "devolucion_pendiente_inventario",
+    "stock_woo_pendiente",
     "recogido_sin_pago_completo",
     "recuperacion_vencida",
     "rechazo_no_reenviado",
@@ -398,6 +400,7 @@ export const MACRO_SUBSTAGE_LABEL: Record<MacroSubstage, string> = {
   salida_adicional_activa: "Salida adicional activa",
   devolucion_fisica_pendiente: "Devolución física pendiente",
   devolucion_pendiente_inventario: "Devolución pendiente de inventario",
+  stock_woo_pendiente: "Venta terminada · stock pendiente en WooCommerce",
   recogido_sin_pago_completo: "Recogido sin pago completo",
   recuperacion_vencida: RECOVERY_LABEL.vencida,
   rechazo_no_reenviado: RECOVERY_LABEL.rechazo_no_reenviado,
@@ -1344,6 +1347,8 @@ export function resolveMacroStage(input: ResolveMacroStageInput): ResolvedMacroS
   const operation = classifyOperation(input.order, input.guides);
   const active = input.guides.filter(isActiveGuide);
   const closeReasons = closingReasons(input);
+  if (input.events.some((e) => e.kind === "woo_sale_ended_pending_return") &&
+    !input.events.some((e) => e.kind === "woo_sale_return_synced")) closeReasons.push("stock_woo_pendiente");
   const reopened = latestEvent(input.events, ["order_reopened"]);
   const finalized = latestEvent(input.events, ["order_finalized"]);
   const explicitFinal = Boolean(

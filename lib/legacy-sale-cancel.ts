@@ -3,7 +3,7 @@
 import type { WooCancelFacts } from "@/lib/woo-cancel";
 
 export const LEGACY_SALE_CANCELLED = "legacy_shopify_sale_cancelled";
-export const LEGACY_SALE_CANCEL_REASON = "La venta de este pedido histórico está anulada en Kapta. No se permiten nuevos envíos. Un admin debe corregir la anulación desde la ficha si fue un error.";
+export const LEGACY_SALE_CANCEL_REASON = "La venta de este pedido está anulada en Kapta. No se permiten nuevos envíos. Resuelve sus retornos, inventario y liquidaciones por sus propios flujos.";
 export const LEGACY_SALE_CANCEL_REASONS = [
   { code: "entrega_no_lograda", label: "No se logró entregar; no se reintentará" },
   { code: "cliente_desiste", label: "La clienta ya no lo quiere" },
@@ -34,6 +34,9 @@ export interface LegacySaleEvent {
 export function legacySaleCancelledAt(events: readonly LegacySaleEvent[]): string | null {
   let cancelled: string | null = null;
   let corrected: string | null = null;
+  // WooCommerce tiene stock pendiente: no se reactiva por un override logístico.
+  const wooEnded = events.filter((e) => e.kind === "woo_sale_ended_pending_return").map((e) => e.occurred_at).sort().at(-1);
+  if (wooEnded) return wooEnded;
   for (const event of events) {
     if (event.kind === LEGACY_SALE_CANCELLED && (!cancelled || event.occurred_at > cancelled)) cancelled = event.occurred_at;
     if (event.kind === "status_override" && event.source === "manual" && ["pendiente", "en_proceso", "entregado"].includes(event.new_status ?? "") &&
@@ -55,6 +58,10 @@ export function isHistoricalShopifyOrder(input: {
 /** Se permiten cajas en calle/retorno: son obligaciones, no un nuevo intento. */
 export function legacySaleCancelBlocks(facts: WooCancelFacts) {
   if (facts.platform !== "shopify") return ["Esta opción es solo para pedidos históricos de Shopify."];
+  return commercialSaleCancelBlocks(facts);
+}
+
+export function commercialSaleCancelBlocks(facts: WooCancelFacts) {
   const blocks: string[] = [];
   if (facts.generalStatus === "entregado" || facts.shipments.some((s) => s.delivery_status === "entregado"))
     blocks.push("Hay una entrega registrada. La anulación de una venta entregada requiere revisión del admin.");

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { loadCompanionRides } from "@/lib/order-companion-access";
+import { wooSaleEndBlocks } from "@/lib/woo-sale-return";
 import {
   isHistoricalShopifyOrder, LEGACY_SALE_CANCELLED, legacySaleCancelBlocks,
   legacySaleCancelledAt, validateLegacySaleCancelReason,
@@ -17,6 +18,7 @@ export function legacySaleCancelOperationId(orderId: string, requestId: string):
 export async function cancelHistoricalShopifySale(input: {
   admin: SupabaseClient; orderId: string; userId: string;
   reasonCode: unknown; reasonText: unknown; requestId: unknown;
+  wooReturn?: boolean;
 }): Promise<{ error?: string; notice?: string }> {
   const reason = validateLegacySaleCancelReason(input.reasonCode, input.reasonText);
   if (!reason.ok) return { error: reason.error };
@@ -29,15 +31,15 @@ export async function cancelHistoricalShopifySale(input: {
     if (orderError || !order) return { error: "No se pudo leer el pedido. No se anuló la venta." };
     const { data: store, error: storeError } = await admin.from("stores")
       .select("platform,platform_switched_at").eq("id", order.store_id).maybeSingle();
-    if (storeError || !store || !isHistoricalShopifyOrder({
+    if (storeError || !store || (input.wooReturn ? order.platform !== "woocommerce" || store.platform !== "woocommerce" : !isHistoricalShopifyOrder({
       orderPlatform: order.platform, orderCreatedAt: order.created_at,
       storePlatform: store.platform, switchedAt: store.platform_switched_at,
-    })) return { error: "Solo se anulan aquí históricos de Shopify anteriores a la migración de su tienda a WooCommerce." };
+    }))) return { error: input.wooReturn ? "La plataforma del pedido o de su tienda no permite esta anulación comercial." : "Solo se anulan aquí históricos de Shopify anteriores a la migración de su tienda a WooCommerce." };
     if (order.cancelled_at) return { notice: "El pedido ya está anulado en la tienda." };
 
     const [master, shipments, payments, events] = await Promise.all([
       admin.from("order_master").select("general_status").eq("order_id", orderId).maybeSingle(),
-      admin.from("shipments").select("id,courier,guide_code,delivery_status,custody_state").eq("order_id", orderId),
+      admin.from("shipments").select("id,courier,guide_code,delivery_status,custody_state,dispatched_at,custody_transferred_at").eq("order_id", orderId),
       admin.from("order_payments").select("validation_status").eq("order_id", orderId),
       admin.from("order_events").select("kind,occurred_at,source,new_status").eq("order_id", orderId),
     ]);
@@ -45,7 +47,7 @@ export async function cancelHistoricalShopifySale(input: {
       return { error: "No se pudieron comprobar el estado, las salidas, los pagos o el historial. No se anuló la venta." };
     if (!legacySaleCancelledAt(events.data ?? [])) {
       const rides = await loadCompanionRides(admin, [orderId]);
-      const blocks = legacySaleCancelBlocks({
+      const blocks = (input.wooReturn ? wooSaleEndBlocks : legacySaleCancelBlocks)({
         platform: order.platform, generalStatus: master.data.general_status,
         financialStatus: order.financial_status, shipments: shipments.data ?? [], payments: payments.data ?? [],
         companion: {
@@ -60,6 +62,15 @@ export async function cancelHistoricalShopifySale(input: {
         events.data?.some((event) => event.kind === "delivered" || event.new_status === "entregado"))
         blocks.push("Hay una entrega reportada. Pide al admin revisar el expediente antes de anular la venta.");
       if (blocks.length) return { error: blocks.join(" ") };
+      if (input.wooReturn) {
+        const { error } = await admin.rpc("woo_end_sale_pending_return", {
+          p_order_id: orderId, p_actor: userId, p_reason: `${reason.label} — ${reason.text}`,
+          p_operation_id: legacySaleCancelOperationId(orderId, input.requestId),
+        });
+        if (error) return { error: "No se pudo terminar la venta: " + error.message };
+        await recomputeOrderMasterSafe(admin, [orderId]);
+        return { notice: `${order.name ?? "El pedido"}: venta terminada. El paquete sigue en seguimiento; WooCommerce y el stock esperan la recepción e inventario en almacén.` };
+      }
       const { error } = await admin.from("order_events").insert({
         store_id: order.store_id, order_id: orderId, kind: LEGACY_SALE_CANCELLED,
         occurred_at: new Date().toISOString(), actor: userId, source: "kapta",
@@ -72,7 +83,7 @@ export async function cancelHistoricalShopifySale(input: {
       if (error && error.code !== "23505") return { error: "No se pudo guardar la anulación. No se cambió la venta." };
     }
     const updated = await recomputeOrderMasterSafe(admin, [orderId]);
-    return { notice: `${order.name ?? "El pedido"}: venta anulada en Kapta. No se modificó Shopify ni ninguna salida.` +
+    return { notice: (input.wooReturn ? `${order.name ?? "El pedido"}: la venta ya está terminada. El retorno e inventario siguen por su propio flujo.` : `${order.name ?? "El pedido"}: venta anulada en Kapta. No se modificó Shopify ni ninguna salida.`) +
       (updated.written < 1 ? " El hecho quedó guardado; el Master está pendiente de recalcular. Actualiza la ficha antes de continuar." : "") };
   } catch {
     return { error: "No se pudo completar la comprobación de la anulación. Actualiza la ficha antes de reintentar." };

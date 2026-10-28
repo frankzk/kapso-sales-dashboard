@@ -12,6 +12,7 @@
 import { useEffect, useId, useState } from "react";
 import { Banner, CARD_ZONE, FIELD, OpsButton, choiceChipClass } from "@/components/ops-ui";
 import { cn } from "@/components/ui";
+import { wooSaleEndBlocks } from "@/lib/woo-sale-return";
 import { LEGACY_SALE_CANCEL_REASONS, legacySaleCancelBlocks, validateLegacySaleCancelReason } from "@/lib/legacy-sale-cancel";
 import {
   WOO_CANCEL_REASONS,
@@ -37,7 +38,7 @@ export function WooCancelZone({
   onCancel,
   mode = "woocommerce",
 }: {
-  mode?: "woocommerce" | "shopify_history";
+  mode?: "woocommerce" | "shopify_history" | "woocommerce_return";
   orderName: string | null;
   /** Lo que la ficha sabe; los comprobantes van en null (los mira el servidor). */
   facts: WooCancelFacts;
@@ -53,8 +54,9 @@ export function WooCancelZone({
   const [requestId, setRequestId] = useState("");
   const helpId = useId();
   useEffect(() => { setOpen(false); setCode(""); setText(""); setRequestId(""); }, [orderName, mode]);
-  const historical = mode === "shopify_history";
-  const blocks = historical ? legacySaleCancelBlocks(facts).map((message, index) => ({ code: String(index), message })) : wooCancelBlocks(facts);
+  const historical = mode !== "woocommerce";
+  const wooReturn = mode === "woocommerce_return";
+  const blocks = historical ? (wooReturn ? wooSaleEndBlocks : legacySaleCancelBlocks)(facts).map((message, index) => ({ code: String(index), message })) : wooCancelBlocks(facts);
   const reason = historical ? validateLegacySaleCancelReason(code, text) : validateWooCancelReason(code, text);
   const reasons = historical ? LEGACY_SALE_CANCEL_REASONS : WOO_CANCEL_REASONS;
   const label = orderName ?? "este pedido";
@@ -75,9 +77,9 @@ export function WooCancelZone({
   return (
     <div className={cn(CARD_ZONE, "space-y-3")} data-woo-cancel>
       <div>
-        <h4 className="text-sm font-semibold text-ink-900">{historical ? "Anular venta de pedido histórico" : "Anular pedido"}</h4>
+        <h4 className="text-sm font-semibold text-ink-900">{wooReturn ? "Terminar venta · retorno pendiente" : historical ? "Anular venta de pedido histórico" : "Anular pedido"}</h4>
         <p id={helpId} className="mt-0.5 text-[13px] leading-5 text-ink-600">
-          {historical
+          {wooReturn ? "La venta termina en el Master y no habrá nuevos intentos. Se conserva el seguimiento de cada paquete. WooCommerce se cancelará y repondrá su stock cuando almacén confirme la recepción y el reingreso apto de todas las salidas." : historical
             ? "La venta termina en Kapta y no se intentará entregar nuevamente. El original de Shopify y el historial de sus salidas se conservan. Queda en la Actividad con tu nombre y el motivo."
             : "Lo pasa a «Cancelado» en WooCommerce, que devuelve el stock, sin entrar a wp-admin. No lo manda a la papelera. Queda en la Actividad con tu nombre y el motivo."}
         </p>
@@ -95,7 +97,7 @@ export function WooCancelZone({
       ) : !open ? (
         <div>
           <OpsButton variant="secondary" disabled={pending} onClick={start} aria-describedby={helpId} className="pointer-coarse:h-11">
-            Anular pedido…
+            {wooReturn ? "Terminar venta…" : "Anular pedido…"}
           </OpsButton>
         </div>
       ) : (
