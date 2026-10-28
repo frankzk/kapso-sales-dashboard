@@ -2723,10 +2723,12 @@ presentación inicial de «Todos» como solo un resumen, descrita a continuació
   agregan Por cerrar ni Finalizado al pendiente de entrega. Si falla esta lectura,
   se informa el error; no se presenta una lista parcial como si fuera el total.
 - **Filtros:** debajo de las tarjetas superiores, macroestados con sus subetapas
-  y cantidades, en el orden canónico del Master. Todos activos al entrar; cada
-  casilla desmarca una subetapa, o una macroetapa completa. Una selección parcial
-  de una macroetapa se indica como mixta. Se permite desmarcar todo y «Mostrar
-  todos» restaura la vista. Las exclusiones viven en `ocultar` en la URL y se
+  y cantidades, en el orden canónico del Master, presentados como chips en dos
+  filas compactas («Macroestado» y «Subetapa», ajuste visual del owner del
+  28-10-2026). Todos activos al entrar; cada chip desmarca una subetapa, o una
+  macroetapa completa. Una selección parcial lleva «−» y estado accesible mixto.
+  Se permite desmarcar todo y el chip «Todos» restaura la vista. Las exclusiones
+  viven en `ocultar` en la URL y se
   conservan al abrir/cerrar la ficha; tienda y búsqueda se combinan con ellas.
   Las cantidades de los filtros cuentan la tienda sin búsqueda ni exclusiones;
   la tarjeta Todos cuenta la tienda y la línea de la lista dice el total visible.
