@@ -19,6 +19,8 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { MasterPhoneSale } from "@/components/master-phone-sale";
+import type { PhoneSaleRequest } from "@/lib/master-phone-sale";
 import { cn } from "@/components/ui";
 import {
   AttentionPill,
@@ -210,6 +212,7 @@ export function OrdersMasterBoard({
   pendingVoucherCount = null,
   paidUnnotifiedCount = null,
   canEdit,
+  canCreateOrder = false,
   canExport = false,
   canOverride,
   canSetStatus,
@@ -222,6 +225,7 @@ export function OrdersMasterBoard({
   closurePermissions,
 }: {
   stores: StoreSummary[];
+  canCreateOrder?: boolean;
   view: MasterView;
   substage: MacroSubstage | null;
   counts: MasterCounts;
@@ -292,6 +296,14 @@ export function OrdersMasterBoard({
     canManageLogistics: boolean;
   };
 }) {
+  const [phoneSaleRequest,setPhoneSaleRequest]=useState<PhoneSaleRequest|null>(null);
+  const [phoneSaleActive,setPhoneSaleActive]=useState(false);
+  const [phoneSaleReturnOrder,setPhoneSaleReturnOrder]=useState<string|null>(null);
+  const phoneSaleSequence=useRef(0);
+  const phoneSaleActiveChanged=useCallback((active:boolean)=>{
+    setPhoneSaleActive(active);
+    if(!active)setPhoneSaleRequest(null);
+  },[]);
   const router = useRouter();
   const pathname = usePathname();
   const [navigating, startNav] = useTransition();
@@ -318,6 +330,7 @@ export function OrdersMasterBoard({
   // enviar la clave» (MOM §16.1). Los demás, como siempre, por Operar.
   const [rowFocus, setRowFocus] = useState<DrawerSectionId | undefined>(undefined);
   const openOrder = useCallback((orderId: string, focus?: DrawerSectionId) => {
+    setPhoneSaleReturnOrder(null);
     setRowFocus(focus);
     setOpenId(orderId);
   }, []);
@@ -592,6 +605,8 @@ export function OrdersMasterBoard({
           <p className="mt-1 text-sm text-ink-500">Estado real de cada pedido {scope}, con su historial completo.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2 min-[1400px]:pt-0.5">
+          {canCreateOrder && <MasterPhoneSale stores={stores} defaultStoreId={filters.stores.size===1 ? [...filters.stores][0] : null}
+            request={phoneSaleRequest} onActiveChange={phoneSaleActiveChanged}/>}
           <MasterSearchInput value={filters.search} onCommit={commitSearch} />
           {canWarehouse && (
             <Link href="/dashboard/pedidos/almacen" className={opsButtonClass("secondary", "md", "pointer-coarse:h-11")}>
@@ -973,7 +988,7 @@ export function OrdersMasterBoard({
         </>
       )}
 
-      {openId && (
+      {openId && !phoneSaleActive && (
         <OrderDrawer
           orderId={openId}
           canEdit={canEdit}
@@ -987,9 +1002,10 @@ export function OrdersMasterBoard({
           storeName={storeName}
           storeDomain={storeDomain}
           storeWooSite={storeWooSite}
-          focusSection={openId === abrir ? focusSection : rowFocus}
+          focusSection={phoneSaleReturnOrder===openId ? undefined : openId === abrir ? focusSection : rowFocus}
           onClose={() => {
             setOpenId(null);
+            setPhoneSaleReturnOrder(null);
             setRowFocus(undefined);
             setOpenWorkspace("operar");
             // Se limpia la URL al cerrar: si no, recargar reabriría un pedido
@@ -1004,6 +1020,12 @@ export function OrdersMasterBoard({
           }}
           onSaved={() => router.refresh()}
           initialWorkspace={openWorkspace}
+          onNewOrderForCustomer={canCreateOrder ? (customer,workspace)=>{
+            setOpenWorkspace(workspace);
+            setPhoneSaleReturnOrder(openId);
+            setPhoneSaleRequest({...customer,requestId:++phoneSaleSequence.current});
+            setPhoneSaleActive(true);
+          } : undefined}
         />
       )}
 

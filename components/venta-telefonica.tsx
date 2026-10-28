@@ -39,6 +39,7 @@ import {
 } from "@/app/dashboard/leads/venta-telefonica-actions";
 import { cuandoLabel, RIESGO_TITULO, type AvisoDuplicado } from "@/lib/pedido-duplicado";
 import { etiquetaCandidato, ordenarCandidatos } from "@/lib/lead-sin-numero";
+import type { PhoneSaleRequest } from "@/lib/master-phone-sale";
 
 // El tono de cada aviso: un duplicado frena, un pedido abierto pide mirar, una
 // recompra solo informa.
@@ -77,11 +78,18 @@ export function VentaTelefonica({
   stores,
   defaultStoreId,
   onAbrir,
+  request,
+  onOpenChange,
+  openingError,
 }: {
   stores: { id: string; name: string }[];
   defaultStoreId?: string | null;
   /** Abre la ficha del lead en la gaveta. Resuelve cuando ya tiene datos. */
   onAbrir: (leadId: string) => Promise<boolean>;
+  /** Otra entrada al mismo panel, con el cliente identificado en el Master. */
+  request?: PhoneSaleRequest | null;
+  onOpenChange?: (open: boolean) => void;
+  openingError?: string | null;
 }) {
   const router = useRouter();
   const [abierto, setAbierto] = useState(false);
@@ -93,7 +101,10 @@ export function VentaTelefonica({
   const [res, setRes] = useState<ClienteParaVenta | null>(null);
 
   const cerrar = () => {
+    ++consultaRef.current;
+    setConsultando(false);
     setAbierto(false);
+    onOpenChange?.(false);
     setPhone("");
     setNombre("");
     setRes(null);
@@ -107,12 +118,25 @@ export function VentaTelefonica({
   // número mientras la anterior viaja, el aviso que llegue tarde sería de OTRO
   // cliente, y un aviso de duplicado equivocado es peor que ninguno.
   const consultaRef = useRef(0);
+  useEffect(() => {
+    if (!request) return;
+    ++consultaRef.current;
+    setConsultando(false);
+    setStoreId(request.storeId);
+    setPhone(request.phone);
+    setNombre(request.name ?? "");
+    setRes(null);
+    setAbierto(true);
+    onOpenChange?.(true);
+  }, [request,onOpenChange]);
   const consultar = async () => {
     const token = ++consultaRef.current;
     setConsultando(true);
     try {
       const r = await consultarClientePorTelefono(storeId, phone, nombre);
       if (consultaRef.current === token) setRes(r);
+    } catch {
+      if (consultaRef.current === token) setRes({ok:false,error:"No se pudo consultar el cliente. Intenta nuevamente."});
     } finally {
       if (consultaRef.current === token) setConsultando(false);
     }
@@ -138,6 +162,8 @@ export function VentaTelefonica({
       // La lista todavía no sabe del lead nuevo. Se refresca DESPUÉS de abrir la
       // ficha, así que su costo no lo paga nadie mirando una pantalla quieta.
       router.refresh();
+    } catch {
+      setRes({ok:false,error:"No se pudo abrir la ficha del cliente. Lo escrito se conserva; intenta nuevamente."});
     } finally {
       abriendoRef.current = false;
       setAbriendo(false);
@@ -162,7 +188,10 @@ export function VentaTelefonica({
 
   return (
     <>
-      <OpsButton onClick={() => setAbierto(true)} aria-haspopup="dialog" aria-expanded={abierto}>
+      <OpsButton onClick={() => {
+        if (defaultStoreId) setStoreId(defaultStoreId);
+        setAbierto(true); onOpenChange?.(true);
+      }} aria-haspopup="dialog" aria-expanded={abierto} className="pointer-coarse:h-11">
         <IconPhone />
         Venta por teléfono
       </OpsButton>
@@ -192,6 +221,7 @@ export function VentaTelefonica({
                       onClick={() => {
                         if (abriendo) return;
                         setStoreId(s.id);
+                        ++consultaRef.current; setConsultando(false);
                         setRes(null); // el aviso es de OTRA tienda: dejaría de ser cierto
                       }}
                     />
@@ -217,6 +247,7 @@ export function VentaTelefonica({
                 disabled={abriendo}
                 onChange={(e) => {
                   setPhone(e.target.value);
+                  ++consultaRef.current; setConsultando(false);
                   setRes(null);
                 }}
                 onBlur={() => {
@@ -242,9 +273,9 @@ export function VentaTelefonica({
               />
             </label>
 
-            {res?.error && (
+            {(res?.error || openingError) && (
               <Banner tone="crit" role="alert">
-                {res.error}
+                {res?.error || openingError}
               </Banner>
             )}
             {res?.ok && res.existia && (
@@ -276,7 +307,11 @@ export function VentaTelefonica({
                         disabled={abriendo}
                         onClick={() => {
                           void (async () => {
-                            if (await onAbrir(c.id)) cerrar();
+                            if(abriendoRef.current)return;
+                            abriendoRef.current=true;setAbriendo(true);
+                            try { if (await onAbrir(c.id)) cerrar(); }
+                            catch {setRes({ok:false,error:"No se pudo abrir la conversación. Intenta nuevamente."});}
+                            finally {abriendoRef.current=false;setAbriendo(false);}
                           })();
                         }}
                         className="flex w-full items-center justify-between gap-3 rounded-md bg-white px-3 py-2 text-left shadow-control ring-1 ring-line transition-colors hover:bg-wash disabled:opacity-60 pointer-coarse:min-h-11"

@@ -177,6 +177,7 @@ async function PedidosContent({
       facets={facets}
       agency={agency}
       canEdit={!perms.readOnly}
+      canCreateOrder={perms.can("orders.create")}
       canExport={perms.can("data.export")}
       canOverride={perms.can("master.override_status")}
       // «Registrar estado» a mano: owner y admin (MOM §16, 15-10-2026). Solo

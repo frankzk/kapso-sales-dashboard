@@ -23,6 +23,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
+import { phoneSaleCustomer, type PhoneSaleCustomer } from "@/lib/master-phone-sale";
+import { CustomerOrderButton } from "@/components/customer-order-button";
 import { cn } from "@/components/ui";
 import {
   Badge,
@@ -668,6 +670,7 @@ export function OrderDrawer({
   onSaved,
   initialWorkspace,
   masterHref,
+  onNewOrderForCustomer,
 }: {
   orderId: string;
   canEdit: boolean;
@@ -711,6 +714,7 @@ export function OrderDrawer({
    * los filtros y las acciones en lote que la ficha sola no trae.
    */
   masterHref?: string | null;
+  onNewOrderForCustomer?: (customer:PhoneSaleCustomer,workspace:DrawerWorkspaceView)=>void;
 }) {
   const [detail, setDetail] = useState<OrderMasterDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -2130,6 +2134,8 @@ export function OrderDrawer({
                 <SectionHead
                   title="Pedido y cliente"
                   help={`Datos comerciales sincronizados desde ${storePlatform} y contexto operativo de Kapta.`}
+                  aside={onNewOrderForCustomer && <CustomerOrderButton customer={phoneSaleCustomer(detail.row)}
+                    onCreate={(customer)=>onNewOrderForCustomer(customer,workspace)}/>}
                 />
                 <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
                   <Field label="Cliente" value={detail.row.customer_name} />
