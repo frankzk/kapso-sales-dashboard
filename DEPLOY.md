@@ -5302,5 +5302,5 @@ Aplicar db/migrations/0285_woo_sale_pending_return.sql antes de publicar el cód
 Instala la ficha de seguimiento solo de servicio y RPCs de fin de venta y turnos;
 actualiza la recepción GF para estas ventas y bloquea otro despacho. No modifica
 ventas ni repone stock al instalarse. Confirmar la tarea /api/cron/woo-sale-returns
-en Vercel (cada minuto). La tarea solo cancela en Woo tras recepción e inventario
+en Vercel (minutos 4,8,14,18,24,28,38,44,54,58 de cada hora). La tarea solo cancela en Woo tras recepción e inventario
 humanos de todas las salidas; probar la migración con el smoke en Postgres desechable.

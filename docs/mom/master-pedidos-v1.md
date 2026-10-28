@@ -19171,7 +19171,8 @@ inventario con los permisos existentes. Las liquidaciones conservan su cierre
 independiente; reponer stock no liquida fletes.
 
 Confirmar «Reingreso a stock» intenta el cierre al momento. El cron
-/api/cron/woo-sale-returns (cada minuto, dos expedientes por ejecución) recupera
+/api/cron/woo-sale-returns (minutos 4,8,14,18,24,28,38,44,54,58 de cada hora,
+sin coincidir con los barridos existentes; dos expedientes por ejecución) recupera
 pendientes. Un turno de cinco minutos con token y SKIP LOCKED evita dos trabajos
 simultáneos y se recupera si el proceso muere. Se vuelven a comprobar las pruebas
 físicas, pagos, entregas y el estado vivo en WooCommerce antes de enviar cancelled.
