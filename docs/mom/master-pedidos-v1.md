@@ -19145,7 +19145,7 @@ sigue para pedidos que nunca salieron.
 
 La transacción woo_end_sale_pending_return (0285) guarda el hecho inmutable
 woo_sale_ended_pending_return y una ficha única woo_sale_returns con las salidas
-despachadas, actor y motivo. Revalida entregas/pagos y bloquea las salidas mientras
+despachadas, productos/cantidades, actor y motivo. Revalida entregas/pagos y bloquea las salidas mientras
 toma la foto. No cambia orders.cancelled_at, stock, dinero, guías, solicitudes ni
 liquidaciones. La venta queda Anulada en el Master y no admite nuevos envíos,
 escaneos de despacho ni arrastre GF a otro reparto. Un webhook, reporte o override
@@ -19163,7 +19163,8 @@ cuenta como recepción humana.
 Para reponer: todas las salidas de la foto deben seguir vinculadas al pedido y
 tener return_received con actor y source manual/dispatch, seguido por
 inventory_reconciled con actor de almacén. Falta de una caja, merma, otra salida
-despachada, pago/entrega posteriores, vínculo corregido o salida interna activa
+despachada, pago/entrega posteriores, cambio de productos o cantidades en WooCommerce,
+vínculo corregido, custodia aún fuera de almacén o salida interna activa
 bloquean la reposición automática. No se repone parcialmente al llegar la primera
 caja ni se toma una merma por mercancía apta. Almacén confirma recepción e
 inventario con los permisos existentes. Las liquidaciones conservan su cierre
