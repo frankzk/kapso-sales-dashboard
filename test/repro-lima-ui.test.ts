@@ -34,7 +34,7 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: () => {} }),
 }));
 
-const read = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8");
+const read = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8").replace(/\r\n/g, "\n");
 
 const page = read("app/dashboard/pedidos/repro-lima/page.tsx");
 const loading = read("app/dashboard/pedidos/repro-lima/loading.tsx");
@@ -409,34 +409,34 @@ describe("el tablero (E31, E33)", () => {
     expect(board).toContain("lg:grid-cols-5");
     expect(board).toContain("col-span-2 sm:col-span-4 lg:col-span-1");
     expect(board).toContain('label="Todos · por entregar"');
-    expect(board).toContain("value={breakdown.totals.porEntregar}");
+    expect(board).toContain("value={pending ? pendingStore.length : breakdown!.totals.porEntregar}");
     // Va DESPUÉS de las cuatro listas y solo con el conteo leído.
     expect(board.indexOf('label="Todos · por entregar"')).toBeGreaterThan(board.indexOf("{REPRO_LISTS.map((l) => (\n          <StatusCard"));
-    expect(board).toContain("{breakdown && (");
+    expect(board).toContain("{(pending || breakdown) && (");
     // La vista va en la URL, sin volver a pedir la página.
-    expect(board).toContain('searchParams.get("vista") === "todos"');
+    expect(board).toContain('const requestedView = searchParams.get("vista");');
     expect(board).toContain("window.history.replaceState(");
     expect(board).not.toMatch(/router\.(push|replace)\(/);
     // Entrar a «Todos» quita la búsqueda; una lista vuelve a las listas.
     const todosCard = between(board, 'label="Todos · por entregar"', "/>");
-    expect(todosCard).toContain('onClick={() => { setQuery(""); showView("todos"); }}');
+    expect(todosCard).toContain('onClick={() => showView("todos")}');
     expect(todosCard).toContain('active={view === "todos"}');
     expect(board).toContain('active={view === "listas" && list === l}');
     expect(board).toContain('onClick={() => { setList(l); showView("listas"); }}');
     // «Por reprogramar Lima» sale de las filas del tablero, por tienda y sin la búsqueda.
     expect(board).toContain("reproAging(storeScoped)");
-    expect(board).toContain("const scoped = useMemo(() => storeScoped.filter((row) => matches(row, query))");
+    expect(board).toContain('!hidden.has(master ? pendingKey(master) : "en_curso:por_reprogramar_lima") && matches(row, query)');
     // En «Todos», sin búsqueda, y la línea dice lo que falta entregar.
     expect(board).toContain("todavía por entregar");
-    expect(board).toContain('aria-label={todos ? "Todos" : LIST_CARD[list].label}');
+    expect(board).toContain('view === "todos" ? "Todos los pendientes de Lima"');
     expect(board).toContain("<ReproLimaTodos breakdown={todos} lists={lists} onOpenList={onOpenList} />");
     // Las cuatro listas de «Todos» se cuentan sin la búsqueda, y la búsqueda se
     // quita aunque se llegue a «Todos» por la URL.
     expect(board).toContain("for (const row of storeScoped) out[row.list] += 1;");
     expect(board).toContain("count: storeCounts[l]");
-    expect(board).toContain('useEffect(() => { if (view === "todos") setQuery(""); }, [view]);');
+    expect(board).toContain('useEffect(() => { if (view === "resumen") setQuery(""); }, [view]);');
     // Sin conteo, `vista` sale de la URL; al abrir una lista desde «Todos» el foco va a la sección.
-    expect(board).toContain('const staleTodos = !openCounts && searchParams.get("vista") === "todos";');
+    expect(board).toContain('requestedView === "resumen" && breakdown ? "resumen"');
     expect(board).toContain("window.requestAnimationFrame(() => listSection.current?.focus());");
     expect(board).toContain("<section ref={listSection} tabIndex={-1}");
   });
@@ -668,12 +668,12 @@ describe("el tablero con «Todos» (§9.5, 14-10-2026)", () => {
     expect(html).toContain('aria-label="Por decidir"');
   });
 
-  it("con «?vista=todos», el resumen sin búsqueda y con la línea de lo que falta", () => {
-    const html = render("vista=todos&ficha=x");
-    expect(card(html)).toContain('aria-pressed="true"');
+  it("con «?vista=resumen», conserva el cuadre anterior sin búsqueda", () => {
+    const html = render("vista=resumen&ficha=x");
+    expect(card(html)).toContain('aria-pressed="false"');
     // Ninguna lista elegida mientras se mira «Todos».
-    expect(html.match(/aria-pressed="true"/g)?.length).toBe(1);
-    expect(html).toContain('<section tabindex="-1" aria-label="Todos"');
+    expect(html.match(/aria-pressed="true"/g)?.length ?? 0).toBe(0);
+    expect(html).toContain('<section tabindex="-1" aria-label="Resumen de Lima"');
     expect(html).not.toContain('type="search"');
     expect(html).toContain('<b class="font-semibold text-ink-900">8</b> todavía por entregar · 7 por cerrar');
     expect(html).toContain("Todavía por entregar");

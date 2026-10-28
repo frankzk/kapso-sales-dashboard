@@ -17,6 +17,9 @@ export default function Loading() {
           <Skeleton key={i} className={i === 4 ? "h-[62px] col-span-2 sm:col-span-4 lg:col-span-1" : "h-[62px]"} />
         ))}
       </div>
+      <div className="space-y-2 rounded-lg bg-white p-4 ring-1 ring-line" aria-hidden="true">
+        {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-9 w-full" />)}
+      </div>
       <div className="space-y-3 rounded-lg bg-white p-4 shadow-control ring-1 ring-line sm:p-5">
         <Skeleton className="h-8 w-full sm:w-72" />
         {Array.from({ length: 8 }).map((_, i) => (

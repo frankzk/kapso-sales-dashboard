@@ -1298,7 +1298,7 @@ export function OrderDrawer({
                   {/* En el teléfono la fecha espera en Información: cada línea de
                       más en la cabecera fija es pantalla que no se usa. */}
                   <span className="hidden shrink-0 sm:inline">
-                    · creado el <span className="tabular-nums">{fmtDate(row.order_created_at)}</span>
+                    · creado el <span className="tabular-nums">{fmtDateTime(row.order_created_at)}</span>
                   </span>
                   {/* En el teléfono el cliente va en su propia línea, arriba y
                       entero: detrás de la tienda se partía a media palabra. En

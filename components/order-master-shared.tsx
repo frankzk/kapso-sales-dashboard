@@ -188,6 +188,7 @@ export function fmtDateTime(iso: string | null | undefined): string {
   const d = new Date(iso);
   if (Number.isNaN(+d)) return "—";
   return d.toLocaleString("es-PE", {
+    timeZone: "America/Lima",
     day: "2-digit",
     month: "2-digit",
     year: "2-digit",
