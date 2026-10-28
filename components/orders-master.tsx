@@ -995,6 +995,7 @@ export function OrdersMasterBoard({
           canOverride={canOverride}
           canSetStatus={canSetStatus}
           canCancelWoo={canCancelWoo}
+          canEditCustomerName={canCreateOrder}
           canCreateGuide={canCreateGuide}
           canCreateTandersGuide={canCreateTandersGuide}
           canCreateShalomGuide={canCreateShalomGuide}
