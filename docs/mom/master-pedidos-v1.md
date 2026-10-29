@@ -17922,7 +17922,7 @@ también salió, va con él. Un producto simple es una variante; los agrupados y
 externos no se venden por aquí. Los ids son `woo:<id>` y nada los manda a
 Shopify: si la tienda vuelve a Shopify con un formulario abierto, «Generar
 pedido» pide volver a elegir esos productos. Una variación sin SKU propio va
-sin SKU y se frena al generar con su mensaje. Acotado: 12 productos, 50
+sin SKU y se frena al generar con su mensaje. Acotado: 12 productos, 1000
 variaciones cada uno y 10 s en total; si WooCommerce no contesta, «Sin
 resultados».
 
@@ -18256,12 +18256,12 @@ Implementación: `lib/shipment-order-capture.ts` (`orderPlatformOf`,
 Implementación de «Generar pedido» y los buscadores en WooCommerce:
 
 **Buscador de variantes (29-10-2026).** Leads, productos promocionados y selector de stock recorren las páginas
-de variaciones publicadas con100 por página, leyendo `X-WP-TotalPages`. El corte anterior de50 ocultaba toda
-la talla38–39 de CloudSlides (66 variantes en Aurela). Se conservan ids, SKU, precios y stock de la tienda,
-incluidas las variantes con stock0. Hasta1000 por producto y el presupuesto total de10segundos; si una página
+de variaciones publicadas con 100 por página, leyendo `X-WP-TotalPages`. El corte anterior de 50 ocultaba toda
+la talla 38–39 de CloudSlides (66 variantes en Aurela). Se conservan ids, SKU, precios y stock de la tienda,
+incluidas las variantes con stock 0. Hasta 1000 por producto y el presupuesto total de 10 segundos; si una página
 falla, vence el presupuesto o se supera el límite, no se ofrece ese producto con una lista incompleta.
 Esto corrige la lectura del catálogo; no crea variantes ni modifica pedidos o inventario.
-Pruebas:66 con11 variantes38–39,125 en dos páginas, fallo de página posterior, presupuesto y límite seguro,
+Pruebas: 66 con 11 variantes 38–39, 125 en dos páginas, fallo de página posterior, presupuesto y límite seguro,
 en `test/woocommerce-orders.test.ts`; la tienda falsa ahora implementa paginación y cabeceras de variaciones.
 
 `lib/woocommerce-orders.ts` (`loadStoreOrderPlatform`, `buildWooSaleOrder`,
