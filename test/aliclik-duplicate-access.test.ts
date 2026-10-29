@@ -100,6 +100,63 @@ describe("retención autoritativa y resolución auditada", () => {
     db.tables.shipments![0]!.returned_at = "2026-10-01";
     expect((await loadAliclikDuplicateHold("new")).allowed).toBe(true);
   });
+  it("libera KP201004 cuando Yhoni ya entregó la salida propia de KP141320", async () => {
+    db.tables.order_master![0]!.order_name = "#KP201004";
+    db.tables.order_master![1]!.order_name = "#KP141320";
+    Object.assign(db.tables.shipments![0]!, { courier: "propio", delivery_status: "pendiente", created_at: "2026-10-14T12:09:43Z" });
+    db.tables.order_events!.push({ order_id: "prior", store_id: "store", shipment_id: "box", kind: "stop_reported",
+      occurred_at: "2026-10-14T20:41:14Z", payload: { status: "entregado", stop_id: "yhoni-stop" } });
+    expect(await loadAliclikDuplicateHold("new")).toMatchObject({ allowed: true, conflicts: [] });
+    expect(db.writes).toHaveLength(0);
+  });
+  it("no libera otra caja del mismo pedido por la entrega de la primera", async () => {
+    Object.assign(db.tables.shipments![0]!, { courier: "propio", delivery_status: "pendiente" });
+    db.tables.shipments!.push({ ...db.tables.shipments![0]!, id: "second-box" });
+    db.tables.order_events!.push({ order_id: "prior", store_id: "store", shipment_id: "box", kind: "stop_reported",
+      occurred_at: "2026-10-14T20:41:14Z", payload: { status: "entregado" } });
+    expect((await loadAliclikDuplicateHold("new")).conflicts.map((c) => c.shipmentId)).toEqual(["second-box"]);
+  });
+  it.each(["pendiente", "no_entregado"])("un reporte posterior %s vuelve a retener la salida propia", async (status) => {
+    Object.assign(db.tables.shipments![0]!, { courier: "propio", delivery_status: "pendiente" });
+    db.tables.order_events!.push(
+      { order_id: "prior", store_id: "store", shipment_id: "box", kind: "stop_reported", occurred_at: "2026-10-14T20:41:14Z", payload: { status: "entregado" } },
+      { order_id: "prior", store_id: "store", shipment_id: "box", kind: "stop_reported", occurred_at: "2026-10-14T21:00:00Z", payload: { status } },
+    );
+    expect((await loadAliclikDuplicateHold("new")).allowed).toBe(false);
+  });
+  it("la entrega propia no resuelve una salida de courier externo", async () => {
+    db.tables.order_events!.push({ order_id: "prior", store_id: "store", shipment_id: "box", kind: "stop_reported",
+      occurred_at: "2026-10-14T20:41:14Z", payload: { status: "entregado" } });
+    expect((await loadAliclikDuplicateHold("new")).allowed).toBe(false);
+  });
+  it("lee el historial completo del motorizado y no usa eventos de otra tienda", async () => {
+    Object.assign(db.tables.shipments![0]!, { courier: "propio", delivery_status: "pendiente" });
+    db.tables.order_events!.push(...Array.from({ length: 105 }, (_, i) => ({
+      order_id: "prior", store_id: "store", shipment_id: "box", kind: "pickup_checked",
+      occurred_at: `2026-10-14T15:00:${String(i % 60).padStart(2, "0")}Z`, payload: {},
+    })), { order_id: "prior", store_id: "other-store", shipment_id: "box", kind: "stop_reported",
+      occurred_at: "2026-10-14T20:41:14Z", payload: { status: "entregado" } });
+    expect((await loadAliclikDuplicateHold("new")).allowed).toBe(false);
+    db.tables.order_events!.push({ order_id: "prior", store_id: "store", shipment_id: "box", kind: "stop_reported",
+      occurred_at: "2026-10-14T20:41:14Z", payload: { status: "entregado" } });
+    expect((await loadAliclikDuplicateHold("new")).allowed).toBe(true);
+  });
+  it("el cuaderno sin salida respeta la fecha de creación y las cajas reemplazadas", async () => {
+    Object.assign(db.tables.shipments![0]!, { courier: "propio", delivery_status: "pendiente", created_at: "2026-10-14T12:09:43Z" });
+    const report = { order_id: "prior", store_id: "store", shipment_id: null, kind: "stop_reported",
+      occurred_at: "2026-10-13T20:41:14Z", payload: { status: "entregado" } };
+    db.tables.order_events!.push(report);
+    expect((await loadAliclikDuplicateHold("new")).allowed).toBe(false);
+    report.occurred_at = "2026-10-14T20:41:14Z";
+    expect((await loadAliclikDuplicateHold("new")).allowed).toBe(true);
+    db.tables.order_events!.push({ order_id: "prior", store_id: "store", shipment_id: "box", kind: "output_replaced", occurred_at: "2026-10-14T21:00:00Z" });
+    expect((await loadAliclikDuplicateHold("new")).allowed).toBe(false);
+  });
+  it("un fallo al leer el reporte propio retiene la guía", async () => {
+    Object.assign(db.tables.shipments![0]!, { courier: "propio", delivery_status: "pendiente" });
+    db.fail = "order_events";
+    expect(await getAliclikDuplicateHold("new")).toHaveProperty("error");
+  });
   it.each(["order_master", "stores", "shipments", "orders", "order_events", "order_payments", "memberships", "user_permissions"])("un fallo en %s cierra la compuerta", async (table) => {
     db.fail = table;
     expect(await getAliclikDuplicateHold("new")).toHaveProperty("error");

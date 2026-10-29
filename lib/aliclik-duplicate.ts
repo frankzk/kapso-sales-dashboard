@@ -10,6 +10,7 @@ export const DUPLICATE_DECISIONS: Record<DuplicateDecision, string> = {
 export interface DuplicateItem { variant: string; sku: string; quantity: number }
 export interface DuplicateShipment {
   id: string; order_id: string; guide_code: string; courier: string;
+  created_at?: string | null;
   dispatched_at: string | null; custody_transferred_at: string | null;
   out_for_delivery_at: string | null; aliclik_reported_dispatch_date: string | null;
   returned_at: string | null; delivery_status: string; custody_state: string | null;

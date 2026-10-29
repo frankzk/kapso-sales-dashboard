@@ -1315,6 +1315,16 @@ Una guía creada pero sin despacho no activa esta regla. Tampoco un envío ya
 entregado o recuperado. Cancelar en Shopify, cerrar la guía o solicitar retorno
 no prueba que la caja volvió. Se revisan todas las salidas del otro pedido.
 
+**Entrega de Grupo GF (corrección 29-10-2026).** La retención reconoce la
+señal vigente del motorizado sobre cada salida (`gfRiderSignal`, §29.13), igual
+que el Master. `shipments.delivery_status` puede seguir pendiente después de
+reportar la entrega en la parada: eso no convierte la caja entregada en otra
+pendiente. Caso KP201004/KP141320: Yhoni reportó la salida anterior entregada
+el 14/10 a las 15:41, pero la lectura de la guía sola retenía la nueva. Un
+reporte deshecho o corregido deja de liberar; entregar una salida no libera
+otra del mismo pedido. No se modifica el estado de la guía ni se cierra la ruta
+o la liquidación para levantar esta retención.
+
 La operadora registra una resolución con motivo, actor, fecha y las salidas
 concretas que revisó:
 
