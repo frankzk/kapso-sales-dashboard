@@ -2514,9 +2514,8 @@ export async function runStoreSync(
     }
   }
 
-  // 2c.6) Olas de reencolado: carritos en nr/buzón/cuelga quietos 48h suben con
-  //       needs_attention (máx 2 olas por lead) para que la llamada de
-  //       recontacto no se pase. Pre-0036 es un no-op. Best-effort.
+  // 2c.6) Por llamar (0289): carritos sin contacto tras 48 h y citas vencidas,
+  //       menos de tres llamadas humanas. Conserva estado e historial.
   try {
     report.requeued = await flagCartAttentionWaves(admin, storeId);
   } catch (e: any) {

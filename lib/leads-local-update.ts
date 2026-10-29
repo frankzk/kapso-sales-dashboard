@@ -1,5 +1,6 @@
 import type { LeadCounts, LeadView } from "./leads-access";
 import type { LeadRow } from "./types";
+import { isInCallQueue } from "./lead-call-queue";
 
 /** Same membership predicates as getStoreLeads / lead_queue_counts (0059).
  * Only used to reconcile a confirmed write; periodic reads remain authoritative. */
@@ -18,7 +19,7 @@ export function leadMembership(lead: LeadRow, now = Date.now()): LeadCounts {
     seguimientos: Number(!!lead.next_followup_at && Date.parse(lead.next_followup_at) <= now),
     ganados: Number(lead.category === "won"),
     perdidos: Number(lead.category === "lost"),
-    sin_llamar: Number(callable && lead.status === "nuevo"),
+    sin_llamar: Number(callable && isInCallQueue(lead)),
   };
 }
 

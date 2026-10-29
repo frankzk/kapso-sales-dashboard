@@ -1,12 +1,13 @@
 "use client";
 
 // El siguiente lead de cada vendedora (DESIGN.md › Leads, MOM §11 › «El
-// siguiente lead de cada vendedora»). Arriba de «Sin llamar», a lo ancho: el
+// siguiente lead de cada vendedora»). Arriba de «Por llamar», a lo ancho: el
 // lead que le toca llamar ahora, ya reservado para ella, en tres columnas —el
 // cliente y lo que pregunta, registrar la gestión, y el chat—. Nunca el mismo a
 // dos vendedoras: aparecer aquí es tomarlo con la reserva de siempre
 // (claimLead, 10 minutos), que cuenta como una de sus dos.
 
+import { LeadAttemptBadge } from "@/components/lead-attempt-badge";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
@@ -654,6 +655,7 @@ function ClientColumn({
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           <SegmentBadge lead={lead} />
+                  <LeadAttemptBadge lead={lead} />
           {urgency?.tier === "dorada" && <Badge tone="ok">{`Hora dorada · quedan ${urgency.minutesLeft} min`}</Badge>}
           {(win === "por_vencer" || win === "critica") && <Badge tone="warn">Ventana por vencer</Badge>}
           {win === "cerrada" && <Badge tone="crit">Sin ventana de 24 h</Badge>}

@@ -160,7 +160,7 @@ export interface LeadActionState {
   windowClosed?: boolean; // the 24h WhatsApp session window is closed (retry won't help)
   savedCall?: LeadCallRow;
   leadPatch?: Partial<
-    Pick<LeadRow, "status" | "category" | "needs_attention" | "next_followup_at" | "last_interaction_at">
+    Pick<LeadRow, "status" | "category" | "needs_attention" | "next_followup_at" | "last_interaction_at" | "call_queue_ready" | "call_attempt_count">
   >;
   sentMessage?: LeadConversationMessage;
   generatedOrder?: {
@@ -1030,6 +1030,14 @@ async function persistCall(formData: FormData): Promise<LeadActionState> {
   ]);
   if (callRes.error) return { error: `No se pudo registrar la llamada: ${callRes.error.message}` };
   if (leadRes.error) return { error: `La llamada se registró, pero no se pudo actualizar el lead: ${leadRes.error.message}` };
+
+  // The insert trigger consumes a pending retry and counts the saved call.
+  // Read its confirmed result, never guess the attempt number in the browser.
+  const { data: attempts, error: attemptsError } = await admin.from("leads")
+    .select("call_queue_ready,call_attempt_count,next_followup_at")
+    .eq("id", leadId).eq("store_id", ctx.storeId).maybeSingle();
+  patch.call_queue_ready = false;
+  if (!attemptsError && attempts) Object.assign(patch, attempts);
 
   // Return the confirmed write only. Revalidation would render and serialize
   // the entire queue before the action response can finish.

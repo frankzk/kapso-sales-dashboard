@@ -8,7 +8,14 @@ vi.mock("next/navigation", () => ({ redirect: (path: string) => { throw new Erro
 vi.mock("@/lib/db", () => ({
   createServerSupabase: async () => ({ auth: { getClaims: mocks.claims }, from: () => ({ select: () => ({ eq: () => ({ maybeSingle: mocks.access }) }) }) }),
   createAdminSupabase: () => ({ from: (table: string) => ({
-    select: () => ({ eq: () => ({ maybeSingle: table === "orders" ? mocks.order : table === "stores" ? async () => ({ data: { timezone: "America/Lima" } }) : mocks.current }) }),
+    select: (columns: string) => {
+      const q: Record<string, unknown> = {};
+      q.eq = () => q;
+      q.maybeSingle = columns.startsWith("call_queue_ready")
+        ? async () => ({data:{call_queue_ready:false,call_attempt_count:2,next_followup_at:mocks.update.mock.calls.at(-1)?.[0]?.next_followup_at ?? null},error:null})
+        : table === "orders" ? mocks.order : table === "stores" ? async () => ({ data: { timezone: "America/Lima" } }) : mocks.current;
+      return q;
+    },
     insert: (payload: unknown) => { mocks.insert(payload); return { select: () => ({ single: async () => mocks.insertResult }) }; },
     update: (patch: unknown) => { mocks.update(patch); return { eq: async () => mocks.updateResult }; },
   }) }),

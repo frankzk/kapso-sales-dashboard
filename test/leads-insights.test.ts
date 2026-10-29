@@ -264,7 +264,7 @@ describe("sinLlamarFromRollup: de las filas agrupadas en la base al gráfico", (
 });
 
 describe("el panel pregunta primero al RPC y la SQL dice lo mismo que el código", () => {
-  const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
+  const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8").replace(/\r\n/g, "\n");
 
   it("loadSinLlamar llama a lead_insights_rollup y solo drena si no existe", () => {
     const src = read("lib/leads-insights.ts");
@@ -286,17 +286,15 @@ describe("el panel pregunta primero al RPC y la SQL dice lo mismo que el código
     expect(read("lib/leads-team-today.ts")).not.toMatch(/from "@\/lib\/(db|access|advisor-schedules|metrics)"/);
   });
 
-  it("el predicado de sin llamar del RPC vigente (0263) es el mismo que el del drenado", () => {
+  it("el gráfico y el drenado incluyen la misma cola Por llamar con reintentos (0289)", () => {
     // Si divergen, el panel dice una cosa con el RPC y otra sin él.
     const src = read("lib/leads-insights.ts");
-    expect(src).toContain('.in("category", ["open", "hot"])\n      .eq("status", "nuevo")');
-    for (const file of ["0155_lead_insights_rollup.sql", "0263_lead_insights_rollup_sin_llamar.sql"]) {
-      const sql = read(`db/migrations/${file}`);
-      expect(sql).toContain("and category in ('open', 'hot')\n      and status = 'nuevo'");
-      expect(sql).toContain("coalesce(last_interaction_at, first_seen_at)");
-      expect(sql).toContain("security invoker");
-      expect(sql).toContain("revoke all on function public.lead_insights_rollup");
-    }
+    expect(src).toContain('.is("contact_opt_out_at", null)');
+    expect(src).toContain('.or(CALL_QUEUE_FILTER)');
+    const sql = read("db/migrations/0289_lead_call_queue_retries.sql");
+    expect(sql).toContain("public.lead_in_call_queue(status,category,call_queue_ready,contact_opt_out_at,has_order,order_id)");
+    expect(sql).toContain("security invoker");
+    expect(sql).toContain("revoke all on function public.lead_insights_rollup");
   });
 
   it("la 0263 conserva la firma y deja solo el cubo sin_llamar", () => {
