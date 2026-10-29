@@ -581,4 +581,6 @@
 \ir migrations/0288_lima_attention_all_pending.sql
 \echo 'Applying 0289_lead_call_queue_retries.sql'
 \ir migrations/0289_lead_call_queue_retries.sql
+\echo 'Applying 0290_agency_unpaid_cohort.sql'
+\ir migrations/0290_agency_unpaid_cohort.sql
 \echo 'Done.'

@@ -6,6 +6,8 @@
 // lleva la tasa, su «n de m» y una barra de proporción.
 
 import { useState } from "react";
+import Link from "next/link";
+import { agencyUnpaidHref } from "@/lib/agency-payment-cohort";
 import { cn } from "@/components/ui";
 import { ChoiceChip } from "@/components/ops-ui";
 import { FIGURE_FRAME, pctText } from "@/components/figures";
@@ -72,7 +74,13 @@ export function MomIndicators({
               )}
             >
               <dt className="text-[13px] font-medium leading-5 text-ink-600">
-                {row.label}
+                {row.key === "agency_full_payment" ? (
+                  <Link href={agencyUnpaidHref(period)} prefetch={false}
+                    className="rounded-sm text-brand-700 underline decoration-brand-500/40 underline-offset-4 hover:decoration-brand-700 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-brand-600"
+                    aria-label={`Ver pedidos de Agencia sin pago completo: ${period.label}`}>
+                    {row.label}
+                  </Link>
+                ) : row.label}
                 <span className="sr-only">: {row.detail}</span>
               </dt>
               <dd className={cn("mt-0.5 text-xl font-semibold leading-7 tabular-nums", rate == null ? "text-ink-500" : "text-ink-900")}>
@@ -96,6 +104,12 @@ export function MomIndicators({
                       <span className="hidden sm:inline lg:hidden xl:inline">{"\u00a0· "}</span>
                       {refName} {ref.kpis[row.key]?.rate == null ? "sin datos" : pctText(ref.kpis[row.key]!.rate!)}
                     </span>
+                  )}
+                  {row.key === "agency_full_payment" && (
+                    <Link href={agencyUnpaidHref(period)} prefetch={false}
+                      className="mt-1.5 inline-flex min-h-8 items-center rounded-sm font-medium text-brand-700 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 pointer-coarse:min-h-11">
+                      Ver pendientes ({nf.format((value?.denominator ?? 0) - (value?.numerator ?? 0))})
+                    </Link>
                   )}
                 </span>
               </dd>

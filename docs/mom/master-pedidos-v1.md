@@ -9371,6 +9371,23 @@ distintas en filas contiguas se leen como comparables sin serlo.
 en la ventana pero despachado fuera no entra; si entrara, «Ayer» acabaría
 contando el mes entero.
 
+**Abrir los pendientes de Agencia (29-10-2026).** «Pago completo de Agencia»
+enlaza al Master, en Todas las etapas, con los pedidos de esa misma cohorte de
+guías Shalom/Olva que todavía no cubren su total. El enlace conserva los días
+del periodo elegido, con corte de medianoche de Lima, sin filtrar por creación
+del pedido. Se deduplica por pedido aunque tenga varias guías. El Master muestra
+el contexto y permite quitarlo; paginación, conteos y Excel usan la misma lectura
+`order_master_agency_unpaid` bajo RLS. Un fallo de lectura se muestra como error,
+no como «sin pendientes» ni como la lista completa. No se excluyen etapas o
+anulaciones por fuera de la cohorte: es el complemento exacto del indicador.
+
+El indicador y su lista reconocen también el checkout confirmado (§6, `paid`,
+pasarela `checkout`, sin reembolso), además de los comprobantes validados que
+cubren el total. Se compara en céntimos. No basta marcar pagado manualmente,
+subir un comprobante sin validar o registrar un pago parcial. Al validar el
+saldo, el pedido sale de la lista en la siguiente lectura; no se modifican
+pedidos, envíos ni pagos al abrirla. Requiere la migración 0290 antes del código.
+
 **Cómo leer las ventanas cortas de esta fila.** «Hoy» y «Ayer» seguirán
 mostrando cifras cercanas a cero, y no es un fallo: con una mediana de cobro de
 5,6 días, casi ningún pedido despachado hoy puede estar cobrado hoy. Lo mismo

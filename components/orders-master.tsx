@@ -1,5 +1,7 @@
 "use client";
 
+import { agencyPaymentWindowLabel } from "@/lib/agency-payment-cohort";
+
 // Master de Pedidos — la vista central de control de la operación logística.
 //
 // FILTRA LA BASE, NO ESTA PANTALLA. Antes se bajaban las ~10.000 filas al
@@ -628,6 +630,18 @@ export function OrdersMasterBoard({
           )}
         </div>
       </header>
+
+      {!searchActive && filters.agencyUnpaid && (
+        <section aria-label="Pendientes de pago de Agencia" className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-info-wash px-4 py-3 ring-1 ring-line">
+          <div className="text-sm text-ink-700">
+            <p className="font-semibold text-ink-900">Agencia · sin pago completo</p>
+            <p>Guías Shalom u Olva del {agencyPaymentWindowLabel(filters.agencyUnpaid)}. Incluye pagos parciales y comprobantes por validar; excluye los pedidos ya pagados por checkout.</p>
+          </div>
+          <OpsButton variant="ghost" size="sm" onClick={() => navigate({ filters: { agencyUnpaid: null } })}>
+            Quitar este filtro
+          </OpsButton>
+        </section>
+      )}
 
       {searchActive ? (
         <section aria-label="Resultados de búsqueda" aria-busy={navigating || undefined} className={CARD}>

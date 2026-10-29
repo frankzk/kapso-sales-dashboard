@@ -25,6 +25,8 @@ export interface MomOwnerPeriod {
 }
 
 export interface MomOwnerOrderFact {
+  /** Checkout payment confirmed by the shop, with no refund (isWebPrepaid). */
+  webPrepaid?: boolean;
   orderId: string;
   createdAt: string | null;
   coverage: string | null;
@@ -258,8 +260,9 @@ function uniqueOrderIds(rows: MomOwnerShipmentFact[]): Set<string> {
 function summedPaymentsByOrder(payments: MomOwnerPaymentFact[]): Map<string, number> {
   const out = new Map<string, number>();
   for (const payment of payments) {
-    out.set(payment.orderId, (out.get(payment.orderId) ?? 0) + payment.amount);
+    out.set(payment.orderId, (out.get(payment.orderId) ?? 0) + Math.round(payment.amount * 100));
   }
+  for (const [id, cents] of out) out.set(id, cents / 100);
   return out;
 }
 
@@ -416,8 +419,9 @@ export function buildMomOwnerSummary(input: BuildMomOwnerSummaryInput): MomOwner
     // comparables y no lo eran.
     let fullyPaidAgencyOrders = 0;
     for (const orderId of dispatchedAgencyOrders) {
-      const total = orderById.get(orderId)?.orderTotal;
-      if (total != null && total > 0 && (currentPayments.get(orderId) ?? 0) >= total) {
+      const order = orderById.get(orderId);
+      const total = order?.orderTotal;
+      if (order?.webPrepaid || (total != null && total > 0 && Math.round((currentPayments.get(orderId) ?? 0) * 100) >= Math.round(total * 100))) {
         fullyPaidAgencyOrders += 1;
       }
     }

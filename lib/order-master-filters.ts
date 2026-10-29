@@ -8,8 +8,11 @@
 
 import type { OrderMasterRow } from "@/lib/types";
 import { confirmationQueueBucket, limaDayKey } from "@/lib/order-confirmation";
+import type { AgencyPaymentWindow } from "@/lib/agency-payment-cohort";
 
 export interface MasterFilters {
+  /** Pending balance in the Shalom/Olva shipment cohort selected in Consolidado. */
+  agencyUnpaid?: AgencyPaymentWindow | null;
   stores: Set<string>;
   generalStatuses: Set<string>;
   operationalStatuses: Set<string>;
@@ -174,6 +177,7 @@ export function emptyFilters(): MasterFilters {
     expiringSoon: false,
     pendingVoucher: false,
     paidUnnotified: false,
+    agencyUnpaid: null,
     search: "",
     confirmationDue: "",
     managementDays: new Set(),
@@ -206,6 +210,7 @@ export function matchesAttempts(count: number, filter: number | null): boolean {
 /** ¿Hay algún filtro activo? Para poder ofrecer "limpiar filtros". */
 export function hasActiveFilters(f: MasterFilters): boolean {
   return (
+    Boolean(f.agencyUnpaid) ||
     f.stores.size > 0 ||
     f.generalStatuses.size > 0 ||
     f.operationalStatuses.size > 0 ||

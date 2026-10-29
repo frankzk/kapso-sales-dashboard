@@ -304,4 +304,6 @@ $PSQL -f "$ROOT/scripts/sql/lima_attention_all_pending_smoke.sql"
 echo "▶ Por llamar y reintentos (0289): fechas, límites, historial, contador, citas y RLS"
 $PSQL -f "$ROOT/scripts/sql/lead_call_queue_smoke.sql"
 
+echo "▶ Agencia: cohorte pendiente, checkout, validación, fechas Lima, deduplicación y RLS (0290)"
+$PSQL -f "$ROOT/scripts/sql/agency_unpaid_cohort_smoke.sql"
 echo "✅ DB verification passed."

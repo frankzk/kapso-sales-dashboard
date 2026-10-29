@@ -8,6 +8,7 @@
 // joins (que PostgREST tampoco daría).
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { masterCohortQuery } from "@/lib/agency-payment-cohort-access";
 import { customerNameFromRaw, type CustomerNameSnapshot } from "@/lib/order-customer-name";
 import { unstable_cache } from "next/cache";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
@@ -312,9 +313,7 @@ export async function getOrderMasterFilteredMomCounts(
   const sb = await createServerSupabase();
   const now = params.now ?? new Date();
   const count = async (column: "macro_stage" | "macro_substage", value: string): Promise<number> => {
-    const q = sb
-      .from("order_master")
-      .select("id", { count: "exact", head: true })
+    const q = masterCohortQuery(sb, storeIds, params.filters, "id", { count: "exact", head: true })
       .in("store_id", storeIds)
       .eq(column, value);
     const { count: n, error } = await applyServerFilters(q, params.filters, now);
@@ -1695,9 +1694,7 @@ export async function getConfirmationQueueCounts(
 
   const rows: ConfirmationQueueRow[] = [];
   for (let from = 0; from < MAX_LIST; from += PAGE) {
-    let query = sb
-      .from("order_master")
-      .select(CONFIRMATION_QUEUE_COLUMNS)
+    let query = masterCohortQuery(sb, storeIds, base, CONFIRMATION_QUEUE_COLUMNS)
       .in("store_id", storeIds)
       .eq("macro_stage", "por_confirmar");
     if (params.substage) query = query.eq("macro_substage", params.substage);
@@ -1786,9 +1783,7 @@ export async function getOrderMasterPage(
   }
 
   const build = (select: string, opts?: { count: "exact"; head: true }) => {
-    let q = opts
-      ? sb.from("order_master").select(select, opts)
-      : sb.from("order_master").select(select);
+    let q = masterCohortQuery(sb, storeIds, effectiveFilters, select, opts);
     q = q.in("store_id", storeIds) as typeof q;
     if (!searching && view !== "todos") q = q.eq("macro_stage", view) as typeof q;
     if (!searching && params.substage) q = q.eq("macro_substage", params.substage) as typeof q;
@@ -1810,7 +1805,10 @@ export async function getOrderMasterPage(
     })(),
   ]);
 
-  if (rowsRes.error) return empty;
+  if (rowsRes.error || countRes.error) {
+    if (effectiveFilters.agencyUnpaid) throw new Error("No se pudieron verificar los pendientes de pago de Agencia. Reintenta la consulta.");
+    return empty;
+  }
   return {
     rows: ((rowsRes.data ?? []) as unknown as OrderMasterRow[]).map(withRuntimeCoverage),
     total: countRes.count ?? 0,
