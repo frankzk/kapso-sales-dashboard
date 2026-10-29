@@ -701,7 +701,7 @@ export function matchesLeadInteractionDate(
 export type LeadGestion = "sin_llamar" | "nr" | "buzon_cuelga" | "contactados" | "sin_stock";
 
 export const LEAD_GESTIONES: { key: LeadGestion; label: string }[] = [
-  { key: "sin_llamar", label: "🆕 Sin llamar" },
+  { key: "sin_llamar", label: "🆕 Sin gestión" },
   { key: "nr", label: "📵 No responde" },
   { key: "buzon_cuelga", label: "📞 Buzón/Cuelga" },
   { key: "contactados", label: "💬 Contactados" },
