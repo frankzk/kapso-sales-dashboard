@@ -148,6 +148,8 @@ export type LeadDrawerProps = {
   shopifyDomain: string | null;
   currency: string;
   onClose: () => void;
+  claimConfirmed?: boolean;
+  onClaimLost?: (message: string) => void;
   onRegistered: (update?: LeadDrawerUpdate) => void;
   onReady?: () => void;
   /**
@@ -506,6 +508,8 @@ export function LeadDrawer({
   shopifyDomain,
   currency,
   onClose,
+  claimConfirmed = true,
+  onClaimLost,
   onRegistered,
   onReady,
   next,
@@ -575,24 +579,33 @@ export function LeadDrawer({
     orderWasOpenRef.current = orderOpen;
   }, [orderOpen]);
 
-  // Live sync while a lead WITHOUT an order is open: a Yape/bot purchase links the
+  // Live sync while a claimed lead is open: a Yape/bot purchase links the
   // order a few seconds later (webhook → lead becomes won). Poll the lead's
   // order/status signal every 12s and, the moment it flips, refresh the drawer —
   // so the asesora sees "Pedido generado" instead of a stale "pendiente" (which
   // is what led to mistakenly marking a real sale as "ya compró en otro lado").
-  // Stops once the lead has an order (deps change) or the drawer closes (unmount).
+  // La misma lectura comprueba la reserva, incluso después de generar el pedido.
   const onRegisteredRef = useRef(onRegistered);
   onRegisteredRef.current = onRegistered;
+  const onClaimLostRef = useRef(onClaimLost);
+  onClaimLostRef.current = onClaimLost;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   useEffect(() => {
-    if (lead.has_order) return; // already won → nothing to watch
+    if (!claimConfirmed) return; // la toma inicial todavía no terminó
     let inFlight = false;
     let alive = true;
-    const id = setInterval(() => {
+    const check = () => {
       if (inFlight || (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
       inFlight = true;
       void pollLeadState(lead.id)
         .then((r) => {
           if (!alive || "error" in r) return;
+          if (r.claimLost) {
+            if (onClaimLostRef.current) onClaimLostRef.current(r.claimError ?? "Otra asesora está atendiendo este lead.");
+            else onCloseRef.current();
+            return;
+          }
           if (r.hasOrder !== lead.has_order || r.status !== lead.status || r.category !== lead.category) {
             onRegisteredRef.current(); // real change → full refresh (lead + historial + lista)
           }
@@ -601,9 +614,18 @@ export function LeadDrawer({
         .finally(() => {
           inFlight = false;
         });
-    }, 12_000);
-    return () => { alive = false; clearInterval(id); };
-  }, [lead.id, lead.has_order, lead.status, lead.category]);
+    };
+    const id = setInterval(check, 12_000);
+    document.addEventListener("visibilitychange", check);
+    window.addEventListener("focus", check);
+    check();
+    return () => {
+      alive = false;
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", check);
+      window.removeEventListener("focus", check);
+    };
+  }, [lead.id, lead.has_order, lead.status, lead.category, claimConfirmed]);
 
   // cod_cart sin conversación → empty-state; el resto muestra el chat (que se
   // resuelve por teléfono si no hay conversation_id guardado).

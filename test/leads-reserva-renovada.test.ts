@@ -47,7 +47,8 @@ describe("la ficha", () => {
     expect(ui).toContain("renewLeadClaim(openLeadId)");
     expect(ui).toContain("shouldRenewClaim(lastActivityRef.current, Date.now())");
     expect(ui).toContain("CLAIM_HEARTBEAT_MS");
-    expect(ui).toContain("if (res.error && activeLeadIdRef.current === openLeadId) setBanner(res.error);");
+    expect(ui).toContain("if (res.claimLost) loseLeadClaim(openLeadId");
+    expect(ui).toContain("else if (res.error) setBanner(res.error);");
   });
 });
 

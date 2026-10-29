@@ -1,18 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-const mocks = vi.hoisted(() => ({ access: vi.fn(), creds: vi.fn(), history: vi.fn(), lead: vi.fn() }));
+const mocks = vi.hoisted(() => ({ access: vi.fn(), creds: vi.fn(), history: vi.fn(), lead: vi.fn(), name: vi.fn() }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("next/server", () => ({ after: vi.fn() }));
 vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
-vi.mock("@/lib/agent-names", () => ({ resolveAgentName: vi.fn(), resolveAgentNames: vi.fn() }));
+vi.mock("@/lib/agent-names", () => ({ resolveAgentName: mocks.name, resolveAgentNames: vi.fn() }));
 vi.mock("@/lib/ingest", () => ({ getStoreCreds: mocks.creds }));
 vi.mock("@/lib/access", () => ({ getWaNumbers: async () => ({}) }));
 vi.mock("@/lib/leads-access", () => ({ getCustomerHistory: mocks.history }));
 vi.mock("@/lib/whatsapp-outbox", () => ({ listLeadWhatsappOutbox: async () => [], mergeTranscriptWithOutbox: (messages: unknown[]) => messages }));
 vi.mock("@/lib/db", () => ({
   createServerSupabase: async () => ({ auth: { getClaims: async () => ({ data: { claims: { sub: "test-advisor" } } }) }, from: () => ({ select: () => ({ eq: () => ({ maybeSingle: mocks.access }) }) }) }),
-  createAdminSupabase: () => ({ from: () => ({ select: () => ({ eq: () => ({ maybeSingle: mocks.lead }) }) }) }),
+  createAdminSupabase: () => ({ from: () => {
+    const q: any = { select: () => q, update: () => q, eq: () => q, gt: () => q, maybeSingle: mocks.lead };
+    return q;
+  } }),
 }));
-import { loadLeadConversation, loadLeadCustomerHistory } from "@/app/dashboard/leads/actions";
+import { loadLeadConversation, loadLeadCustomerHistory, pollLeadState, renewLeadClaim } from "@/app/dashboard/leads/actions";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -21,9 +24,62 @@ beforeEach(() => {
   mocks.lead.mockResolvedValue({ data: { phone: "51999888777", order_id: null, source: "organic", cart_summary: null } });
   mocks.creds.mockResolvedValue({ kapso_api_key: "test-secret", shopify_domain: "shop.test", shopify_token: "shop-secret" });
   mocks.history.mockResolvedValue({ currentOrderId: null, currentOrderName: null, recentOrders: [] });
+  mocks.name.mockResolvedValue("Tania");
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const metric = () => JSON.parse(vi.mocked(console.info).mock.calls.at(-1)![0]);
+
+describe("pérdida de reserva confirmada", () => {
+  const fresh = () => new Date().toISOString();
+  const old = () => new Date(Date.now() - 11 * 60_000).toISOString();
+  const state = { has_order: false, status: "pendiente", category: "nuevo" };
+  it("el sondeo identifica a la otra asesora sin renovar ni tomar su reserva", async () => {
+    mocks.access.mockResolvedValueOnce({ data: { store_id: "store" } }).mockResolvedValueOnce({ data: { ...state, claimed_by: "tania", claimed_at: fresh() } });
+    expect(await pollLeadState("lead")).toMatchObject({ claimLost: true, claimError: "Tania está atendiendo este lead." });
+    expect(mocks.name).toHaveBeenCalledWith("tania", expect.anything());
+  });
+  it.each(["test-advisor", null])("la reserva propia o libre no inventa un conflicto: %s", async (owner) => {
+    mocks.access.mockResolvedValueOnce({ data: { store_id: "store" } }).mockResolvedValueOnce({ data: { ...state, claimed_by: owner, claimed_at: fresh() } });
+    expect(await pollLeadState("lead")).toEqual({ hasOrder: false, status: "pendiente", category: "nuevo" });
+  });
+  it("una reserva ajena vencida no se presenta como vigente", async () => {
+    mocks.access.mockResolvedValueOnce({ data: { store_id: "store" } }).mockResolvedValueOnce({ data: { ...state, claimed_by: "tania", claimed_at: old() } });
+    expect(await pollLeadState("lead")).not.toHaveProperty("claimLost");
+  });
+  it("un fallo de lectura no cierra una ficha ni inventa un cambio de dueña", async () => {
+    mocks.access.mockResolvedValueOnce({ data: { store_id: "store" } }).mockResolvedValueOnce({ data: null, error: { message: "offline" } });
+    const result = await pollLeadState("lead");
+    expect(result).toHaveProperty("error");
+    expect(result).not.toHaveProperty("claimLost");
+  });
+  it("la renovación comunica la pérdida para cerrar la ficha anterior", async () => {
+    mocks.lead.mockResolvedValueOnce({ data: null, error: null }).mockResolvedValueOnce({ data: { claimed_by: "tania", claimed_at: fresh() }, error: null });
+    expect(await renewLeadClaim("lead")).toMatchObject({ claimLost: true, error: expect.stringContaining("Tania tomó este lead") });
+  });
+  it("si falla comprobar la renovación no se interpreta como reserva vencida", async () => {
+    mocks.lead.mockResolvedValueOnce({ data: null, error: null }).mockResolvedValueOnce({ data: null, error: { message: "offline" } });
+    expect(await renewLeadClaim("lead")).toEqual({ error: "No se pudo comprobar la reserva del lead. Intenta nuevamente." });
+  });
+  it("una reserva vencida propia sí cierra la ficha y exige volver a abrirla", async () => {
+    mocks.lead.mockResolvedValueOnce({ data: null, error: null }).mockResolvedValueOnce({ data: { claimed_by: "test-advisor", claimed_at: old() }, error: null });
+    expect(await renewLeadClaim("lead")).toHaveProperty("claimLost", true);
+  });
+  it("una renovación de otra pestaña propia no se interpreta como pérdida", async () => {
+    mocks.lead.mockResolvedValueOnce({ data: null, error: null }).mockResolvedValueOnce({ data: { claimed_by: "test-advisor", claimed_at: fresh() }, error: null });
+    expect(await renewLeadClaim("lead")).toEqual({ notice: "Reserva vigente." });
+  });
+  it("sin acceso al lead no consulta su dueño ni expone el nombre", async () => {
+    mocks.access.mockResolvedValueOnce({ data: null });
+    expect(await pollLeadState("denied")).toEqual({ error: "Sin acceso a este lead." });
+    expect(mocks.name).not.toHaveBeenCalled();
+  });
+  it("cierra por pérdida confirmada aunque falle resolver el nombre", async () => {
+    mocks.access.mockResolvedValueOnce({ data: { store_id: "store" } }).mockResolvedValueOnce({ data: { ...state, claimed_by: "tania", claimed_at: fresh() } });
+    mocks.name.mockRejectedValueOnce(new Error("offline"));
+    expect(await pollLeadState("lead")).toMatchObject({ claimLost: true, claimError: "Otra asesora está atendiendo este lead." });
+    expect(mocks.lead).not.toHaveBeenCalled();
+  });
+});
 
 describe("read timing integration with existing provider clients", () => {
   it("refreshes the authorized stored thread with one HTTP call and keeps selector metadata", async () => {
