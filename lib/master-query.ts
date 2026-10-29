@@ -14,6 +14,7 @@
 
 import { ATTEMPTS_OR_MORE, DISPATCH_DATE_FILTERS, emptyFilters, PAYMENT_STATUS_OPTIONS, type MasterFilters, type MasterSortKey } from "@/lib/order-master-filters";
 import { MASTER_PATH } from "@/lib/order-drawer-href";
+import { agencyPaymentWindow } from "@/lib/agency-payment-cohort";
 
 /** Claves cortas: la URL se lee y se comparte, y `?d=lince,ate` gana a
  *  `?districts=lince%2Cate` para algo que se mira todo el día. */
@@ -82,6 +83,7 @@ export function parseMasterQuery(params: URLSearchParams | Record<string, string
   };
 
   const f = emptyFilters();
+  if (get("agency_unpaid") === "1") f.agencyUnpaid = agencyPaymentWindow(get("apf"), get("apt"));
 
   for (const { param, field } of SET_KEYS) {
     const raw = get(param);
@@ -145,6 +147,11 @@ export function parseMasterQuery(params: URLSearchParams | Record<string, string
 export function buildMasterQuery(q: MasterQuery): URLSearchParams {
   const out = new URLSearchParams();
   const f = q.filters;
+  if (f.agencyUnpaid) {
+    out.set("agency_unpaid", "1");
+    out.set("apf", f.agencyUnpaid.from);
+    out.set("apt", f.agencyUnpaid.to);
+  }
 
   for (const { param, field } of SET_KEYS) {
     const set = f[field] as Set<string>;
@@ -173,6 +180,7 @@ export function buildMasterQuery(q: MasterQuery): URLSearchParams {
 /** ¿Hay algo puesto? Sirve para ofrecer "limpiar filtros" solo cuando toca. */
 export function hasQueryFilters(f: MasterFilters): boolean {
   return (
+    Boolean(f.agencyUnpaid) ||
     SET_KEYS.some(({ field }) => (f[field] as Set<string>)?.size > 0) ||
     DATE_KEYS.some(({ field }) => Boolean(f[field] as string)) ||
     FLAG_KEYS.some(({ field }) => Boolean(f[field] as boolean)) ||
