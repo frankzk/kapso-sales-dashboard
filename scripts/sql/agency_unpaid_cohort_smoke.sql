@@ -28,6 +28,7 @@ insert into order_payments(store_id,order_id,kind,amount,validation_status)
  from orders where name in ('#AG1','#AG2','#AG6') and shopify_order_id like 'agency-%';
 
 set local role authenticated;
+set local request.test_uid = '29000000-0000-0000-0000-000000000004';
 set local request.jwt.claims = '{"sub":"29000000-0000-0000-0000-000000000004","role":"authenticated"}';
 do $$
 declare n integer; names text[];
