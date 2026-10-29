@@ -1183,7 +1183,7 @@ function isRiderReception(event: MacroEventSnapshot): boolean {
  */
 export function gfRiderSignal(
   events: readonly MacroEventSnapshot[],
-  guide: MacroGuideSnapshot,
+  guide: Pick<MacroGuideSnapshot, "id" | "courier" | "created_at">,
 ): { signal: GfRiderSignal; at: string } | null {
   if (!isOwnCourier(guide.courier)) return null;
   const kinds = new Set(["pickup_checked", "stop_reported", "pickup_declined", "package_removed", "returned_to_office", "custody_transferred"]);
@@ -1221,7 +1221,7 @@ export function gfRiderSignal(
  * no, un punto a mano entregado la daba por entregada y el pedido se cerraba
  * con ella todavía en manos del motorizado—.
  */
-function isGuideEvent(event: MacroEventSnapshot, guide: MacroGuideSnapshot, replaced: ReadonlySet<string>): boolean {
+function isGuideEvent(event: MacroEventSnapshot, guide: Pick<MacroGuideSnapshot, "id" | "created_at">, replaced: ReadonlySet<string>): boolean {
   if (event.shipment_id) return event.shipment_id === guide.id;
   if (event.kind !== "stop_reported") return false;
   if (replaced.has(guide.id)) return false;

@@ -3,7 +3,8 @@ import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServerSupabase } from "@/lib/db";
 import { permissionsFor } from "@/lib/permissions";
-import { classifyOperation } from "@/lib/order-macro-stage";
+import { classifyOperation, gfRiderSignal, type MacroEventSnapshot } from "@/lib/order-macro-stage";
+import { OUTPUT_REPLACED_KIND } from "@/lib/gf-replaced-output";
 import { normalizePhone } from "@/lib/phone";
 import { DECLARED_OUTCOME_KINDS, duplicateGate, duplicateItems, sharesDuplicateItem, unresolvedDuplicateShipment,
   type DuplicateConflict, type DuplicateHold, type DuplicateResolution, type DuplicateShipment } from "@/lib/aliclik-duplicate";
@@ -71,7 +72,7 @@ export async function loadAliclikDuplicateHold(
     const ids = priors.slice(start, start + 100).map((p) => p.order_id);
     for (let offset = 0; ; offset += 100) {
       const { data, error: guidesError } = await sb.from("shipments")
-        .select("id,order_id,guide_code,courier,dispatched_at,custody_transferred_at,out_for_delivery_at,aliclik_reported_dispatch_date,returned_at,delivery_status,custody_state,pickup_state")
+        .select("id,order_id,guide_code,courier,created_at,dispatched_at,custody_transferred_at,out_for_delivery_at,aliclik_reported_dispatch_date,returned_at,delivery_status,custody_state,pickup_state")
         .in("order_id", ids).in("store_id", storeIds).order("id").range(offset, offset + 99);
       if (guidesError || !data) throw new Error(DUPLICATE_READ_ERROR);
       active.push(...(data as DuplicateShipment[]).filter((g) => unresolvedDuplicateShipment(g)));
@@ -92,7 +93,29 @@ export async function loadAliclikDuplicateHold(
       if (event.shipment_id) declaredIds.add(event.shipment_id);
     }
   }
-  const pending = active.filter((g) => unresolvedDuplicateShipment(g, declaredIds));
+  // En Grupo GF la entrega vive en la parada, no en delivery_status (§29.13).
+  // Usa la misma señal que el Master: respeta deshacer reportes, retiros y la
+  // identidad de cada salida; el estado comercial del pedido no libera cajas.
+  const riderEvents = new Map<string, MacroEventSnapshot[]>();
+  const ownOrderIds = [...new Set(active.filter((g) => g.courier.trim().toLowerCase() === "propio").map((g) => g.order_id))];
+  for (let start = 0; start < ownOrderIds.length; start += 100) {
+    for (let offset = 0; ; offset += 100) {
+      const { data, error: riderError } = await sb.from("order_events")
+        .select("order_id,kind,shipment_id,occurred_at,payload,note")
+        .in("store_id", storeIds).in("order_id", ownOrderIds.slice(start, start + 100))
+        .in("kind", ["stop_reported", "pickup_checked", "pickup_declined", "package_removed", "returned_to_office", "custody_transferred", OUTPUT_REPLACED_KIND])
+        .order("occurred_at", { ascending: false }).order("id", { ascending: false }).range(offset, offset + 99);
+      if (riderError || !data) throw new Error(DUPLICATE_READ_ERROR);
+      for (const event of data as (MacroEventSnapshot & { order_id: string })[]) {
+        const events = riderEvents.get(event.order_id) ?? [];
+        events.push(event);
+        riderEvents.set(event.order_id, events);
+      }
+      if (data.length < 100) break;
+    }
+  }
+  const pending = active.filter((g) => unresolvedDuplicateShipment(g, declaredIds) &&
+    gfRiderSignal(riderEvents.get(g.order_id) ?? [], g)?.signal !== "entregado");
   active.length = 0;
   active.push(...pending);
   if (!active.length) return clear;
