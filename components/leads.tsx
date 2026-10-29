@@ -1,5 +1,7 @@
 "use client";
 
+import { LeadAttemptBadge } from "@/components/lead-attempt-badge";
+import { prioritizeDueAppointments } from "@/lib/lead-call-queue";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
@@ -393,7 +395,7 @@ function PendingVoucherLine({ voucher }: { voucher: NonNullable<LeadRow["pending
 
 // Gestión (estado de la llamada) → etiqueta y punto de la columna «Última gestión».
 const GESTION_DISPLAY: Record<LeadGestion, { label: string; dot: string }> = {
-  sin_llamar: { label: "Sin llamar", dot: "bg-white ring-1 ring-inset ring-warn-fg" },
+  sin_llamar: { label: "Sin gestión", dot: "bg-white ring-1 ring-inset ring-warn-fg" },
   nr: { label: "No responde", dot: "bg-ink-500" },
   buzon_cuelga: { label: "Buzón / cuelga", dot: "bg-ink-500" },
   contactados: { label: "Contactado", dot: "bg-ok-fg" },
@@ -577,9 +579,9 @@ export function LeadsBoard({
   // intención/gestión axes within "Por llamar".
   // Fuente y Número: multi-select (OR dentro del grupo). Set vacío = sin filtro.
   const [srcFilter, setSrcFilter] = useState<Set<string>>(new Set());
-  // Cola de DOS ejes que se combinan. Eje 1 (estado, tabs primarios): "Sin llamar"
-  // (default) = nadie lo tocó (status nuevo); "En seguimiento" = ya gestionado pero
-  // pendiente. Eje 2 (segmento, "accesos directos" debajo): frío…carrito, scopeado
+  // Cola de DOS ejes que se combinan. Eje 1 (estado, tabs primarios): "Por llamar"
+  // (default) = nuevos + reintentos listos; "En seguimiento" = los demás
+  // pendientes que aún esperan su próxima gestión. Eje 2 (segmento, "accesos directos" debajo): frío…carrito, scopeado
   // al estado activo. La Gestión es un refino que vive en Filtros (sin default).
   const [queueState, setQueueState] = useState<QueueState>(initialState ?? "sin_llamar");
   const [segFilter, setSegFilter] = useState<QueueBucket | null>(initialSeg ?? null);
@@ -615,7 +617,7 @@ export function LeadsBoard({
   const [sortMode, setSortMode] = useState<"prioridad" | "reciente">("prioridad");
   const [exportingAudience, setExportingAudience] = useState(false);
 
-  // «Tablero de hoy» (el equipo, sin llamar 7d y la carrera de pedidos). Se
+  // «Tablero de hoy» (el equipo, por llamar 7d y la carrera de pedidos). Se
   // recarga cuando cambia el conteo de la cola — y con el auto-refresco en vivo
   // eso pasa muy seguido. IMPORTANTE: NO se vacía insightsData antes de recargar;
   // si se vaciara, el tablero parpadearía a esqueleto varios segundos en CADA
@@ -1224,7 +1226,7 @@ export function LeadsBoard({
     const matchSeg = (l: LeadRow) => !inQueue || !segFilter || leadQueueBucket(l) === segFilter;
     const matchCov = (l: LeadRow) => !inQueue || !covFilter || coverageOf(l) === covFilter;
     const matchGest = (l: LeadRow) => {
-      // En "Sin llamar" todos son nuevos → la gestión no aplica (su panel se oculta).
+      // La gestión se conserva y muestra en la fila; este refino sigue en seguimiento.
       if (!inQueue || queueState === "sin_llamar" || !gestFilter) return true;
       if (gestFilter === "otros") return gestionOf(l.status) === null; // casi_cierra, repetido, volver_a_llamar…
       return gestionOf(l.status) === gestFilter;
@@ -1266,7 +1268,7 @@ export function LeadsBoard({
 
     // Eje 2 (segmento): conteos SCOPEADOS al estado activo. `except("seg")` pasa
     // el facet de estado, así que los segmentos suman el total del estado (p.ej. 237
-    // en Sin llamar), no los 429. "Todos" = ese total.
+    // en Por llamar), no los 429. "Todos" = ese total.
     const segBase = facets.except("seg");
     // Cobertura: mismo trato que el segmento — sus chips suman el total del
     // estado activo con los demás filtros puestos, menos el suyo.
@@ -1364,7 +1366,7 @@ export function LeadsBoard({
     now,
   ]);
 
-  // Gestión solo cuenta como filtro activo donde es visible (no en "Sin llamar",
+  // Gestión solo cuenta como filtro activo donde es visible (no en "Por llamar",
   // donde su panel se oculta y matchGest la ignora) — así el badge no miente.
   const gestActive = inQueue && queueState !== "sin_llamar" && !!gestFilter;
   // Filtros de refinamiento activos (excluye el buscador, que tiene su propia ✕).
@@ -1392,7 +1394,7 @@ export function LeadsBoard({
   // view (already narrowed client-side by the query for instant feedback).
   const searchMode = results !== null;
   const baseLeads = results ?? shownLeads;
-  // Orden de la cola "Sin llamar" por probabilidad de cierre (ver lib/lead-priority).
+  // Orden de la cola "Por llamar" por probabilidad de cierre (ver lib/lead-priority).
   // Solo ahí: en "En seguimiento" la llamada tiene fecha comprometida con el
   // cliente y eso manda sobre cualquier puntaje; en una búsqueda el orden lo pone
   // la búsqueda. Se ordena en cliente porque esta vista ya trae el universo
@@ -1429,9 +1431,9 @@ export function LeadsBoard({
   const displayLeads = useMemo(
     () =>
       priorityOn
-        ? sortLeadsByPriorityScoped(baseLeads, (lead) =>
+        ? prioritizeDueAppointments(sortLeadsByPriorityScoped(baseLeads, (lead) =>
             profileByStore.get(lead.store_id) ?? scoringProfileFor(null),
-          )
+          ))
         : baseLeads,
     [priorityOn, baseLeads, profileByStore],
   );
@@ -1509,7 +1511,7 @@ export function LeadsBoard({
     }
   }
 
-  // El siguiente lead (MOM §11): solo a quien vende, en «Sin llamar», sin
+  // El siguiente lead (MOM §11): solo a quien vende, en «Por llamar», sin
   // búsqueda. La cola que mira es la que se le pasa: con sus chips y su orden.
   const nextEnabled =
     canHoldNext && !!currentUserId && view === "por_llamar" && queueState === "sin_llamar" && !searchMode;
@@ -1523,7 +1525,7 @@ export function LeadsBoard({
 
   // «SIGUIENTE LEAD» DE LA FICHA (25-10-2026): el de debajo en la lista que
   // está mirando, sin cerrar la ficha. El que venía detrás se anota MIENTRAS
-  // la ficha sigue en la lista: guardar la gestión la saca de «Sin llamar», y
+  // la ficha sigue en la lista: guardar la gestión la saca de «Por llamar», y
   // es justo entonces cuando se pide el siguiente (`leadAfter`).
   const openIndex = selected ? displayLeads.findIndex((l) => l.id === selected.id) : -1;
   const successorRef = useRef<{ openId: string; nextId: string | null } | null>(null);
@@ -1627,7 +1629,7 @@ export function LeadsBoard({
     ? "Resultados"
     : view === "por_llamar"
       ? queueState === "sin_llamar"
-        ? "Sin llamar"
+        ? "Por llamar"
         : "En seguimiento"
       : VIEW_TITLE[view];
 
@@ -1639,7 +1641,7 @@ export function LeadsBoard({
           <p className="mt-0.5 text-sm text-ink-500">
             {storeLabel}
             {" · "}
-            {counts.sin_llamar.toLocaleString("es-PE")} sin llamar
+            {counts.sin_llamar.toLocaleString("es-PE")} por llamar
             {" · "}
             {(counts.por_llamar - counts.sin_llamar).toLocaleString("es-PE")} en seguimiento
           </p>
@@ -1737,7 +1739,7 @@ export function LeadsBoard({
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <div className={CHIP_ROW}>
             <QueueChip
-              label="Sin llamar"
+              label="Por llamar"
               count={inQueue ? stateCounts.sin_llamar : counts.sin_llamar}
               active={inQueue && queueState === "sin_llamar"}
               onClick={() => pickQueueState("sin_llamar")}
@@ -1811,8 +1813,8 @@ export function LeadsBoard({
           </div>
         </div>
 
-        {/* Segmento y cobertura, scopeados al estado activo (en «Sin llamar»
-            suman lo que hay sin llamar, no la cola entera). Sin «Todos»: volver
+        {/* Segmento y cobertura, scopeados al estado activo (en «Por llamar»
+            suman lo que hay por llamar, no la cola entera). Sin «Todos»: volver
             a tocar el chip elegido lo quita. */}
         {inQueue && (
           <div className={cn(CHIP_ROW, "gap-x-5")}>
@@ -2066,7 +2068,7 @@ export function LeadsBoard({
       )}
 
       {/* Aviso de hora dorada.
-          Con la cola real (1.966 sin llamar) esto muestra un puñado de leads, no
+          Con la cola real (1.966 por llamar) esto muestra un puñado de leads, no
           una lista: 21 estaban dentro de la hora y solo 3 eran carrito o interés.
           Ese es justamente el punto — son pocos, valen el doble, y hasta ahora
           iban pintados igual que los 1.945 restantes.
@@ -2127,7 +2129,7 @@ export function LeadsBoard({
       {view === "por_llamar" && queueState === "sin_llamar" && segFilter === "frio" && (
         <Banner tone="warn" title="Ojo con el costo de oportunidad.">
           Un lead con carrito cierra <span className="font-semibold">14–20 %</span> de las veces que se llama; si
-          quedan carritos sin llamar, rinde más ir por ellos primero. Cuánto rinde llamar a un frío todavía no lo
+          quedan carritos por llamar, rinde más ir por ellos primero. Cuánto rinde llamar a un frío todavía no lo
           sabemos: cuando la llamada funciona, el lead da distrito o genera pedido y{" "}
           <span className="font-semibold">deja de contarse como frío</span>.
         </Banner>
@@ -2220,6 +2222,7 @@ export function LeadsBoard({
                     <span className="shrink-0 text-xs font-medium text-ink-500">{storeNameById.get(lead.store_id) ?? "—"}</span>
                   )}
                   <SegmentBadge lead={lead} />
+                  <LeadAttemptBadge lead={lead} />
                   <YapeKindBadge lead={lead} />
                   {/* Ya pagó y espera (MOM §16.1): es el motivo de la fila, así
                       que la marca genérica «Atención» sobra. */}
@@ -2231,7 +2234,7 @@ export function LeadsBoard({
                   )}
                   {/* Un reencolado, una respuesta nueva o un seguimiento vencido:
                       sin la marca solo cambiaban el orden. */}
-                  {lead.needs_attention && !isYape && !lead.pending_voucher && (
+                  {lead.needs_attention && !lead.call_queue_ready && !isYape && !lead.pending_voucher && (
                     <Badge tone="warn" title="Requiere atención: reencolado por carrito sin contacto, respuesta nueva o seguimiento vencido">
                       Atención
                     </Badge>

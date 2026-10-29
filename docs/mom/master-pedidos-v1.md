@@ -4349,7 +4349,44 @@ Esto ordena la llamada, no la reemplaza. Se descartó crear el pedido de forma
 automática para esta señal: incluso aquí, 6 de cada 10 carritos que siguen
 abiertos a las dos horas no terminan en pedido.
 
-**El siguiente lead de cada vendedora (14-10-2026).** Arriba de «Sin llamar»,
+**Por llamar: nuevos y reintentos en una sola cola (29-10-2026, decisión del owner).**
+La pestaña antes llamada «Sin llamar» se llama **Por llamar**. Las asesoras
+trabajan ahí, así que los reintentos que merecen una nueva llamada regresan a
+esa misma cola; no basta con marcar atención en En seguimiento.
+
+- La pertenencia es operativa (`call_queue_ready`), separada de `status`:
+  «No responde», «Buzón» o la última disposición siguen intactos, igual que
+  todas las gestiones del historial. Las URL `state=sin_llamar` se conservan.
+- Un carrito en No responde/Buzón/Cuelga vuelve tras **48 h sin interacción**,
+  siempre que ya se haya registrado al menos una llamada de asesora.
+- Una próxima llamada acordada vuelve **cuando vence su fecha**, con la
+  misma agenda automática de Casi cierra/Volver a llamar si no se eligió hora.
+  En el orden por prioridad, las citas vencidas van primero; entre los demás
+  se conserva la prioridad medida por intención de compra y tienda.
+- Solo se reencola con **menos de tres llamadas de asesora registradas**:
+  primer intento y hasta dos reintentos. El contador se rellena desde las
+  filas `lead_calls.kind=call` con asesora; notas, ventas y olas automáticas
+  no cuentan. Las llamadas del agente de voz conservan su propio tope (§33).
+- Lista, tarjeta del siguiente y cabecera de ficha muestran **Primer intento /
+  Segundo intento / Tercer intento**, según las llamadas ya registradas. Si
+  alguien registra llamadas adicionales manualmente, se muestra su número
+  real: nunca se finge un tercer intento para una cuarta llamada.
+- No se reencolan ventas ganadas/perdidas, rechazos, números inválidos,
+  personas que pidieron no ser contactadas, sin stock ni leads con pedido
+  vinculado. Tampoco se reencola sobre una reserva vigente de una asesora.
+  El regreso por stock sigue el flujo de reposición existente, sin saltarlo.
+- Un **carrito genuinamente nuevo posterior a la última gestión** sigue la
+  reapertura existente de no contactados/recompra; no se reinicia ni borra el
+  contador de llamadas históricas.
+- Guardar una llamada consume el pendiente y la cita anterior ya vencida;
+  una nueva fecha se conserva. Se escribe una nota de sistema por cada
+  regreso. El sync usa una sola transacción con bloqueo por fila: dos pasadas
+  simultáneas no duplican el regreso ni su nota.
+- La migración 0289 prepara contador, funciones y conteos, **sin reencolar
+  leads al instalarla**. Los reingresos arrancan con el sync del código nuevo.
+  Los conteos, gráfico, filtros y «Siguiente lead» usan la misma pertenencia.
+
+**El siguiente lead de cada vendedora (14-10-2026).** Arriba de «Por llamar»,
 cada vendedora ve UN lead para llamar ahora, con lo que pidió, el chat y el
 resultado de la llamada, y nunca el mismo que otra (`pickNextLead`,
 `lib/leads.ts`). Es el primero de **su** cola tal como la está mirando —con sus

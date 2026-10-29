@@ -203,7 +203,7 @@ describe("getLeadQueueSnapshot", () => {
       }),
       from: () => {
         const query: Record<string, unknown> = {};
-        for (const method of ["select", "eq", "in", "neq", "gte", "lte", "not"]) {
+        for (const method of ["select", "eq", "in", "neq", "gte", "lte", "not", "is", "or"]) {
           query[method] = vi.fn(() => query);
         }
         // El `await` de la consulta: cada una devuelve su conteo, en orden.

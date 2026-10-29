@@ -4,6 +4,8 @@
 // · lost (closed-lost). Each status is set automatically (from bot/CRM behavior)
 // or manually (by the agent during a call).
 
+import { isInCallQueue, type CallQueueLead } from "@/lib/lead-call-queue";
+
 export type LeadCategory = "won" | "hot" | "open" | "lost";
 export type StatusSource = "auto" | "manual";
 
@@ -610,8 +612,8 @@ export function countLeadSegments(leads: LeadSegmentSignals[]): Record<LeadSegme
 
 // ---------------------------------------------------------------------------
 // Queue state: the PRIMARY axis over the "Por llamar" queue — has anyone called
-// this lead yet? `sin_llamar` = status `nuevo` (nobody touched it; the priority);
-// `seguimiento` = already gestioned but still pending (no responde, buzón, …).
+// `sin_llamar` is the legacy URL key for Por llamar: new leads + due retries.
+// `seguimiento` holds the remaining followups until they become callable.
 // It's a SEPARATE axis from the buyer-intent segment (frío…carrito); the two
 // combine — the segment row is scoped WITHIN the active state. Default `sin_llamar`.
 // ---------------------------------------------------------------------------
@@ -619,7 +621,7 @@ export function countLeadSegments(leads: LeadSegmentSignals[]): Record<LeadSegme
 export type QueueState = "sin_llamar" | "seguimiento";
 
 export const QUEUE_STATES: { key: QueueState; label: string }[] = [
-  { key: "sin_llamar", label: "Sin llamar" },
+  { key: "sin_llamar", label: "Por llamar" },
   { key: "seguimiento", label: "En seguimiento" },
 ];
 
@@ -627,15 +629,15 @@ export function isQueueState(v: string | undefined | null): v is QueueState {
   return v === "sin_llamar" || v === "seguimiento";
 }
 
-/** Split the queue by whether anyone has called the lead yet (status `nuevo`). */
-export function matchesQueueState(lead: { status: string }, state: QueueState): boolean {
-  return state === "sin_llamar" ? lead.status === "nuevo" : lead.status !== "nuevo";
+/** Split the queue by pending work, preserving the last disposition (0289). */
+export function matchesQueueState(lead: CallQueueLead, state: QueueState): boolean {
+  return state === "sin_llamar" ? isInCallQueue(lead) : !isInCallQueue(lead);
 }
 
 /** State counts for a loaded queue batch: { sin_llamar, seguimiento }. */
-export function countQueueStates(leads: { status: string }[]): Record<QueueState, number> {
+export function countQueueStates(leads: CallQueueLead[]): Record<QueueState, number> {
   let sinLlamar = 0;
-  for (const l of leads) if (l.status === "nuevo") sinLlamar += 1;
+  for (const l of leads) if (isInCallQueue(l)) sinLlamar += 1;
   return { sin_llamar: sinLlamar, seguimiento: leads.length - sinLlamar };
 }
 
@@ -699,7 +701,7 @@ export function matchesLeadInteractionDate(
 export type LeadGestion = "sin_llamar" | "nr" | "buzon_cuelga" | "contactados" | "sin_stock";
 
 export const LEAD_GESTIONES: { key: LeadGestion; label: string }[] = [
-  { key: "sin_llamar", label: "🆕 Sin llamar" },
+  { key: "sin_llamar", label: "🆕 Sin gestión" },
   { key: "nr", label: "📵 No responde" },
   { key: "buzon_cuelga", label: "📞 Buzón/Cuelga" },
   { key: "contactados", label: "💬 Contactados" },
@@ -985,7 +987,7 @@ export function claimBlockedByCap(
 // (CLAIM_TTL_MINUTES) y cuenta como una de sus MAX_OPEN_LEADS.
 // ---------------------------------------------------------------------------
 
-export interface NextLeadCandidate {
+export interface NextLeadCandidate extends CallQueueLead {
   id: string;
   status: string;
   claimed_by: string | null;
@@ -1010,7 +1012,7 @@ export function pickNextLead<T extends NextLeadCandidate>(
 ): T | null {
   const now = opts.now ?? new Date();
   const usable = (l: T) =>
-    l.status === "nuevo" &&
+    isInCallQueue(l) &&
     !opts.skipped?.has(l.id) &&
     !(l.claimed_by && l.claimed_by !== opts.userId && isClaimActive(l.claimed_at, now));
   if (opts.current) {

@@ -249,6 +249,10 @@ export interface LeadRow {
   category: string; // won | hot | open | lost
   status: string;
   needs_attention: boolean;
+  /** 0289: operational retry queue; never replaces the last call disposition. */
+  call_queue_ready?: boolean;
+  /** Human call records, including the historical backfill (0289). */
+  call_attempt_count?: number;
   order_id: string | null;
   has_order: boolean;
   /**

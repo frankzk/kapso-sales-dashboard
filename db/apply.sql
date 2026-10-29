@@ -579,4 +579,6 @@
 \ir migrations/0287_validated_payment_positive_amount.sql
 \echo 'Applying 0288_lima_attention_all_pending.sql'
 \ir migrations/0288_lima_attention_all_pending.sql
+\echo 'Applying 0289_lead_call_queue_retries.sql'
+\ir migrations/0289_lead_call_queue_retries.sql
 \echo 'Done.'

@@ -10,6 +10,7 @@
 // `CallForm` y `WhatsappChat` se exportan con `variant="card"` para la tarjeta
 // del siguiente lead de la lista: la misma conducta sin el marco de la ficha.
 
+import { LeadAttemptBadge } from "@/components/lead-attempt-badge";
 import { mergeConversationMessages } from "@/lib/conversation-merge";
 import { canUseActiveChatPoll, chatContextAfterRead } from "@/lib/leads-chat-poll";
 import {
@@ -738,6 +739,7 @@ export function LeadDrawer({
       badge={
         <>
           <SegmentBadge lead={lead} currency={currency} />
+                  <LeadAttemptBadge lead={lead} />
           <Badge tone={winTone} title={winTitle}>
             {winLabel}
           </Badge>

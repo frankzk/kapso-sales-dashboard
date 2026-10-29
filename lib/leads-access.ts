@@ -1,6 +1,7 @@
 // RLS-scoped reads for the leads module (queue views, lead detail, counts).
 
 import { createServerSupabase } from "@/lib/db";
+import { CALL_QUEUE_FILTER } from "@/lib/lead-call-queue";
 import { leadCartDetailOf } from "@/lib/lead-cart-detail";
 import { normalizePhone } from "@/lib/phone";
 import {
@@ -77,7 +78,12 @@ const LEAD_BOARD_SELECT = [
   "category",
   "status",
   "needs_attention",
+  "call_queue_ready",
+  "call_attempt_count",
+  "next_followup_at",
+  "contact_opt_out_at",
   "has_order",
+  "order_id",
   "district",
   "cart_value",
   "cart_item_count",
@@ -113,6 +119,8 @@ const LEAD_BOARD_SELECT = [
 // mientras la migración no corra, la cola tiene que seguir dibujándose sin el
 // filtro de producto en vez de quedarse en blanco.
 const COLUMNAS_CON_MIGRACION_PENDIENTE = new Set([
+  "call_queue_ready",
+  "call_attempt_count",
   "first_inbound_text",
   "last_product_handle",
   "cart_product_handle",
@@ -837,7 +845,7 @@ async function legacyLeadCounts(
     head().not("next_followup_at", "is", null).lte("next_followup_at", nowIso),
     head().eq("category", "won"),
     head().eq("category", "lost"),
-    head().in("category", ["open", "hot"]).eq("status", "nuevo"), // "Sin llamar"
+    head().in("category", ["open", "hot"]).is("contact_opt_out_at", null).or(CALL_QUEUE_FILTER), // Por llamar
   ]);
   return {
     por_llamar: porLlamar.count ?? 0,

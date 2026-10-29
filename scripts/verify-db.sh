@@ -301,4 +301,7 @@ echo "▶ Pago validado: monto positivo obligatorio (0287), incompletos y retiro
 $PSQL -f "$ROOT/scripts/sql/payment_positive_amount_smoke.sql"
 echo "▶ Atender todos los pendientes de Lima (0288): cobertura, etapas, tienda, candado e historial"
 $PSQL -f "$ROOT/scripts/sql/lima_attention_all_pending_smoke.sql"
+echo "▶ Por llamar y reintentos (0289): fechas, límites, historial, contador, citas y RLS"
+$PSQL -f "$ROOT/scripts/sql/lead_call_queue_smoke.sql"
+
 echo "✅ DB verification passed."
