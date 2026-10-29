@@ -782,6 +782,57 @@ describe("la comparación (wooSaleMismatches)", () => {
 });
 
 describe("el buscador (searchWooCatalog)", () => {
+  const manyVariations = (count: number) => [
+    { id: 20, name: "CloudSlides", sku: "", price: "89", type: "variable" as const },
+    ...Array.from({ length: count }, (_, i) => ({
+      id: 1_000 + i, name: "", sku: `CLOUD-${i}`, price: "89", stock: i % 3,
+      type: "variation" as const, parentId: 20,
+      attributes: [{ name: "Talla", option: i >= 55 && i < 66 ? "38-39" : "40-41" }, { name: "Color", option: `Color ${i}` }],
+    })),
+  ];
+
+  it("CloudSlides: incluye las 66 variantes y los 11 colores38–39 que quedaban detrás del corte50", async () => {
+    const shop = fakeWooShop({ products: manyVariations(66) });
+    const r = await searchWooCatalog(client(shop.fetchImpl), { query: "CloudSlides" });
+    expect(r[0]!.variants).toHaveLength(66);
+    expect(r[0]!.variants.filter((v) => v.variantTitle.startsWith("38-39 /"))).toHaveLength(11);
+    expect(r[0]!.variants.at(-1)).toMatchObject({ variantId: "woo:1065", sku: "CLOUD-65", price: 89, inventory: 2 });
+  });
+
+  it("recorre más de100 variantes sin omitir ni duplicar las páginas siguientes", async () => {
+    const shop = fakeWooShop({ products: manyVariations(125) });
+    const r = await searchWooCatalog(client(shop.fetchImpl), { query: "CloudSlides" });
+    expect(r[0]!.variants).toHaveLength(125);
+    expect(new Set(r[0]!.variants.map((v) => v.variantId)).size).toBe(125);
+    const pages = shop.calls.filter((c) => c.path === "/products/20/variations");
+    expect(pages.map((c) => c.query.get("page"))).toEqual(["1", "2"]);
+    expect(pages.every((c) => c.query.get("per_page") === "100")).toBe(true);
+  });
+
+  it("si falla una página posterior no ofrece el producto con una lista truncada", async () => {
+    const shop = fakeWooShop({ products: manyVariations(125) });
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      const parsed = new URL(String(url));
+      if (parsed.pathname.endsWith("/products/20/variations") && parsed.searchParams.get("page") === "2") {
+        return new Response(JSON.stringify({ code: "server_error" }), { status: 503 });
+      }
+      return shop.fetchImpl(url, init);
+    }) as typeof fetch;
+    expect(await searchWooCatalog(client(fetchImpl), { query: "CloudSlides" })).toEqual([]);
+  });
+
+  it("respeta el presupuesto de tiempo sin publicar la primera página como catálogo completo", async () => {
+    let clock = 0;
+    const shop = fakeWooShop({ products: manyVariations(125), onCall: (c) => { if (c.path === "/products/20/variations") clock = 10_001; } });
+    expect(await searchWooCatalog(client(shop.fetchImpl), { query: "CloudSlides", now: () => clock })).toEqual([]);
+    expect(shop.calls.filter((c) => c.path.endsWith("/variations"))).toHaveLength(1);
+  });
+
+  it("un catálogo por encima del límite seguro no se devuelve recortado", async () => {
+    const shop = fakeWooShop({ products: manyVariations(1_001) });
+    expect(await searchWooCatalog(client(shop.fetchImpl), { query: "CloudSlides" })).toEqual([]);
+  });
+
   it("devuelve la forma de Shopify: producto, variantes con SKU, precio, stock e imagen; ids woo:", async () => {
     const shop = fakeWooShop({ products: CATALOG });
     const r = await searchWooCatalog(client(shop.fetchImpl), { query: "r" });

@@ -283,6 +283,7 @@ export function fakeWooShop(opts: FakeShopOptions = {}) {
       const parent = products.find((p) => p.id === Number(vars[1]));
       const list = products
         .filter((p) => p.type === "variation" && p.parentId === Number(vars[1]))
+        .filter((p) => !url.searchParams.get("status") || (p.status ?? "publish") === url.searchParams.get("status"))
         .map((p) => ({
           id: p.id,
           // WooCommerce muestra el SKU del padre en una variación sin SKU propio.
@@ -292,7 +293,12 @@ export function fakeWooShop(opts: FakeShopOptions = {}) {
           status: p.status ?? "publish",
           attributes: p.attributes ?? [],
         }));
-      return json(list);
+      const perPage = Number(url.searchParams.get("per_page") ?? 10);
+      const page = Number(url.searchParams.get("page") ?? 1);
+      return json(list.slice((page - 1) * perPage, page * perPage), 200, {
+        "x-wp-total": String(list.length),
+        "x-wp-totalpages": String(Math.ceil(list.length / perPage)),
+      });
     }
     return json({ code: "rest_no_route", message: "No route" }, 404);
   };

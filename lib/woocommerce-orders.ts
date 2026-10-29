@@ -1311,8 +1311,9 @@ interface WooVariation {
 
 /** Productos por búsqueda, como mucho (con sus variaciones cada uno). */
 export const WOO_SEARCH_MAX_PRODUCTS = 12;
-/** Variaciones por producto, como mucho. */
-export const WOO_SEARCH_MAX_VARIATIONS = 50;
+/** Hasta 10 páginas por producto, sin presentar una lista parcial como completa. */
+export const WOO_SEARCH_MAX_VARIATIONS = 1_000;
+export const WOO_SEARCH_VARIATIONS_PER_PAGE = 100;
 /** Reloj de toda la búsqueda: lo que no llegó a tiempo no se muestra. */
 export const WOO_SEARCH_BUDGET_MS = 10_000;
 /** Tope de cada llamada de la búsqueda. */
@@ -1432,14 +1433,30 @@ export async function searchWooCatalog(
   const variable = products.filter((p) => p.type === "variable");
   const jobs: (() => Promise<void>)[] = variable.map((p) => async () => {
     try {
-      const { data } = await wooRequest<unknown>(
-        { ...client, auth, timeoutMs: timeout() },
-        {
-          path: `/products/${p.id}/variations`,
-          query: { status: "publish", per_page: WOO_SEARCH_MAX_VARIATIONS, _fields: VARIATION_FIELDS },
-        },
-      );
-      if (Array.isArray(data)) variationsOf.set(Number(p.id), data as WooVariation[]);
+      const collected = new Map<number, WooVariation>();
+      for (let page = 1; page <= WOO_SEARCH_MAX_VARIATIONS / WOO_SEARCH_VARIATIONS_PER_PAGE; page++) {
+        if (now() >= deadline) return;
+        const result = await wooGetPage<WooVariation>(
+          { ...client, auth, timeoutMs: timeout() },
+          `/products/${p.id}/variations`,
+          { status: "publish", per_page: WOO_SEARCH_VARIATIONS_PER_PAGE, page, _fields: VARIATION_FIELDS },
+        );
+        if (result.total != null && result.total > WOO_SEARCH_MAX_VARIATIONS) return;
+        const before = collected.size;
+        for (const v of result.items) {
+          const id = Number(v?.id);
+          if (Number.isInteger(id) && id > 0) collected.set(id, v);
+        }
+        const complete = result.totalPages != null
+          ? page >= result.totalPages
+          : result.items.length < WOO_SEARCH_VARIATIONS_PER_PAGE;
+        if (complete) {
+          variationsOf.set(Number(p.id), [...collected.values()]);
+          return;
+        }
+        // Un servidor que ignora page no debe producir duplicados ni un bucle.
+        if (collected.size === before) return;
+      }
     } catch {
       /* sin sus variaciones no se ofrece: se muestran las demás */
     }
