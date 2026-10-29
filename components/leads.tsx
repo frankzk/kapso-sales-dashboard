@@ -917,6 +917,8 @@ export function LeadsBoard({
       return true;
     } catch {
       if (activeLeadIdRef.current === leadId) {
+        setSelected(null);
+        activeLeadIdRef.current = null;
         setBanner("No se pudo cargar el lead. Intenta nuevamente.");
       }
       return false;
@@ -1046,20 +1048,34 @@ export function LeadsBoard({
   }, []);
   useEffect(() => {
     if (!openLeadId) return;
+    let alive = true;
     const timer = setInterval(() => {
       if (activeLeadIdRef.current !== openLeadId) return;
       if (!shouldRenewClaim(lastActivityRef.current, Date.now())) return;
       void renewLeadClaim(openLeadId)
         .then((res) => {
-          if (res.error && activeLeadIdRef.current === openLeadId) setBanner(res.error);
+          if (!alive || activeLeadIdRef.current !== openLeadId) return;
+          if (res.claimLost) loseLeadClaim(openLeadId, res.error ?? "La reserva de este lead ya no está disponible.");
+          else if (res.error) setBanner(res.error);
         })
         .catch(() => undefined); // un fallo de red se reintenta en el siguiente latido
     }, CLAIM_HEARTBEAT_MS);
-    return () => clearInterval(timer);
+    return () => { alive = false; clearInterval(timer); };
   }, [openLeadId]);
 
   /** El lead al que se está pasando con «Siguiente lead»; cerrar lo cancela. */
   const jumpingToRef = useRef<string | null>(null);
+
+  function loseLeadClaim(leadId: string, message: string) {
+    if (activeLeadIdRef.current !== leadId) return;
+    jumpingToRef.current = null;
+    activeLeadIdRef.current = null;
+    setSelected(null);
+    setCalls(null);
+    setHistory(null);
+    nextLead.invalidate(leadId);
+    setBanner(`${message} Se cerró la ficha para evitar una gestión doble.`);
+  }
 
   function closeDrawer() {
     jumpingToRef.current = null;
@@ -2394,6 +2410,8 @@ export function LeadsBoard({
           shopifyDomain={stores.find((s) => s.id === selected.store_id)?.shopify_domain ?? null}
           currency={currency}
           onClose={closeDrawer}
+          claimConfirmed={openingId === null}
+          onClaimLost={(message) => loseLeadClaim(selected.id, message)}
           onRegistered={(update) => refreshDetail(selected.id, update)}
           onReady={measureLeadDrawerReady}
           next={{

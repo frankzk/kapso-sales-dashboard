@@ -4367,7 +4367,13 @@ saltó.
   - **Una ficha olvidada abierta** deja de renovarse y el lead se suelta solo,
     como antes.
   - **Si otra asesora ya lo tomó** cuando la reserva había vencido, no se le
-    quita a nadie: la ficha avisa quién lo tiene.
+    quita a nadie: la ficha se cierra y el aviso dice quién lo tiene
+    (corrección del owner, 29-10-2026, Ross y Tania). La consulta liviana que
+    ya corre cada 12 segundos también comprueba si otra asesora tiene una
+    reserva vigente, y se consulta al volver a la pestaña o enfocar la ventana.
+    Espera a que termine la toma inicial; un fallo de red o de lectura no se
+    interpreta como pérdida de reserva. El cierre invalida las respuestas
+    pendientes y la tarjeta del siguiente, sin soltar ni tomar la reserva ajena.
 - **Saltar** lo suelta y no se le vuelve a ofrecer en esa pestaña; para las
   demás sigue en la cola.
 - **Guardar el resultado** desde la tarjeta es lo mismo que guardarlo en la

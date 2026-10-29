@@ -139,6 +139,8 @@ export interface NextLeadState {
   skip: () => void;
   /** Suelta el siguiente (abrir otro lead de la cola lo pide ANTES de reservar el otro). */
   release: () => Promise<void>;
+  /** Descarta una reserva perdida solo en esta pestaña; no toca al nuevo dueño. */
+  invalidate: (id: string) => void;
   retry: () => void;
 }
 
@@ -325,6 +327,12 @@ export function useNextLead({
     setTaken(new Map());
   }, []);
 
+  const invalidate = useCallback((id: string) => {
+    if (heldRef.current !== id) return;
+    hold(null);
+    setTaken((m) => new Map(m).set(id, Date.now()));
+  }, [hold]);
+
   const lead = candidate && candidate.id === heldId ? candidate : null;
   return {
     lead,
@@ -335,6 +343,7 @@ export function useNextLead({
     skip,
     release,
     retry,
+    invalidate,
   };
 }
 

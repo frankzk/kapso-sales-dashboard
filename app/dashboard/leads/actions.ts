@@ -152,6 +152,8 @@ import { zadarmaLocalPeru } from "@/lib/zadarma";
 
 export interface LeadActionState {
   error?: string;
+  /** Pérdida de reserva confirmada por la base; no un fallo transitorio de lectura. */
+  claimLost?: true;
   /** El error es un aviso que el asesor puede saltarse volviendo a confirmar. */
   requiereConfirmacion?: boolean;
   notice?: string;
@@ -521,13 +523,18 @@ async function loadLeadCustomerHistoryTimed(leadId: string, timing: LeadReadTimi
  */
 export async function pollLeadState(
   leadId: string,
-): Promise<{ hasOrder: boolean; status: string | null; category: string | null } | { error: string }> {
+): Promise<{ hasOrder: boolean; status: string | null; category: string | null; claimLost?: true; claimError?: string } | { error: string }> {
   const ctx = await authorizeLead(leadId);
   if (!ctx) return { error: "Sin acceso a este lead." };
   const sb = await createServerSupabase();
-  const { data } = await sb.from("leads").select("has_order, status, category").eq("id", leadId).maybeSingle();
-  const l = data as { has_order: boolean; status: string | null; category: string | null } | null;
+  const { data, error } = await sb.from("leads").select("has_order, status, category, claimed_by, claimed_at").eq("id", leadId).maybeSingle();
+  if (error) return { error: "No se pudo comprobar el estado del lead." };
+  const l = data as { has_order: boolean; status: string | null; category: string | null; claimed_by: string | null; claimed_at: string | null } | null;
   if (!l) return { error: "No encontrado." };
+  if (l.claimed_by && l.claimed_by !== ctx.userId && isClaimActive(l.claimed_at)) {
+    const who = await resolveAgentName(l.claimed_by, createAdminSupabase()).catch(() => null);
+    return { hasOrder: !!l.has_order, status: l.status, category: l.category, claimLost: true, claimError: `${who ?? "Otra asesora"} está atendiendo este lead.` };
+  }
   return { hasOrder: !!l.has_order, status: l.status, category: l.category };
 }
 
@@ -719,17 +726,19 @@ export async function renewLeadClaim(leadId: string): Promise<LeadActionState> {
     .maybeSingle();
   if (error) return { error: error.message };
   if (data) return { notice: "Reserva renovada." };
-  const { data: held } = await admin
+  const { data: held, error: readError } = await admin
     .from("leads")
     .select("claimed_by, claimed_at")
     .eq("id", leadId)
     .maybeSingle();
+  if (readError) return { error: "No se pudo comprobar la reserva del lead. Intenta nuevamente." };
   const h = held as { claimed_by: string | null; claimed_at: string | null } | null;
+  if (h?.claimed_by === ctx.userId && isClaimActive(h.claimed_at)) return { notice: "Reserva vigente." };
   if (h?.claimed_by && h.claimed_by !== ctx.userId && isClaimActive(h.claimed_at)) {
-    const who = await resolveAgentName(h.claimed_by, admin);
-    return { error: `${who ?? "Otra asesora"} tomó este lead mientras lo tenías abierto. Coordina con ella antes de seguir.` };
+    const who = await resolveAgentName(h.claimed_by, admin).catch(() => null);
+    return { claimLost: true, error: `${who ?? "Otra asesora"} tomó este lead mientras lo tenías abierto. Coordina con ella antes de seguir.` };
   }
-  return { error: "Tu reserva de este lead venció. Ciérralo y vuelve a abrirlo para seguir." };
+  return { claimLost: true, error: "Tu reserva de este lead venció. Vuelve a abrirlo para seguir." };
 }
 
 /** Release a claim (called when closing the drawer). Only releases your own. */
