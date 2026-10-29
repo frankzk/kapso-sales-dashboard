@@ -3,8 +3,8 @@
 begin;
 insert into orders(id,store_id,shopify_order_id,name) values
  ('28800000-0000-0000-0000-000000000001','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','attention-0288','#AT288');
-insert into order_master(order_id,store_id,shopify_order_id,order_name,coverage,macro_stage,macro_substage) values
- ('28800000-0000-0000-0000-000000000001','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','attention-0288','#AT288','lima','preparacion','por_armar');
+insert into order_master(order_id,store_id,shopify_order_id,order_name,region,province,district,macro_stage,macro_substage) values
+ ('28800000-0000-0000-0000-000000000001','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','attention-0288','#AT288','Lima','Lima','Santiago de Surco','preparacion','por_armar');
 do $$
 declare
   o uuid := '28800000-0000-0000-0000-000000000001';
@@ -13,6 +13,7 @@ declare
   b uuid := '00000000-0000-0000-0000-00000000000c';
   v jsonb; c uuid; stage text; test text;
 begin
+  if (select coverage from order_master where order_id=o) <> 'lima' then raise exception 'FAIL fixture not classified as Lima'; end if;
   foreach stage in array array['por_confirmar','preparacion','por_despachar','en_curso'] loop
     update order_master set macro_stage=stage,macro_substage=case stage
       when 'por_confirmar' then 'sin_llamar' when 'preparacion' then 'por_armar'
@@ -30,9 +31,9 @@ begin
   if (select macro_substage from order_master where order_id=o) = 'por_reprogramar_lima' then raise exception 'FAIL invented a failed delivery'; end if;
 
   foreach test in array array['coverage','por_cerrar','finalizado','cancelled','wrong_store','wrong_context','fake_failure'] loop
-    update order_master set coverage='lima',macro_stage='preparacion',macro_substage='por_armar' where order_id=o;
+    update order_master set region='Lima',province='Lima',district='Santiago de Surco',macro_stage='preparacion',macro_substage='por_armar' where order_id=o;
     update orders set cancelled_at=null where id=o;
-    if test='coverage' then update order_master set coverage='provincia_cod' where order_id=o; end if;
+    if test='coverage' then update order_master set region='Cusco',province='Cusco',district='Cusco' where order_id=o; end if;
     if test in ('por_cerrar','finalizado') then update order_master set macro_stage=test where order_id=o; end if;
     if test='cancelled' then update orders set cancelled_at=now() where id=o; end if;
     begin
