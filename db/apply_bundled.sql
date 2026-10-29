@@ -26947,9 +26947,9 @@ begin
   if not exists (
     select 1 from order_master m join orders o on o.id = m.order_id
      where m.order_id = p_order and m.store_id = p_store
-       and o.cancelled_at is null and m.coverage = 'lima'
+       and o.cancelled_at is null
        and (
-         (p_episode = 'attention:' || p_order::text
+         (p_episode = 'attention:' || p_order::text and m.coverage = 'lima'
           and m.macro_stage in ('por_confirmar', 'preparacion', 'por_despachar', 'en_curso')
           and not (m.macro_stage = 'en_curso' and coalesce(m.macro_substage, '') = 'por_reprogramar_lima'))
          or (p_episode not like 'attention:%'

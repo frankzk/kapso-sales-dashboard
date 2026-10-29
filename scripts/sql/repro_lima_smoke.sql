@@ -43,8 +43,6 @@ insert into order_master(order_id,store_id,shopify_order_id,order_name,macro_sta
  ('24900000-0000-0000-0000-000000000014','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','rl-4','#RL4','en_curso','por_reprogramar_lima',now() - interval '12 days'),
  ('24900000-0000-0000-0000-000000000015','bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb','rl-5','#RL5','en_curso','por_reprogramar_lima',now() - interval '1 day');
 
-update order_master set coverage = 'lima' where order_id::text like '24900000-%';
-
 -- ── La fecha que pidió el cliente ───────────────────────────────────────────
 do $$
 declare
