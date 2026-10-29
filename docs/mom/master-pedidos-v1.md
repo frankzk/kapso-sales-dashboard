@@ -18254,6 +18254,16 @@ Implementación: `lib/shipment-order-capture.ts` (`orderPlatformOf`,
 `test/shipment-order-capture.test.ts` y `test/woocommerce-integration-mom.test.ts`.
 
 Implementación de «Generar pedido» y los buscadores en WooCommerce:
+
+**Buscador de variantes (29-10-2026).** Leads, productos promocionados y selector de stock recorren las páginas
+de variaciones publicadas con100 por página, leyendo `X-WP-TotalPages`. El corte anterior de50 ocultaba toda
+la talla38–39 de CloudSlides (66 variantes en Aurela). Se conservan ids, SKU, precios y stock de la tienda,
+incluidas las variantes con stock0. Hasta1000 por producto y el presupuesto total de10segundos; si una página
+falla, vence el presupuesto o se supera el límite, no se ofrece ese producto con una lista incompleta.
+Esto corrige la lectura del catálogo; no crea variantes ni modifica pedidos o inventario.
+Pruebas:66 con11 variantes38–39,125 en dos páginas, fallo de página posterior, presupuesto y límite seguro,
+en `test/woocommerce-orders.test.ts`; la tienda falsa ahora implementa paginación y cabeceras de variaciones.
+
 `lib/woocommerce-orders.ts` (`loadStoreOrderPlatform`, `buildWooSaleOrder`,
 `wooSaleFingerprint`, `wooLineCents`, `wooSaleLinesProblem`,
 `wooSaleMismatches`, `wooLinesToVerify`, `createWooSaleOrder`,
