@@ -2735,17 +2735,39 @@ presentación inicial de «Todos» como solo un resumen, descrita a continuació
 - **Contexto:** entrega fallida para la subetapa Por reprogramar Lima; antiguo
   por revisar si se creó hace más de 30 días o si Tanders sigue En tránsito
   con despacho anterior al corte del siguiente día hábil (§29.13); pendiente de primer despacho si
-  no está En curso y no consta despacho ni intento; los demás son seguimiento
+  no está En curso y no consta una salida real; los demás son seguimiento
   de entrega. Son etiquetas de lectura, nunca nuevos estados ni prueba de que
   un paquete haya vuelto. Un antiguo de Tanders que siga En tránsito también
   queda visible, conservando ese estado real.
 - **Presentación unificada (corrección del owner, 28-10-2026):** una sola tabla
   con «Todos · por entregar» primero y activo al entrar. Todos los renglones
   tienen «Atender» como acción principal. Las otras tarjetas filtran esa misma
-  tabla por la gestión de sus casos; conservan sus cantidades y prioridades.
+  tabla por programación e historial de salidas, con los apartados de Grupo GF.
   Un pendiente sin caso aparece en Todos, sin inventarle una llamada o decisión.
   Las cantidades de las tarjetas respetan tienda, búsqueda y exclusiones; la
   línea de la tabla indica cuántos se muestran respecto del total de la tienda.
+- **Apartados operativos (28-10-2026, decisión del owner):** después de Todos
+  aparecen Reprogramados, Programados para hoy, Programados para mañana, Nunca
+  salieron, Ya salieron, Más de 30 días y Programados para después. Los seis
+  apartados desde Hoy hasta Después usan `queueSegment` de Grupo GF (§29.13):
+  una programación persistida manda; una fecha vencida sigue en Hoy; sin fecha,
+  una salida real manda sobre la antigüedad; sin ambas, más de 30 días desde el
+  día de creación en Lima entra en Más de 30 días y el resto en Nunca salieron.
+  Estos seis apartados suman Todos sin duplicar pedidos. Ya salieron no afirma
+  que la caja haya retornado: la custodia sigue mostrándose con los hechos reales.
+  **Reprogramados significa una nueva fecha acordada vigente con el cliente**,
+  según confirmó el owner: requiere un acuerdo vivo de Repro Lima, no basta una
+  fecha propuesta ni un programa de Grupo GF sin acuerdo. Se superpone con Hoy,
+  Mañana o Después, sin duplicar filas en Todos. La fecha del acuerdo vigente
+  prevalece sobre un programa anterior. Llamar después y Cerrados · esperan
+  anulación siguen como chips secundarios junto a la búsqueda; ya no ocupan
+  tarjetas principales. Todas las tarjetas respetan los filtros y «Atender».
+  Los programas se leen de `gf_dispatch_programs`, paginados; el historial real
+  sale de `gf_order_departures` en lotes de 500 pedidos, la misma fuente de Grupo
+  GF. No se deduce «Nunca salieron» de un `dispatched_at` vacío en el Master,
+  porque una devolución puede limpiarlo. Si falla la lectura, se muestra el error
+  y no cantidades parciales. Consultar estos apartados no programa, recibe,
+  asigna ni modifica ningún pedido o salida. No requiere migraciones.
 - **Gestión:** Atender en una entrega fallida conserva la hoja de llamada,
   casos, acuerdos y guardas actuales. En los demás abre la ficha compartida
   sobre Repro Lima con las acciones autorizadas para su etapa: confirmación,
@@ -2757,8 +2779,10 @@ presentación inicial de «Todos» como solo un resumen, descrita a continuació
   casos y «Resumen y cierres pendientes» de esta pantalla. Los enlaces antiguos
   `vista=listas|todos|resumen` abren Todos y limpian ese parámetro sin perder la
   ficha ni las exclusiones. El filtro nuevo `atencion` identifica únicamente la
-  tarjeta elegida; sin él, o con un valor desconocido, abre Todos. Los cierres
-  siguen disponibles en el Master. No requiere migraciones ni recalcular estados.
+  tarjeta elegida; sin él, o con un valor desconocido, abre Todos. El antiguo
+  `atencion=programados` abre Reprogramados y `por_decidir` abre Todos. Los cierres
+  siguen disponibles como filtro secundario y en el Master. No requiere
+  migraciones ni recalcular estados.
 
 **«Todos»: los pedidos de Lima sin estado final (14-10-2026, pedido del owner
 del 13-10-2026).** Además de las cuatro listas, Repro Lima tiene una quinta

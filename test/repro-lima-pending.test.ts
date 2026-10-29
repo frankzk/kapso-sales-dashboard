@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { loadLimaPending } from "@/lib/repro-lima-pending-access";
-import { attentionCounts, attentionFilter, attentionRows, pendingFilters, pendingGroup, pendingKey, pendingMatches, togglePendingKeys, type LimaPendingOrder } from "@/lib/repro-lima-pending";
+import { attentionCounts, attentionFilter, attentionRows, limaQueueSegment, limaScheduledFor, pendingFilters, pendingGroup, pendingKey, pendingMatches, togglePendingKeys, type LimaPendingOrder } from "@/lib/repro-lima-pending";
 import { LimaPendingFilters, LimaPendingList } from "@/components/repro-lima-pending";
 import { ReproLimaBoard } from "@/components/repro-lima-board";
 import type { ReproLimaData } from "@/lib/repro-lima-access";
@@ -20,7 +20,7 @@ const row = (overrides: Partial<LimaPendingOrder> = {}): LimaPendingOrder => ({
   orderId: "o1", storeId: "a", storeName: "Kenku", orderName: "#KP1", customerName: "María Pérez",
   customerPhone: "51912345678", district: "Lima", orderTotal: 149, createdAt: "2026-10-27T18:00:00Z",
   macroSince: "2026-10-27T18:00:00Z", stage: "preparacion", substage: "por_armar",
-  courier: null, dispatchedAt: null, attempts: 0, ...overrides,
+  courier: null, dispatchedAt: null, attempts: 0, hasPriorDispatch: false, lastDepartureAt: null, programmedFor: null, ...overrides,
 });
 const TODAY = "2026-10-28";
 
@@ -82,8 +82,9 @@ function master(i: number, extra: DBRow = {}): DBRow {
     macro_stage: "preparacion", macro_substage: "por_armar", coverage: "lima", current_courier: null,
     dispatched_at: null, attempt_count: 0, ...extra };
 }
-function database(source: DBRow[], fail = false) {
+function database(source: DBRow[], fail = false, opts: { programs?: DBRow[]; departures?: DBRow[]; rpcError?: string; programError?: string } = {}) {
   const pages: number[] = [];
+  const ranges: Array<{ table: string; from: number }> = [];
   const from = vi.fn((table: string) => {
     const filters: Array<(r: DBRow) => boolean> = [];
     let range: [number, number] | null = null;
@@ -92,15 +93,20 @@ function database(source: DBRow[], fail = false) {
       in: (key: string, values: unknown[]) => { filters.push((r) => values.includes(r[key])); return q; },
       eq: (key: string, value: unknown) => { filters.push((r) => r[key] === value); return q; },
       order: () => q,
-      range: (a: number, b: number) => { range = [a, b]; pages.push(a); return q; },
+      range: (a: number, b: number) => { range = [a, b]; if (table === "order_master") pages.push(a); ranges.push({ table, from: a }); return q; },
       then: (resolve: (r: unknown) => unknown, reject?: (e: unknown) => unknown) => {
-        const rows = (table === "stores" ? [{ id: "a", name: "Kenku" }] : source).filter((r) => filters.every((f) => f(r)));
-        return Promise.resolve({ data: range ? rows.slice(range[0], range[1] + 1) : rows, error: fail && table === "order_master" ? { message: "sin conexión" } : null }).then(resolve, reject);
+        const rows = (table === "stores" ? [{ id: "a", name: "Kenku" }] : table === "gf_dispatch_programs" ? opts.programs ?? [] : source).filter((r) => filters.every((f) => f(r)));
+        const error = fail && table === "order_master" ? { message: "sin conexión" } : table === "gf_dispatch_programs" && opts.programError ? { message: opts.programError } : null;
+        return Promise.resolve({ data: range ? rows.slice(range[0], range[1] + 1) : rows, error }).then(resolve, reject);
       },
     };
     return q;
   });
-  return { admin: { from } as unknown as Admin, pages, from };
+  const rpc = vi.fn(async (_name: string, args: { p_order_ids: string[] }) => ({
+    data: (opts.departures ?? []).filter((d) => args.p_order_ids.includes(String(d.order_id))),
+    error: opts.rpcError ? { message: opts.rpcError } : null,
+  }));
+  return { admin: { from, rpc } as unknown as Admin, pages, ranges, from, rpc };
 }
 describe("acceso a todos los pendientes", () => {
   it("carga más de 1383 filas y solo las tiendas/cobertura/etapas autorizadas", async () => {
@@ -108,13 +114,35 @@ describe("acceso a todos los pendientes", () => {
       master(2000, { store_id: "fuera" }), master(2001, { coverage: "provincia_cod" }),
       master(2002, { macro_stage: "por_cerrar" }), master(2003, { macro_stage: "finalizado" }),
       master(2004, { macro_stage: "en_curso", macro_substage: "en_transito", current_courier: "tanders" }),
-    ]);
+    ], false, { departures: [...Array.from({ length: 1383 }, (_, i) => ({ order_id: `o${i}`, last_departure_at: "2026-10-27T17:00:00Z" })), { order_id: "o2004", last_departure_at: "2026-10-27T17:00:00Z" }] });
     const rows = await loadLimaPending(db.admin, { userId: "u", storeIds: new Set(["a"]) });
     expect(rows).toHaveLength(1384);
+    expect(rows.every((r) => r.hasPriorDispatch)).toBe(true);
     expect(db.pages).toEqual([0, 500, 1000]);
     expect(rows.at(-1)?.substage).toBe("en_transito");
     expect(rows[0]?.orderTotal).toBe(149);
-    expect(new Set(db.from.mock.calls.map(([table]) => table))).toEqual(new Set(["stores", "order_master"]));
+    expect(new Set(db.from.mock.calls.map(([table]) => table))).toEqual(new Set(["stores", "order_master", "gf_dispatch_programs"]));
+    expect(db.rpc.mock.calls.map(([, args]) => args.p_order_ids.length)).toEqual([500, 500, 384]);
+  });
+  it("usa salidas reales aunque Master haya vuelto a dejar dispatched_at vacío", async () => {
+    const db = database([master(1)], false, { departures: [{ order_id: "o1", last_departure_at: "2026-10-27T17:00:00Z" }], programs: [{ order_id: "o1", store_id: "a", scheduled_for: "2026-10-29" }] });
+    const [r] = await loadLimaPending(db.admin, { userId: "u", storeIds: new Set(["a"]) });
+    expect(r).toMatchObject({ dispatchedAt: null, hasPriorDispatch: true, programmedFor: "2026-10-29" });
+    expect(db.rpc.mock.calls[0]?.[0]).toBe("gf_order_departures");
+  });
+  it("pagina también los programas y solo asocia la tienda correcta del pedido", async () => {
+    const source = Array.from({ length: 1201 }, (_, i) => master(i));
+    const programs = source.map((r, i) => ({ order_id: r.order_id, store_id: i === 0 ? "b" : "a", scheduled_for: "2026-10-29" }));
+    const db = database(source, false, { programs });
+    const rows = await loadLimaPending(db.admin, { userId: "u", storeIds: new Set(["a"]) });
+    expect(db.ranges.filter((r) => r.table === "gf_dispatch_programs").map((r) => r.from)).toEqual([0, 500, 1000]);
+    expect(rows[1200]?.programmedFor).toBe("2026-10-29");
+    expect(rows[0]?.programmedFor).toBeNull();
+  });
+  it("un error de hechos no se presenta como cero salidas o cero programados", async () => {
+    const scope = { userId: "u", storeIds: new Set(["a"]) };
+    await expect(loadLimaPending(database([master(1)], false, { rpcError: "sin historial" }).admin, scope)).rejects.toThrow("sin historial");
+    await expect(loadLimaPending(database([master(1)], false, { programError: "sin programas" }).admin, scope)).rejects.toThrow("sin programas");
   });
   it("sin tiendas no consulta y un error no se presenta como lista vacía", async () => {
     const db = database([], true);
@@ -143,7 +171,7 @@ describe("presentación inicial y gestión", () => {
       const html = renderToStaticMarkup(createElement(ReproLimaBoard, { data, pending: [row()] }));
       expect(html).toContain('aria-label="Todos los pendientes de Lima"');
       expect(html).toContain(">Atender</a>");
-      expect(html.indexOf("Todos · por entregar")).toBeLessThan(html.indexOf("Por decidir"));
+      expect(html.indexOf("Todos · por entregar")).toBeLessThan(html.indexOf("Reprogramados"));
     }
     nav.search = "";
   });
@@ -171,31 +199,67 @@ describe("presentación inicial y gestión", () => {
   });
 });
 
-describe("una cola de atención para los 2070 pendientes", () => {
-  const rows = Array.from({ length: 2070 }, (_, i) => row({ orderId: `o${i}` }));
-  const cases = Array.from({ length: 577 }, (_, i) => ({ orderId: `o${i}`, list: i < 10 ? "programados" as const : "por_decidir" as const }));
-  it("Todos contiene los 2070, incluyendo los 1493 sin caso de fallo", () => {
-    expect(attentionRows(rows, cases, "todos")).toHaveLength(2070);
-    expect(attentionRows(rows, cases, "todos").at(-1)?.orderId).toBe("o2069");
-    expect(cases).toHaveLength(577); // La lectura no crea casos artificiales.
+describe("apartados operativos de la misma cola", () => {
+  const rows = [
+    row({ orderId: "reciente" }),
+    row({ orderId: "antiguo", createdAt: "2026-09-27T05:00:00Z" }),
+    row({ orderId: "treinta", createdAt: "2026-09-28T05:00:00Z" }),
+    row({ orderId: "retorno", hasPriorDispatch: true, lastDepartureAt: "2026-10-20T15:00:00Z", dispatchedAt: null, attempts: 0 }),
+    row({ orderId: "hoy", programmedFor: TODAY }),
+    row({ orderId: "vencido", programmedFor: "2026-10-26" }),
+    row({ orderId: "manana", programmedFor: "2026-10-29" }),
+    row({ orderId: "despues", programmedFor: "2026-10-30" }),
+    row({ orderId: "acuerdo", hasPriorDispatch: true }),
+  ];
+  const cases = [{ orderId: "acuerdo", list: "programados" as const, agreement: { agreedOn: "2026-10-29" } }];
+  it("los seis apartados suman Todos; Reprogramados cuenta las nuevas fechas acordadas", () => {
+    const counts = attentionCounts(rows, cases, TODAY);
+    expect(counts).toEqual({ todos: 9, reprogramados: 1, programados_hoy: 2, programados_manana: 2, nunca_salieron: 2, ya_salieron: 1, mas_de_30: 1, programados_despues: 1, llamar_despues: 0, cerrados: 0 });
+    expect(counts.programados_hoy + counts.programados_manana + counts.nunca_salieron + counts.ya_salieron + counts.mas_de_30 + counts.programados_despues).toBe(counts.todos);
   });
-  it("las tarjetas solo filtran los mismos pedidos y conservan los acuerdos", () => {
-    expect(attentionCounts(rows, cases)).toEqual({ todos: 2070, por_decidir: 567, programados: 10, llamar_despues: 0, cerrados: 0 });
-    expect(attentionRows(rows, cases, "programados").map((r) => r.orderId)).toEqual(rows.slice(0, 10).map((r) => r.orderId));
-    expect(attentionRows(rows, cases, "por_decidir")).toHaveLength(567);
-    expect(attentionRows(rows, cases, "cerrados")).toEqual([]);
+  it("una salida que retornó no vuelve a Nunca salieron aunque Master haya borrado el despacho", () => {
+    expect(attentionRows(rows, cases, "ya_salieron", TODAY).map((r) => r.orderId)).toEqual(["retorno"]);
+    expect(attentionRows(rows, cases, "nunca_salieron", TODAY).map((r) => r.orderId)).not.toContain("retorno");
   });
-  it("búsqueda, tiendas y exclusiones limitan las cifras de esa misma cola", () => {
-    const scoped = rows.slice(4, 20);
-    expect(attentionCounts(scoped, [...cases, { orderId: "fuera", list: "cerrados" }])).toEqual({ todos: 16, por_decidir: 10, programados: 6, llamar_despues: 0, cerrados: 0 });
+  it("la fecha manda sobre la antigüedad y el historial de salidas", () => {
+    const old = row({ createdAt: "2026-01-01T15:00:00Z", hasPriorDispatch: true, programmedFor: "2026-10-29" });
+    expect(limaQueueSegment(old, TODAY)).toBe("programados_manana");
+    expect(attentionRows(rows, cases, "programados_hoy", TODAY).map((r) => r.orderId)).toEqual(["vencido", "hoy"]);
   });
-  it("conserva el orden de prioridad de los casos al filtrar", () => {
-    const priority = [{ orderId: "o2", list: "por_decidir" as const }, { orderId: "o0", list: "por_decidir" as const }];
-    expect(attentionRows(rows, priority, "por_decidir").map((r) => r.orderId)).toEqual(["o2", "o0"]);
+  it("la fecha acordada vigente manda sobre un programa anterior; no se inventa un acuerdo", () => {
+    const r = row({ programmedFor: TODAY });
+    const c = { orderId: r.orderId, list: "programados" as const, agreement: { agreedOn: "2026-10-29" } };
+    expect(limaScheduledFor(r, c)).toBe("2026-10-29");
+    expect(limaQueueSegment(r, TODAY, c)).toBe("programados_manana");
+    expect(attentionCounts([r], [{ orderId: r.orderId, list: "programados" }], TODAY).reprogramados).toBe(0);
+    expect(attentionCounts([r], [{ ...c, list: "por_decidir" }], TODAY).reprogramados).toBe(0);
   });
-  it("el filtro de atención es explícito; listas y resumen antiguos no son filtros", () => {
-    for (const value of [null, "listas", "resumen", "todos", "desconocido"]) expect(attentionFilter(value)).toBe("todos");
-    expect(attentionFilter("programados")).toBe("programados");
-    expect(attentionFilter("por_decidir")).toBe("por_decidir");
+  it("mañana se convierte en hoy al cambiar el día de Lima, incluso al cambiar de mes", () => {
+    const r = row({ programmedFor: "2026-11-01" });
+    expect(limaQueueSegment(r, "2026-10-31")).toBe("programados_manana");
+    expect(limaQueueSegment(r, "2026-11-01")).toBe("programados_hoy");
+  });
+  it("Más de 30 días es estricto y usa el día de creación en Lima", () => {
+    expect(limaQueueSegment(row({ createdAt: "2026-09-28T04:59:59Z" }), TODAY)).toBe("mas_de_30");
+    expect(limaQueueSegment(row({ createdAt: "2026-09-28T05:00:00Z" }), TODAY)).toBe("nunca_salieron");
+    expect(limaQueueSegment(row({ createdAt: null }), TODAY)).toBe("nunca_salieron");
+  });
+  it("Todas las filas siguen accesibles sin duplicar pedidos por Reprogramados", () => {
+    const all = attentionRows(rows, cases, "todos", TODAY);
+    expect(all).toHaveLength(9);
+    expect(new Set(all.map((r) => r.orderId)).size).toBe(9);
+    expect(attentionRows(rows, cases, "reprogramados", TODAY).map((r) => r.orderId)).toEqual(["acuerdo"]);
+    expect(rows[0]?.orderId).toBe("reciente");
+  });
+  it("mantiene llamadas y cierres como filtros secundarios sobre las mismas filas", () => {
+    const follow = [{ orderId: "hoy", list: "cerrados" as const }, { orderId: "retorno", list: "llamar_despues" as const }];
+    expect(attentionRows(rows, follow, "cerrados", TODAY).map((r) => r.orderId)).toEqual(["hoy"]);
+    expect(attentionCounts(rows.slice(0, 3), follow, TODAY).cerrados).toBe(0);
+  });
+  it("los enlaces antiguos se normalizan y las nuevas tarjetas tienen un filtro explícito", () => {
+    for (const value of [null, "listas", "resumen", "por_decidir", "todos", "desconocido"]) expect(attentionFilter(value)).toBe("todos");
+    expect(attentionFilter("programados")).toBe("reprogramados");
+    expect(attentionFilter("programados_manana")).toBe("programados_manana");
+    expect(attentionFilter("llamar_despues")).toBe("llamar_despues");
   });
 });
