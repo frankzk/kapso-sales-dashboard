@@ -2768,10 +2768,17 @@ presentación inicial de «Todos» como solo un resumen, descrita a continuació
   porque una devolución puede limpiarlo. Si falla la lectura, se muestra el error
   y no cantidades parciales. Consultar estos apartados no programa, recibe,
   asigna ni modifica ningún pedido o salida. No requiere migraciones.
-- **Gestión:** Atender en una entrega fallida conserva la hoja de llamada,
-  casos, acuerdos y guardas actuales. En los demás abre la ficha compartida
-  sobre Repro Lima con las acciones autorizadas para su etapa: confirmación,
-  ubicación, ruta y seguimiento. Los casos programados o cerrados se abren en
+- **Gestión (corrección del owner, 28-10-2026):** «Atender» abre siempre la
+  hoja de llamada y programación/reprogramación, también desde Todos y para
+  pendientes que nunca salieron. El código del pedido abre la ficha compartida.
+  Los pendientes sin fallo usan un contexto de atención `attention:<order_id>`:
+  no se inventa un «No entregado», una parada ni un despacho. Conserva las
+  mismas llamadas, acuerdos, exclusión de edición y guardas de custodia, fechas
+  y guías. El servidor y la RPC admiten ese contexto solo para cobertura Lima
+  en Por confirmar, Preparación, Por despachar o En curso, con tienda y permiso
+  comprobados; una anulación o salida de esas etapas lo invalida. Un fallo real
+  posterior inicia su episodio de reprogramación y conserva la atención anterior
+  en el historial. Los casos programados o cerrados se abren en
   lectura; reabrir un cierre conserva su segundo clic de confirmación. Leer o
   abrir cualquier pedido no crea un episodio fallido, no programa ni genera
   otra salida y no cambia la custodia.

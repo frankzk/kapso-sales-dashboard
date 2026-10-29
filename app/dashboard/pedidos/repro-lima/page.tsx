@@ -38,7 +38,7 @@ async function ReproLimaContent() {
   let pending: LimaPendingOrder[];
   try {
     [data, pending] = await Promise.all([
-      loadReproLima(createAdminSupabase(), scope),
+      loadReproLima(createAdminSupabase(), scope, new Date(), { attention: true }),
       loadLimaPending(createAdminSupabase(), scope),
     ]);
   } catch (error) {

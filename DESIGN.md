@@ -440,8 +440,13 @@ de trabajo.
 Una sola tabla para Todos y para los filtros de atención. «Todos · por entregar»
 es la primera tarjeta y queda activa al entrar, también desde enlaces guardados
 de las vistas antiguas. Todas las filas tienen «Atender» como acción principal;
-los casos conservan su hoja de atención y los demás abren la ficha compartida
-con las acciones de su etapa. Las tarjetas filtran la misma tabla y no cambian
+todos abren la hoja de atención para llamadas y programación/reprogramación.
+El código del pedido abre la ficha compartida con sus datos. Los pendientes sin
+fallo muestran «Programación y seguimiento de entrega», sin fabricar un motivo
+de «No entregado». Mientras se carga su gestión, el botón muestra «Abriendo…»;
+un fallo de lectura se informa en el tablero y permite volver a intentarlo.
+«Guardar y pasar al siguiente» sigue el orden de la lista, incluyendo pendientes
+sin caso previo. Las tarjetas filtran la misma tabla y no cambian
 su estructura. Se retira la navegación entre lista y resumen de esta pantalla.
 La columna «Gestión pendiente» diferencia primer despacho, entrega fallida,
 antiguo por revisar y seguimiento, con los estados reales a su lado. Mantiene

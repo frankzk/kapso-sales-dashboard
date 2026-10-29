@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { Badge, ChoiceChip, OpsButton, choiceChipClass, opsButtonClass } from "@/components/ops-ui";
+import { Badge, ChoiceChip, OpsButton, choiceChipClass } from "@/components/ops-ui";
 import { OrderLink } from "@/components/order-link";
 import { CallButton, ClaimBadge, FailureLine, ReproRowChips, phoneLabel } from "@/components/repro-lima-sheet";
 import type { ReproRow } from "@/lib/repro-lima-access";
@@ -82,22 +82,16 @@ function PendingDate({ row }: { row: LimaPendingOrder }) {
   return label ? <p className="text-xs tabular-nums text-ink-500">Creado {label}</p> : null;
 }
 
-/** La lista amplia conserva la hoja del fallo; fuera de ella usa la ficha real
- * con sus permisos y guardas. No simula un episodio ni crea una segunda guía. */
+/** Atender siempre abre la gestión. El código abre la ficha del pedido. */
 export function LimaPendingList({ rows, reproRows, today, renderActions, emptyText }: {
   rows: readonly LimaPendingOrder[]; reproRows: readonly ReproRow[]; today: string;
-  renderActions: (row: ReproRow, compact: boolean) => ReactNode;
+  renderActions: (row: LimaPendingOrder, compact: boolean) => ReactNode;
   emptyText?: string;
 }) {
   const [limit, setLimit] = useState(100);
   const cases = new Map(reproRows.map((r) => [r.orderId, r]));
   const visible = rows.slice(0, limit);
-  const action = (row: LimaPendingOrder, compact: boolean) => {
-    const repro = cases.get(row.orderId);
-    return repro ? renderActions(repro, compact) : (
-      <OrderLink orderId={row.orderId} section="operar" className={opsButtonClass("secondary", compact ? "sm" : "md", "justify-center pointer-coarse:min-h-11")} title={`Atender ${row.orderName} sin salir de Repro Lima`}>Atender</OrderLink>
-    );
-  };
+  const action = (row: LimaPendingOrder, compact: boolean) => renderActions(row, compact);
   if (!rows.length) return <div className="border-t border-line px-4 py-12 text-center text-sm text-ink-500">{emptyText ?? "No hay pedidos con estos filtros. Activa otros macroestados o quita la búsqueda."}</div>;
   return (
     <>

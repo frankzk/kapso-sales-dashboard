@@ -298,6 +298,16 @@ describe("los hechos del pedido", () => {
     expect(reproCaseProblem({ ...facts, cancelled: true, episode: { key: EPISODE, at: null } }, agreement())?.reason).toBe("fuera_de_etapa");
     expect(reproCaseProblem({ ...facts, episode: { key: EPISODE, at: null } }, agreement())).toBeNull();
   });
+  it("el contexto de atención conserva llamadas sin inventar un fallo y termina con sus propias guardas", () => {
+    const c = { episode_key: "attention:o1", episode_at: "2026-10-12T15:00:00Z" };
+    const f = { inStage: false, attentionEligible: true, cancelled: false, episode: { key: "attention:o1", at: null } };
+    expect(reproCaseProblem(f, c)).toBeNull();
+    expect(reproCaseProblem({ ...f, attentionEligible: false }, c)?.reason).toBe("fuera_de_etapa");
+    expect(reproCaseProblem({ ...f, cancelled: true }, c)?.reason).toBe("fuera_de_etapa");
+    expect(reproCaseProblem({ ...f, inStage: true, episode: { key: EPISODE, at: null } }, c)?.reason).toBe("nuevo_intento");
+    // La ampliación no mantiene vivo un caso fallido al salir de su etapa.
+    expect(reproCaseProblem(f, agreement())?.reason).toBe("fuera_de_etapa");
+  });
 });
 
 describe("materializeAgreement", () => {
