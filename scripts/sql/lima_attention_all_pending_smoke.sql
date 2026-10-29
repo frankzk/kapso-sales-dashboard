@@ -14,7 +14,9 @@ declare
   v jsonb; c uuid; stage text; test text;
 begin
   foreach stage in array array['por_confirmar','preparacion','por_despachar','en_curso'] loop
-    update order_master set macro_stage=stage,macro_substage=null where order_id=o;
+    update order_master set macro_stage=stage,macro_substage=case stage
+      when 'por_confirmar' then 'sin_llamar' when 'preparacion' then 'por_armar'
+      when 'por_despachar' then 'listo_para_asignar' else 'en_reparto' end where order_id=o;
     v := lima_repro_claim(o,s,a,'attention:' || o::text);
     if not (v->>'claimed')::boolean then raise exception 'FAIL pending stage %', stage; end if;
     c := (v->>'case_id')::uuid;
