@@ -34,16 +34,34 @@ create trigger lead_record_call_attempt after insert on public.lead_calls
 for each row execute function public.lead_record_call_attempt();
 
 -- Pure membership shared by rollups. Mirrors lib/lead-call-queue.ts.
-create or replace function public.lead_in_call_queue(p_status text, p_category text, p_ready boolean, p_opt_out timestamptz, p_has_order boolean, p_order_id uuid)
+create or replace function public.lead_in_call_queue(p_status text, p_category text, p_ready boolean, p_opt_out timestamptz, p_has_order boolean, p_order_id uuid, p_followup timestamptz)
 returns boolean language sql immutable security invoker set search_path = public as $$
   select p_category in ('open','hot') and p_opt_out is null and (
-    p_status = 'nuevo' or (p_ready and not p_has_order and p_order_id is null and p_status in (
-      'no_responde','buzon','cuelga','casi_cierra','volver_a_llamar','contactado_dejo_wsp','otros_productos'
+    (p_status = 'nuevo' and p_followup is null) or (p_ready and not p_has_order and p_order_id is null and p_status in (
+      'nuevo','no_responde','buzon','cuelga','casi_cierra','volver_a_llamar','contactado_dejo_wsp','otros_productos'
     ))
   )
 $$;
-revoke all on function public.lead_in_call_queue(text,text,boolean,timestamptz,boolean,uuid) from public, anon;
-grant execute on function public.lead_in_call_queue(text,text,boolean,timestamptz,boolean,uuid) to authenticated, service_role;
+revoke all on function public.lead_in_call_queue(text,text,boolean,timestamptz,boolean,uuid,timestamptz) from public, anon;
+grant execute on function public.lead_in_call_queue(text,text,boolean,timestamptz,boolean,uuid,timestamptz) to authenticated, service_role;
+
+-- Any writer (including the voice agent) can postpone or close a lead.
+-- A stale ready flag must never override the customer's new appointment.
+create or replace function public.lead_guard_call_queue()
+returns trigger language plpgsql security invoker set search_path = public as $$
+begin
+  if new.next_followup_at > now() or new.call_attempt_count >= 3
+    or new.category not in ('open','hot') or new.contact_opt_out_at is not null
+    or new.has_order or new.order_id is not null
+    or new.status not in ('nuevo','no_responde','buzon','cuelga','casi_cierra','volver_a_llamar','contactado_dejo_wsp','otros_productos')
+  then new.call_queue_ready := false; end if;
+  return new;
+end $$;
+revoke all on function public.lead_guard_call_queue() from public, anon, authenticated;
+grant execute on function public.lead_guard_call_queue() to service_role;
+drop trigger if exists lead_guard_call_queue on public.leads;
+create trigger lead_guard_call_queue before insert or update on public.leads
+for each row execute function public.lead_guard_call_queue();
 
 create or replace function public.requeue_leads_for_calls(p_store_id uuid, p_limit integer default 500)
 returns integer language plpgsql security invoker set search_path = public as $$
@@ -52,7 +70,7 @@ begin
   for r in
     select l.* from public.leads l
     where l.store_id = p_store_id and l.category in ('open','hot')
-      and l.status in ('no_responde','buzon','cuelga','casi_cierra','volver_a_llamar','contactado_dejo_wsp','otros_productos')
+      and l.status in ('nuevo','no_responde','buzon','cuelga','casi_cierra','volver_a_llamar','contactado_dejo_wsp','otros_productos')
       and not l.call_queue_ready and l.call_attempt_count < 3
       and l.contact_opt_out_at is null and l.phone is not null
       and not l.has_order and l.order_id is null
@@ -91,7 +109,7 @@ language sql stable security invoker set search_path = public as $$
     count(*) filter (where status = 'yape_por_verificar'),
     count(*) filter (where next_followup_at is not null and next_followup_at <= p_now),
     count(*) filter (where category = 'won'), count(*) filter (where category = 'lost'),
-    count(*) filter (where public.lead_in_call_queue(status,category,call_queue_ready,contact_opt_out_at,has_order,order_id)),
+    count(*) filter (where public.lead_in_call_queue(status,category,call_queue_ready,contact_opt_out_at,has_order,order_id,next_followup_at)),
     count(*),max(updated_at)
   from public.leads where store_id = p_store_id
 $$;
@@ -104,7 +122,7 @@ language sql stable security invoker set search_path = public as $$
   select 'sin_llamar', to_char(coalesce(last_interaction_at,first_seen_at) at time zone p_tz,'YYYY-MM-DD'),count(*)
   from public.leads
   where store_id = any(p_store_ids)
-    and public.lead_in_call_queue(status,category,call_queue_ready,contact_opt_out_at,has_order,order_id)
+    and public.lead_in_call_queue(status,category,call_queue_ready,contact_opt_out_at,has_order,order_id,next_followup_at)
     and coalesce(last_interaction_at,first_seen_at) is not null group by 2
 $$;
 revoke all on function public.lead_insights_rollup(uuid[],timestamptz,text,text) from public, anon;

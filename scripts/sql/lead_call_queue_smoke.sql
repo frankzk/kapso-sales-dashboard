@@ -34,6 +34,7 @@ update leads set claimed_by='00000000-0000-0000-0000-00000000000b',claimed_at=no
 insert into leads(store_id,phone,name,status,cart_item_count,call_attempt_count,last_interaction_at)
  values ('cc028900-0000-0000-0000-000000000002','51999899999','other-store','no_responde',1,1,now()-interval '49 hours');
 
+set local role service_role;
 do $$
 declare n integer; r record; l public.leads%rowtype; s uuid := 'cc028900-0000-0000-0000-000000000001';
 begin
@@ -71,6 +72,25 @@ begin
  if l.next_followup_at is not null or l.call_queue_ready then raise exception 'expired appointment not consumed'; end if;
  insert into lead_calls(lead_id,store_id,kind,note) values(l.id,s,'system','note is not an attempt');
  if (select call_attempt_count from leads where id=l.id) <> 2 then raise exception 'system note counted as call'; end if;
+
+ -- Postponement by a different writer (e.g. voice agent) invalidates readiness.
+ select * into l from leads where store_id=s and name='due';
+ update leads set next_followup_at=now()+interval '1 day' where id=l.id;
+ if (select call_queue_ready from leads where id=l.id) then raise exception 'future appointment still queued'; end if;
+ if public.requeue_leads_for_calls(s) <> 0 then raise exception 'future appointment requeued early'; end if;
+ update leads set next_followup_at=now()-interval '1 minute' where id=l.id;
+ if public.requeue_leads_for_calls(s) <> 1 then raise exception 'postponed appointment did not return when due'; end if;
+ update leads set status='sin_stock' where id=l.id;
+ if (select call_queue_ready from leads where id=l.id) then raise exception 'stock shortage kept ready flag'; end if;
+
+ -- A first call scheduled without changing nuevo must wait for its date too.
+ insert into leads(id,store_id,phone,status,next_followup_at)
+ values('cc028900-0000-0000-0000-000000000088',s,'51999898888','nuevo',now()+interval '1 day');
+ select * into l from leads where id='cc028900-0000-0000-0000-000000000088';
+ if public.lead_in_call_queue(l.status,l.category,l.call_queue_ready,l.contact_opt_out_at,l.has_order,l.order_id,l.next_followup_at)
+ then raise exception 'new lead with future appointment entered early'; end if;
+ update leads set next_followup_at=now()-interval '1 minute' where id=l.id;
+ if public.requeue_leads_for_calls(s) <> 1 then raise exception 'scheduled first attempt did not return'; end if;
 
  if has_function_privilege('authenticated','public.requeue_leads_for_calls(uuid,integer)','EXECUTE')
  or has_function_privilege('anon','public.requeue_leads_for_calls(uuid,integer)','EXECUTE')

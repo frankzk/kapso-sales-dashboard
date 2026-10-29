@@ -35,6 +35,8 @@ describe("Por llamar incluye reintentos sin borrar la gestión", () => {
   });
   it("a follow-up waits outside the queue until the server confirms it is due",()=>{
     expect(isInCallQueue({...retry,call_queue_ready:false})).toBe(false);
+    expect(isInCallQueue({status:"nuevo",next_followup_at:"2026-10-30T10:00:00Z",call_queue_ready:false})).toBe(false);
+    expect(isInCallQueue({status:"nuevo",next_followup_at:"2026-10-29T10:00:00Z",call_queue_ready:true})).toBe(true);
   });
   it("next-lead card can reserve the retry but respects another advisor's live claim",()=>{
     expect(pickNextLead([retry],{userId:"me"})?.id).toBe("retry");

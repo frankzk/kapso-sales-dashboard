@@ -292,7 +292,7 @@ describe("el panel pregunta primero al RPC y la SQL dice lo mismo que el código
     expect(src).toContain('.is("contact_opt_out_at", null)');
     expect(src).toContain('.or(CALL_QUEUE_FILTER)');
     const sql = read("db/migrations/0289_lead_call_queue_retries.sql");
-    expect(sql).toContain("public.lead_in_call_queue(status,category,call_queue_ready,contact_opt_out_at,has_order,order_id)");
+    expect(sql).toContain("public.lead_in_call_queue(status,category,call_queue_ready,contact_opt_out_at,has_order,order_id,next_followup_at)");
     expect(sql).toContain("security invoker");
     expect(sql).toContain("revoke all on function public.lead_insights_rollup");
   });
