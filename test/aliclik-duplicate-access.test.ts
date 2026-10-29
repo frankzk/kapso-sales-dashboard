@@ -129,6 +129,14 @@ describe("retención autoritativa y resolución auditada", () => {
       occurred_at: "2026-10-14T20:41:14Z", payload: { status: "entregado" } });
     expect((await loadAliclikDuplicateHold("new")).allowed).toBe(false);
   });
+  it("una nueva recepción del motorizado deja sin efecto la entrega anterior", async () => {
+    Object.assign(db.tables.shipments![0]!, { courier: "propio", delivery_status: "pendiente" });
+    db.tables.order_events!.push(
+      { order_id: "prior", store_id: "store", shipment_id: "box", kind: "stop_reported", occurred_at: "2026-10-14T20:41:14Z", payload: { status: "entregado" } },
+      { order_id: "prior", store_id: "store", shipment_id: "box", kind: "custody_transferred", occurred_at: "2026-10-15T15:00:00Z", note: "Paquete cotejado y recibido por el motorizado." },
+    );
+    expect((await loadAliclikDuplicateHold("new")).allowed).toBe(false);
+  });
   it("lee el historial completo del motorizado y no usa eventos de otra tienda", async () => {
     Object.assign(db.tables.shipments![0]!, { courier: "propio", delivery_status: "pendiente" });
     db.tables.order_events!.push(...Array.from({ length: 105 }, (_, i) => ({

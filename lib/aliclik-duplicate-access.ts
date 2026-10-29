@@ -101,7 +101,7 @@ export async function loadAliclikDuplicateHold(
   for (let start = 0; start < ownOrderIds.length; start += 100) {
     for (let offset = 0; ; offset += 100) {
       const { data, error: riderError } = await sb.from("order_events")
-        .select("order_id,kind,shipment_id,occurred_at,payload")
+        .select("order_id,kind,shipment_id,occurred_at,payload,note")
         .in("store_id", storeIds).in("order_id", ownOrderIds.slice(start, start + 100))
         .in("kind", ["stop_reported", "pickup_checked", "pickup_declined", "package_removed", "returned_to_office", "custody_transferred", OUTPUT_REPLACED_KIND])
         .order("occurred_at", { ascending: false }).order("id", { ascending: false }).range(offset, offset + 99);
