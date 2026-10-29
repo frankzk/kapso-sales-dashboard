@@ -159,7 +159,7 @@ describe("presentación inicial y gestión", () => {
     const html = renderToStaticMarkup(createElement(ReproLimaBoard, { data, pending: [row()] }));
     expect(html).toContain('aria-label="Todos los pendientes de Lima"');
     expect(html).toContain("#KP1");
-    expect(html).toContain(">Atender</a>");
+    expect(html).toContain(">Atender</button>");
     expect(html).not.toContain("Gestionar pedido");
     expect(html).not.toContain("Resumen y cierres pendientes");
     expect(html.match(/<table /g)).toHaveLength(1);
@@ -170,7 +170,7 @@ describe("presentación inicial y gestión", () => {
       nav.search = `vista=${legacy}`;
       const html = renderToStaticMarkup(createElement(ReproLimaBoard, { data, pending: [row()] }));
       expect(html).toContain('aria-label="Todos los pendientes de Lima"');
-      expect(html).toContain(">Atender</a>");
+      expect(html).toContain(">Atender</button>");
       expect(html.indexOf("Todos · por entregar")).toBeLessThan(html.indexOf("Reprogramados"));
     }
     nav.search = "";

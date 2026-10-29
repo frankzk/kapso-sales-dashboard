@@ -144,6 +144,9 @@ export function photoHref(path: string): string {
 
 /** El fallo en una línea (§11.7); en `crit-fg` si lo rechazó en la puerta. */
 export function FailureLine({ row, className }: { row: ReproRow; className?: string }) {
+  if (row.attentionContext === "pending") {
+    return <p className={cn("text-[13px] leading-5 text-ink-700", className)}>Programación y seguimiento de entrega: confirma con el cliente la fecha y el courier.</p>;
+  }
   if (!row.failure) {
     return <p className={cn("text-[13px] leading-5 text-ink-500", className)}>Sin «No entregado» registrado: revisa la ficha.</p>;
   }

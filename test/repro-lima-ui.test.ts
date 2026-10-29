@@ -61,7 +61,7 @@ describe("quién entra (D11, E32, E36)", () => {
   it("la página pide Repro Lima antes de leer nada, con el cliente de servicio", () => {
     expect(page).toContain('export const dynamic = "force-dynamic";');
     const gate = page.indexOf("await requireReproLima()");
-    const load = page.indexOf("loadReproLima(createAdminSupabase(), scope)");
+    const load = page.indexOf("loadReproLima(createAdminSupabase(), scope, new Date(), { attention: true })");
     expect(gate).toBeGreaterThan(-1);
     expect(load).toBeGreaterThan(gate);
     // «Todos» también se cuenta después del permiso, y llega al tablero.
@@ -135,9 +135,10 @@ describe("el candado de la hoja (D10)", () => {
   it("se toma al abrir, solo al atender: «Ver acuerdo» y «Cerrados» no toman nada (E29)", () => {
     const effect = between(sheet, "useEffect(() => {\n    if (mode !== \"edit\") return;", "}, [orderId, mode, claimAttempt, reload]);");
     expect(effect.indexOf('if (mode !== "edit") return;')).toBeLessThan(effect.indexOf("claimReproCase(orderId"));
-    expect(board).toContain('openRow(row, "read")}>Atender</OpsButton>');
-    expect(board).toContain('openRow(row, "read")}>Atender</OpsButton>');
-    expect(board).toContain('openRow(row, "edit")}>');
+    expect(board).toContain('const read = current.list === "cerrados" || current.list === "programados" && Boolean(current.agreement)');
+    expect(board).toContain('openRow(current, read ? "read" : "edit", false, previous)');
+    expect(board).toContain('await loadReproRow(row.orderId)');
+    expect(pendingUI).not.toContain('title={`Atender');
   });
 
   it("late con el mismo intervalo que Envíos y avisa si se pierde, sin borrar el borrador", () => {
@@ -464,9 +465,9 @@ describe("el tablero (E31, E33)", () => {
     const onSaved = between(board, "function onSaved(saved: ReproSaved, advance: boolean) {", "\n  }\n");
     // Un error o la Mesa de ruta: no pasa; la hoja se cierra y el aviso queda en el tablero.
     expect(onSaved).toContain("const next = advance && !saved.error && !saved.mesa ? nextAfter(saved.orderId) : null;");
-    expect(onSaved).toContain("else setOpen(null);");
+    expect(onSaved).toContain("setOpen(null);");
     // Lo demás («Avisa a Almacén…») va arriba de la hoja siguiente.
-    expect(onSaved).toContain('if (next) openRow(next, "edit", false, { orderName: saved.orderName, text });');
+    expect(onSaved).toContain('if (next) void attend(next, { orderName: saved.orderName, text });');
     expect(board).toContain("previous={open.previous}");
     expect(sheet).toContain('<Banner tone="ok" role="status" title={previous.orderName}>');
     // Arriba de todo: antes del candado.

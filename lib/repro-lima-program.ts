@@ -115,11 +115,12 @@ export interface ReproOrderRow {
   macro_stage: string | null;
   macro_substage: string | null;
   operational_status: string | null;
+  coverage?: string | null;
 }
 
 export const REPRO_ORDER_COLUMNS =
   "order_id,store_id,order_name,customer_name,customer_phone,district,region,province,order_total," +
-  "macro_since,macro_stage,macro_substage,operational_status";
+  "macro_since,macro_stage,macro_substage,operational_status,coverage";
 
 /** Una salida del pedido, con lo que deciden el episodio y la caja. */
 export interface ReproShipmentRow {
@@ -196,6 +197,8 @@ export interface ReproFacts {
   order: ReproOrderRow | null;
   /** «En curso · Por reprogramar Lima». */
   inStage: boolean;
+  /** Atención de un pendiente de Lima, sin inventar un episodio fallido. */
+  attentionEligible?: boolean;
   /** Anulado (`orders.cancelled_at`). */
   cancelled: boolean;
   outputs: ReproShipmentRow[];
@@ -409,7 +412,11 @@ export async function loadReproFacts(
       // El mismo orden que el episodio: el día de la ruta y el nacimiento de la
       // parada antes que `reported_at`, que cada corrección del reporte reescribe.
       .sort(compareEpisodeStops);
-    const episode = reproEpisode({ orderId, outputs, failedStops });
+    const inStage = order?.macro_stage === "en_curso" && order?.macro_substage === "por_reprogramar_lima";
+    const attentionEligible = order?.coverage === "lima" && ["por_confirmar", "preparacion", "por_despachar", "en_curso"].includes(order.macro_stage ?? "");
+    const episode = !inStage && attentionEligible
+      ? { key: `attention:${orderId}`, at: null }
+      : reproEpisode({ orderId, outputs, failedStops });
     let failedOutput: ReproShipmentRow | null = null;
     for (const output of outputs) {
       if (!guideFailedAfterDispatch(output)) continue;
@@ -474,7 +481,8 @@ export async function loadReproFacts(
       storeId,
       orgId,
       order,
-      inStage: order?.macro_stage === "en_curso" && order?.macro_substage === "por_reprogramar_lima",
+      inStage,
+      attentionEligible,
       cancelled: Boolean(base?.cancelled_at),
       outputs,
       failedStops,
@@ -520,11 +528,15 @@ export async function loadReproFacts(
  *   viejos. No se cierra nada; se pide volver a intentarlo.
  */
 export function reproCaseProblem(
-  facts: Pick<ReproFacts, "inStage" | "cancelled" | "episode">,
+  facts: Pick<ReproFacts, "inStage" | "cancelled" | "episode" | "attentionEligible">,
   c: Pick<ReproCaseRow, "episode_key" | "episode_at">,
 ): { reason: Exclude<ReproCloseReason, "desarmar_cerrar"> | "cambio"; message: string } | null {
-  if (!facts.inStage || facts.cancelled) {
-    return { reason: "fuera_de_etapa", message: "Este pedido ya no está en «Por reprogramar Lima»." };
+  const attention = c.episode_key.startsWith("attention:");
+  if (facts.cancelled || !(attention ? facts.attentionEligible : facts.inStage)) {
+    return { reason: "fuera_de_etapa", message: attention ? "Este pedido ya no está pendiente de entrega en Lima." : "Este pedido ya no está en «Por reprogramar Lima»." };
+  }
+  if (attention && facts.inStage) {
+    return { reason: "nuevo_intento", message: "El pedido tiene un fallo de entrega: vuelve a abrir su atención." };
   }
   if (facts.episode.key !== c.episode_key) {
     const freshAt = Date.parse(facts.episode.at ?? "");

@@ -15,6 +15,7 @@ import { cutoffNotice } from "@/lib/repro-lima";
 import { limaClock } from "@/lib/grupo-gf-courier";
 import { ReproLimaSheet, type ReproSaved } from "@/components/repro-lima-sheet";
 import { LimaPendingFilters, LimaPendingList } from "@/components/repro-lima-pending";
+import { loadReproRow } from "@/app/dashboard/pedidos/repro-lima/actions";
 import { LIMA_QUEUE_CARDS, LIMA_FOLLOWUP_FILTERS, attentionCounts, attentionFilter, attentionRows, pendingKey, pendingMatches, togglePendingKeys, type LimaAttentionFilter, type LimaPendingOrder } from "@/lib/repro-lima-pending";
 
 const FOCUS_REFRESH_MS = 20_000;
@@ -40,6 +41,9 @@ export function ReproLimaBoard({ data, pending }: { data: ReproLimaData; pending
   const [storeSheet, setStoreSheet] = useState(false);
   const storePill = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState<OpenSheet | null>(null);
+  const [loadingOrder, setLoadingOrder] = useState<string | null>(null);
+  const opening = useRef(0);
+  useEffect(() => () => { opening.current += 1; }, []);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const lastRefresh = useRef(0);
   const [now, setNow] = useState(() => new Date(data.nowIso));
@@ -51,10 +55,6 @@ export function ReproLimaBoard({ data, pending }: { data: ReproLimaData; pending
   const counts = useMemo(() => attentionCounts(scoped, data.rows, today), [scoped, data.rows, today]);
   const inQueue = useMemo(() => attentionRows(scoped, data.rows, list, today), [scoped, data.rows, list, today]);
   const caseById = useMemo(() => new Map(data.rows.map((row) => [row.orderId, row])), [data.rows]);
-  const inList = useMemo(() => inQueue.flatMap((row) => {
-    const c = caseById.get(row.orderId);
-    return c ? [c] : [];
-  }), [inQueue, caseById]);
   const storeName = data.stores.find((s) => s.id === store)?.name ?? null;
 
   function replaceParams(params: URLSearchParams) {
@@ -118,15 +118,39 @@ export function ReproLimaBoard({ data, pending }: { data: ReproLimaData; pending
   const sheetRow = open ? data.rows.find((row) => row.orderId === open.row.orderId) ?? open.row : null;
 
   /** El siguiente de la misma lista, que nadie más esté atendiendo. */
-  function nextAfter(orderId: string): ReproRow | null {
-    const rows = inList;
+  function nextAfter(orderId: string): LimaPendingOrder | null {
+    const rows = inQueue;
     const at = rows.findIndex((row) => row.orderId === orderId);
     const after = at >= 0 ? [...rows.slice(at + 1), ...rows.slice(0, at)] : rows;
-    return after.find((row) => row.orderId !== orderId && row.claim.view !== "otro" && row.list !== "cerrados") ?? null;
+    return after.find((row) => row.orderId !== orderId && caseById.get(row.orderId)?.claim.view !== "otro" && caseById.get(row.orderId)?.list !== "cerrados") ?? null;
   }
 
   function openRow(row: ReproRow, mode: "edit" | "read", askReopen = false, previous: OpenSheet["previous"] = null) {
+    opening.current += 1;
+    setLoadingOrder(null);
     setOpen({ row, mode, askReopen, key: Date.now(), previous });
+  }
+
+  async function attend(row: LimaPendingOrder, previous: OpenSheet["previous"] = null) {
+    const request = ++opening.current;
+    setLoadingOrder(row.orderId);
+    setFeedback((current) => current?.kind === "error" && current.orderId === row.orderId ? null : current);
+    try {
+      const known = caseById.get(row.orderId);
+      const result = known ? { row: known } : await loadReproRow(row.orderId);
+      if (opening.current !== request) return;
+      if ("error" in result || !result.row) {
+        setFeedback({ kind: "error", text: "error" in result ? result.error : "El pedido ya no está pendiente de entrega en Lima. Actualiza la lista.", orderId: row.orderId, orderName: row.orderName });
+        return;
+      }
+      const current = result.row;
+      const read = current.list === "cerrados" || current.list === "programados" && Boolean(current.agreement);
+      openRow(current, read ? "read" : "edit", false, previous);
+    } catch {
+      if (opening.current === request) setFeedback({ kind: "error", text: "No pudimos abrir la gestión del pedido. Vuelve a intentarlo.", orderId: row.orderId, orderName: row.orderName });
+    } finally {
+      if (opening.current === request) setLoadingOrder(null);
+    }
   }
 
   function onSaved(saved: ReproSaved, advance: boolean) {
@@ -145,18 +169,15 @@ export function ReproLimaBoard({ data, pending }: { data: ReproLimaData; pending
       mesa: saved.mesa,
     });
     refresh();
-    if (next) openRow(next, "edit", false, { orderName: saved.orderName, text });
-    else setOpen(null);
+    setOpen(null);
+    if (next) void attend(next, { orderName: saved.orderName, text });
   }
 
   /** Una sola entrada de atención. Las acciones específicas ya viven dentro
    * de la hoja; abrir acuerdos o cierres no toma ni reabre el caso. */
-  function rowActions(row: ReproRow, stacked = false): ReactNode {
+  function rowActions(row: LimaPendingOrder, stacked = false): ReactNode {
     const size = stacked ? "sm" : "md";
-    if (row.list === "cerrados" || (row.list === "programados" && row.agreement)) {
-      return <OpsButton size={size} className="pointer-coarse:h-11" onClick={() => openRow(row, "read")}>Atender</OpsButton>;
-    }
-    return <OpsButton size={size} className="pointer-coarse:h-11" onClick={() => openRow(row, "edit")}>Atender</OpsButton>;
+    return <OpsButton size={size} className="pointer-coarse:h-11" disabled={loadingOrder !== null} onClick={() => void attend(row)}>{loadingOrder === row.orderId ? "Abriendo…" : "Atender"}</OpsButton>;
   }
 
   const selectedGroup = [...LIMA_QUEUE_CARDS, ...LIMA_FOLLOWUP_FILTERS].find((c) => c.key === list);

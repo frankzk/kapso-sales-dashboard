@@ -211,6 +211,37 @@ beforeEach(() => {
 });
 
 describe("un guardado rechazado le dice a la hoja qué pasó (C3)", () => {
+  it("Atender toma un pendiente elegible con contexto propio y el mismo candado", async () => {
+    state.facts = [facts({ inStage: false, attentionEligible: true, episode: { key: `attention:${ORDER_ID}`, at: null } })];
+    state.rpc = () => ({ data: { case_id: CASE_ID, claimed: true, until: "2026-10-13T13:10:00Z" }, error: null });
+    expect(await claimReproCase(ORDER_ID)).toMatchObject({ caseId: CASE_ID });
+    expect(state.rpcs[0]?.params.p_episode).toBe(`attention:${ORDER_ID}`);
+  });
+  it.each([{ inStage: false, attentionEligible: false }, { inStage: false, attentionEligible: true, cancelled: true }, { storeId: "otra" }])("no toma un pendiente fuera de alcance: %j", async (extra) => {
+    state.facts = [facts(extra)];
+    expect(await claimReproCase(ORDER_ID)).toHaveProperty("error");
+    expect(state.rpcs).toEqual([]);
+  });
+  it("registra la llamada del primer despacho sin cambiarlo a entrega fallida", async () => {
+    const c = caseRow({ episode_key: `attention:${ORDER_ID}` });
+    state.respond = (q) => isCaseRead(q) ? { data: c, error: null } : { data: null, error: null };
+    state.facts = [facts({ inStage: false, attentionEligible: true, episode: { key: c.episode_key, at: null } })];
+    const result = await registerReproCall(confirmInput({ outcome: "no_contesta", courier: null, agreedOn: null }));
+    expect(result.error).toBeUndefined();
+    expect(state.rpcs[0]?.name).toBe("lima_repro_record");
+    expect(state.rpcs[0]?.params.p_episode).toBe(c.episode_key);
+    expect(state.materialize).not.toHaveBeenCalled();
+  });
+  it("guarda la fecha acordada del primer despacho y conserva la creación de guía en su flujo", async () => {
+    const c = caseRow({ episode_key: `attention:${ORDER_ID}` });
+    const f = facts({ inStage: false, attentionEligible: true, episode: { key: c.episode_key, at: null }, outputs: [], ownLive: null, box: { kind: "desconocida" }, hadPropio: false });
+    state.respond = (q) => isCaseRead(q) ? { data: c, error: null } : { data: null, error: null };
+    state.facts = [f, { ...f, cases: [{ ...c, agreement_call_id: "call-1", agreed_on: "2026-10-14", agreed_courier: "propio", box_action: "salida_nueva_rearmar" }] }];
+    const result = await registerReproCall(confirmInput({ agreedOn: "2026-10-14", expectedBoxAction: "salida_nueva_rearmar" }));
+    expect(result.error).toBeUndefined();
+    expect(state.rpcs[0]?.params).toMatchObject({ p_episode: c.episode_key, p_agreed_on: "2026-10-14", p_outcome: "confirma", p_box_action: "salida_nueva_rearmar" });
+    expect(state.materialize).not.toHaveBeenCalled();
+  });
   it("sin el candado: «Ya no tienes este caso» con claimLost, y no llega a la RPC", async () => {
     state.respond = (q) => (isCaseRead(q) ? { data: caseRow({ claimed_by: "ana" }), error: null } : { data: null, error: null });
     const result = await registerReproCall(confirmInput());

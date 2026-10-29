@@ -95,6 +95,8 @@ export async function requireReproLima(): Promise<ReproScope | { error: string; 
 
 /** Una fila de la pantalla: todo lo de D13 y lo que hace falta para decidir. */
 export interface ReproRow {
+  /** Un pendiente sin fallo usa la misma hoja para programar y registrar llamadas. */
+  attentionContext?: "pending";
   orderId: string;
   storeId: string;
   storeName: string;
@@ -285,7 +287,7 @@ function buildRow(input: {
     nowMinute: limaClock(now).minute,
     cutoff,
   });
-  const requestedDate = f.lastStop?.requested_date?.slice(0, 10) ?? null;
+  const requestedDate = f.inStage ? f.lastStop?.requested_date?.slice(0, 10) ?? null : null;
   const listed = reproList({
     open,
     latestClosed: f.latestClosed,
@@ -296,7 +298,7 @@ function buildRow(input: {
     today,
     requestedDate,
   });
-  const failure = failureOf(f);
+  const failure = f.inStage ? failureOf(f) : { line: null, failedOn: null };
   const rank = porDecidirRank({ macroSince: order.macro_since, today, overdue: listed.overdue, failedOn: failure.failedOn });
   const latestOutput = [...f.outputs].sort((a, b) => (b.output_number ?? 0) - (a.output_number ?? 0))[0] ?? null;
   const closedCase: ReproCaseRow | null = !open && f.latestClosed?.close_reason === "desarmar_cerrar" && f.latestClosed.episode_key === f.episode.key
@@ -306,6 +308,7 @@ function buildRow(input: {
     REPRO_COURIERS.map((c) => [c, priorOutputsWith(f.outputs, c)]),
   ) as Record<ReproCourier, number>;
   return {
+    ...(!f.inStage ? { attentionContext: "pending" as const } : {}),
     orderId: f.orderId,
     storeId: order.store_id,
     storeName: input.storeName,
@@ -411,7 +414,7 @@ export async function loadReproLima(
   admin: Admin,
   scope: ReproScope,
   now: Date = new Date(),
-  opts: { orderIds?: readonly string[]; defer?: (task: () => Promise<void>) => void; closeStale?: boolean } = {},
+  opts: { orderIds?: readonly string[]; attention?: boolean; defer?: (task: () => Promise<void>) => void; closeStale?: boolean } = {},
 ): Promise<ReproLimaData> {
   const clock = limaClock(now);
   const today = clock.day;
@@ -424,22 +427,25 @@ export async function loadReproLima(
   if (!storeIds.length || (onlyOrders && !onlyOrders.length)) return empty(null, []);
 
   // Oleada 1: la etapa, los casos abiertos, las tiendas y el proveedor.
-  const [orderRows, openCases, { data: storeRows }, { data: providerRows }] = await Promise.all([
+  const [orderRows, openCases, attentionCases, { data: storeRows }, { data: providerRows }] = await Promise.all([
     allCourierRows<ReproOrderRow>((from, to) => {
       let query = admin
         .from("order_master")
         .select(REPRO_ORDER_COLUMNS)
-        .in("store_id", storeIds)
-        .eq("macro_stage", "en_curso")
-        .eq("macro_substage", "por_reprogramar_lima");
+        .in("store_id", storeIds);
+      query = opts.attention
+        ? query.eq("coverage", "lima").in("macro_stage", ["por_confirmar", "preparacion", "por_despachar", "en_curso"])
+        : query.eq("macro_stage", "en_curso").eq("macro_substage", "por_reprogramar_lima");
       if (onlyOrders) query = query.in("order_id", onlyOrders);
       return query.order("order_id").range(from, to) as unknown as PromiseLike<{ data: ReproOrderRow[] | null; error: { message: string } | null }>;
     }),
     courierRowsByIds(storeIds, (chunk) => {
-      let query = admin.from("lima_repro_cases").select("id,order_id").in("store_id", chunk).is("closed_at", null);
+      let query = admin.from("lima_repro_cases").select("id,order_id,episode_key").in("store_id", chunk).is("closed_at", null);
       if (onlyOrders) query = query.in("order_id", onlyOrders);
-      return query as unknown as PromiseLike<{ data: Array<{ id: string; order_id: string }> | null; error: { message: string } | null }>;
+      return query as unknown as PromiseLike<{ data: Array<{ id: string; order_id: string; episode_key: string }> | null; error: { message: string } | null }>;
     }).then((result) => result.data),
+    opts.attention && !onlyOrders ? allCourierRows<{ order_id: string }>((from, to) => admin.from("lima_repro_cases")
+      .select("order_id").in("store_id", storeIds).like("episode_key", "attention:%").order("id").range(from, to) as unknown as PromiseLike<{ data: Array<{ order_id: string }> | null; error: { message: string } | null }>) : Promise.resolve([]),
     courierRowsByIds(storeIds, (chunk) => admin.from("stores").select("id,name,org_id").in("id", chunk)),
     admin.from("logistics_providers").select("id,org_id,status,same_day_cutoff").eq("code", "grupo-gf-courier"),
   ]);
@@ -454,11 +460,14 @@ export async function loadReproLima(
   const headerCutoff = (stores[0] ? providers.get(stores[0].org_id)?.same_day_cutoff : null) ?? null;
   const visibleStores = stores.map((store) => ({ id: store.id, name: store.name }));
 
-  const rows = orderRows.filter((row) => scope.storeIds.has(row.store_id));
+  const knownCases = new Set([...openCases, ...attentionCases].map((c) => c.order_id));
+  const rows = orderRows.filter((row) => scope.storeIds.has(row.store_id) &&
+    (!opts.attention || row.coverage === "lima" && ["por_confirmar", "preparacion", "por_despachar", "en_curso"].includes(row.macro_stage ?? "")) &&
+    (!opts.attention || onlyOrders || knownCases.has(row.order_id) || row.macro_stage === "en_curso" && row.macro_substage === "por_reprogramar_lima"));
   const inStage = new Set(rows.map((row) => row.order_id));
   // Candidatos, no cierres: la etapa se lee por páginas y un pedido que sale
   // de ella entre página y página corre a los demás. Se releen antes de cerrar.
-  const outOfStage = openCases.filter((row) => !inStage.has(row.order_id));
+  const outOfStage = openCases.filter((row) => !inStage.has(row.order_id) && (opts.attention || !row.episode_key?.startsWith("attention:")));
 
   // Oleadas 2 y 3: los hechos de cada pedido.
   const facts = await loadReproFacts(admin, rows.map((row) => row.order_id), { orders: rows, storeOrg, providers });
@@ -514,7 +523,7 @@ export async function loadReproLima(
   const built: ReproRow[] = [];
   for (const order of rows) {
     const f = facts.get(order.order_id);
-    if (!f) continue;
+    if (!f || f.cancelled) continue;
     const openId = f.open && f.open.episode_key === f.episode.key ? f.open.id : null;
     built.push(buildRow({
       f,
@@ -538,13 +547,14 @@ export async function loadReproLima(
         // cierra lo que de verdad ya no está en «Por reprogramar Lima».
         const { data: still } = await courierRowsByIds([...new Set(outOfStage.map((row) => row.order_id))], (chunk) => admin
           .from("order_master")
-          .select("order_id")
-          .in("order_id", chunk)
-          .eq("macro_stage", "en_curso")
-          .eq("macro_substage", "por_reprogramar_lima") as unknown as PromiseLike<{ data: Array<{ order_id: string }> | null; error: { message: string } | null }>);
-        const stillInStage = new Set(still.map((row) => row.order_id));
+          .select("order_id,coverage,macro_stage,macro_substage")
+          .in("order_id", chunk) as unknown as PromiseLike<{ data: Array<{ order_id: string; coverage: string; macro_stage: string; macro_substage: string }> | null; error: { message: string } | null }>);
+        const closeOutCandidates = outOfStage.filter((c) => !still.some((row) => row.order_id === c.order_id &&
+          (c.episode_key?.startsWith("attention:")
+            ? row.coverage === "lima" && ["por_confirmar", "preparacion", "por_despachar", "en_curso"].includes(row.macro_stage)
+            : row.macro_stage === "en_curso" && row.macro_substage === "por_reprogramar_lima")));
         const closeOut = [...new Set([
-          ...outOfStage.filter((row) => !stillInStage.has(row.order_id)).map((row) => row.id),
+          ...closeOutCandidates.map((row) => row.id),
           ...outOfStageInFacts,
         ])];
         await closeStaleReproCases(admin, closeOut, "fuera_de_etapa", nowIso);
