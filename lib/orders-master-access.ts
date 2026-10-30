@@ -81,6 +81,7 @@ import type {
   ShipmentRow,
 } from "@/lib/types";
 import { orderPlatform } from "@/lib/order-admin-url";
+import { orderOrigin, orderOriginRawFacts, type OrderOrigin } from "@/lib/order-origin";
 import {
   AGENCY_AVAILABLE_STATES,
   ATTEMPTS_OR_MORE,
@@ -547,6 +548,11 @@ export interface OrderMasterDetail {
    *  agencia— y hasta ahora solo se veía entrando al admin de Shopify. */
   shopifyNote: string | null;
   /**
+   * Por dónde entró el pedido, con su evidencia (lib/order-origin.ts, MOM §3
+   * «Origen en la ficha»). Solo en la ficha: se lee para un pedido, no por fila.
+   */
+  origin: OrderOrigin;
+  /**
    * Lo que la pestaña Punto necesita (`lib/order-punto.ts`): de `orders.raw`, la
    * dirección con código postal, el total vigente y la nota tal cual; y lo que
    * se cobra, el saldo (`puntoCollect`, 25-10-2026). El texto se arma en la
@@ -947,7 +953,7 @@ function withRuntimeCoverage(row: OrderMasterRow): OrderMasterRow {
 }
 
 /** Las columnas de `orders` que lee la ficha (sin `platform`, que va aparte). */
-const ORDER_DETAIL_COLUMNS = "line_items,raw,cancelled_at";
+const ORDER_DETAIL_COLUMNS = "line_items,raw,cancelled_at,tags,kapso_conversation_id";
 
 /**
  * La fila de `orders` que la ficha necesita, con su `platform` (0274, MOM
@@ -955,6 +961,44 @@ const ORDER_DETAIL_COLUMNS = "line_items,raw,cancelled_at";
  * ella y el pedido es de Shopify, como siempre. Perder las líneas y los totales
  * por una columna nueva sería peor que no saber la plataforma.
  */
+/**
+ * Los hechos del «Origen» (lib/order-origin.ts) que no están en `orders`: la
+ * venta registrada de la asesora y el lead de esa venta, el borrador que terminó
+ * en este pedido y la prueba de recompra. Solo para la ficha de UN pedido —tres
+ * lecturas por clave, más el lead—, nunca para listas. Una lectura que falla es
+ * un dato que falta: el origen dice lo que sí se sabe.
+ */
+async function loadOrderOriginSources(sb: SupabaseClient, row: OrderMasterRow, orderId: string) {
+  const ref = (row.shopify_order_id ?? "").trim();
+  const draftGids = ref ? [ref, `gid://shopify/Order/${ref}`] : [];
+  const [saleRes, draftRes, trialRes] = await Promise.all([
+    Promise.resolve(
+      sb.from("order_sales").select("vendedora,lead_id,source").eq("order_id", orderId).limit(1).maybeSingle(),
+    ).catch(() => ({ data: null })),
+    draftGids.length
+      ? Promise.resolve(
+          sb.from("draft_orders").select("name").eq("store_id", row.store_id).in("order_gid", draftGids).limit(1),
+        ).catch(() => ({ data: null }))
+      : Promise.resolve({ data: null }),
+    ref
+      ? Promise.resolve(
+          sb.from("auto_order_trials").select("id").eq("store_id", row.store_id).eq("shopify_order_id", ref).limit(1),
+        ).catch(() => ({ data: null }))
+      : Promise.resolve({ data: null }),
+  ]);
+  const sale = (saleRes.data ?? null) as { vendedora: string | null; lead_id: string | null; source: string | null } | null;
+  let leadSource: string | null = null;
+  if (sale?.lead_id) {
+    const { data } = await Promise.resolve(sb.from("leads").select("source").eq("id", sale.lead_id).maybeSingle()).catch(
+      () => ({ data: null }),
+    );
+    leadSource = (data as { source?: string | null } | null)?.source ?? null;
+  }
+  const drafts = (draftRes.data ?? []) as { name: string | null }[];
+  const trials = (trialRes.data ?? []) as unknown[];
+  return { sale, leadSource, draftName: drafts[0]?.name ?? null, autoOrderTrial: trials.length > 0 };
+}
+
 async function readOrderForDetail(sb: SupabaseClient, orderId: string) {
   const read = (columns: string) => sb.from("orders").select(columns).eq("id", orderId).maybeSingle();
   const res = await read(`${ORDER_DETAIL_COLUMNS},platform`);
@@ -989,7 +1033,7 @@ export async function getOrderMasterDetail(
   if (!rowData) return null;
   const row = withRuntimeCoverage(rowData as unknown as OrderMasterRow);
 
-  const [orderRes, guidesRes, eventsRes, tasksRes, migrationRes] = await Promise.all([
+  const [orderRes, guidesRes, eventsRes, tasksRes, migrationRes, originSources] = await Promise.all([
     readOrderForDetail(sb, orderId),
     sb.from("shipments").select(GUIDE_COLUMNS).eq("order_id", orderId).order("created_at"),
     sb
@@ -1004,6 +1048,7 @@ export async function getOrderMasterDetail(
       .eq("status", "pending")
       .order("due_on", { ascending: true }),
     sb.from("stores").select("platform,platform_switched_at").eq("id", row.store_id).maybeSingle(),
+    loadOrderOriginSources(sb, row, orderId),
   ]);
 
   const guides = (guidesRes.data ?? []) as unknown as ShipmentRow[];
@@ -1090,6 +1135,7 @@ export async function getOrderMasterDetail(
         ...calls.map((c) => c.agent),
         ...leadCalls.map((c) => c.vendedora),
         ...taskRows.map((task) => task.assigned_to),
+        originSources.sale?.vendedora,
       ].filter((v): v is string => typeof v === "string" && v.length > 0),
     ),
   ];
@@ -1139,6 +1185,8 @@ export async function getOrderMasterDetail(
     raw?: unknown;
     cancelled_at?: string | null;
     platform?: unknown;
+    tags?: unknown[] | null;
+    kapso_conversation_id?: string | null;
   } | null;
   const rawItems = orderRow?.line_items ?? [];
   // La foto no viene en el line item de Shopify: se adjunta desde el espejo
@@ -1210,6 +1258,22 @@ export async function getOrderMasterDetail(
     address: shopifyShippingAddress(orderRow?.raw),
     departamentoElegido: shopifyDepartamentoElegido(orderRow?.raw),
     shopifyNote: shopifyOrderNote(orderRow?.raw),
+    origin: orderOrigin({
+      platform: orderPlatform(orderRow?.platform),
+      tags: orderRow?.tags ?? null,
+      kapsoConversationId: orderRow?.kapso_conversation_id ?? null,
+      paymentGateway: row.payment_gateway ?? null,
+      raw: orderOriginRawFacts(orderRow?.raw),
+      sale: originSources.sale
+        ? {
+            sellerName: originSources.sale.vendedora ? (names.get(originSources.sale.vendedora) ?? null) : null,
+            source: originSources.sale.source,
+            leadSource: originSources.leadSource,
+          }
+        : null,
+      draftName: originSources.draftName,
+      autoOrderTrial: originSources.autoOrderTrial,
+    }),
     punto: {
       ...puntoSource,
       collect: puntoCollect(

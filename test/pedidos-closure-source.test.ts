@@ -142,7 +142,7 @@ describe("la ficha le pasa a la Mesa lo que necesita para avisar antes del clic"
     expect(tag).toContain("cancelledInShopify={Boolean(detail.shopifyCancelledAt)}");
     // `cancelled_at` sale de la fila de `orders` del detalle (con `platform` si
     // la 0274 está, MOM §38.12).
-    expect(read("lib/orders-master-access.ts")).toContain('const ORDER_DETAIL_COLUMNS = "line_items,raw,cancelled_at";');
+    expect(read("lib/orders-master-access.ts")).toMatch(/const ORDER_DETAIL_COLUMNS = "line_items,raw,cancelled_at[,\w]*";/);
     expect(read("lib/orders-master-access.ts")).toContain("readOrderForDetail(sb, orderId),");
     // Sin la ruta, «Reparto y liquidación» sale sin enlace.
     expect(read("lib/orders-master-access.ts")).toContain("routeId: st.route_id,");

@@ -105,6 +105,42 @@ Shopify: sus 28 pedidos de ese periodo salen como «Web · carrito completado»
 (23) o «Web · formulario» (5), y en «Canal de cierre» como «Recompra
 automática».
 
+**Origen en la ficha (30-10-2026, pedido del owner del 27-10-2026).** En el
+cajón del Master, «Información» → «Pedido y cliente» lleva el campo
+**Origen**: la fuente exacta del pedido en pocas palabras, con la evidencia
+debajo (en 12 px y en el `title` del valor) para que se vea de dónde se dedujo.
+No es un canal nuevo ni cambia el canal de venta ni el de cierre: lee las
+mismas señales que ya existen con la precedencia de §17.3 y nombra el detalle
+que esos canales agrupan. Se lee solo para el pedido abierto (la venta en
+`order_sales` y el `source` de su lead, el borrador de `draft_orders` cuyo
+`order_gid` es este pedido, `auto_order_trials`, y de `orders` las etiquetas,
+`kapso_conversation_id`, `payment_gateway` y en `raw` el `kapta_channel`, el
+`created_via` y el `payment_method` de WooCommerce y el `source_name` de
+Shopify); nunca por fila en las listas. Una lectura que falla es un dato que
+falta, no un error de la ficha. Regla en `lib/order-origin.ts`
+(`orderOrigin`), en este orden:
+
+| Señal | Origen que se ve |
+| --- | --- |
+| Venta en `order_sales` y su lead nació en «Venta telefónica» (`leads.source = manual`) | «Venta telefónica · por <asesora>» (con «· carrito #D…» si cerró un carrito) |
+| Venta en `order_sales` sobre un carrito (canal «Web · carrito completado») | «Kapta Leads · completó el carrito #D… · por <asesora>» |
+| Venta en `order_sales` (`sale_action`) | «Kapta Leads · Generar pedido · por <asesora>»; el borrador que crea el botón en Shopify va en la evidencia |
+| Venta emparejada después (`backfill_match`) | «Kapta Leads · por <asesora>» |
+| Prueba de recompra (`auto_order_trials`) | «Recompra automática» (con el carrito si lo hay) |
+| `venta_manual` sin venta registrada | WooCommerce: «Cargado en wp-admin» (`created_via = admin`) o «Kapta Leads · Generar pedido» (`created_via = kapta`); Shopify: «Asesora · sin venta registrada» |
+| Chatbot (`kapso`, `whatsapp`, conversación de Kapso; en WooCommerce `kapta_channel = kapso`/`whatsapp_bot`) | «Bot de WhatsApp (Kapso)» |
+| `BOT` / `CARRITO RECUPERADO` | «Bot de carritos externo · carrito recuperado» |
+| `catalogo-wsp` | «Catálogo de WhatsApp» |
+| Carrito completado, WooCommerce `created_via = cod-core-chatby` | «Chatby · carrito recuperado #F…» |
+| Carrito completado sin venta de asesora | «Carrito completado · #D…» (sin borrador: «Web · carrito completado»); la evidencia dice que lo completó la clienta o un bot, porque la tienda no lo distingue (§17.3) |
+| Formulario web y pagó con Flow (`payment_method = flowpayment`) | «Web · checkout (Flow)» |
+| Formulario web y `payment_gateway = checkout` en Shopify | «Web · checkout» |
+| Formulario web | «Web · formulario contra entrega» |
+| Sin etiqueta de canal | WooCommerce: «Cargado en wp-admin» / «Web · checkout» por `created_via`; Shopify: «Shopify admin · borrador #D…» si salió de un borrador o `source_name = shopify_draft_order`, «App de Shopify» si `source_name` es el id de una app, «Web» si es `web`; si nada, «Sin marca» |
+
+El nombre de la asesora es el mismo que la línea de tiempo de la ficha
+(su usuario de Kapta). Pruebas: `test/order-origin.test.ts`.
+
 ### Salida
 
 Intento físico de entregar un pedido. Una salida corresponde a un paquete, un

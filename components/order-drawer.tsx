@@ -2162,6 +2162,21 @@ export function OrderDrawer({
                   <Field label="Monto" value={fmtMoney(detail.row.order_total)} numeric />
                   <Field label="Tienda" value={storeName(detail.row.store_id)} />
                   <Field label="Creado" value={fmtDateTime(detail.row.order_created_at)} numeric />
+                  {/* Por dónde entró, con la evidencia debajo (MOM §3, «Origen en
+                      la ficha»): a la vista y no solo en un tooltip, que en el
+                      teléfono no existe. Dos columnas: «Kapta Leads · Generar
+                      pedido · por …» no cabe en una. */}
+                  <div className="col-span-2 min-w-0">
+                    <dt className={FIELD_LABEL}>Origen</dt>
+                    <dd className={FIELD_VALUE} title={`De dónde se dedujo: ${detail.origin.evidence.join(" · ")}`}>
+                      {detail.origin.label}
+                    </dd>
+                    {detail.origin.evidence.length > 0 && (
+                      <dd className="mt-0.5 text-[12px] leading-4 text-ink-500">
+                        {detail.origin.evidence.join(" · ")}
+                      </dd>
+                    )}
+                  </div>
                   <Field label="Courier actual" value={detail.row.current_courier} capitalize />
                   <Field label="Guía actual" value={detail.row.guide_code} mono />
                   {/* Estos cuatro vivían solo en la tabla. Al sacar sus columnas
