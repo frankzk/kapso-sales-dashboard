@@ -1384,6 +1384,19 @@ no se crea la guía. Esta excepción tampoco levanta el veto de dos rechazos del
 distintas; la regla impide emitir una nueva. Lima y los demás couriers conservan
 sus reglas. Las resoluciones quedan en `order_events`, sin borrar historial.
 
+#### Una guía transferida que terminó en otra salida (30-10-2026)
+
+Decisión del owner. `transferido` es que el courier pasó el paquete a otra
+guía, y la guía vieja deja de consultarse: quedaba «despachada, sin entrega ni
+recuperación» para siempre y retenía la guía de cualquier pedido nuevo del
+mismo teléfono y producto. Caso: #KP122115, cuya Aliclik AUR5X447250066858
+pasó a la Fénix #KP12211529072026, entregada el 28-07-2026, retenía a
+#KP201071. Ahora una salida `transferido` **no retiene** cuando una salida
+**posterior del mismo pedido** terminó: entregada, recogida o devuelta
+(`transferredElsewhere`, `lib/aliclik-duplicate.ts`). Si esa otra salida sigue
+viva, la caja sigue pendiente por ella, no por la transferida. Pruebas:
+`test/aliclik-duplicate.test.ts`.
+
 #### Reemplazo: se declara el destino del envío anterior (10-10-2026)
 
 Decisión del owner. Hasta esta fecha «reemplaza» esperaba una constancia de

@@ -6,7 +6,7 @@ import { permissionsFor } from "@/lib/permissions";
 import { classifyOperation, gfRiderSignal, type MacroEventSnapshot } from "@/lib/order-macro-stage";
 import { OUTPUT_REPLACED_KIND } from "@/lib/gf-replaced-output";
 import { normalizePhone } from "@/lib/phone";
-import { DECLARED_OUTCOME_KINDS, duplicateGate, duplicateItems, sharesDuplicateItem, unresolvedDuplicateShipment,
+import { DECLARED_OUTCOME_KINDS, duplicateGate, duplicateItems, sharesDuplicateItem, unresolvedDuplicateShipment, transferredElsewhere,
   type DuplicateConflict, type DuplicateHold, type DuplicateResolution, type DuplicateShipment } from "@/lib/aliclik-duplicate";
 
 export const DUPLICATE_READ_ERROR = "No se pudo verificar si hay otro envío del mismo producto pendiente. Reintenta antes de crear la guía Aliclik.";
@@ -68,6 +68,7 @@ export async function loadAliclikDuplicateHold(
   }
   if (!priors.length) return clear;
   const active: DuplicateShipment[] = [];
+  const allGuides: DuplicateShipment[] = [];
   for (let start = 0; start < priors.length; start += 100) {
     const ids = priors.slice(start, start + 100).map((p) => p.order_id);
     for (let offset = 0; ; offset += 100) {
@@ -75,10 +76,16 @@ export async function loadAliclikDuplicateHold(
         .select("id,order_id,guide_code,courier,created_at,dispatched_at,custody_transferred_at,out_for_delivery_at,aliclik_reported_dispatch_date,returned_at,delivery_status,custody_state,pickup_state")
         .in("order_id", ids).in("store_id", storeIds).order("id").range(offset, offset + 99);
       if (guidesError || !data) throw new Error(DUPLICATE_READ_ERROR);
+      allGuides.push(...(data as DuplicateShipment[]));
       active.push(...(data as DuplicateShipment[]).filter((g) => unresolvedDuplicateShipment(g)));
       if (data.length < 100) break;
     }
   }
+  // Una guía transferida cuyo paquete terminó en otra salida del mismo pedido
+  // ya no es una caja pendiente (owner, 30-10-2026, MOM §8.3).
+  const notTransferred = active.filter((g) => !transferredElsewhere(g, allGuides));
+  active.length = 0;
+  active.push(...notTransferred);
   if (!active.length) return clear;
   // Una salida cuyo destino alguien declaró —entregada o perdida— ya no es una
   // caja pendiente (MOM §8.3). La devolución declarada no se busca aquí: pasa

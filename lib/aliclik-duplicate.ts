@@ -157,6 +157,25 @@ export function unresolvedDuplicateShipment(
     ["en_ruta", "transferido"].includes(guide.delivery_status) || AGENCY_IN_CUSTODY.has(guide.pickup_state ?? ""));
 }
 
+/**
+ * UNA GUÍA TRANSFERIDA SIGUE EN OTRA SALIDA DEL MISMO PEDIDO (owner, 30-10-2026).
+ *
+ * `transferido` es que el courier pasó el paquete a otra guía (#KP122115: la
+ * de Aliclik AUR5X447250066858 pasó a la de Fénix #KP12211529072026, que se
+ * entregó). La guía vieja ya no se lee y quedaba «despachada, sin entrega»
+ * para siempre, reteniendo la guía de cualquier pedido nuevo del mismo
+ * teléfono. Se da por resuelta cuando una salida POSTERIOR del mismo pedido
+ * terminó: entregada, recogida o devuelta. Si la otra salida sigue viva, la
+ * caja sigue pendiente por esa otra salida, no por la transferida.
+ */
+export function transferredElsewhere(guide: DuplicateShipment, siblings: readonly DuplicateShipment[]): boolean {
+  if (guide.delivery_status !== "transferido") return false;
+  return siblings.some((other) =>
+    other.id !== guide.id && other.order_id === guide.order_id && (other.created_at ?? "") > (guide.created_at ?? "") &&
+    (other.delivery_status === "entregado" || other.pickup_state === "recogido" ||
+      Boolean(other.returned_at) || other.custody_state === "devuelto"));
+}
+
 export function duplicateGate(
   conflicts: DuplicateConflict[], fingerprint: string | null,
   resolution: DuplicateResolution | null, validatedAmount: number,
