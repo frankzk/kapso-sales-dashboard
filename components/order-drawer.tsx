@@ -102,6 +102,12 @@ import {
   type OrderGeoInput,
 } from "@/app/dashboard/pedidos/actions";
 import { VoiceAgentPanel } from "@/components/voice-agent-panel";
+import { loadLastKnownDestinations } from "@/app/dashboard/pedidos/last-destination-actions";
+import {
+  destinationNote,
+  needsDestinationSuggestion,
+  type LastKnownDestination,
+} from "@/lib/last-known-destination";
 import { wooSaleWasDispatched } from "@/lib/woo-sale-return";
 import { endWooSalePendingReturn } from "@/app/dashboard/pedidos/woo-sale-return-actions";
 import { WooCancelZone } from "@/components/woo-cancel-zone";
@@ -2586,19 +2592,56 @@ function GeoSection({
   const [message, setMessage] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
-  async function open() {
+  // «Último destino conocido de esta clienta» (MOM §37.8): solo para el pedido
+  // abierto y solo si está «Por revisar» por falta de región, distrito o
+  // dirección. Es una sugerencia: «Usar esta dirección» prellena este mismo
+  // formulario y la persona decide si la guarda.
+  const wantsSuggestion = needsDestinationSuggestion(row);
+  const [destinations, setDestinations] = useState<LastKnownDestination[]>([]);
+  useEffect(() => {
+    if (!wantsSuggestion) {
+      setDestinations([]);
+      return;
+    }
+    let alive = true;
+    loadLastKnownDestinations(orderId)
+      .then((list) => {
+        if (alive) setDestinations(list);
+      })
+      .catch(() => {
+        if (alive) setDestinations([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [orderId, wantsSuggestion]);
+
+  async function open(suggestion?: LastKnownDestination) {
     const current = await loadOrderGeo(orderId);
     setHasOverride(current.hasOverride);
-    setForm({
-      region: current.region ?? row.region ?? "",
-      province: current.province ?? row.province ?? "",
-      district: current.district ?? row.district ?? "",
-      address: current.address ?? row.address ?? "",
-      reference: current.reference ?? row.reference ?? "",
-      latitude: current.latitude ?? row.latitude ?? "",
-      longitude: current.longitude ?? row.longitude ?? "",
-      note: "",
-    });
+    setForm(
+      suggestion
+        ? {
+            region: suggestion.region ?? current.region ?? row.region ?? "",
+            province: suggestion.province ?? current.province ?? row.province ?? "",
+            district: suggestion.district ?? current.district ?? row.district ?? "",
+            address: suggestion.address,
+            reference: suggestion.reference ?? "",
+            latitude: suggestion.latitude ?? "",
+            longitude: suggestion.longitude ?? "",
+            note: destinationNote(suggestion, (iso) => fmtDate(iso)),
+          }
+        : {
+            region: current.region ?? row.region ?? "",
+            province: current.province ?? row.province ?? "",
+            district: current.district ?? row.district ?? "",
+            address: current.address ?? row.address ?? "",
+            reference: current.reference ?? row.reference ?? "",
+            latitude: current.latitude ?? row.latitude ?? "",
+            longitude: current.longitude ?? row.longitude ?? "",
+            note: "",
+          },
+    );
     setEditing(true);
   }
 
@@ -2647,7 +2690,7 @@ function GeoSection({
               </a>
             )}
             {canEdit && !editing && (
-              <OpsButton size="sm" onClick={open} className="pointer-coarse:h-11">
+              <OpsButton size="sm" onClick={() => void open()} className="pointer-coarse:h-11">
                 {hasOverride ? "Editar corrección" : "Corregir ubicación"}
               </OpsButton>
             )}
@@ -2666,12 +2709,20 @@ function GeoSection({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p>Completa la región y el distrito para asignar el flujo correcto.</p>
             {canEdit && (
-              <OpsButton size="sm" onClick={open} className="pointer-coarse:h-11">
+              <OpsButton size="sm" onClick={() => void open()} className="pointer-coarse:h-11">
                 Completar
               </OpsButton>
             )}
           </div>
         </Banner>
+      )}
+
+      {wantsSuggestion && !editing && destinations.length > 0 && (
+        <LastDestinationSuggestions
+          destinations={destinations}
+          canEdit={canEdit}
+          onUse={(d) => void open(d)}
+        />
       )}
 
       {!editing ? (
@@ -2774,6 +2825,73 @@ function GeoSection({
         </form>
       )}
     </section>
+  );
+}
+
+const DESTINATION_SOURCE_LABEL: Record<LastKnownDestination["source"], string> = {
+  kapta: "",
+  shopify_pedido: "del historial de Shopify",
+  shopify_clienta: "ficha de clienta del historial de Shopify",
+};
+
+/**
+ * Las direcciones que esta clienta ya usó en otro pedido de la organización
+ * (MOM §37.8). Se ven, se eligen y se revisan en el formulario; nunca se
+ * aplican solas: la clienta pudo mudarse.
+ */
+function LastDestinationSuggestions({
+  destinations,
+  canEdit,
+  onUse,
+}: {
+  destinations: LastKnownDestination[];
+  canEdit: boolean;
+  onUse: (d: LastKnownDestination) => void;
+}) {
+  const many = destinations.length > 1;
+  return (
+    <div className={cn(CARD_ZONE, "space-y-3")}>
+      <div>
+        <h3 className="text-sm font-semibold text-ink-900">Último destino conocido de esta clienta</h3>
+        <p className="mt-0.5 max-w-[68ch] text-[13px] leading-5 text-ink-500">
+          {many
+            ? "Con el mismo celular, esta clienta usó estas direcciones. Confírmala con ella antes de usarla: pudo mudarse."
+            : "Con el mismo celular, esta clienta usó esta dirección. Confírmala con ella antes de usarla: pudo mudarse."}
+        </p>
+      </div>
+      <ul className="-mx-4 divide-y divide-line border-y border-line sm:-mx-5">
+        {destinations.map((d) => {
+          const place = [d.district, d.province, d.region].filter(Boolean).join(" / ");
+          const from = [d.orderName, d.storeName, d.date ? fmtDate(d.date) : null].filter(Boolean).join(" · ");
+          const sourceLabel = DESTINATION_SOURCE_LABEL[d.source];
+          return (
+            <li key={d.key} className="flex flex-wrap items-start justify-between gap-3 px-4 py-3 sm:px-5">
+              <div className="min-w-0 flex-1 space-y-0.5">
+                <p className="break-words text-sm font-medium text-ink-900">{d.address}</p>
+                {d.reference && <p className="break-words text-[13px] text-ink-700">Ref.: {d.reference}</p>}
+                {place && <p className="text-[13px] text-ink-700">{place}</p>}
+                {d.latitude != null && d.longitude != null && (
+                  <p className="text-[13px] tabular-nums text-ink-500">
+                    {d.latitude}, {d.longitude}
+                  </p>
+                )}
+                <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-ink-500">
+                  {from && <span className="tabular-nums">De {from}</span>}
+                  {sourceLabel && <span>{sourceLabel}</span>}
+                  {d.delivered && <Badge>entregado ahí</Badge>}
+                  {d.cancelled && <Badge>anulado</Badge>}
+                </p>
+              </div>
+              {canEdit && (
+                <OpsButton size="sm" onClick={() => onUse(d)} className="shrink-0 pointer-coarse:h-11">
+                  Usar esta dirección
+                </OpsButton>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 

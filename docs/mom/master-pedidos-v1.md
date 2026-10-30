@@ -16785,7 +16785,8 @@ que Kapta guarda como **archivo de consulta**.
   que se ven son los de Shopify, tal como vinieron (`financial_status`,
   `fulfillment_status`, `cancelled_at`): no se traducen a estados del Master.
   Lo único que lee del archivo fuera de su pantalla es «Pedidos antes» de la
-  ficha del lead (§37.7), solo para contar y listar.
+  ficha del lead (§37.7), solo para contar y listar, y el «Último destino
+  conocido de esta clienta» del cajón del Master (§37.8), solo para sugerir.
 - La tienda sigue siendo la única fuente de pedidos (AGENTS.md, regla 4): esto es
   una copia de lo que Shopify ya tenía, no un canal de entrada.
 
@@ -17019,6 +17020,77 @@ y el conteo), `getCustomerHistory` en `lib/leads-access.ts` (las dos
 consultas), `mergePriorOrders` en `lib/order-admin-url.ts` (con Shopify en
 vivo), `components/leads-drawer.tsx` y `components/leads-next.tsx` (la marca).
 Pruebas: `test/leads-prior-orders-history.test.ts`.
+
+### 37.8 Último destino conocido de la clienta (owner, 30-10-2026)
+
+**Por qué.** Hay pedidos que entran sin dirección: #KP144042 (Kenku, «Catálogo
+de WhatsApp») llegó con región, provincia, distrito y dirección vacíos, y su
+Ubicación y cobertura quedó en «Por revisar». El mismo celular ya tenía
+#KP200293 (Kenku, 27-10-2026) con dirección en Sullana, Piura, y nadie lo
+veía sin ir a buscarlo. **Decisión del owner (30-10-2026):** con el celular,
+Kapta busca a la clienta en las dos tiendas de la organización (Kenku y
+Aurela) y **sugiere** la dirección.
+
+Dónde y cuándo:
+
+- En el cajón del Master → Información → «Ubicación y cobertura», debajo del
+  aviso «Completa la región y el distrito…», con el título «Último destino
+  conocido de esta clienta».
+- Solo si el pedido está «Por revisar» y le falta la región, el distrito o la
+  dirección (`needsDestinationSuggestion`). Un pedido con su ubicación completa
+  no lleva sugerencia.
+- Cada sugerencia muestra la dirección, la referencia, distrito / provincia /
+  región, la coordenada si la hay y de qué pedido sale (número, tienda y
+  fecha), con «entregado ahí» si ese pedido se entregó y «anulado» si lo está.
+
+De dónde sale, en este orden (una fuente solo se mira si la anterior no dio
+ninguna dirección que sirva):
+
+1. **Pedidos de Kapta** (`order_master`, la ubicación ya resuelta: corrección
+   manual, courier, tienda…) de las tiendas de la organización del pedido que
+   quien mira puede ver, con el mismo celular (guardado, normalizado 51 +
+   nueve dígitos o nacional).
+2. **Historial de Shopify** (§37, `shopify_history_orders`): `shipping_address1`
+   es la dirección, `shipping_address2` la referencia, `shipping_city` el
+   distrito y `shipping_province` la región (Shopify llama «province» al
+   departamento); la provincia no viene y la infiere el ubigeo al guardar.
+   No se toma la copia del propio pedido ni un número que ya está en Kapta.
+3. **Ficha de clienta del historial** (`shopify_history_customers`, su
+   dirección por defecto), sin pedido ni fecha.
+
+Reglas:
+
+- **Nunca se aplica sola.** La clienta pudo mudarse. «Usar esta dirección»
+  abre el formulario existente de «Corregir ubicación» ya lleno (y su nota:
+  «Último destino conocido de la clienta (pedido #KP200293, Kenku Peru,
+  27-10-2026).»). Solo al «Guardar ubicación» entra al pedido, por la misma
+  acción del servidor (`updateOrderGeo`): corrección aparte de `orders`, evento
+  «Ubicación corregida manualmente» con quién la guardó y el cambio de
+  cobertura registrado (§19.0.1). Sin permiso de editar, la sugerencia se ve
+  sin el botón.
+- **Una dirección sirve** si trae la calle y al menos el distrito o la región.
+  El propio pedido nunca se sugiere; un anulado entra solo si su dirección
+  sirve, y se marca.
+- **La más reciente primero** y sin repetir la misma dirección (se comparan sin
+  tildes, mayúsculas ni signos, junto con el distrito). Si hay varias
+  distintas, se muestran **hasta 3** para elegir.
+- **Solo lectura.** Con la sesión de quien mira (RLS por tienda); no escribe en
+  `orders`, en `order_master` ni en el historial (§37.1). No se registra nada
+  con datos de la clienta; si algo falla, simplemente no hay sugerencia.
+- **Rendimiento.** Solo para el pedido abierto en el cajón, nunca para la lista
+  del Master: una lectura por el índice de teléfono de `order_master` y, solo si
+  hace falta, otra por `(store_id, phone_norm)` del historial (0273), con
+  límite de 25. Sin migración.
+- **Qué no cambia.** El autocompletado conservador de región, provincia y
+  distrito por historial de la misma tienda (`geo_source = history`, 0078) sigue
+  igual: esa regla rellena sola solo con antecedentes que coinciden; esta solo
+  sugiere la dirección completa y una persona decide.
+
+Implementación: `lib/last-known-destination.ts` (qué pedido necesita
+sugerencia, con qué celulares se busca y qué direcciones se ofrecen),
+`app/dashboard/pedidos/last-destination-actions.ts` (las lecturas) y
+`LastDestinationSuggestions` en `components/order-drawer.tsx`. Pruebas:
+`test/last-known-destination.test.ts`.
 
 ## 38. WooCommerce (23-10-2026)
 
