@@ -583,4 +583,6 @@
 \ir migrations/0289_lead_call_queue_retries.sql
 \echo 'Applying 0290_agency_unpaid_cohort.sql'
 \ir migrations/0290_agency_unpaid_cohort.sql
+\echo 'Applying 0291_lead_retry_recent_signal.sql'
+\ir migrations/0291_lead_retry_recent_signal.sql
 \echo 'Done.'

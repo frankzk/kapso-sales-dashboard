@@ -4386,6 +4386,36 @@ esa misma cola; no basta con marcar atención en En seguimiento.
   leads al instalarla**. Los reingresos arrancan con el sync del código nuevo.
   Los conteos, gráfico, filtros y «Siguiente lead» usan la misma pertenencia.
 
+**Corrección de frescura (29-10-2026, ventana de 7 días aprobada por el owner).**
+La primera selección de la 0289 no tenía antigüedad máxima: volvió a poner en
+Por llamar carritos y citas olvidadas desde julio, y la prioridad de citas
+vencidas los colocó por encima de compras recientes. No eran carritos nuevos.
+
+- Los **reintentos automáticos** exigen al menos una señal real de los últimos
+  **7 días**: la creación del carrito actual, un mensaje entrante del cliente,
+  o el registro reciente de la llamada que pactó la cita vigente. No se usa la
+  edad del lead: un cliente de hace meses con carrito nuevo sí es elegible.
+- Para el carrito se usa `draft_orders.created_at`, de la misma tienda y del
+  mismo borrador. Nunca `updated_at`: notas o sincronizaciones no son compras
+  nuevas. Un carrito sin fecha comprobable no inventa frescura.
+- La cita debe corresponder al `next_followup_at` de una llamada de asesora
+  (`kind=call`, con firma) o a un resultado aplicado del agente de voz
+  (`voice_agent`, Casi cierra/Volver a llamar). Su señal es `occurred_at`, no
+  la fecha vencida por sí sola. Una cita olvidada en julio no es intención de hoy.
+- Ni reencolamientos ni notas de sistema ni llamadas fallidas sin cita
+  rejuvenecen el lead. Se conservan 48 h sin interacción, máximo tres llamadas,
+  exclusiones y reservas de la 0289.
+- La 0291 retira de la cola los reintentos ya activados sin esa frescura,
+  con nota de sistema, **sin borrar ni cambiar disposiciones, llamadas, citas
+  ni pedidos**. Conserva la marca de atención existente porque puede tener
+  otro origen. Vuelven a En seguimiento, no a Perdidos.
+- No interrumpe reservas activas: esos casos se retiran cuando la asesora los
+  suelta o vence su reserva. Cada sync vuelve a retirar los que pierden frescura
+  antes de incorporar candidatos nuevos. El historial del retiro no cuenta
+  como señal reciente ni como intento.
+- Los nuevos sin gestionar conservan su funcionamiento. La ventana se aplica
+  al retorno automático desde En seguimiento, no a la edad de todo el CRM.
+
 **El siguiente lead de cada vendedora (14-10-2026).** Arriba de «Por llamar»,
 cada vendedora ve UN lead para llamar ahora, con lo que pidió, el chat y el
 resultado de la llamada, y nunca el mismo que otra (`pickNextLead`,

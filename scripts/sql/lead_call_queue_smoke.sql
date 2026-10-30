@@ -27,6 +27,9 @@ from (values
  (15,'three','no_responde','open',1,3,interval '49 hours',null::interval),
  (16,'no-call','no_responde','open',1,0,interval '49 hours',null::interval)
 ) f(n,label,status,category,cart,attempts,quiet,due);
+-- These fixtures test 0289's guards with a recent real message (0291).
+update leads set last_inbound_at=now()-interval '3 days'
+ where store_id='cc028900-0000-0000-0000-000000000001';
 update leads set contact_opt_out_at=now() where name='opt-out' and store_id='cc028900-0000-0000-0000-000000000001';
 update leads set has_order=true where name='order' and store_id='cc028900-0000-0000-0000-000000000001';
 update leads set claimed_by='00000000-0000-0000-0000-00000000000b',claimed_at=now()
@@ -84,8 +87,8 @@ begin
  if (select call_queue_ready from leads where id=l.id) then raise exception 'stock shortage kept ready flag'; end if;
 
  -- A first call scheduled without changing nuevo must wait for its date too.
- insert into leads(id,store_id,phone,status,next_followup_at)
- values('cc028900-0000-0000-0000-000000000088',s,'51999898888','nuevo',now()+interval '1 day');
+ insert into leads(id,store_id,phone,status,next_followup_at,last_inbound_at)
+ values('cc028900-0000-0000-0000-000000000088',s,'51999898888','nuevo',now()+interval '1 day',now()-interval '3 days');
  select * into l from leads where id='cc028900-0000-0000-0000-000000000088';
  if public.lead_in_call_queue(l.status,l.category,l.call_queue_ready,l.contact_opt_out_at,l.has_order,l.order_id,l.next_followup_at)
  then raise exception 'new lead with future appointment entered early'; end if;

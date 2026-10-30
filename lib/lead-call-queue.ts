@@ -1,5 +1,7 @@
 // Operational queue membership is separate from the last call result.
 // A retry must never erase «No responde» or its history to look like a new lead.
+export const CALL_RETRY_SIGNAL_DAYS = 7;
+
 export const CALL_RETRY_STATUSES = [
   "nuevo", "no_responde", "buzon", "cuelga", "casi_cierra", "volver_a_llamar",
   "contactado_dejo_wsp", "otros_productos",
