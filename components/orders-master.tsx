@@ -43,6 +43,7 @@ import {
   IconChat,
   IconClock,
   IconDownload,
+  IconMapPin,
   IconMoney,
   IconPackage,
   IconSearch,
@@ -114,7 +115,7 @@ import {
 } from "@/lib/order-master-filters";
 import { SALES_CHANNEL_OPTIONS } from "@/lib/sales-channel";
 import { courierDisplayName, dispatchedWithLabel, dispatchedWithShort } from "@/lib/dispatched-with";
-import { dispatchDateBadge } from "@/lib/dispatch-date";
+import { SCHEDULED_NO_LOCATION_LABEL, dispatchDateBadge } from "@/lib/dispatch-date";
 import { PENDING_VOUCHER_LABEL, awaitsPickupKey, pendingVoucherHint } from "@/lib/pending-voucher";
 import { PAID_UNNOTIFIED_LABEL, agencyDeadlineBadge } from "@/lib/agency-pickup-alert";
 import { buildMasterQuery } from "@/lib/master-query";
@@ -213,6 +214,7 @@ export function OrdersMasterBoard({
   agency,
   pendingVoucherCount = null,
   paidUnnotifiedCount = null,
+  scheduledNoLocationCount = null,
   canEdit,
   canCreateOrder = false,
   canExport = false,
@@ -274,6 +276,11 @@ export function OrdersMasterBoard({
    * la píldora no se pinta (un cero sería afirmar algo que nadie contó).
    */
   paidUnnotifiedCount?: number | null;
+  /**
+   * «Programado sin ubicación» (MOM §6.2): con envío programado y la cobertura
+   * «Por revisar» sin región, distrito o dirección. `null` = no se pudo leer.
+   */
+  scheduledNoLocationCount?: number | null;
   canEdit: boolean;
   /** Descargar el Excel (`data.export`, 08-10-2026): owner, admin o concedido en Equipo. */
   canExport?: boolean;
@@ -696,6 +703,7 @@ export function OrdersMasterBoard({
             showAgency={agencyHasActivity(agency)}
             pendingVoucherCount={pendingVoucherCount}
             paidUnnotifiedCount={paidUnnotifiedCount}
+            scheduledNoLocationCount={scheduledNoLocationCount}
             filters={filters}
             onFilter={(next) => patch(next)}
           />
@@ -1170,6 +1178,7 @@ function AttentionLine({
   showAgency,
   pendingVoucherCount,
   paidUnnotifiedCount,
+  scheduledNoLocationCount,
   filters,
   onFilter,
 }: {
@@ -1178,6 +1187,7 @@ function AttentionLine({
   showAgency: boolean;
   pendingVoucherCount: number | null;
   paidUnnotifiedCount: number | null;
+  scheduledNoLocationCount: number | null;
   filters: MasterFilters;
   onFilter: (next: Partial<MasterFilters>) => void;
 }) {
@@ -1217,6 +1227,24 @@ function AttentionLine({
             />
           )}
         </div>
+        {/* «Programado sin ubicación» (MOM §6.2, #KP142558): tiene fecha de
+            envío y no tiene a dónde ir, así que no puede salir. Sin lectura no
+            se pinta: un cero sería afirmar algo que nadie contó. */}
+        {scheduledNoLocationCount !== null && (
+          <>
+          <span aria-hidden className="mx-0.5 h-5 w-px shrink-0 bg-line-strong" />
+          <div role="group" aria-label="Envío" className="flex items-center">
+            <AttentionPill
+              icon={IconMapPin}
+              label={SCHEDULED_NO_LOCATION_LABEL}
+              count={scheduledNoLocationCount}
+              active={filters.scheduledNoLocation}
+              hint="Tienen envío programado (hoy, vencido o a futuro) pero les falta la región, el distrito o la dirección: así no pueden salir. Toca para listarlos: cada uno se abre en Ubicación para corregirla."
+              onClick={() => onFilter({ scheduledNoLocation: !filters.scheduledNoLocation })}
+            />
+          </div>
+          </>
+        )}
         {showAgency && (
           <>
             <span aria-hidden className="mx-0.5 h-5 w-px shrink-0 bg-line-strong" />
@@ -2249,7 +2277,13 @@ function MasterTable({
             const showCourierCounts = Boolean(r.last_courier) || r.attempt_count > 0 || r.courier_count > 1 || salioCon.length > 0;
             // Con un comprobante por validar, la ficha se abre en Cobro: es
             // donde está «Validar y enviar la clave» (MOM §16.1).
-            const focus: DrawerSectionId | undefined = r.pending_voucher ? "pagos" : undefined;
+            // Programado sin ubicación (MOM §6.2): en Información → Ubicación,
+            // donde están «Último destino conocido» y «Corregir ubicación».
+            const focus: DrawerSectionId | undefined = r.pending_voucher
+              ? "pagos"
+              : r.scheduled_no_location
+                ? "ubicacion"
+                : undefined;
             return (
               <tr
                 key={r.id}
@@ -2405,6 +2439,20 @@ function MasterTable({
                         </Badge>
                       );
                     })()}
+                    {/* Sin ubicación no hay courier ni guía: la fecha se vence
+                        sola (#KP142558). Se apaga al corregir la ubicación o
+                        al quitar la fecha (MOM §6.2). */}
+                    {r.scheduled_no_location && (
+                      <Badge
+                        tone="crit"
+                        wrap
+                        className="xl:mt-0.5"
+                        title="Falta la región, el distrito o la dirección: corrige la ubicación para que pueda salir."
+                      >
+                        <IconMapPin aria-hidden className="size-3 shrink-0" />
+                        {SCHEDULED_NO_LOCATION_LABEL}
+                      </Badge>
+                    )}
                     {/* El plazo de la agencia (MOM §12): solo si vence pronto o
                         ya venció y el paquete sigue esperando. Se apaga solo al
                         recogerse, entregarse o devolverse. */}

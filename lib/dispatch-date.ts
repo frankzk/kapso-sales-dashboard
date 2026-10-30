@@ -96,3 +96,64 @@ export function dispatchDateBadge(date: string, todayLima: string): { text: stri
   if (state === "vencido") return { text: `Programado para el ${dispatchDateLabel(date)} y no salió`, tone: "danger" };
   return { text: `Programado · sale ${dispatchDateLabel(date)}`, tone: "info" };
 }
+
+// ---------------------------------------------------------------------------
+// Programar sin ubicación (owner, 30-10-2026; MOM §6.2)
+//
+// #KP142558 (Kenku) llegó sin dirección: «Por revisar», sin región ni
+// distrito. El 22-10 se confirmó y se programó para el 27-10 desde la
+// confirmación; sin destino no había courier ni guía posible, y la fecha se
+// venció sin que nadie se enterara. Confirmar sigue permitido (la clienta
+// puede dar la dirección después); lo que no se puede es PROGRAMAR la salida
+// de un pedido que no tiene a dónde ir.
+// ---------------------------------------------------------------------------
+
+/** Lo que la acción del servidor responde al intentar programar sin ubicación. */
+export const DISPATCH_NEEDS_LOCATION_ERROR = "Falta la ubicación: corrígela antes de programar el envío.";
+
+/** La chapa de la fila y la píldora del Master. */
+export const SCHEDULED_NO_LOCATION_LABEL = "Programado sin ubicación";
+
+/** Lo que la regla mira del pedido (una fila de `order_master`). */
+export interface DispatchLocationRow {
+  coverage?: string | null;
+  region?: string | null;
+  district?: string | null;
+  address?: string | null;
+}
+
+const blank = (v: string | null | undefined): boolean => !(v ?? "").trim();
+
+/**
+ * ¿Le falta la ubicación para programar su envío? La misma regla que pide
+ * «Último destino conocido» (§37.8, `needsDestinationSuggestion`): cobertura
+ * «Por revisar» (o sin calcular) y sin región, distrito o dirección. Un pedido
+ * con su ubicación completa se programa como siempre. Pura.
+ */
+export function dispatchLocationMissing(row: DispatchLocationRow): boolean {
+  if ((row.coverage ?? "por_revisar") !== "por_revisar") return false;
+  return blank(row.region) || blank(row.district) || blank(row.address);
+}
+
+/**
+ * La alerta del Master: tiene envío programado (hoy, vencido o a futuro) y le
+ * sigue faltando la ubicación. `dispatch_scheduled_on` solo se llena en
+ * Preparación · Por generar rótulo, así que además no tiene salida. Pura.
+ */
+export function scheduledWithoutLocation(
+  row: DispatchLocationRow & { dispatch_scheduled_on?: string | null },
+): boolean {
+  return Boolean(row.dispatch_scheduled_on) && dispatchLocationMissing(row);
+}
+
+/**
+ * Marca las filas de la página con la alerta, desde los ids que leyó el
+ * servidor. Sin lectura (`null`) las deja como estaban: no afirma nada. Pura.
+ */
+export function withScheduledNoLocation<T extends { order_id: string }>(
+  rows: T[],
+  ids: ReadonlySet<string> | null,
+): (T & { scheduled_no_location?: boolean })[] {
+  if (!ids) return rows;
+  return rows.map((r) => ({ ...r, scheduled_no_location: ids.has(r.order_id) }));
+}

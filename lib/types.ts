@@ -644,6 +644,12 @@ export interface OrderMasterRow {
    * último se lee de la cola de avisos (lib/agency-pickup-alert-access.ts).
    */
   paid_unnotified?: boolean | null;
+  /**
+   * «Programado sin ubicación» (MOM §6.2): envío programado y cobertura «Por
+   * revisar» sin región, distrito o dirección. La lista no trae la dirección,
+   * así que lo marca el servidor (`getScheduledNoLocationIds`).
+   */
+  scheduled_no_location?: boolean | null;
 }
 
 /** Un movimiento de la línea de tiempo (`order_events`, append-only). */

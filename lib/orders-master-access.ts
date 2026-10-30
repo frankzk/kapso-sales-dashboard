@@ -1381,6 +1381,42 @@ export function withPaidUnnotifiedFilter(filters: MasterFilters, ids: ReadonlySe
   return { ...filters, paidUnnotifiedOrderIds: ids ? [...ids] : null };
 }
 
+/**
+ * «Programado sin ubicación» (MOM §6.2, owner 30-10-2026) como filtro de la
+ * base: con fecha de envío (cualquiera: hoy, vencida o futura), cobertura
+ * «Por revisar» o sin calcular, y sin región, distrito o dirección. Es la
+ * misma regla que `scheduledWithoutLocation`; el Master guarda el vacío como
+ * null (medido el 30-10-2026: ninguna fila con cadena vacía en esas columnas).
+ * Se exporta para probar la URL.
+ */
+export function applyScheduledNoLocation<T>(query: T): T {
+  return (query as any)
+    .not("dispatch_scheduled_on", "is", null)
+    .or("coverage.is.null,coverage.eq.por_revisar")
+    .or("region.is.null,district.is.null,address.is.null") as T;
+}
+
+/**
+ * Los pedidos «Programado sin ubicación» de las tiendas del Master. UNA
+ * consulta de ids (son pocos: 1 el 30-10-2026) con la sesión de quien mira, a
+ * la par del resto de la carga: cuenta la píldora y marca las filas de la
+ * página sin traer la dirección a la tabla (la lista no la lee, por peso).
+ * `null` = no se pudo leer: la píldora no enseña un cero.
+ */
+export async function getScheduledNoLocationIds(storeIds: string[]): Promise<Set<string> | null> {
+  if (!storeIds.length) return new Set();
+  try {
+    const sb = await createServerSupabase();
+    const { data, error } = await applyScheduledNoLocation(
+      sb.from("order_master").select("order_id").in("store_id", storeIds),
+    ).limit(1000);
+    if (error) return null;
+    return new Set(((data ?? []) as { order_id: string }[]).map((r) => r.order_id));
+  } catch {
+    return null;
+  }
+}
+
 export const MASTER_PAGE_SIZE = 100;
 
 export interface MasterPage {
@@ -1534,6 +1570,9 @@ export function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T 
 
   // «Pagado sin aviso» (MOM §12): resuelto antes, como el de arriba.
   if (f.paidUnnotified) q = q.in("order_id", paidUnnotifiedFilterIds(f.paidUnnotifiedOrderIds));
+
+  // «Programado sin ubicación» (MOM §6.2): columnas del Master, en la base.
+  if (f.scheduledNoLocation) q = applyScheduledNoLocation(q);
 
   if (f.expiringSoon) {
     // Incluye lo ya vencido: es justamente lo que hay que trabajar hoy para que

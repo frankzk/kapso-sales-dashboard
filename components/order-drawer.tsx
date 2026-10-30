@@ -122,7 +122,13 @@ import { UrpiAttemptsSection } from "@/components/urpi-attempts-section";
 import { limaTodayKey } from "@/lib/shipments";
 import { DispatchDatePanel } from "@/components/dispatch-date-panel";
 import { AUTO_GUIDE_HINT } from "@/lib/aliclik-scheduled";
-import { DISPATCH_DATE_SET, dispatchDateBadge, dispatchDateMax } from "@/lib/dispatch-date";
+import {
+  DISPATCH_DATE_SET,
+  DISPATCH_NEEDS_LOCATION_ERROR,
+  dispatchDateBadge,
+  dispatchDateMax,
+  dispatchLocationMissing,
+} from "@/lib/dispatch-date";
 
 const DISPATCH_BADGE_TONE: Record<"info" | "warn" | "danger", BadgeTone> = { info: "info", warn: "warn", danger: "crit" };
 import { downloadPdf } from "@/lib/download-pdf";
@@ -1580,6 +1586,8 @@ export function OrderDrawer({
                           scheduledBy={dispatchDateEvent?.by ?? null}
                           today={limaTodayKey()}
                           autoAliclik={classifyOperation(detail.row) === "provincia_cod"}
+                          locationMissing={dispatchLocationMissing(detail.row)}
+                          onFixLocation={() => jumpTo("ubicacion")}
                           onSaved={() => {
                             void reload();
                             onSaved();
@@ -1631,6 +1639,7 @@ export function OrderDrawer({
                     onAttempt={(payload) =>
                       run(() => registerConfirmationAttempt(orderId, payload))
                     }
+                    onFixLocation={() => jumpTo("ubicacion")}
                   />
                   {/* MOM §11.11: provincia COD que Swayp puede llevar hoy sale sin
                       confirmar; si Swayp no entrega, vuelve aquí. No se ofrece en
@@ -3223,6 +3232,7 @@ function ConfirmationDesk({
   timeline,
   pending,
   onAttempt,
+  onFixLocation,
 }: {
   brief: OrderConfirmationBrief | null;
   onDuplicateChanged: () => void;
@@ -3240,6 +3250,8 @@ function ConfirmationDesk({
     dispatchOn?: string;
     operationId?: string;
   }) => void;
+  /** Lleva a Información → Ubicación (MOM §6.2: programar pide ubicación). */
+  onFixLocation: () => void;
 }) {
   const [result, setResult] = useState(CONFIRMATION_RESULTS[0]!.code);
   const [channel, setChannel] = useState<string>(CONFIRMATION_CHANNELS[0].code);
@@ -3273,6 +3285,8 @@ function ConfirmationDesk({
 
   const selected = confirmationResult(result);
   const needsDate = Boolean(selected?.schedulesFollowup);
+  // Confirmar sin ubicación sí; programar el envío no (MOM §6.2, #KP142558).
+  const locationMissing = dispatchLocationMissing(row);
   const blocked = pending || lastAttempt || (needsDate && !nextContactOn);
 
   return (
@@ -3429,17 +3443,30 @@ function ConfirmationDesk({
               Sale el (opcional)
               <input
                 type="date"
-                value={dispatchOn}
+                value={locationMissing ? "" : dispatchOn}
                 min={today}
                 max={dispatchDateMax(today)}
+                disabled={locationMissing}
+                aria-describedby="sale-el-ayuda"
                 onChange={(e) => setDispatchOn(e.target.value)}
-                className={cn(FIELD, "font-normal tabular-nums pointer-coarse:h-11")}
+                className={cn(FIELD, "font-normal tabular-nums pointer-coarse:h-11 disabled:cursor-not-allowed disabled:bg-wash disabled:text-ink-500")}
               />
             </label>
-            <p className="text-[13px] leading-5 text-ink-500">
-              Solo si acordaron otro día para el envío. Vacío: sale apenas se genere la guía.
-              {classifyOperation(row) === "provincia_cod" && ` ${AUTO_GUIDE_HINT}`}
-            </p>
+            {locationMissing ? (
+              <div id="sale-el-ayuda" className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <p className="text-[13px] leading-5 text-warn-fg">
+                  {DISPATCH_NEEDS_LOCATION_ERROR} Puedes confirmar igual: programa el envío cuando tenga dirección.
+                </p>
+                <OpsButton size="sm" onClick={onFixLocation} className="pointer-coarse:h-11">
+                  Corregir ubicación
+                </OpsButton>
+              </div>
+            ) : (
+              <p id="sale-el-ayuda" className="text-[13px] leading-5 text-ink-500">
+                Solo si acordaron otro día para el envío. Vacío: sale apenas se genere la guía.
+                {classifyOperation(row) === "provincia_cod" && ` ${AUTO_GUIDE_HINT}`}
+              </p>
+            )}
           </div>
         )}
 
@@ -3464,7 +3491,7 @@ function ConfirmationDesk({
                 channel,
                 note,
                 nextContactOn,
-                dispatchOn: selected?.confirms ? dispatchOn : "",
+                dispatchOn: selected?.confirms && !locationMissing ? dispatchOn : "",
                 operationId: crypto.randomUUID(),
               });
               setNote("");

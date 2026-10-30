@@ -156,7 +156,8 @@ describe("Master de Pedidos: indicador y filtro rápido", () => {
 
   it("la fila con comprobante abre la ficha en Cobro, y la página lee los pagos una sola vez", () => {
     const board = readFileSync(join(process.cwd(), "components/orders-master.tsx"), "utf8");
-    expect(board).toContain('r.pending_voucher ? "pagos" : undefined');
+    // Primero Cobro; si no, «Programado sin ubicación» abre en Ubicación (MOM §6.2).
+    expect(board).toMatch(/r\.pending_voucher\s*\?\s*"pagos"/);
     expect(board).toContain("onOpen(r.order_id, focus)");
     expect(board).toContain("label={PENDING_VOUCHER_LABEL}");
     const page = readFileSync(join(process.cwd(), "app/dashboard/pedidos/page.tsx"), "utf8");

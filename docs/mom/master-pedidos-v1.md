@@ -735,6 +735,53 @@ pedido sin fecha programada sigue esperando a que una persona cree su guía.
 - **Se dice al programar.** En un pedido de Provincia COD, «Programar envío» y
   «Sale el (opcional)» avisan que ese día la guía se crea sola.
 
+#### Sin ubicación no se programa el envío (owner, 30-10-2026)
+
+> ⚠️ **Ocurrió.** #KP142558 (Kenku) llegó sin dirección ni cliente: cobertura
+> «Por revisar», región y distrito vacíos. El 22-10-2026 una asesora lo
+> confirmó y, en la misma confirmación, programó el envío para el 27-10. Sin
+> destino no había courier ni guía posible: se quedó en Preparación · Por
+> generar rótulo con la chapa roja «no salió» y nadie se enteró.
+
+Decisión del owner:
+
+- **Confirmar sí, programar no.** Un pedido «Por revisar» al que le falta la
+  región, el distrito o la dirección —la misma condición que pide «Último
+  destino conocido» (§37.8): cobertura `por_revisar` o sin calcular, y alguno
+  de los tres vacío— **se puede confirmar** (la clienta puede dar la dirección
+  después), pero **no se le puede programar el envío** por ninguna de las dos
+  puertas: «Programar envío» de la ficha (`scheduleOrderDispatch`) y «Sale el»
+  al confirmar (`registerConfirmationAttempt`). Son los dos únicos puntos que
+  escriben `dispatch_date_set`, y por tanto `dispatch_scheduled_on`.
+- **El servidor lo rechaza** con «Falta la ubicación: corrígela antes de
+  programar el envío.» y no escribe nada. Al confirmar con fecha, el rechazo va
+  antes de registrar el intento (como una fecha inválida), y dice que se puede
+  confirmar dejando «Sale el» vacío.
+- **La ficha lo explica.** En la gestión de confirmación, «Sale el» queda
+  desactivado con el mismo mensaje y «Corregir ubicación»; en «Programar
+  envío», el botón cambia a «Corregir ubicación». Los dos llevan a Información
+  → «Ubicación y cobertura», donde están «Último destino conocido» y el
+  formulario. Una fecha que ya tenga se puede «Quitar» con su motivo.
+- **Con ubicación nada cambia**, tampoco la guía Aliclik automática del día
+  programado.
+- **Alerta en el Master: «Programado sin ubicación».** Los pedidos con
+  `dispatch_scheduled_on` (hoy, vencido **o a futuro**) y la ubicación
+  incompleta —la fecha solo vive en Por generar rótulo, así que no tienen
+  salida— llevan en la fila una chapa crítica con el pin, y la línea de
+  excepciones una píldora con su conteo (tras «Comprobante por validar»).
+  Tocarla filtra (`su=1`, en la base por columnas del Master: la lista, los
+  conteos de las pestañas y el Excel respetan el filtro). Cada fila abre la
+  ficha en Información → Ubicación. La píldora y la chapa salen de **una**
+  lectura de ids por carga, a la par del resto; si falla, la píldora no se
+  pinta (un cero sería afirmar algo que nadie contó). Se apaga sola al corregir
+  la ubicación (el recálculo cambia la cobertura) o al quitar la fecha.
+- **El 30-10-2026** caía en la alerta un solo pedido: #KP142558, vencido.
+
+Implementación: `dispatchLocationMissing`, `scheduledWithoutLocation` y
+`withScheduledNoLocation` en `lib/dispatch-date.ts`;
+`applyScheduledNoLocation` y `getScheduledNoLocationIds` en
+`lib/orders-master-access.ts`. Pruebas: `test/programar-sin-ubicacion.test.ts`.
+
 Flujo físico:
 
 ```text

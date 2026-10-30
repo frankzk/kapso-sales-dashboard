@@ -78,7 +78,8 @@ describe("Programar envío (MOM §6.2, 15-10-2026)", () => {
     expect(actions).toContain("payload: { date: dispatchOn, at_confirmation: true },");
     const drawer = read("components/order-drawer.tsx");
     expect(drawer).toContain("Sale el (opcional)");
-    expect(drawer).toContain('dispatchOn: selected?.confirms ? dispatchOn : "",');
+    // Sin ubicación no viaja la fecha (MOM §6.2, 30-10-2026).
+    expect(drawer).toContain('dispatchOn: selected?.confirms && !locationMissing ? dispatchOn : "",');
   });
   it("el MOM lo documenta", () => {
     const mom = read("docs/mom/master-pedidos-v1.md").replace(/\s+/g, " ");

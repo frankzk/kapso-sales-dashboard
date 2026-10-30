@@ -9,7 +9,7 @@ import { useState, useTransition } from "react";
 import { Badge, FIELD_BOX, OpsButton, type BadgeTone } from "@/components/ops-ui";
 import { cn } from "@/components/ui";
 import { clearOrderDispatchDate, scheduleOrderDispatch } from "@/app/dashboard/pedidos/actions";
-import { DISPATCH_DATE_MAX_DAYS, dispatchDateBadge } from "@/lib/dispatch-date";
+import { DISPATCH_DATE_MAX_DAYS, DISPATCH_NEEDS_LOCATION_ERROR, dispatchDateBadge } from "@/lib/dispatch-date";
 import { AUTO_GUIDE_HINT } from "@/lib/aliclik-scheduled";
 
 const TONE: Record<"info" | "warn" | "danger", BadgeTone> = { info: "info", warn: "warn", danger: "crit" };
@@ -27,6 +27,8 @@ export function DispatchDatePanel({
   scheduledBy,
   today,
   autoAliclik = false,
+  locationMissing = false,
+  onFixLocation,
   onSaved,
 }: {
   orderId: string;
@@ -37,6 +39,14 @@ export function DispatchDatePanel({
   today: string;
   /** Provincia COD: ese día la guía Aliclik se crea sola (MOM §6.2). */
   autoAliclik?: boolean;
+  /**
+   * «Por revisar» sin región, distrito o dirección (MOM §6.2, #KP142558): no
+   * se puede programar. Se dice por qué y se ofrece «Corregir ubicación»; la
+   * fecha que ya tenga se puede quitar.
+   */
+  locationMissing?: boolean;
+  /** Lleva a Información → Ubicación. */
+  onFixLocation?: () => void;
   onSaved: () => void;
 }) {
   const [mode, setMode] = useState<"idle" | "edit" | "clear">("idle");
@@ -67,14 +77,25 @@ export function DispatchDatePanel({
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         {badge ? (
           <Badge tone={TONE[badge.tone]}>{badge.text}</Badge>
-        ) : (
+        ) : locationMissing ? null : (
           <p className="text-[13px] text-ink-600">¿Se acordó despacharlo otro día? Prográmalo y no parecerá olvidado.</p>
+        )}
+        {locationMissing && (
+          <p className="text-[13px] font-medium text-warn-fg">{DISPATCH_NEEDS_LOCATION_ERROR}</p>
         )}
         {mode === "idle" && (
           <>
-            <OpsButton disabled={pending} onClick={() => { setDate(scheduledOn ?? ""); setMode("edit"); }} className="pointer-coarse:h-11">
-              {scheduledOn ? "Cambiar fecha" : "Programar envío"}
-            </OpsButton>
+            {locationMissing ? (
+              onFixLocation && (
+                <OpsButton disabled={pending} onClick={onFixLocation} className="pointer-coarse:h-11">
+                  Corregir ubicación
+                </OpsButton>
+              )
+            ) : (
+              <OpsButton disabled={pending} onClick={() => { setDate(scheduledOn ?? ""); setMode("edit"); }} className="pointer-coarse:h-11">
+                {scheduledOn ? "Cambiar fecha" : "Programar envío"}
+              </OpsButton>
+            )}
             {scheduledOn && (
               <OpsButton disabled={pending} onClick={() => setMode("clear")} className="pointer-coarse:h-11">
                 Quitar
@@ -93,7 +114,7 @@ export function DispatchDatePanel({
       {autoAliclik && (scheduledOn || mode === "edit") && mode !== "clear" && (
         <p className="text-[13px] text-ink-500">{AUTO_GUIDE_HINT}</p>
       )}
-      {mode === "edit" && (
+      {mode === "edit" && !locationMissing && (
         <form
           className="flex flex-wrap items-end gap-2"
           onSubmit={(e) => {

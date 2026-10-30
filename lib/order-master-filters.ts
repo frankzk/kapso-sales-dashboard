@@ -9,6 +9,7 @@
 import type { OrderMasterRow } from "@/lib/types";
 import { confirmationQueueBucket, limaDayKey } from "@/lib/order-confirmation";
 import type { AgencyPaymentWindow } from "@/lib/agency-payment-cohort";
+import { scheduledWithoutLocation } from "@/lib/dispatch-date";
 
 export interface MasterFilters {
   /** Pending balance in the Shalom/Olva shipment cohort selected in Consolidado. */
@@ -88,6 +89,13 @@ export interface MasterFilters {
   /** Los pedidos que trae, resueltos en el servidor como los de `pendingVoucher`
    *  (lib/agency-pickup-alert-access.ts). Sin resolver, ninguno. */
   paidUnnotifiedOrderIds?: readonly string[] | null;
+  /**
+   * «Programado sin ubicación» (MOM §6.2, owner 30-10-2026): con envío
+   * programado —hoy, vencido o a futuro— y la cobertura «Por revisar» sin
+   * región, distrito o dirección. Son columnas del Master, así que se filtra
+   * en la base sin resolver nada antes. Viaja por la URL como `su=1`.
+   */
+  scheduledNoLocation: boolean;
   /** Búsqueda libre sobre código, cliente, teléfono y guía. */
   search: string;
   /** Cola de Volver a contactar: vencido | hoy | proximo. */
@@ -177,6 +185,7 @@ export function emptyFilters(): MasterFilters {
     expiringSoon: false,
     pendingVoucher: false,
     paidUnnotified: false,
+    scheduledNoLocation: false,
     agencyUnpaid: null,
     search: "",
     confirmationDue: "",
@@ -238,6 +247,7 @@ export function hasActiveFilters(f: MasterFilters): boolean {
     f.expiringSoon ||
     f.pendingVoucher ||
     f.paidUnnotified ||
+    f.scheduledNoLocation ||
     f.search.trim().length > 0
     || Boolean(f.confirmationDue)
     || f.managementDays.size > 0
@@ -399,6 +409,8 @@ export function matchesFilters(
   if (f.pendingVoucher && !row.pending_voucher) return false;
   // Igual: lo trae la fila decorada (lib/agency-pickup-alert.ts).
   if (f.paidUnnotified && !row.paid_unnotified) return false;
+  // «Programado sin ubicación» (MOM §6.2): la misma regla que la base.
+  if (f.scheduledNoLocation && !(row.scheduled_no_location ?? scheduledWithoutLocation(row))) return false;
 
   if (f.staleDays > 0) {
     // "Sin movimientos recientes": un pedido que nunca se movió también cuenta —

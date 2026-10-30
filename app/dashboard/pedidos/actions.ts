@@ -74,7 +74,14 @@ import {
 import { etiquetaDiceTerminoSinEntregar } from "@/lib/aliclik-status";
 import { limaTodayKey, normalizeDistrict } from "@/lib/shipments";
 import { districtLearnVerdict, type LearnedDistrict } from "@/lib/district-learning";
-import { DISPATCH_DATE_CLEARED, DISPATCH_DATE_SET, dispatchDateError, dispatchDateLabel } from "@/lib/dispatch-date";
+import {
+  DISPATCH_DATE_CLEARED,
+  DISPATCH_DATE_SET,
+  DISPATCH_NEEDS_LOCATION_ERROR,
+  dispatchDateError,
+  dispatchDateLabel,
+  dispatchLocationMissing,
+} from "@/lib/dispatch-date";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
 import { agencyPaymentReady, classifyOperation, type OperationKind } from "@/lib/order-macro-stage";
 import {
@@ -1808,6 +1815,13 @@ export async function registerConfirmationAttempt(
 
   const ctx = await authorizeOrder(orderId);
   if (!ctx) return { error: "Sin acceso a este pedido." };
+  // Confirmar sin ubicación sí se puede (la clienta da la dirección después);
+  // programar la salida no (MOM §6.2, #KP142558). Se rechaza antes de
+  // registrar el intento, como la fecha inválida: si no, la confirmación
+  // quedaría registrada y la fecha perdida a medias.
+  if (dispatchOn && dispatchLocationMissing(ctx.row)) {
+    return { error: `${DISPATCH_NEEDS_LOCATION_ERROR} Puedes confirmar dejando «Sale el» vacío.` };
+  }
 
   const admin = createAdminSupabase();
   const occurredAt = new Date().toISOString();
@@ -1910,6 +1924,8 @@ export async function scheduleOrderDispatch(
   if (ctx.row.macro_stage !== "preparacion" || ctx.row.macro_substage !== "por_generar_rotulo") {
     return { error: "Solo se programa un envío que todavía no tiene guía (Preparación · Por generar rótulo)." };
   }
+  // Sin región, distrito o dirección no hay a dónde despacharlo (#KP142558).
+  if (dispatchLocationMissing(ctx.row)) return { error: DISPATCH_NEEDS_LOCATION_ERROR };
 
   const admin = createAdminSupabase();
   const eventError = await recordEvent(admin, ctx, {
