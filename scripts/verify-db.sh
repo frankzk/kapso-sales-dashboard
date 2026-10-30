@@ -306,4 +306,7 @@ $PSQL -f "$ROOT/scripts/sql/lead_call_queue_smoke.sql"
 
 echo "▶ Agencia: cohorte pendiente, checkout, validación, fechas Lima, deduplicación y RLS (0290)"
 $PSQL -f "$ROOT/scripts/sql/agency_unpaid_cohort_smoke.sql"
+echo "▶ Reintentos con señal real de 7 días (0291): históricos retirados, mensajes, carritos, citas, reservas e historial"
+$PSQL -f "$ROOT/scripts/sql/lead_retry_recent_signal_smoke.sql"
+
 echo "✅ DB verification passed."

@@ -1,7 +1,7 @@
 "use client";
 
 import { LeadAttemptBadge } from "@/components/lead-attempt-badge";
-import { prioritizeDueAppointments } from "@/lib/lead-call-queue";
+import { CALL_RETRY_SIGNAL_DAYS, prioritizeDueAppointments } from "@/lib/lead-call-queue";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
@@ -2162,6 +2162,11 @@ export function LeadsBoard({
             )}
           </div>
         </div>
+        {inQueue && queueState === "sin_llamar" && !searchMode && (
+          <p className="border-t border-line px-4 py-2 text-xs text-ink-500">
+            Nuevos sin gestionar. Reintentos: actividad del cliente o llamada acordada en los últimos {CALL_RETRY_SIGNAL_DAYS} días.
+          </p>
+        )}
         {/* Cabecera de columnas — solo md+; en el teléfono cada fila se apila. */}
         <div className="hidden grid-cols-[minmax(0,1fr)_184px_112px_80px] items-center gap-4 px-4 py-2 text-xs font-semibold text-ink-600 shadow-[inset_0_-1px_0_var(--color-line)] md:grid">
           <span>Lead y lo que pidió</span>

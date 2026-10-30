@@ -2024,7 +2024,7 @@ export interface SyncReport {
   returnRecoverySent: number; // plantillas de recuperación de devueltos enviadas
   deliveredThanksSent: number; // agradecimientos con catálogo al entregar
   restockSent: number; // recordatorios de reposición (sin contar el grupo de control)
-  requeued: number; // carritos reencolados con atención (olas, máx 2 por lead)
+  requeued: number; // nuevos reingresos: señal real <=7 días y hasta el tercer intento (0291)
   cartsClosedByOrder: number; // carritos que salieron de la cola porque ya son pedido
   autoOrdersGenerated: number; // pedidos de la prueba de recompra automática (0214)
   /** Filas de esa prueba que no se generaron porque la tienda crea sus pedidos

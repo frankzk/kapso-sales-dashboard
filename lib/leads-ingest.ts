@@ -2208,7 +2208,8 @@ export async function sendSeguimientoDrip(
 // ─────────────── Reintentos en la misma cola Por llamar (0289) ───────────────
 // Se conserva la disposición. El RPC reencola carritos no contactados tras 48 h
 // y citas vencidas, con menos de tres llamadas humanas, sin pedidos, sin bajas
-// ni reservas vigentes. La toma y el historial se escriben atómicamente.
+// ni reservas vigentes. La 0291 exige una señal real en los últimos 7 días y
+// retira reintentos obsoletos. La toma y el historial se escriben atómicamente.
 // Nombre exportado conservado para el reporte requeued del sync.
 export const ATTENTION_WAVE_MAX = 2;
 export const ATTENTION_WAVE_QUIET_HOURS = 48;
