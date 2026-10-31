@@ -529,7 +529,8 @@ describe("el tablero cuenta todas las ventas y lo dice", () => {
     expect(tiendas).toContain("`de los ingresos${of} son de ${topStore.name}${subOf(originCopy)}`");
   });
 
-  it("«Conversión por fuente» está en «Origen y cierre», junto a «Canal de cierre»", () => {
-    expect(dash).toContain('cells: [canal, conversionFuente, fuente, anuncios, tendencia]');
+  it("«Conversión por fuente» abre «Por canal y origen», justo después de «Canal de cierre» (§17.4.2)", () => {
+    expect(dash).toContain('cells: [ventasDia, storeCell, productos, canal]');
+    expect(dash).toContain('cells: [conversionFuente, anuncios, tendencia]');
   });
 });

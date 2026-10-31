@@ -17,6 +17,7 @@ import {
   getOrders,
   getOrdersByIds,
   getRollups,
+  getSalesProductOrders,
   getUserRoleSummary,
   getWaNumbers,
   getWebAdOrders,
@@ -45,7 +46,7 @@ export default async function StorePage({
   if (!store) notFound(); // not accessible (RLS) or non-existent
 
   const prev = previousRange(range);
-  const [rollups, prevRollups, orders, conversations, leads, ops, closing, origin, sourceConversion] = await Promise.all([
+  const [rollups, prevRollups, orders, conversations, leads, ops, closing, origin, sourceConversion, productOrders] = await Promise.all([
     getRollups([storeId], range),
     getRollups([storeId], prev),
     getOrders([storeId], range),
@@ -57,6 +58,8 @@ export default async function StorePage({
     // Todas las ventas por día y origen, y la conversión de cada fuente (MOM §17.4).
     getOriginSales([storeId], range),
     getSourceConversion([storeId], range),
+    // «Productos» y «Patrón de horas»: todas las ventas de la tienda, no solo las del bot (MOM §17.4.1).
+    getSalesProductOrders([storeId], range),
   ]);
   const campaignLeads = await getCampaignLeadsForDashboard(storeId, range, store.timezone);
   const campaignOrdersPromise = getOrdersByIds([storeId], campaignLeads.map((lead) => lead.order_id));
@@ -97,6 +100,7 @@ export default async function StorePage({
       rollups={rollups}
       prevRollups={prevRollups}
       orders={orders}
+      productOrders={productOrders}
       conversations={conversations}
       leads={leads}
       ops={ops}

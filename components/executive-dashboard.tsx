@@ -445,7 +445,9 @@ export function ExecutiveDashboard({
   const breakdown = businessBreakdown(orders);
   const products = topProducts(productOrders ?? orders, Number.POSITIVE_INFINITY);
   const productsOfAll = productOrders != null;
-  const pattern = singleStore ? dateHourPattern(orders, timezone) : null;
+  // El patrón de horas de una tienda: sus ventas de cualquier canal; solo el bot
+  // si no llegan las de todas (owner, 31-10-2026).
+  const pattern = singleStore ? dateHourPattern(productOrders ?? orders, timezone) : null;
 
   // Leads-derived (Phase B)
   const leadList = leads ?? [];
@@ -691,16 +693,16 @@ export function ExecutiveDashboard({
           title: "Patrón de horas",
           figure: pattern.peak ? `${WEEKDAYS[pattern.peak.weekday]} ${String(pattern.peak.hour).padStart(2, "0")}:00` : "—",
           tone: pattern.peak ? undefined : "muted",
-          sub: pattern.peak ? `el pico, con ${nf.format(pattern.peak.count)} órdenes del bot${SEP}${timezone}` : "Sin órdenes del bot en el periodo",
+          sub: pattern.peak ? `el pico, con ${nf.format(pattern.peak.count)} órdenes${productsOfAll ? "" : " del bot"}${SEP}${timezone}` : productsOfAll ? "Sin órdenes en el periodo" : "Sin órdenes del bot en el periodo",
           glyph: pattern.peak ? (
             <ColumnsGlyph
               values={pattern.byHour}
               highlight={pattern.byHour.indexOf(Math.max(...pattern.byHour))}
-              label="Órdenes del bot por hora del día; la hora con más resaltada"
+              label={`Órdenes${productsOfAll ? "" : " del bot"} por hora del día; la hora con más resaltada`}
             />
           ) : undefined,
           panel: pattern.peak
-            ? { meta: `Pedidos del bot${SEP}${periodMeta}${SEP}${timezone}`, width: "max-w-[640px]", body: <HourPattern pattern={pattern} /> }
+            ? { meta: `${productsOfAll ? "Todas las ventas" : "Pedidos del bot"}${SEP}${periodMeta}${SEP}${timezone}`, width: "max-w-[640px]", body: <HourPattern pattern={pattern} /> }
             : null,
         }
       : {
@@ -839,7 +841,7 @@ export function ExecutiveDashboard({
   const topSource = attribution.sources[0];
   const fuente: ModuleCell = {
     id: "fuente",
-    title: "Fuente de las ventas",
+    title: "Fuente de las ventas del bot",
     figure: topSource ? pct(topSource.pct / 100, 0) : "—",
     tone: topSource ? undefined : "muted",
     sub: topSource ? `de las ventas del bot vienen de ${topSource.label}` : "Sin pedidos del bot en el periodo para atribuir",
@@ -875,17 +877,24 @@ export function ExecutiveDashboard({
   // Lo que cuenta qué, con los módulos que hay en ESTA página (en la de una
   // tienda «Por tienda» es «Patrón de horas»).
   const listFmt = new Intl.ListFormat("es", { type: "conjunction" });
-  const allSalesModules = ["Las cifras de cabecera", "«Ventas por día»", ...(singleStore ? [] : ["«Por tienda»"]), "esta tarjeta", "«Conversión por fuente»"];
+  const allSalesModules = [
+    "Las cifras de cabecera",
+    "«Ventas por día»",
+    ...(singleStore ? (productsOfAll ? ["«Patrón de horas»"] : []) : ["«Por tienda»"]),
+    ...(productsOfAll ? ["«Productos»"] : []),
+    "esta tarjeta",
+    "«Conversión por fuente»",
+  ];
   const botOnlyModules = [
     "«Conversión del bot»",
-    "Productos",
-    "Fuente",
+    ...(productsOfAll ? [] : ["Productos"]),
+    "Fuente de las ventas del bot",
     "Embudo y su salud",
     "los ingresos de Carritos",
     "los ingresos de Números de WhatsApp",
     "Desglose de negocio",
     "Integridad",
-    ...(singleStore ? ["Patrón de horas"] : []),
+    ...(singleStore && !productsOfAll ? ["Patrón de horas"] : []),
   ];
   const channelTotal = CHANNEL_COLS.reduce((s, c) => s + channels[c.key].revenue, 0);
   const legacyCanalNote =
@@ -1545,11 +1554,23 @@ export function ExecutiveDashboard({
       : null,
   };
 
+  // «Primera respuesta» del bot: sin panel, la cifra es todo lo que hay.
+  const primeraRespuesta: ModuleCell = {
+    id: "primera-respuesta",
+    title: "Primera respuesta del bot",
+    figure: hasRt ? formatDuration(totals.avgFirstResponseSeconds) : "—",
+    tone: hasRt ? undefined : "muted",
+    sub: hasRt ? "promedio del periodo" : "se activa con la próxima ingesta",
+  };
+
+  // Primero toda la tienda, después por canal y, al final y con su nombre, el
+  // chatbot de Kapso (owner, 31-10-2026; MOM §17.4.2).
   const groups: ModuleGroup[] = [
-    { id: "ventas", label: "Ventas", cells: [ventasDia, conversion, storeCell, productos] },
-    { id: "origen", label: "Origen y cierre", cells: [canal, conversionFuente, fuente, anuncios, tendencia] },
-    { id: "perdida", label: "Lo que se pierde", cells: [embudo, saludEmbudo, motivos, impacto, carritos] },
-    { id: "sistema", label: "Números, negocio y sistema", cells: [whatsapp, negocio, integridad, saludOp] },
+    { id: "ventas", label: "Ventas de toda la tienda", cells: [ventasDia, storeCell, productos, canal] },
+    { id: "origen", label: "Por canal y origen", cells: [conversionFuente, anuncios, tendencia] },
+    { id: "bot", label: "Chatbot de Kapso: sus ventas", cells: [conversion, primeraRespuesta, fuente, carritos, negocio] },
+    { id: "perdida", label: "Chatbot de Kapso: lo que se pierde", cells: [embudo, saludEmbudo, motivos, impacto] },
+    { id: "sistema", label: "Chatbot de Kapso: números y sistema", cells: [whatsapp, integridad, saludOp] },
   ];
 
   return (
@@ -1613,7 +1634,7 @@ export function ExecutiveDashboard({
               </Banner>
             )}
             {originBanner}
-            <dl className={cn(FIGURE_FRAME, "grid-cols-2 lg:grid-cols-5")}>
+            <dl className={cn(FIGURE_FRAME, "grid-cols-2 lg:grid-cols-3")}>
               <Figure
                 label={`Ingresos${of}`}
                 value={money(head.revenue, currency)}
@@ -1636,17 +1657,6 @@ export function ExecutiveDashboard({
                 label={`Ticket promedio${of}`}
                 value={money(head.aov, currency)}
                 delta={headCmp ? <Change pct={headCmp.aovDeltaPct} /> : undefined}
-              />
-              <Figure
-                label="Conversión del bot"
-                value={bot.rate != null ? pct(bot.rate) : "—"}
-                delta={bot.prev && bot.conversations ? <Change pct={botDelta} unit="pts" /> : undefined}
-                sub={`${nf.format(bot.orders)} pedidos del bot de ${nf.format(bot.conversations)} conversaciones`}
-              />
-              <Figure
-                label="Primera respuesta"
-                value={hasRt ? formatDuration(totals.avgFirstResponseSeconds) : "—"}
-                sub={hasRt ? "promedio del periodo" : "se activa con la próxima ingesta"}
                 className="col-span-2 lg:col-span-1"
               />
             </dl>
