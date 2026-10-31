@@ -9936,6 +9936,39 @@ cualquier canal y tienda, sin las anuladas (`getSalesProductOrders` en
 completa**, de más a menos unidades, por SKU o por título sin SKU. El panel
 dice «Todas las ventas». Prueba: `test/executive-products-all.test.ts`.
 
+### 17.4.2 Primero toda la tienda; el chatbot de Kapso, aparte y con su nombre (31-10-2026)
+
+El owner (31-10-2026): «la sección Consolidado quiero que tome las ventas de
+toda la tienda sin excepción; si mostramos estadísticas del chatbot de Kapso,
+mencionémoslo de manera explícita, pero primero que sea de toda la tienda y más
+abajo el detalle por canal». La página de una tienda (Aurela) mostraba en
+«Productos» solo las unidades del bot (4 u con 36 pedidos en el día): no le
+llegaban las líneas de todas las ventas que el Consolidado ya recibía (§17.4.1).
+
+**Qué cambia**, en el Consolidado y en la página de cada tienda:
+
+- **La página de la tienda** pide `getSalesProductOrders` como el Consolidado.
+  «Productos» y «Patrón de horas» cuentan todas las ventas de la tienda; solo
+  si esas líneas no llegan vuelven a los pedidos del bot y lo dicen.
+- **La cabecera** solo lleva cifras de toda la tienda: Ingresos, Pedidos y
+  Ticket promedio. «Conversión del bot» y «Primera respuesta del bot» bajan a
+  la rejilla, al grupo del chatbot.
+- **La rejilla va de lo general a lo particular:**
+  1. «Ventas de toda la tienda»: Ventas por día, Por tienda (o Patrón de horas
+     en una tienda), Productos y Canal de cierre.
+  2. «Por canal y origen»: Conversión por fuente, Anuncios de Meta y Leads por
+     anuncio.
+  3. «Chatbot de Kapso: sus ventas»: Conversión del bot, Primera respuesta del
+     bot, Fuente de las ventas del bot, Carritos y Desglose de negocio.
+  4. «Chatbot de Kapso: lo que se pierde»: Embudo, Salud del embudo, Por qué
+     no compraron y Venta perdida estimada.
+  5. «Chatbot de Kapso: números y sistema»: Números de WhatsApp, Integridad de
+     conversión y Salud operativa.
+- «Fuente de las ventas» pasa a llamarse **«Fuente de las ventas del bot»**:
+  solo atribuye los pedidos del bot.
+
+Prueba: `test/consolidado-toda-la-tienda.test.ts`.
+
 ### 17.5 Cómo van las ventas: hoy, esta semana y este mes contra el anterior a esta altura (25-10-2026)
 
 Arriba de todo el Consolidado, antes de «Operación», el bloque «Cómo van las
