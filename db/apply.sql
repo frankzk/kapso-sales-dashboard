@@ -585,4 +585,6 @@
 \ir migrations/0290_agency_unpaid_cohort.sql
 \echo 'Applying 0291_lead_retry_recent_signal.sql'
 \ir migrations/0291_lead_retry_recent_signal.sql
+\echo 'Applying 0292_gf_notebook_missing_reports.sql'
+\ir migrations/0292_gf_notebook_missing_reports.sql
 \echo 'Done.'

@@ -917,7 +917,9 @@ function StopResult({ stop: s }: { stop: StopWithOrder }) {
       {/* Un no entregado se lee por su motivo, en rojo: «Rechazó el pedido»,
           «No contesta»… El rojo ya dice que no se entregó. */}
       <p className="truncate leading-5" title={reason ? `No entregado · ${reason}` : undefined}>
-        {s.status === "pendiente" ? (
+        {s.status === "pendiente" && carriedTo ? (
+          <Badge tone="neutral">Continuó en otra ruta</Badge>
+        ) : s.status === "pendiente" ? (
           <Badge tone="warn">Sin reportar</Badge>
         ) : s.status === "entregado" ? (
           <Badge tone="ok">Entregado</Badge>
