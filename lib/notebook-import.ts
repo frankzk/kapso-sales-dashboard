@@ -12,9 +12,9 @@
 //     (ANULADO no anula: solo Shopify anula, §9); NO CONTESTO, «No contesta»;
 //     REPRO, LUNES, MIÉRCOLES…, «Reprogramado». Lo que no se entiende no se
 //     adivina: queda para que lo elija una persona.
-//   * Solo se carga lo que está en la caja del motorizado (§29.5). La única
-//     puerta extra es el reprogramado que él conservó de un día anterior: pasa
-//     a esta ruta, ya cotejado, y se reporta aquí (§29.7, 07-10-2026).
+//   * Lo del día se reporta; lo que conserva de una caja anterior pasa aquí.
+//     Desde el 31-10-2026 una hoja con código también confirma un paquete que
+//     quedó sin reporte anterior, sin inventarle un resultado (§29.7).
 //   * Lo demás —anulado en Shopify, en la caja de otro, sin código, que no
 //     existe— se enseña con su motivo y no se carga.
 //   * Una fila sin código se cruza por nombre y monto solo si hay UN candidato
@@ -206,6 +206,8 @@ export interface PlanCarry {
   fromDate: string;
   total: number | null;
   remaining: number | null;
+  /** La hoja confirma un paquete que quedó sin reporte en su caja anterior. */
+  unreported?: boolean;
 }
 
 /** Un pedido nombrado en la hoja que no está ni en la ruta ni para pasar. */
@@ -226,7 +228,7 @@ export interface NotebookContext {
   elsewhere: Map<string, PlanOrderElsewhere>;
 }
 
-export type MatchKind = "pendiente" | "reportada" | "arrastre" | "anulado" | "otra_caja" | "no_existe" | "sin_codigo";
+export type MatchKind = "pendiente" | "reportada" | "arrastre" | "anulado" | "otra_caja" | "no_existe" | "sin_codigo" | "ambiguo";
 
 export type NotebookAction = "reportar" | "pasar_y_reportar" | "omitir";
 
@@ -337,7 +339,16 @@ export function buildNotebookPlan(
   // Primera pasada: por código. Lo que se cruza así no puede volver a tomarse
   // por nombre en la segunda.
   const byCode: (PlanRow["match"] | null)[] = lines.map((line) => {
-    for (const name of codeCandidates(line.order)) {
+    const candidates = codeCandidates(line.order);
+    const matchedIds = new Set(candidates.flatMap((name) => {
+      const found = stopsByName.get(name) ?? carryByName.get(name) ?? ctx.elsewhere.get(name);
+      return found ? [found.orderId] : [];
+    }));
+    if (matchedIds.size > 1) {
+      return { kind: "ambiguo", via: null, orderId: null, orderName: null, stopId: null, shipmentId: null, fromDate: null,
+        detail: `El código ${line.order} coincide con más de un pedido: verifica el prefijo de la tienda.` };
+    }
+    for (const name of candidates) {
       const stop = stopsByName.get(name);
       if (stop) {
         usedOrders.add(stop.orderId);
@@ -353,7 +364,9 @@ export function buildNotebookPlan(
         return {
           kind: "arrastre", via: "codigo", orderId: carry.orderId, orderName: carry.orderName, stopId: null,
           shipmentId: carry.shipmentId, fromDate: carry.fromDate,
-          detail: `Reprogramado el ${ddmm(carry.fromDate)}; sigue con ${ctx.riderName}. Pasa a esta ruta, ya cotejado.`,
+          detail: carry.unreported
+            ? `Añadir a esta ruta: sigue sin reporte en la caja de ${ctx.riderName} del ${ddmm(carry.fromDate)}. La hoja confirma que lo volvió a llevar.`
+            : `Reprogramado el ${ddmm(carry.fromDate)}; sigue con ${ctx.riderName}. Pasa a esta ruta, ya cotejado.`,
         } as PlanRow["match"];
       }
       const other = ctx.elsewhere.get(name);
@@ -379,7 +392,7 @@ export function buildNotebookPlan(
       const hadCode = codeCandidates(line.order).length > 0;
       const pool = [
         ...ctx.stops.filter((s) => s.status === "pendiente" && !usedOrders.has(s.orderId)).map((s) => ({ kind: "pendiente" as const, s, c: null as PlanCarry | null })),
-        ...ctx.carry.filter((c) => !usedOrders.has(c.orderId)).map((c) => ({ kind: "arrastre" as const, s: null as PlanStop | null, c })),
+        ...ctx.carry.filter((c) => !c.unreported && !usedOrders.has(c.orderId)).map((c) => ({ kind: "arrastre" as const, s: null as PlanStop | null, c })),
       ];
       const scored = pool
         .map((p) => {
@@ -498,7 +511,7 @@ export function notebookStopNote(input: {
     `Cuaderno de ${riderName} del ${ddmm(routeDate)}${point}: aún no usa la app, va sin foto. Cargado por ${input.loadedBy} el ${ddmm(input.loadedOn)}.`,
   ];
   if (row.match.kind === "arrastre" && row.match.fromDate) {
-    parts.push(`Lo traía desde su ruta del ${ddmm(row.match.fromDate)} (reprogramado) y salió en la del ${ddmm(routeDate)}.`);
+    parts.push(`Lo traía desde su ruta del ${ddmm(row.match.fromDate)} y la hoja confirma que volvió a llevarlo en la del ${ddmm(routeDate)}.`);
   }
   if (row.match.via === "nombre") {
     parts.push(`La hoja no trae el código; se cruzó por el nombre (${row.line.customer ?? "sin nombre"})${row.line.amount ? ` y el monto (S/ ${row.line.amount.toFixed(2)})` : ""}.`);

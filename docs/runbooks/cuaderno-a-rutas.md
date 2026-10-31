@@ -79,6 +79,15 @@ select set_config('gf.withdraw', 'off', true);
 commit;
 ```
 
+Desde el 31/10/2026, la carga desde fotos también puede pasar en la misma
+aplicación los paquetes **sin reporte** que siguen en una caja anterior del
+mismo motorizado. La hoja debe identificarlos por código: se proponen como
+«Añadir a esta ruta» y `gf_notebook_carry_over` valida la hoja aplicada, el actor,
+la organización y la custodia actual. No se inventa un «Reprogramado» ni se
+cambia la parada anterior. La función antigua mantiene sus guardas. Un pedido
+en otra caja, anulado, reemplazado o con código ambiguo sigue señalado para
+revisión. La instalación de la 0292 no traslada ni reporta paquetes.
+
 ## 4. El Master
 
 Nada de lo anterior toca el Master. Las entregas cruzan por la puerta única

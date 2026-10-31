@@ -309,4 +309,7 @@ $PSQL -f "$ROOT/scripts/sql/agency_unpaid_cohort_smoke.sql"
 echo "▶ Reintentos con señal real de 7 días (0291): históricos retirados, mensajes, carritos, citas, reservas e historial"
 $PSQL -f "$ROOT/scripts/sql/lead_retry_recent_signal_smoke.sql"
 
+echo "▶ Hoja del motorizado: incluir sin reporte anterior, custodia, auditoría, lote atómico y permisos (0292)"
+$PSQL -f "$ROOT/scripts/sql/gf_notebook_missing_reports_smoke.sql"
+
 echo "✅ DB verification passed."

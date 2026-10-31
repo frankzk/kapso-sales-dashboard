@@ -199,7 +199,7 @@ function pickupKey(stop: { dispatch_manifest_id?: string | null; shipment_id?: s
 async function loadStopReturns(stops: readonly StopWithOrder[]): Promise<{ returned: Map<string, string>; carried: Map<string, string> }> {
   const returned = new Map<string, string>();
   const carried = new Map<string, string>();
-  const failed = stops.filter((s) => s.status === "no_entregado" && s.dispatch_manifest_id && s.shipment_id);
+  const failed = stops.filter((s) => (s.status === "no_entregado" || s.status === "pendiente") && s.dispatch_manifest_id && s.shipment_id);
   if (!failed.length) return { returned, carried };
   const admin = createAdminSupabase();
   const { data } = await admin
