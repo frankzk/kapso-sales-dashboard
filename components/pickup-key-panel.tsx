@@ -15,6 +15,7 @@
 import { useEffect, useId, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { hasPositivePaymentAmount, MISSING_PAYMENT_AMOUNT } from "@/lib/payment-amount";
 import { cn } from "@/components/ui";
+import { GuideNumber } from "@/components/guide-number";
 import {
   Badge,
   Banner,
@@ -1741,7 +1742,7 @@ function ShalomDestinationFields({
           <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-ink-600">
             <span>Guía</span>
             {shalomGuide.guideCode && (
-              <span className="select-all font-mono font-semibold text-ink-900">N° {shalomGuide.guideCode}</span>
+              <GuideNumber value={shalomGuide.guideCode} />
             )}
             {shalomGuide.codigo && (
               <span className="rounded bg-wash px-1.5 py-0.5 font-mono text-xs font-medium text-ink-700 ring-1 ring-inset ring-line">
