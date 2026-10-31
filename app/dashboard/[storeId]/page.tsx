@@ -46,12 +46,14 @@ export default async function StorePage({
   if (!store) notFound(); // not accessible (RLS) or non-existent
 
   const prev = previousRange(range);
+  // Los módulos del chatbot, en el día local de la tienda (MOM §17.4.2).
+  const timeZones = { [storeId]: store.timezone };
   const [rollups, prevRollups, orders, conversations, leads, ops, closing, origin, sourceConversion, productOrders] = await Promise.all([
     getRollups([storeId], range),
     getRollups([storeId], prev),
-    getOrders([storeId], range),
-    getConversations([storeId], range),
-    getLeadsForDashboard([storeId], range),
+    getOrders([storeId], range, timeZones),
+    getConversations([storeId], range, timeZones),
+    getLeadsForDashboard([storeId], range, timeZones),
     getLatestOps([storeId]),
     // Quién cerró TODAS las ventas de la tienda, no solo las del bot (MOM §17.3).
     getClosingChannels([storeId], range),

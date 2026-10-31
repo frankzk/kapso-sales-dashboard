@@ -195,16 +195,66 @@ export function acquisitionRangeBounds(
   };
 }
 
+/** La zona de cada tienda (`stores.timezone`), por id. */
+export type StoreTimeZones = Readonly<Record<string, string | null | undefined>>;
+
+/**
+ * El periodo en el día LOCAL de una tienda, como lo cortan `daily_rollups` y
+ * `ventas_por_origen`: desde su medianoche de `from` hasta el último
+ * microsegundo de `to` (`endIso`, para el `lte` del drenado por cursor) o hasta
+ * la medianoche siguiente (`endExclusiveIso`). Sin zona, UTC, como en la base.
+ *
+ * Los módulos del chatbot de Kapso cortaban sus pedidos, conversaciones y leads
+ * en el día UTC (`T00:00:00Z`–`T23:59:59Z`): «Ayer» en Lima traía los pedidos
+ * del bot de las 7 p. m. de anteayer y perdía los de las 7 p. m. a medianoche
+ * de ayer, y el Embudo no cuadraba con «Conversión del bot» (MOM §17.4.2,
+ * 31-10-2026).
+ */
+export function storeDayBounds(
+  range: DateRange,
+  timeZone: string | null | undefined,
+): { startIso: string; endIso: string; endExclusiveIso: string } {
+  const { startIso, endExclusiveIso } = acquisitionRangeBounds(range, timeZone || "UTC");
+  // Un microsegundo antes de la medianoche siguiente: la base guarda
+  // microsegundos, así que `T23:59:59Z` dejaba fuera el último segundo del día.
+  const endIso = new Date(Date.parse(endExclusiveIso) - 1).toISOString().replace(/Z$/, "999Z");
+  return { startIso, endIso, endExclusiveIso };
+}
+
 const PAGE_SIZE = 1000;
 const MAX_ROWS = 50_000;
 
+/**
+ * Los pedidos del bot (`tag:kapso`) del periodo, en el día local de cada tienda
+ * (`storeDayBounds`). Una consulta por zona horaria: las tiendas de la misma
+ * zona comparten límites.
+ */
 export async function getOrders(
   storeIds: string[],
   range: DateRange,
+  timeZones: StoreTimeZones = {},
 ): Promise<OrderRow[]> {
   if (!storeIds.length) return [];
+  const byZone = new Map<string, string[]>();
+  for (const id of new Set(storeIds)) {
+    const tz = timeZones[id] || "UTC";
+    byZone.set(tz, [...(byZone.get(tz) ?? []), id]);
+  }
+  const perZone = await Promise.all(
+    [...byZone.entries()].map(([tz, ids]) => getOrdersInZone(ids, range, tz)),
+  );
+  if (perZone.length === 1) return perZone[0]!;
+  // El orden de la base: el más reciente primero (instantes ISO de PostgREST, comparables como texto).
+  return perZone.flat().sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
+}
+
+async function getOrdersInZone(
+  storeIds: string[],
+  range: DateRange,
+  timeZone: string,
+): Promise<OrderRow[]> {
   const sb = await createServerSupabase();
-  const { startIso, endIso } = rangeBounds(range);
+  const { startIso, endExclusiveIso } = storeDayBounds(range, timeZone);
   const BASE =
     "id,store_id,shopify_order_id,name,created_at,processed_at,total_amount,currency,financial_status,cancelled_at,total_refunded,customer_phone,tags,promo_applied,stock_por_validar,shipping_mode,kapso_conversation_id,line_items";
   // `discount_codes` is added by 0030; step down to the base set if the column
@@ -225,7 +275,7 @@ export async function getOrders(
         // `getOriginSales` (MOM §17.4); esto alimenta los módulos del bot.
         .contains("tags", ["kapso"])
         .gte("created_at", startIso)
-        .lte("created_at", endIso)
+        .lt("created_at", endExclusiveIso)
         .order("created_at", { ascending: false })
         .range(from, from + PAGE_SIZE - 1);
     let { data, error } = await page();
@@ -294,15 +344,17 @@ export async function getSalesProductOrders(storeIds: string[], range: DateRange
 export async function getConversations(
   storeIds: string[],
   range: DateRange,
+  timeZones: StoreTimeZones = {},
 ): Promise<ConversationRow[]> {
   if (!storeIds.length) return [];
   const sb = await createServerSupabase();
-  const { startIso, endIso } = rangeBounds(range);
   return drainStoresByRecency<ConversationRow & { id: string }>(
     storeIds,
     "started_at",
     (row) => row.started_at,
     (storeId) => (upper, after) => {
+      // El día local de la tienda, como `daily_rollups` (MOM §17.4.2).
+      const { startIso, endIso } = storeDayBounds(range, timeZones[storeId]);
       let q = sb
         .from("conversations")
         .select("id,store_id,kapso_conversation_id,phone_number_id,started_at,status,message_count,last_message_at")
@@ -446,10 +498,10 @@ async function drainStoresByRecency<T extends { id: string }>(
 export async function getLeadsForDashboard(
   storeIds: string[],
   range: DateRange,
+  timeZones: StoreTimeZones = {},
 ): Promise<LeadRow[]> {
   if (!storeIds.length) return [];
   const sb = await createServerSupabase();
-  const { startIso, endIso } = rangeBounds(range);
   const BASE_COLS =
     "id,store_id,phone,wa_id,name,email,first_seen_at,last_interaction_at,kapso_conversation_id,handoff_reason,handoff_at,category,status,needs_attention,order_id,has_order";
   // Optional attribution columns, richest first. We try the fullest set and step
@@ -458,13 +510,21 @@ export async function getLeadsForDashboard(
   // ones. 0012 added wa_phone_number_id on top of 0008's source/ad_id/ad_headline;
   // the previous all-or-nothing fallback to BASE_COLS would have hidden the Meta
   // campaign breakdown whenever 0012 hadn't been applied yet.
+  //
+  // «Carritos abandonados» necesita el borrador y el valor del carrito
+  // (`cartRecovery`): sin `draft_order_gid` solo contaba los carritos COD, sin
+  // `draft_order_status` no veía el borrador completado y sin `cart_value` el
+  // «Valor en riesgo» salía siempre S/ 0 (MOM §17.4.2, 31-10-2026).
   const COL_SETS = [
+    `${BASE_COLS},source,ad_id,ad_headline,wa_phone_number_id,cart_value,draft_order_gid,draft_order_status`,
     `${BASE_COLS},source,ad_id,ad_headline,wa_phone_number_id`,
     `${BASE_COLS},source,ad_id,ad_headline`,
     BASE_COLS,
   ];
 
   return drainStoresByRecency<LeadRow>(storeIds, "last_interaction_at", (row) => row.last_interaction_at, (storeId) => {
+    // El día local de la tienda, como `daily_rollups` (MOM §17.4.2).
+    const { startIso, endIso } = storeDayBounds(range, timeZones[storeId]);
     let colIdx = 0;
     const pageQuery = (select: string, upper: string | null, after: string | null) => {
       let q = sb

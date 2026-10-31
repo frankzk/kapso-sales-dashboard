@@ -128,7 +128,8 @@ describe("getConversations: cursor por tienda en vez de OFFSET", () => {
     expect(queries).toHaveLength(3);
     expect(queries.every((q) => q.eq.store_id === A && q.select.split(",").includes("id"))).toBe(true);
     expect(queries[0]!.or).toBeNull();
-    expect(queries[0]!.lte).toBe("2026-09-30T23:59:59Z");
+    // Sin zona, el día UTC como en la base, hasta su último microsegundo.
+    expect(queries[0]!.lte).toBe("2026-09-30T23:59:59.999999Z");
     const last = want[PAGE - 1]!;
     expect(queries[1]!.lte).toBe(last.started_at);
     expect(queries[1]!.or).toBe(recencyCursorFilter("started_at", { at: last.started_at, id: last.id }));

@@ -97,7 +97,9 @@ async function ConsolidatedContent({
     return null;
   });
   const prev = previousRange(range);
-  const leadsPromise = getLeadsForDashboard(storeIds, range);
+  // Los módulos del chatbot, en el día local de cada tienda (MOM §17.4.2).
+  const timeZones = Object.fromEntries(stores.map((s) => [s.id, s.timezone]));
+  const leadsPromise = getLeadsForDashboard(storeIds, range, timeZones);
   const campaignLeadsPromise = Promise.all(
     stores.map((store) => getCampaignLeadsForDashboard(store.id, range, store.timezone)),
   ).then((rows) => rows.flat());
@@ -156,8 +158,8 @@ async function ConsolidatedContent({
     await Promise.all([
       getRollups(storeIds, range),
       getRollups(storeIds, prev),
-      getOrders(storeIds, range),
-      getConversations(storeIds, range),
+      getOrders(storeIds, range, timeZones),
+      getConversations(storeIds, range, timeZones),
       leadsPromise,
       getLatestOps(storeIds),
       adNamesPromise,
