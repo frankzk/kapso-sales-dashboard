@@ -24,6 +24,7 @@ import { categoryOf, deriveAutoState, nextLeadState, statusDef } from "@/lib/lea
 import { tzParts } from "@/lib/metrics";
 import { insertOrderIfAbsent } from "@/lib/order-sale";
 import { normalizePhone } from "@/lib/phone";
+import { webLocationLeadFields } from "@/lib/web-location";
 import { LEAD_VOICE_KIND } from "@/lib/voice-leads";
 import {
   DRAFT_GRACE_MINUTES,
@@ -723,6 +724,22 @@ async function enrichLeadsFromConversations(
         // Never clobber cart/district that came from a real Shopify draft order:
         // the draft (linkDraftOrdersToLeads) is the source of truth; this WhatsApp
         // parse is only the fallback for leads that have no draft.
+        .is("draft_order_gid", null);
+    }
+
+    // La ubicación que eligió en la web antes de saltar al WhatsApp («Soy de
+    // Lima / Lima / Santa Anita», lib/web-location.ts): región, provincia y
+    // distrito con la convención del carrito, para que la cola, la ficha y la
+    // cobertura del Master la lean como una dirección. Es lo último que dijo la
+    // clienta, así que reemplaza a lo que hubiera; pero no a la dirección de un
+    // borrador real, como el patch de arriba. Escritura aparte: si faltan las
+    // columnas de 0013, el resto del enriquecimiento no se cae.
+    if (sig.web_location) {
+      await admin
+        .from("leads")
+        .update(webLocationLeadFields(sig.web_location))
+        .eq("store_id", storeId)
+        .eq("kapso_conversation_id", convId)
         .is("draft_order_gid", null);
     }
 

@@ -4361,6 +4361,33 @@ de Lima Metropolitana por su distrito. Las frases del bot que el lector del
 chat guardó como distrito («indicarte bien 🚚», «coordinarlo») no son lugar y
 quedan Sin identificar.
 
+**La ubicación que trae el salto de la web al WhatsApp (31-10-2026).** Desde
+el 29-10 el botón de WhatsApp de la ficha (WooCommerce) le pide a la clienta
+departamento, provincia y distrito antes de abrir el chat, y los escribe en el
+mensaje: «Hola, quiero pedir <producto>. Soy de Lima / Lima / Santa Anita.
+https://…». Lo traen 215 de los 216 mensajes de la web del 29 al 31-10. El
+lector del chat no lo veía —espera «soy de Arequipa» y las barras lo
+cortaban—, así que esos leads quedaban sin distrito y en Sin identificar
+(`lib/web-location.ts`).
+
+- **En la cola**, si el lead no tiene región guardada, se lee del primer
+  mensaje y gana a un distrito suelto del chat y al pedido anterior: está
+  elegido de una lista y es lo que dijo hoy. Es exacto, sin adivinar por el
+  distrito: Lima / Lima y Callao son **Lima**; cualquier otra provincia,
+  también las del departamento de Lima (Huaral, Cañete), es **Provincia**. Las
+  excepciones de `district_coverage` mandan primero, como en el pedido
+  (Lima / Lima / Pucusana → Provincia). Así quedan clasificados también los
+  leads que ya estaban en la cola, sin escribir en la base.
+- **La sincronización lo guarda** en el lead (`parseOrderSignals` →
+  `web_location`): `region` con la convención del carrito («Lima (provincia)»
+  para Lima / Lima, «Lima (departamento)» para el resto del departamento, o el
+  departamento), `province` con la provincia del INEI que eligió (la que la
+  ficha le pasa a `order_coverage_for` si `peru_districts` no conoce el
+  distrito, y la que separa «Lima / Cañete / San Luis» del San Luis
+  metropolitano) y `district`. Reemplaza lo que hubiera, salvo la dirección de
+  un borrador real. Desde ahí el lead va a «Dio distrito» y la ficha muestra la
+  cobertura del Master como con un carrito.
+
 **La cobertura en «Entrega» (14-10-2026).** La tarjeta del siguiente lead y la
 ficha ponen, junto a la dirección, la cobertura **del Master** —Lima, Provincia
 COD o Agencia, la misma chapa que lleva el pedido—, porque es lo que la

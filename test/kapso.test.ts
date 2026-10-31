@@ -89,7 +89,7 @@ describe("parseOrderSignals (buyer intent from chat messages)", () => {
       { t: 1, dir: "inbound", text: "hola" },
       { t: 2, dir: "outbound", text: "¡Hola! ¿En qué te ayudo?" },
     ]);
-    expect(s).toEqual({ district: null, cart_value: null, cart_item_count: null, cart_summary: null });
+    expect(s).toEqual({ district: null, web_location: null, cart_value: null, cart_item_count: null, cart_summary: null });
   });
 
   // ── Parser ensanchado: variantes de total (otros guiones de bot) ────────────

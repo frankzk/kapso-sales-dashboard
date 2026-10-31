@@ -16,6 +16,7 @@ import { type ConversationRow } from "@/lib/types";
 import { normalizePhone } from "@/lib/phone";
 import { leadProductHandle } from "@/lib/leads";
 import { mentionsKnownPlace } from "@/lib/lead-coverage";
+import { parseWebLocation, type WebLocation } from "@/lib/web-location";
 
 export interface KapsoClientOpts {
   apiKey: string;
@@ -880,6 +881,12 @@ export function extractReferral(rawMsgs: any[]): LeadReferral | null {
 
 export interface OrderSignals {
   district: string | null;
+  /**
+   * «Soy de Depto / Provincia / Distrito»: lo que la clienta eligió en la web
+   * antes de saltar al WhatsApp (lib/web-location.ts). Si lo trae, su distrito
+   * es `district`: está elegido de una lista, no escrito en el chat.
+   */
+  web_location: WebLocation | null;
   cart_value: number | null;
   cart_item_count: number | null;
   cart_summary: string | null;
@@ -1026,7 +1033,14 @@ export function parseOrderSignals(msgs: ParsedMsg[]): OrderSignals {
     /distrito/i.test(text) ||
     (/[?¿]/.test(text) && /(?:provincia|ciudad|departamento|d[oó]nde\s+.{0,24}(?:env[ií]|entreg))/i.test(text));
   let district: string | null = null;
-  for (let i = msgs.length - 1; i >= 0; i--) {
+  let web_location: WebLocation | null = null;
+  for (const m of msgs) {
+    if (m.dir !== "inbound") continue;
+    const loc = parseWebLocation(m.text);
+    if (loc) web_location = loc; // last wins
+  }
+  if (web_location) district = web_location.district.slice(0, 40);
+  for (let i = msgs.length - 1; !district && i >= 0; i--) {
     if (msgs[i]!.dir !== "outbound" || !isLocationPrompt(msgs[i]!.text)) continue;
     const reply = msgs.slice(i + 1).find((x) => x.dir === "inbound" && x.text.trim());
     if (reply && isPlaceReply(reply.text)) district = cleanReply(reply.text);
@@ -1098,7 +1112,7 @@ export function parseOrderSignals(msgs: ParsedMsg[]): OrderSignals {
     }
     break; // first summary wins
   }
-  return { district, cart_value, cart_item_count, cart_summary: cart_summary || null };
+  return { district, web_location, cart_value, cart_item_count, cart_summary: cart_summary || null };
 }
 
 // Payment / Yape-Shalom detection. Aurela's bot reserves a Shalom-pickup order
