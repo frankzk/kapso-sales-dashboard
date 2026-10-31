@@ -421,13 +421,15 @@ describe("liquidar: qué paradas no tienen foto, con su pedido", () => {
     // Las paradas de la ruta traen `reported_by`: sin él, la excepción no se aplicaría.
     const access = readFileSync(resolve(process.cwd(), "lib/routes-access.ts"), "utf8");
     expect(access).toContain("photo_path,voucher_path,reported_at,reported_by,");
-    const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8");
+    const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8").replace(/\r\n/g, "\n");
     expect(mom).toContain("**Excepción: lo cargado desde el cuaderno no exige foto (03-10-2026, decisión\nde Frankz).**");
   });
 
   it("el reprogramado que el motorizado conserva pasa a su ruta siguiente y no queda por devolver (§29.7)", () => {
     const caja = { status: "no_entregado", dispatch_manifest_id: "m-0510" };
     expect(stopReturnState(caja)).toBe("por_devolver");
+    expect(stopReturnState({ ...caja, status: "pendiente", carried_to: "2026-10-29" })).toBe("paso_a_otra_ruta");
+    expect(stopReturnState({ ...caja, status: "pendiente" })).toBeNull();
     expect(stopReturnState({ ...caja, returned_at: "2026-10-06T15:00:00Z" })).toBe("devuelto");
     expect(stopReturnState({ ...caja, carried_to: "2026-10-06" })).toBe("paso_a_otra_ruta");
     // Si después volvió a la oficina, manda la devolución.
@@ -442,7 +444,7 @@ describe("liquidar: qué paradas no tienen foto, con su pedido", () => {
     expect(ledger).toContain('.in("kind", ["returned_to_office", "carried_over"])');
     const panel = readFileSync(resolve(process.cwd(), "components/routes.tsx"), "utf8");
     expect(panel).toContain("Pasó a la ruta del {carriedTo}");
-    const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8");
+    const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8").replace(/\r\n/g, "\n");
     expect(mom).toContain("**Excepción: el reprogramado que el motorizado conserva sale en su ruta\nsiguiente, ya cotejado (07-10-2026, decisión de Frankz).**");
   });
 
@@ -477,7 +479,7 @@ describe("liquidar: qué paradas no tienen foto, con su pedido", () => {
   });
 
   it("y el MOM lo dice", () => {
-    const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8");
+    const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8").replace(/\r\n/g, "\n");
     expect(mom).toContain("**La foto del rechazo se pide al reportarlo, no al liquidar (28-09-2026,\ndecisión de Frankz).**");
     expect(mom).toContain("**Excepción: los rechazos de rutas anteriores al 28-09-2026 no exigen foto\n(28-09-2026, decisión de Frankz).**");
   });
@@ -660,7 +662,7 @@ describe("qué impide terminar la ruta", () => {
     const access = readFileSync(resolve(process.cwd(), "lib/routes-access.ts"), "utf8");
     expect(access).toContain("manifest_item_id: pickups.get(pickupKey(s))?.id ?? null,");
     expect(access).toContain('.is("removed_at", null);');
-    const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8");
+    const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8").replace(/\r\n/g, "\n");
     expect(mom).toContain("**Cerrar una ruta no vacía la caja: los «No entregado» se reciben o se dejan a\nconciencia (29-09-2026).**");
   });
 
@@ -687,7 +689,7 @@ describe("qué impide terminar la ruta", () => {
   });
 
   it("y el MOM lo dice", () => {
-    const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8");
+    const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8").replace(/\r\n/g, "\n");
     expect(mom).toContain("**Qué impide terminar la ruta, a la vista (28-09-2026).**");
     expect(mom).toContain("- Una sola regla, `routeCloseBlockers` (`lib/routes.ts`), para el panel y\n  para `closeRoute`");
   });

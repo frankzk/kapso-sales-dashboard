@@ -12187,6 +12187,36 @@ Courier (`routes.manage`), desde «Reparto y liquidación» de la ruta, con
 - Terminar la ruta y aprobar el pago siguen siendo de quien liquida. El SQL de
   `docs/runbooks/cuaderno-a-rutas.md` queda como respaldo.
 
+**Incluir en la misma carga los pedidos del día que siguen en una caja anterior
+del mismo motorizado (31-10-2026, decisión del dueño).** En la hoja de Alexis
+del 29/10 aparecían pedidos que todavía figuraban sin reporte en sus cajas del
+27 y 28/10. No hay que registrar un «Reprogramado» ficticio para poder cargarlos:
+la hoja revisada confirma que volvió a llevarlos.
+
+- Al revisar la foto se proponen marcados como **«Añadir a esta ruta»**, junto
+  con su resultado. **Aplicar** pasa el paquete y reporta la parada; no exige
+  salir del panel, agregarlo a mano ni volver a subir la foto.
+- Para una parada anterior sin reporte se exige código de pedido inequívoco
+  en la hoja, mismo motorizado y misma organización, caja anterior recibida,
+  paquete todavía activo allí y pedido sin anular. El cruce por nombre sigue
+  permitido solo para las paradas del día y los reprogramados de siempre.
+- La parada anterior se conserva **sin reporte**: no se inventa una llamada,
+  un intento fallido ni un resultado. El traspaso deja el id de la hoja y el
+  motivo «La hoja del día confirma que lo volvió a llevar» en ambas cajas y en
+  el pedido. El retiro resuelve la custodia de la caja anterior, no su reporte.
+  La parada sin reporte lleva un marcador de continuación con la ruta destino y
+  la hoja: queda histórica, protegida frente a cambios y sin bloquear la identidad
+  única de la nueva parada abierta. No se da por pagada ni por entregada la visita
+  anterior. La interfaz la distingue como «Continuó en otra ruta».
+- La relectura al aplicar vuelve a validar todas las condiciones. Una salida
+  reemplazada o recibida en oficina, un pedido anulado, una parada ya reportada,
+  la caja de otro motorizado o un código ambiguo se muestran con su motivo;
+  no se trasladan silenciosamente. Los resultados válidos restantes se cargan.
+- Se conserva el camino anterior de los reprogramados y sus guardas. La nueva
+  función solo permite pasar sin reporte los paquetes nombrados en una hoja
+  revisada y aplicada por quien la está cargando. No modifica stock, pagos ni
+  liquidaciones y no habilita la función antigua para trasladar cualquier caja.
+
 ### 29.8 Tarifas por distrito y comisión Yape
 
 Grupo GF Courier cobra una tarifa por distrito/zona que **incluye IGV**. Debe
