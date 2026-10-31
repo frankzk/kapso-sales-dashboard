@@ -6,6 +6,7 @@
 
 import { useId, useState } from "react";
 import { cn } from "@/components/ui";
+import { GuideNumber } from "@/components/guide-number";
 import { IconChevronDown } from "@/components/icons";
 import { Badge, Banner, OpsButton, SectionHead } from "@/components/ops-ui";
 import { AliclikOutlookLadder } from "@/components/aliclik-outlook";
@@ -117,12 +118,7 @@ export function OrderRouteDesk({
                 {shipmentIsReturning(route.blockingOutput) ? "Salida en devolución" : "Salida activa"}
               </span>
               {route.blockingOutput.guideCode && (
-                // `select-all`: el número se copia de un clic para pegarlo
-                // en el buscador del panel del courier, que es lo que se
-                // hace con él justo después de leerlo.
-                <span className="select-all font-mono font-semibold text-ink-900">
-                  N° {route.blockingOutput.guideCode}
-                </span>
+                <GuideNumber value={route.blockingOutput.guideCode} />
               )}
               {route.blockingOutput.shortCode && (
                 <span className="rounded bg-wash px-1.5 py-0.5 font-mono font-medium text-ink-700 ring-1 ring-inset ring-line">

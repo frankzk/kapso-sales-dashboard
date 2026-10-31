@@ -63,6 +63,7 @@ import { OrderCompanionPanel } from "@/components/order-companion-panel";
 import { OrderChatbyPanel } from "@/components/order-chatby-panel";
 import { AliclikDuplicatePanel } from "@/components/aliclik-duplicate-panel";
 import { CopyButton, copyLabel, useCopyToClipboard } from "@/components/copy-button";
+import { GuideNumber } from "@/components/guide-number";
 import { AliclikCoverageProbe } from "@/components/aliclik-coverage-probe";
 import { DirectFenixGuideModal } from "@/components/direct-fenix-guide-modal";
 import { ManualRouteOutputModal } from "@/components/manual-route-output-modal";
@@ -1729,8 +1730,8 @@ export function OrderDrawer({
                               teclear en el panel del courier para buscarla, y el
                               que el rótulo de Shalom titula «N° de Orden». */}
                           {g.guide_code && outputDisplayCode(g.output_code, g.courier) && (
-                            <span className="select-all font-mono text-xs font-semibold text-ink-900">
-                              N° {g.guide_code}
+                            <span className="text-xs">
+                              <GuideNumber value={g.guide_code} />
                             </span>
                           )}
                           {/* Shalom muestra en su panel el nº de orden Y un código
