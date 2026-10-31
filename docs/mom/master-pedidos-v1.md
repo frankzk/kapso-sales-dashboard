@@ -9967,6 +9967,12 @@ llegaban las líneas de todas las ventas que el Consolidado ya recibía (§17.4.
 - «Fuente de las ventas» pasa a llamarse **«Fuente de las ventas del bot»**:
   solo atribuye los pedidos del bot.
 
+**El día es el de la tienda (31-10-2026).** Las líneas de todas las ventas se
+cortan en el día LOCAL de cada tienda (`acquisitionRangeBounds`), igual que la
+cabecera (`ventas_por_origen`). Antes se cortaban en UTC: «Hoy» a las 00:45 de
+Lima traía los 11 pedidos de Aurela de las 7 p. m. a medianoche del viernes, y
+«Productos» enseñaba unidades con Ingresos en S/ 0.
+
 Prueba: `test/consolidado-toda-la-tienda.test.ts`.
 
 ### 17.5 Cómo van las ventas: hoy, esta semana y este mes contra el anterior a esta altura (25-10-2026)

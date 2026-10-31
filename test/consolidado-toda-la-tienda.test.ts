@@ -16,6 +16,15 @@ describe("Consolidado: toda la tienda primero", () => {
     expect(storePage).toContain("productOrders={productOrders}");
   });
 
+  it("las líneas de todas las ventas se cortan en el día LOCAL de cada tienda, como la cabecera", () => {
+    const access = read("lib/access.ts");
+    const fn = access.slice(access.indexOf("export async function getSalesProductOrders"));
+    const body = fn.slice(0, fn.indexOf("\n}\n"));
+    expect(body).toContain("acquisitionRangeBounds(range, ");
+    expect(body).toContain('.lt("created_at", endExclusiveIso)');
+    expect(body).not.toContain("rangeBounds(range)");
+  });
+
   it("«Productos» y «Patrón de horas» cuentan todas las ventas cuando llegan", () => {
     expect(dash).toContain("dateHourPattern(productOrders ?? orders, timezone)");
     expect(dash).toContain("topProducts(productOrders ?? orders, Number.POSITIVE_INFINITY)");

@@ -250,22 +250,32 @@ export async function getOrders(
 export async function getSalesProductOrders(storeIds: string[], range: DateRange): Promise<OrderRow[]> {
   if (!storeIds.length) return [];
   const sb = await createServerSupabase();
-  const { startIso, endIso } = rangeBounds(range);
-  const out: OrderRow[] = [];
-  for (let from = 0; from < MAX_ROWS; from += PAGE_SIZE) {
-    const { data, error } = await sb
-      .from("orders")
-      .select("id,store_id,created_at,cancelled_at,line_items")
-      .in("store_id", storeIds)
-      .gte("created_at", startIso)
-      .lte("created_at", endIso)
-      .order("created_at", { ascending: false })
-      .range(from, from + PAGE_SIZE - 1);
-    if (error || !data?.length) break;
-    out.push(...(data as unknown as OrderRow[]));
-    if (data.length < PAGE_SIZE) break;
-  }
-  return out;
+  // En el día LOCAL de cada tienda, como la cabecera (`ventas_por_origen`). Con
+  // los límites en UTC, «Hoy» a las 00:45 de Lima traía las ventas de las 7 p. m.
+  // a medianoche de ayer y «Productos» no cuadraba con los ingresos (31-10-2026).
+  const { data: tzRows } = await sb.from("stores").select("id,timezone").in("id", storeIds);
+  const tzOf = new Map(((tzRows ?? []) as { id: string; timezone: string | null }[]).map((r) => [r.id, r.timezone]));
+  const perStore = await Promise.all(
+    storeIds.map(async (storeId) => {
+      const { startIso, endExclusiveIso } = acquisitionRangeBounds(range, tzOf.get(storeId) || "America/Lima");
+      const rows: OrderRow[] = [];
+      for (let from = 0; from < MAX_ROWS; from += PAGE_SIZE) {
+        const { data, error } = await sb
+          .from("orders")
+          .select("id,store_id,created_at,cancelled_at,line_items")
+          .eq("store_id", storeId)
+          .gte("created_at", startIso)
+          .lt("created_at", endExclusiveIso)
+          .order("created_at", { ascending: false })
+          .range(from, from + PAGE_SIZE - 1);
+        if (error || !data?.length) break;
+        rows.push(...(data as unknown as OrderRow[]));
+        if (data.length < PAGE_SIZE) break;
+      }
+      return rows;
+    }),
+  );
+  return perStore.flat();
 }
 
 /**
