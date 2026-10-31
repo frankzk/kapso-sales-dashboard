@@ -31,6 +31,7 @@ import {
   webNoAtribuido,
   type CampaignStat,
   type SalesAttribution,
+  type TopProduct,
 } from "@/lib/metrics";
 import { prettyAdName, type AdMeta } from "@/lib/meta-ads";
 import { fullMonthRange, monthView, recentMonths } from "@/lib/productivity-month";
@@ -184,6 +185,98 @@ function PanelSection({ title, help, aside, children }: { title: string; help?: 
 }
 
 const TH = "px-3 py-2 text-xs font-semibold text-ink-600";
+
+/** Una línea sin variante, dentro de un producto que sí las tiene (MOM §17.4.1). */
+const NO_VARIANT = "Sin variante";
+
+function ordersText(n: number): string {
+  return `${nf.format(n)} ${n === 1 ? "orden" : "órdenes"}`;
+}
+
+/**
+ * El panel «Productos» (MOM §17.4.1): cada producto con su total y, debajo, sus
+ * variantes —nombre, unidades, órdenes e ingresos— de más a menos unidades. Un
+ * producto sin variantes no lleva filas debajo. Tabla desde 640 px; en el
+ * teléfono, una lista con hairlines y las cifras debajo del nombre.
+ */
+function ProductsBreakdown({ products, currency }: { products: TopProduct[]; currency: string }) {
+  const top = products[0]?.quantity || 1;
+  const bar = (quantity: number) => (
+    <span className="mt-1.5 block h-1 w-full max-w-64 rounded-full bg-line">
+      <span className="block h-full rounded-full bg-ink-500" style={{ width: `${Math.max(2, (quantity / top) * 100)}%` }} />
+    </span>
+  );
+  return (
+    <>
+      <table className="hidden w-full text-sm sm:table">
+        <thead>
+          <tr className="border-b border-line text-left">
+            <th scope="col" className={cn(TH, "pl-0")}>Producto y variante</th>
+            <th scope="col" className={cn(TH, "text-right")}>Unidades</th>
+            <th scope="col" className={cn(TH, "text-right")}>Órdenes</th>
+            <th scope="col" className={cn(TH, "pr-0 text-right")}>Ingresos</th>
+          </tr>
+        </thead>
+        {products.map((p) => (
+          <tbody key={p.key} className="border-b border-line">
+            <tr>
+              <th scope="row" className={cn("pr-3 text-left font-normal", p.variants.length ? "pb-1.5 pt-2.5" : "py-2.5")}>
+                <span className="block text-ink-900">{p.title}</span>
+                {bar(p.quantity)}
+              </th>
+              <td className="px-3 py-2.5 align-top text-right font-semibold tabular-nums text-ink-900">{nf.format(p.quantity)}</td>
+              <td className="px-3 py-2.5 align-top text-right tabular-nums text-ink-700">{nf.format(p.orders)}</td>
+              <td className="py-2.5 pl-3 align-top text-right tabular-nums text-ink-700">{formatCurrency(p.revenue, currency)}</td>
+            </tr>
+            {p.variants.map((v, i) => {
+              const last = i === p.variants.length - 1;
+              const pad = last ? "pt-1 pb-2.5" : "py-1";
+              return (
+                <tr key={v.label ?? ""} className="text-[13px] leading-5">
+                  <th scope="row" className={cn("pr-3 text-left font-normal", pad)}>
+                    <span className={cn("block border-l border-line-strong pl-3", v.label ? "text-ink-700" : "text-ink-500")}>{v.label ?? NO_VARIANT}</span>
+                  </th>
+                  <td className={cn("px-3 text-right tabular-nums text-ink-900", pad)}>{nf.format(v.quantity)}</td>
+                  <td className={cn("px-3 text-right tabular-nums text-ink-600", pad)}>{nf.format(v.orders)}</td>
+                  <td className={cn("pl-3 text-right tabular-nums text-ink-600", pad)}>{formatCurrency(v.revenue, currency)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        ))}
+      </table>
+      <ul className="border-t border-line sm:hidden">
+        {products.map((p) => (
+          <li key={p.key} className="border-b border-line py-2.5">
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="min-w-0 text-sm text-ink-900">{p.title}</span>
+              <span className="shrink-0 text-sm font-semibold tabular-nums text-ink-900">{nf.format(p.quantity)} u</span>
+            </div>
+            {bar(p.quantity)}
+            <p className="mt-1 text-xs leading-4 tabular-nums text-ink-500">
+              {ordersText(p.orders)} · {formatCurrency(p.revenue, currency)}
+            </p>
+            {p.variants.length > 0 && (
+              <ul className="mt-2 flex flex-col gap-1.5 border-l border-line-strong pl-3">
+                {p.variants.map((v) => (
+                  <li key={v.label ?? ""} className="text-[13px] leading-5">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <span className={cn("min-w-0", v.label ? "text-ink-700" : "text-ink-500")}>{v.label ?? NO_VARIANT}</span>
+                      <span className="shrink-0 tabular-nums text-ink-900">{nf.format(v.quantity)} u</span>
+                    </div>
+                    <p className="text-xs leading-4 tabular-nums text-ink-500">
+                      {ordersText(v.orders)} · {formatCurrency(v.revenue, currency)}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
 
 interface DayPoint {
   date: string;
@@ -804,34 +897,11 @@ export function ExecutiveDashboard({
           meta: `${productsOfAll ? "Todas las ventas" : "Pedidos del bot"}${SEP}${periodMeta}`,
           width: "max-w-[720px]",
           body: (
-            <PanelSection title={products.length === 1 ? "El producto vendido" : `Los ${products.length} productos, de más a menos unidades`} help="Por SKU, o por título cuando no hay SKU. Las órdenes canceladas no cuentan.">
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[520px] text-sm">
-                  <thead>
-                    <tr className="border-b border-line text-left">
-                      <th scope="col" className={cn(TH, "pl-0")}>Producto</th>
-                      <th scope="col" className={cn(TH, "text-right")}>Unidades</th>
-                      <th scope="col" className={cn(TH, "text-right")}>Órdenes</th>
-                      <th scope="col" className={cn(TH, "pr-0 text-right")}>Ingresos</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {products.map((p) => (
-                      <tr key={p.key} className="border-b border-line">
-                        <td className="py-2.5 pr-3">
-                          <span className="block text-ink-900">{p.title}</span>
-                          <span className="mt-1.5 block h-1 w-full max-w-64 rounded-full bg-line">
-                            <span className="block h-full rounded-full bg-ink-500" style={{ width: `${Math.max(2, (p.quantity / (topProduct?.quantity || 1)) * 100)}%` }} />
-                          </span>
-                        </td>
-                        <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-ink-900">{nf.format(p.quantity)}</td>
-                        <td className="px-3 py-2.5 text-right tabular-nums text-ink-700">{nf.format(p.orders)}</td>
-                        <td className="py-2.5 pl-3 text-right tabular-nums text-ink-700">{formatCurrency(p.revenue, currency)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+            <PanelSection
+              title={products.length === 1 ? "El producto vendido" : `Los ${products.length} productos, de más a menos unidades`}
+              help="Debajo de cada producto, sus variantes (talla, color…) de más a menos unidades. Un producto junta sus variantes, sus SKU y su versión de Shopify y de WooCommerce. Las órdenes canceladas no cuentan."
+            >
+              <ProductsBreakdown products={products} currency={currency} />
             </PanelSection>
           ),
         }

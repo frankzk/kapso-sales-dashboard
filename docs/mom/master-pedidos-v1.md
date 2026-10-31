@@ -9936,6 +9936,43 @@ cualquier canal y tienda, sin las anuladas (`getSalesProductOrders` en
 completa**, de más a menos unidades, por SKU o por título sin SKU. El panel
 dice «Todas las ventas». Prueba: `test/executive-products-all.test.ts`.
 
+**Las variantes debajo de cada producto (31-10-2026).** El owner: «Quiero
+saber qué variantes se venden en Productos. Muestras el nombre del producto,
+pero no muestras la variante». Al agrupar por SKU, las tallas de un mismo
+producto salían como filas sueltas con el mismo título (en Aurela, el 30-10,
+«Fat‑Burn Shorts» en tres filas y «Calzón Faja Moldeador 360° SoyKora®» en
+cuatro) y la variante no se veía. Desde el 31-10-2026:
+
+- **De dónde sale la variante.** De `variant_title` en las dos plataformas:
+  Shopify guarda ahí sus opciones («Negro / L»; sin «Default Title», que
+  descarta al leer el pedido) y WooCommerce los atributos de la variación,
+  unidos con « / » (`lib/woocommerce.ts`), solo cuando la línea es una
+  variación (`variant_id` lleno). El título es siempre el del producto
+  (`parent_name` en WooCommerce) y no se parte: «Fat‑Burn Shorts - Shorts para
+  Quemar Grasa…» es un nombre, no producto y variante. La oferta por cantidad
+  que WooCommerce añade como último atributo («1 unidad», «2 und. + 1 GRATIS
+  (Total 3 und.)») no es una variante y se quita del nombre, porque las
+  unidades ya vienen en la cantidad; si es el único segmento, se queda.
+- **Qué es un producto.** Las líneas que comparten SKU, título o `product_id`
+  de la misma tienda: así se juntan las variantes (cada una con su SKU), el
+  mismo producto en Shopify y en WooCommerce (otro `product_id`) y uno
+  duplicado o renombrado en el catálogo (mismo SKU). Solo junta filas que
+  antes iban separadas: las unidades del periodo no cambian. El nombre es el
+  título con más unidades.
+- **Qué es una variante.** El nombre de la variante, sin distinguir
+  mayúsculas: el mismo «Negro / L» tiene otro `variant_id` en cada
+  plataforma. Se escribe como más unidades se vendió.
+- **El panel** muestra cada producto con su total (unidades, órdenes,
+  ingresos) y, debajo, sus variantes con las mismas tres cifras, de más a
+  menos unidades; sus unidades suman las del producto. Las líneas sin
+  variante de un producto que sí las tiene van al final como «Sin variante».
+  Un producto sin variantes no lleva filas debajo, y nunca se escribe
+  «Default Title». Tabla desde 640 px; en el teléfono, una lista con las
+  cifras bajo cada nombre. Las tres barras de la celda siguen siendo por
+  producto.
+
+Prueba: `test/executive-products-variants.test.ts`.
+
 ### 17.4.2 Primero toda la tienda; el chatbot de Kapso, aparte y con su nombre (31-10-2026)
 
 El owner (31-10-2026): «la sección Consolidado quiero que tome las ventas de
