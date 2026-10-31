@@ -9975,6 +9975,31 @@ Lima traía los 11 pedidos de Aurela de las 7 p. m. a medianoche del viernes, y
 
 Prueba: `test/consolidado-toda-la-tienda.test.ts`.
 
+**Los módulos del chatbot, también en el día de la tienda (31-10-2026).**
+Fuente de las ventas del bot, Carritos, Desglose de negocio, Embudo y su salud,
+Por qué no compraron, Venta perdida estimada, Números de WhatsApp e Integridad
+leen los pedidos del bot (`getOrders`), las conversaciones (`getConversations`)
+y los leads (`getLeadsForDashboard`). Los tres se cortaban en el día UTC
+(`T00:00:00Z`–`T23:59:59Z`) mientras «Conversión del bot» y la Primera
+respuesta salen de `daily_rollups`, que corta en el día local. Medido el
+31-10-2026, «Ayer» (30-10) en las dos tiendas: Desglose y Embudo contaban 30
+pedidos del bot y «Conversión del bot» 29; en «7 días», 151 contra 142 y
+S/ 24.418 contra S/ 22.849; el Embudo contaba 1.366 conversaciones y la
+conversión 1.350. Desde ahora los tres cortan en el día local de cada tienda
+(`storeDayBounds` en `lib/access.ts`, la zona de `stores.timezone`; sin zona,
+UTC, como la base), hasta el último microsegundo del día.
+
+**«Carritos abandonados» con el carrito completo (31-10-2026).** El lector de
+leads no pedía `cart_value`, `draft_order_gid` ni `draft_order_status`: el
+«Valor en riesgo» («… por trabajar») salía siempre S/ 0, los borradores del bot
+sin fuente `cod_cart` no contaban como carrito y un borrador completado sin
+`has_order` no contaba como recuperado. Medido «Ayer» en Kenku: 97 de 283
+recuperados y S/ 0 por trabajar; con las columnas, 137 de 350 y S/ 34.042. Las
+tres columnas van en el juego más completo de `getLeadsForDashboard`, con su
+escalón de respaldo como las demás.
+
+Prueba: `test/consolidado-chatbot-dia-local.test.ts`.
+
 ### 17.5 Cómo van las ventas: hoy, esta semana y este mes contra el anterior a esta altura (25-10-2026)
 
 Arriba de todo el Consolidado, antes de «Operación», el bloque «Cómo van las
