@@ -246,36 +246,49 @@ export async function getOrders(
  * del bot), para el panel «Productos» del Consolidado (owner, 26-10-2026: con
  * solo los del bot se subreportaban las unidades). Solo las columnas que usa
  * `topProducts`; las anuladas se descartan allí.
+ *
+ * TODAS O NINGUNA (31-10-2026, MOM §17.4.2). Null si alguna página falla o una
+ * tienda llega al tope MAX_ROWS: el tablero vuelve entonces a los pedidos del
+ * bot y lo dice. Antes una lectura fallida terminaba el bucle en silencio:
+ * «Productos» decía «Sin líneas de producto en el periodo» o contaba solo las
+ * páginas leídas, con la etiqueta «Todas las ventas». Y paginaba con OFFSET sin
+ * desempate: los pedidos que comparten instante (24 en Kenku desde septiembre)
+ * podían salir dos veces o ninguna al cruzar el borde de una página, y un pedido
+ * nuevo entre dos páginas corría el resto una fila. Ahora drena por cursor,
+ * `created_at DESC, id DESC`, como los leads y las conversaciones.
  */
-export async function getSalesProductOrders(storeIds: string[], range: DateRange): Promise<OrderRow[]> {
+export async function getSalesProductOrders(storeIds: string[], range: DateRange): Promise<OrderRow[] | null> {
   if (!storeIds.length) return [];
   const sb = await createServerSupabase();
   // En el día LOCAL de cada tienda, como la cabecera (`ventas_por_origen`). Con
   // los límites en UTC, «Hoy» a las 00:45 de Lima traía las ventas de las 7 p. m.
   // a medianoche de ayer y «Productos» no cuadraba con los ingresos (31-10-2026).
-  const { data: tzRows } = await sb.from("stores").select("id,timezone").in("id", storeIds);
+  const { data: tzRows, error: tzError } = await sb.from("stores").select("id,timezone").in("id", storeIds);
+  if (tzError) return null;
   const tzOf = new Map(((tzRows ?? []) as { id: string; timezone: string | null }[]).map((r) => [r.id, r.timezone]));
-  const perStore = await Promise.all(
-    storeIds.map(async (storeId) => {
-      const { startIso, endExclusiveIso } = acquisitionRangeBounds(range, tzOf.get(storeId) || "America/Lima");
-      const rows: OrderRow[] = [];
-      for (let from = 0; from < MAX_ROWS; from += PAGE_SIZE) {
-        const { data, error } = await sb
-          .from("orders")
-          .select("id,store_id,created_at,cancelled_at,line_items")
-          .eq("store_id", storeId)
-          .gte("created_at", startIso)
-          .lt("created_at", endExclusiveIso)
-          .order("created_at", { ascending: false })
-          .range(from, from + PAGE_SIZE - 1);
-        if (error || !data?.length) break;
-        rows.push(...(data as unknown as OrderRow[]));
-        if (data.length < PAGE_SIZE) break;
-      }
-      return rows;
-    }),
-  );
-  return perStore.flat();
+  // Por tienda, el largo de la última página: si quedó llena, el drenado paró
+  // antes de terminar (el tope o un cursor que no se pudo armar). -1 = falló.
+  const lastPage = new Map<string, number>();
+  const rows = await drainStoresByRecency<OrderRow & { id: string }>(storeIds, "created_at", (row) => row.created_at, (storeId) => {
+    const { startIso, endExclusiveIso } = acquisitionRangeBounds(range, tzOf.get(storeId) || "America/Lima");
+    return async (upper, after) => {
+      let q = sb
+        .from("orders")
+        .select("id,store_id,created_at,cancelled_at,line_items")
+        .eq("store_id", storeId)
+        .gte("created_at", startIso);
+      // La primera página va hasta el fin del día local (exclusivo); las demás,
+      // hasta el instante del cursor, con el `or` del desempate.
+      q = upper ? q.lte("created_at", upper) : q.lt("created_at", endExclusiveIso);
+      if (after) q = q.or(after);
+      const res = await q.order("created_at", { ascending: false }).order("id", { ascending: false }).limit(PAGE_SIZE);
+      if (lastPage.get(storeId) !== -1) lastPage.set(storeId, res.error || !Array.isArray(res.data) ? -1 : res.data.length);
+      return res;
+    };
+  });
+  // El drenado también corta en MAX_ROWS a todas las tiendas juntas.
+  const incomplete = rows.length >= MAX_ROWS || [...lastPage.values()].some((n) => n === -1 || n >= PAGE_SIZE);
+  return incomplete ? null : rows;
 }
 
 /**

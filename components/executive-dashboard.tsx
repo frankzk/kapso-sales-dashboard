@@ -309,8 +309,8 @@ export function ExecutiveDashboard({
   rollups: DailyRollupRow[];
   prevRollups: DailyRollupRow[];
   orders: OrderRow[];
-  /** Las líneas de TODAS las ventas del periodo, para «Productos» (sin ellas, las del bot). */
-  productOrders?: OrderRow[];
+  /** Las líneas de TODAS las ventas del periodo, para «Productos» y «Patrón de horas». Sin ellas (o null: no llegaron enteras), las del bot, y lo dice. */
+  productOrders?: OrderRow[] | null;
   conversations: ConversationRow[];
   ops: Record<string, unknown>;
   currency: string;
