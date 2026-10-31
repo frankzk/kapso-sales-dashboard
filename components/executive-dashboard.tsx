@@ -952,8 +952,9 @@ export function ExecutiveDashboard({
                             : "Esta tarjeta cuenta todas las ventas. Las cifras de cabecera y los demás módulos de «Ventas del periodo», salvo «Anuncios de Meta», cuentan por ahora solo los pedidos del bot de Kapso: lo dice el aviso de arriba."}
                         </p>
                         <p className="max-w-[72ch] text-[13px] leading-5 text-ink-600">
-                          Un carrito de EasySell que completa el bot de Kapso por WhatsApp hoy cuenta como «Web»: Shopify no le pone
-                          ninguna marca que lo distinga de uno que la clienta terminó sola.
+                          En los pedidos de Shopify, un carrito de EasySell que completó el bot de Kapso por WhatsApp cuenta como «Web»:
+                          Shopify no le pone ninguna marca que lo distinga de uno que la clienta terminó sola. En WooCommerce el bot crea su
+                          pedido con su marca y cuenta como «Bot de Kapso».
                         </p>
                         <ClosingChannels summary={closingSummary} currency={currency} prev={closingPrev} />
                       </>

@@ -970,43 +970,56 @@ export async function getWebAdOrders(
 ): Promise<WebAdOrder[]> {
   if (!storeIds.length) return [];
   const sb = await createServerSupabase();
-  const { startIso, endIso } = rangeBounds(range);
-  const out: WebAdOrder[] = [];
-  for (let from = 0; from < MAX_ROWS; from += PAGE_SIZE) {
-    const { data, error } = await sb
-      .from("orders")
-      .select(
-        "id,store_id,shopify_order_id,name,created_at,total_amount,total_refunded,cancelled_at,currency,line_items,utm_meta",
-      )
-      .in("store_id", storeIds)
-      // Sin filtro por etiqueta `kapso`: estos pedidos no la llevan ninguno
-      // (medido: 0 de 591). La trae el pedido nacido en la conversación.
-      .not("utm_meta", "is", null)
-      .gte("created_at", startIso)
-      .lte("created_at", endIso)
-      .order("created_at", { ascending: false })
-      .range(from, from + PAGE_SIZE - 1);
-    if (error || !data?.length) break;
-    type Atributo = { name?: string | null; value?: string | null };
-    for (const row of data as unknown as Array<OrderRow & { utm_meta: Atributo[] | null }>) {
-      // Por NOMBRE y no por posición: Shopify guarda los atributos en el orden
-      // que le da la gana y cambia de un pedido a otro.
-      const utm = new Map((row.utm_meta ?? []).map((a) => [a.name ?? "", a.value ?? null]));
-      out.push({
-        order: { ...row, tags: [], discount_codes: [] } as OrderRow,
-        utm: {
-          utmId: utm.get("utm_id") ?? null,
-          utmSource: utm.get("utm_source") ?? null,
-          utmMedium: utm.get("utm_medium") ?? null,
-          utmCampaign: utm.get("utm_campaign") ?? null,
-          utmContent: utm.get("utm_content") ?? null,
-          utmTerm: utm.get("utm_term") ?? null,
-        },
-      });
-    }
-    if (data.length < PAGE_SIZE) break;
-  }
-  return out;
+  // En el día LOCAL de cada tienda, como la cohorte de leads de anuncios
+  // (`getCampaignLeadsForDashboard`) y la cabecera (`ventas_por_origen`). Con
+  // los límites en UTC, «Ayer» (30-10) en Lima traía los pedidos web de las
+  // 7 p. m. a medianoche del 29 y perdía los del 30 a esa hora: Aurela, 14
+  // pedidos web en vez de 19 (MOM §17.4.3, 31-10-2026).
+  const { data: tzRows } = await sb.from("stores").select("id,timezone").in("id", storeIds);
+  const tzOf = new Map(((tzRows ?? []) as { id: string; timezone: string | null }[]).map((r) => [r.id, r.timezone]));
+  type Atributo = { name?: string | null; value?: string | null };
+  const perStore = await Promise.all(
+    storeIds.map(async (storeId) => {
+      const { startIso, endExclusiveIso } = acquisitionRangeBounds(range, tzOf.get(storeId) || "America/Lima");
+      const rows: WebAdOrder[] = [];
+      for (let from = 0; from < MAX_ROWS; from += PAGE_SIZE) {
+        const { data, error } = await sb
+          .from("orders")
+          .select(
+            "id,store_id,shopify_order_id,name,created_at,total_amount,total_refunded,cancelled_at,currency,line_items,utm_meta",
+          )
+          .eq("store_id", storeId)
+          // Sin filtro por etiqueta `kapso`. En Shopify ninguno la llevaba
+          // (medido: 0 de 591); en WooCommerce el pedido del bot que nace de un
+          // clic en un anuncio de WhatsApp sí trae `utm_id` (MOM §17.4.3).
+          .not("utm_meta", "is", null)
+          .gte("created_at", startIso)
+          .lt("created_at", endExclusiveIso)
+          .order("created_at", { ascending: false })
+          .range(from, from + PAGE_SIZE - 1);
+        if (error || !data?.length) break;
+        for (const row of data as unknown as Array<OrderRow & { utm_meta: Atributo[] | null }>) {
+          // Por NOMBRE y no por posición: Shopify guarda los atributos en el orden
+          // que le da la gana y cambia de un pedido a otro.
+          const utm = new Map((row.utm_meta ?? []).map((a) => [a.name ?? "", a.value ?? null]));
+          rows.push({
+            order: { ...row, tags: [], discount_codes: [] } as OrderRow,
+            utm: {
+              utmId: utm.get("utm_id") ?? null,
+              utmSource: utm.get("utm_source") ?? null,
+              utmMedium: utm.get("utm_medium") ?? null,
+              utmCampaign: utm.get("utm_campaign") ?? null,
+              utmContent: utm.get("utm_content") ?? null,
+              utmTerm: utm.get("utm_term") ?? null,
+            },
+          });
+        }
+        if (data.length < PAGE_SIZE) break;
+      }
+      return rows;
+    }),
+  );
+  return perStore.flat();
 }
 
 /**

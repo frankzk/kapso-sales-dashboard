@@ -9975,6 +9975,42 @@ Lima traía los 11 pedidos de Aurela de las 7 p. m. a medianoche del viernes, y
 
 Prueba: `test/consolidado-toda-la-tienda.test.ts`.
 
+### 17.4.3 «Anuncios de Meta»: los pedidos web, en el día de la tienda (31-10-2026)
+
+«Anuncios de Meta» suma a cada anuncio dos clases de pedidos: los de los leads
+de anuncios que **nacieron** en el periodo (`getCampaignLeadsForDashboard`, en
+el día local de la tienda) y los pedidos con UTM del formulario o el carrito
+de la web (`getWebAdOrders`, `orders.utm_meta`, §«Pedido» y
+`lib/cod-cart-attribution.ts`). Los primeros ya se cortaban en el día de la
+tienda; los segundos se cortaban en **UTC**. «Ayer» (30-10-2026) en Lima traía
+los pedidos web de las 7 p. m. a medianoche del 29 y perdía los del 30 a esa
+hora: Aurela, 14 pedidos web en vez de 19 (S/ 1.793 en vez de S/ 2.387).
+
+**Desde el 31-10-2026** los pedidos web se cortan en el día LOCAL de cada
+tienda (`acquisitionRangeBounds`), como la cohorte de leads, la cabecera
+(`ventas_por_origen`) y «Productos» (§17.4.2). Prueba:
+`test/web-ad-orders-dia-local.test.ts`.
+
+**Lo que este panel cuenta y la cabecera no, y lo dice este apartado** (medido
+el 31-10-2026; no cambia con este arreglo):
+
+- **Los cancelados.** Un pedido cancelado sigue contando en los pedidos e
+  ingresos del anuncio (el ROAS entregado no: solo suma lo entregado). En
+  Shopify casi todo cancelado con UTM tenía guía —la anulación en reparto, que
+  el panel enseña como «anulado»—; en WooCommerce casi ninguno la tiene, y uno
+  de cada cuatro tiene otro pedido activo del mismo celular en 3 días: es un
+  duplicado del formulario. Kenku, 7 días al 31-10: 116 de 738 pedidos web con
+  UTM están cancelados.
+- **El gasto en dólares.** La cifra de la tarjeta («gasto S/ …» y el ROAS
+  entregado) solo suma los anuncios cuya moneda es la de la tienda. Toda la
+  cuenta de Aurela y tres cuentas de Kenku gastan en USD (Kenku, 30-10: S/
+  3.224 en soles y USD 836 fuera de la cifra). Sin tipo de cambio no se
+  mezclan.
+- **El pedido del bot que nace de un anuncio de WhatsApp.** En WooCommerce trae
+  el `utm_id` del anuncio (`utm_medium = ctwa`). Si su lead nació en el periodo,
+  cuenta por el lead; si nació antes, cuenta como pedido «web» del anuncio
+  (Kenku, 7 días: 16 de 35).
+
 ### 17.5 Cómo van las ventas: hoy, esta semana y este mes contra el anterior a esta altura (25-10-2026)
 
 Arriba de todo el Consolidado, antes de «Operación», el bloque «Cómo van las
