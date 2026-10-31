@@ -10010,7 +10010,21 @@ cabecera (`ventas_por_origen`). Antes se cortaban en UTC: «Hoy» a las 00:45 de
 Lima traía los 11 pedidos de Aurela de las 7 p. m. a medianoche del viernes, y
 «Productos» enseñaba unidades con Ingresos en S/ 0.
 
-Prueba: `test/consolidado-toda-la-tienda.test.ts`.
+**Todas las líneas o ninguna (31-10-2026, auditoría del Consolidado).** Las
+líneas de todas las ventas llegan enteras, una vez cada pedido, o no llegan.
+Antes, si una página de la lectura fallaba (por ejemplo, por tiempo de espera),
+el bucle terminaba en silencio: «Productos» decía «Sin líneas de producto en el
+periodo», o contaba solo las páginas leídas, y seguía diciendo «Todas las
+ventas». Además paginaba con OFFSET y sin desempate: los pedidos que comparten
+instante (24 en Kenku desde septiembre) podían salir dos veces o ninguna al
+cruzar el borde de una página. Ahora lee cada tienda por cursor
+(`created_at DESC, id DESC`, como los leads y las conversaciones) y, si una
+página falla o una tienda llega al tope de 50.000 pedidos, «Productos» y
+«Patrón de horas» vuelven a los pedidos del bot y lo dicen («Pedidos del bot»,
+«el más vendido por el bot»): nunca una cifra a medias con el nombre de todas.
+
+Prueba: `test/consolidado-toda-la-tienda.test.ts` y
+`test/sales-product-orders.test.ts`.
 
 **Los módulos del chatbot, también en el día de la tienda (31-10-2026).**
 Fuente de las ventas del bot, Carritos, Desglose de negocio, Embudo y su salud,
