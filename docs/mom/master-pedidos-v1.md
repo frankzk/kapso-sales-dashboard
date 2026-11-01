@@ -1057,7 +1057,17 @@ Motivos simultáneos posibles:
   medido y no supuesto: lo tiene el 87,7 % de los recogidos por cerrar y el
   89,4 % de los recogidos finalizados, contra **0 % de los 1.642 anulados o
   devueltos**, y solo el 9-10 % de los pedidos de cada mes.
-  **Esta regla laxa no se extiende** a cuánto cobra el courier en la puerta
+  **El redondeo de la clienta (owner, 01-11-2026, `mom-v1.33`).** Faltar
+  **menos de S/ 1** es redondeo y el pedido está pagado completo
+  (`lib/payment-rounding.ts`): el descuento deja céntimos (S/ 134,10) y la
+  clienta yapea redondo (S/ 30 + S/ 104 = S/ 134,00). Al decidirlo había 10
+  pedidos en la alerta por S/ 1,20 entre todos, sin boleta (§35.3) y con un
+  saldo de céntimos que nadie iba a cobrar. Vale para todo lo que pregunta
+  «¿lo validado cubre el total?» (`paymentProgress`, `paymentState`, la clave,
+  el saldo de los mensajes de Shalom, lo que cobra el courier y la boleta), y
+  exige que se haya pagado algo. La boleta sale **por el total del pedido**: la
+  diferencia es redondeo, no un descuento.
+  **La regla laxa de `paid` en Shopify no se extiende** a cuánto cobra el courier en la puerta
   (`expectedCollectAmount`) ni al abono que Agencia exige para pasar a
   Preparación (§6.1): ahí el pedido aún no se ha recogido y equivocarse cuesta
   dinero, no una llamada de más.
@@ -15586,6 +15596,8 @@ boleta» emitir lo pagado antes de «Emitir desde», 15-10-2026) va después de 
 0262, también a mano y antes de su código. La 0275 (la foto del pedido para
 cuando Shopify ya no responde, 23-10-2026, 35.10) va después de la 0274, igual.
 La boleta de un pedido de WooCommerce (25-10-2026, 35.11) no tiene migración.
+La 0293 (faltar menos de S/ 1 es redondeo y cubre, 01-11-2026, §6.5) va
+después de la 0269, a mano y antes de su código.
 Están también las reglas puras, el
 cliente de SimpleFact, el barrido (`/api/cron/invoices`), la sección «Boletas
 y facturas» de Ajustes y el panel «Comprobante» del drawer, con su «Emitir esta
@@ -15699,7 +15711,7 @@ panel (`invoiceEligibility`, función pura; los textos en
 | --- | --- | --- |
 | 1 | El pedido no está anulado ni reembolsado y está en soles | `anulado` / `reembolsado` / `moneda` |
 | 2 | Todos sus pagos vivos (no rechazados) están validados. Un posible duplicado bloquea aunque cubra el total | `posible_duplicado` / `pagos_en_revision` |
-| 3 | La empresa recibió el pago: lo validado cubre el total del pedido, o es un prepago web confirmado (§6.5, §12 Pagos). Un prepago web que además tiene comprobantes cargados no se adivina | `sin_pago_completo` / `prepago_con_comprobantes` |
+| 3 | La empresa recibió el pago: lo validado cubre el total del pedido —faltar menos de S/ 1 es redondeo y cubre; la boleta sale igual por el total (owner, 01-11-2026, §6.5)—, o es un prepago web confirmado (§6.5, §12 Pagos). Un prepago web que además tiene comprobantes cargados no se adivina | `sin_pago_completo` / `prepago_con_comprobantes` |
 | 4 | Cada pago validado tiene cuenta (35.2) | `pago_sin_cuenta` |
 | 5 | Todas sus cuentas tienen RUC, y es el mismo | `cuenta_sin_ruc` / `ruc_mezclados` |
 | 6 | El total es mayor que 0 y no pasa de S/ 700 (35.5) | `monto_cero` / `monto_mayor_700` |
@@ -15809,7 +15821,8 @@ recibió. Ahora, justo después de `pagos_en_revision`, el turno vuelve a revisa
 la condición 3 con los pagos y el pedido guardados, por el camino que dice la
 base del comprobante que manda el código (`p_basis`: prepago web o no). Sin
 prepago, tiene que haber pagos validados y su suma tiene que cubrir el total
-que se va a emitir, al céntimo (`sin_pago_completo`); y si el pedido guardado
+que se va a emitir, salvo menos de S/ 1 de redondeo (0293, owner 01-11-2026;
+§6.5) (`sin_pago_completo`); y si el pedido guardado
 es un prepago web con pagos validados, `prepago_con_comprobantes`, como en las
 reglas. Con prepago, no puede quedar ningún pago vivo
 (`prepago_con_comprobantes`) y el pedido guardado tiene que ser de verdad un

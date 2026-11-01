@@ -19,6 +19,7 @@ import {
 } from "@/lib/yape-recipient";
 import { statementAccountKey } from "@/lib/yape-statement/match";
 import { isWebPrepaid } from "@/lib/order-paid";
+import { paidCoversTotal } from "@/lib/payment-rounding";
 import type { PaymentGateway } from "@/lib/payment-gateway";
 
 // ── Constantes ───────────────────────────────────────────────────────────────
@@ -690,7 +691,9 @@ export function invoiceEligibility(
   if (prepaid && live.length > 0) return fail("prepago_con_comprobantes");
   if (!prepaid) {
     const validatedCents = live.reduce((sum, p) => sum + Math.max(0, toCents(p.amount) ?? 0), 0);
-    if (totalCents === null || totalCents <= 0 || validatedCents < totalCents) {
+    // Menos de S/ 1 por cubrir es redondeo: está pagado y la boleta sale por el
+    // total del pedido (lib/payment-rounding.ts, owner 01-11-2026).
+    if (!paidCoversTotal(validatedCents, totalCents)) {
       return fail("sin_pago_completo");
     }
   }

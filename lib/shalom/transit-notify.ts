@@ -58,6 +58,7 @@ import { parseLabelLineItems } from "@/lib/labels/line-items";
 import { tzParts } from "@/lib/metrics";
 import { loadStorePaymentMethods, yapeNumberParam } from "@/lib/payment-methods";
 import { isWebPrepaid } from "@/lib/order-paid";
+import { remainingCents } from "@/lib/payment-rounding";
 import type { PaymentGateway } from "@/lib/payment-gateway";
 import { replyFirstName } from "@/lib/wa-reply-templates";
 import { shalomVoucherPdf, signedDocUrl } from "@/lib/shalom/label-cache";
@@ -272,7 +273,8 @@ export function pendingBalance(
 ): number | null {
   if (orderTotal == null || !Number.isFinite(orderTotal)) return null;
   const validated = Number(validatedAmount) || 0;
-  return Math.max(0, Math.round((orderTotal - validated) * 100) / 100);
+  // Menos de S/ 1 es redondeo: no hay saldo que pedirle (lib/payment-rounding.ts).
+  return remainingCents(Math.round(validated * 100), Math.round(orderTotal * 100)) / 100;
 }
 
 /**

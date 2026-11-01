@@ -676,7 +676,7 @@ describe("MOM §35.2 y §35.3: los motivos", () => {
     );
     expect(turno).toContain("**Que la empresa recibió el pago tampoco se lo cree** (0262).");
     expect(turno).toContain(
-      "Sin prepago, tiene que haber pagos validados y su suma tiene que cubrir el total que se va a emitir, al céntimo (`sin_pago_completo`); y si el pedido guardado es un prepago web con pagos validados, `prepago_con_comprobantes`, como en las reglas.",
+      "Sin prepago, tiene que haber pagos validados y su suma tiene que cubrir el total que se va a emitir, salvo menos de S/ 1 de redondeo (0293, owner 01-11-2026; §6.5) (`sin_pago_completo`); y si el pedido guardado es un prepago web con pagos validados, `prepago_con_comprobantes`, como en las reglas.",
     );
     expect(turno).toContain(
       "Con prepago, no puede quedar ningún pago vivo (`prepago_con_comprobantes`) y el pedido guardado tiene que ser de verdad un prepago web: pagado, por el checkout y sin nada reembolsado (`sin_pago_completo`).",

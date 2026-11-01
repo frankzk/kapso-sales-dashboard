@@ -5304,3 +5304,33 @@ actualiza la recepción GF para estas ventas y bloquea otro despacho. No modific
 ventas ni repone stock al instalarse. Confirmar la tarea /api/cron/woo-sale-returns
 en Vercel (minutos 4,8,14,18,24,28,38,44,54,58 de cada hora). La tarea solo cancela en Woo tras recepción e inventario
 humanos de todas las salidas; probar la migración con el smoke en Postgres desechable.
+
+### 01-11-2026 · Faltar menos de S/ 1 es redondeo: pago completo y boleta (0293, MOM §6.5 y §35.3)
+
+Decisión del owner (01-11-2026). El precio con descuento deja céntimos
+(S/ 134,10) y la clienta yapea redondo (S/ 30 + S/ 104): faltar **menos de
+S/ 1** cuenta como pago completo. Sale de «Recogido sin pago completo», no se
+le pide saldo y la boleta sale **por el total del pedido**. El código lo
+calcula en `lib/payment-rounding.ts`, y `MOM_RESOLUTION_VERSION` sube a
+`mom-v1.33` para que el cron recalcule los pedidos ya resueltos. Sin variables
+de entorno nuevas.
+
+1. **Migración `0293_invoices_claim_rounding.sql`**, a mano, DESPUÉS de la 0269
+   y ANTES del código. Pegar el archivo en el editor SQL de Supabase (con
+   `psql`: `psql -1 -v ON_ERROR_STOP=1 "$DATABASE_URL" -f db/migrations/0293_invoices_claim_rounding.sql`).
+   Cambia solo `invoice_claim`, con `create or replace` y la misma firma de
+   doce argumentos. El cuerpo es el de la 0269, salvo la condición 3: lo
+   validado cubre si falta menos de S/ 1 (`v_validated <= p_total - 1` es lo
+   que rechaza). No toca filas, ni triggers, ni otra función. El turno sigue
+   solo para `service_role`. Es idempotente. Sin el turno de doce argumentos se
+   detiene con «La 0293 va después de la 0269…» y no cambia nada.
+   Sin la 0293, el código ofrece «Emitir esta boleta» en un pedido al que le
+   faltan céntimos y el turno lo rechaza con `sin_pago_completo`: no emite de
+   más.
+2. Comprobar:
+   ```sql
+   select count(*) = 1 as un_turno,
+          bool_and(pg_get_functiondef(oid) like '%v_validated <= p_total - 1%') as con_redondeo
+   from pg_proc where proname = 'invoice_claim';
+   ```
+3. Desplegar el código.

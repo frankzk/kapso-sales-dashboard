@@ -30,6 +30,12 @@ import {
   swaypNoEntregoMotivo,
 } from "@/lib/swayp-desde-confirmacion";
 
+// v1.33 (01-11-2026): faltar menos de S/ 1 es redondeo y está pagado
+// (lib/payment-rounding.ts, decisión del owner, MOM §6.5). El descuento deja
+// céntimos (S/ 134,10) y la clienta yapea redondo (S/ 30 + S/ 104): 10 pedidos
+// quedaban en «Recogido sin pago completo», sin boleta, por S/ 1,20 entre
+// todos. La versión sube para que el cron los reconcilie.
+//
 // v1.32 (25-10-2026): la provincia de un pedido de Lima Metropolitana o el
 // Callao ya no sale de lo aprendido por nombre de distrito cuando contradice su
 // departamento, ni de una guía que la copió (lib/district-learning.ts, MOM
@@ -210,7 +216,7 @@ import {
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.32" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.33" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"

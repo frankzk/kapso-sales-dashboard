@@ -464,7 +464,8 @@ describe("MOM §35.3 fila 2 — todos los pagos vivos validados", () => {
 
 describe("MOM §35.3 fila 3 — la empresa recibió el pago", () => {
   it.each<[string, Partial<InvoiceOrderFacts>]>([
-    ["lo validado no llega al total por un céntimo", { payments: [pago({ amount: 149.99 })] }],
+    // Faltar menos de S/ 1 es redondeo y cubre (owner 01-11-2026); S/ 1 o más, no.
+    ["lo validado no llega al total por S/ 1", { payments: [pago({ amount: 149 })] }],
     ["sin pagos", { payments: [] }],
     ["solo pagos rechazados", { payments: [pago({ validationStatus: "rechazado" })] }],
     ["un pago validado sin monto", { payments: [pago({ amount: null })] }],
@@ -473,6 +474,11 @@ describe("MOM §35.3 fila 3 — la empresa recibió el pago", () => {
     ["un monto negativo no suma", { payments: [pago({ amount: 140 }), pago({ id: "p2", amount: -10 })] }],
   ])("sin_pago_completo: %s", (_porque, over) => {
     expect(motivo(hechos(over))).toBe("sin_pago_completo");
+  });
+
+  it("faltar céntimos es redondeo: la empresa recibió el pago (owner 01-11-2026)", () => {
+    expect(motivo(hechos({ payments: [pago({ amount: 149.99 })] }))).not.toBe("sin_pago_completo");
+    expect(motivo(hechos({ payments: [pago({ amount: 149.01 })] }))).not.toBe("sin_pago_completo");
   });
 
   it("un monto negativo (dato raro) tampoco resta: cuenta como 0, también en la base", () => {
