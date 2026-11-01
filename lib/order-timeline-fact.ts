@@ -100,6 +100,7 @@ const POR_KIND: Record<string, TimelineFact> = {
   dispatch_date_set: consulta("programado"),
   dispatch_date_cleared: consulta("programado"),
   aliclik_auto_guide_failed: consulta("guia"),
+  chatby_confirmation_held: consulta("mensaje"),
 
   // Despacho (índigo): el paquete sale de nuestras manos.
   swayp_desde_por_confirmar: hito("despacho", "por_despachar"),
@@ -190,12 +191,15 @@ const POR_KIND: Record<string, TimelineFact> = {
 /**
  * De dónde salió un movimiento, para la línea de la fecha: «Repro Provincia»,
  * «Leads», «WooCommerce» (los hechos que escribe la entrada de WooCommerce,
- * MOM §38.3) o la fuente guardada tal cual (`shopify`, `aliclik`, `manual`…).
+ * MOM §38.3), «Chatby» (la confirmación automática, MOM §6.1) o la fuente
+ * guardada tal cual (`shopify`, `aliclik`, `manual`…).
  */
 export function timelineOriginLabel(t: Pick<TimelineEntry, "origin" | "source">): string {
   if (t.origin === "gestion") return "Repro Provincia";
   if (t.origin === "leads") return "Leads";
   if (t.source === "woocommerce") return "WooCommerce";
+  // La confirmación automática por Chatby (MOM §6.1, 01-11-2026).
+  if (t.source === "chatby") return "Chatby";
   return t.source;
 }
 

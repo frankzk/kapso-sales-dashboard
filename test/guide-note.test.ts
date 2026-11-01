@@ -12,6 +12,11 @@ describe("la nota de la guía dice quién la creó", () => {
 
   it("la guía automática del día programado lo dice", () => {
     expect(guideCreatorPhrase(null, true)).toBe("automáticamente (envío programado)");
+    expect(guideCreatorPhrase(null, "envio_programado")).toBe("automáticamente (envío programado)");
+  });
+
+  it("la guía automática de lo que confirmó por Chatby lo dice (MOM §6.1, 01-11-2026)", () => {
+    expect(guideCreatorPhrase(null, "confirmado_chatby")).toBe("automáticamente (confirmó por Chatby)");
   });
 
   it("sin nombre que poner, no inventa uno", () => {
@@ -25,7 +30,7 @@ describe("las dos notas lo usan, y siguen sin firmar", () => {
   const actions = read("app/dashboard/pedidos/aliclik-actions.ts");
 
   it("crear", () => {
-    expect(core).toContain("`Guía de Aliclik creada ${guideCreatorPhrase(creator, Boolean(origin))} · ${orderNumber} · `");
+    expect(core).toContain("`Guía de Aliclik creada ${guideCreatorPhrase(creator, origin?.kind ?? false)} · ${orderNumber} · `");
     const insert = core.slice(core.indexOf("Guía de Aliclik creada ${") - 1200, core.indexOf("Guía de Aliclik creada ${"));
     expect(insert).toContain("vendedora: null,");
   });

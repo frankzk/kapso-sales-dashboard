@@ -9,8 +9,16 @@
 //
 // Pura.
 
-/** «por millonestania5@gmail.com», «automáticamente (envío programado)» o «por el sistema». */
-export function guideCreatorPhrase(creator: string | null | undefined, automatic = false): string {
+/**
+ * «por millonestania5@gmail.com», «automáticamente (envío programado)»,
+ * «automáticamente (confirmó por Chatby)» o «por el sistema». `automatic` es
+ * el origen de la guía automática (`true` es el del día programado, como antes).
+ */
+export function guideCreatorPhrase(
+  creator: string | null | undefined,
+  automatic: boolean | "envio_programado" | "confirmado_chatby" = false,
+): string {
+  if (automatic === "confirmado_chatby") return "automáticamente (confirmó por Chatby)";
   if (automatic) return "automáticamente (envío programado)";
   const who = creator?.trim();
   return who ? `por ${who}` : "por el sistema";

@@ -670,6 +670,9 @@ export const TIMELINE_LABEL: Record<string, string> = {
   aliclik_risk_exception: "Excepción al riesgo de Aliclik",
   // La guía automática del día programado (MOM §6.2) que no se pudo crear.
   aliclik_auto_guide_failed: "Guía automática no creada",
+  // MOM §6.1, «Confirmó por Chatby» (01-11-2026): la clienta escribió para
+  // confirmar y algo no cuadró. La nota dice qué; lo confirma una persona.
+  chatby_confirmation_held: "Confirmación por Chatby para la asesora",
   additional_output_reason: "Motivo de la salida adicional",
   recovery_discarded: "Recuperación de provincia descartada",
   confirmation_cancellation_task_created: "Tarea de anulación creada",

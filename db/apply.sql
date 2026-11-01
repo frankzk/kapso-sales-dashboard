@@ -595,4 +595,6 @@
 \ir migrations/0295_team_lead_blocks.sql
 \echo 'Applying 0296_invoices_claim_agency_shipping.sql'
 \ir migrations/0296_invoices_claim_agency_shipping.sql
+\echo 'Applying 0297_chatby_autoconfirm.sql'
+\ir migrations/0297_chatby_autoconfirm.sql
 \echo 'Done.'

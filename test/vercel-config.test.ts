@@ -92,7 +92,9 @@ describe("vercel.json", () => {
     // 31: la revisión de los webhooks de WooCommerce, que WooCommerce
     //     desactiva solo tras 5 fallos (MOM §38.14, 25-10-2026).
     // 32: cierre de stock Woo tras recepción e inventario, con turno recuperable (§38.18).
-    expect(crons).toHaveLength(32);
+    // 33: confirmación automática por Chatby y su guía Aliclik con tope diario
+    //     (0297, MOM §6.1, «Confirmó por Chatby», 01-11-2026).
+    expect(crons).toHaveLength(33);
     for (const c of crons) {
       expect(c.path.startsWith("/api/cron/")).toBe(true);
       expect(c.schedule.trim().split(/\s+/)).toHaveLength(5);

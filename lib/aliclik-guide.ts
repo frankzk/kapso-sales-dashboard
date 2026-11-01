@@ -831,8 +831,13 @@ export interface AliclikCreateResult {
  * poder firmar una guía suya como automática.
  */
 export interface AliclikGuideOrigin {
-  kind: "envio_programado";
-  /** El día programado (YYYY-MM-DD), que es por lo que se creó hoy. */
+  /**
+   * `envio_programado`: la guía del día programado (MOM §6.2).
+   * `confirmado_chatby`: la del pedido que confirmó por Chatby (MOM §6.1,
+   * «Confirmó por Chatby», 01-11-2026), con su tope diario.
+   */
+  kind: "envio_programado" | "confirmado_chatby";
+  /** El día (YYYY-MM-DD) por el que se creó hoy: el programado, o el de la pasada. */
   scheduledOn: string;
   /** El motivo que queda en el hecho `guide_registered`. */
   reason: string;
@@ -1242,7 +1247,7 @@ export async function createAliclikGuideFor(
         kind: "system",
         new_status: null,
         note:
-          `Guía de Aliclik creada ${guideCreatorPhrase(creator, Boolean(origin))} · ${orderNumber} · ` +
+          `Guía de Aliclik creada ${guideCreatorPhrase(creator, origin?.kind ?? false)} · ${orderNumber} · ` +
           `pedido ${ctx.row.order_name ?? "—"} · ` +
           `cobrar S/ ${(preview.collectTotal ?? 0).toFixed(2)} · ` +
           `${courierBlock.transportName ?? "courier"} S/ ${courierBlock.deliveryCost}`,

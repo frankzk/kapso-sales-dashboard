@@ -1,5 +1,41 @@
 # Deployment runbook
 
+### 01-11-2026 · Confirmó por Chatby: confirmación y guía Aliclik automáticas con tope (0297, MOM §6.1)
+
+Decisión del owner (01-11-2026). Cada 10 minutos (`/api/cron/chatby-autoconfirm`,
+`9,19,29,39,49,59 * * * *`) Kapta lee en Chatby —los mismos dos GET de la
+ficha, solo lectura, hasta 20 pedidos por pasada— los pedidos de Provincia COD
+en Por confirmar de las últimas 72 h. Si el mensaje de la clienta nombra el
+pedido, dice confirmar y pagar en casa, el monto coincide con el total (menos
+de S/ 1) y la dirección es completa y la del pedido, lo confirma por
+`register_confirmation_attempt_v2` (sin actor, `source = 'chatby'`). Después
+crea su guía Aliclik por el camino del botón, hasta 20 por día de Lima. Lo que
+no cuadra queda para la asesora con el motivo en la línea de tiempo. Sin
+variables nuevas: usa `CHATBY_API_KEY`, `ALICLIK_WRITE_ENABLED` y `CRON_SECRET`.
+
+1. **Migración `0297_chatby_autoconfirm.sql`**, a mano, ANTES del código (sin
+   ella el cron responde `skipped: sin_migracion_0297` y no hace nada). Crea
+   `chatby_auto_settings` (por organización: `enabled`, `guide_enabled`,
+   `daily_cap`, `window_hours`, `max_orders_per_run`, `recheck_minutes`) y
+   `chatby_auto_checks` (la marca de procesado por pedido: resultado, motivo, id
+   del mensaje y estado de la guía; sin conversación ni dirección), con RLS de
+   lectura y escritura solo del servidor. Inserta una fila **encendida** con
+   `daily_cap = 20` por organización con tiendas activas que no sea tienda
+   cliente de Grupo GF: lo pidió el owner. Es idempotente.
+2. Comprobar:
+   ```sql
+   select org_id, enabled, guide_enabled, daily_cap from chatby_auto_settings;
+   ```
+3. Desplegar el código. Primera pasada en seco, con el secreto:
+   `GET /api/cron/chatby-autoconfirm?dry=1` (lee Chatby y dice qué confirmaría y
+   qué guía cotizaría, sin escribir nada).
+4. Para apagarlo: `update chatby_auto_settings set enabled = false where org_id = …;`
+   (o `guide_enabled = false` para confirmar sin crear guías).
+
+**Marcha atrás.** Apagar la fila basta. Revertir el commit quita el cron; las
+tablas pueden quedarse (nadie más las lee). Lo ya confirmado y las guías creadas
+quedan como hechos del historial.
+
 ### 31-10-2026 · Equipo → Leads: bloques por asesora (0295)
 
 Aplicar `db/migrations/0295_team_lead_blocks.sql` antes del código. Instala

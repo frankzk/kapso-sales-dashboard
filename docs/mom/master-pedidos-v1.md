@@ -624,6 +624,125 @@ Registro:
 - La subetapa y el conteo de días se derivan de esos hechos. No hay un contador
   que alguien tenga que mantener.
 
+#### Confirmó por Chatby (decisión del owner, 01-11-2026)
+
+La clienta de **Provincia COD** que compra en la web responde al bot de
+confirmación de Chatby (§25) con un mensaje que arma la tienda: «Hola equipo
+Aurela, deseo confirmar mi pedido AUR900226 y pagaré S/ 178.00 en casa.», el
+producto y «Dirección: Jr huallaga 765 barrio huayco, San Martín, Tarapoto». Ese
+mensaje dice lo que la asesora valida al teléfono —el pedido, el monto, que paga
+al recibir y la dirección—, y el pedido seguía en Por confirmar hasta que alguien
+abría la ficha y leía la pestaña Chatby. Decisión del owner: **ese mensaje
+confirma solo, y el pedido confirmado así sale con su guía Aliclik sola, con un
+tope de 20 guías por día**.
+
+- **Cuándo.** Cada 10 minutos, todo el día (`/api/cron/chatby-autoconfirm`,
+  con `CRON_SECRET` como los demás). `?dry=1` lee y dice qué haría, sin escribir.
+- **Qué pedidos se leen.** Provincia COD (`classifyOperation`), en Por confirmar
+  · «Sin llamar» o «Por confirmar» (no «Volver a contactar» ni «Pendiente de
+  abono»: ahí hay una fecha o un abono pactado), creados hace a lo sumo 72 h,
+  vivos (sin anular ni reembolsar, en soles), **sin pagos registrados**, con
+  celular, sin recojo en agencia y sin un rechazo anotado en la nota del pedido
+  o de las gestiones. Ni Lima (no pasa por confirmación) ni Agencia (confirma con
+  el pago validado).
+- **Cuánto se lee.** Lo mismo que la ficha: los dos GET de `lib/chatby-api.ts`
+  (`fetchChatbyConversation`, solo lectura; Kapta nunca manda nada por Chatby).
+  Hasta **20 pedidos por pasada** (40 GET); primero los que nunca se leyeron, el
+  más nuevo primero, y después el que se leyó hace más. Un pedido que todavía no
+  escribió se vuelve a leer cada **30 minutos** mientras siga en la ventana. Dos
+  errores seguidos de Chatby paran las lecturas de esa pasada. Es la única
+  lectura de Chatby en segundo plano: la de §25 sigue siendo a pedido.
+- **Qué mensaje confirma** (`evaluateChatbyConfirmation`,
+  `lib/chatby-autoconfirm.ts`). Un mensaje **de la clienta** (`type = in`: nunca
+  el bot, el equipo ni un botón), de después de creado el pedido, que:
+  1. nombra **este** pedido, con o sin «#» (`chatbyMentionsOrder`: #AUR900226 no
+     es #AUR9002261 ni el #KP de la otra marca);
+  2. dice **confirmar**;
+  3. dice que **paga al recibir** («en casa», «contraentrega», «al recibir»);
+  4. dice un monto «S/ …» —el que sigue a «pagaré», si no el primero— que
+     difiere del total del pedido en **menos de S/ 1** (el redondeo de
+     `lib/payment-rounding.ts`);
+  5. trae «Dirección:» con una dirección **completa** —calle, jirón, avenida,
+     pasaje, prolongación, carretera, o manzana y lote, y su número
+     (`direccionConNumero`, §11.13)— y la del pedido también lo es;
+  6. esa dirección es **la del pedido**: toda la dirección del pedido está en el
+     mensaje, el mensaje no dice nada más que eso, la referencia y los nombres
+     del destino del pedido (departamento, provincia, distrito del Master), y
+     nombra el distrito o la provincia. Otra calle, otro número u otro distrito
+     («…, San Martín, Morales» en un pedido de Tarapoto) no confirma;
+  7. y después la clienta no escribió nada más que cortesía («gracias 🙏», «ok»)
+     o su ubicación.
+- **Lo que no confirma y queda para la asesora.** Si había un mensaje de
+  confirmación y algo de lo anterior no cuadra, o la clienta escribió que no lo
+  quiere («no lo deseo», «quiero anular», `explicitRejection`), o el equipo dejó
+  una nota de anulación, el pedido sigue en Por confirmar como hoy y queda el
+  hecho **`chatby_confirmation_held`** («Confirmación por Chatby para la
+  asesora») en la línea de tiempo, sin actor, con el motivo —el monto no
+  coincide, la dirección no es la del pedido, el distrito no es el del pedido,
+  escribió algo después…— y sin copiar la dirección. **Una sola vez**: ese pedido
+  ya no se vuelve a leer, la asesora lo confirma desde la mesa. Sin un mensaje
+  de confirmación (todavía no escribió) no se escribe nada.
+- **Cómo confirma.** Por el mismo registro atómico que la mesa:
+  `register_confirmation_attempt_v2`, la misma función del botón (v1) con
+  `source`, que ya usa el agente de voz. Resultado «Confirmó el pedido», canal
+  «Mensaje escrito», **sin actor** y `source = 'chatby'`; el `operation_id` sale
+  del pedido y del mensaje, así que un reintento devuelve lo escrito y no
+  duplica. Escribe `confirmation_contact` y `confirmed`, gasta el día de gestión
+  como cualquier intento y el pedido pasa a **Preparación · Por generar rótulo**
+  por la cadena normal. La nota dice «Confirmó por Chatby: mensaje de la clienta
+  del 01-11 a las 10:32 con el pedido #AUR900226, S/ 178.00 contra entrega y la
+  dirección del pedido.»; la línea de tiempo lo firma «Chatby». Justo antes de
+  escribir se relee la etapa: si una asesora lo confirmó o lo anularon mientras
+  se leía Chatby, no se toca.
+- **La guía Aliclik, con tope.** A los que confirmó la pasada (y que siguen sin
+  guía, dentro de las 72 h) les crea la guía por el **mismo camino que el
+  botón** y que la guía del día programado (§6.2, §10.2): `createAliclikGuideFor`
+  con todas sus rejas —`ALICLIK_WRITE_ENABLED`, prepago, rechazos en la puerta,
+  posible duplicado (`lib/aliclik-duplicate.ts`), riesgo del historial, salida
+  viva, pin respaldado, stock y cobertura del almacén, cotización del destino,
+  monto recalculado y el candado—, la transportadora más barata de las que se
+  pueden agendar y ninguna excepción escrita por nadie. **Hasta 20 por día de
+  Lima en toda la organización**, contando las ya creadas hoy. No toca: uno con
+  envío programado (es de la guía de ese día, §6.2), uno con «DNI y agencia
+  Shalom» guardado o con un pago registrado (de una persona, como en §6.2), ni
+  uno que ya tiene guía. Con Aliclik en rojo espera a la pasada siguiente sin
+  escribir nada; si otra creación tiene el candado, también. La guía lleva su
+  `guide_registered` sin actor con el motivo «Guía automática: #AUR900226 confirmó
+  por Chatby.» y `payload.auto.kind = confirmado_chatby`; la nota del lead dice
+  «Guía de Aliclik creada automáticamente (confirmó por Chatby) · …».
+- **Lo que no cuadra para la guía queda en la mesa como hoy**, en Preparación ·
+  Por generar rótulo, con el hecho `aliclik_auto_guide_failed` («Guía automática
+  no creada») y su motivo —sin cobertura, sin stock, posible duplicado, pin sin
+  respaldo…—. **Un intento por pedido**: lo que falló lo crea una persona. Sin
+  aviso por Telegram (la guía del día programado sí avisa: es una fecha
+  comprometida; esto es un pedido que espera como cualquier otro).
+- **Interruptores** (`chatby_auto_settings`, 0297, uno por organización):
+  `enabled` (toda la pasada), `guide_enabled` (solo la guía), `daily_cap` (20),
+  `window_hours` (72), `max_orders_per_run` (20) y `recheck_minutes` (30). Nace
+  **encendido** con 20 guías por día porque lo pidió el owner, y no para las
+  organizaciones cliente de Grupo GF (§29.15.1). Sin la tabla, o con la fila
+  apagada, la pasada no hace nada. Las claves de siempre: `CHATBY_API_KEY` para
+  leer y `ALICLIK_WRITE_ENABLED` / `stores.aliclik_enabled` para la guía.
+- **La marca de procesado** (`chatby_auto_checks`, una fila por pedido mirado):
+  el resultado (`confirmado`, `para_asesora`, `sin_confirmacion`,
+  `sin_conversacion`, `error`), el motivo, el id del mensaje y el estado de la
+  guía. **No guarda la conversación ni la dirección** (§25): lo que dijo la
+  clienta sigue en Chatby, a un clic desde la ficha.
+- **No es un estado nuevo.** El pedido confirmado por Chatby está en
+  Preparación como cualquier confirmado; el que no, en Por confirmar con su
+  subetapa de siempre. Lo nuevo son dos hechos y su origen.
+
+Dimensión al decidirlo (01-11-2026): entraban ~110–150 pedidos de Provincia COD
+por día, con ~100 en Por confirmar dentro de las 72 h en un momento cualquiera,
+y las asesoras confirmaban ~50–77 por día (40–60 con guía Aliclik). Con 20
+lecturas cada 10 minutos la ventana entera se relee en menos de una hora; el
+tope de 20 guías es cerca de un tercio de lo confirmado en un día.
+
+Implementación: `lib/chatby-autoconfirm.ts` (reglas puras),
+`lib/chatby-autoconfirm-server.ts` (carga, lectura y escritura),
+`app/api/cron/chatby-autoconfirm/route.ts`. Pruebas:
+`test/chatby-autoconfirm.test.ts`.
+
 ### 6.2 Preparación
 
 Responsable principal: Yelitza.
@@ -671,7 +790,9 @@ pedido aparecía como confirmado sin guía, igual que uno olvidado (#KP140347).
 
 Decisión del owner: en **Provincia COD**, el día programado la guía Aliclik se
 crea sola. Solo esos pedidos: «el automático solo lo programamos en fecha». Un
-pedido sin fecha programada sigue esperando a que una persona cree su guía.
+pedido sin fecha programada sigue esperando a que una persona cree su guía,
+salvo el que confirmó por Chatby (§6.1, «Confirmó por Chatby», 01-11-2026), que
+tiene su propia guía automática con tope diario.
 
 - **Cuándo.** Cada hora de 8:00 a. m. a 1:00 p. m. de Lima
   (`/api/cron/aliclik-scheduled`, 13–18 UTC), antes del corte de Aliclik
@@ -11259,7 +11380,11 @@ estables:
      chapa. Así se sabe sin abrir la pestaña si la clienta contestó al bot.
    - **A pedido:** se lee al abrir la ficha del pedido (para la cifra; antes,
      al abrir la pestaña), nunca en segundo plano para todos, con un tope de **5 segundos** para las dos llamadas y **un
-     minuto** de caché por celular en la memoria del servidor. Si falla, la
+     minuto** de caché por celular en la memoria del servidor. **La única
+     excepción** es la confirmación automática por Chatby (§6.1, «Confirmó por
+     Chatby», decisión del owner del 01-11-2026): los mismos dos GET, solo para
+     Provincia COD en Por confirmar de las últimas 72 h y con un tope de
+     lecturas por pasada. Si falla, la
      pestaña lo dice («No se pudo cargar la conversación de Chatby» y el
      motivo: la clave rechazada, el código de Chatby o que no respondió), con
      «Abrir en Chatby» si ya se encontró a la clienta; el resto de la ficha no
