@@ -1,9 +1,10 @@
 // «Reprogramado por el cliente» con fecha. El 10-10-2026 la fecha del reporte
-// agendaba la salida de Grupo GF de una vez (#908). Desde el 12-10-2026 (D9,
-// decisión 7: la fecha que da el cliente en la puerta se confirma, NUNCA de
-// forma automática) es la «Fecha que pidió el cliente»: queda en la parada
-// (`delivery_stops.requested_date`) y la tienda la confirma en Repro Lima, que
-// programa por el mismo camino que «Programar».
+// agendaba la salida de Grupo GF de una vez (#908). Del 12-10 al 01-11-2026
+// (D9, decisión 7) solo se anotaba y la tienda la confirmaba en Repro Lima.
+// Desde el 01-11-2026 (decisión del owner: Grupo GF le impone el acuerdo a la
+// tienda) la «Fecha que pidió el cliente» queda en la parada y programa la
+// salida de ese día (`syncDoorDateProgram`, lib/door-date-program.ts), por el
+// mismo camino que «Programar».
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -64,7 +65,7 @@ describe("el reporte y la pantalla", () => {
   const report = read("lib/stop-report.ts");
   const form = read("components/rider-route.tsx");
 
-  it("el reporte ya no programa: la fecha queda en la parada y la tienda la confirma (D9)", () => {
+  it("la app no programa por su cuenta: lo hace el único camino de reporte (01-11-2026)", () => {
     expect(actions).not.toContain("programFromReport");
     expect(actions).not.toContain("writeGfDispatchProgram");
     expect(actions).not.toContain("rescheduleDateProblem");
@@ -74,7 +75,7 @@ describe("el reporte y la pantalla", () => {
     expect(body).toContain("const requestedDate = requested === undefined ? undefined : requested?.trim() || null;");
     const write = body.slice(body.indexOf("await writeStopReport("));
     expect(write.slice(0, write.indexOf("}, { stop, routeStatus });"))).toContain("requestedDate,");
-    expect(body).toContain("Fecha que pidió el cliente: ${programDayLabel(requestedDate)}. La tienda la confirma antes de programarla.");
+    expect(body).toContain("Sale con Grupo GF el ${programDayLabel(requestedDate)}, la fecha que pidió el cliente.");
     expect(body).not.toContain("prográmalo en Grupo GF.");
   });
 
@@ -85,14 +86,14 @@ describe("el reporte y la pantalla", () => {
     expect(report).toContain("...(keeps ? (requestedDate === undefined ? {} : { requested_date: requestedDate }) : { requested_date: null }),");
   });
 
-  it("el campo es opcional, sale solo con ese motivo, va de hoy a 60 días y dice que la tienda la confirma", () => {
+  it("el campo es opcional, sale solo con ese motivo, va de hoy a 60 días y dice que se programa solo", () => {
     expect(form).toContain('{status === "no_entregado" && reason === "reprogramado" && (');
     expect(form).toContain('Fecha que pidió el cliente <span className="font-normal text-ink-500">(opcional)</span>');
     expect(form).toContain("min={limaToday()}");
     expect(form).toContain("max={limaDayPlus(REQUESTED_DATE_MAX_DAYS)}");
     // El tope del teléfono es el mismo que valida el servidor.
     expect(form).toContain(`const REQUESTED_DATE_MAX_DAYS = ${RESCHEDULE_MAX_DAYS};`);
-    expect(form).toContain("La tienda la confirma con el cliente antes de programarla.");
+    expect(form).toContain("Sale ese día con Grupo GF: Kapta lo programa solo.");
     expect(form).not.toContain("Nueva fecha <span");
     expect(form).not.toContain("No se pudo agendar");
     // Abre con la fecha guardada y, sin tocarla, no se manda: una fecha que ya
@@ -110,5 +111,32 @@ describe("el reporte y la pantalla", () => {
   it("«Programar» de Grupo GF y Repro Lima usan la misma escritura", () => {
     expect(read("app/dashboard/courier/actions.ts")).toContain("await writeGfDispatchProgram(admin, {");
     expect(read("lib/repro-lima-program.ts")).toContain("await writeGfDispatchProgram(admin, {");
+  });
+});
+
+describe("la fecha de la puerta programa la salida (01-11-2026)", () => {
+  it("el reporte la programa después de guardar, y la quita si el reporte ya no la trae", () => {
+    const report = read("lib/stop-report.ts");
+    const recompute = report.lastIndexOf("await recomputeOrderMasterSafe(admin, [stop.order_id])");
+    const sync = report.indexOf("await syncDoorDateProgram(admin, {");
+    expect(sync).toBeGreaterThan(recompute);
+    expect(report).toContain("day: keeps && requestedDate ? requestedDate : null,");
+    expect(report).toContain("if (!keeps || requestedDate !== undefined) {");
+  });
+
+  it("con el motivo del motorizado, que Repro Lima lee como «Acordado en la puerta»", async () => {
+    const { doorProgramReason } = await import("@/lib/door-date-program");
+    const { programOrigin } = await import("@/lib/repro-lima");
+    const reason = doorProgramReason("Alexis", "2026-10-31");
+    expect(reason).toBe("Reprogramado por el cliente (reporte de la parada de Alexis del 31/10): acordado en la puerta.");
+    expect(programOrigin(reason)).toBe("motorizado");
+    expect(reason.length).toBeLessThanOrEqual(200);
+    const door = read("lib/door-date-program.ts");
+    // Nunca toca un programa de Repro Lima ni de Despacho.
+    expect(door).toContain('if (program && programOrigin(program.reason) === "motorizado") {');
+  });
+
+  it("al pasar el paquete a la ruta siguiente se borra el programa: ya está en la caja", () => {
+    expect(read("lib/gf-carry-kept-server.ts")).toContain('await clearGfDispatchPrograms(admin, [program as GfProgramRow], input.actor, "Pasó a la ruta del motorizado, que conserva el paquete.");');
   });
 });

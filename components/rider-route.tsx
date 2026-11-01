@@ -1426,7 +1426,7 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
               className={cn(RIDER_FIELD, "mt-1.5")}
             />
             <span id={`reprograma-${stop.id}`} className="mt-1 block text-xs font-normal text-ink-500">
-              La tienda la confirma con el cliente antes de programarla.
+              Sale ese día con Grupo GF: Kapta lo programa solo.
             </span>
           </label>
         )}

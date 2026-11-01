@@ -383,8 +383,9 @@ describe("el día 1 de producción, de punta a punta", () => {
 
     const rider = byId.get("o3")!;
     expect(rider).toMatchObject({ bucket: "hoy", overdue: true, action: "mantener", group: "fuera", boxLabel: "Con Roy desde lun 12/10", programReason: RIDER_REASON });
-    expect(rider.chips).toContainEqual({ tone: "warn", text: RETRY_UNCONFIRMED });
-    expect(rider.chips).toContainEqual({ tone: "warn", text: "Fecha del motorizado sin confirmar: lun 12/10" });
+    // La fecha de la puerta es el acuerdo (01-11-2026): no espera confirmación.
+    expect(rider.chips).not.toContainEqual({ tone: "warn", text: RETRY_UNCONFIRMED });
+    expect(rider.chips).toContainEqual({ tone: "info", text: "Acordado en la puerta: lun 12/10 · no salió" });
 
     const agreed = byId.get("o8")!;
     expect(agreed).toMatchObject({ bucket: "manana", dayFrom: "acuerdo", action: "mantener", actionSource: "acuerdo", decidedLine: "Decidió diana 12/10 16:00" });

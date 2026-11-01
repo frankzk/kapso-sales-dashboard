@@ -59,8 +59,9 @@ export interface ReportStopInput {
    *  de S/ 0,50 (MOM §30.9): abren la observación de monto con su motivo. */
   reasonCode?: string | null;
   reasonNote?: string | null;
-  /** Fecha que pidió el cliente (YYYY-MM-DD, Lima; 12-10-2026, MOM §9.5): queda
-   *  en la parada; la tienda la confirma en Repro Lima; nunca programa.
+  /** Fecha que pidió el cliente (YYYY-MM-DD, Lima; MOM §29.7): queda en la
+   *  parada y, desde el 01-11-2026, programa la salida de Grupo GF para ese
+   *  día (`syncDoorDateProgram`); la tienda puede cambiarla en Repro Lima.
    *  undefined conserva la que ya tenía; null la borra. */
   requestedDate?: string | null;
   /** @deprecated Nombre de la pantalla del 10-10-2026 (pestañas abiertas sin
@@ -230,7 +231,7 @@ export async function reportStop(input: ReportStopInput): Promise<ReportResult> 
   // la confirma antes de programarla.
   const asked =
     input.status === "no_entregado" && input.outcomeReason === "reprogramado" && requestedDate
-      ? ` Fecha que pidió el cliente: ${programDayLabel(requestedDate)}. La tienda la confirma antes de programarla.`
+      ? ` Sale con Grupo GF el ${programDayLabel(requestedDate)}, la fecha que pidió el cliente.`
       : "";
   // «Me lo quedo y lo llevo»: el paquete pasa a su ruta de ese día sin volver
   // a la oficina. El reporte ya quedó; si el traspaso no se puede, se dice.

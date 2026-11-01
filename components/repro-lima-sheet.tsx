@@ -198,7 +198,7 @@ const CHIP_TONE: Record<ReproChipKey, BadgeTone> = {
   acuerdo_vencido: "warn",
   programado_gf_sin_acuerdo: "info",
   programado_acuerdo_anterior: "warn",
-  fecha_motorizado: "warn",
+  acordado_puerta: "info",
   pidio: "info",
 };
 
@@ -981,7 +981,7 @@ export function ReproLimaSheet({
             <dt className="text-ink-500">Pidió</dt>
             <dd className="text-ink-900">
               {current.requestedDate
-                ? `${programDayLabel(current.requestedDate)} · ${current.requestedDate < today ? "ya pasó" : "sin confirmar"}`
+                ? `${programDayLabel(current.requestedDate)} · ${current.requestedDate < today ? "ya pasó" : "acordado en la puerta"}`
                 : "No consta una fecha pedida"}
             </dd>
             <dt className="text-ink-500">Salidas</dt>
