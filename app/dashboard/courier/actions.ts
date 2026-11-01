@@ -268,6 +268,9 @@ export interface CourierOperationsSnapshot {
   blockedCount: number;
   /** Los excluidos con su motivo; `blockedCount` es su tamaño. */
   blocked: CourierBlockedOrder[];
+  /** No entregados de Lima que la tienda todavía no acordó en Repro Lima:
+   *  no entran a la cola (MOM §29.13, 01-11-2026). */
+  awaitingRepro: number;
   sourceCount: number;
 }
 
@@ -280,6 +283,7 @@ const EMPTY_OPERATIONS: CourierOperationsSnapshot = {
   riders: [],
   blockedCount: 0,
   blocked: [],
+  awaitingRepro: 0,
   sourceCount: 0,
 };
 
@@ -766,6 +770,8 @@ async function loadCourierOperations(
   const ownInRequest = new Set((ownRequestRows as Array<{ shipment_id: string }>).map((request) => request.shipment_id));
 
   let blockedCount = 0;
+  // No entregados de Lima que la tienda todavía no acordó en Repro Lima.
+  let awaitingRepro = 0;
   const blocked: CourierBlockedOrder[] = [];
   const available: CourierAvailableOrder[] = [];
   const returnable: CourierReturnableOrder[] = [];
@@ -797,7 +803,11 @@ async function loadCourierOperations(
       // salida sigue viva (una reprogramación de Aliclik, por ejemplo) y la
       // lleva su courier, o no queda ninguna viva que sacar. Nunca
       // desaparece en silencio de la cola.
-      if (isReprogramStage(order.macro_stage, order.macro_substage)) block(order, reprogramBlockReason(outputs, replacedIds));
+      if (isReprogramStage(order.macro_stage, order.macro_substage)) {
+        // Sin acuerdo de la tienda es de Repro Lima, no de la cola (01-11-2026).
+        if (awaitingStoreAgreement(order, programByOrder)) awaitingRepro += 1;
+        else block(order, reprogramBlockReason(outputs, replacedIds));
+      }
       continue;
     }
     const fillable = own ? null : pickFillableRouteOutput(outputs);
@@ -870,7 +880,11 @@ async function loadCourierOperations(
       tandersReview: review,
       ownOutput: own ? { outputCode: own.output_code ?? null } : null,
     };
+    // La caja que el motorizado todavía tiene se recibe igual: es del courier.
+    // Lo demás de «Por reprogramar Lima» entra solo con el día que acordó la
+    // tienda en Repro Lima (MOM §29.13, «Reintentos para hoy», 01-11-2026).
     if (ownBox && own && decision?.action === "recibir_en_oficina") returnable.push({ ...row, route: ownBox, shipmentId: own.id });
+    else if (awaitingStoreAgreement(order, programByOrder)) awaitingRepro += 1;
     else available.push(row);
   }
 
@@ -1078,7 +1092,18 @@ async function loadCourierOperations(
     if (nueva) output.reproLimaChip = reproCajaNuevaChip(nueva.day);
   }
 
-  return { available, returnable, returning, accepted, routes, riders, blockedCount, blocked, sourceCount: sourceCount ?? available.length };
+  return { available, returnable, returning, accepted, routes, riders, blockedCount, blocked, awaitingRepro, sourceCount: sourceCount ?? available.length };
+}
+
+/**
+ * ¿Es un no entregado de Lima que la tienda todavía no acordó? (MOM §29.13,
+ * 01-11-2026, decisión del owner: solo la tienda llama.) El acuerdo con Grupo
+ * GF deja su día en `gf_dispatch_programs` (Repro Lima al decidir, o al
+ * recibir la caja); sin ese día, el pedido es de Repro Lima, no de la cola.
+ * Un programa anterior a la regla, puesto desde Despacho, se respeta.
+ */
+function awaitingStoreAgreement(order: { order_id: string; macro_stage: string | null; macro_substage: string | null }, programs: Map<string, DispatchProgram>): boolean {
+  return isReprogramStage(order.macro_stage, order.macro_substage) && !programs.has(order.order_id);
 }
 
 /**

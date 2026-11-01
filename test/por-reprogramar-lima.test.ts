@@ -356,7 +356,7 @@ describe("4. «Desde la lista» ofrece lo que otro courier no entregó", () => {
     expect(devuelta).toMatchObject({ ok: true, motivo: null });
   });
 
-  it("cuenta en «Por asignar» y en «Por reprogramar», con casilla", () => {
+  it("cuenta en «Por asignar» y, con el día acordado por la tienda, en «Reintentos para hoy»", () => {
     const row = (over: Partial<QueueRow>): QueueRow => ({
       orderId: over.orderId ?? "x",
       orderName: "#KP135161",
@@ -384,9 +384,9 @@ describe("4. «Desde la lista» ofrece lo que otro courier no entregó", () => {
     const rows = [row({ orderId: "kp135161" }), row({ orderId: "otro", macroStage: "preparacion", macroSubstage: "por_armar", failedOutput: null })];
     expect(isPorReprogramar(rows[0]!)).toBe(true);
     expect(filterQueue(rows, EMPTY_QUEUE_FILTERS, "2026-09-29").map((q) => q.orderId)).toContain("kp135161");
-    const tiles = queueTileCounts(rows, rows, "2026-09-29");
-    expect(tiles.por_asignar).toBe(2);
-    expect(tiles.por_reprogramar).toBe(1);
+    expect(queueTileCounts(rows, "2026-09-29")).toMatchObject({ por_asignar: 2, reintentos_hoy: 0 });
+    const acordado = [row({ orderId: "kp135161", programmedFor: "2026-09-29" }), rows[1]!];
+    expect(queueTileCounts(acordado, "2026-09-29")).toMatchObject({ por_asignar: 2, reintentos_hoy: 1 });
   });
 });
 

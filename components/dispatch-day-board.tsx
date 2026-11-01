@@ -136,6 +136,9 @@ interface Props {
   run: (action: () => Promise<CourierActionResult>) => void;
   /** «No entregado» que siguen en una caja, de cualquier fecha: tarjeta «Devoluciones». */
   pendingReturns?: PendingReturn[];
+  /** No entregados de Lima que la tienda todavía no acordó en Repro Lima: no
+   *  están en la cola (MOM §29.13, 01-11-2026). */
+  awaitingRepro?: number;
 }
 
 const money = (n: number) => `S/ ${n.toFixed(2)}`;
@@ -594,7 +597,7 @@ export function DispatchDayBoard(props: Props) {
   }, [props.accepted, scanDay]);
   const declined = useMemo(() => declinedPackages(boxes), [boxes]);
   const dayCod = boxes.reduce((sum, b) => sum + b.loads.reduce((s, l) => s + activeDispatchItems(l.items).length, 0), 0);
-  const queueTiles = useMemo(() => queueTileCounts(queue, allRows, day), [queue, allRows, day]);
+  const queueTiles = useMemo(() => queueTileCounts(queue, day), [queue, day]);
   const boxTiles = useMemo(() => boxTileCounts(boxes), [boxes]);
   /** Tocar una tile de la cola: abre «Desde la lista» con ese filtro (o lo quita). */
   const tapQueueTile = (tile: QueueTile) => {
@@ -724,10 +727,22 @@ export function DispatchDayBoard(props: Props) {
         </div>
         <p className="min-w-0 text-[13px] text-ink-500">
           <b className="font-semibold tabular-nums text-ink-900">{queue.length.toLocaleString("es-PE")}</b> por asignar
+          {(props.awaitingRepro ?? 0) > 0 && (
+            <>
+              {" · "}
+              <a
+                href="/dashboard/pedidos/repro-lima"
+                className="text-ink-500 underline decoration-line-strong underline-offset-2 hover:text-brand-700"
+                title="No entregados de Lima que la tienda todavía no acordó con el cliente. Entran aquí, en «Reintentos para hoy», cuando la tienda confirma el día."
+              >
+                <b className="font-semibold tabular-nums text-ink-900">{props.awaitingRepro}</b> esperan a la tienda en Repro Lima
+              </a>
+            </>
+          )}
           {boxes.length > 0 && <> · <b className="font-semibold tabular-nums text-ink-900">{boxes.length}</b> {boxes.length === 1 ? "caja" : "cajas"} · <b className="font-semibold tabular-nums text-ink-900">{dayCod}</b> paq.</>}
         </p>
         <div role="group" aria-label="Excepciones del día" className="flex flex-wrap items-center gap-2 lg:ml-auto">
-          <AttentionPill icon={IconRepeat} label="Por reprogramar" count={queueTiles.por_reprogramar} hint={QUEUE_TILE_LABEL.por_reprogramar.hint} active={queueTileActive(filters, "por_reprogramar") && method === "lista"} onClick={() => tapQueueTile("por_reprogramar")} />
+          <AttentionPill icon={IconRepeat} label="Reintentos para hoy" count={queueTiles.reintentos_hoy} hint={QUEUE_TILE_LABEL.reintentos_hoy.hint} active={queueTileActive(filters, "reintentos_hoy") && method === "lista"} onClick={() => tapQueueTile("reintentos_hoy")} />
           <AttentionPill icon={IconUndo} label="Devoluciones" count={pendingReturns.length} hint="No entregados que el motorizado tiene que traer de vuelta, de cualquier fecha. Toca para escanear y confirmar que llegaron a la oficina." active={method === "devoluciones"} onClick={() => setMethod((m) => (m === "devoluciones" ? "qr" : "devoluciones"))} />
           {returning.length > 0 && (
             <AttentionPill icon={IconUndo} label="En devolución" count={returning.length} hint="Cajas que el motorizado todavía tiene y ya se reemplazaron por una salida nueva («Sacar con salida nueva»). Cuando las traiga, recíbelas en oficina: vuelven a stock y no se reprograman." active={returningOpen} onClick={() => setReturningOpen((v) => !v)} />

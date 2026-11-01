@@ -13209,6 +13209,33 @@ reprogramar»**, antes de «Tomados sin caja», cuenta los pedidos de Grupo GF e
 aplica ese filtro de etapa y subetapa. La versión del resolver sube a
 `mom-v1.15`.
 
+**«Reintentos para hoy»: Grupo GF solo ve lo que la tienda ya acordó
+(01-11-2026, decisión del owner, entrega 1 de la propuesta «Repro Lima y Grupo
+GF Courier: separar funciones»).** Llamar al cliente y decidir un reintento en
+Lima es **solo de la tienda**, en Repro Lima (§9.5). Grupo GF es el courier:
+recibe lo acordado y lo saca.
+
+- **La cola de Despacho del día** ya no trae los «En curso · Por reprogramar
+  Lima» sin acuerdo. Un pedido de esa etapa entra solo con su día en
+  `gf_dispatch_programs`, que escribe Repro Lima al decidir con Grupo GF (o al
+  recibir la caja que el acuerdo esperaba, §29.6). Un programa puesto desde
+  Despacho antes de esta regla se respeta. Lo mismo para «Sin condiciones»:
+  un reprogramado sin acuerdo no se lista ahí (`awaitingStoreAgreement`,
+  `app/dashboard/courier/actions.ts`).
+- **La caja que el motorizado todavía tiene** sigue llegando a Despacho, con o
+  sin acuerdo: recibirla en oficina es trabajo del courier («Devoluciones»).
+- **La tarjeta «Por reprogramar» pasa a «Reintentos para hoy»**
+  (`reintentos_hoy`, `isRetryForToday`, `lib/dispatch-day.ts`): cuenta los
+  reprogramados de la cola con su día acordado hoy o ya vencido. Al tocarla
+  filtra esa etapa en el apartado «Programados hoy». Lo acordado para otro
+  día espera en «Programados mañana» o «Programados después».
+- **Junto a «por asignar»** la línea dice cuántos esperan a la tienda («N
+  esperan a la tienda en Repro Lima»), con enlace a Repro Lima.
+- **Lo que no cambia todavía.** Por QR, Despacho todavía puede meter en una caja
+  un reprogramado sin acuerdo que tenga en la mano. Tampoco cambian el permiso
+  `repro_lima.manage` del rol «Despacho y Grupo GF» ni «Programar». Son las
+  entregas 2 y 4 de la propuesta.
+
 **Devoluciones en Rutas y el rechazo en puerta (v1.16, 22-09-2026).** Todo
 «No entregado» que salió en una caja tiene que volver físicamente. En Rutas,
 la columna **«Devolver»** dice devueltos / por devolver de cada ruta (verde
