@@ -209,6 +209,11 @@ export interface PickupKeyPanel {
     pickupState: string | null;
   } | null;
   /**
+   * La guía viva de OLVA, si el pedido va por Olva y no por Shalom: entonces el
+   * paso «DNI y agencia Shalom» no pide nada y dice por dónde va.
+   */
+  olvaGuide: { guideCode: string | null } | null;
+  /**
    * El envío automático de la clave al validar (0173), listo para que el botón
    * diga la verdad ANTES de pulsarlo.
    *
@@ -248,9 +253,9 @@ export async function loadPaymentPanel(
     sb.from("pickup_key_views").select("id,viewed_at,reason,override").eq("order_id", orderId).order("viewed_at", { ascending: false }).limit(50),
     sb
       .from("shipments")
-      .select("guide_code,shalom_codigo,delivery_status,pickup_state,custody_state,created_at")
+      .select("courier,guide_code,shalom_codigo,delivery_status,pickup_state,custody_state,created_at")
       .eq("order_id", orderId)
-      .eq("courier", "shalom")
+      .in("courier", ["shalom", "olva"])
       .order("created_at", { ascending: false }),
   ]);
 
@@ -312,17 +317,21 @@ export async function loadPaymentPanel(
   // que poder corregir el DNI o la agencia y volver a crear, que es exactamente
   // lo que manda hacer el modal cuando algo salió mal.
   type ShalomShipmentRow = {
+    courier: string;
     guide_code: string | null;
     shalom_codigo: string | null;
     delivery_status: string;
     pickup_state: string | null;
     custody_state: string | null;
   };
-  const shalomLive = ((shalomRes.data as ShalomShipmentRow[] | null) ?? []).find(
-    (row) =>
-      row.custody_state !== "devuelto" &&
-      ["pendiente", "en_ruta", "por_preparar"].includes(row.delivery_status),
-  );
+  const agencyRows = (shalomRes.data as ShalomShipmentRow[] | null) ?? [];
+  const isLive = (row: ShalomShipmentRow) =>
+    row.custody_state !== "devuelto" && ["pendiente", "en_ruta", "por_preparar"].includes(row.delivery_status);
+  const shalomLive = agencyRows.find((row) => row.courier === "shalom" && isLive(row));
+  // UN PEDIDO QUE YA VA POR OLVA no necesita el destino de Shalom (owner,
+  // 01-11-2026, #KP143233): el paso 1 pedía DNI y agencia de Shalom a un pedido
+  // con su guía de Olva creada. Con una guía viva de Olva, el paso lo dice.
+  const olvaLive = shalomLive ? undefined : agencyRows.find((row) => row.courier === "olva" && isLive(row));
   const shalomGuide: PickupKeyPanel["shalomGuide"] = shalomLive
     ? {
         guideCode: shalomLive.guide_code,
@@ -398,6 +407,7 @@ export async function loadPaymentPanel(
       canEditShalomDraft: perms.can("master.edit"),
       discountException: { ...discountException(keyCtx), max: DISCOUNT_EXCEPTION_MAX },
       shalomGuide,
+      olvaGuide: olvaLive ? { guideCode: olvaLive.guide_code } : null,
       keyAutosend: {
         enabled: autosendOn,
         unlocks,

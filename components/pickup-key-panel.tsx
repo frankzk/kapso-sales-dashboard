@@ -339,7 +339,7 @@ export function PickupKeyPanel({
           ) : null}
           . No hay que cobrar en la entrega ni cargar comprobante.
         </Banner>
-        {shalomDestination && panel.canEditShalomDraft && (
+        {shalomDestination && panel.canEditShalomDraft && !panel.olvaGuide && (
           <ShalomDestinationZone orderId={orderId} storeId={panel.storeId} shalomGuide={panel.shalomGuide} />
         )}
         {error && (
@@ -428,6 +428,7 @@ export function PickupKeyPanel({
           orderTotal={panel.orderTotal}
           existing={panel.payments}
           shalomGuide={panel.shalomGuide}
+          olvaGuide={panel.olvaGuide}
           pending={pending}
           onRegistered={() => {
             void changed();
@@ -1981,6 +1982,7 @@ function VoucherForm({
   orderTotal,
   existing,
   shalomGuide,
+  olvaGuide,
   pending,
   onRegistered,
   onError,
@@ -1993,6 +1995,7 @@ function VoucherForm({
   orderTotal: number | null;
   existing: PaymentRow[];
   shalomGuide: PanelData["shalomGuide"];
+  olvaGuide: PanelData["olvaGuide"];
   pending: boolean;
   onRegistered: () => void;
   onError: (msg: string | null) => void;
@@ -2229,6 +2232,21 @@ function VoucherForm({
             visto cuando está hecho), título y su estado en chapa. Antes había
             además una barra de pasos arriba que repetía los mismos tres títulos. */}
         <ol className="min-w-0">
+          {olvaGuide ? (
+            // Va por Olva: el destino de Shalom no aplica y no se pide.
+            <Step n={1} last={!hasKinds} done title="Va por Olva" badge={<Badge>Guía creada</Badge>}>
+              <p className="text-[13px] leading-5 text-ink-600">
+                El pedido sale por Olva
+                {olvaGuide.guideCode ? (
+                  <>
+                    {" "}
+                    (guía <span className="tabular-nums">{olvaGuide.guideCode}</span>)
+                  </>
+                ) : null}
+                : no hace falta DNI ni agencia de Shalom.
+              </p>
+            </Step>
+          ) : (
           <Step
             n={1}
             last={!hasKinds}
@@ -2248,6 +2266,7 @@ function VoucherForm({
                 pago: un cobro no puede quedarse esperando a un DNI. */}
             <ShalomDestinationFields draft={shalom} shalomGuide={shalomGuide} />
           </Step>
+          )}
 
           {hasKinds && (
             <>

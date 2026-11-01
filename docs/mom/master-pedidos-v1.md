@@ -8563,6 +8563,12 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
       (`offersShalomDestination`, `lib/order-payment-panel.ts`).
     - Permiso: el del borrador, `master.edit` (ver «Ver no es tocar»), no el de
       registrar pagos: aquí no se registra ninguno.
+  - **Si el pedido ya va por Olva, no se pide (owner, 01-11-2026, #KP143233).**
+    Con una guía viva de Olva y ninguna de Shalom, el paso 1 de «Registrar un
+    pago» dice «Va por Olva» con su guía, sin campos, y el bloque del pedido
+    pagado no aparece: pedir DNI y agencia de Shalom a un pedido que ya tiene
+    su courier de agencia era pedir un dato que no se va a usar. Una guía de
+    Olva anulada o devuelta no cuenta: el destino se vuelve a poder preparar.
     - Con la guía Shalom viva el bloque es de solo lectura, igual que en el
       paso 1: el destinatario y el destino ya viajan en el rótulo.
     - «Abrir Shalom» / crear la guía trae puestos el documento y la agencia
