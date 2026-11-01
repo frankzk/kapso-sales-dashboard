@@ -5375,3 +5375,18 @@ tienda». Sin variables de entorno nuevas; `MOM_RESOLUTION_VERSION` no cambia.
    ```
 3. Desplegar el código. Los leads nuevos del botón se marcan solos; los que ya
    estaban en la cola se marcan cuando la sincronización los vuelve a leer.
+
+### 01-11-2026 · Grupo GF: el reprogramado que el motorizado conserva pasa sin su hoja (sin migración, MOM §29.7)
+
+Pedido del owner. En Reparto y liquidación, «Sale con él en otra ruta…» en un
+reprogramado que sigue en su caja, y la lista de lo que el motorizado conserva
+de rutas anteriores con «Pasar a esta ruta». En la app, «Me lo quedo y lo
+llevo mañana» al reportar un reprogramado. Usa `gf_carry_over` (0234, 0248),
+que ya está en la base. Sin migración, crons ni variables.
+
+1. **El código**, por el camino de siempre.
+2. **Comprobar** con un reprogramado de Alexis: al pasarlo, la parada vieja
+   dice «Pasó a la ruta del dd/mm» y la ruta nueva tiene la parada pendiente.
+
+**Marcha atrás.** Revertir el commit. Lo ya pasado queda como un traspaso de
+la hoja.

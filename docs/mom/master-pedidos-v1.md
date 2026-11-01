@@ -12336,6 +12336,45 @@ cargar: #KP138029 (S/ 89) y #KP138037 (S/ 567) del 01/10, entregados el 02/10.
 - Si la hoja del día siguiente no lo trae, no se pasa: se le pregunta a quien
   liquida, porque una parada sin reporte frena el cierre de esa ruta.
 
+**El reprogramado que el motorizado conserva, sin su hoja (01-11-2026, pedido
+del owner).** El traspaso de arriba solo ocurría al cargar la hoja del día
+siguiente y solo si la hoja nombraba el paquete. Del 21 al 31/10 no se cargó
+ninguna hoja de Alexis: sus reprogramados quedaron «Por devolver» en la caja
+vieja aunque él los tuviera y los volviera a llevar, y sus rutas, con 268
+paradas sin reporte. Ahora el traspaso no espera la hoja:
+
+- **En Reparto y liquidación** (quien arma rutas, `routes.manage`), un «No
+  entregado · Reprogramado» que sigue en su caja de Grupo GF, sin devolver ni
+  pasar, ofrece **«Sale con él en otra ruta…»**: se elige el día (propone el
+  siguiente a la ruta, o mañana si ese ya pasó; cualquier día después de la
+  ruta y hasta 7 días adelante) y pasa con «Pasar».
+- **Arriba del panel de la ruta**, la lista **«{motorizado} conserva N
+  reprogramados de rutas anteriores sin ruta nueva»**: los de sus rutas de los
+  últimos 30 días que siguen en su caja vieja, el más reciente por pedido y sin
+  los que ya tienen parada en esa ruta. Cada uno con **«Pasar a esta ruta»**.
+  Un pedido anulado en la tienda sale con «Anulado: vuelve a la oficina» y sin
+  botón: no pasa (como arriba).
+- **En la app**, al reportar «No entregado · Reprogramado» de un paquete de su
+  caja, el motorizado puede marcar **«Me lo quedo y lo llevo mañana»**: el
+  paquete pasa a su ruta del día siguiente sin volver a la oficina. Sin
+  marcarlo, vuelve a la oficina como siempre. Vale para cualquier motorizado de
+  Grupo GF y es opcional en cada reporte. El reporte se guarda primero; si el
+  traspaso no se puede, la app lo dice y pide avisar a Coordinación.
+- **Es el mismo traspaso** que el de la hoja (`gf_carry_over`, 0234 y 0248):
+  sale de la caja anterior con `carried_over` y `package_removed`, entra
+  cotejado en una carga adicional de esa ruta y pasa a custodia, con su parada
+  pendiente. La parada anterior dice «Pasó a la ruta del dd/mm». Si Despacho
+  está armando la carga de ese día, no pasa y lo dice («pasa los reprogramados
+  cuando él la reciba»).
+- Sin migración. Implementación: `lib/gf-carry-kept.ts` (`carryKeptProblem`,
+  `defaultCarryDate`, `isKeptReprogrammed`), `lib/gf-carry-kept-server.ts`
+  (`carryKeptStop`, `loadKeptReprogrammed`), `carryKeptReprogrammed`
+  (`app/dashboard/rutas/actions.ts`), `loadCourierRouteReport`
+  (`app/dashboard/courier/actions.ts`), `keepForDate` en `reportStop`
+  (`app/reparto/actions.ts`), `CarryKept` y `KeptPanel`
+  (`components/routes.tsx`) y la casilla de `components/rider-route.tsx`.
+  Pruebas: `test/gf-carry-kept.test.ts`.
+
 **La fecha que pidió el cliente (12-10-2026).** Del 10 al 12-10-2026 el
 reporte «No entregado · Reprogramado por el cliente» ofrecía «Nueva fecha
 (opcional)» y, con fecha, programaba la salida en Grupo GF con el motivo
