@@ -101,6 +101,13 @@ begin
  exception when others then failed:=true; end;
  if not failed then raise exception 'last recovery store access removed'; end if;
  if (select count(*) from lead_routing_audit where org_id=o)<>2 then raise exception 'settings audit missing/duplicated'; end if;
+ -- A departed advisor must not keep appointments hidden from the replacement team.
+ cfg:=jsonb_set(cfg,'{0,blocks}','["carrito_reciente","interes_reciente","nuevo_sin_intencion","pendiente_con_interes","recuperacion"]');
+ perform save_lead_routing(o,owner_id,2,true,24,cfg);
+ delete from user_store_access where user_id=rec_id and store_id=s;
+ set constraints all immediate;
+ select id into r from leads where store_id=s and name='own-appointment';
+ if not (lead_routing_scope(main_id,array[s],r.id)->>'allowed')::boolean then raise exception 'former advisor orphaned an appointment'; end if;
  if has_function_privilege('authenticated','public.save_lead_routing(uuid,uuid,integer,boolean,integer,jsonb)','execute')
  or has_function_privilege('anon','public.lead_routing_scope(uuid,uuid[],uuid)','execute')
  or has_function_privilege('authenticated','public.claim_routed_lead(uuid,uuid)','execute')

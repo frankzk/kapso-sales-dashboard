@@ -28170,7 +28170,10 @@ with scope as materialized (
   where d.created_at<=now() group by d.store_id,d.draft_order_gid
 ), calls as materialized (
   select c.lead_id,max(c.occurred_at) as last_call_at,
-    (array_agg(c.vendedora order by c.occurred_at desc,c.id desc) filter(where b.next_followup_at is not null and c.next_followup_at=b.next_followup_at))[1] as appointment_owner
+    (array_agg(c.vendedora order by c.occurred_at desc,c.id desc) filter(where b.next_followup_at is not null and c.next_followup_at=b.next_followup_at
+      and exists(select 1 from memberships m join stores st on st.org_id=m.org_id and st.id=c.store_id
+        where m.user_id=c.vendedora and (m.role in ('owner','admin') or exists(select 1 from user_store_access sa where sa.user_id=m.user_id and sa.store_id=st.id))
+        and (m.role in ('owner','admin','vendedora') or exists(select 1 from membership_roles mr where mr.org_id=m.org_id and mr.user_id=m.user_id and mr.role='asesora')))))[1] as appointment_owner
   from lead_calls c join base b on b.id=c.lead_id and b.store_id=c.store_id
   where b.restricted and b.category in ('open','hot') and c.kind='call' and c.vendedora is not null and c.occurred_at<=now() group by c.lead_id
 ), classified as materialized (

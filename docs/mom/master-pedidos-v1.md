@@ -4502,7 +4502,9 @@ completa y activarla es un acto humano posterior.
   reencola a nadie: frescura de siete días, intentos, exclusiones y citas siguen
   las reglas de 0289/0291.
 - La reserva propia vigente y la cita de una llamada firmada conservan su
-  asesora aunque cambien sus bloques. Nadie toma una reserva ajena. El máximo
+  asesora aunque cambien sus bloques, mientras siga en el equipo y con acceso
+  a la tienda. Una cita sin asesora habilitada vuelve al bloque correspondiente.
+  Nadie toma una reserva ajena. El máximo
   sigue siendo dos abiertas por asesora.
 - Respaldo optativo: recibe otros bloques prioritarios de su tienda cuando
   ninguna asesora explícitamente asignada esté en línea (presencia menor a
