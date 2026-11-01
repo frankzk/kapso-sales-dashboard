@@ -1458,8 +1458,9 @@ viva, la caja sigue pendiente por ella, no por la transferida. Pruebas:
 
 Decisión del owner. Hasta esta fecha «reemplaza» esperaba una constancia de
 entrega o retorno que, en los casos reales, el seguimiento ya no iba a traer:
-una guía `transferido` deja de consultarse, una anulada se consulta solo tres
-semanas y un paquete que el courier perdió no vuelve nunca. Del 02 al
+una guía `transferido` deja de consultarse (desde el 01-11-2026, salvo la que
+tiene el paquete en Aliclik y espera su devolución, §11), una anulada se
+consulta solo tres semanas y un paquete que el courier perdió no vuelve nunca. Del 02 al
 10-10-2026 hubo 4 pedidos y 15 intentos con «reemplaza», y los 4 terminaron en
 la excepción de un responsable; las vendedoras no podían cerrar el caso.
 
@@ -3756,6 +3757,19 @@ Seguimiento de una guía hasta que cierra:
   perderse el retorno, que es justo lo que abre §11.1. Pasadas las tres semanas
   ya no va a volver y se deja de preguntar. `entregado` y `transferido` sí
   cierran: una entregada terminó, y una transferida vive en otra guía.
+- **Salvo la transferida con el paquete todavía en Aliclik (owner,
+  01-11-2026).** El pedido sigue por otra guía —el reenvío por Swayp sale del
+  stock de Swayp, no de este paquete—, pero este paquete tiene que volver al
+  almacén. Se dejaba de preguntar al transferir y la devolución que Aliclik
+  reportaba después no llegaba nunca: #KP117015, con la hija de Swayp anulada,
+  quedó 107 días «En curso · En tránsito» mientras Aliclik ya la tenía devuelta
+  y cancelada; eran 137 pedidos así. Ahora una guía `transferido` con custodia
+  del courier y sin `returned_at` se sigue consultando como las que esperan
+  devolución (`transferredAwaitingReturn`, `lib/aliclik-followup.ts`), con
+  **180 días** de silencio para alcanzar las transferidas desde julio. La guía
+  se queda `transferido` (la precedencia no la mueve); lo que llega es
+  `returned_at` y la custodia `devuelto`, y con eso el pedido pasa a «Por
+  cerrar · Devolución física pendiente», como los que ya funcionaban.
 - Existe porque la **devolución** es el tramo más lento: un paquete rechazado
   tarda semanas en volver al origen, mucho más que la ventana del barrido. Si el
   seguimiento se anclara a la fecha, el `RETURNED` de Aliclik llegaría cuando ya
@@ -4179,7 +4193,11 @@ La regla vive en `lib/reproprovincia.ts` y la leen igual el estado del pedido
   reprogramar Lima»). La guía Aliclik no se toca —sigue `anulado`, con su
   `returned_at` cuando vuelva— y el paquete devuelto sigue arrastrando el motivo
   `devolucion_pendiente_inventario` **como razón**, conviviendo con la gestión.
-- **La ventana** es `return_recovery_max_days` (30 por defecto), el mismo número
+- **La ventana** es `return_recovery_max_days` (30 por defecto; **7 días en
+  Kenku y Aurela desde el 01-11-2026**, decisión del owner para limpiar la cola:
+  había 1.218 pedidos en gestión y ~800 con el cierre de hace más de 7 días.
+  La edad máxima del agente de voz, `voice_recovery_max_age_days`, también
+  quedó en 7, para no llamar por pedidos ya vencidos), el mismo número
   que la recuperación por WhatsApp, contada desde que el courier cerró la guía
   (`closed_at`, que el barrido sella al anular). Las guías anteriores al sello
   no lo tienen: el ancla se deriva del historial de llamadas —la última
