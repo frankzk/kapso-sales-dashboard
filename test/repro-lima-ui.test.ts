@@ -76,7 +76,7 @@ describe("quién entra (D11, E32, E36)", () => {
     expect(page).toContain('<EmptyState title="No tienes tiendas asignadas">{scope.error}</EmptyState>');
     expect(page).toContain('title="No pudimos cargar Repro Lima"');
     // El texto de E32: el permiso viene del rol, no de un control de Equipo.
-    expect(access).toContain("Repro Lima es de quien llama a los clientes o despacha (rol «Asesora» o «Despacho y Grupo GF»). Pide uno de esos roles en Equipo.");
+    expect(access).toContain("Repro Lima es del equipo de la tienda, que llama a los clientes (rol «Asesora»). Pide ese rol en Equipo.");
     expect(page).not.toContain("Pide «Despachar» en Equipo");
   });
 

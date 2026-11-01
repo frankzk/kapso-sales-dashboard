@@ -2739,16 +2739,19 @@ programa sola** (decisión 7).
 
 - **Dónde.** `/dashboard/pedidos/repro-lima`: «Repro Lima» en la navegación,
   justo después de «Repro Provincia».
-- **Quién.** Quien llama a los clientes o despacha: permiso propio
+- **Quién.** El equipo de la tienda que llama a los clientes: permiso propio
   `repro_lima.manage` («Repro Lima: llamar y reprogramar en Lima», 13-10-2026,
-  decisión del owner), que traen los roles «Asesora» y «Despacho y Grupo GF»
-  (§16), la vendedora que aún no tiene roles, los admins y el owner. La Asesora
-  lo tiene sin tener Despacho del día (`dispatch.manage`). Vale en las tiendas
-  que la persona tiene asignadas en Equipo: el mismo alcance que Despacho del
-  día (`getAccessibleStores`). Sin el permiso, la pantalla dice «Repro Lima es
-  de quien llama a los clientes o despacha (rol «Asesora» o «Despacho y Grupo
-  GF»). Pide uno de esos roles en Equipo.»; sin tiendas, «No tienes tiendas
-  asignadas». El actor real queda en cada llamada y en cada evento.
+  decisión del owner), que trae el rol «Asesora» (§16), la vendedora que aún no
+  tiene roles, los admins y el owner. **Desde el 01-11-2026 el rol «Despacho y
+  Grupo GF» ya no lo trae** (decisión del owner: solo llama la tienda; Grupo GF
+  es el courier y recibe lo acordado en «Reintentos para hoy», §29.13). Quien
+  tiene los dos roles entra por el de Asesora. La Asesora lo tiene sin tener
+  Despacho del día (`dispatch.manage`). Vale en las tiendas que la persona tiene
+  asignadas en Equipo: el mismo alcance que Despacho del día
+  (`getAccessibleStores`). Sin el permiso, la pantalla dice «Repro Lima es del
+  equipo de la tienda, que llama a los clientes (rol «Asesora»). Pide ese rol en
+  Equipo.»; sin tiendas, «No tienes tiendas asignadas». El actor real queda en
+  cada llamada y en cada evento.
 - **Qué pedidos.** Todo pedido de esas tiendas en «En curso · Por reprogramar
   Lima» (`order_master`), de cualquier courier. La lista se calcula desde el
   Master, no desde los casos.
@@ -9141,7 +9144,7 @@ registra en cada evento.
   | --- | --- |
   | Asesora | Gestionar pedidos, subir comprobantes, ver la clave de recojo (con el cobro completo, o con la excepción por descuento, §12), crear guías de Aliclik, Tanders y Shalom, crear pedidos en la tienda (Shopify o WooCommerce según `stores.platform`, §38.12), responder novedades de Swayp, escribir a clientas con devolución, reprogramar entregas en Lima (§9.5), recibir devoluciones |
   | Almacén | Gestionar pedidos, preparar paquetes, recibir devoluciones, reingresar al inventario |
-  | Despacho y Grupo GF | Gestionar pedidos, despachar, entregar la caja al motorizado, reprogramar entregas en Lima (§9.5), armar rutas, reportar entregas por un motorizado, subir reportes de couriers, manejar stock de Swayp y Fénix, preparar paquetes, crear guías, recibir devoluciones |
+  | Despacho y Grupo GF | Gestionar pedidos, despachar, entregar la caja al motorizado, armar rutas, reportar entregas por un motorizado, subir reportes de couriers, manejar stock de Swayp y Fénix, preparar paquetes, crear guías, recibir devoluciones |
   | Liquidaciones | Gestionar pedidos, subir y cerrar liquidaciones de motorizados, cuadrar hojas de couriers, conciliar el dinero del pedido |
   | Cobranza | Gestionar pedidos, subir comprobantes, ver y registrar claves de recojo, aprobar cobros de Tanders rechazados |
   | Supervisión | Gestionar pedidos, registrar la devolución de pedidos cerrados, cerrar o reabrir el expediente de cierre, anular guías de Aliclik, recibir devoluciones, reingresar al inventario, ver reportes del negocio (el estado a mano, no: es de admin) |
@@ -13231,10 +13234,13 @@ recibe lo acordado y lo saca.
   día espera en «Programados mañana» o «Programados después».
 - **Junto a «por asignar»** la línea dice cuántos esperan a la tienda («N
   esperan a la tienda en Repro Lima»), con enlace a Repro Lima.
-- **Lo que no cambia todavía.** Por QR, Despacho todavía puede meter en una caja
-  un reprogramado sin acuerdo que tenga en la mano. Tampoco cambian el permiso
-  `repro_lima.manage` del rol «Despacho y Grupo GF» ni «Programar». Son las
-  entregas 2 y 4 de la propuesta.
+- **Por QR sigue abierto (01-11-2026, decisión del owner: menos pasos).**
+  Despacho puede meter en una caja, por QR, un reprogramado que tiene en la
+  mano aunque la tienda no lo haya acordado. Al entrar a la caja deja «Por
+  reprogramar Lima» y su caso de Repro Lima se cierra solo (`fuera_de_etapa`,
+  §9.5): nadie llama a un cliente cuyo pedido ya va en ruta.
+- **El permiso de Repro Lima** ya no está en el rol «Despacho y Grupo GF»
+  (entrega 4, 01-11-2026, §9.5). Queda pendiente «Programar» (entrega 2).
 
 **Devoluciones en Rutas y el rechazo en puerta (v1.16, 22-09-2026).** Todo
 «No entregado» que salió en una caja tiene que volver físicamente. En Rutas,
