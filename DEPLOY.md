@@ -1,8 +1,8 @@
 # Deployment runbook
 
-### 31-10-2026 · Equipo → Leads: bloques por asesora (0294)
+### 31-10-2026 · Equipo → Leads: bloques por asesora (0295)
 
-Aplicar `db/migrations/0294_team_lead_blocks.sql` antes del código. Instala
+Aplicar `db/migrations/0295_team_lead_blocks.sql` antes del código. Instala
 tablas de configuración e historial con RLS, RPCs solo de servicio y validación
 diferida de cobertura; no cambia leads, llamadas, reservas ni asignaciones.
 El código nuevo falla cerrado si no puede comprobar el alcance.

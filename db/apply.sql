@@ -589,6 +589,6 @@
 \ir migrations/0292_gf_notebook_missing_reports.sql
 \echo 'Applying 0293_invoices_claim_rounding.sql'
 \ir migrations/0293_invoices_claim_rounding.sql
-\echo 'Applying 0294_team_lead_blocks.sql'
-\ir migrations/0294_team_lead_blocks.sql
+\echo 'Applying 0295_team_lead_blocks.sql'
+\ir migrations/0295_team_lead_blocks.sql
 \echo 'Done.'

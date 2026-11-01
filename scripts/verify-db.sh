@@ -312,6 +312,6 @@ $PSQL -f "$ROOT/scripts/sql/lead_retry_recent_signal_smoke.sql"
 echo "▶ Hoja del motorizado: incluir sin reporte anterior, custodia, auditoría, lote atómico y permisos (0292)"
 $PSQL -f "$ROOT/scripts/sql/gf_notebook_missing_reports_smoke.sql"
 
-echo "▶ Bloques de Leads por asesora (0294): cobertura, permisos, reservas, citas y respaldo"
+echo "▶ Bloques de Leads por asesora (0295): cobertura, permisos, reservas, citas y respaldo"
 $PSQL -f "$ROOT/scripts/sql/team_lead_blocks_smoke.sql"
 echo "✅ DB verification passed."

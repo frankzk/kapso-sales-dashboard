@@ -27803,7 +27803,7 @@ revoke all on function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestampt
 grant execute on function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)
   to service_role;
 
--- ---- 0294 ----
+-- ---- 0295 ----
 -- Optional until the team saves and enables it. Installation never redistributes leads.
 create table public.lead_routing_settings (
   org_id uuid primary key references public.organizations(id) on delete cascade,

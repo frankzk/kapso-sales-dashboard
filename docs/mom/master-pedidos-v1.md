@@ -4482,7 +4482,7 @@ Esto ordena la llamada, no la reemplaza. Se descartó crear el pedido de forma
 automática para esta señal: incluso aquí, 6 de cada 10 carritos que siguen
 abiertos a las dos horas no terminan en pedido.
 
-**Bloques por asesora (31-10-2026, decisión del owner; migración 0294).**
+**Bloques por asesora (31-10-2026, decisión del owner; migración 0295).**
 En Equipo → Leads, quien gestiona el equipo marca varios bloques por persona.
 Los atajos Principal (cuatro primeros) y Recuperación (quinto) solo rellenan
 checks; el respaldo se concede aparte. Propuesta acordada: Medaly
