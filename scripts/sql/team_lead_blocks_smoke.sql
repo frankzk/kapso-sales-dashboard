@@ -8,6 +8,13 @@ insert into stores(id,org_id,name,shopify_domain) values
  ('cc029400-0000-0000-0000-000000000002','cc029400-0000-0000-0000-000000000001','Routing A','routing-a.test'),
  ('cc029400-0000-0000-0000-000000000003','cc029400-0000-0000-0000-000000000001','Routing B','routing-b.test');
 insert into user_store_access(user_id,store_id) select m.user_id,s.id from memberships m cross join stores s where m.org_id='cc029400-0000-0000-0000-000000000001' and s.org_id=m.org_id;
+-- Existing store setup tests re-apply column migrations in the same transaction.
+alter table stores add column routing_smoke_tmp boolean;
+alter table stores drop column routing_smoke_tmp;
+set local role authenticated;
+set local request.test_uid='cc029400-0000-0000-0000-000000000010';
+update stores set name=name where id='cc029400-0000-0000-0000-000000000002';
+reset role;
 insert into leads(store_id,phone,name,status,category,first_seen_at,last_interaction_at,cart_item_count,district,inbound_count,call_attempt_count)
 select 'cc029400-0000-0000-0000-000000000002','519994'||lpad(n::text,5,'0'),label,'nuevo','open',now()-age,now()-age,cart,district,inbound,attempts
 from (values

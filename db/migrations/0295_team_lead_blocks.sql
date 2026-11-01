@@ -27,7 +27,7 @@ grant all on public.lead_routing_settings,public.lead_routing_assignments,public
 grant usage,select on sequence public.lead_routing_audit_id_seq to service_role;
 
 create function public.lead_routing_coverage(p_org uuid) returns void
-language plpgsql security invoker set search_path=public as $$
+language plpgsql security invoker set search_path=public,pg_temp as $$
 declare missing text;
 begin
   perform 1 from lead_routing_settings where org_id=p_org and enabled for update;
@@ -44,10 +44,19 @@ begin
 end $$;
 
 create function public.lead_routing_guard_coverage() returns trigger
-language plpgsql security invoker set search_path=public as $$
-declare o uuid;
+-- RLS-authorized team/store writes can originate from an authenticated client.
+-- Only this trigger checks cross-user coverage as owner; it returns no data,
+-- writes no assignments, is not publicly executable and checks affected orgs only.
+language plpgsql security definer set search_path=public,pg_temp as $$
+declare o uuid; affected uuid[];
 begin
-  for o in select org_id from lead_routing_settings where enabled order by org_id loop
+  if tg_table_name='user_store_access' then
+    select array_agg(distinct s.org_id) into affected from stores s where s.id=any(array[
+      (to_jsonb(old)->>'store_id')::uuid,(to_jsonb(new)->>'store_id')::uuid]);
+  else
+    affected:=array[(to_jsonb(old)->>'org_id')::uuid,(to_jsonb(new)->>'org_id')::uuid];
+  end if;
+  for o in select distinct x from unnest(affected)x where x is not null order by x loop
     perform public.lead_routing_coverage(o);
   end loop;
   return null;
@@ -59,11 +68,13 @@ create constraint trigger lead_routing_access after insert or update or delete o
   deferrable initially deferred for each row execute function public.lead_routing_guard_coverage();
 create constraint trigger lead_routing_roles after insert or update or delete on public.membership_roles
   deferrable initially deferred for each row execute function public.lead_routing_guard_coverage();
-create constraint trigger lead_routing_stores after insert or update on public.stores
-  deferrable initially deferred for each row execute function public.lead_routing_guard_coverage();
+-- Store setup/migrations alter columns in the same transaction. Do not leave
+-- deferred trigger events on stores; only changes of organization affect coverage.
+create trigger lead_routing_stores after insert or update of org_id on public.stores
+  for each row execute function public.lead_routing_guard_coverage();
 
 create function public.save_lead_routing(p_org uuid,p_actor uuid,p_revision integer,p_enabled boolean,p_hours integer,p_assignments jsonb)
-returns integer language plpgsql security invoker set search_path=public as $$
+returns integer language plpgsql security invoker set search_path=public,pg_temp as $$
 declare v_revision integer; v_before jsonb; v_after jsonb; v_assignment jsonb;
 begin
   if not exists(select 1 from memberships m where m.org_id=p_org and m.user_id=p_actor and
@@ -98,7 +109,7 @@ end $$;
 -- Batched narrow reads: no correlated scan per lead, no PostgREST 1,000-row truncation.
 -- p_actor always comes from the verified server session, never browser input.
 create function public.lead_routing_scope(p_actor uuid,p_stores uuid[],p_lead uuid default null)
-returns jsonb language sql stable security invoker set search_path=public as $$
+returns jsonb language sql stable security invoker set search_path=public,pg_temp as $$
 with scope as materialized (
   select s.id,s.org_id,coalesce(cfg.enabled,false) as enabled,coalesce(cfg.fresh_hours,24) as hours,coalesce(cfg.revision,0) as revision,
     (m.role='vendedora' or exists(select 1 from membership_roles r where r.org_id=m.org_id and r.user_id=m.user_id and r.role='asesora'))
@@ -167,7 +178,7 @@ grant execute on function public.lead_routing_coverage(uuid),public.lead_routing
 
 -- Recheck under locks at the actual claim, including the per-person limit.
 create function public.claim_routed_lead(p_actor uuid,p_lead uuid) returns table(id uuid)
-language plpgsql security invoker set search_path=public as $$
+language plpgsql security invoker set search_path=public,pg_temp as $$
 declare v_lead leads%rowtype; v_org uuid;
 begin
   perform pg_advisory_xact_lock(hashtextextended('lead-claim:'||p_actor::text,0));
