@@ -20,6 +20,7 @@ import {
 import { statementAccountKey } from "@/lib/yape-statement/match";
 import { isWebPrepaid } from "@/lib/order-paid";
 import { paidCoversTotal } from "@/lib/payment-rounding";
+import { agencyShippingPaid } from "@/lib/agency-shipping";
 import type { PaymentGateway } from "@/lib/payment-gateway";
 
 // ── Constantes ───────────────────────────────────────────────────────────────
@@ -293,6 +294,11 @@ export interface InvoiceOrderFacts {
   orderDate: string | null;
   /** Para reconocer su nombre en la nota de un Yape (`yapeRecipientReading`). */
   customerName: string | null;
+  /**
+   * Agencia con el paquete ya recogido (`order_master`): lo que falta hasta
+   * S/ 15 es el envío pagado en el mostrador (lib/agency-shipping.ts, §6.5).
+   */
+  agencyPickedUp?: boolean;
   payments: InvoicePayment[];
   /** Las cuentas ACTIVAS de la tienda. */
   accounts: InvoiceAccount[];
@@ -693,7 +699,15 @@ export function invoiceEligibility(
     const validatedCents = live.reduce((sum, p) => sum + Math.max(0, toCents(p.amount) ?? 0), 0);
     // Menos de S/ 1 por cubrir es redondeo: está pagado y la boleta sale por el
     // total del pedido (lib/payment-rounding.ts, owner 01-11-2026).
-    if (!paidCoversTotal(validatedCents, totalCents)) {
+    // Ni el envío que la clienta pagó en la agencia, con el paquete recogido:
+    // hasta S/ 15 sin comprobante (owner 01-11-2026, lib/agency-shipping.ts).
+    const agencyShipping = agencyShippingPaid({
+      operation: facts.agencyPickedUp ? "agencia" : null,
+      pickedUp: Boolean(facts.agencyPickedUp),
+      payments: live.map((p) => ({ kind: p.kind, validation_status: p.validationStatus, amount: p.amount })),
+      orderTotal: facts.total,
+    });
+    if (!paidCoversTotal(validatedCents, totalCents) && agencyShipping === null) {
       return fail("sin_pago_completo");
     }
   }

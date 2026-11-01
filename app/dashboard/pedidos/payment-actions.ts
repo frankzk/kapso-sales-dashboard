@@ -1,4 +1,5 @@
 "use server";
+import { agencyShippingPaid } from "@/lib/agency-shipping";
 import { hasPositivePaymentAmount, MISSING_PAYMENT_AMOUNT } from "@/lib/payment-amount";
 
 // Pagos Yape y clave de recojo de los envíos por Shalom.
@@ -187,6 +188,12 @@ export interface PickupKeyPanel {
    */
   discountException: { eligible: boolean; shortfall: number; reason: string | null; max: number };
   /**
+   * El envío que la clienta pagó en la agencia (S/), o null (owner, 01-11-2026,
+   * lib/agency-shipping.ts): con el paquete recogido, hasta S/ 15 que le faltan
+   * a lo validado. Con él, el pedido está pagado completo.
+   */
+  agencyShipping: number | null;
+  /**
    * La guía Shalom viva del pedido, si ya existe.
    *
    * El DNI y la agencia que se apuntan acá son un BORRADOR para crear esa guía.
@@ -362,6 +369,13 @@ export async function loadPaymentPanel(
     keyPreview = pickupKeyMessage(delivery.facts, KEY_MASK);
   }
 
+  const agencyShipping = agencyShippingPaid({
+    operation: ctx.row.macro_operation,
+    pickedUp: ctx.row.pickup_state === "recogido" || ctx.row.general_status === "entregado",
+    payments: snapshots,
+    orderTotal: ctx.row.order_total,
+  });
+
   return {
     panel: {
       storeId: ctx.storeId,
@@ -369,7 +383,8 @@ export async function loadPaymentPanel(
       customerName: ctx.row.customer_name,
       orderTotal: ctx.row.order_total,
       payments,
-      paymentState: paymentState(snapshots, ctx.row.order_total),
+      paymentState: agencyShipping !== null ? "pago_completo" : paymentState(snapshots, ctx.row.order_total),
+      agencyShipping,
       hasKey: Boolean(keyRow),
       canReveal: verdict.allowed,
       blockers: describeBlockers(verdict),

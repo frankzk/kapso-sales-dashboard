@@ -30,6 +30,12 @@ import {
   swaypNoEntregoMotivo,
 } from "@/lib/swayp-desde-confirmacion";
 
+// v1.34 (01-11-2026): en Agencia, con el paquete recogido, hasta S/ 15 que
+// faltan son el envío que la clienta pagó en el mostrador y el pedido está
+// pagado completo (lib/agency-shipping.ts, decisión del owner, MOM §6.5). Eran
+// 21 pedidos en «Recogido sin pago completo» por S/ 8 o S/ 10. La versión sube
+// para que el cron los reconcilie.
+//
 // v1.33 (01-11-2026): faltar menos de S/ 1 es redondeo y está pagado
 // (lib/payment-rounding.ts, decisión del owner, MOM §6.5). El descuento deja
 // céntimos (S/ 134,10) y la clienta yapea redondo (S/ 30 + S/ 104): 10 pedidos
@@ -216,7 +222,7 @@ import {
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.33" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.34" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"

@@ -1067,6 +1067,23 @@ Motivos simultáneos posibles:
   el saldo de los mensajes de Shalom, lo que cobra el courier y la boleta), y
   exige que se haya pagado algo. La boleta sale **por el total del pedido**: la
   diferencia es redondeo, no un descuento.
+  **El envío pagado en la agencia (owner, 01-11-2026, `mom-v1.34`).** En
+  Agencia la clienta recoge en Shalom u Olva y ahí le cobran el envío; la
+  vendedora se lo descuenta de la diferencia, así que el Yape nunca llega al
+  total (S/ 141 por Yape + S/ 8 en el mostrador = S/ 149). Ese dinero no deja
+  comprobante en ninguna cuenta de la empresa, y 21 pedidos estaban en esta
+  alerta por S/ 8 o S/ 10. Ahora, **con el paquete ya recogido**, lo que falta
+  hasta **S/ 15** —el tope de la excepción por descuento de la clave, §12— es
+  el envío pagado en la agencia y el pedido está **pagado completo**, solo, sin
+  botón (`agencyShippingPaid`, `lib/agency-shipping.ts`). Pide además lo mismo
+  que esa excepción: al menos dos comprobantes validados con el adelanto entre
+  ellos, y ninguno vivo sin validar. Menos de S/ 1 sigue siendo redondeo. La
+  ficha lo enseña como «Envío pagado en agencia · sin comprobante» en vez de
+  «Saldo por cargar». La boleta sale **por el total**: el precio no cambió, la
+  clienta pagó el envío por cuenta de la tienda (§35.3, 0296). No se carga como
+  costo logístico: ningún pedido de Agencia lo tiene hoy, y cargarlo solo en
+  éstos descuadraría el margen contra los demás. Con más de S/ 15 el pedido
+  sigue en la alerta y hace falta un administrador.
   **La regla laxa de `paid` en Shopify no se extiende** a cuánto cobra el courier en la puerta
   (`expectedCollectAmount`) ni al abono que Agencia exige para pasar a
   Preparación (§6.1): ahí el pedido aún no se ha recogido y equivocarse cuesta
@@ -15671,7 +15688,9 @@ boleta» emitir lo pagado antes de «Emitir desde», 15-10-2026) va después de 
 cuando Shopify ya no responde, 23-10-2026, 35.10) va después de la 0274, igual.
 La boleta de un pedido de WooCommerce (25-10-2026, 35.11) no tiene migración.
 La 0293 (faltar menos de S/ 1 es redondeo y cubre, 01-11-2026, §6.5) va
-después de la 0269, a mano y antes de su código.
+después de la 0269, a mano y antes de su código. La 0296 (en Agencia, con el
+paquete recogido, hasta S/ 15 sin comprobante son el envío pagado en el
+mostrador, 01-11-2026, §6.5) va después de la 0293, igual.
 Están también las reglas puras, el
 cliente de SimpleFact, el barrido (`/api/cron/invoices`), la sección «Boletas
 y facturas» de Ajustes y el panel «Comprobante» del drawer, con su «Emitir esta
@@ -15785,7 +15804,7 @@ panel (`invoiceEligibility`, función pura; los textos en
 | --- | --- | --- |
 | 1 | El pedido no está anulado ni reembolsado y está en soles | `anulado` / `reembolsado` / `moneda` |
 | 2 | Todos sus pagos vivos (no rechazados) están validados. Un posible duplicado bloquea aunque cubra el total | `posible_duplicado` / `pagos_en_revision` |
-| 3 | La empresa recibió el pago: lo validado cubre el total del pedido —faltar menos de S/ 1 es redondeo y cubre; la boleta sale igual por el total (owner, 01-11-2026, §6.5)—, o es un prepago web confirmado (§6.5, §12 Pagos). Un prepago web que además tiene comprobantes cargados no se adivina | `sin_pago_completo` / `prepago_con_comprobantes` |
+| 3 | La empresa recibió el pago: lo validado cubre el total del pedido —faltar menos de S/ 1 es redondeo y cubre; y en Agencia, con el paquete recogido, hasta S/ 15 sin comprobante son el envío pagado en el mostrador (0296); la boleta sale igual por el total (owner, 01-11-2026, §6.5)—, o es un prepago web confirmado (§6.5, §12 Pagos). Un prepago web que además tiene comprobantes cargados no se adivina | `sin_pago_completo` / `prepago_con_comprobantes` |
 | 4 | Cada pago validado tiene cuenta (35.2) | `pago_sin_cuenta` |
 | 5 | Todas sus cuentas tienen RUC, y es el mismo | `cuenta_sin_ruc` / `ruc_mezclados` |
 | 6 | El total es mayor que 0 y no pasa de S/ 700 (35.5) | `monto_cero` / `monto_mayor_700` |

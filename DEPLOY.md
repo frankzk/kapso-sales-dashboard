@@ -5375,3 +5375,29 @@ tienda». Sin variables de entorno nuevas; `MOM_RESOLUTION_VERSION` no cambia.
    ```
 3. Desplegar el código. Los leads nuevos del botón se marcan solos; los que ya
    estaban en la cola se marcan cuando la sincronización los vuelve a leer.
+
+### 01-11-2026 · El envío pagado en la agencia: hasta S/ 15 sin comprobante (0296, MOM §6.5 y §35.3)
+
+Decisión del owner (01-11-2026). En Agencia (Shalom u Olva), con el paquete ya
+recogido, lo que le falta a lo validado hasta **S/ 15** es el envío que la
+clienta pagó en el mostrador y el pedido está pagado completo
+(`lib/agency-shipping.ts`): sale de «Recogido sin pago completo», la ficha lo
+enseña como «Envío pagado en agencia» y la boleta sale por el total. Pide al
+menos dos pagos validados con el adelanto entre ellos y ninguno sin validar.
+`MOM_RESOLUTION_VERSION` sube a `mom-v1.34` para que el cron recalcule. Sin
+variables de entorno nuevas.
+
+1. **Migración `0296_invoices_claim_agency_shipping.sql`**, a mano, DESPUÉS de
+   la 0293 y ANTES del código. Cambia solo `invoice_claim`, con `create or
+   replace` y la misma firma de doce argumentos; el cuerpo es el de la 0293
+   salvo la condición 3, que además acepta el envío pagado en la agencia
+   (Agencia con el paquete recogido en `order_master`, al menos dos pagos
+   validados con el adelanto, hasta S/ 15). No toca filas. Es idempotente. Sin
+   la 0293 se detiene con «La 0296 va después de la 0293…».
+2. Comprobar:
+   ```sql
+   select count(*) = 1 as un_turno,
+          bool_and(pg_get_functiondef(oid) like '%p_total - v_validated <= 15%') as con_envio_agencia
+   from pg_proc where proname = 'invoice_claim';
+   ```
+3. Desplegar el código.

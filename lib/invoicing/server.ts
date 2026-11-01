@@ -551,10 +551,16 @@ async function loadOrders(admin: SupabaseClient, orderIds: string[]): Promise<Ma
     selectIn<{ id: string; org_id: string | null }>(admin, "stores", "id,org_id", "id", storeIds),
     // El nombre de la clienta solo sirve para reconocerlo en la nota de un Yape
     // (`yapeRecipientReading`): no se guarda ni sale en ningún reporte.
-    selectIn<{ order_id: string; customer_name: string | null }>(
+    selectIn<{
+      order_id: string;
+      customer_name: string | null;
+      macro_operation: string | null;
+      pickup_state: string | null;
+      general_status: string | null;
+    }>(
       admin,
       "order_master",
-      "order_id,customer_name",
+      "order_id,customer_name,macro_operation,pickup_state,general_status",
       "order_id",
       found,
     ),
@@ -614,6 +620,13 @@ async function loadOrders(admin: SupabaseClient, orderIds: string[]): Promise<Ma
   );
 
   const nameByOrder = new Map(masters.map((m) => [m.order_id, m.customer_name]));
+  // Agencia y el paquete ya recogido: lo que falta hasta S/ 15 es el envío que
+  // la clienta pagó en el mostrador (lib/agency-shipping.ts, §6.5).
+  const agencyPickedUp = new Set(
+    masters
+      .filter((m) => m.macro_operation === "agencia" && (m.pickup_state === "recogido" || m.general_status === "entregado"))
+      .map((m) => m.order_id),
+  );
   const paymentsByOrder = new Map<string, InvoicePayment[]>();
   for (const p of payments) {
     const list = paymentsByOrder.get(p.order_id) ?? [];
@@ -674,6 +687,7 @@ async function loadOrders(admin: SupabaseClient, orderIds: string[]): Promise<Ma
         paymentGateway: gatewayOf(o.payment_gateway),
         orderDate: o.processed_at ?? o.created_at,
         customerName: nameByOrder.get(o.id) ?? null,
+        ...(agencyPickedUp.has(o.id) ? { agencyPickedUp: true } : {}),
         payments: paymentsByOrder.get(o.id) ?? [],
         accounts: accountsByStore.get(o.store_id) ?? [],
         // Una tienda sin organización no tiene RUC: el pedido sale `cuenta_sin_ruc`.

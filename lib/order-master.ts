@@ -20,6 +20,7 @@ import { chunk } from "@/lib/access";
 import { normalizeDistrict } from "@/lib/shipments";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
 import { keyState, paymentState, type PaymentSnapshot } from "@/lib/pickup-key";
+import { agencyShippingPaid } from "@/lib/agency-shipping";
 import {
   computeLogisticsCost,
   costDay,
@@ -1244,7 +1245,7 @@ export async function recomputeOrderMaster(
       paymentState: voucherState,
       paymentGateway,
     };
-    const resolvedPaymentState = isWebPrepaid(paymentFacts) ? "pago_completo" : voucherState;
+    let resolvedPaymentState = isWebPrepaid(paymentFacts) ? "pago_completo" : voucherState;
     // `classifyOrderCoverage` queda como reserva para el caso en que la 0104 no
     // esté aplicada todavía: resuelve solo por nombre, así que da el mismo
     // resultado que la base salvo en los destinos que dependen del mapa COD.
@@ -1275,7 +1276,7 @@ export async function recomputeOrderMaster(
       now,
       recoveryWindowDays: recoveryWindowByStore.get(order.store_id) ?? RECOVERY_DEFAULT_MAX_DAYS,
     });
-    const macro = resolveMacroStage({
+    const macroInput: Parameters<typeof resolveMacroStage>[0] = {
       order: {
         created_at: order.created_at,
         confirmation_activation_date:
@@ -1311,7 +1312,26 @@ export async function recomputeOrderMaster(
       paymentState: resolvedPaymentState,
       recoveryWindowDays: recoveryWindowByStore.get(order.store_id) ?? RECOVERY_DEFAULT_MAX_DAYS,
       now,
-    });
+    };
+    let macro = resolveMacroStage(macroInput);
+    // EL ENVÍO PAGADO EN LA AGENCIA (owner, 01-11-2026, lib/agency-shipping.ts).
+    // Con el paquete recogido, hasta S/ 15 que faltan son el envío que la
+    // clienta pagó en el mostrador: el pedido está pagado completo. Se decide
+    // con la operación que acaba de resolver la macroetapa, y se vuelve a
+    // resolver con el pago completo (puro: misma entrada, otro estado de cobro).
+    if (
+      resolvedPaymentState !== "pago_completo" &&
+      paymentSignals &&
+      agencyShippingPaid({
+        operation: macro.operation,
+        pickedUp: state.general === "entregado" || state.pickupState === "recogido",
+        payments: paymentSignals.payments,
+        orderTotal: order.total_amount,
+      }) !== null
+    ) {
+      resolvedPaymentState = "pago_completo";
+      macro = resolveMacroStage({ ...macroInput, paymentState: resolvedPaymentState });
+    }
 
     // El costo REAL del envío, cuando el courier nos lo dijo. Solo lo tienen las
     // guías creadas por API: al cotizar, Aliclik devuelve lo que va a cobrar por

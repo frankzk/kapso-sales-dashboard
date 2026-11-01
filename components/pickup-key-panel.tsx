@@ -400,7 +400,7 @@ export function PickupKeyPanel({
         </Banner>
       )}
 
-      <PaymentMoneySummary payments={panel.payments} orderTotal={panel.orderTotal} />
+      <PaymentMoneySummary payments={panel.payments} orderTotal={panel.orderTotal} agencyShipping={panel.agencyShipping} />
 
       <PaymentList
         payments={panel.payments}
@@ -506,9 +506,12 @@ export function ShalomPickupKeyPanel({
 function PaymentMoneySummary({
   payments,
   orderTotal,
+  agencyShipping,
 }: {
   payments: PaymentRow[];
   orderTotal: number | null;
+  /** El envío que la clienta pagó en la agencia (lib/agency-shipping.ts), o null. */
+  agencyShipping: number | null;
 }) {
   const progress = paymentProgress(payments, orderTotal);
   const ratio = progress.orderTotal
@@ -530,9 +533,13 @@ function PaymentMoneySummary({
       note: progress.orderTotal !== null ? `de S/ ${progress.orderTotal.toFixed(2)}` : undefined,
     },
     { label: "Cargado", value: `S/ ${progress.registeredTotal.toFixed(2)}` },
-    ...(progress.registeredRemaining !== null
-      ? [{ label: "Saldo por cargar", value: `S/ ${progress.registeredRemaining.toFixed(2)}`, balance: true }]
-      : []),
+    // Lo que falta, cuando es el envío que la clienta pagó en el mostrador, no es
+    // saldo: el pedido está pagado (owner, 01-11-2026).
+    ...(agencyShipping !== null
+      ? [{ label: "Envío pagado en agencia", value: `S/ ${agencyShipping.toFixed(2)}`, note: "sin comprobante", balance: true }]
+      : progress.registeredRemaining !== null
+        ? [{ label: "Saldo por cargar", value: `S/ ${progress.registeredRemaining.toFixed(2)}`, balance: true }]
+        : []),
   ];
 
   return (

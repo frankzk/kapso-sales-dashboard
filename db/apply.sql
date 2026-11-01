@@ -593,4 +593,6 @@
 \ir migrations/0294_conversion_fuente_web.sql
 \echo 'Applying 0295_team_lead_blocks.sql'
 \ir migrations/0295_team_lead_blocks.sql
+\echo 'Applying 0296_invoices_claim_agency_shipping.sql'
+\ir migrations/0296_invoices_claim_agency_shipping.sql
 \echo 'Done.'
