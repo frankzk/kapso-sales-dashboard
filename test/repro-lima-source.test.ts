@@ -77,7 +77,7 @@ describe("quién entra (§9.5, D11, E32, E36)", () => {
     expect(gate).toContain('if (!user) redirect("/login");');
     expect(gate).toContain('permissions.can("repro_lima.manage")');
     expect(gate).toContain("await getAccessibleStores()");
-    expect(access).toContain('"Repro Lima es de quien llama a los clientes o despacha (rol «Asesora» o «Despacho y Grupo GF»). Pide uno de esos roles en Equipo."');
+    expect(access).toContain('"Repro Lima es del equipo de la tienda, que llama a los clientes (rol «Asesora»). Pide ese rol en Equipo."');
     expect(access).toContain('"No tienes tiendas asignadas. Pide acceso en Equipo."');
     // Cada caso se mira contra la tienda antes de tocarlo.
     expect(actions).toContain("if (!scope.storeIds.has(row.store_id)) return { error: REPRO_OUTSIDE_STORE };");
@@ -361,7 +361,7 @@ describe("el MOM lo documenta (§9.5, §29.6, §29.13)", () => {
   it("y con los textos que dice la pantalla", () => {
     const text = flat(mom);
     for (const quote of [
-      "Repro Lima es de quien llama a los clientes o despacha (rol «Asesora» o «Despacho y Grupo GF»). Pide uno de esos roles en Equipo.",
+      "Repro Lima es del equipo de la tienda, que llama a los clientes (rol «Asesora»). Pide ese rol en Equipo.",
       "con acuerdo de Repro Lima: quedaron programados para su día (van al anaquel de ese día).",
       "con fecha acordada que ya pasó: vuelve a confirmarla en Repro Lima.",
       "Repro Lima: el cliente ya no lo quiere. Desármala (cuaderno «DESARMAR»); no va al estante.",

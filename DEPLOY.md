@@ -5430,3 +5430,18 @@ variables.
    su cola; la línea «N esperan a la tienda en Repro Lima» dice cuántos.
 
 **Marcha atrás.** Revertir el commit.
+
+### 01-11-2026 · Repro Lima solo para la tienda: el rol «Despacho y Grupo GF» deja de traerla (sin migración, MOM §9.5)
+
+Decisión del owner (entrega 4 de la propuesta de separar Repro Lima y Grupo
+GF): llamar al cliente y acordar un reintento en Lima es solo de la tienda. El
+rol «Despacho y Grupo GF» ya no trae `repro_lima.manage`; quien además tiene
+«Asesora» sigue entrando. Los permisos se calculan en el código: sin
+migración, crons ni variables.
+
+1. **El código**, por el camino de siempre.
+2. **Avisar**: al 01-11-2026 pierden Repro Lima las cuatro personas con
+   «Despacho» sin «Asesora» (en Equipo se ve quiénes). Si alguna debe seguir
+   llamando, se le da el rol «Asesora» o el permiso suelto en Equipo.
+
+**Marcha atrás.** Revertir el commit.

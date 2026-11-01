@@ -655,7 +655,9 @@ export const FUNCTIONAL_ROLES = [
       "warehouse.prepare",
       "dispatch.manage",
       "dispatch.pickup",
-      "repro_lima.manage",
+      // Sin `repro_lima.manage` (01-11-2026, decisión del owner, MOM §9.5):
+      // llamar al cliente y acordar el reintento es solo de la tienda (Asesora).
+      // Grupo GF es el courier: recibe lo acordado en «Reintentos para hoy».
       "routes.manage",
       "routes.report_others",
       // «Motorizados» vive en Equipo, que es de Administración: sin Equipo,
