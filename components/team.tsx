@@ -21,6 +21,8 @@ import {
 } from "@/app/dashboard/team/actions";
 import { Card, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 import { SchedulesTab } from "@/components/team-schedules";
+import { TeamLeadRouting } from "@/components/team-lead-routing";
+import { EMPTY_LEAD_ROUTING, type LeadRoutingSettings } from "@/lib/lead-routing";
 import { OpsButton } from "@/components/ops-ui";
 import { IconChevronRight, IconInfo } from "@/components/icons";
 import {
@@ -95,7 +97,7 @@ export interface RiderRow {
   user_email: string | null;
 }
 
-type TeamTab = "usuarios" | "motorizados" | "horarios";
+type TeamTab = "usuarios" | "motorizados" | "horarios" | "leads";
 
 export function TeamManager({
   org,
@@ -106,6 +108,7 @@ export function TeamManager({
   members,
   riders,
   schedules,
+  leadRouting = { settings: EMPTY_LEAD_ROUTING, installed: false },
   initialTab = "usuarios",
   initialScheduleUserId = null,
 }: {
@@ -118,6 +121,7 @@ export function TeamManager({
   riders: RiderRow[];
   /** Meta y horario por persona (Equipo › Horarios, migración 0245). */
   schedules: Record<string, AdvisorSchedule>;
+  leadRouting?: { settings: LeadRoutingSettings; installed: boolean };
   initialTab?: TeamTab;
   /** Desde Productividad, «Editar horario» abre el de esa persona. */
   initialScheduleUserId?: string | null;
@@ -162,6 +166,7 @@ export function TeamManager({
           [
             ["usuarios", "Usuarios y accesos"],
             ["horarios", "Horarios"],
+            ["leads", "Leads"],
             ["motorizados", "Motorizados"],
           ] as [TeamTab, string][]
         ).map(([key, label]) => (
@@ -176,6 +181,9 @@ export function TeamManager({
           </button>
         ))}
       </div>
+
+      {tab === "leads" && <TeamLeadRouting key={`${org.id}:${leadRouting.settings.revision}`} orgId={org.id} initial={leadRouting.settings} installed={leadRouting.installed}
+        stores={stores} advisors={members.filter(m => m.role === "vendedora" || m.functions.includes("asesora")).map(m => ({ userId: m.user_id, name: m.name ?? m.email, account: m.email.split("@")[0] ?? m.email, stores: m.stores }))} />}
 
       {tab === "usuarios" && (
         <>

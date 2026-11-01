@@ -18,6 +18,22 @@ import {
 import { hasOrgPermission } from "@/lib/permissions-access";
 import { GROUP_GF_RIDER_COURIER } from "@/lib/couriers/catalog";
 import { parseScheduleInput } from "@/lib/productivity-week";
+import { parseLeadRouting } from "@/lib/lead-routing";
+
+export async function saveTeamLeadRouting(orgId: string, revision: number, input: unknown): Promise<TeamActionState> {
+  const actor = await requireOrgAdmin(orgId);
+  if (!actor) return { error: "Sin permiso para configurar el equipo." };
+  const parsed = parseLeadRouting(input);
+  if (!parsed || !Number.isInteger(revision) || revision < 0) return { error: "Revisa los bloques y las horas de prioridad." };
+  const { error } = await createAdminSupabase().rpc("save_lead_routing", {
+    p_org: orgId, p_actor: actor.userId, p_revision: revision, p_enabled: parsed.enabled,
+    p_hours: parsed.freshHours, p_assignments: parsed.assignments,
+  });
+  if (error) return { error: error.message };
+  revalidatePath("/dashboard/team");
+  revalidatePath("/dashboard/leads");
+  return { notice: parsed.enabled ? "Reparto guardado y activo. Se conservan reservas y citas." : "Configuración guardada. El reparto por bloques sigue desactivado." };
+}
 
 export interface TeamActionState {
   error?: string;

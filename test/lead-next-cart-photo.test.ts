@@ -1,3 +1,4 @@
+vi.mock("@/lib/lead-routing-access", () => import("./helpers/lead-routing-disabled"));
 // La foto del carrito en la tarjeta del siguiente lead (`loadNextLeadCart`)
 // desde el cierre de Shopify (MOM §39): sale por /api/wa-image igual que en las
 // plantillas, así que desde el 28-10-2026, en Kenku y Aurela, solo se muestra

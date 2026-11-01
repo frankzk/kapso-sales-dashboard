@@ -1,3 +1,4 @@
+vi.mock("@/lib/lead-routing-access", () => import("./helpers/lead-routing-disabled"));
 // «Generar pedido» de punta a punta según `stores.platform` (MOM §38.12): con
 // `shopify` el camino de Shopify se llama exactamente como antes y no hay
 // ninguna llamada a WooCommerce; con `woocommerce` el pedido se crea en

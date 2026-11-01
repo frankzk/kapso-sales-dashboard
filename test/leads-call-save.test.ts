@@ -1,3 +1,4 @@
+vi.mock("@/lib/lead-routing-access", () => import("./helpers/lead-routing-disabled"));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ claims: vi.fn(), access: vi.fn(), current: vi.fn(), order: vi.fn(), insert: vi.fn(), update: vi.fn(), revalidate: vi.fn(), insertResult: {} as unknown, updateResult: {} as unknown }));
