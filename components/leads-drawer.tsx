@@ -211,11 +211,13 @@ function finishUiMeasure(name: string) {
 /** Canonical acquisition-source bucket for a lead's `source` (Fuente filter). */
 function leadSourceKey(
   s: string | null | undefined,
-): "meta_ad" | "fb_web" | "cod_cart" | "abandoned_browse" | "organic" {
+): "meta_ad" | "fb_web" | "web" | "cod_cart" | "abandoned_browse" | "organic" {
   return s === "meta_ad"
     ? "meta_ad"
     : s === "fb_web"
       ? "fb_web"
+      : s === "web"
+        ? "web"
       : s === "cod_cart"
         ? "cod_cart"
         : s === "abandoned_browse"
@@ -471,11 +473,12 @@ function SegmentBadge({ lead, currency }: { lead: LeadRow; currency: string }) {
 
 // La fuente del lead, dicha en palabras en la línea de contexto de la cabecera.
 const SOURCE_META: Record<
-  "meta_ad" | "fb_web" | "cod_cart" | "abandoned_browse" | "organic",
+  "meta_ad" | "fb_web" | "web" | "cod_cart" | "abandoned_browse" | "organic",
   { label: string; title: string }
 > = {
   meta_ad: { label: "Campaña Meta", title: "Campaña Meta (Click-to-WhatsApp, con anuncio)" },
   fb_web: { label: "Meta/Web", title: "Llegó por un link de Meta (Facebook/Instagram) en la web (sin anuncio confirmado)" },
+  web: { label: "Web", title: "Escribió desde el botón de WhatsApp de un producto en la web de la tienda" },
   cod_cart: { label: "Carrito", title: "Carrito abandonado (formulario COD)" },
   abandoned_browse: { label: "Búsqueda", title: "Búsqueda abandonada" },
   organic: { label: "Directo", title: "Orgánico / directo" },

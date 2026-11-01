@@ -589,4 +589,6 @@
 \ir migrations/0292_gf_notebook_missing_reports.sql
 \echo 'Applying 0293_invoices_claim_rounding.sql'
 \ir migrations/0293_invoices_claim_rounding.sql
+\echo 'Applying 0294_conversion_fuente_web.sql'
+\ir migrations/0294_conversion_fuente_web.sql
 \echo 'Done.'

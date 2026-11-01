@@ -8,6 +8,7 @@ import type { SourceBucket } from "@/lib/productivity";
 export const SOURCE_LABEL: Record<SourceBucket, string> = {
   meta_ad: "Campaña",
   fb_web: "Meta/Web",
+  web: "Web",
   cod_cart: "Carrito",
   abandoned_browse: "Búsqueda",
   organic: "Orgánico",

@@ -645,7 +645,7 @@ export async function getOrdersByIds(
  *  browse pass through; everything else (incl. null) is organic WhatsApp. Winback
  *  is never a lead source — it's derived from coupon + template send. */
 function normAttributionSource(s: string | null | undefined): AttributionSource {
-  return s === "meta_ad" || s === "fb_web" || s === "cod_cart" || s === "abandoned_browse" ? s : "organic";
+  return s === "meta_ad" || s === "fb_web" || s === "web" || s === "cod_cart" || s === "abandoned_browse" ? s : "organic";
 }
 
 /** Split `arr` into consecutive slices of ≤`size` — the standard cure for

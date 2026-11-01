@@ -353,6 +353,7 @@ export function useNextLead({
 const SOURCE_WORD: Record<string, string> = {
   meta_ad: "una campaña",
   fb_web: "un enlace de Meta",
+  web: "el botón de WhatsApp de la web",
   cod_cart: "el formulario de carrito",
   abandoned_browse: "una búsqueda en la web",
 };
@@ -361,6 +362,7 @@ const SOURCE_WORD: Record<string, string> = {
 const SOURCE_LABEL: Record<string, string> = {
   meta_ad: "Campaña",
   fb_web: "Enlace de Meta",
+  web: "Web de la tienda",
   cod_cart: "Formulario de carrito",
   abandoned_browse: "Búsqueda en la web",
 };

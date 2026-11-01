@@ -9926,8 +9926,24 @@ periodo, cuántos compraron en sus primeros 7 días.
 | Anuncios de Meta | `meta_ad` |
 | Carritos COD abandonados | `cod_cart` |
 | Orgánico de WhatsApp | sin fuente, o `whatsapp-bot` (la marca que recibe el lead orgánico que ganó, `lib/leads-ingest.ts`) |
+| Web de la tienda | `web` |
 | Web de Facebook | `fb_web` |
 | Búsquedas abandonadas | `abandoned_browse` |
+
+**La fuente `web` (owner, 01-11-2026, 0294).** Desde el 29-10 el botón de
+WhatsApp de cada producto en la web (WooCommerce) abre el chat con «Hola,
+quiero pedir <producto>. Soy de Depto / Provincia / Distrito. <enlace>». No
+trae ninguna señal de Meta, así que esos leads quedaban sin fuente y se
+contaban como orgánicos: unos 150 de los ~200 diarios del botón. La
+sincronización los marca `web` cuando un mensaje de la clienta es el del botón
+(«quiero pedir …» con el enlace `/products/` de la tienda, o la ubicación «Soy
+de … / … / …»; `isWebButtonMessage` en `lib/kapso.ts`). Va último: si la
+conversación trae un anuncio de Meta (`meta_ad`) o un enlace de Facebook o
+Instagram (`fb_web`), gana ése. Como toda fuente, se escribe una sola vez
+(`source` vacío). En Leads es el filtro «Web»; en Consolidado y Productividad,
+«Web de la tienda», con el color de «Meta / Web» (la paleta validada tiene seis
+colores y no hay séptimo; las separa la etiqueta). `conversion_por_fuente` la
+cuenta con tasa desde la 0294; sin ella, un lead `web` caería en `sin_tasa`.
 
 La venta telefónica (`manual`) y cualquier fuente que no esté en la tabla no
 tienen tasa —no hay un canal que medir—: se cuentan aparte, en una línea bajo

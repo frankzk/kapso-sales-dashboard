@@ -836,8 +836,12 @@ export interface LeadReferral {
   // and then opened WhatsApp from a web button — could be paid OR organic, and
   // there's no ad_id to tie it to a specific campaign. Kept separate so the
   // "Meta Ads (campañas)" bucket stays trustworthy (only real ad clicks).
-  source: "meta_ad" | "fb_web";
-  ad_id: string | null; // referral.source_id (Meta ad id) — null for fb_web
+  //
+  // "web" = the store's own WhatsApp button on a product page (WooCommerce,
+  // 29-10-2026): «Hola, quiero pedir <producto>. Soy de … / … / …. <link>».
+  // No Meta signal at all — before this they were null and counted as organic.
+  source: "meta_ad" | "fb_web" | "web";
+  ad_id: string | null; // referral.source_id (Meta ad id) — null for fb_web and web
   ad_headline: string | null; // referral.headline (ad creative headline)
   ctwa_clid: string | null; // referral.ctwa_clid (click id, for Meta CAPI matching)
 }
@@ -876,7 +880,24 @@ export function extractReferral(rawMsgs: any[]): LeadReferral | null {
       return { source: "fb_web", ad_id: null, ad_headline: null, ctwa_clid: null };
     }
   }
+  // 3) The store's own web button (MOM §17.4): a customer message that is the
+  //    button's prefilled text. Last, so a Meta signal always wins.
+  for (const m of rawMsgs ?? []) {
+    if (msgDirection(m) !== "inbound") continue;
+    if (isWebButtonMessage(msgText(m))) {
+      return { source: "web", ad_id: null, ad_headline: null, ctwa_clid: null };
+    }
+  }
   return null;
+}
+
+/** The product page's WhatsApp button: «quiero pedir … https://…/products/…»,
+ *  or the location it asks for first («Soy de Lima / Lima / Ate»). */
+const WEB_BUTTON_RE = /\bquiero pedir\b[\s\S]*https?:\/\/\S+\/products\//i;
+
+export function isWebButtonMessage(text: string | null | undefined): boolean {
+  if (!text) return false;
+  return WEB_BUTTON_RE.test(text) || parseWebLocation(text) !== null;
 }
 
 export interface OrderSignals {
