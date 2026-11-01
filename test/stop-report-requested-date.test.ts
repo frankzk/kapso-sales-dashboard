@@ -100,7 +100,7 @@ describe("la fecha que pidió el cliente en el reporte de la parada", () => {
     expect(result.ok).toBe(true);
     expect(update).toMatchObject({ status: "no_entregado", outcome_reason: "reprogramado", requested_date: "2026-10-14" });
     expect(event?.payload).toMatchObject({ requested_date: "2026-10-14", outcome_reason: "reprogramado" });
-    expect(event?.note).toContain("No entregado · Reprogramado por el cliente · pidió el mié 14/10 (sin confirmar)");
+    expect(event?.note).toContain("No entregado · Reprogramado por el cliente · pidió el mié 14/10 (sale ese día con Grupo GF)");
     // Hoy también vale: el cliente pide que se vuelva más tarde.
     expect((await report({ requestedDate: "2026-10-12" })).update).toMatchObject({ requested_date: "2026-10-12" });
   });

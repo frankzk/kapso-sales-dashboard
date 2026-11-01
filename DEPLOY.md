@@ -5445,3 +5445,18 @@ migración, crons ni variables.
    llamando, se le da el rol «Asesora» o el permiso suelto en Equipo.
 
 **Marcha atrás.** Revertir el commit.
+
+### 01-11-2026 · La fecha que el cliente da en la puerta programa la salida (sin migración, MOM §29.7)
+
+Decisión del owner: Grupo GF le impone a la tienda la reprogramación que ya
+tiene. El reporte «No entregado · Reprogramado por el cliente» con fecha
+programa la salida de Grupo GF para ese día; en Repro Lima sale en
+«Programados» como «Acordado en la puerta», sin llamar. Reemplaza la decisión 7
+del 12-10-2026. Sin migración, crons ni variables.
+
+1. **El código**, por el camino de siempre.
+2. **Avisar** a la tienda y a los motorizados: la fecha que anotan en la puerta
+   ya programa la salida.
+
+**Marcha atrás.** Revertir el commit. Los programas ya escritos quedan; se
+quitan con «Quitar la fecha» en Despacho del día.

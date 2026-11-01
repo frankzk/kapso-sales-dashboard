@@ -12,6 +12,7 @@ import { isReturningOwnOutput, OUTPUT_REPLACED_KIND, replacedOutputIds, type Ret
 import { reportedCollection } from "@/lib/route-collection";
 import { loadRouteCollectionBalances } from "@/lib/route-collection-access";
 import { rescheduleDateProblem } from "@/lib/gf-dispatch-program";
+import { syncDoorDateProgram } from "@/lib/door-date-program";
 import { programDayLabel } from "@/lib/dispatch-day";
 import { limaTodayKey } from "@/lib/shipments";
 import {
@@ -48,9 +49,11 @@ export interface WriteStopReportInput {
    */
   notebook?: { riderName: string; importId: string } | null;
   /**
-   * Fecha que pidió el cliente (YYYY-MM-DD, Lima; MOM §9.5, 12-10-2026).
-   * undefined conserva; null borra; solo con no_entregado·reprogramado. Es
-   * informativa: nunca programa la salida; la tienda la confirma en Repro Lima.
+   * Fecha que pidió el cliente (YYYY-MM-DD, Lima; MOM §29.7). undefined
+   * conserva; null borra; solo con no_entregado·reprogramado. Desde el
+   * 01-11-2026 programa la salida de Grupo GF para ese día
+   * (`syncDoorDateProgram`): la tienda la ve en Repro Lima como «Acordado en la
+   * puerta» y puede cambiarla.
    */
   requestedDate?: string | null;
 }
@@ -222,6 +225,17 @@ export async function writeStopReport(admin: SupabaseClient, input: WriteStopRep
   // postergado → Por reprogramar Lima, etc. Sin esto el pedido esperaba al
   // cron y seguía «En curso» después de entregado.
   await recomputeOrderMasterSafe(admin, [stop.order_id]).catch(() => undefined);
+  // La fecha que el cliente dio en la puerta programa la salida (01-11-2026);
+  // sin fecha, o con otro resultado, se quita la que había puesto la puerta.
+  // Solo cuando el reporte la toca: corregir otra cosa no la reescribe.
+  if (!keeps || requestedDate !== undefined) {
+    await syncDoorDateProgram(admin, {
+      orderId: stop.order_id,
+      routeId: stop.route_id,
+      day: keeps && requestedDate ? requestedDate : null,
+      actor: input.actor,
+    });
+  }
   return { ok: true, orderId: stop.order_id, routeId: stop.route_id };
 }
 
@@ -358,7 +372,7 @@ async function writeStopReportedEvent(
     const reason = NON_DELIVERY_REASONS.find((r) => r.code === ev.reason)?.label ?? ev.reason ?? "sin motivo";
     parts.push(`No entregado · ${reason}`);
     // Lo que dijo el cliente en la puerta: nunca programa (MOM §9.5).
-    if (ev.requestedDate) parts.push(`pidió el ${programDayLabel(ev.requestedDate)} (sin confirmar)`);
+    if (ev.requestedDate) parts.push(`pidió el ${programDayLabel(ev.requestedDate)} (sale ese día con Grupo GF)`);
   }
   const evidence = [ev.photoPath ? "foto" : null, ev.voucherPath ? "comprobante" : null].filter(Boolean).join(" y ");
   if (evidence) parts.push(`con ${evidence}`);
