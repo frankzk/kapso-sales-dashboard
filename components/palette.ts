@@ -74,6 +74,9 @@ export const CLOSING_GROUP_SHADE = {
 export const SOURCE_SERIES: Record<string, string> = {
   meta_ad: SERIES[0],
   fb_web: SERIES[1],
+  // Las dos llegan desde la web: comparten color y las separa su etiqueta (la
+  // paleta validada tiene seis y no hay séptimo).
+  web: SERIES[1],
   cod_cart: SERIES[2],
   abandoned_browse: SERIES[3],
   winback: SERIES[4],

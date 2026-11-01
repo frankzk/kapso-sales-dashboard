@@ -5353,3 +5353,25 @@ de entorno nuevas.
    from pg_proc where proname = 'invoice_claim';
    ```
 3. Desplegar el código.
+
+### 01-11-2026 · La fuente `web`: el botón de WhatsApp de la web de la tienda (0294, MOM §17.4)
+
+Decisión del owner (01-11-2026). Los leads que escriben desde el botón de
+WhatsApp de un producto («Hola, quiero pedir … Soy de … / … / …. <enlace>»)
+se marcan `source = 'web'` al sincronizar (`extractReferral` en
+`lib/kapso.ts`). Un anuncio de Meta o un enlace de Facebook o Instagram gana.
+Leads, Consolidado y Productividad la muestran como «Web» / «Web de la
+tienda». Sin variables de entorno nuevas; `MOM_RESOLUTION_VERSION` no cambia.
+
+1. **Migración `0294_conversion_fuente_web.sql`**, a mano, ANTES del código.
+   Solo `conversion_por_fuente`, con `create or replace`, la misma firma y el
+   cuerpo de la 0268 salvo la lista de fuentes con tasa, que suma `web`. Sin
+   ella, un lead `web` cae en `sin_tasa` y desaparece de «Conversión por
+   fuente». No toca filas. Es idempotente.
+2. Comprobar:
+   ```sql
+   select pg_get_functiondef('public.conversion_por_fuente(uuid[], date, date)'::regprocedure)
+          like '%''fb_web'', ''web'', ''cod_cart''%' as con_web;
+   ```
+3. Desplegar el código. Los leads nuevos del botón se marcan solos; los que ya
+   estaban en la cola se marcan cuando la sincronización los vuelve a leer.

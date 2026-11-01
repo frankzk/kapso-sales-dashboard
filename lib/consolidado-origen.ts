@@ -250,13 +250,14 @@ export function salesPeriod(
 export const CONVERSION_DAYS = 7;
 
 /** Las fuentes con tasa, en el orden de la tabla. */
-export const SOURCE_KEYS = ["meta_ad", "cod_cart", "organico", "fb_web", "abandoned_browse"] as const;
+export const SOURCE_KEYS = ["meta_ad", "cod_cart", "organico", "web", "fb_web", "abandoned_browse"] as const;
 export type SourceKey = (typeof SOURCE_KEYS)[number];
 
 export const SOURCE_LABEL: Record<SourceKey, { title: string; sub: string }> = {
   meta_ad: { title: "Anuncios de Meta", sub: "escribieron desde un anuncio de WhatsApp" },
   cod_cart: { title: "Carritos COD abandonados", sub: "dejaron el formulario contraentrega a medias" },
   organico: { title: "Orgánico de WhatsApp", sub: "escribieron sin anuncio ni carrito" },
+  web: { title: "Web de la tienda", sub: "escribieron desde el botón de WhatsApp de un producto" },
   fb_web: { title: "Web de Facebook", sub: "llegaron por un enlace de Facebook o Instagram" },
   abandoned_browse: { title: "Búsquedas abandonadas", sub: "miraron productos en la web y no compraron" },
 };

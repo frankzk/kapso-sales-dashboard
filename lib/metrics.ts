@@ -869,6 +869,8 @@ export function sourceBreakdown(leads: LeadRow[], orders: OrderRow[]): SourceSta
         ? "meta_ad"
         : l.source === "fb_web"
           ? "fb_web"
+          : l.source === "web"
+            ? "web"
           : l.source === "cod_cart"
             ? "cod_cart"
             : l.source === "abandoned_browse"
@@ -885,6 +887,7 @@ export function sourceBreakdown(leads: LeadRow[], orders: OrderRow[]): SourceSta
   const labels: Record<string, string> = {
     meta_ad: "Meta Ads (campañas)",
     fb_web: "🌐 Meta / Web (FB·IG)",
+    web: "🛍️ Web de la tienda",
     cod_cart: "🛒 Carrito abandonado",
     abandoned_browse: "🔎 Búsqueda abandonada",
     organic: "Orgánico",
@@ -1749,6 +1752,7 @@ export type AttributionSource =
   | "winback"
   | "meta_ad"
   | "fb_web"
+  | "web"
   | "cod_cart"
   | "abandoned_browse"
   | "organic"
@@ -1819,6 +1823,7 @@ const SOURCE_LABELS: Record<AttributionSource, string> = {
   winback: "Recuperación 60d",
   meta_ad: "Meta Ads (campañas)",
   fb_web: "Meta / Web (FB·IG)",
+  web: "Web de la tienda",
   cod_cart: "Carrito abandonado",
   abandoned_browse: "Búsqueda abandonada",
   organic: "Orgánico (WhatsApp)",
@@ -1830,6 +1835,7 @@ const SOURCE_LABELS: Record<AttributionSource, string> = {
 export const ATTRIBUTION_SOURCE_ORDER: AttributionSource[] = [
   "meta_ad",
   "fb_web",
+  "web",
   "cod_cart",
   "abandoned_browse",
   "winback",

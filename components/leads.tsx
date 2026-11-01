@@ -196,11 +196,13 @@ function measureLeadDrawerReady() {
 /** Canonical acquisition-source bucket for a lead's `source` (Fuente filter). */
 function leadSourceKey(
   s: string | null | undefined,
-): "meta_ad" | "fb_web" | "cod_cart" | "abandoned_browse" | "organic" {
+): "meta_ad" | "fb_web" | "web" | "cod_cart" | "abandoned_browse" | "organic" {
   return s === "meta_ad"
     ? "meta_ad"
     : s === "fb_web"
       ? "fb_web"
+      : s === "web"
+        ? "web"
       : s === "cod_cart"
         ? "cod_cart"
         : s === "abandoned_browse"
@@ -1180,6 +1182,7 @@ export function LeadsBoard({
     srcCounts,
     hasCampaign,
     hasFbWeb,
+    hasWeb,
     hasCart,
     hasBrowse,
     segCounts,
@@ -1265,7 +1268,7 @@ export function LeadsBoard({
     });
 
     const srcBase = facets.except("src");
-    const srcCountsAcc = { meta_ad: 0, fb_web: 0, cod_cart: 0, abandoned_browse: 0, organic: 0 };
+    const srcCountsAcc = { meta_ad: 0, fb_web: 0, web: 0, cod_cart: 0, abandoned_browse: 0, organic: 0 };
     for (const l of srcBase) srcCountsAcc[leadSourceKey(l.source)] += 1;
 
     // Eje 2 (segmento): conteos SCOPEADOS al estado activo. `except("seg")` pasa
@@ -1312,6 +1315,7 @@ export function LeadsBoard({
       srcCounts: srcCountsAcc,
       hasCampaign: leads.some((l) => l.source === "meta_ad"),
       hasFbWeb: leads.some((l) => l.source === "fb_web"),
+      hasWeb: leads.some((l) => l.source === "web"),
       hasCart: leads.some((l) => l.source === "cod_cart"),
       hasBrowse: leads.some((l) => l.source === "abandoned_browse"),
       segCounts: countQueueBuckets(segBase),
@@ -1935,7 +1939,7 @@ export function LeadsBoard({
                 )}
               </SheetSection>
             )}
-            {(hasCampaign || hasFbWeb || hasCart || hasBrowse) && (
+            {(hasCampaign || hasFbWeb || hasWeb || hasCart || hasBrowse) && (
               <SheetSection title="Fuente">
                 <CheckList
                   label="Fuente"
@@ -1944,6 +1948,7 @@ export function LeadsBoard({
                   options={[
                     ...(hasCampaign ? [{ key: "meta_ad", label: "Campaña", count: srcCounts.meta_ad }] : []),
                     ...(hasFbWeb ? [{ key: "fb_web", label: "Meta / web", count: srcCounts.fb_web }] : []),
+                    ...(hasWeb ? [{ key: "web", label: "Web", count: srcCounts.web }] : []),
                     ...(hasCart ? [{ key: "cod_cart", label: "Carrito", count: srcCounts.cod_cart }] : []),
                     ...(hasBrowse ? [{ key: "abandoned_browse", label: "Búsqueda", count: srcCounts.abandoned_browse }] : []),
                     { key: "organic", label: "Orgánico", count: srcCounts.organic },

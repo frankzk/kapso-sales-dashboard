@@ -74,8 +74,8 @@ export interface WonOrderRef {
 /** The acquisition-source buckets a won order can be attributed to. `meta_ad` =
  *  provable Click-to-WhatsApp ad click (has ad_id); `fb_web` = reached WhatsApp
  *  via a Facebook/IG web link (paid or organic, no ad_id). */
-export type SourceBucket = "meta_ad" | "fb_web" | "cod_cart" | "abandoned_browse" | "organic";
-export const SOURCE_BUCKETS: SourceBucket[] = ["meta_ad", "fb_web", "cod_cart", "abandoned_browse", "organic"];
+export type SourceBucket = "meta_ad" | "fb_web" | "web" | "cod_cart" | "abandoned_browse" | "organic";
+export const SOURCE_BUCKETS: SourceBucket[] = ["meta_ad", "fb_web", "web", "cod_cart", "abandoned_browse", "organic"];
 
 /** One advisor×source cell: how many orders closed and their net revenue. */
 export interface SourceCell {
@@ -97,6 +97,7 @@ export function emptyPorFuente(): Record<SourceBucket, SourceCell> {
   return {
     meta_ad: { cerrados: 0, ingresos: 0 },
     fb_web: { cerrados: 0, ingresos: 0 },
+    web: { cerrados: 0, ingresos: 0 },
     cod_cart: { cerrados: 0, ingresos: 0 },
     abandoned_browse: { cerrados: 0, ingresos: 0 },
     organic: { cerrados: 0, ingresos: 0 },
@@ -169,6 +170,8 @@ function sourceKey(s: string | null | undefined): SourceBucket {
     ? "meta_ad"
     : s === "fb_web"
       ? "fb_web"
+      : s === "web"
+        ? "web"
       : s === "cod_cart"
         ? "cod_cart"
         : s === "abandoned_browse"
