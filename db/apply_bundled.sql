@@ -28654,7 +28654,14 @@ select distinct s.org_id
   from stores s
  where s.status = 'active'
    and s.org_id is not null
+   -- Cliente es la organización AJENA a la del operador (§29.15.1). Aurela y
+   -- Kenku tienen contrato con Grupo GF dentro de su propia organización: no
+   -- son clientes, y la primera versión de este filtro las dejaba fuera.
    and not exists (
-     select 1 from logistics_service_agreements a where a.client_org_id = s.org_id
+     select 1
+       from logistics_service_agreements a
+       join logistics_providers p on p.id = a.provider_id
+      where a.client_org_id = s.org_id
+        and p.org_id <> s.org_id
    )
 on conflict (org_id) do nothing;
