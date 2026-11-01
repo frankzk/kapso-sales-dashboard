@@ -1,3 +1,4 @@
+vi.mock("@/lib/lead-routing-access", () => import("./helpers/lead-routing-disabled"));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({ access: vi.fn(), creds: vi.fn(), history: vi.fn(), lead: vi.fn(), name: vi.fn() }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
@@ -30,6 +31,14 @@ afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const metric = () => JSON.parse(vi.mocked(console.info).mock.calls.at(-1)![0]);
 
 describe("pérdida de reserva confirmada", () => {
+  it("un enlace directo fuera de los bloques no permite leer ni renovar el lead", async () => {
+    const routing = await import("@/lib/lead-routing-access");
+    vi.spyOn(routing, "getLeadRoutingScope").mockResolvedValue({ enabled: true, allowed: false, blockedIds: [], blocks: [], signature: "restricted" });
+    expect(await pollLeadState("other-block")).toEqual({ error: "Sin acceso a este lead." });
+    expect(await renewLeadClaim("other-block")).toEqual({ error: "Sin acceso a este lead." });
+    expect(mocks.lead).not.toHaveBeenCalled();
+    expect(mocks.name).not.toHaveBeenCalled();
+  });
   const fresh = () => new Date().toISOString();
   const old = () => new Date(Date.now() - 11 * 60_000).toISOString();
   const state = { has_order: false, status: "pendiente", category: "nuevo" };

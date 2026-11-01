@@ -1,6 +1,7 @@
 // RLS-scoped reads for the leads module (queue views, lead detail, counts).
 
 import { createServerSupabase } from "@/lib/db";
+import { filterRoutedLeads, getLeadRoutingScope } from "@/lib/lead-routing-access";
 import { CALL_QUEUE_FILTER } from "@/lib/lead-call-queue";
 import { leadCartDetailOf } from "@/lib/lead-cart-detail";
 import { normalizePhone } from "@/lib/phone";
@@ -169,6 +170,7 @@ export async function getStoreLeads(
 ): Promise<LeadRow[]> {
   if (!storeIds.length) return [];
   const sb = await createServerSupabase();
+  const routing = await getLeadRoutingScope(storeIds);
   const buildQuery = (select: string = LEAD_BOARD_SELECT, count?: "exact") => {
     let q = sb
       .from("leads")
@@ -229,7 +231,7 @@ export async function getStoreLeads(
     return q;
   };
 
-  if (limit !== null) {
+  if (limit !== null && (!routing.enabled || view === "ganados" || view === "perdidos")) {
     // «Atender ahora»: los pagos por validar se leen a la par de la vista.
     const pendingIndex = view === "handoff" ? loadPendingVouchers(sb, storeIds) : null;
     let res = await buildQuery().limit(limit);
@@ -243,7 +245,10 @@ export async function getStoreLeads(
     return view === "por_llamar" ? sortPorLlamar(limited) : limited;
   }
   const all = await drainLeads(buildQuery);
-  return view === "por_llamar" ? sortPorLlamar(all) : all;
+  let visible = filterRoutedLeads(all, routing);
+  if (view === "handoff") visible = filterRoutedLeads(await withPendingVoucherLeads(sb, storeIds, visible, LEAD_BOARD_SELECT, await loadPendingVouchers(sb, storeIds)), routing);
+  const sorted = view === "por_llamar" ? sortPorLlamar(visible) : visible;
+  return limit === null ? sorted : sorted.slice(0, limit);
 }
 
 /**
@@ -752,6 +757,14 @@ const ZERO_COUNTS: LeadCounts = {
  */
 export async function getLeadQueueSnapshot(storeIds: StoreScope): Promise<LeadQueueSnapshot> {
   if (!storeIds.length) return { counts: { ...ZERO_COUNTS }, signature: "empty" };
+  const routing = await getLeadRoutingScope(storeIds);
+  if (routing.enabled && routing.counts) {
+    const sb = await createServerSupabase();
+    const index = await loadPendingVouchers(sb, storeIds);
+    const extras = filterRoutedLeads(await loadPendingVoucherLeads<LeadRow>(sb, storeIds, index ?? new Map(), LEAD_BOARD_SELECT), routing)
+      .filter(l => !(l.needs_attention && l.handoff_at && l.handoff_at >= handoffFreshCutoffIso()));
+    return { counts: { ...routing.counts, handoff: routing.counts.handoff + extras.length }, signature: `routing:${routing.signature}:cv:${extras.map(l => l.id).sort().join(",")}` };
+  }
   const sb = await createServerSupabase();
   const nowIso = new Date().toISOString();
 

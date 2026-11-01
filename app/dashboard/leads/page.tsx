@@ -28,6 +28,8 @@ import { getAdProductMap } from "@/lib/ad-products-access";
 import { resolveAgentNames } from "@/lib/agent-names";
 import { LeadsBoard } from "@/components/leads";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
+import { getLeadRoutingScope } from "@/lib/lead-routing-access";
+import { routingLabel } from "@/lib/lead-routing";
 
 export const dynamic = "force-dynamic";
 
@@ -135,6 +137,7 @@ async function LeadsContent({
   const timezone = store?.timezone ?? "America/Lima";
 
   const snapshotPromise = getLeadQueueSnapshot(scope);
+  const routingPromise = getLeadRoutingScope(scope);
   // "Por llamar" se filtra/cuenta en cliente (jerarquía de facetas), así que la
   // cola se pagina completa (`null`) para que los conteos y drill-downs usen el
   // mismo universo que el gráfico; las demás vistas mantienen el tope estándar.
@@ -178,6 +181,7 @@ async function LeadsContent({
     coverageRules,
     shopifyLocations,
     roles,
+    routing,
   ] = await Promise.all([
     snapshotPromise,
     leadsPromise,
@@ -190,6 +194,7 @@ async function LeadsContent({
     coverageRulesPromise,
     shopifyLocationsPromise,
     rolesPromise,
+    routingPromise,
   ]);
 
   return (
@@ -202,6 +207,7 @@ async function LeadsContent({
       view={view}
       counts={snapshot.counts}
       queueSignature={snapshot.signature}
+      routingLabel={routing.enabled ? routingLabel(routing.blocks) : undefined}
       leads={leads}
       adNames={adNames}
       waNumbers={waNumbers}

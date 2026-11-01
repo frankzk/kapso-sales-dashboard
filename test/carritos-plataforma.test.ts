@@ -1,3 +1,4 @@
+vi.mock("@/lib/lead-routing-access", () => import("./helpers/lead-routing-disabled"));
 // Los carritos de Shopify en una tienda que ya crea en WooCommerce (MOM §38.12,
 // 25-10-2026). `stores.platform` dice dónde crea Kapta los pedidos nuevos de la
 // tienda (§38.1): lo que completaba un borrador de Shopify, o registraba una

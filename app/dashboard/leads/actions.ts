@@ -149,6 +149,7 @@ import {
 } from "@/lib/voice-leads-server";
 import { loadDoNotCallPhones } from "@/lib/voice-recovery-server";
 import { zadarmaLocalPeru } from "@/lib/zadarma";
+import { filterRoutedLeads, getLeadRoutingScope, readRoutingForActor } from "@/lib/lead-routing-access";
 
 export interface LeadActionState {
   error?: string;
@@ -587,7 +588,7 @@ export async function searchLeads(storeIds: StoreScope, query: string): Promise<
   for (const { data } of settled) {
     for (const r of (data as LeadRow[] | null) ?? []) byId.set(r.id!, r);
   }
-  return [...byId.values()]
+  return filterRoutedLeads([...byId.values()], await getLeadRoutingScope(scope))
     .sort((a, b) => (b.last_interaction_at ?? "").localeCompare(a.last_interaction_at ?? ""))
     .slice(0, 40);
 }
@@ -617,6 +618,7 @@ async function authorizeLead(leadId: string): Promise<AuthorizedLeadContext | nu
     .eq("id", leadId)
     .maybeSingle();
   if (!data) return null;
+  if (!(await getLeadRoutingScope([data.store_id as string], leadId)).allowed) return null;
   return {
     userId,
     storeId: data.store_id as string,
@@ -672,7 +674,10 @@ export async function claimLead(leadId: string): Promise<LeadActionState> {
   // claimLead, so it must never depend on the Yape-routing columns (a lead that
   // gets claimed leaves the rotation anyway — listYapeAlerts/reconcile exclude
   // claimed leads). This keeps the drawer working even if migration 0020 lags.
-  const { data, error } = await admin
+  const routing = await getLeadRoutingScope([ctx.storeId], leadId);
+  const { data, error } = routing.enabled
+    ? await admin.rpc("claim_routed_lead", { p_actor: ctx.userId, p_lead: leadId }).maybeSingle()
+    : await admin
     .from("leads")
     .update({ claimed_by: ctx.userId, claimed_at: new Date().toISOString() })
     .eq("id", leadId)
@@ -782,7 +787,16 @@ async function reconcileYapeOffers(admin: SupabaseClient, storeId: string, nowMs
     passed: Array.isArray(r.yape_passed) ? (r.yape_passed as string[]) : [],
   }));
   const advisors = await onlineVendedorasForStore(admin, storeId, nowMs);
-  const plans = planYapeOffers(leads, advisors, nowMs);
+  const scopes = new Map(await Promise.all(advisors.map(async a => [a.id, await readRoutingForActor(a.id, [storeId])] as const)));
+  // Never offer a payment lead to somebody whose blocks exclude it. Expire an
+  // old offer after a settings change so the eligible team need not wait 90 s.
+  for (const l of leads) {
+    if (l.offeredTo && scopes.get(l.offeredTo)?.blockedIds.includes(l.id)) {
+      await admin.from("leads").update({ yape_offered_at: null }).eq("id", l.id).eq("yape_offered_to", l.offeredTo);
+      l.offeredTo = null; l.offeredAtMs = null;
+    }
+  }
+  const plans = planYapeOffers(leads, advisors, nowMs, (leadId, advisorId) => !scopes.get(advisorId)?.blockedIds.includes(leadId));
   if (!plans.length) return;
   const offerCutoff = new Date(nowMs - OFFER_TTL_MS).toISOString();
   const nowIso = new Date(nowMs).toISOString();
@@ -828,7 +842,8 @@ export async function listYapeAlerts(): Promise<YapeAlert[]> {
     .order("yape_offered_at", { ascending: true })
     .limit(20);
   if (error || !data) return [];
-  return (data as Array<Record<string, unknown>>).map((l) => ({
+  const visible = filterRoutedLeads(data as Array<Record<string, unknown> & { id: string }>, await getLeadRoutingScope(storeIds));
+  return visible.map((l) => ({
     id: l.id as string,
     storeId: l.store_id as string,
     name: (l.name as string | null) ?? null,

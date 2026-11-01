@@ -71,6 +71,7 @@ export function planYapeOffers(
   leads: RoutingLead[],
   advisors: RoutingAdvisor[],
   nowMs: number,
+  eligible: (leadId: string, advisorId: string) => boolean = () => true,
 ): OfferPlan[] {
   const online = advisors.filter((a) => nowMs - a.lastSeenMs <= ONLINE_TTL_MS);
   if (!online.length) return [];
@@ -102,12 +103,13 @@ export function planYapeOffers(
     const passed = new Set(l.passed.filter((id) => onlineIds.has(id)));
     if (l.offeredTo && onlineIds.has(l.offeredTo)) passed.add(l.offeredTo);
 
-    let pick = chooseAdvisor(online, passed, load, cap);
+    const candidates = online.filter(a => eligible(l.id, a.id));
+    let pick = chooseAdvisor(candidates, passed, load, cap);
     let nextPassed = [...passed];
     if (!pick) {
       // Everyone online has passed → reset the lap and start over (infinite loop).
       nextPassed = [];
-      pick = chooseAdvisor(online, new Set(), load, cap);
+      pick = chooseAdvisor(candidates, new Set(), load, cap);
     }
     if (!pick) continue; // unreachable while online non-empty, but stay safe
     plans.push({ leadId: l.id, offeredTo: pick, passed: nextPassed });

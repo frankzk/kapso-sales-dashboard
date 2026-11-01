@@ -4482,6 +4482,46 @@ Esto ordena la llamada, no la reemplaza. Se descartó crear el pedido de forma
 automática para esta señal: incluso aquí, 6 de cada 10 carritos que siguen
 abiertos a las dos horas no terminan en pedido.
 
+**Bloques por asesora (31-10-2026, decisión del owner; migración 0295).**
+En Equipo → Leads, quien gestiona el equipo marca varios bloques por persona.
+Los atajos Principal (cuatro primeros) y Recuperación (quinto) solo rellenan
+checks; el respaldo se concede aparte. Propuesta acordada: Medaly
+(`millonestania5`), Albornoz, Jessica y Daphne en Principal; Reyna en
+Recuperación. La instalación no activa ni asigna: guardar una configuración
+completa y activarla es un acto humano posterior.
+
+- Clasificación exhaustiva y excluyente: carrito reciente, interés reciente
+  (producto/distrito o atención de pago), nuevo sin intención definida,
+  pendiente/reintento con interés, recuperación de baja intención. El último
+  incluye también los reintentos de baja intención; desconocer la antigüedad
+  nunca deja a alguien sin bloque. Yape por verificar es interés prioritario.
+- Oportunidad inicial configurable, 24 horas **corridas** por defecto (1–168).
+  Se usa ingreso, mensaje entrante o creación del carrito actual de la misma
+  tienda. Fechas futuras, notas y llamadas fallidas no rejuvenecen. Un cliente
+  antiguo con señal posterior a su última llamada vuelve a prioridad. No se
+  reencola a nadie: frescura de siete días, intentos, exclusiones y citas siguen
+  las reglas de 0289/0291.
+- La reserva propia vigente y la cita de una llamada firmada conservan su
+  asesora aunque cambien sus bloques, mientras siga en el equipo y con acceso
+  a la tienda. Una cita sin asesora habilitada vuelve al bloque correspondiente.
+  Nadie toma una reserva ajena. El máximo
+  sigue siendo dos abiertas por asesora.
+- Respaldo optativo: recibe otros bloques prioritarios de su tienda cuando
+  ninguna asesora explícitamente asignada esté en línea (presencia menor a
+  40 segundos) y con menos de dos reservas vivas. No da acceso al bloque de
+  recuperación. Al regresar una asesora no se arrebatan reservas activas.
+- Lista, buscador, apertura directa, acciones, siguiente lead, contadores y
+  ofertas Yape comprueban el alcance en servidor. Supervisión conserva el
+  universo de sus tiendas; los historiales ganados/perdidos siguen consultables.
+  Si no se puede comprobar la asignación, se deniega, no se concede por error.
+- Activar exige una asesora con acceso a cada tienda para cada uno de los cinco
+  bloques. El respaldo no sustituye esa cobertura. Quitar tiendas, membresías o
+  roles tampoco puede dejarla huérfana: la base valida la transacción completa.
+  Sin nadie conectado el bloque sigue pendiente y visible para supervisión.
+- Cada guardado comprueba revisión y deja actor, antes y después en
+  `lead_routing_audit`. Configuración y RPCs solo de servicio; no se confía en
+  actor, bloque o ids autorizados enviados por el navegador.
+
 **Por llamar: nuevos y reintentos en una sola cola (29-10-2026, decisión del owner).**
 La pestaña antes llamada «Sin llamar» se llama **Por llamar**. Las asesoras
 trabajan ahí, así que los reintentos que merecen una nueva llamada regresan a
