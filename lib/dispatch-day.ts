@@ -932,7 +932,7 @@ export function filterBoxItems<T extends Pick<DayItem, "removed_at" | "pickup_de
 // ---------------------------------------------------------------------------
 
 /** Tiles de la cola; las de apartado encienden ese apartado. */
-export type QueueTile = "por_asignar" | "nunca_salieron" | "programados_hoy" | "por_reprogramar" | "tomados_sin_caja" | "armados";
+export type QueueTile = "por_asignar" | "nunca_salieron" | "programados_hoy" | "reintentos_hoy" | "tomados_sin_caja" | "armados";
 export type BoxTile = "por_armar" | "listos_cotejo" | "sin_confirmar";
 
 const SEGMENT_TILES = new Set<QueueTile>(["nunca_salieron", "programados_hoy"]);
@@ -941,7 +941,7 @@ export const QUEUE_TILE_LABEL: Record<QueueTile, { label: string; hint: string }
   por_asignar: { label: "Por asignar", hint: "Pedidos de Lima con condiciones para salir y sin caja: disponibles más tomados sin ruta. Quita los filtros de la lista." },
   nunca_salieron: QUEUE_SEGMENT_LABEL.nunca_salieron,
   programados_hoy: QUEUE_SEGMENT_LABEL.programados_hoy,
-  por_reprogramar: { label: "Por reprogramar", hint: "No entregados (En curso · Por reprogramar Lima): los del motorizado que siguen en su caja se reciben en oficina; los que ya volvieron, y los que otro courier no entregó, se asignan o se programan con el calendario. Lo de otro courier sale en una salida nueva; lo de Grupo GF, con su misma salida. Los que no se pueden sacar están en «Sin condiciones»." },
+  reintentos_hoy: { label: "Reintentos para hoy", hint: "No entregados que la tienda ya acordó con el cliente en Repro Lima y deben salir hoy (o ya debían). Lo que todavía nadie llamó no está aquí: lo atiende la tienda en Repro Lima. Las cajas que el motorizado aún tiene se reciben en «Devoluciones»." },
   tomados_sin_caja: { label: "Tomados sin caja", hint: "Ya tomados por Grupo GF (servicio y tarifa reservados) pero todavía sin motorizado." },
   armados: { label: "Armados", hint: "Tomados cuya salida ya armó Almacén (listo para despacho) y siguen sin caja." },
 };
@@ -958,16 +958,25 @@ export function isPorReprogramar(row: Pick<QueueRow, "macroStage" | "macroSubsta
 }
 
 /**
- * `rows` es la cola de asignación; `allRows` suma los que ya salieron, porque
- * «Por reprogramar» cuenta también los no entregados que siguen en una caja.
+ * Un reintento que sale hoy (01-11-2026, MOM §29.13): un no entregado de Lima
+ * que la tienda ya acordó en Repro Lima —tiene su día programado— y ese día es
+ * hoy o ya pasó. Lo no acordado ni llega a la cola (`awaitingRepro`).
  */
-export function queueTileCounts(rows: readonly QueueRow[], allRows: readonly QueueRow[], today: string): Record<QueueTile, number> {
+export function isRetryForToday(row: Pick<QueueRow, "macroStage" | "macroSubstage" | "assignable" | "programmedFor" | "hasPriorDispatch" | "createdAt">, today: string): boolean {
+  return isPorReprogramar(row) && row.assignable && queueSegment(row, today) === "programados_hoy";
+}
+
+/**
+ * Las tarjetas cuentan sobre la cola de asignación (`rows`): lo que todavía
+ * está en la caja de un motorizado se cuenta en «Devoluciones».
+ */
+export function queueTileCounts(rows: readonly QueueRow[], today: string): Record<QueueTile, number> {
   const segments = rows.map((q) => queueSegment(q, today));
   return {
     por_asignar: rows.length,
     nunca_salieron: segments.filter((s) => s === "nunca_salieron").length,
     programados_hoy: segments.filter((s) => s === "programados_hoy").length,
-    por_reprogramar: allRows.filter(isPorReprogramar).length,
+    reintentos_hoy: rows.filter((q) => isRetryForToday(q, today)).length,
     tomados_sin_caja: rows.filter((q) => q.taken).length,
     armados: rows.filter((q) => q.armed).length,
   };
@@ -985,7 +994,7 @@ export function boxTileCounts(boxes: readonly RiderBox[]): Record<BoxTile, numbe
 /** Si la tile está «encendida» con los filtros actuales. */
 export function queueTileActive(filters: QueueFilters, tile: QueueTile): boolean {
   if (tile === "por_asignar") return false;
-  if (tile === "por_reprogramar") return filters.stages.length === 1 && filters.stages[0] === "en_curso" && filters.substages.length === 1 && filters.substages[0] === "por_reprogramar_lima";
+  if (tile === "reintentos_hoy") return filters.segment === "programados_hoy" && filters.stages.length === 1 && filters.stages[0] === "en_curso" && filters.substages.length === 1 && filters.substages[0] === "por_reprogramar_lima";
   if (tile === "tomados_sin_caja") return filters.takenOnly;
   if (tile === "armados") return filters.armedOnly;
   return filters.segment === tile;
@@ -994,10 +1003,10 @@ export function queueTileActive(filters: QueueFilters, tile: QueueTile): boolean
 /** Tocar una tile: enciende su filtro (o lo apaga si ya estaba); «Por asignar» limpia todos. */
 export function toggleQueueTile(filters: QueueFilters, tile: QueueTile): QueueFilters {
   if (tile === "por_asignar") return { ...EMPTY_QUEUE_FILTERS, query: filters.query };
-  if (tile === "por_reprogramar") {
+  if (tile === "reintentos_hoy") {
     return queueTileActive(filters, tile)
-      ? { ...filters, stages: [], substages: [] }
-      : { ...filters, stages: ["en_curso"], substages: ["por_reprogramar_lima"], segment: null };
+      ? { ...filters, stages: [], substages: [], segment: null }
+      : { ...filters, stages: ["en_curso"], substages: ["por_reprogramar_lima"], segment: "programados_hoy" };
   }
   if (tile === "tomados_sin_caja") return { ...filters, takenOnly: !filters.takenOnly };
   if (tile === "armados") return { ...filters, armedOnly: !filters.armedOnly };

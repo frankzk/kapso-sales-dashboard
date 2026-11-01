@@ -299,9 +299,11 @@ describe("3. la fila en «Desde la lista»", () => {
     const all = [office, inBox];
     expect(filterQueue(all, EMPTY_QUEUE_FILTERS, "2026-10-06").map((q) => q.orderId)).toEqual(["kp132798", "kp135156"]);
     expect(all.every(isPorReprogramar)).toBe(true);
-    const tiles = queueTileCounts(queue, all, "2026-10-06");
+    const tiles = queueTileCounts(queue, "2026-10-06");
     expect(tiles.por_asignar).toBe(1);
-    expect(tiles.por_reprogramar).toBe(2);
+    // Sin día acordado por la tienda no es un «Reintento para hoy» (01-11-2026);
+    // el que sigue en la caja va a «Devoluciones».
+    expect(tiles.reintentos_hoy).toBe(0);
   });
 });
 
@@ -448,7 +450,9 @@ describe("las piezas en el código", () => {
     expect(body).toContain("${REPROGRAM_QUEUE_FILTER}");
     expect(body).not.toContain("${RETRY_QUEUE_FILTER}");
     expect(body).toContain("const own = retry || review ? null : ownByOrder.get(order.order_id) ?? null;");
-    expect(body).toContain("if (isReprogramStage(order.macro_stage, order.macro_substage)) block(order, reprogramBlockReason(outputs, replacedIds));");
+    // Sin acuerdo de la tienda, un «Por reprogramar Lima» es de Repro Lima, no de la cola (01-11-2026).
+    expect(body).toContain("if (awaitingStoreAgreement(order, programByOrder)) awaitingRepro += 1;\n        else block(order, reprogramBlockReason(outputs, replacedIds));");
+    expect(body).toContain("else if (awaitingStoreAgreement(order, programByOrder)) awaitingRepro += 1;\n    else available.push(row);");
     expect(body).toContain("const decision = own ? ownRetryDecision(own, ownBox, ownInRequest.has(own.id)) : null;");
     expect(body).toContain("returnable.push({ ...row, route: ownBox, shipmentId: own.id })");
     // Una salida con solicitud activa va por `accepted`, nunca por aquí.
