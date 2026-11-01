@@ -1,3 +1,4 @@
+vi.mock("@/lib/lead-routing-access", () => import("./helpers/lead-routing-disabled"));
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";

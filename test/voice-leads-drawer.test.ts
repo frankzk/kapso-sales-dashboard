@@ -1,3 +1,4 @@
+vi.mock("@/lib/lead-routing-access", () => import("./helpers/lead-routing-disabled"));
 // Agente de voz para leads — el lado de Leads (MOM §33, 12-10-2026).
 //
 // Lo que ve y hace la asesora en el drawer (el panel A CIEGAS, historial,
@@ -1127,7 +1128,7 @@ describe("opt-out: drip, secuencia de carritos y winback", () => {
   });
 
   it("la secuencia de carritos no le envía, y pre-0247 reintenta sin la columna", () => {
-    const src = read("lib", "cart-sequence.ts");
+    const src = read("lib", "cart-sequence.ts").replace(/\r\n/g, "\n");
     expect(src).toContain("let { data, error } = await buildSelect(`${COLS}, contact_opt_out_at`);");
     expect(src).toContain("if (error && /contact_opt_out_at/i.test(error.message)) {");
     expect(src).toMatch(/if \(l\.contact_opt_out_at\) return "no_contactar";\n\s*if \(!l\.draft_order_gid\) return "sin_carrito";/);

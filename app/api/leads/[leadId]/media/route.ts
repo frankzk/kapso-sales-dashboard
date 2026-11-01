@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerSupabase } from "@/lib/db";
 import { getStoreCreds } from "@/lib/ingest";
+import { getLeadRoutingScope } from "@/lib/lead-routing-access";
 
 // Streams a WhatsApp media blob (Yape voucher, product photo) from Kapso through
 // the dashboard so the browser never needs Kapso credentials and the file stays
@@ -37,6 +38,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ leadId: str
   if (!user) return new NextResponse("unauthorized", { status: 401 });
   const { data: lead } = await sb.from("leads").select("store_id").eq("id", leadId).maybeSingle();
   if (!lead) return new NextResponse("forbidden", { status: 403 });
+  if (!(await getLeadRoutingScope([lead.store_id], leadId)).allowed) return new NextResponse("forbidden", { status: 403 });
 
   const creds = await getStoreCreds((lead as { store_id: string }).store_id);
   if (!creds?.kapso_api_key) return new NextResponse("kapso not configured", { status: 404 });

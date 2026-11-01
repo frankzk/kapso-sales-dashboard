@@ -1,5 +1,24 @@
 # Deployment runbook
 
+### 31-10-2026 · Equipo → Leads: bloques por asesora (0294)
+
+Aplicar `db/migrations/0294_team_lead_blocks.sql` antes del código. Instala
+tablas de configuración e historial con RLS, RPCs solo de servicio y validación
+diferida de cobertura; no cambia leads, llamadas, reservas ni asignaciones.
+El código nuevo falla cerrado si no puede comprobar el alcance.
+
+Después del despliegue: Equipo → Leads. Marcar Principal en Medaly
+(`millonestania5`), Albornoz, Jessica y Daphne; Recuperación en Reyna. Revisar
+también los permisos de las demás asesoras. El respaldo es optativo y separado.
+Guardar puede preparar la selección con el reparto apagado. Para activarlo,
+marcar «Activar reparto por bloques» y guardar: los cinco bloques deben tener
+alguien asignado con acceso a cada tienda. El plazo inicial es 24 horas corridas.
+Verificar con dos sesiones, una principal y otra de recuperación: misma tienda,
+listas y contadores propios, búsqueda/apertura de un lead ajeno denegada,
+reserva propia y cita conservadas. Probar respaldo con principal desconectado
+y ocupado. Supervisión mantiene el universo. Desactivar desde Equipo devuelve
+el acceso previo, sin borrar configuración ni historial.
+
 Turnkey checklist to put the dashboard live on **Supabase + Vercel**. The steps
 below are the ones that need a browser/computer (creating projects, OAuth,
 pasting credentials). Everything else (code, migrations, tests, CI) is already

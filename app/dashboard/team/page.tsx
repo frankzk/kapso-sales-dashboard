@@ -6,6 +6,7 @@ import type { Role } from "@/lib/types";
 import { GRANTED_ONE_BY_ONE, explainPermissions, permissionsFor } from "@/lib/permissions";
 import { hasOrgPermission } from "@/lib/permissions-access";
 import { getAdvisorSchedules } from "@/lib/advisor-schedules";
+import { getTeamLeadRouting } from "@/lib/lead-routing-access";
 
 export const dynamic = "force-dynamic";
 
@@ -57,6 +58,7 @@ export default async function TeamPage({
 
   const selected = adminOrgs.find((o) => o.id === sp.org) ?? adminOrgs[0]!;
   const admin = createAdminSupabase();
+  const leadRoutingPromise = getTeamLeadRouting(selected.id);
 
   const [{ data: memberRows }, { data: storeRows }, { data: riderRows }, { data: permissionRows }, schedules] = await Promise.all([
     admin.from("memberships").select("user_id, role").eq("org_id", selected.id),
@@ -155,7 +157,8 @@ export default async function TeamPage({
       members={members}
       riders={riders}
       schedules={Object.fromEntries(schedules)}
-      initialTab={sp.tab === "horarios" || sp.tab === "motorizados" ? sp.tab : "usuarios"}
+      leadRouting={await leadRoutingPromise}
+      initialTab={sp.tab === "horarios" || sp.tab === "motorizados" || sp.tab === "leads" ? sp.tab : "usuarios"}
       initialScheduleUserId={sp.tab === "horarios" ? (sp.user ?? null) : null}
     />
   );

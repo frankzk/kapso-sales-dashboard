@@ -496,6 +496,7 @@ export function LeadsBoard({
   scope,
   allStoresAvailable = false,
   canHoldNext = false,
+  routingLabel,
 }: {
   stores: StoreSummary[];
   /** Id de la tienda activa, o ALL_STORES cuando la vista es combinada. */
@@ -541,6 +542,7 @@ export function LeadsBoard({
   leadsComplete?: boolean;
   /** Tiene el rol `vendedora`: se le reserva su siguiente lead (MOM §11). */
   canHoldNext?: boolean;
+  routingLabel?: string;
 }) {
   const [board, setBoard] = useState({ sourceLeads: serverLeads, sourceCounts: serverCounts, leads: serverLeads, counts: serverCounts });
   // A route/periodic refresh replaces the local confirmed writes atomically.
@@ -1638,6 +1640,7 @@ export function LeadsBoard({
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h1 className="text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">Leads</h1>
+          {routingLabel && <p className="mt-1 text-sm font-medium text-brand-700">Tu cola: {routingLabel} · incluye tus reservas y citas</p>}
           <p className="mt-0.5 text-sm text-ink-500">
             {storeLabel}
             {" · "}
