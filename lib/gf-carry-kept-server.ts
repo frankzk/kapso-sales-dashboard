@@ -5,6 +5,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { carryKeptProblem } from "@/lib/gf-carry-kept";
+import { clearGfDispatchPrograms, type GfProgramRow } from "@/lib/gf-dispatch-program";
 
 /** Hoy en Lima (UTC-5, sin horario de verano), YYYY-MM-DD. */
 export function limaTodayIso(now: number = Date.now()): string {
@@ -25,12 +26,13 @@ export async function carryKeptStop(
 ): Promise<CarryKeptResult> {
   const { data: stopRow, error: stopErr } = await admin
     .from("delivery_stops")
-    .select("id,status,outcome_reason,shipment_id,dispatch_manifest_id,route_id")
+    .select("id,order_id,status,outcome_reason,shipment_id,dispatch_manifest_id,route_id")
     .eq("id", input.stopId)
     .maybeSingle();
   if (stopErr) return { ok: false, error: "No se pudo leer la parada. Reintenta." };
   const stop = stopRow as {
     id: string;
+    order_id: string;
     status: string;
     outcome_reason: string | null;
     shipment_id: string | null;
@@ -72,6 +74,19 @@ export async function carryKeptStop(
     p_actor: input.actor,
   });
   if (error) return { ok: false, error: error.message };
+  // Ya está en la caja de su ruta: el programa de salida se cumplió (§29.6,
+  // «la programación se borra cuando el pedido entra en la caja»), también el
+  // que puso la fecha de la puerta. Best-effort.
+  try {
+    const { data: program } = await admin
+      .from("gf_dispatch_programs")
+      .select("order_id,store_id,scheduled_for,reason,set_at")
+      .eq("order_id", stop.order_id)
+      .maybeSingle();
+    if (program) await clearGfDispatchPrograms(admin, [program as GfProgramRow], input.actor, "Pasó a la ruta del motorizado, que conserva el paquete.");
+  } catch {
+    /* best-effort: el traspaso ya quedó */
+  }
   return { ok: true, toDate: input.toDate };
 }
 

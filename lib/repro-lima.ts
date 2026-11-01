@@ -884,7 +884,7 @@ export type ReproChipKey =
   | "acuerdo_vencido"
   | "programado_gf_sin_acuerdo"
   | "programado_acuerdo_anterior"
-  | "fecha_motorizado"
+  | "acordado_puerta"
   | "pidio";
 
 export interface ReproChip {
@@ -919,8 +919,9 @@ function callChip(iso: string, now: Date): ReproChip {
  *    programa pasó) → «Por decidir», vencido. La chapa dice cuál: el día
  *    acordado pasó, ya no alcanza hoy, o Grupo GF lo programó antes y ese día
  *    pasó sin salir (el día acordado todavía no llega).
- * 5. Programa sin acuerdo vivo: de Grupo GF → «Programados»; de un acuerdo
- *    anterior o del motorizado (#908, D9) → «Por decidir», con su chapa.
+ * 5. Programa sin acuerdo vivo: de Grupo GF, o la fecha que el cliente dio
+ *    en la puerta (01-11-2026) → «Programados»; la de la puerta que ya pasó, o
+ *    la de un acuerdo anterior → «Por decidir», con su chapa.
  * 6. Lo demás → «Por decidir» (una llamada que ya toca es vencida).
  */
 export function reproList(input: {
@@ -1000,16 +1001,23 @@ export function reproList(input: {
   // 5. Programa sin acuerdo vivo.
   if (input.program && programDay) {
     const origin = programOrigin(input.program.reason);
+    // La fecha que el cliente dio en la puerta ya es el acuerdo (01-11-2026,
+    // decisión del owner, MOM §29.7): «Programados», sin llamar. Si el día
+    // pasó sin salir, vuelve a «Por decidir» para que la tienda llame.
+    if (origin === "motorizado") {
+      if (programDay >= today) {
+        chips.push({ key: "acordado_puerta", text: `Acordado en la puerta: ${programDayLabel(programDay)}` });
+        return { list: "programados", overdue: callDue, chips };
+      }
+      chips.push({ key: "acordado_puerta", text: `Acordado en la puerta: ${programDayLabel(programDay)} · no salió` });
+      return { list: "por_decidir", overdue: true, chips };
+    }
     if (origin === "grupo_gf") {
       chips.push({ key: "programado_gf_sin_acuerdo", text: "Programado en Grupo GF · sin acuerdo" });
       requestedChip();
       return { list: "programados", overdue: callDue, chips };
     }
-    chips.push(
-      origin === "motorizado"
-        ? { key: "fecha_motorizado", text: `Fecha del motorizado sin confirmar: ${programDayLabel(programDay)}` }
-        : { key: "programado_acuerdo_anterior", text: "Programado por un acuerdo anterior" },
-    );
+    chips.push({ key: "programado_acuerdo_anterior", text: "Programado por un acuerdo anterior" });
   }
 
   // 6. Por decidir.

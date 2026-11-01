@@ -417,14 +417,14 @@ describe("sin acuerdo de Repro Lima: la acción por defecto (decisión 1)", () =
     expect(texts(row)).not.toContain(RETRY_DEFAULT_CHIP);
   });
 
-  it("la fecha del motorizado o de un acuerdo anterior no va al anaquel hasta que Repro Lima la confirme", () => {
+  it("la fecha de la puerta va al anaquel de su día (01-11-2026); un acuerdo anterior espera que Repro Lima lo confirme", () => {
     const rider = one(reproRow({
       program: program(TODAY, { reason: "Reprogramado por el cliente (reporte de la parada de Roy)", origin: "motorizado" }),
-      chips: [{ key: "fecha_motorizado", text: "Fecha del motorizado sin confirmar: mar 13/10" }],
+      chips: [{ key: "acordado_puerta", text: "Acordado en la puerta: mar 13/10" }],
     }));
-    expect(rider.chips).toContainEqual({ tone: "warn", text: "Fecha del motorizado sin confirmar: mar 13/10" });
-    expect(rider.chips).toContainEqual({ tone: "warn", text: RETRY_UNCONFIRMED });
-    expect(rider).toMatchObject({ action: "mantener", actionSource: "por_defecto", group: "con_aviso" });
+    expect(rider.chips).toContainEqual({ tone: "info", text: "Acordado en la puerta: mar 13/10" });
+    expect(rider.chips).not.toContainEqual({ tone: "warn", text: RETRY_UNCONFIRMED });
+    expect(rider).toMatchObject({ action: "mantener", actionSource: "por_defecto" });
     expect(rider.programReason).toBe("Reprogramado por el cliente (reporte de la parada de Roy)");
 
     const earlier = one(reproRow({
@@ -436,14 +436,15 @@ describe("sin acuerdo de Repro Lima: la acción por defecto (decisión 1)", () =
     expect(earlier.group).toBe("con_aviso");
   });
 
-  it("con la caja del motorizado, la fecha sin confirmar sigue en «Todavía fuera»", () => {
+  it("con la caja del motorizado, la fecha de la puerta sigue en «Todavía fuera» hasta que la traiga", () => {
     const row = one(reproRow({
       box: { kind: "con_motorizado", riderName: "Roy", since: YESTERDAY },
       receivedAt: null,
       program: program(YESTERDAY, { reason: "Reprogramado por el cliente (reporte de la parada de Roy)", origin: "motorizado" }),
     }));
     expect(row).toMatchObject({ group: "fuera", action: "mantener", boxLabel: "Con Roy desde lun 12/10", whereLine: null });
-    expect(row.chips).toContainEqual({ tone: "warn", text: RETRY_UNCONFIRMED });
+    // La fecha de la puerta es el acuerdo (01-11-2026): no espera confirmación.
+    expect(row.chips).not.toContainEqual({ tone: "warn", text: RETRY_UNCONFIRMED });
   });
 
   describe("un acuerdo vencido con programa no manda: cuenta como sin acuerdo vigente", () => {
@@ -461,7 +462,7 @@ describe("sin acuerdo de Repro Lima: la acción por defecto (decisión 1)", () =
     });
     const RIDER = { reason: "Reprogramado por el cliente (reporte de la parada de Roy)", origin: "motorizado" as const, setAt: "2026-10-11T22:00:00Z" };
 
-    it("la fecha del motorizado: por defecto, «No va al anaquel…» y el acuerdo vencido, «Con aviso»", () => {
+    it("la fecha de la puerta: por defecto, sin «No va al anaquel…», y el acuerdo vencido, «Con aviso»", () => {
       const row = one(expired(YESTERDAY, program(YESTERDAY, RIDER)));
       expect(row).toMatchObject({
         bucket: "hoy",
@@ -471,10 +472,11 @@ describe("sin acuerdo de Repro Lima: la acción por defecto (decisión 1)", () =
         decidedLine: null,
         changesText: null,
         programReason: RIDER.reason,
-        group: "con_aviso",
+        // Como el programa de Grupo GF: va al anaquel (01-11-2026).
+        group: "anaquel",
       });
       expect(row.chips).toContainEqual({ tone: "neutral", text: RETRY_DEFAULT_CHIP });
-      expect(row.chips).toContainEqual({ tone: "warn", text: RETRY_UNCONFIRMED });
+      expect(row.chips).not.toContainEqual({ tone: "warn", text: RETRY_UNCONFIRMED });
       expect(row.chips).toContainEqual({ tone: "warn", text: "El acuerdo era para el lun 12/10 y ya pasó: confírmalo de nuevo" });
       // No es un programa que difiera de un acuerdo vigente.
       expect(texts(row).some((text) => text.startsWith("Grupo GF lo programó para el"))).toBe(false);
@@ -485,8 +487,8 @@ describe("sin acuerdo de Repro Lima: la acción por defecto (decisión 1)", () =
 
     it("el mismo día, llegada después del corte (E25): igual, con «ya no alcanza»", () => {
       const row = one(expired(TODAY, program(TODAY, RIDER)));
-      expect(row).toMatchObject({ bucket: "hoy", overdue: false, actionSource: "por_defecto", group: "con_aviso" });
-      expect(row.chips).toContainEqual({ tone: "warn", text: RETRY_UNCONFIRMED });
+      expect(row).toMatchObject({ bucket: "hoy", overdue: false, actionSource: "por_defecto", group: "anaquel" });
+      expect(row.chips).not.toContainEqual({ tone: "warn", text: RETRY_UNCONFIRMED });
       expect(row.chips).toContainEqual({ tone: "warn", text: "El acuerdo era para hoy (mar 13/10) y ya no alcanza: confírmalo de nuevo" });
     });
 

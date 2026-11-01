@@ -2679,8 +2679,9 @@ subetapas ni estados nuevos.
   aprueba Despacho GF (§29.6).
 - **Paso a paso de un «No entregado» de Grupo GF:**
   1. El motorizado reporta el motivo y la foto en su ruta; si el cliente pide
-     otro día, lo anota en **«Fecha que pidió el cliente»** (§29.7): queda en
-     la parada para que la tienda la confirme y no programa nada. Puede
+     otro día, lo anota en **«Fecha que pidió el cliente»** (§29.7): desde el
+     01-11-2026 programa la salida de Grupo GF para ese día y la tienda la ve
+     en Repro Lima como «Acordado en la puerta», sin llamar. Puede
      reintentarlo el mismo día con la misma caja (§9.3). La caja no entregada
      se queda con él hasta que la trae a la oficina: Johnny (Yhoni) y Roy al
      día siguiente, Alexis cada dos o tres días (§9.4).
@@ -2735,20 +2736,25 @@ subetapas ni estados nuevos.
 
 Decisión del owner sobre el plan de la fase 1 (decisiones 1 a 12, 12-10-2026):
 la fecha que da el cliente en la puerta se confirma con él y **nunca se
-programa sola** (decisión 7).
+programa sola** (decisión 7). **Reemplazada el 01-11-2026** (decisión del
+owner): esa fecha ya es el acuerdo y programa la salida sola; el pedido sale en
+«Programados» como «Acordado en la puerta» (§29.7).
 
 - **Dónde.** `/dashboard/pedidos/repro-lima`: «Repro Lima» en la navegación,
   justo después de «Repro Provincia».
-- **Quién.** Quien llama a los clientes o despacha: permiso propio
+- **Quién.** El equipo de la tienda que llama a los clientes: permiso propio
   `repro_lima.manage` («Repro Lima: llamar y reprogramar en Lima», 13-10-2026,
-  decisión del owner), que traen los roles «Asesora» y «Despacho y Grupo GF»
-  (§16), la vendedora que aún no tiene roles, los admins y el owner. La Asesora
-  lo tiene sin tener Despacho del día (`dispatch.manage`). Vale en las tiendas
-  que la persona tiene asignadas en Equipo: el mismo alcance que Despacho del
-  día (`getAccessibleStores`). Sin el permiso, la pantalla dice «Repro Lima es
-  de quien llama a los clientes o despacha (rol «Asesora» o «Despacho y Grupo
-  GF»). Pide uno de esos roles en Equipo.»; sin tiendas, «No tienes tiendas
-  asignadas». El actor real queda en cada llamada y en cada evento.
+  decisión del owner), que trae el rol «Asesora» (§16), la vendedora que aún no
+  tiene roles, los admins y el owner. **Desde el 01-11-2026 el rol «Despacho y
+  Grupo GF» ya no lo trae** (decisión del owner: solo llama la tienda; Grupo GF
+  es el courier y recibe lo acordado en «Reintentos para hoy», §29.13). Quien
+  tiene los dos roles entra por el de Asesora. La Asesora lo tiene sin tener
+  Despacho del día (`dispatch.manage`). Vale en las tiendas que la persona tiene
+  asignadas en Equipo: el mismo alcance que Despacho del día
+  (`getAccessibleStores`). Sin el permiso, la pantalla dice «Repro Lima es del
+  equipo de la tienda, que llama a los clientes (rol «Asesora»). Pide ese rol en
+  Equipo.»; sin tiendas, «No tienes tiendas asignadas». El actor real queda en
+  cada llamada y en cada evento.
 - **Qué pedidos.** Todo pedido de esas tiendas en «En curso · Por reprogramar
   Lima» (`order_master`), de cualquier courier. La lista se calcula desde el
   Master, no desde los casos.
@@ -9147,7 +9153,7 @@ registra en cada evento.
   | --- | --- |
   | Asesora | Gestionar pedidos, subir comprobantes, ver la clave de recojo (con el cobro completo, o con la excepción por descuento, §12), crear guías de Aliclik, Tanders y Shalom, crear pedidos en la tienda (Shopify o WooCommerce según `stores.platform`, §38.12), responder novedades de Swayp, escribir a clientas con devolución, reprogramar entregas en Lima (§9.5), recibir devoluciones |
   | Almacén | Gestionar pedidos, preparar paquetes, recibir devoluciones, reingresar al inventario |
-  | Despacho y Grupo GF | Gestionar pedidos, despachar, entregar la caja al motorizado, reprogramar entregas en Lima (§9.5), armar rutas, reportar entregas por un motorizado, subir reportes de couriers, manejar stock de Swayp y Fénix, preparar paquetes, crear guías, recibir devoluciones |
+  | Despacho y Grupo GF | Gestionar pedidos, despachar, entregar la caja al motorizado, armar rutas, reportar entregas por un motorizado, subir reportes de couriers, manejar stock de Swayp y Fénix, preparar paquetes, crear guías, recibir devoluciones |
   | Liquidaciones | Gestionar pedidos, subir y cerrar liquidaciones de motorizados, cuadrar hojas de couriers, conciliar el dinero del pedido |
   | Cobranza | Gestionar pedidos, subir comprobantes, ver y registrar claves de recojo, aprobar cobros de Tanders rechazados |
   | Supervisión | Gestionar pedidos, registrar la devolución de pedidos cerrados, cerrar o reabrir el expediente de cierre, anular guías de Aliclik, recibir devoluciones, reingresar al inventario, ver reportes del negocio (el estado a mano, no: es de admin) |
@@ -12200,10 +12206,13 @@ confirmar, porque que salga es justo lo que falta. Lo confirmado queda como
   (…)»: al decidir el acuerdo, o al recibir en oficina la caja que el acuerdo
   esperaba (§29.13).
 
-El reporte de la parada ya no programa: desde el 12-10-2026 la fecha que da el
-cliente en la puerta queda como «Fecha que pidió el cliente» y se confirma en
-Repro Lima (§29.7). Los programas que creó entre el 10 y el 12-10-2026 se
-respetan.
+**El reporte de la parada programa la fecha de la puerta (01-11-2026).** Del
+12-10 al 01-11-2026 la fecha que da el cliente en la puerta solo se anotaba y se
+confirmaba en Repro Lima. Desde el 01-11-2026 es un tercer camino que escribe el
+programa, con el motivo del motorizado: «Reprogramado por el cliente (reporte de
+la parada de … del dd/mm): acordado en la puerta.» (§29.7,
+`syncDoorDateProgram`). Los programas que creó entre el 10 y el 12-10-2026 se
+leen igual.
 
 **Excepción: «Caja nueva desde stock».** Repro Lima programa ese acuerdo al
 decidir aunque la caja anterior siga en la caja del motorizado, porque sale
@@ -12427,6 +12436,39 @@ programa sola**.
   Lima».
 - El traspaso del reprogramado que el motorizado conserva (07-10-2026, arriba)
   no cambia.
+
+**La fecha de la puerta programa la salida (01-11-2026, decisión del owner:
+«que Grupo GF le imponga a la tienda la reprogramación que ya tiene»).**
+Reemplaza el «No programa» de arriba. La llamada de la tienda sobraba cuando el
+cliente ya había dicho el día en la puerta.
+
+- **Al guardar el reporte** «No entregado · Reprogramado por el cliente» con la
+  «Fecha que pidió el cliente», Kapta programa la salida de Grupo GF para ese
+  día (`syncDoorDateProgram`, `lib/door-date-program.ts`, después del
+  recálculo del Master en `writeStopReport`). Vale para la app, para
+  Coordinación por el motorizado y para la hoja cargada desde el cuaderno (un
+  día de la semana escrito, «MIÉRCOLES»). El motivo es el del motorizado:
+  «Reprogramado por el cliente (reporte de la parada de Alexis del 31/10):
+  acordado en la puerta.».
+- **Si el reporte deja de traer la fecha** (se corrige a otro resultado o se
+  borra), se quita ese programa. Nunca toca uno de Repro Lima ni de Despacho.
+- **En Repro Lima** el pedido sale en «Programados» con «Acordado en la puerta:
+  mié 05/11», sin llamar. La tienda puede cambiarlo o cancelarlo como cualquier
+  acuerdo. Si el día pasó sin salir, vuelve a «Por decidir» con «Acordado en la
+  puerta: … · no salió», para que la tienda llame.
+- **En Grupo GF** entra a la cola con su día («Reintentos para hoy» cuando
+  toca, §29.13). La caja que el motorizado todavía tiene se recibe primero en
+  «Devoluciones», como siempre.
+- **En Almacén** («Reintentos por salir») va al anaquel de su día, como un
+  programa de Grupo GF: ya no lleva «No va al anaquel hasta que Repro Lima la
+  confirme». Ese aviso queda solo para el acuerdo anterior de Repro Lima.
+- **Si el motorizado se lo queda** («Me lo quedo y lo llevo mañana», o «Sale
+  con él en otra ruta…»), el paquete entra en la caja de esa ruta y el programa
+  se borra (`clearGfDispatchPrograms`): ya se cumplió.
+- En la app, la ayuda del campo dice «Sale ese día con Grupo GF: Kapta lo
+  programa solo.», y el aviso al guardar, «Sale con Grupo GF el mié 05/11, la
+  fecha que pidió el cliente.». En el historial del pedido: «pidió el mié 05/11
+  (sale ese día con Grupo GF)».
 
 **La hoja del motorizado sin app se carga desde Kapta (08-10-2026, decisión de
 Frankz).** Hasta el 07/10 cada hoja de Alexis se cargaba con SQL desde una
@@ -13237,10 +13279,13 @@ recibe lo acordado y lo saca.
   día espera en «Programados mañana» o «Programados después».
 - **Junto a «por asignar»** la línea dice cuántos esperan a la tienda («N
   esperan a la tienda en Repro Lima»), con enlace a Repro Lima.
-- **Lo que no cambia todavía.** Por QR, Despacho todavía puede meter en una caja
-  un reprogramado sin acuerdo que tenga en la mano. Tampoco cambian el permiso
-  `repro_lima.manage` del rol «Despacho y Grupo GF» ni «Programar». Son las
-  entregas 2 y 4 de la propuesta.
+- **Por QR sigue abierto (01-11-2026, decisión del owner: menos pasos).**
+  Despacho puede meter en una caja, por QR, un reprogramado que tiene en la
+  mano aunque la tienda no lo haya acordado. Al entrar a la caja deja «Por
+  reprogramar Lima» y su caso de Repro Lima se cierra solo (`fuera_de_etapa`,
+  §9.5): nadie llama a un cliente cuyo pedido ya va en ruta.
+- **El permiso de Repro Lima** ya no está en el rol «Despacho y Grupo GF»
+  (entrega 4, 01-11-2026, §9.5). Queda pendiente «Programar» (entrega 2).
 
 **Devoluciones en Rutas y el rechazo en puerta (v1.16, 22-09-2026).** Todo
 «No entregado» que salió en una caja tiene que volver físicamente. En Rutas,

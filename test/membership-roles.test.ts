@@ -54,7 +54,10 @@ describe("cómo se suman", () => {
     const asesora = permissionsFor(["vendedora"], [], ["asesora"]);
     expect(asesora.has("repro_lima.manage")).toBe(true);
     expect(asesora.has("dispatch.manage")).toBe(false);
-    expect(permissionsFor(["vendedora"], [], ["despacho"]).has("repro_lima.manage")).toBe(true);
+    // Desde el 01-11-2026 solo llama la tienda: «Despacho y Grupo GF» ya no la trae.
+    expect(permissionsFor(["vendedora"], [], ["despacho"]).has("repro_lima.manage")).toBe(false);
+    expect(permissionsFor(["vendedora"], [], ["despacho"]).has("dispatch.manage")).toBe(true);
+    expect(permissionsFor(["vendedora"], [], ["despacho", "asesora"]).has("repro_lima.manage")).toBe(true);
     for (const role of ["owner", "admin", "vendedora"]) expect(permissionsFor([role]).has("repro_lima.manage")).toBe(true);
     for (const role of ["almacen", "liquidaciones", "cobranza"]) expect(permissionsFor(["vendedora"], [], [role]).has("repro_lima.manage")).toBe(false);
     expect(permissionsFor(["viewer"]).has("repro_lima.manage")).toBe(false);

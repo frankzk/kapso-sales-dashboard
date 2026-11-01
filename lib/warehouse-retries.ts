@@ -280,7 +280,7 @@ export interface RetryAction {
 /** Las chapas de 1a que pasan tal cual a una fila sin acuerdo, con el tono de Repro Lima. */
 const PASS_THROUGH_CHIPS: Partial<Record<ReproChipKey, RetryChipTone>> = {
   programado_gf_sin_acuerdo: "info",
-  fecha_motorizado: "warn",
+  acordado_puerta: "info",
   programado_acuerdo_anterior: "warn",
 };
 
@@ -413,7 +413,10 @@ export function retryAction(r: ReproRow): RetryAction {
       if (tone) out.chips.push({ tone, text: chip.text });
     }
     out.programReason = r.program.reason?.trim() || null;
-    if (r.program.origin === "motorizado" || r.program.origin === "repro_lima") {
+    // La fecha que el cliente dio en la puerta ya es el acuerdo (01-11-2026,
+    // MOM §29.7): va al anaquel de su día. Solo un acuerdo anterior de Repro
+    // Lima espera que la tienda lo vuelva a confirmar.
+    if (r.program.origin === "repro_lima") {
       out.chips.push({ tone: "warn", text: RETRY_UNCONFIRMED });
       out.unconfirmed = true;
     }

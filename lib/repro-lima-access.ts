@@ -1,8 +1,9 @@
 // «Repro Lima»: quién entra y qué ve (fase 1, entrega 1a; MOM §9.5).
 //
-// Entra quien llama a los clientes o despacha (`repro_lima.manage`: roles
-// «Asesora» y «Despacho y Grupo GF», la vendedora sin roles, admin y owner;
-// MOM §9.5, §16), en las tiendas que tiene en Equipo: el mismo alcance que Despacho del día
+// Entra el equipo de la tienda que llama a los clientes (`repro_lima.manage`:
+// rol «Asesora», la vendedora sin roles, admin y owner; desde el 01-11-2026 ya
+// no el rol «Despacho y Grupo GF»: MOM §9.5, §16), en las tiendas que tiene en
+// Equipo: el mismo alcance que Despacho del día
 // (`getAccessibleStores`, E36). La lista sale del Master —todo «En curso · Por
 // reprogramar Lima» de esas tiendas, de cualquier courier— y se cruza con los
 // casos (`lima_repro_cases`), el programa de Grupo GF y los hechos de cada
@@ -69,7 +70,7 @@ export { loadReproFacts, type ReproFacts } from "@/lib/repro-lima-program";
 type Admin = ReturnType<typeof createAdminSupabase>;
 
 /** Sin `repro_lima.manage` (E32; MOM §9.5). */
-export const REPRO_NO_PERMISSION = "Repro Lima es de quien llama a los clientes o despacha (rol «Asesora» o «Despacho y Grupo GF»). Pide uno de esos roles en Equipo.";
+export const REPRO_NO_PERMISSION = "Repro Lima es del equipo de la tienda, que llama a los clientes (rol «Asesora»). Pide ese rol en Equipo.";
 export const REPRO_NO_STORES = "No tienes tiendas asignadas. Pide acceso en Equipo.";
 export const REPRO_OUTSIDE_STORE = "No tienes acceso a la tienda de este pedido.";
 

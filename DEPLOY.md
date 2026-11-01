@@ -5430,3 +5430,33 @@ variables.
    su cola; la línea «N esperan a la tienda en Repro Lima» dice cuántos.
 
 **Marcha atrás.** Revertir el commit.
+
+### 01-11-2026 · Repro Lima solo para la tienda: el rol «Despacho y Grupo GF» deja de traerla (sin migración, MOM §9.5)
+
+Decisión del owner (entrega 4 de la propuesta de separar Repro Lima y Grupo
+GF): llamar al cliente y acordar un reintento en Lima es solo de la tienda. El
+rol «Despacho y Grupo GF» ya no trae `repro_lima.manage`; quien además tiene
+«Asesora» sigue entrando. Los permisos se calculan en el código: sin
+migración, crons ni variables.
+
+1. **El código**, por el camino de siempre.
+2. **Avisar**: al 01-11-2026 pierden Repro Lima las cuatro personas con
+   «Despacho» sin «Asesora» (en Equipo se ve quiénes). Si alguna debe seguir
+   llamando, se le da el rol «Asesora» o el permiso suelto en Equipo.
+
+**Marcha atrás.** Revertir el commit.
+
+### 01-11-2026 · La fecha que el cliente da en la puerta programa la salida (sin migración, MOM §29.7)
+
+Decisión del owner: Grupo GF le impone a la tienda la reprogramación que ya
+tiene. El reporte «No entregado · Reprogramado por el cliente» con fecha
+programa la salida de Grupo GF para ese día; en Repro Lima sale en
+«Programados» como «Acordado en la puerta», sin llamar. Reemplaza la decisión 7
+del 12-10-2026. Sin migración, crons ni variables.
+
+1. **El código**, por el camino de siempre.
+2. **Avisar** a la tienda y a los motorizados: la fecha que anotan en la puerta
+   ya programa la salida.
+
+**Marcha atrás.** Revertir el commit. Los programas ya escritos quedan; se
+quitan con «Quitar la fecha» en Despacho del día.
