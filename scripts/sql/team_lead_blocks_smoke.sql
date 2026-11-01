@@ -13,7 +13,7 @@ alter table stores add column routing_smoke_tmp boolean;
 alter table stores drop column routing_smoke_tmp;
 set local role authenticated;
 set local request.test_uid='cc029400-0000-0000-0000-000000000010';
-update stores set name=name where id='cc029400-0000-0000-0000-000000000002';
+update stores set org_id=org_id where id='cc029400-0000-0000-0000-000000000002';
 reset role;
 insert into leads(store_id,phone,name,status,category,first_seen_at,last_interaction_at,cart_item_count,district,inbound_count,call_attempt_count)
 select 'cc029400-0000-0000-0000-000000000002','519994'||lpad(n::text,5,'0'),label,'nuevo','open',now()-age,now()-age,cart,district,inbound,attempts
