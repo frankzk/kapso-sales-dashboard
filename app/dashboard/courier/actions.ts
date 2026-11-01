@@ -1,5 +1,6 @@
 "use server";
 
+import { loadKeptReprogrammed, type KeptReprogrammed } from "@/lib/gf-carry-kept-server";
 import { cancelledScanNotice } from "@/lib/scan-cancelled";
 import { annulledOutputScanNotice } from "@/lib/scan-annulled-output";
 import { alreadyInBoxMessage, alreadyInBoxStage, type AlreadyInBoxStage } from "@/lib/gf-scan-already-in-box";
@@ -3917,6 +3918,9 @@ export interface CourierRouteReport {
   closeContext: RouteCloseContext | null;
   /** Cancela aquí mismo una carga abierta y vacía (dispatch.manage). */
   canCancelLoads: boolean;
+  /** Reprogramados que el motorizado conserva de rutas anteriores, sin ruta
+   *  nueva (MOM §29.7, 01-11-2026). Null si no se pudieron leer. */
+  kept: KeptReprogrammed[] | null;
 }
 
 /**
@@ -3939,10 +3943,13 @@ export async function loadCourierRouteReport(routeId: string): Promise<CourierRo
   const detail = await getRouteDetail(id);
   if (!detail) return { error: "No encontramos esa ruta." };
   const day = detail.route.route_date;
-  const [riders, access, closeContext] = await Promise.all([
+  const [riders, access, closeContext, kept] = await Promise.all([
     getRiders(),
     routeReportAccess(id),
     loadRouteCloseContext(createAdminSupabase(), id),
+    detail.route.rider_id && detail.route.status !== "cerrada"
+      ? loadKeptReprogrammed(createAdminSupabase(), detail.route.rider_id, day).catch(() => null)
+      : Promise.resolve([] as KeptReprogrammed[]),
   ]);
   return {
     stores: stores.map((s) => ({ id: s.id, name: s.name })),
@@ -3952,5 +3959,6 @@ export async function loadCourierRouteReport(routeId: string): Promise<CourierRo
     canReport: Boolean(access),
     closeContext,
     canCancelLoads: permissions.can("dispatch.manage"),
+    kept,
   };
 }

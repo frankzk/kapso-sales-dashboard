@@ -32,6 +32,7 @@ import { loadRouteCloseContext } from "@/lib/route-close";
 import { applyDeliveriesToMaster, shopifyCancelledNotice } from "@/lib/master-door";
 import { syncStopsToSheet } from "@/lib/sheets/stop-sync";
 import { ordersWithReplacedOutputOut, replacedOutputStopError } from "@/lib/stop-report";
+import { carryKeptStop } from "@/lib/gf-carry-kept-server";
 
 export interface RouteActionResult {
   ok: boolean;
@@ -262,6 +263,23 @@ export async function startRoute(routeId: string): Promise<RouteActionResult> {
  * (v1.23); la caja reemplazada por otra salida vuelve a stock (0248). Solo las
  * cajas de ESTA ruta. Pulsarlo dice que las cajas están en la oficina.
  */
+/**
+ * El reprogramado que el motorizado conserva sale en su ruta de `toDate`, sin
+ * esperar la hoja del día siguiente (MOM §29.7, 01-11-2026). El paquete sale
+ * de la caja vieja con `carried_over` y entra ya cotejado en una carga de esa
+ * ruta (`gf_carry_over`).
+ */
+export async function carryKeptReprogrammed(stopId: string, toDate: string): Promise<RouteActionResult> {
+  const g = await guard();
+  if ("error" in g) return { ok: false, error: g.error };
+  const res = await carryKeptStop(g.admin, { stopId, toDate, actor: g.user.id });
+  if (!res.ok) return { ok: false, error: res.error };
+  revalidatePath("/dashboard/courier/rutas");
+  revalidatePath("/dashboard/courier");
+  revalidatePath("/reparto");
+  return { ok: true, message: `Pasó a la ruta del ${res.toDate.slice(8, 10)}/${res.toDate.slice(5, 7)}: el motorizado ya lo tiene, no vuelve a la oficina.` };
+}
+
 export async function receiveRouteReturns(routeId: string): Promise<RouteActionResult> {
   const g = await guard();
   if ("error" in g) return { ok: false, error: g.error };

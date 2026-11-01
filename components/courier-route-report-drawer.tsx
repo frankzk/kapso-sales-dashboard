@@ -137,6 +137,7 @@ export function CourierRouteReportView({ report, error, onClose, onChanged, onRe
           canReport={report.canReport}
           closeContext={report.closeContext}
           canCancelLoads={report.canCancelLoads}
+          kept={report.kept}
           onChanged={onChanged}
           onRefresh={onRefresh}
         />

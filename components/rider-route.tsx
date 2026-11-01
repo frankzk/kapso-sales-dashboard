@@ -975,6 +975,10 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
   /** Fecha que pidió el cliente (12-10-2026, D9): opcional, YYYY-MM-DD. Queda
    *  en la parada; la tienda la confirma en Repro Lima antes de programarla. */
   const [requestedDate, setRequestedDate] = useState(stop.requested_date ?? "");
+  /** «Me lo quedo y lo llevo» (MOM §29.7, 01-11-2026): solo un paquete de una
+   *  caja de Grupo GF que todavía tiene. Sale en su ruta de mañana. */
+  const canKeep = Boolean(stop.dispatch_manifest_id && stop.shipment_id && stop.manifest_item_id && !stop.returned_at && !stop.carried_to);
+  const [keep, setKeep] = useState(false);
   const [photoPath, setPhotoPath] = useState<string | null>(stop.photo_path);
   const [voucherPath, setVoucherPath] = useState<string | null>(stop.voucher_path);
   const [err, setErr] = useState<string | null>(null);
@@ -1159,6 +1163,7 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
           requestedDate: status === "no_entregado" && reason === "reprogramado"
             ? (requestedDate === (stop.requested_date ?? "") ? undefined : requestedDate || null)
             : null,
+          keepForDate: status === "no_entregado" && reason === "reprogramado" && canKeep && keep ? limaDayPlus(1) : null,
         });
         if (!res.ok) setErr(res.error ?? "No se pudo guardar.");
         else {
@@ -1422,6 +1427,26 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
             />
             <span id={`reprograma-${stop.id}`} className="mt-1 block text-xs font-normal text-ink-500">
               La tienda la confirma con el cliente antes de programarla.
+            </span>
+          </label>
+        )}
+
+        {/* «Me lo quedo y lo llevo» (MOM §29.7, 01-11-2026): el paquete pasa a
+            su ruta de mañana sin volver a la oficina. Sin marcarlo, vuelve a
+            la oficina como siempre. */}
+        {status === "no_entregado" && reason === "reprogramado" && canKeep && (
+          <label className="flex min-h-12 items-start gap-3 rounded-xl bg-wash px-3 py-3 text-sm text-ink-900">
+            <input
+              type="checkbox"
+              checked={keep}
+              onChange={(e) => { setKeep(e.target.checked); setErr(null); }}
+              className="mt-0.5 size-5 shrink-0"
+            />
+            <span>
+              <span className="font-semibold">Me lo quedo y lo llevo mañana</span>
+              <span className="mt-0.5 block text-xs text-ink-500">
+                Sale en tu ruta del {limaDayPlus(1).slice(8, 10)}/{limaDayPlus(1).slice(5, 7)}, ya cotejado. No lo devuelves a la oficina.
+              </span>
             </span>
           </label>
         )}
