@@ -5390,3 +5390,17 @@ que ya está en la base. Sin migración, crons ni variables.
 
 **Marcha atrás.** Revertir el commit. Lo ya pasado queda como un traspaso de
 la hoja.
+
+### 01-11-2026 · Despacho del día: «Reintentos para hoy», solo lo acordado en Repro Lima (sin migración, MOM §29.13)
+
+Decisión del owner: solo la tienda llama y decide un reintento en Lima. La cola
+de Grupo GF deja de traer los «Por reprogramar Lima» sin día acordado en Repro
+Lima; la tarjeta «Por reprogramar» pasa a «Reintentos para hoy». Las cajas que
+el motorizado todavía tiene siguen en «Devoluciones». Sin migración, crons ni
+variables.
+
+1. **El código**, por el camino de siempre.
+2. **Avisar al equipo de Despacho**: lo que no tenga acuerdo ya no aparece en
+   su cola; la línea «N esperan a la tienda en Repro Lima» dice cuántos.
+
+**Marcha atrás.** Revertir el commit.
