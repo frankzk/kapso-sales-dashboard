@@ -28158,7 +28158,7 @@ with scope as materialized (
   from stores s join memberships m on m.org_id=s.org_id and m.user_id=p_actor
   left join lead_routing_settings cfg on cfg.org_id=s.org_id
   left join lead_routing_assignments a on a.org_id=s.org_id and a.user_id=p_actor
-  where s.id=any(p_stores) and (m.role in ('owner','admin','viewer') or exists(select 1 from user_store_access sa where sa.store_id=s.id and sa.user_id=p_actor))
+  where s.id=any(p_stores) and (m.role in ('owner','admin') or exists(select 1 from user_store_access sa where sa.store_id=s.id and sa.user_id=p_actor))
 ), base as materialized (
   select l.id,l.store_id,l.category,l.status,l.call_attempt_count,l.first_seen_at,l.last_inbound_at,l.draft_order_gid,l.next_followup_at,l.claimed_by,l.claimed_at,l.updated_at,l.needs_attention,l.handoff_at,l.call_queue_ready,l.contact_opt_out_at,l.has_order,l.order_id,sc.hours,sc.revision,sc.enabled and sc.advisor as restricted,sc.blocks,sc.backup,
     (coalesce(l.cart_item_count,0)>0 or nullif(l.draft_order_gid,'') is not null) as cart,

@@ -1,6 +1,6 @@
 -- THROWAWAY DATABASE ONLY. No production configuration or business rows.
 begin;
-insert into auth.users(id,email) select ('cc029400-0000-0000-0000-'||lpad(n::text,12,'0'))::uuid,'routing-'||n||'@test.invalid' from generate_series(10,14)n;
+insert into auth.users(id,email) select ('cc029400-0000-0000-0000-'||lpad(n::text,12,'0'))::uuid,'routing-'||n||'@test.invalid' from generate_series(10,15)n;
 insert into organizations(id,name) values('cc029400-0000-0000-0000-000000000001','Routing test'),('cc029400-0000-0000-0000-000000000004','Other org');
 insert into memberships(user_id,org_id,role) select ('cc029400-0000-0000-0000-'||lpad(n::text,12,'0'))::uuid,'cc029400-0000-0000-0000-000000000001',case when n=10 then 'owner' else 'vendedora' end from generate_series(10,13)n;
 insert into memberships values('cc029400-0000-0000-0000-000000000014','cc029400-0000-0000-0000-000000000004','owner',now());
@@ -8,6 +8,8 @@ insert into stores(id,org_id,name,shopify_domain) values
  ('cc029400-0000-0000-0000-000000000002','cc029400-0000-0000-0000-000000000001','Routing A','routing-a.test'),
  ('cc029400-0000-0000-0000-000000000003','cc029400-0000-0000-0000-000000000001','Routing B','routing-b.test');
 insert into user_store_access(user_id,store_id) select m.user_id,s.id from memberships m cross join stores s where m.org_id='cc029400-0000-0000-0000-000000000001' and s.org_id=m.org_id;
+insert into memberships values('cc029400-0000-0000-0000-000000000015','cc029400-0000-0000-0000-000000000001','viewer',now());
+insert into user_store_access(user_id,store_id) values('cc029400-0000-0000-0000-000000000015','cc029400-0000-0000-0000-000000000002');
 -- Existing store setup tests re-apply column migrations in the same transaction.
 alter table stores add column routing_smoke_tmp boolean;
 alter table stores drop column routing_smoke_tmp;
@@ -70,6 +72,7 @@ begin
  if not (lead_routing_scope(owner_id,array[s])->>'allowed')::boolean then raise exception 'supervisor lost access'; end if;
  if jsonb_array_length(lead_routing_scope(main_id,array['cc029400-0000-0000-0000-000000000003'::uuid])->'blockedIds')<>1030 then raise exception 'routing truncated after 1000 rows'; end if;
  if (lead_routing_scope('cc029400-0000-0000-0000-000000000014',array[s])->>'allowed')::boolean then raise exception 'cross-org access'; end if;
+ if (lead_routing_scope('cc029400-0000-0000-0000-000000000015',array['cc029400-0000-0000-0000-000000000003'::uuid])->>'allowed')::boolean then raise exception 'viewer gained an unassigned store'; end if;
  if exists(select 1 from routing_before old join leads l using(id) where old.row<>to_jsonb(l)) then raise exception 'settings changed customer/history data'; end if;
  -- Optimistic revision, authorization and all-or-nothing coverage.
  failed:=false; begin perform save_lead_routing(o,owner_id,0,true,24,cfg); exception when others then failed:=true; end;
