@@ -9570,7 +9570,12 @@ solo «casi».
      holgura a cada lado;
   3. **quién pagó**: en un adelanto, diferencia o pago total, el pagador del
      reporte es **la clienta del pedido** («Benito Cac\*» ↔ Benito Cachique
-     Puga; con el nombre completo, dos palabras suyas en cualquier orden). En
+     Puga; con el nombre completo, dos palabras suyas en cualquier orden).
+     **Desde el 02-11-2026 se perdona una letra** en palabras de cinco o más
+     —la clienta escribe su nombre con el pulgar— y una letra rota cuenta como
+     comodín: «Cesar Cha\*» ↔ «Céssr chßvez pereyra» (#KP200869, validado a
+     mano con el movimiento en el reporte). El apellido recortado sigue
+     exigiendo sus tres letras exactas, y un nombre corto, el nombre exacto. En
      el **cobro del courier** paga el motorizado, así que el nombre no dice
      nada: se exige que **el canal** del reporte sea el de la constancia (un
      Yape sale como Yape directo; Plin, BBVA o Scotiabank como «PLIN - …»; el
@@ -9628,6 +9633,9 @@ solo «casi».
   - **el mismo monto y minuto pero pagó otra persona**. El 04-10 fueron nueve
     («Tito Gab\*» pagando el pedido de Gilberto Gabino, «Luis Pal\*» el de
     Alfredo Palao): probablemente un familiar, pero eso lo decide alguien.
+    Desde el 02-11-2026 el reporte del cruce lo dice aparte —«otro_pagador»,
+    con el nombre del reporte— y no como «sin movimiento»: el dinero sí está
+    (#KP200200, diferencia de S/ 268 yapeada por «Silvia Anc\*»).
 - **Dos imposibles se descartan**: un movimiento **posterior** a la carga del
   comprobante —nadie sube la constancia de un pago que aún no hizo— y uno que
   ya concilió otro comprobante.
