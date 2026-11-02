@@ -16,11 +16,13 @@ import { NextResponse, type NextRequest } from "next/server";
 import ExcelJS from "exceljs";
 import { getAccessibleStores } from "@/lib/access";
 import {
+  getMasterProductOptionsCached,
   getOrderMasterPage,
   getOrderMasterRowsByIds,
   getPaidUnnotifiedIds,
   getPendingVoucherIndex,
   isMasterView,
+  withAvailableProductFilter,
   withPaidUnnotifiedFilter,
   withPendingVoucherFilter,
   type MasterView,
@@ -67,7 +69,12 @@ export async function GET(req: NextRequest) {
 
   // Mismo parseo que la página: la URL es el contrato entre la tabla y esto.
   const sp = req.nextUrl.searchParams;
-  const parsed = parseMasterQuery(sp).filters;
+  const urlFilters = parseMasterQuery(sp).filters;
+  // «Producto» (0300), igual que en la página: sin la función de opciones (la
+  // 0300 sin aplicar) el filtro se ignora, como hace la tabla.
+  const parsed = urlFilters.products.size
+    ? withAvailableProductFilter(urlFilters, await getMasterProductOptionsCached(storeIds))
+    : urlFilters;
   // «Comprobante por validar» se resuelve igual que en la página: los pedidos
   // salen de `order_payments`, no de una columna (MOM §16.1).
   const withVoucher = parsed.pendingVoucher

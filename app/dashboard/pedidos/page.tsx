@@ -9,6 +9,7 @@ import {
   getConfirmationCycleDays,
   getConfirmationQueueCounts,
   getMasterFacetsCached,
+  getMasterProductOptionsCached,
   getOrderMasterFilteredMomCounts,
   getOrderMasterMomCounts,
   getOrderMasterPage,
@@ -16,6 +17,7 @@ import {
   getScheduledNoLocationIds,
   getPendingVoucherIndex,
   isMasterView,
+  withAvailableProductFilter,
   withPaidUnnotifiedFilter,
   withPendingVoucherFilter,
   type MasterMomCounts,
@@ -101,9 +103,17 @@ async function PedidosContent({
   // «Programado sin ubicación» (MOM §6.2): UNA lectura de ids, a la par. Su
   // filtro va por columnas del Master y no necesita esperarla.
   const scheduledNoLocationPromise = getScheduledNoLocationIds(storeIds);
-  const withVoucher = urlFilters.pendingVoucher
-    ? withPendingVoucherFilter(urlFilters, await pendingPromise)
+  // «Producto» (0300): las opciones salen cacheadas y a la par. Solo con el
+  // filtro puesto hay que esperarlas: si no respondieron (la 0300 sin aplicar),
+  // el filtro se quita en vez de pedirle a la base una columna que no existe.
+  const productOptionsPromise = getMasterProductOptionsCached(storeIds);
+  const withProducts = urlFilters.products.size
+    ? withAvailableProductFilter(urlFilters, await productOptionsPromise)
     : urlFilters;
+  const productFilterIgnored = urlFilters.products.size > 0 && withProducts.products.size === 0;
+  const withVoucher = withProducts.pendingVoucher
+    ? withPendingVoucherFilter(withProducts, await pendingPromise)
+    : withProducts;
   const filters = withVoucher.paidUnnotified
     ? withPaidUnnotifiedFilter(withVoucher, await paidUnnotifiedPromise)
     : withVoucher;
@@ -116,7 +126,7 @@ async function PedidosContent({
   // El ciclo de recontacto se muestra junto a los chips de «Fecha pactada», y el
   // filtro de Gestión solo se ofrece en esta vista.
   const showConfirmation = !searching && view === "por_confirmar";
-  const [momCounts, pageData, facets, agency, confirmationCounts, cycleDays, pendingVouchers, paidUnnotified, scheduledNoLocation] = await Promise.all([
+  const [momCounts, pageData, facets, agency, confirmationCounts, cycleDays, productOptions, pendingVouchers, paidUnnotified, scheduledNoLocation] = await Promise.all([
     // Con filtros, las pestañas cuentan lo mismo que la lista (MOM §6).
     searching
       ? Promise.resolve(EMPTY_MOM_COUNTS)
@@ -135,6 +145,7 @@ async function PedidosContent({
     showConfirmation
       ? getConfirmationCycleDays(storeIds)
       : Promise.resolve({} as Record<string, number>),
+    productOptionsPromise,
     pendingPromise,
     paidUnnotifiedPromise,
     scheduledNoLocationPromise,
@@ -186,6 +197,10 @@ async function PedidosContent({
       filters={urlFilters}
       sortKey="created"
       facets={facets}
+      // «Producto» (0300): null si la función no respondió; la píldora no se
+      // ofrece y, si venía en la URL, se avisa de que no se aplicó.
+      productOptions={productOptions}
+      productFilterIgnored={productFilterIgnored}
       agency={agency}
       canEdit={!perms.readOnly}
       canCreateOrder={perms.can("orders.create")}

@@ -5532,3 +5532,35 @@ variables de entorno nuevas.
    from pg_proc where proname = 'invoice_claim';
    ```
 3. Desplegar el código.
+
+### 02-11-2026 · Filtro «Producto» en el Master de Pedidos (0300, MOM §6)
+
+Pedido del owner. El Master filtra por producto (título sin la variante; basta
+con uno), con su cifra de pedidos por opción. Sin `MOM_RESOLUTION_VERSION`
+nuevo: la migración rellena todo lo existente y el recálculo de cada pedido
+mantiene la columna. Sin crons ni variables de entorno.
+
+1. **Migración `0300_order_master_product_titles.sql`**, a mano, ANTES del
+   código. Añade `order_master.product_titles` (`text[] not null default
+   '{}'`), `order_product_titles(jsonb)` (la regla en SQL), la rellena desde
+   `orders.line_items` en UN `UPDATE` (35.322 filas al 02-11-2026: ~1,2 s de
+   cálculo y la reescritura de cada fila; segundos o pocas decenas de
+   segundos), y después crea el índice GIN `order_master_product_titles_idx` y
+   `order_master_product_options(uuid[])` (security invoker; `authenticated` y
+   `service_role`). Es idempotente: re-aplicarla no reescribe filas iguales.
+   Como la 0264, mueve `updated_at` de las filas que rellena. Mejor en una hora
+   tranquila: el recálculo que toque esas filas espera al commit.
+2. Comprobar:
+   ```sql
+   select count(*) filter (where cardinality(product_titles) = 0) as sin_producto,
+          count(*) as total
+   from order_master;
+   select jsonb_array_length(order_master_product_options(array(select id from stores))) as opciones;
+   ```
+   `sin_producto` debe ser 0 o casi (todos los pedidos traían líneas).
+3. Desplegar el código. Si sale antes que la migración, el Master no se cae: el
+   recálculo escribe sin la columna, la píldora «Producto» no aparece y un
+   `?pr=` en la URL se ignora con un aviso.
+
+**Marcha atrás.** Revertir el commit. La columna, el índice y las funciones
+pueden quedarse (nadie más los lee).

@@ -113,6 +113,7 @@ import {
   type MasterFilters,
   type MasterSortKey,
 } from "@/lib/order-master-filters";
+import { productFilterOptions, type ProductOptionRow } from "@/lib/order-product-titles";
 import { SALES_CHANNEL_OPTIONS } from "@/lib/sales-channel";
 import { courierDisplayName, dispatchedWithLabel, dispatchedWithShort } from "@/lib/dispatched-with";
 import { SCHEDULED_NO_LOCATION_LABEL, dispatchDateBadge } from "@/lib/dispatch-date";
@@ -211,6 +212,8 @@ export function OrdersMasterBoard({
   filters,
   sortKey,
   facets,
+  productOptions = null,
+  productFilterIgnored = false,
   agency,
   pendingVoucherCount = null,
   paidUnnotifiedCount = null,
@@ -262,6 +265,13 @@ export function OrdersMasterBoard({
     pickup: string[];
     dispatchedWith: string[];
   };
+  /**
+   * Opciones de «Producto» (0300): pedidos por tienda y producto. `null` = la
+   * función no respondió (la 0300 sin aplicar): la píldora no se ofrece.
+   */
+  productOptions?: ProductOptionRow[] | null;
+  /** Venía `?pr=` en la URL pero no se pudo aplicar: se avisa en vez de callar. */
+  productFilterIgnored?: boolean;
   /** Contado en la base: sobre una página daría números falsos sin avisar. */
   agency: AgencySummary;
   /**
@@ -876,6 +886,18 @@ export function OrdersMasterBoard({
                 selected={filters.dispatchedWith}
                 onChange={(dispatchedWith) => patch({ dispatchedWith })}
               />
+              {/* Qué lleva el pedido (0300): el producto sin la variante, con
+                  cuántos pedidos lo llevan en las tiendas elegidas. Basta con
+                  uno. Sin la función de opciones no se ofrece. */}
+              {productOptions && (
+                <FacetPill
+                  label="Producto"
+                  allLabel="Todos los productos"
+                  options={productFilterOptions(productOptions, filters.stores, filters.products)}
+                  selected={filters.products}
+                  onChange={(products) => patch({ products })}
+                />
+              )}
               {/* Por dónde se generó el pedido: lo dicen sus etiquetas de
                   Shopify (0264). Opciones fijas, como «Swayp». */}
               <FacetPill
@@ -926,6 +948,12 @@ export function OrdersMasterBoard({
                 </OpsButton>
               )}
             </div>
+
+            {productFilterIgnored && (
+              <Banner tone="warn" role="status">
+                El filtro «Producto» todavía no está disponible y no se aplicó: la lista enseña todos los productos.
+              </Banner>
+            )}
 
             {showMore && (
               <MoreFilters
@@ -1114,6 +1142,7 @@ function pillFilterCount(f: MasterFilters, withManagement: boolean): number {
     f.swaypAvailability,
     f.salesChannels,
     f.dispatchedWith,
+    f.products,
     f.pickupStates,
     ...(withManagement ? [f.managementDays] : []),
   ].filter((set) => set.size > 0).length;
@@ -1150,6 +1179,7 @@ const CLEARED_PILL_FILTERS: Partial<MasterFilters> = {
   swaypAvailability: new Set(),
   salesChannels: new Set(),
   dispatchedWith: new Set(),
+  products: new Set(),
   pickupStates: new Set(),
   managementDays: new Set(),
   ...CLEARED_MORE_FILTERS,

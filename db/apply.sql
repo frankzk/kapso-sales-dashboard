@@ -601,4 +601,6 @@
 \ir migrations/0298_invoices_claim_agency_one_payment.sql
 \echo 'Applying 0299_lead_routing_admin_advisors.sql'
 \ir migrations/0299_lead_routing_admin_advisors.sql
+\echo 'Applying 0300_order_master_product_titles.sql'
+\ir migrations/0300_order_master_product_titles.sql
 \echo 'Done.'

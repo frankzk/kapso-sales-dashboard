@@ -561,6 +561,11 @@ export interface OrderMasterRow {
   dispatch_scheduled_on?: string | null;
   /** Con quién salió (0266, lib/dispatched-with.ts): `gf:Roy`, `tanders`… */
   dispatched_with?: string[] | null;
+  /**
+   * Títulos de producto del pedido, sin variante (0300, lib/order-product-titles.ts).
+   * No viaja en el listado (`MASTER_COLUMNS`): el filtro «Producto» va en la base.
+   */
+  product_titles?: string[] | null;
   /** Por dónde se generó el pedido (0264, lib/sales-channel.ts). */
   sales_channel?: import("@/lib/sales-channel").SalesChannel | null;
   address?: string | null;

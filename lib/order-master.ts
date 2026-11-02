@@ -71,6 +71,7 @@ import {
 import { salesChannel } from "@/lib/sales-channel";
 import { guideProvinceFits, learnedDistrictFits } from "@/lib/district-learning";
 import { dispatchedWith, type RiderStop } from "@/lib/dispatched-with";
+import { orderProductTitles } from "@/lib/order-product-titles";
 import { costCourier } from "@/lib/delivery-courier";
 import { currentDispatchDate } from "@/lib/dispatch-date";
 import {
@@ -80,8 +81,9 @@ import {
   lentShipment,
 } from "@/lib/order-companion";
 
+// `line_items` es de la 0001: da el filtro «Producto» (0300, `product_titles`).
 const ORDER_COLUMNS =
-  "id,store_id,shopify_order_id,name,created_at,cancelled_at,financial_status,payment_gateway,shipping_mode,customer_phone,total_amount,total_refunded,raw,tags,kapso_conversation_id";
+  "id,store_id,shopify_order_id,name,created_at,cancelled_at,financial_status,payment_gateway,shipping_mode,customer_phone,total_amount,total_refunded,raw,tags,kapso_conversation_id,line_items";
 
 // Las columnas de gestión (assigned_at … agency_expires_at) las añade 0047. El
 // código se despliega antes que la migración, así que se intenta el conjunto
@@ -170,6 +172,7 @@ interface OrderRecord {
   raw: unknown;
   tags?: string[] | null;
   kapso_conversation_id?: string | null;
+  line_items?: unknown;
 }
 
 interface ShipmentRecord {
@@ -976,6 +979,15 @@ export interface RecomputeResult {
  * pedido del vínculo se recalcula en la misma pasada, y `requested`/`written`
  * lo cuentan.
  */
+/**
+ * ¿El upsert falló porque `order_master.product_titles` (0300) todavía no
+ * existe? PostgREST lo dice como «Could not find the 'product_titles' column…»
+ * (PGRST204) y Postgres como «column "product_titles" … does not exist».
+ */
+export function isMissingProductTitles(message: string | null | undefined): boolean {
+  return /product_titles/i.test(message ?? "") && /(could not find|does not exist|schema cache)/i.test(message ?? "");
+}
+
 export async function recomputeOrderMaster(
   admin: SupabaseClient,
   orderIds: readonly string[],
@@ -1454,6 +1466,10 @@ export async function recomputeOrderMaster(
       // Por dónde se generó (formulario web, asesora, chatbot…): el filtro
       // «Canal» del Master (0264, lib/sales-channel.ts).
       sales_channel: salesChannel(order.tags, order.kapso_conversation_id),
+      // Los productos del pedido, sin variante: el filtro «Producto» del Master
+      // (0300, lib/order-product-titles.ts). Si la columna aún no existe, el
+      // upsert de abajo la quita y sigue.
+      product_titles: orderProductTitles(order.line_items),
       order_total: order.total_amount,
       general_status: state.general,
       operational_status: state.operational,
@@ -1552,8 +1568,16 @@ export async function recomputeOrderMaster(
   });
 
   let written = 0;
-  for (const batch of chunk(rows, ID_BATCH)) {
+  for (let batch of chunk(rows, ID_BATCH)) {
     let { error } = await admin.from("order_master").upsert(batch, { onConflict: "order_id" });
+    // Deploy compatible con la 0300: si el código llega antes que la columna
+    // `product_titles`, el Master se sigue escribiendo sin ella. La migración
+    // rellena después todas las filas desde `orders.line_items`, así que no se
+    // pierde nada de lo escrito mientras tanto.
+    if (error && isMissingProductTitles(error.message)) {
+      batch = batch.map(({ product_titles: _omit, ...row }) => row) as typeof batch;
+      ({ error } = await admin.from("order_master").upsert(batch, { onConflict: "order_id" }));
+    }
     // Deploy compatible: si el código llega antes que 0059, el Master antiguo
     // continúa recalculándose. Tras aplicar la migración, el siguiente barrido
     // llena automáticamente las columnas MOM.

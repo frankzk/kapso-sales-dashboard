@@ -46,6 +46,11 @@ export interface MasterFilters {
   salesChannels: Set<string>;
   /** «Salió con» (lib/dispatched-with.ts): basta con uno. Vacío = no filtra. */
   dispatchedWith: Set<string>;
+  /**
+   * «Producto» (0300, lib/order-product-titles.ts): títulos de producto sin la
+   * variante. Basta con que el pedido lleve uno. Vacío = no filtra.
+   */
+  products: Set<string>;
   /** «Programar envío» (lib/dispatch-date.ts): «» = no filtra. */
   dispatchDate: DispatchDateFilter;
   /** YYYY-MM-DD; extremos inclusive, vacío = sin límite. */
@@ -168,6 +173,7 @@ export function emptyFilters(): MasterFilters {
     swaypAvailability: new Set(),
     salesChannels: new Set(),
     dispatchedWith: new Set(),
+    products: new Set(),
     dispatchDate: "",
     createdFrom: "",
     createdTo: "",
@@ -234,6 +240,7 @@ export function hasActiveFilters(f: MasterFilters): boolean {
     f.swaypAvailability.size > 0 ||
     f.salesChannels.size > 0 ||
     f.dispatchedWith.size > 0 ||
+    f.products.size > 0 ||
     Boolean(f.dispatchDate) ||
     Boolean(f.createdFrom || f.createdTo) ||
     Boolean(f.dispatchedFrom || f.dispatchedTo) ||
@@ -367,6 +374,8 @@ export function matchesFilters(
   if (!inSet(f.swaypAvailability, row.swayp_availability)) return false;
   if (!inSet(f.salesChannels, row.sales_channel)) return false;
   if (f.dispatchedWith.size && !(row.dispatched_with ?? []).some((code) => f.dispatchedWith.has(code))) return false;
+  // «Producto» (0300): basta con uno, como en la base (`&&`).
+  if (f.products.size && !(row.product_titles ?? []).some((title) => f.products.has(title))) return false;
   if (!matchesDispatchDate(row.dispatch_scheduled_on ?? null, f.dispatchDate, limaDayKey(now))) return false;
 
   // El filtro de courier mira el actual Y el último: buscar "los pedidos que
