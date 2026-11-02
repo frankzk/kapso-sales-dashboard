@@ -2373,6 +2373,7 @@ export function OrderDrawer({
                 orderId={orderId}
                 orderName={detail.row.order_name}
                 phone={detail.row.customer_phone ?? null}
+                canEdit={canEdit}
                 onCustomerMessages={setChatbyCustomerMessages}
               />
             </div>

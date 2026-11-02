@@ -668,7 +668,8 @@ se creó**.
   o de las gestiones. Ni Lima (no pasa por confirmación) ni Agencia (confirma con
   el pago validado).
 - **Cuánto se lee.** Lo mismo que la ficha: los dos GET de `lib/chatby-api.ts`
-  (`fetchChatbyConversation`, solo lectura; Kapta nunca manda nada por Chatby).
+  (`fetchChatbyConversation`, solo lectura: la confirmación automática nunca
+  manda nada por Chatby; lo único que escribe es una persona desde la ficha, §25).
   Hasta **20 pedidos por pasada** (40 GET); primero los que nunca se leyeron, el
   más nuevo primero, y después el que se leyó hace más. Un pedido que todavía no
   escribió se vuelve a leer cada **30 minutos** mientras siga en la ventana. Dos
@@ -11552,8 +11553,8 @@ estables:
    - **Cada producto lleva su cantidad**: «  2 x Producto - Variante». Una línea
      quitada del pedido (cantidad 0) no va.
 5. **Chatby (26-10-2026, pedido del owner):** la conversación de WhatsApp de la
-   clienta con el bot de confirmación de Chatby, **solo para leer**, para no salir de
-   Kapta a ver qué se le dijo. Kenku y Aurela comparten el bot y el número. El
+   clienta con el bot de confirmación de Chatby, para no salir de Kapta a ver qué
+   se le dijo: **para leer** y, desde el 02-11-2026, para **responderle** (abajo). Kenku y Aurela comparten el bot y el número. El
    contrato es el documento del equipo de la tienda
    (`docs/kapta/chatby-conversaciones.md`), probado el 25-10-2026 contra la API
    real.
@@ -11590,8 +11591,9 @@ estables:
      **con el `+`**: con «51…» o los 9 dígitos Chatby devuelve 0) da el
      `user_ns`; con más de una clienta, la del mensaje más reciente. Luego
      `GET /subscriber/chat-messages?user_ns=…&limit=20&include_bot=1&include_note=1`
-     (sin `include_bot` no salen las plantillas). Solo esos dos GET: Chatby no
-     tiene claves de solo lectura y Kapta nunca manda nada.
+     (sin `include_bot` no salen las plantillas). Para leer, solo esos dos
+     GET. Chatby no tiene claves de solo lectura: Kapta solo escribe cuando una
+     persona responde desde la ficha (abajo).
    - **Lo que no sale de la lectura:** la clave (`CHATBY_API_KEY`, la clave
      «KAPTA» del bot, creada en `app.chatby.io/settings#/api` → «Create API Token»
      con solo el permiso «Manage Flow», aparte de la de Make para
@@ -11616,6 +11618,36 @@ estables:
      Las primeras horas se llamó «WhatsApp»; el owner pidió «Chatby» el mismo
      día, porque «WhatsApp» ya es el botón de la cabecera que abre el chat.
      Pruebas: `test/chatby-conversation.test.ts`.
+   - **Responder desde la ficha (02-11-2026, pedido del owner).** Debajo de la
+     conversación, «Responder por WhatsApp»: una caja de texto y «Enviar por
+     WhatsApp». Decisiones del owner:
+     - **Quién:** quien puede editar el pedido (`master.edit`, como el resto de
+       la ficha). Sin ese permiso la pestaña sigue «Solo lectura».
+     - **Cómo sale:** solo texto (hasta 1.000 caracteres), **como persona del
+       equipo** y no como bot: `POST /subscriber/send-content` con
+       `send_as_agent: 1` y `data.content.messages = [{type: "text"}]`.
+     - **La ventana de 24 h de WhatsApp:** se puede escribir solo hasta 24 h
+       después del último mensaje de la clienta (texto, botón o archivo) en los
+       20 que se traen (`chatbyReplyWindow`); la caja dice hasta cuándo. Pasado
+       eso, o si la clienta no escribió, no hay caja: un aviso explica que
+       WhatsApp no deja mandar texto libre y que se le escribe con una
+       plantilla desde Chatby. El servidor lo vuelve a comprobar con la
+       conversación al día (sin la caché) antes de mandar.
+     - **El bot en pausa 60 minutos** para esa clienta
+       (`POST /subscriber/pause-bot`), para que sus flujos y recordatorios no
+       hablen encima de la persona, como cuando se responde desde el panel de
+       Chatby. Si la pausa falla, el mensaje igual salió y el aviso lo dice.
+     - **Queda en la Actividad:** «Mensaje por WhatsApp (Chatby)» (`kind =
+       chatby_message`, `source = 'chatby'`), con el texto como nota y quien lo
+       mandó como actor (Chatby no sabe quién es en Kapta). Es lo que escribió
+       el equipo: la conversación de la clienta sigue sin guardarse.
+     - Después de mandar, la conversación se vuelve a leer (sin la caché) y se
+       ve lo enviado. Si Chatby rechaza el envío, sale su motivo y no se anota
+       nada.
+     Implementación: `sendOrderChatbyReply` en
+     `app/dashboard/pedidos/actions.ts`, `sendChatbyReply` y
+     `forgetChatbyConversation` en `lib/chatby-api.ts`, `ReplyBox` en
+     `components/order-chatby-panel.tsx`. Pruebas: `test/chatby-reply.test.ts`.
 
 **El historial del lead se reparte entre los pedidos del cliente (16-10-2026).**
 La Actividad trae también las gestiones de Leads (llamadas, mensajes, la venta

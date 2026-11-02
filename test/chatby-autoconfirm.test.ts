@@ -534,7 +534,13 @@ describe("el servidor, el cron y la migración", () => {
   it("Chatby solo se lee: la misma función de la ficha, nada de POST", () => {
     expect(server).toContain("fetchChatbyConversation(");
     expect(server).not.toMatch(/method:\s*"POST"/);
-    expect(read("lib/chatby-api.ts")).not.toMatch(/method:\s*"(POST|PUT|PATCH|DELETE)"/);
+    expect(server).not.toContain("sendChatbyReply");
+    // lib/chatby-api.ts solo escribe para que una persona responda desde la
+    // ficha (MOM §25, «Chatby», 02-11-2026): las dos llamadas de sendChatbyReply.
+    const api = read("lib/chatby-api.ts");
+    expect(api).not.toMatch(/method:\s*"(PUT|PATCH|DELETE)"/);
+    const writes = [...api.matchAll(/\$\{CHATBY_API_BASE\}\/subscriber\/([a-z-]+)`,\s*\n\s*"/g)].map((m) => m[1]);
+    expect(writes).toEqual(["send-content", "pause-bot"]);
   });
 
   it("sin la 0297 no hace nada", () => {

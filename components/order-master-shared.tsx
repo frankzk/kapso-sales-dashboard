@@ -673,6 +673,9 @@ export const TIMELINE_LABEL: Record<string, string> = {
   // MOM §6.1, «Confirmó por Chatby» (01-11-2026): la clienta escribió para
   // confirmar y algo no cuadró. La nota dice qué; lo confirma una persona.
   chatby_confirmation_held: "Confirmación por Chatby para la asesora",
+  // MOM §25, «Chatby» (02-11-2026): lo que una persona le escribió a la clienta
+  // desde la ficha. La nota es el texto; el autor, quien lo mandó.
+  chatby_message: "Mensaje por WhatsApp (Chatby)",
   additional_output_reason: "Motivo de la salida adicional",
   recovery_discarded: "Recuperación de provincia descartada",
   confirmation_cancellation_task_created: "Tarea de anulación creada",

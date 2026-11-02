@@ -7,8 +7,15 @@
 //      → sus mensajes (`include_bot=1` es obligatorio: sin él no salen las
 //      plantillas; `include_system` no se pide, es ruido).
 //
-// Solo esos dos GET. Chatby no tiene claves de solo lectura: con la clave
-// «KAPTA» se podrían mandar mensajes, y Kapta nunca lo hace.
+// Para leer, solo esos dos GET. Chatby no tiene claves de solo lectura: con la
+// clave «KAPTA» se pueden mandar mensajes, y Kapta solo lo hace cuando una
+// persona responde desde la pestaña «Chatby» de la ficha (owner, 02-11-2026;
+// `sendChatbyReply`):
+//
+//   3. `POST /subscriber/send-content` con `send_as_agent: 1` → el texto, como
+//      persona del equipo (no como bot).
+//   4. `POST /subscriber/pause-bot` → el bot de esa clienta en pausa, para que
+//      no hable encima.
 //
 // La clave llega como argumento (la lee la acción del servidor de
 // `CHATBY_API_KEY`): este archivo no la guarda ni la escribe en ningún registro.
@@ -39,9 +46,15 @@ export function clearChatbyCache(): void {
   cache.clear();
 }
 
+/** Olvida la conversación guardada de ese celular: después de responder, la ficha la vuelve a leer con lo enviado. */
+export function forgetChatbyConversation(phone: string | null | undefined): void {
+  const key = chatbyPhone(phone);
+  if (key) cache.delete(key);
+}
+
 class ChatbyHttpError extends Error {
   constructor(
-    readonly step: "subscribers" | "chat-messages",
+    readonly step: "subscribers" | "chat-messages" | "send-content" | "pause-bot",
     readonly status: number,
     message: string,
   ) {
@@ -63,6 +76,18 @@ function errorMessage(cause: unknown): string {
   return "No hubo conexión con Chatby.";
 }
 
+async function failure(res: Response, step: ChatbyHttpError["step"]): Promise<ChatbyHttpError> {
+  // `{"message": "…"}` en los 400. Se enseña recortado; nunca el cuerpo entero.
+  let message = "";
+  try {
+    const body = (await res.json()) as { message?: unknown };
+    if (typeof body?.message === "string") message = body.message.trim().slice(0, 160);
+  } catch {
+    /* sin cuerpo legible */
+  }
+  return new ChatbyHttpError(step, res.status, message);
+}
+
 async function getJson(
   url: string,
   step: ChatbyHttpError["step"],
@@ -76,18 +101,37 @@ async function getJson(
     signal,
     cache: "no-store",
   });
-  if (!res.ok) {
-    // `{"message": "…"}` en los 400. Se enseña recortado; nunca el cuerpo entero.
-    let message = "";
-    try {
-      const body = (await res.json()) as { message?: unknown };
-      if (typeof body?.message === "string") message = body.message.trim().slice(0, 160);
-    } catch {
-      /* sin cuerpo legible */
-    }
-    throw new ChatbyHttpError(step, res.status, message);
-  }
+  if (!res.ok) throw await failure(res, step);
   return res.json();
+}
+
+type ChatbyWriteAnswer = { status?: unknown; message?: unknown };
+
+async function postJson(
+  url: string,
+  step: ChatbyHttpError["step"],
+  apiKey: string,
+  body: Record<string, unknown>,
+  fetchImpl: typeof fetch,
+): Promise<void> {
+  const res = await fetchImpl(url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(CHATBY_TIMEOUT_MS),
+    cache: "no-store",
+  });
+  if (!res.ok) throw await failure(res, step);
+  // Algunas respuestas de Chatby vienen con 200 y `{"status": "error", "message": …}`.
+  let answer: ChatbyWriteAnswer | null = null;
+  try {
+    answer = (await res.json()) as ChatbyWriteAnswer;
+  } catch {
+    /* 200 sin cuerpo: hecho */
+  }
+  if (typeof answer?.status === "string" && !["ok", "success"].includes(answer.status.toLowerCase())) {
+    throw new ChatbyHttpError(step, res.status, typeof answer.message === "string" ? answer.message.trim().slice(0, 160) : "");
+  }
 }
 
 /**
@@ -155,5 +199,65 @@ export async function fetchChatbyConversation(input: {
     return { status: "error", message: errorMessage(cause), inboxUrl: userNs ? chatbyInboxUrl(userNs) : null };
   } finally {
     clearTimeout(timer);
+  }
+}
+
+export type ChatbyReplyResult =
+  /** Se mandó. `paused` dice si además quedó el bot en pausa. */
+  | { status: "ok"; paused: boolean }
+  | { status: "error"; message: string };
+
+/**
+ * Manda el texto de una persona del equipo a la clienta, como agente (no como
+ * bot), y deja el bot de esa clienta en pausa `pauseMinutes` (MOM §25,
+ * «Chatby», 02-11-2026). Si la pausa falla, el mensaje igual salió: se dice y
+ * no se reintenta el envío. Nunca lanza; el registro lleva el paso y el código.
+ */
+export async function sendChatbyReply(input: {
+  userNs: string;
+  text: string;
+  apiKey: string;
+  pauseMinutes: number;
+  fetchImpl?: typeof fetch;
+}): Promise<ChatbyReplyResult> {
+  const apiKey = input.apiKey.trim();
+  if (!apiKey) return { status: "error", message: "Falta la clave «KAPTA» de Chatby en Kapta (CHATBY_API_KEY)." };
+  const fetchImpl = input.fetchImpl ?? fetch;
+  const log = (cause: unknown) =>
+    console.error(
+      `[chatby] ${JSON.stringify({
+        paso: cause instanceof ChatbyHttpError ? cause.step : "red",
+        status: cause instanceof ChatbyHttpError ? cause.status : null,
+        error: cause instanceof Error ? cause.name : "desconocido",
+      })}`,
+    );
+  try {
+    await postJson(
+      `${CHATBY_API_BASE}/subscriber/send-content`,
+      "send-content",
+      apiKey,
+      {
+        user_ns: input.userNs,
+        send_as_agent: 1,
+        data: { version: "v1", content: { messages: [{ type: "text", text: input.text }] } },
+      },
+      fetchImpl,
+    );
+  } catch (cause) {
+    log(cause);
+    return { status: "error", message: errorMessage(cause) };
+  }
+  try {
+    await postJson(
+      `${CHATBY_API_BASE}/subscriber/pause-bot`,
+      "pause-bot",
+      apiKey,
+      { user_ns: input.userNs, minutes: input.pauseMinutes },
+      fetchImpl,
+    );
+    return { status: "ok", paused: true };
+  } catch (cause) {
+    log(cause);
+    return { status: "ok", paused: false };
   }
 }

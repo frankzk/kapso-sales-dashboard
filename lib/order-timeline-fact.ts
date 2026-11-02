@@ -101,6 +101,8 @@ const POR_KIND: Record<string, TimelineFact> = {
   dispatch_date_cleared: consulta("programado"),
   aliclik_auto_guide_failed: consulta("guia"),
   chatby_confirmation_held: consulta("mensaje"),
+  // MOM §25, «Chatby» (02-11-2026): una persona le escribió a la clienta desde la ficha.
+  chatby_message: consulta("mensaje"),
 
   // Despacho (índigo): el paquete sale de nuestras manos.
   swayp_desde_por_confirmar: hito("despacho", "por_despachar"),
