@@ -710,6 +710,19 @@ tope de 20 guías por día**.
   `guide_registered` sin actor con el motivo «Guía automática: #AUR900226 confirmó
   por Chatby.» y `payload.auto.kind = confirmado_chatby`; la nota del lead dice
   «Guía de Aliclik creada automáticamente (confirmó por Chatby) · …».
+- **La coordenada sale de WhatsApp** (owner, 02-11-2026). Aliclik exige
+  coordenada para cotizar y los pedidos de WooCommerce no la traen: las 10
+  primeras guías automáticas fallaron todas por eso. Si el pedido no tiene
+  coordenada, la pasada lee la conversación de Chatby y usa la **última
+  ubicación que mandó la clienta en esta compra** (como mucho 3 días antes del
+  pedido; `chatbyGuidePin`), la misma que el panel le propone a la asesora
+  (§38, «De dónde sale ahora»). La guía guarda esa coordenada como la del botón.
+  Sin ubicación, o con un pin que el pedido no respalda (§10, pin respaldado;
+  la guía automática nunca escribe la excepción), **queda para una persona**:
+  `guide_state = para_persona` con el motivo `sin_ubicacion` o
+  `pin_sin_respaldo`, sin gastar el tope ni dejar el hecho de guía no creada;
+  la asesora le pide la ubicación a la clienta y la crea desde el panel. Si
+  Chatby no responde, se reintenta en la pasada siguiente.
 - **Lo que no cuadra para la guía queda en la mesa como hoy**, en Preparación ·
   Por generar rótulo, con el hecho `aliclik_auto_guide_failed` («Guía automática
   no creada») y su motivo —sin cobertura, sin stock, posible duplicado, pin sin
@@ -18033,7 +18046,11 @@ y en Aliclik el pin decide a dónde va el paquete.
    coordenada o la coordenada escrita; un enlace acortado no la trae. Solo
    mensajes de la clienta, y solo dentro del Perú. **No se llena sola**: quien
    cotiza la mira y la usa con un clic. Sin Chatby, el campo se llena a mano
-   como siempre.
+   como siempre. **La excepción es la guía automática del que confirmó por
+   Chatby** (§6.1, owner, 02-11-2026): ahí no hay nadie que la mire, así que la
+   usa sola con dos condiciones más (`chatbyGuidePin`): que sea de esta compra
+   —enviada como mucho 3 días antes del pedido; si la última es más vieja, no
+   vale— y que el pedido respalde el pin, sin excepción escrita.
 
 Pruebas: `test/order-pin-sources.test.ts`.
 - **Teléfono:** el de facturación y, si falta, el de envío. Sin dirección de

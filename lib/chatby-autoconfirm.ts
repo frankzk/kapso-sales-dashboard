@@ -619,3 +619,41 @@ export function limaDayStartIso(now: Date): string {
 export function chatbyGuideReason(orderName: string | null): string {
   return `Guía automática: ${orderName ?? "el pedido"} confirmó por Chatby.`;
 }
+
+// ---------------------------------------------------------------------------
+// La coordenada de la guía automática (owner, 02-11-2026)
+//
+// Aliclik exige coordenada para cotizar, y los pedidos de WooCommerce no traen
+// ninguna: las 10 primeras guías automáticas fallaron todas por eso. La que usa
+// la asesora en el panel es la ubicación que mandó la clienta por WhatsApp
+// (§38); la guía automática usa la misma, con dos condiciones que en el panel
+// pone la persona que la mira: que sea de la clienta (nunca del bot ni del
+// equipo) y que sea de esta compra, no de un pedido de hace meses. Y pasa por
+// la misma puerta del pin respaldado: si el pedido contradice el pin, no hay
+// guía automática.
+
+/** Lo más que puede preceder la ubicación al pedido: la conversación que lo trajo. */
+export const CHATBY_PIN_MAX_DAYS_BEFORE_ORDER = 3;
+
+/**
+ * La ubicación de WhatsApp para la guía automática, como par «lat, lng», o null
+ * si la clienta no mandó ninguna en esta compra. Solo la última de la clienta:
+ * si esa es vieja, no se busca otra más vieja todavía. Sin fecha no se puede
+ * saber si es de esta compra, así que tampoco vale.
+ */
+export function chatbyGuidePin(
+  messages: readonly Pick<ChatbyMessage, "kind" | "location" | "at">[],
+  orderCreatedAt: string | null | undefined,
+): { coordinate: string; at: string } | null {
+  const created = Date.parse(orderCreatedAt ?? "");
+  if (!Number.isFinite(created)) return null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (m.kind !== "cliente" || !m.location) continue;
+    const at = Date.parse(m.at ?? "");
+    if (!Number.isFinite(at)) return null;
+    if (at < created - CHATBY_PIN_MAX_DAYS_BEFORE_ORDER * 86_400_000) return null;
+    return { coordinate: `${m.location.lat}, ${m.location.lng}`, at: m.at! };
+  }
+  return null;
+}

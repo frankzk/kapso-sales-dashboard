@@ -15,7 +15,9 @@ import {
   chatbyAutoSettingsFrom,
   chatbyCheckDue,
   chatbyConfirmationNote,
+  CHATBY_PIN_MAX_DAYS_BEFORE_ORDER,
   chatbyGuideHold,
+  chatbyGuidePin,
   chatbyGuideSkip,
   chatbyOperationId,
   chatbyOrderSkip,
@@ -400,6 +402,48 @@ describe("la guía automática", () => {
   it("el día de Lima empieza a medianoche de Lima", () => {
     expect(limaDayStartIso(new Date("2026-11-02T03:00:00Z"))).toBe("2026-11-01T00:00:00-05:00");
     expect(limaDayStartIso(new Date("2026-11-02T06:00:00Z"))).toBe("2026-11-02T00:00:00-05:00");
+  });
+});
+
+describe("la coordenada de la guía automática", () => {
+  const PIN = { lat: -6.4875, lng: -76.3653 };
+
+  it("usa la última ubicación que mandó la clienta, como par", () => {
+    const messages = [
+      msg({ location: { lat: -6.1, lng: -76.1 }, at: "2026-11-01T13:00:00.000Z" }),
+      msg({ location: PIN, at: "2026-11-01T14:20:00.000Z" }),
+      msg({ text: "gracias" }),
+    ];
+    expect(chatbyGuidePin(messages, CREATED)).toEqual({ coordinate: "-6.4875, -76.3653", at: "2026-11-01T14:20:00.000Z" });
+  });
+
+  it("nunca la del bot ni la del equipo", () => {
+    expect(chatbyGuidePin([msg({ kind: "bot", location: PIN }), msg({ kind: "equipo", location: PIN })], CREATED)).toBeNull();
+  });
+
+  it("vale la que mandó hasta unos días antes del pedido, no la de una compra vieja", () => {
+    const days = (n: number) => new Date(Date.parse(CREATED) - n * 86_400_000).toISOString();
+    expect(chatbyGuidePin([msg({ location: PIN, at: days(CHATBY_PIN_MAX_DAYS_BEFORE_ORDER - 0.1) })], CREATED)).not.toBeNull();
+    expect(chatbyGuidePin([msg({ location: PIN, at: days(CHATBY_PIN_MAX_DAYS_BEFORE_ORDER + 0.1) })], CREATED)).toBeNull();
+    // La última es vieja: no se busca otra más vieja todavía.
+    expect(chatbyGuidePin([msg({ location: PIN, at: days(40) }), msg({ text: "hola" })], CREATED)).toBeNull();
+  });
+
+  it("sin fecha del mensaje o del pedido, no", () => {
+    expect(chatbyGuidePin([msg({ location: PIN, at: null })], CREATED)).toBeNull();
+    expect(chatbyGuidePin([msg({ location: PIN })], null)).toBeNull();
+    expect(chatbyGuidePin([], CREATED)).toBeNull();
+  });
+
+  it("el servidor la pasa a la cotización y a la creación, y sin ubicación o con pin sin respaldo queda para una persona", () => {
+    const server = read("lib/chatby-autoconfirm-server.ts");
+    expect(server).toContain("chatbyGuidePin(conversation.messages, row.order_created_at)");
+    expect(server).toContain('previewAliclikGuideFor(aliclik, { modality: "cod", coordinate }, scope)');
+    expect(server).toMatch(/note: null, coordinate \}/);
+    expect(server).toContain('await mark(row.order_id, "para_persona", "sin_ubicacion")');
+    expect(server).toContain('"pin_sin_respaldo"');
+    // Nunca levanta la puerta del pin con una excepción escrita.
+    expect(server).not.toContain("pinExceptionReason");
   });
 });
 

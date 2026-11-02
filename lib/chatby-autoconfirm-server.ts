@@ -44,6 +44,7 @@ import {
   chatbyCheckDue,
   chatbyConfirmationNote,
   chatbyGuideHold,
+  chatbyGuidePin,
   chatbyGuideReason,
   chatbyGuideSkip,
   chatbyHoldNote,
@@ -191,7 +192,7 @@ export async function runChatbyAutoconfirm(
 
     // ── 2. La guía de lo confirmado por Chatby ──────────────────────────────
     if (settings.guide_enabled && report.stopped !== "tiempo") {
-      await guidePass(admin, settings, { dry, now, started }, report);
+      await guidePass(admin, settings, { dry, now, started, apiKey }, report);
     }
   } catch (err) {
     report.error = err instanceof Error ? err.message : "Error de la confirmación por Chatby";
@@ -418,7 +419,7 @@ type GuideState = "creada" | "fallo" | "para_persona" | "ya_tenia" | "fuera";
 async function guidePass(
   admin: SupabaseClient,
   settings: ChatbyAutoSettings,
-  ctx: { dry: boolean; now: Date; started: number },
+  ctx: { dry: boolean; now: Date; started: number; apiKey: string },
   report: ChatbyAutoReport,
 ): Promise<void> {
   const { now } = ctx;
@@ -569,7 +570,43 @@ async function guidePass(
       await fail(ctxError ?? "No se pudo preparar la conexión con Aliclik.");
       continue;
     }
-    const preview = await previewAliclikGuideFor(aliclik, { modality: "cod" }, scope);
+    // La coordenada: la del pedido si la trae; si no (WooCommerce no
+    // geocodifica), la ubicación que mandó la clienta por WhatsApp en esta
+    // compra. Sin ninguna, es de una persona: se la pide a la clienta.
+    let coordinate: string | null = null;
+    if (row.latitude == null || row.longitude == null) {
+      if (!ctx.apiKey) {
+        item.outcome = "sin_clave";
+        item.detail = "Falta CHATBY_API_KEY para leer la ubicación de WhatsApp.";
+        continue;
+      }
+      const conversation = await fetchChatbyConversation({ phone: row.customer_phone, apiKey: ctx.apiKey });
+      if (conversation.status === "error") {
+        // Chatby caído: la próxima pasada, sin marcar ni gastar el intento.
+        item.outcome = "error";
+        item.detail = conversation.message;
+        continue;
+      }
+      const pin = conversation.status === "ok" ? chatbyGuidePin(conversation.messages, row.order_created_at) : null;
+      if (!pin) {
+        item.outcome = "para_persona";
+        item.detail = "sin_ubicacion";
+        await mark(row.order_id, "para_persona", "sin_ubicacion");
+        continue;
+      }
+      coordinate = pin.coordinate;
+    }
+
+    const preview = await previewAliclikGuideFor(aliclik, { modality: "cod", coordinate }, scope);
+    if (!preview.ok && (preview.pinSinCorroborar || preview.needsCoordinate)) {
+      // El pedido contradice el pin (otro departamento y otra ciudad): no es un
+      // fallo de Aliclik, es un destino que tiene que mirar una persona.
+      const why = preview.pinSinCorroborar ? "pin_sin_respaldo" : "sin_ubicacion";
+      item.outcome = "para_persona";
+      item.detail = why;
+      await mark(row.order_id, "para_persona", preview.pinSinCorroborar ? `${why}: ${preview.pinSinCorroborar}` : why);
+      continue;
+    }
     if (!preview.ok) {
       await fail(preview.error ?? "No se pudo cotizar el envío.");
       continue;
@@ -588,7 +625,7 @@ async function guidePass(
 
     const result = await createAliclikGuideFor(
       aliclik,
-      { transportId: transport.transportId, expectedCollectTotal: preview.collectTotal ?? null, note: null },
+      { transportId: transport.transportId, expectedCollectTotal: preview.collectTotal ?? null, note: null, coordinate },
       scope,
       { kind: CHATBY_GUIDE_ORIGIN, scheduledOn: today, reason: chatbyGuideReason(row.order_name) },
     );
