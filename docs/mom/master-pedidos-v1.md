@@ -963,6 +963,39 @@ Implementación: `dispatchLocationMissing`, `scheduledWithoutLocation` y
 `applyScheduledNoLocation` y `getScheduledNoLocationIds` en
 `lib/orders-master-access.ts`. Pruebas: `test/programar-sin-ubicacion.test.ts`.
 
+#### Provincia COD: programar pide la coordenada (owner, 02-11-2026)
+
+> ⚠️ **Ocurrió.** #AUR900167 (Aurela) se confirmó y se programó con
+> «Programado · sale hoy», pero no tenía coordenada: el panel de Aliclik decía
+> «Obligatoria: el pedido no la tiene». Aliclik no cotiza ni crea sin ella, así
+> que la guía automática del día programado no podía salir. Ese día había 15
+> Provincia COD programados así.
+
+Decisión del owner: **en Provincia COD, programar la salida exige la
+ubicación** (la coordenada que pide Aliclik), y se guarda en el pedido.
+
+- **Las dos puertas de programar la piden** cuando el pedido no la tiene: «Sale
+  el» al confirmar (`registerConfirmationAttempt`) y «Programar envío / Cambiar
+  fecha» (`scheduleOrderDispatch`). Un campo «Ubicación» acepta el enlace de
+  Google Maps o el par (`parseCoordinateInput`, el mismo del panel de Aliclik);
+  sin él no se puede guardar. Un enlace acortado (`maps.app.goo.gl`) no trae la
+  coordenada escrita y se pide el largo o el par.
+- **El servidor la valida y la guarda** en `order_geo_overrides` (donde la deja
+  «Corregir ubicación» y de donde la lee el recálculo), sin borrar lo demás que
+  ese registro tuviera, y deja en el historial «Ubicación guardada al programar
+  el envío». Al confirmar con fecha, va antes de registrar el intento; si falta
+  o no sirve, se rechaza y se dice que se puede confirmar dejando «Sale el»
+  vacío. **Confirmar sin fecha no la pide.**
+- **Lo ya programado sin ella** lo dice la ficha: «Sin ubicación: ese día
+  Aliclik no podrá crear la guía.», con «Agregar ubicación», que abre el mismo
+  formulario con la fecha que ya tiene.
+- Lima, Agencia y lo que ya tiene coordenada no cambian.
+
+Implementación: `dispatchCoordinateMissing`, `dispatchCoordinateInput` y
+`DISPATCH_NEEDS_COORDINATE_ERROR` en `lib/dispatch-date.ts`;
+`ensureDispatchCoordinate` en `app/dashboard/pedidos/actions.ts`. Pruebas:
+`test/dispatch-date.test.ts`.
+
 Flujo físico:
 
 ```text
