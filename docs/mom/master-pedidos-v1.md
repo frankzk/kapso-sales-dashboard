@@ -1846,6 +1846,14 @@ crear guías. En Lima, Aliclik se usa **solo con su transporte AUTOECOM**.
   confirma cómo lo llama Aliclik. **Confirmado el 26-10-2026: Aliclik lo llama
   «AutoEcom Logistic»**, que la comparación reconoce. La creación vuelve a cotizar y exige que el
   transporte se pueda elegir: la regla vale también en el servidor.
+- **Después de AUTOECOM, ALIDRIVER (02-11-2026, decisión del owner).** Si el
+  pedido **ya salió con AUTOECOM** —una guía Aliclik suya con ese transporte y
+  despachada, aunque hoy esté anulada o devuelta (`alreadyLeftWithAutoecom`)—
+  y se vuelve a enviar por Aliclik, **recién entonces se puede elegir
+  ALIDRIVER**; AUTOECOM sigue disponible y los demás no («En Lima, después de
+  AUTOECOM, se envía con AUTOECOM o ALIDRIVER.»). La cotización lo avisa. Una
+  guía AUTOECOM anulada antes de salir no cuenta. Caso: #KP143987, guía
+  AUR5X246218871979 (AutoEcom, despachada el 29-10, anulada).
 - **Tanders no crea guías nuevas** (`TANDERS_NEW_GUIDES_ENABLED = false`,
   `lib/tanders/new-guides.ts`): el plan de rutas no lo ofrece en ninguna
   operación y `createTandersGuide` responde «Tanders ya no crea guías nuevas»

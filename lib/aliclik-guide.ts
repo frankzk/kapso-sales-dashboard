@@ -51,7 +51,7 @@ import { aliclikDoorBan } from "@/lib/door-rejection";
 import { DUPLICATE_READ_ERROR, loadAliclikDuplicateHold } from "@/lib/aliclik-duplicate-access";
 import type { DuplicateHold } from "@/lib/aliclik-duplicate";
 import { classifyOperation } from "@/lib/order-macro-stage";
-import { limaTransportPolicy } from "@/lib/aliclik-lima";
+import { alreadyLeftWithAutoecom, limaTransportPolicy, type PriorAliclikGuide } from "@/lib/aliclik-lima";
 import { normalizePhone } from "@/lib/phone";
 import { pinSinCorroborar } from "@/lib/pin-corroborado";
 import { categoryOf } from "@/lib/shipments";
@@ -697,7 +697,20 @@ export async function previewAliclikGuideFor(
   // En Lima solo AUTOECOM; si Aliclik no lo ofrece, el que ofrezca, con aviso
   // (MOM §9, «Aliclik en Lima», 26-10-2026). La creación vuelve a cotizar y
   // exige `selectable`, así que la regla vale también del lado del servidor.
-  const lima = classifyOperation(ctx.row) === "lima" ? limaTransportPolicy(quoted) : null;
+  //
+  // Ya salió con AUTOECOM y vuelve a enviarse: recién ahí también ALIDRIVER
+  // (02-11-2026). Si no se pueden leer sus guías, la regla de siempre.
+  const isLima = classifyOperation(ctx.row) === "lima";
+  let afterAutoecom = false;
+  if (isLima) {
+    const { data: prior } = await admin
+      .from("shipments")
+      .select("courier,aliclik_transport_name,dispatched_at")
+      .eq("order_id", ctx.row.order_id)
+      .eq("courier", "aliclik");
+    afterAutoecom = alreadyLeftWithAutoecom((prior ?? []) as PriorAliclikGuide[]);
+  }
+  const lima = isLima ? limaTransportPolicy(quoted, { afterAutoecom }) : null;
   const annotated = lima?.couriers ?? quoted;
   const warnings = lima?.warning ? [...(resolved.warnings ?? []), lima.warning] : resolved.warnings;
   const outputPolicy = await readAliclikOutputPolicy(admin, ctx);
