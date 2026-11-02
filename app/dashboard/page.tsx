@@ -49,7 +49,7 @@ export const dynamic = "force-dynamic";
 export default function ConsolidatedPage({
   searchParams,
 }: {
-  searchParams: Promise<{ from?: string; to?: string }>;
+  searchParams: Promise<{ from?: string; to?: string; mm?: string }>;
 }) {
   return (
     <Suspense fallback={<DashboardRouteSkeleton />}>
@@ -61,7 +61,7 @@ export default function ConsolidatedPage({
 async function ConsolidatedContent({
   searchParams,
 }: {
-  searchParams: Promise<{ from?: string; to?: string }>;
+  searchParams: Promise<{ from?: string; to?: string; mm?: string }>;
 }) {
   // Quien instaló la app de Shopify para tiendas cliente sin sesión abierta
   // entra al login, y el login siempre aterriza aquí: se retoma el reclamo de
@@ -207,6 +207,7 @@ async function ConsolidatedContent({
             <MomOwnerSummaryLoader
               storeIds={storeIds}
               orgIds={[...new Set(stores.map((store) => store.org_id))]}
+              month={sp.mm ?? null}
             />
           </Suspense>
           <Suspense fallback={<LtvCpaSkeleton />}>
@@ -258,12 +259,15 @@ async function SalesPulseLoader({ promise, currency }: { promise: Promise<SalesP
 async function MomOwnerSummaryLoader({
   storeIds,
   orgIds,
+  month,
 }: {
   storeIds: string[];
   orgIds: string[];
+  /** «Otro mes…» de «Cierre y entregas» (`?mm=2026-08`). */
+  month: string | null;
 }) {
   try {
-    const summary = await getMomOwnerSummary(storeIds, orgIds);
+    const summary = await getMomOwnerSummary(storeIds, orgIds, { month });
     return <MomOwnerSummaryPanel summary={summary} />;
   } catch (error) {
     console.error("No se pudo cargar el resumen operativo MOM", error);
