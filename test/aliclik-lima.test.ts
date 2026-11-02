@@ -1,7 +1,16 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { AUTOECOM_MISSING_WARNING, AUTOECOM_ONLY_REASON, isAutoecom, limaTransportPolicy } from "@/lib/aliclik-lima";
+import {
+  ALIDRIVER_AFTER_AUTOECOM_NOTE,
+  AUTOECOM_MISSING_WARNING,
+  AUTOECOM_ONLY_REASON,
+  AUTOECOM_OR_ALIDRIVER_REASON,
+  alreadyLeftWithAutoecom,
+  isAlidriver,
+  isAutoecom,
+  limaTransportPolicy,
+} from "@/lib/aliclik-lima";
 import { TANDERS_NEW_GUIDES_ENABLED, TANDERS_NEW_GUIDES_OFF_MESSAGE } from "@/lib/tanders/new-guides";
 import { REPRO_COURIER_CHOICES, REPRO_COURIER_LABEL, isReproCourier } from "@/lib/repro-lima";
 
@@ -47,8 +56,38 @@ describe("limaTransportPolicy: qué transporte se puede elegir en Lima", () => {
 
   it("la cotización la aplica solo en Lima, y crear la guía exige `selectable`", () => {
     const src = read("lib/aliclik-guide.ts");
-    expect(src).toContain('classifyOperation(ctx.row) === "lima" ? limaTransportPolicy(quoted) : null');
+    expect(src).toContain('const isLima = classifyOperation(ctx.row) === "lima";');
+    expect(src).toContain("const lima = isLima ? limaTransportPolicy(quoted, { afterAutoecom }) : null;");
     expect(src).toContain("if (!courier.selectable)");
+  });
+});
+
+describe("Después de AUTOECOM, ALIDRIVER (02-11-2026, #KP143987)", () => {
+  const alidriver: Quote = { transportId: 1, transportName: "ALIDRIVER", selectable: true };
+  const autoecom: Quote = { transportId: 30, transportName: "AutoEcom Logistic", selectable: true };
+  const otro: Quote = { transportId: 9, transportName: "Otro Courier", selectable: true };
+
+  it("si ya salió con AUTOECOM, se puede elegir AUTOECOM o ALIDRIVER; los demás no", () => {
+    const { couriers, warning } = limaTransportPolicy([alidriver, autoecom, otro], { afterAutoecom: true });
+    expect(couriers.find((c) => c.transportId === 1)).toMatchObject({ selectable: true });
+    expect(couriers.find((c) => c.transportId === 30)).toMatchObject({ selectable: true });
+    expect(couriers.find((c) => c.transportId === 9)).toMatchObject({ selectable: false, reason: AUTOECOM_OR_ALIDRIVER_REASON });
+    expect(warning).toBe(ALIDRIVER_AFTER_AUTOECOM_NOTE);
+  });
+
+  it("sin haber salido con AUTOECOM, ALIDRIVER sigue cerrado", () => {
+    const { couriers } = limaTransportPolicy([alidriver, autoecom], { afterAutoecom: false });
+    expect(couriers.find((c) => c.transportId === 1)).toMatchObject({ selectable: false, reason: AUTOECOM_ONLY_REASON });
+  });
+
+  it("cuenta la guía AUTOECOM despachada aunque hoy esté anulada; no la anulada sin salir ni la de ALIDRIVER", () => {
+    expect(isAlidriver("ALIDRIVER")).toBe(true);
+    expect(isAlidriver("AutoEcom Logistic")).toBe(false);
+    // AUR5X246218871979: AutoEcom, despachada el 29-10, hoy anulada.
+    expect(alreadyLeftWithAutoecom([{ courier: "aliclik", aliclik_transport_name: "AutoEcom Logistic", dispatched_at: "2026-10-29T13:58:09Z" }])).toBe(true);
+    expect(alreadyLeftWithAutoecom([{ courier: "aliclik", aliclik_transport_name: "AutoEcom Logistic", dispatched_at: null }])).toBe(false);
+    expect(alreadyLeftWithAutoecom([{ courier: "aliclik", aliclik_transport_name: "ALIDRIVER", dispatched_at: "2026-10-29T13:58:09Z" }])).toBe(false);
+    expect(alreadyLeftWithAutoecom([])).toBe(false);
   });
 });
 
