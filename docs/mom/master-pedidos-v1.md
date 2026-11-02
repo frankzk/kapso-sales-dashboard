@@ -9731,6 +9731,16 @@ Lima: hoy, ayer, últimos 7 días, mes actual y mes anterior. Cada porcentaje
 muestra siempre su numerador y denominador; un universo vacío se presenta como
 `Sin datos`, nunca como 0 %.
 
+**Y cualquier mes cerrado, con su mes y año (02-11-2026, pedido del owner).**
+Junto a los chips, «Otro mes…» ofrece los meses anteriores al mes anterior,
+desde enero de 2025 (`?mm=2026-05` en el Consolidado; `momChosenMonth`,
+`lib/mom-owner-summary.ts`). Es el mes entero en días de Lima, con las mismas
+reglas de cohorte de abajo. Se lee aparte: los pedidos creados en ese mes, y
+sus salidas y confirmaciones hasta un mes después —el pedido del 31 que salió
+el 2 sigue siendo de ese mes—, sin traer todo lo que hay entre él y el mes
+anterior. La línea de abajo lo compara con el mes en curso, como a las demás
+ventanas.
+
 **Las ventanas se leen según su madurez, no una contra otra.** Todas las tasas
 de confirmación y adelanto son de cohorte: el denominador son los pedidos
 *creados* en la ventana y el numerador es lo que esos mismos pedidos han

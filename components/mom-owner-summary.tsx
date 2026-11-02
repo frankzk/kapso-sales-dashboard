@@ -5,7 +5,8 @@ import { CARD_ZONE, SECTION_CARD, SectionHead, Skeleton } from "@/components/ops
 import { opsButtonClass } from "@/components/ops-styles";
 import { MomIndicators } from "@/components/mom-indicators";
 import { IconChevronRight } from "@/components/icons";
-import type { MomOwnerAlert, MomOwnerKpiKey, MomOwnerSummary } from "@/lib/mom-owner-summary";
+import { MOM_FIRST_MONTH, type MomOwnerAlert, type MomOwnerKpiKey, type MomOwnerSummary } from "@/lib/mom-owner-summary";
+import { recentMonths } from "@/lib/productivity-month";
 
 // La operación del MOM en Consolidado (DESIGN.md › Consolidado): arriba las
 // excepciones que esperan a alguien, cada una abre su cola del Master; debajo,
@@ -89,6 +90,14 @@ function ExceptionCell({ alert }: { alert: MomOwnerAlert }) {
   );
 }
 
+/**
+ * «Otro mes…»: los meses cerrados antes del mes anterior, hasta enero de 2025
+ * (dos años como mucho). Este mes y el anterior tienen su chip.
+ */
+function otherMonthsOf(nowIso: string): { month: string; label: string }[] {
+  return recentMonths("America/Lima", nowIso, MOM_FIRST_MONTH, 26).slice(2);
+}
+
 export function MomOwnerSummaryPanel({ summary }: { summary: MomOwnerSummary }) {
   const pending = summary.alerts.filter((a) => a.count > 0).length;
   return (
@@ -119,7 +128,7 @@ export function MomOwnerSummaryPanel({ summary }: { summary: MomOwnerSummary }) 
         ))}
       </ul>
       <div className={cn(CARD_ZONE, "mt-4")}>
-        <MomIndicators periods={summary.periods} rows={KPI_ROWS} />
+        <MomIndicators periods={summary.periods} rows={KPI_ROWS} otherMonths={otherMonthsOf(summary.generatedAt)} />
       </div>
     </section>
   );
