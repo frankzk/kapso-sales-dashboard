@@ -25,6 +25,7 @@ import { isFillableRouteOutput, puertaDeSalidaAdicional } from "@/lib/shipment-o
 import { esNumeroDeGuiaSwayp } from "@/lib/swayp-guide";
 import { avisoSinVinculoSwayp, productosSinVinculo } from "@/lib/swayp-productos";
 import { cargarMapaSwayp } from "@/lib/swayp-sku-map";
+import { swaypDestinationRefusal } from "@/lib/swayp-destination-guard";
 import {
   createFenixGuideViaApi,
   resolveDirectGuideAddress,
@@ -187,6 +188,10 @@ export async function emitirGuiaSwaypDirecta(
         "El pedido no tiene distrito/ciudad de envío, así que no se puede validar la cobertura ni el stock Swayp. Complétalo en Shopify y reintenta.",
     };
   }
+  // Lima para un pedido que no es de Lima no sale, con número de Swayp o escrito
+  // a mano (02-11-2026, #KP142611, lib/swayp-destination-guard.ts).
+  const contradictorio = await swaypDestinationRefusal(admin, order.id, city);
+  if (contradictorio) return { error: contradictorio };
 
   const { data: store } = await admin
     .from("stores")

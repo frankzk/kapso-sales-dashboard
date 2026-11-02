@@ -69,7 +69,15 @@ import {
   type StatusOverride,
 } from "@/lib/order-status";
 import { salesChannel } from "@/lib/sales-channel";
-import { guideProvinceFits, learnedDistrictFits } from "@/lib/district-learning";
+import {
+  firstAliclikUbigeo,
+  guideProvinceFits,
+  learnedDistrictFits,
+  learnedIsLima,
+  limaProvinceTrusted,
+  ubigeoProvinceFor,
+} from "@/lib/district-learning";
+import { isLimaOrCallaoProvince } from "@/lib/peru-departamentos";
 import { dispatchedWith, type RiderStop } from "@/lib/dispatched-with";
 import { orderProductTitles } from "@/lib/order-product-titles";
 import { costCourier } from "@/lib/delivery-courier";
@@ -1093,18 +1101,59 @@ export async function recomputeOrderMaster(
     // caben en el departamento del pedido (lib/district-learning.ts).
     const ownRegion =
       geoOverride?.region ?? text(address?.province) ?? guides.find((g) => g.region)?.region ?? draft?.region ?? null;
-    const geoHit = learnedDistrictFits(geo.get(normalizeDistrict(district)), ownRegion, district);
+
+    // El punto del mapa, de más fiable a menos:
+    //
+    //   1. La corrección manual del equipo, que gana siempre.
+    //   2. Lo que el courier geolocalizó al ir FÍSICAMENTE a la puerta. Es la
+    //      verdad de campo: alguien estuvo ahí.
+    //   3. Lo que Shopify geocodificó de la dirección escrita. Es una
+    //      estimación a partir de texto, así que va después de las dos
+    //      anteriores — pero llega desde el minuto cero del pedido, mientras
+    //      que las otras dos solo existen después de un intento de entrega o de
+    //      una corrección a mano.
+    //
+    // El punto 3 estuvo en `orders.raw` todo el tiempo sin usarse: la consulta
+    // GraphQL no pedía `latitude`/`longitude`, así que solo lo traían los
+    // pedidos que entraban por webhook. Es la coordenada que Aliclik exige para
+    // cotizar y crear una guía. Se resuelve ANTES que la provincia porque es
+    // la prueba con que se juzga el homónimo de Lima (abajo).
+    const geoPin = guides.find((g) => g.latitude != null && g.longitude != null);
+    const latitude = geoOverride?.latitude ?? geoPin?.latitude ?? address?.latitude ?? null;
+    const longitude = geoOverride?.longitude ?? geoPin?.longitude ?? address?.longitude ?? null;
+
+    // EL HOMÓNIMO DE LIMA CONTRA EL PIN (02-11-2026, #KP142611). Un distrito de
+    // Lima Metropolitana que se repite en provincia —La Victoria también es
+    // Chiclayo— no toma provincia Lima/Callao de lo aprendido, de una guía, del
+    // carrito ni del historial si el pin está claramente fuera de Lima, si el
+    // ubigeo de la primera guía de Aliclik es de otro departamento, o si el
+    // «departamento» del pedido no es uno («Chiclayo», una provincia, se lee
+    // como Lambayeque). Ver `limaProvinceTrusted`. La corrección manual manda
+    // igual que siempre.
+    const ubigeo = firstAliclikUbigeo(orderEvents);
+    const limaTrusted = limaProvinceTrusted(district, {
+      region: ownRegion,
+      latitude,
+      longitude,
+      ubigeoDepartment: ubigeo?.department ?? null,
+    });
+    const fitsLimaEvidence = (p: string | null | undefined) => limaTrusted || !isLimaOrCallaoProvince(p);
+    const learned = learnedDistrictFits(geo.get(normalizeDistrict(district)), ownRegion, district);
+    const geoHit = limaTrusted || !learnedIsLima(learned) ? learned : null;
 
     // Prioridad de la ubicación, de mayor a menor:
     //   1. corrección manual del equipo (0051),
     //   2. lo que reportó el courier (conoce la zona mejor que el formulario),
     //   3. Shopify / el ubigeo / el draft order.
+    // Sin Lima para el homónimo, la provincia que Aliclik sacó del pin va
+    // después de lo aprendido: es la que casa con la evidencia.
     const province =
       geoOverride?.province ??
-      guides.find((g) => guideProvinceFits(g.province, ownRegion, district))?.province ??
+      guides.find((g) => guideProvinceFits(g.province, ownRegion, district) && fitsLimaEvidence(g.province))?.province ??
       geoHit?.province ??
-      draft?.province ??
-      historical?.province ??
+      (limaTrusted ? null : ubigeoProvinceFor(ubigeo, ownRegion)) ??
+      (fitsLimaEvidence(draft?.province) ? draft?.province : null) ??
+      (fitsLimaEvidence(historical?.province) ? historical?.province : null) ??
       null;
     // Shopify llama `province` al DEPARTAMENTO (Perú no tiene un tercer nivel).
     const region =
@@ -1124,24 +1173,6 @@ export async function recomputeOrderMaster(
       guideAddress?.delivery_reference ??
       draft?.referencia ??
       null;
-    // El punto del mapa, de más fiable a menos:
-    //
-    //   1. La corrección manual del equipo, que gana siempre.
-    //   2. Lo que el courier geolocalizó al ir FÍSICAMENTE a la puerta. Es la
-    //      verdad de campo: alguien estuvo ahí.
-    //   3. Lo que Shopify geocodificó de la dirección escrita. Es una
-    //      estimación a partir de texto, así que va después de las dos
-    //      anteriores — pero llega desde el minuto cero del pedido, mientras
-    //      que las otras dos solo existen después de un intento de entrega o de
-    //      una corrección a mano.
-    //
-    // El punto 3 estuvo en `orders.raw` todo el tiempo sin usarse: la consulta
-    // GraphQL no pedía `latitude`/`longitude`, así que solo lo traían los
-    // pedidos que entraban por webhook. Es la coordenada que Aliclik exige para
-    // cotizar y crear una guía.
-    const geoPin = guides.find((g) => g.latitude != null && g.longitude != null);
-    const latitude = geoOverride?.latitude ?? geoPin?.latitude ?? address?.latitude ?? null;
-    const longitude = geoOverride?.longitude ?? geoPin?.longitude ?? address?.longitude ?? null;
     const geoSource = geoOverride
       ? "manual"
       : geoPin

@@ -50,6 +50,7 @@ import { normalizePhone } from "@/lib/phone";
 import type { OrderLineItem, OrderShippingAddress } from "@/lib/types";
 import { emitSwaypOnce, type AutoEmission } from "@/lib/swayp-emission";
 import { swaypGuideFailed } from "@/lib/reproprovincia";
+import { swaypDestinationRefusal } from "@/lib/swayp-destination-guard";
 
 /**
  * De qué guía sale un reenvío por Swayp (MOM §11.8). La guía de origen queda
@@ -382,6 +383,13 @@ export async function createFenixGuideViaApi(args: {
   const saleBlock = await legacySaleSendBlock(args.admin, args.orderId);
   if (saleBlock) return { ok: false, reason: saleBlock };
 
+  // La última puerta antes de pedirle la guía a Swayp, para TODOS los caminos
+  // que la piden (reenvío, reprogramación, guía directa, Por confirmar y los
+  // dos automáticos): una ciudad de Lima para un pedido que no es de Lima no
+  // sale (02-11-2026, #KP142611, lib/swayp-destination-guard.ts).
+  const destino = await swaypDestinationRefusal(args.admin, args.orderId, args.city);
+  if (destino) return { ok: false, reason: destino };
+
   const built = buildSwaypGuideInput({
     ...args,
     senders: parseSenders(env.swaypSenders()),
@@ -507,6 +515,11 @@ export async function swaypGuideForReprogram(
   );
   const district = address?.city ?? null;
   const city = deriveFenixCoverageCity(district, address?.province ?? null);
+  // El destino tiene que casar con el pedido (#KP142611): la salida copió la
+  // provincia del Master, y una «lima» mal aprendida mandaba a Lima el reenvío
+  // de un pedido de Chiclayo. Ver lib/swayp-destination-guard.ts.
+  const contradictorio = await swaypDestinationRefusal(admin, order.id, city);
+  if (contradictorio) return { ok: false, reason: contradictorio };
   const totalRefunded = order.total_refunded ?? 0;
   const lineItems = (order.line_items ?? []).map((li) => ({
     title: li.title ?? "",

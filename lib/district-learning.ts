@@ -16,8 +16,18 @@
 //   · `learnedDistrictFits`: lo ya aprendido solo vale para un pedido si no
 //     contradice su propio departamento. Así una fila mala no se reparte.
 
-import { resolveLimaDistrict } from "@/lib/order-coverage";
-import { departmentsConflict, isKnownDepartment, normalizeDepartment, provinceFitsDepartment } from "@/lib/peru-departamentos";
+import { isAmbiguousLimaDistrict, resolveLimaDistrict } from "@/lib/order-coverage";
+import {
+  departmentKey,
+  departmentsConflict,
+  isKnownDepartment,
+  isLimaOrCallaoProvince,
+  normalizeDepartment,
+  orderDepartmentKey,
+  pinInLimaMetro,
+  provinceFitsDepartment,
+  regionMentionsLima,
+} from "@/lib/peru-departamentos";
 
 export interface LearnedDistrict {
   province: string | null;
@@ -118,4 +128,123 @@ export function printedProvince(
   const p = province?.trim() || null;
   if (!p || guideProvinceFits(p, region, district)) return p;
   return normalizeDepartment(region) === "Callao" ? "Callao" : "Lima";
+}
+
+// ── El homónimo de Lima contra la evidencia del propio pedido (02-11-2026) ────
+//
+// #KP142611: un pedido de provincia COD de La Victoria, CHICLAYO, llegó del bot
+// antiguo de Kapso con «Chiclayo» donde Shopify pone el departamento. Como
+// «Chiclayo» no es un departamento, `departmentKey` daba null y ninguna de las
+// guardas de arriba podía descartar «la victoria → lima» aprendido: el Master
+// resolvió provincia «lima», la salida la copió, y la guía de reenvío de Swayp
+// salió a La Victoria de LIMA. El pedido tenía con qué saberlo: el pin estaba
+// en Chiclayo (-6,83, -79,83) y la primera guía de Aliclik guardó el ubigeo
+// La Victoria / Chiclayo / Lambayeque.
+
+/** Lo que el pedido dice de dónde está, aparte del nombre del distrito. */
+export interface OrderLocationEvidence {
+  /** El «departamento» del pedido, tal cual vino (Shopify `province`, corrección, guía…). */
+  region?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  /** El departamento del ubigeo que Aliclik dedujo del pin en la primera guía. */
+  ubigeoDepartment?: string | null;
+}
+
+/**
+ * ¿Se puede dar Lima o el Callao como provincia de este distrito?
+ *
+ * Solo se juzga un distrito de Lima Metropolitana o el Callao (`judgeable`).
+ * De la prueba más fuerte a la más débil:
+ *   1. El pin: dentro de Lima, sí; claramente fuera (`pinInLimaMetro`), no.
+ *   2. El departamento del ubigeo de la primera guía de Aliclik.
+ *   3. La región del pedido, leyendo una provincia capital como su
+ *      departamento («Chiclayo» → Lambayeque, `orderDepartmentKey`). Sin región,
+ *      como hasta hoy: no hay nada que contradiga.
+ *   4. Una región que no es ningún departamento: vale si nombra Lima o un
+ *      distrito de Lima que no se repite fuera («La Molina, Lima», «HUACHIPA»);
+ *      si no, Lima no se da para un distrito HOMÓNIMO (La Victoria,
+ *      Independencia, Miraflores… la lista de `lima_ambiguous_districts`). Un
+ *      distrito que solo existe en Lima (Comas, Surquillo) sigue siendo Lima:
+ *      su propio nombre es la prueba.
+ */
+export function limaProvinceTrusted(
+  district: string | null | undefined,
+  evidence: OrderLocationEvidence,
+): boolean {
+  if (!judgeable(district)) return true;
+  const pin = pinInLimaMetro(evidence.latitude, evidence.longitude);
+  if (pin !== null) return pin;
+  const ubigeo = orderDepartmentKey(evidence.ubigeoDepartment);
+  if (ubigeo) return ubigeo === "lima";
+  const region = evidence.region?.trim();
+  if (!region) return true;
+  const dep = orderDepartmentKey(region);
+  if (dep) return dep === "lima";
+  if (regionMentionsLima(region)) return true;
+  const regionAsDistrict = resolveLimaDistrict(region);
+  if (regionAsDistrict && !isAmbiguousLimaDistrict(regionAsDistrict)) return true;
+  return !isAmbiguousLimaDistrict(resolveLimaDistrict(district));
+}
+
+/** ¿Lo aprendido de un distrito es la fila de Lima (provincia o departamento)? */
+export function learnedIsLima(learned: LearnedDistrict | null | undefined): boolean {
+  if (!learned) return false;
+  return isLimaOrCallaoProvince(learned.province) || departmentKey(learned.department) === "lima";
+}
+
+/** El ubigeo que Aliclik dedujo del pin al registrar una guía. */
+export interface AliclikUbigeo {
+  department: string | null;
+  province: string | null;
+  district: string | null;
+}
+
+interface UbigeoEventLike {
+  kind: string;
+  occurred_at?: string | null;
+  courier?: string | null;
+  source?: string | null;
+  payload?: unknown;
+}
+
+function str(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/**
+ * El ubigeo de la PRIMERA guía de Aliclik del pedido (`guide_registered`,
+ * `payload.ubigeo`): es el que Aliclik sacó del pin la primera vez, antes de
+ * que nada del Master se copiara a una salida. null si no hay.
+ */
+export function firstAliclikUbigeo(events: readonly UbigeoEventLike[]): AliclikUbigeo | null {
+  const registered = events
+    .filter((e) => e.kind === "guide_registered" && (e.courier === "aliclik" || e.source === "aliclik"))
+    .slice()
+    .sort((a, b) => String(a.occurred_at ?? "").localeCompare(String(b.occurred_at ?? "")));
+  for (const event of registered) {
+    const payload = event.payload as { ubigeo?: Record<string, unknown> | null } | null | undefined;
+    const u = payload?.ubigeo;
+    if (!u || typeof u !== "object") continue;
+    const found = { department: str(u.department), province: str(u.province), district: str(u.district) };
+    if (found.department || found.province) return found;
+  }
+  return null;
+}
+
+/**
+ * La provincia del ubigeo de Aliclik, solo para un pedido al que se le negó
+ * Lima (`limaProvinceTrusted` en false): es la respuesta que sí casa con el pin.
+ * Nunca Lima, y nunca contra el departamento del pedido.
+ */
+export function ubigeoProvinceFor(
+  ubigeo: AliclikUbigeo | null | undefined,
+  region: string | null | undefined,
+): string | null {
+  const province = ubigeo?.province ?? null;
+  if (!province || isLimaOrCallaoProvince(province)) return null;
+  const own = orderDepartmentKey(region);
+  const theirs = orderDepartmentKey(ubigeo?.department);
+  if (own && theirs && own !== theirs) return null;
+  return province;
 }

@@ -30,6 +30,15 @@ import {
   swaypNoEntregoMotivo,
 } from "@/lib/swayp-desde-confirmacion";
 
+// v1.36 (02-11-2026, owner, #KP142611): un distrito de Lima Metropolitana que
+// se repite en provincia (La Victoria también es Chiclayo) ya no toma provincia
+// Lima/Callao de lo aprendido, de una guía, del carrito ni del historial cuando
+// el pin está claramente fuera de Lima, cuando el ubigeo de la primera guía de
+// Aliclik es de otro departamento o cuando el «departamento» del pedido no es
+// uno («Chiclayo», una provincia, se lee como Lambayeque)
+// (`limaProvinceTrusted`, lib/district-learning.ts, MOM §19.0). Cambia la
+// provincia de esos pedidos; la versión sube para que el cron los recalcule.
+//
 // v1.35 (01-11-2026): dos reglas del owner. (1) El envío pagado en la agencia
 // vale también con un solo Yape (lib/agency-shipping.ts; #KP138744, #KP129106).
 // (2) La devolución queda probada si el courier recogió el paquete
@@ -229,7 +238,7 @@ import {
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.35" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.36" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"

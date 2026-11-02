@@ -142,6 +142,7 @@ import {
 } from "@/lib/swayp-guide";
 import { avisoSinVinculoSwayp, normalizeSku, productosSinVinculo } from "@/lib/swayp-productos";
 import { cargarMapaSwayp, cargarMapaSwaypDeOrg } from "@/lib/swayp-sku-map";
+import { swaypDestinationRefusal } from "@/lib/swayp-destination-guard";
 import { NOVELTY_ACTIONS, buildNoveltySolution, noveltyActionIsReturn } from "@/lib/swayp-novelty";
 import { getMasterPermissions, orgsWithPermission } from "@/lib/permissions-access";
 import {
@@ -1588,6 +1589,10 @@ export async function previewDirectFenixGuide(input: {
   const totalRefunded = order.total_refunded ?? 0;
   const refundedTotal = (order.total_amount ?? 0) > 0 && totalRefunded >= (order.total_amount ?? 0);
   const warnings: string[] = [];
+  // La guarda de destino (#KP142611) también se avisa en la vista previa, para
+  // no descubrirla al pulsar: `emitirGuiaSwaypDirecta` la vuelve a aplicar.
+  const destinoContradictorio = await swaypDestinationRefusal(admin, order.id, city);
+  if (destinoContradictorio) warnings.push(destinoContradictorio);
   if (!address?.address1) {
     warnings.push(
       "El pedido no tiene dirección de envío registrada; la guía se creará sin dirección y podrás completarla en el panel del envío.",

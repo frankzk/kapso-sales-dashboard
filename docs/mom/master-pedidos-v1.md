@@ -11017,6 +11017,46 @@ pedidos de Lima con una provincia imposible («arequipa», «HUARAZ», «lince»
   ruta del motorizado (y su Google Maps sin coordenadas) lee la del Master, que
   recalcula el cron.
 
+**El homónimo de Lima contra el pin y la región (02-11-2026, owner, #KP142611,
+`mom-v1.36`).** Un pedido de provincia COD de **La Victoria, Chiclayo**, llegó
+del bot antiguo de Kapso (carrito de Shopify del 18-10) con «Chiclayo» donde
+Shopify pone el departamento: es una provincia. Como «Chiclayo» no es un
+departamento, las guardas del 25-10 no tenían con qué descartar «la victoria →
+lima» aprendido: el Master resolvió provincia «lima», la salida la copió y la
+guía de reenvío de Swayp salió a La Victoria de **Lima**. El pedido tenía con
+qué saberlo: el pin en Chiclayo (-6,83, -79,83) y el ubigeo que Aliclik guardó
+en su primera guía (`guide_registered`: La Victoria / Chiclayo / Lambayeque).
+Desde ahora (`limaProvinceTrusted` en `lib/district-learning.ts`), para un
+distrito de Lima Metropolitana o el Callao el Master **no da provincia Lima ni
+Callao** —ni de lo aprendido, ni de una guía, ni del carrito, ni del
+historial— cuando:
+
+- **el pin cae claramente fuera de Lima** (caja conservadora `LIMA_METRO_BBOX`,
+  lat −12,6 a −11,5 y lng −77,3 a −76,6, en `lib/peru-departamentos.ts`: deja
+  dentro Chancay o Chilca, porque solo sirve para decir «esto NO es Lima»). Un
+  pin dentro de la caja, al revés, es la prueba de que sí;
+- sin pin, **el ubigeo de la primera guía de Aliclik** es de otro departamento;
+- sin pin ni ubigeo, **la región es otro departamento**, leyendo una **provincia
+  capital** escrita en su lugar como su departamento (`orderDepartmentKey`):
+  «Chiclayo» → Lambayeque, «Huaraz» → Áncash, «Mariscal Nieto» → Moquegua. Son
+  solo las capitales cuyo nombre difiere del departamento, cotejadas con lo que
+  hay en el repo (no hay un catálogo completo del INEI y no se inventa); lo
+  ambiguo, como «Bellavista» (Callao y San Martín), no se mapea: ahí decide el
+  pin;
+- o **la región no es ningún departamento** y el distrito es un homónimo
+  (`lima_ambiguous_districts`: La Victoria, Independencia, Miraflores…). Una
+  región que nombra Lima («La Molina, Lima») o un distrito de Lima que no se
+  repite («HUACHIPA») cuenta como Lima, y un distrito que solo existe en Lima
+  (Comas, Surquillo) sigue siendo Lima: su nombre es la prueba. **Sin región**
+  todo sigue como antes.
+
+En esos casos la provincia queda vacía, salvo que el ubigeo de Aliclik dé una
+que case con el pedido («CHICLAYO»), que entonces se usa. La corrección manual
+manda como siempre, y la región que se muestra no cambia: «Chiclayo» sigue
+diciendo «Chiclayo». Un pedido normal de Lima —Miraflores con «Lima
+(provincia)» y el pin en Lima, o con «Lima» y sin pin— sale igual que antes.
+La versión sube a `mom-v1.36` para que el cron recalcule.
+
 ### 19.0.1 La ortografía del departamento se unifica; el matiz de Lima no
 
 Medido el 14-09-2026: `shipments.region` tenía **77 valores distintos para 25
@@ -11078,6 +11118,29 @@ el barrido masivo que resincroniza la elegibilidad.
 `province` llegó en la migración 0039 y el histórico guarda la suya en `region`.
 Se resuelve una sola vez (`province ?? region`): sin ese respaldo, media base
 pierde la provincia y con ella la derivación.
+
+**Una guía Swayp a Lima para un pedido que no es de Lima no se crea
+(02-11-2026, owner, #KP142611).** Derivar la ciudad del distrito y la provincia
+copia lo que diga la salida, y la del #KP142611 decía «La Victoria» + «lima»
+(ver §19.0, el homónimo de Lima): el reenvío por Swayp que confirmó el agente de
+voz salió a Lima para un pedido que el Master clasificaba como Provincia COD.
+Antes de pedirle a Swayp **cualquier** guía —reenvío y reprogramación
+(`swaypGuideForReprogram`), guía directa y «Enviar por Swayp» desde Por
+confirmar (`emitirGuiaSwaypDirecta`), y los dos automáticos, que pasan por
+`createFenixGuideViaApi`, la última puerta de todas—, si la ciudad resuelve a
+Lima Metropolitana o el Callao y la fila del Master dice que el pedido no es de
+Lima —**cobertura Provincia COD o Agencia**, **región de otro departamento**
+(una provincia capital se lee como su departamento) o **pin fuera de
+`LIMA_METRO_BBOX`**—, no se crea y se responde: «Destino contradictorio: la guía
+Swayp saldría a Lima, pero el pedido es de <región/cobertura>. Revisa la
+ubicación del pedido (Corregir ubicación) antes de crear la guía.»
+(`lib/swayp-destination-guard.ts`). La vista previa de la guía directa lo avisa
+antes de pulsar. Si la fila del Master no se puede leer, tampoco sale: reintentar
+cuesta un clic y una guía mal dirigida es un paquete en la ciudad equivocada.
+Una guía a una ciudad Fenix de provincia (Chiclayo, Arequipa…) no pasa por esta
+reja. Registrar a mano un número que ya emitió Swayp desde su panel
+(`createFenixGuide`) no se frena: esa guía ya existe en Swayp y negarse a
+registrarla solo la dejaría sin seguimiento.
 
 ### 19.1 La etapa es una foto, y alguien tiene que revelarla
 

@@ -5578,3 +5578,21 @@ mantiene la columna. Sin crons ni variables de entorno.
 
 **Marcha atrás.** Revertir el commit. La columna, el índice y las funciones
 pueden quedarse (nadie más los lee).
+
+### 02-11-2026 · El homónimo de Lima y la guía Swayp a Lima de un pedido de provincia (sin migración, MOM §19.0 y §19.0.2)
+
+Pedido del owner tras #KP142611 (La Victoria de Chiclayo con la guía Swayp
+impresa a La Victoria de Lima). Dos reglas: el Master no da provincia
+Lima/Callao a un distrito homónimo cuando el pin, el ubigeo de la primera guía
+de Aliclik o la región dicen otra cosa (una provincia capital como «Chiclayo» se
+lee como su departamento), y ninguna guía Swayp sale a Lima para un pedido de
+Provincia COD, Agencia, de otro departamento o con el pin fuera de Lima.
+`MOM_RESOLUTION_VERSION` sube a `mom-v1.36` para que el cron recalcule. Sin
+migración, crons ni variables de entorno.
+
+1. **El código**, por el camino de siempre.
+2. **Avisar** a quien crea guías Swayp: el aviso «Destino contradictorio» se
+   resuelve con «Corregir ubicación» en el pedido, no reintentando.
+
+**Marcha atrás.** Revertir el commit. Las filas recalculadas con `mom-v1.36`
+vuelven a calcularse con la versión anterior en la siguiente pasada del cron.
