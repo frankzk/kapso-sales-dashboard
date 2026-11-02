@@ -109,6 +109,22 @@ describe("¿el pagador es la clienta?", () => {
     expect(payerIsPerson("Carlo Lop*", "YAPE", "letsy Silvia Quintana")).toBe(false);
   });
 
+  it("perdona una letra en nombres de cinco o más, y la letra rota es comodín (#KP200869)", () => {
+    expect(payerIsPerson("Cesar Cha*", "YAPE", "Céssr chßvez pereyra")).toBe(true);
+    expect(payerIsPerson("Cesar Cha*", "YAPE", "Cesar Chávez")).toBe(true);
+    expect(payerIsPerson("Marcos Rui*", "YAPE", "Marco Ruiz")).toBe(true);
+    expect(payerIsPerson("JUAN MARTINEZ", "BCP", "Juan Martines")).toBe(true);
+  });
+
+  it("…pero no en nombres cortos, ni dos letras, ni en el apellido recortado", () => {
+    expect(payerIsPerson("Luis Pal*", "YAPE", "Luz Palacios")).toBe(false);
+    expect(payerIsPerson("Rosa Gom*", "YAPE", "Rocio Gomez")).toBe(false);
+    expect(payerIsPerson("Carlos Lop*", "YAPE", "Carmen Lopez")).toBe(false);
+    expect(payerIsPerson("Cesar Cha*", "YAPE", "Cesar Chu Pereyra")).toBe(false);
+    // El mismo nombre no cuenta dos veces: hace falta otra palabra para el apellido.
+    expect(payerIsPerson("Maria Mar*", "YAPE", "Maria")).toBe(false);
+  });
+
   it("las otras apps traen el nombre completo, a veces con los apellidos delante", () => {
     expect(payerIsPerson("QUISPE ARELA JUAN MARTIN", "BCP", "JUAN MARTIN\t QUISPE\tARELA")).toBe(true);
     expect(payerIsPerson("ALVARO ROMAN REMUZGO", "PLIN", "Alvaro Remuzgo")).toBe(true);
@@ -166,7 +182,35 @@ describe("matchStatement", () => {
     const p = pago({ paidAt: "2026-10-04T12:41:00.000Z", customerName: "letsy Silvia Quintana" });
     const r = matchStatement([mov("Carlo Lop*", 30, "2026-10-04T12:41:51.000Z")], [p], [p], NADA);
     expect(r.matches).toHaveLength(0);
-    expect(r.skipped[0]?.reason).toBe("sin_movimiento");
+    // Se dice quién pagó: el dinero sí está en el reporte.
+    expect(r.skipped[0]).toMatchObject({ reason: "otro_pagador", detail: "Carlo Lop*" });
+  });
+
+  it("#KP200200: la diferencia de S/ 268 la yapeó otra persona, aunque hubo otro S/ 268 esa mañana", () => {
+    const p = pago({
+      kind: "diferencia",
+      amount: 268,
+      paidAt: "2026-11-01T15:22:00.000Z",
+      registeredAt: "2026-11-01T15:23:33.000Z",
+      customerName: "NORBIL RAMIRO INGA DIAZ",
+    });
+    const movs = [mov("Edith Eco*", 268, "2026-11-01T14:50:53.000Z"), mov("Silvia Anc*", 268, "2026-11-01T15:22:45.000Z")];
+    const r = matchStatement(movs, [p], [p], NADA);
+    expect(r.matches).toHaveLength(0);
+    expect(r.skipped[0]).toMatchObject({ reason: "otro_pagador", detail: "Silvia Anc*" });
+  });
+
+  it("#KP200869: la clienta escribió mal su nombre («Céssr chßvez») y el reporte dice «Cesar Cha*»", () => {
+    const p = pago({
+      amount: 30,
+      paidAt: "2026-10-29T14:00:00.000Z",
+      registeredAt: "2026-10-30T11:51:30.000Z",
+      customerName: "Céssr chßvez pereyra",
+    });
+    const r = matchStatement([mov("Cesar Cha*", 30, "2026-10-29T14:00:22.000Z")], [p], [p], NADA);
+    expect(r.matches).toEqual([
+      expect.objectContaining({ paymentId: p.id, rule: "minuto_y_clienta", deltaSeconds: 22 }),
+    ]);
   });
 
   it("el pago validado de otro pedido en el mismo minuto no estorba si es de otra persona (#KP138593)", () => {

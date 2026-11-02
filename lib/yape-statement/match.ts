@@ -11,7 +11,10 @@
 //      BCP, Prex…) trae la hora del reloj de esa app y se le da un minuto de
 //      holgura a cada lado;
 //   3. QUIÉN PAGÓ: en un adelanto o una diferencia, el pagador del reporte es la
-//      clienta del pedido («Benito Cac*» ↔ Benito Cachique Puga). En el cobro de
+//      clienta del pedido («Benito Cac*» ↔ Benito Cachique Puga; con una letra
+//      de diferencia en palabras de cinco o más, «Cesar Cha*» ↔ «Céssr
+//      chßvez», 02-11-2026). Si paga otra persona, lo decide alguien
+//      («otro_pagador»). En el cobro de
 //      un courier paga el motorizado, así que el nombre no dice nada; ahí se
 //      exige que el canal del reporte sea el de la constancia (un Yape sale
 //      como Yape directo, un Plin o un BBVA como «PLIN - …», un BCP como
@@ -78,6 +81,7 @@ export type SkipReason =
   | "operacion_transcrita"
   | "no_fue_a_yape"
   | "sin_movimiento"
+  | "otro_pagador"
   | "varios_movimientos"
   | "movimiento_disputado"
   | "ya_conciliado";
@@ -105,14 +109,66 @@ export function statementAccountKey(s: string): string {
   return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
+/**
+ * Las palabras de un nombre, comparables: sin tildes y en minúsculas. Una
+ * letra que no es del alfabeto llano (la «ß» de «chßvez», una «á» que llegó
+ * rota) queda como comodín «?» en vez de partir la palabra en dos.
+ */
 function tokens(s: string | null | undefined): string[] {
   return (s ?? "")
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
-    .replace(/[^a-z ]+/g, " ")
+    .replace(/[^\sa-z]/gu, (c) => (/\p{L}/u.test(c) ? "?" : " "))
     .split(/\s+/)
-    .filter(Boolean);
+    .filter((w) => /[a-z]/.test(w));
+}
+
+function sameChar(a: string, b: string): boolean {
+  return a === b || a === "?" || b === "?";
+}
+
+/** ¿`w` empieza por `prefix`? Con comodines. */
+function startsLike(w: string, prefix: string): boolean {
+  if (w.length < prefix.length) return false;
+  for (let i = 0; i < prefix.length; i++) if (!sameChar(w[i]!, prefix[i]!)) return false;
+  return true;
+}
+
+/** ¿Difieren a lo más en una letra (cambiada, sobrante o faltante)? Con comodines. */
+function oneEditAway(a: string, b: string): boolean {
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  let j = 0;
+  let edits = 0;
+  while (i < a.length && j < b.length) {
+    if (sameChar(a[i]!, b[j]!)) {
+      i++;
+      j++;
+      continue;
+    }
+    if (++edits > 1) return false;
+    if (a.length > b.length) i++;
+    else if (b.length > a.length) j++;
+    else {
+      i++;
+      j++;
+    }
+  }
+  return edits + (a.length - i) + (b.length - j) <= 1;
+}
+
+/** Palabras de nombre a partir de las cuales se perdona una letra. */
+const TYPO_MIN_LENGTH = 5;
+
+/**
+ * ¿Es el mismo nombre de pila o apellido? Igual, o —en palabras de cinco
+ * letras o más— con una letra de diferencia: la clienta escribe su nombre en
+ * el formulario con el pulgar («Céssr» por César, #KP200869).
+ */
+function sameWord(a: string, b: string): boolean {
+  if (a.length === b.length && startsLike(a, b)) return true;
+  return a.length >= TYPO_MIN_LENGTH && b.length >= TYPO_MIN_LENGTH && oneEditAway(a, b);
 }
 
 /**
@@ -132,14 +188,21 @@ export function payerIsPerson(payerName: string, channel: string, person: string
     if (shown.length < 2) return false;
     const prefix = shown[shown.length - 1]!;
     const names = shown.slice(0, -1);
-    if (!names.every((n) => who.includes(n))) return false;
-    return who.some((w) => !names.includes(w) && w.startsWith(prefix));
+    // Cada nombre que muestra Yape es una palabra suya; el apellido recortado,
+    // el comienzo de OTRA.
+    const used = new Set<number>();
+    for (const n of names) {
+      const at = who.findIndex((w, k) => !used.has(k) && sameWord(n, w));
+      if (at < 0) return false;
+      used.add(at);
+    }
+    return who.some((w, k) => !used.has(k) && startsLike(w, prefix));
   }
   const shown = tokens(payerName);
   const hits = shown.filter(
     (s) =>
-      who.includes(s) ||
-      (s.length >= 4 && who.some((w) => w.length >= 4 && (w.startsWith(s) || s.startsWith(w)))),
+      who.some((w) => sameWord(s, w)) ||
+      (s.length >= 4 && who.some((w) => w.length >= 4 && (startsLike(w, s) || startsLike(s, w)))),
   );
   return new Set(hits).size >= 2;
 }
@@ -175,6 +238,18 @@ function inMinute(m: MatchableMovement, start: number): number | null {
   const delta = Date.parse(m.occurredAt) - start;
   const ok = m.channel === "YAPE" ? delta >= 0 && delta < MINUTE : delta >= -MINUTE && delta < 2 * MINUTE;
   return ok ? Math.round(delta / 1000) : null;
+}
+
+/**
+ * ¿Cuadran el monto y el minuto, sea quien sea el que pagó? Es lo que separa
+ * «no está en el reporte» de «está, pero pagó otra persona». Solo para los
+ * pagos de la clienta.
+ */
+function fitsAmountAndMinute(p: StatementPayment, m: MatchableMovement): boolean {
+  if (p.amount == null || !p.paidAt || p.kind === COURIER_KIND) return false;
+  if (Math.round(p.amount * 100) !== Math.round(m.amount * 100)) return false;
+  if (Date.parse(m.occurredAt) > Date.parse(p.registeredAt) + UPLOAD_SKEW) return false;
+  return voucherMinutes(p).some(({ start }) => inMinute(m, start) !== null);
 }
 
 /** ¿Este movimiento puede ser el pago de este comprobante? Devuelve cómo. */
@@ -259,7 +334,15 @@ export function matchStatement(
       .map((m) => ({ m, fit: fits(p, m) }))
       .filter((x): x is { m: MatchableMovement; fit: { rule: MatchRule; delta: number } } => x.fit !== null);
     if (!found.length) {
-      skipped.push({ paymentId: p.id, reason: "sin_movimiento" });
+      // Está en el reporte, pero a nombre de otra persona (un familiar que
+      // yapeó por la clienta, #KP200200): eso lo decide alguien. Se dice
+      // quién, para que no parezca que el dinero no llegó.
+      const others = same.filter((m) => fitsAmountAndMinute(p, m));
+      skipped.push(
+        others.length
+          ? { paymentId: p.id, reason: "otro_pagador", detail: others.map((m) => m.origin).join(", ") }
+          : { paymentId: p.id, reason: "sin_movimiento" },
+      );
       continue;
     }
     if (found.length > 1) {
