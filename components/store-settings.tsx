@@ -61,7 +61,12 @@ import type { MetaAdAccount, MetaConnectionProbe, StoreMetaAdAccount } from "@/l
 import { InvoiceSettingsSection, type InvoiceSettingsData } from "@/components/invoice-settings-section";
 import { WooCommerceSettingsSection, type WooSettingsView } from "@/components/woocommerce-settings-section";
 import { BotOrdersSettingsSection, type BotOrdersSettingsView } from "@/components/bot-orders-settings-section";
-import { runGeocodePilotAction, type GeocodePilotState } from "@/app/dashboard/[storeId]/settings/geocode-actions";
+import {
+  runGeocodeChatbyAction,
+  runGeocodePilotAction,
+  type GeocodeChatbyState,
+  type GeocodePilotState,
+} from "@/app/dashboard/[storeId]/settings/geocode-actions";
 import {
   GEOCODE_COVERAGE_LABEL,
   GEOCODE_CRITERION_B,
@@ -1303,7 +1308,95 @@ function GeocodePilotSection({ storeId, configured }: { storeId: string; configu
         ) : null}
         {report ? <GeocodePilotResults report={report} /> : null}
       </div>
+      <GeocodeChatbyCheck storeId={storeId} configured={configured} />
     </SettingsSection>
+  );
+}
+
+/**
+ * Los confirmados por Chatby que esperan la ubicación de la clienta: ¿cuántos
+ * tendrían coordenada por dirección? Pedido por pedido, con el punto en el mapa
+ * para que una persona lo mire. No escribe nada.
+ */
+function GeocodeChatbyCheck({ storeId, configured }: { storeId: string; configured: boolean }) {
+  const [state, action, pending] = useActionState<GeocodeChatbyState, FormData>(runGeocodeChatbyAction, {});
+  const rows = state.rows ?? null;
+  const passed = rows?.filter((r) => r.ok).length ?? 0;
+  return (
+    <div className={cn(CARD, "mt-4 divide-y divide-line")}>
+      <CardHeader
+        title="Confirmados por Chatby sin ubicación"
+        description="Los que esperan que la clienta mande su ubicación: cuántos pasarían el candado. Una consulta por pedido; no cambia nada."
+        aside={
+          <form action={action}>
+            <input type="hidden" name="store_id" value={storeId} />
+            <OpsButton type="submit" size="sm" disabled={pending || !configured} className="pointer-coarse:h-11">
+              {pending ? "Probando…" : "Probar con estos pedidos"}
+            </OpsButton>
+          </form>
+        }
+      />
+      {state.error ? (
+        <div className={ROW}>
+          <Banner tone="crit" role="alert">
+            <p className="whitespace-pre-line break-words">{state.error}</p>
+          </Banner>
+        </div>
+      ) : null}
+      {rows && !rows.length ? (
+        <div className={ROW}>
+          <p className="text-sm text-ink-500">No hay pedidos de esta tienda esperando la ubicación.</p>
+        </div>
+      ) : null}
+      {rows?.length ? (
+        <div className={ROW}>
+          <p className="mb-2 text-sm">
+            Pasan el candado <strong>{passed}</strong> de {rows.length} · {state.apiCalls ?? 0} consultas a Google
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm tabular-nums">
+              <thead>
+                <tr className="text-left text-xs text-ink-500">
+                  <th className="py-1 pr-3 font-medium">Pedido</th>
+                  <th className="py-1 pr-3 font-medium">Etapa</th>
+                  <th className="py-1 pr-3 font-medium">Resultado</th>
+                  <th className="py-1 font-medium">Mapa</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.orderName} className="border-t border-line">
+                    <td className="py-1.5 pr-3">{r.orderName}</td>
+                    <td className="py-1.5 pr-3">{r.stage === "preparacion" ? "Preparación" : "Por confirmar"}</td>
+                    <td className="py-1.5 pr-3">
+                      {r.ok ? (
+                        <Badge tone="ok">Pasa · {r.precision === "ROOFTOP" ? "edificio" : "número"}</Badge>
+                      ) : (
+                        <span className="text-ink-500">{r.reason ? GEOCODE_REASON_LABEL[r.reason] : "No pasa"}</span>
+                      )}
+                    </td>
+                    <td className="py-1.5">
+                      {r.point ? (
+                        <a
+                          className="font-medium text-brand-700 hover:underline"
+                          href={`https://www.google.com/maps?q=${r.point.lat},${r.point.lng}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Ver punto
+                        </a>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

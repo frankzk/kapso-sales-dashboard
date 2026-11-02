@@ -147,3 +147,17 @@ El resultado del piloto se escribe aquí cuando se corra, salga bien o mal.
 - **Cambios de precio de Google.** El tope de gasto lo contiene.
 
 Cuando se implemente (después de un piloto que cumpla B), el MOM (§38, «De dónde sale ahora») y las pruebas se actualizan con la implementación.
+
+## Resultado de Kenku y prueba con los confirmados por Chatby (02-11-2026)
+
+Primera pasada, en Kenku: 400 pedidos (84 de Lima y 316 de Provincia COD).
+- Pasan el candado **74 (18,5 %)**.
+- De esos, el **83,8 %** queda a 300 m o menos del pin (mediana: 21 m) y el **12,2 %** a más de 1 km.
+- **No cumple el criterio B.** Solo con ROOFTOP, Provincia COD llega al 92,7 %, pero son 41 puntos.
+
+En la misma sección hay ahora un segundo botón, **«Probar con estos pedidos»**:
+- Toma los pedidos que esperan la ubicación de la clienta: los confirmados por Chatby sin guía y los que siguen en Por confirmar con `sin_ubicacion`.
+- Dice, pedido por pedido, si pasarían el candado y por qué no.
+- Para los que pasan, da el punto en el mapa para que una persona lo mire.
+- No hay pin con qué comparar: es solo para ver cuántos tendrían coordenada.
+- No escribe nada.

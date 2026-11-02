@@ -13,7 +13,7 @@ import { redirect } from "next/navigation";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
 import { hasOrgPermission } from "@/lib/permissions-access";
-import { runGeocodePilot } from "@/lib/geocode-google-server";
+import { runGeocodeChatbyCheck, runGeocodePilot, type GeocodeChatbyRow } from "@/lib/geocode-google-server";
 import { GEOCODE_KEY_MISSING, type GeocodePilotReport } from "@/lib/geocode-google";
 
 export interface GeocodePilotState {
@@ -44,5 +44,36 @@ export async function runGeocodePilotAction(_prev: GeocodePilotState, formData: 
   } catch (e) {
     // El mensaje es de la base (lectura del Master o de `orders`), sin datos de clientes.
     return { error: `No se pudo medir: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+export interface GeocodeChatbyState {
+  error?: string;
+  rows?: GeocodeChatbyRow[];
+  apiCalls?: number;
+}
+
+/** «Probar con los confirmados por Chatby sin ubicación»: el mismo permiso y la misma clave. */
+export async function runGeocodeChatbyAction(_prev: GeocodeChatbyState, formData: FormData): Promise<GeocodeChatbyState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  if (!storeId) return { error: "Sin permiso." };
+  const admin = createAdminSupabase();
+  const { data: store } = await admin.from("stores").select("id, org_id").eq("id", storeId).maybeSingle();
+  if (!store) return { error: "Sin permiso." };
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+  if (!(await hasOrgPermission((store as { org_id: string }).org_id, "stores.manage"))) return { error: "Sin permiso." };
+
+  const key = env.googleGeocodingApiKey();
+  if (!key) return { error: GEOCODE_KEY_MISSING };
+
+  try {
+    const run = await runGeocodeChatbyCheck(admin, storeId, { key });
+    return run.ok ? { rows: run.rows, apiCalls: run.apiCalls } : { error: run.error };
+  } catch (e) {
+    return { error: `No se pudo probar: ${e instanceof Error ? e.message : String(e)}` };
   }
 }

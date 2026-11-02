@@ -42,7 +42,9 @@ import {
   parseGeocodeResponse,
   type GeocodeCoverage,
   type GeocodeParsed,
+  type GeocodePilotReason,
   type GeocodePilotReport,
+  type GeocodePrecision,
   type GeocodePilotSample,
   type GeocodeRequestParams,
 } from "@/lib/geocode-google";
@@ -280,4 +282,89 @@ export async function runGeocodePilot(
     })}`,
   );
   return { ok: true, report };
+}
+
+// ---------------------------------------------------------------------------
+// Los confirmados por Chatby que esperan la ubicación (owner, 02-11-2026)
+//
+// Antes de decidir si la coordenada por dirección alcanza para ellos: cuántos
+// pasan el candado y por qué no los demás. No tienen pin, así que no hay
+// distancia que medir; se enseña pedido por pedido (número, etapa, resultado y
+// el punto en el mapa, para que una persona lo mire). No escribe nada.
+
+export interface GeocodeChatbyRow {
+  orderName: string;
+  stage: "por_confirmar" | "preparacion";
+  coverage: string | null;
+  ok: boolean;
+  precision?: GeocodePrecision;
+  reason?: GeocodePilotReason;
+  /** Solo si pasó: el punto de Google, para verlo en el mapa. */
+  point?: { lat: number; lng: number };
+}
+
+export type GeocodeChatbyRun = { ok: true; rows: GeocodeChatbyRow[]; apiCalls: number } | { ok: false; error: string };
+
+/** Como mucho: es una prueba sobre unos pocos pedidos, no otra muestra. */
+export const GEOCODE_CHATBY_CAP = 40;
+
+export async function runGeocodeChatbyCheck(
+  admin: SupabaseClient,
+  storeId: string,
+  opts: { key: string; fetchImpl?: typeof fetch },
+): Promise<GeocodeChatbyRun> {
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const { data: checks, error } = await admin
+    .from("chatby_auto_checks")
+    .select("order_id,outcome,reason,guide_state,guide_detail")
+    .eq("store_id", storeId)
+    .or("and(outcome.eq.confirmado,guide_state.eq.para_persona,guide_detail.eq.sin_ubicacion),and(outcome.eq.para_asesora,reason.eq.sin_ubicacion)")
+    .limit(GEOCODE_CHATBY_CAP);
+  if (error) throw new Error(`leer los confirmados por Chatby: ${error.message}`);
+  const list = (checks ?? []) as { order_id: string; outcome: string }[];
+  if (!list.length) return { ok: true, rows: [], apiCalls: 0 };
+  const { data: masters, error: mErr } = await admin
+    .from("order_master")
+    .select("order_id,order_name,coverage,address,district,province,region")
+    .in("order_id", list.map((c) => c.order_id));
+  if (mErr) throw new Error(`leer el Master: ${mErr.message}`);
+  const byId = new Map(
+    ((masters ?? []) as (Omit<MasterRow, "latitude" | "longitude"> & { order_name: string | null })[]).map((m) => [m.order_id, m]),
+  );
+
+  const rows: GeocodeChatbyRow[] = [];
+  let apiCalls = 0;
+  for (const c of list) {
+    const m = byId.get(c.order_id);
+    if (!m) continue;
+    const base = {
+      orderName: m.order_name ?? "—",
+      stage: c.outcome === "confirmado" ? ("preparacion" as const) : ("por_confirmar" as const),
+      coverage: m.coverage,
+    };
+    const params = geocodeRequestParams(m);
+    if (!params) {
+      rows.push({ ...base, ok: false, reason: "sin_direccion" });
+      continue;
+    }
+    apiCalls += 1;
+    const parsed = await geocodeOnce(params, opts.key, fetchImpl, GEOCODE_PILOT.requestTimeoutMs);
+    if (parsed.kind === "error") {
+      if (parsed.status === QUOTA_STATUS) {
+        rows.push({ ...base, ok: false, reason: "sin_cupo" });
+        continue;
+      }
+      if (parsed.fatal) return { ok: false, error: fatalMessage(parsed.status) };
+      rows.push({ ...base, ok: false, reason: "error_api" });
+      continue;
+    }
+    const verdict = geocodeSafeguard(parsed.kind === "ok" ? parsed.result : null, m);
+    rows.push(
+      verdict.ok
+        ? { ...base, ok: true, precision: verdict.precision, point: { lat: verdict.lat, lng: verdict.lng } }
+        : { ...base, ok: false, reason: verdict.reason },
+    );
+  }
+  console.info(`[geocode-chatby] ${JSON.stringify({ store: storeId, checked: rows.length, passed: rows.filter((r) => r.ok).length, apiCalls })}`);
+  return { ok: true, rows, apiCalls };
 }

@@ -570,3 +570,65 @@ describe("la acción de Ajustes", () => {
     expect(h.run).toHaveBeenCalledWith(expect.anything(), "store-1", { key: "k" });
   });
 });
+
+describe("los confirmados por Chatby sin ubicación", () => {
+  const ACTION = readFileSync(resolve(process.cwd(), "app/dashboard/[storeId]/settings/geocode-actions.ts"), "utf8");
+
+  it("en el código: el mismo permiso antes de la clave y de consultar", () => {
+    const start = ACTION.indexOf("export async function runGeocodeChatbyAction");
+    const body = ACTION.slice(start);
+    const perm = body.indexOf('"stores.manage"');
+    const key = body.indexOf("env.googleGeocodingApiKey()");
+    const run = body.indexOf("runGeocodeChatbyCheck(admin");
+    expect(start).toBeGreaterThan(0);
+    expect(perm).toBeGreaterThan(0);
+    expect(key).toBeGreaterThan(perm);
+    expect(run).toBeGreaterThan(key);
+  });
+
+  it("prueba pedido por pedido, no escribe y solo da el punto de los que pasan", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    // La acción de arriba deja el módulo simulado: aquí va el de verdad.
+    vi.doUnmock("@/lib/geocode-google-server");
+    vi.resetModules();
+    const { runGeocodeChatbyCheck } = await import("@/lib/geocode-google-server");
+    const checks = [
+      { order_id: "c1", outcome: "confirmado", reason: null, guide_state: "para_persona", guide_detail: "sin_ubicacion" },
+      { order_id: "c2", outcome: "para_asesora", reason: "sin_ubicacion", guide_state: "para_persona", guide_detail: "sin_ubicacion" },
+    ];
+    const masters = [
+      { order_id: "c1", order_name: "#KP1", coverage: "provincia_cod", address: "Av. Ejército 123", district: "Yanahuara", province: "Arequipa", region: "Arequipa" },
+      { order_id: "c2", order_name: "#KP2", coverage: "provincia_cod", address: "Mz B Lt 22", district: "Cayma", province: "Arequipa", region: "Arequipa" },
+    ];
+    const client = {
+      from(table: string) {
+        const chain: Record<string, unknown> = {};
+        for (const m of ["select", "eq", "or", "limit", "in"]) chain[m] = () => chain;
+        for (const w of ["insert", "update", "upsert", "delete"]) {
+          chain[w] = () => {
+            throw new Error(`escritura prohibida: ${table}.${w}`);
+          };
+        }
+        chain.then = (res: (v: unknown) => unknown) =>
+          Promise.resolve({ data: table === "chatby_auto_checks" ? checks : masters, error: null }).then(res);
+        return chain;
+      },
+    };
+    const fetchImpl = vi.fn(async (url: string) => {
+      const address = new URL(url).searchParams.get("address") ?? "";
+      const body = address.startsWith("Av. Ejército")
+        ? googleOk(-16.3989, -71.535, "Yanahuara", "Arequipa", "ROOFTOP")
+        : googleOk(-16.37, -71.54, "Cayma", "Arequipa", "GEOMETRIC_CENTER");
+      return new Response(JSON.stringify(body), { status: 200 });
+    });
+    const run = await runGeocodeChatbyCheck(client as never, "store-1", { key: "k", fetchImpl: fetchImpl as never });
+    expect(run).toEqual({
+      ok: true,
+      apiCalls: 2,
+      rows: [
+        { orderName: "#KP1", stage: "preparacion", coverage: "provincia_cod", ok: true, precision: "ROOFTOP", point: { lat: -16.3989, lng: -71.535 } },
+        { orderName: "#KP2", stage: "por_confirmar", coverage: "provincia_cod", ok: false, reason: "impreciso" },
+      ],
+    });
+  });
+});
