@@ -78,6 +78,8 @@ import {
   DISPATCH_DATE_CLEARED,
   DISPATCH_DATE_SET,
   DISPATCH_NEEDS_LOCATION_ERROR,
+  dispatchCoordinateInput,
+  dispatchCoordinateMissing,
   dispatchDateError,
   dispatchDateLabel,
   dispatchLocationMissing,
@@ -1778,6 +1780,8 @@ export async function registerConfirmationAttempt(
     nextContactOn?: string;
     /** «Programar envío» en vivo (MOM §6.2): solo con «Confirmó el pedido». */
     dispatchOn?: string;
+    /** Provincia COD sin coordenada: la que se pegó al programar (02-11-2026). */
+    coordinate?: string;
     operationId?: string;
   },
 ): Promise<MasterActionState> {
@@ -1821,6 +1825,12 @@ export async function registerConfirmationAttempt(
   // quedaría registrada y la fecha perdida a medias.
   if (dispatchOn && dispatchLocationMissing(ctx.row)) {
     return { error: `${DISPATCH_NEEDS_LOCATION_ERROR} Puedes confirmar dejando «Sale el» vacío.` };
+  }
+  // Provincia COD: sin coordenada, ese día Aliclik no crea la guía. Se guarda
+  // antes del intento: una coordenada guardada no estorba si el intento falla.
+  if (dispatchOn) {
+    const coordinateError = await ensureDispatchCoordinate(ctx, input.coordinate);
+    if (coordinateError) return { error: `${coordinateError} Puedes confirmar dejando «Sale el» vacío.` };
   }
 
   const admin = createAdminSupabase();
@@ -1903,13 +1913,53 @@ export async function registerConfirmationAttempt(
 }
 
 /**
+ * Provincia COD: la coordenada que pide programar (MOM §6.2, 02-11-2026). Si
+ * el pedido no la tiene, la pegada al programar se valida y se guarda en
+ * `order_geo_overrides` —donde la deja «Corregir ubicación» y la lee el panel
+ * de Aliclik—, sin tocar lo demás que ese registro tuviera. Devuelve el error
+ * a mostrar, o null (también cuando no hacía falta).
+ */
+async function ensureDispatchCoordinate(ctx: OrderContext, raw: string | null | undefined): Promise<string | null> {
+  if (!dispatchCoordinateMissing(ctx.row, classifyOperation(ctx.row))) return null;
+  const parsed = dispatchCoordinateInput(raw);
+  if (!parsed.ok) return parsed.error;
+  const { lat, lng } = parsed.coordinate;
+  const admin = createAdminSupabase();
+  const { data: existing, error: readError } = await admin
+    .from("order_geo_overrides")
+    .select("region,province,district,address,reference,note")
+    .eq("order_id", ctx.row.order_id)
+    .maybeSingle();
+  if (readError) return `No se pudo guardar la ubicación: ${readError.message}`;
+  const { error } = await admin.from("order_geo_overrides").upsert(
+    {
+      ...((existing as Record<string, string | null> | null) ?? {}),
+      order_id: ctx.row.order_id,
+      store_id: ctx.storeId,
+      latitude: lat,
+      longitude: lng,
+      updated_by: ctx.userId,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "order_id" },
+  );
+  if (error) return `No se pudo guardar la ubicación: ${error.message}`;
+  const eventError = await recordEvent(admin, ctx, {
+    kind: "comment",
+    commentType: "ubicacion",
+    note: `Ubicación guardada al programar el envío. coordenadas: ${lat}, ${lng}`,
+  });
+  return eventError;
+}
+
+/**
  * «Programar envío» (MOM §6.2, 15-10-2026): la fecha acordada para despachar
  * un pedido confirmado que todavía no tiene guía. Queda en el historial con
  * quien lo programó y la nota; programar otra vez cambia la fecha.
  */
 export async function scheduleOrderDispatch(
   orderId: string,
-  input: { date: string; note?: string | null },
+  input: { date: string; note?: string | null; coordinate?: string | null },
 ): Promise<MasterActionState> {
   const perms = await getMasterPermissions();
   if (!perms.can("master.edit")) return { error: "Tu rol no permite programar envíos." };
@@ -1926,6 +1976,9 @@ export async function scheduleOrderDispatch(
   }
   // Sin región, distrito o dirección no hay a dónde despacharlo (#KP142558).
   if (dispatchLocationMissing(ctx.row)) return { error: DISPATCH_NEEDS_LOCATION_ERROR };
+  // Provincia COD: la coordenada para la guía Aliclik de ese día.
+  const coordinateError = await ensureDispatchCoordinate(ctx, input.coordinate);
+  if (coordinateError) return { error: coordinateError };
 
   const admin = createAdminSupabase();
   const eventError = await recordEvent(admin, ctx, {

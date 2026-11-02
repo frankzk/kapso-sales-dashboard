@@ -18,6 +18,8 @@
 //
 // Pura.
 
+import { isShortenedMapsLink, parseCoordinateInput, type Coordinate } from "@/lib/aliclik-geo";
+
 export const DISPATCH_DATE_SET = "dispatch_date_set";
 export const DISPATCH_DATE_CLEARED = "dispatch_date_cleared";
 /** Hasta cuántos días adelante se puede programar. Más que eso no es una fecha, es un «algún día». */
@@ -156,4 +158,52 @@ export function withScheduledNoLocation<T extends { order_id: string }>(
 ): (T & { scheduled_no_location?: boolean })[] {
   if (!ids) return rows;
   return rows.map((r) => ({ ...r, scheduled_no_location: ids.has(r.order_id) }));
+}
+
+// ---------------------------------------------------------------------------
+// Provincia COD: programar pide la coordenada (owner, 02-11-2026; MOM §6.2)
+//
+// El día programado Kapta crea sola la guía Aliclik (lib/aliclik-scheduled.ts),
+// y Aliclik no cotiza ni crea sin coordenada. Un Provincia COD programado sin
+// ella fallaba ese día (#AUR900167: «Programado · sale hoy», «Obligatoria: el
+// pedido no la tiene») y la guía quedaba para una persona. Ahora la ubicación
+// se pide al programar —al confirmar con «Sale el» o en «Programar envío»— y
+// se guarda en el pedido, la misma que usa el panel de Aliclik.
+// ---------------------------------------------------------------------------
+
+export const DISPATCH_NEEDS_COORDINATE_ERROR =
+  "Falta la ubicación: pega el enlace de Google Maps o la coordenada. Sin ella, ese día Aliclik no crea la guía.";
+
+/** Lo que la regla mira del pedido: su cobertura operativa y su coordenada. */
+export interface DispatchCoordinateRow {
+  latitude?: number | string | null;
+  longitude?: number | string | null;
+}
+
+/** ¿Es un Provincia COD sin coordenada guardada? Pura. */
+export function dispatchCoordinateMissing(row: DispatchCoordinateRow, operation: string | null | undefined): boolean {
+  if (operation !== "provincia_cod") return false;
+  return row.latitude == null || row.longitude == null || row.latitude === "" || row.longitude === "";
+}
+
+/**
+ * La coordenada que se pegó al programar, o por qué no sirve. Un enlace
+ * acortado (maps.app.goo.gl) no trae la coordenada escrita: hay que abrirlo y
+ * copiar el enlace largo o el par. Pura.
+ */
+export function dispatchCoordinateInput(
+  raw: string | null | undefined,
+): { ok: true; coordinate: Coordinate } | { ok: false; error: string } {
+  const text = (raw ?? "").trim();
+  if (!text) return { ok: false, error: DISPATCH_NEEDS_COORDINATE_ERROR };
+  const coordinate = parseCoordinateInput(text);
+  if (coordinate) return { ok: true, coordinate };
+  if (isShortenedMapsLink(text)) {
+    return {
+      ok: false,
+      error:
+        "Ese enlace es acortado (maps.app.goo.gl) y no trae la coordenada: ábrelo y copia el enlace largo de la barra, o la coordenada (p. ej. -12.04318, -77.02824).",
+    };
+  }
+  return { ok: false, error: "No se encontró una coordenada en lo que pegaste. Usa el enlace de Google Maps o el par, p. ej. -12.04318, -77.02824." };
 }

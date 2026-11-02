@@ -125,9 +125,11 @@ import { DispatchDatePanel } from "@/components/dispatch-date-panel";
 import { AUTO_GUIDE_HINT } from "@/lib/aliclik-scheduled";
 import {
   DISPATCH_DATE_SET,
+  DISPATCH_NEEDS_COORDINATE_ERROR,
   DISPATCH_NEEDS_LOCATION_ERROR,
   dispatchDateBadge,
   dispatchDateMax,
+  dispatchCoordinateMissing,
   dispatchLocationMissing,
 } from "@/lib/dispatch-date";
 
@@ -1588,6 +1590,7 @@ export function OrderDrawer({
                           today={limaTodayKey()}
                           autoAliclik={classifyOperation(detail.row) === "provincia_cod"}
                           locationMissing={dispatchLocationMissing(detail.row)}
+                          coordinateMissing={dispatchCoordinateMissing(detail.row, classifyOperation(detail.row))}
                           onFixLocation={() => jumpTo("ubicacion")}
                           onSaved={() => {
                             void reload();
@@ -3249,6 +3252,7 @@ function ConfirmationDesk({
     note?: string;
     nextContactOn?: string;
     dispatchOn?: string;
+    coordinate?: string;
     operationId?: string;
   }) => void;
   /** Lleva a Información → Ubicación (MOM §6.2: programar pide ubicación). */
@@ -3259,6 +3263,8 @@ function ConfirmationDesk({
   const [nextContactOn, setNextContactOn] = useState("");
   // «Programar envío» en vivo (MOM §6.2): la fecha se acuerda en la llamada.
   const [dispatchOn, setDispatchOn] = useState("");
+  // Provincia COD sin coordenada: programar la pide (MOM §6.2, 02-11-2026).
+  const [coordinate, setCoordinate] = useState("");
   const [note, setNote] = useState("");
 
   const events = useMemo(
@@ -3288,7 +3294,10 @@ function ConfirmationDesk({
   const needsDate = Boolean(selected?.schedulesFollowup);
   // Confirmar sin ubicación sí; programar el envío no (MOM §6.2, #KP142558).
   const locationMissing = dispatchLocationMissing(row);
-  const blocked = pending || lastAttempt || (needsDate && !nextContactOn);
+  const coordinateMissing = dispatchCoordinateMissing(row, classifyOperation(row));
+  const schedules = Boolean(selected?.confirms && !locationMissing && dispatchOn);
+  const blocked =
+    pending || lastAttempt || (needsDate && !nextContactOn) || (schedules && coordinateMissing && !coordinate.trim());
 
   return (
     <section className="space-y-4">
@@ -3468,6 +3477,21 @@ function ConfirmationDesk({
                 {classifyOperation(row) === "provincia_cod" && ` ${AUTO_GUIDE_HINT}`}
               </p>
             )}
+            {schedules && coordinateMissing && (
+              <label className={cn(LABEL, "pt-2")}>
+                Ubicación (obligatoria para programar)
+                <input
+                  value={coordinate}
+                  placeholder="Enlace de Google Maps o coordenada"
+                  aria-describedby="sale-el-ubicacion"
+                  onChange={(e) => setCoordinate(e.target.value)}
+                  className={cn(FIELD, "font-normal pointer-coarse:h-11")}
+                />
+                <span id="sale-el-ubicacion" className="text-[13px] font-normal leading-5 text-warn-fg">
+                  {DISPATCH_NEEDS_COORDINATE_ERROR} Se guarda en el pedido.
+                </span>
+              </label>
+            )}
           </div>
         )}
 
@@ -3493,11 +3517,13 @@ function ConfirmationDesk({
                 note,
                 nextContactOn,
                 dispatchOn: selected?.confirms && !locationMissing ? dispatchOn : "",
+                coordinate: schedules && coordinateMissing ? coordinate : "",
                 operationId: crypto.randomUUID(),
               });
               setNote("");
               setNextContactOn("");
               setDispatchOn("");
+              setCoordinate("");
             }}
             className="pointer-coarse:h-11"
           >

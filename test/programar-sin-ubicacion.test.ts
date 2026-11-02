@@ -54,6 +54,10 @@ vi.mock("@/lib/db", () => {
         insert = value;
         return q;
       },
+      upsert: (value: any) => {
+        insert = { upsert: true, ...value };
+        return q;
+      },
       then: (ok: any, ko: any) => {
         if (insert) {
           st.inserts.push({ table, value: insert });
@@ -77,6 +81,7 @@ vi.mock("@/lib/db", () => {
 
 import { registerConfirmationAttempt, scheduleOrderDispatch } from "@/app/dashboard/pedidos/actions";
 import {
+  DISPATCH_NEEDS_COORDINATE_ERROR,
   DISPATCH_NEEDS_LOCATION_ERROR,
   SCHEDULED_NO_LOCATION_LABEL,
   dispatchLocationMissing,
@@ -114,7 +119,13 @@ const CON_UBICACION: Row = {
   province: "Sullana",
   district: "Sullana",
   address: "Av. Grau 123",
+  // Provincia COD programado necesita la coordenada de Aliclik (02-11-2026).
+  latitude: -4.9039,
+  longitude: -80.6853,
 };
+
+/** #AUR900167: Provincia COD con dirección pero sin coordenada. */
+const SIN_COORDENADA: Row = { ...CON_UBICACION, latitude: null, longitude: null };
 
 function addDays(day: string, n: number): string {
   const d = new Date(`${day}T12:00:00Z`);
@@ -255,5 +266,46 @@ describe("la alerta del Master", () => {
     expect(drawer).toContain("disabled={locationMissing}");
     const panel = readFileSync(join(process.cwd(), "components/dispatch-date-panel.tsx"), "utf8");
     expect(panel).toContain("Corregir ubicación");
+  });
+});
+
+describe("Provincia COD sin coordenada (#AUR900167, 02-11-2026)", () => {
+  const geo = () => st.inserts.filter((i) => i.table === "order_geo_overrides");
+
+  it("«Programar envío» sin la ubicación se rechaza y no escribe nada", async () => {
+    st.row = SIN_COORDENADA;
+    const res = await scheduleOrderDispatch(ORDER, { date: addDays(limaTodayKey(), 2) });
+    expect(res.error).toBe(DISPATCH_NEEDS_COORDINATE_ERROR);
+    expect(dispatchEvents()).toHaveLength(0);
+    expect(geo()).toHaveLength(0);
+  });
+
+  it("con el enlace de Maps la guarda en el pedido y programa", async () => {
+    st.row = SIN_COORDENADA;
+    const date = addDays(limaTodayKey(), 2);
+    const res = await scheduleOrderDispatch(ORDER, {
+      date,
+      coordinate: "https://www.google.com/maps/place/X/@-4.9,-80.6,17z/data=!3d-4.90391!4d-80.68534",
+    });
+    expect(res.error).toBeUndefined();
+    expect(geo()).toHaveLength(1);
+    expect(geo()[0]!.value).toMatchObject({ order_id: ORDER, latitude: -4.90391, longitude: -80.68534 });
+    expect(dispatchEvents()).toHaveLength(1);
+  });
+
+  it("«Sale el» al confirmar sin ubicación se rechaza antes de registrar el intento; sin fecha confirma igual", async () => {
+    st.row = { ...SIN_COORDENADA, macro_stage: "por_confirmar", macro_substage: "sin_llamar" };
+    const res = await registerConfirmationAttempt(ORDER, {
+      result: "confirmado",
+      channel: "llamada",
+      dispatchOn: addDays(limaTodayKey(), 2),
+      coordinate: "https://maps.app.goo.gl/abc",
+    });
+    expect(res.error).toMatch(/acortado/);
+    expect(res.error).toContain("Puedes confirmar dejando «Sale el» vacío.");
+    expect(st.rpcs).toHaveLength(0);
+    const sinFecha = await registerConfirmationAttempt(ORDER, { result: "confirmado", channel: "llamada", dispatchOn: "" });
+    expect(sinFecha.error).toBeUndefined();
+    expect(geo()).toHaveLength(0);
   });
 });
