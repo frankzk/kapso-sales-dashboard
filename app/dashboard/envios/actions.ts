@@ -1405,7 +1405,8 @@ export interface DirectFenixGuidePreview {
     address2: string | null;
     district: string | null;
     region: string | null;
-    source: "shopify" | "carrito" | "lead" | null;
+    /** «manual»: la dirección sale de «Corregir ubicación», como en el Master. */
+    source: "shopify" | "carrito" | "lead" | "manual" | null;
   };
   city: string;
   schedule: FenixDeliverySchedule | null;

@@ -151,6 +151,10 @@ export const UBIGEO_BY_CITY: Record<string, Record<string, string>> = {
     "las lomas": "200111",
     "tambo grande": "200114",
     "26 de octubre": "200115",
+    // Provincia de Sullana: Swayp la reparte desde la bodega de Piura (su panel
+    // lista PIURA → SULLANA). Confirmado por Frankz el 02-11-2026 con #KP144042.
+    // Solo el distrito de Sullana: los demás de esa provincia no se confirmaron.
+    "sullana": "200601",
   },
   // Chimbote es la capital de la provincia de Santa, no una provincia propia.
   chimbote: {
