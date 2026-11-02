@@ -112,8 +112,13 @@ import {
 import { reprogramOutputReason } from "@/lib/gf-retry";
 import { cancelGuides, swaypOptsFromEnv } from "@/lib/swayp";
 import { env } from "@/lib/env";
-import { fetchChatbyConversation } from "@/lib/chatby-api";
-import type { ChatbyConversation } from "@/lib/chatby-conversation";
+import { fetchChatbyConversation, forgetChatbyConversation, sendChatbyReply } from "@/lib/chatby-api";
+import {
+  CHATBY_REPLY_PAUSE_MINUTES,
+  chatbyReplyText,
+  chatbyReplyWindow,
+  type ChatbyConversation,
+} from "@/lib/chatby-conversation";
 import {
   decideLabelAction,
   labelCreatesOutput,
@@ -277,6 +282,70 @@ export async function loadOrderChatby(orderId: string): Promise<ChatbyConversati
     if (cause instanceof OrderMasterReadError) return { status: "error", message: cause.message, inboxUrl: null };
     throw cause;
   }
+}
+
+/**
+ * Responder a la clienta por Chatby desde la pestaña de la ficha (MOM §25,
+ * «Chatby», owner 02-11-2026): quien puede editar el pedido, solo texto, como
+ * persona del equipo, y solo dentro de las 24 h de WhatsApp desde el último
+ * mensaje de la clienta. El bot de esa clienta queda en pausa 60 minutos. El
+ * texto queda en la Actividad del pedido con quién lo mandó (Chatby no sabe
+ * quién es en Kapta).
+ */
+export async function sendOrderChatbyReply(orderId: string, rawText: string): Promise<MasterActionState> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite escribir a la clienta." };
+  const reply = chatbyReplyText(rawText);
+  if ("error" in reply) return { error: reply.error };
+
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+
+  // La conversación al día (no la del minuto de caché): a quién se le escribe
+  // y si la ventana de 24 h sigue abierta.
+  forgetChatbyConversation(ctx.row.customer_phone);
+  const conversation = await fetchChatbyConversation({ phone: ctx.row.customer_phone, apiKey: env.chatbyApiKey() });
+  if (conversation.status !== "ok") {
+    return {
+      error:
+        conversation.status === "error"
+          ? conversation.message
+          : conversation.status === "sin_clave"
+            ? "Chatby todavía no está conectado en Kapta."
+            : "Esta clienta no tiene conversación en Chatby.",
+    };
+  }
+  if (!chatbyReplyWindow(conversation.messages).open) {
+    return {
+      error:
+        "La clienta no escribió en las últimas 24 horas: WhatsApp no deja mandarle texto libre. Para escribirle, una plantilla desde Chatby.",
+    };
+  }
+
+  const sent = await sendChatbyReply({
+    userNs: conversation.userNs,
+    text: reply.text,
+    apiKey: env.chatbyApiKey(),
+    pauseMinutes: CHATBY_REPLY_PAUSE_MINUTES,
+  });
+  forgetChatbyConversation(ctx.row.customer_phone);
+  if (sent.status === "error") return { error: sent.message };
+
+  const admin = createAdminSupabase();
+  const eventError = await recordEvent(admin, ctx, {
+    kind: "chatby_message",
+    source: "chatby",
+    note: reply.text,
+    payload: { paused_minutes: sent.paused ? CHATBY_REPLY_PAUSE_MINUTES : 0 },
+  });
+  await recomputeOrderMasterSafe(admin, [orderId]);
+  revalidatePath(MASTER_PATH);
+  const pause = sent.paused
+    ? `El bot queda en pausa ${CHATBY_REPLY_PAUSE_MINUTES} minutos para esta clienta.`
+    : "Chatby no confirmó la pausa del bot: puede seguir con sus mensajes.";
+  return eventError
+    ? { notice: `Mensaje enviado. ${pause} No se pudo anotar en la Actividad: ${eventError}` }
+    : { notice: `Mensaje enviado. ${pause}` };
 }
 
 /** Búsqueda global, para encontrar un pedido fuera de la pestaña activa. */

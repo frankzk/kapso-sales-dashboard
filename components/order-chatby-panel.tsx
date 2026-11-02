@@ -1,8 +1,9 @@
 "use client";
 
 // La pestaña «Chatby» de la ficha del pedido (MOM §25, 26-10-2026): la
-// conversación de la clienta con el bot de confirmación de Chatby, solo para
-// leer. Se pide al abrir la ficha del pedido (la cifra de la pestaña dice
+// conversación de la clienta con el bot de confirmación de Chatby. Quien puede
+// editar el pedido también le responde desde aquí (owner, 02-11-2026): texto,
+// como persona del equipo y dentro de las 24 h de WhatsApp. Se pide al abrir la ficha del pedido (la cifra de la pestaña dice
 // cuántos mensajes mandó la clienta), nunca en segundo plano para todos. El hilo tiene la misma anatomía que el
 // chat de Leads (la clienta a la izquierda en blanco, la tienda a la derecha
 // sobre `line`), con las notas internas aparte y los errores de WhatsApp en
@@ -10,12 +11,15 @@
 
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/components/ui";
-import { Badge, Banner, OpsButton, SECTION_CARD, SectionHead, Skeleton, opsButtonClass } from "@/components/ops-ui";
-import { IconAlert, IconArrowUpRight, IconCheck, IconCopy, IconImage, IconRepeat } from "@/components/icons";
+import { Badge, Banner, FIELD, OpsButton, SECTION_CARD, SectionHead, Skeleton, opsButtonClass } from "@/components/ops-ui";
+import { IconAlert, IconArrowUpRight, IconChat, IconCheck, IconCopy, IconImage, IconRepeat } from "@/components/icons";
 import { copyLabel, useCopyToClipboard } from "@/components/copy-button";
-import { loadOrderChatby } from "@/app/dashboard/pedidos/actions";
+import { loadOrderChatby, sendOrderChatbyReply } from "@/app/dashboard/pedidos/actions";
 import {
   CHATBY_MESSAGES_LIMIT,
+  CHATBY_REPLY_MAX,
+  CHATBY_REPLY_PAUSE_MINUTES,
+  chatbyReplyWindow,
   chatbyDayLabel,
   chatbyLimaDay,
   chatbyLimaTime,
@@ -158,6 +162,100 @@ function Thread({ messages, orderName }: { messages: ChatbyMessage[]; orderName:
 
 type LoadState = { status: "cargando" } | { status: "listo"; result: ChatbyConversation };
 
+const TEXTAREA = cn(FIELD, "h-auto py-2 leading-5");
+
+/** «Hoy 18:20», «Ayer 09:12» o «03-11-2026 10:05», en Lima. */
+function whenInLima(iso: string): string {
+  const day = chatbyLimaDay(iso);
+  return `${day ? chatbyDayLabel(day) : ""} ${chatbyLimaTime(iso)}`.trim();
+}
+
+/**
+ * La caja para responder (MOM §25, «Chatby», 02-11-2026). Solo con la ventana
+ * de 24 h de WhatsApp abierta; si está cerrada, dice por qué y manda a Chatby
+ * (allí están las plantillas). El servidor vuelve a comprobar todo antes de
+ * mandar.
+ */
+function ReplyBox({
+  orderId,
+  messages,
+  inboxUrl,
+  onSent,
+}: {
+  orderId: string;
+  messages: ChatbyMessage[];
+  inboxUrl: string;
+  /** Salió: el panel vuelve a leer la conversación y muestra el aviso. */
+  onSent: (notice: string) => void;
+}) {
+  const [text, setText] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const ventana = chatbyReplyWindow(messages);
+
+  if (!ventana.open) {
+    return (
+      <Banner tone="info" title="No se le puede escribir desde aquí">
+        {ventana.lastCustomerAt
+          ? `La clienta escribió por última vez: ${whenInLima(ventana.lastCustomerAt)}. Pasaron más de 24 horas y WhatsApp no deja mandarle texto libre.`
+          : "La clienta no escribió en estos mensajes: WhatsApp solo deja mandarle texto libre hasta 24 horas después de su último mensaje."}{" "}
+        Para escribirle hay que usar una plantilla desde{" "}
+        <a href={inboxUrl} target="_blank" rel="noreferrer noopener" className="font-medium text-brand-700 hover:underline">
+          Chatby
+        </a>
+        .
+      </Banner>
+    );
+  }
+
+  const send = () => {
+    setPending(true);
+    setError(null);
+    sendOrderChatbyReply(orderId, text)
+      .then((result) => {
+        if (result.error) {
+          setError(result.error);
+          return;
+        }
+        setText("");
+        onSent(result.notice ?? "Mensaje enviado.");
+      })
+      .catch(() => setError("No hubo respuesta de Kapta. El mensaje puede no haber salido: revísalo con «Actualizar»."))
+      .finally(() => setPending(false));
+  };
+
+  return (
+    <div className="space-y-2">
+      <label className="grid gap-1.5 text-[13px] font-medium text-ink-700">
+        Responder por WhatsApp
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={3}
+          maxLength={CHATBY_REPLY_MAX}
+          placeholder="Escribe tu mensaje para la clienta…"
+          className={TEXTAREA}
+        />
+      </label>
+      <div className="flex flex-wrap items-center gap-3">
+        <OpsButton variant="primary" disabled={pending || !text.trim()} onClick={send} className="pointer-coarse:h-11">
+          <IconChat aria-hidden />
+          {pending ? "Enviando…" : "Enviar por WhatsApp"}
+        </OpsButton>
+        <p className="text-xs leading-4 text-ink-500">
+          Sale como persona del equipo. El bot de esta clienta queda en pausa {CHATBY_REPLY_PAUSE_MINUTES} minutos. Se puede
+          escribir hasta: {whenInLima(ventana.closesAt)}.
+        </p>
+      </div>
+      {error && (
+        <Banner tone="crit" role="alert">
+          {error}
+        </Banner>
+      )}
+    </div>
+  );
+}
+
 /**
  * El celular de la clienta en grande, con su botón de copiar (owner,
  * 26-10-2026): hay asesoras con miopía que lo copian para buscarlo en Chatby o
@@ -191,16 +289,20 @@ export function OrderChatbyPanel({
   orderId,
   orderName,
   phone = null,
+  canEdit = false,
   onCustomerMessages,
 }: {
   orderId: string;
   orderName: string | null;
   /** El celular de la clienta, en grande y con «Copiar celular» arriba de la conversación. */
   phone?: string | null;
+  /** Quien puede editar el pedido también puede responderle a la clienta (`master.edit`). */
+  canEdit?: boolean;
   /** Cuántos de los mensajes traídos son de la clienta, para la cifra de la pestaña; null mientras no se sabe. */
   onCustomerMessages?: (count: number | null) => void;
 }) {
   const [state, setState] = useState<LoadState | null>(null);
+  const [sentNotice, setSentNotice] = useState<string | null>(null);
   const loadedFor = useRef<string | null>(null);
 
   const load = useCallback(() => {
@@ -220,8 +322,19 @@ export function OrderChatbyPanel({
   // Se pide al abrir la ficha de este pedido (no en segundo plano para todos):
   // la pestaña dice en su cifra si la clienta respondió sin tener que abrirla.
   useEffect(() => {
-    if (loadedFor.current !== orderId) load();
+    if (loadedFor.current !== orderId) {
+      setSentNotice(null);
+      load();
+    }
   }, [orderId, load]);
+
+  const onSent = useCallback(
+    (notice: string) => {
+      setSentNotice(notice);
+      load();
+    },
+    [load],
+  );
 
   const result = state?.status === "listo" ? state.result : null;
   useEffect(() => {
@@ -235,8 +348,8 @@ export function OrderChatbyPanel({
       <SectionHead
         id="pedido-chatby-title"
         title="Conversación en Chatby"
-        badge={<Badge>Solo lectura</Badge>}
-        help={`Los últimos ${CHATBY_MESSAGES_LIMIT} mensajes de la clienta con el bot de confirmación, en hora de Lima. Kenku y Aurela comparten el bot: pueden salir mensajes de las dos marcas.`}
+        badge={canEdit ? undefined : <Badge>Solo lectura</Badge>}
+        help={`Los últimos ${CHATBY_MESSAGES_LIMIT} mensajes de la clienta con el bot de confirmación, en hora de Lima. Kenku y Aurela comparten el bot: pueden salir mensajes de las dos marcas.${canEdit ? " Lo que escribas abajo le llega por WhatsApp." : ""}`}
         aside={
           <>
             <OpsButton onClick={load} disabled={loading} className="pointer-coarse:h-11">
@@ -255,6 +368,12 @@ export function OrderChatbyPanel({
 
       <ChatbyPhone phone={phone} />
 
+      {sentNotice && (
+        <Banner tone="ok" role="status">
+          {sentNotice}
+        </Banner>
+      )}
+
       <div aria-live="polite" aria-busy={loading}>
         {loading || !state ? (
           <div className="space-y-2">
@@ -263,14 +382,17 @@ export function OrderChatbyPanel({
             <Skeleton className="h-10 w-1/2" />
           </div>
         ) : result?.status === "ok" ? (
-          result.messages.length ? (
-            <div className="space-y-2">
-              {result.name && <p className="text-[13px] leading-5 text-ink-600">En Chatby: {result.name}</p>}
-              <Thread messages={result.messages} orderName={orderName} />
-            </div>
-          ) : (
-            <p className="text-sm text-ink-600">La conversación de esta clienta en Chatby está vacía.</p>
-          )
+          <div className="space-y-3">
+            {result.messages.length ? (
+              <div className="space-y-2">
+                {result.name && <p className="text-[13px] leading-5 text-ink-600">En Chatby: {result.name}</p>}
+                <Thread messages={result.messages} orderName={orderName} />
+              </div>
+            ) : (
+              <p className="text-sm text-ink-600">La conversación de esta clienta en Chatby está vacía.</p>
+            )}
+            {canEdit && <ReplyBox orderId={orderId} messages={result.messages} inboxUrl={result.inboxUrl} onSent={onSent} />}
+          </div>
         ) : result?.status === "sin_conversacion" ? (
           <p className="text-sm text-ink-600">Esta clienta no tiene conversación en Chatby.</p>
         ) : result?.status === "sin_celular" ? (

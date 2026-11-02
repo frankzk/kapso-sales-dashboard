@@ -339,3 +339,55 @@ export function chatbyMentionsOrder(message: Pick<ChatbyMessage, "text">, orderN
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`(^|[^A-Za-z0-9])#?${escaped}(?![A-Za-z0-9])`, "i").test(message.text);
 }
+
+// --- Responder desde la ficha (MOM §25, «Chatby», decisión del owner del 02-11-2026) ---
+
+/**
+ * WhatsApp deja mandar texto libre solo hasta 24 h después del último mensaje
+ * de la clienta (texto, botón o archivo). Pasado eso, solo plantillas: desde
+ * Chatby, no desde Kapta.
+ */
+export const CHATBY_REPLY_WINDOW_MS = 24 * 60 * 60 * 1000;
+/** Lo más largo que se deja mandar desde la ficha: un mensaje, no un documento. */
+export const CHATBY_REPLY_MAX = 1_000;
+/**
+ * Minutos que el bot de esa clienta queda en pausa al responder desde Kapta,
+ * para que sus flujos y recordatorios no hablen encima de la persona (owner,
+ * 02-11-2026; lo mismo que hace Chatby cuando alguien responde desde su panel).
+ */
+export const CHATBY_REPLY_PAUSE_MINUTES = 60;
+
+export type ChatbyReplyWindow =
+  /** Se puede escribir hasta `closesAt` (ISO). */
+  | { open: true; closesAt: string }
+  /** No: la clienta no escribió en los mensajes traídos, o lo hizo hace más de 24 h. */
+  | { open: false; lastCustomerAt: string | null };
+
+/**
+ * La ventana de 24 h de WhatsApp, con los mensajes que se trajeron (los
+ * últimos 20). Si la clienta escribió antes de esos 20, cuenta como cerrada:
+ * mejor no dejar escribir que mandar algo que WhatsApp no entrega.
+ */
+export function chatbyReplyWindow(
+  messages: readonly Pick<ChatbyMessage, "kind" | "at">[],
+  now: Date = new Date(),
+): ChatbyReplyWindow {
+  let last: number | null = null;
+  for (const message of messages) {
+    if (message.kind !== "cliente" || !message.at) continue;
+    const at = Date.parse(message.at);
+    if (Number.isFinite(at) && (last === null || at > last)) last = at;
+  }
+  if (last !== null && now.getTime() - last < CHATBY_REPLY_WINDOW_MS) {
+    return { open: true, closesAt: new Date(last + CHATBY_REPLY_WINDOW_MS).toISOString() };
+  }
+  return { open: false, lastCustomerAt: last === null ? null : new Date(last).toISOString() };
+}
+
+/** El texto que escribió la persona, listo para mandar, o por qué no. */
+export function chatbyReplyText(raw: string): { text: string } | { error: string } {
+  const text = raw.replace(/\r\n?/g, "\n").trim();
+  if (!text) return { error: "El mensaje está vacío." };
+  if (text.length > CHATBY_REPLY_MAX) return { error: `El mensaje es demasiado largo (máx. ${CHATBY_REPLY_MAX} caracteres).` };
+  return { text };
+}
