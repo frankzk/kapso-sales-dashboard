@@ -13,14 +13,15 @@ import { UrpiResultsBoard } from "@/components/urpi-results-board";
 import { UrpiViewNav } from "@/components/urpi-view-nav";
 import { buildUrpiShipments, URPI_OBSERVATION_RESOLVED, type UrpiOrderFacts, type UrpiStoredRow } from "@/lib/urpi-report-view";
 import { planUrpiSalida, type UrpiSalidaCandidate } from "@/lib/urpi-salida";
-import { olderDeliveredOrderIds, type UrpiAttemptRef } from "@/lib/urpi-results-window";
+import { olderDeliveredOrderIds, olderUrpiFollowUp, type UrpiAttemptRef, type UrpiOlderFact } from "@/lib/urpi-results-window";
 import { macroStageLabel, macroSubstageLabel } from "@/lib/order-macro-stage";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 type Params = { source?: string; version?: string; vista?: string };
 /** Resultados de Urpi: los últimos 60 días de intentos (MOM §30.11), más los
- *  entregados de antes cuya salida «por definir» sigue por rellenar. */
+ *  entregados de antes cuya salida «por definir» sigue por rellenar o que Kapta
+ *  sigue teniendo abiertos. */
 const RESULTS_DAYS = 60;
 const ROW_COLUMNS = "urpi_row,previous_row,report_date,result_code,data,order_id,store_id,link_status,link_method,candidate_order_ids";
 type Supabase = Awaited<ReturnType<typeof createServerSupabase>>;
@@ -81,7 +82,7 @@ async function UrpiResultsContent({ orgId }: { orgId: string }) {
   ]);
   if (rowsRes.error) return <EmptyState title="Resultados de Urpi todavía no está disponible">No se pudo leer el reporte. Si es la primera vez, falta aplicar la migración 0229.</EmptyState>;
   const windowRows = (rowsRes.data ?? []) as UrpiStoredRow[];
-  const rows = [...windowRows, ...await olderSalidaPendingRows(sb, orgId, cutoff, windowRows)];
+  const rows = [...windowRows, ...await olderFollowUpRows(sb, orgId, cutoff, windowRows)];
   const ids = [...new Set(rows.flatMap((row) => [row.order_id, ...row.candidate_order_ids]).filter((id): id is string => Boolean(id)))];
   const facts = new Map<string, UrpiOrderFacts>();
   for (let i = 0; i < ids.length; i += 200) {
@@ -131,14 +132,15 @@ async function salidaPendingIds(sb: Supabase, delivered: readonly string[]): Pro
 }
 
 /**
- * Los intentos de los pedidos que Urpi entregó ANTES de la ventana y cuya caja
- * sigue «por definir» (lib/urpi-results-window.ts). Sin esto el aviso «Pasar a
- * salida de Urpi entregada» no los veía y nadie podía rellenarlos. Para no
- * cargar historia, de los viejos se leen solo tres columnas, y enteros solo los
- * que tienen la salida pendiente. Si una lectura falla, la pantalla sigue con la
- * ventana, como antes.
+ * Los intentos de los pedidos que Urpi entregó ANTES de la ventana y que todavía
+ * piden algo (lib/urpi-results-window.ts): entregados en Kapta con la caja
+ * «por definir», para el aviso «Pasar a salida de Urpi entregada», y los que
+ * Kapta sigue teniendo abiertos, para «Entregados por marcar». Sin esto nadie
+ * podía rellenar los unos ni marcar los otros. Para no cargar historia, de los
+ * viejos se leen solo tres columnas, y enteros solo esos. Si una lectura falla,
+ * la pantalla sigue con la ventana, como antes.
  */
-async function olderSalidaPendingRows(sb: Supabase, orgId: string, cutoff: string, windowRows: readonly UrpiStoredRow[]): Promise<UrpiStoredRow[]> {
+async function olderFollowUpRows(sb: Supabase, orgId: string, cutoff: string, windowRows: readonly UrpiStoredRow[]): Promise<UrpiStoredRow[]> {
   const attempts: UrpiAttemptRef[] = [];
   for (let from = 0; ; from += 1000) {
     const { data, error } = await sb.from("urpi_report_rows").select("order_id,urpi_row,result_code")
@@ -149,13 +151,16 @@ async function olderSalidaPendingRows(sb: Supabase, orgId: string, cutoff: strin
   }
   const inWindow = new Set(windowRows.map((row) => row.order_id).filter((id): id is string => Boolean(id)));
   const candidates = olderDeliveredOrderIds(attempts, inWindow);
-  const entregados: string[] = [];
+  const facts: UrpiOlderFact[] = [];
   for (let i = 0; i < candidates.length; i += 200) {
-    const { data, error } = await sb.from("order_master").select("order_id").eq("general_status", "entregado").in("order_id", candidates.slice(i, i + 200));
+    const { data, error } = await sb.from("order_master").select("order_id,general_status,orders(cancelled_at)").in("order_id", candidates.slice(i, i + 200));
     if (error) return [];
-    entregados.push(...((data ?? []) as { order_id: string }[]).map((row) => row.order_id));
+    for (const row of (data ?? []) as unknown as { order_id: string; general_status: string; orders: { cancelled_at: string | null } | null }[]) {
+      facts.push({ order_id: row.order_id, general_status: row.general_status, cancelled_at: row.orders?.cancelled_at ?? null });
+    }
   }
-  const pending = [...await salidaPendingIds(sb, entregados)];
+  const { entregados, abiertos } = olderUrpiFollowUp(facts);
+  const pending = [...await salidaPendingIds(sb, entregados), ...abiertos];
   const rows: UrpiStoredRow[] = [];
   for (let i = 0; i < pending.length; i += 200) {
     const { data, error } = await sb.from("urpi_report_rows").select(ROW_COLUMNS).eq("org_id", orgId).in("order_id", pending.slice(i, i + 200));

@@ -15168,9 +15168,22 @@ tienen su último intento «Entregado» y ningún intento dentro de la ventana,
 están entregados en Kapta y tienen la salida que se puede rellenar
 (`lib/urpi-results-window.ts`, con la misma regla del botón). La cabecera lo
 dice. De lo anterior a la ventana no se carga nada más: ni lo que ya está al
-día, ni los cancelados o reprogramados, ni los entregados que Kapta tiene
-abiertos o sin vincular. El marcado automático sigue rellenando solo lo de los
-60 días; lo de antes se completa con el botón.
+día, ni los cancelados o reprogramados, ni los entregados sin vincular. El
+marcado automático sigue rellenando solo lo de los 60 días; lo de antes se
+completa con el botón.
+
+**Entregados de antes de la ventana que Kapta tiene abiertos (02-11-2026,
+owner).** Con la regla anterior tampoco se veían los pedidos que Urpi entregó
+hace más de 60 días y que Kapta seguía teniendo abiertos, y nadie podía
+marcarlos: #AUR174784, entregado y cobrado por Urpi el 31/07, seguía en
+«Preparación · Por armar» el 01-11-2026, y con él #KP120308 (01/07) y #KP117336
+(11/06). Desde entonces se cargan también y caen en «Entregados por marcar»:
+los que tienen su último intento «Entregado», ningún intento dentro de la
+ventana y Kapta no ha cerrado —ni entregados, ni anulados (en Kapta o en
+Shopify), ni devueltos— (`olderUrpiFollowUp`). Los marca una persona con el
+mismo botón y por la misma puerta; el marcado automático de la carga sigue en
+los 60 días. Los anulados y devueltos de antes de la ventana siguen sin
+cargarse.
 
 **El día de la entrega en la salida y las cajas viejas (23-10-2026).** Hasta
 este día la salida rellenada no llevaba `closed_at`, y el Master saca el día de

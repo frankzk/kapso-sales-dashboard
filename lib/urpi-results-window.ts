@@ -8,8 +8,12 @@
 // (15 pedidos, entregados del 10 al 15 de agosto, el 16-10-2026).
 //
 // Así que esos pedidos, y solo esos, se leen enteros aunque sean viejos. Lo
-// demás de antes de la ventana —ya al día, cancelado, reprogramado— sigue fuera:
-// no hay nada que hacer con ello aquí y cargaría la página de historia.
+// mismo pasaba con los que Urpi entregó hace más de 60 días y Kapta sigue
+// teniendo abiertos: no salían en «Entregados por marcar» y nadie podía
+// marcarlos (3 el 01-11-2026). Desde el 02-11-2026 también se leen. Lo demás de
+// antes de la ventana —ya al día, cancelado, reprogramado, anulado, devuelto—
+// sigue fuera: no hay nada que hacer con ello aquí y cargaría la página de
+// historia.
 
 import type { UrpiResultCode } from "./urpi-report";
 
@@ -36,4 +40,32 @@ export function olderDeliveredOrderIds(
     if ((latest.get(attempt.order_id)?.urpi_row ?? 0) < attempt.urpi_row) latest.set(attempt.order_id, attempt);
   }
   return [...latest.values()].filter((attempt) => attempt.result_code === "entregado").map((attempt) => attempt.order_id!);
+}
+
+/** Lo que Kapta sabe de un pedido que Urpi entregó antes de la ventana. */
+export interface UrpiOlderFact {
+  order_id: string;
+  general_status: string;
+  cancelled_at: string | null;
+}
+
+/**
+ * De esos entregados de antes de la ventana, los que todavía piden algo:
+ *   entregados  entregados en Kapta: falta ver si su salida «por definir» se
+ *               rellena (eso lo decide `planUrpiSalida`, como el botón).
+ *   abiertos    Kapta no los cerró (ni entregados, ni anulados, ni devueltos,
+ *               ni anulados en Shopify): van a «Entregados por marcar» para que
+ *               una persona los marque (02-11-2026: #AUR174784, entregado por
+ *               Urpi el 31/07, seguía «Por armar» el 01/11).
+ * Lo anulado o devuelto de antes de la ventana no se carga. PURA.
+ */
+export function olderUrpiFollowUp(facts: readonly UrpiOlderFact[]): { entregados: string[]; abiertos: string[] } {
+  const entregados: string[] = [];
+  const abiertos: string[] = [];
+  for (const fact of facts) {
+    if (fact.cancelled_at) continue;
+    if (fact.general_status === "entregado") entregados.push(fact.order_id);
+    else if (fact.general_status !== "anulado" && fact.general_status !== "devuelto") abiertos.push(fact.order_id);
+  }
+  return { entregados, abiertos };
 }

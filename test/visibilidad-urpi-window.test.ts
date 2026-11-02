@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { olderDeliveredOrderIds, type UrpiAttemptRef } from "@/lib/urpi-results-window";
+import { olderDeliveredOrderIds, olderUrpiFollowUp, type UrpiAttemptRef, type UrpiOlderFact } from "@/lib/urpi-results-window";
 
 const flat = (text: string) => text.replace(/\s+/g, " ");
 const page = flat(readFileSync(resolve(process.cwd(), "app/dashboard/urpi/page.tsx"), "utf8"));
@@ -31,17 +31,31 @@ describe("(G) pedidos de antes de la ventana que pueden tener la salida por rell
   });
 });
 
-describe("(G) la pantalla de resultados los suma a la ventana", () => {
-  it("lee la ventana y, aparte, los entregados de antes con la salida pendiente", () => {
-    expect(page).toContain('.gte("report_date", cutoff)');
-    expect(page).toContain("const rows = [...windowRows, ...await olderSalidaPendingRows(sb, orgId, cutoff, windowRows)];");
+const fact = (order_id: string, general_status: string, cancelled_at: string | null = null): UrpiOlderFact => ({ order_id, general_status, cancelled_at });
+
+describe("entregados de antes de la ventana que Kapta sigue teniendo abiertos (02-11-2026)", () => {
+  it("abiertos → por marcar; entregados → a mirar su salida", () => {
+    expect(olderUrpiFollowUp([fact("abierto", "en_proceso"), fact("pendiente", "pendiente"), fact("ent", "entregado")]))
+      .toEqual({ entregados: ["ent"], abiertos: ["abierto", "pendiente"] });
   });
 
-  it("de los viejos lee tres columnas y enteros solo los que tienen la salida pendiente", () => {
+  it("lo anulado (en Kapta o en Shopify) o devuelto no se carga", () => {
+    expect(olderUrpiFollowUp([fact("a", "anulado"), fact("d", "devuelto"), fact("s", "en_proceso", "2026-08-01T00:00:00Z"), fact("se", "entregado", "2026-08-01T00:00:00Z")]))
+      .toEqual({ entregados: [], abiertos: [] });
+  });
+});
+
+describe("(G) la pantalla de resultados los suma a la ventana", () => {
+  it("lee la ventana y, aparte, los entregados de antes que todavía piden algo", () => {
+    expect(page).toContain('.gte("report_date", cutoff)');
+    expect(page).toContain("const rows = [...windowRows, ...await olderFollowUpRows(sb, orgId, cutoff, windowRows)];");
+  });
+
+  it("de los viejos lee tres columnas y enteros solo los de salida pendiente o abiertos", () => {
     expect(page).toContain('.select("order_id,urpi_row,result_code") .eq("org_id", orgId).lt("report_date", cutoff)');
     expect(page).toContain("olderDeliveredOrderIds(attempts, inWindow)");
-    expect(page).toContain('.eq("general_status", "entregado")');
-    expect(page).toContain("const pending = [...await salidaPendingIds(sb, entregados)];");
+    expect(page).toContain("const { entregados, abiertos } = olderUrpiFollowUp(facts);");
+    expect(page).toContain("const pending = [...await salidaPendingIds(sb, entregados), ...abiertos];");
   });
 
   it("decide la salida pendiente con la misma regla que el botón (planUrpiSalida)", () => {
@@ -54,7 +68,7 @@ describe("(G) la cabecera dice que también enseña los entregados antiguos", ()
   it("no promete solo «los últimos N días»", () => {
     const board = flat(readFileSync(resolve(process.cwd(), "components/urpi-results-board.tsx"), "utf8"));
     expect(board).toContain(
-      "Se muestran los intentos de los últimos {days} días, y los entregados más antiguos cuya salida «Por definir» falta pasar a Urpi.",
+      "Se muestran los intentos de los últimos {days} días, y los entregados más antiguos que faltan marcar o cuya salida «Por definir» falta pasar a Urpi.",
     );
   });
 });
