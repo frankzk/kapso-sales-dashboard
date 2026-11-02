@@ -210,8 +210,11 @@ function mapMessage(row: Record<string, unknown>, index: number): (ChatbyMessage
   return { ...base, ms, order: index };
 }
 
-/** ¿Cae en el Perú? Lo demás es un error de tipeo o un punto de prueba. */
-function inPeru(lat: number, lng: number): boolean {
+/**
+ * ¿Cae en el Perú? Lo demás es un error de tipeo o un punto de prueba. La usa
+ * también el candado de la coordenada por dirección (lib/geocode-google.ts).
+ */
+export function inPeru(lat: number, lng: number): boolean {
   return Number.isFinite(lat) && Number.isFinite(lng) && lat >= -18.6 && lat <= 0.1 && lng >= -81.5 && lng <= -68.5;
 }
 

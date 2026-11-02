@@ -1,5 +1,18 @@
 # Deployment runbook
 
+### 02-11-2026 · Coordenada por dirección: el piloto (sin migración)
+
+Solo la variable `GOOGLE_GEOCODING_API_KEY` en Vercel (Production, sensible,
+solo servidor: sin `NEXT_PUBLIC_`). **La crea el owner** en Google Cloud: un
+proyecto con **Geocoding API** (la clásica, «v3»: `maps/api/geocode/json`, no
+la v4 GeocodeAddress) y facturación, la clave **restringida a Geocoding API** y
+la cuota «v3 requests per day» en **400**, más un tope o alerta de gasto. No se
+pega en el chat. Con ella aparece activo el botón de Ajustes → «Coordenada por
+dirección (piloto)», que mide y no escribe nada (ver
+`docs/kapta/geocodificacion-propuesta.md`). Sin ella el botón dice «Falta
+GOOGLE_GEOCODING_API_KEY en Vercel» y no se llama a Google. Marcha atrás:
+borrar la variable.
+
 ### 01-11-2026 · Bloques para asesoras administradoras (0299)
 
 Aplicar `db/migrations/0299_lead_routing_admin_advisors.sql` antes de publicar.
@@ -185,6 +198,7 @@ roles and the `auth` schema, so it just works.
    | `OLVA_TRACKING_APIKEY` | La `apikey` con la que la página pública de Olva (`tracking.olvaexpress.pe`) llama a `reports.olvaexpress.pe/webservice/rest/getTrackingInformation`. **Es de Olva, no nuestra**: se captura en DevTools → Red al consultar un tracking, y la pueden rotar sin aviso. Sin ella el cron `olva-reconcile` se salta y los estados de Olva se marcan a mano (ver §12 del MOM) |
    | `OLVA_TRACKING_API_BASE` | `https://reports.olvaexpress.pe` (optional) |
    | `CHATBY_API_KEY` | La clave «KAPTA» de la API de Chatby, para la pestaña «Chatby» de la ficha del pedido. **La emite Chatby**: `app.chatby.io/settings#/api` → «Create API Token» (nombre «KAPTA», solo «Manage Flow», workspace AURELA KENKU, bot Aurela Kenku BOT), aparte de la de Make para poder revocarla sola. Solo servidor (sin `NEXT_PUBLIC_`). Sin ella la pestaña dice que falta conectar Chatby (ver 5q.1) |
+   | `GOOGLE_GEOCODING_API_KEY` | Clave de la Geocoding API clásica («v3») de Google, para el piloto de Ajustes → «Coordenada por dirección (piloto)». **La crea el owner** en Google Cloud, restringida a Geocoding API, con la cuota «v3 requests per day» en 400 y tope de gasto. Solo servidor (sin `NEXT_PUBLIC_`). Sin ella el botón dice que falta y no consulta nada |
    | `CHATBY_WEBHOOK_SECRET` | Secreto del «Live Chat Webhook» de Chatby. **Lo elegís vos** (`openssl rand -hex 32`), no lo emite Chatby. Va también en Chatby → Integrations → Live Chat Support → Webhook, campo *Custom Header*: `X-Webhook-Secret: <valor>`. Sin él el receptor rechaza todo (ver 5q) |
    | `META_APP_SECRET` | *App Secret* de la app de Meta — **lo emite Meta**, es el mismo que ya usa la Marketing API. Con él se verifica la firma `X-Hub-Signature-256` de cada entrega del webhook de página/Instagram. Sin él el receptor rechaza todo (ver 5s) |
    | `META_WEBHOOK_VERIFY_TOKEN` | Token del apretón de manos del webhook de Meta. **Lo elegís vos** (`openssl rand -hex 32`) y lo tecleás en el panel de Meta al dar de alta la URL. Sin él Meta **nunca activa la suscripción** y no llega nada, sin error visible (ver 5s) |

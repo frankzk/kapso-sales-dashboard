@@ -1,6 +1,6 @@
 # Propuesta: coordenada por dirección (Google), solo cuando es exacta
 
-02-11-2026 · propuesta de Kapta para decisión del owner. **No está implementada.**
+02-11-2026 · propuesta de Kapta. **Decisiones A, B y C tomadas por el owner el 02-11-2026** (ver «Decisiones del owner»). Hoy solo está construido **el piloto de medición**; la coordenada todavía no se guarda ni se usa en ningún pedido.
 
 ## El problema
 
@@ -30,7 +30,7 @@ Convertir la dirección del pedido en coordenadas con la API de geocodificación
    - No sirven `GEOMETRIC_CENTER` (el centro de una calle o zona) ni `APPROXIMATE` (el distrito o la ciudad). Es lo que Google devuelve para «Mz B Lt 22», un caserío o una dirección que no encuentra.
 2. **Coincidencia completa.** Si Google marca `partial_match`, no vale: entendió otra cosa de lo escrito.
 3. **El destino del pedido.** El distrito y el departamento que devuelve Google tienen que ser los del Master.
-   - Se comparan con la misma normalización de nombres de siempre (`lib/ubigeo.ts`).
+   - Se comparan con la misma normalización de nombres de siempre: `departmentKey` (`lib/peru-departamentos.ts`) para el departamento, y `normalizeCoverageLabel` + `resolveLimaDistrict` (`lib/order-coverage.ts`) para el distrito, con Cusco/Cuzco iguales como en el pin respaldado. Los alias de Lima («Surco», «Cercado de Lima») solo valen en Lima.
    - Si no coinciden, el punto se descarta aunque sea «exacto».
 4. **Dentro del Perú.** Es la misma regla que ya se usa para la ubicación de WhatsApp.
 
@@ -56,7 +56,7 @@ La coordenada se toma de la primera fuente que exista:
 Cómo se usa la nueva:
 - **Se guarda aparte, no como la coordenada del pedido.** Lleva su origen («por dirección, Google») y su precisión. Así nunca se confunde con una ubicación que dio la clienta.
 - **En el panel de Aliclik se propone como la de WhatsApp.** El panel muestra «Ubicación por dirección (Google), exacta al número: Usar esta ubicación · Ver en el mapa». La asesora la ve y la usa con un clic.
-- **En la guía automática por Chatby, solo si el owner lo aprueba** (decisión A). Mi recomendación es usarla solo con `ROOFTOP` y siempre después de la de WhatsApp.
+- **En la guía automática por Chatby** (decisión A, aprobada el 02-11-2026): solo con `ROOFTOP` y siempre después de la de WhatsApp, y solo cuando el piloto cumpla el criterio B.
 
 ### Cuándo se consulta
 
@@ -85,27 +85,60 @@ Con el volumen de hoy (unos 240–300 pedidos por día):
 
 Antes de mostrarla a las asesoras o usarla en guías se mide, sin tocar ningún pedido.
 
-1. **Muestra:** los 445 pedidos de WooCommerce de los últimos días que ya tienen coordenada puesta por una persona.
-2. **Medición:** se geocodifican sus direcciones (unas 445 consultas, gratis) y se compara contra la coordenada real.
+1. **Muestra:** los pedidos de WooCommerce de los últimos 7 días que ya tienen coordenada puesta por una persona (hasta 400, el cupo diario; ver «Cómo correr el piloto»).
+2. **Medición:** se geocodifican sus direcciones (hasta 400 consultas, gratis) y se compara contra la coordenada real.
 3. **Qué se mide:**
    - cuántos pasan el candado;
    - a qué distancia queda el punto de Google del de la asesora: la mediana y cuántos a más de 300 m y a más de 1 km;
    - Lima y Provincia por separado.
-4. **Criterio para encender** (propuesta, lo fija el owner): al menos el 90 % de los que pasan el candado a menos de 300 m del punto real.
+4. **Criterio para encender** (decisión B del owner, 02-11-2026): al menos el 90 % de los que pasan el candado a 300 m o menos del punto real.
 
 Si el piloto sale mal, no se enciende y el resultado queda escrito.
 
 ## Lo que tiene que hacer el owner
 
 1. Crear un proyecto en Google Cloud y activar **Geocoding API** con facturación. Google pide tarjeta aunque no se pase de lo gratis.
-2. **Restringir la clave** solo a Geocoding API y poner un **tope o alerta de gasto** (US$ 20).
+2. **Restringir la clave** solo a Geocoding API, poner la cuota **«v3 requests per day» en 400** y un **tope o alerta de gasto** (US$ 20).
 3. Guardar la clave en Vercel como `GOOGLE_GEOCODING_API_KEY`. **No pegarla en el chat.**
 
-## Decisiones pendientes
+## Decisiones del owner (02-11-2026)
 
-- **A.** ¿La guía automática por Chatby puede usar la coordenada por dirección? Recomendación: sí, solo con `ROOFTOP` y después de la de WhatsApp.
-- **B.** ¿El criterio del piloto: el 90 % a menos de 300 m?
-- **C.** ¿Lima también, o solo Provincia COD? En Lima la mayoría va por GF y no pide coordenada a Aliclik, aunque la ficha y el mapa la usan.
+- **A. Sí.** La guía automática por Chatby puede usar la coordenada por dirección, **solo con `ROOFTOP`** y **solo después** de la ubicación de WhatsApp (si la clienta mandó su pin, manda el pin).
+- **B. Sí.** Se enciende solo si **al menos el 90 % de los puntos que pasan el candado quedan a 300 m o menos** del pin real.
+- **C. Lima y Provincia COD.** El piloto mide las dos coberturas, por separado.
+
+Mientras el piloto no diga que se cumple B, nada de esto cambia un pedido: el MOM no se toca hasta implementar la coordenada de verdad.
+
+## Qué API de Google
+
+La **Geocoding API clásica**, la que Google llama «v3»: `https://maps.googleapis.com/maps/api/geocode/json`. **No** los endpoints v4 (`GeocodeAddress`).
+
+- El candado depende de dos campos de la respuesta v3: `geometry.location_type` y `partial_match`.
+- El owner limita en Google Cloud la cuota **«v3 requests per day» a 400**. Por eso el piloto toma como mucho 400 pedidos (no 450): una pasada cabe entera en el cupo del día. Si Google contesta `OVER_QUERY_LIMIT` (por ejemplo, una segunda pasada el mismo día), el piloto deja de consultar y lo que faltó sale como «No se consultó (cupo diario de Google)».
+- Si algún día se pasa a la v4, hay que revisar el candado: esos dos campos no vienen igual.
+
+## Cómo correr el piloto
+
+1. El owner guarda `GOOGLE_GEOCODING_API_KEY` en Vercel (Production; ver `DEPLOY.md`, 02-11-2026). Sin la clave, la sección dice «Falta GOOGLE_GEOCODING_API_KEY en Vercel» y no se llama a Google.
+2. En **Ajustes de la tienda → Conexiones → «Coordenada por dirección (piloto)»**, con «Administrar tiendas» (owner/admin), aprieta **«Medir con los pedidos que ya tienen ubicación»**.
+3. Kapta toma los pedidos de WooCommerce (`orders.raw ? 'woo'`) de los **últimos 7 días**, con cobertura Lima o Provincia COD y con `order_master.latitude`/`longitude` (el pin que puso la asesora al crear la guía): los más recientes primero, **hasta 400**, alternando Lima y Provincia.
+4. Geocodifica cada dirección (a Google va solo calle, distrito, provincia y departamento, con `region=pe` y `components=country:PE`; un celular escrito en la dirección se quita), aplica el candado y mide la distancia del punto aceptado al pin.
+5. **No escribe nada** en la base y enseña **solo cuentas**: ni direcciones, ni nombres, ni celulares, ni números de pedido, tampoco en el registro.
+
+Qué se ve, por cobertura (Lima, Provincia COD y el total):
+- la muestra, cuántos pasan el candado (y cuántos con `ROOFTOP`);
+- la mediana de la distancia al pin, el % a 300 m o menos y el % a más de 1 km;
+- el % a 300 m o menos **solo con `ROOFTOP`**, que es lo que usaría la guía automática (decisión A);
+- si se cumple el criterio B;
+- por qué no pasaron los demás (sin calle, sin resultado, no exacta, coincidencia parcial, otro departamento, otro distrito, fuera del Perú, error de la API, sin tiempo, sin cupo).
+
+Con menos de 30 puntos que pasan en una cobertura, la pantalla avisa que el porcentaje todavía no dice mucho; el criterio B no cambia.
+
+**Tiempo.** Corre dentro del botón: 5 consultas a la vez, como mucho 6 s cada una, y a los 38 s no empieza ninguna más, así que la pasada termina antes de unos 50 s. Lo que quedó sin consultar sale como «No se llegó a consultar (tiempo)». Con 400 consultas a la velocidad normal de Google (unas décimas de segundo) alcanza de sobra.
+
+**Dónde está.** Lo puro (la petición, el candado, la distancia y la cuenta) en `lib/geocode-google.ts`; la pasada en `lib/geocode-google-server.ts`; el botón en `app/dashboard/[storeId]/settings/geocode-actions.ts` y `components/store-settings.tsx`; las pruebas en `test/geocode-google.test.ts`.
+
+El resultado del piloto se escribe aquí cuando se corra, salga bien o mal.
 
 ## Riesgos
 
@@ -113,4 +146,4 @@ Si el piloto sale mal, no se enciende y el resultado queda escrito.
 - **Cobertura baja en Provincia.** En pueblos y asentamientos Google casi nunca da `ROOFTOP`, así que muchos pedidos seguirán sin coordenada. Por eso la pantalla de COD Core sigue siendo lo más exacto, y conviene empujarla igual.
 - **Cambios de precio de Google.** El tope de gasto lo contiene.
 
-Si se aprueba, el MOM (§38, «De dónde sale ahora») y las pruebas se actualizan con la implementación.
+Cuando se implemente (después de un piloto que cumpla B), el MOM (§38, «De dónde sale ahora») y las pruebas se actualizan con la implementación.

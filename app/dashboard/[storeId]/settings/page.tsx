@@ -696,6 +696,8 @@ export default async function StoreSettingsPage({
       platform: full.platform ?? "shopify",
       migrationMissing: isBotOrdersMigrationMissing(botSecretRead.error),
     },
+    // Coordenada por dirección (piloto): solo si la clave está, nunca su valor.
+    geocodePilot: { configured: env.googleGeocodingConfigured() },
     // Solo sí/no, nunca los valores: la página llega al navegador.
     leadVoice: {
       configured: leadVoiceConfigured(),

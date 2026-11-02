@@ -232,6 +232,17 @@ export const env = {
   //     dice que falta conectar Chatby. Solo servidor.
   chatbyApiKey: () => (process.env.CHATBY_API_KEY ?? "").trim(),
 
+  // --- Google Geocoding API: coordenada por dirección (PILOTO, 02-11-2026,
+  //     docs/kapta/geocodificacion-propuesta.md). Hoy solo la usa el botón de
+  //     Ajustes que mide el geocodificador contra los pins ya puestos por una
+  //     persona; no escribe nada. La clave es de la cuenta de Google Cloud del
+  //     owner, restringida a Geocoding API y con tope de gasto. Vacía = el botón
+  //     dice que falta y no se llama a Google. Solo servidor: nunca se manda al
+  //     navegador ni se escribe en el registro. Se recorta por lo mismo que
+  //     SHALOM_API_KEY: un blanco pegado en Vercel da REQUEST_DENIED siempre.
+  googleGeocodingApiKey: () => (process.env.GOOGLE_GEOCODING_API_KEY ?? "").trim(),
+  googleGeocodingConfigured: () => Boolean((process.env.GOOGLE_GEOCODING_API_KEY ?? "").trim()),
+
   // --- Webhooks de página de Facebook e Instagram (sonda de comentarios) ---
   //
   // SON DOS COSAS DISTINTAS Y SE OLVIDA UNA:

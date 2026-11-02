@@ -61,6 +61,17 @@ import type { MetaAdAccount, MetaConnectionProbe, StoreMetaAdAccount } from "@/l
 import { InvoiceSettingsSection, type InvoiceSettingsData } from "@/components/invoice-settings-section";
 import { WooCommerceSettingsSection, type WooSettingsView } from "@/components/woocommerce-settings-section";
 import { BotOrdersSettingsSection, type BotOrdersSettingsView } from "@/components/bot-orders-settings-section";
+import { runGeocodePilotAction, type GeocodePilotState } from "@/app/dashboard/[storeId]/settings/geocode-actions";
+import {
+  GEOCODE_COVERAGE_LABEL,
+  GEOCODE_CRITERION_B,
+  GEOCODE_DAILY_QUOTA,
+  GEOCODE_KEY_MISSING,
+  GEOCODE_REASON_LABEL,
+  GEOCODE_SMALL_SAMPLE,
+  type GeocodeCoverageStats,
+  type GeocodePilotReason,
+} from "@/lib/geocode-google";
 import {
   addPaymentMethod,
   addReplyTemplate,
@@ -303,6 +314,11 @@ export interface StoreSettingsData {
    * si hay secreto (nunca el valor ni su hash), y el último uso y fallo.
    */
   botOrders: BotOrdersSettingsView;
+  /**
+   * Coordenada por dirección, piloto (docs/kapta/geocodificacion-propuesta.md):
+   * solo si GOOGLE_GEOCODING_API_KEY está en el entorno. Nunca la clave.
+   */
+  geocodePilot: { configured: boolean };
   /** Lo del agente de leads (MOM §33) que no es una columna de la tienda. */
   leadVoice: {
     /** Telnyx, la puerta SIP y el secreto propio del agente de leads están en Vercel. */
@@ -418,6 +434,7 @@ const INDEX: IndexGroup[] = [
       { id: "bot-pedidos", label: "Bot de Kapso → pedidos" },
       { id: "kapso", label: "Kapso" },
       { id: "aliclik", label: "Aliclik" },
+      { id: "geocodificacion", label: "Coordenada por dirección" },
       { id: "shalom", label: "Shalom" },
       { id: "olva", label: "Olva" },
       { id: "tanders", label: "Tanders" },
@@ -617,6 +634,7 @@ export function StoreSettings({
               hasSecret={has.aliclikWebhookSecret}
               enabled={s.aliclik_enabled}
             />
+            <GeocodePilotSection storeId={s.id} configured={data.geocodePilot.configured} />
             <ShalomSection data={data} />
             <OlvaPortalSection data={data} />
             <TandersSection data={data} />
@@ -1225,6 +1243,178 @@ function KapsoSection({ data }: { data: StoreSettingsData }) {
  * cabecera de autenticación— así que el secreto en la URL es la única barrera.
  * De ahí que se acuñe igual que el de Kapso y se revele una sola vez.
  */
+/**
+ * «Coordenada por dirección (piloto)» (docs/kapta/geocodificacion-propuesta.md):
+ * mide el geocodificador de Google contra los pedidos de WooCommerce cuyo pin
+ * ya puso una persona. No toca ningún pedido y solo enseña cuentas.
+ */
+function GeocodePilotSection({ storeId, configured }: { storeId: string; configured: boolean }) {
+  const [state, action, pending] = useActionState<GeocodePilotState, FormData>(runGeocodePilotAction, {});
+  const report = state.report ?? null;
+  return (
+    <SettingsSection
+      id="geocodificacion"
+      title="Coordenada por dirección (piloto)"
+      badge={configured ? <Badge tone="info">Solo medición</Badge> : <Badge>Sin clave</Badge>}
+      description={
+        <>
+          <p>
+            Antes de usar la coordenada que da Google para la dirección escrita, se mide contra los pedidos de
+            WooCommerce de los últimos 7 días cuyo pin ya puso una persona (Lima y Provincia COD, hasta{" "}
+            {GEOCODE_DAILY_QUOTA}: el cupo diario de la Geocoding API en Google Cloud). Solo cuenta
+            el punto que pasa el candado: exacto al edificio o al número, sin coincidencia parcial, en el distrito y el
+            departamento del pedido y dentro del Perú.
+          </p>
+          <p>
+            Para encenderla, al menos el {Math.round(GEOCODE_CRITERION_B.minShare * 100)} % de los que pasan tienen que
+            quedar a {GEOCODE_CRITERION_B.withinMeters} m o menos del pin real. No cambia ningún pedido: a Google solo
+            va la dirección, y aquí solo se ven cuentas. Cada pasada gasta una consulta por pedido: con el cupo de{" "}
+            {GEOCODE_DAILY_QUOTA} al día, una pasada por día.
+          </p>
+        </>
+      }
+    >
+      <div className={cn(CARD, "divide-y divide-line")}>
+        <CardHeader
+          title="Medición"
+          description="Tarda hasta un minuto. Si se acaba el tiempo, lo que quedó sin consultar se cuenta aparte."
+          aside={
+            <form action={action}>
+              <input type="hidden" name="store_id" value={storeId} />
+              <OpsButton type="submit" size="sm" disabled={pending || !configured} className="pointer-coarse:h-11">
+                {pending ? "Midiendo…" : "Medir con los pedidos que ya tienen ubicación"}
+              </OpsButton>
+            </form>
+          }
+        />
+        {!configured ? (
+          <div className={ROW}>
+            <Banner tone="warn" role="status">
+              <p>{GEOCODE_KEY_MISSING}</p>
+            </Banner>
+          </div>
+        ) : null}
+        {state.error ? (
+          <div className={ROW}>
+            <Banner tone="crit" role="alert">
+              <p className="whitespace-pre-line break-words">{state.error}</p>
+            </Banner>
+          </div>
+        ) : null}
+        {report ? <GeocodePilotResults report={report} /> : null}
+      </div>
+    </SettingsSection>
+  );
+}
+
+function GeocodePilotResults({ report }: { report: NonNullable<GeocodePilotState["report"]> }) {
+  const n = (x: number) => x.toLocaleString("es-PE");
+  const pct = (x: number | null) =>
+    x == null ? "—" : `${x.toLocaleString("es-PE", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} %`;
+  const meters = (x: number | null) => (x == null ? "—" : `${Math.round(x).toLocaleString("es-PE")} m`);
+  const rows: GeocodeCoverageStats[] = [...report.byCoverage, report.total];
+  const label = (c: GeocodeCoverageStats["coverage"]) => (c === "total" ? "Total" : GEOCODE_COVERAGE_LABEL[c]);
+  const reasons = (Object.keys(GEOCODE_REASON_LABEL) as GeocodePilotReason[]).filter((r) =>
+    rows.some((s) => (s.rejections[r] ?? 0) > 0),
+  );
+  const verdict = (s: GeocodeCoverageStats) =>
+    s.criterionBMet == null ? (
+      <Badge>Sin puntos</Badge>
+    ) : s.criterionBMet ? (
+      <Badge tone="ok">Cumple</Badge>
+    ) : (
+      <Badge tone="crit">No cumple</Badge>
+    );
+  return (
+    <>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[720px] text-[13px] tabular-nums">
+          <thead>
+            <tr className="text-left text-xs text-ink-500">
+              <th className="px-4 py-2 font-medium sm:px-5">Cobertura</th>
+              <th className="px-2 py-2 text-right font-medium">Muestra</th>
+              <th className="px-2 py-2 text-right font-medium">Pasan el candado</th>
+              <th className="px-2 py-2 text-right font-medium">Mediana al pin</th>
+              <th className="px-2 py-2 text-right font-medium">A {GEOCODE_CRITERION_B.withinMeters} m o menos</th>
+              <th className="px-2 py-2 text-right font-medium">A más de 1 km</th>
+              <th className="px-2 py-2 text-right font-medium">Solo ROOFTOP, a {GEOCODE_CRITERION_B.withinMeters} m o menos</th>
+              <th className="px-4 py-2 text-right font-medium sm:px-5">Criterio B</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-line">
+            {rows.map((s) => (
+              <tr key={s.coverage} className={cn("text-ink-700", s.coverage === "total" && "font-semibold text-ink-900")}>
+                <td className="whitespace-nowrap px-4 py-2 text-ink-900 sm:px-5">{label(s.coverage)}</td>
+                <td className="px-2 py-2 text-right">{n(s.sampled)}</td>
+                <td className="px-2 py-2 text-right">
+                  {n(s.passed)}
+                  <span className="text-ink-500"> ({n(s.rooftop)} ROOFTOP)</span>
+                </td>
+                <td className="px-2 py-2 text-right">{meters(s.medianM)}</td>
+                <td className="px-2 py-2 text-right">{pct(s.within300Pct)}</td>
+                <td className="px-2 py-2 text-right">{pct(s.beyond1kmPct)}</td>
+                <td className="px-2 py-2 text-right">{pct(s.rooftopWithin300Pct)}</td>
+                <td className="px-4 py-2 text-right sm:px-5">{verdict(s)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {reasons.length ? (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[520px] text-[13px] tabular-nums">
+            <thead>
+              <tr className="text-left text-xs text-ink-500">
+                <th className="px-4 py-2 font-medium sm:px-5">Por qué no pasaron</th>
+                {rows.map((s) => (
+                  <th key={s.coverage} className="px-2 py-2 text-right font-medium last:pr-4 sm:last:pr-5">
+                    {label(s.coverage)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-line">
+              {reasons.map((r) => (
+                <tr key={r} className="text-ink-700">
+                  <td className="px-4 py-2 text-ink-900 sm:px-5">{GEOCODE_REASON_LABEL[r]}</td>
+                  {rows.map((s) => (
+                    <td key={s.coverage} className="px-2 py-2 text-right last:pr-4 sm:last:pr-5">
+                      {n(s.rejections[r] ?? 0)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+      <div className={cn(ROW, "space-y-1.5 text-[13px] leading-5 text-ink-700")}>
+        <p className="tabular-nums">
+          {n(report.apiCalls)} {report.apiCalls === 1 ? "consulta" : "consultas"} a Google ·{" "}
+          {(report.elapsedMs / 1000).toLocaleString("es-PE", { maximumFractionDigits: 0 })} s · pedidos de los últimos{" "}
+          {report.days} días, hasta {n(report.cap)}.
+        </p>
+        {report.truncated ? (
+          <p className="text-warn-fg">
+            Se acabó el tiempo antes de consultar toda la muestra: lo que quedó está en «No se llegó a consultar».
+          </p>
+        ) : null}
+        {report.quotaHit ? (
+          <p className="text-warn-fg">
+            Google contestó que se acabó el cupo del día (OVER_QUERY_LIMIT): lo que quedó está en «No se consultó (cupo
+            diario de Google)». Vuelve a medir mañana.
+          </p>
+        ) : null}
+        {rows.some((s) => s.passed > 0 && s.smallSample) ? (
+          <p className="text-ink-500">
+            Con menos de {GEOCODE_SMALL_SAMPLE} puntos que pasan, el porcentaje de una cobertura todavía no dice mucho.
+          </p>
+        ) : null}
+      </div>
+    </>
+  );
+}
+
 function AliclikSection({
   siteUrl,
   storeId,
