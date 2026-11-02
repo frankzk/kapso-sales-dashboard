@@ -991,6 +991,11 @@ ubicación** (la coordenada que pide Aliclik), y se guarda en el pedido.
   Aliclik no podrá crear la guía.», con «Agregar ubicación», que abre el mismo
   formulario con la fecha que ya tiene.
 - Lima, Agencia y lo que ya tiene coordenada no cambian.
+- **Y si ya la tiene, se dice (02-11-2026).** Bajo «Sale el» al confirmar y en
+  «Programar envío», un Provincia COD con coordenada muestra «Ubicación: ya
+  tiene coordenada · Ver en el mapa». Sin esa línea, que no se pidiera parecía
+  un fallo (#KP201412: la coordenada se había guardado dos minutos antes en
+  «Corregir ubicación»).
 
 Implementación: `dispatchCoordinateMissing`, `dispatchCoordinateInput` y
 `DISPATCH_NEEDS_COORDINATE_ERROR` en `lib/dispatch-date.ts`;

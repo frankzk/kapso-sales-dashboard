@@ -121,7 +121,7 @@ import { OrderInvoicePanel } from "@/components/order-invoice-panel";
 import { BrowserCallButton } from "@/components/browser-call";
 import { UrpiAttemptsSection } from "@/components/urpi-attempts-section";
 import { limaTodayKey } from "@/lib/shipments";
-import { DispatchDatePanel } from "@/components/dispatch-date-panel";
+import { CoordinateOkLine, DispatchDatePanel } from "@/components/dispatch-date-panel";
 import { AUTO_GUIDE_HINT } from "@/lib/aliclik-scheduled";
 import {
   DISPATCH_DATE_SET,
@@ -132,6 +132,14 @@ import {
   dispatchCoordinateMissing,
   dispatchLocationMissing,
 } from "@/lib/dispatch-date";
+
+/** La coordenada guardada del pedido, o null (MOM §6.2: la que usa Aliclik). */
+function savedCoordinate(row: { latitude?: number | string | null; longitude?: number | string | null }): { latitude: number; longitude: number } | null {
+  const latitude = Number(row.latitude);
+  const longitude = Number(row.longitude);
+  if (row.latitude == null || row.longitude == null || !Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  return { latitude, longitude };
+}
 
 const DISPATCH_BADGE_TONE: Record<"info" | "warn" | "danger", BadgeTone> = { info: "info", warn: "warn", danger: "crit" };
 import { downloadPdf } from "@/lib/download-pdf";
@@ -1591,6 +1599,7 @@ export function OrderDrawer({
                           autoAliclik={classifyOperation(detail.row) === "provincia_cod"}
                           locationMissing={dispatchLocationMissing(detail.row)}
                           coordinateMissing={dispatchCoordinateMissing(detail.row, classifyOperation(detail.row))}
+                          coordinate={savedCoordinate(detail.row)}
                           onFixLocation={() => jumpTo("ubicacion")}
                           onSaved={() => {
                             void reload();
@@ -3477,6 +3486,9 @@ function ConfirmationDesk({
                 Solo si acordaron otro día para el envío. Vacío: sale apenas se genere la guía.
                 {classifyOperation(row) === "provincia_cod" && ` ${AUTO_GUIDE_HINT}`}
               </p>
+            )}
+            {selected?.confirms && !locationMissing && !coordinateMissing && classifyOperation(row) === "provincia_cod" && savedCoordinate(row) && (
+              <CoordinateOkLine latitude={savedCoordinate(row)!.latitude} longitude={savedCoordinate(row)!.longitude} className="pt-1" />
             )}
             {schedules && coordinateMissing && (
               <label className={cn(LABEL, "pt-2")}>

@@ -16,6 +16,32 @@ import {
   dispatchDateBadge,
 } from "@/lib/dispatch-date";
 import { AUTO_GUIDE_HINT } from "@/lib/aliclik-scheduled";
+import { IconCheck } from "@/components/icons";
+
+/**
+ * Provincia COD que ya tiene coordenada (MOM §6.2, 02-11-2026): programar no la
+ * pide, y se dice para que no parezca que se saltó. Con el punto en el mapa
+ * para revisarlo antes de que la guía Aliclik salga sola ese día.
+ */
+export function CoordinateOkLine({ latitude, longitude, className }: { latitude: number; longitude: number; className?: string }) {
+  return (
+    <p className={cn("flex flex-wrap items-center gap-x-1.5 text-[13px] leading-5 text-ink-600", className)}>
+      <IconCheck aria-hidden className="size-4 text-ok-fg" />
+      <span>
+        Ubicación: <span className="font-medium text-ok-fg">ya tiene coordenada</span>
+      </span>
+      <span aria-hidden>·</span>
+      <a
+        href={`https://www.google.com/maps?q=${latitude},${longitude}`}
+        target="_blank"
+        rel="noreferrer"
+        className="rounded-sm font-medium text-brand-700 underline decoration-brand-500/40 underline-offset-4 hover:decoration-brand-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
+      >
+        Ver en el mapa
+      </a>
+    </p>
+  );
+}
 
 const TONE: Record<"info" | "warn" | "danger", BadgeTone> = { info: "info", warn: "warn", danger: "crit" };
 
@@ -34,6 +60,7 @@ export function DispatchDatePanel({
   autoAliclik = false,
   locationMissing = false,
   coordinateMissing = false,
+  coordinate: savedCoordinate = null,
   onFixLocation,
   onSaved,
 }: {
@@ -56,6 +83,8 @@ export function DispatchDatePanel({
    * se guarda en el pedido. Sin ella, ese día Aliclik no crea la guía.
    */
   coordinateMissing?: boolean;
+  /** La coordenada guardada, para decir que ya la tiene (solo Provincia COD). */
+  coordinate?: { latitude: number; longitude: number } | null;
   /** Lleva a Información → Ubicación. */
   onFixLocation?: () => void;
   onSaved: () => void;
@@ -145,6 +174,9 @@ export function DispatchDatePanel({
             run(() => scheduleOrderDispatch(orderId, { date, note: text, coordinate: coordinateMissing ? coordinate : null }));
           }}
         >
+          {!coordinateMissing && autoAliclik && savedCoordinate && (
+            <CoordinateOkLine latitude={savedCoordinate.latitude} longitude={savedCoordinate.longitude} className="w-full" />
+          )}
           {coordinateMissing && (
             <label className="grid w-full gap-1 text-[13px] font-medium text-ink-700">
               Ubicación (obligatoria en Provincia COD)
