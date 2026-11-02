@@ -599,4 +599,6 @@
 \ir migrations/0297_chatby_autoconfirm.sql
 \echo 'Applying 0298_invoices_claim_agency_one_payment.sql'
 \ir migrations/0298_invoices_claim_agency_one_payment.sql
+\echo 'Applying 0299_lead_routing_admin_advisors.sql'
+\ir migrations/0299_lead_routing_admin_advisors.sql
 \echo 'Done.'

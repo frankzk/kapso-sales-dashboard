@@ -314,4 +314,7 @@ $PSQL -f "$ROOT/scripts/sql/gf_notebook_missing_reports_smoke.sql"
 
 echo "▶ Bloques de Leads por asesora (0295): cobertura, permisos, reservas, citas y respaldo"
 $PSQL -f "$ROOT/scripts/sql/team_lead_blocks_smoke.sql"
+
+echo "▶ Bloques para asesoras administradoras (0299): cola restringida, supervisión, reservas y permisos intactos"
+$PSQL -f "$ROOT/scripts/sql/lead_routing_admin_smoke.sql"
 echo "✅ DB verification passed."

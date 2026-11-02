@@ -1,5 +1,20 @@
 # Deployment runbook
 
+### 01-11-2026 · Bloques para asesoras administradoras (0299)
+
+Aplicar `db/migrations/0299_lead_routing_admin_advisors.sql` antes de publicar.
+Reemplaza únicamente el alcance de Leads: una persona con rol base Admin y
+función Asesora respeta sus bloques. No modifica roles, permisos, asignaciones,
+reservas ni citas. Dueño, Supervisión/Administración funcional y administradores
+sin función Asesora conservan la vista completa.
+
+El owner autorizó activar el reparto con los bloques ya guardados. Hacerlo
+tras verificar la migración y los controles, mediante `save_lead_routing` con
+la revisión actual y las mismas asignaciones: conservar la cobertura, las 24
+horas y el historial de activación. Comprobar el alcance de Albornoz y Reyna,
+los contadores y el rechazo de un frío antiguo sin reserva ni cita propia;
+un frío nuevo sigue en Principal durante su oportunidad inicial.
+
 ### 01-11-2026 · Confirmó por Chatby: confirmación y guía Aliclik automáticas con tope (0297, MOM §6.1)
 
 Decisión del owner (01-11-2026). Cada 10 minutos (`/api/cron/chatby-autoconfirm`,

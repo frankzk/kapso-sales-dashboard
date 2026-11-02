@@ -4664,6 +4664,16 @@ checks; el respaldo se concede aparte. Propuesta acordada: Medaly
 Recuperación. La instalación no activa ni asigna: guardar una configuración
 completa y activarla es un acto humano posterior.
 
+**Asesoras con rol Administrador (01-11-2026, decisión del owner; 0299).**
+El rol base Administrador no exime del reparto a quien también tiene la
+función Asesora: Albornoz y las demás asesoras administradoras atienden sus
+bloques, conservando sus permisos administrativos en el resto del sistema.
+Sin bloques asignados no reciben la cola general. Dueño, los roles funcionales
+Supervisión/Administración y los administradores sin función Asesora mantienen
+la vista completa. Se conservan las reservas y citas propias según las reglas
+siguientes. Activar usa la configuración guardada, con cobertura completa e
+historial; la migración no activa ni reasigna por sí misma.
+
 - Clasificación exhaustiva y excluyente: carrito reciente, interés reciente
   (producto/distrito o atención de pago), nuevo sin intención definida,
   pendiente/reintento con interés, recuperación de baja intención. El último
