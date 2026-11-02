@@ -1,10 +1,11 @@
 import { CONFIRMATION_SIGNAL_KINDS } from "@/lib/order-confirmation";
 import { ADELANTO_MINIMO } from "@/lib/adelanto-minimo";
 import { deliveryCourier } from "@/lib/delivery-courier";
+import { monthLabel, parseMonthParam, shiftMonth } from "@/lib/productivity-month";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export type MomOwnerPeriodKey = "today" | "yesterday" | "last7" | "month" | "previous_month";
+export type MomOwnerPeriodKey = "today" | "yesterday" | "last7" | "month" | "previous_month" | "chosen_month";
 export type MomOwnerKpiKey =
   | "province_confirmation"
   | "agency_advance"
@@ -142,6 +143,11 @@ export interface BuildMomOwnerSummaryInput {
   payments: MomOwnerPaymentFact[];
   events: MomOwnerEventFact[];
   manifests: MomOwnerManifestFact[];
+  /**
+   * Un mes cerrado elegido en «Otro mes…» (`YYYY-MM`), además de las cinco
+   * ventanas fijas. Lo que ya es «Este mes» o «Mes anterior» no se repite.
+   */
+  month?: string | null;
 }
 
 function dayMs(day: string): number {
@@ -208,6 +214,37 @@ export function momOwnerPeriods(today: string): MomOwnerPeriod[] {
       endIso: limaStartIso(currentMonth),
     },
   ];
+}
+
+/** El primer mes que se ofrece en «Otro mes…» del Consolidado. */
+export const MOM_FIRST_MONTH = "2025-01";
+
+/**
+ * El mes elegido en «Otro mes…» (`?mm=2026-08`), solo si es un mes cerrado
+ * ANTERIOR al mes anterior y no antes de `MOM_FIRST_MONTH`: «Este mes» y «Mes
+ * anterior» ya tienen su chip. Cualquier otra cosa, null. Pura.
+ */
+export function momChosenMonth(raw: string | null | undefined, today: string): string | null {
+  const month = parseMonthParam(raw);
+  if (!month) return null;
+  const previous = shiftMonth(today.slice(0, 7), -1);
+  return month < previous && month >= MOM_FIRST_MONTH ? month : null;
+}
+
+/** La ventana de un mes entero, en días de Lima. Pura. */
+export function momMonthPeriod(month: string): MomOwnerPeriod {
+  return {
+    key: "chosen_month",
+    label: monthLabel(month),
+    startIso: limaStartIso(`${month}-01`),
+    endIso: limaStartIso(`${shiftMonth(month, 1)}-01`),
+  };
+}
+
+/** Las ventanas fijas y, si se eligió, el mes de «Otro mes…». Pura. */
+export function momOwnerPeriodsWith(today: string, month?: string | null): MomOwnerPeriod[] {
+  const chosen = momChosenMonth(month, today);
+  return chosen ? [...momOwnerPeriods(today), momMonthPeriod(chosen)] : momOwnerPeriods(today);
 }
 
 function inPeriod(value: string | null, period: MomOwnerPeriod): boolean {
@@ -356,7 +393,7 @@ const EXPLICIT_REPROGRAM_SUBSTAGES = new Set([
 const CONFIRMATION_EVENTS = new Set<string>(CONFIRMATION_SIGNAL_KINDS);
 
 export function buildMomOwnerSummary(input: BuildMomOwnerSummaryInput): MomOwnerSummary {
-  const periods = momOwnerPeriods(input.today);
+  const periods = momOwnerPeriodsWith(input.today, input.month);
   const orderById = new Map(input.orders.map((order) => [order.orderId, order]));
   const shipmentsByOrder = new Map<string, MomOwnerShipmentFact[]>();
   for (const shipment of input.shipments) {
