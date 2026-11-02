@@ -257,4 +257,8 @@ describe("§30.11 entregados de Urpi de antes de la ventana", () => {
     expect(mom).toContain(`intentos de los últimos ${URPI_RESULTS_DAYS} días, y el botón «Pasar a salida de Urpi entregada»`);
     expect(mom).toContain("(`lib/urpi-results-window.ts`, con la misma regla del botón)");
   });
+  it("y los entregados de antes que Kapta tiene abiertos van a «Entregados por marcar»", () => {
+    expect(mom).toContain("**Entregados de antes de la ventana que Kapta tiene abiertos (02-11-2026,");
+    expect(mom).toContain("(`olderUrpiFollowUp`)");
+  });
 });
