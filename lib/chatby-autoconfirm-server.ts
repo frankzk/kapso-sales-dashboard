@@ -33,7 +33,7 @@ import {
   previewAliclikGuideFor,
   type AliclikReadScope,
 } from "@/lib/aliclik-guide";
-import { ALICLIK_AUTO_FAILED, autoTransport, waitForAliclik } from "@/lib/aliclik-scheduled";
+import { autoTransport, waitForAliclik } from "@/lib/aliclik-scheduled";
 import {
   CHATBY_AUTO_POLICY,
   CHATBY_CONFIRMATION_HELD,
@@ -43,10 +43,10 @@ import {
   chatbyAutoSettingsFrom,
   chatbyCheckDue,
   chatbyConfirmationNote,
+  chatbyGuideBlock,
   chatbyGuideHold,
   chatbyGuidePin,
   chatbyGuideReason,
-  chatbyGuideSkip,
   chatbyHoldNote,
   chatbyOperationId,
   chatbyOrderSkip,
@@ -58,7 +58,9 @@ import {
   type ChatbyCandidate,
   type ChatbyCheckOutcome,
   type ChatbyCheckState,
+  type ChatbyHoldReason,
 } from "@/lib/chatby-autoconfirm";
+import type { ChatbyMessage } from "@/lib/chatby-conversation";
 import type { OrderMasterRow } from "@/lib/types";
 
 /** El tiempo de una pasada (maxDuration 300 s). Lo que no entra va en la siguiente. */
@@ -131,6 +133,7 @@ async function upsertCheck(
     evidence?: Record<string, unknown>;
     reads: number;
     confirmed_at?: string | null;
+    guide?: { state: GuideState; detail: string | null; code: string | null } | null;
   },
 ): Promise<string | null> {
   const { error } = await admin.from("chatby_auto_checks").upsert({
@@ -142,6 +145,14 @@ async function upsertCheck(
     reads: patch.reads,
     checked_at: new Date().toISOString(),
     ...(patch.confirmed_at ? { confirmed_at: patch.confirmed_at } : {}),
+    ...(patch.guide
+      ? {
+          guide_state: patch.guide.state,
+          guide_detail: patch.guide.detail?.slice(0, 1000) ?? null,
+          guide_code: patch.guide.code,
+          guide_at: new Date().toISOString(),
+        }
+      : {}),
   });
   return error ? error.message : null;
 }
@@ -183,16 +194,21 @@ export async function runChatbyAutoconfirm(
     const storeIds = ((stores ?? []) as { id: string }[]).map((s) => s.id);
     if (!storeIds.length) return report;
 
-    // ── 1. Confirmar ────────────────────────────────────────────────────────
-    if (apiKey) {
-      await confirmPass(admin, settings, storeIds, { dry, now, started, apiKey }, report);
-    } else {
+    // Confirmar y crear la guía son UN paso: el pedido solo sale de Por
+    // confirmar con la guía creada (owner, 02-11-2026). Sin guía automática
+    // posible, no se confirma nada.
+    if (!apiKey) {
       report.items.push({ orderId: "", orderName: null, step: "confirmar", outcome: "sin_clave", detail: "Falta CHATBY_API_KEY." });
-    }
-
-    // ── 2. La guía de lo confirmado por Chatby ──────────────────────────────
-    if (settings.guide_enabled && report.stopped !== "tiempo") {
-      await guidePass(admin, settings, { dry, now, started, apiKey }, report);
+    } else if (!settings.guide_enabled || (!dry && !env.aliclikWriteEnabled())) {
+      report.items.push({
+        orderId: "",
+        orderName: null,
+        step: "confirmar",
+        outcome: "apagado",
+        detail: "La guía automática está apagada: sin guía no se confirma nada.",
+      });
+    } else {
+      await confirmPass(admin, settings, storeIds, { dry, now, started, apiKey }, report);
     }
   } catch (err) {
     report.error = err instanceof Error ? err.message : "Error de la confirmación por Chatby";
@@ -273,6 +289,35 @@ async function confirmPass(
     .sort(chatbyReadOrder)
     .slice(0, settings.max_orders_per_run);
 
+  if (!due.length) return;
+
+  // EL TOPE: las guías automáticas de hoy (día de Lima), de toda la organización.
+  const { count, error: cErr } = await admin
+    .from("chatby_auto_checks")
+    .select("order_id", { count: "exact", head: true })
+    .eq("org_id", settings.org_id)
+    .eq("guide_state", "creada")
+    .gte("guide_at", limaDayStartIso(now));
+  if (cErr) throw new Error(`leer el tope de guías de hoy: ${cErr.message}`);
+  // Sin saber si va por Shalom no se crea nada: es la diferencia entre esperar
+  // diez minutos y mandar un paquete por el courier equivocado (§6.2).
+  const { data: drafts, error: dErr } = await admin
+    .from("shalom_order_drafts")
+    .select("order_id")
+    .in("order_id", due.map((d) => d.master.order_id));
+  if (dErr) throw new Error(`leer los borradores de Shalom: ${dErr.message}`);
+  const guide: GuideCtx = {
+    admin,
+    dry: ctx.dry,
+    today: limaTodayKey(now),
+    left: guideCapLeft(count ?? 0, settings.daily_cap),
+    withShalom: new Set(((drafts ?? []) as { order_id: string }[]).map((d) => d.order_id)),
+    scopes: new Map(),
+    waiting: new Map(),
+    report,
+  };
+  report.guideCapLeft = guide.left;
+
   let errorsInARow = 0;
   for (const { master, order, check } of due) {
     if (Date.now() - ctx.started > TIME_BUDGET_MS) {
@@ -332,50 +377,57 @@ async function confirmPass(
       if (ctx.dry) continue;
       const evidence: Record<string, unknown> = { total_cents: Math.round(Number(order.total_amount) * 100) };
       if (verdict.amountCents != null) evidence.amount_cents = verdict.amountCents;
-      const { error: eErr } = await admin.from("order_events").insert({
-        store_id: master.store_id,
-        order_id: order.id,
-        kind: CHATBY_CONFIRMATION_HELD,
-        occurred_at: new Date().toISOString(),
-        actor: null,
-        source: CHATBY_SOURCE,
-        reason: CHATBY_HOLD_REASONS[verdict.reason],
-        note: chatbyHoldNote(verdict.reason),
-        payload: { policy: CHATBY_AUTO_POLICY, reason: verdict.reason, message_id: verdict.messageId, ...evidence },
-      });
-      // Sin el hecho, la asesora no sabría por qué: se reintenta en la próxima pasada.
-      if (eErr) {
-        item.outcome = "error";
-        item.detail = eErr.message;
-        await upsertCheck(admin, key, { outcome: "error", reason: "hecho", reads });
-        continue;
-      }
-      await upsertCheck(admin, key, {
-        outcome: "para_asesora",
-        reason: verdict.reason,
-        message_id: verdict.messageId,
-        evidence,
-        reads,
-      });
+      await holdForAdvisor(admin, key, item, { reason: verdict.reason, messageId: verdict.messageId, evidence, reads });
       continue;
     }
 
-    item.outcome = ctx.dry ? "confirmaria" : "confirmado";
-    if (ctx.dry) continue;
-
     // Justo antes de escribir: ¿sigue en Por confirmar? Una asesora pudo
     // confirmarlo (o anularlo) mientras se leía Chatby.
-    const { data: fresh, error: fErr } = await admin
-      .from("order_master")
-      .select("macro_stage,macro_substage")
-      .eq("order_id", order.id)
-      .maybeSingle();
-    const stillOpen =
-      !fErr &&
-      (fresh as { macro_stage?: string } | null)?.macro_stage === "por_confirmar" &&
-      ["sin_llamar", "por_confirmar"].includes((fresh as { macro_substage?: string } | null)?.macro_substage ?? "");
-    if (!stillOpen) {
-      item.outcome = "fuera";
+    if (!ctx.dry) {
+      const { data: fresh, error: fErr } = await admin
+        .from("order_master")
+        .select("macro_stage,macro_substage")
+        .eq("order_id", order.id)
+        .maybeSingle();
+      const stillOpen =
+        !fErr &&
+        (fresh as { macro_stage?: string } | null)?.macro_stage === "por_confirmar" &&
+        ["sin_llamar", "por_confirmar"].includes((fresh as { macro_substage?: string } | null)?.macro_substage ?? "");
+      if (!stillOpen) {
+        item.outcome = "fuera";
+        continue;
+      }
+    }
+
+    // LA GUÍA PRIMERO. Solo sale de Por confirmar con la guía creada.
+    const evidence = { amount_cents: verdict.amountCents };
+    const g = await tryChatbyGuide(guide, master, conversation.messages);
+    if (g.kind === "wait") {
+      // Aliclik en rojo, el tope del día o una creación en curso: sigue en Por
+      // confirmar sin escribir nada visible y se vuelve a leer más tarde.
+      item.outcome = g.outcome;
+      item.detail = g.detail ?? undefined;
+      if (!ctx.dry) await upsertCheck(admin, key, { outcome: "sin_confirmacion", reason: g.outcome, message_id: verdict.messageId, reads });
+      continue;
+    }
+    if (g.kind === "hold") {
+      item.outcome = "para_asesora";
+      item.detail = g.detail ? `${g.reason}: ${g.detail}` : g.reason;
+      report.held++;
+      if (ctx.dry) continue;
+      await holdForAdvisor(admin, key, item, {
+        reason: g.reason,
+        detail: g.detail,
+        messageId: verdict.messageId,
+        evidence,
+        reads,
+        guide: { state: g.state, detail: g.detail ? `${g.reason}: ${g.detail}` : g.reason, code: g.code ?? null },
+      });
+      continue;
+    }
+    if (ctx.dry) {
+      item.outcome = "confirmaria";
+      item.detail = g.detail ?? undefined;
       continue;
     }
 
@@ -396,272 +448,211 @@ async function confirmPass(
         chatby: { policy: CHATBY_AUTO_POLICY, message_id: verdict.messageId, message_at: verdict.at, amount_cents: verdict.amountCents },
       },
     });
+    const guideMark = { state: g.state, detail: null, code: g.code };
     if (rpcErr) {
+      // La guía ya existe: la pasada siguiente la encuentra («ya tenía») y
+      // vuelve a intentar solo la confirmación.
       item.outcome = "error";
       item.detail = rpcErr.message;
-      await upsertCheck(admin, key, { outcome: "error", reason: "confirmar", message_id: verdict.messageId, reads });
+      await upsertCheck(admin, key, { outcome: "error", reason: "confirmar", message_id: verdict.messageId, reads, guide: guideMark });
       continue;
     }
     await recomputeOrderMasterSafe(admin, [order.id]);
+    item.outcome = "confirmado";
+    item.detail = g.code ?? undefined;
     report.confirmed++;
     await upsertCheck(admin, key, {
       outcome: "confirmado",
       message_id: verdict.messageId,
-      evidence: { amount_cents: verdict.amountCents },
+      evidence,
       reads,
       confirmed_at: occurredAt,
+      guide: guideMark,
     });
   }
 }
 
-type GuideState = "creada" | "fallo" | "para_persona" | "ya_tenia" | "fuera";
-
-async function guidePass(
+/**
+ * Deja el pedido para la asesora: el hecho en la línea de tiempo con el motivo
+ * y la marca final (no se vuelve a leer). Sin el hecho, la asesora no sabría
+ * por qué: entonces se reintenta en la próxima pasada.
+ */
+async function holdForAdvisor(
   admin: SupabaseClient,
-  settings: ChatbyAutoSettings,
-  ctx: { dry: boolean; now: Date; started: number; apiKey: string },
-  report: ChatbyAutoReport,
+  key: { order_id: string; store_id: string; org_id: string },
+  item: ChatbyAutoItem,
+  h: {
+    reason: ChatbyHoldReason;
+    detail?: string | null;
+    messageId: string | null;
+    evidence: Record<string, unknown>;
+    reads: number;
+    guide?: { state: GuideState; detail: string | null; code: string | null };
+  },
 ): Promise<void> {
-  const { now } = ctx;
-  if (!ctx.dry && !env.aliclikWriteEnabled()) {
-    report.items.push({ orderId: "", orderName: null, step: "guia", outcome: "apagado", detail: "ALICLIK_WRITE_ENABLED está apagado." });
+  const { error: eErr } = await admin.from("order_events").insert({
+    store_id: key.store_id,
+    order_id: key.order_id,
+    kind: CHATBY_CONFIRMATION_HELD,
+    occurred_at: new Date().toISOString(),
+    actor: null,
+    source: CHATBY_SOURCE,
+    reason: CHATBY_HOLD_REASONS[h.reason],
+    note: chatbyHoldNote(h.reason, h.detail),
+    payload: {
+      policy: CHATBY_AUTO_POLICY,
+      reason: h.reason,
+      message_id: h.messageId,
+      ...h.evidence,
+      ...(h.guide ? { guide: { state: h.guide.state, code: h.guide.code, origin: CHATBY_GUIDE_ORIGIN } } : {}),
+    },
+  });
+  if (eErr) {
+    item.outcome = "error";
+    item.detail = eErr.message;
+    await upsertCheck(admin, key, { outcome: "error", reason: "hecho", reads: h.reads, guide: h.guide ?? null });
     return;
   }
+  await upsertCheck(admin, key, {
+    outcome: "para_asesora",
+    reason: h.reason,
+    message_id: h.messageId,
+    evidence: h.evidence,
+    reads: h.reads,
+    guide: h.guide ?? null,
+  });
+}
 
-  // EL TOPE: las guías automáticas de hoy (día de Lima), de toda la organización.
-  const { count, error: cErr } = await admin
-    .from("chatby_auto_checks")
-    .select("order_id", { count: "exact", head: true })
-    .eq("org_id", settings.org_id)
-    .eq("guide_state", "creada")
-    .gte("guide_at", limaDayStartIso(now));
-  if (cErr) throw new Error(`leer el tope de guías de hoy: ${cErr.message}`);
-  let left = guideCapLeft(count ?? 0, settings.daily_cap);
-  report.guideCapLeft = left;
-  if (left <= 0) return;
+type GuideState = "creada" | "fallo" | "para_persona" | "ya_tenia" | "fuera";
 
-  const since = new Date(now.getTime() - settings.window_hours * 3_600_000).toISOString();
-  const { data: pending, error: pErr } = await admin
-    .from("chatby_auto_checks")
-    .select("order_id,store_id,confirmed_at")
-    .eq("org_id", settings.org_id)
-    .eq("outcome", "confirmado")
-    .is("guide_state", null)
-    .gte("confirmed_at", since)
-    .order("confirmed_at", { ascending: true })
-    .limit(100);
-  if (pErr) throw new Error(`leer los confirmados por Chatby: ${pErr.message}`);
-  const pendingRows = (pending ?? []) as { order_id: string; store_id: string }[];
-  if (!pendingRows.length) return;
-  const ids = pendingRows.map((p) => p.order_id);
+interface GuideCtx {
+  admin: SupabaseClient;
+  dry: boolean;
+  today: string;
+  /** Guías automáticas que quedan hoy (tope de la organización). */
+  left: number;
+  withShalom: Set<string>;
+  scopes: Map<string, AliclikReadScope | string>;
+  waiting: Map<string, boolean>;
+  report: ChatbyAutoReport;
+}
 
-  const [mastersRes, draftsRes] = await Promise.all([
-    admin.from("order_master").select("*").in("order_id", ids),
-    admin.from("shalom_order_drafts").select("order_id").in("order_id", ids),
-  ]);
-  if (mastersRes.error) throw new Error(`leer el Master: ${mastersRes.error.message}`);
-  // Sin saber si va por Shalom no se crea nada: es la diferencia entre esperar
-  // diez minutos y mandar un paquete por el courier equivocado (§6.2).
-  if (draftsRes.error) throw new Error(`leer los borradores de Shalom: ${draftsRes.error.message}`);
-  const masterBy = new Map(((mastersRes.data ?? []) as unknown as MasterRow[]).map((m) => [m.order_id, m]));
-  const withShalom = new Set(((draftsRes.data ?? []) as { order_id: string }[]).map((d) => d.order_id));
+type GuideTry =
+  /** La guía existe (creada ahora o ya la tenía): se puede confirmar. */
+  | { kind: "ok"; state: "creada" | "ya_tenia"; code: string | null; detail?: string | null }
+  /** Todavía no: se vuelve a leer más tarde, sin escribir nada visible. */
+  | { kind: "wait"; outcome: string; detail?: string | null }
+  /** No se puede crear sola: para la asesora, en Por confirmar. */
+  | { kind: "hold"; reason: ChatbyHoldReason; detail: string | null; state: GuideState; code?: string | null };
 
-  const today = limaTodayKey(now);
-  const scopes = new Map<string, AliclikReadScope | string>();
-  const waiting = new Map<string, boolean>();
+/**
+ * La guía Aliclik del pedido que confirmó por Chatby, ANTES de confirmarlo.
+ * Por el mismo camino que el botón y que la guía del día programado (§6.2,
+ * §10.2): `createAliclikGuideFor` con todas sus rejas. La coordenada es la del
+ * pedido o, si no trae (WooCommerce), la ubicación que mandó la clienta por
+ * WhatsApp en esta compra (`chatbyGuidePin`). En `dry` solo cotiza.
+ */
+async function tryChatbyGuide(g: GuideCtx, row: MasterRow, messages: readonly ChatbyMessage[]): Promise<GuideTry> {
+  const { admin } = g;
+  if (chatbyGuideBlock(row)) return { kind: "hold", reason: "programado", detail: null, state: "para_persona" };
+  const hold = chatbyGuideHold({ hasShalomDraft: g.withShalom.has(row.order_id), paymentState: row.payment_state });
+  if (hold === "shalom") return { kind: "hold", reason: "shalom", detail: null, state: "para_persona" };
+  if (hold) return { kind: "hold", reason: "guia_no_creada", detail: "Tiene un pago registrado.", state: "para_persona" };
 
-  const mark = async (orderId: string, state: GuideState, detail: string | null, code: string | null = null) => {
-    if (ctx.dry) return;
-    await admin
-      .from("chatby_auto_checks")
-      .update({ guide_state: state, guide_detail: detail?.slice(0, 1000) ?? null, guide_code: code, guide_at: new Date().toISOString() })
-      .eq("order_id", orderId);
-  };
+  const live = await activeAliclikBlocker(admin, row.order_id);
+  if (live.guide) return { kind: "ok", state: "ya_tenia", code: live.guide.guide_code ?? null, detail: live.guide.courier ?? null };
+  if (live.error) return failed(g, live.error);
 
-  for (const p of pendingRows) {
-    if (left <= 0) return;
-    if (Date.now() - ctx.started > TIME_BUDGET_MS) {
-      report.stopped = "tiempo";
-      return;
-    }
-    const row = masterBy.get(p.order_id);
-    if (!row) continue;
-    const item: ChatbyAutoItem = { orderId: row.order_id, orderName: row.order_name, step: "guia", outcome: "fuera" };
-    report.items.push(item);
+  if (g.left <= 0) return { kind: "wait", outcome: "tope", detail: "Ya se crearon las guías automáticas de hoy." };
 
-    const skip = chatbyGuideSkip(row);
-    if (skip === "sin_recalcular") {
-      // El Master todavía no lo pasó a Preparación: la próxima pasada.
-      item.outcome = "esperando_master";
-      if (!ctx.dry) await recomputeOrderMasterSafe(admin, [row.order_id]);
-      continue;
-    }
-    if (skip) {
-      item.outcome = skip === "programado" ? "programado" : "fuera";
-      item.detail = skip;
-      await mark(row.order_id, "fuera", skip);
-      continue;
-    }
-    const hold = chatbyGuideHold({ hasShalomDraft: withShalom.has(row.order_id), paymentState: row.payment_state });
-    if (hold) {
-      item.outcome = "para_persona";
-      item.detail = hold;
-      await mark(row.order_id, "para_persona", hold);
-      continue;
-    }
-
-    const live = await activeAliclikBlocker(admin, row.order_id);
-    if (live.guide) {
-      item.outcome = "ya_tenia";
-      item.detail = live.guide.guide_code;
-      await mark(row.order_id, "ya_tenia", live.guide.courier, live.guide.guide_code);
-      continue;
-    }
-
-    const fail = async (error: string) => {
-      item.outcome = "fallo";
-      item.detail = error;
-      if (ctx.dry) return;
-      report.guidesFailed++;
-      // El mismo hecho que la guía del día programado (§6.2): «Guía automática
-      // no creada», con el motivo. Queda en la mesa como hoy; un intento por pedido.
-      await admin.from("order_events").insert({
-        store_id: row.store_id,
-        order_id: row.order_id,
-        kind: ALICLIK_AUTO_FAILED,
-        occurred_at: new Date().toISOString(),
-        actor: null,
-        source: "system",
-        courier: "aliclik",
-        reason: error.slice(0, 2000),
-        note: "No se pudo crear la guía Aliclik automática del pedido que confirmó por Chatby. Hay que crearla a mano.",
-        payload: { date: today, policy: CHATBY_AUTO_POLICY, origin: CHATBY_GUIDE_ORIGIN },
-      });
-      await mark(row.order_id, "fallo", error);
-    };
-
-    if (live.error) {
-      await fail(live.error);
-      continue;
-    }
-
-    // Con Aliclik en rojo se espera a la pasada siguiente, sin avisar (§10.2).
-    if (!waiting.has(row.store_id)) {
-      waiting.set(row.store_id, waitForAliclik(await loadAliclikHealthState(admin, row.store_id), 0));
-    }
-    if (waiting.get(row.store_id)) {
-      item.outcome = "esperando_aliclik";
-      continue;
-    }
-
-    let scope = scopes.get(row.store_id);
-    if (!scope) {
-      const resolved = await aliclikReadScopeFor(admin, row.store_id);
-      scope = resolved.scope ?? resolved.error ?? "No se pudo leer la organización de la tienda.";
-      scopes.set(row.store_id, scope);
-    }
-    if (typeof scope === "string") {
-      await fail(scope);
-      continue;
-    }
-
-    const { ctx: aliclik, error: ctxError } = await aliclikContextFor(row, null, { blockAgencia: true });
-    if (!aliclik) {
-      await fail(ctxError ?? "No se pudo preparar la conexión con Aliclik.");
-      continue;
-    }
-    // La coordenada: la del pedido si la trae; si no (WooCommerce no
-    // geocodifica), la ubicación que mandó la clienta por WhatsApp en esta
-    // compra. Sin ninguna, es de una persona: se la pide a la clienta.
-    let coordinate: string | null = null;
-    if (row.latitude == null || row.longitude == null) {
-      if (!ctx.apiKey) {
-        item.outcome = "sin_clave";
-        item.detail = "Falta CHATBY_API_KEY para leer la ubicación de WhatsApp.";
-        continue;
-      }
-      const conversation = await fetchChatbyConversation({ phone: row.customer_phone, apiKey: ctx.apiKey });
-      if (conversation.status === "error") {
-        // Chatby caído: la próxima pasada, sin marcar ni gastar el intento.
-        item.outcome = "error";
-        item.detail = conversation.message;
-        continue;
-      }
-      const pin = conversation.status === "ok" ? chatbyGuidePin(conversation.messages, row.order_created_at) : null;
-      if (!pin) {
-        item.outcome = "para_persona";
-        item.detail = "sin_ubicacion";
-        await mark(row.order_id, "para_persona", "sin_ubicacion");
-        continue;
-      }
-      coordinate = pin.coordinate;
-    }
-
-    const preview = await previewAliclikGuideFor(aliclik, { modality: "cod", coordinate }, scope);
-    if (!preview.ok && (preview.pinSinCorroborar || preview.needsCoordinate)) {
-      // El pedido contradice el pin (otro departamento y otra ciudad): no es un
-      // fallo de Aliclik, es un destino que tiene que mirar una persona.
-      const why = preview.pinSinCorroborar ? "pin_sin_respaldo" : "sin_ubicacion";
-      item.outcome = "para_persona";
-      item.detail = why;
-      await mark(row.order_id, "para_persona", preview.pinSinCorroborar ? `${why}: ${preview.pinSinCorroborar}` : why);
-      continue;
-    }
-    if (!preview.ok) {
-      await fail(preview.error ?? "No se pudo cotizar el envío.");
-      continue;
-    }
-    const transport = autoTransport(preview.couriers);
-    if (!transport) {
-      await fail("Ninguna transportadora de Aliclik se puede agendar ahora para este destino.");
-      continue;
-    }
-    if (ctx.dry) {
-      item.outcome = "simulada";
-      item.detail = `${transport.transportName ?? "courier"} S/ ${transport.deliveryCost} · cobrar S/ ${(preview.collectTotal ?? 0).toFixed(2)}`;
-      left--;
-      continue;
-    }
-
-    const result = await createAliclikGuideFor(
-      aliclik,
-      { transportId: transport.transportId, expectedCollectTotal: preview.collectTotal ?? null, note: null, coordinate },
-      scope,
-      { kind: CHATBY_GUIDE_ORIGIN, scheduledOn: today, reason: chatbyGuideReason(row.order_name) },
-    );
-    if (result.locked) {
-      // Otra creación tiene el candado (una persona creándola ahora): no es un fallo.
-      item.outcome = "en_curso";
-      item.detail = result.error;
-      continue;
-    }
-    if (result.timedOut) {
-      // Aliclik pudo crearla: el barrido la reencuentra. Cuenta para el tope y
-      // no se reintenta, que es lo que crea duplicados.
-      item.outcome = "fallo";
-      item.detail = result.error;
-      left--;
-      await mark(row.order_id, "creada", result.error ?? "timeout");
-      continue;
-    }
-    if (result.error && result.orderNumber) {
-      // Se creó en Aliclik y no se pudo guardar la fila: existe, cuenta para el
-      // tope, y una persona la vincula con el número que deja el hecho.
-      left--;
-      report.guidesCreated++;
-      await fail(result.error);
-      await mark(row.order_id, "creada", result.error, result.orderNumber);
-      continue;
-    }
-    if (result.error) {
-      await fail(result.error);
-      continue;
-    }
-    item.outcome = "creada";
-    item.detail = result.orderNumber;
-    report.guidesCreated++;
-    left--;
-    await mark(row.order_id, "creada", null, result.orderNumber ?? null);
+  // Con Aliclik en rojo se espera a la pasada siguiente, sin avisar (§10.2).
+  if (!g.waiting.has(row.store_id)) {
+    g.waiting.set(row.store_id, waitForAliclik(await loadAliclikHealthState(admin, row.store_id), 0));
   }
-  report.guideCapLeft = left;
+  if (g.waiting.get(row.store_id)) return { kind: "wait", outcome: "esperando_aliclik" };
+
+  // La coordenada: la del pedido si la trae; si no, la ubicación que mandó la
+  // clienta por WhatsApp en esta compra. Sin ninguna, se la pide una persona.
+  let coordinate: string | null = null;
+  if (row.latitude == null || row.longitude == null) {
+    const pin = chatbyGuidePin(messages, row.order_created_at);
+    if (!pin) return { kind: "hold", reason: "sin_ubicacion", detail: null, state: "para_persona" };
+    coordinate = pin.coordinate;
+  }
+
+  let scope = g.scopes.get(row.store_id);
+  if (!scope) {
+    const resolved = await aliclikReadScopeFor(admin, row.store_id);
+    scope = resolved.scope ?? resolved.error ?? "No se pudo leer la organización de la tienda.";
+    g.scopes.set(row.store_id, scope);
+  }
+  if (typeof scope === "string") return failed(g, scope);
+
+  const { ctx: aliclik, error: ctxError } = await aliclikContextFor(row, null, { blockAgencia: true });
+  if (!aliclik) return failed(g, ctxError ?? "No se pudo preparar la conexión con Aliclik.");
+
+  const preview = await previewAliclikGuideFor(aliclik, { modality: "cod", coordinate }, scope);
+  // El pedido contradice el pin (otro departamento y otra ciudad): no es un
+  // fallo de Aliclik, es un destino que tiene que mirar una persona. La guía
+  // automática nunca escribe la excepción.
+  if (!preview.ok && preview.pinSinCorroborar) {
+    return { kind: "hold", reason: "pin_sin_respaldo", detail: preview.pinSinCorroborar, state: "para_persona" };
+  }
+  if (!preview.ok && preview.needsCoordinate) return { kind: "hold", reason: "sin_ubicacion", detail: null, state: "para_persona" };
+  if (!preview.ok) return failed(g, preview.error ?? "No se pudo cotizar el envío.");
+  const transport = autoTransport(preview.couriers);
+  if (!transport) return failed(g, "Ninguna transportadora de Aliclik se puede agendar ahora para este destino.");
+  if (g.dry) {
+    g.left--;
+    return {
+      kind: "ok",
+      state: "creada",
+      code: null,
+      detail: `guía simulada: ${transport.transportName ?? "courier"} S/ ${transport.deliveryCost} · cobrar S/ ${(preview.collectTotal ?? 0).toFixed(2)}`,
+    };
+  }
+
+  const result = await createAliclikGuideFor(
+    aliclik,
+    { transportId: transport.transportId, expectedCollectTotal: preview.collectTotal ?? null, note: null, coordinate },
+    scope,
+    { kind: CHATBY_GUIDE_ORIGIN, scheduledOn: g.today, reason: chatbyGuideReason(row.order_name) },
+  );
+  if (result.locked) {
+    // Otra creación tiene el candado (una persona creándola ahora): no es un fallo.
+    return { kind: "wait", outcome: "en_curso", detail: result.error ?? null };
+  }
+  if (result.timedOut) {
+    // Aliclik pudo crearla: cuenta para el tope y NO se reintenta, que es lo
+    // que crea duplicados. La asesora mira Aliclik antes de crear otra.
+    g.left--;
+    return {
+      kind: "hold",
+      reason: "guia_no_creada",
+      detail: `Aliclik no respondió a tiempo y pudo haberla creado: revisa Aliclik antes de crear otra. ${result.error ?? ""}`.trim(),
+      state: "creada",
+    };
+  }
+  if (result.error && result.orderNumber) {
+    // Se creó en Aliclik y no se pudo guardar la fila: existe y cuenta para el tope.
+    g.left--;
+    g.report.guidesCreated++;
+    return {
+      kind: "hold",
+      reason: "guia_no_creada",
+      detail: `Se creó en Aliclik (${result.orderNumber}) pero no se guardó en Kapta: vincúlala. ${result.error}`,
+      state: "creada",
+      code: result.orderNumber,
+    };
+  }
+  if (result.error) return failed(g, result.error);
+  g.left--;
+  g.report.guidesCreated++;
+  g.report.guideCapLeft = g.left;
+  return { kind: "ok", state: "creada", code: result.orderNumber ?? null };
+}
+
+function failed(g: GuideCtx, error: string): GuideTry {
+  if (!g.dry) g.report.guidesFailed++;
+  return { kind: "hold", reason: "guia_no_creada", detail: error, state: "fallo" };
 }

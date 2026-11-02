@@ -419,7 +419,14 @@ export type ChatbyHoldReason =
   | "direccion_incompleta"
   | "direccion_distinta"
   | "destino_distinto"
-  | "mensaje_posterior";
+  | "mensaje_posterior"
+  // La confirmación cuadró pero la guía no se pudo crear: sigue en Por
+  // confirmar, porque solo sale de ahí con la guía creada (owner, 02-11-2026).
+  | "sin_ubicacion"
+  | "pin_sin_respaldo"
+  | "shalom"
+  | "programado"
+  | "guia_no_creada";
 
 export const CHATBY_HOLD_REASONS: Record<ChatbyHoldReason, string> = {
   rechazo: "La clienta escribió que no quiere el pedido.",
@@ -432,7 +439,18 @@ export const CHATBY_HOLD_REASONS: Record<ChatbyHoldReason, string> = {
   direccion_distinta: "La dirección del mensaje no es la del pedido.",
   destino_distinto: "El distrito o la provincia del mensaje no son los del pedido.",
   mensaje_posterior: "La clienta escribió algo más después de confirmar.",
+  sin_ubicacion: "La clienta no mandó su ubicación por WhatsApp en esta compra, y Aliclik la exige.",
+  pin_sin_respaldo: "La ubicación que mandó no cae en el departamento ni en la ciudad del pedido.",
+  shalom: "Tiene «DNI y agencia Shalom» guardado: la salida la decide una persona.",
+  programado: "Tiene envío programado: la guía es la del día programado.",
+  guia_no_creada: "Aliclik no dejó crear la guía.",
 };
+
+/** ¿El motivo es de la guía (la confirmación sí cuadró)? */
+export function isGuideHoldReason(reason: ChatbyHoldReason): boolean {
+  return GUIDE_HOLD_REASONS.has(reason);
+}
+const GUIDE_HOLD_REASONS = new Set<ChatbyHoldReason>(["sin_ubicacion", "pin_sin_respaldo", "shalom", "programado", "guia_no_creada"]);
 
 export type ChatbyVerdict =
   | { confirm: true; messageId: string; at: string | null; amountCents: number }
@@ -566,7 +584,14 @@ export function chatbyConfirmationNote(input: { orderName: string; at: string | 
 }
 
 /** La nota del hecho `chatby_confirmation_held`. */
-export function chatbyHoldNote(reason: ChatbyHoldReason): string {
+export function chatbyHoldNote(reason: ChatbyHoldReason, detail?: string | null): string {
+  if (isGuideHoldReason(reason)) {
+    const why = detail?.trim() ? `${CHATBY_HOLD_REASONS[reason]} (${detail.trim().slice(0, 300)})` : CHATBY_HOLD_REASONS[reason];
+    return (
+      `La clienta confirmó por Chatby, pero Kapta no creó la guía de Aliclik: ${why} ` +
+      "Sigue en Por confirmar: crea la guía desde el panel de Aliclik y registra la confirmación en la mesa."
+    );
+  }
   return `La clienta escribió por Chatby para confirmar, pero Kapta no lo confirmó solo: ${CHATBY_HOLD_REASONS[reason]} Revísalo en la pestaña Chatby y regístralo en la mesa de confirmación.`;
 }
 
@@ -574,28 +599,13 @@ export function chatbyHoldNote(reason: ChatbyHoldReason): string {
 // La guía
 // ---------------------------------------------------------------------------
 
-export type ChatbyGuideSkip = "sin_recalcular" | "otra_etapa" | "no_provincia_cod" | "programado";
-
 /**
- * Por qué este pedido confirmado por Chatby no entra a la guía automática, o
- * null. `sin_recalcular` (sigue en Por confirmar) se reintenta; lo demás no.
- * Uno con envío programado es de la guía del día programado (§6.2).
+ * Por qué la guía automática no se intenta para un pedido de Provincia COD en
+ * Por confirmar, o null. Uno con envío programado es de la guía del día
+ * programado (§6.2): la asesora lo confirma cuando toca.
  */
-export function chatbyGuideSkip(row: {
-  macro_stage?: string | null;
-  macro_substage?: string | null;
-  dispatch_scheduled_on?: string | null;
-  shipping_mode?: string | null;
-  coverage?: string | null;
-  region?: string | null;
-  province?: string | null;
-  district?: string | null;
-}): ChatbyGuideSkip | null {
-  if (row.macro_stage === "por_confirmar") return "sin_recalcular";
-  if (row.macro_stage !== "preparacion" || row.macro_substage !== "por_generar_rotulo") return "otra_etapa";
-  if (operationOf(row) !== "provincia_cod") return "no_provincia_cod";
-  if (row.dispatch_scheduled_on) return "programado";
-  return null;
+export function chatbyGuideBlock(row: { dispatch_scheduled_on?: string | null }): "programado" | null {
+  return row.dispatch_scheduled_on ? "programado" : null;
 }
 
 /** Lo que es de una persona, como en la guía del día programado (§6.2): Shalom elegido o un pago. */

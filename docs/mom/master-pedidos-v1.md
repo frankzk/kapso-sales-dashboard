@@ -655,7 +655,8 @@ mensaje dice lo que la asesora valida al teléfono —el pedido, el monto, que p
 al recibir y la dirección—, y el pedido seguía en Por confirmar hasta que alguien
 abría la ficha y leía la pestaña Chatby. Decisión del owner: **ese mensaje
 confirma solo, y el pedido confirmado así sale con su guía Aliclik sola, con un
-tope de 20 guías por día**.
+tope de 20 guías por día**; desde el 02-11-2026, **solo se confirma si la guía
+se creó**.
 
 - **Cuándo.** Cada 10 minutos, todo el día (`/api/cron/chatby-autoconfirm`,
   con `CRON_SECRET` como los demás). `?dry=1` lee y dice qué haría, sin escribir.
@@ -703,53 +704,61 @@ tope de 20 guías por día**.
   escribió algo después…— y sin copiar la dirección. **Una sola vez**: ese pedido
   ya no se vuelve a leer, la asesora lo confirma desde la mesa. Sin un mensaje
   de confirmación (todavía no escribió) no se escribe nada.
-- **Cómo confirma.** Por el mismo registro atómico que la mesa:
-  `register_confirmation_attempt_v2`, la misma función del botón (v1) con
-  `source`, que ya usa el agente de voz. Resultado «Confirmó el pedido», canal
-  «Mensaje escrito», **sin actor** y `source = 'chatby'`; el `operation_id` sale
-  del pedido y del mensaje, así que un reintento devuelve lo escrito y no
-  duplica. Escribe `confirmation_contact` y `confirmed`, gasta el día de gestión
-  como cualquier intento y el pedido pasa a **Preparación · Por generar rótulo**
-  por la cadena normal. La nota dice «Confirmó por Chatby: mensaje de la clienta
-  del 01-11 a las 10:32 con el pedido #AUR900226, S/ 178.00 contra entrega y la
-  dirección del pedido.»; la línea de tiempo lo firma «Chatby». Justo antes de
-  escribir se relee la etapa: si una asesora lo confirmó o lo anularon mientras
-  se leía Chatby, no se toca.
-- **La guía Aliclik, con tope.** A los que confirmó la pasada (y que siguen sin
-  guía, dentro de las 72 h) les crea la guía por el **mismo camino que el
-  botón** y que la guía del día programado (§6.2, §10.2): `createAliclikGuideFor`
-  con todas sus rejas —`ALICLIK_WRITE_ENABLED`, prepago, rechazos en la puerta,
-  posible duplicado (`lib/aliclik-duplicate.ts`), riesgo del historial, salida
-  viva, pin respaldado, stock y cobertura del almacén, cotización del destino,
-  monto recalculado y el candado—, la transportadora más barata de las que se
-  pueden agendar y ninguna excepción escrita por nadie. **Hasta 20 por día de
-  Lima en toda la organización**, contando las ya creadas hoy. No toca: uno con
-  envío programado (es de la guía de ese día, §6.2), uno con «DNI y agencia
-  Shalom» guardado o con un pago registrado (de una persona, como en §6.2), ni
-  uno que ya tiene guía. Con Aliclik en rojo espera a la pasada siguiente sin
-  escribir nada; si otra creación tiene el candado, también. La guía lleva su
-  `guide_registered` sin actor con el motivo «Guía automática: #AUR900226 confirmó
-  por Chatby.» y `payload.auto.kind = confirmado_chatby`; la nota del lead dice
-  «Guía de Aliclik creada automáticamente (confirmó por Chatby) · …».
+- **Solo sale de Por confirmar con la guía creada** (owner, 02-11-2026). Al
+  principio la pasada confirmaba y creaba la guía después; las 14 primeras
+  confirmaciones (01-11) salieron a Preparación y ninguna guía se pudo crear
+  —WooCommerce no trae coordenada—, así que quedaron fuera de Por confirmar sin
+  rótulo. Ahora confirmar y crear la guía son **un solo paso, con la guía
+  primero**: si la guía no se crea, el pedido no se confirma y sigue en Por
+  confirmar. Con la guía automática apagada (`guide_enabled`) o
+  `ALICLIK_WRITE_ENABLED` cerrado, la pasada **no confirma nada**.
+- **La guía Aliclik, con tope.** Cuando el mensaje confirma, y justo después de
+  releer que el pedido sigue en Por confirmar, crea la guía por el **mismo
+  camino que el botón** y que la guía del día programado (§6.2, §10.2):
+  `createAliclikGuideFor` con todas sus rejas —`ALICLIK_WRITE_ENABLED`,
+  prepago, rechazos en la puerta, posible duplicado (`lib/aliclik-duplicate.ts`),
+  riesgo del historial, salida viva, pin respaldado, stock y cobertura del
+  almacén, cotización del destino, monto recalculado y el candado—, la
+  transportadora más barata de las que se pueden agendar y ninguna excepción
+  escrita por nadie. **Hasta 20 por día de Lima en toda la organización**,
+  contando las ya creadas hoy. La guía lleva su `guide_registered` sin actor con
+  el motivo «Guía automática: #AUR900226 confirmó por Chatby.» y
+  `payload.auto.kind = confirmado_chatby`; la nota del lead dice «Guía de
+  Aliclik creada automáticamente (confirmó por Chatby) · …». Si el pedido **ya
+  tenía** una guía viva, no se crea otra y se confirma.
 - **La coordenada sale de WhatsApp** (owner, 02-11-2026). Aliclik exige
-  coordenada para cotizar y los pedidos de WooCommerce no la traen: las 10
-  primeras guías automáticas fallaron todas por eso. Si el pedido no tiene
-  coordenada, la pasada lee la conversación de Chatby y usa la **última
-  ubicación que mandó la clienta en esta compra** (como mucho 3 días antes del
-  pedido; `chatbyGuidePin`), la misma que el panel le propone a la asesora
-  (§38, «De dónde sale ahora»). La guía guarda esa coordenada como la del botón.
-  Sin ubicación, o con un pin que el pedido no respalda (§10, pin respaldado;
-  la guía automática nunca escribe la excepción), **queda para una persona**:
-  `guide_state = para_persona` con el motivo `sin_ubicacion` o
-  `pin_sin_respaldo`, sin gastar el tope ni dejar el hecho de guía no creada;
-  la asesora le pide la ubicación a la clienta y la crea desde el panel. Si
-  Chatby no responde, se reintenta en la pasada siguiente.
-- **Lo que no cuadra para la guía queda en la mesa como hoy**, en Preparación ·
-  Por generar rótulo, con el hecho `aliclik_auto_guide_failed` («Guía automática
-  no creada») y su motivo —sin cobertura, sin stock, posible duplicado, pin sin
-  respaldo…—. **Un intento por pedido**: lo que falló lo crea una persona. Sin
-  aviso por Telegram (la guía del día programado sí avisa: es una fecha
-  comprometida; esto es un pedido que espera como cualquier otro).
+  coordenada para cotizar y los pedidos de WooCommerce no la traen. Si el pedido
+  no tiene coordenada, se usa la **última ubicación que mandó la clienta en esta
+  compra** (como mucho 3 días antes del pedido; `chatbyGuidePin`), de la misma
+  conversación que se acaba de leer y la misma que el panel le propone a la
+  asesora (§38, «De dónde sale ahora»). La guía guarda esa coordenada como la
+  del botón. Nunca se escribe la excepción del pin respaldado (§10).
+- **Cómo confirma, con la guía ya creada.** Por el mismo registro atómico que
+  la mesa: `register_confirmation_attempt_v2`, la misma función del botón (v1)
+  con `source`, que ya usa el agente de voz. Resultado «Confirmó el pedido»,
+  canal «Mensaje escrito», **sin actor** y `source = 'chatby'`; el
+  `operation_id` sale del pedido y del mensaje, así que un reintento devuelve lo
+  escrito y no duplica. Escribe `confirmation_contact` y `confirmed`, gasta el
+  día de gestión como cualquier intento y el pedido pasa a **Preparación · Por
+  armar** por la cadena normal (ya tiene rótulo). La nota dice «Confirmó por
+  Chatby: mensaje de la clienta del 01-11 a las 10:32 con el pedido #AUR900226,
+  S/ 178.00 contra entrega y la dirección del pedido.»; la línea de tiempo lo
+  firma «Chatby». Si la confirmación falla con la guía ya creada, la pasada
+  siguiente encuentra la guía y solo confirma.
+- **Si la guía no sale, sigue en Por confirmar para la asesora**, con el mismo
+  hecho `chatby_confirmation_held` y una nota que lo dice: «La clienta confirmó
+  por Chatby, pero Kapta no creó la guía de Aliclik: … Sigue en Por confirmar:
+  crea la guía desde el panel de Aliclik y registra la confirmación en la
+  mesa.» Los motivos: `sin_ubicacion` (no mandó ubicación en esta compra),
+  `pin_sin_respaldo` (el pedido contradice el pin), `shalom` («DNI y agencia
+  Shalom» guardado), `programado` (envío programado: es de la guía de ese día,
+  §6.2) y `guia_no_creada` (Aliclik no la dejó crear: sin cobertura, sin stock,
+  posible duplicado…, con su texto). **Una sola vez**, como los demás motivos.
+  Un timeout de Aliclik también queda para la asesora (pudo crearse: se mira
+  Aliclik antes de crear otra) y cuenta para el tope. Sin aviso por Telegram.
+- **Lo que solo espera.** Con Aliclik en rojo, con el tope del día gastado o
+  con otra creación en curso (el candado), no se escribe nada visible: el
+  pedido sigue en Por confirmar y se vuelve a leer a los 30 minutos.
 - **Interruptores** (`chatby_auto_settings`, 0297, uno por organización):
   `enabled` (toda la pasada), `guide_enabled` (solo la guía), `daily_cap` (20),
   `window_hours` (72), `max_orders_per_run` (20) y `recheck_minutes` (30). Nace

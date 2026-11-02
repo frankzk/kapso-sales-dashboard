@@ -18,7 +18,9 @@ import {
   CHATBY_PIN_MAX_DAYS_BEFORE_ORDER,
   chatbyGuideHold,
   chatbyGuidePin,
-  chatbyGuideSkip,
+  chatbyGuideBlock,
+  chatbyHoldNote,
+  isGuideHoldReason,
   chatbyOperationId,
   chatbyOrderSkip,
   chatbyReadOrder,
@@ -375,13 +377,19 @@ describe("la guía automática", () => {
     district: "Tarapoto",
   };
 
-  it("Provincia COD en Por generar rótulo, sin fecha programada", () => {
-    expect(chatbyGuideSkip(prep)).toBeNull();
-    expect(chatbyGuideSkip({ ...prep, macro_stage: "por_confirmar", macro_substage: "por_confirmar" })).toBe("sin_recalcular");
-    expect(chatbyGuideSkip({ ...prep, macro_substage: "por_armar" })).toBe("otra_etapa");
-    expect(chatbyGuideSkip({ ...prep, coverage: "agencia" })).toBe("no_provincia_cod");
-    // Con envío programado, la guía es la del día programado (§6.2).
-    expect(chatbyGuideSkip({ ...prep, dispatch_scheduled_on: "2026-11-03" })).toBe("programado");
+  it("con envío programado, la guía es la del día programado (§6.2)", () => {
+    expect(chatbyGuideBlock({ dispatch_scheduled_on: null })).toBeNull();
+    expect(chatbyGuideBlock({ dispatch_scheduled_on: "2026-11-03" })).toBe("programado");
+  });
+
+  it("si la guía no sale, la nota dice que sigue en Por confirmar y por qué", () => {
+    for (const reason of ["sin_ubicacion", "pin_sin_respaldo", "shalom", "programado", "guia_no_creada"] as const) {
+      expect(isGuideHoldReason(reason)).toBe(true);
+      expect(chatbyHoldNote(reason)).toContain("Sigue en Por confirmar");
+      expect(CHATBY_HOLD_REASONS[reason].length).toBeGreaterThan(10);
+    }
+    expect(isGuideHoldReason("sin_monto")).toBe(false);
+    expect(chatbyHoldNote("guia_no_creada", "Sin stock en el almacén.")).toContain("(Sin stock en el almacén.)");
   });
 
   it("Shalom elegido o un pago registrado son de una persona (§6.2)", () => {
@@ -437,13 +445,32 @@ describe("la coordenada de la guía automática", () => {
 
   it("el servidor la pasa a la cotización y a la creación, y sin ubicación o con pin sin respaldo queda para una persona", () => {
     const server = read("lib/chatby-autoconfirm-server.ts");
-    expect(server).toContain("chatbyGuidePin(conversation.messages, row.order_created_at)");
+    expect(server).toContain("chatbyGuidePin(messages, row.order_created_at)");
     expect(server).toContain('previewAliclikGuideFor(aliclik, { modality: "cod", coordinate }, scope)');
     expect(server).toMatch(/note: null, coordinate \}/);
-    expect(server).toContain('await mark(row.order_id, "para_persona", "sin_ubicacion")');
-    expect(server).toContain('"pin_sin_respaldo"');
+    expect(server).toContain('reason: "sin_ubicacion"');
+    expect(server).toContain('reason: "pin_sin_respaldo"');
     // Nunca levanta la puerta del pin con una excepción escrita.
     expect(server).not.toContain("pinExceptionReason");
+  });
+});
+
+describe("solo sale de Por confirmar con la guía creada (owner, 02-11-2026)", () => {
+  const server = read("lib/chatby-autoconfirm-server.ts");
+  it("la guía va ANTES que la confirmación", () => {
+    const guide = server.indexOf("await tryChatbyGuide(guide, master, conversation.messages)");
+    const confirm = server.indexOf('admin.rpc("register_confirmation_attempt_v2"');
+    expect(guide).toBeGreaterThan(0);
+    expect(confirm).toBeGreaterThan(guide);
+  });
+  it("sin guía no hay confirmación: ni con la guía apagada ni con Aliclik cerrado", () => {
+    expect(server).toContain("sin guía no se confirma nada");
+    expect(server).toContain("!settings.guide_enabled || (!dry && !env.aliclikWriteEnabled())");
+    expect(server).not.toContain("guidePass");
+  });
+  it("lo que no sale queda para la asesora o se vuelve a leer, sin confirmar", () => {
+    expect(server).toMatch(/if \(g\.kind === "wait"\)[\s\S]*?continue;/);
+    expect(server).toMatch(/if \(g\.kind === "hold"\)[\s\S]*?holdForAdvisor[\s\S]*?continue;/);
   });
 });
 
