@@ -95,6 +95,7 @@ import {
   type MasterSortKey,
 } from "@/lib/order-master-filters";
 import { compareDispatchCodes } from "@/lib/dispatched-with";
+import { pgTextArrayLiteral, type ProductOptionRow } from "@/lib/order-product-titles";
 import { isHistoricalShopifyOrder, legacySaleCancelledAt } from "@/lib/legacy-sale-cancel";
 import { pendingVoucherFilterIds, type PendingVoucherSummary } from "@/lib/pending-voucher";
 import { loadPendingVouchers } from "@/lib/pending-voucher-access";
@@ -1498,6 +1499,10 @@ export function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T 
   if (f.swaypAvailability.size) q = q.in("swayp_availability", [...f.swaypAvailability]);
   if (f.salesChannels.size) q = q.in("sales_channel", [...f.salesChannels]);
   if (f.dispatchedWith.size) q = q.overlaps("dispatched_with", [...f.dispatchedWith]);
+  // «Producto» (0300): basta con uno. El arreglo va escrito con comillas porque
+  // un título puede llevar comas (`pgTextArrayLiteral`). Si la 0300 no está, la
+  // página quita este filtro antes de llegar aquí (`withAvailableProductFilter`).
+  if (f.products?.size) q = q.overlaps("product_titles", pgTextArrayLiteral([...f.products]));
   // «Programar envío» (0267): el día se compara contra hoy en Lima.
   if (f.dispatchDate) {
     const today = limaTodayKey(now);
@@ -2009,6 +2014,44 @@ export const getMasterFacetsCached = (storeIds: string[]) =>
     ["master-facets", [...storeIds].sort().join(",")],
     { revalidate: FACETS_TTL_SECONDS },
   )();
+
+/**
+ * Las opciones del filtro «Producto» (0300): por tienda y producto, cuántos
+ * pedidos lo llevan. La píldora suma las de las tiendas elegidas.
+ *
+ * `null` = la función no respondió, que es lo que pasa mientras la 0300 no
+ * está aplicada: la píldora no se ofrece y la página ignora un `?pr=` que
+ * llegue por la URL (`withAvailableProductFilter`). El Master no se cae.
+ */
+async function loadProductOptions(storeIds: string[]): Promise<ProductOptionRow[] | null> {
+  if (!storeIds.length) return [];
+  const admin = createAdminSupabase();
+  const { data, error } = await admin.rpc("order_master_product_options", { p_store_ids: storeIds });
+  if (error || !Array.isArray(data)) return null;
+  return (data as Partial<ProductOptionRow>[])
+    .filter((r): r is ProductOptionRow => typeof r?.store_id === "string" && typeof r?.title === "string" && r.title.length > 0)
+    .map((r) => ({ store_id: r.store_id, title: r.title, orders: Number(r.orders) || 0 }));
+}
+
+export const getMasterProductOptionsCached = (storeIds: string[]) =>
+  unstable_cache(
+    async () => loadProductOptions(storeIds),
+    ["master-product-options", [...storeIds].sort().join(",")],
+    { revalidate: FACETS_TTL_SECONDS },
+  )();
+
+/**
+ * Sin la 0300 la columna `product_titles` no existe y pedir `&&` sobre ella
+ * sería un error de PostgREST: la lista, las pestañas y el Excel en blanco. Si
+ * las opciones no se pudieron leer, el filtro se quita y la pantalla lo avisa.
+ */
+export function withAvailableProductFilter(
+  filters: MasterFilters,
+  options: readonly ProductOptionRow[] | null,
+): MasterFilters {
+  if (!filters.products?.size || options) return filters;
+  return { ...filters, products: new Set() };
+}
 
 export const getAgencySummaryCached = (storeIds: string[]) =>
   unstable_cache(

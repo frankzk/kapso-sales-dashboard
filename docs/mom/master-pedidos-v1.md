@@ -395,6 +395,27 @@ definición que la tabla (`applyServerFilters`). Sin filtros se cuenta todo el
 Master de las tiendas visibles. La búsqueda sigue aparte: mientras se busca, las
 pestañas no se muestran.
 
+**Filtro «Producto» (owner, 02-11-2026).** Junto a los demás filtros del Master
+(Tienda, Estado operativo, Courier, Estado de pago, Cobro del courier, Región,
+Provincia, Distrito, Cobertura, Swayp, Salió con, Canal, Agencia y Más filtros)
+está **Producto**: varias opciones con buscador, y basta con que el pedido lleve
+una. Un producto es el título de la línea del pedido en la tienda (Shopify o
+WooCommerce) **sin la variante**, con los espacios recortados; dos variantes del
+mismo producto son un solo producto. Cada opción dice cuántos pedidos lo llevan
+en las tiendas elegidas (todas si no hay ninguna), las más pedidas primero.
+
+- **Vive en `order_master.product_titles`** (0300, índice GIN) porque el Master
+  filtra en la base y pagina; `orders.line_items` no está en el Master. La
+  escribe el recálculo del pedido (`orderProductTitles`,
+  `lib/order-product-titles.ts`) y la 0300 rellenó lo existente con la misma
+  regla. Las opciones salen de `order_master_product_options` (por tienda).
+- **Viaja por `pr`** en la URL y se aplica en servidor a la lista, las pestañas,
+  los chips, la paginación y el Excel, como los demás. Al buscar un pedido se
+  ignora, como los demás. Limpiar filtros también lo quita.
+- **Sin la 0300** la píldora no se ofrece y un `pr` que llegue por la URL no se
+  aplica: la pantalla lo avisa y enseña todo, nunca una lista vacía ni un error.
+- No cambia estados, etapas, stock ni permisos: es solo una forma de mirar.
+
 ### 6.1 Por confirmar
 
 Aplica a Provincia COD y Agencia. Lima la omite.
