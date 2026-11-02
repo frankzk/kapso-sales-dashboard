@@ -597,4 +597,6 @@
 \ir migrations/0296_invoices_claim_agency_shipping.sql
 \echo 'Applying 0297_chatby_autoconfirm.sql'
 \ir migrations/0297_chatby_autoconfirm.sql
+\echo 'Applying 0298_invoices_claim_agency_one_payment.sql'
+\ir migrations/0298_invoices_claim_agency_one_payment.sql
 \echo 'Done.'

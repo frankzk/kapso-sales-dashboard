@@ -1196,9 +1196,11 @@ Motivos simultáneos posibles:
   alerta por S/ 8 o S/ 10. Ahora, **con el paquete ya recogido**, lo que falta
   hasta **S/ 15** —el tope de la excepción por descuento de la clave, §12— es
   el envío pagado en la agencia y el pedido está **pagado completo**, solo, sin
-  botón (`agencyShippingPaid`, `lib/agency-shipping.ts`). Pide además lo mismo
-  que esa excepción: al menos dos comprobantes validados con el adelanto entre
-  ellos, y ninguno vivo sin validar. Menos de S/ 1 sigue siendo redondeo. La
+  botón (`agencyShippingPaid`, `lib/agency-shipping.ts`). Pide al menos un
+  comprobante validado y ninguno vivo sin validar. Al principio pedía dos, con
+  el adelanto entre ellos, como la excepción de la clave; desde el 01-11-2026
+  (`mom-v1.35`, 0298) vale también un solo Yape: la clienta que paga todo menos
+  el envío de una vez está en la misma situación (#KP138744: S/ 134 de S/ 149). Menos de S/ 1 sigue siendo redondeo. La
   ficha lo enseña como «Envío pagado en agencia · sin comprobante» en vez de
   «Saldo por cargar». La boleta sale **por el total**: el precio no cambió, la
   clienta pagó el envío por cuenta de la tienda (§35.3, 0296). No se carga como
@@ -3914,6 +3916,16 @@ Seguimiento de una guía hasta que cierra:
   se queda `transferido` (la precedencia no la mueve); lo que llega es
   `returned_at` y la custodia `devuelto`, y con eso el pedido pasa a «Por
   cerrar · Devolución física pendiente», como los que ya funcionaban.
+- **La recogida del courier prueba la salida (owner, 01-11-2026,
+  `mom-v1.35`).** Un pedido solo se da por devuelto si la devolución está
+  **probada**: la guía salió de verdad y volvió. «Salió» exigía fecha de
+  despacho, de reparto o un estado de agencia, y las guías de Aliclik que
+  llegaron por el Excel no traen ninguna: #KP117015 tenía la devolución sellada
+  y seguía «En curso · En tránsito», como ~50 pedidos más. Ahora también prueba
+  la salida que el courier haya recogido el paquete en el almacén
+  (`custody_transferred_at`, el PICKED de Aliclik; `leftWithCourier`,
+  `lib/order-status.ts`). Una devolución sin ninguna de esas pruebas sigue
+  siendo solo reclamada («en proceso de retorno»).
 - Existe porque la **devolución** es el tramo más lento: un paquete rechazado
   tarda semanas en volver al origen, mucho más que la ventana del barrido. Si el
   seguimiento se anclara a la fecha, el `RETURNED` de Aliclik llegaría cuando ya
@@ -15932,7 +15944,8 @@ La boleta de un pedido de WooCommerce (25-10-2026, 35.11) no tiene migración.
 La 0293 (faltar menos de S/ 1 es redondeo y cubre, 01-11-2026, §6.5) va
 después de la 0269, a mano y antes de su código. La 0296 (en Agencia, con el
 paquete recogido, hasta S/ 15 sin comprobante son el envío pagado en el
-mostrador, 01-11-2026, §6.5) va después de la 0293, igual.
+mostrador, 01-11-2026, §6.5) va después de la 0293, igual, y la 0298 (lo mismo
+con un solo pago validado) después de la 0296.
 Están también las reglas puras, el
 cliente de SimpleFact, el barrido (`/api/cron/invoices`), la sección «Boletas
 y facturas» de Ajustes y el panel «Comprobante» del drawer, con su «Emitir esta

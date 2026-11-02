@@ -30,6 +30,13 @@ import {
   swaypNoEntregoMotivo,
 } from "@/lib/swayp-desde-confirmacion";
 
+// v1.35 (01-11-2026): dos reglas del owner. (1) El envío pagado en la agencia
+// vale también con un solo Yape (lib/agency-shipping.ts; #KP138744, #KP129106).
+// (2) La devolución queda probada si el courier recogió el paquete
+// (`custody_transferred_at`), aunque la guía no traiga despacho
+// (lib/order-status.ts, `leftWithCourier`; #KP117015 y ~50 más seguían «En
+// curso · En tránsito»). La versión sube para que el cron los reconcilie.
+//
 // v1.34 (01-11-2026): en Agencia, con el paquete recogido, hasta S/ 15 que
 // faltan son el envío que la clienta pagó en el mostrador y el pedido está
 // pagado completo (lib/agency-shipping.ts, decisión del owner, MOM §6.5). Eran
@@ -222,7 +229,7 @@ import {
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.34" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.35" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"

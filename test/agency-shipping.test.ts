@@ -27,18 +27,10 @@ describe("envío pagado en la agencia (owner, 01-11-2026, MOM §6.5)", () => {
     expect(agencyShippingPaid({ ...base, operation: "provincia_cod", payments: pagos(111) })).toBeNull();
   });
 
-  it("pide dos pagos validados con el adelanto, y ninguno en revisión", () => {
-    expect(agencyShippingPaid({ ...base, payments: [{ kind: "adelanto", validation_status: "validado", amount: 141 }] })).toBeNull();
+  it("basta un pago validado (un solo Yape, #KP138744), pero ninguno en revisión", () => {
+    expect(agencyShippingPaid({ ...base, payments: [{ kind: "adelanto", validation_status: "validado", amount: 134 }] })).toBe(15);
+    expect(agencyShippingPaid({ ...base, payments: [] })).toBeNull();
     expect(agencyShippingPaid({ ...base, payments: pagos(111, "pendiente") })).toBeNull();
-    expect(
-      agencyShippingPaid({
-        ...base,
-        payments: [
-          { kind: "diferencia", validation_status: "validado", amount: 30 },
-          { kind: "diferencia", validation_status: "validado", amount: 111 },
-        ],
-      }),
-    ).toBeNull();
     // Un pago rechazado no cuenta ni bloquea.
     expect(
       agencyShippingPaid({ ...base, payments: [...pagos(111), { kind: "diferencia", validation_status: "rechazado", amount: 8 }] }),
@@ -75,5 +67,27 @@ describe("donde se usa", () => {
         .replace(/ {4}-- Lo validado cubre el total[\s\S]*?return jsonb_build_object\('reason', 'sin_pago_completo'\);\n {4}end if;\n/, "")
         .trim();
     expect(sinCondicion(sql)).toBe(sinCondicion(s0293));
+  });
+});
+
+describe("0298 y la devolución probada por la recogida del courier (owner, 01-11-2026)", () => {
+  it("0298: el turno acepta un solo pago, y el resto es la 0296", () => {
+    const sql = readFileSync("db/migrations/0298_invoices_claim_agency_one_payment.sql", "utf8");
+    const s0296 = readFileSync("db/migrations/0296_invoices_claim_agency_shipping.sql", "utf8");
+    expect(sql).not.toContain("v_live >= 2");
+    expect(sql).not.toContain("kind = 'adelanto'");
+    expect(sql).toContain("La 0298 va después de la 0296");
+    const sinCondicion = (s: string) =>
+      s
+        .slice(s.indexOf("create or replace function invoice_claim("))
+        .replace(/ {4}-- Lo validado cubre el total[\s\S]*?return jsonb_build_object\('reason', 'sin_pago_completo'\);\n {4}end if;\n/, "")
+        .trim();
+    expect(sinCondicion(sql)).toBe(sinCondicion(s0296));
+  });
+
+  it("la recogida del courier prueba la salida para dar el pedido por devuelto", () => {
+    const src = readFileSync("lib/order-status.ts", "utf8");
+    expect(src).toContain("return wasDispatched(g) || Boolean(g.custody_transferred_at);");
+    expect(src).toContain("g.returned_at && leftWithCourier(g) && g.guide_code");
   });
 });

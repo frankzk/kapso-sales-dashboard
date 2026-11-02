@@ -416,6 +416,17 @@ function wasDispatched(g: GuideSnapshot): boolean {
   return Boolean(g.dispatched_at || g.out_for_delivery_at || g.pickup_state);
 }
 
+/**
+ * ¿El paquete salió con el courier? Para PROBAR una devolución basta con que el
+ * courier lo haya recogido en el almacén (`custody_transferred_at`, el PICKED
+ * de Aliclik), aunque la guía no traiga fecha de despacho (owner, 01-11-2026).
+ * Las guías de Aliclik que llegaron por el Excel no la traen: #KP117015 tenía
+ * la devolución sellada y seguía «En curso · En tránsito», como ~50 pedidos más.
+ */
+function leftWithCourier(g: GuideSnapshot): boolean {
+  return wasDispatched(g) || Boolean(g.custody_transferred_at);
+}
+
 const AGENCY_COURIERS = new Set(["shalom", "olva"]);
 
 /** Eventos de salida que SIEMPRE los escribe una persona, y por eso pueden
@@ -706,7 +717,7 @@ export function resolveOrderState(inputs: ResolveInputs): ResolvedOrderState {
   // Solo la probada cierra el pedido como Devuelto; la reclamada se ve como
   // "en proceso de retorno" para que el equipo la trabaje sin contabilizarla
   // todavía como devolución (que además lleva costo asociado).
-  const returnedGuide = guides.find((g) => g.returned_at && wasDispatched(g) && g.guide_code);
+  const returnedGuide = guides.find((g) => g.returned_at && leftWithCourier(g) && g.guide_code);
   const returnClaimed =
     guides.some((g) => g.returned_at || g.pickup_state === "retorno_iniciado") ||
     events.some((e) => e.kind === "returned" || e.kind === "return_started");

@@ -483,9 +483,9 @@ describe("MOM §35.3 fila 3 — la empresa recibió el pago", () => {
     ];
     // S/ 150: 30 + 112 = 142, faltan S/ 8.
     expect(motivo(hechos({ agencyPickedUp: true, payments: dos(112) }))).not.toBe("sin_pago_completo");
-    // Sin recojo, o con un solo pago, o faltando más de S/ 15: no.
+    // Un solo pago también (owner 01-11-2026); sin recojo o faltando más de S/ 15, no.
+    expect(motivo(hechos({ agencyPickedUp: true, payments: [pago({ amount: 142 })] }))).not.toBe("sin_pago_completo");
     expect(motivo(hechos({ payments: dos(112) }))).toBe("sin_pago_completo");
-    expect(motivo(hechos({ agencyPickedUp: true, payments: [pago({ amount: 142 })] }))).toBe("sin_pago_completo");
     expect(motivo(hechos({ agencyPickedUp: true, payments: dos(100) }))).toBe("sin_pago_completo");
   });
 

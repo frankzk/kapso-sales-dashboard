@@ -17,7 +17,10 @@
 //
 // Las rejas son las de esa excepción, más el recojo:
 //   - Agencia y el paquete ya recogido: antes de eso, falta cobrar el saldo;
-//   - al menos dos comprobantes VALIDADOS, el adelanto entre ellos;
+//   - al menos un comprobante VALIDADO. Al principio se pedían dos (adelanto y
+//     diferencia), como la excepción de la clave; pero la clienta que paga todo
+//     en un solo Yape está en la misma situación (#KP138744: S/ 134 de S/ 149 en
+//     un solo pago). Owner, 01-11-2026;
 //   - ningún comprobante vivo sin validar (en revisión, observado, posible
 //     duplicado): si hay uno, lo que falta puede ser justo ése;
 //   - lo que falta con lo validado, entre S/ 1 y S/ 15. Menos de S/ 1 ya es el
@@ -54,7 +57,7 @@ export function agencyShippingPaid(input: AgencyShippingInput): number | null {
 
   const live = input.payments.filter((p) => p.validation_status !== "rechazado");
   if (live.some((p) => p.validation_status !== "validado")) return null;
-  if (live.length < 2 || !live.some((p) => p.kind === "adelanto")) return null;
+  if (live.length < 1) return null;
 
   const paid = live.reduce((sum, p) => sum + (cents(p.amount) ?? 0), 0);
   const shortfall = total - paid;

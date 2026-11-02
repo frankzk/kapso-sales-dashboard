@@ -5496,3 +5496,24 @@ del 12-10-2026. Sin migración, crons ni variables.
 
 **Marcha atrás.** Revertir el commit. Los programas ya escritos quedan; se
 quitan con «Quitar la fecha» en Despacho del día.
+
+### 01-11-2026 · Envío pagado en la agencia con un solo pago, y la recogida del courier prueba la salida (0298, MOM §6.5)
+
+Dos decisiones del owner. El envío pagado en la agencia (hasta S/ 15 sin
+comprobante, Agencia con el paquete recogido) vale también con **un solo**
+pago validado. Y una devolución queda probada si el courier recogió el paquete
+(`custody_transferred_at`), aunque la guía no traiga fecha de despacho.
+`MOM_RESOLUTION_VERSION` sube a `mom-v1.35` para que el cron recalcule. Sin
+variables de entorno nuevas.
+
+1. **Migración `0298_invoices_claim_agency_one_payment.sql`**, a mano, DESPUÉS
+   de la 0296 y ANTES del código. Solo `invoice_claim`, con `create or replace`
+   y la misma firma; el cuerpo es el de la 0296 salvo que el envío pagado en la
+   agencia ya no exige dos pagos ni el adelanto. No toca filas. Es idempotente.
+2. Comprobar:
+   ```sql
+   select count(*) = 1 as un_turno,
+          bool_and(pg_get_functiondef(oid) not like '%v_live >= 2%') as un_pago
+   from pg_proc where proname = 'invoice_claim';
+   ```
+3. Desplegar el código.
