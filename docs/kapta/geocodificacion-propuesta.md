@@ -161,3 +161,13 @@ En la misma sección hay ahora un segundo botón, **«Probar con estos pedidos»
 - Para los que pasan, da el punto en el mapa para que una persona lo mire.
 - No hay pin con qué comparar: es solo para ver cuántos tendrían coordenada.
 - No escribe nada.
+
+## Encendido para la guía automática de Provincia COD (02-11-2026)
+
+El owner pidió encenderla para Provincia COD. Queda dentro de las decisiones A y B:
+- **Precisión:** solo el edificio (`ROOFTOP`). Provincia COD dio 92,7 % a 300 m o menos en el piloto de Kenku.
+- **Orden:** siempre después de la ubicación de WhatsApp.
+- **Caché:** una consulta por pedido y dirección (`order_geocodes`, 0301).
+- **Interruptor:** `chatby_auto_settings.geocode_enabled`.
+
+No se usa en el panel de la asesora ni en Lima. Ver MOM §6.1 y §38.

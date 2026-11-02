@@ -603,4 +603,6 @@
 \ir migrations/0299_lead_routing_admin_advisors.sql
 \echo 'Applying 0300_order_master_product_titles.sql'
 \ir migrations/0300_order_master_product_titles.sql
+\echo 'Applying 0301_order_geocodes.sql'
+\ir migrations/0301_order_geocodes.sql
 \echo 'Done.'

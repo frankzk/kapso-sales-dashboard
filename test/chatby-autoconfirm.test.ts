@@ -336,7 +336,13 @@ describe("qué pedido se lee", () => {
 
 describe("los ajustes", () => {
   it("la fila de la base, con sus rangos", () => {
-    expect(chatbyAutoSettingsFrom({ org_id: "o", enabled: true, daily_cap: 20 })).toEqual({ ...DEFAULT_CHATBY_AUTO_SETTINGS, org_id: "o" });
+    // Sin la columna de la 0301 no se consulta a Google.
+    expect(chatbyAutoSettingsFrom({ org_id: "o", enabled: true, daily_cap: 20 })).toEqual({
+      ...DEFAULT_CHATBY_AUTO_SETTINGS,
+      org_id: "o",
+      geocode_enabled: false,
+    });
+    expect(chatbyAutoSettingsFrom({ org_id: "o", enabled: true, geocode_enabled: true })?.geocode_enabled).toBe(true);
     expect(chatbyAutoSettingsFrom({ org_id: "o", enabled: false })?.enabled).toBe(false);
     expect(chatbyAutoSettingsFrom({ org_id: "o", enabled: true, daily_cap: 5, guide_enabled: false })).toMatchObject({ daily_cap: 5, guide_enabled: false });
     expect(chatbyAutoSettingsFrom({ org_id: "o", enabled: true, daily_cap: -3, max_orders_per_run: 900 })).toMatchObject({ daily_cap: 20, max_orders_per_run: 20 });
@@ -507,6 +513,29 @@ describe("mirar el chat hasta que llegue la ubicación (owner, 02-11-2026)", () 
     expect(server).toContain('.eq("guide_detail", "sin_ubicacion")');
     expect(server).toMatch(/g\.kind === "hold" && g\.reason === "sin_ubicacion"\)\) \{[\s\S]*?await touch\(r\);/);
     expect(server).toContain("await confirmWithGuide(admin, key, master, master.order_name");
+  });
+});
+
+describe("la coordenada por dirección en la guía automática (0301, owner 02-11-2026)", () => {
+  const server = read("lib/chatby-autoconfirm-server.ts");
+  it("primero WhatsApp; Google solo sin ella, solo Provincia COD y nunca en dry", () => {
+    const whatsapp = server.indexOf("chatbyGuidePin(messages, row.order_created_at)");
+    const google = server.indexOf("geocodeOrderAddress(");
+    expect(whatsapp).toBeGreaterThan(0);
+    expect(google).toBeGreaterThan(whatsapp);
+    expect(server).toContain('g.geocodeKey && !g.dry && row.coverage === "provincia_cod"');
+    expect(server).toContain("settings.geocode_enabled ? env.googleGeocodingApiKey() || null : null");
+  });
+  it("la guía deja escrito de dónde salió la coordenada", () => {
+    expect(server).toContain("coordenada: dirección en Google (edificio)");
+    expect(server).toContain("coordenada: ubicación de WhatsApp");
+  });
+  it("la migración: la caché por pedido y el interruptor", () => {
+    const sql = read("db/migrations/0301_order_geocodes.sql");
+    expect(sql).toContain("create table if not exists order_geocodes");
+    expect(sql).toContain("address_hash  text not null");
+    expect(sql).toContain("enable row level security");
+    expect(sql).toContain("add column if not exists geocode_enabled boolean not null default true");
   });
 });
 

@@ -62,6 +62,8 @@ export interface ChatbyAutoSettings {
   max_orders_per_run: number;
   /** Cada cuánto se vuelve a leer un pedido que todavía no confirmó. */
   recheck_minutes: number;
+  /** La coordenada por dirección (Google, solo el edificio) para la guía (0301). */
+  geocode_enabled: boolean;
 }
 
 export const DEFAULT_CHATBY_AUTO_SETTINGS: Omit<ChatbyAutoSettings, "org_id"> = {
@@ -71,6 +73,7 @@ export const DEFAULT_CHATBY_AUTO_SETTINGS: Omit<ChatbyAutoSettings, "org_id"> = 
   window_hours: 72,
   max_orders_per_run: 20,
   recheck_minutes: 30,
+  geocode_enabled: true,
 };
 
 function intIn(value: unknown, min: number, max: number, fallback: number): number {
@@ -95,6 +98,8 @@ export function chatbyAutoSettingsFrom(row: Record<string, unknown>): ChatbyAuto
     window_hours: intIn(row.window_hours, 1, 168, d.window_hours),
     max_orders_per_run: intIn(row.max_orders_per_run, 1, 100, d.max_orders_per_run),
     recheck_minutes: intIn(row.recheck_minutes, 5, 1440, d.recheck_minutes),
+    // Sin la columna (antes de la 0301) no se consulta a Google.
+    geocode_enabled: row.geocode_enabled === true,
   };
 }
 

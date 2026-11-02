@@ -431,3 +431,20 @@ export function aggregateGeocodePilot(samples: readonly GeocodePilotSample[]): {
     total: statsFor("total", samples),
   };
 }
+
+// ---------------------------------------------------------------------------
+// La guía automática de Provincia COD (owner, 02-11-2026)
+//
+// Decisión A: la guía automática puede usar la coordenada por dirección, solo
+// con el EDIFICIO (`ROOFTOP`) y después de la ubicación de WhatsApp. Decisión
+// B: el 90 % a 300 m o menos. En el piloto de Kenku, Provincia COD con
+// `ROOFTOP` dio 92,7 % (41 puntos); con `RANGE_INTERPOLATED` incluido, 84,5 %:
+// por eso el número de la cuadra no basta para mandar un paquete solo.
+
+/** Lo único que la guía automática acepta de Google. */
+export const GEOCODE_AUTO_PRECISION: GeocodePrecision = "ROOFTOP";
+
+/** ¿Este resultado del candado sirve para crear una guía sin que nadie lo mire? */
+export function geocodeUsableForAutoGuide(v: GeocodeSafeguard): boolean {
+  return v.ok && v.precision === GEOCODE_AUTO_PRECISION;
+}

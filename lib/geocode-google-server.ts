@@ -27,6 +27,7 @@ import "server-only";
 // cuenta como «sin_tiempo» y el reporte dice que se cortó. Para que un corte no
 // deje fuera a una cobertura entera, la cola alterna Lima y Provincia COD.
 
+import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { inPeru } from "@/lib/chatby-conversation";
 import {
@@ -38,6 +39,7 @@ import {
   geocodeQueryString,
   geocodeRequestParams,
   geocodeSafeguard,
+  geocodeUsableForAutoGuide,
   haversineMeters,
   parseGeocodeResponse,
   type GeocodeCoverage,
@@ -367,4 +369,91 @@ export async function runGeocodeChatbyCheck(
   }
   console.info(`[geocode-chatby] ${JSON.stringify({ store: storeId, checked: rows.length, passed: rows.filter((r) => r.ok).length, apiCalls })}`);
   return { ok: true, rows, apiCalls };
+}
+
+// ---------------------------------------------------------------------------
+// La coordenada por dirección para la guía automática (0301, owner 02-11-2026)
+//
+// Una consulta por pedido y dirección: la respuesta se guarda en
+// `order_geocodes` con la huella de lo consultado, y la pasada que vuelve a
+// mirar el pedido cada 30 minutos usa lo guardado. Los errores de la API y el
+// cupo agotado no se guardan: se reintenta en la pasada siguiente.
+
+export type OrderGeocode =
+  | { kind: "ok"; lat: number; lng: number; precision: GeocodePrecision; cached: boolean }
+  | { kind: "rejected"; reason: GeocodePilotReason; precision?: GeocodePrecision; cached: boolean }
+  /** No se pudo preguntar (sin clave, sin calle, error o cupo): no se guarda. */
+  | { kind: "unavailable"; reason: string };
+
+function addressHash(params: GeocodeRequestParams): string {
+  return createHash("sha256").update(geocodeQueryString(params)).digest("hex");
+}
+
+interface GeocodeRow {
+  address_hash: string;
+  ok: boolean;
+  precision: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  reason: string | null;
+}
+
+/**
+ * La coordenada de la dirección del pedido según Google, con el candado
+ * aplicado. `rejected` también trae la precisión cuando el punto pasó el
+ * candado pero no es `ROOFTOP` (lo decide quien llama: la guía automática solo
+ * acepta el edificio, `geocodeUsableForAutoGuide`).
+ */
+export async function geocodeOrderAddress(
+  admin: SupabaseClient,
+  order: {
+    order_id: string;
+    store_id: string;
+    address: string | null;
+    district: string | null;
+    province: string | null;
+    region: string | null;
+  },
+  opts: { key: string; fetchImpl?: typeof fetch },
+): Promise<OrderGeocode> {
+  if (!opts.key) return { kind: "unavailable", reason: "sin_clave" };
+  const params = geocodeRequestParams(order);
+  if (!params) return { kind: "unavailable", reason: "sin_direccion" };
+  const hash = addressHash(params);
+
+  const { data: cached, error: cErr } = await admin
+    .from("order_geocodes")
+    .select("address_hash,ok,precision,latitude,longitude,reason")
+    .eq("order_id", order.order_id)
+    .maybeSingle();
+  if (cErr) return { kind: "unavailable", reason: `cache: ${cErr.message}` };
+  const row = cached as GeocodeRow | null;
+  if (row && row.address_hash === hash) {
+    if (row.ok && row.latitude != null && row.longitude != null) {
+      return { kind: "ok", lat: row.latitude, lng: row.longitude, precision: row.precision as GeocodePrecision, cached: true };
+    }
+    return { kind: "rejected", reason: (row.reason ?? "sin_resultado") as GeocodePilotReason, cached: true };
+  }
+
+  const parsed = await geocodeOnce(params, opts.key, opts.fetchImpl ?? fetch, GEOCODE_PILOT.requestTimeoutMs);
+  if (parsed.kind === "error") return { kind: "unavailable", reason: parsed.status === QUOTA_STATUS ? "sin_cupo" : parsed.status };
+  const verdict = geocodeSafeguard(parsed.kind === "ok" ? parsed.result : null, order);
+  const usable = geocodeUsableForAutoGuide(verdict);
+  const point = verdict.ok ? verdict : null;
+  const save = {
+    order_id: order.order_id,
+    store_id: order.store_id,
+    address_hash: hash,
+    ok: usable,
+    precision: verdict.ok ? verdict.precision : null,
+    latitude: usable && point ? point.lat : null,
+    longitude: usable && point ? point.lng : null,
+    reason: usable ? null : verdict.ok ? "no_es_edificio" : verdict.reason,
+    checked_at: new Date().toISOString(),
+  };
+  await admin.from("order_geocodes").upsert(save, { onConflict: "order_id" });
+  console.info(`[geocode-auto] ${JSON.stringify({ store: order.store_id, ok: usable, precision: save.precision, reason: save.reason })}`);
+  if (usable && point) return { kind: "ok", lat: point.lat, lng: point.lng, precision: point.precision, cached: false };
+  if (point) return { kind: "rejected", reason: "impreciso", precision: point.precision, cached: false };
+  return { kind: "rejected", reason: verdict.ok ? "impreciso" : verdict.reason, cached: false };
 }

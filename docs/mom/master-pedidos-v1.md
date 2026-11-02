@@ -734,6 +734,28 @@ se creó**.
   conversación que se acaba de leer y la misma que el panel le propone a la
   asesora (§38, «De dónde sale ahora»). La guía guarda esa coordenada como la
   del botón. Nunca se escribe la excepción del pin respaldado (§10).
+- **Sin ubicación de WhatsApp, la dirección en Google, solo con el edificio**
+  (owner, 02-11-2026; decisiones A y B de `docs/kapta/geocodificacion-propuesta.md`).
+  Si el pedido de Provincia COD no trae coordenada y la clienta no mandó su
+  ubicación, la guía prueba la dirección escrita en la Geocoding API de Google
+  con el candado de siempre: exacta, sin coincidencia parcial, en el distrito
+  y el departamento del pedido, dentro del Perú. Para la guía automática solo
+  vale el **edificio** (`ROOFTOP`). En el piloto de Kenku (02-11-2026), Provincia
+  COD con `ROOFTOP` quedó al 92,7 % a 300 m o menos del pin real, sobre el
+  90 % pedido; con el número de cuadra incluido bajaba al 84,5 %.
+  - **Una consulta por pedido y dirección.** La respuesta se guarda en
+    `order_geocodes` (0301) con la huella de lo consultado; si la dirección
+    cambia se vuelve a consultar. Los errores y el cupo agotado (400 por día en
+    Google Cloud) no se guardan: se reintenta.
+  - **Las puertas de siempre.** Después vienen el pin respaldado de Aliclik (§10)
+    y todas las rejas de la guía. La guía deja escrito de dónde salió la
+    coordenada (`guide_detail`: «coordenada: dirección en Google (edificio)» o
+    «… ubicación de WhatsApp»). La coordenada del pedido no se toca.
+  - **Interruptor:** `chatby_auto_settings.geocode_enabled`, por organización;
+    nace encendido. Sin `GOOGLE_GEOCODING_API_KEY`, no consulta. Nunca en
+    `?dry=1`.
+  - **Si Google no da el edificio,** el pedido queda `sin_ubicacion` como antes,
+    y Kapta sigue mirando el chat por si la clienta manda su ubicación.
 - **Cómo confirma, con la guía ya creada.** Por el mismo registro atómico que
   la mesa: `register_confirmation_attempt_v2`, la misma función del botón (v1)
   con `source`, que ya usa el agente de voz. Resultado «Confirmó el pedido»,
@@ -18272,6 +18294,9 @@ y en Aliclik el pin decide a dónde va el paquete.
    usa sola con dos condiciones más (`chatbyGuidePin`): que sea de esta compra
    —enviada como mucho 3 días antes del pedido; si la última es más vieja, no
    vale— y que el pedido respalde el pin, sin excepción escrita.
+3. **La de la dirección en Google, solo para la guía automática de Provincia
+   COD y solo con el edificio** (§6.1, «Confirmó por Chatby», 02-11-2026; 0301).
+   No se muestra en el panel ni pasa a ser la coordenada del pedido.
 
 Pruebas: `test/order-pin-sources.test.ts`.
 - **Teléfono:** el de facturación y, si falta, el de envío. Sin dirección de

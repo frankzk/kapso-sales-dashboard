@@ -5596,3 +5596,11 @@ migración, crons ni variables de entorno.
 
 **Marcha atrás.** Revertir el commit. Las filas recalculadas con `mom-v1.36`
 vuelven a calcularse con la versión anterior en la siguiente pasada del cron.
+
+## 02-11-2026 · 0301 — coordenada por dirección para la guía automática de Provincia COD
+
+- **Migración `0301_order_geocodes.sql`:**
+  - tabla `order_geocodes`, la caché por pedido, con RLS y sin políticas;
+  - `chatby_auto_settings.geocode_enabled`, encendido por defecto.
+- **Aplicarla antes del código.** Sin la columna, la pasada no consulta a Google (`geocode_enabled` se lee como apagado).
+- **Usa** `GOOGLE_GEOCODING_API_KEY` (ya en Vercel) y el cupo de 400 por día de «v3 requests per day».

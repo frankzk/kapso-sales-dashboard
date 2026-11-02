@@ -632,3 +632,57 @@ describe("los confirmados por Chatby sin ubicación", () => {
     });
   });
 });
+
+describe("la coordenada por dirección para la guía automática (0301)", () => {
+  it("la guía automática solo acepta el edificio", async () => {
+    const { geocodeUsableForAutoGuide } = await import("@/lib/geocode-google");
+    expect(geocodeUsableForAutoGuide({ ok: true, lat: -6.8, lng: -79.8, precision: "ROOFTOP" })).toBe(true);
+    expect(geocodeUsableForAutoGuide({ ok: true, lat: -6.8, lng: -79.8, precision: "RANGE_INTERPOLATED" })).toBe(false);
+    expect(geocodeUsableForAutoGuide({ ok: false, reason: "impreciso" })).toBe(false);
+  });
+
+  function cacheAdmin(initial: Record<string, unknown> | null) {
+    const state = { row: initial, upserts: [] as Record<string, unknown>[] };
+    const client = {
+      from() {
+        const chain: Record<string, unknown> = {};
+        for (const m of ["select", "eq"]) chain[m] = () => chain;
+        chain.maybeSingle = () => Promise.resolve({ data: state.row, error: null });
+        chain.upsert = (row: Record<string, unknown>) => {
+          state.upserts.push(row);
+          state.row = row;
+          return Promise.resolve({ error: null });
+        };
+        return chain;
+      },
+    };
+    return { client: client as never, state };
+  }
+
+  const order = { order_id: "o1", store_id: "s1", address: "Av. Ejército 123", district: "Yanahuara", province: "Arequipa", region: "Arequipa" };
+
+  it("consulta una vez y después usa lo guardado; un error no se guarda", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    vi.doUnmock("@/lib/geocode-google-server");
+    vi.resetModules();
+    const { geocodeOrderAddress } = await import("@/lib/geocode-google-server");
+    const { client, state } = cacheAdmin(null);
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify(googleOk(-16.3989, -71.535, "Yanahuara", "Arequipa", "ROOFTOP")), { status: 200 }));
+    const first = await geocodeOrderAddress(client, order, { key: "k", fetchImpl: fetchImpl as never });
+    expect(first).toMatchObject({ kind: "ok", precision: "ROOFTOP", cached: false });
+    expect(state.upserts).toHaveLength(1);
+    const second = await geocodeOrderAddress(client, order, { key: "k", fetchImpl: fetchImpl as never });
+    expect(second).toMatchObject({ kind: "ok", cached: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    // Otra dirección: vuelve a consultar. El número de la cuadra no sirve para la guía.
+    const moved = { ...order, address: "Calle Nueva 456" };
+    const interpolated = vi.fn(async () => new Response(JSON.stringify(googleOk(-16.39, -71.53, "Yanahuara", "Arequipa", "RANGE_INTERPOLATED")), { status: 200 }));
+    expect(await geocodeOrderAddress(client, moved, { key: "k", fetchImpl: interpolated as never })).toMatchObject({ kind: "rejected", precision: "RANGE_INTERPOLATED" });
+
+    const fresh = cacheAdmin(null);
+    const failing = vi.fn(async () => new Response("oops", { status: 500 }));
+    expect(await geocodeOrderAddress(fresh.client, order, { key: "k", fetchImpl: failing as never })).toMatchObject({ kind: "unavailable" });
+    expect(fresh.state.upserts).toHaveLength(0);
+  });
+});

@@ -22,6 +22,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { env } from "@/lib/env";
 import { fetchChatbyConversation } from "@/lib/chatby-api";
+import { geocodeOrderAddress } from "@/lib/geocode-google-server";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { limaTodayKey } from "@/lib/shipments";
 import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
@@ -426,7 +427,7 @@ async function confirmWithGuide(
   master: MasterRow,
   orderName: string,
   verdict: { messageId: string; at: string | null; amountCents: number },
-  g: { state: GuideState; code: string | null },
+  g: { state: GuideState; code: string | null; detail?: string | null },
   reads: number,
   item: ChatbyAutoItem,
   report: ChatbyAutoReport,
@@ -448,7 +449,7 @@ async function confirmWithGuide(
       chatby: { policy: CHATBY_AUTO_POLICY, message_id: verdict.messageId, message_at: verdict.at, amount_cents: verdict.amountCents },
     },
   });
-  const guideMark = { state: g.state, detail: null, code: g.code };
+  const guideMark = { state: g.state, detail: g.detail ?? null, code: g.code };
   if (rpcErr) {
     item.outcome = "error";
     item.detail = rpcErr.message;
@@ -538,6 +539,8 @@ interface GuideCtx {
   scopes: Map<string, AliclikReadScope | string>;
   waiting: Map<string, boolean>;
   report: ChatbyAutoReport;
+  /** La clave de Google si la coordenada por dirección está encendida (0301), o null. */
+  geocodeKey: string | null;
 }
 
 /** EL TOPE: las guías automáticas de hoy (día de Lima), de toda la organización. */
@@ -556,7 +559,17 @@ async function guideContext(
   if (error) throw new Error(`leer el tope de guías de hoy: ${error.message}`);
   const left = guideCapLeft(count ?? 0, settings.daily_cap);
   report.guideCapLeft = left;
-  return { admin, dry: ctx.dry, today: limaTodayKey(ctx.now), left, scopes: new Map(), waiting: new Map(), report };
+  const geocodeKey = settings.geocode_enabled ? env.googleGeocodingApiKey() || null : null;
+  return { admin, dry: ctx.dry, today: limaTodayKey(ctx.now), left, scopes: new Map(), waiting: new Map(), report, geocodeKey };
+}
+
+/** De dónde salió la coordenada de la guía automática (queda en `guide_detail`). */
+type GuideCoordinateSource = "pedido" | "whatsapp" | "google";
+
+function coordinateNote(source: GuideCoordinateSource): string | null {
+  if (source === "google") return "coordenada: dirección en Google (edificio)";
+  if (source === "whatsapp") return "coordenada: ubicación de WhatsApp";
+  return null;
 }
 
 type GuideTry =
@@ -604,10 +617,35 @@ async function tryChatbyGuide(g: GuideCtx, row: MasterRow, messages: readonly Ch
   // La coordenada: la del pedido si la trae; si no, la ubicación que mandó la
   // clienta por WhatsApp en esta compra. Sin ninguna, se la pide una persona.
   let coordinate: string | null = null;
+  let source: GuideCoordinateSource = "pedido";
   if (row.latitude == null || row.longitude == null) {
     const pin = chatbyGuidePin(messages, row.order_created_at);
-    if (!pin) return { kind: "hold", reason: "sin_ubicacion", detail: null, state: "para_persona" };
-    coordinate = pin.coordinate;
+    if (pin) {
+      coordinate = pin.coordinate;
+      source = "whatsapp";
+    } else if (g.geocodeKey && !g.dry && row.coverage === "provincia_cod") {
+      // Sin ubicación de WhatsApp: la dirección escrita en Google, solo si da
+      // el EDIFICIO (decisiones A y B del owner, 02-11-2026; MOM §38). Una
+      // consulta por pedido y dirección (0301). El candado del pin respaldado
+      // de Aliclik se aplica igual al cotizar.
+      const geo = await geocodeOrderAddress(
+        admin,
+        {
+          order_id: row.order_id,
+          store_id: row.store_id,
+          address: row.address ?? null,
+          district: row.district ?? null,
+          province: row.province ?? null,
+          region: row.region ?? null,
+        },
+        { key: g.geocodeKey },
+      );
+      if (geo.kind !== "ok") return { kind: "hold", reason: "sin_ubicacion", detail: null, state: "para_persona" };
+      coordinate = `${geo.lat}, ${geo.lng}`;
+      source = "google";
+    } else {
+      return { kind: "hold", reason: "sin_ubicacion", detail: null, state: "para_persona" };
+    }
   }
 
   let scope = g.scopes.get(row.store_id);
@@ -679,7 +717,7 @@ async function tryChatbyGuide(g: GuideCtx, row: MasterRow, messages: readonly Ch
   g.left--;
   g.report.guidesCreated++;
   g.report.guideCapLeft = g.left;
-  return { kind: "ok", state: "creada", code: result.orderNumber ?? null };
+  return { kind: "ok", state: "creada", code: result.orderNumber ?? null, detail: coordinateNote(source) };
 }
 
 function failed(g: GuideCtx, error: string): GuideTry {
@@ -868,7 +906,7 @@ async function watchPass(
       item.outcome = ctx.dry ? "simulada" : "creada";
       item.detail = g.code ?? g.detail ?? undefined;
       if (ctx.dry) continue;
-      await touch(r, { guide_state: g.state, guide_detail: null, guide_code: g.code });
+      await touch(r, { guide_state: g.state, guide_detail: g.detail ?? null, guide_code: g.code });
       await recomputeOrderMasterSafe(admin, [master.order_id]);
       continue;
     }
