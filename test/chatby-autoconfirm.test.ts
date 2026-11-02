@@ -20,6 +20,7 @@ import {
   chatbyGuidePin,
   chatbyGuideBlock,
   chatbyHoldNote,
+  chatbyLocationWatch,
   isGuideHoldReason,
   chatbyOperationId,
   chatbyOrderSkip,
@@ -471,6 +472,41 @@ describe("solo sale de Por confirmar con la guía creada (owner, 02-11-2026)", (
   it("lo que no sale queda para la asesora o se vuelve a leer, sin confirmar", () => {
     expect(server).toMatch(/if \(g\.kind === "wait"\)[\s\S]*?continue;/);
     expect(server).toMatch(/if \(g\.kind === "hold"\)[\s\S]*?holdForAdvisor[\s\S]*?continue;/);
+  });
+});
+
+describe("mirar el chat hasta que llegue la ubicación (owner, 02-11-2026)", () => {
+  const PIN = { lat: -6.4875, lng: -76.3653 };
+  const watch = (messages: ChatbyMessage[]) =>
+    chatbyLocationWatch({ messages, orderName: "#AUR900226", orderCreatedAt: CREATED, totalAmount: 178, order: ORDER });
+  const confirma = () => msg({ text: CONFIRMA, at: "2026-11-01T14:10:00.000Z" });
+
+  it("la confirmación sigue en pie: confirma", () => {
+    expect(watch([confirma()]).kind).toBe("confirm");
+  });
+
+  it("le pidieron la ubicación y contestó antes de mandarla: si lo último es su ubicación, confirma", () => {
+    const c = confirma();
+    const v = watch([c, msg({ kind: "equipo", text: "Nos compartes tu ubicación?" }), msg({ text: "ya te mando" }), msg({ location: PIN, text: "Ubicación" })]);
+    expect(v).toEqual({ kind: "confirm", messageId: c.id, at: c.at, amountCents: 17800 });
+  });
+
+  it("si lo último no es su ubicación, espera", () => {
+    expect(watch([confirma(), msg({ text: "ya te mando" })]).kind).toBe("wait");
+    expect(watch([confirma(), msg({ location: PIN }), msg({ text: "¿puede ser el lunes?" })]).kind).toBe("wait");
+  });
+
+  it("un «no lo quiero» lo pasa a la asesora", () => {
+    expect(watch([confirma(), msg({ text: "ya no lo deseo, quiero anular" })])).toEqual({ kind: "hold", reason: "rechazo" });
+  });
+
+  it("el servidor: los dos casos, sin ubicación solo vuelve a mirar, y con ella crea la guía (y confirma si seguía en Por confirmar)", () => {
+    const server = read("lib/chatby-autoconfirm-server.ts");
+    expect(server).toContain("await watchPass(admin, settings, ctx, guide, report)");
+    expect(server).toContain('.eq("reason", "sin_ubicacion")');
+    expect(server).toContain('.eq("guide_detail", "sin_ubicacion")');
+    expect(server).toMatch(/g\.kind === "hold" && g\.reason === "sin_ubicacion"\)\) \{[\s\S]*?await touch\(r\);/);
+    expect(server).toContain("await confirmWithGuide(admin, key, master, master.order_name");
   });
 });
 

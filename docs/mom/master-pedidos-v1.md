@@ -756,6 +756,23 @@ se creó**.
   posible duplicado…, con su texto). **Una sola vez**, como los demás motivos.
   Un timeout de Aliclik también queda para la asesora (pudo crearse: se mira
   Aliclik antes de crear otra) y cuenta para el tope. Sin aviso por Telegram.
+- **Sin ubicación, Kapta sigue mirando el chat** (owner, 02-11-2026). El que
+  quedó para la asesora por `sin_ubicacion` no es final como los demás: cada
+  30 minutos, dentro de las 72 h del pedido, la pasada vuelve a leer su chat
+  (aparte de las 20 lecturas de la confirmación, hasta 10 más por pasada). La
+  asesora le pide la ubicación a la clienta; cuando la manda, Kapta crea la guía
+  por el mismo camino y con el mismo tope y **confirma con la guía creada**. La
+  confirmación se vuelve a evaluar entera, con una sola diferencia: lo que la
+  clienta escribió después de confirmar («ya te mando») no la anula si **lo
+  último que mandó es su ubicación**; si lo último es otra cosa, se espera. Un
+  «no lo quiero» lo deja definitivamente para la asesora. Mientras no llega, no
+  se escribe nada visible (ni otro hecho). Si una persona lo confirma, lo anula
+  o lo mueve, se deja de mirar (`reason = sin_ubicacion_cerrado`).
+  Los 14 primeros (01-11), confirmados antes de esta regla y sin guía, también
+  se miran así mientras sigan en Preparación · Por generar rótulo: cuando la
+  clienta manda su ubicación, Kapta les crea la guía (`guide_detail =
+  sin_ubicacion` → `creada`). Si la guía no sale, queda el hecho «Guía
+  automática no creada» como antes.
 - **Lo que solo espera.** Con Aliclik en rojo, con el tope del día gastado o
   con otra creación en curso (el candado), no se escribe nada visible: el
   pedido sigue en Por confirmar y se vuelve a leer a los 30 minutos.

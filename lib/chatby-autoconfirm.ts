@@ -439,7 +439,8 @@ export const CHATBY_HOLD_REASONS: Record<ChatbyHoldReason, string> = {
   direccion_distinta: "La dirección del mensaje no es la del pedido.",
   destino_distinto: "El distrito o la provincia del mensaje no son los del pedido.",
   mensaje_posterior: "La clienta escribió algo más después de confirmar.",
-  sin_ubicacion: "La clienta no mandó su ubicación por WhatsApp en esta compra, y Aliclik la exige.",
+  sin_ubicacion:
+    "La clienta no mandó su ubicación por WhatsApp en esta compra, y Aliclik la exige. Pídesela: Kapta sigue mirando el chat 72 h y, cuando llegue, crea la guía y confirma sola.",
   pin_sin_respaldo: "La ubicación que mandó no cae en el departamento ni en la ciudad del pedido.",
   shalom: "Tiene «DNI y agencia Shalom» guardado: la salida la decide una persona.",
   programado: "Tiene envío programado: la guía es la del día programado.",
@@ -666,4 +667,38 @@ export function chatbyGuidePin(
     return { coordinate: `${m.location.lat}, ${m.location.lng}`, at: m.at! };
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Mirar el chat hasta que llegue la ubicación (owner, 02-11-2026)
+//
+// Sin ubicación no hay guía, y sin guía no se confirma: el pedido queda para la
+// asesora, que se la pide a la clienta. Mientras dure la ventana, la pasada
+// vuelve a leer el chat cada `recheck_minutes`, y cuando la clienta la manda,
+// crea la guía (y confirma, si seguía en Por confirmar).
+
+export type ChatbyWatchVerdict =
+  | { kind: "confirm"; messageId: string; at: string | null; amountCents: number }
+  /** Algo cambió (un rechazo, otra dirección…): ya es de la asesora. */
+  | { kind: "hold"; reason: ChatbyHoldReason }
+  /** Todavía nada: se vuelve a mirar en la pasada siguiente. */
+  | { kind: "wait" };
+
+/**
+ * ¿La confirmación del pedido que esperaba su ubicación sigue en pie? La misma
+ * evaluación de siempre, con una sola diferencia: lo que escribió después de
+ * confirmar (le pidieron la ubicación y contestó «ya te mando») no la anula si
+ * lo ÚLTIMO que mandó es su ubicación. Si escribió otra cosa al final, se espera:
+ * puede estar por mandarla, y un «¿puede ser el lunes?» lo lee una persona.
+ */
+export function chatbyLocationWatch(input: Parameters<typeof evaluateChatbyConfirmation>[0]): ChatbyWatchVerdict {
+  const v = evaluateChatbyConfirmation(input);
+  if (v.confirm) return { kind: "confirm", messageId: v.messageId, at: v.at, amountCents: v.amountCents };
+  if (!v.final) return { kind: "wait" };
+  if (v.reason !== "mensaje_posterior") return { kind: "hold", reason: v.reason };
+  const fromClient = input.messages.filter((m) => m.kind === "cliente");
+  const last = fromClient[fromClient.length - 1];
+  const original = input.messages.find((m) => m.id === v.messageId);
+  if (!last?.location || !v.messageId || v.amountCents == null || !original) return { kind: "wait" };
+  return { kind: "confirm", messageId: v.messageId, at: original.at, amountCents: v.amountCents };
 }
