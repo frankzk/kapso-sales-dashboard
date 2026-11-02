@@ -116,7 +116,9 @@ en reportes de entrega ni cambia fechas por sí sola.
    es el día de entrega que muestra el Master (MOM §30.11, migración 0272).
 4. Revisar las listas:
    - **Entregados por marcar**: lo que la carga no pudo marcar (quien cargó no
-     tenía `master.edit`, o algo falló). Seleccionar y «Marcar entregados».
+     tenía `master.edit`, o algo falló) y, desde el 02-11-2026, lo que Urpi
+     entregó hace más de 60 días y Kapta sigue teniendo abierto (la carga no
+     lo marca solo). Seleccionar y «Marcar entregados».
      Pasa por `lib/master-door.ts` como la liquidación y convierte la salida
      «Por definir» del pedido en salida de Urpi entregada
      (`lib/urpi-salida.ts`). Incluye los anulados solo en Kapta.

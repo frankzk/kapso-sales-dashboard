@@ -30,7 +30,7 @@ const RESULT_TONE: Record<string, string> = {
 };
 
 const TABS: { key: UrpiBucket; label: string; help: string }[] = [
-  { key: "por_aplicar", label: "Entregados por marcar", help: "Al cargar el reporte, Kapta marca solos los entregados por Urpi. Aquí queda lo que no pudo marcar: quien cargó no tenía permiso para editar el Master, o algo falló. Márcalos: van al Master por la misma vía que la liquidación, y su salida «Por definir» pasa a ser la salida de Urpi entregada." },
+  { key: "por_aplicar", label: "Entregados por marcar", help: "Al cargar el reporte, Kapta marca solos los entregados por Urpi. Aquí queda lo que no pudo marcar: quien cargó no tenía permiso para editar el Master, algo falló, o Urpi lo entregó antes de los días que se muestran (lo antiguo no se marca solo). Márcalos: van al Master por la misma vía que la liquidación, y su salida «Por definir» pasa a ser la salida de Urpi entregada." },
   { key: "cancelado", label: "Cancelados por Urpi", help: "Urpi los canceló y siguen abiertos en Kapta. Seguimiento Lima decide si se llaman, salen con otro courier o vuelven. Kapta no cambia su estado." },
   { key: "reprogramado", label: "Reprogramados", help: "Urpi los reintenta el siguiente día de lunes a sábado desde la fecha del reporte." },
   { key: "por_vincular_entregado", label: "Por vincular – entregados", help: "Urpi los entregó, pero el teléfono no lleva a un único pedido. Elige el pedido o escribe su código: se vincula todo el envío y queda marcado entregado en el Master." },
@@ -101,7 +101,7 @@ export function UrpiResultsBoard({ nav, orgId, canImport, canApply, days, lastIm
     <header className="flex flex-wrap items-start justify-between gap-4">
       <div><p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Couriers externos</p>
         <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">Urpi · Resultados de entrega</h1>
-        <p className="mt-2 max-w-3xl text-sm text-slate-600">En Urpi, abre «Reporte del mes – detallado», pulsa <strong>Exportar</strong> y carga aquí el .csv. Kapta vincula cada envío por teléfono y te dice qué falta hacer. Se muestran los intentos de los últimos {days} días, y los entregados más antiguos cuya salida «Por definir» falta pasar a Urpi.</p>
+        <p className="mt-2 max-w-3xl text-sm text-slate-600">En Urpi, abre «Reporte del mes – detallado», pulsa <strong>Exportar</strong> y carga aquí el .csv. Kapta vincula cada envío por teléfono y te dice qué falta hacer. Se muestran los intentos de los últimos {days} días, y los entregados más antiguos que faltan marcar o cuya salida «Por definir» falta pasar a Urpi.</p>
       </div>
       {canImport && <div className="flex flex-col items-end gap-1">
         <button disabled={busy} className={primary} onClick={() => fileInput.current?.click()}>{uploading ? "Leyendo reporte…" : "Cargar reporte de Urpi"}</button>
