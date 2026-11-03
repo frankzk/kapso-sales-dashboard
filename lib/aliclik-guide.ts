@@ -68,6 +68,7 @@ import {
   distritoQueAliclikNoTiene,
 } from "@/lib/aliclik-status";
 import { lockedIntentMessage, type LockedIntent } from "@/lib/aliclik-orphan-expiry";
+import { releasableIntents, type CreationIntent, type IntentGuide } from "@/lib/aliclik-intent-release";
 import {
   loadCatalogFor,
   hydrateOrderLineSkusFromCatalog,
@@ -794,6 +795,35 @@ export interface CreateGuideInput {
 const INTENT_EXPIRY_MS = 90 * 60_000;
 
 /**
+ * Suelta las intenciones de creación cuya guía ya quedó anulada o transferida
+ * (`releasableIntents`). Devuelve un error solo si no se pudieron leer: soltar
+ * de menos deja el candado como estaba, que es el lado seguro.
+ */
+async function releaseClosedGuideIntents(
+  admin: ReturnType<typeof createAdminSupabase>,
+  orderId: string,
+): Promise<string | null> {
+  const [intents, guides] = await Promise.all([
+    admin.from("aliclik_order_requests").select("id,status,order_number,released_at")
+      .eq("order_id", orderId).neq("status", "failed").is("released_at", null),
+    admin.from("shipments").select("courier,guide_code,external_order_number,delivery_status").eq("order_id", orderId),
+  ]);
+  if (intents.error || guides.error) {
+    return `No se pudieron leer las guías anteriores del pedido: ${(intents.error ?? guides.error)!.message}`;
+  }
+  const { release } = releasableIntents((intents.data ?? []) as CreationIntent[], (guides.data ?? []) as IntentGuide[]);
+  const now = new Date().toISOString();
+  for (const r of release) {
+    // Condicional: si otra creación ya la soltó, no se pisa su marca.
+    await admin.from("aliclik_order_requests")
+      .update({ released_at: now, released_reason: r.reason })
+      .eq("id", r.id)
+      .is("released_at", null);
+  }
+  return null;
+}
+
+/**
  * Por qué el candado rechazó este intento, en cristiano.
  *
  * Se consulta la intención viva en lugar de devolver un texto fijo: el estado
@@ -809,6 +839,7 @@ async function describeLockedIntent(
     .select("status,order_number,created_at")
     .eq("order_id", orderId)
     .neq("status", "failed")
+    .is("released_at", null)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -1003,6 +1034,14 @@ export async function createAliclikGuideFor(
       courier: output.courier, estado: output.delivery_status,
     })),
   } : null;
+
+  // Una guía de Aliclik anulada o transferida suelta su candado (MOM §10.2,
+  // 03-11-2026): sin esto el pedido no podía volver a salir por Aliclik nunca
+  // más (cadena de reintentos, §9.5). Solo después de que la regla de salidas
+  // diera paso, y nunca un `pending`. Dos creaciones a la vez sueltan la misma
+  // fila y la segunda sigue chocando abajo, en el candado.
+  const releaseError = await releaseClosedGuideIntents(admin, orderId);
+  if (releaseError) return { error: releaseError };
 
   // EL CANDADO. Se escribe ANTES del POST: si dos peticiones llegan a la vez,
   // una choca aquí (23505) en lugar de crear dos pedidos reales en Aliclik.

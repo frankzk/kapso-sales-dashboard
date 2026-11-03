@@ -4343,6 +4343,30 @@ candado.
   del día programado (§6.2) usa ese mismo núcleo, con el mismo candado, y no
   levanta ninguna excepción por nadie.
 
+**Una guía anulada suelta el candado (03-11-2026).** El candado protege de
+crear **la misma** guía dos veces, no de que el pedido vuelva a salir por
+Aliclik. Hasta hoy una intención completada (`sent`) quedaba viva para siempre,
+aunque su guía terminara anulada, y el pedido ya no podía salir otra vez por
+Aliclik: lo que piden la cadena de reintentos (§9.5) y «después de AUTOECOM,
+ALIDRIVER» (§9). Caso: #KP200108, guía AUTOECOM AUR5X510805505383 anulada el
+02-11; «Aprobar · ALIDRIVER» respondía «Este pedido ya tiene una guía en
+Aliclik».
+
+- Justo antes de escribir la nueva intención, y solo si la regla de salidas ya
+  dio paso, `createAliclikGuideFor` suelta (`released_at`, `released_reason`)
+  las intenciones `sent` o `duplicate` cuya guía está en las salidas del pedido
+  —por el número que devolvió Aliclik— y **todas** esas salidas están
+  **anuladas o transferidas** (`releasableIntents`,
+  `lib/aliclik-intent-release.ts`). Es la misma línea de la regla de salidas:
+  una Aliclik anulada o transferida no estorba; cualquier otra, sí.
+- **Nunca se suelta un `pending`** (lo resuelven el barrido y la caducidad de
+  abajo), ni una intención sin número o cuyo número no aparece en las salidas,
+  ni una guía viva, devuelta sin anular o entregada.
+- El único parcial excluye las soltadas (`0303_aliclik_intent_release.sql`).
+  Soltar no cambia el estado de la fila: el historial y la salud de Aliclik la
+  siguen contando como una creación completada. Dos creaciones a la vez sueltan
+  la misma fila y la segunda sigue chocando en el candado.
+
 El barrido periódico resuelve esa espera, y tiene que cerrar **las dos** ramas
 posibles:
 

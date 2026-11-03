@@ -607,4 +607,6 @@
 \ir migrations/0301_order_geocodes.sql
 \echo 'Applying 0302_urpi_link_programacion.sql'
 \ir migrations/0302_urpi_link_programacion.sql
+\echo 'Applying 0303_aliclik_intent_release.sql'
+\ir migrations/0303_aliclik_intent_release.sql
 \echo 'Done.'
