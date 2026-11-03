@@ -36,7 +36,7 @@
 // Soltar no borra nada: la fila sigue `sent`, con su número, su cuerpo y su
 // respuesta, y la salud de Aliclik la sigue contando como un éxito.
 
-import { mapAliclikStatus } from "@/lib/aliclik-status";
+import { mapAliclikStatus, parseAliclikLabel } from "@/lib/aliclik-status";
 
 /** Los estados de una guía de Aliclik que ya no es una salida viva. */
 export const RELEASABLE_GUIDE_STATUSES = ["anulado", "transferido"] as const;
@@ -60,12 +60,13 @@ export interface IntentGuide {
 /**
  * ¿El último reporte de Aliclik cierra la guía? Devuelta (RETURNED, o de vuelta
  * en almacén tras un intento) o anulada (CANCEL, ANNULLED o una llamada que
- * cancela). Lee la etiqueta `estado · despacho · llamada`. Pura.
+ * cancela). Lee la etiqueta con `parseAliclikLabel`, que aguanta campos vacíos
+ * y el español del Excel. Pura.
  */
 export function aliclikReportSaysClosed(reportedStatus: string | null | undefined): boolean {
-  const [status = "", dispatchStatus = "", callStatus = ""] = (reportedStatus ?? "").split(" · ").map((p) => p.trim());
-  if (!status) return false;
-  return mapAliclikStatus({ status, dispatchStatus, callStatus }).deliveryStatus === "anulado";
+  const parsed = parseAliclikLabel(reportedStatus);
+  if (!parsed.status && !parsed.dispatchStatus && !parsed.callStatus) return false;
+  return mapAliclikStatus(parsed).deliveryStatus === "anulado";
 }
 
 function guideNumber(value: string | null | undefined): string {

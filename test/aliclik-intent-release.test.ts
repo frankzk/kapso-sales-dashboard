@@ -39,6 +39,21 @@ describe("releasableIntents", () => {
     expect(aliclikReportSaysClosed(null)).toBe(false);
   });
 
+  it("aguanta campos vacíos (la etiqueta los descarta) y el español del Excel", () => {
+    // Sin estado de entrega: las partes se corrían de lugar.
+    expect(aliclikReportSaysClosed("RETURNED · CONFIRMED")).toBe(true);
+    expect(aliclikReportSaysClosed("FAKE")).toBe(true);
+    expect(aliclikReportSaysClosed("TO_PREPARE · DUPLICATE")).toBe(true);
+    expect(aliclikReportSaysClosed("PENDING_DELIVERY · OUT_OF_STOCK")).toBe(true);
+    // Lo que escribe el Excel en ESTADO ENTREGA.
+    expect(aliclikReportSaysClosed("ANULADO")).toBe(true);
+    expect(aliclikReportSaysClosed("CANCELADO")).toBe(true);
+    // Un intento fallido no es una guía cerrada.
+    for (const live of ["RECHAZADO", "NO CONTESTA", "NOT_RESPOND · CONFIRMED", "CONFIRMED", "PICKED · CONFIRMED", "ALGO_RARO"]) {
+      expect(aliclikReportSaysClosed(live), live).toBe(false);
+    }
+  });
+
   it("también una transferida, como en la regla de salidas", () => {
     expect(RELEASABLE_GUIDE_STATUSES).toEqual(["anulado", "transferido"]);
     expect(releasableIntents([sent], [guide("transferido", { reported_status: "CANCEL · TO_RETURN · CONFIRMED" })]).release).toHaveLength(1);

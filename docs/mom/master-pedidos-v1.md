@@ -4358,8 +4358,10 @@ Aliclik».
   —por el número que devolvió Aliclik— y **todas** esas salidas están
   **anuladas o transferidas** en Kapta **y Aliclik las reportó devueltas o
   anuladas** (`reported_status`: RETURNED, de vuelta en almacén tras un intento,
-  CANCEL o ANNULLED; `releasableIntents` y `aliclikReportSaysClosed`,
-  `lib/aliclik-intent-release.ts`). El reporte de Aliclik hace falta porque
+  CANCEL, ANNULLED o una llamada que cancela; también «ANULADO» o
+  «CANCELADO» del Excel; `releasableIntents` y `aliclikReportSaysClosed`,
+  `lib/aliclik-intent-release.ts`). La etiqueta se lee por vocabulario y no por
+  posición (`parseAliclikLabel`), porque descarta los campos vacíos. El reporte de Aliclik hace falta porque
   Kapta también escribe `anulado` o `transferido` sin cancelar nada allá (la
   gestión «cliente cancela», el séptimo «no contesta», el paso a Swayp), y esa
   guía puede seguir viva en Aliclik.
