@@ -5657,6 +5657,24 @@ tiene una guía en Aliclik» (#KP200108). Sin crons, variables ni
 al candado anterior hay que recrear el índice con `where status <> 'failed'`,
 lo que falla si ya hay pedidos con una intención soltada y otra viva.
 
+### 03-11-2026 · El detalle del Excel de Aliclik: subestado y comentario del motorizado (0304, MOM §9)
+
+El Excel de Aliclik trae «SUB ESTADO» y «ÚLTIMO COMENTARIO MOTORIZADO», que
+la API no da. Kapta los guarda en la guía al subir el reporte, los muestra en
+la ficha y en Repro Lima, y la cadena de reintentos toma DE VIAJE y POR
+CLIENTE como reprogramado. Sin crons ni variables nuevas.
+
+1. **Migración `0304_aliclik_report_detail.sql`**, a mano, ANTES del código.
+   Suma `shipments.aliclik_sub_status` y `aliclik_rider_comment`. No toca
+   filas. Es idempotente.
+2. Desplegar el código. Si sale antes que la migración, Repro Lima y la ficha
+   del envío no cargan (leen las columnas nuevas); la importación del Excel sí
+   sigue (las quita en el reintento).
+3. **Avisar** a quien sube los reportes: volver a subir el Excel de Aliclik
+   cada día para tener el subestado y el comentario.
+
+**Marcha atrás.** Revertir el commit. Las columnas pueden quedarse.
+
 ### 03-11-2026 · Lima tiene su ventana de recuperación: 21 días (sin migración, MOM §11)
 
 Decisión del owner: la ventana de 7 días de Kenku y Aurela (01-11-2026) era

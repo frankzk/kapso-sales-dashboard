@@ -20,7 +20,7 @@ import { rescheduleDateProblem, RESCHEDULE_MAX_DAYS } from "@/lib/gf-dispatch-pr
 import { programDayLabel } from "@/lib/dispatch-day";
 import { guideDoorRejection, guideFailedAfterDispatch, type RecoveryGuideLike } from "@/lib/reproprovincia";
 import { ownRetryDecision, type OwnRetryBlock } from "@/lib/gf-retry";
-import { motivoDelCourier } from "@/lib/aliclik-status";
+import { courierDetail, motivoDelCourier } from "@/lib/aliclik-status";
 import { NON_DELIVERY_REASONS } from "@/lib/routes";
 import { nombreDeCourier, sameCourier } from "@/lib/shipment-output";
 import { firstSwaypDispatchDay, isSwaypDispatchDay, SWAYP_SUNDAY_ERROR } from "@/lib/swayp-dispatch-days";
@@ -1160,6 +1160,9 @@ export type ReproFailure =
       kind: "courier";
       courier: string;
       reportedStatus: string | null;
+      /** Aliclik, del Excel (0304): «SUB ESTADO» y el último comentario del motorizado. */
+      subStatus?: string | null;
+      riderComment?: string | null;
       swaypState?: number | null;
       /** Día del fallo (YYYY-MM-DD o ISO), cuando el courier lo sella (Aliclik al anular). */
       failedOn?: string | null;
@@ -1187,7 +1190,7 @@ export function failureLine(f: ReproFailure): { text: string; rejected: boolean 
     const note = f.note?.trim() ? ` · «${f.note.trim()}»` : "";
     return { text: `No entregado por ${who}${day} · ${reason}${note}`, rejected: f.outcomeReason === "rechazado" };
   }
-  const motivo = motivoDelCourier(f.reportedStatus).texto;
+  const motivo = `${motivoDelCourier(f.reportedStatus).texto}${courierDetail(f.subStatus, f.riderComment)}`;
   const rejected = guideDoorRejection({
     courier: f.courier,
     delivery_status: "",

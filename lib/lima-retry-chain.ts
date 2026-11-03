@@ -100,9 +100,17 @@ export function isChainRider(riderName: string | null | undefined): boolean {
  * El motivo de una guía de Aliclik que no entregó, en el vocabulario de la
  * parada: `REFUSED` es rechazo en puerta, `RESCHEDULED` reprogramado,
  * `NOT_RESPOND` no contestó; lo demás (`CANCEL`, `ANNULLED`, en devolución)
- * no dice por qué y cuenta como «otro». Pura.
+ * no dice por qué y cuenta como «otro».
+ *
+ * El «SUB ESTADO» del Excel de Aliclik (0304, owner 03-11-2026) dice el porqué
+ * de un cancelado: «DE VIAJE» y «POR CLIENTE» son un reprogramado (el cliente
+ * pidió otra fecha o canceló: hay que llamar, no reintentar al día siguiente)
+ * y «FUERA DE COBERTURA» es la dirección. Manda sobre el estado. Pura.
  */
-export function aliclikChainReason(reportedStatus: string | null | undefined): string {
+export function aliclikChainReason(reportedStatus: string | null | undefined, subStatus?: string | null): string {
+  const sub = (subStatus ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toUpperCase();
+  if (sub === "DE VIAJE" || sub === "POR CLIENTE") return "reprogramado";
+  if (sub === "FUERA DE COBERTURA") return "direccion_errada";
   const status = (reportedStatus ?? "").split(" · ")[0]?.trim().toUpperCase() ?? "";
   if (status === "REFUSED") return "rechazado";
   if (status === "RESCHEDULED") return "reprogramado";

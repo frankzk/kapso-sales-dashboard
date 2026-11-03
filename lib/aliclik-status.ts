@@ -643,3 +643,13 @@ export function avisoDistritoQueAliclikNoTiene(distrito: string): string {
     `para que lo arreglen de su lado.`
   );
 }
+
+/**
+ * « · de viaje · «Cliente desea la entrega el sábado»»: lo que el Excel de
+ * Aliclik añade al estado (0304). Vacío si no trae nada. Pura.
+ */
+export function courierDetail(subStatus: string | null | undefined, riderComment: string | null | undefined): string {
+  const sub = subStatus?.trim() ? ` · ${subStatus.trim().toLowerCase()}` : "";
+  const comment = riderComment?.trim() ? ` · «${riderComment.trim()}»` : "";
+  return `${sub}${comment}`;
+}
