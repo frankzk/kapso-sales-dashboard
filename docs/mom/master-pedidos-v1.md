@@ -2010,8 +2010,9 @@ Tanders:
   Gestión Reproprovincia**, donde Swayp sí se repite: desde el 08-10-2026 la
   guía en devolución es la madre del reenvío por Swayp, sin esperar a que se
   confirme la devolución (§11.8).
-- **La ventana es la de la tienda** (`return_recovery_max_days`), no los 65 días
-  de Tanders, que eran por su antigüedad. Se ancla igual, en la **salida** del
+- **La ventana es la de la tienda** (`return_recovery_max_days`) en provincia y
+  21 días en Lima (§11, 03-11-2026), no los 65 días de Tanders, que eran por su
+  antigüedad. Se ancla igual, en la **salida** del
   intento fallido: el barrido sella la guía en cada pasada y la Devolución
   confirmada llega días después de la Devolución, así que ninguna de las dos
   sirve de ancla.
@@ -2061,7 +2062,8 @@ Decisión del owner (30-09-2026), para **todos los couriers de Lima**:
   caja anterior lo recibe y lo asigna. Un rechazo que la 0189 ya recibió como
   devuelto va igual a «Por reprogramar Lima», con el inventario como razón.
 - La ventana, el ancla y lo demás no cambian: Tanders 65 días, los demás la de
-  la tienda, contadas desde la **salida** del intento fallido. El paquete que
+  la tienda (desde el 03-11-2026, 21 días en Lima, §11), contadas desde la
+  **salida** del intento fallido. El paquete que
   vuelve sigue arrastrando `Devolución pendiente de inventario` como razón.
 - **Anulado en Shopify**: el pedido espera la caja en **Por cerrar** (§13:
   toda salida despachada necesita devolución física para cerrar una
@@ -4617,6 +4619,20 @@ La regla vive en `lib/reproprovincia.ts` y la leen igual el estado del pedido
   Master y en Envíos**. Caer a `returned_at` no vale: el retorno llega días
   después del cierre (medido: 58 guías con más de un día de diferencia) y
   estiraría la ventana solo en una de las dos pantallas.
+- **Lima tiene su ventana: 21 días (decisión del owner, 03-11-2026).** «Esa
+  regla de recuperación de 7 días era para Provincia. No es para Lima. Lima debe
+  tener unas 3 semanas aprox». La operación del pedido elige la ventana
+  (`LIMA_RECOVERY_DAYS`, `recoveryWindowDaysForOperation`, `lib/reproprovincia.ts`):
+  Lima, 21 días; Provincia COD y Agencia, `return_recovery_max_days`; Tanders
+  sigue con sus 65. La usan igual el estado y la macroetapa del Master, el
+  barrido que baja las ventanas vencidas (`reconcileOrderMaster`, con un corte
+  propio para «Por reprogramar Lima») y Envíos, que del Master solo lee la
+  operación (`macro_operation`) y sigue calculando la decisión con los hechos
+  del pedido. Medido el 03-11-2026: 20 pedidos de Lima con la salida de Urpi
+  cancelada entre el 16 y el 26-10 habían caído a anulado (18) o devuelto (2) a
+  los 7 días; con la v1.37 vuelven a «En curso · Por reprogramar Lima». La
+  recuperación por WhatsApp y el agente de voz no cambian: siguen con
+  `return_recovery_max_days`.
 - **No aplica si alguna guía del pedido ya ENTREGÓ**: ése es el reenvío que
   funcionó, la venta terminó bien. Ni si hay una guía viva: la gestión la lleva
   ella.

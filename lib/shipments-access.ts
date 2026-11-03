@@ -37,6 +37,7 @@ import {
   RECOVERY_DISCARDED_KIND,
   aliclikGuideFailedAfterDispatch,
   recoveryOutcome,
+  recoveryWindowDaysForOperation,
   type RecoveryEventLike,
   type RecoveryGuideLike,
 } from "@/lib/reproprovincia";
@@ -287,8 +288,9 @@ export async function withRecoveryState(
   const guidesByOrder = new Map<string, SiblingGuide[]>();
   const eventsByOrder = new Map<string, RecoveryEventLike[]>();
   const cancelled = new Set<string>();
+  const operationByOrder = new Map<string, string>();
   for (const part of chunk(orderIds, 300)) {
-    const [guides, events, orders] = await Promise.all([
+    const [guides, events, orders, operations] = await Promise.all([
       sb
         .from("shipments")
         .select("id,order_id,courier,delivery_status,reported_status,swayp_state,dispatched_at,closed_at,returned_at,updated_at")
@@ -299,6 +301,9 @@ export async function withRecoveryState(
         .in("order_id", part)
         .eq("kind", RECOVERY_DISCARDED_KIND),
       sb.from("orders").select("id,cancelled_at").in("id", part).not("cancelled_at", "is", null),
+      // Solo la OPERACIÓN (Lima, Provincia, Agencia), que no vence con el tiempo,
+      // para elegir la ventana. La decisión se sigue calculando aquí.
+      sb.from("order_master").select("order_id,macro_operation").in("order_id", part),
     ]);
     for (const g of ((guides.data ?? []) as SiblingGuide[])) {
       const list = guidesByOrder.get(g.order_id) ?? [];
@@ -311,6 +316,9 @@ export async function withRecoveryState(
       eventsByOrder.set(e.order_id, list);
     }
     for (const o of ((orders.data ?? []) as { id: string }[])) cancelled.add(o.id);
+    for (const m of ((operations.data ?? []) as { order_id: string; macro_operation: string | null }[])) {
+      if (m.macro_operation) operationByOrder.set(m.order_id, m.macro_operation);
+    }
   }
 
   // EL ANCLA DE LA VENTANA ES LA MISMA QUE EN EL MASTER. Las guías anteriores al
@@ -340,7 +348,8 @@ export async function withRecoveryState(
   }
 
   // La ventana es por tienda: `return_recovery_max_days`, el mismo número que la
-  // recuperación por WhatsApp y que el Master.
+  // recuperación por WhatsApp y que el Master. Lima tiene la suya
+  // (`LIMA_RECOVERY_DAYS`, owner, 03-11-2026), con la operación del Master.
   const windowByStore = new Map<string, number>();
   const { data: stores } = await sb
     .from("stores")
@@ -363,7 +372,10 @@ export async function withRecoveryState(
         guides,
         events,
         nowIso,
-        windowByStore.get(row.store_id) ?? RECOVERY_DEFAULT_MAX_DAYS,
+        recoveryWindowDaysForOperation(
+          (row.order_id && operationByOrder.get(row.order_id)) || "",
+          windowByStore.get(row.store_id) ?? RECOVERY_DEFAULT_MAX_DAYS,
+        ),
       ),
     };
   });

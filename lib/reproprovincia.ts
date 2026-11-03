@@ -94,6 +94,22 @@ export interface RecoveryGuideLike {
  */
 export const TANDERS_RECOVERY_DAYS = 65;
 
+/**
+ * Días de la ventana en LIMA (owner, 03-11-2026): unas tres semanas. Los 7 días
+ * de `return_recovery_max_days` en Kenku y Aurela (01-11-2026) eran para limpiar
+ * la cola de Provincia; aplicados también a Lima, un no entregado de la semana
+ * anterior caía a «Por cerrar» como perdido en vez de seguir en «Por reprogramar
+ * Lima» (20 cancelados de Urpi del 16 al 26/10, el 03-11-2026). Tanders conserva
+ * sus 65 días.
+ */
+export const LIMA_RECOVERY_DAYS = 21;
+
+/** La ventana de la tienda para su operación: Lima tiene la suya; Provincia y
+ *  Agencia, la de la tienda (`return_recovery_max_days`). Pura. */
+export function recoveryWindowDaysForOperation(operation: string, storeWindowDays: number): number {
+  return operation === "lima" ? LIMA_RECOVERY_DAYS : storeWindowDays;
+}
+
 export interface RecoveryEventLike {
   kind: string;
   occurred_at: string;

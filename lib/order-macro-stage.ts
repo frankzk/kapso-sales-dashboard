@@ -30,6 +30,13 @@ import {
   swaypNoEntregoMotivo,
 } from "@/lib/swayp-desde-confirmacion";
 
+// v1.37 (03-11-2026, owner): la ventana de recuperación de 7 días de Kenku y
+// Aurela es de Provincia. Lima tiene la suya, 21 días
+// (`LIMA_RECOVERY_DAYS`, `recoveryWindowDaysForOperation`, lib/reproprovincia.ts,
+// MOM §11). Un intento fallido de Lima de hace 8–21 días vuelve de anulado o
+// devuelto a «En curso · Por reprogramar Lima»; la versión sube para que el cron
+// los recalcule.
+//
 // v1.36 (02-11-2026, owner, #KP142611): un distrito de Lima Metropolitana que
 // se repite en provincia (La Victoria también es Chiclayo) ya no toma provincia
 // Lima/Callao de lo aprendido, de una guía, del carrito ni del historial cuando
@@ -238,7 +245,7 @@ import {
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.36" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.37" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"

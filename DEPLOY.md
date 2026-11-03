@@ -5656,3 +5656,21 @@ tiene una guía en Aliclik» (#KP200108). Sin crons, variables ni
 **Marcha atrás.** Revertir el commit. Las columnas pueden quedarse; para volver
 al candado anterior hay que recrear el índice con `where status <> 'failed'`,
 lo que falla si ya hay pedidos con una intención soltada y otra viva.
+
+### 03-11-2026 · Lima tiene su ventana de recuperación: 21 días (sin migración, MOM §11)
+
+Decisión del owner: la ventana de 7 días de Kenku y Aurela (01-11-2026) era
+para Provincia; Lima se queda con unas tres semanas. `LIMA_RECOVERY_DAYS = 21`
+y `recoveryWindowDaysForOperation` (`lib/reproprovincia.ts`) eligen la ventana
+por operación en el Master, en el barrido de ventanas vencidas y en Envíos.
+`MOM_RESOLUTION_VERSION` sube a `mom-v1.37` para que el cron recalcule: los
+intentos fallidos de Lima de hace 8–21 días vuelven de anulado o devuelto a
+«En curso · Por reprogramar Lima». Sin migración, crons ni variables de
+entorno; `return_recovery_max_days` de las tiendas no cambia.
+
+1. **El código**, por el camino de siempre.
+2. **Comprobar** tras la pasada del cron que los 20 pedidos con la salida de
+   Urpi cancelada entre el 16 y el 26-10 están en `por_reprogramar_lima`.
+
+**Marcha atrás.** Revertir el commit. Las filas recalculadas con `mom-v1.37`
+vuelven a calcularse con la versión anterior en la siguiente pasada del cron.
