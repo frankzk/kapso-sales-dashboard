@@ -53,6 +53,9 @@ function stubAdmin(
         order() {
           return builder;
         },
+        range() {
+          return builder;
+        },
         limit() {
           return Promise.resolve({ data: rows, error: null });
         },
@@ -430,6 +433,12 @@ describe("recomputeOrderMaster — robustez", () => {
       from() {
         return {
           select() {
+            return this;
+          },
+          order() {
+            return this;
+          },
+          range() {
             return this;
           },
           in() {

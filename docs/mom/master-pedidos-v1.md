@@ -1524,6 +1524,19 @@ Un estado congelado por un humano (`status_source = 'manual'`) **no** es una fot
 vieja: es una decisión, el recálculo no la pisa (§4) y no cuenta como
 desperfecto aunque contradiga a las guías.
 
+- **El revelado lee TODOS los hechos, de a páginas (03-11-2026).** PostgREST
+  corta cada respuesta en 1000 filas sin avisar, y el barrido lee los hechos de
+  hasta 200 pedidos a la vez (~15 por pedido). Lo que se cortaba eran los
+  hechos más NUEVOS, los últimos en el orden físico de la tabla. Medido ese
+  día: un lote de 99 pedidos con 1.105 hechos, donde los dos «Entregado» a mano
+  de #KP143645 y #KP143595 eran las filas 1.104 y 1.105; el barrido los
+  recalculó sin verlos y los devolvió a «Por despachar». Lo mismo les pasó a
+  14 entregas marcadas a mano desde el Master esa tarde (#KP142761, #KP201304,
+  …): el drawer las recalculaba bien, uno por uno, y el barrido siguiente las
+  deshacía. Las lecturas por lote del recálculo (hechos, salidas, historial de
+  llamadas, pagos, claves compartidas, paradas y Urpi) van ahora por
+  `readAllPages` (lib/postgrest-pages.ts), ordenadas por su clave.
+
 ## 8. Confirmación y riesgo del cliente
 
 Responsables actuales: Milagros, con apoyo de Mildred, Gabriela, Yohalis y

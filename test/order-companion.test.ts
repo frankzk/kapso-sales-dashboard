@@ -508,6 +508,9 @@ function filteringAdmin(tables: Record<string, Row[]>) {
         order() {
           return builder;
         },
+        range() {
+          return builder;
+        },
         limit() {
           return builder;
         },
