@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useState, useTransition, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
+import { approveAliclikRetry, dismissAliclikRetry } from "@/app/dashboard/pedidos/repro-lima/retry-actions";
 import { Badge, ChoiceChip, OpsButton, choiceChipClass } from "@/components/ops-ui";
 import { OrderLink } from "@/components/order-link";
 import { CallButton, ClaimBadge, FailureLine, ReproRowChips, phoneLabel } from "@/components/repro-lima-sheet";
@@ -70,8 +72,82 @@ function PendingStage({ row, repro, today }: { row: LimaPendingOrder; repro?: Re
   return (
     <div className="space-y-1">
       <div className="flex flex-wrap gap-1"><Badge tone="brand">{macroStageLabel(row.stage)}</Badge><Badge wrap>{row.substage ? macroSubstageLabel(row.substage) : "Sin subetapa"}</Badge></div>
+      {repro?.retryChain && <RetryChainNote orderId={row.orderId} chain={repro.retryChain} />}
       {repro && <div className="flex flex-wrap gap-1"><ReproRowChips row={repro} today={today} /></div>}
       {!repro && row.programmedFor && <Badge tone={row.programmedFor < today ? "warn" : "info"} wrap>{`Programado ${programDayLabel(row.programmedFor)}${row.programmedFor < today ? " · vencido" : ""}`}</Badge>}
+    </div>
+  );
+}
+
+/**
+ * La cadena de reintentos por Aliclik (MOM §9.5, 03-11-2026): qué intento toca,
+ * con qué transporte y si el paquete ya está en la oficina. No se llama: la
+ * guía se crea desde la ficha con ese transporte.
+ */
+function RetryChainNote({ orderId, chain }: { orderId: string; chain: NonNullable<ReproRow["retryChain"]> }) {
+  const transport = chain.next === "autoecom" ? "AUTOECOM" : "ALIDRIVER";
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [dismissing, setDismissing] = useState(false);
+  const [reason, setReason] = useState("");
+  const run = (action: () => Promise<{ error?: string; notice?: string; done?: boolean }>) => {
+    setMessage(null);
+    start(async () => {
+      const result = await action();
+      setMessage(result.error ? { ok: false, text: result.error } : { ok: true, text: result.notice ?? "Listo." });
+      if (result.done) {
+        setDismissing(false);
+        router.refresh();
+      }
+    });
+  };
+  return (
+    <div className="space-y-1">
+      <Badge tone="brand" wrap>{`Reintento Aliclik ${chain.attempt} de ${chain.of} · ${transport}`}</Badge>
+      <p className="text-xs text-ink-500">{chain.failedText}</p>
+      <p className={chain.inOffice ? "text-xs font-medium text-ok-fg" : "text-xs text-warn-fg"}>
+        {chain.inOffice ? "Paquete en oficina." : "Esperando el paquete en oficina: recíbelo en «Devoluciones» para aprobar."}
+      </p>
+      <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+        <OpsButton
+          size="sm"
+          variant="primary"
+          disabled={pending || !chain.inOffice}
+          onClick={() => run(() => approveAliclikRetry(orderId))}
+          className="pointer-coarse:h-11"
+        >
+          {pending && !dismissing ? "Creando guía…" : `Aprobar · ${transport}`}
+        </OpsButton>
+        <OpsButton size="sm" disabled={pending} onClick={() => setDismissing((v) => !v)} className="pointer-coarse:h-11">
+          A Repro Lima
+        </OpsButton>
+        <OrderLink orderId={orderId} section="operar" className="text-xs font-medium text-brand-700 hover:underline">
+          Abrir ficha
+        </OrderLink>
+      </div>
+      {dismissing && (
+        <form
+          className="flex flex-wrap items-center gap-1.5"
+          onSubmit={(e) => { e.preventDefault(); run(() => dismissAliclikRetry(orderId, reason)); }}
+        >
+          <label className="sr-only" htmlFor={`retry-why-${orderId}`}>Por qué pasa a Repro Lima</label>
+          <input
+            id={`retry-why-${orderId}`}
+            value={reason}
+            maxLength={500}
+            placeholder="Por qué pasa a Repro Lima"
+            onChange={(e) => setReason(e.target.value)}
+            className="h-8 min-w-48 flex-1 rounded-md bg-white px-2 text-xs ring-1 ring-inset ring-line-strong pointer-coarse:h-11"
+          />
+          <OpsButton size="sm" type="submit" disabled={pending || reason.trim().length < 3} className="pointer-coarse:h-11">
+            {pending ? "Guardando…" : "Pasar"}
+          </OpsButton>
+        </form>
+      )}
+      {message && (
+        <p role={message.ok ? "status" : "alert"} className={message.ok ? "text-xs text-ok-fg" : "text-xs text-crit-fg"}>{message.text}</p>
+      )}
     </div>
   );
 }

@@ -30,7 +30,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
     permissions.can("dispatch.pickup");
   // «Repro Lima» es de quien llama a los clientes o despacha
   // (`repro_lima.manage`, MOM §9.5). La página y cada acción lo vuelven a pedir.
-  const canReproLima = permissions.can("repro_lima.manage");
+  // Despacho entra a ver «Reintentos Aliclik» (`repro_lima.retries`, 03-11-2026).
+  const canReproLima = permissions.can("repro_lima.manage") || permissions.can("repro_lima.retries");
   // Lo que espera a una persona en «Cotejar Olva» (MOM §12). Un fallo aquí no
   // puede tumbar el panel entero: sin número, el menú sigue funcionando.
   const olvaPending = canManageLogistics

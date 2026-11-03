@@ -28,7 +28,8 @@ export default function ReproLimaPage() {
 }
 
 async function ReproLimaContent() {
-  const scope = await requireReproLima();
+  // Despacho entra solo a «Reintentos Aliclik» (`repro_lima.retries`).
+  const scope = await requireReproLima({ retries: true });
   if ("error" in scope) {
     return scope.reason === "permiso"
       ? <EmptyState title="Acceso restringido">{scope.error}</EmptyState>
@@ -45,5 +46,5 @@ async function ReproLimaContent() {
     const message = error instanceof Error ? error.message : String(error);
     return <EmptyState title="No pudimos cargar Repro Lima">{`${message} Recarga la página.`}</EmptyState>;
   }
-  return <ReproLimaBoard data={data} pending={pending} />;
+  return <ReproLimaBoard data={data} pending={pending} retriesOnly={scope.retriesOnly} />;
 }

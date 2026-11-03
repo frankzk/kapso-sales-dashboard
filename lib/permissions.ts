@@ -143,6 +143,11 @@ export const PERMISSIONS = [
   // llama —la Asesora— y de quien despacha: permiso propio para que el rol
   // «Asesora» lo traiga sin traer Despacho del día (`dispatch.manage`).
   "repro_lima.manage",
+  // «Reintentos Aliclik» de Repro Lima (03-11-2026, decisión del owner): ver
+  // los no entregados que vuelven a salir por Aliclik y crear su guía. Lo
+  // tienen las asesoras y Despacho; sin `repro_lima.manage`, Despacho ve solo
+  // esa tarjeta, no las llamadas.
+  "repro_lima.retries",
   // Registro de motorizados: alta/edición de la ficha y vínculo con un usuario
   // para dar acceso a /reparto. Vive en Equipo (owner/admin). El alta rápida por
   // nombre desde Liquidaciones sigue bajo settlements.manage.
@@ -230,6 +235,7 @@ export const PERMISSION_LABEL: Record<Permission, string> = {
   "alerts.repeated_voucher": "Alerta de comprobante repetido",
   "recovery.contact": "Escribir a clientas con devolución",
   "repro_lima.manage": "Reprogramar entregas en Lima",
+  "repro_lima.retries": "Reintentos Aliclik en Lima",
   "riders.manage": "Dar de alta motorizados",
   "leads.map_ads": "Asignar producto a anuncios",
   "orders.create": "Crear pedidos en Shopify",
@@ -284,6 +290,7 @@ export const PERMISSION_HELP: Record<Permission, string> = {
   "alerts.repeated_voucher": "Recibir el aviso urgente cuando el mismo comprobante aparece en dos pedidos.",
   "recovery.contact": "Enviar el WhatsApp que ofrece reenviar un pedido devuelto con adelanto.",
   "repro_lima.manage": "Llamar al cliente de Lima cuya entrega falló y dejar el acuerdo. Kapta lo programa en Grupo GF.",
+  "repro_lima.retries": "Ver en Repro Lima los no entregados que vuelven a salir por Aliclik (AUTOECOM, luego ALIDRIVER) y crear su guía.",
   "riders.manage": "Crear la ficha del motorizado y darle acceso a su ruta en el celular.",
   "leads.map_ads": "Decir qué producto vende cada anuncio de Meta, para ordenar la cola de leads.",
   "orders.create": "Crear un pedido desde Kapta. Se crea de verdad en la tienda de Shopify.",
@@ -339,6 +346,7 @@ export const PERMISSION_AREAS = [
       "swayp.solve_novelty",
       "recovery.contact",
       "repro_lima.manage",
+      "repro_lima.retries",
       "aliclik.manage_catalog",
     ],
   },
@@ -590,6 +598,7 @@ const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
     "recovery.contact",
     // Lo mismo con el cliente de Lima que no recibió: lo llama y deja el acuerdo.
     "repro_lima.manage",
+    "repro_lima.retries",
     // Coordinar el reparto es operativo, no financiero: arma la ruta del día.
     "routes.manage",
     // Generar el pedido ES su trabajo: la vendedora cierra la venta por teléfono
@@ -635,6 +644,7 @@ export const FUNCTIONAL_ROLES = [
       "swayp.solve_novelty",
       "recovery.contact",
       "repro_lima.manage",
+      "repro_lima.retries",
       "orders.create",
       "closure.return",
     ],
@@ -658,6 +668,9 @@ export const FUNCTIONAL_ROLES = [
       // Sin `repro_lima.manage` (01-11-2026, decisión del owner, MOM §9.5):
       // llamar al cliente y acordar el reintento es solo de la tienda (Asesora).
       // Grupo GF es el courier: recibe lo acordado en «Reintentos para hoy».
+      // Sí ve «Reintentos Aliclik» (03-11-2026): los reintentos que salen por
+      // Aliclik sin llamar, para crear su guía.
+      "repro_lima.retries",
       "routes.manage",
       "routes.report_others",
       // «Motorizados» vive en Equipo, que es de Administración: sin Equipo,
