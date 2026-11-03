@@ -5633,3 +5633,62 @@ variables de entorno.
 **Marcha atrás.** Revertir el commit. Las salidas ya pasadas a Urpi en ruta se
 quedan como están (son hechos registrados); la restricción ampliada puede
 quedarse.
+
+### 03-11-2026 · Una guía de Aliclik anulada suelta el candado de creación (0303, MOM §10.2)
+
+El candado de `aliclik_order_requests` admitía una sola intención viva por
+pedido para siempre: una guía anulada impedía volver a salir por Aliclik, y la
+cadena de reintentos de Lima (AUTOECOM → ALIDRIVER) chocaba con «Este pedido ya
+tiene una guía en Aliclik» (#KP200108). Sin crons, variables ni
+`MOM_RESOLUTION_VERSION` nuevos.
+
+1. **Migración `0303_aliclik_intent_release.sql`**, a mano, ANTES del código.
+   Suma `released_at` y `released_reason` y rehace el único parcial
+   excluyendo las soltadas, con el mismo nombre. No toca filas. Es idempotente.
+2. Comprobar:
+   ```sql
+   select indexdef from pg_indexes where indexname = 'aliclik_order_requests_live_uniq';
+   ```
+   Debe terminar en `WHERE ((status <> 'failed'::text) AND (released_at IS NULL))`.
+3. Desplegar el código. **Si sale antes que la migración, ninguna guía de
+   Aliclik se puede crear** (la creación lee `released_at` antes del candado).
+
+**Marcha atrás.** Revertir el commit. Las columnas pueden quedarse; para volver
+al candado anterior hay que recrear el índice con `where status <> 'failed'`,
+lo que falla si ya hay pedidos con una intención soltada y otra viva.
+
+### 03-11-2026 · El detalle del Excel de Aliclik: subestado y comentario del motorizado (0304, MOM §9)
+
+El Excel de Aliclik trae «SUB ESTADO» y «ÚLTIMO COMENTARIO MOTORIZADO», que
+la API no da. Kapta los guarda en la guía al subir el reporte, los muestra en
+la ficha y en Repro Lima, y la cadena de reintentos toma DE VIAJE y POR
+CLIENTE como reprogramado. Sin crons ni variables nuevas.
+
+1. **Migración `0304_aliclik_report_detail.sql`**, a mano, ANTES del código.
+   Suma `shipments.aliclik_sub_status` y `aliclik_rider_comment`. No toca
+   filas. Es idempotente.
+2. Desplegar el código. Si sale antes que la migración, Repro Lima y la ficha
+   del envío no cargan (leen las columnas nuevas); la importación del Excel sí
+   sigue (las quita en el reintento).
+3. **Avisar** a quien sube los reportes: volver a subir el Excel de Aliclik
+   cada día para tener el subestado y el comentario.
+
+**Marcha atrás.** Revertir el commit. Las columnas pueden quedarse.
+
+### 03-11-2026 · Lima tiene su ventana de recuperación: 21 días (sin migración, MOM §11)
+
+Decisión del owner: la ventana de 7 días de Kenku y Aurela (01-11-2026) era
+para Provincia; Lima se queda con unas tres semanas. `LIMA_RECOVERY_DAYS = 21`
+y `recoveryWindowDaysForOperation` (`lib/reproprovincia.ts`) eligen la ventana
+por operación en el Master, en el barrido de ventanas vencidas y en Envíos.
+`MOM_RESOLUTION_VERSION` sube a `mom-v1.37` para que el cron recalcule: los
+intentos fallidos de Lima de hace 8–21 días vuelven de anulado o devuelto a
+«En curso · Por reprogramar Lima». Sin migración, crons ni variables de
+entorno; `return_recovery_max_days` de las tiendas no cambia.
+
+1. **El código**, por el camino de siempre.
+2. **Comprobar** tras la pasada del cron que los 20 pedidos con la salida de
+   Urpi cancelada entre el 16 y el 26-10 están en `por_reprogramar_lima`.
+
+**Marcha atrás.** Revertir el commit. Las filas recalculadas con `mom-v1.37`
+vuelven a calcularse con la versión anterior en la siguiente pasada del cron.

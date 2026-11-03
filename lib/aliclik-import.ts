@@ -45,6 +45,10 @@ export interface ParsedShipmentRow {
   /** El courier salió y no encontró a la clienta (NO CONTESTA): consume la
    *  reprogramación agendada y devuelve la guía a la cola de llamadas. */
   attempt_failed: boolean;
+  /** «SUB ESTADO» del Excel (DE VIAJE, POR CLIENTE…), en mayúsculas. 0304. */
+  sub_status: string | null;
+  /** «ÚLTIMO COMENTARIO MOTORIZADO», limpio (`cleanRiderComment`). 0304. */
+  rider_comment: string | null;
   raw: Record<string, string>;
 }
 
@@ -74,6 +78,27 @@ function pick(map: Map<string, string>, keys: string[]): string | null {
     if (v && v.trim()) return v.trim();
   }
   return null;
+}
+
+// El detalle que la API no trae (0304, owner 03-11-2026).
+const SUB_STATUS_KEYS = ["sub estado", "subestado", "sub-estado"];
+const RIDER_COMMENT_KEYS = ["ultimo comentario motorizado", "comentario motorizado", "comentario del motorizado"];
+
+/**
+ * El comentario del motorizado sin la basura que trae a menudo: «-», «.», «j».
+ * Se quitan los signos sueltos del borde; sin al menos tres letras, no hay
+ * comentario. Se corta a 300 caracteres. Pura.
+ */
+export function cleanRiderComment(raw: string | null | undefined): string | null {
+  const text = (raw ?? "").replace(/\s+/g, " ").replace(/^[\s\-.,;:_*]+|[\s\-,;:_*]+$/g, "").trim();
+  if ((text.match(/\p{L}/gu) ?? []).length < 3) return null;
+  return text.length > 300 ? `${text.slice(0, 300)}…` : text;
+}
+
+/** El «SUB ESTADO» en mayúsculas y sin espacios de más, o null. Pura. */
+export function cleanSubStatus(raw: string | null | undefined): string | null {
+  const text = (raw ?? "").replace(/\s+/g, " ").trim().toUpperCase();
+  return text && /\p{L}/u.test(text) ? text : null;
 }
 
 // The guide code is always an AUR5X… token; detect it by value, not by header.
@@ -484,6 +509,8 @@ export function parseAliclikRow(
       pick(map, DESPACHO_KEYS),
       pick(map, ESTADO_LLAMADA_KEYS),
     ),
+    sub_status: cleanSubStatus(pick(map, SUB_STATUS_KEYS)),
+    rider_comment: cleanRiderComment(pick(map, RIDER_COMMENT_KEYS)),
     raw,
   };
 }

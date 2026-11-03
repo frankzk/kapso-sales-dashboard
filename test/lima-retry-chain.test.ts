@@ -14,6 +14,7 @@ import {
   aliclikChainReason,
   chainChipText,
   chainFailureText,
+  chainReadyOn,
   isChainRider,
   limaRetryChain,
   urpiChainReason,
@@ -124,22 +125,33 @@ describe("la fila de Repro Lima", () => {
   const chain = limaRetryChain([a("alexis", "otro", "2026-11-02T17:00:00Z")], NOW);
   const base = { retryChain: chain, cancelled: false, inStage: true, box: { kind: "en_oficina" as const, since: "2026-11-02T22:00:00Z" } };
 
-  it("propone el reintento con el paquete en oficina", () => {
-    expect(retryChainOf(base, null)).toEqual({ attempt: 2, of: 3, next: "autoecom", failedText: "Falló con Alexis (Grupo GF) el 02/11: otro motivo", inOffice: true });
-    expect(retryChainOf({ ...base, box: { kind: "con_motorizado", riderName: "Alexis", since: null } }, null)?.inOffice).toBe(false);
+  it("propone el reintento y se aprueba desde el día siguiente, sin esperar la devolución", () => {
+    expect(retryChainOf(base, null, "2026-11-03")).toEqual({ attempt: 2, of: 3, next: "autoecom", failedText: "Falló con Alexis (Grupo GF) el 02/11: otro motivo", inOffice: true, ready: true });
+    // Con el paquete todavía con Alexis también se aprueba (owner, 03-11-2026).
+    const withRider = retryChainOf({ ...base, box: { kind: "con_motorizado", riderName: "Alexis", since: null } }, null, "2026-11-03");
+    expect(withRider).toMatchObject({ inOffice: false, ready: true });
+    // El mismo día que falló, no: sale otro día.
+    expect(retryChainOf(base, null, "2026-11-02")?.ready).toBe(false);
+  });
+
+  it("chainReadyOn compara el día de Lima, no el de UTC", () => {
+    // 23:30 de Lima del 02-11 son las 04:30 UTC del 03-11.
+    expect(chainReadyOn({ at: "2026-11-03T04:30:00Z" }, "2026-11-03")).toBe(true);
+    expect(chainReadyOn({ at: "2026-11-03T15:00:00Z" }, "2026-11-03")).toBe(false);
+    expect(chainReadyOn({ at: "no-es-fecha" }, "2026-11-03")).toBe(false);
   });
 
   it("anulado, fuera de la etapa o con acuerdo de la tienda: no hay reintento", () => {
-    expect(retryChainOf({ ...base, cancelled: true }, null)).toBeNull();
-    expect(retryChainOf({ ...base, inStage: false }, null)).toBeNull();
-    expect(retryChainOf(base, { agreed_on: "2026-11-04" })).toBeNull();
+    expect(retryChainOf({ ...base, cancelled: true }, null, "2026-11-03")).toBeNull();
+    expect(retryChainOf({ ...base, inStage: false }, null, "2026-11-03")).toBeNull();
+    expect(retryChainOf(base, { agreed_on: "2026-11-04" }, "2026-11-03")).toBeNull();
   });
 
   it("la tarjeta «Reintentos Aliclik» va primera y cuenta solo esos", () => {
     expect(LIMA_QUEUE_CARDS[0]?.key).toBe("reintentos_aliclik");
     const rows = [{ orderId: "o1" }, { orderId: "o2" }] as unknown as LimaPendingOrder[];
     const cases = [
-      { orderId: "o1", list: "por_decidir" as const, retryChain: retryChainOf(base, null) },
+      { orderId: "o1", list: "por_decidir" as const, retryChain: retryChainOf(base, null, "2026-11-03") },
       { orderId: "o2", list: "por_decidir" as const, retryChain: null },
     ];
     expect(attentionCounts(rows, cases, "2026-11-03").reintentos_aliclik).toBe(1);
@@ -181,8 +193,8 @@ describe("entrega 2: la bandeja «Aprobar» / «A Repro Lima»", () => {
     expect(actions).toContain('perms.can("repro_lima.retries")');
     expect(actions).toContain('perms.can("aliclik.create_guide")');
     const approve = actions.slice(actions.indexOf("export async function approveAliclikRetry"));
-    // El orden: la cadena de ahora, el paquete en oficina, la cotización, la guía.
-    const order = ["readChain(orderId)", "if (!chain.inOffice)", "previewAliclikGuideFor(ctx", "createAliclikGuideFor(ctx"].map((t) => approve.indexOf(t));
+    // El orden: la cadena de ahora, otro día que el fallo, la cotización, la guía.
+    const order = ["readChain(orderId)", "if (!chain.ready)", "previewAliclikGuideFor(ctx", "createAliclikGuideFor(ctx"].map((t) => approve.indexOf(t));
     expect(order.every((i) => i > -1)).toBe(true);
     expect([...order].sort((x, y) => x - y)).toEqual(order);
     // Por el mismo camino que la ficha, con el motivo de la salida adicional de Lima.
@@ -206,9 +218,10 @@ describe("entrega 2: la bandeja «Aprobar» / «A Repro Lima»", () => {
     expect(program).toContain("withDismissal(");
   });
 
-  it("«Aprobar todos» solo los que tienen el paquete en oficina, con confirmación", () => {
+  it("«Aprobar todos» los que ya se pueden aprobar, con confirmación; no espera la devolución", () => {
     const board = readFileSync(resolve(process.cwd(), "components/repro-lima-board.tsx"), "utf8");
-    expect(board).toContain("caseById.get(row.orderId)?.retryChain?.inOffice");
+    expect(board).toContain("caseById.get(row.orderId)?.retryChain?.ready");
+    expect(actions).not.toContain("chain.inOffice");
     expect(board).toContain("window.confirm(`Se crearán ${rows.length} guías de Aliclik. ¿Seguir?`)");
   });
 });

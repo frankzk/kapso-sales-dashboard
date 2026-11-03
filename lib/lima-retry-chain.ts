@@ -100,9 +100,17 @@ export function isChainRider(riderName: string | null | undefined): boolean {
  * El motivo de una guía de Aliclik que no entregó, en el vocabulario de la
  * parada: `REFUSED` es rechazo en puerta, `RESCHEDULED` reprogramado,
  * `NOT_RESPOND` no contestó; lo demás (`CANCEL`, `ANNULLED`, en devolución)
- * no dice por qué y cuenta como «otro». Pura.
+ * no dice por qué y cuenta como «otro».
+ *
+ * El «SUB ESTADO» del Excel de Aliclik (0304, owner 03-11-2026) dice el porqué
+ * de un cancelado: «DE VIAJE» y «POR CLIENTE» son un reprogramado (el cliente
+ * pidió otra fecha o canceló: hay que llamar, no reintentar al día siguiente)
+ * y «FUERA DE COBERTURA» es la dirección. Manda sobre el estado. Pura.
  */
-export function aliclikChainReason(reportedStatus: string | null | undefined): string {
+export function aliclikChainReason(reportedStatus: string | null | undefined, subStatus?: string | null): string {
+  const sub = (subStatus ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toUpperCase();
+  if (sub === "DE VIAJE" || sub === "POR CLIENTE") return "reprogramado";
+  if (sub === "FUERA DE COBERTURA") return "direccion_errada";
   const status = (reportedStatus ?? "").split(" · ")[0]?.trim().toUpperCase() ?? "";
   if (status === "REFUSED") return "rechazado";
   if (status === "RESCHEDULED") return "reprogramado";
@@ -176,6 +184,24 @@ const REASON_LABEL: Record<string, string> = {
   no_estaba: "no estaba",
   otro: "otro motivo",
 };
+
+/** El día de Lima (YYYY-MM-DD) de un instante. */
+function limaDayOf(iso: string): string | null {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return null;
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Lima", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ms));
+}
+
+/**
+ * ¿Ya se puede aprobar el reintento? Sale OTRO día que el intento que falló, y
+ * no espera a que el paquete vuelva a oficina (owner, 03-11-2026: «no necesito
+ * esperar la devolución para sacar el pedido, solo que se saque un día
+ * distinto»). `today` es el día de Lima. Pura.
+ */
+export function chainReadyOn(failed: Pick<ChainAttempt, "at">, today: string): boolean {
+  const day = limaDayOf(failed.at);
+  return day !== null && day < today;
+}
 
 /** «Reintento 2 de 3 · AUTOECOM» para la chapa. Pura. */
 export function chainChipText(chain: Extract<LimaRetryChain, { state: "siguiente" }>): string {

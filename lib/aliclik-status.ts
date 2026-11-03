@@ -373,6 +373,42 @@ export function aliclikStatusLabel(input: AliclikStatusInput): string {
     .join(" · ");
 }
 
+/** Lo que el Excel de Aliclik escribe en `reported_status` y cierra la guía. */
+const SPANISH_LABEL_TOKEN: Record<string, string> = {
+  ANULADO: "ANNULLED",
+  CANCELADO: "CANCEL",
+  DEVUELTO: "RETURNED",
+};
+
+/**
+ * Lee de vuelta la etiqueta de `reported_status` (03-11-2026, MOM §10.2).
+ *
+ * `aliclikStatusLabel` descarta los campos vacíos, así que leerla por posición
+ * corre las partes: «RETURNED · CONFIRMED» (sin estado de entrega) se leía como
+ * estado RETURNED y despacho CONFIRMED. Aquí cada parte va al primer campo, en
+ * el orden estado → despacho → llamada, cuyo vocabulario la reconoce. Una parte
+ * que ninguno reconoce se ignora. El Excel de Aliclik escribe en español
+ * («ANULADO», «CANCELADO»): esos se traducen. Pura.
+ */
+export function parseAliclikLabel(label: string | null | undefined): AliclikStatusInput {
+  const slots: { key: "status" | "dispatchStatus" | "callStatus"; vocab: ReadonlySet<string> }[] = [
+    { key: "status", vocab: KNOWN_STATUS },
+    { key: "dispatchStatus", vocab: KNOWN_DISPATCH },
+    { key: "callStatus", vocab: new Set([...CANCELLING_CALL, ...LIVE_CALL]) },
+  ];
+  const out: AliclikStatusInput = {};
+  let next = 0;
+  for (const raw of (label ?? "").split(" · ")) {
+    const token = SPANISH_LABEL_TOKEN[norm(raw)] ?? norm(raw);
+    if (!token) continue;
+    const at = slots.findIndex((slot, i) => i >= next && slot.vocab.has(token));
+    if (at < 0) continue;
+    out[slots[at]!.key] = token;
+    next = at + 1;
+  }
+  return out;
+}
+
 /**
  * ¿Esta guía de Aliclik terminó SIN entregar, y por lo tanto el pedido todavía
  * merece un intento?
@@ -606,4 +642,14 @@ export function avisoDistritoQueAliclikNoTiene(distrito: string): string {
     `Si el punto es correcto, despacha por otro courier y pásale a Aliclik la referencia de abajo ` +
     `para que lo arreglen de su lado.`
   );
+}
+
+/**
+ * « · de viaje · «Cliente desea la entrega el sábado»»: lo que el Excel de
+ * Aliclik añade al estado (0304). Vacío si no trae nada. Pura.
+ */
+export function courierDetail(subStatus: string | null | undefined, riderComment: string | null | undefined): string {
+  const sub = subStatus?.trim() ? ` · ${subStatus.trim().toLowerCase()}` : "";
+  const comment = riderComment?.trim() ? ` · «${riderComment.trim()}»` : "";
+  return `${sub}${comment}`;
 }

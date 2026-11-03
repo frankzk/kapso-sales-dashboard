@@ -29227,3 +29227,76 @@ alter table chatby_auto_settings add column if not exists geocode_enabled boolea
 alter table public.urpi_report_rows drop constraint if exists urpi_report_rows_link_method_check;
 alter table public.urpi_report_rows add constraint urpi_report_rows_link_method_check
   check (link_method in ('telefono','cadena','manual','programacion'));
+
+-- ---- 0303 ----
+-- ============================================================================
+-- 0303_aliclik_intent_release.sql — una guía de Aliclik anulada suelta el
+-- candado de creación (MOM §10.2, owner 03-11-2026).
+--
+-- POR QUÉ. El candado de 0056 admite una sola intención viva por pedido y
+-- excluye solo `failed`. Una intención `sent` quedaba viva para siempre, aunque
+-- su guía terminara anulada: el pedido ya no podía volver a salir por Aliclik.
+-- Eso bloquea la cadena de reintentos de Lima (AUTOECOM → ALIDRIVER, §9.5).
+-- Caso: #KP200108, guía AUTOECOM AUR5X510805505383 anulada el 02-11.
+--
+-- QUÉ CAMBIA.
+--   * `released_at` / `released_reason`: cuándo y por qué una intención dejó de
+--     contar para el candado. La fila no cambia de estado (sigue `sent`), así
+--     que el historial y la salud de Aliclik la leen igual que antes.
+--   * El único parcial excluye además las intenciones soltadas. Se crea el
+--     nuevo antes de borrar el viejo (el pedido nunca queda sin candado) y
+--     toma el nombre del viejo, para que volver a correr el paquete entero no
+--     intente recrear en 0056 el índice viejo sobre filas ya soltadas.
+--
+-- Quién suelta: `createAliclikGuideFor` (lib/aliclik-guide.ts), justo antes de
+-- escribir la nueva intención y solo si Aliclik reportó su guía devuelta o anulada
+-- (`releasableIntents`, lib/aliclik-intent-release.ts). Nunca un `pending`.
+--
+-- No cambia datos. Correrla otra vez no cambia nada.
+-- ============================================================================
+
+alter table public.aliclik_order_requests
+  add column if not exists released_at timestamptz,
+  add column if not exists released_reason text;
+
+comment on column public.aliclik_order_requests.released_at is
+  'Cuándo la intención dejó de contar para el candado porque su guía quedó anulada o transferida en Aliclik (MOM §10.2). La fila conserva su estado.';
+comment on column public.aliclik_order_requests.released_reason is
+  'Por qué se soltó el candado: la guía y su estado final.';
+
+create unique index if not exists aliclik_order_requests_live_uniq_v2
+  on public.aliclik_order_requests(order_id)
+  where status <> 'failed' and released_at is null;
+
+drop index if exists public.aliclik_order_requests_live_uniq;
+
+alter index if exists public.aliclik_order_requests_live_uniq_v2
+  rename to aliclik_order_requests_live_uniq;
+
+-- ---- 0304 ----
+-- ============================================================================
+-- 0304_aliclik_report_detail.sql — el detalle que el Excel de Aliclik trae y
+-- Kapta no guardaba: «SUB ESTADO» y «ÚLTIMO COMENTARIO MOTORIZADO» (MOM §11,
+-- owner 03-11-2026).
+--
+-- POR QUÉ. La API de Aliclik solo da tres estados (entrega, despacho,
+-- llamada): «CANCEL · TO_RETURN · CONFIRMED» no dice por qué. El Excel del
+-- portal sí: CANCELADO · DE VIAJE, · POR CLIENTE, · NO CONFIRMADO,
+-- · DEVOLUCIÓN EXCESIVA, · FUERA DE COBERTURA, y el último comentario del
+-- motorizado («Cliente desea la entrega el próximo sábado»). En 30 días de
+-- imports: 311 cancelados con subestado y 169 de 174 «no contesta» con
+-- comentario.
+--
+-- QUÉ CAMBIA. Dos columnas en `shipments`, que escribe la importación del
+-- Excel (lib/aliclik-ingest.ts) con lo que trae el reporte más reciente. No
+-- cambia datos. Correrla otra vez no cambia nada.
+-- ============================================================================
+
+alter table public.shipments
+  add column if not exists aliclik_sub_status text,
+  add column if not exists aliclik_rider_comment text;
+
+comment on column public.shipments.aliclik_sub_status is
+  'SUB ESTADO del Excel de Aliclik (DE VIAJE, POR CLIENTE, NO CONFIRMADO…), del reporte más reciente.';
+comment on column public.shipments.aliclik_rider_comment is
+  'ÚLTIMO COMENTARIO MOTORIZADO del Excel de Aliclik, limpio (sin «-», «.» ni letras sueltas), del reporte más reciente.';
