@@ -29,7 +29,12 @@ a Kapta. La aplicación necesita una conexión propia:
 
 1. Habilitar Sheets API en un proyecto de Google Cloud y una cuenta de servicio.
 2. Configurar `URPI_GOOGLE_CLIENT_EMAIL` y `URPI_GOOGLE_PRIVATE_KEY` solo en el
-   servidor. La clave puede contener saltos de línea reales o `\n`.
+   servidor. La clave es la **clave JSON de la cuenta de servicio** (no una
+   «clave de API»): el valor de `private_key`. Desde el 03-11-2026 se acepta como
+   se haya pegado —con saltos reales o `\n`, entre comillas, en una línea o el
+   JSON entero— (`urpiGooglePrivateKey`, `lib/urpi-google-sheets.ts`); antes, la
+   clave pegada entre comillas fallaba con «DECODER routines::unsupported». Si
+   no parece una clave privada, el error dice qué copiar.
 3. Compartir los archivos mensuales específicos como **lector** con esa cuenta.
    No requiere acceso a todo Drive ni delegación de dominio.
 4. Pulsar **Actualizar desde Google**. La conexión usa exclusivamente el scope
