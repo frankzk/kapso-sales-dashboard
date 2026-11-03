@@ -2649,6 +2649,29 @@ sin tope de antigüedad. Reglas:
         por comprobante repetido (`fichasBloqueadas`) y cuáles son de pedidos
         anulados en Shopify (`fichasAnuladas`). En seco no se sella nada, así
         que cada revisión enseña las mismas hasta que corre la pasada real.
+      - **La constancia que Tanders no tiene se carga a mano (03-11-2026).**
+        El 03-11-2026 había 33 pedidos entregados por Tanders sin constancia
+        válida —21 sin ninguna en Tanders (S/ 3.069), dos pares con un solo
+        Yape, los cuatro del «89yape.png» y cuatro anulados en Shopify—, y la
+        imagen solía existir igual: llegó por WhatsApp a alguien del equipo. En
+        un pedido de Lima contra entrega el drawer no ofrece «Registrar un
+        pago», así que no había dónde subirla. «Validar pagos → Cargar
+        constancia de courier» (/dashboard/pagos/constancia) busca la guía por
+        **nuestro código de pedido o por la guía de Tanders**, se pega la imagen
+        (Ctrl+V) y entra por el mismo puente que la del barrido
+        (`registerCourierCollection`): lector de constancias, huella sha256, nº
+        de operación único y alerta de comprobante repetido. Además choca con
+        las lecturas del barrido en OTRA guía (`tanders_payment_checks`), que es
+        donde viven los pares con un solo Yape. Queda con `registered_by`,
+        `vision.source = subida_manual` y un hecho en la Actividad; la firma la
+        sigue poniendo quien valida. Reglas (lib/tanders/manual-collection.ts):
+        no entra si el pedido ya tiene un cobro de courier vivo ni si la guía
+        está anulada; si Tanders aún no la da por entregada, avisa sin frenar.
+        **Un pedido anulado en Shopify sí se puede cargar, pero solo marcando
+        expresamente que la caja se entregó y se cobró**: es la decisión de una
+        persona que la regla de arriba pide, y al validarla se cierra como venta
+        cobrada. Lo puede hacer quien sube comprobantes
+        (`shalom.register_payment`); validar sigue siendo `payments.validate`.
     - Al entrar aquí se hereda lo que la vía paralela de Tanders no tenía: nº de
       operación único en todo el sistema, huella `sha256` que atrapa la misma
       imagen renombrada (es lo que habría cazado el «198yape.png» sin depender
