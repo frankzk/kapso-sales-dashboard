@@ -1854,6 +1854,15 @@ crear guías. En Lima, Aliclik se usa **solo con su transporte AUTOECOM**.
   AUTOECOM, se envía con AUTOECOM o ALIDRIVER.»). La cotización lo avisa. Una
   guía AUTOECOM anulada antes de salir no cuenta. Caso: #KP143987, guía
   AUR5X246218871979 (AutoEcom, despachada el 29-10, anulada).
+- **Siempre entrega Normal, nunca Express (03-11-2026, decisión del owner).**
+  La cotización de Aliclik marca `flagDeliveryExpress` en el transporte que
+  *puede* ir Express (ALIDRIVER en Lima, p. ej. Ventanilla en #KP200108) con
+  la tarifa normal. Reenviar el bloque tal cual creaba la guía Express (+S/ 5
+  en su portal) y solo dejaba elegirla de 05:01 a 14:00. Kapta crea la entrega
+  **Normal**, la que el portal de Aliclik elige por defecto: el bloque viaja con
+  `flagDeliveryExpress: false` (`asNormalDelivery`, `lib/aliclik-geo.ts`), sin
+  ventana horaria, y la fecha la calcula Aliclik con su hora de corte. Aplica a
+  toda guía de Aliclik, Lima y Provincia.
 - **Tanders no crea guías nuevas** (`TANDERS_NEW_GUIDES_ENABLED = false`,
   `lib/tanders/new-guides.ts`): el plan de rutas no lo ofrece en ninguna
   operación y `createTandersGuide` responde «Tanders ya no crea guías nuevas»
@@ -3027,8 +3036,9 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
     recoge al día siguiente. Deja el hecho `lima_retry_approved` con quién,
     cuándo, el transporte y la guía.
   - **Si Aliclik no ofrece ese transporte para la dirección**, el pedido pasa a
-    Repro Lima solo (decisión del owner). Si lo ofrece pero no se puede agendar
-    ahora (un ALIDRIVER Express fuera de su horario), solo lo dice.
+    Repro Lima solo (decisión del owner). Si lo ofrece pero Aliclik no deja
+    elegirlo, solo lo dice. ALIDRIVER sale como entrega Normal, nunca Express
+    (ver «Siempre entrega Normal» en §9, «Aliclik en Lima»).
   - **«A Repro Lima»** lo saca de la cadena con un motivo
     (`lima_retry_dismissed`); un fallo nuevo la vuelve a abrir.
   - **«Aprobar todos con paquete en oficina»** aprueba los de la tarjeta, uno

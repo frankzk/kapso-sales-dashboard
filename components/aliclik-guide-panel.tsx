@@ -609,7 +609,6 @@ export function AliclikGuidePanel({
                         badge={
                           <>
                             {c.selectable && c.transportId === cheapestId && <Badge tone="ok">Más barata</Badge>}
-                            {c.flagDeliveryExpress && <Badge tone="brand">Express</Badge>}
                           </>
                         }
                         aside={`S/ ${c.deliveryCost.toFixed(2)}`}
