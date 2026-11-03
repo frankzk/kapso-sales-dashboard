@@ -1865,8 +1865,11 @@ crear guías. En Lima, Aliclik se usa **solo con su transporte AUTOECOM**.
   (`cleanRiderComment`). Se ven en la ficha del envío («Aliclik: de viaje ·
   «…»») y en la línea del fallo de Repro Lima, y el subestado decide el motivo
   de la cadena de reintentos (§9.5). Para tenerlos, el Excel se sube a diario.
-  Una sonda temporal (`lib/aliclik-api-shape.ts`, hasta el 10-11-2026) revisa
-  si la API también los trae con otro nombre.
+  **La API no los trae** (sonda del 03-11-2026 sobre 1.814 pedidos de las dos
+  tiendas, guías canceladas y no contestadas incluidas): `GET
+  /integration/order` solo devuelve el número, total, los tres estados, canal,
+  producto, nota, fechas, cliente, envío y productos. No hay subestado,
+  comentario ni historial; el Excel es la única fuente.
 - **Siempre entrega Normal, nunca Express (03-11-2026, decisión del owner).**
   La cotización de Aliclik marca `flagDeliveryExpress` en el transporte que
   *puede* ir Express (ALIDRIVER en Lima, p. ej. Ventanilla en #KP200108) con
