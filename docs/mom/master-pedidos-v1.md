@@ -1524,6 +1524,19 @@ Un estado congelado por un humano (`status_source = 'manual'`) **no** es una fot
 vieja: es una decisión, el recálculo no la pisa (§4) y no cuenta como
 desperfecto aunque contradiga a las guías.
 
+- **El revelado lee TODOS los hechos, de a páginas (03-11-2026).** PostgREST
+  corta cada respuesta en 1000 filas sin avisar, y el barrido lee los hechos de
+  hasta 200 pedidos a la vez (~15 por pedido). Lo que se cortaba eran los
+  hechos más NUEVOS, los últimos en el orden físico de la tabla. Medido ese
+  día: un lote de 99 pedidos con 1.105 hechos, donde los dos «Entregado» a mano
+  de #KP143645 y #KP143595 eran las filas 1.104 y 1.105; el barrido los
+  recalculó sin verlos y los devolvió a «Por despachar». Lo mismo les pasó a
+  14 entregas marcadas a mano desde el Master esa tarde (#KP142761, #KP201304,
+  …): el drawer las recalculaba bien, uno por uno, y el barrido siguiente las
+  deshacía. Las lecturas por lote del recálculo (hechos, salidas, historial de
+  llamadas, pagos, claves compartidas, paradas y Urpi) van ahora por
+  `readAllPages` (lib/postgrest-pages.ts), ordenadas por su clave.
+
 ## 8. Confirmación y riesgo del cliente
 
 Responsables actuales: Milagros, con apoyo de Mildred, Gabriela, Yohalis y
@@ -9690,6 +9703,34 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
     el aviso de cobro y tiene que estar también donde compra.
   - Lo ejecuta Frankz, como todo reembolso: la regla dice qué se devuelve y qué
     no, no automatiza la caja.
+
+#### Vía aérea por defecto en la guía Shalom (decidido el 03-11-2026)
+
+- **La decisión.** El owner: «dejar activado por defecto que todo se vaya vía
+  aérea». Hasta ese día la casilla «Enviar por vía aérea» del modal nacía vacía
+  a propósito —el aéreo encarece el envío y se quería que lo eligiera quien
+  despacha—. Ahora nace **marcada** siempre que se pueda, y quien despacha la
+  desmarca para una excepción (`defaultAirChoice`, lib/shalom/draft.ts).
+- **«Si se puede» lo dice Shalom** (`shalomAirRoute`), no Kapta:
+  - la agencia de destino no vuela → no hay casilla: va por tierra;
+  - vuela, pero `origenes_aereos` no incluye nuestra agencia de origen (hoy
+    476, Breña) → la casilla está bloqueada: va por tierra. Pedir aéreo ahí es
+    pedir una ruta que no existe;
+  - vuela desde nuestro origen → marcada;
+  - el directorio no trae la lista (`unknown`) → **marcada** también: «todo»
+    incluye lo que no se pudo confirmar. Si Shalom rechaza la ruta al crear, el
+    error lo dice y se desmarca.
+- La casilla se marca **una vez por agencia**, cuando su ficha del directorio
+  ya llegó; lo que la persona cambie después no se pisa. Nunca se manda aéreo en
+  una ruta bloqueada aunque el estado hubiera quedado marcado de otra agencia.
+- **La cotización no incluye el recargo aéreo**: Shalom no acepta la vía al
+  cotizar, solo al crear. El aviso ya estaba en el modal.
+- **Queda registrado.** El evento `guide_created` guarda `aereo` (true/false)
+  y su nota dice «Vía aérea» o «Vía terrestre». Antes no se guardaba: de las
+  2.505 guías creadas por la API hasta el 03-11-2026 no se puede saber cuál
+  voló.
+- No toca el registro de guías hechas en el mostrador (guía manual): ahí la vía
+  la elige el mostrador y Kapta solo apunta la guía.
 
 ## 13. Devoluciones, inventario y reclamos
 
