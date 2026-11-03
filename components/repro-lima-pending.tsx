@@ -70,8 +70,30 @@ function PendingStage({ row, repro, today }: { row: LimaPendingOrder; repro?: Re
   return (
     <div className="space-y-1">
       <div className="flex flex-wrap gap-1"><Badge tone="brand">{macroStageLabel(row.stage)}</Badge><Badge wrap>{row.substage ? macroSubstageLabel(row.substage) : "Sin subetapa"}</Badge></div>
+      {repro?.retryChain && <RetryChainNote orderId={row.orderId} chain={repro.retryChain} />}
       {repro && <div className="flex flex-wrap gap-1"><ReproRowChips row={repro} today={today} /></div>}
       {!repro && row.programmedFor && <Badge tone={row.programmedFor < today ? "warn" : "info"} wrap>{`Programado ${programDayLabel(row.programmedFor)}${row.programmedFor < today ? " · vencido" : ""}`}</Badge>}
+    </div>
+  );
+}
+
+/**
+ * La cadena de reintentos por Aliclik (MOM §9.5, 03-11-2026): qué intento toca,
+ * con qué transporte y si el paquete ya está en la oficina. No se llama: la
+ * guía se crea desde la ficha con ese transporte.
+ */
+function RetryChainNote({ orderId, chain }: { orderId: string; chain: NonNullable<ReproRow["retryChain"]> }) {
+  const transport = chain.next === "autoecom" ? "AUTOECOM" : "ALIDRIVER";
+  return (
+    <div className="space-y-0.5">
+      <Badge tone="brand" wrap>{`Reintento Aliclik ${chain.attempt} de ${chain.of} · ${transport}`}</Badge>
+      <p className="text-xs text-ink-500">{chain.failedText}</p>
+      <p className={chain.inOffice ? "text-xs font-medium text-ok-fg" : "text-xs text-warn-fg"}>
+        {chain.inOffice ? "Paquete en oficina: " : "Esperando el paquete en oficina · "}
+        <OrderLink orderId={orderId} section="operar" className="font-medium text-brand-700 underline decoration-brand-500/40 underline-offset-2 hover:decoration-brand-700">
+          {`crear la guía con ${transport}`}
+        </OrderLink>
+      </p>
     </div>
   );
 }

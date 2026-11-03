@@ -2984,6 +2984,42 @@ subetapas ni estados nuevos.
 - **Urpi**, mientras no se registre su despacho en Kapta (§30.11): un pedido con
   reporte de Urpi no se toma en Grupo GF sin revisar antes si ya salió con Urpi.
 
+#### «Reintentos Aliclik»: la cadena de reintentos en Lima (03-11-2026, entrega 1)
+
+**Decisión del owner (03-11-2026).** Un no entregado de Lima que solo necesita
+otra salida vuelve a salir por Aliclik, sin llamar, hasta tres intentos. Hasta
+hoy, de 670 pedidos de Grupo GF no entregados por «no contesta», «no estaba» u
+«otro» en 60 días, solo 194 volvieron a salir; los que salieron se entregaron
+en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
+
+- **La cadena** (`limaRetryChain`, `lib/lima-retry-chain.ts`):
+  - **Alexis** (de Grupo GF, solo sus rutas) **o Urpi → AUTOECOM → ALIDRIVER**.
+  - **AUTOECOM → ALIDRIVER**, también cuando AUTOECOM fue el primer intento.
+  - Los demás motorizados de Grupo GF, Swayp, Axel y ALIDRIVER como primer
+    intento no abren cadena.
+- **Entran** «no contesta», «no estaba» y «otro». **No entran** el rechazo en
+  puerta, el reprogramado, la dirección errada ni «sin dinero»: siguen en Repro
+  Lima como siempre. El motivo de Aliclik sale de su estado (`REFUSED` rechazo,
+  `RESCHEDULED` reprogramado, `NOT_RESPOND` no contestó, lo demás «otro»); el de
+  Urpi, del resultado y el motivo en texto libre de su último reporte.
+- **Se corta** al fallar ALIDRIVER, a los 7 días del primer intento, si el
+  pedido se anula, si sale de «Por reprogramar Lima» o si la tienda deja un
+  acuerdo en Repro Lima para ese episodio (lo acordado manda).
+- **Dónde se ve:** la primera tarjeta de Repro Lima, **«Reintentos Aliclik»**,
+  con la chapa «Reintento Aliclik 2 de 3 · AUTOECOM», el intento que falló y si
+  el paquete ya está en la oficina (la recepción en «Devoluciones» lo dice; los
+  couriers no devuelven en un plazo fijo). En «Todos» los mismos pedidos llevan
+  la chapa, para que no se llamen.
+- **Quién:** las asesoras (`repro_lima.manage`) y Despacho, que entra con el
+  permiso nuevo `repro_lima.retries` y ve solo esa tarjeta, sin «Atender»:
+  llamar y acordar siguen siendo de la tienda.
+- **Entrega 1:** la guía la crea una persona desde la ficha, con el transporte
+  que indica la chapa (AUTOECOM; ALIDRIVER ya se habilita después de AUTOECOM,
+  §11 «Aliclik en Lima»). Siguen la bandeja con «Aprobar» que crea la guía y,
+  medidas dos semanas, la creación automática.
+
+Pruebas: `test/lima-retry-chain.test.ts`.
+
 #### «Repro Lima» (fase 1, entrega 1a, 12-10-2026)
 
 Decisión del owner sobre el plan de la fase 1 (decisiones 1 a 12, 12-10-2026):

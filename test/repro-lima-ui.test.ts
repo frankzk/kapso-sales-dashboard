@@ -60,7 +60,8 @@ function between(src: string, start: string, end: string): string {
 describe("quién entra (D11, E32, E36)", () => {
   it("la página pide Repro Lima antes de leer nada, con el cliente de servicio", () => {
     expect(page).toContain('export const dynamic = "force-dynamic";');
-    const gate = page.indexOf("await requireReproLima()");
+    // Con `retries`: Despacho entra solo a «Reintentos Aliclik» (03-11-2026).
+    const gate = page.indexOf("await requireReproLima({ retries: true })");
     const load = page.indexOf("loadReproLima(createAdminSupabase(), scope, new Date(), { attention: true })");
     expect(gate).toBeGreaterThan(-1);
     expect(load).toBeGreaterThan(gate);
@@ -116,7 +117,7 @@ describe("la entrada del menú (§9.5, D11)", () => {
   });
 
   it("el permiso sale del layout y pasa por el armazón", () => {
-    expect(layout).toContain('const canReproLima = permissions.can("repro_lima.manage");');
+    expect(layout).toContain('const canReproLima = permissions.can("repro_lima.manage") || permissions.can("repro_lima.retries");');
     expect(layout).toContain("canReproLima={canReproLima}");
     expect(shell).toContain("canReproLima={canReproLima}");
   });
@@ -409,7 +410,8 @@ describe("el tablero (E31, E33)", () => {
     expect(board).not.toContain("<ReproLimaTodos");
     expect(board).not.toContain("<table");
     expect(board).not.toContain("showView(");
-    expect(board.indexOf('label="Todos · por entregar"')).toBeLessThan(board.indexOf("{LIMA_QUEUE_CARDS.map((card) => ("));
+    expect(board.indexOf('label="Todos · por entregar"')).toBeLessThan(board.indexOf("{LIMA_QUEUE_CARDS.filter((card) => !retriesOnly || card.key === \"reintentos_aliclik\").map((card) => ("));
+    expect(board.indexOf("{LIMA_QUEUE_CARDS.filter(")).toBeGreaterThan(-1);
     expect(board).toContain('active={list === "todos"}');
     expect(board).toContain('onClick={() => chooseList(list === card.key ? "todos" : card.key)}');
     expect(board).toContain('params.delete("vista")');
