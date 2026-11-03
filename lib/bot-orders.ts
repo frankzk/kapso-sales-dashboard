@@ -975,6 +975,8 @@ export async function handleBotOrder(req: BotOrderRequest, deps: BotOrderDeps): 
       expected,
       requestId: requestIdWoo,
       knownOrderId: myClaim.wooOrderId,
+      // Primera vez que el candado ve este id: nada que buscar en WooCommerce.
+      firstAttempt: myClaim.attempts === 1 && myClaim.wooOrderId == null,
       now,
       clock,
       budgetMs,

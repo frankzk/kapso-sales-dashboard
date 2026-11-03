@@ -983,6 +983,16 @@ export async function createWooSaleOrder(input: {
    */
   knownOrderId?: number | null;
   /**
+   * El candado de quien llama (`bot_order_requests`) acaba de ver este id por
+   * PRIMERA vez (intento 1, sin pedido anotado): Kapta nunca mandó a
+   * WooCommerce un pedido con este `kapta_request_id`, así que no hay intento
+   * anterior que buscar y la búsqueda se salta (03-11-2026). Esa búsqueda —los
+   * pedidos de las últimas 2 horas con sus metadatos— era la llamada que se
+   * cortaba en las horas lentas de WooCommerce. Sin candado (o en un
+   * reintento) se busca como siempre.
+   */
+  firstAttempt?: boolean;
+  /**
    * Se llama con el id de WooCommerce apenas existe un pedido de este intento
    * (el POST contestó, o el pedido apareció después de un POST sin
    * respuesta), antes de comprobarlo. Para anotarlo fuera de WooCommerce. Lo
@@ -1071,7 +1081,8 @@ export async function createWooSaleOrder(input: {
   // 1) El intento anterior: el que ya se conoce por su id, si lo hay (a
   // cualquier edad); si no, o si ya no está, la búsqueda de las últimas 2 horas.
   let previous: Pick<WooOrder, "id" | "status" | "number" | "meta_data"> | null = null;
-  try {
+  if (input.firstAttempt) log("lookup_skipped", { requestId: input.requestId });
+  else try {
     const known = Number(input.knownOrderId ?? 0);
     if (Number.isInteger(known) && known > 0) {
       try {

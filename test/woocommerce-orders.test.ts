@@ -409,6 +409,22 @@ describe("crear la venta (createWooSaleOrder)", () => {
     expect(shop.orders.size).toBe(0);
   });
 
+  it("primer intento del id (firstAttempt): no busca el intento anterior, aunque esa búsqueda esté caída", async () => {
+    // 03-11-2026: la búsqueda de las últimas 2 horas era la llamada que se
+    // cortaba cuando WooCommerce iba lento. En el primer intento no hay nada
+    // que buscar: Kapta nunca mandó este `kapta_request_id`.
+    const shop = fakeWooShop({ products: CATALOG, now: () => NOW, failAlways: { "GET /orders": "timeout" } });
+    const { body, expected } = buildWooSaleOrder(saleInput());
+    const events: string[] = [];
+    const out = await createWooSaleOrder({
+      client: client(shop.fetchImpl), body, expected, requestId: REQ, now: () => NOW.getTime(),
+      firstAttempt: true, log: (event) => { events.push(event); },
+    });
+    expect(out).toMatchObject({ kind: "created" });
+    expect(shop.calls.some((c) => c.method === "GET" && c.path === "/orders")).toBe(false);
+    expect(events).toContain("lookup_skipped");
+  });
+
   it("WooCommerce no contesta al buscar el intento anterior: no se crea nada", async () => {
     const shop = fakeWooShop({ products: CATALOG, now: () => NOW, failAlways: { "GET /orders": "timeout" } });
     const { body, expected } = buildWooSaleOrder(saleInput());
