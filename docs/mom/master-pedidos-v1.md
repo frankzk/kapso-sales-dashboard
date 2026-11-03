@@ -5436,6 +5436,14 @@ aproximado: un ubigeo equivocado desvía el paquete sin avisar.
 
 Los códigos son INEI, nunca RENIEC — numeran distinto los mismos distritos.
 
+**Sullana sale de la bodega de Piura (02-11-2026, owner, #KP144042).** Es otra
+provincia (Sullana, `2006`), pero el panel de Swayp la lista bajo PIURA y la
+reparte desde esa bodega. Se suma a la tabla de Piura **solo el distrito de
+Sullana** (`200601`); el resto de esa provincia (Bellavista, Marcavelica,
+Querecotillo…) no se confirmó y sigue rechazándose con el mensaje de siempre.
+Antes, «Sullana» resolvía al cercado de Piura (`200101`) marcado como no exacto
+y la guía se negaba.
+
 «Exacto» es sobre el DISTRITO, no sobre cómo se escribe. El nombre llega del
 campo *city* de la dirección de Shopify, que usa el nombre oficial completo, y
 el padrón a veces usa el corto: «Lurigancho-Chosica» contra «Lurigancho». El
@@ -11207,7 +11215,23 @@ ubicación del pedido (Corregir ubicación) antes de crear la guía.»
 antes de pulsar. Si la fila del Master no se puede leer, tampoco sale: reintentar
 cuesta un clic y una guía mal dirigida es un paquete en la ciudad equivocada.
 Una guía a una ciudad Fenix de provincia (Chiclayo, Arequipa…) no pasa por esta
-reja. Registrar a mano un número que ya emitió Swayp desde su panel
+reja.
+
+**La guía directa lee la ubicación corregida (02-11-2026, owner, #KP144042).**
+El Master arma el destino con «Corregir ubicación» (`order_geo_overrides`) por
+delante de todo (0051), pero la guía directa —y con ella «Enviar por Swayp»
+desde Por confirmar, el automático y la reprogramación cuando la salida no trae
+destino— solo buscaba en Shopify, el carrito COD y el lead. #KP144042 entró por
+el catálogo de WhatsApp sin dirección de Shopify; el equipo le puso la de la
+compra anterior de la clienta (Av. Santa Rosa 409, Sullana). El Master la
+mostraba y la mesa de confirmación decía «Swayp lo puede llevar hoy», y el panel
+de la guía decía «Sin dirección registrada» y «Swayp no tiene cobertura en este
+destino». Ahora `resolveDirectGuideAddress` aplica la corrección **campo a
+campo** (`withGeoOverride`, la misma precedencia que el Master: un nulo en la
+corrección no borra lo que trae el pedido) y el panel lo dice con la chapa
+«Ubicación corregida». Una corrección que solo trae la coordenada no cambia el
+origen de la dirección. En la reprogramación sigue mandando el destino de la
+salida (`reprogramDestination`), que es el que usó el courier. Registrar a mano un número que ya emitió Swayp desde su panel
 (`createFenixGuide`) no se frena: esa guía ya existe en Swayp y negarse a
 registrarla solo la dejaría sin seguimiento.
 
