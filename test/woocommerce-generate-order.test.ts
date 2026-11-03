@@ -465,6 +465,15 @@ describe("stores.platform = 'woocommerce'", () => {
     expect(h.db.rows("orders")).toHaveLength(0);
   });
 
+  it("el formulario ya mandó este id (requestIdSent): se busca el intento anterior aunque el candado lo vea por primera vez", async () => {
+    setup("woocommerce");
+    const shop = fakeWooShop({ products: CATALOG });
+    vi.stubGlobal("fetch", shop.fetchImpl);
+    const res = await generateOrder(LEAD, venta({ requestIdSent: true }));
+    expect(res.error).toBeUndefined();
+    expect(shop.calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /orders", "POST /orders", "PUT /orders/501"]);
+  });
+
   it("el buscador usa el catálogo de WooCommerce, con la forma de siempre", async () => {
     setup("woocommerce");
     const shop = fakeWooShop({ products: CATALOG });

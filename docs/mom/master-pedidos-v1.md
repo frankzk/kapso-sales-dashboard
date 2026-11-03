@@ -19292,7 +19292,13 @@ búsqueda —los pedidos de las últimas 2 horas con sus metadatos, la llamada m
 lenta de WooCommerce— queda para los reintentos, que es donde puede haber un
 pedido de un intento anterior. El candado no borra sus filas, así que un id ya
 visto nunca vuelve a ser «intento 1»; sin candado (una base sin la 0277) se
-busca como siempre. Si WooCommerce no contesta al buscar el intento anterior, no
+busca como siempre. Si el formulario ya mandó ese id antes (`requestIdSent`: un
+clic que falló o que pidió confirmar un duplicado), también se busca, aunque el
+candado lo vea por primera vez: un clic anterior pudo llegar a WooCommerce sin
+candado. Como la búsqueda era la que averiguaba si el hosting borra la cabecera
+`Authorization` (§38.11), el POST trae ahora su propio respaldo por query
+string: un 401 `woocommerce_rest_cannot_create` no creó nada y repetirlo no
+duplica. Si WooCommerce no contesta al buscar el intento anterior, no
 se crea nada y el aviso pide volver a pulsar «Generar pedido» en un momento. La búsqueda tuvo 6 s hasta el 03-11-2026:
 ese día, de 11:45 a 11:48, WooCommerce de Kenku tardó más en listar los pedidos
 de las últimas 2 horas y dos ventas se cortaron ahí (y otras tres solo salieron

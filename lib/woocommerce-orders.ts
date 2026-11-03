@@ -1182,8 +1182,15 @@ export async function createWooSaleOrder(input: {
     }
     let created: WooOrder;
     try {
-      const { data } = await wooRequest<WooOrder>(opts(t.create), { method: "POST", path: "/orders", body: input.body });
-      created = data;
+      // Con el respaldo de autenticación: en el primer intento (`firstAttempt`)
+      // la búsqueda ya no averiguó si el hosting borra la cabecera
+      // `Authorization`. Un 401 `woocommerce_rest_cannot_create` no creó nada,
+      // así que repetir el POST por query string no duplica.
+      const posted = await withWooAuthFallback(opts(t.create), (o) =>
+        wooRequest<WooOrder>(o, { method: "POST", path: "/orders", body: input.body }),
+      );
+      auth = posted.auth;
+      created = posted.value.data;
     } catch (e) {
       let cleanup: WooSaleCleanup | null = null;
       let unanswered = false;

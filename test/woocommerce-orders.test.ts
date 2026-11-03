@@ -459,6 +459,23 @@ describe("crear la venta (createWooSaleOrder)", () => {
     expect(after.every((c) => c.auth === null && c.query.get("consumer_key") === CK)).toBe(true);
   });
 
+  it("primer intento con el hosting que borra la cabecera: el POST reintenta por query, un solo pedido", async () => {
+    // Sin la búsqueda previa, nadie averiguó el modo de autenticación: el POST
+    // trae su propio respaldo (un 401 `cannot_create` no creó nada).
+    const shop = fakeWooShop({
+      products: CATALOG,
+      now: () => NOW,
+      failOnce: { "POST /orders": { status: 401, body: { code: "woocommerce_rest_cannot_create", message: "Lo siento, no puedes crear recursos." } } },
+    });
+    const { body, expected } = buildWooSaleOrder(saleInput());
+    const out = await createWooSaleOrder({ client: client(shop.fetchImpl), body, expected, requestId: REQ, now: () => NOW.getTime(), firstAttempt: true, log: silent });
+    expect(out.kind).toBe("created");
+    expect(shop.orders.size).toBe(1);
+    expect(shop.calls.filter((c) => c.method === "POST")).toHaveLength(2);
+    const after = shop.calls.slice(1);
+    expect(after.every((c) => c.auth === null && c.query.get("consumer_key") === CK)).toBe(true);
+  });
+
   it("sin precio fijado no se llama a WooCommerce (la red detrás de wooSaleLinesProblem)", async () => {
     const shop = fakeWooShop({ products: CATALOG, now: () => NOW });
     const { body, expected } = buildWooSaleOrder(
