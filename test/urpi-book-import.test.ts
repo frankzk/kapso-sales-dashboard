@@ -25,7 +25,7 @@ vi.mock("@/lib/urpi-programming-db", () => ({
 vi.mock("@/lib/urpi-dispatch", () => ({
   registerUrpiDispatches: async (_admin: unknown, rows: any[]) => {
     state.dispatched.push(...rows.map((row: any) => row.orderCode));
-    return { filled: state.dispatchFilled, alreadyUrpi: 0, closed: 0, sinSalida: [], otraSalidaViva: [], errors: [] };
+    return { filled: state.dispatchFilled, fromGf: [], alreadyUrpi: 0, closed: 0, sinSalida: [], otraSalidaViva: [], errors: [] };
   },
   urpiDispatchMessage: (result: any) => result.filled.length ? `Despachos a Urpi: ${result.filled.length} salida(s) «Por definir» pasaron a Urpi en ruta.` : "",
 }));

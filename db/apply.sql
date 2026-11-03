@@ -611,4 +611,6 @@
 \ir migrations/0303_aliclik_intent_release.sql
 \echo 'Applying 0304_aliclik_report_detail.sql'
 \ir migrations/0304_aliclik_report_detail.sql
+\echo 'Applying 0305_urpi_take_gf_output.sql'
+\ir migrations/0305_urpi_take_gf_output.sql
 \echo 'Done.'
