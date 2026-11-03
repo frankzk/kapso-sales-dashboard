@@ -15,9 +15,19 @@
 // `route_output_filled`. El pedido pasa a «En curso · En tránsito». Cuando Urpi
 // reporta la entrega, lib/urpi-salida.ts cierra esa misma salida.
 //
-// QUÉ NO HACE. No crea salidas: sin caja «por definir» no hay caja en Kapta que
-// sea la de Urpi. No toca un pedido con otra salida viva —otro courier u otra
-// «por definir»—: no se sabe qué caja se llevó Urpi, y queda para revisar a mano.
+// LA CAJA QUE GRUPO GF NO ENTREGÓ (03-11-2026, decisión del owner, §9.1). Si la
+// única salida viva es la propia de Grupo GF y su motorizado la reportó «No
+// entregado» en una ruta anterior al día programado, esa caja es la que se llevó
+// Urpi: la base la recibe en oficina, cancela la solicitud de Grupo GF y la pasa
+// a Urpi en ruta en una sola transacción (`urpi_take_gf_output`, 0305). Vale
+// también para un pedido que Urpi ya entregó: así su caja se puede cerrar como
+// entrega de Urpi. #KP200665: Yordani falló el 29/10, Urpi la llevó el 31/10 y
+// la canceló el 02/11; sin esto no entraba a «Reintentos Aliclik».
+//
+// QUÉ NO HACE. No crea salidas: sin caja «por definir» (o de Grupo GF que no
+// entregó) no hay caja en Kapta que sea la de Urpi. No toca un pedido con otra
+// salida viva —otro courier, otra «por definir», o una de Grupo GF sin su «No
+// entregado»—: no se sabe qué caja se llevó Urpi, y queda para revisar a mano.
 // Tampoco una caja creada después del día programado, ni un pedido cerrado
 // (entregado, anulado, devuelto o anulado en Shopify), ni una fecha que todavía
 // no llega. Si el pedido ya tiene salida de Urpi, no la toca: una programación
@@ -54,6 +64,8 @@ export interface UrpiDispatchOrder {
 
 export type UrpiDispatchPlan =
   | { kind: "rellenar"; salida: UrpiDispatchCandidate }
+  /** La caja de Grupo GF; la base decide si su «No entregado» la deja pasar. */
+  | { kind: "tomar_caja_gf"; salida: UrpiDispatchCandidate }
   | { kind: "ya_es_urpi" }
   | { kind: "reenvio_tras_cancelado" }
   | { kind: "cerrado" }
@@ -65,7 +77,12 @@ const CLOSED = new Set(["entregado", "anulado", "devuelto"]);
 /** Qué hacer con un pedido que la programación da por enviado a Urpi el día
  *  `programmedOn` (AAAA-MM-DD). PURA. */
 export function planUrpiDispatch(order: UrpiDispatchOrder, salidas: readonly UrpiDispatchCandidate[], programmedOn: string): UrpiDispatchPlan {
-  if (order.cancelled_at || CLOSED.has(order.general_status)) return { kind: "cerrado" };
+  if (order.cancelled_at || CLOSED.has(order.general_status)) {
+    // Un entregado por Urpi cuya caja sigue siendo la de Grupo GF: se toma para
+    // poder cerrarla como entrega de Urpi. Cualquier otro cerrado no se toca.
+    const gf = !order.cancelled_at && order.general_status === "entregado" ? gfBoxFor(salidas, programmedOn) : null;
+    return gf ? { kind: "tomar_caja_gf", salida: gf } : { kind: "cerrado" };
+  }
   if (salidas.some((s) => s.courier === "urpi" && (isLiveUrpiCandidate(s) || s.delivery_status === "entregado"))) return { kind: "ya_es_urpi" };
   // Urpi ya canceló una salida de este pedido. La programación de ese día o de
   // antes es la que canceló; una posterior es un reenvío a Urpi tras el
@@ -77,7 +94,11 @@ export function planUrpiDispatch(order: UrpiDispatchOrder, salidas: readonly Urp
   }
   const live = salidas.filter(isLiveUrpiCandidate);
   const fillable = pickFillableRouteOutput(live);
-  if (!fillable) return live.length ? { kind: "otra_salida_viva" } : { kind: "sin_salida" };
+  if (!fillable) {
+    const gf = gfBoxFor(salidas, programmedOn);
+    if (gf) return { kind: "tomar_caja_gf", salida: gf };
+    return live.length ? { kind: "otra_salida_viva" } : { kind: "sin_salida" };
+  }
   // Una sola caja viva, y es la «por definir»: es la que se llevó Urpi.
   if (live.length > 1) return { kind: "otra_salida_viva" };
   // La caja tenía que existir ese día: una «por definir» creada después no es
@@ -85,6 +106,23 @@ export function planUrpiDispatch(order: UrpiDispatchOrder, salidas: readonly Urp
   if (fillable.created_at && limaDayKey(fillable.created_at) > programmedOn) return { kind: "sin_salida" };
   return { kind: "rellenar", salida: fillable };
 }
+
+/** La caja propia de Grupo GF, si es la ÚNICA salida viva, sigue pendiente,
+ *  nada se entregó con otra salida y ya existía el día programado. Si su
+ *  motorizado la reportó «No entregado» antes de ese día lo decide la base
+ *  (`urpi_take_gf_output`), que ve paradas, cajas y solicitudes. PURA. */
+export function gfBoxFor(salidas: readonly UrpiDispatchCandidate[], programmedOn: string): UrpiDispatchCandidate | null {
+  if (salidas.some((s) => s.delivery_status === "entregado")) return null;
+  const live = salidas.filter(isLiveUrpiCandidate);
+  if (live.length !== 1) return null;
+  const box = live[0]!;
+  if (box.courier !== "propio" || box.delivery_status !== "pendiente") return null;
+  if (box.created_at && limaDayKey(box.created_at) > programmedOn) return null;
+  return box;
+}
+
+/** Lo que devuelve `urpi_take_gf_output` cuando la caja pasó a Urpi. */
+export const GF_BOX_TAKEN = "tomada";
 
 /** La fila que se escribe encima. El Sheet dice el día; la hora no, y se usa
  *  mediodía de Lima, como en las demás salidas de Urpi. PURA. */
@@ -117,6 +155,8 @@ export function dueUrpiDispatches(
 export interface UrpiDispatchResult {
   /** Códigos de pedido cuya caja pasó a salida de Urpi en ruta. */
   filled: string[];
+  /** De esos, los que eran la caja de Grupo GF que no entregó (0305). */
+  fromGf: string[];
   alreadyUrpi: number;
   closed: number;
   /** Sin caja «por definir» que pasar a Urpi (o creada después del día). */
@@ -139,7 +179,7 @@ export async function registerUrpiDispatches(
   rows: readonly { orderId: string | null; orderCode: string; date: string }[],
   today: string = limaTodayKey(),
 ): Promise<UrpiDispatchResult> {
-  const result: UrpiDispatchResult = { filled: [], alreadyUrpi: 0, closed: 0, sinSalida: [], otraSalidaViva: [], reenvioTrasCancelado: [], cancelled: [], errors: [] };
+  const result: UrpiDispatchResult = { filled: [], fromGf: [], alreadyUrpi: 0, closed: 0, sinSalida: [], otraSalidaViva: [], reenvioTrasCancelado: [], cancelled: [], errors: [] };
   const due = dueUrpiDispatches(rows, today);
   const ids = [...due.keys()];
   if (!ids.length) return result;
@@ -172,6 +212,18 @@ export async function registerUrpiDispatches(
     if (plan.kind === "sin_salida") { result.sinSalida.push(code); continue; }
     if (plan.kind === "otra_salida_viva") { result.otraSalidaViva.push(code); continue; }
     if (plan.kind === "reenvio_tras_cancelado") { result.reenvioTrasCancelado.push(code); continue; }
+    if (plan.kind === "tomar_caja_gf") {
+      const { data, error } = await admin.rpc("urpi_take_gf_output", {
+        p_shipment_id: plan.salida.id,
+        p_programmed_on: programmedOn,
+        p_guide_code: manualRouteGuideCode(fact.order_name, plan.salida.id, "urpi"),
+      });
+      // Sin la 0305 aplicada, como antes: otra salida viva, para revisar a mano.
+      if (error && error.code !== "PGRST202") result.errors.push(code);
+      else if (data === GF_BOX_TAKEN) { result.filled.push(code); result.fromGf.push(code); filledIds.push(orderId); }
+      else result.otraSalidaViva.push(code);
+      continue;
+    }
     const written = await writeCourierGuide(admin, orderId, urpiDispatchRow(fact.order_name, plan.salida.id, programmedOn), { createIfMissing: false });
     if ("error" in written) result.errors.push(code);
     else { result.filled.push(code); filledIds.push(orderId); }
@@ -195,7 +247,9 @@ const listOf = (codes: readonly string[], max = 10) =>
  *  que decir, cadena vacía. PURA. */
 export function urpiDispatchMessage(result: UrpiDispatchResult): string {
   const parts: string[] = [];
-  if (result.filled.length) parts.push(`${result.filled.length} salida(s) «Por definir» pasaron a Urpi en ruta`);
+  const porDefinir = result.filled.length - result.fromGf.length;
+  if (porDefinir) parts.push(`${porDefinir} salida(s) «Por definir» pasaron a Urpi en ruta`);
+  if (result.fromGf.length) parts.push(`${result.fromGf.length} caja(s) que Grupo GF no entregó pasaron a Urpi en ruta (${listOf(result.fromGf)})`);
   if (result.otraSalidaViva.length) parts.push(`${result.otraSalidaViva.length} con otra salida viva, revísalos a mano (${listOf(result.otraSalidaViva)})`);
   if (result.cancelled.length) parts.push(`${result.cancelled.length} ya cancelado(s) por Urpi pasaron a «Por reprogramar Lima»`);
   if (result.reenvioTrasCancelado.length) parts.push(`${result.reenvioTrasCancelado.length} que Urpi ya canceló se volvieron a programar a Urpi; Urpi solo lleva primeros despachos (§9.1), revísalos (${listOf(result.reenvioTrasCancelado)})`);

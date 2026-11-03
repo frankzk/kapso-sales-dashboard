@@ -801,6 +801,7 @@ export async function createShalomGuide(
       `Guía Shalom creada${recovered ? " (recuperada tras un corte de conexión)" : ""}.` +
       ` Destino: ${input.destinyTerminalName ?? input.destinyTerminalId}.` +
       ` Paga: ${built.payload.payer === "sender" ? "remitente" : "destinatario"}.` +
+      (built.payload.aereo ? " Vía aérea." : " Vía terrestre.") +
       // El motivo va en la NOTA, no solo en el payload: la línea de tiempo se
       // lee, el payload se consulta. Si alguien despachó sin cobro, tiene que
       // verse al abrir el pedido, no al escarbar.
@@ -818,6 +819,9 @@ export async function createShalomGuide(
       quantity: built.payload.quantity,
       payer: built.payload.payer,
       declaracion_jurada: built.payload.declaracion_jurada,
+      // Desde el 03-11-2026 el aéreo es lo normal (defaultAirChoice). Antes no
+      // quedaba registrado, y no había forma de saber qué guía voló.
+      aereo: built.payload.aereo === true,
       recovered,
       ...(soft.length ? { override_reason: overrideReason, override_of: soft } : {}),
     },

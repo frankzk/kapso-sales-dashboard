@@ -2683,6 +2683,13 @@ export interface GenerateOrderInput {
    * lo usa.
    */
   requestId?: string;
+  /**
+   * El formulario ya mandó este `requestId` antes (otro clic que falló o que
+   * pidió confirmar un duplicado). Entonces se busca siempre el pedido del
+   * intento anterior en WooCommerce, aunque el candado lo vea por primera vez:
+   * un clic anterior pudo llegar a WooCommerce sin candado (03-11-2026).
+   */
+  requestIdSent?: boolean;
 }
 
 function defaultConfirmation(o: {
@@ -3375,6 +3382,8 @@ async function generateWooOrder(args: {
     // El pedido que ya creó un intento anterior de este formulario: se lee por
     // su id a cualquier edad, antes que la búsqueda de las últimas 2 horas.
     knownOrderId: claim?.wooOrderId ?? null,
+    // Primera vez que el candado ve este formulario: nada que buscar en WooCommerce.
+    firstAttempt: claim != null && claim.attempts === 1 && claim.wooOrderId == null && input.requestIdSent !== true,
     onCreated: claim ? (wooId) => noteWooFormOrder(admin, claim, wooId) : undefined,
   });
 

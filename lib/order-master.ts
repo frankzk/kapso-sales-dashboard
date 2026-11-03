@@ -83,6 +83,7 @@ import { dispatchedWith, type RiderStop } from "@/lib/dispatched-with";
 import { orderProductTitles } from "@/lib/order-product-titles";
 import { costCourier } from "@/lib/delivery-courier";
 import { currentDispatchDate } from "@/lib/dispatch-date";
+import { readAllPages } from "@/lib/postgrest-pages";
 import {
   activeCompanionLinks,
   borrowedHostEvents,
@@ -438,12 +439,12 @@ async function fetchShipments(admin: SupabaseClient, ids: string[]): Promise<Shi
   for (const batch of chunk(ids, ID_BATCH)) {
     let data: unknown[] | null = null;
     for (; columnIndex < SHIPMENT_COLUMN_SETS.length; columnIndex++) {
-      const res = await admin
-        .from("shipments")
-        .select(SHIPMENT_COLUMN_SETS[columnIndex]!)
-        .in("order_id", batch);
+      const columns = SHIPMENT_COLUMN_SETS[columnIndex]!;
+      const res = await readAllPages<unknown>((from, to) =>
+        admin.from("shipments").select(columns).order("id").range(from, to).in("order_id", batch),
+      );
       if (!res.error) {
-        data = res.data ?? [];
+        data = res.rows;
         break;
       }
       // Última alternativa agotada: es un error real, no un desfase de migración.
@@ -460,25 +461,39 @@ async function fetchCalls(admin: SupabaseClient, shipmentIds: string[]): Promise
   if (!shipmentIds.length) return [];
   const out: CallRecord[] = [];
   for (const batch of chunk(shipmentIds, ID_BATCH)) {
-    const { data, error } = await admin
-      .from("shipment_calls")
-      .select("shipment_id,kind,new_status,occurred_at")
-      .in("shipment_id", batch);
+    const { rows, error } = await readAllPages<CallRecord>((from, to) =>
+      admin
+        .from("shipment_calls")
+        .select("shipment_id,kind,new_status,occurred_at")
+        .order("id")
+        .range(from, to)
+        .in("shipment_id", batch),
+    );
     if (error) throw new Error(`order_master: no se pudo leer el historial — ${error.message}`);
-    out.push(...((data ?? []) as unknown as CallRecord[]));
+    out.push(...rows);
   }
   return out;
 }
 
+/**
+ * Los hechos de los pedidos, TODOS. Un lote de 200 pedidos pasa de largo las
+ * 1000 filas que devuelve PostgREST, y lo que se cortaba eran los hechos más
+ * nuevos: el 03-11-2026 el barrido borró así 16 «Entregado» puestos a mano esa
+ * tarde (lib/postgrest-pages.ts). Por eso se pagina.
+ */
 async function fetchEvents(admin: SupabaseClient, ids: string[]): Promise<EventRecord[]> {
   const out: EventRecord[] = [];
   for (const batch of chunk(ids, ID_BATCH)) {
-    const { data, error } = await admin
-      .from("order_events")
-      .select("order_id,shipment_id,kind,occurred_at,actor,courier,new_status,new_operational,reason,note,payload,source")
-      .in("order_id", batch);
+    const { rows, error } = await readAllPages<EventRecord>((from, to) =>
+      admin
+        .from("order_events")
+        .select("order_id,shipment_id,kind,occurred_at,actor,courier,new_status,new_operational,reason,note,payload,source")
+        .order("id")
+        .range(from, to)
+        .in("order_id", batch),
+    );
     if (error) throw new Error(`order_master: no se pudieron leer los eventos — ${error.message}`);
-    out.push(...((data ?? []) as unknown as EventRecord[]));
+    out.push(...rows);
   }
   return out;
 }
@@ -618,12 +633,17 @@ async function fetchPaymentSignals(
   };
 
   for (const batch of chunk(ids, ID_BATCH)) {
-    const { data, error } = await admin
-      .from("order_payments")
-      .select("order_id,kind,validation_status,amount")
-      .in("order_id", batch);
+    const { rows, error } = await readAllPages<{ order_id: string; kind: string; validation_status: string; amount: number | null }>(
+      (from, to) =>
+        admin
+          .from("order_payments")
+          .select("order_id,kind,validation_status,amount")
+          .order("id")
+          .range(from, to)
+          .in("order_id", batch),
+    );
     if (error) return out; // la fase 3 aún no está aplicada
-    for (const row of (data ?? []) as { order_id: string; kind: string; validation_status: string; amount: number | null }[]) {
+    for (const row of rows) {
       ensure(row.order_id).payments.push({
         kind: row.kind,
         validation_status: row.validation_status,
@@ -637,8 +657,10 @@ async function fetchPaymentSignals(
     for (const row of (data ?? []) as { order_id: string }[]) ensure(row.order_id).hasKey = true;
   }
   for (const batch of chunk(ids, ID_BATCH)) {
-    const { data } = await admin.from("pickup_key_shares").select("order_id").in("order_id", batch);
-    for (const row of (data ?? []) as { order_id: string }[]) ensure(row.order_id).shared = true;
+    const { rows } = await readAllPages<{ order_id: string }>((from, to) =>
+      admin.from("pickup_key_shares").select("order_id").order("id").range(from, to).in("order_id", batch),
+    );
+    for (const row of rows) ensure(row.order_id).shared = true;
   }
   return out;
 }
@@ -921,13 +943,17 @@ async function fetchGeoOverrides(
 async function fetchRiderStops(admin: SupabaseClient, ids: string[]): Promise<Map<string, RiderStop[]>> {
   const out = new Map<string, RiderStop[]>();
   for (const batch of chunk(ids, ID_BATCH)) {
-    const { data, error } = await admin
-      .from("delivery_stops")
-      .select("id,order_id,status,shipment_id,delivery_routes(riders(full_name))")
-      .in("order_id", batch);
-    if (error) return out;
     type Row = { id: string; order_id: string; status: string | null; shipment_id: string | null; delivery_routes: { riders: { full_name: string | null } | null } | null };
-    for (const row of (data ?? []) as unknown as Row[]) {
+    const { rows, error } = await readAllPages<Row>((from, to) =>
+      admin
+        .from("delivery_stops")
+        .select("id,order_id,status,shipment_id,delivery_routes(riders(full_name))")
+        .order("id")
+        .range(from, to)
+        .in("order_id", batch),
+    );
+    if (error) return out;
+    for (const row of rows) {
       const stop: RiderStop = { id: row.id, status: row.status, shipment_id: row.shipment_id, rider: row.delivery_routes?.riders?.full_name ?? null };
       out.set(row.order_id, [...(out.get(row.order_id) ?? []), stop]);
     }
@@ -942,12 +968,17 @@ async function fetchRiderStops(admin: SupabaseClient, ids: string[]): Promise<Ma
 async function fetchUrpiAttempts(admin: SupabaseClient, ids: string[]): Promise<Map<string, number>> {
   const out = new Map<string, number>();
   for (const batch of chunk(ids, ID_BATCH)) {
-    const { data, error } = await admin
-      .from("urpi_report_rows")
-      .select("order_id,result_code")
-      .in("order_id", batch);
+    const { rows, error } = await readAllPages<{ order_id: string; result_code: string | null }>((from, to) =>
+      admin
+        .from("urpi_report_rows")
+        .select("order_id,result_code")
+        .order("org_id")
+        .order("urpi_row")
+        .range(from, to)
+        .in("order_id", batch),
+    );
     if (error) return out;
-    const byOrder = groupBy((data ?? []) as { order_id: string; result_code: string | null }[], (row) => row.order_id);
+    const byOrder = groupBy(rows, (row) => row.order_id);
     for (const [orderId, rows] of byOrder) out.set(orderId, urpiAttempts(rows));
   }
   return out;

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import { cn } from "@/components/ui";
 import { Badge, Banner, FIELD, FIELD_BOX, OpsButton } from "@/components/ops-ui";
-import { IconArrowLeft, IconCheck, IconSearch, IconX, IconXCircle } from "@/components/icons";
+import { IconAlert, IconArrowLeft, IconCheck, IconSearch, IconX, IconXCircle } from "@/components/icons";
 import {
   createDirectFenixGuide,
   previewDirectFenixGuide,
@@ -18,6 +18,7 @@ import { firstSwaypDispatchDay, isSwaypDispatchDay } from "@/lib/swayp-dispatch-
 import { SwaypDispatchDateSelect } from "@/components/swayp-dispatch-date-select";
 import { esNumeroDeGuiaSwayp } from "@/lib/swayp-guide";
 import { orderPlatformName } from "@/lib/order-admin-url";
+import { swaypLotNotice, swaypSuggestedDispatchDay, type SwaypLotNotice } from "@/lib/warehouse-swayp";
 
 /** El despacho más pronto es mañana (Lima): el Excel del día ya suele estar
  *  enviado, así que una guía de hoy nunca llegaría a Fenix. */
@@ -30,12 +31,34 @@ function defaultDispatchDate(): string {
   return firstSwaypDispatchDay(limaTodayKey());
 }
 
+// El subtítulo dice quién arma la caja (D1, owner 03-11-2026): en Lima y Callao
+// nuestro almacén, y Swayp la recoge en la oficina; en provincia, la bodega
+// regional de Swayp (el texto de siempre). Antes de elegir el pedido, los dos.
+// Decía «stock regional de Swayp» también para Lima, y las guías de Lima se
+// creaban sin avisar a quien de verdad arma la caja.
+const SUBTITULO_SIN_PEDIDO =
+  "Sin guía Aliclik previa. En provincia sale del stock regional de Swayp; en Lima y Callao la caja la arma nuestro almacén.";
+const SUBTITULO_LIMA =
+  "Lima y Callao: la caja la arma nuestro almacén y Swayp la recoge en la oficina. Sin guía Aliclik previa.";
+const SUBTITULO_PROVINCIA = "Despacho desde el stock regional de Swayp (antes Fénix), sin guía Aliclik previa.";
+
 /**
- * Crear una guía Fenix DIRECTA desde un pedido (sin guía Aliclik madre), para
- * urgencias que salen del almacén regional de Fénix. Buscar pedido (local +
- * Shopify en vivo) → revisar destino/productos/stock/duplicados → fecha de
- * despacho + código autogenerado editable → crear. La guía nace En ruta y entra
- * al Excel de programación de su fecha.
+ * El tono del aviso del lote tras crear (MOM §9.1, «Swayp por salir · Lima»):
+ * después de las 21:20 de la víspera, el aviso fuerte; después de las 17:00, el
+ * suave; si no, solo informa. Nada bloquea (D3): la guía ya está creada.
+ */
+function lotNoticeTone(notice: SwaypLotNotice): "info" | "warn" | "crit" {
+  return notice.afterCutoff ? "crit" : notice.late ? "warn" : "info";
+}
+
+/**
+ * Crear una guía Fenix DIRECTA desde un pedido (sin guía Aliclik madre). En
+ * provincia la caja sale de la bodega regional de Swayp; en Lima y Callao la
+ * arma nuestro almacén y Swayp la recoge en la oficina (D1, owner 03-11-2026).
+ * Buscar pedido (local + Shopify en vivo) → revisar destino/productos/stock/
+ * duplicados → fecha de despacho + N° de guía (vacío: lo emite Swayp) →
+ * crear. La guía nace En ruta y entra al Excel de programación de su fecha; con
+ * destino de Lima, también al lote «Swayp por salir · Lima» del almacén (MOM §9.1).
  */
 export function DirectFenixGuideModal({
   initialOrderId,
@@ -66,8 +89,26 @@ export function DirectFenixGuideModal({
   const [motivo, setMotivo] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [createdNotice, setCreatedNotice] = useState<string | null>(null);
+  // «Swayp por salir · Lima» (MOM §9.1, D3 del owner, 03-11-2026). La hora de
+  // Lima se lee en el navegador al cargar el pedido y al elegir la fecha, nunca
+  // al pintar: el aviso dice si ya pasó el corte del turno noche de la víspera.
+  const [clock, setClock] = useState<Date | null>(null);
+  const [createdLot, setCreatedLot] = useState<SwaypLotNotice | null>(null);
+  // La fecha que eligió la persona no se pisa al cargar otro pedido.
+  const dateTouched = useRef(false);
   const [pending, start] = useTransition();
   const panel = useRef<HTMLDivElement>(null);
+
+  /**
+   * Al cargar el pedido: la hora de ahora y, si nadie eligió fecha, la que se
+   * propone. Con destino de Lima, pasadas las 21:20 de la víspera del próximo
+   * día de despacho, el siguiente (D3); provincia sigue en el primero.
+   */
+  function onPreviewLoaded(p: DirectFenixGuidePreview) {
+    const now = new Date();
+    setClock(now);
+    if (!dateTouched.current) setDispatchDate(swaypSuggestedDispatchDay({ now, lima: p.operation === "lima" }));
+  }
 
   // El foco entra al abrir; al cerrar vuelve a quien lo abrió.
   useEffect(() => {
@@ -86,6 +127,7 @@ export function DirectFenixGuideModal({
       if ("error" in result) setMsg(result.error);
       else {
         setPreview(result);
+        onPreviewLoaded(result);
         // Un código escrito para OTRO pedido no puede sobrevivir al cambio: se
         // lo llevaría puesto y apagaría la API para el pedido nuevo.
         setGuideCode("");
@@ -152,6 +194,7 @@ export function DirectFenixGuideModal({
         return;
       }
       setPreview(r);
+      onPreviewLoaded(r);
       setGuideCode("");
       setMotivo("");
     });
@@ -174,9 +217,28 @@ export function DirectFenixGuideModal({
       }
       setMsg(null);
       setCreatedNotice(r.notice ?? "Guía Swayp directa creada.");
+      // A qué lote del almacén entró, con la hora de la confirmación (MOM §9.1).
+      setCreatedLot(swaypLotNotice({ day: dispatchDate, now: new Date(), lima: limaLot }));
       onCreated(r.shipmentId);
     });
   }
+
+  // El destino es Lima o Callao con certeza: lo dice la operación del pedido,
+  // la misma con la que el almacén arma su lote, y no la ciudad de cobertura.
+  const limaLot = preview?.operation === "lima";
+  // El aviso fuerte bajo la fecha (D3): el día elegido es el próximo día de
+  // despacho y ya pasaron las 21:20 de su víspera. Informa; nunca bloquea, así
+  // que no entra en `canCreate`.
+  const lotBefore = clock && limaLot ? swaypLotNotice({ day: dispatchDate, now: clock, lima: true })?.before ?? null : null;
+  // Con el pedido de Lima cargado, la hora se refresca cada minuto: quien abre
+  // el modal a las 21:10 y crea a las 21:25 sin tocar la fecha tiene que ver el
+  // aviso ANTES de crear, no solo después (revisión del 03-11-2026). La fecha
+  // propuesta no se cambia sola: solo el aviso.
+  useEffect(() => {
+    if (!limaLot) return;
+    const id = window.setInterval(() => setClock(new Date()), 60_000);
+    return () => window.clearInterval(id);
+  }, [limaLot]);
 
   // Otra salida viva: fuera de Lima (o por el límite / la repetición) bloquea;
   // en Lima solo pide el motivo. Lo decide el servidor con la misma regla que
@@ -240,7 +302,7 @@ export function DirectFenixGuideModal({
               Guía Swayp directa
             </h2>
             <p className="text-[13px] leading-5 text-ink-500">
-              Despacho desde el stock regional de Swayp (antes Fénix), sin guía Aliclik previa.
+              {!preview ? SUBTITULO_SIN_PEDIDO : limaLot ? SUBTITULO_LIMA : SUBTITULO_PROVINCIA}
             </p>
           </div>
           <button
@@ -262,6 +324,13 @@ export function DirectFenixGuideModal({
                 enviarla a Swayp, filtra por su fecha de despacho y descarga el Excel de programación.
               </p>
             </Banner>
+            {/* Lima y Callao: a qué lote del almacén entró (MOM §9.1). La
+                frase sale entera de `swaypLotNotice`; el tono solo la acompaña. */}
+            {createdLot && (
+              <Banner tone={lotNoticeTone(createdLot)} role="status">
+                {createdLot.after}
+              </Banner>
+            )}
             <div className="flex justify-end">
               <OpsButton variant="primary" onClick={onClose} className="pointer-coarse:h-11">
                 Ver la guía en En ruta
@@ -593,9 +662,22 @@ export function DirectFenixGuideModal({
                 Fecha de despacho (lunes a sábado)
                 <SwaypDispatchDateSelect
                   value={dispatchDate}
-                  onChange={setDispatchDate}
+                  onChange={(value) => {
+                    dateTouched.current = true;
+                    setDispatchDate(value);
+                    setClock(new Date());
+                  }}
                   className={cn(FIELD, "font-normal tabular-nums pointer-coarse:h-11")}
                 />
+                {/* Un aviso y no un error: la fecha es válida y la guía se
+                    puede crear igual. Por eso el campo no se pinta ni se marca
+                    inválido; la frase dice qué pasa y qué hacer. */}
+                {lotBefore && (
+                  <span role="status" className="flex gap-1.5 text-[13px] font-medium leading-5 text-crit-fg">
+                    <IconAlert aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+                    {lotBefore.text}
+                  </span>
+                )}
               </label>
               <label className="grid gap-1.5 text-[13px] font-medium text-ink-700">
                 N° de guía Swayp

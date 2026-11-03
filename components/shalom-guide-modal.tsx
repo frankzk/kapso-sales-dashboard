@@ -19,6 +19,7 @@ import {
   pickupCodeError,
   preferredShalomProductId,
   shalomAirRoute,
+  defaultAirChoice,
   DEFAULT_DECLARACION,
   DEFAULT_PAYER,
 } from "@/lib/shalom/draft";
@@ -286,6 +287,21 @@ export function ShalomGuideModal({
   const air = shalomAirRoute(agency, draft?.originTerminalId ?? null);
   const [overrideReason, setOverrideReason] = useState("");
   const [aereo, setAereo] = useState(false);
+  // Vía aérea por defecto (03-11-2026, ver defaultAirChoice). Se marca UNA vez
+  // por agencia, cuando su ficha del directorio ya llegó: antes de eso la ruta
+  // es «no consta» y la casilla se marcaría para desmarcarse sola un instante
+  // después. Lo que la persona cambie a mano después ya no se pisa.
+  const airDefaultedFor = useRef<number | null>(null);
+  const airDefault = defaultAirChoice(air);
+  useEffect(() => {
+    if (!agency || agencyDetailing) return;
+    if (airDefaultedFor.current === agency.id) return;
+    airDefaultedFor.current = agency.id;
+    setAereo(airDefault);
+  }, [agency, agencyDetailing, airDefault]);
+  // Lo que se manda: nunca aéreo en una ruta sin vuelo, aunque el estado
+  // hubiera quedado marcado de una agencia anterior.
+  const sendAereo = aereo && air.offered && air.fromOrigin !== "no";
   const canSeeKey = Boolean(draft?.pickupCode);
   const keyErr = canSeeKey && pickupCode ? pickupCodeError(pickupCode) : null;
 
@@ -338,7 +354,7 @@ export function ShalomGuideModal({
         surName: surName.trim(),
         phone: phone.trim(),
         overrideReason: overrideReason.trim() || null,
-        aereo: aereo || undefined,
+        aereo: sendAereo || undefined,
         dimensions: parsedDims,
         ...(canSeeKey && pickupCode ? { pickupCode } : {}),
       });
@@ -677,6 +693,7 @@ export function ShalomGuideModal({
                           setAgency(null);
                           setQuote(null);
                           setAereo(false);
+                          airDefaultedFor.current = null;
                         }}
                         className="text-xs text-slate-500 underline"
                       >
@@ -695,11 +712,11 @@ export function ShalomGuideModal({
                         El cliente tiene que ir a recogerlo.
                       </p>
                     )}
-                    {/* Vía aérea. Explícita a propósito: encarece el envío, así
-                        que la decide quien despacha y no un automatismo. Solo
-                        aparece si la agencia vuela, y se bloquea si no hay ruta
-                        desde nuestro origen — marcarla ahí sería pedir algo que
-                        no existe. */}
+                    {/* Vía aérea. Empieza marcada siempre que se pueda
+                        (03-11-2026, defaultAirChoice); quien despacha la
+                        desmarca para una excepción. Solo aparece si la agencia
+                        vuela, y se bloquea si no hay ruta desde nuestro origen
+                        — marcarla ahí sería pedir algo que no existe. */}
                     {!agencyDetailing && air.offered && (
                       <div className="mt-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2">
                         <label className="flex items-start gap-2 text-sm text-sky-900">

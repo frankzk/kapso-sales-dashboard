@@ -105,9 +105,15 @@ queda «En curso · En tránsito». No se crea ninguna salida.
    lectura de Google, que lo hace cada 15 minutos). Sin carga no hay registro.
 2. Leer el aviso de la carga: «Despachos a Urpi: N salida(s) «Por definir»
    pasaron a Urpi en ruta», y los pedidos que nombra para revisar:
-   - **Con otra salida viva**: casi siempre la salida de un motorizado de
-     Grupo GF que falló antes y sigue a su nombre. Revisar dónde está la caja
-     y cerrar o devolver esa salida a mano.
+   - **«N caja(s) que Grupo GF no entregó pasaron a Urpi en ruta»** (desde el
+     03-11-2026, migración 0305): la caja de un motorizado de Grupo GF que la
+     reportó «No entregado» antes del día programado. Kapta la recibe en
+     oficina, cancela la solicitud de Grupo GF y la pasa a Urpi con el mismo
+     rótulo. No hay que hacer nada; si Urpi ya la canceló, el pedido va a
+     «Por reprogramar Lima» y, con su motivo, a «Reintentos Aliclik».
+   - **Con otra salida viva**: la caja de Grupo GF sin «No entregado» (su
+     parada sigue pendiente o dice entregado), de otro courier u otra «Por
+     definir». Revisar dónde está la caja y cerrar o devolver esa salida a mano.
    - **Sin caja «Por definir» del día**: el pedido no tenía caja armada ese día
      en Kapta. Revisar por qué salió sin ella.
 3. Cuando Urpi reporta la entrega, la carga del reporte cierra esa salida de

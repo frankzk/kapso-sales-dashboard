@@ -492,3 +492,25 @@ export function shalomAirRoute(
     fromOrigin: origins.includes(originTerminalId as number) ? "yes" : "no",
   };
 }
+
+/**
+ * ¿La casilla «vía aérea» empieza marcada? (decisión del owner, 03-11-2026)
+ *
+ * Todo va por aire si se puede. Antes la casilla nacía vacía a propósito,
+ * porque el aéreo encarece el envío y se quería que lo decidiera quien
+ * despacha; el owner decidió lo contrario: por defecto aéreo, y quien despacha
+ * la desmarca para una excepción.
+ *
+ * «Si se puede» es lo que dice `shalomAirRoute`:
+ *   - La agencia no vuela → no hay casilla, va por tierra.
+ *   - Vuela, pero no desde nuestra agencia de origen (`no`) → la casilla está
+ *     bloqueada y marcarla sería pedir una ruta que no existe: tierra.
+ *   - Vuela desde nuestro origen (`yes`) → marcada.
+ *   - No consta (`unknown`) → marcada. «Todo» incluye lo que no se pudo
+ *     confirmar; si Shalom rechaza la ruta al crear, el error lo dice y se
+ *     desmarca. Dejarla vacía ahí convertiría una laguna del directorio en un
+ *     envío por tierra que nadie eligió.
+ */
+export function defaultAirChoice(route: AirRoute): boolean {
+  return route.offered && route.fromOrigin !== "no";
+}

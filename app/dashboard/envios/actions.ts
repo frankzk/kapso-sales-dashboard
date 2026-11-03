@@ -1409,6 +1409,15 @@ export interface DirectFenixGuidePreview {
     source: "shopify" | "carrito" | "lead" | "manual" | null;
   };
   city: string;
+  /**
+   * Lima, provincia o agencia del pedido (`order_master.macro_operation`, leído
+   * con `operacionDelPedido`). Es la misma fuente con la que «Swayp por salir ·
+   * Lima» decide quién arma la caja (MOM §9.1, owner 03-11-2026): con `lima`
+   * —que incluye el Callao— la arma nuestro almacén, y el modal dice a qué lote
+   * entra la guía. No se deduce de `city`: «Huaral, Lima» resuelve a la clave
+   * `lima` de Swayp y es agencia. Provincia no cambia.
+   */
+  operation: "lima" | "provincia_cod" | "agencia" | "desconocida";
   schedule: FenixDeliverySchedule | null;
   stockOk: boolean;
   stockReason: "sin_cobertura" | "sin_stock" | null;
@@ -1577,9 +1586,12 @@ export async function previewDirectFenixGuide(input: {
   const activeGuides = activas.filter((g) => !esRellenable(g));
   const rellenable = pickFillableRouteOutput(activas);
   const closedGuidesCount = guides.length - activas.length;
+  // Una sola lectura de la operación: decide la salida adicional y, en el
+  // modal, si la guía entra al lote Swayp de Lima del almacén (MOM §9.1).
+  const operation = await operacionDelPedido(admin, order.id);
   const puerta = puertaDeSalidaAdicional({
     courier: "fenix",
-    operation: await operacionDelPedido(admin, order.id),
+    operation,
     outputs: guides,
     motivo: null,
   });
@@ -1641,6 +1653,7 @@ export async function previewDirectFenixGuide(input: {
       source,
     },
     city,
+    operation,
     schedule: getFenixDeliverySchedule(city, district),
     stockOk: check.ok,
     stockReason: check.ok ? null : check.reason ?? null,

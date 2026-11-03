@@ -766,8 +766,13 @@ export function wooConflictRejection(input: {
  * de toda la venta (`WOO_SALE_BUDGET_MS`).
  */
 export const WOO_SALE_TIMEOUTS = {
-  /** Buscar el intento anterior, y leer el pedido que se encontró. */
-  lookup: 6_000,
+  /**
+   * Buscar el intento anterior, y leer el pedido que se encontró. 12 s desde el
+   * 03-11-2026: con 6 s, la búsqueda (los pedidos de las últimas 2 horas con sus
+   * metadatos) se cortó en las horas lentas de WooCommerce y la asesora veía
+   * «No se pudo consultar WooCommerce» sin que nada fallara de verdad.
+   */
+  lookup: 12_000,
   /** El POST: lo más pesado que hace WooCommerce (numeración, stock, ganchos). */
   create: 15_000,
   /** ¿Es variable el producto de una línea que llegó sin la elección del buscador? */
@@ -978,6 +983,16 @@ export async function createWooSaleOrder(input: {
    */
   knownOrderId?: number | null;
   /**
+   * El candado de quien llama (`bot_order_requests`) acaba de ver este id por
+   * PRIMERA vez (intento 1, sin pedido anotado): Kapta nunca mandó a
+   * WooCommerce un pedido con este `kapta_request_id`, así que no hay intento
+   * anterior que buscar y la búsqueda se salta (03-11-2026). Esa búsqueda —los
+   * pedidos de las últimas 2 horas con sus metadatos— era la llamada que se
+   * cortaba en las horas lentas de WooCommerce. Sin candado (o en un
+   * reintento) se busca como siempre.
+   */
+  firstAttempt?: boolean;
+  /**
    * Se llama con el id de WooCommerce apenas existe un pedido de este intento
    * (el POST contestó, o el pedido apareció después de un POST sin
    * respuesta), antes de comprobarlo. Para anotarlo fuera de WooCommerce. Lo
@@ -1066,7 +1081,8 @@ export async function createWooSaleOrder(input: {
   // 1) El intento anterior: el que ya se conoce por su id, si lo hay (a
   // cualquier edad); si no, o si ya no está, la búsqueda de las últimas 2 horas.
   let previous: Pick<WooOrder, "id" | "status" | "number" | "meta_data"> | null = null;
-  try {
+  if (input.firstAttempt) log("lookup_skipped", { requestId: input.requestId });
+  else try {
     const known = Number(input.knownOrderId ?? 0);
     if (Number.isInteger(known) && known > 0) {
       try {
@@ -1089,7 +1105,7 @@ export async function createWooSaleOrder(input: {
   } catch (e) {
     return {
       kind: "error",
-      message: `No se pudo consultar WooCommerce antes de crear el pedido: ${errorText(e)} No se creó nada.`,
+      message: `No se pudo consultar WooCommerce antes de crear el pedido: ${errorText(e)} No se creó nada: vuelve a pulsar «Generar pedido» en un momento.`,
       cleanup: null,
       orderLabel: null,
     };
@@ -1166,8 +1182,15 @@ export async function createWooSaleOrder(input: {
     }
     let created: WooOrder;
     try {
-      const { data } = await wooRequest<WooOrder>(opts(t.create), { method: "POST", path: "/orders", body: input.body });
-      created = data;
+      // Con el respaldo de autenticación: en el primer intento (`firstAttempt`)
+      // la búsqueda ya no averiguó si el hosting borra la cabecera
+      // `Authorization`. Un 401 `woocommerce_rest_cannot_create` no creó nada,
+      // así que repetir el POST por query string no duplica.
+      const posted = await withWooAuthFallback(opts(t.create), (o) =>
+        wooRequest<WooOrder>(o, { method: "POST", path: "/orders", body: input.body }),
+      );
+      auth = posted.auth;
+      created = posted.value.data;
     } catch (e) {
       let cleanup: WooSaleCleanup | null = null;
       let unanswered = false;

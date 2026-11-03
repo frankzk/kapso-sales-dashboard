@@ -69,6 +69,18 @@ describe("limaRetryChain", () => {
     expect(r).toMatchObject({ state: "siguiente", attempt: 2, of: 3, next: "autoecom" });
   });
 
+  it("#KP200665: Yordani no contestó y después Urpi la canceló con su misma caja → el de Urpi abre la cadena", () => {
+    // La programación de Urpi tomó la caja de Grupo GF (0305): Kapta ve los dos
+    // intentos, la parada de Yordani y la salida de Urpi anulada.
+    const r = limaRetryChain([
+      a("otro", "no_contesta", "2026-10-29T17:00:00.000Z"),
+      a("urpi", urpiChainReason("cancelado", "Otras razones"), "2026-10-31T17:00:00.000Z"),
+    ], NOW);
+    expect(r).toMatchObject({ state: "siguiente", attempt: 2, of: 3, next: "autoecom", startedAt: "2026-10-31T17:00:00.000Z" });
+    // Sin la salida de Urpi —antes de la 0305— solo quedaba Yordani: sin cadena.
+    expect(limaRetryChain([a("otro", "no_contesta", "2026-10-29T17:00:00.000Z")], NOW)).toMatchObject({ state: "fuera", why: "sin_cadena" });
+  });
+
   it("Urpi «otro» → AUTOECOM; luego AUTOECOM falla → 3 de 3 con ALIDRIVER", () => {
     expect(limaRetryChain([a("urpi", "otro", "2026-11-01T17:00:00Z")], NOW)).toMatchObject({ attempt: 2, of: 3, next: "autoecom" });
     const r = limaRetryChain([

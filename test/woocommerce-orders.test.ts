@@ -409,12 +409,28 @@ describe("crear la venta (createWooSaleOrder)", () => {
     expect(shop.orders.size).toBe(0);
   });
 
+  it("primer intento del id (firstAttempt): no busca el intento anterior, aunque esa búsqueda esté caída", async () => {
+    // 03-11-2026: la búsqueda de las últimas 2 horas era la llamada que se
+    // cortaba cuando WooCommerce iba lento. En el primer intento no hay nada
+    // que buscar: Kapta nunca mandó este `kapta_request_id`.
+    const shop = fakeWooShop({ products: CATALOG, now: () => NOW, failAlways: { "GET /orders": "timeout" } });
+    const { body, expected } = buildWooSaleOrder(saleInput());
+    const events: string[] = [];
+    const out = await createWooSaleOrder({
+      client: client(shop.fetchImpl), body, expected, requestId: REQ, now: () => NOW.getTime(),
+      firstAttempt: true, log: (event) => { events.push(event); },
+    });
+    expect(out).toMatchObject({ kind: "created" });
+    expect(shop.calls.some((c) => c.method === "GET" && c.path === "/orders")).toBe(false);
+    expect(events).toContain("lookup_skipped");
+  });
+
   it("WooCommerce no contesta al buscar el intento anterior: no se crea nada", async () => {
     const shop = fakeWooShop({ products: CATALOG, now: () => NOW, failAlways: { "GET /orders": "timeout" } });
     const { body, expected } = buildWooSaleOrder(saleInput());
     const out = await createWooSaleOrder({ client: client(shop.fetchImpl), body, expected, requestId: REQ, now: () => NOW.getTime(), log: silent });
     expect(out).toMatchObject({ kind: "error", cleanup: null });
-    expect((out as { message: string }).message).toContain("No se creó nada.");
+    expect((out as { message: string }).message).toContain("No se creó nada: vuelve a pulsar «Generar pedido» en un momento.");
     expect(shop.calls.some((c) => c.method === "POST")).toBe(false);
   });
 
@@ -439,6 +455,23 @@ describe("crear la venta (createWooSaleOrder)", () => {
     const { body, expected } = buildWooSaleOrder(saleInput());
     const out = await createWooSaleOrder({ client: client(shop.fetchImpl), body, expected, requestId: REQ, now: () => NOW.getTime(), log: silent });
     expect(out.kind).toBe("created");
+    const after = shop.calls.slice(1);
+    expect(after.every((c) => c.auth === null && c.query.get("consumer_key") === CK)).toBe(true);
+  });
+
+  it("primer intento con el hosting que borra la cabecera: el POST reintenta por query, un solo pedido", async () => {
+    // Sin la búsqueda previa, nadie averiguó el modo de autenticación: el POST
+    // trae su propio respaldo (un 401 `cannot_create` no creó nada).
+    const shop = fakeWooShop({
+      products: CATALOG,
+      now: () => NOW,
+      failOnce: { "POST /orders": { status: 401, body: { code: "woocommerce_rest_cannot_create", message: "Lo siento, no puedes crear recursos." } } },
+    });
+    const { body, expected } = buildWooSaleOrder(saleInput());
+    const out = await createWooSaleOrder({ client: client(shop.fetchImpl), body, expected, requestId: REQ, now: () => NOW.getTime(), firstAttempt: true, log: silent });
+    expect(out.kind).toBe("created");
+    expect(shop.orders.size).toBe(1);
+    expect(shop.calls.filter((c) => c.method === "POST")).toHaveLength(2);
     const after = shop.calls.slice(1);
     expect(after.every((c) => c.auth === null && c.query.get("consumer_key") === CK)).toBe(true);
   });

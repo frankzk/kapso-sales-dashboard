@@ -27,6 +27,7 @@ function stubAdmin(tables: Record<string, any[]>) {
         in: () => (mutation ? builder : Promise.resolve({ data: rows, error: null })),
         eq: () => builder,
         order: () => builder,
+        range: () => builder,
         limit: () => Promise.resolve({ data: rows, error: null }),
         upsert(batch: any[]) {
           upserts.push(batch);
