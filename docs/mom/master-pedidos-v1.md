@@ -3015,8 +3015,25 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
   llamar y acordar siguen siendo de la tienda.
 - **Entrega 1:** la guía la crea una persona desde la ficha, con el transporte
   que indica la chapa (AUTOECOM; ALIDRIVER ya se habilita después de AUTOECOM,
-  §11 «Aliclik en Lima»). Siguen la bandeja con «Aprobar» que crea la guía y,
-  medidas dos semanas, la creación automática.
+  §11 «Aliclik en Lima»).
+- **Entrega 2, la bandeja (03-11-2026).** En cada fila de «Reintentos Aliclik»:
+  - **«Aprobar · AUTOECOM/ALIDRIVER»** crea ya la guía de Aliclik con ese
+    transporte (`approveAliclikRetry`). Antes recalcula la cadena con los
+    hechos de ahora y exige el paquete en oficina; la guía sale por el mismo
+    camino que el panel de la ficha (`createAliclikGuideFor`: monto, pin,
+    historial), con el motivo de la salida adicional de Lima «Reintento Aliclik
+    N de M aprobado en Repro Lima». Pide `repro_lima.retries` y
+    `aliclik.create_guide`. Pasado el corte de Aliclik (2:00 p. m.), Aliclik la
+    recoge al día siguiente. Deja el hecho `lima_retry_approved` con quién,
+    cuándo, el transporte y la guía.
+  - **Si Aliclik no ofrece ese transporte para la dirección**, el pedido pasa a
+    Repro Lima solo (decisión del owner). Si lo ofrece pero no se puede agendar
+    ahora (un ALIDRIVER Express fuera de su horario), solo lo dice.
+  - **«A Repro Lima»** lo saca de la cadena con un motivo
+    (`lima_retry_dismissed`); un fallo nuevo la vuelve a abrir.
+  - **«Aprobar todos con paquete en oficina»** aprueba los de la tarjeta, uno
+    por uno, con una confirmación antes y el resumen al final.
+  - Sigue la creación automática, medidas dos semanas de aprobaciones.
 
 Pruebas: `test/lima-retry-chain.test.ts`.
 

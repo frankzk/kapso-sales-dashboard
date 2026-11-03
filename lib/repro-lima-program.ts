@@ -44,6 +44,7 @@ import {
   isChainRider,
   limaRetryChain,
   urpiChainReason,
+  withDismissal,
   type ChainAttempt,
   type LimaRetryChain,
 } from "@/lib/lima-retry-chain";
@@ -197,6 +198,8 @@ const FACT_EVENT_KINDS = [
   "output_replaced",
   "dispatch_program_cleared",
   "dispatch_program_overridden",
+  // «A Repro Lima» de la bandeja de reintentos (lib/lima-retry-chain.ts).
+  "lima_retry_dismissed",
 ];
 
 /** Todo lo que Repro Lima sabe de un pedido, leído junto. */
@@ -579,7 +582,10 @@ export async function loadReproFacts(
       open,
       latestClosed,
       reopened,
-      retryChain: limaRetryChain(chainAttempts(failedStops, outputs, urpiLastByOrder.get(orderId) ?? null), new Date()),
+      retryChain: withDismissal(
+        limaRetryChain(chainAttempts(failedStops, outputs, urpiLastByOrder.get(orderId) ?? null), new Date()),
+        newest(orderEvents.filter((event) => event.kind === "lima_retry_dismissed"), (event) => event.occurred_at)?.occurred_at ?? null,
+      ),
     });
   }
   return out;

@@ -8,6 +8,7 @@ import { ReproLimaBoard } from "@/components/repro-lima-board";
 import type { ReproLimaData } from "@/lib/repro-lima-access";
 
 vi.mock("@/app/dashboard/pedidos/repro-lima/actions", () => ({}));
+vi.mock("@/app/dashboard/pedidos/repro-lima/retry-actions", () => ({ approveAliclikRetry: vi.fn(), dismissAliclikRetry: vi.fn() }));
 vi.mock("@/components/order-master-shared", () => ({ MacroStageDot: () => null }));
 const nav = vi.hoisted(() => ({ search: "" }));
 vi.mock("next/navigation", () => ({

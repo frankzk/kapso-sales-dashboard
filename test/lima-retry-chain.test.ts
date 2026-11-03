@@ -17,6 +17,8 @@ import {
   isChainRider,
   limaRetryChain,
   urpiChainReason,
+  withDismissal,
+  CHAIN_EVENT_KINDS,
   type ChainAttempt,
 } from "@/lib/lima-retry-chain";
 import { retryChainOf } from "@/lib/repro-lima-access";
@@ -160,5 +162,53 @@ describe("quién lo ve", () => {
     expect(actions).not.toContain("retries: true");
     const board = readFileSync(resolve(process.cwd(), "components/repro-lima-board.tsx"), "utf8");
     expect(board).toContain('if (retriesOnly) return null;');
+  });
+});
+
+describe("entrega 2: la bandeja «Aprobar» / «A Repro Lima»", () => {
+  const chain = limaRetryChain([a("alexis", "no_contesta", "2026-11-01T17:00:00Z")], NOW);
+
+  it("«A Repro Lima» después del fallo la saca; un fallo nuevo la vuelve a abrir", () => {
+    expect(withDismissal(chain, "2026-11-02T15:00:00Z")).toMatchObject({ state: "fuera", why: "descartada" });
+    expect(withDismissal(chain, null)).toBe(chain);
+    // Descartada antes del último fallo: no cuenta.
+    expect(withDismissal(chain, "2026-10-31T15:00:00Z")).toMatchObject({ state: "siguiente" });
+  });
+
+  const actions = readFileSync(resolve(process.cwd(), "app/dashboard/pedidos/repro-lima/retry-actions.ts"), "utf8");
+
+  it("aprobar pide los reintentos y crear guías, y recalcula la cadena antes de crear", () => {
+    expect(actions).toContain('perms.can("repro_lima.retries")');
+    expect(actions).toContain('perms.can("aliclik.create_guide")');
+    const approve = actions.slice(actions.indexOf("export async function approveAliclikRetry"));
+    // El orden: la cadena de ahora, el paquete en oficina, la cotización, la guía.
+    const order = ["readChain(orderId)", "if (!chain.inOffice)", "previewAliclikGuideFor(ctx", "createAliclikGuideFor(ctx"].map((t) => approve.indexOf(t));
+    expect(order.every((i) => i > -1)).toBe(true);
+    expect([...order].sort((x, y) => x - y)).toEqual(order);
+    // Por el mismo camino que la ficha, con el motivo de la salida adicional de Lima.
+    expect(approve).toContain("motivoSalidaAdicional: `Reintento Aliclik ${chain.attempt} de ${chain.of} aprobado en Repro Lima.");
+    expect(approve).toContain("CHAIN_EVENT_KINDS.approved");
+  });
+
+  it("sin ese transporte para la dirección pasa a Repro Lima; fuera de horario solo avisa", () => {
+    const approve = actions.slice(actions.indexOf("export async function approveAliclikRetry"));
+    const missing = approve.slice(approve.indexOf("if (!courier) {"), approve.indexOf("if (!courier.selectable)"));
+    expect(missing).toContain("CHAIN_EVENT_KINDS.dismissed");
+    const closed = approve.slice(approve.indexOf("if (!courier.selectable)"), approve.indexOf("createAliclikGuideFor(ctx"));
+    expect(closed).not.toContain("CHAIN_EVENT_KINDS.dismissed");
+  });
+
+  it("«A Repro Lima» pide motivo y deja el hecho que la cadena lee", () => {
+    expect(actions).toContain('if (why.length < 3) return { error: "Escribe por qué pasa a Repro Lima." };');
+    expect(CHAIN_EVENT_KINDS.dismissed).toBe("lima_retry_dismissed");
+    const program = readFileSync(resolve(process.cwd(), "lib/repro-lima-program.ts"), "utf8");
+    expect(program).toContain('"lima_retry_dismissed",');
+    expect(program).toContain("withDismissal(");
+  });
+
+  it("«Aprobar todos» solo los que tienen el paquete en oficina, con confirmación", () => {
+    const board = readFileSync(resolve(process.cwd(), "components/repro-lima-board.tsx"), "utf8");
+    expect(board).toContain("caseById.get(row.orderId)?.retryChain?.inOffice");
+    expect(board).toContain("window.confirm(`Se crearán ${rows.length} guías de Aliclik. ¿Seguir?`)");
   });
 });
