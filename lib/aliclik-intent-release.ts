@@ -16,19 +16,27 @@
 //
 // LA REGLA. Una intención `sent` o `duplicate` se suelta (`released_at`) solo si
 // su guía está en las salidas del pedido —por el número que devolvió Aliclik— y
-// TODAS las salidas con ese número están anuladas o transferidas. Es la misma
-// línea que ya usa la regla de salidas (`aliclikOutputPolicy`): una guía de
-// Aliclik anulada o transferida no estorba; cualquier otra, sí.
+// TODAS las salidas con ese número cumplen las dos cosas:
+//   * en Kapta están anuladas o transferidas (la línea de `aliclikOutputPolicy`:
+//     una Aliclik anulada o transferida no estorba), y
+//   * lo dice ALICLIK: su último reporte (`reported_status`) es una devolución
+//     o una anulación (`aliclikReportSaysClosed`). Kapta también escribe
+//     `anulado` o `transferido` por su cuenta —una gestión «cliente cancela», el
+//     séptimo «no contesta», el paso a Swayp— sin cancelar nada en Aliclik, y
+//     esa guía puede seguir viva allá. Sin el reporte de Aliclik, no se suelta.
 //
 // LO QUE NO SUELTA, porque soltar de más duplica una escritura irreversible:
 //   * `pending`: Aliclik pudo haberla creado (timeout). La resuelven el barrido
 //     y la caducidad de huérfanas (`aliclik-orphan-expiry.ts`).
 //   * una intención sin número, o cuyo número no aparece en las salidas: no hay
 //     forma de saber cómo terminó su guía.
-//   * una guía viva, devuelta sin anular, entregada o por definir.
+//   * una guía viva, entregada o por definir, o una que solo Kapta dio por
+//     cerrada.
 //
 // Soltar no borra nada: la fila sigue `sent`, con su número, su cuerpo y su
 // respuesta, y la salud de Aliclik la sigue contando como un éxito.
+
+import { mapAliclikStatus } from "@/lib/aliclik-status";
 
 /** Los estados de una guía de Aliclik que ya no es una salida viva. */
 export const RELEASABLE_GUIDE_STATUSES = ["anulado", "transferido"] as const;
@@ -45,6 +53,19 @@ export interface IntentGuide {
   guide_code: string | null;
   external_order_number?: string | null;
   delivery_status: string | null;
+  /** La etiqueta del último reporte de Aliclik (`aliclikStatusLabel`). */
+  reported_status?: string | null;
+}
+
+/**
+ * ¿El último reporte de Aliclik cierra la guía? Devuelta (RETURNED, o de vuelta
+ * en almacén tras un intento) o anulada (CANCEL, ANNULLED o una llamada que
+ * cancela). Lee la etiqueta `estado · despacho · llamada`. Pura.
+ */
+export function aliclikReportSaysClosed(reportedStatus: string | null | undefined): boolean {
+  const [status = "", dispatchStatus = "", callStatus = ""] = (reportedStatus ?? "").split(" · ").map((p) => p.trim());
+  if (!status) return false;
+  return mapAliclikStatus({ status, dispatchStatus, callStatus }).deliveryStatus === "anulado";
 }
 
 function guideNumber(value: string | null | undefined): string {
@@ -79,7 +100,8 @@ export function releasableIntents(
         (guideNumber(g.guide_code) === number || guideNumber(g.external_order_number) === number),
     );
     const closed = matching.length > 0 && matching.every((g) =>
-      (RELEASABLE_GUIDE_STATUSES as readonly string[]).includes(g.delivery_status ?? ""),
+      (RELEASABLE_GUIDE_STATUSES as readonly string[]).includes(g.delivery_status ?? "") &&
+      aliclikReportSaysClosed(g.reported_status),
     );
     if (!closed) {
       held.push(intent);
@@ -88,4 +110,14 @@ export function releasableIntents(
     release.push({ id: intent.id, reason: releaseReason((intent.order_number ?? "").trim(), matching[0]?.delivery_status ?? "anulado") });
   }
   return { release, held };
+}
+
+/**
+ * Qué guía cancela «Cancelar guía Aliclik» cuando el pedido tiene varias (la
+ * anterior anulada y la de su reintento): la viva más reciente; si ninguna está
+ * viva, la más reciente. `guides` viene de la más nueva a la más vieja. Pura.
+ */
+export function pickGuideToCancel<T extends { delivery_status: string | null }>(guides: readonly T[]): T | null {
+  const closed = new Set<string>([...RELEASABLE_GUIDE_STATUSES, "entregado"]);
+  return guides.find((g) => !closed.has(g.delivery_status ?? "")) ?? guides[0] ?? null;
 }

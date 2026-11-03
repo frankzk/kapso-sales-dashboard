@@ -795,8 +795,8 @@ export interface CreateGuideInput {
 const INTENT_EXPIRY_MS = 90 * 60_000;
 
 /**
- * Suelta las intenciones de creación cuya guía ya quedó anulada o transferida
- * (`releasableIntents`). Devuelve un error solo si no se pudieron leer: soltar
+ * Suelta las intenciones de creación cuya guía Aliclik ya reportó devuelta o
+ * anulada (`releasableIntents`). Devuelve un error solo si no se pudieron leer: soltar
  * de menos deja el candado como estaba, que es el lado seguro.
  */
 async function releaseClosedGuideIntents(
@@ -806,7 +806,7 @@ async function releaseClosedGuideIntents(
   const [intents, guides] = await Promise.all([
     admin.from("aliclik_order_requests").select("id,status,order_number,released_at")
       .eq("order_id", orderId).neq("status", "failed").is("released_at", null),
-    admin.from("shipments").select("courier,guide_code,external_order_number,delivery_status").eq("order_id", orderId),
+    admin.from("shipments").select("courier,guide_code,external_order_number,delivery_status,reported_status").eq("order_id", orderId),
   ]);
   if (intents.error || guides.error) {
     return `No se pudieron leer las guías anteriores del pedido: ${(intents.error ?? guides.error)!.message}`;

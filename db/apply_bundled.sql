@@ -29244,10 +29244,12 @@ alter table public.urpi_report_rows add constraint urpi_report_rows_link_method_
 --     contar para el candado. La fila no cambia de estado (sigue `sent`), así
 --     que el historial y la salud de Aliclik la leen igual que antes.
 --   * El único parcial excluye además las intenciones soltadas. Se crea el
---     nuevo antes de borrar el viejo: el pedido nunca queda sin candado.
+--     nuevo antes de borrar el viejo (el pedido nunca queda sin candado) y
+--     toma el nombre del viejo, para que volver a correr el paquete entero no
+--     intente recrear en 0056 el índice viejo sobre filas ya soltadas.
 --
 -- Quién suelta: `createAliclikGuideFor` (lib/aliclik-guide.ts), justo antes de
--- escribir la nueva intención y solo si su guía está anulada o transferida
+-- escribir la nueva intención y solo si Aliclik reportó su guía devuelta o anulada
 -- (`releasableIntents`, lib/aliclik-intent-release.ts). Nunca un `pending`.
 --
 -- No cambia datos. Correrla otra vez no cambia nada.
@@ -29267,3 +29269,6 @@ create unique index if not exists aliclik_order_requests_live_uniq_v2
   where status <> 'failed' and released_at is null;
 
 drop index if exists public.aliclik_order_requests_live_uniq;
+
+alter index if exists public.aliclik_order_requests_live_uniq_v2
+  rename to aliclik_order_requests_live_uniq;

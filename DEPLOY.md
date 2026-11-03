@@ -5633,3 +5633,26 @@ variables de entorno.
 **Marcha atrás.** Revertir el commit. Las salidas ya pasadas a Urpi en ruta se
 quedan como están (son hechos registrados); la restricción ampliada puede
 quedarse.
+
+### 03-11-2026 · Una guía de Aliclik anulada suelta el candado de creación (0303, MOM §10.2)
+
+El candado de `aliclik_order_requests` admitía una sola intención viva por
+pedido para siempre: una guía anulada impedía volver a salir por Aliclik, y la
+cadena de reintentos de Lima (AUTOECOM → ALIDRIVER) chocaba con «Este pedido ya
+tiene una guía en Aliclik» (#KP200108). Sin crons, variables ni
+`MOM_RESOLUTION_VERSION` nuevos.
+
+1. **Migración `0303_aliclik_intent_release.sql`**, a mano, ANTES del código.
+   Suma `released_at` y `released_reason` y rehace el único parcial
+   excluyendo las soltadas, con el mismo nombre. No toca filas. Es idempotente.
+2. Comprobar:
+   ```sql
+   select indexdef from pg_indexes where indexname = 'aliclik_order_requests_live_uniq';
+   ```
+   Debe terminar en `WHERE ((status <> 'failed'::text) AND (released_at IS NULL))`.
+3. Desplegar el código. **Si sale antes que la migración, ninguna guía de
+   Aliclik se puede crear** (la creación lee `released_at` antes del candado).
+
+**Marcha atrás.** Revertir el commit. Las columnas pueden quedarse; para volver
+al candado anterior hay que recrear el índice con `where status <> 'failed'`,
+lo que falla si ya hay pedidos con una intención soltada y otra viva.

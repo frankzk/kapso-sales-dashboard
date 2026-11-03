@@ -4356,13 +4356,22 @@ Aliclik».
   dio paso, `createAliclikGuideFor` suelta (`released_at`, `released_reason`)
   las intenciones `sent` o `duplicate` cuya guía está en las salidas del pedido
   —por el número que devolvió Aliclik— y **todas** esas salidas están
-  **anuladas o transferidas** (`releasableIntents`,
-  `lib/aliclik-intent-release.ts`). Es la misma línea de la regla de salidas:
-  una Aliclik anulada o transferida no estorba; cualquier otra, sí.
+  **anuladas o transferidas** en Kapta **y Aliclik las reportó devueltas o
+  anuladas** (`reported_status`: RETURNED, de vuelta en almacén tras un intento,
+  CANCEL o ANNULLED; `releasableIntents` y `aliclikReportSaysClosed`,
+  `lib/aliclik-intent-release.ts`). El reporte de Aliclik hace falta porque
+  Kapta también escribe `anulado` o `transferido` sin cancelar nada allá (la
+  gestión «cliente cancela», el séptimo «no contesta», el paso a Swayp), y esa
+  guía puede seguir viva en Aliclik.
 - **Nunca se suelta un `pending`** (lo resuelven el barrido y la caducidad de
   abajo), ni una intención sin número o cuyo número no aparece en las salidas,
-  ni una guía viva, devuelta sin anular o entregada.
-- El único parcial excluye las soltadas (`0303_aliclik_intent_release.sql`).
+  ni una guía viva, entregada o que solo Kapta dio por cerrada.
+- **Con dos guías de Aliclik en el pedido**, «Cancelar guía Aliclik» cancela la
+  viva más reciente (`pickGuideToCancel`), y el rescate de una creación en
+  timeout solo le pone el número nuevo a una salida sin código o con ese mismo
+  código, nunca a la guía anterior.
+- El único parcial excluye las soltadas (`0303_aliclik_intent_release.sql`,
+  mismo nombre de índice; va a mano antes del código, ver DEPLOY.md).
   Soltar no cambia el estado de la fila: el historial y la salud de Aliclik la
   siguen contando como una creación completada. Dos creaciones a la vez sueltan
   la misma fila y la segunda sigue chocando en el candado.
