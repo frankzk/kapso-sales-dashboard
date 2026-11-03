@@ -143,6 +143,6 @@ describe("MOM y versión", () => {
     const mom = readFileSync(resolve(__dirname, "../docs/mom/master-pedidos-v1.md"), "utf8");
     expect(mom).toContain("**Recordar la provincia de un distrito, con guarda (25-10-2026, `mom-v1.32`).**");
     expect(mom).toContain("`learnedDistrictFits`");
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.36");
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.37");
   });
 });

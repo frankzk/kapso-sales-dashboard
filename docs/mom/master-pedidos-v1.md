@@ -1870,6 +1870,22 @@ crear guías. En Lima, Aliclik se usa **solo con su transporte AUTOECOM**.
   AUTOECOM, se envía con AUTOECOM o ALIDRIVER.»). La cotización lo avisa. Una
   guía AUTOECOM anulada antes de salir no cuenta. Caso: #KP143987, guía
   AUR5X246218871979 (AutoEcom, despachada el 29-10, anulada).
+- **El detalle del Excel de Aliclik (03-11-2026, owner, `0304`).** La API de
+  Aliclik solo da tres estados (entrega, despacho, llamada): «CANCEL ·
+  TO_RETURN · CONFIRMED» no dice por qué. El Excel del portal sí: «SUB ESTADO»
+  (DE VIAJE, POR CLIENTE, NO CONFIRMADO, DEVOLUCIÓN EXCESIVA, FUERA DE
+  COBERTURA, ANULADO POR MOTORIZADO) y «ÚLTIMO COMENTARIO MOTORIZADO». Al
+  subirlo en «Subir reporte», Kapta guarda los dos en la guía
+  (`aliclik_sub_status`, `aliclik_rider_comment`), con lo que diga el reporte
+  más reciente; el comentario se limpia de «-», «.» y letras sueltas
+  (`cleanRiderComment`). Se ven en la ficha del envío («Aliclik: de viaje ·
+  «…»») y en la línea del fallo de Repro Lima, y el subestado decide el motivo
+  de la cadena de reintentos (§9.5). Para tenerlos, el Excel se sube a diario.
+  **La API no los trae** (sonda del 03-11-2026 sobre 1.814 pedidos de las dos
+  tiendas, guías canceladas y no contestadas incluidas): `GET
+  /integration/order` solo devuelve el número, total, los tres estados, canal,
+  producto, nota, fechas, cliente, envío y productos. No hay subestado,
+  comentario ni historial; el Excel es la única fuente.
 - **Siempre entrega Normal, nunca Express (03-11-2026, decisión del owner).**
   La cotización de Aliclik marca `flagDeliveryExpress` en el transporte que
   *puede* ir Express (ALIDRIVER en Lima, p. ej. Ventanilla en #KP200108) con
@@ -2026,8 +2042,9 @@ Tanders:
   Gestión Reproprovincia**, donde Swayp sí se repite: desde el 08-10-2026 la
   guía en devolución es la madre del reenvío por Swayp, sin esperar a que se
   confirme la devolución (§11.8).
-- **La ventana es la de la tienda** (`return_recovery_max_days`), no los 65 días
-  de Tanders, que eran por su antigüedad. Se ancla igual, en la **salida** del
+- **La ventana es la de la tienda** (`return_recovery_max_days`) en provincia y
+  21 días en Lima (§11, 03-11-2026), no los 65 días de Tanders, que eran por su
+  antigüedad. Se ancla igual, en la **salida** del
   intento fallido: el barrido sella la guía en cada pasada y la Devolución
   confirmada llega días después de la Devolución, así que ninguna de las dos
   sirve de ancla.
@@ -2077,7 +2094,8 @@ Decisión del owner (30-09-2026), para **todos los couriers de Lima**:
   caja anterior lo recibe y lo asigna. Un rechazo que la 0189 ya recibió como
   devuelto va igual a «Por reprogramar Lima», con el inventario como razón.
 - La ventana, el ancla y lo demás no cambian: Tanders 65 días, los demás la de
-  la tienda, contadas desde la **salida** del intento fallido. El paquete que
+  la tienda (desde el 03-11-2026, 21 días en Lima, §11), contadas desde la
+  **salida** del intento fallido. El paquete que
   vuelve sigue arrastrando `Devolución pendiente de inventario` como razón.
 - **Anulado en Shopify**: el pedido espera la caja en **Por cerrar** (§13:
   toda salida despachada necesita devolución física para cerrar una
@@ -3414,7 +3432,11 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
 - **Entran** «no contesta», «no estaba» y «otro». **No entran** el rechazo en
   puerta, el reprogramado, la dirección errada ni «sin dinero»: siguen en Repro
   Lima como siempre. El motivo de Aliclik sale de su estado (`REFUSED` rechazo,
-  `RESCHEDULED` reprogramado, `NOT_RESPOND` no contestó, lo demás «otro»); el de
+  `RESCHEDULED` reprogramado, `NOT_RESPOND` no contestó, lo demás «otro»),
+  salvo que el «SUB ESTADO» del Excel de Aliclik diga más (03-11-2026): «DE
+  VIAJE» y «POR CLIENTE» cuentan como reprogramado (hay que llamar, no
+  reintentar al día siguiente) y «FUERA DE COBERTURA» como dirección errada;
+  el de
   Urpi, del resultado y el motivo en texto libre de su último reporte.
 - **Se corta** al fallar ALIDRIVER, a los 7 días del primer intento, si el
   pedido se anula, si sale de «Por reprogramar Lima» o si la tienda deja un
@@ -3422,7 +3444,10 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
 - **Dónde se ve:** la primera tarjeta de Repro Lima, **«Reintentos Aliclik»**,
   con la chapa «Reintento Aliclik 2 de 3 · AUTOECOM», el intento que falló y si
   el paquete ya está en la oficina (la recepción en «Devoluciones» lo dice; los
-  couriers no devuelven en un plazo fijo). En «Todos» los mismos pedidos llevan
+  couriers no devuelven en un plazo fijo). Es informativo: el reintento **no
+  espera la devolución**, solo sale **otro día** que el intento que falló
+  (`chainReadyOn`; decisión del owner, 03-11-2026: «no necesito esperar la
+  devolución para sacar el pedido, solo que se saque un día distinto»). En «Todos» los mismos pedidos llevan
   la chapa, para que no se llamen.
 - **Quién:** las asesoras (`repro_lima.manage`) y Despacho, que entra con el
   permiso nuevo `repro_lima.retries` y ve solo esa tarjeta, sin «Atender»:
@@ -3433,7 +3458,8 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
 - **Entrega 2, la bandeja (03-11-2026).** En cada fila de «Reintentos Aliclik»:
   - **«Aprobar · AUTOECOM/ALIDRIVER»** crea ya la guía de Aliclik con ese
     transporte (`approveAliclikRetry`). Antes recalcula la cadena con los
-    hechos de ahora y exige el paquete en oficina; la guía sale por el mismo
+    hechos de ahora y exige que el intento que falló haya sido un día anterior
+    a hoy en Lima (no exige el paquete en oficina); la guía sale por el mismo
     camino que el panel de la ficha (`createAliclikGuideFor`: monto, pin,
     historial), con el motivo de la salida adicional de Lima «Reintento Aliclik
     N de M aprobado en Repro Lima». Pide `repro_lima.retries` y
@@ -3446,8 +3472,10 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
     (ver «Siempre entrega Normal» en §9, «Aliclik en Lima»).
   - **«A Repro Lima»** lo saca de la cadena con un motivo
     (`lima_retry_dismissed`); un fallo nuevo la vuelve a abrir.
-  - **«Aprobar todos con paquete en oficina»** aprueba los de la tarjeta, uno
-    por uno, con una confirmación antes y el resumen al final.
+  - **«Aprobar todos los listos»** aprueba los de la tarjeta que ya se pueden
+    aprobar (fallaron un día anterior), uno por uno, con una confirmación antes
+    y el resumen al final. El mismo día del fallo la fila dice «Falló hoy: el
+    reintento se aprueba desde mañana».
   - Sigue la creación automática, medidas dos semanas de aprobaciones.
 
 Pruebas: `test/lima-retry-chain.test.ts`.
@@ -4748,6 +4776,41 @@ candado.
   del día programado (§6.2) usa ese mismo núcleo, con el mismo candado, y no
   levanta ninguna excepción por nadie.
 
+**Una guía anulada suelta el candado (03-11-2026).** El candado protege de
+crear **la misma** guía dos veces, no de que el pedido vuelva a salir por
+Aliclik. Hasta hoy una intención completada (`sent`) quedaba viva para siempre,
+aunque su guía terminara anulada, y el pedido ya no podía salir otra vez por
+Aliclik: lo que piden la cadena de reintentos (§9.5) y «después de AUTOECOM,
+ALIDRIVER» (§9). Caso: #KP200108, guía AUTOECOM AUR5X510805505383 anulada el
+02-11; «Aprobar · ALIDRIVER» respondía «Este pedido ya tiene una guía en
+Aliclik».
+
+- Justo antes de escribir la nueva intención, y solo si la regla de salidas ya
+  dio paso, `createAliclikGuideFor` suelta (`released_at`, `released_reason`)
+  las intenciones `sent` o `duplicate` cuya guía está en las salidas del pedido
+  —por el número que devolvió Aliclik— y **todas** esas salidas están
+  **anuladas o transferidas** en Kapta **y Aliclik las reportó devueltas o
+  anuladas** (`reported_status`: RETURNED, de vuelta en almacén tras un intento,
+  CANCEL, ANNULLED o una llamada que cancela; también «ANULADO» o
+  «CANCELADO» del Excel; `releasableIntents` y `aliclikReportSaysClosed`,
+  `lib/aliclik-intent-release.ts`). La etiqueta se lee por vocabulario y no por
+  posición (`parseAliclikLabel`), porque descarta los campos vacíos. El reporte de Aliclik hace falta porque
+  Kapta también escribe `anulado` o `transferido` sin cancelar nada allá (la
+  gestión «cliente cancela», el séptimo «no contesta», el paso a Swayp), y esa
+  guía puede seguir viva en Aliclik.
+- **Nunca se suelta un `pending`** (lo resuelven el barrido y la caducidad de
+  abajo), ni una intención sin número o cuyo número no aparece en las salidas,
+  ni una guía viva, entregada o que solo Kapta dio por cerrada.
+- **Con dos guías de Aliclik en el pedido**, «Cancelar guía Aliclik» cancela la
+  viva más reciente (`pickGuideToCancel`), y el rescate de una creación en
+  timeout solo le pone el número nuevo a una salida sin código o con ese mismo
+  código, nunca a la guía anterior.
+- El único parcial excluye las soltadas (`0303_aliclik_intent_release.sql`,
+  mismo nombre de índice; va a mano antes del código, ver DEPLOY.md).
+  Soltar no cambia el estado de la fila: el historial y la salud de Aliclik la
+  siguen contando como una creación completada. Dos creaciones a la vez sueltan
+  la misma fila y la segunda sigue chocando en el candado.
+
 El barrido periódico resuelve esa espera, y tiene que cerrar **las dos** ramas
 posibles:
 
@@ -4958,6 +5021,20 @@ La regla vive en `lib/reproprovincia.ts` y la leen igual el estado del pedido
   Master y en Envíos**. Caer a `returned_at` no vale: el retorno llega días
   después del cierre (medido: 58 guías con más de un día de diferencia) y
   estiraría la ventana solo en una de las dos pantallas.
+- **Lima tiene su ventana: 21 días (decisión del owner, 03-11-2026).** «Esa
+  regla de recuperación de 7 días era para Provincia. No es para Lima. Lima debe
+  tener unas 3 semanas aprox». La operación del pedido elige la ventana
+  (`LIMA_RECOVERY_DAYS`, `recoveryWindowDaysForOperation`, `lib/reproprovincia.ts`):
+  Lima, 21 días; Provincia COD y Agencia, `return_recovery_max_days`; Tanders
+  sigue con sus 65. La usan igual el estado y la macroetapa del Master, el
+  barrido que baja las ventanas vencidas (`reconcileOrderMaster`, con un corte
+  propio para «Por reprogramar Lima») y Envíos, que del Master solo lee la
+  operación (`macro_operation`) y sigue calculando la decisión con los hechos
+  del pedido. Medido el 03-11-2026: 20 pedidos de Lima con la salida de Urpi
+  cancelada entre el 16 y el 26-10 habían caído a anulado (18) o devuelto (2) a
+  los 7 días; con la v1.37 vuelven a «En curso · Por reprogramar Lima». La
+  recuperación por WhatsApp y el agente de voz no cambian: siguen con
+  `return_recovery_max_days`.
 - **No aplica si alguna guía del pedido ya ENTREGÓ**: ése es el reenvío que
   funcionó, la venta terminó bien. Ni si hay una guía viva: la gestión la lleva
   ella.

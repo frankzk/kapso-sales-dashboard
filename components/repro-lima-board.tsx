@@ -188,11 +188,12 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
     return <OpsButton size={size} className="pointer-coarse:h-11" disabled={loadingOrder !== null} onClick={() => void attend(row)}>{loadingOrder === row.orderId ? "Abriendo…" : "Atender"}</OpsButton>;
   }
 
-  // «Aprobar todos» (entrega 2): los de la bandeja con el paquete en oficina,
+  // «Aprobar todos» (entrega 2): los de la bandeja que ya se pueden aprobar
+  // (fallaron un día anterior; no esperan la devolución, owner 03-11-2026),
   // uno por uno por el mismo camino que «Aprobar»; al final, el resumen.
   const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null);
   const readyToApprove = list === "reintentos_aliclik"
-    ? inQueue.filter((row) => caseById.get(row.orderId)?.retryChain?.inOffice)
+    ? inQueue.filter((row) => caseById.get(row.orderId)?.retryChain?.ready)
     : [];
   async function approveAll() {
     const rows = readyToApprove;
@@ -286,7 +287,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
           </div>
           {list === "reintentos_aliclik" && (
             <OpsButton size="sm" variant="primary" disabled={!readyToApprove.length || Boolean(bulk)} onClick={() => void approveAll()} className="pointer-coarse:h-11">
-              {bulk ? `Creando ${bulk.done} de ${bulk.total}…` : `Aprobar todos con paquete en oficina (${readyToApprove.length})`}
+              {bulk ? `Creando ${bulk.done} de ${bulk.total}…` : `Aprobar todos los listos (${readyToApprove.length})`}
             </OpsButton>
           )}
           <p className="w-full text-[13px] tabular-nums text-ink-500 lg:ml-auto lg:w-auto" aria-live="polite">

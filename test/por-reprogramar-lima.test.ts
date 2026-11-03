@@ -431,8 +431,10 @@ describe("las piezas en el código", () => {
   it("el barrido de vencidas busca a Tanders con SU ventana", () => {
     const src = read("lib/order-master.ts");
     expect(src).toContain("const tandersCutoff = new Date(Date.now() - TANDERS_RECOVERY_DAYS * 86_400_000).toISOString();");
-    expect(src).toContain('query.eq("last_courier", "tanders").lt("macro_since", tandersCutoff)');
-    expect(src).toContain('query.or("last_courier.is.null,last_courier.neq.tanders").lt("macro_since", cutoff)');
+    expect(src).toContain('["gestion_reproprovincia", true, tandersCutoff]');
+    expect(src).toContain('["por_reprogramar_lima", true, tandersCutoff]');
+    expect(src).toContain('query.eq("last_courier", "tanders").lt("macro_since", since)');
+    expect(src).toContain('query.or("last_courier.is.null,last_courier.neq.tanders").lt("macro_since", since)');
   });
 
   it("todas las lecturas de la regla traen la salida del intento (el ancla de Tanders) y el estado de Swayp", () => {
@@ -444,7 +446,7 @@ describe("las piezas en el código", () => {
     // La v1.21 (adelanto mínimo de Agencia, #KP134162) y la v1.22 (Swayp que
     // no entrega) vinieron después; lo que se vigila aquí es que el MOM
     // documente la v1.19.
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.36");
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.37");
     const mom = read("docs/mom/master-pedidos-v1.md");
     expect(mom).toContain("#### Lo que Tanders no entrega también es «Por reprogramar Lima» (v1.19, 29-09-2026)");
     expect(mom).toContain("**Crear la guía directa no es reprogramar (v1.19, 29-09-2026).**");

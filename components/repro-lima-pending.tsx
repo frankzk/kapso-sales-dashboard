@@ -106,14 +106,14 @@ function RetryChainNote({ orderId, chain }: { orderId: string; chain: NonNullabl
     <div className="space-y-1">
       <Badge tone="brand" wrap>{`Reintento Aliclik ${chain.attempt} de ${chain.of} · ${transport}`}</Badge>
       <p className="text-xs text-ink-500">{chain.failedText}</p>
-      <p className={chain.inOffice ? "text-xs font-medium text-ok-fg" : "text-xs text-warn-fg"}>
-        {chain.inOffice ? "Paquete en oficina." : "Esperando el paquete en oficina: recíbelo en «Devoluciones» para aprobar."}
+      <p className={chain.ready ? "text-xs text-ink-500" : "text-xs text-warn-fg"}>
+        {!chain.ready ? "Falló hoy: el reintento se aprueba desde mañana." : chain.inOffice ? "Paquete en oficina." : "El paquete aún no vuelve a oficina."}
       </p>
       <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
         <OpsButton
           size="sm"
           variant="primary"
-          disabled={pending || !chain.inOffice}
+          disabled={pending || !chain.ready}
           onClick={() => run(() => approveAliclikRetry(orderId))}
           className="pointer-coarse:h-11"
         >

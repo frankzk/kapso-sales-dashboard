@@ -46,13 +46,14 @@ import {
 } from "@/lib/order-confirmation";
 import { classifyOrderCoverage, type OrderCoverage } from "@/lib/order-coverage";
 import { RECOVERY_DEFAULT_MAX_DAYS } from "@/lib/return-recovery";
-import { TANDERS_RECOVERY_DAYS } from "@/lib/reproprovincia";
+import { LIMA_RECOVERY_DAYS, recoveryWindowDaysForOperation, TANDERS_RECOVERY_DAYS } from "@/lib/reproprovincia";
 import { derivedGuideDates } from "@/lib/guide-dates";
 import { FENIX_DIRECT_CREATED_VIA } from "@/lib/shipment-output";
 import { ttlCache } from "@/lib/ttl-cache";
 import { isWebPrepaid } from "@/lib/order-paid";
 import { paymentGatewayOf, type PaymentGateway } from "@/lib/payment-gateway";
 import {
+  classifyOperation,
   MOM_RESOLUTION_VERSION,
   resolveMacroStage,
   type MacroGuideSnapshot,
@@ -1305,6 +1306,16 @@ export async function recomputeOrderMaster(
         tariffs,
         now.slice(0, 10),
       );
+    // La ventana de recuperación es por operación (owner, 03-11-2026): Lima tiene
+    // la suya (`LIMA_RECOVERY_DAYS`); Provincia y Agencia, la de la tienda. El
+    // estado y la macroetapa usan la misma, con la operación que ve el resolvedor.
+    const recoveryDays = recoveryWindowDaysForOperation(
+      classifyOperation(
+        { shipping_mode: order.shipping_mode, coverage: resolvedCoverage, region, province, district },
+        stateShipments.map((s) => ({ courier: s.courier })),
+      ),
+      recoveryWindowByStore.get(order.store_id) ?? RECOVERY_DEFAULT_MAX_DAYS,
+    );
 
     const state = resolveOrderState({
       order: {
@@ -1317,7 +1328,7 @@ export async function recomputeOrderMaster(
       events: eventSnapshots,
       override,
       now,
-      recoveryWindowDays: recoveryWindowByStore.get(order.store_id) ?? RECOVERY_DEFAULT_MAX_DAYS,
+      recoveryWindowDays: recoveryDays,
     });
     const macroInput: Parameters<typeof resolveMacroStage>[0] = {
       order: {
@@ -1353,7 +1364,7 @@ export async function recomputeOrderMaster(
         since: state.since,
       },
       paymentState: resolvedPaymentState,
-      recoveryWindowDays: recoveryWindowByStore.get(order.store_id) ?? RECOVERY_DEFAULT_MAX_DAYS,
+      recoveryWindowDays: recoveryDays,
       now,
     };
     let macro = resolveMacroStage(macroInput);
@@ -2061,6 +2072,9 @@ export async function reconcileOrderMaster(
   // Tanders tiene su propia ventana (`TANDERS_RECOVERY_DAYS`), así que se busca
   // aparte: con el corte de la tienda, sus filas entre los 30 y los 65 días se
   // recalcularían en cada pasada sin cambiar nada, ocupando el cupo del barrido.
+  // Lima también tiene la suya (`LIMA_RECOVERY_DAYS`, 03-11-2026): «Por
+  // reprogramar Lima» se corta con ella y «En gestión Reproprovincia» con la de
+  // la tienda.
   if (pending.length < limit) {
     const { data: storeRows } = await admin
       .from("stores")
@@ -2068,20 +2082,26 @@ export async function reconcileOrderMaster(
       .in("id", storeIds as string[]);
     const seenVencidas = new Set(pending);
     const tandersCutoff = new Date(Date.now() - TANDERS_RECOVERY_DAYS * 86_400_000).toISOString();
+    const limaCutoff = new Date(Date.now() - LIMA_RECOVERY_DAYS * 86_400_000).toISOString();
     for (const store of (storeRows ?? []) as { id: string; return_recovery_max_days: number | null }[]) {
       const windowDays = store.return_recovery_max_days ?? RECOVERY_DEFAULT_MAX_DAYS;
       const cutoff = new Date(Date.now() - windowDays * 86_400_000).toISOString();
-      for (const tanders of [false, true]) {
+      for (const [substage, tanders, since] of [
+        ["gestion_reproprovincia", false, cutoff],
+        ["por_reprogramar_lima", false, limaCutoff],
+        ["gestion_reproprovincia", true, tandersCutoff],
+        ["por_reprogramar_lima", true, tandersCutoff],
+      ] as const) {
         if (pending.length >= limit) break;
         let query = admin
           .from("order_master")
           .select("order_id")
           .eq("store_id", store.id)
           .eq("operational_status", "pendiente_nuevo_courier")
-          .in("macro_substage", ["gestion_reproprovincia", "por_reprogramar_lima"]);
+          .eq("macro_substage", substage);
         query = tanders
-          ? query.eq("last_courier", "tanders").lt("macro_since", tandersCutoff)
-          : query.or("last_courier.is.null,last_courier.neq.tanders").lt("macro_since", cutoff);
+          ? query.eq("last_courier", "tanders").lt("macro_since", since)
+          : query.or("last_courier.is.null,last_courier.neq.tanders").lt("macro_since", since);
         const { data: vencidas } = await query.limit(limit - pending.length);
         for (const row of (vencidas ?? []) as { order_id: string }[]) {
           if (seenVencidas.has(row.order_id) || pending.length >= limit) continue;

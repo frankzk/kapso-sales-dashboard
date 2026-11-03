@@ -20,6 +20,7 @@ import { aliclikContextFor, createAliclikGuideFor, previewAliclikGuideFor } from
 import { isAlidriver, isAutoecom } from "@/lib/aliclik-lima";
 import { loadReproFacts, retryChainOf } from "@/lib/repro-lima-access";
 import { CHAIN_EVENT_KINDS } from "@/lib/lima-retry-chain";
+import { limaTodayKey } from "@/lib/shipments";
 import type { OrderMasterRow } from "@/lib/types";
 
 const PATHS = ["/dashboard/pedidos/repro-lima", "/dashboard/pedidos"];
@@ -58,7 +59,7 @@ async function readChain(orderId: string) {
   const facts = (await loadReproFacts(admin, [orderId])).get(orderId);
   if (!facts) return { error: "No se pudo leer el pedido." } as const;
   const open = facts.open && facts.open.episode_key === facts.episode.key ? facts.open : null;
-  return { row, admin, facts, chain: retryChainOf(facts, open) } as const;
+  return { row, admin, facts, chain: retryChainOf(facts, open, limaTodayKey()) } as const;
 }
 
 async function recordChainEvent(
@@ -95,8 +96,9 @@ export async function approveAliclikRetry(orderId: string): Promise<RetryActionS
   if (!chain) {
     return { error: "Este pedido ya no está en la cadena (se entregó, se acordó otra cosa en Repro Lima o venció). Recarga la lista.", done: true };
   }
-  if (!chain.inOffice) {
-    return { error: "El paquete todavía no volvió a la oficina: recíbelo en «Devoluciones» y vuelve a aprobar." };
+  // Otro día que el intento que falló; no espera la devolución (owner, 03-11-2026).
+  if (!chain.ready) {
+    return { error: "El intento falló hoy: el reintento sale otro día. Apruébalo desde mañana." };
   }
   const transport = TRANSPORT_LABEL[chain.next];
 
