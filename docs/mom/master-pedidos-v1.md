@@ -9691,6 +9691,34 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   - Lo ejecuta Frankz, como todo reembolso: la regla dice qué se devuelve y qué
     no, no automatiza la caja.
 
+#### Vía aérea por defecto en la guía Shalom (decidido el 03-11-2026)
+
+- **La decisión.** El owner: «dejar activado por defecto que todo se vaya vía
+  aérea». Hasta ese día la casilla «Enviar por vía aérea» del modal nacía vacía
+  a propósito —el aéreo encarece el envío y se quería que lo eligiera quien
+  despacha—. Ahora nace **marcada** siempre que se pueda, y quien despacha la
+  desmarca para una excepción (`defaultAirChoice`, lib/shalom/draft.ts).
+- **«Si se puede» lo dice Shalom** (`shalomAirRoute`), no Kapta:
+  - la agencia de destino no vuela → no hay casilla: va por tierra;
+  - vuela, pero `origenes_aereos` no incluye nuestra agencia de origen (hoy
+    476, Breña) → la casilla está bloqueada: va por tierra. Pedir aéreo ahí es
+    pedir una ruta que no existe;
+  - vuela desde nuestro origen → marcada;
+  - el directorio no trae la lista (`unknown`) → **marcada** también: «todo»
+    incluye lo que no se pudo confirmar. Si Shalom rechaza la ruta al crear, el
+    error lo dice y se desmarca.
+- La casilla se marca **una vez por agencia**, cuando su ficha del directorio
+  ya llegó; lo que la persona cambie después no se pisa. Nunca se manda aéreo en
+  una ruta bloqueada aunque el estado hubiera quedado marcado de otra agencia.
+- **La cotización no incluye el recargo aéreo**: Shalom no acepta la vía al
+  cotizar, solo al crear. El aviso ya estaba en el modal.
+- **Queda registrado.** El evento `guide_created` guarda `aereo` (true/false)
+  y su nota dice «Vía aérea» o «Vía terrestre». Antes no se guardaba: de las
+  2.505 guías creadas por la API hasta el 03-11-2026 no se puede saber cuál
+  voló.
+- No toca el registro de guías hechas en el mostrador (guía manual): ahí la vía
+  la elige el mostrador y Kapta solo apunta la guía.
+
 ## 13. Devoluciones, inventario y reclamos
 
 - Toda salida físicamente despachada necesita devolución física para cerrar una

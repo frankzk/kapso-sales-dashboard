@@ -17,6 +17,7 @@ import {
   shalomGuideIsCancelable,
   shalomSoftBlockers,
   shalomAirRoute,
+  defaultAirChoice,
   MIN_OVERRIDE_REASON,
 } from "@/lib/shalom/draft";
 import {
@@ -842,6 +843,17 @@ describe("shalomAirRoute", () => {
   // Que falte el dato no es un error: la búsqueda de agencias no siempre
   // devuelve esas listas. Impedir el envío por falta de dato sería bloquear algo
   // legítimo con una excusa, así que se deja elegir y no se afirma nada.
+  // Decisión del owner (03-11-2026): todo va por aire si se puede. La casilla
+  // empieza marcada salvo donde no hay casilla o Shalom dice que no hay vuelo
+  // desde nuestro origen.
+  it("marca la vía aérea por defecto donde se puede", () => {
+    expect(defaultAirChoice(shalomAirRoute(iquitos, 587))).toBe(true);
+    expect(defaultAirChoice(shalomAirRoute({ aereo: true }, 476))).toBe(true);
+    expect(defaultAirChoice(shalomAirRoute(iquitos, 476))).toBe(false);
+    expect(defaultAirChoice(shalomAirRoute({ aereo: false }, 476))).toBe(false);
+    expect(defaultAirChoice(shalomAirRoute(null, 476))).toBe(false);
+  });
+
   it("no afirma nada si falta la lista o el origen", () => {
     expect(shalomAirRoute({ aereo: true }, 587)).toEqual({ offered: true, fromOrigin: "unknown" });
     expect(shalomAirRoute({ aereo: true, origenes_aereos: [] }, 587)).toEqual({
